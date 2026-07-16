@@ -40,11 +40,26 @@ export const getNoteFileName = (application: WebApplicationInterface, note: SNNo
 
 const headlessSuperConverter = new HeadlessSuperConverter()
 
-const superHTML = (note: SNNote, content: string) => `<!DOCTYPE html>
+// note.title is untrusted: it can be set by another actor via an imported note
+// (Google Keep / Evernote / Zoho / OneNote / HTML titles all flow straight into
+// content.title) or by a write-capable member of a shared vault. Both export
+// templates below interpolate it into markup, so it MUST be neutralized at the
+// sink or a `</title><script>…` title executes when the exported .html is opened
+// from disk, and a title with a newline injects arbitrary YAML frontmatter keys.
+const escapeHtml = (value: string) =>
+  value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
+// Emit the title as a double-quoted YAML scalar: escape backslash and quote, and
+// collapse newlines to the \n escape so the value can never open a new frontmatter
+// key or close the --- block.
+const escapeYamlDoubleQuoted = (value: string) =>
+  '"' + value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\r?\n/g, '\\n') + '"'
+
+export const superHTML = (note: SNNote, content: string) => `<!DOCTYPE html>
 <html>
   <head>
     <meta charset="utf-8" />
-    <title>${note.title}</title>
+    <title>${escapeHtml(note.title)}</title>
     <style>
 ${snColorsCSS.toString()}
 ${superEditorCSS.toString()}
@@ -57,8 +72,8 @@ ${exportOverridesCSS.toString()}
 </html>
 `
 
-const superMarkdown = (note: SNNote, content: string) => `---
-title: ${note.title}
+export const superMarkdown = (note: SNNote, content: string) => `---
+title: ${escapeYamlDoubleQuoted(note.title)}
 created_at: ${note.created_at.toISOString()}
 updated_at: ${note.serverUpdatedAt.toISOString()}
 uuid: ${note.uuid}

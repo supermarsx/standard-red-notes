@@ -11,8 +11,28 @@ jest.mock('./Items/rehydrateLazyDecryptedNote', () => ({
   getFullNoteText: (sync: unknown, note: SNNote) => getFullNoteTextMock(sync, note),
 }))
 
+// superHTML inlines three SCSS bundles via `${css.toString()}`. Under jest those
+// specifiers map to identity-obj-proxy, whose `.toString` is a string (not callable),
+// so stub them with a real toString — the CSS content is irrelevant to these assertions.
+jest.mock(
+  '!css-loader?{"sourceMap":false}!sass-loader?{"api":"modern","sassOptions":{"quietDeps":true,"silenceDeprecations":["import","legacy-js-api"]}}!../Components/SuperEditor/Lexical/Theme/editor.scss',
+  () => ({ __esModule: true, default: '' }),
+  { virtual: true },
+)
+jest.mock(
+  '!css-loader?{"sourceMap":false}!sass-loader?{"api":"modern","sassOptions":{"quietDeps":true,"silenceDeprecations":["import","legacy-js-api"]}}!@standardnotes/styles/src/Styles/_colors.scss',
+  () => ({ __esModule: true, default: '' }),
+  { virtual: true },
+)
+jest.mock(
+  '!css-loader?{"sourceMap":false}!sass-loader?{"api":"modern","sassOptions":{"quietDeps":true,"silenceDeprecations":["import","legacy-js-api"]}}!../Components/SuperEditor/Lexical/Theme/export-overrides.scss',
+  () => ({ __esModule: true, default: '' }),
+  { virtual: true },
+)
+
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const { createNoteExport, noteHasEmbeddedFiles } = require('./NoteExportUtils') as typeof import('./NoteExportUtils')
+const { createNoteExport, noteHasEmbeddedFiles, superHTML, superMarkdown } =
+  require('./NoteExportUtils') as typeof import('./NoteExportUtils')
 
 const makeLiteNote = (overrides: Partial<SNNote> = {}): SNNote => {
   return {
@@ -90,6 +110,44 @@ describe('createNoteExport (lazy-decrypt re-hydration)', () => {
     expect(result).toBeUndefined()
     // The re-hydration/export path must never even run for a non-exportable item.
     expect(getFullNoteTextMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('note.title escaping (cross-actor XSS + YAML frontmatter injection)', () => {
+  // note.title is attacker-influenceable: an imported note (Google Keep / Evernote /
+  // Zoho / OneNote / HTML) carries a title straight from the file, and a write-capable
+  // shared-vault member's title syncs to everyone. Both export templates interpolate
+  // it into markup, so the raw payload must never survive to the output.
+
+  it('HTML: neutralizes a </title><script> title so it cannot execute on open', () => {
+    const payload = '</title><script>alert(document.domain)</script>'
+    const note = makeLiteNote({ title: payload } as Partial<SNNote>)
+
+    const html = superHTML(note, '<p>body</p>')
+
+    // False-green: pre-fix the template emits `<title>${note.title}</title>`, so the
+    // raw `</title><script>…</script>` appears verbatim and this assertion FAILS.
+    expect(html).not.toContain('<script>alert(document.domain)</script>')
+    expect(html).not.toContain('</title><script>')
+    // Post-fix the payload is HTML-escaped inside the <title> text node.
+    expect(html).toContain('<title>&lt;/title&gt;&lt;script&gt;alert(document.domain)&lt;/script&gt;</title>')
+  })
+
+  it('MD: a title with a newline cannot inject a YAML frontmatter key or close the block', () => {
+    const note = makeLiteNote({
+      title: 'x\npermalink: /evil',
+      // superMarkdown reads these for the other frontmatter fields.
+      created_at: new Date('2026-01-01T00:00:00.000Z'),
+      serverUpdatedAt: new Date('2026-01-02T00:00:00.000Z'),
+    } as unknown as Partial<SNNote>)
+
+    const md = superMarkdown(note, 'body')
+
+    // False-green: pre-fix `title: ${note.title}` spills the newline, so `permalink: /evil`
+    // becomes its own top-level YAML key — this assertion FAILS.
+    expect(md).not.toMatch(/^permalink: \/evil$/m)
+    // Post-fix the value is a single double-quoted scalar with the newline as \n.
+    expect(md).toContain('title: "x\\npermalink: /evil"')
   })
 })
 
