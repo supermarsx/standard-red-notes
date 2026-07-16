@@ -17,6 +17,7 @@ Standard Notes. See the [license](../license.md) file for details.
 - [Prerequisites](#prerequisites)
 - [Configuration (the `.env` file)](#configuration-the-env-file)
 - [Standalone home-server release](#standalone-home-server-release)
+- [The srn-admin binary](#the-srn-admin-binary)
 - [Choosing a domain and ports](#choosing-a-domain-and-ports)
 - [Running behind a reverse proxy](#running-behind-a-reverse-proxy)
 - [Start, stop, and upgrade](#start-stop-and-upgrade)
@@ -251,6 +252,27 @@ After it starts, follow [Choosing a domain and ports](#choosing-a-domain-and-por
 and [Running behind a reverse proxy](#running-behind-a-reverse-proxy) before
 exposing it publicly. The binary is only the backend, so point a separately
 deployed Standard Red Notes client at that public server URL.
+
+---
+
+## The srn-admin binary
+
+`srn-admin` is the administrative CLI for a Standard Red Notes deployment. Like
+the tools above it is published as native binaries (Windows, macOS, and Linux)
+with a `SHA256SUMS.txt` for verification. Unlike `srn-home-server`, it is **not**
+a standalone offline tool: every command runs against a **running** SRN stack and
+its database, so a reachable server and database must already be up.
+
+In the Docker stack the supported invocation runs it inside the `server`
+container, which already holds the database connection and server configuration:
+
+```bash
+docker compose exec server srn-admin help
+```
+
+You can download and checksum the binary like the other published tools to keep
+it on an operator machine, but it always targets a live deployment — it manages
+an existing stack rather than starting a server of its own.
 
 ---
 
