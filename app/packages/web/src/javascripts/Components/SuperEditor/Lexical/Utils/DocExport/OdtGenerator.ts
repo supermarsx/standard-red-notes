@@ -22,8 +22,17 @@ import {
 
 export const ODT_MIME_TYPE = 'application/vnd.oasis.opendocument.text'
 
+// Control chars forbidden in XML 1.0 (U+0000–08, 0B, 0C, 0E–1F): not even
+// representable as numeric character references, so they must be dropped — never
+// emitted raw — or LibreOffice/Word/Google Docs reject the whole .odt. Tab (\t),
+// newline (\n) and carriage return (\r) are the only legal C0 controls; keep them.
+// eslint-disable-next-line no-control-regex
+const XML_ILLEGAL_CONTROL_CHARS = /[\x00-\x08\x0B\x0C\x0E-\x1F]/g
+
 const xmlEscape = (text: string): string =>
-  text.replace(/[<>&]/g, (c) => (c === '<' ? '&lt;' : c === '>' ? '&gt;' : '&amp;'))
+  text
+    .replace(XML_ILLEGAL_CONTROL_CHARS, '')
+    .replace(/[<>&]/g, (c) => (c === '<' ? '&lt;' : c === '>' ? '&gt;' : '&amp;'))
 
 const attrEscape = (text: string): string =>
   text.replace(/[<>&"]/g, (c) => (c === '<' ? '&lt;' : c === '>' ? '&gt;' : c === '&' ? '&amp;' : '&quot;'))
@@ -521,7 +530,10 @@ ${builder.automaticStylesXml()}
 
 const buildManifestXml = (pictures: Picture[]): string => {
   const pictureEntries = pictures
-    .map((p) => `<manifest:file-entry manifest:full-path="${attrEscape(p.path)}" manifest:media-type="${p.mime}"/>`)
+    .map(
+      (p) =>
+        `<manifest:file-entry manifest:full-path="${attrEscape(p.path)}" manifest:media-type="${attrEscape(p.mime)}"/>`,
+    )
     .join('')
   return `<?xml version="1.0" encoding="UTF-8"?>
 <manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0" manifest:version="1.2">

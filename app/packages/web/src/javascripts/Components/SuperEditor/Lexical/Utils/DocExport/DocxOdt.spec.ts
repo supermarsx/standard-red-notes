@@ -423,6 +423,53 @@ describe('buildOdtBlob (OpenDocument)', () => {
   })
 })
 
+describe('buildOdtBlob escaping (t72-e2)', () => {
+  // XML-1.0-illegal C0 control chars (U+0000–08, 0B, 0C, 0E–1F); \t \n \r are legal.
+  const XML_ILLEGAL_CONTROL_CHARS = /[\x00-\x08\x0B\x0C\x0E-\x1F]/
+
+  it('F4: strips XML-1.0-illegal control chars from every text sink (no raw byte, re-parses)', async () => {
+    // \x0C (form feed), \x0B (vertical tab), \x00 (NUL) are all forbidden in XML 1.0
+    // and cannot be represented even as numeric refs. Route them through a paragraph
+    // (span/plain-text sink) AND a code block (per-line sink).
+    const model: DocBlock[] = [
+      { kind: 'paragraph', inlines: [{ kind: 'text', text: 'before\x00\x0B\x0Cafter' }] },
+      {
+        kind: 'paragraph',
+        inlines: [{ kind: 'text', text: 'styled\x0Ctext', bold: true }],
+      },
+      { kind: 'code', language: 'js', text: 'const a = 1\x0C\x00\nconst b = 2\x0B' },
+    ]
+    const blob = await buildOdtBlob(model)
+    const files = await unzip(blob)
+    const contentXml = await files['content.xml'].text()
+
+    // The visible text must survive (only the control chars are dropped).
+    expect(contentXml).toContain('beforeafter')
+    expect(contentXml).toContain('styledtext')
+    expect(contentXml).toContain('const a = 1')
+    expect(contentXml).toContain('const b = 2')
+    // No XML-illegal control char anywhere in content.xml...
+    expect(XML_ILLEGAL_CONTROL_CHARS.test(contentXml)).toBe(false)
+    // ...and it re-parses with no <parsererror>.
+    assertWellFormedXml(contentXml)
+  })
+
+  it('F5: escapes an inline image MIME in manifest.xml (no attribute break-out, re-parses)', async () => {
+    // A data-URI mime of `image/x"y;base64,QQ==` yields mime === 'image/x"y'; the bare
+    // double-quote would close the media-type attribute early and corrupt the package.
+    const model: DocBlock[] = [{ kind: 'image', dataB64: 'QQ==', mime: 'image/x"y', alt: 'pixel' }]
+    const blob = await buildOdtBlob(model)
+    const files = await unzip(blob)
+    const manifest = await files['META-INF/manifest.xml'].text()
+
+    // The quote must appear escaped, never raw inside the attribute value.
+    expect(manifest).toContain('image/x&quot;y')
+    expect(manifest).not.toContain('media-type="image/x"y"')
+    // And the manifest re-parses as valid XML (no <parsererror>).
+    assertWellFormedXml(manifest)
+  })
+})
+
 describe('buildPlainTextDocModel', () => {
   it('turns a plain note into one paragraph per line', async () => {
     const model = buildPlainTextDocModel('line one\nline two')
