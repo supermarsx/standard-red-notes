@@ -43,6 +43,14 @@ const SuggestTagsForFileModalContent = observer(({ application, file, close }: O
   const [onlyMetadata, setOnlyMetadata] = useState<boolean | null>(null)
   const [customTag, setCustomTag] = useState('')
   const abortRef = useRef<AbortController | null>(null)
+  // Synchronous re-entrancy latch for the confirm handler. The button's
+  // `disabled: … || applying` guard relies on React re-rendering `applying=true`
+  // before a second click lands, so a rapid double-click in the pre-render window
+  // could enter applyTags twice. A ref read/write is synchronous (not subject to
+  // render timing), so the second synchronous invocation is dropped. (`applying`
+  // is not in applyTags' useCallback deps, so an `if (applying) return` would read
+  // a stale closure value and not help — hence the ref.)
+  const applyingRef = useRef(false)
 
   useEffect(() => {
     return () => abortRef.current?.abort()
@@ -121,6 +129,11 @@ const SuggestTagsForFileModalContent = observer(({ application, file, close }: O
     if (chosen.length === 0) {
       return
     }
+    // Drop a second synchronous entry (rapid double-click before re-render).
+    if (applyingRef.current) {
+      return
+    }
+    applyingRef.current = true
     setApplying(true)
     try {
       for (const suggestion of chosen) {
@@ -142,6 +155,7 @@ const SuggestTagsForFileModalContent = observer(({ application, file, close }: O
         message: err instanceof Error ? `Could not add topics: ${err.message}` : 'Could not add topics.',
       })
     } finally {
+      applyingRef.current = false
       setApplying(false)
     }
   }, [application, chosen, file, close])

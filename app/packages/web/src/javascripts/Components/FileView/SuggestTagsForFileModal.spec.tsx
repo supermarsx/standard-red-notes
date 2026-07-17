@@ -217,6 +217,42 @@ describe('SuggestTagsForFileModal', () => {
     expect(document.body.textContent).toContain('only its name and type were sent')
   })
 
+  it('drops a rapid double-confirm — the tag path runs exactly ONCE (t74 re-entrancy guard)', async () => {
+    // One suggestion → a clean 1-vs-2 count. The synchronous applyingRef latch
+    // must drop the second click that lands in the pre-render window (before
+    // React re-renders the button as disabled). Without the ref guard this fires
+    // findOrCreateTag/addTagToItem twice; with it, exactly once.
+    extractFileTextForTagsMock.mockResolvedValue({ text: 'quarterly figures', onlyMetadataAvailable: false })
+    suggestTagsForFileMock.mockResolvedValue(['invoices'])
+    // Make findOrCreateTag hang until we release it, so both synchronous clicks land
+    // while the first apply is still in-flight (mid-await, pre-finally, pre-re-render).
+    let releaseFindOrCreate: (value: { title: string; uuid: string }) => void = () => undefined
+    findOrCreateTagMock.mockImplementationOnce(
+      (name: string) =>
+        new Promise((resolve) => {
+          releaseFindOrCreate = () => resolve({ title: name, uuid: `tag-${name}` })
+        }),
+    )
+    renderModal()
+
+    await act(async () => {
+      findButton('Suggest topics')!.click()
+    })
+
+    // Two synchronous clicks in ONE act, before any microtask flush / re-render.
+    const confirm = findButton('Add 1 topic')!
+    await act(async () => {
+      confirm.click()
+      confirm.click()
+      releaseFindOrCreate({ title: 'invoices', uuid: 'tag-invoices' })
+    })
+
+    // Exactly one apply happened despite the double-click.
+    expect(findOrCreateTagMock).toHaveBeenCalledTimes(1)
+    expect(addTagToItemMock).toHaveBeenCalledTimes(1)
+    expect(syncMock).toHaveBeenCalledTimes(1)
+  })
+
   it('lets the user add their own topic, applied only on confirm', async () => {
     renderModal()
     const input = document.body.querySelector('input[type="text"]') as HTMLInputElement
