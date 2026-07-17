@@ -37,8 +37,19 @@ const xmlEscape = (text: string): string =>
 const attrEscape = (text: string): string =>
   text.replace(/[<>&"]/g, (c) => (c === '<' ? '&lt;' : c === '>' ? '&gt;' : c === '&' ? '&amp;' : '&quot;'))
 
+/**
+ * Defensive cap mirroring DocModel's `MAX_EMBEDDED_IMAGE_BYTES` choke point. The
+ * DocModel walk already drops oversized data-URI images before they reach here, so
+ * this only guards a direct caller that bypasses the model — an oversized base64
+ * string decodes to nothing (empty Uint8Array) rather than an unbounded allocation.
+ */
+const MAX_EMBEDDED_IMAGE_BYTES = 32 * 1024 * 1024
+
 const base64ToBytes = (b64: string): Uint8Array => {
   const clean = b64.trim()
+  if (Math.floor((clean.length * 3) / 4) > MAX_EMBEDDED_IMAGE_BYTES) {
+    return new Uint8Array(0)
+  }
   if (typeof atob === 'function') {
     const binary = atob(clean)
     const bytes = new Uint8Array(binary.length)

@@ -237,6 +237,87 @@ const readAlign = (node: ElementNode): Align | undefined => {
 
 /* --------------------------------------------------------------- inline walk */
 
+/**
+ * Bound the structured export walk the same way the IMPORT side is bounded
+ * (`DocImport/OdtConverter.ts` MAX_WALK_DEPTH). A hostile or broken Super note
+ * with tens of thousands of nested lists/containers would otherwise overflow the
+ * JS stack during the recursive walk. Because the walk runs on a plain array of
+ * `DocBlock`/`Inline`, exceeding the cap TRUNCATES (we stop descending) rather
+ * than throwing — the output degrades gracefully. Far deeper than any real doc.
+ */
+const MAX_WALK_DEPTH = 200
+
+/**
+ * Serialized Lexical node (as produced by `EditorState.toJSON`): an opaque record
+ * that MAY carry a `children` array of nested serialized nodes. Used only by the
+ * pre-load depth prune below.
+ */
+interface SerializedNodeLike {
+  children?: unknown[]
+  [key: string]: unknown
+}
+
+/**
+ * Deepest serialized-tree level the export walk can ever emit from. A list chain
+ * costs the walk two tree levels (ListNode → ListItemNode) per `MAX_WALK_DEPTH`
+ * step — the walk's steepest descent — so `2 * MAX_WALK_DEPTH` bounds every node
+ * the walk actually reads; the small margin absorbs the root/off-by-one.
+ */
+const PRUNE_TREE_DEPTH = MAX_WALK_DEPTH * 2 + 2
+
+/**
+ * Truncate a serialized editor-state tree so nothing is nested deeper than the
+ * walk can emit from, BEFORE it is loaded via `parseEditorState`/`setEditorState`.
+ *
+ * WHY (this is the actual stack-overflow fix, not the walk's own depth guards):
+ * `setEditorState`'s commit unconditionally computes the whole tree's text content
+ * — Lexical's `triggerTextContentListeners` → `getEditorStateTextContent` →
+ * `$getRoot().getTextContent()` — an UNBOUNDED recursion, independent of our walk.
+ * On a pathologically deep note that overflows the JS stack at LOAD time, before
+ * the depth-bounded walk (which truncates at `MAX_WALK_DEPTH`) ever runs. Dropping
+ * descendants the walk would discard anyway makes the load itself safe and leaves
+ * every real note (nesting far below the cap) byte-for-byte unchanged. It also
+ * bounds the walk's own final-fallback `getTextContent()` on a deep UNKNOWN
+ * container. The prune is ITERATIVE (an explicit stack) so it cannot itself
+ * overflow on the very input it defends against.
+ */
+const pruneSerializedDepth = (state: unknown): unknown => {
+  const root = (state as { root?: SerializedNodeLike } | null | undefined)?.root
+  if (!root || !Array.isArray(root.children)) {
+    return state
+  }
+  const stack: Array<{ node: SerializedNodeLike; depth: number }> = [{ node: root, depth: 0 }]
+  while (stack.length > 0) {
+    const { node, depth } = stack.pop() as { node: SerializedNodeLike; depth: number }
+    const children = node.children
+    if (!Array.isArray(children)) {
+      continue
+    }
+    if (depth >= PRUNE_TREE_DEPTH) {
+      // Past the deepest level the walk emits from: drop the subtree so the
+      // load-time full-tree getTextContent stays shallow. A container truncated
+      // here degrades exactly as the walk's own MAX_WALK_DEPTH guard would.
+      node.children = []
+      continue
+    }
+    for (const child of children) {
+      if (child && typeof child === 'object') {
+        stack.push({ node: child as SerializedNodeLike, depth: depth + 1 })
+      }
+    }
+  }
+  return state
+}
+
+/**
+ * Cap on the decoded byte length of a single embedded (base64 data-URI) image.
+ * A note can embed an arbitrarily large base64 image; both generators decode
+ * `dataB64` into a `Uint8Array` of exactly that size (`base64ToBytes`), so an
+ * unbounded image means an unbounded allocation / OOM on export. Past the cap the
+ * image is DROPPED and its alt text is emitted as a plain text inline instead.
+ */
+const MAX_EMBEDDED_IMAGE_BYTES = 32 * 1024 * 1024
+
 const CODE_ISH_TYPES = new Set(['mermaid', 'sql-query', 'math', 'inline-math', 'gantt-chart', 'timing-diagram'])
 
 const textInline = (node: LexicalNode): Inline => {
@@ -283,16 +364,28 @@ const textInline = (node: LexicalNode): Inline => {
   return inline
 }
 
-const dataUriToImageInline = (src: string, alt?: string): Extract<Inline, { kind: 'image' }> => {
+/**
+ * Turn a data-URI (or plain URL) `src` into an image inline. Base64 data-URIs are
+ * size-capped at the single choke point through which both generators receive
+ * `dataB64`: the decoded length is estimated (≈ 3/4 of the base64 length) and, past
+ * `MAX_EMBEDDED_IMAGE_BYTES`, the image is dropped and its alt text returned as a
+ * plain text inline — bounding both DOCX and ODT at once. Remote (URL-only) images
+ * carry no `dataB64`, so they are never decoded here and pass through unbounded.
+ */
+const dataUriToImageInline = (src: string, alt?: string): Inline => {
   const m = src.match(/^data:([^;,]+)?(;base64)?,(.*)$/s)
   if (m && m[2]) {
-    return { kind: 'image', mime: m[1] || 'image/png', dataB64: m[3], alt }
+    const b64 = m[3]
+    if (Math.floor((b64.length * 3) / 4) > MAX_EMBEDDED_IMAGE_BYTES) {
+      return { kind: 'text', text: alt ? `[${alt}]` : '[image]' }
+    }
+    return { kind: 'image', mime: m[1] || 'image/png', dataB64: b64, alt }
   }
   return { kind: 'image', src, alt }
 }
 
 /** Turn a single (possibly inline) node into zero or more Inline items. */
-const nodeToInlines = (node: LexicalNode): Inline[] => {
+const nodeToInlines = (node: LexicalNode, depth = 0): Inline[] => {
   if ($isTextNode(node)) {
     const text = node.getTextContent()
     return text.length > 0 ? [textInline(node)] : []
@@ -301,7 +394,7 @@ const nodeToInlines = (node: LexicalNode): Inline[] => {
     return [{ kind: 'lineBreak' }]
   }
   if ($isLinkNode(node)) {
-    return [{ kind: 'link', url: node.getURL(), children: collectInlines(node) }]
+    return [{ kind: 'link', url: node.getURL(), children: collectInlines(node, depth) }]
   }
   if ($isInlineFileNode(node)) {
     const src = (node as unknown as { __src: string }).__src
@@ -319,28 +412,35 @@ const nodeToInlines = (node: LexicalNode): Inline[] => {
   }
   if ($isElementNode(node)) {
     // Mark / Hashtag / Overflow and other inline containers: flatten their children.
-    return collectInlines(node)
+    return collectInlines(node, depth)
   }
   const text = node.getTextContent()
   return text.length > 0 ? [{ kind: 'text', text }] : []
 }
 
-const collectInlines = (element: ElementNode): Inline[] => {
+const collectInlines = (element: ElementNode, depth = 0): Inline[] => {
+  if (depth >= MAX_WALK_DEPTH) {
+    return []
+  }
   const inlines: Inline[] = []
   for (const child of element.getChildren()) {
-    inlines.push(...nodeToInlines(child))
+    inlines.push(...nodeToInlines(child, depth + 1))
   }
   return inlines
 }
 
 /* ----------------------------------------------------------------- list walk */
 
-const listNodeToModel = (listNode: ListNode): ListModel => {
+const listNodeToModel = (listNode: ListNode, depth = 0): ListModel => {
   const listType = listNode.getListType()
   const model: ListModel = {
     ordered: listType === 'number',
     check: listType === 'check',
     items: [],
+  }
+  // Truncate a pathologically deep list nest instead of overflowing the stack.
+  if (depth >= MAX_WALK_DEPTH) {
+    return model
   }
   for (const child of listNode.getChildren()) {
     if (!$isListItemNode(child)) {
@@ -351,9 +451,9 @@ const listNodeToModel = (listNode: ListNode): ListModel => {
     let sublist: ListModel | undefined
     for (const grandChild of item.getChildren()) {
       if ($isListNode(grandChild)) {
-        sublist = listNodeToModel(grandChild)
+        sublist = listNodeToModel(grandChild, depth + 1)
       } else {
-        inlines.push(...nodeToInlines(grandChild))
+        inlines.push(...nodeToInlines(grandChild, depth))
       }
     }
     const checked = item.getChecked()
@@ -380,7 +480,7 @@ const headingLevel = (tag: string): 1 | 2 | 3 | 4 | 5 | 6 => {
 }
 
 /** Turn a top-level (block) node into zero or more DocBlocks. Never drops content. */
-const nodeToBlocks = (node: LexicalNode): DocBlock[] => {
+const nodeToBlocks = (node: LexicalNode, depth = 0): DocBlock[] => {
   if ($isHeadingNode(node)) {
     return [
       {
@@ -388,15 +488,15 @@ const nodeToBlocks = (node: LexicalNode): DocBlock[] => {
         level: headingLevel(node.getTag()),
         align: readAlign(node),
         style: deriveBlockStyle(node.getStyle()),
-        inlines: collectInlines(node),
+        inlines: collectInlines(node, depth),
       },
     ]
   }
   if ($isQuoteNode(node)) {
-    return [{ kind: 'quote', inlines: collectInlines(node) }]
+    return [{ kind: 'quote', inlines: collectInlines(node, depth) }]
   }
   if ($isListNode(node)) {
-    return [{ kind: 'list', list: listNodeToModel(node) }]
+    return [{ kind: 'list', list: listNodeToModel(node, depth) }]
   }
   if ($isCodeNode(node)) {
     return [
@@ -418,7 +518,7 @@ const nodeToBlocks = (node: LexicalNode): DocBlock[] => {
         if (!$isTableCellNode(cellNode)) {
           continue
         }
-        row.push(buildBlocksFromChildren((cellNode as ElementNode).getChildren()))
+        row.push(buildBlocksFromChildren((cellNode as ElementNode).getChildren(), depth + 1))
       }
       rows.push(row)
     }
@@ -436,7 +536,12 @@ const nodeToBlocks = (node: LexicalNode): DocBlock[] => {
     const name = (node as unknown as { __fileName?: string }).__fileName
     if (mime.startsWith('image/')) {
       const img = dataUriToImageInline(src, name)
-      return [{ kind: 'image', dataB64: img.dataB64, mime: img.mime, src: img.src, alt: img.alt }]
+      // Oversized data-URI images are dropped by the choke point above, which returns
+      // a text inline instead — emit that as a paragraph rather than an image block.
+      if (img.kind === 'image') {
+        return [{ kind: 'image', dataB64: img.dataB64, mime: img.mime, src: img.src, alt: img.alt }]
+      }
+      return [{ kind: 'paragraph', inlines: [img] }]
     }
     return [{ kind: 'paragraph', inlines: [{ kind: 'text', text: name ? `[${name}]` : '[file]' }] }]
   }
@@ -457,7 +562,7 @@ const nodeToBlocks = (node: LexicalNode): DocBlock[] => {
         style: deriveBlockStyle(node.getStyle()),
         align: readAlign(node),
         indent: node.getIndent() || undefined,
-        inlines: collectInlines(node),
+        inlines: collectInlines(node, depth),
       },
     ]
   }
@@ -471,7 +576,7 @@ const nodeToBlocks = (node: LexicalNode): DocBlock[] => {
   // Unknown CONTAINER node (callout / collapsible / etc.): recurse children so
   // their structured content survives.
   if ($isElementNode(node) && node.getChildrenSize() > 0) {
-    const nested = buildBlocksFromChildren(node.getChildren())
+    const nested = buildBlocksFromChildren(node.getChildren(), depth + 1)
     if (nested.length > 0) {
       return nested
     }
@@ -482,10 +587,13 @@ const nodeToBlocks = (node: LexicalNode): DocBlock[] => {
   return [{ kind: 'paragraph', inlines: [{ kind: 'text', text }] }]
 }
 
-const buildBlocksFromChildren = (children: LexicalNode[]): DocBlock[] => {
+const buildBlocksFromChildren = (children: LexicalNode[], depth = 0): DocBlock[] => {
+  if (depth >= MAX_WALK_DEPTH) {
+    return []
+  }
   const blocks: DocBlock[] = []
   for (const child of children) {
-    blocks.push(...nodeToBlocks(child))
+    blocks.push(...nodeToBlocks(child, depth))
   }
   return blocks
 }
@@ -578,7 +686,13 @@ export const superStringToDocModel = async (superString: string, config: DocMode
     return []
   }
   const editor = createExportEditor()
-  editor.setEditorState(editor.parseEditorState(superString))
+  // Prune pathological nesting BEFORE loading: setEditorState's commit walks the
+  // whole tree's text content (Lexical-internal, unbounded), so a deep note would
+  // overflow the stack here — before our depth-bounded walk runs. See
+  // `pruneSerializedDepth`. Parsing the string to an object first is safe
+  // (JSON.parse is iterative) and `parseEditorState` accepts the object directly.
+  const serialized = pruneSerializedDepth(JSON.parse(superString))
+  editor.setEditorState(editor.parseEditorState(serialized as Parameters<typeof editor.parseEditorState>[0]))
   await rewriteFileNodes(editor, config)
   return editor.getEditorState().read(() => buildBlocksFromChildren($getRoot().getChildren()))
 }

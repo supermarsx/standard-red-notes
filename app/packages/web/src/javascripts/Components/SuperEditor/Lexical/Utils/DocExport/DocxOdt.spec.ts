@@ -29,7 +29,7 @@ import BlocksEditorTheme from '../../Theme/Theme'
 import { SuperExportNodes } from '../../Nodes/AllNodes'
 import { $createInlineFileNode } from '../../../Plugins/InlineFilePlugin/InlineFileNode'
 import { $createMermaidNode } from '../../Nodes/MermaidNode'
-import { superStringToDocModel, DocBlock, buildPlainTextDocModel } from './DocModel'
+import { superStringToDocModel, DocBlock, ListModel, buildPlainTextDocModel } from './DocModel'
 import { buildDocxBlob } from './DocxGenerator'
 import { buildOdtBlob } from './OdtGenerator'
 
@@ -467,6 +467,133 @@ describe('buildOdtBlob escaping (t72-e2)', () => {
     expect(manifest).not.toContain('media-type="image/x"y"')
     // And the manifest re-parses as valid XML (no <parsererror>).
     assertWellFormedXml(manifest)
+  })
+})
+
+describe('DocModel export bounds (t74-e1 F6)', () => {
+  const MAX_WALK_DEPTH = 200
+
+  /**
+   * A Super note string that is a single chain of `depth` nested bullet lists.
+   *
+   * Built by ITERATIVE string concatenation, NOT via `editor.update()` +
+   * `JSON.stringify`. Both of those overflow the JS stack at large `depth` before
+   * production is ever exercised: committing the tree makes Lexical compute the
+   * whole tree's text content on commit (`triggerTextContentListeners` →
+   * `$getRoot().getTextContent()`, unbounded recursion), and `JSON.stringify` of a
+   * `depth`-deep object recurses per level too. `String.repeat`/concatenation and
+   * (in production) `JSON.parse` are both iterative, so this feeds production a
+   * genuine `depth`-deep note without the harness itself blowing the stack. The
+   * shape mirrors a real depth-2 `EditorState.toJSON()` (list → listitem → …).
+   */
+  const buildNestedListSuperString = (depth: number): string => {
+    const listPost =
+      '],"direction":null,"format":"","indent":0,"type":"list","version":1,"listType":"bullet","start":1,"tag":"ul"}'
+    const itemPost = '],"direction":null,"format":"","indent":0,"type":"listitem","version":1,"value":1}'
+    const textNode = '{"detail":0,"format":0,"mode":"normal","style":"","text":"deepest","type":"text","version":1}'
+    // One nesting level = list([ listitem([ <inner> ]) ]); both open with
+    // `{"children":[`, so the opener repeats twice per level.
+    const pre = '{"children":[{"children":['.repeat(depth)
+    const post = (itemPost + listPost).repeat(depth)
+    const chain = pre + textNode + post
+    return '{"root":{"children":[' + chain + '],"direction":null,"format":"","indent":0,"type":"root","version":1}}'
+  }
+
+  /** Depth of the nested-list chain in a produced DocModel (follows items[0].children). */
+  const listChainDepth = (blocks: DocBlock[]): number => {
+    const top = blocks.find((b) => b.kind === 'list')
+    let cur: ListModel | undefined = top && top.kind === 'list' ? top.list : undefined
+    let n = 0
+    while (cur) {
+      n++
+      cur = cur.items[0]?.children
+    }
+    return n
+  }
+
+  it('(a) truncates a deeply nested walk at MAX_WALK_DEPTH instead of walking it whole', async () => {
+    const inputDepth = 260 // safely > the 200 cap
+    const blocks = await superStringToDocModel(buildNestedListSuperString(inputDepth), {})
+    const producedDepth = listChainDepth(blocks)
+
+    // The walk STOPPED descending at the cap: the produced chain is bounded near
+    // MAX_WALK_DEPTH and strictly shallower than the 260-deep input. With the guard
+    // removed the walk follows the input all the way down (producedDepth === 260),
+    // so this upper bound is exactly what fails RED in the false-green direction.
+    expect(producedDepth).toBeLessThanOrEqual(MAX_WALK_DEPTH + 1)
+    expect(producedDepth).toBeLessThan(inputDepth)
+    // And it degraded gracefully — the walk returned a real model, never threw.
+    expect(producedDepth).toBeGreaterThan(0)
+  })
+
+  it('(a) does NOT throw a RangeError on a pathologically deep (stack-overflow-class) nest', async () => {
+    // Deep enough that the UNGUARDED recursive walk overflows the JS stack; the depth
+    // guard must truncate before that and resolve normally. (False-green: remove the
+    // guard → this rejects with a RangeError.)
+    const blocks = await superStringToDocModel(buildNestedListSuperString(20000), {})
+    expect(blocks.length).toBeGreaterThan(0)
+    expect(listChainDepth(blocks)).toBeLessThanOrEqual(MAX_WALK_DEPTH + 1)
+  })
+
+  it('(b) drops an over-cap embedded base64 image, emitting its alt text as a paragraph', async () => {
+    // A base64 payload whose decoded size (~3/4 of its length) exceeds the 32MB cap.
+    // MAX_EMBEDDED_IMAGE_BYTES = 32*1024*1024 → need length > 44,739,242.
+    const hugeB64 = 'A'.repeat(45_000_000)
+    const dataUri = `data:image/png;base64,${hugeB64}`
+
+    const editor = createHeadlessEditor({
+      namespace: 'BlocksEditor',
+      theme: BlocksEditorTheme,
+      editable: false,
+      onError: (e: Error) => {
+        throw e
+      },
+      nodes: SuperExportNodes,
+    })
+    editor.update(
+      () => {
+        const root = $getRoot()
+        root.clear()
+        root.append($createInlineFileNode(dataUri, 'image/png', 'huge.png'))
+      },
+      { discrete: true },
+    )
+    const superString = JSON.stringify(editor.getEditorState())
+
+    const blocks = await superStringToDocModel(superString, {})
+
+    // No image block carrying the oversized dataB64 survives...
+    const imageBlock = blocks.find((b) => b.kind === 'image')
+    expect(imageBlock).toBeUndefined()
+    // ...instead the alt/filename comes through as a plain text paragraph.
+    const para = blocks.find(
+      (b) => b.kind === 'paragraph' && b.inlines.some((i) => i.kind === 'text' && i.text === '[huge.png]'),
+    )
+    expect(para).toBeDefined()
+  })
+
+  it('(b) keeps a normal (under-cap) embedded base64 image as an image block', async () => {
+    const editor = createHeadlessEditor({
+      namespace: 'BlocksEditor',
+      theme: BlocksEditorTheme,
+      editable: false,
+      onError: (e: Error) => {
+        throw e
+      },
+      nodes: SuperExportNodes,
+    })
+    editor.update(
+      () => {
+        const root = $getRoot()
+        root.clear()
+        root.append($createInlineFileNode(PNG_DATA_URI, 'image/png', 'pixel.png'))
+      },
+      { discrete: true },
+    )
+    const blocks = await superStringToDocModel(JSON.stringify(editor.getEditorState()), {})
+    const imageBlock = blocks.find((b) => b.kind === 'image')
+    expect(imageBlock?.kind).toBe('image')
+    expect(imageBlock?.kind === 'image' && imageBlock.dataB64).toBe(PNG_1x1)
   })
 })
 
