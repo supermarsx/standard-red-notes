@@ -68,7 +68,8 @@ describe('SyncService failure backoff', () => {
     jest.useRealTimers()
   })
 
-  const failureCount = (service: SyncService) => (service as unknown as { consecutiveFailureCount: number }).consecutiveFailureCount
+  const failureCount = (service: SyncService) =>
+    (service as unknown as { consecutiveFailureCount: number }).consecutiveFailureCount
   const hasPendingBackoff = (service: SyncService) =>
     (service as unknown as { failureBackoffTimeout?: unknown }).failureBackoffTimeout != undefined
 
@@ -283,9 +284,7 @@ describe('SyncService websocket push apply (Phase 1A)', () => {
     await service.handleEvent({ type: WebSocketsServiceEvent.WebSocketDidOpen } as never)
 
     expect(syncSpy).toHaveBeenCalledTimes(1)
-    expect(syncSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ sourceDescription: 'WebSocket reconnect backfill' }),
-    )
+    expect(syncSpy).toHaveBeenCalledWith(expect.objectContaining({ sourceDescription: 'WebSocket reconnect backfill' }))
   })
 })
 
@@ -590,8 +589,7 @@ describe('SyncService local-only PERSISTENCE (silent data-loss regression)', () 
       }
     ).prepareForSync({})
 
-  const persistedUuids = (): string[] =>
-    (persistPayloads.mock.calls[0][0] as { uuid: string }[]).map((p) => p.uuid)
+  const persistedUuids = (): string[] => (persistPayloads.mock.calls[0][0] as { uuid: string }[]).map((p) => p.uuid)
 
   it('prepareForSync persists a dirty local-only item locally', async () => {
     const service = createService([makeDirtyItem(LOCAL_ONLY_UUID, true), makeDirtyItem(NORMAL_UUID, false)])
@@ -628,9 +626,7 @@ describe('SyncService local-only PERSISTENCE (silent data-loss regression)', () 
    * request. prepareForSyncExecution is called OUTSIDE performSync's try/catch, so the sentinel
    * propagates out and we assert on the captured values.
    */
-  const captureUploadSetViaPerformSync = async (
-    service: SyncService,
-  ): Promise<DecryptedItemInterface[]> => {
+  const captureUploadSetViaPerformSync = async (service: SyncService): Promise<DecryptedItemInterface[]> => {
     let capturedUploadItems: DecryptedItemInterface[] = []
     const sentinel = new Error('stop-after-capture')
     ;(service as unknown as { prepareForSyncExecution: unknown }).prepareForSyncExecution = (
@@ -956,9 +952,7 @@ describe('SyncService lazy-decrypt SAFETY INVARIANTS', () => {
 
   describe('persistPayloads tripwire (never write a lite payload to disk)', () => {
     const persistPayloads = (service: SyncService, payloads: unknown[]) =>
-      (
-        service as unknown as { persistPayloads: (p: unknown[]) => Promise<unknown> }
-      ).persistPayloads(payloads)
+      (service as unknown as { persistPayloads: (p: unknown[]) => Promise<unknown> }).persistPayloads(payloads)
 
     it('THROWS rather than save a lite payload (would overwrite real ciphertext with nothing)', async () => {
       const savePayloads = jest.fn().mockResolvedValue(undefined)
@@ -1017,9 +1011,7 @@ describe('SyncService lazy-decrypt SAFETY INVARIANTS', () => {
       // Stub the on-disk re-hydration to return the full payload for the lite item's uuid.
       jest
         .spyOn(service, 'getFullContentPayload')
-        .mockImplementation((uuid: string) =>
-          Promise.resolve(uuid === fullNote.uuid ? fullNote : undefined),
-        )
+        .mockImplementation((uuid: string) => Promise.resolve(uuid === fullNote.uuid ? fullNote : undefined))
 
       await callMarkAll(service)
 
@@ -1212,8 +1204,9 @@ describe('SyncService lazy-decrypt SAFETY INVARIANTS', () => {
       // CRUX: the dirty lite item must be in the UPLOAD set (returned `items`), not merely persisted.
       const uploaded = result.items.find((i) => i.uuid === editedLite.uuid)
       expect(uploaded).toBeDefined()
-      const uploadedPayload = (uploaded as { payloadRepresentation: () => DecryptedPayload<NoteContent> })
-        .payloadRepresentation()
+      const uploadedPayload = (
+        uploaded as { payloadRepresentation: () => DecryptedPayload<NoteContent> }
+      ).payloadRepresentation()
       // The uploaded payload carries the FULL body AND the user's dirty edit (not the stale disk title).
       expect(isLitePayload(uploadedPayload)).toBe(false)
       expect((uploadedPayload.content as NoteContent).text).toEqual('BODY-MUST-NOT-LEAK')
@@ -1272,9 +1265,9 @@ describe('SyncService lazy-decrypt SAFETY INVARIANTS', () => {
 
     it('classifier surfaces a generic write failure and suppresses a no-root-key failure', () => {
       expect(SyncService.isSuppressibleKeyLookupError(new Error('disk write failed'))).toBe(false)
-      expect(SyncService.isSuppressibleKeyLookupError(new Error('Attempting root key encryption with no root key'))).toBe(
-        true,
-      )
+      expect(
+        SyncService.isSuppressibleKeyLookupError(new Error('Attempting root key encryption with no root key')),
+      ).toBe(true)
     })
   })
 })
@@ -1359,8 +1352,9 @@ describe('SyncService no-session sync status (no-login "syncing" bug)', () => {
     ;(service as unknown as { handleSyncOperationFinish: unknown }).handleSyncOperationFinish = jest
       .fn()
       .mockResolvedValue({ hasError: false })
-    ;(service as unknown as { potentiallySyncAgainAfterSyncCompletion: unknown }).potentiallySyncAgainAfterSyncCompletion =
-      jest.fn().mockResolvedValue(false)
+    ;(
+      service as unknown as { potentiallySyncAgainAfterSyncCompletion: unknown }
+    ).potentiallySyncAgainAfterSyncCompletion = jest.fn().mockResolvedValue(false)
     ;(service as unknown as { prepareForSync: unknown }).prepareForSync = jest
       .fn()
       .mockResolvedValue({ items: [], beginDate: new Date(), frozenDirtyIndex: 0, neverSyncedDeleted: [] })
@@ -1854,7 +1848,10 @@ describe('SyncService local-only dirty-clear (infinite sync-loop regression — 
     persistPayloads: jest.Mock
     itemsNeedingSync: () => DecryptedItemInterface[]
     clearSeam: (items: DecryptedItemInterface[], frozenDirtyIndex: number) => Promise<void>
-    prepareForSync: () => Promise<{ items: DecryptedItemInterface[]; localOnlyPersistedItems: DecryptedItemInterface[] }>
+    prepareForSync: () => Promise<{
+      items: DecryptedItemInterface[]
+      localOnlyPersistedItems: DecryptedItemInterface[]
+    }>
     potentiallySyncAgain: () => Promise<boolean>
     syncAgainSpy: jest.Mock
   }

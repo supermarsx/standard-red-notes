@@ -26,16 +26,12 @@ const CORE_SHELL = ['/', '/index.html', '/app.js', '/app.css', '/manifest.webman
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches
-      .open(CACHE_NAME)
-      .then((cache) =>
-        // Use `reload` so install doesn't pick up an already-stale HTTP cache
-        // entry, and tolerate individual misses (e.g. a 404 on one optional
-        // file must not abort the whole install).
-        Promise.allSettled(
-          CORE_SHELL.map((url) => cache.add(new Request(url, { cache: 'reload' }))),
-        ),
-      ),
+    caches.open(CACHE_NAME).then((cache) =>
+      // Use `reload` so install doesn't pick up an already-stale HTTP cache
+      // entry, and tolerate individual misses (e.g. a 404 on one optional
+      // file must not abort the whole install).
+      Promise.allSettled(CORE_SHELL.map((url) => cache.add(new Request(url, { cache: 'reload' })))),
+    ),
   )
 })
 
@@ -45,9 +41,7 @@ self.addEventListener('activate', (event) => {
       .keys()
       .then((keys) =>
         Promise.all(
-          keys
-            .filter((key) => key.startsWith('srn-shell-') && key !== CACHE_NAME)
-            .map((key) => caches.delete(key)),
+          keys.filter((key) => key.startsWith('srn-shell-') && key !== CACHE_NAME).map((key) => caches.delete(key)),
         ),
       )
       .then(() => self.clients.claim()),
@@ -108,9 +102,7 @@ self.addEventListener('fetch', (event) => {
           caches.open(CACHE_NAME).then((cache) => cache.put(request, copy))
           return response
         })
-        .catch(() =>
-          caches.match(request).then((cached) => cached || caches.match('/index.html')),
-        ),
+        .catch(() => caches.match(request).then((cached) => cached || caches.match('/index.html'))),
     )
     return
   }

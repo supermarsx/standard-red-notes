@@ -94,9 +94,9 @@ describe('large local-only file stability benchmark', () => {
       const chunks = Math.ceil(bytes / MINIMUM_CHUNK_SIZE)
       // eslint-disable-next-line no-console
       console.log(
-        `[chunking] ${label}: ${chunks} chunks, extrapolated chunker CPU ~${(
-          (msPerMb * bytes) / MB / 1000
-        ).toFixed(1)}s (extrapolated; real cost is super-linear due to the chunker's array spread)`,
+        `[chunking] ${label}: ${chunks} chunks, extrapolated chunker CPU ~${((msPerMb * bytes) / MB / 1000).toFixed(
+          1,
+        )}s (extrapolated; real cost is super-linear due to the chunker's array spread)`,
       )
     }
   })
@@ -106,9 +106,7 @@ describe('large local-only file stability benchmark', () => {
     // size of the input + overhead and copies the bytes (mirrors the real memory behaviour of
     // producing a fresh encrypted Uint8Array per chunk, without the native xchacha cost).
     const crypto = {} as jest.Mocked<PureCryptoInterface>
-    crypto.xchacha20StreamInitEncryptor = jest
-      .fn()
-      .mockReturnValue({ header: 'header', state: {} } as StreamEncryptor)
+    crypto.xchacha20StreamInitEncryptor = jest.fn().mockReturnValue({ header: 'header', state: {} } as StreamEncryptor)
     crypto.xchacha20StreamEncryptorPush = jest.fn().mockImplementation((_stream, message: Uint8Array) => {
       const out = new Uint8Array(message.length + ENCRYPTION_OVERHEAD_PER_CHUNK)
       out.set(message)
@@ -118,7 +116,10 @@ describe('large local-only file stability benchmark', () => {
     const oneChunk = new Uint8Array(MINIMUM_CHUNK_SIZE)
 
     // Time a single representative chunk encryption.
-    const op = new LocalOnlyFileUploadOperation({ key: 'k', remoteIdentifier: 'r', decryptedSize: MINIMUM_CHUNK_SIZE }, crypto)
+    const op = new LocalOnlyFileUploadOperation(
+      { key: 'k', remoteIdentifier: 'r', decryptedSize: MINIMUM_CHUNK_SIZE },
+      crypto,
+    )
     const startOne = Date.now()
     op.pushBytes(oneChunk, true)
     const perChunkMs = Date.now() - startOne
@@ -146,9 +147,7 @@ describe('large local-only file stability benchmark', () => {
     // accumulation logic that, at 500 MB, is the dominant transient memory cost (a second full
     // copy of the file's encrypted bytes in a single contiguous buffer).
     const crypto = {} as jest.Mocked<PureCryptoInterface>
-    crypto.xchacha20StreamInitEncryptor = jest
-      .fn()
-      .mockReturnValue({ header: 'header', state: {} } as StreamEncryptor)
+    crypto.xchacha20StreamInitEncryptor = jest.fn().mockReturnValue({ header: 'header', state: {} } as StreamEncryptor)
     let counter = 0
     crypto.xchacha20StreamEncryptorPush = jest.fn().mockImplementation((_stream, message: Uint8Array) => {
       // Tag each chunk's first byte so we can verify ordering.

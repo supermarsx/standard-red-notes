@@ -108,7 +108,10 @@ describe('webSocketsService', () => {
     // Pump a RAW non-JSON text frame straight through the message handler (not
     // via JSON.stringify) — modelling a proxy/gateway that answers the client's
     // raw `'ping'` heartbeat with a plain text `pong`/keepalive.
-    const pumpRaw = (service: WebSocketsService, raw: string): { events: WebSocketsServiceEvent[]; run: () => void } => {
+    const pumpRaw = (
+      service: WebSocketsService,
+      raw: string,
+    ): { events: WebSocketsServiceEvent[]; run: () => void } => {
       const events: WebSocketsServiceEvent[] = []
       service.addEventObserver((event) => {
         events.push(event)

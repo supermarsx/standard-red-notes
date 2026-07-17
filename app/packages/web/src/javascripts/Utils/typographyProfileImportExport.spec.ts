@@ -274,7 +274,11 @@ describe('typographyProfileImportExport', () => {
   })
 
   describe('partial selection', () => {
-    const alpha = makeProfile({ id: 'a', name: 'Alpha', blocks: { h1: { fontSize: '2rem' }, h2: { fontSize: '1.5rem' } } })
+    const alpha = makeProfile({
+      id: 'a',
+      name: 'Alpha',
+      blocks: { h1: { fontSize: '2rem' }, h2: { fontSize: '1.5rem' } },
+    })
     const beta = makeProfile({ id: 'b', name: 'Beta', blocks: { code: { fontFamily: 'monospace' } } })
 
     it('builds a full selection of every carried block, in catalog order', () => {
@@ -370,7 +374,9 @@ describe('typographyProfileImportExport', () => {
     })
 
     it('merge mode overwrites only the incoming blocks of the target, keeping the rest', () => {
-      const incoming = [makeProfile({ id: 'x', name: 'From file', blocks: { h1: { fontSize: '9rem' }, h3: { color: 'red' } } })]
+      const incoming = [
+        makeProfile({ id: 'x', name: 'From file', blocks: { h1: { fontSize: '9rem' }, h3: { color: 'red' } } }),
+      ]
       const out = resolveImport(existing, incoming, { mode: 'merge', targetProfileId: 'custom' })
       expect(out).toHaveLength(2) // no new profile
       const target = out.find((p) => p.id === 'custom')!

@@ -21,7 +21,9 @@
 .Lexical__code,
 .Lexical__textCode {
   font-variant-ligatures: none;
-  font-feature-settings: 'liga' 0, 'calt' 0;
+  font-feature-settings:
+    'liga' 0,
+    'calt' 0;
 }
 
 .srn-ligatures-on {
@@ -29,7 +31,9 @@
   .Lexical__code,
   .Lexical__textCode {
     font-variant-ligatures: contextual common-ligatures;
-    font-feature-settings: 'liga' 1, 'calt' 1;
+    font-feature-settings:
+      'liga' 1,
+      'calt' 1;
   }
 }
 

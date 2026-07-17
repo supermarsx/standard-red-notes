@@ -95,7 +95,10 @@ describe('extractFileTextForTags', () => {
       return undefined
     })
 
-    const decodeSpy = jest.spyOn((globalThis as unknown as { TextDecoder: typeof TextDecoder }).TextDecoder.prototype, 'decode')
+    const decodeSpy = jest.spyOn(
+      (globalThis as unknown as { TextDecoder: typeof TextDecoder }).TextDecoder.prototype,
+      'decode',
+    )
     try {
       const result = await extractFileTextForTags(app as never, makeFile('text/plain') as never, { budget })
 

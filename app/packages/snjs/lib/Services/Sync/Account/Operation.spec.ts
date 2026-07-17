@@ -42,12 +42,7 @@ describe('AccountSyncOperation receiver-error handling', () => {
       }
     })
 
-    const operation = new AccountSyncOperation(
-      [],
-      receiver as never,
-      apiService as never,
-      {},
-    )
+    const operation = new AccountSyncOperation([], receiver as never, apiService as never, {})
 
     await expect(operation.run()).rejects.toBe(boom)
   })
@@ -105,8 +100,7 @@ describe('AccountSyncOperation paginated-upload error handling', () => {
     data: { error: { message: 'server unavailable' } },
   })
 
-  const makeUploadPayloads = (count: number) =>
-    Array.from({ length: count }, (_, i) => ({ uuid: `u${i}` })) as never[]
+  const makeUploadPayloads = (count: number) => Array.from({ length: count }, (_, i) => ({ uuid: `u${i}` })) as never[]
 
   it('does NOT proceed to batch 2 after batch 1 returns an error response, and preserves dirty items', async () => {
     // 200 dirty items => two upload batches (150 + 50).

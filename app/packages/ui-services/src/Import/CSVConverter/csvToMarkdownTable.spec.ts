@@ -26,10 +26,7 @@ describe('csvToMarkdownTable', () => {
   })
 
   it('converts embedded newlines to <br>', () => {
-    const rows = [
-      ['col'],
-      ['line1\nline2'],
-    ]
+    const rows = [['col'], ['line1\nline2']]
     expect(csvToMarkdownTable(rows)).toBe(['| col |', '| --- |', '| line1<br>line2 |'].join('\n'))
   })
 

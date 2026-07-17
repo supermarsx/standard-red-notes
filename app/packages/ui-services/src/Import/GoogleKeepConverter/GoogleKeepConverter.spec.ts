@@ -136,7 +136,13 @@ describe('GoogleKeepConverter', () => {
     const converter = new GoogleKeepConverter()
     const data = JSON.stringify([{ textContent: 'valid' }, { not: 'a keep note' }, 42])
 
-    const result = await converter.tryParseAsJsonCollection(data, insertNote, insertTag, async () => {}, (md) => md)
+    const result = await converter.tryParseAsJsonCollection(
+      data,
+      insertNote,
+      insertTag,
+      async () => {},
+      (md) => md,
+    )
 
     expect(result).not.toBeNull()
     expect(result?.successful.filter((i) => i.content_type === ContentType.TYPES.Note)).toHaveLength(1)

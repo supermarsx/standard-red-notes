@@ -142,8 +142,7 @@ export type SanitizationDiff = {
   totalDropped: number
 }
 
-const asDisplayValue = (value: unknown): string =>
-  typeof value === 'string' ? value : JSON.stringify(value)
+const asDisplayValue = (value: unknown): string => (typeof value === 'string' ? value : JSON.stringify(value))
 
 /**
  * Compute — using the REAL `sanitizeBlockStyle` — exactly what an import will keep
@@ -209,7 +208,9 @@ export const computeSanitizationDiff = (rawProfile: unknown): SanitizationDiff =
  * plus its truthful sanitisation diff. Does NOT validate schemaVersion — the
  * caller does that at the file level (bundle version governs bundle items).
  */
-const normalizeProfileObject = (raw: Record<string, unknown>): { profile: TypographyProfile; diff: SanitizationDiff } => {
+const normalizeProfileObject = (
+  raw: Record<string, unknown>,
+): { profile: TypographyProfile; diff: SanitizationDiff } => {
   const rawBlocks = isPlainObject(raw.blocks) ? raw.blocks : {}
   const blocks: Partial<Record<BlockTypeKey, BlockStyle>> = {}
   for (const key of BLOCK_CATALOG_KEYS) {
@@ -501,11 +502,11 @@ export const resolveImport = (
         }
       }
     }
-    return existingProfiles.map((profile) =>
-      profile.id === target.targetProfileId
+    return existingProfiles.map((profile) => {
+      return profile.id === target.targetProfileId
         ? { ...profile, blocks: { ...profile.blocks, ...mergedBlocks } }
-        : profile,
-    )
+        : profile
+    })
   }
 
   // create-new: append each incoming as a fresh profile with a unique name. Names

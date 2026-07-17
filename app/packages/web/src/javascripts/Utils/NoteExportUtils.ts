@@ -46,8 +46,7 @@ const headlessSuperConverter = new HeadlessSuperConverter()
 // templates below interpolate it into markup, so it MUST be neutralized at the
 // sink or a `</title><script>…` title executes when the exported .html is opened
 // from disk, and a title with a newline injects arbitrary YAML frontmatter keys.
-const escapeHtml = (value: string) =>
-  value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+const escapeHtml = (value: string) => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
 // Emit the title as a double-quoted YAML scalar: escape backslash and quote, and
 // collapse newlines to the \n escape so the value can never open a new frontmatter

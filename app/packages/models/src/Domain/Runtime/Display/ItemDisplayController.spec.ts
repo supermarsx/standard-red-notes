@@ -528,7 +528,10 @@ describe('item display controller', () => {
         notes.push(
           new SNNote(
             note.payload.copy({
-              content: { ...note.payload.content, title: `${randomTitle(rand)}-${String(i).padStart(3, '0')}` } as NoteContent,
+              content: {
+                ...note.payload.content,
+                title: `${randomTitle(rand)}-${String(i).padStart(3, '0')}`,
+              } as NoteContent,
             }),
           ),
         )
@@ -570,7 +573,10 @@ describe('item display controller', () => {
       const batchCount = 5
 
       const makeNote = (index: number) =>
-        createNoteWithContent({ title: `note-${(index * 2654435761) % 100000}` }, new Date(1600000000000 + ((index * 48271) % 100000) * 1000))
+        createNoteWithContent(
+          { title: `note-${(index * 2654435761) % 100000}` },
+          new Date(1600000000000 + ((index * 48271) % 100000) * 1000),
+        )
 
       const notes: SNNote[] = []
       for (let i = 0; i < existingCount + batchSize * batchCount; i++) {

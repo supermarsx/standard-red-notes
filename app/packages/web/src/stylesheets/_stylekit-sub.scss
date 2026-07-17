@@ -95,8 +95,7 @@ input:focus {
    Radios/checkboxes are excluded: their focus treatment is owned entirely by
    _radio.scss/_checkbox.scss. Bare inputs (no ring-drawing wrapper) keep the
    1px shadow for accessibility. */
-:is([class*='focus-within:ring-'], [class*='focus-within:border-'])
-  input:not([type='radio'], [type='checkbox']):focus {
+:is([class*='focus-within:ring-'], [class*='focus-within:border-']) input:not([type='radio'], [type='checkbox']):focus {
   box-shadow: none;
 }
 

@@ -64,10 +64,7 @@
   input[type='checkbox']:indeterminate {
     border-color: var(--sn-stylekit-info-color);
     background-color: var(--sn-stylekit-info-color);
-    background-image: linear-gradient(
-      var(--sn-stylekit-info-contrast-color),
-      var(--sn-stylekit-info-contrast-color)
-    );
+    background-image: linear-gradient(var(--sn-stylekit-info-contrast-color), var(--sn-stylekit-info-contrast-color));
     background-size: 0.55rem 2px;
     background-position: center;
   }

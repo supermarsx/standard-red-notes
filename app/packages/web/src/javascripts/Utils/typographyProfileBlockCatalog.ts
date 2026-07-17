@@ -119,13 +119,13 @@ export const BLOCK_CATALOG_GROUPS: readonly BlockCatalogGroup[] = BLOCK_GROUP_OR
 }))
 
 /** The display label for a block key (falls back to the raw key if unknown). */
-export const blockLabel = (key: string): string =>
-  Object.prototype.hasOwnProperty.call(BLOCK_META, key) ? BLOCK_META[key as BlockTypeKey].label : key
+export const blockLabel = (key: string): string => {
+  return Object.prototype.hasOwnProperty.call(BLOCK_META, key) ? BLOCK_META[key as BlockTypeKey].label : key
+}
 
 /** Type guard: is `key` a real, catalogued block key? */
 export const isBlockCatalogKey = (key: string): key is BlockTypeKey =>
   Object.prototype.hasOwnProperty.call(BLOCK_META, key)
 
 /** The catalog index of a block key (its sort position); `-1` if unknown. */
-export const blockCatalogIndex = (key: string): number =>
-  BLOCK_CATALOG_KEYS.indexOf(key as BlockTypeKey)
+export const blockCatalogIndex = (key: string): number => BLOCK_CATALOG_KEYS.indexOf(key as BlockTypeKey)

@@ -47,13 +47,14 @@ describe('GenerateDecryptedParameters with itemsKey-only key (worker invariant)'
     } as unknown as jest.Mocked<DecryptedPayloadInterface>
 
     const encryptUseCase = new GenerateEncryptedParametersUseCase(crypto)
-    return encryptUseCase.execute(decrypted, fullKey, signingKeyPair) as EncryptedOutputParameters as EncryptedInputParameters
+    return encryptUseCase.execute(
+      decrypted,
+      fullKey,
+      signingKeyPair,
+    ) as EncryptedOutputParameters as EncryptedInputParameters
   }
 
-  const decryptOrThrow = (
-    encrypted: EncryptedInputParameters,
-    key: { itemsKey: string },
-  ): DecryptedParameters => {
+  const decryptOrThrow = (encrypted: EncryptedInputParameters, key: { itemsKey: string }): DecryptedParameters => {
     const result = usecase.execute(encrypted, key as unknown as ItemsKeyInterface)
     if (isErrorDecryptingParameters(result)) {
       throw new Error('expected successful decryption')

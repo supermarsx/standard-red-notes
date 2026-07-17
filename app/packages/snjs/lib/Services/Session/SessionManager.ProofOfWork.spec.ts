@@ -12,7 +12,11 @@ import { SessionManager } from './SessionManager'
  */
 describe('SessionManager proof-of-work', () => {
   let userApiService: { register: jest.Mock }
-  let apiService: { setInvalidSessionObserver: jest.Mock; getAccountKeyParams: jest.Mock; createErrorResponse: jest.Mock }
+  let apiService: {
+    setInvalidSessionObserver: jest.Mock
+    getAccountKeyParams: jest.Mock
+    createErrorResponse: jest.Mock
+  }
   let encryptionService: { createRootKey: jest.Mock }
   let challengeService: { getWrappingKeyIfApplicable: jest.Mock }
   let solver: ProofOfWorkSolverInterface & { solve: jest.Mock }
@@ -37,7 +41,10 @@ describe('SessionManager proof-of-work', () => {
     // handleAuthentication does heavy storage/key work that is irrelevant to the PoW
     // loop, so stub it out on the prototype.
     jest
-      .spyOn(SessionManager.prototype as unknown as { handleAuthentication: () => Promise<void> }, 'handleAuthentication')
+      .spyOn(
+        SessionManager.prototype as unknown as { handleAuthentication: () => Promise<void> },
+        'handleAuthentication',
+      )
       .mockResolvedValue(undefined)
 
     return new SessionManager(

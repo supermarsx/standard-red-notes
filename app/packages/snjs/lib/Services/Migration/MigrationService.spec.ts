@@ -100,8 +100,7 @@ describe('MigrationService', () => {
     ;(svc as any).runBaseMigrationPreRun = jest.fn().mockResolvedValue(undefined)
     ;(svc as any).getStoredSnjsVersion = jest.fn().mockImplementation(() => Promise.resolve(storedVersion))
     // Build fake instances directly from the (already filtered) required classes.
-    ;(svc as any).instantiateMigrationClasses = (classes: any[]) =>
-      classes.map((klass) => new klass(services))
+    ;(svc as any).instantiateMigrationClasses = (classes: any[]) => classes.map((klass) => new klass(services))
 
     return svc
   }
@@ -112,9 +111,7 @@ describe('MigrationService', () => {
   })
 
   it('checkpoints the stored version after EACH migration completes (PERSIST-M1)', async () => {
-    jest
-      .spyOn(MigrationService as any, 'getRequiredMigrations')
-      .mockReturnValue([MigrationA, MigrationB])
+    jest.spyOn(MigrationService as any, 'getRequiredMigrations').mockReturnValue([MigrationA, MigrationB])
 
     service = createService()
     await service.initialize()

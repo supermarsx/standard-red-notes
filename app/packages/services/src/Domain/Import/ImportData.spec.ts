@@ -81,7 +81,16 @@ describe('ImportData', () => {
       execute: jest.fn().mockResolvedValue(Result.ok('password')),
     }
 
-    useCase = new ImportData(items, sync, protections, encryption, payloads, history, decryptBackupFile, getFilePassword)
+    useCase = new ImportData(
+      items,
+      sync,
+      protections,
+      encryption,
+      payloads,
+      history,
+      decryptBackupFile,
+      getFilePassword,
+    )
   })
 
   const backupFile = (): BackupFile => {

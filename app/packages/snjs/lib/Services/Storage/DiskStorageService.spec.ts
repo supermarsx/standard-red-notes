@@ -118,14 +118,7 @@ describe('diskStorageService', () => {
       pending[2].resolve()
       await Promise.all([savePromise, deletePromise, clearPromise])
 
-      expect(order).toEqual([
-        'save:start',
-        'save:end',
-        'delete:start',
-        'delete:end',
-        'clear:start',
-        'clear:end',
-      ])
+      expect(order).toEqual(['save:start', 'save:end', 'delete:start', 'delete:end', 'clear:start', 'clear:end'])
     })
 
     it('releases the queue for the next write when a prior write rejects', async () => {

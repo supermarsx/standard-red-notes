@@ -2,7 +2,10 @@ import { FullyFormedPayloadInterface } from '@standardnotes/models'
 import { rehydrateLiteBackupPayloads } from './RehydrateLiteBackupPayloads'
 
 describe('rehydrateLiteBackupPayloads', () => {
-  const fullNote = { uuid: 'note-1', content: { text: 'real body', title: 'A' } } as unknown as FullyFormedPayloadInterface
+  const fullNote = {
+    uuid: 'note-1',
+    content: { text: 'real body', title: 'A' },
+  } as unknown as FullyFormedPayloadInterface
   const liteNote = {
     uuid: 'note-1',
     content: { title: 'A', __lazyLite: true },
@@ -65,9 +68,9 @@ describe('rehydrateLiteBackupPayloads', () => {
     const liteB = { uuid: 'b', content: { title: 'B', __lazyLite: true } } as unknown as FullyFormedPayloadInterface
     const rehydratedA = { uuid: 'a', content: { text: 'body A', title: 'A' } }
     const sync = {
-      getFullContentPayload: jest.fn().mockImplementation((uuid: string) =>
-        Promise.resolve(uuid === 'a' ? rehydratedA : undefined),
-      ),
+      getFullContentPayload: jest
+        .fn()
+        .mockImplementation((uuid: string) => Promise.resolve(uuid === 'a' ? rehydratedA : undefined)),
     }
     const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined)
 

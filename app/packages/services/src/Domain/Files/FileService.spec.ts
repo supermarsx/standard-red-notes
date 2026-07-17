@@ -244,18 +244,16 @@ describe('fileService', () => {
     // The api download pumps one chunk, then the caller aborts; a subsequent chunk must be
     // dropped by the downloader's aborted-guard. The api promise itself NEVER resolves — proving
     // the call only returns because abort() resolves the downloader's abort race (a hang => RED).
-    apiService.downloadFile = jest.fn().mockImplementation(
-      (params: { onBytesReceived: (bytes: Uint8Array) => Promise<void> }) => {
+    apiService.downloadFile = jest
+      .fn()
+      .mockImplementation((params: { onBytesReceived: (bytes: Uint8Array) => Promise<void> }) => {
         return new Promise<void>(() => {
-          void params
-            .onBytesReceived(Uint8Array.from([0xaa]))
-            .then(() => {
-              controller.abort()
-              return params.onBytesReceived(Uint8Array.from([0xbb]))
-            })
+          void params.onBytesReceived(Uint8Array.from([0xaa])).then(() => {
+            controller.abort()
+            return params.onBytesReceived(Uint8Array.from([0xbb]))
+          })
         })
-      },
-    )
+      })
 
     const decryptedChunks: Uint8Array[] = []
     const onBytes = jest.fn(async (bytes: Uint8Array) => {
