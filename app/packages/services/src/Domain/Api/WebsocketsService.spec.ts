@@ -104,6 +104,50 @@ describe('webSocketsService', () => {
     })
   })
 
+  describe('malformed inbound frame (unguarded JSON.parse)', () => {
+    // Pump a RAW non-JSON text frame straight through the message handler (not
+    // via JSON.stringify) — modelling a proxy/gateway that answers the client's
+    // raw `'ping'` heartbeat with a plain text `pong`/keepalive.
+    const pumpRaw = (service: WebSocketsService, raw: string): { events: WebSocketsServiceEvent[]; run: () => void } => {
+      const events: WebSocketsServiceEvent[] = []
+      service.addEventObserver((event) => {
+        events.push(event)
+        return Promise.resolve()
+      })
+      const run = () =>
+        (service as unknown as { onWebSocketMessage: (e: { data: string }) => void }).onWebSocketMessage({
+          data: raw,
+        })
+      return { events, run }
+    }
+
+    it('does not throw and emits no event for a non-JSON text frame', () => {
+      const service = createService()
+      // FALSE-GREEN: without the try/catch guard, JSON.parse('pong') throws an
+      // uncaught SyntaxError inside the onmessage handler → this call throws → RED.
+      const { events, run } = pumpRaw(service, 'pong')
+
+      expect(run).not.toThrow()
+      expect(events).toHaveLength(0)
+    })
+
+    it('does not throw for an empty text frame', () => {
+      const service = createService()
+      const { events, run } = pumpRaw(service, '')
+
+      expect(run).not.toThrow()
+      expect(events).toHaveLength(0)
+    })
+
+    it('still processes a well-formed frame after the guard (no behaviour change for valid JSON)', () => {
+      const service = createService()
+      const { events, run } = pumpRaw(service, JSON.stringify({ type: 'ITEMS_CHANGED_ON_SERVER' }))
+
+      expect(run).not.toThrow()
+      expect(events).toContain(WebSocketsServiceEvent.ItemsChangedOnServer)
+    })
+  })
+
   describe('connecting guard (concurrent-dial timing)', () => {
     // A fake WebSocket that records every construction and only transitions to
     // OPEN / CLOSED when the test explicitly drives it — modelling the real

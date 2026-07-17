@@ -315,7 +315,17 @@ export class WebSocketsService extends AbstractService<
   }
 
   private onWebSocketMessage(messageEvent: { data: string }) {
-    const eventData = JSON.parse(messageEvent.data)
+    // Defensive: an inbound text frame is not guaranteed to be JSON. The client
+    // itself sends a raw `'ping'` heartbeat, and a gateway/proxy that answers a
+    // text `pong`/keepalive would otherwise throw an uncaught exception here on
+    // every beat. Mirror the "malformed push must not throw" discipline below
+    // (and authorizeCollaborationRoom's try/catch): drop the frame and return.
+    let eventData
+    try {
+      eventData = JSON.parse(messageEvent.data)
+    } catch {
+      return
+    }
     if (typeof eventData.t === 'string' && COLLABORATION_FRAME_TYPES.has(eventData.t)) {
       this.collaborationFrameHandlers.forEach((handler) => handler(eventData as CollaborationFrame))
       return
