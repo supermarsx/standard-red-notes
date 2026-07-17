@@ -35,7 +35,11 @@ const ADMIN_DIRECT_CALL_IDS = [
 ]
 
 // The 3 SELF-SERVE identifiers — EndpointResolver.ts lines 101-103.
-const ME_INVITE_LINKS_DIRECT_CALL_IDS = ['auth.meInviteLinks.create', 'auth.meInviteLinks.list', 'auth.meInviteLinks.revoke']
+const ME_INVITE_LINKS_DIRECT_CALL_IDS = [
+  'auth.meInviteLinks.create',
+  'auth.meInviteLinks.list',
+  'auth.meInviteLinks.revoke',
+]
 
 describe('t69 DirectCall registration (gateway ↔ auth identifier contract)', () => {
   // A stand-in for any positional constructor dep. The registration block only
