@@ -2,6 +2,7 @@ import test from 'ava'
 import { promises as fs } from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
+import yauzl from 'yauzl'
 import { FilesManager } from '../app/javascripts/Main/File/FilesManager'
 import { FileErrorCodes } from '../app/javascripts/Main/File/FileErrorCodes'
 
@@ -111,6 +112,58 @@ test('extractZip rejects (does not crash) on a zip with a path-traversal entry',
 
   // And nothing was written outside (or inside) the destination.
   t.false(await pathExists(path.join(tmpPath, 'evil.txt')))
+})
+
+/**
+ * The traversal test above rejects via yauzl's OWN central-directory 'error'
+ * (a pre-entry path). This one proves the fd is released on an ENTRY-LEVEL
+ * reject: force `ensureDirectoryExists` to throw once so a VALID zip reaches
+ * `tryReject` AFTER an entry + openReadStream have already succeeded. With
+ * `autoClose:true`, yauzl only auto-closes after the LAST entry — halting
+ * mid-iteration would otherwise leak the fd until GC. A close-spy wrapped around
+ * the real yauzl.open callback's zipFile proves `extractZip` closes it on reject.
+ */
+test('extractZip closes the zip file descriptor on an entry-level reject', async (t) => {
+  const localManager = new FilesManager()
+
+  // Make the first per-entry ensureDirectoryExists throw (after openReadStream
+  // succeeded), driving a deterministic entry-level tryReject.
+  const originalEnsure = localManager.ensureDirectoryExists.bind(localManager)
+  let thrownOnce = false
+  localManager.ensureDirectoryExists = async (dirPath: string): Promise<void> => {
+    if (!thrownOnce) {
+      thrownOnce = true
+      throw new Error('simulated ensureDirectoryExists failure')
+    }
+    return originalEnsure(dirPath)
+  }
+
+  // Close-spy: wrap yauzl.open so we can observe zipFile.close() being called.
+  // FilesManager imports the same yauzl module singleton, so patching here is seen.
+  const realOpen = yauzl.open
+  let closeCalled = 0
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ;(yauzl as any).open = (source: any, options: any, cb: any) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return realOpen(source, options, (err: any, zipFile: any) => {
+      if (zipFile) {
+        const realClose = zipFile.close.bind(zipFile)
+        zipFile.close = () => {
+          closeCalled++
+          return realClose()
+        }
+      }
+      cb(err, zipFile)
+    })
+  }
+
+  try {
+    await t.throwsAsync(() => localManager.extractZip(path.join(dataPath, 'zip-file.zip'), zipFileDestination))
+    t.true(closeCalled > 0, 'expected extractZip to close the zip file descriptor on the reject path')
+  } finally {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(yauzl as any).open = realOpen
+  }
 })
 
 async function pathExists(p: string): Promise<boolean> {

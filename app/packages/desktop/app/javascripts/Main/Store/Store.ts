@@ -54,14 +54,36 @@ export class Store {
   }
 
   set<T extends keyof StoreData>(key: T, val: StoreData[T]): void {
-    this.data[key] = val
+    // Serialize the *would-be* next state WITHOUT mutating in-memory `data`
+    // first. If the write or rename below throws, `data` is left untouched, so
+    // in-memory state stays consistent with the last successfully committed
+    // on-disk file instead of diverging until the next successful set.
+    const serialized = serializeStoreData({ ...this.data, [key]: val })
+
     // Write to a temp file then rename into place. rename is atomic on the same
     // volume, so a crash/power-loss mid-write can only leave a throwaway temp
     // file behind and never truncates user-preferences.json — a torn primary
     // file would make parseDataFile silently reset every desktop setting to
     // defaults.
     const tempPath = `${this.path}.${process.pid}.tmp`
-    fs.writeFileSync(tempPath, serializeStoreData(this.data))
-    fs.renameSync(tempPath, this.path)
+    try {
+      fs.writeFileSync(tempPath, serialized)
+      fs.renameSync(tempPath, this.path)
+    } catch (error) {
+      // The write/rename failed (disk full; Windows EPERM/EBUSY renaming over an
+      // open handle). Best-effort remove the orphaned temp file so *.tmp files
+      // don't accumulate, then re-throw. Swallow the unlink error — the temp may
+      // never have been created (ENOENT), and its removal must not mask the
+      // original failure.
+      try {
+        fs.unlinkSync(tempPath)
+      } catch {
+        /* nothing to clean up */
+      }
+      throw error
+    }
+
+    // Commit to memory only after the on-disk rename succeeded.
+    this.data[key] = val
   }
 }

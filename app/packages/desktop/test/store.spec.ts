@@ -76,3 +76,45 @@ test('set writes atomically: a crash mid-write never truncates the real file', (
     fs.rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('set cleans up the temp file and keeps memory consistent when the rename fails', (t) => {
+  const dir = freshStoreDir()
+  try {
+    const store = new Store(dir)
+
+    // Commit a known-good value first.
+    store.set(StoreKeys.ZoomFactor, 2)
+    t.is(store.get(StoreKeys.ZoomFactor), 2)
+
+    // Now let the temp write succeed but make the atomic rename throw, modelling
+    // the Windows EPERM/EBUSY case (rename over an open handle) or a disk fault
+    // after the temp landed. The temp file is really created here, so the fix
+    // must clean it up, and in-memory state must NOT advance to the value that
+    // never reached disk.
+    const realRenameSync = fs.renameSync
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    fs.renameSync = (() => {
+      throw new Error('simulated EPERM on rename-over-open')
+    }) as typeof fs.renameSync
+
+    try {
+      t.throws(() => store.set(StoreKeys.ZoomFactor, 3))
+    } finally {
+      fs.renameSync = realRenameSync
+    }
+
+    // (a) No orphaned *.tmp file left behind in the store dir.
+    const leftovers = fs.readdirSync(dir).filter((f) => f.endsWith('.tmp'))
+    t.deepEqual(leftovers, [], 'the temp file must be cleaned up after a failed rename')
+
+    // (b) In-memory state still equals the last committed value, not the failed
+    // one — memory must not diverge from what is actually on disk.
+    t.is(store.get(StoreKeys.ZoomFactor), 2)
+
+    // And disk still holds the committed value too.
+    const onDisk = JSON.parse(fs.readFileSync(path.join(dir, 'user-preferences.json'), 'utf8'))
+    t.is(onDisk[StoreKeys.ZoomFactor], 2)
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})

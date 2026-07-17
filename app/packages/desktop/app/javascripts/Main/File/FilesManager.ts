@@ -214,6 +214,14 @@ export class FilesManager implements FilesManagerInterface {
           if (!cancelled) {
             cancelled = true
             reject(err)
+            // yauzl (autoClose) only closes the underlying fd after the LAST
+            // entry is read. Bailing out mid-iteration means the 'close' event
+            // never fires and the fd leaks until GC, so release it explicitly on
+            // every reject path. Guarded by the `cancelled` latch above so this
+            // runs exactly once; ZipFile.close() is itself idempotent. reject()
+            // already settled the promise, so the resulting 'close' event (wired
+            // to resolve below) is a no-op. The happy path is unaffected.
+            zipFile?.close()
           }
         }
 
@@ -278,7 +286,7 @@ export class FilesManager implements FilesManagerInterface {
             } catch (error: any) {
               return tryReject(error)
             }
-            const writeStream = fs.createWriteStream(filepath).on('error', tryReject).on('error', tryReject)
+            const writeStream = fs.createWriteStream(filepath).on('error', tryReject)
 
             stream.pipe(writeStream).on('close', () => {
               zipFile.readEntry()
