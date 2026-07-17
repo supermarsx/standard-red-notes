@@ -56,9 +56,18 @@ export interface FilesClientInterface {
     uuid: string,
   ): Promise<FileItem | ClientDisplayableError>
 
+  /**
+   * Downloads and decrypts a file, invoking `onDecryptedBytes` per chunk.
+   *
+   * `options.signal` lets a caller cancel an in-flight download: if it is already aborted the
+   * call short-circuits before any work, and aborting it mid-flight tears down the underlying
+   * download/decrypt operation so no further chunks are pumped. Optional and backward-compatible
+   * — existing callers that omit it are unaffected.
+   */
   downloadFile(
     file: FileItem,
     onDecryptedBytes: (bytes: Uint8Array, progress: FileDownloadProgress) => Promise<void>,
+    options?: { signal?: AbortSignal },
   ): Promise<ClientDisplayableError | undefined>
 
   deleteFile(file: FileItem): Promise<ClientDisplayableError | undefined>

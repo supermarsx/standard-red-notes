@@ -9,7 +9,7 @@ import { AlertService } from '../Alert/AlertService'
 
 import { SyncServiceInterface } from '../Sync/SyncServiceInterface'
 import { FileService } from './FileService'
-import { BackupServiceInterface } from '@standardnotes/files'
+import { BackupServiceInterface, DownloadAndDecryptFileOperation } from '@standardnotes/files'
 import { HttpServiceInterface } from '@standardnotes/api'
 import { LoggerInterface } from '@standardnotes/utils'
 
@@ -196,6 +196,81 @@ describe('fileService', () => {
     })
 
     expect(downloadMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('short-circuits before any download work when the signal is already aborted', async () => {
+    const file = {
+      uuid: '1',
+      localOnly: false,
+      decryptedSize: 100_000,
+      encryptedSize: 101_000,
+      encryptedChunkSizes: [101_000],
+    } as jest.Mocked<FileItem>
+
+    backupService.getFileBackupInfo = jest.fn().mockReturnValue(undefined)
+    const downloadMock = apiService.downloadFile as jest.Mock
+
+    const controller = new AbortController()
+    controller.abort()
+
+    const onBytes = jest.fn().mockResolvedValue(undefined)
+    const error = await fileService.downloadFile(file, onBytes, { signal: controller.signal })
+
+    expect(error).toBeUndefined()
+    // No token minted, no api download, no chunk pumped — nothing ran.
+    expect(downloadMock).not.toHaveBeenCalled()
+    expect(onBytes).not.toHaveBeenCalled()
+  })
+
+  it('aborts an in-flight network download when the signal fires mid-flight, pumping no further chunks', async () => {
+    const file = {
+      uuid: '1',
+      localOnly: false,
+      decryptedSize: 100_000,
+      encryptedSize: 101_000,
+      encryptedChunkSizes: [101_000],
+      remoteIdentifier: 'remote-1',
+      encryptionHeader: 'header',
+      key: 'key',
+    } as unknown as jest.Mocked<FileItem>
+
+    backupService.getFileBackupInfo = jest.fn().mockReturnValue(undefined)
+    apiService.createUserFileValetToken = jest.fn().mockResolvedValue('valet-token')
+
+    const abortSpy = jest.spyOn(DownloadAndDecryptFileOperation.prototype, 'abort')
+
+    const controller = new AbortController()
+
+    // The api download pumps one chunk, then the caller aborts; a subsequent chunk must be
+    // dropped by the downloader's aborted-guard. The api promise itself NEVER resolves — proving
+    // the call only returns because abort() resolves the downloader's abort race (a hang => RED).
+    apiService.downloadFile = jest.fn().mockImplementation(
+      (params: { onBytesReceived: (bytes: Uint8Array) => Promise<void> }) => {
+        return new Promise<void>(() => {
+          void params
+            .onBytesReceived(Uint8Array.from([0xaa]))
+            .then(() => {
+              controller.abort()
+              return params.onBytesReceived(Uint8Array.from([0xbb]))
+            })
+        })
+      },
+    )
+
+    const decryptedChunks: Uint8Array[] = []
+    const onBytes = jest.fn(async (bytes: Uint8Array) => {
+      decryptedChunks.push(bytes)
+    })
+
+    const error = await fileService.downloadFile(file, onBytes, { signal: controller.signal })
+
+    // Aborted mid-flight: operation.abort() was invoked via the signal listener, the call
+    // resolved without error (aborted != error), and only the pre-abort chunk was pumped.
+    expect(abortSpy).toHaveBeenCalledTimes(1)
+    expect(error).toBeUndefined()
+    expect(decryptedChunks).toHaveLength(1)
+
+    abortSpy.mockRestore()
   })
 
   it('should download file from local backup if it exists', async () => {

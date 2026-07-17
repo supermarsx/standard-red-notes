@@ -452,7 +452,15 @@ export class FileService extends AbstractService implements FilesClientInterface
   public async downloadFile(
     file: FileItem,
     onDecryptedBytes: (decryptedBytes: Uint8Array, progress: FileDownloadProgress) => Promise<void>,
+    options?: { signal?: AbortSignal },
   ): Promise<ClientDisplayableError | undefined> {
+    // Honor an already-cancelled request before doing any work. This single entry pre-check
+    // also covers the cache/backup branches below (both are local and fast — there is no
+    // in-flight network operation to tear down there).
+    if (options?.signal?.aborted) {
+      return undefined
+    }
+
     if (file.localOnly) {
       return this.downloadLocalOnlyFile(file, onDecryptedBytes)
     }
@@ -508,6 +516,11 @@ export class FileService extends AbstractService implements FilesClientInterface
       }
 
       const operation = new DownloadAndDecryptFileOperation(file, this.crypto, this.api, tokenResult)
+
+      // Tear down the in-flight download/decrypt if the caller aborts (e.g. the preview modal
+      // is closed mid-download). `abort()` propagates to FileDownloader.abort(), stopping further
+      // chunk fetches. `{ once: true }` so the listener is dropped after firing.
+      options?.signal?.addEventListener('abort', () => operation.abort(), { once: true })
 
       const result = await operation.run(async ({ decrypted, encrypted, progress }): Promise<void> => {
         if (addToCache) {

@@ -112,6 +112,21 @@ describe('extractFileTextForTags', () => {
     }
   })
 
+  it('forwards options.signal into downloadFile so the in-flight download can be aborted', async () => {
+    const { app, downloadFile } = makeApp(async (push) => {
+      await push(new TextEncoder().encode('hi'))
+      return undefined
+    })
+    const controller = new AbortController()
+    await extractFileTextForTags(app as never, makeFile('text/plain') as never, { signal: controller.signal })
+
+    // FALSE-GREEN: drop the `{ signal: options.signal }` third arg on the downloadFile call and
+    // this options object is `undefined` (or lacks the signal), so downloadFile can never abort.
+    expect(downloadFile).toHaveBeenCalledTimes(1)
+    const passedOptions = downloadFile.mock.calls[0][2] as { signal?: AbortSignal } | undefined
+    expect(passedOptions?.signal).toBe(controller.signal)
+  })
+
   it('returns metadata-only for a non-text file WITHOUT downloading', async () => {
     const { app, downloadFile } = makeApp()
     const result = await extractFileTextForTags(app as never, makeFile('image/png') as never)
