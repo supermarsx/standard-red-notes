@@ -41,6 +41,10 @@ jobs:
       - name: Install ${{ matrix.workspace_root }} dependencies
         working-directory: ${{ matrix.workspace_root }}
         run: yarn install --immutable
+      - name: Build server workspace packages
+        if: matrix.shard == 'server'
+        working-directory: server
+        run: yarn build
       - name: Collect ${{ matrix.shard }} Jest coverage
         run: yarn coverage:collect:${{ matrix.shard }}
       - name: Upload raw ${{ matrix.shard }} coverage
