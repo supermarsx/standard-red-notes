@@ -99,7 +99,7 @@ jobs:
           package-manager-cache: false
 
       - name: Install Corepack (Yarn 4.17.1)
-        run: npm install --global corepack@0.35.0 && corepack enable
+        run: npm install --global --force corepack@0.35.0 && corepack enable
 
       - name: Install Linux build deps
         if: runner.os == 'Linux'
@@ -166,7 +166,7 @@ jobs:
           package-manager-cache: false
 
       - name: Install Corepack
-        run: npm install --global corepack@0.35.0 && corepack enable
+        run: npm install --global --force corepack@0.35.0 && corepack enable
 
       - name: Install build deps
         run: |
