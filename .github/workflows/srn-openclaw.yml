@@ -73,10 +73,12 @@ jobs:
           fi
 
           source_epoch="$(git show -s --format=%ct "${source_sha}")"
-          echo "source_epoch=${source_epoch}" >> "${GITHUB_OUTPUT}"
-          echo "source_sha=${source_sha}" >> "${GITHUB_OUTPUT}"
-          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
-          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          {
+            echo "source_epoch=${source_epoch}"
+            echo "source_sha=${source_sha}"
+            echo "tag=${tag}"
+            echo "version=${version}"
+          } >> "${GITHUB_OUTPUT}"
 
   quality:
     name: Typecheck, format, unit, live E2E, build

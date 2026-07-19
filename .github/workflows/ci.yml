@@ -50,7 +50,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
       - name: Install Corepack
-        run: npm install --global corepack@${COREPACK_VERSION} && corepack enable
+        run: npm install --global "corepack@${COREPACK_VERSION}" && corepack enable
       - name: Cache root Yarn packages
         uses: actions/cache@v6.1.0
         with:
@@ -78,7 +78,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
       - name: Install Corepack
-        run: npm install --global corepack@${COREPACK_VERSION} && corepack enable
+        run: npm install --global "corepack@${COREPACK_VERSION}" && corepack enable
       - name: Cache Yarn packages
         uses: actions/cache@v6.1.0
         with:
@@ -110,7 +110,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
       - name: Install Corepack
-        run: npm install --global corepack@${COREPACK_VERSION} && corepack enable
+        run: npm install --global "corepack@${COREPACK_VERSION}" && corepack enable
       - name: Cache Yarn packages
         uses: actions/cache@v6.1.0
         with:
@@ -144,7 +144,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
       - name: Install Corepack
-        run: npm install --global corepack@${COREPACK_VERSION} && corepack enable
+        run: npm install --global "corepack@${COREPACK_VERSION}" && corepack enable
       - name: Cache root Yarn and npm packages
         uses: actions/cache@v6.1.0
         with:
@@ -194,13 +194,15 @@ jobs:
       - name: Configure isolated stack
         run: |
           set -euo pipefail
-          echo 'APP_PORT=3001' >> "$GITHUB_ENV"
-          echo 'APP_URL=http://127.0.0.1:3001' >> "$GITHUB_ENV"
-          echo 'PUBLIC_FILES_SERVER_URL=http://127.0.0.1:3001/files' >> "$GITHUB_ENV"
-          echo 'AUTH_SERVER_U2F_EXPECTED_ORIGIN=http://127.0.0.1:3001,http://localhost:3001,http://localhost' >> "$GITHUB_ENV"
-          echo 'MYSQL_DATABASE=standard_notes_ci' >> "$GITHUB_ENV"
-          echo 'MYSQL_USER=std_notes_ci' >> "$GITHUB_ENV"
-          echo 'LOG_LEVEL=warn' >> "$GITHUB_ENV"
+          {
+            echo 'APP_PORT=3001'
+            echo 'APP_URL=http://127.0.0.1:3001'
+            echo 'PUBLIC_FILES_SERVER_URL=http://127.0.0.1:3001/files'
+            echo 'AUTH_SERVER_U2F_EXPECTED_ORIGIN=http://127.0.0.1:3001,http://localhost:3001,http://localhost'
+            echo 'MYSQL_DATABASE=standard_notes_ci'
+            echo 'MYSQL_USER=std_notes_ci'
+            echo 'LOG_LEVEL=warn'
+          } >> "$GITHUB_ENV"
           for name in MYSQL_PASSWORD MYSQL_ROOT_PASSWORD AUTH_JWT_SECRET AUTH_SERVER_ENCRYPTION_SERVER_KEY VALET_TOKEN_SECRET WEBSOCKET_GATEWAY_INTERNAL_SECRET WEB_SOCKET_CONNECTION_TOKEN_SECRET; do
             value="$(openssl rand -hex 32)"
             echo "::add-mask::${value}"
@@ -224,13 +226,13 @@ jobs:
       - name: Verify image and live-container hardening
         run: >-
           yarn ci:docker-hardening
-          --image app=${APP_IMAGE}
-          --image server=${SERVER_IMAGE}
-          --container app=${COMPOSE_PROJECT_NAME}-app-1
-          --container server=${COMPOSE_PROJECT_NAME}-server-1
-          --container db=${COMPOSE_PROJECT_NAME}-db-1
-          --container cache=${COMPOSE_PROJECT_NAME}-cache-1
-          --container floci=${COMPOSE_PROJECT_NAME}-floci-1
+          --image "app=${APP_IMAGE}"
+          --image "server=${SERVER_IMAGE}"
+          --container "app=${COMPOSE_PROJECT_NAME}-app-1"
+          --container "server=${COMPOSE_PROJECT_NAME}-server-1"
+          --container "db=${COMPOSE_PROJECT_NAME}-db-1"
+          --container "cache=${COMPOSE_PROJECT_NAME}-cache-1"
+          --container "floci=${COMPOSE_PROJECT_NAME}-floci-1"
       - name: Collect stack diagnostics
         if: always()
         run: |
@@ -270,7 +272,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
       - name: Install Corepack
-        run: npm install --global corepack@${COREPACK_VERSION} && corepack enable
+        run: npm install --global "corepack@${COREPACK_VERSION}" && corepack enable
       - name: Cache root Yarn and npm packages
         uses: actions/cache@v6.1.0
         with:
@@ -307,13 +309,15 @@ jobs:
       - name: Configure isolated stack
         run: |
           set -euo pipefail
-          echo 'APP_PORT=3001' >> "$GITHUB_ENV"
-          echo 'APP_URL=http://127.0.0.1:3001' >> "$GITHUB_ENV"
-          echo 'PUBLIC_FILES_SERVER_URL=http://127.0.0.1:3001/files' >> "$GITHUB_ENV"
-          echo 'AUTH_SERVER_U2F_EXPECTED_ORIGIN=http://127.0.0.1:3001,http://localhost:3001,http://localhost' >> "$GITHUB_ENV"
-          echo 'MYSQL_DATABASE=standard_notes_ci' >> "$GITHUB_ENV"
-          echo 'MYSQL_USER=std_notes_ci' >> "$GITHUB_ENV"
-          echo 'LOG_LEVEL=warn' >> "$GITHUB_ENV"
+          {
+            echo 'APP_PORT=3001'
+            echo 'APP_URL=http://127.0.0.1:3001'
+            echo 'PUBLIC_FILES_SERVER_URL=http://127.0.0.1:3001/files'
+            echo 'AUTH_SERVER_U2F_EXPECTED_ORIGIN=http://127.0.0.1:3001,http://localhost:3001,http://localhost'
+            echo 'MYSQL_DATABASE=standard_notes_ci'
+            echo 'MYSQL_USER=std_notes_ci'
+            echo 'LOG_LEVEL=warn'
+          } >> "$GITHUB_ENV"
           for name in MYSQL_PASSWORD MYSQL_ROOT_PASSWORD AUTH_JWT_SECRET AUTH_SERVER_ENCRYPTION_SERVER_KEY VALET_TOKEN_SECRET WEBSOCKET_GATEWAY_INTERNAL_SECRET WEB_SOCKET_CONNECTION_TOKEN_SECRET; do
             value="$(openssl rand -hex 32)"
             echo "::add-mask::${value}"
@@ -371,7 +375,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
       - name: Install Corepack
-        run: npm install --global corepack@${COREPACK_VERSION} && corepack enable
+        run: npm install --global "corepack@${COREPACK_VERSION}" && corepack enable
       - name: Cache root Yarn and npm packages
         uses: actions/cache@v6.1.0
         with:
@@ -408,13 +412,15 @@ jobs:
       - name: Configure isolated stack
         run: |
           set -euo pipefail
-          echo 'APP_PORT=3001' >> "$GITHUB_ENV"
-          echo 'APP_URL=http://127.0.0.1:3001' >> "$GITHUB_ENV"
-          echo 'PUBLIC_FILES_SERVER_URL=http://127.0.0.1:3001/files' >> "$GITHUB_ENV"
-          echo 'AUTH_SERVER_U2F_EXPECTED_ORIGIN=http://127.0.0.1:3001,http://localhost:3001,http://localhost' >> "$GITHUB_ENV"
-          echo 'MYSQL_DATABASE=standard_notes_ci' >> "$GITHUB_ENV"
-          echo 'MYSQL_USER=std_notes_ci' >> "$GITHUB_ENV"
-          echo 'LOG_LEVEL=warn' >> "$GITHUB_ENV"
+          {
+            echo 'APP_PORT=3001'
+            echo 'APP_URL=http://127.0.0.1:3001'
+            echo 'PUBLIC_FILES_SERVER_URL=http://127.0.0.1:3001/files'
+            echo 'AUTH_SERVER_U2F_EXPECTED_ORIGIN=http://127.0.0.1:3001,http://localhost:3001,http://localhost'
+            echo 'MYSQL_DATABASE=standard_notes_ci'
+            echo 'MYSQL_USER=std_notes_ci'
+            echo 'LOG_LEVEL=warn'
+          } >> "$GITHUB_ENV"
           for name in MYSQL_PASSWORD MYSQL_ROOT_PASSWORD AUTH_JWT_SECRET AUTH_SERVER_ENCRYPTION_SERVER_KEY VALET_TOKEN_SECRET WEBSOCKET_GATEWAY_INTERNAL_SECRET WEB_SOCKET_CONNECTION_TOKEN_SECRET; do
             value="$(openssl rand -hex 32)"
             echo "::add-mask::${value}"
