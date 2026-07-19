@@ -28308,7 +28308,7 @@ __metadata:
   resolution: "react-native-fingerprint-scanner@https://github.com/standardnotes/react-native-fingerprint-scanner.git#commit=b55d1c0ca627a87a130f758603f12911fbac200f"
   peerDependencies:
     react-native: ">=0.60 <1.0.0"
-  checksum: 10/6b27c031c16c2b94ed68b03ccd47f99849cb1acb38af4858679dddb3455a6686ad78dd3739ead9066e90c10f7c2bbb934606c3c41b0b410d0d60d5805141767b
+  checksum: 10/c51928667468910ede2018c6521d51a0dae196dbc2bb33b767faf07282f8b69f358d00dbfd84dc459d5984a04fc6f3e151b1e9fbdd55307257e49f5ae1b72af3
   languageName: node
   linkType: hard
 
@@ -28356,7 +28356,7 @@ __metadata:
 "react-native-keychain@standardnotes/react-native-keychain#618c3e1f253e6980866ee02a80c3ea66fa6f5bad":
   version: 10.0.0
   resolution: "react-native-keychain@https://github.com/standardnotes/react-native-keychain.git#commit=618c3e1f253e6980866ee02a80c3ea66fa6f5bad"
-  checksum: 10/c681fe3062ef32b24345ada0e0c6f35be173a5ccefc0bf4687ece4d969e0a6d8f42bb354d34bb8480afee8481ebae10d351f384ee273071372108bd837d0c70b
+  checksum: 10/144d70d625b2356301c3eb582f4375d1a90ee4a2b614fe30411525837bf296775e02ab2a09943e503a0f8caf7a52b8949bf9d4dc06b8cff43d18d5e95b246dd4
   languageName: node
   linkType: hard
 
