@@ -229,19 +229,35 @@ export function validateReleaseContract(files) {
 
   const openClawPackageFile = "openclaw/package.json";
   const openClawPackage = JSON.parse(files.get(openClawPackageFile) ?? "{}");
-  if (openClawPackage.private !== false) {
-    errors.push(
-      `${openClawPackageFile}: release package must set private to boolean false`,
-    );
+  // `yarn install` rewrites workspace manifests in place, and Yarn 4 does not
+  // serialize values that already match its defaults. `private: false` is
+  // therefore dropped on every install, so an absent field is as publishable as
+  // an explicit `false`; only an explicit `true` blocks the release.
+  if (openClawPackage.private === true) {
+    errors.push(`${openClawPackageFile}: release package must not be private`);
   }
   if (openClawPackage.engines?.node !== ">=26.0.0") {
     errors.push(
       `${openClawPackageFile}: release package must require Node >=26.0.0`,
     );
   }
-  if (openClawPackage.bin?.openclaw !== "dist/index.js") {
+  // Same install rewrite: a lone `bin` entry whose key equals the unscoped
+  // package name collapses to the bare string form. Both spellings declare the
+  // identical `openclaw` executable, and the target itself is still asserted.
+  const openClawBin = openClawPackage.bin;
+  const openClawUnscopedName = String(openClawPackage.name ?? "").replace(
+    /^@[^/]+\//,
+    "",
+  );
+  const openClawBinTarget =
+    typeof openClawBin === "string"
+      ? openClawUnscopedName === "openclaw"
+        ? openClawBin
+        : undefined
+      : openClawBin?.openclaw;
+  if (openClawBinTarget !== "dist/index.js") {
     errors.push(
-      `${openClawPackageFile}: release package must expose bin.openclaw`,
+      `${openClawPackageFile}: release package must expose bin.openclaw as dist/index.js`,
     );
   }
   for (const [field, expected] of [

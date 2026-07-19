@@ -42,10 +42,7 @@ test("a missing native tool target is rejected", () => {
 test("a missing srn-admin native tool target is rejected", () => {
   const file = ".github/workflows/srn-admin.yml";
   const files = withFileChanged(file, (content) =>
-    content.replace(
-      '["${TOOL}-linux-arm64"]="${PKG_NODE}-linux-arm64"',
-      "",
-    ),
+    content.replace('["${TOOL}-linux-arm64"]="${PKG_NODE}-linux-arm64"', ""),
   );
 
   assert.match(
@@ -124,6 +121,70 @@ test("every OpenClaw runtime dependency must stay bundled", () => {
   assert.match(
     validateReleaseContract(files).join("\n"),
     /every runtime dependency must be bundled/,
+  );
+});
+
+function withOpenClawPackage(update) {
+  return withFileChanged("openclaw/package.json", (content) => {
+    const packageJson = JSON.parse(content);
+    update(packageJson);
+    return JSON.stringify(packageJson);
+  });
+}
+
+test("the Yarn-normalized OpenClaw manifest still satisfies the contract", () => {
+  // `yarn install` rewrites the workspace manifest: `private: false` is dropped
+  // because it is Yarn's default, and the single-entry `bin` map collapses to a
+  // bare string. Both forms declare the same release package.
+  const files = withOpenClawPackage((packageJson) => {
+    delete packageJson.private;
+    packageJson.bin = "dist/index.js";
+  });
+
+  assert.deepEqual(validateReleaseContract(files), []);
+});
+
+test("a private OpenClaw release package is rejected", () => {
+  const files = withOpenClawPackage((packageJson) => {
+    packageJson.private = true;
+  });
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /release package must not be private/,
+  );
+});
+
+test("a missing OpenClaw executable is rejected", () => {
+  const files = withOpenClawPackage((packageJson) => {
+    delete packageJson.bin;
+  });
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /must expose bin\.openclaw as dist\/index\.js/,
+  );
+});
+
+test("an OpenClaw executable pointing at the wrong entrypoint is rejected", () => {
+  const files = withOpenClawPackage((packageJson) => {
+    packageJson.bin = "dist/cli.js";
+  });
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /must expose bin\.openclaw as dist\/index\.js/,
+  );
+});
+
+test("an OpenClaw executable published under another name is rejected", () => {
+  const files = withOpenClawPackage((packageJson) => {
+    packageJson.bin = { claw: "dist/index.js" };
+  });
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /must expose bin\.openclaw as dist\/index\.js/,
   );
 });
 
