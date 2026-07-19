@@ -200,62 +200,76 @@ test("a missing app Windows release job is rejected", () => {
   );
 });
 
-// The desktop Snap job is temporarily descoped: it runs and reports but does
-// not block the release, because snapcraft 8 removed the `snapcraft snap`
-// subcommand that electron-builder's legacy core22 path invokes. The contract
-// permits that shape only while the job declares it.
+// The desktop Snap target was removed outright: snapcraft 8 dropped the
+// `snapcraft snap` subcommand that electron-builder's legacy core22 path
+// hardcodes, and migrating to snapcraft.core24 was declined. What remains --
+// the OS/arch build matrix -- must still gate the release completely.
 const desktopWorkflowFile = ".github/workflows/srn-desktop.yml";
 
-test("the declared temporary Snap descope satisfies the contract", () => {
+test("the desktop pipeline carries no Snap target", () => {
   const workflow = baseline.get(desktopWorkflowFile);
 
-  assert.match(workflow, /continue-on-error: true/);
-  assert.match(workflow, /TEMPORARY SNAP DESCOPE/);
+  // Prose about why Snap went away is fine; a Snap job, a snapcraft install or
+  // a snap electron-builder invocation is not.
+  assert.doesNotMatch(workflow, /\r?\n {2}snap:\r?\n/);
+  assert.doesNotMatch(
+    workflow,
+    /snap install snapcraft|--linux snap|srn-desktop-linux-snap/,
+  );
+  assert.doesNotMatch(workflow, /continue-on-error/);
   assert.deepEqual(validateReleaseContract(baseline), []);
 });
 
-test("an undeclared best-effort desktop Snap release is rejected", () => {
+test("a removed desktop build matrix is rejected", () => {
   const files = withFileChanged(desktopWorkflowFile, (content) =>
-    content.replace("TEMPORARY SNAP DESCOPE (user-approved).", "housekeeping."),
+    content.replace(/\r?\n  build:\r?\n/, "\n  Removed-build:\n"),
   );
 
   assert.match(
     validateReleaseContract(files).join("\n"),
-    /a non-blocking Snap job must declare "TEMPORARY SNAP DESCOPE"/,
+    /srn-desktop\.yml: missing desktop build matrix/,
   );
 });
 
-test("a removed desktop Snap job is rejected", () => {
+test("a partial desktop build matrix is rejected", () => {
   const files = withFileChanged(desktopWorkflowFile, (content) =>
-    content.replace(/\r?\n  snap:\r?\n/, "\n  Removed-snap:\n"),
+    content.replace("      fail-fast: false\n", ""),
   );
 
   assert.match(
     validateReleaseContract(files).join("\n"),
-    /srn-desktop\.yml: missing Snap job/,
+    /srn-desktop\.yml: missing complete desktop build matrix/,
   );
 });
 
-test("a best-effort desktop Snap artifact upload is rejected", () => {
+test("a best-effort desktop installer upload is rejected", () => {
+  const files = withFileChanged(desktopWorkflowFile, (content) =>
+    content.replace("          if-no-files-found: error\n", ""),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /srn-desktop\.yml: missing required desktop installer upload/,
+  );
+});
+
+test("a best-effort desktop build leg is rejected", () => {
   const files = withFileChanged(desktopWorkflowFile, (content) =>
     content.replace(
-      "          name: srn-desktop-linux-snap\n          path: app/packages/desktop/dist/*.snap\n          retention-days: 2\n          if-no-files-found: error\n",
-      "          name: srn-desktop-linux-snap\n          path: app/packages/desktop/dist/*.snap\n          retention-days: 2\n",
+      "    runs-on: ${{ matrix.os }}\n",
+      "    runs-on: ${{ matrix.os }}\n    continue-on-error: true\n",
     ),
   );
 
   assert.match(
     validateReleaseContract(files).join("\n"),
-    /srn-desktop\.yml: missing required Snap artifact upload/,
+    /no desktop release leg may be best-effort/,
   );
 });
 
-test("dropping Snap from the desktop release fan-in is rejected", () => {
+test("dropping the build matrix from the desktop release fan-in is rejected", () => {
   const files = withFileChanged(desktopWorkflowFile, (content) =>
-    content.replace(
-      "needs: [version, build, snap]",
-      "needs: [version, build]",
-    ),
+    content.replace("needs: [version, build]", "needs: [version]"),
   );
 
   assert.match(

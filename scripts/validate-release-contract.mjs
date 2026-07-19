@@ -53,11 +53,6 @@ const OPENCLAW_SMOKE_TARGETS = Object.freeze([
   ["macos-arm64", "macos-15", "arm64"],
 ]);
 
-// A non-blocking desktop Snap job must carry this marker in the job body. It is
-// the single, greppable token that ties the relaxed contract below to the
-// deliberate, temporary descope documented in srn-desktop.yml.
-const SNAP_DESCOPE_MARKER = "TEMPORARY SNAP DESCOPE";
-
 function countOccurrences(text, fragment) {
   return text.split(fragment).length - 1;
 }
@@ -402,38 +397,44 @@ export function validateReleaseContract(files) {
     );
   }
 
-  const rootSnap = jobBlock(rootDesktop, "snap");
-  if (!rootSnap) {
-    errors.push(`${rootDesktopFile}: missing Snap job`);
+  // The Snap target was removed outright (snapcraft 8 dropped the `snapcraft
+  // snap` subcommand electron-builder's legacy core22 path hardcodes), so the
+  // build matrix is now the whole of the desktop pipeline. Its artifact upload
+  // therefore carries the guard the Snap job used to: an empty upload must fail
+  // the leg rather than silently release fewer installers than were built.
+  const rootDesktopBuild = jobBlock(rootDesktop, "build");
+  if (!rootDesktopBuild) {
+    errors.push(`${rootDesktopFile}: missing desktop build matrix`);
   } else {
-    // The Snap job is release-blocking by default. It may be made best-effort
-    // ONLY by declaring the descope in the job itself, so a silent
-    // `continue-on-error` can never soften the release. See the marker in
-    // srn-desktop.yml: snapcraft 8 removed the `snapcraft snap` subcommand that
-    // electron-builder's legacy core22 path invokes. Temporary, pending a
-    // snapcraft 7.x pin or a snapcraft.core24 migration.
-    if (
-      rootSnap.includes("continue-on-error: true") &&
-      !rootSnap.includes(SNAP_DESCOPE_MARKER)
-    ) {
-      errors.push(
-        `${rootDesktopFile}: a non-blocking Snap job must declare "${SNAP_DESCOPE_MARKER}"`,
-      );
-    }
     requireFragment(
       errors,
       rootDesktopFile,
-      rootSnap,
+      rootDesktopBuild,
+      "fail-fast: false",
+      "complete desktop build matrix",
+    );
+    requireFragment(
+      errors,
+      rootDesktopFile,
+      rootDesktopBuild,
       "if-no-files-found: error",
-      "required Snap artifact upload",
+      "required desktop installer upload",
+    );
+  }
+  // No desktop leg may be best-effort: every job in this workflow gates the
+  // release, so a `continue-on-error` anywhere would let a broken installer
+  // through. (This replaces the narrower guard that only covered the Snap job.)
+  if (/continue-on-error:\s*true/.test(rootDesktop)) {
+    errors.push(
+      `${rootDesktopFile}: no desktop release leg may be best-effort (continue-on-error)`,
     );
   }
 
   const rootDesktopRelease = jobBlock(rootDesktop, "release");
   for (const [fragment, description] of [
-    // The Snap job stays in the release fan-in even while descoped, so it can
-    // never be quietly dropped from the pipeline.
-    ["needs: [version, build, snap]", "desktop release fan-in over every leg"],
+    // Every remaining leg must gate the release, so a broken macOS, Windows or
+    // Linux build can never publish. `build` is the whole OS/arch matrix.
+    ["needs: [version, build]", "desktop release fan-in over every leg"],
     ["mapfile -d '' files", "bounded desktop checksum input collection"],
     [
       'sha256sum "${files[@]}" > SHA256SUMS.txt',

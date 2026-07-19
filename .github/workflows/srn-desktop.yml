@@ -1,7 +1,7 @@
 # Rolling release pipeline for the Standard Red Notes DESKTOP app (electron-builder).
 #
 # Electron apps are built on native runners (no cross-compile). Stages:
-#   version -> build (matrix) + snap -> release
+#   version -> build (matrix) -> release
 #
 # Trigger: push to `main` touching any packaged app workspace or dependency
 # manifest, or manual dispatch. The desktop embeds the web UI and its shared
@@ -58,7 +58,6 @@ jobs:
 
   # 2) BUILD — electron-builder per OS. Each OS builds BOTH arches in one run so
   # the per-platform update metadata (latest*.yml) is produced once, not twice.
-  # (Snap is built in its own job because it needs a distinct IS_SNAP webpack.)
   build:
     name: build (${{ matrix.label }})
     needs: version
@@ -139,69 +138,16 @@ jobs:
           retention-days: 2
           if-no-files-found: error
 
-  # 3) SNAP — needs a separate webpack pass (IS_SNAP define) before the snap
-  # target, plus snapcraft on the runner. x64 only.
-  snap:
-    name: snap (linux-x64)
-    needs: version
-    runs-on: ubuntu-latest
-    # TEMPORARY SNAP DESCOPE (user-approved). electron-builder's legacy core22
-    # path invokes the subcommand `snapcraft snap`, which snapcraft 8.x removed
-    # ("The 'snap' command was renamed to 'pack'"), so this job cannot pass as
-    # configured. It still RUNS and reports — we keep the visibility — but it no
-    # longer blocks the desktop release. Re-arm by deleting this marker and
-    # `continue-on-error` once snapcraft is pinned to 7.x, or the config is
-    # migrated to `snapcraft.core24` (Jammy -> Noble, libpython3.10 -> 3.12).
-    # scripts/validate-release-contract.mjs permits a non-blocking Snap job ONLY
-    # while the marker above is present.
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version-file: app/.nvmrc
-          package-manager-cache: false
-
-      - name: Install Corepack
-        run: npm install --global --force corepack@0.35.0 && corepack enable
-
-      - name: Install build deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libsecret-1-dev fakeroot
-          sudo snap install snapcraft --classic
-
-      - name: Install workspace dependencies
-        working-directory: app
-        run: yarn install --immutable
-
-      - name: Build web UI
-        working-directory: app
-        # See the build matrix job: the shared workspaces must be built first.
-        run: yarn build:web
-
-      - name: Build desktop bundle (snap variant)
-        working-directory: app/packages/desktop
-        run: yarn build --env snap
-
-      - name: electron-builder (snap)
-        working-directory: app/packages/desktop
-        run: yarn electron-builder --linux snap --x64 --publish never -c.extraMetadata.version=${{ needs.version.outputs.version }}
-
-      - name: Upload snap
-        uses: actions/upload-artifact@v7
-        with:
-          name: srn-desktop-linux-snap
-          path: app/packages/desktop/dist/*.snap
-          retention-days: 2
-          if-no-files-found: error
-
-  # 4) RELEASE — gather every leg's installers + update metadata and publish ONE
+  # 3) RELEASE — gather every leg's installers + update metadata and publish ONE
   # rolling GitHub Release (non-draft, so electron-updater can read it).
+  #
+  # The Snap target was removed, not descoped: electron-builder's legacy core22
+  # path hardcodes the `snapcraft snap` subcommand that snapcraft 8 renamed to
+  # `pack`, and migrating to snapcraft.core24 was declined. Linux ships as
+  # AppImage + deb from the build matrix.
   release:
     name: release
-    needs: [version, build, snap]
+    needs: [version, build]
     runs-on: ubuntu-latest
     steps:
       - name: Download all installers
