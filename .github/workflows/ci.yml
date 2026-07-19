@@ -218,12 +218,12 @@ jobs:
           PLAYWRIGHT_JSON_OUTPUT_FILE: artifacts/playwright-smoke.json
         run: npx playwright test tests/app-opens.spec.ts tests/ops-load.spec.ts --project=chromium --reporter=list,json
       - name: Reject skipped or incomplete required browser tests
-        run: yarn ci:verify-playwright -- --report e2e/artifacts/playwright-smoke.json --min-expected 4 --max-skipped 0
+        run: yarn ci:verify-playwright --report e2e/artifacts/playwright-smoke.json --min-expected 4 --max-skipped 0
       - name: Verify MariaDB backup and restore
         run: yarn ops:backup-restore
       - name: Verify image and live-container hardening
         run: >-
-          yarn ci:docker-hardening --
+          yarn ci:docker-hardening
           --image app=${APP_IMAGE}
           --image server=${SERVER_IMAGE}
           --container app=${COMPOSE_PROJECT_NAME}-app-1
@@ -331,7 +331,7 @@ jobs:
           PLAYWRIGHT_JSON_OUTPUT_FILE: artifacts/playwright-load.json
         run: npx playwright test tests/ops-load.spec.ts --project=chromium --reporter=list,json
       - name: Verify heavy-load report
-        run: yarn ci:verify-playwright -- --report e2e/artifacts/playwright-load.json --min-expected 1 --max-skipped 0
+        run: yarn ci:verify-playwright --report e2e/artifacts/playwright-load.json --min-expected 1 --max-skipped 0
       - name: Collect load diagnostics
         if: always()
         run: |
@@ -429,7 +429,7 @@ jobs:
         run: npx playwright test --grep-invert "ops load and Redis throughput" --reporter=list,json
       - name: Verify exhaustive report and explicit skips
         run: >-
-          yarn ci:verify-playwright --
+          yarn ci:verify-playwright
           --report e2e/artifacts/playwright-exhaustive.json
           --min-expected 45
           --max-skipped 25
