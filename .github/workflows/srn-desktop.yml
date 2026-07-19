@@ -104,7 +104,11 @@ jobs:
 
       - name: Build web UI
         working-directory: app
-        run: yarn workspace @standardnotes/web build
+        # Topological build of web + every first-party workspace it imports;
+        # their entrypoints are compiled dist/ output, so webpack cannot
+        # resolve them until they are built. Also pre-builds snjs/utils/web
+        # for the desktop bundle step below.
+        run: yarn build:web
 
       - name: Build desktop bundle (webpack)
         working-directory: app/packages/desktop
@@ -164,7 +168,8 @@ jobs:
 
       - name: Build web UI
         working-directory: app
-        run: yarn workspace @standardnotes/web build
+        # See the build matrix job: the shared workspaces must be built first.
+        run: yarn build:web
 
       - name: Build desktop bundle (snap variant)
         working-directory: app/packages/desktop
