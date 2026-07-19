@@ -35,3 +35,18 @@ packages/snjs/dist
 !.yarn/releases
 !.yarn/sdks
 !.yarn/versions
+
+# The four approved standardnotes/react-native-* forks are git dependencies, so
+# every cold checkout has to clone and repack them. That repack is not
+# byte-reproducible across platforms (react-native-keychain even runs
+# `prepack: bob build`), which made `checksumBehavior: throw` fail on whichever
+# OS did not generate the lockfile. Vendoring their cache archives pins one
+# canonical zip per dep, so Linux, macOS and Windows all verify the same bytes.
+# Listed by exact filename so a dependency bump has to update this list
+# deliberately instead of silently vendoring a stale archive.
+!.yarn/cache
+.yarn/cache/*
+!.yarn/cache/react-native-fingerprint-scanner-https-c92249c49b-c519286674.zip
+!.yarn/cache/react-native-flag-secure-android-https-2c9d6318d9-6c90fe473a.zip
+!.yarn/cache/react-native-keychain-https-34878270f4-144d70d625.zip
+!.yarn/cache/react-native-privacy-snapshot-https-5b78aeecef-46df591dbf.zip
