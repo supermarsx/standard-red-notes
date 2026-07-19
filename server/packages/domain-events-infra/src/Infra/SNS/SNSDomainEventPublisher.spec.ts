@@ -1,7 +1,7 @@
 import { createServer, Server } from 'node:http'
 import { AddressInfo, Socket } from 'node:net'
 
-import { SNSClient } from '@aws-sdk/client-sns'
+import { PublishCommand, SNSClient } from '@aws-sdk/client-sns'
 import { DomainEventInterface } from '@standardnotes/domain-events'
 
 import { SNSDomainEventPublisher, SNSPublishTimeoutError } from './SNSDomainEventPublisher'
@@ -10,6 +10,11 @@ const event = {
   type: 'USER_REGISTERED',
   payload: { userUuid: 'user-uuid' },
   meta: { origin: 'auth' },
+} as DomainEventInterface
+const targetedEvent = {
+  type: 'USER_REGISTERED',
+  payload: { userUuid: 'user-uuid' },
+  meta: { origin: 'auth', target: 'syncing-server' },
 } as DomainEventInterface
 const topicArn = 'arn:aws:sns:us-east-1:000000000000:events'
 
@@ -51,6 +56,45 @@ describe('SNSDomainEventPublisher', () => {
 
     expect(send).toHaveBeenCalledTimes(1)
     expect(send.mock.calls[0]).toHaveLength(1)
+  })
+
+  it('adds a target message attribute when the event declares one', async () => {
+    const send = jest.fn(async (..._args: unknown[]) => ({}))
+    const publisher = new SNSDomainEventPublisher({ send } as unknown as SNSClient, topicArn)
+
+    await publisher.publish(targetedEvent)
+
+    const { input } = send.mock.calls[0][0] as PublishCommand
+    expect(input.MessageAttributes?.target).toEqual({
+      DataType: 'String',
+      StringValue: 'syncing-server',
+    })
+  })
+
+  it('omits the target message attribute when the event declares none', async () => {
+    const send = jest.fn(async (..._args: unknown[]) => ({}))
+    const publisher = new SNSDomainEventPublisher({ send } as unknown as SNSClient, topicArn)
+
+    await publisher.publish(event)
+
+    const { input } = send.mock.calls[0][0] as PublishCommand
+    expect(input.MessageAttributes).not.toHaveProperty('target')
+  })
+
+  it('rethrows a non-abort failure untouched and still clears the deadline', async () => {
+    const failure = new Error('SNS is unreachable')
+    let abortSignal: AbortSignal | undefined
+    const send = jest.fn(async (...args: unknown[]) => {
+      abortSignal = (args[1] as { abortSignal?: AbortSignal } | undefined)?.abortSignal
+
+      throw failure
+    })
+    const publisher = new SNSDomainEventPublisher({ send } as unknown as SNSClient, topicArn, 10)
+
+    await expect(publisher.publish(event)).rejects.toBe(failure)
+
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    expect(abortSignal?.aborted).toBe(false)
   })
 
   it('clears the deadline after a successful publish', async () => {
