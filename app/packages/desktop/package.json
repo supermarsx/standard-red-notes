@@ -144,6 +144,7 @@
     "linux": {
       "category": "Office",
       "icon": "build/icon/",
+      "maintainer": "Standard Red Notes. <noreply@standardrednotes.invalid>",
       "executableName": "standard-red-notes",
       "desktop": {
         "entry": {
