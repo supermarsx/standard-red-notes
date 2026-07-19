@@ -11,6 +11,12 @@ module.exports = {
     ...pathsToModuleNameMapper(pathsFromTsconfig, {
       prefix: '<rootDir>',
     }),
+    // Webpack inline-loader specifiers (`!css-loader?{…}!sass-loader?{…}!….scss`)
+    // import raw stylesheet TEXT, which product code calls `.toString()` on. They
+    // must be matched BEFORE the generic rule below (first match wins): the generic
+    // rule sends them to identity-obj-proxy, whose `.toString` is the string
+    // "toString" rather than a function.
+    '^!.*!.*\\.(css|less|scss|sass)$': '<rootDir>/src/javascripts/__mocks__/rawCssMock.js',
     '\\.(css|less|scss|sass)$': 'identity-obj-proxy',
     // Deep imports of pure toast modules resolve to real sources (unit-testable);
     // the package root stays proxied since its index pulls in React components.
