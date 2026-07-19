@@ -348,8 +348,12 @@ jobs:
             echo "No release assets found in out/ (mirrors fail_on_unmatched_files)" >&2
             exit 1
           fi
+          # Do not claim the repo-global Latest pointer: electron-updater
+          # resolves the desktop channel file through /releases/latest, so only
+          # srn-desktop may hold it.
           gh release create "${{ steps.ver.outputs.tag }}" \
             --title "${{ env.TOOL }} ${{ steps.ver.outputs.version }}" \
             --target "${{ github.sha }}" \
+            --latest=false \
             --generate-notes \
             "${files[@]}"

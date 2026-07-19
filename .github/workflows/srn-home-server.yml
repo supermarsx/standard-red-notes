@@ -227,9 +227,13 @@ jobs:
           echo "Releasing ${tag}"
           shopt -s nullglob
           files=(out/*)
+          # Do not claim the repo-global Latest pointer: electron-updater
+          # resolves the desktop channel file through /releases/latest, so only
+          # srn-desktop may hold it.
           gh release create "$tag" \
             --repo "$GITHUB_REPOSITORY" \
             --title "${TOOL} ${version}" \
             --target "${GITHUB_SHA}" \
+            --latest=false \
             --generate-notes \
             "${files[@]}"

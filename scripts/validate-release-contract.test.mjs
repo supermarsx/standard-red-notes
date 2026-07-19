@@ -427,3 +427,57 @@ test("a missing iOS arm64 artifact assertion is rejected", () => {
     /missing iOS device architecture assertion step/,
   );
 });
+
+test("a non-desktop softprops release that claims the Latest pointer is rejected", () => {
+  const file = ".github/workflows/srn-admin.yml";
+  const files = withFileChanged(file, (content) =>
+    content.replace("          make_latest: 'false'\n", ""),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /srn-admin\.yml: 1 'uses: softprops\/action-gh-release' release step\(s\) but 0 'make_latest: 'false'' opt-out\(s\)/,
+  );
+});
+
+test("a non-desktop gh release that claims the Latest pointer is rejected", () => {
+  const file = ".github/workflows/srn-server.yml";
+  const files = withFileChanged(file, (content) =>
+    content.replace("--latest=false", "--draft=false"),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /srn-server\.yml: 1 'gh release create' release step\(s\) but 0 '--latest=false' opt-out\(s\)/,
+  );
+});
+
+test("a second non-desktop release step without the opt-out is rejected", () => {
+  const file = ".github/workflows/srn-openclaw.yml";
+  const files = withFileChanged(file, (content) =>
+    content.replace(
+      'gh release create "${TAG}"',
+      'gh release create "${TAG}-extra"\n          gh release create "${TAG}"',
+    ),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /srn-openclaw\.yml: 2 'gh release create' release step\(s\) but 1 '--latest=false' opt-out\(s\)/,
+  );
+});
+
+test("srn-desktop giving away the Latest pointer is rejected", () => {
+  const file = ".github/workflows/srn-desktop.yml";
+  const files = withFileChanged(file, (content) =>
+    content.replace(
+      "          draft: false\n",
+      "          draft: false\n          make_latest: 'false'\n",
+    ),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /srn-desktop\.yml: srn-desktop must claim the repo-global Latest pointer/,
+  );
+});

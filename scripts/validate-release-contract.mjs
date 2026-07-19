@@ -504,6 +504,73 @@ export function validateReleaseContract(files) {
     );
   }
 
+  // GitHub's "Latest release" pointer is REPO-GLOBAL, and electron-updater
+  // resolves the desktop update channel through it: it GETs /releases/latest,
+  // takes `tag_name` verbatim, then fetches `<tag>/latest.yml`. Releases default
+  // to `make_latest: true`, so any non-desktop srn-* release silently steals the
+  // pointer and desktop updates die with ERR_UPDATER_CHANNEL_FILE_NOT_FOUND.
+  // Every non-desktop publisher must therefore opt out explicitly, in its own
+  // mechanism's syntax. The counts (rather than a mere presence check) are the
+  // point: a newly added second release step that forgets the flag must fail.
+  // Matched line-anchored so prose in a workflow's header comment (srn-admin
+  // still describes a `gh release create` it no longer uses) is not counted as
+  // a release step.
+  const LATEST_POINTER_MECHANISMS = Object.freeze([
+    [
+      "uses: softprops/action-gh-release",
+      /^\s*(?:-\s+)?uses:\s+softprops\/action-gh-release/gm,
+      "make_latest: 'false'",
+      /^\s*make_latest:\s*'false'\s*$/gm,
+    ],
+    [
+      "gh release create",
+      /^\s*gh release create\b/gm,
+      "--latest=false",
+      /^\s*--latest=false\b/gm,
+    ],
+  ]);
+  for (const file of [
+    ".github/workflows/srn-client.yml",
+    ".github/workflows/srn-server.yml",
+    ".github/workflows/srn-mcp.yml",
+    ".github/workflows/srn-home-server.yml",
+    ".github/workflows/srn-admin.yml",
+    ".github/workflows/srn-openclaw.yml",
+    ".github/workflows/srn-mobile.yml",
+  ]) {
+    const workflow = files.get(file) ?? "";
+    let publishers = 0;
+    for (const [
+      invocation,
+      invocationPattern,
+      optOut,
+      optOutPattern,
+    ] of LATEST_POINTER_MECHANISMS) {
+      const steps = [...workflow.matchAll(invocationPattern)].length;
+      publishers += steps;
+      const optOuts = [...workflow.matchAll(optOutPattern)].length;
+      if (steps !== optOuts) {
+        errors.push(
+          `${file}: ${steps} '${invocation}' release step(s) but ${optOuts} '${optOut}' opt-out(s); ` +
+            "non-desktop releases must leave the repo-global Latest pointer to srn-desktop",
+        );
+      }
+    }
+    if (publishers === 0) {
+      errors.push(`${file}: missing GitHub release publication step`);
+    }
+  }
+  // The mirror image: desktop is the one component that must keep the pointer,
+  // because that is how electron-updater finds its channel file at all.
+  if (
+    rootDesktop.includes("make_latest: 'false'") ||
+    rootDesktop.includes("--latest=false")
+  ) {
+    errors.push(
+      `${rootDesktopFile}: srn-desktop must claim the repo-global Latest pointer`,
+    );
+  }
+
   const appDesktopFile = "app/.github/workflows/desktop.release.reuse.yml";
   const appDesktop = files.get(appDesktopFile) ?? "";
   const windows = jobBlock(appDesktop, "Windows");

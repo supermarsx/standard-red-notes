@@ -269,9 +269,13 @@ jobs:
           VERSION: ${{ needs.context.outputs.version }}
         run: |
           set -euo pipefail
+          # Do not claim the repo-global Latest pointer: electron-updater
+          # resolves the desktop channel file through /releases/latest, so only
+          # srn-desktop may hold it.
           gh release create "${TAG}" \
             --verify-tag \
             --target "${SOURCE_SHA}" \
             --title "OpenClaw ${VERSION}" \
+            --latest=false \
             --generate-notes \
             out/*
