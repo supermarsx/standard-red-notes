@@ -278,6 +278,78 @@ test("dropping the build matrix from the desktop release fan-in is rejected", ()
   );
 });
 
+// Desktop versions and tags like every other srn-* component: rolling `YY.N`
+// under a namespaced `srn-desktop-v*` tag. The old `YY.M.<run>` scheme tagged a
+// bare `v*`, taking the repo-global tag namespace and the "Latest" badge.
+test("an unnamespaced desktop release tag is rejected", () => {
+  const files = withFileChanged(desktopWorkflowFile, (content) =>
+    content.replace('echo "tag=${TOOL}-v${version}"', 'echo "tag=v${version}"'),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /srn-desktop\.yml: desktop must not publish an unnamespaced v\* tag/,
+  );
+});
+
+test("dropping the namespaced desktop tag is rejected", () => {
+  const files = withFileChanged(desktopWorkflowFile, (content) =>
+    content.replace(
+      'echo "tag=${TOOL}-v${version}"',
+      'echo "tag=srn-desktop-${version}"',
+    ),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /srn-desktop\.yml: missing namespaced desktop release tag/,
+  );
+});
+
+test("reverting the desktop version to the run-number scheme is rejected", () => {
+  const files = withFileChanged(desktopWorkflowFile, (content) =>
+    content.replace(
+      'version="${YY}.$((max + 1))"',
+      'version="$(date -u +%y).$(date -u +%-m).${GITHUB_RUN_NUMBER}"',
+    ),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /srn-desktop\.yml: missing rolling YY\.N desktop version/,
+  );
+});
+
+// electron-updater throws ERR_UPDATER_INVALID_VERSION on a non-semver app
+// version, and `26.1` is not semver, so the app must be built with `YY.N.0`.
+test("baking the non-semver release version into the app is rejected", () => {
+  const files = withFileChanged(desktopWorkflowFile, (content) =>
+    content.replace(
+      "-c.extraMetadata.version=${{ needs.version.outputs.app_version }}",
+      "-c.extraMetadata.version=${{ needs.version.outputs.version }}",
+    ),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /srn-desktop\.yml: missing semver app version injected into electron-builder/,
+  );
+});
+
+test("a non-srn-* desktop release title is rejected", () => {
+  const files = withFileChanged(desktopWorkflowFile, (content) =>
+    content.replace(
+      "name: srn-desktop ${{ needs.version.outputs.version }}",
+      "name: Standard Red Notes Desktop ${{ needs.version.outputs.version }}",
+    ),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /srn-desktop\.yml: missing srn-\* desktop release title convention/,
+  );
+});
+
 test("suppressed desktop checksum failures are rejected", () => {
   const file = ".github/workflows/srn-desktop.yml";
   const files = withFileChanged(file, (content) =>

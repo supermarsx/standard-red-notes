@@ -397,6 +397,46 @@ export function validateReleaseContract(files) {
     );
   }
 
+  // Desktop must version and tag itself like every other srn-* component:
+  // rolling `YY.N` discovered from the existing releases, published under a
+  // NAMESPACED `srn-desktop-v<version>` tag. A bare `v<version>` tag would hand
+  // desktop the repo-global tag namespace and the "Latest" release badge, which
+  // is what the old `YY.M.<run>` scheme did.
+  const rootDesktopVersion = jobBlock(rootDesktop, "version");
+  if (!rootDesktopVersion) {
+    errors.push(`${rootDesktopFile}: missing desktop version job`);
+  } else {
+    for (const [fragment, description] of [
+      ['version="${YY}.$((max + 1))"', "rolling YY.N desktop version"],
+      ["tag=${TOOL}-v${version}", "namespaced desktop release tag"],
+      // electron-updater refuses a non-semver app version outright
+      // (ERR_UPDATER_INVALID_VERSION), so the release identity `YY.N` and the
+      // semver baked into the app must be computed separately.
+      ["app_version=${version}.0", "semver app version for electron-updater"],
+    ]) {
+      requireFragment(
+        errors,
+        rootDesktopFile,
+        rootDesktopVersion,
+        fragment,
+        description,
+      );
+    }
+    if (/\btag=v\$\{version\}/.test(rootDesktopVersion)) {
+      errors.push(
+        `${rootDesktopFile}: desktop must not publish an unnamespaced v* tag`,
+      );
+    }
+  }
+  // The app version electron-builder bakes in must be the semver one.
+  requireFragment(
+    errors,
+    rootDesktopFile,
+    rootDesktop,
+    "-c.extraMetadata.version=${{ needs.version.outputs.app_version }}",
+    "semver app version injected into electron-builder",
+  );
+
   // The Snap target was removed outright (snapcraft 8 dropped the `snapcraft
   // snap` subcommand electron-builder's legacy core22 path hardcodes), so the
   // build matrix is now the whole of the desktop pipeline. Its artifact upload
@@ -435,6 +475,14 @@ export function validateReleaseContract(files) {
     // Every remaining leg must gate the release, so a broken macOS, Windows or
     // Linux build can never publish. `build` is the whole OS/arch matrix.
     ["needs: [version, build]", "desktop release fan-in over every leg"],
+    [
+      "tag_name: ${{ needs.version.outputs.tag }}",
+      "namespaced desktop release tag reference",
+    ],
+    [
+      "name: srn-desktop ${{ needs.version.outputs.version }}",
+      "srn-* desktop release title convention",
+    ],
     ["mapfile -d '' files", "bounded desktop checksum input collection"],
     [
       'sha256sum "${files[@]}" > SHA256SUMS.txt',
