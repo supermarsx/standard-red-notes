@@ -140,11 +140,21 @@ jobs:
           if-no-files-found: error
 
   # 3) SNAP — needs a separate webpack pass (IS_SNAP define) before the snap
-  # target, plus snapcraft on the runner. x64 only and release-blocking.
+  # target, plus snapcraft on the runner. x64 only.
   snap:
     name: snap (linux-x64)
     needs: version
     runs-on: ubuntu-latest
+    # TEMPORARY SNAP DESCOPE (user-approved). electron-builder's legacy core22
+    # path invokes the subcommand `snapcraft snap`, which snapcraft 8.x removed
+    # ("The 'snap' command was renamed to 'pack'"), so this job cannot pass as
+    # configured. It still RUNS and reports — we keep the visibility — but it no
+    # longer blocks the desktop release. Re-arm by deleting this marker and
+    # `continue-on-error` once snapcraft is pinned to 7.x, or the config is
+    # migrated to `snapcraft.core24` (Jammy -> Noble, libpython3.10 -> 3.12).
+    # scripts/validate-release-contract.mjs permits a non-blocking Snap job ONLY
+    # while the marker above is present.
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v7
 

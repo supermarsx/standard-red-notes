@@ -200,18 +200,67 @@ test("a missing app Windows release job is rejected", () => {
   );
 });
 
-test("a best-effort desktop Snap release is rejected", () => {
-  const file = ".github/workflows/srn-desktop.yml";
-  const files = withFileChanged(file, (content) =>
+// The desktop Snap job is temporarily descoped: it runs and reports but does
+// not block the release, because snapcraft 8 removed the `snapcraft snap`
+// subcommand that electron-builder's legacy core22 path invokes. The contract
+// permits that shape only while the job declares it.
+const desktopWorkflowFile = ".github/workflows/srn-desktop.yml";
+
+test("the declared temporary Snap descope satisfies the contract", () => {
+  const workflow = baseline.get(desktopWorkflowFile);
+
+  assert.match(workflow, /continue-on-error: true/);
+  assert.match(workflow, /TEMPORARY SNAP DESCOPE/);
+  assert.deepEqual(validateReleaseContract(baseline), []);
+});
+
+test("an undeclared best-effort desktop Snap release is rejected", () => {
+  const files = withFileChanged(desktopWorkflowFile, (content) =>
+    content.replace("TEMPORARY SNAP DESCOPE (user-approved).", "housekeeping."),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /a non-blocking Snap job must declare "TEMPORARY SNAP DESCOPE"/,
+  );
+});
+
+test("a removed desktop Snap job is rejected", () => {
+  const files = withFileChanged(desktopWorkflowFile, (content) =>
+    content.replace(/\r?\n  snap:\r?\n/, "\n  Removed-snap:\n"),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /srn-desktop\.yml: missing Snap job/,
+  );
+});
+
+test("a best-effort desktop Snap artifact upload is rejected", () => {
+  const files = withFileChanged(desktopWorkflowFile, (content) =>
     content.replace(
-      "  snap:\n    name: snap (linux-x64)\n    needs: version\n    runs-on: ubuntu-latest\n",
-      "  snap:\n    name: snap (linux-x64)\n    needs: version\n    runs-on: ubuntu-latest\n    continue-on-error: true\n",
+      "          name: srn-desktop-linux-snap\n          path: app/packages/desktop/dist/*.snap\n          retention-days: 2\n          if-no-files-found: error\n",
+      "          name: srn-desktop-linux-snap\n          path: app/packages/desktop/dist/*.snap\n          retention-days: 2\n",
     ),
   );
 
   assert.match(
     validateReleaseContract(files).join("\n"),
-    /Snap job must block a broken desktop release/,
+    /srn-desktop\.yml: missing required Snap artifact upload/,
+  );
+});
+
+test("dropping Snap from the desktop release fan-in is rejected", () => {
+  const files = withFileChanged(desktopWorkflowFile, (content) =>
+    content.replace(
+      "needs: [version, build, snap]",
+      "needs: [version, build]",
+    ),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /srn-desktop\.yml: missing desktop release fan-in over every leg/,
   );
 });
 

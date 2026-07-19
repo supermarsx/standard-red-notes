@@ -53,6 +53,11 @@ const OPENCLAW_SMOKE_TARGETS = Object.freeze([
   ["macos-arm64", "macos-15", "arm64"],
 ]);
 
+// A non-blocking desktop Snap job must carry this marker in the job body. It is
+// the single, greppable token that ties the relaxed contract below to the
+// deliberate, temporary descope documented in srn-desktop.yml.
+const SNAP_DESCOPE_MARKER = "TEMPORARY SNAP DESCOPE";
+
 function countOccurrences(text, fragment) {
   return text.split(fragment).length - 1;
 }
@@ -399,11 +404,20 @@ export function validateReleaseContract(files) {
 
   const rootSnap = jobBlock(rootDesktop, "snap");
   if (!rootSnap) {
-    errors.push(`${rootDesktopFile}: missing release-blocking Snap job`);
+    errors.push(`${rootDesktopFile}: missing Snap job`);
   } else {
-    if (rootSnap.includes("continue-on-error: true")) {
+    // The Snap job is release-blocking by default. It may be made best-effort
+    // ONLY by declaring the descope in the job itself, so a silent
+    // `continue-on-error` can never soften the release. See the marker in
+    // srn-desktop.yml: snapcraft 8 removed the `snapcraft snap` subcommand that
+    // electron-builder's legacy core22 path invokes. Temporary, pending a
+    // snapcraft 7.x pin or a snapcraft.core24 migration.
+    if (
+      rootSnap.includes("continue-on-error: true") &&
+      !rootSnap.includes(SNAP_DESCOPE_MARKER)
+    ) {
       errors.push(
-        `${rootDesktopFile}: Snap job must block a broken desktop release`,
+        `${rootDesktopFile}: a non-blocking Snap job must declare "${SNAP_DESCOPE_MARKER}"`,
       );
     }
     requireFragment(
@@ -417,6 +431,9 @@ export function validateReleaseContract(files) {
 
   const rootDesktopRelease = jobBlock(rootDesktop, "release");
   for (const [fragment, description] of [
+    // The Snap job stays in the release fan-in even while descoped, so it can
+    // never be quietly dropped from the pipeline.
+    ["needs: [version, build, snap]", "desktop release fan-in over every leg"],
     ["mapfile -d '' files", "bounded desktop checksum input collection"],
     [
       'sha256sum "${files[@]}" > SHA256SUMS.txt',
