@@ -45,6 +45,10 @@ jobs:
         if: matrix.shard == 'server'
         working-directory: server
         run: yarn build
+      - name: Build app workspace packages
+        if: startsWith(matrix.shard, 'app')
+        working-directory: app
+        run: yarn workspaces foreach -pt --topological-dev --verbose -R --from @standardnotes/web --exclude @standardnotes/web run build
       - name: Collect ${{ matrix.shard }} Jest coverage
         run: yarn coverage:collect:${{ matrix.shard }}
       - name: Upload raw ${{ matrix.shard }} coverage
