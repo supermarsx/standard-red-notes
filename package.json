@@ -70,7 +70,7 @@
     "test:coverage-tools": "node --test scripts/coverage.test.mjs",
     "test:openclaw": "yarn workspace @standard-red-notes/openclaw test",
     "test:release-contract": "node --test scripts/validate-release-contract.test.mjs",
-    "test:server": "cd server && yarn test",
+    "test:server": "cd server && yarn build && yarn test",
     "typecheck": "yarn typecheck:mcp && yarn typecheck:openclaw",
     "typecheck:mcp": "yarn workspace @standard-red-notes/mcp typecheck",
     "typecheck:openclaw": "yarn workspace @standard-red-notes/openclaw typecheck"
