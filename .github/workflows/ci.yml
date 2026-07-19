@@ -99,6 +99,9 @@ jobs:
       - name: Build app workspaces
         working-directory: app
         run: yarn build:all
+      - name: Build server workspaces
+        working-directory: server
+        run: yarn build
       - name: Run coordinated checks
         run: yarn check
 
