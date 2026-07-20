@@ -115,6 +115,11 @@ const defaultScript = (line: string): string | null => {
 }
 
 describe('EmailProvider', () => {
+  // These tests drive a loopback socket, so they are latency-sensitive in a way
+  // the rest of the suite is not. Locally each one finishes in ~100ms; the extra
+  // headroom is purely so a slow CI runner cannot turn a passing test red.
+  jest.setTimeout(30_000)
+
   const servers: FakeSmtp[] = []
 
   afterEach(async () => {
