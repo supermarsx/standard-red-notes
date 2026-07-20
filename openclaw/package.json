@@ -43,6 +43,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "yarn test:unit && yarn test:e2e",
     "test:unit": "vitest run",
+    "coverage": "vitest run --coverage",
     "test:e2e": "yarn workspace @standard-red-notes/mcp build && yarn build && node test/live.e2e.js",
     "verify:release": "node scripts/verify-release.mjs",
     "format": "prettier --write \"src/**/*.{ts,tsx,js,json,md}\" \"test/**/*.{ts,tsx,js,json,md}\" \"scripts/**/*.mjs\" README.md package.json",
@@ -64,6 +65,7 @@
   ],
   "devDependencies": {
     "@types/node": "^26.1.1",
+    "@vitest/coverage-v8": "^4.1.10",
     "prettier": "^3.9.5",
     "tsx": "^4.23.1",
     "typescript": "^7.0.2",
