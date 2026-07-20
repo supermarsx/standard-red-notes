@@ -179,7 +179,12 @@ export function runCli(sandbox: Sandbox, argv: string[], options: RunOptions = {
   process.env[key] = searchPath(sandbox, options)
   let child
   try {
-    child = spawn(process.execPath, ['--import', REGISTER, ENTRY, ...argv], {
+    // --no-deprecation: the child is launched with `--import <resolver>`, which
+    // is test plumbing. If Node deprecates something that plumbing uses, the
+    // warning lands on the CLI's stderr and fails assertions about output the
+    // CLI never produced. Non-deprecation warnings are still emitted, and are
+    // split out by splitNodeNotices.
+    child = spawn(process.execPath, ['--no-deprecation', '--import', REGISTER, ENTRY, ...argv], {
       cwd: options.cwd ?? sandbox.orphan,
       // NODE_V8_COVERAGE is inherited through childEnv's spread of process.env;
       // dropping it would silently lose all coverage of the child.

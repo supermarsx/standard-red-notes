@@ -78,6 +78,13 @@ test('a REAL Node notice on a real child is split out, end to end', async () => 
   )
   assert.doesNotMatch(r.stderr, /HarnessTestWarning/, 'it must not contaminate the CLI stderr')
   assert.doesNotMatch(r.stderr, /^\(node:\d+\)/m)
+  // Second layer: the child runs with --no-deprecation, so a DeprecationWarning
+  // is never emitted at all — not into stderr and not into nodeNotices.
+  assert.doesNotMatch(r.stderr, /DeprecationWarning/)
+  assert.equal(
+    r.nodeNotices.some((n) => n.includes('DeprecationWarning')),
+    false,
+  )
 })
 
 // --- help / dispatch ---------------------------------------------------------

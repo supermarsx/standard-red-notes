@@ -15,6 +15,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import path from 'node:path'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { pathToFileURL } from 'node:url'
 import { makeSandbox, runCli, splitNodeNotices, writeFixture, type Sandbox } from './harness.ts'
 
 const sandbox: Sandbox = makeSandbox()
@@ -48,6 +49,18 @@ test("Node's process-level notices are split out of the CLI's stderr", () => {
   const split = splitNodeNotices(raw)
   assert.equal(split.stderr, 'Error: Missing --email <email>.\n')
   assert.equal(split.nodeNotices.length, 2, 'the warning AND its paired hint line are both taken')
+})
+
+test('a real DeprecationWarning in a real child never reaches stderr', async () => {
+  // The layer the (node:PID) filter cannot handle: polyfill.ts reformats
+  // warnings to `Name: message`, so a deprecation from the test resolver looks
+  // exactly like CLI output. Children therefore run with --no-deprecation.
+  const preload = pathToFileURL(path.join(import.meta.dirname, 'emit-deprecation.mjs')).href
+  const r = await runCli(sandbox, ['version'], { env: { NODE_OPTIONS: `--import ${preload}` } })
+  assert.equal(r.code, 0)
+  assert.equal(r.stdout, 'srn-client 0.1.0\n')
+  assert.equal(r.stderr, '', `stderr should be empty, got ${JSON.stringify(r.stderr)}`)
+  assert.doesNotMatch(r.stderr, /DeprecationWarning/)
 })
 
 test("the CLI's own warning output is NOT swallowed", () => {

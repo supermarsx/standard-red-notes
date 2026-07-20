@@ -101,7 +101,15 @@ export function runCli(sandbox: Sandbox, argv: string[], options: RunOptions = {
     }
   }
 
-  const child = spawn(process.execPath, ['--import', REGISTER, ENTRY, ...argv], {
+  // --no-deprecation: the child is launched with `--import <resolver>`, and the
+  // resolver's module.register() is deprecated from Node 26. src/polyfill.ts
+  // installs its OWN warning printer, which faithfully reformats that warning to
+  // `DeprecationWarning: ...` with no `(node:PID)` prefix — so it is
+  // indistinguishable from CLI output and the harness cannot filter it after the
+  // fact. Suppressing it at the source is the only version-independent fix.
+  // Non-deprecation warnings are still emitted, and polyfill's printer is
+  // asserted directly in polyfill.test.ts.
+  const child = spawn(process.execPath, ['--no-deprecation', '--import', REGISTER, ENTRY, ...argv], {
     cwd: options.cwd ?? sandbox.dir,
     // NODE_V8_COVERAGE rides along in this spread; dropping it would silently
     // lose all coverage of the child.

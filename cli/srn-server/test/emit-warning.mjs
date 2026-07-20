@@ -6,3 +6,7 @@
 //   (node:1234) HarnessTestWarning: synthetic notice from the test harness
 // which is the same shape as the DEP0205 deprecation that turned CI red.
 process.emitWarning('synthetic notice from the test harness', 'HarnessTestWarning')
+
+// The second one proves the other layer: children run with --no-deprecation, so
+// a DeprecationWarning must never reach stderr in any form.
+process.emitWarning('synthetic deprecation from the test harness', 'DeprecationWarning')
