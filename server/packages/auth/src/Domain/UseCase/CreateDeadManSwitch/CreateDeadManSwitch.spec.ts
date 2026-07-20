@@ -1,3 +1,4 @@
+import { Result } from '@standardnotes/domain-core'
 import { DeadManSwitch } from '../../DeadManSwitch/DeadManSwitch'
 import { DeadManSwitchRepositoryInterface } from '../../DeadManSwitch/DeadManSwitchRepositoryInterface'
 import { User } from '../../User/User'
@@ -99,5 +100,36 @@ describe('CreateDeadManSwitch', () => {
     expect(result.isFailed()).toBe(false)
     const saved = (deadManSwitchRepository.save as jest.Mock).mock.calls[0][0] as DeadManSwitch
     expect(saved.props.message).toBeNull()
+  })
+
+  it('should reject a share url that is not a parseable URL', async () => {
+    const result = await createUseCase().execute({ ...validDto, shareUrl: 'notes.example.com/share/abc' })
+
+    expect(result.isFailed()).toBe(true)
+    expect(result.getError()).toContain('must be a valid URL')
+    expect(deadManSwitchRepository.save).not.toHaveBeenCalled()
+  })
+
+  it('should reject a non-https share url so it cannot become a hostile link in the email', async () => {
+    for (const shareUrl of ['http://notes.example.com/share/abc', 'javascript:alert(1)', 'data:text/html,x']) {
+      ;(deadManSwitchRepository.save as jest.Mock).mockClear()
+
+      const result = await createUseCase().execute({ ...validDto, shareUrl })
+
+      expect(result.isFailed()).toBe(true)
+      expect(result.getError()).toContain('must be an https URL')
+      expect(deadManSwitchRepository.save).not.toHaveBeenCalled()
+    }
+  })
+
+  it('fails without persisting when the switch entity is rejected', async () => {
+    const spy = jest.spyOn(DeadManSwitch, 'create').mockReturnValue(Result.fail('bad props'))
+
+    const result = await createUseCase().execute(validDto)
+
+    expect(result.isFailed()).toBe(true)
+    expect(result.getError()).toEqual('Could not create dead man switch: bad props')
+    expect(deadManSwitchRepository.save).not.toHaveBeenCalled()
+    spy.mockRestore()
   })
 })

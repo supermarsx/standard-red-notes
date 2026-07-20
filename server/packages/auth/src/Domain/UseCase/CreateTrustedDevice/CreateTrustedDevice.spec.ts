@@ -1,3 +1,4 @@
+import { Result } from '@standardnotes/domain-core'
 import * as bcrypt from 'bcryptjs'
 
 import { TrustedDevice } from '../../TrustedDevice/TrustedDevice'
@@ -87,5 +88,16 @@ describe('CreateTrustedDevice', () => {
     const second = (await createUseCase().execute(validDto)).getValue()
 
     expect(first.token).not.toEqual(second.token)
+  })
+
+  it('fails without persisting when the trusted device entity is rejected', async () => {
+    const spy = jest.spyOn(TrustedDevice, 'create').mockReturnValue(Result.fail('bad props'))
+
+    const result = await createUseCase().execute(validDto)
+
+    expect(result.isFailed()).toBe(true)
+    expect(result.getError()).toEqual('Could not create trusted device: bad props')
+    expect(trustedDeviceRepository.save).not.toHaveBeenCalled()
+    spy.mockRestore()
   })
 })

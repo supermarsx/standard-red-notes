@@ -49,4 +49,12 @@ describe('GetRoleHolders', () => {
 
     expect(result.isFailed()).toBe(true)
   })
+
+  it('fails on a malformed role uuid before touching the repository', async () => {
+    const result = await createUseCase().execute({ roleUuid: 'not-a-uuid' })
+
+    expect(result.isFailed()).toBe(true)
+    expect(result.getError()).toContain('Could not resolve role holders')
+    expect(roleRepository.findOneByUuid).not.toHaveBeenCalled()
+  })
 })

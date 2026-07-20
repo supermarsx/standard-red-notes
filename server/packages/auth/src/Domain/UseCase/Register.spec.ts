@@ -1461,5 +1461,23 @@ describe('Register', () => {
       const savedUser = (userRepository.save as jest.Mock).mock.calls[0][0] as User
       expect(savedUser.approved).toBeUndefined()
     })
+
+    it('ignores an invite token in OPEN mode when no invite consumer is wired (fails open)', async () => {
+      const result = await createWith(makeResolver({ inviteOnly: false })).execute(dtoFor({ inviteToken: 'tok' }))
+
+      expect(result.success).toBe(true)
+      expect(userRepository.save).toHaveBeenCalledTimes(1)
+    })
+
+    it('falls back to the default registration config when the resolver throws', async () => {
+      const throwingResolver = { resolve: jest.fn().mockRejectedValue(new Error('overlay unreadable')) }
+
+      const result = await createWith(throwingResolver).execute(dtoFor())
+
+      expect(throwingResolver.resolve).toHaveBeenCalled()
+      // The default config is open + no approval queue, so registration completes.
+      expect(result.success).toBe(true)
+      expect('pendingApproval' in result).toBe(false)
+    })
   })
 })

@@ -1,3 +1,4 @@
+import { Result } from '@standardnotes/domain-core'
 import { Share } from '../../Share/Share'
 import { ShareRepositoryInterface } from '../../Share/ShareRepositoryInterface'
 import { User } from '../../User/User'
@@ -140,5 +141,16 @@ describe('CreateShare', () => {
 
     expect(result.isFailed()).toBe(true)
     expect(shareRepository.save).not.toHaveBeenCalled()
+  })
+
+  it('fails without persisting when the share entity is rejected', async () => {
+    const spy = jest.spyOn(Share, 'create').mockReturnValue(Result.fail('bad props'))
+
+    const result = await createUseCase().execute(validDto)
+
+    expect(result.isFailed()).toBe(true)
+    expect(result.getError()).toEqual('Could not create share: bad props')
+    expect(shareRepository.save).not.toHaveBeenCalled()
+    spy.mockRestore()
   })
 })

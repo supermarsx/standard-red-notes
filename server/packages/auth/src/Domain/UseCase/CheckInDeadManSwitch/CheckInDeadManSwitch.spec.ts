@@ -1,4 +1,4 @@
-import { UniqueEntityId } from '@standardnotes/domain-core'
+import { Result, UniqueEntityId } from '@standardnotes/domain-core'
 
 import { DeadManSwitch } from '../../DeadManSwitch/DeadManSwitch'
 import { DeadManSwitchRepositoryInterface } from '../../DeadManSwitch/DeadManSwitchRepositoryInterface'
@@ -77,5 +77,16 @@ describe('CheckInDeadManSwitch', () => {
     expect(saved.props.triggered).toBe(false)
     expect(saved.props.lastCheckInAt).not.toBeNull()
     expect(saved.props.deadline).toEqual(newDeadline)
+  })
+
+  it('fails without persisting when rebuilding the checked-in switch is rejected', async () => {
+    const spy = jest.spyOn(DeadManSwitch, 'create').mockReturnValue(Result.fail('bad props'))
+
+    const result = await createUseCase().execute({ userUuid, switchId })
+
+    expect(result.isFailed()).toBe(true)
+    expect(result.getError()).toEqual('Could not check in: bad props')
+    expect(deadManSwitchRepository.save).not.toHaveBeenCalled()
+    spy.mockRestore()
   })
 })

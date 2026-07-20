@@ -165,4 +165,14 @@ describe('VerifyAppPassword', () => {
 
     expect(result.getValue()).toBe(true)
   })
+
+  it('should return false when the resolved account carries a malformed uuid', async () => {
+    userRepository.findOneByUsernameOrEmail = jest.fn().mockResolvedValue({ uuid: 'not-a-uuid' } as jest.Mocked<User>)
+
+    const result = await createUseCase().execute({ email: 'user@example.com', appPassword: plaintext })
+
+    expect(result.isFailed()).toBe(false)
+    expect(result.getValue()).toBe(false)
+    expect(appPasswordRepository.findByUserUuid).not.toHaveBeenCalled()
+  })
 })

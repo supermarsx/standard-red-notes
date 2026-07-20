@@ -648,4 +648,105 @@ describe('SignIn', () => {
       expect(result.success).toBe(true)
     })
   })
+
+  describe('audit log and webhook hooks', () => {
+    let auditLogWriter: { write: jest.Mock }
+    let webhookDispatcher: { dispatch: jest.Mock }
+
+    const createUseCaseWithHooks = () =>
+      new SignIn(
+        userRepository,
+        authResponseFactoryResolver,
+        domainEventPublisher,
+        domainEventFactory,
+        sessionService,
+        pkceRepository,
+        crypter,
+        logger,
+        maxNonCaptchaAttempts,
+        lockRepository,
+        verifyHumanInteractionUseCase,
+        false,
+        auditLogWriter as never,
+        webhookDispatcher as never,
+      )
+
+    const signIn = (password: string, ipAddress?: string | null) =>
+      createUseCaseWithHooks().execute({
+        email: 'test@test.te',
+        password,
+        userAgent: 'Google Chrome',
+        apiVersion: '20190520',
+        ephemeralSession: false,
+        codeVerifier: 'test',
+        ipAddress,
+      } as never)
+
+    beforeEach(() => {
+      auditLogWriter = { write: jest.fn().mockResolvedValue(undefined) }
+      webhookDispatcher = { dispatch: jest.fn().mockResolvedValue(undefined) }
+    })
+
+    it('records a login.success audit entry and dispatches the user.login webhook', async () => {
+      const result = await signIn('qweqwe123123', '203.0.113.9')
+
+      expect(result.success).toBe(true)
+      expect(auditLogWriter.write).toHaveBeenCalledWith({
+        actorUuid: '1-2-3',
+        action: 'login.success',
+        targetType: 'user',
+        targetUuid: '1-2-3',
+        ip: '203.0.113.9',
+      })
+      expect(webhookDispatcher.dispatch).toHaveBeenCalledWith('user.login', {
+        userUuid: '1-2-3',
+        metadata: { result: 'success' },
+      })
+    })
+
+    it('normalizes a missing ip address to null on the audit entry', async () => {
+      await signIn('qweqwe123123')
+
+      expect(auditLogWriter.write).toHaveBeenCalledWith(expect.objectContaining({ ip: null }))
+    })
+
+    it('records a login.failure audit entry with the reason and does not fire the webhook', async () => {
+      const result = await signIn('wrong-password', '203.0.113.9')
+
+      expect(result.success).toBe(false)
+      expect(auditLogWriter.write).toHaveBeenCalledWith({
+        actorUuid: '1-2-3',
+        action: 'login.failure',
+        targetType: 'user',
+        targetUuid: '1-2-3',
+        ip: '203.0.113.9',
+        metadata: { email: 'test@test.te', reason: 'invalid_password' },
+      })
+      expect(webhookDispatcher.dispatch).not.toHaveBeenCalled()
+    })
+
+    it('still signs the user in when the webhook dispatcher throws', async () => {
+      webhookDispatcher.dispatch = jest.fn().mockRejectedValue(new Error('endpoint unreachable'))
+
+      const result = await signIn('qweqwe123123')
+
+      expect(result.success).toBe(true)
+      expect(logger.error).toHaveBeenCalledWith('Could not dispatch user.login webhook: endpoint unreachable')
+    })
+
+    it('signs in without touching either hook when neither is configured', async () => {
+      const result = await createUseCase().execute({
+        email: 'test@test.te',
+        password: 'qweqwe123123',
+        userAgent: 'Google Chrome',
+        apiVersion: '20190520',
+        ephemeralSession: false,
+        codeVerifier: 'test',
+      })
+
+      expect(result.success).toBe(true)
+      expect(auditLogWriter.write).not.toHaveBeenCalled()
+      expect(webhookDispatcher.dispatch).not.toHaveBeenCalled()
+    })
+  })
 })

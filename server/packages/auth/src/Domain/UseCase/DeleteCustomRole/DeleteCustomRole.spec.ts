@@ -78,4 +78,12 @@ describe('DeleteCustomRole', () => {
     expect(result.isFailed()).toBe(true)
     expect(result.getError()).toContain('not found')
   })
+
+  it('fails on a malformed role uuid before touching the repository', async () => {
+    const result = await createUseCase().execute({ roleUuid: 'not-a-uuid' })
+
+    expect(result.isFailed()).toBe(true)
+    expect(result.getError()).toContain('Could not delete custom role')
+    expect(roleRepository.findOneByUuid).not.toHaveBeenCalled()
+  })
 })

@@ -1,3 +1,4 @@
+import { Result } from '@standardnotes/domain-core'
 import * as bcrypt from 'bcryptjs'
 
 import { McpToken } from '../../McpToken/McpToken'
@@ -109,5 +110,32 @@ describe('CreateMcpToken', () => {
     const second = (await createUseCase().execute(validDto)).getValue()
 
     expect(first.token).not.toEqual(second.token)
+  })
+
+  it('should fail if the kdf salt is missing', async () => {
+    const result = await createUseCase().execute({ ...validDto, kdfSalt: '' })
+
+    expect(result.isFailed()).toBe(true)
+    expect(result.getError()).toContain('kdf salt is required')
+    expect(mcpTokenRepository.save).not.toHaveBeenCalled()
+  })
+
+  it('should fail if the kdf params are missing', async () => {
+    const result = await createUseCase().execute({ ...validDto, kdfParams: '' })
+
+    expect(result.isFailed()).toBe(true)
+    expect(result.getError()).toContain('kdf params are required')
+    expect(mcpTokenRepository.save).not.toHaveBeenCalled()
+  })
+
+  it('fails without persisting when the token entity is rejected', async () => {
+    const spy = jest.spyOn(McpToken, 'create').mockReturnValue(Result.fail('bad props'))
+
+    const result = await createUseCase().execute(validDto)
+
+    expect(result.isFailed()).toBe(true)
+    expect(result.getError()).toEqual('Could not create MCP token: bad props')
+    expect(mcpTokenRepository.save).not.toHaveBeenCalled()
+    spy.mockRestore()
   })
 })

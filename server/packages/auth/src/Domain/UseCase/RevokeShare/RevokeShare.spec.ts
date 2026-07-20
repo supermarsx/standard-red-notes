@@ -1,4 +1,4 @@
-import { UniqueEntityId } from '@standardnotes/domain-core'
+import { Result, UniqueEntityId } from '@standardnotes/domain-core'
 
 import { Share } from '../../Share/Share'
 import { ShareRepositoryInterface } from '../../Share/ShareRepositoryInterface'
@@ -68,5 +68,16 @@ describe('RevokeShare', () => {
     expect(saved.props.revoked).toBe(true)
     expect(saved.id.toString()).toEqual(shareId)
     expect(saved.props.encryptedPayload).toEqual('cipher')
+  })
+
+  it('fails without persisting when rebuilding the revoked share is rejected', async () => {
+    const spy = jest.spyOn(Share, 'create').mockReturnValue(Result.fail('bad props'))
+
+    const result = await createUseCase().execute({ userUuid, shareId })
+
+    expect(result.isFailed()).toBe(true)
+    expect(result.getError()).toEqual('Could not revoke share: bad props')
+    expect(shareRepository.save).not.toHaveBeenCalled()
+    spy.mockRestore()
   })
 })

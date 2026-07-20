@@ -49,4 +49,21 @@ describe('RejectUser', () => {
 
     expect(result.isFailed()).toBe(true)
   })
+
+  it('fails on a malformed uuid before touching the repository', async () => {
+    const result = await new RejectUser(userRepository, deleteAccount).execute({ userUuid: 'not-a-uuid' })
+
+    expect(result.isFailed()).toBe(true)
+    expect(userRepository.findOneByUuid).not.toHaveBeenCalled()
+    expect(deleteAccount.execute).not.toHaveBeenCalled()
+  })
+
+  it('propagates a failure from the DeleteAccount pipeline', async () => {
+    deleteAccount.execute = jest.fn().mockResolvedValue(Result.fail('Could not delete account.'))
+
+    const result = await new RejectUser(userRepository, deleteAccount).execute({ userUuid: validUuid })
+
+    expect(result.isFailed()).toBe(true)
+    expect(result.getError()).toEqual('Could not delete account.')
+  })
 })

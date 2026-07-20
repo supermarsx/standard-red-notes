@@ -1,3 +1,4 @@
+import { Result } from '@standardnotes/domain-core'
 import { EmailReminder } from '../../EmailReminder/EmailReminder'
 import { EmailReminderRepositoryInterface } from '../../EmailReminder/EmailReminderRepositoryInterface'
 
@@ -106,5 +107,16 @@ describe('CreateEmailReminder', () => {
     expect(result.isFailed()).toBe(false)
     expect(emailReminderRepository.findByUserUuid).not.toHaveBeenCalled()
     expect(emailReminderRepository.save).toHaveBeenCalledTimes(1)
+  })
+
+  it('fails without persisting when the reminder entity is rejected', async () => {
+    const spy = jest.spyOn(EmailReminder, 'create').mockReturnValue(Result.fail('bad props'))
+
+    const result = await createUseCase().execute({ userUuid, dueAt: 1900000000000, message: 'Ping' })
+
+    expect(result.isFailed()).toBe(true)
+    expect(result.getError()).toEqual('Could not create email reminder: bad props')
+    expect(emailReminderRepository.save).not.toHaveBeenCalled()
+    spy.mockRestore()
   })
 })

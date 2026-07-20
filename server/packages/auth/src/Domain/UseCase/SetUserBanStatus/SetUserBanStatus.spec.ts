@@ -156,4 +156,17 @@ describe('SetUserBanStatus', () => {
     expect(saved.banType).toBeNull()
     expect(saved.bannedUntil).toBeNull()
   })
+
+  it('should reject a temporary ban whose expiry is not a parseable date', async () => {
+    const result = await createUseCase().execute({
+      userUuid: validUuid,
+      banned: true,
+      banType: 'temporary',
+      bannedUntil: 'the day after tomorrow' as unknown as Date,
+    })
+
+    expect(result.isFailed()).toBeTruthy()
+    expect(result.getError()).toContain('not a valid date')
+    expect(userRepository.save).not.toHaveBeenCalled()
+  })
 })

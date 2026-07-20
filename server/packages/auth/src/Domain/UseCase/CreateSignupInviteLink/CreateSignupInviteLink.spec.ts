@@ -1,9 +1,10 @@
 import 'reflect-metadata'
-import { RoleName } from '@standardnotes/domain-core'
+import { Result, RoleName } from '@standardnotes/domain-core'
 
 import { SignupInviteLinkRepositoryInterface } from '../../SignupInvite/SignupInviteLinkRepositoryInterface'
 
 import { CreateSignupInviteLink } from './CreateSignupInviteLink'
+import { SignupInviteLink } from '../../SignupInvite/SignupInviteLink'
 
 describe('CreateSignupInviteLink', () => {
   let repo: jest.Mocked<SignupInviteLinkRepositoryInterface>
@@ -121,5 +122,29 @@ describe('CreateSignupInviteLink', () => {
     expect((await new CreateSignupInviteLink(repo).execute({ creatorKind: 'admin', maxUses: 999999 })).isFailed()).toBe(
       true,
     )
+  })
+
+  it('rejects an allowed-domain value that does not normalize to exactly one domain', async () => {
+    // '@.' is stripped entirely by normalizeDomainList, leaving nothing to lock on.
+    const result = await new CreateSignupInviteLink(repo).execute({
+      creatorKind: 'admin',
+      adminUuid: 'admin-1',
+      allowedDomain: ' @. ',
+    })
+
+    expect(result.isFailed()).toBe(true)
+    expect(result.getError()).toContain('Invalid allowed domain')
+    expect(repo.save).not.toHaveBeenCalled()
+  })
+
+  it('fails without persisting when the link entity is rejected', async () => {
+    const spy = jest.spyOn(SignupInviteLink, 'create').mockReturnValue(Result.fail('bad props'))
+
+    const result = await new CreateSignupInviteLink(repo).execute({ creatorKind: 'admin', adminUuid: 'admin-1' })
+
+    expect(result.isFailed()).toBe(true)
+    expect(result.getError()).toEqual('bad props')
+    expect(repo.save).not.toHaveBeenCalled()
+    spy.mockRestore()
   })
 })

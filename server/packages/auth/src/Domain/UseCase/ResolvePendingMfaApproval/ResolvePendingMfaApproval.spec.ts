@@ -83,4 +83,12 @@ describe('ResolvePendingMfaApproval', () => {
 
     expect(result.isFailed()).toBe(true)
   })
+
+  it('fails on a malformed user uuid before looking the challenge up', async () => {
+    const result = await createUseCase().execute({ userUuid: 'not-a-uuid', challengeId, approve: true })
+
+    expect(result.isFailed()).toBe(true)
+    expect(result.getError()).toContain('Could not resolve MFA approval')
+    expect(pendingMfaApprovalRepository.findByChallengeId).not.toHaveBeenCalled()
+  })
 })

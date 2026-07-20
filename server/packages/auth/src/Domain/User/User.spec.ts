@@ -173,4 +173,28 @@ describe('User', () => {
     expect(user.isSuspended()).toBe(false)
     expect(user.isAccessBlocked()).toBe(false)
   })
+
+  // banned is a tinyint(1): TypeORM hydrates it as the NUMBER 0/1 while
+  // SetUserBanStatus assigns a real boolean. effectiveBanType must read both.
+  it('effectiveBanType returns null for every unbanned representation', () => {
+    for (const banned of [0, false, null, undefined]) {
+      const user = createUser()
+      user.banned = banned as unknown as boolean
+      user.banType = 'permanent'
+
+      expect(user.effectiveBanType()).toBeNull()
+    }
+  })
+
+  it('effectiveBanType reads the numeric 1 as banned and defaults a typeless ban to permanent', () => {
+    const numeric = createUser()
+    numeric.banned = 1 as unknown as boolean
+    numeric.banType = 'shadow'
+    expect(numeric.effectiveBanType()).toEqual('shadow')
+
+    const legacy = createUser()
+    legacy.banned = true
+    legacy.banType = null
+    expect(legacy.effectiveBanType()).toEqual('permanent')
+  })
 })

@@ -1,3 +1,4 @@
+import { Result } from '@standardnotes/domain-core'
 import { DomainEventPublisherInterface } from '@standardnotes/domain-events'
 import { Logger } from 'winston'
 
@@ -88,5 +89,16 @@ describe('CreatePendingMfaApproval', () => {
 
     expect(result.isFailed()).toBe(false)
     expect(logger.error).toHaveBeenCalled()
+  })
+
+  it('fails without persisting when the approval entity is rejected', async () => {
+    const spy = jest.spyOn(PendingMfaApproval, 'create').mockReturnValue(Result.fail('bad props'))
+
+    const result = await createUseCase().execute(dto)
+
+    expect(result.isFailed()).toBe(true)
+    expect(result.getError()).toEqual('Could not create pending MFA approval: bad props')
+    expect(pendingMfaApprovalRepository.save).not.toHaveBeenCalled()
+    spy.mockRestore()
   })
 })

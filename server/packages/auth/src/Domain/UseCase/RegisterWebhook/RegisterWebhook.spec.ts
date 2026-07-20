@@ -7,7 +7,7 @@ jest.mock('@standardnotes/domain-core', () => {
   }
 })
 
-import { assertPublicHttpUrl, SsrfValidationError } from '@standardnotes/domain-core'
+import { Result, assertPublicHttpUrl, SsrfValidationError } from '@standardnotes/domain-core'
 
 import { Webhook } from '../../Webhook/Webhook'
 import { WebhookRepositoryInterface } from '../../Webhook/WebhookRepositoryInterface'
@@ -126,5 +126,16 @@ describe('RegisterWebhook', () => {
     const second = (await createUseCase().execute(validDto)).getValue()
 
     expect(first.secret).not.toEqual(second.secret)
+  })
+
+  it('fails without persisting when the webhook entity is rejected', async () => {
+    const spy = jest.spyOn(Webhook, 'create').mockReturnValue(Result.fail('bad props'))
+
+    const result = await createUseCase().execute(validDto)
+
+    expect(result.isFailed()).toBe(true)
+    expect(result.getError()).toEqual('Could not register webhook: bad props')
+    expect(webhookRepository.save).not.toHaveBeenCalled()
+    spy.mockRestore()
   })
 })

@@ -126,4 +126,14 @@ describe('VerifyTrustedDevice', () => {
 
     expect(result.getValue()).toBe(true)
   })
+
+  it('should return false when the resolved account carries a malformed uuid', async () => {
+    userRepository.findOneByUsernameOrEmail = jest.fn().mockResolvedValue({ uuid: 'not-a-uuid' } as jest.Mocked<User>)
+
+    const result = await createUseCase().execute({ email, deviceToken: plaintextToken })
+
+    expect(result.isFailed()).toBe(false)
+    expect(result.getValue()).toBe(false)
+    expect(trustedDeviceRepository.findByUserUuid).not.toHaveBeenCalled()
+  })
 })

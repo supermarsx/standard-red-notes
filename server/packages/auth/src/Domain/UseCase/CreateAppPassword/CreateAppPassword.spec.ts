@@ -1,3 +1,4 @@
+import { Result } from '@standardnotes/domain-core'
 import * as bcrypt from 'bcryptjs'
 
 import { AppPassword } from '../../AppPassword/AppPassword'
@@ -114,5 +115,24 @@ describe('CreateAppPassword', () => {
 
     expect(result.isFailed()).toBe(true)
     expect(appPasswordRepository.save).not.toHaveBeenCalled()
+  })
+
+  it('should fail if the provided expiry is not a parseable date', async () => {
+    const result = await createUseCase().execute({ userUuid, label: 'MCP', expiresAt: new Date('the 32nd') })
+
+    expect(result.isFailed()).toBe(true)
+    expect(result.getError()).toContain('not a valid date')
+    expect(appPasswordRepository.save).not.toHaveBeenCalled()
+  })
+
+  it('fails without persisting when the app password entity is rejected', async () => {
+    const spy = jest.spyOn(AppPassword, 'create').mockReturnValue(Result.fail('bad props'))
+
+    const result = await createUseCase().execute({ userUuid, label: 'MCP' })
+
+    expect(result.isFailed()).toBe(true)
+    expect(result.getError()).toEqual('Could not create app password: bad props')
+    expect(appPasswordRepository.save).not.toHaveBeenCalled()
+    spy.mockRestore()
   })
 })

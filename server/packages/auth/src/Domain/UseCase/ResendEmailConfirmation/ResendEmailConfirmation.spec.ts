@@ -128,4 +128,16 @@ describe('ResendEmailConfirmation', () => {
     expect(result.getValue()).toBe(true)
     expect(logger.error).toHaveBeenCalled()
   })
+
+  it('returns the uniform success without any lookup when the email is blank or not a string', async () => {
+    for (const email of ['', '   ', undefined, 42]) {
+      const result = await createUseCase().execute({ email } as never)
+
+      expect(result.isFailed()).toBe(false)
+      expect(result.getValue()).toBe(true)
+    }
+
+    expect(userRepository.findOneByUsernameOrEmail).not.toHaveBeenCalled()
+    expect(sendEmailConfirmation.execute).not.toHaveBeenCalled()
+  })
 })

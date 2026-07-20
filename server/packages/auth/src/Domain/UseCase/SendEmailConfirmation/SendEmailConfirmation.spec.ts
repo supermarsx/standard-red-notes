@@ -122,4 +122,14 @@ describe('SendEmailConfirmation', () => {
     expect(result.isFailed()).toBe(true)
     expect(logger.error).toHaveBeenCalled()
   })
+
+  it('fails without issuing a token when the user identifier or email is missing', async () => {
+    const noEmail = await createUseCase().execute({ userUuid: 'u-1', email: '', registrationConfig: config() })
+    const noUuid = await createUseCase().execute({ userUuid: '', email: 'a@b.co', registrationConfig: config() })
+
+    expect(noEmail.isFailed()).toBe(true)
+    expect(noEmail.getError()).toContain('missing user identifier')
+    expect(noUuid.isFailed()).toBe(true)
+    expect(tokenRepository.save).not.toHaveBeenCalled()
+  })
 })

@@ -68,4 +68,15 @@ describe('ApproveUser', () => {
 
     expect(result.isFailed()).toBe(true)
   })
+
+  it('persists the approval note when one is supplied', async () => {
+    const result = await new ApproveUser(userRepository, timer, sendApprovalNotification, 'https://app').execute({
+      userUuid: validUuid,
+      approvalNote: 'verified by support',
+    })
+
+    expect(result.isFailed()).toBe(false)
+    const saved = (userRepository.save as jest.Mock).mock.calls[0][0] as User
+    expect(saved.approvalNote).toEqual('verified by support')
+  })
 })
