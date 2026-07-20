@@ -47,6 +47,17 @@ test('up adds --build only when asked, and keeps the service last', () => {
   assert.deepEqual(up(['server']), ['compose', 'up', '-d', 'server'])
 })
 
+test('up keeps the service when --build is given BEFORE it', () => {
+  // Regression: `--build` used to bind "server" as its value, so the service
+  // vanished and `up --build server` rebuilt and started the ENTIRE stack.
+  assert.deepEqual(up(['--build', 'server']), ['compose', 'up', '-d', '--build', 'server'])
+})
+
+test('logs keeps the service when --follow is given BEFORE it', () => {
+  // Same class as above: `logs --follow server` used to tail every service.
+  assert.deepEqual(logs(['--follow', 'server']), ['compose', 'logs', '-f', 'server'])
+})
+
 test('up ignores unrelated flags', () => {
   assert.deepEqual(up(['--repo', '/tmp/x']), ['compose', 'up', '-d'])
 })

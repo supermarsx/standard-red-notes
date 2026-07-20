@@ -19,13 +19,23 @@ export interface ParsedArgs {
 const SHORT_FLAGS: Record<string, string> = { '-h': 'help', '-f': 'follow' }
 
 /**
+ * Flags that take NO value. They must be declared, because the parser otherwise
+ * cannot tell `--build server` (switch + service) from `--tail 50` (flag +
+ * value) and would bind the service as the switch's value, silently losing it.
+ *
+ * Keep in sync with HELP. Every other flag is value-taking: --repo, --url,
+ * --server-key, --timeout, --tail, --env.
+ */
+const BOOLEAN_FLAGS = new Set(['help', 'follow', 'f', 'build', 'yes', 'volumes', 'compose-config'])
+
+/**
  * Tiny arg parser: `--key=value`, `--key value`, `--bool`, plus the short
  * aliases in SHORT_FLAGS.
  *
- * A `--key` whose next token starts with ANY `-` is treated as a boolean, so
- * `--follow -f` yields two flags rather than swallowing `-f` as a value.
- * Any other dash-leading token is dropped rather than becoming a positional —
- * an unrecognised switch must never be mistaken for a service name.
+ * A value-taking `--key` whose next token starts with ANY `-` is treated as a
+ * boolean, so `--follow -f` yields two flags rather than swallowing `-f` as a
+ * value. Any other dash-leading token is dropped rather than becoming a
+ * positional — an unrecognised switch must never be mistaken for a service name.
  */
 export function parseArgs(argv: string[]): ParsedArgs {
   const _: string[] = []
@@ -41,6 +51,10 @@ export function parseArgs(argv: string[]): ParsedArgs {
       const eq = body.indexOf('=')
       if (eq !== -1) {
         flags[body.slice(0, eq)] = body.slice(eq + 1)
+        continue
+      }
+      if (BOOLEAN_FLAGS.has(body)) {
+        flags[body] = true
         continue
       }
       const next = argv[i + 1]

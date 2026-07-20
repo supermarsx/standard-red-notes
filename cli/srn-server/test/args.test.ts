@@ -54,6 +54,57 @@ test('parseArgs treats a trailing flag as boolean', () => {
   assert.equal(parseArgs(['down', '--yes']).flags.yes, true)
 })
 
+// --- valueless boolean flags -------------------------------------------------
+//
+// Regression: boolean switches were not declared, so the parser could not tell
+// `--build server` (switch + service) from `--tail 50` (flag + value). It bound
+// the following token as the switch's VALUE, which both made the flag a string
+// and removed the service from the positionals — `up --build server` ran
+// `docker compose up -d --build` against the WHOLE stack.
+
+const BOOLEANS = ['help', 'follow', 'build', 'yes', 'volumes', 'compose-config']
+
+for (const name of BOOLEANS) {
+  test(`--${name} is boolean true when followed by a positional, and keeps the positional`, () => {
+    const { _, flags } = parseArgs([`--${name}`, 'server'])
+    assert.equal(flags[name], true, `--${name} must not bind "server" as its value`)
+    assert.deepEqual(_, ['server'], `--${name} must not consume the positional`)
+  })
+
+  test(`--${name} is boolean true at the end of argv`, () => {
+    assert.equal(parseArgs([`--${name}`]).flags[name], true)
+  })
+
+  test(`--${name} is boolean true when followed by another flag`, () => {
+    const { flags } = parseArgs([`--${name}`, '--repo', '/tmp/x'])
+    assert.equal(flags[name], true)
+    assert.equal(flags.repo, '/tmp/x')
+  })
+}
+
+test('value-taking flags still consume their value', () => {
+  // The fix must not turn every flag into a boolean.
+  const { _, flags } = parseArgs(['logs', '--tail', '50', '--repo', '/tmp/x', '--env', '.env.prod', 'server'])
+  assert.equal(flags.tail, '50')
+  assert.equal(flags.repo, '/tmp/x')
+  assert.equal(flags.env, '.env.prod')
+  assert.deepEqual(_, ['logs', 'server'])
+})
+
+test('value-taking url/server-key/timeout flags still consume their value', () => {
+  const { flags } = parseArgs(['health', '--url', 'http://h:3001', '--server-key', 'k', '--timeout', '250'])
+  assert.equal(flags.url, 'http://h:3001')
+  assert.equal(flags['server-key'], 'k')
+  assert.equal(flags.timeout, '250')
+})
+
+test('a boolean flag and a value flag mix without stealing each others tokens', () => {
+  const { _, flags } = parseArgs(['up', '--build', 'server', '--repo', '/tmp/x'])
+  assert.equal(flags.build, true)
+  assert.equal(flags.repo, '/tmp/x')
+  assert.deepEqual(_, ['up', 'server'])
+})
+
 test('parseArgs maps -h to help', () => {
   assert.equal(parseArgs(['-h']).flags.help, true)
   assert.equal(parseArgs(['status', '-h']).flags.help, true)
