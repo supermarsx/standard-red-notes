@@ -538,9 +538,9 @@ test("requires an explicit reason for an inventory workspace with no eligible so
 });
 
 test("rejects unexpected or stale source-only inventory entries", async (t) => {
-  const reviewed = EXPECTED_COVERAGE_WORKSPACES.app.find(
+  const reviewed = EXPECTED_COVERAGE_WORKSPACES.server.find(
     ({ location: workspaceLocation }) =>
-      workspaceLocation === "packages/responses",
+      workspaceLocation === "packages/domain-events",
   );
   assert.ok(reviewed?.sourceOnlyReason);
 
@@ -549,7 +549,7 @@ test("rejects unexpected or stale source-only inventory entries", async (t) => {
     await assert.rejects(
       resolveCoverageWorkspaces({
         repoRoot: repository,
-        workspaceRoot: "app",
+        workspaceRoot: "server",
         expectedWorkspaces: [
           {
             name: "@test/unreviewed",
@@ -558,7 +558,7 @@ test("rejects unexpected or stale source-only inventory entries", async (t) => {
           },
         ],
       }),
-      /Unexpected source-only coverage workspace app\/packages\/unreviewed/,
+      /Unexpected source-only coverage workspace server\/packages\/unreviewed/,
     );
   });
 
@@ -567,7 +567,7 @@ test("rejects unexpected or stale source-only inventory entries", async (t) => {
     await assert.rejects(
       resolveCoverageWorkspaces({
         repoRoot: repository,
-        workspaceRoot: "app",
+        workspaceRoot: "server",
         expectedWorkspaces: [
           { name: reviewed.name, location: reviewed.location },
         ],
@@ -578,9 +578,9 @@ test("rejects unexpected or stale source-only inventory entries", async (t) => {
 
   await t.test("package gains a test", async (t) => {
     const repository = await temporaryRepository(t);
-    const app = path.join(repository, "app");
-    const directory = path.join(app, reviewed.location);
-    await writeJson(path.join(app, "package.json"), {
+    const server = path.join(repository, "server");
+    const directory = path.join(server, reviewed.location);
+    await writeJson(path.join(server, "package.json"), {
       private: true,
       workspaces: ["packages/*"],
     });
@@ -594,7 +594,7 @@ test("rejects unexpected or stale source-only inventory entries", async (t) => {
     await assert.rejects(
       resolveCoverageWorkspaces({
         repoRoot: repository,
-        workspaceRoot: "app",
+        workspaceRoot: "server",
         expectedWorkspaces: [reviewed],
       }),
       /Source-only coverage inventory drift.*found package-local test\/spec file.*src\/index\.spec\.ts/,
@@ -774,14 +774,14 @@ test("fails a successful normal workspace process that omits coverage-final.json
 
 test("allows a reviewed source-only workspace to synthesize a missing report as zero-only", async (t) => {
   const repository = await temporaryRepository(t);
-  const app = path.join(repository, "app");
-  const reviewed = EXPECTED_COVERAGE_WORKSPACES.app.find(
+  const server = path.join(repository, "server");
+  const reviewed = EXPECTED_COVERAGE_WORKSPACES.server.find(
     ({ location: workspaceLocation }) =>
-      workspaceLocation === "packages/responses",
+      workspaceLocation === "packages/domain-events",
   );
   assert.ok(reviewed?.sourceOnlyReason);
-  const directory = path.join(app, reviewed.location);
-  await writeJson(path.join(app, "package.json"), {
+  const directory = path.join(server, reviewed.location);
+  await writeJson(path.join(server, "package.json"), {
     private: true,
     workspaces: ["packages/*"],
   });
@@ -803,10 +803,10 @@ test("allows a reviewed source-only workspace to synthesize a missing report as 
   );
   const resolved = await resolveCoverageWorkspaces({
     repoRoot: repository,
-    workspaceRoot: "app",
+    workspaceRoot: "server",
     expectedWorkspaces: [reviewed],
   });
-  const outputRoot = path.join(repository, "coverage/raw/app");
+  const outputRoot = path.join(repository, "coverage/raw/server");
 
   const result = await runWorkspaceCoverage(
     resolved.workspaces[0],
@@ -1379,14 +1379,14 @@ test("merges the complete app-core, app-web, and server manifest union without a
 
   assert.equal(appCore.manifest.selected.length, 11);
   assert.equal(appWeb.manifest.selected.length, 1);
-  assert.equal(server.manifest.selected.length, 16);
-  assert.equal(reportCount, 28);
-  assert.equal(coverageMap.files().length, 28);
+  assert.equal(server.manifest.selected.length, 17);
+  assert.equal(reportCount, 29);
+  assert.equal(coverageMap.files().length, 29);
   assert.deepEqual(scopes, ["app", "server"]);
-  assert.deepEqual(metrics.statements, { covered: 4, total: 56, pct: 7.1 });
-  assert.deepEqual(metrics.lines, { covered: 4, total: 56, pct: 7.1 });
-  assert.deepEqual(metrics.functions, { covered: 2, total: 28, pct: 7.1 });
-  assert.deepEqual(metrics.branches, { covered: 3, total: 56, pct: 5.4 });
+  assert.deepEqual(metrics.statements, { covered: 4, total: 58, pct: 6.9 });
+  assert.deepEqual(metrics.lines, { covered: 4, total: 58, pct: 6.9 });
+  assert.deepEqual(metrics.functions, { covered: 2, total: 29, pct: 6.9 });
+  assert.deepEqual(metrics.branches, { covered: 3, total: 58, pct: 5.2 });
 });
 
 test("rejects a workspace missing from the selected manifest union", async (t) => {

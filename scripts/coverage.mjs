@@ -59,10 +59,7 @@ const TEST_DISCOVERY_EXCLUDED_DIRECTORIES = new Set([
   "vendor",
 ]);
 const REVIEWED_SOURCE_ONLY_WORKSPACES = Object.freeze({
-  app: Object.freeze({
-    "packages/responses":
-      "Shared response contracts with no package-local Jest test/spec files.",
-  }),
+  app: Object.freeze({}),
   server: Object.freeze({
     "packages/domain-events":
       "Domain event contracts with no package-local Jest test/spec files.",
@@ -84,12 +81,7 @@ export const EXPECTED_COVERAGE_WORKSPACES = Object.freeze({
     { location: "packages/filepicker", name: "@standardnotes/filepicker" },
     { location: "packages/files", name: "@standardnotes/files" },
     { location: "packages/models", name: "@standardnotes/models" },
-    {
-      location: "packages/responses",
-      name: "@standardnotes/responses",
-      sourceOnlyReason:
-        REVIEWED_SOURCE_ONLY_WORKSPACES.app["packages/responses"],
-    },
+    { location: "packages/responses", name: "@standardnotes/responses" },
     { location: "packages/services", name: "@standardnotes/services" },
     { location: "packages/snjs", name: "@standardnotes/snjs" },
     { location: "packages/ui-services", name: "@standardnotes/ui-services" },
@@ -131,6 +123,7 @@ export const EXPECTED_COVERAGE_WORKSPACES = Object.freeze({
       name: "@standardnotes/scheduler-server",
     },
     { location: "packages/security", name: "@standardnotes/security" },
+    { location: "packages/settings", name: "@standardnotes/settings" },
     {
       location: "packages/sncrypto-node",
       name: "@standardnotes/sncrypto-node",

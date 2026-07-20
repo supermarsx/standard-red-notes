@@ -75,9 +75,8 @@ After synthesis, every workspace report must contain exactly its eligible
 canonical source paths once. A successful Jest process that does not emit its
 raw `coverage-final.json` fails for every normal workspace. The only exceptions
 are the explicitly reviewed source-only/no-test inventory entries
-`app/packages/responses`, `server/packages/domain-events`, and
-`server/packages/predicates`. The collector verifies that these entries remain
-in the reviewed inventory and have no package-local test/spec files, then
+`server/packages/domain-events` and `server/packages/predicates`. The collector
+verifies that these entries remain in the reviewed inventory and have no package-local test/spec files, then
 synthesizes every eligible source as zero-covered if Jest emits no raw report.
 Unexpected, missing, or stale source-only flags fail inventory validation, and
 each source-only workspace still contributes a non-empty denominator. Parser
@@ -89,14 +88,14 @@ The current app scope is `api`, `encryption`, `features`, `filepicker`, `files`,
 `models`, `responses`, `services`, `snjs`, `ui-services`, `utils`, and `web`.
 The current server scope is `analytics`, `api-gateway`, `auth`, `common`,
 `domain-core`, `domain-events`, `domain-events-infra`, `files`, `predicates`,
-`revisions`, `scheduler`, `security`, `sncrypto-node`, `syncing-server`, `time`,
-and `websockets`.
+`revisions`, `scheduler`, `security`, `settings`, `sncrypto-node`,
+`syncing-server`, `time`, and `websockets`.
 
 The source denominator excludes non-Jest app workspaces (`clipper`, `desktop`,
 `filepicker/example`, `icons`, `mobile`, `releases`, `sncrypto-common`,
 `sncrypto-web`, `styles`, and `toast`), non-Jest server workspaces (`grpc`,
-`home-server`, `settings`, and `websocket-gateway`), and the root `mcp` and
-`openclaw` workspaces.
+`home-server`, and `websocket-gateway`), and the root `mcp` and `openclaw`
+workspaces.
 
 The excluded non-Jest suites are the Playwright suites under `e2e/`; desktop's
 AVA suite; the app and `sncrypto-web` Mocha/Chai browser harnesses; the
