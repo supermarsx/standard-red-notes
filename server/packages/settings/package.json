@@ -27,11 +27,16 @@
     "prestart": "yarn clean",
     "start": "tsc -p tsconfig.json --watch",
     "build": "tsc --build",
-    "lint": "eslint . --ext .ts"
+    "lint": "eslint . --ext .ts",
+    "test": "jest --coverage --no-cache --config=./jest.config.js --maxWorkers=2"
   },
   "devDependencies": {
+    "@swc/core": "^1.15.43",
+    "@swc/jest": "^0.2.39",
     "@types/jest": "^30.0.0",
     "@types/node": "^26.1.1",
+    "jest": "^30.4.2",
+    "jest-util": "^30.4.1",
     "typescript": "6.0.3"
   },
   "dependencies": {
