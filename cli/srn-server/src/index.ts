@@ -23,6 +23,21 @@
 import { spawn } from 'node:child_process'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
+import {
+  composeDownArgs,
+  composeLogsArgs,
+  composeUpArgs,
+  DEFAULT_TIMEOUT_MS,
+  defaultProbes,
+  flagStr,
+  gateHeaders,
+  parseArgs,
+  resolveBaseUrl,
+  resolveSharedKey,
+  type ParsedArgs,
+  type Probe,
+} from './cli.js'
+import { checkRequiredSecret, parseEnvFile, REQUIRED_KEYS, resolveEnvValue, sharedKeyGate } from './env.js'
 
 const CLI_VERSION = '0.1.0'
 
@@ -42,47 +57,6 @@ class ExitSignal extends Error {
 function exit(code: number): never {
   process.exitCode = code
   throw new ExitSignal(code)
-}
-
-interface ParsedArgs {
-  _: string[]
-  flags: Record<string, string | boolean>
-}
-
-/** Tiny zero-dependency arg parser: supports --key=value, --key value, --bool, -h. */
-function parseArgs(argv: string[]): ParsedArgs {
-  const _: string[] = []
-  const flags: Record<string, string | boolean> = {}
-  for (let i = 0; i < argv.length; i++) {
-    const token = argv[i]
-    if (token === '-h') {
-      flags.help = true
-      continue
-    }
-    if (token.startsWith('--')) {
-      const body = token.slice(2)
-      const eq = body.indexOf('=')
-      if (eq !== -1) {
-        flags[body.slice(0, eq)] = body.slice(eq + 1)
-        continue
-      }
-      const next = argv[i + 1]
-      if (next !== undefined && !next.startsWith('-')) {
-        flags[body] = next
-        i++
-      } else {
-        flags[body] = true
-      }
-      continue
-    }
-    _.push(token)
-  }
-  return { _, flags }
-}
-
-function flagStr(flags: Record<string, string | boolean>, name: string): string | undefined {
-  const v = flags[name]
-  return typeof v === 'string' ? v : undefined
 }
 
 /** Walk up from a starting dir to find the repo root (the dir with docker-compose.yml). */
@@ -149,74 +123,13 @@ function capture(cmd: string, args: string[], cwd: string): Promise<{ code: numb
   })
 }
 
-// --- env / config -----------------------------------------------------------
-
-/**
- * Minimal .env parser. Intentionally tiny: KEY=VALUE per line, ignores blanks
- * and `#` comments, strips surrounding quotes. Not a full dotenv implementation.
- */
-function parseEnvFile(content: string): Record<string, string> {
-  const out: Record<string, string> = {}
-  for (const rawLine of content.split(/\r?\n/)) {
-    const line = rawLine.trim()
-    if (!line || line.startsWith('#')) {
-      continue
-    }
-    const eq = line.indexOf('=')
-    if (eq === -1) {
-      continue
-    }
-    const key = line.slice(0, eq).trim()
-    let value = line.slice(eq + 1).trim()
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1)
-    }
-    out[key] = value
-  }
-  return out
-}
-
-// Required secrets the stack will not start without. We validate presence and,
-// for the hex-key ones, the 64-char hex shape — WITHOUT ever printing the value.
-const REQUIRED_KEYS = [
-  'AUTH_JWT_SECRET',
-  'AUTH_SERVER_ENCRYPTION_SERVER_KEY',
-  'VALET_TOKEN_SECRET',
-  'WEBSOCKET_GATEWAY_INTERNAL_SECRET',
-  'WEB_SOCKET_CONNECTION_TOKEN_SECRET',
-  'MYSQL_PASSWORD',
-  'MYSQL_ROOT_PASSWORD',
-]
-const HEX_KEYS = new Set([
-  'AUTH_JWT_SECRET',
-  'AUTH_SERVER_ENCRYPTION_SERVER_KEY',
-  'VALET_TOKEN_SECRET',
-  'WEBSOCKET_GATEWAY_INTERNAL_SECRET',
-  'WEB_SOCKET_CONNECTION_TOKEN_SECRET',
-])
-const PLACEHOLDER = /change-?me/i
-
 // --- HTTP health -------------------------------------------------------------
-
-interface Probe {
-  name: string
-  url: string
-}
-
-function defaultProbes(baseUrl: string): Probe[] {
-  const base = baseUrl.replace(/\/$/, '')
-  return [{ name: 'api-gateway (server)', url: `${base}/healthcheck` }]
-}
 
 async function probe(p: Probe, sharedKey: string | undefined, timeoutMs: number): Promise<string> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
-    const headers: Record<string, string> = {}
-    if (sharedKey) {
-      headers['X-Shared-Server-Key'] = sharedKey
-    }
-    const res = await fetch(p.url, { signal: controller.signal, headers })
+    const res = await fetch(p.url, { signal: controller.signal, headers: gateHeaders(sharedKey) })
     const body = (await res.text().catch(() => '')).trim().slice(0, 80)
     if (res.ok) {
       return `  ok   ${p.name.padEnd(22)} ${res.status} ${body}`
@@ -233,9 +146,9 @@ async function probe(p: Probe, sharedKey: string | undefined, timeoutMs: number)
 // --- commands ----------------------------------------------------------------
 
 async function cmdHealth(args: ParsedArgs): Promise<number> {
-  const baseUrl = flagStr(args.flags, 'url') ?? process.env.SRN_SERVER_URL ?? 'http://localhost:3001'
-  const sharedKey = flagStr(args.flags, 'server-key') ?? process.env.SHARED_SERVER_ACCESS_KEY
-  const timeoutMs = Number(flagStr(args.flags, 'timeout') ?? '5000')
+  const baseUrl = resolveBaseUrl(args, process.env)
+  const sharedKey = resolveSharedKey(args, process.env)
+  const timeoutMs = Number(flagStr(args.flags, 'timeout') ?? String(DEFAULT_TIMEOUT_MS))
   process.stdout.write(`Health probe against ${baseUrl}\n`)
   const probes = defaultProbes(baseUrl)
   let anyFail = false
@@ -256,31 +169,12 @@ async function cmdStatus(args: ParsedArgs): Promise<number> {
 
 async function cmdLogs(args: ParsedArgs): Promise<number> {
   const root = await resolveRepoRoot(args.flags)
-  const service = args._[0]
-  const composeArgs = ['compose', 'logs']
-  if (args.flags.follow || args.flags.f) {
-    composeArgs.push('-f')
-  }
-  const tail = flagStr(args.flags, 'tail')
-  if (tail) {
-    composeArgs.push('--tail', tail)
-  }
-  if (service) {
-    composeArgs.push(service)
-  }
-  return run('docker', composeArgs, root)
+  return run('docker', composeLogsArgs(args), root)
 }
 
 async function cmdUp(args: ParsedArgs): Promise<number> {
   const root = await resolveRepoRoot(args.flags)
-  const composeArgs = ['compose', 'up', '-d']
-  if (args.flags.build) {
-    composeArgs.push('--build')
-  }
-  const service = args._[0]
-  if (service) {
-    composeArgs.push(service)
-  }
+  const composeArgs = composeUpArgs(args)
   process.stdout.write(`Starting stack: docker ${composeArgs.join(' ')} (cwd ${root})\n`)
   return run('docker', composeArgs, root)
 }
@@ -295,10 +189,7 @@ async function cmdDown(args: ParsedArgs): Promise<number> {
     return 2
   }
   const root = await resolveRepoRoot(args.flags)
-  const composeArgs = ['compose', 'down']
-  if (args.flags.volumes) {
-    composeArgs.push('--volumes')
-  }
+  const composeArgs = composeDownArgs(args)
   process.stdout.write(`Stopping stack: docker ${composeArgs.join(' ')} (cwd ${root})\n`)
   return run('docker', composeArgs, root)
 }
@@ -323,34 +214,33 @@ async function cmdConfig(args: ParsedArgs): Promise<number> {
   let problems = 0
   process.stdout.write('\nRequired secrets:\n')
   for (const key of REQUIRED_KEYS) {
-    const value = process.env[key] ?? env[key]
-    if (!value) {
-      // Missing from .env is only a hard error when no .env exists at all; with a
-      // .env present, a missing required key means the stack falls back to an
-      // insecure compose default — flag it.
-      process.stdout.write(`  MISSING  ${key} (will use insecure compose default)\n`)
-      problems++
-      continue
+    const verdict = checkRequiredSecret(key, resolveEnvValue(key, process.env, env))
+    switch (verdict.status) {
+      case 'missing':
+        // Missing from .env is only a hard error when no .env exists at all; with a
+        // .env present, a missing required key means the stack falls back to an
+        // insecure compose default — flag it.
+        process.stdout.write(`  MISSING  ${key} (will use insecure compose default)\n`)
+        problems++
+        break
+      case 'placeholder':
+        process.stdout.write(`  PLACEHOLDER ${key} (still contains CHANGE-ME — replace it)\n`)
+        problems++
+        break
+      case 'weak':
+        process.stdout.write(`  WEAK     ${key} (should be 64-char hex / 32 random bytes)\n`)
+        problems++
+        break
+      default:
+        // Never print the secret value — only that it is set and well-formed.
+        process.stdout.write(`  ok       ${key} (set, ${verdict.length} chars)\n`)
     }
-    if (PLACEHOLDER.test(value)) {
-      process.stdout.write(`  PLACEHOLDER ${key} (still contains CHANGE-ME — replace it)\n`)
-      problems++
-      continue
-    }
-    if (HEX_KEYS.has(key) && !/^[0-9a-fA-F]{64}$/.test(value)) {
-      process.stdout.write(`  WEAK     ${key} (should be 64-char hex / 32 random bytes)\n`)
-      problems++
-      continue
-    }
-    // Never print the secret value — only that it is set and well-formed.
-    process.stdout.write(`  ok       ${key} (set, ${value.length} chars)\n`)
   }
 
-  const sharedKey = process.env.SHARED_SERVER_ACCESS_KEY ?? env.SHARED_SERVER_ACCESS_KEY
-  const sharedMode = process.env.SHARED_SERVER_ACCESS_KEY_MODE ?? env.SHARED_SERVER_ACCESS_KEY_MODE
+  const gate = sharedKeyGate(process.env, env)
   process.stdout.write('\nShared server access key gate:\n')
-  if (sharedKey && sharedKey.length > 0) {
-    process.stdout.write(`  enabled  mode=${sharedMode || 'all'} (clients must send X-Shared-Server-Key)\n`)
+  if (gate.enabled) {
+    process.stdout.write(`  enabled  mode=${gate.mode} (clients must send X-Shared-Server-Key)\n`)
   } else {
     process.stdout.write('  off      (no SHARED_SERVER_ACCESS_KEY set; gate disabled)\n')
   }
@@ -378,15 +268,11 @@ async function cmdConfig(args: ParsedArgs): Promise<number> {
 
 async function cmdVersion(args: ParsedArgs): Promise<number> {
   process.stdout.write(`srn-server ${CLI_VERSION}\n`)
-  const baseUrl = flagStr(args.flags, 'url') ?? process.env.SRN_SERVER_URL ?? 'http://localhost:3001'
-  const sharedKey = flagStr(args.flags, 'server-key') ?? process.env.SHARED_SERVER_ACCESS_KEY
+  const baseUrl = resolveBaseUrl(args, process.env)
+  const sharedKey = resolveSharedKey(args, process.env)
   try {
-    const headers: Record<string, string> = {}
-    if (sharedKey) {
-      headers['X-Shared-Server-Key'] = sharedKey
-    }
-    const res = await fetch(`${baseUrl.replace(/\/$/, '')}/healthcheck`, {
-      headers,
+    const res = await fetch(defaultProbes(baseUrl)[0].url, {
+      headers: gateHeaders(sharedKey),
       signal: AbortSignal.timeout(4000),
     })
     process.stdout.write(`server ${baseUrl}: ${res.status} ${res.ok ? 'reachable' : 'error'}\n`)

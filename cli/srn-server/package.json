@@ -15,6 +15,7 @@
     "build:bundle": "node esbuild.config.mjs",
     "package": "node esbuild.config.mjs",
     "start": "node dist/index.js",
+    "test": "node --test \"test/**/*.test.ts\"",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {

@@ -4,7 +4,9 @@ import './polyfill.js'
 
 import { promises as fs } from 'node:fs'
 import { bootstrapHeadlessApp, type HeadlessApp } from './bootstrap.js'
-import { NotesClient, type FullNote } from './NotesClient.js'
+import { NotesClient } from './NotesClient.js'
+import { collectTags, flagStr, parseArgs, type ParsedArgs } from './args.js'
+import { normalizeImportRecord, parseImportPayload, toMarkdown } from './transform.js'
 import {
   clearActiveProfile,
   dataDirFor,
@@ -15,47 +17,6 @@ import {
 } from './config.js'
 
 const CLI_VERSION = '0.1.0'
-
-interface ParsedArgs {
-  _: string[]
-  flags: Record<string, string | boolean>
-}
-
-/** Tiny zero-dependency arg parser: --key=value, --key value, --bool, -h. */
-function parseArgs(argv: string[]): ParsedArgs {
-  const _: string[] = []
-  const flags: Record<string, string | boolean> = {}
-  for (let i = 0; i < argv.length; i++) {
-    const token = argv[i]
-    if (token === '-h') {
-      flags.help = true
-      continue
-    }
-    if (token.startsWith('--')) {
-      const body = token.slice(2)
-      const eq = body.indexOf('=')
-      if (eq !== -1) {
-        flags[body.slice(0, eq)] = body.slice(eq + 1)
-        continue
-      }
-      const next = argv[i + 1]
-      if (next !== undefined && !next.startsWith('--')) {
-        flags[body] = next
-        i++
-      } else {
-        flags[body] = true
-      }
-      continue
-    }
-    _.push(token)
-  }
-  return { _, flags }
-}
-
-function flagStr(flags: Record<string, string | boolean>, name: string): string | undefined {
-  const v = flags[name]
-  return typeof v === 'string' ? v : undefined
-}
 
 /**
  * Exit after a short tick so closing async handles (sockets opened by snjs sync)
@@ -290,30 +251,6 @@ async function cmdNotes(args: ParsedArgs): Promise<number> {
   return 0
 }
 
-/** Collect repeated --tag flags (the simple parser keeps only the last; support comma lists). */
-function collectTags(args: ParsedArgs): string[] {
-  const raw = flagStr(args.flags, 'tag') ?? flagStr(args.flags, 'tags')
-  if (!raw) {
-    return []
-  }
-  return raw
-    .split(',')
-    .map((t) => t.trim())
-    .filter(Boolean)
-}
-
-function toMarkdown(notes: FullNote[]): string {
-  return notes
-    .map((n) => {
-      const header = `# ${n.title || '(untitled)'}\n`
-      const meta = `<!-- uuid: ${n.uuid} | updated: ${n.updatedAt}${
-        n.tags.length ? ` | tags: ${n.tags.join(', ')}` : ''
-      } -->\n\n`
-      return header + meta + (n.text ?? '')
-    })
-    .join('\n\n---\n\n')
-}
-
 async function cmdExport(args: ParsedArgs): Promise<number> {
   const format = (flagStr(args.flags, 'format') ?? 'json').toLowerCase()
   if (format !== 'json' && format !== 'md') {
@@ -344,27 +281,21 @@ async function cmdImport(args: ParsedArgs): Promise<number> {
   } catch (err) {
     fail(`Cannot read ${file}: ${(err as Error).message}`)
   }
-  let parsed: unknown
+  let records: ReturnType<typeof parseImportPayload>
   try {
-    parsed = JSON.parse(raw!)
-  } catch {
-    fail(`${file} is not valid JSON. Import expects a JSON array of notes.`)
+    records = parseImportPayload(raw!, file)
+  } catch (err) {
+    fail((err as Error).message)
   }
-  if (!Array.isArray(parsed)) {
-    fail('Import file must be a JSON array of { title, text, tags? } objects.')
-  }
-  const records = parsed as Array<{ title?: string; text?: string; tags?: string[] }>
   return withSession(args, async (headless) => {
     const client = new NotesClient(headless)
     let created = 0
     for (const rec of records) {
-      const title = typeof rec.title === 'string' ? rec.title : ''
-      const text = typeof rec.text === 'string' ? rec.text : ''
-      const tags = Array.isArray(rec.tags) ? rec.tags.filter((t): t is string => typeof t === 'string') : []
-      if (!title && !text) {
+      const note = normalizeImportRecord(rec)
+      if (!note) {
         continue
       }
-      await client.createNote({ title: title || '(untitled)', text, tags })
+      await client.createNote(note)
       created++
     }
     process.stdout.write(`Imported ${created} note(s) from ${file}.\n`)
