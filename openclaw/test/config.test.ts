@@ -56,6 +56,40 @@ describe("providerSchema", () => {
     ).toMatchObject({ base_url: "https://api.example.test/v1" });
   });
 
+  it("rejects a scheme-less host:port that `new URL` reads as a scheme", () => {
+    // "localhost:1234" parses as the scheme `localhost:`, so it used to pass
+    // validation and only fail later as an opaque fetch error.
+    for (const base_url of [
+      "localhost:1234",
+      "127.0.0.1:11434",
+      "example.test",
+      "ftp://example.test",
+      "file:///etc/hosts",
+      "http://",
+    ]) {
+      expect(
+        () => providerSchema.parse({ type: "openai", base_url }),
+        base_url,
+      ).toThrow();
+    }
+  });
+
+  it("still accepts ports, IPv6 literals, paths and plain http", () => {
+    for (const base_url of [
+      "http://127.0.0.1:11434",
+      "http://localhost:1234",
+      "https://api.example.test/v1",
+      "https://api.example.test:8443/v1/",
+      "http://[::1]:11434",
+      "http://my-ollama.internal",
+    ]) {
+      expect(
+        providerSchema.parse({ type: "openai", base_url }),
+        base_url,
+      ).toMatchObject({ base_url });
+    }
+  });
+
   it("keeps mock scripts as a string array defaulting to empty", () => {
     expect(providerSchema.parse({ type: "mock" })).toEqual({
       type: "mock",
@@ -92,19 +126,18 @@ describe("configSchema", () => {
     expect(cfg.agent.audit_file).toBe("~/.openclaw/audit.log");
   });
 
-  // KNOWN DEFECT, characterised so a fix breaks this test loudly.
-  // `agentSchema.default({} as never)` hands back the literal `{}` without
-  // running it through the object schema, so omitting [agent] / [security]
-  // from the TOML yields undefined fields rather than the documented
-  // defaults. cli/ask.ts then calls auditSink(cfg.agent.audit_file) with
-  // undefined and throws on `file.startsWith`. Reported, not fixed here.
-  it("does NOT default agent/security when the section is absent (bug)", () => {
+  // Regression: `.default({} as never)` handed the literal back unparsed, so
+  // omitting [agent] / [security] yielded undefined fields, and cli/ask.ts
+  // then called auditSink(cfg.agent.audit_file) with undefined and threw on
+  // `file.startsWith`. The defaults must be applied when the section is absent.
+  it("fills agent and security defaults when the section is absent", () => {
     const cfg = configSchema.parse({ provider: { type: "mock" } });
-    expect(cfg.agent).toEqual({});
-    expect(cfg.agent.audit_file).toBeUndefined();
-    expect(cfg.agent.max_steps).toBeUndefined();
-    expect(cfg.security).toEqual({});
-    expect(cfg.security.allow_filesystem_paths).toBeUndefined();
+    expect(cfg.agent).toEqual({
+      max_steps: 8,
+      scratchpad_kb: 64,
+      audit_file: "~/.openclaw/audit.log",
+    });
+    expect(cfg.security).toEqual({ allow_filesystem_paths: [] });
   });
 
   it("requires a provider", () => {
@@ -217,6 +250,24 @@ describe("loadConfig", () => {
     expect(cfg.agent.max_steps).toBe(3);
     // Untouched sections still get their defaults.
     expect(cfg.agent.scratchpad_kb).toBe(64);
+  });
+
+  it("gives a config with no [agent] section usable audit settings", () => {
+    // The README-style minimal config. `openclaw ask` used to throw
+    // `TypeError: Cannot read properties of undefined (reading 'startsWith')`
+    // in auditSink because audit_file came back undefined here.
+    const file = writeConfig(
+      "minimal.toml",
+      '[provider]\ntype = "mock"\n\n[mcp.local]\n',
+    );
+
+    const cfg = loadConfig(file);
+    expect(cfg.agent.audit_file).toBe("~/.openclaw/audit.log");
+    expect(cfg.agent.max_steps).toBe(8);
+    expect(cfg.agent.scratchpad_kb).toBe(64);
+    expect(cfg.security.allow_filesystem_paths).toEqual([]);
+    // The exact expression auditSink runs on it.
+    expect(() => cfg.agent.audit_file.startsWith("~")).not.toThrow();
   });
 
   it("reads OPENCLAW_CONFIG when no explicit path is given", () => {
