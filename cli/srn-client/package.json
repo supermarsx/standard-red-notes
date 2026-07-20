@@ -13,7 +13,7 @@
   "scripts": {
     "build": "node esbuild.config.mjs",
     "start": "node dist/index.cjs",
-    "test": "node --import ./test/register-ts-resolver.mjs --test \"test/**/*.test.ts\"",
+    "test": "node --import ./test/register-ts-resolver.mjs --test --experimental-test-coverage --test-coverage-lines=90 --test-coverage-branches=85 --test-coverage-functions=75 \"test/**/*.test.ts\"",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {

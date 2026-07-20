@@ -15,7 +15,7 @@
     "build:bundle": "node esbuild.config.mjs",
     "package": "node esbuild.config.mjs",
     "start": "node dist/index.js",
-    "test": "node --test \"test/**/*.test.ts\"",
+    "test": "node --test --experimental-test-coverage --test-coverage-lines=97 --test-coverage-branches=92 --test-coverage-functions=94 \"test/**/*.test.ts\"",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {
