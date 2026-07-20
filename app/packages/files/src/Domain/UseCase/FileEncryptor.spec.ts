@@ -50,6 +50,13 @@ describe('file encryptor', () => {
     )
   })
 
+  it('pushBytes should throw when initializeHeader was never called', () => {
+    expect(() => encryptor.pushBytes(new Uint8Array([1]), false)).toThrow(
+      'FileEncryptor must call initializeHeader first',
+    )
+    expect(crypto.xchacha20StreamEncryptorPush).not.toHaveBeenCalled()
+  })
+
   it('pushBytes with not last chunk should not pass final tag', () => {
     encryptor.initializeHeader()
     const decryptedBytes = new Uint8Array()

@@ -13,7 +13,7 @@
   "scripts": {
     "build": "echo 'Empty build script required for yarn topological install'",
     "lint": "eslint src",
-    "test": "jest"
+    "test": "jest --coverage"
   },
   "devDependencies": {
     "@types/jest": "^30.0.0",

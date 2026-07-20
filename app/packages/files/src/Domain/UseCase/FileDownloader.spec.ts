@@ -45,6 +45,52 @@ describe('file downloader', () => {
     }
   })
 
+  it('should download as a user when the file is not in a shared vault', async () => {
+    downloader = new FileDownloader(file, apiService, 'valet-token')
+
+    // eslint-disable-next-line @typescript-eslint/require-await
+    await downloader.run(async () => undefined)
+
+    expect(apiService.downloadFile).toHaveBeenCalledWith(
+      expect.objectContaining({ ownershipType: 'user', valetToken: 'valet-token' }),
+    )
+  })
+
+  it('should download as a shared vault when the file belongs to one', async () => {
+    downloader = new FileDownloader({ ...file, shared_vault_uuid: 'vault-1' }, apiService, 'valet-token')
+
+    // eslint-disable-next-line @typescript-eslint/require-await
+    await downloader.run(async () => undefined)
+
+    expect(apiService.downloadFile).toHaveBeenCalledWith(expect.objectContaining({ ownershipType: 'shared-vault' }))
+  })
+
+  it('should report progress against the total encrypted size', async () => {
+    downloader = new FileDownloader({ ...file, encryptedChunkSizes: [4] }, apiService, 'valet-token')
+
+    const progresses: number[] = []
+    // eslint-disable-next-line @typescript-eslint/require-await
+    await downloader.run(async (_bytes, progress) => {
+      progresses.push(progress.percentComplete)
+    })
+
+    expect(progresses).toEqual([25, 50, 75, 100, 125])
+  })
+
+  it('should stop forwarding bytes once aborted and resolve with "aborted"', async () => {
+    downloader = new FileDownloader(file, apiService, 'valet-token')
+
+    let chunksSeen = 0
+    const result = await downloader.run(async () => {
+      chunksSeen++
+      downloader.abort()
+      await Promise.resolve()
+    })
+
+    expect(chunksSeen).toEqual(1)
+    expect(result).toEqual('aborted')
+  })
+
   it('should pass back bytes as they are received', async () => {
     let receivedBytes = new Uint8Array()
 

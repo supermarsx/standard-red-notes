@@ -1,7 +1,73 @@
-import { formatSizeToReadableString } from './utils'
+import { formatSizeToReadableString, readFile, saveFile } from './utils'
 import { parseFileName } from '@standardnotes/utils'
 
 describe('utils', () => {
+  describe('readFile', () => {
+    it('should read a file into a Uint8Array of its bytes', async () => {
+      const file = new File([new Uint8Array([1, 2, 3, 250])], 'bytes.bin')
+
+      const bytes = await readFile(file)
+
+      expect(bytes).toBeInstanceOf(Uint8Array)
+      expect(Array.from(bytes)).toEqual([1, 2, 3, 250])
+    })
+
+    it('should read an empty file as an empty Uint8Array', async () => {
+      const bytes = await readFile(new File([], 'empty.bin'))
+
+      expect(bytes.length).toBe(0)
+    })
+  })
+
+  describe('saveFile', () => {
+    let createObjectURL: jest.Mock
+    let revokeObjectURL: jest.Mock
+    let click: jest.SpyInstance
+
+    beforeEach(() => {
+      createObjectURL = jest.fn().mockReturnValue('blob:srn/download')
+      revokeObjectURL = jest.fn()
+      // jsdom implements neither of these.
+      window.URL.createObjectURL = createObjectURL
+      window.URL.revokeObjectURL = revokeObjectURL
+      // Prevent jsdom from attempting a real navigation on the synthetic click.
+      click = jest.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined)
+    })
+
+    afterEach(() => {
+      click.mockRestore()
+      delete (window.URL as unknown as Record<string, unknown>).createObjectURL
+      delete (window.URL as unknown as Record<string, unknown>).revokeObjectURL
+    })
+
+    it('should click a download link pointing at an object URL for the bytes', () => {
+      saveFile('note.txt', new Uint8Array([1, 2, 3]))
+
+      expect(createObjectURL).toHaveBeenCalledTimes(1)
+      expect(createObjectURL.mock.calls[0][0]).toBeInstanceOf(Blob)
+      expect(createObjectURL.mock.calls[0][0].type).toBe('text/plain;charset=utf-8')
+      expect(click).toHaveBeenCalledTimes(1)
+    })
+
+    it('should set the download attribute to the requested file name', () => {
+      let downloadName: string | null = null
+      click.mockImplementation(function (this: HTMLAnchorElement) {
+        downloadName = this.getAttribute('download')
+      })
+
+      saveFile('my note.txt', new Uint8Array([1]))
+
+      expect(downloadName).toBe('my note.txt')
+    })
+
+    it('should remove the link from the document and revoke the object URL', () => {
+      saveFile('note.txt', new Uint8Array([1]))
+
+      expect(document.querySelectorAll('a').length).toBe(0)
+      expect(revokeObjectURL).toHaveBeenCalledWith('blob:srn/download')
+    })
+  })
+
   describe('parseFileName', () => {
     it('should parse regular filenames', () => {
       const fileName = 'test.txt'
