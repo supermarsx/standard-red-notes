@@ -12,7 +12,7 @@
     "clean": "rm -fr dist",
     "build": "tsc --build",
     "lint": "eslint . --ext .ts",
-    "test": "yarn build && node --test test/index.integration.test.cjs"
+    "test": "yarn build && node --test --experimental-test-coverage --test-coverage-include='dist/src/**' --test-coverage-lines=90 --test-coverage-branches=90 --test-coverage-functions=90 test/index.integration.test.cjs test/index.unit.test.cjs"
   },
   "dependencies": {
     "@inversifyjs/http-core": "^5.4.5",
