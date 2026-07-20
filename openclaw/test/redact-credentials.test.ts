@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { redactForAudit } from "../src/util/redact.js";
+import { noteSummary, redactForAudit } from "../src/util/redact.js";
 
 /**
  * Regression tests for the audit-log credential leak.
@@ -126,5 +126,37 @@ describe("existing redaction behaviour is preserved", () => {
   it("preserves null and undefined rather than masking them", () => {
     expect(redactForAudit(null)).toBeNull();
     expect(redactForAudit(undefined)).toBeUndefined();
+  });
+
+  it("replaces a non-string payload wholesale rather than summarising it", () => {
+    const out = redactForAudit({ body: { blocks: 3 }, content: [1, 2] });
+
+    expect(out).toEqual({ body: "<redacted>", content: "<redacted>" });
+  });
+
+  it("marks an empty note body as empty rather than reporting 0 chars", () => {
+    const out = redactForAudit({ body: "" }) as Record<string, string>;
+
+    expect(out.body).toBe("<note:unknown empty>");
+  });
+
+  it("passes non-string scalars through untouched", () => {
+    expect(redactForAudit(42)).toBe(42);
+    expect(redactForAudit(true)).toBe(true);
+  });
+});
+
+describe("noteSummary", () => {
+  it("reports the uuid and length of a note it was given", () => {
+    expect(noteSummary("hello", { uuid: "u1" })).toBe("<note:u1 5 chars>");
+  });
+
+  it("falls back to unknown when no reference is supplied", () => {
+    expect(noteSummary("hello")).toBe("<note:unknown 5 chars>");
+  });
+
+  it("reports an absent or empty body as empty", () => {
+    expect(noteSummary(undefined, { uuid: "u1" })).toBe("<note:u1 empty>");
+    expect(noteSummary("")).toBe("<note:unknown empty>");
   });
 });

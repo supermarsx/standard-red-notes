@@ -94,7 +94,7 @@ beforeEach(() => {
   h.endWith = eof();
   h.runCalls.length = 0;
   h.sessionCtorArgs.length = 0;
-  h.appended.length = 0;
+  h.appended = [];
   h.replies = [];
   h.rlClosed = 0;
   h.sessionClosed = 0;
@@ -180,6 +180,19 @@ describe("chat audit sink", () => {
       throw new Error("EACCES");
     };
     expect(() => sink({ tool: "notes.create", ok: false })).not.toThrow();
+  });
+
+  it("expands a leading ~ in the audit path to the home directory", async () => {
+    h.config = baseConfig({
+      agent: { audit_file: "~/.openclaw/audit.jsonl", max_steps: 5 },
+    });
+    h.lines = ["a question"];
+    await chat();
+
+    const sink = h.sessionCtorArgs[0].audit as (e: unknown) => void;
+    sink({ tool: "notes.search", ok: true });
+
+    expect(h.appended[0].file).toBe("/home/tester/.openclaw/audit.jsonl");
   });
 });
 
