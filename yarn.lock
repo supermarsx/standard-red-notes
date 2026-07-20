@@ -672,6 +672,7 @@ __metadata:
     prettier: "npm:^3.9.5"
     tsx: "npm:^4.23.1"
     typescript: "npm:^7.0.2"
+    uuid: "npm:9.0.1"
     zod: "npm:^4.4.3"
   bin:
     standard-red-notes-mcp: dist/index.cjs
