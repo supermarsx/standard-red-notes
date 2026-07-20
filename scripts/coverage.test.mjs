@@ -17,10 +17,16 @@ import {
   generateCoverageReport,
   mergeCoverageReports,
   normalizeWorkspaceReport,
+  optionalOption,
+  parseArguments,
+  positiveInteger,
   renderFlatSquareBadge,
+  requiredOption,
   resolveCoverageWorkspaces,
+  runPool,
   runProcessWithTimeout,
   runWorkspaceCoverage,
+  selectWorkspaces,
   validateExactCoverageSources,
   validateWorkspaceInventory,
   workspaceSlug,
@@ -1733,4 +1739,211 @@ test("renders escaped flat-square SVG and maps every coverage color band", () =>
       }),
     /Invalid badge color/,
   );
+});
+
+test("parseArguments splits the command from repeatable --flag value pairs", () => {
+  const { command, options } = parseArguments([
+    "collect",
+    "--workspace-root",
+    "app",
+    "--workspace",
+    "a",
+    "--workspace",
+    "b",
+  ]);
+
+  assert.equal(command, "collect");
+  assert.deepEqual(options.get("--workspace-root"), ["app"]);
+  assert.deepEqual(options.get("--workspace"), ["a", "b"]);
+});
+
+test("parseArguments returns an undefined command for an empty argv", () => {
+  const { command, options } = parseArguments([]);
+
+  assert.equal(command, undefined);
+  assert.equal(options.size, 0);
+});
+
+test("parseArguments rejects positional arguments after the command", () => {
+  assert.throws(
+    () => parseArguments(["collect", "stray"]),
+    /Unexpected argument: stray/,
+  );
+});
+
+test("parseArguments rejects a flag with no value", () => {
+  assert.throws(
+    () => parseArguments(["collect", "--output"]),
+    /Missing value for --output/,
+  );
+  assert.throws(
+    () => parseArguments(["collect", "--output", "--jobs", "2"]),
+    /Missing value for --output/,
+  );
+});
+
+test("requiredOption demands exactly one occurrence", () => {
+  const options = new Map([
+    ["--output", ["one"]],
+    ["--input", ["a", "b"]],
+  ]);
+
+  assert.equal(requiredOption(options, "--output"), "one");
+  assert.throws(
+    () => requiredOption(options, "--input"),
+    /Expected exactly one --input option/,
+  );
+  assert.throws(
+    () => requiredOption(options, "--missing"),
+    /Expected exactly one --missing option/,
+  );
+});
+
+test("optionalOption allows absence but not repetition", () => {
+  const options = new Map([
+    ["--jobs", ["4"]],
+    ["--input", ["a", "b"]],
+  ]);
+
+  assert.equal(optionalOption(options, "--jobs"), "4");
+  assert.equal(optionalOption(options, "--missing"), undefined);
+  assert.throws(
+    () => optionalOption(options, "--input"),
+    /Expected at most one --input option/,
+  );
+});
+
+test("positiveInteger accepts only integers of at least one", () => {
+  assert.equal(positiveInteger("1", "Jobs"), 1);
+  assert.equal(positiveInteger("12", "Jobs"), 12);
+  for (const value of ["0", "-1", "1.5", "abc", "", " "]) {
+    assert.throws(
+      () => positiveInteger(value, "Jobs"),
+      /Jobs must be a positive integer/,
+      `expected ${JSON.stringify(value)} to be rejected`,
+    );
+  }
+});
+
+test("selectWorkspaces returns every workspace when no selector is given", () => {
+  const workspaces = [
+    { name: "@a/one", location: "packages/one" },
+    { name: "@a/two", location: "packages/two" },
+  ];
+
+  assert.deepEqual(selectWorkspaces(workspaces, []), workspaces);
+});
+
+test("selectWorkspaces matches by name or location, preserving selector order", () => {
+  const workspaces = [
+    { name: "@a/one", location: "packages/one" },
+    { name: "@a/two", location: "packages/two" },
+  ];
+
+  assert.deepEqual(selectWorkspaces(workspaces, ["packages/two", "@a/one"]), [
+    workspaces[1],
+    workspaces[0],
+  ]);
+});
+
+test("selectWorkspaces rejects unknown, duplicate and ambiguous selectors", () => {
+  const workspaces = [
+    { name: "@a/one", location: "packages/one" },
+    { name: "@a/two", location: "packages/two" },
+  ];
+
+  assert.throws(
+    () => selectWorkspaces(workspaces, ["@a/three"]),
+    /Unknown Jest workspace selector: @a\/three/,
+  );
+  assert.throws(
+    () => selectWorkspaces(workspaces, ["@a/one", "@a/one"]),
+    /coverage workspace selector/,
+  );
+  assert.throws(
+    () =>
+      selectWorkspaces(
+        [
+          { name: "dup", location: "packages/one" },
+          { name: "dup", location: "packages/two" },
+        ],
+        ["dup"],
+      ),
+    /Ambiguous Jest workspace selector: dup/,
+  );
+});
+
+test("selectWorkspaces rejects two selectors that resolve to the same workspace", () => {
+  const workspaces = [{ name: "@a/one", location: "packages/one" }];
+
+  assert.throws(
+    () => selectWorkspaces(workspaces, ["@a/one", "packages/one"]),
+    /selected coverage workspace/,
+  );
+});
+
+test("runPool runs every item and preserves result order", async () => {
+  const items = [1, 2, 3, 4, 5];
+
+  const results = await runPool(items, 2, async (item) => item * 10);
+
+  assert.deepEqual(results, [10, 20, 30, 40, 50]);
+});
+
+test("runPool bounds concurrency to the requested job count", async () => {
+  let active = 0;
+  let peak = 0;
+
+  await runPool([1, 2, 3, 4, 5, 6], 2, async () => {
+    active += 1;
+    peak = Math.max(peak, active);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    active -= 1;
+  });
+
+  assert.equal(peak, 2);
+});
+
+test("runPool handles an empty item list", async () => {
+  assert.deepEqual(await runPool([], 4, async () => "never"), []);
+});
+
+test("runPool aggregates failures into an ordered ledger", async () => {
+  const errorLines = [];
+  const originalError = console.error;
+  console.error = (message) => errorLines.push(message);
+
+  const items = [
+    { name: "@a/one", location: "packages/one" },
+    { name: "@a/two", location: "packages/two" },
+    { name: "@a/three", location: "packages/three" },
+  ];
+
+  let thrown;
+  try {
+    await runPool(items, 3, async (item) => {
+      if (item.name === "@a/one") {
+        throw new Error("one exploded");
+      }
+      if (item.name === "@a/three") {
+        throw new Error("three exploded");
+      }
+      return item.name;
+    });
+  } catch (error) {
+    thrown = error;
+  } finally {
+    console.error = originalError;
+  }
+
+  assert.ok(thrown instanceof AggregateError);
+  assert.equal(thrown.errors.length, 2);
+  assert.match(thrown.message, /^2 coverage workspace\(s\) failed:\n/);
+  // Ledger order follows item index, not completion order.
+  assert.match(
+    thrown.message,
+    /- @a\/one \(packages\/one\): one exploded\n- @a\/three \(packages\/three\): three exploded/,
+  );
+  assert.equal(errorLines.length, 1);
+  assert.match(errorLines[0], /^\[coverage\] Failure ledger:\n/);
 });

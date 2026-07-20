@@ -1675,7 +1675,7 @@ export async function runWorkspaceCoverage(
   }
 }
 
-async function runPool(items, jobs, operation) {
+export async function runPool(items, jobs, operation) {
   let next = 0;
   const results = new Array(items.length);
   const failures = [];
@@ -1715,7 +1715,7 @@ async function runPool(items, jobs, operation) {
   return results;
 }
 
-function selectWorkspaces(workspaces, selectors) {
+export function selectWorkspaces(workspaces, selectors) {
   assertUniqueValues(selectors, "coverage workspace selector");
   if (selectors.length === 0) {
     return workspaces;
@@ -2506,7 +2506,7 @@ export async function generateCoverageReport({
   return summary;
 }
 
-function parseArguments(argv) {
+export function parseArguments(argv) {
   const [command, ...rest] = argv;
   const options = new Map();
   for (let index = 0; index < rest.length; index += 1) {
@@ -2526,7 +2526,7 @@ function parseArguments(argv) {
   return { command, options };
 }
 
-function requiredOption(options, name) {
+export function requiredOption(options, name) {
   const values = options.get(name);
   if (!values || values.length !== 1) {
     throw new Error(`Expected exactly one ${name} option`);
@@ -2534,7 +2534,7 @@ function requiredOption(options, name) {
   return values[0];
 }
 
-function optionalOption(options, name) {
+export function optionalOption(options, name) {
   const values = options.get(name);
   if (!values) {
     return undefined;
@@ -2545,7 +2545,7 @@ function optionalOption(options, name) {
   return values[0];
 }
 
-function positiveInteger(value, label) {
+export function positiveInteger(value, label) {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 1) {
     throw new Error(`${label} must be a positive integer`);
