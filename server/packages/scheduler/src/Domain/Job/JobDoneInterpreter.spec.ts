@@ -120,6 +120,11 @@ describe('JobDoneInterpreter', () => {
       userIdentifier: '2-3-4',
       userIdentifierType: 'uuid',
     } as jest.Mocked<Job>)
+    predicateRepository.findByJobUuid = jest
+      .fn()
+      .mockReturnValue([
+        { name: PredicateName.EmailBackupsEnabled, status: PredicateStatus.Denied } as jest.Mocked<Predicate>,
+      ])
 
     await createInterpreter().interpret('1-2-3')
 
@@ -152,6 +157,11 @@ describe('JobDoneInterpreter', () => {
       userIdentifier: '2-3-4',
       userIdentifierType: 'uuid',
     } as jest.Mocked<Job>)
+    predicateRepository.findByJobUuid = jest
+      .fn()
+      .mockReturnValue([
+        { name: PredicateName.SubscriptionPurchased, status: PredicateStatus.Denied } as jest.Mocked<Predicate>,
+      ])
 
     await createInterpreter().interpret('1-2-3')
 
@@ -212,6 +222,11 @@ describe('JobDoneInterpreter', () => {
       userIdentifier: '2-3-4',
       userIdentifierType: 'uuid',
     } as jest.Mocked<Job>)
+    predicateRepository.findByJobUuid = jest
+      .fn()
+      .mockReturnValue([
+        { name: PredicateName.SubscriptionPurchased, status: PredicateStatus.Denied } as jest.Mocked<Predicate>,
+      ])
 
     await createInterpreter().interpret('1-2-3')
 
