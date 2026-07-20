@@ -58,11 +58,11 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
-          cache-dependency-path: ${{ env.TOOL_DIR }}/package.json
+          cache-dependency-path: ${{ env.TOOL_DIR }}/package-lock.json
 
       - name: Install tool dependencies
         working-directory: ${{ env.TOOL_DIR }}
-        run: npm install --no-package-lock --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: Typecheck
         working-directory: ${{ env.TOOL_DIR }}
@@ -108,11 +108,11 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
-          cache-dependency-path: ${{ env.TOOL_DIR }}/package.json
+          cache-dependency-path: ${{ env.TOOL_DIR }}/package-lock.json
 
       - name: Install tool dependencies
         working-directory: ${{ env.TOOL_DIR }}
-        run: npm install --no-package-lock --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: Build bundle
         working-directory: ${{ env.TOOL_DIR }}
@@ -142,11 +142,11 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
-          cache-dependency-path: ${{ env.TOOL_DIR }}/package.json
+          cache-dependency-path: ${{ env.TOOL_DIR }}/package-lock.json
 
       - name: Install tool dependencies
         working-directory: ${{ env.TOOL_DIR }}
-        run: npm install --no-package-lock --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: Build bundle
         working-directory: ${{ env.TOOL_DIR }}
