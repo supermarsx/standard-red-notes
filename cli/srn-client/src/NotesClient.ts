@@ -47,7 +47,14 @@ function updatedAtIso(note: { updated_at?: unknown; created_at?: unknown }): str
  * SnjsBackedClient (the proven headless-snjs blueprint).
  */
 export class NotesClient {
-  constructor(private readonly headless: HeadlessApp) {}
+  // Explicit field + assignment rather than a constructor parameter property:
+  // parameter properties are not erasable syntax and Node's strip-only type
+  // stripping refuses to load a module that uses them.
+  private readonly headless: HeadlessApp
+
+  constructor(headless: HeadlessApp) {
+    this.headless = headless
+  }
 
   private get app(): any {
     return this.headless.app

@@ -1,8 +1,8 @@
-import test from "node:test";
-import assert from "node:assert/strict";
+import { test, expect } from "vitest";
 
 // The polyfill captures `globalThis.fetch` at module-load time, so the fake must
-// be installed before it is imported.
+// be installed before it is imported — hence the dynamic import below rather
+// than a static one.
 const calls: { url: string; cookie: string | null }[] = [];
 let nextSetCookies: string[] = [];
 
@@ -27,30 +27,30 @@ globalThis.fetch = (async (input: unknown, init?: { headers?: unknown }) => {
 await import("../src/polyfill.ts");
 
 test("browser globals snjs touches at load time are shimmed", () => {
-  assert.equal((globalThis as Record<string, unknown>).self, globalThis);
-  assert.equal((globalThis as Record<string, unknown>).window, globalThis);
-  assert.notEqual((globalThis as Record<string, unknown>).document, undefined);
+  expect((globalThis as Record<string, unknown>).self).toBe(globalThis);
+  expect((globalThis as Record<string, unknown>).window).toBe(globalThis);
+  expect((globalThis as Record<string, unknown>).document).toBeDefined();
 });
 
 test("the cookie jar replays Set-Cookie back to the same origin", async () => {
   nextSetCookies = ["session=abc; Path=/; HttpOnly"];
   await fetch("https://a.example/sign-in");
-  assert.equal(calls.at(-1)?.cookie, null, "first request carries no cookie");
+  expect(calls.at(-1)?.cookie).toBeNull();
 
   await fetch("https://a.example/items");
-  assert.equal(calls.at(-1)?.cookie, "session=abc");
+  expect(calls.at(-1)?.cookie).toBe("session=abc");
 });
 
 test("the cookie jar is scoped per origin", async () => {
   await fetch("https://b.example/items");
-  assert.equal(calls.at(-1)?.cookie, null);
+  expect(calls.at(-1)?.cookie).toBeNull();
 });
 
 test("a Max-Age=0 Set-Cookie deletes the stored cookie", async () => {
   nextSetCookies = ["session=; Path=/; Max-Age=0"];
   await fetch("https://a.example/sign-out");
-  assert.equal(calls.at(-1)?.cookie, "session=abc");
+  expect(calls.at(-1)?.cookie).toBe("session=abc");
 
   await fetch("https://a.example/items");
-  assert.equal(calls.at(-1)?.cookie, null);
+  expect(calls.at(-1)?.cookie).toBeNull();
 });

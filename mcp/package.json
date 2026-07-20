@@ -15,8 +15,8 @@
     "dev": "node esbuild.config.mjs src/index.ts dist/index.cjs && node dist/index.cjs",
     "start": "node dist/index.cjs",
     "e2e": "node run-e2e.mjs",
-    "test": "node --test \"test/**/*.test.ts\"",
-    "coverage": "node --test --experimental-test-coverage --test-coverage-exclude=\"test/**\" \"test/**/*.test.ts\"",
+    "test": "vitest run",
+    "coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "format": "prettier --write \"src/**/*.{ts,tsx,js,json,md}\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx,js,json,md}\""
@@ -32,9 +32,11 @@
   },
   "devDependencies": {
     "@types/node": "^26.1.1",
+    "@vitest/coverage-v8": "^4.1.10",
     "esbuild": "^0.28.1",
     "prettier": "^3.9.5",
     "tsx": "^4.23.1",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
   }
 }

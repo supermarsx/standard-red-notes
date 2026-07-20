@@ -52,7 +52,14 @@ export class NodeDevice {
   private destroyed = false
   private loaded = false
 
-  constructor(private readonly dataDir: string) {}
+  // Explicit field + assignment rather than a constructor parameter property:
+  // parameter properties are not erasable syntax and Node's strip-only type
+  // stripping refuses to load a module that uses them.
+  private readonly dataDir: string
+
+  constructor(dataDir: string) {
+    this.dataDir = dataDir
+  }
 
   private file(name: string): string {
     return path.join(this.dataDir, name)

@@ -43,8 +43,15 @@ const CLI_VERSION = '0.1.0'
 
 /** Thrown by exit() to unwind the stack; main() swallows it. */
 class ExitSignal extends Error {
-  constructor(public readonly code: number) {
+  // Declared as an explicit field rather than a constructor parameter property:
+  // parameter properties are not erasable syntax, so Node's strip-only type
+  // stripping refuses to load the module. Keeping every source file loadable by
+  // `node --test` directly is what lets the test suite exercise this entry point.
+  public readonly code: number
+
+  constructor(code: number) {
     super(`exit ${code}`)
+    this.code = code
   }
 }
 
