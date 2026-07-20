@@ -7,104 +7,107 @@ import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url))
+const SCRIPT_PATH = fileURLToPath(import.meta.url)
 const REPO_ROOT = path.resolve(SCRIPT_DIR, '..')
 const DATABASE_READY_TIMEOUT_MS = 120_000
 const DATABASE_READY_RETRY_MS = 1_000
 
-const args = parseArgs(process.argv.slice(2))
+export async function runBackupRestoreDrill(argv = process.argv.slice(2)) {
+  const args = parseArgs(argv)
 
-if (args.help) {
-  printHelp()
-  process.exit(0)
+  if (args.help) {
+    printHelp()
+    process.exit(0)
+  }
+
+  const tempDir = mkdtempSync(path.join(tmpdir(), 'srn-backup-restore-'))
+  const backupFile = args.output ? path.resolve(args.output) : path.join(tempDir, 'backup.sql')
+  const restoreDb = args.restoreDb ?? `srn_restore_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+  let createdRestoreDb = false
+
+  validateRestoreDatabaseName(restoreDb)
+
+  try {
+    console.log('Standard Red Notes backup/restore drill')
+    console.log(`Repository: ${REPO_ROOT}`)
+
+    const { authenticatedUser, database: sourceDb } = await waitForDatabaseReady()
+    await mysqlServer('SELECT 1;')
+
+    console.log(`Authenticated database readiness passed as ${authenticatedUser}.`)
+    console.log(`Source database: ${sourceDb}`)
+    console.log(`Backup file: ${backupFile}`)
+    console.log(`Temporary restore database: ${restoreDb}`)
+
+    await dockerToFile(
+      [
+        'compose',
+        'exec',
+        '-T',
+        'db',
+        'sh',
+        '-c',
+        'exec mariadb-dump -uroot -p"$MYSQL_ROOT_PASSWORD" --single-transaction --routines --events "$MYSQL_DATABASE"',
+      ],
+      backupFile,
+    )
+
+    const backupSize = statSync(backupFile).size
+    if (backupSize <= 0) {
+      throw new Error('Backup file is empty')
+    }
+    console.log(`Dumped ${formatBytes(backupSize)}.`)
+
+    await mysqlServer(`CREATE DATABASE ${quoteIdentifier(restoreDb)} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;`)
+    createdRestoreDb = true
+
+    await dockerFromFile(
+      [
+        'compose',
+        'exec',
+        '-T',
+        'db',
+        'sh',
+        '-c',
+        `exec mariadb -uroot -p"$MYSQL_ROOT_PASSWORD" ${shellSingleQuote(restoreDb)}`,
+      ],
+      backupFile,
+    )
+
+    const sourceTables = await tableNames(sourceDb)
+    const restoredTables = await tableNames(restoreDb)
+    compareLists(sourceTables, restoredTables, 'table list')
+    if (sourceTables.length === 0) {
+      throw new Error('No tables found in the source database; refusing to call this a valid restore')
+    }
+
+    const sourceCounts = await tableCounts(sourceDb, sourceTables)
+    const restoredCounts = await tableCounts(restoreDb, restoredTables)
+    compareMaps(sourceCounts, restoredCounts, 'table row counts')
+
+    const sourceChecksums = await tableChecksums(sourceDb, sourceTables)
+    const restoredChecksums = await tableChecksums(restoreDb, restoredTables)
+    compareChecksums(sourceChecksums, restoredChecksums)
+
+    const totalRows = [...sourceCounts.values()].reduce((sum, value) => sum + value, 0)
+    const checksummed = [...sourceChecksums.values()].filter((value) => value !== null).length
+    console.log(`Verified ${sourceTables.length} tables, ${totalRows} rows, ${checksummed} table checksums.`)
+    console.log('Backup/restore drill passed.')
+  } finally {
+    if (createdRestoreDb && !args.keepRestoreDatabase) {
+      await mysqlServer(`DROP DATABASE IF EXISTS ${quoteIdentifier(restoreDb)};`).catch((error) => {
+        console.error(`Warning: failed to drop temporary database ${restoreDb}: ${error.message}`)
+      })
+    }
+    if (!args.output && !args.keepBackup) {
+      rmSync(tempDir, { recursive: true, force: true })
+    } else if (!args.output) {
+      console.log(`Kept backup at ${backupFile}`)
+    }
+  }
 }
 
-const tempDir = mkdtempSync(path.join(tmpdir(), 'srn-backup-restore-'))
-const backupFile = args.output ? path.resolve(args.output) : path.join(tempDir, 'backup.sql')
-const restoreDb = args.restoreDb ?? `srn_restore_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-let createdRestoreDb = false
-
-validateRestoreDatabaseName(restoreDb)
-
-try {
-  console.log('Standard Red Notes backup/restore drill')
-  console.log(`Repository: ${REPO_ROOT}`)
-
-  const { authenticatedUser, database: sourceDb } = await waitForDatabaseReady()
-  await mysqlServer('SELECT 1;')
-
-  console.log(`Authenticated database readiness passed as ${authenticatedUser}.`)
-  console.log(`Source database: ${sourceDb}`)
-  console.log(`Backup file: ${backupFile}`)
-  console.log(`Temporary restore database: ${restoreDb}`)
-
-  await dockerToFile(
-    [
-      'compose',
-      'exec',
-      '-T',
-      'db',
-      'sh',
-      '-c',
-      'exec mariadb-dump -uroot -p"$MYSQL_ROOT_PASSWORD" --single-transaction --routines --events "$MYSQL_DATABASE"',
-    ],
-    backupFile,
-  )
-
-  const backupSize = statSync(backupFile).size
-  if (backupSize <= 0) {
-    throw new Error('Backup file is empty')
-  }
-  console.log(`Dumped ${formatBytes(backupSize)}.`)
-
-  await mysqlServer(`CREATE DATABASE ${quoteIdentifier(restoreDb)} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;`)
-  createdRestoreDb = true
-
-  await dockerFromFile(
-    [
-      'compose',
-      'exec',
-      '-T',
-      'db',
-      'sh',
-      '-c',
-      `exec mariadb -uroot -p"$MYSQL_ROOT_PASSWORD" ${shellSingleQuote(restoreDb)}`,
-    ],
-    backupFile,
-  )
-
-  const sourceTables = await tableNames(sourceDb)
-  const restoredTables = await tableNames(restoreDb)
-  compareLists(sourceTables, restoredTables, 'table list')
-  if (sourceTables.length === 0) {
-    throw new Error('No tables found in the source database; refusing to call this a valid restore')
-  }
-
-  const sourceCounts = await tableCounts(sourceDb, sourceTables)
-  const restoredCounts = await tableCounts(restoreDb, restoredTables)
-  compareMaps(sourceCounts, restoredCounts, 'table row counts')
-
-  const sourceChecksums = await tableChecksums(sourceDb, sourceTables)
-  const restoredChecksums = await tableChecksums(restoreDb, restoredTables)
-  compareChecksums(sourceChecksums, restoredChecksums)
-
-  const totalRows = [...sourceCounts.values()].reduce((sum, value) => sum + value, 0)
-  const checksummed = [...sourceChecksums.values()].filter((value) => value !== null).length
-  console.log(`Verified ${sourceTables.length} tables, ${totalRows} rows, ${checksummed} table checksums.`)
-  console.log('Backup/restore drill passed.')
-} finally {
-  if (createdRestoreDb && !args.keepRestoreDatabase) {
-    await mysqlServer(`DROP DATABASE IF EXISTS ${quoteIdentifier(restoreDb)};`).catch((error) => {
-      console.error(`Warning: failed to drop temporary database ${restoreDb}: ${error.message}`)
-    })
-  }
-  if (!args.output && !args.keepBackup) {
-    rmSync(tempDir, { recursive: true, force: true })
-  } else if (!args.output) {
-    console.log(`Kept backup at ${backupFile}`)
-  }
-}
-
-function parseArgs(argv) {
+export function parseArgs(argv) {
   const parsed = {
     help: false,
     keepBackup: false,
@@ -133,7 +136,7 @@ function parseArgs(argv) {
   return parsed
 }
 
-function requireValue(argv, index, flag) {
+export function requireValue(argv, index, flag) {
   const value = argv[index]
   if (!value || value.startsWith('--')) {
     throw new Error(`${flag} requires a value`)
@@ -252,7 +255,7 @@ async function tableChecksums(database, tables) {
   )
 }
 
-function parseTwoColumnMap(output, valueParser, keyParser = (key) => key) {
+export function parseTwoColumnMap(output, valueParser, keyParser = (key) => key) {
   const rows = new Map()
   for (const line of output.trim().split(/\r?\n/).filter(Boolean)) {
     const [key, value] = line.split('\t')
@@ -261,7 +264,7 @@ function parseTwoColumnMap(output, valueParser, keyParser = (key) => key) {
   return rows
 }
 
-function compareLists(actual, expected, label) {
+export function compareLists(actual, expected, label) {
   const a = JSON.stringify(actual)
   const b = JSON.stringify(expected)
   if (a !== b) {
@@ -269,7 +272,7 @@ function compareLists(actual, expected, label) {
   }
 }
 
-function compareMaps(source, restored, label) {
+export function compareMaps(source, restored, label) {
   const mismatches = []
   for (const [key, value] of source) {
     if (restored.get(key) !== value) {
@@ -281,7 +284,7 @@ function compareMaps(source, restored, label) {
   }
 }
 
-function compareChecksums(source, restored) {
+export function compareChecksums(source, restored) {
   const mismatches = []
   for (const [key, value] of source) {
     const restoredValue = restored.get(key)
@@ -297,25 +300,25 @@ function compareChecksums(source, restored) {
   }
 }
 
-function validateRestoreDatabaseName(name) {
+export function validateRestoreDatabaseName(name) {
   if (!/^srn_restore_[A-Za-z0-9_]{1,48}$/.test(name)) {
     throw new Error('Restore database name must match srn_restore_[A-Za-z0-9_]{1,48}')
   }
 }
 
-function quoteIdentifier(identifier) {
+export function quoteIdentifier(identifier) {
   return `\`${identifier.replace(/`/g, '``')}\``
 }
 
-function sqlString(value) {
+export function sqlString(value) {
   return `'${value.replace(/\\/g, '\\\\').replace(/'/g, "''")}'`
 }
 
-function shellSingleQuote(value) {
+export function shellSingleQuote(value) {
   return `'${value.replace(/'/g, "'\"'\"'")}'`
 }
 
-function formatBytes(bytes) {
+export function formatBytes(bytes) {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`
   return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`
@@ -391,4 +394,8 @@ function run(command, argv, options = {}) {
       }
     })
   })
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === SCRIPT_PATH) {
+  await runBackupRestoreDrill()
 }

@@ -1,8 +1,10 @@
 import { deflateSync } from 'node:zlib'
 import { mkdirSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const ROOT = new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:\/)/, '$1')
+const SCRIPT_PATH = fileURLToPath(import.meta.url)
 const FAVICON_DIR = join(ROOT, 'app', 'packages', 'web', 'src', 'favicon')
 
 const BRAND = {
@@ -27,7 +29,7 @@ const crcTable = (() => {
   return table
 })()
 
-function crc32(buffer) {
+export function crc32(buffer) {
   let c = 0xffffffff
   for (const byte of buffer) {
     c = crcTable[(c ^ byte) & 0xff] ^ (c >>> 8)
@@ -35,7 +37,7 @@ function crc32(buffer) {
   return (c ^ 0xffffffff) >>> 0
 }
 
-function chunk(type, data) {
+export function chunk(type, data) {
   const typeBuffer = Buffer.from(type, 'ascii')
   const out = Buffer.alloc(12 + data.length)
   out.writeUInt32BE(data.length, 0)
@@ -45,7 +47,7 @@ function chunk(type, data) {
   return out
 }
 
-function pngEncode(width, height, rgba) {
+export function pngEncode(width, height, rgba) {
   const scanlines = Buffer.alloc((width * 4 + 1) * height)
   for (let y = 0; y < height; y += 1) {
     const row = y * (width * 4 + 1)
@@ -70,7 +72,7 @@ function pngEncode(width, height, rgba) {
   ])
 }
 
-function blend(base, color, alpha) {
+export function blend(base, color, alpha) {
   const a = (color[3] / 255) * alpha
   const inv = 1 - a
   return [
@@ -81,7 +83,7 @@ function blend(base, color, alpha) {
   ]
 }
 
-function drawPixel(buffer, width, x, y, color, alpha = 1) {
+export function drawPixel(buffer, width, x, y, color, alpha = 1) {
   if (x < 0 || y < 0 || x >= width || y >= width) return
   const offset = (y * width + x) * 4
   const base = [buffer[offset], buffer[offset + 1], buffer[offset + 2], buffer[offset + 3]]
@@ -92,7 +94,7 @@ function drawPixel(buffer, width, x, y, color, alpha = 1) {
   buffer[offset + 3] = next[3]
 }
 
-function inRoundedRect(x, y, left, top, right, bottom, radius) {
+export function inRoundedRect(x, y, left, top, right, bottom, radius) {
   const cx = x < left + radius ? left + radius : x > right - radius ? right - radius : x
   const cy = y < top + radius ? top + radius : y > bottom - radius ? bottom - radius : y
   const dx = x - cx
@@ -100,7 +102,7 @@ function inRoundedRect(x, y, left, top, right, bottom, radius) {
   return dx * dx + dy * dy <= radius * radius
 }
 
-function drawRoundedRect(buffer, width, rect, color) {
+export function drawRoundedRect(buffer, width, rect, color) {
   const [left, top, right, bottom, radius] = rect
   for (let y = Math.floor(top); y <= Math.ceil(bottom); y += 1) {
     for (let x = Math.floor(left); x <= Math.ceil(right); x += 1) {
@@ -111,7 +113,7 @@ function drawRoundedRect(buffer, width, rect, color) {
   }
 }
 
-function drawRect(buffer, width, left, top, right, bottom, color) {
+export function drawRect(buffer, width, left, top, right, bottom, color) {
   for (let y = Math.floor(top); y < Math.ceil(bottom); y += 1) {
     for (let x = Math.floor(left); x < Math.ceil(right); x += 1) {
       drawPixel(buffer, width, x, y, color)
@@ -119,7 +121,7 @@ function drawRect(buffer, width, left, top, right, bottom, color) {
   }
 }
 
-function drawTriangle(buffer, width, points, color) {
+export function drawTriangle(buffer, width, points, color) {
   const [a, b, c] = points
   const minX = Math.floor(Math.min(a[0], b[0], c[0]))
   const maxX = Math.ceil(Math.max(a[0], b[0], c[0]))
@@ -140,7 +142,7 @@ function drawTriangle(buffer, width, points, color) {
   }
 }
 
-function downsample(high, highSize, size, scale) {
+export function downsample(high, highSize, size, scale) {
   const out = Buffer.alloc(size * size * 4)
   for (let y = 0; y < size; y += 1) {
     for (let x = 0; x < size; x += 1) {
@@ -165,7 +167,7 @@ function downsample(high, highSize, size, scale) {
   return out
 }
 
-function renderIcon(size) {
+export function renderIcon(size) {
   const scale = 4
   const highSize = size * scale
   const b = Buffer.alloc(highSize * highSize * 4)
@@ -209,7 +211,7 @@ function renderIcon(size) {
   return pngEncode(size, size, downsample(b, highSize, size, scale))
 }
 
-function icoEncode(images) {
+export function icoEncode(images) {
   const header = Buffer.alloc(6)
   header.writeUInt16LE(0, 0)
   header.writeUInt16LE(1, 2)
@@ -232,59 +234,60 @@ function icoEncode(images) {
   return Buffer.concat([header, ...entries, ...images.map((image) => image.data)])
 }
 
-mkdirSync(FAVICON_DIR, { recursive: true })
+export function generateBrandAssets() {
+  mkdirSync(FAVICON_DIR, { recursive: true })
 
-const pngs = new Map()
-for (const size of [16, 32, 48, 150, 180, 192, 512]) {
-  pngs.set(size, renderIcon(size))
-}
+  const pngs = new Map()
+  for (const size of [16, 32, 48, 150, 180, 192, 512]) {
+    pngs.set(size, renderIcon(size))
+  }
 
-writeFileSync(join(FAVICON_DIR, 'favicon-16x16.png'), pngs.get(16))
-writeFileSync(join(FAVICON_DIR, 'favicon-32x32.png'), pngs.get(32))
-writeFileSync(join(FAVICON_DIR, 'mstile-150x150.png'), pngs.get(150))
-writeFileSync(join(FAVICON_DIR, 'apple-touch-icon.png'), pngs.get(180))
-writeFileSync(join(FAVICON_DIR, 'android-chrome-192x192.png'), pngs.get(192))
-writeFileSync(join(FAVICON_DIR, 'android-chrome-512x512.png'), pngs.get(512))
-writeFileSync(
-  join(FAVICON_DIR, 'favicon.ico'),
-  icoEncode([
-    { size: 16, data: pngs.get(16) },
-    { size: 32, data: pngs.get(32) },
-    { size: 48, data: pngs.get(48) },
-  ]),
-)
+  writeFileSync(join(FAVICON_DIR, 'favicon-16x16.png'), pngs.get(16))
+  writeFileSync(join(FAVICON_DIR, 'favicon-32x32.png'), pngs.get(32))
+  writeFileSync(join(FAVICON_DIR, 'mstile-150x150.png'), pngs.get(150))
+  writeFileSync(join(FAVICON_DIR, 'apple-touch-icon.png'), pngs.get(180))
+  writeFileSync(join(FAVICON_DIR, 'android-chrome-192x192.png'), pngs.get(192))
+  writeFileSync(join(FAVICON_DIR, 'android-chrome-512x512.png'), pngs.get(512))
+  writeFileSync(
+    join(FAVICON_DIR, 'favicon.ico'),
+    icoEncode([
+      { size: 16, data: pngs.get(16) },
+      { size: 32, data: pngs.get(32) },
+      { size: 48, data: pngs.get(48) },
+    ]),
+  )
 
-writeFileSync(
-  join(FAVICON_DIR, 'safari-pinned-tab.svg'),
-  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  writeFileSync(
+    join(FAVICON_DIR, 'safari-pinned-tab.svg'),
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
   <path fill="#000" d="M56 34h400c12 0 22 10 22 22v400c0 12-10 22-22 22H56c-12 0-22-10-22-22V56c0-12 10-22 22-22Zm112 90c-10 0-18 8-18 18v244c0 10 8 18 18 18h176c10 0 18-8 18-18V190l-66-66H168Zm149 28 17 17h-17v-17ZM206 241h100v28H206v-28Zm0 62h100v28H206v-28Z"/>
 </svg>
 `,
-)
+  )
 
-writeFileSync(
-  join(FAVICON_DIR, 'site.webmanifest'),
-  JSON.stringify(
-    {
-      name: 'Standard Red Notes',
-      short_name: 'Red Notes',
-      description: 'A self-hosted-first encrypted note-taking app for private notes, documents, and files.',
-      icons: [
-        { src: 'android-chrome-192x192.png', sizes: '192x192', type: 'image/png' },
-        { src: 'android-chrome-512x512.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' },
-      ],
-      theme_color: '#be1f2d',
-      background_color: '#fffaf6',
-      display: 'standalone',
-    },
-    null,
-    2,
-  ) + '\n',
-)
+  writeFileSync(
+    join(FAVICON_DIR, 'site.webmanifest'),
+    JSON.stringify(
+      {
+        name: 'Standard Red Notes',
+        short_name: 'Red Notes',
+        description: 'A self-hosted-first encrypted note-taking app for private notes, documents, and files.',
+        icons: [
+          { src: 'android-chrome-192x192.png', sizes: '192x192', type: 'image/png' },
+          { src: 'android-chrome-512x512.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' },
+        ],
+        theme_color: '#be1f2d',
+        background_color: '#fffaf6',
+        display: 'standalone',
+      },
+      null,
+      2,
+    ) + '\n',
+  )
 
-writeFileSync(
-  join(FAVICON_DIR, 'browserconfig.xml'),
-  `<?xml version="1.0" encoding="utf-8"?>
+  writeFileSync(
+    join(FAVICON_DIR, 'browserconfig.xml'),
+    `<?xml version="1.0" encoding="utf-8"?>
 <browserconfig>
   <msapplication>
     <tile>
@@ -294,6 +297,11 @@ writeFileSync(
   </msapplication>
 </browserconfig>
 `,
-)
+  )
 
-console.log(`Generated Standard Red Notes brand assets in ${FAVICON_DIR}`)
+  console.log(`Generated Standard Red Notes brand assets in ${FAVICON_DIR}`)
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === SCRIPT_PATH) {
+  generateBrandAssets()
+}

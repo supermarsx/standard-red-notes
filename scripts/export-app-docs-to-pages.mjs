@@ -7,6 +7,7 @@ import vm from 'node:vm'
 import { fileURLToPath } from 'node:url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const scriptPath = fileURLToPath(import.meta.url)
 const rootDir = path.resolve(__dirname, '..')
 const sourcePath = path.join(
   rootDir,
@@ -24,7 +25,7 @@ const sourcePath = path.join(
 const outputPath = path.join(rootDir, 'docs', 'app-guide.md')
 const checkOnly = process.argv.includes('--check')
 
-function findMatchingBracket(source, startIndex) {
+export function findMatchingBracket(source, startIndex) {
   let depth = 0
   let quote = null
   let escaping = false
@@ -91,7 +92,7 @@ function findMatchingBracket(source, startIndex) {
   throw new Error('Could not find the end of DOC_CATEGORIES')
 }
 
-function loadDocCategories() {
+export function loadDocCategories() {
   const source = fs.readFileSync(sourcePath, 'utf8')
   const marker = 'export const DOC_CATEGORIES: DocCategory[] ='
   const markerIndex = source.indexOf(marker)
@@ -112,7 +113,7 @@ function loadDocCategories() {
   })
 }
 
-function assertValidDocs(categories) {
+export function assertValidDocs(categories) {
   const pageIds = new Set()
   for (const category of categories) {
     if (!category.id || !category.title || !Array.isArray(category.pages)) {
@@ -140,15 +141,15 @@ function assertValidDocs(categories) {
   }
 }
 
-function escapeMarkdownTableCell(value) {
+export function escapeMarkdownTableCell(value) {
   return String(value).replaceAll('\\', '\\\\').replaceAll('|', '\\|').replaceAll('\n', '<br>')
 }
 
-function pageAnchor(id) {
+export function pageAnchor(id) {
   return id.replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-|-$/g, '').toLowerCase()
 }
 
-function renderBlock(block) {
+export function renderBlock(block) {
   switch (block.type) {
     case 'heading':
       return `#### ${block.text}\n`
@@ -177,7 +178,7 @@ function renderBlock(block) {
   }
 }
 
-function renderMarkdown(categories) {
+export function renderMarkdown(categories) {
   const lines = [
     '---',
     'title: In-app guide',
@@ -227,18 +228,24 @@ function renderMarkdown(categories) {
   return `${lines.join('\n').replace(/\n{3,}/g, '\n\n')}\n`
 }
 
-const categories = loadDocCategories()
-assertValidDocs(categories)
+export function exportAppDocs() {
+  const categories = loadDocCategories()
+  assertValidDocs(categories)
 
-const rendered = renderMarkdown(categories)
-if (checkOnly) {
-  const existing = fs.existsSync(outputPath) ? fs.readFileSync(outputPath, 'utf8') : ''
-  if (existing !== rendered) {
-    console.error(`${path.relative(rootDir, outputPath)} is out of date. Run node scripts/export-app-docs-to-pages.mjs.`)
-    process.exit(1)
+  const rendered = renderMarkdown(categories)
+  if (checkOnly) {
+    const existing = fs.existsSync(outputPath) ? fs.readFileSync(outputPath, 'utf8') : ''
+    if (existing !== rendered) {
+      console.error(`${path.relative(rootDir, outputPath)} is out of date. Run node scripts/export-app-docs-to-pages.mjs.`)
+      process.exit(1)
+    }
+    console.log(`${path.relative(rootDir, outputPath)} is up to date.`)
+  } else {
+    fs.writeFileSync(outputPath, rendered)
+    console.log(`Wrote ${path.relative(rootDir, outputPath)} from ${path.relative(rootDir, sourcePath)}.`)
   }
-  console.log(`${path.relative(rootDir, outputPath)} is up to date.`)
-} else {
-  fs.writeFileSync(outputPath, rendered)
-  console.log(`Wrote ${path.relative(rootDir, outputPath)} from ${path.relative(rootDir, sourcePath)}.`)
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === scriptPath) {
+  exportAppDocs()
 }
