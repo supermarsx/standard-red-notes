@@ -35,6 +35,21 @@ describe('CheckForContentLimit', () => {
     expect(result.isFailed()).toBe(true)
   })
 
+  it('never reports an increase when no items are being modified', async () => {
+    // A sync batch with no item hashes cannot grow the account, so the repository
+    // must not even be consulted for pre-modification sizes.
+    itemRepository.sumContentSizeForComputingTransferLimit = jest.fn().mockResolvedValue(1_000_000)
+
+    const useCase = createUseCase()
+    const result = await useCase.execute({
+      userUuid: '00000000-0000-0000-0000-000000000000',
+      itemsBeingModified: [],
+    })
+
+    expect(result.isFailed()).toBe(false)
+    expect(itemRepository.findContentSizeForComputingTransferLimit).not.toHaveBeenCalled()
+  })
+
   it('should return a failure result if user has exceeded their content limit', async () => {
     itemRepository.sumContentSizeForComputingTransferLimit = jest.fn().mockResolvedValue(101)
     itemRepository.findContentSizeForComputingTransferLimit = jest

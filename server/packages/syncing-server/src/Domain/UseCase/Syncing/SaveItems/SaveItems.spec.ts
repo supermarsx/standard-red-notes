@@ -226,6 +226,62 @@ describe('SaveItems', () => {
     ])
   })
 
+  it('should mark items as conflicts if updating an existing item throws an error', async () => {
+    const useCase = createUseCase()
+
+    itemRepository.findByUuid = jest.fn().mockResolvedValue(savedItem)
+    updateExistingItem.execute = jest.fn().mockRejectedValue(new Error('update blew up'))
+
+    const result = await useCase.execute({
+      itemHashes: [itemHash1],
+      userUuid: 'user-uuid',
+      apiVersion: '1',
+      readOnlyAccess: false,
+      sessionUuid: 'session-uuid',
+      snjsVersion: '2.200.0',
+      isFreeUser: false,
+      hasContentLimit: false,
+      liveSyncEnabled: true,
+    })
+
+    expect(result.isFailed()).toBeFalsy()
+    expect(result.getValue().savedItems).toEqual([])
+    expect(result.getValue().conflicts).toEqual([
+      {
+        unsavedItem: itemHash1,
+        type: 'uuid_conflict',
+      },
+    ])
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('update blew up'))
+  })
+
+  it('should still report the save as successful when post-persist notification throws', async () => {
+    // The items are already durably persisted at this point; a Redis/publish blip
+    // must not turn a successful save into a failed sync request.
+    const useCase = createUseCase()
+
+    domainEventFactory.createItemsChangedOnServerEvent = jest.fn().mockImplementation(() => {
+      throw new Error('publish blip')
+    })
+
+    const result = await useCase.execute({
+      itemHashes: [itemHash1],
+      userUuid: 'user-uuid',
+      apiVersion: '1',
+      readOnlyAccess: false,
+      sessionUuid: 'session-uuid',
+      snjsVersion: '2.200.0',
+      isFreeUser: false,
+      hasContentLimit: false,
+      liveSyncEnabled: true,
+    })
+
+    expect(result.isFailed()).toBeFalsy()
+    expect(result.getValue().savedItems).toEqual([savedItem])
+    expect(result.getValue().conflicts).toEqual([])
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('publish blip'))
+  })
+
   it('should not save items if in read-only mode', async () => {
     const useCase = createUseCase()
 
