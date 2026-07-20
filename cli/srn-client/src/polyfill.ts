@@ -10,6 +10,14 @@
 //   2. Attaches the optional `X-Shared-Server-Key` header (the self-hosted
 //      "obfuscation gate") to requests so a CLI can pass a gated instance.
 
+// Imported statically rather than pulled in with require() inside the two cookie
+// helpers. The calls are still SYNCHRONOUS — that is the deliberate part, since
+// they run once at startup before any fetch — but `require` does not exist in an
+// ES module, so the require form only ever worked because the shipped artifact
+// is an esbuild CommonJS bundle. Under plain ESM (which is what package.json
+// declares, and what the tests load) it throws ReferenceError.
+import { readFileSync, writeFileSync } from 'node:fs'
+
 const g = globalThis as unknown as Record<string, unknown>
 
 // snjs occasionally schedules a session-refresh timer with an already-past
@@ -73,9 +81,7 @@ export function configureCookieJar(filePath: string): void {
   cookieJarPath = filePath
   try {
     // Synchronous read on purpose: this runs once at startup before any fetch.
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const fs = require('node:fs') as typeof import('node:fs')
-    const raw = fs.readFileSync(filePath, 'utf8')
+    const raw = readFileSync(filePath, 'utf8')
     const parsed = JSON.parse(raw) as Record<string, Record<string, string>>
     for (const [origin, cookies] of Object.entries(parsed)) {
       jarByOrigin.set(origin, new Map(Object.entries(cookies)))
@@ -90,13 +96,11 @@ function persistCookieJar(): void {
     return
   }
   try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const fs = require('node:fs') as typeof import('node:fs')
     const obj: Record<string, Record<string, string>> = {}
     for (const [origin, store] of jarByOrigin) {
       obj[origin] = Object.fromEntries(store)
     }
-    fs.writeFileSync(cookieJarPath, JSON.stringify(obj), { mode: 0o600 })
+    writeFileSync(cookieJarPath, JSON.stringify(obj), { mode: 0o600 })
   } catch {
     // Best-effort; a failed persist just means the next command re-auths.
   }
