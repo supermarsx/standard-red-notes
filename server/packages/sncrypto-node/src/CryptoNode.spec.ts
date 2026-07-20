@@ -213,6 +213,45 @@ describe('CryptoNode', function () {
     expect(token1).toEqual(token2)
   })
 
+  it('should default to 6-digit HOTP tokens when tokenLength is omitted', async () => {
+    // base32 of "12345678901234567890" — RFC 4226 Appendix D, counter 0 => 755224
+    const secret = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ'
+
+    expect(await crypto.hotpToken(secret, 0)).toEqual('755224')
+  })
+
+  it('should default to 6 digits and a 30 second step when TOTP options are omitted', async () => {
+    // RFC 6238 Appendix B, SHA-1, T = 59s => 94287082; truncated to 6 digits => 287082
+    const secret = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ'
+
+    expect(await crypto.totpToken(secret, 59 * 1000)).toEqual('287082')
+    // T = 1111111109s falls in step 37037036 => 07081804 => 081804
+    expect(await crypto.totpToken(secret, 1111111109 * 1000)).toEqual('081804')
+  })
+
+  it('should reject a secret containing a non base32 character', async () => {
+    await expect(crypto.hotpToken('JBSWY3DP!', 0)).rejects.toThrow('Invalid base32 character: !')
+  })
+
+  it('should base32 encode with RFC 4648 padding', () => {
+    // base32Encode is private and today only ever receives a 20-byte secret from
+    // generateOtpSecret(), which encodes to exactly 32 characters with no padding.
+    // The padding paths are only reachable by calling the encoder directly.
+    const encode = (text: string) =>
+      (crypto as unknown as { base32Encode(input: ArrayBuffer): string }).base32Encode(
+        Uint8Array.from(Buffer.from(text, 'utf8')).buffer,
+      )
+
+    // RFC 4648 section 10 test vectors
+    expect(encode('')).toEqual('')
+    expect(encode('f')).toEqual('MY======')
+    expect(encode('fo')).toEqual('MZXQ====')
+    expect(encode('foo')).toEqual('MZXW6===')
+    expect(encode('foob')).toEqual('MZXW6YQ=')
+    expect(encode('fooba')).toEqual('MZXW6YTB')
+    expect(encode('foobar')).toEqual('MZXW6YTBOI======')
+  })
+
   it('should match RFC 4226 HOTP test vectors', async () => {
     // base32 of "12345678901234567890"
     const secret = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ'
