@@ -413,6 +413,15 @@ export function validateReleaseContract(files) {
       "platform-neutral package cannot contain native addons",
       "native addon rejection",
     ],
+    // Yarn's node-modules linker writes node_modules/.bin/* as symlinks on
+    // Linux, which the payload walk rejected outright, so no release could ever
+    // be packaged. The allowance MUST stay scoped to `.bin`: skipping symlinks
+    // anywhere would let the walk step over a link to a native addon and defeat
+    // the rejection asserted directly above.
+    [
+      'entry.isSymbolicLink() && path.basename(directory) === ".bin"',
+      "bin-shim-only symlink allowance",
+    ],
     [
       "productionDependenciesBundled: true",
       "bundled dependency manifest assertion",
@@ -425,6 +434,24 @@ export function validateReleaseContract(files) {
       openClawPackager,
       fragment,
       description,
+    );
+  }
+  // Count-based, like the Latest-pointer opt-out: a broadened or additional
+  // symlink branch that is not scoped to `.bin` must fail even though the
+  // scoped one above is still present.
+  const symlinkAllowances = countOccurrences(
+    openClawPackager,
+    "entry.isSymbolicLink()",
+  );
+  const binScopedAllowances = countOccurrences(
+    openClawPackager,
+    'entry.isSymbolicLink() && path.basename(directory) === ".bin"',
+  );
+  if (symlinkAllowances !== binScopedAllowances) {
+    errors.push(
+      `${openClawPackagerFile}: ${symlinkAllowances} symlink allowance(s) but ` +
+        `${binScopedAllowances} scoped to .bin; a release payload walk that skips ` +
+        "symlinks outside .bin can step over a native addon",
     );
   }
 

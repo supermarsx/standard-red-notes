@@ -343,6 +343,69 @@ test("a non-srn-* OpenClaw release title is rejected", () => {
   );
 });
 
+// Yarn's node-modules linker writes node_modules/.bin/* as symlinks on Linux,
+// which the release payload walk rejected outright -- no OpenClaw release could
+// be packaged at all. The allowance that unblocks it must stay scoped to
+// `.bin`, because a walk that skips symlinks anywhere can step over a link to a
+// native addon and silently defeat the platform-neutrality guard.
+const openClawPackagerFile = "openclaw/scripts/package-release.mjs";
+
+test("dropping the bin-shim symlink allowance is rejected", () => {
+  const files = withFileChanged(openClawPackagerFile, (content) =>
+    content.replace(
+      '    } else if (entry.isSymbolicLink() && path.basename(directory) === ".bin") {\n',
+      "    } else if (false) {\n",
+    ),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /package-release\.mjs: missing bin-shim-only symlink allowance/,
+  );
+});
+
+test("broadening the symlink allowance beyond .bin is rejected", () => {
+  const files = withFileChanged(openClawPackagerFile, (content) =>
+    content.replace(
+      'entry.isSymbolicLink() && path.basename(directory) === ".bin"',
+      "entry.isSymbolicLink()",
+    ),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /package-release\.mjs: 1 symlink allowance\(s\) but 0 scoped to \.bin/,
+  );
+});
+
+test("a second unscoped symlink allowance is rejected", () => {
+  const files = withFileChanged(openClawPackagerFile, (content) =>
+    content.replace(
+      "    } else if (entry.isSymbolicLink() &&",
+      "    } else if (entry.isSymbolicLink()) {\n      continue;\n    } else if (entry.isSymbolicLink() &&",
+    ),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /package-release\.mjs: 2 symlink allowance\(s\) but 1 scoped to \.bin/,
+  );
+});
+
+test("the native addon rejection survives the symlink allowance", () => {
+  const files = withFileChanged(openClawPackagerFile, (content) =>
+    content.replace(
+      "platform-neutral package cannot contain native addons",
+      "package contains native addons",
+    ),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /package-release\.mjs: missing native addon rejection/,
+  );
+});
+
 test("a missing app Windows release job is rejected", () => {
   const file = "app/.github/workflows/desktop.release.reuse.yml";
   const files = withFileChanged(file, (content) =>

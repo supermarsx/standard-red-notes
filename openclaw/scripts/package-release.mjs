@@ -177,6 +177,14 @@ function walkFiles(directory) {
       files.push(...walkFiles(entryPath));
     } else if (entry.isFile()) {
       files.push(entryPath);
+    } else if (entry.isSymbolicLink() && path.basename(directory) === ".bin") {
+      // Package-manager executable shims only: Yarn's node-modules linker
+      // creates node_modules/.bin/* as symlinks on Linux, so the release could
+      // never be packaged there. They are not payload -- `files` never ships
+      // them and npm regenerates them from the manifest on install. The
+      // allowance is scoped to `.bin` on purpose: skipping any symlink anywhere
+      // would let this walk step over a link to a native addon.
+      continue;
     } else {
       fail(
         `release payload contains an unsupported link or special file: ${entryPath}`,
