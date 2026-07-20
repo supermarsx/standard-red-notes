@@ -248,13 +248,52 @@ export function validateReleaseContract(files) {
     }
   }
 
+  // Signing and publishing are separate jobs because permissions are per-job:
+  // the attester signs with the Sigstore/attestation scopes and only reads the
+  // repository, the publisher writes with nothing but `contents: write`.
+  const openClawAttest = jobBlock(openClawWorkflow, "attest");
+  if (!openClawAttest) {
+    errors.push(`${openClawWorkflowFile}: missing OpenClaw attestation job`);
+  } else {
+    for (const [fragment, description] of [
+      ["artifact-metadata: write", "artifact metadata permission"],
+      ["attestations: write", "attestation permission"],
+      ["id-token: write", "provenance signing permission"],
+      ["outputs.bundle-path", "published Sigstore provenance bundle"],
+      ['sha256sum "${provenance}" >> SHA256SUMS.txt', "provenance checksum"],
+      // The attested payload is exactly what gets published, so it must reach
+      // the publisher intact and an empty handoff must fail the job rather than
+      // publish a release with no artifacts.
+      [
+        "name: srn-openclaw-attested-package",
+        "attested payload handoff to the publisher",
+      ],
+      ["if-no-files-found: error", "required attested payload upload"],
+    ]) {
+      requireFragment(
+        errors,
+        openClawWorkflowFile,
+        openClawAttest,
+        fragment,
+        description,
+      );
+    }
+  }
+
   const openClawRelease = jobBlock(openClawWorkflow, "release");
   for (const [fragment, description] of [
-    ["artifact-metadata: write", "artifact metadata permission"],
-    ["attestations: write", "attestation permission"],
-    ["id-token: write", "provenance signing permission"],
-    ["outputs.bundle-path", "published Sigstore provenance bundle"],
-    ['sha256sum "${provenance}" >> SHA256SUMS.txt', "provenance checksum"],
+    // Publication still fans in over every gate: attest needs
+    // [context, package, smoke], so no failed smoke target can be published.
+    ["needs: [context, attest]", "attested OpenClaw release fan-in"],
+    ["contents: write", "release publication permission"],
+    [
+      "name: srn-openclaw-attested-package",
+      "attested payload as the published payload",
+    ],
+    [
+      "sha256sum --check SHA256SUMS.txt",
+      "attested payload re-verified before publication",
+    ],
     ["--verify-tag", "existing tag verification"],
     // A tag handed to the workflow must already exist, so a typo cannot publish
     // a brand new tag; a rolling release derives its own tag and has nothing to
@@ -269,6 +308,23 @@ export function validateReleaseContract(files) {
       fragment,
       description,
     );
+  }
+  // The publishing token must stay minimal: attestation scopes belong to the
+  // attest job. Carrying them into the publisher is the shape whose
+  // `gh release create` returned "HTTP 403: Resource not accessible by
+  // integration" from POST /releases even though the runner reported
+  // `Contents: write` on the token.
+  for (const scope of [
+    "artifact-metadata: write",
+    "attestations: write",
+    "id-token: write",
+  ]) {
+    if (openClawRelease.includes(scope)) {
+      errors.push(
+        `${openClawWorkflowFile}: the OpenClaw publish job must not request '${scope}'; ` +
+          "publication needs contents: write only",
+      );
+    }
   }
   if (/sha256sum[^\n]*\|\|\s*true/.test(openClawWorkflow)) {
     errors.push(

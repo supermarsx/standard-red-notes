@@ -314,14 +314,22 @@ jobs:
           --manifest "out/srn-openclaw-${{ needs.context.outputs.package_version }}-node-any.manifest.json"
           --target "${{ matrix.target }}"
 
-  release:
-    name: Attest and publish GitHub release
+  # Attestation and publication are separate JOBS because permissions are
+  # per-job. The attester needs the Sigstore/attestation trio and only read
+  # access to the repository; the publisher needs `contents: write` and nothing
+  # else. Held together in one job, `gh release create` returned
+  #   HTTP 403: Resource not accessible by integration (.../releases)
+  # even though the runner reported `Contents: write` on the token, while every
+  # other srn-* publisher -- whose token carries `contents: write` and nothing
+  # more -- creates releases in this repository without trouble.
+  attest:
+    name: Attest release package provenance
     needs: [context, package, smoke]
     runs-on: ubuntu-24.04
     permissions:
       artifact-metadata: write
       attestations: write
-      contents: write
+      contents: read
       id-token: write
     steps:
       - name: Download verified release package
@@ -346,6 +354,33 @@ jobs:
           provenance="srn-openclaw-${{ needs.context.outputs.package_version }}-node-any.provenance.sigstore.json"
           cp "${{ steps.provenance.outputs.bundle-path }}" "out/${provenance}"
           (cd out && sha256sum "${provenance}" >> SHA256SUMS.txt && sha256sum --check SHA256SUMS.txt)
+
+      - name: Upload attested release package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: srn-openclaw-attested-package
+          path: out/*
+          if-no-files-found: error
+          retention-days: 2
+
+  release:
+    name: Publish GitHub release
+    needs: [context, attest]
+    runs-on: ubuntu-24.04
+    # `contents: write` and nothing else -- the exact token every other srn-*
+    # publisher holds. Publishing needs no attestation scope, and the attested
+    # payload is re-verified below before anything is uploaded.
+    permissions:
+      contents: write
+    steps:
+      - name: Download attested release package
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: srn-openclaw-attested-package
+          path: out
+
+      - name: Recheck attested package checksums
+        run: (cd out && sha256sum --check SHA256SUMS.txt)
 
       - name: Publish immutable tagged GitHub release
         env:

@@ -343,6 +343,61 @@ test("a non-srn-* OpenClaw release title is rejected", () => {
   );
 });
 
+// Signing and publishing are separate jobs because permissions are per-job.
+// Held together, `gh release create` returned "HTTP 403: Resource not
+// accessible by integration" from POST /releases even though the runner
+// reported `Contents: write`, while every other srn-* publisher -- carrying
+// `contents: write` and nothing else -- publishes fine.
+test("removing the OpenClaw attestation job is rejected", () => {
+  const files = withFileChanged(openClawWorkflowFile, (content) =>
+    content.replace(/\r?\n  attest:\r?\n/, "\n  Removed-attest:\n"),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /srn-openclaw\.yml: missing OpenClaw attestation job/,
+  );
+});
+
+test("an attestation scope on the OpenClaw publish job is rejected", () => {
+  const files = withFileChanged(openClawWorkflowFile, (content) =>
+    content.replace(
+      "      contents: write\n    steps:\n      - name: Download attested release package",
+      "      contents: write\n      attestations: write\n    steps:\n      - name: Download attested release package",
+    ),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /publish job must not request 'attestations: write'/,
+  );
+});
+
+test("dropping the attested payload from the OpenClaw release fan-in is rejected", () => {
+  const files = withFileChanged(openClawWorkflowFile, (content) =>
+    content.replace("needs: [context, attest]", "needs: [context]"),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /srn-openclaw\.yml: missing attested OpenClaw release fan-in/,
+  );
+});
+
+test("a best-effort attested payload handoff is rejected", () => {
+  const files = withFileChanged(openClawWorkflowFile, (content) =>
+    content.replace(
+      "          name: srn-openclaw-attested-package\n          path: out/*\n          if-no-files-found: error\n",
+      "          name: srn-openclaw-attested-package\n          path: out/*\n",
+    ),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /srn-openclaw\.yml: missing required attested payload upload/,
+  );
+});
+
 // Yarn's node-modules linker writes node_modules/.bin/* as symlinks on Linux,
 // which the release payload walk rejected outright -- no OpenClaw release could
 // be packaged at all. The allowance that unblocks it must stay scoped to
