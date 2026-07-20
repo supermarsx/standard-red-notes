@@ -108,6 +108,24 @@ function sortedJson(value) {
   return `${JSON.stringify(value, null, 2)}\n`;
 }
 
+// `yarn install` rewrites workspace manifests in place, and openclaw is a root
+// workspace: a lone `bin` entry whose key equals the unscoped package name
+// collapses to the bare string form, so both spellings reach a release. They
+// declare the identical `openclaw` executable. The string form is accepted ONLY
+// when the unscoped name is `openclaw` -- otherwise it declares a
+// differently-named executable -- and the target itself is still asserted by
+// the caller. Same rule as scripts/validate-release-contract.mjs (cb979521), so
+// the repository has one definition of a publishable manifest rather than two.
+function binTarget(packageJson) {
+  const bin = packageJson.bin;
+  if (typeof bin !== "string") {
+    return bin?.openclaw;
+  }
+
+  const unscopedName = String(packageJson.name ?? "").replace(/^@[^/]+\//, "");
+  return unscopedName === "openclaw" ? bin : undefined;
+}
+
 function assertReleaseInputs(options, packageJson) {
   const version = versionFromReleaseTag(options.tag);
   if (version !== packageJson.version) {
@@ -138,7 +156,7 @@ function assertReleaseInputs(options, packageJson) {
   if (packageJson.engines?.node !== NODE_RANGE) {
     fail(`package engines.node must remain ${NODE_RANGE}`);
   }
-  if (packageJson.bin?.openclaw !== "dist/index.js") {
+  if (binTarget(packageJson) !== "dist/index.js") {
     fail("package bin.openclaw must point to dist/index.js");
   }
 

@@ -138,6 +138,23 @@ function walkFiles(directory) {
   });
 }
 
+// The packaged manifest is written from the workspace manifest, and `yarn
+// install` collapses a lone `bin` entry whose key equals the unscoped package
+// name to the bare string form, so an installed release can carry either
+// spelling of the identical `openclaw` executable. The string form is accepted
+// ONLY when the unscoped name is `openclaw`, and the target is still asserted
+// below. Same rule as package-release.mjs and
+// scripts/validate-release-contract.mjs (cb979521).
+function binTarget(packageJson) {
+  const bin = packageJson.bin;
+  if (typeof bin !== "string") {
+    return bin?.openclaw;
+  }
+
+  const unscopedName = String(packageJson.name ?? "").replace(/^@[^/]+\//, "");
+  return unscopedName === "openclaw" ? bin : undefined;
+}
+
 function assertPackageContents(packageRoot, version, releaseManifest) {
   const topLevel = readdirSync(packageRoot).sort();
   const allowedTopLevel = [
@@ -159,7 +176,7 @@ function assertPackageContents(packageRoot, version, releaseManifest) {
     packageJson.name !== PACKAGE_NAME ||
     packageJson.version !== version ||
     packageJson.engines?.node !== NODE_RANGE ||
-    packageJson.bin?.openclaw !== "dist/index.js"
+    binTarget(packageJson) !== "dist/index.js"
   ) {
     fail(
       "installed package metadata does not match the OpenClaw release contract",

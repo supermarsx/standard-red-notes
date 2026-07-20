@@ -447,6 +447,65 @@ test("a second unscoped symlink allowance is rejected", () => {
   );
 });
 
+// openclaw is a root yarn workspace, so an install collapses its `bin` map to
+// the bare string form and drops `private: false`. This validator already
+// accepts that shape (cb979521); the release scripts must accept exactly the
+// same one, or a manifest that passes the contract would fail the release.
+const openClawVerifierFile = "openclaw/scripts/verify-release.mjs";
+
+test("a packager that rejects the Yarn-normalized bin shape is rejected", () => {
+  const files = withFileChanged(openClawPackagerFile, (content) =>
+    content.replace(
+      'const unscopedName = String(packageJson.name ?? "").replace(/^@[^/]+\\//, "");\n  return unscopedName === "openclaw" ? bin : undefined;',
+      "return undefined;",
+    ),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /package-release\.mjs: missing bin string form scoped to the openclaw executable/,
+  );
+});
+
+test("a verifier that rejects the Yarn-normalized bin shape is rejected", () => {
+  const files = withFileChanged(openClawVerifierFile, (content) =>
+    content.replace(
+      'const unscopedName = String(packageJson.name ?? "").replace(/^@[^/]+\\//, "");\n  return unscopedName === "openclaw" ? bin : undefined;',
+      "return undefined;",
+    ),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /verify-release\.mjs: missing bin string form scoped to the openclaw executable/,
+  );
+});
+
+test("dropping the packaged bin target assertion is rejected", () => {
+  const files = withFileChanged(openClawPackagerFile, (content) =>
+    content.replace(
+      "package bin.openclaw must point to dist/index.js",
+      "package bin is fine",
+    ),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /package-release\.mjs: missing packaged bin target assertion/,
+  );
+});
+
+test("dropping the installed bin target assertion is rejected", () => {
+  const files = withFileChanged(openClawVerifierFile, (content) =>
+    content.replace('binTarget(packageJson) !== "dist/index.js"', "false"),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /verify-release\.mjs: missing installed bin target assertion/,
+  );
+});
+
 test("the native addon rejection survives the symlink allowance", () => {
   const files = withFileChanged(openClawPackagerFile, (content) =>
     content.replace(

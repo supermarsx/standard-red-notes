@@ -483,6 +483,19 @@ export function validateReleaseContract(files) {
       "bundled dependency manifest assertion",
     ],
     ["SHA256SUMS.txt", "release checksum manifest"],
+    // openclaw is a root yarn workspace, so an install can collapse its `bin`
+    // map to the bare string form and that shape can be committed -- this
+    // validator accepts it, so the packager must too, or a manifest that passes
+    // the contract would fail the release. The string form stays scoped to the
+    // `openclaw` executable, and the target is still asserted.
+    [
+      'unscopedName === "openclaw"',
+      "bin string form scoped to the openclaw executable",
+    ],
+    [
+      "package bin.openclaw must point to dist/index.js",
+      "packaged bin target assertion",
+    ],
   ]) {
     requireFragment(
       errors,
@@ -521,6 +534,17 @@ export function validateReleaseContract(files) {
     ["process.arch !== target.architecture", "native architecture assertion"],
     ["direct packaged entrypoint", "direct CLI entrypoint smoke test"],
     ["installed OpenClaw shim", "npm-generated executable shim smoke test"],
+    // The packaged manifest inherits the workspace manifest's `bin` spelling,
+    // so the installed-package guard tolerates the same two shapes as the
+    // packager and this validator -- and no more.
+    [
+      'unscopedName === "openclaw"',
+      "bin string form scoped to the openclaw executable",
+    ],
+    [
+      'binTarget(packageJson) !== "dist/index.js"',
+      "installed bin target assertion",
+    ],
   ]) {
     requireFragment(
       errors,
