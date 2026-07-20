@@ -12,12 +12,23 @@ export interface ParsedArgs {
 }
 
 /**
+ * Flags that take NO value. They must be declared, because the parser otherwise
+ * cannot tell `--json <uuid>` (switch + note id) from `--limit 20` (flag +
+ * value) and would bind the uuid as the switch's value, silently losing it.
+ *
+ * Keep in sync with HELP. Every other flag is value-taking: --server, --email,
+ * --password, --mfa, --server-key, --limit, --title, --text, --tag, --tags,
+ * --format, --out.
+ */
+const BOOLEAN_FLAGS = new Set(['help', 'register', 'json'])
+
+/**
  * Tiny arg parser: `--key=value`, `--key value`, `--bool`, `-h`.
  *
- * A `--key` whose next token also starts with `--` is treated as a boolean, so
- * `--json --limit 5` parses as `{ json: true, limit: '5' }`. Note this is
- * deliberately looser than srn-server's parser, which stops on any leading `-`:
- * here a negative number (`--limit -1`) is consumed as the flag's value.
+ * A value-taking `--key` whose next token also starts with `--` is treated as a
+ * boolean, so `--title --text body` does not swallow the `--text` switch. Note
+ * this is deliberately looser than srn-server's parser, which stops on any
+ * leading `-`: here a negative number (`--limit -1`) is consumed as the value.
  */
 export function parseArgs(argv: string[]): ParsedArgs {
   const _: string[] = []
@@ -33,6 +44,10 @@ export function parseArgs(argv: string[]): ParsedArgs {
       const eq = body.indexOf('=')
       if (eq !== -1) {
         flags[body.slice(0, eq)] = body.slice(eq + 1)
+        continue
+      }
+      if (BOOLEAN_FLAGS.has(body)) {
+        flags[body] = true
         continue
       }
       const next = argv[i + 1]
