@@ -15,7 +15,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import path from 'node:path'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { makeSandbox, runCli, writeFixture, type Sandbox } from './harness.ts'
+import { makeSandbox, runCli, splitNodeNotices, writeFixture, type Sandbox } from './harness.ts'
 
 const sandbox: Sandbox = makeSandbox()
 
@@ -34,6 +34,28 @@ function seedProfile(
 function clearProfile(sb: Sandbox): void {
   writeFileSync(path.join(sb.home, 'config.json'), JSON.stringify({ profiles: {} }))
 }
+
+// --- harness: Node's own notices must not be mistaken for CLI output ---------
+
+test("Node's process-level notices are split out of the CLI's stderr", () => {
+  // Regression guard. The child runs with `--import <resolver>`, and Node 26
+  // deprecates the module.register() that resolver uses; the notice landed in
+  // stderr and took 8 tests red on the runner while Node 24 passed.
+  const raw =
+    '(node:2430) [DEP0205] DeprecationWarning: `module.register()` is deprecated. Use `module.registerHooks()` instead.\n' +
+    '(Use `node --trace-deprecation ...` to show where the warning was created)\n' +
+    'Error: Missing --email <email>.\n'
+  const split = splitNodeNotices(raw)
+  assert.equal(split.stderr, 'Error: Missing --email <email>.\n')
+  assert.equal(split.nodeNotices.length, 2, 'the warning AND its paired hint line are both taken')
+})
+
+test("the CLI's own warning output is NOT swallowed", () => {
+  // src/polyfill.ts replaces Node's warning printer with `Name: message`, which
+  // has no `(node:PID)` prefix — so CLI-owned warnings still reach assertions.
+  const raw = 'DeprecationWarning: emitted by the CLI itself\nError: real failure\n'
+  assert.deepEqual(splitNodeNotices(raw), { stderr: raw, nodeNotices: [] })
+})
 
 // --- help / dispatch ---------------------------------------------------------
 

@@ -8,10 +8,14 @@
 //
 // This is test-only: nothing in src/ or dist/ knows about it. Compiled output
 // and the esbuild bundle keep resolving `./cli.js` the normal way.
+//
+// The hook is SYNCHRONOUS because it is installed with module.registerHooks(),
+// which runs hooks in-thread; module.register() is deprecated from Node 26 and
+// printed a DeprecationWarning onto every child's stderr.
 import { existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
-export async function resolve(specifier, context, nextResolve) {
+export function resolve(specifier, context, nextResolve) {
   if (specifier.startsWith('.') && specifier.endsWith('.js') && context.parentURL) {
     const asTs = new URL(specifier.slice(0, -3) + '.ts', context.parentURL)
     if (existsSync(fileURLToPath(asTs))) {

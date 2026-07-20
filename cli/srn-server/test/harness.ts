@@ -25,6 +25,39 @@ export interface CliResult {
   code: number | null
   stdout: string
   stderr: string
+  /** Node's own process-level notices, split out of stderr. See splitNodeNotices. */
+  nodeNotices: string[]
+}
+
+/**
+ * Separate Node's own process-level notices from the CLI's stderr.
+ *
+ * The child is launched with `--import <resolver>`, which is test plumbing, not
+ * the product. When Node decides to complain about that plumbing it prints
+ * `(node:1234) [DEP0205] DeprecationWarning: ...` — and a test asserting the
+ * CLI's exact stderr then fails for a reason that has nothing to do with the
+ * CLI. That is exactly what happened on the Node 26 runner while Node 24 passed.
+ *
+ * The notices are returned separately rather than discarded, so nothing is
+ * hidden. Note this only matches Node's OWN `(node:PID)` prefix format; anything
+ * the CLI itself writes to stderr is untouched.
+ */
+export function splitNodeNotices(stderr: string): { stderr: string; nodeNotices: string[] } {
+  const notices: string[] = []
+  const kept: string[] = []
+  const lines = stderr.split('\n')
+  for (let i = 0; i < lines.length; i++) {
+    if (/^\(node:\d+\) /.test(lines[i])) {
+      notices.push(lines[i])
+      // Node emits a paired hint line directly after most warnings.
+      if (/^\(Use `node --trace-[a-z-]+ \.\.\.` to show where the .* was created\)$/.test(lines[i + 1] ?? '')) {
+        notices.push(lines[++i])
+      }
+      continue
+    }
+    kept.push(lines[i])
+  }
+  return { stderr: kept.join('\n'), nodeNotices: notices }
 }
 
 /**
@@ -166,7 +199,8 @@ export function runCli(sandbox: Sandbox, argv: string[], options: RunOptions = {
     const timer = setTimeout(() => child.kill('SIGKILL'), 60_000)
     child.on('close', (code) => {
       clearTimeout(timer)
-      resolve({ code, stdout: stdout.replaceAll('\r\n', '\n'), stderr: stderr.replaceAll('\r\n', '\n') })
+      const split = splitNodeNotices(stderr.replaceAll('\r\n', '\n'))
+      resolve({ code, stdout: stdout.replaceAll('\r\n', '\n'), stderr: split.stderr, nodeNotices: split.nodeNotices })
     })
   })
 }

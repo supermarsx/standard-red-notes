@@ -22,6 +22,9 @@
 //     unaliased package cannot even be imported as ESM (its named re-exports are
 //     not statically analysable). Applying the SAME alias here keeps the tested
 //     module graph identical to the shipped bundle's.
+//
+// Installed with module.register() — see register-ts-resolver.mjs for why
+// registerHooks() cannot be used here.
 import { existsSync } from 'node:fs'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 

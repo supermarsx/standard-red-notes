@@ -11,8 +11,9 @@ import assert from 'node:assert/strict'
 import http from 'node:http'
 import path from 'node:path'
 import { mkdirSync, writeFileSync } from 'node:fs'
+import { pathToFileURL } from 'node:url'
 import { type AddressInfo } from 'node:net'
-import { healthyEnvLines, makeSandbox, runCli, writeEnvFile, type Sandbox } from './harness.ts'
+import { healthyEnvLines, makeSandbox, runCli, splitNodeNotices, writeEnvFile, type Sandbox } from './harness.ts'
 
 const sandbox: Sandbox = makeSandbox()
 
@@ -33,6 +34,51 @@ async function startServer(
     stop: () => new Promise<void>((resolve) => server.close(() => resolve())),
   }
 }
+
+// --- harness: Node's own notices must not be mistaken for CLI output ---------
+
+test("Node's process-level notices are split out of the CLI's stderr", () => {
+  // Regression guard. The child runs with `--import <resolver>`; when Node
+  // complains about that plumbing the notice landed in stderr and every test
+  // asserting exact CLI stderr went red on the Node 26 runner while passing on
+  // Node 24. This is the verbatim output that broke it.
+  const raw =
+    '(node:2468) [DEP0205] DeprecationWarning: `module.register()` is deprecated. Use `module.registerHooks()` instead.\n' +
+    '(Use `node --trace-deprecation ...` to show where the warning was created)\n' +
+    'Error: Could not locate the repo root.\n'
+  const split = splitNodeNotices(raw)
+  assert.equal(split.stderr, 'Error: Could not locate the repo root.\n')
+  assert.equal(split.nodeNotices.length, 2, 'the warning AND its paired hint line are both taken')
+  assert.match(split.nodeNotices[0], /DEP0205/)
+})
+
+test('splitting notices leaves ordinary stderr completely untouched', () => {
+  const raw = 'Error: something broke\nsecond line (node:123) not at the start\n'
+  assert.deepEqual(splitNodeNotices(raw), { stderr: raw, nodeNotices: [] })
+})
+
+test('a CLI line that merely mentions a warning is NOT swallowed', () => {
+  // Only Node's own `(node:PID) ` prefix format is filtered.
+  const raw = 'DeprecationWarning: this came from the CLI itself\n'
+  assert.deepEqual(splitNodeNotices(raw), { stderr: raw, nodeNotices: [] })
+})
+
+test('a REAL Node notice on a real child is split out, end to end', async () => {
+  // Proves the splitting against Node's actual printer, not a hand-written
+  // string. Overriding NODE_OPTIONS drops the fake-docker preload, so this uses
+  // a command that never spawns docker.
+  const preload = pathToFileURL(path.join(import.meta.dirname, 'emit-warning.mjs')).href
+  const r = await runCli(sandbox, ['version', '--url', 'http://127.0.0.1:1', '--timeout', '300'], {
+    env: { NODE_OPTIONS: `--import ${preload}` },
+  })
+  assert.equal(r.code, 0)
+  assert.ok(
+    r.nodeNotices.some((n) => n.includes('HarnessTestWarning')),
+    `expected the notice to be captured, got ${JSON.stringify(r.nodeNotices)}`,
+  )
+  assert.doesNotMatch(r.stderr, /HarnessTestWarning/, 'it must not contaminate the CLI stderr')
+  assert.doesNotMatch(r.stderr, /^\(node:\d+\)/m)
+})
 
 // --- help / dispatch ---------------------------------------------------------
 
