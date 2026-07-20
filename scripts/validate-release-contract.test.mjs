@@ -188,6 +188,161 @@ test("an OpenClaw executable published under another name is rejected", () => {
   );
 });
 
+// OpenClaw auto-releases on every push to main, versioned and tagged like every
+// other srn-* component: rolling `YY.N` under a namespaced `srn-openclaw-v*`
+// tag. The previous scheme released only from a pushed tag.
+const openClawWorkflowFile = ".github/workflows/srn-openclaw.yml";
+
+test("dropping the OpenClaw auto-release trigger is rejected", () => {
+  const files = withFileChanged(openClawWorkflowFile, (content) =>
+    content.replace("    branches: [main]\n", ""),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /srn-openclaw\.yml: missing OpenClaw auto-release trigger on main/,
+  );
+});
+
+test("dropping the OpenClaw workspace trigger path is rejected", () => {
+  const files = withFileChanged(openClawWorkflowFile, (content) =>
+    content.replace('      - "openclaw/**"\n', ""),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /srn-openclaw\.yml: missing OpenClaw workspace release trigger path/,
+  );
+});
+
+test("an unnamespaced OpenClaw release tag is rejected", () => {
+  const files = withFileChanged(openClawWorkflowFile, (content) =>
+    content.replace('tag="${TOOL}-v${version}"', 'tag="v${version}"'),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /srn-openclaw\.yml: OpenClaw must not publish an unnamespaced v\* tag/,
+  );
+});
+
+test("dropping the namespaced OpenClaw tag is rejected", () => {
+  const files = withFileChanged(openClawWorkflowFile, (content) =>
+    content.replace('tag="${TOOL}-v${version}"', 'tag="srn-openclaw-${version}"'),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /srn-openclaw\.yml: missing namespaced OpenClaw release tag/,
+  );
+});
+
+test("reverting OpenClaw to a tag-parsed version is rejected", () => {
+  const files = withFileChanged(openClawWorkflowFile, (content) =>
+    content.replace(
+      'version="${YY}.$((max + 1))"',
+      'version="$(date -u +%y).${GITHUB_RUN_NUMBER}"',
+    ),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /srn-openclaw\.yml: missing rolling YY\.N OpenClaw version/,
+  );
+});
+
+// release-config.mjs only accepts `srn-openclaw-v<semver>`, and `26.1` is not
+// semver, so the packaged artifact must carry `26.1.0`.
+test("packaging OpenClaw under the non-semver release version is rejected", () => {
+  const files = withFileChanged(openClawWorkflowFile, (content) =>
+    content.replace(
+      "            package_version=${version}.0\n",
+      "            package_version=${version}\n",
+    ),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /srn-openclaw\.yml: missing semver package version for packaging/,
+  );
+});
+
+test("packaging OpenClaw with the release identity instead of the semver tag is rejected", () => {
+  const files = withFileChanged(openClawWorkflowFile, (content) =>
+    content.replace(
+      '--tag "${{ needs.context.outputs.package_tag }}"',
+      '--tag "${{ needs.context.outputs.tag }}"',
+    ),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /srn-openclaw\.yml: missing semver packaging tag/,
+  );
+});
+
+// Without the stamp the packaged tarball would ship openclaw/package.json's
+// placeholder development version, and package-release.mjs's own tag/manifest
+// equality assertion would no longer be satisfiable by the rolling version.
+test("dropping the OpenClaw release version stamp is rejected", () => {
+  const files = withFileChanged(openClawWorkflowFile, (content) =>
+    content.replace(
+      "            manifest.version = process.env.PACKAGE_VERSION;\n",
+      "",
+    ),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /srn-openclaw\.yml: missing release version stamped into the packaged manifest/,
+  );
+});
+
+test("dropping the explicit-tag version assertion is rejected", () => {
+  const files = withFileChanged(openClawWorkflowFile, (content) =>
+    content.replace(
+      'if [ "${version}" != "${declared_version}" ]; then',
+      "if false; then",
+    ),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /srn-openclaw\.yml: missing explicit-tag version assertion against openclaw\/package\.json/,
+  );
+});
+
+// --verify-tag must stay conditional on an explicitly requested tag: unguarded
+// it would abort every rolling release, and dropping the guard's condition
+// would let a mistyped manual tag be created by the release step.
+test("dropping the OpenClaw explicit-tag verification gate is rejected", () => {
+  const files = withFileChanged(openClawWorkflowFile, (content) =>
+    content.replace(
+      'if [ "${VERIFY_TAG}" = "true" ]; then',
+      "if true; then",
+    ),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /srn-openclaw\.yml: missing explicit-tag verification gate/,
+  );
+});
+
+test("a non-srn-* OpenClaw release title is rejected", () => {
+  const files = withFileChanged(openClawWorkflowFile, (content) =>
+    content.replace(
+      '--title "${TOOL} ${VERSION}"',
+      '--title "OpenClaw ${VERSION}"',
+    ),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /srn-openclaw\.yml: missing srn-\* OpenClaw release title convention/,
+  );
+});
+
 test("a missing app Windows release job is rejected", () => {
   const file = "app/.github/workflows/desktop.release.reuse.yml";
   const files = withFileChanged(file, (content) =>

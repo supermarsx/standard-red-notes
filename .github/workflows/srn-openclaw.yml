@@ -1,20 +1,53 @@
-# Tagged release pipeline for the platform-neutral OpenClaw Node CLI.
+# Rolling release pipeline for the platform-neutral OpenClaw Node CLI.
 #
 # OpenClaw has no native addons or embedded runtime. The package job therefore
 # creates one dependency-bundled npm tarball instead of six relabelled binaries.
 # That exact tarball is installed offline and smoke-tested on native Windows,
 # Linux, and macOS runners for x64 and arm64 before a release can be published.
+#
+# Trigger: push to `main` touching the OpenClaw workspace or the root dependency
+# manifests its bundled runtime graph is resolved from. `mcp/` is deliberately
+# NOT a trigger path: the live E2E builds it, but no MCP code ships inside the
+# OpenClaw tarball, and srn-mcp releases itself.
+#
+# Versioning: rolling `YY.N` (e.g. 26.1) — N is one past the highest N already
+# released for the current year, so it resets every January. This is the same
+# scheme every other srn-* component uses, and the tag is namespaced the same
+# way: `srn-openclaw-v26.1`.
+#
+# The version INSIDE the package is `YY.N.0` (package_version), not `YY.N`.
+# openclaw/scripts/release-config.mjs only accepts a strict `srn-openclaw-v<semver>`
+# tag and `26.1` is not valid semver, so — exactly like srn-desktop's app version
+# — the release identity (tag/title) and the artifact's internal semver are
+# computed together but formatted differently on purpose. The package job stamps
+# that semver into openclaw/package.json before packaging, so
+# package-release.mjs's own "tag version == manifest version" assertion still
+# runs, and still fails, on every release.
+#
+# Escape hatch: an explicit `srn-openclaw-v<semver>` tag (pushed, or passed to
+# workflow_dispatch) releases that exact tag instead. On that path the version
+# comes FROM the tag, must equal openclaw/package.json's declared version, and
+# the tag must already exist (`--verify-tag`).
 name: srn-openclaw
 
 on:
   push:
+    branches: [main]
+    paths:
+      - "openclaw/**"
+      - "package.json"
+      - "yarn.lock"
+      - ".yarnrc.yml"
+      - ".yarn/releases/**"
+      - ".github/workflows/srn-openclaw.yml"
     tags:
       - "srn-openclaw-v*"
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing srn-openclaw-v<semver> tag to build and release
-        required: true
+        description: Existing srn-openclaw-v<semver> tag to release; empty cuts a rolling YY.N release
+        required: false
+        default: ""
         type: string
 
 permissions:
@@ -25,18 +58,22 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  TOOL: srn-openclaw
   NODE_VERSION: "26.5.0"
   YARN_VERSION: "4.17.1"
   COREPACK_VERSION: "0.35.0"
 
 jobs:
   context:
-    name: Resolve release tag
+    name: Resolve release version
     runs-on: ubuntu-24.04
     outputs:
+      package_tag: ${{ steps.release.outputs.package_tag }}
+      package_version: ${{ steps.release.outputs.package_version }}
       source_epoch: ${{ steps.release.outputs.source_epoch }}
       source_sha: ${{ steps.release.outputs.source_sha }}
       tag: ${{ steps.release.outputs.tag }}
+      verify_tag: ${{ steps.release.outputs.verify_tag }}
       version: ${{ steps.release.outputs.version }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -52,33 +89,63 @@ jobs:
       - name: Resolve and validate release source
         id: release
         env:
-          REQUESTED_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REQUESTED_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || (startsWith(github.ref, 'refs/tags/') && github.ref_name || '') }}
         run: |
           set -euo pipefail
           tag="${REQUESTED_TAG}"
-          if [[ ! "${tag}" =~ ^srn-openclaw-v[0-9A-Za-z.-]+$ ]]; then
-            echo "Invalid OpenClaw release tag: ${tag}" >&2
-            exit 1
-          fi
+          if [ -n "${tag}" ]; then
+            # Explicit tag release: the version comes from the tag, the tag must
+            # already exist, and openclaw/package.json must already declare it.
+            if [[ ! "${tag}" =~ ^srn-openclaw-v[0-9A-Za-z.-]+$ ]]; then
+              echo "Invalid OpenClaw release tag: ${tag}" >&2
+              exit 1
+            fi
 
-          git fetch --force --tags origin
-          source_sha="$(git rev-parse --verify "refs/tags/${tag}^{commit}")"
-          git checkout --detach "${source_sha}"
-          version="$(TAG="${tag}" node --input-type=module -e \
-            'import { versionFromReleaseTag } from "./openclaw/scripts/release-config.mjs"; process.stdout.write(versionFromReleaseTag(process.env.TAG));')"
-          package_version="$(node -p "require('./openclaw/package.json').version")"
-          if [ "${version}" != "${package_version}" ]; then
-            echo "Tag version ${version} does not match openclaw/package.json ${package_version}." >&2
-            exit 1
+            git fetch --force --tags origin
+            source_sha="$(git rev-parse --verify "refs/tags/${tag}^{commit}")"
+            git checkout --detach "${source_sha}"
+            version="$(TAG="${tag}" node --input-type=module -e \
+              'import { versionFromReleaseTag } from "./openclaw/scripts/release-config.mjs"; process.stdout.write(versionFromReleaseTag(process.env.TAG));')"
+            declared_version="$(node -p "require('./openclaw/package.json').version")"
+            if [ "${version}" != "${declared_version}" ]; then
+              echo "Tag version ${version} does not match openclaw/package.json ${declared_version}." >&2
+              exit 1
+            fi
+            package_version="${version}"
+            verify_tag=true
+          else
+            # Rolling release: N is one past the highest N already released this
+            # year, discovered from the existing `srn-openclaw-v<YY>.` releases,
+            # exactly as every other srn-* workflow does.
+            YY="$(date -u +%y)"
+            prefix="${TOOL}-v${YY}."
+            max=0
+            while read -r released; do
+              [ -z "$released" ] && continue
+              n="${released#"$prefix"}"
+              if [[ "$n" =~ ^[0-9]+$ ]] && [ "$n" -gt "$max" ]; then max="$n"; fi
+            done < <(gh release list --repo "$GITHUB_REPOSITORY" --limit 200 --json tagName --jq '.[].tagName' | grep -F "${prefix}" || true)
+            version="${YY}.$((max + 1))"
+            # release-config.mjs demands a strict semver tag and `26.1` is not
+            # semver, so the packaged artifact carries `26.1.0`.
+            package_version=${version}.0
+            tag="${TOOL}-v${version}"
+            source_sha="${GITHUB_SHA}"
+            verify_tag=false
           fi
 
           source_epoch="$(git show -s --format=%ct "${source_sha}")"
           {
+            echo "package_tag=${TOOL}-v${package_version}"
+            echo "package_version=${package_version}"
             echo "source_epoch=${source_epoch}"
             echo "source_sha=${source_sha}"
             echo "tag=${tag}"
+            echo "verify_tag=${verify_tag}"
             echo "version=${version}"
           } >> "${GITHUB_OUTPUT}"
+          echo "OpenClaw release ${TOOL} ${version} (tag ${tag}, package semver ${package_version})"
 
   quality:
     name: Typecheck, format, unit, live E2E, build
@@ -158,10 +225,29 @@ jobs:
           name: srn-openclaw-dist
           path: openclaw/dist
 
+      # The rolling release identity (`26.1`) is not semver, so the packaged
+      # manifest carries `26.1.0`. Stamping it here keeps package-release.mjs's
+      # "release tag version == openclaw/package.json version" assertion live:
+      # the packaging tag below is built from this same value, so a mismatch
+      # between the resolved version and what is packaged still fails the build.
+      # Only the workspace version changes, which yarn.lock records as
+      # `0.0.0-use.local`, so the immutable production install is unaffected.
+      - name: Stamp the release version into the OpenClaw manifest
+        env:
+          PACKAGE_VERSION: ${{ needs.context.outputs.package_version }}
+        run: |
+          set -euo pipefail
+          node -e 'const fs = require("node:fs");
+            const file = "openclaw/package.json";
+            const manifest = JSON.parse(fs.readFileSync(file, "utf8"));
+            manifest.version = process.env.PACKAGE_VERSION;
+            fs.writeFileSync(file, JSON.stringify(manifest, null, 2) + "\n");'
+          test "$(node -p "require('./openclaw/package.json').version")" = "${PACKAGE_VERSION}"
+
       - name: Build platform-neutral release package and manifest
         run: |
           node openclaw/scripts/package-release.mjs \
-            --tag "${{ needs.context.outputs.tag }}" \
+            --tag "${{ needs.context.outputs.package_tag }}" \
             --source-sha "${{ needs.context.outputs.source_sha }}" \
             --source-date-epoch "${{ needs.context.outputs.source_epoch }}" \
             --source-repository "${{ github.server_url }}/${{ github.repository }}" \
@@ -223,9 +309,9 @@ jobs:
       - name: Verify offline install, contents, and executable entrypoints
         run: >-
           node openclaw/scripts/verify-release.mjs
-          --archive "out/srn-openclaw-${{ needs.context.outputs.version }}-node-any.tgz"
+          --archive "out/srn-openclaw-${{ needs.context.outputs.package_version }}-node-any.tgz"
           --checksums "out/SHA256SUMS.txt"
-          --manifest "out/srn-openclaw-${{ needs.context.outputs.version }}-node-any.manifest.json"
+          --manifest "out/srn-openclaw-${{ needs.context.outputs.package_version }}-node-any.manifest.json"
           --target "${{ matrix.target }}"
 
   release:
@@ -252,12 +338,12 @@ jobs:
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           subject-path: |
-            out/srn-openclaw-${{ needs.context.outputs.version }}-node-any.tgz
-            out/srn-openclaw-${{ needs.context.outputs.version }}-node-any.manifest.json
+            out/srn-openclaw-${{ needs.context.outputs.package_version }}-node-any.tgz
+            out/srn-openclaw-${{ needs.context.outputs.package_version }}-node-any.manifest.json
 
       - name: Add provenance bundle and verify final checksums
         run: |
-          provenance="srn-openclaw-${{ needs.context.outputs.version }}-node-any.provenance.sigstore.json"
+          provenance="srn-openclaw-${{ needs.context.outputs.package_version }}-node-any.provenance.sigstore.json"
           cp "${{ steps.provenance.outputs.bundle-path }}" "out/${provenance}"
           (cd out && sha256sum "${provenance}" >> SHA256SUMS.txt && sha256sum --check SHA256SUMS.txt)
 
@@ -266,16 +352,28 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SOURCE_SHA: ${{ needs.context.outputs.source_sha }}
           TAG: ${{ needs.context.outputs.tag }}
+          VERIFY_TAG: ${{ needs.context.outputs.verify_tag }}
           VERSION: ${{ needs.context.outputs.version }}
         run: |
           set -euo pipefail
+          # A tag supplied by a human must already exist and must never be
+          # created here, so a typo cannot silently publish a new tag. A rolling
+          # release derives its own tag, so there is nothing to verify against
+          # and gh creates it at the resolved source commit.
+          verify=()
+          if [ "${VERIFY_TAG}" = "true" ]; then
+            verify=(--verify-tag)
+          fi
           # Do not claim the repo-global Latest pointer: electron-updater
           # resolves the desktop channel file through /releases/latest, so only
           # srn-desktop may hold it.
+          # This job never checks the repository out, so gh has no git remote to
+          # infer the repository from.
           gh release create "${TAG}" \
-            --verify-tag \
+            "${verify[@]}" \
+            --repo "${GITHUB_REPOSITORY}" \
             --target "${SOURCE_SHA}" \
-            --title "OpenClaw ${VERSION}" \
+            --title "${TOOL} ${VERSION}" \
             --latest=false \
             --generate-notes \
             out/*

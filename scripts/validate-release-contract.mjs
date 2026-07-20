@@ -114,7 +114,9 @@ export function validateReleaseContract(files) {
   const openClawWorkflowFile = ".github/workflows/srn-openclaw.yml";
   const openClawWorkflow = files.get(openClawWorkflowFile) ?? "";
   for (const [fragment, description] of [
-    ['- "srn-openclaw-v*"', "OpenClaw release tag trigger"],
+    ["branches: [main]", "OpenClaw auto-release trigger on main"],
+    ['- "openclaw/**"', "OpenClaw workspace release trigger path"],
+    ['- "srn-openclaw-v*"', "OpenClaw explicit release tag trigger"],
     ["workflow_dispatch:", "manual OpenClaw release trigger"],
     ['NODE_VERSION: "26.5.0"', "pinned Node 26 release runtime"],
     ['YARN_VERSION: "4.17.1"', "pinned Yarn release version"],
@@ -152,6 +154,73 @@ export function validateReleaseContract(files) {
     );
   }
 
+  // OpenClaw releases itself on every push to main, versioned and tagged like
+  // every other srn-* component: rolling `YY.N` discovered from the existing
+  // releases, published under a NAMESPACED `srn-openclaw-v<version>` tag. A bare
+  // `v<version>` tag would take the repo-global tag namespace and the "Latest"
+  // release badge away from srn-desktop.
+  const openClawContext = jobBlock(openClawWorkflow, "context");
+  if (!openClawContext) {
+    errors.push(`${openClawWorkflowFile}: missing OpenClaw version job`);
+  } else {
+    for (const [fragment, description] of [
+      ['version="${YY}.$((max + 1))"', "rolling YY.N OpenClaw version"],
+      ['tag="${TOOL}-v${version}"', "namespaced OpenClaw release tag"],
+      // openclaw/scripts/release-config.mjs only accepts a strict
+      // `srn-openclaw-v<semver>` tag, and the release identity `YY.N` is not
+      // semver, so the packaged artifact's version is computed separately.
+      ["package_version=${version}.0", "semver package version for packaging"],
+      // The explicit-tag escape hatch must keep asserting that the tag it was
+      // handed is the version openclaw/package.json declares.
+      [
+        'if [ "${version}" != "${declared_version}" ]; then',
+        "explicit-tag version assertion against openclaw/package.json",
+      ],
+    ]) {
+      requireFragment(
+        errors,
+        openClawWorkflowFile,
+        openClawContext,
+        fragment,
+        description,
+      );
+    }
+    if (/\btag="?v\$\{version\}/.test(openClawContext)) {
+      errors.push(
+        `${openClawWorkflowFile}: OpenClaw must not publish an unnamespaced v* tag`,
+      );
+    }
+  }
+
+  // The rolling identity is not semver, so package-release.mjs is handed the
+  // semver packaging tag, and the matching version is stamped into the manifest
+  // it asserts that tag against. Packaging the release identity directly would
+  // fail; packaging without the stamp would silently ship the placeholder
+  // development version.
+  const openClawPackageJob = jobBlock(openClawWorkflow, "package");
+  if (!openClawPackageJob) {
+    errors.push(`${openClawWorkflowFile}: missing OpenClaw package job`);
+  } else {
+    for (const [fragment, description] of [
+      [
+        '--tag "${{ needs.context.outputs.package_tag }}"',
+        "semver packaging tag",
+      ],
+      [
+        "manifest.version = process.env.PACKAGE_VERSION",
+        "release version stamped into the packaged manifest",
+      ],
+    ]) {
+      requireFragment(
+        errors,
+        openClawWorkflowFile,
+        openClawPackageJob,
+        fragment,
+        description,
+      );
+    }
+  }
+
   const openClawSmoke = jobBlock(openClawWorkflow, "smoke");
   if (!openClawSmoke) {
     errors.push(
@@ -187,6 +256,11 @@ export function validateReleaseContract(files) {
     ["outputs.bundle-path", "published Sigstore provenance bundle"],
     ['sha256sum "${provenance}" >> SHA256SUMS.txt', "provenance checksum"],
     ["--verify-tag", "existing tag verification"],
+    // A tag handed to the workflow must already exist, so a typo cannot publish
+    // a brand new tag; a rolling release derives its own tag and has nothing to
+    // verify against.
+    ['if [ "${VERIFY_TAG}" = "true" ]; then', "explicit-tag verification gate"],
+    ['--title "${TOOL} ${VERSION}"', "srn-* OpenClaw release title convention"],
   ]) {
     requireFragment(
       errors,
