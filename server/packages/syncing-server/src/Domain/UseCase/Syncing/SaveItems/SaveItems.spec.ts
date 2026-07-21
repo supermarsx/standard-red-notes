@@ -376,6 +376,72 @@ describe('SaveItems', () => {
     expect(sendEventToClients.execute).not.toHaveBeenCalled()
   })
 
+  it('should log, but not fail the save, when the personal realtime push cannot be delivered', async () => {
+    sendEventToClient.execute = jest.fn().mockReturnValue(Result.fail('websocket gateway unreachable'))
+
+    const result = await createUseCase().execute({
+      itemHashes: [itemHash1],
+      userUuid: 'user-uuid',
+      apiVersion: '1',
+      readOnlyAccess: false,
+      sessionUuid: 'session-uuid',
+      snjsVersion: '2.200.0',
+      isFreeUser: false,
+      hasContentLimit: false,
+      liveSyncEnabled: true,
+    })
+
+    expect(result.isFailed()).toBeFalsy()
+    expect(result.getValue().savedItems).toEqual([savedItem])
+    expect(logger.error).toHaveBeenCalledWith(
+      'Sending items changed event to client failed. Error: websocket gateway unreachable',
+      { userId: 'user-uuid' },
+    )
+  })
+
+  it('should log, but not fail the save, when the shared vault fan-out cannot be delivered', async () => {
+    savedItem = Item.create({
+      duplicateOf: null,
+      itemsKeyId: 'items-key-id',
+      content: 'content',
+      contentType: ContentType.create(ContentType.TYPES.Note).getValue(),
+      encItemKey: 'enc-item-key',
+      authHash: 'auth-hash',
+      userUuid: Uuid.create('00000000-0000-0000-0000-000000000000').getValue(),
+      deleted: false,
+      updatedWithSession: null,
+      sharedVaultAssociation: SharedVaultAssociation.create({
+        sharedVaultUuid: Uuid.create('00000000-0000-0000-0000-000000000001').getValue(),
+        lastEditedBy: Uuid.create('00000000-0000-0000-0000-000000000000').getValue(),
+      }).getValue(),
+      dates: Dates.create(new Date(123), new Date(123)).getValue(),
+      timestamps: Timestamps.create(123, 123).getValue(),
+    }).getValue()
+
+    itemRepository.findByUuid = jest.fn().mockResolvedValue(savedItem)
+    updateExistingItem.execute = jest.fn().mockResolvedValue(Result.ok(savedItem))
+    sendEventToClients.execute = jest.fn().mockReturnValue(Result.fail('shared vault gateway unreachable'))
+
+    const result = await createUseCase().execute({
+      itemHashes: [itemHash1],
+      userUuid: '00000000-0000-0000-0000-000000000000',
+      apiVersion: '1',
+      readOnlyAccess: false,
+      sessionUuid: 'session-uuid',
+      snjsVersion: '2.200.0',
+      isFreeUser: false,
+      hasContentLimit: false,
+      liveSyncEnabled: true,
+    })
+
+    expect(result.isFailed()).toBeFalsy()
+    expect(sendEventToClients.execute).toHaveBeenCalled()
+    expect(logger.error).toHaveBeenCalledWith(
+      'Sending items changed event to clients failed. Error: shared vault gateway unreachable',
+      { userId: '00000000-0000-0000-0000-000000000000', sharedVaultUuid: '00000000-0000-0000-0000-000000000001' },
+    )
+  })
+
   it('should update existing shared vault items', async () => {
     savedItem = Item.create({
       duplicateOf: null,

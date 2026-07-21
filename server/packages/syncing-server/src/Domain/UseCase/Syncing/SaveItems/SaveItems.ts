@@ -319,7 +319,6 @@ export class SaveItems implements UseCaseInterface<SaveItemsResult> {
         originatingSessionUuid: dto.sessionUuid ?? undefined,
         event: personalMessage,
       })
-      /* istanbul ignore next */
       if (result.isFailed()) {
         this.logger.error(`Sending items changed event to client failed. Error: ${result.getError()}`, {
           userId: dto.userUuid,
@@ -340,7 +339,6 @@ export class SaveItems implements UseCaseInterface<SaveItemsResult> {
         event: itemsChangedEvent,
         originatingUserUuid: dto.userUuid,
       })
-      /* istanbul ignore next */
       if (result.isFailed()) {
         this.logger.error(`Sending items changed event to clients failed. Error: ${result.getError()}`, {
           userId: dto.userUuid,
