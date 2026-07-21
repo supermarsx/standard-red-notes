@@ -203,7 +203,6 @@ export class UpdateExistingItem implements UseCaseInterface<Item> {
         userUuid,
       )
 
-      /* istanbul ignore next */
       const revisionsFrequency = dto.isFreeUser ? this.freeRevisionFrequency : this.premiumRevisionFrequency
 
       if (secondsFromLastUpdate >= revisionsFrequency) {

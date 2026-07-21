@@ -125,7 +125,6 @@ export class AuthenticateUser implements UseCaseInterface {
         }
 
         if (authenticationMethod.givenTokensWereInCooldown) {
-          /* istanbul ignore next */
           this.logger.warn('Request was authenticated with tokens that were in cooldown.', {
             userId: user.uuid,
             sessionUuid: session.uuid,

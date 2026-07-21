@@ -88,7 +88,6 @@ export class TriggerNextcloudBackupForAllUsers implements UseCaseInterface<void>
         }
 
         const result = await this.triggerNextcloudBackupForUserUseCase.execute({ userUuid })
-        /* istanbul ignore next */
         if (result.isFailed()) {
           this.logger.error(`Failed to trigger Nextcloud backup for user: ${result.getError()}`, { userId: userUuid })
           failedUsers++
@@ -103,7 +102,6 @@ export class TriggerNextcloudBackupForAllUsers implements UseCaseInterface<void>
       `Nextcloud backup trigger pass complete for frequency ${dto.backupFrequency}: ${skippedNotDue} skipped (not due), ${failedUsers} failed`,
     )
 
-    /* istanbul ignore next */
     if (failedUsers > 0) {
       this.logger.error(`Failed to trigger Nextcloud backup for ${failedUsers} users`)
     }
@@ -142,7 +140,6 @@ export class TriggerNextcloudBackupForAllUsers implements UseCaseInterface<void>
       checkUserPermissions: false,
     })
 
-    /* istanbul ignore next */
     if (result.isFailed()) {
       this.logger.error(`Failed to record Nextcloud backup last-run for user ${userUuid}: ${result.getError()}`)
     }

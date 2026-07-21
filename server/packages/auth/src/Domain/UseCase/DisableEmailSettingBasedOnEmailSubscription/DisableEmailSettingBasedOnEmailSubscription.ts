@@ -56,7 +56,6 @@ export class DisableEmailSettingBasedOnEmailSubscription implements UseCaseInter
   }
 
   private getSettingNameFromLevel(level: string): Result<SettingName> {
-    /* istanbul ignore next */
     switch (level) {
       case EmailLevel.LEVELS.Marketing:
         return Result.ok(SettingName.create(SettingName.NAMES.MuteMarketingEmails).getValue())

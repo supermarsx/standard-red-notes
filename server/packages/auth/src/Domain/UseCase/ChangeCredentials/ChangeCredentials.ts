@@ -135,7 +135,6 @@ export class ChangeCredentials implements UseCaseInterface<AuthResponseCreationR
         }),
       )
     } catch (error) {
-      /* istanbul ignore next */
       this.logger.error(`Could not publish email changed request for email: ${(error as Error).message}`)
     }
   }
