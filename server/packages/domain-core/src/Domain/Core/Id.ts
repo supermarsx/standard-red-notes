@@ -1,5 +1,3 @@
-/* istanbul ignore file */
-
 export class Id<T> {
   constructor(private value: T) {}
 

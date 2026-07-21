@@ -1,4 +1,3 @@
-/* istanbul ignore file */
 import { ValueObjectProps } from './ValueObjectProps'
 
 export abstract class ValueObject<T extends ValueObjectProps> {

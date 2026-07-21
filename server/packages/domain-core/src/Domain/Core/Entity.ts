@@ -1,5 +1,3 @@
-/* istanbul ignore file */
-
 import { UniqueEntityId } from './UniqueEntityId'
 
 export abstract class Entity<T> {

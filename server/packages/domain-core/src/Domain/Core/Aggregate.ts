@@ -1,5 +1,3 @@
-/* istanbul ignore file */
-
 import { Change } from './Change'
 import { Entity } from './Entity'
 

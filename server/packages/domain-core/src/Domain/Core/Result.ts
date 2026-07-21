@@ -1,5 +1,3 @@
-/* istanbul ignore file */
-
 export class Result<T> {
   constructor(
     private isSuccess: boolean,

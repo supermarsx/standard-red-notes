@@ -1,5 +1,3 @@
-/* istanbul ignore file */
-
 import { ChangeProps } from './ChangeProps'
 import { Result } from './Result'
 
