@@ -1,5 +1,3 @@
-/* istanbul ignore file */
-
 import { DomainEventService, EmailRequestedEvent } from '@standardnotes/domain-events'
 import { TimerInterface } from '@standardnotes/time'
 import { inject, injectable } from 'inversify'
