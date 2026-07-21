@@ -160,6 +160,45 @@ describe('UpdateExistingItem', () => {
     expect(itemRepository.update).toHaveBeenCalled()
   })
 
+  describe('revision frequency', () => {
+    // The use case is constructed with freeRevisionFrequency 86_400s and
+    // premiumRevisionFrequency 5s. 100 seconds since the last update therefore
+    // clears the premium threshold but not the free one, which is the only gap
+    // in which the two arms of the isFreeUser ternary are distinguishable.
+    beforeEach(() => {
+      timer.convertMicrosecondsToSeconds = jest.fn().mockReturnValue(100)
+    })
+
+    it('should request a revision for a premium user once the premium frequency has elapsed', async () => {
+      const result = await createUseCase().execute({
+        existingItem: item1,
+        itemHash: itemHash1,
+        sessionUuid: '00000000-0000-0000-0000-000000000000',
+        performingUserUuid: '00000000-0000-0000-0000-000000000000',
+        isFreeUser: false,
+      })
+
+      expect(result.isFailed()).toBeFalsy()
+      expect(domainEventFactory.createItemRevisionCreationRequested).toHaveBeenCalledWith({
+        itemUuid: '00000000-0000-0000-0000-000000000000',
+        userUuid: '00000000-0000-0000-0000-000000000000',
+      })
+    })
+
+    it('should not request a revision for a free user until the much longer free frequency has elapsed', async () => {
+      const result = await createUseCase().execute({
+        existingItem: item1,
+        itemHash: itemHash1,
+        sessionUuid: '00000000-0000-0000-0000-000000000000',
+        performingUserUuid: '00000000-0000-0000-0000-000000000000',
+        isFreeUser: true,
+      })
+
+      expect(result.isFailed()).toBeFalsy()
+      expect(domainEventFactory.createItemRevisionCreationRequested).not.toHaveBeenCalled()
+    })
+  })
+
   it('still returns the SAVED item (not a failure) when a POST-persist metric store throws', async () => {
     // The update has already committed; a transient metric-store throw must not
     // be surfaced as a failure (which SaveItems would map to a UuidConflict).
