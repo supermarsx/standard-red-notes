@@ -5,6 +5,54 @@ import { Timer } from './Timer'
 describe('Timer', () => {
   const createTimer = () => new Timer()
 
+  describe('sleep', () => {
+    afterEach(() => {
+      jest.useRealTimers()
+    })
+
+    it('should stay pending until the requested number of milliseconds has elapsed', async () => {
+      jest.useFakeTimers()
+
+      let resolved = false
+      const pending = createTimer()
+        .sleep(500)
+        .then(() => {
+          resolved = true
+        })
+
+      jest.advanceTimersByTime(499)
+      await Promise.resolve()
+      expect(resolved).toEqual(false)
+
+      jest.advanceTimersByTime(1)
+      await pending
+      expect(resolved).toEqual(true)
+    })
+
+    it('should schedule exactly one timeout for the given delay', async () => {
+      jest.useFakeTimers()
+      const setTimeoutSpy = jest.spyOn(global, 'setTimeout')
+
+      const pending = createTimer().sleep(1_500)
+      jest.advanceTimersByTime(1_500)
+      await pending
+
+      expect(setTimeoutSpy).toHaveBeenCalledTimes(1)
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 1_500)
+
+      setTimeoutSpy.mockRestore()
+    })
+
+    it('should resolve with undefined', async () => {
+      jest.useFakeTimers()
+
+      const pending = createTimer().sleep(0)
+      jest.advanceTimersByTime(0)
+
+      await expect(pending).resolves.toBeUndefined()
+    })
+  })
+
   it('should return a timestamp in microseconds', () => {
     const timestamp = createTimer().getTimestampInMicroseconds()
     expect(`${timestamp}`.length).toEqual(16)

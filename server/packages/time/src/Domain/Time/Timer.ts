@@ -9,7 +9,6 @@ export class Timer implements TimerInterface {
     dayjs.extend(utc)
   }
 
-  /* istanbul ignore next */
   async sleep(milliseconds: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, milliseconds))
   }
