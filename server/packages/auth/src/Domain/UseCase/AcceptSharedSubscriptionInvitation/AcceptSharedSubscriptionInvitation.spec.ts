@@ -113,6 +113,18 @@ describe('AcceptSharedSubscriptionInvitation', () => {
     expect(applyDefaultSubscriptionSettings.execute).toHaveBeenCalled()
   })
 
+  it('should still accept the invitation when the default subscription settings cannot be applied', async () => {
+    applyDefaultSubscriptionSettings.execute = jest.fn().mockReturnValue(Result.fail('setting service unavailable'))
+
+    expect(
+      await createUseCase().execute({
+        sharedSubscriptionInvitationUuid: '1-2-3',
+      }),
+    ).toEqual({ success: true })
+
+    expect(logger.error).toHaveBeenCalledWith('Could not apply default subscription settings for user with uuid 123')
+  })
+
   it('should create a shared subscription upon accepting the invitation if inviter has a second subscription', async () => {
     const inviterSubscription1 = { endsAt: 1, planName: SubscriptionName.PlusPlan } as jest.Mocked<UserSubscription>
     const inviterSubscription2 = { endsAt: 5, planName: SubscriptionName.PlusPlan } as jest.Mocked<UserSubscription>

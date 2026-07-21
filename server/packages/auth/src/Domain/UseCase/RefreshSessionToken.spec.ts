@@ -75,6 +75,7 @@ describe('RefreshSessionToken', () => {
     logger = {} as jest.Mocked<Logger>
     logger.error = jest.fn()
     logger.debug = jest.fn()
+    logger.warn = jest.fn()
   })
 
   it('should refresh session token', async () => {
@@ -97,6 +98,69 @@ describe('RefreshSessionToken', () => {
     })
 
     expect(domainEventPublisher.publish).toHaveBeenCalled()
+  })
+
+  it('should match a cooled-down refresh token against the cooldown hash rather than the session hash', async () => {
+    // sha256('3') -- the refresh token carried by '1:2:3' under the header scheme.
+    const hashOfPresentedToken = '4e07408562bedb8b60ce05c1decfe3ad16b72230967de01f640b7e4729b49fce'
+    // The session has already rotated to a different token, so only the cooldown
+    // hash can still match; a refresh that succeeds proves the cooldown hash won.
+    session.hashedRefreshToken = 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'
+
+    getSessionFromToken.execute = jest.fn().mockReturnValue(
+      Result.ok({
+        session,
+        isEphemeral: false,
+        givenTokensWereInCooldown: true,
+        cooldownHashedRefreshToken: hashOfPresentedToken,
+      }),
+    )
+
+    const result = await createUseCase().execute({
+      authTokenFromHeaders: '123',
+      refreshTokenFromHeaders: '1:2:3',
+      requestMetadata: { url: '/foobar', method: 'GET', snjs: '2.0.0', application: 'web', secChUa: 'Chromium;v=124' },
+      apiVersion: ApiVersion.VERSIONS.v20200115,
+    })
+
+    expect(result).toEqual({ success: true, result: sessionCreationResult })
+    expect(logger.warn).toHaveBeenCalledWith('Given tokens were in cooldown', {
+      codeTag: 'RefreshSessionToken',
+      userId: session.userUuid,
+      sessionUuid: '1-2-3',
+      snjs: '2.0.0',
+      application: 'web',
+      url: '/foobar',
+      method: 'GET',
+      userAgent: undefined,
+      secChUa: undefined,
+    })
+  })
+
+  it('should report the client hint in the cooldown warning when the session carries a user agent', async () => {
+    session.userAgent = 'Mozilla/5.0'
+    session.hashedRefreshToken = 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'
+
+    getSessionFromToken.execute = jest.fn().mockReturnValue(
+      Result.ok({
+        session,
+        isEphemeral: false,
+        givenTokensWereInCooldown: true,
+        cooldownHashedRefreshToken: '4e07408562bedb8b60ce05c1decfe3ad16b72230967de01f640b7e4729b49fce',
+      }),
+    )
+
+    await createUseCase().execute({
+      authTokenFromHeaders: '123',
+      refreshTokenFromHeaders: '1:2:3',
+      requestMetadata: { url: '/foobar', method: 'GET', secChUa: 'Chromium;v=124' },
+      apiVersion: ApiVersion.VERSIONS.v20200115,
+    })
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      'Given tokens were in cooldown',
+      expect.objectContaining({ userAgent: 'Mozilla/5.0', secChUa: 'Chromium;v=124' }),
+    )
   })
 
   it('should refresh cookie token', async () => {

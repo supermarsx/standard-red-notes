@@ -22,6 +22,7 @@ describe('TriggerEmailBackupForAllUsers', () => {
 
   const NOW_MICROS = 1_700_000_000_000_000
   const NOW_MS = 1_700_000_000_000
+  const USER_UUID = '00000000-0000-0000-0000-000000000000'
 
   const createUseCase = () =>
     new TriggerEmailBackupForAllUsers(
@@ -124,5 +125,52 @@ describe('TriggerEmailBackupForAllUsers', () => {
     expect(result.isFailed()).toBeFalsy()
     expect(triggerEmailBackupForUserUseCase.execute).not.toHaveBeenCalled()
     expect(setSettingValue.execute).not.toHaveBeenCalled()
+  })
+
+  it('continues the scheduler pass when a user backup fails, and does not record a last-sent', async () => {
+    triggerEmailBackupForUserUseCase.execute = jest.fn().mockResolvedValue(Result.fail('SMTP unavailable'))
+
+    const result = await createUseCase().execute({ backupFrequency: 'daily' })
+
+    expect(result.isFailed()).toBeFalsy()
+    expect(setSettingValue.execute).not.toHaveBeenCalled()
+    expect(logger.error).toHaveBeenCalledWith('Failed to trigger email backup for user: SMTP unavailable', {
+      userId: USER_UUID,
+    })
+    expect(logger.error).toHaveBeenCalledWith('Failed to trigger email backup for 1 users')
+  })
+
+  it('reports a last-sent persistence failure without failing the completed backup', async () => {
+    setSettingValue.execute = jest.fn().mockResolvedValue(Result.fail('database unavailable'))
+
+    const result = await createUseCase().execute({ backupFrequency: 'daily' })
+
+    expect(result.isFailed()).toBeFalsy()
+    expect(triggerEmailBackupForUserUseCase.execute).toHaveBeenCalled()
+    expect(logger.error).toHaveBeenCalledWith(
+      `Failed to record email backup last-sent for user ${USER_UUID}: database unavailable`,
+    )
+    expect(logger.error).not.toHaveBeenCalledWith('Failed to trigger email backup for 1 users')
+  })
+
+  it.each([
+    ['an empty', ''],
+    ['a malformed', 'not-a-timestamp'],
+  ])('treats %s last-sent value as never sent', async (_description, decryptedValue) => {
+    const lastSentSetting = Setting.create({
+      name: SettingName.NAMES.EmailBackupLastSent,
+      value: decryptedValue,
+      serverEncryptionVersion: EncryptionVersion.Unencrypted,
+      userUuid: Uuid.create(USER_UUID).getValue(),
+      sensitive: false,
+      timestamps: Timestamps.create(123, 123).getValue(),
+    }).getValue()
+
+    getSetting.execute = jest.fn().mockResolvedValue(Result.ok({ setting: lastSentSetting, decryptedValue }))
+
+    const result = await createUseCase().execute({ backupFrequency: 'daily' })
+
+    expect(result.isFailed()).toBeFalsy()
+    expect(triggerEmailBackupForUserUseCase.execute).toHaveBeenCalledWith({ userUuid: USER_UUID })
   })
 })

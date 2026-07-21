@@ -62,7 +62,6 @@ export class RefreshSessionToken {
     const { session, isEphemeral, givenTokensWereInCooldown, cooldownHashedRefreshToken } = resultOrError.getValue()
 
     let hashedRefreshToken = session.hashedRefreshToken
-    /* istanbul ignore next */
     if (givenTokensWereInCooldown) {
       this.logger.warn('Given tokens were in cooldown', {
         codeTag: 'RefreshSessionToken',

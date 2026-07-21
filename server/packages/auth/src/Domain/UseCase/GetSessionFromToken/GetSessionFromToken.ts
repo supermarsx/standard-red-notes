@@ -62,7 +62,6 @@ export class GetSessionFromToken implements UseCaseInterface<GetSessionFromToken
         retrievedSession = session
 
         if (!dto.authCookies || dto.authCookies.size === 0) {
-          /* istanbul ignore next */
           this.logger.error('No cookies provided for cookie-based session token.', {
             userId: session.userUuid,
             sessionUuid: session.uuid,
@@ -88,7 +87,6 @@ export class GetSessionFromToken implements UseCaseInterface<GetSessionFromToken
       }
     }
 
-    /* istanbul ignore next */
     if (accessTokens.length === 0 || !retrievedSession) {
       return Result.fail('Invalid token')
     }

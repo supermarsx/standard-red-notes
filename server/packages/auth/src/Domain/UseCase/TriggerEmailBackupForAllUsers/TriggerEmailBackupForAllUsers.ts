@@ -79,7 +79,6 @@ export class TriggerEmailBackupForAllUsers implements UseCaseInterface<void> {
         }
 
         const result = await this.triggerEmailBackupForUserUseCase.execute({ userUuid })
-        /* istanbul ignore next */
         if (result.isFailed()) {
           this.logger.error(`Failed to trigger email backup for user: ${result.getError()}`, { userId: userUuid })
           failedUsers++
@@ -94,7 +93,6 @@ export class TriggerEmailBackupForAllUsers implements UseCaseInterface<void> {
       `Email backup trigger pass complete for frequency ${dto.backupFrequency}: ${skippedNotDue} skipped (not due), ${failedUsers} failed`,
     )
 
-    /* istanbul ignore next */
     if (failedUsers > 0) {
       this.logger.error(`Failed to trigger email backup for ${failedUsers} users`)
     }
@@ -133,7 +131,6 @@ export class TriggerEmailBackupForAllUsers implements UseCaseInterface<void> {
       checkUserPermissions: false,
     })
 
-    /* istanbul ignore next */
     if (result.isFailed()) {
       this.logger.error(`Failed to record email backup last-sent for user ${userUuid}: ${result.getError()}`)
     }

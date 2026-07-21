@@ -84,6 +84,20 @@ describe('UpdateStorageQuotaUsedForUser', () => {
     })
   })
 
+  it('should log, but not fail, when the bytes used setting cannot be persisted', async () => {
+    setSubscriptonSettingValue.execute = jest.fn().mockReturnValue(Result.fail('database unavailable'))
+
+    const result = await createUseCase().execute({
+      userUuid: '00000000-0000-0000-0000-000000000000',
+      bytesUsed: 123,
+    })
+
+    expect(result.isFailed()).toBeFalsy()
+    expect(logger.error).toHaveBeenCalledWith(
+      'Could not set file upload bytes used for subscription 00000000-0000-0000-0000-000000000000',
+    )
+  })
+
   it('should not do anything if a user uuid is invalid', async () => {
     const result = await createUseCase().execute({
       userUuid: 'invalid',

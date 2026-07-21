@@ -93,7 +93,6 @@ export class AcceptSharedSubscriptionInvitation implements UseCaseInterface {
       userSubscriptionUuid: inviteeSubscription.uuid,
       userUuid: invitee.uuid,
     })
-    /* istanbul ignore next */
     if (result.isFailed()) {
       this.logger.error(`Could not apply default subscription settings for user with uuid ${invitee.uuid}`)
     }

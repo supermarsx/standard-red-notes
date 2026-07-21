@@ -207,9 +207,25 @@ describe('GetSessionFromToken', () => {
     const result2 = await createUseCase().execute({
       authTokenFromHeaders: '2:00000000-0000-0000-0000-000000000000',
       authCookies: new Map([]),
-      requestMetadata: { url: '/foobar', method: 'GET' },
+      requestMetadata: { url: '/foobar', method: 'GET', secChUa: 'Chromium;v=124' },
     })
     expect(result2.isFailed()).toBeTruthy()
+    expect(logger.error).toHaveBeenCalledWith(
+      'No cookies provided for cookie-based session token.',
+      expect.objectContaining({ userAgent: 'Chrome', secChUa: 'Chromium;v=124' }),
+    )
+
+    existingSession.userAgent = undefined as unknown as string
+    const result3 = await createUseCase().execute({
+      authTokenFromHeaders: '2:00000000-0000-0000-0000-000000000000',
+      authCookies: new Map([]),
+      requestMetadata: { url: '/foobar', method: 'GET', secChUa: 'Chromium;v=124' },
+    })
+    expect(result3.isFailed()).toBeTruthy()
+    expect(logger.error).toHaveBeenCalledWith(
+      'No cookies provided for cookie-based session token.',
+      expect.objectContaining({ userAgent: undefined, secChUa: undefined }),
+    )
   })
 
   it('should retrieve an ephemeral session from a session token', async () => {
@@ -242,6 +258,18 @@ describe('GetSessionFromToken', () => {
       requestMetadata: { url: '/foobar', method: 'GET' },
     })
     expect(result.isFailed()).toBeTruthy()
+  })
+
+  it('should not retrieve a session from a token whose version matches neither the header nor the cookie scheme', async () => {
+    const result = await createUseCase().execute({
+      authTokenFromHeaders: '9:2:3',
+      requestMetadata: { url: '/foobar', method: 'GET' },
+    })
+
+    expect(result.isFailed()).toBeTruthy()
+    expect(result.getError()).toEqual('Invalid token')
+    expect(sessionRepository.findOneByUuid).not.toHaveBeenCalled()
+    expect(sessionRepository.findOneByPrivateIdentifier).not.toHaveBeenCalled()
   })
 
   it('should not retrieve a session that is missing', async () => {

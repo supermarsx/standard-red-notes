@@ -77,7 +77,6 @@ export class UpdateStorageQuotaUsedForUser implements UseCaseInterface<void> {
       value: bytesUsedValue.toString(),
     })
 
-    /* istanbul ignore next */
     if (result.isFailed()) {
       this.logger.error(`Could not set file upload bytes used for subscription ${subscription.uuid}`)
     }
