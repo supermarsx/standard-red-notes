@@ -202,6 +202,66 @@ describe('AuthenticateUser', () => {
     expect(response.failureType).toEqual('COOLEDDOWN_TOKEN')
   })
 
+  it('should omit the client hint from the cooldown warning when the session has no user agent', async () => {
+    user.uuid = '1-2-3'
+    user.supportsSessions = jest.fn().mockReturnValue(true)
+    session.uuid = '2-3-4'
+    session.userAgent = undefined as unknown as string
+
+    authenticationMethodResolver.resolve = jest.fn().mockReturnValue({
+      type: 'session_token',
+      session,
+      user,
+      givenTokensWereInCooldown: true,
+    })
+
+    await createUseCase().execute({
+      authTokenFromHeaders: 'test',
+      requestMetadata: { url: '/foobar', method: 'GET', secChUa: 'Chromium;v=124' },
+    })
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      'Request was authenticated with tokens that were in cooldown.',
+      expect.objectContaining({ userAgent: undefined, secChUa: undefined }),
+    )
+  })
+
+  it('should include the client hint in the cooldown warning when the session has a user agent', async () => {
+    user.uuid = '1-2-3'
+    user.supportsSessions = jest.fn().mockReturnValue(true)
+    session.uuid = '2-3-4'
+    session.userAgent = 'Mozilla/5.0'
+
+    authenticationMethodResolver.resolve = jest.fn().mockReturnValue({
+      type: 'session_token',
+      session,
+      user,
+      givenTokensWereInCooldown: true,
+    })
+
+    await createUseCase().execute({
+      authTokenFromHeaders: 'test',
+      requestMetadata: {
+        url: '/foobar',
+        method: 'GET',
+        secChUa: 'Chromium;v=124',
+        snjs: '2.0.0',
+        application: 'web',
+      },
+    })
+
+    expect(logger.warn).toHaveBeenCalledWith('Request was authenticated with tokens that were in cooldown.', {
+      userId: '1-2-3',
+      sessionUuid: '2-3-4',
+      snjs: '2.0.0',
+      application: 'web',
+      url: '/foobar',
+      method: 'GET',
+      userAgent: 'Mozilla/5.0',
+      secChUa: 'Chromium;v=124',
+    })
+  })
+
   it('should not authenticate a user from a session token if session is expired', async () => {
     timer.getUTCDate = jest.fn().mockReturnValue(new Date(200))
     user.supportsSessions = jest.fn().mockReturnValue(true)
