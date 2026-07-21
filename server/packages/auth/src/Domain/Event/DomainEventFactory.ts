@@ -1,5 +1,3 @@
-/* istanbul ignore file */
-
 import { ProtocolVersion } from '@standardnotes/common'
 import {
   AccountDeletionRequestedEvent,
