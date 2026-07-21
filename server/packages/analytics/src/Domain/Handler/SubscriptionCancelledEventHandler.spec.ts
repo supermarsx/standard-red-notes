@@ -93,7 +93,11 @@ describe('SubscriptionCancelledEventHandler', () => {
   it('marks the subscription-cancelled activity for today, this week and this month', async () => {
     await createHandler().handle(createEvent())
 
-    expect(analyticsStore.markActivity).toHaveBeenCalledWith([AnalyticsActivity.SubscriptionCancelled], 123, ALL_PERIODS)
+    expect(analyticsStore.markActivity).toHaveBeenCalledWith(
+      [AnalyticsActivity.SubscriptionCancelled],
+      123,
+      ALL_PERIODS,
+    )
   })
 
   it('records the subscription length as the time between creation and cancellation', async () => {

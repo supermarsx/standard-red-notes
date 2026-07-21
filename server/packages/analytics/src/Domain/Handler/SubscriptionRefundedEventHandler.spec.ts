@@ -109,7 +109,9 @@ describe('SubscriptionRefundedEventHandler', () => {
     await createHandler().handle(createEvent({ userExistingSubscriptionsCount: 2 }))
 
     for (const period of [Period.ThisMonth, Period.ThisWeek, Period.Today]) {
-      expect(analyticsStore.markActivity).toHaveBeenCalledWith([AnalyticsActivity.ExistingCustomersChurn], 123, [period])
+      expect(analyticsStore.markActivity).toHaveBeenCalledWith([AnalyticsActivity.ExistingCustomersChurn], 123, [
+        period,
+      ])
     }
   })
 

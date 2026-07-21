@@ -114,11 +114,9 @@ describe('SubscriptionPurchasedEventHandler', () => {
   it('marks the limited-discount activity for today only when the offer was purchased', async () => {
     await createHandler().handle(createEvent({ limitedDiscountPurchased: true }))
 
-    expect(analyticsStore.markActivity).toHaveBeenCalledWith(
-      [AnalyticsActivity.LimitedDiscountOfferPurchased],
-      123,
-      [Period.Today],
-    )
+    expect(analyticsStore.markActivity).toHaveBeenCalledWith([AnalyticsActivity.LimitedDiscountOfferPurchased], 123, [
+      Period.Today,
+    ])
   })
 
   it('does not mark the limited-discount activity when the offer was not purchased', async () => {

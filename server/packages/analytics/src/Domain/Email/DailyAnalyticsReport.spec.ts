@@ -21,9 +21,7 @@ describe('DailyAnalyticsReport', () => {
     jest.useFakeTimers().setSystemTime(new Date('2023-04-05T12:00:00.000Z'))
     const now = new Date()
 
-    expect(getSubject()).toEqual(
-      `Daily analytics report ${now.getMonth() + 1}/${now.getDate()}/${now.getFullYear()}`,
-    )
+    expect(getSubject()).toEqual(`Daily analytics report ${now.getMonth() + 1}/${now.getDate()}/${now.getFullYear()}`)
 
     jest.useRealTimers()
   })

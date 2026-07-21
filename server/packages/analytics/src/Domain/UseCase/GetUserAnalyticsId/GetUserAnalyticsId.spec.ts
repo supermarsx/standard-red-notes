@@ -31,6 +31,14 @@ describe('GetUserAnalyticsId', () => {
     expect((await createUseCase().execute({ userEmail: 'test@test.te' })).getValue().analyticsId).toEqual(123)
   })
 
+  it('should fail without querying when neither a uuid nor an email is given', async () => {
+    const result = await createUseCase().execute({})
+
+    expect(result.isFailed()).toEqual(true)
+    expect(analyticsEntityRepository.findOneByUserUuid).not.toHaveBeenCalled()
+    expect(analyticsEntityRepository.findOneByUserEmail).not.toHaveBeenCalled()
+  })
+
   it('should throw error if user is missing analytics entity', async () => {
     analyticsEntityRepository.findOneByUserUuid = jest.fn().mockReturnValue(null)
 

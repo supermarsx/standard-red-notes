@@ -3,5 +3,5 @@ const base = require('../../jest.config')
 
 module.exports = {
   ...base,
-  coveragePathIgnorePatterns: ['/Infra/', '/Domain/Email/', '/Handler/'],
+  collectCoverageFrom: ['src/**/*.ts', '!src/**/*.spec.ts'],
 }

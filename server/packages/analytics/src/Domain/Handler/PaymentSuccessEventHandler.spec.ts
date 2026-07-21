@@ -168,7 +168,11 @@ describe('PaymentSuccessEventHandler', () => {
       subscription_name: SubscriptionName.PlusPlan,
     })
     expect((mixpanelClient as Mixpanel).people.track_charge).toHaveBeenCalledWith('123', 12.5)
-    expect((mixpanelClient as Mixpanel).people.set).toHaveBeenCalledWith('123', 'subscription', SubscriptionName.PlusPlan)
+    expect((mixpanelClient as Mixpanel).people.set).toHaveBeenCalledWith(
+      '123',
+      'subscription',
+      SubscriptionName.PlusPlan,
+    )
   })
 
   it('does nothing when the user has no analytics id', async () => {

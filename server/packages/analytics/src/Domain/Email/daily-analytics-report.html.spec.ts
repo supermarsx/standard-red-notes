@@ -21,7 +21,11 @@ type ReportData = {
 const activeUserCounts = (values: number[]) =>
   values.map((totalCount, index) => ({ periodKey: `2023-1-${index + 1}`, totalCount }))
 
-const measure = (name: string, period: Period, values: { totalValue?: number; average?: number; increments?: number }) => ({
+const measure = (
+  name: string,
+  period: Period,
+  values: { totalValue?: number; average?: number; increments?: number },
+) => ({
   name,
   period,
   totalValue: 0,
@@ -98,7 +102,12 @@ const buildData = (): ReportData => {
       ],
     })
   }
-  for (const [quarterIndex, quarter] of [Period.Q1ThisYear, Period.Q2ThisYear, Period.Q3ThisYear, Period.Q4ThisYear].entries()) {
+  for (const [quarterIndex, quarter] of [
+    Period.Q1ThisYear,
+    Period.Q2ThisYear,
+    Period.Q3ThisYear,
+    Period.Q4ThisYear,
+  ].entries()) {
     activityStatisticsOverTime.push(
       { name: AnalyticsActivity.Register, period: quarter, totalCount: 1000 + quarterIndex },
       { name: AnalyticsActivity.SubscriptionPurchased, period: quarter, totalCount: 2000 + quarterIndex },
@@ -307,9 +316,9 @@ describe('daily-analytics-report html', () => {
   })
 
   it('falls back to zero for a quarter with no recorded activity', () => {
-    data.activityStatisticsOverTime = (
-      data.activityStatisticsOverTime as { period: Period }[]
-    ).filter((entry) => entry.period !== Period.Q3ThisYear)
+    data.activityStatisticsOverTime = (data.activityStatisticsOverTime as { period: Period }[]).filter(
+      (entry) => entry.period !== Period.Q3ThisYear,
+    )
 
     const config = chartConfigFrom(html(data, timer), 4)
 
@@ -338,8 +347,7 @@ describe('daily-analytics-report html', () => {
 
   it('treats a missing income or refund measure as zero revenue', () => {
     data.statisticMeasures = (data.statisticMeasures as { name: string }[]).filter(
-      (entry) =>
-        entry.name !== StatisticMeasureName.NAMES.Income && entry.name !== StatisticMeasureName.NAMES.Refunds,
+      (entry) => entry.name !== StatisticMeasureName.NAMES.Income && entry.name !== StatisticMeasureName.NAMES.Refunds,
     )
 
     const report = html(data, timer)
