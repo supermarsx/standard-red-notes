@@ -5,6 +5,8 @@ import * as path from 'path'
 import { Request, Response } from 'express'
 import { getControllerMethodMetadata } from 'inversify-express-utils'
 
+import * as barrel from './index'
+
 /**
  * Standard Red Notes: cross-cutting checks over EVERY versioned route controller.
  *
@@ -96,7 +98,6 @@ const controllerModules = fs
 
 type RouteUnderTest = {
   controllerName: string
-  moduleName: string
   handlerName: string
   routePath: string
   routeGuarded: boolean
@@ -104,33 +105,46 @@ type RouteUnderTest = {
   ControllerClass: new (...args: never[]) => unknown
 }
 
-const routes: RouteUnderTest[] = []
+/**
+ * Whether each versioned controller class carries middleware on its `@controller`
+ * decorator: `@controller('/v1/messages', TYPES.X)` guards EVERY route on the
+ * controller, even routes that declare none of their own. Read from source
+ * because the decorator's middleware is not exposed on the runtime metadata.
+ * Keyed by class name, which is also what restricts the run below to the v1/v2
+ * controllers (the barrel also exports middlewares and root-level controllers).
+ */
+const controllerGuardedByClassName = new Map<string, boolean>()
 
 for (const moduleName of controllerModules) {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const moduleExports = require(path.join(controllerDir, moduleName)) as Record<string, unknown>
   const source = fs.readFileSync(path.join(controllerDir, `${moduleName}.ts`), 'utf-8')
 
-  // `@controller('/v1/messages', TYPES.X)` — a second argument means every route
-  // on the controller is guarded, even when the route itself declares none.
-  const controllerDecorator = /@controller\(\s*'[^']*'\s*(,[\s\S]*?)?\)\s*\nexport class/.exec(source)
-  const controllerGuarded = Boolean(controllerDecorator?.[1]?.trim())
+  for (const declaration of source.matchAll(/@controller\(\s*'[^']*'\s*(,[\s\S]*?)?\)\s*\nexport class (\w+)/g)) {
+    controllerGuardedByClassName.set(declaration[2], Boolean(declaration[1]?.trim()))
+  }
+}
 
-  for (const exported of Object.values(moduleExports)) {
-    if (typeof exported !== 'function') continue
+const routes: RouteUnderTest[] = []
 
-    const ControllerClass = exported as new (...args: never[]) => unknown
-    for (const route of getControllerMethodMetadata(ControllerClass as never)) {
-      routes.push({
-        controllerName: ControllerClass.name,
-        moduleName,
-        handlerName: String(route.key),
-        routePath: route.path,
-        routeGuarded: route.middleware.length > 0,
-        controllerGuarded,
-        ControllerClass,
-      })
-    }
+for (const exported of Object.values(barrel)) {
+  if (typeof exported !== 'function') {
+    continue
+  }
+
+  const ControllerClass = exported as unknown as new (...args: never[]) => unknown
+  const controllerGuarded = controllerGuardedByClassName.get(ControllerClass.name)
+  if (controllerGuarded === undefined) {
+    continue
+  }
+
+  for (const route of getControllerMethodMetadata(ControllerClass as never)) {
+    routes.push({
+      controllerName: ControllerClass.name,
+      handlerName: String(route.key),
+      routePath: route.path,
+      routeGuarded: route.middleware.length > 0,
+      controllerGuarded,
+      ControllerClass,
+    })
   }
 }
 

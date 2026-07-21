@@ -179,7 +179,9 @@ describe('AdminController auth-server pass-through routes', () => {
 
   it('every route named gateway-local really is answered without touching the auth server', async () => {
     for (const route of routeMetadata) {
-      if (!gatewayLocalHandlers.has(route.key as string)) continue
+      if (!gatewayLocalHandlers.has(route.key as string)) {
+        continue
+      }
 
       const { proxied } = await invoke(route.key as string, route.path as string)
 
