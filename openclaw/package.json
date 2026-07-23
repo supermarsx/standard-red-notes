@@ -52,7 +52,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.111.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "openai": "^6.47.0",
+    "openai": "^6.48.0",
     "toml": "^5.0.0",
     "zod": "^4.4.3"
   },
@@ -66,7 +66,7 @@
   "devDependencies": {
     "@types/node": "^26.1.1",
     "@vitest/coverage-v8": "^4.1.10",
-    "prettier": "^3.9.5",
+    "prettier": "^3.9.6",
     "tsx": "^4.23.1",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"
