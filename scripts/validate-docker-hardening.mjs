@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -48,6 +49,67 @@ function mountSource(volume) {
     return volume.split(":", 1)[0];
   }
   return volume?.source ?? "";
+}
+
+export function validateServerDockerfileContract(dockerfile) {
+  const errors = [];
+  const instructions = String(dockerfile)
+    .replace(/\\\r?\n/g, " ")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const finalStageStart = instructions.findLastIndex((instruction) =>
+    /^FROM(?:\s|$)/i.test(instruction),
+  );
+  const finalStage = instructions.slice(Math.max(0, finalStageStart));
+  const adminCliCopies = finalStage
+    .map((instruction, index) => ({ instruction, index }))
+    .filter(
+      ({ instruction }) =>
+        /^COPY(?:\s|$)/i.test(instruction) &&
+        /\bdocker\/srn-admin\.sh\b/i.test(instruction) &&
+        /\/usr\/local\/bin\/srn-admin\b/i.test(instruction),
+    );
+  const installedAdminCli = adminCliCopies.at(-1);
+  const installsAdminCli = installedAdminCli !== undefined;
+
+  let makesAdminCliExecutable = false;
+  if (installedAdminCli !== undefined) {
+    const copyMode = /--chmod=0?[0-7]{2}[1357](?:\s|$)/i.test(
+      installedAdminCli.instruction,
+    );
+    const nextUser = finalStage.findIndex(
+      (instruction, index) =>
+        index > installedAdminCli.index && /^USER(?:\s|$)/i.test(instruction),
+    );
+    const beforeUser =
+      nextUser === -1
+        ? finalStage.slice(installedAdminCli.index + 1)
+        : finalStage.slice(installedAdminCli.index + 1, nextUser);
+    const chmodsAdminCli = beforeUser.some((instruction) =>
+      [...instruction.matchAll(/\bchmod\s+(\S+)\s+([^;&|]+)/gi)].some(
+        ([, mode, targets]) =>
+          (/^(?:\+x|a\+x|ugo\+x)$/i.test(mode) ||
+            /^0?[0-7]{2}[1357]$/.test(mode)) &&
+          targets.trim().split(/\s+/).includes("/usr/local/bin/srn-admin"),
+      ),
+    );
+    makesAdminCliExecutable = copyMode || chmodsAdminCli;
+  }
+
+  if (!installsAdminCli) {
+    errors.push(
+      "server Dockerfile: must install docker/srn-admin.sh as /usr/local/bin/srn-admin",
+    );
+  }
+  if (!makesAdminCliExecutable) {
+    errors.push(
+      "server Dockerfile: /usr/local/bin/srn-admin must be executable",
+    );
+  }
+
+  return errors;
 }
 
 export function validateComposeHardening(config) {
@@ -204,8 +266,13 @@ export function runDockerHardeningValidation(argv = process.argv.slice(2)) {
     return { composeServices: 0, images: 0, containers: 0 };
   }
 
-  const errors = validateComposeHardening(
-    dockerJson(["compose", "config", "--format", "json"]),
+  const errors = validateServerDockerfileContract(
+    readFileSync(path.join(repositoryRoot, "server", "Dockerfile"), "utf8"),
+  );
+  errors.push(
+    ...validateComposeHardening(
+      dockerJson(["compose", "config", "--format", "json"]),
+    ),
   );
 
   for (const [service, image] of args.images) {

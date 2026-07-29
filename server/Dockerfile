@@ -99,7 +99,7 @@ RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh /usr/local/bin/srn-admi
   && find /opt/server -path '*/supervisor/*.sh' -exec sed -i 's/\r$//' {} + \
   && find /opt/server/docker -name '*.sh' -exec sed -i 's/\r$//' {} + \
   && mkdir -p /var/lib/server/logs /opt/shared/uploads \
-  && chmod +x /usr/local/bin/docker-entrypoint.sh \
+  && chmod +x /usr/local/bin/docker-entrypoint.sh /usr/local/bin/srn-admin \
   && find /opt/server -path '*/supervisor/*.sh' -exec chmod +x {} + \
   && addgroup -g 10001 -S srn \
   && adduser -u 10001 -S srn -G srn \

@@ -6,6 +6,7 @@ import {
   validateComposeHardening,
   validateContainerHardening,
   validateImageHardening,
+  validateServerDockerfileContract,
 } from "./validate-docker-hardening.mjs";
 
 function composeFixture() {
@@ -42,6 +43,63 @@ function containerFixture(user = "srn:srn") {
     State: { Health: { Status: "healthy" } },
   };
 }
+
+test("accepts an installed executable srn-admin wrapper", () => {
+  assert.deepEqual(
+    validateServerDockerfileContract(`
+      FROM node:26-alpine AS build
+      RUN chmod +x /usr/local/bin/srn-admin
+      FROM node:26-alpine AS runtime
+      COPY docker/srn-admin.sh /usr/local/bin/srn-admin
+      RUN chmod +x /usr/local/bin/docker-entrypoint.sh \\
+        /usr/local/bin/srn-admin
+      USER srn:srn
+    `),
+    [],
+  );
+  assert.deepEqual(
+    validateServerDockerfileContract(`
+      FROM node:26-alpine
+      COPY --chmod=0755 docker/srn-admin.sh /usr/local/bin/srn-admin
+      USER srn:srn
+    `),
+    [],
+  );
+});
+
+test("rejects a missing or non-executable srn-admin wrapper", () => {
+  assert.deepEqual(validateServerDockerfileContract("FROM node:26-alpine"), [
+    "server Dockerfile: must install docker/srn-admin.sh as /usr/local/bin/srn-admin",
+    "server Dockerfile: /usr/local/bin/srn-admin must be executable",
+  ]);
+  assert.deepEqual(
+    validateServerDockerfileContract(`
+      COPY docker/srn-admin.sh /usr/local/bin/srn-admin
+      RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+    `),
+    ["server Dockerfile: /usr/local/bin/srn-admin must be executable"],
+  );
+  assert.deepEqual(
+    validateServerDockerfileContract(`
+      FROM node:26-alpine
+      RUN chmod +x /usr/local/bin/srn-admin
+      COPY docker/srn-admin.sh /usr/local/bin/srn-admin
+      USER srn:srn
+    `),
+    ["server Dockerfile: /usr/local/bin/srn-admin must be executable"],
+  );
+  assert.deepEqual(
+    validateServerDockerfileContract(`
+      FROM node:26-alpine AS build
+      COPY --chmod=0755 docker/srn-admin.sh /usr/local/bin/srn-admin
+      FROM node:26-alpine AS runtime
+    `),
+    [
+      "server Dockerfile: must install docker/srn-admin.sh as /usr/local/bin/srn-admin",
+      "server Dockerfile: /usr/local/bin/srn-admin must be executable",
+    ],
+  );
+});
 
 test("accepts the hardened default Compose shape", () => {
   assert.deepEqual(validateComposeHardening(composeFixture()), []);
@@ -200,7 +258,9 @@ test("treats a blank, zero or 0:0 image user as root", () => {
 test("rejects an image whose healthcheck test list is empty or not a list", () => {
   for (const healthcheck of [{ Test: [] }, { Test: "CMD true" }, undefined]) {
     assert.deepEqual(
-      validateImageHardening("db", { Config: { User: "srn", Healthcheck: healthcheck } }),
+      validateImageHardening("db", {
+        Config: { User: "srn", Healthcheck: healthcheck },
+      }),
       ["image db: healthcheck is missing"],
     );
   }
