@@ -2,22 +2,23 @@ import { test, expect } from '@playwright/test'
 import { waitForApplicationReady } from '../helpers/stress'
 
 /**
- * REGRESSION GATE: "second-level ordered-list markers must INCREMENT, not repeat
- * the first glyph."
+ * REGRESSION GATE: "second-level ordered-list markers must count independently
+ * of level 1 and continue exactly a..f / 1..6 across split nested blocks."
  *
  * BUG: In the Super (Lexical) editor a custom parenthesized number style
- * (`a) b) c)` = lower-alpha-paren, `1) 2) 3)` = decimal-paren) renders the
- * second level as "a) a) a)" instead of "a) b) c)" whenever that level is split
- * across more than one nested `<ol>` (which @lexical/list produces for
- * non-contiguous nested groups). Root cause: `lists.scss` put
- * `counter-reset: sn-list-counter` on the list ELEMENT, so each nested same-class
- * `<ol>` re-resets the counter and restarts at the first glyph.
+ * (`a) b) c)` = lower-alpha-paren, `1) 2) 3)` = decimal-paren) can render one
+ * visual level as several nested `<ol>` blocks (which @lexical/list produces for
+ * non-contiguous nested groups). Resetting on every `<ol>` makes each block
+ * restart at a); removing nested resets but sharing one counter makes parent
+ * items consume the sequence, yielding c,d,e / h,i,j. The correct model is one
+ * continuous counter per visual nesting depth.
  *
  * getComputedStyle can't resolve native `::marker` glyphs (returns `normal`) nor
  * custom counter `::before` content (returns the literal `counter(...)` /
  * `counters(...)` expression), so this spec reads markers VISUALLY: it crops a
- * thin strip over each second-level `<li>`'s marker and fingerprints the pixels.
- * Distinct fingerprints == distinct glyphs (incrementing); identical == repeated.
+ * marker-only strip and fingerprints the pixels. For custom counters it then
+ * re-renders the same real `::before` box with exact reference strings, proving
+ * the resolved sequence rather than merely counting distinct glyphs.
  *
  * CSS counters/::marker do not render in jsdom, so this can only be verified in a
  * real browser — hence an e2e, not a jest unit test.
@@ -32,6 +33,8 @@ import { waitForApplicationReady } from '../helpers/stress'
 
 const APP_SHELL = '.main-ui-view, #footer-bar'
 const SUPER_EDITABLE = '#super-editor-content'
+const MARKER_REFERENCE_STYLE_ID = 'e2e-super-list-marker-reference'
+type ParenthesizedMarker = 'lower-alpha-paren' | 'decimal-paren'
 
 async function createAndOpenSuperNote(page: import('@playwright/test').Page): Promise<void> {
   await page.evaluate(async () => {
@@ -57,11 +60,15 @@ async function createAndOpenSuperNote(page: import('@playwright/test').Page): Pr
  *  - `twoBlocks`: the second level split across TWO sibling nested `<ol>`s (under
  *    top items 2 and 4), 6 items total — the shape that triggers the restart bug.
  */
-async function buildTwoLevelOrderedList(
+async function buildTwoLevelList(
   page: import('@playwright/test').Page,
   twoBlocks: boolean,
+  marker?: ParenthesizedMarker,
+  mixedTags = false,
 ): Promise<void> {
-  await page.evaluate((flag) => {
+  const options: [boolean, ParenthesizedMarker | undefined, boolean] = [twoBlocks, marker, mixedTags]
+  await page.evaluate((options) => {
+    const [flag, markerValue, mixed] = options
     /* eslint-disable @typescript-eslint/no-explicit-any */
     const el = document.getElementById('super-editor-content') as any
     const editor = el?.__lexicalEditor
@@ -85,47 +92,66 @@ async function buildTwoLevelOrderedList(
       version: 1,
       value,
     })
-    const orderedList = (children: any[]) => ({
+    const list = (children: any[], tag: 'ol' | 'ul') => ({
       children,
       direction: 'ltr',
       format: '',
       indent: 0,
       type: 'list',
       version: 1,
-      listType: 'number',
+      listType: tag === 'ol' ? 'number' : 'bullet',
       start: 1,
-      tag: 'ol',
+      tag,
     })
 
-    const nestedA = orderedList([
-      listItem([textNode('alpha')], 1),
-      listItem([textNode('beta')], 2),
-      listItem([textNode('gamma')], 3),
-    ])
+    const nestedTag = 'ol'
+    const topTag = mixed ? 'ul' : 'ol'
+    const nestedA = list(
+      [listItem([textNode('alpha')], 1), listItem([textNode('beta')], 2), listItem([textNode('gamma')], 3)],
+      nestedTag,
+    )
     const top = flag
-      ? orderedList([
-          listItem([textNode('first')], 1),
-          listItem([nestedA], 2),
-          listItem([textNode('third')], 3),
-          listItem(
-            [
-              orderedList([
-                listItem([textNode('delta')], 1),
-                listItem([textNode('epsilon')], 2),
-                listItem([textNode('zeta')], 3),
-              ]),
-            ],
-            4,
-          ),
-        ])
-      : orderedList([listItem([textNode('first')], 1), listItem([nestedA], 2)])
+      ? list(
+          [
+            listItem([textNode('first')], 1),
+            listItem([nestedA], 2),
+            listItem([textNode('third')], 3),
+            listItem(
+              [
+                list(
+                  [
+                    listItem([textNode('delta')], 1),
+                    listItem([textNode('epsilon')], 2),
+                    listItem([textNode('zeta')], 3),
+                  ],
+                  nestedTag,
+                ),
+              ],
+              4,
+            ),
+          ],
+          topTag,
+        )
+      : list([listItem([textNode('first')], 1), listItem([nestedA], 2)], topTag)
 
     const state = {
       root: { children: [top], direction: 'ltr', format: '', indent: 0, type: 'root', version: 1 },
     }
     editor.setEditorState(editor.parseEditorState(JSON.stringify(state)))
+    if (markerValue) {
+      editor.update(
+        () => {
+          for (const node of (editor as any)._pendingEditorState._nodeMap.values()) {
+            if (node.getType?.() === 'list' && node.getParent?.()?.getType?.() === 'root') {
+              node.getWritable().setStyle(`--sn-list-levels: 1=${markerValue},2=${markerValue}`)
+            }
+          }
+        },
+        { discrete: true },
+      )
+    }
     /* eslint-enable @typescript-eslint/no-explicit-any */
-  }, twoBlocks)
+  }, options)
   // Give the ListStylePlugin mutation listener a tick to stamp the rendered lists.
   await page.waitForTimeout(200)
 }
@@ -138,8 +164,8 @@ async function fingerprintNestedMarkers(page: import('@playwright/test').Page): 
   const boxes = await page.evaluate(() => {
     const root = document.getElementById('super-editor-content')!
     const items: HTMLElement[] = []
-    for (const ol of Array.from(root.querySelectorAll('ol ol')) as HTMLElement[]) {
-      for (const c of Array.from(ol.children)) {
+    for (const list of Array.from(root.querySelectorAll('ol ol, ol ul, ul ol, ul ul')) as HTMLElement[]) {
+      for (const c of Array.from(list.children)) {
         if (c.tagName === 'LI') items.push(c as HTMLElement)
       }
     }
@@ -157,24 +183,90 @@ async function fingerprintNestedMarkers(page: import('@playwright/test').Page): 
   return shots
 }
 
-/** Stamp (or clear) a marker class on EVERY `<ol>` in the editor (whole-list apply). */
-async function setAllOrderedListClass(
+/** Compare resolved custom-counter glyphs against exact text rendered in the same boxes. */
+async function expectNestedMarkerSequence(
   page: import('@playwright/test').Page,
-  cls: string | null,
+  expectedMarkers: string[],
 ): Promise<void> {
-  await page.evaluate((c) => {
-    const root = document.getElementById('super-editor-content')!
-    for (const ol of Array.from(root.querySelectorAll('ol')) as HTMLElement[]) {
-      ol.className = ol.className.replace(/\bLexical__listStyle--\S+/g, '').trim()
-      ol.style.removeProperty('list-style-type')
-      if (c) {
-        ol.classList.add(c)
-        ol.style.listStyleType = 'none'
+  const rendered = await fingerprintNestedMarkers(page)
+  expect(rendered.length, `${expectedMarkers.length} nested marker screenshots`).toBe(expectedMarkers.length)
+  const referenceOptions: [string[], string] = [expectedMarkers, MARKER_REFERENCE_STYLE_ID]
+  try {
+    await page.evaluate((options) => {
+      const [markers, styleId] = options
+      const items = Array.from(
+        document.querySelectorAll('#super-editor-content :is(ol, ul) :is(ol, ul) > li'),
+      ) as HTMLElement[]
+      if (items.length !== markers.length) {
+        throw new Error(`Expected ${markers.length} nested marker references, found ${items.length} list items`)
       }
-      void ol.offsetHeight
-    }
-  }, cls)
-  await page.waitForTimeout(50)
+      const style = document.createElement('style')
+      style.id = styleId
+      style.textContent = `
+        #super-editor-content :is(ol, ul) :is(ol, ul) > li[data-e2e-marker-reference]::before {
+          content: attr(data-e2e-marker-reference) !important;
+        }
+      `
+      document.head.append(style)
+      items.forEach((item, index) => item.setAttribute('data-e2e-marker-reference', markers[index]))
+    }, referenceOptions)
+    expect(rendered, `resolved markers must be exactly ${expectedMarkers.join(', ')}`).toEqual(
+      await fingerprintNestedMarkers(page),
+    )
+  } finally {
+    await page.evaluate((styleId) => {
+      const root = document.getElementById('super-editor-content')
+      for (const item of Array.from(root?.querySelectorAll('[data-e2e-marker-reference]') ?? [])) {
+        item.removeAttribute('data-e2e-marker-reference')
+      }
+      document.getElementById(styleId)?.remove()
+    }, MARKER_REFERENCE_STYLE_ID)
+  }
+}
+
+/** Verify persisted multilevel styling survives a real Lexical reconciliation. */
+async function expectPersistedMarker(
+  page: import('@playwright/test').Page,
+  marker: ParenthesizedMarker,
+): Promise<void> {
+  const className = `Lexical__listStyle--${marker}`
+  const allListsAreStamped = (expectedClass: string) => {
+    const lists = Array.from(document.querySelectorAll('#super-editor-content ol, #super-editor-content ul'))
+    return (
+      lists.length > 1 &&
+      lists.every(
+        (list) => list.classList.contains(expectedClass) && (list as HTMLElement).style.listStyleType === 'none',
+      )
+    )
+  }
+  await page.waitForFunction(allListsAreStamped, className)
+
+  const persisted = await page.evaluate((expectedMarker) => {
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    const el = document.getElementById('super-editor-content') as any
+    const editor = el?.__lexicalEditor
+    if (!editor) throw new Error('__lexicalEditor not found on #super-editor-content')
+    let topStyle = ''
+    editor.getEditorState().read(() => {
+      for (const node of (editor.getEditorState() as any)._nodeMap.values()) {
+        if (node.getType?.() === 'list' && node.getParent?.()?.getType?.() === 'root') {
+          topStyle = node.getStyle?.() ?? ''
+        }
+      }
+    })
+    editor.update(
+      () => {
+        for (const node of (editor as any)._pendingEditorState._nodeMap.values()) {
+          if (node.getType?.() === 'list') node.getWritable()
+        }
+      },
+      { discrete: true },
+    )
+    return topStyle.includes(`--sn-list-levels: 1=${expectedMarker},2=${expectedMarker}`)
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+  }, marker)
+  expect(persisted, 'multilevel marker map persisted on the outer ListNode').toBe(true)
+  await page.waitForFunction(allListsAreStamped, className)
 }
 
 async function openEditorWithList(page: import('@playwright/test').Page, twoBlocks: boolean): Promise<void> {
@@ -189,7 +281,7 @@ async function openEditorWithList(page: import('@playwright/test').Page, twoBloc
   }
   await editable.waitFor({ state: 'visible', timeout: 20_000 })
   await editable.click()
-  await buildTwoLevelOrderedList(page, twoBlocks)
+  await buildTwoLevelList(page, twoBlocks)
 }
 
 test.describe('Super editor 2-level ordered-list numbering', () => {
@@ -197,60 +289,35 @@ test.describe('Super editor 2-level ordered-list numbering', () => {
     await openEditorWithList(page, false)
 
     // (a) NATIVE upper-alpha (default .Lexical__ol2) — leave classes as rendered.
-    await setAllOrderedListClass(page, null)
     const native = await fingerprintNestedMarkers(page)
 
-    // (b) custom paren + legal, applied to the whole list.
-    await setAllOrderedListClass(page, 'Lexical__listStyle--lower-alpha-paren')
-    const lowerAlphaParen = await fingerprintNestedMarkers(page)
-    await setAllOrderedListClass(page, 'Lexical__listStyle--decimal-paren')
-    const decimalParen = await fingerprintNestedMarkers(page)
-    await setAllOrderedListClass(page, 'Lexical__listStyle--legal')
-    const legal = await fingerprintNestedMarkers(page)
-
-    // eslint-disable-next-line no-console
-    console.log(
-      'SINGLE-BLOCK distinct:',
-      JSON.stringify({
-        native: new Set(native).size,
-        lowerAlphaParen: new Set(lowerAlphaParen).size,
-        decimalParen: new Set(decimalParen).size,
-        legal: new Set(legal).size,
-      }),
-    )
+    // (b) custom paren styles, persisted as a multilevel map on the outer ListNode.
+    await buildTwoLevelList(page, false, 'lower-alpha-paren')
+    await expectPersistedMarker(page, 'lower-alpha-paren')
+    await expectNestedMarkerSequence(page, ['a) ', 'b) ', 'c) '])
+    await buildTwoLevelList(page, false, 'decimal-paren')
+    await expectPersistedMarker(page, 'decimal-paren')
+    await expectNestedMarkerSequence(page, ['1) ', '2) ', '3) '])
 
     expect(native.length, 'three nested second-level items').toBe(3)
     expect(new Set(native).size, 'native upper-alpha increments (A,B,C)').toBe(3)
-    expect(new Set(lowerAlphaParen).size, 'lower-alpha-paren increments (a),b),c))').toBe(3)
-    expect(new Set(decimalParen).size, 'decimal-paren increments (1),2),3))').toBe(3)
-    expect(new Set(legal).size, 'legal increments').toBe(3)
   })
 
   test('a paren second level split across nested <ol>s continues, not restarts (the A,A,A bug)', async ({ page }) => {
     await openEditorWithList(page, true)
 
     // Apply the paren style to the WHOLE list (top + every nested <ol>), the way a
-    // user picks "a) b) c)" for the list. The top <ol> establishes the counter; if
-    // the nested <ol>s re-reset it (the bug), block 2 restarts at a) and the 6
-    // markers collapse to 3 distinct. The fix keeps one shared counter -> 6 distinct
-    // (a,b,c,d,e,f).
-    await setAllOrderedListClass(page, 'Lexical__listStyle--lower-alpha-paren')
-    const lowerAlphaParen = await fingerprintNestedMarkers(page)
-    await setAllOrderedListClass(page, 'Lexical__listStyle--decimal-paren')
-    const decimalParen = await fingerprintNestedMarkers(page)
-
-    // eslint-disable-next-line no-console
-    console.log(
-      'SPLIT-LEVEL distinct (want 6 = continuous; 3 = restarted/A,A,A):',
-      JSON.stringify({
-        items: lowerAlphaParen.length,
-        lowerAlphaParen: new Set(lowerAlphaParen).size,
-        decimalParen: new Set(decimalParen).size,
-      }),
-    )
-
-    expect(lowerAlphaParen.length, 'six nested items across two blocks').toBe(6)
-    expect(new Set(lowerAlphaParen).size, 'lower-alpha-paren must continue across blocks (a..f), not restart').toBe(6)
-    expect(new Set(decimalParen).size, 'decimal-paren must continue across blocks (1..6), not restart').toBe(6)
+    // user picks "a) b) c)" for the list. The top <ol> establishes independent
+    // counters for each visual depth; both nested <ol>s increment level 2's
+    // counter, while level-1 items cannot consume it. The exact result is a..f.
+    await buildTwoLevelList(page, true, 'lower-alpha-paren')
+    await expectPersistedMarker(page, 'lower-alpha-paren')
+    await expectNestedMarkerSequence(page, ['a) ', 'b) ', 'c) ', 'd) ', 'e) ', 'f) '])
+    await buildTwoLevelList(page, true, 'decimal-paren')
+    await expectPersistedMarker(page, 'decimal-paren')
+    await expectNestedMarkerSequence(page, ['1) ', '2) ', '3) ', '4) ', '5) ', '6) '])
+    await buildTwoLevelList(page, true, 'lower-alpha-paren', true)
+    await expectPersistedMarker(page, 'lower-alpha-paren')
+    await expectNestedMarkerSequence(page, ['a) ', 'b) ', 'c) ', 'd) ', 'e) ', 'f) '])
   })
 })

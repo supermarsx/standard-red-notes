@@ -206,15 +206,13 @@
 
 /**
  * Parenthesized + legal numbering: CSS counters so the suffix renders correctly.
- * Each list item gets a counter; `list-style: none` hides the native marker.
+ * `list-style: none` hides the native marker while `::before` draws the glyph.
  */
 .Lexical__listStyle--lower-alpha-paren,
 .Lexical__listStyle--decimal-paren,
 .Lexical__listStyle--legal {
   list-style-type: none;
-  counter-reset: sn-list-counter;
   & > li {
-    counter-increment: sn-list-counter;
     position: relative;
   }
   & > li::marker {
@@ -227,27 +225,56 @@
     width: 1.4em;
   }
 }
+
 /**
- * NESTING SAFETY (the "a) a) a)" / "A A A" bug). `counter-reset: sn-list-counter`
- * above creates a FRESH counter scoped to every element that carries the class —
- * so when @lexical/list renders a second-level group as more than one nested
- * `<ol>` (each nested list lives inside its own `.Lexical__nestedListItem`), the
- * second nested `<ol>` re-resets the counter and its items RESTART at the first
- * glyph instead of continuing. Suppress that re-reset on nested paren lists so
- * sibling nested `<ol>`s of the same level share ONE counter and increment
- * continuously, and read the value with `counters()` so a nested list still shows
- * the right glyph. `legal` already uses `counters()` and INTENTIONALLY keeps a
- * fresh reset per level for its dotted `1.1.1` chain, so it is excluded here.
+ * Parenthesized numbering is continuous PER VISUAL DEPTH. Lexical can represent
+ * one level as several nested sibling `<ol>` blocks, so resetting on each `<ol>`
+ * restarts every block. A single shared counter is also wrong: top-level items
+ * then consume the second-level sequence (c,d,e / h,i,j instead of a..f).
+ *
+ * Reset one counter per Lexical depth on the common outer list, then increment
+ * only the counter matching each list's structural nesting depth. Split blocks
+ * at the same depth therefore share a sequence, while parent/child depths stay
+ * isolated. This deliberately follows the DOM structure instead of
+ * `Lexical__olN`: numbered styles can be applied to `<ul>` nodes by the generic
+ * style picker or a mixed multilevel definition, and those only have
+ * `Lexical__ul`. Structural nested-list wrapper items are excluded so they do
+ * not consume a visible marker. The configurator exposes five visual depths, so
+ * mirror that range here.
  */
-.Lexical__nestedListItem > .Lexical__listStyle--lower-alpha-paren,
-.Lexical__nestedListItem > .Lexical__listStyle--decimal-paren {
-  counter-reset: none;
+$sn-list-depth-list: '.ContentEditable__root :is(ol, ul):not(.Lexical__nestedListItem > :is(ol, ul))';
+
+#{$sn-list-depth-list} {
+  counter-reset: sn-list-lower-alpha-paren-1 sn-list-lower-alpha-paren-2 sn-list-lower-alpha-paren-3
+    sn-list-lower-alpha-paren-4 sn-list-lower-alpha-paren-5 sn-list-decimal-paren-1 sn-list-decimal-paren-2
+    sn-list-decimal-paren-3 sn-list-decimal-paren-4 sn-list-decimal-paren-5 sn-list-counter;
 }
-.Lexical__listStyle--lower-alpha-paren > li::before {
-  content: counters(sn-list-counter, '', lower-alpha) ') ';
+
+@for $i from 1 through 5 {
+  #{$sn-list-depth-list}.Lexical__listStyle--lower-alpha-paren > li:not(.Lexical__nestedListItem) {
+    counter-increment: sn-list-lower-alpha-paren-#{$i};
+  }
+  #{$sn-list-depth-list}.Lexical__listStyle--lower-alpha-paren > li:not(.Lexical__nestedListItem)::before {
+    content: counter(sn-list-lower-alpha-paren-#{$i}, lower-alpha) ') ';
+  }
+  #{$sn-list-depth-list}.Lexical__listStyle--decimal-paren > li:not(.Lexical__nestedListItem) {
+    counter-increment: sn-list-decimal-paren-#{$i};
+  }
+  #{$sn-list-depth-list}.Lexical__listStyle--decimal-paren > li:not(.Lexical__nestedListItem)::before {
+    content: counter(sn-list-decimal-paren-#{$i}, decimal) ') ';
+  }
+  $sn-list-depth-list: '#{$sn-list-depth-list} > .Lexical__nestedListItem > :is(ol, ul)';
 }
-.Lexical__listStyle--decimal-paren > li::before {
-  content: counters(sn-list-counter, '', decimal) ') ';
+
+/**
+ * Legal numbering intentionally nests one same-named counter per level so
+ * `counters()` can render the full dotted chain.
+ */
+.Lexical__nestedListItem > .Lexical__listStyle--legal {
+  counter-reset: sn-list-counter;
+}
+.Lexical__listStyle--legal > li {
+  counter-increment: sn-list-counter;
 }
 .Lexical__listStyle--legal > li::before {
   content: counters(sn-list-counter, '.', decimal) ' ';
