@@ -46,17 +46,7 @@ export class SettingsGateway {
   }
 
   async getSetting(name: SettingName, serverPassword?: string): Promise<string | undefined> {
-    const response = await this.settingsApi.getSetting(this.userUuid, name.value, serverPassword)
-
-    if (response.status === HttpStatusCode.BadRequest) {
-      return undefined
-    }
-
-    if (isErrorResponse(response)) {
-      throw new Error(getErrorFromErrorResponse(response).message)
-    }
-
-    return response?.data?.setting?.value ?? undefined
+    return this.getRawSetting(name.value, serverPassword)
   }
 
   async getSubscriptionSetting(name: SettingName): Promise<string | undefined> {
@@ -89,7 +79,11 @@ export class SettingsGateway {
       throw new Error(`Setting ${name.value} is not sensitive`)
     }
 
-    const response = await this.settingsApi.getSetting(this.userUuid, name.value)
+    return this.getDoesRawSensitiveSettingExist(name.value)
+  }
+
+  async getDoesRawSensitiveSettingExist(settingName: string): Promise<boolean> {
+    const response = await this.settingsApi.getSetting(this.userUuid, settingName)
 
     if (response.status === HttpStatusCode.BadRequest) {
       return false
@@ -103,26 +97,20 @@ export class SettingsGateway {
   }
 
   async updateSetting(name: SettingName, payload: string, sensitive: boolean, totpToken?: string): Promise<void> {
-    const response = await this.settingsApi.updateSetting(this.userUuid, name.value, payload, sensitive, totpToken)
-    if (isErrorResponse(response)) {
-      throw new Error(getErrorFromErrorResponse(response).message)
-    }
+    return this.updateRawSetting(name.value, payload, sensitive, totpToken)
   }
 
   async deleteSetting(name: SettingName, serverPassword?: string): Promise<void> {
-    const response = await this.settingsApi.deleteSetting(this.userUuid, name.value, serverPassword)
-    if (isErrorResponse(response)) {
-      throw new Error(getErrorFromErrorResponse(response).message)
-    }
+    return this.deleteRawSetting(name.value, serverPassword)
   }
 
   /**
-   * Standard Red Notes: account-recovery escrow accessors. Addressed by raw
-   * setting name so they work regardless of whether the published client-side
-   * SettingName enum includes the name. The server validates the name.
+   * Addresses server-recognized settings by raw name when the published
+   * client-side SettingName enum does not yet include them. The server remains
+   * responsible for validating the name.
    */
-  async getRawSetting(settingName: string): Promise<string | undefined> {
-    const response = await this.settingsApi.getSetting(this.userUuid, settingName)
+  async getRawSetting(settingName: string, serverPassword?: string): Promise<string | undefined> {
+    const response = await this.settingsApi.getSetting(this.userUuid, settingName, serverPassword)
 
     if (response.status === HttpStatusCode.BadRequest) {
       return undefined
@@ -135,15 +123,15 @@ export class SettingsGateway {
     return response?.data?.setting?.value ?? undefined
   }
 
-  async updateRawSetting(settingName: string, payload: string, sensitive: boolean): Promise<void> {
-    const response = await this.settingsApi.updateSetting(this.userUuid, settingName, payload, sensitive)
+  async updateRawSetting(settingName: string, payload: string, sensitive: boolean, totpToken?: string): Promise<void> {
+    const response = await this.settingsApi.updateSetting(this.userUuid, settingName, payload, sensitive, totpToken)
     if (isErrorResponse(response)) {
       throw new Error(getErrorFromErrorResponse(response).message)
     }
   }
 
-  async deleteRawSetting(settingName: string): Promise<void> {
-    const response = await this.settingsApi.deleteSetting(this.userUuid, settingName)
+  async deleteRawSetting(settingName: string, serverPassword?: string): Promise<void> {
+    const response = await this.settingsApi.deleteSetting(this.userUuid, settingName, serverPassword)
     if (isErrorResponse(response)) {
       throw new Error(getErrorFromErrorResponse(response).message)
     }

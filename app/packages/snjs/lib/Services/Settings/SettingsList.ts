@@ -19,7 +19,15 @@ export class SettingsList {
   }
 
   getSettingValue<T = SettingType, D = SettingType>(settingName: SettingName, defaultValue: D): T {
-    const settingData = this.map[settingName.value]
+    return this.getRawSettingValue(settingName.value, defaultValue)
+  }
+
+  /**
+   * Reads a server-recognized setting whose name is not yet available in the
+   * client's published SettingName enum.
+   */
+  getRawSettingValue<T = SettingType, D = SettingType>(settingName: string, defaultValue: D): T {
+    const settingData = this.map[settingName]
     return (settingData?.value as unknown as T) || (defaultValue as unknown as T)
   }
 }

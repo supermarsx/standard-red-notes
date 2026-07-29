@@ -7,9 +7,15 @@ export interface SettingsClientInterface {
 
   getSetting(name: SettingName, serverPassword?: string): Promise<string | undefined>
 
+  getRawSetting(name: string, serverPassword?: string): Promise<string | undefined>
+
   getDoesSensitiveSettingExist(name: SettingName): Promise<boolean>
 
+  getDoesRawSensitiveSettingExist(name: string): Promise<boolean>
+
   updateSetting(name: SettingName, payload: string, sensitive?: boolean, totpToken?: string): Promise<void>
+
+  updateRawSetting(name: string, payload: string, sensitive?: boolean, totpToken?: string): Promise<void>
 
   deleteSetting(name: SettingName, serverPassword?: string): Promise<void>
 

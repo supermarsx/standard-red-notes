@@ -37,6 +37,10 @@ export class SettingsService extends AbstractService implements SettingsClientIn
     return this.provider.getSetting(name, serverPassword)
   }
 
+  async getRawSetting(name: string, serverPassword?: string) {
+    return this.provider.getRawSetting(name, serverPassword)
+  }
+
   async getSubscriptionSetting(name: SettingName) {
     return this.provider.getSubscriptionSetting(name)
   }
@@ -49,8 +53,16 @@ export class SettingsService extends AbstractService implements SettingsClientIn
     return this.provider.updateSetting(name, payload, sensitive, totpToken)
   }
 
+  async updateRawSetting(name: string, payload: string, sensitive = false, totpToken?: string) {
+    return this.provider.updateRawSetting(name, payload, sensitive, totpToken)
+  }
+
   async getDoesSensitiveSettingExist(name: SettingName) {
     return this.provider.getDoesSensitiveSettingExist(name)
+  }
+
+  async getDoesRawSensitiveSettingExist(name: string) {
+    return this.provider.getDoesRawSensitiveSettingExist(name)
   }
 
   async deleteSetting(name: SettingName, serverPassword?: string) {

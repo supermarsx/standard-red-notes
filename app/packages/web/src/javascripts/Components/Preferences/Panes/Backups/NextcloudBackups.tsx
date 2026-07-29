@@ -5,13 +5,13 @@ import { observer } from 'mobx-react-lite'
 import { Subtitle, Text, Title } from '@/Components/Preferences/PreferencesComponents/Content'
 import Dropdown from '@/Components/Dropdown/Dropdown'
 import { DropdownItem } from '@/Components/Dropdown/DropdownItem'
-import { SettingName } from '@standardnotes/snjs'
 import PreferencesGroup from '../../PreferencesComponents/PreferencesGroup'
 import PreferencesSegment from '../../PreferencesComponents/PreferencesSegment'
 import Spinner from '@/Components/Spinner/Spinner'
 import DecoratedInput from '@/Components/Input/DecoratedInput'
 import DecoratedPasswordInput from '@/Components/Input/DecoratedPasswordInput'
 import Button from '@/Components/Button/Button'
+import { NextcloudBackupSettingName } from './NextcloudBackupSettings'
 
 type Props = {
   application: WebApplication
@@ -59,27 +59,17 @@ const NextcloudBackups = ({ application }: Props) => {
     try {
       const userSettings = await application.settings.listSettings()
       setFrequency(
-        userSettings.getSettingValue<NextcloudFrequency, NextcloudFrequency>(
-          SettingName.create(SettingName.NAMES.NextcloudBackupFrequency).getValue(),
+        userSettings.getRawSettingValue<NextcloudFrequency, NextcloudFrequency>(
+          NextcloudBackupSettingName.Frequency,
           NextcloudBackupFrequency.Disabled,
         ),
       )
-      setUrl(
-        userSettings.getSettingValue<string, string>(
-          SettingName.create(SettingName.NAMES.NextcloudBackupUrl).getValue(),
-          '',
-        ),
-      )
-      setFolder(
-        userSettings.getSettingValue<string, string>(
-          SettingName.create(SettingName.NAMES.NextcloudBackupFolder).getValue(),
-          '',
-        ),
-      )
+      setUrl(userSettings.getRawSettingValue<string, string>(NextcloudBackupSettingName.Url, ''))
+      setFolder(userSettings.getRawSettingValue<string, string>(NextcloudBackupSettingName.Folder, ''))
       // The app password is SENSITIVE: the server never returns its value. We can
       // only learn whether one is stored, and let the user replace it.
-      const appPasswordExists = await application.settings.getDoesSensitiveSettingExist(
-        SettingName.create(SettingName.NAMES.NextcloudBackupAppPassword).getValue(),
+      const appPasswordExists = await application.settings.getDoesRawSensitiveSettingExist(
+        NextcloudBackupSettingName.AppPassword,
       )
       setAppPasswordIsSet(appPasswordExists)
     } catch (error) {
@@ -93,9 +83,9 @@ const NextcloudBackups = ({ application }: Props) => {
     load().catch(console.error)
   }, [load])
 
-  const updateSetting = async (settingName: SettingName, payload: string, sensitive = false): Promise<boolean> => {
+  const updateSetting = async (settingName: string, payload: string, sensitive = false): Promise<boolean> => {
     try {
-      await application.settings.updateSetting(settingName, payload, sensitive)
+      await application.settings.updateRawSetting(settingName, payload, sensitive)
       return true
     } catch {
       application.alerts.alert(STRING_FAILED_TO_UPDATE_USER_SETTING()).catch(console.error)
@@ -106,17 +96,13 @@ const NextcloudBackups = ({ application }: Props) => {
   const handleSave = useCallback(async () => {
     setIsSaving(true)
     try {
-      await updateSetting(SettingName.create(SettingName.NAMES.NextcloudBackupUrl).getValue(), url.trim())
-      await updateSetting(SettingName.create(SettingName.NAMES.NextcloudBackupFolder).getValue(), folder.trim())
-      await updateSetting(SettingName.create(SettingName.NAMES.NextcloudBackupFrequency).getValue(), frequency)
+      await updateSetting(NextcloudBackupSettingName.Url, url.trim())
+      await updateSetting(NextcloudBackupSettingName.Folder, folder.trim())
+      await updateSetting(NextcloudBackupSettingName.Frequency, frequency)
       // Only write the app password if the user typed a new one; otherwise we keep
       // the existing stored (sensitive) value untouched.
       if (appPassword.trim() !== '') {
-        const ok = await updateSetting(
-          SettingName.create(SettingName.NAMES.NextcloudBackupAppPassword).getValue(),
-          appPassword.trim(),
-          true,
-        )
+        const ok = await updateSetting(NextcloudBackupSettingName.AppPassword, appPassword.trim(), true)
         if (ok) {
           setAppPassword('')
           setAppPasswordIsSet(true)
