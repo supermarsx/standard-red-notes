@@ -1,7 +1,9 @@
+import { randomUUID } from 'crypto'
+
 import { DeliveryConfigStore } from './DeliveryConfigStore'
 import { ProviderRegistry } from './Providers/ProviderRegistry'
-import { PublishedRemindersStore } from './PublishedRemindersStore'
-import { DeliveryConfig, PublishedReminder, formatReminderMessage, isDue } from './Types'
+import { ClaimedReminder, PublishedRemindersStore } from './PublishedRemindersStore'
+import { DeliveryConfig, DeliveryResult, PublishedReminder, formatReminderMessage } from './Types'
 
 /**
  * Standard Red Notes: facade tying together the published-reminders store, the
@@ -27,13 +29,46 @@ export interface DeliverySummary {
   skipped: number
 }
 
+export interface ReminderDeliveryServiceOptions {
+  ownerId?: string
+  clock?: () => number
+}
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+function isDeliveryResult(value: unknown): value is DeliveryResult {
+  try {
+    return (
+      typeof value === 'object' &&
+      value !== null &&
+      !Array.isArray(value) &&
+      'ok' in value &&
+      typeof value.ok === 'boolean' &&
+      (!('notConfigured' in value) || value.notConfigured === undefined || typeof value.notConfigured === 'boolean') &&
+      (!('reason' in value) || value.reason === undefined || typeof value.reason === 'string')
+    )
+  } catch {
+    return false
+  }
+}
+
 export class ReminderDeliveryService {
+  private readonly ownerId: string
+  private readonly clock: () => number
+
   constructor(
     private readonly enabled: boolean,
     private readonly remindersStore: PublishedRemindersStore,
     private readonly configStore: DeliveryConfigStore,
     private readonly registry: ProviderRegistry,
-  ) {}
+    options: ReminderDeliveryServiceOptions = {},
+  ) {
+    this.ownerId = options.ownerId ?? randomUUID()
+    this.clock = options.clock ?? (() => Date.now())
+    if (!UUID_PATTERN.test(this.ownerId)) {
+      throw new Error('Reminder delivery worker owners must be UUIDs.')
+    }
+  }
 
   isEnabled(): boolean {
     return this.enabled
@@ -58,10 +93,6 @@ export class ReminderDeliveryService {
     return this.remindersStore.unpublish(userUuid, id)
   }
 
-  async markSent(userUuid: string, id: string, ok: boolean, error?: string): Promise<void> {
-    return this.remindersStore.markSent(userUuid, id, ok, error)
-  }
-
   // ---- delivery config API (used by the controller) ----
 
   async getConfig(userUuid: string): Promise<DeliveryConfig | null> {
@@ -75,67 +106,153 @@ export class ReminderDeliveryService {
   // ---- the scan (used by the scheduler) ----
 
   /**
-   * Scan every published, unsent, DUE reminder and deliver each via the owner's
-   * configured channel (or a per-reminder channel/destination override), marking
-   * it sent on success and recording the failure reason otherwise.
+   * Atomically claim a bounded batch of published, unsent, DUE reminders and
+   * deliver each via the owner's configured channel (or a per-reminder
+   * channel/destination override). Successful and failed completion are both
+   * conditional on this worker still owning a live claim.
    *
-   * Returns a summary for logging. Never throws: a single reminder's failure is
-   * recorded and the scan continues.
+   * Provider and per-reminder configuration failures are isolated and persisted
+   * with backoff so the scan continues. Store-wide failures still propagate to
+   * the scheduler, which logs them without crashing the process.
    */
-  async deliverDueReminders(now: Date = new Date()): Promise<DeliverySummary> {
+  async deliverDueReminders(now?: Date): Promise<DeliverySummary> {
     const summary: DeliverySummary = { scanned: 0, due: 0, sent: 0, failed: 0, skipped: 0 }
     if (!this.enabled) {
       return summary
     }
 
-    const unsent = await this.remindersStore.listAllUnsent()
-    summary.scanned = unsent.length
+    const fixedNow = now?.getTime()
+    const claimTime = fixedNow ?? this.clock()
+    const claimed = await this.remindersStore.claimDue(this.ownerId, claimTime)
+    summary.scanned = claimed.length
+    summary.due = claimed.length
 
     // Cache per-user config across the scan so we don't re-read the file per item.
     const configCache = new Map<string, DeliveryConfig | null>()
 
-    for (const { userUuid, reminder } of unsent) {
-      if (!isDue(reminder, now)) {
-        continue
-      }
-      summary.due++
-
+    for (const dueReminder of claimed) {
+      const { userUuid, reminder } = dueReminder
       let config = configCache.get(userUuid)
-      if (config === undefined) {
-        config = await this.getConfig(userUuid)
-        configCache.set(userUuid, config)
+      try {
+        if (config === undefined) {
+          config = await this.getConfig(userUuid)
+          configCache.set(userUuid, config)
+        }
+      } catch (error) {
+        await this.recordRetry(dueReminder, error, fixedNow, summary, 'failed')
+        continue
       }
 
       const channel = reminder.channel ?? config?.channel
       const destination = reminder.destination ?? config?.destination
 
-      // Skip (do NOT mark sent) when the user hasn't opted in / configured a
-      // usable channel — they may configure it before the reminder is purged.
-      if (!config || !config.enabled || !channel || !destination) {
-        summary.skipped++
+      if (!config) {
+        await this.recordRetry(
+          dueReminder,
+          'Reminder delivery is not configured for this user.',
+          fixedNow,
+          summary,
+          'skipped',
+        )
+        continue
+      }
+      if (!config.enabled) {
+        await this.recordRetry(
+          dueReminder,
+          'Reminder delivery is disabled for this user.',
+          fixedNow,
+          summary,
+          'skipped',
+        )
+        continue
+      }
+      if (!channel || !destination) {
+        await this.recordRetry(
+          dueReminder,
+          'Reminder delivery requires a channel and destination.',
+          fixedNow,
+          summary,
+          'skipped',
+        )
         continue
       }
 
       const provider = this.registry.get(channel)
       if (!provider) {
-        summary.skipped++
+        await this.recordRetry(
+          dueReminder,
+          `No reminder delivery provider is registered for ${channel}.`,
+          fixedNow,
+          summary,
+          'skipped',
+        )
         continue
       }
 
       const message = formatReminderMessage(reminder)
-      const result = await provider.send(destination, message)
+      let result
+      try {
+        result = await provider.send(destination, message)
+      } catch (error) {
+        await this.recordRetry(dueReminder, error, fixedNow, summary, 'failed')
+        continue
+      }
+
+      if (!isDeliveryResult(result)) {
+        await this.recordRetry(
+          dueReminder,
+          'The reminder delivery provider returned an invalid result.',
+          fixedNow,
+          summary,
+          'failed',
+        )
+        continue
+      }
 
       if (result.ok) {
-        await this.remindersStore.markSent(userUuid, reminder.id, true)
-        summary.sent++
+        const completed = await this.remindersStore.markClaimSucceeded(
+          userUuid,
+          reminder.id,
+          dueReminder.claim,
+          fixedNow ?? this.clock(),
+        )
+        if (completed) {
+          summary.sent++
+        } else {
+          summary.skipped++
+        }
       } else {
-        // Unconfigured adapter / transient failure: record the reason, leave it
-        // UNSENT so a later tick (once creds are present) can retry.
-        await this.remindersStore.markSent(userUuid, reminder.id, false, result.reason)
-        summary.failed++
+        await this.recordRetry(
+          dueReminder,
+          result.reason ?? 'The reminder delivery provider reported a failure.',
+          fixedNow,
+          summary,
+          'failed',
+        )
       }
     }
 
     return summary
+  }
+
+  private async recordRetry(
+    dueReminder: ClaimedReminder,
+    error: unknown,
+    fixedNow: number | undefined,
+    summary: DeliverySummary,
+    outcome: 'failed' | 'skipped',
+  ): Promise<void> {
+    const scheduled = await this.remindersStore.scheduleClaimRetry(
+      dueReminder.userUuid,
+      dueReminder.reminder.id,
+      dueReminder.claim,
+      error,
+      fixedNow ?? this.clock(),
+    )
+    if (scheduled) {
+      summary[outcome]++
+    } else {
+      summary.skipped++
+    }
   }
 }

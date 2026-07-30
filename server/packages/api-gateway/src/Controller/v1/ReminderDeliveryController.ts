@@ -28,8 +28,9 @@ import { DeliveryChannel, isDeliveryChannel } from '../../Service/ReminderDelive
  * PUBLISH FLOW: the web client POSTs a reminder here when the user has delivery
  * enabled (see the web Reminders/reminderDelivery helpers), re-POSTs it under the
  * same stable id when it is edited or a recurring occurrence advances (the store
- * re-arms `sent` when `dueAtUtc` changes), and DELETEs it when the in-app
- * reminder is cleared. It does not expose anyone else's data.
+ * re-arms delivery when message, due time, channel, or destination changes), and
+ * DELETEs it when the in-app reminder is cleared. It does not expose anyone
+ * else's data.
  */
 @controller('/v1/reminder-delivery')
 export class ReminderDeliveryController extends BaseHttpController {
@@ -98,8 +99,9 @@ export class ReminderDeliveryController extends BaseHttpController {
 
   /**
    * Publish a reminder for delivery. Called by the web client whenever a reminder
-   * is saved while the user's delivery config is enabled. Upserts by id; a changed
-   * dueAtUtc re-arms delivery (see PublishedRemindersStore.publish).
+   * is saved while the user's delivery config is enabled. Upserts by id; changing
+   * any delivery payload field re-arms delivery (see
+   * PublishedRemindersStore.publish).
    */
   @httpPost('/', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
   async publish(request: Request, response: Response): Promise<void> {

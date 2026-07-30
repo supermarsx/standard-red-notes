@@ -14,9 +14,11 @@ import { ReminderDeliveryService } from './ReminderDeliveryService'
  * do not overlap — a slow scan defers the next tick rather than running two at
  * once.
  *
- * PUNCH-LIST: a single-node interval is fine for one home-server instance but is
- * NOT cluster-safe (two instances would double-send). Durable/clustered
- * scheduling is deferred.
+ * Multiple scheduler instances may share the same published-reminders file.
+ * Each scan first acquires persisted, expiring delivery claims through the
+ * store's cross-instance transaction, so workers do not send the same occurrence
+ * concurrently while a claim is live. Expired claims recover work abandoned by
+ * a crashed process.
  */
 
 export interface SchedulerLogger {
@@ -71,7 +73,7 @@ export class ReminderDeliveryScheduler {
       if (summary.sent > 0 || summary.failed > 0) {
         this.logger?.info(
           `Reminder delivery: ${summary.sent} sent, ${summary.failed} failed, ${summary.skipped} skipped ` +
-            `(of ${summary.due} due / ${summary.scanned} unsent).`,
+            `(of ${summary.due} due / ${summary.scanned} claimed).`,
         )
       }
     } catch (error) {

@@ -41,12 +41,18 @@ export interface PublishedReminder {
    * absent, the user's DeliveryConfig destination is used.
    */
   destination?: string
-  /** Whether this reminder has already been delivered (or terminally failed). */
+  /** Whether this reminder has been confirmed as delivered. */
   sent: boolean
-  /** ms-epoch the delivery attempt that set `sent` completed. */
+  /** ms-epoch of the successful delivery confirmation. */
   sentAt?: number
   /** Last delivery error, if the last attempt failed. */
   error?: string
+  /** Number of times this occurrence has been claimed for delivery. */
+  attemptCount?: number
+  /** ms-epoch when the most recent delivery claim was created. */
+  lastAttemptAt?: number
+  /** ms-epoch before which this occurrence must not be retried. */
+  nextAttemptAt?: number
   /** ms-epoch of creation. */
   createdAt: number
   /** ms-epoch of last change. */
@@ -62,9 +68,9 @@ export interface DeliveryConfig {
 }
 
 /**
- * Outcome of a single send attempt. Adapters NEVER throw — an unconfigured or
- * failing adapter returns `ok: false` with a reason, so the scheduler can record
- * it and move on.
+ * Outcome of a single send attempt. Adapters should return `ok: false` with a
+ * reason when unconfigured or failing. The service also catches an adapter that
+ * violates this contract and throws, then persists the same retry state.
  */
 export interface DeliveryResult {
   ok: boolean

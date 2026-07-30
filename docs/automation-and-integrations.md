@@ -5,6 +5,8 @@ description: Runtime status, gates, and privacy boundaries for workflows, webhoo
 
 # Automation and Integrations
 
+{% include mermaid.html %}
+
 Integrations are not all at the same maturity or trust boundary. This page
 describes the code that is present and calls out explicit deferrals.
 
@@ -16,19 +18,19 @@ describes the code that is present and calls out explicit deferrals.
 
 ## Status matrix
 
-| Integration | Runtime status | Gate |
-| --- | --- | --- |
-| MCP | Shipped, with documented scope limits | Account credential or full decrypting token; server-enforced read-only/write mode; bridge writes off by default; selected-tag scope is not currently enforced |
-| OpenClaw | Shipped with local MCP | Local MCP configuration and provider |
-| Workflows/n8n | Phase 1 shipped | Operator master switch, per-user entitlement, explicit pairing |
-| Webhooks | Shipped | Authenticated user or administrator for global hooks |
-| GitHub publish | Shipped | Explicit user action and user-supplied PAT |
-| Browser OCR | Shipped | Client setting/operator intent |
-| Server OCR | Shipped, off by default | Operator master switch and per-user permission |
-| CalDAV | Shipped read-only, off by default | Operator master switch, per-user permission, dedicated token |
-| Plugins gallery proxy | Shipped, operator-configured | Repository URL and rendering policy |
-| Email reminders | Shipped, operator-dependent | Mail delivery and per-user feature setting |
-| Assistant proxy | Shipped, operator/provider-dependent | Per-user AI gate, provider configuration, limits |
+| Integration                                  | Runtime status                        | Gate                                                                                                                                                          |
+| -------------------------------------------- | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| MCP                                          | Shipped, with documented scope limits | Account credential or full decrypting token; server-enforced read-only/write mode; bridge writes off by default; selected-tag scope is not currently enforced |
+| OpenClaw                                     | Shipped with local MCP                | Local MCP configuration and provider                                                                                                                          |
+| Workflows/n8n                                | Phase 1 shipped                       | Operator master switch, per-user entitlement, explicit pairing                                                                                                |
+| Webhooks                                     | Shipped                               | Authenticated user or administrator for global hooks                                                                                                          |
+| GitHub publish                               | Shipped                               | Explicit user action and user-supplied PAT                                                                                                                    |
+| Browser OCR                                  | Shipped                               | Client setting/operator intent                                                                                                                                |
+| Server OCR                                   | Shipped, off by default               | Operator master switch and per-user permission                                                                                                                |
+| CalDAV                                       | Shipped read-only, off by default     | Operator master switch, per-user permission, dedicated token                                                                                                  |
+| Plugins gallery proxy                        | Shipped, operator-configured          | Repository URL and rendering policy                                                                                                                           |
+| Server reminders (Email, Telegram, WhatsApp) | Shipped, operator-dependent           | Operator master switch, per-user feature setting, enabled delivery config, and provider credentials                                                           |
+| Assistant proxy                              | Shipped, operator/provider-dependent  | Per-user AI gate, provider configuration, limits                                                                                                              |
 
 ## Workflows and n8n
 
@@ -134,9 +136,58 @@ can turn plugin distribution into code delivery.
 
 ## Reminders and assistant providers
 
-Email reminders require server mail configuration and the user’s reminder
-setting. Delivery metadata and reminder text sent by email leave the encrypted
-client boundary.
+### Reminder delivery
+
+Server-side reminder delivery supports Email, Telegram, and WhatsApp. It is off
+until the operator master switch, the user’s reminder setting, and the user’s
+delivery configuration are all enabled. A reminder can use that default channel
+and destination or publish its own override. The published reminder text, due
+time, destination, and delivery status are server-readable; they are deliberately
+outside the encrypted note store so the server can send them.
+
+{% include safety-alert.html
+  level="trust"
+  title="Published reminders are plaintext"
+  body="Publishing opts this reminder out of the encrypted note boundary. The server and the selected Email, Telegram, or WhatsApp provider can read its message, schedule, and destination. Unpublish reminders you no longer want retained or delivered."
+%}
+
+Each scheduler scan atomically claims a bounded batch in the published-reminders
+store. A claim records a cryptographically random claim ID, a random worker
+owner ID, its start time, and lease expiry. Processes sharing the same local
+store file cannot claim the same occurrence concurrently while that lease is
+live. This is a local shared-file guarantee, not a distributed coordinator for
+independent store copies or arbitrary network filesystems. Success and retry
+updates are conditional on the same worker still owning the live claim, so a
+stale worker cannot complete or release a claim recovered by another process.
+
+```mermaid
+flowchart TD
+  due[Due and retry-eligible reminder] --> claim{Live claim exists?}
+  claim -->|Yes| wait[Leave it with the current worker]
+  claim -->|No or expired| lease[Atomically create a bounded lease]
+  lease --> send[Call the configured provider]
+  send -->|Accepted and claim still live| done[Mark delivered]
+  send -->|Failure and claim still live| backoff[Persist error and exponential backoff]
+  backoff --> due
+  send -->|Claim expired| stale[Do not mutate newer state]
+```
+
+The default lease is ten minutes. Current HTTP transports time out within one
+minute, and the bounded SMTP phases total no more than six minutes, so these
+providers do not need claim renewal. Keep any future provider’s worst-case
+transport time below the lease or add a safe renewal protocol before enabling
+it. Failed attempts use persisted exponential backoff, from one minute up to six
+hours by default, and expired claims are recovered after a worker crash. Editing
+the message, due time, channel, or destination creates a new delivery revision
+and invalidates the old claim.
+
+**Delivery is at-least-once, not exactly-once.** If a provider accepts a message
+and the worker crashes before recording success, the lease eventually expires
+and another worker retries. That recovery prevents silent loss but can produce a
+duplicate. The current adapters do not turn the reminder ID into a provider
+idempotency key, so operators must account for this duplicate window. An
+ambiguous provider timeout can create the same outcome even when the worker does
+not crash.
 
 AI assistant requests can be routed to Anthropic, OpenAI, or Ollama-compatible
 providers according to operator configuration. Apply per-user enablement and
