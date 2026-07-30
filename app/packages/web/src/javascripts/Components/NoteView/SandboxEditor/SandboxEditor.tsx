@@ -11,6 +11,7 @@ import {
   useState,
 } from 'react'
 import { NoteViewController } from '../Controller/NoteViewController'
+import { useEditorPersistenceDebounce } from '../useEditorPersistenceDebounce'
 import Icon from '@/Components/Icon/Icon'
 import {
   SandboxDocument,
@@ -36,7 +37,6 @@ export const sandboxModeForIdentifier = (identifier: string | undefined): Sandbo
   return identifier === JsSandboxEditorIdentifier ? 'js' : 'web'
 }
 
-const PERSIST_DEBOUNCE_MS = 400
 const AUTO_RUN_DEBOUNCE_MS = 600
 
 type ConsoleLevel = 'log' | 'info' | 'warn' | 'error'
@@ -94,7 +94,6 @@ export const SandboxEditor: FunctionComponent<Props> = ({
   /** The document snapshot currently rendered into the iframe. */
   const [runDocument, setRunDocument] = useState<SandboxDocument>(initialParse.document)
 
-  const persistTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const autoRunTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const ignoreNextChange = useRef(false)
   const iframeRef = useRef<HTMLIFrameElement>(null)
@@ -103,31 +102,29 @@ export const SandboxEditor: FunctionComponent<Props> = ({
   const isReadonly = note.current.locked || Boolean(readonly)
   const captureConsole = mode === 'js'
 
-  const persist = useCallback(
+  const persistDocument = useCallback(
     (doc: SandboxDocument) => {
-      if (isReadonly) {
-        return
-      }
-      if (persistTimer.current) {
-        clearTimeout(persistTimer.current)
-      }
-      persistTimer.current = setTimeout(() => {
-        ignoreNextChange.current = true
-        void controller.saveAndAwaitLocalPropagation({
-          text: serializeSandboxDocument(doc),
-          isUserModified: true,
-          previews: {
-            previewPlain:
-              mode === 'js'
-                ? `JS Sandbox: ${doc.js.length} chars of JS`
-                : `Web App Sandbox: ${doc.html.length + doc.css.length + doc.js.length} chars`,
-            previewHtml: undefined,
-          },
-        })
-      }, PERSIST_DEBOUNCE_MS)
+      ignoreNextChange.current = true
+      void controller.saveAndAwaitLocalPropagation({
+        text: serializeSandboxDocument(doc),
+        isUserModified: true,
+        previews: {
+          previewPlain:
+            mode === 'js'
+              ? `JS Sandbox: ${doc.js.length} chars of JS`
+              : `Web App Sandbox: ${doc.html.length + doc.css.length + doc.js.length} chars`,
+          previewHtml: undefined,
+        },
+      })
     },
-    [controller, isReadonly, mode],
+    [controller, mode],
   )
+  const persist = useEditorPersistenceDebounce({
+    controller,
+    noteUuid: controller.item.uuid,
+    persist: persistDocument,
+    disabled: isReadonly,
+  })
 
   const updateDocument = useCallback(
     (updater: (doc: SandboxDocument) => SandboxDocument) => {
@@ -161,9 +158,6 @@ export const SandboxEditor: FunctionComponent<Props> = ({
 
   useEffect(() => {
     return () => {
-      if (persistTimer.current) {
-        clearTimeout(persistTimer.current)
-      }
       if (autoRunTimer.current) {
         clearTimeout(autoRunTimer.current)
       }

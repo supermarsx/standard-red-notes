@@ -11,6 +11,7 @@ import {
   useState,
 } from 'react'
 import { NoteViewController } from '../Controller/NoteViewController'
+import { useEditorPersistenceDebounce } from '../useEditorPersistenceDebounce'
 import Icon from '@/Components/Icon/Icon'
 import {
   KanbanCard,
@@ -26,8 +27,6 @@ import {
 
 /** Identifier stored in `note.editorIdentifier` to mark a note as a Kanban board. */
 export const KanbanEditorIdentifier = 'org.standardnotes.kanban-board'
-
-const PERSIST_DEBOUNCE_MS = 400
 
 const COLUMN_COLORS = ['#ef4444', '#f59e0b', '#10b981', '#3b82f6', '#8b5cf6', '#ec4899']
 
@@ -53,35 +52,32 @@ export const KanbanEditor: FunctionComponent<Props> = ({
   const [recoveryNotice, setRecoveryNotice] = useState(!initialParse.recovered)
   const [dragOverColumnId, setDragOverColumnId] = useState<string | null>(null)
 
-  const persistTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const ignoreNextChange = useRef(false)
   const dragInfo = useRef<DragInfo | null>(null)
 
   const isReadonly = note.current.locked || Boolean(readonly)
 
-  const persist = useCallback(
+  const persistDocument = useCallback(
     (doc: KanbanDocument) => {
-      if (isReadonly) {
-        return
-      }
-      if (persistTimer.current) {
-        clearTimeout(persistTimer.current)
-      }
-      persistTimer.current = setTimeout(() => {
-        ignoreNextChange.current = true
-        const cards = countCards(doc)
-        void controller.saveAndAwaitLocalPropagation({
-          text: serializeKanbanDocument(doc),
-          isUserModified: true,
-          previews: {
-            previewPlain: `Kanban: ${doc.columns.length} columns, ${cards} ${cards === 1 ? 'card' : 'cards'}`,
-            previewHtml: undefined,
-          },
-        })
-      }, PERSIST_DEBOUNCE_MS)
+      ignoreNextChange.current = true
+      const cards = countCards(doc)
+      void controller.saveAndAwaitLocalPropagation({
+        text: serializeKanbanDocument(doc),
+        isUserModified: true,
+        previews: {
+          previewPlain: `Kanban: ${doc.columns.length} columns, ${cards} ${cards === 1 ? 'card' : 'cards'}`,
+          previewHtml: undefined,
+        },
+      })
     },
-    [controller, isReadonly],
+    [controller],
   )
+  const persist = useEditorPersistenceDebounce({
+    controller,
+    noteUuid: controller.item.uuid,
+    persist: persistDocument,
+    disabled: isReadonly,
+  })
 
   const updateDocument = useCallback(
     (updater: (doc: KanbanDocument) => KanbanDocument) => {
@@ -112,14 +108,6 @@ export const KanbanEditor: FunctionComponent<Props> = ({
     })
     return disposer
   }, [controller])
-
-  useEffect(() => {
-    return () => {
-      if (persistTimer.current) {
-        clearTimeout(persistTimer.current)
-      }
-    }
-  }, [])
 
   // --- column mutators -----------------------------------------------------
 

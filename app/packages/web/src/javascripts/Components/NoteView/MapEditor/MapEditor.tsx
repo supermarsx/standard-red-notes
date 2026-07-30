@@ -11,6 +11,7 @@ import {
   useState,
 } from 'react'
 import { NoteViewController } from '../Controller/NoteViewController'
+import { useEditorPersistenceDebounce } from '../useEditorPersistenceDebounce'
 import Icon from '@/Components/Icon/Icon'
 import {
   MapDocument,
@@ -32,8 +33,6 @@ import {
 
 /** Identifier stored in `note.editorIdentifier` to mark a note as a Map. */
 export const MapEditorIdentifier = 'org.standardnotes.map'
-
-const PERSIST_DEBOUNCE_MS = 400
 
 const NODE_WIDTH = 140
 const NODE_HEIGHT = 56
@@ -72,35 +71,32 @@ export const MapEditor: FunctionComponent<Props> = ({
   const canvasRef = useRef<HTMLDivElement | null>(null)
   const dragState = useRef<DragState | null>(null)
 
-  const persistTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const ignoreNextChange = useRef(false)
 
   const isReadonly = note.current.locked || Boolean(readonly)
 
-  const persist = useCallback(
+  const persistDocument = useCallback(
     (doc: MapDocument) => {
-      if (isReadonly) {
-        return
-      }
-      if (persistTimer.current) {
-        clearTimeout(persistTimer.current)
-      }
-      persistTimer.current = setTimeout(() => {
-        ignoreNextChange.current = true
-        void controller.saveAndAwaitLocalPropagation({
-          text: serializeMapDocument(doc),
-          isUserModified: true,
-          previews: {
-            previewPlain: `Map: ${doc.nodes.length} ${doc.nodes.length === 1 ? 'node' : 'nodes'}, ${
-              doc.edges.length
-            } ${doc.edges.length === 1 ? 'link' : 'links'}`,
-            previewHtml: undefined,
-          },
-        })
-      }, PERSIST_DEBOUNCE_MS)
+      ignoreNextChange.current = true
+      void controller.saveAndAwaitLocalPropagation({
+        text: serializeMapDocument(doc),
+        isUserModified: true,
+        previews: {
+          previewPlain: `Map: ${doc.nodes.length} ${doc.nodes.length === 1 ? 'node' : 'nodes'}, ${
+            doc.edges.length
+          } ${doc.edges.length === 1 ? 'link' : 'links'}`,
+          previewHtml: undefined,
+        },
+      })
     },
-    [controller, isReadonly],
+    [controller],
   )
+  const persist = useEditorPersistenceDebounce({
+    controller,
+    noteUuid: controller.item.uuid,
+    persist: persistDocument,
+    disabled: isReadonly,
+  })
 
   const updateDocument = useCallback(
     (updater: (doc: MapDocument) => MapDocument) => {
@@ -131,14 +127,6 @@ export const MapEditor: FunctionComponent<Props> = ({
     })
     return disposer
   }, [controller])
-
-  useEffect(() => {
-    return () => {
-      if (persistTimer.current) {
-        clearTimeout(persistTimer.current)
-      }
-    }
-  }, [])
 
   // --- coordinate helpers --------------------------------------------------
 

@@ -7,6 +7,7 @@ import { AppPaneId } from '@/Components/Panes/AppPaneMetadata'
 import Icon from '@/Components/Icon/Icon'
 import { extractPlaintextFromNoteText, computePlaintextStats } from '@/Utils/NoteStats'
 import { NoteViewController } from '../Controller/NoteViewController'
+import { useEditorPersistenceDebounce } from '../useEditorPersistenceDebounce'
 import {
   BaseDocument,
   BaseSourceKind,
@@ -37,7 +38,6 @@ import {
 /** Identifier stored in `note.editorIdentifier` to mark a note as a Base note. */
 export const BaseEditorIdentifier = 'org.standardnotes.base'
 
-const PERSIST_DEBOUNCE_MS = 400
 const FOLDER_CONTENT_TYPE = 'Folder'
 
 type Props = {
@@ -102,33 +102,30 @@ export const BaseEditor: FunctionComponent<Props> = ({
   /** Bumped to force a re-resolution of source notes when items change. */
   const [refreshToken, setRefreshToken] = useState(0)
 
-  const persistTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const ignoreNextChange = useRef(false)
 
   const isReadonly = note.current.locked || Boolean(readonly)
 
-  const persist = useCallback(
+  const persistDocument = useCallback(
     (doc: BaseDocument) => {
-      if (isReadonly) {
-        return
-      }
-      if (persistTimer.current) {
-        clearTimeout(persistTimer.current)
-      }
-      persistTimer.current = setTimeout(() => {
-        ignoreNextChange.current = true
-        void controller.saveAndAwaitLocalPropagation({
-          text: serializeBaseDocument(doc),
-          isUserModified: true,
-          previews: {
-            previewPlain: `Base: ${doc.columns.length} columns, ${doc.filters.length} filters`,
-            previewHtml: undefined,
-          },
-        })
-      }, PERSIST_DEBOUNCE_MS)
+      ignoreNextChange.current = true
+      void controller.saveAndAwaitLocalPropagation({
+        text: serializeBaseDocument(doc),
+        isUserModified: true,
+        previews: {
+          previewPlain: `Base: ${doc.columns.length} columns, ${doc.filters.length} filters`,
+          previewHtml: undefined,
+        },
+      })
     },
-    [controller, isReadonly],
+    [controller],
   )
+  const persist = useEditorPersistenceDebounce({
+    controller,
+    noteUuid: controller.item.uuid,
+    persist: persistDocument,
+    disabled: isReadonly,
+  })
 
   const updateDocument = useCallback(
     (updater: (doc: BaseDocument) => BaseDocument) => {
@@ -168,14 +165,6 @@ export const BaseEditor: FunctionComponent<Props> = ({
     )
     return disposer
   }, [application])
-
-  useEffect(() => {
-    return () => {
-      if (persistTimer.current) {
-        clearTimeout(persistTimer.current)
-      }
-    }
-  }, [])
 
   const tags = useMemo(() => application.items.getDisplayableTags(), [application, refreshToken])
   const folders = useMemo(() => application.items.getItems<SNFolder>(FOLDER_CONTENT_TYPE), [application, refreshToken])

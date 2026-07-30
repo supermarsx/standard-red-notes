@@ -3,6 +3,7 @@ import { isPayloadSourceRetrieved } from '@standardnotes/snjs'
 import { classNames } from '@standardnotes/utils'
 import { FunctionComponent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { NoteViewController } from '../Controller/NoteViewController'
+import { useEditorPersistenceDebounce } from '../useEditorPersistenceDebounce'
 import Icon from '@/Components/Icon/Icon'
 import {
   TimelineDocument,
@@ -17,8 +18,6 @@ import {
 
 /** Identifier stored in `note.editorIdentifier` to mark a note as a Timeline note. */
 export const TimelineEditorIdentifier = 'org.standardnotes.timeline'
-
-const PERSIST_DEBOUNCE_MS = 400
 
 const ITEM_COLORS = ['#ef4444', '#f59e0b', '#10b981', '#3b82f6', '#8b5cf6', '#ec4899']
 
@@ -48,33 +47,30 @@ export const TimelineEditor: FunctionComponent<Props> = ({
   const [document, setDocument] = useState<TimelineDocument>(initialParse.document)
   const [recoveryNotice, setRecoveryNotice] = useState(!initialParse.recovered)
 
-  const persistTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const ignoreNextChange = useRef(false)
 
   const isReadonly = note.current.locked || Boolean(readonly)
 
-  const persist = useCallback(
+  const persistDocument = useCallback(
     (doc: TimelineDocument) => {
-      if (isReadonly) {
-        return
-      }
-      if (persistTimer.current) {
-        clearTimeout(persistTimer.current)
-      }
-      persistTimer.current = setTimeout(() => {
-        ignoreNextChange.current = true
-        void controller.saveAndAwaitLocalPropagation({
-          text: serializeTimelineDocument(doc),
-          isUserModified: true,
-          previews: {
-            previewPlain: `Timeline: ${doc.items.length} ${doc.items.length === 1 ? 'item' : 'items'}`,
-            previewHtml: undefined,
-          },
-        })
-      }, PERSIST_DEBOUNCE_MS)
+      ignoreNextChange.current = true
+      void controller.saveAndAwaitLocalPropagation({
+        text: serializeTimelineDocument(doc),
+        isUserModified: true,
+        previews: {
+          previewPlain: `Timeline: ${doc.items.length} ${doc.items.length === 1 ? 'item' : 'items'}`,
+          previewHtml: undefined,
+        },
+      })
     },
-    [controller, isReadonly],
+    [controller],
   )
+  const persist = useEditorPersistenceDebounce({
+    controller,
+    noteUuid: controller.item.uuid,
+    persist: persistDocument,
+    disabled: isReadonly,
+  })
 
   const updateDocument = useCallback(
     (updater: (doc: TimelineDocument) => TimelineDocument) => {
@@ -105,14 +101,6 @@ export const TimelineEditor: FunctionComponent<Props> = ({
     })
     return disposer
   }, [controller])
-
-  useEffect(() => {
-    return () => {
-      if (persistTimer.current) {
-        clearTimeout(persistTimer.current)
-      }
-    }
-  }, [])
 
   const layout = useMemo(() => computeTimelineLayout(document.items), [document.items])
   const barsById = useMemo(() => {

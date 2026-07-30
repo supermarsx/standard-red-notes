@@ -11,6 +11,7 @@ import {
   useState,
 } from 'react'
 import { NoteViewController } from '../Controller/NoteViewController'
+import { useEditorPersistenceDebounce } from '../useEditorPersistenceDebounce'
 import Icon from '@/Components/Icon/Icon'
 import { classNames } from '@standardnotes/utils'
 import {
@@ -27,7 +28,6 @@ import {
 /** Identifier stored in `note.editorIdentifier` to mark a note as a Canvas note. */
 export const CanvasEditorIdentifier = 'org.standardnotes.canvas'
 
-const PERSIST_DEBOUNCE_MS = 400
 const MIN_NODE_WIDTH = 120
 const MIN_NODE_HEIGHT = 60
 const DEFAULT_NODE_WIDTH = 200
@@ -114,36 +114,32 @@ export const CanvasEditor: FunctionComponent<Props> = ({
 
   const containerRef = useRef<HTMLDivElement>(null)
   const dragState = useRef<DragState | null>(null)
-  const persistTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const ignoreNextChange = useRef(false)
   const latestDocument = useRef(document)
   latestDocument.current = document
 
   const isReadonly = note.current.locked || Boolean(readonly)
 
-  // Persist (debounced) to note.text using the same mutator path Super uses.
-  const persist = useCallback(
+  const persistDocument = useCallback(
     (doc: CanvasDocument) => {
-      if (isReadonly) {
-        return
-      }
-      if (persistTimer.current) {
-        clearTimeout(persistTimer.current)
-      }
-      persistTimer.current = setTimeout(() => {
-        ignoreNextChange.current = true
-        void controller.saveAndAwaitLocalPropagation({
-          text: serializeCanvasDocument(doc),
-          isUserModified: true,
-          previews: {
-            previewPlain: `Canvas: ${doc.nodes.length} cards, ${doc.edges.length} connections`,
-            previewHtml: undefined,
-          },
-        })
-      }, PERSIST_DEBOUNCE_MS)
+      ignoreNextChange.current = true
+      void controller.saveAndAwaitLocalPropagation({
+        text: serializeCanvasDocument(doc),
+        isUserModified: true,
+        previews: {
+          previewPlain: `Canvas: ${doc.nodes.length} cards, ${doc.edges.length} connections`,
+          previewHtml: undefined,
+        },
+      })
     },
-    [controller, isReadonly],
+    [controller],
   )
+  const persist = useEditorPersistenceDebounce({
+    controller,
+    noteUuid: controller.item.uuid,
+    persist: persistDocument,
+    disabled: isReadonly,
+  })
 
   const updateDocument = useCallback(
     (updater: (doc: CanvasDocument) => CanvasDocument) => {
@@ -176,14 +172,6 @@ export const CanvasEditor: FunctionComponent<Props> = ({
     })
     return disposer
   }, [controller])
-
-  useEffect(() => {
-    return () => {
-      if (persistTimer.current) {
-        clearTimeout(persistTimer.current)
-      }
-    }
-  }, [])
 
   const nodesById = useMemo(() => {
     const map = new Map<string, CanvasNode>()

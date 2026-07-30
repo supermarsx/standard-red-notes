@@ -3,6 +3,7 @@ import { isPayloadSourceRetrieved } from '@standardnotes/snjs'
 import { classNames } from '@standardnotes/utils'
 import { FunctionComponent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { NoteViewController } from '../Controller/NoteViewController'
+import { useEditorPersistenceDebounce } from '../useEditorPersistenceDebounce'
 import Icon from '@/Components/Icon/Icon'
 import {
   Flashcard,
@@ -18,8 +19,6 @@ import {
 
 /** Identifier stored in `note.editorIdentifier` to mark a note as Flashcards. */
 export const FlashcardsEditorIdentifier = 'org.standardnotes.flashcards'
-
-const PERSIST_DEBOUNCE_MS = 400
 
 type Props = {
   application: WebApplication
@@ -43,34 +42,31 @@ export const FlashcardsEditor: FunctionComponent<Props> = ({
   const [recoveryNotice, setRecoveryNotice] = useState(!initialParse.recovered)
   const [mode, setMode] = useState<Mode>('edit')
 
-  const persistTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const ignoreNextChange = useRef(false)
 
   const isReadonly = note.current.locked || Boolean(readonly)
 
-  const persist = useCallback(
+  const persistDocument = useCallback(
     (doc: FlashcardsDocument) => {
-      if (isReadonly) {
-        return
-      }
-      if (persistTimer.current) {
-        clearTimeout(persistTimer.current)
-      }
-      persistTimer.current = setTimeout(() => {
-        ignoreNextChange.current = true
-        const known = countKnownCards(doc)
-        void controller.saveAndAwaitLocalPropagation({
-          text: serializeFlashcardsDocument(doc),
-          isUserModified: true,
-          previews: {
-            previewPlain: `Flashcards: ${doc.cards.length} ${doc.cards.length === 1 ? 'card' : 'cards'}, ${known} known`,
-            previewHtml: undefined,
-          },
-        })
-      }, PERSIST_DEBOUNCE_MS)
+      ignoreNextChange.current = true
+      const known = countKnownCards(doc)
+      void controller.saveAndAwaitLocalPropagation({
+        text: serializeFlashcardsDocument(doc),
+        isUserModified: true,
+        previews: {
+          previewPlain: `Flashcards: ${doc.cards.length} ${doc.cards.length === 1 ? 'card' : 'cards'}, ${known} known`,
+          previewHtml: undefined,
+        },
+      })
     },
-    [controller, isReadonly],
+    [controller],
   )
+  const persist = useEditorPersistenceDebounce({
+    controller,
+    noteUuid: controller.item.uuid,
+    persist: persistDocument,
+    disabled: isReadonly,
+  })
 
   const updateDocument = useCallback(
     (updater: (doc: FlashcardsDocument) => FlashcardsDocument) => {
@@ -101,14 +97,6 @@ export const FlashcardsEditor: FunctionComponent<Props> = ({
     })
     return disposer
   }, [controller])
-
-  useEffect(() => {
-    return () => {
-      if (persistTimer.current) {
-        clearTimeout(persistTimer.current)
-      }
-    }
-  }, [])
 
   // --- card mutators -------------------------------------------------------
 
