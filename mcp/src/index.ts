@@ -21,13 +21,16 @@ import type { McpScope } from "./snjs/tokenAuth.js";
 import { rootsFromEnvironment } from "./security/filesystem.js";
 import {
   assertSafeHttpBinding,
+  evictIdleSessions,
   HttpInputError,
   isBearerAuthorized,
   isInitializeRequest,
+  isLoopbackHost,
   parseBoundedInteger,
   readBoundedJsonBody,
   withHttpRequestTimeout,
 } from "./httpSecurity.js";
+import { AsyncMutex } from "./AsyncMutex.js";
 
 // Transport selection. `stdio` (default) preserves the original single-client
 // behavior. `http` runs the bridge as a long-lived, authenticated network
@@ -114,6 +117,7 @@ let headless: HeadlessApp | undefined;
 let client: SnjsBackedClient | undefined;
 let initPromise: Promise<SnjsBackedClient> | undefined;
 let activeScope: McpScope | undefined;
+const bridgeOperations = new AsyncMutex();
 
 function diagnosticMessage(error: unknown): string {
   let message = error instanceof Error ? error.message : String(error);
@@ -125,6 +129,14 @@ function diagnosticMessage(error: unknown): string {
   return message
     .replace(/\bBearer\s+[^\s,;]+/gi, "Bearer <redacted>")
     .slice(0, 1_000);
+}
+
+async function useClient<T>(
+  operation: (activeClient: SnjsBackedClient) => Promise<T> | T,
+): Promise<T> {
+  return bridgeOperations.runExclusive(async () =>
+    operation(await getClient()),
+  );
 }
 
 // Lazily bootstrap snjs and sign into the account on first use. Memoized so the
@@ -147,6 +159,7 @@ function getClient(): Promise<SnjsBackedClient> {
         mfaCode,
         password,
         syncIntervalMs,
+        runExclusive: (operation) => bridgeOperations.runExclusive(operation),
         onUnauthorized: () => {
           if (headless === created) {
             headless = undefined;
@@ -190,14 +203,14 @@ function getClient(): Promise<SnjsBackedClient> {
         maxExportBytes,
       });
       return client;
-    })().catch((error) => {
+    })().catch(async (error) => {
       // Don't cache a rejected init — a transient sign-in/network failure would
       // otherwise brick every subsequent tool call until the process restarts.
       // Tear down any half-initialized app so the next call starts clean.
       initPromise = undefined;
       const failed = headless;
       if (failed) {
-        void (
+        await (
           isUnauthorizedError(error) ? failed.wipe() : failed.deinit()
         ).catch(() => {});
       }
@@ -259,11 +272,21 @@ function buildServer(): McpServer {
       const accountConfigured = Boolean(mcpToken || (email && password));
       let signedIn = false;
       let initializationError: string | undefined;
-      let initializedClient: SnjsBackedClient | undefined;
+      let initializedStatus:
+        | {
+            writes: boolean;
+            tagScope: ReturnType<SnjsBackedClient["accountStatus"]>["tagScope"];
+          }
+        | undefined;
       try {
         if (accountConfigured) {
-          initializedClient = await getClient();
-          signedIn = headless?.isSignedIn() ?? false;
+          initializedStatus = await useClient((activeClient) => {
+            signedIn = headless?.isSignedIn() ?? false;
+            return {
+              writes: activeClient.allowWrites,
+              tagScope: activeClient.accountStatus().tagScope,
+            };
+          });
         }
       } catch (error) {
         signedIn = false;
@@ -274,7 +297,7 @@ function buildServer(): McpServer {
         authorizationLost: false,
       };
       const tagScope =
-        initializedClient?.accountStatus().tagScope ??
+        initializedStatus?.tagScope ??
         ({
           restricted: activeScope?.tagUuids !== undefined,
           enforcement: "client-side-advisory",
@@ -290,7 +313,7 @@ function buildServer(): McpServer {
             : "ready",
         transport: transportMode,
         serverUrl,
-        writes: initializedClient?.allowWrites ?? configuredAllowWrites,
+        writes: initializedStatus?.writes ?? configuredAllowWrites,
         accountConfigured,
         signedIn,
         // A signed-in bridge whose background sync keeps failing is a "zombie":
@@ -338,7 +361,9 @@ function buildServer(): McpServer {
       },
     },
     async ({ limit, cursor }) => {
-      const result = await (await getClient()).listNotes(limit, cursor);
+      const result = await useClient((activeClient) =>
+        activeClient.listNotes(limit, cursor),
+      );
       return {
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
         structuredContent: result as unknown as Record<string, unknown>,
@@ -367,7 +392,9 @@ function buildServer(): McpServer {
       },
     },
     async ({ query, limit }) => {
-      const result = await (await getClient()).searchNotes(query, limit);
+      const result = await useClient((activeClient) =>
+        activeClient.searchNotes(query, limit),
+      );
       return {
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
         structuredContent: result as unknown as Record<string, unknown>,
@@ -393,7 +420,9 @@ function buildServer(): McpServer {
       },
     },
     async ({ uuid }) => {
-      const note = await (await getClient()).readNote(uuid);
+      const note = await useClient((activeClient) =>
+        activeClient.readNote(uuid),
+      );
       return {
         content: [{ type: "text", text: JSON.stringify(note, null, 2) }],
         structuredContent: note as unknown as Record<string, unknown>,
@@ -421,9 +450,9 @@ function buildServer(): McpServer {
       outputSchema: { uuid: z.string(), title: z.string() },
     },
     async ({ title, body, tags, vault }) => {
-      const created = await (
-        await getClient()
-      ).createNote({ title, body, tags, vault });
+      const created = await useClient((activeClient) =>
+        activeClient.createNote({ title, body, tags, vault }),
+      );
       return {
         content: [{ type: "text", text: JSON.stringify(created, null, 2) }],
         structuredContent: created as unknown as Record<string, unknown>,
@@ -446,9 +475,9 @@ function buildServer(): McpServer {
       outputSchema: { uuid: z.string(), updatedAt: z.string() },
     },
     async ({ uuid, title, body, tags }) => {
-      const updated = await (
-        await getClient()
-      ).updateNote(uuid, { title, body, tags });
+      const updated = await useClient((activeClient) =>
+        activeClient.updateNote(uuid, { title, body, tags }),
+      );
       return {
         content: [{ type: "text", text: JSON.stringify(updated, null, 2) }],
         structuredContent: updated as unknown as Record<string, unknown>,
@@ -466,7 +495,7 @@ function buildServer(): McpServer {
       outputSchema: { uuid: z.string(), deleted: z.boolean() },
     },
     async ({ uuid }) => {
-      await (await getClient()).deleteNote(uuid);
+      await useClient((activeClient) => activeClient.deleteNote(uuid));
       return {
         content: [
           { type: "text", text: JSON.stringify({ uuid, deleted: true }) },
@@ -487,7 +516,7 @@ function buildServer(): McpServer {
       },
     },
     async () => {
-      const tags = await (await getClient()).listTags();
+      const tags = await useClient((activeClient) => activeClient.listTags());
       return {
         content: [{ type: "text", text: JSON.stringify({ tags }, null, 2) }],
         structuredContent: { tags },
@@ -512,12 +541,9 @@ function buildServer(): McpServer {
       },
     },
     async ({ noteUuid, add, remove }) => {
-      const result = await (
-        await getClient()
-      ).applyTags(noteUuid, {
-        add,
-        remove,
-      });
+      const result = await useClient((activeClient) =>
+        activeClient.applyTags(noteUuid, { add, remove }),
+      );
       return {
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
         structuredContent: result as unknown as Record<string, unknown>,
@@ -541,12 +567,12 @@ function buildServer(): McpServer {
         },
       },
       async ({ noteUuid, tagUuid }) => {
-        const result = await (
-          await getClient()
-        ).applyTags(noteUuid, {
-          add: operation === "add" ? [tagUuid] : [],
-          remove: operation === "remove" ? [tagUuid] : [],
-        });
+        const result = await useClient((activeClient) =>
+          activeClient.applyTags(noteUuid, {
+            add: operation === "add" ? [tagUuid] : [],
+            remove: operation === "remove" ? [tagUuid] : [],
+          }),
+        );
         return {
           content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
           structuredContent: result as unknown as Record<string, unknown>,
@@ -580,14 +606,14 @@ function buildServer(): McpServer {
       },
     },
     async ({ noteUuid, path, name, mimeType }) => {
-      const result = await (
-        await getClient()
-      ).attachFile({
-        noteUuid,
-        path,
-        name,
-        mimeType,
-      });
+      const result = await useClient((activeClient) =>
+        activeClient.attachFile({
+          noteUuid,
+          path,
+          name,
+          mimeType,
+        }),
+      );
       return {
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
         structuredContent: result,
@@ -612,9 +638,9 @@ function buildServer(): McpServer {
       },
     },
     async ({ outputPath, overwrite }) => {
-      const result = await (
-        await getClient()
-      ).createEncryptedExport({ outputPath, overwrite });
+      const result = await useClient((activeClient) =>
+        activeClient.createEncryptedExport({ outputPath, overwrite }),
+      );
       return {
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
         structuredContent: result,
@@ -684,7 +710,9 @@ function buildServer(): McpServer {
       },
     },
     async () => {
-      const result = (await getClient()).accountStatus();
+      const result = await useClient((activeClient) =>
+        activeClient.accountStatus(),
+      );
       return {
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
         structuredContent: result,
@@ -706,7 +734,9 @@ function buildServer(): McpServer {
       },
     },
     async () => {
-      const vaults = await (await getClient()).listVaults();
+      const vaults = await useClient((activeClient) =>
+        activeClient.listVaults(),
+      );
       return {
         content: [{ type: "text", text: JSON.stringify({ vaults }, null, 2) }],
         structuredContent: { vaults },
@@ -727,7 +757,9 @@ function buildServer(): McpServer {
       outputSchema: { uuid: z.string(), name: z.string(), shared: z.boolean() },
     },
     async ({ name, description }) => {
-      const vault = await (await getClient()).createVault(name, description);
+      const vault = await useClient((activeClient) =>
+        activeClient.createVault(name, description),
+      );
       return {
         content: [{ type: "text", text: JSON.stringify(vault, null, 2) }],
         structuredContent: vault as unknown as Record<string, unknown>,
@@ -839,32 +871,64 @@ async function startHttp(): Promise<void> {
   console.error(
     `[mcp] Streamable HTTP transport listening on ${httpHost}:${httpPort} (POST/GET/DELETE /mcp, bearer-authenticated)`,
   );
+  if (!isLoopbackHost(httpHost)) {
+    console.error(
+      "[mcp] WARNING: the built-in MCP HTTP listener is plaintext. " +
+        "MCP_HTTP_ALLOW_REMOTE=1 is only safe behind trusted TLS termination; " +
+        "a bearer token alone does not protect traffic on a hostile network.",
+    );
+  }
 
   const sweepInterval = setInterval(
     () => {
-      const cutoff = Date.now() - httpSessionIdleMs;
-      for (const [id, session] of state.sessions) {
-        if (session.lastSeenAt < cutoff) {
-          state.sessions.delete(id);
-          void session.transport.close().catch(() => {});
-        }
-      }
+      void evictIdleSessions(
+        state.sessions,
+        Date.now(),
+        httpSessionIdleMs,
+        (session) => session.transport.close(),
+      );
     },
     Math.min(httpSessionIdleMs, 30_000),
   );
   sweepInterval.unref?.();
 
   // Close active sessions on shutdown so in-flight streams end cleanly.
+  let shutdownPromise: Promise<void> | undefined;
   httpShutdownHook = async () => {
-    clearInterval(sweepInterval);
-    await new Promise<void>((resolve) => httpServer.close(() => resolve()));
-    for (const session of state.sessions.values()) {
-      try {
-        await session.transport.close();
-      } catch {
-        /* best-effort */
-      }
+    if (shutdownPromise) {
+      return shutdownPromise;
     }
+    shutdownPromise = (async () => {
+      clearInterval(sweepInterval);
+
+      // End Streamable-HTTP GET/SSE streams before awaiting server.close().
+      // Reversing this order deadlocks shutdown because close() waits for those
+      // long-lived responses to finish.
+      const sessions = [...state.sessions.values()];
+      state.sessions.clear();
+      await Promise.allSettled(
+        sessions.map((session) => session.transport.close()),
+      );
+
+      let forceTimer: NodeJS.Timeout | undefined;
+      try {
+        await Promise.race([
+          new Promise<void>((resolve) => httpServer.close(() => resolve())),
+          new Promise<void>((resolve) => {
+            forceTimer = setTimeout(() => {
+              httpServer.closeAllConnections();
+              resolve();
+            }, 5_000);
+            forceTimer.unref?.();
+          }),
+        ]);
+      } finally {
+        if (forceTimer) {
+          clearTimeout(forceTimer);
+        }
+      }
+    })();
+    return shutdownPromise;
   };
 }
 
@@ -942,6 +1006,7 @@ async function handleHttpRequest(
   state.initializations += 1;
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: () => randomUUID(),
+    enableJsonResponse: true,
     onsessioninitialized: (id) => {
       state.sessions.set(id, { transport, lastSeenAt: Date.now() });
     },

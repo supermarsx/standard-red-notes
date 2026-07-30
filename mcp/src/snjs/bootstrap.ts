@@ -50,6 +50,10 @@ export interface BootstrapOptions {
    * bridge to wipe local account state and deinitialize.
    */
   onUnauthorized?: () => void;
+  /**
+   * Serializes background sync with MCP tool operations sharing this app.
+   */
+  runExclusive?: <T>(operation: () => Promise<T>) => Promise<T>;
 }
 
 export function isUnauthorizedError(error: unknown): boolean {
@@ -249,11 +253,16 @@ export async function bootstrapHeadlessApp(
       return;
     }
     authorizationLost = true;
+    // Invalidate the globally reachable client before any network logout or
+    // disk erasure: a queued tool must never observe the revoked local session.
     try {
-      await result.wipe();
-    } finally {
       options.onUnauthorized?.();
+    } catch {
+      // A notification hook must never prevent mandatory local erasure.
     }
+    await result.wipe().catch(() => {
+      // wipe() is best-effort but authorization remains lost either way.
+    });
   }
 
   const result: HeadlessApp = {
@@ -269,8 +278,21 @@ export async function bootstrapHeadlessApp(
           return;
         }
         syncing = true;
-        void app.sync
-          .sync({ sourceDescription: "mcp-bridge-loop" })
+        const syncOperation = async () => {
+          try {
+            await app.sync.sync({ sourceDescription: "mcp-bridge-loop" });
+          } catch (error) {
+            if (isUnauthorizedError(error)) {
+              await handleAuthorizationLoss();
+            }
+            throw error;
+          }
+        };
+        void (
+          options.runExclusive
+            ? options.runExclusive(syncOperation)
+            : syncOperation()
+        )
           .then(() => {
             consecutiveSyncFailures = 0;
             lastSyncError = undefined;
@@ -279,9 +301,6 @@ export async function bootstrapHeadlessApp(
           .catch((e: unknown) => {
             consecutiveSyncFailures += 1;
             lastSyncError = e instanceof Error ? e.message : String(e);
-            if (isUnauthorizedError(e)) {
-              void handleAuthorizationLoss();
-            }
           })
           .finally(() => {
             syncing = false;

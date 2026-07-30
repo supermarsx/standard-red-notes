@@ -137,10 +137,6 @@ export async function writePrivateOutputFile(
       await fs.unlink(temporary);
       temporaryExists = false;
     }
-
-    if (process.platform !== "win32") {
-      await fs.chmod(target, 0o600);
-    }
   } finally {
     if (temporaryExists) {
       await fs.unlink(temporary).catch(() => {});

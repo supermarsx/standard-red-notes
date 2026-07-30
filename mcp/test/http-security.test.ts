@@ -3,6 +3,7 @@ import type { IncomingMessage } from "node:http";
 import { describe, expect, test } from "vitest";
 import {
   assertSafeHttpBinding,
+  evictIdleSessions,
   HttpInputError,
   isBearerAuthorized,
   isInitializeRequest,
@@ -106,5 +107,21 @@ describe("HTTP MCP boundary", () => {
       status: 504,
       message: "MCP request timed out",
     });
+  });
+
+  test("evicts and closes only naturally idle sessions", async () => {
+    const closed: string[] = [];
+    const sessions = new Map([
+      ["expired", { id: "expired", lastSeenAt: 1_000 }],
+      ["boundary", { id: "boundary", lastSeenAt: 2_000 }],
+      ["active", { id: "active", lastSeenAt: 2_001 }],
+    ]);
+    await expect(
+      evictIdleSessions(sessions, 3_000, 1_000, async (session) => {
+        closed.push(session.id);
+      }),
+    ).resolves.toBe(2);
+    expect(closed).toEqual(["expired", "boundary"]);
+    expect([...sessions.keys()]).toEqual(["active"]);
   });
 });

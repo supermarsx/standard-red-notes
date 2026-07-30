@@ -194,3 +194,23 @@ export async function withHttpRequestTimeout<T>(
     }
   }
 }
+
+export async function evictIdleSessions<T extends { lastSeenAt: number }>(
+  sessions: Map<string, T>,
+  now: number,
+  idleMs: number,
+  close: (session: T) => Promise<void>,
+): Promise<number> {
+  let evicted = 0;
+  for (const [id, session] of sessions) {
+    if (now - session.lastSeenAt < idleMs) {
+      continue;
+    }
+    // Delete before awaiting close so no request can reuse an expiring
+    // session while its SSE stream is being torn down.
+    sessions.delete(id);
+    evicted += 1;
+    await close(session).catch(() => {});
+  }
+  return evicted;
+}
