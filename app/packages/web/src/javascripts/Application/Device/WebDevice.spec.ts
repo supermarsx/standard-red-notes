@@ -52,6 +52,16 @@ const originalLockManager = navigator.locks
 
 type Wrapped = { __srnKeychainEnc: number; alg: string; iv: string; ct: string }
 
+const installImmediateLockManager = () => {
+  Object.defineProperty(navigator, 'locks', {
+    configurable: true,
+    value: {
+      request: <T>(name: string, _options: LockOptions, callback: LockGrantedCallback<T>): Promise<T> =>
+        Promise.resolve(callback({ name, mode: 'exclusive' } as Lock)),
+    },
+  })
+}
+
 /** A representative RawKeychainValue-shaped blob (root key material per identifier). */
 const sampleKeychain = {
   'workspace-a': { version: '004', masterKey: 'mk-a', dataAuthenticationKey: 'dak-a' },
@@ -81,6 +91,7 @@ describe('WebDevice keychain-at-rest wrapping', () => {
   beforeEach(() => {
     localStorage.clear()
     jest.clearAllMocks()
+    installImmediateLockManager()
     // Restore default mock behaviors (clearAllMocks wipes implementations set per-test).
     ;(mocked.isWrappingAvailable as jest.Mock).mockImplementation(async () => true)
     ;(mocked.getOrCreateDeviceKey as jest.Mock).mockImplementation(async () => ({
@@ -336,6 +347,22 @@ describe('WebDevice keychain-at-rest wrapping', () => {
       })
       expect(request).toHaveBeenCalledTimes(2)
       expect(request.mock.calls.every(([name]) => name === 'standard-red-notes-keychain-mutation')).toBe(true)
+    })
+
+    it('refuses mutation without Web Locks and leaves the keychain untouched', async () => {
+      Object.defineProperty(navigator, 'locks', {
+        configurable: true,
+        value: undefined,
+      })
+      const { device, emitKeychainChanged } = makeDevice(false)
+      localStorage.setItem(KEYCHAIN_STORAGE_KEY, JSON.stringify(sampleKeychain))
+
+      await expect(
+        device.setNamespacedKeychainValue({ masterKey: 'mk-b' } as any, 'workspace-b' as any),
+      ).rejects.toThrow(/requires the Web Locks API/)
+
+      expect(readStoredParsed()).toEqual(sampleKeychain)
+      expect(emitKeychainChanged).not.toHaveBeenCalled()
     })
   })
 

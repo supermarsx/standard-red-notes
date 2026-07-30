@@ -19,6 +19,8 @@ import {
 import { Database, DatabaseCrossTabHooks } from '../Database'
 
 const KEYCHAIN_MUTATION_LOCK = 'standard-red-notes-keychain-mutation'
+const KEYCHAIN_MUTATION_LOCK_UNAVAILABLE =
+  'Secure keychain mutation requires the Web Locks API; refusing an unserialized keychain write.'
 
 export abstract class WebOrDesktopDevice implements WebOrDesktopDeviceInterface {
   platform?: Platform
@@ -274,12 +276,14 @@ export abstract class WebOrDesktopDevice implements WebOrDesktopDeviceInterface 
    * different update, silently discarding whichever write lands first.
    *
    * Web Locks is shared by same-origin browsing contexts (including desktop
-   * renderer windows). Older engines fall back to the existing behavior.
+   * renderer windows). Runtimes without that guarantee must refuse the
+   * mutation: proceeding would silently reintroduce the lost-update race this
+   * lock exists to prevent.
    */
   protected async withKeychainMutationLock<T>(operation: () => Promise<T>): Promise<T> {
     const lockManager = typeof navigator !== 'undefined' ? navigator.locks : undefined
-    if (!lockManager) {
-      return operation()
+    if (!lockManager || typeof lockManager.request !== 'function') {
+      throw new Error(KEYCHAIN_MUTATION_LOCK_UNAVAILABLE)
     }
 
     return lockManager.request(KEYCHAIN_MUTATION_LOCK, { mode: 'exclusive' }, operation)
