@@ -1,0 +1,20 @@
+diff --git a/android/build.gradle b/android/build.gradle
+index 0497b555b1bfab7cc0bb0a6d5d559ad68c1d57fa..eb3a763a7c383b06fbe81d063ba3ff5593eca5c6 100644
+--- a/android/build.gradle
++++ b/android/build.gradle
+@@ -5,7 +5,7 @@ buildscript {
+     if (project == rootProject) {
+         repositories {
+             google()
+-            jcenter()
++            mavenCentral()
+         }
+         dependencies {
+             classpath 'com.android.tools.build:gradle:3.6.3'
+@@ -43,5 +43,5 @@ repositories {
+         // All of React Native (JS, Obj-C sources, Android binaries) is installed from npm
+         url "$rootDir/../node_modules/react-native/android"
+     }
+-    jcenter()
++    mavenCentral()
+ }

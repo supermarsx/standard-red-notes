@@ -139,7 +139,9 @@ dependencies {
 
     implementation 'androidx.appcompat:appcompat:1.7.1'
     implementation 'de.undercouch:gradle-download-task:5.7.0'
-    implementation 'com.google.android.gms:play-services-fido:21.3.0'
+    // 21.3.0 is compiled with Kotlin 2.3 metadata, which RN 0.86's Kotlin
+    // 2.1.20 toolchain cannot consume. Stay on the last compatible FIDO SDK.
+    implementation 'com.google.android.gms:play-services-fido:21.2.0'
 
     androidTestImplementation('com.wix:detox:+')
 

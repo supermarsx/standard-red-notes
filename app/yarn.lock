@@ -10746,7 +10746,7 @@ __metadata:
     "@react-native/babel-preset": "npm:0.86.0"
     "@react-native/eslint-config": "npm:0.86.0"
     "@react-native/metro-config": "npm:0.86.0"
-    "@standardnotes/react-native-utils": "npm:1.0.1"
+    "@standardnotes/react-native-utils": "patch:@standardnotes/react-native-utils@npm%3A1.0.1#~/.yarn/patches/@standardnotes-react-native-utils-npm-1.0.1-40c9dd01f0.patch"
     "@standardnotes/snjs": "workspace:*"
     "@standardnotes/web": "workspace:*"
     "@types/jest": "npm:^30.0.0"
@@ -10766,10 +10766,10 @@ __metadata:
     react: "npm:19.2.7"
     react-native: "npm:0.86.0"
     react-native-file-viewer: "npm:^2.1.5"
-    react-native-fingerprint-scanner: "standardnotes/react-native-fingerprint-scanner#b55d1c0ca627a87a130f758603f12911fbac200f"
-    react-native-flag-secure-android: "standardnotes/react-native-flag-secure-android#cb08e74583c22a5d912842459b35ebbbb4bcd852"
+    react-native-fingerprint-scanner: "patch:react-native-fingerprint-scanner@https%3A//github.com/standardnotes/react-native-fingerprint-scanner.git%23commit=b55d1c0ca627a87a130f758603f12911fbac200f#~/.yarn/patches/react-native-fingerprint-scanner-https-c92249c49b.patch"
+    react-native-flag-secure-android: "patch:react-native-flag-secure-android@https%3A//github.com/standardnotes/react-native-flag-secure-android.git%23commit=cb08e74583c22a5d912842459b35ebbbb4bcd852#~/.yarn/patches/react-native-flag-secure-android-https-2c9d6318d9.patch"
     react-native-fs: "npm:^2.20.0"
-    react-native-iap: "npm:^15.5.0"
+    react-native-iap: "patch:react-native-iap@npm%3A15.5.0#~/.yarn/patches/react-native-iap-npm-15.5.0-f9478cfd8f.patch"
     react-native-keychain: "standardnotes/react-native-keychain#618c3e1f253e6980866ee02a80c3ea66fa6f5bad"
     react-native-mmkv: "npm:^4.3.2"
     react-native-nitro-modules: "npm:0.35.10"
@@ -10826,6 +10826,13 @@ __metadata:
   version: 1.0.1
   resolution: "@standardnotes/react-native-utils@npm:1.0.1"
   checksum: 10/9ab93b7ebc5abb60ed4f50d8dd1a8f6090fb3b9d74b2f2c415845316346f518c8a0536bc6d611731262400c57bfabb5e2cc8529d61290137240412b3aec5c081
+  languageName: node
+  linkType: hard
+
+"@standardnotes/react-native-utils@patch:@standardnotes/react-native-utils@npm%3A1.0.1#~/.yarn/patches/@standardnotes-react-native-utils-npm-1.0.1-40c9dd01f0.patch":
+  version: 1.0.1
+  resolution: "@standardnotes/react-native-utils@patch:@standardnotes/react-native-utils@npm%3A1.0.1#~/.yarn/patches/@standardnotes-react-native-utils-npm-1.0.1-40c9dd01f0.patch::version=1.0.1&hash=96610e"
+  checksum: 10/c0234fc06b3df766ba9813ba58ff99734e61249172d81ceaeace2838be98d522ad30e897e659b2ab8c6f3f3bbdcaa4cc5b8c47caf154965a660cba2aa32c2e85
   languageName: node
   linkType: hard
 
@@ -28305,7 +28312,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"react-native-fingerprint-scanner@standardnotes/react-native-fingerprint-scanner#b55d1c0ca627a87a130f758603f12911fbac200f":
+"react-native-fingerprint-scanner@https://github.com/standardnotes/react-native-fingerprint-scanner.git#commit=b55d1c0ca627a87a130f758603f12911fbac200f":
   version: 5.0.0
   resolution: "react-native-fingerprint-scanner@https://github.com/standardnotes/react-native-fingerprint-scanner.git#commit=b55d1c0ca627a87a130f758603f12911fbac200f"
   peerDependencies:
@@ -28314,10 +28321,26 @@ __metadata:
   languageName: node
   linkType: hard
 
-"react-native-flag-secure-android@standardnotes/react-native-flag-secure-android#cb08e74583c22a5d912842459b35ebbbb4bcd852":
+"react-native-fingerprint-scanner@patch:react-native-fingerprint-scanner@https%3A//github.com/standardnotes/react-native-fingerprint-scanner.git%23commit=b55d1c0ca627a87a130f758603f12911fbac200f#~/.yarn/patches/react-native-fingerprint-scanner-https-c92249c49b.patch":
+  version: 5.0.0
+  resolution: "react-native-fingerprint-scanner@patch:react-native-fingerprint-scanner@https%3A//github.com/standardnotes/react-native-fingerprint-scanner.git%23commit=b55d1c0ca627a87a130f758603f12911fbac200f#~/.yarn/patches/react-native-fingerprint-scanner-https-c92249c49b.patch::version=5.0.0&hash=a256b4"
+  peerDependencies:
+    react-native: ">=0.60 <1.0.0"
+  checksum: 10/2b31a4e5b94cd456e5f954911cc60f9d218d0df776561de5abe5d3226ba1e3665e95ecbfef04a73e36273d0181d30a733f250f182cb92f098ee89965b54bab4f
+  languageName: node
+  linkType: hard
+
+"react-native-flag-secure-android@https://github.com/standardnotes/react-native-flag-secure-android.git#commit=cb08e74583c22a5d912842459b35ebbbb4bcd852":
   version: 1.0.0
   resolution: "react-native-flag-secure-android@https://github.com/standardnotes/react-native-flag-secure-android.git#commit=cb08e74583c22a5d912842459b35ebbbb4bcd852"
   checksum: 10/6c90fe473a4926bbc5978c6cd42f60ceab802e71b67744288511988804e9281dca7afa44e13ef2201b5c96a6146e4d0dceb1faa57d811a705d88568b892f944e
+  languageName: node
+  linkType: hard
+
+"react-native-flag-secure-android@patch:react-native-flag-secure-android@https%3A//github.com/standardnotes/react-native-flag-secure-android.git%23commit=cb08e74583c22a5d912842459b35ebbbb4bcd852#~/.yarn/patches/react-native-flag-secure-android-https-2c9d6318d9.patch":
+  version: 1.0.0
+  resolution: "react-native-flag-secure-android@patch:react-native-flag-secure-android@https%3A//github.com/standardnotes/react-native-flag-secure-android.git%23commit=cb08e74583c22a5d912842459b35ebbbb4bcd852#~/.yarn/patches/react-native-flag-secure-android-https-2c9d6318d9.patch::version=1.0.0&hash=8fc2ce"
+  checksum: 10/a31a83845afd89956dc52b2d701d97e894f3dd67925a3b6306e1e4ff0b741bd24c493e575eeff68751d3ae89042da2b3ee239b7f69be7498305dee8572504f80
   languageName: node
   linkType: hard
 
@@ -28337,7 +28360,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"react-native-iap@npm:^15.5.0":
+"react-native-iap@npm:15.5.0":
   version: 15.5.0
   resolution: "react-native-iap@npm:15.5.0"
   peerDependencies:
@@ -28352,6 +28375,24 @@ __metadata:
     "@amazon-devices/package-manager-lib":
       optional: true
   checksum: 10/8a4fe3abcc38f683e1f4f0870002599ccedcf3af01ecba430fe00b6cb407e077637e5c027db7bdf88452d2630a5100e0ae0b994a3cac73406df701db4021635d
+  languageName: node
+  linkType: hard
+
+"react-native-iap@patch:react-native-iap@npm%3A15.5.0#~/.yarn/patches/react-native-iap-npm-15.5.0-f9478cfd8f.patch":
+  version: 15.5.0
+  resolution: "react-native-iap@patch:react-native-iap@npm%3A15.5.0#~/.yarn/patches/react-native-iap-npm-15.5.0-f9478cfd8f.patch::version=15.5.0&hash=9150c9"
+  peerDependencies:
+    "@amazon-devices/keplerscript-appstore-iap-lib": ~2.12.13
+    "@amazon-devices/package-manager-lib": ~1.0.1767254401
+    react: "*"
+    react-native: "*"
+    react-native-nitro-modules: ^0.35.10
+  peerDependenciesMeta:
+    "@amazon-devices/keplerscript-appstore-iap-lib":
+      optional: true
+    "@amazon-devices/package-manager-lib":
+      optional: true
+  checksum: 10/a4f7d04e5d5df2959557cb54889f753b874312d5aa32bd677fe3460772c279a80056a26972177183163801dd8b04a830c5f272d53ff36b4504a1c11faa881ce9
   languageName: node
   linkType: hard
 

@@ -1,0 +1,11 @@
+diff --git a/android/build.gradle b/android/build.gradle
+index 96147102e84157ae539b65f7dad4a6b584c033d1..036ff4633ead6669dfc4d6254aeeccaf789ab599 100644
+--- a/android/build.gradle
++++ b/android/build.gradle
+@@ -227,3 +227,6 @@ android {
+   lintOptions {
+     disable "GradleCompatible"
++    // This detector's bundled metadata reader cannot parse the Kotlin 2.2
++    // metadata used by react-native-iap 15.5.0. Keep the rest of lint enabled.
++    disable "CoroutineCreationDuringComposition"
+   }
