@@ -25,6 +25,7 @@ import {
   resolveMappedPlaintextBackupPath,
   resolvePathInsideDirectory,
 } from './PlaintextBackupPaths'
+import { writeFileAtomically } from './AtomicFileWriter'
 
 const TextBackupFileExtension = '.txt'
 
@@ -155,7 +156,9 @@ export class FilesBackupManager implements FileBackupsDevice {
   }
 
   private async saveFilesBackupsMappingFile(location: string, file: FileBackupsMapping): Promise<'success' | 'failed'> {
-    await this.filesManager.writeJSONFile(this.getFileBackupsMappingFilePath(location), file)
+    const mappingPath = this.getFileBackupsMappingFilePath(location)
+    await this.filesManager.ensureDirectoryExists(path.dirname(mappingPath))
+    await writeFileAtomically(mappingPath, JSON.stringify(file, null, 2))
 
     return 'success'
   }
@@ -318,7 +321,9 @@ export class FilesBackupManager implements FileBackupsDevice {
     location: string,
     file: PlaintextBackupsMapping,
   ): Promise<'success' | 'failed'> {
-    await this.filesManager.writeJSONFile(this.getPlaintextMappingFilePath(location), file)
+    const mappingPath = this.getPlaintextMappingFilePath(location)
+    await this.filesManager.ensureDirectoryExists(path.dirname(mappingPath))
+    await writeFileAtomically(mappingPath, JSON.stringify(file, null, 2))
 
     return 'success'
   }
@@ -368,7 +373,7 @@ export class FilesBackupManager implements FileBackupsDevice {
       const fileAbsolutePath = resolvePathInsideDirectory(location, relativePath)
 
       await this.filesManager.ensureDirectoryExists(path.dirname(fileAbsolutePath))
-      await this.filesManager.writeFile(fileAbsolutePath, data)
+      await writeFileAtomically(fileAbsolutePath, data)
 
       newRecords.push({
         tag: forTag,

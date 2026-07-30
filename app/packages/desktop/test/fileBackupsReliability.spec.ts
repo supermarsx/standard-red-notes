@@ -4,6 +4,8 @@ import http, { IncomingMessage, ServerResponse } from 'http'
 import os from 'os'
 import path from 'path'
 import { AddressInfo } from 'net'
+import { writeFileAtomically } from '../app/javascripts/Main/FileBackups/AtomicFileWriter'
+import type { AtomicFileWriteOperations } from '../app/javascripts/Main/FileBackups/AtomicFileWriter'
 import { FileDownloader } from '../app/javascripts/Main/FileBackups/FileDownloader'
 import {
   createPlaintextBackupFileName,
@@ -32,6 +34,103 @@ async function stopServer(server: http.Server): Promise<void> {
     server.close((error) => (error ? reject(error) : resolve()))
   })
 }
+
+function atomicOperationsWith(overrides: Partial<AtomicFileWriteOperations> = {}): AtomicFileWriteOperations {
+  return {
+    open: (filePath, flags) => fs.open(filePath, flags),
+    rename: (oldPath, newPath) => fs.rename(oldPath, newPath),
+    rm: (filePath, options) => fs.rm(filePath, options),
+    ...overrides,
+  }
+}
+
+test('atomic writer replaces an existing backup with one complete sibling-temp publish', async (t) => {
+  const directory = await createTemporaryDirectory()
+  const destination = path.join(directory, 'note.txt')
+
+  try {
+    await fs.writeFile(destination, 'previous backup')
+    await writeFileAtomically(destination, 'complete replacement')
+
+    t.is(await fs.readFile(destination, 'utf8'), 'complete replacement')
+    t.deepEqual(
+      (await fs.readdir(directory)).filter((fileName) => fileName.endsWith('.partial')),
+      [],
+    )
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('atomic writer preserves the previous file after a partial temporary write', async (t) => {
+  const directory = await createTemporaryDirectory()
+  const destination = path.join(directory, 'info.json')
+  const previous = '{"version":"known-good"}'
+
+  try {
+    await fs.writeFile(destination, previous)
+
+    await t.throwsAsync(
+      writeFileAtomically(
+        destination,
+        '{"version":"replacement"}',
+        atomicOperationsWith({
+          open: async (filePath, flags) => {
+            const handle = await fs.open(filePath, flags)
+            return {
+              writeFile: async (data, encoding) => {
+                await handle.writeFile(data.slice(0, 5), encoding)
+                throw new Error('simulated disk-full write')
+              },
+              sync: () => handle.sync(),
+              close: () => handle.close(),
+            }
+          },
+        }),
+      ),
+      { message: 'simulated disk-full write' },
+    )
+
+    t.is(await fs.readFile(destination, 'utf8'), previous)
+    t.deepEqual(
+      (await fs.readdir(directory)).filter((fileName) => fileName.endsWith('.partial')),
+      [],
+    )
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('atomic writer preserves the previous file and removes its temporary output when publish fails', async (t) => {
+  const directory = await createTemporaryDirectory()
+  const destination = path.join(directory, 'note.txt')
+  const previous = 'known-good note backup'
+
+  try {
+    await fs.writeFile(destination, previous)
+
+    await t.throwsAsync(
+      writeFileAtomically(
+        destination,
+        'replacement note backup',
+        atomicOperationsWith({
+          rename: async () => {
+            throw new Error('simulated rename failure')
+          },
+        }),
+      ),
+      { message: 'simulated rename failure' },
+    )
+
+    t.is(await fs.readFile(destination, 'utf8'), previous)
+    t.deepEqual(
+      (await fs.readdir(directory)).filter((fileName) => fileName.endsWith('.partial')),
+      [],
+    )
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true })
+  }
+})
 
 test('encrypted file backup replaces stale bytes and validates every downloaded range', async (t) => {
   const directory = await createTemporaryDirectory()
