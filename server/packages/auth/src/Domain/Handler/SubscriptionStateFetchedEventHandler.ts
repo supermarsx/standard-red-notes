@@ -15,10 +15,11 @@ export class SubscriptionStateFetchedEventHandler implements DomainEventHandlerI
   ) {}
 
   async handle(event: SubscriptionStateFetchedEvent): Promise<void> {
-    if (!event.payload.subscriptionId) {
+    const subscriptionId = event.payload.subscriptionId
+    if (!Number.isSafeInteger(subscriptionId) || subscriptionId <= 0) {
       this.logger.error('Subscription ID is missing', {
         codeTag: 'SubscriptionStateFetchedEventHandler.handle',
-        subscriptionId: event.payload.subscriptionId,
+        subscriptionId,
         userId: event.payload.userEmail,
       })
 
@@ -26,21 +27,21 @@ export class SubscriptionStateFetchedEventHandler implements DomainEventHandlerI
     }
 
     this.logger.info('Subscription state update fetched', {
-      subscriptionId: event.payload.subscriptionId,
+      subscriptionId,
     })
 
     if (event.payload.offline) {
       this.logger.info('Updating offline subscription', {
-        subscriptionId: event.payload.subscriptionId,
+        subscriptionId,
       })
 
       const subscription = await this.offlineUserSubscriptionRepository.findOneByEmailAndSubscriptionId(
         event.payload.userEmail,
-        0,
+        subscriptionId,
       )
       if (!subscription) {
         this.logger.error('Offline subscription not found', {
-          subscriptionId: event.payload.subscriptionId,
+          subscriptionId,
         })
 
         return
@@ -50,18 +51,18 @@ export class SubscriptionStateFetchedEventHandler implements DomainEventHandlerI
       subscription.email = event.payload.userEmail
       subscription.endsAt = event.payload.subscriptionExpiresAt
       subscription.cancelled = event.payload.canceled
-      if (subscription.subscriptionId !== event.payload.subscriptionId) {
+      if (subscription.subscriptionId !== subscriptionId) {
         this.logger.warn('Subscription IDs do not match', {
           previousSubscriptionId: subscription.subscriptionId,
-          subscriptionId: event.payload.subscriptionId,
+          subscriptionId,
         })
       }
-      subscription.subscriptionId = event.payload.subscriptionId
+      subscription.subscriptionId = subscriptionId
 
       await this.offlineUserSubscriptionRepository.save(subscription)
 
       this.logger.info('Offline subscription updated', {
-        subscriptionId: event.payload.subscriptionId,
+        subscriptionId,
       })
 
       return
@@ -70,7 +71,7 @@ export class SubscriptionStateFetchedEventHandler implements DomainEventHandlerI
     const usernameOrError = Username.create(event.payload.userEmail)
     if (usernameOrError.isFailed()) {
       this.logger.warn(`Could not update subscription: ${usernameOrError.getError()}`, {
-        subscriptionId: event.payload.subscriptionId,
+        subscriptionId,
       })
 
       return
@@ -81,7 +82,7 @@ export class SubscriptionStateFetchedEventHandler implements DomainEventHandlerI
 
     if (user === null) {
       this.logger.warn(`Could not find user with email: ${username.value}`, {
-        subscriptionId: event.payload.subscriptionId,
+        subscriptionId,
       })
 
       return
@@ -89,14 +90,17 @@ export class SubscriptionStateFetchedEventHandler implements DomainEventHandlerI
 
     this.logger.info('Updating subscription', {
       userId: user.uuid,
-      subscriptionId: event.payload.subscriptionId,
+      subscriptionId,
     })
 
-    const subscription = await this.userSubscriptionRepository.findOneByUserUuidAndSubscriptionId(user.uuid, 0)
+    const subscription = await this.userSubscriptionRepository.findOneByUserUuidAndSubscriptionId(
+      user.uuid,
+      subscriptionId,
+    )
     if (!subscription) {
       this.logger.error('Subscription not found', {
         userId: user.uuid,
-        subscriptionId: event.payload.subscriptionId,
+        subscriptionId,
       })
 
       return
@@ -105,19 +109,19 @@ export class SubscriptionStateFetchedEventHandler implements DomainEventHandlerI
     subscription.planName = event.payload.subscriptionName
     subscription.endsAt = event.payload.subscriptionExpiresAt
     subscription.cancelled = event.payload.canceled
-    if (subscription.subscriptionId !== event.payload.subscriptionId) {
+    if (subscription.subscriptionId !== subscriptionId) {
       this.logger.warn('Subscription IDs do not match', {
         previousSubscriptionId: subscription.subscriptionId,
-        subscriptionId: event.payload.subscriptionId,
+        subscriptionId,
       })
     }
-    subscription.subscriptionId = event.payload.subscriptionId
+    subscription.subscriptionId = subscriptionId
 
     await this.userSubscriptionRepository.save(subscription)
 
     this.logger.info('Subscription updated to current state', {
       userId: user.uuid,
-      subscriptionId: event.payload.subscriptionId,
+      subscriptionId,
     })
   }
 }

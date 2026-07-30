@@ -70,9 +70,24 @@ describe('SubscriptionStateFetchedEventHandler', () => {
     await createHandler().handle(eventWith({ userEmail }))
 
     expect(userSubscriptionRepository.save).not.toHaveBeenCalled()
+    expect(userSubscriptionRepository.findOneByUserUuidAndSubscriptionId).not.toHaveBeenCalled()
+    expect(offlineUserSubscriptionRepository.findOneByEmailAndSubscriptionId).not.toHaveBeenCalled()
     expect(logger.error).toHaveBeenCalledWith('Subscription ID is missing', {
       codeTag: 'SubscriptionStateFetchedEventHandler.handle',
       subscriptionId: undefined,
+      userId: userEmail,
+    })
+  })
+
+  it('should reject subscription id zero without querying either repository', async () => {
+    await createHandler().handle(eventWith({ ...fullPayload, subscriptionId: 0 }))
+
+    expect(userRepository.findOneByUsernameOrEmail).not.toHaveBeenCalled()
+    expect(userSubscriptionRepository.findOneByUserUuidAndSubscriptionId).not.toHaveBeenCalled()
+    expect(offlineUserSubscriptionRepository.findOneByEmailAndSubscriptionId).not.toHaveBeenCalled()
+    expect(logger.error).toHaveBeenCalledWith('Subscription ID is missing', {
+      codeTag: 'SubscriptionStateFetchedEventHandler.handle',
+      subscriptionId: 0,
       userId: userEmail,
     })
   })
@@ -157,14 +172,14 @@ describe('SubscriptionStateFetchedEventHandler', () => {
     expect(subscription.subscriptionId).toEqual(subscriptionId)
   })
 
-  // Documents CURRENT behaviour, not desired behaviour: both lookups pass a
-  // hardcoded 0 as the subscription id instead of the id from the event.
-  // Reported as a bug — see the executor log — deliberately NOT fixed here.
-  it('should look both subscriptions up with a hardcoded subscription id of 0', async () => {
+  it('should look both subscriptions up with the subscription id from the event', async () => {
     await createHandler().handle(eventWith({ ...fullPayload, offline: true }))
-    expect(offlineUserSubscriptionRepository.findOneByEmailAndSubscriptionId).toHaveBeenCalledWith(userEmail, 0)
+    expect(offlineUserSubscriptionRepository.findOneByEmailAndSubscriptionId).toHaveBeenCalledWith(
+      userEmail,
+      subscriptionId,
+    )
 
     await createHandler().handle(eventWith(fullPayload))
-    expect(userSubscriptionRepository.findOneByUserUuidAndSubscriptionId).toHaveBeenCalledWith(userUuid, 0)
+    expect(userSubscriptionRepository.findOneByUserUuidAndSubscriptionId).toHaveBeenCalledWith(userUuid, subscriptionId)
   })
 })
