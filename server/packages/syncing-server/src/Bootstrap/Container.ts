@@ -638,6 +638,7 @@ export class ContainerConfigLoader {
           : new FSItemBackupService(
               container.get(TYPES.Sync_FILE_UPLOAD_PATH),
               container.get(TYPES.Sync_ItemBackupMapper),
+              container.get(TYPES.Sync_ItemHttpMapper),
               container.get(TYPES.Sync_Logger),
             ),
       )
