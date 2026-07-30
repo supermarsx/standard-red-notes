@@ -22,6 +22,7 @@ const {
   httpPut,
   response,
   results,
+  sanitizeRequestUrlForLogging,
 } = require('../dist/src/index.js')
 
 const FUNCTION_MIDDLEWARE = Symbol('FunctionMiddleware')
@@ -428,6 +429,44 @@ test('results.OkResult, BadRequestResult and NotFoundResult use their canonical 
   assert.equal(new results.OkResult().statusCode, 200)
   assert.equal(new results.BadRequestResult().statusCode, 400)
   assert.equal(new results.NotFoundResult().statusCode, 404)
+})
+
+test('sanitizeRequestUrlForLogging strips credential-bearing query data and fragments from relative URLs', () => {
+  const sanitized = sanitizeRequestUrlForLogging(
+    '/v1/assistant/oauth/callback?code=oauth-secret&state=csrf-secret#private-fragment',
+  )
+
+  assert.equal(sanitized, '/v1/assistant/oauth/callback [query-parameter-count=2]')
+  assert.doesNotMatch(sanitized, /code|oauth-secret|state|csrf-secret|private-fragment/)
+})
+
+test('sanitizeRequestUrlForLogging strips origins, userinfo, and query data from full URLs', () => {
+  const sanitized = sanitizeRequestUrlForLogging(
+    'https://user:password@example.com/v1/subscriptions?subscription_token=bearer-secret&mode=full#private',
+  )
+
+  assert.equal(sanitized, '/v1/subscriptions [query-parameter-count=2]')
+  assert.doesNotMatch(sanitized, /user|password|example|subscription_token|bearer-secret|mode|private/)
+})
+
+test('sanitizeRequestUrlForLogging preserves a query-free pathname', () => {
+  assert.equal(sanitizeRequestUrlForLogging('/v1/items/sync'), '/v1/items/sync')
+  assert.equal(sanitizeRequestUrlForLogging('https://example.com'), '/')
+})
+
+test('sanitizeRequestUrlForLogging fails closed for malformed, unsupported, and unavailable inputs', () => {
+  assert.equal(sanitizeRequestUrlForLogging('http://[::1?token=secret'), '[unparseable-request-url]')
+  assert.equal(sanitizeRequestUrlForLogging('javascript:secret?token=secret'), '[unparseable-request-url]')
+  assert.equal(sanitizeRequestUrlForLogging(''), '[unavailable-request-url]')
+  assert.equal(sanitizeRequestUrlForLogging(undefined), '[unavailable-request-url]')
+  assert.equal(
+    sanitizeRequestUrlForLogging({
+      toString: () => {
+        throw new Error('must not inspect')
+      },
+    }),
+    '[unavailable-request-url]',
+  )
 })
 
 test('results.BadRequestErrorMessageResult carries the message as its body', () => {

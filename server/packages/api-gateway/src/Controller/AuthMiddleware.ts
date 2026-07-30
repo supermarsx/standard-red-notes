@@ -1,7 +1,7 @@
 import { CrossServiceTokenData } from '@standardnotes/security'
 import { TimerInterface } from '@standardnotes/time'
 import { NextFunction, Request, Response } from 'express'
-import { BaseMiddleware } from 'inversify-express-utils'
+import { BaseMiddleware, sanitizeRequestUrlForLogging } from 'inversify-express-utils'
 import { verify } from 'jsonwebtoken'
 import { AxiosError } from 'axios'
 import { Logger } from 'winston'
@@ -68,7 +68,7 @@ export abstract class AuthMiddleware extends BaseMiddleware {
           requestMetadata: {
             snjs: request.headers['x-snjs-version'] as string,
             application: request.headers['x-application-version'] as string,
-            url: request.url,
+            url: sanitizeRequestUrlForLogging(request.url),
             method: request.method,
             userAgent: request.headers['user-agent'],
             secChUa: request.headers['sec-ch-ua'] as string,

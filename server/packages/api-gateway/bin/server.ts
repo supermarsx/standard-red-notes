@@ -51,7 +51,7 @@ import cookieParser from 'cookie-parser'
 import { text, json, Request, Response, NextFunction } from 'express'
 import * as winston from 'winston'
 
-import { InversifyExpressServer } from 'inversify-express-utils'
+import { InversifyExpressServer, sanitizeRequestUrlForLogging } from 'inversify-express-utils'
 import { ContainerConfigLoader } from '../src/Bootstrap/Container'
 import { TYPES } from '../src/Bootstrap/Types'
 import { Env } from '../src/Bootstrap/Env'
@@ -140,7 +140,7 @@ void container
         logger.debug('Request is using deprecated domain', {
           origin: request.headers.origin,
           method: request.method,
-          url: request.url,
+          url: sanitizeRequestUrlForLogging(request.url),
           snjs: request.headers['x-snjs-version'],
           application: request.headers['x-application-version'],
         })
@@ -347,18 +347,19 @@ void container
   server.setErrorConfig((app) => {
     app.use((error: Record<string, unknown>, request: Request, response: Response, _next: NextFunction) => {
       const locals = response.locals as ResponseLocals
+      const sanitizedRequestUrl = sanitizeRequestUrlForLogging(request.url)
 
       logger.error(`${error.stack}`, {
         origin: request.headers.origin,
         codeTag: 'server.ts',
         method: request.method,
-        url: request.url,
+        url: sanitizedRequestUrl,
         snjs: request.headers['x-snjs-version'],
         application: request.headers['x-application-version'],
         userId: locals.user ? locals.user.uuid : undefined,
       })
       logger.debug(
-        `[URL: |${request.method}| ${request.url}][SNJS: ${request.headers['x-snjs-version']}][Application: ${
+        `[URL: |${request.method}| ${sanitizedRequestUrl}][SNJS: ${request.headers['x-snjs-version']}][Application: ${
           request.headers['x-application-version']
         }] Request body metadata: ${JSON.stringify(requestBodyLogMetadata(request.body))}`,
       )

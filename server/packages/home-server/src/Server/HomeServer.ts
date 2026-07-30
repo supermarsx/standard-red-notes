@@ -28,7 +28,7 @@ import { Service as AuthService, AuthServiceInterface } from '@standardnotes/aut
 import { Service as SyncingService } from '@standardnotes/syncing-server'
 import { Service as RevisionsService } from '@standardnotes/revisions-server'
 import { Container } from 'inversify'
-import { InversifyExpressServer } from 'inversify-express-utils'
+import { InversifyExpressServer, sanitizeRequestUrlForLogging } from 'inversify-express-utils'
 import helmet from 'helmet'
 import cors from 'cors'
 import cookieParser from 'cookie-parser'
@@ -373,7 +373,7 @@ export class HomeServer implements HomeServerInterface {
         app.use((error: Record<string, unknown>, request: Request, response: Response, _next: NextFunction) => {
           logger.error(`${error.stack}`, {
             method: request.method,
-            url: request.url,
+            url: sanitizeRequestUrlForLogging(request.url),
             snjs: request.headers['x-snjs-version'],
             application: request.headers['x-application-version'],
             userId: response.locals.user ? response.locals.user.uuid : undefined,

@@ -36,7 +36,7 @@ import * as winston from 'winston'
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc'
 
-import { InversifyExpressServer } from 'inversify-express-utils'
+import { InversifyExpressServer, sanitizeRequestUrlForLogging } from 'inversify-express-utils'
 import { ContainerConfigLoader } from '../src/Bootstrap/Container'
 import TYPES from '../src/Bootstrap/Types'
 import { Env } from '../src/Bootstrap/Env'
@@ -102,7 +102,7 @@ void container
       const locals = response.locals as ResponseLocals
       logger.error(`${error.stack}`, {
         method: request.method,
-        url: request.url,
+        url: sanitizeRequestUrlForLogging(request.url),
         snjs: request.headers['x-snjs-version'],
         application: request.headers['x-application-version'],
         userId: locals.user ? locals.user.uuid : undefined,

@@ -176,6 +176,24 @@ describe('AuthMiddleware client IP for session validation', () => {
     return call?.requestMetadata?.ip as string | undefined
   }
 
+  it('removes query credentials from session-validation request metadata', async () => {
+    const response = { locals: {} } as unknown as Response
+    const next = jest.fn() as unknown as NextFunction
+    const request = {
+      headers: { authorization: 'Bearer token' },
+      socket: { remoteAddress: '1.1.1.1' },
+      url: '/v1/subscriptions?subscription_token=bearer-secret&mode=full#private',
+    } as unknown as Request
+
+    await createMiddleware().handler(request, response, next)
+
+    const call = (serviceProxy.validateSession as jest.Mock).mock.calls[0]?.[0]
+    expect(call.requestMetadata.url).toBe('/v1/subscriptions [query-parameter-count=2]')
+    expect(JSON.stringify(call.requestMetadata)).not.toContain('subscription_token')
+    expect(JSON.stringify(call.requestMetadata)).not.toContain('bearer-secret')
+    expect(JSON.stringify(call.requestMetadata)).not.toContain('private')
+  })
+
   it('uses request.ip (TRUST_PROXY-resolved) and ignores a spoofed X-Forwarded-For', async () => {
     const ip = await runWithRequest({
       headers: { authorization: 'Bearer token', 'x-forwarded-for': '9.9.9.9, 8.8.8.8' } as never,

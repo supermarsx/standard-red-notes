@@ -23,6 +23,8 @@ import { InversifyExpressHttpAdapter, type ExpressMiddleware } from '@inversifyj
 import express, { type Application, type NextFunction, type Request, type Response, type Router } from 'express'
 import { type Container, type ResolutionContext, type ServiceIdentifier } from 'inversify'
 
+export { sanitizeRequestUrlForLogging } from './RequestUrlLogMetadata'
+
 type MiddlewareIdentifier = ServiceIdentifier<ExpressMiddleware>
 type ConfigFunction = (app: Application) => void
 type RouteDecorator = (path: string, ...middleware: MiddlewareIdentifier[]) => MethodDecorator
