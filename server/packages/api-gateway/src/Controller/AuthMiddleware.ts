@@ -104,15 +104,22 @@ export abstract class AuthMiddleware extends BaseMiddleware {
         })
       }
 
+      const mcpScope = decodedToken.mcp_scope
+      const readOnlyAccess = (decodedToken.session?.readonly_access ?? false) || mcpScope?.access === 'read'
+
       Object.assign(response.locals, {
         authToken: crossServiceToken,
         user: decodedToken.user,
         session: decodedToken.session,
         roles: decodedToken.roles,
         sharedVaultOwnerContext: decodedToken.shared_vault_owner_context,
-        readOnlyAccess: decodedToken.session?.readonly_access ?? false,
+        readOnlyAccess,
+        mcpScope,
         isFreeUser: decodedToken.roles.length === 1 && decodedToken.roles[0].name === RoleName.NAMES.CoreUser,
         belongsToSharedVaults: decodedToken.belongs_to_shared_vaults ?? [],
+        hasContentLimit: decodedToken.hasContentLimit === true,
+        collaborationEnabled: decodedToken.collaboration_enabled !== false,
+        liveSyncEnabled: decodedToken.live_sync_enabled !== false,
         authTokenVersion: decodedToken.version,
         // Standard Red Notes: SHADOW-BAN pass-through. Projected onto locals so
         // gateway controllers can see it; the enforced degradation is applied by

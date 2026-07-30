@@ -18,6 +18,10 @@ export interface ResponseLocals {
     refresh_expiration: string
   }
   readOnlyAccess: boolean
+  mcpScope?: {
+    access: 'read' | 'write'
+    tagUuids?: string[]
+  }
   isFreeUser: boolean
   belongsToSharedVaults?: Array<{
     shared_vault_uuid: string
@@ -27,6 +31,8 @@ export interface ResponseLocals {
     upload_bytes_limit: number
   }
   hasContentLimit: boolean
+  collaborationEnabled: boolean
+  liveSyncEnabled: boolean
   authTokenVersion?: number
   /**
    * Standard Red Notes: SHADOW-BAN marker carried by the cross-service token. A

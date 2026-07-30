@@ -121,6 +121,57 @@ describe('AuthMiddleware settings projection', () => {
     const locals = await runReturningLocals(baseToken())
     expect(locals.shadowBanned).toBe(false)
   })
+
+  it('enforces an MCP read scope as read-only even when the session is writable', async () => {
+    const locals = await runReturningLocals({
+      ...baseToken(),
+      session: {
+        uuid: 'session-1',
+        api_version: '20200115',
+        created_at: '2026-01-01T00:00:00.000Z',
+        updated_at: '2026-01-01T00:00:00.000Z',
+        device_info: 'test',
+        readonly_access: false,
+        access_expiration: '2026-01-02T00:00:00.000Z',
+        refresh_expiration: '2026-01-03T00:00:00.000Z',
+      },
+      mcp_scope: { access: 'read', tagUuids: ['tag-1'] },
+    })
+
+    expect(locals.readOnlyAccess).toBe(true)
+    expect(locals.mcpScope).toEqual({ access: 'read', tagUuids: ['tag-1'] })
+  })
+
+  it('keeps a writable MCP scope writable when the session is writable', async () => {
+    const locals = await runReturningLocals({
+      ...baseToken(),
+      mcp_scope: { access: 'write' },
+    })
+
+    expect(locals.readOnlyAccess).toBe(false)
+  })
+
+  it('projects downstream sync gates and content-limit state', async () => {
+    const locals = await runReturningLocals({
+      ...baseToken(),
+      collaboration_enabled: false,
+      live_sync_enabled: false,
+      hasContentLimit: true,
+    })
+
+    expect(locals.collaborationEnabled).toBe(false)
+    expect(locals.liveSyncEnabled).toBe(false)
+    expect(locals.hasContentLimit).toBe(true)
+  })
+
+  it('uses compatibility-safe defaults when optional downstream gates are absent', async () => {
+    const locals = await runReturningLocals(baseToken())
+
+    expect(locals.collaborationEnabled).toBe(true)
+    expect(locals.liveSyncEnabled).toBe(true)
+    expect(locals.hasContentLimit).toBe(false)
+    expect(locals.readOnlyAccess).toBe(false)
+  })
 })
 
 describe('AuthMiddleware client IP for session validation', () => {

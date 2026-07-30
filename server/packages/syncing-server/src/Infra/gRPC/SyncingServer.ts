@@ -151,6 +151,10 @@ export class SyncingServer implements ISyncingServer {
       // Standard Red Notes: per-user live-sync gating over gRPC. Opt-in disable:
       // enabled unless the metadata header explicitly carries 'false'.
       const liveSyncEnabled = call.metadata.get('x-live-sync-enabled').pop() !== 'false'
+      // Standard Red Notes: shadow bans silently reduce sync throughput and
+      // disable real-time push. Absent metadata remains not shadow-banned for
+      // backwards compatibility with older trusted gateway versions.
+      const shadowBanned = call.metadata.get('x-shadow-banned').pop() === 'true'
       if (readOnlyAccess) {
         this.logger.debug('Syncing with read-only access', {
           codeTag: 'SyncingServer',
@@ -174,6 +178,7 @@ export class SyncingServer implements ISyncingServer {
         isFreeUser,
         hasContentLimit,
         liveSyncEnabled,
+        shadowBanned,
       })
       if (syncResult.isFailed()) {
         const metadata = new grpc.Metadata()

@@ -46,6 +46,8 @@ export class GRPCSyncingServerServiceProxy {
         }
         metadata.set('x-is-free-user', locals.isFreeUser ? 'true' : 'false')
         metadata.set('x-has-content-limit', locals.hasContentLimit ? 'true' : 'false')
+        metadata.set('x-live-sync-enabled', locals.liveSyncEnabled === false ? 'false' : 'true')
+        metadata.set('x-shadow-banned', locals.shadowBanned === true ? 'true' : 'false')
 
         this.syncingClient.syncItems(syncRequest, metadata, (error, syncResponse) => {
           if (error) {
@@ -58,7 +60,7 @@ export class GRPCSyncingServerServiceProxy {
             }
 
             if (error.code === Status.INTERNAL) {
-              this.logger.error(`Internal gRPC error: ${error.message}. Payload: ${JSON.stringify(payload)}`, {
+              this.logger.error(`Internal gRPC error: ${error.message}`, {
                 codeTag: 'GRPCSyncingServerServiceProxy',
                 userId: locals.user.uuid,
               })
@@ -80,7 +82,7 @@ export class GRPCSyncingServerServiceProxy {
           'code' in (error as Record<string, unknown>) &&
           (error as Record<string, unknown>).code === Status.INTERNAL
         ) {
-          this.logger.error(`Internal gRPC error: ${JSON.stringify(error)}. Payload: ${JSON.stringify(payload)}`, {
+          this.logger.error(`Internal gRPC error: ${(error as Error).message}`, {
             codeTag: 'GRPCSyncingServerServiceProxy.catch',
             userId: locals.user.uuid,
           })
