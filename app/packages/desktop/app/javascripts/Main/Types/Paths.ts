@@ -1,8 +1,8 @@
 import decryptScript from 'decrypt/dist/decrypt.html'
-import { app } from 'electron'
 import path from 'path'
 import grantLinuxPasswordsAccess from '../../../grantLinuxPasswordsAccess.html'
 import index from '../../../index.html'
+import { RuntimePaths } from './RuntimePaths'
 
 function url(fileName: string): string {
   if ('APP_RELATIVE_PATH' in process.env) {
@@ -34,36 +34,28 @@ export const Urls = {
  */
 export const Paths = {
   get userDataDir(): string {
-    return app.getPath('userData')
+    return RuntimePaths.userDataDir
   },
   get homeDir(): string | undefined {
-    try {
-      return app.getPath('home')
-    } catch {
-      return undefined
-    }
+    return RuntimePaths.homeDir
   },
   get documentsDir(): string | undefined {
-    try {
-      return app.getPath('documents')
-    } catch {
-      return undefined
-    }
+    return RuntimePaths.documentsDir
   },
   get tempDir(): string {
-    return app.getPath('temp')
+    return RuntimePaths.tempDir
   },
   get extensionsDirRelative(): string {
-    return 'Extensions'
+    return RuntimePaths.extensionsDirRelative
   },
   get extensionsDir(): string {
-    return path.join(Paths.userDataDir, 'Extensions')
+    return RuntimePaths.extensionsDir
   },
   get extensionsMappingJson(): string {
-    return path.join(Paths.extensionsDir, 'mapping.json')
+    return RuntimePaths.extensionsMappingJson
   },
   get windowPositionJson(): string {
-    return path.join(Paths.userDataDir, 'window-position.json')
+    return RuntimePaths.windowPositionJson
   },
   get decryptScript(): string {
     return filePath(decryptScript)
@@ -72,7 +64,7 @@ export const Paths = {
     return path.join(__dirname, 'javascripts/renderer/preload.js')
   },
   get components(): string {
-    return `${app.getAppPath()}/dist/web/components/assets`
+    return RuntimePaths.components
   },
   get grantLinuxPasswordsAccessJs(): string {
     return path.join(__dirname, 'javascripts/renderer/grantLinuxPasswordsAccess.js')

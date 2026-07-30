@@ -5,13 +5,40 @@ import fs from 'fs'
 import path from 'path'
 import { MessageToWebApp } from '../../Shared/IpcMessages'
 import { AppName } from '../Strings'
-import { Paths } from '../Types/Paths'
+import { RuntimePaths } from '../Types/RuntimePaths'
 import { timeout } from '../Utils/Utils'
 import { downloadFile, getJSON } from './Networking'
 import { Component, MappingFile, PackageInfo, PackageManagerInterface, SyncTask } from './PackageManagerInterface'
 import { FilesManagerInterface } from '../File/FilesManagerInterface'
 import { FilesManager } from '../File/FilesManager'
 import { FileErrorCodes } from '../File/FileErrorCodes'
+
+type PackageManagerPaths = Pick<
+  typeof RuntimePaths,
+  'extensionsDirRelative' | 'extensionsMappingJson' | 'tempDir' | 'userDataDir'
+>
+
+export type PackageManagerDependencies = {
+  appName: string
+  createFilesManager: () => FilesManagerInterface
+  downloadFile: typeof downloadFile
+  getJSON: typeof getJSON
+  paths: PackageManagerPaths
+  wait: typeof timeout
+}
+
+type PackageManagerWebContents = Pick<Electron.WebContents, 'send'>
+
+function getDependencies(overrides: Partial<PackageManagerDependencies> = {}): PackageManagerDependencies {
+  return {
+    appName: overrides.appName ?? AppName,
+    createFilesManager: overrides.createFilesManager ?? (() => new FilesManager()),
+    downloadFile: overrides.downloadFile ?? downloadFile,
+    getJSON: overrides.getJSON ?? getJSON,
+    paths: overrides.paths ?? RuntimePaths,
+    wait: overrides.wait ?? timeout,
+  }
+}
 
 function logMessage(...message: any) {
   log.info('PackageManager[Info]:', ...message)
@@ -25,32 +52,41 @@ function logError(...message: any) {
  * Safe component mapping manager that queues its disk writes
  */
 class MappingFileHandler {
-  static async create() {
+  static async create(dependencies: PackageManagerDependencies) {
     let mapping: MappingFile
-    const filesManager = new FilesManager()
+    const filesManager = dependencies.createFilesManager()
 
     try {
-      const result = await filesManager.readJSONFile<MappingFile>(Paths.extensionsMappingJson)
+      const result = await filesManager.readJSONFile<MappingFile>(dependencies.paths.extensionsMappingJson)
       mapping = result || {}
     } catch (error: any) {
       /**
        * Mapping file might be absent (first start, corrupted data)
        */
       if (error.code === FileErrorCodes.FileDoesNotExist) {
-        await filesManager.ensureDirectoryExists(path.dirname(Paths.extensionsMappingJson))
+        await filesManager.ensureDirectoryExists(path.dirname(dependencies.paths.extensionsMappingJson))
       } else {
         logError(error)
       }
       mapping = {}
     }
 
-    return new MappingFileHandler(mapping, filesManager)
+    return new MappingFileHandler(mapping, filesManager, dependencies)
   }
 
   constructor(
     private mapping: MappingFile,
     private filesManager: FilesManagerInterface,
-  ) {}
+    private dependencies: PackageManagerDependencies,
+  ) {
+    this.writeMappingToDisk = this.filesManager.debouncedJSONDiskWriter(
+      100,
+      this.dependencies.paths.extensionsMappingJson,
+      () => this.mapping,
+    )
+  }
+
+  private writeMappingToDisk: () => void
 
   get = (componendId: string) => {
     return this.mapping[componendId]
@@ -62,13 +98,13 @@ class MappingFileHandler {
       version,
     }
 
-    this.filesManager.debouncedJSONDiskWriter(100, Paths.extensionsMappingJson, () => this.mapping)
+    this.writeMappingToDisk()
   }
 
   remove = (componentId: string) => {
     delete this.mapping[componentId]
 
-    this.filesManager.debouncedJSONDiskWriter(100, Paths.extensionsMappingJson, () => this.mapping)
+    this.writeMappingToDisk()
   }
 
   getInstalledVersionForComponent = async (component: Component): Promise<string> => {
@@ -81,7 +117,7 @@ class MappingFileHandler {
      * If the mapping has no version (pre-3.5 installs) check the component's
      * package.json file
      */
-    const paths = pathsForComponent(component)
+    const paths = pathsForComponent(component, this.dependencies)
     const packagePath = path.join(paths.absolutePath, 'package.json')
     const response = await this.filesManager.readJSONFile<{ version: string }>(packagePath)
     if (!response) {
@@ -92,11 +128,15 @@ class MappingFileHandler {
   }
 }
 
-export async function initializePackageManager(webContents: Electron.WebContents): Promise<PackageManagerInterface> {
+export async function initializePackageManager(
+  webContents: PackageManagerWebContents,
+  dependencyOverrides: Partial<PackageManagerDependencies> = {},
+): Promise<PackageManagerInterface> {
   const syncTasks: SyncTask[] = []
   let isRunningTasks = false
+  const dependencies = getDependencies(dependencyOverrides)
 
-  const mapping = await MappingFileHandler.create()
+  const mapping = await MappingFileHandler.create(dependencies)
 
   return {
     syncComponents: async (components: Component[]) => {
@@ -115,16 +155,21 @@ export async function initializePackageManager(webContents: Electron.WebContents
       }
 
       isRunningTasks = true
-      await runTasks(webContents, mapping, syncTasks)
+      await runTasks(webContents, mapping, syncTasks, dependencies)
       isRunningTasks = false
     },
   }
 }
 
-async function runTasks(webContents: Electron.WebContents, mapping: MappingFileHandler, tasks: SyncTask[]) {
+async function runTasks(
+  webContents: PackageManagerWebContents,
+  mapping: MappingFileHandler,
+  tasks: SyncTask[],
+  dependencies: PackageManagerDependencies,
+) {
   while (tasks.length > 0) {
     try {
-      const oppositeTask = await runTask(webContents, mapping, tasks[0], tasks.slice(1))
+      const oppositeTask = await runTask(webContents, mapping, tasks[0], tasks.slice(1), dependencies)
       if (oppositeTask) {
         tasks.splice(tasks.indexOf(oppositeTask), 1)
       }
@@ -145,10 +190,11 @@ async function runTasks(webContents: Electron.WebContents, mapping: MappingFileH
  * doing anything. Otherwise undefined.
  */
 async function runTask(
-  webContents: Electron.WebContents,
+  webContents: PackageManagerWebContents,
   mapping: MappingFileHandler,
   task: SyncTask,
   nextTasks: SyncTask[],
+  dependencies: PackageManagerDependencies,
 ): Promise<SyncTask | undefined> {
   const maxTries = 3
   /** Try to execute the task with up to three tries. */
@@ -177,7 +223,7 @@ async function runTask(
           return oppositeTask
         }
       }
-      await syncComponents(webContents, mapping, task.components)
+      await syncComponents(webContents, mapping, task.components, dependencies)
       /** Everything went well, leave the loop */
       return
     } catch (error) {
@@ -190,7 +236,12 @@ async function runTask(
   }
 }
 
-async function syncComponents(webContents: Electron.WebContents, mapping: MappingFileHandler, components: Component[]) {
+async function syncComponents(
+  webContents: PackageManagerWebContents,
+  mapping: MappingFileHandler,
+  components: Component[],
+  dependencies: PackageManagerDependencies,
+) {
   /**
    * Incoming `components` are what should be installed. For every component,
    * check the filesystem and see if that component is installed. If not,
@@ -201,7 +252,7 @@ async function syncComponents(webContents: Electron.WebContents, mapping: Mappin
       if (component.deleted) {
         /** Uninstall */
         logMessage(`Uninstalling ${component.content?.name}`)
-        await uninstallComponent(mapping, component.uuid)
+        await uninstallComponent(mapping, component.uuid, dependencies)
         return
       }
 
@@ -210,24 +261,31 @@ async function syncComponents(webContents: Electron.WebContents, mapping: Mappin
         return
       }
 
-      const paths = pathsForComponent(component)
+      const paths = pathsForComponent(component, dependencies)
       const version = component.content.package_info.version
       if (!component.content.local_url) {
         /**
          * We have a component but it is not mapped to anything on the file system
          */
-        await installComponent(webContents, mapping, component, component.content.package_info, version)
+        await installComponent(webContents, mapping, component, component.content.package_info, version, dependencies)
       } else {
         try {
           /** Will trigger an error if the directory does not exist. */
           await fs.promises.lstat(paths.absolutePath)
           if (!component.content.autoupdateDisabled) {
-            await checkForUpdate(webContents, mapping, component)
+            await checkForUpdate(webContents, mapping, component, dependencies)
           }
         } catch (error: any) {
           if (error.code === FileErrorCodes.FileDoesNotExist) {
             /** We have a component but no content. Install the component */
-            await installComponent(webContents, mapping, component, component.content.package_info, version)
+            await installComponent(
+              webContents,
+              mapping,
+              component,
+              component.content.package_info,
+              version,
+              dependencies,
+            )
           } else {
             throw error
           }
@@ -237,7 +295,12 @@ async function syncComponents(webContents: Electron.WebContents, mapping: Mappin
   )
 }
 
-async function checkForUpdate(webContents: Electron.WebContents, mapping: MappingFileHandler, component: Component) {
+async function checkForUpdate(
+  webContents: PackageManagerWebContents,
+  mapping: MappingFileHandler,
+  component: Component,
+  dependencies: PackageManagerDependencies,
+) {
   const installedVersion = await mapping.getInstalledVersionForComponent(component)
 
   const latestUrl = component.content?.package_info?.latest_url
@@ -245,7 +308,7 @@ async function checkForUpdate(webContents: Electron.WebContents, mapping: Mappin
     return
   }
 
-  const latestJson = await getJSON<PackageInfo>(latestUrl)
+  const latestJson = await dependencies.getJSON<PackageInfo>(latestUrl)
   if (!latestJson) {
     return
   }
@@ -259,7 +322,7 @@ async function checkForUpdate(webContents: Electron.WebContents, mapping: Mappin
   if (compareVersions(latestVersion, installedVersion) === 1) {
     /** Latest version is greater than installed version */
     logMessage('Downloading new version', latestVersion)
-    await installComponent(webContents, mapping, component, latestJson, latestVersion)
+    await installComponent(webContents, mapping, component, latestJson, latestVersion, dependencies)
   }
 }
 
@@ -279,20 +342,30 @@ async function usesLegacyNestedFolderStructure(dir: string) {
   return stat.isDirectory()
 }
 
-async function unnestLegacyStructure(dir: string) {
+async function unnestLegacyStructure(dir: string, dependencies: PackageManagerDependencies) {
   const fileNames = await fs.promises.readdir(dir)
   const sourceDir = path.join(dir, fileNames[0])
   const destDir = dir
+  const filesManager = dependencies.createFilesManager()
 
-  await new FilesManager().moveDirContents(sourceDir, destDir)
+  const moveResult = await filesManager.moveDirContents(sourceDir, destDir)
+  if (moveResult.isFailed()) {
+    throw new Error(moveResult.getError())
+  }
+
+  const deleteResult = await filesManager.deleteDir(sourceDir)
+  if (deleteResult.isFailed()) {
+    throw new Error(deleteResult.getError())
+  }
 }
 
 async function installComponent(
-  webContents: Electron.WebContents,
+  webContents: PackageManagerWebContents,
   mapping: MappingFileHandler,
   component: Component,
   packageInfo: PackageInfo,
   version: string,
+  dependencies: PackageManagerDependencies,
 ) {
   if (!component.content) {
     return
@@ -318,27 +391,27 @@ async function installComponent(
     })
   }
 
-  const paths = pathsForComponent(component)
+  const paths = pathsForComponent(component, dependencies)
   try {
     logMessage(`Downloading from ${downloadUrl}`)
     /** Download the zip and clear the component's directory in parallel */
     await Promise.all([
-      downloadFile(downloadUrl, paths.downloadPath),
+      dependencies.downloadFile(downloadUrl, paths.downloadPath),
       (async () => {
         /** Clear the component's directory before extracting the zip. */
-        const filesManager = new FilesManager()
+        const filesManager = dependencies.createFilesManager()
         await filesManager.ensureDirectoryExists(paths.absolutePath)
         await filesManager.deleteDirContents(paths.absolutePath)
       })(),
     ])
 
     logMessage('Extracting', paths.downloadPath, 'to', paths.absolutePath)
-    const filesManager = new FilesManager()
+    const filesManager = dependencies.createFilesManager()
     await filesManager.extractZip(paths.downloadPath, paths.absolutePath)
 
     const legacyStructure = await usesLegacyNestedFolderStructure(paths.absolutePath)
     if (legacyStructure) {
-      await unnestLegacyStructure(paths.absolutePath)
+      await unnestLegacyStructure(paths.absolutePath, dependencies)
     }
 
     let main = 'index.html'
@@ -373,7 +446,7 @@ async function installComponent(
      * of faulty components
      */
     const fiveSeconds = 5000
-    await timeout(fiveSeconds)
+    await dependencies.wait(fiveSeconds)
 
     sendInstalledMessage(component, {
       message: error.message,
@@ -392,8 +465,8 @@ function validatePackageIdentifier(identifier: string) {
   }
 }
 
-function assertPathWithinExtensions(absolutePath: string) {
-  const extensionsRoot = path.resolve(Paths.userDataDir, Paths.extensionsDirRelative)
+function assertPathWithinExtensions(absolutePath: string, dependencies: PackageManagerDependencies) {
+  const extensionsRoot = path.resolve(dependencies.paths.userDataDir, dependencies.paths.extensionsDirRelative)
   const resolvedPath = path.resolve(absolutePath)
   const relativeToExtensions = path.relative(extensionsRoot, resolvedPath)
 
@@ -402,13 +475,18 @@ function assertPathWithinExtensions(absolutePath: string) {
   }
 }
 
-function pathsForComponent(component: Pick<Component, 'content'>) {
+function pathsForComponent(component: Pick<Component, 'content'>, dependencies: PackageManagerDependencies) {
   const identifier = component.content!.package_info.identifier
   validatePackageIdentifier(identifier)
 
-  const relativePath = path.join(Paths.extensionsDirRelative, identifier)
-  const absolutePath = path.join(Paths.userDataDir, relativePath)
-  const downloadPath = path.join(Paths.tempDir, AppName, 'downloads', component.content!.name + '.zip')
+  const relativePath = path.join(dependencies.paths.extensionsDirRelative, identifier)
+  const absolutePath = path.join(dependencies.paths.userDataDir, relativePath)
+  const downloadPath = path.join(
+    dependencies.paths.tempDir,
+    dependencies.appName,
+    'downloads',
+    component.content!.name + '.zip',
+  )
 
   return {
     relativePath,
@@ -417,15 +495,15 @@ function pathsForComponent(component: Pick<Component, 'content'>) {
   }
 }
 
-async function uninstallComponent(mapping: MappingFileHandler, uuid: string) {
+async function uninstallComponent(mapping: MappingFileHandler, uuid: string, dependencies: PackageManagerDependencies) {
   const componentMapping = mapping.get(uuid)
   if (!componentMapping || !componentMapping.location) {
     /** No mapping for component */
     return
   }
-  const absolutePath = path.join(Paths.userDataDir, componentMapping.location)
-  assertPathWithinExtensions(absolutePath)
-  const result = await new FilesManager().deleteDir(absolutePath)
+  const absolutePath = path.join(dependencies.paths.userDataDir, componentMapping.location)
+  assertPathWithinExtensions(absolutePath, dependencies)
+  const result = await dependencies.createFilesManager().deleteDir(absolutePath)
   if (!result.isFailed()) {
     mapping.remove(uuid)
   }

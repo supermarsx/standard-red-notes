@@ -20,6 +20,9 @@ export default function makeFakePaths(tmpDir: string) {
     get extensionsMappingJson(): string {
       return path.join(Paths.extensionsDir, 'mapping.json')
     },
+    get components(): string {
+      return path.join(tmpDir, 'components')
+    },
     get windowPositionJson(): string {
       return path.join(Paths.userDataDir, 'window-position.json')
     },

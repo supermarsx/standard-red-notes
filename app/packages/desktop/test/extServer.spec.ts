@@ -4,138 +4,117 @@ import http from 'http'
 import { AddressInfo } from 'net'
 import path from 'path'
 import { fileURLToPath } from 'url'
-import proxyquire from 'proxyquire'
-import { initializeStrings } from '../app/javascripts/Main/Strings'
 import { FilesManager } from '../app/javascripts/Main/File/FilesManager'
+import { createExtensionsServer, normalizeFilePath } from '../app/javascripts/Main/ExtensionsServer'
+import { initializeStrings } from '../app/javascripts/Main/Strings'
 import makeFakePaths from './fakePaths'
 import { createTmpDir } from './testUtils'
 
 const currentFile = fileURLToPath(import.meta.url)
 const filesManager = new FilesManager()
+const tmpDir = createTmpDir(currentFile)
+const FakePaths = makeFakePaths(tmpDir.path)
+const extensionsDir = path.join(tmpDir.path, 'Extensions')
 
 const test = anyTest as TestFn<{
   server: http.Server
   host: string
 }>
 
-/**
- * proxyquire intercepts CommonJS `require` via `module.parent`, which does not
- * exist under the ESM/tsx test loader, so this suite cannot run until it is
- * reworked (e.g. to dependency injection). Kept intact + typechecked, skipped.
- */
-const proxyquireSupported = false
-
-if (proxyquireSupported) {
-  const tmpDir = createTmpDir(currentFile)
-  const FakePaths = makeFakePaths(tmpDir.path)
-
-  let server: http.Server
-
-  const { createExtensionsServer, normalizeFilePath } = proxyquire('../app/javascripts/Main/ExtensionsServer', {
-    './paths': {
-      Paths: FakePaths,
-      '@noCallThru': true,
-    },
-    electron: {
-      app: {
-        getPath() {
-          return tmpDir.path
-        },
-      },
-    },
-    http: {
-      createServer(...args: any) {
-        server = http.createServer(...args)
-        return server
-      },
-    },
-  })
-
-  const extensionsDir = path.join(tmpDir.path, 'Extensions')
-
-  initializeStrings('en')
-
-  const log = console.log
-  const error = console.error
-
-  test.before(async (t) => {
-    await filesManager.ensureDirectoryExists(extensionsDir)
-    await new Promise((resolve) => {
-      createExtensionsServer(resolve)
-      t.context.server = server
-      server.once('listening', () => {
-        const { address, port } = server.address() as AddressInfo
-        t.context.host = `http://${address}:${port}/`
-        resolve(null)
-      })
-    })
-  })
-
-  test.after((t): Promise<any> => {
-    /** Restore the console's functionality */
-    console.log = log
-    console.error = error
-
-    return Promise.all([tmpDir.clean(), new Promise((resolve) => t.context.server.close(resolve))])
-  })
-
-  test('serves the files in the Extensions directory over HTTP', (t) => {
-    const data = {
-      name: 'Boxes',
-      meter: {
-        4: 4,
-      },
-      syncopation: true,
-      instruments: ['Drums', 'Bass', 'Vocals', { name: 'Piano', type: 'Electric' }],
-    }
-
-    return fs.writeFile(path.join(extensionsDir, 'file.json'), JSON.stringify(data)).then(
-      () =>
-        new Promise<void>((resolve) => {
-          let serverData = ''
-          http.get(t.context.host + 'Extensions/file.json').on('response', (response) => {
-            response
-              .setEncoding('utf-8')
-              .on('data', (chunk) => {
-                serverData += chunk
-              })
-              .on('end', () => {
-                t.deepEqual(data, JSON.parse(serverData))
-                resolve()
-              })
+function get(url: string): Promise<{ body: string; etag: string | undefined; statusCode: number | undefined }> {
+  return new Promise((resolve, reject) => {
+    http
+      .get(url, (response) => {
+        let body = ''
+        response
+          .setEncoding('utf-8')
+          .on('data', (chunk) => {
+            body += chunk
           })
-        }),
-    )
-  })
-
-  test('does not serve files outside the Extensions directory', async (t) => {
-    await new Promise((resolve) => {
-      http.get(t.context.host + 'Extensions/../../../package.json').on('response', (response) => {
-        t.is(response.statusCode, 500)
-        resolve(true)
+          .on('end', () => {
+            resolve({ body, etag: response.headers.etag, statusCode: response.statusCode })
+          })
+          .on('error', reject)
       })
-    })
+      .on('error', reject)
   })
-
-  test('returns a 404 for files that are not present', async (t) => {
-    await new Promise((resolve) => {
-      http.get(t.context.host + 'Extensions/nothing').on('response', (response) => {
-        t.is(response.statusCode, 404)
-        resolve(true)
-      })
-    })
-  })
-
-  test('normalizes file paths to always point somewhere in the Extensions directory', (t) => {
-    t.is(normalizeFilePath('/Extensions/test/yes', '127.0.0.1'), path.join(tmpDir.path, 'Extensions', 'test', 'yes'))
-    t.is(
-      normalizeFilePath('/Extensions/../../data/outside/the/extensions/directory'),
-      path.join(tmpDir.path, 'Extensions', 'data', 'outside', 'the', 'extensions', 'directory'),
-    )
-  })
-} else {
-  test.skip(
-    'extServer: uses proxyquire (CJS require-interception), incompatible with the ESM/tsx test loader; needs rework to run',
-    () => {},
-  )
 }
+
+initializeStrings('en')
+
+test.before(async (t) => {
+  await filesManager.ensureDirectoryExists(extensionsDir)
+
+  let server: http.Server | undefined
+  createExtensionsServer({
+    paths: FakePaths,
+    getVersion: () => 'test-version',
+    port: 0,
+    createServer(requestListener) {
+      server = http.createServer(requestListener)
+      return server
+    },
+  })
+
+  if (!server) {
+    throw new Error('Extensions server was not created')
+  }
+
+  const startedServer = server
+  t.context.server = startedServer
+  await new Promise<void>((resolve) => startedServer.once('listening', resolve))
+  const { address, port } = startedServer.address() as AddressInfo
+  t.context.host = `http://${address}:${port}/`
+})
+
+test.after.always(async (t) => {
+  await new Promise<void>((resolve, reject) => {
+    t.context.server.close((error) => {
+      if (error) {
+        reject(error)
+      } else {
+        resolve()
+      }
+    })
+  })
+  await tmpDir.clean()
+})
+
+test('serves the files in the Extensions directory over HTTP', async (t) => {
+  const data = {
+    name: 'Boxes',
+    meter: {
+      4: 4,
+    },
+    syncopation: true,
+    instruments: ['Drums', 'Bass', 'Vocals', { name: 'Piano', type: 'Electric' }],
+  }
+
+  await fs.writeFile(path.join(extensionsDir, 'file.json'), JSON.stringify(data))
+  const response = await get(t.context.host + 'Extensions/file.json')
+
+  t.is(response.statusCode, 200)
+  t.is(response.etag, 'test-version')
+  t.deepEqual(data, JSON.parse(response.body))
+})
+
+test('does not serve files outside the Extensions directory', async (t) => {
+  const response = await get(t.context.host + 'Extensions/../../../package.json')
+  t.is(response.statusCode, 500)
+})
+
+test('returns a 404 for files that are not present', async (t) => {
+  const response = await get(t.context.host + 'Extensions/nothing')
+  t.is(response.statusCode, 404)
+})
+
+test('normalizes file paths to always point somewhere in the Extensions directory', (t) => {
+  t.is(
+    normalizeFilePath('/Extensions/test/yes', '127.0.0.1', FakePaths),
+    path.join(tmpDir.path, 'Extensions', 'test', 'yes'),
+  )
+  t.is(
+    normalizeFilePath('/Extensions/../../data/outside/the/extensions/directory', undefined, FakePaths),
+    path.join(tmpDir.path, 'Extensions', 'data', 'outside', 'the', 'extensions', 'directory'),
+  )
+})

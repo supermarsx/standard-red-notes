@@ -2,237 +2,230 @@ import test from 'ava'
 import { promises as fs } from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
-import proxyquire from 'proxyquire'
+import { FilesManager } from '../app/javascripts/Main/File/FilesManager'
+import { initializePackageManager, PackageManagerDependencies } from '../app/javascripts/Main/Packages/PackageManager'
 import { PackageManagerInterface } from '../app/javascripts/Main/Packages/PackageManagerInterface'
 import { AppName } from '../app/javascripts/Main/Strings'
-import { FilesManager } from '../app/javascripts/Main/File/FilesManager'
 import makeFakePaths from './fakePaths'
 import { createTmpDir } from './testUtils'
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url))
 const currentFile = fileURLToPath(import.meta.url)
 const filesManager = new FilesManager()
+const tmpDir = createTmpDir(currentFile)
+const FakePaths = makeFakePaths(tmpDir.path)
+const contentDir = path.join(tmpDir.path, 'Extensions')
+let downloadFileCallCount = 0
 
-/**
- * proxyquire intercepts CommonJS `require` via `module.parent`, which does not
- * exist under the ESM/tsx test loader, so this suite cannot run until it is
- * reworked (e.g. to dependency injection). Kept intact + typechecked, skipped.
- */
-const proxyquireSupported = false
+const dependencies: Partial<PackageManagerDependencies> = {
+  paths: FakePaths,
+  wait: async () => {},
+  /** Download a fake component file. */
+  async downloadFile(_src, dest) {
+    downloadFileCallCount += 1
+    if (!path.normalize(dest).startsWith(tmpDir.path)) {
+      throw new Error(`Bad download destination: ${dest}`)
+    }
+    await filesManager.ensureDirectoryExists(path.dirname(dest))
+    await fs.copyFile(path.join(currentDir, 'data', 'zip-file.zip'), dest)
+  },
+}
 
-if (proxyquireSupported) {
-  const tmpDir = createTmpDir(currentFile)
-  const FakePaths = makeFakePaths(tmpDir.path)
+const fakeWebContents = {
+  send(_eventName: string, ...args: unknown[]) {
+    const payload = args[0] as { error?: Error } | undefined
+    if (payload?.error) {
+      throw payload.error
+    }
+  },
+}
 
-  const contentDir = path.join(tmpDir.path, 'Extensions')
-  let downloadFileCallCount = 0
+const name = 'Fake Component'
+const identifier = 'fake.component'
+const uuid = 'fake-component'
+const version = '1.0.0'
+const modifiers = Array(20)
+  .fill(0)
+  .map((_, i) => String(i).padStart(2, '0'))
 
-  const { initializePackageManager } = proxyquire('../app/javascripts/Main/Packages/PackageManager', {
-    './paths': {
-      Paths: FakePaths,
-      '@noCallThru': true,
-    },
-    './networking': {
-      /** Download a fake component file */
-      async downloadFile(_src: string, dest: string) {
-        downloadFileCallCount += 1
-        if (!path.normalize(dest).startsWith(tmpDir.path)) {
-          throw new Error(`Bad download destination: ${dest}`)
-        }
-        await filesManager.ensureDirectoryExists(path.dirname(dest))
-        await fs.copyFile(path.join(currentDir, 'data', 'zip-file.zip'), path.join(dest))
+function fakeComponent({ deleted = false, modifier = '' } = {}) {
+  return {
+    uuid: uuid + modifier,
+    deleted,
+    content: {
+      name: name + modifier,
+      autoupdateDisabled: false,
+      package_info: {
+        version,
+        identifier: identifier + modifier,
+        download_url: 'https://standardnotes.com',
+        url: 'https://standardnotes.com',
+        latest_url: 'https://standardnotes.com',
       },
     },
-  })
+  }
+}
 
-  const fakeWebContents = {
-    send(_eventName: string, { error }: { error?: Error }) {
-      if (error) throw error
-    },
+function waitForDiskWrites() {
+  return new Promise((resolve) => setTimeout(resolve, 200))
+}
+
+let packageManager: PackageManagerInterface
+const log = console.log
+const error = console.error
+
+test.before(() => {
+  /** Silence the package manager's expected error output. */
+  // eslint-disable-next-line @typescript-eslint/no-empty-function
+  console.log = () => {}
+  // eslint-disable-next-line @typescript-eslint/no-empty-function
+  console.error = () => {}
+})
+
+test.beforeEach(async () => {
+  await tmpDir.clean()
+  await filesManager.ensureDirectoryExists(contentDir)
+  downloadFileCallCount = 0
+  packageManager = await initializePackageManager(fakeWebContents, dependencies)
+})
+
+test.afterEach.always(async () => {
+  await waitForDiskWrites()
+  await tmpDir.clean()
+})
+
+test.after.always(() => {
+  console.log = log
+  console.error = error
+})
+
+test('installs multiple components', async (t) => {
+  await packageManager.syncComponents(modifiers.map((modifier) => fakeComponent({ modifier })))
+  await waitForDiskWrites()
+
+  const files = await fs.readdir(contentDir)
+  t.is(files.length, 1 + modifiers.length)
+  for (const modifier of modifiers) {
+    t.true(files.includes(identifier + modifier))
+  }
+  t.true(files.includes('mapping.json'))
+  const mappingContents = await fs.readFile(path.join(contentDir, 'mapping.json'), 'utf8')
+
+  t.deepEqual(
+    JSON.parse(mappingContents),
+    modifiers.reduce((acc: Record<string, unknown>, modifier) => {
+      acc[uuid + modifier] = {
+        location: path.join('Extensions', identifier + modifier),
+        version,
+      }
+      return acc
+    }, {}),
+  )
+
+  const downloads = await fs.readdir(path.join(tmpDir.path, AppName, 'downloads'))
+  t.is(downloads.length, modifiers.length)
+  for (const modifier of modifiers) {
+    t.true(downloads.includes(`${name + modifier}.zip`))
   }
 
-  const name = 'Fake Component'
-  const identifier = 'fake.component'
-  const uuid = 'fake-component'
-  const version = '1.0.0'
-  const modifiers = Array(20)
-    .fill(0)
-    .map((_, i) => String(i).padStart(2, '0'))
-
-  function fakeComponent({ deleted = false, modifier = '' } = {}) {
-    return {
-      uuid: uuid + modifier,
-      deleted,
-      content: {
-        name: name + modifier,
-        autoupdateDisabled: false,
-        package_info: {
-          version,
-          identifier: identifier + modifier,
-          download_url: 'https://standardnotes.com',
-          url: 'https://standardnotes.com',
-          latest_url: 'https://standardnotes.com',
-        },
-      },
-    }
+  for (const modifier of modifiers) {
+    const componentFiles = await fs.readdir(path.join(contentDir, identifier + modifier))
+    t.is(componentFiles.length, 2)
   }
+})
 
-  let packageManager: PackageManagerInterface
+test('uninstalls multiple components', async (t) => {
+  await packageManager.syncComponents(modifiers.map((modifier) => fakeComponent({ modifier })))
+  await waitForDiskWrites()
 
-  const log = console.log
-  const error = console.error
+  await packageManager.syncComponents(modifiers.map((modifier) => fakeComponent({ deleted: true, modifier })))
+  await waitForDiskWrites()
 
-  test.before(async function () {
-    /** Silence the package manager's output. */
-    // eslint-disable-next-line @typescript-eslint/no-empty-function
-    console.log = () => {}
-    // eslint-disable-next-line @typescript-eslint/no-empty-function
-    console.error = () => {}
-    await filesManager.ensureDirectoryExists(contentDir)
-    packageManager = await initializePackageManager(fakeWebContents)
-  })
+  const files = await fs.readdir(contentDir)
+  t.deepEqual(files, ['mapping.json'])
+  t.deepEqual(await filesManager.readJSONFile(path.join(contentDir, 'mapping.json')), {})
+})
 
-  test.after.always(async function () {
-    console.log = log
-    console.error = error
-    await tmpDir.clean()
-  })
+test("doesn't download anything when two install/uninstall tasks are queued", async (t) => {
+  await Promise.all([
+    packageManager.syncComponents([fakeComponent({ deleted: false })]),
+    packageManager.syncComponents([fakeComponent({ deleted: false })]),
+    packageManager.syncComponents([fakeComponent({ deleted: true })]),
+  ])
+  t.is(downloadFileCallCount, 1)
+})
 
-  test.beforeEach(function () {
-    downloadFileCallCount = 0
-  })
+test('does not uninstall paths outside extensions from poisoned mapping', async (t) => {
+  await packageManager.syncComponents([fakeComponent()])
+  await waitForDiskWrites()
 
-  test('installs multiple components', async (t) => {
-    await packageManager.syncComponents(modifiers.map((modifier) => fakeComponent({ modifier })))
-    await new Promise((resolve) => setTimeout(resolve, 200))
+  const escapeDir = path.join(tmpDir.path, 'escape')
+  const markerPath = path.join(escapeDir, 'marker.txt')
+  await filesManager.ensureDirectoryExists(escapeDir)
+  await fs.writeFile(markerPath, 'keep')
 
-    const files = await fs.readdir(contentDir)
-    t.is(files.length, 1 + modifiers.length)
-    for (const modifier of modifiers) {
-      t.true(files.includes(identifier + modifier))
-    }
-    t.true(files.includes('mapping.json'))
-    const mappingContents = await fs.readFile(path.join(contentDir, 'mapping.json'), 'utf8')
+  const poisonedLocations = [path.join('Extensions', '..', 'escape'), path.join('..', 'escape')]
 
-    t.deepEqual(
-      JSON.parse(mappingContents),
-      modifiers.reduce((acc: Record<string, unknown>, modifier) => {
-        acc[uuid + modifier] = {
-          location: path.join('Extensions', identifier + modifier),
-          version,
-        }
-        return acc
-      }, {}),
+  for (const location of poisonedLocations) {
+    await fs.writeFile(
+      path.join(contentDir, 'mapping.json'),
+      JSON.stringify({
+        [uuid]: { location, version },
+      }),
     )
 
-    const downloads = await fs.readdir(path.join(tmpDir.path, AppName, 'downloads'))
-    t.is(downloads.length, modifiers.length)
-    for (const modifier of modifiers) {
-      t.true(downloads.includes(`${name + modifier}.zip`))
-    }
+    const poisonedPackageManager = await initializePackageManager(fakeWebContents, dependencies)
+    await poisonedPackageManager.syncComponents([fakeComponent({ deleted: true })])
+    await waitForDiskWrites()
 
-    for (const modifier of modifiers) {
-      const componentFiles = await fs.readdir(path.join(contentDir, identifier + modifier))
-      t.is(componentFiles.length, 2)
-    }
-  })
+    t.true(await fs.stat(markerPath).then(() => true), `marker preserved for location ${location}`)
+    t.deepEqual(await filesManager.readJSONFile(path.join(contentDir, 'mapping.json')), {
+      [uuid]: { location, version },
+    })
+  }
 
-  test('uninstalls multiple components', async (t) => {
-    await packageManager.syncComponents(modifiers.map((modifier) => fakeComponent({ deleted: true, modifier })))
-    await new Promise((resolve) => setTimeout(resolve, 200))
+  t.true(await fs.stat(path.join(contentDir, identifier)).then(() => true))
+})
 
-    const files = await fs.readdir(contentDir)
-    t.deepEqual(files, ['mapping.json'])
+test('rejects path traversal in package identifier', async (t) => {
+  const traversalIdentifiers = ['../escape', 'foo/../../escape', '..', '.', 'foo/bar']
+  const extensionsParent = path.dirname(contentDir)
 
-    t.deepEqual(await filesManager.readJSONFile(path.join(contentDir, 'mapping.json')), {})
-  })
+  for (const badIdentifier of traversalIdentifiers) {
+    const before = await fs.readdir(contentDir)
+    const parentBefore = await fs.readdir(extensionsParent)
 
-  test("doesn't download anything when two install/uninstall tasks are queued", async (t) => {
-    await Promise.all([
-      packageManager.syncComponents([fakeComponent({ deleted: false })]),
-      packageManager.syncComponents([fakeComponent({ deleted: false })]),
-      packageManager.syncComponents([fakeComponent({ deleted: true })]),
-    ])
-    t.is(downloadFileCallCount, 1)
-  })
-
-  test('does not uninstall paths outside extensions from poisoned mapping', async (t) => {
-    await packageManager.syncComponents([fakeComponent()])
-    await new Promise((resolve) => setTimeout(resolve, 200))
-
-    const escapeDir = path.join(tmpDir.path, 'escape')
-    const markerPath = path.join(escapeDir, 'marker.txt')
-    await filesManager.ensureDirectoryExists(escapeDir)
-    await fs.writeFile(markerPath, 'keep')
-
-    const poisonedLocations = [path.join('Extensions', '..', 'escape'), path.join('..', 'escape')]
-
-    for (const location of poisonedLocations) {
-      await fs.writeFile(
-        path.join(contentDir, 'mapping.json'),
-        JSON.stringify({
-          [uuid]: { location, version },
-        }),
-      )
-
-      await packageManager.syncComponents([fakeComponent({ deleted: true })])
-      await new Promise((resolve) => setTimeout(resolve, 200))
-
-      t.true(await fs.stat(markerPath).then(() => true), `marker preserved for location ${location}`)
-      t.deepEqual(await filesManager.readJSONFile(path.join(contentDir, 'mapping.json')), {
-        [uuid]: { location, version },
-      })
-    }
-
-    t.true(await fs.stat(path.join(contentDir, identifier)).then(() => true))
-  })
-
-  test('rejects path traversal in package identifier', async (t) => {
-    const traversalIdentifiers = ['../escape', 'foo/../../escape', '..', '.', 'foo/bar']
-    const extensionsParent = path.dirname(contentDir)
-
-    for (const badIdentifier of traversalIdentifiers) {
-      const before = await fs.readdir(contentDir)
-      const parentBefore = await fs.readdir(extensionsParent)
-
-      downloadFileCallCount = 0
-      await packageManager.syncComponents([
-        {
-          ...fakeComponent({ modifier: badIdentifier }),
-          content: {
-            ...fakeComponent().content,
-            name: `Bad ${badIdentifier}`,
-            package_info: {
-              ...fakeComponent().content.package_info,
-              identifier: badIdentifier,
-            },
+    downloadFileCallCount = 0
+    await packageManager.syncComponents([
+      {
+        ...fakeComponent({ modifier: badIdentifier }),
+        content: {
+          ...fakeComponent().content,
+          name: `Bad ${badIdentifier}`,
+          package_info: {
+            ...fakeComponent().content.package_info,
+            identifier: badIdentifier,
           },
         },
-      ])
-      await new Promise((resolve) => setTimeout(resolve, 200))
+      },
+    ])
+    await waitForDiskWrites()
 
-      t.is(downloadFileCallCount, 0, `should not download for identifier ${badIdentifier}`)
-      t.deepEqual(await fs.readdir(contentDir), before, `extensions dir unchanged for ${badIdentifier}`)
-      t.deepEqual(await fs.readdir(extensionsParent), parentBefore, `no directory escape for ${badIdentifier}`)
-    }
-  })
+    t.is(downloadFileCallCount, 0, `should not download for identifier ${badIdentifier}`)
+    t.deepEqual(await fs.readdir(contentDir), before, `extensions dir unchanged for ${badIdentifier}`)
+    t.deepEqual(await fs.readdir(extensionsParent), parentBefore, `no directory escape for ${badIdentifier}`)
+  }
+})
 
-  test("Relies on download_url's version field to store the version number", async (t) => {
-    await packageManager.syncComponents([fakeComponent()])
-    await new Promise((resolve) => setTimeout(resolve, 200))
+test("Relies on download_url's version field to store the version number", async (t) => {
+  await packageManager.syncComponents([fakeComponent()])
+  await waitForDiskWrites()
 
-    const mappingFileVersion = JSON.parse(await fs.readFile(path.join(contentDir, 'mapping.json'), 'utf8'))[uuid].version
+  const mappingFileVersion = JSON.parse(await fs.readFile(path.join(contentDir, 'mapping.json'), 'utf8'))[uuid].version
+  const packageJsonVersion = JSON.parse(
+    await fs.readFile(path.join(contentDir, identifier, 'package.json'), 'utf-8'),
+  ).version
 
-    const packageJsonVersion = JSON.parse(
-      await fs.readFile(path.join(contentDir, identifier, 'package.json'), 'utf-8'),
-    ).version
-
-    t.not(mappingFileVersion, packageJsonVersion)
-    t.is(mappingFileVersion, version)
-  })
-} else {
-  test.skip(
-    'packageManager: uses proxyquire (CJS require-interception), incompatible with the ESM/tsx test loader; needs rework to run',
-    () => {},
-  )
-}
+  t.not(mappingFileVersion, packageJsonVersion)
+  t.is(mappingFileVersion, version)
+})
