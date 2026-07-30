@@ -31,6 +31,7 @@ import { LoggerInterface, spaceSeparatedStrings, UuidGenerator } from '@standard
 import { SNItemsKey } from '@standardnotes/encryption'
 import {
   DownloadAndDecryptFileOperation,
+  DownloadAndDecryptResult,
   EncryptAndUploadFileOperation,
   FileDecryptor,
   FileDownloadProgress,
@@ -215,6 +216,9 @@ export class FileService extends AbstractService implements FilesClientInterface
     }
 
     const decrypted = await this.decryptCachedEntry(file, stored)
+    if (!decrypted) {
+      return new ClientDisplayableError('Local file data failed its integrity check.')
+    }
 
     await onDecryptedBytes(decrypted.decryptedBytes, {
       encryptedFileSize: stored.encryptedBytes.length,
@@ -431,22 +435,51 @@ export class FileService extends AbstractService implements FilesClientInterface
     return insertedItem
   }
 
-  private async decryptCachedEntry(file: FileItem, entry: EncryptedBytes): Promise<DecryptedBytes> {
-    const decryptOperation = new FileDecryptor(file, this.crypto)
+  private async decryptCachedEntry(file: FileItem, entry: EncryptedBytes): Promise<DecryptedBytes | undefined> {
+    try {
+      const decryptOperation = new FileDecryptor(file, this.crypto)
+      const decryptedChunks: Uint8Array[] = []
+      let decryptedSize = 0
+      let authenticatedChunks = 0
+      let finalSeen = false
+      let integrityFailed = false
 
-    let decryptedAggregate = new Uint8Array()
+      const orderedChunker = new OrderedByteChunker(file.encryptedChunkSizes, 'memcache', async (chunk) => {
+        if (integrityFailed || finalSeen) {
+          integrityFailed = true
+          return
+        }
 
-    const orderedChunker = new OrderedByteChunker(file.encryptedChunkSizes, 'memcache', async (chunk) => {
-      const decryptedBytes = decryptOperation.decryptBytes(chunk.data)
+        const decryptedBytes = decryptOperation.decryptBytes(chunk.data)
+        if (!decryptedBytes || decryptedBytes.isFinalChunk !== chunk.isLast) {
+          integrityFailed = true
+          return
+        }
 
-      if (decryptedBytes) {
-        decryptedAggregate = new Uint8Array([...decryptedAggregate, ...decryptedBytes.decryptedBytes])
+        decryptedChunks.push(decryptedBytes.decryptedBytes)
+        decryptedSize += decryptedBytes.decryptedBytes.byteLength
+        authenticatedChunks += 1
+        finalSeen = decryptedBytes.isFinalChunk
+      })
+
+      await orderedChunker.addBytes(entry.encryptedBytes)
+      orderedChunker.finish()
+
+      if (integrityFailed || !finalSeen || authenticatedChunks !== file.encryptedChunkSizes.length) {
+        return undefined
       }
-    })
 
-    await orderedChunker.addBytes(entry.encryptedBytes)
+      const decryptedAggregate = new Uint8Array(decryptedSize)
+      let offset = 0
+      for (const chunk of decryptedChunks) {
+        decryptedAggregate.set(chunk, offset)
+        offset += chunk.byteLength
+      }
 
-    return { decryptedBytes: decryptedAggregate }
+      return { decryptedBytes: decryptedAggregate }
+    } catch {
+      return undefined
+    }
   }
 
   public async downloadFile(
@@ -469,6 +502,9 @@ export class FileService extends AbstractService implements FilesClientInterface
 
     if (cachedBytes) {
       const decryptedBytes = await this.decryptCachedEntry(file, cachedBytes)
+      if (!decryptedBytes) {
+        return new ClientDisplayableError('Cached file data failed its integrity check.')
+      }
 
       await onDecryptedBytes(decryptedBytes.decryptedBytes, {
         encryptedFileSize: cachedBytes.encryptedBytes.length,
@@ -486,11 +522,23 @@ export class FileService extends AbstractService implements FilesClientInterface
     if (this.backupsService && fileBackup) {
       this.logger.info('Downloading file from backup', fileBackup)
 
-      await readAndDecryptBackupFileUsingBackupService(file, this.backupsService, this.crypto, async (chunk) => {
-        this.logger.info('Got local file chunk', chunk.progress)
+      const backupResult = await readAndDecryptBackupFileUsingBackupService(
+        file,
+        this.backupsService,
+        this.crypto,
+        async (chunk) => {
+          this.logger.info('Got local file chunk', chunk.progress)
 
-        return onDecryptedBytes(chunk.data, chunk.progress)
-      })
+          return onDecryptedBytes(chunk.data, chunk.progress)
+        },
+      )
+
+      if (backupResult === 'aborted') {
+        return undefined
+      }
+      if (backupResult === 'failed') {
+        return new ClientDisplayableError('Backup file data failed its integrity check.')
+      }
 
       this.logger.info('Finished downloading file from backup')
 
@@ -500,7 +548,8 @@ export class FileService extends AbstractService implements FilesClientInterface
 
       const addToCache = file.encryptedSize < this.encryptedCache.maxSize
 
-      let cacheEntryAggregate = new Uint8Array()
+      const cacheEntryChunks: Uint8Array[] = []
+      let cacheEntrySize = 0
 
       const tokenResult = file.shared_vault_uuid
         ? await this.createSharedVaultValetToken({
@@ -511,6 +560,10 @@ export class FileService extends AbstractService implements FilesClientInterface
           })
         : await this.createUserValetToken(file.remoteIdentifier, ValetTokenOperation.Read)
 
+      if (options?.signal?.aborted) {
+        return undefined
+      }
+
       if (tokenResult instanceof ClientDisplayableError) {
         return tokenResult
       }
@@ -518,18 +571,31 @@ export class FileService extends AbstractService implements FilesClientInterface
       const operation = new DownloadAndDecryptFileOperation(file, this.crypto, this.api, tokenResult)
 
       // Tear down the in-flight download/decrypt if the caller aborts (e.g. the preview modal
-      // is closed mid-download). `abort()` propagates to FileDownloader.abort(), stopping further
-      // chunk fetches. `{ once: true }` so the listener is dropped after firing.
-      options?.signal?.addEventListener('abort', () => operation.abort(), { once: true })
+      // is closed mid-download). Always remove the listener when this run settles;
+      // `{ once: true }` only cleans up the path where the signal actually fires.
+      const abortOperation = () => operation.abort()
+      options?.signal?.addEventListener('abort', abortOperation, { once: true })
 
-      const result = await operation.run(async ({ decrypted, encrypted, progress }): Promise<void> => {
-        if (addToCache) {
-          cacheEntryAggregate = new Uint8Array([...cacheEntryAggregate, ...encrypted.encryptedBytes])
+      let result: DownloadAndDecryptResult
+      try {
+        result = await operation.run(async ({ decrypted, encrypted, progress }): Promise<void> => {
+          if (addToCache) {
+            cacheEntryChunks.push(encrypted.encryptedBytes)
+            cacheEntrySize += encrypted.encryptedBytes.byteLength
+          }
+          return onDecryptedBytes(decrypted.decryptedBytes, progress)
+        })
+      } finally {
+        options?.signal?.removeEventListener('abort', abortOperation)
+      }
+
+      if (result.success && addToCache && cacheEntrySize > 0) {
+        const cacheEntryAggregate = new Uint8Array(cacheEntrySize)
+        let offset = 0
+        for (const chunk of cacheEntryChunks) {
+          cacheEntryAggregate.set(chunk, offset)
+          offset += chunk.byteLength
         }
-        return onDecryptedBytes(decrypted.decryptedBytes, progress)
-      })
-
-      if (addToCache && cacheEntryAggregate.byteLength > 0) {
         this.encryptedCache.add(file.uuid, { encryptedBytes: cacheEntryAggregate })
       }
 
@@ -666,7 +732,10 @@ export class FileService extends AbstractService implements FilesClientInterface
       },
     )
 
-    await fileSystem.closeFileWriteStream(destinationFileHandle)
+    const closeResult = await fileSystem.closeFileWriteStream(destinationFileHandle)
+    if (result === 'success' && closeResult !== 'success') {
+      return 'failed'
+    }
 
     return result
   }
@@ -676,17 +745,30 @@ export class FileService extends AbstractService implements FilesClientInterface
     file: FileItem,
     fileSystem: FileSystemApi,
   ): Promise<Uint8Array> {
-    let bytes = new Uint8Array()
+    const chunks: Uint8Array[] = []
+    let totalSize = 0
 
-    await readAndDecryptBackupFileUsingFileSystemAPI(
+    const result = await readAndDecryptBackupFileUsingFileSystemAPI(
       fileHandle,
       file,
       fileSystem,
       this.crypto,
       async (decryptedBytes) => {
-        bytes = new Uint8Array([...bytes, ...decryptedBytes])
+        chunks.push(decryptedBytes)
+        totalSize += decryptedBytes.byteLength
       },
     )
+
+    if (result !== 'success') {
+      throw new Error(`Unable to authenticate and decrypt backup file: ${result}`)
+    }
+
+    const bytes = new Uint8Array(totalSize)
+    let offset = 0
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset)
+      offset += chunk.byteLength
+    }
 
     return bytes
   }

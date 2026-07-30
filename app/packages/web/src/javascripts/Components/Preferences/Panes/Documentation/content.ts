@@ -726,6 +726,11 @@ export const DOC_CATEGORIES: DocCategory[] = [
             type: 'paragraph',
             text: 'Files are downloaded and decrypted locally when you open them, the same way notes are.',
           },
+          {
+            type: 'callout',
+            variant: 'info',
+            text: 'A download is accepted only when every declared encrypted chunk arrives, authenticates successfully, and the authenticated final marker appears exactly at the end. Truncated, oversized, malformed, or tampered data is reported as an error instead of being treated as a complete file; an authenticated file with empty contents is still valid.',
+          },
         ],
         related: ['files/encryption', 'self-hosting/overview'],
       },

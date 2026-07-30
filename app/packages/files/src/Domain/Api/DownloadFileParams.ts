@@ -8,4 +8,6 @@ export type DownloadFileParams = {
   ownershipType: FileOwnershipType
   contentRangeStart: number
   onBytesReceived: (bytes: Uint8Array) => Promise<void>
+  /** Stops bounded follow-up range requests after the active request settles. */
+  shouldAbort?: () => boolean
 }

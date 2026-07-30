@@ -1,4 +1,4 @@
-import { PureCryptoInterface } from '@standardnotes/sncrypto-common'
+import { PureCryptoInterface, SodiumTag } from '@standardnotes/sncrypto-common'
 import { FileSystemApi } from '../Api/FileSystemApi'
 import { FileHandleRead } from '../Api/FileHandleRead'
 import { readAndDecryptBackupFileUsingFileSystemAPI } from './ReadAndDecryptBackupFileFileSystemAPI'
@@ -13,12 +13,19 @@ const file = {
 const bytes = (...values: number[]) => new Uint8Array(values)
 
 /** Returns the encrypted bytes with every value incremented, so decryption is observable. */
-const decryptingCrypto = (): PureCryptoInterface => {
+const decryptingCrypto = (
+  tags: SodiumTag[] = [
+    SodiumTag.CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_TAG_PUSH,
+    SodiumTag.CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_TAG_FINAL,
+  ],
+  plaintext = (encrypted: Uint8Array) => encrypted.map((value) => value + 1),
+): PureCryptoInterface => {
   const crypto = {} as jest.Mocked<PureCryptoInterface>
+  let index = 0
   crypto.xchacha20StreamInitDecryptor = jest.fn().mockReturnValue({ state: {} })
   crypto.xchacha20StreamDecryptorPush = jest.fn().mockImplementation((_state: unknown, encrypted: Uint8Array) => ({
-    message: encrypted.map((value) => value + 1),
-    tag: 0,
+    message: plaintext(encrypted),
+    tag: tags[index++],
   }))
   return crypto
 }
@@ -41,7 +48,7 @@ describe('readAndDecryptBackupFileUsingFileSystemAPI', () => {
     await readAndDecryptBackupFileUsingFileSystemAPI(
       {} as FileHandleRead,
       file,
-      fileSystemYielding([bytes(1, 2, 3, 4)]),
+      fileSystemYielding([bytes(1, 2, 3, 4, 5, 6, 7, 8)]),
       crypto,
       jest.fn().mockResolvedValue(undefined),
     )
@@ -83,19 +90,39 @@ describe('readAndDecryptBackupFileUsingFileSystemAPI', () => {
     ])
   })
 
-  it('should skip chunks the crypto layer refuses to decrypt', async () => {
+  it('fails when the crypto layer refuses to authenticate a chunk', async () => {
     const crypto = decryptingCrypto()
     crypto.xchacha20StreamDecryptorPush = jest.fn().mockReturnValue(false)
     const onDecryptedBytes = jest.fn().mockResolvedValue(undefined)
 
-    await readAndDecryptBackupFileUsingFileSystemAPI(
+    const result = await readAndDecryptBackupFileUsingFileSystemAPI(
       {} as FileHandleRead,
       file,
-      fileSystemYielding([bytes(1, 2, 3, 4)]),
+      fileSystemYielding([bytes(1, 2, 3, 4, 5, 6, 7, 8)]),
       crypto,
       onDecryptedBytes,
     )
 
+    expect(result).toBe('failed')
+    expect(onDecryptedBytes).not.toHaveBeenCalled()
+  })
+
+  it('fails when the crypto layer throws while authenticating a chunk', async () => {
+    const crypto = decryptingCrypto()
+    crypto.xchacha20StreamDecryptorPush = jest.fn(() => {
+      throw new Error('invalid ciphertext')
+    })
+    const onDecryptedBytes = jest.fn().mockResolvedValue(undefined)
+
+    const result = await readAndDecryptBackupFileUsingFileSystemAPI(
+      {} as FileHandleRead,
+      file,
+      fileSystemYielding([bytes(1, 2, 3, 4, 5, 6, 7, 8)]),
+      crypto,
+      onDecryptedBytes,
+    )
+
+    expect(result).toBe('failed')
     expect(onDecryptedBytes).not.toHaveBeenCalled()
   })
 
@@ -104,10 +131,70 @@ describe('readAndDecryptBackupFileUsingFileSystemAPI', () => {
       readAndDecryptBackupFileUsingFileSystemAPI(
         {} as FileHandleRead,
         file,
-        fileSystemYielding([bytes(1, 2, 3, 4)], 'failed'),
+        fileSystemYielding([], 'failed'),
         decryptingCrypto(),
         jest.fn().mockResolvedValue(undefined),
       ),
     ).resolves.toBe('failed')
+  })
+
+  it('allows authenticated chunks with empty plaintext', async () => {
+    const onDecryptedBytes = jest.fn().mockResolvedValue(undefined)
+
+    const result = await readAndDecryptBackupFileUsingFileSystemAPI(
+      {} as FileHandleRead,
+      { ...file, encryptedChunkSizes: [4] },
+      fileSystemYielding([bytes(1, 2, 3, 4)]),
+      decryptingCrypto([SodiumTag.CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_TAG_FINAL], () => new Uint8Array()),
+      onDecryptedBytes,
+    )
+
+    expect(result).toBe('success')
+    expect(onDecryptedBytes).toHaveBeenCalledWith(new Uint8Array())
+  })
+
+  it.each([
+    [
+      'missing final tag',
+      bytes(1, 2, 3, 4, 5, 6, 7, 8),
+      decryptingCrypto([
+        SodiumTag.CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_TAG_PUSH,
+        SodiumTag.CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_TAG_PUSH,
+      ]),
+    ],
+    [
+      'early final tag',
+      bytes(1, 2, 3, 4, 5, 6, 7, 8),
+      decryptingCrypto([
+        SodiumTag.CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_TAG_FINAL,
+        SodiumTag.CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_TAG_FINAL,
+      ]),
+    ],
+    ['truncated data', bytes(1, 2, 3, 4, 5, 6, 7), decryptingCrypto()],
+    ['trailing data', bytes(1, 2, 3, 4, 5, 6, 7, 8, 9), decryptingCrypto()],
+  ])('fails on %s', async (_case, encryptedBytes, crypto) => {
+    const result = await readAndDecryptBackupFileUsingFileSystemAPI(
+      {} as FileHandleRead,
+      file,
+      fileSystemYielding([encryptedBytes as Uint8Array]),
+      crypto as PureCryptoInterface,
+      jest.fn().mockResolvedValue(undefined),
+    )
+
+    expect(result).toBe('failed')
+  })
+
+  it('does not hide failures from the plaintext consumer', async () => {
+    const consumerError = new Error('destination failed')
+
+    await expect(
+      readAndDecryptBackupFileUsingFileSystemAPI(
+        {} as FileHandleRead,
+        file,
+        fileSystemYielding([bytes(1, 2, 3, 4, 5, 6, 7, 8)]),
+        decryptingCrypto(),
+        jest.fn().mockRejectedValue(consumerError),
+      ),
+    ).rejects.toBe(consumerError)
   })
 })

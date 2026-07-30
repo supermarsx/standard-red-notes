@@ -1,7 +1,7 @@
 import { FileContent } from '@standardnotes/models'
 import { PureCryptoInterface } from '@standardnotes/sncrypto-common'
 import { FileDecryptor } from '../UseCase/FileDecryptor'
-import { OrderedByteChunker } from '../Chunker/OrderedByteChunker'
+import { OrderedByteChunker, OrderedByteChunkerError } from '../Chunker/OrderedByteChunker'
 import { BackupServiceInterface } from './BackupServiceInterface'
 import { OnChunkCallback } from '../Chunker/OnChunkCallback'
 import { log, LoggingDomain } from '../Logging'
@@ -26,27 +26,63 @@ export async function readAndDecryptBackupFileUsingBackupService(
     file.encryptedChunkSizes,
   )
 
-  const decryptor = new FileDecryptor(file, crypto)
+  let integrityFailed = false
+  let authenticatedChunks = 0
+  let finalSeen = false
 
-  const byteChunker = new OrderedByteChunker(file.encryptedChunkSizes, 'local', async (chunk) => {
-    log(LoggingDomain.FilesPackage, 'OrderedByteChunker did pop bytes', chunk.data.length, chunk.progress)
+  try {
+    const decryptor = new FileDecryptor(file, crypto)
+    const byteChunker = new OrderedByteChunker(file.encryptedChunkSizes, 'local', async (chunk) => {
+      log(LoggingDomain.FilesPackage, 'OrderedByteChunker did pop bytes', chunk.data.length, chunk.progress)
 
-    const decryptResult = decryptor.decryptBytes(chunk.data)
+      if (integrityFailed || finalSeen) {
+        integrityFailed = true
+        return
+      }
 
-    if (!decryptResult) {
-      return
+      let decryptResult: ReturnType<FileDecryptor['decryptBytes']>
+      try {
+        decryptResult = decryptor.decryptBytes(chunk.data)
+      } catch {
+        integrityFailed = true
+        return
+      }
+
+      if (!decryptResult || decryptResult.isFinalChunk !== chunk.isLast) {
+        integrityFailed = true
+        return
+      }
+
+      authenticatedChunks += 1
+      finalSeen = decryptResult.isFinalChunk
+
+      await onDecryptedBytes({ ...chunk, data: decryptResult.decryptedBytes })
+    })
+
+    const readResult = await backupService.readEncryptedFileFromBackup(file.uuid, async (chunk) => {
+      log(LoggingDomain.FilesPackage, 'Got file chunk from backup service', chunk.data.length, chunk.progress)
+
+      await byteChunker.addBytes(chunk.data)
+    })
+
+    if (readResult !== 'success') {
+      return readResult
     }
 
-    await onDecryptedBytes({ ...chunk, data: decryptResult.decryptedBytes })
-  })
+    byteChunker.finish()
 
-  const readResult = await backupService.readEncryptedFileFromBackup(file.uuid, async (chunk) => {
-    log(LoggingDomain.FilesPackage, 'Got file chunk from backup service', chunk.data.length, chunk.progress)
+    if (integrityFailed || !finalSeen || authenticatedChunks !== file.encryptedChunkSizes.length) {
+      return 'failed'
+    }
 
-    await byteChunker.addBytes(chunk.data)
-  })
+    log(LoggingDomain.FilesPackage, 'Finished reading and decrypting backup file', file.uuid)
 
-  log(LoggingDomain.FilesPackage, 'Finished reading and decrypting backup file', file.uuid)
+    return 'success'
+  } catch (error) {
+    if (error instanceof OrderedByteChunkerError) {
+      return 'failed'
+    }
 
-  return readResult
+    throw error
+  }
 }

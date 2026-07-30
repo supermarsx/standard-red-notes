@@ -554,6 +554,8 @@ Attach files to notes or keep them in the Files view.
 
 Files are downloaded and decrypted locally when you open them, the same way notes are.
 
+> **Info.** A download is accepted only when every declared encrypted chunk arrives, authenticates successfully, and the authenticated final marker appears exactly at the end. Truncated, oversized, malformed, or tampered data is reported as an error instead of being treated as a complete file; an authenticated file with empty contents is still valid.
+
 Related: [files/encryption](#files-encryption), [self-hosting/overview](#self-hosting-overview)
 
 <a id="files-encryption"></a>

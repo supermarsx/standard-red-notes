@@ -32,7 +32,7 @@ describe('file downloader', () => {
     file = {
       uuid: '123',
       shared_vault_uuid: undefined,
-      encryptedChunkSizes: [5],
+      encryptedChunkSizes: [1, 1, 1, 1, 1],
       remoteIdentifier: '123',
     }
   })
@@ -66,37 +66,54 @@ describe('file downloader', () => {
     expect(progresses).toEqual([20, 40, 60, 80, 100])
   })
 
-  it('clamps progress and remaining bytes when the server sends more than the declared size', async () => {
-    downloader = new FileDownloader({ ...file, encryptedChunkSizes: [4] }, apiService, 'valet-token')
-
-    const progresses: Array<{ percentComplete: number; remaining: number }> = []
-    await downloader.run(async (_bytes, progress) => {
-      progresses.push({
-        percentComplete: progress.percentComplete,
-        remaining: progress.encryptedBytesRemaining,
-      })
-    })
-
-    expect(progresses[progresses.length - 1]).toEqual({ percentComplete: 100, remaining: 0 })
-  })
-
-  it('reports an empty encrypted file as complete without dividing by zero', async () => {
+  it('rejects an oversized chunk instead of hiding the overrun in clamped progress', async () => {
     apiService.downloadFile = jest.fn().mockImplementation(async (params: DownloadFileParams) => {
-      await params.onBytesReceived(new Uint8Array())
-
+      await params.onBytesReceived(Uint8Array.from([0xaa, 0xbb, 0xcc, 0xdd, 0xee]))
       return undefined
     })
+    downloader = new FileDownloader({ ...file, encryptedChunkSizes: [4] }, apiService, 'valet-token')
+
+    const onBytes = jest.fn().mockResolvedValue(undefined)
+    const result = await downloader.run(onBytes)
+
+    expect(result).toEqual(expect.objectContaining({ text: expect.stringContaining('had 5 bytes; expected 4') }))
+    expect(onBytes).not.toHaveBeenCalled()
+  })
+
+  it('rejects empty encrypted metadata because it cannot contain an authenticated final chunk', async () => {
     downloader = new FileDownloader({ ...file, encryptedChunkSizes: [] }, apiService, 'valet-token')
 
-    const progresses: number[] = []
-    await downloader.run(async (_bytes, progress) => {
-      progresses.push(progress.percentComplete)
-      expect(progress.encryptedFileSize).toBe(0)
-      expect(progress.encryptedBytesRemaining).toBe(0)
-    })
+    const result = await downloader.run(jest.fn())
 
-    expect(progresses).toEqual([100])
-    expect(Number.isFinite(progresses[0])).toBe(true)
+    expect(result).toEqual(expect.objectContaining({ text: expect.stringContaining('authenticated encrypted chunk') }))
+    expect(apiService.downloadFile).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    { chunkSizes: [0] },
+    { chunkSizes: [-1] },
+    { chunkSizes: [1.5] },
+    { chunkSizes: [Number.NaN] },
+  ])('rejects invalid encrypted chunk sizes $chunkSizes', async ({ chunkSizes }) => {
+    downloader = new FileDownloader({ ...file, encryptedChunkSizes: chunkSizes }, apiService, 'valet-token')
+
+    const result = await downloader.run(jest.fn())
+
+    expect(result).toEqual(expect.objectContaining({ text: expect.stringContaining('invalid encrypted chunk size') }))
+    expect(apiService.downloadFile).not.toHaveBeenCalled()
+  })
+
+  it('rejects encrypted metadata whose aggregate exceeds a safe integer', async () => {
+    downloader = new FileDownloader(
+      { ...file, encryptedChunkSizes: [Number.MAX_SAFE_INTEGER, 1] },
+      apiService,
+      'valet-token',
+    )
+
+    const result = await downloader.run(jest.fn())
+
+    expect(result).toEqual(expect.objectContaining({ text: expect.stringContaining('supported encrypted size') }))
+    expect(apiService.downloadFile).not.toHaveBeenCalled()
   })
 
   it('passes a bound abort callback and resolves the active run as aborted', async () => {
@@ -136,6 +153,47 @@ describe('file downloader', () => {
     })
 
     expect(receivedBytes.length).toEqual(numChunks)
+  })
+
+  it('rejects a truncated chunk before forwarding it', async () => {
+    apiService.downloadFile = jest.fn().mockImplementation(async (params: DownloadFileParams) => {
+      await params.onBytesReceived(Uint8Array.from([0xaa]))
+      return undefined
+    })
+    downloader = new FileDownloader({ ...file, encryptedChunkSizes: [2] }, apiService, 'valet-token')
+    const onBytes = jest.fn().mockResolvedValue(undefined)
+
+    const result = await downloader.run(onBytes)
+
+    expect(result).toEqual(expect.objectContaining({ text: expect.stringContaining('had 1 bytes; expected 2') }))
+    expect(onBytes).not.toHaveBeenCalled()
+  })
+
+  it('rejects a download that ends before all declared encrypted chunks arrive', async () => {
+    apiService.downloadFile = jest.fn().mockImplementation(async (params: DownloadFileParams) => {
+      await params.onBytesReceived(Uint8Array.from([0xaa]))
+      return undefined
+    })
+    downloader = new FileDownloader({ ...file, encryptedChunkSizes: [1, 1] }, apiService, 'valet-token')
+
+    const result = await downloader.run(jest.fn().mockResolvedValue(undefined))
+
+    expect(result).toEqual(expect.objectContaining({ text: expect.stringContaining('after 1 of 2 encrypted chunks') }))
+  })
+
+  it('rejects bytes delivered after all declared encrypted chunks', async () => {
+    apiService.downloadFile = jest.fn().mockImplementation(async (params: DownloadFileParams) => {
+      await params.onBytesReceived(Uint8Array.from([0xaa]))
+      await params.onBytesReceived(Uint8Array.from([0xbb]))
+      return undefined
+    })
+    downloader = new FileDownloader({ ...file, encryptedChunkSizes: [1] }, apiService, 'valet-token')
+    const onBytes = jest.fn().mockResolvedValue(undefined)
+
+    const result = await downloader.run(onBytes)
+
+    expect(result).toEqual(expect.objectContaining({ text: expect.stringContaining('beyond its encrypted metadata') }))
+    expect(onBytes).toHaveBeenCalledTimes(1)
   })
 
   it('does not let an idle abort poison a later run', async () => {

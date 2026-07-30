@@ -1,5 +1,5 @@
 import { ClientDisplayableError } from '@standardnotes/responses'
-import { AbortFunction, FileDownloader } from '../UseCase/FileDownloader'
+import { AbortFunction, FileDownloader, FileDownloaderResult } from '../UseCase/FileDownloader'
 import { FileDecryptor } from '../UseCase/FileDecryptor'
 import { FileDownloadProgress } from '../Types/FileDownloadProgress'
 import { PureCryptoInterface } from '@standardnotes/sncrypto-common'
@@ -40,9 +40,19 @@ export class DownloadAndDecryptFileOperation {
   }
 
   public async run(onBytes: OnBytesCallback): Promise<DownloadAndDecryptResult> {
-    const decryptor = this.createDecryptor()
+    let decryptor: FileDecryptor
+    try {
+      decryptor = this.createDecryptor()
+    } catch {
+      return {
+        success: false,
+        error: new ClientDisplayableError('File download could not initialize its authenticated decryptor.'),
+        aborted: false,
+      }
+    }
 
-    let decryptError: ClientDisplayableError | undefined
+    let authenticatedChunks = 0
+    let finalSeen = false
 
     const onDownloadBytes = async (
       encryptedBytes: Uint8Array,
@@ -50,26 +60,68 @@ export class DownloadAndDecryptFileOperation {
       abortDownload: AbortFunction,
     ) => {
       const result = decryptor.decryptBytes(encryptedBytes)
-
-      if (!result || result.decryptedBytes.length === 0) {
-        decryptError = new ClientDisplayableError('Failed to decrypt chunk')
-
-        abortDownload()
-
+      if (!result) {
+        abortDownload(new ClientDisplayableError('Failed to authenticate and decrypt file chunk.'))
         return
       }
 
-      const decryptedBytes = result.decryptedBytes
+      const isLastDeclaredChunk = authenticatedChunks === this.file.encryptedChunkSizes.length - 1
+      if (result.isFinalChunk && !isLastDeclaredChunk) {
+        abortDownload(
+          new ClientDisplayableError('File download authenticated its final chunk before the declared end.'),
+        )
+        return
+      }
+      if (!result.isFinalChunk && isLastDeclaredChunk) {
+        abortDownload(new ClientDisplayableError('File download ended without an authenticated final chunk.'))
+        return
+      }
 
-      await onBytes({ decrypted: { decryptedBytes }, encrypted: { encryptedBytes }, progress })
+      authenticatedChunks += 1
+      finalSeen = result.isFinalChunk
+
+      await onBytes({ decrypted: { decryptedBytes: result.decryptedBytes }, encrypted: { encryptedBytes }, progress })
     }
 
-    const downloadResult = await this.downloader.run(onDownloadBytes)
+    let downloadResult: FileDownloaderResult
+    try {
+      downloadResult = await this.downloader.run(onDownloadBytes)
+    } catch {
+      return {
+        success: false,
+        error: new ClientDisplayableError('File download failed before its encrypted stream could be authenticated.'),
+        aborted: false,
+      }
+    }
+
+    if (downloadResult === 'aborted') {
+      return {
+        success: false,
+        error: undefined,
+        aborted: true,
+      }
+    }
+
+    if (downloadResult instanceof ClientDisplayableError) {
+      return {
+        success: false,
+        error: downloadResult,
+        aborted: false,
+      }
+    }
+
+    if (!finalSeen || authenticatedChunks !== this.file.encryptedChunkSizes.length) {
+      return {
+        success: false,
+        error: new ClientDisplayableError('File download did not contain exactly one authenticated final chunk.'),
+        aborted: false,
+      }
+    }
 
     return {
-      success: downloadResult instanceof ClientDisplayableError ? false : true,
-      error: downloadResult === 'aborted' ? undefined : downloadResult || decryptError,
-      aborted: downloadResult === 'aborted',
+      success: true,
+      error: undefined,
+      aborted: false,
     }
   }
 

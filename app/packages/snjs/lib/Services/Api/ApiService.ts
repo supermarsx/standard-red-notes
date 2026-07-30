@@ -2323,60 +2323,111 @@ export class LegacyApiService
     ownershipType,
     contentRangeStart,
     onBytesReceived,
+    shouldAbort,
   }: DownloadFileParams): Promise<ClientDisplayableError | undefined> {
+    if (file.encryptedChunkSizes.length === 0) {
+      return new ClientDisplayableError('File download metadata does not contain an authenticated encrypted chunk.')
+    }
+
+    let declaredTotalSize = 0
+    for (const size of file.encryptedChunkSizes) {
+      if (!Number.isSafeInteger(size) || size <= 0) {
+        return new ClientDisplayableError('File download metadata contains an invalid encrypted chunk size.')
+      }
+      declaredTotalSize += size
+      if (!Number.isSafeInteger(declaredTotalSize)) {
+        return new ClientDisplayableError('File download metadata exceeds the supported encrypted size.')
+      }
+    }
+
+    if (!Number.isSafeInteger(chunkIndex) || chunkIndex < 0 || chunkIndex >= file.encryptedChunkSizes.length) {
+      return new ClientDisplayableError('File download requested an encrypted chunk outside its metadata.')
+    }
+
+    const declaredStart = file.encryptedChunkSizes
+      .slice(0, chunkIndex)
+      .reduce((total, encryptedChunkSize) => total + encryptedChunkSize, 0)
+    if (!Number.isSafeInteger(contentRangeStart) || contentRangeStart !== declaredStart) {
+      return new ClientDisplayableError('File download requested a range that does not match its encrypted metadata.')
+    }
+
     const url = this.getFilesDownloadUrl(ownershipType)
-    const pullChunkSize = file.encryptedChunkSizes[chunkIndex]
 
-    const request: HttpRequest = {
-      verb: HttpVerb.Get,
-      url,
-      customHeaders: [
-        { key: 'x-valet-token', value: valetToken },
-        {
-          key: 'x-chunk-size',
-          value: pullChunkSize.toString(),
-        },
-        { key: 'range', value: `bytes=${contentRangeStart}-` },
-      ],
-      responseType: 'arraybuffer',
-    }
+    let expectedRangeStart = contentRangeStart
+    for (let currentChunkIndex = chunkIndex; currentChunkIndex < file.encryptedChunkSizes.length; currentChunkIndex++) {
+      if (shouldAbort?.()) {
+        return undefined
+      }
 
-    const response = await this.tokenRefreshableRequest<DownloadFileChunkResponse>({
-      ...request,
-      fallbackErrorMessage: Strings.Network.Files.FailedDownloadFileChunk,
-    })
+      const expectedChunkSize = file.encryptedChunkSizes[currentChunkIndex]
+      const expectedRangeEnd = expectedRangeStart + expectedChunkSize - 1
+      const request: HttpRequest = {
+        verb: HttpVerb.Get,
+        url,
+        customHeaders: [
+          { key: 'x-valet-token', value: valetToken },
+          {
+            key: 'x-chunk-size',
+            value: expectedChunkSize.toString(),
+          },
+          { key: 'range', value: `bytes=${expectedRangeStart}-${expectedRangeEnd}` },
+        ],
+        responseType: 'arraybuffer',
+      }
 
-    if (isErrorResponse(response)) {
-      return new ClientDisplayableError(response.data?.error?.message as string)
-    }
-
-    const contentRangeHeader = (<Map<string, string | null>>response.headers).get('content-range')
-    if (!contentRangeHeader) {
-      return new ClientDisplayableError('Could not obtain content-range header while downloading file chunk')
-    }
-
-    const matches = contentRangeHeader.match(/(^[a-zA-Z][\w]*)\s+(\d+)\s?-\s?(\d+)?\s?\/?\s?(\d+|\*)?/)
-    if (!matches || matches.length !== 5) {
-      return new ClientDisplayableError('Malformed content-range header in response when downloading file chunk')
-    }
-
-    const rangeStart = +matches[2]
-    const rangeEnd = +matches[3]
-    const totalSize = +matches[4]
-
-    const bytesReceived = new Uint8Array(response.data)
-
-    await onBytesReceived(bytesReceived)
-
-    if (rangeEnd < totalSize - 1) {
-      return this.downloadFile({
-        file,
-        chunkIndex: ++chunkIndex,
-        valetToken,
-        ownershipType,
-        contentRangeStart: rangeStart + pullChunkSize,
-        onBytesReceived,
+      const response = await this.tokenRefreshableRequest<DownloadFileChunkResponse>({
+        ...request,
+        fallbackErrorMessage: Strings.Network.Files.FailedDownloadFileChunk,
       })
+
+      if (isErrorResponse(response)) {
+        return ClientDisplayableError.FromNetworkError(response)
+      }
+      if ((response.status as number) !== 206) {
+        return new ClientDisplayableError('File download response was not a partial-content response.')
+      }
+
+      const contentRangeHeader = response.headers?.get('content-range')
+      if (!contentRangeHeader) {
+        return new ClientDisplayableError('File download response did not include a Content-Range header.')
+      }
+
+      const matches = /^bytes ([0-9]+)-([0-9]+)\/([0-9]+)$/.exec(contentRangeHeader)
+      if (!matches) {
+        return new ClientDisplayableError('File download response contained a malformed Content-Range header.')
+      }
+
+      const rangeStart = Number(matches[1])
+      const rangeEnd = Number(matches[2])
+      const totalSize = Number(matches[3])
+      if (
+        !Number.isSafeInteger(rangeStart) ||
+        !Number.isSafeInteger(rangeEnd) ||
+        !Number.isSafeInteger(totalSize) ||
+        rangeStart !== expectedRangeStart ||
+        rangeEnd !== expectedRangeEnd ||
+        totalSize !== declaredTotalSize
+      ) {
+        return new ClientDisplayableError(
+          'File download response range does not match the requested encrypted chunk metadata.',
+        )
+      }
+
+      if (!(response.data instanceof ArrayBuffer)) {
+        return new ClientDisplayableError('File download response did not contain encrypted binary data.')
+      }
+      const bytesReceived = new Uint8Array(response.data)
+      if (bytesReceived.byteLength !== expectedChunkSize) {
+        return new ClientDisplayableError(
+          `File download chunk ${currentChunkIndex} had ${bytesReceived.byteLength} bytes; expected ${expectedChunkSize}.`,
+        )
+      }
+
+      if (shouldAbort?.()) {
+        return undefined
+      }
+      await onBytesReceived(bytesReceived)
+      expectedRangeStart = expectedRangeEnd + 1
     }
 
     return undefined

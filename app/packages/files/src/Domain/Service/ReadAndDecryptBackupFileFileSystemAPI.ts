@@ -3,7 +3,7 @@ import { PureCryptoInterface } from '@standardnotes/sncrypto-common'
 import { FileDecryptor } from '../UseCase/FileDecryptor'
 import { FileSystemApi } from '../Api/FileSystemApi'
 import { FileHandleRead } from '../Api/FileHandleRead'
-import { OrderedByteChunker } from '../Chunker/OrderedByteChunker'
+import { OrderedByteChunker, OrderedByteChunkerError } from '../Chunker/OrderedByteChunker'
 
 export async function readAndDecryptBackupFileUsingFileSystemAPI(
   fileHandle: FileHandleRead,
@@ -17,21 +17,57 @@ export async function readAndDecryptBackupFileUsingFileSystemAPI(
   crypto: PureCryptoInterface,
   onDecryptedBytes: (decryptedBytes: Uint8Array) => Promise<void>,
 ): Promise<'aborted' | 'failed' | 'success'> {
-  const decryptor = new FileDecryptor(file, crypto)
+  let integrityFailed = false
+  let authenticatedChunks = 0
+  let finalSeen = false
 
-  const byteChunker = new OrderedByteChunker(file.encryptedChunkSizes, 'local', async (chunk) => {
-    const decryptResult = decryptor.decryptBytes(chunk.data)
+  try {
+    const decryptor = new FileDecryptor(file, crypto)
+    const byteChunker = new OrderedByteChunker(file.encryptedChunkSizes, 'local', async (chunk) => {
+      if (integrityFailed || finalSeen) {
+        integrityFailed = true
+        return
+      }
 
-    if (!decryptResult) {
-      return
+      let decryptResult: ReturnType<FileDecryptor['decryptBytes']>
+      try {
+        decryptResult = decryptor.decryptBytes(chunk.data)
+      } catch {
+        integrityFailed = true
+        return
+      }
+
+      if (!decryptResult || decryptResult.isFinalChunk !== chunk.isLast) {
+        integrityFailed = true
+        return
+      }
+
+      authenticatedChunks += 1
+      finalSeen = decryptResult.isFinalChunk
+
+      await onDecryptedBytes(decryptResult.decryptedBytes)
+    })
+
+    const readResult = await fileSystem.readFile(fileHandle, async (encryptedBytes: Uint8Array) => {
+      await byteChunker.addBytes(encryptedBytes)
+    })
+
+    if (readResult !== 'success') {
+      return readResult
     }
 
-    await onDecryptedBytes(decryptResult.decryptedBytes)
-  })
+    byteChunker.finish()
 
-  const readResult = await fileSystem.readFile(fileHandle, async (encryptedBytes: Uint8Array) => {
-    await byteChunker.addBytes(encryptedBytes)
-  })
+    if (integrityFailed || !finalSeen || authenticatedChunks !== file.encryptedChunkSizes.length) {
+      return 'failed'
+    }
 
-  return readResult
+    return 'success'
+  } catch (error) {
+    if (error instanceof OrderedByteChunkerError) {
+      return 'failed'
+    }
+
+    throw error
+  }
 }
