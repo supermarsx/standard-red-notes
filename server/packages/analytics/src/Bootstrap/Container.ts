@@ -104,27 +104,26 @@ export class ContainerConfigLoader {
     }
     container.bind<SNSClient>(TYPES.SNS).toConstantValue(new SNSClient(snsConfig))
 
-    if (env.get('SQS_QUEUE_URL', true)) {
-      const sqsConfig: SQSClientConfig = {
-        region: env.get('SQS_AWS_REGION', true),
-      }
-      if (env.get('SQS_ENDPOINT', true)) {
-        sqsConfig.endpoint = env.get('SQS_ENDPOINT', true)
-      }
-      if (env.get('SQS_ACCESS_KEY_ID', true) && env.get('SQS_SECRET_ACCESS_KEY', true)) {
-        sqsConfig.credentials = {
-          accessKeyId: env.get('SQS_ACCESS_KEY_ID', true),
-          secretAccessKey: env.get('SQS_SECRET_ACCESS_KEY', true),
-        }
-      }
-      container.bind<SQSClient>(TYPES.SQS).toConstantValue(new SQSClient(sqsConfig))
+    const sqsQueueUrl = env.get('SQS_QUEUE_URL')
+    const sqsConfig: SQSClientConfig = {
+      region: env.get('SQS_AWS_REGION', true),
     }
+    if (env.get('SQS_ENDPOINT', true)) {
+      sqsConfig.endpoint = env.get('SQS_ENDPOINT', true)
+    }
+    if (env.get('SQS_ACCESS_KEY_ID', true) && env.get('SQS_SECRET_ACCESS_KEY', true)) {
+      sqsConfig.credentials = {
+        accessKeyId: env.get('SQS_ACCESS_KEY_ID', true),
+        secretAccessKey: env.get('SQS_SECRET_ACCESS_KEY', true),
+      }
+    }
+    container.bind<SQSClient>(TYPES.SQS).toConstantValue(new SQSClient(sqsConfig))
 
     // env vars
     container.bind(TYPES.REDIS_URL).toConstantValue(env.get('REDIS_URL'))
     container.bind(TYPES.SNS_TOPIC_ARN).toConstantValue(env.get('SNS_TOPIC_ARN'))
     container.bind(TYPES.SNS_AWS_REGION).toConstantValue(env.get('SNS_AWS_REGION', true))
-    container.bind(TYPES.SQS_QUEUE_URL).toConstantValue(env.get('SQS_QUEUE_URL'))
+    container.bind(TYPES.SQS_QUEUE_URL).toConstantValue(sqsQueueUrl)
     container.bind(TYPES.ADMIN_EMAILS).toConstantValue(env.get('ADMIN_EMAILS').split(','))
     container.bind(TYPES.MIXPANEL_TOKEN).toConstantValue(env.get('MIXPANEL_TOKEN', true))
 

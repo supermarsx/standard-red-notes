@@ -151,9 +151,7 @@ describe('ContainerConfigLoader', () => {
     expect(container.get(TYPES.DomainEventSubscriber)).toBeDefined()
   })
 
-  // The SQS client is bound behind an `optional` read of SQS_QUEUE_URL, but the same variable is
-  // then read as required a few lines later, so skipping it fails the boot rather than the queue.
-  it('refuses to boot when no queue url is configured', async () => {
+  it('fails closed before wiring queue services when no queue url is configured', async () => {
     await expect(loadContainer({}, ['SQS_QUEUE_URL'])).rejects.toThrow('Environment variable SQS_QUEUE_URL not set')
   })
 
