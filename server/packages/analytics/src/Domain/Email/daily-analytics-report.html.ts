@@ -7,31 +7,75 @@ import { Period } from '../Time/Period'
 
 import { safeHtml } from '@standardnotes/common'
 
-const countActiveUsers = (measureName: string, data: any): { yesterday: number; last30Days: number } => {
-  const totalActiveUsersLast30DaysIncludingToday = data.statisticsOverTime.find(
-    (a: { name: string; period: number }) => a.name === measureName && a.period === 27,
-  )
+const unavailable = 'N/A'
 
-  const totalActiveUsersYesterday =
-    totalActiveUsersLast30DaysIncludingToday.counts[totalActiveUsersLast30DaysIncludingToday.counts.length - 2]
-      .totalCount
+const asArray = (value: unknown): any[] => (Array.isArray(value) ? value : [])
 
-  const filteredCounts = totalActiveUsersLast30DaysIncludingToday.counts.filter(
-    (count: { totalCount: number }) => count.totalCount !== 0,
-  )
-  if (filteredCounts.length === 0) {
-    return {
-      yesterday: 0,
-      last30Days: 0,
-    }
+const asFiniteNumber = (value: unknown): number | undefined => {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+const formatNumber = (value: unknown): string => asFiniteNumber(value)?.toLocaleString('en-US') ?? unavailable
+
+const formatCurrency = (value: unknown): string => {
+  const amount = asFiniteNumber(value)
+
+  return amount === undefined ? unavailable : `$${amount.toLocaleString('en-US')}`
+}
+
+const formatPercentage = (value: unknown): string => {
+  const percentage = asFiniteNumber(value)
+
+  return percentage === undefined ? unavailable : `${Math.floor(percentage)}%`
+}
+
+const formatDuration = (timer: TimerInterface, value: unknown): string => {
+  const microseconds = asFiniteNumber(value)
+  if (microseconds === undefined) {
+    return unavailable
   }
 
-  const last30DaysNumbers = filteredCounts.map((count: { totalCount: number }) => count.totalCount)
-  const last30DaysCount = last30DaysNumbers.reduce((previousValue: number, currentValue: number) => {
-    return previousValue + currentValue
-  })
+  const duration = timer.convertMicrosecondsToTimeStructure(Math.floor(microseconds))
 
-  const averageActiveUsersLast30Days = Math.floor(last30DaysCount / last30DaysNumbers.length)
+  return `${duration.days} days ${duration.hours} hours ${duration.minutes} minutes`
+}
+
+const latestTotalCount = (measurement: any): number | undefined => {
+  const counts = asArray(measurement?.counts)
+
+  return asFiniteNumber(counts.at(-1)?.totalCount)
+}
+
+const countActiveUsers = (
+  measureName: string,
+  statisticsOverTime: any[],
+): { yesterday: number | undefined; last30Days: number | undefined } => {
+  const totalActiveUsersLast30DaysIncludingToday = statisticsOverTime.find(
+    (a: { name: string; period: number }) => a.name === measureName && a.period === Period.Last30DaysIncludingToday,
+  )
+
+  const counts = asArray(totalActiveUsersLast30DaysIncludingToday?.counts)
+  const totalActiveUsersYesterday = asFiniteNumber(counts.at(-2)?.totalCount)
+
+  const validCounts = counts.flatMap((count: { totalCount?: unknown }) => {
+    const totalCount = asFiniteNumber(count.totalCount)
+
+    return totalCount === undefined ? [] : [totalCount]
+  })
+  const nonZeroCounts = validCounts.filter((totalCount: number) => totalCount !== 0)
+  if (validCounts.length === 0) {
+    return {
+      yesterday: totalActiveUsersYesterday,
+      last30Days: undefined,
+    }
+  }
+  const averageActiveUsersLast30Days =
+    nonZeroCounts.length === 0
+      ? 0
+      : Math.floor(
+          nonZeroCounts.reduce((previousValue: number, currentValue: number) => previousValue + currentValue, 0) /
+            nonZeroCounts.length,
+        )
 
   return {
     yesterday: totalActiveUsersYesterday,
@@ -48,23 +92,27 @@ const getChartUrls = (
   churn: string
   mrrMonthly: string
 } => {
-  const subscriptionPurchasingOverTime = data.activityStatisticsOverTime.find(
+  const activityStatisticsOverTime = asArray(data?.activityStatisticsOverTime)
+  const statisticsOverTime = asArray(data?.statisticsOverTime)
+  const churnValues = asArray(data?.churn?.values)
+
+  const subscriptionPurchasingOverTime = activityStatisticsOverTime.find(
     (a: { name: AnalyticsActivity; period: Period }) =>
       a.name === AnalyticsActivity.SubscriptionPurchased && a.period === Period.Last30Days,
   )
-  const subscriptionRenewingOverTime = data.activityStatisticsOverTime.find(
+  const subscriptionRenewingOverTime = activityStatisticsOverTime.find(
     (a: { name: AnalyticsActivity; period: Period }) =>
       a.name === AnalyticsActivity.SubscriptionRenewed && a.period === Period.Last30Days,
   )
-  const subscriptionRefundingOverTime = data.activityStatisticsOverTime.find(
+  const subscriptionRefundingOverTime = activityStatisticsOverTime.find(
     (a: { name: AnalyticsActivity; period: Period }) =>
       a.name === AnalyticsActivity.SubscriptionRefunded && a.period === Period.Last30Days,
   )
-  const subscriptionCancelledOverTime = data.activityStatisticsOverTime.find(
+  const subscriptionCancelledOverTime = activityStatisticsOverTime.find(
     (a: { name: AnalyticsActivity; period: Period }) =>
       a.name === AnalyticsActivity.SubscriptionCancelled && a.period === Period.Last30Days,
   )
-  const subscriptionReactivatedOverTime = data.activityStatisticsOverTime.find(
+  const subscriptionReactivatedOverTime = activityStatisticsOverTime.find(
     (a: { name: AnalyticsActivity; period: Period }) =>
       a.name === AnalyticsActivity.SubscriptionReactivated && a.period === Period.Last30Days,
   )
@@ -72,13 +120,13 @@ const getChartUrls = (
   const subscriptionsLinerOverTimeConfig = {
     type: 'line',
     data: {
-      labels: subscriptionPurchasingOverTime?.counts.map((count: { periodKey: any }) => count.periodKey),
+      labels: asArray(subscriptionPurchasingOverTime?.counts).map((count: { periodKey: any }) => count.periodKey),
       datasets: [
         {
           label: 'Subscription Purchases',
           backgroundColor: 'rgb(25, 255, 140)',
           borderColor: 'rgb(25, 255, 140)',
-          data: subscriptionPurchasingOverTime?.counts.map((count: { totalCount: any }) => count.totalCount),
+          data: asArray(subscriptionPurchasingOverTime?.counts).map((count: { totalCount: any }) => count.totalCount),
           fill: false,
           pointRadius: 2,
         },
@@ -86,7 +134,7 @@ const getChartUrls = (
           label: 'Subscription Renewals',
           backgroundColor: 'rgb(54, 162, 235)',
           borderColor: 'rgb(54, 162, 235)',
-          data: subscriptionRenewingOverTime?.counts.map((count: { totalCount: any }) => count.totalCount),
+          data: asArray(subscriptionRenewingOverTime?.counts).map((count: { totalCount: any }) => count.totalCount),
           fill: false,
           pointRadius: 2,
         },
@@ -94,7 +142,7 @@ const getChartUrls = (
           label: 'Subscription Refunds',
           backgroundColor: 'rgb(255, 221, 51)',
           borderColor: 'rgb(255, 221, 51)',
-          data: subscriptionRefundingOverTime?.counts.map((count: { totalCount: any }) => count.totalCount),
+          data: asArray(subscriptionRefundingOverTime?.counts).map((count: { totalCount: any }) => count.totalCount),
           fill: false,
           pointRadius: 2,
         },
@@ -102,7 +150,7 @@ const getChartUrls = (
           label: 'Subscription Cancels',
           backgroundColor: 'rgb(255, 99, 132)',
           borderColor: 'rgb(255, 99, 132)',
-          data: subscriptionCancelledOverTime?.counts.map((count: { totalCount: any }) => count.totalCount),
+          data: asArray(subscriptionCancelledOverTime?.counts).map((count: { totalCount: any }) => count.totalCount),
           fill: false,
           pointRadius: 2,
         },
@@ -110,7 +158,7 @@ const getChartUrls = (
           label: 'Subscription Reactivations',
           backgroundColor: 'rgb(221, 51, 255)',
           borderColor: 'rgb(221, 51, 255)',
-          data: subscriptionReactivatedOverTime?.counts.map((count: { totalCount: any }) => count.totalCount),
+          data: asArray(subscriptionReactivatedOverTime?.counts).map((count: { totalCount: any }) => count.totalCount),
           fill: false,
           pointRadius: 2,
         },
@@ -118,11 +166,11 @@ const getChartUrls = (
     },
   }
 
-  const userRegistrationOverTime = data.activityStatisticsOverTime.find(
+  const userRegistrationOverTime = activityStatisticsOverTime.find(
     (a: { name: AnalyticsActivity; period: Period }) =>
       a.name === AnalyticsActivity.Register && a.period === Period.Last30Days,
   )
-  const userDeletionOverTime = data.activityStatisticsOverTime.find(
+  const userDeletionOverTime = activityStatisticsOverTime.find(
     (a: { name: AnalyticsActivity; period: Period }) =>
       a.name === AnalyticsActivity.DeleteAccount && a.period === Period.Last30Days,
   )
@@ -130,13 +178,13 @@ const getChartUrls = (
   const usersLinerOverTimeConfig = {
     type: 'line',
     data: {
-      labels: userRegistrationOverTime?.counts.map((count: { periodKey: any }) => count.periodKey),
+      labels: asArray(userRegistrationOverTime?.counts).map((count: { periodKey: any }) => count.periodKey),
       datasets: [
         {
           label: 'User Registrations',
           backgroundColor: 'rgb(25, 255, 140)',
           borderColor: 'rgb(25, 255, 140)',
-          data: userRegistrationOverTime?.counts.map((count: { totalCount: any }) => count.totalCount),
+          data: asArray(userRegistrationOverTime?.counts).map((count: { totalCount: any }) => count.totalCount),
           fill: false,
           pointRadius: 2,
         },
@@ -144,7 +192,7 @@ const getChartUrls = (
           label: 'Account Deletions',
           backgroundColor: 'rgb(255, 99, 132)',
           borderColor: 'rgb(255, 99, 132)',
-          data: userDeletionOverTime?.counts.map((count: { totalCount: any }) => count.totalCount),
+          data: asArray(userDeletionOverTime?.counts).map((count: { totalCount: any }) => count.totalCount),
           fill: false,
           pointRadius: 2,
         },
@@ -158,17 +206,17 @@ const getChartUrls = (
   const quarterlySubscriptionRenewals = []
   for (const quarter of quarters) {
     const registrations =
-      data.activityStatisticsOverTime.find(
+      activityStatisticsOverTime.find(
         (a: { name: AnalyticsActivity; period: Period }) =>
           a.name === AnalyticsActivity.Register && a.period === quarter,
       )?.totalCount ?? 0
     const purchases =
-      data.activityStatisticsOverTime.find(
+      activityStatisticsOverTime.find(
         (a: { name: AnalyticsActivity; period: Period }) =>
           a.name === AnalyticsActivity.SubscriptionPurchased && a.period === quarter,
       )?.totalCount ?? 0
     const renewals =
-      data.activityStatisticsOverTime.find(
+      activityStatisticsOverTime.find(
         (a: { name: AnalyticsActivity; period: Period }) =>
           a.name === AnalyticsActivity.SubscriptionRenewed && a.period === quarter,
       )?.totalCount ?? 0
@@ -223,7 +271,11 @@ const getChartUrls = (
     },
   }
 
-  const monthlyChurnRates = data.churn.values.map((value: { rate: number }) => +value.rate.toFixed(2))
+  const monthlyChurnRates = churnValues.flatMap((value: { rate?: unknown }) => {
+    const rate = asFiniteNumber(value.rate)
+
+    return rate === undefined ? [] : [+rate.toFixed(2)]
+  })
 
   const churnConfig = {
     type: 'bar',
@@ -270,9 +322,14 @@ const getChartUrls = (
     },
   }
 
-  const mrrMonthlyOverTime = data.statisticsOverTime
-    .find((a: { name: string; period: Period }) => a.name === 'mrr' && a.period === Period.ThisYear)
-    ?.counts.map((count: { totalCount: number }) => +count.totalCount.toFixed(2))
+  const mrrThisYear = statisticsOverTime.find(
+    (a: { name: string; period: Period }) => a.name === 'mrr' && a.period === Period.ThisYear,
+  )
+  const mrrMonthlyOverTime = asArray(mrrThisYear?.counts).flatMap((count: { totalCount?: unknown }) => {
+    const totalCount = asFiniteNumber(count.totalCount)
+
+    return totalCount === undefined ? [] : [+totalCount.toFixed(2)]
+  })
 
   const mrrMonthlyConfig = {
     type: 'bar',
@@ -333,241 +390,253 @@ const getChartUrls = (
 }
 
 export const html = (data: any, timer: TimerInterface) => {
-  const chartUrls = getChartUrls(data)
+  const activityStatistics = asArray(data?.activityStatistics)
+  const activityStatisticsOverTime = asArray(data?.activityStatisticsOverTime)
+  const statisticMeasures = asArray(data?.statisticMeasures)
+  const statisticsOverTime = asArray(data?.statisticsOverTime)
+  const churnValues = asArray(data?.churn?.values)
+  const chartUrls = getChartUrls({
+    activityStatisticsOverTime,
+    statisticsOverTime,
+    churn: {
+      values: churnValues,
+    },
+  })
 
-  const successfullPaymentsActivity = data.activityStatistics.find(
-    (a: { name: AnalyticsActivity }) => a.name === AnalyticsActivity.PaymentSuccess && Period.Yesterday,
+  const successfulPaymentsActivity = activityStatistics.find(
+    (a: { name: AnalyticsActivity; period: Period }) =>
+      a.name === AnalyticsActivity.PaymentSuccess && a.period === Period.Yesterday,
   )
-  const failedPaymentsActivity = data.activityStatistics.find(
-    (a: { name: AnalyticsActivity }) => a.name === AnalyticsActivity.PaymentFailed && Period.Yesterday,
+  const failedPaymentsActivity = activityStatistics.find(
+    (a: { name: AnalyticsActivity; period: Period }) =>
+      a.name === AnalyticsActivity.PaymentFailed && a.period === Period.Yesterday,
   )
-  const limitedDiscountPurchasedActivity = data.activityStatistics.find(
-    (a: { name: AnalyticsActivity }) => a.name === AnalyticsActivity.LimitedDiscountOfferPurchased && Period.Yesterday,
+  const limitedDiscountPurchasedActivity = activityStatistics.find(
+    (a: { name: AnalyticsActivity; period: Period }) =>
+      a.name === AnalyticsActivity.LimitedDiscountOfferPurchased && a.period === Period.Yesterday,
   )
-  const subscriptionPurchasingOverTime = data.activityStatisticsOverTime.find(
+  const subscriptionPurchasingOverTime = activityStatisticsOverTime.find(
     (a: { name: AnalyticsActivity; period: Period }) =>
       a.name === AnalyticsActivity.SubscriptionPurchased && a.period === Period.Last30Days,
   )
-  const subscriptionRenewingOverTime = data.activityStatisticsOverTime.find(
+  const subscriptionRenewingOverTime = activityStatisticsOverTime.find(
     (a: { name: AnalyticsActivity; period: Period }) =>
       a.name === AnalyticsActivity.SubscriptionRenewed && a.period === Period.Last30Days,
   )
-  const subscriptionRefundingOverTime = data.activityStatisticsOverTime.find(
+  const subscriptionRefundingOverTime = activityStatisticsOverTime.find(
     (a: { name: AnalyticsActivity; period: Period }) =>
       a.name === AnalyticsActivity.SubscriptionRefunded && a.period === Period.Last30Days,
   )
-  const subscriptionCancelledOverTime = data.activityStatisticsOverTime.find(
+  const subscriptionCancelledOverTime = activityStatisticsOverTime.find(
     (a: { name: AnalyticsActivity; period: Period }) =>
       a.name === AnalyticsActivity.SubscriptionCancelled && a.period === Period.Last30Days,
   )
-  const subscriptionReactivatedOverTime = data.activityStatisticsOverTime.find(
+  const subscriptionReactivatedOverTime = activityStatisticsOverTime.find(
     (a: { name: AnalyticsActivity; period: Period }) =>
       a.name === AnalyticsActivity.SubscriptionReactivated && a.period === Period.Last30Days,
   )
-  const userRegistrationOverTime = data.activityStatisticsOverTime.find(
+  const userRegistrationOverTime = activityStatisticsOverTime.find(
     (a: { name: AnalyticsActivity; period: Period }) =>
       a.name === AnalyticsActivity.Register && a.period === Period.Last30Days,
   )
-  const userDeletionOverTime = data.activityStatisticsOverTime.find(
+  const userDeletionOverTime = activityStatisticsOverTime.find(
     (a: { name: AnalyticsActivity; period: Period }) =>
       a.name === AnalyticsActivity.DeleteAccount && a.period === Period.Last30Days,
   )
-  const incomeMeasureYesterday = data.statisticMeasures.find(
+  const incomeMeasureYesterday = statisticMeasures.find(
     (a: { name: string; period: Period }) =>
       a.name === StatisticMeasureName.NAMES.Income && a.period === Period.Yesterday,
   )
-  const refundMeasureYesterday = data.statisticMeasures.find(
+  const refundMeasureYesterday = statisticMeasures.find(
     (a: { name: string; period: Period }) =>
       a.name === StatisticMeasureName.NAMES.Refunds && a.period === Period.Yesterday,
   )
-  const incomeYesterday = incomeMeasureYesterday?.totalValue ?? 0
-  const refundsYesterday = refundMeasureYesterday?.totalValue ?? 0
-  const revenueYesterday = incomeYesterday - refundsYesterday
+  const incomeYesterday = asFiniteNumber(incomeMeasureYesterday?.totalValue)
+  const refundsYesterday = asFiniteNumber(refundMeasureYesterday?.totalValue)
+  const revenueYesterday =
+    incomeYesterday === undefined || refundsYesterday === undefined ? undefined : incomeYesterday - refundsYesterday
 
-  const subscriptionLengthMeasureYesterday = data.statisticMeasures.find(
+  const subscriptionLengthMeasureYesterday = statisticMeasures.find(
     (a: { name: string; period: Period }) =>
       a.name === StatisticMeasureName.NAMES.SubscriptionLength && a.period === Period.Yesterday,
   )
-  const subscriptionLengthDurationYesterday = timer.convertMicrosecondsToTimeStructure(
-    Math.floor(subscriptionLengthMeasureYesterday?.average ?? 0),
-  )
+  const subscriptionLengthDurationYesterday = formatDuration(timer, subscriptionLengthMeasureYesterday?.average)
 
-  const subscriptionRemainingTimePercentageMeasureYesterday = data.statisticMeasures.find(
+  const subscriptionRemainingTimePercentageMeasureYesterday = statisticMeasures.find(
     (a: { name: string; period: Period }) =>
       a.name === StatisticMeasureName.NAMES.RemainingSubscriptionTimePercentage && a.period === Period.Yesterday,
   )
-  const subscriptionRemainingTimePercentageYesterday = Math.floor(
-    subscriptionRemainingTimePercentageMeasureYesterday?.average ?? 0,
+  const subscriptionRemainingTimePercentageYesterday = formatPercentage(
+    subscriptionRemainingTimePercentageMeasureYesterday?.average,
   )
 
-  const registrationLengthMeasureYesterday = data.statisticMeasures.find(
+  const registrationLengthMeasureYesterday = statisticMeasures.find(
     (a: { name: string; period: Period }) =>
       a.name === StatisticMeasureName.NAMES.RegistrationLength && a.period === Period.Yesterday,
   )
-  const registrationLengthDurationYesterday = timer.convertMicrosecondsToTimeStructure(
-    Math.floor(registrationLengthMeasureYesterday?.average ?? 0),
-  )
+  const registrationLengthDurationYesterday = formatDuration(timer, registrationLengthMeasureYesterday?.average)
 
-  const registrationToSubscriptionMeasureYesterday = data.statisticMeasures.find(
+  const registrationToSubscriptionMeasureYesterday = statisticMeasures.find(
     (a: { name: string; period: Period }) =>
       a.name === StatisticMeasureName.NAMES.RegistrationToSubscriptionTime && a.period === Period.Yesterday,
   )
-  const registrationToSubscriptionDurationYesterday = timer.convertMicrosecondsToTimeStructure(
-    Math.floor(registrationToSubscriptionMeasureYesterday?.average ?? 0),
+  const registrationToSubscriptionDurationYesterday = formatDuration(
+    timer,
+    registrationToSubscriptionMeasureYesterday?.average,
   )
 
-  const incomeMeasureThisMonth = data.statisticMeasures.find(
+  const incomeMeasureThisMonth = statisticMeasures.find(
     (a: { name: string; period: Period }) =>
       a.name === StatisticMeasureName.NAMES.Income && a.period === Period.ThisMonth,
   )
-  const refundMeasureThisMonth = data.statisticMeasures.find(
+  const refundMeasureThisMonth = statisticMeasures.find(
     (a: { name: string; period: Period }) =>
       a.name === StatisticMeasureName.NAMES.Refunds && a.period === Period.ThisMonth,
   )
-  const incomeThisMonth = incomeMeasureThisMonth?.totalValue ?? 0
-  const refundsThisMonth = refundMeasureThisMonth?.totalValue ?? 0
-  const revenueThisMonth = incomeThisMonth - refundsThisMonth
+  const incomeThisMonth = asFiniteNumber(incomeMeasureThisMonth?.totalValue)
+  const refundsThisMonth = asFiniteNumber(refundMeasureThisMonth?.totalValue)
+  const revenueThisMonth =
+    incomeThisMonth === undefined || refundsThisMonth === undefined ? undefined : incomeThisMonth - refundsThisMonth
 
-  const subscriptionLengthMeasureThisMonth = data.statisticMeasures.find(
+  const subscriptionLengthMeasureThisMonth = statisticMeasures.find(
     (a: { name: string; period: Period }) =>
       a.name === StatisticMeasureName.NAMES.SubscriptionLength && a.period === Period.ThisMonth,
   )
-  const subscriptionLengthDurationThisMonth = timer.convertMicrosecondsToTimeStructure(
-    Math.floor(subscriptionLengthMeasureThisMonth?.average ?? 0),
-  )
+  const subscriptionLengthDurationThisMonth = formatDuration(timer, subscriptionLengthMeasureThisMonth?.average)
 
-  const subscriptionRemainingTimePercentageMeasureThisMonth = data.statisticMeasures.find(
+  const subscriptionRemainingTimePercentageMeasureThisMonth = statisticMeasures.find(
     (a: { name: string; period: Period }) =>
       a.name === StatisticMeasureName.NAMES.RemainingSubscriptionTimePercentage && a.period === Period.ThisMonth,
   )
-  const subscriptionRemainingTimePercentageThisMonth = Math.floor(
-    subscriptionRemainingTimePercentageMeasureThisMonth?.average ?? 0,
+  const subscriptionRemainingTimePercentageThisMonth = formatPercentage(
+    subscriptionRemainingTimePercentageMeasureThisMonth?.average,
   )
 
-  const registrationLengthMeasureThisMonth = data.statisticMeasures.find(
+  const registrationLengthMeasureThisMonth = statisticMeasures.find(
     (a: { name: string; period: Period }) =>
       a.name === StatisticMeasureName.NAMES.RegistrationLength && a.period === Period.ThisMonth,
   )
-  const registrationLengthDurationThisMonth = timer.convertMicrosecondsToTimeStructure(
-    Math.floor(registrationLengthMeasureThisMonth?.average ?? 0),
-  )
+  const registrationLengthDurationThisMonth = formatDuration(timer, registrationLengthMeasureThisMonth?.average)
 
-  const registrationToSubscriptionMeasureThisMonth = data.statisticMeasures.find(
+  const registrationToSubscriptionMeasureThisMonth = statisticMeasures.find(
     (a: { name: string; period: Period }) =>
       a.name === StatisticMeasureName.NAMES.RegistrationToSubscriptionTime && a.period === Period.ThisMonth,
   )
-  const registrationToSubscriptionDurationThisMonth = timer.convertMicrosecondsToTimeStructure(
-    Math.floor(registrationToSubscriptionMeasureThisMonth?.average ?? 0),
+  const registrationToSubscriptionDurationThisMonth = formatDuration(
+    timer,
+    registrationToSubscriptionMeasureThisMonth?.average,
   )
 
-  const plusSubscriptionsInitialAnnualPaymentsYesterday = data.statisticMeasures.find(
+  const plusSubscriptionsInitialAnnualPaymentsYesterday = statisticMeasures.find(
     (a: { name: string; period: Period }) =>
       a.name === StatisticMeasureName.NAMES.PlusSubscriptionInitialAnnualPaymentsIncome &&
       a.period === Period.Yesterday,
   )
-  const plusSubscriptionsInitialMonthlyPaymentsYesterday = data.statisticMeasures.find(
+  const plusSubscriptionsInitialMonthlyPaymentsYesterday = statisticMeasures.find(
     (a: { name: string; period: Period }) =>
       a.name === StatisticMeasureName.NAMES.PlusSubscriptionInitialMonthlyPaymentsIncome &&
       a.period === Period.Yesterday,
   )
-  const plusSubscriptionsRenewingAnnualPaymentsYesterday = data.statisticMeasures.find(
+  const plusSubscriptionsRenewingAnnualPaymentsYesterday = statisticMeasures.find(
     (a: { name: string; period: Period }) =>
       a.name === StatisticMeasureName.NAMES.PlusSubscriptionRenewingAnnualPaymentsIncome &&
       a.period === Period.Yesterday,
   )
-  const plusSubscriptionsRenewingMonthlyPaymentsYesterday = data.statisticMeasures.find(
+  const plusSubscriptionsRenewingMonthlyPaymentsYesterday = statisticMeasures.find(
     (a: { name: string; period: Period }) =>
       a.name === StatisticMeasureName.NAMES.PlusSubscriptionRenewingMonthlyPaymentsIncome &&
       a.period === Period.Yesterday,
   )
-  const proSubscriptionsInitialAnnualPaymentsYesterday = data.statisticMeasures.find(
+  const proSubscriptionsInitialAnnualPaymentsYesterday = statisticMeasures.find(
     (a: { name: string; period: Period }) =>
       a.name === StatisticMeasureName.NAMES.ProSubscriptionInitialAnnualPaymentsIncome && a.period === Period.Yesterday,
   )
-  const proSubscriptionsInitialMonthlyPaymentsYesterday = data.statisticMeasures.find(
+  const proSubscriptionsInitialMonthlyPaymentsYesterday = statisticMeasures.find(
     (a: { name: string; period: Period }) =>
       a.name === StatisticMeasureName.NAMES.ProSubscriptionInitialMonthlyPaymentsIncome &&
       a.period === Period.Yesterday,
   )
-  const proSubscriptionsRenewingAnnualPaymentsYesterday = data.statisticMeasures.find(
+  const proSubscriptionsRenewingAnnualPaymentsYesterday = statisticMeasures.find(
     (a: { name: string; period: Period }) =>
       a.name === StatisticMeasureName.NAMES.ProSubscriptionRenewingAnnualPaymentsIncome &&
       a.period === Period.Yesterday,
   )
-  const proSubscriptionsRenewingMonthlyPaymentsYesterday = data.statisticMeasures.find(
+  const proSubscriptionsRenewingMonthlyPaymentsYesterday = statisticMeasures.find(
     (a: { name: string; period: Period }) =>
       a.name === StatisticMeasureName.NAMES.ProSubscriptionRenewingMonthlyPaymentsIncome &&
       a.period === Period.Yesterday,
   )
-  const plusSubscriptionsInitialAnnualPaymentsThisMonth = data.statisticMeasures.find(
+  const plusSubscriptionsInitialAnnualPaymentsThisMonth = statisticMeasures.find(
     (a: { name: string; period: Period }) =>
       a.name === StatisticMeasureName.NAMES.PlusSubscriptionInitialAnnualPaymentsIncome &&
       a.period === Period.ThisMonth,
   )
-  const plusSubscriptionsInitialMonthlyPaymentsThisMonth = data.statisticMeasures.find(
+  const plusSubscriptionsInitialMonthlyPaymentsThisMonth = statisticMeasures.find(
     (a: { name: string; period: Period }) =>
       a.name === StatisticMeasureName.NAMES.PlusSubscriptionInitialMonthlyPaymentsIncome &&
       a.period === Period.ThisMonth,
   )
-  const plusSubscriptionsRenewingAnnualPaymentsThisMonth = data.statisticMeasures.find(
+  const plusSubscriptionsRenewingAnnualPaymentsThisMonth = statisticMeasures.find(
     (a: { name: string; period: Period }) =>
       a.name === StatisticMeasureName.NAMES.PlusSubscriptionRenewingAnnualPaymentsIncome &&
       a.period === Period.ThisMonth,
   )
-  const plusSubscriptionsRenewingMonthlyPaymentsThisMonth = data.statisticMeasures.find(
+  const plusSubscriptionsRenewingMonthlyPaymentsThisMonth = statisticMeasures.find(
     (a: { name: string; period: Period }) =>
       a.name === StatisticMeasureName.NAMES.PlusSubscriptionRenewingMonthlyPaymentsIncome &&
       a.period === Period.ThisMonth,
   )
-  const proSubscriptionsInitialAnnualPaymentsThisMonth = data.statisticMeasures.find(
+  const proSubscriptionsInitialAnnualPaymentsThisMonth = statisticMeasures.find(
     (a: { name: string; period: Period }) =>
       a.name === StatisticMeasureName.NAMES.ProSubscriptionInitialAnnualPaymentsIncome && a.period === Period.ThisMonth,
   )
-  const proSubscriptionsInitialMonthlyPaymentsThisMonth = data.statisticMeasures.find(
+  const proSubscriptionsInitialMonthlyPaymentsThisMonth = statisticMeasures.find(
     (a: { name: string; period: Period }) =>
       a.name === StatisticMeasureName.NAMES.ProSubscriptionInitialMonthlyPaymentsIncome &&
       a.period === Period.ThisMonth,
   )
-  const proSubscriptionsRenewingAnnualPaymentsThisMonth = data.statisticMeasures.find(
+  const proSubscriptionsRenewingAnnualPaymentsThisMonth = statisticMeasures.find(
     (a: { name: string; period: Period }) =>
       a.name === StatisticMeasureName.NAMES.ProSubscriptionRenewingAnnualPaymentsIncome &&
       a.period === Period.ThisMonth,
   )
-  const proSubscriptionsRenewingMonthlyPaymentsThisMonth = data.statisticMeasures.find(
+  const proSubscriptionsRenewingMonthlyPaymentsThisMonth = statisticMeasures.find(
     (a: { name: string; period: Period }) =>
       a.name === StatisticMeasureName.NAMES.ProSubscriptionRenewingMonthlyPaymentsIncome &&
       a.period === Period.ThisMonth,
   )
 
-  const mrrOverTime = data.statisticsOverTime.find(
-    (a: { name: string; period: number }) => a.name === 'mrr' && a.period === 27,
+  const mrrOverTime = statisticsOverTime.find(
+    (a: { name: string; period: number }) => a.name === 'mrr' && a.period === Period.Last30DaysIncludingToday,
   )
-  const monthlyPlansMrrOverTime = data.statisticsOverTime.find(
-    (a: { name: string; period: number }) => a.name === 'monthly-plans-mrr' && a.period === 27,
+  const monthlyPlansMrrOverTime = statisticsOverTime.find(
+    (a: { name: string; period: number }) =>
+      a.name === 'monthly-plans-mrr' && a.period === Period.Last30DaysIncludingToday,
   )
-  const annualPlansMrrOverTime = data.statisticsOverTime.find(
-    (a: { name: string; period: number }) => a.name === 'annual-plans-mrr' && a.period === 27,
+  const annualPlansMrrOverTime = statisticsOverTime.find(
+    (a: { name: string; period: number }) =>
+      a.name === 'annual-plans-mrr' && a.period === Period.Last30DaysIncludingToday,
   )
-  const fiveYearPlansMrrOverTime = data.statisticsOverTime.find(
-    (a: { name: string; period: number }) => a.name === 'five-year-plans-mrr' && a.period === 27,
+  const fiveYearPlansMrrOverTime = statisticsOverTime.find(
+    (a: { name: string; period: number }) =>
+      a.name === 'five-year-plans-mrr' && a.period === Period.Last30DaysIncludingToday,
   )
-  const proPlansMrrOverTime = data.statisticsOverTime.find(
-    (a: { name: string; period: number }) => a.name === 'pro-plans-mrr' && a.period === 27,
+  const proPlansMrrOverTime = statisticsOverTime.find(
+    (a: { name: string; period: number }) => a.name === 'pro-plans-mrr' && a.period === Period.Last30DaysIncludingToday,
   )
-  const plusPlansMrrOverTime = data.statisticsOverTime.find(
-    (a: { name: string; period: number }) => a.name === 'plus-plans-mrr' && a.period === 27,
+  const plusPlansMrrOverTime = statisticsOverTime.find(
+    (a: { name: string; period: number }) =>
+      a.name === 'plus-plans-mrr' && a.period === Period.Last30DaysIncludingToday,
   )
 
   const today = new Date()
   const thisMonthPeriodKey = `${today.getFullYear().toString()}-${(today.getMonth() + 1).toString()}`
-  const thisMonthChurn = data.churn.values.find(
-    (value: { periodKey: string }) => value.periodKey === thisMonthPeriodKey,
-  )
+  const thisMonthChurn = churnValues.find((value: { periodKey: string }) => value.periodKey === thisMonthPeriodKey)
 
-  const totalActiveUsers = countActiveUsers(StatisticMeasureName.NAMES.ActiveUsers, data)
-  const totalActiveFreeUsers = countActiveUsers(StatisticMeasureName.NAMES.ActiveFreeUsers, data)
-  const totalActivePlusUsers = countActiveUsers(StatisticMeasureName.NAMES.ActivePlusUsers, data)
-  const totalActiveProUsers = countActiveUsers(StatisticMeasureName.NAMES.ActiveProUsers, data)
+  const totalActiveUsers = countActiveUsers(StatisticMeasureName.NAMES.ActiveUsers, statisticsOverTime)
+  const totalActiveFreeUsers = countActiveUsers(StatisticMeasureName.NAMES.ActiveFreeUsers, statisticsOverTime)
+  const totalActivePlusUsers = countActiveUsers(StatisticMeasureName.NAMES.ActivePlusUsers, statisticsOverTime)
+  const totalActiveProUsers = countActiveUsers(StatisticMeasureName.NAMES.ActiveProUsers, statisticsOverTime)
 
   return safeHtml`      <div>
 <p>Hello,</p>
@@ -579,19 +648,19 @@ export const html = (data: any, timer: TimerInterface) => {
     <b>Active Users</b>
     <ul>
       <li>
-        <b>Total:</b> ${totalActiveUsers.yesterday.toLocaleString('en-US')}
+        <b>Total:</b> ${formatNumber(totalActiveUsers.yesterday)}
       </li>
       <li>
         <b>By Subscription Type:</b>
         <ul>
           <li>
-            <b>FREE:</b> ${totalActiveFreeUsers.yesterday.toLocaleString('en-US')}
+            <b>FREE:</b> ${formatNumber(totalActiveFreeUsers.yesterday)}
           </li>
           <li>
-            <b>PLUS:</b> ${totalActivePlusUsers.yesterday.toLocaleString('en-US')}
+            <b>PLUS:</b> ${formatNumber(totalActivePlusUsers.yesterday)}
           </li>
           <li>
-            <b>PRO:</b> ${totalActiveProUsers.yesterday.toLocaleString('en-US')}
+            <b>PRO:</b> ${formatNumber(totalActiveProUsers.yesterday)}
           </li>
         </ul>
       </li>
@@ -601,14 +670,14 @@ export const html = (data: any, timer: TimerInterface) => {
     <b>Payments</b>
     <ul>
       <li>
-        Revenue: <b>$${revenueYesterday.toLocaleString('en-US')}</b> (Income: $
-        ${incomeYesterday.toLocaleString('en-US')}, Refunds: $${refundsYesterday.toLocaleString('en-US')})
+        Revenue: <b>${formatCurrency(revenueYesterday)}</b> (Income:
+        ${formatCurrency(incomeYesterday)}, Refunds: ${formatCurrency(refundsYesterday)})
       </li>
       <li>
-        Successfull payments: <b>${successfullPaymentsActivity?.totalCount.toLocaleString('en-US')}</b>
+        Successful payments: <b>${formatNumber(successfulPaymentsActivity?.totalCount)}</b>
       </li>
       <li>
-        Failed payments: <b>${failedPaymentsActivity?.totalCount.toLocaleString('en-US')}</b>
+        Failed payments: <b>${formatNumber(failedPaymentsActivity?.totalCount)}</b>
       </li>
     </ul>
   </li>
@@ -616,18 +685,18 @@ export const html = (data: any, timer: TimerInterface) => {
     <b>MRR Breakdown</b>
     <ul>
       <li>
-        <b>Total:</b> $${mrrOverTime?.counts[mrrOverTime?.counts.length - 1].totalCount.toLocaleString('en-US')}
+        <b>Total:</b> ${formatCurrency(latestTotalCount(mrrOverTime))}
       </li>
       <li>
         <b>By Subscription Type:</b>
         <ul>
           <li>
-            <b>PLUS:</b> $
-            ${plusPlansMrrOverTime?.counts[plusPlansMrrOverTime?.counts.length - 1].totalCount.toLocaleString('en-US')}
+            <b>PLUS:</b>
+            ${formatCurrency(latestTotalCount(plusPlansMrrOverTime))}
           </li>
           <li>
-            <b>PRO:</b> $
-            ${proPlansMrrOverTime?.counts[proPlansMrrOverTime?.counts.length - 1].totalCount.toLocaleString('en-US')}
+            <b>PRO:</b>
+            ${formatCurrency(latestTotalCount(proPlansMrrOverTime))}
           </li>
         </ul>
       </li>
@@ -635,22 +704,16 @@ export const html = (data: any, timer: TimerInterface) => {
         <b>By Billing Frequency:</b>
         <ul>
           <li>
-            <b>Monthly:</b> $
-            ${monthlyPlansMrrOverTime?.counts[monthlyPlansMrrOverTime?.counts.length - 1].totalCount.toLocaleString(
-              'en-US',
-            )}
+            <b>Monthly:</b>
+            ${formatCurrency(latestTotalCount(monthlyPlansMrrOverTime))}
           </li>
           <li>
-            <b>Annual:</b> $
-            ${annualPlansMrrOverTime?.counts[annualPlansMrrOverTime?.counts.length - 1].totalCount.toLocaleString(
-              'en-US',
-            )}
+            <b>Annual:</b>
+            ${formatCurrency(latestTotalCount(annualPlansMrrOverTime))}
           </li>
           <li>
-            <b>5-year:</b> $
-            ${fiveYearPlansMrrOverTime?.counts[fiveYearPlansMrrOverTime?.counts.length - 1].totalCount.toLocaleString(
-              'en-US',
-            )}
+            <b>5-year:</b>
+            ${formatCurrency(latestTotalCount(fiveYearPlansMrrOverTime))}
           </li>
         </ul>
       </li>
@@ -663,24 +726,24 @@ export const html = (data: any, timer: TimerInterface) => {
         <b>Plus Subscription:</b>
         <ul>
           <li>
-            <b>${plusSubscriptionsInitialMonthlyPaymentsYesterday?.increments.toLocaleString('en-US')}</b>${' '}
-            <i>initial</i> payments on <u>monhtly</u> plan, totaling${' '}
-            <b>$${plusSubscriptionsInitialMonthlyPaymentsYesterday?.totalValue.toLocaleString('en-US')}</b>
+            <b>${formatNumber(plusSubscriptionsInitialMonthlyPaymentsYesterday?.increments)}</b>${' '}
+            <i>initial</i> payments on <u>monthly</u> plan, totaling${' '}
+            <b>${formatCurrency(plusSubscriptionsInitialMonthlyPaymentsYesterday?.totalValue)}</b>
           </li>
           <li>
-            <b>${plusSubscriptionsInitialAnnualPaymentsYesterday?.increments.toLocaleString('en-US')}</b>${' '}
+            <b>${formatNumber(plusSubscriptionsInitialAnnualPaymentsYesterday?.increments)}</b>${' '}
             <i>initial</i> payments on <u>annual</u> plan, totaling${' '}
-            <b>$${plusSubscriptionsInitialAnnualPaymentsYesterday?.totalValue.toLocaleString('en-US')}</b>
+            <b>${formatCurrency(plusSubscriptionsInitialAnnualPaymentsYesterday?.totalValue)}</b>
           </li>
           <li>
-            <b>${plusSubscriptionsRenewingMonthlyPaymentsYesterday?.increments.toLocaleString('en-US')}</b>${' '}
+            <b>${formatNumber(plusSubscriptionsRenewingMonthlyPaymentsYesterday?.increments)}</b>${' '}
             <i>renewing</i> payments on <u>monthly</u> plan, totaling${' '}
-            <b>$${plusSubscriptionsRenewingMonthlyPaymentsYesterday?.totalValue.toLocaleString('en-US')}</b>
+            <b>${formatCurrency(plusSubscriptionsRenewingMonthlyPaymentsYesterday?.totalValue)}</b>
           </li>
           <li>
-            <b>${plusSubscriptionsRenewingAnnualPaymentsYesterday?.increments.toLocaleString('en-US')}</b>${' '}
+            <b>${formatNumber(plusSubscriptionsRenewingAnnualPaymentsYesterday?.increments)}</b>${' '}
             <i>renewing</i> payments on <u>annual</u> plan, totaling${' '}
-            <b>$${plusSubscriptionsRenewingAnnualPaymentsYesterday?.totalValue.toLocaleString('en-US')}</b>
+            <b>${formatCurrency(plusSubscriptionsRenewingAnnualPaymentsYesterday?.totalValue)}</b>
           </li>
         </ul>
       </li>
@@ -688,24 +751,24 @@ export const html = (data: any, timer: TimerInterface) => {
         <b>Pro Subscription:</b>
         <ul>
           <li>
-            <b>${proSubscriptionsInitialMonthlyPaymentsYesterday?.increments.toLocaleString('en-US')}</b>${' '}
-            <i>initial</i> payments on <u>monhtly</u> plan, totaling${' '}
-            <b>$${proSubscriptionsInitialMonthlyPaymentsYesterday?.totalValue.toLocaleString('en-US')}</b>
+            <b>${formatNumber(proSubscriptionsInitialMonthlyPaymentsYesterday?.increments)}</b>${' '}
+            <i>initial</i> payments on <u>monthly</u> plan, totaling${' '}
+            <b>${formatCurrency(proSubscriptionsInitialMonthlyPaymentsYesterday?.totalValue)}</b>
           </li>
           <li>
-            <b>${proSubscriptionsInitialAnnualPaymentsYesterday?.increments.toLocaleString('en-US')}</b>${' '}
+            <b>${formatNumber(proSubscriptionsInitialAnnualPaymentsYesterday?.increments)}</b>${' '}
             <i>initial</i> payments on <u>annual</u> plan, totaling${' '}
-            <b>$${proSubscriptionsInitialAnnualPaymentsYesterday?.totalValue.toLocaleString('en-US')}</b>
+            <b>${formatCurrency(proSubscriptionsInitialAnnualPaymentsYesterday?.totalValue)}</b>
           </li>
           <li>
-            <b>${proSubscriptionsRenewingMonthlyPaymentsYesterday?.increments.toLocaleString('en-US')}</b>${' '}
+            <b>${formatNumber(proSubscriptionsRenewingMonthlyPaymentsYesterday?.increments)}</b>${' '}
             <i>renewing</i> payments on <u>monthly</u> plan, totaling${' '}
-            <b>$${proSubscriptionsRenewingMonthlyPaymentsYesterday?.totalValue.toLocaleString('en-US')}</b>
+            <b>${formatCurrency(proSubscriptionsRenewingMonthlyPaymentsYesterday?.totalValue)}</b>
           </li>
           <li>
-            <b>${proSubscriptionsRenewingAnnualPaymentsYesterday?.increments.toLocaleString('en-US')}</b>${' '}
+            <b>${formatNumber(proSubscriptionsRenewingAnnualPaymentsYesterday?.increments)}</b>${' '}
             <i>renewing</i> payments on <u>annual</u> plan, totaling${' '}
-            <b>$${proSubscriptionsRenewingAnnualPaymentsYesterday?.totalValue.toLocaleString('en-US')}</b>
+            <b>${formatCurrency(proSubscriptionsRenewingAnnualPaymentsYesterday?.totalValue)}</b>
           </li>
         </ul>
       </li>
@@ -717,18 +780,15 @@ export const html = (data: any, timer: TimerInterface) => {
       <li>
         Number of users registered:${' '}
         <b>
-          ${userRegistrationOverTime?.counts[userRegistrationOverTime?.counts.length - 1]?.totalCount.toLocaleString(
-            'en-US',
-          )}
+          ${formatNumber(latestTotalCount(userRegistrationOverTime))}
         </b>
       </li>
       <li>
         Number of users unregistered:${' '}
         <b>
-          ${userDeletionOverTime?.counts[userDeletionOverTime?.counts.length - 1]?.totalCount.toLocaleString('en-US')}
+          ${formatNumber(latestTotalCount(userDeletionOverTime))}
         </b>${' '}
-        (average account duration: ${registrationLengthDurationYesterday.days} days${' '}
-        ${registrationLengthDurationYesterday.hours} hours ${registrationLengthDurationYesterday.minutes} minutes)
+        (average account duration: ${registrationLengthDurationYesterday})
       </li>
     </ul>
   </li>
@@ -738,55 +798,40 @@ export const html = (data: any, timer: TimerInterface) => {
       <li>
         Number of subscriptions purchased:${' '}
         <b>
-          ${subscriptionPurchasingOverTime?.counts[
-            subscriptionPurchasingOverTime?.counts.length - 1
-          ]?.totalCount.toLocaleString('en-US')}
+          ${formatNumber(latestTotalCount(subscriptionPurchasingOverTime))}
         </b>${' '}
-        (includes <b>${limitedDiscountPurchasedActivity?.totalCount.toLocaleString('en-US')}</b> limited time
+        (includes <b>${formatNumber(limitedDiscountPurchasedActivity?.totalCount)}</b> limited time
         offer purchases)
       </li>
       <li>
         Number of subscriptions renewed:${' '}
         <b>
-          ${subscriptionRenewingOverTime?.counts[
-            subscriptionRenewingOverTime?.counts.length - 1
-          ]?.totalCount.toLocaleString('en-US')}
+          ${formatNumber(latestTotalCount(subscriptionRenewingOverTime))}
         </b>
       </li>
       <li>
         Number of subscriptions refunded:${' '}
         <b>
-          ${subscriptionRefundingOverTime?.counts[
-            subscriptionRefundingOverTime?.counts.length - 1
-          ]?.totalCount.toLocaleString('en-US')}
+          ${formatNumber(latestTotalCount(subscriptionRefundingOverTime))}
         </b>
       </li>
       <li>
         Number of subscriptions cancelled:${' '}
         <b>
-          ${subscriptionCancelledOverTime?.counts[
-            subscriptionCancelledOverTime?.counts.length - 1
-          ]?.totalCount.toLocaleString('en-US')}
+          ${formatNumber(latestTotalCount(subscriptionCancelledOverTime))}
         </b>${' '}
-        (average subscription duration: ${subscriptionLengthDurationYesterday.days} days${' '}
-        ${subscriptionLengthDurationYesterday.hours} hours ${subscriptionLengthDurationYesterday.minutes} minutes,
-        average remaining subscription percentage: ${subscriptionRemainingTimePercentageYesterday}%)
+        (average subscription duration: ${subscriptionLengthDurationYesterday},
+        average remaining subscription percentage: ${subscriptionRemainingTimePercentageYesterday})
       </li>
       <li>
         Number of subscriptions reactivated:${' '}
         <b>
-          ${subscriptionReactivatedOverTime?.counts[
-            subscriptionReactivatedOverTime?.counts.length - 1
-          ]?.totalCount.toLocaleString('en-US')}
+          ${formatNumber(latestTotalCount(subscriptionReactivatedOverTime))}
         </b>
       </li>
       <li>
         Average time from registration to subscription purchase:${' '}
-        <b>
-          ${registrationToSubscriptionDurationYesterday.days} days${' '}
-          ${registrationToSubscriptionDurationYesterday.hours} hours${' '}
-          ${registrationToSubscriptionDurationYesterday.minutes} minutes
-        </b>
+        <b>${registrationToSubscriptionDurationYesterday}</b>
       </li>
     </ul>
   </li>
@@ -799,19 +844,19 @@ export const html = (data: any, timer: TimerInterface) => {
     <b>Active Users (Average)</b>
     <ul>
       <li>
-        <b>Total:</b> ${totalActiveUsers.last30Days.toLocaleString('en-US')}
+        <b>Total:</b> ${formatNumber(totalActiveUsers.last30Days)}
       </li>
       <li>
         <b>By Subscription Type:</b>
         <ul>
           <li>
-            <b>FREE:</b> ${totalActiveFreeUsers.last30Days.toLocaleString('en-US')}
+            <b>FREE:</b> ${formatNumber(totalActiveFreeUsers.last30Days)}
           </li>
           <li>
-            <b>PLUS:</b> ${totalActivePlusUsers.last30Days.toLocaleString('en-US')}
+            <b>PLUS:</b> ${formatNumber(totalActivePlusUsers.last30Days)}
           </li>
           <li>
-            <b>PRO:</b> ${totalActiveProUsers.last30Days.toLocaleString('en-US')}
+            <b>PRO:</b> ${formatNumber(totalActiveProUsers.last30Days)}
           </li>
         </ul>
       </li>
@@ -821,13 +866,13 @@ export const html = (data: any, timer: TimerInterface) => {
     <b>Payments (This Month)</b>
     <ul>
       <li>
-        Revenue: <b>$${revenueThisMonth.toLocaleString('en-US')}</b>
+        Revenue: <b>${formatCurrency(revenueThisMonth)}</b>
       </li>
       <li>
-        Income: <b>$${incomeThisMonth.toLocaleString('en-US')}</b>
+        Income: <b>${formatCurrency(incomeThisMonth)}</b>
       </li>
       <li>
-        Refunds: <b>$${refundsThisMonth.toLocaleString('en-US')}</b>
+        Refunds: <b>${formatCurrency(refundsThisMonth)}</b>
       </li>
     </ul>
   </li>
@@ -838,24 +883,24 @@ export const html = (data: any, timer: TimerInterface) => {
         <b>Plus Subscription:</b>
         <ul>
           <li>
-            <b>${plusSubscriptionsInitialMonthlyPaymentsThisMonth?.increments.toLocaleString('en-US')}</b>${' '}
-            <i>initial</i> payments on <u>monhtly</u> plan, totaling${' '}
-            <b>$${plusSubscriptionsInitialMonthlyPaymentsThisMonth?.totalValue.toLocaleString('en-US')}</b>
+            <b>${formatNumber(plusSubscriptionsInitialMonthlyPaymentsThisMonth?.increments)}</b>${' '}
+            <i>initial</i> payments on <u>monthly</u> plan, totaling${' '}
+            <b>${formatCurrency(plusSubscriptionsInitialMonthlyPaymentsThisMonth?.totalValue)}</b>
           </li>
           <li>
-            <b>${plusSubscriptionsInitialAnnualPaymentsThisMonth?.increments.toLocaleString('en-US')}</b>${' '}
+            <b>${formatNumber(plusSubscriptionsInitialAnnualPaymentsThisMonth?.increments)}</b>${' '}
             <i>initial</i> payments on <u>annual</u> plan, totaling${' '}
-            <b>$${plusSubscriptionsInitialAnnualPaymentsThisMonth?.totalValue.toLocaleString('en-US')}</b>
+            <b>${formatCurrency(plusSubscriptionsInitialAnnualPaymentsThisMonth?.totalValue)}</b>
           </li>
           <li>
-            <b>${plusSubscriptionsRenewingMonthlyPaymentsThisMonth?.increments.toLocaleString('en-US')}</b>${' '}
+            <b>${formatNumber(plusSubscriptionsRenewingMonthlyPaymentsThisMonth?.increments)}</b>${' '}
             <i>renewing</i> payments on <u>monthly</u> plan, totaling${' '}
-            <b>$${plusSubscriptionsRenewingMonthlyPaymentsThisMonth?.totalValue.toLocaleString('en-US')}</b>
+            <b>${formatCurrency(plusSubscriptionsRenewingMonthlyPaymentsThisMonth?.totalValue)}</b>
           </li>
           <li>
-            <b>${plusSubscriptionsRenewingAnnualPaymentsThisMonth?.increments.toLocaleString('en-US')}</b>${' '}
+            <b>${formatNumber(plusSubscriptionsRenewingAnnualPaymentsThisMonth?.increments)}</b>${' '}
             <i>renewing</i> payments on <u>annual</u> plan, totaling${' '}
-            <b>$${plusSubscriptionsRenewingAnnualPaymentsThisMonth?.totalValue.toLocaleString('en-US')}</b>
+            <b>${formatCurrency(plusSubscriptionsRenewingAnnualPaymentsThisMonth?.totalValue)}</b>
           </li>
         </ul>
       </li>
@@ -863,24 +908,24 @@ export const html = (data: any, timer: TimerInterface) => {
         <b>Pro Subscription:</b>
         <ul>
           <li>
-            <b>${proSubscriptionsInitialMonthlyPaymentsThisMonth?.increments.toLocaleString('en-US')}</b>${' '}
-            <i>initial</i> payments on <u>monhtly</u> plan, totaling${' '}
-            <b>$${proSubscriptionsInitialMonthlyPaymentsThisMonth?.totalValue.toLocaleString('en-US')}</b>
+            <b>${formatNumber(proSubscriptionsInitialMonthlyPaymentsThisMonth?.increments)}</b>${' '}
+            <i>initial</i> payments on <u>monthly</u> plan, totaling${' '}
+            <b>${formatCurrency(proSubscriptionsInitialMonthlyPaymentsThisMonth?.totalValue)}</b>
           </li>
           <li>
-            <b>${proSubscriptionsInitialAnnualPaymentsThisMonth?.increments.toLocaleString('en-US')}</b>${' '}
+            <b>${formatNumber(proSubscriptionsInitialAnnualPaymentsThisMonth?.increments)}</b>${' '}
             <i>initial</i> payments on <u>annual</u> plan, totaling${' '}
-            <b>$${proSubscriptionsInitialAnnualPaymentsThisMonth?.totalValue.toLocaleString('en-US')}</b>
+            <b>${formatCurrency(proSubscriptionsInitialAnnualPaymentsThisMonth?.totalValue)}</b>
           </li>
           <li>
-            <b>${proSubscriptionsRenewingMonthlyPaymentsThisMonth?.increments.toLocaleString('en-US')}</b>${' '}
+            <b>${formatNumber(proSubscriptionsRenewingMonthlyPaymentsThisMonth?.increments)}</b>${' '}
             <i>renewing</i> payments on <u>monthly</u> plan, totaling${' '}
-            <b>$${proSubscriptionsRenewingMonthlyPaymentsThisMonth?.totalValue.toLocaleString('en-US')}</b>
+            <b>${formatCurrency(proSubscriptionsRenewingMonthlyPaymentsThisMonth?.totalValue)}</b>
           </li>
           <li>
-            <b>${proSubscriptionsRenewingAnnualPaymentsThisMonth?.increments.toLocaleString('en-US')}</b>${' '}
+            <b>${formatNumber(proSubscriptionsRenewingAnnualPaymentsThisMonth?.increments)}</b>${' '}
             <i>renewing</i> payments on <u>annual</u> plan, totaling${' '}
-            <b>$${proSubscriptionsRenewingAnnualPaymentsThisMonth?.totalValue.toLocaleString('en-US')}</b>
+            <b>${formatCurrency(proSubscriptionsRenewingAnnualPaymentsThisMonth?.totalValue)}</b>
           </li>
         </ul>
       </li>
@@ -890,17 +935,14 @@ export const html = (data: any, timer: TimerInterface) => {
     <b>Users</b>
     <ul>
       <li>
-        Number of users registered: <b>${userRegistrationOverTime?.totalCount.toLocaleString('en-US')}</b>
+        Number of users registered: <b>${formatNumber(userRegistrationOverTime?.totalCount)}</b>
       </li>
       <li>
-        Number of users unregistered: <b>${userDeletionOverTime?.totalCount.toLocaleString('en-US')}</b>
+        Number of users unregistered: <b>${formatNumber(userDeletionOverTime?.totalCount)}</b>
       </li>
       <li>
         Average account duration this month:${' '}
-        <b>
-          ${registrationLengthDurationThisMonth.days} days ${registrationLengthDurationThisMonth.hours} hours${' '}
-          ${registrationLengthDurationThisMonth.minutes} minutes
-        </b>
+        <b>${registrationLengthDurationThisMonth}</b>
       </li>
     </ul>
   </li>
@@ -909,42 +951,35 @@ export const html = (data: any, timer: TimerInterface) => {
     <ul>
       <li>
         Number of subscriptions purchased:${' '}
-        <b>${subscriptionPurchasingOverTime?.totalCount.toLocaleString('en-US')}</b>
+        <b>${formatNumber(subscriptionPurchasingOverTime?.totalCount)}</b>
       </li>
       <li>
         Number of subscriptions renewed:${' '}
-        <b>${subscriptionRenewingOverTime?.totalCount.toLocaleString('en-US')}</b>
+        <b>${formatNumber(subscriptionRenewingOverTime?.totalCount)}</b>
       </li>
       <li>
         Number of subscriptions refunded:${' '}
-        <b>${subscriptionRefundingOverTime?.totalCount.toLocaleString('en-US')}</b>
+        <b>${formatNumber(subscriptionRefundingOverTime?.totalCount)}</b>
       </li>
       <li>
         Number of subscriptions cancelled:${' '}
-        <b>${subscriptionCancelledOverTime?.totalCount.toLocaleString('en-US')}</b>
+        <b>${formatNumber(subscriptionCancelledOverTime?.totalCount)}</b>
       </li>
       <li>
         Number of subscriptions reactivated:${' '}
-        <b>${subscriptionReactivatedOverTime?.totalCount.toLocaleString('en-US')}</b>
+        <b>${formatNumber(subscriptionReactivatedOverTime?.totalCount)}</b>
       </li>
       <li>
         Average subscription duration this month:${' '}
-        <b>
-          ${subscriptionLengthDurationThisMonth.days} days ${subscriptionLengthDurationThisMonth.hours} hours${' '}
-          ${subscriptionLengthDurationThisMonth.minutes} minutes
-        </b>
+        <b>${subscriptionLengthDurationThisMonth}</b>
       </li>
       <li>
         Average subscription remaining percentage this month:${' '}
-        <b>${subscriptionRemainingTimePercentageThisMonth}%</b>
+        <b>${subscriptionRemainingTimePercentageThisMonth}</b>
       </li>
       <li>
         Average time from registration to subscription purchase this month:${' '}
-        <b>
-          ${registrationToSubscriptionDurationThisMonth.days} days${' '}
-          ${registrationToSubscriptionDurationThisMonth.hours} hours${' '}
-          ${registrationToSubscriptionDurationThisMonth.minutes} minutes
-        </b>
+        <b>${registrationToSubscriptionDurationThisMonth}</b>
       </li>
     </ul>
   </li>
@@ -967,9 +1002,9 @@ export const html = (data: any, timer: TimerInterface) => {
 <p>✅ GREAT! Up to 7% 🔶 OKAY: 8-10% 🩸 BAD: 11 -15 % 🚨 TERRIBLE! 16-20%</p>
 <p>Churn is calculated by the following formula:</p>
 <p>
-  ( Existing Customers Churn [${thisMonthChurn?.existingCustomersChurn}] + New Customers Churn [
-  ${thisMonthChurn?.newCustomersChurn}] ) * 100 / Average Customers Count This Month [
-  ${thisMonthChurn?.averageCustomersCount}]
+  ( Existing Customers Churn [${formatNumber(thisMonthChurn?.existingCustomersChurn)}] + New Customers Churn [
+  ${formatNumber(thisMonthChurn?.newCustomersChurn)}] ) * 100 / Average Customers Count This Month [
+  ${formatNumber(thisMonthChurn?.averageCustomersCount)}]
 </p>
 <img src=${chartUrls.churn}></img>
 <p>

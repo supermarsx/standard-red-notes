@@ -140,9 +140,12 @@ const buildData = (): ReportData => {
     statisticsOverTime,
     activityStatisticsOverTime,
     activityStatistics: [
-      { name: AnalyticsActivity.PaymentSuccess, totalCount: 77 },
-      { name: AnalyticsActivity.PaymentFailed, totalCount: 8 },
-      { name: AnalyticsActivity.LimitedDiscountOfferPurchased, totalCount: 3 },
+      { name: AnalyticsActivity.PaymentSuccess, period: Period.ThisMonth, totalCount: 999 },
+      { name: AnalyticsActivity.PaymentFailed, period: Period.ThisMonth, totalCount: 999 },
+      { name: AnalyticsActivity.LimitedDiscountOfferPurchased, period: Period.ThisMonth, totalCount: 999 },
+      { name: AnalyticsActivity.PaymentSuccess, period: Period.Yesterday, totalCount: 77 },
+      { name: AnalyticsActivity.PaymentFailed, period: Period.Yesterday, totalCount: 8 },
+      { name: AnalyticsActivity.LimitedDiscountOfferPurchased, period: Period.Yesterday, totalCount: 3 },
     ],
     statisticMeasures,
     churn: {
@@ -208,7 +211,7 @@ describe('daily-analytics-report html', () => {
   it('reports yesterdays revenue as income minus refunds', () => {
     const report = html(data, timer)
 
-    expect(squash(report)).toContain('Revenue: <b>$750</b> (Income: $ 1,000, Refunds: $250)')
+    expect(squash(report)).toContain('Revenue: <b>$750</b> (Income: $1,000, Refunds: $250)')
   })
 
   it('reports this months revenue as income minus refunds', () => {
@@ -222,7 +225,7 @@ describe('daily-analytics-report html', () => {
   it('reports the payment activity counts from yesterday', () => {
     const report = html(data, timer)
 
-    expect(report).toContain('Successfull payments: <b>77</b>')
+    expect(report).toContain('Successful payments: <b>77</b>')
     expect(report).toContain('Failed payments: <b>8</b>')
   })
 
@@ -230,8 +233,8 @@ describe('daily-analytics-report html', () => {
     const report = html(data, timer)
 
     expect(report).toContain('<b>Total:</b> $300')
-    expect(report).toContain('$\n            35')
-    expect(report).toContain('$\n            90')
+    expect(squash(report)).toContain('<b>PLUS:</b> $35')
+    expect(squash(report)).toContain('<b>PRO:</b> $90')
   })
 
   it('floors the average remaining subscription percentage', () => {
@@ -327,36 +330,41 @@ describe('daily-analytics-report html', () => {
     expect(config.data.datasets[2].data).toEqual([3000, 3001, 0, 3003])
   })
 
-  it('throws rather than rendering a report when there is no last-30-days activity at all', () => {
+  it('renders unavailable values when there is no last-30-days activity at all', () => {
     data.activityStatisticsOverTime = (data.activityStatisticsOverTime as { period: Period }[]).filter(
       (entry) => entry.period !== Period.Last30Days,
     )
 
-    expect(() => html(data, timer)).toThrow(TypeError)
+    const report = html(data, timer)
+
+    expect(squash(report)).toContain('Number of subscriptions purchased: <b>N/A</b>')
+    expect(squash(report)).toContain('Number of users registered: <b>N/A</b>')
+    expect(chartConfigFrom(report, 1).data.datasets[0].data).toEqual([])
   })
 
-  it('omits the MRR chart series when this year has no MRR statistics', () => {
+  it('renders an empty MRR chart series when this year has no MRR statistics', () => {
     data.statisticsOverTime = (data.statisticsOverTime as { name: string; period: number }[]).filter(
       (entry) => !(entry.name === 'mrr' && entry.period === Period.ThisYear),
     )
 
     const config = chartConfigFrom(html(data, timer), 0)
 
-    expect(config.data.datasets[0].data).toBeUndefined()
+    expect(config.data.datasets[0].data).toEqual([])
   })
 
-  it('treats a missing income or refund measure as zero revenue', () => {
+  it('renders unavailable rather than zero when income or refund measures are missing', () => {
     data.statisticMeasures = (data.statisticMeasures as { name: string }[]).filter(
       (entry) => entry.name !== StatisticMeasureName.NAMES.Income && entry.name !== StatisticMeasureName.NAMES.Refunds,
     )
 
     const report = html(data, timer)
 
-    expect(report).toContain('Revenue: <b>$0</b>')
+    expect(report).toContain('Revenue: <b>N/A</b>')
+    expect(squash(report)).toContain('(Income: N/A, Refunds: N/A)')
     expect(timer.convertMicrosecondsToTimeStructure).toHaveBeenCalledWith(172_800_000_000)
   })
 
-  it('treats missing duration measures as a zero-microsecond duration', () => {
+  it('renders unavailable without asking the timer to convert missing duration measures', () => {
     data.statisticMeasures = (data.statisticMeasures as { name: string }[]).filter(
       (entry) =>
         entry.name !== StatisticMeasureName.NAMES.SubscriptionLength &&
@@ -367,39 +375,61 @@ describe('daily-analytics-report html', () => {
 
     const report = html(data, timer)
 
-    expect(timer.convertMicrosecondsToTimeStructure).toHaveBeenCalledWith(0)
-    expect(report).toContain('average remaining subscription percentage: 0%')
+    expect(timer.convertMicrosecondsToTimeStructure).not.toHaveBeenCalled()
+    expect(report).toContain('average subscription duration: N/A')
+    expect(report).toContain('average remaining subscription percentage: N/A')
   })
 
-  it('throws rather than rendering a report when the current month has no churn entry', () => {
+  it('renders unavailable churn inputs when the current month has no churn entry', () => {
     data.churn.values = [
       { periodKey: '1999-1', rate: 1, existingCustomersChurn: 0, newCustomersChurn: 0, averageCustomersCount: 0 },
     ]
 
-    expect(() => html(data, timer)).toThrow(TypeError)
+    const report = html(data, timer)
+
+    expect(report).toContain('Existing Customers Churn [N/A]')
+    expect(report).toContain('New Customers Churn [\n  N/A]')
+    expect(report).toContain('Average Customers Count This Month [\n  N/A]')
   })
 
-  // Documents current behaviour, not desired behaviour: see the report notes on
-  // safeHtml receiving `undefined` from an optional-chained substitution.
-  it('throws rather than rendering a report when a per-plan income measure is missing', () => {
+  it('renders unavailable values when a per-plan income measure is missing', () => {
     data.statisticMeasures = (data.statisticMeasures as { name: string }[]).filter(
       (entry) => !INCOME_MEASURE_NAMES.includes(entry.name),
     )
 
-    expect(() => html(data, timer)).toThrow(TypeError)
+    const report = html(data, timer)
+
+    expect(squash(report)).toContain('<b>N/A</b> <i>initial</i> payments on <u>monthly</u> plan')
+    expect(squash(report)).toContain('plan, totaling <b>N/A</b>')
   })
 
-  it('throws rather than rendering a report when the payment activity counts are missing', () => {
+  it('renders unavailable values when the payment activity counts are missing', () => {
     data.activityStatistics = []
 
-    expect(() => html(data, timer)).toThrow(TypeError)
+    const report = html(data, timer)
+
+    expect(report).toContain('Successful payments: <b>N/A</b>')
+    expect(report).toContain('Failed payments: <b>N/A</b>')
   })
 
-  it('throws rather than rendering a report when the MRR breakdown is missing', () => {
+  it('renders unavailable values when the MRR breakdown is missing', () => {
     data.statisticsOverTime = (data.statisticsOverTime as { name: string }[]).filter(
       (entry) => !entry.name.includes('mrr'),
     )
 
-    expect(() => html(data, timer)).toThrow(TypeError)
+    const report = html(data, timer)
+
+    expect(report).toContain('<b>Total:</b> N/A')
+    expect(squash(report)).toContain('<b>Monthly:</b> N/A')
+  })
+
+  it('renders unavailable active-user values when a measure has no daily counts', () => {
+    ;(data.statisticsOverTime as { name: string; counts?: unknown[] }[]).find(
+      (entry) => entry.name === StatisticMeasureName.NAMES.ActiveUsers,
+    )!.counts = []
+
+    const report = html(data, timer)
+
+    expect(report).toContain('<b>Total:</b> N/A')
   })
 })
