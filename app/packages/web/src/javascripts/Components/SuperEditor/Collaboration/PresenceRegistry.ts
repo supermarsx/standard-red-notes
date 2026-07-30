@@ -8,7 +8,7 @@
  * The signal here is GENUINE real-time presence: an entry exists for a peer only
  * while that peer has the same note open and their awareness state is live on
  * the relay. When the collaboration plugin is not mounted (solo notes, or the
- * collaboration flag is off) the registry is simply empty for that room, and the
+ * security gate is closed) the registry is simply empty for that room, and the
  * sidebar reflects that honestly rather than inventing activity.
  */
 

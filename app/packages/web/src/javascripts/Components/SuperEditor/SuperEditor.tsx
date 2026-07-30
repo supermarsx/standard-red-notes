@@ -8,10 +8,8 @@ import {
   WebAppEvent,
   LocalPrefKey,
 } from '@standardnotes/snjs'
-import { CSSProperties, FocusEvent, FunctionComponent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { CSSProperties, FocusEvent, FunctionComponent, useCallback, useEffect, useRef, useState } from 'react'
 import { BlocksEditor } from './BlocksEditor'
-import { CollaborationConfig } from './Collaboration/CollaborationPlugin'
-import { collaboratorColor } from './Collaboration/collaboratorColor'
 import { BlocksEditorComposer } from './BlocksEditorComposer'
 import { ItemSelectionPlugin } from './Plugins/ItemSelectionPlugin/ItemSelectionPlugin'
 import { FileNode } from './Plugins/EncryptedFilePlugin/Nodes/FileNode'
@@ -155,34 +153,6 @@ export const SuperEditor: FunctionComponent<Props> = ({
   const closeMarkdownPreview = useCallback(() => {
     setShowMarkdownPreview(false)
   }, [])
-
-  // Live co-editing is OPT-IN: only for notes in a shared vault, and only when
-  // explicitly enabled via window.enableSuperCollaboration. Default off, so solo
-  // notes and the normal editing path are completely unaffected. The room secret
-  // is derived from the shared vault's key-system identifier (all members hold
-  // it); for E2E against an untrusted relay, swap in the raw vault key.
-  const collaboration = useMemo<CollaborationConfig | undefined>(() => {
-    if (!(window as { enableSuperCollaboration?: boolean }).enableSuperCollaboration) {
-      return undefined
-    }
-    const vault = application.vaults.getItemVault(note.current)
-    if (!vault || !vault.isSharedVaultListing()) {
-      return undefined
-    }
-    const user = application.sessions.getUser()
-    const email = user?.email ?? 'Collaborator'
-    // Color the local user's cursor by their OWN account id so it stays stable
-    // across notes and matches their presence dot in the sidebar.
-    return {
-      room: note.current.uuid,
-      sharedSecret: String(vault.systemIdentifier),
-      username: email,
-      cursorColor: collaboratorColor(user?.uuid ?? email),
-      userUuid: user?.uuid,
-      shouldBootstrap: true,
-      initialEditorState: note.current.text && note.current.text.length > 0 ? note.current.text : undefined,
-    }
-  }, [application])
 
   useEffect(() => {
     return application.actions.addPayloadRequestHandler((uuid) => {
@@ -337,11 +307,7 @@ export const SuperEditor: FunctionComponent<Props> = ({
       <ErrorBoundary>
         <LinkingControllerProvider controller={linkingController}>
           <FilesControllerProvider controller={filesController}>
-            <BlocksEditorComposer
-              readonly={isEditorReadonly}
-              initialValue={note.current.text}
-              collaborating={!!collaboration}
-            >
+            <BlocksEditorComposer readonly={isEditorReadonly} initialValue={note.current.text} collaborating={false}>
               <BlocksEditor
                 onChange={handleChange}
                 className="blocks-editor h-full resize-none"
@@ -351,7 +317,6 @@ export const SuperEditor: FunctionComponent<Props> = ({
                 onFocus={handleFocus}
                 onBlur={onBlur}
                 application={application}
-                collaboration={collaboration}
                 registerDebounceControl={registerDebounceControl}
               >
                 <ItemSelectionPlugin currentNote={note.current} />

@@ -7,9 +7,11 @@ import type { RoomCipher } from './RoomCrypto'
 type Listener = (...args: never[]) => void
 
 /**
- * A yjs provider that syncs a Y.Doc over the gateway relay, encrypting every
- * update end-to-end. Implements the @lexical/yjs `Provider` interface so it can
- * drive @lexical/react's CollaborationPlugin.
+ * A yjs provider that syncs a Y.Doc over the gateway relay through the supplied
+ * RoomCipher. This is end-to-end encrypted only when the caller supplies a key
+ * unavailable to the relay; the product entry point remains security-gated
+ * until that client-only key source exists. Implements the @lexical/yjs
+ * `Provider` interface so it can drive @lexical/react's CollaborationPlugin.
  *
  * Sync model (no central server, peer-to-peer over the relay):
  *  - local doc change  -> encrypt incremental update -> broadcast `yjs` frame;

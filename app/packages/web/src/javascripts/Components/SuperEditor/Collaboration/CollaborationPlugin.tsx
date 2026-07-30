@@ -7,18 +7,15 @@ import type { Provider } from '@lexical/yjs'
 import { WebApplication } from '@/Application/WebApplication'
 import { EncryptedYjsProvider } from './EncryptedYjsProvider'
 import { createGatewayCollabChannel } from './GatewayCollabChannel'
-import { createPlaintextCipher, createRoomCipher, deriveRoomKey, RoomCipher } from './RoomCrypto'
+import { createRoomCipher } from './RoomCrypto'
 import { PresenceRegistry, PresentPeer } from './PresenceRegistry'
+import { getSuperCollaborationAvailability } from './CollaborationAvailability'
 
 export type CollaborationConfig = {
   /** Room id — the note uuid. All collaborators on this note share it. */
   room: string
-  /**
-   * Shared secret all collaborators hold (e.g. the vault key). Used to derive
-   * the per-room AES key. When undefined, frames are relayed WITHOUT encryption
-   * (only acceptable on a fully-trusted self-hosted gateway).
-   */
-  sharedSecret?: string
+  /** A non-extractable room key derived exclusively from client-only vault key material. */
+  roomKey: CryptoKey
   /** Display name + cursor color for presence. */
   username: string
   cursorColor: string
@@ -53,26 +50,11 @@ type Props = {
 }
 
 /**
- * Wraps a not-yet-resolved RoomCipher so the provider can start relaying
- * immediately; the real AES key derives asynchronously. yjs updates are
- * idempotent, so any frames sent before the key is ready are re-synced.
+ * The relay implementation remains dormant behind SuperCollaborationPlugin's
+ * security gate. This inner component must never be mounted until a caller can
+ * supply a non-extractable room key derived from client-only vault material.
  */
-function deferredCipher(keyReady: Promise<RoomCipher>): RoomCipher {
-  return {
-    encrypt: async (b) => (await keyReady).encrypt(b),
-    decrypt: async (p) => (await keyReady).decrypt(p),
-  }
-}
-
-/**
- * Live co-editing for the Super editor. Mounts @lexical/react's
- * CollaborationPlugin backed by an EncryptedYjsProvider over the gateway relay.
- *
- * OPT-IN: only mounted for notes explicitly marked collaborative (shared vault
- * notes). The single-user editing path never instantiates this, so it cannot
- * affect solo notes.
- */
-export const SuperCollaborationPlugin: FunctionComponent<Props> = ({ application, config }) => {
+const AvailableSuperCollaborationPlugin: FunctionComponent<Props> = ({ application, config }) => {
   const channel = useMemo(() => createGatewayCollabChannel(application), [application])
 
   // The CollaborationPlugin owns the provider lifecycle; we capture the live
@@ -88,15 +70,13 @@ export const SuperCollaborationPlugin: FunctionComponent<Props> = ({ application
         yjsDocMap.set(id, doc)
       }
 
-      const cipher = config.sharedSecret
-        ? deferredCipher(deriveRoomKey(config.sharedSecret, config.room).then(createRoomCipher))
-        : createPlaintextCipher()
+      const cipher = createRoomCipher(config.roomKey)
 
       const provider = new EncryptedYjsProvider(doc, config.room, channel, cipher)
       providerRef.current = provider
       return provider
     }
-  }, [channel, config.room, config.sharedSecret])
+  }, [channel, config.room, config.roomKey])
 
   const awarenessData = useMemo(() => (config.userUuid ? { userUuid: config.userUuid } : undefined), [config.userUuid])
 
@@ -151,4 +131,17 @@ export const SuperCollaborationPlugin: FunctionComponent<Props> = ({ application
       awarenessData={awarenessData}
     />
   )
+}
+
+/**
+ * Fail-closed entry point. Runtime flags cannot enable relay access; the inner
+ * provider is unreachable until the centralized security gate is deliberately
+ * opened alongside real client-only room-key wiring.
+ */
+export const SuperCollaborationPlugin: FunctionComponent<Props> = (props) => {
+  if (!getSuperCollaborationAvailability().available) {
+    return null
+  }
+
+  return <AvailableSuperCollaborationPlugin {...props} />
 }

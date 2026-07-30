@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { PresenceRegistry, PresentPeer } from './PresenceRegistry'
+import { getSuperCollaborationAvailability } from './CollaborationAvailability'
 
 export type PresenceState = {
   /**
@@ -9,18 +10,16 @@ export type PresenceState = {
    * stale timestamps.
    */
   peers: PresentPeer[]
-  /** Whether live presence is even possible on this client (collab flag on). */
+  /** Whether live presence is available through the security-gated collaboration channel. */
   liveEnabled: boolean
 }
 
 /**
- * Whether the live-presence signal is possible at all. Remote presence rides
- * the Super editor's yjs awareness channel, which is opt-in behind
- * window.enableSuperCollaboration (see SuperEditor.tsx / CollaboratorsPresencePanel).
- * When the flag is off there is NO real online signal.
+ * Runtime flags cannot enable presence. It is available only when the same
+ * client-only-key security gate as the collaboration provider is open.
  */
 export function isLivePresenceEnabled(): boolean {
-  return Boolean((window as { enableSuperCollaboration?: boolean }).enableSuperCollaboration)
+  return getSuperCollaborationAvailability().available
 }
 
 /**

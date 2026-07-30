@@ -4,6 +4,7 @@ import { useApplication } from '@/Components/ApplicationProvider'
 import { useItemVaultInfo } from '@/Hooks/useItemVaultInfo'
 import { collaboratorColor, collaboratorInitials } from '../SuperEditor/Collaboration/collaboratorColor'
 import { PresenceRegistry, PresentPeer } from '../SuperEditor/Collaboration/PresenceRegistry'
+import { getSuperCollaborationAvailability } from '../SuperEditor/Collaboration/CollaborationAvailability'
 
 type Props = {
   item: DecryptedItemInterface
@@ -17,24 +18,14 @@ type DisplayMember = {
 }
 
 /**
- * Whether the live-presence signal is even possible for this client. Remote
- * presence rides the Super editor's yjs awareness channel, which is opt-in
- * behind window.enableSuperCollaboration (see SuperEditor.tsx). When that flag
- * is off there is NO real online signal, so we say so rather than faking dots.
- */
-function isLivePresenceEnabled(): boolean {
-  return Boolean((window as { enableSuperCollaboration?: boolean }).enableSuperCollaboration)
-}
-
-/**
  * Sidebar panel listing the other members of the current note's shared vault and
  * indicating who is genuinely online (has this same note open right now).
  *
  * "Online" is a REAL signal: it comes from the live yjs awareness channel via
  * PresenceRegistry, which only holds a peer while their cursor is live on the
  * relay for this note. It is NOT derived from stale timestamps. When live
- * presence is unavailable (collaboration flag off), the panel still lists vault
- * members but labels their status as unavailable instead of inventing it.
+ * presence is unavailable, the panel still lists vault members but labels the
+ * feature as security-gated instead of inventing online state.
  *
  * Renders nothing unless the note belongs to a shared vault with >1 member, so
  * solo notes are completely unaffected.
@@ -46,7 +37,8 @@ const CollaboratorsPresencePanel: FunctionComponent<Props> = ({ item }) => {
   const [members, setMembers] = useState<SharedVaultUserServerHash[]>([])
   const [presentPeers, setPresentPeers] = useState<PresentPeer[]>([])
 
-  const liveEnabled = isLivePresenceEnabled()
+  const collaborationAvailability = getSuperCollaborationAvailability()
+  const liveEnabled = collaborationAvailability.available
   const room = item.uuid
 
   // Load the shared-vault member list (server-backed, cached by the service).
@@ -125,11 +117,17 @@ const CollaboratorsPresencePanel: FunctionComponent<Props> = ({ item }) => {
         {liveEnabled ? (
           <div className="text-passive-1 text-xs">{onlineCount} online</div>
         ) : (
-          <div className="text-passive-2 text-xs" title="Live presence requires collaboration to be enabled">
-            live status unavailable
+          <div
+            className="text-passive-2 text-xs"
+            title={collaborationAvailability.available ? undefined : collaborationAvailability.reason}
+          >
+            collaboration unavailable
           </div>
         )}
       </div>
+      {!collaborationAvailability.available && (
+        <div className="text-passive-2 mb-2 text-xs">{collaborationAvailability.reason}</div>
+      )}
       <div className="max-h-44 space-y-1.5 overflow-y-auto overscroll-contain md:max-h-none md:overflow-visible">
         {displayMembers.map((member) => {
           const online = isOnline(member)

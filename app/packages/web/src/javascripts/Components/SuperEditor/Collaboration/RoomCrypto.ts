@@ -1,9 +1,9 @@
-// End-to-end encryption for collaborative (yjs) updates.
+// Encryption primitives for collaborative (yjs) updates.
 //
-// The gateway relays opaque base64 blobs and never holds a key, so every yjs
-// sync/awareness update is encrypted client-side with a key only the note's
-// collaborators share (derived from the vault key + note id). AES-256-GCM with a
-// random 96-bit IV per message; payload on the wire is base64(iv ‖ ciphertext).
+// These primitives provide end-to-end encryption only when the input secret is
+// client-only key material unavailable to the relay. The product-level
+// collaboration gate remains closed until such material is wired. AES-256-GCM
+// uses a random 96-bit IV per message; payload is base64(iv ‖ ciphertext).
 
 const IV_BYTES = 12
 
@@ -37,9 +37,9 @@ function fromBase64(b64: string): Uint8Array {
  * and the room id (note uuid), via HKDF-SHA-256. Collaborators holding the same
  * secret deterministically derive the same key without any key exchange.
  */
-export async function deriveRoomKey(sharedSecret: string, room: string): Promise<CryptoKey> {
+export async function deriveRoomKey(clientOnlySecret: string, room: string): Promise<CryptoKey> {
   const enc = new TextEncoder()
-  const base = await subtle().importKey('raw', enc.encode(sharedSecret), 'HKDF', false, ['deriveKey'])
+  const base = await subtle().importKey('raw', enc.encode(clientOnlySecret), 'HKDF', false, ['deriveKey'])
   return subtle().deriveKey(
     { name: 'HKDF', hash: 'SHA-256', salt: enc.encode('srn-collab-v1'), info: enc.encode(room) },
     base,
