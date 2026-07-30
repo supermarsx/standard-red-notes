@@ -254,7 +254,10 @@ const Sync: FunctionComponent<Props> = ({ application }: Props) => {
     async (tagOrFolder: SNTag | SNFolder, localOnly: boolean) => {
       setBusyUuid(tagOrFolder.uuid)
       try {
-        await application.navigationController.setTagOrFolderNotesLocalOnly(tagOrFolder, localOnly)
+        const changed = await application.navigationController.setTagOrFolderNotesLocalOnly(tagOrFolder, localOnly)
+        if (!changed) {
+          return
+        }
         addToast({
           type: ToastType.Success,
           message: localOnly
@@ -426,7 +429,8 @@ const Sync: FunctionComponent<Props> = ({ application }: Props) => {
             <PreferencesSegment>
               <Title>Kept on this device only</Title>
               <Subtitle>
-                These items are excluded from sync and never leave this device. Switch any of them back to syncing.
+                These items are excluded from future sync. Items made local-only before their first upload have no
+                server copy; legacy items that were already synced may still have encrypted data on the server.
               </Subtitle>
               {!syncStatus.hasAccount ? (
                 // No account: everything is on this device because there's nowhere to
@@ -467,7 +471,9 @@ const Sync: FunctionComponent<Props> = ({ application }: Props) => {
           <PreferencesGroup>
             <PreferencesSegment>
               <Title>Configure selective sync</Title>
-              <Subtitle>Mark a tag or folder local-only to keep all of its notes on this device.</Subtitle>
+              <Subtitle>
+                Mark a tag or folder local-only before its notes first sync to keep those notes on this device.
+              </Subtitle>
               <div className="border-border bg-contrast mt-2.5 rounded border p-3 text-sm">
                 <div className="mb-1.5 flex items-center gap-2 font-semibold">
                   <Icon type="info" size="small" />
@@ -475,8 +481,8 @@ const Sync: FunctionComponent<Props> = ({ application }: Props) => {
                 </div>
                 <ul className="ml-4 list-disc space-y-1">
                   <li>
-                    Marking a tag/folder local-only sets every member note to local-only. The notes’ content stays on
-                    this device; only a tag’s membership reference may remain visible on the server.
+                    Local-only is a pre-upload choice. It is unavailable after any affected note has synced because
+                    pausing future uploads cannot retract an existing encrypted server copy.
                   </li>
                   <li>
                     Individual notes and files can also be made local-only from their own options menu. Large files
@@ -493,6 +499,8 @@ const Sync: FunctionComponent<Props> = ({ application }: Props) => {
                 <ul className="space-y-1.5">
                   {tagsAndFolders.map((tagOrFolder) => {
                     const hasLocalOnly = application.navigationController.tagOrFolderHasAnyLocalOnlyNotes(tagOrFolder)
+                    const canEnableLocalOnly =
+                      application.navigationController.canEnableLocalOnlyForTagOrFolder(tagOrFolder)
                     const isFolder = (tagOrFolder as unknown as { isFolder?: boolean }).isFolder === true
                     return (
                       <li
@@ -522,8 +530,8 @@ const Sync: FunctionComponent<Props> = ({ application }: Props) => {
                         ) : (
                           <Button
                             small
-                            label="Keep local-only"
-                            disabled={busyUuid === tagOrFolder.uuid}
+                            label={canEnableLocalOnly ? 'Keep local-only' : 'Already synced'}
+                            disabled={busyUuid === tagOrFolder.uuid || !canEnableLocalOnly}
                             onClick={() => setTagOrFolderLocalOnly(tagOrFolder, true)}
                           />
                         )}

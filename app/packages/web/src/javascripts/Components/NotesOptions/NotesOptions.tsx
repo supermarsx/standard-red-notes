@@ -90,6 +90,7 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
   )
 
   const aiAvailability = useMemo(() => getSelectionAIAvailability(application), [application])
+  const canEnableLocalOnly = notesController.canEnableLocalOnlyForNotes(notes)
 
   useEffect(() => {
     const removeAltKeyObserver = application.keyboardService.addCommandHandler({
@@ -350,15 +351,17 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
         <MenuSwitchButtonItem
           checked={localOnly}
           onChange={(localOnly) => {
-            notesController.setLocalOnlySelectedNotes(localOnly)
+            notesController.setLocalOnlySelectedNotes(localOnly).catch(console.error)
           }}
-          disabled={areSomeNotesInReadonlySharedVault}
+          disabled={areSomeNotesInReadonlySharedVault || (!localOnly && !canEnableLocalOnly)}
         >
           <Icon type="cloud-off" className={iconClass} />
           <div className="flex flex-col">
             <div>Keep local only — don&apos;t sync to the server</div>
             <div className="text-passive-0 mt-1 text-xs">
-              Stays on this device. Won&apos;t be backed up or appear on your other devices.
+              {canEnableLocalOnly || localOnly
+                ? 'Available only before first sync. Won’t be backed up or appear on your other devices.'
+                : 'Unavailable because this note has already synced; pausing sync would not remove its server copy.'}
             </div>
           </div>
         </MenuSwitchButtonItem>

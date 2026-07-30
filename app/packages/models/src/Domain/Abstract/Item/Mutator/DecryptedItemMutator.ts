@@ -106,13 +106,17 @@ export class DecryptedItemMutator<
   /**
    * Marks/unmarks this item as "local only" (excluded from the sync upload set).
    *
-   * Setting this is a dirtying mutation, which matters for the RE-ENABLE path: when
-   * `localOnly` is cleared (set to false), the item becomes dirty with a fresh dirty index
-   * and is therefore picked up by the next sync's upload set and pushed to the server. When
-   * set to true the item is also dirtied, but `SyncService.itemsNeedingSync` filters it out
-   * of the upload set, so it is persisted locally without ever being uploaded.
+   * Local-only is a pre-upload decision. Once an item has synced, excluding future
+   * uploads cannot retract the encrypted copy already stored by the server, so allowing
+   * that transition would violate the feature's privacy contract. Existing legacy
+   * local-only items remain readable and can be switched back to syncing.
    */
   public set localOnly(localOnly: boolean) {
+    const isNewlyEnabling = localOnly && !this.immutableItem.localOnly
+    if (isNewlyEnabling && !this.immutableItem.neverSynced) {
+      throw new Error('Local-only can only be enabled before an item has ever been synced.')
+    }
+
     this.setAppDataItem(AppDataField.LocalOnly, localOnly)
   }
 

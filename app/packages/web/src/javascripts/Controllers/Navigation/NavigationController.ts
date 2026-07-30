@@ -690,21 +690,26 @@ export class NavigationController
     return this.memberNotesOfTagOrFolder(tagOrFolder).some((note) => note.localOnly)
   }
 
+  public canEnableLocalOnlyForTagOrFolder(tagOrFolder: SNTag | SNFolder): boolean {
+    return this.memberNotesOfTagOrFolder(tagOrFolder).every((note) => note.localOnly || note.neverSynced)
+  }
+
   /**
-   * Applies (or clears) the "local only" / exclude-from-sync flag to every member note of a
-   * tag or folder. Per the design, this operates on the member NOTES (not the tag/folder
-   * container itself): excluding the notes is what keeps their content off the server.
-   *
-   * Edge case (documented, not silently handled): a note that is a member of a SYNCED tag
-   * may be marked local-only here. The tag still references it (and the tag continues to
-   * sync, carrying that reference). The note's content stays local; only the membership
-   * reference is visible on the server. We do not strip the reference, to avoid surprising
-   * data changes to the shared tag.
+   * Applies (or clears) local-only for every member note. Enabling is allowed
+   * only while every affected note has never synced; otherwise a server copy
+   * would remain and the "device only" privacy contract would be false.
    */
-  public async setTagOrFolderNotesLocalOnly(tagOrFolder: SNTag | SNFolder, localOnly: boolean): Promise<void> {
+  public async setTagOrFolderNotesLocalOnly(tagOrFolder: SNTag | SNFolder, localOnly: boolean): Promise<boolean> {
     const notes = this.memberNotesOfTagOrFolder(tagOrFolder)
     if (notes.length === 0) {
-      return
+      return false
+    }
+
+    if (localOnly && !this.canEnableLocalOnlyForTagOrFolder(tagOrFolder)) {
+      await this.alerts.alert(
+        'Local-only can only be enabled before every note in this tag or folder has synced. Existing server copies cannot be retracted by pausing future sync.',
+      )
+      return false
     }
 
     await this.mutator.changeItems<NoteMutator, SNNote>(notes, (mutator) => {
@@ -712,6 +717,7 @@ export class NavigationController
     })
 
     await this.sync.sync()
+    return true
   }
 
   public get selectedFolder(): SNFolder | undefined {

@@ -45,6 +45,7 @@ const FolderContextMenu = ({ navigationController, isEntitledToFolders, selected
   }, [navigationController, selectedFolder])
 
   const folderHasLocalOnlyNotes = navigationController.tagOrFolderHasAnyLocalOnlyNotes(selectedFolder)
+  const canEnableLocalOnly = navigationController.canEnableLocalOnlyForTagOrFolder(selectedFolder)
   const onClickToggleLocalOnly = useCallback(() => {
     navigationController.setTagOrFolderNotesLocalOnly(selectedFolder, !folderHasLocalOnlyNotes).catch(console.error)
     navigationController.setContextMenuOpen(false)
@@ -153,7 +154,11 @@ const FolderContextMenu = ({ navigationController, isEntitledToFolders, selected
             </div>
             {!isEntitledToFolders && <Icon type={PremiumFeatureIconName} className={PremiumFeatureIconClass} />}
           </MenuItem>
-          <MenuItem className={'py-1.5'} onClick={onClickToggleLocalOnly}>
+          <MenuItem
+            className={'py-1.5'}
+            onClick={onClickToggleLocalOnly}
+            disabled={!folderHasLocalOnlyNotes && !canEnableLocalOnly}
+          >
             <Icon type="cloud-off" className="text-neutral mr-2" />
             <div className="flex flex-col">
               <div>
@@ -164,7 +169,9 @@ const FolderContextMenu = ({ navigationController, isEntitledToFolders, selected
               <div className="text-passive-0 mt-0.5 text-xs">
                 {folderHasLocalOnlyNotes
                   ? 'Notes will sync to the server again.'
-                  : "Notes stay on this device. Won't be backed up or appear on other devices."}
+                  : canEnableLocalOnly
+                    ? "Available before first sync. Notes won't be backed up or appear on other devices."
+                    : 'Unavailable: at least one note has already synced and has a server copy.'}
               </div>
             </div>
           </MenuItem>

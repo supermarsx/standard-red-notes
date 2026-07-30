@@ -453,20 +453,34 @@ export class NotesController
     }).catch(console.error)
   }
 
+  canEnableLocalOnlyForNotes(notes: SNNote[]): boolean {
+    return notes.every((note) => note.localOnly || note.neverSynced)
+  }
+
   /**
-   * Marks/unmarks the selected notes as "local only" (kept on this device, never synced).
-   * Clearing the flag re-dirties the note so it uploads on the next sync.
+   * Marks/unmarks never-synced selected notes as local-only. A server copy cannot
+   * be retracted merely by suppressing future uploads, so already-synced notes
+   * fail closed instead of presenting a false "device only" guarantee.
    */
-  setLocalOnlySelectedNotes(localOnly: boolean): void {
-    this.changeSelectedNotes((mutator) => {
+  async setLocalOnlySelectedNotes(localOnly: boolean): Promise<boolean> {
+    const notes = this.selectedNotes
+    if (localOnly && !this.canEnableLocalOnlyForNotes(notes)) {
+      await this.application.alerts.alert(
+        'Local-only can only be enabled before a note has synced. An already-synced server copy cannot be retracted by pausing future sync.',
+      )
+      return false
+    }
+
+    await this.changeSelectedNotes((mutator) => {
       mutator.localOnly = localOnly
-    }).catch(console.error)
+    })
+    return true
   }
 
   async toggleLocalOnlySelectedNotes(): Promise<void> {
     const notes = this.selectedNotes
     const anyLocalOnly = notes.some((note) => note.localOnly)
-    this.setLocalOnlySelectedNotes(!anyLocalOnly)
+    await this.setLocalOnlySelectedNotes(!anyLocalOnly)
   }
 
   async setArchiveSelectedNotes(archived: boolean): Promise<void> {

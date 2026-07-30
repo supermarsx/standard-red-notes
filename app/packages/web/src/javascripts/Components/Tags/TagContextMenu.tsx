@@ -54,6 +54,7 @@ const TagContextMenu = ({ navigationController, selectedTag }: ContextMenuProps)
   }, [navigationController, selectedTag])
 
   const tagHasLocalOnlyNotes = navigationController.tagOrFolderHasAnyLocalOnlyNotes(selectedTag)
+  const canEnableLocalOnly = navigationController.canEnableLocalOnlyForTagOrFolder(selectedTag)
   const onClickToggleLocalOnly = useCallback(() => {
     navigationController.setTagOrFolderNotesLocalOnly(selectedTag, !tagHasLocalOnlyNotes).catch(console.error)
     navigationController.setContextMenuOpen(false)
@@ -154,7 +155,11 @@ const TagContextMenu = ({ navigationController, selectedTag }: ContextMenuProps)
               Add subtopic
             </div>
           </MenuItem>
-          <MenuItem className={'py-1.5'} onClick={onClickToggleLocalOnly}>
+          <MenuItem
+            className={'py-1.5'}
+            onClick={onClickToggleLocalOnly}
+            disabled={!tagHasLocalOnlyNotes && !canEnableLocalOnly}
+          >
             <Icon type="cloud-off" className="text-neutral mr-2" />
             <div className="flex flex-col">
               <div>
@@ -163,7 +168,9 @@ const TagContextMenu = ({ navigationController, selectedTag }: ContextMenuProps)
               <div className="text-passive-0 mt-0.5 text-xs">
                 {tagHasLocalOnlyNotes
                   ? 'Notes will sync to the server again.'
-                  : "Notes stay on this device. Won't be backed up or appear on other devices."}
+                  : canEnableLocalOnly
+                    ? "Available before first sync. Notes won't be backed up or appear on other devices."
+                    : 'Unavailable: at least one note has already synced and has a server copy.'}
               </div>
             </div>
           </MenuItem>
