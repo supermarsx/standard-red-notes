@@ -1,0 +1,7 @@
+diff --git a/index.d.ts b/index.d.ts
+index 10b9c145b920a6a2ba1fb09bd72150328fafe211..8487b10ec6b0336461acdc1d7341fbbc7fe89170 100644
+--- a/index.d.ts
++++ b/index.d.ts
+@@ -8 +8 @@
+-declare class WebView<P = undefined> extends Component<WebViewProps & P> {
++declare class WebView<P = unknown> extends Component<WebViewProps & P> {

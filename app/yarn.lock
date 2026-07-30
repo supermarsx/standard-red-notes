@@ -10778,7 +10778,7 @@ __metadata:
     react-native-share: "npm:^12.3.1"
     react-native-store-review: "npm:^0.5.0"
     react-native-version-info: "npm:^1.1.1"
-    react-native-webview: "npm:14.0.1"
+    react-native-webview: "patch:react-native-webview@npm%3A14.0.1#~/.yarn/patches/react-native-webview-npm-14.0.1-5188b52144.patch"
     typescript: "npm:6.0.3"
   languageName: unknown
   linkType: soft
@@ -28477,6 +28477,19 @@ __metadata:
     react: "*"
     react-native: "*"
   checksum: 10/dc7591657aa699c843cf3af6b354748c1bca7050c30854d3832bbaced0113237bbf470c51bed50c49877941b4d8c45540cf485cb9455a6956b618c7cd63bd74e
+  languageName: node
+  linkType: hard
+
+"react-native-webview@patch:react-native-webview@npm%3A14.0.1#~/.yarn/patches/react-native-webview-npm-14.0.1-5188b52144.patch":
+  version: 14.0.1
+  resolution: "react-native-webview@patch:react-native-webview@npm%3A14.0.1#~/.yarn/patches/react-native-webview-npm-14.0.1-5188b52144.patch::version=14.0.1&hash=80d0a1"
+  dependencies:
+    escape-string-regexp: "npm:^4.0.0"
+    invariant: "npm:2.2.4"
+  peerDependencies:
+    react: "*"
+    react-native: "*"
+  checksum: 10/11aae804fea11c806481e07a363169e95c861575b7beca0fb9117dea7dccd196ba3d3ffaccce0a8eed49d08384a2ffdfb3be592323f2ab8d77b25b1c4da0c963
   languageName: node
   linkType: hard
 
