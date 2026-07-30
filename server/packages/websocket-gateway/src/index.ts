@@ -78,13 +78,51 @@ httpServer.listen(PORT, () => {
   logger.info(`websocket-gateway listening on :${PORT} (redis ${REDIS_HOST}:${REDIS_PORT})`)
 })
 
-function shutdown(signal: string): void {
-  logger.info(`[shutdown] received ${signal}, closing`)
-  void gateway.stop().finally(() => {
-    httpServer.close(() => process.exit(0))
-    // Force-exit if something hangs.
-    setTimeout(() => process.exit(0), 5_000).unref()
+let shutdownStarted = false
+
+async function stopGatewaySafely(): Promise<void> {
+  try {
+    await gateway.stop()
+  } catch (error) {
+    logger.error('[shutdown] gateway stop failed', error instanceof Error ? error.message : error)
+  }
+}
+
+async function closeHttpServerSafely(): Promise<void> {
+  await new Promise<void>((resolveClose) => {
+    try {
+      httpServer.close(() => resolveClose())
+    } catch (error) {
+      logger.error('[shutdown] http server close failed', error instanceof Error ? error.message : error)
+      resolveClose()
+    }
   })
+}
+
+function shutdown(signal: string): void {
+  if (shutdownStarted) {
+    logger.info(`[shutdown] ignoring ${signal}; shutdown already in progress`)
+    return
+  }
+  shutdownStarted = true
+
+  logger.info(`[shutdown] received ${signal}, closing`)
+  const forceExitTimer = setTimeout(() => {
+    logger.error('[shutdown] forcing process exit after 5000ms')
+    process.exit(0)
+  }, 5_000)
+  forceExitTimer.unref()
+
+  void Promise.all([stopGatewaySafely(), closeHttpServerSafely()])
+    .then(() => {
+      clearTimeout(forceExitTimer)
+      process.exit(0)
+    })
+    .catch((error) => {
+      logger.error('[shutdown] unexpected shutdown failure', error instanceof Error ? error.message : error)
+      clearTimeout(forceExitTimer)
+      process.exit(0)
+    })
 }
 
 process.on('SIGINT', () => shutdown('SIGINT'))

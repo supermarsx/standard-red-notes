@@ -17,6 +17,7 @@ const harness = vi.hoisted(() => {
     handleMintToken: undefined as ReturnType<typeof vi.fn> | undefined,
     stop: undefined as ReturnType<typeof vi.fn> | undefined,
     stopRejects: false,
+    stopPromise: undefined as Promise<void> | undefined,
   }
 
   const createServer = vi.fn((listener: RequestListener) => {
@@ -39,6 +40,9 @@ const harness = vi.hoisted(() => {
     state.attachOptions = options
     state.handleMintToken = vi.fn()
     state.stop = vi.fn(async () => {
+      if (state.stopPromise) {
+        return state.stopPromise
+      }
       if (state.stopRejects) {
         throw new Error('stop failed')
       }
@@ -120,6 +124,7 @@ beforeEach(() => {
   harness.state.attachOptions = undefined
   harness.state.closeCallbacks = []
   harness.state.stopRejects = false
+  harness.state.stopPromise = undefined
   signalHandlers = new Map()
 
   exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never)
@@ -136,6 +141,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  vi.useRealTimers()
   vi.unstubAllEnvs()
   vi.restoreAllMocks()
   vi.clearAllMocks()
@@ -263,25 +269,23 @@ describe('standalone entry', () => {
     signalHandlers.get('SIGTERM')?.[0]?.()
     await vi.waitFor(() => expect(harness.state.stop).toHaveBeenCalled())
     await vi.waitFor(() => expect(exitSpy).toHaveBeenCalledWith(0))
+    expect(harness.state.closeCallbacks).toHaveLength(1)
   })
 
-  // SKIPPED because it reproduces an OPEN DEFECT, reported rather than fixed here.
-  //
-  // src/index.ts:83 is `void gateway.stop().finally(...)`. `.finally()` re-raises the
-  // rejection and `void` attaches no rejection handler, so a stop() failure during
-  // SIGINT/SIGTERM escapes as an unhandled rejection — fatal under Node's default
-  // --unhandled-rejections=throw, in the middle of shutdown. Running this test makes
-  // the whole suite exit non-zero for exactly that reason, and no test-side listener
-  // can absorb it (the escaping promise is derived inside the entry module).
-  //
-  // Un-skip once shutdown() catches, e.g. `void gateway.stop().catch(...).finally(...)`.
-  it.skip('still closes the http server when the gateway fails to stop', async () => {
+  it('logs a gateway stop failure and still closes the http server', async () => {
     await importEntry()
     harness.state.stopRejects = true
 
     signalHandlers.get('SIGINT')?.[0]?.()
     await vi.waitFor(() => expect(harness.state.stop).toHaveBeenCalled())
     await vi.waitFor(() => expect(exitSpy).toHaveBeenCalledWith(0))
+    expect(harness.state.closeCallbacks).toHaveLength(1)
+    expect(console.error).toHaveBeenCalledWith(
+      expect.any(String),
+      '[error]',
+      '[shutdown] gateway stop failed',
+      'stop failed',
+    )
   })
 
   it('runs the shutdown path on SIGINT as well as SIGTERM', async () => {
@@ -297,5 +301,49 @@ describe('standalone entry', () => {
 
     expect(signalHandlers.get('SIGINT')).toHaveLength(1)
     expect(signalHandlers.get('SIGTERM')).toHaveLength(1)
+  })
+
+  it('runs shutdown only once when repeated signals arrive', async () => {
+    let releaseStop!: () => void
+    harness.state.stopPromise = new Promise<void>((resolve) => {
+      releaseStop = resolve
+    })
+    await importEntry()
+
+    signalHandlers.get('SIGTERM')?.[0]?.()
+    signalHandlers.get('SIGINT')?.[0]?.()
+    signalHandlers.get('SIGTERM')?.[0]?.()
+
+    expect(harness.state.stop).toHaveBeenCalledTimes(1)
+    expect(harness.state.closeCallbacks).toHaveLength(1)
+    expect(console.log).toHaveBeenCalledWith(
+      expect.any(String),
+      '[info]',
+      '[shutdown] ignoring SIGINT; shutdown already in progress',
+    )
+
+    releaseStop()
+    await vi.waitFor(() => expect(exitSpy).toHaveBeenCalledWith(0))
+  })
+
+  it('forces a bounded exit when gateway shutdown never settles', async () => {
+    vi.useFakeTimers()
+    harness.state.stopPromise = new Promise<void>(() => {})
+    await importEntry()
+
+    signalHandlers.get('SIGTERM')?.[0]?.()
+
+    expect(harness.state.stop).toHaveBeenCalledTimes(1)
+    expect(harness.state.closeCallbacks).toHaveLength(1)
+    expect(exitSpy).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(5_000)
+
+    expect(exitSpy).toHaveBeenCalledWith(0)
+    expect(console.error).toHaveBeenCalledWith(
+      expect.any(String),
+      '[error]',
+      '[shutdown] forcing process exit after 5000ms',
+    )
   })
 })
