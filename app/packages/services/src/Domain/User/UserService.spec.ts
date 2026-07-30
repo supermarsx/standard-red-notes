@@ -435,6 +435,7 @@ describe('UserService', () => {
       newRootKey.compare.mockReturnValue(true)
       encryptionService.decryptSplit = jest.fn().mockResolvedValue([decryptedPayload])
       encryptionService.encryptSplit = jest.fn().mockResolvedValue([newCiphertext])
+      storageService.getRawPayloads = jest.fn().mockResolvedValueOnce([]).mockResolvedValueOnce([newCiphertext])
 
       await createService().handleEvent({
         type: ApplicationEvent.ApplicationStageChanged,
@@ -456,6 +457,149 @@ describe('UserService', () => {
         },
       })
       expect(storageService.savePayloads).toHaveBeenCalledWith([newCiphertext])
+    })
+
+    it('restages the full rollback snapshot when a persisted new ItemsKey masks an old-root Type-A payload', async () => {
+      const { currentRootKey, newRootKey } = prepareCredentialChange()
+      const oldItemsKeyCiphertext = {
+        uuid: 'old-items-key',
+        content_type: 'SN|ItemsKey',
+        content: '004:old-items-key-ciphertext',
+        enc_item_key: '004:old-items-key',
+        items_key_id: null,
+        errorDecrypting: false,
+        waitingForKey: false,
+      }
+      const oldTrustedContactCiphertext = {
+        uuid: 'trusted-contact',
+        content_type: 'SN|TrustedContact',
+        content: '004:old-trusted-contact-ciphertext',
+        enc_item_key: '004:old-item-key',
+        items_key_id: null,
+        errorDecrypting: false,
+        waitingForKey: false,
+      }
+      const newItemsKeyCiphertext = {
+        ...oldItemsKeyCiphertext,
+        content: '004:new-items-key-ciphertext',
+        enc_item_key: '004:new-item-key',
+      }
+      const newTrustedContactCiphertext = {
+        ...oldTrustedContactCiphertext,
+        content: '004:new-trusted-contact-ciphertext',
+        enc_item_key: '004:new-item-key',
+      }
+      const decryptedItemsKey = {
+        uuid: 'old-items-key',
+        content_type: 'SN|ItemsKey',
+        content: { itemsKey: 'decrypted-items-key' },
+      }
+      const decryptedTrustedContact = {
+        uuid: 'trusted-contact',
+        content_type: 'SN|TrustedContact',
+        content: { contactUuid: 'contact-uuid' },
+      }
+      const journal = {
+        schemaVersion: 1 as const,
+        operationId: 'rotation-id',
+        phase: CredentialRotationPhase.ServerConfirmed,
+        rollbackPayloads: [oldItemsKeyCiphertext, oldTrustedContactCiphertext],
+        newItemsKeyUuid: 'new-items-key',
+      }
+      encryptionService.getCredentialRotationJournal = jest.fn().mockReturnValue(journal)
+      encryptionService.getCredentialRotationSecrets = jest.fn().mockResolvedValue({
+        currentEmail: 'old@example.com',
+        newEmail: 'new@example.com',
+        currentRootKey,
+        newRootKey,
+      })
+      encryptionService.getSureRootKey = jest.fn().mockReturnValue(newRootKey)
+      newRootKey.compare.mockReturnValue(true)
+      storageService.getRawPayloads = jest
+        .fn()
+        .mockResolvedValueOnce([newItemsKeyCiphertext, oldTrustedContactCiphertext])
+        .mockResolvedValueOnce([newItemsKeyCiphertext, newTrustedContactCiphertext])
+      encryptionService.decryptSplit = jest
+        .fn()
+        .mockResolvedValueOnce([decryptedItemsKey, oldTrustedContactCiphertext])
+        .mockResolvedValueOnce([decryptedItemsKey, decryptedTrustedContact])
+        .mockResolvedValueOnce([decryptedItemsKey, decryptedTrustedContact])
+      encryptionService.encryptSplit = jest.fn().mockResolvedValue([newItemsKeyCiphertext, newTrustedContactCiphertext])
+
+      await createService().handleEvent({
+        type: ApplicationEvent.ApplicationStageChanged,
+        payload: {
+          stage: ApplicationStage.Launched_10,
+        },
+      } as never)
+
+      expect(storageService.getRawPayloads).toHaveBeenNthCalledWith(1, ['old-items-key', 'trusted-contact'])
+      expect(storageService.getRawPayloads).not.toHaveBeenCalledWith(['new-items-key'])
+      expect(encryptionService.encryptSplit).toHaveBeenCalledWith({
+        usesRootKey: {
+          items: [decryptedItemsKey, decryptedTrustedContact],
+          key: newRootKey,
+        },
+      })
+      expect(storageService.savePayloads).toHaveBeenCalledWith([newItemsKeyCiphertext, newTrustedContactCiphertext])
+    })
+
+    it('does not rewrite a complete rollback snapshot that already decrypts under the new root', async () => {
+      const { currentRootKey, newRootKey } = prepareCredentialChange()
+      const newCiphertext = {
+        uuid: 'old-items-key',
+        content_type: 'SN|ItemsKey',
+        content: '004:new-ciphertext',
+        enc_item_key: '004:new-item-key',
+        items_key_id: null,
+        errorDecrypting: false,
+        waitingForKey: false,
+      }
+      const decryptedPayload = {
+        uuid: 'old-items-key',
+        content_type: 'SN|ItemsKey',
+        content: { itemsKey: 'decrypted-items-key' },
+      }
+      encryptionService.getCredentialRotationJournal = jest.fn().mockReturnValue({
+        schemaVersion: 1,
+        operationId: 'rotation-id',
+        phase: CredentialRotationPhase.ServerConfirmed,
+        rollbackPayloads: [
+          {
+            ...newCiphertext,
+            content: '004:old-ciphertext',
+            enc_item_key: '004:old-item-key',
+          },
+        ],
+        newItemsKeyUuid: 'new-items-key',
+      })
+      encryptionService.getCredentialRotationSecrets = jest.fn().mockResolvedValue({
+        currentEmail: 'old@example.com',
+        newEmail: 'new@example.com',
+        currentRootKey,
+        newRootKey,
+      })
+      encryptionService.getSureRootKey = jest.fn().mockReturnValue(newRootKey)
+      newRootKey.compare.mockReturnValue(true)
+      storageService.getRawPayloads = jest.fn().mockResolvedValue([newCiphertext])
+      encryptionService.decryptSplit = jest.fn().mockResolvedValue([decryptedPayload])
+      encryptionService.encryptSplit = jest.fn()
+
+      await createService().handleEvent({
+        type: ApplicationEvent.ApplicationStageChanged,
+        payload: {
+          stage: ApplicationStage.Launched_10,
+        },
+      } as never)
+
+      expect(encryptionService.decryptSplit).toHaveBeenCalledWith({
+        usesRootKey: {
+          items: [expect.objectContaining({ uuid: 'old-items-key', content: '004:new-ciphertext' })],
+          key: newRootKey,
+        },
+      })
+      expect(encryptionService.encryptSplit).not.toHaveBeenCalled()
+      expect(storageService.savePayloads).not.toHaveBeenCalled()
     })
 
     it('restores the exact old ciphertext and removes the prepared key after confirmed rollback', async () => {

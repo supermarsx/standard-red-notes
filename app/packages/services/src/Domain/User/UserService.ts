@@ -908,15 +908,12 @@ export class UserService
     journal: CredentialRotationJournal,
     secrets: CredentialRotationSecrets,
   ): Promise<void> {
-    if (journal.newItemsKeyUuid) {
-      const persistedNewItemsKey = await this.storage.getRawPayloads([journal.newItemsKeyUuid])
-      if (persistedNewItemsKey.length > 0) {
-        return
-      }
-    }
-
     const encryptedPayloads = journal.rollbackPayloads.map((payload) => new EncryptedPayload(payload))
     if (encryptedPayloads.length === 0) {
+      return
+    }
+
+    if (await this.credentialRotationSnapshotUsesRoot(journal, secrets.newRootKey)) {
       return
     }
 
@@ -926,17 +923,88 @@ export class UserService
         key: secrets.currentRootKey,
       },
     })
-    if (!decryptedPayloads.every(isDecryptedPayload)) {
+    if (!this.payloadSetMatchesCredentialRotationSnapshot(decryptedPayloads, journal)) {
       throw Error('Unable to decrypt the credential rotation rollback snapshot.')
     }
+    const verifiedDecryptedPayloads = decryptedPayloads.filter(isDecryptedPayload)
 
     const reencryptedPayloads = await this.encryption.encryptSplit({
       usesRootKey: {
-        items: decryptedPayloads,
+        items: verifiedDecryptedPayloads,
         key: secrets.newRootKey,
       },
     })
+    if (
+      !reencryptedPayloads.every(isEncryptedTransferPayload) ||
+      !this.payloadSetHasCredentialRotationSnapshotMetadata(reencryptedPayloads, journal)
+    ) {
+      throw Error('Unable to encrypt the complete credential rotation snapshot.')
+    }
+
     await this.storage.savePayloads(reencryptedPayloads)
+
+    if (!(await this.credentialRotationSnapshotUsesRoot(journal, secrets.newRootKey))) {
+      throw Error('Unable to verify the persisted credential rotation snapshot.')
+    }
+  }
+
+  private async credentialRotationSnapshotUsesRoot(
+    journal: CredentialRotationJournal,
+    rootKey: RootKeyInterface,
+  ): Promise<boolean> {
+    const rollbackUuids = journal.rollbackPayloads.map((payload) => payload.uuid)
+    const persistedPayloads = await this.storage.getRawPayloads(rollbackUuids)
+    if (
+      !persistedPayloads.every(isEncryptedTransferPayload) ||
+      !this.payloadSetHasCredentialRotationSnapshotMetadata(persistedPayloads, journal)
+    ) {
+      return false
+    }
+
+    try {
+      const decryptedPayloads = await this.encryption.decryptSplit({
+        usesRootKey: {
+          items: persistedPayloads.map((payload) => new EncryptedPayload(payload)),
+          key: rootKey,
+        },
+      })
+      return this.payloadSetMatchesCredentialRotationSnapshot(decryptedPayloads, journal)
+    } catch {
+      return false
+    }
+  }
+
+  private payloadSetMatchesCredentialRotationSnapshot(
+    payloads: Awaited<ReturnType<EncryptionProviderInterface['decryptSplit']>>,
+    journal: CredentialRotationJournal,
+  ): boolean {
+    return payloads.every(isDecryptedPayload) && this.payloadSetHasCredentialRotationSnapshotMetadata(payloads, journal)
+  }
+
+  private payloadSetHasCredentialRotationSnapshotMetadata(
+    payloads: readonly { uuid: string; content_type: string }[],
+    journal: CredentialRotationJournal,
+  ): boolean {
+    if (payloads.length !== journal.rollbackPayloads.length) {
+      return false
+    }
+
+    const expectedPayloadsByUuid = new Map(
+      journal.rollbackPayloads.map((payload) => [payload.uuid, payload.content_type]),
+    )
+    if (expectedPayloadsByUuid.size !== journal.rollbackPayloads.length) {
+      return false
+    }
+
+    const seenUuids = new Set<string>()
+    return payloads.every((payload) => {
+      if (seenUuids.has(payload.uuid)) {
+        return false
+      }
+      seenUuids.add(payload.uuid)
+
+      return expectedPayloadsByUuid.get(payload.uuid) === payload.content_type
+    })
   }
 
   private async restoreCredentialRotationRollbackSnapshot(

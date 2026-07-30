@@ -132,10 +132,13 @@ export class Database implements DatabaseInterface {
 
   async multiGet<T>(keys: string[]): Promise<T[]> {
     const results: T[] = []
+    const databaseKeys = keys.map((key) => {
+      return key.startsWith(this.getDatabaseKeyPrefix()) ? key : this.databaseKeyForPayloadId(key)
+    })
 
     if (Platform.OS === 'android') {
       const failedItemIds: string[] = []
-      for (const key of keys) {
+      for (const key of databaseKeys) {
         try {
           const item = await AsyncStorage.getItem(key)
           if (item) {
@@ -155,7 +158,7 @@ export class Database implements DatabaseInterface {
       }
     } else {
       try {
-        const record = await AsyncStorage.getMany(keys)
+        const record = await AsyncStorage.getMany(databaseKeys)
         for (const value of Object.values(record)) {
           if (value) {
             try {
