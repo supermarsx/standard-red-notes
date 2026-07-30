@@ -76,6 +76,7 @@ import { ServerSettingsResolver } from '../src/Service/ServerSettings/ServerSett
 import { registerCaldavRoutes } from '../src/Caldav/registerCaldavRoutes'
 import { registerWorkflowsUiProxy } from '../src/Workflows/registerWorkflowsUiProxy'
 import { startReminderDeliveryScheduler } from '../src/ReminderDelivery/startReminderDeliveryScheduler'
+import { requestBodyLogMetadata } from '../src/Logging/RequestBodyLogMetadata'
 import { attachWebSocketGateway } from '@standard-red-notes/websocket-gateway'
 
 // Standard Red Notes: fail-fast global crash handlers. A genuinely unhandled
@@ -359,7 +360,7 @@ void container
       logger.debug(
         `[URL: |${request.method}| ${request.url}][SNJS: ${request.headers['x-snjs-version']}][Application: ${
           request.headers['x-application-version']
-        }] Request body: ${JSON.stringify(request.body)}`,
+        }] Request body metadata: ${JSON.stringify(requestBodyLogMetadata(request.body))}`,
       )
 
       if ('type' in error && error.type === 'entity.too.large') {

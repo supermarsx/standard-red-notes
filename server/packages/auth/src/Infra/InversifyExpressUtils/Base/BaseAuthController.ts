@@ -296,7 +296,11 @@ export class BaseAuthController extends BaseHttpController {
 
   async pkceSignIn(request: Request, response: Response): Promise<results.JsonResult> {
     if (!request.body.email || !request.body.password || !request.body.code_verifier) {
-      this.logger.debug('/auth/pkce_sign_in request missing credentials: %O', request.body)
+      this.logger.debug('/auth/pkce_sign_in request is missing one or more required credential fields', {
+        hasEmail: typeof request.body.email === 'string' && request.body.email.length > 0,
+        hasPassword: typeof request.body.password === 'string' && request.body.password.length > 0,
+        hasCodeVerifier: typeof request.body.code_verifier === 'string' && request.body.code_verifier.length > 0,
+      })
 
       return this.json(
         {
