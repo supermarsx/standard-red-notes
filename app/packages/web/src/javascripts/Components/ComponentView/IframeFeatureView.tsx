@@ -208,14 +208,12 @@ const IframeFeatureView: FunctionComponent<Props> = ({
   }, [application, requestReload, componentViewer, uiFeature])
 
   const sandboxAttributes = useMemo(() => {
-    const attributes = [
-      'allow-scripts',
-      'allow-top-navigation-by-user-activation',
-      'allow-popups',
-      'allow-modals',
-      'allow-forms',
-      'allow-downloads',
-    ]
+    /**
+     * Component frames must not replace the parent document. On native mobile
+     * the parent owns a privileged bridge, so top navigation is a trust-boundary
+     * violation even when it follows a user activation.
+     */
+    const attributes = ['allow-scripts', 'allow-popups', 'allow-modals', 'allow-forms', 'allow-downloads']
 
     if (uiFeature.isNativeFeature) {
       attributes.push('allow-popups-to-escape-sandbox')

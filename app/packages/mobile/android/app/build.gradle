@@ -134,6 +134,8 @@ android {
 dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
+    // CustomWebViewManager enforces main-frame-only messaging with these APIs.
+    implementation "androidx.webkit:webkit:1.14.0"
 
     implementation 'androidx.appcompat:appcompat:1.7.1'
     implementation 'de.undercouch:gradle-download-task:5.7.0'

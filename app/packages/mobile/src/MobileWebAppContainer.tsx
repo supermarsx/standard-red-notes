@@ -3,6 +3,7 @@
 import { ApplicationEvent, ReactNativeToWebEvent } from '@standardnotes/snjs'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AppState, Button, Dimensions, Keyboard, KeyboardEvent, Platform, Text, View } from 'react-native'
+import { MainBundlePath } from 'react-native-fs'
 import VersionInfo from 'react-native-version-info'
 import { WebView, WebViewMessageEvent } from 'react-native-webview'
 import { OnShouldStartLoadWithRequest, WebViewNativeConfig } from 'react-native-webview/lib/WebViewTypes'
@@ -11,6 +12,14 @@ import { AppStateObserverService } from './AppStateObserverService'
 import { ColorSchemeObserverService } from './ColorSchemeObserverService'
 import CustomAndroidWebView from './CustomAndroidWebView'
 import { MobileDevice, MobileDeviceEvent } from './Lib/MobileDevice'
+import {
+  createMobileDeviceBridgeMethodSource,
+  decideMobileNavigation,
+  isTrustedMobileAppDocumentUrl,
+  MobileDeviceBridgeMethod,
+  parseMobileBridgeRequest,
+  trustedMobileAppDocumentGuardSource,
+} from './Lib/MobileWebViewSecurity'
 import { IsDev } from './Lib/Utils'
 import { ReceivedSharedItemsHandler } from './ReceivedSharedItemsHandler'
 import { ReviewService } from './ReviewService'
@@ -33,6 +42,7 @@ const MobileWebAppContents = ({ destroyAndReload }: { destroyAndReload: () => vo
   const webViewRef = useRef<WebView>(null)
 
   const sourceUri = (Platform.OS === 'android' ? 'file:///android_asset/' : '') + 'Web.bundle/src/index.html'
+  const trustedAppDocumentUri = Platform.OS === 'ios' ? `file://${MainBundlePath}/Web.bundle/src/index.html` : sourceUri
   const stateService = useMemo(() => new AppStateObserverService(), [])
   const androidBackHandlerService = useMemo(() => new AndroidBackHandlerService(), [])
   const colorSchemeService = useMemo(() => new ColorSchemeObserverService(), [])
@@ -223,8 +233,6 @@ const MobileWebAppContents = ({ destroyAndReload }: { destroyAndReload: () => vo
     }
   }, [device, destroyAndReload])
 
-  const functions = Object.getOwnPropertyNames(Object.getPrototypeOf(device))
-
   const baselineFunctions: Record<string, any> = {
     isDeviceDestroyed: `(){
       return false
@@ -236,17 +244,7 @@ const MobileWebAppContents = ({ destroyAndReload }: { destroyAndReload: () => vo
     stringFunctions += `${key}${value}`
   }
 
-  for (const functionName of functions) {
-    if (functionName === 'constructor' || baselineFunctions[functionName]) {
-      continue
-    }
-
-    stringFunctions += `
-    ${functionName}(...args) {
-      return this.askReactNativeToInvokeInterfaceMethod('${functionName}', args);
-    }
-    `
-  }
+  stringFunctions += createMobileDeviceBridgeMethodSource()
 
   const WebProcessDeviceInterface = `
   class WebProcessDeviceInterface {
@@ -274,6 +272,9 @@ const MobileWebAppContents = ({ destroyAndReload }: { destroyAndReload: () => vo
 
     handleReplyFromReactNative( messageId, returnValue) {
       const pendingMessage = this.pendingMessages.find((m) => m.messageId === messageId)
+      if (!pendingMessage) {
+        return
+      }
       pendingMessage.resolve(returnValue)
       this.pendingMessages.splice(this.pendingMessages.indexOf(pendingMessage), 1)
     }
@@ -293,6 +294,10 @@ const MobileWebAppContents = ({ destroyAndReload }: { destroyAndReload: () => vo
   `
 
   const injectedJS = `
+  (() => {
+  if (!(${trustedMobileAppDocumentGuardSource(trustedAppDocumentUri)})) {
+    return;
+  }
 
   console.log = (...args) => {
     window.ReactNativeWebView.postMessage('[web log] ' + args.join(' '));
@@ -327,10 +332,15 @@ const MobileWebAppContents = ({ destroyAndReload }: { destroyAndReload: () => vo
   window.addEventListener('message', handleMessageFromReactNative)
   document.addEventListener('message', handleMessageFromReactNative)
 
+  })();
   true;
     `
 
   const onMessage = (event: WebViewMessageEvent) => {
+    if (!isTrustedMobileAppDocumentUrl(event.nativeEvent.url, sourceUri, trustedAppDocumentUri)) {
+      return
+    }
+
     const message = event.nativeEvent.data
     if (message === 'appLoadError' && Platform.OS === 'android') {
       setShowAndroidWebviewUpdatePrompt(true)
@@ -342,7 +352,11 @@ const MobileWebAppContents = ({ destroyAndReload }: { destroyAndReload: () => vo
       return
     }
     try {
-      const functionData = JSON.parse(message)
+      const functionData = parseMobileBridgeRequest(JSON.parse(message))
+      if (!functionData) {
+        return
+      }
+
       void onFunctionMessage(functionData.functionName, functionData.messageId, functionData.args)
     } catch {
       if (LoggingEnabled) {
@@ -352,8 +366,13 @@ const MobileWebAppContents = ({ destroyAndReload }: { destroyAndReload: () => vo
     }
   }
 
-  const onFunctionMessage = async (functionName: string, messageId: string, args: any) => {
-    const returnValue = await (device as any)[functionName](...args)
+  const onFunctionMessage = async (
+    functionName: MobileDeviceBridgeMethod,
+    messageId: string | number,
+    args: unknown[],
+  ) => {
+    const method = device[functionName] as (...methodArgs: unknown[]) => unknown
+    const returnValue = await method.apply(device, args)
     if (LoggingEnabled && functionName !== 'consoleLog') {
       // eslint-disable-next-line no-console
       console.log(`Native device function ${functionName} called`)
@@ -362,31 +381,13 @@ const MobileWebAppContents = ({ destroyAndReload }: { destroyAndReload: () => vo
   }
 
   const onShouldStartLoadWithRequest: OnShouldStartLoadWithRequest = (request) => {
-    /**
-     * We want to handle link clicks within an editor by opening the browser
-     * instead of loading inline. On iOS, onShouldStartLoadWithRequest is
-     * called for all requests including the initial request to load the editor.
-     * On iOS, clicks in the editors have a navigationType of 'click', but on
-     * Android, this is not the case (no navigationType).
-     * However, on Android, this function is not called for the initial request.
-     * So that might be one way to determine if this request is a click or the
-     * actual editor load request. But I don't think it's safe to rely on this
-     * being the case in the future. So on Android, we'll handle url loads only
-     * if the url isn't equal to the editor url.
-     */
-
-    const shouldStopRequest =
-      (Platform.OS === 'ios' && request.navigationType === 'click') ||
-      (Platform.OS === 'android' && request.url !== sourceUri)
-
-    const isComponentUrl = device.isUrlRegisteredComponentUrl(request.url)
-
-    if (shouldStopRequest && !isComponentUrl) {
+    const decision = decideMobileNavigation(request, sourceUri, trustedAppDocumentUri)
+    if (decision === 'open-external') {
       device.openUrl(request.url)
       return false
     }
 
-    return true
+    return decision === 'allow'
   }
 
   const requireInlineMediaPlaybackForMomentsFeature = true
@@ -497,6 +498,7 @@ const MobileWebAppContents = ({ destroyAndReload }: { destroyAndReload: () => vo
         allowFileAccess={true}
         allowUniversalAccessFromFileURLs={true}
         injectedJavaScriptBeforeContentLoaded={injectedJS}
+        injectedJavaScriptBeforeContentLoadedForMainFrameOnly={true}
         bounces={false}
         keyboardDisplayRequiresUserAction={false}
         allowsInlineMediaPlayback={requireInlineMediaPlaybackForMomentsFeature}
@@ -513,7 +515,7 @@ const MobileWebAppContents = ({ destroyAndReload }: { destroyAndReload: () => vo
             component: CustomAndroidWebView,
           } as WebViewNativeConfig,
         })}
-        webviewDebuggingEnabled
+        webviewDebuggingEnabled={IsDev}
       />
     </View>
   )

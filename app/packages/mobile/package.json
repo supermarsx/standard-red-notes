@@ -20,6 +20,7 @@
     "lint": "yarn eslint src",
     "pods": "yarn install:pods",
     "start": "react-native start",
+    "test": "jest --config jest.config.js",
     "tsc": "tsc --noEmit",
     "upgrade:snjs": "ncu -u '@standardnotes/*'",
     "bundle:web": "mkdir -p html/Web.bundle/src/web-src/ && cp -r ../web/dist/. html/Web.bundle/src/web-src/ && node scripts/configure-web-bundle.js"
@@ -41,6 +42,7 @@
     "@standardnotes/react-native-utils": "1.0.1",
     "@standardnotes/snjs": "workspace:*",
     "@standardnotes/web": "workspace:*",
+    "@types/jest": "^30.0.0",
     "@types/react": "^19.2.17",
     "@typescript-eslint/eslint-plugin": "^8.64.0",
     "@typescript-eslint/parser": "^8.64.0",
@@ -49,6 +51,7 @@
     "eslint": "^9.39.5",
     "eslint-plugin-prettier": "^5.5.6",
     "get-yarn-workspaces": "^1.0.2",
+    "jest": "^30.4.2",
     "npm-check-updates": "^22.2.9",
     "pod-install": "^1.1.0",
     "prettier": "3.9.5",

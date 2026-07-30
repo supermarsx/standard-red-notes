@@ -33,13 +33,13 @@ import FileViewer from 'react-native-file-viewer'
 import FingerprintScanner from 'react-native-fingerprint-scanner'
 import FlagSecure from 'react-native-flag-secure-android'
 import {
-  CachesDirectoryPath,
   DocumentDirectoryPath,
   DownloadDirectoryPath,
   exists,
   MainBundlePath,
   readFile,
   readFileAssets,
+  TemporaryDirectoryPath,
   unlink,
   writeFile,
 } from 'react-native-fs'
@@ -52,6 +52,11 @@ import { Database } from './Database/Database'
 import { isLegacyIdentifier } from './Database/LegacyIdentifier'
 import { LegacyKeyValueStore } from './Database/LegacyKeyValueStore'
 import Keychain from './Keychain'
+import {
+  assertSafeMobileFileName,
+  createContainedMobileFilePath,
+  createTemporaryMobileFileName,
+} from './MobileFilePathSecurity'
 import notifee, { AuthorizationStatus, Notification, NotificationSettings } from '@notifee/react-native'
 
 export type BiometricsType = 'Fingerprint' | 'Face ID' | 'Biometrics' | 'Touch ID'
@@ -458,7 +463,7 @@ export class MobileDevice implements MobileDeviceInterface {
     return false
   }
 
-  async deleteFileAtPathIfExists(path: string) {
+  private async deleteFileAtPathIfExists(path: string) {
     if (await exists(path)) {
       await unlink(path)
     }
@@ -484,14 +489,18 @@ export class MobileDevice implements MobileDeviceInterface {
     }
   }
 
-  getFileDestinationPath(filename: string, saveInTempLocation: boolean): string {
-    let directory = DocumentDirectoryPath
+  private getFileDestinationPath(filename: string, saveInTempLocation: boolean): string {
+    const safeFilename = assertSafeMobileFileName(filename)
+    const directory = saveInTempLocation
+      ? TemporaryDirectoryPath
+      : Platform.OS === 'android'
+        ? DownloadDirectoryPath
+        : DocumentDirectoryPath
+    const destinationFilename = saveInTempLocation
+      ? createTemporaryMobileFileName(safeFilename, `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`)
+      : safeFilename
 
-    if (Platform.OS === 'android') {
-      directory = saveInTempLocation ? CachesDirectoryPath : DownloadDirectoryPath
-    }
-
-    return `${directory}/${filename}`
+    return createContainedMobileFilePath(directory, destinationFilename)
   }
 
   async downloadBase64AsFile(
@@ -499,12 +508,13 @@ export class MobileDevice implements MobileDeviceInterface {
     filename: string,
     saveInTempLocation = false,
   ): Promise<string | undefined> {
-    if (Platform.OS === 'android') {
-      await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.WRITE_EXTERNAL_STORAGE)
-    }
-
     try {
       const path = this.getFileDestinationPath(filename, saveInTempLocation)
+
+      if (Platform.OS === 'android' && !saveInTempLocation) {
+        await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.WRITE_EXTERNAL_STORAGE)
+      }
+
       await this.deleteFileAtPathIfExists(path)
       await writeFile(path, base64.replace(/data.*base64,/, ''), 'base64')
       return path
@@ -538,6 +548,7 @@ export class MobileDevice implements MobileDeviceInterface {
       })
     } catch (error) {
       this.consoleLog(error)
+      await this.deleteFileAtPathIfExists(tempLocation)
       return false
     }
 
