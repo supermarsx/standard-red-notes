@@ -12,6 +12,7 @@ import {
   pageAnchor,
   renderBlock,
   renderMarkdown,
+  renderOnlinePageSupplement,
 } from './export-app-docs-to-pages.mjs'
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -176,6 +177,14 @@ test('renderMarkdown emits front matter, a table of contents and anchored sectio
 
 test('renderMarkdown omits the Related line when a page has no related pages', () => {
   assert.ok(!renderMarkdown([category()]).includes('Related:'))
+})
+
+test('the online interface page receives the validated source-capture supplement only', () => {
+  const supplement = renderOnlinePageSupplement('getting-started/interface-tour')
+
+  assert.match(supplement, /include feature-screenshot\.html/)
+  assert.match(supplement, /id="app-guide-interface"/)
+  assert.equal(renderOnlinePageSupplement('getting-started/create-first-note'), undefined)
 })
 
 test('renderMarkdown collapses runs of blank lines to at most one', () => {

@@ -1,0 +1,76 @@
+{% assign screenshot_variant = include.variant | default: "card" %}
+{% assign marker_radius = 15 %}
+{% if screenshot_variant == "overview" %}
+  {% assign marker_radius = 18 %}
+{% endif %}
+<figure
+  class="feature-screenshot feature-screenshot--{{ screenshot_variant }}"
+  data-docs-screenshot-id="{{ include.id | escape }}"
+  data-docs-view-box="{{ include.view_box | escape }}"
+>
+  <a
+    class="feature-screenshot__frame"
+    href="{{ '/assets/readme-screenshot.png' | relative_url }}"
+    aria-label="Open the original app capture: {{ include.alt | escape }}"
+  >
+    <svg
+      viewBox="{{ include.view_box | escape }}"
+      width="{{ include.width }}"
+      height="{{ include.height }}"
+      preserveAspectRatio="xMidYMid meet"
+      role="img"
+      aria-labelledby="{{ include.id | escape }}-title"
+      focusable="false"
+    >
+      <title id="{{ include.id | escape }}-title">{{ include.alt | escape }}</title>
+      <image
+        href="{{ '/assets/readme-screenshot.png' | relative_url }}"
+        x="0"
+        y="0"
+        width="1440"
+        height="900"
+      />
+      <g
+        class="feature-screenshot__marker"
+        transform="translate({{ include.marker_one_x }} {{ include.marker_one_y }})"
+        aria-hidden="true"
+      >
+        <circle r="{{ marker_radius }}"></circle>
+        <text x="0" y="1">1</text>
+      </g>
+      {% if include.marker_two_x %}
+      <g
+        class="feature-screenshot__marker"
+        transform="translate({{ include.marker_two_x }} {{ include.marker_two_y }})"
+        aria-hidden="true"
+      >
+        <circle r="{{ marker_radius }}"></circle>
+        <text x="0" y="1">2</text>
+      </g>
+      {% endif %}
+      {% if include.marker_three_x %}
+      <g
+        class="feature-screenshot__marker"
+        transform="translate({{ include.marker_three_x }} {{ include.marker_three_y }})"
+        aria-hidden="true"
+      >
+        <circle r="{{ marker_radius }}"></circle>
+        <text x="0" y="1">3</text>
+      </g>
+      {% endif %}
+    </svg>
+  </a>
+  <figcaption>
+    <strong>{{ include.title | escape }}</strong>
+    <p>{{ include.caption | escape }}</p>
+    <ol class="feature-screenshot__targets">
+      <li>{{ include.marker_one_text | escape }}</li>
+      {% if include.marker_two_text %}
+      <li>{{ include.marker_two_text | escape }}</li>
+      {% endif %}
+      {% if include.marker_three_text %}
+      <li>{{ include.marker_three_text | escape }}</li>
+      {% endif %}
+    </ol>
+  </figcaption>
+</figure>

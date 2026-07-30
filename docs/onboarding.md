@@ -20,10 +20,6 @@ instance to sign in to (your own, or one someone runs for you).
 - [Tips and keyboard shortcuts](#tips-and-keyboard-shortcuts)
 - [Getting help](#getting-help)
 
----
-
-{% include workspace-tour.html %}
-
 ## What this is
 
 Standard Red Notes is a private, **end-to-end encrypted** notes app. Your notes
@@ -39,8 +35,6 @@ upgrade to unlock things.
 > through a 5-minute Docker setup, every configuration option, backups, and
 > troubleshooting. The rest of *this* guide is about using the app once you can
 > reach it.
-
----
 
 ## First steps
 
@@ -80,8 +74,6 @@ website can.
 > **Preferences -> Security -> Server Access Key** *before* signing in. It is
 > stored only on that device and is separate from your account password.
 
----
-
 ## The basics
 
 ### Creating and editing notes
@@ -91,6 +83,26 @@ website can.
 - The **note list** sits between your navigation sidebar and the editor. Use the
   options at the top of the list to change sort order (by date modified,
   created, or title) and what's displayed.
+
+{% include feature-screenshot.html
+  id="onboarding-note-list"
+  variant="inline"
+  view_box="220 0 400 300"
+  width="400"
+  height="300"
+  alt="Wide-screen notes list with create, search, quick-action, and note-row controls"
+  title="Create, search, and choose a note"
+  caption="This is a crop of the real wide-screen demo capture; the controls reflow on narrow screens."
+  marker_one_x="551"
+  marker_one_y="29"
+  marker_one_text="Create a note from the red plus button."
+  marker_two_x="412"
+  marker_two_y="73"
+  marker_two_text="Search the current Notes collection."
+  marker_three_x="244"
+  marker_three_y="167"
+  marker_three_text="The highlighted first row is open in the editor."
+%}
 
 ### Finding things
 
@@ -112,8 +124,6 @@ From a note's **options menu** (the "..." / context menu) you can:
 
 The navigation sidebar has built-in smart views for **Notes**, **Starred**,
 **Archived**, and **Trash**.
-
----
 
 ## Editors
 
@@ -152,8 +162,6 @@ freeform drawing surface.
 The editor is chosen **per note**. Open the **editor menu** for a note (the
 editor/format selector in the note's options) and pick Plain, Super, Canvas, or
 any other available editor. You can change a note's editor at any time.
-
----
 
 ## Organizing and navigating
 
@@ -196,8 +204,6 @@ you want.
 Both the navigation sidebar and the note list can be **collapsed** to give the
 editor more room. Collapse them when you want to focus, expand them when you want
 to browse.
-
----
 
 ## Power features
 
@@ -268,8 +274,6 @@ loss only while you retain its password. Recovering after a forgotten password
 requires an independently usable copy, such as a carefully protected decrypted
 export or an encrypted export whose password you still know.
 
----
-
 ## Security: what leaves your device
 
 End-to-end encryption means your note **content** is encrypted locally and the
@@ -288,8 +292,6 @@ cross that boundary — here's an honest summary so there are no surprises:
 The takeaway: your notes are private by default. Each feature above is a
 deliberate, opt-in trade-off — use them knowingly.
 
----
-
 ## Tips and keyboard shortcuts
 
 - **Ctrl/Cmd + Shift + ;** — open the **command palette**.
@@ -304,8 +306,6 @@ deliberate, opt-in trade-off — use them knowingly.
 - Prefer a **local AI model** (LM Studio / Ollama) if you want assistant
   features without sending content to a cloud provider.
 - Export an **encrypted backup** before any big change or migration.
-
----
 
 ## Getting help
 

@@ -198,8 +198,22 @@ npm --prefix e2e run screenshot:readme
 ```
 
 The script opens the live app with Playwright, seeds local demo notes through the
-real in-page application surface when available, and writes
-`docs/assets/readme-screenshot.png`.
+real in-page application surface, verifies the controls documented by the site
+are visible, and writes a deterministic 1440 × 900
+`docs/assets/readme-screenshot.png`. It fails instead of replacing the source
+capture with a login screen or incomplete app shell.
+
+Validate the committed image and every documentation crop without launching a
+browser:
+
+```powershell
+yarn docs:screenshots
+```
+
+That gate checks the PNG dimensions, source asset reference, SVG image
+dimensions, accessible text, crop bounds, marker coordinates and descriptions,
+unique IDs, and contextual coverage in onboarding, client-platform, and in-app
+guidance.
 
 ## Deeper End-to-End Gates
 

@@ -1,7 +1,8 @@
-import { existsSync, mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
+import { README_SCREENSHOT_CONTRACT, readPngDimensions } from './validate-docs-screenshots.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(__dirname, '..')
@@ -11,6 +12,8 @@ const APP_URL = process.env.APP_URL ?? process.env.SRN_SCREENSHOT_URL ?? 'http:/
 const requireFromE2E = createRequire(join(ROOT, 'e2e', 'package.json'))
 const { chromium } = requireFromE2E('playwright')
 const DEMO_SUPER_TITLE = 'Super note demo'
+const SCREENSHOT_WIDTH = README_SCREENSHOT_CONTRACT.width
+const SCREENSHOT_HEIGHT = README_SCREENSHOT_CONTRACT.height
 
 const chromeCandidates = [
   process.env.CHROME_PATH,
@@ -158,24 +161,60 @@ async function polishForScreenshot(page) {
   await page.waitForTimeout(500)
 }
 
+async function assertDocumentedControlsAreVisible(page) {
+  const targets = [
+    ['navigation topic search', page.locator('input[placeholder="Search topics..."]').first()],
+    ['notes search', page.locator('input[placeholder="Search..."]').first()],
+    ['quick-action row', page.getByText('Add a quick action', { exact: true }).first()],
+    ['linked-items entry point', page.getByText('LINKS', { exact: true }).first()],
+    ['Super editor Home ribbon tab', page.getByRole('tab', { name: 'Home', exact: true }).first()],
+    ['Super editor Tools ribbon tab', page.getByRole('tab', { name: 'Tools', exact: true }).first()],
+    ['seeded Super note', page.getByText(DEMO_SUPER_TITLE, { exact: true }).first()],
+  ]
+
+  for (const [label, locator] of targets) {
+    await locator.waitFor({ state: 'visible', timeout: 20_000 }).catch((error) => {
+      throw new Error(`Cannot capture the documented workspace because ${label} is not visible: ${error.message}`)
+    })
+  }
+}
+
 mkdirSync(dirname(OUT), { recursive: true })
 
 const browser = await chromium.launch({ headless: true, ...launchOptions() })
 try {
   const context = await browser.newContext({
-    viewport: { width: 1440, height: 900 },
+    viewport: { width: SCREENSHOT_WIDTH, height: SCREENSHOT_HEIGHT },
     deviceScaleFactor: 1,
     colorScheme: 'dark',
   })
   const page = await context.newPage()
   page.setDefaultTimeout(60_000)
   await waitForApp(page)
-  await seedDemoNotes(page).catch((error) => {
-    console.warn(`Could not seed demo notes; capturing the loaded app shell instead: ${error.message}`)
-  })
+  await seedDemoNotes(page)
   await polishForScreenshot(page)
-  await page.screenshot({ path: OUT, fullPage: false })
-  console.log(`Captured README screenshot from ${APP_URL} -> ${OUT}`)
+  await assertDocumentedControlsAreVisible(page)
+  await page.evaluate(async () => {
+    await document.fonts?.ready
+  })
+  await page.screenshot({
+    path: OUT,
+    fullPage: false,
+    animations: 'disabled',
+    caret: 'hide',
+    scale: 'css',
+  })
+
+  const dimensions = readPngDimensions(readFileSync(OUT))
+  if (dimensions.width !== SCREENSHOT_WIDTH || dimensions.height !== SCREENSHOT_HEIGHT) {
+    throw new Error(
+      `Captured ${dimensions.width}x${dimensions.height}; expected ${SCREENSHOT_WIDTH}x${SCREENSHOT_HEIGHT}`,
+    )
+  }
+
+  console.log(
+    `Captured verified ${SCREENSHOT_WIDTH}x${SCREENSHOT_HEIGHT} README screenshot from ${APP_URL} -> ${OUT}`,
+  )
 } finally {
   await browser.close()
 }

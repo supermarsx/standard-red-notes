@@ -351,97 +351,123 @@
   margin: 0;
 }
 
-.workspace-tour__overview {
-  overflow: hidden;
-  border: 1px solid var(--line);
+.workspace-tour > .feature-screenshot--overview {
   border-radius: 14px;
-  background: var(--panel);
   box-shadow: 0 18px 48px rgb(69 31 36 / 12%);
 }
 
-.workspace-tour__overview a,
-.workspace-tour__overview img {
-  display: block;
-}
-
-.workspace-tour__overview img {
-  width: 100%;
-  height: auto;
-}
-
-.workspace-tour__overview figcaption {
-  border-top: 1px solid var(--line);
-  color: var(--muted);
-  font-size: 0.88rem;
-  padding: 0.75rem 1rem;
-}
-
-.workspace-tour__snippets {
+.feature-screenshot-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
   gap: 1rem;
   margin-top: 1rem;
 }
 
-.workspace-snippet {
+.feature-screenshot {
   overflow: hidden;
+  margin: 1.5rem 0;
   border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--panel);
 }
 
-.workspace-snippet__frame {
-  position: relative;
-  display: block;
-  aspect-ratio: 4 / 3;
-  overflow: hidden;
+.feature-screenshot-grid > .feature-screenshot {
+  margin: 0;
+}
+
+.feature-screenshot--inline {
+  max-width: 52rem;
+}
+
+.feature-screenshot__frame {
+  display: flex;
+  height: 15rem;
+  align-items: center;
+  justify-content: center;
   border-bottom: 1px solid var(--line);
   background: #141010;
 }
 
-.workspace-snippet__frame img {
-  position: absolute;
-  top: 50%;
-  width: 225%;
-  max-width: none;
+.feature-screenshot--inline .feature-screenshot__frame,
+.feature-screenshot--overview .feature-screenshot__frame {
   height: auto;
-  transform: translateY(-50%);
+}
+
+.feature-screenshot__frame svg {
+  display: block;
+  width: 100%;
+  height: 100%;
   transition: transform 180ms ease;
 }
 
-.workspace-snippet__frame:hover img,
-.workspace-snippet__frame:focus-visible img {
-  transform: translateY(-50%) scale(1.025);
+.feature-screenshot--inline .feature-screenshot__frame svg,
+.feature-screenshot--overview .feature-screenshot__frame svg {
+  height: auto;
 }
 
-.workspace-snippet__frame:focus-visible {
+.feature-screenshot__frame:hover svg,
+.feature-screenshot__frame:focus-visible svg {
+  transform: scale(1.018);
+}
+
+.feature-screenshot__frame:focus-visible {
   outline: 3px solid var(--red);
   outline-offset: -3px;
 }
 
-.workspace-snippet__frame--navigation img {
-  left: 0;
+.feature-screenshot__marker circle {
+  fill: var(--red);
+  stroke: #fff;
+  stroke-width: 3;
+  filter: drop-shadow(0 3px 6px rgb(0 0 0 / 70%));
 }
 
-.workspace-snippet__frame--notes img {
-  left: -64%;
+.feature-screenshot__marker text {
+  fill: #fff;
+  font: 800 16px/1 Inter, ui-sans-serif, system-ui, sans-serif;
+  text-anchor: middle;
+  dominant-baseline: central;
+  pointer-events: none;
 }
 
-.workspace-snippet__frame--editor img {
-  right: 0;
-}
-
-.workspace-snippet figcaption {
+.feature-screenshot figcaption {
   color: var(--muted);
   font-size: 0.88rem;
   line-height: 1.5;
-  padding: 0.8rem 0.9rem 0.95rem;
+  padding: 0.85rem 0.95rem 1rem;
 }
 
-.workspace-snippet figcaption strong {
+.feature-screenshot figcaption > strong {
   display: block;
   margin-bottom: 0.15rem;
   color: var(--ink);
+  font-size: 0.98rem;
+}
+
+.feature-screenshot figcaption p {
+  margin: 0;
+}
+
+.feature-screenshot__targets {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0.65rem 0 0;
+  padding-left: 1.4rem;
+}
+
+.feature-screenshot__targets li {
+  padding-left: 0.12rem;
+}
+
+.feature-screenshot__targets li::marker {
+  color: var(--red);
+  font-weight: 800;
+}
+
+.feature-screenshot--overview .feature-screenshot__targets {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem 1.25rem;
 }
 
 @media (max-width: 760px) {
@@ -454,12 +480,13 @@
     flex-direction: column;
   }
 
-  .workspace-tour__snippets {
+  .feature-screenshot-grid,
+  .feature-screenshot--overview .feature-screenshot__targets {
     grid-template-columns: 1fr;
   }
 
-  .workspace-snippet__frame {
-    aspect-ratio: 16 / 9;
+  .feature-screenshot-grid .feature-screenshot__frame {
+    height: 13rem;
   }
 }
 

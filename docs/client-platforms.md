@@ -10,6 +10,26 @@ and mobile bundles it inside a React Native WebView with native adapters. That
 shared foundation keeps the data model and encryption behavior aligned, but
 platform integrations are intentionally different.
 
+{% include feature-screenshot.html
+  id="client-wide-workspace"
+  variant="inline"
+  view_box="0 0 1440 440"
+  width="1440"
+  height="440"
+  alt="Upper wide-screen workspace with navigation, notes list, and the active Super editor"
+  title="Shared wide-screen application surface"
+  caption="The real capture documents the wide web/desktop layout only; it does not depict mobile, native backup, biometric, or browser-clipper controls."
+  marker_one_x="106"
+  marker_one_y="69"
+  marker_one_text="The navigation sidebar exposes its own topic search."
+  marker_two_x="412"
+  marker_two_y="73"
+  marker_two_text="The notes list has a separate collection search."
+  marker_three_x="660"
+  marker_three_y="181"
+  marker_three_text="The open Super note shows its active ribbon."
+%}
+
 ## Capability matrix
 
 | Capability | Web | Desktop | Android/iOS | Browser clipper |
@@ -31,9 +51,10 @@ native package adds the matching OS integration.
 
 ## Web
 
-The web client is the reference user interface and can run against the bundled
-home server or another compatible Standard Notes server. Its persistent local
-state lives in browser storage. Browser controls therefore matter:
+The web client is the reference user interface and runs against the bundled
+home server. Use another Standard Notes-family server only after validating the
+exact client/server version pair. Its persistent local state lives in browser
+storage. Browser controls therefore matter:
 
 - Do not clear site data unless the account has fully synchronized or you have
   a current export.
@@ -42,6 +63,14 @@ state lives in browser storage. Browser controls therefore matter:
 - File downloads and passkey support depend on browser permissions. The local
   passkey gate requires an app passcode as its recovery method.
 - A private browsing session is not a durable local database.
+
+{% include safety-alert.html
+  level="danger"
+  title="Local-only means this device may hold the only copy"
+  body="Clearing site data, deleting the browser profile, resetting the app, or losing the device can permanently remove local-only notes. Export them before storage maintenance, and do not assume an untested client will honor this fork’s local-only sync filter."
+  link_url="/standard-notes-compatibility.html#content-features-and-local-only-data"
+  link_text="Check the interoperability boundary"
+%}
 
 The web app also contains the administrator console. It is shown only when the
 client believes the account has the admin role, and every operation is
@@ -118,4 +147,6 @@ can inspect pages containing sensitive information.
 
 For cross-client behavior, continue with [Sync and Data
 Lifecycle](sync-and-data-lifecycle.md) and [Security and
-Account](security-and-account.md).
+Account](security-and-account.md). For original Standard Notes clients, servers,
+and backups, use the [compatibility
+matrix](standard-notes-compatibility.md#compatibility-matrix).
