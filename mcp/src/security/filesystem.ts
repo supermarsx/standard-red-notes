@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
@@ -89,4 +90,60 @@ export async function resolveAllowedOutputFile(
     throw new Error("export path is outside the configured allowlist");
   }
   return candidate;
+}
+
+/**
+ * Write a private file without ever opening an existing destination for
+ * writing. Data first lands in an owner-only same-directory temporary file.
+ * Linking (no-overwrite) or renaming (overwrite) changes the directory entry,
+ * so a leaf symlink can never redirect bytes outside the allowlist.
+ */
+export async function writePrivateOutputFile(
+  target: string,
+  data: string | Uint8Array,
+  overwrite: boolean,
+): Promise<void> {
+  const temporary = path.join(
+    path.dirname(target),
+    `.srn-export-${randomUUID()}.tmp`,
+  );
+  let temporaryExists = false;
+  try {
+    await fs.writeFile(temporary, data, { flag: "wx", mode: 0o600 });
+    temporaryExists = true;
+
+    if (overwrite) {
+      try {
+        const existing = await fs.lstat(target);
+        if (existing.isSymbolicLink() || !existing.isFile()) {
+          throw new Error(
+            "refusing to overwrite a symlink or non-regular export target",
+          );
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw error;
+        }
+      }
+      // rename replaces the directory entry; it never follows the destination
+      // leaf. If a platform cannot atomically replace an existing file, fail
+      // closed and leave the original untouched.
+      await fs.rename(temporary, target);
+      temporaryExists = false;
+    } else {
+      // An atomic hard-link creation has O_EXCL-like destination semantics:
+      // any existing file, directory, symlink, or junction makes it fail.
+      await fs.link(temporary, target);
+      await fs.unlink(temporary);
+      temporaryExists = false;
+    }
+
+    if (process.platform !== "win32") {
+      await fs.chmod(target, 0o600);
+    }
+  } finally {
+    if (temporaryExists) {
+      await fs.unlink(temporary).catch(() => {});
+    }
+  }
 }

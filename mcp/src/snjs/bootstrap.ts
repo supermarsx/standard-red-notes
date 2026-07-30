@@ -45,6 +45,60 @@ export interface BootstrapOptions {
    * without waiting for a tool call. 0 disables the loop. Default 10000.
    */
   syncIntervalMs?: number;
+  /**
+   * Invoked once after an upstream 401/expired-session failure has caused the
+   * bridge to wipe local account state and deinitialize.
+   */
+  onUnauthorized?: () => void;
+}
+
+export function isUnauthorizedError(error: unknown): boolean {
+  const seen = new Set<unknown>();
+  const queue: unknown[] = [error];
+  while (queue.length > 0) {
+    const value = queue.shift();
+    if (value == null || seen.has(value)) {
+      continue;
+    }
+    seen.add(value);
+    if (typeof value === "number" && (value === 401 || value === 498)) {
+      return true;
+    }
+    if (typeof value === "string") {
+      if (
+        /\b(?:401|498)\b/.test(value) ||
+        /unauthori[sz]ed|invalid session|expired access token/i.test(value)
+      ) {
+        return true;
+      }
+      continue;
+    }
+    if (typeof value === "object") {
+      if (value instanceof Error) {
+        queue.push(value.message, value.cause);
+      }
+      for (const [key, nested] of Object.entries(
+        value as Record<string, unknown>,
+      )) {
+        if (
+          (key === "status" || key === "statusCode" || key === "code") &&
+          (nested === 401 || nested === 498)
+        ) {
+          return true;
+        }
+        if (
+          key === "message" ||
+          key === "error" ||
+          key === "cause" ||
+          key === "response" ||
+          key === "data"
+        ) {
+          queue.push(nested);
+        }
+      }
+    }
+  }
+  return false;
 }
 
 export interface HeadlessApp {
@@ -63,7 +117,14 @@ export interface HeadlessApp {
   /** How many MFA/2FA challenges snjs has raised (e.g. during sign-in). */
   getMfaChallengeCount(): number;
   /** Background-sync health, to detect a silently-failing ("zombie") bridge. */
-  getSyncHealth(): { consecutiveFailures: number; lastError?: string };
+  getSyncHealth(): {
+    consecutiveFailures: number;
+    lastError?: string;
+    lastSuccessfulSyncAt?: string;
+    authorizationLost: boolean;
+  };
+  /** Delete all local account state and deinitialize. Idempotent. */
+  wipe(): Promise<void>;
   deinit(): Promise<void>;
 }
 
@@ -178,6 +239,22 @@ export async function bootstrapHeadlessApp(
   // expired -> the loop keeps failing silently while isSignedIn() stays true).
   let consecutiveSyncFailures = 0;
   let lastSyncError: string | undefined;
+  let lastSuccessfulSyncAt: string | undefined;
+  let authorizationLost = false;
+  let wiping: Promise<void> | undefined;
+  let deinitialized = false;
+
+  async function handleAuthorizationLoss(): Promise<void> {
+    if (authorizationLost) {
+      return;
+    }
+    authorizationLost = true;
+    try {
+      await result.wipe();
+    } finally {
+      options.onUnauthorized?.();
+    }
+  }
 
   const result: HeadlessApp = {
     app,
@@ -197,10 +274,14 @@ export async function bootstrapHeadlessApp(
           .then(() => {
             consecutiveSyncFailures = 0;
             lastSyncError = undefined;
+            lastSuccessfulSyncAt = new Date().toISOString();
           })
           .catch((e: unknown) => {
             consecutiveSyncFailures += 1;
             lastSyncError = e instanceof Error ? e.message : String(e);
+            if (isUnauthorizedError(e)) {
+              void handleAuthorizationLoss();
+            }
           })
           .finally(() => {
             syncing = false;
@@ -210,10 +291,17 @@ export async function bootstrapHeadlessApp(
       syncTimer.unref?.();
     },
 
-    getSyncHealth(): { consecutiveFailures: number; lastError?: string } {
+    getSyncHealth(): {
+      consecutiveFailures: number;
+      lastError?: string;
+      lastSuccessfulSyncAt?: string;
+      authorizationLost: boolean;
+    } {
       return {
         consecutiveFailures: consecutiveSyncFailures,
         lastError: lastSyncError,
+        lastSuccessfulSyncAt,
+        authorizationLost,
       };
     },
 
@@ -259,6 +347,7 @@ export async function bootstrapHeadlessApp(
       const res = await signInWithMcpToken(app, options.serverUrl, fullToken);
       consecutiveSyncFailures = 0;
       lastSyncError = undefined;
+      lastSuccessfulSyncAt = new Date().toISOString();
       return res;
     },
 
@@ -279,11 +368,50 @@ export async function bootstrapHeadlessApp(
         await app.sync.sync({ sourceDescription: "mcp-bridge" });
         consecutiveSyncFailures = 0;
         lastSyncError = undefined;
+        lastSuccessfulSyncAt = new Date().toISOString();
       } catch (e) {
         consecutiveSyncFailures += 1;
         lastSyncError = e instanceof Error ? e.message : String(e);
+        if (isUnauthorizedError(e)) {
+          await handleAuthorizationLoss();
+        }
         throw e;
       }
+    },
+
+    async wipe(): Promise<void> {
+      if (wiping) {
+        return wiping;
+      }
+      wiping = (async () => {
+        if (syncTimer) {
+          clearInterval(syncTimer);
+          syncTimer = undefined;
+        }
+        try {
+          await Promise.race([
+            Promise.resolve(app.user?.signOut?.(true)),
+            new Promise<void>((resolve) => {
+              const timeout = setTimeout(resolve, 5_000);
+              timeout.unref?.();
+            }),
+          ]);
+        } catch {
+          // An upstream 401 can make the remote logout call fail. Local wipe is
+          // mandatory regardless, so continue to the device-level erasure.
+        }
+        await device.clearAllDataFromDevice([identifier]);
+        await device.flushWrites();
+        if (!deinitialized) {
+          deinitialized = true;
+          try {
+            await app.prepareForDeinit?.();
+          } finally {
+            app.deinit?.(1);
+          }
+        }
+      })();
+      return wiping;
     },
 
     async deinit(): Promise<void> {
@@ -291,8 +419,14 @@ export async function bootstrapHeadlessApp(
         clearInterval(syncTimer);
         syncTimer = undefined;
       }
-      await app.prepareForDeinit?.();
-      app.deinit?.(1);
+      if (!deinitialized) {
+        deinitialized = true;
+        try {
+          await app.prepareForDeinit?.();
+        } finally {
+          app.deinit?.(1);
+        }
+      }
       // Ensure any storage/keychain writes queued during teardown actually land
       // before the process exits.
       await device.flushWrites().catch(() => {});

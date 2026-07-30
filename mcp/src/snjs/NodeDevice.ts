@@ -66,7 +66,10 @@ export class NodeDevice {
     if (this.loaded) {
       return;
     }
-    await fs.mkdir(this.dataDir, { recursive: true });
+    await fs.mkdir(this.dataDir, { recursive: true, mode: 0o700 });
+    if (process.platform !== "win32") {
+      await fs.chmod(this.dataDir, 0o700);
+    }
     this.storage = new Map(
       Object.entries(
         (await this.readJson("storage.json")) as Record<string, string>,
@@ -127,8 +130,14 @@ export class NodeDevice {
   private async doWrite(name: string, data: string): Promise<void> {
     const tmp = this.file(`${name}.${this.writeSeq++}.tmp`);
     try {
-      await fs.writeFile(tmp, data, "utf8");
+      await fs.writeFile(tmp, data, {
+        encoding: "utf8",
+        mode: 0o600,
+      });
       await fs.rename(tmp, this.file(name));
+      if (process.platform !== "win32") {
+        await fs.chmod(this.file(name), 0o600);
+      }
     } catch (error) {
       // Best-effort cleanup so failed renames don't leak temp files forever.
       await fs.rm(tmp, { force: true }).catch(() => {});

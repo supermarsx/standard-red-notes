@@ -20,6 +20,16 @@ function fixture() {
     uuid: "hidden-note",
     title: "Hidden",
   };
+  const visibleVault = {
+    uuid: "visible-vault",
+    name: "Visible vault",
+    isSharedVaultListing: () => false,
+  };
+  const hiddenVault = {
+    uuid: "hidden-vault",
+    name: "Hidden vault",
+    isSharedVaultListing: () => false,
+  };
   const relations = new Map<unknown, any[]>([
     [visible, [allowed, denied]],
     [hidden, [denied]],
@@ -32,8 +42,13 @@ function fixture() {
       getSortedTagsForItem: (note: unknown) => relations.get(note) ?? [],
     },
     vaults: {
-      getItemVault: () => undefined,
-      getVaults: () => [],
+      getItemVault: (item: unknown) =>
+        item === visible
+          ? visibleVault
+          : item === hidden
+            ? hiddenVault
+            : undefined,
+      getVaults: () => [visibleVault, hiddenVault],
     },
     mutator: {
       unlinkItems: vi.fn(async (tag: any, note: unknown) => {
@@ -60,7 +75,7 @@ function fixture() {
     baseUrl: "http://127.0.0.1",
     allowedTagUuids: [allowed.uuid],
   });
-  return { client, app, allowed, denied };
+  return { client, app, allowed, denied, visible };
 }
 
 describe("exact advisory tag scope", () => {
@@ -104,6 +119,7 @@ describe("exact advisory tag scope", () => {
       cryptographic: false,
       tagUuids: [allowed.uuid],
     });
+    expect(client.accountStatus().vaultCount).toBe(1);
   });
 
   test("blocks account-wide exports that would bypass advisory filtering", async () => {
@@ -114,5 +130,14 @@ describe("exact advisory tag scope", () => {
         overwrite: false,
       }),
     ).rejects.toThrow("tag filtering is not a cryptographic boundary");
+  });
+
+  test("normalizes malformed timestamps to a finite deterministic cursor value", async () => {
+    const { client, visible } = fixture();
+    (visible as any).updated_at = "not-a-date";
+    (visible as any).created_at = undefined;
+    await expect(client.listNotes(1)).resolves.toMatchObject({
+      notes: [{ updatedAt: "1970-01-01T00:00:00.000Z" }],
+    });
   });
 });

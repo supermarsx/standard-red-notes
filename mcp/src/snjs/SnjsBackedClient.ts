@@ -1,5 +1,6 @@
 import snjs from "@standardnotes/snjs";
-import { constants as fsConstants, promises as fs } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { HeadlessApp } from "./bootstrap.js";
 import {
@@ -11,9 +12,10 @@ import {
 import {
   resolveAllowedInputFile,
   resolveAllowedOutputFile,
+  writePrivateOutputFile,
 } from "../security/filesystem.js";
 
-const { ContentType, UuidGenerator } = snjs as unknown as Record<string, any>;
+const { ContentType } = snjs as unknown as Record<string, any>;
 
 export interface NoteSummary {
   uuid: string;
@@ -60,13 +62,17 @@ export interface SnjsBackedClientOptions {
 }
 
 function iso(d: unknown): string {
-  if (d instanceof Date) {
-    return d.toISOString();
-  }
-  if (typeof d === "string" || typeof d === "number") {
-    return new Date(d).toISOString();
-  }
-  return new Date().toISOString();
+  return new Date(validTime(d) ?? 0).toISOString();
+}
+
+function validTime(value: unknown): number | undefined {
+  const time =
+    value instanceof Date
+      ? value.getTime()
+      : typeof value === "string" || typeof value === "number"
+        ? new Date(value).getTime()
+        : Number.NaN;
+  return Number.isFinite(time) ? time : undefined;
 }
 
 // A just-created item that hasn't round-tripped a server-assigned update stamp
@@ -76,24 +82,18 @@ function updatedAtIso(note: {
   updated_at?: unknown;
   created_at?: unknown;
 }): string {
-  const u = note.updated_at;
-  if (u instanceof Date && u.getTime() > 0) {
-    return u.toISOString();
-  }
-  if (
-    (typeof u === "string" || typeof u === "number") &&
-    new Date(u).getTime() > 0
-  ) {
-    return new Date(u).toISOString();
-  }
-  return iso(note.created_at);
+  return new Date(updatedAtMs(note)).toISOString();
 }
 
 function updatedAtMs(note: {
   updated_at?: unknown;
   created_at?: unknown;
 }): number {
-  return new Date(updatedAtIso(note)).getTime();
+  const updated = validTime(note.updated_at);
+  if (updated !== undefined && updated > 0) {
+    return updated;
+  }
+  return validTime(note.created_at) ?? 0;
 }
 
 function clientErrorMessage(value: unknown, fallback: string): string {
@@ -312,6 +312,14 @@ export class SnjsBackedClient {
 
   async listVaults(): Promise<VaultSummary[]> {
     await this.headless.sync();
+    return this.visibleVaults().map((v: any) => ({
+      uuid: v.uuid,
+      name: v.name ?? "",
+      shared: v.isSharedVaultListing?.() ?? false,
+    }));
+  }
+
+  private visibleVaults(): any[] {
     let vaults = this.app.vaults.getVaults();
     if (this.allowedTagUuids !== undefined) {
       const visibleVaultUuids = new Set(
@@ -321,11 +329,7 @@ export class SnjsBackedClient {
       );
       vaults = vaults.filter((vault: any) => visibleVaultUuids.has(vault.uuid));
     }
-    return vaults.map((v: any) => ({
-      uuid: v.uuid,
-      name: v.name ?? "",
-      shared: v.isSharedVaultListing?.() ?? false,
-    }));
+    return vaults;
   }
 
   async createVault(name: string, description?: string): Promise<VaultSummary> {
@@ -643,7 +647,10 @@ export class SnjsBackedClient {
     }
 
     const files = this.app.files;
-    const operation = await files.beginNewFileUpload(bytes.byteLength);
+    const operation = await files.beginNewFileUpload(
+      bytes.byteLength,
+      this.app.vaults.getItemVault(note),
+    );
     if (!operation || typeof operation.getProgress !== "function") {
       throw new Error(
         clientErrorMessage(operation, "failed to begin attachment upload"),
@@ -665,7 +672,7 @@ export class SnjsBackedClient {
         );
       }
     }
-    const uuid = UuidGenerator.GenerateUuid();
+    const uuid = randomUUID();
     const file = await files.finishUpload(
       operation,
       { name: fileName, mimeType: input.mimeType },
@@ -678,6 +685,7 @@ export class SnjsBackedClient {
     }
     const associated = await this.app.mutator.associateFileWithNote(file, note);
     if (!associated) {
+      await files.deleteFile(file).catch(() => undefined);
       throw new Error("failed to associate attachment with note");
     }
     await this.headless.sync();
@@ -719,14 +727,7 @@ export class SnjsBackedClient {
         `encrypted export exceeds ${this.maxExportBytes} byte limit`,
       );
     }
-    await fs.writeFile(outputPath, serialized, {
-      encoding: "utf8",
-      flag: input.overwrite ? "w" : "wx",
-      mode: 0o600,
-    });
-    if (process.platform !== "win32") {
-      await fs.chmod(outputPath, fsConstants.S_IRUSR | fsConstants.S_IWUSR);
-    }
+    await writePrivateOutputFile(outputPath, serialized, input.overwrite);
     return { path: outputPath, bytes, encrypted: true };
   }
 
@@ -775,7 +776,7 @@ export class SnjsBackedClient {
             this.allowedTagUuids === undefined ||
             this.allowedTagUuids.has(tag.uuid),
         ).length,
-      vaultCount: this.app.vaults.getVaults().length,
+      vaultCount: this.visibleVaults().length,
       tagScope: {
         restricted: this.allowedTagUuids !== undefined,
         enforcement: "client-side-advisory",
