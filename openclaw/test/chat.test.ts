@@ -5,9 +5,11 @@ const h = vi.hoisted(() => ({
   /** Lines `rl.question()` yields, in order, before `endWith` is thrown. */
   lines: [] as string[],
   endWith: null as unknown,
+  createError: undefined as Error | undefined,
   runCalls: [] as unknown[][],
+  runOpts: [] as Record<string, unknown>[],
   sessionCtorArgs: [] as Record<string, unknown>[],
-  appended: [] as { file: string; data: string }[],
+  auditFiles: [] as string[],
   replies: [] as string[],
   rlClosed: 0,
   sessionClosed: 0,
@@ -21,6 +23,31 @@ vi.mock("../src/providers/factory.js", () => ({
 }));
 
 vi.mock("../src/mcp/session.js", () => ({
+  sessionOptionsFromConfig: (
+    config: {
+      mcp: {
+        local?: Record<string, unknown>;
+        remote?: Record<string, unknown>;
+      };
+      security: { allow_filesystem_paths: string[] };
+    },
+    audit: (entry: unknown) => void,
+    onStderr: (chunk: string) => void,
+  ) => {
+    const transport = config.mcp.local
+      ? { ...config.mcp.local }
+      : { remote: config.mcp.remote };
+    return {
+      ...transport,
+      audit,
+      onStderr,
+      allowedScopes:
+        (config.mcp.local?.scopes as string[] | undefined) ??
+        (config.mcp.remote?.scopes as string[] | undefined) ??
+        [],
+      allowedFilesystemPaths: config.security.allow_filesystem_paths,
+    };
+  },
   McpSession: class {
     constructor(opts: Record<string, unknown>) {
       h.sessionCtorArgs.push(opts);
@@ -34,37 +61,44 @@ vi.mock("../src/mcp/session.js", () => ({
   },
 }));
 
-vi.mock("../src/core/agent.js", () => ({
-  run: async (messages: unknown[], opts: Record<string, unknown>) => {
-    // Snapshot the history as it was at call time — chat.ts mutates the array.
-    h.runCalls.push(structuredClone(messages));
-    (opts.onTextDelta as ((c: string) => void) | undefined)?.("streamed");
-    return {
-      finalText: h.replies[h.runCalls.length - 1] ?? "reply",
-      steps: 1,
-      stopReason: "end_turn",
-    };
+vi.mock("../src/core/agent.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/core/agent.js")>();
+  return {
+    ...actual,
+    run: async (messages: unknown[], opts: Record<string, unknown>) => {
+      // Snapshot the history as it was at call time — chat.ts mutates the array.
+      h.runCalls.push(structuredClone(messages));
+      h.runOpts.push(opts);
+      (opts.onTextDelta as ((c: string) => void) | undefined)?.("streamed");
+      return {
+        finalText: h.replies[h.runCalls.length - 1] ?? "reply",
+        steps: 1,
+        stopReason: "end_turn",
+      };
+    },
+  };
+});
+
+vi.mock("../src/util/audit.js", () => ({
+  createAuditSink: (file: string) => {
+    h.auditFiles.push(file);
+    return () => undefined;
   },
 }));
 
 vi.mock("node:readline/promises", () => ({
-  createInterface: () => ({
-    question: async () => {
-      const next = h.lines.shift();
-      if (next === undefined) throw h.endWith;
-      return next;
-    },
-    close: () => {
-      h.rlClosed += 1;
-    },
-  }),
-}));
-
-vi.mock("node:os", () => ({ homedir: () => "/home/tester" }));
-vi.mock("node:fs", () => ({
-  mkdirSync: () => {},
-  appendFileSync: (file: string, data: string) => {
-    h.appended.push({ file, data });
+  createInterface: () => {
+    if (h.createError) throw h.createError;
+    return {
+      question: async () => {
+        const next = h.lines.shift();
+        if (next === undefined) throw h.endWith;
+        return next;
+      },
+      close: () => {
+        h.rlClosed += 1;
+      },
+    };
   },
 }));
 
@@ -77,7 +111,12 @@ function eof(): Error & { code: string } {
 function baseConfig(overrides: Record<string, unknown> = {}) {
   return {
     provider: { type: "mock" },
-    agent: { audit_file: "/tmp/audit.jsonl", max_steps: 5 },
+    agent: {
+      audit_file: "/tmp/audit.jsonl",
+      max_steps: 5,
+      scratchpad_kb: 4,
+    },
+    security: { allow_filesystem_paths: [] },
     mcp: {
       local: { command: "node", args: [], env: {}, scopes: ["read"] },
     },
@@ -92,9 +131,11 @@ beforeEach(() => {
   h.config = baseConfig();
   h.lines = [];
   h.endWith = eof();
+  h.createError = undefined;
   h.runCalls.length = 0;
+  h.runOpts.length = 0;
   h.sessionCtorArgs.length = 0;
-  h.appended = [];
+  h.auditFiles.length = 0;
   h.replies = [];
   h.rlClosed = 0;
   h.sessionClosed = 0;
@@ -107,12 +148,12 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("chat without a local MCP", () => {
+describe("chat without an MCP transport", () => {
   it("refuses with exit code 1 and never starts a session", async () => {
     h.config = baseConfig({ mcp: {} });
 
     await expect(chat()).resolves.toBe(1);
-    expect(stderr.mock.calls.at(0)?.[0]).toContain("No local MCP configured");
+    expect(stderr.mock.calls.at(0)?.[0]).toContain("No MCP configured");
     expect(h.started).toBe(0);
   });
 });
@@ -160,39 +201,44 @@ describe("chat conversation loop", () => {
 
     expect(stdout.mock.calls.at(0)?.[0]).toContain("chat with anthropic");
   });
-});
 
-describe("chat audit sink", () => {
-  it("writes one JSON line per audited tool call and tolerates a write failure", async () => {
+  it("passes the configured scratchpad bound and audit path", async () => {
     h.lines = ["a question"];
     await chat();
 
-    const sink = h.sessionCtorArgs[0].audit as (e: unknown) => void;
-    sink({ tool: "notes.search", ok: true });
-
-    expect(h.appended).toHaveLength(1);
-    expect(h.appended[0].file).toBe("/tmp/audit.jsonl");
-    expect(h.appended[0].data).toBe(
-      JSON.stringify({ tool: "notes.search", ok: true }) + "\n",
-    );
-
-    h.appended.push = () => {
-      throw new Error("EACCES");
-    };
-    expect(() => sink({ tool: "notes.create", ok: false })).not.toThrow();
+    expect(h.runOpts[0].scratchpadBytes).toBe(4 * 1024);
+    expect(h.auditFiles).toEqual(["/tmp/audit.jsonl"]);
   });
 
-  it("expands a leading ~ in the audit path to the home directory", async () => {
-    h.config = baseConfig({
-      agent: { audit_file: "~/.openclaw/audit.jsonl", max_steps: 5 },
-    });
-    h.lines = ["a question"];
+  it("keeps persistent chat history within the scratchpad bound", async () => {
+    h.lines = ["x".repeat(5_000), "second"];
     await chat();
 
-    const sink = h.sessionCtorArgs[0].audit as (e: unknown) => void;
-    sink({ tool: "notes.search", ok: true });
+    expect(
+      Buffer.byteLength(JSON.stringify(h.runCalls[1]), "utf8"),
+    ).toBeLessThanOrEqual(4 * 1024);
+    expect(JSON.stringify(h.runCalls[1])).toContain("second");
+  });
 
-    expect(h.appended[0].file).toBe("/home/tester/.openclaw/audit.jsonl");
+  it("supports a remote MCP transport", async () => {
+    h.config = baseConfig({
+      mcp: {
+        remote: {
+          url: "http://127.0.0.1:3010/mcp",
+          scopes: ["read"],
+        },
+      },
+    });
+    h.lines = ["status"];
+
+    await expect(chat()).resolves.toBe(0);
+    expect(h.sessionCtorArgs[0]).toMatchObject({
+      remote: {
+        url: "http://127.0.0.1:3010/mcp",
+        scopes: ["read"],
+      },
+      allowedScopes: ["read"],
+    });
   });
 });
 
@@ -221,5 +267,15 @@ describe("chat shutdown", () => {
     );
     expect(h.rlClosed).toBe(1);
     expect(h.sessionClosed).toBe(1);
+  });
+
+  it("releases the session if readline initialization fails", async () => {
+    h.createError = new Error("readline unavailable");
+
+    await expect(chat()).resolves.toBe(0);
+
+    expect(h.sessionClosed).toBe(1);
+    expect(h.rlClosed).toBe(0);
+    expect(stderr.mock.calls.at(-1)?.[0]).toContain("readline unavailable");
   });
 });

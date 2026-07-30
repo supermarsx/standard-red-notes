@@ -24,8 +24,31 @@ export function redactToken(input: string): string {
   );
 }
 
+export function redactPathText(input: string): string {
+  return input
+    .replace(
+      /(^|[\s"'(=])((?:[A-Za-z]:[\\/]|\\\\)[^\s"'`),;]+)/g,
+      "$1<redacted-path>",
+    )
+    .replace(
+      /(^|[\s"'(=])((?:~\/|\/(?!\/))[^\s"'`),;]+)/g,
+      "$1<redacted-path>",
+    );
+}
+
+export function redactSensitiveText(input: string): string {
+  return redactPathText(redactToken(input));
+}
+
 /** Keys whose value is a note payload — summarised rather than stored. */
 const PAYLOAD_KEYS = new Set(["body", "content", "text"]);
+const PATH_KEYS = new Set([
+  "directory",
+  "filepath",
+  "outputpath",
+  "path",
+  "root",
+]);
 
 /**
  * Keys whose value is a credential, matched exactly after normalisation.
@@ -81,6 +104,19 @@ function isCredentialKey(key: string): boolean {
   );
 }
 
+function isPathKey(key: string): boolean {
+  const normalized = normalizeKey(key);
+  return (
+    PATH_KEYS.has(normalized) ||
+    normalized.endsWith("directory") ||
+    normalized.endsWith("filepath") ||
+    normalized.endsWith("path") ||
+    normalized.endsWith("root")
+  );
+}
+
+const NOTE_SUMMARY_PATTERN = /^<note:[^>]+ (?:empty|\d+ chars)>$/;
+
 export interface NoteRef {
   uuid?: string;
   title?: string;
@@ -90,6 +126,7 @@ export function noteSummary(
   content: string | undefined,
   ref: NoteRef = {},
 ): string {
+  if (content && NOTE_SUMMARY_PATTERN.test(content)) return content;
   if (!content) return `<note:${ref.uuid ?? "unknown"} empty>`;
   const len = content.length;
   return `<note:${ref.uuid ?? "unknown"} ${len} chars>`;
@@ -104,13 +141,15 @@ export function noteSummary(
  */
 export function redactForAudit<T>(value: T): unknown {
   if (value == null) return value;
-  if (typeof value === "string") return redactToken(value);
+  if (typeof value === "string") return redactSensitiveText(value);
   if (Array.isArray(value)) return value.map((v) => redactForAudit(v));
   if (typeof value === "object") {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
       if (PAYLOAD_KEYS.has(k.toLowerCase())) {
         out[k] = typeof v === "string" ? noteSummary(v) : "<redacted>";
+      } else if (isPathKey(k)) {
+        out[k] = "<redacted-path>";
       } else if (isCredentialKey(k)) {
         // Wholesale, and without a length hint — unlike a note summary, the
         // length of a credential is itself worth withholding.

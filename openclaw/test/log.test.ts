@@ -36,8 +36,33 @@ describe("log", () => {
     expect(lines()[0]).toMatchObject({
       level: "warn",
       msg: "config loaded",
-      path: "/tmp/a.toml",
+      path: "<redacted-path>",
       count: 3,
+    });
+  });
+
+  it("redacts credentials in both the message and structured fields", () => {
+    log.error("request failed with sk-abc12345secret", {
+      authorization: "Bearer sk-abc12345secret",
+      nested: { token: "sk-abc12345secret" },
+    });
+
+    expect(lines()[0]).toMatchObject({
+      msg: "request failed with <redacted-token>",
+      authorization: "<redacted-credential>",
+      nested: { token: "<redacted-credential>" },
+    });
+    expect(written[0]).not.toContain("abc12345secret");
+  });
+
+  it("redacts paths embedded in log messages and error strings", () => {
+    log.error("failed to open /home/user/private.toml", {
+      error: "ENOENT C:\\Users\\user\\private.toml",
+    });
+
+    expect(lines()[0]).toMatchObject({
+      msg: "failed to open <redacted-path>",
+      error: "ENOENT <redacted-path>",
     });
   });
 

@@ -1,6 +1,6 @@
 import { loadConfig } from "../config/load.js";
 import type { Config } from "../config/schema.js";
-import { McpSession } from "../mcp/session.js";
+import { McpSession, sessionOptionsFromConfig } from "../mcp/session.js";
 import { log } from "../util/log.js";
 
 export async function doctor(): Promise<number> {
@@ -35,24 +35,23 @@ export async function doctor(): Promise<number> {
     bad++;
   }
 
-  if (cfg.mcp.local) {
-    const session = new McpSession({
-      ...cfg.mcp.local,
-      allowedScopes: cfg.mcp.local.scopes,
-      audit: () => undefined,
-    });
+  if (cfg.mcp.local || cfg.mcp.remote) {
+    const transportName = cfg.mcp.local ? "local" : "remote";
+    let session: McpSession | undefined;
     try {
+      session = new McpSession(sessionOptionsFromConfig(cfg, () => undefined));
       await session.start();
       const tools = session.tools();
       out.write(
-        `✓ local MCP connected, ${tools.length} tools allowed in scope\n`,
+        `✓ ${transportName} MCP connected, ${tools.length} tools allowed in scope\n`,
       );
       for (const t of tools) out.write(`  - ${t.name} [${t.scope}]\n`);
-      await session.close();
     } catch (err) {
-      log.error("local mcp probe failed", { err: String(err) });
-      out.write(`✗ local MCP failed: ${String(err)}\n`);
+      log.error(`${transportName} mcp probe failed`, { err: String(err) });
+      out.write(`✗ ${transportName} MCP failed: ${String(err)}\n`);
       bad++;
+    } finally {
+      await session?.close().catch(() => undefined);
     }
   }
 

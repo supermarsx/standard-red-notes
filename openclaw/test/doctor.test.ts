@@ -3,15 +3,45 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 // Only the two I/O boundaries are replaced: reading the config file and
 // spawning a real MCP server. All of doctor's branching is exercised for real.
 vi.mock("../src/config/load.js", () => ({ loadConfig: vi.fn() }));
-vi.mock("../src/mcp/session.js", () => ({ McpSession: vi.fn() }));
+vi.mock("../src/mcp/session.js", () => ({
+  McpSession: vi.fn(),
+  sessionOptionsFromConfig: vi.fn(
+    (
+      cfg: {
+        mcp: {
+          local?: Record<string, unknown>;
+          remote?: Record<string, unknown>;
+        };
+        security: { allow_filesystem_paths: string[] };
+      },
+      audit: (entry: unknown) => void,
+    ) => {
+      if (cfg.mcp.local) {
+        return {
+          ...cfg.mcp.local,
+          audit,
+          allowedScopes: cfg.mcp.local.scopes,
+          allowedFilesystemPaths: cfg.security.allow_filesystem_paths,
+        };
+      }
+      return {
+        remote: cfg.mcp.remote,
+        audit,
+        allowedScopes: cfg.mcp.remote?.scopes,
+        allowedFilesystemPaths: cfg.security.allow_filesystem_paths,
+      };
+    },
+  ),
+}));
 
 import { doctor } from "../src/cli/doctor.js";
 import { loadConfig } from "../src/config/load.js";
-import { McpSession } from "../src/mcp/session.js";
+import { McpSession, sessionOptionsFromConfig } from "../src/mcp/session.js";
 import { configSchema } from "../src/config/schema.js";
 
 const loadConfigMock = vi.mocked(loadConfig);
 const McpSessionMock = vi.mocked(McpSession);
+const sessionOptionsFromConfigMock = vi.mocked(sessionOptionsFromConfig);
 
 let out: string;
 let stdout: ReturnType<typeof vi.spyOn>;
@@ -29,6 +59,8 @@ beforeEach(() => {
   vi.spyOn(process.stderr, "write").mockImplementation(() => true);
   delete process.env.ANTHROPIC_API_KEY;
   delete process.env.OPENAI_API_KEY;
+  sessionOptionsFromConfigMock.mockClear();
+  session({});
 });
 
 afterEach(() => {
@@ -79,7 +111,7 @@ describe("doctor", () => {
   it("flags a missing ANTHROPIC_API_KEY for the anthropic provider", async () => {
     config({
       provider: { type: "anthropic" },
-      mcp: { remote: { url: "https://mcp.local" } },
+      mcp: { remote: { url: "http://127.0.0.1:3010/mcp" } },
     });
     expect(await doctor()).toBe(1);
     expect(out).toContain("✓ config loaded");
@@ -91,7 +123,7 @@ describe("doctor", () => {
     process.env.ANTHROPIC_API_KEY = "sk-ant";
     config({
       provider: { type: "anthropic" },
-      mcp: { remote: { url: "https://mcp.local" } },
+      mcp: { remote: { url: "http://127.0.0.1:3010/mcp" } },
     });
     expect(await doctor()).toBe(0);
     expect(out).toContain("✓ provider credentials present");
@@ -101,7 +133,7 @@ describe("doctor", () => {
   it("flags a missing OPENAI_API_KEY for the openai provider", async () => {
     config({
       provider: { type: "openai" },
-      mcp: { remote: { url: "https://mcp.local" } },
+      mcp: { remote: { url: "http://127.0.0.1:3010/mcp" } },
     });
     expect(await doctor()).toBe(1);
     expect(out).toContain("✗ OPENAI_API_KEY not set");
@@ -110,7 +142,7 @@ describe("doctor", () => {
   it("does not require a key for local providers", async () => {
     config({
       provider: { type: "ollama" },
-      mcp: { remote: { url: "https://mcp.local" } },
+      mcp: { remote: { url: "http://127.0.0.1:3010/mcp" } },
     });
     expect(await doctor()).toBe(0);
     expect(out).toContain("✓ provider credentials present");
@@ -147,6 +179,24 @@ describe("doctor", () => {
       args: ["mcp/dist/index.cjs"],
       allowedScopes: ["read", "write"],
     });
+  });
+
+  it("probes a configured remote MCP transport", async () => {
+    config({
+      provider: { type: "mock" },
+      mcp: {
+        remote: {
+          url: "http://127.0.0.1:3010/mcp",
+          scopes: ["read"],
+        },
+      },
+    });
+    session({ tools: [{ name: "server.status", scope: "read" }] });
+
+    expect(await doctor()).toBe(0);
+    expect(out).toContain("✓ remote MCP connected, 1 tools allowed in scope");
+    expect(out).toContain("- server.status [read]");
+    expect(sessionOptionsFromConfigMock).toHaveBeenCalledOnce();
   });
 
   it("returns 1 and reports the failure when the local MCP probe throws", async () => {

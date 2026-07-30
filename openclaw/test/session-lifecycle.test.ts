@@ -1,4 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { configSchema } from "../src/config/schema.js";
 import type { Scope } from "../src/config/schema.js";
 
 const h = vi.hoisted(() => ({
@@ -15,20 +19,35 @@ const h = vi.hoisted(() => ({
   transportClosed: 0,
   transportPid: 4242 as number | undefined,
   transportOpts: [] as Record<string, unknown>[],
+  remoteTransportOpts: [] as {
+    url: string;
+    opts: Record<string, unknown>;
+  }[],
+  remoteClosed: 0,
+  remoteTerminated: 0,
+  remoteTerminateThrows: null as unknown,
+  remoteSessionId: "session-1" as string | undefined,
   stderrHandlers: [] as ((chunk: unknown) => void)[],
-  connected: [] as unknown[],
+  connected: [] as { transport: unknown; options: unknown }[],
+  listOptions: [] as unknown[],
+  callRequests: [] as {
+    request: unknown;
+    options: unknown;
+  }[],
 }));
 
 vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
   Client: class {
-    async connect(transport: unknown) {
+    async connect(transport: unknown, options: unknown) {
       if (h.connectThrows) throw h.connectThrows;
-      h.connected.push(transport);
+      h.connected.push({ transport, options });
     }
-    async listTools() {
+    async listTools(_params: unknown, options: unknown) {
+      h.listOptions.push(options);
       return { tools: h.tools };
     }
-    async callTool() {
+    async callTool(request: unknown, _schema: unknown, options: unknown) {
+      h.callRequests.push({ request, options });
       if (h.callThrows) throw h.callThrows;
       return h.callResult;
     }
@@ -58,7 +77,24 @@ vi.mock("@modelcontextprotocol/sdk/client/stdio.js", () => ({
   },
 }));
 
-const { McpSession } = await import("../src/mcp/session.js");
+vi.mock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
+  StreamableHTTPClientTransport: class {
+    sessionId = h.remoteSessionId;
+    constructor(url: URL, opts: Record<string, unknown>) {
+      h.remoteTransportOpts.push({ url: url.toString(), opts });
+    }
+    async terminateSession() {
+      h.remoteTerminated += 1;
+      if (h.remoteTerminateThrows) throw h.remoteTerminateThrows;
+    }
+    async close() {
+      h.remoteClosed += 1;
+    }
+  },
+}));
+
+const { McpSession, sessionOptionsFromConfig } =
+  await import("../src/mcp/session.js");
 
 type Audit = Parameters<
   ConstructorParameters<typeof McpSession>[0]["audit"]
@@ -92,8 +128,15 @@ beforeEach(() => {
   h.transportClosed = 0;
   h.transportPid = 4242;
   h.transportOpts.length = 0;
+  h.remoteTransportOpts.length = 0;
+  h.remoteClosed = 0;
+  h.remoteTerminated = 0;
+  h.remoteTerminateThrows = null;
+  h.remoteSessionId = "session-1";
   h.stderrHandlers.length = 0;
   h.connected.length = 0;
+  h.listOptions.length = 0;
+  h.callRequests.length = 0;
 });
 
 describe("McpSession.start", () => {
@@ -140,6 +183,186 @@ describe("McpSession.start", () => {
     expect(h.transportClosed).toBe(1);
     expect(session.childPid()).toBeNull();
   });
+
+  it("connects to remote Streamable HTTP with bearer auth and bounded retries", async () => {
+    const { session } = makeSession({
+      command: undefined,
+      remote: {
+        url: "http://127.0.0.1:3010/mcp",
+        bearerToken: "test-secret",
+      },
+      timeoutMs: 4_321,
+    });
+
+    await session.start();
+
+    expect(h.remoteTransportOpts[0].url).toBe("http://127.0.0.1:3010/mcp");
+    const requestInit = h.remoteTransportOpts[0].opts.requestInit as {
+      headers: Headers;
+    };
+    expect(requestInit.headers.get("authorization")).toBe("Bearer test-secret");
+    expect(h.remoteTransportOpts[0].opts.reconnectionOptions).toMatchObject({
+      maxRetries: 2,
+      maxReconnectionDelay: 2_000,
+    });
+    expect(h.connected[0].options).toEqual({
+      timeout: 4_321,
+      maxTotalTimeout: 4_321,
+    });
+    expect(h.listOptions[0]).toEqual({
+      timeout: 4_321,
+      maxTotalTimeout: 4_321,
+    });
+    expect(session.childPid()).toBeNull();
+  });
+
+  it("rejects ambiguous, insecure, and unbounded direct session options", () => {
+    expect(
+      () =>
+        new McpSession({
+          allowedScopes: ["read"],
+          audit: () => undefined,
+        }),
+    ).toThrow(/exactly one/);
+    expect(
+      () =>
+        new McpSession({
+          command: "node",
+          remote: { url: "http://127.0.0.1:3010/mcp" },
+          allowedScopes: ["read"],
+          audit: () => undefined,
+        }),
+    ).toThrow(/exactly one/);
+    expect(
+      () =>
+        new McpSession({
+          remote: { url: "http://mcp.example.test/mcp" },
+          allowedScopes: ["read"],
+          audit: () => undefined,
+        }),
+    ).toThrow(/HTTPS and bearer/);
+    expect(() => makeSession({ timeoutMs: 999 })).toThrow(/timeout/);
+    expect(() => makeSession({ maxResponseBytes: 0 })).toThrow(
+      /response limit/,
+    );
+  });
+});
+
+describe("sessionOptionsFromConfig", () => {
+  it("maps local transport limits and explicit filesystem roots", () => {
+    const previous = process.env.OPENCLAW_TEST_LOCAL_TOKEN;
+    process.env.OPENCLAW_TEST_LOCAL_TOKEN = "local-runtime-secret";
+    const cfg = configSchema.parse({
+      provider: { type: "mock" },
+      mcp: {
+        local: {
+          command: "custom-mcp",
+          env: { MCP_TRANSPORT: "stdio" },
+          env_from: ["OPENCLAW_TEST_LOCAL_TOKEN"],
+          scopes: ["read", "files"],
+          timeout_ms: 2_000,
+          max_response_kb: 2,
+        },
+      },
+      security: { allow_filesystem_paths: ["C:\\vault"] },
+    });
+    const audit = () => undefined;
+
+    try {
+      expect(sessionOptionsFromConfig(cfg, audit)).toMatchObject({
+        command: "custom-mcp",
+        env: {
+          MCP_TRANSPORT: "stdio",
+          OPENCLAW_TEST_LOCAL_TOKEN: "local-runtime-secret",
+        },
+        allowedScopes: ["read", "files"],
+        allowedFilesystemPaths: ["C:\\vault"],
+        timeoutMs: 2_000,
+        maxResponseBytes: 2_048,
+        audit,
+      });
+    } finally {
+      if (previous === undefined) delete process.env.OPENCLAW_TEST_LOCAL_TOKEN;
+      else process.env.OPENCLAW_TEST_LOCAL_TOKEN = previous;
+    }
+  });
+
+  it("fails closed when an explicitly inherited local variable is missing", () => {
+    const previous = process.env.OPENCLAW_TEST_LOCAL_MISSING;
+    delete process.env.OPENCLAW_TEST_LOCAL_MISSING;
+    try {
+      const cfg = configSchema.parse({
+        provider: { type: "mock" },
+        mcp: {
+          local: { env_from: ["OPENCLAW_TEST_LOCAL_MISSING"] },
+        },
+      });
+      expect(() => sessionOptionsFromConfig(cfg, () => undefined)).toThrow(
+        /local MCP environment variable is not set/,
+      );
+    } finally {
+      if (previous === undefined)
+        delete process.env.OPENCLAW_TEST_LOCAL_MISSING;
+      else process.env.OPENCLAW_TEST_LOCAL_MISSING = previous;
+    }
+  });
+
+  it("loads the remote bearer from the named environment variable", () => {
+    const previous = process.env.OPENCLAW_TEST_MCP_TOKEN;
+    process.env.OPENCLAW_TEST_MCP_TOKEN = "runtime-secret";
+    try {
+      const cfg = configSchema.parse({
+        provider: { type: "mock" },
+        mcp: {
+          remote: {
+            url: "https://mcp.example.test/mcp",
+            allow_remote: true,
+            bearer_env: "OPENCLAW_TEST_MCP_TOKEN",
+          },
+        },
+      });
+
+      expect(sessionOptionsFromConfig(cfg, () => undefined).remote).toEqual({
+        url: "https://mcp.example.test/mcp",
+        bearerToken: "runtime-secret",
+      });
+    } finally {
+      if (previous === undefined) delete process.env.OPENCLAW_TEST_MCP_TOKEN;
+      else process.env.OPENCLAW_TEST_MCP_TOKEN = previous;
+    }
+  });
+
+  it("fails closed when a configured remote bearer is missing", () => {
+    const previous = process.env.OPENCLAW_TEST_MISSING_TOKEN;
+    delete process.env.OPENCLAW_TEST_MISSING_TOKEN;
+    try {
+      const cfg = configSchema.parse({
+        provider: { type: "mock" },
+        mcp: {
+          remote: {
+            url: "https://mcp.example.test/mcp",
+            allow_remote: true,
+            bearer_env: "OPENCLAW_TEST_MISSING_TOKEN",
+          },
+        },
+      });
+
+      expect(() => sessionOptionsFromConfig(cfg, () => undefined)).toThrow(
+        /environment variable is not set/,
+      );
+    } finally {
+      if (previous === undefined)
+        delete process.env.OPENCLAW_TEST_MISSING_TOKEN;
+      else process.env.OPENCLAW_TEST_MISSING_TOKEN = previous;
+    }
+  });
+
+  it("rejects a config without either MCP transport", () => {
+    const cfg = configSchema.parse({ provider: { type: "mock" } });
+    expect(() => sessionOptionsFromConfig(cfg, () => undefined)).toThrow(
+      /no MCP transport/,
+    );
+  });
 });
 
 describe("McpSession catalog", () => {
@@ -165,6 +388,19 @@ describe("McpSession catalog", () => {
     await expect(session.refreshCatalog()).rejects.toThrow(
       "session not started",
     );
+  });
+
+  it("rejects a catalog larger than the configured response limit", async () => {
+    h.tools = [
+      {
+        name: "notes.search",
+        description: "x".repeat(500),
+      },
+    ];
+    const { session } = makeSession({ maxResponseBytes: 128 });
+
+    await expect(session.start()).rejects.toThrow(/catalog exceeds/);
+    expect(h.transportClosed).toBe(1);
   });
 });
 
@@ -260,6 +496,172 @@ describe("McpSession.call", () => {
     expect(audited[0].error).toContain("transport died");
     expect(audited[0].resultRedacted).toBeUndefined();
   });
+
+  it("passes the configured timeout to tool calls", async () => {
+    const { session } = makeSession({ timeoutMs: 2_345 });
+    await session.start();
+
+    await session.call("notes.search", { query: "budget" });
+
+    expect(h.callRequests[0]).toMatchObject({
+      request: {
+        name: "notes.search",
+        arguments: { query: "budget" },
+      },
+      options: {
+        timeout: 2_345,
+        maxTotalTimeout: 2_345,
+      },
+    });
+  });
+
+  it("rejects and audits a response larger than the configured limit", async () => {
+    h.callResult = {
+      isError: false,
+      content: [{ type: "text", text: "x".repeat(2_000) }],
+    };
+    const { session, audited } = makeSession({ maxResponseBytes: 1_024 });
+    await session.start();
+
+    await expect(session.call("notes.search", {})).rejects.toThrow(
+      /response exceeds/,
+    );
+    expect(audited).toHaveLength(1);
+    expect(audited[0]).toMatchObject({
+      tool: "notes.search",
+      ok: false,
+    });
+  });
+
+  it("audits denied and pre-start invocations without leaking audit failures", async () => {
+    const audit = vi.fn(() => {
+      throw new Error("audit destination failed");
+    });
+    const session = new McpSession({
+      command: "node",
+      allowedScopes: ["read"],
+      audit,
+    });
+
+    await expect(session.call("notes.search", {})).rejects.toThrow(
+      "session not started",
+    );
+    expect(audit).toHaveBeenCalledOnce();
+
+    await session.start();
+    await expect(session.call("notes.create", {})).rejects.toThrow(
+      /scope write/,
+    );
+    expect(audit).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("McpSession filesystem confinement", () => {
+  it("requires explicit local roots and canonical paths for filesystem tools", async () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-files-"));
+    const outside = mkdtempSync(join(tmpdir(), "openclaw-outside-"));
+    const input = join(root, "attachment.txt");
+    const outsideInput = join(outside, "private.txt");
+    writeFileSync(input, "inside");
+    writeFileSync(outsideInput, "outside");
+    h.tools = [{ name: "files.attach" }, { name: "export.create" }];
+    try {
+      const withoutRoots = makeSession({
+        allowedScopes: ["files", "export"] as Scope[],
+      }).session;
+      await withoutRoots.start();
+      expect(withoutRoots.tools()).toEqual([]);
+      await expect(
+        withoutRoots.call("files.attach", { path: input }),
+      ).rejects.toThrow(/requires security\.allow_filesystem_paths/);
+
+      const { session } = makeSession({
+        allowedScopes: ["files", "export"] as Scope[],
+        allowedFilesystemPaths: [root],
+      });
+      await session.start();
+      expect(session.tools().map((tool) => tool.name)).toEqual([
+        "files.attach",
+        "export.create",
+      ]);
+      await expect(
+        session.call("files.attach", { path: outsideInput }),
+      ).rejects.toThrow(/outside the filesystem allowlist/);
+      await expect(
+        session.call("files.attach", { path: "relative.txt" }),
+      ).rejects.toThrow(/must be an absolute path/);
+      await expect(
+        session.call("export.create", {
+          outputPath: join(outside, "export.zip"),
+        }),
+      ).rejects.toThrow(/outside the filesystem allowlist/);
+
+      await expect(session.call("files.attach", { path: input })).resolves.toBe(
+        h.callResult,
+      );
+      await expect(
+        session.call("export.create", {
+          outputPath: join(root, "export.zip"),
+        }),
+      ).resolves.toBe(h.callResult);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects invalid roots, directories as attachments, and unsafe output links", async () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-files-"));
+    const directory = join(root, "directory");
+    mkdirSync(directory);
+    h.tools = [{ name: "files.attach" }, { name: "export.create" }];
+    try {
+      expect(() =>
+        makeSession({
+          allowedScopes: ["files"] as Scope[],
+          allowedFilesystemPaths: [join(root, "missing")],
+        }),
+      ).toThrow(/does not exist or cannot be resolved/);
+
+      const { session } = makeSession({
+        allowedScopes: ["files", "export"] as Scope[],
+        allowedFilesystemPaths: [root],
+      });
+      await session.start();
+      await expect(
+        session.call("files.attach", { path: directory }),
+      ).rejects.toThrow(/must be a regular file/);
+      await expect(
+        session.call("export.create", {
+          outputPath: join(root, "missing", "export.zip"),
+        }),
+      ).rejects.toThrow(/could not be resolved safely/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("never exposes or invokes filesystem tools over remote MCP", async () => {
+    h.tools = [
+      { name: "files.attach" },
+      { name: "export.create" },
+      { name: "notes.search" },
+    ];
+    const { session } = makeSession({
+      command: undefined,
+      remote: { url: "http://127.0.0.1:3010/mcp" },
+      allowedScopes: ["read", "files", "export"] as Scope[],
+      allowedFilesystemPaths: ["Z:\\does-not-need-to-exist"],
+    });
+
+    await session.start();
+
+    expect(session.tools().map((tool) => tool.name)).toEqual(["notes.search"]);
+    await expect(
+      session.call("files.attach", { path: "C:\\private.txt" }),
+    ).rejects.toThrow(/disabled over remote/);
+    expect(h.callRequests).toHaveLength(0);
+  });
 });
 
 describe("McpSession.close", () => {
@@ -292,5 +694,32 @@ describe("McpSession.close", () => {
     await expect(session.close()).resolves.toBeUndefined();
     expect(h.clientClosed).toBe(0);
     expect(h.transportClosed).toBe(0);
+  });
+
+  it("terminates and closes an active remote session", async () => {
+    const { session } = makeSession({
+      command: undefined,
+      remote: { url: "http://127.0.0.1:3010/mcp" },
+    });
+    await session.start();
+
+    await session.close();
+
+    expect(h.remoteTerminated).toBe(1);
+    expect(h.remoteClosed).toBe(1);
+    expect(h.transportClosed).toBe(0);
+  });
+
+  it("still closes remote transport when session termination fails", async () => {
+    h.remoteTerminateThrows = new Error("already expired");
+    const { session } = makeSession({
+      command: undefined,
+      remote: { url: "http://127.0.0.1:3010/mcp" },
+    });
+    await session.start();
+
+    await expect(session.close()).resolves.toBeUndefined();
+    expect(h.remoteTerminated).toBe(1);
+    expect(h.remoteClosed).toBe(1);
   });
 });

@@ -150,6 +150,12 @@ async function main() {
       signedIn: false,
       syncHealthy: false,
       consecutiveSyncFailures: 0,
+      authorizationLost: false,
+      tagScope: {
+        restricted: false,
+        enforcement: "client-side-advisory",
+        cryptographic: false,
+      },
     });
     assert.equal(payload.isError, undefined);
 

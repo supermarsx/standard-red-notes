@@ -152,7 +152,10 @@ describe("configSchema", () => {
     expect(cfg.mcp.local).toEqual({
       command: "node",
       args: ["mcp/dist/index.cjs"],
+      env_from: [],
       scopes: ["read"],
+      timeout_ms: 60_000,
+      max_response_kb: 1024,
     });
   });
 
@@ -183,8 +186,169 @@ describe("configSchema", () => {
     ).toThrow();
   });
 
+  it("allows loopback remote MCP without an explicit remote opt-in", () => {
+    const remote = configSchema.parse({
+      provider: { type: "mock" },
+      mcp: { remote: { url: "http://127.0.0.1:3010/mcp" } },
+    }).mcp.remote;
+
+    expect(remote).toEqual({
+      url: "http://127.0.0.1:3010/mcp",
+      scopes: ["read"],
+      allow_remote: false,
+      timeout_ms: 60_000,
+      max_response_kb: 1024,
+    });
+  });
+
+  it("requires HTTPS, explicit opt-in, and bearer auth off loopback", () => {
+    const base = {
+      provider: { type: "mock" },
+      mcp: { remote: { url: "http://mcp.example.test/mcp" } },
+    };
+    expect(() => configSchema.parse(base)).toThrow(/allow_remote/);
+    expect(() => configSchema.parse(base)).toThrow(/HTTPS/);
+    expect(() => configSchema.parse(base)).toThrow(/bearer_env/);
+
+    expect(
+      configSchema.parse({
+        provider: { type: "mock" },
+        mcp: {
+          remote: {
+            url: "https://mcp.example.test/mcp",
+            allow_remote: true,
+            bearer_env: "STANDARD_RED_NOTES_MCP_TOKEN",
+          },
+        },
+      }).mcp.remote,
+    ).toMatchObject({
+      allow_remote: true,
+      bearer_env: "STANDARD_RED_NOTES_MCP_TOKEN",
+    });
+  });
+
+  it("rejects embedded credentials and invalid bearer environment names", () => {
+    expect(() =>
+      configSchema.parse({
+        provider: { type: "mock" },
+        mcp: {
+          remote: {
+            url: "http://user:secret@127.0.0.1:3010/mcp",
+          },
+        },
+      }),
+    ).toThrow(/must not embed credentials/);
+    expect(() =>
+      configSchema.parse({
+        provider: { type: "mock" },
+        mcp: {
+          remote: {
+            url: "http://127.0.0.1:3010/mcp",
+            bearer_env: "BAD-NAME",
+          },
+        },
+      }),
+    ).toThrow(/environment variable name/);
+    expect(() =>
+      configSchema.parse({
+        provider: { type: "mock" },
+        mcp: { local: { env_from: ["BAD-NAME"] } },
+      }),
+    ).toThrow(/environment variable name/);
+  });
+
+  it("rejects configuring local and remote MCP transports together", () => {
+    expect(() =>
+      configSchema.parse({
+        provider: { type: "mock" },
+        mcp: {
+          local: {},
+          remote: { url: "http://127.0.0.1:3010/mcp" },
+        },
+      }),
+    ).toThrow(/exactly one MCP transport/);
+  });
+
+  it("rejects remote-only filesystem scopes and unsafe local path settings", () => {
+    for (const scope of ["files", "export"]) {
+      expect(() =>
+        configSchema.parse({
+          provider: { type: "mock" },
+          mcp: {
+            remote: {
+              url: "http://127.0.0.1:3010/mcp",
+              scopes: [scope],
+            },
+          },
+        }),
+      ).toThrow(/local-only/);
+    }
+    expect(() =>
+      configSchema.parse({
+        provider: { type: "mock" },
+        mcp: { local: { command: "" } },
+      }),
+    ).toThrow();
+    expect(() =>
+      configSchema.parse({
+        provider: { type: "mock" },
+        mcp: { local: { env: { "BAD-NAME": "value" } } },
+      }),
+    ).toThrow(/environment variable name/);
+    expect(() =>
+      configSchema.parse({
+        provider: { type: "mock" },
+        security: { allow_filesystem_paths: ["relative/path"] },
+      }),
+    ).toThrow(/absolute or start with/);
+    expect(() =>
+      configSchema.parse({
+        provider: { type: "mock" },
+        agent: { audit_file: "" },
+      }),
+    ).toThrow();
+  });
+
+  it("bounds transport, agent, response, and filesystem settings", () => {
+    for (const timeout_ms of [999, 600_001]) {
+      expect(() =>
+        configSchema.parse({
+          provider: { type: "mock" },
+          mcp: { local: { timeout_ms } },
+        }),
+      ).toThrow();
+    }
+    for (const max_response_kb of [0, 16_385]) {
+      expect(() =>
+        configSchema.parse({
+          provider: { type: "mock" },
+          mcp: { local: { max_response_kb } },
+        }),
+      ).toThrow();
+    }
+    for (const scratchpad_kb of [3, 1025]) {
+      expect(() =>
+        configSchema.parse({
+          provider: { type: "mock" },
+          agent: { scratchpad_kb },
+        }),
+      ).toThrow();
+    }
+    expect(() =>
+      configSchema.parse({
+        provider: { type: "mock" },
+        security: {
+          allow_filesystem_paths: Array.from(
+            { length: 129 },
+            (_, index) => `/tmp/root-${index}`,
+          ),
+        },
+      }),
+    ).toThrow();
+  });
+
   it("rejects non-positive or fractional agent limits", () => {
-    for (const max_steps of [0, -1, 2.5]) {
+    for (const max_steps of [0, -1, 2.5, 65]) {
       expect(() =>
         configSchema.parse({
           provider: { type: "mock" },

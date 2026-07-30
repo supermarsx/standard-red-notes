@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { redactForAudit, noteSummary } from "../src/util/redact.js";
+import {
+  redactForAudit,
+  noteSummary,
+  redactSensitiveText,
+} from "../src/util/redact.js";
 
 describe("redactForAudit", () => {
   it("replaces note body content", () => {
@@ -22,6 +26,47 @@ describe("redactForAudit", () => {
     >;
     expect((out[0] as Record<string, unknown>).body).toMatch(/^<note:/);
     expect(out[1]).toBe("<redacted-token>");
+  });
+
+  it("redacts filesystem paths at every nesting level", () => {
+    const out = redactForAudit({
+      path: "/home/user/note.txt",
+      nested: {
+        outputPath: "C:\\Users\\user\\export.zip",
+        directory: "/tmp/private",
+      },
+    }) as Record<string, unknown>;
+
+    expect(out).toEqual({
+      path: "<redacted-path>",
+      nested: {
+        outputPath: "<redacted-path>",
+        directory: "<redacted-path>",
+      },
+    });
+  });
+
+  it("redacts compound path keys and paths embedded in error text", () => {
+    expect(
+      redactForAudit({
+        allowedFilesystemPaths: ["/home/user/private"],
+      }),
+    ).toEqual({
+      allowedFilesystemPaths: "<redacted-path>",
+    });
+    expect(
+      redactSensitiveText(
+        "ENOENT opening C:\\Users\\me\\secret.txt and /home/me/private.txt",
+      ),
+    ).toBe("ENOENT opening <redacted-path> and <redacted-path>");
+    expect(
+      redactSensitiveText("request failed at https://example.test/mcp"),
+    ).toContain("https://example.test/mcp");
+  });
+
+  it("is idempotent for note summaries", () => {
+    const once = redactForAudit({ body: "private body" });
+    expect(redactForAudit(once)).toEqual(once);
   });
 });
 

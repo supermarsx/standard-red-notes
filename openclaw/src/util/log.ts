@@ -1,5 +1,6 @@
 // Structured logging without secrets. All log lines are JSON on stderr so the
 // surrounding agent loop output (stdout) stays clean for piping.
+import { redactForAudit, redactSensitiveText } from "./redact.js";
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
@@ -25,8 +26,8 @@ function emit(
   const line = JSON.stringify({
     ts: new Date().toISOString(),
     level: lvl,
-    msg,
-    ...fields,
+    msg: redactSensitiveText(msg),
+    ...(fields ? (redactForAudit(fields) as Record<string, unknown>) : {}),
   });
   process.stderr.write(line + "\n");
 }

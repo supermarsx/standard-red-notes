@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { run } from "../src/core/agent.js";
+import { boundHistory, run, truncateText } from "../src/core/agent.js";
 import type { McpSession } from "../src/mcp/session.js";
 import type {
   Provider,
@@ -308,5 +308,134 @@ describe("agent stream robustness", () => {
 
     expect(result.finalText).toBe("hi");
     expect(result.stopReason).toBe("end_turn");
+  });
+});
+
+describe("agent scratchpad bounds", () => {
+  it("keeps the newest complete turns within the exact serialized byte limit", () => {
+    const bounded = boundHistory(
+      [
+        { role: "user", content: "old".repeat(2_000) },
+        { role: "assistant", content: "old answer".repeat(1_000) },
+        { role: "user", content: "new question" },
+      ],
+      4 * 1024,
+    );
+
+    expect(
+      Buffer.byteLength(JSON.stringify(bounded), "utf8"),
+    ).toBeLessThanOrEqual(4 * 1024);
+    expect(bounded.at(-1)?.content).toBe("new question");
+    expect(JSON.stringify(bounded)).not.toContain("oldoldold");
+  });
+
+  it("does not leave an orphan tool response at the front of history", () => {
+    const bounded = boundHistory(
+      [
+        { role: "user", content: "x".repeat(5_000) },
+        {
+          role: "tool",
+          content: "newest tool result",
+          toolCallId: "call-1",
+          name: "notes.search",
+        },
+      ],
+      128,
+    );
+
+    expect(bounded[0]?.role).not.toBe("tool");
+  });
+
+  it("rejects invalid scratchpad limits and truncates UTF-8 safely", () => {
+    expect(() => boundHistory([], 0)).toThrow(/positive integer/);
+    expect(() => boundHistory([], 1.5)).toThrow(/positive integer/);
+    const value = truncateText("é".repeat(100), 32);
+    expect(Buffer.byteLength(value, "utf8")).toBeLessThanOrEqual(32);
+    expect(value).toContain("<openclaw:truncated>");
+  });
+
+  it("bounds large tool results before the next provider request", async () => {
+    const provider = new RecordingProvider([
+      [
+        {
+          kind: "tool-call",
+          id: "c1",
+          name: "notes.search",
+          args: { query: "budget" },
+        },
+        { kind: "finish", stopReason: "tool_use" },
+      ],
+      [
+        { kind: "text-delta", delta: "done" },
+        { kind: "finish", stopReason: "end_turn" },
+      ],
+    ]);
+    const session = fakeSession(async () => ({
+      hits: [{ body: "secret".repeat(10_000) }],
+    }));
+
+    await run([{ role: "user", content: "find" }], {
+      provider,
+      session,
+      scratchpadBytes: 4 * 1024,
+    });
+
+    const secondRequest = provider.requests[1];
+    expect(
+      Buffer.byteLength(JSON.stringify(secondRequest.messages), "utf8"),
+    ).toBeLessThanOrEqual(4 * 1024);
+    expect(JSON.stringify(secondRequest.messages)).toContain(
+      "<openclaw:truncated>",
+    );
+  });
+
+  it("bounds accumulated assistant text while still streaming deltas", async () => {
+    const huge = "answer".repeat(2_000);
+    const streamed: string[] = [];
+    const provider = new RecordingProvider([
+      [
+        { kind: "text-delta", delta: huge },
+        { kind: "finish", stopReason: "end_turn" },
+      ],
+    ]);
+
+    const result = await run([{ role: "user", content: "answer" }], {
+      provider,
+      session: okSession(),
+      scratchpadBytes: 4 * 1024,
+      onTextDelta: (chunk) => streamed.push(chunk),
+    });
+
+    expect(Buffer.byteLength(result.finalText, "utf8")).toBeLessThanOrEqual(
+      4 * 1024,
+    );
+    expect(result.finalText).toContain("<openclaw:truncated>");
+    expect(streamed).toEqual([huge]);
+  });
+
+  it("fails closed on an oversized provider tool-call batch", async () => {
+    let invoked = 0;
+    const toolCalls = Array.from({ length: 65 }, (_, index) => ({
+      kind: "tool-call" as const,
+      id: `call-${index}`,
+      name: "notes.search",
+      args: {},
+    }));
+    const provider = new RecordingProvider([
+      [...toolCalls, { kind: "finish", stopReason: "tool_use" as const }],
+    ]);
+    const session = fakeSession(async () => {
+      invoked += 1;
+      return {};
+    });
+
+    const result = await run([{ role: "user", content: "search" }], {
+      provider,
+      session,
+      scratchpadBytes: 64 * 1024,
+    });
+
+    expect(result.stopReason).toBe("error");
+    expect(invoked).toBe(0);
   });
 });
