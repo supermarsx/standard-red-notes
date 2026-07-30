@@ -20,7 +20,6 @@ jest.mock('./GatewayCollabChannel', () => ({
 
 jest.mock('./RoomCrypto', () => ({
   createRoomCipher: jest.fn(),
-  deriveRoomKey: jest.fn(),
 }))
 
 jest.mock('./EncryptedYjsProvider', () => ({
@@ -29,7 +28,7 @@ jest.mock('./EncryptedYjsProvider', () => ({
 
 import { EncryptedYjsProvider } from './EncryptedYjsProvider'
 import { createGatewayCollabChannel } from './GatewayCollabChannel'
-import { createRoomCipher, deriveRoomKey } from './RoomCrypto'
+import { createRoomCipher } from './RoomCrypto'
 import { getSuperCollaborationAvailability, SUPER_COLLABORATION_UNAVAILABLE_REASON } from './CollaborationAvailability'
 import { CollaborationConfig, SuperCollaborationPlugin } from './CollaborationPlugin'
 
@@ -81,7 +80,6 @@ describe('Super collaboration security gate', () => {
 
     expect(container.innerHTML).toBe('')
     expect(createGatewayCollabChannel).not.toHaveBeenCalled()
-    expect(deriveRoomKey).not.toHaveBeenCalled()
     expect(createRoomCipher).not.toHaveBeenCalled()
     expect(EncryptedYjsProvider).not.toHaveBeenCalled()
   })

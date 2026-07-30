@@ -3,8 +3,20 @@
  */
 import * as Y from 'yjs'
 import { EncryptedYjsProvider } from './EncryptedYjsProvider'
-import { createPlaintextCipher, createRoomCipher, deriveRoomKey } from './RoomCrypto'
+import { createRoomCipher, RoomCipher } from './RoomCrypto'
 import type { CollabChannel, CollabFrame } from './CollabChannel'
+
+/** Fast identity-equivalent transport used only to isolate provider behavior. */
+const createTestTransportCipher = (): RoomCipher => ({
+  encrypt: async (plaintext) => Buffer.from(plaintext).toString('base64'),
+  decrypt: async (payload) => new Uint8Array(Buffer.from(payload, 'base64')),
+})
+
+const generateTestRoomKey = (): Promise<CryptoKey> =>
+  globalThis.crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, [
+    'encrypt',
+    'decrypt',
+  ]) as Promise<CryptoKey>
 
 // In-memory hub that mirrors the gateway's room relay semantics: frames go to
 // every OTHER member of the room, and a join prompts existing members to re-sync.
@@ -58,13 +70,13 @@ async function settle(...providers: EncryptedYjsProvider[]): Promise<void> {
 }
 
 describe('EncryptedYjsProvider convergence', () => {
-  it('converges two docs editing the same room (plaintext cipher)', async () => {
+  it('converges two docs editing the same room (test transport cipher)', async () => {
     const hub = new LoopbackHub()
     const room = 'note-1'
     const docA = new Y.Doc()
     const docB = new Y.Doc()
-    const a = new EncryptedYjsProvider(docA, room, hub.channel(), createPlaintextCipher())
-    const b = new EncryptedYjsProvider(docB, room, hub.channel(), createPlaintextCipher())
+    const a = new EncryptedYjsProvider(docA, room, hub.channel(), createTestTransportCipher())
+    const b = new EncryptedYjsProvider(docB, room, hub.channel(), createTestTransportCipher())
     a.connect()
     b.connect()
     await settle(a, b)
@@ -83,13 +95,13 @@ describe('EncryptedYjsProvider convergence', () => {
     const hub = new LoopbackHub()
     const room = 'note-2'
     const docA = new Y.Doc()
-    const a = new EncryptedYjsProvider(docA, room, hub.channel(), createPlaintextCipher())
+    const a = new EncryptedYjsProvider(docA, room, hub.channel(), createTestTransportCipher())
     a.connect()
     docA.getText('content').insert(0, 'existing content')
     await settle(a)
 
     const docB = new Y.Doc()
-    const b = new EncryptedYjsProvider(docB, room, hub.channel(), createPlaintextCipher())
+    const b = new EncryptedYjsProvider(docB, room, hub.channel(), createTestTransportCipher())
     b.connect()
     await settle(a, b)
 
@@ -103,8 +115,8 @@ describe('EncryptedYjsProvider convergence', () => {
     const room = 'note-3'
     const docA = new Y.Doc()
     const docB = new Y.Doc()
-    const a = new EncryptedYjsProvider(docA, room, hub.channel(), createPlaintextCipher())
-    const b = new EncryptedYjsProvider(docB, room, hub.channel(), createPlaintextCipher())
+    const a = new EncryptedYjsProvider(docA, room, hub.channel(), createTestTransportCipher())
+    const b = new EncryptedYjsProvider(docB, room, hub.channel(), createTestTransportCipher())
     a.connect()
     b.connect()
     await settle(a, b)
@@ -137,7 +149,7 @@ describe('EncryptedYjsProvider — no memory leak', () => {
 
     const measure = async (updates: number): Promise<number> => {
       const doc = new Y.Doc()
-      const provider = new EncryptedYjsProvider(doc, `leak-${updates}`, hub.channel(), createPlaintextCipher())
+      const provider = new EncryptedYjsProvider(doc, `leak-${updates}`, hub.channel(), createTestTransportCipher())
       provider.connect()
       await drain(provider)
       for (let i = 0; i < updates; i++) {
@@ -166,7 +178,7 @@ describe('EncryptedYjsProvider — no memory leak', () => {
       const clearBefore = clearSpy.mock.calls.length
 
       for (let i = 0; i < 200; i++) {
-        const p = new EncryptedYjsProvider(new Y.Doc(), `cycle-${i}`, hub.channel(), createPlaintextCipher())
+        const p = new EncryptedYjsProvider(new Y.Doc(), `cycle-${i}`, hub.channel(), createTestTransportCipher())
         p.connect()
         p.disconnect()
       }
@@ -187,7 +199,7 @@ const maybe = hasSubtle ? describe : describe.skip
 
 maybe('RoomCrypto (AES-GCM, requires WebCrypto)', () => {
   it('round-trips an encrypted yjs update', async () => {
-    const key = await deriveRoomKey('vault-secret', 'note-1')
+    const key = await generateTestRoomKey()
     const cipher = createRoomCipher(key)
     const plaintext = Y.encodeStateAsUpdate(
       ((): Y.Doc => {
@@ -202,17 +214,15 @@ maybe('RoomCrypto (AES-GCM, requires WebCrypto)', () => {
     expect(Array.from(back)).toEqual(Array.from(plaintext))
   })
 
-  it('two collaborators derive the same key; an outsider derives a different one', async () => {
-    const k1 = await deriveRoomKey('vault-secret', 'note-1')
-    const cipher1 = createRoomCipher(k1)
-    const k2 = await deriveRoomKey('vault-secret', 'note-1')
-    const cipher2 = createRoomCipher(k2)
-    const k3 = await deriveRoomKey('different-secret', 'note-1')
-    const cipher3 = createRoomCipher(k3)
+  it('two collaborators with the room key can decrypt while an outsider cannot', async () => {
+    const sharedKey = await generateTestRoomKey()
+    const cipher1 = createRoomCipher(sharedKey)
+    const cipher2 = createRoomCipher(sharedKey)
+    const outsiderCipher = createRoomCipher(await generateTestRoomKey())
 
     const msg = new TextEncoder().encode('hello')
     const payload = await cipher1.encrypt(msg)
     expect(Array.from(await cipher2.decrypt(payload))).toEqual(Array.from(msg))
-    await expect(cipher3.decrypt(payload)).rejects.toBeDefined()
+    await expect(outsiderCipher.decrypt(payload)).rejects.toBeDefined()
   })
 })

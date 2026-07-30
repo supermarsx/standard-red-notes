@@ -1,10 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { ContentType, SNNote } from '@standardnotes/snjs'
-import { addToast, ToastType } from '@standardnotes/toast'
 import { useApplication } from '@/Components/ApplicationProvider'
-import { generateCommentId, getNoteComments, NoteComment, sortCommentsByCreatedAt } from './comments'
-import { extractMentionedUuids, textMentionsUser } from './mentions'
-import { CommentRelay } from './CommentRelay'
+import { generateCommentId, getNoteComments, NoteComment } from './comments'
+import { extractMentionedUuids } from './mentions'
 
 export type CommentsApi = {
   comments: NoteComment[]
@@ -23,16 +21,14 @@ export type CommentsApi = {
 /**
  * Loads + manages a note's comment thread.
  *
- * Storage is E2E (note appData via NotesController). On top of that, when the
- * note belongs to a shared vault, this hook opens a CommentRelay so new comments
- * are pushed live to collaborators who have the note open — and surfaces a toast
- * when an incoming comment @mentions the local user. Everything degrades to plain
- * HTTP sync when the socket is closed.
+ * Storage is E2E (note appData via NotesController) and reaches collaborators
+ * through normal encrypted HTTP sync. Realtime comment relay is deliberately
+ * disabled until the app can supply a non-extractable room key derived from
+ * client-only vault key material; public vault identifiers are not secrets.
  */
 export function useNoteComments(note: SNNote): CommentsApi {
   const application = useApplication()
   const [comments, setComments] = useState<NoteComment[]>(() => getNoteComments(note))
-  const relayRef = useRef<CommentRelay | null>(null)
 
   const selfUuid = application.sessions.getUser()?.uuid
   const selfEmail = application.sessions.getUser()?.email
@@ -49,44 +45,6 @@ export function useNoteComments(note: SNNote): CommentsApi {
       }
     })
   }, [application.items, note, noteUuid])
-
-  // Resolve the shared-vault secret (same derivation the Super collab editor uses)
-  // so the relay encrypts comments with the per-room key. Undefined for solo notes
-  // — then there is no relay, only E2E persistence + HTTP sync.
-  const sharedSecret = useMemo(() => {
-    const vault = application.vaults.getItemVault(note)
-    if (!vault || !vault.isSharedVaultListing()) {
-      return undefined
-    }
-    return String(vault.systemIdentifier)
-  }, [application.vaults, note])
-
-  // Open/refresh the realtime relay for this room. The handler merges incoming
-  // comments into local state immediately (HTTP sync is the durable backstop) and
-  // raises a toast if the local user was @mentioned by someone else.
-  useEffect(() => {
-    if (!sharedSecret) {
-      return
-    }
-    const relay = new CommentRelay(application, noteUuid, sharedSecret, (incoming) => {
-      setComments((current) => {
-        const next = current.filter((c) => c.id !== incoming.id)
-        next.push(incoming)
-        return sortCommentsByCreatedAt(next)
-      })
-      if (selfUuid && incoming.authorUuid !== selfUuid && textMentionsUser(incoming.text, selfUuid)) {
-        addToast({
-          type: ToastType.Regular,
-          message: `${incoming.authorName} mentioned you in a comment`,
-        })
-      }
-    })
-    relayRef.current = relay
-    return () => {
-      relay.destroy()
-      relayRef.current = null
-    }
-  }, [application, noteUuid, sharedSecret, selfUuid])
 
   const addComment = useCallback<CommentsApi['addComment']>(
     async ({ text, parentId, anchor }) => {
@@ -112,7 +70,6 @@ export function useNoteComments(note: SNNote): CommentsApi {
         comment.mentions = mentions
       }
       await application.notesController.upsertNoteComment(note, comment)
-      void relayRef.current?.broadcast(comment)
       return comment
     },
     [application.notesController, note, selfUuid, selfEmail],
@@ -128,11 +85,6 @@ export function useNoteComments(note: SNNote): CommentsApi {
   const setResolved = useCallback(
     async (id: string, resolved: boolean) => {
       await application.notesController.setNoteCommentResolved(note, id, resolved)
-      // Broadcast the resolved state so peers' threads update live too.
-      const updated = getNoteComments(note).find((c) => c.id === id)
-      if (updated) {
-        void relayRef.current?.broadcast({ ...updated, resolved })
-      }
     },
     [application.notesController, note],
   )

@@ -25,10 +25,16 @@ import { $getRoot, $createParagraphNode, $createTextNode, LexicalEditor } from '
 import * as Y from 'yjs'
 import type { Doc } from 'yjs'
 import { EncryptedYjsProvider } from './EncryptedYjsProvider'
-import { createPlaintextCipher } from './RoomCrypto'
+import type { RoomCipher } from './RoomCrypto'
 import type { CollabChannel, CollabFrame } from './CollabChannel'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+
+/** Fast identity-equivalent transport used only to isolate editor/provider behavior. */
+const createTestTransportCipher = (): RoomCipher => ({
+  encrypt: async (plaintext) => Buffer.from(plaintext).toString('base64'),
+  decrypt: async (payload) => new Uint8Array(Buffer.from(payload, 'base64')),
+})
 
 // Gateway-mirroring loopback: frames go to every OTHER member of the room; a join
 // prompts existing members to re-sync.
@@ -94,7 +100,7 @@ function CollabEditor(props: { hub: LoopbackHub; room: string; bootstrap: boolea
       doc = new Y.Doc()
       docMap.set(id, doc)
     }
-    provider = new EncryptedYjsProvider(doc, room, hub.channel(), createPlaintextCipher())
+    provider = new EncryptedYjsProvider(doc, room, hub.channel(), createTestTransportCipher())
     return provider
   }
   return createElement(

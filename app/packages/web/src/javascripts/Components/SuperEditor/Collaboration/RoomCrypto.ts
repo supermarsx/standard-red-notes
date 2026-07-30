@@ -1,11 +1,14 @@
 // Encryption primitives for collaborative (yjs) updates.
 //
-// These primitives provide end-to-end encryption only when the input secret is
-// client-only key material unavailable to the relay. The product-level
-// collaboration gate remains closed until such material is wired. AES-256-GCM
-// uses a random 96-bit IV per message; payload is base64(iv ‖ ciphertext).
+// These primitives provide end-to-end encryption only when the caller supplies
+// a non-extractable AES-256-GCM key derived from client-only key material. The
+// product-level collaboration gate remains closed until such a key is wired.
+// AES-GCM uses a random 96-bit IV per message; payload is
+// base64(iv ‖ ciphertext).
 
 const IV_BYTES = 12
+const INVALID_ROOM_KEY =
+  'Collaboration requires a non-extractable AES-256-GCM CryptoKey with encrypt and decrypt access.'
 
 const subtle = (): SubtleCrypto => {
   const c = (globalThis as { crypto?: Crypto }).crypto
@@ -32,30 +35,36 @@ function fromBase64(b64: string): Uint8Array {
   return out
 }
 
-/**
- * Derive a stable per-room AES-GCM key from a shared secret (e.g. the vault key)
- * and the room id (note uuid), via HKDF-SHA-256. Collaborators holding the same
- * secret deterministically derive the same key without any key exchange.
- */
-export async function deriveRoomKey(clientOnlySecret: string, room: string): Promise<CryptoKey> {
-  const enc = new TextEncoder()
-  const base = await subtle().importKey('raw', enc.encode(clientOnlySecret), 'HKDF', false, ['deriveKey'])
-  return subtle().deriveKey(
-    { name: 'HKDF', hash: 'SHA-256', salt: enc.encode('srn-collab-v1'), info: enc.encode(room) },
-    base,
-    { name: 'AES-GCM', length: 256 },
-    false,
-    ['encrypt', 'decrypt'],
-  )
-}
-
 export interface RoomCipher {
   encrypt(plaintext: Uint8Array): Promise<string>
   decrypt(payload: string): Promise<Uint8Array>
 }
 
-/** AES-GCM cipher over a derived room key. */
+/**
+ * AES-GCM cipher over a client-only room key.
+ *
+ * Accepting a CryptoKey instead of a string is an intentional security
+ * boundary: public identifiers such as a vault systemIdentifier must never be
+ * accepted as key material. The key must also be non-extractable so this layer
+ * cannot accidentally serialize it into a relay frame or log.
+ */
 export function createRoomCipher(key: CryptoKey): RoomCipher {
+  const algorithm = typeof key === 'object' && key !== null ? (key.algorithm as AesKeyAlgorithm) : undefined
+  const usages = typeof key === 'object' && key !== null ? key.usages : undefined
+  if (
+    typeof key !== 'object' ||
+    key === null ||
+    key.type !== 'secret' ||
+    key.extractable ||
+    algorithm?.name !== 'AES-GCM' ||
+    algorithm.length !== 256 ||
+    !Array.isArray(usages) ||
+    !usages.includes('encrypt') ||
+    !usages.includes('decrypt')
+  ) {
+    throw new Error(INVALID_ROOM_KEY)
+  }
+
   return {
     async encrypt(plaintext) {
       const iv = (globalThis.crypto as Crypto).getRandomValues(new Uint8Array(IV_BYTES))
@@ -81,22 +90,6 @@ export function createRoomCipher(key: CryptoKey): RoomCipher {
         ct as unknown as BufferSource,
       )
       return new Uint8Array(pt)
-    },
-  }
-}
-
-/**
- * Passthrough "cipher" (base64 only, NO encryption) for development against a
- * fully self-hosted, trusted gateway where E2E is not required. Never use this
- * when collaborators are untrusted or the relay is shared.
- */
-export function createPlaintextCipher(): RoomCipher {
-  return {
-    async encrypt(plaintext) {
-      return toBase64(plaintext)
-    },
-    async decrypt(payload) {
-      return fromBase64(payload)
     },
   }
 }

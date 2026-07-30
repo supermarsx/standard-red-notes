@@ -37,7 +37,7 @@ import { TextEncoder as NodeTextEncoder, TextDecoder as NodeTextDecoder } from '
 import * as Y from 'yjs'
 import type { Doc } from 'yjs'
 import { EncryptedYjsProvider } from './EncryptedYjsProvider'
-import { createRoomCipher, deriveRoomKey } from './RoomCrypto'
+import { createRoomCipher } from './RoomCrypto'
 import type { CollabChannel, CollabFrame } from './CollabChannel'
 
 // jsdom lacks WebSocket + WebCrypto; supply Node's so the REAL provider/crypto
@@ -230,8 +230,10 @@ describe('Collaborative editor over the LIVE gateway (definitive e2e)', () => {
     }
 
     const room = 'note-live-' + Date.now()
-    const secret = 'shared-vault-secret'
-    const [keyA, keyB] = await Promise.all([deriveRoomKey(secret, room), deriveRoomKey(secret, room)])
+    const roomKey = (await globalThis.crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, [
+      'encrypt',
+      'decrypt',
+    ])) as CryptoKey
     const userA = 'live-a-' + Date.now()
     const userB = 'live-b-' + Date.now()
     const chA = await liveChannel(await mint(userA, 'sa'), userA)
@@ -247,11 +249,11 @@ describe('Collaborative editor over the LIVE gateway (definitive e2e)', () => {
 
     await act(async () => {
       rootA = createRoot(containerA)
-      rootA.render(makeEditorTree(room, chA, createRoomCipher(keyA), true, (c) => (capA = c)))
+      rootA.render(makeEditorTree(room, chA, createRoomCipher(roomKey), true, (c) => (capA = c)))
     })
     await act(async () => {
       rootB = createRoot(containerB)
-      rootB.render(makeEditorTree(room, chB, createRoomCipher(keyB), false, (c) => (capB = c)))
+      rootB.render(makeEditorTree(room, chB, createRoomCipher(roomKey), false, (c) => (capB = c)))
     })
     await settle(800)
 
