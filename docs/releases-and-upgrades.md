@@ -3,6 +3,8 @@ title: Releases and Upgrades
 description: Release streams, supported artifacts, verification, safe upgrade order, and rollback.
 ---
 
+{% include mermaid.html %}
+
 # Releases and Upgrades
 
 Standard Red Notes publishes several independently versioned products from one
@@ -12,16 +14,16 @@ complete product catalog.
 
 ## Release streams
 
-| Component | Release shape |
-| --- | --- |
-| Desktop | macOS DMG/ZIP, Windows NSIS, Linux AppImage/DEB; x64 and arm64 |
-| Mobile | Universal Android APK, Android AAB, and iOS device arm64 artifact |
-| `srn-client` | Native/standalone artifacts for Windows, Linux, and macOS on x64/arm64 |
-| `srn-server` | Native/standalone artifacts for Windows, Linux, and macOS on x64/arm64 |
-| `srn-admin` | Native tool artifacts for the six OS/architecture targets and an in-container wrapper |
-| MCP bridge | Release artifacts for the six OS/architecture targets |
-| Home server | Release artifacts for the six OS/architecture targets |
-| OpenClaw | One Node-any `.tgz`, manifest, checksums, and signed provenance; smoke-tested across the six targets |
+| Component    | Release shape                                                                                        |
+| ------------ | ---------------------------------------------------------------------------------------------------- |
+| Desktop      | macOS DMG/ZIP, Windows NSIS, Linux AppImage/DEB; x64 and arm64                                       |
+| Mobile       | Universal Android APK, Android AAB, and iOS device arm64 artifact                                    |
+| `srn-client` | Native/standalone artifacts for Windows, Linux, and macOS on x64/arm64                               |
+| `srn-server` | Native/standalone artifacts for Windows, Linux, and macOS on x64/arm64                               |
+| `srn-admin`  | Native tool artifacts for the six OS/architecture targets and an in-container wrapper                |
+| MCP bridge   | Release artifacts for the six OS/architecture targets                                                |
+| Home server  | Release artifacts for the six OS/architecture targets                                                |
+| OpenClaw     | One Node-any `.tgz`, manifest, checksums, and signed provenance; smoke-tested across the six targets |
 
 Desktop and the rolling `srn-*` streams use namespaced component tags. OpenClaw
 also supports explicit namespaced release tags. Non-desktop publishers are
@@ -117,3 +119,81 @@ conventions, Latest-pointer behavior, OpenClaw provenance, and mobile native
 architectures. The release workflows remain the publishing authority; a local
 contract pass proves configuration consistency, not that a remote release
 completed.
+
+Every publisher checks complete Git history and tags before it compares the
+current source with a release. Single-profile streams select the highest
+version-valid tag that is an ancestor of the commit being built. OpenClaw's
+mixed rolling/SemVer stream instead selects the unique latest ancestor by
+commit topology, so a later explicit SemVer release cannot be shadowed by a
+numerically larger older rolling tag. Incomparable hybrid release ancestors
+fail closed. A tag on another branch is never used as a diff base; it is listed
+as a divergent off-history tag in the machine result and audit report. A manual
+force is accepted only with a non-empty reason, which is preserved in the
+result.
+
+Tag validity is product-specific:
+
+- rolling products accept only `srn-<product>-vYY.N`, without prerelease or
+  build metadata;
+- mobile and independent workspace-package tags require full SemVer and allow
+  valid SemVer prerelease/build metadata; and
+- OpenClaw accepts its rolling `YY.N` identity or a full SemVer identity for
+  the documented explicit-tag path.
+
+For OpenClaw, `YY.N` and `YY.N.0` would produce the same internal package
+version. If both identities exist, analysis stops with a release-version
+collision instead of guessing which artifact is authoritative.
+
+Numeric components are compared at arbitrary precision, so a very large
+version cannot be rounded into another tag during baseline selection.
+
+```mermaid
+flowchart TD
+  H[Complete commit and tag history] --> T[Find version-valid product tags]
+  T --> A{Ancestor state}
+  A -- One or more --> V{Version profile}
+  V -- Single profile --> O[Select highest version-valid ancestor]
+  V -- OpenClaw hybrid --> H2[Select unique latest topological ancestor]
+  O --> D[Diff product and dependency closure]
+  H2 --> D
+  A -- No tags --> F[Auditable first release]
+  A -- Only divergent tags --> N[No-ancestor baseline; release required]
+  D --> S[Build the release surface]
+  F --> S
+  N --> S
+  S --> P[Normalize release-only manifest versions]
+  P --> C{Artifact fingerprint changed?}
+  C -- No --> X[Do not publish]
+  C -- Yes --> R[Publish under per-product lock]
+```
+
+Fingerprints are calculated from the built release surface, not from a package
+version alone. Bundled tools therefore include their compiled dependency
+closure; desktop, mobile, and OpenClaw normalize release-only manifest versions;
+and the home-server fingerprint covers both its executable bundle and every
+shipped migration.
+
+Run `yarn release:report` from a complete clone to write:
+
+- `release-impact.json`, the machine-readable product and workspace audit; and
+- `release-impact.md`, the same audit as readable tables.
+
+The release-contract workflow uploads both files and adds the Markdown report
+to its job summary. The managed-product table includes all eight publishers.
+The workspace table separately inventories all 44 manifests discovered through
+the root, app, and server Yarn workspace declarations. It deliberately excludes
+the two standalone managed CLI manifests, `cli/srn-client/package.json` and
+`cli/srn-server/package.json`; those have their own table and are already
+represented by `srn-client` and `srn-server` in the eight-product table.
+
+Each Yarn workspace has its own tag prefix, latest matching tag, selected
+ancestor baseline, change reasons, and one of these categories:
+
+- `release-managed`: an `srn-*` workflow explicitly owns the product;
+- `publishable-unmanaged`: the manifest is not private, but this repository has
+  no publisher for it; or
+- `private`: the package manifest prevents registry publication.
+
+`publishable-unmanaged` is inventory metadata, not an npm publishing promise.
+In particular, the report does not infer or create publishing for upstream
+`@standardnotes/*` packages.

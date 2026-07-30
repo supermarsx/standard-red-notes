@@ -26,7 +26,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: srn-mobile-${{ github.ref }}
+  group: srn-mobile-release
   cancel-in-progress: false
 
 defaults:
@@ -85,18 +85,26 @@ jobs:
       tag: ${{ steps.version.outputs.tag }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - id: version
         name: Resolve mobile release version
         run: |
           set -euo pipefail
+          git fetch --force --tags origin
           version="$(node -p "require('./app/packages/web/package.json').version.split('-')[0]")"
           if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "Invalid mobile release version: $version" >&2
             exit 1
           fi
+          tag="@standardnotes/mobile@$version"
+          if git show-ref --verify --quiet "refs/tags/$tag"; then
+            echo "Mobile release tag already exists: $tag" >&2
+            exit 1
+          fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "tag=@standardnotes/mobile@$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
   # Build deterministic Android/iOS JavaScript bundles plus the embedded web
   # payload before either Fastlane lane can publish externally. Native

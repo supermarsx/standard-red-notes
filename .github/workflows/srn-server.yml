@@ -31,7 +31,11 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: srn-server-release
+  cancel-in-progress: false
 
 defaults:
   run:
@@ -360,8 +364,12 @@ jobs:
     needs: [decide, package]
     if: needs.decide.outputs.changed == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Download packaged binaries
         uses: actions/download-artifact@v8
@@ -375,6 +383,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          git fetch --force --tags origin
           YY="$(date -u +%y)"
           prefix="${TOOL}-v${YY}."
           max=0
@@ -384,7 +393,7 @@ jobs:
             if [[ "$n" =~ ^[0-9]+$ ]] && [ "$n" -gt "$max" ]; then
               max="$n"
             fi
-          done < <(gh release list --limit 200 --json tagName --jq '.[].tagName' | grep -F "${prefix}" || true)
+          done < <(git tag --list "${prefix}*")
           next=$((max + 1))
           version="${YY}.${next}"
           tag="${TOOL}-v${version}"

@@ -20,6 +20,7 @@ export const RELEASE_CONTRACT_FILES = Object.freeze([
   "app/.github/workflows/desktop.release.reuse.yml",
   "app/.github/workflows/mobile.release.prod.yml",
   "app/packages/mobile/android/gradle.properties",
+  "docs/releases-and-upgrades.md",
   "openclaw/package.json",
   "openclaw/scripts/package-release.mjs",
   "openclaw/scripts/release-config.mjs",
@@ -91,6 +92,18 @@ function jobBlock(workflow, jobName) {
   return nextJob < 0 ? remainder : remainder.slice(0, nextJob);
 }
 
+function releaseTargetBlock(analyzer, target) {
+  const marker = `\n  "${target}": {`;
+  const start = analyzer.indexOf(marker);
+  if (start < 0) {
+    return "";
+  }
+  const contentStart = start + marker.length;
+  const remainder = analyzer.slice(contentStart);
+  const nextTarget = remainder.search(/\r?\n  "srn-[^"]+": \{/);
+  return nextTarget < 0 ? remainder : remainder.slice(0, nextTarget);
+}
+
 export function loadReleaseContractFiles(
   repositoryRoot = defaultRepositoryRoot,
 ) {
@@ -108,10 +121,26 @@ export function validateReleaseContract(files) {
   // Every automatic publisher uses the same two-stage selective-release
   // contract: an ancestry-aware source analysis first, then a normalized
   // artifact/input fingerprint before any tag or external publication. Missing
-  // refs, shallow history and malformed/ambiguous tags are errors in the
-  // analyzer; an audited force reason is the only bypass.
+  // refs, shallow history and malformed/ambiguous tag versions are errors in
+  // the analyzer; an audited force reason is the only bypass.
   for (const [file, target, firstJobName] of SELECTIVE_RELEASE_WORKFLOWS) {
     const workflow = files.get(file) ?? "";
+    for (const [fragment, description] of [
+      ["permissions:\n  contents: read", "read-only workflow permissions"],
+      [`concurrency:\n  group: ${target}-release`, "per-product concurrency"],
+      ["  cancel-in-progress: false", "non-cancelling release concurrency"],
+    ]) {
+      requireFragment(errors, file, workflow, fragment, description);
+    }
+    const writePermissions = workflow
+      .split(/\r?\n/)
+      .filter((line) => !line.trimStart().startsWith("#"))
+      .filter((line) => line.trim() === "contents: write").length;
+    if (writePermissions !== 1) {
+      errors.push(
+        `${file}: expected contents: write only on the publication job, found ${writePermissions}`,
+      );
+    }
     for (const [fragment, description] of [
       ["force_release:", "audited force-release input"],
       ["force_reason:", "audited force reason input"],
@@ -169,10 +198,7 @@ export function validateReleaseContract(files) {
           "BASE_REF: ${{ needs.impact.outputs.base_ref }}",
           "analyzer-selected fingerprint base",
         ],
-        [
-          "FORCED: ${{ needs.impact.outputs.forced }}",
-          "audited force output",
-        ],
+        ["FORCED: ${{ needs.impact.outputs.forced }}", "audited force output"],
         ['if [ "$FORCED" = "true" ]; then', "audited force-only bypass"],
         ['gh release download "$BASE_REF"', "prior fingerprint download"],
         [".fingerprint", "release surface fingerprint"],
@@ -180,7 +206,7 @@ export function validateReleaseContract(files) {
       ]) {
         requireFragment(errors, file, decide, fragment, description);
       }
-      if (decide.includes("last_tag=\"$(gh release list")) {
+      if (decide.includes('last_tag="$(gh release list')) {
         errors.push(
           `${file}: fingerprint comparison must use the analyzer-selected ancestry-validated base ref`,
         );
@@ -200,6 +226,38 @@ export function validateReleaseContract(files) {
         release,
         "if: needs.decide.outputs.changed == 'true'",
         "unchanged-release publication guard",
+      );
+      requireFragment(
+        errors,
+        file,
+        release,
+        "permissions:\n      contents: write",
+        "publication-only write permission",
+      );
+    }
+
+    if (target !== "srn-mobile") {
+      for (const [fragment, description] of [
+        ["git fetch --force --tags origin", "complete version tag fetch"],
+        [
+          'git tag --list "${prefix}*"',
+          "collision-safe rolling version source",
+        ],
+      ]) {
+        requireFragment(errors, file, workflow, fragment, description);
+      }
+      if (workflow.includes("gh release list")) {
+        errors.push(
+          `${file}: rolling versions must use complete tag history, not a truncated release list`,
+        );
+      }
+    } else {
+      requireFragment(
+        errors,
+        file,
+        workflow,
+        'git show-ref --verify --quiet "refs/tags/$tag"',
+        "mobile tag collision guard",
       );
     }
   }
@@ -223,6 +281,28 @@ export function validateReleaseContract(files) {
         );
       }
     }
+  }
+
+  const homeServerWorkflowFile = ".github/workflows/srn-home-server.yml";
+  const homeServerBuild = jobBlock(
+    files.get(homeServerWorkflowFile) ?? "",
+    "build",
+  );
+  for (const [fragment, description] of [
+    [
+      "node ../../../scripts/fingerprint-release-tree.mjs",
+      "normalized home-server release fingerprint",
+    ],
+    ["--path home-server.cjs", "home-server executable fingerprint input"],
+    ["--path migrations", "home-server migration fingerprint input"],
+  ]) {
+    requireFragment(
+      errors,
+      homeServerWorkflowFile,
+      homeServerBuild,
+      fragment,
+      description,
+    );
   }
   for (const file of [
     ".github/workflows/srn-client.yml",
@@ -432,10 +512,7 @@ export function validateReleaseContract(files) {
   for (const [fragment, description] of [
     // Publication still fans in over every gate: attest needs
     // [context, package, smoke], so no failed smoke target can be published.
-    [
-      "needs: [context, decide, attest]",
-      "attested OpenClaw release fan-in",
-    ],
+    ["needs: [context, decide, attest]", "attested OpenClaw release fan-in"],
     ["contents: write", "release publication permission"],
     [
       "name: srn-openclaw-attested-package",
@@ -794,10 +871,7 @@ export function validateReleaseContract(files) {
     );
     for (const [fragment, description] of [
       ["find dist -type f -name app.asar", "actual packaged asar discovery"],
-      [
-        "yarn exec asar extract",
-        "packaged desktop runtime extraction",
-      ],
+      ["yarn exec asar extract", "packaged desktop runtime extraction"],
       [
         "--normalize-package-version package.json",
         "rolling desktop version normalization",
@@ -1192,6 +1266,7 @@ export function validateReleaseContract(files) {
     "scripts/analyze-release-impact.test.mjs",
     "scripts/fingerprint-release-tree.mjs",
     "scripts/fingerprint-release-tree.test.mjs",
+    "docs/releases-and-upgrades.md",
   ]) {
     const declaration = `- '${triggerPath}'`;
     const count = countOccurrences(ci, declaration);
@@ -1215,6 +1290,17 @@ export function validateReleaseContract(files) {
     "node scripts/validate-release-contract.mjs",
     "release-contract validation",
   );
+  for (const [fragment, description] of [
+    ["fetch-depth: 0", "complete report history checkout"],
+    ["git fetch --force --tags origin", "complete report tag fetch"],
+    ["--all-workspaces all", "all-workspace release analysis"],
+    ["--output release-impact.json", "machine-readable release report"],
+    ["--report release-impact.md", "readable release report"],
+    ["actions/upload-artifact@v7", "release report artifact publication"],
+    ['cat release-impact.md >> "$GITHUB_STEP_SUMMARY"', "readable job summary"],
+  ]) {
+    requireFragment(errors, ciFile, ci, fragment, description);
+  }
 
   const rootPackage = JSON.parse(files.get("package.json") ?? "{}");
   if (
@@ -1242,6 +1328,14 @@ export function validateReleaseContract(files) {
     );
   }
   if (
+    rootPackage.scripts?.["release:report"] !==
+    "node scripts/analyze-release-impact.mjs --all-workspaces all --output release-impact.json --report release-impact.md"
+  ) {
+    errors.push(
+      "package.json: release:report script is not wired to both report formats",
+    );
+  }
+  if (
     rootPackage.scripts?.["test:release-impact"] !==
     "node --test scripts/analyze-release-impact.test.mjs scripts/fingerprint-release-tree.test.mjs"
   ) {
@@ -1256,12 +1350,81 @@ export function validateReleaseContract(files) {
     ["shallow-history", "shallow-history fail-closed guard"],
     ["malformed-release-ref", "malformed release-ref guard"],
     ["ambiguous-release-history", "ambiguous history guard"],
+    ["ambiguous-hybrid-release-history", "hybrid topology ambiguity guard"],
+    ["release-version-collision", "hybrid package-version collision guard"],
+    ["divergentNewerReleaseRefs", "diagnostic divergent-newer release refs"],
+    ["no-ancestor-baseline", "explicit no-ancestor baseline policy"],
+    ["createReleaseAnalysisContext", "shared release-analysis context"],
+    ["BigInt(", "arbitrary-precision tag ordering"],
+    ["release-managed", "managed workspace classification"],
+    ["publishable-unmanaged", "unmanaged workspace classification"],
+    [
+      "discoverStandaloneManagedPackages",
+      "standalone managed-package inventory",
+    ],
+    ["renderReleaseImpactReport", "readable release report renderer"],
     ["Unknown argument", "unknown CLI argument rejection"],
   ]) {
     requireFragment(
       errors,
       impactAnalyzerFile,
       impactAnalyzer,
+      fragment,
+      description,
+    );
+  }
+  if (
+    countOccurrences(impactAnalyzer, "releaseTargetsForPackage(packageName)") <
+    3
+  ) {
+    errors.push(
+      `${impactAnalyzerFile}: all workspace modes must use the managed-product category mapping`,
+    );
+  }
+  for (const [target, versioning] of [
+    ["srn-admin", "rolling-year"],
+    ["srn-client", "rolling-year"],
+    ["srn-desktop", "rolling-year"],
+    ["srn-home-server", "rolling-year"],
+    ["srn-mcp", "rolling-year"],
+    ["srn-mobile", "semver"],
+    ["srn-openclaw", "rolling-year-or-semver"],
+    ["srn-server", "rolling-year"],
+  ]) {
+    requireFragment(
+      errors,
+      impactAnalyzerFile,
+      releaseTargetBlock(impactAnalyzer, target),
+      `versioning: "${versioning}"`,
+      `${target} ${versioning} tag profile`,
+    );
+  }
+  requireFragment(
+    errors,
+    impactAnalyzerFile,
+    impactAnalyzer,
+    'tagPrefix: `${packageName}@`,\n      versioning: "semver"',
+    "independent workspace SemVer profile",
+  );
+
+  const releasesDocFile = "docs/releases-and-upgrades.md";
+  const releasesDoc = files.get(releasesDocFile) ?? "";
+  for (const [fragment, description] of [
+    ["divergent off-history tag", "divergent-tag baseline behavior"],
+    ["unique latest ancestor by", "hybrid topological baseline behavior"],
+    ["release-version", "hybrid package-version collision policy"],
+    ["`release-managed`", "managed workspace category"],
+    ["`publishable-unmanaged`", "unmanaged workspace category"],
+    ["does not infer or create publishing", "non-publisher disclaimer"],
+    ["all 44 manifests", "current Yarn-workspace inventory count"],
+    ["two standalone managed CLI manifests", "standalone CLI inventory scope"],
+    ["all eight publishers", "complete managed-product count"],
+    ["```mermaid", "release decision diagram"],
+  ]) {
+    requireFragment(
+      errors,
+      releasesDocFile,
+      releasesDoc,
       fragment,
       description,
     );
@@ -1275,10 +1438,7 @@ export function validateReleaseContract(files) {
       "fingerprint path escapes the selected root",
       "fingerprint traversal rejection",
     ],
-    [
-      "0.0.0-release-fingerprint",
-      "rolling package-version normalization",
-    ],
+    ["0.0.0-release-fingerprint", "rolling package-version normalization"],
   ]) {
     requireFragment(
       errors,

@@ -13,6 +13,8 @@ node_modules/
 dist/
 build/
 coverage/
+release-impact.json
+release-impact.md
 *.tsbuildinfo
 .eslintcache
 

@@ -70,6 +70,7 @@
     "ops:load": "npm --prefix e2e run test:ops-load",
     "release:contract": "node scripts/validate-release-contract.mjs",
     "release:impact": "node scripts/analyze-release-impact.mjs",
+    "release:report": "node scripts/analyze-release-impact.mjs --all-workspaces all --output release-impact.json --report release-impact.md",
     "screenshot:readme": "node scripts/capture-readme-screenshot.mjs",
     "start:mcp": "yarn workspace @standard-red-notes/mcp start",
     "start:openclaw": "yarn workspace @standard-red-notes/openclaw start",

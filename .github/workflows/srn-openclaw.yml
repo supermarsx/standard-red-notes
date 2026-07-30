@@ -64,7 +64,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: srn-openclaw-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+  group: srn-openclaw-release
   cancel-in-progress: false
 
 env:
@@ -148,6 +148,7 @@ jobs:
           REQUESTED_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || (startsWith(github.ref, 'refs/tags/') && github.ref_name || '') }}
         run: |
           set -euo pipefail
+          git fetch --force --tags origin
           tag="${REQUESTED_TAG}"
           if [ -n "${tag}" ]; then
             # Explicit tag release: the version comes from the tag, the tag must
@@ -157,7 +158,6 @@ jobs:
               exit 1
             fi
 
-            git fetch --force --tags origin
             source_sha="$(git rev-parse --verify "refs/tags/${tag}^{commit}")"
             git checkout --detach "${source_sha}"
             version="$(TAG="${tag}" node --input-type=module -e \
@@ -171,7 +171,7 @@ jobs:
             verify_tag=true
           else
             # Rolling release: N is one past the highest N already released this
-            # year, discovered from the existing `srn-openclaw-v<YY>.` releases,
+            # year, discovered from every `srn-openclaw-v<YY>.` tag,
             # exactly as every other srn-* workflow does.
             YY="$(date -u +%y)"
             prefix="${TOOL}-v${YY}."
@@ -180,7 +180,7 @@ jobs:
               [ -z "$released" ] && continue
               n="${released#"$prefix"}"
               if [[ "$n" =~ ^[0-9]+$ ]] && [ "$n" -gt "$max" ]; then max="$n"; fi
-            done < <(gh release list --repo "$GITHUB_REPOSITORY" --limit 200 --json tagName --jq '.[].tagName' | grep -F "${prefix}" || true)
+            done < <(git tag --list "${prefix}*")
             version="${YY}.$((max + 1))"
             # release-config.mjs demands a strict semver tag and `26.1` is not
             # semver, so the packaged artifact carries `26.1.0`.

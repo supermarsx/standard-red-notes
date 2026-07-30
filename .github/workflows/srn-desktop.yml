@@ -52,7 +52,11 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: srn-desktop-release
+  cancel-in-progress: false
 
 defaults:
   run:
@@ -117,11 +121,16 @@ jobs:
       app_version: ${{ steps.v.outputs.app_version }}
       tag: ${{ steps.v.outputs.tag }}
     steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
       - id: v
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          git fetch --force --tags origin
           YY="$(date -u +%y)"
           prefix="${TOOL}-v${YY}."
           max=0
@@ -129,7 +138,7 @@ jobs:
             [ -z "$tag" ] && continue
             n="${tag#"$prefix"}"
             if [[ "$n" =~ ^[0-9]+$ ]] && [ "$n" -gt "$max" ]; then max="$n"; fi
-          done < <(gh release list --repo "$GITHUB_REPOSITORY" --limit 200 --json tagName --jq '.[].tagName' | grep -F "${prefix}" || true)
+          done < <(git tag --list "${prefix}*")
           version="${YY}.$((max + 1))"
           {
             echo "version=${version}"
@@ -360,6 +369,8 @@ jobs:
     needs: [version, build, decide]
     if: needs.decide.outputs.changed == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Download all installers
         uses: actions/download-artifact@v8

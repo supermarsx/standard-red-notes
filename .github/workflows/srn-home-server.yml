@@ -41,7 +41,11 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: srn-home-server-release
+  cancel-in-progress: false
 
 defaults:
   run:
@@ -97,7 +101,8 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   # 1) BUILD — install the PnP workspace, tsc-build every server package, then
-  # esbuild-bundle home-server into a single CJS + a content fingerprint.
+  # esbuild-bundle home-server into a single CJS + a normalized fingerprint of
+  # the executable and the complete migration payload.
   build:
     name: build
     needs: impact
@@ -135,15 +140,18 @@ jobs:
         working-directory: ${{ env.SERVER_DIR }}
         run: yarn workspace @standardnotes/home-server build:bundle
 
-      - name: Compute content fingerprint
+      - name: Compute release-surface fingerprint
         id: fp
         working-directory: ${{ env.HS_DIR }}
         run: |
           set -euo pipefail
-          fp="$(sha256sum dist/bundle/home-server.cjs | awk '{print $1}')"
-          echo "fingerprint=${fp}" >> "$GITHUB_OUTPUT"
-          printf '%s\n' "$fp" > "dist/bundle/${TOOL}.fingerprint"
-          echo "Bundle fingerprint: ${fp}"
+          node ../../../scripts/fingerprint-release-tree.mjs \
+            --root dist/bundle \
+            --path home-server.cjs \
+            --path migrations \
+            --output "dist/bundle/${TOOL}.fingerprint" \
+            --github-output "$GITHUB_OUTPUT"
+          grep -Eq '^[0-9a-f]{64}$' "dist/bundle/${TOOL}.fingerprint"
 
       - name: Upload bundle artifact
         uses: actions/upload-artifact@v7
@@ -244,7 +252,7 @@ jobs:
 
       - name: Generate checksums
         working-directory: out
-        run: sha256sum "${TOOL}"-* "${TOOL}-migrations.zip" > SHA256SUMS.txt && cat SHA256SUMS.txt
+        run: sha256sum "${TOOL}"-* > SHA256SUMS.txt && cat SHA256SUMS.txt
 
       - name: Upload packaged binaries
         uses: actions/upload-artifact@v7
@@ -261,7 +269,13 @@ jobs:
     needs: [decide, package]
     if: needs.decide.outputs.changed == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
       - name: Download packaged binaries
         uses: actions/download-artifact@v8
         with:
@@ -273,6 +287,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          git fetch --force --tags origin
           YY="$(date -u +%y)"
           prefix="${TOOL}-v${YY}."
           max=0
@@ -280,7 +295,7 @@ jobs:
             [ -z "$tag" ] && continue
             n="${tag#"$prefix"}"
             if [[ "$n" =~ ^[0-9]+$ ]] && [ "$n" -gt "$max" ]; then max="$n"; fi
-          done < <(gh release list --repo "$GITHUB_REPOSITORY" --limit 200 --json tagName --jq '.[].tagName' | grep -F "${prefix}" || true)
+          done < <(git tag --list "${prefix}*")
           version="${YY}.$((max + 1))"
           tag="${TOOL}-v${version}"
           echo "Releasing ${tag}"

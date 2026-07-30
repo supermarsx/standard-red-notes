@@ -228,7 +228,10 @@ test("an unnamespaced OpenClaw release tag is rejected", () => {
 
 test("dropping the namespaced OpenClaw tag is rejected", () => {
   const files = withFileChanged(openClawWorkflowFile, (content) =>
-    content.replace('tag="${TOOL}-v${version}"', 'tag="srn-openclaw-${version}"'),
+    content.replace(
+      'tag="${TOOL}-v${version}"',
+      'tag="srn-openclaw-${version}"',
+    ),
   );
 
   assert.match(
@@ -317,10 +320,7 @@ test("dropping the explicit-tag version assertion is rejected", () => {
 // would let a mistyped manual tag be created by the release step.
 test("dropping the OpenClaw explicit-tag verification gate is rejected", () => {
   const files = withFileChanged(openClawWorkflowFile, (content) =>
-    content.replace(
-      'if [ "${VERIFY_TAG}" = "true" ]; then',
-      "if true; then",
-    ),
+    content.replace('if [ "${VERIFY_TAG}" = "true" ]; then', "if true; then"),
   );
 
   assert.match(
@@ -829,7 +829,10 @@ test("every publisher must fetch complete history and tags before impact analysi
   );
   const errors = validateReleaseContract(files).join("\n");
 
-  assert.match(errors, /srn-server\.yml: missing complete Git history checkout/);
+  assert.match(
+    errors,
+    /srn-server\.yml: missing complete Git history checkout/,
+  );
   assert.match(errors, /srn-server\.yml: missing complete release tag fetch/);
 });
 
@@ -865,6 +868,18 @@ test("fingerprints must compare against the analyzer-selected base", () => {
   assert.match(
     validateReleaseContract(files).join("\n"),
     /srn-client\.yml: missing analyzer-selected fingerprint base/,
+  );
+});
+
+test("home-server fingerprints include the shipped migration payload", () => {
+  const file = ".github/workflows/srn-home-server.yml";
+  const files = withFileChanged(file, (content) =>
+    content.replace("            --path migrations \\\n", ""),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /srn-home-server\.yml: missing home-server migration fingerprint input/,
   );
 });
 
@@ -912,5 +927,147 @@ test("release-contract CI runs when release analysis or OpenClaw gating changes"
   assert.match(
     errors,
     /release-contract\.yml: expected scripts\/fingerprint-release-tree\.mjs in both push and pull_request paths, found 1/,
+  );
+});
+
+test("publisher concurrency and write permissions stay product-scoped", () => {
+  const file = ".github/workflows/srn-admin.yml";
+  const files = withFileChanged(file, (content) =>
+    content
+      .replace(
+        "permissions:\n  contents: read",
+        "permissions:\n  contents: write",
+      )
+      .replace(
+        "concurrency:\n  group: srn-admin-release\n  cancel-in-progress: false\n\n",
+        "",
+      )
+      .replace("    permissions:\n      contents: write\n", ""),
+  );
+  const errors = validateReleaseContract(files).join("\n");
+
+  assert.match(
+    errors,
+    /srn-admin\.yml: missing read-only workflow permissions/,
+  );
+  assert.match(errors, /srn-admin\.yml: missing per-product concurrency/);
+  assert.match(
+    errors,
+    /srn-admin\.yml: missing non-cancelling release concurrency/,
+  );
+  assert.match(
+    errors,
+    /srn-admin\.yml: missing publication-only write permission/,
+  );
+});
+
+test("rolling versions use every tag rather than a truncated release list", () => {
+  const file = ".github/workflows/srn-server.yml";
+  const files = withFileChanged(file, (content) =>
+    content.replace(
+      'git tag --list "${prefix}*"',
+      "gh release list --limit 200 --json tagName --jq '.[].tagName'",
+    ),
+  );
+  const errors = validateReleaseContract(files).join("\n");
+
+  assert.match(
+    errors,
+    /srn-server\.yml: missing collision-safe rolling version source/,
+  );
+  assert.match(
+    errors,
+    /srn-server\.yml: rolling versions must use complete tag history/,
+  );
+});
+
+test("mobile refuses to reuse an existing version tag", () => {
+  const file = ".github/workflows/srn-mobile.yml";
+  const files = withFileChanged(file, (content) =>
+    content.replace(
+      '          if git show-ref --verify --quiet "refs/tags/$tag"; then\n',
+      "          if false; then\n",
+    ),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /srn-mobile\.yml: missing mobile tag collision guard/,
+  );
+});
+
+test("release-contract CI produces both complete report formats", () => {
+  const file = ".github/workflows/release-contract.yml";
+  const files = withFileChanged(file, (content) =>
+    content
+      .replace("            --all-workspaces all \\\n", "")
+      .replace("            --output release-impact.json \\\n", "")
+      .replace("            --report release-impact.md\n", "")
+      .replace(
+        "        uses: actions/upload-artifact@v7\n",
+        "        run: true\n",
+      ),
+  );
+  const errors = validateReleaseContract(files).join("\n");
+
+  assert.match(
+    errors,
+    /release-contract\.yml: missing all-workspace release analysis/,
+  );
+  assert.match(
+    errors,
+    /release-contract\.yml: missing machine-readable release report/,
+  );
+  assert.match(
+    errors,
+    /release-contract\.yml: missing readable release report/,
+  );
+  assert.match(
+    errors,
+    /release-contract\.yml: missing release report artifact publication/,
+  );
+});
+
+test("product tag profiles and workspace classification cannot drift", () => {
+  const file = "scripts/analyze-release-impact.mjs";
+  const files = withFileChanged(file, (content) =>
+    content
+      .replace(
+        '  "srn-mobile": {\n    ...appProductConfig,\n    tagPrefix: "@standardnotes/mobile@",\n    versioning: "semver",',
+        '  "srn-mobile": {\n    ...appProductConfig,\n    tagPrefix: "@standardnotes/mobile@",\n    versioning: "rolling-year",',
+      )
+      .replace(
+        "    const releaseTargets = releaseTargetsForPackage(packageName);",
+        "    const releaseTargets = [];",
+      ),
+  );
+  const errors = validateReleaseContract(files).join("\n");
+
+  assert.match(
+    errors,
+    /analyze-release-impact\.mjs: missing srn-mobile semver tag profile/,
+  );
+  assert.match(
+    errors,
+    /analyze-release-impact\.mjs: all workspace modes must use the managed-product category mapping/,
+  );
+});
+
+test("hybrid history ambiguity and package-version collisions stay fail-closed", () => {
+  const file = "scripts/analyze-release-impact.mjs";
+  const files = withFileChanged(file, (content) =>
+    content
+      .replace('"ambiguous-hybrid-release-history"', '"hybrid-history-ignored"')
+      .replace('"release-version-collision"', '"release-version-ignored"'),
+  );
+  const errors = validateReleaseContract(files).join("\n");
+
+  assert.match(
+    errors,
+    /analyze-release-impact\.mjs: missing hybrid topology ambiguity guard/,
+  );
+  assert.match(
+    errors,
+    /analyze-release-impact\.mjs: missing hybrid package-version collision guard/,
   );
 });
