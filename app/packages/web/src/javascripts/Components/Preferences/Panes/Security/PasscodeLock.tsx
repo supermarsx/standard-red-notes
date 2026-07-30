@@ -15,6 +15,7 @@ import { alertDialog } from '@standardnotes/ui-services'
 import { FormEvent, useCallback, useEffect, useRef, useState } from 'react'
 import { ApplicationEvent, MobileUnlockTiming } from '@standardnotes/snjs'
 import { observer } from 'mobx-react-lite'
+import { removeAppLockPasskey } from '@/AppLockPasskey/appLockPasskeyService'
 import { Title, Text } from '@/Components/Preferences/PreferencesComponents/Content'
 import Button from '@/Components/Button/Button'
 import PreferencesGroup from '../../PreferencesComponents/PreferencesGroup'
@@ -96,6 +97,9 @@ const PasscodeLock = ({ application }: Props) => {
   const removePasscodePressed = async () => {
     await preventRefreshing(STRING_CONFIRM_APP_QUIT_DURING_PASSCODE_REMOVAL, async () => {
       if (await application.removePasscode()) {
+        await removeAppLockPasskey(application).catch((error) => {
+          console.error('Unable to remove the now-inactive app-lock passkey', error)
+        })
         if (!isNativeMobileWeb) {
           await application.autolockService?.deleteAutolockPreference()
           await reloadDesktopAutoLockInterval()

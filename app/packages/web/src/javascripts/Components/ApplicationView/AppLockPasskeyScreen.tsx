@@ -6,7 +6,10 @@ import ModalOverlay from '@/Components/Modal/ModalOverlay'
 import Modal from '@/Components/Modal/Modal'
 import { classNames } from '@standardnotes/utils'
 import { MutuallyExclusiveMediaQueryBreakpoints, useMediaQuery } from '@/Hooks/useMediaQuery'
-import { authenticateAppLockPasskey } from '@/AppLockPasskey/appLockPasskeyService'
+import {
+  authenticateAppLockPasskey,
+  disableAppLockPasskeyAfterVerifiedPasscode,
+} from '@/AppLockPasskey/appLockPasskeyService'
 
 type Props = {
   application: WebApplication
@@ -25,11 +28,9 @@ type Props = {
  * SECURITY SCOPE: this is a LOCAL ACCESS GATE — it gates the app UI on this
  * device. It does not decrypt data and does not affect the E2E encryption keys.
  *
- * Cancellation / failure keeps the app locked and shows a retry. There is no
- * "skip passkey" escape here: the passcode (if any) has already been entered, so
- * the passkey is an additional local factor the user opted into, and bypassing it
- * would defeat the purpose. To stop using passkey unlock, remove it in
- * Preferences → Security (which requires being unlocked).
+ * Cancellation / failure keeps the app locked and shows a retry. Because the
+ * passcode has already been verified before this screen is mounted, it can also
+ * be used as a recovery factor to disable an unavailable passkey.
  */
 const AppLockPasskeyScreen: FunctionComponent<Props> = ({ application, onUnlocked }) => {
   const [isAuthenticating, setIsAuthenticating] = useState(false)
@@ -46,6 +47,33 @@ const AppLockPasskeyScreen: FunctionComponent<Props> = ({ application, onUnlocke
       } else {
         setError('Passkey verification was cancelled or failed. Please try again.')
       }
+    } finally {
+      setIsAuthenticating(false)
+    }
+  }, [application, onUnlocked])
+
+  const useVerifiedPasscode = useCallback(async () => {
+    const confirmed = await application.alerts.confirm(
+      'Use your verified app passcode and disable the passkey lock on this device?',
+      'Use passcode instead?',
+      'Use passcode',
+    )
+    if (!confirmed) {
+      return
+    }
+
+    setIsAuthenticating(true)
+    setError(null)
+    try {
+      const disabled = await disableAppLockPasskeyAfterVerifiedPasscode(application)
+      if (disabled) {
+        onUnlocked()
+      } else {
+        setError('The passkey lock could not be disabled. Lock and unlock the app with your passcode, then try again.')
+      }
+    } catch (error) {
+      console.error('Unable to disable app-lock passkey after passcode verification', error)
+      setError('The passkey lock could not be disabled. Please try again.')
     } finally {
       setIsAuthenticating(false)
     }
@@ -78,6 +106,9 @@ const AppLockPasskeyScreen: FunctionComponent<Props> = ({ application, onUnlocke
           {error && <div className="text-danger mb-3 max-w-76 text-center text-sm">{error}</div>}
           <Button primary disabled={isAuthenticating} className="mb-2 min-w-76" onClick={() => void attempt()}>
             {isAuthenticating ? 'Waiting for passkey…' : 'Unlock with passkey'}
+          </Button>
+          <Button disabled={isAuthenticating} className="min-w-76" onClick={() => void useVerifiedPasscode()}>
+            Use verified passcode instead
           </Button>
         </div>
       </Modal>

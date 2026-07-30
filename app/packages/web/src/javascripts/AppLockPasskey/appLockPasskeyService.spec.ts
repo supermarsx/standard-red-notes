@@ -3,7 +3,9 @@ import { startAuthentication, startRegistration } from '@simplewebauthn/browser'
 import { AppLockPasskeyCredential, AppLockPasskeyStorageKey } from './appLockPasskey'
 import {
   authenticateAppLockPasskey,
+  disableAppLockPasskeyAfterVerifiedPasscode,
   getAppLockPasskeyCredential,
+  hasAppLockPasscodeFallback,
   isAppLockPasskeyRegistered,
   isAppLockPasskeySupported,
   registerAppLockPasskey,
@@ -32,7 +34,9 @@ type AppMock = {
   removeValue: jest.Mock
 }
 
-const makeApplication = (opts: { isNativeMobileWeb?: boolean; stored?: unknown } = {}): AppMock => {
+const makeApplication = (
+  opts: { isNativeMobileWeb?: boolean; stored?: unknown; hasPasscode?: boolean; isLocked?: boolean } = {},
+): AppMock => {
   const store: Record<string, unknown> = {}
   if (opts.stored !== undefined) {
     store[AppLockPasskeyStorageKey] = opts.stored
@@ -48,6 +52,10 @@ const makeApplication = (opts: { isNativeMobileWeb?: boolean; stored?: unknown }
     },
     removeValue,
     isNativeMobileWeb: () => opts.isNativeMobileWeb ?? false,
+    hasPasscode: () => opts.hasPasscode ?? true,
+    protections: {
+      isLocked: jest.fn().mockResolvedValue(opts.isLocked ?? false),
+    },
   } as unknown as WebApplication
   return { store, application, removeValue }
 }
@@ -74,6 +82,13 @@ describe('getAppLockPasskeyCredential / isAppLockPasskeyRegistered', () => {
     const { application } = makeApplication({ stored: credential() })
     expect(getAppLockPasskeyCredential(application)).toEqual(credential())
     expect(isAppLockPasskeyRegistered(application)).toBe(true)
+  })
+
+  it('keeps a legacy credential inactive when no recovery passcode exists', () => {
+    const { application } = makeApplication({ stored: credential(), hasPasscode: false })
+    expect(getAppLockPasskeyCredential(application)).toEqual(credential())
+    expect(hasAppLockPasscodeFallback(application)).toBe(false)
+    expect(isAppLockPasskeyRegistered(application)).toBe(false)
   })
 })
 
@@ -114,6 +129,13 @@ describe('registerAppLockPasskey', () => {
     expect(app.store[AppLockPasskeyStorageKey]).toMatchObject({ credentialId: 'new-cred' })
   })
 
+  it('does not start registration without a recovery passcode', async () => {
+    const app = makeApplication({ hasPasscode: false })
+    expect(await registerAppLockPasskey(app.application)).toBeNull()
+    expect(mockedStartRegistration).not.toHaveBeenCalled()
+    expect(app.store[AppLockPasskeyStorageKey]).toBeUndefined()
+  })
+
   it('returns null and stores nothing when the user cancels', async () => {
     mockedStartRegistration.mockRejectedValue(new Error('cancelled'))
     const app = makeApplication()
@@ -145,6 +167,12 @@ describe('authenticateAppLockPasskey', () => {
     expect(mockedStartAuthentication).not.toHaveBeenCalled()
   })
 
+  it('does not authenticate a legacy credential without a recovery passcode', async () => {
+    const app = makeApplication({ stored: credential(), hasPasscode: false })
+    expect(await authenticateAppLockPasskey(app.application)).toBe(false)
+    expect(mockedStartAuthentication).not.toHaveBeenCalled()
+  })
+
   it('returns true when the assertion matches the registered credential id', async () => {
     mockedStartAuthentication.mockResolvedValue({ id: 'cred-1' })
     const app = makeApplication({ stored: credential() })
@@ -161,5 +189,19 @@ describe('authenticateAppLockPasskey', () => {
     mockedStartAuthentication.mockRejectedValue(new Error('cancelled'))
     const app = makeApplication({ stored: credential() })
     expect(await authenticateAppLockPasskey(app.application)).toBe(false)
+  })
+})
+
+describe('disableAppLockPasskeyAfterVerifiedPasscode', () => {
+  it('removes the passkey only after the passcode-backed protection is unlocked', async () => {
+    const app = makeApplication({ stored: credential(), isLocked: false })
+    expect(await disableAppLockPasskeyAfterVerifiedPasscode(app.application)).toBe(true)
+    expect(app.removeValue).toHaveBeenCalledWith(AppLockPasskeyStorageKey)
+  })
+
+  it('does not remove the passkey while protection is still locked', async () => {
+    const app = makeApplication({ stored: credential(), isLocked: true })
+    expect(await disableAppLockPasskeyAfterVerifiedPasscode(app.application)).toBe(false)
+    expect(app.removeValue).not.toHaveBeenCalled()
   })
 })

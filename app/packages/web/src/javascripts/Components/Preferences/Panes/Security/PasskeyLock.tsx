@@ -6,8 +6,10 @@ import PreferencesGroup from '@/Components/Preferences/PreferencesComponents/Pre
 import PreferencesSegment from '@/Components/Preferences/PreferencesComponents/PreferencesSegment'
 import Button from '@/Components/Button/Button'
 import { addToast, ToastType } from '@standardnotes/toast'
+import { ApplicationEvent } from '@standardnotes/snjs'
 import {
   getAppLockPasskeyCredential,
+  hasAppLockPasscodeFallback,
   isAppLockPasskeySupported,
   registerAppLockPasskey,
   removeAppLockPasskey,
@@ -31,17 +33,28 @@ type Props = {
 const PasskeyLock = ({ application }: Props) => {
   const supported = isAppLockPasskeySupported(application)
   const [hasPasskey, setHasPasskey] = useState(() => getAppLockPasskeyCredential(application) !== null)
+  const [hasPasscodeFallback, setHasPasscodeFallback] = useState(() => hasAppLockPasscodeFallback(application))
   const [isRegistering, setIsRegistering] = useState(false)
 
   const refresh = useCallback(() => {
     setHasPasskey(getAppLockPasskeyCredential(application) !== null)
+    setHasPasscodeFallback(hasAppLockPasscodeFallback(application))
   }, [application])
 
   useEffect(() => {
     refresh()
-  }, [refresh])
+    return application.addEventObserver(async () => refresh(), ApplicationEvent.KeyStatusChanged)
+  }, [application, refresh])
 
   const onRegister = useCallback(async () => {
+    if (!hasAppLockPasscodeFallback(application)) {
+      addToast({
+        type: ToastType.Error,
+        message: 'Set an app passcode before registering a passkey so you keep a recovery method.',
+      })
+      return
+    }
+
     setIsRegistering(true)
     try {
       const credential = await registerAppLockPasskey(application)
@@ -90,21 +103,32 @@ const PasskeyLock = ({ application }: Props) => {
         <Text className="mb-3">
           Register a passkey (Touch ID, Windows Hello, or a security key) to unlock this app on this device. This is a
           local access gate only: it controls access to the app UI on this device and does not change your encryption
-          keys, which still come from your account password{application.hasPasscode() ? ' and passcode' : ''}.
+          keys. Your app passcode remains the recovery method if the passkey becomes unavailable.
         </Text>
 
         {!hasPasskey && (
-          <Button
-            label={isRegistering ? 'Waiting for passkey…' : 'Register passkey'}
-            disabled={isRegistering}
-            onClick={onRegister}
-            primary
-          />
+          <>
+            {!hasPasscodeFallback && (
+              <Text className="text-warning mb-3">
+                Set an app passcode first. Passkey lock is not enabled without a separate recovery method.
+              </Text>
+            )}
+            <Button
+              label={isRegistering ? 'Waiting for passkey…' : 'Register passkey'}
+              disabled={isRegistering || !hasPasscodeFallback}
+              onClick={onRegister}
+              primary
+            />
+          </>
         )}
 
         {hasPasskey && (
           <>
-            <Text className="mb-3">A passkey is registered. You can use it to unlock the app on this device.</Text>
+            <Text className="mb-3">
+              {hasPasscodeFallback
+                ? 'A passkey is registered. You can use it to unlock the app on this device.'
+                : 'A passkey credential is stored but inactive because no recovery passcode is set.'}
+            </Text>
             <Button colorStyle="danger" label="Remove passkey" onClick={onRemove} />
           </>
         )}

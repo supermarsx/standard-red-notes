@@ -46,9 +46,23 @@ export function getAppLockPasskeyCredential(application: WebApplication): AppLoc
   return normalizeAppLockPasskeyCredential(readStoredCredential(application))
 }
 
-/** True iff an app-lock passkey is registered on this device. */
+/**
+ * A passkey may only be an additional local gate when a passcode remains
+ * available as a recovery factor. This also makes legacy credentials fail open
+ * after their passcode has been removed instead of permanently locking the
+ * local vault behind an unavailable authenticator.
+ */
+export function hasAppLockPasscodeFallback(application: WebApplication): boolean {
+  try {
+    return application.hasPasscode()
+  } catch {
+    return false
+  }
+}
+
+/** True iff a usable, recoverable app-lock passkey is registered on this device. */
 export function isAppLockPasskeyRegistered(application: WebApplication): boolean {
-  return hasRegisteredAppLockPasskey(readStoredCredential(application))
+  return hasAppLockPasscodeFallback(application) && hasRegisteredAppLockPasskey(readStoredCredential(application))
 }
 
 /**
@@ -75,6 +89,10 @@ export async function registerAppLockPasskey(
   application: WebApplication,
   label = 'This device',
 ): Promise<AppLockPasskeyCredential | null> {
+  if (!hasAppLockPasscodeFallback(application)) {
+    return null
+  }
+
   const optionsJSON = buildAppLockRegistrationOptions({ rpId: currentRpId() })
 
   let registration
@@ -112,6 +130,10 @@ export async function removeAppLockPasskey(application: WebApplication): Promise
  * credential id. Cancellation/failure returns false (caller stays locked).
  */
 export async function authenticateAppLockPasskey(application: WebApplication): Promise<boolean> {
+  if (!hasAppLockPasscodeFallback(application)) {
+    return false
+  }
+
   const credential = getAppLockPasskeyCredential(application)
   if (!credential) {
     return false
@@ -132,4 +154,19 @@ export async function authenticateAppLockPasskey(application: WebApplication): P
     console.error('App-lock passkey unlock failed or was cancelled', error)
     return false
   }
+}
+
+/**
+ * Recover from an unavailable passkey after the normal passcode gate has
+ * already been satisfied. The lock screen calls this only after launch, but the
+ * protection-state check is kept here as defense in depth so an unverified
+ * caller cannot remove the additional gate.
+ */
+export async function disableAppLockPasskeyAfterVerifiedPasscode(application: WebApplication): Promise<boolean> {
+  if (!hasAppLockPasscodeFallback(application) || (await application.protections.isLocked())) {
+    return false
+  }
+
+  await removeAppLockPasskey(application)
+  return true
 }
