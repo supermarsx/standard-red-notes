@@ -45,6 +45,6 @@ export function loadConfig(explicit?: string): Config {
   }
 
   throw new Error(
-    `No config file found. Tried: ${candidates.join(", ")}. Run \`openclaw doctor --write-config\` to scaffold one.`,
+    `No config file found. Tried: ${candidates.join(", ")}. Create ~/.openclaw/config.toml as documented in the OpenClaw README, or set OPENCLAW_CONFIG.`,
   );
 }

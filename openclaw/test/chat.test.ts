@@ -269,6 +269,20 @@ describe("chat shutdown", () => {
     expect(h.sessionClosed).toBe(1);
   });
 
+  it("redacts sensitive readline failures from terminal output", async () => {
+    h.endWith = new Error(
+      "failed at C:\\Users\\me\\private.txt with sk-abc12345secret",
+    );
+
+    await expect(chat()).resolves.toBe(0);
+
+    const output = String(stderr.mock.calls.at(-1)?.[0]);
+    expect(output).not.toContain("private.txt");
+    expect(output).not.toContain("abc12345secret");
+    expect(output).toContain("<redacted-path>");
+    expect(output).toContain("<redacted-token>");
+  });
+
   it("releases the session if readline initialization fails", async () => {
     h.createError = new Error("readline unavailable");
 

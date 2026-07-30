@@ -462,7 +462,10 @@ describe("loadConfig", () => {
     const missing = join(dir, "nope.toml");
     expect(() => loadConfig(missing)).toThrow(/No config file found\. Tried:/);
     expect(() => loadConfig(missing)).toThrow(/nope\.toml/);
-    expect(() => loadConfig(missing)).toThrow(/doctor --write-config/);
+    expect(() => loadConfig(missing)).toThrow(
+      /Create ~\/\.openclaw\/config\.toml/,
+    );
+    expect(() => loadConfig(missing)).not.toThrow(/doctor --write-config/);
   });
 
   it("propagates a schema violation instead of silently defaulting", () => {

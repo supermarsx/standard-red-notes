@@ -6,6 +6,7 @@ import { boundHistory, run } from "../core/agent.js";
 import type { ChatMessage } from "../providers/types.js";
 import { createAuditSink } from "../util/audit.js";
 import { log } from "../util/log.js";
+import { redactSensitiveText } from "../util/redact.js";
 
 export async function chat(): Promise<number> {
   const cfg = loadConfig();
@@ -60,7 +61,7 @@ export async function chat(): Promise<number> {
     }
   } catch (err) {
     if ((err as { code?: string }).code !== "ERR_USE_AFTER_CLOSE") {
-      process.stderr.write(`chat ended: ${String(err)}\n`);
+      process.stderr.write(`chat ended: ${redactSensitiveText(String(err))}\n`);
     }
   } finally {
     rl?.close();

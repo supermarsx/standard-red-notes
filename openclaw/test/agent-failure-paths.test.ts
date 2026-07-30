@@ -134,6 +134,32 @@ describe("agent tool failures", () => {
     expect(toolTurn?.content).toContain("error: Error: tool exploded");
   });
 
+  it("redacts sensitive tool exceptions before provider history", async () => {
+    const provider = new RecordingProvider([
+      [
+        { kind: "tool-call", id: "c1", name: "notes.search", args: {} },
+        { kind: "finish", stopReason: "tool_use" },
+      ],
+      [
+        { kind: "text-delta", delta: "I could not search." },
+        { kind: "finish", stopReason: "end_turn" },
+      ],
+    ]);
+    const session = fakeSession(async () => {
+      throw new Error(
+        "failed at /home/user/private.txt with sk-abc12345secret",
+      );
+    });
+
+    await run([{ role: "user", content: "find" }], { provider, session });
+
+    const serialized = JSON.stringify(provider.lastRequest?.messages);
+    expect(serialized).not.toContain("/home/user/private.txt");
+    expect(serialized).not.toContain("abc12345secret");
+    expect(serialized).toContain("<redacted-path>");
+    expect(serialized).toContain("<redacted-token>");
+  });
+
   it("serialises a non-string tool result as JSON for the model", async () => {
     const provider = new RecordingProvider([
       [

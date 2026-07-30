@@ -2,6 +2,7 @@ import { loadConfig } from "../config/load.js";
 import type { Config } from "../config/schema.js";
 import { McpSession, sessionOptionsFromConfig } from "../mcp/session.js";
 import { log } from "../util/log.js";
+import { redactSensitiveText } from "../util/redact.js";
 
 export async function doctor(): Promise<number> {
   const out = process.stdout;
@@ -12,7 +13,7 @@ export async function doctor(): Promise<number> {
     cfg = loadConfig();
     out.write("✓ config loaded\n");
   } catch (err) {
-    out.write(`✗ config: ${String(err)}\n`);
+    out.write(`✗ config: ${redactSensitiveText(String(err))}\n`);
     return 1;
   }
 
@@ -48,7 +49,9 @@ export async function doctor(): Promise<number> {
       for (const t of tools) out.write(`  - ${t.name} [${t.scope}]\n`);
     } catch (err) {
       log.error(`${transportName} mcp probe failed`, { err: String(err) });
-      out.write(`✗ ${transportName} MCP failed: ${String(err)}\n`);
+      out.write(
+        `✗ ${transportName} MCP failed: ${redactSensitiveText(String(err))}\n`,
+      );
       bad++;
     } finally {
       await session?.close().catch(() => undefined);

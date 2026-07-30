@@ -3,6 +3,7 @@
 import { doctor } from "./cli/doctor.js";
 import { ask } from "./cli/ask.js";
 import { chat } from "./cli/chat.js";
+import { redactSensitiveText } from "./util/redact.js";
 
 function usage(): void {
   process.stdout.write(`Open Claw — Standard Red Notes personal assistant
@@ -48,6 +49,6 @@ async function main(): Promise<number> {
 main()
   .then((code) => process.exit(code))
   .catch((err: unknown) => {
-    process.stderr.write(`fatal: ${String(err)}\n`);
+    process.stderr.write(`fatal: ${redactSensitiveText(String(err))}\n`);
     process.exit(1);
   });

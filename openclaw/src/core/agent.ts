@@ -7,6 +7,7 @@ import type {
 import type { McpSession } from "../mcp/session.js";
 import { SYSTEM_PROMPT } from "./prompts.js";
 import { log } from "../util/log.js";
+import { redactSensitiveText } from "../util/redact.js";
 
 export interface AgentOptions {
   provider: Provider;
@@ -210,7 +211,7 @@ export async function run(
       } catch (err) {
         history.push({
           role: "tool",
-          content: `error: ${String(err)}`,
+          content: `error: ${redactSensitiveText(String(err))}`,
           toolCallId: tc.id,
           name: tc.name,
         });

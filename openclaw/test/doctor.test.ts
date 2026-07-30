@@ -207,6 +207,30 @@ describe("doctor", () => {
     expect(out).toContain("spawn ENOENT");
   });
 
+  it("redacts sensitive config and MCP failures from terminal output", async () => {
+    loadConfigMock.mockImplementationOnce(() => {
+      throw new Error("bad config /home/user/private.toml sk-abc12345secret");
+    });
+    expect(await doctor()).toBe(1);
+    expect(out).not.toContain("private.toml");
+    expect(out).not.toContain("abc12345secret");
+    expect(out).toContain("<redacted-path>");
+    expect(out).toContain("<redacted-token>");
+
+    out = "";
+    config({ provider: { type: "mock" }, mcp: { local: {} } });
+    session({
+      startError: new Error(
+        "spawn C:\\Users\\me\\private.exe sk-abc12345secret",
+      ),
+    });
+    expect(await doctor()).toBe(1);
+    expect(out).not.toContain("private.exe");
+    expect(out).not.toContain("abc12345secret");
+    expect(out).toContain("<redacted-path>");
+    expect(out).toContain("<redacted-token>");
+  });
+
   it("accumulates failures across independent checks", async () => {
     config({ provider: { type: "openai" }, mcp: { local: {} } });
     session({ startError: new Error("nope") });
