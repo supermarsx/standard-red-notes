@@ -43,6 +43,25 @@ describe('PublishedRemindersStore', () => {
     expect(all.map((d) => d.userUuid).sort()).toEqual(['u1', 'u2'])
   })
 
+  it('does not lose concurrent publishes from separate store instances', async () => {
+    const first = new PublishedRemindersStore(filePath)
+    const second = new PublishedRemindersStore(filePath)
+
+    await Promise.all(
+      Array.from({ length: 20 }, (_, index) =>
+        (index % 2 === 0 ? first : second).publish(`user-${index}`, {
+          id: `reminder-${index}`,
+          message: `message-${index}`,
+          dueAtUtc: '2026-06-25T12:00:00.000Z',
+        }),
+      ),
+    )
+
+    const all = await first.listAllUnsent()
+    expect(all).toHaveLength(20)
+    expect(new Set(all.map(({ userUuid }) => userUuid)).size).toBe(20)
+  })
+
   it('markSent(true) removes a reminder from the unsent scan', async () => {
     const store = new PublishedRemindersStore(filePath)
     await store.publish('u1', { id: 'r1', message: 'a', dueAtUtc: '2026-06-25T12:00:00.000Z' })

@@ -14,7 +14,14 @@ import {
   resolveEffectiveAssistantProfile,
   selectActiveProfile,
 } from '../Assistant/profiles'
-import { PersistedServerSettings, ServerSettingsPatch, ServerSettingsStore } from './ServerSettingsStore'
+import {
+  PERSISTED_LOG_LEVELS,
+  PERSISTED_REGISTRATION_ASSIGNABLE_ROLES,
+  PersistedServerSettings,
+  SERVER_SETTINGS_BOUNDS,
+  ServerSettingsPatch,
+  ServerSettingsStore,
+} from './ServerSettingsStore'
 
 /**
  * Standard Red Notes: the single read path for runtime-configurable server
@@ -179,7 +186,7 @@ export const DEFAULT_EMAIL_CONFIRMATION_BODY =
   'This link expires in 24 hours. If you did not create this account you can ignore this email.'
 
 /** Default-role choices a NEW signup may be given (never the admin role). */
-export const REGISTRATION_ASSIGNABLE_ROLES = ['CORE_USER', 'PRO_USER', 'VAULTS_USER']
+export const REGISTRATION_ASSIGNABLE_ROLES: string[] = [...PERSISTED_REGISTRATION_ASSIGNABLE_ROLES]
 
 export interface ResolvedRegistrationConfig {
   defaultRole: string
@@ -247,7 +254,7 @@ const REGISTRATION_DEFAULTS: ResolvedRegistrationConfig = {
  * bad value can never leave the logger in an invalid state — the resolver falls
  * through to the next candidate (env then 'info').
  */
-export const LOG_LEVELS = ['error', 'warn', 'info', 'http', 'verbose', 'debug', 'silly']
+export const LOG_LEVELS: string[] = [...PERSISTED_LOG_LEVELS]
 
 /** Hardcoded default log level (applies last, after persisted then env). */
 export const DEFAULT_LOG_LEVEL = 'info'
@@ -742,11 +749,41 @@ export class ServerSettingsResolver {
 
     return {
       enabled: typeof rl.enabled === 'boolean' ? rl.enabled : (env.rateLimitEnabled ?? d.enabled),
-      windowSeconds: pick(rl.windowSeconds, env.rateLimitWindowSeconds, d.windowSeconds, 1, 3600),
-      loginMax: pick(rl.loginMax, env.rateLimitLoginMax, d.loginMax, 0, 100000),
-      registrationMax: pick(rl.registrationMax, env.rateLimitRegistrationMax, d.registrationMax, 0, 100000),
-      userWindowSeconds: pick(rl.userWindowSeconds, env.rateLimitUserWindowSeconds, d.userWindowSeconds, 1, 3600),
-      userMax: pick(rl.userMax, env.rateLimitUserMax, d.userMax, 0, 100000),
+      windowSeconds: pick(
+        rl.windowSeconds,
+        env.rateLimitWindowSeconds,
+        d.windowSeconds,
+        SERVER_SETTINGS_BOUNDS.rateLimitWindowSeconds.minimum,
+        SERVER_SETTINGS_BOUNDS.rateLimitWindowSeconds.maximum,
+      ),
+      loginMax: pick(
+        rl.loginMax,
+        env.rateLimitLoginMax,
+        d.loginMax,
+        SERVER_SETTINGS_BOUNDS.rateLimitMaximum.minimum,
+        SERVER_SETTINGS_BOUNDS.rateLimitMaximum.maximum,
+      ),
+      registrationMax: pick(
+        rl.registrationMax,
+        env.rateLimitRegistrationMax,
+        d.registrationMax,
+        SERVER_SETTINGS_BOUNDS.rateLimitMaximum.minimum,
+        SERVER_SETTINGS_BOUNDS.rateLimitMaximum.maximum,
+      ),
+      userWindowSeconds: pick(
+        rl.userWindowSeconds,
+        env.rateLimitUserWindowSeconds,
+        d.userWindowSeconds,
+        SERVER_SETTINGS_BOUNDS.rateLimitWindowSeconds.minimum,
+        SERVER_SETTINGS_BOUNDS.rateLimitWindowSeconds.maximum,
+      ),
+      userMax: pick(
+        rl.userMax,
+        env.rateLimitUserMax,
+        d.userMax,
+        SERVER_SETTINGS_BOUNDS.rateLimitMaximum.minimum,
+        SERVER_SETTINGS_BOUNDS.rateLimitMaximum.maximum,
+      ),
       adaptiveEscalation:
         typeof rl.adaptiveEscalation === 'boolean'
           ? rl.adaptiveEscalation
@@ -825,36 +862,36 @@ export class ServerSettingsResolver {
         registration.signupsPerIpMax,
         env.registrationSignupsPerIpMax,
         REGISTRATION_DEFAULTS.signupsPerIpMax,
-        0,
-        100000,
+        SERVER_SETTINGS_BOUNDS.registrationMaximum.minimum,
+        SERVER_SETTINGS_BOUNDS.registrationMaximum.maximum,
       ),
       signupsPerIpWindowHours: cap(
         registration.signupsPerIpWindowHours,
         env.registrationSignupsPerIpWindowHours,
         REGISTRATION_DEFAULTS.signupsPerIpWindowHours,
-        1,
-        168,
+        SERVER_SETTINGS_BOUNDS.registrationWindowHours.minimum,
+        SERVER_SETTINGS_BOUNDS.registrationWindowHours.maximum,
       ),
       signupsPerWeekMax: cap(
         registration.signupsPerWeekMax,
         env.registrationSignupsPerWeekMax,
         REGISTRATION_DEFAULTS.signupsPerWeekMax,
-        0,
-        1000000,
+        SERVER_SETTINGS_BOUNDS.registrationWeeklyOrTotalMaximum.minimum,
+        SERVER_SETTINGS_BOUNDS.registrationWeeklyOrTotalMaximum.maximum,
       ),
       signupsPerDeviceMax: cap(
         registration.signupsPerDeviceMax,
         env.registrationSignupsPerDeviceMax,
         REGISTRATION_DEFAULTS.signupsPerDeviceMax,
-        0,
-        100000,
+        SERVER_SETTINGS_BOUNDS.registrationMaximum.minimum,
+        SERVER_SETTINGS_BOUNDS.registrationMaximum.maximum,
       ),
       signupsPerDeviceWindowHours: cap(
         registration.signupsPerDeviceWindowHours,
         env.registrationSignupsPerDeviceWindowHours,
         REGISTRATION_DEFAULTS.signupsPerDeviceWindowHours,
-        1,
-        168,
+        SERVER_SETTINGS_BOUNDS.registrationWindowHours.minimum,
+        SERVER_SETTINGS_BOUNDS.registrationWindowHours.maximum,
       ),
       // Invite-URL signup control + extended capabilities. Booleans: persisted
       // admin value wins over env, over the default (false). Ints: clamped like
@@ -872,8 +909,8 @@ export class ServerSettingsResolver {
         registration.maxTotalAccounts,
         env.registrationMaxTotalAccounts,
         REGISTRATION_DEFAULTS.maxTotalAccounts,
-        0,
-        1000000,
+        SERVER_SETTINGS_BOUNDS.registrationWeeklyOrTotalMaximum.minimum,
+        SERVER_SETTINGS_BOUNDS.registrationWeeklyOrTotalMaximum.maximum,
       ),
       signupsOpenAt:
         registration.signupsOpenAt !== undefined
@@ -891,8 +928,8 @@ export class ServerSettingsResolver {
         registration.invitesPerUser,
         env.registrationInvitesPerUser,
         REGISTRATION_DEFAULTS.invitesPerUser,
-        0,
-        100000,
+        SERVER_SETTINGS_BOUNDS.registrationMaximum.minimum,
+        SERVER_SETTINGS_BOUNDS.registrationMaximum.maximum,
       ),
     }
   }
@@ -930,10 +967,21 @@ export class ServerSettingsResolver {
       serverEnabled:
         typeof ocr.serverEnabled === 'boolean' ? ocr.serverEnabled : (env.ocrServerEnabled ?? d.serverEnabled),
       defaultLanguage: language(ocr.defaultLanguage, env.ocrDefaultLanguage, d.defaultLanguage),
-      maxPages: boundedInt(ocr.maxPages, 1, 1000) ?? boundedInt(env.ocrMaxPages, 1, 1000) ?? d.maxPages,
+      maxPages:
+        boundedInt(ocr.maxPages, SERVER_SETTINGS_BOUNDS.ocrPages.minimum, SERVER_SETTINGS_BOUNDS.ocrPages.maximum) ??
+        boundedInt(env.ocrMaxPages, SERVER_SETTINGS_BOUNDS.ocrPages.minimum, SERVER_SETTINGS_BOUNDS.ocrPages.maximum) ??
+        d.maxPages,
       maxImageBytes:
-        boundedInt(ocr.maxImageBytes, 1024, 200 * 1024 * 1024) ??
-        boundedInt(env.ocrMaxImageBytes, 1024, 200 * 1024 * 1024) ??
+        boundedInt(
+          ocr.maxImageBytes,
+          SERVER_SETTINGS_BOUNDS.ocrImageBytes.minimum,
+          SERVER_SETTINGS_BOUNDS.ocrImageBytes.maximum,
+        ) ??
+        boundedInt(
+          env.ocrMaxImageBytes,
+          SERVER_SETTINGS_BOUNDS.ocrImageBytes.minimum,
+          SERVER_SETTINGS_BOUNDS.ocrImageBytes.maximum,
+        ) ??
         d.maxImageBytes,
       clientEnabled:
         typeof ocr.clientEnabled === 'boolean' ? ocr.clientEnabled : (env.ocrClientEnabled ?? d.clientEnabled),
@@ -985,8 +1033,16 @@ export class ServerSettingsResolver {
       n8nUrl: url(wf.n8nUrl, env.workflowsN8nUrl, d.n8nUrl),
       uiBasePath: path(wf.uiBasePath, env.workflowsUiBasePath, d.uiBasePath),
       uiTokenTtlSeconds:
-        boundedInt(wf.uiTokenTtlSeconds, 60, 7 * 24 * 60 * 60) ??
-        boundedInt(env.workflowsUiTokenTtlSeconds, 60, 7 * 24 * 60 * 60) ??
+        boundedInt(
+          wf.uiTokenTtlSeconds,
+          SERVER_SETTINGS_BOUNDS.workflowsTokenTtlSeconds.minimum,
+          SERVER_SETTINGS_BOUNDS.workflowsTokenTtlSeconds.maximum,
+        ) ??
+        boundedInt(
+          env.workflowsUiTokenTtlSeconds,
+          SERVER_SETTINGS_BOUNDS.workflowsTokenTtlSeconds.minimum,
+          SERVER_SETTINGS_BOUNDS.workflowsTokenTtlSeconds.maximum,
+        ) ??
         d.uiTokenTtlSeconds,
     }
   }

@@ -1,5 +1,10 @@
-import { promises as fs } from 'fs'
-import * as path from 'path'
+import {
+  hasOnlyKeys,
+  isEpochMilliseconds,
+  isJsonObject,
+  isSafeRecordKey,
+  SecureJsonFileStore,
+} from '../../Infra/SecureJsonFileStore'
 
 /**
  * Standard Red Notes: per-user WORKFLOWS pairing records.
@@ -12,8 +17,10 @@ import * as path from 'path'
  * credential/webhook references get recorded here when Phase 2 wires them).
  *
  * STORAGE: a single JSON file, like the CalDAV token/published stores, keeping
- * the feature self-contained inside api-gateway (which has no database). Writes
- * are chained + atomic (tmp file + rename), mirroring CaldavTokenStore.
+ * the feature self-contained inside api-gateway (which has no database). The
+ * shared secure-file primitive bounds and validates reads, rejects unsafe
+ * link/type targets, and serializes durable atomic writes across local store
+ * instances.
  */
 
 export interface WorkflowsPairing {
@@ -36,12 +43,46 @@ interface StoreShape {
   [userUuid: string]: WorkflowsPairing
 }
 
-export class WorkflowsPairingStore {
-  private writeChain: Promise<void> = Promise.resolve()
+const MAX_PAIRINGS = 10_000
+const MAX_RESOURCE_ID_LENGTH = 512
+const MAX_WEBHOOKS_PER_PAIRING = 10_000
 
-  constructor(private readonly filePath: string) {}
+function isPairing(value: unknown, userUuid: string): value is WorkflowsPairing {
+  return (
+    hasOnlyKeys(value, ['userUuid', 'pairedAt', 'mcpTokenUuid', 'webhookUuids']) &&
+    isSafeRecordKey(userUuid) &&
+    value.userUuid === userUuid &&
+    isEpochMilliseconds(value.pairedAt) &&
+    (value.mcpTokenUuid === null || isSafeRecordKey(value.mcpTokenUuid, MAX_RESOURCE_ID_LENGTH)) &&
+    (value.webhookUuids === null ||
+      (Array.isArray(value.webhookUuids) &&
+        value.webhookUuids.length <= MAX_WEBHOOKS_PER_PAIRING &&
+        value.webhookUuids.every((webhookUuid) => isSafeRecordKey(webhookUuid, MAX_RESOURCE_ID_LENGTH))))
+  )
+}
+
+function isStoreShape(value: unknown): value is StoreShape {
+  if (!isJsonObject(value)) {
+    return false
+  }
+  const entries = Object.entries(value)
+  return entries.length <= MAX_PAIRINGS && entries.every(([userUuid, pairing]) => isPairing(pairing, userUuid))
+}
+
+export class WorkflowsPairingStore {
+  private readonly store: SecureJsonFileStore<StoreShape>
+
+  constructor(filePath: string) {
+    this.store = new SecureJsonFileStore({
+      filePath,
+      validate: isStoreShape,
+    })
+  }
 
   async get(userUuid: string): Promise<WorkflowsPairing | null> {
+    if (!isSafeRecordKey(userUuid)) {
+      return null
+    }
     const data = await this.read()
     return data[userUuid] ?? null
   }
@@ -52,6 +93,9 @@ export class WorkflowsPairingStore {
 
   /** Idempotent: pairing an already-paired user keeps the original record. */
   async pair(userUuid: string): Promise<WorkflowsPairing> {
+    if (!isSafeRecordKey(userUuid)) {
+      throw new Error('A valid user identifier is required to pair workflows.')
+    }
     let pairing: WorkflowsPairing | undefined
     await this.mutate((data) => {
       if (!data[userUuid]) {
@@ -69,6 +113,9 @@ export class WorkflowsPairingStore {
 
   /** Idempotent: returns true when a record was actually removed. */
   async unpair(userUuid: string): Promise<boolean> {
+    if (!isSafeRecordKey(userUuid)) {
+      return false
+    }
     let removed = false
     await this.mutate((data) => {
       if (data[userUuid]) {
@@ -80,32 +127,14 @@ export class WorkflowsPairingStore {
   }
 
   private async read(): Promise<StoreShape> {
-    try {
-      const raw = await fs.readFile(this.filePath, 'utf8')
-      const parsed = JSON.parse(raw) as StoreShape
-      return parsed && typeof parsed === 'object' ? parsed : {}
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        return {}
-      }
-      throw error
-    }
+    return (await this.store.read()) ?? {}
   }
 
   private async mutate(mutator: (data: StoreShape) => void): Promise<void> {
-    const run = this.writeChain.then(async () => {
-      const data = await this.read()
+    await this.store.update((current) => {
+      const data = current ?? {}
       mutator(data)
-      await this.atomicWrite(data)
+      return data
     })
-    this.writeChain = run.catch(() => undefined)
-    return run
-  }
-
-  private async atomicWrite(data: StoreShape): Promise<void> {
-    await fs.mkdir(path.dirname(this.filePath), { recursive: true })
-    const tmp = `${this.filePath}.${process.pid}.${Date.now()}.tmp`
-    await fs.writeFile(tmp, JSON.stringify(data, null, 2), 'utf8')
-    await fs.rename(tmp, this.filePath)
   }
 }

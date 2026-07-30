@@ -1,18 +1,25 @@
 import * as crypto from 'crypto'
-import { promises as fs } from 'fs'
-import * as path from 'path'
 import { injectable } from 'inversify'
+
+import {
+  hasOnlyKeys,
+  isBoundedString,
+  isEpochMilliseconds,
+  isJsonObject,
+  isSafeRecordKey,
+  SecureJsonFileStore,
+} from '../../../Infra/SecureJsonFileStore'
 
 /**
  * Encrypted, server-held storage for the single ChatGPT / Codex subscription
  * credential the Assistant proxy replays upstream.
  *
- * Mirrors CaldavTokenStore's self-contained JSON-file pattern (serialized
- * writeChain + atomic tmp+rename + ENOENT->empty) — the api-gateway has no
- * database — BUT the payload is AES-256-GCM encrypted at rest. Unlike CalDAV
- * tokens (one-way scrypt hashes), this credential must be REVERSIBLE because it
- * is replayed to the upstream provider, so we encrypt with a symmetric operator
- * key (ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY) instead of hashing.
+ * Mirrors CaldavTokenStore's self-contained secure JSON-file pattern — the
+ * api-gateway has no database — BUT the payload is AES-256-GCM encrypted at
+ * rest. Unlike CalDAV tokens (one-way scrypt hashes), this credential must be
+ * REVERSIBLE because it is replayed to the upstream provider, so we encrypt
+ * with a symmetric operator key (ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY) instead
+ * of hashing.
  *
  * FAIL-SAFE: if the encryption key is absent or malformed, `save` throws and
  * NOTHING is written — the credential is never persisted in plaintext. `load`
@@ -20,8 +27,9 @@ import { injectable } from 'inversify'
  * (wrong key or tampering), so a bad key fails closed rather than silently
  * returning stale or partial data.
  *
- * SINGLE-INSTANCE: one JSON file suits the single-process home-server. A
- * horizontally-scaled gateway would need a shared encrypted store.
+ * The shared secure JSON primitive serializes separate local store instances.
+ * A horizontally-scaled gateway on different hosts would still need a shared
+ * encrypted store.
  */
 
 /** The full record persisted on disk (encrypted). Contains secret material. */
@@ -72,19 +80,81 @@ interface EncryptedEnvelope {
  * record (a single subscription); those are migrated on read into the map under
  * the reserved DEFAULT id, so an existing single-pairing deployment keeps working.
  */
-interface MultiRecordPayload {
-  records: Record<string, SubscriptionTokenRecord>
-}
-
 const ALGORITHM = 'aes-256-gcm'
 const IV_BYTES = 12
+const MAX_SUBSCRIPTIONS = 1_000
+const MAX_SUBSCRIPTION_ID_LENGTH = 128
+const MAX_TOKEN_LENGTH = 256 * 1024
+const MAX_ACCOUNT_ID_LENGTH = 1_024
+const MAX_ACCOUNT_LABEL_LENGTH = 1_024
+const MAX_ENCRYPTED_DATA_HEX_LENGTH = 1024 * 1024
 
 /** The reserved id of the first/legacy paired subscription credential. */
 export const DEFAULT_SUBSCRIPTION_ID = 'default'
 
+function isEncryptedEnvelope(value: unknown): value is EncryptedEnvelope {
+  return (
+    hasOnlyKeys(value, ['v', 'iv', 'tag', 'data']) &&
+    value.v === 1 &&
+    typeof value.iv === 'string' &&
+    /^[0-9a-f]{24}$/i.test(value.iv) &&
+    typeof value.tag === 'string' &&
+    /^[0-9a-f]{32}$/i.test(value.tag) &&
+    typeof value.data === 'string' &&
+    value.data.length > 0 &&
+    value.data.length <= MAX_ENCRYPTED_DATA_HEX_LENGTH &&
+    value.data.length % 2 === 0 &&
+    /^[0-9a-f]+$/i.test(value.data)
+  )
+}
+
+function isSubscriptionTokenRecord(value: unknown): value is SubscriptionTokenRecord {
+  return (
+    hasOnlyKeys(value, [
+      'accessToken',
+      'refreshToken',
+      'idToken',
+      'expiresAt',
+      'accountId',
+      'accountLabel',
+      'pairedAt',
+      'needsRepair',
+    ]) &&
+    isBoundedString(value.accessToken, 1, MAX_TOKEN_LENGTH) &&
+    isEpochMilliseconds(value.expiresAt) &&
+    isEpochMilliseconds(value.pairedAt) &&
+    (value.refreshToken === undefined || isBoundedString(value.refreshToken, 1, MAX_TOKEN_LENGTH)) &&
+    (value.idToken === undefined || isBoundedString(value.idToken, 1, MAX_TOKEN_LENGTH)) &&
+    (value.accountId === undefined || isBoundedString(value.accountId, 1, MAX_ACCOUNT_ID_LENGTH)) &&
+    (value.accountLabel === undefined || isBoundedString(value.accountLabel, 1, MAX_ACCOUNT_LABEL_LENGTH)) &&
+    (value.needsRepair === undefined || typeof value.needsRepair === 'boolean')
+  )
+}
+
+function isSubscriptionRecordMap(value: unknown): value is Record<string, SubscriptionTokenRecord> {
+  if (!isJsonObject(value)) {
+    return false
+  }
+  const entries = Object.entries(value)
+  return (
+    entries.length <= MAX_SUBSCRIPTIONS &&
+    entries.every(
+      ([id, record]) => isSafeRecordKey(id, MAX_SUBSCRIPTION_ID_LENGTH) && isSubscriptionTokenRecord(record),
+    )
+  )
+}
+
+function copyRecordMap(records: Record<string, SubscriptionTokenRecord>): Record<string, SubscriptionTokenRecord> {
+  const copy = Object.create(null) as Record<string, SubscriptionTokenRecord>
+  for (const [id, record] of Object.entries(records)) {
+    copy[id] = record
+  }
+  return copy
+}
+
 @injectable()
 export class SubscriptionTokenStore {
-  private writeChain: Promise<void> = Promise.resolve()
+  private readonly store: SecureJsonFileStore<EncryptedEnvelope>
 
   /**
    * @param filePath        where the encrypted envelope lives.
@@ -92,9 +162,14 @@ export class SubscriptionTokenStore {
    *                         make save/load fail closed.
    */
   constructor(
-    private readonly filePath: string,
+    filePath: string,
     private readonly encryptionKeyHex: string | undefined,
-  ) {}
+  ) {
+    this.store = new SecureJsonFileStore({
+      filePath,
+      validate: isEncryptedEnvelope,
+    })
+  }
 
   /**
    * Encrypts and atomically persists a record under the DEFAULT id. Throws if
@@ -115,19 +190,14 @@ export class SubscriptionTokenStore {
 
   /** Removes ALL stored credentials. Best-effort; missing file is not an error. */
   async clear(): Promise<void> {
-    await this.runExclusive(async () => {
-      try {
-        await fs.unlink(this.filePath)
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-          throw error
-        }
-      }
-    })
+    await this.store.delete()
   }
 
   /** Non-secret status for the DEFAULT subscription. Never returns a token. */
   async getStatus(id: string = DEFAULT_SUBSCRIPTION_ID): Promise<SubscriptionStatus> {
+    if (!isSafeRecordKey(id, MAX_SUBSCRIPTION_ID_LENGTH)) {
+      return { paired: false }
+    }
     let records: Record<string, SubscriptionTokenRecord>
     try {
       records = await this.loadAll()
@@ -143,17 +213,26 @@ export class SubscriptionTokenStore {
 
   /** Encrypts and persists a record under an explicit subscription id. */
   async saveRecord(id: string, record: SubscriptionTokenRecord): Promise<void> {
+    if (!isSafeRecordKey(id, MAX_SUBSCRIPTION_ID_LENGTH)) {
+      throw new Error('Refusing to store a subscription credential under an invalid id.')
+    }
+    if (!isSubscriptionTokenRecord(record)) {
+      throw new Error('Refusing to store an invalid subscription credential record.')
+    }
     const key = this.requireKey()
-    await this.runExclusive(async () => {
-      const records = await this.readRecordsMap()
+    await this.store.runExclusive(async (transaction) => {
+      const records = this.recordsFromEnvelope(await transaction.read())
       records[id] = record
       const envelope = this.encrypt({ records }, key)
-      await this.writeEnvelope(envelope)
+      await transaction.write(envelope)
     })
   }
 
   /** Returns one record by id, or null. Throws (fail closed) on decrypt failure. */
   async loadRecord(id: string = DEFAULT_SUBSCRIPTION_ID): Promise<SubscriptionTokenRecord | null> {
+    if (!isSafeRecordKey(id, MAX_SUBSCRIPTION_ID_LENGTH)) {
+      return null
+    }
     const records = await this.loadAll()
     return records[id] ?? null
   }
@@ -168,14 +247,17 @@ export class SubscriptionTokenStore {
    * Best-effort: a missing store is a no-op.
    */
   async removeRecord(id: string): Promise<void> {
+    if (!isSafeRecordKey(id, MAX_SUBSCRIPTION_ID_LENGTH)) {
+      return
+    }
     const key = this.requireKey()
-    await this.runExclusive(async () => {
+    await this.store.runExclusive(async (transaction) => {
       let records: Record<string, SubscriptionTokenRecord>
       try {
-        records = await this.readRecordsMap()
+        records = this.recordsFromEnvelope(await transaction.read())
       } catch {
         // Undecryptable store — clearing one id is meaningless; drop the file.
-        await this.unlinkQuietly()
+        await transaction.delete()
         return
       }
       if (!(id in records)) {
@@ -183,11 +265,11 @@ export class SubscriptionTokenStore {
       }
       delete records[id]
       if (Object.keys(records).length === 0) {
-        await this.unlinkQuietly()
+        await transaction.delete()
         return
       }
       const envelope = this.encrypt({ records }, key)
-      await this.writeEnvelope(envelope)
+      await transaction.write(envelope)
     })
   }
 
@@ -224,28 +306,29 @@ export class SubscriptionTokenStore {
    * Throws (fail closed) when a stored payload cannot be authenticated.
    */
   private async readRecordsMap(): Promise<Record<string, SubscriptionTokenRecord>> {
-    const envelope = await this.readEnvelope()
+    return this.recordsFromEnvelope(await this.store.read())
+  }
+
+  private recordsFromEnvelope(envelope: EncryptedEnvelope | null): Record<string, SubscriptionTokenRecord> {
     if (!envelope) {
-      return {}
+      return Object.create(null) as Record<string, SubscriptionTokenRecord>
     }
     const key = this.requireKey()
     const payload = this.decrypt(envelope, key)
-    if (payload && typeof payload === 'object' && 'records' in (payload as MultiRecordPayload)) {
-      const records = (payload as MultiRecordPayload).records
-      return records && typeof records === 'object' ? records : {}
+    if (hasOnlyKeys(payload, ['records']) && 'records' in payload) {
+      const records = payload.records
+      if (!isSubscriptionRecordMap(records)) {
+        throw new Error('The stored subscription credential contains an invalid record map.')
+      }
+      return copyRecordMap(records)
+    }
+    if (!isSubscriptionTokenRecord(payload)) {
+      throw new Error('The stored subscription credential contains an invalid legacy record.')
     }
     // Legacy bare record → migrate under the default id.
-    return { [DEFAULT_SUBSCRIPTION_ID]: payload as SubscriptionTokenRecord }
-  }
-
-  private async unlinkQuietly(): Promise<void> {
-    try {
-      await fs.unlink(this.filePath)
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        throw error
-      }
-    }
+    const records = Object.create(null) as Record<string, SubscriptionTokenRecord>
+    records[DEFAULT_SUBSCRIPTION_ID] = payload
+    return records
   }
 
   private requireKey(): Buffer {
@@ -288,39 +371,5 @@ export class SubscriptionTokenStore {
       // Wrong key or tampering — GCM authentication failed. Fail closed.
       throw new Error('Could not decrypt the stored subscription credential (wrong encryption key or corrupted store).')
     }
-  }
-
-  private async readEnvelope(): Promise<EncryptedEnvelope | null> {
-    try {
-      const raw = await fs.readFile(this.filePath, 'utf8')
-      const parsed = JSON.parse(raw) as EncryptedEnvelope
-      if (parsed && typeof parsed === 'object' && parsed.iv && parsed.tag && parsed.data) {
-        return parsed
-      }
-      return null
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        return null
-      }
-      throw error
-    }
-  }
-
-  /**
-   * Atomic tmp+rename write of the envelope. NOTE: callers already hold the
-   * write lock (runExclusive) — this must NOT re-acquire it or it would deadlock.
-   */
-  private async writeEnvelope(envelope: EncryptedEnvelope): Promise<void> {
-    await fs.mkdir(path.dirname(this.filePath), { recursive: true })
-    const tmp = `${this.filePath}.${process.pid}.${Date.now()}.tmp`
-    await fs.writeFile(tmp, JSON.stringify(envelope, null, 2), 'utf8')
-    await fs.rename(tmp, this.filePath)
-  }
-
-  /** Serializes writes so concurrent save/clear never interleave a tmp+rename. */
-  private runExclusive(fn: () => Promise<void>): Promise<void> {
-    const run = this.writeChain.then(fn)
-    this.writeChain = run.catch(() => undefined)
-    return run
   }
 }

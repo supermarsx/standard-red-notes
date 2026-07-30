@@ -119,6 +119,34 @@ describe('validateProfilesPatch', () => {
     it('rejects a models value that is not an array', () => {
       expect(errorOf(validateProfilesPatch([validProfile({ models: 'a,b' })], undefined, []))).toContain('models')
     })
+
+    it('rejects unknown fields, unsafe ids, and non-boolean enabled flags', () => {
+      expect(errorOf(validateProfilesPatch([validProfile({ unexpected: true })], undefined, []))).toContain(
+        'unknown field',
+      )
+      expect(errorOf(validateProfilesPatch([validProfile({ id: 'constructor' })], undefined, []))).toContain('safe')
+      expect(errorOf(validateProfilesPatch([validProfile({ enabled: 'false' })], undefined, []))).toContain('boolean')
+    })
+
+    it('bounds ids, models, model collections, and secrets', () => {
+      expect(errorOf(validateProfilesPatch([validProfile({ id: 'x'.repeat(257) })], undefined, []))).toContain('256')
+      expect(errorOf(validateProfilesPatch([validProfile({ model: 'x'.repeat(513) })], undefined, []))).toContain('512')
+      expect(errorOf(validateProfilesPatch([validProfile({ models: ['same', 'same'] })], undefined, []))).toContain(
+        'unique',
+      )
+      expect(
+        errorOf(
+          validateProfilesPatch(
+            [validProfile({ models: Array.from({ length: 1_001 }, (_, index) => `model-${index}`) })],
+            undefined,
+            [],
+          ),
+        ),
+      ).toContain('models')
+      expect(
+        errorOf(validateProfilesPatch([validProfile({ apiKey: 'x'.repeat(256 * 1024 + 1) })], undefined, [])),
+      ).toContain('apiKey')
+    })
   })
 
   describe('base URL', () => {
@@ -252,6 +280,15 @@ describe('validateBackendProfilesPatch', () => {
     expect(errorOf(validateBackendProfilesPatch([apiKeyBackend({ models: 'a' })], []))).toContain('models')
   })
 
+  it('rejects unknown fields, unsafe ids, duplicate models, and oversized secrets', () => {
+    expect(errorOf(validateBackendProfilesPatch([apiKeyBackend({ unexpected: true })], []))).toContain('unknown field')
+    expect(errorOf(validateBackendProfilesPatch([apiKeyBackend({ id: 'prototype' })], []))).toContain('safe')
+    expect(errorOf(validateBackendProfilesPatch([apiKeyBackend({ models: ['same', 'same'] })], []))).toContain('unique')
+    expect(
+      errorOf(validateBackendProfilesPatch([apiKeyBackend({ apiKey: 'x'.repeat(256 * 1024 + 1) })], [])),
+    ).toContain('apiKey')
+  })
+
   it('drops blank entries from the models array and omits it when nothing remains', () => {
     const kept = ok(validateBackendProfilesPatch([apiKeyBackend({ models: [' a ', '', '  '] })], []))
     expect(kept.backendProfiles?.[0].models).toEqual(['a'])
@@ -321,6 +358,15 @@ describe('validateBackendProfilesPatch', () => {
       )
     })
 
+    it('rejects a prototype-sensitive or overlong subscriptionId', () => {
+      expect(
+        errorOf(validateBackendProfilesPatch([subscriptionBackend({ subscriptionId: 'constructor' })], [])),
+      ).toContain('invalid')
+      expect(
+        errorOf(validateBackendProfilesPatch([subscriptionBackend({ subscriptionId: 'x'.repeat(129) })], [])),
+      ).toContain('invalid')
+    })
+
     it('stores the trimmed subscriptionId and no provider', () => {
       const result = ok(validateBackendProfilesPatch([subscriptionBackend({ subscriptionId: ' team ' })], []))
 
@@ -348,6 +394,18 @@ describe('validateAssignmentsPatch', () => {
 
   it('normalizes an empty object to empty user and role maps', () => {
     expect(ok(validateAssignmentsPatch({})).assignments).toEqual({ users: {}, roles: {} })
+  })
+
+  it('rejects unknown fields, unsafe identifiers, and oversized assignment maps', () => {
+    expect(errorOf(validateAssignmentsPatch({ unexpected: true }))).toContain('must be an object')
+    expect(errorOf(validateAssignmentsPatch({ users: { constructor: 'p1' } }))).toContain('unsafe')
+    expect(
+      errorOf(
+        validateAssignmentsPatch({
+          users: Object.fromEntries(Array.from({ length: 10_001 }, (_, index) => [`user-${index}`, 'p1'])),
+        }),
+      ),
+    ).toContain('more than')
   })
 
   it('lowercases user identifiers and trims the profile ids', () => {

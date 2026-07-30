@@ -1,6 +1,11 @@
-import { promises as fs } from 'fs'
-import * as path from 'path'
-
+import {
+  hasOnlyKeys,
+  isBoundedString,
+  isEpochMilliseconds,
+  isJsonObject,
+  isSafeRecordKey,
+  SecureJsonFileStore,
+} from '../../Infra/SecureJsonFileStore'
 import { PublishedTodo } from './ICalendarSerializer'
 
 /**
@@ -14,9 +19,9 @@ import { PublishedTodo } from './ICalendarSerializer'
  *
  * STORAGE: a single JSON file (default empty object). This is the lightest idiom
  * that keeps the feature fully self-contained inside api-gateway, which has no
- * database of its own. Writes are serialized per process via a simple mutex so
- * concurrent publishes don't clobber each other; the file is rewritten
- * atomically (temp file + rename).
+ * database of its own. The shared secure-file primitive bounds and validates
+ * reads, rejects unsafe link/type targets, and serializes durable atomic writes
+ * across local store instances.
  *
  * NOTE (first slice): there is no publish API/UI yet — populating this store is a
  * deferred item. The store + read path exist so the CalDAV surface is testable
@@ -28,12 +33,92 @@ interface StoreShape {
   [userUuid: string]: { [uid: string]: PublishedTodo }
 }
 
-export class PublishedCalendarStore {
-  private writeChain: Promise<void> = Promise.resolve()
+const MAX_USERS = 10_000
+const MAX_TODOS_PER_USER = 10_000
+const MAX_UID_LENGTH = 1_024
+const MAX_SUMMARY_LENGTH = 4_096
+const MAX_DESCRIPTION_LENGTH = 65_536
+const ISO_DATE_PATTERN =
+  /^\d{4}-\d{2}-\d{2}(?:[Tt ][0-2]\d:[0-5]\d(?::[0-5]\d(?:\.\d{1,9})?)?(?:[Zz]|[+-][0-2]\d:[0-5]\d)?)?$/
 
-  constructor(private readonly filePath: string) {}
+function isOptionalBoundedString(value: unknown, maximumLength: number): value is string | undefined {
+  return value === undefined || isBoundedString(value, 0, maximumLength)
+}
+
+function isOptionalIsoDate(value: unknown): value is string | undefined {
+  return (
+    value === undefined ||
+    (isBoundedString(value, 1, 64) && ISO_DATE_PATTERN.test(value) && !Number.isNaN(Date.parse(value)))
+  )
+}
+
+function isOptionalEpochMilliseconds(value: unknown): value is number | undefined {
+  return value === undefined || isEpochMilliseconds(value)
+}
+
+function isPublishedTodo(value: unknown, uid: string): value is PublishedTodo {
+  return (
+    hasOnlyKeys(value, [
+      'uid',
+      'summary',
+      'description',
+      'due',
+      'start',
+      'completed',
+      'completedAt',
+      'priority',
+      'createdAt',
+      'updatedAt',
+    ]) &&
+    isSafeRecordKey(uid, MAX_UID_LENGTH) &&
+    value.uid === uid &&
+    isBoundedString(value.summary, 0, MAX_SUMMARY_LENGTH) &&
+    isOptionalBoundedString(value.description, MAX_DESCRIPTION_LENGTH) &&
+    isOptionalIsoDate(value.due) &&
+    isOptionalIsoDate(value.start) &&
+    (value.completed === undefined || typeof value.completed === 'boolean') &&
+    isOptionalIsoDate(value.completedAt) &&
+    (value.priority === undefined ||
+      (typeof value.priority === 'number' &&
+        Number.isSafeInteger(value.priority) &&
+        value.priority >= 0 &&
+        value.priority <= 9)) &&
+    isOptionalEpochMilliseconds(value.createdAt) &&
+    isOptionalEpochMilliseconds(value.updatedAt)
+  )
+}
+
+function isStoreShape(value: unknown): value is StoreShape {
+  if (!isJsonObject(value)) {
+    return false
+  }
+  const users = Object.entries(value)
+  return (
+    users.length <= MAX_USERS &&
+    users.every(([userUuid, todos]) => {
+      if (!isSafeRecordKey(userUuid) || !isJsonObject(todos)) {
+        return false
+      }
+      const entries = Object.entries(todos)
+      return entries.length <= MAX_TODOS_PER_USER && entries.every(([uid, todo]) => isPublishedTodo(todo, uid))
+    })
+  )
+}
+
+export class PublishedCalendarStore {
+  private readonly store: SecureJsonFileStore<StoreShape>
+
+  constructor(filePath: string) {
+    this.store = new SecureJsonFileStore({
+      filePath,
+      validate: isStoreShape,
+    })
+  }
 
   async listForUser(userUuid: string): Promise<PublishedTodo[]> {
+    if (!isSafeRecordKey(userUuid)) {
+      return []
+    }
     const data = await this.read()
     const todos = data[userUuid]
     if (!todos) {
@@ -43,6 +128,9 @@ export class PublishedCalendarStore {
   }
 
   async getForUser(userUuid: string, uid: string): Promise<PublishedTodo | null> {
+    if (!isSafeRecordKey(userUuid) || !isSafeRecordKey(uid, MAX_UID_LENGTH)) {
+      return null
+    }
     const data = await this.read()
     return data[userUuid]?.[uid] ?? null
   }
@@ -52,11 +140,17 @@ export class PublishedCalendarStore {
    * Returns the stored todo with normalized timestamps.
    */
   async publish(userUuid: string, todo: PublishedTodo): Promise<PublishedTodo> {
+    if (!isSafeRecordKey(userUuid) || !isSafeRecordKey(todo.uid, MAX_UID_LENGTH)) {
+      throw new Error('A valid user identifier and todo uid are required to publish a calendar item.')
+    }
     const now = Date.now()
     const normalized: PublishedTodo = {
       ...todo,
       createdAt: todo.createdAt ?? now,
       updatedAt: now,
+    }
+    if (!isPublishedTodo(normalized, todo.uid)) {
+      throw new Error('Refusing to publish an invalid calendar item.')
     }
     await this.mutate((data) => {
       const forUser = data[userUuid] ?? {}
@@ -68,6 +162,9 @@ export class PublishedCalendarStore {
 
   /** Remove a single published todo. No-op if absent. */
   async unpublish(userUuid: string, uid: string): Promise<void> {
+    if (!isSafeRecordKey(userUuid) || !isSafeRecordKey(uid, MAX_UID_LENGTH)) {
+      return
+    }
     await this.mutate((data) => {
       if (data[userUuid]) {
         delete data[userUuid][uid]
@@ -79,33 +176,14 @@ export class PublishedCalendarStore {
   }
 
   private async read(): Promise<StoreShape> {
-    try {
-      const raw = await fs.readFile(this.filePath, 'utf8')
-      const parsed = JSON.parse(raw) as StoreShape
-      return parsed && typeof parsed === 'object' ? parsed : {}
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        return {}
-      }
-      throw error
-    }
+    return (await this.store.read()) ?? {}
   }
 
   private async mutate(mutator: (data: StoreShape) => void): Promise<void> {
-    const run = this.writeChain.then(async () => {
-      const data = await this.read()
+    await this.store.update((current) => {
+      const data = current ?? {}
       mutator(data)
-      await this.atomicWrite(data)
+      return data
     })
-    // Keep the chain alive even if a write rejects, so later writes still run.
-    this.writeChain = run.catch(() => undefined)
-    return run
-  }
-
-  private async atomicWrite(data: StoreShape): Promise<void> {
-    await fs.mkdir(path.dirname(this.filePath), { recursive: true })
-    const tmp = `${this.filePath}.${process.pid}.${Date.now()}.tmp`
-    await fs.writeFile(tmp, JSON.stringify(data, null, 2), 'utf8')
-    await fs.rename(tmp, this.filePath)
   }
 }

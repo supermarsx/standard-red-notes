@@ -1,7 +1,19 @@
-import { promises as fs } from 'fs'
-import * as path from 'path'
-
-import { AssistantProfileAssignments, PersistedAiProfile, PersistedBackendProfile } from '../Assistant/profiles'
+import {
+  hasOnlyKeys,
+  isBoundedString,
+  isJsonObject,
+  isSafeRecordKey,
+  SecureJsonFileStore,
+} from '../../Infra/SecureJsonFileStore'
+import {
+  ASSIGNABLE_ROLE_NAMES,
+  ASSISTANT_PROFILE_LIMITS,
+  AssistantProfileAssignments,
+  ASSISTANT_PROFILE_PROVIDER_KINDS,
+  BACKEND_API_KEY_PROVIDERS,
+  PersistedAiProfile,
+  PersistedBackendProfile,
+} from '../Assistant/profiles'
 
 /**
  * Standard Red Notes: runtime-configurable SERVER settings (admin pane).
@@ -15,7 +27,9 @@ import { AssistantProfileAssignments, PersistedAiProfile, PersistedBackendProfil
  * STORAGE: a single JSON file (SERVER_SETTINGS_PATH, default
  * `<cwd>/data/server-settings.json`), mirroring the WorkflowsPairingStore /
  * CalDAV store pattern — the api-gateway has no database, and a JSON file keeps
- * the feature self-contained. Writes are chained + atomic (tmp file + rename).
+ * the feature self-contained. The shared secure-file primitive bounds and
+ * validates reads, rejects unsafe link/type targets, and serializes durable
+ * atomic writes across local store instances.
  *
  * SECRETS: provider API keys are persisted here in plaintext (same trust level
  * as the env file they replace) but are NEVER returned by any endpoint — the
@@ -274,6 +288,410 @@ export interface PersistedServerSettings {
   plugins?: PersistedPluginsSettings
 }
 
+type FieldValidator = (value: unknown) => boolean
+
+const MAX_DOMAIN_COUNT = 10_000
+const MAX_DOMAIN_LENGTH = 253
+const MAX_PATH_LENGTH = 1_024
+const ISO_DATE_PATTERN =
+  /^\d{4}-\d{2}-\d{2}(?:[Tt ][0-2]\d:[0-5]\d(?::[0-5]\d(?:\.\d{1,9})?)?(?:[Zz]|[+-][0-2]\d:[0-5]\d)?)?$/
+
+export const PERSISTED_REGISTRATION_ASSIGNABLE_ROLES = ['CORE_USER', 'PRO_USER', 'VAULTS_USER'] as const
+export const PERSISTED_LOG_LEVELS = ['error', 'warn', 'info', 'http', 'verbose', 'debug', 'silly'] as const
+export const SERVER_SETTINGS_BOUNDS = {
+  proofOfWorkDifficulty: { minimum: 0, maximum: 32 },
+  proofOfWorkAdaptiveThreshold: { minimum: 0, maximum: 100 },
+  rateLimitWindowSeconds: { minimum: 1, maximum: 3_600 },
+  rateLimitMaximum: { minimum: 0, maximum: 100_000 },
+  registrationMaximum: { minimum: 0, maximum: 100_000 },
+  registrationWindowHours: { minimum: 1, maximum: 168 },
+  registrationWeeklyOrTotalMaximum: { minimum: 0, maximum: 1_000_000 },
+  ocrPages: { minimum: 1, maximum: 1_000 },
+  ocrImageBytes: { minimum: 1_024, maximum: 200 * 1024 * 1024 },
+  workflowsTokenTtlSeconds: { minimum: 60, maximum: 7 * 24 * 60 * 60 },
+  emailSubjectLength: { minimum: 0, maximum: 1_000 },
+  emailBodyLength: { minimum: 0, maximum: 20_000 },
+} as const
+
+const isBoolean = (value: unknown): boolean => typeof value === 'boolean'
+const isNonNegativeSafeInteger = (value: unknown): boolean =>
+  typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+const isIntegerBetween = (value: unknown, minimum: number, maximum: number): boolean =>
+  typeof value === 'number' && Number.isSafeInteger(value) && value >= minimum && value <= maximum
+const isSecret = (value: unknown): boolean => isBoundedString(value, 1, ASSISTANT_PROFILE_LIMITS.secretLength)
+const isProfileId = (value: unknown): value is string => isSafeRecordKey(value, ASSISTANT_PROFILE_LIMITS.idLength)
+const isSubscriptionId = (value: unknown): value is string =>
+  isSafeRecordKey(value, ASSISTANT_PROFILE_LIMITS.subscriptionIdLength)
+const isModel = (value: unknown): value is string => isBoundedString(value, 1, ASSISTANT_PROFILE_LIMITS.modelLength)
+const isNullableDate = (value: unknown): boolean =>
+  value === null || (isBoundedString(value, 1, 64) && ISO_DATE_PATTERN.test(value) && !Number.isNaN(Date.parse(value)))
+const isOcrLanguage = (value: unknown): boolean =>
+  isBoundedString(value, 2, 256) && /^[a-zA-Z]{2,}([_+][a-zA-Z]{2,})*$/.test(value)
+const isUiBasePath = (value: unknown): boolean =>
+  isBoundedString(value, 1, MAX_PATH_LENGTH) && /^\/[A-Za-z0-9/_-]*$/.test(value)
+
+function isHttpUrl(value: unknown, allowEmpty = false): boolean {
+  if (allowEmpty && value === '') {
+    return true
+  }
+  if (!isBoundedString(value, 1, ASSISTANT_PROFILE_LIMITS.urlLength)) {
+    return false
+  }
+  try {
+    const parsed = new URL(value)
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
+function isModels(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= ASSISTANT_PROFILE_LIMITS.modelCount &&
+    value.every(isModel) &&
+    new Set(value).size === value.length
+  )
+}
+
+function isPersistedAiProfile(value: unknown): value is PersistedAiProfile {
+  return (
+    hasOnlyKeys(value, [
+      'id',
+      'name',
+      'provider',
+      'baseUrl',
+      'model',
+      'models',
+      'enabled',
+      'apiKey',
+      'backendProfileId',
+    ]) &&
+    isProfileId(value.id) &&
+    isBoundedString(value.name, 1, ASSISTANT_PROFILE_LIMITS.nameLength) &&
+    (ASSISTANT_PROFILE_PROVIDER_KINDS as readonly unknown[]).includes(value.provider) &&
+    (value.baseUrl === undefined || isHttpUrl(value.baseUrl)) &&
+    (value.model === undefined || isModel(value.model)) &&
+    (value.models === undefined || isModels(value.models)) &&
+    typeof value.enabled === 'boolean' &&
+    (value.apiKey === undefined || isSecret(value.apiKey)) &&
+    (value.backendProfileId === undefined || isProfileId(value.backendProfileId))
+  )
+}
+
+function isPersistedAiProfiles(value: unknown): value is PersistedAiProfile[] {
+  if (!Array.isArray(value) || value.length > ASSISTANT_PROFILE_LIMITS.profiles || !value.every(isPersistedAiProfile)) {
+    return false
+  }
+  return new Set(value.map((profile) => profile.id)).size === value.length
+}
+
+function isPersistedBackendProfile(value: unknown): value is PersistedBackendProfile {
+  if (
+    !hasOnlyKeys(value, ['id', 'name', 'type', 'provider', 'baseUrl', 'model', 'models', 'apiKey', 'subscriptionId']) ||
+    !isProfileId(value.id) ||
+    !isBoundedString(value.name, 1, ASSISTANT_PROFILE_LIMITS.nameLength) ||
+    (value.type !== 'api-key' && value.type !== 'subscription') ||
+    (value.baseUrl !== undefined && !isHttpUrl(value.baseUrl)) ||
+    (value.model !== undefined && !isModel(value.model)) ||
+    (value.models !== undefined && !isModels(value.models))
+  ) {
+    return false
+  }
+
+  if (value.type === 'api-key') {
+    return (
+      (BACKEND_API_KEY_PROVIDERS as readonly unknown[]).includes(value.provider) &&
+      (value.apiKey === undefined || isSecret(value.apiKey)) &&
+      value.subscriptionId === undefined
+    )
+  }
+
+  return value.provider === undefined && value.apiKey === undefined && isSubscriptionId(value.subscriptionId)
+}
+
+function isPersistedBackendProfiles(value: unknown): value is PersistedBackendProfile[] {
+  if (
+    !Array.isArray(value) ||
+    value.length > ASSISTANT_PROFILE_LIMITS.profiles ||
+    !value.every(isPersistedBackendProfile)
+  ) {
+    return false
+  }
+  return new Set(value.map((profile) => profile.id)).size === value.length
+}
+
+function isStringMap(
+  value: unknown,
+  maximumEntries: number,
+  keyValidator: (key: string) => boolean,
+  valueValidator: (entry: string) => boolean,
+): value is Record<string, string> {
+  if (!isJsonObject(value)) {
+    return false
+  }
+  const entries = Object.entries(value)
+  return (
+    entries.length <= maximumEntries &&
+    entries.every(([key, entry]) => keyValidator(key) && typeof entry === 'string' && valueValidator(entry))
+  )
+}
+
+function isAssignments(value: unknown): value is AssistantProfileAssignments {
+  return (
+    hasOnlyKeys(value, ['users', 'roles']) &&
+    Object.prototype.hasOwnProperty.call(value, 'users') &&
+    Object.prototype.hasOwnProperty.call(value, 'roles') &&
+    isStringMap(
+      value.users,
+      ASSISTANT_PROFILE_LIMITS.assignmentCount,
+      (identifier) => isSafeRecordKey(identifier, ASSISTANT_PROFILE_LIMITS.userIdentifierLength),
+      (profileId) => isProfileId(profileId),
+    ) &&
+    isStringMap(
+      value.roles,
+      ASSIGNABLE_ROLE_NAMES.length,
+      (roleName) => (ASSIGNABLE_ROLE_NAMES as readonly string[]).includes(roleName),
+      (profileId) => isProfileId(profileId),
+    )
+  )
+}
+
+function isDomainList(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.length <= MAX_DOMAIN_COUNT &&
+    value.every(
+      (entry) =>
+        isBoundedString(entry, 1, MAX_DOMAIN_LENGTH) && entry.trim() === entry && !/[\u0000-\u0020\u007f]/.test(entry),
+    )
+  )
+}
+
+function matchesFields(value: unknown, validators: Record<string, FieldValidator>): boolean {
+  return (
+    isJsonObject(value) && Object.entries(value).every(([key, fieldValue]) => validators[key]?.(fieldValue) === true)
+  )
+}
+
+function hasValidAiReferences(ai: PersistedAiSettings | undefined): boolean {
+  if (!ai) {
+    return true
+  }
+
+  const profileIds = new Set((ai.profiles ?? []).map((profile) => profile.id))
+  const backendIds = new Set((ai.backendProfiles ?? []).map((backend) => backend.id))
+
+  if (ai.defaultProfileId !== undefined && !profileIds.has(ai.defaultProfileId)) {
+    return false
+  }
+  if (
+    ai.profiles?.some((profile) => profile.backendProfileId !== undefined && !backendIds.has(profile.backendProfileId))
+  ) {
+    return false
+  }
+
+  const assignmentTargets = ai.assignments
+    ? [...Object.values(ai.assignments.users), ...Object.values(ai.assignments.roles)]
+    : []
+  return assignmentTargets.every((profileId) => profileIds.has(profileId))
+}
+
+function isPersistedServerSettings(value: unknown): value is PersistedServerSettings {
+  const proofOfWork = (candidate: unknown) =>
+    matchesFields(candidate, {
+      registerEnabled: isBoolean,
+      registerDifficulty: (entry) =>
+        isIntegerBetween(
+          entry,
+          SERVER_SETTINGS_BOUNDS.proofOfWorkDifficulty.minimum,
+          SERVER_SETTINGS_BOUNDS.proofOfWorkDifficulty.maximum,
+        ),
+      signInEnabled: isBoolean,
+      signInMode: (entry) => entry === 'always' || entry === 'adaptive',
+      signInDifficulty: (entry) =>
+        isIntegerBetween(
+          entry,
+          SERVER_SETTINGS_BOUNDS.proofOfWorkDifficulty.minimum,
+          SERVER_SETTINGS_BOUNDS.proofOfWorkDifficulty.maximum,
+        ),
+      signInAdaptiveThreshold: (entry) =>
+        isIntegerBetween(
+          entry,
+          SERVER_SETTINGS_BOUNDS.proofOfWorkAdaptiveThreshold.minimum,
+          SERVER_SETTINGS_BOUNDS.proofOfWorkAdaptiveThreshold.maximum,
+        ),
+    })
+  const rateLimit = (candidate: unknown) =>
+    matchesFields(candidate, {
+      enabled: isBoolean,
+      windowSeconds: (entry) =>
+        isIntegerBetween(
+          entry,
+          SERVER_SETTINGS_BOUNDS.rateLimitWindowSeconds.minimum,
+          SERVER_SETTINGS_BOUNDS.rateLimitWindowSeconds.maximum,
+        ),
+      loginMax: (entry) =>
+        isIntegerBetween(
+          entry,
+          SERVER_SETTINGS_BOUNDS.rateLimitMaximum.minimum,
+          SERVER_SETTINGS_BOUNDS.rateLimitMaximum.maximum,
+        ),
+      registrationMax: (entry) =>
+        isIntegerBetween(
+          entry,
+          SERVER_SETTINGS_BOUNDS.rateLimitMaximum.minimum,
+          SERVER_SETTINGS_BOUNDS.rateLimitMaximum.maximum,
+        ),
+      userWindowSeconds: (entry) =>
+        isIntegerBetween(
+          entry,
+          SERVER_SETTINGS_BOUNDS.rateLimitWindowSeconds.minimum,
+          SERVER_SETTINGS_BOUNDS.rateLimitWindowSeconds.maximum,
+        ),
+      userMax: (entry) =>
+        isIntegerBetween(
+          entry,
+          SERVER_SETTINGS_BOUNDS.rateLimitMaximum.minimum,
+          SERVER_SETTINGS_BOUNDS.rateLimitMaximum.maximum,
+        ),
+      adaptiveEscalation: isBoolean,
+    })
+
+  if (
+    !matchesFields(value, {
+      ai: (candidate) =>
+        matchesFields(candidate, {
+          anthropicApiKey: isSecret,
+          openaiApiKey: isSecret,
+          openaiBaseUrl: isHttpUrl,
+          ollamaUrl: isHttpUrl,
+          dailyRequestLimit: isNonNegativeSafeInteger,
+          fiveHourTokenLimit: isNonNegativeSafeInteger,
+          weeklyTokenLimit: isNonNegativeSafeInteger,
+          profiles: isPersistedAiProfiles,
+          defaultProfileId: isProfileId,
+          backendProfiles: isPersistedBackendProfiles,
+          assignments: isAssignments,
+        }),
+      updateCheck: (candidate) => matchesFields(candidate, { url: isHttpUrl }),
+      nextcloudBackups: (candidate) => matchesFields(candidate, { enabled: isBoolean }),
+      security: (candidate) =>
+        matchesFields(candidate, {
+          proofOfWork,
+          rateLimit,
+        }),
+      registration: (candidate) =>
+        matchesFields(candidate, {
+          defaultRole: (entry) => (PERSISTED_REGISTRATION_ASSIGNABLE_ROLES as readonly unknown[]).includes(entry),
+          domainMode: (entry) => entry === 'off' || entry === 'allowlist' || entry === 'blocklist',
+          domainList: isDomainList,
+          emailConfirmationEnabled: isBoolean,
+          emailConfirmationGating: (entry) => entry === 'block_signin' || entry === 'warn',
+          emailConfirmationSubject: (entry) =>
+            isBoundedString(
+              entry,
+              SERVER_SETTINGS_BOUNDS.emailSubjectLength.minimum,
+              SERVER_SETTINGS_BOUNDS.emailSubjectLength.maximum,
+            ),
+          emailConfirmationBody: (entry) =>
+            isBoundedString(
+              entry,
+              SERVER_SETTINGS_BOUNDS.emailBodyLength.minimum,
+              SERVER_SETTINGS_BOUNDS.emailBodyLength.maximum,
+            ),
+          emailConfirmationBaseUrl: (entry) => isHttpUrl(entry, true),
+          signupsPerIpMax: (entry) =>
+            isIntegerBetween(
+              entry,
+              SERVER_SETTINGS_BOUNDS.registrationMaximum.minimum,
+              SERVER_SETTINGS_BOUNDS.registrationMaximum.maximum,
+            ),
+          signupsPerIpWindowHours: (entry) =>
+            isIntegerBetween(
+              entry,
+              SERVER_SETTINGS_BOUNDS.registrationWindowHours.minimum,
+              SERVER_SETTINGS_BOUNDS.registrationWindowHours.maximum,
+            ),
+          signupsPerWeekMax: (entry) =>
+            isIntegerBetween(
+              entry,
+              SERVER_SETTINGS_BOUNDS.registrationWeeklyOrTotalMaximum.minimum,
+              SERVER_SETTINGS_BOUNDS.registrationWeeklyOrTotalMaximum.maximum,
+            ),
+          signupsPerDeviceMax: (entry) =>
+            isIntegerBetween(
+              entry,
+              SERVER_SETTINGS_BOUNDS.registrationMaximum.minimum,
+              SERVER_SETTINGS_BOUNDS.registrationMaximum.maximum,
+            ),
+          signupsPerDeviceWindowHours: (entry) =>
+            isIntegerBetween(
+              entry,
+              SERVER_SETTINGS_BOUNDS.registrationWindowHours.minimum,
+              SERVER_SETTINGS_BOUNDS.registrationWindowHours.maximum,
+            ),
+          inviteOnly: isBoolean,
+          approvalRequired: isBoolean,
+          maxTotalAccounts: (entry) =>
+            isIntegerBetween(
+              entry,
+              SERVER_SETTINGS_BOUNDS.registrationWeeklyOrTotalMaximum.minimum,
+              SERVER_SETTINGS_BOUNDS.registrationWeeklyOrTotalMaximum.maximum,
+            ),
+          signupsOpenAt: isNullableDate,
+          signupsCloseAt: isNullableDate,
+          invitesPerUser: (entry) =>
+            isIntegerBetween(
+              entry,
+              SERVER_SETTINGS_BOUNDS.registrationMaximum.minimum,
+              SERVER_SETTINGS_BOUNDS.registrationMaximum.maximum,
+            ),
+        }),
+      logging: (candidate) =>
+        matchesFields(candidate, {
+          level: (entry) => (PERSISTED_LOG_LEVELS as readonly unknown[]).includes(entry),
+        }),
+      ocr: (candidate) =>
+        matchesFields(candidate, {
+          serverEnabled: isBoolean,
+          defaultLanguage: isOcrLanguage,
+          maxPages: (entry) =>
+            isIntegerBetween(entry, SERVER_SETTINGS_BOUNDS.ocrPages.minimum, SERVER_SETTINGS_BOUNDS.ocrPages.maximum),
+          maxImageBytes: (entry) =>
+            isIntegerBetween(
+              entry,
+              SERVER_SETTINGS_BOUNDS.ocrImageBytes.minimum,
+              SERVER_SETTINGS_BOUNDS.ocrImageBytes.maximum,
+            ),
+          clientEnabled: isBoolean,
+          clientDefaultLanguage: isOcrLanguage,
+        }),
+      workflows: (candidate) =>
+        matchesFields(candidate, {
+          enabled: isBoolean,
+          n8nUrl: isHttpUrl,
+          uiBasePath: isUiBasePath,
+          uiTokenTtlSeconds: (entry) =>
+            isIntegerBetween(
+              entry,
+              SERVER_SETTINGS_BOUNDS.workflowsTokenTtlSeconds.minimum,
+              SERVER_SETTINGS_BOUNDS.workflowsTokenTtlSeconds.maximum,
+            ),
+        }),
+      plugins: (candidate) =>
+        matchesFields(candidate, {
+          repoUrl: isHttpUrl,
+          sameOriginRendering: isBoolean,
+        }),
+    })
+  ) {
+    return false
+  }
+
+  return hasValidAiReferences((value as PersistedServerSettings).ai)
+}
+
 /**
  * A validated PUT payload: `undefined` = leave untouched, `null` = CLEAR the
  * persisted value (fall back to env), anything else = persist the new value.
@@ -359,22 +777,17 @@ export interface ServerSettingsPatch {
 }
 
 export class ServerSettingsStore {
-  private writeChain: Promise<void> = Promise.resolve()
+  private readonly store: SecureJsonFileStore<PersistedServerSettings>
 
-  constructor(private readonly filePath: string) {}
+  constructor(filePath: string) {
+    this.store = new SecureJsonFileStore({
+      filePath,
+      validate: isPersistedServerSettings,
+    })
+  }
 
   async read(): Promise<PersistedServerSettings> {
-    try {
-      const raw = await fs.readFile(this.filePath, 'utf8')
-      const parsed = JSON.parse(raw) as PersistedServerSettings
-
-      return parsed && typeof parsed === 'object' ? parsed : {}
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        return {}
-      }
-      throw error
-    }
+    return (await this.store.read()) ?? {}
   }
 
   /**
@@ -532,20 +945,10 @@ export class ServerSettingsStore {
   }
 
   private async mutate(mutator: (data: PersistedServerSettings) => void): Promise<void> {
-    const run = this.writeChain.then(async () => {
-      const data = await this.read()
+    await this.store.update((current) => {
+      const data = current ?? {}
       mutator(data)
-      await this.atomicWrite(data)
+      return data
     })
-    this.writeChain = run.catch(() => undefined)
-
-    return run
-  }
-
-  private async atomicWrite(data: PersistedServerSettings): Promise<void> {
-    await fs.mkdir(path.dirname(this.filePath), { recursive: true })
-    const tmp = `${this.filePath}.${process.pid}.${Date.now()}.tmp`
-    await fs.writeFile(tmp, JSON.stringify(data, null, 2), 'utf8')
-    await fs.rename(tmp, this.filePath)
   }
 }

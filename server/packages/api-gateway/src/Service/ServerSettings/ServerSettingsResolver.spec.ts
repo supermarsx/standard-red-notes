@@ -116,7 +116,7 @@ describe('ServerSettingsStore + ServerSettingsResolver', () => {
       })
     })
 
-    it('lets persisted admin values WIN over env and coerces an invalid role to CORE_USER', async () => {
+    it('lets valid persisted values win and rejects an invalid persisted role', async () => {
       await new ServerSettingsStore(filePath).update({
         registration: { defaultRole: 'VAULTS_USER', domainMode: 'blocklist', domainList: ['persisted.com'] },
       })
@@ -131,9 +131,9 @@ describe('ServerSettingsStore + ServerSettingsResolver', () => {
         ...signupControlDefaults,
       })
 
-      // An admin role must never survive resolution as a default.
-      await new ServerSettingsStore(filePath).update({ registration: { defaultRole: 'ADMIN_USER' as string } })
-      expect((await resolver.resolveRegistrationConfig()).defaultRole).toEqual('CORE_USER')
+      // The invalid document is rejected wholesale, so the valid env baseline wins.
+      await fs.writeFile(filePath, JSON.stringify({ registration: { defaultRole: 'ADMIN_USER' } }))
+      expect((await resolver.resolveRegistrationConfig()).defaultRole).toEqual('PRO_USER')
     })
 
     it('resolves email confirmation: persisted enable + gating win over env/default', async () => {
@@ -208,15 +208,18 @@ describe('ServerSettingsStore + ServerSettingsResolver', () => {
       expect(config.signupsPerWeekMax).toBe(250)
     })
 
-    it('clamps out-of-range persisted/env values to the bounds (a bad value never disables a cap)', async () => {
-      await new ServerSettingsStore(filePath).update({
-        registration: { signupsPerIpWindowHours: 9999, signupsPerDeviceWindowHours: 0, signupsPerIpMax: -4 },
-      })
+    it('rejects out-of-range persisted values as corrupt and falls back safely', async () => {
+      await fs.writeFile(
+        filePath,
+        JSON.stringify({
+          registration: { signupsPerIpWindowHours: 9999, signupsPerDeviceWindowHours: 0, signupsPerIpMax: -4 },
+        }),
+      )
       const config = await makeResolver().resolveRegistrationConfig()
 
-      expect(config.signupsPerIpWindowHours).toBe(168) // clamped to max
-      expect(config.signupsPerDeviceWindowHours).toBe(1) // clamped to min
-      expect(config.signupsPerIpMax).toBe(0) // clamped to min
+      expect(config.signupsPerIpWindowHours).toBe(24)
+      expect(config.signupsPerDeviceWindowHours).toBe(24)
+      expect(config.signupsPerIpMax).toBe(0)
     })
 
     it('exposes each cap in the view source map (persisted / env / default)', async () => {
@@ -284,23 +287,25 @@ describe('ServerSettingsStore + ServerSettingsResolver', () => {
     })
 
     it('coerces an unparseable persisted window value to null so signups can never wedge shut', async () => {
-      await new ServerSettingsStore(filePath).update({
-        registration: { signupsOpenAt: 'not-a-date' as string, signupsCloseAt: '' as string },
-      })
+      await fs.writeFile(
+        filePath,
+        JSON.stringify({ registration: { signupsOpenAt: 'not-a-date', signupsCloseAt: '' } }),
+      )
       const config = await makeResolver().resolveRegistrationConfig()
 
       expect(config.signupsOpenAt).toBeNull()
       expect(config.signupsCloseAt).toBeNull()
     })
 
-    it('clamps out-of-range totals (a bad value never becomes an accidental cap of its own)', async () => {
-      await new ServerSettingsStore(filePath).update({
-        registration: { maxTotalAccounts: 9_999_999_999, invitesPerUser: -5 },
-      })
+    it('rejects out-of-range totals and falls back to unlimited defaults', async () => {
+      await fs.writeFile(
+        filePath,
+        JSON.stringify({ registration: { maxTotalAccounts: 9_999_999_999, invitesPerUser: -5 } }),
+      )
       const config = await makeResolver().resolveRegistrationConfig()
 
-      expect(config.maxTotalAccounts).toBe(1000000) // clamped to max
-      expect(config.invitesPerUser).toBe(0) // clamped to min
+      expect(config.maxTotalAccounts).toBe(0)
+      expect(config.invitesPerUser).toBe(0)
     })
 
     it('clears a persisted knob on null and falls back through to the default', async () => {
@@ -329,10 +334,10 @@ describe('ServerSettingsStore + ServerSettingsResolver', () => {
     })
 
     it('ignores an invalid persisted level and falls through to env then default', async () => {
-      await new ServerSettingsStore(filePath).update({ logging: { level: 'bogus' } })
+      await fs.writeFile(filePath, JSON.stringify({ logging: { level: 'bogus' } }))
       expect(await makeResolver({ logLevel: 'http' }).resolveLoggingLevel()).toBe('http')
 
-      await new ServerSettingsStore(filePath).update({ logging: { level: 'also-bad' } })
+      await fs.writeFile(filePath, JSON.stringify({ logging: { level: 'also-bad' } }))
       expect(await makeResolver({ logLevel: 'nonsense' }).resolveLoggingLevel()).toBe('info')
     })
 
@@ -761,10 +766,10 @@ describe('ServerSettingsStore + ServerSettingsResolver', () => {
       expect(config.registrationMax).toBe(5) // unset env -> default
     })
 
-    it('clamps an out-of-range persisted window into bounds', async () => {
+    it('rejects an out-of-range persisted window and falls back to the safe default', async () => {
       const resolver = makeResolver()
-      await resolver.applyPatch({ security: { rateLimit: { windowSeconds: 99999 } } })
-      expect((await resolver.resolveRateLimitConfig()).windowSeconds).toBe(3600)
+      await fs.writeFile(filePath, JSON.stringify({ security: { rateLimit: { windowSeconds: 99999 } } }))
+      expect((await resolver.resolveRateLimitConfig()).windowSeconds).toBe(60)
     })
 
     it('lets persisted admin values WIN over env', async () => {
@@ -843,15 +848,15 @@ describe('ServerSettingsStore + ServerSettingsResolver', () => {
       expect(config.clientDefaultLanguage).toBe('eng')
     })
 
-    it('lets persisted admin values WIN over env and clamps out-of-range bounds', async () => {
+    it('lets persisted admin values WIN over env at the exact upper bound', async () => {
       const resolver = makeResolver({ ocrServerEnabled: false, ocrMaxPages: 10 })
       await resolver.applyPatch({
-        ocr: { serverEnabled: true, maxPages: 99999, defaultLanguage: 'chi_sim', clientEnabled: true },
+        ocr: { serverEnabled: true, maxPages: 1000, defaultLanguage: 'chi_sim', clientEnabled: true },
       })
 
       const config = await resolver.resolveOcrConfig()
       expect(config.serverEnabled).toBe(true)
-      expect(config.maxPages).toBe(1000) // clamped into bounds
+      expect(config.maxPages).toBe(1000)
       expect(config.defaultLanguage).toBe('chi_sim')
       expect(config.clientEnabled).toBe(true)
     })
@@ -914,13 +919,13 @@ describe('ServerSettingsStore + ServerSettingsResolver', () => {
     it('lets persisted admin values WIN over env and clamps the TTL', async () => {
       const resolver = makeResolver({ workflowsEnabled: false, workflowsN8nUrl: 'http://env-n8n:5678' })
       await resolver.applyPatch({
-        workflows: { enabled: true, n8nUrl: 'https://n8n.example.com', uiTokenTtlSeconds: 999999999 },
+        workflows: { enabled: true, n8nUrl: 'https://n8n.example.com', uiTokenTtlSeconds: 604800 },
       })
 
       const config = await resolver.resolveWorkflowsConfig()
       expect(config.enabled).toBe(true)
       expect(config.n8nUrl).toBe('https://n8n.example.com')
-      expect(config.uiTokenTtlSeconds).toBe(7 * 24 * 60 * 60) // clamped to 7 days
+      expect(config.uiTokenTtlSeconds).toBe(7 * 24 * 60 * 60)
     })
 
     it('persists, prunes on null, and clears back to env/default', async () => {
@@ -972,7 +977,7 @@ describe('ServerSettingsStore + ServerSettingsResolver', () => {
       const resolver = makeResolver({ pluginsRepoUrl: 'ftp://nope.example.com' })
       expect(await resolver.resolvePluginsRepoUrl()).toEqual(DEFAULT)
 
-      await resolver.applyPatch({ plugins: { repoUrl: 'not a url' } as never })
+      await fs.writeFile(filePath, JSON.stringify({ plugins: { repoUrl: 'not a url' } }))
       expect(await resolver.resolvePluginsRepoUrl()).toEqual(DEFAULT)
     })
 

@@ -14,7 +14,7 @@ import {
   REGISTRATION_ASSIGNABLE_ROLES,
   ServerSettingsResolver,
 } from '../../Service/ServerSettings/ServerSettingsResolver'
-import { ServerSettingsPatch } from '../../Service/ServerSettings/ServerSettingsStore'
+import { SERVER_SETTINGS_BOUNDS, ServerSettingsPatch } from '../../Service/ServerSettings/ServerSettingsStore'
 import {
   PersistedAiProfile,
   PersistedBackendProfile,
@@ -1354,9 +1354,9 @@ export class AdminController extends BaseHttpController {
         }
 
         for (const [key, max] of [
-          ['registerDifficulty', 32],
-          ['signInDifficulty', 32],
-          ['signInAdaptiveThreshold', 100],
+          ['registerDifficulty', SERVER_SETTINGS_BOUNDS.proofOfWorkDifficulty.maximum],
+          ['signInDifficulty', SERVER_SETTINGS_BOUNDS.proofOfWorkDifficulty.maximum],
+          ['signInAdaptiveThreshold', SERVER_SETTINGS_BOUNDS.proofOfWorkAdaptiveThreshold.maximum],
         ] as const) {
           const invalid = boundedInt(key, max)
           if (invalid) {
@@ -1424,11 +1424,27 @@ export class AdminController extends BaseHttpController {
         }
 
         for (const [key, min, max] of [
-          ['windowSeconds', 1, 3600],
-          ['loginMax', 0, 100000],
-          ['registrationMax', 0, 100000],
-          ['userWindowSeconds', 1, 3600],
-          ['userMax', 0, 100000],
+          [
+            'windowSeconds',
+            SERVER_SETTINGS_BOUNDS.rateLimitWindowSeconds.minimum,
+            SERVER_SETTINGS_BOUNDS.rateLimitWindowSeconds.maximum,
+          ],
+          [
+            'loginMax',
+            SERVER_SETTINGS_BOUNDS.rateLimitMaximum.minimum,
+            SERVER_SETTINGS_BOUNDS.rateLimitMaximum.maximum,
+          ],
+          [
+            'registrationMax',
+            SERVER_SETTINGS_BOUNDS.rateLimitMaximum.minimum,
+            SERVER_SETTINGS_BOUNDS.rateLimitMaximum.maximum,
+          ],
+          [
+            'userWindowSeconds',
+            SERVER_SETTINGS_BOUNDS.rateLimitWindowSeconds.minimum,
+            SERVER_SETTINGS_BOUNDS.rateLimitWindowSeconds.maximum,
+          ],
+          ['userMax', SERVER_SETTINGS_BOUNDS.rateLimitMaximum.minimum, SERVER_SETTINGS_BOUNDS.rateLimitMaximum.maximum],
         ] as const) {
           const invalid = rlBoundedInt(key, min, max)
           if (invalid) {
@@ -1534,7 +1550,10 @@ export class AdminController extends BaseHttpController {
       for (const key of ['emailConfirmationSubject', 'emailConfirmationBody'] as const) {
         if (registration[key] !== undefined) {
           const value = registration[key]
-          const maxLength = key === 'emailConfirmationSubject' ? 1000 : 20000
+          const maxLength =
+            key === 'emailConfirmationSubject'
+              ? SERVER_SETTINGS_BOUNDS.emailSubjectLength.maximum
+              : SERVER_SETTINGS_BOUNDS.emailBodyLength.maximum
           if (value !== null && (typeof value !== 'string' || value.length > maxLength)) {
             return {
               error: `registration.${key} must be a string of at most ${maxLength} characters, or null to clear it.`,
@@ -1597,11 +1616,31 @@ export class AdminController extends BaseHttpController {
       }
 
       for (const [key, min, max] of [
-        ['signupsPerIpMax', 0, 100000],
-        ['signupsPerIpWindowHours', 1, 168],
-        ['signupsPerWeekMax', 0, 1000000],
-        ['signupsPerDeviceMax', 0, 100000],
-        ['signupsPerDeviceWindowHours', 1, 168],
+        [
+          'signupsPerIpMax',
+          SERVER_SETTINGS_BOUNDS.registrationMaximum.minimum,
+          SERVER_SETTINGS_BOUNDS.registrationMaximum.maximum,
+        ],
+        [
+          'signupsPerIpWindowHours',
+          SERVER_SETTINGS_BOUNDS.registrationWindowHours.minimum,
+          SERVER_SETTINGS_BOUNDS.registrationWindowHours.maximum,
+        ],
+        [
+          'signupsPerWeekMax',
+          SERVER_SETTINGS_BOUNDS.registrationWeeklyOrTotalMaximum.minimum,
+          SERVER_SETTINGS_BOUNDS.registrationWeeklyOrTotalMaximum.maximum,
+        ],
+        [
+          'signupsPerDeviceMax',
+          SERVER_SETTINGS_BOUNDS.registrationMaximum.minimum,
+          SERVER_SETTINGS_BOUNDS.registrationMaximum.maximum,
+        ],
+        [
+          'signupsPerDeviceWindowHours',
+          SERVER_SETTINGS_BOUNDS.registrationWindowHours.minimum,
+          SERVER_SETTINGS_BOUNDS.registrationWindowHours.maximum,
+        ],
       ] as const) {
         const invalid = regBoundedInt(key, min, max)
         if (invalid) {
@@ -1626,8 +1665,16 @@ export class AdminController extends BaseHttpController {
       }
 
       for (const [key, min, max] of [
-        ['maxTotalAccounts', 0, 1000000],
-        ['invitesPerUser', 0, 100000],
+        [
+          'maxTotalAccounts',
+          SERVER_SETTINGS_BOUNDS.registrationWeeklyOrTotalMaximum.minimum,
+          SERVER_SETTINGS_BOUNDS.registrationWeeklyOrTotalMaximum.maximum,
+        ],
+        [
+          'invitesPerUser',
+          SERVER_SETTINGS_BOUNDS.registrationMaximum.minimum,
+          SERVER_SETTINGS_BOUNDS.registrationMaximum.maximum,
+        ],
       ] as const) {
         const invalid = regBoundedInt(key, min, max)
         if (invalid) {
@@ -1716,8 +1763,8 @@ export class AdminController extends BaseHttpController {
       }
 
       for (const [key, min, max] of [
-        ['maxPages', 1, 1000],
-        ['maxImageBytes', 1024, 200 * 1024 * 1024],
+        ['maxPages', SERVER_SETTINGS_BOUNDS.ocrPages.minimum, SERVER_SETTINGS_BOUNDS.ocrPages.maximum],
+        ['maxImageBytes', SERVER_SETTINGS_BOUNDS.ocrImageBytes.minimum, SERVER_SETTINGS_BOUNDS.ocrImageBytes.maximum],
       ] as const) {
         if (ocr[key] !== undefined) {
           if (ocr[key] === null) {
@@ -1785,8 +1832,8 @@ export class AdminController extends BaseHttpController {
         } else if (
           typeof workflows.uiTokenTtlSeconds === 'number' &&
           Number.isInteger(workflows.uiTokenTtlSeconds) &&
-          workflows.uiTokenTtlSeconds >= 60 &&
-          workflows.uiTokenTtlSeconds <= 7 * 24 * 60 * 60
+          workflows.uiTokenTtlSeconds >= SERVER_SETTINGS_BOUNDS.workflowsTokenTtlSeconds.minimum &&
+          workflows.uiTokenTtlSeconds <= SERVER_SETTINGS_BOUNDS.workflowsTokenTtlSeconds.maximum
         ) {
           wfPatch.uiTokenTtlSeconds = workflows.uiTokenTtlSeconds
         } else {

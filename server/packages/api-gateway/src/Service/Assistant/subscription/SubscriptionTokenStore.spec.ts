@@ -158,6 +158,21 @@ describe('SubscriptionTokenStore', () => {
       expect(Object.keys(await store.loadAll()).sort()).toEqual(['one', 'two'])
     })
 
+    it('does not lose encrypted records saved by separate store instances', async () => {
+      const first = new SubscriptionTokenStore(filePath, key)
+      const second = new SubscriptionTokenStore(filePath, key)
+
+      await Promise.all([
+        first.saveRecord('one', sampleRecord({ accountLabel: 'one@team.test' })),
+        second.saveRecord('two', sampleRecord({ accountLabel: 'two@team.test' })),
+      ])
+
+      const all = await first.loadAll()
+      expect(Object.keys(all).sort()).toEqual(['one', 'two'])
+      expect(all.one.accountLabel).toBe('one@team.test')
+      expect(all.two.accountLabel).toBe('two@team.test')
+    })
+
     it('migrates a legacy bare-record file into the default id', async () => {
       // A legacy single-record store written via save().
       const legacy = new SubscriptionTokenStore(filePath, key)

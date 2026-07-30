@@ -1,6 +1,10 @@
-import { promises as fs } from 'fs'
-import * as path from 'path'
-
+import {
+  hasOnlyKeys,
+  isBoundedString,
+  isJsonObject,
+  isSafeRecordKey,
+  SecureJsonFileStore,
+} from '../../Infra/SecureJsonFileStore'
 import { DeliveryConfig, isDeliveryChannel } from './Types'
 
 /**
@@ -8,9 +12,9 @@ import { DeliveryConfig, isDeliveryChannel } from './Types'
  *
  * Holds, per user, the channel (whatsapp|telegram|email) + destination
  * (phone / chat-id / email) + an enabled flag. Default is unset/disabled: the
- * scheduler skips any user without an enabled config. Same JSON-file + mutex +
- * atomic-write idiom as the published-reminders store, keeping the whole feature
- * self-contained in api-gateway.
+ * scheduler skips any user without an enabled config. It uses the same bounded,
+ * validated, cross-instance locked, durable JSON primitive as the
+ * published-reminders store.
  *
  * NOTE: the destination here is plaintext (it has to be — the server needs it to
  * send). Like the published reminders, it exists only because the user opted in.
@@ -21,12 +25,41 @@ interface StoreShape {
   [userUuid: string]: DeliveryConfig
 }
 
-export class DeliveryConfigStore {
-  private writeChain: Promise<void> = Promise.resolve()
+const MAX_USERS = 10_000
+const MAX_DESTINATION_LENGTH = 8_192
 
-  constructor(private readonly filePath: string) {}
+function isStoreShape(value: unknown): value is StoreShape {
+  if (!isJsonObject(value)) {
+    return false
+  }
+  const entries = Object.entries(value)
+  return (
+    entries.length <= MAX_USERS &&
+    entries.every(
+      ([userUuid, config]) =>
+        isSafeRecordKey(userUuid) &&
+        hasOnlyKeys(config, ['channel', 'destination', 'enabled']) &&
+        isDeliveryChannel(config.channel) &&
+        isBoundedString(config.destination, 0, MAX_DESTINATION_LENGTH) &&
+        typeof config.enabled === 'boolean',
+    )
+  )
+}
+
+export class DeliveryConfigStore {
+  private readonly store: SecureJsonFileStore<StoreShape>
+
+  constructor(filePath: string) {
+    this.store = new SecureJsonFileStore({
+      filePath,
+      validate: isStoreShape,
+    })
+  }
 
   async getForUser(userUuid: string): Promise<DeliveryConfig | null> {
+    if (!isSafeRecordKey(userUuid)) {
+      return null
+    }
     const data = await this.read()
     const config = data[userUuid]
     if (!config || !isDeliveryChannel(config.channel)) {
@@ -36,6 +69,9 @@ export class DeliveryConfigStore {
   }
 
   async setForUser(userUuid: string, config: DeliveryConfig): Promise<DeliveryConfig> {
+    if (!isSafeRecordKey(userUuid)) {
+      throw new Error('A valid user identifier is required to configure reminder delivery.')
+    }
     if (!isDeliveryChannel(config.channel)) {
       throw new Error(`Unsupported delivery channel: ${String(config.channel)}`)
     }
@@ -44,6 +80,9 @@ export class DeliveryConfigStore {
       destination: (config.destination ?? '').trim(),
       enabled: Boolean(config.enabled),
     }
+    if (!isBoundedString(normalized.destination, 0, MAX_DESTINATION_LENGTH)) {
+      throw new Error(`Reminder delivery destinations may not exceed ${MAX_DESTINATION_LENGTH} characters.`)
+    }
     await this.mutate((data) => {
       data[userUuid] = normalized
     })
@@ -51,32 +90,14 @@ export class DeliveryConfigStore {
   }
 
   private async read(): Promise<StoreShape> {
-    try {
-      const raw = await fs.readFile(this.filePath, 'utf8')
-      const parsed = JSON.parse(raw) as StoreShape
-      return parsed && typeof parsed === 'object' ? parsed : {}
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        return {}
-      }
-      throw error
-    }
+    return (await this.store.read()) ?? {}
   }
 
   private async mutate(mutator: (data: StoreShape) => void): Promise<void> {
-    const run = this.writeChain.then(async () => {
-      const data = await this.read()
+    await this.store.update((current) => {
+      const data = current ?? {}
       mutator(data)
-      await this.atomicWrite(data)
+      return data
     })
-    this.writeChain = run.catch(() => undefined)
-    return run
-  }
-
-  private async atomicWrite(data: StoreShape): Promise<void> {
-    await fs.mkdir(path.dirname(this.filePath), { recursive: true })
-    const tmp = `${this.filePath}.${process.pid}.${Date.now()}.tmp`
-    await fs.writeFile(tmp, JSON.stringify(data, null, 2), 'utf8')
-    await fs.rename(tmp, this.filePath)
   }
 }

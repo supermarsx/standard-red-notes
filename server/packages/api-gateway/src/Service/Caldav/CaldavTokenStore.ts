@@ -1,7 +1,14 @@
 import * as crypto from 'crypto'
-import { promises as fs } from 'fs'
 import { randomUUID } from 'crypto'
-import * as path from 'path'
+
+import {
+  hasOnlyKeys,
+  isBoundedString,
+  isEpochMilliseconds,
+  isJsonObject,
+  isSafeRecordKey,
+  SecureJsonFileStore,
+} from '../../Infra/SecureJsonFileStore'
 
 /**
  * Standard Red Notes: scoped, revocable CalDAV access tokens.
@@ -19,7 +26,9 @@ import * as path from 'path'
  * verify so we never scan the whole table. Verification is constant-time.
  *
  * STORAGE: a single JSON file, like the published-calendar store, keeping the
- * feature self-contained inside api-gateway (which has no database).
+ * feature self-contained inside api-gateway (which has no database). The shared
+ * secure-file primitive bounds and validates reads, rejects unsafe link/type
+ * targets, and serializes durable atomic writes across local store instances.
  *
  * HASHING: Node scrypt (no extra dependency vs. bcrypt) with a per-token random
  * salt, compared with timingSafeEqual.
@@ -61,16 +70,55 @@ interface StoreShape {
 const SECRET_BYTES = 32
 const SALT_BYTES = 16
 const SCRYPT_KEYLEN = 64
+const MAX_TOKENS = 10_000
+const MAX_LABEL_LENGTH = 256
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+function isStoredToken(value: unknown, uuid: string): value is StoredToken {
+  return (
+    hasOnlyKeys(value, ['uuid', 'userUuid', 'label', 'scope', 'salt', 'hash', 'createdAt', 'lastUsedAt']) &&
+    UUID_PATTERN.test(uuid) &&
+    value.uuid === uuid &&
+    isSafeRecordKey(value.userUuid) &&
+    isBoundedString(value.label, 1, MAX_LABEL_LENGTH) &&
+    value.scope === 'calendar-read' &&
+    typeof value.salt === 'string' &&
+    /^[0-9a-f]{32}$/i.test(value.salt) &&
+    typeof value.hash === 'string' &&
+    /^[0-9a-f]{128}$/i.test(value.hash) &&
+    isEpochMilliseconds(value.createdAt) &&
+    (value.lastUsedAt === null || isEpochMilliseconds(value.lastUsedAt))
+  )
+}
+
+function isStoreShape(value: unknown): value is StoreShape {
+  if (!isJsonObject(value)) {
+    return false
+  }
+  const entries = Object.entries(value)
+  return entries.length <= MAX_TOKENS && entries.every(([uuid, token]) => isStoredToken(token, uuid))
+}
 
 export class CaldavTokenStore {
-  private writeChain: Promise<void> = Promise.resolve()
+  private readonly store: SecureJsonFileStore<StoreShape>
 
-  constructor(private readonly filePath: string) {}
+  constructor(filePath: string) {
+    this.store = new SecureJsonFileStore({
+      filePath,
+      validate: isStoreShape,
+    })
+  }
 
   async create(userUuid: string, label: string): Promise<CreatedCaldavToken> {
+    if (!isSafeRecordKey(userUuid)) {
+      throw new Error('A valid user identifier is required to create a CalDAV token.')
+    }
     const trimmedLabel = (label ?? '').trim()
     if (trimmedLabel.length === 0) {
       throw new Error('A label is required to create a CalDAV token.')
+    }
+    if (!isBoundedString(trimmedLabel, 1, MAX_LABEL_LENGTH)) {
+      throw new Error(`A CalDAV token label may not exceed ${MAX_LABEL_LENGTH} characters.`)
     }
 
     const uuid = randomUUID()
@@ -185,32 +233,14 @@ export class CaldavTokenStore {
   }
 
   private async read(): Promise<StoreShape> {
-    try {
-      const raw = await fs.readFile(this.filePath, 'utf8')
-      const parsed = JSON.parse(raw) as StoreShape
-      return parsed && typeof parsed === 'object' ? parsed : {}
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        return {}
-      }
-      throw error
-    }
+    return (await this.store.read()) ?? {}
   }
 
   private async mutate(mutator: (data: StoreShape) => void): Promise<void> {
-    const run = this.writeChain.then(async () => {
-      const data = await this.read()
+    await this.store.update((current) => {
+      const data = current ?? {}
       mutator(data)
-      await this.atomicWrite(data)
+      return data
     })
-    this.writeChain = run.catch(() => undefined)
-    return run
-  }
-
-  private async atomicWrite(data: StoreShape): Promise<void> {
-    await fs.mkdir(path.dirname(this.filePath), { recursive: true })
-    const tmp = `${this.filePath}.${process.pid}.${Date.now()}.tmp`
-    await fs.writeFile(tmp, JSON.stringify(data, null, 2), 'utf8')
-    await fs.rename(tmp, this.filePath)
   }
 }

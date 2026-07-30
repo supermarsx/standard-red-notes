@@ -1,3 +1,4 @@
+import { hasOnlyKeys, isBoundedString, isSafeRecordKey } from '../../Infra/SecureJsonFileStore'
 import { AssistantProviderConfig } from './providers/factory'
 
 /**
@@ -28,6 +29,19 @@ export const ASSISTANT_PROFILE_PROVIDER_KINDS: AssistantProfileProviderKind[] = 
   'ollama',
   'codex-subscription',
 ]
+
+export const ASSISTANT_PROFILE_LIMITS = {
+  profiles: 50,
+  idLength: 256,
+  nameLength: 120,
+  modelCount: 1_000,
+  modelLength: 512,
+  urlLength: 8_192,
+  secretLength: 256 * 1024,
+  subscriptionIdLength: 128,
+  assignmentCount: 10_000,
+  userIdentifierLength: 320,
+} as const
 
 /** A profile as persisted on disk. Contains the (secret) apiKey. */
 export interface PersistedAiProfile {
@@ -249,10 +263,10 @@ export function selectActiveProfile(
 export type ProfilesValidation =
   { profiles?: PersistedAiProfile[] | null; defaultProfileId?: string | null } | { error: string }
 
-const MAX_PROFILES = 50
-const MAX_NAME_LENGTH = 120
-
 function isHttpUrl(value: string): boolean {
+  if (!isBoundedString(value, 1, ASSISTANT_PROFILE_LIMITS.urlLength)) {
+    return false
+  }
   try {
     const parsed = new URL(value)
     return parsed.protocol === 'http:' || parsed.protocol === 'https:'
@@ -287,8 +301,8 @@ export function validateProfilesPatch(
       if (!Array.isArray(rawProfiles)) {
         return { error: 'ai.profiles must be an array, or null to clear it.' }
       }
-      if (rawProfiles.length > MAX_PROFILES) {
-        return { error: `ai.profiles may not contain more than ${MAX_PROFILES} profiles.` }
+      if (rawProfiles.length > ASSISTANT_PROFILE_LIMITS.profiles) {
+        return { error: `ai.profiles may not contain more than ${ASSISTANT_PROFILE_LIMITS.profiles} profiles.` }
       }
       const seenIds = new Set<string>()
       const profiles: PersistedAiProfile[] = []
@@ -297,10 +311,27 @@ export function validateProfilesPatch(
           return { error: 'Each ai.profiles entry must be an object.' }
         }
         const raw = entry as Record<string, unknown>
+        if (
+          !hasOnlyKeys(raw, [
+            'id',
+            'name',
+            'provider',
+            'baseUrl',
+            'model',
+            'models',
+            'enabled',
+            'apiKey',
+            'backendProfileId',
+          ])
+        ) {
+          return { error: 'Each ai.profiles entry contains an unknown field.' }
+        }
 
         const id = typeof raw.id === 'string' ? raw.id.trim() : ''
-        if (!id) {
-          return { error: 'Each profile requires a non-empty string id.' }
+        if (!isSafeRecordKey(id, ASSISTANT_PROFILE_LIMITS.idLength)) {
+          return {
+            error: `Each profile requires a safe non-empty id of at most ${ASSISTANT_PROFILE_LIMITS.idLength} characters.`,
+          }
         }
         if (seenIds.has(id)) {
           return { error: `Duplicate profile id: ${id}.` }
@@ -311,8 +342,8 @@ export function validateProfilesPatch(
         if (!name) {
           return { error: `Profile ${id} requires a non-empty name.` }
         }
-        if (name.length > MAX_NAME_LENGTH) {
-          return { error: `Profile ${id} name is too long (max ${MAX_NAME_LENGTH}).` }
+        if (name.length > ASSISTANT_PROFILE_LIMITS.nameLength) {
+          return { error: `Profile ${id} name is too long (max ${ASSISTANT_PROFILE_LIMITS.nameLength}).` }
         }
 
         const provider = raw.provider
@@ -325,11 +356,15 @@ export function validateProfilesPatch(
           }
         }
 
+        if (raw.enabled !== undefined && typeof raw.enabled !== 'boolean') {
+          return { error: `Profile ${id} enabled must be a boolean.` }
+        }
+
         const profile: PersistedAiProfile = {
           id,
           name,
           provider: provider as AssistantProfileProviderKind,
-          enabled: raw.enabled === undefined ? true : Boolean(raw.enabled),
+          enabled: raw.enabled === undefined ? true : raw.enabled,
         }
 
         if (raw.baseUrl !== undefined && raw.baseUrl !== null && raw.baseUrl !== '') {
@@ -343,14 +378,32 @@ export function validateProfilesPatch(
           if (typeof raw.model !== 'string') {
             return { error: `Profile ${id} model must be a string.` }
           }
-          profile.model = raw.model.trim()
+          const model = raw.model.trim()
+          if (!isBoundedString(model, 1, ASSISTANT_PROFILE_LIMITS.modelLength)) {
+            return {
+              error: `Profile ${id} model may not exceed ${ASSISTANT_PROFILE_LIMITS.modelLength} characters.`,
+            }
+          }
+          profile.model = model
         }
 
         if (raw.models !== undefined && raw.models !== null) {
-          if (!Array.isArray(raw.models) || raw.models.some((model) => typeof model !== 'string')) {
+          if (
+            !Array.isArray(raw.models) ||
+            raw.models.length > ASSISTANT_PROFILE_LIMITS.modelCount ||
+            raw.models.some((model) => typeof model !== 'string')
+          ) {
             return { error: `Profile ${id} models must be an array of strings.` }
           }
           const models = (raw.models as string[]).map((model) => model.trim()).filter((model) => model.length > 0)
+          if (
+            models.some((model) => !isBoundedString(model, 1, ASSISTANT_PROFILE_LIMITS.modelLength)) ||
+            new Set(models).size !== models.length
+          ) {
+            return {
+              error: `Profile ${id} models must be unique strings of at most ${ASSISTANT_PROFILE_LIMITS.modelLength} characters.`,
+            }
+          }
           if (models.length > 0) {
             profile.models = models
           }
@@ -363,7 +416,11 @@ export function validateProfilesPatch(
           if (typeof raw.backendProfileId !== 'string') {
             return { error: `Profile ${id} backendProfileId must be a string.` }
           }
-          profile.backendProfileId = raw.backendProfileId.trim()
+          const backendProfileId = raw.backendProfileId.trim()
+          if (!isSafeRecordKey(backendProfileId, ASSISTANT_PROFILE_LIMITS.idLength)) {
+            return { error: `Profile ${id} backendProfileId is invalid.` }
+          }
+          profile.backendProfileId = backendProfileId
         }
 
         // Secret handling: undefined => preserve existing key; null => clear;
@@ -376,7 +433,13 @@ export function validateProfilesPatch(
         } else if (raw.apiKey === null || raw.apiKey === '') {
           // cleared — leave apiKey unset
         } else if (typeof raw.apiKey === 'string') {
-          profile.apiKey = raw.apiKey.trim() || undefined
+          const apiKey = raw.apiKey.trim()
+          if (apiKey.length > ASSISTANT_PROFILE_LIMITS.secretLength) {
+            return {
+              error: `Profile ${id} apiKey may not exceed ${ASSISTANT_PROFILE_LIMITS.secretLength} characters.`,
+            }
+          }
+          profile.apiKey = apiKey || undefined
         } else {
           return { error: `Profile ${id} apiKey must be a string, null, or omitted.` }
         }
@@ -390,7 +453,10 @@ export function validateProfilesPatch(
   if (rawDefaultId !== undefined) {
     if (rawDefaultId === null) {
       result.defaultProfileId = null
-    } else if (typeof rawDefaultId === 'string' && rawDefaultId.trim() !== '') {
+    } else if (
+      typeof rawDefaultId === 'string' &&
+      isSafeRecordKey(rawDefaultId.trim(), ASSISTANT_PROFILE_LIMITS.idLength)
+    ) {
       result.defaultProfileId = rawDefaultId.trim()
     } else {
       return { error: 'ai.defaultProfileId must be a non-empty string, or null to clear it.' }
@@ -650,8 +716,8 @@ export function validateBackendProfilesPatch(
   if (!Array.isArray(rawBackends)) {
     return { error: 'ai.backendProfiles must be an array, or null to clear it.' }
   }
-  if (rawBackends.length > MAX_PROFILES) {
-    return { error: `ai.backendProfiles may not contain more than ${MAX_PROFILES} entries.` }
+  if (rawBackends.length > ASSISTANT_PROFILE_LIMITS.profiles) {
+    return { error: `ai.backendProfiles may not contain more than ${ASSISTANT_PROFILE_LIMITS.profiles} entries.` }
   }
 
   const existingById = new Map((existing ?? []).map((backend) => [backend.id, backend]))
@@ -663,10 +729,17 @@ export function validateBackendProfilesPatch(
       return { error: 'Each ai.backendProfiles entry must be an object.' }
     }
     const raw = entry as Record<string, unknown>
+    if (
+      !hasOnlyKeys(raw, ['id', 'name', 'type', 'provider', 'baseUrl', 'model', 'models', 'apiKey', 'subscriptionId'])
+    ) {
+      return { error: 'Each ai.backendProfiles entry contains an unknown field.' }
+    }
 
     const id = typeof raw.id === 'string' ? raw.id.trim() : ''
-    if (!id) {
-      return { error: 'Each backend profile requires a non-empty string id.' }
+    if (!isSafeRecordKey(id, ASSISTANT_PROFILE_LIMITS.idLength)) {
+      return {
+        error: `Each backend profile requires a safe non-empty id of at most ${ASSISTANT_PROFILE_LIMITS.idLength} characters.`,
+      }
     }
     if (seenIds.has(id)) {
       return { error: `Duplicate backend profile id: ${id}.` }
@@ -677,8 +750,8 @@ export function validateBackendProfilesPatch(
     if (!name) {
       return { error: `Backend profile ${id} requires a non-empty name.` }
     }
-    if (name.length > MAX_NAME_LENGTH) {
-      return { error: `Backend profile ${id} name is too long (max ${MAX_NAME_LENGTH}).` }
+    if (name.length > ASSISTANT_PROFILE_LIMITS.nameLength) {
+      return { error: `Backend profile ${id} name is too long (max ${ASSISTANT_PROFILE_LIMITS.nameLength}).` }
     }
 
     if (raw.type !== 'api-key' && raw.type !== 'subscription') {
@@ -698,13 +771,31 @@ export function validateBackendProfilesPatch(
       if (typeof raw.model !== 'string') {
         return { error: `Backend profile ${id} model must be a string.` }
       }
-      backend.model = raw.model.trim()
+      const model = raw.model.trim()
+      if (!isBoundedString(model, 1, ASSISTANT_PROFILE_LIMITS.modelLength)) {
+        return {
+          error: `Backend profile ${id} model may not exceed ${ASSISTANT_PROFILE_LIMITS.modelLength} characters.`,
+        }
+      }
+      backend.model = model
     }
     if (raw.models !== undefined && raw.models !== null) {
-      if (!Array.isArray(raw.models) || raw.models.some((model) => typeof model !== 'string')) {
+      if (
+        !Array.isArray(raw.models) ||
+        raw.models.length > ASSISTANT_PROFILE_LIMITS.modelCount ||
+        raw.models.some((model) => typeof model !== 'string')
+      ) {
         return { error: `Backend profile ${id} models must be an array of strings.` }
       }
       const models = (raw.models as string[]).map((model) => model.trim()).filter((model) => model.length > 0)
+      if (
+        models.some((model) => !isBoundedString(model, 1, ASSISTANT_PROFILE_LIMITS.modelLength)) ||
+        new Set(models).size !== models.length
+      ) {
+        return {
+          error: `Backend profile ${id} models must be unique strings of at most ${ASSISTANT_PROFILE_LIMITS.modelLength} characters.`,
+        }
+      }
       if (models.length > 0) {
         backend.models = models
       }
@@ -727,7 +818,13 @@ export function validateBackendProfilesPatch(
       } else if (raw.apiKey === null || raw.apiKey === '') {
         // cleared — leave apiKey unset
       } else if (typeof raw.apiKey === 'string') {
-        backend.apiKey = raw.apiKey.trim() || undefined
+        const apiKey = raw.apiKey.trim()
+        if (apiKey.length > ASSISTANT_PROFILE_LIMITS.secretLength) {
+          return {
+            error: `Backend profile ${id} apiKey may not exceed ${ASSISTANT_PROFILE_LIMITS.secretLength} characters.`,
+          }
+        }
+        backend.apiKey = apiKey || undefined
       } else {
         return { error: `Backend profile ${id} apiKey must be a string, null, or omitted.` }
       }
@@ -735,6 +832,9 @@ export function validateBackendProfilesPatch(
       const subscriptionId = typeof raw.subscriptionId === 'string' ? raw.subscriptionId.trim() : ''
       if (!subscriptionId) {
         return { error: `Backend profile ${id} (subscription) requires a subscriptionId.` }
+      }
+      if (!isSafeRecordKey(subscriptionId, ASSISTANT_PROFILE_LIMITS.subscriptionIdLength)) {
+        return { error: `Backend profile ${id} has an invalid subscriptionId.` }
       }
       backend.subscriptionId = subscriptionId
     }
@@ -760,11 +860,11 @@ export function validateAssignmentsPatch(rawAssignments: unknown): AssignmentsVa
   if (rawAssignments === null) {
     return { assignments: null }
   }
-  if (typeof rawAssignments !== 'object' || Array.isArray(rawAssignments)) {
+  if (!hasOnlyKeys(rawAssignments, ['users', 'roles'])) {
     return { error: 'ai.assignments must be an object, or null to clear it.' }
   }
 
-  const raw = rawAssignments as Record<string, unknown>
+  const raw = rawAssignments
   const users: Record<string, string> = {}
   const roles: Record<string, string> = {}
 
@@ -772,12 +872,18 @@ export function validateAssignmentsPatch(rawAssignments: unknown): AssignmentsVa
     if (typeof raw.users !== 'object' || Array.isArray(raw.users)) {
       return { error: 'ai.assignments.users must be an object of identifier -> profile id.' }
     }
-    for (const [identifier, value] of Object.entries(raw.users as Record<string, unknown>)) {
-      const key = identifier.trim().toLowerCase()
-      if (!key) {
-        return { error: 'ai.assignments.users has an empty identifier key.' }
+    const entries = Object.entries(raw.users as Record<string, unknown>)
+    if (entries.length > ASSISTANT_PROFILE_LIMITS.assignmentCount) {
+      return {
+        error: `ai.assignments.users may not contain more than ${ASSISTANT_PROFILE_LIMITS.assignmentCount} entries.`,
       }
-      if (typeof value !== 'string' || value.trim() === '') {
+    }
+    for (const [identifier, value] of entries) {
+      const key = identifier.trim().toLowerCase()
+      if (!isSafeRecordKey(key, ASSISTANT_PROFILE_LIMITS.userIdentifierLength)) {
+        return { error: 'ai.assignments.users has an empty identifier key or an unsafe identifier.' }
+      }
+      if (typeof value !== 'string' || !isSafeRecordKey(value.trim(), ASSISTANT_PROFILE_LIMITS.idLength)) {
         return { error: `ai.assignments.users[${identifier}] must be a non-empty profile id.` }
       }
       users[key] = value.trim()
@@ -794,7 +900,7 @@ export function validateAssignmentsPatch(rawAssignments: unknown): AssignmentsVa
           error: `ai.assignments.roles has an unknown role "${roleName}". Expected one of: ${ASSIGNABLE_ROLE_NAMES.join(', ')}.`,
         }
       }
-      if (typeof value !== 'string' || value.trim() === '') {
+      if (typeof value !== 'string' || !isSafeRecordKey(value.trim(), ASSISTANT_PROFILE_LIMITS.idLength)) {
         return { error: `ai.assignments.roles[${roleName}] must be a non-empty profile id.` }
       }
       roles[roleName] = value.trim()
