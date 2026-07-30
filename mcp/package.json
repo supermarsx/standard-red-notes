@@ -22,7 +22,7 @@
     "format:check": "prettier --check \"src/**/*.{ts,tsx,js,json,md}\""
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@standardnotes/domain-core": "^1.41.3",
     "@standardnotes/sncrypto-web": "1.14.11",
     "@standardnotes/snjs": "2.211.6",
@@ -31,10 +31,10 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@types/node": "^26.1.1",
+    "@types/node": "^26.1.2",
     "@vitest/coverage-v8": "^4.1.10",
     "esbuild": "^0.28.1",
-    "prettier": "^3.9.5",
+    "prettier": "^3.9.6",
     "tsx": "^4.23.1",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"

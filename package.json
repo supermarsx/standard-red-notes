@@ -82,7 +82,7 @@
   "devDependencies": {
     "istanbul-lib-coverage": "^3.2.2",
     "istanbul-lib-instrument": "^6.0.3",
-    "npm-check-updates": "^22.2.9",
-    "turbo": "^2.10.5"
+    "npm-check-updates": "^23.0.0",
+    "turbo": "^2.10.7"
   }
 }
