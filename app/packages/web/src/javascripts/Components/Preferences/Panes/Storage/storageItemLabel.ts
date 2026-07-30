@@ -101,9 +101,8 @@ export function storageItemIconType(contentType: string | undefined): IconType {
  * Whether a largest-items row can be OPENED in a view and meaningfully EXPORTED in a
  * native format — i.e. it's a user-facing Note or File. Every other content type
  * (items keys, user preferences, tags, components, themes, smart views, key-system
- * records, etc.) is a system item whose encrypted payload can't be opened or
- * downloaded on its own, so those rows only offer Delete. Pure — keys off
- * content_type alone, no decrypted item required.
+ * records, etc.) is not directly navigable. Pure — keys off content_type alone,
+ * no decrypted item required.
  */
 export function isOpenableStorageItem(contentType: string | undefined): boolean {
   return contentType === ContentType.TYPES.Note || contentType === ContentType.TYPES.File
@@ -121,12 +120,13 @@ export function isExportableStorageItem(contentType: string | undefined): boolea
 }
 
 /**
- * System records the app itself depends on: deleting an items key can make other
- * items undecryptable and deleting user preferences resets settings until the next
- * sync. Their delete confirmation carries an extra "may affect app state" warning.
+ * Only user content with an established deletion workflow may be removed from the
+ * storage-size list. System, key, vault, preference, component, and organization
+ * records must be managed by their owning feature; generic deletion can make data
+ * undecryptable or bypass required relationship cleanup.
  */
-export function isRiskySystemStorageItem(contentType: string | undefined): boolean {
-  return contentType === ContentType.TYPES.ItemsKey || contentType === ContentType.TYPES.UserPrefs
+export function isDeletableStorageItem(contentType: string | undefined): boolean {
+  return contentType === ContentType.TYPES.Note || contentType === ContentType.TYPES.File
 }
 
 /** Best-effort read of a string `title` off any item, trimmed, or undefined. */

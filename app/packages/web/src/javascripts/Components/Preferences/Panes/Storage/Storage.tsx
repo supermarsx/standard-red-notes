@@ -23,9 +23,9 @@ import { BYTES_PER_GB, BYTES_PER_MB, resolveStorageCapState, STORAGE_CAP_UNLIMIT
 import { contentTypeLabel, loadCachedSnapshot, percentOf, saveCachedSnapshot } from './storageDisplay'
 import { deleteLargestItem, exportLargestItems, openLargestItem } from './storageItemActions'
 import {
+  isDeletableStorageItem,
   isExportableStorageItem,
   isOpenableStorageItem,
-  isRiskySystemStorageItem,
   resolveStorageItemLabel,
   storageItemIconType,
 } from './storageItemLabel'
@@ -276,18 +276,18 @@ const Storage: FunctionComponent<Props> = ({ application }: Props) => {
 
   const handleDelete = useCallback(
     async (row: StorageLargestItem) => {
-      // Confirm HERE (naming the item + warning for system items) before deleting.
-      // Resolve the same label the row shows; fall back to the content type + uuid.
+      // Confirm HERE before deleting user content. System records never reach this
+      // handler: both the UI and deleteLargestItem enforce that boundary.
       const found = application.items.findItem(row.uuid)
       const label = resolveStorageItemLabel(found, row.uuid, row.contentType)
-      const risky = isRiskySystemStorageItem(row.contentType)
+      const localOnly = Boolean(found && 'localOnly' in found && found.localOnly)
       const confirmed = await confirmDialog({
         title: 'Delete item',
         text:
-          `Permanently delete “${label.primary}” from this device? This is a local deletion that can’t be undone.` +
-          (risky
-            ? ' This is a system item the app relies on — deleting it may affect app state (broken decryption or reset settings) until the next sync.'
-            : ''),
+          `Permanently delete “${label.primary}”? This can’t be undone.` +
+          (localOnly
+            ? ' This item exists only on this device.'
+            : ' The deletion will sync to your account and other devices.'),
         confirmButtonText: 'Delete',
         confirmButtonStyle: 'danger',
       })
@@ -628,17 +628,25 @@ const Storage: FunctionComponent<Props> = ({ application }: Props) => {
                           </Button>
                         </StyledTooltip>
                       )}
-                      <StyledTooltip label="Delete">
-                        <Button
-                          small
-                          colorStyle="danger"
-                          disabled={busy}
-                          onClick={() => handleDelete(item)}
-                          aria-label="Delete"
-                        >
-                          <Icon type="trash" size="small" />
-                        </Button>
-                      </StyledTooltip>
+                      {isDeletableStorageItem(item.contentType) ? (
+                        <StyledTooltip label="Delete">
+                          <Button
+                            small
+                            colorStyle="danger"
+                            disabled={busy}
+                            onClick={() => handleDelete(item)}
+                            aria-label="Delete"
+                          >
+                            <Icon type="trash" size="small" />
+                          </Button>
+                        </StyledTooltip>
+                      ) : (
+                        <StyledTooltip label="Protected app record">
+                          <Button small disabled aria-label="Protected app record">
+                            <Icon type="lock" size="small" />
+                          </Button>
+                        </StyledTooltip>
+                      )}
                     </div>
                   </div>
                 )

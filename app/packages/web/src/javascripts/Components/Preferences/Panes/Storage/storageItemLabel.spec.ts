@@ -1,8 +1,8 @@
 import { ContentType } from '@standardnotes/snjs'
 import {
+  isDeletableStorageItem,
   isExportableStorageItem,
   isOpenableStorageItem,
-  isRiskySystemStorageItem,
   resolveStorageItemLabel,
   storageItemIconType,
 } from './storageItemLabel'
@@ -122,15 +122,19 @@ describe('isExportableStorageItem', () => {
   })
 })
 
-describe('isRiskySystemStorageItem', () => {
-  it('is true for items keys and user preferences', () => {
-    expect(isRiskySystemStorageItem(ContentType.TYPES.ItemsKey)).toBe(true)
-    expect(isRiskySystemStorageItem(ContentType.TYPES.UserPrefs)).toBe(true)
+describe('isDeletableStorageItem', () => {
+  it('allows only notes and files with established deletion workflows', () => {
+    expect(isDeletableStorageItem(ContentType.TYPES.Note)).toBe(true)
+    expect(isDeletableStorageItem(ContentType.TYPES.File)).toBe(true)
   })
 
-  it('is false for ordinary and openable content types', () => {
-    expect(isRiskySystemStorageItem(ContentType.TYPES.Note)).toBe(false)
-    expect(isRiskySystemStorageItem(ContentType.TYPES.Tag)).toBe(false)
-    expect(isRiskySystemStorageItem(undefined)).toBe(false)
+  it('protects key, preference, vault, and other app-owned records', () => {
+    expect(isDeletableStorageItem(ContentType.TYPES.ItemsKey)).toBe(false)
+    expect(isDeletableStorageItem(ContentType.TYPES.KeySystemItemsKey)).toBe(false)
+    expect(isDeletableStorageItem(ContentType.TYPES.KeySystemRootKey)).toBe(false)
+    expect(isDeletableStorageItem(ContentType.TYPES.UserPrefs)).toBe(false)
+    expect(isDeletableStorageItem(ContentType.TYPES.VaultListing)).toBe(false)
+    expect(isDeletableStorageItem(ContentType.TYPES.Tag)).toBe(false)
+    expect(isDeletableStorageItem(undefined)).toBe(false)
   })
 })

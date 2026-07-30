@@ -28,6 +28,7 @@ import { sanitizeFileName } from '@standardnotes/utils'
 import { addToast, dismissToast, ToastType } from '@standardnotes/toast'
 import { LinkableItem } from '@/Utils/Items/Search/LinkableItem'
 import { StorageLargestItem } from '@/Utils/Storage/storageUsageWorkerProtocol'
+import { isDeletableStorageItem } from './storageItemLabel'
 
 /** Open / navigate to the item referenced by a largest-list row, closing Preferences. */
 export async function openLargestItem(application: WebApplication, uuid: string): Promise<boolean> {
@@ -53,6 +54,14 @@ export async function deleteLargestItem(application: WebApplication, row: Storag
   const item = application.items.findItem(row.uuid)
   if (!item) {
     addToast({ type: ToastType.Error, message: 'This item is no longer available.' })
+    return false
+  }
+
+  if (!isDeletableStorageItem(row.contentType) || !isDeletableStorageItem(item.content_type)) {
+    addToast({
+      type: ToastType.Error,
+      message: 'This protected app record cannot be deleted from Storage. Use the feature that owns it.',
+    })
     return false
   }
 
