@@ -19,21 +19,38 @@ export class RemoveUserFromSharedVaults implements UseCaseInterface<void> {
     const userUuid = userUuidOrError.getValue()
 
     const sharedVaultUsers = await this.sharedVaultUserRepository.findByUserUuid(userUuid)
+    let firstFailure: string | undefined
     for (const sharedVaultUser of sharedVaultUsers) {
-      const result = await this.removeUserFromSharedVault.execute({
-        sharedVaultUuid: sharedVaultUser.props.sharedVaultUuid.value,
-        originatorUuid: userUuid.value,
-        userUuid: userUuid.value,
-        forceRemoveOwner: true,
-      })
+      try {
+        const result = await this.removeUserFromSharedVault.execute({
+          sharedVaultUuid: sharedVaultUser.props.sharedVaultUuid.value,
+          originatorUuid: userUuid.value,
+          userUuid: userUuid.value,
+          forceRemoveOwner: true,
+        })
 
-      if (result.isFailed()) {
+        if (result.isFailed()) {
+          const error = result.getError()
+          this.logger.error(
+            `Failed to remove user: ${userUuid.value} from shared vault: ${
+              sharedVaultUser.props.sharedVaultUuid.value
+            }: ${error}`,
+          )
+          firstFailure ??= error
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
         this.logger.error(
           `Failed to remove user: ${userUuid.value} from shared vault: ${
             sharedVaultUser.props.sharedVaultUuid.value
-          }: ${result.getError()}`,
+          }: ${message}`,
         )
+        firstFailure ??= message
       }
+    }
+
+    if (firstFailure !== undefined) {
+      return Result.fail(firstFailure)
     }
 
     return Result.ok()

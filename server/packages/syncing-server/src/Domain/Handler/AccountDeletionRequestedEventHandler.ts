@@ -25,36 +25,61 @@ export class AccountDeletionRequestedEventHandler implements DomainEventHandlerI
       return
     }
     const userUuid = userUuidOrError.getValue()
-
-    await this.itemRepository.deleteByUserUuidAndNotInSharedVault(userUuid)
-
-    const deletingVaultsResult = await this.deleteSharedVaults.execute({
-      ownerUuid: event.payload.userUuid,
-      allowSurviving: true,
-    })
-    if (deletingVaultsResult.isFailed()) {
-      this.logger.error(`Failed to delete shared vaults: ${deletingVaultsResult.getError()}`, {
+    let firstFailure: Error | undefined
+    const recordFailure = (message: string): void => {
+      this.logger.error(message, {
         userId: event.payload.userUuid,
       })
+      firstFailure ??= new Error(message)
+    }
+    const describeError = (error: unknown): string => (error instanceof Error ? error.message : String(error))
+
+    try {
+      await this.itemRepository.deleteByUserUuidAndNotInSharedVault(userUuid)
+    } catch (error) {
+      recordFailure(`Failed to delete items outside shared vaults: ${describeError(error)}`)
     }
 
-    const deletedSharedVaultUuids = Array.from(deletingVaultsResult.getValue().keys())
-
-    this.logger.debug(
-      `Deleting items from shared vaults: ${deletedSharedVaultUuids.map((uuid) => uuid.value).join(', ')}`,
-    )
-
-    if (deletedSharedVaultUuids.length !== 0) {
-      await this.itemRepository.deleteByUserUuidInSharedVaults(userUuid, deletedSharedVaultUuids)
-    }
-
-    const deletingUserFromOtherVaultsResult = await this.removeUserFromSharedVaults.execute({
-      userUuid: event.payload.userUuid,
-    })
-    if (deletingUserFromOtherVaultsResult.isFailed()) {
-      this.logger.error(`Failed to remove user from shared vaults: ${deletingUserFromOtherVaultsResult.getError()}`, {
-        userId: event.payload.userUuid,
+    try {
+      const deletingVaultsResult = await this.deleteSharedVaults.execute({
+        ownerUuid: event.payload.userUuid,
+        allowSurviving: true,
       })
+
+      if (deletingVaultsResult.isFailed()) {
+        recordFailure(`Failed to delete shared vaults: ${deletingVaultsResult.getError()}`)
+      } else {
+        const deletedSharedVaultUuids = Array.from(deletingVaultsResult.getValue().keys())
+
+        this.logger.debug(
+          `Deleting items from shared vaults: ${deletedSharedVaultUuids.map((uuid) => uuid.value).join(', ')}`,
+        )
+
+        if (deletedSharedVaultUuids.length !== 0) {
+          try {
+            await this.itemRepository.deleteByUserUuidInSharedVaults(userUuid, deletedSharedVaultUuids)
+          } catch (error) {
+            recordFailure(`Failed to delete items from shared vaults: ${describeError(error)}`)
+          }
+        }
+      }
+    } catch (error) {
+      recordFailure(`Failed to delete shared vaults: ${describeError(error)}`)
+    }
+
+    try {
+      const deletingUserFromOtherVaultsResult = await this.removeUserFromSharedVaults.execute({
+        userUuid: event.payload.userUuid,
+      })
+      if (deletingUserFromOtherVaultsResult.isFailed()) {
+        recordFailure(`Failed to remove user from shared vaults: ${deletingUserFromOtherVaultsResult.getError()}`)
+      }
+    } catch (error) {
+      recordFailure(`Failed to remove user from shared vaults: ${describeError(error)}`)
+    }
+
+    if (firstFailure) {
+      throw firstFailure
     }
 
     this.logger.info('Finished account cleanup', {

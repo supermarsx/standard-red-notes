@@ -50,7 +50,7 @@ describe('RemoveUserFromSharedVaults', () => {
     })
   })
 
-  it('should log error if removing user from shared vault fails', async () => {
+  it('should report failure if removing user from a shared vault fails', async () => {
     removeUserFromSharedVault.execute = jest.fn().mockResolvedValue(Result.fail('error'))
 
     const useCase = createUseCase()
@@ -59,11 +59,36 @@ describe('RemoveUserFromSharedVaults', () => {
       userUuid: '00000000-0000-0000-0000-000000000000',
     })
 
-    expect(result.isFailed()).toBeFalsy()
+    expect(result.isFailed()).toBeTruthy()
+    expect(result.getError()).toBe('error')
     expect(logger.error).toHaveBeenCalledTimes(1)
     expect(logger.error).toHaveBeenCalledWith(
       'Failed to remove user: 00000000-0000-0000-0000-000000000000 from shared vault: 00000000-0000-0000-0000-000000000000: error',
     )
+  })
+
+  it('should attempt every vault and retain the first failure', async () => {
+    const secondSharedVaultUser = SharedVaultUser.create({
+      permission: SharedVaultUserPermission.create(SharedVaultUserPermission.PERMISSIONS.Write).getValue(),
+      sharedVaultUuid: Uuid.create('00000000-0000-0000-0000-000000000001').getValue(),
+      userUuid: Uuid.create('00000000-0000-0000-0000-000000000000').getValue(),
+      timestamps: Timestamps.create(123, 123).getValue(),
+      isDesignatedSurvivor: false,
+    }).getValue()
+    sharedVaultUserRepository.findByUserUuid = jest.fn().mockResolvedValue([sharedVaultUser, secondSharedVaultUser])
+    removeUserFromSharedVault.execute = jest
+      .fn()
+      .mockResolvedValueOnce(Result.fail('first error'))
+      .mockRejectedValueOnce(Error('second error'))
+
+    const result = await createUseCase().execute({
+      userUuid: '00000000-0000-0000-0000-000000000000',
+    })
+
+    expect(result.isFailed()).toBeTruthy()
+    expect(result.getError()).toBe('first error')
+    expect(removeUserFromSharedVault.execute).toHaveBeenCalledTimes(2)
+    expect(logger.error).toHaveBeenCalledTimes(2)
   })
 
   it('should fail if the user uuid is invalid', async () => {

@@ -78,27 +78,56 @@ describe('AccountDeletionRequestedEventHandler', () => {
     })
   })
 
-  it('logs, but still finishes the cleanup, when the user cannot be removed from other vaults', async () => {
+  it('rejects for retry and does not log completion when the user cannot be removed from other vaults', async () => {
     removeUserFromSharedVaults.execute = jest.fn().mockResolvedValue(Result.fail('Oops'))
 
-    await createHandler().handle(event())
+    await expect(createHandler().handle(event())).rejects.toThrow('Failed to remove user from shared vaults: Oops')
 
     expect(logger.error).toHaveBeenCalledWith('Failed to remove user from shared vaults: Oops', { userId: userUuid })
-    expect(logger.info).toHaveBeenCalledWith('Finished account cleanup', { userId: userUuid })
+    expect(logger.info).not.toHaveBeenCalled()
   })
 
-  // BUG (reported, not fixed): the handler logs the DeleteSharedVaults failure and then calls
-  // `deletingVaultsResult.getValue()` unconditionally, which throws on a failed Result. The
-  // intended "log and carry on" path is therefore dead: the account cleanup aborts before the
-  // user is removed from the shared vaults they do not own. This test pins the CURRENT
-  // behaviour so the eventual fix is a deliberate, visible change.
-  it('currently aborts the whole cleanup when the shared vaults cannot be deleted', async () => {
+  it('runs independent cleanup before rejecting for retry when shared vault deletion fails', async () => {
     deleteSharedVaults.execute = jest.fn().mockResolvedValue(Result.fail('Oops'))
 
-    await expect(createHandler().handle(event())).rejects.toThrow('Cannot get value of an unsuccessfull result: Oops')
+    await expect(createHandler().handle(event())).rejects.toThrow('Failed to delete shared vaults: Oops')
 
     expect(logger.error).toHaveBeenCalledWith('Failed to delete shared vaults: Oops', { userId: userUuid })
-    expect(removeUserFromSharedVaults.execute).not.toHaveBeenCalled()
+    expect(itemRepository.deleteByUserUuidInSharedVaults).not.toHaveBeenCalled()
+    expect(removeUserFromSharedVaults.execute).toHaveBeenCalledWith({ userUuid })
+    expect(logger.info).not.toHaveBeenCalled()
+  })
+
+  it('retains the first failure after attempting every independent cleanup', async () => {
+    itemRepository.deleteByUserUuidAndNotInSharedVault = jest.fn().mockRejectedValue(Error('database unavailable'))
+    deleteSharedVaults.execute = jest.fn().mockResolvedValue(Result.fail('vault deletion failed'))
+    removeUserFromSharedVaults.execute = jest.fn().mockResolvedValue(Result.fail('membership removal failed'))
+
+    await expect(createHandler().handle(event())).rejects.toThrow(
+      'Failed to delete items outside shared vaults: database unavailable',
+    )
+
+    expect(deleteSharedVaults.execute).toHaveBeenCalledWith({ ownerUuid: userUuid, allowSurviving: true })
+    expect(removeUserFromSharedVaults.execute).toHaveBeenCalledWith({ userUuid })
+    expect(logger.error).toHaveBeenCalledWith('Failed to delete shared vaults: vault deletion failed', {
+      userId: userUuid,
+    })
+    expect(logger.error).toHaveBeenCalledWith('Failed to remove user from shared vaults: membership removal failed', {
+      userId: userUuid,
+    })
+    expect(logger.info).not.toHaveBeenCalled()
+  })
+
+  it('still removes the user from other vaults when deleted-vault item cleanup rejects', async () => {
+    const deletedVaultUuid = Uuid.create(sharedVaultUuid).getValue()
+    deleteSharedVaults.execute = jest.fn().mockResolvedValue(Result.ok(new Map([[deletedVaultUuid, []]])))
+    itemRepository.deleteByUserUuidInSharedVaults = jest.fn().mockRejectedValue(Error('database unavailable'))
+
+    await expect(createHandler().handle(event())).rejects.toThrow(
+      'Failed to delete items from shared vaults: database unavailable',
+    )
+
+    expect(removeUserFromSharedVaults.execute).toHaveBeenCalledWith({ userUuid })
     expect(logger.info).not.toHaveBeenCalled()
   })
 })

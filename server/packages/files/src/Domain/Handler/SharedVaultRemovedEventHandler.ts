@@ -22,9 +22,12 @@ export class SharedVaultRemovedEventHandler implements DomainEventHandlerInterfa
     })
 
     if (result.isFailed()) {
-      this.logger.error(
-        `Could not mark files to be removed for shared vault: ${event.payload.sharedVaultUuid}: ${result.getError()}`,
-      )
+      const message = `Could not mark files to be removed for shared vault: ${
+        event.payload.sharedVaultUuid
+      }: ${result.getError()}`
+      this.logger.error(message)
+
+      throw new Error(message)
     }
 
     const filesRemoved = result.getValue()

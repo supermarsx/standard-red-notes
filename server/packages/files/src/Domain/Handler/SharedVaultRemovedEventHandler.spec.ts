@@ -78,13 +78,12 @@ describe('SharedVaultRemovedEventHandler (files)', () => {
     expect(logger.error).not.toHaveBeenCalled()
   })
 
-  // BUG (reported, not fixed): the failure branch logs but does not return, and the very next
-  // statement is `result.getValue()`, which throws on a failed Result. So the handler throws out
-  // of the subscriber instead of logging and moving on. This test pins the CURRENT behaviour.
-  it('currently throws out of the handler when the files cannot be marked for removal', async () => {
+  it('rejects with a contextual error so failed file cleanup remains retryable', async () => {
     markFilesToBeRemoved.execute = jest.fn().mockResolvedValue(Result.fail('Oops'))
 
-    await expect(createHandler().handle(event())).rejects.toThrow('Cannot get value of an unsuccessfull result: Oops')
+    await expect(createHandler().handle(event())).rejects.toThrow(
+      `Could not mark files to be removed for shared vault: ${sharedVaultUuid}: Oops`,
+    )
 
     expect(logger.error).toHaveBeenCalledWith(
       `Could not mark files to be removed for shared vault: ${sharedVaultUuid}: Oops`,
