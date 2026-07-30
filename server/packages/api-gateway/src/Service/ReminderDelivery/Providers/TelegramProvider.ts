@@ -1,4 +1,5 @@
 import { DeliveryChannel, DeliveryResult, ReminderDeliveryProvider } from '../Types'
+import { providerTimeoutSignal, responseErrorDetail, transportFailureReason } from './HttpProviderSafety'
 
 /**
  * Standard Red Notes: Telegram delivery adapter.
@@ -21,6 +22,7 @@ export class TelegramProvider implements ReminderDeliveryProvider {
   constructor(
     private readonly botToken: string | undefined,
     private readonly fetchImpl: typeof fetch = globalThis.fetch?.bind(globalThis),
+    private readonly timeoutMs?: number,
   ) {}
 
   isConfigured(): boolean {
@@ -39,28 +41,23 @@ export class TelegramProvider implements ReminderDeliveryProvider {
       return { ok: false, reason: 'No fetch implementation available for Telegram delivery.' }
     }
 
-    const url = `https://api.telegram.org/bot${this.botToken as string}/sendMessage`
+    const botToken = (this.botToken as string).trim()
+    const url = `https://api.telegram.org/bot${botToken}/sendMessage`
+    const secrets = [botToken, url, chatId, message]
     try {
       const res = await this.fetchImpl(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ chat_id: chatId, text: message, disable_web_page_preview: true }),
+        signal: providerTimeoutSignal(this.timeoutMs),
       })
       if (!res.ok) {
-        const detail = await safeText(res)
+        const detail = await responseErrorDetail(res, secrets)
         return { ok: false, reason: `Telegram API returned ${res.status}${detail ? `: ${detail}` : ''}` }
       }
       return { ok: true }
     } catch (error) {
-      return { ok: false, reason: `Telegram delivery failed: ${(error as Error).message}` }
+      return { ok: false, reason: transportFailureReason('Telegram delivery', error, secrets) }
     }
-  }
-}
-
-async function safeText(res: Response): Promise<string> {
-  try {
-    return (await res.text()).slice(0, 300)
-  } catch {
-    return ''
   }
 }

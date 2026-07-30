@@ -1,4 +1,5 @@
 import { DeliveryChannel, DeliveryResult, ReminderDeliveryProvider } from '../Types'
+import { providerTimeoutSignal, responseErrorDetail, transportFailureReason } from './HttpProviderSafety'
 
 /**
  * Standard Red Notes: WhatsApp delivery adapter.
@@ -43,6 +44,7 @@ export class WhatsAppProvider implements ReminderDeliveryProvider {
   constructor(
     private readonly config: WhatsAppProviderConfig,
     private readonly fetchImpl: typeof fetch = globalThis.fetch?.bind(globalThis),
+    private readonly timeoutMs?: number,
   ) {}
 
   private metaCreds(): WhatsAppMetaCreds | null {
@@ -95,6 +97,7 @@ export class WhatsAppProvider implements ReminderDeliveryProvider {
 
   private async sendViaMeta(creds: WhatsAppMetaCreds, to: string, message: string): Promise<DeliveryResult> {
     const url = `https://graph.facebook.com/v19.0/${creds.phoneId}/messages`
+    const secrets = [creds.token, creds.phoneId, url, to, message]
     try {
       const res = await this.fetchImpl(url, {
         method: 'POST',
@@ -108,14 +111,15 @@ export class WhatsAppProvider implements ReminderDeliveryProvider {
           type: 'text',
           text: { body: message },
         }),
+        signal: providerTimeoutSignal(this.timeoutMs),
       })
       if (!res.ok) {
-        const detail = await safeText(res)
+        const detail = await responseErrorDetail(res, secrets)
         return { ok: false, reason: `WhatsApp (Meta) API returned ${res.status}${detail ? `: ${detail}` : ''}` }
       }
       return { ok: true }
     } catch (error) {
-      return { ok: false, reason: `WhatsApp (Meta) delivery failed: ${(error as Error).message}` }
+      return { ok: false, reason: transportFailureReason('WhatsApp (Meta) delivery', error, secrets) }
     }
   }
 
@@ -126,6 +130,7 @@ export class WhatsAppProvider implements ReminderDeliveryProvider {
     form.set('From', creds.from.startsWith('whatsapp:') ? creds.from : `whatsapp:${creds.from}`)
     form.set('Body', message)
     const auth = Buffer.from(`${creds.accountSid}:${creds.authToken}`).toString('base64')
+    const secrets = [creds.accountSid, creds.authToken, creds.from, auth, url, to, message]
     try {
       const res = await this.fetchImpl(url, {
         method: 'POST',
@@ -134,22 +139,15 @@ export class WhatsAppProvider implements ReminderDeliveryProvider {
           'Content-Type': 'application/x-www-form-urlencoded',
         },
         body: form.toString(),
+        signal: providerTimeoutSignal(this.timeoutMs),
       })
       if (!res.ok) {
-        const detail = await safeText(res)
+        const detail = await responseErrorDetail(res, secrets)
         return { ok: false, reason: `WhatsApp (Twilio) API returned ${res.status}${detail ? `: ${detail}` : ''}` }
       }
       return { ok: true }
     } catch (error) {
-      return { ok: false, reason: `WhatsApp (Twilio) delivery failed: ${(error as Error).message}` }
+      return { ok: false, reason: transportFailureReason('WhatsApp (Twilio) delivery', error, secrets) }
     }
-  }
-}
-
-async function safeText(res: Response): Promise<string> {
-  try {
-    return (await res.text()).slice(0, 300)
-  } catch {
-    return ''
   }
 }

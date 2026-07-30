@@ -6096,6 +6096,7 @@ const RAW_RUNTIME_STATE =
           ["@types/jest", "npm:30.0.0"],\
           ["@types/jsonwebtoken", "npm:9.0.10"],\
           ["@types/node", "npm:26.1.1"],\
+          ["@types/nodemailer", "npm:8.0.1"],\
           ["@types/prettyjson", "npm:0.0.33"],\
           ["agentkeepalive", "npm:4.6.0"],\
           ["axios", "npm:1.18.1"],\
@@ -6110,6 +6111,7 @@ const RAW_RUNTIME_STATE =
           ["jest", "virtual:fd909b174d079e30b336c4ce72c38a88c1e447767b1a8dd7655e07719a1e31b97807f0931368724fc78897ff15e6a6d00b83316c0f76d11f85111f342e08bb79#npm:30.4.2"],\
           ["jest-util", "npm:30.4.1"],\
           ["jsonwebtoken", "npm:9.0.3"],\
+          ["nodemailer", "npm:9.0.3"],\
           ["openai", "virtual:04783e12400851b8a3d76e71495851cc94959db6e62f04cb0a31190080629440b182d8c8eb4d7f2b04e281912f2783a5fd4d2c3c6ab68d38b7097246c93f4c19#npm:6.47.0"],\
           ["prettyjson", "npm:1.2.5"],\
           ["reflect-metadata", "npm:0.2.2"],\

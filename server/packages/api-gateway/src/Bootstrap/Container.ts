@@ -751,6 +751,7 @@ export class ContainerConfigLoader {
     )
     const reminderDeliveryDataPath =
       env.get('REMINDER_DELIVERY_DATA_PATH', true) || path.resolve(process.cwd(), 'data', 'reminder-delivery')
+    const smtpSecureValue = env.get('SMTP_SECURE', true)
     container.bind<boolean>(TYPES.ApiGateway_REMINDER_DELIVERY_ENABLED).toConstantValue(reminderDeliveryEnabled)
 
     const reminderRegistry = new ProviderRegistry([
@@ -761,7 +762,8 @@ export class ContainerConfigLoader {
         user: env.get('SMTP_USER', true) || undefined,
         password: env.get('SMTP_PASSWORD', true) || undefined,
         from: env.get('SMTP_FROM', true) || undefined,
-        secure: ['true', '1', 'yes', 'on'].includes((env.get('SMTP_SECURE', true) || '').toLowerCase()),
+        secure: smtpSecureValue ? ['true', '1', 'yes', 'on'].includes(smtpSecureValue.toLowerCase()) : undefined,
+        allowInsecure: ['true', '1', 'yes', 'on'].includes((env.get('SMTP_ALLOW_INSECURE', true) || '').toLowerCase()),
       }),
       new WhatsAppProvider({
         meta: {
