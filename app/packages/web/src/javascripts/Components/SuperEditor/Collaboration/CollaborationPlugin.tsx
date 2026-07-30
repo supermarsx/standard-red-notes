@@ -16,6 +16,8 @@ export type CollaborationConfig = {
   room: string
   /** A non-extractable room key derived exclusively from client-only vault key material. */
   roomKey: CryptoKey
+  /** Short-lived server capability bound to this exact account + note UUID. */
+  capability: string
   /** Display name + cursor color for presence. */
   username: string
   cursorColor: string
@@ -26,6 +28,8 @@ export type CollaborationConfig = {
   userUuid?: string
   /** First client to open the note seeds the doc from its current content. */
   shouldBootstrap: boolean
+  /** Stable request-bound editor lease reserved before Lexical bootstraps. */
+  leaseRequestId: string
   /** Content used to seed the shared doc on first bootstrap (the note text). */
   initialEditorState?: InitialEditorStateType
 }
@@ -50,9 +54,10 @@ type Props = {
 }
 
 /**
- * The relay implementation remains dormant behind SuperCollaborationPlugin's
- * security gate. This inner component must never be mounted until a caller can
- * supply a non-extractable room key derived from client-only vault material.
+ * Mounted only after SuperCollaborationPlugin receives an exact-note capability,
+ * a request-bound editor lease, and a non-extractable room key derived from
+ * client-only shared-vault material. Other states retain ordinary encrypted
+ * persistence/sync without mounting a relay provider.
  */
 const AvailableSuperCollaborationPlugin: FunctionComponent<Props> = ({ application, config }) => {
   const channel = useMemo(() => createGatewayCollabChannel(application), [application])
@@ -72,11 +77,18 @@ const AvailableSuperCollaborationPlugin: FunctionComponent<Props> = ({ applicati
 
       const cipher = createRoomCipher(config.roomKey)
 
-      const provider = new EncryptedYjsProvider(doc, config.room, channel, cipher)
+      const provider = new EncryptedYjsProvider(
+        doc,
+        config.room,
+        channel,
+        cipher,
+        config.capability,
+        config.leaseRequestId,
+      )
       providerRef.current = provider
       return provider
     }
-  }, [channel, config.room, config.roomKey])
+  }, [channel, config.capability, config.leaseRequestId, config.room, config.roomKey])
 
   const awarenessData = useMemo(() => (config.userUuid ? { userUuid: config.userUuid } : undefined), [config.userUuid])
 
@@ -134,9 +146,9 @@ const AvailableSuperCollaborationPlugin: FunctionComponent<Props> = ({ applicati
 }
 
 /**
- * Fail-closed entry point. Runtime flags cannot enable relay access; the inner
- * provider is unreachable until the centralized security gate is deliberately
- * opened alongside real client-only room-key wiring.
+ * Fail-closed entry point. The note-level caller supplies a freshly prepared
+ * non-extractable room key and exact-note capability; this final runtime check
+ * prevents construction where WebCrypto itself is unavailable.
  */
 export const SuperCollaborationPlugin: FunctionComponent<Props> = (props) => {
   if (!getSuperCollaborationAvailability().available) {

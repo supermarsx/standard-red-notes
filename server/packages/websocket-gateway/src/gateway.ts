@@ -1,7 +1,12 @@
 import { type IncomingMessage, type Server as HttpServer, type ServerResponse } from 'node:http'
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
-import { WebSocketServer, type WebSocket } from 'ws'
-import { decodeCrossServiceToken, mintConnectionToken, verifyConnectionToken, verifyRoomCapability } from './auth.js'
+import { WebSocketServer, type RawData, type WebSocket } from 'ws'
+import {
+  decodeCrossServiceToken,
+  mintConnectionToken,
+  verifyConnectionToken,
+  verifyRoomCapabilityWithExpiry,
+} from './auth.js'
 import { ConnectionRegistry, type Conn } from './registry.js'
 import { RoomRegistry, parseRelayFrame, handleRelayFrame, type RoomJoinAuthorizer } from './rooms.js'
 import { startRedisBridge, type Logger } from './redisBridge.js'
@@ -29,6 +34,91 @@ import { startSqsConsumer } from './sqsConsumer.js'
 const HEARTBEAT_MS = 30_000
 
 /**
+ * `parseRelayFrame` accepts at most a 512 KiB base64 payload. Apply a slightly
+ * larger limit in `ws` itself so an oversized message is rejected while the
+ * protocol parser is still streaming it, before a complete Buffer/string is
+ * retained by application code. The 32 KiB margin covers JSON keys, the room
+ * identifier, request id and signed capability.
+ */
+export const MAX_WEBSOCKET_MESSAGE_BYTES = 544 * 1024
+/** Allows several tabs/devices while bounding one account's aggregate sockets. */
+export const DEFAULT_MAX_CONNECTIONS_PER_USER = 16
+
+export interface WebSocketIngressLimits {
+  /** Maximum instantaneous application messages accepted from one connection. */
+  frameCapacity: number
+  /** Sustained application messages replenished per second, per connection. */
+  frameRefillPerSecond: number
+  /** Maximum instantaneous message bytes accepted from one connection. */
+  byteCapacity: number
+  /** Sustained message bytes replenished per second, per connection. */
+  byteRefillPerSecond: number
+}
+
+/**
+ * Deliberately roomy for legitimate Yjs bootstrap/update bursts while bounding
+ * a single authenticated socket to a finite sustained ingress rate.
+ */
+export const DEFAULT_WEBSOCKET_INGRESS_LIMITS: Readonly<WebSocketIngressLimits> = Object.freeze({
+  frameCapacity: 512,
+  frameRefillPerSecond: 256,
+  byteCapacity: 8 * 1024 * 1024,
+  byteRefillPerSecond: 2 * 1024 * 1024,
+})
+
+function assertValidIngressLimits(limits: WebSocketIngressLimits): void {
+  for (const [name, value] of Object.entries(limits)) {
+    if (!Number.isFinite(value) || value <= 0) {
+      throw new Error(`Invalid WebSocket ingress limit ${name}: expected a finite positive number.`)
+    }
+  }
+}
+
+export class WebSocketIngressLimiter {
+  private frameTokens: number
+  private byteTokens: number
+  private lastRefill: number
+
+  constructor(
+    private readonly limits: WebSocketIngressLimits,
+    private readonly now: () => number = Date.now,
+  ) {
+    this.frameTokens = limits.frameCapacity
+    this.byteTokens = limits.byteCapacity
+    this.lastRefill = now()
+  }
+
+  tryConsume(bytes: number): boolean {
+    const currentTime = this.now()
+    const elapsedSeconds = Math.max(0, currentTime - this.lastRefill) / 1_000
+    this.lastRefill = currentTime
+    this.frameTokens = Math.min(
+      this.limits.frameCapacity,
+      this.frameTokens + elapsedSeconds * this.limits.frameRefillPerSecond,
+    )
+    this.byteTokens = Math.min(
+      this.limits.byteCapacity,
+      this.byteTokens + elapsedSeconds * this.limits.byteRefillPerSecond,
+    )
+
+    if (!Number.isFinite(bytes) || bytes < 0 || this.frameTokens < 1 || this.byteTokens < bytes) {
+      return false
+    }
+
+    this.frameTokens -= 1
+    this.byteTokens -= bytes
+    return true
+  }
+}
+
+function rawDataByteLength(data: RawData): number {
+  if (Array.isArray(data)) {
+    return data.reduce((total, part) => total + part.byteLength, 0)
+  }
+  return data.byteLength
+}
+
+/**
  * Constant-time comparison of two secrets that does not leak length or content
  * via timing. Both sides are SHA-256 digested first so the comparison is always
  * over equal-length buffers (timingSafeEqual throws on length mismatch, which
@@ -54,6 +144,8 @@ export interface GatewayConfig {
   authJwtSecret: string
   redisHost: string
   redisPort: number
+  /** Optional operator override; attach-level override wins (primarily tests). */
+  maxConnectionsPerUser?: number
   /** SQS source; when queueUrl is unset the consumer is not started. */
   sqs?: {
     queueUrl?: string
@@ -101,6 +193,16 @@ export interface AttachOptions {
    * authorizer only to override that (e.g. tests).
    */
   authorizeRoomJoin?: RoomJoinAuthorizer
+  /**
+   * Optional tighter limits for constrained deployments and deterministic
+   * tests. Omitted fields retain the conservative production defaults.
+   */
+  ingressLimits?: Partial<WebSocketIngressLimits>
+  /**
+   * Aggregate live-socket ceiling for one authenticated user. This prevents
+   * bypassing per-connection ingress limits by opening unbounded tabs/sockets.
+   */
+  maxConnectionsPerUser?: number
 }
 
 export interface AttachedGateway {
@@ -219,8 +321,10 @@ function mintFromBody(
  * default is NOT allow-all).
  */
 export function defaultRoomJoinAuthorizer(connectionTokenSecret: string): RoomJoinAuthorizer {
-  return (userUuid: string, room: string, capability?: string): boolean =>
-    verifyRoomCapability(capability, connectionTokenSecret, userUuid, room)
+  return (userUuid: string, room: string, capability?: string) => {
+    const verified = verifyRoomCapabilityWithExpiry(capability, connectionTokenSecret, userUuid, room)
+    return verified ? { authorized: true, expiresAt: verified.expiresAt } : { authorized: false }
+  }
 }
 
 export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
@@ -235,6 +339,16 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
   // still requires a valid, matching, unexpired room capability on every join.
   const roomAuthorizer: RoomJoinAuthorizer =
     authorizeRoomJoin ?? defaultRoomJoinAuthorizer(config.connectionTokenSecret)
+  const ingressLimits: WebSocketIngressLimits = {
+    ...DEFAULT_WEBSOCKET_INGRESS_LIMITS,
+    ...opts.ingressLimits,
+  }
+  assertValidIngressLimits(ingressLimits)
+  const maxConnectionsPerUser =
+    opts.maxConnectionsPerUser ?? config.maxConnectionsPerUser ?? DEFAULT_MAX_CONNECTIONS_PER_USER
+  if (!Number.isSafeInteger(maxConnectionsPerUser) || maxConnectionsPerUser < 1) {
+    throw new Error('Invalid WebSocket per-user connection limit: expected a positive safe integer.')
+  }
 
   const registry = new ConnectionRegistry<WebSocket>()
   const rooms = new RoomRegistry<WebSocket>()
@@ -245,7 +359,9 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
     app.post('/sockets/tokens', handleMintToken)
   }
 
-  const wss = new WebSocketServer({ server: httpServer })
+  // This is intentionally enforced by `ws`, before the application-level
+  // `message` event and JSON parser can observe or retain an oversized frame.
+  const wss = new WebSocketServer({ server: httpServer, maxPayload: MAX_WEBSOCKET_MESSAGE_BYTES })
 
   wss.on('connection', (socket: WebSocket, req: IncomingMessage) => {
     // Client connects to: ws://host:PORT/?authToken=<jwt>
@@ -267,6 +383,12 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
       return
     }
 
+    if (registry.get(identity.userUuid).length >= maxConnectionsPerUser) {
+      logger.warn(`[ws] connection rejected: per-user limit user=${identity.userUuid}`)
+      socket.close(1008, 'per-user connection limit exceeded')
+      return
+    }
+
     const conn: Conn<WebSocket> = {
       socket,
       userUuid: identity.userUuid,
@@ -275,14 +397,33 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
     }
     registry.add(identity.userUuid, conn)
     alive.set(socket, true)
+    const ingressLimiter = new WebSocketIngressLimiter(ingressLimits)
     logger.info(
       `[ws] connect user=${identity.userUuid} session=${identity.sessionUuid} ` +
         `conn=${conn.connectionId} total=${registry.size()}`,
     )
 
+    let connectionClosed = false
+    // Preserve frame order while async room authorization is in flight. Without
+    // this queue, a yjs/comment frame arriving immediately after room-join could
+    // race ahead of the authorization result, and a leave could race behind a
+    // late successful join during provider teardown.
+    let relayQueue = Promise.resolve()
+
     const cleanup = (): void => {
+      if (connectionClosed) {
+        return
+      }
+      connectionClosed = true
       registry.remove(identity.userUuid, conn)
       rooms.leaveAll(conn)
+      // A room authorizer may already be in flight. The handler observes the
+      // closed flag and refuses the join; this final sweep is a second invariant
+      // after every frame already queued for this connection has settled.
+      void relayQueue.then(
+        () => rooms.leaveAll(conn),
+        () => rooms.leaveAll(conn),
+      )
       logger.info(`[ws] disconnect user=${identity.userUuid} conn=${conn.connectionId} total=${registry.size()}`)
     }
 
@@ -297,6 +438,15 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
     })
 
     socket.on('message', (data) => {
+      if (connectionClosed) {
+        return
+      }
+      if (!ingressLimiter.tryConsume(rawDataByteLength(data))) {
+        logger.warn(`[ws] ingress rate exceeded user=${identity.userUuid} conn=${conn.connectionId}`)
+        cleanup()
+        socket.close(1008, 'message rate limit exceeded')
+        return
+      }
       alive.set(socket, true)
       const raw = data.toString()
       if (raw === 'ping') {
@@ -308,15 +458,21 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
         // handleRelayFrame is async (room-join may consult the membership
         // authorizer). Swallow rejections so a failing authorizer can never crash
         // the message handler / gateway; the authorizer itself already fails closed.
-        void handleRelayFrame(rooms, conn, frame, roomAuthorizer).catch((err) => {
-          logger.warn('[ws] relay frame handling failed', err instanceof Error ? err.message : err)
-        })
+        relayQueue = relayQueue
+          .then(() =>
+            connectionClosed ? 0 : handleRelayFrame(rooms, conn, frame, roomAuthorizer, () => !connectionClosed),
+          )
+          .then(() => undefined)
+          .catch((err) => {
+            logger.warn('[ws] relay frame handling failed', err instanceof Error ? err.message : err)
+          })
       }
     })
   })
 
   // Periodic ping sweep: terminate sockets that didn't respond since last sweep.
   const heartbeat = setInterval(() => {
+    rooms.evictExpired()
     for (const socket of wss.clients) {
       if (alive.get(socket) === false) {
         logger.warn('[ws] terminating dead socket')

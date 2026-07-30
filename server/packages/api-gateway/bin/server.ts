@@ -447,6 +447,9 @@ void container
           authJwtSecret: env.get('AUTH_JWT_SECRET', true) || '',
           redisHost: env.get('REDIS_HOST', true) || '127.0.0.1',
           redisPort: env.get('REDIS_PORT', true) ? +env.get('REDIS_PORT', true) : 6379,
+          maxConnectionsPerUser: env.get('WEBSOCKET_MAX_CONNECTIONS_PER_USER', true)
+            ? +env.get('WEBSOCKET_MAX_CONNECTIONS_PER_USER', true)
+            : undefined,
           sqs: {
             queueUrl: env.get('SQS_QUEUE_URL', true) || undefined,
             endpoint: env.get('SQS_ENDPOINT', true) || undefined,

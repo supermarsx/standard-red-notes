@@ -17,20 +17,24 @@ describe('CollaborationController', () => {
   let jsonMock: jest.Mock
   let statusMock: jest.Mock
 
-  const makeController = (secret = SECRET) =>
+  const makeController = (secret = SECRET, ttl = TTL) =>
     new CollaborationController(
       serviceProxy as unknown as ServiceProxyInterface,
       endpointResolver as unknown as EndpointResolverInterface,
       secret,
-      TTL,
+      ttl,
       logger as never,
     )
 
-  const responseWith = (userUuid?: string): Response => {
+  const responseWith = (userUuid?: string, additionalLocals: Record<string, unknown> = {}): Response => {
     jsonMock = jest.fn()
     statusMock = jest.fn(() => ({ json: jsonMock }))
     return {
-      locals: userUuid ? { user: { uuid: userUuid } } : {},
+      locals: {
+        readOnlyAccess: false,
+        ...(userUuid ? { user: { uuid: userUuid } } : {}),
+        ...additionalLocals,
+      },
       status: statusMock,
       json: jsonMock,
     } as unknown as Response
@@ -88,6 +92,20 @@ describe('CollaborationController', () => {
     expect(jsonMock).not.toHaveBeenCalledWith(expect.objectContaining({ capability: expect.anything() }))
   })
 
+  it.each([
+    ['normalized read-only access', { readOnlyAccess: true }],
+    ['a read-only account session', { session: { readonly_access: true } }],
+    ['an MCP read scope', { mcpScope: { access: 'read' } }],
+  ])('DENIES (403) for %s before asking the syncing-server', async (_description, locals) => {
+    const response = responseWith('user-1', locals)
+
+    await makeController().authorize(requestWith('note-1'), response)
+
+    expect(statusMock).toHaveBeenCalledWith(403)
+    expect(serviceProxy.callSyncingServer).not.toHaveBeenCalled()
+    expect(jsonMock).not.toHaveBeenCalledWith(expect.objectContaining({ capability: expect.anything() }))
+  })
+
   it('DENIES (403) on a non-2xx syncing-server response', async () => {
     serviceProxy.callSyncingServer = proxyReturning({ error: 'nope' }, 500)
     const response = responseWith('user-1')
@@ -115,6 +133,16 @@ describe('CollaborationController', () => {
     expect(statusMock).toHaveBeenCalledWith(403)
     expect(serviceProxy.callSyncingServer).not.toHaveBeenCalled()
   })
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, 29, 30.5, 901])(
+    'DENIES (403) when capability TTL %p is invalid',
+    async (ttl) => {
+      const response = responseWith('user-1')
+      await makeController(SECRET, ttl).authorize(requestWith('note-1'), response)
+      expect(statusMock).toHaveBeenCalledWith(403)
+      expect(serviceProxy.callSyncingServer).not.toHaveBeenCalled()
+    },
+  )
 
   it('DENIES (403) when the user is missing from locals', async () => {
     const response = responseWith(undefined)

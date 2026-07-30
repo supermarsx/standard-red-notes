@@ -8,6 +8,7 @@ import { Container } from 'inversify'
 import { Timer, TimerInterface } from '@standardnotes/time'
 
 import { Env } from './Env'
+import { parseCollaborationCapabilityTtlSeconds } from './CollaborationCapabilityTtl'
 import { TYPES } from './Types'
 import { ServiceProxyInterface } from '../Service/Proxy/ServiceProxyInterface'
 import { HttpServiceProxy } from '../Service/Http/HttpServiceProxy'
@@ -201,11 +202,7 @@ export class ContainerConfigLoader {
       .toConstantValue(env.get('WEB_SOCKET_CONNECTION_TOKEN_SECRET', true) || '')
     container
       .bind<number>(TYPES.ApiGateway_COLLABORATION_CAPABILITY_TTL)
-      .toConstantValue(
-        env.get('COLLABORATION_CAPABILITY_TTL_SECONDS', true)
-          ? +env.get('COLLABORATION_CAPABILITY_TTL_SECONDS', true)
-          : 300,
-      )
+      .toConstantValue(parseCollaborationCapabilityTtlSeconds(env.get('COLLABORATION_CAPABILITY_TTL_SECONDS', true)))
     container
       .bind(TYPES.ApiGateway_HTTP_CALL_TIMEOUT)
       .toConstantValue(env.get('HTTP_CALL_TIMEOUT', true) ? +env.get('HTTP_CALL_TIMEOUT', true) : 60_000)

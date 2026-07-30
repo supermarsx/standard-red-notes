@@ -104,7 +104,7 @@ describe('RoomRegistry — no leak', () => {
     const c = fakeConn('flooder')
     let accepted = 0
     for (let r = 0; r < 10_000; r++) {
-      if (rooms.join(`junk-${r}`, c)) accepted++
+      if (rooms.join(`junk-${r}`, c).joined) accepted++
     }
     expect(accepted).toBe(100) // MAX_ROOMS_PER_CONNECTION
     expect(rooms.roomCountForConn(c)).toBe(100)

@@ -890,9 +890,9 @@ Related: [collaboration/vaults](#collaboration-vaults), [collaboration/realtime]
 
 Co-edit notes live, with changes relayed end-to-end encrypted.
 
-Realtime collaboration lets multiple people edit the same note together, with presence and live updates. Edits are encrypted and relayed through the self-hosted gateway, which forwards ciphertext between collaborators without being able to read it.
+Realtime collaboration lets shared-vault members with current write or admin permission—including the note creator—edit the same note together, with presence, encrypted comments, and live updates. Changes are encrypted on each client and relayed through the self-hosted gateway, which forwards ciphertext without being able to read it.
 
-> **Info.** Realtime co-editing is an advanced, experimental capability and is off by default. It builds on shared vaults and the WebSocket gateway.
+> **Info.** Read-only vault members and read-only account or MCP sessions cannot join the live relay. They keep ordinary encrypted sync and can still view content their vault permission allows. If the relay is unavailable, editors fall back to ordinary encrypted note persistence and sync.
 
 Related: [collaboration/vaults](#collaboration-vaults), [self-hosting/architecture](#self-hosting-architecture)
 

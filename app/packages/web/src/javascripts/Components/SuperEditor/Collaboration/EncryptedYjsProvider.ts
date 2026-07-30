@@ -1,16 +1,16 @@
 import * as Y from 'yjs'
 import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate, removeAwarenessStates } from 'y-protocols/awareness'
 import type { Provider } from '@lexical/yjs'
-import type { CollabChannel, CollabFrame } from './CollabChannel'
+import { createCollaborationRequestId, type CollabChannel, type CollabFrame } from './CollabChannel'
 import type { RoomCipher } from './RoomCrypto'
 
 type Listener = (...args: never[]) => void
 
 /**
  * A yjs provider that syncs a Y.Doc over the gateway relay through the supplied
- * RoomCipher. This is end-to-end encrypted only when the caller supplies a key
- * unavailable to the relay; the product entry point remains security-gated
- * until that client-only key source exists. Implements the @lexical/yjs
+ * RoomCipher. The product entry point supplies a non-extractable key derived
+ * from client-only shared-vault key material and fails closed before mounting
+ * this provider when that source is unavailable. Implements the @lexical/yjs
  * `Provider` interface so it can drive @lexical/react's CollaborationPlugin.
  *
  * Sync model (no central server, peer-to-peer over the relay):
@@ -27,6 +27,10 @@ export class EncryptedYjsProvider implements Provider {
   private readonly listeners: Record<string, Set<Listener>> = {}
   private unsubscribe: (() => void) | null = null
   private connected = false
+  private joined = false
+  private readonly joinRequestId: string
+  private initialCapabilityConsumed = false
+  private joining = false
   // In-flight encrypt/send/decrypt work. Entries REMOVE THEMSELVES on settle so
   // this never grows unbounded over a long editing session (awareness fires on
   // every cursor move); flush() still works for tests by awaiting the live set.
@@ -37,7 +41,10 @@ export class EncryptedYjsProvider implements Provider {
     private readonly room: string,
     private readonly channel: CollabChannel,
     private readonly cipher: RoomCipher,
+    private readonly initialCapability?: string,
+    leaseRequestId?: string,
   ) {
+    this.joinRequestId = leaseRequestId ?? createCollaborationRequestId()
     this.yAwareness = new Awareness(doc)
     // y-protocols Awareness is structurally compatible with lexical's
     // ProviderAwareness at runtime; the field type differs only in the UserState
@@ -71,34 +78,50 @@ export class EncryptedYjsProvider implements Provider {
     this.yAwareness.on('update', this.onLocalAwarenessUpdate)
     this.unsubscribe = this.channel.subscribe(this.onFrame)
 
-    // The gateway requires a signed capability on room-join. Fetch it, then join.
-    // If authorization fails (no access / offline), we simply never join the relay
-    // room — local editing still works; we just don't receive/send remote frames.
+    // The gateway requires a signed exact-note capability. No yjs or awareness
+    // payload is sent until it acknowledges this specific join request.
     void this.joinWithCapability()
-    // Broadcast our current state so peers already in the room merge us in (no-op
-    // until/unless we actually joined; the room-sync handshake recovers state).
-    void this.broadcastFullState()
-    // The plugin waits for `sync` before it stops showing a loading state.
-    queueMicrotask(() => this.emit('sync', true as never))
   }
 
   private async joinWithCapability(): Promise<void> {
-    let capability: string | undefined
+    if (this.joining) {
+      return
+    }
+    this.joining = true
     try {
-      capability = await this.channel.authorize(this.room)
-    } catch {
-      capability = undefined
+      let capability: string | undefined
+      if (!this.initialCapabilityConsumed) {
+        capability = this.initialCapability
+        this.initialCapabilityConsumed = true
+      }
+      if (!capability) {
+        try {
+          capability = await this.channel.authorize(this.room)
+        } catch {
+          capability = undefined
+        }
+      }
+      // A concurrent disconnect() may have run while we awaited; don't join if so.
+      if (!this.connected || !capability) {
+        // Denied / unavailable: do not attempt to join. The gateway would reject a
+        // capability-less join anyway; skipping avoids a pointless room-denied round trip.
+        return
+      }
+      try {
+        this.channel.send({
+          t: 'room-join',
+          room: this.room,
+          cap: capability,
+          requestId: this.joinRequestId,
+          role: 'editor',
+        })
+      } catch {
+        // A reconnect race may close the transport between capability minting
+        // and send. Stay fail-closed; durable encrypted sync remains available.
+      }
+    } finally {
+      this.joining = false
     }
-    // A concurrent disconnect() may have run while we awaited; don't join if so.
-    if (!this.connected) {
-      return
-    }
-    if (!capability) {
-      // Denied / unavailable: do not attempt to join. The gateway would reject a
-      // capability-less join anyway; skipping avoids a pointless room-denied round trip.
-      return
-    }
-    this.channel.send({ t: 'room-join', room: this.room, cap: capability })
   }
 
   disconnect(): void {
@@ -106,18 +129,32 @@ export class EncryptedYjsProvider implements Provider {
       return
     }
     this.connected = false
+    this.joined = false
     removeAwarenessStates(this.yAwareness, [this.doc.clientID], 'disconnect')
-    this.channel.send({ t: 'room-leave', room: this.room })
     this.doc.off('update', this.onLocalDocUpdate)
     this.yAwareness.off('update', this.onLocalAwarenessUpdate)
-    this.yAwareness.destroy() // clears the awareness heartbeat interval
-    this.unsubscribe?.()
+    // Clears the awareness heartbeat interval.
+    this.yAwareness.destroy()
+    try {
+      this.unsubscribe?.()
+    } catch {
+      // Local listener cleanup must not make editor teardown throw.
+    }
     this.unsubscribe = null
+    try {
+      this.channel.send({ t: 'room-leave', room: this.room, requestId: this.joinRequestId })
+    } catch {
+      // Offline teardown is best-effort; capability expiry is the backstop.
+    }
   }
 
   /** Count of in-flight encrypt/send/decrypt operations (for tests/leak guards). */
   getPendingCount(): number {
     return this.pending.size
+  }
+
+  isRoomJoined(): boolean {
+    return this.joined
   }
 
   /** Resolves once all in-flight encrypt/send work settles (used by tests). */
@@ -130,12 +167,15 @@ export class EncryptedYjsProvider implements Provider {
   // --- outbound ----------------------------------------------------------
 
   private readonly onLocalDocUpdate = (update: Uint8Array, origin: unknown): void => {
-    if (origin === this) {
+    // Remote updates are applied with this provider as their origin; do not echo.
+    if (origin === this || !this.connected || !this.joined) {
       return
-    } // came from applying a remote update; don't loop
+    }
     this.track(
       this.cipher.encrypt(update).then((payload) => {
-        this.channel.send({ t: 'yjs', room: this.room, payload })
+        if (this.connected && this.joined) {
+          this.channel.send({ t: 'yjs', room: this.room, payload })
+        }
       }),
     )
   }
@@ -144,21 +184,28 @@ export class EncryptedYjsProvider implements Provider {
     changes: { added: number[]; updated: number[]; removed: number[] },
     origin: unknown,
   ): void => {
-    if (origin === 'remote') {
+    if (origin === 'remote' || !this.connected || !this.joined) {
       return
     }
     const changed = [...changes.added, ...changes.updated, ...changes.removed]
     const update = encodeAwarenessUpdate(this.yAwareness, changed)
     this.track(
       this.cipher.encrypt(update).then((payload) => {
-        this.channel.send({ t: 'awareness', room: this.room, payload })
+        if (this.connected && this.joined) {
+          this.channel.send({ t: 'awareness', room: this.room, payload })
+        }
       }),
     )
   }
 
   private async broadcastFullState(): Promise<void> {
+    if (!this.connected || !this.joined) {
+      return
+    }
     const payload = await this.cipher.encrypt(Y.encodeStateAsUpdate(this.doc))
-    this.channel.send({ t: 'yjs', room: this.room, payload })
+    if (this.connected && this.joined) {
+      this.channel.send({ t: 'yjs', room: this.room, payload })
+    }
   }
 
   // --- inbound -----------------------------------------------------------
@@ -168,20 +215,54 @@ export class EncryptedYjsProvider implements Provider {
       return
     }
     switch (frame.t) {
-      case 'room-sync':
+      case 'room-joined':
+        if (!this.connected || frame.requestId !== this.joinRequestId) {
+          break
+        }
+        this.joined = true
         this.track(this.broadcastFullState())
+        queueMicrotask(() => {
+          if (this.connected && this.joined) {
+            this.emit('sync', true as never)
+          }
+        })
+        break
+      case 'room-denied':
+        if (frame.requestId === this.joinRequestId) {
+          const shouldReauthorize = this.joined
+          this.joined = false
+          this.emit('sync', false as never)
+          if (shouldReauthorize && this.connected) {
+            void this.joinWithCapability()
+          }
+        }
+        break
+      case 'room-sync':
+        if (this.joined) {
+          this.track(this.broadcastFullState())
+        }
         break
       case 'yjs':
+        if (!this.joined) {
+          break
+        }
         this.track(
           this.cipher.decrypt(frame.payload).then((update) => {
-            Y.applyUpdate(this.doc, update, this)
+            if (this.connected && this.joined) {
+              Y.applyUpdate(this.doc, update, this)
+            }
           }),
         )
         break
       case 'awareness':
+        if (!this.joined) {
+          break
+        }
         this.track(
           this.cipher.decrypt(frame.payload).then((update) => {
-            applyAwarenessUpdate(this.yAwareness, update, 'remote')
+            if (this.connected && this.joined) {
+              applyAwarenessUpdate(this.yAwareness, update, 'remote')
+            }
           }),
         )
         break
@@ -190,7 +271,9 @@ export class EncryptedYjsProvider implements Provider {
 
   private track(p: Promise<void>): void {
     const settled = p
-      .catch((err) => console.error('[collab] frame error', err))
+      // Do not log thrown objects: a custom cipher/channel error could include
+      // plaintext, ciphertext, key material, or a capability in its message.
+      .catch(() => console.error('[collab] encrypted frame processing failed'))
       .finally(() => this.pending.delete(settled))
     this.pending.add(settled)
   }

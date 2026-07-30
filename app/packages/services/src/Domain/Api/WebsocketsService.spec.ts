@@ -102,6 +102,21 @@ describe('webSocketsService', () => {
 
       expect(events).toContain(WebSocketsServiceEvent.WebSocketDidOpen)
     })
+
+    it('emits WebSocketDidClose so encrypted room consumers fail closed immediately', () => {
+      const service = createService()
+      const events: WebSocketsServiceEvent[] = []
+      service.addEventObserver((event) => {
+        events.push(event)
+        return Promise.resolve()
+      })
+      const closeCode = (service as unknown as { CLOSE_CONNECTION_CODE: number }).CLOSE_CONNECTION_CODE
+      ;(service as unknown as { onWebSocketClose: (event: { code: number }) => void }).onWebSocketClose({
+        code: closeCode,
+      })
+
+      expect(events).toContain(WebSocketsServiceEvent.WebSocketDidClose)
+    })
   })
 
   describe('malformed inbound frame (unguarded JSON.parse)', () => {

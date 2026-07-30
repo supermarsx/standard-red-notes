@@ -1,12 +1,12 @@
 import { FunctionComponent } from 'react'
-import { DecryptedItemInterface } from '@standardnotes/snjs'
+import { SNNote } from '@standardnotes/snjs'
 import VaultNameBadge from '../Vaults/VaultNameBadge'
 import LastEditedByBadge from '../Vaults/LastEditedByBadge'
 import { useItemVaultInfo } from '@/Hooks/useItemVaultInfo'
 import CollaboratorsPresencePanel from './CollaboratorsPresencePanel'
 
 type Props = {
-  item: DecryptedItemInterface
+  item: SNNote
 }
 
 const CollaborationInfoHUD: FunctionComponent<Props> = ({ item }) => {

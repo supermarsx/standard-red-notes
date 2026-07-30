@@ -5,6 +5,7 @@ import { sign } from 'jsonwebtoken'
 import { Logger } from 'winston'
 
 import { TYPES } from '../../Bootstrap/Types'
+import { isValidCollaborationCapabilityTtlSeconds } from '../../Bootstrap/CollaborationCapabilityTtl'
 import { ServiceProxyInterface } from '../../Service/Proxy/ServiceProxyInterface'
 import { EndpointResolverInterface } from '../../Service/Resolver/EndpointResolverInterface'
 
@@ -19,8 +20,9 @@ interface AuthorizeRequestBody {
  *
  * Flow:
  *  1. The client opens a note for collaboration and POSTs its uuid here.
- *  2. We ask the syncing-server (single source of truth for note ownership +
- *     shared-vault membership) whether this user may access the note.
+ *  2. We reject read-only sessions, then ask the syncing-server (single source
+ *     of truth for note ownership + shared-vault write permission) whether this
+ *     user may edit the note.
  *  3. ONLY on an explicit `authorized: true` do we mint an HS256 capability
  *     `{ purpose: 'collab-room', userUuid, room, exp }`, signed with the same
  *     secret the websocket-gateway verifies connection tokens with, so the
@@ -29,8 +31,8 @@ interface AuthorizeRequestBody {
  *     join lacking a valid, matching, unexpired capability.
  *
  * FAILS CLOSED everywhere: missing/invalid input, no signing secret configured,
- * an unauthorized result, a non-2xx / unparseable syncing-server response, or any
- * thrown error all yield 403 with NO capability.
+ * a read-only session, an unauthorized result, a non-2xx / unparseable
+ * syncing-server response, or any thrown error all yield 403 with NO capability.
  */
 @controller('/v1/collaboration')
 export class CollaborationController extends BaseHttpController {
@@ -50,7 +52,7 @@ export class CollaborationController extends BaseHttpController {
       response.status(403).json({
         error: {
           tag: 'collaboration-not-authorized',
-          message: 'You are not authorized to collaborate on this note.',
+          message: 'Live collaboration requires edit access to this note.',
         },
       })
     }
@@ -58,7 +60,18 @@ export class CollaborationController extends BaseHttpController {
     try {
       // No signing secret => the realtime gateway is not configured; deny rather
       // than mint an unforgeable-looking-but-unverifiable token.
-      if (!this.capabilitySecret) {
+      if (!this.capabilitySecret || !isValidCollaborationCapabilityTtlSeconds(this.capabilityTtlSeconds)) {
+        denied()
+        return
+      }
+
+      // AuthMiddleware normalizes both a read-only account session and an
+      // MCP read scope into readOnlyAccess. Check the underlying fields too so
+      // capability minting remains fail-closed if a future caller constructs
+      // response.locals without running that normalization.
+      const session = response.locals.session as { readonly_access?: boolean } | undefined
+      const mcpScope = response.locals.mcpScope as { access?: string } | undefined
+      if (response.locals.readOnlyAccess === true || session?.readonly_access === true || mcpScope?.access === 'read') {
         denied()
         return
       }

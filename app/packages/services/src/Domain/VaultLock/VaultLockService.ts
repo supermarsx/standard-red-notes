@@ -1,7 +1,12 @@
 import { GetVaultItems } from './../Vault/UseCase/GetVaultItems'
 import { RemoveItemsFromMemory } from './../Storage/UseCase/RemoveItemsFromMemory'
 import { GetVaults } from '../Vault/UseCase/GetVaults'
-import { KeySystemPasswordType, KeySystemRootKeyStorageMode, VaultListingInterface } from '@standardnotes/models'
+import {
+  KeySystemPasswordType,
+  KeySystemRootKeyInterface,
+  KeySystemRootKeyStorageMode,
+  VaultListingInterface,
+} from '@standardnotes/models'
 import { VaultLockServiceInterface } from './VaultLockServiceInterface'
 import { VaultLockServiceEvent, VaultLockServiceEventPayload } from './VaultLockServiceEvent'
 import { AbstractService } from '../Service/AbstractService'
@@ -57,6 +62,19 @@ export class VaultLockService
 
   public isVaultLocked(vault: VaultListingInterface): boolean {
     return this.lockMap.get(vault.uuid) === true
+  }
+
+  public getUnlockedSharedVaultRootKey(vault: VaultListingInterface): KeySystemRootKeyInterface | undefined {
+    if (!vault.isSharedVaultListing() || this.isVaultLocked(vault)) {
+      return undefined
+    }
+
+    const rootKey = this.keys.getPrimaryKeySystemRootKey(vault.systemIdentifier)
+    if (!rootKey || rootKey.systemIdentifier !== vault.systemIdentifier) {
+      return undefined
+    }
+
+    return rootKey
   }
 
   public isVaultLockable(vault: VaultListingInterface): boolean {

@@ -5,8 +5,15 @@
 
 export type CollabFrame =
   // `cap` is the short-lived signed capability the gateway requires to join.
-  | { t: 'room-join'; room: string; cap?: string }
-  | { t: 'room-leave'; room: string }
+  | {
+      t: 'room-join'
+      room: string
+      cap?: string
+      requestId?: string
+      role?: 'editor' | 'comment'
+    }
+  | { t: 'room-leave'; room: string; requestId?: string }
+  | { t: 'room-joined'; room: string; requestId?: string; bootstrap?: boolean }
   | { t: 'room-sync'; room: string }
   | { t: 'yjs'; room: string; payload: string }
   | { t: 'awareness'; room: string; payload: string }
@@ -14,7 +21,7 @@ export type CollabFrame =
   // CollaborationFrame). Carries an encrypted JSON comment payload.
   | { t: 'comment'; room: string; payload: string }
   // Gateway -> client: the join was refused.
-  | { t: 'room-denied'; room: string }
+  | { t: 'room-denied'; room: string; requestId?: string }
 
 export interface CollabChannel {
   isConnected(): boolean
@@ -27,4 +34,11 @@ export interface CollabChannel {
    * the request fails; the provider then must NOT join.
    */
   authorize(room: string): Promise<string | undefined>
+}
+
+export function createCollaborationRequestId(): string {
+  if (!globalThis.crypto?.randomUUID) {
+    throw new Error('Secure random UUID generation is unavailable')
+  }
+  return globalThis.crypto.randomUUID()
 }

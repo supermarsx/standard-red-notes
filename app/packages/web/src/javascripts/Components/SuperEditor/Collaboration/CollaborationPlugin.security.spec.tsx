@@ -29,7 +29,7 @@ jest.mock('./EncryptedYjsProvider', () => ({
 import { EncryptedYjsProvider } from './EncryptedYjsProvider'
 import { createGatewayCollabChannel } from './GatewayCollabChannel'
 import { createRoomCipher } from './RoomCrypto'
-import { getSuperCollaborationAvailability, SUPER_COLLABORATION_UNAVAILABLE_REASON } from './CollaborationAvailability'
+import { getSuperCollaborationAvailability } from './CollaborationAvailability'
 import { CollaborationConfig, SuperCollaborationPlugin } from './CollaborationPlugin'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -53,17 +53,16 @@ afterEach(() => {
 })
 
 describe('Super collaboration security gate', () => {
-  it('stays unavailable when the legacy window flag is forcibly enabled', () => {
-    expect(getSuperCollaborationAvailability()).toEqual({
-      available: false,
-      reason: SUPER_COLLABORATION_UNAVAILABLE_REASON,
-    })
+  it('depends on WebCrypto capability, never the legacy window flag', () => {
+    expect(getSuperCollaborationAvailability().available).toBe(Boolean(globalThis.crypto?.subtle))
   })
 
-  it('does not construct a relay, derive or use a room key, or create a provider', async () => {
+  it('threads the prepared exact-note capability into the encrypted provider', async () => {
     const config: CollaborationConfig = {
       room: 'note-uuid',
       roomKey: {} as CryptoKey,
+      capability: 'exact-note-capability',
+      leaseRequestId: 'editor-lease',
       username: 'Collaborator',
       cursorColor: '#ff0000',
       shouldBootstrap: true,
@@ -78,9 +77,19 @@ describe('Super collaboration security gate', () => {
       )
     })
 
-    expect(container.innerHTML).toBe('')
-    expect(createGatewayCollabChannel).not.toHaveBeenCalled()
-    expect(createRoomCipher).not.toHaveBeenCalled()
-    expect(EncryptedYjsProvider).not.toHaveBeenCalled()
+    if (globalThis.crypto?.subtle) {
+      expect(createGatewayCollabChannel).toHaveBeenCalled()
+      expect(createRoomCipher).toHaveBeenCalledWith(config.roomKey)
+      expect(EncryptedYjsProvider).toHaveBeenCalledWith(
+        expect.anything(),
+        'note-uuid',
+        expect.anything(),
+        expect.anything(),
+        'exact-note-capability',
+        'editor-lease',
+      )
+    } else {
+      expect(EncryptedYjsProvider).not.toHaveBeenCalled()
+    }
   })
 })

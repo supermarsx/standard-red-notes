@@ -86,6 +86,10 @@ x-server-env: &server-env
   # reads these from its environment and passes them to attachWebSocketGateway.
   WEB_SOCKET_CONNECTION_TOKEN_SECRET: ${WEB_SOCKET_CONNECTION_TOKEN_SECRET:-dev-ws-conn-token-secret-change-me}
   WEB_SOCKET_CONNECTION_TOKEN_TTL: ${WEB_SOCKET_CONNECTION_TOKEN_TTL:-60s}
+  # Exact-note collaboration capabilities are deliberately short lived. The
+  # api-gateway rejects values outside the safe whole-second range 30..900.
+  COLLABORATION_CAPABILITY_TTL_SECONDS: ${COLLABORATION_CAPABILITY_TTL_SECONDS:-300}
+  WEBSOCKET_MAX_CONNECTIONS_PER_USER: ${WEBSOCKET_MAX_CONNECTIONS_PER_USER:-16}
   # SNS/SQS event source for realtime push: the gateway consumes the syncing
   # server's WEB_SOCKET_MESSAGE_REQUESTED events from this queue. The `floci`
   # service below emulates SNS/SQS; credentials are dummies (floci has no auth).

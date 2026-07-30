@@ -41,6 +41,16 @@ const createTestTransportCipher = (): RoomCipher => ({
 class LoopbackHub {
   private readonly handlers = new Map<symbol, (f: CollabFrame) => void>()
   private readonly rooms = new Map<string, Set<symbol>>()
+  private readonly electedEditorRooms = new Set<string>()
+
+  reserveEditorBootstrap(room: string): boolean {
+    if (this.electedEditorRooms.has(room)) {
+      return false
+    }
+    this.electedEditorRooms.add(room)
+    return true
+  }
+
   channel(): CollabChannel {
     const id = Symbol('chan')
     return {
@@ -58,6 +68,7 @@ class LoopbackHub {
       const set = this.rooms.get(frame.room) ?? new Set<symbol>()
       set.add(from)
       this.rooms.set(frame.room, set)
+      this.handlers.get(from)?.({ t: 'room-joined', room: frame.room, requestId: frame.requestId })
       for (const m of set) {
         if (m !== from) {
           this.handlers.get(m)?.({ t: 'room-sync', room: frame.room })
@@ -91,8 +102,14 @@ function CapturePlugin({ onReady }: { onReady: (editor: LexicalEditor) => void }
   return null
 }
 
-function CollabEditor(props: { hub: LoopbackHub; room: string; bootstrap: boolean; capture: (c: Captured) => void }) {
-  const { hub, room, bootstrap, capture } = props
+function CollabEditor(props: {
+  hub: LoopbackHub
+  room: string
+  bootstrap: boolean
+  initialText?: string
+  capture: (c: Captured) => void
+}) {
+  const { hub, room, bootstrap, initialText, capture } = props
   let provider: EncryptedYjsProvider
   const providerFactory = (id: string, docMap: Map<string, Doc>) => {
     let doc = docMap.get(id)
@@ -126,6 +143,15 @@ function CollabEditor(props: { hub: LoopbackHub; room: string; bootstrap: boolea
         id: room,
         providerFactory,
         shouldBootstrap: bootstrap,
+        initialEditorState: initialText
+          ? () => {
+              const root = $getRoot()
+              root.clear()
+              const paragraph = $createParagraphNode()
+              paragraph.append($createTextNode(initialText))
+              root.append(paragraph)
+            }
+          : undefined,
       }),
       createElement(CapturePlugin, { onReady: (editor: LexicalEditor) => capture({ editor, provider }) }),
     ),
@@ -228,6 +254,53 @@ describe('Collaborative editor (editor-level e2e)', () => {
     await flush(capA!.provider, capB!.provider)
 
     expect(textOf(capB!.editor)).toContain('written before B joined')
+
+    await act(async () => {
+      rootA!.unmount()
+      rootB!.unmount()
+    })
+  })
+
+  it('elects one bootstrapper when two production editors open simultaneously, avoiding duplicated note text', async () => {
+    const hub = new LoopbackHub()
+    const room = 'note-editor-dual-bootstrap'
+    const containerA = document.createElement('div')
+    const containerB = document.createElement('div')
+    document.body.append(containerA, containerB)
+    let capA: Captured | undefined
+    let capB: Captured | undefined
+    let rootA: Root
+    let rootB: Root
+    const bootstrapA = hub.reserveEditorBootstrap(room)
+    const bootstrapB = hub.reserveEditorBootstrap(room)
+    expect([bootstrapA, bootstrapB].filter(Boolean)).toHaveLength(1)
+
+    await act(async () => {
+      rootA = createRoot(containerA)
+      rootB = createRoot(containerB)
+      rootA.render(
+        createElement(CollabEditor, {
+          hub,
+          room,
+          bootstrap: bootstrapA,
+          initialText: 'persisted note body',
+          capture: (captured) => (capA = captured),
+        }),
+      )
+      rootB.render(
+        createElement(CollabEditor, {
+          hub,
+          room,
+          bootstrap: bootstrapB,
+          initialText: 'persisted note body',
+          capture: (captured) => (capB = captured),
+        }),
+      )
+    })
+    await flush(capA!.provider, capB!.provider)
+
+    expect(textOf(capA!.editor)).toBe('persisted note body')
+    expect(textOf(capB!.editor)).toBe('persisted note body')
 
     await act(async () => {
       rootA!.unmount()

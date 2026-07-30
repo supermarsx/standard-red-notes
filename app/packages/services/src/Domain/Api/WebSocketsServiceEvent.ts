@@ -12,6 +12,9 @@ export enum WebSocketsServiceEvent {
   // Emitted when the websocket (re)connects. The sync service performs a full
   // HTTP sync on this event to backfill anything missed while disconnected.
   WebSocketDidOpen = 'WebSocketDidOpen',
+  // Emitted on every close so encrypted realtime consumers can synchronously
+  // tear down room keys/providers and fall back to ordinary note persistence.
+  WebSocketDidClose = 'WebSocketDidClose',
   // Standard Red Notes: push-MFA. Emitted on a trusted session when an untrusted
   // device starts a sign-in that needs 2FA, so the UI can prompt the user to
   // approve or deny the sign-in.

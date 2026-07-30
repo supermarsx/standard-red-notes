@@ -73,7 +73,7 @@ profiles](docs/DEPLOYMENT.md).
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | **Write and create**      | Plain text, Markdown, code, spreadsheet, and Super block editing, plus Canvas, Bases, Calendar, Kanban, Timeline, and sandbox note types.                                                  |
 | **Organize and retrieve** | Tags and nested folders, smart views, links and backlinks, graph navigation, full-text search, reminders, files, and import/export workflows.                                              |
-| **Sync and collaborate**  | End-to-end encrypted multi-device sync, offline use, revisions and backups, shared vaults, contacts, and experimental realtime co-editing, which is off by default.                        |
+| **Sync and collaborate**  | End-to-end encrypted multi-device sync, offline use, revisions and backups, shared vaults, contacts, plus live editing, presence, and comments for signed-in write/admin editors in unlocked shared vaults; ordinary encrypted sync remains the fallback. |
 | **Assist and automate**   | An optional, operator-configured AI assistant; an HTTP API; encrypted client and operator CLIs; and, where configured and authorized, app passwords, revocable MCP tokens, and an MCP bridge. |
 | **Run it yourself**       | Docker deployment profiles, same-origin routing, reverse-proxy guidance, operator-configured registration controls, administrator-only controls, diagnostics, and backup/restore drills.   |
 

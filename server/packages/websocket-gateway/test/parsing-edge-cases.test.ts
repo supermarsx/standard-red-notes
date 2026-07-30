@@ -117,6 +117,25 @@ describe('parseRelayFrame rejections', () => {
     expect(parseRelayFrame(JSON.stringify({ t: 'room-join', room: 'note-1', cap: 'x'.repeat(20_000) }))).toBeNull()
   })
 
+  it('drops a join with a malformed request id', () => {
+    expect(parseRelayFrame(JSON.stringify({ t: 'room-join', room: 'note-1', requestId: '' }))).toBeNull()
+    expect(parseRelayFrame(JSON.stringify({ t: 'room-join', room: 'note-1', requestId: 7 }))).toBeNull()
+    expect(parseRelayFrame(JSON.stringify({ t: 'room-join', room: 'note-1', requestId: 'x'.repeat(129) }))).toBeNull()
+  })
+
+  it('drops a join with an unknown logical lease role', () => {
+    expect(
+      parseRelayFrame(
+        JSON.stringify({
+          t: 'room-join',
+          room: 'note-1',
+          requestId: 'request-1',
+          role: 'presence-only',
+        }),
+      ),
+    ).toBeNull()
+  })
+
   it('parses a room-leave frame', () => {
     expect(parseRelayFrame(JSON.stringify({ t: 'room-leave', room: 'note-1' }))).toEqual({
       t: 'room-leave',
@@ -124,10 +143,11 @@ describe('parseRelayFrame rejections', () => {
     })
   })
 
-  it('rejects a yjs or awareness frame with a missing, empty or oversized payload', () => {
+  it('rejects a yjs, awareness, or comment frame with a missing, empty or oversized payload', () => {
     expect(parseRelayFrame(JSON.stringify({ t: 'yjs', room: 'note-1' }))).toBeNull()
     expect(parseRelayFrame(JSON.stringify({ t: 'yjs', room: 'note-1', payload: '' }))).toBeNull()
     expect(parseRelayFrame(JSON.stringify({ t: 'awareness', room: 'note-1', payload: 5 }))).toBeNull()
+    expect(parseRelayFrame(JSON.stringify({ t: 'comment', room: 'note-1', payload: '' }))).toBeNull()
     expect(
       parseRelayFrame(JSON.stringify({ t: 'awareness', room: 'note-1', payload: 'x'.repeat(2_000_000) })),
     ).toBeNull()
@@ -145,7 +165,7 @@ describe('handleRelayFrame room cap', () => {
 
     // Fill the connection up to whatever cap RoomRegistry.join enforces.
     let room = 0
-    while (rooms.join(`room-${room}`, connection) && room < 1_000) {
+    while (rooms.join(`room-${room}`, connection).joined && room < 1_000) {
       room += 1
     }
     const cappedRoom = `room-${room}`

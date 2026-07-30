@@ -39,6 +39,8 @@ import BlockPickerMenuPlugin from './Plugins/BlockPickerPlugin/BlockPickerPlugin
 import { EditorEventSource } from '@/Types/EditorEventSource'
 import { ElementIds } from '@/Constants/ElementIDs'
 import { NoteFromSelectionPlugin } from './Plugins/NoteFromSelectionPlugin'
+import { useCollaborationRoomAccess } from './Collaboration/useCollaborationRoomAccess'
+import { collaboratorColor } from './Collaboration/collaboratorColor'
 
 export const SuperNotePreviewCharLimit = 160
 
@@ -103,6 +105,22 @@ export const SuperEditor: FunctionComponent<Props> = ({
 
   const keyboardService = application.keyboardService
   const isEditorReadonly = note.current.locked || Boolean(readonly) || featureStatus !== FeatureStatus.Entitled
+  const collaborationAccess = useCollaborationRoomAccess(application, note.current, true)
+  const editorLease = collaborationAccess.status === 'ready' ? collaborationAccess.editorLease : undefined
+  const collaboration =
+    collaborationAccess.status === 'ready' && editorLease
+      ? {
+          room: note.current.uuid,
+          roomKey: collaborationAccess.roomKey,
+          capability: collaborationAccess.capability,
+          username: collaborationAccess.username,
+          userUuid: collaborationAccess.userUuid,
+          cursorColor: collaboratorColor(collaborationAccess.userUuid),
+          shouldBootstrap: editorLease.shouldBootstrap,
+          leaseRequestId: editorLease.requestId,
+          initialEditorState: note.current.text,
+        }
+      : undefined
 
   useEffect(() => {
     return application.commands.addWithShortcut(
@@ -307,35 +325,51 @@ export const SuperEditor: FunctionComponent<Props> = ({
       <ErrorBoundary>
         <LinkingControllerProvider controller={linkingController}>
           <FilesControllerProvider controller={filesController}>
-            <BlocksEditorComposer readonly={isEditorReadonly} initialValue={note.current.text} collaborating={false}>
-              <BlocksEditor
-                onChange={handleChange}
-                className="blocks-editor h-full resize-none"
-                previewLength={SuperNotePreviewCharLimit}
-                spellcheck={spellcheck}
+            {collaborationAccess.status === 'preparing' ? (
+              <div className="text-passive-1 flex h-full items-center justify-center text-sm">
+                Preparing encrypted collaboration…
+              </div>
+            ) : (
+              <BlocksEditorComposer
+                key={
+                  collaborationAccess.status === 'ready' && editorLease
+                    ? editorLease.requestId
+                    : `${note.current.uuid}:solo`
+                }
                 readonly={isEditorReadonly}
-                onFocus={handleFocus}
-                onBlur={onBlur}
-                application={application}
-                registerDebounceControl={registerDebounceControl}
+                initialValue={note.current.text}
+                collaborating={Boolean(collaboration)}
               >
-                <ItemSelectionPlugin currentNote={note.current} />
-                <FilePlugin currentNote={note.current} />
-                <ItemBubblePlugin />
-                <GetMarkdownPlugin ref={getMarkdownPlugin} />
-                <ChangeContentCallbackPlugin
-                  providerCallback={(callback) => (changeEditorFunction.current = callback)}
-                />
-                <NodeObserverPlugin nodeType={BubbleNode} onRemove={handleBubbleRemove} />
-                <NodeObserverPlugin nodeType={FileNode} onRemove={handleBubbleRemove} />
-                {readonly === undefined && (
-                  <ReadonlyPlugin note={note.current} forceReadonly={featureStatus !== FeatureStatus.Entitled} />
-                )}
-                <AutoFocusPlugin isEnabled={controller.isTemplateNote} />
-                <BlockPickerMenuPlugin />
-                <NoteFromSelectionPlugin currentNote={note.current} />
-              </BlocksEditor>
-            </BlocksEditorComposer>
+                <BlocksEditor
+                  onChange={handleChange}
+                  className="blocks-editor h-full resize-none"
+                  previewLength={SuperNotePreviewCharLimit}
+                  spellcheck={spellcheck}
+                  readonly={isEditorReadonly}
+                  onFocus={handleFocus}
+                  onBlur={onBlur}
+                  application={application}
+                  collaboration={collaboration}
+                  registerDebounceControl={registerDebounceControl}
+                >
+                  <ItemSelectionPlugin currentNote={note.current} />
+                  <FilePlugin currentNote={note.current} />
+                  <ItemBubblePlugin />
+                  <GetMarkdownPlugin ref={getMarkdownPlugin} />
+                  <ChangeContentCallbackPlugin
+                    providerCallback={(callback) => (changeEditorFunction.current = callback)}
+                  />
+                  <NodeObserverPlugin nodeType={BubbleNode} onRemove={handleBubbleRemove} />
+                  <NodeObserverPlugin nodeType={FileNode} onRemove={handleBubbleRemove} />
+                  {readonly === undefined && (
+                    <ReadonlyPlugin note={note.current} forceReadonly={featureStatus !== FeatureStatus.Entitled} />
+                  )}
+                  <AutoFocusPlugin isEnabled={controller.isTemplateNote} />
+                  <BlockPickerMenuPlugin />
+                  <NoteFromSelectionPlugin currentNote={note.current} />
+                </BlocksEditor>
+              </BlocksEditorComposer>
+            )}
           </FilesControllerProvider>
         </LinkingControllerProvider>
         <ModalOverlay isOpen={showMarkdownPreview} close={closeMarkdownPreview}>

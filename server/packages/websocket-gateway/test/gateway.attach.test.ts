@@ -30,7 +30,13 @@ const redis = vi.hoisted(() => {
 
 vi.mock('ioredis', () => ({ Redis: redis.FakeRedisClient }))
 
-import { attachWebSocketGateway, defaultRoomJoinAuthorizer, type GatewayConfig } from '../src/gateway.js'
+import {
+  attachWebSocketGateway,
+  defaultRoomJoinAuthorizer,
+  MAX_WEBSOCKET_MESSAGE_BYTES,
+  WebSocketIngressLimiter,
+  type GatewayConfig,
+} from '../src/gateway.js'
 import { mintConnectionToken } from '../src/auth.js'
 
 const CONNECTION_SECRET = 'connection-secret'
@@ -149,6 +155,22 @@ describe('attachWebSocketGateway configuration', () => {
     expect(post).toHaveBeenCalledWith('/sockets/tokens', attached.handleMintToken)
   })
 
+  it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+    'refuses an invalid per-user connection ceiling (%s)',
+    async (maxConnectionsPerUser) => {
+      await listen()
+
+      expect(() =>
+        attachWebSocketGateway({
+          httpServer,
+          config: baseConfig(),
+          logger: makeLogger(),
+          maxConnectionsPerUser,
+        }),
+      ).toThrow(/positive safe integer/)
+    },
+  )
+
   it('does not register any route in standalone mode', async () => {
     await listen()
     attached = attachWebSocketGateway({ httpServer, config: baseConfig(), logger: makeLogger() })
@@ -188,6 +210,35 @@ describe('attachWebSocketGateway configuration', () => {
   })
 })
 
+describe('WebSocketIngressLimiter', () => {
+  it('refills frame and byte budgets deterministically and caps accumulated credit', () => {
+    let now = 0
+    const limiter = new WebSocketIngressLimiter(
+      {
+        frameCapacity: 2,
+        frameRefillPerSecond: 1,
+        byteCapacity: 10,
+        byteRefillPerSecond: 5,
+      },
+      () => now,
+    )
+
+    expect(limiter.tryConsume(6)).toBe(true)
+    expect(limiter.tryConsume(4)).toBe(true)
+    expect(limiter.tryConsume(1)).toBe(false)
+
+    now = 1_000
+    expect(limiter.tryConsume(5)).toBe(true)
+    expect(limiter.tryConsume(1)).toBe(false)
+
+    // A long idle period replenishes only to capacity, never beyond it.
+    now = 100_000
+    expect(limiter.tryConsume(6)).toBe(true)
+    expect(limiter.tryConsume(4)).toBe(true)
+    expect(limiter.tryConsume(1)).toBe(false)
+  })
+})
+
 describe('defaultRoomJoinAuthorizer', () => {
   const authorizer = defaultRoomJoinAuthorizer(CONNECTION_SECRET)
 
@@ -197,28 +248,31 @@ describe('defaultRoomJoinAuthorizer', () => {
 
   it('admits a capability minted for exactly this user and room', () => {
     const cap = capability({ purpose: 'collab-room', userUuid: 'user-1', room: 'note-1' })
-    expect(authorizer('user-1', 'note-1', cap)).toBe(true)
+    expect(authorizer('user-1', 'note-1', cap)).toMatchObject({
+      authorized: true,
+      expiresAt: expect.any(Number),
+    })
   })
 
   it('denies a join with no capability at all', () => {
-    expect(authorizer('user-1', 'note-1', undefined)).toBe(false)
+    expect(authorizer('user-1', 'note-1', undefined)).toEqual({ authorized: false })
   })
 
   it('denies a capability issued for a different room', () => {
     const cap = capability({ purpose: 'collab-room', userUuid: 'user-1', room: 'note-OTHER' })
-    expect(authorizer('user-1', 'note-1', cap)).toBe(false)
+    expect(authorizer('user-1', 'note-1', cap)).toEqual({ authorized: false })
   })
 
   it('denies a capability issued for a different user', () => {
     const cap = capability({ purpose: 'collab-room', userUuid: 'user-OTHER', room: 'note-1' })
-    expect(authorizer('user-1', 'note-1', cap)).toBe(false)
+    expect(authorizer('user-1', 'note-1', cap)).toEqual({ authorized: false })
   })
 
   it('denies a capability signed with the wrong secret', () => {
     const cap = jwt.sign({ purpose: 'collab-room', userUuid: 'user-1', room: 'note-1' }, 'other-secret', {
       algorithm: 'HS256',
     })
-    expect(authorizer('user-1', 'note-1', cap)).toBe(false)
+    expect(authorizer('user-1', 'note-1', cap)).toEqual({ authorized: false })
   })
 })
 
@@ -441,6 +495,78 @@ describe('websocket connection lifecycle', () => {
     await vi.waitFor(() => expect(attached!.registry.size()).toBe(0))
   })
 
+  it('rejects the N+1 socket at the per-user ceiling and reclaims the user bucket on close', async () => {
+    await attachGateway({ maxConnectionsPerUser: 2 })
+    const token = mintConnectionToken({ userUuid: 'user-tabs', sessionUuid: 'session-tabs' }, CONNECTION_SECRET, '60s')
+    const first = connect(`?authToken=${token}`)
+    const second = connect(`?authToken=${token}`)
+    await Promise.all([opened(first), opened(second)])
+    await vi.waitFor(() => expect(attached!.registry.get('user-tabs')).toHaveLength(2))
+
+    const rejected = connect(`?authToken=${token}`)
+    expect(await closedWith(rejected)).toBe(1008)
+    expect(attached!.registry.get('user-tabs')).toHaveLength(2)
+    expect(logger.warn).toHaveBeenCalledWith('[ws] connection rejected: per-user limit user=user-tabs')
+
+    first.close()
+    await vi.waitFor(() => expect(attached!.registry.get('user-tabs')).toHaveLength(1))
+
+    const replacement = connect(`?authToken=${token}`)
+    await opened(replacement)
+    await vi.waitFor(() => expect(attached!.registry.get('user-tabs')).toHaveLength(2))
+
+    second.close()
+    replacement.close()
+    await vi.waitFor(() => {
+      expect(attached!.registry.size()).toBe(0)
+      expect(attached!.registry.userCount()).toBe(0)
+    })
+  })
+
+  it('does not resurrect a room join whose authorization resolves after socket close', async () => {
+    let resolveAuthorization!: (value: { authorized: true; expiresAt: number }) => void
+    let markAuthorizationStarted!: () => void
+    const authorizationStarted = new Promise<void>((resolve) => {
+      markAuthorizationStarted = resolve
+    })
+    const delayedAuthorization = new Promise<{ authorized: true; expiresAt: number }>((resolve) => {
+      resolveAuthorization = resolve
+    })
+    await attachGateway({
+      authorizeRoomJoin: () => {
+        markAuthorizationStarted()
+        return delayedAuthorization
+      },
+    })
+    const token = mintConnectionToken({ userUuid: 'user-race', sessionUuid: 'session-race' }, CONNECTION_SECRET, '60s')
+    const socket = connect(`?authToken=${token}`)
+    const messages: string[] = []
+    socket.on('message', (data) => messages.push(data.toString()))
+    await opened(socket)
+    socket.send(
+      JSON.stringify({
+        t: 'room-join',
+        room: 'note-race',
+        requestId: 'delayed-join',
+        role: 'editor',
+      }),
+    )
+    await authorizationStarted
+
+    const closed = closedWith(socket)
+    socket.close()
+    await closed
+    resolveAuthorization({ authorized: true, expiresAt: Date.now() + 60_000 })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+
+    expect(attached!.registry.size()).toBe(0)
+    expect(attached!.rooms.roomCount()).toBe(0)
+    expect(messages.some((message) => message.includes('room-joined'))).toBe(false)
+    expect(
+      logger.info.mock.calls.filter(([message]) => String(message).includes('disconnect user=user-race')),
+    ).toHaveLength(1)
+  })
+
   it('answers an application-level ping with pong', async () => {
     await attachGateway()
     const token = mintConnectionToken({ userUuid: 'user-1', sessionUuid: 'session-1' }, CONNECTION_SECRET, '60s')
@@ -452,8 +578,90 @@ describe('websocket connection lifecycle', () => {
     socket.close()
   })
 
+  it('rejects an oversized message in ws before it can enter the relay', async () => {
+    const authorizeRoomJoin = vi.fn(() => ({ authorized: true as const, expiresAt: Date.now() + 60_000 }))
+    await attachGateway({ authorizeRoomJoin })
+    const token = mintConnectionToken(
+      { userUuid: 'user-large', sessionUuid: 'session-large' },
+      CONNECTION_SECRET,
+      '60s',
+    )
+    const socket = connect(`?authToken=${token}`)
+    await opened(socket)
+
+    const closed = closedWith(socket)
+    socket.send('x'.repeat(MAX_WEBSOCKET_MESSAGE_BYTES + 1))
+
+    expect(await closed).toBe(1009)
+    await vi.waitFor(() => expect(attached!.registry.size()).toBe(0))
+    expect(attached!.rooms.roomCount()).toBe(0)
+    expect(authorizeRoomJoin).not.toHaveBeenCalled()
+  })
+
+  it('closes a connection that exhausts its per-connection frame bucket', async () => {
+    await attachGateway({
+      ingressLimits: {
+        frameCapacity: 2,
+        frameRefillPerSecond: 0.000_001,
+        byteCapacity: 1024,
+        byteRefillPerSecond: 1024,
+      },
+    })
+    const token = mintConnectionToken(
+      { userUuid: 'user-frames', sessionUuid: 'session-frames' },
+      CONNECTION_SECRET,
+      '60s',
+    )
+    const socket = connect(`?authToken=${token}`)
+    await opened(socket)
+
+    for (let index = 0; index < 2; index++) {
+      const pong = nextMessage(socket)
+      socket.send('ping')
+      expect(await pong).toBe('pong')
+    }
+
+    const closed = closedWith(socket)
+    socket.send('ping')
+    expect(await closed).toBe(1008)
+    await vi.waitFor(() => expect(attached!.registry.size()).toBe(0))
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('[ws] ingress rate exceeded user=user-frames'))
+  })
+
+  it('closes a connection that exhausts its per-connection byte bucket', async () => {
+    await attachGateway({
+      ingressLimits: {
+        frameCapacity: 100,
+        frameRefillPerSecond: 100,
+        byteCapacity: 10,
+        byteRefillPerSecond: 0.000_001,
+      },
+    })
+    const token = mintConnectionToken(
+      { userUuid: 'user-bytes', sessionUuid: 'session-bytes' },
+      CONNECTION_SECRET,
+      '60s',
+    )
+    const socket = connect(`?authToken=${token}`)
+    await opened(socket)
+
+    for (let index = 0; index < 2; index++) {
+      const pong = nextMessage(socket)
+      socket.send('ping')
+      expect(await pong).toBe('pong')
+    }
+
+    const closed = closedWith(socket)
+    socket.send('ping')
+    expect(await closed).toBe(1008)
+    await vi.waitFor(() => expect(attached!.registry.size()).toBe(0))
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('[ws] ingress rate exceeded user=user-bytes'))
+  })
+
   it('relays a yjs frame between two sockets that joined the same room', async () => {
-    await attachGateway({ authorizeRoomJoin: () => true })
+    await attachGateway({
+      authorizeRoomJoin: () => ({ authorized: true, expiresAt: Date.now() + 60_000 }),
+    })
     const tokenA = mintConnectionToken({ userUuid: 'user-A', sessionUuid: 'session-A' }, CONNECTION_SECRET, '60s')
     const tokenB = mintConnectionToken({ userUuid: 'user-B', sessionUuid: 'session-B' }, CONNECTION_SECRET, '60s')
     const socketA = connect(`?authToken=${tokenA}`)
@@ -474,7 +682,7 @@ describe('websocket connection lifecycle', () => {
   })
 
   it('denies a room join that the authorizer rejects', async () => {
-    await attachGateway({ authorizeRoomJoin: () => false })
+    await attachGateway({ authorizeRoomJoin: () => ({ authorized: false }) })
     const token = mintConnectionToken({ userUuid: 'user-A', sessionUuid: 'session-A' }, CONNECTION_SECRET, '60s')
     const socket = connect(`?authToken=${token}`)
     await opened(socket)

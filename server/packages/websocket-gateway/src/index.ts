@@ -32,6 +32,10 @@ const config: GatewayConfig = {
   authJwtSecret: process.env.AUTH_JWT_SECRET ?? '',
   redisHost: REDIS_HOST,
   redisPort: REDIS_PORT,
+  maxConnectionsPerUser:
+    process.env.WEBSOCKET_MAX_CONNECTIONS_PER_USER === undefined
+      ? undefined
+      : Number(process.env.WEBSOCKET_MAX_CONNECTIONS_PER_USER),
   sqs: {
     queueUrl: process.env.SQS_QUEUE_URL,
     endpoint: process.env.SQS_ENDPOINT,

@@ -57,11 +57,23 @@ describe('default (production) room authorization is fail-closed', () => {
     const rooms = new RoomRegistry()
     const conn = fakeConn('user-a')
 
-    await handleRelayFrame(rooms, conn, { t: 'room-join', room: 'note-1', cap: capabilityFor('user-a', 'note-OTHER') }, authorize)
+    await handleRelayFrame(
+      rooms,
+      conn,
+      { t: 'room-join', room: 'note-1', cap: capabilityFor('user-a', 'note-OTHER') },
+      authorize,
+    )
     expect(rooms.members('note-1')).toHaveLength(0)
+    expect(conn.sent.filter((message) => message.includes('room-joined'))).toHaveLength(0)
 
-    await handleRelayFrame(rooms, conn, { t: 'room-join', room: 'note-1', cap: capabilityFor('attacker', 'note-1') }, authorize)
+    await handleRelayFrame(
+      rooms,
+      conn,
+      { t: 'room-join', room: 'note-1', cap: capabilityFor('attacker', 'note-1') },
+      authorize,
+    )
     expect(rooms.members('note-1')).toHaveLength(0)
+    expect(conn.sent.filter((message) => message.includes('room-joined'))).toHaveLength(0)
   })
 
   it('ALLOWS a join with a valid capability and relays to that member', async () => {
@@ -69,7 +81,12 @@ describe('default (production) room authorization is fail-closed', () => {
     const a = fakeConn('user-a')
     const b = fakeConn('user-b')
 
-    await handleRelayFrame(rooms, a, { t: 'room-join', room: 'note-1', cap: capabilityFor('user-a', 'note-1') }, authorize)
+    await handleRelayFrame(
+      rooms,
+      a,
+      { t: 'room-join', room: 'note-1', cap: capabilityFor('user-a', 'note-1') },
+      authorize,
+    )
     const reached = await handleRelayFrame(
       rooms,
       b,
@@ -80,6 +97,34 @@ describe('default (production) room authorization is fail-closed', () => {
     // B's join asks the existing member (A) to re-sync.
     expect(reached).toBe(1)
     expect(rooms.members('note-1')).toHaveLength(2)
+    expect(b.sent).toContain(JSON.stringify({ t: 'room-joined', room: 'note-1' }))
     expect(a.sent).toContain(JSON.stringify({ t: 'room-sync', room: 'note-1' }))
+  })
+
+  it('evicts a joined member when its production JWT capability expires', async () => {
+    let now = Date.now()
+    const rooms = new RoomRegistry(() => now)
+    const conn = fakeConn('user-a')
+    const capability = capabilityFor('user-a', 'note-1')
+    const decoded = jwt.decode(capability) as { exp: number }
+
+    await handleRelayFrame(
+      rooms,
+      conn,
+      { t: 'room-join', room: 'note-1', cap: capability, requestId: 'join-request' },
+      authorize,
+    )
+    expect(rooms.isMember('note-1', conn)).toBe(true)
+
+    now = decoded.exp * 1_000 + 1
+    const reached = await handleRelayFrame(rooms, conn, {
+      t: 'comment',
+      room: 'note-1',
+      payload: 'expired-ciphertext',
+    })
+
+    expect(reached).toBe(0)
+    expect(rooms.isMember('note-1', conn)).toBe(false)
+    expect(conn.sent).toContain(JSON.stringify({ t: 'room-denied', room: 'note-1', requestId: 'join-request' }))
   })
 })

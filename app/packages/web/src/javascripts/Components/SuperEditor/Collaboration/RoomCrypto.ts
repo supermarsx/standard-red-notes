@@ -2,9 +2,9 @@
 //
 // These primitives provide end-to-end encryption only when the caller supplies
 // a non-extractable AES-256-GCM key derived from client-only key material. The
-// product-level collaboration gate remains closed until such a key is wired.
-// AES-GCM uses a random 96-bit IV per message; payload is
-// base64(iv ‖ ciphertext).
+// live product path derives that key per note for signed-in write/admin editors
+// in an unlocked shared vault and otherwise keeps ordinary encrypted sync.
+// AES-GCM uses a random 96-bit IV per message; payload is base64(iv ‖ ciphertext).
 
 const IV_BYTES = 12
 const INVALID_ROOM_KEY =

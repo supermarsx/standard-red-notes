@@ -4,7 +4,9 @@ import type { CollabChannel, CollabFrame } from './CollabChannel'
 /**
  * Backs a CollabChannel with the app's existing authenticated gateway socket
  * (WebSocketsService). Reuses the single live connection rather than opening a
- * second socket per note.
+ * second socket per note. Editor and comment consumers carry stable request IDs;
+ * the gateway treats those as logical leases on one physical socket membership,
+ * so one consumer can leave or renew without invalidating the other.
  */
 export function createGatewayCollabChannel(application: WebApplication): CollabChannel {
   return {

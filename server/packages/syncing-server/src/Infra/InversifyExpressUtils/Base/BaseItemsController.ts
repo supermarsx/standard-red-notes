@@ -53,8 +53,9 @@ export class BaseItemsController extends BaseHttpController {
    * Standard Red Notes: answer "may the authenticated user collaborate on this
    * note over the realtime relay?" Used by the api-gateway to decide whether to
    * mint a collaboration-room capability. Reuses AuthorizeCollaborationAccess
-   * (owner OR shared-vault member). FAILS CLOSED: any missing dependency, invalid
-   * input, use-case failure or thrown error resolves to `{ authorized: false }`.
+   * (write-capable owner or shared-vault editor). FAILS CLOSED: any missing
+   * dependency, invalid input, read-only session, use-case failure or thrown
+   * error resolves to `{ authorized: false }`.
    */
   async authorizeCollaboration(request: Request, response: Response): Promise<results.JsonResult> {
     const locals = response.locals as ResponseLocals
@@ -72,6 +73,7 @@ export class BaseItemsController extends BaseHttpController {
       const result = await this.authorizeCollaborationAccess.execute({
         userUuid: locals.user.uuid,
         itemUuid,
+        readOnlyAccess: locals.readOnlyAccess === true,
       })
 
       if (result.isFailed()) {

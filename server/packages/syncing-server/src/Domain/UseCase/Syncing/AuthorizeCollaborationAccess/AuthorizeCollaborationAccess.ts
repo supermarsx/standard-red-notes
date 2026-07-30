@@ -1,4 +1,4 @@
-import { Result, UseCaseInterface, Uuid } from '@standardnotes/domain-core'
+import { Result, SharedVaultUserPermission, UseCaseInterface, Uuid } from '@standardnotes/domain-core'
 
 import { ItemRepositoryInterface } from '../../../Item/ItemRepositoryInterface'
 import { SharedVaultUserRepositoryInterface } from '../../../SharedVault/User/SharedVaultUserRepositoryInterface'
@@ -8,12 +8,14 @@ import { AuthorizeCollaborationAccessDTO } from './AuthorizeCollaborationAccessD
  * Standard Red Notes: decide whether `userUuid` may collaborate on the note
  * (item) `itemUuid` over the realtime gateway relay. This is the SINGLE source
  * of truth the collaboration-room capability is minted from, and it reuses the
- * exact same access rules the sync layer enforces:
+ * exact same write-access rules the sync layer enforces:
  *
- *   - the note's OWNER (item.user_uuid === userUuid) may always access it; OR
- *   - if the note is associated with a shared vault, the user must be a MEMBER
- *     of that shared vault (same intersection GetItems performs between the
- *     note's shared_vault_uuid and the user's vault memberships).
+ *   - read-only sessions and read-scoped MCP sessions are denied;
+ *   - the OWNER of a personal note may access it; OR
+ *   - if the note is associated with a shared vault, every user (including the
+ *     item creator) must currently have WRITE or ADMIN permission for that
+ *     vault. A creator later downgraded to READ must not bypass the live-write
+ *     policy through item ownership.
  *
  * Returns Result.ok(true) only when access is proven; Result.ok(false) for a
  * definitively-not-authorized case (item missing / not a member). Any thrown
@@ -26,6 +28,10 @@ export class AuthorizeCollaborationAccess implements UseCaseInterface<boolean> {
   ) {}
 
   async execute(dto: AuthorizeCollaborationAccessDTO): Promise<Result<boolean>> {
+    if (dto.readOnlyAccess) {
+      return Result.ok(false)
+    }
+
     const userUuidOrError = Uuid.create(dto.userUuid)
     if (userUuidOrError.isFailed()) {
       return Result.fail(`User uuid is invalid: ${userUuidOrError.getError()}`)
@@ -45,23 +51,29 @@ export class AuthorizeCollaborationAccess implements UseCaseInterface<boolean> {
       return Result.ok(false)
     }
 
-    // Owner always has access.
-    if (item.props.userUuid.equals(userUuid)) {
-      return Result.ok(true)
-    }
-
-    // Otherwise the note must live in a shared vault the user is a member of.
     const sharedVaultUuid = item.sharedVaultUuid
     if (sharedVaultUuid === null) {
-      // A non-shared note owned by someone else: deny.
-      return Result.ok(false)
+      // Personal notes are accessible only to their owner. The read-only
+      // session restriction was applied before the item lookup.
+      return Result.ok(item.props.userUuid.equals(userUuid))
     }
 
+    // Shared-vault writes always follow the user's current vault permission,
+    // even if this account originally created the item.
     const membership = await this.sharedVaultUserRepository.findByUserUuidAndSharedVaultUuid({
       userUuid,
       sharedVaultUuid,
     })
 
-    return Result.ok(membership !== null)
+    if (membership === null) {
+      return Result.ok(false)
+    }
+
+    const permission = membership.props.permission.value
+
+    return Result.ok(
+      permission === SharedVaultUserPermission.PERMISSIONS.Write ||
+        permission === SharedVaultUserPermission.PERMISSIONS.Admin,
+    )
   }
 }

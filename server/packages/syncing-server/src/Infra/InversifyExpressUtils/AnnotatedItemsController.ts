@@ -74,9 +74,9 @@ export class AnnotatedItemsController extends BaseItemsController {
     return super.getSingleItem(request, response)
   }
 
-  // Standard Red Notes: realtime-collaboration access check (owner OR shared-vault
-  // member). Authenticated by Sync_AuthMiddleware (the user's cross-service token),
-  // consumed by the api-gateway to mint a collaboration-room capability.
+  // Standard Red Notes: realtime-collaboration access check (write-capable owner
+  // or shared-vault editor). Authenticated by Sync_AuthMiddleware (the user's
+  // cross-service token), consumed by the api-gateway to mint a room capability.
   @httpPost('/collaboration-authorization')
   override async authorizeCollaboration(request: Request, response: Response): Promise<results.JsonResult> {
     return super.authorizeCollaboration(request, response)

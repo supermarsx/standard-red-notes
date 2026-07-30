@@ -1,10 +1,16 @@
 /**
  * @jest-environment node
  */
+import { webcrypto } from 'node:crypto'
 import * as Y from 'yjs'
 import { EncryptedYjsProvider } from './EncryptedYjsProvider'
 import { createRoomCipher, RoomCipher } from './RoomCrypto'
 import type { CollabChannel, CollabFrame } from './CollabChannel'
+
+Object.defineProperty(globalThis, 'crypto', {
+  configurable: true,
+  value: webcrypto,
+})
 
 /** Fast identity-equivalent transport used only to isolate provider behavior. */
 const createTestTransportCipher = (): RoomCipher => ({
@@ -44,6 +50,7 @@ class LoopbackHub {
       const set = this.rooms.get(frame.room) ?? new Set<symbol>()
       set.add(from)
       this.rooms.set(frame.room, set)
+      this.handlers.get(from)?.({ t: 'room-joined', room: frame.room, requestId: frame.requestId })
       // Ask existing members to re-sync (gateway behaviour).
       for (const member of set) {
         if (member !== from) this.handlers.get(member)?.({ t: 'room-sync', room: frame.room })
@@ -70,6 +77,211 @@ async function settle(...providers: EncryptedYjsProvider[]): Promise<void> {
 }
 
 describe('EncryptedYjsProvider convergence', () => {
+  it('waits for its exact accepted join, then resends edits made while authorization was pending', async () => {
+    let resolveAuthorization!: (capability: string) => void
+    const authorization = new Promise<string>((resolve) => {
+      resolveAuthorization = resolve
+    })
+    const sent: CollabFrame[] = []
+    let inbound: ((frame: CollabFrame) => void) | undefined
+    const channel: CollabChannel = {
+      isConnected: () => true,
+      authorize: () => authorization,
+      subscribe: (handler) => {
+        inbound = handler
+        return () => {
+          inbound = undefined
+        }
+      },
+      send: (frame) => sent.push(frame),
+    }
+    const doc = new Y.Doc()
+    const provider = new EncryptedYjsProvider(doc, 'delayed-room', channel, createTestTransportCipher())
+    const sync = jest.fn()
+    provider.on('sync', sync as never)
+    provider.connect()
+
+    doc.getText('content').insert(0, 'typed before join')
+    await provider.flush()
+    expect(sent.filter((frame) => frame.t === 'yjs')).toHaveLength(0)
+    expect(sync).not.toHaveBeenCalledWith(true)
+
+    resolveAuthorization('exact-note-capability')
+    await Promise.resolve()
+    await Promise.resolve()
+    const join = sent.find((frame): frame is Extract<CollabFrame, { t: 'room-join' }> => frame.t === 'room-join')
+    expect(join?.cap).toBe('exact-note-capability')
+
+    inbound?.({ t: 'room-joined', room: 'delayed-room', requestId: 'wrong-request' })
+    await provider.flush()
+    expect(provider.isRoomJoined()).toBe(false)
+    expect(sent.filter((frame) => frame.t === 'yjs')).toHaveLength(0)
+
+    inbound?.({ t: 'room-joined', room: 'delayed-room', requestId: join?.requestId })
+    await provider.flush()
+    await Promise.resolve()
+
+    expect(provider.isRoomJoined()).toBe(true)
+    expect(sync).toHaveBeenCalledWith(true)
+    const stateFrame = sent.find((frame): frame is Extract<CollabFrame, { t: 'yjs' }> => frame.t === 'yjs')
+    const recovered = new Y.Doc()
+    Y.applyUpdate(recovered, new Uint8Array(Buffer.from(stateFrame!.payload, 'base64')))
+    expect(recovered.getText('content').toString()).toBe('typed before join')
+    provider.disconnect()
+  })
+
+  it('stays fail-closed when the exact join request is denied', async () => {
+    const sent: CollabFrame[] = []
+    let inbound: ((frame: CollabFrame) => void) | undefined
+    const channel: CollabChannel = {
+      isConnected: () => true,
+      authorize: async () => 'capability',
+      subscribe: (handler) => {
+        inbound = handler
+        return () => undefined
+      },
+      send: (frame) => sent.push(frame),
+    }
+    const doc = new Y.Doc()
+    const provider = new EncryptedYjsProvider(doc, 'denied-room', channel, createTestTransportCipher())
+    provider.connect()
+    await Promise.resolve()
+    await Promise.resolve()
+    const join = sent.find((frame): frame is Extract<CollabFrame, { t: 'room-join' }> => frame.t === 'room-join')
+
+    inbound?.({ t: 'room-denied', room: 'denied-room', requestId: join?.requestId })
+    doc.getText('content').insert(0, 'must remain local')
+    await provider.flush()
+
+    expect(provider.isRoomJoined()).toBe(false)
+    expect(sent.filter((frame) => frame.t === 'yjs')).toHaveLength(0)
+    provider.disconnect()
+  })
+
+  it('reauthorizes with the same logical lease after an accepted membership expires', async () => {
+    const sent: CollabFrame[] = []
+    let inbound: ((frame: CollabFrame) => void) | undefined
+    const authorize = jest.fn().mockResolvedValue('renewed-capability')
+    const channel: CollabChannel = {
+      isConnected: () => true,
+      authorize,
+      subscribe: (handler) => {
+        inbound = handler
+        return () => undefined
+      },
+      send: (frame) => sent.push(frame),
+    }
+    const doc = new Y.Doc()
+    const provider = new EncryptedYjsProvider(
+      doc,
+      'expiring-room',
+      channel,
+      createTestTransportCipher(),
+      'initial-capability',
+    )
+    provider.connect()
+    const firstJoin = sent[0] as Extract<CollabFrame, { t: 'room-join' }>
+    inbound?.({ t: 'room-joined', room: 'expiring-room', requestId: firstJoin.requestId })
+    await provider.flush()
+
+    inbound?.({ t: 'room-denied', room: 'expiring-room', requestId: firstJoin.requestId })
+    await Promise.resolve()
+    await Promise.resolve()
+    const joins = sent.filter((frame): frame is Extract<CollabFrame, { t: 'room-join' }> => frame.t === 'room-join')
+
+    expect(authorize).toHaveBeenCalledWith('expiring-room')
+    expect(joins).toHaveLength(2)
+    expect(joins[1]).toMatchObject({
+      cap: 'renewed-capability',
+      requestId: firstJoin.requestId,
+    })
+    expect(provider.isRoomJoined()).toBe(false)
+
+    doc.getText('content').insert(0, 'edited during renewal')
+    await provider.flush()
+    expect(sent.filter((frame) => frame.t === 'yjs')).toHaveLength(1)
+    inbound?.({ t: 'room-joined', room: 'expiring-room', requestId: firstJoin.requestId })
+    await provider.flush()
+    expect(provider.isRoomJoined()).toBe(true)
+    expect(sent.filter((frame) => frame.t === 'yjs')).toHaveLength(2)
+    provider.disconnect()
+  })
+
+  it('fails closed without sticking or rejecting when a room-join send throws', async () => {
+    const authorize = jest.fn().mockResolvedValue('renewed-capability')
+    const channel: CollabChannel = {
+      isConnected: () => true,
+      authorize,
+      subscribe: () => jest.fn(),
+      send: (frame) => {
+        if (frame.t === 'room-join') {
+          throw new Error('socket closed')
+        }
+      },
+    }
+    const provider = new EncryptedYjsProvider(
+      new Y.Doc(),
+      'throwing-join-room',
+      channel,
+      createTestTransportCipher(),
+      'initial-capability',
+    )
+    const retry = provider as unknown as { joinWithCapability(): Promise<void> }
+
+    expect(() => provider.connect()).not.toThrow()
+    await Promise.resolve()
+    await expect(retry.joinWithCapability()).resolves.toBeUndefined()
+    await expect(retry.joinWithCapability()).resolves.toBeUndefined()
+
+    expect(authorize).toHaveBeenCalledTimes(2)
+    expect(provider.isRoomJoined()).toBe(false)
+    provider.disconnect()
+  })
+
+  it('completes local teardown when offline leave and unsubscribe both throw', async () => {
+    const sent: CollabFrame[] = []
+    let inbound: ((frame: CollabFrame) => void) | undefined
+    const unsubscribe = jest.fn(() => {
+      throw new Error('unsubscribe failed')
+    })
+    const channel: CollabChannel = {
+      isConnected: () => true,
+      authorize: async () => 'capability',
+      subscribe: (handler) => {
+        inbound = handler
+        return unsubscribe
+      },
+      send: (frame) => {
+        sent.push(frame)
+        if (frame.t === 'room-leave') {
+          throw new Error('socket closed')
+        }
+      },
+    }
+    const doc = new Y.Doc()
+    const provider = new EncryptedYjsProvider(
+      doc,
+      'offline-leave-room',
+      channel,
+      createTestTransportCipher(),
+      'initial-capability',
+    )
+    provider.connect()
+    const join = sent[0] as Extract<CollabFrame, { t: 'room-join' }>
+    inbound?.({ t: 'room-joined', room: 'offline-leave-room', requestId: join.requestId })
+    await provider.flush()
+
+    expect(provider.isRoomJoined()).toBe(true)
+    expect(() => provider.disconnect()).not.toThrow()
+    expect(unsubscribe).toHaveBeenCalledTimes(1)
+    expect(provider.isRoomJoined()).toBe(false)
+
+    const sentAfterDisconnect = sent.length
+    doc.getText('content').insert(0, 'local only')
+    await provider.flush()
+    expect(sent).toHaveLength(sentAfterDisconnect)
+  })
+
   it('converges two docs editing the same room (test transport cipher)', async () => {
     const hub = new LoopbackHub()
     const room = 'note-1'

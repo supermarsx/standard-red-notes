@@ -1,13 +1,13 @@
 import { FunctionComponent, useEffect, useMemo, useState } from 'react'
-import { DecryptedItemInterface, SharedVaultUserServerHash } from '@standardnotes/snjs'
+import { SharedVaultUserServerHash, SNNote } from '@standardnotes/snjs'
 import { useApplication } from '@/Components/ApplicationProvider'
 import { useItemVaultInfo } from '@/Hooks/useItemVaultInfo'
 import { collaboratorColor, collaboratorInitials } from '../SuperEditor/Collaboration/collaboratorColor'
 import { PresenceRegistry, PresentPeer } from '../SuperEditor/Collaboration/PresenceRegistry'
-import { getSuperCollaborationAvailability } from '../SuperEditor/Collaboration/CollaborationAvailability'
+import { useCollaborationRoomAccess } from '../SuperEditor/Collaboration/useCollaborationRoomAccess'
 
 type Props = {
-  item: DecryptedItemInterface
+  item: SNNote
 }
 
 type DisplayMember = {
@@ -37,8 +37,14 @@ const CollaboratorsPresencePanel: FunctionComponent<Props> = ({ item }) => {
   const [members, setMembers] = useState<SharedVaultUserServerHash[]>([])
   const [presentPeers, setPresentPeers] = useState<PresentPeer[]>([])
 
-  const collaborationAvailability = getSuperCollaborationAvailability()
-  const liveEnabled = collaborationAvailability.available
+  const collaborationAccess = useCollaborationRoomAccess(application, item)
+  const liveEnabled = collaborationAccess.status === 'ready'
+  const collaborationStatus =
+    collaborationAccess.status === 'disabled'
+      ? collaborationAccess.reason
+      : collaborationAccess.status === 'preparing'
+        ? 'Preparing end-to-end encrypted live collaboration.'
+        : undefined
   const room = item.uuid
 
   // Load the shared-vault member list (server-backed, cached by the service).
@@ -117,16 +123,16 @@ const CollaboratorsPresencePanel: FunctionComponent<Props> = ({ item }) => {
         {liveEnabled ? (
           <div className="text-passive-1 text-xs">{onlineCount} online</div>
         ) : (
-          <div
-            className="text-passive-2 text-xs"
-            title={collaborationAvailability.available ? undefined : collaborationAvailability.reason}
-          >
-            collaboration unavailable
+          <div className="text-passive-2 text-xs" title={collaborationStatus}>
+            live collaboration paused
           </div>
         )}
       </div>
-      {!collaborationAvailability.available && (
-        <div className="text-passive-2 mb-2 text-xs">{collaborationAvailability.reason}</div>
+      {!liveEnabled && collaborationStatus && <div className="text-passive-2 mb-2 text-xs">{collaborationStatus}</div>}
+      {liveEnabled && (
+        <div className="text-passive-2 mb-2 text-xs">
+          End-to-end encrypted live editing and presence are active for collaborators with edit permission.
+        </div>
       )}
       <div className="max-h-44 space-y-1.5 overflow-y-auto overscroll-contain md:max-h-none md:overflow-visible">
         {displayMembers.map((member) => {

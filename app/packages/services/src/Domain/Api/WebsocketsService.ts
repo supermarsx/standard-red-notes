@@ -16,13 +16,20 @@ import { Result } from '@standardnotes/domain-core'
 export type CollaborationFrame =
   // `cap` is the short-lived signed capability proving this user may join the
   // room; obtained via authorizeCollaborationRoom() and required by the gateway.
-  | { t: 'room-join'; room: string; cap?: string }
-  | { t: 'room-leave'; room: string }
+  | {
+      t: 'room-join'
+      room: string
+      cap?: string
+      requestId?: string
+      role?: 'editor' | 'comment'
+    }
+  | { t: 'room-leave'; room: string; requestId?: string }
+  | { t: 'room-joined'; room: string; requestId?: string; bootstrap?: boolean }
   | { t: 'room-sync'; room: string }
   | { t: 'yjs'; room: string; payload: string }
   | { t: 'awareness'; room: string; payload: string }
   // Gateway -> client: the join was refused (no/invalid capability or no access).
-  | { t: 'room-denied'; room: string }
+  | { t: 'room-denied'; room: string; requestId?: string }
   // Standard Red Notes: an end-to-end-encrypted note-comment event. `payload` is
   // a base64(iv ‖ ciphertext) blob encrypted with the same per-room key as the
   // yjs frames, so the gateway never sees comment text. Used to push new/edited
@@ -32,6 +39,7 @@ export type CollaborationFrame =
 const COLLABORATION_FRAME_TYPES = new Set([
   'room-join',
   'room-leave',
+  'room-joined',
   'room-sync',
   'yjs',
   'awareness',
@@ -387,6 +395,7 @@ export class WebSocketsService extends AbstractService<
     // The socket didn't survive: cancel the pending "stable" reset so a flapping
     // server can't reset our backoff.
     this.clearStableConnectionTimeout()
+    void this.notifyEvent(WebSocketsServiceEvent.WebSocketDidClose)
 
     const closedByApplication = event.code === this.CLOSE_CONNECTION_CODE
     if (closedByApplication) {

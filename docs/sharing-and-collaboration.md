@@ -76,9 +76,29 @@ Revocation controls future access; it cannot retract knowledge.
 
 ## Realtime collaboration
 
-Realtime notifications prompt other connected clients to sync changes quickly.
-The editor also includes collaborative cursors/comments infrastructure.
-WebSocket delivery is not the durable record: accepted sync state is.
+Shared-vault members with current `write` or `admin` permission—including the
+note creator—can join the end-to-end encrypted live relay for co-editing,
+presence, and comments. The gateway sees room membership and message
+timing/size, but it relays only ciphertext and cannot read note updates or
+comments.
+
+Members with `read` permission, read-only account sessions, and read-scoped MCP
+sessions cannot mint a live-room capability. They retain ordinary encrypted
+sync and can view content their vault permission allows; they simply do not
+receive or inject live editor, presence, or comment frames.
+
+Room capabilities expire after 300 seconds by default and deployments may set
+`COLLABORATION_CAPABILITY_TTL_SECONDS` to a whole number from 30 through 900.
+The gateway refuses invalid values. A removed or downgraded member cannot renew,
+and the short expiry bounds how long an already-issued capability can be replayed.
+Each account may hold 16 simultaneous realtime sockets by default; operators may
+set `WEBSOCKET_MAX_CONNECTIONS_PER_USER` to another positive whole number. This
+allows normal tabs and devices while bounding per-account connection fan-out.
+
+WebSocket delivery is best-effort, not the durable record. Local edits and
+comments persist through ordinary encrypted item sync, so a gateway outage
+falls back to normal save/sync behavior and reconnecting editors can converge
+again.
 
 If collaborators see stale content:
 

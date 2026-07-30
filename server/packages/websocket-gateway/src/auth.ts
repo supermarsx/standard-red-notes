@@ -101,43 +101,63 @@ export function mintConnectionToken(
  * wrong user, wrong room, malformed payload, thrown error) returns false. There
  * is NO branch that returns true on uncertainty — this is the fail-closed core.
  */
+export interface VerifiedRoomCapability {
+  expiresAt: number
+}
+
+/**
+ * Verify a room capability and return the exact epoch-millisecond expiry that
+ * the room registry must enforce for the lifetime of the membership.
+ */
+export function verifyRoomCapabilityWithExpiry(
+  capability: string | undefined,
+  secret: string,
+  expectedUserUuid: string,
+  expectedRoom: string,
+): VerifiedRoomCapability | undefined {
+  if (typeof capability !== 'string' || capability.length === 0) {
+    return undefined
+  }
+  if (typeof secret !== 'string' || secret.length === 0) {
+    // No secret configured => cannot verify => deny.
+    return undefined
+  }
+  if (typeof expectedUserUuid !== 'string' || expectedUserUuid.length === 0) {
+    return undefined
+  }
+  if (typeof expectedRoom !== 'string' || expectedRoom.length === 0) {
+    return undefined
+  }
+
+  try {
+    const decoded = jwt.verify(capability, secret, { algorithms: ['HS256'], clockTolerance: 10 })
+    if (typeof decoded !== 'object' || decoded === null) {
+      return undefined
+    }
+    const payload = decoded as Record<string, unknown>
+    if (payload.purpose !== 'collab-room') {
+      return undefined
+    }
+    if (payload.userUuid !== expectedUserUuid) {
+      return undefined
+    }
+    if (payload.room !== expectedRoom) {
+      return undefined
+    }
+    if (typeof payload.exp !== 'number' || !Number.isSafeInteger(payload.exp) || payload.exp <= 0) {
+      return undefined
+    }
+    return { expiresAt: payload.exp * 1_000 }
+  } catch {
+    return undefined
+  }
+}
+
 export function verifyRoomCapability(
   capability: string | undefined,
   secret: string,
   expectedUserUuid: string,
   expectedRoom: string,
 ): boolean {
-  if (typeof capability !== 'string' || capability.length === 0) {
-    return false
-  }
-  if (typeof secret !== 'string' || secret.length === 0) {
-    // No secret configured => cannot verify => deny.
-    return false
-  }
-  if (typeof expectedUserUuid !== 'string' || expectedUserUuid.length === 0) {
-    return false
-  }
-  if (typeof expectedRoom !== 'string' || expectedRoom.length === 0) {
-    return false
-  }
-
-  try {
-    const decoded = jwt.verify(capability, secret, { algorithms: ['HS256'], clockTolerance: 10 })
-    if (typeof decoded !== 'object' || decoded === null) {
-      return false
-    }
-    const payload = decoded as Record<string, unknown>
-    if (payload.purpose !== 'collab-room') {
-      return false
-    }
-    if (payload.userUuid !== expectedUserUuid) {
-      return false
-    }
-    if (payload.room !== expectedRoom) {
-      return false
-    }
-    return true
-  } catch {
-    return false
-  }
+  return verifyRoomCapabilityWithExpiry(capability, secret, expectedUserUuid, expectedRoom) !== undefined
 }
