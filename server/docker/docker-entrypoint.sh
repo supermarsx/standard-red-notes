@@ -264,6 +264,17 @@ export AUTH_SERVER_SYNCING_SERVER_URL=http://localhost:$SYNCING_SERVER_PORT
 if [ -z "$AUTH_SERVER_VALET_TOKEN_TTL" ]; then
   export AUTH_SERVER_VALET_TOKEN_TTL=7200
 fi
+if [ -z "$AUTH_SERVER_FILE_UPLOAD_PATH" ]; then
+  export AUTH_SERVER_FILE_UPLOAD_PATH="/opt/shared/uploads"
+fi
+if [ -z "$AUTH_SERVER_EMAIL_ATTACHMENT_MAX_BYTE_SIZE" ]; then
+  export AUTH_SERVER_EMAIL_ATTACHMENT_MAX_BYTE_SIZE=10485760
+fi
+
+# Outbound email and optional S3 backup credentials support Docker secrets.
+file_env 'AUTH_SERVER_SMTP_PASS'
+file_env 'AUTH_SERVER_S3_ACCESS_KEY_ID'
+file_env 'AUTH_SERVER_S3_SECRET_ACCESS_KEY'
 
 # SNS/SQS emulator setup (floci — the compose stack's LocalStack replacement)
 if [ -z "$AUTH_SERVER_SNS_TOPIC_ARN" ]; then
@@ -375,7 +386,11 @@ if [ -z "$SYNCING_SERVER_REVISIONS_FREQUENCY" ]; then
   export SYNCING_SERVER_REVISIONS_FREQUENCY=300
 fi
 
-export SYNCING_SERVER_FILE_UPLOAD_PATH="/opt/shared/uploads"
+if [ -z "$SYNCING_SERVER_FILE_UPLOAD_PATH" ]; then
+  export SYNCING_SERVER_FILE_UPLOAD_PATH="/opt/shared/uploads"
+fi
+file_env 'SYNCING_SERVER_S3_ACCESS_KEY_ID'
+file_env 'SYNCING_SERVER_S3_SECRET_ACCESS_KEY'
 
 printenv | grep SYNCING_SERVER_ | sed 's/SYNCING_SERVER_//g' > /opt/server/packages/syncing-server/.env
 
