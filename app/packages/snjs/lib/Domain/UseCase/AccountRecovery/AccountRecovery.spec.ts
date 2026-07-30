@@ -51,7 +51,31 @@ const makeKeyParams = () => ({
   getPortableValue: () => ({ identifier: 'user@example.com', pw_nonce: 'nonce', version: '004' }),
 })
 
-describe('AccountRecovery (Standard Red Notes opt-in escrow)', () => {
+const seedEscrow = (crypto: PureCryptoInterface, store: Record<string, string | undefined>) => {
+  const recoveryCode = 'offline-recovery-code'
+  const salt = 'escrow-salt'
+  const nonce = 'escrow-nonce'
+  const wrappingKey = crypto.argon2(recoveryCode, salt, 5, 67108864, 32)
+  const ciphertext = crypto.xchacha20Encrypt(
+    JSON.stringify({
+      masterKey: 'the-master-key',
+      keyParams: makeKeyParams().getPortableValue(),
+    }),
+    nonce,
+    wrappingKey,
+  )
+
+  store.escrow = JSON.stringify({
+    version: 1,
+    identifier: 'user@example.com',
+    salt,
+    nonce,
+    ciphertext,
+  })
+  return recoveryCode
+}
+
+describe('AccountRecovery incomplete escrow substrate', () => {
   let crypto: PureCryptoInterface
   let encryption: EncryptionProviderInterface
   let settings: SettingsClientInterface
@@ -88,36 +112,18 @@ describe('AccountRecovery (Standard Red Notes opt-in escrow)', () => {
   })
 
   describe('enable', () => {
-    it('requires the account password', async () => {
-      const result = await new EnableAccountRecovery(encryption, settings, crypto).execute({ password: '' })
-      expect(result.isFailed()).toBe(true)
-      expect(settings.updateAccountRecoveryEscrow).not.toHaveBeenCalled()
-    })
-
-    it('returns a recovery code and escrows only ciphertext (no plaintext master key)', async () => {
+    it('fails closed while the end-to-end recovery flow is incomplete', async () => {
       const result = await new EnableAccountRecovery(encryption, settings, crypto).execute({ password: 'pw' })
 
-      expect(result.isFailed()).toBe(false)
-      const recoveryCode = result.getValue()
-      expect(recoveryCode.length).toBeGreaterThan(0)
-
-      expect(settings.updateAccountRecoveryEscrow).toHaveBeenCalledTimes(1)
-      // The stored blob must NOT contain the plaintext master key.
-      expect(store.escrow).toBeDefined()
-      expect(store.escrow).not.toContain('the-master-key')
-    })
-
-    it('marks recovery as enabled afterwards', async () => {
-      await new EnableAccountRecovery(encryption, settings, crypto).execute({ password: 'pw' })
-      const status = await new GetAccountRecoveryStatus(settings).execute()
-      expect(status.getValue()).toBe(true)
+      expect(result.isFailed()).toBe(true)
+      expect(result.getError()).toMatch(/unavailable.*incomplete/i)
+      expect(settings.updateAccountRecoveryEscrow).not.toHaveBeenCalled()
     })
   })
 
   describe('recover (round-trip)', () => {
     it('recovers the master key with the correct recovery code', async () => {
-      const enableResult = await new EnableAccountRecovery(encryption, settings, crypto).execute({ password: 'pw' })
-      const recoveryCode = enableResult.getValue()
+      const recoveryCode = seedEscrow(crypto, store)
 
       const recovered = new RecoverAccount(crypto).decryptEscrow(store.escrow as string, recoveryCode)
       expect(recovered.isFailed()).toBe(false)
@@ -125,7 +131,7 @@ describe('AccountRecovery (Standard Red Notes opt-in escrow)', () => {
     })
 
     it('fails with an incorrect recovery code (server alone cannot decrypt)', async () => {
-      await new EnableAccountRecovery(encryption, settings, crypto).execute({ password: 'pw' })
+      seedEscrow(crypto, store)
 
       const recovered = new RecoverAccount(crypto).decryptEscrow(store.escrow as string, 'wrong-code')
       expect(recovered.isFailed()).toBe(true)
@@ -139,7 +145,7 @@ describe('AccountRecovery (Standard Red Notes opt-in escrow)', () => {
 
   describe('disable', () => {
     it('deletes the escrow and returns recovery to disabled', async () => {
-      await new EnableAccountRecovery(encryption, settings, crypto).execute({ password: 'pw' })
+      seedEscrow(crypto, store)
       expect((await new GetAccountRecoveryStatus(settings).execute()).getValue()).toBe(true)
 
       const disableResult = await new DisableAccountRecovery(settings).execute()
