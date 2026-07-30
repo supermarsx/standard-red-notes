@@ -2,6 +2,7 @@ import { Readable } from "node:stream";
 import type { IncomingMessage } from "node:http";
 import { describe, expect, test } from "vitest";
 import {
+  assertDistinctHttpCredentials,
   assertSafeHttpBinding,
   cleanupFailedInitialization,
   evictIdleSessions,
@@ -53,6 +54,30 @@ describe("HTTP MCP boundary", () => {
     expect(isBearerAuthorized("Bearer correct", "correct")).toBe(true);
     expect(isBearerAuthorized("Bearer correcT", "correct")).toBe(false);
     expect(isBearerAuthorized("Basic correct", "correct")).toBe(false);
+  });
+
+  test("requires separate bridge and account credentials", () => {
+    expect(() =>
+      assertDistinctHttpCredentials({
+        httpToken: "bridge-secret",
+        accountToken: "bridge-secret",
+        password: undefined,
+      }),
+    ).toThrow(/STANDARD_RED_NOTES_MCP_TOKEN/);
+    expect(() =>
+      assertDistinctHttpCredentials({
+        httpToken: "bridge-secret",
+        accountToken: undefined,
+        password: "bridge-secret",
+      }),
+    ).toThrow(/STANDARD_RED_NOTES_PASSWORD/);
+    expect(() =>
+      assertDistinctHttpCredentials({
+        httpToken: "bridge-secret",
+        accountToken: "scoped-account-secret",
+        password: "password-secret",
+      }),
+    ).not.toThrow();
   });
 
   test("accepts only a JSON-RPC initialize request for a new session", () => {

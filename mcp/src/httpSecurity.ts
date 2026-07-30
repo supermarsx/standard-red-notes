@@ -67,6 +67,21 @@ export function assertSafeHttpBinding(input: {
   }
 }
 
+export function assertDistinctHttpCredentials(input: {
+  httpToken: string;
+  accountToken: string | undefined;
+  password: string | undefined;
+}): void {
+  for (const [name, credential] of [
+    ["STANDARD_RED_NOTES_MCP_TOKEN", input.accountToken],
+    ["STANDARD_RED_NOTES_PASSWORD", input.password],
+  ] as const) {
+    if (credential && credential === input.httpToken) {
+      throw new Error(`MCP_HTTP_TOKEN must be distinct from ${name}`);
+    }
+  }
+}
+
 export function isBearerAuthorized(
   authorizationHeader: string | string[] | undefined,
   token: string | undefined,

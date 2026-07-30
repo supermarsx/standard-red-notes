@@ -21,6 +21,7 @@ import type { McpScope } from "./snjs/tokenAuth.js";
 import { rootsFromEnvironment } from "./security/filesystem.js";
 import {
   assertSafeHttpBinding,
+  assertDistinctHttpCredentials,
   cleanupFailedInitialization,
   evictIdleSessions,
   HttpInputError,
@@ -823,6 +824,11 @@ async function startHttp(): Promise<void> {
   if (!Number.isInteger(httpPort) || httpPort <= 0 || httpPort > 65535) {
     throw new Error(`invalid MCP_HTTP_PORT: ${process.env.MCP_HTTP_PORT}`);
   }
+  assertDistinctHttpCredentials({
+    httpToken,
+    accountToken: mcpToken,
+    password,
+  });
   assertSafeHttpBinding({
     host: httpHost,
     allowRemote: httpAllowRemote,

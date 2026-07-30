@@ -4,7 +4,10 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { redactDiagnosticMessage } from "../src/diagnostics.js";
-import { assertSafeHttpBinding } from "../src/httpSecurity.js";
+import {
+  assertDistinctHttpCredentials,
+  assertSafeHttpBinding,
+} from "../src/httpSecurity.js";
 
 const repositoryRoot = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -62,6 +65,13 @@ describe("MCP Compose deployment contract", () => {
         token: "x".repeat(32),
       }),
     ).not.toThrow();
+    expect(() =>
+      assertDistinctHttpCredentials({
+        httpToken: "same-secret",
+        accountToken: "same-secret",
+        password: undefined,
+      }),
+    ).toThrow(/must be distinct/);
   });
 
   it("passes scoped account auth, bounded HTTP settings, and confinement controls", () => {
@@ -136,15 +146,26 @@ describe("MCP deployment diagnostics", () => {
     ];
     const output = redactDiagnosticMessage(
       new Error(
-        `${secrets.join(" ")} Bearer header-secret ${"x".repeat(2_000)}`,
+        `${secrets.join(" ")} Bearer header-secret Authorization: Basic dXNlcjpwYXNz X-Api-Key: unknown-secret ${"x".repeat(2_000)}`,
       ),
       secrets,
     );
 
-    for (const secret of [...secrets, "header-secret"]) {
+    for (const secret of [
+      ...secrets,
+      "header-secret",
+      "dXNlcjpwYXNz",
+      "unknown-secret",
+    ]) {
       expect(output).not.toContain(secret);
     }
     expect(output).toContain("Bearer <redacted>");
     expect(output.length).toBeLessThanOrEqual(1_000);
+  });
+
+  it("does not over-redact ordinary authentication prose", () => {
+    const prose =
+      "Basic authentication is supported; bearer capacity is an unrelated phrase.";
+    expect(redactDiagnosticMessage(prose, [])).toBe(prose);
   });
 });
