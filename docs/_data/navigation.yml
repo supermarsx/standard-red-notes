@@ -176,6 +176,8 @@
       url: /API.html
     - title: OpenClaw assistant
       url: /openclaw.html
+    - title: CalDAV
+      url: /caldav.html
     - title: Automation and integrations
       url: /automation-and-integrations.html
 

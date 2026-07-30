@@ -67,6 +67,15 @@ export type CrossServiceTokenData = {
    */
   workflows_enabled?: boolean
   /**
+   * Standard Red Notes: per-user CalDAV gate, read from the auth settings store
+   * at token-mint time (SettingName.CaldavEnabled).
+   *
+   * OPT-IN (default-off), mirroring `workflows_enabled`: the field is EMITTED
+   * ONLY WHEN the setting is literally 'true'. Absent MUST be treated as
+   * disabled so older tokens fail closed at the API gateway.
+   */
+  caldav_enabled?: boolean
+  /**
    * Standard Red Notes: per-user SERVER-SIDE OCR gate, read from the auth
    * settings store at token-mint time (SettingName.OcrServerAllowed).
    *

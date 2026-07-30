@@ -9,21 +9,22 @@ import {
   isSafeRecordKey,
   SecureJsonFileStore,
 } from '../../Infra/SecureJsonFileStore'
+import { CaldavInputError } from './CaldavInputError'
 
 /**
  * Standard Red Notes: scoped, revocable CalDAV access tokens.
  *
- * These authenticate stock CalDAV clients (Apple Calendar, Thunderbird, DAVx5)
- * over HTTP Basic, INSTEAD of the account password. They mirror the MCP token
- * model: a high-entropy server-generated secret stored only as a salted hash,
- * with the plaintext returned to the caller exactly once at creation.
+ * These authenticate CalDAV clients with VTODO support over HTTP Basic,
+ * INSTEAD of the account password. They mirror the MCP token model: a
+ * high-entropy server-generated secret stored only as a salted hash, with the
+ * plaintext returned to the caller exactly once at creation.
  *
  * SCOPE: every token here is read-only calendar access for a single user. The
- * scope field is fixed to 'calendar-read' in this first slice; it exists so a
- * future write scope can be added without changing the token shape.
+ * scope field is fixed to 'calendar-read' and is enforced by the DAV router.
  *
  * Plaintext form: `<tokenUuid>.<secret>`. The uuid prefix selects the row to
- * verify so we never scan the whole table. Verification is constant-time.
+ * verify so we never scan the whole table. Matching secrets are compared in
+ * constant time.
  *
  * STORAGE: a single JSON file, like the published-calendar store, keeping the
  * feature self-contained inside api-gateway (which has no database). The shared
@@ -71,8 +72,16 @@ const SECRET_BYTES = 32
 const SALT_BYTES = 16
 const SCRYPT_KEYLEN = 64
 const MAX_TOKENS = 10_000
+const DEFAULT_MAX_TOKENS_PER_USER = 100
 const MAX_LABEL_LENGTH = 256
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const SECRET_PATTERN = /^[A-Za-z0-9_-]{43}$/
+
+export interface CaldavTokenStoreOptions {
+  clock?: () => number
+  deriveKey?: (secret: string, salt: string, keyLength: number) => Promise<Buffer>
+  maxTokensPerUser?: number
+}
 
 function isStoredToken(value: unknown, uuid: string): value is StoredToken {
   return (
@@ -101,31 +110,40 @@ function isStoreShape(value: unknown): value is StoreShape {
 
 export class CaldavTokenStore {
   private readonly store: SecureJsonFileStore<StoreShape>
+  private readonly clock: () => number
+  private readonly deriveKey: (secret: string, salt: string, keyLength: number) => Promise<Buffer>
+  private readonly maxTokensPerUser: number
 
-  constructor(filePath: string) {
+  constructor(filePath: string, options: CaldavTokenStoreOptions = {}) {
     this.store = new SecureJsonFileStore({
       filePath,
       validate: isStoreShape,
     })
+    this.clock = options.clock ?? Date.now
+    this.deriveKey = options.deriveKey ?? this.scrypt
+    this.maxTokensPerUser = options.maxTokensPerUser ?? DEFAULT_MAX_TOKENS_PER_USER
+    if (!Number.isSafeInteger(this.maxTokensPerUser) || this.maxTokensPerUser <= 0) {
+      throw new Error('maxTokensPerUser must be a positive integer.')
+    }
   }
 
   async create(userUuid: string, label: string): Promise<CreatedCaldavToken> {
     if (!isSafeRecordKey(userUuid)) {
-      throw new Error('A valid user identifier is required to create a CalDAV token.')
+      throw new CaldavInputError('A valid user identifier is required to create a CalDAV token.')
     }
     const trimmedLabel = (label ?? '').trim()
     if (trimmedLabel.length === 0) {
-      throw new Error('A label is required to create a CalDAV token.')
+      throw new CaldavInputError('A label is required to create a CalDAV token.')
     }
     if (!isBoundedString(trimmedLabel, 1, MAX_LABEL_LENGTH)) {
-      throw new Error(`A CalDAV token label may not exceed ${MAX_LABEL_LENGTH} characters.`)
+      throw new CaldavInputError(`A CalDAV token label may not exceed ${MAX_LABEL_LENGTH} characters.`)
     }
 
     const uuid = randomUUID()
     const secret = crypto.randomBytes(SECRET_BYTES).toString('base64url')
     const salt = crypto.randomBytes(SALT_BYTES).toString('hex')
-    const hash = this.deriveHash(secret, salt)
-    const createdAt = Date.now()
+    const hash = (await this.deriveKey(secret, salt, SCRYPT_KEYLEN)).toString('hex')
+    const createdAt = this.clock()
 
     const stored: StoredToken = {
       uuid,
@@ -139,6 +157,10 @@ export class CaldavTokenStore {
     }
 
     await this.mutate((data) => {
+      const tokensForUser = Object.values(data).filter((token) => token.userUuid === userUuid).length
+      if (tokensForUser >= this.maxTokensPerUser) {
+        throw new CaldavInputError(`A user may not have more than ${this.maxTokensPerUser} CalDAV tokens.`)
+      }
       data[uuid] = stored
     })
 
@@ -174,6 +196,23 @@ export class CaldavTokenStore {
     return removed
   }
 
+  /** Revoke every CalDAV token owned by a user in one durable transaction. */
+  async revokeAllForUser(userUuid: string): Promise<number> {
+    if (!isSafeRecordKey(userUuid)) {
+      return 0
+    }
+    let removed = 0
+    await this.mutate((data) => {
+      for (const [uuid, token] of Object.entries(data)) {
+        if (token.userUuid === userUuid) {
+          delete data[uuid]
+          removed += 1
+        }
+      }
+    })
+    return removed
+  }
+
   /**
    * Verify a plaintext `<uuid>.<secret>` token. Returns the token metadata on a
    * match, or null otherwise. Fails closed for any malformed/missing/mismatched
@@ -189,6 +228,9 @@ export class CaldavTokenStore {
     }
     const tokenUuid = plaintext.substring(0, separatorIndex)
     const secret = plaintext.substring(separatorIndex + 1)
+    if (!UUID_PATTERN.test(tokenUuid) || !SECRET_PATTERN.test(secret)) {
+      return null
+    }
 
     const data = await this.read()
     const token = data[tokenUuid]
@@ -196,29 +238,46 @@ export class CaldavTokenStore {
       return null
     }
 
-    const candidate = this.deriveHash(secret, token.salt)
+    // scrypt is intentionally asynchronous. The synchronous variant blocks the
+    // gateway event loop and turns a known token UUID into a CPU denial-of-service
+    // primitive even when every supplied secret is wrong.
+    const candidate = await this.deriveKey(secret, token.salt, SCRYPT_KEYLEN)
     const expected = Buffer.from(token.hash, 'hex')
-    const actual = Buffer.from(candidate, 'hex')
-    if (expected.length !== actual.length || !crypto.timingSafeEqual(expected, actual)) {
+    if (expected.length !== candidate.length || !crypto.timingSafeEqual(expected, candidate)) {
       return null
     }
 
-    // Best-effort; never let bookkeeping failure block auth.
-    try {
-      await this.mutate((store) => {
-        if (store[tokenUuid]) {
-          store[tokenUuid].lastUsedAt = Date.now()
-        }
-      })
-    } catch {
-      // ignored
-    }
-
-    return this.toMetadata(token)
+    // Linearize successful verification with revocation. The expensive hash is
+    // computed before taking the lock, then the exact row is rechecked inside the
+    // transaction. If revocation won the race, authentication fails closed.
+    return this.store.runExclusive(async (transaction) => {
+      const current = (await transaction.read()) ?? {}
+      const live = current[tokenUuid]
+      if (
+        !live ||
+        live.userUuid !== token.userUuid ||
+        live.salt !== token.salt ||
+        live.hash !== token.hash ||
+        live.scope !== 'calendar-read'
+      ) {
+        return null
+      }
+      live.lastUsedAt = this.clock()
+      await transaction.write(current)
+      return this.toMetadata(live)
+    })
   }
 
-  private deriveHash(secret: string, salt: string): string {
-    return crypto.scryptSync(secret, salt, SCRYPT_KEYLEN).toString('hex')
+  private scrypt(secret: string, salt: string, keyLength: number): Promise<Buffer> {
+    return new Promise((resolve, reject) => {
+      crypto.scrypt(secret, salt, keyLength, (error, derivedKey) => {
+        if (error) {
+          reject(error)
+          return
+        }
+        resolve(derivedKey)
+      })
+    })
   }
 
   private toMetadata(token: StoredToken): CaldavTokenMetadata {

@@ -118,6 +118,24 @@ describe('ICalendarSerializer', () => {
       const out = serializeVTodo({ ...base, summary: 'a, b; c\\ d' })
       expect(out).toContain('SUMMARY:a\\, b\\; c\\\\ d')
     })
+
+    it('escapes UID as an iCalendar TEXT value so punctuation cannot corrupt the component', () => {
+      const out = serializeVTodo({ ...base, uid: 'a,b;c\\d' })
+      expect(out).toContain('UID:a\\,b\\;c\\\\d')
+    })
+
+    it('preserves date-only DTSTART and DUE values', () => {
+      const out = serializeVTodo({ ...base, start: '2026-06-25', due: '2026-06-30' })
+      expect(out).toContain('DTSTART;VALUE=DATE:20260625')
+      expect(out).toContain('DUE;VALUE=DATE:20260630')
+    })
+
+    it('uses a deterministic timestamp for legacy rows without stored timestamps', () => {
+      expect(serializeVTodo({ uid: 'legacy', summary: 'Legacy' })).toBe(
+        serializeVTodo({ uid: 'legacy', summary: 'Legacy' }),
+      )
+      expect(serializeVTodo({ uid: 'legacy', summary: 'Legacy' })).toContain('DTSTAMP:19700101T000000Z')
+    })
   })
 
   describe('serializeCalendar', () => {
@@ -141,6 +159,19 @@ describe('ICalendarSerializer', () => {
       expect(ics).toContain('BEGIN:VCALENDAR')
       expect(ics).toContain('END:VCALENDAR')
       expect(ics).not.toContain('BEGIN:VTODO')
+    })
+
+    it('sorts components by uid so equivalent stores serialize identically', () => {
+      const first = serializeCalendar([
+        { uid: 'z', summary: 'Z' },
+        { uid: 'a', summary: 'A' },
+      ])
+      const second = serializeCalendar([
+        { uid: 'a', summary: 'A' },
+        { uid: 'z', summary: 'Z' },
+      ])
+      expect(first).toBe(second)
+      expect(first.indexOf('UID:a')).toBeLessThan(first.indexOf('UID:z'))
     })
   })
 })

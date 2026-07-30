@@ -6,6 +6,7 @@ import {
   isSafeRecordKey,
   SecureJsonFileStore,
 } from '../../Infra/SecureJsonFileStore'
+import { CaldavInputError } from './CaldavInputError'
 import { PublishedTodo } from './ICalendarSerializer'
 
 /**
@@ -23,9 +24,8 @@ import { PublishedTodo } from './ICalendarSerializer'
  * reads, rejects unsafe link/type targets, and serializes durable atomic writes
  * across local store instances.
  *
- * NOTE (first slice): there is no publish API/UI yet — populating this store is a
- * deferred item. The store + read path exist so the CalDAV surface is testable
- * and a publish endpoint can be added without reworking the read side.
+ * The authenticated CalDAV management API and Security preferences UI populate
+ * this store. Users can list, edit, and unpublish the retained plaintext fields.
  */
 
 interface StoreShape {
@@ -38,18 +38,18 @@ const MAX_TODOS_PER_USER = 10_000
 const MAX_UID_LENGTH = 1_024
 const MAX_SUMMARY_LENGTH = 4_096
 const MAX_DESCRIPTION_LENGTH = 65_536
-const ISO_DATE_PATTERN =
-  /^\d{4}-\d{2}-\d{2}(?:[Tt ][0-2]\d:[0-5]\d(?::[0-5]\d(?:\.\d{1,9})?)?(?:[Zz]|[+-][0-2]\d:[0-5]\d)?)?$/
+const DATE_PATTERN = /^\d{4}-(\d{2})-(\d{2})$/
+const DATE_TIME_PATTERN =
+  /^(\d{4})-(\d{2})-(\d{2})T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,9})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/
+const ILLEGAL_CALENDAR_TEXT = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/
 
-function isOptionalBoundedString(value: unknown, maximumLength: number): value is string | undefined {
-  return value === undefined || isBoundedString(value, 0, maximumLength)
+export interface PublishedCalendarStoreOptions {
+  clock?: () => number
+  maxTodosPerUser?: number
 }
 
 function isOptionalIsoDate(value: unknown): value is string | undefined {
-  return (
-    value === undefined ||
-    (isBoundedString(value, 1, 64) && ISO_DATE_PATTERN.test(value) && !Number.isNaN(Date.parse(value)))
-  )
+  return value === undefined || isCalendarDate(value)
 }
 
 function isOptionalEpochMilliseconds(value: unknown): value is number | undefined {
@@ -72,12 +72,12 @@ function isPublishedTodo(value: unknown, uid: string): value is PublishedTodo {
     ]) &&
     isSafeRecordKey(uid, MAX_UID_LENGTH) &&
     value.uid === uid &&
-    isBoundedString(value.summary, 0, MAX_SUMMARY_LENGTH) &&
-    isOptionalBoundedString(value.description, MAX_DESCRIPTION_LENGTH) &&
+    isNonBlankCalendarText(value.summary, MAX_SUMMARY_LENGTH) &&
+    (value.description === undefined || isBoundedCalendarText(value.description, 0, MAX_DESCRIPTION_LENGTH)) &&
     isOptionalIsoDate(value.due) &&
     isOptionalIsoDate(value.start) &&
     (value.completed === undefined || typeof value.completed === 'boolean') &&
-    isOptionalIsoDate(value.completedAt) &&
+    (value.completedAt === undefined || isCalendarDateTime(value.completedAt)) &&
     (value.priority === undefined ||
       (typeof value.priority === 'number' &&
         Number.isSafeInteger(value.priority) &&
@@ -86,6 +86,54 @@ function isPublishedTodo(value: unknown, uid: string): value is PublishedTodo {
     isOptionalEpochMilliseconds(value.createdAt) &&
     isOptionalEpochMilliseconds(value.updatedAt)
   )
+}
+
+function isBoundedCalendarText(value: unknown, minimumLength: number, maximumLength: number): value is string {
+  return isBoundedString(value, minimumLength, maximumLength) && !ILLEGAL_CALENDAR_TEXT.test(value)
+}
+
+function isNonBlankCalendarText(value: unknown, maximumLength: number): value is string {
+  return isBoundedCalendarText(value, 1, maximumLength) && value.trim().length > 0
+}
+
+function hasValidDateParts(year: string, month: string, day: string): boolean {
+  const numericYear = Number(year)
+  const numericMonth = Number(month)
+  const numericDay = Number(day)
+  const leapYear = numericYear % 4 === 0 && (numericYear % 100 !== 0 || numericYear % 400 === 0)
+  const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+  return numericMonth >= 1 && numericMonth <= 12 && numericDay >= 1 && numericDay <= daysInMonth[numericMonth - 1]
+}
+
+function isCalendarDateTime(value: unknown): value is string {
+  if (!isBoundedString(value, 1, 64)) {
+    return false
+  }
+  const match = DATE_TIME_PATTERN.exec(value)
+  return match !== null && hasValidDateParts(match[1], match[2], match[3]) && !Number.isNaN(Date.parse(value))
+}
+
+function isCalendarDate(value: unknown): value is string {
+  if (!isBoundedString(value, 1, 64)) {
+    return false
+  }
+  const dateMatch = DATE_PATTERN.exec(value)
+  if (dateMatch) {
+    return hasValidDateParts(value.slice(0, 4), dateMatch[1], dateMatch[2])
+  }
+  return isCalendarDateTime(value)
+}
+
+function hasValidTemporalSemantics(todo: PublishedTodo): boolean {
+  if (todo.completedAt !== undefined && todo.completed !== true) {
+    return false
+  }
+  if (todo.start === undefined || todo.due === undefined) {
+    return true
+  }
+  const startIsDate = DATE_PATTERN.test(todo.start)
+  const dueIsDate = DATE_PATTERN.test(todo.due)
+  return startIsDate === dueIsDate && Date.parse(todo.due) > Date.parse(todo.start)
 }
 
 function isStoreShape(value: unknown): value is StoreShape {
@@ -100,19 +148,33 @@ function isStoreShape(value: unknown): value is StoreShape {
         return false
       }
       const entries = Object.entries(todos)
-      return entries.length <= MAX_TODOS_PER_USER && entries.every(([uid, todo]) => isPublishedTodo(todo, uid))
+      return (
+        entries.length <= MAX_TODOS_PER_USER &&
+        entries.every(([uid, todo]) => isPublishedTodo(todo, uid) && hasValidTemporalSemantics(todo))
+      )
     })
   )
 }
 
 export class PublishedCalendarStore {
   private readonly store: SecureJsonFileStore<StoreShape>
+  private readonly clock: () => number
+  private readonly maxTodosPerUser: number
 
-  constructor(filePath: string) {
+  constructor(filePath: string, options: PublishedCalendarStoreOptions = {}) {
     this.store = new SecureJsonFileStore({
       filePath,
       validate: isStoreShape,
     })
+    this.clock = options.clock ?? Date.now
+    this.maxTodosPerUser = options.maxTodosPerUser ?? MAX_TODOS_PER_USER
+    if (
+      !Number.isSafeInteger(this.maxTodosPerUser) ||
+      this.maxTodosPerUser <= 0 ||
+      this.maxTodosPerUser > MAX_TODOS_PER_USER
+    ) {
+      throw new Error(`maxTodosPerUser must be an integer between 1 and ${MAX_TODOS_PER_USER}.`)
+    }
   }
 
   async listForUser(userUuid: string): Promise<PublishedTodo[]> {
@@ -124,7 +186,7 @@ export class PublishedCalendarStore {
     if (!todos) {
       return []
     }
-    return Object.values(todos)
+    return Object.values(todos).sort((left, right) => left.uid.localeCompare(right.uid))
   }
 
   async getForUser(userUuid: string, uid: string): Promise<PublishedTodo | null> {
@@ -136,43 +198,60 @@ export class PublishedCalendarStore {
   }
 
   /**
-   * Upsert a published todo for a user. Used by a (future) publish endpoint.
+   * Upsert a published todo for a user through the authenticated management API.
    * Returns the stored todo with normalized timestamps.
    */
   async publish(userUuid: string, todo: PublishedTodo): Promise<PublishedTodo> {
     if (!isSafeRecordKey(userUuid) || !isSafeRecordKey(todo.uid, MAX_UID_LENGTH)) {
-      throw new Error('A valid user identifier and todo uid are required to publish a calendar item.')
+      throw new CaldavInputError('A valid user identifier and todo uid are required to publish a calendar item.')
     }
-    const now = Date.now()
-    const normalized: PublishedTodo = {
-      ...todo,
-      createdAt: todo.createdAt ?? now,
-      updatedAt: now,
+    if (!isPublishedTodo(todo, todo.uid) || !hasValidTemporalSemantics(todo)) {
+      throw new CaldavInputError('Refusing to publish an invalid calendar item.')
     }
-    if (!isPublishedTodo(normalized, todo.uid)) {
-      throw new Error('Refusing to publish an invalid calendar item.')
-    }
+
+    let stored: PublishedTodo | undefined
     await this.mutate((data) => {
       const forUser = data[userUuid] ?? {}
-      forUser[todo.uid] = normalized
+      const existing = forUser[todo.uid]
+      if (!existing && Object.keys(forUser).length >= this.maxTodosPerUser) {
+        throw new CaldavInputError(`A user may not publish more than ${this.maxTodosPerUser} calendar items.`)
+      }
+      const now = this.clock()
+      const updatedAt = Math.max(now, (existing?.updatedAt ?? -1) + 1)
+      stored = {
+        uid: todo.uid,
+        summary: todo.summary,
+        ...(todo.description !== undefined ? { description: todo.description } : {}),
+        ...(todo.due !== undefined ? { due: todo.due } : {}),
+        ...(todo.start !== undefined ? { start: todo.start } : {}),
+        ...(todo.completed !== undefined ? { completed: todo.completed } : {}),
+        ...(todo.completedAt !== undefined ? { completedAt: todo.completedAt } : {}),
+        ...(todo.priority !== undefined ? { priority: todo.priority } : {}),
+        createdAt: existing?.createdAt ?? now,
+        updatedAt,
+      }
+      forUser[todo.uid] = stored
       data[userUuid] = forUser
     })
-    return normalized
+    return stored as PublishedTodo
   }
 
   /** Remove a single published todo. No-op if absent. */
-  async unpublish(userUuid: string, uid: string): Promise<void> {
+  async unpublish(userUuid: string, uid: string): Promise<boolean> {
     if (!isSafeRecordKey(userUuid) || !isSafeRecordKey(uid, MAX_UID_LENGTH)) {
-      return
+      return false
     }
+    let removed = false
     await this.mutate((data) => {
-      if (data[userUuid]) {
+      if (data[userUuid]?.[uid]) {
         delete data[userUuid][uid]
+        removed = true
         if (Object.keys(data[userUuid]).length === 0) {
           delete data[userUuid]
         }
       }
     })
+    return removed
   }
 
   private async read(): Promise<StoreShape> {

@@ -218,6 +218,13 @@ export abstract class AuthMiddleware extends BaseMiddleware {
       settings[SettingName.NAMES.WorkflowsEnabled] = 'true'
     }
 
+    // CALDAV_ENABLED is OPT-IN (default-off): auth emits `caldav_enabled` only
+    // for the literal per-user opt-in. Omitted and false values remain absent so
+    // CalDAV management controllers fail closed for old or unentitled tokens.
+    if (decodedToken.caldav_enabled === true) {
+      settings[SettingName.NAMES.CaldavEnabled] = 'true'
+    }
+
     // OCR_SERVER_ALLOWED is OPT-IN (default-off) like WORKFLOWS_ENABLED: auth
     // emits `ocr_server_allowed` ONLY when the admin-managed setting is literally
     // 'true', so the key is projected only in that case. An absent key means "not

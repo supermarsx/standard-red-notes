@@ -237,6 +237,11 @@ export class BaseSettingsController extends BaseHttpController {
       this.logger.error(`Failed to trigger post setting update actions: ${triggerResult.getError()}`)
     }
 
+    // Settings projected into cross-service tokens (including CalDAV, AI,
+    // workflows, and OCR) must take effect on the very next gateway request.
+    // Both HTTP and gRPC gateway proxies consume this header synchronously.
+    response.setHeader('x-invalidate-cache', locals.user.uuid)
+
     return this.json({
       success: true,
       setting: setting.props.sensitive ? undefined : this.settingHttMapper.toProjection(setting),
@@ -281,6 +286,7 @@ export class BaseSettingsController extends BaseHttpController {
     })
 
     if (result.success) {
+      response.setHeader('x-invalidate-cache', locals.user.uuid)
       return this.json(result)
     }
 

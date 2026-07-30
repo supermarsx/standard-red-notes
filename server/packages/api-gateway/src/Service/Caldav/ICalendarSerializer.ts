@@ -6,8 +6,8 @@
  * published reminders/todos. Only the small, plaintext "published calendar"
  * fields are serialized here — never any end-to-end-encrypted note content.
  *
- * Scope of this first slice: VTODO only (todos/reminders). VEVENT and VALARM are
- * intentionally out of scope and listed in the deferred punch-list.
+ * This implementation intentionally exposes VTODO only (todos/reminders).
+ * VEVENT and VALARM are not advertised by the server.
  */
 
 export interface PublishedTodo {
@@ -25,7 +25,7 @@ export interface PublishedTodo {
   completed?: boolean
   /** Optional completion timestamp (ISO 8601). Emitted as COMPLETED. */
   completedAt?: string
-  /** Optional 1 (high) – 9 (low) priority. Emitted as PRIORITY when set. */
+  /** Optional 0 (unspecified), 1 (high) – 9 (low) priority. */
   priority?: number
   /** ms-epoch of creation; emitted as CREATED. */
   createdAt?: number
@@ -67,6 +67,11 @@ export function toICalDateTimeUTC(value: string | number | undefined): string | 
   )
 }
 
+function toICalDate(value: string): string | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value)
+  return match ? `${match[1]}${match[2]}${match[3]}` : null
+}
+
 /**
  * Fold a content line to <=75 octets per RFC 5545 §3.1 by inserting CRLF +
  * single space continuations. Folding on octet boundaries keeps multi-byte
@@ -104,12 +109,14 @@ function line(name: string, value: string): string {
  * VCALENDAR). `dtstamp` is the generation time used for DTSTAMP when the item
  * carries no updatedAt.
  */
-export function serializeVTodo(todo: PublishedTodo, now: Date = new Date()): string {
+export function serializeVTodo(todo: PublishedTodo): string {
   const lines: string[] = ['BEGIN:VTODO']
 
-  lines.push(line('UID', todo.uid))
+  lines.push(line('UID', escapeText(todo.uid)))
 
-  const stamp = toICalDateTimeUTC(todo.updatedAt ?? now.getTime()) as string
+  // Legacy rows may lack timestamps. A fixed fallback keeps the representation
+  // stable across requests so strong ETags remain truthful.
+  const stamp = toICalDateTimeUTC(todo.updatedAt ?? todo.createdAt ?? 0) as string
   lines.push(line('DTSTAMP', stamp))
 
   if (todo.createdAt !== undefined) {
@@ -131,14 +138,24 @@ export function serializeVTodo(todo: PublishedTodo, now: Date = new Date()): str
     lines.push(line('DESCRIPTION', escapeText(todo.description)))
   }
 
-  const start = toICalDateTimeUTC(todo.start)
-  if (start) {
-    lines.push(line('DTSTART', start))
+  if (todo.start) {
+    const startDate = toICalDate(todo.start)
+    const startDateTime = toICalDateTimeUTC(todo.start)
+    if (startDate) {
+      lines.push(line('DTSTART;VALUE=DATE', startDate))
+    } else if (startDateTime) {
+      lines.push(line('DTSTART', startDateTime))
+    }
   }
 
-  const due = toICalDateTimeUTC(todo.due)
-  if (due) {
-    lines.push(line('DUE', due))
+  if (todo.due) {
+    const dueDate = toICalDate(todo.due)
+    const dueDateTime = toICalDateTimeUTC(todo.due)
+    if (dueDate) {
+      lines.push(line('DUE;VALUE=DATE', dueDate))
+    } else if (dueDateTime) {
+      lines.push(line('DUE', dueDateTime))
+    }
   }
 
   if (todo.priority !== undefined && Number.isFinite(todo.priority)) {
@@ -149,7 +166,7 @@ export function serializeVTodo(todo: PublishedTodo, now: Date = new Date()): str
   if (todo.completed) {
     lines.push(line('STATUS', 'COMPLETED'))
     lines.push(line('PERCENT-COMPLETE', '100'))
-    const completedAt = toICalDateTimeUTC(todo.completedAt ?? todo.updatedAt ?? now.getTime())
+    const completedAt = toICalDateTimeUTC(todo.completedAt ?? todo.updatedAt ?? todo.createdAt ?? 0)
     if (completedAt) {
       lines.push(line('COMPLETED', completedAt))
     }
@@ -166,15 +183,15 @@ export function serializeVTodo(todo: PublishedTodo, now: Date = new Date()): str
  * produces the per-object body served by GET / calendar-multiget; passing all
  * of them produces the collection body served by a calendar-query REPORT.
  */
-export function serializeCalendar(todos: PublishedTodo[], now: Date = new Date()): string {
+export function serializeCalendar(todos: PublishedTodo[]): string {
   const lines: string[] = [
     'BEGIN:VCALENDAR',
     line('VERSION', '2.0'),
     line('PRODID', PRODID),
     line('CALSCALE', 'GREGORIAN'),
   ]
-  for (const todo of todos) {
-    lines.push(serializeVTodo(todo, now))
+  for (const todo of [...todos].sort((left, right) => left.uid.localeCompare(right.uid))) {
+    lines.push(serializeVTodo(todo))
   }
   lines.push('END:VCALENDAR')
   // RFC 5545 requires CRLF line endings and a trailing CRLF.

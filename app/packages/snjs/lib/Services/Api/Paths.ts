@@ -232,6 +232,8 @@ const CaldavTokenPaths = {
   caldavConfig: '/v1/caldav/tokens/config',
   caldavTokens: '/v1/caldav/tokens',
   caldavToken: (tokenUuid: string) => `/v1/caldav/tokens/${tokenUuid}`,
+  caldavTodos: '/v1/caldav/todos',
+  caldavTodo: (uid: string) => `/v1/caldav/todos/${encodeURIComponent(uid)}`,
 }
 
 const SubscriptionPaths = {

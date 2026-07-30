@@ -38,6 +38,10 @@ export class CaldavService {
     return this.tokenStore.revoke(userUuid, tokenUuid)
   }
 
+  async revokeAllTokens(userUuid: string): Promise<number> {
+    return this.tokenStore.revokeAllForUser(userUuid)
+  }
+
   /** Verify a Basic-auth password (the plaintext CalDAV token). */
   async verifyToken(plaintext: string): Promise<CaldavTokenMetadata | null> {
     return this.tokenStore.verify(plaintext)
@@ -49,6 +53,14 @@ export class CaldavService {
 
   async getTodo(userUuid: string, uid: string): Promise<PublishedTodo | null> {
     return this.publishedStore.getForUser(userUuid, uid)
+  }
+
+  async publishTodo(userUuid: string, todo: PublishedTodo): Promise<PublishedTodo> {
+    return this.publishedStore.publish(userUuid, todo)
+  }
+
+  async unpublishTodo(userUuid: string, uid: string): Promise<boolean> {
+    return this.publishedStore.unpublish(userUuid, uid)
   }
 
   serializeCalendar(todos: PublishedTodo[]): string {

@@ -142,6 +142,13 @@ export class CreateCrossServiceToken implements UseCaseInterface<string> {
       authTokenData.workflows_enabled = true
     }
 
+    // Standard Red Notes: CalDAV is OPT-IN (default-off). Only a literal 'true'
+    // is carried across services; absent keeps older tokens compatible and makes
+    // the API gateway fail closed for users who never enabled CalDAV.
+    if (await this.readOptInGatingFlag(user.uuid, SettingName.NAMES.CaldavEnabled)) {
+      authTokenData.caldav_enabled = true
+    }
+
     // Standard Red Notes: SERVER-SIDE OCR is OPT-IN (default-off), same shape as
     // WORKFLOWS above — the field is emitted ONLY when the admin-managed
     // OcrServerAllowed setting is literally 'true'. Absent means not allowed, so

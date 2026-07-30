@@ -632,6 +632,43 @@ describe('CreateCrossServiceToken', () => {
     })
   })
 
+  describe('CalDAV gating (caldav_enabled)', () => {
+    it('does NOT embed caldav_enabled when the setting is unset (fail-closed)', async () => {
+      await createUseCase().execute({ user, session })
+
+      const payload = (tokenEncoder.encodeExpirableToken as jest.Mock).mock.calls[0][0] as CrossServiceTokenData
+      expect(payload.caldav_enabled).toBeUndefined()
+    })
+
+    it('does NOT embed caldav_enabled when the setting is literally "false"', async () => {
+      settingRepository.findLastByNameAndUserUuid = jest.fn().mockImplementation((settingName: string) => {
+        if (settingName === SettingName.NAMES.CaldavEnabled) {
+          return Promise.resolve({ props: { value: 'false' } })
+        }
+        return Promise.resolve(null)
+      })
+
+      await createUseCase().execute({ user, session })
+
+      const payload = (tokenEncoder.encodeExpirableToken as jest.Mock).mock.calls[0][0] as CrossServiceTokenData
+      expect(payload.caldav_enabled).toBeUndefined()
+    })
+
+    it('embeds caldav_enabled === true ONLY when the setting is literally "true"', async () => {
+      settingRepository.findLastByNameAndUserUuid = jest.fn().mockImplementation((settingName: string) => {
+        if (settingName === SettingName.NAMES.CaldavEnabled) {
+          return Promise.resolve({ props: { value: 'true' } })
+        }
+        return Promise.resolve(null)
+      })
+
+      await createUseCase().execute({ user, session })
+
+      const payload = (tokenEncoder.encodeExpirableToken as jest.Mock).mock.calls[0][0] as CrossServiceTokenData
+      expect(payload.caldav_enabled).toBe(true)
+    })
+  })
+
   describe('server-side OCR gating (ocr_server_allowed)', () => {
     it('does NOT embed ocr_server_allowed when the setting is unset (fail-closed)', async () => {
       // Default mock: findLastByNameAndUserUuid resolves to null for every setting.

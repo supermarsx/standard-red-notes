@@ -2072,6 +2072,56 @@ export class LegacyApiService
     })
   }
 
+  /** Revoke every CalDAV token owned by the current user. */
+  async deleteAllCaldavTokens(): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Delete,
+      url: joinPaths(this.host, Paths.v1.caldavTokens),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to revoke CalDAV tokens.',
+    })
+  }
+
+  /** List the explicit plaintext todos currently exposed through CalDAV. */
+  async listCaldavTodos(): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Get,
+      url: joinPaths(this.host, Paths.v1.caldavTodos),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to list published CalDAV items.',
+    })
+  }
+
+  /** Create or replace one explicit plaintext CalDAV todo. */
+  async publishCaldavTodo(body: {
+    uid?: string
+    summary: string
+    description?: string
+    due?: string
+    start?: string
+    completed?: boolean
+    completedAt?: string
+    priority?: number
+  }): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Post,
+      url: joinPaths(this.host, Paths.v1.caldavTodos),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to publish the CalDAV item.',
+      params: body,
+    })
+  }
+
+  /** Remove one plaintext item from the CalDAV projection. */
+  async deleteCaldavTodo(uid: string): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Delete,
+      url: joinPaths(this.host, Paths.v1.caldavTodo(uid)),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to unpublish the CalDAV item.',
+    })
+  }
+
   public downloadFeatureUrl(url: string): Promise<HttpResponse> {
     return this.request({
       verb: HttpVerb.Get,

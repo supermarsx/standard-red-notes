@@ -7,6 +7,8 @@ import { CrossServiceTokenData } from '@standardnotes/security'
 import { CrossServiceTokenCacheInterface } from '../Service/Cache/CrossServiceTokenCacheInterface'
 import { ServiceProxyInterface } from '../Service/Proxy/ServiceProxyInterface'
 import { RequiredCrossServiceTokenMiddleware } from './RequiredCrossServiceTokenMiddleware'
+import { CaldavTokensController } from './v1/CaldavTokensController'
+import { CaldavService } from '../Service/Caldav/CaldavService'
 
 import { verify } from 'jsonwebtoken'
 
@@ -99,6 +101,16 @@ describe('AuthMiddleware settings projection', () => {
     expect(settings[SettingName.NAMES.OcrServerAllowed]).toBe('true')
   })
 
+  it('projects only a literal caldav_enabled opt-in and otherwise fails closed', async () => {
+    const enabled = await runWith({ ...baseToken(), caldav_enabled: true })
+    const absent = await runWith(baseToken())
+    const falseValue = await runWith({ ...baseToken(), caldav_enabled: false })
+
+    expect(enabled[SettingName.NAMES.CaldavEnabled]).toBe('true')
+    expect(absent[SettingName.NAMES.CaldavEnabled]).toBeUndefined()
+    expect(falseValue[SettingName.NAMES.CaldavEnabled]).toBeUndefined()
+  })
+
   const runReturningLocals = async (decoded: CrossServiceTokenData): Promise<Record<string, unknown>> => {
     mockedVerify.mockReturnValue(decoded)
     const request = {
@@ -111,6 +123,24 @@ describe('AuthMiddleware settings projection', () => {
     await createMiddleware().handler(request, response, next)
     return locals
   }
+
+  it('carries the decoded CalDAV opt-in through middleware into the real config controller', async () => {
+    const controller = new CaldavTokensController(
+      { isEnabled: () => true } as unknown as CaldavService,
+      '/calendar-api',
+    )
+    const configFor = async (decoded: CrossServiceTokenData): Promise<Record<string, unknown>> => {
+      const locals = await runReturningLocals(decoded)
+      const json = jest.fn()
+      await controller.config({} as Request, { locals, json } as unknown as Response)
+      return json.mock.calls[0][0] as Record<string, unknown>
+    }
+
+    await expect(configFor({ ...baseToken(), caldav_enabled: true })).resolves.toEqual(
+      expect.objectContaining({ allowed: true, available: true, basePath: '/calendar-api' }),
+    )
+    await expect(configFor(baseToken())).resolves.toEqual(expect.objectContaining({ allowed: false, available: false }))
+  })
 
   it('projects shadowBanned=true onto locals when the token carries shadow_banned', async () => {
     const locals = await runReturningLocals({ ...baseToken(), shadow_banned: true })

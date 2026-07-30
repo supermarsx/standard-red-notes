@@ -1,4 +1,5 @@
 import { promises as fs } from 'fs'
+import * as crypto from 'crypto'
 import * as os from 'os'
 import * as path from 'path'
 
@@ -10,6 +11,8 @@ describe('CaldavTokenStore', () => {
 
   const userA = '11111111-1111-1111-1111-111111111111'
   const userB = '22222222-2222-2222-2222-222222222222'
+  const testDerive = async (secret: string, salt: string, keyLength: number): Promise<Buffer> =>
+    crypto.createHash('sha512').update(secret).update(salt).digest().subarray(0, keyLength)
 
   beforeEach(async () => {
     dir = await fs.mkdtemp(path.join(os.tmpdir(), 'caldav-tokens-'))
@@ -80,6 +83,34 @@ describe('CaldavTokenStore', () => {
       await store.revoke(userA, created.uuid)
       expect(await store.verify(created.token)).toBeNull()
     })
+
+    it('fails a verification whose token is revoked while hashing', async () => {
+      let deriveCalls = 0
+      let releaseVerification!: () => void
+      let verificationStarted!: () => void
+      const started = new Promise<void>((resolve) => {
+        verificationStarted = resolve
+      })
+      const release = new Promise<void>((resolve) => {
+        releaseVerification = resolve
+      })
+      store = new CaldavTokenStore(path.join(dir, 'race-tokens.json'), {
+        deriveKey: async (secret, salt, keyLength) => {
+          deriveCalls += 1
+          if (deriveCalls === 2) {
+            verificationStarted()
+            await release
+          }
+          return testDerive(secret, salt, keyLength)
+        },
+      })
+      const created = await store.create(userA, 'race')
+      const verification = store.verify(created.token)
+      await started
+      await expect(store.revoke(userA, created.uuid)).resolves.toBe(true)
+      releaseVerification()
+      await expect(verification).resolves.toBeNull()
+    })
   })
 
   describe('listForUser', () => {
@@ -101,6 +132,31 @@ describe('CaldavTokenStore', () => {
       expect(await store.revoke(userB, created.uuid)).toBe(false)
       expect(await store.revoke(userA, created.uuid)).toBe(true)
       expect(await store.revoke(userA, created.uuid)).toBe(false)
+    })
+
+    it('revokes every token for one user without touching another user', async () => {
+      await store.create(userA, 'a1')
+      await store.create(userA, 'a2')
+      const other = await store.create(userB, 'b1')
+      await expect(store.revokeAllForUser(userA)).resolves.toBe(2)
+      await expect(store.listForUser(userA)).resolves.toEqual([])
+      await expect(store.verify(other.token)).resolves.toMatchObject({ userUuid: userB })
+    })
+  })
+
+  describe('concurrency bounds', () => {
+    it('enforces the per-user cap atomically across store instances', async () => {
+      const filePath = path.join(dir, 'bounded-tokens.json')
+      const first = new CaldavTokenStore(filePath, { deriveKey: testDerive, maxTokensPerUser: 2 })
+      const second = new CaldavTokenStore(filePath, { deriveKey: testDerive, maxTokensPerUser: 2 })
+      const outcomes = await Promise.allSettled([
+        first.create(userA, 'one'),
+        second.create(userA, 'two'),
+        first.create(userA, 'three'),
+      ])
+      expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(2)
+      expect(outcomes.filter((outcome) => outcome.status === 'rejected')).toHaveLength(1)
+      await expect(first.listForUser(userA)).resolves.toHaveLength(2)
     })
   })
 })
