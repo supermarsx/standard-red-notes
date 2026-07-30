@@ -581,17 +581,14 @@ export class UserService
   }
 
   /**
-   * Allows items keys to be rewritten to local db on local credential status change,
-   * such as if passcode is added, changed, or removed.
-   * This allows IndexedDB unencrypted logs to be deleted
-   * `deletePayloads` will remove data from backing store,
-   * but not from working memory See:
-   * https://github.com/standardnotes/desktop/issues/131
+   * Rewrites items keys in place after a local credential-status change. The
+   * storage save replaces records with the same UUID, so deleting the only
+   * durable copies first is both unnecessary and unsafe: a quota/transaction
+   * failure between delete and save could make the vault undecryptable.
    */
   private async rewriteItemsKeys(): Promise<void> {
     const itemsKeys = this.items.getDisplayableItemsKeys()
     const payloads = itemsKeys.map((key) => key.payloadRepresentation())
-    await this.storage.deletePayloads(payloads)
     await this.sync.persistPayloads(payloads)
   }
 

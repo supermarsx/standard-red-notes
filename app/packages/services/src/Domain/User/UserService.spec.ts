@@ -95,4 +95,48 @@ describe('UserService', () => {
 
     expect(await createService().submitUserRequest(UserRequestType.ExitDiscount)).toBeFalsy()
   })
+
+  describe('items-key rewrite safety', () => {
+    it('replaces items-key records without deleting the durable copies first', async () => {
+      const payloads = [{ uuid: 'items-key-1' }, { uuid: 'items-key-2' }]
+      itemManager.getDisplayableItemsKeys = jest.fn().mockReturnValue(
+        payloads.map((payload) => ({
+          payloadRepresentation: () => payload,
+        })),
+      )
+      syncService.persistPayloads = jest.fn().mockResolvedValue(undefined)
+      storageService.deletePayloads = jest.fn().mockResolvedValue(undefined)
+
+      await (
+        createService() as unknown as {
+          rewriteItemsKeys(): Promise<void>
+        }
+      ).rewriteItemsKeys()
+
+      expect(syncService.persistPayloads).toHaveBeenCalledWith(payloads)
+      expect(storageService.deletePayloads).not.toHaveBeenCalled()
+    })
+
+    it('leaves existing durable items keys intact when replacement persistence fails', async () => {
+      const payload = { uuid: 'items-key-1' }
+      const writeFailure = new Error('quota exceeded')
+      itemManager.getDisplayableItemsKeys = jest.fn().mockReturnValue([
+        {
+          payloadRepresentation: () => payload,
+        },
+      ])
+      syncService.persistPayloads = jest.fn().mockRejectedValue(writeFailure)
+      storageService.deletePayloads = jest.fn().mockResolvedValue(undefined)
+
+      await expect(
+        (
+          createService() as unknown as {
+            rewriteItemsKeys(): Promise<void>
+          }
+        ).rewriteItemsKeys(),
+      ).rejects.toBe(writeFailure)
+
+      expect(storageService.deletePayloads).not.toHaveBeenCalled()
+    })
+  })
 })
