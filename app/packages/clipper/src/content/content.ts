@@ -152,30 +152,66 @@ const toPng = async (element: HTMLElement) => {
   return canvas.toDataURL('image/png')
 }
 
-window.addEventListener('click', async (event) => {
+const consumePageActivationDuringSelection = (event: Event): boolean => {
   if (!isSelectingNodeForClipping) {
-    return
+    return false
   }
-  disableNodeSelection()
+
+  /**
+   * Node selection is an extension action, not a page interaction. Handle it
+   * during capture and stop the event before target/bubble handlers can submit
+   * forms, follow links, mutate the page, or run other site-controlled actions.
+   */
   event.preventDefault()
   event.stopPropagation()
-  const { target } = event
-  if (!target || !(target instanceof HTMLElement)) {
-    return
-  }
-  const title = document.title
-  const content = isScreenshotMode ? await toPng(target) : target.outerHTML
-  void runtime.sendMessage({
-    type: RuntimeMessageTypes.OpenPopupWithSelection,
-    payload: { title, content, url: window.location.href, isScreenshot: isScreenshotMode },
-  } as RuntimeMessage)
-})
+  event.stopImmediatePropagation()
+  return true
+}
 
-window.addEventListener('keydown', (event) => {
-  if (!isSelectingNodeForClipping) {
-    return
-  }
-  if (event.key === 'Escape') {
+const blockPageActivationDuringSelection = (event: Event) => {
+  consumePageActivationDuringSelection(event)
+}
+
+for (const eventName of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'auxclick', 'contextmenu']) {
+  window.addEventListener(eventName, blockPageActivationDuringSelection, { capture: true })
+}
+
+window.addEventListener(
+  'click',
+  (event) => {
+    if (!consumePageActivationDuringSelection(event)) {
+      return
+    }
+
     disableNodeSelection()
-  }
-})
+    const { target } = event
+    if (!target || !(target instanceof HTMLElement)) {
+      return
+    }
+    const title = document.title
+
+    void (async () => {
+      const content = isScreenshotMode ? await toPng(target) : target.outerHTML
+      await runtime.sendMessage({
+        type: RuntimeMessageTypes.OpenPopupWithSelection,
+        payload: { title, content, url: window.location.href, isScreenshot: isScreenshotMode },
+      } as RuntimeMessage)
+    })().catch((error) => {
+      console.error('Unable to clip the selected page element', error)
+    })
+  },
+  { capture: true },
+)
+
+window.addEventListener(
+  'keydown',
+  (event) => {
+    if (!isSelectingNodeForClipping || event.key !== 'Escape') {
+      return
+    }
+
+    consumePageActivationDuringSelection(event)
+    disableNodeSelection()
+  },
+  { capture: true },
+)
