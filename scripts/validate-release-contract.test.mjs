@@ -375,7 +375,10 @@ test("an attestation scope on the OpenClaw publish job is rejected", () => {
 
 test("dropping the attested payload from the OpenClaw release fan-in is rejected", () => {
   const files = withFileChanged(openClawWorkflowFile, (content) =>
-    content.replace("needs: [context, attest]", "needs: [context]"),
+    content.replace(
+      "needs: [context, decide, attest]",
+      "needs: [context, attest]",
+    ),
   );
 
   assert.match(
@@ -601,7 +604,10 @@ test("a best-effort desktop build leg is rejected", () => {
 
 test("dropping the build matrix from the desktop release fan-in is rejected", () => {
   const files = withFileChanged(desktopWorkflowFile, (content) =>
-    content.replace("needs: [version, build]", "needs: [version]"),
+    content.replace(
+      "needs: [version, build, decide]",
+      "needs: [version, decide]",
+    ),
   );
 
   assert.match(
@@ -811,5 +817,100 @@ test("srn-desktop giving away the Latest pointer is rejected", () => {
   assert.match(
     validateReleaseContract(files).join("\n"),
     /srn-desktop\.yml: srn-desktop must claim the repo-global Latest pointer/,
+  );
+});
+
+test("every publisher must fetch complete history and tags before impact analysis", () => {
+  const file = ".github/workflows/srn-server.yml";
+  const files = withFileChanged(file, (content) =>
+    content
+      .replace("          fetch-depth: 0\n", "")
+      .replace("          git fetch --force --tags origin\n", ""),
+  );
+  const errors = validateReleaseContract(files).join("\n");
+
+  assert.match(errors, /srn-server\.yml: missing complete Git history checkout/);
+  assert.match(errors, /srn-server\.yml: missing complete release tag fetch/);
+});
+
+test("a publisher cannot tag without the unchanged-artifact decision", () => {
+  const file = ".github/workflows/srn-home-server.yml";
+  const files = withFileChanged(file, (content) =>
+    content.replace(
+      "  release:\n    name: release\n    needs: [decide, package]\n    if: needs.decide.outputs.changed == 'true'\n",
+      "  release:\n    name: release\n    needs: [package]\n",
+    ),
+  );
+  const errors = validateReleaseContract(files).join("\n");
+
+  assert.match(
+    errors,
+    /srn-home-server\.yml: release publication does not depend on decide/,
+  );
+  assert.match(
+    errors,
+    /srn-home-server\.yml: missing unchanged-release publication guard/,
+  );
+});
+
+test("fingerprints must compare against the analyzer-selected base", () => {
+  const file = ".github/workflows/srn-client.yml";
+  const files = withFileChanged(file, (content) =>
+    content.replace(
+      "BASE_REF: ${{ needs.impact.outputs.base_ref }}",
+      "BASE_REF: srn-client-v00.1",
+    ),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /srn-client\.yml: missing analyzer-selected fingerprint base/,
+  );
+});
+
+test("OpenClaw package fingerprints normalize release-only metadata", () => {
+  const file = ".github/workflows/srn-openclaw.yml";
+  const files = withFileChanged(file, (content) =>
+    content
+      .replace("--normalize-package-version package/package.json \\\n", "")
+      .replace("--exclude package/release-package.json \\\n", ""),
+  );
+  const errors = validateReleaseContract(files).join("\n");
+
+  assert.match(errors, /missing rolling package-version normalization/);
+  assert.match(errors, /missing volatile source metadata exclusion/);
+});
+
+test("mobile publication cannot include a stale embedded web payload", () => {
+  const file = ".github/workflows/srn-mobile.yml";
+  const files = withFileChanged(file, (content) =>
+    content.replace(
+      "          rm -rf html/Web.bundle/src/web-src .release-impact\n",
+      "          rm -rf .release-impact\n",
+    ),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /srn-mobile\.yml: missing stale embedded-web payload cleanup/,
+  );
+});
+
+test("release-contract CI runs when release analysis or OpenClaw gating changes", () => {
+  const file = ".github/workflows/release-contract.yml";
+  const files = withFileChanged(file, (content) =>
+    content
+      .replace("      - '.github/workflows/srn-openclaw.yml'\n", "")
+      .replace("      - 'scripts/fingerprint-release-tree.mjs'\n", ""),
+  );
+  const errors = validateReleaseContract(files).join("\n");
+
+  assert.match(
+    errors,
+    /release-contract\.yml: expected \.github\/workflows\/srn-openclaw\.yml in both push and pull_request paths, found 1/,
+  );
+  assert.match(
+    errors,
+    /release-contract\.yml: expected scripts\/fingerprint-release-tree\.mjs in both push and pull_request paths, found 1/,
   );
 });

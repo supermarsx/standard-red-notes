@@ -15,8 +15,20 @@ on:
     branches: [main]
     paths:
       - 'cli/srn-server/**'
+      - 'cli/.prettierrc'
       - '.github/workflows/srn-server.yml'
   workflow_dispatch:
+    inputs:
+      force_release:
+        description: Publish even when source and bundle fingerprints are unchanged
+        required: false
+        default: false
+        type: boolean
+      force_reason:
+        description: Required audit reason when force_release is true
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: write
@@ -33,6 +45,47 @@ env:
   PKG_VERSION: '6.21.0'
 
 jobs:
+  impact:
+    name: analyze release impact
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.impact.outputs.changed }}
+      forced: ${{ steps.impact.outputs.forced }}
+      base_ref: ${{ steps.impact.outputs.base_ref }}
+      reason_codes: ${{ steps.impact.outputs.reason_codes }}
+      result_json: ${{ steps.impact.outputs.result_json }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
+      - id: impact
+        name: Compare srn-server publishable surface with its latest release
+        env:
+          FORCE_RELEASE: ${{ github.event_name == 'workflow_dispatch' && inputs.force_release || false }}
+          FORCE_REASON: ${{ github.event_name == 'workflow_dispatch' && inputs.force_reason || '' }}
+        run: |
+          set -euo pipefail
+          git fetch --force --tags origin
+          node scripts/analyze-release-impact.mjs \
+            --target srn-server \
+            --head HEAD \
+            --force "${FORCE_RELEASE}" \
+            --force-reason "${FORCE_REASON}" \
+            --output release-impact.json \
+            --github-output "$GITHUB_OUTPUT"
+          {
+            echo '### srn-server release impact'
+            echo '```json'
+            cat release-impact.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
   # 1) CHECK — lint, format and test run as three INDEPENDENT parallel jobs;
   # `build` fans in on all three (needs: [lint, test, format]). srn-server is a
   # standalone, zero-runtime-dependency npm package (Node built-ins only); it is
@@ -43,6 +96,8 @@ jobs:
   # a package-shape assertion so a missing/renamed entry point fails loudly.
   lint:
     name: lint
+    needs: impact
+    if: needs.impact.outputs.changed == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -72,6 +127,8 @@ jobs:
   # install needed; prettier runs via npx and auto-discovers cli/.prettierrc.
   format:
     name: format
+    needs: impact
+    if: needs.impact.outputs.changed == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -94,6 +151,8 @@ jobs:
   # non-empty, then smoke-run --help (tolerant of a non-zero help exit code).
   test:
     name: test
+    needs: impact
+    if: needs.impact.outputs.changed == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -130,7 +189,8 @@ jobs:
   # node-version/timestamps).
   build:
     name: build
-    needs: [lint, test, format]
+    needs: [impact, lint, test, format]
+    if: needs.impact.outputs.changed == 'true'
     runs-on: ubuntu-latest
     outputs:
       fingerprint: ${{ steps.fp.outputs.fingerprint }}
@@ -184,7 +244,7 @@ jobs:
   # changed=false to skip packaging + release entirely (a successful no-op).
   decide:
     name: decide
-    needs: build
+    needs: [impact, build]
     runs-on: ubuntu-latest
     outputs:
       changed: ${{ steps.cmp.outputs.changed }}
@@ -194,20 +254,25 @@ jobs:
       - name: Compare against last released fingerprint
         id: cmp
         env:
+          BASE_REF: ${{ needs.impact.outputs.base_ref }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NEW_FP: ${{ needs.build.outputs.fingerprint }}
+          FORCED: ${{ needs.impact.outputs.forced }}
         run: |
           set -euo pipefail
-          last_tag="$(gh release list --limit 200 --json tagName --jq '.[].tagName' \
-            | grep -E "^${TOOL}-v[0-9]+\.[0-9]+$" | head -n1 || true)"
-          if [ -z "$last_tag" ]; then
+          if [ "$FORCED" = "true" ]; then
+            echo "Audited force request bypasses the bundle fingerprint comparison."
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -z "$BASE_REF" ]; then
             echo "No prior ${TOOL} release found -> treat as changed."
             echo "changed=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          echo "Last ${TOOL} release: ${last_tag}"
+          echo "Last ${TOOL} release: ${BASE_REF}"
           old_fp=""
-          if gh release download "$last_tag" --pattern "${TOOL}.fingerprint" --output old.fingerprint --clobber 2>/dev/null; then
+          if gh release download "$BASE_REF" --pattern "${TOOL}.fingerprint" --output old.fingerprint --clobber 2>/dev/null; then
             old_fp="$(tr -d '[:space:]' < old.fingerprint)"
           else
             echo "Last release has no fingerprint asset -> treat as changed."
@@ -215,10 +280,10 @@ jobs:
           echo "old=${old_fp}"
           echo "new=${NEW_FP}"
           if [ -n "$old_fp" ] && [ "$old_fp" = "$NEW_FP" ]; then
-            echo "No changes since ${last_tag}, skipping release."
+            echo "No changes since ${BASE_REF}, skipping release."
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
-            echo "Bundle changed since ${last_tag} -> release."
+            echo "Bundle changed since ${BASE_REF} -> release."
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
 

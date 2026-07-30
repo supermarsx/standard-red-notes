@@ -25,6 +25,10 @@ export const RELEASE_CONTRACT_FILES = Object.freeze([
   "openclaw/scripts/release-config.mjs",
   "openclaw/scripts/verify-release.mjs",
   "package.json",
+  "scripts/analyze-release-impact.mjs",
+  "scripts/analyze-release-impact.test.mjs",
+  "scripts/fingerprint-release-tree.mjs",
+  "scripts/fingerprint-release-tree.test.mjs",
 ]);
 
 const TOOL_WORKFLOWS = Object.freeze([
@@ -51,6 +55,17 @@ const OPENCLAW_SMOKE_TARGETS = Object.freeze([
   ["linux-arm64", "ubuntu-24.04-arm", "arm64"],
   ["macos-x64", "macos-15-intel", "x64"],
   ["macos-arm64", "macos-15", "arm64"],
+]);
+
+const SELECTIVE_RELEASE_WORKFLOWS = Object.freeze([
+  [".github/workflows/srn-admin.yml", "srn-admin", "build"],
+  [".github/workflows/srn-client.yml", "srn-client", "lint"],
+  [".github/workflows/srn-desktop.yml", "srn-desktop", "version"],
+  [".github/workflows/srn-home-server.yml", "srn-home-server", "build"],
+  [".github/workflows/srn-mcp.yml", "srn-mcp", "lint"],
+  [".github/workflows/srn-mobile.yml", "srn-mobile", "version"],
+  [".github/workflows/srn-openclaw.yml", "srn-openclaw", "context"],
+  [".github/workflows/srn-server.yml", "srn-server", "lint"],
 ]);
 
 function countOccurrences(text, fragment) {
@@ -90,6 +105,105 @@ export function loadReleaseContractFiles(
 export function validateReleaseContract(files) {
   const errors = [];
 
+  // Every automatic publisher uses the same two-stage selective-release
+  // contract: an ancestry-aware source analysis first, then a normalized
+  // artifact/input fingerprint before any tag or external publication. Missing
+  // refs, shallow history and malformed/ambiguous tags are errors in the
+  // analyzer; an audited force reason is the only bypass.
+  for (const [file, target, firstJobName] of SELECTIVE_RELEASE_WORKFLOWS) {
+    const workflow = files.get(file) ?? "";
+    for (const [fragment, description] of [
+      ["force_release:", "audited force-release input"],
+      ["force_reason:", "audited force reason input"],
+    ]) {
+      requireFragment(errors, file, workflow, fragment, description);
+    }
+
+    const impact = jobBlock(workflow, "impact");
+    if (!impact) {
+      errors.push(`${file}: missing release-impact analysis job`);
+    } else {
+      for (const [fragment, description] of [
+        ["fetch-depth: 0", "complete Git history checkout"],
+        ["git fetch --force --tags origin", "complete release tag fetch"],
+        [
+          "node scripts/analyze-release-impact.mjs",
+          "release-impact analyzer invocation",
+        ],
+        [`--target ${target}`, `${target} analyzer target`],
+        ['--force "${FORCE_RELEASE}"', "force flag forwarding"],
+        ['--force-reason "${FORCE_REASON}"', "force reason forwarding"],
+        ["base_ref:", "selected base-ref output"],
+        ["reason_codes:", "machine-readable impact reasons"],
+      ]) {
+        requireFragment(errors, file, impact, fragment, description);
+      }
+    }
+
+    const firstJob = jobBlock(workflow, firstJobName);
+    if (!firstJob) {
+      errors.push(`${file}: missing source-gated ${firstJobName} job`);
+    } else {
+      requireFragment(
+        errors,
+        file,
+        firstJob,
+        "needs: impact",
+        `${firstJobName} dependency on release impact`,
+      );
+      requireFragment(
+        errors,
+        file,
+        firstJob,
+        "if: needs.impact.outputs.changed == 'true'",
+        `${firstJobName} source-impact gate`,
+      );
+    }
+
+    const decide = jobBlock(workflow, "decide");
+    if (!decide) {
+      errors.push(`${file}: missing release fingerprint decision job`);
+    } else {
+      for (const [fragment, description] of [
+        [
+          "BASE_REF: ${{ needs.impact.outputs.base_ref }}",
+          "analyzer-selected fingerprint base",
+        ],
+        [
+          "FORCED: ${{ needs.impact.outputs.forced }}",
+          "audited force output",
+        ],
+        ['if [ "$FORCED" = "true" ]; then', "audited force-only bypass"],
+        ['gh release download "$BASE_REF"', "prior fingerprint download"],
+        [".fingerprint", "release surface fingerprint"],
+        ['echo "changed=false" >> "$GITHUB_OUTPUT"', "successful no-op output"],
+      ]) {
+        requireFragment(errors, file, decide, fragment, description);
+      }
+      if (decide.includes("last_tag=\"$(gh release list")) {
+        errors.push(
+          `${file}: fingerprint comparison must use the analyzer-selected ancestry-validated base ref`,
+        );
+      }
+    }
+
+    const release = jobBlock(workflow, "release");
+    if (!release) {
+      errors.push(`${file}: missing release publication job`);
+    } else {
+      if (!/needs:\s*\[[^\]]*\bdecide\b[^\]]*\]/.test(release)) {
+        errors.push(`${file}: release publication does not depend on decide`);
+      }
+      requireFragment(
+        errors,
+        file,
+        release,
+        "if: needs.decide.outputs.changed == 'true'",
+        "unchanged-release publication guard",
+      );
+    }
+  }
+
   for (const file of TOOL_WORKFLOWS) {
     const workflow = files.get(file) ?? "";
     requireFragment(
@@ -109,6 +223,18 @@ export function validateReleaseContract(files) {
         );
       }
     }
+  }
+  for (const file of [
+    ".github/workflows/srn-client.yml",
+    ".github/workflows/srn-server.yml",
+  ]) {
+    requireFragment(
+      errors,
+      file,
+      files.get(file) ?? "",
+      "- 'cli/.prettierrc'",
+      "shared CLI release/check configuration trigger",
+    );
   }
 
   const openClawWorkflowFile = ".github/workflows/srn-openclaw.yml";
@@ -142,7 +268,10 @@ export function validateReleaseContract(files) {
       "actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373",
       "pinned OpenClaw build provenance action",
     ],
-    ["needs: [context, package, smoke]", "all-target OpenClaw release fan-in"],
+    [
+      "needs: [context, package, decide, smoke]",
+      "all-target OpenClaw release fan-in",
+    ],
     ["gh release create", "tagged OpenClaw GitHub release publication"],
   ]) {
     requireFragment(
@@ -210,6 +339,18 @@ export function validateReleaseContract(files) {
         "manifest.version = process.env.PACKAGE_VERSION",
         "release version stamped into the packaged manifest",
       ],
+      [
+        "--normalize-package-version package/package.json",
+        "rolling package-version normalization",
+      ],
+      [
+        "--exclude package/release-package.json",
+        "volatile source metadata exclusion",
+      ],
+      [
+        '--output "out/${TOOL}.fingerprint"',
+        "normalized OpenClaw package fingerprint asset",
+      ],
     ]) {
       requireFragment(
         errors,
@@ -233,6 +374,13 @@ export function validateReleaseContract(files) {
       openClawSmoke,
       "fail-fast: false",
       "complete OpenClaw smoke matrix",
+    );
+    requireFragment(
+      errors,
+      openClawWorkflowFile,
+      openClawSmoke,
+      "if: needs.decide.outputs.changed == 'true'",
+      "unchanged OpenClaw smoke skip",
     );
     for (const [target, runner, architecture] of OPENCLAW_SMOKE_TARGETS) {
       const declaration =
@@ -284,7 +432,10 @@ export function validateReleaseContract(files) {
   for (const [fragment, description] of [
     // Publication still fans in over every gate: attest needs
     // [context, package, smoke], so no failed smoke target can be published.
-    ["needs: [context, attest]", "attested OpenClaw release fan-in"],
+    [
+      "needs: [context, decide, attest]",
+      "attested OpenClaw release fan-in",
+    ],
     ["contents: write", "release publication permission"],
     [
       "name: srn-openclaw-attested-package",
@@ -641,6 +792,29 @@ export function validateReleaseContract(files) {
       "if-no-files-found: error",
       "required desktop installer upload",
     );
+    for (const [fragment, description] of [
+      ["find dist -type f -name app.asar", "actual packaged asar discovery"],
+      [
+        "yarn exec asar extract",
+        "packaged desktop runtime extraction",
+      ],
+      [
+        "--normalize-package-version package.json",
+        "rolling desktop version normalization",
+      ],
+      [
+        "${TOOL}-${target}.fingerprint",
+        "per-platform desktop runtime fingerprints",
+      ],
+    ]) {
+      requireFragment(
+        errors,
+        rootDesktopFile,
+        rootDesktopBuild,
+        fragment,
+        description,
+      );
+    }
   }
   // No desktop leg may be best-effort: every job in this workflow gates the
   // release, so a `continue-on-error` anywhere would let a broken installer
@@ -655,7 +829,10 @@ export function validateReleaseContract(files) {
   for (const [fragment, description] of [
     // Every remaining leg must gate the release, so a broken macOS, Windows or
     // Linux build can never publish. `build` is the whole OS/arch matrix.
-    ["needs: [version, build]", "desktop release fan-in over every leg"],
+    [
+      "needs: [version, build, decide]",
+      "desktop release fan-in over every leg",
+    ],
     [
       "tag_name: ${{ needs.version.outputs.tag }}",
       "namespaced desktop release tag reference",
@@ -833,6 +1010,37 @@ export function validateReleaseContract(files) {
     requireFragment(errors, rootMobileFile, rootMobile, fragment, description);
   }
 
+  const rootMobileFingerprint = jobBlock(rootMobile, "fingerprint");
+  if (!rootMobileFingerprint) {
+    errors.push(`${rootMobileFile}: missing pre-publication fingerprint job`);
+  } else {
+    for (const [fragment, description] of [
+      ["--platform android", "deterministic Android JavaScript bundle"],
+      ["--platform ios", "deterministic iOS JavaScript bundle"],
+      [
+        "rm -rf html/Web.bundle/src/web-src .release-impact",
+        "stale embedded-web payload cleanup",
+      ],
+      [
+        "--normalize-package-version app/packages/mobile/package.json",
+        "rolling mobile version normalization",
+      ],
+      [
+        '--output "release-fingerprint/srn-mobile.fingerprint"',
+        "normalized mobile release fingerprint",
+      ],
+      ["if-no-files-found: error", "required mobile fingerprint upload"],
+    ]) {
+      requireFragment(
+        errors,
+        rootMobileFile,
+        rootMobileFingerprint,
+        fragment,
+        description,
+      );
+    }
+  }
+
   const rootAndroid = jobBlock(rootMobile, "android");
   if (!rootAndroid) {
     errors.push(`${rootMobileFile}: missing Android release job`);
@@ -897,7 +1105,7 @@ export function validateReleaseContract(files) {
   } else {
     for (const [fragment, description] of [
       [
-        "needs: [version, android, ios]",
+        "needs: [version, decide, android, ios]",
         "validated Android and iOS release dependencies",
       ],
       ["pattern: srn-mobile-*", "mobile artifact fan-in"],
@@ -913,6 +1121,8 @@ export function validateReleaseContract(files) {
         "standard-red-notes-ios-arm64-${VERSION}.ipa",
         "iOS IPA release assertion",
       ],
+      ["test -s srn-mobile.fingerprint", "mobile fingerprint release asset"],
+      ['test "${#files[@]}" -eq 4', "complete mobile release payload"],
       [
         'sha256sum "${files[@]}" > SHA256SUMS.txt',
         "strict mobile checksum generation",
@@ -975,13 +1185,22 @@ export function validateReleaseContract(files) {
 
   const ciFile = ".github/workflows/release-contract.yml";
   const ci = files.get(ciFile) ?? "";
-  requireFragment(
-    errors,
-    ciFile,
-    ci,
+  for (const triggerPath of [
     ".github/workflows/srn-mobile.yml",
-    "root mobile workflow trigger path",
-  );
+    ".github/workflows/srn-openclaw.yml",
+    "scripts/analyze-release-impact.mjs",
+    "scripts/analyze-release-impact.test.mjs",
+    "scripts/fingerprint-release-tree.mjs",
+    "scripts/fingerprint-release-tree.test.mjs",
+  ]) {
+    const declaration = `- '${triggerPath}'`;
+    const count = countOccurrences(ci, declaration);
+    if (count !== 2) {
+      errors.push(
+        `${ciFile}: expected ${triggerPath} in both push and pull_request paths, found ${count}`,
+      );
+    }
+  }
   requireFragment(
     errors,
     ciFile,
@@ -1012,6 +1231,61 @@ export function validateReleaseContract(files) {
   ) {
     errors.push(
       "package.json: test:release-contract script is not wired to the validator tests",
+    );
+  }
+  if (
+    rootPackage.scripts?.["release:impact"] !==
+    "node scripts/analyze-release-impact.mjs"
+  ) {
+    errors.push(
+      "package.json: release:impact script is not wired to the analyzer",
+    );
+  }
+  if (
+    rootPackage.scripts?.["test:release-impact"] !==
+    "node --test scripts/analyze-release-impact.test.mjs scripts/fingerprint-release-tree.test.mjs"
+  ) {
+    errors.push(
+      "package.json: test:release-impact script is not wired to analyzer and fingerprint tests",
+    );
+  }
+
+  const impactAnalyzerFile = "scripts/analyze-release-impact.mjs";
+  const impactAnalyzer = files.get(impactAnalyzerFile) ?? "";
+  for (const [fragment, description] of [
+    ["shallow-history", "shallow-history fail-closed guard"],
+    ["malformed-release-ref", "malformed release-ref guard"],
+    ["ambiguous-release-history", "ambiguous history guard"],
+    ["Unknown argument", "unknown CLI argument rejection"],
+  ]) {
+    requireFragment(
+      errors,
+      impactAnalyzerFile,
+      impactAnalyzer,
+      fragment,
+      description,
+    );
+  }
+
+  const fingerprintScriptFile = "scripts/fingerprint-release-tree.mjs";
+  const fingerprintScript = files.get(fingerprintScriptFile) ?? "";
+  for (const [fragment, description] of [
+    ["srn-release-tree-v1", "versioned fingerprint schema"],
+    [
+      "fingerprint path escapes the selected root",
+      "fingerprint traversal rejection",
+    ],
+    [
+      "0.0.0-release-fingerprint",
+      "rolling package-version normalization",
+    ],
+  ]) {
+    requireFragment(
+      errors,
+      fingerprintScriptFile,
+      fingerprintScript,
+      fragment,
+      description,
     );
   }
 
