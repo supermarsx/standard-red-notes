@@ -87,6 +87,12 @@ describe('sanitizeWebEmbedUrl', () => {
     expect(isValidWebEmbedUrl('https://example.com')).toBe(true)
     expect(isValidWebEmbedUrl('javascript:alert(1)')).toBe(false)
   })
+
+  it('blocks a persisted URL whenever it becomes the app origin', () => {
+    const persistedUrl = 'https://notes-a.example/embed'
+    expect(sanitizeWebEmbedUrl(persistedUrl, 'https://notes-b.example')).toBe(persistedUrl)
+    expect(sanitizeWebEmbedUrl(persistedUrl, 'https://notes-a.example/reloaded')).toBe('')
+  })
 })
 
 describe('WebEmbedNode serialization', () => {

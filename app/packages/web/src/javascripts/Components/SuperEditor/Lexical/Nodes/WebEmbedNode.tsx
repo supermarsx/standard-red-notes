@@ -49,8 +49,9 @@ const DEFAULT_WEB_EMBED: WebEmbedData = { url: '' }
  *     warning about that pair only applies when the framed document's origin is
  *     the SAME as the embedder's origin (the frame could then reach back into
  *     the parent app's storage/DOM and lift the sandbox on itself). In this
- *     block the `src` is always an arbitrary EXTERNAL http(s) origin (enforced
- *     by sanitizeWebEmbedUrl) that is cross-origin to Standard Notes, so
+ *     block the `src` is always an EXTERNAL http(s) origin (enforced and
+ *     re-evaluated at render time by sanitizeWebEmbedUrl) that is cross-origin
+ *     to Standard Notes, so
  *     `allow-same-origin` only ever grants the frame access to its OWN site's
  *     data — exactly what it already has when opened in a normal tab. It does
  *     NOT grant any access to the note, the editor, or other origins. The
@@ -128,11 +129,16 @@ function WebEmbedComponent({ data, nodeKey }: { data: WebEmbedData; nodeKey: Nod
 
   const commit = useCallback(
     (url: string) => {
+      const safeUrl = sanitizeWebEmbedUrl(url)
+      if (!safeUrl) {
+        return
+      }
+
       editor.update(() => {
         const node = $getNodeByKey(nodeKey)
         if ($isWebEmbedNode(node)) {
           const current = node.getData()
-          node.setData({ url, height: current.height, trusted: current.trusted })
+          node.setData({ url: safeUrl, height: current.height, trusted: current.trusted })
         }
       })
       setEditing(false)
@@ -180,7 +186,9 @@ function WebEmbedComponent({ data, nodeKey }: { data: WebEmbedData; nodeKey: Nod
             autoFocus
           />
           {draft.trim() && !sanitizeWebEmbedUrl(draft) ? (
-            <div className="text-danger mt-1 text-xs">Enter a valid http(s) website URL.</div>
+            <div className="text-danger mt-1 text-xs">
+              Enter a valid external http(s) website URL. Standard Notes pages cannot be embedded.
+            </div>
           ) : null}
           <button
             type="button"
@@ -222,7 +230,9 @@ function WebEmbedComponent({ data, nodeKey }: { data: WebEmbedData; nodeKey: Nod
       </div>
 
       {!safeUrl ? (
-        <div className="text-danger p-2 text-sm">Enter a valid http(s) website URL to embed.</div>
+        <div className="text-danger p-2 text-sm">
+          Enter a valid external http(s) website URL. Standard Notes pages cannot be embedded.
+        </div>
       ) : !loaded ? (
         /* Risk-alert placeholder card: shown FIRST instead of an auto-loaded
            iframe. The user must explicitly opt in to loading external content. */
@@ -243,8 +253,8 @@ function WebEmbedComponent({ data, nodeKey }: { data: WebEmbedData; nodeKey: Nod
               onChange={(event) => setTrusted(event.target.checked)}
             />
             <span>
-              Trust this site (apply the looser sandbox profile). Only enable for sites you control or fully trust — the
-              embed still runs cross-origin, so it can never read your note.
+              Trust this site. Only enable for sites you control or fully trust — the embed still runs cross-origin, so
+              it cannot read your note.
             </span>
           </label>
           <div className="mt-2 flex flex-wrap items-center gap-2">

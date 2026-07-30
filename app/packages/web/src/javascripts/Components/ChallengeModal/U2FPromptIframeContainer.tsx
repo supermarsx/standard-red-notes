@@ -3,13 +3,14 @@ import { useEffect, useRef } from 'react'
 
 type Props = {
   contextData?: Record<string, unknown>
-  onResponse: (response: string) => void
+  onResponse: (response: Record<string, unknown>) => void
   apiHost: string
 }
 
 // Self-hosted: the `?route=u2f` view is served by this same app (see App.tsx),
 // so the WebAuthn iframe loads from our own origin rather than a hosted domain.
-const U2F_IFRAME_ORIGIN = `${window.location.origin}/?route=u2f`
+const U2F_IFRAME_URL = `${window.location.origin}/?route=u2f`
+const U2F_IFRAME_ORIGIN = window.location.origin
 
 const U2FPromptIframeContainer = ({ contextData, onResponse, apiHost }: Props) => {
   const iframeRef = useRef<HTMLIFrameElement>(null)
@@ -17,31 +18,30 @@ const U2FPromptIframeContainer = ({ contextData, onResponse, apiHost }: Props) =
   useEffect(() => {
     const messageHandler = (event: MessageEvent) => {
       log(LoggingDomain.U2F, 'Native client received message', event)
-      const eventDoesNotComeFromU2FIFrame = event.origin !== new URL(U2F_IFRAME_ORIGIN).origin
+      const eventDoesNotComeFromU2FIFrame =
+        event.source !== iframeRef.current?.contentWindow || event.origin !== U2F_IFRAME_ORIGIN
       if (eventDoesNotComeFromU2FIFrame) {
-        log(
-          LoggingDomain.U2F,
-          'Not sending data to U2F iframe; origin does not match',
-          event.origin,
-          new URL(U2F_IFRAME_ORIGIN).origin,
-        )
+        log(LoggingDomain.U2F, 'Ignoring U2F message; source or origin does not match', event.origin, U2F_IFRAME_ORIGIN)
         return
       }
 
-      if (event.data.mountedAuthView) {
+      const data = event.data as Record<string, unknown> | null
+      if (!data || typeof data !== 'object') {
+        return
+      }
+
+      if (data.mountedAuthView === true) {
         if (iframeRef.current?.contentWindow) {
           log(LoggingDomain.U2F, 'Sending contextData to U2F iframe', contextData)
-          iframeRef.current.contentWindow.postMessage(
-            { username: (contextData as Record<string, unknown>).username, apiHost },
-            U2F_IFRAME_ORIGIN,
-          )
+          iframeRef.current.contentWindow.postMessage({ username: contextData?.username, apiHost }, U2F_IFRAME_ORIGIN)
         }
         return
       }
 
-      if (event.data.assertionResponse) {
-        log(LoggingDomain.U2F, 'Received assertion response from U2F iframe', event.data.assertionResponse)
-        onResponse(event.data.assertionResponse)
+      const assertionResponse = data.assertionResponse
+      if (assertionResponse && typeof assertionResponse === 'object' && !Array.isArray(assertionResponse)) {
+        log(LoggingDomain.U2F, 'Received assertion response from U2F iframe', assertionResponse)
+        onResponse(assertionResponse as Record<string, unknown>)
       }
     }
 
@@ -55,7 +55,7 @@ const U2FPromptIframeContainer = ({ contextData, onResponse, apiHost }: Props) =
   return (
     <iframe
       ref={iframeRef}
-      src={U2F_IFRAME_ORIGIN}
+      src={U2F_IFRAME_URL}
       className="h-40 w-full"
       title="U2F"
       allow="publickey-credentials-get"

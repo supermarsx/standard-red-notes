@@ -29,16 +29,22 @@ const U2FAuthIframe = () => {
     const messageHandler = (event: MessageEvent) => {
       log(LoggingDomain.U2F, 'U2F iframe received message', event)
 
-      const eventDoesNotComeFromNativeClient = event.origin !== NATIVE_CLIENT_ORIGIN
+      const eventDoesNotComeFromNativeClient = event.source !== window.parent || event.origin !== NATIVE_CLIENT_ORIGIN
       if (eventDoesNotComeFromNativeClient) {
-        log(LoggingDomain.U2F, 'Not setting username; origin does not match', event.origin, NATIVE_CLIENT_ORIGIN)
+        log(
+          LoggingDomain.U2F,
+          'Not setting username; source or origin does not match',
+          event.origin,
+          NATIVE_CLIENT_ORIGIN,
+        )
         return
       }
 
-      if (event.data.username) {
-        setUsername(event.data.username)
-        setApiHost(event.data.apiHost)
-        setSource(event.source)
+      const data = event.data as Record<string, unknown> | null
+      if (data && typeof data.username === 'string' && typeof data.apiHost === 'string') {
+        setUsername(data.username)
+        setApiHost(data.apiHost)
+        setSource(window.parent)
       }
     }
 
