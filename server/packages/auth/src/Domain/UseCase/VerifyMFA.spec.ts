@@ -409,6 +409,50 @@ describe('VerifyMFA', () => {
       })
     })
 
+    it('should require TOTP instead of accepting magic link when both factors are configured', async () => {
+      getSetting.execute = jest.fn().mockImplementation((dto: { settingName: string }) => {
+        if (dto.settingName === SettingName.NAMES.MagicLinkEnabled) {
+          return Result.ok({ setting, decryptedValue: 'true' })
+        }
+        if (dto.settingName === SettingName.NAMES.MfaSecret) {
+          return Result.ok({ setting, decryptedValue: 'shhhh' })
+        }
+
+        return Result.fail('not found')
+      })
+
+      expect(
+        await createVerifyMFA().execute({
+          email: 'test@test.te',
+          requestParams: { magic_link_code: '123456' },
+          preventOTPFromFurtherUsage: true,
+        }),
+      ).toEqual({
+        success: false,
+        errorTag: 'mfa-required',
+        errorMessage: 'Please enter your two-factor authentication code.',
+        errorPayload: { mfa_key: expect.stringMatching(/^mfa_/) },
+      })
+      expect(verifyMagicLinkCode.execute).not.toHaveBeenCalled()
+    })
+
+    it('should require U2F instead of accepting magic link when both factors are configured', async () => {
+      authenticatorRepository.findByUserUuid = jest.fn().mockReturnValue([{} as jest.Mocked<Authenticator>])
+
+      expect(
+        await createVerifyMFA().execute({
+          email: 'test@test.te',
+          requestParams: { magic_link_code: '123456' },
+          preventOTPFromFurtherUsage: true,
+        }),
+      ).toEqual({
+        success: false,
+        errorTag: 'u2f-required',
+        errorMessage: 'Please authenticate with your U2F device.',
+      })
+      expect(verifyMagicLinkCode.execute).not.toHaveBeenCalled()
+    })
+
     it('should pass when the magic link code is valid', async () => {
       verifyMagicLinkCode.execute = jest.fn().mockReturnValue(Result.ok(true))
 

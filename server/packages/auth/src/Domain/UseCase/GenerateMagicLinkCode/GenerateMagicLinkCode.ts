@@ -9,7 +9,7 @@ import { EmailSenderInterface } from '../../Email/EmailSenderInterface'
 
 import { GenerateMagicLinkCodeDto } from './GenerateMagicLinkCodeDto'
 
-export class GenerateMagicLinkCode implements UseCaseInterface<{ code: string; emailed: boolean }> {
+export class GenerateMagicLinkCode implements UseCaseInterface<{ emailed: true }> {
   private static readonly CODE_LENGTH = 6
   private static readonly EXPIRATION_MINUTES = 15
 
@@ -19,12 +19,20 @@ export class GenerateMagicLinkCode implements UseCaseInterface<{ code: string; e
     private logger: Logger,
   ) {}
 
-  async execute(dto: GenerateMagicLinkCodeDto): Promise<Result<{ code: string; emailed: boolean }>> {
+  isDeliveryConfigured(): boolean {
+    return this.emailSender.isConfigured()
+  }
+
+  async execute(dto: GenerateMagicLinkCodeDto): Promise<Result<{ emailed: true }>> {
     if (!dto.userIdentifier) {
       return Result.fail('Could not generate magic link code: missing user identifier.')
     }
 
     try {
+      if (!this.isDeliveryConfigured()) {
+        return Result.fail('Email delivery is not configured. Magic-link sign-in is unavailable.')
+      }
+
       const code = this.generateNumericCode()
       const now = new Date()
       const expiresAt = new Date(now.getTime() + GenerateMagicLinkCode.EXPIRATION_MINUTES * 60 * 1000)
@@ -42,16 +50,16 @@ export class GenerateMagicLinkCode implements UseCaseInterface<{ code: string; e
 
       await this.magicLinkTokenRepository.save(magicLinkToken)
 
-      let emailed = false
-      if (this.emailSender.isConfigured()) {
-        emailed = await this.emailSender.sendEmail(
-          dto.userIdentifier,
-          'Your sign-in verification code',
-          `Your one-time verification code is: ${code}\n\nThis code expires in ${GenerateMagicLinkCode.EXPIRATION_MINUTES} minutes.`,
-        )
+      const emailed = await this.emailSender.sendEmail(
+        dto.userIdentifier,
+        'Your sign-in verification code',
+        `Your one-time verification code is: ${code}\n\nThis code expires in ${GenerateMagicLinkCode.EXPIRATION_MINUTES} minutes.`,
+      )
+      if (!emailed) {
+        return Result.fail('Could not deliver the magic-link verification code. Please try again.')
       }
 
-      return Result.ok({ code, emailed })
+      return Result.ok({ emailed: true })
     } catch (error) {
       this.logger.error(`Failed to generate magic link code: ${(error as Error).message}`)
 

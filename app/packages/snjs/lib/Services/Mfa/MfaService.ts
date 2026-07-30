@@ -11,7 +11,7 @@ import {
 import { SettingName } from '@standardnotes/domain-core'
 import { SNRootKeyParams } from '@standardnotes/encryption'
 import { HttpServiceInterface } from '@standardnotes/api'
-import { isErrorResponse } from '@standardnotes/responses'
+import { getErrorFromErrorResponse, isErrorResponse } from '@standardnotes/responses'
 
 const MagicLinkPaths = {
   status: '/v1/mfa/magic-link/status',
@@ -44,7 +44,11 @@ export class MfaService extends AbstractService implements MfaServiceInterface {
   }
 
   async setMagicLinkEnabled(enabled: boolean): Promise<void> {
-    await this.http.post(MagicLinkPaths.status, { enabled })
+    const response = await this.http.post<{ enabled?: boolean }>(MagicLinkPaths.status, { enabled })
+
+    if (isErrorResponse(response)) {
+      throw new Error(getErrorFromErrorResponse(response).message)
+    }
   }
 
   async isMfaActivated(): Promise<boolean> {

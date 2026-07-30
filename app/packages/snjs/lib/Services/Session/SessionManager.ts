@@ -91,6 +91,8 @@ const ThirtyMinutes = 30 * 60 * 1000
  */
 const MAX_PROOF_OF_WORK_ATTEMPTS = 2
 const PROOF_OF_WORK_FAILED_MESSAGE = 'Could not complete the anti-bot verification challenge. Please try again.'
+const MAGIC_LINK_DELIVERY_FAILED_MESSAGE =
+  'The verification code could not be delivered by email. Please contact your server administrator or try again later.'
 
 /**
  * The session manager is responsible for loading initial user state, and any relevant
@@ -428,24 +430,34 @@ export class SessionManager
     return response.values[0].value as Record<string, unknown>
   }
 
-  /**
-   * Requests a magic-link one-time code from the server. When SMTP is configured
-   * server-side the code is emailed and nothing is returned here; when it is not
-   * configured the server returns the code so it can be shown on screen as a fallback.
-   */
-  private async requestMagicLinkCode(email: string): Promise<string | undefined> {
+  private async requestMagicLinkCode(
+    email: string,
+  ): Promise<{ success: true } | { success: false; errorMessage: string }> {
     try {
-      const response = await this.httpService.post<{ emailed?: boolean; code?: string }>('/v1/mfa/magic-link/request', {
+      const response = await this.httpService.post<{ emailed?: boolean }>('/v1/mfa/magic-link/request', {
         email,
       })
 
       if (isErrorResponse(response)) {
-        return undefined
+        return {
+          success: false,
+          errorMessage: getErrorFromErrorResponse(response).message || MAGIC_LINK_DELIVERY_FAILED_MESSAGE,
+        }
       }
 
-      return response.data?.code
+      if (response.data?.emailed !== true) {
+        return {
+          success: false,
+          errorMessage: MAGIC_LINK_DELIVERY_FAILED_MESSAGE,
+        }
+      }
+
+      return { success: true }
     } catch {
-      return undefined
+      return {
+        success: false,
+        errorMessage: MAGIC_LINK_DELIVERY_FAILED_MESSAGE,
+      }
     }
   }
 
@@ -465,13 +477,10 @@ export class SessionManager
    * removed, mirroring the server's contract.
    */
   private async promptForMfaValue(options?: {
-    onScreenCode?: string
     approvalChallengeId?: string
     approvedElsewhereButCodeStillRequired?: boolean
   }): Promise<{ mfaCode?: string; pushApprovalStatus?: 'approved' | 'denied' } | undefined> {
-    let heading = options?.onScreenCode
-      ? `${SessionStrings.EnterMfa} Your verification code is: ${options.onScreenCode}`
-      : SessionStrings.EnterMfa
+    let heading = SessionStrings.EnterMfa
     if (options?.approvedElsewhereButCodeStillRequired) {
       heading = `${SessionStrings.MfaPushApprovedButCodeStillRequired} ${heading}`
     }
@@ -769,11 +778,21 @@ export class SessionManager
           })
         }
 
-        let onScreenMagicLinkCode: string | undefined
         const isMagicLinkRequired =
           error?.tag === ErrorTag.MfaRequired && /email/i.test(error?.message ?? '') && !dto.mfaCode
         if (isMagicLinkRequired) {
-          onScreenMagicLinkCode = await this.requestMagicLinkCode(dto.email)
+          const magicLinkRequest = await this.requestMagicLinkCode(dto.email)
+          if (!magicLinkRequest.success) {
+            await this.alertService.alert(magicLinkRequest.errorMessage)
+
+            return {
+              response: this.apiService.createErrorResponse(
+                magicLinkRequest.errorMessage,
+                undefined,
+                ErrorTag.ClientCanceledMfa,
+              ),
+            }
+          }
         }
 
         /**
@@ -791,7 +810,6 @@ export class SessionManager
             : undefined
 
         const mfaResult = await this.promptForMfaValue({
-          onScreenCode: onScreenMagicLinkCode,
           approvalChallengeId,
           approvedElsewhereButCodeStillRequired: dto.disallowPushApproval,
         })

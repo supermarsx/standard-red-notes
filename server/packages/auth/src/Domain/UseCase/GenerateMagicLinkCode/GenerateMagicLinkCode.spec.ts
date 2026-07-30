@@ -20,7 +20,7 @@ describe('GenerateMagicLinkCode', () => {
     }
 
     emailSender = {
-      isConfigured: jest.fn().mockReturnValue(false),
+      isConfigured: jest.fn().mockReturnValue(true),
       sendEmail: jest.fn().mockResolvedValue(true),
     }
 
@@ -37,22 +37,31 @@ describe('GenerateMagicLinkCode', () => {
     expect(magicLinkTokenRepository.save).not.toHaveBeenCalled()
   })
 
-  it('should generate and persist a 6 digit numeric code', async () => {
+  it('should generate, persist, and email a 6 digit numeric code without returning it', async () => {
     const result = await createUseCase().execute({ userIdentifier: 'test@test.te' })
 
     expect(result.isFailed()).toBe(false)
-    expect(result.getValue().code).toMatch(/^\d{6}$/)
-    expect(result.getValue().emailed).toBe(false)
+    expect(result.getValue()).toEqual({ emailed: true })
     expect(magicLinkTokenRepository.save).toHaveBeenCalledTimes(1)
+
+    const persistedToken = magicLinkTokenRepository.save.mock.calls[0][0]
+    expect(persistedToken.props.code).toMatch(/^\d{6}$/)
+    expect(emailSender.sendEmail).toHaveBeenCalledWith(
+      'test@test.te',
+      'Your sign-in verification code',
+      expect.stringContaining(persistedToken.props.code),
+    )
   })
 
-  it('should not email the code when SMTP is not configured', async () => {
+  it('should fail closed without generating or persisting a code when SMTP is not configured', async () => {
     emailSender.isConfigured.mockReturnValue(false)
 
     const result = await createUseCase().execute({ userIdentifier: 'test@test.te' })
 
-    expect(result.getValue().emailed).toBe(false)
+    expect(result.isFailed()).toBe(true)
+    expect(result.getError()).toEqual('Email delivery is not configured. Magic-link sign-in is unavailable.')
     expect(emailSender.sendEmail).not.toHaveBeenCalled()
+    expect(magicLinkTokenRepository.save).not.toHaveBeenCalled()
   })
 
   it('should email the code when SMTP is configured', async () => {
@@ -61,23 +70,23 @@ describe('GenerateMagicLinkCode', () => {
 
     const result = await createUseCase().execute({ userIdentifier: 'test@test.te' })
 
-    expect(result.getValue().emailed).toBe(true)
+    expect(result.getValue()).toEqual({ emailed: true })
     expect(emailSender.sendEmail).toHaveBeenCalledWith(
       'test@test.te',
       'Your sign-in verification code',
-      expect.stringContaining(result.getValue().code),
+      expect.stringMatching(/\d{6}/),
     )
   })
 
-  it('should still succeed (on-screen fallback) when email delivery fails', async () => {
+  it('should fail without returning an on-screen fallback when email delivery fails', async () => {
     emailSender.isConfigured.mockReturnValue(true)
     emailSender.sendEmail.mockResolvedValue(false)
 
     const result = await createUseCase().execute({ userIdentifier: 'test@test.te' })
 
-    expect(result.isFailed()).toBe(false)
-    expect(result.getValue().emailed).toBe(false)
-    expect(result.getValue().code).toMatch(/^\d{6}$/)
+    expect(result.isFailed()).toBe(true)
+    expect(result.getError()).toEqual('Could not deliver the magic-link verification code. Please try again.')
+    expect(magicLinkTokenRepository.save).toHaveBeenCalledTimes(1)
   })
 
   it('should fail gracefully if persistence throws', async () => {

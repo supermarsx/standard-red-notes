@@ -34,6 +34,7 @@ const MagicLinkView: FunctionComponent<Props> = ({ application }) => {
   const handleToggle = useCallback(
     async (newValue: boolean) => {
       setError('')
+      setLoading(true)
       const previous = enabled
       setEnabled(newValue)
       try {
@@ -41,6 +42,8 @@ const MagicLinkView: FunctionComponent<Props> = ({ application }) => {
       } catch (e) {
         setEnabled(previous)
         setError((e as Error).message)
+      } finally {
+        setLoading(false)
       }
     },
     [application, enabled],
@@ -57,8 +60,8 @@ const MagicLinkView: FunctionComponent<Props> = ({ application }) => {
           <div className="flex flex-grow flex-col">
             <Title>Magic link</Title>
             <Text>
-              Receive a one-time verification code by email when signing in. If email is not configured on your server,
-              the code is shown on screen as a fallback.
+              Receive a one-time verification code by email when signing in. Email delivery must be configured and
+              available on your server; verification codes are never shown on the sign-in screen.
             </Text>
           </div>
           <Switch

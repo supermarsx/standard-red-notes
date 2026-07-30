@@ -63,7 +63,7 @@ export class MagicLinkController {
 
     if (result.isFailed()) {
       return {
-        status: HttpStatusCode.BadRequest,
+        status: HttpStatusCode.InternalServerError,
         data: {
           error: {
             message: result.getError(),
@@ -72,15 +72,10 @@ export class MagicLinkController {
       }
     }
 
-    const { code, emailed } = result.getValue()
-
     return {
       status: HttpStatusCode.Success,
       data: {
-        emailed,
-        // The on-screen code is always returned as a fallback when email is not
-        // configured. When the code has been emailed it is omitted from the body.
-        code: emailed ? undefined : code,
+        emailed: true,
       },
     }
   }
@@ -89,6 +84,17 @@ export class MagicLinkController {
     params: SetMagicLinkStatusRequestParams,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   ): Promise<HttpResponse<any>> {
+    if (params.enabled && !this.generateMagicLinkCode.isDeliveryConfigured()) {
+      return {
+        status: HttpStatusCode.BadRequest,
+        data: {
+          error: {
+            message: 'Email delivery is not configured. Magic-link sign-in cannot be enabled.',
+          },
+        },
+      }
+    }
+
     const result = await this.setSettingValue.execute({
       userUuid: params.userUuid,
       settingName: SettingName.NAMES.MagicLinkEnabled,

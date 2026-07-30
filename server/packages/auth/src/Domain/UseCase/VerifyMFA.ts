@@ -119,10 +119,6 @@ export class VerifyMFA implements UseCaseInterface {
         }
       }
 
-      if (magicLinkEnabled) {
-        return await this.verifyMagicLink(dto.email, dto.requestParams)
-      }
-
       if (u2fEnabled) {
         if (!dto.requestParams.authenticator_response) {
           return {
@@ -158,7 +154,9 @@ export class VerifyMFA implements UseCaseInterface {
         return {
           success: true,
         }
-      } else {
+      }
+
+      if (twoFactorEnabled) {
         const verificationResult = await this.verifyMFASecret(
           dto.email,
           mfaSecretOrError.getValue().decryptedValue as string,
@@ -168,6 +166,8 @@ export class VerifyMFA implements UseCaseInterface {
 
         return verificationResult
       }
+
+      return await this.verifyMagicLink(dto.email, dto.requestParams)
     } catch (error) {
       if (error instanceof MFAValidationError) {
         return {
