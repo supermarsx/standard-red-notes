@@ -206,24 +206,77 @@ function numericVersion(tag, prefix) {
     return undefined;
   }
   const suffix = tag.slice(prefix.length);
-  if (!/^(?:0|[1-9]\d*)(?:\.(?:0|[1-9]\d*)){1,2}$/.test(suffix)) {
+  const match =
+    /^(0|[1-9]\d*)\.(0|[1-9]\d*)(?:\.(0|[1-9]\d*))?(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(
+      suffix,
+    );
+  const prerelease = match?.[4]?.split(".") ?? [];
+  if (
+    !match ||
+    prerelease.some(
+      (identifier) => /^\d+$/.test(identifier) && /^0\d+/.test(identifier),
+    )
+  ) {
     throw new ReleaseImpactError(
       "malformed-release-ref",
-      `Release ref '${tag}' matches prefix '${prefix}' but has a malformed numeric version.`,
+      `Release ref '${tag}' matches prefix '${prefix}' but has a malformed release version.`,
     );
   }
-  return suffix.split(".").map(Number);
+  return {
+    core: [match[1], match[2], match[3]]
+      .filter((component) => component !== undefined)
+      .map(Number),
+    prerelease,
+  };
 }
 
 function compareVersions(left, right) {
-  const width = Math.max(left.length, right.length);
+  const width = Math.max(left.core.length, right.core.length);
   for (let index = 0; index < width; index += 1) {
-    const delta = (left[index] ?? 0) - (right[index] ?? 0);
+    const delta = (left.core[index] ?? 0) - (right.core[index] ?? 0);
     if (delta !== 0) {
       return delta;
     }
   }
-  return left.length - right.length;
+  const coreWidth = left.core.length - right.core.length;
+  if (coreWidth !== 0) {
+    return coreWidth;
+  }
+  if (left.prerelease.length === 0 || right.prerelease.length === 0) {
+    return left.prerelease.length === right.prerelease.length
+      ? 0
+      : left.prerelease.length === 0
+        ? 1
+        : -1;
+  }
+  const prereleaseWidth = Math.max(
+    left.prerelease.length,
+    right.prerelease.length,
+  );
+  for (let index = 0; index < prereleaseWidth; index += 1) {
+    const leftIdentifier = left.prerelease[index];
+    const rightIdentifier = right.prerelease[index];
+    if (leftIdentifier === undefined || rightIdentifier === undefined) {
+      return leftIdentifier === rightIdentifier
+        ? 0
+        : leftIdentifier === undefined
+          ? -1
+          : 1;
+    }
+    if (leftIdentifier === rightIdentifier) {
+      continue;
+    }
+    const leftNumeric = /^\d+$/.test(leftIdentifier);
+    const rightNumeric = /^\d+$/.test(rightIdentifier);
+    if (leftNumeric && rightNumeric) {
+      return Number(leftIdentifier) - Number(rightIdentifier);
+    }
+    if (leftNumeric !== rightNumeric) {
+      return leftNumeric ? -1 : 1;
+    }
+    return leftIdentifier.localeCompare(rightIdentifier);
+  }
+  return 0;
 }
 
 function matchingReleaseTags(repo, prefix) {
@@ -852,6 +905,19 @@ function parseBoolean(value, flag) {
 }
 
 function parseArguments(argv) {
+  const supportedArguments = new Set([
+    "--all-workspaces",
+    "--base-ref",
+    "--force",
+    "--force-reason",
+    "--github-output",
+    "--head",
+    "--output",
+    "--package",
+    "--repo",
+    "--target",
+    "--workspace-root",
+  ]);
   const values = new Map();
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
@@ -859,6 +925,12 @@ function parseArguments(argv) {
       throw new ReleaseImpactError(
         "invalid-argument",
         `Unexpected positional argument '${argument}'.`,
+      );
+    }
+    if (!supportedArguments.has(argument)) {
+      throw new ReleaseImpactError(
+        "invalid-argument",
+        `Unknown argument '${argument}'.\n${usage()}`,
       );
     }
     const value = argv[index + 1];
@@ -958,6 +1030,12 @@ export function runCli(argv = process.argv.slice(2)) {
     throw new ReleaseImpactError(
       "invalid-argument",
       `Choose exactly one analysis mode.\n${usage()}`,
+    );
+  }
+  if (!args.has("--package") && args.has("--workspace-root")) {
+    throw new ReleaseImpactError(
+      "invalid-argument",
+      "--workspace-root is supported only with --package; --all-workspaces takes its workspace root as the mode value.",
     );
   }
 

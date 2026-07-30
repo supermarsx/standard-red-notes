@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -204,6 +204,30 @@ test("a malformed matching release ref fails closed", () => {
   }
 });
 
+test("a valid independent-package prerelease tag remains analyzable", () => {
+  const context = fixture();
+  try {
+    git(context.repo, "tag", "@fixture/a@1.0.0-beta.1");
+    write(
+      context.repo,
+      "packages/a/src/index.js",
+      "export const a = 'after prerelease';\n",
+    );
+    commit(context.repo, "change after prerelease");
+
+    const result = analyzeWorkspacePackageImpact({
+      repo: context.repo,
+      packageName: "@fixture/a",
+      workspaceRoot: "root",
+    });
+
+    assert.equal(result.baseRef, "@fixture/a@1.0.0-beta.1");
+    assert.equal(result.changed, true);
+  } finally {
+    context.cleanup();
+  }
+});
+
 test("divergent release history is rejected instead of choosing an unsafe diff", () => {
   const context = fixture();
   try {
@@ -314,6 +338,59 @@ test("all-workspaces mode reports only changed packages and their dependents", (
     assert.equal(
       result.packages.find((entry) => entry.identity === "@fixture/c").changed,
       false,
+    );
+  } finally {
+    context.cleanup();
+  }
+});
+
+test("the CLI rejects unknown flags instead of silently weakening analysis", () => {
+  const context = fixture();
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [
+        path.resolve("scripts/analyze-release-impact.mjs"),
+        "--repo",
+        context.repo,
+        "--package",
+        "@fixture/a",
+        "--workspace-root",
+        "root",
+        "--typo-base",
+        "@fixture/a@1.0.0",
+      ],
+      { encoding: "utf8" },
+    );
+
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /Unknown argument '--typo-base'/);
+  } finally {
+    context.cleanup();
+  }
+});
+
+test("the CLI rejects flags that do not apply to the selected mode", () => {
+  const context = fixture();
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [
+        path.resolve("scripts/analyze-release-impact.mjs"),
+        "--repo",
+        context.repo,
+        "--target",
+        "srn-mcp",
+        "--workspace-root",
+        "root",
+      ],
+      { encoding: "utf8" },
+    );
+
+    assert.equal(result.status, 1);
+    assert.match(
+      result.stderr,
+      /--workspace-root is supported only with --package/,
     );
   } finally {
     context.cleanup();
