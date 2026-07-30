@@ -201,7 +201,12 @@ export function setupUpdates(window: BrowserWindow, appState: AppState): void {
     return
   }
   if (updatesSetup) {
-    throw Error('Already set up updates.')
+    /**
+     * electron-updater is process-global, while the desktop app may have
+     * several BrowserWindows. Additional windows reuse the one updater
+     * registration instead of crashing when their services are initialized.
+     */
+    return
   }
   const { store } = appState
 
@@ -233,8 +238,24 @@ export function setupUpdates(window: BrowserWindow, appState: AppState): void {
   autoUpdater.autoInstallOnAppQuit = updateState.enableAutoUpdate
 
   autoUpdater.on('update-downloaded', (info: { version?: string }) => {
-    window.webContents.send(MessageToWebApp.UpdateAvailable, null)
     updateState.autoUpdateHasBeenDownloaded(info.version || null)
+
+    let sentToTrackedWindow = false
+    for (const windowState of appState.windows) {
+      if (windowState.window.isDestroyed()) {
+        continue
+      }
+      windowState.window.webContents.send(MessageToWebApp.UpdateAvailable, null)
+      sentToTrackedWindow = true
+    }
+
+    /**
+     * The first update check can theoretically complete before createWindowState
+     * has inserted the initial window into appState.windows.
+     */
+    if (!sentToTrackedWindow && !window.isDestroyed()) {
+      window.webContents.send(MessageToWebApp.UpdateAvailable, null)
+    }
   })
 
   autoUpdater.on('error', logError)
