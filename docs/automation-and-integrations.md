@@ -8,6 +8,12 @@ description: Runtime status, gates, and privacy boundaries for workflows, webhoo
 Integrations are not all at the same maturity or trust boundary. This page
 describes the code that is present and calls out explicit deferrals.
 
+{% include safety-alert.html
+  level="trust"
+  title="Integrations can receive decrypted content"
+  body="Provider AI, the server OCR path, GitHub publishing, webhooks, reminders, and workflow tools can move selected plaintext or credentials beyond the encrypted client. Enable only the path you have reviewed, minimize its input, and document retention and revocation."
+%}
+
 ## Status matrix
 
 | Integration | Runtime status | Gate |
@@ -96,6 +102,12 @@ Server OCR fails closed behind:
 Administrators can also set the default language, maximum pages, and maximum
 image bytes. Use browser OCR for sensitive documents when possible.
 
+{% include safety-alert.html
+  level="caution"
+  title="Server OCR uploads decrypted page images"
+  body="The client rasterizes decrypted PDF pages and sends those images to the server OCR endpoint. Browser OCR keeps that image path on the device; use it when the document must not be disclosed to the server."
+%}
+
 ## CalDAV
 
 CalDAV publishes a read-only reminders/calendar feed under the configurable
@@ -131,6 +143,12 @@ providers according to operator configuration. Apply per-user enablement and
 request/token limits. Hosted providers receive the prompt and selected content;
 local providers reduce external disclosure but still require secured local
 logs, models, and network access.
+
+{% include safety-alert.html
+  level="trust"
+  title="Review the AI route, not only the model name"
+  body="A direct browser provider receives the selected prompt and tool context from the client. A proxy route also exposes that request to the configured Standard Red Notes server before it reaches the provider. Self-hosting the app does not make a hosted AI request local."
+%}
 
 ## Integration review checklist
 

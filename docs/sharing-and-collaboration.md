@@ -15,6 +15,12 @@ Standard Red Notes has two distinct sharing models:
 Choose the model before sharing. A public link is not a shortcut for a managed
 team vault.
 
+{% include safety-alert.html
+  level="trust"
+  title="Sharing crosses a trust boundary"
+  body="A collaborator can copy plaintext while authorized. Anyone who obtains a complete public share link can decrypt its payload, and revocation cannot retract saved text, files, screenshots, browser history, or logs."
+%}
+
 {% include mermaid.html %}
 
 ## Shared vault lifecycle

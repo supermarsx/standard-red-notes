@@ -9,6 +9,14 @@ Standard Red Notes combines client-side encryption with server-side identity,
 authorization, abuse prevention, and availability controls. These layers solve
 different problems.
 
+{% include safety-alert.html
+  level="danger"
+  title="The account password is not recoverable by an administrator"
+  body="MFA recovery codes can restore the second factor, but they do not decrypt notes or replace a forgotten account password. Keep the password and a tested encrypted backup independently recoverable before changing credentials."
+  link_url="/backups-and-recovery.html"
+  link_text="Build a recovery plan"
+%}
+
 ## Trust boundary
 
 The account password participates in deriving client encryption keys. Normal
@@ -69,11 +77,11 @@ available forgotten-password recovery path. The default guidance remains:
 without the known password and an independent usable backup, the encrypted
 account is unrecoverable.
 
-> ⚠️ **Do not rely on or advertise the escrow primitives as recovery.** Enabling
-> them also weakens the normal end-to-end guarantee: anyone who obtains both the
-> server-side escrow and the one-time recovery code can decrypt the account key
-> and read the notes. Leave them disabled unless you are developing and
-> independently validating the missing end-to-end recovery flow.
+{% include safety-alert.html
+  level="danger"
+  title="Escrow is not a finished recovery path"
+  body="Do not rely on or advertise the escrow primitives as recovery. Anyone who obtains both the server-side escrow and its recovery secret can decrypt the account key. Leave escrow disabled unless you are developing and independently validating the missing end-to-end flow."
+%}
 
 An administrator can reset a user’s server-side MFA state. That operation does
 not recover the account encryption password.
@@ -102,6 +110,12 @@ passcode also disables and removes the passkey gate.
 On mobile, biometric/keychain integrations and privacy-snapshot or secure-window
 controls add platform protection. On desktop, OS keychain security and the
 machine’s account security remain part of the boundary.
+
+{% include safety-alert.html
+  level="caution"
+  title="An unlocked device can read unlocked notes"
+  body="App locks and protected-item prompts reduce casual local exposure; they do not stop malware, screenshots, clipboard capture, memory inspection, or an authorized user from copying content. Use full-disk encryption, an OS login, timely screen locking, and device revocation together."
+%}
 
 ## Public sharing and collaboration
 

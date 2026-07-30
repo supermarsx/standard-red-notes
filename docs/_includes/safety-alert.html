@@ -1,0 +1,22 @@
+{% assign alert_level = include.level | default: "caution" %}
+{% assign alert_title = include.title | default: "Safety note" %}
+{% case alert_level %}
+  {% when "danger" %}
+    {% assign alert_icon = "!" %}
+  {% when "trust" %}
+    {% assign alert_icon = "↗" %}
+  {% when "info" %}
+    {% assign alert_icon = "i" %}
+  {% else %}
+    {% assign alert_icon = "⚠" %}
+{% endcase %}
+<aside class="safety-alert safety-alert--{{ alert_level }}" aria-label="{{ alert_title }}">
+  <span class="safety-alert__icon" aria-hidden="true">{{ alert_icon }}</span>
+  <div class="safety-alert__content">
+    <strong class="safety-alert__title">{{ alert_title }}</strong>
+    <p>{{ include.body }}</p>
+    {% if include.link_url and include.link_text %}
+      <a class="safety-alert__link" href="{{ include.link_url | relative_url }}">{{ include.link_text }}</a>
+    {% endif %}
+  </div>
+</aside>

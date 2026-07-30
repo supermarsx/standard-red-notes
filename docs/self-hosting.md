@@ -12,6 +12,14 @@ secrets), then a single `docker compose up` brings the whole stack online.
 Standard Red Notes is licensed under AGPL-3.0; it is a self-hosted fork of
 Standard Notes. See the [license](../license.md) file for details.
 
+{% include safety-alert.html
+  level="danger"
+  title="Internet exposure needs TLS, unique secrets, and tested recovery"
+  body="The localhost quickstart is not an internet-hardening guide. Before publishing an instance, terminate TLS, restrict ingress to the single app front door, replace or verify every secret, configure secure cookies and trusted proxy hops, and complete a database plus file restore drill."
+  link_url="/operations-hardening.html"
+  link_text="Review production hardening"
+%}
+
 - [Deploy in 5 minutes](#deploy-in-5-minutes)
 - [What the stack contains](#what-the-stack-contains)
 - [Prerequisites](#prerequisites)
@@ -24,8 +32,6 @@ Standard Notes. See the [license](../license.md) file for details.
 - [Where your data lives](#where-your-data-lives)
 - [Backup and restore](#backup-and-restore)
 - [Troubleshooting](#troubleshooting)
-
----
 
 ## Deploy in 5 minutes
 
@@ -79,8 +85,6 @@ configuration, and administrative capabilities require an administrator role.
 
 That's it. To stop the stack later: `docker compose down`.
 
----
-
 ## What the stack contains
 
 `docker-compose.yml` defines these services on a private bridge network:
@@ -106,8 +110,6 @@ start (all its calls are idempotent) — there is no emulator data volume to
 manage. See [Troubleshooting](#troubleshooting) if realtime updates aren't
 flowing.
 
----
-
 ## Prerequisites
 
 - **Docker** with the **Compose v2** plugin (`docker compose`, not the legacy
@@ -123,8 +125,6 @@ flowing.
 
 You do **not** need Node.js, Yarn, or a database installed on the host - the
 containers provide all of that.
-
----
 
 ## Configuration (the `.env` file)
 
@@ -184,14 +184,11 @@ for the database, Redis, operation-limit, and image-pinning model.
 
 ### Server-wide shared access key (optional obfuscation gate)
 
-> **This is obfuscation / access-gating, not end-to-end security.** It does not
-> replace and does not strengthen the existing client-side end-to-end
-> encryption, which is what actually protects your note content. The shared key
-> only makes the server refuse to talk to clients that do not present it -
-> analogous to a reverse-proxy "basic auth" gate, but built into the gateway so
-> the official clients can pass it. It deters a casual scanner who stumbles onto
-> your server; it is _not_ a defense against an attacker who already has the key
-> (or can read it off a client device). It is also **not** a user password.
+{% include safety-alert.html
+  level="caution"
+  title="The shared access key is only an access gate"
+  body="It does not replace TLS, account authentication, or client-side encryption. Anyone who extracts it from a configured device can pass the gate, and the value is stored locally on every configured client."
+%}
 
 Two variables control it, both **OFF by default** (leaving them unset means zero
 behavior change for existing installs):
@@ -210,8 +207,6 @@ Access Key**. It is stored locally on that device (never synced) and attached to
 outgoing requests automatically. Because sign-in and registration also pass
 through the gate, configure the key on a device _before_ signing in to a gated
 server.
-
----
 
 ## Standalone home-server release
 
@@ -253,8 +248,6 @@ and [Running behind a reverse proxy](#running-behind-a-reverse-proxy) before
 exposing it publicly. The binary is only the backend, so point a separately
 deployed Standard Red Notes client at that public server URL.
 
----
-
 ## The srn-admin binary
 
 `srn-admin` is the administrative CLI for a Standard Red Notes deployment. Like
@@ -274,8 +267,6 @@ You can download and checksum the binary like the other published tools to keep
 it on an operator machine, but it always targets a live deployment — it manages
 an existing stack rather than starting a server of its own.
 
----
-
 ## Choosing a domain and ports
 
 - **Local-only (default).** Leave the domain blank. The app is reachable at
@@ -293,8 +284,6 @@ an existing stack rather than starting a server of its own.
   port, or edit `APP_PORT` in `.env`, then `docker compose up -d` again. It is
   the only published port — the API gateway and files service are internal-only
   and reached through the app front door.
-
----
 
 ## Running behind a reverse proxy
 
@@ -475,8 +464,6 @@ Use the same `.env` values as the nginx example.
 - **Real client IP in logs.** With `TRUST_PROXY` set correctly the server logs
   the client's address (from `X-Forwarded-For`), not the proxy's.
 
----
-
 ## Start, stop, and upgrade
 
 ```bash
@@ -499,11 +486,17 @@ docker compose pull            # refresh mariadb / redis / floci images
 docker compose up -d --build   # rebuild app/server/gateway and restart
 ```
 
+{% include safety-alert.html
+  level="danger"
+  title="Snapshot before every upgrade"
+  body="Back up the database, uploaded files, configuration, and required secrets; record image digests; then test restore and rollback. Never use docker compose down -v as an upgrade step because it deletes named data volumes."
+  link_url="/backups-and-recovery.html"
+  link_text="Follow the backup and restore checklist"
+%}
+
 > `docker compose down` keeps your data (it lives in named volumes).
 > `docker compose down -v` **deletes the volumes and all your data** - only use
 > it for a clean reset.
-
----
 
 ## Where your data lives
 
@@ -519,8 +512,6 @@ and container rebuilds:
 | `mcp-data`     | MCP bridge local state (only with the `mcp` profile).          | Disposable.                                            |
 
 List them with `docker volume ls | grep standard-red-notes`.
-
----
 
 ## Backup and restore
 
@@ -565,8 +556,6 @@ Keep your `.env` backed up in a safe place too: if you lose
 can be locked out and encrypted server-side data becomes unreadable.
 
 For database tuning and restore drills, see [Operations hardening](operations-hardening.md).
-
----
 
 ## Troubleshooting
 
@@ -614,3 +603,8 @@ MariaDB takes a few seconds to initialize a brand-new `mariadb-data` volume. The
 server waits on the db healthcheck, but if you changed `MYSQL_*` values after the
 volume was already initialized, the credentials won't match - reset with
 `docker compose down -v` (destroys data) or fix the volume's existing user.
+
+For deployment security, continue with [Operations
+Hardening](operations-hardening.md). Before mixing original Standard Notes
+clients or moving an original vault, use [Standard Notes
+Compatibility](standard-notes-compatibility.md).

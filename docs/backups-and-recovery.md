@@ -53,6 +53,12 @@ A decrypted export should be treated as sensitive plaintext. Encrypt the
 storage medium or place the export in a separately encrypted archive, and
 delete temporary copies after verification.
 
+{% include safety-alert.html
+  level="danger"
+  title="Readable exports leave the encrypted vault"
+  body="Decrypted native backups, plaintext desktop backups, and readable CLI exports can be indexed, synced, copied, or recovered from disk like any other plaintext file. Write them only to a protected destination and remove temporary copies after the restore check."
+%}
+
 The `srn-client export` command can also create JSON or Markdown exports. Its
 output is decrypted and therefore inherits the same plaintext handling rules.
 
@@ -166,3 +172,7 @@ desktop folders, exports, email, Nextcloud, database snapshots, object storage,
 and disaster-recovery replicas. When a deletion request must cover backups,
 document whether the copy is immediately purged or expires through normal
 rotation.
+
+For migrations to or from original Standard Notes clients and servers, review
+the evidence and test matrix in [Standard Notes
+Compatibility](standard-notes-compatibility.md).

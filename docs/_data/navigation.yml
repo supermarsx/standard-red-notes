@@ -6,6 +6,24 @@
       url: /onboarding.html
     - title: Capability map
       url: /capability-map.html
+    - title: Standard Notes compatibility
+      items:
+        - title: Compatibility overview
+          url: /standard-notes-compatibility.html
+        - title: Status definitions
+          url: /standard-notes-compatibility.html#status-key
+        - title: Compatibility matrix
+          url: /standard-notes-compatibility.html#compatibility-matrix
+        - title: Backups and imports
+          url: /standard-notes-compatibility.html#backups-and-imports
+        - title: Clients and servers
+          url: /standard-notes-compatibility.html#clients-and-servers
+        - title: Content and features
+          url: /standard-notes-compatibility.html#content-features-and-local-only-data
+        - title: Migration playbooks
+          url: /standard-notes-compatibility.html#safe-migration-playbooks
+        - title: Evidence and gaps
+          url: /standard-notes-compatibility.html#evidence-reviewed
     - title: Complete in-app guide
       expanded: true
       items:

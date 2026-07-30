@@ -29,8 +29,14 @@ the hosted subscription machinery.
 
 ## Compatibility Notes
 
-Because the upstream model and package boundaries remain recognizable, changes
-should be made conservatively:
+Recognizable upstream package names are not a drop-in compatibility guarantee.
+The current repository proves internal protocol, backup, and wire contracts but
+does not run a released original client against the fork server or the fork
+client against the hosted original service.
+
+Use the [Standard Notes Compatibility](standard-notes-compatibility.md) page for
+the status matrix, migration playbooks, exact source/test evidence, and known
+gaps. Changes to shared contracts should still be made conservatively:
 
 - Keep encryption and sync changes covered by real browser or protocol tests.
 - Avoid mixing hosted-service assumptions into self-hosted defaults.

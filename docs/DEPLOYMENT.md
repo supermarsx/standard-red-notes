@@ -25,7 +25,13 @@ AI proxy, OCR, CalDAV — works the same.
 
 {% include mermaid.html %}
 
----
+{% include safety-alert.html
+  level="danger"
+  title="Protect data before changing deployment profiles"
+  body="Back up the database or SQLite data, uploaded files, generated secrets, and configuration before an upgrade or profile migration. Verify the restore on a separate instance, and do not use a volume-deleting command as part of an update."
+  link_url="/backups-and-recovery.html"
+  link_text="Use the recovery checklist"
+%}
 
 ## A. Full multi-container (existing, unchanged)
 
@@ -40,8 +46,6 @@ docker compose up -d
 See the top of `docker-compose.yml` and `docs/self-hosting.md` for the full env
 reference, reverse-proxy (Traefik) examples, and optional profiles (`mcp`,
 `workflows`).
-
----
 
 ## B. All-in-one single container (new)
 
@@ -174,8 +178,6 @@ multi-container app image already ships.
 > becomes a no-op once the migrations are corrected upstream. Mode A (MySQL) is
 > unaffected — it never executes the sqlite migrations.
 
----
-
 ## C. LXC / systemd (new)
 
 Run natively (no Docker) inside a Debian/Ubuntu LXC system container or VM. Same
@@ -193,8 +195,6 @@ Full copy-paste steps (Proxmox `pct` / `incus` container creation, upgrade,
 backup, HTTPS) are in **`deploy/lxc/README.md`**. The installer is idempotent,
 persists secrets under `/var/lib/standard-red-notes`, and installs
 `standard-red-notes.service` (`journalctl -u standard-red-notes -f`).
-
----
 
 ## Opt-in container restart (Redis / MariaDB)
 
@@ -253,8 +253,6 @@ Once enabled and reachable, an "Infrastructure containers" section appears under
 restart is admin-gated and audit-logged (`admin.container-control`). To turn the
 feature back off, unset `SERVICE_CONTROL_DOCKER_ENABLED` and stop the proxy
 (`docker compose --profile ops stop docker-socket-proxy`).
-
----
 
 ## Verifying the CSP self-heal
 

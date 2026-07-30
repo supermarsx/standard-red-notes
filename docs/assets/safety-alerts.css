@@ -1,0 +1,131 @@
+.safety-alert {
+  --alert-accent: #8f5b00;
+  --alert-bg: #fff8df;
+  --alert-border: #e3c778;
+  align-items: flex-start;
+  background: var(--alert-bg);
+  border: 1px solid var(--alert-border);
+  border-left: 0.35rem solid var(--alert-accent);
+  border-radius: 0.65rem;
+  color: var(--ink);
+  display: flex;
+  gap: 0.8rem;
+  margin: 1.25rem 0;
+  padding: 1rem;
+}
+
+.safety-alert--danger {
+  --alert-accent: #a31320;
+  --alert-bg: #fff0f1;
+  --alert-border: #e8aeb4;
+}
+
+.safety-alert--trust {
+  --alert-accent: #315d75;
+  --alert-bg: #eef7fb;
+  --alert-border: #accfdf;
+}
+
+.safety-alert--info {
+  --alert-accent: #3c5f2f;
+  --alert-bg: #f1f8ed;
+  --alert-border: #b7d2a9;
+}
+
+.safety-alert__icon {
+  align-items: center;
+  background: var(--alert-accent);
+  border-radius: 999px;
+  color: #fff;
+  display: inline-flex;
+  flex: 0 0 1.7rem;
+  font-size: 0.9rem;
+  font-weight: 800;
+  height: 1.7rem;
+  justify-content: center;
+  line-height: 1;
+}
+
+.safety-alert__content {
+  min-width: 0;
+}
+
+.safety-alert__title {
+  color: var(--alert-accent);
+  display: block;
+  line-height: 1.35;
+  margin-bottom: 0.25rem;
+}
+
+.safety-alert__content p {
+  margin: 0;
+}
+
+.safety-alert__link {
+  display: inline-block;
+  font-weight: 700;
+  margin-top: 0.45rem;
+}
+
+.compatibility-badge {
+  border: 1px solid currentcolor;
+  border-radius: 999px;
+  display: inline-block;
+  font-size: 0.78rem;
+  font-weight: 750;
+  letter-spacing: 0.015em;
+  line-height: 1.2;
+  padding: 0.22rem 0.55rem;
+  white-space: nowrap;
+}
+
+.compatibility-badge--confirmed {
+  background: #edf8ea;
+  color: #315f24;
+}
+
+.compatibility-badge--conditional {
+  background: #fff8df;
+  color: #765000;
+}
+
+.compatibility-badge--export {
+  background: #eef4ff;
+  color: #2f568a;
+}
+
+.compatibility-badge--fork {
+  background: #f4eeff;
+  color: #63449a;
+}
+
+.compatibility-badge--unverified {
+  background: #fff0f1;
+  color: #8b1722;
+}
+
+@media (max-width: 36rem) {
+  .safety-alert {
+    gap: 0.65rem;
+    padding: 0.85rem;
+  }
+}
+
+@media print {
+  .safety-alert,
+  .compatibility-badge {
+    background: transparent;
+    break-inside: avoid;
+  }
+}
+
+@media (forced-colors: active) {
+  .safety-alert,
+  .compatibility-badge {
+    border-color: CanvasText;
+  }
+
+  .safety-alert__icon {
+    forced-color-adjust: none;
+  }
+}
