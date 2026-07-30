@@ -32,7 +32,6 @@ import { InversifyExpressServer, sanitizeRequestUrlForLogging } from 'inversify-
 import helmet from 'helmet'
 import cors from 'cors'
 import cookieParser from 'cookie-parser'
-import * as http from 'http'
 import { text, json, Request, Response, NextFunction, raw } from 'express'
 import * as winston from 'winston'
 import { PassThrough } from 'stream'
@@ -40,11 +39,14 @@ import { Env } from '../Bootstrap/Env'
 import { HomeServerInterface } from './HomeServerInterface'
 import { HomeServerConfiguration } from './HomeServerConfiguration'
 import { WebSocketRedisBridge } from './WebSocketRedisBridge'
+import { HomeServerRuntime } from './HomeServerRuntime'
 
 export class HomeServer implements HomeServerInterface {
-  private serverInstance: http.Server | undefined
+  private readonly runtime = new HomeServerRuntime()
   private authService: AuthServiceInterface | undefined
   private logStream: PassThrough | undefined
+  private starting = false
+  private stopPromise: Promise<Result<string>> | undefined
   private readonly loggerNames = [
     'auth-server',
     'syncing-server',
@@ -55,6 +57,11 @@ export class HomeServer implements HomeServerInterface {
   ]
 
   async start(configuration: HomeServerConfiguration): Promise<Result<string>> {
+    if (this.starting || this.runtime.isActive()) {
+      return Result.fail('Home server is already running or changing state.')
+    }
+
+    this.starting = true
     try {
       const controllerContainer = new ControllerContainer()
       const serviceContainer = new ServiceContainer()
@@ -89,17 +96,15 @@ export class HomeServer implements HomeServerInterface {
 
       // Bridge in-process WEB_SOCKET_MESSAGE_REQUESTED events onto Redis pub/sub
       // so the self-hosted WebSocket gateway can push them to live clients.
-      directCallDomainEventPublisher.register(
-        new WebSocketRedisBridge(
-          winston.loggers.get('home-server'),
-          env.get('REDIS_HOST', true) || undefined,
-          env.get('REDIS_PORT', true) ? +env.get('REDIS_PORT', true) : 6379,
-        ),
+      const webSocketRedisBridge = new WebSocketRedisBridge(
+        winston.loggers.get('home-server'),
+        env.get('REDIS_HOST', true) || undefined,
+        env.get('REDIS_PORT', true) ? +env.get('REDIS_PORT', true) : 6379,
       )
+      directCallDomainEventPublisher.register(webSocketRedisBridge)
 
       const apiGatewayService = new ApiGatewayService(serviceContainer)
       const authService = new AuthService(serviceContainer, controllerContainer, directCallDomainEventPublisher)
-      this.authService = authService
       const syncingService = new SyncingService(serviceContainer, controllerContainer, directCallDomainEventPublisher)
       const revisionsService = new RevisionsService(
         serviceContainer,
@@ -223,7 +228,6 @@ export class HomeServer implements HomeServerInterface {
           }),
         )
 
-        /* eslint-disable */
         app.use(
           helmet({
             contentSecurityPolicy: {
@@ -246,7 +250,6 @@ export class HomeServer implements HomeServerInterface {
             },
           }),
         )
-        /* eslint-enable */
         app.use(json({ limit: requestPayloadLimit }))
         app.use(raw({ limit: requestPayloadLimit, type: 'application/octet-stream' }))
         app.use(
@@ -418,18 +421,6 @@ export class HomeServer implements HomeServerInterface {
       // why this is a post-build handler and not a repaired controller.
       app.use(createFallbackHandler({ welcomeHtml: HOME_SERVER_WELCOME_HTML }))
 
-      // Standard Red Notes: start the reminder-delivery scheduler. It gates itself
-      // on the REMINDER_DELIVERY_ENABLED master switch (start() no-ops when off) and
-      // only ever delivers reminders the user explicitly published to a configured,
-      // enabled channel.
-      try {
-        if (startReminderDeliveryScheduler(container)) {
-          logger.info('Reminder delivery scheduler started')
-        }
-      } catch (error) {
-        logger.error(`Failed to start reminder delivery scheduler: ${(error as Error).message}`)
-      }
-
       const serverInstance = app.listen(port)
 
       const keepAliveTimeout = env.get('HTTP_KEEP_ALIVE_TIMEOUT', true)
@@ -438,56 +429,107 @@ export class HomeServer implements HomeServerInterface {
 
       serverInstance.keepAliveTimeout = keepAliveTimeout
 
-      this.serverInstance = serverInstance
-
-      process.on('SIGTERM', () => {
-        logger.info('SIGTERM signal received: closing HTTP server')
-        serverInstance.close(() => {
-          logger.info('HTTP server closed')
-        })
+      await this.runtime.start({
+        server: serverInstance,
+        bridge: webSocketRedisBridge,
+        logger,
+        startScheduler: () => {
+          const scheduler = container.get<{ stop(): void }>(ApiGatewayTypes.ApiGateway_ReminderDeliveryScheduler)
+          if (startReminderDeliveryScheduler(container)) {
+            logger.info('Reminder delivery scheduler started')
+          }
+          return scheduler
+        },
+        onSigterm: async () => {
+          logger.info('SIGTERM signal received: stopping home server')
+          const result = await this.stop()
+          if (result.isFailed()) {
+            throw new Error(result.getError())
+          }
+          logger.info('Home server stopped')
+        },
       })
 
+      this.authService = authService
       logger.info(`Server started on port ${port}. Log level: ${env.get('LOG_LEVEL', true)}.`)
 
       return Result.ok('Server started.')
     } catch (error) {
-      console.error((error as Error).stack)
+      const startupError = error as Error
+      let cleanupError: string | undefined
+      if (this.runtime.isActive() || this.logStream !== undefined) {
+        const cleanupResult = await this.stopRunningServer()
+        if (cleanupResult.isFailed()) {
+          cleanupError = cleanupResult.getError()
+        }
+      } else {
+        this.authService = undefined
+      }
+      console.error(startupError.stack)
 
-      return Result.fail((error as Error).message)
+      return Result.fail(
+        cleanupError ? `${startupError.message}; startup cleanup failed: ${cleanupError}` : startupError.message,
+      )
+    } finally {
+      this.starting = false
     }
   }
 
   async stop(): Promise<Result<string>> {
+    if (this.stopPromise) {
+      return this.stopPromise
+    }
+    if (this.starting) {
+      return Result.fail('Home server is still starting.')
+    }
+    if (!this.runtime.isActive()) {
+      return Result.fail('Home server is not running.')
+    }
+
+    this.stopPromise = this.stopRunningServer()
     try {
-      if (!this.serverInstance) {
-        return Result.fail('Home server is not running.')
-      }
-
-      for (const loggerName of this.loggerNames) {
-        winston.loggers.close(loggerName)
-      }
-
-      if (this.logStream) {
-        this.logStream.end()
-      }
-
-      this.serverInstance.close()
-      this.serverInstance.unref()
-
-      this.serverInstance = undefined
-
-      return Result.ok('Server stopped.')
-    } catch (error) {
-      return Result.fail((error as Error).message)
+      return await this.stopPromise
+    } finally {
+      this.stopPromise = undefined
     }
   }
 
-  async isRunning(): Promise<boolean> {
-    if (!this.serverInstance) {
-      return false
+  private async stopRunningServer(): Promise<Result<string>> {
+    const errors: Error[] = []
+    try {
+      await this.runtime.stop()
+    } catch (error) {
+      errors.push(error as Error)
     }
 
-    return this.serverInstance.address() !== null
+    for (const loggerName of this.loggerNames) {
+      try {
+        winston.loggers.close(loggerName)
+      } catch (error) {
+        errors.push(error as Error)
+      }
+    }
+
+    try {
+      if (this.logStream) {
+        this.logStream.end()
+      }
+    } catch (error) {
+      errors.push(error as Error)
+    } finally {
+      this.logStream = undefined
+      this.authService = undefined
+    }
+
+    if (errors.length > 0) {
+      return Result.fail(errors.map((error) => error.message).join('; '))
+    }
+
+    return Result.ok('Server stopped.')
+  }
+
+  async isRunning(): Promise<boolean> {
+    return this.runtime.isRunning()
   }
 
   async activatePremiumFeatures(dto: {
@@ -498,7 +540,7 @@ export class HomeServer implements HomeServerInterface {
     endsAt?: Date
     cancelPreviousSubscription?: boolean
   }): Promise<Result<string>> {
-    if (!this.isRunning() || !this.authService) {
+    if (!(await this.isRunning()) || !this.authService) {
       return Result.fail('Home server is not running.')
     }
 

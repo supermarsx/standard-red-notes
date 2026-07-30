@@ -25,6 +25,7 @@
     "package": "yarn node esbuild.config.mjs",
     "lint": "eslint . --ext .ts",
     "lint:fix": "eslint . --ext .ts --fix",
+    "test": "jest --coverage --no-cache --config=./jest.config.js --maxWorkers=2",
     "start": "yarn node dist/bin/server.js"
   },
   "dependencies": {
@@ -48,6 +49,8 @@
     "winston": "^3.19.0"
   },
   "devDependencies": {
+    "@swc/core": "^1.15.43",
+    "@swc/jest": "^0.2.39",
     "@types/cookie-parser": "^1",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
@@ -55,6 +58,7 @@
     "@types/node": "^26.1.1",
     "@yarnpkg/esbuild-plugin-pnp": "^3.0.0-rc.15",
     "esbuild": "^0.28.1",
+    "jest": "^30.4.2",
     "typescript": "6.0.3"
   }
 }

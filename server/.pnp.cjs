@@ -6366,6 +6366,8 @@ const RAW_RUNTIME_STATE =
           ["@standardnotes/home-server", "workspace:packages/home-server"],\
           ["@standardnotes/revisions-server", "workspace:packages/revisions"],\
           ["@standardnotes/syncing-server", "workspace:packages/syncing-server"],\
+          ["@swc/core", "virtual:fd909b174d079e30b336c4ce72c38a88c1e447767b1a8dd7655e07719a1e31b97807f0931368724fc78897ff15e6a6d00b83316c0f76d11f85111f342e08bb79#npm:1.15.43"],\
+          ["@swc/jest", "virtual:fd909b174d079e30b336c4ce72c38a88c1e447767b1a8dd7655e07719a1e31b97807f0931368724fc78897ff15e6a6d00b83316c0f76d11f85111f342e08bb79#npm:0.2.39"],\
           ["@types/cookie-parser", "npm:1.4.6"],\
           ["@types/cors", "npm:2.8.19"],\
           ["@types/express", "npm:5.0.6"],\
@@ -6381,6 +6383,7 @@ const RAW_RUNTIME_STATE =
           ["inversify", "npm:8.1.3"],\
           ["inversify-express-utils", "virtual:04783e12400851b8a3d76e71495851cc94959db6e62f04cb0a31190080629440b182d8c8eb4d7f2b04e281912f2783a5fd4d2c3c6ab68d38b7097246c93f4c19#workspace:packages/inversify-express-utils"],\
           ["ioredis", "npm:5.11.1"],\
+          ["jest", "virtual:fd909b174d079e30b336c4ce72c38a88c1e447767b1a8dd7655e07719a1e31b97807f0931368724fc78897ff15e6a6d00b83316c0f76d11f85111f342e08bb79#npm:30.4.2"],\
           ["reflect-metadata", "npm:0.2.2"],\
           ["typescript", "patch:typescript@npm%3A6.0.3#optional!builtin<compat/typescript>::version=6.0.3&hash=5786d5"],\
           ["winston", "npm:3.19.0"]\

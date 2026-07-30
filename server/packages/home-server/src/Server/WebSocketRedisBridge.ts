@@ -1,6 +1,13 @@
 import { DomainEventInterface, DomainEventMessageHandlerInterface } from '@standardnotes/domain-events'
-import Redis from 'ioredis'
+import Redis, { RedisOptions } from 'ioredis'
 import { Logger } from 'winston'
+
+export interface WebSocketRedisPublisher {
+  on(event: 'error', listener: (error: Error) => void): unknown
+  publish(channel: string, message: string): Promise<unknown>
+  quit(): Promise<unknown>
+  disconnect(): void
+}
 
 /**
  * Bridges the in-process `WEB_SOCKET_MESSAGE_REQUESTED` domain event onto a
@@ -16,16 +23,18 @@ import { Logger } from 'winston'
  */
 export class WebSocketRedisBridge implements DomainEventMessageHandlerInterface {
   static readonly CHANNEL = 'websocket-messages'
-  private publisher: Redis | undefined
+  private publisher: WebSocketRedisPublisher | undefined
   private warned = false
 
   constructor(
     private readonly logger: Logger,
     private readonly redisHost: string | undefined,
     private readonly redisPort: number,
+    private readonly createPublisher: (options: RedisOptions) => WebSocketRedisPublisher = (options) =>
+      new Redis(options),
   ) {}
 
-  private getPublisher(): Redis | undefined {
+  private getPublisher(): WebSocketRedisPublisher | undefined {
     if (!this.redisHost) {
       if (!this.warned) {
         this.logger.info('WebSocketRedisBridge: REDIS_HOST not set; realtime push bridge disabled.')
@@ -34,7 +43,7 @@ export class WebSocketRedisBridge implements DomainEventMessageHandlerInterface 
       return undefined
     }
     if (!this.publisher) {
-      this.publisher = new Redis({
+      this.publisher = this.createPublisher({
         host: this.redisHost,
         port: this.redisPort,
         lazyConnect: false,
@@ -63,6 +72,21 @@ export class WebSocketRedisBridge implements DomainEventMessageHandlerInterface 
       await publisher.publish(WebSocketRedisBridge.CHANNEL, JSON.stringify(messageOrEvent.payload))
     } catch (error) {
       this.logger.debug(`WebSocketRedisBridge publish failed: ${(error as Error).message}`)
+    }
+  }
+
+  async close(): Promise<void> {
+    const publisher = this.publisher
+    this.publisher = undefined
+    if (!publisher) {
+      return
+    }
+
+    try {
+      await publisher.quit()
+    } catch (error) {
+      this.logger.debug(`WebSocketRedisBridge graceful close failed: ${(error as Error).message}`)
+      publisher.disconnect()
     }
   }
 
