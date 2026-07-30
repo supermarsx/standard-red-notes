@@ -360,8 +360,9 @@ export const DOC_CATEGORIES: DocCategory[] = [
           {
             type: 'list',
             items: [
-              'When your server has email (SMTP) configured, the code is emailed to you.',
-              'When email is not configured (for example a minimal self-host), the server shows the code on-screen so you can still complete the flow.',
+              'Your server must have working email (SMTP) delivery before magic-link 2FA can be enabled.',
+              'The code is sent only by email and is never returned to or shown by the unauthenticated sign-in screen.',
+              'If delivery fails, sign-in stops instead of falling back to an exposed on-screen code.',
             ],
           },
           {
@@ -1019,8 +1020,8 @@ export const DOC_CATEGORIES: DocCategory[] = [
           },
           {
             type: 'callout',
-            variant: 'info',
-            text: 'Without SMTP configured, magic-link still works for a single-user/self-host scenario by showing the code on-screen instead of emailing it.',
+            variant: 'warning',
+            text: 'Without working SMTP, magic-link cannot be enabled or used. Verification codes are deliberately never exposed in an unauthenticated API response or on the sign-in screen.',
           },
         ],
         related: ['security/magic-link', 'self-hosting/overview'],
@@ -1461,11 +1462,11 @@ export const DOC_CATEGORIES: DocCategory[] = [
       {
         id: 'troubleshooting/lost-2fa',
         title: 'Lost two-factor access',
-        summary: 'Use your saved secret/backup key, or fall back to magic link.',
+        summary: 'Use your saved secret/backup key, or a previously configured emailed factor.',
         blocks: [
           {
             type: 'paragraph',
-            text: 'If you lose your authenticator device, re-add the account in a new authenticator using the secret/backup key you saved when enabling 2FA. If you enabled email magic-link 2FA, you can complete sign-in via the emailed (or on-screen) code instead.',
+            text: 'If you lose your authenticator device, re-add the account in a new authenticator using the secret/backup key you saved when enabling 2FA. If you previously enabled email magic-link 2FA and the server can still deliver mail, you can complete sign-in with the emailed code instead.',
           },
           {
             type: 'callout',

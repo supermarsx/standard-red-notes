@@ -281,8 +281,9 @@ Use a one-time emailed code as your second factor.
 
 As an alternative to an authenticator app, Standard Red Notes supports an email magic-link second factor. At sign-in, a one-time code is delivered to your email address; entering it completes authentication.
 
-- When your server has email (SMTP) configured, the code is emailed to you.
-- When email is not configured (for example a minimal self-host), the server shows the code on-screen so you can still complete the flow.
+- Your server must have working email (SMTP) delivery before magic-link 2FA can be enabled.
+- The code is sent only by email and is never returned to or shown by the unauthenticated sign-in screen.
+- If delivery fails, sign-in stops instead of falling back to an exposed on-screen code.
 
 > **Info.** Magic-link 2FA ties your account security to your email account. Make sure that email account is itself well protected.
 
@@ -720,7 +721,7 @@ Configure email so magic-link codes are delivered to inboxes.
 
 The email magic-link second factor needs an email transport (SMTP) to deliver codes. Configure your server’s SMTP settings to send mail from an address you control.
 
-> **Info.** Without SMTP configured, magic-link still works for a single-user/self-host scenario by showing the code on-screen instead of emailing it.
+> **Warning.** Without working SMTP, magic-link cannot be enabled or used. Verification codes are deliberately never exposed in an unauthenticated API response or on the sign-in screen.
 
 Related: [security/magic-link](#security-magic-link), [self-hosting/overview](#self-hosting-overview)
 
@@ -990,9 +991,9 @@ Related: [troubleshooting/cant-sign-in](#troubleshooting-cant-sign-in), [sync/co
 <a id="troubleshooting-lost-2fa"></a>
 ### Lost two-factor access
 
-Use your saved secret/backup key, or fall back to magic link.
+Use your saved secret/backup key, or a previously configured emailed factor.
 
-If you lose your authenticator device, re-add the account in a new authenticator using the secret/backup key you saved when enabling 2FA. If you enabled email magic-link 2FA, you can complete sign-in via the emailed (or on-screen) code instead.
+If you lose your authenticator device, re-add the account in a new authenticator using the secret/backup key you saved when enabling 2FA. If you previously enabled email magic-link 2FA and the server can still deliver mail, you can complete sign-in with the emailed code instead.
 
 > **Warning.** Without the secret key and without an alternate factor, you may be unable to complete new sign-ins. This is why saving the secret key at setup is essential.
 

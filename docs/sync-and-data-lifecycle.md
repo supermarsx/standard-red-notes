@@ -30,7 +30,20 @@ flowchart LR
 | Files | Encrypted/decrypted at the client boundary; temporary previews may exist on the device | Encrypted file bytes and transfer metadata are handled by the files service |
 | Sessions and feature settings | Tokens or keys use platform-appropriate secure storage where available | Authentication, revocation, roles, limits, and gates are server-side |
 | Revisions | Requested and decrypted by an authorized client | Historical encrypted item revisions are retained according to server policy |
-| Local-only items | Exist only in the local client profile | No server copy until moved into a signed-in synchronized account |
+| Local-only items | Exist only in the local client profile when marked before first upload | No server copy; the app refuses to newly mark an already-synced item local-only because suppressing future uploads cannot retract existing ciphertext |
+
+## Local-only is a pre-upload boundary
+
+Selective sync is safe only when chosen before an item first uploads. The
+client enforces that boundary in the item mutator and in note, tag, folder, and
+sync-preferences controls. Clearing local-only is always allowed and uploads the
+item on the next sync.
+
+Older clients may have allowed an already-synced item to be flagged local-only.
+That stops later versions from uploading, but it does not erase the server copy
+that already exists. Re-enable sync or treat that server copy according to the
+server's normal deletion and retention policy; do not assume changing a local
+flag remotely purged it.
 
 ## Normal sync cycle
 

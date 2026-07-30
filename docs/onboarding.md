@@ -241,9 +241,12 @@ your most sensitive notes so a glance at an unlocked app doesn't reveal them.
 
 ### Selective sync (local-only notes)
 
-You can mark a note as **local-only** so it stays on the current device and is
-**never uploaded to the server**. Useful for scratch notes or device-specific
-content you don't want synced anywhere.
+You can mark a note as **local-only before its first sync** so it stays on the
+current device and is never uploaded to the server. This is a pre-upload
+privacy choice: after a note has synced, the control is disabled because
+stopping future uploads cannot retract the encrypted copy already stored by the
+server. Use it for new scratch notes or device-specific content, and back those
+notes up yourself.
 
 ### Themes (auto light/dark)
 
@@ -280,7 +283,7 @@ cross that boundary — here's an honest summary so there are no surprises:
 | **Sharing / collaboration** | Anyone you share with can read what you share — that content is, by design, no longer private to you alone. |
 | **Server Access Key** | An operator-set **obfuscation gate**, not encryption. It makes the server refuse clients that don't present the key; it does **not** strengthen (or replace) end-to-end encryption. |
 | **Decrypted / plaintext export** | The file is unencrypted — anyone who gets the file can read it. Prefer **encrypted** backups. |
-| **Local-only (selective sync)** | The note never leaves the device at all — but it also isn't backed up to the server, so back it up yourself. |
+| **Local-only (selective sync)** | When enabled before first sync, the note never leaves the device — but it also isn't backed up to the server, so back it up yourself. It cannot be newly enabled after upload. |
 
 The takeaway: your notes are private by default. Each feature above is a
 deliberate, opt-in trade-off — use them knowingly.

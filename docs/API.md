@@ -294,8 +294,8 @@ shared-vault variants under `/v1/shared-vault/files/*`.
 | POST | `/v1/authenticators/verify-registration` | `auth.authenticators.verifyRegistrationResponse` | Complete WebAuthn registration. |
 | POST | `/v1/authenticators/generate-authentication-options` | `auth.authenticators.generateAuthenticationOptions` | Begin WebAuthn authentication. |
 | DELETE | `/v1/authenticators/:authenticatorId` | `auth.authenticators.delete` | Remove an authenticator. |
-| POST | `/v1/mfa/magic-link/request` | `auth.magicLink.request` | Request an email magic-link code (falls back to on-screen when SMTP is unconfigured). |
-| POST | `/v1/mfa/magic-link/status` | `auth.magicLink.setStatus` | Enable/disable magic-link 2FA. |
+| POST | `/v1/mfa/magic-link/request` | `auth.magicLink.request` | Request delivery of an email magic-link code. Fails when SMTP is unavailable; the code is never returned in the response. |
+| POST | `/v1/mfa/magic-link/status` | `auth.magicLink.setStatus` | Enable/disable magic-link 2FA. Enabling requires configured email delivery. |
 | GET | `/v1/mfa/magic-link/status` | `auth.magicLink.getStatus` | Read magic-link 2FA status. |
 
 ### Collaboration: shared vaults, invites, messages
