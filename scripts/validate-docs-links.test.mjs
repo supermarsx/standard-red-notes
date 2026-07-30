@@ -12,6 +12,7 @@ import {
   headingSlug,
   validateDocsLinks,
   validateFencedCodeBlocks,
+  validateMarkdownStructure,
 } from './validate-docs-links.mjs'
 
 async function createFixture(files) {
@@ -81,6 +82,31 @@ test('fenced code validation accepts matching backticks and tildes and rejects m
   ])
   assert.deepEqual(validateFencedCodeBlocks(['~~~shell', 'printf hello', '```'].join('\n'), 'docs/mixed.md'), [
     'docs/mixed.md:1: unclosed code fence opened with 3 tildes; closing fence must use the same marker and at least the same length',
+  ])
+})
+
+test('Markdown structure validation ignores front matter, fenced examples, and Setext headings', () => {
+  const markdown = [
+    '---',
+    'title: Structure',
+    '---',
+    '',
+    '# Structure',
+    '',
+    '---',
+    '',
+    '## Next section',
+    '',
+    '```md',
+    '---',
+    '```',
+    '',
+    'Legacy section',
+    '---',
+  ].join('\n')
+
+  assert.deepEqual(validateMarkdownStructure(markdown, 'docs/structure.md'), [
+    'docs/structure.md:7: redundant Markdown horizontal rule; headings already provide section separation',
   ])
 })
 
@@ -163,6 +189,21 @@ test('a complete fixture validates nested navigation, anchors, images, and repos
   try {
     assert.deepEqual(await validateDocsLinks({ root }), [])
     await assert.doesNotReject(assertDocsLinks({ root }))
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('docs validation reports redundant Markdown horizontal rules outside front matter', async () => {
+  const root = await createFixture({
+    'docs/_data/navigation.yml': ['- title: Start', '  items:', '    - title: Home', '      url: /'].join('\n'),
+    'docs/index.md': ['---', 'title: Home', '---', '', '# Home', '', '---', '', '## Details'].join('\n'),
+  })
+
+  try {
+    assert.deepEqual(await validateDocsLinks({ root }), [
+      'docs/index.md:7: redundant Markdown horizontal rule; headings already provide section separation',
+    ])
   } finally {
     await rm(root, { recursive: true, force: true })
   }

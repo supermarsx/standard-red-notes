@@ -17,8 +17,6 @@ webhooks + REST API + scoped MCP tokens (#316), the assistant proxy, share links
 valet-token file access, SMTP email, the Settings/feature-flag + admin surface,
 and the MCP bridge.
 
----
-
 ## 1. Architecture at a glance
 
 ```

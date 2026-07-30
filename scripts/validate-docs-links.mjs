@@ -142,6 +142,29 @@ function visibleMarkdownLines(source, { maskInlineCode = true } = {}) {
   return visible
 }
 
+export function validateMarkdownStructure(source, file = '<markdown>') {
+  const lines = visibleMarkdownLines(source, { maskInlineCode: false })
+  const diagnostics = []
+
+  for (const [index, line] of lines.entries()) {
+    if (line.trim() !== '---') {
+      continue
+    }
+
+    // A hyphen line directly under text is a Setext heading underline, not a
+    // thematic break. Front matter and fenced examples are already masked.
+    if ((lines[index - 1] ?? '').trim()) {
+      continue
+    }
+
+    diagnostics.push(
+      `${file}:${index + 1}: redundant Markdown horizontal rule; headings already provide section separation`,
+    )
+  }
+
+  return diagnostics
+}
+
 function decodeEntities(value) {
   const named = { amp: '&', apos: "'", gt: '>', lt: '<', quot: '"' }
   return value
@@ -624,6 +647,7 @@ export async function validateDocsLinks({
   for (const file of docsFiles) {
     const source = await readFile(file, 'utf8')
     const sourceDisplayPath = displayPath(root, file)
+    diagnostics.push(...validateMarkdownStructure(source, sourceDisplayPath))
     diagnostics.push(...validateFencedCodeBlocks(source, sourceDisplayPath))
     for (const target of extractMarkdownTargets(source, sourceDisplayPath)) {
       const destination = target.destination.trim()
@@ -691,7 +715,7 @@ export async function assertDocsLinks(options) {
 if (process.argv[1] && path.resolve(process.argv[1]) === scriptPath) {
   try {
     await assertDocsLinks()
-    console.log('Documentation navigation, links, images, and anchors are valid.')
+    console.log('Documentation structure, navigation, links, images, and anchors are valid.')
   } catch (error) {
     console.error(error.message)
     process.exitCode = 1

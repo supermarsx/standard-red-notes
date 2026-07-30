@@ -175,8 +175,6 @@ Practical consequences when talking to the API directly:
 - Public share links store only ciphertext keyed by a `shareId`; the decryption
   key lives in the link fragment and never reaches the server.
 
----
-
 ## Endpoints
 
 Notation: each entry shows the **client-facing method + path** (what you call on
@@ -471,8 +469,6 @@ Source:
 | Method | Path | Notes |
 | --- | --- | --- |
 | GET | `/v1/meta` | Public. Returns server metadata such as the CAPTCHA UI URL. |
-
----
 
 ## See also
 
