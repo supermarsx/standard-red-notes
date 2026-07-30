@@ -48,6 +48,7 @@ const mocked = KeychainEncryption as jest.Mocked<typeof KeychainEncryption> & {
 }
 
 const KEYCHAIN_STORAGE_KEY = 'keychain'
+const originalLockManager = navigator.locks
 
 type Wrapped = { __srnKeychainEnc: number; alg: string; iv: string; ct: string }
 
@@ -100,6 +101,10 @@ describe('WebDevice keychain-at-rest wrapping', () => {
 
   afterEach(() => {
     warnSpy.mockRestore()
+    Object.defineProperty(navigator, 'locks', {
+      configurable: true,
+      value: originalLockManager,
+    })
   })
 
   describe('flag OFF (SHIPPED default) — status-quo plaintext', () => {
@@ -160,6 +165,27 @@ describe('WebDevice keychain-at-rest wrapping', () => {
       expect(value).toEqual(sampleKeychain)
       expect(mocked.isEnvelope(readStoredParsed())).toBe(false)
       expect(mocked.encryptKeychain).not.toHaveBeenCalled()
+    })
+
+    it('does not let a delayed lazy migration overwrite a newer keychain value', async () => {
+      const { device } = makeDevice(true)
+      localStorage.setItem(KEYCHAIN_STORAGE_KEY, JSON.stringify(sampleKeychain))
+      const newerValue = {
+        ...sampleKeychain,
+        'workspace-b': { version: '004', masterKey: 'mk-b' },
+      }
+      ;(mocked.encryptKeychain as jest.Mock).mockImplementation(async (plaintext: string) => {
+        localStorage.setItem(KEYCHAIN_STORAGE_KEY, JSON.stringify(newerValue))
+        return {
+          __srnKeychainEnc: 1,
+          alg: 'AES-GCM',
+          iv: 'mock-iv',
+          ct: Buffer.from(plaintext, 'utf8').toString('base64'),
+        }
+      })
+
+      expect(await device.getKeychainValue()).toEqual(sampleKeychain)
+      expect(readStoredParsed()).toEqual(newerValue)
     })
   })
 
@@ -283,6 +309,34 @@ describe('WebDevice keychain-at-rest wrapping', () => {
       const afterClear = await device.getNamespacedKeychainValue('workspace-b' as any)
       expect(afterClear).toBeUndefined()
     })
+
+    it('serializes concurrent namespaced mutations so neither workspace is lost', async () => {
+      let previous = Promise.resolve<unknown>(undefined)
+      const request = jest.fn(
+        <T>(_name: string, _options: LockOptions, callback: LockGrantedCallback<T>): Promise<T> => {
+          const result = previous.then(() => callback({ name: _name, mode: 'exclusive' } as Lock))
+          previous = result.catch(() => undefined)
+          return result
+        },
+      )
+      Object.defineProperty(navigator, 'locks', {
+        configurable: true,
+        value: { request },
+      })
+      const { device } = makeDevice(false)
+
+      await Promise.all([
+        device.setNamespacedKeychainValue({ masterKey: 'mk-a' } as any, 'workspace-a' as any),
+        device.setNamespacedKeychainValue({ masterKey: 'mk-b' } as any, 'workspace-b' as any),
+      ])
+
+      expect(readStoredParsed()).toEqual({
+        'workspace-a': { masterKey: 'mk-a' },
+        'workspace-b': { masterKey: 'mk-b' },
+      })
+      expect(request).toHaveBeenCalledTimes(2)
+      expect(request.mock.calls.every(([name]) => name === 'standard-red-notes-keychain-mutation')).toBe(true)
+    })
   })
 
   describe('case 12 — cross-tab notification preserved', () => {
@@ -300,6 +354,25 @@ describe('WebDevice keychain-at-rest wrapping', () => {
       expect(localStorage.getItem(KEYCHAIN_STORAGE_KEY)).toBeNull()
       expect(emitKeychainChanged).not.toHaveBeenCalled()
       expect(mocked.encryptKeychain).not.toHaveBeenCalled()
+    })
+
+    it('re-checks the foreign-change lock after asynchronous encryption', async () => {
+      const { device, emitKeychainChanged } = makeDevice(true)
+      let locked = false
+      jest.spyOn(device as any, 'isKeychainLocked').mockImplementation(() => locked)
+      ;(mocked.encryptKeychain as jest.Mock).mockImplementation(async (plaintext: string) => {
+        locked = true
+        return {
+          __srnKeychainEnc: 1,
+          alg: 'AES-GCM',
+          iv: 'mock-iv',
+          ct: Buffer.from(plaintext, 'utf8').toString('base64'),
+        }
+      })
+
+      await expect(device.setKeychainValue(sampleKeychain as any)).rejects.toThrow(/changed in another tab/i)
+      expect(localStorage.getItem(KEYCHAIN_STORAGE_KEY)).toBeNull()
+      expect(emitKeychainChanged).not.toHaveBeenCalled()
     })
   })
 

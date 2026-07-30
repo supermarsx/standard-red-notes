@@ -18,6 +18,8 @@ import {
 } from '@standardnotes/snjs'
 import { Database, DatabaseCrossTabHooks } from '../Database'
 
+const KEYCHAIN_MUTATION_LOCK = 'standard-red-notes-keychain-mutation'
+
 export abstract class WebOrDesktopDevice implements WebOrDesktopDeviceInterface {
   platform?: Platform
 
@@ -81,9 +83,10 @@ export abstract class WebOrDesktopDevice implements WebOrDesktopDeviceInterface 
   }
 
   async clearAllDataFromDevice(workspaceIdentifiers: ApplicationIdentifier[]): Promise<{ killsApplication: boolean }> {
-    await this.clearRawKeychainValue()
-
-    await this.removeAllRawStorageValues()
+    await this.withKeychainMutationLock(async () => {
+      await this.clearRawKeychainValue()
+      await this.removeAllRawStorageValues()
+    })
 
     await Database.deleteAll(workspaceIdentifiers)
 
@@ -234,31 +237,52 @@ export abstract class WebOrDesktopDevice implements WebOrDesktopDeviceInterface 
   }
 
   async setNamespacedKeychainValue(value: NamespacedRootKeyInKeychain, identifier: ApplicationIdentifier) {
-    let keychain = await this.getKeychainValue()
+    return this.withKeychainMutationLock(async () => {
+      let keychain = await this.getKeychainValue()
 
-    if (!keychain) {
-      keychain = {}
-    }
+      if (!keychain) {
+        keychain = {}
+      }
 
-    return this.setKeychainValue({
-      ...keychain,
-      [identifier]: value,
+      return this.setKeychainValue({
+        ...keychain,
+        [identifier]: value,
+      })
     })
   }
 
   async clearNamespacedKeychainValue(identifier: ApplicationIdentifier) {
-    const keychain = await this.getKeychainValue()
-    if (!keychain) {
-      return
-    }
+    return this.withKeychainMutationLock(async () => {
+      const keychain = await this.getKeychainValue()
+      if (!keychain) {
+        return
+      }
 
-    delete keychain[identifier]
+      delete keychain[identifier]
 
-    return this.setKeychainValue(keychain)
+      return this.setKeychainValue(keychain)
+    })
   }
 
   setRawKeychainValue(value: unknown): Promise<void> {
-    return this.setKeychainValue(value)
+    return this.withKeychainMutationLock(() => this.setKeychainValue(value))
+  }
+
+  /**
+   * Serialize keychain read-modify-write sequences across windows/tabs. Without
+   * this, two workspaces can both read the same blob and each replace it with a
+   * different update, silently discarding whichever write lands first.
+   *
+   * Web Locks is shared by same-origin browsing contexts (including desktop
+   * renderer windows). Older engines fall back to the existing behavior.
+   */
+  protected async withKeychainMutationLock<T>(operation: () => Promise<T>): Promise<T> {
+    const lockManager = typeof navigator !== 'undefined' ? navigator.locks : undefined
+    if (!lockManager) {
+      return operation()
+    }
+
+    return lockManager.request(KEYCHAIN_MUTATION_LOCK, { mode: 'exclusive' }, operation)
   }
 
   openUrl(url: string) {

@@ -194,7 +194,14 @@ export class WebDevice extends WebOrDesktopDevice {
           // localStorage.setItem, so storage holds old-plaintext-or-new-envelope, never garbage.
           const key = await getOrCreateDeviceKey()
           const envelope = await encryptKeychain(JSON.stringify(plaintext), key)
-          localStorage.setItem(KEYCHAIN_STORAGE_KEY, JSON.stringify(envelope))
+          /**
+           * Migration is an optimistic read/replace, not a semantic keychain
+           * mutation. If another tab wrote after our read while encryption was
+           * in flight, leave that newer value untouched.
+           */
+          if (localStorage.getItem(KEYCHAIN_STORAGE_KEY) === value && !this.isKeychainLocked()) {
+            localStorage.setItem(KEYCHAIN_STORAGE_KEY, JSON.stringify(envelope))
+          }
         }
       } catch (error) {
         console.warn('[WebDevice] Lazy keychain wrapping migration failed; leaving plaintext intact.', error)
@@ -205,6 +212,9 @@ export class WebDevice extends WebOrDesktopDevice {
   }
 
   async setKeychainValue(value: RawKeychainValue): Promise<void> {
+    // Install the foreign-change listeners before the first write, not after it.
+    const crossTabCoordinator = this.getCrossTabCoordinator()
+
     // Refuse to persist a keychain once another tab has changed it: the in-memory key this
     // value was derived from is stale, and writing it would clobber the foreign rotation.
     if (this.isKeychainLocked()) {
@@ -220,6 +230,9 @@ export class WebDevice extends WebOrDesktopDevice {
           // storage always holds the old-or-new value, never garbage.
           const key = await getOrCreateDeviceKey()
           const envelope = await encryptKeychain(JSON.stringify(value), key)
+          if (this.isKeychainLocked()) {
+            throw new Error('Keychain changed in another tab while preparing the write; refusing the stale update.')
+          }
           localStorage.setItem(KEYCHAIN_STORAGE_KEY, JSON.stringify(envelope))
           stored = true
         }
@@ -231,21 +244,25 @@ export class WebDevice extends WebOrDesktopDevice {
     }
 
     if (!stored) {
+      if (this.isKeychainLocked()) {
+        throw new Error('Keychain changed in another tab while preparing the write; refusing the stale update.')
+      }
       localStorage.setItem(KEYCHAIN_STORAGE_KEY, JSON.stringify(value))
     }
 
     // Notify peers so they lock immediately (the window 'storage' event also fires in other
     // tabs, but the BroadcastChannel message is faster and works when storage events are
     // throttled/coalesced).
-    this.getCrossTabCoordinator().emitKeychainChanged()
+    crossTabCoordinator.emitKeychainChanged()
   }
 
   async clearRawKeychainValue(): Promise<void> {
+    const crossTabCoordinator = this.getCrossTabCoordinator()
     localStorage.removeItem(KEYCHAIN_STORAGE_KEY)
 
     // Logout / full reset: tell peers the session is gone so they lock and reload before
     // they can autosave under the now-removed key.
-    this.getCrossTabCoordinator().emitKeychainChanged()
+    crossTabCoordinator.emitKeychainChanged()
 
     // Leave no device key behind after a full clear of the keychain. deleteDeviceKey never
     // throws (missing/unavailable IndexedDB is swallowed).
