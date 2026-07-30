@@ -347,14 +347,16 @@ export class Database {
         settled = true
         reject(error)
       }
-      transaction.oncomplete = () => {}
+      transaction.oncomplete = settleResolve
       transaction.onerror = (event) => {
         const target = event.target as any
-        this.showGenericError(target.error)
+        const error = target.error ?? transaction.error ?? new Error('IndexedDB transaction failed')
+        this.showGenericError(error)
+        settleReject(error)
       }
       transaction.onabort = (event) => {
         const target = event.target as any
-        const error = target.error
+        const error = target.error ?? transaction.error ?? new Error('IndexedDB transaction aborted')
         if (error && error.name === QUOTE_EXCEEDED_ERROR) {
           this.showAlert(OUT_OF_SPACE)
         } else {
@@ -363,15 +365,20 @@ export class Database {
         settleReject(error)
       }
       const objectStore = transaction.objectStore(STORE_NAME)
-      this.putItems(objectStore, payloads)
-        .then(settleResolve)
+      void this.putItems(objectStore, payloads).catch((error) => {
         /**
-         * A per-item put error rejects putItems. Surface it (instead of the previous
-         * .catch(console.error) which silently swallowed it). If the same failure also
-         * aborted the transaction, onabort will have already settled the promise and
-         * settleReject is a no-op, so there is no double-reject.
+         * Request success only means IndexedDB accepted the operation into the
+         * transaction. Durability is established exclusively by transaction.oncomplete.
+         * Abort explicitly on a request failure so a mock or browser implementation
+         * cannot commit the rest of a partially failed batch.
          */
-        .catch(settleReject)
+        try {
+          transaction.abort()
+        } catch {
+          // The transaction may already be aborting because the request error bubbled.
+        }
+        settleReject(error)
+      })
     })
   }
 
@@ -406,11 +413,39 @@ export class Database {
   public async deletePayload(uuid: string): Promise<void> {
     const db = (await this.openDatabase()) as IDBDatabase
     return new Promise((resolve, reject) => {
-      const request = db.transaction(STORE_NAME, READ_WRITE).objectStore(STORE_NAME).delete(uuid)
-      request.onsuccess = () => {
-        resolve()
+      const transaction = db.transaction(STORE_NAME, READ_WRITE)
+      let settled = false
+      const settleResolve = () => {
+        if (!settled) {
+          settled = true
+          resolve()
+        }
       }
-      request.onerror = reject
+      const settleReject = (error: any) => {
+        if (!settled) {
+          settled = true
+          reject(error)
+        }
+      }
+      transaction.oncomplete = settleResolve
+      transaction.onerror = (event) => {
+        const target = event.target as any
+        settleReject(target.error ?? transaction.error ?? new Error('IndexedDB delete transaction failed'))
+      }
+      transaction.onabort = (event) => {
+        const target = event.target as any
+        settleReject(target.error ?? transaction.error ?? new Error('IndexedDB delete transaction aborted'))
+      }
+      const request = transaction.objectStore(STORE_NAME).delete(uuid)
+      request.onerror = () => {
+        const error = request.error ?? new Error('IndexedDB delete request failed')
+        try {
+          transaction.abort()
+        } catch {
+          // The request error may already have put the transaction into its abort path.
+        }
+        settleReject(error)
+      }
     })
   }
 

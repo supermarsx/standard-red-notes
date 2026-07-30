@@ -20,6 +20,12 @@ const fireAsync = (fn: () => void) => {
   Promise.resolve().then(fn)
 }
 
+const flushMicrotasks = async () => {
+  for (let index = 0; index < 6; index++) {
+    await Promise.resolve()
+  }
+}
+
 class MockRequest {
   public onsuccess: ((event: any) => void) | null = null
   public onerror: ((event: any) => void) | null = null
@@ -37,7 +43,7 @@ class MockObjectStore {
   private putIndex = 0
   private getIndex = 0
 
-  put(_item: any): MockRequest {
+  private writeRequest(): MockRequest {
     const request = new MockRequest()
     const behavior = this.putBehaviors[this.putIndex++] ?? 'success'
     fireAsync(() => {
@@ -51,6 +57,14 @@ class MockObjectStore {
       }
     })
     return request
+  }
+
+  put(_item: any): MockRequest {
+    return this.writeRequest()
+  }
+
+  delete(_key: string): MockRequest {
+    return this.writeRequest()
   }
 
   get(_key: string): MockRequest {
@@ -97,6 +111,9 @@ class MockTransaction {
   }
 
   complete() {
+    if (this.aborted) {
+      return
+    }
     fireAsync(() => {
       this.oncomplete && this.oncomplete()
     })
@@ -140,7 +157,70 @@ describe('Database silent-data-loss fixes', () => {
       }
 
       const database = buildDatabaseWithMock(mockDb)
-      await expect(database.savePayloads([{ uuid: 'a' }, { uuid: 'b' }])).resolves.toBeUndefined()
+      const savePromise = database.savePayloads([{ uuid: 'a' }, { uuid: 'b' }])
+      let resolved = false
+      void savePromise.then(() => {
+        resolved = true
+      })
+
+      await flushMicrotasks()
+      expect(resolved).toBe(false)
+
+      transaction.complete()
+      await expect(savePromise).resolves.toBeUndefined()
+    })
+
+    it('rejects when every put succeeds but the transaction aborts before commit', async () => {
+      const transaction = new MockTransaction(null)
+      const store = new MockObjectStore(['success', 'success'], [], transaction)
+      transaction.setStore(store)
+      const mockDb = { transaction: () => transaction }
+
+      const database = buildDatabaseWithMock(mockDb)
+      ;(database as any).showGenericError = () => {}
+      ;(database as any).showAlert = () => {}
+      const savePromise = database.savePayloads([{ uuid: 'a' }, { uuid: 'b' }])
+      const assertion = expect(savePromise).rejects.toThrow('commit failed')
+
+      await flushMicrotasks()
+      transaction.abort(new DOMException('commit failed', 'QuotaExceededError'))
+
+      await assertion
+    })
+  })
+
+  describe('deletePayload waits for transaction durability', () => {
+    it('does not resolve on request success before the transaction commits', async () => {
+      const transaction = new MockTransaction(null)
+      const store = new MockObjectStore(['success'], [], transaction)
+      transaction.setStore(store)
+      const database = buildDatabaseWithMock({ transaction: () => transaction })
+
+      const deletePromise = database.deletePayload('a')
+      let resolved = false
+      void deletePromise.then(() => {
+        resolved = true
+      })
+
+      await flushMicrotasks()
+      expect(resolved).toBe(false)
+
+      transaction.complete()
+      await expect(deletePromise).resolves.toBeUndefined()
+    })
+
+    it('rejects when the delete request succeeds but the transaction aborts', async () => {
+      const transaction = new MockTransaction(null)
+      const store = new MockObjectStore(['success'], [], transaction)
+      transaction.setStore(store)
+      const database = buildDatabaseWithMock({ transaction: () => transaction })
+      const deletePromise = database.deletePayload('a')
+      const assertion = expect(deletePromise).rejects.toThrow('delete commit failed')
+
+      await flushMicrotasks()
+      transaction.abort(new DOMException('delete commit failed', 'UnknownError'))
+
+      await assertion
     })
   })
 
@@ -231,10 +311,33 @@ describe('Database silent-data-loss fixes', () => {
       const emitSaved = jest.fn()
       database.setCrossTabHooks({ emitSaved, isWriteBlocked: () => false })
 
-      await database.savePayloads([{ uuid: 'a' }, { uuid: 'b' }])
+      const savePromise = database.savePayloads([{ uuid: 'a' }, { uuid: 'b' }])
+      await flushMicrotasks()
+      expect(emitSaved).not.toHaveBeenCalled()
+      transaction.complete()
+      await savePromise
 
       expect(emitSaved).toHaveBeenCalledTimes(1)
       expect(emitSaved).toHaveBeenCalledWith(['a', 'b'])
+    })
+
+    it('does not emit saved uuids when the transaction aborts after request success', async () => {
+      const transaction = new MockTransaction(null)
+      const store = new MockObjectStore(['success'], [], transaction)
+      transaction.setStore(store)
+      const database = buildDatabaseWithMock({ transaction: () => transaction })
+      ;(database as any).showGenericError = () => {}
+      ;(database as any).showAlert = () => {}
+      const emitSaved = jest.fn()
+      database.setCrossTabHooks({ emitSaved, isWriteBlocked: () => false })
+
+      const savePromise = database.savePayloads([{ uuid: 'a' }])
+      const assertion = expect(savePromise).rejects.toThrow('commit failed')
+      await flushMicrotasks()
+      transaction.abort(new DOMException('commit failed', 'UnknownError'))
+      await assertion
+
+      expect(emitSaved).not.toHaveBeenCalled()
     })
   })
 })
