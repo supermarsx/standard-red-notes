@@ -14,6 +14,13 @@ export interface AppTestMessage {
   type: AppMessageType
 }
 
+export interface TestMenuItemSnapshot {
+  id?: string
+  label: string
+  role?: string
+  submenu?: TestMenuItemSnapshot[]
+}
+
 export enum AppMessageType {
   Ready,
   WindowLoaded,
@@ -49,4 +56,12 @@ export enum MessageType {
   HasReloadedMenu,
   AppStateCall,
   SignOut,
+  ClearRendererStorage,
+  GetLegacyTextBackupsLocation,
+  SaveTextBackupData,
+  GetTextBackupsCount,
+  SavePlaintextNoteBackup,
+  PersistPlaintextBackupsMapping,
+  GetPlaintextBackupsMapping,
+  GetRendererStorageValue,
 }

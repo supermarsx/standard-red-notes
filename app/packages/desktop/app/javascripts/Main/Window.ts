@@ -1,10 +1,10 @@
 import { clearSensitiveDirectories } from '@standardnotes/electron-clear-data'
-import { BrowserWindow, Rectangle, screen, Shell } from 'electron'
+import { BrowserWindow, Menu, Rectangle, screen, Shell } from 'electron'
 import fs from 'fs'
 import { debounce } from 'lodash'
 import path from 'path'
 import { pathToFileURL } from 'url'
-import { AppMessageType, MessageType } from '../../../test/TestIpcMessage'
+import { AppMessageType, MessageType, TestMenuItemSnapshot } from '../../../test/TestIpcMessage'
 import { AppState } from '../../AppState'
 import { MessageToWebApp } from '../Shared/IpcMessages'
 import { FilesBackupManager } from './FileBackups/FileBackupsManager'
@@ -45,6 +45,15 @@ function hideWindowsTaskbarPreviewThumbnail(window: BrowserWindow) {
   if (isWindows()) {
     window.setThumbnailClip({ x: 0, y: 0, width: 1, height: 1 })
   }
+}
+
+function menuSnapshot(items: readonly Electron.MenuItem[]): TestMenuItemSnapshot[] {
+  return items.map((item) => ({
+    id: item.id || undefined,
+    label: item.label,
+    role: item.role || undefined,
+    submenu: item.submenu ? menuSnapshot(item.submenu.items) : undefined,
+  }))
 }
 
 /**
@@ -336,11 +345,16 @@ async function createWindow(store: Store): Promise<Electron.BrowserWindow> {
       testMessageHandlersRegistered = true
       handleTestMessage(MessageType.SpellCheckerLanguages, () => window.webContents.session.getSpellCheckerLanguages())
       handleTestMessage(MessageType.SetLocalStorageValue, async (key, value) => {
-        await window.webContents.executeJavaScript(`localStorage.setItem("${key}", "${value}")`)
+        await window.webContents.executeJavaScript(
+          `localStorage.setItem(${JSON.stringify(key)}, ${JSON.stringify(value)})`,
+        )
         window.webContents.session.flushStorageData()
       })
-      handleTestMessage(MessageType.SignOut, () =>
-        window.webContents.executeJavaScript('window.device.onSignOut(false)'),
+      handleTestMessage(MessageType.GetRendererStorageValue, (key) =>
+        window.webContents.executeJavaScript(`localStorage.getItem(${JSON.stringify(key)})`),
+      )
+      handleTestMessage(MessageType.ClearRendererStorage, () =>
+        window.webContents.executeJavaScript('window.device.removeAllRawStorageValues()'),
       )
     }
     window.webContents.once('did-finish-load', () => {
@@ -387,6 +401,43 @@ async function createWindowServices(
   })
 
   const fileBackupsManager = new FilesBackupManager(appState, window.webContents, filesManager)
+
+  if (isTesting()) {
+    handleTestMessage(MessageType.AppMenuItems, () => menuSnapshot(Menu.getApplicationMenu()?.items ?? []))
+    handleTestMessage(MessageType.ClickLanguage, (code: string) => {
+      const language = spellcheckerManager?.languages().find((candidate) => candidate.code === code)
+      if (!spellcheckerManager || !language) {
+        throw new Error(`Unavailable spellchecker language: ${code}`)
+      }
+      if (language.enabled) {
+        spellcheckerManager.removeLanguage(code)
+      } else {
+        spellcheckerManager.addLanguage(code)
+      }
+      menuManager.reload()
+    })
+    handleTestMessage(MessageType.GetLegacyTextBackupsLocation, () => fileBackupsManager.getLegacyTextBackupsLocation())
+    handleTestMessage(MessageType.CopyDecryptScript, (location: string) =>
+      fileBackupsManager.copyDecryptScript(location),
+    )
+    handleTestMessage(MessageType.SaveTextBackupData, (location: string, data: string) =>
+      fileBackupsManager.saveTextBackupData(location, data),
+    )
+    handleTestMessage(MessageType.GetTextBackupsCount, (location: string) =>
+      fileBackupsManager.getTextBackupsCount(location),
+    )
+    handleTestMessage(
+      MessageType.SavePlaintextNoteBackup,
+      (location: string, uuid: string, name: string, tags: string[], data: string) =>
+        fileBackupsManager.savePlaintextNoteBackup(location, uuid, name, tags, data),
+    )
+    handleTestMessage(MessageType.PersistPlaintextBackupsMapping, (location: string) =>
+      fileBackupsManager.persistPlaintextBackupsMappingFile(location),
+    )
+    handleTestMessage(MessageType.GetPlaintextBackupsMapping, (location: string) =>
+      fileBackupsManager.getPlaintextBackupsMappingFile(location),
+    )
+  }
 
   return {
     updateManager,

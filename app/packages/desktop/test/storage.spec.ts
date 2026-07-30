@@ -2,7 +2,7 @@ import anyTest, { ExecutionContext, TestFn } from 'ava'
 import fs, { existsSync } from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
-import proxyquire from 'proxyquire'
+import { serializeStoreData } from '../app/javascripts/Main/Store/createSanitizedStoreData'
 import { timeout } from '../app/javascripts/Main/Utils/Utils'
 import { createDriver, Driver } from './driver'
 
@@ -13,25 +13,10 @@ const canRunElectron =
 const test = anyTest as TestFn<Driver>
 
 if (canRunElectron) {
-  const { serializeStoreData } = proxyquire('../app/javascripts/Main/Store', {
-    './backupsManager': {
-      '@noCallThru': true,
-    },
-    '@electron': {
-      '@noCallThru': true,
-    },
-    '@electron/remote': {
-      '@noCallThru': true,
-    },
-  })
-
   async function validateData(t: ExecutionContext<Driver>) {
     const data = await t.context.storage.dataOnDisk()
 
-    /**
-     * There should always be 8 values in the store.
-     * If one was added/removed intentionally, update this number
-     */
+    /** If a persisted default is intentionally added or removed, update this number. */
     const numberOfStoreKeys = 10
     t.is(Object.keys(data).length, numberOfStoreKeys)
 
@@ -39,11 +24,12 @@ if (canRunElectron) {
 
     t.is(typeof data.useSystemMenuBar, 'boolean')
 
-    t.is(typeof data.backupsDisabled, 'boolean')
-
     t.is(typeof data.minimizeToTray, 'boolean')
 
     t.is(typeof data.enableAutoUpdates, 'boolean')
+    t.false(data.enableAutoUpdates)
+
+    t.is(typeof data.notifyUpdates, 'boolean')
 
     t.is(typeof data.zoomFactor, 'number')
     t.true(data.zoomFactor > 0)
@@ -55,9 +41,9 @@ if (canRunElectron) {
     t.is(extServerHost.protocol, 'http:')
     t.is(extServerHost.port, '45653')
 
-    t.is(typeof data.backupsLocation, 'string')
-
     t.is(data.useNativeKeychain, null)
+
+    t.is(typeof data.LastRunVersion, 'string')
 
     if (process.platform === 'darwin') {
       t.is(data.selectedSpellCheckerLanguageCodes, null)
@@ -114,27 +100,16 @@ if (canRunElectron) {
     )
   })
 
-  test('deletes local storage data after signing out', async (t) => {
-    function readLocalStorageContents() {
-      return fs.promises.readFile(path.join(t.context.userDataPath, 'Local Storage', 'leveldb', '000003.log'), {
-        encoding: 'utf8',
-      })
-    }
-    await t.context.windowLoaded
+  test('clears renderer local storage through the current device API', async (t) => {
     await t.context.storage.setLocalStorageValue('foo', 'bar')
-    let localStorageContents = await readLocalStorageContents()
-
-    t.is(localStorageContents.includes('foo'), true)
-    t.is(localStorageContents.includes('bar'), true)
+    t.is(await t.context.storage.getLocalStorageValue('foo'), 'bar')
 
     await timeout(1_000)
-    await t.context.window.signOut()
+    await t.context.window.clearRendererStorage()
     await timeout(1_000)
-    localStorageContents = await readLocalStorageContents()
-    t.is(localStorageContents.includes('foo'), false)
-    t.is(localStorageContents.includes('bar'), false)
+    t.is(await t.context.storage.getLocalStorageValue('foo'), null)
   })
 } else {
-  // Spawns a real Electron process against app/dist/index.js (and uses proxyquire); needs a build + display, not runnable headless.
+  // Spawns a real Electron process against app/dist/index.js; needs a build + display, not runnable headless.
   test.skip('storage: spawns Electron (needs built app/dist/index.js + display); set RUN_ELECTRON_TESTS=1 to run', () => {})
 }

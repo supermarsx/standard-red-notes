@@ -56,7 +56,7 @@ export function setupTesting(): void {
 
   handleTestMessage(MessageType.WindowCount, () => BrowserWindow.getAllWindows().length)
 
-  app.on('ready', () => {
+  void app.whenReady().then(() => {
     setTimeout(() => {
       send(AppMessageType.Ready)
     }, 200)

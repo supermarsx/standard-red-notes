@@ -125,6 +125,19 @@ export function validateCiContract(files) {
     }
   }
 
+  requireJob(errors, workflow, "desktop-electron", [
+    ["actions/cache@v6.1.0", "dependency cache"],
+    ["sudo apt-get install --yes xvfb", "Xvfb installation"],
+    ["working-directory: app", "app workspace"],
+    ["run: yarn install --immutable", "immutable app install"],
+    ["run: yarn build:desktop", "desktop artifact build"],
+    ["xvfb-run --auto-servernum", "virtual display"],
+    [
+      "yarn workspace @standardnotes/desktop ava:electron",
+      "guarded real Electron suite",
+    ],
+  ]);
+
   requireJob(errors, workflow, "container-smoke", [
     ["hadolint/hadolint@sha256:", "pinned hadolint image"],
     ["docker/build-push-action@v7.3.0", "BuildKit image builds"],
@@ -185,7 +198,7 @@ export function validateCiContract(files) {
 
   requireJob(errors, workflow, "production-gate", [
     [
-      "needs: [contracts, check, build, container-smoke]",
+      "needs: [contracts, check, build, desktop-electron, container-smoke]",
       "required lane fan-in",
     ],
     ["if: always()", "fail-closed fan-in"],
@@ -198,7 +211,7 @@ export function validateCiContract(files) {
   const rootPackage = JSON.parse(files.get("package.json") ?? "{}");
   const expectedScripts = {
     "ci:contracts":
-      "yarn test:ci-tools && node scripts/validate-ci-contract.mjs && yarn test:release-contract && yarn release:contract && yarn docs:check",
+      "yarn test:ci-tools && node scripts/validate-ci-contract.mjs && yarn test:release-impact && yarn test:release-contract && yarn release:contract && yarn docs:check",
     "ci:docker-hardening": "node scripts/validate-docker-hardening.mjs",
     "ci:verify-playwright": "node scripts/verify-playwright-report.mjs",
     "test:ci-tools":
@@ -251,7 +264,7 @@ export function runCiContractValidation(
     throw new Error(`CI contract validation failed:\n- ${errors.join("\n- ")}`);
   }
 
-  return { requiredJobs: 5, extendedJobs: 2 };
+  return { requiredJobs: 6, extendedJobs: 2 };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === scriptPath) {

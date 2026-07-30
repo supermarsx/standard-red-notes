@@ -16,13 +16,14 @@ the fan-in green.
 
 ## Required Lanes
 
-| Lane              | Contract                                                                                                                                                                                            | Timeout |
-| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------: |
-| `contracts`       | Immutable root install; CI validator tests; release target and artifact contract; generated docs/search freshness, link/navigation integrity, Mermaid rendering; actionlint over root workflows.    |  12 min |
-| `check`           | Immutable installs in the root, app, and server projects, followed by the coordinated type, lint, format, and test gate.                                                                            |  45 min |
-| `build`           | A second clean set of immutable installs followed by the coordinated MCP, OpenClaw, app, and server build.                                                                                          |  45 min |
-| `container-smoke` | Hadolint, BuildKit image builds, an isolated Compose stack, Chromium app-open checks, bounded parallel sync and Redis operations, MariaDB backup/restore, and image/container hardening assertions. |  70 min |
-| `production-gate` | Fail-closed fan-in for the four implementation lanes above.                                                                                                                                         |   5 min |
+| Lane               | Contract                                                                                                                                                                                            | Timeout |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------: |
+| `contracts`        | Immutable root install; CI validator tests; release target and artifact contract; generated docs/search freshness, link/navigation integrity, Mermaid rendering; actionlint over root workflows.    |  12 min |
+| `check`            | Immutable installs in the root, app, and server projects, followed by the coordinated type, lint, format, and test gate.                                                                            |  45 min |
+| `build`            | A second clean set of immutable installs followed by the coordinated MCP, OpenClaw, app, and server build.                                                                                          |  45 min |
+| `desktop-electron` | A production desktop build followed by the seven real Electron suites under Xvfb. The guarded runner requires the built entry point and cannot silently fall back to skipped headless tests.        |  45 min |
+| `container-smoke`  | Hadolint, BuildKit image builds, an isolated Compose stack, Chromium app-open checks, bounded parallel sync and Redis operations, MariaDB backup/restore, and image/container hardening assertions. |  70 min |
+| `production-gate`  | Fail-closed fan-in for all five implementation lanes above.                                                                                                                                         |   5 min |
 
 The required browser selection contains three app-open tests and one combined
 sync/Redis test. The generated JSON report must contain at least four expected
@@ -70,6 +71,19 @@ Run the workflow policy and its failure-case tests without starting Docker:
 yarn ci:contracts
 actionlint .github/workflows/ci.yml
 ```
+
+Run the same desktop artifact and live Electron suite locally on a machine with
+a display:
+
+```bash
+cd app
+yarn build:desktop
+yarn workspace @standardnotes/desktop ava:electron
+```
+
+On headless Linux, prefix the final command with `xvfb-run --auto-servernum`.
+The runner sets its own test gate and fails when the desktop entry point is
+missing, so this command cannot report success by substituting skipped tests.
 
 Validate the current Compose model:
 

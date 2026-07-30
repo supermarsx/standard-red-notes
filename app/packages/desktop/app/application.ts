@@ -5,7 +5,8 @@ import { Keychain } from './javascripts/Main/Keychain/Keychain'
 import { StoreKeys } from './javascripts/Main/Store/StoreKeys'
 import { AppName, initializeStrings } from './javascripts/Main/Strings'
 import { isLinux, isMac, isWindows } from './javascripts/Main/Types/Platforms'
-import { isDev } from './javascripts/Main/Utils/Utils'
+import { setupTesting } from './javascripts/Main/Utils/Testing'
+import { isDev, isTesting } from './javascripts/Main/Utils/Utils'
 import { createWindowState, WindowState } from './javascripts/Main/Window'
 
 const deepLinkScheme = 'standardnotes'
@@ -14,6 +15,10 @@ export function initializeApplication(args: { app: Electron.App; ipcMain: Electr
   const { app } = args
 
   app.name = AppName
+
+  if (isTesting()) {
+    setupTesting()
+  }
 
   const state = new AppState(app)
 
@@ -26,7 +31,7 @@ export function initializeApplication(args: { app: Electron.App; ipcMain: Electr
     state,
   })
 
-  if (isDev()) {
+  if (isDev() && !isTesting()) {
     /** Expose the app's state as a global variable. Useful for debugging */
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ;(global as any).appState = state

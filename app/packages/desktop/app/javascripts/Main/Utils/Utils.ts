@@ -4,8 +4,24 @@ export function isDev(): boolean {
   return process.env.NODE_ENV === 'development'
 }
 
+export function isTestLaunch({
+  argv,
+  hasIpcChannel,
+  testMode,
+}: {
+  argv: readonly string[]
+  hasIpcChannel: boolean
+  testMode: string | undefined
+}): boolean {
+  return testMode === '1' && hasIpcChannel && argv.includes(CommandLineArgs.Testing)
+}
+
 export function isTesting(): boolean {
-  return isDev() && process.argv.includes(CommandLineArgs.Testing)
+  return isTestLaunch({
+    argv: process.argv,
+    hasIpcChannel: typeof process.send === 'function' && process.connected,
+    testMode: process.env.STANDARD_NOTES_TEST_MODE,
+  })
 }
 
 export function isBoolean(arg: unknown): arg is boolean {

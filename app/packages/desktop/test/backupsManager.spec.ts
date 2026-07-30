@@ -1,8 +1,7 @@
+import anyTest, { TestFn } from 'ava'
 import { existsSync, promises as fs } from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
-
-import anyTest, { TestFn } from 'ava'
 import { createDriver, Driver } from './driver'
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url))
@@ -11,126 +10,63 @@ const canRunElectron =
 
 const test = anyTest as TestFn<Driver>
 
-const BackupsDirectoryName = 'Standard Notes Backups'
-
-/**
- * Depending on the current system load, performing a backup
- * might take a while
- */
-const timeoutDuration = 20 * 1000 /** 20s */
-
-function wait(duration = 1000) {
-  return new Promise((resolve) => setTimeout(resolve, duration))
-}
-
 if (canRunElectron) {
   test.beforeEach(async (t) => {
     t.context = await createDriver()
-    const backupsLocation = await t.context.backups.location()
-    await fs.rm(backupsLocation, { recursive: true, force: true })
-    await t.context.backups.copyDecryptScript(backupsLocation)
   })
 
   test.afterEach.always(async (t) => {
     await t.context.stop()
   })
 
-  test('saves incoming data to the backups folder', async (t) => {
+  test('resolves the default legacy text-backup location', async (t) => {
+    const location = await t.context.backups.legacyTextLocation()
+
+    t.truthy(location)
+    t.true(path.isAbsolute(location!))
+    t.is(path.basename(location!), 'Standard Notes Backups')
+  })
+
+  test('saves text backup data and reports the current count', async (t) => {
+    const location = path.join(t.context.userDataPath, 'text-backups')
     const data = 'Sample Data'
-    const fileName = await t.context.backups.save(data)
-    const backupsLocation = await t.context.backups.location()
-    const files = await fs.readdir(backupsLocation)
-    t.true(files.includes(fileName))
-    t.is(data, await fs.readFile(path.join(backupsLocation, fileName), 'utf8'))
+
+    await t.context.backups.saveText(location, data)
+
+    t.is(await t.context.backups.textCount(location), 1)
+    const files = await fs.readdir(location)
+    t.is(files.length, 1)
+    t.true(files[0].endsWith('.txt'))
+    t.is(await fs.readFile(path.join(location, files[0]), 'utf8'), data)
   })
 
-  test('saves the decrypt script to the backups folder', async (t) => {
-    const backupsLocation = await t.context.backups.location()
-    await wait(300) /** Disk might be busy */
-    const files = await fs.readdir(backupsLocation)
-    t.true(files.includes('decrypt.html'))
+  test('copies the offline decrypt script into a backup directory', async (t) => {
+    const location = path.join(t.context.userDataPath, 'decrypt-script')
+
+    await t.context.backups.copyDecryptScript(location)
+
+    const decryptScript = path.join(location, 'decrypt.html')
+    t.true(await fs.stat(decryptScript).then((stat) => stat.isFile()))
+    t.true((await fs.readFile(decryptScript, 'utf8')).length > 0)
   })
 
-  test('performs a backup', async (t) => {
-    t.timeout(timeoutDuration)
+  test('persists plaintext-note mapping and content together', async (t) => {
+    const location = path.join(t.context.userDataPath, 'plaintext-backups')
+    const uuid = '00000000-0000-4000-8000-000000000001'
+    const data = 'Current plaintext backup'
 
-    await wait()
-    await t.context.backups.perform()
-    const backupsLocation = await t.context.backups.location()
-    const files = await fs.readdir(backupsLocation)
+    await t.context.backups.savePlaintextNote(location, uuid, 'Runtime backup', ['Important'], data)
+    await t.context.backups.persistPlaintextMapping(location)
 
-    t.true(files.length >= 1)
-  })
+    const mapping = await t.context.backups.plaintextMapping(location)
+    const records = mapping.files[uuid]
+    t.is(records.length, 1)
+    t.is(records[0].tag, 'Important')
+    t.is(await fs.readFile(path.join(location, records[0].path), 'utf8'), data)
 
-  test('changes backups folder location', async (t) => {
-    t.timeout(timeoutDuration)
-    await wait()
-    await t.context.backups.perform()
-    let newLocation = path.join(t.context.userDataPath, 'newLocation')
-    await fs.mkdir(newLocation)
-    const currentLocation = await t.context.backups.location()
-    const fileNames = await fs.readdir(currentLocation)
-    await t.context.backups.changeLocation(newLocation)
-    newLocation = path.join(newLocation, BackupsDirectoryName)
-    t.deepEqual(fileNames, await fs.readdir(newLocation))
-
-    /** Assert that the setting was saved */
-    const data = await t.context.storage.dataOnDisk()
-    t.is(data.backupsLocation, newLocation)
-
-    /** Perform backup and make sure there is one more file in the directory */
-    await t.context.backups.perform()
-    const newFileNames = await fs.readdir(newLocation)
-    t.deepEqual(newFileNames.length, fileNames.length + 1)
-  })
-
-  test('changes backups location to a child directory', async (t) => {
-    t.timeout(timeoutDuration)
-
-    await wait()
-    await t.context.backups.perform()
-    const currentLocation = await t.context.backups.location()
-    const backups = await fs.readdir(currentLocation)
-
-    t.is(backups.length, 2) /** 1 + decrypt script */
-
-    const newLocation = path.join(currentLocation, 'child_dir')
-    await t.context.backups.changeLocation(newLocation)
-
-    t.deepEqual(await fs.readdir(path.join(newLocation, BackupsDirectoryName)), backups)
-  })
-
-  test('changing backups location to the same directory should not do anything', async (t) => {
-    t.timeout(timeoutDuration)
-    await wait()
-    await t.context.backups.perform()
-    await t.context.backups.perform()
-    const currentLocation = await t.context.backups.location()
-    let totalFiles = (await fs.readdir(currentLocation)).length
-    t.is(totalFiles, 3) /** 2 + decrypt script */
-    await t.context.backups.changeLocation(currentLocation)
-    totalFiles = (await fs.readdir(currentLocation)).length
-    t.is(totalFiles, 3)
-  })
-
-  test('backups are enabled by default', async (t) => {
-    t.is(await t.context.backups.enabled(), true)
-  })
-
-  test('does not save a backup when they are disabled', async (t) => {
-    await t.context.backups.toggleEnabled()
-    await t.context.windowLoaded
-    /** Do not wait on this one as the backup shouldn't be triggered */
-    t.context.backups.perform()
-    await wait()
-    const backupsLocation = await t.context.backups.location()
-    const files = await fs.readdir(backupsLocation)
-    t.deepEqual(files, ['decrypt.html'])
+    const mappingOnDisk = JSON.parse(await fs.readFile(path.join(location, '.settings', 'info.json'), 'utf8'))
+    t.deepEqual(mappingOnDisk, mapping)
   })
 } else {
-  // Spawns a real Electron process against app/dist/index.js; needs a webpack build + display, not runnable headless.
-  test.skip(
-    'backupsManager: spawns Electron (needs built app/dist/index.js + display); set RUN_ELECTRON_TESTS=1 to run',
-    () => {},
-  )
+  test.skip('backupsManager: spawns Electron (needs built app/dist/index.js + display); set RUN_ELECTRON_TESTS=1 to run', () => {})
 }

@@ -30,7 +30,8 @@
     "tsc:test": "tsc -p tsconfig.test.json --noEmit",
     "release:mac": "node scripts/build.mjs mac",
     "start": "electron ./app --enable-logging --icon _icon/icon.png",
-    "ava": "rimraf test/data/tmp && ava --serial",
+    "ava": "rimraf test/data/tmp && node --test scripts/runElectronTests.test.mjs && ava --serial",
+    "ava:electron": "node scripts/runElectronTests.mjs",
     "rebuild:keytar": "yarn app/node_modules/keytar build ",
     "rebuild:home-server": "electron-rebuild -f -w @standardnotes/home-server -m ./app"
   },

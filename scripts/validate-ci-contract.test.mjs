@@ -63,6 +63,19 @@ test("a missing backup and restore drill is rejected", () => {
   );
 });
 
+test("the desktop lane cannot silently drop its virtual display", () => {
+  const files = withFileChanged(".github/workflows/ci.yml", (content) =>
+    content.replace(
+      "xvfb-run --auto-servernum",
+      "echo desktop-display-disabled",
+    ),
+  );
+  assert.match(
+    validateCiContract(files).join("\n"),
+    /desktop-electron virtual display/,
+  );
+});
+
 test("publishing permissions are rejected", () => {
   const files = withFileChanged(".github/workflows/ci.yml", (content) =>
     content.replace("contents: read", "contents: write"),

@@ -1,10 +1,10 @@
 import anyTest, { TestFn } from 'ava'
-import { MenuItem } from 'electron'
 import { existsSync } from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { AppName } from '../app/javascripts/Main/Strings'
 import { createDriver, Driver } from './driver'
+import { TestMenuItemSnapshot } from './TestIpcMessage'
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url))
 const canRunElectron =
@@ -12,15 +12,12 @@ const canRunElectron =
 
 const test = anyTest as TestFn<{
   driver: Driver
-  menuItems: MenuItem[]
+  menuItems: TestMenuItemSnapshot[]
 }>
 
-function findSpellCheckerLanguagesMenu(menuItems: MenuItem[]) {
-  return menuItems.find((item) => {
-    if (item.role?.toLowerCase() === 'editmenu') {
-      return item?.submenu?.items?.find((item) => item.id === 'SpellcheckerLanguages')
-    }
-  })
+function findSpellCheckerLanguagesMenu(menuItems: TestMenuItemSnapshot[]) {
+  const editMenu = menuItems.find((item) => item.role?.toLowerCase() === 'editmenu')
+  return editMenu?.submenu?.find((item) => item.id === 'SpellcheckerLanguages')
 }
 
 if (canRunElectron) {
@@ -53,7 +50,7 @@ if (canRunElectron) {
     test('shows the spellchecking submenu on Windows/Linux', (t) => {
       const menu = findSpellCheckerLanguagesMenu(t.context.menuItems)
       t.truthy(menu)
-      t.true(menu!.submenu!.items!.length > 0)
+      t.true((menu?.submenu?.length ?? 0) > 0)
     })
   }
 } else {

@@ -25,9 +25,9 @@ if (canRunElectron) {
     t.false(await t.context.updates.autoUpdateEnabled())
   })
 
-  test('reloads the menu after checking for an update', async (t) => {
+  test('a background update check does not opt into automatic updates', async (t) => {
     await t.context.updates.check()
-    t.true(await t.context.appMenu.hasReloaded())
+    t.false(await t.context.updates.autoUpdateEnabled())
   })
 } else {
   // Spawns a real Electron process against app/dist/index.js; needs a webpack build + display, not runnable headless.

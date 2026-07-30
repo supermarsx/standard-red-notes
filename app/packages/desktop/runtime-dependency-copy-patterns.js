@@ -144,6 +144,10 @@ function copyPattern(node, target) {
     context: node.root,
     from: '**/*',
     to: target.split(path.sep).join('/'),
+    // Package names can contain dots (for example, `fn.name`). Without an
+    // explicit directory target, CopyWebpackPlugin treats those names as
+    // filenames and repeatedly overwrites the package with each source file.
+    toType: 'dir',
     globOptions,
   }
 }

@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/explicit-module-boundary-types */
 import { ChildProcess, spawn } from 'child_process'
-import electronPath, { MenuItem } from 'electron'
+import electronPath from 'electron'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { Language } from '../app/javascripts/Main/SpellcheckerManager'
@@ -8,7 +8,14 @@ import { StoreKeys } from '../app/javascripts/Main/Store/StoreKeys'
 import { UpdateState } from '../app/javascripts/Main/UpdateManager'
 import { FilesManager } from '../app/javascripts/Main/File/FilesManager'
 import { CommandLineArgs } from '../app/javascripts/Shared/CommandLineArgs'
-import { AppMessageType, AppTestMessage, MessageType, TestIPCMessage, TestIPCMessageResult } from './TestIpcMessage'
+import {
+  AppMessageType,
+  AppTestMessage,
+  MessageType,
+  TestIPCMessage,
+  TestIPCMessageResult,
+  TestMenuItemSnapshot,
+} from './TestIpcMessage'
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url))
 const filesManager = new FilesManager()
@@ -18,6 +25,10 @@ function spawnAppprocess(userDataPath: string) {
     electronPath as any,
     [path.join(currentDir, '..'), CommandLineArgs.Testing, CommandLineArgs.UserDataPath, userDataPath],
     {
+      env: {
+        ...process.env,
+        STANDARD_NOTES_TEST_MODE: '1',
+      },
       stdio: ['inherit', 'inherit', 'inherit', 'ipc'],
     },
   )
@@ -103,7 +114,7 @@ class Driver {
     this.send(MessageType.AppStateCall, methodName, ...args)
 
   readonly window = {
-    signOut: (): Promise<void> => this.send(MessageType.SignOut),
+    clearRendererStorage: (): Promise<void> => this.send(MessageType.ClearRendererStorage),
   }
 
   readonly storage = {
@@ -115,10 +126,11 @@ class Driver {
     setZoomFactor: (factor: number) => this.send(MessageType.StoreSet, 'zoomFactor', factor),
     setLocalStorageValue: (key: string, value: string): Promise<void> =>
       this.send(MessageType.SetLocalStorageValue, key, value),
+    getLocalStorageValue: (key: string): Promise<string | null> => this.send(MessageType.GetRendererStorageValue, key),
   }
 
   readonly appMenu = {
-    items: (): Promise<MenuItem[]> => this.send(MessageType.AppMenuItems),
+    items: (): Promise<TestMenuItemSnapshot[]> => this.send(MessageType.AppMenuItems),
     clickLanguage: (language: Language) => this.send(MessageType.ClickLanguage, language),
     hasReloaded: () => this.send(MessageType.HasReloadedMenu),
   }
@@ -129,19 +141,19 @@ class Driver {
   }
 
   readonly backups = {
-    enabled: (): Promise<boolean> => this.send(MessageType.BackupsAreEnabled),
-    toggleEnabled: (): Promise<boolean> => this.send(MessageType.ToggleBackupsEnabled),
-    location: (): Promise<string> => this.send(MessageType.BackupsLocation),
+    legacyTextLocation: (): Promise<string | undefined> => this.send(MessageType.GetLegacyTextBackupsLocation),
     copyDecryptScript: async (location: string) => {
       await this.send(MessageType.CopyDecryptScript, location)
     },
-    changeLocation: (location: string) => this.send(MessageType.ChangeBackupsLocation, location),
-    save: (data: any) => this.send(MessageType.DataArchive, data),
-    perform: async () => {
-      await this.windowLoaded
-      await this.send(MessageType.PerformBackup)
-      await this.waitOn(AppMessageType.SavedBackup)
-    },
+    saveText: (location: string, data: string): Promise<void> =>
+      this.send(MessageType.SaveTextBackupData, location, data),
+    textCount: (location: string): Promise<number> => this.send(MessageType.GetTextBackupsCount, location),
+    savePlaintextNote: (location: string, uuid: string, name: string, tags: string[], data: string): Promise<void> =>
+      this.send(MessageType.SavePlaintextNoteBackup, location, uuid, name, tags, data),
+    persistPlaintextMapping: (location: string): Promise<void> =>
+      this.send(MessageType.PersistPlaintextBackupsMapping, location),
+    plaintextMapping: (location: string): Promise<{ files: Record<string, Array<{ path: string; tag?: string }>> }> =>
+      this.send(MessageType.GetPlaintextBackupsMapping, location),
   }
 
   readonly updates = {
@@ -185,7 +197,7 @@ class Driver {
     this.appProcess.on('message', this.receive)
     this.appReady = this.waitOn(AppMessageType.Ready)
     this.windowLoaded = this.waitOn(AppMessageType.WindowLoaded)
-    await this.appReady
+    await Promise.all([this.appReady, this.windowLoaded])
   }
 }
 
@@ -200,6 +212,6 @@ export async function createDriver() {
   )
   await filesManager.ensureDirectoryExists(userDataPath)
   const driver = new Driver(userDataPath)
-  await driver.appReady
+  await Promise.all([driver.appReady, driver.windowLoaded])
   return driver
 }
