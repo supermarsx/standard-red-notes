@@ -1,22 +1,27 @@
 import axios, { RawAxiosResponseHeaders } from 'axios'
-import { WriteStream } from 'fs'
+
+const FileBackupDownloadTimeout = 120_000
 
 export async function downloadData(
-  writeStream: WriteStream,
   url: string,
   headers: RawAxiosResponseHeaders,
+  maximumResponseBytes: number,
 ): Promise<{
+  data: Uint8Array
   headers: RawAxiosResponseHeaders
   status: number
 }> {
   const response = await axios.get(url, {
     responseType: 'arraybuffer',
     headers: headers,
+    maxContentLength: maximumResponseBytes,
+    maxBodyLength: maximumResponseBytes,
+    timeout: FileBackupDownloadTimeout,
   })
 
-  if (String(response.status).startsWith('2')) {
-    writeStream.write(response.data)
+  return {
+    data: Buffer.isBuffer(response.data) ? response.data : Buffer.from(response.data),
+    headers: response.headers,
+    status: response.status,
   }
-
-  return { headers: response.headers, status: response.status }
 }

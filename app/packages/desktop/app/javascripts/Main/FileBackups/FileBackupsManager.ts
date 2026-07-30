@@ -10,6 +10,7 @@ import {
 import { AppState } from 'app/AppState'
 import { promises as fs, existsSync } from 'fs'
 import { WebContents } from 'electron'
+import { randomUUID } from 'crypto'
 import { StoreKeys } from '../Store/StoreKeys'
 import path from 'path'
 import { FileDownloader } from './FileDownloader'
@@ -17,7 +18,13 @@ import { FileReadOperation } from './FileReadOperation'
 import { Paths } from '../Types/Paths'
 import { MessageToWebApp } from '../../Shared/IpcMessages'
 import { FilesManagerInterface } from '../File/FilesManagerInterface'
-import { sanitizeFileName } from '@standardnotes/utils'
+import {
+  createPlaintextBackupFileName,
+  createPlaintextBackupRelativePath,
+  isSafeBackupDirectoryName,
+  resolveMappedPlaintextBackupPath,
+  resolvePathInsideDirectory,
+} from './PlaintextBackupPaths'
 
 const TextBackupFileExtension = '.txt'
 
@@ -37,7 +44,8 @@ export const FileBackupsConstantsV1 = {
 
 export class FilesBackupManager implements FileBackupsDevice {
   private readOperations: Map<string, FileReadOperation> = new Map()
-  private plaintextMappingCache?: PlaintextBackupsMapping
+  private plaintextMappingCache = new Map<string, PlaintextBackupsMapping>()
+  private plaintextPendingDeletions = new Map<string, Set<string>>()
 
   constructor(
     private appState: AppState,
@@ -162,24 +170,55 @@ export class FilesBackupManager implements FileBackupsDevice {
       url: string
     },
   ): Promise<'success' | 'failed'> {
-    const fileDir = path.join(location, uuid)
-    const metaFilePath = path.join(fileDir, FileBackupsConstantsV1.MetadataFileName)
-    const binaryPath = path.join(fileDir, FileBackupsConstantsV1.BinaryFileName)
+    if (!isSafeBackupDirectoryName(uuid)) {
+      console.error('Refusing to save an encrypted file backup with an unsafe identifier')
+      return 'failed'
+    }
 
-    await this.filesManager.ensureDirectoryExists(fileDir)
+    const fileDir = resolvePathInsideDirectory(location, uuid)
+    const operationId = `${process.pid}-${randomUUID()}`
+    const stagingDir = resolvePathInsideDirectory(location, `${uuid}.partial-${operationId}`)
+    const previousDir = resolvePathInsideDirectory(location, `${uuid}.previous-${operationId}`)
+    let previousDirectoryMoved = false
+    let replacementPublished = false
 
-    await this.filesManager.writeFile(metaFilePath, metaFile)
+    try {
+      await this.filesManager.ensureDirectoryExists(stagingDir)
+      await this.filesManager.writeFile(path.join(stagingDir, FileBackupsConstantsV1.MetadataFileName), metaFile)
 
-    const downloader = new FileDownloader(
-      downloadRequest.chunkSizes,
-      downloadRequest.valetToken,
-      downloadRequest.url,
-      binaryPath,
-    )
+      const downloader = new FileDownloader(
+        downloadRequest.chunkSizes,
+        downloadRequest.valetToken,
+        downloadRequest.url,
+        path.join(stagingDir, FileBackupsConstantsV1.BinaryFileName),
+      )
 
-    const result = await downloader.run()
+      const result = await downloader.run()
+      if (result !== 'success') {
+        return result
+      }
 
-    if (result === 'success') {
+      /**
+       * Metadata and ciphertext are one logical backup. Swap the completed
+       * staging directory into place as a unit so a retry can never pair a new
+       * metadata file with stale/partial ciphertext (or vice versa).
+       */
+      if (existsSync(fileDir)) {
+        await fs.rename(fileDir, previousDir)
+        previousDirectoryMoved = true
+      }
+
+      try {
+        await fs.rename(stagingDir, fileDir)
+        replacementPublished = true
+      } catch (error) {
+        if (previousDirectoryMoved) {
+          await fs.rename(previousDir, fileDir)
+          previousDirectoryMoved = false
+        }
+        throw error
+      }
+
       const mapping = await this.getFilesBackupsMappingFile(location)
 
       mapping.files[uuid] = {
@@ -191,9 +230,23 @@ export class FilesBackupManager implements FileBackupsDevice {
       }
 
       await this.saveFilesBackupsMappingFile(location, mapping)
-    }
+      return 'success'
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      console.error('Failed to save encrypted file backup', message)
+      return 'failed'
+    } finally {
+      await fs.rm(stagingDir, { recursive: true, force: true }).catch(() => undefined)
 
-    return result
+      if (replacementPublished) {
+        await fs.rm(previousDir, { recursive: true, force: true }).catch(() => undefined)
+      } else if (previousDirectoryMoved && !existsSync(fileDir)) {
+        await fs.rename(previousDir, fileDir).catch((error) => {
+          const message = error instanceof Error ? error.message : String(error)
+          console.error('Failed to restore previous encrypted file backup', message)
+        })
+      }
+    }
   }
 
   async getFileBackupReadToken(filePath: string): Promise<FileBackupReadToken> {
@@ -275,17 +328,19 @@ export class FilesBackupManager implements FileBackupsDevice {
   }
 
   async getPlaintextBackupsMappingFile(location: string): Promise<PlaintextBackupsMapping> {
-    if (this.plaintextMappingCache) {
-      return this.plaintextMappingCache
+    const cacheKey = path.resolve(location)
+    const cachedMapping = this.plaintextMappingCache.get(cacheKey)
+    if (cachedMapping) {
+      return cachedMapping
     }
 
     let data = await this.getPlaintextMappingFileFromDisk(location)
 
-    if (!data) {
+    if (!data || !data.files || typeof data.files !== 'object' || Array.isArray(data.files)) {
       data = this.defaultPlaintextMappingFileValue()
     }
 
-    this.plaintextMappingCache = data
+    this.plaintextMappingCache.set(cacheKey, data)
 
     return data
   }
@@ -299,68 +354,132 @@ export class FilesBackupManager implements FileBackupsDevice {
   ): Promise<void> {
     log(LoggingDomain.Backups, 'Saving plaintext note backup', uuid, 'to', location)
 
+    if (!isSafeBackupDirectoryName(uuid)) {
+      throw new Error('Refusing to save a plaintext backup with an unsafe identifier')
+    }
+
     const mapping = await this.getPlaintextBackupsMappingFile(location)
-    if (!mapping.files[uuid]) {
-      mapping.files[uuid] = []
-    }
+    const mappedRecords = mapping.files[uuid]
+    const previousRecords = Array.isArray(mappedRecords) ? mappedRecords : []
+    const newRecords: PlaintextBackupsMapping['files'][string] = []
 
-    const removeNoteFromAllDirectories = async () => {
-      const records = mapping.files[uuid]
-      for (const record of records) {
-        const filePath = path.join(location, record.path)
-        await this.filesManager.deleteFileIfExists(filePath)
-      }
-      mapping.files[uuid] = []
-    }
+    const writeFileToPath = async (filename: string, data: string, forTag?: string) => {
+      const relativePath = createPlaintextBackupRelativePath(filename, forTag)
+      const fileAbsolutePath = resolvePathInsideDirectory(location, relativePath)
 
-    await removeNoteFromAllDirectories()
-
-    const writeFileToPath = async (absolutePath: string, filename: string, data: string, forTag?: string) => {
-      const findMappingRecord = (tag?: string) => {
-        const records = mapping.files[uuid]
-        return records.find((record) => record.tag === tag)
-      }
-
-      await this.filesManager.ensureDirectoryExists(absolutePath)
-
-      const relativePath = forTag ?? ''
-      const filenameWithSlashesEscaped = filename.replace(/\//g, '\u2215')
-      const sanitizedFilename = sanitizeFileName(filenameWithSlashesEscaped)
-      const fileAbsolutePath = path.join(absolutePath, relativePath, sanitizedFilename)
+      await this.filesManager.ensureDirectoryExists(path.dirname(fileAbsolutePath))
       await this.filesManager.writeFile(fileAbsolutePath, data)
 
-      const existingRecord = findMappingRecord(forTag)
-      if (!existingRecord) {
-        mapping.files[uuid].push({
-          tag: forTag,
-          path: path.join(relativePath, filename),
-        })
-      } else {
-        existingRecord.path = path.join(relativePath, filename)
-        existingRecord.tag = forTag
+      newRecords.push({
+        tag: forTag,
+        path: relativePath,
+      })
+    }
+
+    const trimmedName = name.trim()
+    const baseName = trimmedName.length > 0 ? trimmedName : formatPlaintextBackupTimestamp(new Date())
+    const backupFilename = createPlaintextBackupFileName(baseName, uuid)
+
+    if (tags.length === 0) {
+      await writeFileToPath(backupFilename, data)
+    } else {
+      for (const tag of tags) {
+        await writeFileToPath(backupFilename, data, tag)
       }
     }
 
-    const uuidPart = uuid.split('-')[0]
-    const condensedUuidPart = uuidPart.substring(0, 4)
-    const trimmedName = name.trim()
-    const baseName = trimmedName.length > 0 ? trimmedName : formatPlaintextBackupTimestamp(new Date())
-    const backupFilename = `${baseName}-${condensedUuidPart}.txt`
-    if (tags.length === 0) {
-      await writeFileToPath(location, backupFilename, data)
-    } else {
-      for (const tag of tags) {
-        await writeFileToPath(location, backupFilename, data, tag)
+    /**
+     * Only retire the previous copies after every replacement has been
+     * written. A disk error while writing a new backup therefore leaves the
+     * last known-good copies and mapping intact.
+     */
+    const pathKey = (filePath: string) => {
+      const normalized = path.normalize(filePath)
+      return process.platform === 'win32' ? normalized.toLowerCase() : normalized
+    }
+    const cacheKey = path.resolve(location)
+    const pendingDeletions = this.plaintextPendingDeletions.get(cacheKey) ?? new Set<string>()
+    const newPaths = new Set(newRecords.map((record) => pathKey(record.path)))
+    for (const record of newRecords) {
+      pendingDeletions.delete(pathKey(resolvePathInsideDirectory(location, record.path)))
+    }
+    const pathsReferencedByOtherNotes = new Set<string>()
+    for (const [recordUuid, records] of Object.entries(mapping.files)) {
+      if (recordUuid === uuid || !Array.isArray(records)) {
+        continue
+      }
+      for (const record of records) {
+        if (record && typeof record.path === 'string') {
+          pathsReferencedByOtherNotes.add(pathKey(record.path))
+        }
       }
     }
+
+    for (const record of previousRecords) {
+      if (!record || typeof record.path !== 'string') {
+        console.error('Ignoring invalid record in plaintext backups mapping')
+        continue
+      }
+      const previousPathKey = pathKey(record.path)
+      if (newPaths.has(previousPathKey) || pathsReferencedByOtherNotes.has(previousPathKey)) {
+        continue
+      }
+
+      const filePath = resolveMappedPlaintextBackupPath(location, record.path)
+      if (!filePath) {
+        console.error('Ignoring unsafe path in plaintext backups mapping')
+        continue
+      }
+
+      pendingDeletions.add(pathKey(filePath))
+    }
+
+    mapping.files[uuid] = newRecords
+    this.plaintextPendingDeletions.set(cacheKey, pendingDeletions)
   }
 
   async persistPlaintextBackupsMappingFile(location: string): Promise<void> {
-    if (!this.plaintextMappingCache) {
+    const cacheKey = path.resolve(location)
+    const mapping = this.plaintextMappingCache.get(cacheKey)
+    if (!mapping) {
       return
     }
 
-    await this.savePlaintextBackupsMappingFile(location, this.plaintextMappingCache)
+    await this.savePlaintextBackupsMappingFile(location, mapping)
+
+    /**
+     * Persist the replacement mapping before deleting superseded files. If the
+     * mapping write fails or the app exits mid-save, the last known-good files
+     * remain recoverable; a crash after persistence can leave only harmless
+     * stale copies.
+     */
+    const pendingDeletions = this.plaintextPendingDeletions.get(cacheKey)
+    if (!pendingDeletions) {
+      return
+    }
+
+    const referencedPaths = new Set<string>()
+    for (const records of Object.values(mapping.files)) {
+      if (!Array.isArray(records)) {
+        continue
+      }
+      for (const record of records) {
+        if (!record || typeof record.path !== 'string') {
+          continue
+        }
+        const filePath = resolveMappedPlaintextBackupPath(location, record.path)
+        if (filePath) {
+          referencedPaths.add(process.platform === 'win32' ? filePath.toLowerCase() : filePath)
+        }
+      }
+    }
+
+    for (const filePath of pendingDeletions) {
+      if (!referencedPaths.has(filePath)) {
+        await this.filesManager.deleteFileIfExists(filePath)
+      }
+    }
+    this.plaintextPendingDeletions.delete(cacheKey)
   }
 
   async monitorPlaintextBackupsLocationForChanges(backupsDirectory: string): Promise<void> {

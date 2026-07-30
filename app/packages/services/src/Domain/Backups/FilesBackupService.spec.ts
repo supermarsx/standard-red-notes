@@ -12,6 +12,7 @@ import { InternalEventBusInterface } from '..'
 import { AlertService } from '../Alert/AlertService'
 import { SyncServiceInterface } from '../Sync/SyncServiceInterface'
 import { DirectoryManagerInterface, FileBackupsDevice } from '@standardnotes/files'
+import { FileItem } from '@standardnotes/models'
 
 describe('backup service', () => {
   let apiService: LegacyApiServiceInterface
@@ -132,6 +133,46 @@ describe('backup service', () => {
       await backupService.readEncryptedFileFromBackup('123', async () => {})
 
       expect(mockFn.mock.calls.length).toEqual(expectedChunkCount)
+    })
+  })
+
+  describe('automatic file backups', () => {
+    it('releases a file from the pending set when a backup operation fails so it can be retried', async () => {
+      jest.useFakeTimers()
+      const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined)
+      try {
+        const file = {
+          uuid: 'file-uuid',
+          name: 'example.txt',
+          payload: {},
+        } as FileItem
+        const subject = backupService as unknown as {
+          handleChangedFiles(files: FileItem[]): Promise<void>
+          pendingFiles: Set<string>
+        }
+
+        backupService.isFilesBackupsEnabled = jest.fn().mockReturnValue(true)
+        device.getFilesBackupsMappingFile = jest.fn().mockResolvedValue({
+          version: '1.0.0',
+          files: {},
+        })
+        status.addMessage = jest.fn().mockReturnValue('status-message')
+        status.removeMessage = jest.fn()
+        encryptor.encryptSplitSingle = jest.fn().mockRejectedValue(new Error('simulated encryption failure'))
+
+        await subject.handleChangedFiles([file])
+        expect(subject.pendingFiles.has(file.uuid)).toBe(false)
+
+        await subject.handleChangedFiles([file])
+        expect(encryptor.encryptSplitSingle).toHaveBeenCalledTimes(2)
+        expect(subject.pendingFiles.has(file.uuid)).toBe(false)
+        expect(status.removeMessage).toHaveBeenCalledWith('status-message')
+        expect(consoleError).toHaveBeenCalledTimes(2)
+      } finally {
+        consoleError.mockRestore()
+        jest.runOnlyPendingTimers()
+        jest.useRealTimers()
+      }
     })
   })
 })

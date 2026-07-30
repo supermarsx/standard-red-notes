@@ -1,59 +1,126 @@
-import { createWriteStream, WriteStream } from 'fs'
+import { randomUUID } from 'crypto'
+import { promises as fs } from 'fs'
+import type { FileHandle } from 'fs/promises'
 import { downloadData } from './FileNetworking'
 
-export class FileDownloader {
-  writeStream: WriteStream
+type DownloadResult = 'success' | 'failed'
 
+type ContentRange = {
+  start: number
+  end: number
+  total: number
+}
+
+function parseContentRange(value: unknown): ContentRange | undefined {
+  if (typeof value !== 'string') {
+    return undefined
+  }
+
+  const match = /^bytes\s+(\d+)-(\d+)\/(\d+)$/i.exec(value.trim())
+  if (!match) {
+    return undefined
+  }
+
+  const start = Number(match[1])
+  const end = Number(match[2])
+  const total = Number(match[3])
+  if (
+    !Number.isSafeInteger(start) ||
+    !Number.isSafeInteger(end) ||
+    !Number.isSafeInteger(total) ||
+    start < 0 ||
+    end < start ||
+    total <= 0 ||
+    end >= total
+  ) {
+    return undefined
+  }
+
+  return { start, end, total }
+}
+
+export class FileDownloader {
   constructor(
     private chunkSizes: number[],
     private valetToken: string,
     private url: string,
-    filePath: string,
-  ) {
-    this.writeStream = createWriteStream(filePath, { flags: 'a' })
+    private filePath: string,
+  ) {}
+
+  public async run(): Promise<DownloadResult> {
+    const temporaryPath = `${this.filePath}.${process.pid}.${randomUUID()}.partial`
+    let fileHandle: FileHandle | undefined
+
+    try {
+      fileHandle = await fs.open(temporaryPath, 'wx')
+      const result = await this.downloadChunks(fileHandle)
+
+      await fileHandle.close()
+      fileHandle = undefined
+
+      if (result !== 'success') {
+        return result
+      }
+
+      /**
+       * Publish only a fully downloaded and range-validated file. Writing into
+       * a fresh sibling first means retries never append to an old/partial
+       * backup and a failed retry cannot destroy a previously complete file.
+       */
+      await fs.rename(temporaryPath, this.filePath)
+      return 'success'
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      console.error('Failed to download encrypted file backup', message)
+      return 'failed'
+    } finally {
+      await fileHandle?.close().catch(() => undefined)
+      await fs.rm(temporaryPath, { force: true }).catch(() => undefined)
+    }
   }
 
-  public async run(): Promise<'success' | 'failed'> {
-    const result = await this.downloadChunk(0, 0)
+  private async downloadChunks(fileHandle: FileHandle): Promise<DownloadResult> {
+    let expectedRangeStart = 0
+    let expectedTotal: number | undefined
 
-    this.writeStream.close()
+    for (const pullChunkSize of this.chunkSizes) {
+      if (!Number.isSafeInteger(pullChunkSize) || pullChunkSize <= 0) {
+        return 'failed'
+      }
 
-    return result
-  }
+      const headers = {
+        'x-valet-token': this.valetToken,
+        'x-chunk-size': pullChunkSize.toString(),
+        range: `bytes=${expectedRangeStart}-`,
+      }
 
-  private async downloadChunk(chunkIndex = 0, contentRangeStart: number): Promise<'success' | 'failed'> {
-    const pullChunkSize = this.chunkSizes[chunkIndex]
+      const response = await downloadData(this.url, headers, pullChunkSize)
 
-    const headers = {
-      'x-valet-token': this.valetToken,
-      'x-chunk-size': pullChunkSize.toString(),
-      range: `bytes=${contentRangeStart}-`,
+      if (response.status !== 206) {
+        return 'failed'
+      }
+
+      const range = parseContentRange(response.headers['content-range'])
+      if (
+        !range ||
+        range.start !== expectedRangeStart ||
+        (expectedTotal !== undefined && range.total !== expectedTotal) ||
+        response.data.byteLength !== range.end - range.start + 1 ||
+        response.data.byteLength > pullChunkSize
+      ) {
+        return 'failed'
+      }
+
+      expectedTotal = range.total
+      await fileHandle.writeFile(response.data)
+
+      if (range.end === range.total - 1) {
+        return 'success'
+      }
+
+      expectedRangeStart = range.end + 1
     }
 
-    const response = await downloadData(this.writeStream, this.url, headers)
-
-    if (!String(response.status).startsWith('2')) {
-      return 'failed'
-    }
-
-    const contentRangeHeader = response.headers['content-range'] as string
-    if (!contentRangeHeader) {
-      return 'failed'
-    }
-
-    const matches = contentRangeHeader.match(/(^[a-zA-Z][\w]*)\s+(\d+)\s?-\s?(\d+)?\s?\/?\s?(\d+|\*)?/)
-    if (!matches || matches.length !== 5) {
-      return 'failed'
-    }
-
-    const rangeStart = +matches[2]
-    const rangeEnd = +matches[3]
-    const totalSize = +matches[4]
-
-    if (rangeEnd < totalSize - 1) {
-      return this.downloadChunk(++chunkIndex, rangeStart + pullChunkSize)
-    }
-
-    return 'success'
+    return 'failed'
   }
 }
