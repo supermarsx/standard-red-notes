@@ -8,10 +8,10 @@ import { achievements, METRICS } from '@/Achievements'
  * Permanently deletes notes that have been sitting in the Trash longer than a
  * user-configured age. Because notes are end-to-end encrypted, the server cannot
  * decide what to delete — the CLIENT must perform the permanent deletion. This is
- * irreversible, so the feature is opt-out friendly ("Never" disables it) and only
+ * irreversible, so the feature is opt-in ("Never" is the default) and only
  * ever acts on items that are actually trashed (`item.trashed === true`).
  *
- * Storage: the chosen interval lives in localStorage (web-only), deliberately NOT
+ * Storage: the chosen interval lives in scoped localStorage (web-only), deliberately NOT
  * in the published `@standardnotes/models` PrefKey enum, so this stays a web-only
  * change (no build:snjs / models edits). It is therefore per-device, which is the
  * right scope for a destructive maintenance action.
@@ -25,7 +25,7 @@ import { achievements, METRICS } from '@/Achievements'
  * which is the safe direction for a destructive action.
  */
 
-const STORAGE_KEY = 'sn-auto-empty-trash-interval-ms'
+const STORAGE_KEY_PREFIX = 'sn-auto-empty-trash-interval-ms'
 
 /** How often the cleanup pass may run while the app is open. */
 const CLEANUP_THROTTLE_MS = 60 * 60 * 1000 // 1 hour
@@ -39,8 +39,8 @@ const DAY_MS = 24 * 60 * 60 * 1000
 export const AUTO_EMPTY_TRASH_NEVER = 0
 
 /**
- * Selectable intervals (ms). 30 days is the default (see DEFAULT_AUTO_EMPTY_TRASH_INTERVAL_MS).
- * "1 month" is offered as the 30-day option, matching the product default.
+ * Selectable intervals (ms). Automatic deletion is disabled until the user
+ * explicitly selects a non-zero interval.
  */
 export const AutoEmptyTrashInterval = {
   Never: AUTO_EMPTY_TRASH_NEVER,
@@ -57,8 +57,8 @@ export const AutoEmptyTrashInterval = {
 
 export type AutoEmptyTrashIntervalValue = (typeof AutoEmptyTrashInterval)[keyof typeof AutoEmptyTrashInterval]
 
-/** Default: permanently delete trashed notes after 30 days. */
-export const DEFAULT_AUTO_EMPTY_TRASH_INTERVAL_MS: number = AutoEmptyTrashInterval.OneMonth
+/** Safe default: never delete anything automatically. */
+export const DEFAULT_AUTO_EMPTY_TRASH_INTERVAL_MS: number = AutoEmptyTrashInterval.Never
 
 export const AUTO_EMPTY_TRASH_OPTIONS: { value: number; label: string }[] = [
   { value: AutoEmptyTrashInterval.Never, label: 'Never (off)' },
@@ -76,16 +76,27 @@ export const AUTO_EMPTY_TRASH_OPTIONS: { value: number; label: string }[] = [
 const VALID_INTERVALS = new Set<number>(AUTO_EMPTY_TRASH_OPTIONS.map((o) => o.value))
 
 /**
- * Read the configured interval (ms) from localStorage. Returns the 30-day default
- * when nothing valid is stored. Exported as a free function so the preferences UI
- * and the service share one source of truth without needing a service instance.
+ * Scope destructive preferences to the signed-in account where possible and to
+ * the persistent application profile for account-less use.
  */
-export function readAutoEmptyTrashInterval(): number {
+export function autoEmptyTrashStorageScope(application: WebApplication): string {
+  return application.sessions.getUser()?.uuid ?? application.identifier
+}
+
+function scopedStorageKey(scope: string): string {
+  return `${STORAGE_KEY_PREFIX}:${encodeURIComponent(scope)}`
+}
+
+/**
+ * Read the configured interval from scoped localStorage. Missing, legacy
+ * unscoped, malformed, and inaccessible values all fail closed to Never.
+ */
+export function readAutoEmptyTrashInterval(scope: string): number {
   if (typeof localStorage === 'undefined') {
     return DEFAULT_AUTO_EMPTY_TRASH_INTERVAL_MS
   }
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
+    const raw = localStorage.getItem(scopedStorageKey(scope))
     if (raw === null) {
       return DEFAULT_AUTO_EMPTY_TRASH_INTERVAL_MS
     }
@@ -99,13 +110,15 @@ export function readAutoEmptyTrashInterval(): number {
   }
 }
 
-/** Persist the configured interval (ms). Best-effort; ignores storage failures. */
-export function writeAutoEmptyTrashInterval(intervalMs: number): void {
+/** Persist a validated configured interval. Invalid input is stored as Never. */
+export function writeAutoEmptyTrashInterval(scope: string, intervalMs: number): void {
   if (typeof localStorage === 'undefined') {
     return
   }
   try {
-    localStorage.setItem(STORAGE_KEY, String(intervalMs))
+    const safeInterval =
+      Number.isFinite(intervalMs) && VALID_INTERVALS.has(intervalMs) ? intervalMs : AUTO_EMPTY_TRASH_NEVER
+    localStorage.setItem(scopedStorageKey(scope), String(safeInterval))
   } catch {
     /* storage may be unavailable; the setting display is best-effort */
   }
@@ -183,7 +196,7 @@ export class AutoEmptyTrashService {
       return 0
     }
 
-    const intervalMs = readAutoEmptyTrashInterval()
+    const intervalMs = readAutoEmptyTrashInterval(autoEmptyTrashStorageScope(this.application))
     if (intervalMs <= 0) {
       // "Never" — feature disabled. Still mark the initial pass as done so the
       // throttle behaves consistently if the user later enables it.

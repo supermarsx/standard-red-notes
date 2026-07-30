@@ -1,5 +1,14 @@
+/**
+ * @jest-environment jsdom
+ */
 import { SNNote } from '@standardnotes/snjs'
-import { AutoEmptyTrashInterval, selectTrashedItemsDueForDeletion } from './AutoEmptyTrashService'
+import {
+  AutoEmptyTrashInterval,
+  DEFAULT_AUTO_EMPTY_TRASH_INTERVAL_MS,
+  readAutoEmptyTrashInterval,
+  selectTrashedItemsDueForDeletion,
+  writeAutoEmptyTrashInterval,
+} from './AutoEmptyTrashService'
 
 /**
  * Builds a minimal SNNote-shaped stub with just the fields the selector reads.
@@ -10,6 +19,38 @@ function makeNote(uuid: string, trashed: boolean, userModifiedDate: Date | undef
 
 const NOW = new Date('2026-06-20T12:00:00.000Z').getTime()
 const DAY = 24 * 60 * 60 * 1000
+
+beforeEach(() => {
+  localStorage.clear()
+})
+
+describe('auto-empty trash preference', () => {
+  it('is off by default when no explicit scoped choice exists', () => {
+    expect(DEFAULT_AUTO_EMPTY_TRASH_INTERVAL_MS).toBe(AutoEmptyTrashInterval.Never)
+    expect(readAutoEmptyTrashInterval('account-a')).toBe(AutoEmptyTrashInterval.Never)
+  })
+
+  it('does not inherit the legacy unscoped destructive preference', () => {
+    localStorage.setItem('sn-auto-empty-trash-interval-ms', String(AutoEmptyTrashInterval.OneDay))
+
+    expect(readAutoEmptyTrashInterval('account-a')).toBe(AutoEmptyTrashInterval.Never)
+  })
+
+  it('keeps explicit choices isolated between accounts', () => {
+    writeAutoEmptyTrashInterval('account-a', AutoEmptyTrashInterval.OneWeek)
+
+    expect(readAutoEmptyTrashInterval('account-a')).toBe(AutoEmptyTrashInterval.OneWeek)
+    expect(readAutoEmptyTrashInterval('account-b')).toBe(AutoEmptyTrashInterval.Never)
+  })
+
+  it('fails closed to Never for malformed or unsupported values', () => {
+    localStorage.setItem('sn-auto-empty-trash-interval-ms:account-a', 'not-a-number')
+    expect(readAutoEmptyTrashInterval('account-a')).toBe(AutoEmptyTrashInterval.Never)
+
+    writeAutoEmptyTrashInterval('account-a', 42)
+    expect(readAutoEmptyTrashInterval('account-a')).toBe(AutoEmptyTrashInterval.Never)
+  })
+})
 
 describe('selectTrashedItemsDueForDeletion', () => {
   it('returns trashed items older than the interval', () => {

@@ -57,7 +57,7 @@ const General: FunctionComponent = () => {
       content: (
         <>
           <FileUploadPrivacy />
-          <AutoEmptyTrash />
+          <AutoEmptyTrash application={application} />
         </>
       ),
     },
