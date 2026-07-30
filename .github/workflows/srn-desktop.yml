@@ -39,6 +39,17 @@ on:
       - 'app/.yarn/releases/**'
       - '.github/workflows/srn-desktop.yml'
   workflow_dispatch:
+    inputs:
+      force_release:
+        description: Publish even when the desktop surface is unchanged
+        required: false
+        default: false
+        type: boolean
+      force_reason:
+        description: Required audit reason when force_release is true
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: write
@@ -51,12 +62,55 @@ env:
   TOOL: srn-desktop
 
 jobs:
+  impact:
+    name: analyze release impact
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.impact.outputs.changed }}
+      forced: ${{ steps.impact.outputs.forced }}
+      base_ref: ${{ steps.impact.outputs.base_ref }}
+      reason_codes: ${{ steps.impact.outputs.reason_codes }}
+      result_json: ${{ steps.impact.outputs.result_json }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+          package-manager-cache: false
+
+      - id: impact
+        name: Compare desktop publishable surface with its latest release
+        env:
+          FORCE_RELEASE: ${{ github.event_name == 'workflow_dispatch' && inputs.force_release || false }}
+          FORCE_REASON: ${{ github.event_name == 'workflow_dispatch' && inputs.force_reason || '' }}
+        run: |
+          set -euo pipefail
+          git fetch --force --tags origin
+          node scripts/analyze-release-impact.mjs \
+            --target srn-desktop \
+            --head HEAD \
+            --force "${FORCE_RELEASE}" \
+            --force-reason "${FORCE_REASON}" \
+            --output release-impact.json \
+            --github-output "$GITHUB_OUTPUT"
+          {
+            echo '### Desktop release impact'
+            echo '```json'
+            cat release-impact.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
   # 1) VERSION — compute the rolling YY.N version once so every leg bakes the
   # same version and the release tags it identically. N is discovered by
   # scanning the existing `srn-desktop-v<YY>.` releases, exactly as every other
   # srn-* workflow does; the versioning state lives in GitHub Releases.
   version:
     name: version
+    needs: impact
+    if: needs.impact.outputs.changed == 'true'
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.v.outputs.version }}
@@ -147,6 +201,62 @@ jobs:
         # non-semver app version, and the release identity `YY.N` is not semver.
         run: yarn electron-builder ${{ matrix.builder }} --publish never -c.extraMetadata.version=${{ needs.version.outputs.app_version }}
 
+      # Fingerprint the ACTUAL packaged application payload, not the installer:
+      # installers carry timestamps/signature containers and are not byte
+      # reproducible. app.asar + app.asar.unpacked is the runtime payload users
+      # execute. Normalizing only package.json's rolling version lets a root lock
+      # change build safely, then stop here when every shipped byte is unchanged.
+      - name: Fingerprint packaged runtime payloads
+        working-directory: app/packages/desktop
+        env:
+          MATRIX_LABEL: ${{ matrix.label }}
+        run: |
+          set -euo pipefail
+          mkdir -p staged
+          work="$RUNNER_TEMP/srn-desktop-fingerprint"
+          rm -rf "$work"
+          mkdir -p "$work"
+          count=0
+          while IFS= read -r -d '' asar; do
+            case "$MATRIX_LABEL:$asar" in
+              macos:*arm64*) target=macos-arm64 ;;
+              macos:*) target=macos-x64 ;;
+              windows:*arm64*) target=windows-arm64 ;;
+              windows:*) target=windows-x64 ;;
+              linux-x64:*) target=linux-x64 ;;
+              linux-arm64:*) target=linux-arm64 ;;
+              *) echo "Cannot classify packaged runtime: $asar" >&2; exit 1 ;;
+            esac
+            output="staged/${TOOL}-${target}.fingerprint"
+            test ! -e "$output" || {
+              echo "Duplicate packaged runtime for $target" >&2
+              exit 1
+            }
+            extract="$work/$target"
+            mkdir -p "$extract"
+            yarn exec asar extract "$asar" "$extract"
+            if [ -d "${asar}.unpacked" ]; then
+              cp -a "${asar}.unpacked" "$extract/app.asar.unpacked"
+            fi
+            node ../../../scripts/fingerprint-release-tree.mjs \
+              --root "$extract" \
+              --path . \
+              --normalize-package-version package.json \
+              --output "$output"
+            grep -Eq '^[0-9a-f]{64}$' "$output"
+            count=$((count + 1))
+          done < <(find dist -type f -name app.asar -print0 | sort -z)
+
+          case "$MATRIX_LABEL" in
+            macos|windows) expected=2 ;;
+            linux-x64|linux-arm64) expected=1 ;;
+            *) echo "Unknown desktop matrix label: $MATRIX_LABEL" >&2; exit 1 ;;
+          esac
+          test "$count" -eq "$expected" || {
+            echo "Expected $expected packaged runtimes for $MATRIX_LABEL, found $count" >&2
+            exit 1
+          }
+
       - name: Collect installers
         working-directory: app/packages/desktop
         run: |
@@ -168,7 +278,77 @@ jobs:
           retention-days: 2
           if-no-files-found: error
 
-  # 3) RELEASE — gather every leg's installers + update metadata and publish ONE
+  # 3) DECIDE — all native builds ran because source impact was detected. Stop
+  # before tagging/publishing when all six normalized runtime payloads are
+  # byte-identical to the analyzer-selected prior release.
+  decide:
+    name: decide
+    needs: [impact, version, build]
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.compare.outputs.changed }}
+    steps:
+      - name: Download packaged desktop payloads
+        uses: actions/download-artifact@v8
+        with:
+          pattern: srn-desktop-*
+          path: artifacts
+          merge-multiple: true
+
+      - id: compare
+        name: Compare normalized runtime fingerprints
+        env:
+          BASE_REF: ${{ needs.impact.outputs.base_ref }}
+          FORCED: ${{ needs.impact.outputs.forced }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          targets=(
+            macos-x64 macos-arm64
+            windows-x64 windows-arm64
+            linux-x64 linux-arm64
+          )
+          for target in "${targets[@]}"; do
+            file="artifacts/${TOOL}-${target}.fingerprint"
+            test -s "$file"
+            grep -Eq '^[0-9a-f]{64}$' "$file"
+          done
+          actual="$(find artifacts -maxdepth 1 -type f -name "${TOOL}-*.fingerprint" | wc -l | tr -d '[:space:]')"
+          test "$actual" -eq "${#targets[@]}"
+
+          if [ "$FORCED" = "true" ]; then
+            echo "Audited force request bypasses the runtime fingerprint comparison."
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -z "$BASE_REF" ]; then
+            echo "No prior desktop release -> changed."
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          mkdir -p old
+          if ! gh release download "$BASE_REF" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "${TOOL}-*.fingerprint" \
+            --dir old 2>/dev/null; then
+            echo "${BASE_REF} has no complete runtime fingerprint set -> changed."
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          for target in "${targets[@]}"; do
+            old_file="old/${TOOL}-${target}.fingerprint"
+            new_file="artifacts/${TOOL}-${target}.fingerprint"
+            if [ ! -s "$old_file" ] || ! cmp --silent "$old_file" "$new_file"; then
+              echo "$target changed since ${BASE_REF} -> release."
+              echo "changed=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          echo "All six desktop runtime payloads are unchanged since ${BASE_REF} -> skip."
+          echo "changed=false" >> "$GITHUB_OUTPUT"
+
+  # 4) RELEASE — gather every leg's installers + update metadata and publish ONE
   # rolling GitHub Release (non-draft, so electron-updater can read it).
   #
   # The Snap target was removed, not descoped: electron-builder's legacy core22
@@ -177,7 +357,8 @@ jobs:
   # AppImage + deb from the build matrix.
   release:
     name: release
-    needs: [version, build]
+    needs: [version, build, decide]
+    if: needs.decide.outputs.changed == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Download all installers

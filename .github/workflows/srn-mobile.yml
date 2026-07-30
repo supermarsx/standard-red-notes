@@ -10,6 +10,17 @@ on:
     tags:
       - '@standardnotes/web@*'
   workflow_dispatch:
+    inputs:
+      force_release:
+        description: Publish even when the mobile surface is unchanged
+        required: false
+        default: false
+        type: boolean
+      force_reason:
+        description: Required audit reason when force_release is true
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -23,8 +34,51 @@ defaults:
     shell: bash
 
 jobs:
+  impact:
+    name: analyze release impact
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.impact.outputs.changed }}
+      forced: ${{ steps.impact.outputs.forced }}
+      base_ref: ${{ steps.impact.outputs.base_ref }}
+      reason_codes: ${{ steps.impact.outputs.reason_codes }}
+      result_json: ${{ steps.impact.outputs.result_json }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+          package-manager-cache: false
+
+      - id: impact
+        name: Compare mobile publishable surface with its latest release
+        env:
+          FORCE_RELEASE: ${{ github.event_name == 'workflow_dispatch' && inputs.force_release || false }}
+          FORCE_REASON: ${{ github.event_name == 'workflow_dispatch' && inputs.force_reason || '' }}
+        run: |
+          set -euo pipefail
+          git fetch --force --tags origin
+          node scripts/analyze-release-impact.mjs \
+            --target srn-mobile \
+            --head HEAD \
+            --force "${FORCE_RELEASE}" \
+            --force-reason "${FORCE_REASON}" \
+            --output release-impact.json \
+            --github-output "$GITHUB_OUTPUT"
+          {
+            echo '### Mobile release impact'
+            echo '```json'
+            cat release-impact.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
   version:
     name: version
+    needs: impact
+    if: needs.impact.outputs.changed == 'true'
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -44,9 +98,138 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=@standardnotes/mobile@$version" >> "$GITHUB_OUTPUT"
 
+  # Build deterministic Android/iOS JavaScript bundles plus the embedded web
+  # payload before either Fastlane lane can publish externally. Native
+  # installers are signed/version-stamped and therefore not reproducible, but
+  # these executable inputs are. A shared lockfile-only change can now prove it
+  # did not alter the mobile product and stop before Google Play/App Store.
+  fingerprint:
+    name: fingerprint release inputs
+    needs: version
+    runs-on: ubuntu-latest
+    outputs:
+      fingerprint: ${{ steps.fingerprint.outputs.fingerprint }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: app/.nvmrc
+          package-manager-cache: false
+
+      - name: Enable Corepack
+        working-directory: app
+        run: npm install --global corepack@0.35.0 && corepack enable
+
+      - name: Install workspace dependencies
+        working-directory: app
+        run: yarn install --immutable
+
+      - name: Build embedded web UI
+        working-directory: app
+        run: yarn build:web
+
+      - name: Build deterministic mobile JavaScript payloads
+        working-directory: app/packages/mobile
+        run: |
+          set -euo pipefail
+          rm -rf html/Web.bundle/src/web-src .release-impact
+          mkdir -p .release-impact/android-assets .release-impact/ios-assets
+          yarn bundle:web
+          yarn react-native bundle \
+            --platform android \
+            --dev false \
+            --entry-file index.js \
+            --bundle-output .release-impact/index.android.bundle \
+            --assets-dest .release-impact/android-assets \
+            --reset-cache
+          yarn react-native bundle \
+            --platform ios \
+            --dev false \
+            --entry-file index.js \
+            --bundle-output .release-impact/index.ios.bundle \
+            --assets-dest .release-impact/ios-assets \
+            --reset-cache
+
+      - id: fingerprint
+        name: Fingerprint executable mobile release inputs
+        run: |
+          set -euo pipefail
+          mkdir -p release-fingerprint
+          node scripts/fingerprint-release-tree.mjs \
+            --root . \
+            --path app/packages/mobile/.release-impact \
+            --path app/packages/mobile/html/Web.bundle \
+            --path app/packages/mobile/package.json \
+            --normalize-package-version app/packages/mobile/package.json \
+            --path app/packages/mobile/android \
+            --exclude app/packages/mobile/android/app/debug.keystore \
+            --exclude app/packages/mobile/android/app/src/androidTest \
+            --exclude app/packages/mobile/android/app/src/debug \
+            --exclude app/packages/mobile/android/app/src/dev \
+            --path app/packages/mobile/ios \
+            --exclude app/packages/mobile/ios/Dev.xcassets \
+            --exclude app/packages/mobile/ios/StandardNotesTests \
+            --exclude app/packages/mobile/ios/StandardNotesDev-Info.plist \
+            --output "release-fingerprint/srn-mobile.fingerprint" \
+            --github-output "$GITHUB_OUTPUT"
+          grep -Eq '^[0-9a-f]{64}$' release-fingerprint/srn-mobile.fingerprint
+
+      - name: Upload mobile release fingerprint
+        uses: actions/upload-artifact@v7
+        with:
+          name: srn-mobile-release-fingerprint
+          path: release-fingerprint/srn-mobile.fingerprint
+          retention-days: 2
+          if-no-files-found: error
+
+  decide:
+    name: decide
+    needs: [impact, fingerprint]
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.compare.outputs.changed }}
+    steps:
+      - id: compare
+        name: Compare mobile release fingerprint
+        env:
+          BASE_REF: ${{ needs.impact.outputs.base_ref }}
+          FORCED: ${{ needs.impact.outputs.forced }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEW_FP: ${{ needs.fingerprint.outputs.fingerprint }}
+        run: |
+          set -euo pipefail
+          [[ "$NEW_FP" =~ ^[0-9a-f]{64}$ ]]
+          if [ "$FORCED" = "true" ]; then
+            echo "Audited force request bypasses the mobile fingerprint comparison."
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -z "$BASE_REF" ]; then
+            echo "No prior mobile release -> changed."
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          old_fp=""
+          if gh release download "$BASE_REF" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern srn-mobile.fingerprint \
+            --output old.fingerprint \
+            --clobber 2>/dev/null; then
+            old_fp="$(tr -d '[:space:]' < old.fingerprint)"
+          fi
+          if [ -n "$old_fp" ] && [ "$old_fp" = "$NEW_FP" ]; then
+            echo "Mobile executable inputs are unchanged since ${BASE_REF} -> skip."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Mobile executable inputs changed since ${BASE_REF} -> release."
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
   android:
     name: android (arm64-v8a + x86_64)
-    needs: version
+    needs: [version, decide]
+    if: needs.decide.outputs.changed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     defaults:
@@ -115,7 +298,7 @@ jobs:
         run: yarn build:web
 
       - name: Prepare embedded mobile web bundle
-        run: yarn bundle:web
+        run: rm -rf html/Web.bundle/src/web-src && yarn bundle:web
 
       - name: Build and publish Android production release
         env:
@@ -167,7 +350,8 @@ jobs:
 
   ios:
     name: ios (device arm64)
-    needs: version
+    needs: [version, decide]
+    if: needs.decide.outputs.changed == 'true'
     runs-on: macos-15
     timeout-minutes: 90
     defaults:
@@ -218,7 +402,7 @@ jobs:
         run: yarn build:web
 
       - name: Prepare embedded mobile web bundle
-        run: yarn bundle:web
+        run: rm -rf html/Web.bundle/src/web-src && yarn bundle:web
 
       - name: Install iOS pods
         run: yarn install:pods
@@ -296,7 +480,8 @@ jobs:
 
   release:
     name: release
-    needs: [version, android, ios]
+    needs: [version, decide, android, ios]
+    if: needs.decide.outputs.changed == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -317,8 +502,10 @@ jobs:
           test -s "standard-red-notes-android-universal-${VERSION}.apk"
           test -s "standard-red-notes-android-${VERSION}.aab"
           test -s "standard-red-notes-ios-arm64-${VERSION}.ipa"
+          test -s srn-mobile.fingerprint
+          grep -Eq '^[0-9a-f]{64}$' srn-mobile.fingerprint
           mapfile -d '' files < <(find . -maxdepth 1 -type f ! -name SHA256SUMS.txt -print0 | sort -z)
-          test "${#files[@]}" -eq 3
+          test "${#files[@]}" -eq 4
           sha256sum "${files[@]}" > SHA256SUMS.txt
           sha256sum --check SHA256SUMS.txt
 

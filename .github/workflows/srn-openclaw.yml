@@ -49,6 +49,16 @@ on:
         required: false
         default: ""
         type: string
+      force_release:
+        description: Publish a rolling release even when the OpenClaw surface is unchanged
+        required: false
+        default: false
+        type: boolean
+      force_reason:
+        description: Required audit reason when force_release is true
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -64,8 +74,53 @@ env:
   COREPACK_VERSION: "0.35.0"
 
 jobs:
+  impact:
+    name: Analyze release impact
+    runs-on: ubuntu-24.04
+    outputs:
+      changed: ${{ steps.impact.outputs.changed }}
+      forced: ${{ steps.impact.outputs.forced }}
+      base_ref: ${{ steps.impact.outputs.base_ref }}
+      reason_codes: ${{ steps.impact.outputs.reason_codes }}
+      result_json: ${{ steps.impact.outputs.result_json }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          architecture: x64
+          package-manager-cache: false
+
+      - id: impact
+        name: Compare OpenClaw publishable surface with its latest release
+        env:
+          FORCE_RELEASE: ${{ startsWith(github.ref, 'refs/tags/srn-openclaw-v') || (github.event_name == 'workflow_dispatch' && inputs.tag != '') || (github.event_name == 'workflow_dispatch' && inputs.force_release) }}
+          FORCE_REASON: ${{ startsWith(github.ref, 'refs/tags/srn-openclaw-v') && format('tag:{0}', github.ref_name) || (github.event_name == 'workflow_dispatch' && inputs.tag != '' && format('tag:{0}', inputs.tag)) || (github.event_name == 'workflow_dispatch' && inputs.force_reason) || '' }}
+        run: |
+          set -euo pipefail
+          git fetch --force --tags origin
+          node scripts/analyze-release-impact.mjs \
+            --target srn-openclaw \
+            --head HEAD \
+            --force "${FORCE_RELEASE}" \
+            --force-reason "${FORCE_REASON}" \
+            --output release-impact.json \
+            --github-output "$GITHUB_OUTPUT"
+          {
+            echo '### OpenClaw release impact'
+            echo '```json'
+            cat release-impact.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
   context:
     name: Resolve release version
+    needs: impact
+    if: needs.impact.outputs.changed == 'true'
     runs-on: ubuntu-24.04
     outputs:
       package_tag: ${{ steps.release.outputs.package_tag }}
@@ -202,6 +257,8 @@ jobs:
     needs: [context, quality]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    outputs:
+      fingerprint: ${{ steps.fingerprint.outputs.fingerprint }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -254,6 +311,28 @@ jobs:
             --out-dir out
           (cd out && sha256sum --check SHA256SUMS.txt)
 
+      # Hash the exact npm payload after extraction. The rolling package version
+      # is normalized and release-package.json is excluded because it contains
+      # source/tag timestamps only; every executable, bundled dependency,
+      # install contract, README and license byte remains fingerprinted.
+      - id: fingerprint
+        name: Fingerprint normalized package payload
+        run: |
+          set -euo pipefail
+          archive="out/srn-openclaw-${{ needs.context.outputs.package_version }}-node-any.tgz"
+          extract="$RUNNER_TEMP/srn-openclaw-fingerprint"
+          rm -rf "$extract"
+          mkdir -p "$extract"
+          tar -xzf "$archive" -C "$extract"
+          node scripts/fingerprint-release-tree.mjs \
+            --root "$extract" \
+            --path package \
+            --exclude package/release-package.json \
+            --normalize-package-version package/package.json \
+            --output "out/${TOOL}.fingerprint" \
+            --github-output "$GITHUB_OUTPUT"
+          grep -Eq '^[0-9a-f]{64}$' "out/${TOOL}.fingerprint"
+
       - name: Upload release package
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -262,9 +341,52 @@ jobs:
           if-no-files-found: error
           retention-days: 2
 
+  decide:
+    name: Compare normalized package fingerprint
+    needs: [impact, context, package]
+    runs-on: ubuntu-24.04
+    outputs:
+      changed: ${{ steps.compare.outputs.changed }}
+    steps:
+      - id: compare
+        env:
+          BASE_REF: ${{ needs.impact.outputs.base_ref }}
+          FORCED: ${{ needs.impact.outputs.forced }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEW_FP: ${{ needs.package.outputs.fingerprint }}
+        run: |
+          set -euo pipefail
+          [[ "$NEW_FP" =~ ^[0-9a-f]{64}$ ]]
+          if [ "$FORCED" = "true" ]; then
+            echo "Audited tag/force request bypasses the package fingerprint comparison."
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -z "$BASE_REF" ]; then
+            echo "No prior OpenClaw release -> changed."
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          old_fp=""
+          if gh release download "$BASE_REF" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "${TOOL}.fingerprint" \
+            --output old.fingerprint \
+            --clobber 2>/dev/null; then
+            old_fp="$(tr -d '[:space:]' < old.fingerprint)"
+          fi
+          if [ -n "$old_fp" ] && [ "$old_fp" = "$NEW_FP" ]; then
+            echo "Normalized package is unchanged since ${BASE_REF} -> skip."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Normalized package changed since ${BASE_REF} -> release."
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
   smoke:
     name: Smoke (${{ matrix.target }})
-    needs: [context, package]
+    needs: [context, package, decide]
+    if: needs.decide.outputs.changed == 'true'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     strategy:
@@ -324,7 +446,8 @@ jobs:
   # more -- creates releases in this repository without trouble.
   attest:
     name: Attest release package provenance
-    needs: [context, package, smoke]
+    needs: [context, package, decide, smoke]
+    if: needs.decide.outputs.changed == 'true'
     runs-on: ubuntu-24.04
     permissions:
       artifact-metadata: write
@@ -348,12 +471,18 @@ jobs:
           subject-path: |
             out/srn-openclaw-${{ needs.context.outputs.package_version }}-node-any.tgz
             out/srn-openclaw-${{ needs.context.outputs.package_version }}-node-any.manifest.json
+            out/srn-openclaw.fingerprint
 
       - name: Add provenance bundle and verify final checksums
         run: |
           provenance="srn-openclaw-${{ needs.context.outputs.package_version }}-node-any.provenance.sigstore.json"
           cp "${{ steps.provenance.outputs.bundle-path }}" "out/${provenance}"
-          (cd out && sha256sum "${provenance}" >> SHA256SUMS.txt && sha256sum --check SHA256SUMS.txt)
+          (
+            cd out
+            sha256sum "${TOOL}.fingerprint" >> SHA256SUMS.txt
+            sha256sum "${provenance}" >> SHA256SUMS.txt
+            sha256sum --check SHA256SUMS.txt
+          )
 
       - name: Upload attested release package
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -365,7 +494,8 @@ jobs:
 
   release:
     name: Publish GitHub release
-    needs: [context, attest]
+    needs: [context, decide, attest]
+    if: needs.decide.outputs.changed == 'true'
     runs-on: ubuntu-24.04
     # `contents: write` and nothing else -- the exact token every other srn-*
     # publisher holds. Publishing needs no attestation scope, and the attested
