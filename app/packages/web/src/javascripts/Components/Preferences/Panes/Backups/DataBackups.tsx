@@ -61,46 +61,56 @@ const DataBackups = ({ application }: Props) => {
   }, [refreshEncryptionStatus])
 
   const downloadDataArchive = async () => {
-    const result = isBackupEncrypted
-      ? await application.createEncryptedBackupFile.execute()
-      : await application.createDecryptedBackupFile.execute()
+    try {
+      const result = isBackupEncrypted
+        ? await application.createEncryptedBackupFile.execute()
+        : await application.createDecryptedBackupFile.execute()
 
-    if (result.isFailed()) {
-      return
-    }
+      if (result.isFailed()) {
+        throw new Error(result.getError())
+      }
 
-    const data = result.getValue()
+      const data = result.getValue()
 
-    const blobData = new Blob([JSON.stringify(data, null, 2)], {
-      type: 'text/json',
-    })
-
-    if (isBackupEncrypted) {
-      achievements.markEvent(METRICS.backupEncrypted)
-      const filename = `Standard Red Notes Encrypted Backup and Import File - ${application.archiveService.formattedDateForExports()}`
-      const sanitizedFilename = sanitizeFileName(filename) + '.txt'
-      void downloadOrShareBlobBasedOnPlatform({
-        archiveService: application.archiveService,
-        platform: application.platform,
-        mobileDevice: application.mobileDevice,
-        blob: blobData,
-        filename: sanitizedFilename,
-        isNativeMobileWeb: application.isNativeMobileWeb(),
-        showToastOnAndroid: undefined,
+      const blobData = new Blob([JSON.stringify(data, null, 2)], {
+        type: 'text/json',
       })
-    } else {
-      achievements.markEvent(METRICS.backupUnencrypted)
-      const zippedDecryptedItemsBlob = await application.archiveService.getZippedDecryptedItemsBlob(data)
-      const filename = `Standard Red Notes Backup - ${application.archiveService.formattedDateForExports()}`
-      const sanitizedFilename = sanitizeFileName(filename) + '.zip'
-      void downloadOrShareBlobBasedOnPlatform({
-        archiveService: application.archiveService,
-        platform: application.platform,
-        mobileDevice: application.mobileDevice,
-        blob: zippedDecryptedItemsBlob,
-        filename: sanitizedFilename,
-        isNativeMobileWeb: application.isNativeMobileWeb(),
-        showToastOnAndroid: undefined,
+
+      if (isBackupEncrypted) {
+        const filename = `Standard Red Notes Encrypted Backup and Import File - ${application.archiveService.formattedDateForExports()}`
+        const sanitizedFilename = sanitizeFileName(filename) + '.txt'
+        await downloadOrShareBlobBasedOnPlatform({
+          archiveService: application.archiveService,
+          platform: application.platform,
+          mobileDevice: application.mobileDevice,
+          blob: blobData,
+          filename: sanitizedFilename,
+          isNativeMobileWeb: application.isNativeMobileWeb(),
+          showToastOnAndroid: undefined,
+        })
+        achievements.markEvent(METRICS.backupEncrypted)
+      } else {
+        const zippedDecryptedItemsBlob = await application.archiveService.getZippedDecryptedItemsBlob(data)
+        const filename = `Standard Red Notes Backup - ${application.archiveService.formattedDateForExports()}`
+        const sanitizedFilename = sanitizeFileName(filename) + '.zip'
+        await downloadOrShareBlobBasedOnPlatform({
+          archiveService: application.archiveService,
+          platform: application.platform,
+          mobileDevice: application.mobileDevice,
+          blob: zippedDecryptedItemsBlob,
+          filename: sanitizedFilename,
+          isNativeMobileWeb: application.isNativeMobileWeb(),
+          showToastOnAndroid: undefined,
+        })
+        achievements.markEvent(METRICS.backupUnencrypted)
+      }
+    } catch (error) {
+      console.error(error)
+      void alertDialog({
+        text:
+          error instanceof Error && error.message
+            ? error.message
+            : c('Error').t`Backup creation failed. Please try again.`,
       })
     }
   }

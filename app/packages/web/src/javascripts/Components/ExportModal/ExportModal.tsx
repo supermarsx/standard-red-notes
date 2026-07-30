@@ -35,7 +35,11 @@ const ExportModal = ({ exportModalController }: { exportModalController: ExportM
         }
       } catch (error) {
         console.error(error)
-        addToast({ type: ToastType.Error, message: c('Error').t`Export failed. Please try again.` })
+        addToast({
+          type: ToastType.Error,
+          message:
+            error instanceof Error && error.message ? error.message : c('Error').t`Export failed. Please try again.`,
+        })
       } finally {
         setBusy(null)
       }

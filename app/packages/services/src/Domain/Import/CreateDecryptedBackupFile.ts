@@ -3,16 +3,15 @@ import { Result, UseCaseInterface } from '@standardnotes/domain-core'
 import {
   BackupFile,
   CreateDecryptedBackupFileContextPayload,
-  CreateEncryptedBackupFileContextPayload,
   isDecryptedPayload,
   isEncryptedPayload,
   isItemExportable,
   ProtocolVersionLatest,
 } from '@standardnotes/models'
 import { PayloadManagerInterface } from '../Payloads/PayloadManagerInterface'
-import { isNotUndefined } from '@standardnotes/utils'
 import { SyncServiceInterface } from '../Sync/SyncServiceInterface'
 import { rehydrateLiteBackupPayloads } from './RehydrateLiteBackupPayloads'
+import { Strings } from './Strings'
 
 export class CreateDecryptedBackupFile implements UseCaseInterface<BackupFile> {
   constructor(
@@ -38,34 +37,25 @@ export class CreateDecryptedBackupFile implements UseCaseInterface<BackupFile> {
      * shared rule; the ENCRYPTED backup path (CreateEncryptedBackupFile) does NOT apply it, so a
      * full-account encrypted backup stays complete and restorable.
      */
+    const exportablePayloads = this.payloads.nonDeletedItems.filter((item) => isItemExportable(item))
+    const unreadablePayloads = exportablePayloads.filter(isEncryptedPayload)
+
+    if (unreadablePayloads.length > 0) {
+      return Result.fail(Strings.DecryptedBackupItemsUnreadable(unreadablePayloads.length))
+    }
+
     const { payloads, excludedUuids } = await rehydrateLiteBackupPayloads(
-      this.payloads.nonDeletedItems.filter((item) => isItemExportable(item)),
+      exportablePayloads.filter(isDecryptedPayload),
       this.sync,
     )
 
     if (excludedUuids.length > 0) {
-      /**
-       * These lite notes could not be re-hydrated and were omitted rather than written body-less.
-       * The UI (ArchiveManager / DataBackups pane / desktop auto-backup notifier) should surface
-       * this count to the user; at minimum record it so the omission is not fully silent.
-       */
-      console.warn(
-        `CreateDecryptedBackupFile: omitted ${excludedUuids.length} note(s) whose content could not be re-hydrated locally.`,
-      )
+      return Result.fail(Strings.BackupItemsUnavailable(excludedUuids.length))
     }
 
     const data: BackupFile = {
       version: ProtocolVersionLatest,
-      items: payloads
-        .map((payload) => {
-          if (isDecryptedPayload(payload)) {
-            return CreateDecryptedBackupFileContextPayload(payload)
-          } else if (isEncryptedPayload(payload)) {
-            return CreateEncryptedBackupFileContextPayload(payload)
-          }
-          return undefined
-        })
-        .filter(isNotUndefined),
+      items: payloads.map((payload) => CreateDecryptedBackupFileContextPayload(payload)),
     }
 
     return Result.ok(data)

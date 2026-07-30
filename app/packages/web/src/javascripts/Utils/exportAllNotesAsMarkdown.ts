@@ -1,11 +1,18 @@
 import { WebApplication } from '@/Application/WebApplication'
 import { HeadlessSuperConverter } from '@/Components/SuperEditor/Tools/HeadlessSuperConverter'
-import { FileItem, NoteType, PrefDefaults, PrefKey, isItemExportable } from '@standardnotes/snjs'
+import {
+  ContentType,
+  FileItem,
+  isItemExportable,
+  isLitePayload,
+  isNote,
+  NoteType,
+  PrefDefaults,
+  PrefKey,
+} from '@standardnotes/snjs'
 import { sanitizeFileName } from '@standardnotes/utils'
-import { addToast, ToastType } from '@standardnotes/toast'
-import { c } from 'ttag'
 import { getBase64FromBlob } from './Utils'
-import { getFullNoteText, isLiteNote } from './Items/rehydrateLazyDecryptedNote'
+import { isLiteNote } from './Items/rehydrateLazyDecryptedNote'
 
 const headlessSuperConverter = new HeadlessSuperConverter()
 
@@ -45,26 +52,41 @@ async function noteToMarkdown(
  * notes, nothing downloaded).
  */
 export async function exportAllNotesAsMarkdown(application: WebApplication): Promise<number> {
-  // Displayable notes only, and never an items key / user preferences: this is decrypted,
-  // human-consumable output (shared exportability rule with the other export paths).
-  const notes = application.items.getDisplayableNotes().filter((note) => isItemExportable(note))
+  const unreadableNotes = application.items.invalidItems.filter(
+    (item) => item.content_type === ContentType.TYPES.Note && isItemExportable(item),
+  )
+  if (unreadableNotes.length > 0) {
+    throw new Error(
+      `Markdown export stopped because ${unreadableNotes.length} ${
+        unreadableNotes.length === 1 ? 'note is' : 'notes are'
+      } unreadable with the keys currently available. No incomplete export was downloaded.`,
+    )
+  }
+
+  // Export every decrypted note, independent of the current vault, trash, archive, or list-display
+  // filters. "Displayable" is a UI projection and silently omitted valid notes from an all-notes
+  // export.
+  const notes = application.items.items.filter(isNote).filter((note) => isItemExportable(note))
   if (notes.length === 0) {
     return 0
   }
 
   const data: { name: string; content: Blob }[] = []
-  let unavailableCount = 0
+  const unavailableNoteUuids: string[] = []
   for (const note of notes) {
-    // LAZY-DECRYPT: notes may be body-less "lite" projections on cold-load; pull
-    // the full body on demand from IndexedDB (no-op / unchanged with the flag off).
-    const text = await getFullNoteText(application.sync, note)
-    // If a lite note's on-disk body can't be re-hydrated it falls back to an empty body,
-    // which would otherwise be written as a silent zero-byte .md file. Count it so the user
-    // is warned rather than getting truncated notes with no signal. (An intentionally empty
-    // note also yields '', so this may slightly over-count; the toast is phrased accordingly.)
-    if (text.length === 0 && isLiteNote(note)) {
-      unavailableCount++
+    let text = note.text
+    if (isLiteNote(note)) {
+      const fullPayload = await application.sync.getFullContentPayload(note.uuid)
+      const fullText = (fullPayload?.content as { text?: unknown } | undefined)?.text
+
+      if (!fullPayload || isLitePayload(fullPayload) || typeof fullText !== 'string') {
+        unavailableNoteUuids.push(note.uuid)
+        continue
+      }
+
+      text = fullText
     }
+
     const markdown = await noteToMarkdown(application, { noteType: note.noteType, text, uuid: note.uuid })
     const title = sanitizeFileName(note.title || 'Untitled')
     data.push({
@@ -75,19 +97,19 @@ export async function exportAllNotesAsMarkdown(application: WebApplication): Pro
     })
   }
 
+  if (unavailableNoteUuids.length > 0) {
+    throw new Error(
+      `Markdown export stopped because ${unavailableNoteUuids.length} ${
+        unavailableNoteUuids.length === 1 ? 'note could' : 'notes could'
+      } not be read in full from local storage. No incomplete export was downloaded.`,
+    )
+  }
+
   const blob = await application.archiveService.zipData(data)
   application.archiveService.downloadData(
     blob,
     `Standard Red Notes Markdown Export - ${application.archiveService.formattedDateForExports()}.zip`,
   )
-
-  if (unavailableCount > 0) {
-    addToast({
-      type: ToastType.Error,
-      message: c('Warning')
-        .t`${unavailableCount} note(s) may not have been fully exported because their content isn't available locally.`,
-    })
-  }
 
   return notes.length
 }

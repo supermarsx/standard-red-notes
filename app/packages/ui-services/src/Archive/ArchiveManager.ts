@@ -34,7 +34,7 @@ export class ArchiveManager {
       : await this.application.createDecryptedBackupFile.execute()
 
     if (result.isFailed()) {
-      return
+      throw new Error(result.getError())
     }
 
     const data = result.getValue()

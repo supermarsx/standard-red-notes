@@ -1,11 +1,21 @@
 import { ItemManagerInterface } from './../Item/ItemManagerInterface'
 import { ProtectionsClientInterface } from './../Protection/ProtectionClientInterface'
 import { Result, UseCaseInterface } from '@standardnotes/domain-core'
-import { BackupFile, CreateEncryptedBackupFileContextPayload, ProtocolVersionLatest } from '@standardnotes/models'
+import {
+  BackupFile,
+  CreateEncryptedBackupFileContextPayload,
+  DecryptedItemInterface,
+  EncryptedItemInterface,
+  isDecryptedPayload,
+  isDeletedItem,
+  isEncryptedPayload,
+  ProtocolVersionLatest,
+} from '@standardnotes/models'
 import { CreateEncryptionSplitWithKeyLookup, SplitPayloadsByEncryptionType } from '@standardnotes/encryption'
 import { EncryptionProviderInterface } from '../Encryption/EncryptionProviderInterface'
 import { SyncServiceInterface } from '../Sync/SyncServiceInterface'
 import { rehydrateLiteBackupPayloads } from './RehydrateLiteBackupPayloads'
+import { Strings } from './Strings'
 
 export class CreateEncryptedBackupFile implements UseCaseInterface<BackupFile> {
   constructor(
@@ -24,30 +34,41 @@ export class CreateEncryptedBackupFile implements UseCaseInterface<BackupFile> {
      * Re-hydrate any content-stripped (lite) note payloads to their full on-disk body before
      * encrypting them into the backup. Without this, a backup created while lazy-decrypt is on
      * would contain body-less notes. Pass-through when the flag is off.
+     *
+     * allTrackedItems is intentional: ItemManager.items contains only successfully decrypted
+     * items, which silently omitted unreadable/waiting-for-key ciphertext from an encrypted
+     * full-account backup. Existing ciphertext remains useful for later key recovery and must
+     * be preserved byte-for-byte rather than dropped.
      */
     const { payloads, excludedUuids } = await rehydrateLiteBackupPayloads(
-      this.items.items.map((item) => item.payload),
+      this.items
+        .allTrackedItems()
+        .filter((item): item is DecryptedItemInterface | EncryptedItemInterface => !isDeletedItem(item))
+        .map((item) => item.payload),
       this.sync,
     )
 
     if (excludedUuids.length > 0) {
-      /**
-       * These lite notes could not be re-hydrated and were omitted rather than written body-less.
-       * The UI (ArchiveManager / DataBackups pane / desktop auto-backup notifier) should surface
-       * this count to the user; at minimum record it so the omission is not fully silent.
-       */
-      console.warn(
-        `CreateEncryptedBackupFile: omitted ${excludedUuids.length} note(s) whose content could not be re-hydrated locally.`,
-      )
+      return Result.fail(Strings.BackupItemsUnavailable(excludedUuids.length))
     }
 
-    const split = SplitPayloadsByEncryptionType(payloads)
+    const decryptedPayloads = payloads.filter(isDecryptedPayload)
+    const existingEncryptedPayloads = payloads.filter(isEncryptedPayload)
+
+    const split = SplitPayloadsByEncryptionType(decryptedPayloads)
 
     const keyLookupSplit = CreateEncryptionSplitWithKeyLookup(split)
 
     const result = await this.encryption.encryptSplit(keyLookupSplit)
 
-    const ejected = result.map((payload) => CreateEncryptedBackupFileContextPayload(payload))
+    const encryptedPayloads = [...result, ...existingEncryptedPayloads]
+    const encryptedUuids = new Set(encryptedPayloads.map((payload) => payload.uuid))
+    const missingPayloadCount = payloads.filter((payload) => !encryptedUuids.has(payload.uuid)).length
+    if (missingPayloadCount > 0) {
+      return Result.fail(Strings.BackupItemsMissingFromOutput(missingPayloadCount))
+    }
+
+    const ejected = encryptedPayloads.map((payload) => CreateEncryptedBackupFileContextPayload(payload))
 
     const data: BackupFile = {
       version: ProtocolVersionLatest,
