@@ -159,8 +159,11 @@ export function renderBlock(block) {
       return `${block.items.map((item) => `- ${item}`).join('\n')}\n`
     case 'steps':
       return `${block.items.map((item, index) => `${index + 1}. ${item}`).join('\n')}\n`
-    case 'code':
-      return `\`\`\`\n${block.code}\n\`\`\`\n`
+    case 'code': {
+      const longestBacktickRun = Math.max(0, ...[...block.code.matchAll(/`+/g)].map((match) => match[0].length))
+      const fence = '`'.repeat(Math.max(3, longestBacktickRun + 1))
+      return `${fence}\n${block.code}\n${fence}\n`
+    }
     case 'callout': {
       const labels = {
         info: 'Info',

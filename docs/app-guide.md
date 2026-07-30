@@ -202,13 +202,15 @@ Your account password is used to derive your encryption key. The server stores o
 
 #### Why there is no “forgot password”
 
-Because the server cannot decrypt your data, it also cannot reset your password and re-encrypt your notes for you. If you forget your password, your encrypted notes cannot be recovered. This is the cost of true privacy.
+Because the server cannot decrypt your data, it also cannot reset your password and re-encrypt your notes for you. If you forget your password, the live encrypted account cannot be recovered through any supported flow. This is the cost of true privacy.
+
+This repository contains disabled, experimental recovery-escrow primitives, but no verified logged-out retrieval, credential-rotation, and sign-in flow. Do not enable or depend on that substrate as a password recovery feature.
 
 - Use a long, memorable passphrase, or store the password in a password manager.
 - Export encrypted backups regularly — they can be restored on any device with the password.
 - Changing your password re-wraps your keys; keep a recent backup before doing so.
 
-> **Warning.** Treat your password like the only key to a safe. Lose it and the contents are unrecoverable.
+> **Warning.** Treat your password like the only key to a safe. An encrypted backup still requires its password; recovering after a forgotten password requires an independently usable copy whose decryption material you retained.
 
 Related: [security/change-password](#security-change-password), [backups/why-backups](#backups-why-backups), [encryption/how-it-works](#encryption-how-it-works)
 
@@ -379,14 +381,14 @@ Several Markdown editors are bundled, from minimal to full-featured. They render
 
 Fenced code blocks tagged as mermaid are rendered as diagrams in the preview where supported.
 
-```
+````
 ```mermaid
 flowchart TD
   A[Start] --> B{Decision}
   B -->|Yes| C[Do thing]
   B -->|No| D[Stop]
 ```
-```
+````
 
 Related: [editors/super](#editors-super), [editors/mermaid](#editors-mermaid), [editors/code](#editors-code)
 
@@ -601,12 +603,13 @@ Export, import, and protect yourself against data loss.
 <a id="backups-why-backups"></a>
 ### Why backups matter
 
-There is no password reset — backups are your safety net.
+There is no password reset — maintain independently usable backups.
 
-Because your data is end-to-end encrypted and there is no password reset, encrypted backups are how you protect yourself against a forgotten password, a lost device, or an accidental deletion.
+Because your data is end-to-end encrypted and there is no supported password reset, backups protect against a lost device or accidental deletion only when you retain the material needed to open them.
 
 - Export an encrypted backup regularly and store copies in more than one place.
 - An encrypted backup can be restored on any device with your password.
+- For forgotten-password recovery, retain an independently usable copy, such as a carefully protected decrypted export or an encrypted export whose password you still know.
 - Verify occasionally that you can actually restore a backup.
 
 Related: [backups/export-import](#backups-export-import), [backups/automatic](#backups-automatic), [encryption/your-password](#encryption-your-password)
@@ -916,7 +919,7 @@ Related: [automation/mcp-setup](#automation-mcp-setup), [automation/http-api](#a
 
 Your server exposes a documented HTTP API for sync, auth, and automation.
 
-Your self-hosted server exposes the full Standard Notes HTTP API through its gateway: PKCE sign-in, sync, items and files, settings, sessions, two-factor, collaboration, and this fork’s additions (app passwords, scoped MCP tokens, public share links, and the AI assistant proxy).
+Your self-hosted server exposes the full Standard Notes HTTP API through its gateway: PKCE sign-in, sync, items and files, settings, sessions, two-factor, collaboration, and this fork’s additions (app passwords, revocable MCP tokens, public share links, and the AI assistant proxy).
 
 The full reference — base URL and versioning, the authentication model, a curl walkthrough, and every endpoint grouped by area — lives in the project repository at docs/API.md (also linked from the README’s "API" section).
 
@@ -960,7 +963,7 @@ Repeated “Invalid login credentials” usually means a cookie or password issu
 
 #### Check your password
 
-There is no password reset. Make sure you are using the exact account password. If you genuinely forgot it, you must restore from a backup into a new account.
+There is no supported password reset. Make sure you are using the exact account password. If you genuinely forgot it, the live encrypted account is unrecoverable; restore an independently usable backup into a new account. An encrypted backup still requires its password.
 
 #### Self-hosted: cookie problems
 

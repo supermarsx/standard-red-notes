@@ -32,7 +32,7 @@ automation, and included access.
 ## Privacy And Security Controls
 
 - Same-origin web defaults for API, files, and websocket paths.
-- App passwords and scoped MCP tokens.
+- App passwords and revocable MCP tokens with read-only/write modes.
 - Trusted devices and passkey-oriented flows in the client surface.
 - Clear docs for optional features that can cross the local encryption boundary,
   especially AI providers.

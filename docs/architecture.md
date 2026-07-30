@@ -10,6 +10,8 @@ self-hosted operational layer around it. The user-facing client, server-side
 services, files, realtime relay, command-line tools, and MCP bridge are separate
 concerns with explicit boundaries.
 
+{% include mermaid.html %}
+
 ## Runtime Shape
 
 | Layer | Path | Responsibility |
@@ -20,8 +22,44 @@ concerns with explicit boundaries.
 | Single-container server | `Dockerfile.single`, `docker-compose.single.yml` | Small/self-hosted deployment profile: web app plus all-in-one home server with SQLite and persisted data volume. |
 | Multi-container stack | `docker-compose.yml` | Production-grade layout with app, gateway, auth/sync/files/revisions services, MySQL, Redis, and queue emulator. |
 | CLI tools | `cli/` and `server/packages/auth/bin/srn_admin.ts` | User-facing encrypted note CLI, operator CLI, and in-container admin helper. |
-| MCP bridge | `mcp/` | Stdio bridge for MCP-capable clients using scoped app passwords/tokens. |
+| MCP bridge | `mcp/` | Stdio or bearer-authenticated HTTP bridge that signs in with account credentials/MFA or a full MCP token, decrypts locally, and keeps writes off by default. |
 | Docs and validation | `docs/`, `e2e/` | Operator docs, API docs, Playwright smoke/correctness/stress tests, and screenshot capture. |
+
+The default Compose profile keeps one public ingress while preserving the
+server's internal package boundaries:
+
+```mermaid
+flowchart LR
+  Client["Web, desktop, and mobile clients<br/>encrypt and decrypt locally"]
+  Front["App nginx front door<br/>only published service"]
+
+  subgraph Server["Server container"]
+    Gateway["API gateway<br/>HTTP and WebSocket entry"]
+    Auth["Auth and settings"]
+    Sync["Sync and revisions"]
+    Files["Files service"]
+  end
+
+  Database[("MariaDB<br/>accounts and encrypted items")]
+  Uploads[("Uploads volume<br/>encrypted file payloads")]
+  Cache[("Redis<br/>cache and realtime state")]
+  Events["floci SNS/SQS<br/>domain-event queues"]
+
+  Client -->|"same-origin HTTPS"| Front
+  Front -->|"/v1, /v2, /auth, /subscription, /sockets"| Gateway
+  Front -->|"/files"| Files
+  Gateway --> Auth
+  Gateway --> Sync
+  Auth --> Database
+  Sync --> Database
+  Files --> Database
+  Files --> Uploads
+  Gateway --> Cache
+  Auth --> Events
+  Sync --> Events
+  Files --> Events
+  Events --> Gateway
+```
 
 ## Request Flow
 

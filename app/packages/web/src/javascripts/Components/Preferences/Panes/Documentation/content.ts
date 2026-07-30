@@ -223,7 +223,11 @@ export const DOC_CATEGORIES: DocCategory[] = [
           },
           {
             type: 'paragraph',
-            text: 'Because the server cannot decrypt your data, it also cannot reset your password and re-encrypt your notes for you. If you forget your password, your encrypted notes cannot be recovered. This is the cost of true privacy.',
+            text: 'Because the server cannot decrypt your data, it also cannot reset your password and re-encrypt your notes for you. If you forget your password, the live encrypted account cannot be recovered through any supported flow. This is the cost of true privacy.',
+          },
+          {
+            type: 'paragraph',
+            text: 'This repository contains disabled, experimental recovery-escrow primitives, but no verified logged-out retrieval, credential-rotation, and sign-in flow. Do not enable or depend on that substrate as a password recovery feature.',
           },
           {
             type: 'list',
@@ -236,7 +240,7 @@ export const DOC_CATEGORIES: DocCategory[] = [
           {
             type: 'callout',
             variant: 'warning',
-            text: 'Treat your password like the only key to a safe. Lose it and the contents are unrecoverable.',
+            text: 'Treat your password like the only key to a safe. An encrypted backup still requires its password; recovering after a forgotten password requires an independently usable copy whose decryption material you retained.',
           },
         ],
         related: ['security/change-password', 'backups/why-backups', 'encryption/how-it-works'],
@@ -827,17 +831,18 @@ export const DOC_CATEGORIES: DocCategory[] = [
       {
         id: 'backups/why-backups',
         title: 'Why backups matter',
-        summary: 'There is no password reset — backups are your safety net.',
+        summary: 'There is no password reset — maintain independently usable backups.',
         blocks: [
           {
             type: 'paragraph',
-            text: 'Because your data is end-to-end encrypted and there is no password reset, encrypted backups are how you protect yourself against a forgotten password, a lost device, or an accidental deletion.',
+            text: 'Because your data is end-to-end encrypted and there is no supported password reset, backups protect against a lost device or accidental deletion only when you retain the material needed to open them.',
           },
           {
             type: 'list',
             items: [
               'Export an encrypted backup regularly and store copies in more than one place.',
               'An encrypted backup can be restored on any device with your password.',
+              'For forgotten-password recovery, retain an independently usable copy, such as a carefully protected decrypted export or an encrypted export whose password you still know.',
               'Verify occasionally that you can actually restore a backup.',
             ],
           },
@@ -1344,7 +1349,7 @@ export const DOC_CATEGORIES: DocCategory[] = [
         blocks: [
           {
             type: 'paragraph',
-            text: 'Your self-hosted server exposes the full Standard Notes HTTP API through its gateway: PKCE sign-in, sync, items and files, settings, sessions, two-factor, collaboration, and this fork’s additions (app passwords, scoped MCP tokens, public share links, and the AI assistant proxy).',
+            text: 'Your self-hosted server exposes the full Standard Notes HTTP API through its gateway: PKCE sign-in, sync, items and files, settings, sessions, two-factor, collaboration, and this fork’s additions (app passwords, revocable MCP tokens, public share links, and the AI assistant proxy).',
           },
           {
             type: 'paragraph',
@@ -1413,7 +1418,7 @@ export const DOC_CATEGORIES: DocCategory[] = [
           },
           {
             type: 'paragraph',
-            text: 'There is no password reset. Make sure you are using the exact account password. If you genuinely forgot it, you must restore from a backup into a new account.',
+            text: 'There is no supported password reset. Make sure you are using the exact account password. If you genuinely forgot it, the live encrypted account is unrecoverable; restore an independently usable backup into a new account. An encrypted backup still requires its password.',
           },
           {
             type: 'heading',

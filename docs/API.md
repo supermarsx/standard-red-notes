@@ -113,10 +113,11 @@ on the server. The high-level flow:
   the interactive 2FA challenge for a single sign-in, so headless clients do not
   need a live TOTP code. The account password is still required. See
   [App passwords](#app-passwords-standard-red-notes).
-- **MCP tokens (Standard Red Notes)** — a scoped credential (`<uuid>.<secret>`)
-  that authenticates without the account email/password and returns
-  client-side-wrapped items keys in one round trip. Intended for the MCP bridge.
-  See [MCP tokens](#mcp-tokens-standard-red-notes).
+- **MCP tokens (Standard Red Notes)** — the API issues an authentication
+  credential (`<uuid>.<auth-secret>`); the client adds a separate wrap secret
+  to form the full bridge token. The full token authenticates without the
+  account email/password and unwraps client-wrapped items keys. See
+  [MCP tokens](#mcp-tokens-standard-red-notes).
 - **Trusted devices (Standard Red Notes)** — a per-device token that bypasses
   *only* the 2FA gate (never the account password) on future sign-ins. See
   [Trusted devices](#trusted-devices-and-push-mfa-standard-red-notes).
@@ -342,18 +343,27 @@ body; a valid value marks the interactive 2FA challenge satisfied for that sign-
 
 ### MCP tokens (Standard Red Notes)
 
-Scoped tokens (`<uuid>.<secret>`) that authenticate without the account
-email/password and return client-side-wrapped items keys. Built for the MCP
-bridge. Source:
+The API-facing token (`<uuid>.<auth-secret>`) authenticates without the account
+email/password and returns client-side-wrapped items keys. The web client
+appends a client-only wrap secret to create the full three-part bridge token.
+Source:
 [`McpTokensController.ts`](../server/packages/auth/src/Controller/McpTokensController.ts).
 
 | Method | Path | Resolver id | Notes |
 | --- | --- | --- | --- |
 | GET | `/v1/mcp-tokens/` | `auth.mcpTokens.list` | List MCP tokens (metadata only). |
-| POST | `/v1/mcp-tokens/` | `auth.mcpTokens.create` | Body: `label`, `scope` (`read`/`write`), optional `scopeTagUuids`, plus the client-side `wrappedKeys`, `kdfSalt`, `kdfParams`. Returns the token **once** in `<uuid>.<secret>` form. |
+| POST | `/v1/mcp-tokens/` | `auth.mcpTokens.create` | Body: `label`, `scope` (`read`/`write`), optional `scopeTagUuids`, plus the client-side `wrappedKeys`, `kdfSalt`, `kdfParams`. Returns the API authentication token **once** in `<uuid>.<auth-secret>` form. |
 | DELETE | `/v1/mcp-tokens/:mcpTokenId` | `auth.mcpTokens.delete` | Revoke a token. |
 | GET | `/v1/mcp-tokens/keys/:mcpTokenId` | `auth.mcpTokens.getKeys` | Fetch the wrapped key material + scope for a token. Authenticated. |
 | POST | `/v1/mcp-tokens/authenticate` | `auth.mcpTokens.authenticate` | **Unauthenticated** (the token is the credential). Body: `token`, optional `apiVersion`. Returns `{ session, key_params, user, mcp_scope, mcp_key_material }` — a real session plus wrapped keys in one round trip. `scope=read` yields a read-only session. |
+
+> ⚠️ The full bridge token can unwrap items keys and decrypt notes without the
+> account password. The server enforces read-only versus write mode, but the
+> current bridge does not enforce `scopeTagUuids`. Deleting the token prevents
+> new authentication; it does not invalidate a session already issued from the
+> token or erase the bridge’s local data. Follow the [MCP compromise
+> procedure](mcp-bridge.md#scope-and-revocation-limits), not token deletion
+> alone.
 
 ### Trusted devices and push MFA (Standard Red Notes)
 

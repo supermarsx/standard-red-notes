@@ -96,6 +96,13 @@ test('renderBlock renders every supported block type', () => {
   assert.equal(renderBlock({ type: 'callout', variant: 'tip', text: 'Try.' }), '> **Tip.** Try.\n')
 })
 
+test('renderBlock uses a longer fence when code contains a fenced example', () => {
+  assert.equal(
+    renderBlock({ type: 'code', code: '```mermaid\nflowchart LR\n  A --> B\n```' }),
+    '````\n```mermaid\nflowchart LR\n  A --> B\n```\n````\n',
+  )
+})
+
 test('renderBlock renders tables with a header and escaped cells', () => {
   const rendered = renderBlock({
     type: 'table',

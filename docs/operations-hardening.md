@@ -10,6 +10,8 @@ covers the parts that protect availability and blast radius: MariaDB durability,
 connection limits, Redis/cache ceilings, request limits, signup controls, and
 container hardening.
 
+{% include mermaid.html %}
+
 ## Database Resilience
 
 The multi-container stack stores primary state in the `mariadb-data` named
@@ -79,6 +81,26 @@ table checksums, then drops only the temporary database. Run it when the system
 is idle so live writes do not change the source database while the comparison is
 in progress. Use `--keep-backup` or `--output backup.sql` when you want to keep
 the generated dump for inspection.
+
+```mermaid
+flowchart LR
+  Live[("Live MariaDB")]
+  Dump["Logical SQL dump"]
+  Restore[("Temporary srn_restore database")]
+  Compare{"Tables, row counts,<br/>and checksums match?"}
+  Pass["Report success"]
+  Fail["Report mismatch"]
+  Cleanup["Drop temporary database<br/>and remove temporary dump"]
+
+  Live -->|"mariadb-dump"| Dump
+  Dump -->|"restore"| Restore
+  Live --> Compare
+  Restore --> Compare
+  Compare -->|yes| Pass
+  Compare -->|no| Fail
+  Pass --> Cleanup
+  Fail --> Cleanup
+```
 
 Back up the `uploads` volume with the database if you use file attachments.
 Keep `.env` backed up separately. Losing server secrets can invalidate sessions

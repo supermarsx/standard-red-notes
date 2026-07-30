@@ -23,6 +23,8 @@ websocket bridge) is disabled without Redis, so clients fall back to normal
 periodic sync. Everything else — accounts, notes, files, revisions, admin panel,
 AI proxy, OCR, CalDAV — works the same.
 
+{% include mermaid.html %}
+
 ---
 
 ## A. Full multi-container (existing, unchanged)
@@ -138,16 +140,23 @@ read-only (changing them requires editing the environment and redeploying).
 
 ### Architecture
 
-```
-                 ┌────────────────────── single container ──────────────────────┐
-  browser ─▶ 8080│  nginx  ──(127.0.0.1:3000)──▶  home-server (one Node process) │
-                 │   │                              ├─ auth / syncing / files     │
-                 │   └─ serves the web SPA          ├─ revisions / api-gateway    │
-                 │      (+ CSP self-heal)           └─ sqlite + in-memory cache    │
-                 │                                     + in-process events         │
-                 │  supervisord runs nginx + home-server                          │
-                 │  /data volume: sqlite, uploads, secrets                        │
-                 └───────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+  Browser["Browser"]
+
+  subgraph Container["Single container"]
+    Nginx["nginx on port 8080<br/>SPA and same-origin proxy"]
+    Home["home-server on 127.0.0.1:3000<br/>auth, sync, files, revisions, API gateway"]
+    Cache["In-memory cache<br/>and in-process events"]
+  end
+
+  Data[("/data volume<br/>SQLite, uploads, and generated secrets")]
+
+  Browser --> Nginx
+  Nginx -->|"API and file requests"| Home
+  Nginx -->|"static web app"| Browser
+  Home --> Cache
+  Home --> Data
 ```
 
 Why nginx + home-server (not home-server serving static itself): it reuses the
@@ -270,4 +279,3 @@ The token from step 1 and step 2 must match (when they do, the pin is intact; if
 the entrypoint ever falls back, step 1 shows `unsafe-inline` instead and the app
 still boots). The container's own build/curl verification is captured in the PR
 description.
-```
