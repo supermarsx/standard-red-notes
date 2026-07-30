@@ -32,6 +32,7 @@ import {
   withHttpRequestTimeout,
 } from "./httpSecurity.js";
 import { AsyncMutex } from "./AsyncMutex.js";
+import { redactDiagnosticMessage } from "./diagnostics.js";
 
 // Transport selection. `stdio` (default) preserves the original single-client
 // behavior. `http` runs the bridge as a long-lived, authenticated network
@@ -121,15 +122,13 @@ let activeScope: McpScope | undefined;
 const bridgeOperations = new AsyncMutex();
 
 function diagnosticMessage(error: unknown): string {
-  let message = error instanceof Error ? error.message : String(error);
-  for (const secret of [mcpToken, password, httpToken]) {
-    if (secret) {
-      message = message.replaceAll(secret, "<redacted>");
-    }
-  }
-  return message
-    .replace(/\bBearer\s+[^\s,;]+/gi, "Bearer <redacted>")
-    .slice(0, 1_000);
+  return redactDiagnosticMessage(error, [
+    mcpToken,
+    password,
+    mfaCode,
+    httpToken,
+    email,
+  ]);
 }
 
 async function useClient<T>(

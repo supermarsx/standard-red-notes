@@ -387,18 +387,35 @@ services:
       STANDARD_RED_NOTES_DATA_DIR: /var/lib/standard-red-notes-mcp
       # Autonomous HTTP mode: run the MCP server as a long-lived HTTP service
       # (instead of stdio) so other containers/agents can reach it over the
-      # network. MCP_HTTP_TOKEN is a REQUIRED bearer token that authenticates
-      # callers — set it in your .env; with it empty the server has no auth, so
-      # provide one before relying on this service.
+      # network. Binding beyond loopback is an explicit opt-in and is safe here
+      # only because the port is NOT published to the host. MCP_HTTP_TOKEN is a
+      # REQUIRED bearer token; when it is empty or shorter than 32 bytes the
+      # process fails closed instead of starting an unauthenticated endpoint.
       MCP_TRANSPORT: http
+      MCP_HTTP_HOST: "0.0.0.0"
       MCP_HTTP_PORT: "3010"
+      MCP_HTTP_ALLOW_REMOTE: "1"
       MCP_HTTP_TOKEN: ${MCP_HTTP_TOKEN:-}
-      # Provide account credentials to enable note tools (read-only by default).
+      MCP_HTTP_MAX_BODY_BYTES: ${MCP_HTTP_MAX_BODY_BYTES:-1048576}
+      MCP_HTTP_MAX_SESSIONS: ${MCP_HTTP_MAX_SESSIONS:-32}
+      MCP_HTTP_SESSION_IDLE_MS: ${MCP_HTTP_SESSION_IDLE_MS:-300000}
+      MCP_HTTP_BODY_TIMEOUT_MS: ${MCP_HTTP_BODY_TIMEOUT_MS:-10000}
+      MCP_HTTP_REQUEST_TIMEOUT_MS: ${MCP_HTTP_REQUEST_TIMEOUT_MS:-60000}
+      # Prefer a server-issued, scoped MCP token. Email/password remains a
+      # compatibility fallback; never reuse MCP_HTTP_TOKEN for account auth.
+      STANDARD_RED_NOTES_MCP_TOKEN: ${STANDARD_RED_NOTES_MCP_TOKEN:-}
       STANDARD_RED_NOTES_EMAIL: ${STANDARD_RED_NOTES_EMAIL:-}
       STANDARD_RED_NOTES_PASSWORD: ${STANDARD_RED_NOTES_PASSWORD:-}
       STANDARD_RED_NOTES_MFA_CODE: ${STANDARD_RED_NOTES_MFA_CODE:-}
       STANDARD_RED_NOTES_ALLOW_WRITES: ${STANDARD_RED_NOTES_ALLOW_WRITES:-0}
       STANDARD_RED_NOTES_ALLOW_REGISTER: ${STANDARD_RED_NOTES_ALLOW_REGISTER:-0}
+      # Empty roots disable local attachment/export tools. Values are
+      # colon-delimited absolute paths INSIDE this Linux container and need
+      # matching read/write volume mounts supplied by an operator override.
+      STANDARD_RED_NOTES_FILE_ROOTS: ${STANDARD_RED_NOTES_FILE_ROOTS:-}
+      STANDARD_RED_NOTES_EXPORT_ROOTS: ${STANDARD_RED_NOTES_EXPORT_ROOTS:-}
+      STANDARD_RED_NOTES_MAX_ATTACHMENT_BYTES: ${STANDARD_RED_NOTES_MAX_ATTACHMENT_BYTES:-16777216}
+      STANDARD_RED_NOTES_MAX_EXPORT_BYTES: ${STANDARD_RED_NOTES_MAX_EXPORT_BYTES:-134217728}
       # Continuous background sync so the agent picks up collaborators' changes.
       STANDARD_RED_NOTES_SYNC_INTERVAL_MS: ${STANDARD_RED_NOTES_SYNC_INTERVAL_MS:-10000}
     volumes:
