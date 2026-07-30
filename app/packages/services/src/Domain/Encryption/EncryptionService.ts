@@ -621,6 +621,33 @@ export class EncryptionService
     await this.rootKeyManager.setRootKey(key, wrappingKey)
   }
 
+  public prepareCredentialRotationJournal(dto: {
+    currentEmail: string
+    newEmail: string
+    currentRootKey: RootKeyInterface
+    newRootKey: RootKeyInterface
+    wrappingKey?: RootKeyInterface
+    rollbackPayloads: Parameters<RootKeyManager['prepareCredentialRotationJournal']>[0]['rollbackPayloads']
+  }) {
+    return this.rootKeyManager.prepareCredentialRotationJournal(dto)
+  }
+
+  public getCredentialRotationJournal() {
+    return this.rootKeyManager.getCredentialRotationJournal()
+  }
+
+  public updateCredentialRotationJournal(update: Parameters<RootKeyManager['updateCredentialRotationJournal']>[0]) {
+    return this.rootKeyManager.updateCredentialRotationJournal(update)
+  }
+
+  public getCredentialRotationSecrets() {
+    return this.rootKeyManager.getCredentialRotationSecrets()
+  }
+
+  public clearCredentialRotationJournal() {
+    return this.rootKeyManager.clearCredentialRotationJournal()
+  }
+
   /**
    * Returns the in-memory root key value.
    */

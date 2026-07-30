@@ -8,7 +8,9 @@ import {
   EncryptedTransferPayload,
   FillItemContentSpecialized,
   NamespacedRootKeyInKeychain,
+  PayloadTimestampDefaults,
   RootKeyContent,
+  RootKeyContentSpecialized,
   RootKeyInterface,
   RootKeyParamsInterface,
 } from '@standardnotes/models'
@@ -32,6 +34,14 @@ import { ValidatePasscodeResult } from './ValidatePasscodeResult'
 import { ValidateAccountPasswordResult } from './ValidateAccountPasswordResult'
 import { KeyMode } from './KeyMode'
 import { ReencryptTypeAItems } from '../Encryption/UseCase/TypeA/ReencryptTypeAItems'
+import { UuidGenerator } from '@standardnotes/utils'
+import { ContentType } from '@standardnotes/domain-core'
+import {
+  CredentialRotationBundleContent,
+  CredentialRotationJournal,
+  CredentialRotationPhase,
+  CredentialRotationSecrets,
+} from './CredentialRotationJournal'
 
 export class RootKeyManager extends AbstractService<RootKeyManagerEvent> {
   private rootKey?: RootKeyInterface
@@ -80,7 +90,12 @@ export class RootKeyManager extends AbstractService<RootKeyManagerEvent> {
     }
 
     if (this.keyMode === KeyMode.RootKeyOnly) {
-      this.setRootKeyInstance(await this.getRootKeyFromKeychain())
+      const keychainRoot = await this.getRootKeyFromKeychain()
+      const resolvedRoot = keychainRoot ? await this.resolveCredentialRotationRootForStorage(keychainRoot) : undefined
+      this.setRootKeyInstance(resolvedRoot)
+      if (resolvedRoot && keychainRoot) {
+        await this.repairUnwrappedRootPersistence(resolvedRoot, keychainRoot)
+      }
       await this.handleKeyStatusChange()
     }
   }
@@ -288,8 +303,221 @@ export class RootKeyManager extends AbstractService<RootKeyManagerEvent> {
         ...payload.ejected(),
         ...decrypted,
       })
-      this.setRootKeyInstance(new SNRootKey(decryptedPayload))
+      const decryptedRoot = new SNRootKey(decryptedPayload)
+      const resolvedRoot = await this.resolveCredentialRotationRootForStorage(decryptedRoot)
+      this.setRootKeyInstance(resolvedRoot)
+      await this.repairWrappedRootPersistence(resolvedRoot, wrappingKey, decryptedRoot)
       await this.handleKeyStatusChange()
+    }
+  }
+
+  public getCredentialRotationJournal(): CredentialRotationJournal | undefined {
+    return this.storage.getValue<CredentialRotationJournal | undefined>(
+      StorageKey.CredentialRotationJournal,
+      StorageValueModes.Nonwrapped,
+    )
+  }
+
+  public async prepareCredentialRotationJournal(dto: {
+    currentEmail: string
+    newEmail: string
+    currentRootKey: RootKeyInterface
+    newRootKey: RootKeyInterface
+    wrappingKey?: RootKeyInterface
+    rollbackPayloads: CredentialRotationJournal['rollbackPayloads']
+  }): Promise<CredentialRotationJournal> {
+    const bundle: CredentialRotationBundleContent = FillItemContentSpecialized({
+      schemaVersion: 1,
+      currentEmail: dto.currentEmail,
+      newEmail: dto.newEmail,
+      currentRootKey: this.serializeRootKey(dto.currentRootKey),
+      newRootKey: this.serializeRootKey(dto.newRootKey),
+      wrappingKey: dto.wrappingKey ? this.serializeRootKey(dto.wrappingKey) : undefined,
+    })
+
+    const journal: CredentialRotationJournal = {
+      schemaVersion: 1,
+      operationId: UuidGenerator.GenerateUuid(),
+      phase: CredentialRotationPhase.Prepared,
+      createdAt: Date.now(),
+      bundleEncryptedByCurrentRoot: await this.encryptCredentialRotationBundle(bundle, dto.currentRootKey),
+      bundleEncryptedByNewRoot: await this.encryptCredentialRotationBundle(bundle, dto.newRootKey),
+      rollbackPayloads: dto.rollbackPayloads,
+    }
+
+    await this.storage.setValueAndAwaitPersist(
+      StorageKey.CredentialRotationJournal,
+      journal,
+      StorageValueModes.Nonwrapped,
+    )
+
+    return journal
+  }
+
+  public async updateCredentialRotationJournal(
+    update: Pick<CredentialRotationJournal, 'phase'> & Pick<Partial<CredentialRotationJournal>, 'newItemsKeyUuid'>,
+  ): Promise<CredentialRotationJournal | undefined> {
+    const journal = this.getCredentialRotationJournal()
+    if (!journal) {
+      return undefined
+    }
+
+    const updated = {
+      ...journal,
+      ...update,
+    }
+    await this.storage.setValueAndAwaitPersist(
+      StorageKey.CredentialRotationJournal,
+      updated,
+      StorageValueModes.Nonwrapped,
+    )
+
+    return updated
+  }
+
+  public async clearCredentialRotationJournal(): Promise<void> {
+    await this.storage.removeValue(StorageKey.CredentialRotationJournal, StorageValueModes.Nonwrapped)
+  }
+
+  public async getCredentialRotationSecrets(): Promise<CredentialRotationSecrets | undefined> {
+    const journal = this.getCredentialRotationJournal()
+    const activeRootKey = this.getRootKey()
+    if (!journal || !activeRootKey) {
+      return undefined
+    }
+
+    const bundle = await this.decryptCredentialRotationJournalWithKey(journal, activeRootKey)
+    if (!bundle) {
+      return undefined
+    }
+
+    return {
+      currentEmail: bundle.currentEmail,
+      newEmail: bundle.newEmail,
+      currentRootKey: CreateNewRootKey(bundle.currentRootKey),
+      newRootKey: CreateNewRootKey(bundle.newRootKey),
+      wrappingKey: bundle.wrappingKey ? CreateNewRootKey(bundle.wrappingKey) : undefined,
+    }
+  }
+
+  private serializeRootKey(rootKey: RootKeyInterface): RootKeyContentSpecialized {
+    return {
+      version: rootKey.keyVersion,
+      masterKey: rootKey.masterKey,
+      serverPassword: rootKey.serverPassword,
+      dataAuthenticationKey: rootKey.dataAuthenticationKey,
+      keyParams: rootKey.keyParams.getPortableValue(),
+      encryptionKeyPair: rootKey.encryptionKeyPair,
+      signingKeyPair: rootKey.signingKeyPair,
+    }
+  }
+
+  private async encryptCredentialRotationBundle(
+    bundle: CredentialRotationBundleContent,
+    rootKey: RootKeyInterface,
+  ): Promise<EncryptedTransferPayload> {
+    const payload = new DecryptedPayload<CredentialRotationBundleContent>({
+      uuid: UuidGenerator.GenerateUuid(),
+      content_type: ContentType.TYPES.RootKey,
+      content: bundle,
+      ...PayloadTimestampDefaults(),
+    })
+    const encrypted = await new EncryptTypeAPayload(this.operators).executeOne(payload, rootKey)
+
+    return new EncryptedPayload({
+      ...payload.ejected(),
+      ...encrypted,
+      errorDecrypting: false,
+      waitingForKey: false,
+    }).ejected()
+  }
+
+  private async decryptCredentialRotationJournalWithKey(
+    journal: CredentialRotationJournal,
+    rootKey: RootKeyInterface,
+  ): Promise<CredentialRotationBundleContent | undefined> {
+    for (const rawPayload of [journal.bundleEncryptedByCurrentRoot, journal.bundleEncryptedByNewRoot]) {
+      const payload = new EncryptedPayload(rawPayload)
+      const decrypted = await new DecryptTypeAPayload(this.operators).executeOne<CredentialRotationBundleContent>(
+        payload,
+        rootKey,
+      )
+      if (isErrorDecryptingParameters(decrypted)) {
+        continue
+      }
+
+      const decryptedPayload = new DecryptedPayload<CredentialRotationBundleContent>({
+        ...payload.ejected(),
+        ...decrypted,
+      })
+      if (decryptedPayload.content.schemaVersion === 1) {
+        return decryptedPayload.content
+      }
+    }
+
+    return undefined
+  }
+
+  /**
+   * setRootKey persists the encrypted storage object/root params and platform
+   * keychain in separate device writes. If a process dies between those writes,
+   * use the reciprocal recovery envelopes to select the root that decrypts the
+   * storage object and repair the lagging key store before launch continues.
+   */
+  private async resolveCredentialRotationRootForStorage(availableRoot: RootKeyInterface): Promise<RootKeyInterface> {
+    const journal = this.getCredentialRotationJournal()
+    if (!journal || !this.storage.isStorageWrapped()) {
+      return availableRoot
+    }
+
+    const bundle = await this.decryptCredentialRotationJournalWithKey(journal, availableRoot)
+    if (!bundle) {
+      return availableRoot
+    }
+
+    const currentRoot = CreateNewRootKey<RootKeyInterface>(bundle.currentRootKey)
+    const newRoot = CreateNewRootKey<RootKeyInterface>(bundle.newRootKey)
+    for (const candidate of [currentRoot, newRoot]) {
+      try {
+        if (await this.storage.canDecryptWithKey(candidate)) {
+          return candidate
+        }
+      } catch {
+        continue
+      }
+    }
+
+    return availableRoot
+  }
+
+  private async repairUnwrappedRootPersistence(
+    resolvedRoot: RootKeyInterface,
+    keychainRoot: RootKeyInterface,
+  ): Promise<void> {
+    this.storage.setValue(
+      StorageKey.RootKeyParams,
+      resolvedRoot.keyParams.getPortableValue(),
+      StorageValueModes.Nonwrapped,
+    )
+
+    if (!resolvedRoot.compare(keychainRoot)) {
+      await this.device.setNamespacedKeychainValue(resolvedRoot.getKeychainValue(), this.identifier)
+    }
+  }
+
+  private async repairWrappedRootPersistence(
+    resolvedRoot: RootKeyInterface,
+    wrappingKey: RootKeyInterface,
+    wrappedRoot: RootKeyInterface,
+  ): Promise<void> {
+    this.storage.setValue(
+      StorageKey.RootKeyParams,
+      resolvedRoot.keyParams.getPortableValue(),
+      StorageValueModes.Nonwrapped,
+    )
+
+    if (!resolvedRoot.compare(wrappedRoot)) {
+      await this.wrapAndPersistRootKey(wrappingKey)
     }
   }
   /**

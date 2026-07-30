@@ -78,6 +78,17 @@ export interface SessionsClientInterface {
     // Standard Red Notes: optional workspace name (WORKSPACES_PER_EMAIL_ENABLED).
     workspaceIdentifier?: string,
   ): Promise<HttpResponse<SignInResponse>>
+  /**
+   * Re-establishes a session while reconciling an interrupted credential
+   * rotation. Unlike bypassChecksAndSignInWithRootKey, this first performs the
+   * login-params/PKCE/MFA exchange and verifies that the server parameters match
+   * the candidate root key before submitting its derived server password.
+   */
+  reconcileCredentialRotationSignIn(
+    email: string,
+    rootKey: RootKeyInterface,
+    wrappingKey?: RootKeyInterface,
+  ): Promise<HttpResponse<SignInResponse>>
   signOut(): Promise<void>
   changeCredentials(parameters: {
     currentServerPassword: string

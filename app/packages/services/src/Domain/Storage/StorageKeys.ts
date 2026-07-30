@@ -52,6 +52,7 @@ export enum StorageKey {
   VaultSelectionOptions = 'vault_selection_options',
   Subscription = 'subscription',
   LocalPreferences = 'local_preferences',
+  CredentialRotationJournal = 'credential_rotation_journal',
 }
 
 export enum NonwrappedStorageKey {

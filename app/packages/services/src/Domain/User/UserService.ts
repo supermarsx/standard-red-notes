@@ -39,6 +39,21 @@ import { CredentialsChangeFunctionResponse } from './CredentialsChangeFunctionRe
 import { EncryptionProviderInterface } from '../Encryption/EncryptionProviderInterface'
 import { ReencryptTypeAItems } from '../Encryption/UseCase/TypeA/ReencryptTypeAItems'
 import { DecryptErroredPayloads } from '../Encryption/UseCase/DecryptErroredPayloads'
+import { ApplicationEvent } from '../Event/ApplicationEvent'
+import { ApplicationStageChangedEventPayload } from '../Event/ApplicationStageChangedEventPayload'
+import { ApplicationStage } from '../Application/ApplicationStage'
+import {
+  CredentialRotationJournal,
+  CredentialRotationPhase,
+  CredentialRotationSecrets,
+} from '../RootKeyManager/CredentialRotationJournal'
+import {
+  ContentTypesUsingRootKeyEncryption,
+  EncryptedPayload,
+  isDecryptedPayload,
+  isEncryptedTransferPayload,
+  RootKeyInterface,
+} from '@standardnotes/models'
 
 const cleanedEmailString = (email: string) => {
   return email.trim().toLowerCase()
@@ -50,6 +65,7 @@ export class UserService
 {
   private signingIn = false
   private registering = false
+  private resumingCredentialRotation = false
 
   private readonly MINIMUM_PASSCODE_LENGTH = 1
   private readonly MINIMUM_PASSWORD_LENGTH = 8
@@ -126,6 +142,13 @@ export class UserService
         await syncPromise
 
         await this._decryptErroredPayloads.execute()
+      }
+    } else if (event.type === ApplicationEvent.ApplicationStageChanged) {
+      const stage = (event.payload as ApplicationStageChangedEventPayload).stage
+      if (stage === ApplicationStage.Launched_10) {
+        await this.resumeCredentialRotationBeforeDatabaseLoad()
+      } else if (stage === ApplicationStage.LoadedDatabase_12) {
+        await this.resumeCredentialRotationAfterDatabaseLoad()
       }
     }
   }
@@ -617,6 +640,16 @@ export class UserService
     await this.sync.persistPayloads(payloads)
   }
 
+  /**
+   * A root-key transition affects every Type-A payload, not only the default
+   * items key. Persist their current decrypted representations before relying on
+   * a network sync so a process restart never depends on an in-memory rewrite.
+   */
+  private async persistTypeAItems(): Promise<void> {
+    const items = this.items.getItems(ContentTypesUsingRootKeyEncryption())
+    await this.sync.persistPayloads(items.map((item) => item.payloadRepresentation()))
+  }
+
   private lockSyncing(): void {
     this.sync.lockSyncing()
   }
@@ -673,6 +706,27 @@ export class UserService
     this.lockSyncing()
     let response
     try {
+      /**
+       * Flush the pre-rotation Type-A state first, then snapshot its exact
+       * ciphertext. The snapshot is the rollback half of the transaction and is
+       * also enough to stage new-root ciphertext before database load on resume.
+       */
+      await this.persistTypeAItems()
+      const typeAUuids = this.items.getItems(ContentTypesUsingRootKeyEncryption()).map((item) => item.uuid)
+      const rawRollbackPayloads = await this.storage.getRawPayloads(typeAUuids)
+      if (!rawRollbackPayloads.every(isEncryptedTransferPayload)) {
+        throw Error('Unable to create an encrypted credential rotation rollback snapshot.')
+      }
+      const rollbackPayloads = rawRollbackPayloads
+      await this.encryption.prepareCredentialRotationJournal({
+        currentEmail,
+        newEmail: newEmail ?? currentEmail,
+        currentRootKey,
+        newRootKey,
+        wrappingKey,
+        rollbackPayloads,
+      })
+
       ;({ response } = await this.sessions.changeCredentials({
         currentServerPassword: currentRootKey.serverPassword as string,
         newRootKey: newRootKey,
@@ -684,17 +738,36 @@ export class UserService
     }
 
     if (isErrorResponse(response)) {
+      await this.encryption.clearCredentialRotationJournal()
       return { error: Error(response.data.error?.message) }
     }
 
+    await this.encryption.updateCredentialRotationJournal({
+      phase: CredentialRotationPhase.ServerConfirmed,
+    })
+
     const rollback = await this.encryption.createNewItemsKeyWithRollback()
+    const newDefaultItemsKey = this.encryption.getSureDefaultItemsKey()
+    await this.encryption.updateCredentialRotationJournal({
+      phase: CredentialRotationPhase.ServerConfirmed,
+      newItemsKeyUuid: newDefaultItemsKey.uuid,
+    })
     await this._reencryptTypeAItems.execute()
+    await this.persistTypeAItems()
+    await this.encryption.updateCredentialRotationJournal({
+      phase: CredentialRotationPhase.LocalItemsPersisted,
+      newItemsKeyUuid: newDefaultItemsKey.uuid,
+    })
     await this.sync.sync({ awaitAll: true })
 
     const defaultItemsKey = this.encryption.getSureDefaultItemsKey()
     const itemsKeyWasSynced = !defaultItemsKey.neverSynced
 
     if (!itemsKeyWasSynced) {
+      await this.encryption.updateCredentialRotationJournal({
+        phase: CredentialRotationPhase.RollbackPending,
+        newItemsKeyUuid: newDefaultItemsKey.uuid,
+      })
       this.lockSyncing()
       let serverRollbackConfirmed = false
       try {
@@ -706,12 +779,21 @@ export class UserService
         })
 
         if (isErrorResponse(rollbackResponse)) {
+          await this.encryption.updateCredentialRotationJournal({
+            phase: CredentialRotationPhase.ServerConfirmed,
+            newItemsKeyUuid: newDefaultItemsKey.uuid,
+          })
           return { error: Error(Messages.CredentialsChangeStrings.RollbackRejected) }
         }
 
         serverRollbackConfirmed = true
+        await this.encryption.updateCredentialRotationJournal({
+          phase: CredentialRotationPhase.RollbackConfirmed,
+          newItemsKeyUuid: newDefaultItemsKey.uuid,
+        })
         await this._reencryptTypeAItems.execute()
         await rollback()
+        await this.persistTypeAItems()
       } catch {
         return {
           error: Error(
@@ -725,11 +807,208 @@ export class UserService
       }
 
       await this.sync.sync({ awaitAll: true })
+      await this.encryption.clearCredentialRotationJournal()
 
       return { error: Error(Messages.CredentialsChangeStrings.Failed) }
     }
 
+    await this.encryption.clearCredentialRotationJournal()
     return {}
+  }
+
+  private async resumeCredentialRotationBeforeDatabaseLoad(): Promise<void> {
+    if (this.resumingCredentialRotation) {
+      return
+    }
+
+    const journal = this.encryption.getCredentialRotationJournal()
+    if (!journal) {
+      return
+    }
+
+    this.resumingCredentialRotation = true
+    try {
+      const secrets = await this.encryption.getCredentialRotationSecrets()
+      if (!secrets) {
+        return
+      }
+
+      if (journal.phase === CredentialRotationPhase.Prepared) {
+        if (await this.tryCredentialRotationSignIn(secrets.newEmail, secrets.newRootKey, secrets.wrappingKey)) {
+          const updated =
+            (await this.encryption.updateCredentialRotationJournal({
+              phase: CredentialRotationPhase.ServerConfirmed,
+              newItemsKeyUuid: journal.newItemsKeyUuid,
+            })) ?? journal
+          await this.stageCredentialRotationPayloadsForNewRoot(updated, secrets)
+        } else if (
+          await this.tryCredentialRotationSignIn(secrets.currentEmail, secrets.currentRootKey, secrets.wrappingKey)
+        ) {
+          /**
+           * The old credentials are authoritative, so the interrupted request
+           * did not commit. No local Type-A mutation was performed before the
+           * request and the journal can be discarded.
+           */
+          await this.encryption.clearCredentialRotationJournal()
+        }
+        return
+      }
+
+      if (journal.phase === CredentialRotationPhase.RollbackPending) {
+        if (await this.tryCredentialRotationSignIn(secrets.currentEmail, secrets.currentRootKey, secrets.wrappingKey)) {
+          const updated =
+            (await this.encryption.updateCredentialRotationJournal({
+              phase: CredentialRotationPhase.RollbackConfirmed,
+              newItemsKeyUuid: journal.newItemsKeyUuid,
+            })) ?? journal
+          await this.restoreCredentialRotationRollbackSnapshot(updated, secrets)
+          await this.encryption.clearCredentialRotationJournal()
+        } else if (await this.tryCredentialRotationSignIn(secrets.newEmail, secrets.newRootKey, secrets.wrappingKey)) {
+          const updated =
+            (await this.encryption.updateCredentialRotationJournal({
+              phase: CredentialRotationPhase.ServerConfirmed,
+              newItemsKeyUuid: journal.newItemsKeyUuid,
+            })) ?? journal
+          await this.stageCredentialRotationPayloadsForNewRoot(updated, secrets)
+        }
+        return
+      }
+
+      const targetRoot =
+        journal.phase === CredentialRotationPhase.RollbackConfirmed ? secrets.currentRootKey : secrets.newRootKey
+      if (!this.encryption.getSureRootKey().compare(targetRoot)) {
+        await this.encryption.setRootKey(targetRoot, secrets.wrappingKey)
+      }
+
+      if (journal.phase === CredentialRotationPhase.RollbackConfirmed) {
+        await this.restoreCredentialRotationRollbackSnapshot(journal, secrets)
+        await this.encryption.clearCredentialRotationJournal()
+      } else if (journal.phase === CredentialRotationPhase.ServerConfirmed) {
+        await this.stageCredentialRotationPayloadsForNewRoot(journal, secrets)
+      }
+    } finally {
+      this.resumingCredentialRotation = false
+    }
+  }
+
+  private async tryCredentialRotationSignIn(
+    email: string,
+    rootKey: RootKeyInterface,
+    wrappingKey?: RootKeyInterface,
+  ): Promise<boolean> {
+    try {
+      const response = await this.sessions.reconcileCredentialRotationSignIn(email, rootKey, wrappingKey)
+      return !isErrorResponse(response)
+    } catch {
+      return false
+    }
+  }
+
+  private async stageCredentialRotationPayloadsForNewRoot(
+    journal: CredentialRotationJournal,
+    secrets: CredentialRotationSecrets,
+  ): Promise<void> {
+    if (journal.newItemsKeyUuid) {
+      const persistedNewItemsKey = await this.storage.getRawPayloads([journal.newItemsKeyUuid])
+      if (persistedNewItemsKey.length > 0) {
+        return
+      }
+    }
+
+    const encryptedPayloads = journal.rollbackPayloads.map((payload) => new EncryptedPayload(payload))
+    if (encryptedPayloads.length === 0) {
+      return
+    }
+
+    const decryptedPayloads = await this.encryption.decryptSplit({
+      usesRootKey: {
+        items: encryptedPayloads,
+        key: secrets.currentRootKey,
+      },
+    })
+    if (!decryptedPayloads.every(isDecryptedPayload)) {
+      throw Error('Unable to decrypt the credential rotation rollback snapshot.')
+    }
+
+    const reencryptedPayloads = await this.encryption.encryptSplit({
+      usesRootKey: {
+        items: decryptedPayloads,
+        key: secrets.newRootKey,
+      },
+    })
+    await this.storage.savePayloads(reencryptedPayloads)
+  }
+
+  private async restoreCredentialRotationRollbackSnapshot(
+    journal: CredentialRotationJournal,
+    secrets: CredentialRotationSecrets,
+  ): Promise<void> {
+    if (!this.encryption.getSureRootKey().compare(secrets.currentRootKey)) {
+      await this.encryption.setRootKey(secrets.currentRootKey, secrets.wrappingKey)
+    }
+    await this.storage.savePayloads(journal.rollbackPayloads.map((payload) => new EncryptedPayload(payload)))
+    if (journal.newItemsKeyUuid) {
+      await this.storage.deletePayloadsWithUuids([journal.newItemsKeyUuid])
+    }
+  }
+
+  private async resumeCredentialRotationAfterDatabaseLoad(): Promise<void> {
+    if (this.resumingCredentialRotation) {
+      return
+    }
+
+    const journal = this.encryption.getCredentialRotationJournal()
+    if (
+      !journal ||
+      (journal.phase !== CredentialRotationPhase.ServerConfirmed &&
+        journal.phase !== CredentialRotationPhase.LocalItemsPersisted)
+    ) {
+      return
+    }
+
+    this.resumingCredentialRotation = true
+    try {
+      const secrets = await this.encryption.getCredentialRotationSecrets()
+      if (!secrets) {
+        return
+      }
+
+      if (!this.encryption.getSureRootKey().compare(secrets.newRootKey)) {
+        await this.encryption.setRootKey(secrets.newRootKey, secrets.wrappingKey)
+      }
+
+      let updatedJournal: CredentialRotationJournal = journal
+      const preparedItemsKey = journal.newItemsKeyUuid ? this.items.findItem(journal.newItemsKeyUuid) : undefined
+      if (!preparedItemsKey) {
+        await this.encryption.createNewItemsKeyWithRollback()
+        const newDefaultItemsKey = this.encryption.getSureDefaultItemsKey()
+        updatedJournal =
+          (await this.encryption.updateCredentialRotationJournal({
+            phase: CredentialRotationPhase.ServerConfirmed,
+            newItemsKeyUuid: newDefaultItemsKey.uuid,
+          })) ?? journal
+      }
+
+      await this._reencryptTypeAItems.execute()
+      await this.persistTypeAItems()
+      await this.encryption.updateCredentialRotationJournal({
+        phase: CredentialRotationPhase.LocalItemsPersisted,
+        newItemsKeyUuid: updatedJournal.newItemsKeyUuid,
+      })
+      await this.sync.sync({ awaitAll: true })
+
+      if (!this.encryption.getSureDefaultItemsKey().neverSynced) {
+        await this.encryption.clearCredentialRotationJournal()
+      }
+    } catch {
+      /**
+       * Recovery is deliberately retryable. Keep the durable journal intact and
+       * let the next launch or foreground credential flow resume from the last
+       * confirmed phase instead of failing application startup.
+       */
+    } finally {
+      this.resumingCredentialRotation = false
+    }
   }
 
   private async recomputeRootKeysForCredentialChange(parameters: {

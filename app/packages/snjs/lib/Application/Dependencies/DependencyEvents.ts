@@ -45,6 +45,7 @@ export function RegisterApplicationServicesEvents(container: Dependencies, event
   events.addEventHandler(container.get(TYPES.SyncService), WebSocketsServiceEvent.SyncItemsPushed)
   events.addEventHandler(container.get(TYPES.SyncService), WebSocketsServiceEvent.WebSocketDidOpen)
   events.addEventHandler(container.get(TYPES.UserService), AccountEvent.SignedInOrRegistered)
+  events.addEventHandler(container.get(TYPES.UserService), ApplicationEvent.ApplicationStageChanged)
   events.addEventHandler(container.get(TYPES.VaultInviteService), ApplicationEvent.Launched)
   events.addEventHandler(container.get(TYPES.VaultInviteService), SyncEvent.ReceivedSharedVaultInvites)
   events.addEventHandler(container.get(TYPES.VaultInviteService), WebSocketsServiceEvent.UserInvitedToSharedVault)

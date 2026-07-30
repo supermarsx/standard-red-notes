@@ -19,6 +19,11 @@ import {
   KeySystemRootKeyParamsInterface,
   PortablePublicKeySet,
 } from '@standardnotes/models'
+import {
+  CredentialRotationJournal,
+  CredentialRotationPhase,
+  CredentialRotationSecrets,
+} from '../RootKeyManager/CredentialRotationJournal'
 
 export interface EncryptionProviderInterface {
   initialize(): Promise<void>
@@ -88,6 +93,25 @@ export interface EncryptionProviderInterface {
   ): Promise<K>
   getRootKeyParams(): SNRootKeyParams | undefined
   setNewRootKeyWrapper(wrappingKey: RootKeyInterface): Promise<void>
+  setRootKey(key: RootKeyInterface, wrappingKey?: RootKeyInterface): Promise<void>
+  getRootKey(): RootKeyInterface | undefined
+  getSureRootKey(): RootKeyInterface
+
+  prepareCredentialRotationJournal(dto: {
+    currentEmail: string
+    newEmail: string
+    currentRootKey: RootKeyInterface
+    newRootKey: RootKeyInterface
+    wrappingKey?: RootKeyInterface
+    rollbackPayloads: CredentialRotationJournal['rollbackPayloads']
+  }): Promise<CredentialRotationJournal>
+  getCredentialRotationJournal(): CredentialRotationJournal | undefined
+  updateCredentialRotationJournal(update: {
+    phase: CredentialRotationPhase
+    newItemsKeyUuid?: string
+  }): Promise<CredentialRotationJournal | undefined>
+  getCredentialRotationSecrets(): Promise<CredentialRotationSecrets | undefined>
+  clearCredentialRotationJournal(): Promise<void>
 
   createNewItemsKeyWithRollback(): Promise<() => Promise<void>>
   getSureDefaultItemsKey(): ItemsKeyInterface

@@ -17,6 +17,9 @@ import { StorageServiceInterface } from '../Storage/StorageServiceInterface'
 import { SyncServiceInterface } from '../Sync/SyncServiceInterface'
 import { AccountEvent } from './AccountEvent'
 import { UserService } from './UserService'
+import { CredentialRotationPhase } from '../RootKeyManager/CredentialRotationJournal'
+import { ApplicationEvent } from '../Event/ApplicationEvent'
+import { ApplicationStage } from '../Application/ApplicationStage'
 
 describe('UserService', () => {
   let sessionManager: SessionsClientInterface
@@ -55,10 +58,30 @@ describe('UserService', () => {
     syncService = {} as jest.Mocked<SyncServiceInterface>
 
     storageService = {} as jest.Mocked<StorageServiceInterface>
+    storageService.getRawPayloads = jest.fn().mockResolvedValue([])
+    storageService.savePayloads = jest.fn().mockResolvedValue(undefined)
+    storageService.deletePayloadsWithUuids = jest.fn().mockResolvedValue(undefined)
 
     itemManager = {} as jest.Mocked<ItemManagerInterface>
+    itemManager.getItems = jest.fn().mockReturnValue([])
+    itemManager.findItem = jest.fn()
 
     encryptionService = {} as jest.Mocked<EncryptionProviderInterface>
+    encryptionService.prepareCredentialRotationJournal = jest.fn().mockResolvedValue({
+      schemaVersion: 1,
+      operationId: 'rotation-id',
+      phase: CredentialRotationPhase.Prepared,
+      rollbackPayloads: [],
+    })
+    encryptionService.updateCredentialRotationJournal = jest.fn().mockImplementation(async (update) => ({
+      schemaVersion: 1,
+      operationId: 'rotation-id',
+      rollbackPayloads: [],
+      ...update,
+    }))
+    encryptionService.clearCredentialRotationJournal = jest.fn().mockResolvedValue(undefined)
+    encryptionService.getCredentialRotationJournal = jest.fn()
+    encryptionService.getCredentialRotationSecrets = jest.fn()
 
     alertService = {} as jest.Mocked<AlertService>
     alertService.alert = jest.fn().mockResolvedValue(undefined)
@@ -96,8 +119,14 @@ describe('UserService', () => {
   })
 
   const prepareCredentialChange = (neverSynced = true) => {
-    const currentRootKey = { serverPassword: 'current-server-password' }
-    const newRootKey = { serverPassword: 'new-server-password' }
+    const currentRootKey = {
+      compare: jest.fn(),
+      serverPassword: 'current-server-password',
+    }
+    const newRootKey = {
+      compare: jest.fn(),
+      serverPassword: 'new-server-password',
+    }
     const localRollback = jest.fn().mockResolvedValue(undefined)
 
     challengeService.getWrappingKeyIfApplicable = jest.fn().mockResolvedValue({
@@ -109,7 +138,10 @@ describe('UserService', () => {
     encryptionService.computeRootKey = jest.fn().mockResolvedValue(currentRootKey)
     encryptionService.createRootKey = jest.fn().mockResolvedValue(newRootKey)
     encryptionService.createNewItemsKeyWithRollback = jest.fn().mockResolvedValue(localRollback)
-    encryptionService.getSureDefaultItemsKey = jest.fn().mockReturnValue({ neverSynced })
+    encryptionService.getSureDefaultItemsKey = jest.fn().mockReturnValue({
+      uuid: 'new-items-key',
+      neverSynced,
+    })
     sessionManager.getUser = jest.fn().mockReturnValue({
       uuid: 'user-uuid',
       email: 'old@example.com',
@@ -117,6 +149,7 @@ describe('UserService', () => {
     syncService.lockSyncing = jest.fn()
     syncService.unlockSyncing = jest.fn()
     syncService.sync = jest.fn().mockResolvedValue(undefined)
+    syncService.persistPayloads = jest.fn().mockResolvedValue(undefined)
 
     return {
       currentRootKey,
@@ -174,6 +207,49 @@ describe('UserService', () => {
 
       expect(syncService.lockSyncing).toHaveBeenCalledTimes(1)
       expect(syncService.unlockSyncing).toHaveBeenCalledTimes(1)
+      expect(encryptionService.clearCredentialRotationJournal).not.toHaveBeenCalled()
+    })
+
+    it('durably journals the reciprocal-key recovery state before contacting the server', async () => {
+      const { currentRootKey, newRootKey } = prepareCredentialChange(false)
+      sessionManager.changeCredentials = jest.fn().mockResolvedValue(successSessionResponse)
+
+      await createService().changeCredentials(emailChange)
+
+      expect(encryptionService.prepareCredentialRotationJournal).toHaveBeenCalledWith({
+        currentEmail: 'old@example.com',
+        newEmail: 'new@example.com',
+        currentRootKey,
+        newRootKey,
+        wrappingKey: undefined,
+        rollbackPayloads: [],
+      })
+      expect(
+        (encryptionService.prepareCredentialRotationJournal as jest.Mock).mock.invocationCallOrder[0],
+      ).toBeLessThan((sessionManager.changeCredentials as jest.Mock).mock.invocationCallOrder[0])
+    })
+
+    it('persists every Type-A payload before relying on the first network sync', async () => {
+      prepareCredentialChange(false)
+      const payloads = [{ uuid: 'items-key' }, { uuid: 'trusted-contact' }]
+      itemManager.getItems = jest.fn().mockReturnValue(
+        payloads.map((payload) => ({
+          payloadRepresentation: () => payload,
+        })),
+      )
+      sessionManager.changeCredentials = jest.fn().mockResolvedValue(successSessionResponse)
+
+      await createService().changeCredentials(passwordChange)
+
+      expect(syncService.persistPayloads).toHaveBeenCalledWith(payloads)
+      expect((syncService.persistPayloads as jest.Mock).mock.invocationCallOrder[0]).toBeLessThan(
+        (syncService.sync as jest.Mock).mock.invocationCallOrder[0],
+      )
+      expect(encryptionService.updateCredentialRotationJournal).toHaveBeenCalledWith({
+        phase: CredentialRotationPhase.LocalItemsPersisted,
+        newItemsKeyUuid: 'new-items-key',
+      })
+      expect(encryptionService.clearCredentialRotationJournal).toHaveBeenCalledTimes(1)
     })
 
     it('does not apply a local rollback when the server rejects the credential rollback', async () => {
@@ -200,6 +276,7 @@ describe('UserService', () => {
       expect(syncService.sync).toHaveBeenCalledTimes(1)
       expect(syncService.lockSyncing).toHaveBeenCalledTimes(2)
       expect(syncService.unlockSyncing).toHaveBeenCalledTimes(2)
+      expect(encryptionService.clearCredentialRotationJournal).not.toHaveBeenCalled()
     })
 
     it('does not apply a local rollback when the server rollback is unconfirmed', async () => {
@@ -215,6 +292,7 @@ describe('UserService', () => {
       expect(localRollback).not.toHaveBeenCalled()
       expect(syncService.lockSyncing).toHaveBeenCalledTimes(2)
       expect(syncService.unlockSyncing).toHaveBeenCalledTimes(2)
+      expect(encryptionService.clearCredentialRotationJournal).not.toHaveBeenCalled()
     })
 
     it('reports a distinct failure when local rollback fails after server confirmation', async () => {
@@ -255,6 +333,170 @@ describe('UserService', () => {
       expect(reencryptTypeAItems.execute).toHaveBeenCalledTimes(2)
       expect(syncService.sync).toHaveBeenCalledTimes(2)
       expect(result.error?.message).toBe('Unable to change your credentials due to a sync error. Please try again.')
+      expect(encryptionService.clearCredentialRotationJournal).toHaveBeenCalledTimes(1)
+    })
+
+    it('reconciles an ambiguous prepared rotation to the new credential side before database load', async () => {
+      const { currentRootKey, newRootKey } = prepareCredentialChange()
+      encryptionService.getCredentialRotationJournal = jest.fn().mockReturnValue({
+        schemaVersion: 1,
+        operationId: 'rotation-id',
+        phase: CredentialRotationPhase.Prepared,
+        rollbackPayloads: [],
+      })
+      encryptionService.getCredentialRotationSecrets = jest.fn().mockResolvedValue({
+        currentEmail: 'old@example.com',
+        newEmail: 'new@example.com',
+        currentRootKey,
+        newRootKey,
+      })
+      sessionManager.reconcileCredentialRotationSignIn = jest.fn().mockResolvedValue(successSessionResponse.response)
+
+      await createService().handleEvent({
+        type: ApplicationEvent.ApplicationStageChanged,
+        payload: {
+          stage: ApplicationStage.Launched_10,
+        },
+      } as never)
+
+      expect(sessionManager.reconcileCredentialRotationSignIn).toHaveBeenCalledWith(
+        'new@example.com',
+        newRootKey,
+        undefined,
+      )
+      expect(encryptionService.updateCredentialRotationJournal).toHaveBeenCalledWith({
+        phase: CredentialRotationPhase.ServerConfirmed,
+        newItemsKeyUuid: undefined,
+      })
+    })
+
+    it('keeps a resumable server-confirmed journal when launch-time local persistence fails', async () => {
+      const { currentRootKey, newRootKey } = prepareCredentialChange()
+      const journal = {
+        schemaVersion: 1,
+        operationId: 'rotation-id',
+        phase: CredentialRotationPhase.ServerConfirmed,
+        rollbackPayloads: [],
+      }
+      encryptionService.getCredentialRotationJournal = jest.fn().mockReturnValue(journal)
+      encryptionService.getCredentialRotationSecrets = jest.fn().mockResolvedValue({
+        currentEmail: 'old@example.com',
+        newEmail: 'new@example.com',
+        currentRootKey,
+        newRootKey,
+      })
+      encryptionService.getSureRootKey = jest.fn().mockReturnValue(newRootKey)
+      newRootKey.compare.mockReturnValue(true)
+      syncService.persistPayloads = jest.fn().mockRejectedValue(new Error('quota exceeded'))
+
+      await createService().handleEvent({
+        type: ApplicationEvent.ApplicationStageChanged,
+        payload: {
+          stage: ApplicationStage.LoadedDatabase_12,
+        },
+      } as never)
+
+      expect(encryptionService.clearCredentialRotationJournal).not.toHaveBeenCalled()
+    })
+
+    it('restages the pre-rotation Type-A snapshot under the new root before database load', async () => {
+      const { currentRootKey, newRootKey } = prepareCredentialChange()
+      const oldCiphertext = {
+        uuid: 'old-items-key',
+        content_type: 'SN|ItemsKey',
+        content: '004:old-ciphertext',
+        enc_item_key: '004:old-item-key',
+        items_key_id: null,
+        errorDecrypting: false,
+        waitingForKey: false,
+      }
+      const decryptedPayload = {
+        uuid: 'old-items-key',
+        content_type: 'SN|ItemsKey',
+        content: { itemsKey: 'decrypted-only-in-memory' },
+      }
+      const newCiphertext = {
+        ...oldCiphertext,
+        content: '004:new-ciphertext',
+      }
+      encryptionService.getCredentialRotationJournal = jest.fn().mockReturnValue({
+        schemaVersion: 1,
+        operationId: 'rotation-id',
+        phase: CredentialRotationPhase.ServerConfirmed,
+        rollbackPayloads: [oldCiphertext],
+      })
+      encryptionService.getCredentialRotationSecrets = jest.fn().mockResolvedValue({
+        currentEmail: 'old@example.com',
+        newEmail: 'new@example.com',
+        currentRootKey,
+        newRootKey,
+      })
+      encryptionService.getSureRootKey = jest.fn().mockReturnValue(newRootKey)
+      newRootKey.compare.mockReturnValue(true)
+      encryptionService.decryptSplit = jest.fn().mockResolvedValue([decryptedPayload])
+      encryptionService.encryptSplit = jest.fn().mockResolvedValue([newCiphertext])
+
+      await createService().handleEvent({
+        type: ApplicationEvent.ApplicationStageChanged,
+        payload: {
+          stage: ApplicationStage.Launched_10,
+        },
+      } as never)
+
+      expect(encryptionService.decryptSplit).toHaveBeenCalledWith({
+        usesRootKey: {
+          items: [expect.objectContaining({ uuid: 'old-items-key', content: '004:old-ciphertext' })],
+          key: currentRootKey,
+        },
+      })
+      expect(encryptionService.encryptSplit).toHaveBeenCalledWith({
+        usesRootKey: {
+          items: [decryptedPayload],
+          key: newRootKey,
+        },
+      })
+      expect(storageService.savePayloads).toHaveBeenCalledWith([newCiphertext])
+    })
+
+    it('restores the exact old ciphertext and removes the prepared key after confirmed rollback', async () => {
+      const { currentRootKey, newRootKey } = prepareCredentialChange()
+      const oldCiphertext = {
+        uuid: 'old-items-key',
+        content_type: 'SN|ItemsKey',
+        content: '004:old-ciphertext',
+        enc_item_key: '004:old-item-key',
+        items_key_id: null,
+        errorDecrypting: false,
+        waitingForKey: false,
+      }
+      encryptionService.getCredentialRotationJournal = jest.fn().mockReturnValue({
+        schemaVersion: 1,
+        operationId: 'rotation-id',
+        phase: CredentialRotationPhase.RollbackConfirmed,
+        rollbackPayloads: [oldCiphertext],
+        newItemsKeyUuid: 'new-items-key',
+      })
+      encryptionService.getCredentialRotationSecrets = jest.fn().mockResolvedValue({
+        currentEmail: 'old@example.com',
+        newEmail: 'new@example.com',
+        currentRootKey,
+        newRootKey,
+      })
+      encryptionService.getSureRootKey = jest.fn().mockReturnValue(currentRootKey)
+      currentRootKey.compare.mockReturnValue(true)
+
+      await createService().handleEvent({
+        type: ApplicationEvent.ApplicationStageChanged,
+        payload: {
+          stage: ApplicationStage.Launched_10,
+        },
+      } as never)
+
+      expect(storageService.savePayloads).toHaveBeenCalledWith([
+        expect.objectContaining({ uuid: 'old-items-key', content: '004:old-ciphertext' }),
+      ])
+      expect(storageService.deletePayloadsWithUuids).toHaveBeenCalledWith(['new-items-key'])
+      expect(encryptionService.clearCredentialRotationJournal).toHaveBeenCalledTimes(1)
     })
   })
 

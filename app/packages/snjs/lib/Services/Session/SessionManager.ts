@@ -15,6 +15,7 @@ import {
   SignInStrings,
   INVALID_PASSWORD_COST,
   API_MESSAGE_FALLBACK_LOGIN_FAIL,
+  API_MESSAGE_GENERIC_INVALID_LOGIN,
   API_MESSAGE_GENERIC_SYNC_FAIL,
   EXPIRED_PROTOCOL_VERSION,
   StrictSignInFailed,
@@ -1010,8 +1011,11 @@ export class SessionManager
     hvmToken?: string,
     // Standard Red Notes: optional workspace name (WORKSPACES_PER_EMAIL_ENABLED).
     workspaceIdentifier?: string,
+    suppliedWrappingKey?: SNRootKey,
   ): Promise<HttpResponse<SignInResponse>> {
-    const { wrappingKey, canceled } = await this.challengeService.getWrappingKeyIfApplicable()
+    const { wrappingKey, canceled } = suppliedWrappingKey
+      ? { wrappingKey: suppliedWrappingKey, canceled: false }
+      : await this.challengeService.getWrappingKeyIfApplicable()
 
     if (canceled) {
       return this.apiService.createErrorResponse(
@@ -1043,6 +1047,33 @@ export class SessionManager
     await this.handleSuccessAuthResponse(signInResponse, expandedRootKey, wrappingKey)
 
     return signInResponse
+  }
+
+  public async reconcileCredentialRotationSignIn(
+    email: string,
+    rootKey: SNRootKey,
+    wrappingKey?: SNRootKey,
+  ): Promise<HttpResponse<SignInResponse>> {
+    const paramsResult = await this.retrieveKeyParams({
+      email,
+      workspaceIdentifier: this.workspaceIdentifier,
+    })
+    if (!paramsResult.keyParams || isErrorResponse(paramsResult.response)) {
+      return paramsResult.response as unknown as HttpResponse<SignInResponse>
+    }
+
+    if (!paramsResult.keyParams.compare(rootKey.keyParams)) {
+      return this.apiService.createErrorResponse(API_MESSAGE_GENERIC_INVALID_LOGIN)
+    }
+
+    return this.bypassChecksAndSignInWithRootKey(
+      email,
+      rootKey,
+      false,
+      undefined,
+      this.workspaceIdentifier,
+      wrappingKey,
+    )
   }
 
   public async changeCredentials(parameters: {
