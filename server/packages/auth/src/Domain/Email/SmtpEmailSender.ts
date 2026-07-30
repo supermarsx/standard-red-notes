@@ -1,7 +1,7 @@
 import * as nodemailer from 'nodemailer'
 import { Logger } from 'winston'
 
-import { EmailSenderInterface } from './EmailSenderInterface'
+import { EmailSenderInterface, SendEmailOptions } from './EmailSenderInterface'
 
 export interface SmtpEmailSenderConfig {
   host?: string
@@ -21,10 +21,17 @@ export class SmtpEmailSender implements EmailSenderInterface {
   ) {}
 
   isConfigured(): boolean {
-    return this.config.host !== undefined && this.config.host !== '' && this.config.from !== undefined
+    return (
+      typeof this.config.host === 'string' &&
+      this.config.host.trim().length > 0 &&
+      typeof this.config.from === 'string' &&
+      this.config.from.trim().length > 0 &&
+      (this.config.port === undefined ||
+        (Number.isSafeInteger(this.config.port) && this.config.port > 0 && this.config.port <= 65535))
+    )
   }
 
-  async sendEmail(to: string, subject: string, body: string): Promise<boolean> {
+  async sendEmail(to: string, subject: string, body: string, options?: SendEmailOptions): Promise<boolean> {
     if (!this.isConfigured()) {
       this.logger.debug('SMTP is not configured. Skipping email delivery.')
 
@@ -33,17 +40,34 @@ export class SmtpEmailSender implements EmailSenderInterface {
 
     try {
       const transporter = this.getTransporter()
+      const bodyContent = options?.html ? { html: body } : { text: body }
 
-      await transporter.sendMail({
+      const result = await transporter.sendMail({
         from: this.config.from,
         to,
         subject,
-        text: body,
+        ...bodyContent,
+        attachments: options?.attachments?.map((attachment) => ({
+          filename: attachment.filename,
+          content: attachment.content,
+          contentType: attachment.contentType,
+        })),
       })
 
-      return true
+      const acceptedRecipients = Array.isArray(result?.accepted) ? result.accepted : []
+      const accepted = acceptedRecipients.length > 0
+      if (!accepted) {
+        this.logger.error('SMTP did not confirm recipient acceptance', {
+          codeTag: 'SmtpEmailSender',
+        })
+      }
+
+      return accepted
     } catch (error) {
-      this.logger.error(`Failed to send email via SMTP: ${(error as Error).message}`)
+      this.logger.error('Failed to send email via SMTP', {
+        codeTag: 'SmtpEmailSender',
+        errorName: error instanceof Error ? error.name : 'UnknownError',
+      })
 
       return false
     }

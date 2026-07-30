@@ -4,7 +4,6 @@ import { TimerInterface } from '@standardnotes/time'
 import { TriggerEmailBackupForUser } from '../TriggerEmailBackupForUser/TriggerEmailBackupForUser'
 import { SettingRepositoryInterface } from '../../Setting/SettingRepositoryInterface'
 import { GetSetting } from '../GetSetting/GetSetting'
-import { SetSettingValue } from '../SetSettingValue/SetSettingValue'
 import { TriggerEmailBackupForAllUsersDTO } from './TriggerEmailBackupForAllUsersDTO'
 import { isEmailBackupDue } from './EmailBackupDueCalculator'
 import { Logger } from 'winston'
@@ -16,7 +15,6 @@ export class TriggerEmailBackupForAllUsers implements UseCaseInterface<void> {
     private settingRepository: SettingRepositoryInterface,
     private triggerEmailBackupForUserUseCase: TriggerEmailBackupForUser,
     private getSetting: GetSetting,
-    private setSettingValue: SetSettingValue,
     private timer: TimerInterface,
     private logger: Logger,
     /**
@@ -84,8 +82,6 @@ export class TriggerEmailBackupForAllUsers implements UseCaseInterface<void> {
           failedUsers++
           continue
         }
-
-        await this.recordLastSent(userUuid, nowMs)
       }
     }
 
@@ -120,19 +116,5 @@ export class TriggerEmailBackupForAllUsers implements UseCaseInterface<void> {
     const parsed = Number.parseInt(value, 10)
 
     return Number.isNaN(parsed) ? null : parsed
-  }
-
-  private async recordLastSent(userUuid: string, nowMs: number): Promise<void> {
-    const result = await this.setSettingValue.execute({
-      settingName: SettingName.NAMES.EmailBackupLastSent,
-      value: String(nowMs),
-      userUuid,
-      // Server-side bookkeeping: bypass the client-mutability permission check.
-      checkUserPermissions: false,
-    })
-
-    if (result.isFailed()) {
-      this.logger.error(`Failed to record email backup last-sent for user ${userUuid}: ${result.getError()}`)
-    }
   }
 }

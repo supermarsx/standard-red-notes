@@ -37,7 +37,7 @@ import { GetItem } from '../Domain/UseCase/Syncing/GetItem/GetItem'
 import { AuthorizeCollaborationAccess } from '../Domain/UseCase/Syncing/AuthorizeCollaborationAccess/AuthorizeCollaborationAccess'
 import { SyncItems } from '../Domain/UseCase/Syncing/SyncItems/SyncItems'
 import { InversifyExpressAuthMiddleware } from '../Infra/InversifyExpressUtils/Middleware/InversifyExpressAuthMiddleware'
-import { S3Client } from '@aws-sdk/client-s3'
+import { S3Client, S3ClientConfig } from '@aws-sdk/client-s3'
 import { SQSClient, SQSClientConfig } from '@aws-sdk/client-sqs'
 import { ContentDecoder, ContentDecoderInterface } from '@standardnotes/common'
 import {
@@ -66,6 +66,7 @@ import {
 } from '@standardnotes/domain-core'
 import { BaseItemsController } from '../Infra/InversifyExpressUtils/Base/BaseItemsController'
 import { Transform } from 'stream'
+import { resolve } from 'path'
 import { ItemHttpRepresentation } from '../Mapping/Http/ItemHttpRepresentation'
 import { ItemHttpMapper } from '../Mapping/Http/ItemHttpMapper'
 import { SavedItemHttpRepresentation } from '../Mapping/Http/SavedItemHttpRepresentation'
@@ -235,6 +236,12 @@ export class ContainerConfigLoader {
     const isConfiguredForSelfHosting = env.get('MODE', true) === 'self-hosted'
     const isConfiguredForHomeServerOrSelfHosting = isConfiguredForHomeServer || isConfiguredForSelfHosting
     const isConfiguredForInMemoryCache = env.get('CACHE_TYPE', true) === 'memory'
+    const s3BackupRegion = env.get('S3_AWS_REGION', true)
+    const s3BackupBucketName = env.get('S3_BACKUP_BUCKET_NAME', true)
+    if (!isConfiguredForHomeServer && Boolean(s3BackupRegion) !== Boolean(s3BackupBucketName)) {
+      throw new Error('S3 email backup storage requires both S3_AWS_REGION and S3_BACKUP_BUCKET_NAME')
+    }
+    const useS3ItemBackup = !isConfiguredForHomeServer && Boolean(s3BackupRegion && s3BackupBucketName)
 
     if (!isConfiguredForInMemoryCache) {
       const redisUrl = env.get('REDIS_URL')
@@ -324,26 +331,40 @@ export class ContainerConfigLoader {
 
         let s3Client = undefined
         if (env.get('S3_AWS_REGION', true)) {
-          s3Client = new S3Client({
+          const s3Config: S3ClientConfig = {
             apiVersion: 'latest',
             region: env.get('S3_AWS_REGION', true),
-          })
+          }
+          if (env.get('S3_ENDPOINT', true)) {
+            s3Config.endpoint = env.get('S3_ENDPOINT', true)
+          }
+          if (env.get('S3_ACCESS_KEY_ID', true) && env.get('S3_SECRET_ACCESS_KEY', true)) {
+            s3Config.credentials = {
+              accessKeyId: env.get('S3_ACCESS_KEY_ID', true),
+              secretAccessKey: env.get('S3_SECRET_ACCESS_KEY', true),
+            }
+          }
+          s3Client = new S3Client(s3Config)
         }
 
         return s3Client
       })
     }
 
+    const emailAttachmentMaxByteSize = env.get('EMAIL_ATTACHMENT_MAX_BYTE_SIZE', true)
+      ? +env.get('EMAIL_ATTACHMENT_MAX_BYTE_SIZE', true)
+      : 10485760
+    if (!Number.isSafeInteger(emailAttachmentMaxByteSize) || emailAttachmentMaxByteSize <= 0) {
+      throw new Error('EMAIL_ATTACHMENT_MAX_BYTE_SIZE must be a positive safe integer')
+    }
+    container.bind(TYPES.Sync_EMAIL_ATTACHMENT_MAX_BYTE_SIZE).toConstantValue(emailAttachmentMaxByteSize)
+    const fileUploadPath = env.get('FILE_UPLOAD_PATH', true)
+      ? env.get('FILE_UPLOAD_PATH', true)
+      : this.DEFAULT_FILE_UPLOAD_PATH
+    container.bind(TYPES.Sync_FILE_UPLOAD_PATH).toConstantValue(fileUploadPath)
     container
-      .bind(TYPES.Sync_EMAIL_ATTACHMENT_MAX_BYTE_SIZE)
-      .toConstantValue(
-        env.get('EMAIL_ATTACHMENT_MAX_BYTE_SIZE', true) ? +env.get('EMAIL_ATTACHMENT_MAX_BYTE_SIZE', true) : 10485760,
-      )
-    container
-      .bind(TYPES.Sync_FILE_UPLOAD_PATH)
-      .toConstantValue(
-        env.get('FILE_UPLOAD_PATH', true) ? env.get('FILE_UPLOAD_PATH', true) : this.DEFAULT_FILE_UPLOAD_PATH,
-      )
+      .bind(TYPES.Sync_BACKUP_FILE_LOCATION)
+      .toConstantValue(useS3ItemBackup ? s3BackupBucketName : resolve(fileUploadPath, 'backups'))
 
     // Mapping
     container
@@ -627,7 +648,7 @@ export class ContainerConfigLoader {
     container
       .bind<ItemBackupServiceInterface>(TYPES.Sync_ItemBackupService)
       .toConstantValue(
-        env.get('S3_AWS_REGION', true)
+        useS3ItemBackup
           ? new S3ItemBackupService(
               container.get(TYPES.Sync_S3_BACKUP_BUCKET_NAME),
               container.get(TYPES.Sync_ItemBackupMapper),
@@ -1215,24 +1236,22 @@ export class ContainerConfigLoader {
       )
     eventHandlers.set('NEXTCLOUD_BACKUP_REQUESTED', container.get(TYPES.Sync_NextcloudBackupRequestedEventHandler))
 
-    if (!isConfiguredForHomeServer) {
-      container
-        .bind<EmailBackupRequestedEventHandler>(TYPES.Sync_EmailBackupRequestedEventHandler)
-        .toConstantValue(
-          new EmailBackupRequestedEventHandler(
-            container.get<ItemRepositoryInterface>(TYPES.Sync_SQLItemRepository),
-            container.get<ItemBackupServiceInterface>(TYPES.Sync_ItemBackupService),
-            container.get<DomainEventPublisherInterface>(TYPES.Sync_DomainEventPublisher),
-            container.get<DomainEventFactoryInterface>(TYPES.Sync_DomainEventFactory),
-            container.get<number>(TYPES.Sync_EMAIL_ATTACHMENT_MAX_BYTE_SIZE),
-            container.get<ItemTransferCalculatorInterface>(TYPES.Sync_ItemTransferCalculator),
-            container.get<string>(TYPES.Sync_S3_BACKUP_BUCKET_NAME),
-            container.get<Logger>(TYPES.Sync_Logger),
-          ),
-        )
+    container
+      .bind<EmailBackupRequestedEventHandler>(TYPES.Sync_EmailBackupRequestedEventHandler)
+      .toConstantValue(
+        new EmailBackupRequestedEventHandler(
+          container.get<ItemRepositoryInterface>(TYPES.Sync_SQLItemRepository),
+          container.get<ItemBackupServiceInterface>(TYPES.Sync_ItemBackupService),
+          container.get<DomainEventPublisherInterface>(TYPES.Sync_DomainEventPublisher),
+          container.get<DomainEventFactoryInterface>(TYPES.Sync_DomainEventFactory),
+          container.get<number>(TYPES.Sync_EMAIL_ATTACHMENT_MAX_BYTE_SIZE),
+          container.get<ItemTransferCalculatorInterface>(TYPES.Sync_ItemTransferCalculator),
+          container.get<string>(TYPES.Sync_BACKUP_FILE_LOCATION),
+          container.get<Logger>(TYPES.Sync_Logger),
+        ),
+      )
 
-      eventHandlers.set('EMAIL_BACKUP_REQUESTED', container.get(TYPES.Sync_EmailBackupRequestedEventHandler))
-    }
+    eventHandlers.set('EMAIL_BACKUP_REQUESTED', container.get(TYPES.Sync_EmailBackupRequestedEventHandler))
 
     if (isConfiguredForHomeServer) {
       const directCallEventMessageHandler = new DirectCallEventMessageHandler(

@@ -169,6 +169,17 @@ describe('SettingsAssociationService', () => {
     })
   })
 
+  describe('email backup delivery receipt state', () => {
+    it('is valid, unencrypted, unsensitive, and server-written only', () => {
+      const settingName = SettingName.create(SettingName.NAMES.EmailBackupDeliveryState).getValue()
+
+      expect(settingName.value).toEqual('EMAIL_BACKUP_DELIVERY_STATE')
+      expect(createService().getEncryptionVersionForSetting(settingName)).toEqual(EncryptionVersion.Unencrypted)
+      expect(createService().getSensitivityForSetting(settingName)).toBeFalsy()
+      expect(createService().isSettingMutableByClient(settingName)).toBeFalsy()
+    })
+  })
+
   describe('instance-wide registration-disabled flag (Standard Red Notes, admin-only)', () => {
     it('should be a valid, recognized setting name', () => {
       const result = SettingName.create(SettingName.NAMES.RegistrationDisabled)

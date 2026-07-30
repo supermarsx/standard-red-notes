@@ -13,6 +13,7 @@ export class SettingsAssociationService implements SettingsAssociationServiceInt
   private readonly UNENCRYPTED_SETTINGS = [
     SettingName.NAMES.EmailBackupFrequency,
     SettingName.NAMES.EmailBackupLastSent,
+    SettingName.NAMES.EmailBackupDeliveryState,
     SettingName.NAMES.EmailRemindersEnabled,
     // Standard Red Notes: per-user server-OCR opt-in. A plain 'true'/'false' flag
     // carrying no secret; stored unencrypted so the api-gateway can read it without
@@ -55,6 +56,7 @@ export class SettingsAssociationService implements SettingsAssociationServiceInt
     SettingName.NAMES.OneDriveBackupFrequency,
     SettingName.NAMES.EmailBackupFrequency,
     SettingName.NAMES.EmailBackupLastSent,
+    SettingName.NAMES.EmailBackupDeliveryState,
     SettingName.NAMES.EmailRemindersEnabled,
     // Standard Red Notes: per-user server-OCR opt-in must be retrievable by the
     // owning client (to know whether to offer "Run OCR on server") and by the
@@ -110,6 +112,7 @@ export class SettingsAssociationService implements SettingsAssociationServiceInt
     // Standard Red Notes: last-sent bookkeeping for scheduled email backups is
     // written only by the server-side trigger job; clients may not mutate it.
     SettingName.NAMES.EmailBackupLastSent,
+    SettingName.NAMES.EmailBackupDeliveryState,
     // Standard Red Notes: last-run bookkeeping for scheduled Nextcloud backups is
     // written only by the server-side trigger job; clients may not mutate it.
     SettingName.NAMES.NextcloudBackupLastRun,

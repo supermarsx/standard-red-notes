@@ -5,5 +5,6 @@ import { Item } from './Item'
 
 export interface ItemBackupServiceInterface {
   backup(items: Array<Item>, authParams: KeyParamsData, contentSizeLimit?: number): Promise<string[]>
+  delete(fileName: string): Promise<void>
   dump(item: Item): Promise<Result<string>>
 }

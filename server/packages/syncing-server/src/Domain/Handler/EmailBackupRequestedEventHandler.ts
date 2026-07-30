@@ -3,14 +3,17 @@ import {
   DomainEventPublisherInterface,
   EmailBackupRequestedEvent,
 } from '@standardnotes/domain-events'
-import { EmailLevel, Uuid } from '@standardnotes/domain-core'
+import { Email, EmailLevel, Uuid } from '@standardnotes/domain-core'
 import { Logger } from 'winston'
+import * as uuid from 'uuid'
 import { DomainEventFactoryInterface } from '../Event/DomainEventFactoryInterface'
 import { ItemBackupServiceInterface } from '../Item/ItemBackupServiceInterface'
+import { BackupContentTooLargeError } from '../Item/BackupContentTooLargeError'
 import { ItemRepositoryInterface } from '../Item/ItemRepositoryInterface'
 import { ItemTransferCalculatorInterface } from '../Item/ItemTransferCalculatorInterface'
 import { ItemQuery } from '../Item/ItemQuery'
 import { getBody, getSubject } from '../Email/EmailBackupAttachmentCreated'
+import { getEmailBackupFailedBody, getEmailBackupFailedSubject } from '../Email/EmailBackupFailed'
 
 export class EmailBackupRequestedEventHandler implements DomainEventHandlerInterface {
   constructor(
@@ -20,7 +23,7 @@ export class EmailBackupRequestedEventHandler implements DomainEventHandlerInter
     private domainEventFactory: DomainEventFactoryInterface,
     private emailAttachmentMaxByteSize: number,
     private itemTransferCalculator: ItemTransferCalculatorInterface,
-    private s3BackupBucketName: string,
+    private backupFileLocation: string,
     private logger: Logger,
   ) {}
 
@@ -28,45 +31,40 @@ export class EmailBackupRequestedEventHandler implements DomainEventHandlerInter
     await this.requestEmailWithBackupFile(event, this.primaryItemRepository)
   }
 
-  // ---------------------------------------------------------------------------
-  // Standard Red Notes — DELIVERY GAP (scaffolded, not fully wired):
-  //
-  // This handler produces the user's ALREADY end-to-end-encrypted items as a
-  // backup file in the S3 backup bucket, then publishes an EMAIL_REQUESTED domain
-  // event whose `attachments[].filePath` points at that S3 object.
-  //
-  // In upstream Standard Notes, EMAIL_REQUESTED was consumed by a separate,
-  // closed-source `email` micro-service (via SNS/SQS) that fetched the attachment
-  // from S3 and sent it over SMTP. THIS FORK HAS NO EMAIL_REQUESTED CONSUMER, so
-  // the backup file is generated but never actually emailed.
-  //
-  // To fully wire delivery, a new EMAIL_REQUESTED handler is needed that, when the
-  // operator has enabled email backups (EMAIL_BACKUPS_ENABLED) and SMTP is
-  // configured, (1) fetches the attachment object from the S3 backup bucket and
-  // (2) calls an SMTP sender with the attachment (the existing
-  // auth/.../SmtpEmailSender currently only sends text bodies, so it would need an
-  // attachment-capable send path, or a dedicated sender here). SMTP creds are the
-  // remaining operator-supplied config. See TriggerEmailBackupForAllUsers for the
-  // operator gate and per-user due-calculation that drive this event.
-  // ---------------------------------------------------------------------------
+  // The auth service is the single EMAIL_REQUESTED delivery owner. It validates
+  // this storage reference against its configured S3 bucket or shared local
+  // backup directory, sends the encrypted bytes over SMTP, and removes them only
+  // after SMTP confirms acceptance.
 
   private async requestEmailWithBackupFile(
     event: EmailBackupRequestedEvent,
     itemRepository: ItemRepositoryInterface,
   ): Promise<void> {
-    const userUuidOrError = Uuid.create(event.payload.userUuid)
+    const userUuidValue = event.payload?.userUuid
+    const userUuidOrError = Uuid.create(userUuidValue)
     if (userUuidOrError.isFailed()) {
       this.logger.error('User uuid is invalid', {
-        userId: event.payload.userUuid,
+        userId: userUuidValue,
         codeTag: 'EmailBackupRequestedEventHandler',
       })
 
       return
     }
     const userUuid = userUuidOrError.getValue()
+    const keyParams = event.payload?.keyParams
+    const userEmailOrError = Email.create(keyParams?.identifier as string)
+    if (userEmailOrError.isFailed()) {
+      this.logger.error('User email identifier is invalid', {
+        userId: userUuidValue,
+        codeTag: 'EmailBackupRequestedEventHandler',
+      })
+
+      return
+    }
+    const userEmail = userEmailOrError.getValue().value
 
     const itemQuery: ItemQuery = {
-      userUuid: event.payload.userUuid,
+      userUuid: userUuidValue,
       sortBy: 'updated_at_timestamp',
       sortOrder: 'ASC',
       deleted: false,
@@ -79,49 +77,104 @@ export class EmailBackupRequestedEventHandler implements DomainEventHandlerInter
     )
 
     const backupFileNames: string[] = []
-    for (const itemUuidBundle of itemUuidBundles) {
-      const items = await itemRepository.findAll({
-        uuids: itemUuidBundle,
-        sortBy: 'updated_at_timestamp',
-        sortOrder: 'ASC',
-      })
+    try {
+      for (const itemUuidBundle of itemUuidBundles) {
+        const items = await itemRepository.findAll({
+          uuids: itemUuidBundle,
+          sortBy: 'updated_at_timestamp',
+          sortOrder: 'ASC',
+        })
 
-      const bundleBackupFileNames = await this.itemBackupService.backup(
-        items,
-        event.payload.keyParams,
-        this.emailAttachmentMaxByteSize,
-      )
+        const bundleBackupFileNames = await this.itemBackupService.backup(
+          items,
+          keyParams,
+          this.emailAttachmentMaxByteSize,
+        )
 
-      backupFileNames.push(...bundleBackupFileNames)
+        backupFileNames.push(...bundleBackupFileNames)
+      }
+    } catch (error) {
+      await this.cleanupBackupFiles(backupFileNames)
+      if (error instanceof BackupContentTooLargeError) {
+        await this.publishOversizedBackupFailure(userUuidValue, userEmail)
+
+        return
+      }
+
+      throw error
     }
 
     const dateOnly = new Date().toISOString().substring(0, 10)
-    let bundleIndex = 1
-
-    for (const backupFileName of backupFileNames) {
-      await this.domainEventPublisher.publish(
-        this.domainEventFactory.createEmailRequestedEvent({
-          body: getBody(event.payload.keyParams.identifier as string),
-          level: EmailLevel.LEVELS.System,
-          messageIdentifier: 'DATA_BACKUP',
-          subject: getSubject(bundleIndex++, backupFileNames.length, dateOnly),
-          userEmail: event.payload.keyParams.identifier as string,
-          sender: 'backups@standardnotes.org',
-          attachments: [
-            {
+    if (backupFileNames.length > 0) {
+      const backupBatchId = uuid.v4()
+      try {
+        await this.domainEventPublisher.publish(
+          this.domainEventFactory.createEmailRequestedEvent({
+            backupBatchId,
+            body: getBody(userEmail),
+            level: EmailLevel.LEVELS.System,
+            messageIdentifier: 'DATA_BACKUP',
+            subject: getSubject(1, backupFileNames.length, dateOnly),
+            userEmail,
+            sender: 'backups@standardnotes.org',
+            attachments: backupFileNames.map((backupFileName, index) => ({
               fileName: backupFileName,
-              filePath: this.s3BackupBucketName,
-              attachmentFileName: `SN-Data-${dateOnly}.txt`,
+              filePath: this.backupFileLocation,
+              attachmentFileName:
+                backupFileNames.length === 1
+                  ? `SN-Data-${dateOnly}.txt`
+                  : `SN-Data-${dateOnly}-Part-${index + 1}-Of-${backupFileNames.length}.txt`,
               attachmentContentType: 'application/json',
-            },
-          ],
-          userUuid: event.payload.userUuid,
-        }),
-      )
+              emailSubject: getSubject(index + 1, backupFileNames.length, dateOnly),
+              batchIndex: index + 1,
+              batchCount: backupFileNames.length,
+            })),
+            userUuid: userUuidValue,
+          }),
+        )
+      } catch (error) {
+        await this.cleanupBackupFiles(backupFileNames)
+        throw error
+      }
     }
 
     this.logger.info('Email with backup requested for user', {
-      userId: event.payload.userUuid,
+      userId: userUuidValue,
     })
+  }
+
+  private async publishOversizedBackupFailure(userUuid: string, userEmail: string): Promise<void> {
+    await this.domainEventPublisher.publish(
+      this.domainEventFactory.createEmailRequestedEvent({
+        body: getEmailBackupFailedBody(),
+        level: EmailLevel.LEVELS.System,
+        messageIdentifier: 'DATA_BACKUP_FAILED',
+        subject: getEmailBackupFailedSubject(),
+        userEmail,
+        sender: 'backups@standardnotes.org',
+        userUuid,
+      }),
+    )
+
+    this.logger.warn('Email backup could not be created because an item exceeds the attachment limit', {
+      codeTag: 'EmailBackupRequestedEventHandler',
+      userId: userUuid,
+    })
+  }
+
+  private async cleanupBackupFiles(fileNames: string[]): Promise<void> {
+    for (const fileName of fileNames) {
+      try {
+        await this.itemBackupService.delete(fileName)
+      } catch {
+        try {
+          this.logger.error('Incomplete email backup artifact could not be deleted', {
+            codeTag: 'EmailBackupRequestedEventHandler',
+          })
+        } catch {
+          // Preserve the primary backup or publication failure.
+        }
+      }
+    }
   }
 }

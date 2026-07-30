@@ -4,7 +4,7 @@ import Redis from 'ioredis'
 import { SNSClient } from '@aws-sdk/client-sns'
 import axios, { AxiosInstance } from 'axios'
 import { SQSClient, SQSClientConfig } from '@aws-sdk/client-sqs'
-import { S3Client } from '@aws-sdk/client-s3'
+import { S3Client, S3ClientConfig } from '@aws-sdk/client-s3'
 import { Container } from 'inversify'
 import {
   DomainEventHandlerInterface,
@@ -164,6 +164,7 @@ import { CreateCrossServiceToken } from '../Domain/UseCase/CreateCrossServiceTok
 import { ProcessUserRequest } from '../Domain/UseCase/ProcessUserRequest/ProcessUserRequest'
 import { UserRequestsController } from '../Controller/UserRequestsController'
 import { EmailSubscriptionUnsubscribedEventHandler } from '../Domain/Handler/EmailSubscriptionUnsubscribedEventHandler'
+import { EmailRequestedEventHandler } from '../Domain/Handler/EmailRequestedEventHandler'
 import { SessionTraceRepositoryInterface } from '../Domain/Session/SessionTraceRepositoryInterface'
 import { TypeORMSessionTraceRepository } from '../Infra/TypeORM/TypeORMSessionTraceRepository'
 import {
@@ -223,6 +224,8 @@ import { VerifyEmailConfirmation } from '../Domain/UseCase/VerifyEmailConfirmati
 import { ResendEmailConfirmation } from '../Domain/UseCase/ResendEmailConfirmation/ResendEmailConfirmation'
 import { EmailSenderInterface } from '../Domain/Email/EmailSenderInterface'
 import { SmtpEmailSender } from '../Domain/Email/SmtpEmailSender'
+import { BackupAttachmentStorageInterface } from '../Domain/Email/BackupAttachmentStorageInterface'
+import { FSOrS3BackupAttachmentStorage } from '../Infra/Backup/FSOrS3BackupAttachmentStorage'
 import { GenerateMagicLinkCode } from '../Domain/UseCase/GenerateMagicLinkCode/GenerateMagicLinkCode'
 import { VerifyMagicLinkCode } from '../Domain/UseCase/VerifyMagicLinkCode/VerifyMagicLinkCode'
 import { MagicLinkController } from '../Controller/MagicLinkController'
@@ -662,12 +665,20 @@ export class ContainerConfigLoader {
       const sqsClient = new SQSClient(sqsConfig)
       container.bind<SQSClient>(TYPES.Auth_SQS).toConstantValue(sqsClient)
 
-      container.bind<S3Client>(TYPES.Auth_S3).toConstantValue(
-        new S3Client({
-          apiVersion: 'latest',
-          region: env.get('S3_AWS_REGION', true),
-        }),
-      )
+      const s3Config: S3ClientConfig = {
+        apiVersion: 'latest',
+        region: env.get('S3_AWS_REGION', true),
+      }
+      if (env.get('S3_ENDPOINT', true)) {
+        s3Config.endpoint = env.get('S3_ENDPOINT', true)
+      }
+      if (env.get('S3_ACCESS_KEY_ID', true) && env.get('S3_SECRET_ACCESS_KEY', true)) {
+        s3Config.credentials = {
+          accessKeyId: env.get('S3_ACCESS_KEY_ID', true),
+          secretAccessKey: env.get('S3_SECRET_ACCESS_KEY', true),
+        }
+      }
+      container.bind<S3Client>(TYPES.Auth_S3).toConstantValue(new S3Client(s3Config))
 
       container
         .bind<CSVFileReaderInterface>(TYPES.Auth_CSVFileReader)
@@ -1223,6 +1234,13 @@ export class ContainerConfigLoader {
     container.bind(TYPES.Auth_SMTP_USER).toConstantValue(env.get('SMTP_USER', true))
     container.bind(TYPES.Auth_SMTP_PASS).toConstantValue(env.get('SMTP_PASS', true))
     container.bind(TYPES.Auth_SMTP_FROM).toConstantValue(env.get('SMTP_FROM', true))
+    container.bind(TYPES.Auth_FILE_UPLOAD_PATH).toConstantValue(env.get('FILE_UPLOAD_PATH', true))
+    container.bind(TYPES.Auth_S3_BACKUP_BUCKET_NAME).toConstantValue(env.get('S3_BACKUP_BUCKET_NAME', true))
+    container
+      .bind<number>(TYPES.Auth_EMAIL_ATTACHMENT_MAX_BYTE_SIZE)
+      .toConstantValue(
+        env.get('EMAIL_ATTACHMENT_MAX_BYTE_SIZE', true) ? +env.get('EMAIL_ATTACHMENT_MAX_BYTE_SIZE', true) : 10485760,
+      )
     // Standard Red Notes: operator switch for scheduled email backups. Default OFF.
     // The trigger job additionally requires SMTP to be configured before it will
     // generate/send anything (see TriggerEmailBackupForAllUsers).
@@ -1266,6 +1284,16 @@ export class ContainerConfigLoader {
         container.get<winston.Logger>(TYPES.Auth_Logger),
       ),
     )
+    container
+      .bind<BackupAttachmentStorageInterface>(TYPES.Auth_BackupAttachmentStorage)
+      .toConstantValue(
+        new FSOrS3BackupAttachmentStorage(
+          container.get(TYPES.Auth_FILE_UPLOAD_PATH),
+          container.get(TYPES.Auth_S3_BACKUP_BUCKET_NAME),
+          container.isBound(TYPES.Auth_S3) ? container.get<S3Client>(TYPES.Auth_S3) : undefined,
+          container.get<number>(TYPES.Auth_EMAIL_ATTACHMENT_MAX_BYTE_SIZE),
+        ),
+      )
     // Standard Red Notes: a dedicated sender for email reminders so operators can
     // use a distinct From address. Sender resolution: EMAIL_REMINDER_FROM if set,
     // otherwise fall back to the shared SMTP_FROM. Same SMTP transport/credentials.
@@ -2690,6 +2718,7 @@ export class ContainerConfigLoader {
           container.get<GetUserKeyParams>(TYPES.Auth_GetUserKeyParams),
           container.get<DomainEventPublisherInterface>(TYPES.Auth_DomainEventPublisher),
           container.get<DomainEventFactoryInterface>(TYPES.Auth_DomainEventFactory),
+          container.get<boolean>(TYPES.Auth_EMAIL_BACKUPS_ENABLED),
         ),
       )
     container.bind<TriggerEmailBackupForAllUsers>(TYPES.Auth_TriggerEmailBackupForAllUsers).toConstantValue(
@@ -2697,7 +2726,6 @@ export class ContainerConfigLoader {
         container.get<SettingRepositoryInterface>(TYPES.Auth_SettingRepository),
         container.get<TriggerEmailBackupForUser>(TYPES.Auth_TriggerEmailBackupForUser),
         container.get<GetSetting>(TYPES.Auth_GetSetting),
-        container.get<SetSettingValue>(TYPES.Auth_SetSettingValue),
         container.get<TimerInterface>(TYPES.Auth_Timer),
         container.get<winston.Logger>(TYPES.Auth_Logger),
         container.get<boolean>(TYPES.Auth_EMAIL_BACKUPS_ENABLED),
@@ -3131,6 +3159,19 @@ export class ContainerConfigLoader {
     container
       .bind<WebhookItemsChangedEventHandler>(TYPES.Auth_WebhookItemsChangedEventHandler)
       .toConstantValue(new WebhookItemsChangedEventHandler(container.get(TYPES.Auth_WebhookDispatcher)))
+    container
+      .bind<EmailRequestedEventHandler>(TYPES.Auth_EmailRequestedEventHandler)
+      .toConstantValue(
+        new EmailRequestedEventHandler(
+          container.get<EmailSenderInterface>(TYPES.Auth_EmailSender),
+          container.get<BackupAttachmentStorageInterface>(TYPES.Auth_BackupAttachmentStorage),
+          container.get<GetSetting>(TYPES.Auth_GetSetting),
+          container.get<SetSettingValue>(TYPES.Auth_SetSettingValue),
+          container.get<TimerInterface>(TYPES.Auth_Timer),
+          container.get<boolean>(TYPES.Auth_EMAIL_BACKUPS_ENABLED),
+          container.get<winston.Logger>(TYPES.Auth_Logger),
+        ),
+      )
 
     const eventHandlers: Map<string, DomainEventHandlerInterface> = new Map([
       ['ACCOUNT_DELETION_REQUESTED', container.get(TYPES.Auth_AccountDeletionRequestedEventHandler)],
@@ -3158,6 +3199,7 @@ export class ContainerConfigLoader {
       ],
       ['PREDICATE_VERIFICATION_REQUESTED', container.get(TYPES.Auth_PredicateVerificationRequestedEventHandler)],
       ['EMAIL_SUBSCRIPTION_UNSUBSCRIBED', container.get(TYPES.Auth_EmailSubscriptionUnsubscribedEventHandler)],
+      ['EMAIL_REQUESTED', container.get(TYPES.Auth_EmailRequestedEventHandler)],
       ['PAYMENTS_ACCOUNT_DELETED', container.get(TYPES.Auth_PaymentsAccountDeletedEventHandler)],
       ['USER_ADDED_TO_SHARED_VAULT', container.get(TYPES.Auth_UserAddedToSharedVaultEventHandler)],
       ['USER_REMOVED_FROM_SHARED_VAULT', container.get(TYPES.Auth_UserRemovedFromSharedVaultEventHandler)],

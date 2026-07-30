@@ -7,6 +7,7 @@ import { Logger } from 'winston'
 import { dirname, isAbsolute, relative, resolve } from 'path'
 
 import { Item } from '../../Domain/Item/Item'
+import { BackupContentTooLargeError } from '../../Domain/Item/BackupContentTooLargeError'
 import { ItemBackupServiceInterface } from '../../Domain/Item/ItemBackupServiceInterface'
 import { ItemBackupRepresentation } from '../../Mapping/Backup/ItemBackupRepresentation'
 import { ItemHttpRepresentation } from '../../Mapping/Http/ItemHttpRepresentation'
@@ -15,7 +16,7 @@ export interface FSItemBackupOperations {
   mkdir(path: string, options: { recursive: true; mode: number }): Promise<unknown>
   chmod(path: string, mode: number): Promise<void>
   open(path: string, flags: 'wx', mode: number): Promise<FileHandle>
-  rename(oldPath: string, newPath: string): Promise<void>
+  link(existingPath: string, newPath: string): Promise<void>
   rm(path: string, options: { force: true }): Promise<void>
 }
 
@@ -23,7 +24,7 @@ const nodeFileOperations: FSItemBackupOperations = {
   mkdir: (path, options) => promises.mkdir(path, options),
   chmod: (path, mode) => promises.chmod(path, mode),
   open: (path, flags, mode) => promises.open(path, flags, mode),
-  rename: (oldPath, newPath) => promises.rename(oldPath, newPath),
+  link: (existingPath, newPath) => promises.link(existingPath, newPath),
   rm: (path, options) => promises.rm(path, options),
 }
 
@@ -49,27 +50,38 @@ export class FSItemBackupService implements ItemBackupServiceInterface {
     const backupFileNames: string[] = []
     let bundle: ItemHttpRepresentation[] = []
 
-    for (const item of items) {
-      const projection = this.httpMapper.toProjection(item)
-      const candidateBundle = [...bundle, projection]
+    try {
+      for (const item of items) {
+        const projection = this.httpMapper.toProjection(item)
+        if (
+          contentSizeLimit !== undefined &&
+          this.backupContentsByteLength([projection], authParams) > contentSizeLimit
+        ) {
+          throw new BackupContentTooLargeError()
+        }
+        const candidateBundle = [...bundle, projection]
 
-      if (
-        contentSizeLimit !== undefined &&
-        bundle.length > 0 &&
-        this.backupContentsByteLength(candidateBundle, authParams) > contentSizeLimit
-      ) {
-        backupFileNames.push(await this.createBackupFile(bundle, authParams))
-        bundle = [projection]
-      } else {
-        bundle = candidateBundle
+        if (
+          contentSizeLimit !== undefined &&
+          bundle.length > 0 &&
+          this.backupContentsByteLength(candidateBundle, authParams) > contentSizeLimit
+        ) {
+          backupFileNames.push(await this.createBackupFile(bundle, authParams))
+          bundle = [projection]
+        } else {
+          bundle = candidateBundle
+        }
       }
-    }
 
-    if (bundle.length > 0) {
-      backupFileNames.push(await this.createBackupFile(bundle, authParams))
-    }
+      if (bundle.length > 0) {
+        backupFileNames.push(await this.createBackupFile(bundle, authParams))
+      }
 
-    return backupFileNames
+      return backupFileNames
+    } catch (error) {
+      await this.deleteIncompleteBackups(backupFileNames)
+      throw error
+    }
   }
 
   async dump(item: Item): Promise<Result<string>> {
@@ -98,6 +110,12 @@ export class FSItemBackupService implements ItemBackupServiceInterface {
     }
   }
 
+  async delete(fileName: string): Promise<void> {
+    const path = this.resolvePathInsideDirectory(this.backupDirectory(), fileName)
+
+    await this.fileOperations.rm(path, { force: true })
+  }
+
   private backupContents(itemRepresentations: ItemHttpRepresentation[], authParams: KeyParamsData): string {
     return JSON.stringify({
       items: itemRepresentations,
@@ -107,6 +125,20 @@ export class FSItemBackupService implements ItemBackupServiceInterface {
 
   private backupContentsByteLength(itemRepresentations: ItemHttpRepresentation[], authParams: KeyParamsData): number {
     return Buffer.byteLength(this.backupContents(itemRepresentations, authParams), 'utf8')
+  }
+
+  private async deleteIncompleteBackups(fileNames: string[]): Promise<void> {
+    for (const fileName of fileNames) {
+      try {
+        await this.delete(fileName)
+      } catch {
+        try {
+          this.logger.error('Incomplete filesystem item backup could not be deleted')
+        } catch {
+          // Preserve the primary backup failure even if diagnostics are broken.
+        }
+      }
+    }
   }
 
   private async createBackupFile(
@@ -137,9 +169,16 @@ export class FSItemBackupService implements ItemBackupServiceInterface {
       await fileHandle.close()
       fileHandle = undefined
 
-      await this.fileOperations.rename(temporaryPath, destinationPath)
+      // Hard-link publication is atomic and refuses to replace an existing
+      // destination if the UUID generator ever collides.
+      await this.fileOperations.link(temporaryPath, destinationPath)
 
-      this.logger.debug(`Created item backup ${destinationPath}`)
+      try {
+        this.logger.debug(`Created item backup ${destinationPath}`)
+      } catch {
+        // Diagnostic logging must never turn an already-published artifact into
+        // an untracked orphan.
+      }
 
       return fileName
     } finally {

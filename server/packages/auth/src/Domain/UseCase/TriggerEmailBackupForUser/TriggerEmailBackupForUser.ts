@@ -13,9 +13,14 @@ export class TriggerEmailBackupForUser implements UseCaseInterface<void> {
     private getUserKeyParamsUseCase: GetUserKeyParams,
     private domainEventPublisher: DomainEventPublisherInterface,
     private domainEventFactory: DomainEventFactoryInterface,
+    private emailBackupsEnabled: boolean,
   ) {}
 
   async execute(dto: TriggerEmailBackupForUserDTO): Promise<Result<void>> {
+    if (!this.emailBackupsEnabled) {
+      return Result.ok()
+    }
+
     const userUuidOrError = Uuid.create(dto.userUuid)
     if (userUuidOrError.isFailed()) {
       return Result.fail(userUuidOrError.getError())

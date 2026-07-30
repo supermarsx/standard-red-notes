@@ -56,12 +56,16 @@ export class SettingName extends ValueObject<SettingNameProps> {
     // "Account recovery" opt-in for the full warning and tradeoff.
     AccountRecoveryEscrow: 'ACCOUNT_RECOVERY_ESCROW',
     // Standard Red Notes: server-managed bookkeeping for scheduled email backups.
-    // Records the last time an email backup was triggered for the user, as a
-    // millisecond epoch string. Used by the due-calculation so a single cron can
-    // serve daily/weekly/monthly cadences and catch up missed runs. Server-written
-    // only (CLIENT-IMMUTABLE); unencrypted/unsensitive so the trigger job can read
-    // it without per-user key material.
+    // Records the last time a complete backup (or explicit oversized-item failure
+    // notice) was accepted by SMTP, as a millisecond epoch string. Used by the
+    // due-calculation so a single cron can serve daily/weekly/monthly cadences and
+    // catch up missed runs. Server-written only (CLIENT-IMMUTABLE);
+    // unencrypted/unsensitive so the trigger job can read it without key material.
     EmailBackupLastSent: 'EMAIL_BACKUP_LAST_SENT',
+    // Server-only receipt state for email-backup batches. Stores a bounded JSON
+    // history of completed batch UUIDs and delivery timestamps so a replay can
+    // finish bookkeeping without resending already accepted SMTP messages.
+    EmailBackupDeliveryState: 'EMAIL_BACKUP_DELIVERY_STATE',
     // Standard Red Notes: per-user, OFF-BY-DEFAULT scheduled encrypted-backup
     // upload to a Nextcloud instance over WebDAV. This is NOT a sync replacement:
     // it uploads the user's ALREADY end-to-end-encrypted backup artifact (the same

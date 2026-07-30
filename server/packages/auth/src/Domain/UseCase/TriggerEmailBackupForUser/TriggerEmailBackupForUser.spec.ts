@@ -10,9 +10,16 @@ describe('TriggerEmailBackupForUser', () => {
   let getUserKeyParamsUseCase: GetUserKeyParams
   let domainEventPublisher: DomainEventPublisherInterface
   let domainEventFactory: DomainEventFactoryInterface
+  let emailBackupsEnabled: boolean
 
   const createUseCase = () =>
-    new TriggerEmailBackupForUser(roleService, getUserKeyParamsUseCase, domainEventPublisher, domainEventFactory)
+    new TriggerEmailBackupForUser(
+      roleService,
+      getUserKeyParamsUseCase,
+      domainEventPublisher,
+      domainEventFactory,
+      emailBackupsEnabled,
+    )
 
   beforeEach(() => {
     roleService = {} as jest.Mocked<RoleServiceInterface>
@@ -26,6 +33,8 @@ describe('TriggerEmailBackupForUser', () => {
 
     domainEventFactory = {} as jest.Mocked<DomainEventFactoryInterface>
     domainEventFactory.createEmailBackupRequestedEvent = jest.fn().mockReturnValue({} as EmailBackupRequestedEvent)
+
+    emailBackupsEnabled = true
   })
 
   it('publishes EmailBackupRequestedEvent', async () => {
@@ -51,5 +60,15 @@ describe('TriggerEmailBackupForUser', () => {
     const result = await useCase.execute({ userUuid: '00000000-0000-0000-0000-000000000000' })
 
     expect(result.isFailed()).toBe(true)
+  })
+
+  it('does not inspect the user or publish when the operator switch is off', async () => {
+    emailBackupsEnabled = false
+
+    const result = await createUseCase().execute({ userUuid: '00000000-0000-0000-0000-000000000000' })
+
+    expect(result.isFailed()).toBe(false)
+    expect(roleService.userHasPermission).not.toHaveBeenCalled()
+    expect(domainEventPublisher.publish).not.toHaveBeenCalled()
   })
 })

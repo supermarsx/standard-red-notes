@@ -5,6 +5,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { Logger } from 'winston'
 
+import { BackupContentTooLargeError } from '../../Domain/Item/BackupContentTooLargeError'
 import { Item } from '../../Domain/Item/Item'
 import { ItemBackupRepresentation } from '../../Mapping/Backup/ItemBackupRepresentation'
 import { ItemHttpRepresentation } from '../../Mapping/Http/ItemHttpRepresentation'
@@ -63,7 +64,7 @@ describe('FSItemBackupService', () => {
     mkdir: (path, options) => fs.mkdir(path, options),
     chmod: (path, mode) => fs.chmod(path, mode),
     open: openForTest,
-    rename: (oldPath, newPath) => fs.rename(oldPath, newPath),
+    link: (existingPath, newPath) => fs.link(existingPath, newPath),
     rm: (path, options) => fs.rm(path, options),
     ...overrides,
   })
@@ -90,6 +91,7 @@ describe('FSItemBackupService', () => {
 
     logger = {} as jest.Mocked<Logger>
     logger.debug = jest.fn()
+    logger.error = jest.fn()
   })
 
   afterEach(async () => {
@@ -128,6 +130,21 @@ describe('FSItemBackupService', () => {
     })
   })
 
+  it('returns the published filename even when diagnostic logging fails', async () => {
+    ;(logger.debug as jest.Mock).mockImplementation(() => {
+      throw new Error('logging transport failed')
+    })
+    const ids = ['owned-backup', 'owned-temp']
+
+    await expect(createService(() => ids.shift() as string).backup([item('item-1')], authParams)).resolves.toEqual([
+      'owned-backup.json',
+    ])
+    await expect(readBackup('owned-backup.json')).resolves.toEqual({
+      items: [projection('item-1')],
+      auth_params: authParams,
+    })
+  })
+
   it('bundles by complete UTF-8 backup JSON byte size', async () => {
     const firstProjection = projection('item-1', 'é'.repeat(20))
     const secondProjection = projection('item-2', 'encrypted-two')
@@ -155,7 +172,7 @@ describe('FSItemBackupService', () => {
     }
   })
 
-  it('writes one oversized item instead of emitting an empty file', async () => {
+  it('rejects one oversized item without emitting an empty or oversized file', async () => {
     const oversizedProjection = projection('oversized', 'x'.repeat(1_000))
     ;(httpMapper.toProjection as jest.Mock).mockReturnValueOnce(oversizedProjection)
     const singleItemSize = Buffer.byteLength(
@@ -163,14 +180,67 @@ describe('FSItemBackupService', () => {
       'utf8',
     )
 
-    const fileNames = await createService().backup([item('oversized')], authParams, singleItemSize - 1)
+    await expect(createService().backup([item('oversized')], authParams, singleItemSize - 1)).rejects.toThrow(
+      'A single item cannot fit within the configured email attachment limit',
+    )
+    await expect(fs.readdir(join(uploadPath, 'backups'))).rejects.toMatchObject({ code: 'ENOENT' })
+  })
 
-    expect(fileNames).toHaveLength(1)
-    await expect(readBackup(fileNames[0])).resolves.toEqual({
-      items: [oversizedProjection],
-      auth_params: authParams,
+  it('rolls back an earlier bundle when a later item is oversized', async () => {
+    const firstProjection = projection('item-1', 'first')
+    const secondProjection = projection('item-2', 'second')
+    const oversizedProjection = projection('oversized', 'x'.repeat(1_000))
+    ;(httpMapper.toProjection as jest.Mock)
+      .mockReturnValueOnce(firstProjection)
+      .mockReturnValueOnce(secondProjection)
+      .mockReturnValueOnce(oversizedProjection)
+    const oneItemLimit = Math.max(
+      Buffer.byteLength(JSON.stringify({ items: [firstProjection], auth_params: authParams }), 'utf8'),
+      Buffer.byteLength(JSON.stringify({ items: [secondProjection], auth_params: authParams }), 'utf8'),
+    )
+    const ids = ['first-backup', 'first-temp']
+
+    await expect(
+      createService(() => ids.shift() as string).backup(
+        [item('item-1'), item('item-2'), item('oversized')],
+        authParams,
+        oneItemLimit,
+      ),
+    ).rejects.toThrow('A single item cannot fit within the configured email attachment limit')
+
+    await expect(fs.readdir(join(uploadPath, 'backups'))).resolves.toEqual([])
+  })
+
+  it('does not mask the typed oversized error when rollback itself fails', async () => {
+    const firstProjection = projection('item-1', 'first')
+    const secondProjection = projection('item-2', 'second')
+    const oversizedProjection = projection('oversized', 'x'.repeat(1_000))
+    ;(httpMapper.toProjection as jest.Mock)
+      .mockReturnValueOnce(firstProjection)
+      .mockReturnValueOnce(secondProjection)
+      .mockReturnValueOnce(oversizedProjection)
+    const oneItemLimit = Math.max(
+      Buffer.byteLength(JSON.stringify({ items: [firstProjection], auth_params: authParams }), 'utf8'),
+      Buffer.byteLength(JSON.stringify({ items: [secondProjection], auth_params: authParams }), 'utf8'),
+    )
+    const ids = ['first-backup', 'first-temp']
+    const operations = testOperations({
+      rm: async (path, options) => {
+        if (path.endsWith('first-backup.json')) {
+          throw new Error('rollback storage failure')
+        }
+        await fs.rm(path, options)
+      },
     })
-    expect((await fs.readdir(join(uploadPath, 'backups'))).filter((name) => name.endsWith('.json'))).toHaveLength(1)
+
+    await expect(
+      createService(() => ids.shift() as string, operations).backup(
+        [item('item-1'), item('item-2'), item('oversized')],
+        authParams,
+        oneItemLimit,
+      ),
+    ).rejects.toBeInstanceOf(BackupContentTooLargeError)
+    expect(logger.error).toHaveBeenCalledWith('Incomplete filesystem item backup could not be deleted')
   })
 
   it('returns no files for an empty item set and rejects invalid limits', async () => {
@@ -196,19 +266,47 @@ describe('FSItemBackupService', () => {
     expect(open).toHaveBeenCalledWith(expect.stringContaining('.partial'), 'wx', 0o600)
   })
 
-  it('removes the temporary file when atomic publication fails', async () => {
+  it('removes the temporary file when exclusive atomic publication fails', async () => {
     const ids = ['backup-id', 'temp-id']
     const operations = testOperations({
-      rename: async () => {
-        throw new Error('simulated rename failure')
+      link: async () => {
+        throw new Error('simulated publication failure')
       },
     })
 
     await expect(
       createService(() => ids.shift() as string, operations).backup([item('item-1')], authParams),
-    ).rejects.toThrow('simulated rename failure')
+    ).rejects.toThrow('simulated publication failure')
 
     await expect(fs.readdir(join(uploadPath, 'backups'))).resolves.toEqual([])
+  })
+
+  it('never overwrites or rolls back a pre-existing file when a generated name collides', async () => {
+    const backupDirectory = join(uploadPath, 'backups')
+    const existingPath = join(backupDirectory, 'collision.json')
+    await fs.mkdir(backupDirectory)
+    await fs.writeFile(existingPath, 'pre-existing')
+    const ids = ['collision', 'collision-temp']
+
+    await expect(createService(() => ids.shift() as string).backup([item('item-1')], authParams)).rejects.toMatchObject(
+      { code: 'EEXIST' },
+    )
+
+    await expect(fs.readFile(existingPath, 'utf8')).resolves.toBe('pre-existing')
+    await expect(fs.readdir(backupDirectory)).resolves.toEqual(['collision.json'])
+  })
+
+  it('deletes only a direct child created in the backup directory', async () => {
+    const ids = ['owned-backup', 'owned-temp']
+    const service = createService(() => ids.shift() as string)
+    const [fileName] = await service.backup([item('item-1')], authParams)
+    const outsidePath = join(uploadPath, 'outside.json')
+    await fs.writeFile(outsidePath, 'do-not-delete')
+
+    await expect(service.delete(fileName)).resolves.toBeUndefined()
+    await expect(fs.stat(join(uploadPath, 'backups', fileName))).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(service.delete('../outside.json')).rejects.toThrow('Invalid backup path')
+    await expect(fs.readFile(outsidePath, 'utf8')).resolves.toBe('do-not-delete')
   })
 
   it('rejects generated paths that escape the dedicated backup directory', async () => {

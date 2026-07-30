@@ -338,11 +338,15 @@ export class DomainEventFactory implements DomainEventFactoryInterface {
     body: string
     subject: string
     sender?: string
+    backupBatchId?: string
     attachments?: Array<{
       filePath: string
       fileName: string
       attachmentFileName: string
       attachmentContentType: string
+      emailSubject?: string
+      batchIndex?: number
+      batchCount?: number
     }>
     userUuid?: string
   }): EmailRequestedEvent {

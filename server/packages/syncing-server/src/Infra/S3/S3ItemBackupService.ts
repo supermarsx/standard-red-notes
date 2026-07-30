@@ -1,9 +1,10 @@
 import * as uuid from 'uuid'
-import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
+import { DeleteObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import { KeyParamsData } from '@standardnotes/responses'
 import { Logger } from 'winston'
 
 import { Item } from '../../Domain/Item/Item'
+import { BackupContentTooLargeError } from '../../Domain/Item/BackupContentTooLargeError'
 import { ItemBackupServiceInterface } from '../../Domain/Item/ItemBackupServiceInterface'
 import { MapperInterface, Result } from '@standardnotes/domain-core'
 import { ItemBackupRepresentation } from '../../Mapping/Backup/ItemBackupRepresentation'
@@ -34,6 +35,7 @@ export class S3ItemBackupService implements ItemBackupServiceInterface {
           Body: JSON.stringify({
             item: this.backupMapper.toProjection(item),
           }),
+          IfNoneMatch: '*',
         }),
       )
 
@@ -44,64 +46,116 @@ export class S3ItemBackupService implements ItemBackupServiceInterface {
   }
 
   async backup(items: Item[], authParams: KeyParamsData, contentSizeLimit?: number): Promise<string[]> {
-    if (!this.s3BackupBucketName || this.s3Client === undefined) {
-      this.logger.warn('S3 backup not configured')
-
+    if (items.length === 0) {
       return []
     }
 
-    const fileNames = []
-    let itemProjections: Array<ItemHttpRepresentation> = []
-    let contentSizeCounter = 0
-    for (const item of items) {
-      const itemProjection = this.httpMapper.toProjection(item)
+    if (!this.s3BackupBucketName || this.s3Client === undefined) {
+      this.logger.warn('S3 backup not configured')
 
-      if (contentSizeLimit === undefined) {
-        itemProjections.push(itemProjection)
+      throw new Error('S3 backup not configured')
+    }
 
-        continue
+    if (contentSizeLimit !== undefined && (!Number.isSafeInteger(contentSizeLimit) || contentSizeLimit <= 0)) {
+      throw new Error('Backup content size limit must be a positive integer')
+    }
+
+    const fileNames: string[] = []
+    let itemProjections: ItemHttpRepresentation[] = []
+    try {
+      for (const item of items) {
+        const itemProjection = this.httpMapper.toProjection(item)
+        if (
+          contentSizeLimit !== undefined &&
+          this.backupContentsByteLength([itemProjection], authParams) > contentSizeLimit
+        ) {
+          throw new BackupContentTooLargeError()
+        }
+        const candidateProjections = [...itemProjections, itemProjection]
+
+        if (
+          contentSizeLimit !== undefined &&
+          itemProjections.length > 0 &&
+          this.backupContentsByteLength(candidateProjections, authParams) > contentSizeLimit
+        ) {
+          const backupFileName = await this.createBackupFile(itemProjections, authParams)
+          fileNames.push(backupFileName)
+
+          itemProjections = [itemProjection]
+        } else {
+          itemProjections = candidateProjections
+        }
       }
 
-      const itemContentSize = Buffer.byteLength(JSON.stringify(itemProjection))
-
-      if (contentSizeCounter + itemContentSize <= contentSizeLimit) {
-        itemProjections.push(itemProjection)
-
-        contentSizeCounter += itemContentSize
-      } else {
+      if (itemProjections.length > 0) {
         const backupFileName = await this.createBackupFile(itemProjections, authParams)
         fileNames.push(backupFileName)
-
-        itemProjections = [itemProjection]
-        contentSizeCounter = itemContentSize
       }
+
+      return fileNames
+    } catch (error) {
+      await this.deleteIncompleteBackups(fileNames)
+      throw error
+    }
+  }
+
+  async delete(fileName: string): Promise<void> {
+    if (!this.s3BackupBucketName || this.s3Client === undefined) {
+      throw new Error('S3 backup not configured')
     }
 
-    if (itemProjections.length > 0) {
-      const backupFileName = await this.createBackupFile(itemProjections, authParams)
-      fileNames.push(backupFileName)
-    }
-
-    return fileNames
+    await this.s3Client.send(
+      new DeleteObjectCommand({
+        Bucket: this.s3BackupBucketName,
+        Key: fileName,
+      }),
+    )
   }
 
   private async createBackupFile(
     itemRepresentations: ItemHttpRepresentation[],
     authParams: KeyParamsData,
   ): Promise<string> {
+    if (itemRepresentations.length === 0) {
+      throw new Error('Refusing to create an empty backup file')
+    }
+
     const fileName = uuid.v4()
 
     await (this.s3Client as S3Client).send(
       new PutObjectCommand({
         Bucket: this.s3BackupBucketName,
         Key: fileName,
-        Body: JSON.stringify({
-          items: itemRepresentations,
-          auth_params: authParams,
-        }),
+        Body: this.backupContents(itemRepresentations, authParams),
+        IfNoneMatch: '*',
       }),
     )
 
     return fileName
+  }
+
+  private backupContents(itemRepresentations: ItemHttpRepresentation[], authParams: KeyParamsData): string {
+    return JSON.stringify({
+      items: itemRepresentations,
+      auth_params: authParams,
+    })
+  }
+
+  private backupContentsByteLength(itemRepresentations: ItemHttpRepresentation[], authParams: KeyParamsData): number {
+    return Buffer.byteLength(this.backupContents(itemRepresentations, authParams), 'utf8')
+  }
+
+  private async deleteIncompleteBackups(fileNames: string[]): Promise<void> {
+    for (const fileName of fileNames) {
+      try {
+        await this.delete(fileName)
+      } catch {
+        try {
+          this.logger.error('Incomplete S3 item backup could not be deleted')
+        } catch {
+          // Preserve the primary backup failure even if diagnostics are broken.
+        }
+      }
+    }
   }
 }

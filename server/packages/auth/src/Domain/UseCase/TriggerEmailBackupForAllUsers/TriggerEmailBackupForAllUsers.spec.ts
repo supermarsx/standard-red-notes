@@ -2,7 +2,6 @@ import { Logger } from 'winston'
 import { SettingRepositoryInterface } from '../../Setting/SettingRepositoryInterface'
 import { TriggerEmailBackupForUser } from '../TriggerEmailBackupForUser/TriggerEmailBackupForUser'
 import { GetSetting } from '../GetSetting/GetSetting'
-import { SetSettingValue } from '../SetSettingValue/SetSettingValue'
 import { TriggerEmailBackupForAllUsers } from './TriggerEmailBackupForAllUsers'
 import { EncryptionVersion } from '../../Encryption/EncryptionVersion'
 import { TimerInterface } from '@standardnotes/time'
@@ -14,7 +13,6 @@ describe('TriggerEmailBackupForAllUsers', () => {
   let settingRepository: SettingRepositoryInterface
   let triggerEmailBackupForUserUseCase: TriggerEmailBackupForUser
   let getSetting: GetSetting
-  let setSettingValue: SetSettingValue
   let timer: TimerInterface
   let logger: Logger
   let emailBackupsEnabled: boolean
@@ -29,7 +27,6 @@ describe('TriggerEmailBackupForAllUsers', () => {
       settingRepository,
       triggerEmailBackupForUserUseCase,
       getSetting,
-      setSettingValue,
       timer,
       logger,
       emailBackupsEnabled,
@@ -57,9 +54,6 @@ describe('TriggerEmailBackupForAllUsers', () => {
     // Default: user has never received a backup -> due.
     getSetting.execute = jest.fn().mockResolvedValue(Result.fail('not found'))
 
-    setSettingValue = {} as jest.Mocked<SetSettingValue>
-    setSettingValue.execute = jest.fn().mockResolvedValue(Result.ok({} as Setting))
-
     timer = {} as jest.Mocked<TimerInterface>
     timer.getTimestampInMicroseconds = jest.fn().mockReturnValue(NOW_MICROS)
     timer.convertMicrosecondsToMilliseconds = jest.fn().mockReturnValue(NOW_MS)
@@ -73,18 +67,11 @@ describe('TriggerEmailBackupForAllUsers', () => {
     emailDeliveryConfigured = true
   })
 
-  it('triggers email backup for a due user and records last-sent', async () => {
+  it('triggers an email backup for a due user and leaves last-sent to confirmed delivery', async () => {
     const result = await createUseCase().execute({ backupFrequency: 'daily' })
 
     expect(result.isFailed()).toBeFalsy()
     expect(triggerEmailBackupForUserUseCase.execute).toHaveBeenCalled()
-    expect(setSettingValue.execute).toHaveBeenCalledWith(
-      expect.objectContaining({
-        settingName: SettingName.NAMES.EmailBackupLastSent,
-        value: String(NOW_MS),
-        checkUserPermissions: false,
-      }),
-    )
   })
 
   it('no-ops when the operator has not enabled email backups', async () => {
@@ -124,33 +111,18 @@ describe('TriggerEmailBackupForAllUsers', () => {
 
     expect(result.isFailed()).toBeFalsy()
     expect(triggerEmailBackupForUserUseCase.execute).not.toHaveBeenCalled()
-    expect(setSettingValue.execute).not.toHaveBeenCalled()
   })
 
-  it('continues the scheduler pass when a user backup fails, and does not record a last-sent', async () => {
+  it('continues the scheduler pass when a user backup request fails', async () => {
     triggerEmailBackupForUserUseCase.execute = jest.fn().mockResolvedValue(Result.fail('SMTP unavailable'))
 
     const result = await createUseCase().execute({ backupFrequency: 'daily' })
 
     expect(result.isFailed()).toBeFalsy()
-    expect(setSettingValue.execute).not.toHaveBeenCalled()
     expect(logger.error).toHaveBeenCalledWith('Failed to trigger email backup for user: SMTP unavailable', {
       userId: USER_UUID,
     })
     expect(logger.error).toHaveBeenCalledWith('Failed to trigger email backup for 1 users')
-  })
-
-  it('reports a last-sent persistence failure without failing the completed backup', async () => {
-    setSettingValue.execute = jest.fn().mockResolvedValue(Result.fail('database unavailable'))
-
-    const result = await createUseCase().execute({ backupFrequency: 'daily' })
-
-    expect(result.isFailed()).toBeFalsy()
-    expect(triggerEmailBackupForUserUseCase.execute).toHaveBeenCalled()
-    expect(logger.error).toHaveBeenCalledWith(
-      `Failed to record email backup last-sent for user ${USER_UUID}: database unavailable`,
-    )
-    expect(logger.error).not.toHaveBeenCalledWith('Failed to trigger email backup for 1 users')
   })
 
   it.each([
