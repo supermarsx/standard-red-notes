@@ -1,0 +1,24 @@
+<ul class="docs-nav-list docs-nav-list--level-{{ include.level | default: 0 }}">
+  {% for item in include.items %}
+    {% if item.items %}
+      <li class="docs-nav-branch">
+        <details data-docs-nav-details{% if item.expanded %} open{% endif %}>
+          <summary>{{ item.title }}</summary>
+          {% assign next_level = include.level | default: 0 | plus: 1 %}
+          {% include navigation-items.html items=item.items level=next_level %}
+        </details>
+      </li>
+    {% else %}
+      {% assign item_path = item.url | split: '#' | first %}
+      <li class="docs-nav-leaf">
+        <a
+          href="{{ item.url | relative_url }}"
+          data-docs-nav-link
+          {% if item.url == item_path and page.url == item_path %}aria-current="page"{% endif %}
+        >
+          {{ item.title }}
+        </a>
+      </li>
+    {% endif %}
+  {% endfor %}
+</ul>

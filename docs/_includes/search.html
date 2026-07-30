@@ -1,0 +1,62 @@
+<div
+  class="docs-search"
+  data-docs-search
+  data-search-index-url="{{ '/assets/search-index.json' | relative_url }}"
+  data-search-base-url="{{ '/' | relative_url }}"
+>
+  <button
+    class="docs-search-trigger"
+    type="button"
+    data-search-trigger
+    aria-haspopup="dialog"
+    aria-controls="docs-search-dialog"
+    aria-keyshortcuts="Control+K Meta+K /"
+    hidden
+  >
+    <span class="docs-search-trigger-label">
+      <span aria-hidden="true">⌕</span>
+      <span>Search docs</span>
+    </span>
+    <kbd data-search-shortcut>Ctrl K</kbd>
+  </button>
+
+  <dialog id="docs-search-dialog" class="docs-search-dialog" data-search-dialog aria-labelledby="docs-search-title">
+    <div class="docs-search-panel">
+      <div class="docs-search-header">
+        <span class="docs-search-icon" aria-hidden="true">⌕</span>
+        <label class="visually-hidden" for="docs-search-input" id="docs-search-title">Search documentation</label>
+        <input
+          id="docs-search-input"
+          class="docs-search-input"
+          type="search"
+          inputmode="search"
+          autocomplete="off"
+          spellcheck="false"
+          placeholder="Search every guide and section..."
+          data-search-input
+          aria-describedby="docs-search-status"
+          aria-controls="docs-search-results"
+          aria-autocomplete="list"
+        />
+        <button class="docs-search-close" type="button" data-search-close aria-label="Close documentation search">
+          Esc
+        </button>
+      </div>
+
+      <p class="docs-search-status" id="docs-search-status" data-search-status aria-live="polite">
+        Type a word or phrase to search all documentation.
+      </p>
+      <ol
+        id="docs-search-results"
+        class="docs-search-results"
+        data-search-results
+      ></ol>
+
+      <footer class="docs-search-footer" aria-hidden="true">
+        <span><kbd>↑</kbd><kbd>↓</kbd> move</span>
+        <span><kbd>Enter</kbd> open</span>
+        <span><kbd>Esc</kbd> close</span>
+      </footer>
+    </div>
+  </dialog>
+</div>

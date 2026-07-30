@@ -22,6 +22,8 @@ instance to sign in to (your own, or one someone runs for you).
 
 ---
 
+{% include workspace-tour.html %}
+
 ## What this is
 
 Standard Red Notes is a private, **end-to-end encrypted** notes app. Your notes
@@ -60,12 +62,18 @@ Because notes are end-to-end encrypted, **your password is the key to your
 data**. The server never sees it and cannot reset it for you the way a typical
 website can.
 
-- If you **forget your password, your encrypted notes cannot be recovered.**
-  There is no backdoor — that's the point of end-to-end encryption.
+- If you **forget your password, the live encrypted account cannot be recovered
+  through any supported flow.** There is no backdoor — that's the point of
+  end-to-end encryption.
 - Choose a strong password and store it somewhere safe (a password manager is
   ideal).
 - Make regular **encrypted backups** (see [Import / export](#import--export)) so
   you always have a copy you control.
+
+> The source tree contains disabled, experimental recovery-escrow primitives,
+> but it does not contain a verified logged-out retrieval, credential-rotation,
+> and sign-in flow. Do not enable or depend on that substrate as a password
+> recovery feature.
 
 > Some servers may have a shared **Server Access Key** configured (an
 > obfuscation gate the operator sets). If yours does, enter it under
@@ -252,8 +260,10 @@ In **Preferences -> Backups / Data** you can:
   **decrypted** backup, or plaintext.
 - **Import** notes from a backup or from other apps' export formats.
 
-Make encrypted backups regularly. They're your safety net against a forgotten
-password or a lost server.
+Make backups regularly. An encrypted backup protects against device or server
+loss only while you retain its password. Recovering after a forgotten password
+requires an independently usable copy, such as a carefully protected decrypted
+export or an encrypted export whose password you still know.
 
 ---
 

@@ -22,7 +22,7 @@
     "build:openclaw": "yarn workspace @standard-red-notes/openclaw build",
     "build:server": "cd server && yarn build",
     "check": "yarn typecheck && yarn lint && yarn format:check && yarn test",
-    "ci:contracts": "yarn test:ci-tools && node scripts/validate-ci-contract.mjs && yarn test:release-contract && yarn release:contract && node scripts/export-app-docs-to-pages.mjs --check",
+    "ci:contracts": "yarn test:ci-tools && node scripts/validate-ci-contract.mjs && yarn test:release-contract && yarn release:contract && yarn docs:check",
     "ci:docker-hardening": "node scripts/validate-docker-hardening.mjs",
     "ci:verify-playwright": "node scripts/verify-playwright-report.mjs",
     "coverage": "yarn coverage:clean && yarn coverage:collect:app-core && yarn coverage:collect:app-web && yarn coverage:collect:server && yarn coverage:report",
@@ -44,6 +44,11 @@
     "docker:config": "docker compose config",
     "docker:down": "docker compose down",
     "docker:up": "docker compose up --build",
+    "docs:check": "node scripts/export-app-docs-to-pages.mjs --check && yarn docs:search:check && yarn docs:links && yarn docs:mermaid",
+    "docs:links": "node scripts/validate-docs-links.mjs",
+    "docs:mermaid": "node scripts/validate-mermaid-docs.mjs",
+    "docs:search:check": "node scripts/generate-docs-search-index.mjs --check",
+    "docs:search:index": "node scripts/generate-docs-search-index.mjs",
     "format": "yarn format:mcp && yarn format:openclaw && yarn format:app && yarn format:server",
     "format:app": "cd app && yarn format",
     "format:check": "yarn format:check:mcp && yarn format:check:openclaw && yarn format:check:app && yarn format:check:server",
@@ -73,7 +78,7 @@
     "test:mcp": "yarn workspace @standard-red-notes/mcp test",
     "test:openclaw": "yarn workspace @standard-red-notes/openclaw test",
     "test:release-contract": "node --test scripts/validate-release-contract.test.mjs",
-    "test:script-tools": "node --test scripts/export-app-docs-to-pages.test.mjs scripts/generate-brand-assets.test.mjs scripts/verify-backup-restore.test.mjs",
+    "test:script-tools": "node --test scripts/docs-browser-ui.test.mjs scripts/export-app-docs-to-pages.test.mjs scripts/generate-brand-assets.test.mjs scripts/generate-docs-search-index.test.mjs scripts/validate-docs-links.test.mjs scripts/validate-mermaid-docs.test.mjs scripts/verify-backup-restore.test.mjs",
     "test:server": "cd server && yarn build && yarn test",
     "typecheck": "yarn typecheck:mcp && yarn typecheck:openclaw",
     "typecheck:mcp": "yarn workspace @standard-red-notes/mcp typecheck",
@@ -82,6 +87,7 @@
   "devDependencies": {
     "istanbul-lib-coverage": "^3.2.2",
     "istanbul-lib-instrument": "^6.0.3",
+    "jsdom": "^29.1.1",
     "npm-check-updates": "^22.2.9",
     "turbo": "^2.10.5"
   }

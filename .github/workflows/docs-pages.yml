@@ -88,6 +88,12 @@ jobs:
         run: yarn coverage:report
       - name: Verify app documentation mirror
         run: node scripts/export-app-docs-to-pages.mjs --check
+      - name: Verify documentation search index
+        run: node scripts/generate-docs-search-index.mjs --check
+      - name: Validate documentation links and navigation
+        run: yarn docs:links
+      - name: Validate Mermaid diagrams
+        run: yarn docs:mermaid
       - uses: actions/configure-pages@v6
       - uses: actions/jekyll-build-pages@v1
         with:

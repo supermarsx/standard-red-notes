@@ -1,40 +1,193 @@
-- title: Overview
+- title: Start here
   items:
     - title: Documentation home
       url: /
-    - title: Onboarding
+    - title: Quick start
       url: /onboarding.html
-    - title: In-app guide
-      url: /app-guide.html
+    - title: Capability map
+      url: /capability-map.html
+    - title: Complete in-app guide
+      expanded: true
+      items:
+        - title: Guide overview
+          url: /app-guide.html
+        - title: Getting started
+          url: /app-guide.html#getting-started
+        - title: Privacy and encryption
+          url: /app-guide.html#encryption
+        - title: Account and security
+          url: /app-guide.html#security
+        - title: Notes and editors
+          url: /app-guide.html#editors
+        - title: Organizing notes
+          url: /app-guide.html#organization
+        - title: Files and attachments
+          url: /app-guide.html#files
+        - title: Sync and devices
+          url: /app-guide.html#sync
+        - title: Backups and export
+          url: /app-guide.html#backups
+        - title: Self-hosting
+          url: /app-guide.html#self-hosting
+        - title: AI assistant
+          url: /app-guide.html#assistant
+        - title: Collaboration
+          url: /app-guide.html#collaboration
+        - title: Automation with MCP
+          url: /app-guide.html#automation
+        - title: Keyboard shortcuts
+          url: /app-guide.html#shortcuts
+        - title: Troubleshooting
+          url: /app-guide.html#troubleshooting
+
+- title: Use the app
+  items:
+    - title: Client platforms
+      items:
+        - title: Platform overview
+          url: /client-platforms.html
+        - title: Capability matrix
+          url: /client-platforms.html#capability-matrix
+        - title: Web
+          url: /client-platforms.html#web
+        - title: Desktop
+          url: /client-platforms.html#desktop
+        - title: Android and iOS
+          url: /client-platforms.html#android-and-ios
+        - title: Browser clipper
+          url: /client-platforms.html#browser-clipper
+        - title: Choosing a client
+          url: /client-platforms.html#choosing-a-client
+    - title: Sync and data lifecycle
+      items:
+        - title: Lifecycle overview
+          url: /sync-and-data-lifecycle.html
+        - title: Data classes
+          url: /sync-and-data-lifecycle.html#data-classes
+        - title: Normal sync cycle
+          url: /sync-and-data-lifecycle.html#normal-sync-cycle
+        - title: Offline work
+          url: /sync-and-data-lifecycle.html#offline-work
+        - title: Conflicts
+          url: /sync-and-data-lifecycle.html#conflicts
+        - title: Shared vault sync
+          url: /sync-and-data-lifecycle.html#shared-vault-sync
+        - title: Revisions and deletion
+          url: /sync-and-data-lifecycle.html#revisions-trash-and-deletion
+        - title: Files
+          url: /sync-and-data-lifecycle.html#files
+        - title: Sync health checks
+          url: /sync-and-data-lifecycle.html#sync-health-checks
+    - title: Security and account
+      items:
+        - title: Security overview
+          url: /security-and-account.html
+        - title: Trust boundary
+          url: /security-and-account.html#trust-boundary
+        - title: Authentication controls
+          url: /security-and-account.html#authentication-controls
+        - title: Recovery
+          url: /security-and-account.html#recovery
+        - title: Protected notes and locks
+          url: /security-and-account.html#protected-notes-and-local-locks
+        - title: Public sharing
+          url: /security-and-account.html#public-sharing-and-collaboration
+        - title: Server-side security
+          url: /security-and-account.html#server-side-security
+        - title: Secrets and configuration
+          url: /security-and-account.html#secrets-and-configuration
+    - title: Sharing and collaboration
+      items:
+        - title: Collaboration overview
+          url: /sharing-and-collaboration.html
+        - title: Shared vault lifecycle
+          url: /sharing-and-collaboration.html#shared-vault-lifecycle
+        - title: Inviting collaborators
+          url: /sharing-and-collaboration.html#inviting-a-collaborator
+        - title: Encryption and membership
+          url: /sharing-and-collaboration.html#encryption-and-membership
+        - title: Realtime collaboration
+          url: /sharing-and-collaboration.html#realtime-collaboration
+        - title: Comments and mentions
+          url: /sharing-and-collaboration.html#comments-and-mentions
+        - title: Public share links
+          url: /sharing-and-collaboration.html#public-share-links
+    - title: Backups and recovery
+      url: /backups-and-recovery.html
+
+- title: Self-host and operate
+  items:
     - title: Self-hosting
-      url: /self-hosting.html
-    - title: Deployment
+      items:
+        - title: Self-hosting overview
+          url: /self-hosting.html
+        - title: Deploy in five minutes
+          url: /self-hosting.html#deploy-in-5-minutes
+        - title: Stack components
+          url: /self-hosting.html#what-the-stack-contains
+        - title: Configuration
+          url: /self-hosting.html#configuration-the-env-file
+        - title: Reverse proxy
+          url: /self-hosting.html#running-behind-a-reverse-proxy
+        - title: Upgrades
+          url: /self-hosting.html#start-stop-and-upgrade
+        - title: Data locations
+          url: /self-hosting.html#where-your-data-lives
+        - title: Backup and restore
+          url: /self-hosting.html#backup-and-restore
+        - title: Troubleshooting
+          url: /self-hosting.html#troubleshooting
+    - title: Deployment profiles
       url: /DEPLOYMENT.html
+    - title: Administration
+      url: /administration.html
     - title: Operations hardening
       url: /operations-hardening.html
-- title: Project
+    - title: Monitoring and troubleshooting
+      url: /monitoring-and-troubleshooting.html
+    - title: Releases and upgrades
+      url: /releases-and-upgrades.html
+
+- title: Automate and integrate
+  items:
+    - title: Command-line tools
+      url: /command-line-tools.html
+    - title: MCP bridge
+      url: /mcp-bridge.html
+    - title: HTTP API
+      url: /API.html
+    - title: OpenClaw assistant
+      url: /openclaw.html
+    - title: Automation and integrations
+      url: /automation-and-integrations.html
+
+- title: Build and verify
   items:
     - title: Architecture
       url: /architecture.html
-    - title: Standard Notes base
-      url: /standard-notes-base.html
-    - title: Improvements
-      url: /improvements.html
-    - title: Comparison
-      url: /comparison.html
+    - title: Development guide
+      url: /development-guide.html
     - title: Validation
       url: /validation.html
     - title: CI production gates
       url: /ci-production-gates.html
-- title: Reference
+    - title: Standard Notes base
+      url: /standard-notes-base.html
+    - title: Dependency upgrade audit
+      url: /DEPENDENCY_UPGRADE_AUDIT.html
+
+- title: Project reference
   items:
-    - title: API
-      url: /API.html
+    - title: Improvements in this fork
+      url: /improvements.html
+    - title: Product comparison
+      url: /comparison.html
+
+- title: Plans and status
+  items:
     - title: MCP support plan
       url: /MCP_SUPPORT_PLAN.html
     - title: OpenClaw plan
       url: /OPENCLAW_PLAN.html
     - title: Workflows plan
       url: /WORKFLOWS_PLAN.html
-    - title: Dependency audit
-      url: /DEPENDENCY_UPGRADE_AUDIT.html

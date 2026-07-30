@@ -198,7 +198,7 @@ export function validateCiContract(files) {
   const rootPackage = JSON.parse(files.get("package.json") ?? "{}");
   const expectedScripts = {
     "ci:contracts":
-      "yarn test:ci-tools && node scripts/validate-ci-contract.mjs && yarn test:release-contract && yarn release:contract && node scripts/export-app-docs-to-pages.mjs --check",
+      "yarn test:ci-tools && node scripts/validate-ci-contract.mjs && yarn test:release-contract && yarn release:contract && yarn docs:check",
     "ci:docker-hardening": "node scripts/validate-docker-hardening.mjs",
     "ci:verify-playwright": "node scripts/verify-playwright-report.mjs",
     "test:ci-tools":

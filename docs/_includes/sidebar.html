@@ -1,20 +1,32 @@
-<aside class="docs-sidebar" aria-label="Documentation navigation">
-  <a class="docs-brand" href="{{ '/' | relative_url }}">
-    <img src="{{ '/assets/icon.svg' | relative_url }}" alt="" width="32" height="32" />
-    <span>Standard Red Notes</span>
-  </a>
-  <nav>
-    {% for group in site.data.navigation %}
-      <section>
-        <h2>{{ group.title }}</h2>
-        <ul>
-          {% for item in group.items %}
-            <li>
-              <a href="{{ item.url | relative_url }}">{{ item.title }}</a>
-            </li>
-          {% endfor %}
-        </ul>
-      </section>
-    {% endfor %}
-  </nav>
+<aside class="docs-sidebar" aria-label="Documentation navigation" data-docs-sidebar>
+  <div class="docs-brand-row">
+    <a class="docs-brand" href="{{ '/' | relative_url }}">
+      <img src="{{ '/assets/icon.svg' | relative_url }}" alt="" width="32" height="32" />
+      <span>Standard Red Notes</span>
+    </a>
+    <button
+      class="docs-nav-toggle"
+      type="button"
+      aria-controls="docs-sidebar-content"
+      aria-expanded="false"
+      data-docs-nav-toggle
+    >
+      <span aria-hidden="true">☰</span>
+      <span data-docs-nav-toggle-label>Browse docs</span>
+    </button>
+  </div>
+
+  {% include search.html %}
+
+  <div class="docs-sidebar__content" id="docs-sidebar-content">
+    <div data-docs-page-toc></div>
+    <nav aria-label="All documentation">
+      {% for group in site.data.navigation %}
+        <section>
+          <h2>{{ group.title }}</h2>
+          {% include navigation-items.html items=group.items level=0 %}
+        </section>
+      {% endfor %}
+    </nav>
+  </div>
 </aside>

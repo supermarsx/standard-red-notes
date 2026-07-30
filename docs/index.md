@@ -1,43 +1,89 @@
 ---
 title: Documentation
-description: Standard Red Notes documentation home.
+description: Guides, reference material, and operational runbooks for every Standard Red Notes surface.
 ---
 
-# Standard Red Notes Documentation
+<div class="docs-hero" markdown="1">
 
-Standard Red Notes is a self-hosted-first fork of Standard Notes. It keeps the
-end-to-end encrypted notes model and adds operational controls, included
-features, local-first CLI tooling, an MCP bridge, richer settings, and
-deployment documentation for people running their own instance.
+<p class="eyebrow">Private notes, fully documented</p>
 
-![Standard Red Notes app screenshot](assets/readme-screenshot.png)
+# Understand, use, and operate Standard Red Notes
 
-## Start Here
+<p class="docs-hero__lede">
+Follow a first-note walkthrough, compare every client, deploy your own server,
+administer accounts, automate encrypted workflows, or trace the architecture
+down to its verification gates.
+</p>
 
-- [Onboarding](onboarding.md) explains the app from a user point of view.
-- [In-app guide](app-guide.md) mirrors the offline Documentation pane bundled
-  inside the app, including user help for encryption, editors, files, sync,
-  backups, self-hosting, assistant features, MCP, shortcuts, and troubleshooting.
-- [Self-hosting](self-hosting.md) covers the Docker stack, environment, reverse
-  proxy setup, updates, and backups.
-- [Operations hardening](operations-hardening.md) covers database resilience,
-  safety limits, and Docker runtime hardening.
-- [CI production gates](ci-production-gates.md) documents the required,
-  scheduled, and manually dispatched release-readiness checks.
-- [Architecture](architecture.md) explains how the app, gateway, services, files,
-  realtime, CLIs, and MCP bridge fit together.
-- [Improvements](improvements.md) lists what this fork changes beyond the
-  upstream base.
-- [Comparison](comparison.md) positions Standard Red Notes against adjacent note
-  and knowledge-base tools.
+<div class="docs-hero__actions">
+  <a class="docs-button" href="onboarding.html">Start using the app</a>
+  <a class="docs-button docs-button--secondary" href="self-hosting.html">Deploy a server</a>
+</div>
 
-## Operating Principles
+</div>
 
-- Encryption remains a client-side boundary: notes and files are encrypted before
-  they sync.
-- Self-hosting is the product target, not an afterthought.
-- All included features are available to every account on your instance.
-- Operational controls are surfaced in the app where possible and backed by CLI
-  or environment configuration where necessary.
-- Documentation should explain the system plainly enough to deploy, audit, and
-  maintain it without reading every package first.
+Use the full-text search in the sidebar from any page. Press <kbd>Ctrl</kbd> +
+<kbd>K</kbd> (or <kbd>⌘</kbd> + <kbd>K</kbd> on macOS), or press <kbd>/</kbd>
+when you are not typing, to search page titles, headings, and body text.
+
+{% include workspace-tour.html %}
+
+## Choose a path
+
+<div class="docs-card-grid">
+  <section class="docs-card">
+    <h3><a href="onboarding.html">Learn the product</a></h3>
+    <p>Create a first note, choose an editor, organize a vault, use search, and understand what stays encrypted.</p>
+    <p><a href="app-guide.html">Browse the complete in-app guide →</a></p>
+  </section>
+  <section class="docs-card">
+    <h3><a href="client-platforms.html">Pick a client</a></h3>
+    <p>Compare web, desktop, Android, iOS, and the browser clipper, including platform-only capabilities.</p>
+    <p><a href="sync-and-data-lifecycle.html">Understand sync and offline data →</a></p>
+  </section>
+  <section class="docs-card">
+    <h3><a href="self-hosting.html">Self-host and operate</a></h3>
+    <p>Choose a deployment profile, configure a reverse proxy, protect data, monitor services, upgrade, and recover.</p>
+    <p><a href="administration.html">Open the administration guide →</a></p>
+  </section>
+  <section class="docs-card">
+    <h3><a href="command-line-tools.html">Automate and integrate</a></h3>
+    <p>Use the encrypted client CLI, operator CLIs, MCP bridge, OpenClaw, HTTP API, webhooks, and integrations.</p>
+    <p><a href="mcp-bridge.html">Connect an MCP client →</a></p>
+  </section>
+  <section class="docs-card">
+    <h3><a href="security-and-account.html">Review security boundaries</a></h3>
+    <p>Trace encryption, authentication, MFA, trusted devices, recovery, scoped credentials, sharing, and operator controls.</p>
+    <p><a href="backups-and-recovery.html">Build a recovery plan →</a></p>
+  </section>
+  <section class="docs-card">
+    <h3><a href="architecture.html">Build and verify</a></h3>
+    <p>Map the monorepo, runtime services, request paths, CI gates, release contracts, and focused validation commands.</p>
+    <p><a href="development-guide.html">Open the development guide →</a></p>
+  </section>
+</div>
+
+## Feature atlas
+
+The [Capability Map](capability-map.md) is the quickest way to see what ships
+across the app, server, desktop and mobile packages, CLIs, MCP bridge, OpenClaw,
+administration surfaces, backups, and integrations. It labels each capability
+as one of:
+
+- **Shipped** — executable implementation and supporting evidence are present.
+- **Operator-gated** — the implementation must be enabled or configured.
+- **Phase-limited** — a bounded slice works, but the surrounding design is not
+  complete.
+- **Planned** — the repository contains a design, not a runtime promise.
+
+That distinction is especially important for the separate
+[MCP](MCP_SUPPORT_PLAN.md), [OpenClaw](OPENCLAW_PLAN.md), and
+[workflows](WORKFLOWS_PLAN.md) plan documents.
+
+## Documentation principles
+
+- Encryption boundaries and any intentional plaintext path are named directly.
+- Runtime guides and future plans are separated in navigation.
+- Copy-ready commands include the directory and assumptions that make them safe.
+- Destructive recovery and administration steps put backups and verification first.
+- Capability claims point back to implementation, tests, configuration, or release contracts.

@@ -18,7 +18,7 @@ the fan-in green.
 
 | Lane              | Contract                                                                                                                                                                                            | Timeout |
 | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------: |
-| `contracts`       | Immutable root install; CI validator tests; release target and artifact contract; in-app documentation export check; actionlint over root workflows.                                                |  12 min |
+| `contracts`       | Immutable root install; CI validator tests; release target and artifact contract; generated docs/search freshness, link/navigation integrity, Mermaid rendering; actionlint over root workflows.    |  12 min |
 | `check`           | Immutable installs in the root, app, and server projects, followed by the coordinated type, lint, format, and test gate.                                                                            |  45 min |
 | `build`           | A second clean set of immutable installs followed by the coordinated MCP, OpenClaw, app, and server build.                                                                                          |  45 min |
 | `container-smoke` | Hadolint, BuildKit image builds, an isolated Compose stack, Chromium app-open checks, bounded parallel sync and Redis operations, MariaDB backup/restore, and image/container hardening assertions. |  70 min |
