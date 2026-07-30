@@ -36,6 +36,7 @@ import {
   GetKeyPairs,
   IsApplicationUsingThirdPartyHost,
   WebSocketsService,
+  RevokeAllOtherSessionsResult,
 } from '@standardnotes/services'
 import { Base64String, PureCryptoInterface } from '@standardnotes/sncrypto-common'
 import { sleep } from '@standardnotes/utils'
@@ -1107,15 +1108,51 @@ export class SessionManager
     return this.apiService.deleteSession(sessionId)
   }
 
-  public async revokeAllOtherSessions(): Promise<void> {
+  public async revokeAllOtherSessions(): Promise<RevokeAllOtherSessionsResult> {
     const response = await this.getSessionsList()
     if (isErrorResponse(response) || !response.data) {
       const error = isErrorResponse(response) ? response.data?.error : undefined
       throw new Error(error?.message ?? API_MESSAGE_GENERIC_SYNC_FAIL)
     }
 
-    const otherSessions = response.data.filter((session) => !session.current)
-    await Promise.all(otherSessions.map((session) => this.revokeSession(session.uuid)))
+    const requestedSessionIds = response.data.filter((session) => !session.current).map((session) => session.uuid)
+    const revokedSessionIds: UuidString[] = []
+    const failures: RevokeAllOtherSessionsResult['failures'] = []
+    let confirmedSessions = response.data
+
+    /**
+     * Revoke sequentially because every successful response contains a fresh,
+     * authoritative session list. Parallel responses can arrive out of order
+     * and replace a newer list with a stale one.
+     */
+    for (const sessionId of requestedSessionIds) {
+      try {
+        const revokeResponse = await this.revokeSession(sessionId)
+
+        if (isErrorResponse(revokeResponse)) {
+          failures.push({
+            sessionId,
+            message: getErrorFromErrorResponse(revokeResponse).message || API_MESSAGE_GENERIC_SYNC_FAIL,
+          })
+          continue
+        }
+
+        revokedSessionIds.push(sessionId)
+        confirmedSessions = revokeResponse.data
+      } catch (error) {
+        failures.push({
+          sessionId,
+          message: error instanceof Error && error.message ? error.message : API_MESSAGE_GENERIC_SYNC_FAIL,
+        })
+      }
+    }
+
+    return {
+      requestedSessionIds,
+      revokedSessionIds,
+      failures,
+      sessions: confirmedSessions,
+    }
   }
 
   private async processChangeCredentialsResponse(

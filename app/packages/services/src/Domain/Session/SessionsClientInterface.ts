@@ -14,6 +14,18 @@ import { Base64String } from '@standardnotes/sncrypto-common'
 import { ProofOfWorkSolverInterface } from './ProofOfWorkSolverInterface'
 import { SessionManagerResponse } from './SessionManagerResponse'
 
+export type SessionRevocationFailure = {
+  sessionId: string
+  message: string
+}
+
+export type RevokeAllOtherSessionsResult = {
+  requestedSessionIds: string[]
+  revokedSessionIds: string[]
+  failures: SessionRevocationFailure[]
+  sessions: SessionListEntry[]
+}
+
 export interface SessionsClientInterface {
   getWorkspaceDisplayIdentifier(): string
   populateSessionFromDemoShareToken(token: Base64String): Promise<void>
@@ -35,7 +47,7 @@ export interface SessionsClientInterface {
   getSessionsList(): Promise<HttpResponse<SessionListEntry[]>>
   refreshSessionIfExpiringSoon(): Promise<boolean>
   revokeSession(sessionId: string): Promise<HttpResponse<SessionListResponse>>
-  revokeAllOtherSessions(): Promise<void>
+  revokeAllOtherSessions(): Promise<RevokeAllOtherSessionsResult>
 
   isCurrentSessionReadOnly(): boolean | undefined
   register(

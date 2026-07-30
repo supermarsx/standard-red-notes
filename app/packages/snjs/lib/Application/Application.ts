@@ -83,6 +83,7 @@ import {
   CreateEncryptedBackupFile,
   WebSocketsService,
   PreferencesServiceEvent,
+  RevokeAllOtherSessionsResult,
 } from '@standardnotes/services'
 import {
   SNNote,
@@ -571,7 +572,7 @@ export class SNApplication implements ApplicationInterface, AppGroupManagedAppli
   /**
    * Revokes all sessions except the current one.
    */
-  public async revokeAllOtherSessions(): Promise<void> {
+  public async revokeAllOtherSessions(): Promise<RevokeAllOtherSessionsResult> {
     return this.sessions.revokeAllOtherSessions()
   }
 
