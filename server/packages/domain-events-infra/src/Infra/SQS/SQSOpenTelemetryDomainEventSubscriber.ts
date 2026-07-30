@@ -47,7 +47,7 @@ export class SQSOpenTelemetryDomainEventSubscriber implements DomainEventSubscri
     this.currentSpan = tracer.startSpan(this.serviceName, { kind: OpenTelemetryApi.SpanKind.CONSUMER })
   }
 
-  async handleMessage(message: Message): Promise<Message | undefined> {
+  async handleMessage(message: Message): Promise<Message> {
     await this.domainEventMessageHandler.handleMessage(message.Body as string)
 
     if (this.currentSpan) {
@@ -55,7 +55,9 @@ export class SQSOpenTelemetryDomainEventSubscriber implements DomainEventSubscri
       this.currentSpan = undefined
     }
 
-    return undefined
+    // sqs-consumer 15 treats the returned message as the acknowledgement.
+    // Returning undefined leaves a successfully processed event on the queue.
+    return message
   }
 
   handleError(error: Error): void {

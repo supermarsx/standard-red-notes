@@ -76,11 +76,12 @@ describe('SQSOpenTelemetryDomainEventSubscriber', () => {
     const subscriber = createSubscriber()
     await subscriber.startParentSpan()
 
-    const result = await subscriber.handleMessage({ Body: 'raw-message-body' } as Message)
+    const message = { Body: 'raw-message-body' } as Message
+    const result = await subscriber.handleMessage(message)
 
     expect(domainEventMessageHandler.handleMessage).toHaveBeenCalledWith('raw-message-body')
     expect(span.end).toHaveBeenCalledTimes(1)
-    expect(result).toBeUndefined()
+    expect(result).toBe(message)
   })
 
   it('does not end a span twice across consecutive messages', async () => {
@@ -94,7 +95,8 @@ describe('SQSOpenTelemetryDomainEventSubscriber', () => {
   })
 
   it('handles a message even when no span was opened', async () => {
-    await expect(createSubscriber().handleMessage({ Body: 'body' } as Message)).resolves.toBeUndefined()
+    const message = { Body: 'body' } as Message
+    await expect(createSubscriber().handleMessage(message)).resolves.toBe(message)
     expect(span.end).not.toHaveBeenCalled()
   })
 

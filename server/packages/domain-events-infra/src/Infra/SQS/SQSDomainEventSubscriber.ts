@@ -37,9 +37,13 @@ export class SQSDomainEventSubscriber implements DomainEventSubscriberInterface 
     }
   }
 
-  async handleMessage(message: Message): Promise<Message | undefined> {
+  async handleMessage(message: Message): Promise<Message> {
     await this.domainEventMessageHandler.handleMessage(message.Body as string)
-    return undefined
+
+    // sqs-consumer 15 only acknowledges a successfully processed message when
+    // the handler returns that message. Returning undefined deliberately leaves
+    // it on the queue, which would replay every domain event indefinitely.
+    return message
   }
 
   handleError(error: Error): void {

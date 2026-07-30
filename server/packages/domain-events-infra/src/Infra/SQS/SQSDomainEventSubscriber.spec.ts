@@ -75,8 +75,8 @@ describe('SQSDomainEventSubscriber', () => {
     const result = await subscriber.handleMessage({ Body: 'raw-message-body' } as Message)
 
     expect(domainEventMessageHandler.handleMessage).toHaveBeenCalledWith('raw-message-body')
-    // Returning undefined tells sqs-consumer to delete the message.
-    expect(result).toBeUndefined()
+    // sqs-consumer 15 deletes only the message returned by the handler.
+    expect(result).toEqual({ Body: 'raw-message-body' })
   })
 
   it('stops a running consumer and says so', () => {
