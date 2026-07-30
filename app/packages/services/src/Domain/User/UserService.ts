@@ -308,6 +308,53 @@ export class UserService
     }
   }
 
+  public async signInWithRecoveryRootKey(
+    identifier: string,
+    rootKey: RootKeyInterface,
+    workspaceIdentifier: string,
+    mergeLocal: boolean,
+    awaitSync = true,
+  ): Promise<HttpResponse<SignInResponse>> {
+    if (this.encryption.hasAccount()) {
+      throw Error('Tried to recover an account when an account already exists.')
+    }
+    if (this.signingIn) {
+      throw Error('Already signing in.')
+    }
+
+    this.signingIn = true
+    this.lockSyncing()
+    try {
+      const response = await this.sessions.reconcileCredentialRotationSignIn(
+        identifier,
+        rootKey,
+        undefined,
+        workspaceIdentifier,
+      )
+      if (isErrorResponse(response)) {
+        this.unlockSyncing()
+        return response
+      }
+
+      const notifyingFunction = awaitSync ? this.notifyEventSync.bind(this) : this.notifyEvent.bind(this)
+      await notifyingFunction(AccountEvent.SignedInOrRegistered, {
+        payload: {
+          mergeLocal,
+          awaitSync,
+          ephemeral: false,
+          checkIntegrity: true,
+        },
+      })
+
+      return response
+    } catch (error) {
+      this.unlockSyncing()
+      throw error
+    } finally {
+      this.signingIn = false
+    }
+  }
+
   public async deleteAccount(): Promise<{
     error: boolean
     message?: string
@@ -421,6 +468,21 @@ export class UserService
       void this.alerts.alert(result.error.message)
     }
     return result
+  }
+
+  public async changeCredentialsUsingProvenRootKey(parameters: {
+    currentRootKey: RootKeyInterface
+    newPassword: string
+    passcode?: string
+  }): Promise<CredentialsChangeFunctionResponse> {
+    return this.performCredentialsChange({
+      currentPassword: undefined,
+      provenCurrentRootKey: parameters.currentRootKey,
+      origination: KeyParamsOrigination.PasswordChange,
+      validateNewPasswordStrength: true,
+      newPassword: parameters.newPassword,
+      passcode: parameters.passcode,
+    })
   }
 
   public async signOut(force = false, source = DeinitSource.SignOut): Promise<void> {
@@ -663,7 +725,8 @@ export class UserService
   }
 
   private async performCredentialsChange(parameters: {
-    currentPassword: string
+    currentPassword: string | undefined
+    provenCurrentRootKey?: RootKeyInterface
     origination: KeyParamsOrigination
     validateNewPasswordStrength: boolean
     newEmail?: string
@@ -684,10 +747,18 @@ export class UserService
       }
     }
 
-    const accountPasswordValidation = await this.encryption.validateAccountPassword(parameters.currentPassword)
-    if (!accountPasswordValidation.valid) {
-      return {
-        error: Error(Messages.INVALID_PASSWORD),
+    if (parameters.provenCurrentRootKey) {
+      if (!this.sessions.isSignedIn() || !this.encryption.getSureRootKey().compare(parameters.provenCurrentRootKey)) {
+        return { error: Error(Messages.INVALID_PASSWORD) }
+      }
+    } else {
+      const accountPasswordValidation = await this.encryption.validateAccountPassword(
+        parameters.currentPassword as string,
+      )
+      if (!accountPasswordValidation.valid) {
+        return {
+          error: Error(Messages.INVALID_PASSWORD),
+        }
       }
     }
 
@@ -697,6 +768,7 @@ export class UserService
     const currentEmail = user.email
     const { currentRootKey, newRootKey } = await this.recomputeRootKeysForCredentialChange({
       currentPassword: parameters.currentPassword,
+      currentRootKey: parameters.provenCurrentRootKey,
       currentEmail,
       origination: parameters.origination,
       newEmail: newEmail,
@@ -1080,19 +1152,22 @@ export class UserService
   }
 
   private async recomputeRootKeysForCredentialChange(parameters: {
-    currentPassword: string
+    currentPassword: string | undefined
+    currentRootKey?: RootKeyInterface
     currentEmail: string
     origination: KeyParamsOrigination
     newEmail?: string
     newPassword?: string
-  }): Promise<{ currentRootKey: SNRootKey; newRootKey: SNRootKey }> {
-    const currentRootKey = await this.encryption.computeRootKey(
-      parameters.currentPassword,
-      this.encryption.getRootKeyParams() as SNRootKeyParams,
-    )
+  }): Promise<{ currentRootKey: RootKeyInterface; newRootKey: SNRootKey }> {
+    const currentRootKey =
+      parameters.currentRootKey ??
+      (await this.encryption.computeRootKey(
+        parameters.currentPassword as string,
+        this.encryption.getRootKeyParams() as SNRootKeyParams,
+      ))
     const newRootKey = await this.encryption.createRootKey(
       parameters.newEmail ?? parameters.currentEmail,
-      parameters.newPassword ?? parameters.currentPassword,
+      parameters.newPassword ?? (parameters.currentPassword as string),
       parameters.origination,
     )
 

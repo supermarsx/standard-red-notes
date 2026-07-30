@@ -1,11 +1,13 @@
 import { HttpResponse } from '@standardnotes/responses'
 import {
+  AccountRecoveryLookupResponseBody,
   GenerateRecoveryCodesResponseBody,
   RecoveryKeyParamsResponseBody,
   SignInWithRecoveryCodesResponseBody,
 } from '../../Response'
 
 export interface AuthApiServiceInterface {
+  accountRecoveryLookup(dto: { userUuid: string }): Promise<HttpResponse<AccountRecoveryLookupResponseBody>>
   generateRecoveryCodes(dto: { serverPassword: string }): Promise<HttpResponse<GenerateRecoveryCodesResponseBody>>
   recoveryKeyParams(dto: {
     username: string

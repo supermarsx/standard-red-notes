@@ -7,6 +7,7 @@ import { AbstractService } from '../Service/AbstractService'
 import { AccountEventData } from './AccountEventData'
 import { AccountEvent } from './AccountEvent'
 import { CredentialsChangeFunctionResponse } from './CredentialsChangeFunctionResponse'
+import { RootKeyInterface } from '@standardnotes/models'
 
 export interface UserServiceInterface extends AbstractService<AccountEvent, AccountEventData> {
   get user(): User | undefined
@@ -40,6 +41,13 @@ export interface UserServiceInterface extends AbstractService<AccountEvent, Acco
     // Standard Red Notes: optional workspace name (WORKSPACES_PER_EMAIL_ENABLED).
     workspaceIdentifier?: string,
   ): Promise<HttpResponse<SignInResponse>>
+  signInWithRecoveryRootKey(
+    identifier: string,
+    rootKey: RootKeyInterface,
+    workspaceIdentifier: string,
+    mergeLocal: boolean,
+    awaitSync?: boolean,
+  ): Promise<HttpResponse<SignInResponse>>
   deleteAccount(): Promise<{
     error: boolean
     message?: string
@@ -50,6 +58,11 @@ export interface UserServiceInterface extends AbstractService<AccountEvent, Acco
     validateNewPasswordStrength: boolean
     newEmail?: string
     newPassword?: string
+    passcode?: string
+  }): Promise<CredentialsChangeFunctionResponse>
+  changeCredentialsUsingProvenRootKey(parameters: {
+    currentRootKey: RootKeyInterface
+    newPassword: string
     passcode?: string
   }): Promise<CredentialsChangeFunctionResponse>
 

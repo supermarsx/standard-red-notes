@@ -1,19 +1,19 @@
 import { Result, UseCaseInterface } from '@standardnotes/domain-core'
 
 import { SettingsClientInterface } from '@Lib/Services/Settings/SettingsClientInterface'
+import { AccountRecoveryStatus, parseAccountRecoveryEnvelope } from './AccountRecoveryEscrowTypes'
 
-/**
- * Standard Red Notes: report whether account recovery escrow is currently enabled
- * for this account. Returns false when no escrow exists (the default for every
- * account that has not explicitly opted in).
- */
-export class GetAccountRecoveryStatus implements UseCaseInterface<boolean> {
+export class GetAccountRecoveryStatus implements UseCaseInterface<AccountRecoveryStatus> {
   constructor(private settingsClient: SettingsClientInterface) {}
 
-  async execute(): Promise<Result<boolean>> {
+  async execute(): Promise<Result<AccountRecoveryStatus>> {
     try {
       const escrow = await this.settingsClient.getAccountRecoveryEscrow()
-      return Result.ok(escrow !== undefined && escrow !== null && escrow.length > 0)
+      if (!escrow) {
+        return Result.ok('disabled')
+      }
+
+      return Result.ok(parseAccountRecoveryEnvelope(escrow) ? 'enabled' : 'legacy')
     } catch (error) {
       return Result.fail(`Could not read recovery status: ${(error as Error).message}`)
     }

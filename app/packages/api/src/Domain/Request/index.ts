@@ -3,6 +3,7 @@ export * from './Authenticator/GenerateAuthenticatorAuthenticationOptionsRequest
 export * from './Authenticator/ListAuthenticatorsRequestParams'
 export * from './Authenticator/VerifyAuthenticatorRegistrationResponseRequestParams'
 export * from './Recovery/GenerateRecoveryCodesRequestParams'
+export * from './Recovery/AccountRecoveryLookupRequestParams'
 export * from './Recovery/RecoveryKeyParamsRequestParams'
 export * from './Recovery/SignInWithRecoveryCodesRequestParams'
 export * from './Revision/DeleteRevisionRequestParams'

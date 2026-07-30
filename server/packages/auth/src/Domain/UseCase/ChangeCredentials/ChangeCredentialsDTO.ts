@@ -1,6 +1,7 @@
 import { Username } from '@standardnotes/domain-core'
 
 export type ChangeCredentialsDTO = {
+  userUuid: string
   username: Username
   apiVersion: string
   currentPassword: string

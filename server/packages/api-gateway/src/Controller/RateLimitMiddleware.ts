@@ -118,7 +118,13 @@ export const buildDefaultRateLimitRules = (limits: RateLimitLimits): RateLimitRu
       bucket: 'auth-login',
       limit: limits.loginMax,
       windowSeconds: limits.windowSeconds,
-      match: postTo(['/v1/login', '/v2/login', '/v1/recovery/login', '/v1/recovery/login-params']),
+      match: postTo([
+        '/v1/login',
+        '/v2/login',
+        '/v1/recovery/login',
+        '/v1/recovery/login-params',
+        '/v1/account-recovery/lookup',
+      ]),
     },
     {
       bucket: 'auth-sensitive',

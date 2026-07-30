@@ -30,6 +30,7 @@ import { VerifyMFAResponse } from '../../../Domain/UseCase/VerifyMFAResponse'
 import { ProofOfWorkGate, ProofOfWorkChallengePayload } from '../../../Domain/ProofOfWork/ProofOfWorkGate'
 import { VerifyEmailConfirmation } from '../../../Domain/UseCase/VerifyEmailConfirmation/VerifyEmailConfirmation'
 import { ResendEmailConfirmation } from '../../../Domain/UseCase/ResendEmailConfirmation/ResendEmailConfirmation'
+import { GetAccountRecoveryEscrow } from '../../../Domain/UseCase/GetAccountRecoveryEscrow/GetAccountRecoveryEscrow'
 
 const PROOF_OF_WORK_REQUIRED_TAG = 'proof-of-work-required'
 
@@ -60,6 +61,7 @@ export class BaseAuthController extends BaseHttpController {
     // a confirmation token and to resend the confirmation email.
     protected verifyEmailConfirmationUseCase: VerifyEmailConfirmation,
     protected resendEmailConfirmationUseCase: ResendEmailConfirmation,
+    protected getAccountRecoveryEscrow: GetAccountRecoveryEscrow,
     protected controllerContainer?: ControllerContainerInterface,
   ) {
     super()
@@ -71,6 +73,7 @@ export class BaseAuthController extends BaseHttpController {
       this.controllerContainer.register('auth.generateRecoveryCodes', this.generateRecoveryCodes.bind(this))
       this.controllerContainer.register('auth.signInWithRecoveryCodes', this.recoveryLogin.bind(this))
       this.controllerContainer.register('auth.recoveryKeyParams', this.recoveryParams.bind(this))
+      this.controllerContainer.register('auth.accountRecovery.lookup', this.accountRecoveryLookup.bind(this))
       this.controllerContainer.register('auth.signOut', this.signOut.bind(this))
       this.controllerContainer.register('auth.emailConfirmation.verify', this.verifyEmailConfirmation.bind(this))
       this.controllerContainer.register('auth.emailConfirmation.resend', this.resendEmailConfirmation.bind(this))
@@ -457,6 +460,29 @@ export class BaseAuthController extends BaseHttpController {
     })
 
     return this.json(result.data, result.status)
+  }
+
+  async accountRecoveryLookup(request: Request): Promise<results.JsonResult> {
+    const userUuid = typeof request.body?.user_uuid === 'string' ? request.body.user_uuid : ''
+    const result = await this.getAccountRecoveryEscrow.execute({ userUuid })
+
+    if (result.isFailed()) {
+      return this.json(
+        {
+          error: {
+            message: 'Account recovery is unavailable.',
+          },
+        },
+        404,
+      )
+    }
+
+    const lookup = result.getValue()
+    return this.json({
+      escrow: lookup.escrow,
+      identifier: lookup.identifier,
+      workspace_identifier: lookup.workspaceIdentifier,
+    })
   }
 
   async signOut(request: Request, response: Response): Promise<results.JsonResult | void> {

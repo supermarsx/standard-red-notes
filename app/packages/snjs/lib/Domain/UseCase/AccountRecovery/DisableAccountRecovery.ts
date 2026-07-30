@@ -1,4 +1,5 @@
 import { Result, UseCaseInterface } from '@standardnotes/domain-core'
+import { EncryptionProviderInterface } from '@standardnotes/services'
 
 import { SettingsClientInterface } from '@Lib/Services/Settings/SettingsClientInterface'
 
@@ -10,13 +11,24 @@ import { SettingsClientInterface } from '@Lib/Services/Settings/SettingsClientIn
  * end-to-end guarantee for this account going forward.
  */
 export class DisableAccountRecovery implements UseCaseInterface<void> {
-  constructor(private settingsClient: SettingsClientInterface) {}
+  constructor(
+    private settingsClient: SettingsClientInterface,
+    private encryption: EncryptionProviderInterface,
+  ) {}
 
-  async execute(): Promise<Result<void>> {
+  async execute(dto: { password: string }): Promise<Result<void>> {
+    if (!dto.password) {
+      return Result.fail('Your current account password is required.')
+    }
+
     try {
+      const validation = await this.encryption.validateAccountPassword(dto.password)
+      if (!validation.valid) {
+        return Result.fail('The account password is incorrect.')
+      }
       await this.settingsClient.deleteAccountRecoveryEscrow()
-    } catch (error) {
-      return Result.fail(`Could not delete recovery escrow from the server: ${(error as Error).message}`)
+    } catch {
+      return Result.fail('Account recovery could not be disabled.')
     }
 
     return Result.ok()

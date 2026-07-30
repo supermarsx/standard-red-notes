@@ -1041,11 +1041,15 @@ export class Dependencies {
         this.get<EncryptionService>(TYPES.EncryptionService),
         this.get<SettingsService>(TYPES.SettingsService),
         this.get<PureCryptoInterface>(TYPES.Crypto),
+        this.get<SessionManager>(TYPES.SessionManager),
       )
     })
 
     this.factory.set(TYPES.DisableAccountRecovery, () => {
-      return new DisableAccountRecovery(this.get<SettingsService>(TYPES.SettingsService))
+      return new DisableAccountRecovery(
+        this.get<SettingsService>(TYPES.SettingsService),
+        this.get<EncryptionService>(TYPES.EncryptionService),
+      )
     })
 
     this.factory.set(TYPES.GetAccountRecoveryStatus, () => {
@@ -1053,7 +1057,12 @@ export class Dependencies {
     })
 
     this.factory.set(TYPES.RecoverAccount, () => {
-      return new RecoverAccount(this.get<PureCryptoInterface>(TYPES.Crypto))
+      return new RecoverAccount(
+        this.get<PureCryptoInterface>(TYPES.Crypto),
+        this.get<AuthManager>(TYPES.AuthManager),
+        this.get<UserService>(TYPES.UserService),
+        this.get<EnableAccountRecovery>(TYPES.EnableAccountRecovery),
+      )
     })
 
     this.factory.set(TYPES.AddAuthenticator, () => {

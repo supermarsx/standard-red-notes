@@ -2,6 +2,14 @@ import { AnyKeyParamsContent } from '@standardnotes/common'
 import { SessionBody } from '@standardnotes/responses'
 
 export interface AuthClientInterface {
+  accountRecoveryLookup(dto: { userUuid: string }): Promise<
+    | {
+        escrow: string
+        identifier: string
+        workspaceIdentifier: string
+      }
+    | false
+  >
   generateRecoveryCodes(dto: { serverPassword: string }): Promise<string | false>
   recoveryKeyParams(dto: {
     username: string

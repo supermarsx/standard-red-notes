@@ -16,6 +16,32 @@ const boom = () => jest.fn().mockRejectedValue(new Error('network down'))
 const pending = () => jest.fn().mockReturnValue(new Promise(() => undefined))
 
 describe('AuthApiService', () => {
+  it('accountRecoveryLookup should forward only the UUID locator', async () => {
+    const server = { accountRecoveryLookup: ok() }
+
+    await expect(
+      new AuthApiService(server as never, ApiVersion.v0).accountRecoveryLookup({
+        userUuid: '123e4567-e89b-42d3-a456-426614174000',
+      }),
+    ).resolves.toBe(response)
+    expect(server.accountRecoveryLookup).toHaveBeenCalledWith({
+      user_uuid: '123e4567-e89b-42d3-a456-426614174000',
+    })
+  })
+
+  it('accountRecoveryLookup should reject a concurrent call and translate transport failures', async () => {
+    const locked = new AuthApiService({ accountRecoveryLookup: pending() } as never, ApiVersion.v0)
+    void locked.accountRecoveryLookup({ userUuid: '123e4567-e89b-42d3-a456-426614174000' })
+    await expect(locked.accountRecoveryLookup({ userUuid: '123e4567-e89b-42d3-a456-426614174000' })).rejects.toThrow(
+      ErrorMessage.GenericInProgress,
+    )
+
+    const failing = new AuthApiService({ accountRecoveryLookup: boom() } as never, ApiVersion.v0)
+    await expect(failing.accountRecoveryLookup({ userUuid: '123e4567-e89b-42d3-a456-426614174000' })).rejects.toThrow(
+      ErrorMessage.GenericFail,
+    )
+  })
+
   it('generateRecoveryCodes should send the server password as a header', async () => {
     const server = { generateRecoveryCodes: ok() }
 

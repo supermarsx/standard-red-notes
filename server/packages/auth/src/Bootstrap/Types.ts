@@ -213,6 +213,7 @@ const TYPES = {
   Auth_GetSharedSubscriptionForUser: Symbol.for('Auth_GetSharedSubscriptionForUser'),
   Auth_GetAllSettingsForUser: Symbol.for('Auth_GetAllSettingsForUser'),
   Auth_GetSetting: Symbol.for('Auth_GetSetting'),
+  Auth_GetAccountRecoveryEscrow: Symbol.for('Auth_GetAccountRecoveryEscrow'),
   Auth_GetUserFeatures: Symbol.for('Auth_GetUserFeatures'),
   Auth_DeleteSetting: Symbol.for('Auth_DeleteSetting'),
   Auth_DeleteAccount: Symbol.for('Auth_DeleteAccount'),

@@ -5,6 +5,7 @@ import { Repository, SelectQueryBuilder } from 'typeorm'
 import TYPES from '../../Bootstrap/Types'
 
 import { User } from '../../Domain/User/User'
+import { TypeORMSetting } from './TypeORMSetting'
 import {
   AdminUserListQuery,
   AdminUserListResult,
@@ -248,6 +249,51 @@ export class TypeORMUserRepository implements UserRepositoryInterface {
     return this.ormRepository.createQueryBuilder('user').getCount()
   }
 
+  async compareAndSwapCredentialsAndInvalidateAccountRecovery(dto: {
+    user: User
+    expectedEncryptedPassword: string
+    expectedProtocolVersion: string | null
+  }): Promise<User | null> {
+    return this.ormRepository.manager.transaction(async (manager) => {
+      const transactionalUsers = manager.getRepository(User)
+      const updateQuery = transactionalUsers
+        .createQueryBuilder()
+        .update(User)
+        .set({
+          encryptedPassword: dto.user.encryptedPassword,
+          email: dto.user.email,
+          pwNonce: dto.user.pwNonce,
+          version: dto.user.version,
+          kpCreated: dto.user.kpCreated,
+          kpOrigination: dto.user.kpOrigination,
+          updatedAt: dto.user.updatedAt,
+        })
+        .where('uuid = :uuid AND encrypted_password = :expectedEncryptedPassword', {
+          uuid: dto.user.uuid,
+          expectedEncryptedPassword: dto.expectedEncryptedPassword,
+        })
+      if (dto.expectedProtocolVersion === null) {
+        updateQuery.andWhere('version IS NULL')
+      } else {
+        updateQuery.andWhere('version = :expectedProtocolVersion', {
+          expectedProtocolVersion: dto.expectedProtocolVersion,
+        })
+      }
+      const updateResult = await updateQuery.execute()
+
+      if (updateResult.affected !== 1) {
+        return null
+      }
+
+      await manager.getRepository(TypeORMSetting).delete({
+        userUuid: dto.user.uuid,
+        name: SettingName.NAMES.AccountRecoveryEscrow,
+      })
+
+      return transactionalUsers.findOneByOrFail({ uuid: dto.user.uuid })
+    })
+  }
+
   async save(user: User): Promise<User> {
     return this.ormRepository.save(user)
   }
@@ -275,11 +321,7 @@ export class TypeORMUserRepository implements UserRepositoryInterface {
   }
 
   async findOneByUuid(uuid: Uuid): Promise<User | null> {
-    return this.ormRepository
-      .createQueryBuilder('user')
-      .where('user.uuid = :uuid', { uuid: uuid.value })
-      .cache(`user_uuid_${uuid.value}`, 60000)
-      .getOne()
+    return this.ormRepository.createQueryBuilder('user').where('user.uuid = :uuid', { uuid: uuid.value }).getOne()
   }
 
   async findOneByUsernameOrEmail(usernameOrEmail: Email | Username): Promise<User | null> {

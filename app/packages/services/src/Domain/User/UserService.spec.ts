@@ -661,6 +661,52 @@ describe('UserService', () => {
       expect(syncService.unlockSyncing).toHaveBeenCalledTimes(1)
     })
 
+    it('routes recovered-root sign-in through reconciliation and the normal account event lifecycle', async () => {
+      const recoveredRootKey = { uuid: 'recovered-root' }
+      sessionManager.reconcileCredentialRotationSignIn = jest.fn().mockResolvedValue(successSessionResponse.response)
+      internalEventBus.publishSync = jest.fn().mockResolvedValue(undefined)
+
+      const response = await createService().signInWithRecoveryRootKey(
+        'person@example.com',
+        recoveredRootKey as never,
+        'team-a',
+        false,
+      )
+
+      expect(response).toBe(successSessionResponse.response)
+      expect(sessionManager.reconcileCredentialRotationSignIn).toHaveBeenCalledWith(
+        'person@example.com',
+        recoveredRootKey,
+        undefined,
+        'team-a',
+      )
+      expect(internalEventBus.publishSync).toHaveBeenCalledWith(
+        {
+          type: AccountEvent.SignedInOrRegistered,
+          payload: {
+            payload: {
+              mergeLocal: false,
+              awaitSync: true,
+              ephemeral: false,
+              checkIntegrity: true,
+            },
+          },
+        },
+        expect.anything(),
+      )
+    })
+
+    it('rejects recovered-root sign-in when local account state already exists', async () => {
+      encryptionService.hasAccount = jest.fn().mockReturnValue(true)
+      sessionManager.reconcileCredentialRotationSignIn = jest.fn()
+
+      await expect(
+        createService().signInWithRecoveryRootKey('person@example.com', {} as never, 'team-a', true),
+      ).rejects.toThrow(/account already exists/i)
+      expect(sessionManager.reconcileCredentialRotationSignIn).not.toHaveBeenCalled()
+      expect(syncService.lockSyncing).not.toHaveBeenCalled()
+    })
+
     it('unlocks syncing when a successful sign-in event observer rejects', async () => {
       sessionManager.signIn = jest.fn().mockResolvedValue(successSessionResponse)
       const service = createService()
@@ -730,6 +776,44 @@ describe('UserService', () => {
       expect(syncService.unlockSyncing).toHaveBeenCalledTimes(1)
       expect(syncService.markAllItemsAsNeedingSyncAndPersist).not.toHaveBeenCalled()
       expect(syncService.downloadFirstSync).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('recovered-root credential rotation', () => {
+    it('uses the shared journaled rotation path without re-validating a discarded password', async () => {
+      const { currentRootKey } = prepareCredentialChange(false)
+      sessionManager.isSignedIn = jest.fn().mockReturnValue(true)
+      encryptionService.getSureRootKey = jest.fn().mockReturnValue(currentRootKey)
+      currentRootKey.compare.mockReturnValue(true)
+      sessionManager.changeCredentials = jest.fn().mockResolvedValue(successSessionResponse)
+
+      const result = await createService().changeCredentialsUsingProvenRootKey({
+        currentRootKey: currentRootKey as never,
+        newPassword: 'strong new password',
+      })
+
+      expect(result.error).toBeUndefined()
+      expect(encryptionService.validateAccountPassword).not.toHaveBeenCalled()
+      expect(encryptionService.computeRootKey).not.toHaveBeenCalled()
+      expect(encryptionService.prepareCredentialRotationJournal).toHaveBeenCalled()
+      expect(sessionManager.changeCredentials).toHaveBeenCalled()
+      expect(encryptionService.clearCredentialRotationJournal).toHaveBeenCalled()
+    })
+
+    it('rejects a proven root that is not the active signed-in root', async () => {
+      const { currentRootKey } = prepareCredentialChange(false)
+      sessionManager.isSignedIn = jest.fn().mockReturnValue(true)
+      sessionManager.changeCredentials = jest.fn()
+      encryptionService.getSureRootKey = jest.fn().mockReturnValue({ compare: jest.fn().mockReturnValue(false) })
+
+      const result = await createService().changeCredentialsUsingProvenRootKey({
+        currentRootKey: currentRootKey as never,
+        newPassword: 'strong new password',
+      })
+
+      expect(result.error?.message).toMatch(/invalid password/i)
+      expect(encryptionService.prepareCredentialRotationJournal).not.toHaveBeenCalled()
+      expect(sessionManager.changeCredentials).not.toHaveBeenCalled()
     })
   })
 

@@ -36,6 +36,12 @@ const SignInPane: FunctionComponent<Props> = ({ setMenuPane }) => {
   // resolves accounts differently and does not support workspace disambiguation.
   const [workspaceIdentifier, setWorkspaceIdentifier] = useState('')
   const [recoveryCodes, setRecoveryCodes] = useState('')
+  const [accountRecoveryCode, setAccountRecoveryCode] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [newPasswordConfirmation, setNewPasswordConfirmation] = useState('')
+  const [freshAccountRecoveryCode, setFreshAccountRecoveryCode] = useState('')
+  const [savedFreshRecoveryCode, setSavedFreshRecoveryCode] = useState(false)
+  const [recoveryNotice, setRecoveryNotice] = useState('')
   const [error, setError] = useState('')
   const [isEphemeral, setIsEphemeral] = useState(false)
 
@@ -45,6 +51,7 @@ const SignInPane: FunctionComponent<Props> = ({ setMenuPane }) => {
   const [isPrivateUsername, setIsPrivateUsername] = useState(false)
 
   const [isRecoverySignIn, setIsRecoverySignIn] = useState(false)
+  const [isAccountRecovery, setIsAccountRecovery] = useState(false)
   const [showNoMergeConfirmation, setShowNoMergeConfirmation] = useState(false)
 
   const [captchaURL, setCaptchaURL] = useState('')
@@ -208,6 +215,57 @@ const SignInPane: FunctionComponent<Props> = ({ setMenuPane }) => {
     shouldMergeLocal,
   ])
 
+  const recoverAccount = useCallback(() => {
+    setIsSigningIn(true)
+    setError('')
+    application.recoverAccount
+      .execute({
+        recoveryCode: accountRecoveryCode,
+        newPassword,
+        newPasswordConfirmation,
+        mergeLocal: shouldMergeLocal,
+      })
+      .then((result) => {
+        if (result.isFailed()) {
+          setError(result.getError())
+          return
+        }
+
+        const outcome = result.getValue()
+        setAccountRecoveryCode('')
+        setNewPassword('')
+        setNewPasswordConfirmation('')
+        if (!outcome.passwordReset) {
+          setRecoveryNotice(
+            `You are signed in, but the password was not changed. ${
+              outcome.passwordResetError ?? 'Retry the password change from Security preferences.'
+            }`,
+          )
+          return
+        }
+        if (outcome.reenrollmentError) {
+          setRecoveryNotice(
+            `Your password was changed, but account recovery is now disabled. ${outcome.reenrollmentError}`,
+          )
+          return
+        }
+        if (outcome.recoveryCode) {
+          setFreshAccountRecoveryCode(outcome.recoveryCode)
+          setSavedFreshRecoveryCode(false)
+          setRecoveryNotice('')
+          return
+        }
+
+        setRecoveryNotice('Your password was changed. Enable account recovery again from Security preferences.')
+      })
+      .catch(() => {
+        setError('Account recovery could not be completed.')
+      })
+      .finally(() => {
+        setIsSigningIn(false)
+      })
+  }, [accountRecoveryCode, application.recoverAccount, newPassword, newPasswordConfirmation, shouldMergeLocal])
+
   const onPrivateUsernameChange = useCallback(
     (newisPrivateUsername: boolean, privateUsernameIdentifier?: string) => {
       setIsPrivateUsername(newisPrivateUsername)
@@ -219,6 +277,19 @@ const SignInPane: FunctionComponent<Props> = ({ setMenuPane }) => {
   )
 
   const performSignIn = useCallback(() => {
+    if (isAccountRecovery) {
+      if (!accountRecoveryCode || !newPassword || !newPasswordConfirmation) {
+        setError('Enter the account recovery code, a strong new password, and its confirmation.')
+        return
+      }
+      if (notesAndTagsCount > 0 && !shouldMergeLocal) {
+        setShowNoMergeConfirmation(true)
+        return
+      }
+      recoverAccount()
+      return
+    }
+
     if (!email || email.length === 0) {
       emailInputRef?.current?.focus()
       return
@@ -240,7 +311,20 @@ const SignInPane: FunctionComponent<Props> = ({ setMenuPane }) => {
     }
 
     signIn()
-  }, [email, isRecoverySignIn, password, recoverySignIn, signIn, notesAndTagsCount, shouldMergeLocal])
+  }, [
+    accountRecoveryCode,
+    email,
+    isAccountRecovery,
+    isRecoverySignIn,
+    newPassword,
+    newPasswordConfirmation,
+    notesAndTagsCount,
+    password,
+    recoverAccount,
+    recoverySignIn,
+    shouldMergeLocal,
+    signIn,
+  ])
 
   const handleSignInFormSubmit = useCallback(
     (e: React.SyntheticEvent) => {
@@ -272,6 +356,143 @@ const SignInPane: FunctionComponent<Props> = ({ setMenuPane }) => {
 
     performSignIn()
   }, [hvmToken, performSignIn])
+
+  const copyFreshRecoveryCode = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(freshAccountRecoveryCode)
+      setRecoveryNotice('')
+    } catch {
+      setRecoveryNotice('The recovery code could not be copied. Select it and save it manually.')
+    }
+  }, [freshAccountRecoveryCode])
+
+  const finishRecoveredSignIn = useCallback(() => {
+    if (!savedFreshRecoveryCode) {
+      return
+    }
+    application.accountMenuController.closeAccountMenu()
+  }, [application.accountMenuController, savedFreshRecoveryCode])
+
+  const accountRecoveryForm = (
+    <div className="mb-1 px-3">
+      <div className="border-warning bg-warning-faded mb-3 rounded border border-solid p-3 text-sm">
+        Your recovery code can decrypt your account keys. MFA is still required for server sign-in, but cannot protect a
+        copied code from offline decryption. Only continue on a computer you trust.
+      </div>
+      <DecoratedInput
+        className={{ container: `mb-2 ${error ? 'border-danger' : ''}` }}
+        left={[<Icon type="restore" className="text-neutral" />]}
+        type="text"
+        placeholder="Account recovery code"
+        value={accountRecoveryCode}
+        onChange={(value) => {
+          setAccountRecoveryCode(value)
+          resetInvalid()
+        }}
+        onKeyDown={handleKeyDown}
+        disabled={isSigningIn}
+        spellcheck={false}
+      />
+      <DecoratedPasswordInput
+        className={{ container: `mb-2 ${error ? 'border-danger' : ''}` }}
+        disabled={isSigningIn}
+        left={[<Icon type="password" className="text-neutral" />]}
+        onChange={(value) => {
+          setNewPassword(value)
+          resetInvalid()
+        }}
+        onKeyDown={handleKeyDown}
+        placeholder="Strong new password"
+        value={newPassword}
+      />
+      <DecoratedPasswordInput
+        className={{ container: `mb-2 ${error ? 'border-danger' : ''}` }}
+        disabled={isSigningIn}
+        left={[<Icon type="password" className="text-neutral" />]}
+        onChange={(value) => {
+          setNewPasswordConfirmation(value)
+          resetInvalid()
+        }}
+        onKeyDown={handleKeyDown}
+        placeholder="Confirm new password"
+        value={newPasswordConfirmation}
+      />
+      {error ? <div className="text-danger my-2">{error}</div> : null}
+      {recoveryNotice ? <div className="text-warning my-2">{recoveryNotice}</div> : null}
+      <Button
+        className="mt-1 mb-3"
+        label={isSigningIn ? 'Recovering account…' : 'Recover account and change password'}
+        primary
+        onClick={handleSignInFormSubmit}
+        disabled={isSigningIn}
+        fullWidth
+      />
+      {notesAndTagsCount > 0 ? (
+        <MergeLocalDataCheckbox
+          checked={shouldMergeLocal}
+          onChange={handleShouldMergeChange}
+          disabled={isSigningIn}
+          notesAndTagsCount={notesAndTagsCount}
+        />
+      ) : null}
+      {recoveryNotice ? (
+        <Button
+          className="mt-3"
+          label="Close"
+          onClick={() => application.accountMenuController.closeAccountMenu()}
+          fullWidth
+        />
+      ) : null}
+      {!recoveryNotice ? (
+        <button
+          type="button"
+          className="text-info mt-4 w-full cursor-pointer border-0 bg-transparent text-center"
+          onClick={() => {
+            setIsAccountRecovery(false)
+            setError('')
+            setRecoveryNotice('')
+          }}
+        >
+          Back to sign in
+        </button>
+      ) : null}
+    </div>
+  )
+
+  const freshRecoveryCodeForm = (
+    <div className="mb-1 px-3">
+      <div className="border-warning bg-warning-faded mb-3 rounded border border-solid p-3">
+        <div className="font-bold">Save your new recovery code now</div>
+        <div className="mt-1 text-sm">
+          Your password was changed successfully. The old code no longer works, and this replacement is shown once.
+        </div>
+      </div>
+      <textarea
+        className="border-border bg-default min-h-24 w-full resize-y rounded border border-solid p-3 font-mono text-sm"
+        readOnly
+        value={freshAccountRecoveryCode}
+        aria-label="New account recovery code"
+      />
+      <Button className="mt-2" label="Copy recovery code" onClick={() => void copyFreshRecoveryCode()} fullWidth />
+      {recoveryNotice ? <div className="text-danger mt-2">{recoveryNotice}</div> : null}
+      <div className="mt-3">
+        <Checkbox
+          name="fresh-account-recovery-code-saved"
+          label="I saved this recovery code somewhere secure"
+          checked={savedFreshRecoveryCode}
+          onChange={() => setSavedFreshRecoveryCode((value) => !value)}
+        />
+      </div>
+      <Button
+        className="mt-3"
+        primary
+        label="Finish"
+        disabled={!savedFreshRecoveryCode}
+        onClick={finishRecoveredSignIn}
+        fullWidth
+      />
+    </div>
+  )
 
   const signInForm = (
     <>
@@ -350,6 +571,18 @@ const SignInPane: FunctionComponent<Props> = ({ setMenuPane }) => {
         onStrictSignInChange={handleStrictSigninChange}
         onRecoveryCodesChange={onRecoveryCodesChange}
       />
+      <button
+        type="button"
+        className="text-info mt-3 w-full cursor-pointer border-0 bg-transparent px-3 text-center"
+        disabled={isSigningIn}
+        onClick={() => {
+          setIsAccountRecovery(true)
+          setIsRecoverySignIn(false)
+          setError('')
+        }}
+      >
+        Recover account with an account recovery code
+      </button>
     </>
   )
 
@@ -359,12 +592,14 @@ const SignInPane: FunctionComponent<Props> = ({ setMenuPane }) => {
 
   const confirmSignInWithoutMerge = useCallback(() => {
     setShowNoMergeConfirmation(false)
-    if (isRecoverySignIn) {
+    if (isAccountRecovery) {
+      recoverAccount()
+    } else if (isRecoverySignIn) {
       recoverySignIn()
     } else {
       signIn()
     }
-  }, [signIn, isRecoverySignIn, recoverySignIn])
+  }, [isAccountRecovery, isRecoverySignIn, recoverAccount, recoverySignIn, signIn])
 
   return (
     <>
@@ -377,9 +612,25 @@ const SignInPane: FunctionComponent<Props> = ({ setMenuPane }) => {
           focusable={true}
           disabled={isSigningIn}
         />
-        <div className="text-base font-bold">{showCaptcha ? t('humanVerification') : t('account:signIn')}</div>
+        <div className="text-base font-bold">
+          {showCaptcha
+            ? t('humanVerification')
+            : isAccountRecovery
+              ? freshAccountRecoveryCode
+                ? 'Save recovery code'
+                : 'Recover account'
+              : t('account:signIn')}
+        </div>
       </div>
-      {showCaptcha ? <div className="p-[10px]">{captchaIframe}</div> : signInForm}
+      {showCaptcha ? (
+        <div className="p-[10px]">{captchaIframe}</div>
+      ) : freshAccountRecoveryCode ? (
+        freshRecoveryCodeForm
+      ) : isAccountRecovery ? (
+        accountRecoveryForm
+      ) : (
+        signInForm
+      )}
       {showNoMergeConfirmation && (
         <ConfirmNoMergeDialog onClose={closeNoMergeConfirmation} onConfirm={confirmSignInWithoutMerge} />
       )}

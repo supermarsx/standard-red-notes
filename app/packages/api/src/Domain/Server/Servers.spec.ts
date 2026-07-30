@@ -31,6 +31,13 @@ describe('Servers', () => {
   })
 
   describe('AuthServer', () => {
+    it('accountRecoveryLookup should POST the UUID locator to the account recovery path', async () => {
+      const params = { user_uuid: '123e4567-e89b-42d3-a456-426614174000' }
+
+      await expect(new AuthServer(http).accountRecoveryLookup(params)).resolves.toBe(response)
+      expect(http.post).toHaveBeenCalledWith('/v1/account-recovery/lookup', params)
+    })
+
     it('generateRecoveryCodes should POST to the recovery codes path, forwarding options', async () => {
       const options = { headers: [{ key: 'x-server-password', value: 'secret' }] }
 

@@ -88,6 +88,7 @@ export interface SessionsClientInterface {
     email: string,
     rootKey: RootKeyInterface,
     wrappingKey?: RootKeyInterface,
+    workspaceIdentifier?: string,
   ): Promise<HttpResponse<SignInResponse>>
   signOut(): Promise<void>
   changeCredentials(parameters: {

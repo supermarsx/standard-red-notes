@@ -26,6 +26,7 @@ import { UserRepositoryInterface } from '../../Domain/User/UserRepositoryInterfa
 import { ProofOfWorkGate } from '../../Domain/ProofOfWork/ProofOfWorkGate'
 import { VerifyEmailConfirmation } from '../../Domain/UseCase/VerifyEmailConfirmation/VerifyEmailConfirmation'
 import { ResendEmailConfirmation } from '../../Domain/UseCase/ResendEmailConfirmation/ResendEmailConfirmation'
+import { GetAccountRecoveryEscrow } from '../../Domain/UseCase/GetAccountRecoveryEscrow/GetAccountRecoveryEscrow'
 
 @controller('/auth')
 export class AnnotatedAuthController extends BaseAuthController {
@@ -53,6 +54,7 @@ export class AnnotatedAuthController extends BaseAuthController {
     @inject(TYPES.Auth_ProofOfWorkGate) override proofOfWorkGate: ProofOfWorkGate,
     @inject(TYPES.Auth_VerifyEmailConfirmation) override verifyEmailConfirmationUseCase: VerifyEmailConfirmation,
     @inject(TYPES.Auth_ResendEmailConfirmation) override resendEmailConfirmationUseCase: ResendEmailConfirmation,
+    @inject(TYPES.Auth_GetAccountRecoveryEscrow) override getAccountRecoveryEscrow: GetAccountRecoveryEscrow,
   ) {
     super(
       verifyMFA,
@@ -78,6 +80,7 @@ export class AnnotatedAuthController extends BaseAuthController {
       proofOfWorkGate,
       verifyEmailConfirmationUseCase,
       resendEmailConfirmationUseCase,
+      getAccountRecoveryEscrow,
     )
   }
 
@@ -104,6 +107,11 @@ export class AnnotatedAuthController extends BaseAuthController {
   @httpPost('/recovery/params')
   override async recoveryParams(request: Request): Promise<results.JsonResult> {
     return super.recoveryParams(request)
+  }
+
+  @httpPost('/account-recovery/lookup')
+  override async accountRecoveryLookup(request: Request): Promise<results.JsonResult> {
+    return super.accountRecoveryLookup(request)
   }
 
   @httpPost('/sign_out', TYPES.Auth_OptionalCrossServiceTokenMiddleware)

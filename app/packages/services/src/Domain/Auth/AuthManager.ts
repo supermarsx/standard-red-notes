@@ -14,6 +14,30 @@ export class AuthManager extends AbstractService implements AuthClientInterface 
     super(internalEventBus)
   }
 
+  async accountRecoveryLookup(dto: { userUuid: string }): Promise<
+    | {
+        escrow: string
+        identifier: string
+        workspaceIdentifier: string
+      }
+    | false
+  > {
+    try {
+      const result = await this.authApiService.accountRecoveryLookup(dto)
+      if (isErrorResponse(result)) {
+        return false
+      }
+
+      return {
+        escrow: result.data.escrow,
+        identifier: result.data.identifier,
+        workspaceIdentifier: result.data.workspace_identifier,
+      }
+    } catch {
+      return false
+    }
+  }
+
   async generateRecoveryCodes(dto: { serverPassword: string }): Promise<string | false> {
     try {
       const result = await this.authApiService.generateRecoveryCodes(dto)

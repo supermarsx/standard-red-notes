@@ -11,6 +11,7 @@ export class EndpointResolver implements EndpointResolverInterface {
     ['[POST]:auth/recovery/codes', 'auth.generateRecoveryCodes'],
     ['[POST]:auth/recovery/login', 'auth.signInWithRecoveryCodes'],
     ['[POST]:auth/recovery/params', 'auth.recoveryKeyParams'],
+    ['[POST]:auth/account-recovery/lookup', 'auth.accountRecovery.lookup'],
     // v2 Actions Controller
     ['[POST]:auth/pkce_sign_in', 'auth.pkceSignIn'],
     ['[POST]:auth/pkce_params', 'auth.pkceParams'],

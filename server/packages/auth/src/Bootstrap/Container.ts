@@ -61,6 +61,7 @@ import { CrypterInterface } from '../Domain/Encryption/CrypterInterface'
 import { CrypterNode } from '../Domain/Encryption/CrypterNode'
 import { CryptoNode } from '@standardnotes/sncrypto-node'
 import { GetSetting } from '../Domain/UseCase/GetSetting/GetSetting'
+import { GetAccountRecoveryEscrow } from '../Domain/UseCase/GetAccountRecoveryEscrow/GetAccountRecoveryEscrow'
 import { AccountDeletionRequestedEventHandler } from '../Domain/Handler/AccountDeletionRequestedEventHandler'
 import { SubscriptionPurchasedEventHandler } from '../Domain/Handler/SubscriptionPurchasedEventHandler'
 import { SubscriptionRenewedEventHandler } from '../Domain/Handler/SubscriptionRenewedEventHandler'
@@ -1568,6 +1569,15 @@ export class ContainerConfigLoader {
           container.get<SettingRepositoryInterface>(TYPES.Auth_SettingRepository),
           container.get<SettingCrypterInterface>(TYPES.Auth_SettingCrypter),
           container.get<VerifyUserServerPassword>(TYPES.Auth_VerifyUserServerPassword),
+        ),
+      )
+    container
+      .bind<GetAccountRecoveryEscrow>(TYPES.Auth_GetAccountRecoveryEscrow)
+      .toConstantValue(
+        new GetAccountRecoveryEscrow(
+          container.get<SettingRepositoryInterface>(TYPES.Auth_SettingRepository),
+          container.get<SettingCrypterInterface>(TYPES.Auth_SettingCrypter),
+          container.get<UserRepositoryInterface>(TYPES.Auth_UserRepository),
         ),
       )
     container
@@ -3274,6 +3284,7 @@ export class ContainerConfigLoader {
           container.get<ProofOfWorkGate>(TYPES.Auth_ProofOfWorkGate),
           container.get<VerifyEmailConfirmation>(TYPES.Auth_VerifyEmailConfirmation),
           container.get<ResendEmailConfirmation>(TYPES.Auth_ResendEmailConfirmation),
+          container.get<GetAccountRecoveryEscrow>(TYPES.Auth_GetAccountRecoveryEscrow),
           container.get<ControllerContainerInterface>(TYPES.Auth_ControllerContainer),
         ),
       )

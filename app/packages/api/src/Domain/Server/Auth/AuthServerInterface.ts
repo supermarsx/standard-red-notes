@@ -1,6 +1,11 @@
 import { HttpResponse } from '@standardnotes/responses'
-import { RecoveryKeyParamsRequestParams, SignInWithRecoveryCodesRequestParams } from '../../Request'
 import {
+  AccountRecoveryLookupRequestParams,
+  RecoveryKeyParamsRequestParams,
+  SignInWithRecoveryCodesRequestParams,
+} from '../../Request'
+import {
+  AccountRecoveryLookupResponseBody,
   GenerateRecoveryCodesResponseBody,
   RecoveryKeyParamsResponseBody,
   SignInWithRecoveryCodesResponseBody,
@@ -8,6 +13,9 @@ import {
 import { HttpRequestOptions } from '../../Http/HttpRequestOptions'
 
 export interface AuthServerInterface {
+  accountRecoveryLookup(
+    params: AccountRecoveryLookupRequestParams,
+  ): Promise<HttpResponse<AccountRecoveryLookupResponseBody>>
   generateRecoveryCodes(options?: HttpRequestOptions): Promise<HttpResponse<GenerateRecoveryCodesResponseBody>>
   recoveryKeyParams(params: RecoveryKeyParamsRequestParams): Promise<HttpResponse<RecoveryKeyParamsResponseBody>>
   signInWithRecoveryCodes(

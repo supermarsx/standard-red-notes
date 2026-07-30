@@ -97,4 +97,34 @@ describe('SessionManager credential rotation reconciliation', () => {
     expect(apiService.createErrorResponse).toHaveBeenCalledTimes(1)
     expect(response.status).toBe(400)
   })
+
+  it('uses the recovered account workspace explicitly instead of ambient session state', async () => {
+    const manager = createSessionManager()
+    const keyParams = { compare: jest.fn().mockReturnValue(true) }
+    const rootKey = { keyParams }
+    const internals = manager as unknown as {
+      retrieveKeyParams: jest.Mock
+      bypassChecksAndSignInWithRootKey: jest.Mock
+    }
+    internals.retrieveKeyParams = jest.fn().mockResolvedValue({
+      keyParams,
+      response: { status: 200, data: {} },
+    })
+    internals.bypassChecksAndSignInWithRootKey = jest.fn().mockResolvedValue({ status: 200, data: {} })
+
+    await manager.reconcileCredentialRotationSignIn('person@example.com', rootKey as never, undefined, 'recovered-team')
+
+    expect(internals.retrieveKeyParams).toHaveBeenCalledWith({
+      email: 'person@example.com',
+      workspaceIdentifier: 'recovered-team',
+    })
+    expect(internals.bypassChecksAndSignInWithRootKey).toHaveBeenCalledWith(
+      'person@example.com',
+      rootKey,
+      false,
+      undefined,
+      'recovered-team',
+      undefined,
+    )
+  })
 })

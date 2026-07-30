@@ -3,6 +3,7 @@ import { ApiVersion } from '../../Api'
 import { ApiCallError } from '../../Error/ApiCallError'
 import { ErrorMessage } from '../../Error/ErrorMessage'
 import {
+  AccountRecoveryLookupResponseBody,
   GenerateRecoveryCodesResponseBody,
   RecoveryKeyParamsResponseBody,
   SignInWithRecoveryCodesResponseBody,
@@ -20,6 +21,22 @@ export class AuthApiService implements AuthApiServiceInterface {
     private apiVersion: ApiVersion,
   ) {
     this.operationsInProgress = new Map()
+  }
+
+  async accountRecoveryLookup(dto: { userUuid: string }): Promise<HttpResponse<AccountRecoveryLookupResponseBody>> {
+    if (this.operationsInProgress.get(AuthApiOperations.LookupAccountRecovery)) {
+      throw new ApiCallError(ErrorMessage.GenericInProgress)
+    }
+
+    this.operationsInProgress.set(AuthApiOperations.LookupAccountRecovery, true)
+
+    try {
+      return await this.authServer.accountRecoveryLookup({ user_uuid: dto.userUuid })
+    } catch {
+      throw new ApiCallError(ErrorMessage.GenericFail)
+    } finally {
+      this.operationsInProgress.set(AuthApiOperations.LookupAccountRecovery, false)
+    }
   }
 
   async generateRecoveryCodes(dto: {

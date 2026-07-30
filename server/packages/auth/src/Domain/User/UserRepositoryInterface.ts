@@ -102,6 +102,17 @@ export interface UserRepositoryInterface {
    * max-total-accounts cap. Mirrors countAllCreatedBetween with no WHERE.
    */
   countAll(): Promise<number>
+  /**
+   * Applies a conditional credential compare-and-swap and invalidates recovery
+   * escrow in the same transaction. Returns null when the password hash or
+   * protocol version changed since validation, so concurrent recovery attempts
+   * cannot both win.
+   */
+  compareAndSwapCredentialsAndInvalidateAccountRecovery(dto: {
+    user: User
+    expectedEncryptedPassword: string
+    expectedProtocolVersion: string | null
+  }): Promise<User | null>
   save(user: User): Promise<User>
   remove(user: User): Promise<User>
 }

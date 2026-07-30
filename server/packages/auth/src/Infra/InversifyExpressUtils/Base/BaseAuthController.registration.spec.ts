@@ -72,6 +72,7 @@ describe('BaseAuthController registration', () => {
       proofOfWorkGate,
       {} as never,
       {} as never,
+      {} as never,
     )
     const request = {
       body: {

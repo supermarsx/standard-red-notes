@@ -5,6 +5,7 @@ export * from './Authenticator/GenerateAuthenticatorRegistrationOptionsResponseB
 export * from './Authenticator/ListAuthenticatorsResponseBody'
 export * from './Authenticator/VerifyAuthenticatorRegistrationResponseBody'
 export * from './Recovery/GenerateRecoveryCodesResponseBody'
+export * from './Recovery/AccountRecoveryLookupResponseBody'
 export * from './Recovery/RecoveryKeyParamsResponseBody'
 export * from './Recovery/SignInWithRecoveryCodesResponseBody'
 export * from './Recovery/GenerateRecoveryCodesResponseBody'

@@ -1053,10 +1053,12 @@ export class SessionManager
     email: string,
     rootKey: SNRootKey,
     wrappingKey?: SNRootKey,
+    workspaceIdentifier?: string,
   ): Promise<HttpResponse<SignInResponse>> {
+    const targetWorkspaceIdentifier = workspaceIdentifier ?? this.workspaceIdentifier
     const paramsResult = await this.retrieveKeyParams({
       email,
-      workspaceIdentifier: this.workspaceIdentifier,
+      workspaceIdentifier: targetWorkspaceIdentifier,
     })
     if (!paramsResult.keyParams || isErrorResponse(paramsResult.response)) {
       return paramsResult.response as unknown as HttpResponse<SignInResponse>
@@ -1071,7 +1073,7 @@ export class SessionManager
       rootKey,
       false,
       undefined,
-      this.workspaceIdentifier,
+      targetWorkspaceIdentifier,
       wrappingKey,
     )
   }

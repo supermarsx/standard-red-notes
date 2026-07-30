@@ -77,6 +77,7 @@ describe('RateLimitMiddleware', () => {
       expect(matchesAny('POST', '/v2/login')).toBe(true)
       expect(matchesAny('POST', '/v1/recovery/login')).toBe(true)
       expect(matchesAny('POST', '/v1/recovery/login-params')).toBe(true)
+      expect(matchesAny('POST', '/v1/account-recovery/lookup')).toBe(true)
     })
     it('matches the sensitive tier', () => {
       expect(matchesAny('POST', '/v1/users')).toBe(true)

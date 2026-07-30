@@ -1,7 +1,8 @@
 import * as bcrypt from 'bcryptjs'
 import { DomainEventPublisherInterface, UserEmailChangedEvent } from '@standardnotes/domain-events'
 import { TimerInterface } from '@standardnotes/time'
-import { EmailLevel, Result, UseCaseInterface, Username } from '@standardnotes/domain-core'
+import { EmailLevel, Result, UseCaseInterface, Username, Uuid } from '@standardnotes/domain-core'
+import { ProtocolVersion } from '@standardnotes/common'
 
 import { AuthResponseFactoryResolverInterface } from '../../Auth/AuthResponseFactoryResolverInterface'
 import { User } from '../../User/User'
@@ -33,7 +34,18 @@ export class ChangeCredentials implements UseCaseInterface<AuthResponseCreationR
     }
     const apiVersion = apiVersionOrError.getValue()
 
-    const user = await this.userRepository.findOneByUsernameOrEmail(dto.username)
+    if (!dto.currentPassword || !dto.newPassword || !dto.pwNonce) {
+      return Result.fail('The credential change request is missing required parameters.')
+    }
+    if (dto.protocolVersion && !Object.values(ProtocolVersion).includes(dto.protocolVersion as ProtocolVersion)) {
+      return Result.fail('The credential change request contains an unsupported protocol version.')
+    }
+
+    const userUuidOrError = Uuid.create(dto.userUuid)
+    if (userUuidOrError.isFailed()) {
+      return Result.fail('User not found.')
+    }
+    const user = await this.userRepository.findOneByUuid(userUuidOrError.getValue())
     if (!user) {
       return Result.fail('User not found.')
     }
@@ -42,10 +54,8 @@ export class ChangeCredentials implements UseCaseInterface<AuthResponseCreationR
       return Result.fail('The current password you entered is incorrect. Please try again.')
     }
 
-    user.encryptedPassword = await bcrypt.hash(dto.newPassword, User.PASSWORD_HASH_COST)
-
-    let userEmailChangedEvent: UserEmailChangedEvent | undefined = undefined
     const existingEmailAddress = user.email
+    let validatedNewEmail: string | undefined
     if (dto.newEmail !== undefined) {
       const newUsernameOrError = Username.create(dto.newEmail)
       if (newUsernameOrError.isFailed()) {
@@ -57,14 +67,24 @@ export class ChangeCredentials implements UseCaseInterface<AuthResponseCreationR
       if (existingUser !== null) {
         return Result.fail('The email you entered is already taken. Please try again.')
       }
+      validatedNewEmail = newUsername.value
+    }
 
+    const expectedEncryptedPassword = user.encryptedPassword
+    const expectedProtocolVersion = user.version ?? null
+    const encryptedPassword = await bcrypt.hash(dto.newPassword, User.PASSWORD_HASH_COST)
+
+    user.encryptedPassword = encryptedPassword
+
+    let userEmailChangedEvent: UserEmailChangedEvent | undefined = undefined
+    if (validatedNewEmail !== undefined) {
       userEmailChangedEvent = this.domainEventFactory.createUserEmailChangedEvent(
         user.uuid,
         user.email,
-        newUsername.value,
+        validatedNewEmail,
       )
 
-      user.email = newUsername.value
+      user.email = validatedNewEmail
     }
 
     user.pwNonce = dto.pwNonce
@@ -79,7 +99,19 @@ export class ChangeCredentials implements UseCaseInterface<AuthResponseCreationR
     }
     user.updatedAt = this.timer.getUTCDate()
 
-    const updatedUser = await this.userRepository.save(user)
+    let updatedUser: User | null
+    try {
+      updatedUser = await this.userRepository.compareAndSwapCredentialsAndInvalidateAccountRecovery({
+        user,
+        expectedEncryptedPassword,
+        expectedProtocolVersion,
+      })
+    } catch {
+      return Result.fail('Could not invalidate account recovery before changing credentials.')
+    }
+    if (updatedUser === null) {
+      return Result.fail('Credentials changed while this request was in progress. Please sign in again.')
+    }
 
     if (userEmailChangedEvent !== undefined) {
       await this.domainEventPublisher.publish(userEmailChangedEvent)

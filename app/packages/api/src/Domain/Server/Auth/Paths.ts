@@ -3,6 +3,7 @@ const SessionPaths = {
 }
 
 const RecoveryPaths = {
+  accountRecoveryLookup: '/v1/account-recovery/lookup',
   generateRecoveryCodes: '/v1/recovery/codes',
   recoveryKeyParams: '/v1/recovery/login-params',
   signInWithRecoveryCodes: '/v1/recovery/login',

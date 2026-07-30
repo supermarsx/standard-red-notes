@@ -284,6 +284,7 @@ describe('versioned route controllers', () => {
       'ActionsController.login (/login)',
       'ActionsController.recoveryLogin (/recovery/login)',
       'ActionsController.recoveryParams (/recovery/login-params)',
+      'ActionsController.accountRecoveryLookup (/account-recovery/lookup)',
       'AuthenticatorsController.generateAuthenticationOptions (/generate-authentication-options)',
       'McpTokensController.authenticate (/authenticate)',
       'MagicLinkController.request (/request)',

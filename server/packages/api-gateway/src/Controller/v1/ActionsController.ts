@@ -86,6 +86,16 @@ export class ActionsController extends BaseHttpController {
     )
   }
 
+  @httpPost('/account-recovery/lookup')
+  async accountRecoveryLookup(request: Request, response: Response): Promise<void> {
+    await this.serviceProxy.callAuthServer(
+      request,
+      response,
+      this.endpointResolver.resolveEndpointOrMethodIdentifier('POST', 'auth/account-recovery/lookup'),
+      request.body,
+    )
+  }
+
   @httpGet('/meta')
   async serverMetadata(): Promise<JsonResult> {
     return this.json({

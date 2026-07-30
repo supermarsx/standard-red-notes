@@ -164,6 +164,7 @@ export class BaseUsersController extends BaseHttpController {
     const username = usernameOrError.getValue()
 
     const changeCredentialsResult = await this.changeCredentialsUseCase.execute({
+      userUuid: locals.user.uuid,
       username,
       apiVersion: request.body.api,
       currentPassword: request.body.current_password,
