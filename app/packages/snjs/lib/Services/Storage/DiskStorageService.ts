@@ -64,7 +64,10 @@ export class DiskStorageService
   private storagePersistable = false
   private persistencePolicy!: StoragePersistencePolicies
   private needsPersist = false
-  private currentPersistPromise?: Promise<StorageValuesObject>
+  private currentPersistPromise?: Promise<unknown>
+  private keyValueWriteQueue: Promise<unknown> = Promise.resolve()
+  private keyValueMutationVersions = new Map<string, number>()
+  private keyValueMutationSequence = 0
 
   private values!: StorageValuesObject
 
@@ -217,7 +220,16 @@ export class DiskStorageService
   }
 
   /** @todo This function should be debounced. */
-  private async persistValuesToDisk() {
+  private persistValuesToDisk(): Promise<void> {
+    return this.enqueueKeyValueWrite(() => this.persistCurrentValuesToDisk())
+  }
+
+  /**
+   * Persists the current cache from inside the key-value write queue. Keeping the
+   * snapshot generation and raw replacement in the queue prevents an older,
+   * slower encryption/write from landing after a newer checkpoint.
+   */
+  private async persistCurrentValuesToDisk(): Promise<void> {
     if (!this.storagePersistable) {
       this.needsPersist = true
       return
@@ -227,19 +239,18 @@ export class DiskStorageService
       return
     }
 
-    /**
-     * D2 POISON FIX: still serialize behind the previous persist, but neutralize its
-     * rejection first. Previously a single rejected `currentPersistPromise` (e.g. one
-     * failed disk write) would propagate out of EVERY subsequent persist for the rest
-     * of the session, silently blocking all future key-value writes (sync/session/root
-     * keys). Swallowing only the PRIOR op's rejection here keeps ordering intact while
-     * letting this write proceed and set its own fresh promise.
-     */
-    await this.currentPersistPromise?.catch(() => undefined)
-
     this.needsPersist = false
 
-    const values = await this.immediatelyPersistValuesToDisk()
+    const values = await this.executeCriticalFunction(async () => {
+      const generatedValues = await this.generatePersistableValues()
+
+      const persistencePolicySuddenlyChanged = this.persistencePolicy === StoragePersistencePolicies.Ephemeral
+      if (!persistencePolicySuddenlyChanged) {
+        await this.device?.setRawStorageValue(this.getPersistenceKey(), JSON.stringify(generatedValues))
+      }
+
+      return generatedValues
+    })
 
     /** Save the persisted value so we have access to it in memory (for unit tests afawk) */
     this.values[ValueModesKeys.Wrapped] = values[ValueModesKeys.Wrapped]
@@ -249,21 +260,21 @@ export class DiskStorageService
     await this.currentPersistPromise
   }
 
-  private async immediatelyPersistValuesToDisk(): Promise<StorageValuesObject> {
-    this.currentPersistPromise = this.executeCriticalFunction(async () => {
-      const values = await this.generatePersistableValues()
+  /**
+   * Serializes every simple key/value raw-storage replacement. The returned
+   * promise retains this operation's rejection, while the queue tail is always
+   * released so one device failure cannot poison later writes.
+   */
+  private enqueueKeyValueWrite<T>(operation: () => Promise<T>): Promise<T> {
+    const run = this.keyValueWriteQueue.then(operation, operation)
 
-      const persistencePolicySuddenlyChanged = this.persistencePolicy === StoragePersistencePolicies.Ephemeral
-      if (persistencePolicySuddenlyChanged) {
-        return values
-      }
+    this.keyValueWriteQueue = run.then(
+      () => undefined,
+      () => undefined,
+    )
+    this.currentPersistPromise = run
 
-      await this.device?.setRawStorageValue(this.getPersistenceKey(), JSON.stringify(values))
-
-      return values
-    })
-
-    return this.currentPersistPromise
+    return run
   }
 
   /**
@@ -317,9 +328,59 @@ export class DiskStorageService
   }
 
   public async setValueAndAwaitPersist<T>(key: string, value: T, mode = StorageValueModes.Default): Promise<void> {
-    this.setValueWithNoPersist(key, value, mode)
+    await this.setValuesAtomicallyAndAwaitPersist({ [key]: value }, mode)
+  }
 
-    await this.persistValuesToDisk()
+  public async setValuesAtomicallyAndAwaitPersist(
+    values: Readonly<Record<string, unknown>>,
+    mode = StorageValueModes.Default,
+  ): Promise<void> {
+    await this.enqueueKeyValueWrite(async () => {
+      if (!this.values) {
+        throw Error('Attempting to atomically set storage values before loading local storage.')
+      }
+
+      const domainKey = this.domainKeyForMode(mode)
+      const domain = this.values[domainKey]
+      const previousNeedsPersist = this.needsPersist
+      const previousValues = new Map<string, { existed: boolean; value: unknown; appliedMutationVersion: number }>()
+
+      for (const [key, value] of Object.entries(values)) {
+        const existed = Object.prototype.hasOwnProperty.call(domain, key)
+        const previousValue = domain[key]
+
+        if (value === undefined) {
+          delete domain[key]
+        } else {
+          domain[key] = value
+        }
+
+        previousValues.set(key, {
+          existed,
+          value: previousValue,
+          appliedMutationVersion: this.recordKeyValueMutation(key, mode),
+        })
+      }
+
+      try {
+        await this.persistCurrentValuesToDisk()
+      } catch (error) {
+        for (const [key, previous] of previousValues) {
+          if (this.getKeyValueMutationVersion(key, mode) !== previous.appliedMutationVersion) {
+            continue
+          }
+
+          if (previous.existed) {
+            domain[key] = previous.value
+          } else {
+            delete domain[key]
+          }
+          this.recordKeyValueMutation(key, mode)
+        }
+        this.needsPersist = previousNeedsPersist
+        throw error
+      }
+    })
   }
 
   private setValueWithNoPersist(key: string, value: unknown, mode = StorageValueModes.Default): void {
@@ -330,6 +391,22 @@ export class DiskStorageService
     const domainKey = this.domainKeyForMode(mode)
     const domainStorage = this.values[domainKey]
     domainStorage[key] = value
+    this.recordKeyValueMutation(key, mode)
+  }
+
+  private keyValueMutationVersionKey(key: string, mode: StorageValueModes): string {
+    return `${mode}:${key}`
+  }
+
+  private getKeyValueMutationVersion(key: string, mode: StorageValueModes): number {
+    return this.keyValueMutationVersions.get(this.keyValueMutationVersionKey(key, mode)) ?? 0
+  }
+
+  private recordKeyValueMutation(key: string, mode: StorageValueModes): number {
+    const mutationKey = this.keyValueMutationVersionKey(key, mode)
+    const version = ++this.keyValueMutationSequence
+    this.keyValueMutationVersions.set(mutationKey, version)
+    return version
   }
 
   public getValue<T>(key: string, mode = StorageValueModes.Default, defaultValue?: T): T {
@@ -361,9 +438,8 @@ export class DiskStorageService
 
     const domain = this.values[this.domainKeyForMode(mode)]
 
-    if (domain?.[key]) {
-      delete domain[key]
-      return this.persistValuesToDisk()
+    if (Object.prototype.hasOwnProperty.call(domain, key)) {
+      await this.setValuesAtomicallyAndAwaitPersist({ [key]: undefined }, mode)
     }
   }
 
@@ -408,8 +484,23 @@ export class DiskStorageService
    * Clears simple values from storage only. Does not affect payloads.
    */
   async clearValues() {
-    await this.setInitialValues()
-    await this.immediatelyPersistValuesToDisk()
+    await this.enqueueKeyValueWrite(async () => {
+      const previousValues = this.values
+      const previousNeedsPersist = this.needsPersist
+      await this.setInitialValues()
+      const appliedMutationSequence = ++this.keyValueMutationSequence
+
+      try {
+        await this.persistCurrentValuesToDisk()
+      } catch (error) {
+        if (this.keyValueMutationSequence === appliedMutationSequence) {
+          this.values = previousValues
+          this.keyValueMutationSequence++
+        }
+        this.needsPersist = previousNeedsPersist
+        throw error
+      }
+    })
   }
 
   /**

@@ -24,6 +24,7 @@ export enum StorageKey {
   LegacyUuid = 'uuid',
   LastSyncToken = 'syncToken',
   PaginationToken = 'cursorToken',
+  SyncPositionCheckpoint = 'syncPositionCheckpoint',
   BiometricsState = 'biometrics_state',
   MobilePasscodeTiming = 'passcode_timing',
   MobileBiometricsTiming = 'biometrics_timing',

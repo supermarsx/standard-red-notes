@@ -136,6 +136,15 @@ const FAILURE_BACKOFF_JITTER_RATIO = 0.25
 /** Minimum gap between focus/visibility-triggered "sync ASAP" requests, to avoid focus-spam. */
 const FOCUS_SYNC_THROTTLE_MS = 5_000
 
+const SYNC_POSITION_CHECKPOINT_VERSION = 1 as const
+
+type SyncPositionCheckpoint = {
+  version: typeof SYNC_POSITION_CHECKPOINT_VERSION
+  revision: number
+  syncToken?: string
+  paginationToken?: string
+}
+
 /** Content types appearing first are always mapped first */
 const ContentTypeLocalLoadPriorty = [
   ContentType.TYPES.ItemsKey,
@@ -176,8 +185,9 @@ export class SyncService
   private clientLocked = false
   private databaseLoaded = false
 
-  private syncToken?: string
-  private cursorToken?: string
+  private syncPositionCheckpoint?: SyncPositionCheckpoint
+  private syncPositionCheckpointLoadPromise?: Promise<SyncPositionCheckpoint>
+  private syncPositionWriteQueue: Promise<unknown> = Promise.resolve()
 
   /**
    * Owner token for the short critical section that prepares/starts a sync operation.
@@ -399,9 +409,7 @@ export class SyncService
    * we want to reset any sync tokens we have.
    */
   public async onNewDatabaseCreated(): Promise<void> {
-    if (await this.getLastSyncToken()) {
-      await this.clearSyncPositionTokens()
-    }
+    await this.clearSyncPositionTokens()
   }
 
   private get launchPriorityUuids() {
@@ -991,77 +999,54 @@ export class SyncService
   }
 
   private async setLastSyncToken(token: string): Promise<void> {
-    const previousToken = this.syncToken
-    /**
-     * D2 CRITICAL-KEY ROUTING: await the disk flush. This token gates what a future
-     * sync re-pulls; a silently-dropped write (old fire-and-forget setValue) could
-     * leave disk behind memory, so a restart re-pulls already-applied pages or, worse,
-     * pairs a stale token with freshly-persisted items. Awaiting durability keeps the
-     * on-disk token consistent with the items persisted just before it (see D4).
-     */
-    try {
-      await this.writeCriticalStorageValue(StorageKey.LastSyncToken, token)
-    } catch (error) {
-      this.syncToken = previousToken
-      await this.restoreCriticalStorageValues([[StorageKey.LastSyncToken, previousToken]])
-      this.reportCriticalStorageWriteFailure(error)
-    }
-    this.syncToken = token
+    await this.updateSyncPositionCheckpoint((current) =>
+      this.createSyncPositionCheckpoint(current.revision + 1, token, current.paginationToken),
+    )
   }
 
   /**
-   * The sync and pagination cursors are one logical checkpoint. DiskStorageService
-   * currently exposes only single-key writes, so wait for both attempts to settle and,
-   * if either fails, restore BOTH values before surfacing the original failure. Waiting
-   * for allSettled is essential: a slower successful write must not re-advance one half
-   * of the pair after rollback has begun.
+   * The two server cursors are persisted as one versioned record. DiskStorageService's
+   * atomic batch changes the record and removes the legacy keys with one raw-storage
+   * replacement, so a process boundary can observe the old checkpoint or the new one,
+   * never a mixed pair. The per-service queue also prevents a slower stale response from
+   * landing after a newer checkpoint in this application instance.
    */
   private async setSyncTokens(syncToken: string, paginationToken?: string): Promise<void> {
-    const previousSyncToken = this.syncToken
-    const previousPaginationToken = this.cursorToken
-
-    const results = await Promise.allSettled([
-      this.writeCriticalStorageValue(StorageKey.LastSyncToken, syncToken),
-      this.writeCriticalStorageValue(StorageKey.PaginationToken, paginationToken),
-    ])
-    const failedWrite = results.find((result) => result.status === 'rejected')
-
-    if (failedWrite?.status === 'rejected') {
-      this.syncToken = previousSyncToken
-      this.cursorToken = previousPaginationToken
-      await this.restoreCriticalStorageValues([
-        [StorageKey.LastSyncToken, previousSyncToken],
-        [StorageKey.PaginationToken, previousPaginationToken],
-      ])
-      this.reportCriticalStorageWriteFailure(failedWrite.reason)
-    }
-
-    this.syncToken = syncToken
-    this.cursorToken = paginationToken
+    await this.updateSyncPositionCheckpoint((current) =>
+      this.createSyncPositionCheckpoint(current.revision + 1, syncToken, paginationToken),
+    )
   }
 
-  private async writeCriticalStorageValue(key: StorageKey, value: unknown): Promise<void> {
-    if (value == undefined) {
-      await this.storageService.removeValue(key)
-      return
-    }
+  private async updateSyncPositionCheckpoint(
+    update: (current: SyncPositionCheckpoint) => SyncPositionCheckpoint,
+  ): Promise<void> {
+    await this.enqueueSyncPositionWrite(async () => {
+      const current = await this.getSyncPositionCheckpoint()
+      const next = update(current)
 
-    await this.storageService.setValueAndAwaitPersist(key, value)
+      try {
+        await this.storageService.setValuesAtomicallyAndAwaitPersist({
+          [StorageKey.SyncPositionCheckpoint]: next,
+          [StorageKey.LastSyncToken]: undefined,
+          [StorageKey.PaginationToken]: undefined,
+        })
+      } catch (error) {
+        this.reportCriticalStorageWriteFailure(error)
+      }
+
+      this.cacheSyncPositionCheckpoint(next)
+    })
   }
 
-  private async restoreCriticalStorageValues(entries: [StorageKey, unknown][]): Promise<void> {
-    const rollbackResults = await Promise.allSettled(
-      entries.map(([key, value]) => this.writeCriticalStorageValue(key, value)),
+  private async enqueueSyncPositionWrite(operation: () => Promise<void>): Promise<void> {
+    const write = this.syncPositionWriteQueue.then(operation)
+
+    this.syncPositionWriteQueue = write.then(
+      () => undefined,
+      () => undefined,
     )
 
-    for (const [index, result] of rollbackResults.entries()) {
-      if (result.status === 'rejected') {
-        this.logger.error(
-          `Failed to durably restore critical storage value ${entries[index][0]} after write failure`,
-          result.reason,
-        )
-      }
-    }
+    await write
   }
 
   private reportCriticalStorageWriteFailure(error: unknown): never {
@@ -1070,25 +1055,122 @@ export class SyncService
     this.throwLocalPersistenceFailure(error)
   }
 
-  private async getLastSyncToken(): Promise<string> {
-    if (!this.syncToken) {
-      this.syncToken = (await this.storageService.getValue(StorageKey.LastSyncToken)) as string
+  private createSyncPositionCheckpoint(
+    revision: number,
+    syncToken?: string,
+    paginationToken?: string,
+  ): SyncPositionCheckpoint {
+    return {
+      version: SYNC_POSITION_CHECKPOINT_VERSION,
+      revision,
+      ...(syncToken === undefined ? {} : { syncToken }),
+      ...(paginationToken === undefined ? {} : { paginationToken }),
     }
-    return this.syncToken
   }
 
-  private async getPaginationToken(): Promise<string> {
-    if (!this.cursorToken) {
-      this.cursorToken = (await this.storageService.getValue(StorageKey.PaginationToken)) as string
+  private isSyncPositionCheckpoint(value: unknown): value is SyncPositionCheckpoint {
+    if (!value || typeof value !== 'object') {
+      return false
     }
-    return this.cursorToken
+
+    const candidate = value as Record<string, unknown>
+    return (
+      candidate.version === SYNC_POSITION_CHECKPOINT_VERSION &&
+      Number.isSafeInteger(candidate.revision) &&
+      (candidate.revision as number) >= 0 &&
+      (candidate.syncToken === undefined || typeof candidate.syncToken === 'string') &&
+      (candidate.paginationToken === undefined || typeof candidate.paginationToken === 'string')
+    )
+  }
+
+  private cacheSyncPositionCheckpoint(checkpoint: SyncPositionCheckpoint): SyncPositionCheckpoint {
+    this.syncPositionCheckpoint = checkpoint
+    return checkpoint
+  }
+
+  private async loadSyncPositionCheckpoint(): Promise<SyncPositionCheckpoint> {
+    const storedCheckpoint = this.storageService.getValue<unknown>(StorageKey.SyncPositionCheckpoint)
+
+    if (storedCheckpoint !== undefined) {
+      if (this.isSyncPositionCheckpoint(storedCheckpoint)) {
+        return this.cacheSyncPositionCheckpoint(storedCheckpoint)
+      }
+
+      this.logger.error('Ignoring malformed sync position checkpoint and restarting sync from the beginning')
+      return this.cacheSyncPositionCheckpoint(this.createSyncPositionCheckpoint(0))
+    }
+
+    const legacySyncTokenValue = this.storageService.getValue<unknown>(StorageKey.LastSyncToken)
+    const legacyPaginationTokenValue = this.storageService.getValue<unknown>(StorageKey.PaginationToken)
+    const legacySyncToken = typeof legacySyncTokenValue === 'string' ? legacySyncTokenValue : undefined
+    const legacyPaginationToken =
+      typeof legacyPaginationTokenValue === 'string' ? legacyPaginationTokenValue : undefined
+    const hasLegacyCheckpoint = legacySyncToken !== undefined || legacyPaginationToken !== undefined
+    const checkpoint = this.createSyncPositionCheckpoint(
+      hasLegacyCheckpoint ? 1 : 0,
+      legacySyncToken,
+      legacyPaginationToken,
+    )
+
+    if (hasLegacyCheckpoint) {
+      try {
+        await this.storageService.setValuesAtomicallyAndAwaitPersist({
+          [StorageKey.SyncPositionCheckpoint]: checkpoint,
+          [StorageKey.LastSyncToken]: undefined,
+          [StorageKey.PaginationToken]: undefined,
+        })
+      } catch (error) {
+        this.reportCriticalStorageWriteFailure(error)
+      }
+    }
+
+    return this.cacheSyncPositionCheckpoint(checkpoint)
+  }
+
+  private async getSyncPositionCheckpoint(): Promise<SyncPositionCheckpoint> {
+    if (this.syncPositionCheckpoint) {
+      return this.syncPositionCheckpoint
+    }
+
+    if (!this.syncPositionCheckpointLoadPromise) {
+      this.syncPositionCheckpointLoadPromise = this.loadSyncPositionCheckpoint()
+    }
+
+    try {
+      return await this.syncPositionCheckpointLoadPromise
+    } catch (error) {
+      this.syncPositionCheckpointLoadPromise = undefined
+      throw error
+    }
+  }
+
+  private async getLastSyncToken(): Promise<string | undefined> {
+    return (await this.getSyncPositionCheckpoint()).syncToken
+  }
+
+  private async getPaginationToken(): Promise<string | undefined> {
+    return (await this.getSyncPositionCheckpoint()).paginationToken
   }
 
   private async clearSyncPositionTokens() {
-    this.syncToken = undefined
-    this.cursorToken = undefined
-    await this.storageService.removeValue(StorageKey.LastSyncToken)
-    await this.storageService.removeValue(StorageKey.PaginationToken)
+    await this.enqueueSyncPositionWrite(async () => {
+      const storedCheckpoint = this.storageService.getValue<unknown>(StorageKey.SyncPositionCheckpoint)
+      const revision = this.isSyncPositionCheckpoint(storedCheckpoint) ? storedCheckpoint.revision + 1 : 1
+      const clearedCheckpoint = this.createSyncPositionCheckpoint(revision)
+
+      try {
+        await this.storageService.setValuesAtomicallyAndAwaitPersist({
+          [StorageKey.SyncPositionCheckpoint]: clearedCheckpoint,
+          [StorageKey.LastSyncToken]: undefined,
+          [StorageKey.PaginationToken]: undefined,
+        })
+      } catch (error) {
+        this.reportCriticalStorageWriteFailure(error)
+      }
+
+      this.syncPositionCheckpointLoadPromise = undefined
+      this.cacheSyncPositionCheckpoint(clearedCheckpoint)
+    })
   }
 
   private itemsNeedingSync() {

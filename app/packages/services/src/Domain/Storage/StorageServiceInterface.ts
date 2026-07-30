@@ -21,6 +21,12 @@ export interface StorageServiceInterface {
    * silently-dropped write would cause data loss or an unrecoverable auth state.
    */
   setValueAndAwaitPersist<T>(key: string, value: T, mode?: StorageValueModes): Promise<void>
+  /**
+   * Applies all changes to the in-memory value cache together and flushes them with
+   * one raw-storage replacement. An `undefined` value removes that key. If the raw
+   * write rejects, the cache is restored without issuing a compensating disk write.
+   */
+  setValuesAtomicallyAndAwaitPersist(values: Readonly<Record<string, unknown>>, mode?: StorageValueModes): Promise<void>
   removeValue(key: string, mode?: StorageValueModes): Promise<void>
   setPersistencePolicy(persistencePolicy: StoragePersistencePolicies): Promise<void>
   clearAllData(): Promise<void>

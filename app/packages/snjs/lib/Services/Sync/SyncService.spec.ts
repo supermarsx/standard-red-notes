@@ -165,10 +165,11 @@ describe('SyncService failure backoff', () => {
 describe('SyncService websocket push apply (Phase 1A)', () => {
   let logger: jest.Mocked<LoggerInterface>
   let storage: {
-    values: Record<string, string>
+    values: Record<string, unknown>
     getValue: jest.Mock
     setValue: jest.Mock
     setValueAndAwaitPersist: jest.Mock
+    setValuesAtomicallyAndAwaitPersist: jest.Mock
     removeValue: jest.Mock
     savePayloads: jest.Mock
   }
@@ -177,7 +178,10 @@ describe('SyncService websocket push apply (Phase 1A)', () => {
   let encryptionService: { decryptSplit: jest.Mock }
   let livePayloads: Map<string, FullyFormedPayloadInterface>
 
-  const StorageKeyLastSyncToken = 'syncToken'
+  const StorageKeySyncPositionCheckpoint = 'syncPositionCheckpoint'
+
+  const storedSyncToken = () =>
+    (storage.values[StorageKeySyncPositionCheckpoint] as { syncToken?: string } | undefined)?.syncToken
 
   const createService = (currentToken?: string): SyncService => {
     logger = {
@@ -190,10 +194,19 @@ describe('SyncService websocket push apply (Phase 1A)', () => {
     const noop = () => undefined
 
     storage = {
-      values: currentToken ? { [StorageKeyLastSyncToken]: currentToken } : {},
+      values: currentToken
+        ? {
+            [StorageKeySyncPositionCheckpoint]: {
+              version: 1,
+              revision: 1,
+              syncToken: currentToken,
+            },
+          }
+        : {},
       getValue: jest.fn(),
       setValue: jest.fn(),
       setValueAndAwaitPersist: jest.fn(),
+      setValuesAtomicallyAndAwaitPersist: jest.fn(),
       removeValue: jest.fn(),
       savePayloads: jest.fn().mockResolvedValue(undefined),
     }
@@ -204,6 +217,15 @@ describe('SyncService websocket push apply (Phase 1A)', () => {
     // setLastSyncToken now routes through the awaited-persist API (D2 critical-key routing).
     storage.setValueAndAwaitPersist.mockImplementation(async (key: string, value: string) => {
       storage.values[key] = value
+    })
+    storage.setValuesAtomicallyAndAwaitPersist.mockImplementation(async (values: Record<string, unknown>) => {
+      for (const [key, value] of Object.entries(values)) {
+        if (value === undefined) {
+          delete storage.values[key]
+        } else {
+          storage.values[key] = value
+        }
+      }
     })
     storage.removeValue.mockImplementation(async (key: string) => {
       delete storage.values[key]
@@ -275,7 +297,7 @@ describe('SyncService websocket push apply (Phase 1A)', () => {
     await dispatchPush(service, { items: [], syncToken: 'new-token', baseSyncToken: 'base-token' })
 
     expect(syncSpy).not.toHaveBeenCalled()
-    expect(storage.values[StorageKeyLastSyncToken]).toEqual('new-token')
+    expect(storedSyncToken()).toEqual('new-token')
   })
 
   it('discards the push and triggers an HTTP sync on a token mismatch/gap', async () => {
@@ -286,7 +308,7 @@ describe('SyncService websocket push apply (Phase 1A)', () => {
 
     expect(syncSpy).toHaveBeenCalledTimes(1)
     // Token must NOT be advanced when we discard the push.
-    expect(storage.values[StorageKeyLastSyncToken]).toEqual('different-token')
+    expect(storedSyncToken()).toEqual('different-token')
     expect((service as unknown as { wasNotifiedOfItemsChangeOnServer: boolean }).wasNotifiedOfItemsChangeOnServer).toBe(
       true,
     )
@@ -300,7 +322,7 @@ describe('SyncService websocket push apply (Phase 1A)', () => {
     await dispatchPush(service, { items: [], syncToken: 'new-token', baseSyncToken: 'base-token' })
 
     expect(syncSpy).toHaveBeenCalledTimes(1)
-    expect(storage.values[StorageKeyLastSyncToken]).toEqual('base-token')
+    expect(storedSyncToken()).toEqual('base-token')
   })
 
   it('falls back to an HTTP sync if applying the push throws, without advancing the token', async () => {
@@ -314,7 +336,7 @@ describe('SyncService websocket push apply (Phase 1A)', () => {
     await dispatchPush(service, { items: [{ uuid: 'x' }], syncToken: 'new-token', baseSyncToken: 'base-token' })
 
     expect(syncSpy).toHaveBeenCalledTimes(1)
-    expect(storage.values[StorageKeyLastSyncToken]).toEqual('base-token')
+    expect(storedSyncToken()).toEqual('base-token')
     expect(logger.error).toHaveBeenCalled()
   })
 
@@ -347,8 +369,8 @@ describe('SyncService websocket push apply (Phase 1A)', () => {
     expect(payloadManager.emitDeltaEmit).toHaveBeenCalled()
     expect(livePayloads.get(remote.uuid)).toBe(localBeforePush)
     expect(livePayloads.get(remote.uuid)?.dirty).toBe(true)
-    expect(storage.setValueAndAwaitPersist).not.toHaveBeenCalled()
-    expect(storage.values[StorageKeyLastSyncToken]).toEqual('base-token')
+    expect(storage.setValuesAtomicallyAndAwaitPersist).not.toHaveBeenCalled()
+    expect(storedSyncToken()).toEqual('base-token')
     expect(syncSpy).toHaveBeenCalledTimes(1)
     expect((service as unknown as { syncLock: symbol | false }).syncLock).toBe(false)
   })
@@ -357,41 +379,225 @@ describe('SyncService websocket push apply (Phase 1A)', () => {
     const service = createService('base-token')
     const syncSpy = jest.spyOn(service, 'sync').mockResolvedValue(undefined)
     const writeError = new Error('sync-token IndexedDB transaction aborted')
-    storage.setValueAndAwaitPersist.mockImplementation(async (key: string, value: string) => {
-      // Match DiskStorageService semantics: its value cache changes before the
-      // device transaction settles, so SyncService must explicitly roll it back.
-      storage.values[key] = value
-      throw writeError
-    })
+    storage.setValuesAtomicallyAndAwaitPersist.mockRejectedValue(writeError)
 
     await expect(
       dispatchPush(service, { items: [], syncToken: 'new-token', baseSyncToken: 'base-token' }),
     ).resolves.toBeUndefined()
 
-    expect(storage.values[StorageKeyLastSyncToken]).toEqual('base-token')
-    expect((service as unknown as { syncToken?: string }).syncToken).toEqual('base-token')
-    expect(storage.setValueAndAwaitPersist).toHaveBeenLastCalledWith(StorageKeyLastSyncToken, 'base-token')
+    expect(storedSyncToken()).toEqual('base-token')
+    expect(
+      (service as unknown as { syncPositionCheckpoint?: { syncToken?: string } }).syncPositionCheckpoint?.syncToken,
+    ).toEqual('base-token')
+    expect(storage.setValuesAtomicallyAndAwaitPersist).toHaveBeenCalledTimes(1)
     expect(syncSpy).toHaveBeenCalledTimes(1)
     expect((service as unknown as { syncLock: symbol | false }).syncLock).toBe(false)
   })
 
-  it.each([
-    ['sync token', StorageKey.LastSyncToken],
-    ['pagination token', StorageKey.PaginationToken],
-  ])('restores both cursor values when the %s write fails', async (_label, failingKey) => {
+  it('persists sync and pagination tokens as one versioned checkpoint', async () => {
     const service = createService('old-sync-token')
-    storage.values[StorageKey.PaginationToken] = 'old-pagination-token'
-    ;(service as unknown as { syncToken?: string; cursorToken?: string }).syncToken = 'old-sync-token'
-    ;(service as unknown as { syncToken?: string; cursorToken?: string }).cursorToken = 'old-pagination-token'
-    const writeError = new Error(`${failingKey} write failed`)
+    storage.values[StorageKeySyncPositionCheckpoint] = {
+      version: 1,
+      revision: 7,
+      syncToken: 'old-sync-token',
+      paginationToken: 'old-pagination-token',
+    }
 
-    storage.setValueAndAwaitPersist.mockImplementation(async (key: string, value: string) => {
-      storage.values[key] = value
-      const isNewFailedValue = key === failingKey && (value === 'new-sync-token' || value === 'new-pagination-token')
-      if (isNewFailedValue) {
-        throw writeError
-      }
+    await expect(
+      (
+        service as unknown as {
+          setSyncTokens: (syncToken: string, paginationToken?: string) => Promise<void>
+        }
+      ).setSyncTokens('new-sync-token', 'new-pagination-token'),
+    ).resolves.toBeUndefined()
+
+    expect(storage.setValuesAtomicallyAndAwaitPersist).toHaveBeenCalledTimes(1)
+    expect(storage.values[StorageKeySyncPositionCheckpoint]).toEqual({
+      version: 1,
+      revision: 8,
+      syncToken: 'new-sync-token',
+      paginationToken: 'new-pagination-token',
     })
+    expect(storage.values[StorageKey.LastSyncToken]).toBeUndefined()
+    expect(storage.values[StorageKey.PaginationToken]).toBeUndefined()
+  })
+
+  it('migrates both legacy cursor keys with the checkpoint in one atomic write', async () => {
+    const service = createService()
+    storage.values[StorageKey.LastSyncToken] = 'legacy-sync-token'
+    storage.values[StorageKey.PaginationToken] = 'legacy-pagination-token'
+
+    const [syncToken, paginationToken] = await Promise.all([
+      (
+        service as unknown as {
+          getLastSyncToken: () => Promise<string | undefined>
+        }
+      ).getLastSyncToken(),
+      (
+        service as unknown as {
+          getPaginationToken: () => Promise<string | undefined>
+        }
+      ).getPaginationToken(),
+    ])
+
+    expect(syncToken).toBe('legacy-sync-token')
+    expect(paginationToken).toBe('legacy-pagination-token')
+    expect(storage.setValuesAtomicallyAndAwaitPersist).toHaveBeenCalledTimes(1)
+    expect(storage.values[StorageKeySyncPositionCheckpoint]).toEqual({
+      version: 1,
+      revision: 1,
+      syncToken: 'legacy-sync-token',
+      paginationToken: 'legacy-pagination-token',
+    })
+    expect(storage.values[StorageKey.LastSyncToken]).toBeUndefined()
+    expect(storage.values[StorageKey.PaginationToken]).toBeUndefined()
+  })
+
+  it('uses a valid checkpoint after restart and ignores stale legacy cursor keys', async () => {
+    const service = createService()
+    storage.values[StorageKeySyncPositionCheckpoint] = {
+      version: 1,
+      revision: 12,
+      syncToken: 'checkpoint-sync-token',
+      paginationToken: 'checkpoint-pagination-token',
+    }
+    storage.values[StorageKey.LastSyncToken] = 'stale-legacy-sync-token'
+    storage.values[StorageKey.PaginationToken] = 'stale-legacy-pagination-token'
+
+    await expect(
+      (
+        service as unknown as {
+          getLastSyncToken: () => Promise<string | undefined>
+        }
+      ).getLastSyncToken(),
+    ).resolves.toBe('checkpoint-sync-token')
+    await expect(
+      (
+        service as unknown as {
+          getPaginationToken: () => Promise<string | undefined>
+        }
+      ).getPaginationToken(),
+    ).resolves.toBe('checkpoint-pagination-token')
+    expect(storage.setValuesAtomicallyAndAwaitPersist).not.toHaveBeenCalled()
+  })
+
+  it('fails safe to a full sync when the checkpoint is malformed', async () => {
+    const service = createService()
+    storage.values[StorageKeySyncPositionCheckpoint] = {
+      version: 1,
+      revision: 'not-a-number',
+      syncToken: 'untrusted-checkpoint-token',
+    }
+    storage.values[StorageKey.LastSyncToken] = 'stale-legacy-sync-token'
+
+    await expect(
+      (
+        service as unknown as {
+          getLastSyncToken: () => Promise<string | undefined>
+        }
+      ).getLastSyncToken(),
+    ).resolves.toBeUndefined()
+
+    expect(storage.setValuesAtomicallyAndAwaitPersist).not.toHaveBeenCalled()
+    expect(logger.error).toHaveBeenCalledWith(
+      'Ignoring malformed sync position checkpoint and restarting sync from the beginning',
+    )
+  })
+
+  it('fails closed when the atomic legacy migration write rejects', async () => {
+    const service = createService()
+    const writeError = new Error('migration raw write failed')
+    storage.values[StorageKey.LastSyncToken] = 'legacy-sync-token'
+    storage.values[StorageKey.PaginationToken] = 'legacy-pagination-token'
+    storage.setValuesAtomicallyAndAwaitPersist.mockRejectedValue(writeError)
+
+    await expect(
+      (
+        service as unknown as {
+          getLastSyncToken: () => Promise<string | undefined>
+        }
+      ).getLastSyncToken(),
+    ).rejects.toBe(writeError)
+
+    expect(storage.values[StorageKeySyncPositionCheckpoint]).toBeUndefined()
+    expect(storage.values[StorageKey.LastSyncToken]).toBe('legacy-sync-token')
+    expect(storage.values[StorageKey.PaginationToken]).toBe('legacy-pagination-token')
+  })
+
+  it('clears legacy cursors for a new database with one atomic checkpoint write', async () => {
+    const service = createService()
+    storage.values[StorageKey.LastSyncToken] = 'legacy-sync-token'
+    storage.values[StorageKey.PaginationToken] = 'legacy-pagination-token'
+
+    await service.onNewDatabaseCreated()
+
+    expect(storage.setValuesAtomicallyAndAwaitPersist).toHaveBeenCalledTimes(1)
+    expect(storage.values[StorageKeySyncPositionCheckpoint]).toEqual({
+      version: 1,
+      revision: 1,
+    })
+    expect(storage.values[StorageKey.LastSyncToken]).toBeUndefined()
+    expect(storage.values[StorageKey.PaginationToken]).toBeUndefined()
+  })
+
+  it('serializes checkpoint writers and advances the revision in commit order', async () => {
+    const service = createService('base-token')
+    let releaseFirstWrite!: () => void
+    const firstWrite = new Promise<void>((resolve) => {
+      releaseFirstWrite = resolve
+    })
+
+    storage.setValuesAtomicallyAndAwaitPersist
+      .mockImplementationOnce(async (values: Record<string, unknown>) => {
+        for (const [key, value] of Object.entries(values)) {
+          if (value === undefined) {
+            delete storage.values[key]
+          } else {
+            storage.values[key] = value
+          }
+        }
+        await firstWrite
+      })
+      .mockImplementationOnce(async (values: Record<string, unknown>) => {
+        for (const [key, value] of Object.entries(values)) {
+          if (value === undefined) {
+            delete storage.values[key]
+          } else {
+            storage.values[key] = value
+          }
+        }
+      })
+
+    const pairWrite = (
+      service as unknown as {
+        setSyncTokens: (syncToken: string, paginationToken?: string) => Promise<void>
+      }
+    ).setSyncTokens('page-token', 'next-page')
+    await new Promise((resolve) => setImmediate(resolve))
+
+    const websocketWrite = (
+      service as unknown as {
+        setLastSyncToken: (syncToken: string) => Promise<void>
+      }
+    ).setLastSyncToken('websocket-token')
+    expect(storage.setValuesAtomicallyAndAwaitPersist).toHaveBeenCalledTimes(1)
+
+    releaseFirstWrite()
+    await Promise.all([pairWrite, websocketWrite])
+
+    expect(storage.setValuesAtomicallyAndAwaitPersist).toHaveBeenCalledTimes(2)
+    expect(storage.values[StorageKeySyncPositionCheckpoint]).toEqual({
+      version: 1,
+      revision: 3,
+      syncToken: 'websocket-token',
+      paginationToken: 'next-page',
+    })
+  })
+
+  it('does not issue a compensating disk write when an atomic checkpoint write rejects', async () => {
+    const service = createService('old-sync-token')
+    const writeError = new Error('checkpoint write rejected')
+    storage.setValuesAtomicallyAndAwaitPersist.mockRejectedValue(writeError)
 
     await expect(
       (
@@ -401,10 +607,23 @@ describe('SyncService websocket push apply (Phase 1A)', () => {
       ).setSyncTokens('new-sync-token', 'new-pagination-token'),
     ).rejects.toBe(writeError)
 
-    expect(storage.values[StorageKey.LastSyncToken]).toBe('old-sync-token')
-    expect(storage.values[StorageKey.PaginationToken]).toBe('old-pagination-token')
-    expect((service as unknown as { syncToken?: string }).syncToken).toBe('old-sync-token')
-    expect((service as unknown as { cursorToken?: string }).cursorToken).toBe('old-pagination-token')
+    expect(storage.setValuesAtomicallyAndAwaitPersist).toHaveBeenCalledTimes(1)
+    expect(storage.values[StorageKeySyncPositionCheckpoint]).toEqual({
+      version: 1,
+      revision: 1,
+      syncToken: 'old-sync-token',
+    })
+    expect(
+      (
+        service as unknown as {
+          syncPositionCheckpoint?: { syncToken?: string; paginationToken?: string }
+        }
+      ).syncPositionCheckpoint,
+    ).toEqual({
+      version: 1,
+      revision: 1,
+      syncToken: 'old-sync-token',
+    })
   })
 
   it('performs a full HTTP sync on websocket (re)connect to backfill', async () => {

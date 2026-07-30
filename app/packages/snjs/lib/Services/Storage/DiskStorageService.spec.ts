@@ -196,4 +196,198 @@ describe('diskStorageService', () => {
       expect(SNLog.onError).toHaveBeenCalled()
     })
   })
+
+  describe('atomic key-value batches', () => {
+    const flush = () => new Promise((resolve) => setImmediate(resolve))
+
+    beforeEach(() => {
+      UuidGenerator.SetGenerator(() => 'atomic-storage-test-uuid')
+      storageService.provideEncryptionProvider({
+        hasRootKeyEncryptionSource: jest.fn().mockReturnValue(false),
+        encryptSplit: jest.fn().mockResolvedValue([]),
+      } as never)
+      storageService['values'] = DiskStorageService.DefaultValuesObject()
+      storageService['storagePersistable'] = true
+      device.setRawStorageValue = jest.fn().mockResolvedValue(undefined)
+    })
+
+    it('persists a cursor migration as one raw replacement', async () => {
+      storageService['values'].unwrapped = {
+        syncToken: 'legacy-sync-token',
+        cursorToken: 'legacy-pagination-token',
+      }
+      const checkpoint = {
+        version: 1,
+        revision: 1,
+        syncToken: 'legacy-sync-token',
+        paginationToken: 'legacy-pagination-token',
+      }
+
+      await storageService.setValuesAtomicallyAndAwaitPersist({
+        syncPositionCheckpoint: checkpoint,
+        syncToken: undefined,
+        cursorToken: undefined,
+      })
+
+      expect(device.setRawStorageValue).toHaveBeenCalledTimes(1)
+      expect(storageService.getValue('syncPositionCheckpoint')).toEqual(checkpoint)
+      expect(storageService.getValue('syncToken')).toBeUndefined()
+      expect(storageService.getValue('cursorToken')).toBeUndefined()
+
+      const persisted = JSON.parse((device.setRawStorageValue as jest.Mock).mock.calls[0][1]) as {
+        wrapped: { content: Record<string, unknown> }
+      }
+      expect(persisted.wrapped.content).toEqual(expect.objectContaining({ syncPositionCheckpoint: checkpoint }))
+    })
+
+    it('restores every cached key after a rejected batch without a compensating write', async () => {
+      const previousCheckpoint = {
+        version: 1,
+        revision: 4,
+        syncToken: 'old-sync-token',
+        paginationToken: 'old-pagination-token',
+      }
+      storageService['values'].unwrapped = {
+        syncPositionCheckpoint: previousCheckpoint,
+        syncToken: 'legacy-sync-token',
+      }
+      device.setRawStorageValue = jest.fn().mockRejectedValue(new Error('raw storage write failed'))
+
+      await expect(
+        storageService.setValuesAtomicallyAndAwaitPersist({
+          syncPositionCheckpoint: {
+            version: 1,
+            revision: 5,
+            syncToken: 'new-sync-token',
+            paginationToken: 'new-pagination-token',
+          },
+          syncToken: undefined,
+        }),
+      ).rejects.toThrow('raw storage write failed')
+
+      expect(device.setRawStorageValue).toHaveBeenCalledTimes(1)
+      expect(storageService.getValue('syncPositionCheckpoint')).toBe(previousCheckpoint)
+      expect(storageService.getValue('syncToken')).toBe('legacy-sync-token')
+    })
+
+    it('serializes atomic writers so a stale snapshot cannot land last', async () => {
+      let releaseFirstWrite!: () => void
+      const firstWrite = new Promise<void>((resolve) => {
+        releaseFirstWrite = resolve
+      })
+      device.setRawStorageValue = jest
+        .fn()
+        .mockImplementationOnce(async () => firstWrite)
+        .mockResolvedValueOnce(undefined)
+
+      const firstCheckpoint = { version: 1, revision: 1, syncToken: 'first-token' }
+      const secondCheckpoint = { version: 1, revision: 2, syncToken: 'second-token' }
+      const first = storageService.setValuesAtomicallyAndAwaitPersist({
+        syncPositionCheckpoint: firstCheckpoint,
+      })
+      await flush()
+
+      const second = storageService.setValuesAtomicallyAndAwaitPersist({
+        syncPositionCheckpoint: secondCheckpoint,
+      })
+      await flush()
+
+      expect(device.setRawStorageValue).toHaveBeenCalledTimes(1)
+      expect(storageService.getValue('syncPositionCheckpoint')).toEqual(firstCheckpoint)
+
+      releaseFirstWrite()
+      await Promise.all([first, second])
+
+      expect(device.setRawStorageValue).toHaveBeenCalledTimes(2)
+      const firstPersisted = JSON.parse((device.setRawStorageValue as jest.Mock).mock.calls[0][1]) as {
+        wrapped: { content: Record<string, unknown> }
+      }
+      const secondPersisted = JSON.parse((device.setRawStorageValue as jest.Mock).mock.calls[1][1]) as {
+        wrapped: { content: Record<string, unknown> }
+      }
+      expect(firstPersisted.wrapped.content.syncPositionCheckpoint).toEqual(firstCheckpoint)
+      expect(secondPersisted.wrapped.content.syncPositionCheckpoint).toEqual(secondCheckpoint)
+      expect(storageService.getValue('syncPositionCheckpoint')).toEqual(secondCheckpoint)
+    })
+
+    it('does not roll back a newer same-key mutation when an older atomic write fails', async () => {
+      let rejectFirstWrite!: (error: Error) => void
+      const firstWrite = new Promise<void>((_resolve, reject) => {
+        rejectFirstWrite = reject
+      })
+      device.setRawStorageValue = jest
+        .fn()
+        .mockImplementationOnce(async () => firstWrite)
+        .mockResolvedValueOnce(undefined)
+      storageService['values'].unwrapped = {
+        syncPositionCheckpoint: { version: 1, revision: 1, syncToken: 'old-token' },
+      }
+
+      const failedAtomicWrite = storageService.setValuesAtomicallyAndAwaitPersist({
+        syncPositionCheckpoint: { version: 1, revision: 2, syncToken: 'failed-token' },
+      })
+      await flush()
+
+      const newerCheckpoint = { version: 1, revision: 3, syncToken: 'newer-token' }
+      storageService.setValue('syncPositionCheckpoint', newerCheckpoint)
+      rejectFirstWrite(new Error('older write failed'))
+
+      await expect(failedAtomicWrite).rejects.toThrow('older write failed')
+      await storageService.awaitPersist()
+
+      expect(device.setRawStorageValue).toHaveBeenCalledTimes(2)
+      expect(storageService.getValue('syncPositionCheckpoint')).toEqual(newerCheckpoint)
+      const persisted = JSON.parse((device.setRawStorageValue as jest.Mock).mock.calls[1][1]) as {
+        wrapped: { content: Record<string, unknown> }
+      }
+      expect(persisted.wrapped.content.syncPositionCheckpoint).toEqual(newerCheckpoint)
+    })
+
+    it('a rejected forward write remains on the old checkpoint after a process boundary', async () => {
+      let rawStorageValue: string | undefined
+      device.getRawStorageValue = jest.fn().mockImplementation(async () => rawStorageValue)
+      device.setRawStorageValue = jest.fn().mockImplementation(async (_key: string, value: string) => {
+        rawStorageValue = value
+      })
+
+      const oldCheckpoint = { version: 1, revision: 8, syncToken: 'durable-old-token' }
+      await storageService.setValuesAtomicallyAndAwaitPersist({
+        syncPositionCheckpoint: oldCheckpoint,
+      })
+      const durableBeforeFailure = rawStorageValue
+
+      ;(device.setRawStorageValue as jest.Mock).mockRejectedValueOnce(new Error('simulated process-boundary failure'))
+      await expect(
+        storageService.setValuesAtomicallyAndAwaitPersist({
+          syncPositionCheckpoint: { version: 1, revision: 9, syncToken: 'non-durable-new-token' },
+        }),
+      ).rejects.toThrow('simulated process-boundary failure')
+
+      expect(rawStorageValue).toBe(durableBeforeFailure)
+      expect(storageService.getValue('syncPositionCheckpoint')).toEqual(oldCheckpoint)
+
+      const restarted = new DiskStorageService(device, 'test', internalEventBus)
+      restarted.provideEncryptionProvider({
+        hasRootKeyEncryptionSource: jest.fn().mockReturnValue(false),
+        encryptSplit: jest.fn().mockResolvedValue([]),
+      } as never)
+      await restarted.initializeFromDisk()
+
+      expect(restarted.getValue('syncPositionCheckpoint')).toEqual(oldCheckpoint)
+
+      const newCheckpoint = { version: 1, revision: 9, syncToken: 'durable-new-token' }
+      await storageService.setValuesAtomicallyAndAwaitPersist({
+        syncPositionCheckpoint: newCheckpoint,
+      })
+
+      const restartedAfterCommit = new DiskStorageService(device, 'test', internalEventBus)
+      restartedAfterCommit.provideEncryptionProvider({
+        hasRootKeyEncryptionSource: jest.fn().mockReturnValue(false),
+        encryptSplit: jest.fn().mockResolvedValue([]),
+      } as never)
+      await restartedAfterCommit.initializeFromDisk()
+
+      expect(restartedAfterCommit.getValue('syncPositionCheckpoint')).toEqual(newCheckpoint)
+    })
+  })
 })
