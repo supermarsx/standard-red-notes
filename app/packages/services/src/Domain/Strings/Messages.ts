@@ -86,6 +86,12 @@ export function StrictSignInFailed(current: ProtocolVersion, latest: ProtocolVer
 export const CredentialsChangeStrings = {
   PasscodeRequired: 'Your passcode is required to process your credentials change.',
   Failed: 'Unable to change your credentials due to a sync error. Please try again.',
+  RollbackRejected:
+    'Your credentials changed, but key synchronization did not finish and the previous credentials could not be safely restored. Keep using your new credentials and do not sign out until syncing succeeds.',
+  RollbackUnconfirmed:
+    'The server did not confirm whether your previous credentials were restored. Keep both your old and new credentials available and do not sign out until you verify syncing and sign-in.',
+  LocalRollbackFailed:
+    'The server restored your previous credentials, but this device could not finish restoring its local encryption state. Keep your old credentials available and do not sign out until syncing succeeds.',
 }
 
 export const RegisterStrings = {

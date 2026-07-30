@@ -2,7 +2,7 @@ import { DecryptErroredPayloads } from './../Encryption/UseCase/DecryptErroredPa
 import { ReencryptTypeAItems } from './../Encryption/UseCase/TypeA/ReencryptTypeAItems'
 import { EncryptionProviderInterface } from './../Encryption/EncryptionProviderInterface'
 import { UserApiServiceInterface } from '@standardnotes/api'
-import { UserRequestType } from '@standardnotes/common'
+import { KeyParamsOrigination, UserRequestType } from '@standardnotes/common'
 import { User } from '@standardnotes/responses'
 
 import {
@@ -15,6 +15,7 @@ import {
 import { SessionsClientInterface } from '../Session/SessionsClientInterface'
 import { StorageServiceInterface } from '../Storage/StorageServiceInterface'
 import { SyncServiceInterface } from '../Sync/SyncServiceInterface'
+import { AccountEvent } from './AccountEvent'
 import { UserService } from './UserService'
 
 describe('UserService', () => {
@@ -60,6 +61,7 @@ describe('UserService', () => {
     encryptionService = {} as jest.Mocked<EncryptionProviderInterface>
 
     alertService = {} as jest.Mocked<AlertService>
+    alertService.alert = jest.fn().mockResolvedValue(undefined)
 
     challengeService = {} as jest.Mocked<ChallengeServiceInterface>
 
@@ -67,8 +69,61 @@ describe('UserService', () => {
 
     userApiService = {} as jest.Mocked<UserApiServiceInterface>
 
+    reencryptTypeAItems = {} as jest.Mocked<ReencryptTypeAItems>
+    reencryptTypeAItems.execute = jest.fn().mockResolvedValue(undefined)
+
+    decryptErroredPayloads = {} as jest.Mocked<DecryptErroredPayloads>
+
     internalEventBus = {} as jest.Mocked<InternalEventBusInterface>
   })
+
+  const successSessionResponse = {
+    response: {
+      status: 200,
+      data: {},
+    },
+  }
+
+  const errorSessionResponse = (message: string) => ({
+    response: {
+      status: 500,
+      data: {
+        error: {
+          message,
+        },
+      },
+    },
+  })
+
+  const prepareCredentialChange = (neverSynced = true) => {
+    const currentRootKey = { serverPassword: 'current-server-password' }
+    const newRootKey = { serverPassword: 'new-server-password' }
+    const localRollback = jest.fn().mockResolvedValue(undefined)
+
+    challengeService.getWrappingKeyIfApplicable = jest.fn().mockResolvedValue({
+      canceled: false,
+      wrappingKey: undefined,
+    })
+    encryptionService.validateAccountPassword = jest.fn().mockResolvedValue({ valid: true })
+    encryptionService.getRootKeyParams = jest.fn().mockReturnValue({})
+    encryptionService.computeRootKey = jest.fn().mockResolvedValue(currentRootKey)
+    encryptionService.createRootKey = jest.fn().mockResolvedValue(newRootKey)
+    encryptionService.createNewItemsKeyWithRollback = jest.fn().mockResolvedValue(localRollback)
+    encryptionService.getSureDefaultItemsKey = jest.fn().mockReturnValue({ neverSynced })
+    sessionManager.getUser = jest.fn().mockReturnValue({
+      uuid: 'user-uuid',
+      email: 'old@example.com',
+    })
+    syncService.lockSyncing = jest.fn()
+    syncService.unlockSyncing = jest.fn()
+    syncService.sync = jest.fn().mockResolvedValue(undefined)
+
+    return {
+      currentRootKey,
+      localRollback,
+      newRootKey,
+    }
+  }
 
   it('should submit a user request to the server', async () => {
     userApiService.submitUserRequest = jest.fn().mockReturnValue({ data: { success: true } })
@@ -94,6 +149,202 @@ describe('UserService', () => {
     })
 
     expect(await createService().submitUserRequest(UserRequestType.ExitDiscount)).toBeFalsy()
+  })
+
+  describe('credential rotation failure safety', () => {
+    const passwordChange = {
+      currentPassword: 'current-password',
+      newPassword: 'new-password',
+      origination: KeyParamsOrigination.PasswordChange,
+      validateNewPasswordStrength: true,
+    }
+    const emailChange = {
+      currentPassword: 'current-password',
+      newEmail: 'new@example.com',
+      origination: KeyParamsOrigination.EmailChange,
+      validateNewPasswordStrength: false,
+    }
+
+    it('unlocks syncing when the initial server or keychain update rejects', async () => {
+      prepareCredentialChange()
+      const failure = new Error('keychain unavailable')
+      sessionManager.changeCredentials = jest.fn().mockRejectedValue(failure)
+
+      await expect(createService().changeCredentials(passwordChange)).rejects.toBe(failure)
+
+      expect(syncService.lockSyncing).toHaveBeenCalledTimes(1)
+      expect(syncService.unlockSyncing).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not apply a local rollback when the server rejects the credential rollback', async () => {
+      const { localRollback } = prepareCredentialChange()
+      sessionManager.changeCredentials = jest
+        .fn()
+        .mockResolvedValueOnce(successSessionResponse)
+        .mockResolvedValueOnce(errorSessionResponse('rollback rejected'))
+
+      const result = await createService().changeCredentials(emailChange)
+
+      expect(result.error?.message).toBe(
+        'Your credentials changed, but key synchronization did not finish and the previous credentials could not be safely restored. Keep using your new credentials and do not sign out until syncing succeeds.',
+      )
+      expect(sessionManager.changeCredentials).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          currentServerPassword: 'new-server-password',
+          newEmail: 'old@example.com',
+        }),
+      )
+      expect(localRollback).not.toHaveBeenCalled()
+      expect(reencryptTypeAItems.execute).toHaveBeenCalledTimes(1)
+      expect(syncService.sync).toHaveBeenCalledTimes(1)
+      expect(syncService.lockSyncing).toHaveBeenCalledTimes(2)
+      expect(syncService.unlockSyncing).toHaveBeenCalledTimes(2)
+    })
+
+    it('does not apply a local rollback when the server rollback is unconfirmed', async () => {
+      const { localRollback } = prepareCredentialChange()
+      sessionManager.changeCredentials = jest
+        .fn()
+        .mockResolvedValueOnce(successSessionResponse)
+        .mockRejectedValueOnce(new Error('connection dropped'))
+
+      const result = await createService().changeCredentials(passwordChange)
+
+      expect(result.error?.message).toContain('did not confirm whether your previous credentials were restored')
+      expect(localRollback).not.toHaveBeenCalled()
+      expect(syncService.lockSyncing).toHaveBeenCalledTimes(2)
+      expect(syncService.unlockSyncing).toHaveBeenCalledTimes(2)
+    })
+
+    it('reports a distinct failure when local rollback fails after server confirmation', async () => {
+      const { localRollback } = prepareCredentialChange()
+      localRollback.mockRejectedValue(new Error('local database unavailable'))
+      sessionManager.changeCredentials = jest
+        .fn()
+        .mockResolvedValueOnce(successSessionResponse)
+        .mockResolvedValueOnce(successSessionResponse)
+
+      const result = await createService().changeCredentials(passwordChange)
+
+      expect(result.error?.message).toContain(
+        'server restored your previous credentials, but this device could not finish restoring',
+      )
+      expect(localRollback).toHaveBeenCalledTimes(1)
+      expect(syncService.sync).toHaveBeenCalledTimes(1)
+      expect(syncService.lockSyncing).toHaveBeenCalledTimes(2)
+      expect(syncService.unlockSyncing).toHaveBeenCalledTimes(2)
+    })
+
+    it('restores the original email before applying a confirmed local rollback', async () => {
+      const { currentRootKey, localRollback } = prepareCredentialChange()
+      sessionManager.changeCredentials = jest
+        .fn()
+        .mockResolvedValueOnce(successSessionResponse)
+        .mockResolvedValueOnce(successSessionResponse)
+
+      const result = await createService().changeCredentials(emailChange)
+
+      expect(sessionManager.changeCredentials).toHaveBeenNthCalledWith(2, {
+        currentServerPassword: 'new-server-password',
+        newRootKey: currentRootKey,
+        wrappingKey: undefined,
+        newEmail: 'old@example.com',
+      })
+      expect(localRollback).toHaveBeenCalledTimes(1)
+      expect(reencryptTypeAItems.execute).toHaveBeenCalledTimes(2)
+      expect(syncService.sync).toHaveBeenCalledTimes(2)
+      expect(result.error?.message).toBe('Unable to change your credentials due to a sync error. Please try again.')
+    })
+  })
+
+  describe('authentication sync-lock lifecycle', () => {
+    beforeEach(() => {
+      encryptionService.hasAccount = jest.fn().mockReturnValue(false)
+      syncService.lockSyncing = jest.fn()
+      syncService.unlockSyncing = jest.fn()
+    })
+
+    it('unlocks syncing when sign-in rejects before the account event handoff', async () => {
+      const failure = new Error('sign-in request failed')
+      sessionManager.signIn = jest.fn().mockRejectedValue(failure)
+
+      await expect(createService().signIn('user@example.com', 'password')).rejects.toBe(failure)
+
+      expect(syncService.lockSyncing).toHaveBeenCalledTimes(1)
+      expect(syncService.unlockSyncing).toHaveBeenCalledTimes(1)
+    })
+
+    it('unlocks syncing when a successful sign-in event observer rejects', async () => {
+      sessionManager.signIn = jest.fn().mockResolvedValue(successSessionResponse)
+      const service = createService()
+      service.addEventObserver(async () => {
+        throw new Error('account event failed')
+      })
+
+      await expect(service.signIn('user@example.com', 'password')).rejects.toThrow('account event failed')
+
+      expect(syncService.unlockSyncing).toHaveBeenCalledTimes(1)
+    })
+
+    it('unlocks syncing when corrective sign-in rejects', async () => {
+      const failure = new Error('corrective sign-in failed')
+      sessionManager.bypassChecksAndSignInWithRootKey = jest.fn().mockRejectedValue(failure)
+
+      await expect(
+        createService().correctiveSignIn({
+          keyParams: {
+            identifier: 'user@example.com',
+          },
+        } as never),
+      ).rejects.toBe(failure)
+
+      expect(syncService.unlockSyncing).toHaveBeenCalledTimes(1)
+    })
+
+    it('unlocks syncing when a corrective sign-in event observer rejects', async () => {
+      sessionManager.bypassChecksAndSignInWithRootKey = jest.fn().mockResolvedValue(successSessionResponse.response)
+      const service = createService()
+      service.addEventObserver(async () => {
+        throw new Error('corrective account event failed')
+      })
+
+      await expect(
+        service.correctiveSignIn({
+          keyParams: {
+            identifier: 'user@example.com',
+          },
+        } as never),
+      ).rejects.toThrow('corrective account event failed')
+
+      expect(syncService.unlockSyncing).toHaveBeenCalledTimes(1)
+    })
+
+    it('unlocks syncing when signed-in account storage preparation rejects', async () => {
+      const failure = new Error('database unavailable')
+      syncService.resetSyncState = jest.fn()
+      syncService.markAllItemsAsNeedingSyncAndPersist = jest.fn()
+      syncService.downloadFirstSync = jest.fn()
+      storageService.setPersistencePolicy = jest.fn().mockRejectedValue(failure)
+
+      await expect(
+        createService().handleEvent({
+          type: AccountEvent.SignedInOrRegistered,
+          payload: {
+            payload: {
+              ephemeral: false,
+              mergeLocal: true,
+              awaitSync: true,
+              checkIntegrity: true,
+            },
+          },
+        } as never),
+      ).rejects.toBe(failure)
+
+      expect(syncService.unlockSyncing).toHaveBeenCalledTimes(1)
+      expect(syncService.markAllItemsAsNeedingSyncAndPersist).not.toHaveBeenCalled()
+      expect(syncService.downloadFirstSync).not.toHaveBeenCalled()
+    })
   })
 
   describe('items-key rewrite safety', () => {

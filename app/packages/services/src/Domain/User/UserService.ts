@@ -91,18 +91,25 @@ export class UserService
       const payload = (event.payload as AccountEventData).payload as SignedInOrRegisteredEventPayload
       this.sync.resetSyncState()
 
-      await this.storage.setPersistencePolicy(
-        payload.ephemeral ? StoragePersistencePolicies.Ephemeral : StoragePersistencePolicies.Default,
-      )
+      try {
+        await this.storage.setPersistencePolicy(
+          payload.ephemeral ? StoragePersistencePolicies.Ephemeral : StoragePersistencePolicies.Default,
+        )
 
-      if (payload.mergeLocal) {
-        await this.sync.markAllItemsAsNeedingSyncAndPersist()
-      } else {
-        void this.items.removeAllItemsFromMemory()
-        await this.clearDatabase()
+        if (payload.mergeLocal) {
+          await this.sync.markAllItemsAsNeedingSyncAndPersist()
+        } else {
+          void this.items.removeAllItemsFromMemory()
+          await this.clearDatabase()
+        }
+      } finally {
+        /**
+         * This event is the success-path handoff for register/sign-in. Storage
+         * preparation can fail before the download sync begins; never leave the
+         * caller's client lock set when that happens.
+         */
+        this.unlockSyncing()
       }
-
-      this.unlockSyncing()
 
       const syncPromise = this.sync
         .downloadFirstSync(1_000, {
@@ -265,6 +272,14 @@ export class UserService
       }
 
       return response
+    } catch (error) {
+      /**
+       * A successful SignedInOrRegistered event unlocks syncing from handleEvent
+       * after account storage has been prepared. Rejections never complete that
+       * handoff, so release the client lock before propagating the failure.
+       */
+      this.unlockSyncing()
+      throw error
     } finally {
       this.signingIn = false
     }
@@ -334,23 +349,33 @@ export class UserService
    */
   public async correctiveSignIn(rootKey: SNRootKey): Promise<HttpResponse<SignInResponse>> {
     this.lockSyncing()
+    try {
+      const response = await this.sessions.bypassChecksAndSignInWithRootKey(
+        rootKey.keyParams.identifier,
+        rootKey,
+        false,
+      )
 
-    const response = await this.sessions.bypassChecksAndSignInWithRootKey(rootKey.keyParams.identifier, rootKey, false)
+      if (!isErrorResponse(response)) {
+        await this.notifyEvent(AccountEvent.SignedInOrRegistered, {
+          payload: {
+            mergeLocal: true,
+            awaitSync: true,
+            ephemeral: false,
+            checkIntegrity: true,
+          },
+        })
+      }
 
-    if (!isErrorResponse(response)) {
-      await this.notifyEvent(AccountEvent.SignedInOrRegistered, {
-        payload: {
-          mergeLocal: true,
-          awaitSync: true,
-          ephemeral: false,
-          checkIntegrity: true,
-        },
-      })
+      return response
+    } finally {
+      /**
+       * handleEvent also unlocks on the successful event path; the underlying
+       * boolean lock is idempotent. The finally protects rejected auth/event
+       * paths that otherwise leave all subsequent sync attempts disabled.
+       */
+      this.unlockSyncing()
     }
-
-    this.unlockSyncing()
-
-    return response
   }
 
   /**
@@ -646,15 +671,17 @@ export class UserService
     })
 
     this.lockSyncing()
-
-    const { response } = await this.sessions.changeCredentials({
-      currentServerPassword: currentRootKey.serverPassword as string,
-      newRootKey: newRootKey,
-      wrappingKey,
-      newEmail: newEmail,
-    })
-
-    this.unlockSyncing()
+    let response
+    try {
+      ;({ response } = await this.sessions.changeCredentials({
+        currentServerPassword: currentRootKey.serverPassword as string,
+        newRootKey: newRootKey,
+        wrappingKey,
+        newEmail: newEmail,
+      }))
+    } finally {
+      this.unlockSyncing()
+    }
 
     if (isErrorResponse(response)) {
       return { error: Error(response.data.error?.message) }
@@ -668,13 +695,35 @@ export class UserService
     const itemsKeyWasSynced = !defaultItemsKey.neverSynced
 
     if (!itemsKeyWasSynced) {
-      await this.sessions.changeCredentials({
-        currentServerPassword: newRootKey.serverPassword as string,
-        newRootKey: currentRootKey,
-        wrappingKey,
-      })
-      await this._reencryptTypeAItems.execute()
-      await rollback()
+      this.lockSyncing()
+      let serverRollbackConfirmed = false
+      try {
+        const { response: rollbackResponse } = await this.sessions.changeCredentials({
+          currentServerPassword: newRootKey.serverPassword as string,
+          newRootKey: currentRootKey,
+          wrappingKey,
+          newEmail: newEmail !== undefined ? currentEmail : undefined,
+        })
+
+        if (isErrorResponse(rollbackResponse)) {
+          return { error: Error(Messages.CredentialsChangeStrings.RollbackRejected) }
+        }
+
+        serverRollbackConfirmed = true
+        await this._reencryptTypeAItems.execute()
+        await rollback()
+      } catch {
+        return {
+          error: Error(
+            serverRollbackConfirmed
+              ? Messages.CredentialsChangeStrings.LocalRollbackFailed
+              : Messages.CredentialsChangeStrings.RollbackUnconfirmed,
+          ),
+        }
+      } finally {
+        this.unlockSyncing()
+      }
+
       await this.sync.sync({ awaitAll: true })
 
       return { error: Error(Messages.CredentialsChangeStrings.Failed) }

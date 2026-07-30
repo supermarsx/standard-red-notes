@@ -438,27 +438,30 @@ export class LegacyApiService
       return preprocessingError
     }
     this.changing = true
-    const path = Paths.v1.changeCredentials(parameters.userUuid)
-    const params = this.params({
-      current_password: parameters.currentServerPassword,
-      new_password: parameters.newServerPassword,
-      new_email: parameters.newEmail,
-      ...parameters.newKeyParams.getPortableValue(),
-    })
 
-    const response = await this.httpService.put<ChangeCredentialsResponse>(path, params, {
-      authentication: this.getSessionAccessToken(),
-    })
+    try {
+      const path = Paths.v1.changeCredentials(parameters.userUuid)
+      const params = this.params({
+        current_password: parameters.currentServerPassword,
+        new_password: parameters.newServerPassword,
+        new_email: parameters.newEmail,
+        ...parameters.newKeyParams.getPortableValue(),
+      })
 
-    this.changing = false
+      const response = await this.httpService.put<ChangeCredentialsResponse>(path, params, {
+        authentication: this.getSessionAccessToken(),
+      })
 
-    if (isErrorResponse(response)) {
-      return this.errorResponseWithFallbackMessage(response, API_MESSAGE_GENERIC_CHANGE_CREDENTIALS_FAIL)
+      if (isErrorResponse(response)) {
+        return this.errorResponseWithFallbackMessage(response, API_MESSAGE_GENERIC_CHANGE_CREDENTIALS_FAIL)
+      }
+
+      this.processSuccessResponseForMetaBody(response)
+
+      return response
+    } finally {
+      this.changing = false
     }
-
-    this.processSuccessResponseForMetaBody(response)
-
-    return response
   }
 
   async sync(
