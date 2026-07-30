@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, test } from "vitest";
 import { AsyncMutex } from "../src/AsyncMutex.js";
+import { withHttpRequestTimeout } from "../src/httpSecurity.js";
 
 describe("shared SNJS operation gate", () => {
   test("runs concurrent operations one at a time in FIFO order", async () => {
@@ -64,5 +65,28 @@ describe("shared SNJS operation gate", () => {
     // A new direct call in a tool handler bypasses shared-app serialization.
     expect(calls).toHaveLength(2);
     expect(source).toContain("bridgeOperations.runExclusive");
+  });
+
+  test("keeps serialization held after a 504 until the operation really settles", async () => {
+    const mutex = new AsyncMutex();
+    let releaseMutation!: () => void;
+    const mutationMayFinish = new Promise<void>((resolve) => {
+      releaseMutation = resolve;
+    });
+    let followUpStarted = false;
+    const mutation = mutex.runExclusive(async () => mutationMayFinish);
+
+    await expect(withHttpRequestTimeout(mutation, 5)).rejects.toThrow(
+      "operation outcome is unknown",
+    );
+    const followUp = mutex.runExclusive(async () => {
+      followUpStarted = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(followUpStarted).toBe(false);
+
+    releaseMutation();
+    await Promise.all([mutation, followUp]);
+    expect(followUpStarted).toBe(true);
   });
 });

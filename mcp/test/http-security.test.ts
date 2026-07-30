@@ -3,6 +3,7 @@ import type { IncomingMessage } from "node:http";
 import { describe, expect, test } from "vitest";
 import {
   assertSafeHttpBinding,
+  cleanupFailedInitialization,
   evictIdleSessions,
   HttpInputError,
   isBearerAuthorized,
@@ -105,8 +106,23 @@ describe("HTTP MCP boundary", () => {
       withHttpRequestTimeout(new Promise(() => undefined), 5),
     ).rejects.toMatchObject<HttpInputError>({
       status: 504,
-      message: "MCP request timed out",
+      message:
+        "MCP request timed out; operation outcome is unknown, verify state before retrying",
     });
+  });
+
+  test("cleans a session initialized before its response later fails", async () => {
+    const transport = {
+      sessionId: "half-open",
+      close: async () => {
+        transport.closed += 1;
+      },
+      closed: 0,
+    };
+    const sessions = new Map([["half-open", { transport }]]);
+    await cleanupFailedInitialization(sessions, transport);
+    expect(sessions.size).toBe(0);
+    expect(transport.closed).toBe(1);
   });
 
   test("evicts and closes only naturally idle sessions", async () => {

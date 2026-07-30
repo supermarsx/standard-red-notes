@@ -182,7 +182,13 @@ export async function withHttpRequestTimeout<T>(
       new Promise<never>((_, reject) => {
         timer = setTimeout(
           () =>
-            reject(new HttpInputError("MCP request timed out", 504, -32000)),
+            reject(
+              new HttpInputError(
+                "MCP request timed out; operation outcome is unknown, verify state before retrying",
+                504,
+                -32000,
+              ),
+            ),
           timeoutMs,
         );
         timer.unref?.();
@@ -193,6 +199,16 @@ export async function withHttpRequestTimeout<T>(
       clearTimeout(timer);
     }
   }
+}
+
+export async function cleanupFailedInitialization<
+  T extends { sessionId?: string; close(): Promise<void> },
+  S,
+>(sessions: Map<string, S>, transport: T): Promise<void> {
+  if (transport.sessionId) {
+    sessions.delete(transport.sessionId);
+  }
+  await transport.close().catch(() => {});
 }
 
 export async function evictIdleSessions<T extends { lastSeenAt: number }>(

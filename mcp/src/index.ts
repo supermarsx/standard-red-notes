@@ -21,6 +21,7 @@ import type { McpScope } from "./snjs/tokenAuth.js";
 import { rootsFromEnvironment } from "./security/filesystem.js";
 import {
   assertSafeHttpBinding,
+  cleanupFailedInitialization,
   evictIdleSessions,
   HttpInputError,
   isBearerAuthorized,
@@ -1022,6 +1023,11 @@ async function handleHttpRequest(
       transport.handleRequest(req, res, parsedBody),
       httpRequestTimeoutMs,
     );
+  } catch (error) {
+    // onsessioninitialized can run before the initialize response finishes.
+    // Any later timeout/error must release that now-visible session and its cap.
+    await cleanupFailedInitialization(state.sessions, transport);
+    throw error;
   } finally {
     state.initializations -= 1;
     if (!transport.sessionId) {
@@ -1057,7 +1063,15 @@ async function shutdown(signal: string): Promise<void> {
     /* best-effort */
   }
   try {
-    await headless?.deinit();
+    await Promise.race([
+      bridgeOperations.runExclusive(async () => {
+        await headless?.deinit();
+      }),
+      new Promise<void>((resolve) => {
+        const timeout = setTimeout(resolve, 2_000);
+        timeout.unref?.();
+      }),
+    ]);
   } catch {
     /* best-effort */
   }
