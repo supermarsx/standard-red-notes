@@ -45,9 +45,12 @@ import {
   DecryptedItemInterface,
   CreatePayloadSplit,
   CreateDeletedServerSyncPushPayload,
+  isDeletedPayload,
   ItemsKeyInterface,
   CreateNonDecryptedPayloadSplit,
   DeltaOfflineSaved,
+  DeltaEmit,
+  DeletedPayload,
   FilteredServerItem,
   PayloadEmitSource,
   getIncrementedDirtyIndex,
@@ -176,7 +179,14 @@ export class SyncService
   private syncToken?: string
   private cursorToken?: string
 
-  private syncLock = false
+  /**
+   * Owner token for the short critical section that prepares/starts a sync operation.
+   * A boolean cannot express ownership: a concurrent LocalOnly call used to invoke the
+   * shared release closure and unlock an HTTP sync it never acquired.
+   */
+  private syncLock: symbol | false = false
+  /** Tracks write failures thrown by persistPayloads without changing the original error identity. */
+  private readonly localPersistenceFailures = new WeakSet<object>()
   private _simulate_latency?: { latency: number; enabled: boolean }
   private dealloced = false
 
@@ -242,7 +252,10 @@ export class SyncService
       this.logger.debug('Network came back online, syncing ASAP and resetting backoff')
       this.cancelFailureBackoff()
       this.consecutiveFailureCount = 0
-      void this.sync({ source: SyncSource.NetworkReturned, sourceDescription: 'Browser online event' })
+      this.syncDetached(
+        { source: SyncSource.NetworkReturned, sourceDescription: 'Browser online event' },
+        'browser online event',
+      )
     }
 
     const onFocusOrVisible = () => {
@@ -258,7 +271,10 @@ export class SyncService
 
       this.logger.debug('App regained focus/visibility, syncing to pull latest')
       this.cancelFailureBackoff()
-      void this.sync({ source: SyncSource.NetworkReturned, sourceDescription: 'App focus/visibility' })
+      this.syncDetached(
+        { source: SyncSource.NetworkReturned, sourceDescription: 'App focus/visibility' },
+        'app focus/visibility',
+      )
     }
 
     window.addEventListener('online', onOnline)
@@ -285,6 +301,23 @@ export class SyncService
   }
 
   /**
+   * Automatic/background callers have no consumer to observe a rejected sync promise.
+   * Catch unexpected programming/event errors at the detached boundary; handled sync
+   * failures retain sync()'s historical event-driven, non-rejecting contract.
+   */
+  private syncDetached(options: Partial<SyncOptions>, context: string): void {
+    void this.sync(options).catch((error) => {
+      this.logger.error(`Detached sync failed (${context})`, error)
+    })
+  }
+
+  private notifyEventDetached(event: SyncEvent, data: unknown, context: string): void {
+    void this.notifyEvent(event, data).catch((error) => {
+      this.logger.error(`Detached sync event failed (${context})`, error)
+    })
+  }
+
+  /**
    * Schedule the next auto-retry after a failed sync using exponential backoff with jitter,
    * capped. Only one retry may be pending at a time; a successful/user-driven sync clears it.
    */
@@ -308,7 +341,10 @@ export class SyncService
       if (this.dealloced) {
         return
       }
-      void this.sync({ source: SyncSource.BackoffRetry, sourceDescription: 'Failure backoff retry' })
+      this.syncDetached(
+        { source: SyncSource.BackoffRetry, sourceDescription: 'Failure backoff retry' },
+        'failure backoff retry',
+      )
     }, delay)
   }
 
@@ -757,7 +793,7 @@ export class SyncService
     if (!this.sockets.isWebSocketConnectionOpen()) {
       this.logger.debug('WebSocket connection is closed, doing autosync')
 
-      void this.sync({ sourceDescription: 'Auto Sync' })
+      this.syncDetached({ sourceDescription: 'Auto Sync' }, 'automatic sync')
 
       return
     }
@@ -767,7 +803,10 @@ export class SyncService
 
       this.wasNotifiedOfItemsChangeOnServer = false
 
-      void this.sync({ sourceDescription: 'WebSockets Event - Items Changed On Server' })
+      this.syncDetached(
+        { sourceDescription: 'WebSockets Event - Items Changed On Server' },
+        'websocket items-changed notification',
+      )
     }
   }
 
@@ -807,7 +846,10 @@ export class SyncService
       }
       this.wasNotifiedOfItemsChangeOnServer = false
       this.logger.debug('Live-sync debounce elapsed; syncing for server-side items change')
-      void this.sync({ source: SyncSource.External, sourceDescription: 'Live Sync - Items Changed On Server' })
+      this.syncDetached(
+        { source: SyncSource.External, sourceDescription: 'Live Sync - Items Changed On Server' },
+        'debounced live sync',
+      )
     }, LIVE_SYNC_DEBOUNCE_MS)
   }
 
@@ -948,8 +990,8 @@ export class SyncService
     return undefined
   }
 
-  private setLastSyncToken(token: string) {
-    this.syncToken = token
+  private async setLastSyncToken(token: string): Promise<void> {
+    const previousToken = this.syncToken
     /**
      * D2 CRITICAL-KEY ROUTING: await the disk flush. This token gates what a future
      * sync re-pulls; a silently-dropped write (old fire-and-forget setValue) could
@@ -957,17 +999,75 @@ export class SyncService
      * pairs a stale token with freshly-persisted items. Awaiting durability keeps the
      * on-disk token consistent with the items persisted just before it (see D4).
      */
-    return this.storageService.setValueAndAwaitPersist(StorageKey.LastSyncToken, token)
+    try {
+      await this.writeCriticalStorageValue(StorageKey.LastSyncToken, token)
+    } catch (error) {
+      this.syncToken = previousToken
+      await this.restoreCriticalStorageValues([[StorageKey.LastSyncToken, previousToken]])
+      this.reportCriticalStorageWriteFailure(error)
+    }
+    this.syncToken = token
   }
 
-  private async setPaginationToken(token: string) {
-    this.cursorToken = token
-    if (token) {
-      /** D2 CRITICAL-KEY ROUTING: await durability (see setLastSyncToken). */
-      return this.storageService.setValueAndAwaitPersist(StorageKey.PaginationToken, token)
-    } else {
-      return this.storageService.removeValue(StorageKey.PaginationToken)
+  /**
+   * The sync and pagination cursors are one logical checkpoint. DiskStorageService
+   * currently exposes only single-key writes, so wait for both attempts to settle and,
+   * if either fails, restore BOTH values before surfacing the original failure. Waiting
+   * for allSettled is essential: a slower successful write must not re-advance one half
+   * of the pair after rollback has begun.
+   */
+  private async setSyncTokens(syncToken: string, paginationToken?: string): Promise<void> {
+    const previousSyncToken = this.syncToken
+    const previousPaginationToken = this.cursorToken
+
+    const results = await Promise.allSettled([
+      this.writeCriticalStorageValue(StorageKey.LastSyncToken, syncToken),
+      this.writeCriticalStorageValue(StorageKey.PaginationToken, paginationToken),
+    ])
+    const failedWrite = results.find((result) => result.status === 'rejected')
+
+    if (failedWrite?.status === 'rejected') {
+      this.syncToken = previousSyncToken
+      this.cursorToken = previousPaginationToken
+      await this.restoreCriticalStorageValues([
+        [StorageKey.LastSyncToken, previousSyncToken],
+        [StorageKey.PaginationToken, previousPaginationToken],
+      ])
+      this.reportCriticalStorageWriteFailure(failedWrite.reason)
     }
+
+    this.syncToken = syncToken
+    this.cursorToken = paginationToken
+  }
+
+  private async writeCriticalStorageValue(key: StorageKey, value: unknown): Promise<void> {
+    if (value == undefined) {
+      await this.storageService.removeValue(key)
+      return
+    }
+
+    await this.storageService.setValueAndAwaitPersist(key, value)
+  }
+
+  private async restoreCriticalStorageValues(entries: [StorageKey, unknown][]): Promise<void> {
+    const rollbackResults = await Promise.allSettled(
+      entries.map(([key, value]) => this.writeCriticalStorageValue(key, value)),
+    )
+
+    for (const [index, result] of rollbackResults.entries()) {
+      if (result.status === 'rejected') {
+        this.logger.error(
+          `Failed to durably restore critical storage value ${entries[index][0]} after write failure`,
+          result.reason,
+        )
+      }
+    }
+  }
+
+  private reportCriticalStorageWriteFailure(error: unknown): never {
+    this.notifyEventDetached(SyncEvent.DatabaseWriteError, error, 'critical storage write failure')
+    SNLog.error(error instanceof Error ? error : Error(String(error)))
+    this.throwLocalPersistenceFailure(error)
   }
 
   private async getLastSyncToken(): Promise<string> {
@@ -1172,8 +1272,6 @@ export class SyncService
     const payloads = from.filter((candidate) => {
       return !candidate.dirtyIndex || candidate.dirtyIndex > lastPreSyncSave
     })
-
-    this.dirtyIndexAtLastPresyncSave = getCurrentDirtyIndex()
 
     return payloads
   }
@@ -1394,7 +1492,17 @@ export class SyncService
     const payloadsNeedingSave = this.popPayloadsNeedingPreSyncSave(safeDecryptedPayloads)
 
     const hidePersistErrorDueToWaitingOnKeyDownload = options.mode === SyncMode.DownloadFirst
-    await this.persistPayloads(payloadsNeedingSave, { throwError: !hidePersistErrorDueToWaitingOnKeyDownload })
+    const didPersistPayloads = await this.persistPayloadsWithResult(payloadsNeedingSave, {
+      throwError: !hidePersistErrorDueToWaitingOnKeyDownload,
+    })
+    /**
+     * Advance the pre-sync persistence watermark only AFTER the write commits. Advancing it
+     * before awaiting persistence caused the retry to filter out the exact payloads whose
+     * first write failed.
+     */
+    if (didPersistPayloads) {
+      this.dirtyIndexAtLastPresyncSave = frozenDirtyIndex
+    }
 
     if (options.onPresyncSave) {
       options.onPresyncSave()
@@ -1436,16 +1544,36 @@ export class SyncService
    *                  (before reaching opStatus.setDidBegin).
    * 2. syncOpInProgress: If a sync() call is in flight to the server.
    */
+  private tryAcquireSyncLock(): symbol | undefined {
+    if (this.syncLock !== false) {
+      return undefined
+    }
+
+    const owner = Symbol('sync-lock-owner')
+    this.syncLock = owner
+    return owner
+  }
+
+  private releaseSyncLock(owner: symbol | undefined): void {
+    if (owner && this.syncLock === owner) {
+      this.syncLock = false
+    }
+  }
+
+  private isSyncLocked(): boolean {
+    return this.syncLock !== false
+  }
+
   private configureSyncLock(options: SyncOptions) {
     const syncInProgress = this.opStatus.syncInProgress
     const databaseLoaded = this.databaseLoaded
-    const canExecuteSync = !this.syncLock
+    const canExecuteSync = !this.isSyncLocked()
     const syncLimitReached = this.syncFrequencyGuard.isSyncCallsThresholdReachedThisMinute()
-    const shouldExecuteSync = canExecuteSync && databaseLoaded && !syncInProgress && !syncLimitReached
+    const canAcquire = canExecuteSync && databaseLoaded && !syncInProgress && !syncLimitReached
+    const lockOwner = canAcquire ? this.tryAcquireSyncLock() : undefined
+    const shouldExecuteSync = lockOwner !== undefined
 
-    if (shouldExecuteSync) {
-      this.syncLock = true
-    } else {
+    if (!shouldExecuteSync) {
       this.logger.debug(
         !canExecuteSync
           ? 'Another function call has begun preparing for sync.'
@@ -1457,7 +1585,7 @@ export class SyncService
     }
 
     const releaseLock = () => {
-      this.syncLock = false
+      this.releaseSyncLock(lockOwner)
     }
 
     return { shouldExecuteSync, releaseLock }
@@ -1704,128 +1832,232 @@ export class SyncService
     }
   }
 
-  private async performSync(options: SyncOptions): Promise<unknown> {
-    const { shouldExecuteSync, releaseLock } = this.configureSyncLock(options)
+  private handleThrownSyncFailure(error: unknown, online: boolean): void {
+    if (this.opStatus.syncInProgress) {
+      this.opStatus.setDidEnd()
+    }
+    this.opStatus.setError(error as Error)
+    this.applyOnlineSyncResult(true, online)
+    this.notifyEventDetached(SyncEvent.SyncError, error, 'sync failure')
+  }
 
-    const { items, beginDate, frozenDirtyIndex, neverSyncedDeleted, localOnlyPersistedItems } =
-      await this.prepareForSync(options)
-    const shouldSkipUploadsForReadOnlySession = this.sessionManager.isCurrentSessionReadOnly() === true
+  /**
+   * A failed owner cannot leave callers parked behind a request that no longer
+   * exists. Resolve them consistently with sync()'s historical non-throwing error
+   * contract; the DatabaseWriteError/SyncError events carry the failure details.
+   */
+  private settlePendingSyncRequestsAfterFailure(inTimeResolveQueue: SyncPromise[]): void {
+    const pending = new Set<SyncPromise>([...inTimeResolveQueue, ...this.resolveQueue, ...this.spawnQueue])
+    this.resolveQueue.length = 0
+    this.spawnQueue.length = 0
 
-    if (options.mode === SyncMode.LocalOnly) {
-      this.logger.debug('Syncing local only, skipping remote sync request')
-      releaseLock()
+    for (const request of pending) {
+      request.resolve()
+    }
+  }
+
+  /**
+   * A standalone LocalOnly request performs no operation-finish phase, so explicitly
+   * hand off any requests that queued while its pre-sync save held the owner lock.
+   */
+  private async drainQueuedSyncRequests(options: SyncOptions): Promise<void> {
+    const spawnedRequest = this.popSpawnQueue()
+    if (spawnedRequest) {
+      if (options.awaitAll) {
+        await spawnedRequest
+      }
       return
     }
 
-    const inTimeResolveQueue = this.getPendingRequestsMadeInTimeToPiggyBackOnCurrentRequest()
+    if (this.resolveQueue.length > 0) {
+      await this.syncAgainByHandlingRequestsWaitingInResolveQueue(options)
+    }
+  }
+
+  private async performSync(options: SyncOptions): Promise<unknown> {
+    const { shouldExecuteSync, releaseLock } = this.configureSyncLock(options)
 
     if (!shouldExecuteSync) {
       return this.deferSyncRequest(options)
     }
 
-    if (this.dealloced) {
-      return
-    }
+    let inTimeResolveQueue: SyncPromise[] = []
+    let online: boolean | undefined
+    let presyncSaveCompleted = false
 
-    /**
-     * Determine online (has-session) BEFORE we begin so the server-sync status is only
-     * entered for an actual online sync. Without a session this is a local-only persist
-     * and must not surface as server "syncing".
-     */
-    const online = this.sessionManager.online()
-
-    const latestItems = await this.prepareForSyncExecution(
-      shouldSkipUploadsForReadOnlySession ? [] : items,
-      inTimeResolveQueue,
-      beginDate,
-      frozenDirtyIndex,
-      online,
-    )
-
-    if (shouldSkipUploadsForReadOnlySession && items.length > 0) {
-      this.logger.debug('Read-only session detected, skipping upload of dirty items.')
-    }
-
-    const { operation, mode: syncMode } = await this.createSyncOperation(
-      latestItems.map((i) => i.payloadRepresentation()),
-      online,
-      options,
-    )
-
-    const operationPromise = operation.run()
-
-    this.currentSyncRequestPromise = operationPromise
-
-    /**
-     * RELIABILITY (silent-drop fix, paired with AccountSyncOperation.run): the
-     * paginated operation now PROPAGATES a receiver error (e.g. a transient
-     * IndexedDB persist or decrypt failure while applying a retrieved page)
-     * instead of swallowing it and paginating on. Catch it here and treat it as a
-     * normal failed online sync: release the lock (so the client isn't wedged) and
-     * route through applyOnlineSyncResult so the existing exponential-backoff retry
-     * fires. Because the PERSISTED sync token is only advanced inside a successful
-     * handleSuccessServerResponse, the retry re-pulls the un-persisted page — no
-     * items are dropped.
-     */
     try {
-      await operationPromise
-    } catch (error) {
       if (this.dealloced) {
         return
       }
-      this.logger.error(`Sync operation threw while applying server response: ${(error as Error)?.message ?? error}`)
+
+      /**
+       * Preparing includes the durability-critical pre-sync save. It must be inside
+       * this owner's finally block so an encryption/IndexedDB failure cannot wedge the
+       * service's lock for the remainder of the session.
+       */
+      const { items, beginDate, frozenDirtyIndex, neverSyncedDeleted, localOnlyPersistedItems } =
+        await this.prepareForSync(options)
+      presyncSaveCompleted = true
+      const isReadOnlySession = this.sessionManager.isCurrentSessionReadOnly() === true
+
+      if (options.mode === SyncMode.LocalOnly) {
+        this.logger.debug('Syncing local only, skipping remote sync request')
+        releaseLock()
+        await this.drainQueuedSyncRequests(options)
+        return
+      }
+
+      inTimeResolveQueue = this.getPendingRequestsMadeInTimeToPiggyBackOnCurrentRequest()
+
+      if (this.dealloced) {
+        return
+      }
+
+      /**
+       * Determine online (has-session) BEFORE we begin so the server-sync status is only
+       * entered for an actual online sync. Without a session this is a local-only persist
+       * and must not surface as server "syncing".
+       */
+      online = this.sessionManager.online()
+
+      const latestItems = await this.prepareForSyncExecution(
+        isReadOnlySession ? [] : items,
+        inTimeResolveQueue,
+        beginDate,
+        frozenDirtyIndex,
+        online,
+      )
+
+      if (isReadOnlySession && items.length > 0) {
+        this.logger.debug('Read-only session detected, retaining dirty items locally and skipping their upload.')
+      }
+
+      const { operation, mode: syncMode } = await this.createSyncOperation(
+        latestItems.map((i) => i.payloadRepresentation()),
+        online,
+        options,
+      )
+
+      const operationPromise = operation.run()
+
+      /** awaitCurrentSyncs must preserve sync()'s historical non-rejecting background contract. */
+      this.currentSyncRequestPromise = operationPromise.catch(() => undefined)
+
+      /**
+       * RELIABILITY (silent-drop fix, paired with AccountSyncOperation.run): the
+       * paginated operation now PROPAGATES a receiver error (e.g. a transient
+       * IndexedDB persist or decrypt failure while applying a retrieved page)
+       * instead of swallowing it and paginating on. Catch it here and treat it as a
+       * normal failed online sync. Status/backoff bookkeeping and error events expose
+       * the failure while sync() preserves its background-safe resolution contract.
+       */
+      try {
+        await operationPromise
+      } catch (error) {
+        if (!this.dealloced) {
+          this.logger.error(
+            `Sync operation threw while applying server response: ${(error as Error)?.message ?? error}`,
+          )
+          releaseLock()
+          this.handleThrownSyncFailure(error, online)
+          this.settlePendingSyncRequestsAfterFailure(inTimeResolveQueue)
+        }
+        return
+      }
+
+      if (this.dealloced) {
+        return
+      }
+
+      /**
+       * From here on opStatus owns serialization. Release this short preparation
+       * lock before any follow-up sync is spawned; finally remains as an idempotent
+       * safety net for every earlier return/throw.
+       */
       releaseLock()
-      this.opStatus?.setError(error as Error)
-      this.applyOnlineSyncResult(true, online)
-      void this.notifyEvent(SyncEvent.SyncError, error)
-      return
+
+      const { hasError } = await this.handleSyncOperationFinish(
+        operation,
+        options,
+        neverSyncedDeleted,
+        syncMode,
+        localOnlyPersistedItems,
+        frozenDirtyIndex,
+        isReadOnlySession,
+      )
+
+      this.applyOnlineSyncResult(hasError, online)
+
+      if (hasError) {
+        this.settlePendingSyncRequestsAfterFailure(inTimeResolveQueue)
+        return
+      }
+
+      const didSyncAgain = await this.potentiallySyncAgainAfterSyncCompletion(
+        syncMode,
+        options,
+        inTimeResolveQueue,
+        online,
+        isReadOnlySession,
+      )
+      if (didSyncAgain) {
+        return
+      }
+
+      if (options.checkIntegrity && online) {
+        await this.notifyEventSync(SyncEvent.SyncRequestsIntegrityCheck, {
+          source: options.source as SyncSource,
+        })
+      }
+
+      const hasUnuploadableReadOnlyDirtyItems =
+        isReadOnlySession && (this.itemsNeedingSync().length > 0 || this.dirtyLiteItems().length > 0)
+      if (!hasUnuploadableReadOnlyDirtyItems) {
+        await this.notifyEventSync(SyncEvent.SyncCompletedWithAllItemsUploadedAndDownloaded, {
+          source: options.source,
+          options,
+        })
+      }
+
+      this.resolvePendingSyncRequestsThatMadeItInTimeOfCurrentRequest(inTimeResolveQueue)
+
+      return undefined
+    } catch (error) {
+      if (!this.dealloced) {
+        this.logger.error(`Sync failed before completion: ${(error as Error)?.message ?? error}`)
+        if (this.isLocalPersistenceFailure(error)) {
+          this.handleThrownSyncFailure(error, online ?? false)
+        } else if (this.opStatus.syncInProgress) {
+          this.opStatus.setDidEnd()
+        }
+        this.settlePendingSyncRequestsAfterFailure(inTimeResolveQueue)
+      }
+
+      /**
+       * Local durability failures are already surfaced via DatabaseWriteError and
+       * SyncError. By default preserve sync()'s historical background-safe contract
+       * so existing fire-and-forget callers do not gain unhandled rejections. Direct
+       * persistPayloads callers, and the explicit pre-sync acknowledgement case below,
+       * still receive the original rejection.
+       */
+      if (this.isLocalPersistenceFailure(error)) {
+        /**
+         * onPresyncSave is an explicit acknowledgement contract used by components:
+         * its sole caller reports save failure from sync().catch(). If preparation
+         * failed before that acknowledgement, preserve the rejection for that caller.
+         * Later sync failures remain event-driven so an already-sent success reply is
+         * not followed by a contradictory error reply.
+         */
+        if (!presyncSaveCompleted && options.onPresyncSave) {
+          throw error
+        }
+        return
+      }
+
+      throw error
+    } finally {
+      releaseLock()
     }
-
-    if (this.dealloced) {
-      return
-    }
-
-    releaseLock()
-
-    const { hasError } = await this.handleSyncOperationFinish(
-      operation,
-      options,
-      neverSyncedDeleted,
-      syncMode,
-      localOnlyPersistedItems,
-      frozenDirtyIndex,
-    )
-
-    this.applyOnlineSyncResult(hasError, online)
-
-    if (hasError) {
-      return
-    }
-
-    const didSyncAgain = await this.potentiallySyncAgainAfterSyncCompletion(
-      syncMode,
-      options,
-      inTimeResolveQueue,
-      online,
-    )
-    if (didSyncAgain) {
-      return
-    }
-
-    if (options.checkIntegrity && online) {
-      await this.notifyEventSync(SyncEvent.SyncRequestsIntegrityCheck, {
-        source: options.source as SyncSource,
-      })
-    }
-
-    await this.notifyEventSync(SyncEvent.SyncCompletedWithAllItemsUploadedAndDownloaded, {
-      source: options.source,
-      options,
-    })
-
-    this.resolvePendingSyncRequestsThatMadeItInTimeOfCurrentRequest(inTimeResolveQueue)
-
-    return undefined
   }
 
   async getRawSyncRequestForExternalUse(
@@ -1857,9 +2089,7 @@ export class SyncService
 
     const emit = delta.result()
 
-    const payloadsToPersist = await this.payloadManager.emitDeltaEmit(emit)
-
-    await this.persistPayloads(payloadsToPersist)
+    await this.emitDeltasAndPersist([emit])
 
     this.opStatus.clearError()
 
@@ -1945,22 +2175,15 @@ export class SyncService
 
     const emits = resolver.result()
 
-    for (const emit of emits) {
-      const payloadsToPersist = await this.payloadManager.emitDeltaEmit(emit)
-
-      /**
-       * D4: a genuine write failure here MUST abort before the token advance below,
-       * so the failed page is re-pulled on the backoff retry (Operation.run rethrows
-       * this out to the sync() catch). Suppressible legacy-key lookups do not abort.
-       */
-      await this.persistPayloads(payloadsToPersist, { throwError: true, rethrowGenuineWriteFailure: true })
-    }
+    /**
+     * D4: a genuine write failure here MUST abort before the token advance below.
+     * emitDeltasAndPersist restores any dirty payloads it tentatively finalized, while
+     * preserving a newer edit that lands during the write.
+     */
+    await this.emitDeltasAndPersist(emits)
 
     if (!operation.options.sharedVaultUuids) {
-      await Promise.all([
-        this.setLastSyncToken(response.lastSyncToken as string),
-        this.setPaginationToken(response.paginationToken as string),
-      ])
+      await this.setSyncTokens(response.lastSyncToken as string, response.paginationToken as string | undefined)
     }
 
     await this.notifyEvent(SyncEvent.PaginatedSyncRequestCompleted, {
@@ -2163,6 +2386,7 @@ export class SyncService
     syncMode: SyncMode,
     localOnlyPersistedItems: DecryptedItemInterface[] = [],
     frozenDirtyIndex = getCurrentDirtyIndex(),
+    isReadOnlySession = false,
   ) {
     this.opStatus.setDidEnd()
 
@@ -2186,7 +2410,7 @@ export class SyncService
 
     await this.clearDirtyStateForPersistedLocalOnlyItems(localOnlyPersistedItems, frozenDirtyIndex)
 
-    if (syncMode !== SyncMode.DownloadFirst) {
+    if (syncMode !== SyncMode.DownloadFirst && !isReadOnlySession) {
       await this.notifyEvent(SyncEvent.SyncCompletedWithAllItemsUploaded, {
         source: options.source,
       })
@@ -2249,16 +2473,32 @@ export class SyncService
     options: SyncOptions,
     inTimeResolveQueue: SyncPromise[],
     online: boolean,
+    isReadOnlySession = false,
   ) {
     if (syncMode === SyncMode.DownloadFirst) {
-      await this.handleDownloadFirstCompletionAndSyncAgain(online, options)
+      if (isReadOnlySession) {
+        if (online) {
+          this.completedOnlineDownloadFirstSync = true
+        }
+        await this.notifyEvent(SyncEvent.DownloadFirstSyncCompleted)
+      } else {
+        await this.handleDownloadFirstCompletionAndSyncAgain(online, options)
+        this.resolvePendingSyncRequestsThatMadeItInTimeOfCurrentRequest(inTimeResolveQueue)
+        return true
+      }
+    }
+
+    const spawnedRequest = this.popSpawnQueue()
+    if (spawnedRequest) {
+      if (options.awaitAll) {
+        await spawnedRequest
+      }
       this.resolvePendingSyncRequestsThatMadeItInTimeOfCurrentRequest(inTimeResolveQueue)
       return true
     }
 
-    const didSpawnNewRequest = this.popSpawnQueue()
     const resolveQueueHasRequestsThatDidntMakeItInTime = this.resolveQueue.length > 0
-    if (!didSpawnNewRequest && resolveQueueHasRequestsThatDidntMakeItInTime) {
+    if (resolveQueueHasRequestsThatDidntMakeItInTime) {
       await this.syncAgainByHandlingRequestsWaitingInResolveQueue(options)
       this.resolvePendingSyncRequestsThatMadeItInTimeOfCurrentRequest(inTimeResolveQueue)
       return true
@@ -2266,6 +2506,11 @@ export class SyncService
 
     const newItemsNeedingSync = this.itemsNeedingSync()
     if (newItemsNeedingSync.length > 0) {
+      if (isReadOnlySession) {
+        this.logger.debug('Read-only session still has local dirty items; not spawning an unbounded empty sync.')
+        return false
+      }
+
       await this.syncAgainByHandlingNewDirtyItems(options)
       this.resolvePendingSyncRequestsThatMadeItInTimeOfCurrentRequest(inTimeResolveQueue)
       return true
@@ -2285,8 +2530,12 @@ export class SyncService
       })
     })
 
-    await this.payloadManager.emitPayloads(payloads, PayloadEmitSource.LocalChanged)
-    await this.persistPayloads(payloads)
+    await this.emitDeltasAndPersist([
+      {
+        emits: payloads,
+        source: PayloadEmitSource.LocalChanged,
+      },
+    ])
   }
 
   /**
@@ -2340,18 +2589,107 @@ export class SyncService
       return
     }
 
-    /** LocalChanged (not LocalDatabaseLoaded) so the dirty:false is honored as a real local change. */
-    await this.payloadManager.emitPayloads(payloads, PayloadEmitSource.LocalChanged)
-    /** Persist the now-clean copy so it stays clean across reloads (no re-clear next session). */
-    await this.persistPayloads(payloads)
+    await this.emitDeltasAndPersist([
+      {
+        emits: payloads,
+        source: PayloadEmitSource.LocalChanged,
+      },
+    ])
+  }
+
+  /**
+   * Apply resolved payloads through the authoritative mapping queue, then make the
+   * exact applied set durable. If persistence fails, restore the pre-emit payloads
+   * only when the failed emission is still current. A user edit that lands while
+   * the disk write is pending replaces the emitted object, so the identity check
+   * deliberately leaves that newer dirty revision untouched.
+   */
+  private async emitDeltasAndPersist(emits: DeltaEmit[]): Promise<FullyFormedPayloadInterface[]> {
+    const originals = new Map<string, FullyFormedPayloadInterface | undefined>()
+    const baseCollection = this.payloadManager.getMasterCollection()
+
+    for (const emit of emits) {
+      for (const payload of emit.emits) {
+        if (!originals.has(payload.uuid)) {
+          originals.set(payload.uuid, baseCollection.find(payload.uuid))
+        }
+      }
+    }
+
+    const appliedPayloads: FullyFormedPayloadInterface[] = []
+
+    try {
+      for (const emit of emits) {
+        appliedPayloads.push(...(await this.payloadManager.emitDeltaEmit(emit)))
+      }
+
+      await this.persistPayloads(appliedPayloads)
+      return appliedPayloads
+    } catch (error) {
+      await this.restorePayloadsAfterFailedPersistence(originals, appliedPayloads)
+      throw error
+    }
+  }
+
+  private async restorePayloadsAfterFailedPersistence(
+    originals: Map<string, FullyFormedPayloadInterface | undefined>,
+    appliedPayloads: FullyFormedPayloadInterface[],
+  ): Promise<void> {
+    const lastAppliedByUuid = new Map<string, FullyFormedPayloadInterface>()
+    for (const payload of appliedPayloads) {
+      lastAppliedByUuid.set(payload.uuid, payload)
+    }
+
+    const currentCollection = this.payloadManager.getMasterCollection()
+    const rollbackPayloads: FullyFormedPayloadInterface[] = []
+
+    for (const [uuid, applied] of lastAppliedByUuid) {
+      const current = currentCollection.find(uuid)
+      const appliedDeletionIsStillCurrent = isDeletedPayload(applied) && applied.discardable && current == undefined
+      if (current !== applied && !appliedDeletionIsStillCurrent) {
+        continue
+      }
+
+      const original = originals.get(uuid)
+      if (original) {
+        rollbackPayloads.push(original)
+      } else if (current === applied) {
+        rollbackPayloads.push(
+          new DeletedPayload({
+            ...applied.ejected(),
+            content: undefined,
+            deleted: true,
+            dirty: false,
+            dirtyIndex: undefined,
+          }),
+        )
+      }
+    }
+
+    if (rollbackPayloads.length === 0) {
+      return
+    }
+
+    try {
+      await this.payloadManager.emitPayloads(rollbackPayloads, PayloadEmitSource.LocalChanged)
+    } catch (rollbackError) {
+      this.logger.error('Failed to restore in-memory payloads after local persistence failure', rollbackError)
+    }
   }
 
   public async persistPayloads(
     payloads: FullyFormedPayloadInterface[],
     options: { throwError: boolean; rethrowGenuineWriteFailure?: boolean } = { throwError: true },
-  ) {
+  ): Promise<void> {
+    await this.persistPayloadsWithResult(payloads, options)
+  }
+
+  private async persistPayloadsWithResult(
+    payloads: FullyFormedPayloadInterface[],
+    options: { throwError: boolean; rethrowGenuineWriteFailure?: boolean } = { throwError: true },
+  ): Promise<boolean> {
     if (payloads.length === 0 || this.dealloced) {
-      return
+      return payloads.length === 0
     }
 
     /**
@@ -2363,37 +2701,48 @@ export class SyncService
      */
     assertNoLitePayloads(payloads, 'SyncService.persistPayloads')
 
-    return this.storageService.savePayloads(payloads).catch((error) => {
-      /**
-       * DATA-LOSS GUARD: `throwError:false` is used to suppress the EXPECTED, transient
-       * key-not-found error when signing into an 003/non-latest account (the temporary items key
-       * doesn't yet match the account version; it self-heals after download-first sync). It must NOT
-       * also swallow a genuine WRITE failure — e.g. a QuotaExceededError during a full-vault
-       * re-persist — which would silently leave dirtied-in-memory items unwritten to disk. Surface
-       * any non-key (write/quota/IO) failure even when throwError is false, so the UI can react and
-       * the user isn't left with unsaved data they believe is saved.
-       */
-      const isSuppressibleKeyError = SyncService.isSuppressibleKeyLookupError(error)
-      if (options.throwError || !isSuppressibleKeyError) {
-        void this.notifyEvent(SyncEvent.DatabaseWriteError, error)
-        SNLog.error(error)
-      }
-      /**
-       * D4 DATA-LOSS FIX (scoped to the paginated download-persist call in
-       * handleSuccessServerResponse): when the caller opts in via
-       * `rethrowGenuineWriteFailure`, a GENUINE (non-suppressible) write failure —
-       * e.g. QuotaExceeded/IDB IO — must PROPAGATE instead of resolving cleanly.
-       * Resolving would let the caller advance the persisted sync/pagination token
-       * PAST a page that never reached disk, permanently dropping those items. The
-       * throw routes out through AccountSyncOperation.run -> the sync() backoff-retry
-       * catch, which re-pulls the un-persisted page. Suppressible legacy-key lookups
-       * (sign-in self-heal) still resolve cleanly, so they never abort a sync.
-       * Callers that don't set the flag keep the exact prior behavior (never rejects).
-       */
-      if (options.rethrowGenuineWriteFailure && !isSuppressibleKeyError) {
-        throw error
-      }
-    })
+    return this.storageService
+      .savePayloads(payloads)
+      .then(() => true)
+      .catch((error) => {
+        /**
+         * DATA-LOSS GUARD: `throwError:false` is used to suppress the EXPECTED, transient
+         * key-not-found error when signing into an 003/non-latest account (the temporary items key
+         * doesn't yet match the account version; it self-heals after download-first sync). It must NOT
+         * also swallow a genuine WRITE failure — e.g. a QuotaExceededError during a full-vault
+         * re-persist — which would silently leave dirtied-in-memory items unwritten to disk. Surface
+         * any non-key (write/quota/IO) failure even when throwError is false, so the UI can react and
+         * the user isn't left with unsaved data they believe is saved.
+         */
+        const isSuppressibleKeyError = SyncService.isSuppressibleKeyLookupError(error)
+        if (options.throwError || !isSuppressibleKeyError) {
+          this.notifyEventDetached(SyncEvent.DatabaseWriteError, error, 'payload persistence failure')
+          SNLog.error(error)
+        }
+        /**
+         * Genuine local write failures reject by default on every sync persistence path.
+         * This prevents callers from reporting a successful pre-sync/offline/websocket
+         * save, clearing dirty state, or advancing a token past data that never committed.
+         * The expected legacy key-lookup failure remains suppressible for download-first
+         * self-healing; an explicit rethrowGenuineWriteFailure:false is the only opt-out.
+         */
+        if (options.rethrowGenuineWriteFailure !== false && !isSuppressibleKeyError) {
+          this.throwLocalPersistenceFailure(error)
+        }
+
+        return false
+      })
+  }
+
+  private throwLocalPersistenceFailure(error: unknown): never {
+    const persistenceFailure =
+      typeof error === 'object' && error !== null ? error : Error(`Local persistence failed: ${String(error)}`)
+    this.localPersistenceFailures.add(persistenceFailure)
+    throw persistenceFailure
+  }
+
+  private isLocalPersistenceFailure(error: unknown): boolean {
+    return typeof error === 'object' && error !== null && this.localPersistenceFailures.has(error)
   }
 
   /**
@@ -2471,7 +2820,10 @@ export class SyncService
    */
   private async handleWebSocketReconnect(): Promise<void> {
     this.logger.debug('WebSocket (re)connected; performing full HTTP sync to backfill')
-    void this.sync({ source: SyncSource.External, sourceDescription: 'WebSocket reconnect backfill' })
+    this.syncDetached(
+      { source: SyncSource.External, sourceDescription: 'WebSocket reconnect backfill' },
+      'websocket reconnect backfill',
+    )
   }
 
   /**
@@ -2486,11 +2838,10 @@ export class SyncService
    * 2. Never while a sync is in progress / before the DB is loaded: defer to HTTP.
    * 3. Any failure during decrypt/apply/persist falls back to a full HTTP sync.
    *
-   * The pushed payloads are run through the SAME decryption + conflict pipeline
-   * (`processServerPayloads` -> `ServerSyncResponseResolver` -> `emitDeltaEmit`)
-   * as HTTP-retrieved items, then persisted, and only then is the sync token
-   * advanced — mirroring `handleSuccessServerResponse`. So data can never be
-   * dropped or corrupted: a discarded/failed push simply results in an HTTP pull.
+   * The pushed payloads are run through the SAME decryption + conflict resolver as
+   * HTTP-retrieved items. The resolved batch is emitted, durably persisted, and only
+   * then is the sync token advanced. A failed write conditionally restores the prior
+   * in-memory payloads without overwriting a newer edit, then falls back to HTTP.
    */
   private async handleItemsPushedOverWebSocket(data: SyncItemsPushedData): Promise<void> {
     if (this.dealloced) {
@@ -2511,10 +2862,13 @@ export class SyncService
     const triggerReconcilingHttpSync = (reason: string) => {
       this.logger.debug(`Discarding websocket sync push (${reason}); falling back to HTTP sync`)
       this.wasNotifiedOfItemsChangeOnServer = true
-      void this.sync({ source: SyncSource.External, sourceDescription: `WebSocket push fallback: ${reason}` })
+      this.syncDetached(
+        { source: SyncSource.External, sourceDescription: `WebSocket push fallback: ${reason}` },
+        `websocket push fallback: ${reason}`,
+      )
     }
 
-    if (!this.databaseLoaded || this.opStatus.syncInProgress || this.syncLock) {
+    if (!this.databaseLoaded || this.opStatus.syncInProgress || this.isSyncLocked()) {
       triggerReconcilingHttpSync('sync busy or database not loaded')
       return
     }
@@ -2533,12 +2887,13 @@ export class SyncService
     // cannot interleave and double-advance the token. A normal sync that arrives
     // while we hold it simply defers (its own lock check), and our token advance
     // makes it a no-op pull anyway. If acquisition races, defer to HTTP.
-    if (this.syncLock) {
+    const lockOwner = this.tryAcquireSyncLock()
+    if (!lockOwner) {
       triggerReconcilingHttpSync('sync busy or database not loaded')
       return
     }
-    this.syncLock = true
 
+    let applyFailed = false
     try {
       const decryptedPayloads = await this.processServerPayloads(
         data.items as FilteredServerItem[],
@@ -2560,10 +2915,8 @@ export class SyncService
       )
 
       const emits = resolver.result()
-      for (const emit of emits) {
-        const payloadsToPersist = await this.payloadManager.emitDeltaEmit(emit)
-        await this.persistPayloads(payloadsToPersist)
-      }
+
+      await this.emitDeltasAndPersist(emits)
 
       // Advance the sync token EXACTLY as an HTTP pull would, so the next HTTP
       // sync starts from the new server position and we don't re-pull the change.
@@ -2578,11 +2931,21 @@ export class SyncService
 
       this.logger.debug(`Applied ${decryptedPayloads.length} item(s) from websocket push without HTTP pull`)
     } catch (error) {
-      // Never drop or corrupt data: on ANY failure, fall back to a full HTTP sync.
       this.logger.error('Failed to apply websocket sync push; falling back to HTTP sync', error)
-      triggerReconcilingHttpSync('apply error')
+      applyFailed = true
     } finally {
-      this.syncLock = false
+      this.releaseSyncLock(lockOwner)
+    }
+
+    if (applyFailed) {
+      /**
+       * Start fallback only after releasing our owner token; otherwise the fallback
+       * observes the websocket lock and queues behind a request that has already ended.
+       * Websocket delivery is an automatic/background path, so the database error event
+       * and HTTP fallback surface/retry the failure without creating an unhandled
+       * rejection contract for the event bus.
+       */
+      triggerReconcilingHttpSync('apply error')
     }
   }
 
@@ -2634,9 +2997,7 @@ export class SyncService
 
     const emit = delta.result()
 
-    await this.payloadManager.emitDeltaEmit(emit)
-
-    await this.persistPayloads(emit.emits)
+    await this.emitDeltasAndPersist([emit])
   }
 
   async syncSharedVaultsFromScratch(sharedVaultUuids: string[]): Promise<void> {

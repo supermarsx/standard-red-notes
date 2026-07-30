@@ -1,5 +1,5 @@
 import { LoggerInterface } from '@standardnotes/utils'
-import { SyncEvent, SyncMode, SyncSource, WebSocketsServiceEvent } from '@standardnotes/services'
+import { StorageKey, SyncEvent, SyncMode, SyncSource, WebSocketsServiceEvent } from '@standardnotes/services'
 import { SyncService } from './SyncService'
 import { SNLog } from '../../Log'
 import {
@@ -7,9 +7,12 @@ import {
   DecryptedPayload,
   DeletedItemInterface,
   FillItemContent,
+  FullyFormedPayloadInterface,
   ImmutablePayloadCollection,
   LitePayloadSafetyError,
   NoteContent,
+  CreateOfflineSyncSavedPayload,
+  CreateServerSyncSavedPayload,
   PayloadEmitSource,
   PayloadSource,
   PayloadTimestampDefaults,
@@ -19,6 +22,16 @@ import {
   isLitePayload,
 } from '@standardnotes/models'
 import { ContentType } from '@standardnotes/domain-core'
+
+function createDeferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve
+    reject = promiseReject
+  })
+  return { promise, resolve, reject }
+}
 
 describe('SyncService failure backoff', () => {
   let logger: jest.Mocked<LoggerInterface>
@@ -156,10 +169,13 @@ describe('SyncService websocket push apply (Phase 1A)', () => {
     getValue: jest.Mock
     setValue: jest.Mock
     setValueAndAwaitPersist: jest.Mock
+    removeValue: jest.Mock
+    savePayloads: jest.Mock
   }
-  let payloadManager: { getMasterCollection: jest.Mock; emitDeltaEmit: jest.Mock }
+  let payloadManager: { getMasterCollection: jest.Mock; emitDeltaEmit: jest.Mock; emitPayloads: jest.Mock }
   let historyService: { getHistoryMapCopy: jest.Mock }
   let encryptionService: { decryptSplit: jest.Mock }
+  let livePayloads: Map<string, FullyFormedPayloadInterface>
 
   const StorageKeyLastSyncToken = 'syncToken'
 
@@ -178,6 +194,8 @@ describe('SyncService websocket push apply (Phase 1A)', () => {
       getValue: jest.fn(),
       setValue: jest.fn(),
       setValueAndAwaitPersist: jest.fn(),
+      removeValue: jest.fn(),
+      savePayloads: jest.fn().mockResolvedValue(undefined),
     }
     storage.getValue.mockImplementation((key: string) => storage.values[key])
     storage.setValue.mockImplementation((key: string, value: string) => {
@@ -187,10 +205,29 @@ describe('SyncService websocket push apply (Phase 1A)', () => {
     storage.setValueAndAwaitPersist.mockImplementation(async (key: string, value: string) => {
       storage.values[key] = value
     })
+    storage.removeValue.mockImplementation(async (key: string) => {
+      delete storage.values[key]
+    })
 
+    livePayloads = new Map()
+    const applyPayloads = async (payloads: FullyFormedPayloadInterface[]) => {
+      for (const payload of payloads) {
+        if (payload.deleted && !payload.dirty) {
+          livePayloads.delete(payload.uuid)
+        } else {
+          livePayloads.set(payload.uuid, payload)
+        }
+      }
+      return payloads
+    }
     payloadManager = {
-      getMasterCollection: jest.fn().mockReturnValue(ImmutablePayloadCollection.WithPayloads([])),
-      emitDeltaEmit: jest.fn().mockResolvedValue([]),
+      getMasterCollection: jest
+        .fn()
+        .mockImplementation(() => ImmutablePayloadCollection.WithPayloads([...livePayloads.values()])),
+      emitDeltaEmit: jest.fn().mockImplementation(async (emit: { emits: FullyFormedPayloadInterface[] }) => {
+        return applyPayloads(emit.emits)
+      }),
+      emitPayloads: jest.fn().mockImplementation(applyPayloads),
     }
     historyService = { getHistoryMapCopy: jest.fn().mockReturnValue({}) }
     encryptionService = { decryptSplit: jest.fn().mockResolvedValue([]) }
@@ -223,6 +260,10 @@ describe('SyncService websocket push apply (Phase 1A)', () => {
 
   const dispatchPush = (service: SyncService, data: unknown) =>
     service.handleEvent({ type: WebSocketsServiceEvent.SyncItemsPushed, payload: data } as never)
+
+  beforeAll(() => {
+    SNLog.onError = jest.fn()
+  })
 
   it('applies an in-order push directly without an HTTP sync and advances the token', async () => {
     const service = createService('base-token')
@@ -275,6 +316,95 @@ describe('SyncService websocket push apply (Phase 1A)', () => {
     expect(syncSpy).toHaveBeenCalledTimes(1)
     expect(storage.values[StorageKeyLastSyncToken]).toEqual('base-token')
     expect(logger.error).toHaveBeenCalled()
+  })
+
+  it('restores state after a payload write failure, retains the previous token, and starts HTTP recovery', async () => {
+    const service = createService('base-token')
+    const syncSpy = jest.spyOn(service, 'sync').mockResolvedValue(undefined)
+    const remote = new DecryptedPayload<NoteContent>(
+      {
+        uuid: 'websocket-persist-failure',
+        content_type: ContentType.TYPES.Note,
+        content: FillItemContent<NoteContent>({ title: 'Remote', text: 'body' }),
+        ...PayloadTimestampDefaults(),
+      },
+      PayloadSource.RemoteRetrieved,
+    )
+    ;(service as unknown as { processServerPayloads: jest.Mock }).processServerPayloads = jest
+      .fn()
+      .mockResolvedValue([remote])
+    livePayloads.set(remote.uuid, remote.copy({ dirty: true }, PayloadSource.Constructor))
+    const localBeforePush = livePayloads.get(remote.uuid)
+
+    const quota = new Error('The quota has been exceeded.')
+    quota.name = 'QuotaExceededError'
+    storage.savePayloads.mockRejectedValue(quota)
+
+    await expect(
+      dispatchPush(service, { items: [], syncToken: 'new-token', baseSyncToken: 'base-token' }),
+    ).resolves.toBeUndefined()
+
+    expect(payloadManager.emitDeltaEmit).toHaveBeenCalled()
+    expect(livePayloads.get(remote.uuid)).toBe(localBeforePush)
+    expect(livePayloads.get(remote.uuid)?.dirty).toBe(true)
+    expect(storage.setValueAndAwaitPersist).not.toHaveBeenCalled()
+    expect(storage.values[StorageKeyLastSyncToken]).toEqual('base-token')
+    expect(syncSpy).toHaveBeenCalledTimes(1)
+    expect((service as unknown as { syncLock: symbol | false }).syncLock).toBe(false)
+  })
+
+  it('does not reject or advance the websocket token when the token write itself fails', async () => {
+    const service = createService('base-token')
+    const syncSpy = jest.spyOn(service, 'sync').mockResolvedValue(undefined)
+    const writeError = new Error('sync-token IndexedDB transaction aborted')
+    storage.setValueAndAwaitPersist.mockImplementation(async (key: string, value: string) => {
+      // Match DiskStorageService semantics: its value cache changes before the
+      // device transaction settles, so SyncService must explicitly roll it back.
+      storage.values[key] = value
+      throw writeError
+    })
+
+    await expect(
+      dispatchPush(service, { items: [], syncToken: 'new-token', baseSyncToken: 'base-token' }),
+    ).resolves.toBeUndefined()
+
+    expect(storage.values[StorageKeyLastSyncToken]).toEqual('base-token')
+    expect((service as unknown as { syncToken?: string }).syncToken).toEqual('base-token')
+    expect(storage.setValueAndAwaitPersist).toHaveBeenLastCalledWith(StorageKeyLastSyncToken, 'base-token')
+    expect(syncSpy).toHaveBeenCalledTimes(1)
+    expect((service as unknown as { syncLock: symbol | false }).syncLock).toBe(false)
+  })
+
+  it.each([
+    ['sync token', StorageKey.LastSyncToken],
+    ['pagination token', StorageKey.PaginationToken],
+  ])('restores both cursor values when the %s write fails', async (_label, failingKey) => {
+    const service = createService('old-sync-token')
+    storage.values[StorageKey.PaginationToken] = 'old-pagination-token'
+    ;(service as unknown as { syncToken?: string; cursorToken?: string }).syncToken = 'old-sync-token'
+    ;(service as unknown as { syncToken?: string; cursorToken?: string }).cursorToken = 'old-pagination-token'
+    const writeError = new Error(`${failingKey} write failed`)
+
+    storage.setValueAndAwaitPersist.mockImplementation(async (key: string, value: string) => {
+      storage.values[key] = value
+      const isNewFailedValue = key === failingKey && (value === 'new-sync-token' || value === 'new-pagination-token')
+      if (isNewFailedValue) {
+        throw writeError
+      }
+    })
+
+    await expect(
+      (
+        service as unknown as {
+          setSyncTokens: (syncToken: string, paginationToken?: string) => Promise<void>
+        }
+      ).setSyncTokens('new-sync-token', 'new-pagination-token'),
+    ).rejects.toBe(writeError)
+
+    expect(storage.values[StorageKey.LastSyncToken]).toBe('old-sync-token')
+    expect(storage.values[StorageKey.PaginationToken]).toBe('old-pagination-token')
+    expect((service as unknown as { syncToken?: string }).syncToken).toBe('old-sync-token')
+    expect((service as unknown as { cursorToken?: string }).cursorToken).toBe('old-pagination-token')
   })
 
   it('performs a full HTTP sync on websocket (re)connect to backfill', async () => {
@@ -497,6 +627,10 @@ describe('SyncService local-only PERSISTENCE (silent data-loss regression)', () 
   let persistPayloads: jest.Mock
   let online: jest.Mock
 
+  beforeAll(() => {
+    SNLog.onError = jest.fn()
+  })
+
   const LOCAL_ONLY_UUID = 'local-only-uuid'
   const NORMAL_UUID = 'normal-uuid'
   const DELETED_UUID = 'deleted-uuid'
@@ -511,6 +645,7 @@ describe('SyncService local-only PERSISTENCE (silent data-loss regression)', () 
     const payload = {
       uuid,
       deleted,
+      dirty: true,
       dirtyIndex: 1,
       content: deleted ? undefined : { title: uuid },
     }
@@ -535,6 +670,7 @@ describe('SyncService local-only PERSISTENCE (silent data-loss regression)', () 
 
     getDirtyItems = jest.fn().mockReturnValue(dirtyItems)
     online = jest.fn().mockReturnValue(true)
+    persistPayloads = jest.fn().mockResolvedValue(undefined)
 
     const itemManager = {
       getDirtyItems,
@@ -556,7 +692,7 @@ describe('SyncService local-only PERSISTENCE (silent data-loss regression)', () 
       itemManager as never,
       sessionManager as never,
       {} as never,
-      {} as never,
+      { savePayloads: persistPayloads } as never,
       {} as never,
       {} as never,
       {} as never,
@@ -570,8 +706,6 @@ describe('SyncService local-only PERSISTENCE (silent data-loss regression)', () 
       { addEventHandler: noop } as never,
     )
 
-    persistPayloads = jest.fn().mockResolvedValue(undefined)
-    ;(service as unknown as { persistPayloads: unknown }).persistPayloads = persistPayloads
     ;(service as unknown as { databaseLoaded: boolean }).databaseLoaded = true
 
     return service
@@ -579,6 +713,7 @@ describe('SyncService local-only PERSISTENCE (silent data-loss regression)', () 
 
   const callPrepareForSync = (
     service: SyncService,
+    options: Record<string, unknown> = {},
   ): Promise<{ items: DecryptedItemInterface[]; neverSyncedDeleted: DecryptedItemInterface[] }> =>
     (
       service as unknown as {
@@ -587,7 +722,7 @@ describe('SyncService local-only PERSISTENCE (silent data-loss regression)', () 
           neverSyncedDeleted: DecryptedItemInterface[]
         }>
       }
-    ).prepareForSync({})
+    ).prepareForSync(options)
 
   const persistedUuids = (): string[] => (persistPayloads.mock.calls[0][0] as { uuid: string }[]).map((p) => p.uuid)
 
@@ -612,12 +747,67 @@ describe('SyncService local-only PERSISTENCE (silent data-loss regression)', () 
     expect(uploadUuids).toContain(NORMAL_UUID)
   })
 
+  it('reports a failed pre-sync save without rejecting background sync, retains dirty state, and retries', async () => {
+    const localOnly = makeDirtyItem(LOCAL_ONLY_UUID, true)
+    const normal = makeDirtyItem(NORMAL_UUID, false)
+    const service = createService([localOnly, normal])
+    const quota = new Error('The quota has been exceeded.')
+    quota.name = 'QuotaExceededError'
+    persistPayloads.mockRejectedValueOnce(quota).mockResolvedValueOnce(undefined)
+
+    await expect(service.sync({ source: SyncSource.External })).resolves.toBeUndefined()
+
+    expect(localOnly.payload.dirty).toBe(true)
+    expect(normal.payload.dirty).toBe(true)
+    expect((service as unknown as { dirtyIndexAtLastPresyncSave?: number }).dirtyIndexAtLastPresyncSave).toBeUndefined()
+    expect((service as unknown as { syncLock: symbol | false }).syncLock).toBe(false)
+
+    await expect(callPrepareForSync(service)).resolves.toBeDefined()
+
+    expect(persistPayloads).toHaveBeenCalledTimes(2)
+    const retriedUuids = (persistPayloads.mock.calls[1][0] as { uuid: string }[]).map((payload) => payload.uuid)
+    expect(retriedUuids).toEqual(expect.arrayContaining([LOCAL_ONLY_UUID, NORMAL_UUID]))
+    expect((service as unknown as { dirtyIndexAtLastPresyncSave?: number }).dirtyIndexAtLastPresyncSave).toBeDefined()
+  })
+
+  it('rejects a failed acknowledged pre-sync save so the component caller can report save-error', async () => {
+    const service = createService([makeDirtyItem(NORMAL_UUID, false)])
+    const quota = new Error('The quota has been exceeded.')
+    quota.name = 'QuotaExceededError'
+    const onPresyncSave = jest.fn()
+    persistPayloads.mockRejectedValueOnce(quota)
+
+    await expect(service.sync({ source: SyncSource.External, onPresyncSave })).rejects.toBe(quota)
+
+    expect(onPresyncSave).not.toHaveBeenCalled()
+    expect((service as unknown as { syncLock: symbol | false }).syncLock).toBe(false)
+  })
+
   it('a deleted item still flows to the upload/delete set (deletions must propagate)', async () => {
     const service = createService([makeDirtyItem(DELETED_UUID, false, true), makeDirtyItem(NORMAL_UUID, false)])
 
     const { items } = await callPrepareForSync(service)
 
     expect(items.map((i) => i.uuid)).toContain(DELETED_UUID)
+  })
+
+  it('does not advance the pre-sync watermark when a DownloadFirst key lookup failure is suppressed', async () => {
+    const item = makeDirtyItem(NORMAL_UUID, false)
+    const service = createService([item])
+    const keyError = new Error('Cannot find items key to use for encryption')
+    persistPayloads.mockRejectedValueOnce(keyError).mockResolvedValueOnce(undefined)
+
+    await expect(callPrepareForSync(service, { mode: SyncMode.DownloadFirst })).resolves.toBeDefined()
+
+    expect((service as unknown as { dirtyIndexAtLastPresyncSave?: number }).dirtyIndexAtLastPresyncSave).toBeUndefined()
+
+    await expect(callPrepareForSync(service, { mode: SyncMode.DownloadFirst })).resolves.toBeDefined()
+
+    expect(persistPayloads).toHaveBeenCalledTimes(2)
+    expect((persistPayloads.mock.calls[1][0] as { uuid: string }[]).map((payload) => payload.uuid)).toContain(
+      NORMAL_UUID,
+    )
+    expect((service as unknown as { dirtyIndexAtLastPresyncSave?: number }).dirtyIndexAtLastPresyncSave).toBeDefined()
   })
 
   /**
@@ -663,6 +853,278 @@ describe('SyncService local-only PERSISTENCE (silent data-loss regression)', () 
     expect(persistedUuids()).toContain(LOCAL_ONLY_UUID)
     expect(uploadItems.map((i) => i.uuid)).not.toContain(LOCAL_ONLY_UUID)
     expect(uploadItems.map((i) => i.uuid)).toContain(NORMAL_UUID)
+  })
+})
+
+describe('SyncService sync lock ownership', () => {
+  const createService = (): SyncService => {
+    const logger = {
+      debug: jest.fn(),
+      info: jest.fn(),
+      warn: jest.fn(),
+      error: jest.fn(),
+    } as unknown as jest.Mocked<LoggerInterface>
+    const noop = () => undefined
+
+    const service = new SyncService(
+      {} as never,
+      {
+        isCurrentSessionReadOnly: jest.fn().mockReturnValue(false),
+        online: jest.fn().mockReturnValue(true),
+      } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      'test-identifier',
+      {} as never,
+      logger,
+      {} as never,
+      { isSyncCallsThresholdReachedThisMinute: jest.fn().mockReturnValue(false) } as never,
+      {} as never,
+      { addEventHandler: noop } as never,
+    )
+
+    ;(service as unknown as { databaseLoaded: boolean }).databaseLoaded = true
+    ;(service as unknown as { opStatus: { syncInProgress: boolean } }).opStatus = {
+      syncInProgress: false,
+    } as never
+    return service
+  }
+
+  it('does not let a concurrent LocalOnly request release an HTTP preparation lock it does not own', async () => {
+    const service = createService()
+    const configureSyncLock = (
+      service as unknown as {
+        configureSyncLock: (options: { source: SyncSource }) => {
+          shouldExecuteSync: boolean
+          releaseLock: () => void
+        }
+      }
+    ).configureSyncLock.bind(service)
+    const performSync = (
+      service as unknown as {
+        performSync: (options: { source: SyncSource; mode: SyncMode }) => Promise<unknown>
+      }
+    ).performSync.bind(service)
+    const owner = configureSyncLock({ source: SyncSource.External })
+    const ownerToken = (service as unknown as { syncLock: symbol | false }).syncLock
+    const prepareForSync = jest.fn()
+    const deferSyncRequest = jest.fn().mockResolvedValue('deferred')
+    ;(service as unknown as { prepareForSync: jest.Mock }).prepareForSync = prepareForSync
+    ;(service as unknown as { deferSyncRequest: jest.Mock }).deferSyncRequest = deferSyncRequest
+
+    expect(owner.shouldExecuteSync).toBe(true)
+    expect(typeof ownerToken).toBe('symbol')
+
+    await expect(performSync({ source: SyncSource.External, mode: SyncMode.LocalOnly })).resolves.toEqual('deferred')
+
+    expect(prepareForSync).not.toHaveBeenCalled()
+    expect(deferSyncRequest).toHaveBeenCalledTimes(1)
+    expect((service as unknown as { syncLock: symbol | false }).syncLock).toBe(ownerToken)
+
+    owner.releaseLock()
+    expect((service as unknown as { syncLock: symbol | false }).syncLock).toBe(false)
+  })
+
+  it('releases its lock when prepareForSync rejects', async () => {
+    const service = createService()
+    const prepareError = new Error('pre-sync encryption failed')
+    ;(service as unknown as { prepareForSync: jest.Mock }).prepareForSync = jest.fn().mockRejectedValue(prepareError)
+
+    await expect(
+      (
+        service as unknown as {
+          performSync: (options: { source: SyncSource }) => Promise<unknown>
+        }
+      ).performSync({ source: SyncSource.External }),
+    ).rejects.toBe(prepareError)
+
+    expect((service as unknown as { syncLock: symbol | false }).syncLock).toBe(false)
+  })
+
+  it('settles a concurrent queued caller when the owner pre-sync persistence fails', async () => {
+    SNLog.onError = jest.fn()
+    const service = createService()
+    const write = createDeferred<void>()
+    const writeStarted = createDeferred<void>()
+    const quota = new Error('The quota has been exceeded.')
+    quota.name = 'QuotaExceededError'
+    const payload = new DecryptedPayload<NoteContent>({
+      uuid: 'queued-pre-sync-write',
+      content_type: ContentType.TYPES.Note,
+      content: FillItemContent<NoteContent>({ title: 'Queued', text: 'body' }),
+      dirty: true,
+      dirtyIndex: getIncrementedDirtyIndex(),
+      ...PayloadTimestampDefaults(),
+    })
+    ;(service as unknown as { storageService: unknown }).storageService = {
+      savePayloads: jest.fn(() => {
+        writeStarted.resolve()
+        return write.promise
+      }),
+    }
+    ;(service as unknown as { opStatus: unknown }).opStatus = {
+      syncInProgress: false,
+      setDidEnd: jest.fn(),
+      setError: jest.fn(),
+    }
+    ;(service as unknown as { notifyEvent: jest.Mock }).notifyEvent = jest.fn().mockResolvedValue(undefined)
+    ;(service as unknown as { prepareForSync: jest.Mock }).prepareForSync = jest.fn(async () => {
+      await service.persistPayloads([payload])
+      return {
+        items: [],
+        beginDate: new Date(),
+        frozenDirtyIndex: getCurrentDirtyIndex(),
+        neverSyncedDeleted: [],
+        localOnlyPersistedItems: [],
+      }
+    })
+
+    const owner = service.sync({ source: SyncSource.External })
+    await writeStarted.promise
+    const queued = service.sync({ source: SyncSource.External })
+
+    write.reject(quota)
+
+    await expect(Promise.all([owner, queued])).resolves.toEqual([undefined, undefined])
+    expect((service as unknown as { resolveQueue: unknown[] }).resolveQueue).toHaveLength(0)
+    expect((service as unknown as { spawnQueue: unknown[] }).spawnQueue).toHaveLength(0)
+    expect((service as unknown as { syncLock: symbol | false }).syncLock).toBe(false)
+  })
+
+  it('ends opStatus after an online persistence failure and allows the next sync to execute', async () => {
+    SNLog.onError = jest.fn()
+    const service = createService()
+    const quota = new Error('The quota has been exceeded.')
+    quota.name = 'QuotaExceededError'
+    const payload = new DecryptedPayload<NoteContent>({
+      uuid: 'operation-write-failure',
+      content_type: ContentType.TYPES.Note,
+      content: FillItemContent<NoteContent>({ title: 'Operation', text: 'body' }),
+      ...PayloadTimestampDefaults(),
+    })
+    const savePayloads = jest.fn().mockRejectedValueOnce(quota).mockResolvedValueOnce(undefined)
+    ;(service as unknown as { storageService: unknown }).storageService = { savePayloads }
+
+    const status = {
+      syncInProgress: false,
+      setDidBegin: jest.fn(() => {
+        status.syncInProgress = true
+      }),
+      setDidEnd: jest.fn(() => {
+        status.syncInProgress = false
+      }),
+      setError: jest.fn(),
+    }
+    ;(service as unknown as { opStatus: unknown }).opStatus = status
+    ;(service as unknown as { prepareForSync: jest.Mock }).prepareForSync = jest.fn().mockResolvedValue({
+      items: [],
+      beginDate: new Date(),
+      frozenDirtyIndex: getCurrentDirtyIndex(),
+      neverSyncedDeleted: [],
+      localOnlyPersistedItems: [],
+    })
+    ;(service as unknown as { prepareForSyncExecution: jest.Mock }).prepareForSyncExecution = jest.fn(
+      async (_items: unknown[], inTimeResolveQueue: unknown[]) => {
+        status.setDidBegin()
+        const resolveQueue = (service as unknown as { resolveQueue: unknown[] }).resolveQueue
+        for (const request of inTimeResolveQueue) {
+          const index = resolveQueue.indexOf(request)
+          if (index >= 0) {
+            resolveQueue.splice(index, 1)
+          }
+        }
+        return []
+      },
+    )
+    const run = jest.fn(() => service.persistPayloads([payload]))
+    ;(service as unknown as { createSyncOperation: jest.Mock }).createSyncOperation = jest.fn().mockResolvedValue({
+      operation: { run, numberOfItemsInvolved: 0 },
+      mode: SyncMode.Default,
+    })
+    ;(service as unknown as { handleSyncOperationFinish: jest.Mock }).handleSyncOperationFinish = jest.fn(async () => {
+      status.setDidEnd()
+      return { hasError: false }
+    })
+    ;(
+      service as unknown as { potentiallySyncAgainAfterSyncCompletion: jest.Mock }
+    ).potentiallySyncAgainAfterSyncCompletion = jest.fn().mockResolvedValue(false)
+    ;(service as unknown as { applyOnlineSyncResult: jest.Mock }).applyOnlineSyncResult = jest.fn()
+    ;(service as unknown as { notifyEvent: jest.Mock }).notifyEvent = jest.fn().mockResolvedValue(undefined)
+    ;(service as unknown as { notifyEventSync: jest.Mock }).notifyEventSync = jest.fn().mockResolvedValue(undefined)
+
+    await expect(service.sync({ source: SyncSource.External })).resolves.toBeUndefined()
+    expect(status.syncInProgress).toBe(false)
+    expect(status.setDidEnd).toHaveBeenCalledTimes(1)
+    await expect(
+      (service as unknown as { currentSyncRequestPromise: Promise<void> }).currentSyncRequestPromise,
+    ).resolves.toBeUndefined()
+
+    await expect(service.sync({ source: SyncSource.External })).resolves.toBeUndefined()
+    expect(run).toHaveBeenCalledTimes(2)
+    expect(status.syncInProgress).toBe(false)
+  })
+
+  it('settles a caller queued behind an operation that finishes with a server error', async () => {
+    const service = createService()
+    const runDeferred = createDeferred<void>()
+    const runStarted = createDeferred<void>()
+    const status = {
+      syncInProgress: false,
+      setDidBegin: jest.fn(() => {
+        status.syncInProgress = true
+      }),
+      setDidEnd: jest.fn(() => {
+        status.syncInProgress = false
+      }),
+    }
+    ;(service as unknown as { opStatus: unknown }).opStatus = status
+    ;(service as unknown as { prepareForSync: jest.Mock }).prepareForSync = jest.fn().mockResolvedValue({
+      items: [],
+      beginDate: new Date(),
+      frozenDirtyIndex: getCurrentDirtyIndex(),
+      neverSyncedDeleted: [],
+      localOnlyPersistedItems: [],
+    })
+    ;(service as unknown as { prepareForSyncExecution: jest.Mock }).prepareForSyncExecution = jest.fn(
+      async (_items: unknown[], inTimeResolveQueue: unknown[]) => {
+        status.setDidBegin()
+        const resolveQueue = (service as unknown as { resolveQueue: unknown[] }).resolveQueue
+        for (const request of inTimeResolveQueue) {
+          const index = resolveQueue.indexOf(request)
+          if (index >= 0) {
+            resolveQueue.splice(index, 1)
+          }
+        }
+        return []
+      },
+    )
+    const run = jest.fn(() => {
+      runStarted.resolve()
+      return runDeferred.promise
+    })
+    ;(service as unknown as { createSyncOperation: jest.Mock }).createSyncOperation = jest.fn().mockResolvedValue({
+      operation: { run, numberOfItemsInvolved: 0 },
+      mode: SyncMode.Default,
+    })
+    ;(service as unknown as { handleSyncOperationFinish: jest.Mock }).handleSyncOperationFinish = jest.fn(async () => {
+      status.setDidEnd()
+      return { hasError: true }
+    })
+    ;(service as unknown as { applyOnlineSyncResult: jest.Mock }).applyOnlineSyncResult = jest.fn()
+
+    const owner = service.sync({ source: SyncSource.External })
+    await runStarted.promise
+    const queued = service.sync({ source: SyncSource.External })
+    runDeferred.resolve()
+
+    await expect(Promise.all([owner, queued])).resolves.toEqual([undefined, undefined])
+    expect((service as unknown as { resolveQueue: unknown[] }).resolveQueue).toHaveLength(0)
+    expect((service as unknown as { spawnQueue: unknown[] }).spawnQueue).toHaveLength(0)
+    expect((service as unknown as { syncLock: symbol | false }).syncLock).toBe(false)
   })
 })
 
@@ -1246,7 +1708,7 @@ describe('SyncService lazy-decrypt SAFETY INVARIANTS', () => {
       const { service, notifyEvent } = buildService(quota)
       const note = createNotePayload()
 
-      await persistPayloads(service, [note], { throwError: false })
+      await expect(persistPayloads(service, [note], { throwError: false })).rejects.toBe(quota)
 
       expect(notifyEvent).toHaveBeenCalledTimes(1)
       const [event] = notifyEvent.mock.calls[0]
@@ -1403,6 +1865,229 @@ describe('SyncService no-session sync status (no-login "syncing" bug)', () => {
     ).not.toHaveBeenCalled()
     // Online sync DOES enter the server-sync status (the legitimate "syncing" indicator).
     expect(opStatus.setDidBegin).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('SyncService read-only session convergence', () => {
+  it('performs one download pull, retains local dirty data, and does not recursively spawn empty uploads', async () => {
+    const logger = {
+      debug: jest.fn(),
+      info: jest.fn(),
+      warn: jest.fn(),
+      error: jest.fn(),
+    } as unknown as jest.Mocked<LoggerInterface>
+    const noop = () => undefined
+    const payload = new DecryptedPayload<NoteContent>(
+      {
+        uuid: 'read-only-dirty-note',
+        content_type: ContentType.TYPES.Note,
+        content: FillItemContent<NoteContent>({ title: 'Local edit', text: 'must remain dirty' }),
+        dirty: true,
+        dirtyIndex: getIncrementedDirtyIndex(),
+        ...PayloadTimestampDefaults(),
+      },
+      PayloadSource.Constructor,
+    )
+    const dirtyItem = {
+      uuid: payload.uuid,
+      localOnly: false,
+      neverSynced: false,
+      payload,
+      payloadRepresentation: () => payload,
+    } as unknown as DecryptedItemInterface
+    const itemManager = {
+      getDirtyItems: jest.fn().mockReturnValue([dirtyItem]),
+    }
+    const sessionManager = {
+      online: jest.fn().mockReturnValue(true),
+      isCurrentSessionReadOnly: jest.fn().mockReturnValue(true),
+    }
+    const run = jest.fn().mockResolvedValue(undefined)
+
+    const service = new SyncService(
+      itemManager as never,
+      sessionManager as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      'test-identifier',
+      {} as never,
+      logger,
+      {} as never,
+      { isSyncCallsThresholdReachedThisMinute: jest.fn().mockReturnValue(false) } as never,
+      { isItemInBackoff: jest.fn().mockReturnValue(false) } as never,
+      { addEventHandler: noop } as never,
+    )
+
+    const prepareForSyncExecution = jest.fn().mockResolvedValue([])
+    const handleSyncOperationFinish = jest.fn().mockResolvedValue({ hasError: false })
+    const syncAgainByHandlingNewDirtyItems = jest.fn().mockResolvedValue(undefined)
+    const notifyEvent = jest.fn().mockResolvedValue(undefined)
+    const notifyEventSync = jest.fn().mockResolvedValue(undefined)
+    ;(service as unknown as { databaseLoaded: boolean }).databaseLoaded = true
+    ;(service as unknown as { opStatus: { syncInProgress: boolean } }).opStatus = {
+      syncInProgress: false,
+    } as never
+    ;(service as unknown as { prepareForSync: jest.Mock }).prepareForSync = jest.fn().mockResolvedValue({
+      items: [dirtyItem],
+      beginDate: new Date(),
+      frozenDirtyIndex: getCurrentDirtyIndex(),
+      neverSyncedDeleted: [],
+      localOnlyPersistedItems: [],
+    })
+    ;(service as unknown as { prepareForSyncExecution: jest.Mock }).prepareForSyncExecution = prepareForSyncExecution
+    ;(service as unknown as { createSyncOperation: jest.Mock }).createSyncOperation = jest.fn().mockResolvedValue({
+      operation: { run, numberOfItemsInvolved: 0 },
+      mode: SyncMode.DownloadFirst,
+    })
+    ;(service as unknown as { handleSyncOperationFinish: jest.Mock }).handleSyncOperationFinish =
+      handleSyncOperationFinish
+    ;(service as unknown as { syncAgainByHandlingNewDirtyItems: jest.Mock }).syncAgainByHandlingNewDirtyItems =
+      syncAgainByHandlingNewDirtyItems
+    ;(service as unknown as { notifyEvent: jest.Mock }).notifyEvent = notifyEvent
+    ;(service as unknown as { notifyEventSync: jest.Mock }).notifyEventSync = notifyEventSync
+
+    await expect(service.sync({ source: SyncSource.External })).resolves.toBeUndefined()
+
+    expect(run).toHaveBeenCalledTimes(1)
+    expect(prepareForSyncExecution).toHaveBeenCalledWith(
+      [],
+      expect.any(Array),
+      expect.any(Date),
+      expect.any(Number),
+      true,
+    )
+    expect(handleSyncOperationFinish).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({ source: SyncSource.External }),
+      [],
+      SyncMode.DownloadFirst,
+      [],
+      expect.any(Number),
+      true,
+    )
+    expect(syncAgainByHandlingNewDirtyItems).not.toHaveBeenCalled()
+    expect(payload.dirty).toBe(true)
+    expect(service.completedOnlineDownloadFirstSync).toBe(true)
+    expect(notifyEvent).toHaveBeenCalledWith(SyncEvent.DownloadFirstSyncCompleted)
+    expect(notifyEventSync).not.toHaveBeenCalledWith(
+      SyncEvent.SyncCompletedWithAllItemsUploadedAndDownloaded,
+      expect.anything(),
+    )
+    expect((service as unknown as { syncLock: symbol | false }).syncLock).toBe(false)
+  })
+
+  it('drains a caller queued during read-only DownloadFirst without recursively retrying dirty uploads', async () => {
+    const logger = {
+      debug: jest.fn(),
+      info: jest.fn(),
+      warn: jest.fn(),
+      error: jest.fn(),
+    } as unknown as jest.Mocked<LoggerInterface>
+    const noop = () => undefined
+    const payload = new DecryptedPayload<NoteContent>({
+      uuid: 'read-only-queued-note',
+      content_type: ContentType.TYPES.Note,
+      content: FillItemContent<NoteContent>({ title: 'Queued', text: 'must remain dirty' }),
+      dirty: true,
+      dirtyIndex: getIncrementedDirtyIndex(),
+      ...PayloadTimestampDefaults(),
+    })
+    const dirtyItem = {
+      uuid: payload.uuid,
+      localOnly: false,
+      neverSynced: false,
+      payload,
+      payloadRepresentation: () => payload,
+    } as unknown as DecryptedItemInterface
+    const status = {
+      syncInProgress: false,
+      setDidBegin: jest.fn(() => {
+        status.syncInProgress = true
+      }),
+      setDidEnd: jest.fn(() => {
+        status.syncInProgress = false
+      }),
+    }
+    const service = new SyncService(
+      { getDirtyItems: jest.fn().mockReturnValue([dirtyItem]) } as never,
+      {
+        online: jest.fn().mockReturnValue(true),
+        isCurrentSessionReadOnly: jest.fn().mockReturnValue(true),
+      } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      'test-identifier',
+      {} as never,
+      logger,
+      {} as never,
+      { isSyncCallsThresholdReachedThisMinute: jest.fn().mockReturnValue(false) } as never,
+      { isItemInBackoff: jest.fn().mockReturnValue(false) } as never,
+      { addEventHandler: noop } as never,
+    )
+    ;(service as unknown as { databaseLoaded: boolean }).databaseLoaded = true
+    ;(service as unknown as { opStatus: unknown }).opStatus = status
+    ;(service as unknown as { prepareForSync: jest.Mock }).prepareForSync = jest.fn().mockResolvedValue({
+      items: [dirtyItem],
+      beginDate: new Date(),
+      frozenDirtyIndex: getCurrentDirtyIndex(),
+      neverSyncedDeleted: [],
+      localOnlyPersistedItems: [],
+    })
+    ;(service as unknown as { prepareForSyncExecution: jest.Mock }).prepareForSyncExecution = jest.fn(
+      async (_items: unknown[], inTimeResolveQueue: unknown[]) => {
+        status.setDidBegin()
+        const resolveQueue = (service as unknown as { resolveQueue: unknown[] }).resolveQueue
+        for (const request of inTimeResolveQueue) {
+          const index = resolveQueue.indexOf(request)
+          if (index >= 0) {
+            resolveQueue.splice(index, 1)
+          }
+        }
+        return []
+      },
+    )
+    const firstRun = createDeferred<void>()
+    const firstRunStarted = createDeferred<void>()
+    const run = jest
+      .fn()
+      .mockImplementationOnce(() => {
+        firstRunStarted.resolve()
+        return firstRun.promise
+      })
+      .mockResolvedValueOnce(undefined)
+    let operationCount = 0
+    ;(service as unknown as { createSyncOperation: jest.Mock }).createSyncOperation = jest.fn(async () => {
+      const mode = operationCount++ === 0 ? SyncMode.DownloadFirst : SyncMode.Default
+      return { operation: { run, numberOfItemsInvolved: 0 }, mode }
+    })
+    ;(service as unknown as { handleSyncOperationFinish: jest.Mock }).handleSyncOperationFinish = jest.fn(async () => {
+      status.setDidEnd()
+      return { hasError: false }
+    })
+    ;(service as unknown as { applyOnlineSyncResult: jest.Mock }).applyOnlineSyncResult = jest.fn()
+    ;(service as unknown as { notifyEvent: jest.Mock }).notifyEvent = jest.fn().mockResolvedValue(undefined)
+    ;(service as unknown as { notifyEventSync: jest.Mock }).notifyEventSync = jest.fn().mockResolvedValue(undefined)
+
+    const downloadFirst = service.sync({ source: SyncSource.External })
+    await firstRunStarted.promise
+    const queued = service.sync({ source: SyncSource.External })
+
+    firstRun.resolve()
+
+    await expect(Promise.all([downloadFirst, queued])).resolves.toEqual([undefined, undefined])
+    expect(run).toHaveBeenCalledTimes(2)
+    expect(payload.dirty).toBe(true)
+    expect((service as unknown as { resolveQueue: unknown[] }).resolveQueue).toHaveLength(0)
+    expect((service as unknown as { spawnQueue: unknown[] }).spawnQueue).toHaveLength(0)
+    expect((service as unknown as { syncLock: symbol | false }).syncLock).toBe(false)
   })
 })
 
@@ -1703,9 +2388,30 @@ describe('SyncService D4: download-page persist failure must not advance the syn
     } as unknown as jest.Mocked<LoggerInterface>
     const noop = () => undefined
 
+    const local = createNote().copy({
+      dirty: true,
+      dirtyIndex: getIncrementedDirtyIndex(),
+      globalDirtyIndexAtLastSync: getCurrentDirtyIndex(),
+    })
+    const livePayloads = new Map<string, FullyFormedPayloadInterface>([[local.uuid, local]])
     const savePayloads = jest.fn().mockRejectedValue(savePayloadsRejection)
-    const emitDeltaEmit = jest.fn().mockResolvedValue([createNote()])
-    const getMasterCollection = jest.fn().mockReturnValue(ImmutablePayloadCollection.WithPayloads([]))
+    const applyPayloads = async (payloads: FullyFormedPayloadInterface[]) => {
+      for (const payload of payloads) {
+        if (payload.deleted && !payload.dirty) {
+          livePayloads.delete(payload.uuid)
+        } else {
+          livePayloads.set(payload.uuid, payload)
+        }
+      }
+      return payloads
+    }
+    const emitDeltaEmit = jest
+      .fn()
+      .mockImplementation(async (emit: { emits: FullyFormedPayloadInterface[] }) => applyPayloads(emit.emits))
+    const emitPayloads = jest.fn().mockImplementation(applyPayloads)
+    const getMasterCollection = jest
+      .fn()
+      .mockImplementation(() => ImmutablePayloadCollection.WithPayloads([...livePayloads.values()]))
     const getHistoryMapCopy = jest.fn().mockReturnValue({})
 
     const service = new SyncService(
@@ -1713,7 +2419,7 @@ describe('SyncService D4: download-page persist failure must not advance the syn
       {} as never, // sessionManager
       {} as never, // encryptionService
       { savePayloads } as never, // storageService
-      { getMasterCollection, emitDeltaEmit } as never, // payloadManager
+      { getMasterCollection, emitDeltaEmit, emitPayloads } as never, // payloadManager
       {} as never, // apiService
       { getHistoryMapCopy } as never, // historyService
       {} as never, // device
@@ -1736,21 +2442,24 @@ describe('SyncService D4: download-page persist failure must not advance the syn
     ;(service as unknown as { notifyEvent: jest.Mock }).notifyEvent = notifyEvent
     ;(service as unknown as { notifyEventSync: jest.Mock }).notifyEventSync = jest.fn().mockResolvedValue(undefined)
 
-    // Spy the token setters so we can assert whether the PERSISTED token advanced,
-    // independent of the real storage backend (setValueAndAwaitPersist).
-    const setLastSyncToken = jest
-      .spyOn(service as unknown as { setLastSyncToken: () => Promise<void> }, 'setLastSyncToken')
-      .mockResolvedValue(undefined)
-    const setPaginationToken = jest
-      .spyOn(service as unknown as { setPaginationToken: () => Promise<void> }, 'setPaginationToken')
+    // Spy the logical cursor-pair setter independently of the storage backend.
+    const setSyncTokens = jest
+      .spyOn(service as unknown as { setSyncTokens: () => Promise<void> }, 'setSyncTokens')
       .mockResolvedValue(undefined)
 
-    return { service, savePayloads, setLastSyncToken, setPaginationToken, notifyEvent }
+    return { service, local, livePayloads, savePayloads, setSyncTokens, notifyEvent }
   }
 
-  const buildResponse = () => ({
+  const buildResponse = (local?: FullyFormedPayloadInterface) => ({
     retrievedPayloads: [],
-    savedPayloads: [],
+    savedPayloads: local
+      ? [
+          CreateServerSyncSavedPayload({
+            ...local.ejected(),
+            user_uuid: 'test-user',
+          } as never),
+        ]
+      : [],
     conflicts: {},
     userEvents: [],
     asymmetricMessages: [],
@@ -1776,23 +2485,107 @@ describe('SyncService D4: download-page persist failure must not advance the syn
   it('a genuine write failure (QuotaExceeded) REJECTS and does NOT advance the sync/pagination token', async () => {
     const quota = new Error('The quota has been exceeded.')
     quota.name = 'QuotaExceededError'
-    const { service, setLastSyncToken, setPaginationToken } = buildService(quota)
+    const { service, local, livePayloads, setSyncTokens } = buildService(quota)
 
-    await expect(invoke(service, buildOperation(), buildResponse())).rejects.toBe(quota)
+    await expect(invoke(service, buildOperation(), buildResponse(local))).rejects.toBe(quota)
 
     // The whole point: the persisted token must stay at its pre-failure position so the
-    // failed page is re-pulled on the next sync. Before the fix, both were called.
-    expect(setLastSyncToken).not.toHaveBeenCalled()
-    expect(setPaginationToken).not.toHaveBeenCalled()
+    // failed page is re-pulled on the next sync, and the local dirty revision is restored.
+    expect(setSyncTokens).not.toHaveBeenCalled()
+    expect(livePayloads.get(local.uuid)).toBe(local)
+    expect(livePayloads.get(local.uuid)?.dirty).toBe(true)
   })
 
   it('a SUPPRESSIBLE legacy key-lookup failure does NOT abort — the token still advances', async () => {
     const keyError = new Error('Cannot find items key to use for encryption')
-    const { service, setLastSyncToken } = buildService(keyError)
+    const { service, local, setSyncTokens } = buildService(keyError)
 
-    await expect(invoke(service, buildOperation(), buildResponse())).resolves.toBeUndefined()
+    await expect(invoke(service, buildOperation(), buildResponse(local))).resolves.toBeUndefined()
 
-    expect(setLastSyncToken).toHaveBeenCalledWith('server-token-NEXT')
+    expect(setSyncTokens).toHaveBeenCalledWith('server-token-NEXT', undefined)
+  })
+})
+
+describe('SyncService offline persistence failure', () => {
+  beforeAll(() => {
+    SNLog.onError = jest.fn()
+  })
+
+  it('rejects the write and leaves the live payload dirty for retry', async () => {
+    const logger = {
+      debug: jest.fn(),
+      info: jest.fn(),
+      warn: jest.fn(),
+      error: jest.fn(),
+    } as unknown as jest.Mocked<LoggerInterface>
+    const noop = () => undefined
+    const dirty = new DecryptedPayload<NoteContent>(
+      {
+        uuid: 'offline-dirty-note',
+        content_type: ContentType.TYPES.Note,
+        content: FillItemContent<NoteContent>({ title: 'Unsaved', text: 'body' }),
+        dirty: true,
+        dirtyIndex: getIncrementedDirtyIndex(),
+        ...PayloadTimestampDefaults(),
+      },
+      PayloadSource.Constructor,
+    )
+    let live: FullyFormedPayloadInterface = dirty
+    const applyPayloads = async (payloads: FullyFormedPayloadInterface[]) => {
+      live = payloads[0]
+      return payloads
+    }
+    const emitDeltaEmit = jest
+      .fn()
+      .mockImplementation(async (emit: { emits: FullyFormedPayloadInterface[] }) => applyPayloads(emit.emits))
+    const emitPayloads = jest.fn().mockImplementation(applyPayloads)
+    const quota = new Error('The quota has been exceeded.')
+    quota.name = 'QuotaExceededError'
+    const savePayloads = jest.fn().mockRejectedValue(quota)
+
+    const service = new SyncService(
+      {} as never,
+      {} as never,
+      {} as never,
+      { savePayloads } as never,
+      {
+        getMasterCollection: jest.fn().mockImplementation(() => ImmutablePayloadCollection.WithPayloads([live])),
+        emitDeltaEmit,
+        emitPayloads,
+      } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      'test-identifier',
+      {} as never,
+      logger,
+      {} as never,
+      {} as never,
+      {} as never,
+      { addEventHandler: noop } as never,
+    )
+    ;(service as unknown as { opStatus: { clearError: jest.Mock } }).opStatus = {
+      clearError: jest.fn(),
+    } as never
+    ;(service as unknown as { notifyEvent: jest.Mock }).notifyEvent = jest.fn().mockResolvedValue(undefined)
+
+    const response = {
+      savedPayloads: [CreateOfflineSyncSavedPayload(dirty)],
+    }
+
+    await expect(
+      (
+        service as unknown as {
+          handleOfflineResponse: (response: unknown) => Promise<void>
+        }
+      ).handleOfflineResponse(response),
+    ).rejects.toBe(quota)
+
+    expect(savePayloads).toHaveBeenCalledTimes(1)
+    expect(emitDeltaEmit).toHaveBeenCalledTimes(1)
+    expect(emitPayloads).toHaveBeenCalledTimes(1)
+    expect(live).toBe(dirty)
+    expect(live.dirty).toBe(true)
   })
 })
 
@@ -1817,6 +2610,10 @@ describe('SyncService local-only dirty-clear (infinite sync-loop regression — 
   const LOCAL_ONLY_UUID = 'loop-local-only-uuid'
   const NORMAL_UUID = 'loop-normal-uuid'
 
+  beforeAll(() => {
+    SNLog.onError = jest.fn()
+  })
+
   type FakeItem = DecryptedItemInterface & { localOnly: boolean }
 
   const makeItem = (uuid: string, localOnly: boolean, dirtyIndex: number): FakeItem => {
@@ -1832,13 +2629,14 @@ describe('SyncService local-only dirty-clear (infinite sync-loop regression — 
       },
       PayloadSource.Constructor,
     )
-    return {
+    const item = {
       uuid,
       localOnly,
       neverSynced: false,
       payload,
-      payloadRepresentation: () => payload,
+      payloadRepresentation: () => item.payload,
     } as unknown as FakeItem
+    return item
   }
 
   interface LoopHarness {
@@ -1869,13 +2667,21 @@ describe('SyncService local-only dirty-clear (infinite sync-loop regression — 
     // getDirtyItems()/itemsNeedingSync() reflect the clear — exactly what the live loop re-checks.
     const dirtySet = new Set(items.map((i) => i.uuid))
 
-    const emitPayloads = jest.fn(async (payloads: { uuid: string; dirty?: boolean }[]) => {
+    const emitPayloads = jest.fn(async (payloads: FullyFormedPayloadInterface[]) => {
       for (const p of payloads) {
+        const item = items.find((candidate) => candidate.uuid === p.uuid)
+        if (item) {
+          item.payload = p as DecryptedPayload<NoteContent>
+        }
         if (p.dirty === false) {
           dirtySet.delete(p.uuid)
+        } else if (p.dirty) {
+          dirtySet.add(p.uuid)
         }
       }
+      return payloads
     })
+    const emitDeltaEmit = jest.fn(async (emit: { emits: FullyFormedPayloadInterface[] }) => emitPayloads(emit.emits))
 
     const itemManager = {
       getDirtyItems: jest.fn(() => items.filter((i) => dirtySet.has(i.uuid))),
@@ -1892,13 +2698,20 @@ describe('SyncService local-only dirty-clear (infinite sync-loop regression — 
       incrementCallsPerMinute: jest.fn(),
     }
     const syncBackoffService = { isItemInBackoff: jest.fn(() => false) }
-    const payloadManager = { emitPayloads }
+    const persistPayloads = jest.fn().mockResolvedValue(undefined)
+    const payloadManager = {
+      getMasterCollection: jest.fn(() =>
+        ImmutablePayloadCollection.WithPayloads(items.map((item) => item.payload as FullyFormedPayloadInterface)),
+      ),
+      emitDeltaEmit,
+      emitPayloads,
+    }
 
     const service = new SyncService(
       itemManager as never,
       sessionManager as never,
       {} as never,
-      {} as never,
+      { savePayloads: persistPayloads } as never,
       payloadManager as never,
       {} as never,
       {} as never,
@@ -1912,9 +2725,7 @@ describe('SyncService local-only dirty-clear (infinite sync-loop regression — 
       { addEventHandler: noop } as never,
     )
 
-    const persistPayloads = jest.fn().mockResolvedValue(undefined)
     const syncAgainSpy = jest.fn().mockResolvedValue(undefined)
-    ;(service as unknown as { persistPayloads: unknown }).persistPayloads = persistPayloads
     ;(service as unknown as { notifyEvent: unknown }).notifyEvent = jest.fn().mockResolvedValue(undefined)
     ;(service as unknown as { notifyEventSync: unknown }).notifyEventSync = jest.fn().mockResolvedValue(undefined)
     ;(service as unknown as { syncAgainByHandlingNewDirtyItems: unknown }).syncAgainByHandlingNewDirtyItems =
@@ -2078,6 +2889,53 @@ describe('SyncService local-only dirty-clear (infinite sync-loop regression — 
     expect(h.emitPayloads).not.toHaveBeenCalled()
     expect(h.persistPayloads).not.toHaveBeenCalled()
     expect(h.itemsNeedingSync().map((i) => i.uuid)).toEqual([LOCAL_ONLY_UUID])
+  })
+
+  it('does not overwrite a local-only edit that lands while the clean payload is being persisted', async () => {
+    const frozenDirtyIndex = getIncrementedDirtyIndex()
+    const localOnly = makeItem(LOCAL_ONLY_UUID, true, frozenDirtyIndex)
+    const h = buildHarness([localOnly])
+    const write = createDeferred<void>()
+    const writeStarted = createDeferred<void>()
+    h.persistPayloads.mockImplementationOnce(() => {
+      writeStarted.resolve()
+      return write.promise
+    })
+
+    const clearPromise = h.clearSeam([localOnly], frozenDirtyIndex)
+    await writeStarted.promise
+
+    const newerPayload = new DecryptedPayload<NoteContent>({
+      ...localOnly.payload.ejected(),
+      content: FillItemContent<NoteContent>({ title: 'Newer edit', text: 'must survive' }),
+      dirty: true,
+      dirtyIndex: frozenDirtyIndex + 1,
+    })
+    localOnly.payload = newerPayload
+    h.dirtySet.add(localOnly.uuid)
+
+    write.resolve()
+    await clearPromise
+
+    expect(localOnly.payload).toBe(newerPayload)
+    expect(localOnly.payload.dirty).toBe(true)
+    expect(h.dirtySet.has(localOnly.uuid)).toBe(true)
+  })
+
+  it('restores the original dirty local-only payload when persisting its clean copy fails', async () => {
+    const frozenDirtyIndex = getIncrementedDirtyIndex()
+    const localOnly = makeItem(LOCAL_ONLY_UUID, true, frozenDirtyIndex)
+    const originalPayload = localOnly.payload
+    const h = buildHarness([localOnly])
+    const quota = new Error('The quota has been exceeded.')
+    quota.name = 'QuotaExceededError'
+    h.persistPayloads.mockRejectedValueOnce(quota)
+
+    await expect(h.clearSeam([localOnly], frozenDirtyIndex)).rejects.toBe(quota)
+
+    expect(localOnly.payload).toBe(originalPayload)
+    expect(localOnly.payload.dirty).toBe(true)
+    expect(h.dirtySet.has(localOnly.uuid)).toBe(true)
   })
 
   it('UNMARK local-only: a no-longer-local-only item is NOT collected for local clear and IS returned for upload', async () => {
