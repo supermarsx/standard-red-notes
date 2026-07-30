@@ -19,7 +19,7 @@ platform integrations are intentionally different.
 | Local-only use | IndexedDB-backed | Desktop storage | Mobile storage | No independent vault |
 | Encrypted files | Browser transfer | Native file access and preview | Native file access, preview, and sharing | Captures page content, not a general file client |
 | OS key storage | Browser-dependent | Native keychain via `keytar` | Native keychain | Extension local storage for the pending clip |
-| App lock/biometrics | Browser passkey support where available | Desktop lock plus OS integration | Fingerprint/biometric adapter | No |
+| App lock/biometrics | App passcode; optional passkey as an additional recoverable gate | App passcode; optional passkey and OS integration | Fingerprint/biometric adapter | No |
 | Automatic local backups | No | Encrypted text, optional plaintext, and file backup paths | No desktop-style automatic folder backup | No |
 | Multiple app windows | Browser windows/tabs | Native multiple-window support | No | Popup plus app window |
 | OS share target | Browser share behavior | File-system integration | Android and iOS share targets | Captures active browser content |
@@ -39,7 +39,8 @@ state lives in browser storage. Browser controls therefore matter:
   a current export.
 - Local-only sessions have no server copy. Clearing the browser profile can be
   destructive.
-- File downloads and passkey support depend on browser permissions.
+- File downloads and passkey support depend on browser permissions. The local
+  passkey gate requires an app passcode as its recovery method.
 - A private browsing session is not a durable local database.
 
 The web app also contains the administrator console. It is shown only when the

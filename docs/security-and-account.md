@@ -37,7 +37,8 @@ Enable those features only when their additional trust boundary is acceptable.
 | Account password | Sign-in and client key derivation | Do not reuse it or pass it to automation through command history |
 | Two-factor authentication | Adds a server-side sign-in challenge | Save the recovery code outside the account |
 | Trusted devices/push approval | Lets an existing trusted session approve a new challenge | Review and revoke old devices |
-| App passcode or passkey | Locks a local application session | It does not replace the account password or server MFA |
+| App passcode | Locks a local application session and protects local key material | It does not replace the account password or server MFA |
+| Local app-lock passkey | Adds another local unlock step on supported web/desktop clients | It requires an app passcode as a recovery factor; it is not an account passkey or encryption key |
 | Session management | Lists and revokes signed-in clients | Revoke unknown sessions and rotate credentials after compromise |
 | App password | Lets a non-interactive client pass the MFA gate | It never supplies the encryption key; the client still needs the real account password to decrypt |
 | Full MCP token | Authenticates the bridge and unwraps the account’s items keys without the password | Treat it as decrypting access: use read-only mode where possible; selected-tag scope is not currently enforced; deletion does not terminate an already-issued session |
@@ -91,6 +92,12 @@ Protected-item access and app locks reduce accidental local disclosure. They do
 not change what a deliberately unlocked client can decrypt, and they do not
 prevent screen capture, clipboard capture, malware, or an authorized recipient
 from copying content.
+
+On supported web and desktop clients, the local passkey gate is an additional
+app-lock factor. It can be registered only while an app passcode exists. If the
+platform passkey later becomes unavailable, verify the app passcode and choose
+the passcode fallback to disable that local passkey credential. Removing the app
+passcode also disables and removes the passkey gate.
 
 On mobile, biometric/keychain integrations and privacy-snapshot or secure-window
 controls add platform protection. On desktop, OS keychain security and the

@@ -434,6 +434,10 @@ export const DOC_CATEGORIES: DocCategory[] = [
             text: 'You can also set an app-level passcode or biometric lock so the whole app requires authentication when opened or after it has been idle.',
           },
           {
+            type: 'paragraph',
+            text: 'On supported web and desktop clients, a local passkey can add another app-lock step. Set an app passcode first: the passcode remains the recovery method and can disable the passkey gate after it has been verified.',
+          },
+          {
             type: 'callout',
             variant: 'tip',
             text: 'Protection is a convenience guard against shoulder-surfing and casual access. The underlying notes are always encrypted regardless of protection state.',
