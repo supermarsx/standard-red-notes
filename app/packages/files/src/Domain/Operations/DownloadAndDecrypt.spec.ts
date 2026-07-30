@@ -1,5 +1,4 @@
 import { ClientDisplayableError } from '@standardnotes/responses'
-import { sleep } from '@standardnotes/utils'
 import { PureCryptoInterface, StreamEncryptor } from '@standardnotes/sncrypto-common'
 import { FileDownloadProgress } from '../Types/FileDownloadProgress'
 import { DownloadAndDecryptFileOperation } from './DownloadAndDecrypt'
@@ -28,27 +27,11 @@ describe('download and decrypt', () => {
   const downloadChunksOfSize = (size: number) => {
     apiService.downloadFile = jest
       .fn()
-      .mockImplementation(
-        (params: {
-          _file: string
-          _chunkIndex: number
-          _apiToken: string
-          _rangeStart: number
-          onBytesReceived: (bytes: Uint8Array) => void
-        }) => {
-          const receiveFile = async () => {
-            for (let i = 0; i < NumChunks; i++) {
-              params.onBytesReceived(chunkOfSize(size))
-
-              await sleep(100, false)
-            }
-          }
-
-          return new Promise<void>((resolve) => {
-            void receiveFile().then(resolve)
-          })
-        },
-      )
+      .mockImplementation(async (params: { onBytesReceived: (bytes: Uint8Array) => Promise<void> }) => {
+        for (let i = 0; i < NumChunks; i++) {
+          await params.onBytesReceived(chunkOfSize(size))
+        }
+      })
   }
 
   beforeEach(() => {
@@ -90,30 +73,9 @@ describe('download and decrypt', () => {
     expect(receivedBytes.length).toEqual(NumChunks)
   })
 
-  /**
-   * BUG (reported, deliberately not fixed here): FileDownloader passes its `abort` method to the
-   * onBytes callback unbound (`FileDownloader.ts:60` -> `this.abort`). When DownloadAndDecrypt hits
-   * an undecryptable chunk it calls that callback, `this` is undefined under strict mode, and the
-   * download blows up with `TypeError: Cannot set properties of undefined (setting 'aborted')`
-   * instead of aborting cleanly and surfacing "Failed to decrypt chunk".
-   *
-   * The two tests below assert the INTENDED behaviour and are marked `failing`, so they document
-   * the defect without going green on it. Once `abort` is bound, drop the `.failing`.
-   */
-  /** Unlike `downloadChunksOfSize`, this stub awaits each callback the way a real API client does. */
-  const downloadAwaitingEachChunk = (size: number) => {
-    apiService.downloadFile = jest
-      .fn()
-      .mockImplementation(async (params: { onBytesReceived: (bytes: Uint8Array) => Promise<void> }) => {
-        for (let i = 0; i < NumChunks; i++) {
-          await params.onBytesReceived(chunkOfSize(size))
-        }
-      })
-  }
-
-  it.failing('should abort and report an error when a chunk cannot be decrypted', async () => {
+  it('should abort cleanly when a chunk cannot be decrypted', async () => {
     crypto.xchacha20StreamDecryptorPush = jest.fn().mockReturnValue(false)
-    downloadAwaitingEachChunk(5)
+    downloadChunksOfSize(5)
 
     operation = new DownloadAndDecryptFileOperation(file, crypto, apiService, 'own')
 
@@ -124,9 +86,9 @@ describe('download and decrypt', () => {
     expect(result.aborted).toBe(true)
   })
 
-  it.failing('should abort and report an error when a chunk decrypts to zero bytes', async () => {
+  it('should abort cleanly when a chunk decrypts to zero bytes', async () => {
     crypto.xchacha20StreamDecryptorPush = jest.fn().mockReturnValue({ message: new Uint8Array([]), tag: 0 })
-    downloadAwaitingEachChunk(5)
+    downloadChunksOfSize(5)
 
     operation = new DownloadAndDecryptFileOperation(file, crypto, apiService, 'own')
 
@@ -135,17 +97,6 @@ describe('download and decrypt', () => {
 
     expect(onBytes).not.toHaveBeenCalled()
     expect(result.aborted).toBe(true)
-  })
-
-  it('currently throws a TypeError when a chunk cannot be decrypted (see the BUG note above)', async () => {
-    crypto.xchacha20StreamDecryptorPush = jest.fn().mockReturnValue(false)
-    downloadAwaitingEachChunk(5)
-
-    operation = new DownloadAndDecryptFileOperation(file, crypto, apiService, 'own')
-
-    await expect(operation.run(jest.fn().mockResolvedValue(undefined))).rejects.toThrow(TypeError)
-    // The very first chunk blows up, so nothing further is decrypted.
-    expect(crypto.xchacha20StreamDecryptorPush).toHaveBeenCalledTimes(1)
   })
 
   it('should report failure when the download itself errors', async () => {

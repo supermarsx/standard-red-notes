@@ -68,6 +68,10 @@ async function readFile(
   const chunker = new ByteChunker(minimumChunkSize, onChunk)
   const readSize = 2_000_000
 
+  if (buffer.length === 0) {
+    await chunker.addBytes(new Uint8Array(), true)
+  }
+
   for (let i = 0; i < buffer.length; i += readSize) {
     const chunkMax = i + readSize
     const chunk = buffer.slice(i, chunkMax)

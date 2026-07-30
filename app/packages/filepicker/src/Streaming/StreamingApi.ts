@@ -88,25 +88,33 @@ export class StreamingFileApi implements FileSystemApi {
     const stream = file.stream() as unknown as ReadableStream
     const reader = stream.getReader()
 
-    let previousChunk: Uint8Array
+    let previousChunk: Uint8Array | undefined
 
-    const processChunk = async (result: ReadableStreamReadResult<Uint8Array>): Promise<void> => {
-      if (result.done) {
-        await onBytes(previousChunk, true)
-        return
+    try {
+      for (;;) {
+        const result = (await reader.read()) as ReadableStreamReadResult<Uint8Array>
+        if (result.done) {
+          await onBytes(previousChunk ?? new Uint8Array(), true)
+          break
+        }
+
+        if (previousChunk !== undefined) {
+          await onBytes(previousChunk, false)
+        }
+
+        previousChunk = result.value
       }
 
-      if (previousChunk) {
-        await onBytes(previousChunk, false)
+      return 'success'
+    } catch (error) {
+      try {
+        await reader.cancel(error)
+      } catch {
+        // Preserve the original read/consumer error.
       }
-
-      previousChunk = result.value
-
-      return reader.read().then(processChunk)
+      throw error
+    } finally {
+      reader.releaseLock()
     }
-
-    await reader.read().then(processChunk)
-
-    return 'success'
   }
 }

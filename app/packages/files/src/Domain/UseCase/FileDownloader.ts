@@ -14,10 +14,14 @@ type OnEncryptedBytes = (
 
 export type FileDownloaderResult = ClientDisplayableError | AbortSignal | undefined
 
+type DownloadRunState = {
+  aborted: boolean
+  abortDeferred: ReturnType<typeof Deferred<AbortSignal>>
+  totalBytesDownloaded: number
+}
+
 export class FileDownloader {
-  private aborted = false
-  private abortDeferred = Deferred<AbortSignal>()
-  private totalBytesDownloaded = 0
+  private activeRun: DownloadRunState | undefined
 
   constructor(
     private file: {
@@ -30,34 +34,56 @@ export class FileDownloader {
     private readonly valetToken: string,
   ) {}
 
-  private getProgress(): FileDownloadProgress {
+  private getProgress(totalBytesDownloaded: number): FileDownloadProgress {
     const encryptedSize = this.file.encryptedChunkSizes.reduce((total, chunk) => total + chunk, 0)
+    const encryptedBytesRemaining = Math.max(0, encryptedSize - totalBytesDownloaded)
+    const percentComplete = encryptedSize === 0 ? 100 : Math.min(100, (totalBytesDownloaded / encryptedSize) * 100.0)
 
     return {
       encryptedFileSize: encryptedSize,
-      encryptedBytesDownloaded: this.totalBytesDownloaded,
-      encryptedBytesRemaining: encryptedSize - this.totalBytesDownloaded,
-      percentComplete: (this.totalBytesDownloaded / encryptedSize) * 100.0,
+      encryptedBytesDownloaded: totalBytesDownloaded,
+      encryptedBytesRemaining,
+      percentComplete,
       source: 'network',
     }
   }
 
   public async run(onEncryptedBytes: OnEncryptedBytes): Promise<FileDownloaderResult> {
-    return this.performDownload(onEncryptedBytes)
+    if (this.activeRun !== undefined) {
+      throw new Error('FileDownloader cannot run more than one download at a time')
+    }
+
+    const state: DownloadRunState = {
+      aborted: false,
+      abortDeferred: Deferred<AbortSignal>(),
+      totalBytesDownloaded: 0,
+    }
+    this.activeRun = state
+
+    try {
+      return await this.performDownload(onEncryptedBytes, state)
+    } finally {
+      if (this.activeRun === state) {
+        this.activeRun = undefined
+      }
+    }
   }
 
-  private async performDownload(onEncryptedBytes: OnEncryptedBytes): Promise<FileDownloaderResult> {
+  private async performDownload(
+    onEncryptedBytes: OnEncryptedBytes,
+    state: DownloadRunState,
+  ): Promise<FileDownloaderResult> {
     const chunkIndex = 0
     const startRange = 0
 
     const onRemoteBytesReceived = async (bytes: Uint8Array) => {
-      if (this.aborted) {
+      if (state.aborted) {
         return
       }
 
-      this.totalBytesDownloaded += bytes.byteLength
+      state.totalBytesDownloaded += bytes.byteLength
 
-      await onEncryptedBytes(bytes, this.getProgress(), this.abort)
+      await onEncryptedBytes(bytes, this.getProgress(state.totalBytesDownloaded), () => this.abortRun(state))
     }
 
     const downloadPromise = this.api.downloadFile({
@@ -69,14 +95,19 @@ export class FileDownloader {
       ownershipType: this.file.shared_vault_uuid ? 'shared-vault' : 'user',
     })
 
-    const result = await Promise.race([this.abortDeferred.promise, downloadPromise])
+    const result = await Promise.race([state.abortDeferred.promise, downloadPromise])
 
     return result
   }
 
   public abort(): void {
-    this.aborted = true
+    if (this.activeRun !== undefined) {
+      this.abortRun(this.activeRun)
+    }
+  }
 
-    this.abortDeferred.resolve('aborted')
+  private abortRun(state: DownloadRunState): void {
+    state.aborted = true
+    state.abortDeferred.resolve('aborted')
   }
 }

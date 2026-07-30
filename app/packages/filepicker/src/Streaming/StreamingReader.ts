@@ -45,28 +45,36 @@ async function readFile(
   const stream = file.stream() as unknown as ReadableStream
   const reader = stream.getReader()
 
-  let previousChunk: Uint8Array
+  let previousChunk: Uint8Array | undefined
 
-  const processChunk = async (result: ReadableStreamReadResult<Uint8Array>): Promise<void> => {
-    if (result.done) {
-      await byteChunker.addBytes(previousChunk, true)
-      return
+  try {
+    for (;;) {
+      const result = (await reader.read()) as ReadableStreamReadResult<Uint8Array>
+      if (result.done) {
+        await byteChunker.addBytes(previousChunk ?? new Uint8Array(), true)
+        break
+      }
+
+      if (previousChunk !== undefined) {
+        await byteChunker.addBytes(previousChunk, false)
+      }
+
+      previousChunk = result.value
     }
 
-    if (previousChunk) {
-      await byteChunker.addBytes(previousChunk, false)
+    return {
+      name: file.name,
+      mimeType: file.type,
     }
-
-    previousChunk = result.value
-
-    return reader.read().then(processChunk)
-  }
-
-  await reader.read().then(processChunk)
-
-  return {
-    name: file.name,
-    mimeType: file.type,
+  } catch (error) {
+    try {
+      await reader.cancel(error)
+    } catch {
+      // Preserve the original read/consumer error.
+    }
+    throw error
+  } finally {
+    reader.releaseLock()
   }
 }
 

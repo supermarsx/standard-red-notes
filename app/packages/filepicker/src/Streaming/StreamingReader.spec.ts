@@ -14,8 +14,10 @@ const fileYielding = (name: string, type: string, chunks: Uint8Array[]) => {
       }
       return Promise.resolve({ done: false, value: chunks[index++] })
     }),
+    cancel: jest.fn().mockResolvedValue(undefined),
+    releaseLock: jest.fn(),
   }
-  return { name, type, stream: () => ({ getReader: () => reader }) }
+  return { name, type, stream: () => ({ getReader: () => reader }), reader }
 }
 
 describe('StreamingFileReader', () => {
@@ -112,6 +114,55 @@ describe('StreamingFileReader', () => {
         [[1, 2, 3], 1, false],
         [[4], 2, true],
       ])
+    })
+
+    it('should emit an empty terminal chunk for an empty stream', async () => {
+      const file = fileYielding('empty.bin', '', [])
+      const onChunk = jest.fn().mockResolvedValue(undefined)
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const response = await StreamingFileReader.readFile(file as any, 1, onChunk)
+
+      expect(onChunk.mock.calls).toEqual([[{ data: new Uint8Array(), index: 1, isLast: true }]])
+      expect(response).toEqual({ name: 'empty.bin', mimeType: '' })
+    })
+
+    it('marks only the second chunk final when the stream ends on an exact chunk boundary', async () => {
+      const file = fileYielding('boundary.bin', '', [chunk(1, 2), chunk(3, 4)])
+      const onChunk = jest.fn().mockResolvedValue(undefined)
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await StreamingFileReader.readFile(file as any, 2, onChunk)
+
+      expect(onChunk.mock.calls.map(([value]) => [Array.from(value.data), value.isLast])).toEqual([
+        [[1, 2], false],
+        [[3, 4], true],
+      ])
+    })
+
+    it('cancels the reader, releases its lock, and preserves a consumer error', async () => {
+      const file = fileYielding('note.txt', 'text/plain', [chunk(1), chunk(2)])
+      const error = new Error('consumer failed')
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await expect(StreamingFileReader.readFile(file as any, 1, jest.fn().mockRejectedValue(error))).rejects.toBe(error)
+
+      expect(file.reader.cancel).toHaveBeenCalledWith(error)
+      expect(file.reader.releaseLock).toHaveBeenCalledTimes(1)
+    })
+
+    it('cancels the reader, releases its lock, and preserves a read error', async () => {
+      const file = fileYielding('note.txt', 'text/plain', [])
+      const error = new Error('read failed')
+      file.reader.read.mockRejectedValueOnce(error)
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await expect(StreamingFileReader.readFile(file as any, 1, jest.fn().mockResolvedValue(undefined))).rejects.toBe(
+        error,
+      )
+
+      expect(file.reader.cancel).toHaveBeenCalledWith(error)
+      expect(file.reader.releaseLock).toHaveBeenCalledTimes(1)
     })
   })
 })

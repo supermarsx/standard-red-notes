@@ -22,6 +22,8 @@ const readerOver = (chunks: Uint8Array[]) => {
       }
       return Promise.resolve({ done: false, value: chunks[index++] })
     }),
+    cancel: jest.fn().mockResolvedValue(undefined),
+    releaseLock: jest.fn(),
   }
 }
 
@@ -134,14 +136,16 @@ describe('StreamingFileApi', () => {
   })
 
   describe('readFile', () => {
-    const handleStreaming = (chunks: Uint8Array[]) => {
-      const reader = readerOver(chunks)
-      const fileHandle = {
+    const handleForReader = (reader: ReturnType<typeof readerOver>) => {
+      return {
         nativeHandle: {
           getFile: jest.fn().mockResolvedValue({ stream: () => ({ getReader: () => reader }) }),
         },
       }
-      return fileHandle
+    }
+
+    const handleStreaming = (chunks: Uint8Array[]) => {
+      return handleForReader(readerOver(chunks))
     }
 
     it('should emit every chunk, marking only the last one as final', async () => {
@@ -169,15 +173,66 @@ describe('StreamingFileApi', () => {
       expect(onBytes.mock.calls).toEqual([[only, true]])
     })
 
-    // Documents current behaviour, which is arguably wrong: a zero-chunk stream (empty file)
-    // hands `undefined` to the callback instead of an empty Uint8Array. Reported, not fixed here.
-    it('should emit undefined as the final chunk for an empty stream', async () => {
+    it('should emit an empty final chunk for an empty stream', async () => {
       const onBytes = jest.fn().mockResolvedValue(undefined)
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       await api.readFile(handleStreaming([]) as any, onBytes)
 
-      expect(onBytes.mock.calls).toEqual([[undefined, true]])
+      expect(onBytes.mock.calls).toEqual([[new Uint8Array(), true]])
+    })
+
+    it('marks only the second chunk final when the stream ends on an exact chunk boundary', async () => {
+      const chunks = [chunk(1, 2), chunk(3, 4)]
+      const onBytes = jest.fn().mockResolvedValue(undefined)
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await api.readFile(handleStreaming(chunks) as any, onBytes)
+
+      expect(onBytes.mock.calls).toEqual([
+        [chunks[0], false],
+        [chunks[1], true],
+      ])
+    })
+
+    it('cancels the reader, releases its lock, and preserves a consumer error', async () => {
+      const error = new Error('consumer failed')
+      const reader = readerOver([chunk(1), chunk(2)])
+      const onBytes = jest.fn().mockRejectedValue(error)
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await expect(api.readFile(handleForReader(reader) as any, onBytes)).rejects.toBe(error)
+
+      expect(reader.cancel).toHaveBeenCalledWith(error)
+      expect(reader.releaseLock).toHaveBeenCalledTimes(1)
+    })
+
+    it('cancels the reader, releases its lock, and preserves a read error', async () => {
+      const error = new Error('read failed')
+      const reader = readerOver([])
+      reader.read.mockRejectedValueOnce(error)
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await expect(api.readFile(handleForReader(reader) as any, jest.fn().mockResolvedValue(undefined))).rejects.toBe(
+        error,
+      )
+
+      expect(reader.cancel).toHaveBeenCalledWith(error)
+      expect(reader.releaseLock).toHaveBeenCalledTimes(1)
+    })
+
+    it('preserves the original error when cancel also fails', async () => {
+      const error = new Error('read failed')
+      const reader = readerOver([])
+      reader.read.mockRejectedValueOnce(error)
+      reader.cancel.mockRejectedValueOnce(new Error('cancel failed'))
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await expect(api.readFile(handleForReader(reader) as any, jest.fn().mockResolvedValue(undefined))).rejects.toBe(
+        error,
+      )
+
+      expect(reader.releaseLock).toHaveBeenCalledTimes(1)
     })
   })
 })

@@ -87,16 +87,42 @@ describe('ClassicFileReader', () => {
       expect(chunk.isLast).toBe(true)
     })
 
-    // Documents current behaviour, which is arguably wrong: an empty file never enters the read
-    // loop, so no chunk at all is emitted and the consumer never sees an `isLast` marker.
-    // Reported, not fixed here.
-    it('should emit no chunks at all for an empty file', async () => {
+    it('should emit an empty terminal chunk for an empty file', async () => {
       const onChunk = jest.fn().mockResolvedValue(undefined)
 
       const response = await ClassicFileReader.readFile(fileOfBytes('empty.bin', '', new Uint8Array([])), 1, onChunk)
 
-      expect(onChunk).not.toHaveBeenCalled()
+      expect(onChunk).toHaveBeenCalledTimes(1)
+      expect(onChunk.mock.calls[0][0]).toEqual({
+        data: new Uint8Array(),
+        index: 1,
+        isLast: true,
+      })
       expect(response).toEqual({ name: 'empty.bin', mimeType: '' })
+    })
+
+    it('marks only the second read as terminal when the file ends on an exact read boundary', async () => {
+      const bytes = new Uint8Array(4_000_000)
+      bytes[0] = 1
+      bytes[2_000_000] = 2
+      const onChunk = jest.fn().mockResolvedValue(undefined)
+
+      await ClassicFileReader.readFile(fileOfBytes('boundary.bin', '', bytes), 2_000_000, onChunk)
+
+      expect(onChunk).toHaveBeenCalledTimes(2)
+      expect(onChunk.mock.calls.map(([value]) => [value.data.length, value.data[0], value.isLast])).toEqual([
+        [2_000_000, 1, false],
+        [2_000_000, 2, true],
+      ])
+    })
+
+    it('propagates a terminal chunk callback error', async () => {
+      const error = new Error('consumer failed')
+      const onChunk = jest.fn().mockRejectedValue(error)
+
+      await expect(
+        ClassicFileReader.readFile(fileOfBytes('note.txt', 'text/plain', new Uint8Array([1])), 1, onChunk),
+      ).rejects.toBe(error)
     })
   })
 })
