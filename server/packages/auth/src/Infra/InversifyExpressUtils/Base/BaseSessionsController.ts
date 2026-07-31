@@ -4,7 +4,7 @@ import { Request, Response } from 'express'
 import { AuthenticateRequest } from '../../../Domain/UseCase/AuthenticateRequest'
 import { CreateCrossServiceToken } from '../../../Domain/UseCase/CreateCrossServiceToken/CreateCrossServiceToken'
 import { GetActiveSessionsForUser } from '../../../Domain/UseCase/GetActiveSessionsForUser'
-import { ProjectorInterface } from '../../../Projection/ProjectorInterface'
+import { CustomProjectorInterface } from '../../../Projection/ProjectorInterface'
 import { Session } from '../../../Domain/Session/Session'
 import { BaseHttpController, results } from 'inversify-express-utils'
 import { User } from '../../../Domain/User/User'
@@ -15,7 +15,7 @@ export class BaseSessionsController extends BaseHttpController {
   constructor(
     protected getActiveSessionsForUser: GetActiveSessionsForUser,
     protected authenticateRequest: AuthenticateRequest,
-    protected sessionProjector: ProjectorInterface<Session>,
+    protected sessionProjector: CustomProjectorInterface<Session>,
     protected createCrossServiceToken: CreateCrossServiceToken,
     private controllerContainer?: ControllerContainerInterface,
   ) {

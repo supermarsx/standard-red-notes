@@ -26,8 +26,8 @@ export class SettingName extends ValueObject<SettingNameProps> {
     AiEnabled: 'AI_ENABLED',
     AiRequestLimit: 'AI_REQUEST_LIMIT',
     // Standard Red Notes: admin-managed instance flag for whether new signups
-    // are allowed. Persisted as a setting so the admin panel state survives; see
-    // the TODO in Register.ts about having registration consult this at runtime.
+    // are allowed. Persisted as a setting so the admin panel state survives;
+    // Register consults it at runtime after applying the environment override.
     RegistrationDisabled: 'REGISTRATION_DISABLED',
     // Standard Red Notes: per-user gating for collaboration (shared vaults) and
     // live-sync websocket push. Default ENABLED when unset; value 'false'

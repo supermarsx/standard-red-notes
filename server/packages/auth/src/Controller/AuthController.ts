@@ -1,4 +1,3 @@
-import { UserDeletionResponseBody, UserUpdateRequestParams } from '@standardnotes/api'
 import { HttpResponse, HttpStatusCode } from '@standardnotes/responses'
 
 import { GetUserKeyParamsRecovery } from '../Domain/UseCase/GetUserKeyParamsRecovery/GetUserKeyParamsRecovery'
@@ -8,7 +7,6 @@ import { GenerateRecoveryCodesResponseBody } from '../Infra/Http/Response/Genera
 import { GenerateRecoveryCodes } from '../Domain/UseCase/GenerateRecoveryCodes/GenerateRecoveryCodes'
 import { GenerateRecoveryCodesRequestParams } from '../Infra/Http/Request/GenerateRecoveryCodesRequestParams'
 import { Logger } from 'winston'
-import { UserUpdateResponse } from '@standardnotes/api/dist/Domain/Response/User/UserUpdateResponse'
 import { SECURITY_STEP_UP_UPDATE_REQUIRED_MESSAGE } from '../Domain/Auth/SecurityStepUp'
 
 /**
@@ -20,14 +18,6 @@ export class AuthController {
     private doGenerateRecoveryCodes: GenerateRecoveryCodes,
     private logger: Logger,
   ) {}
-
-  async update(_params: UserUpdateRequestParams): Promise<HttpResponse<UserUpdateResponse>> {
-    throw new Error('Method not implemented.')
-  }
-
-  async deleteAccount(_params: never): Promise<HttpResponse<UserDeletionResponseBody>> {
-    throw new Error('This method is implemented on the payments server.')
-  }
 
   async generateRecoveryCodes(
     params: GenerateRecoveryCodesRequestParams,

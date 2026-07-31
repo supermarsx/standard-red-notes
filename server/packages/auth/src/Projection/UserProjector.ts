@@ -13,12 +13,4 @@ export class UserProjector implements ProjectorInterface<User> {
       protocolVersion: user.version,
     }
   }
-
-  projectCustom(_projectionType: string, _user: User): Record<string, unknown> {
-    throw Error('not implemented')
-  }
-
-  projectFull(_user: User): Record<string, unknown> {
-    throw Error('not implemented')
-  }
 }

@@ -4,10 +4,10 @@ import TYPES from '../Bootstrap/Types'
 
 import { Session } from '../Domain/Session/Session'
 import { SessionServiceInterface } from '../Domain/Session/SessionServiceInterface'
-import { ProjectorInterface } from './ProjectorInterface'
+import { CustomProjectorInterface } from './ProjectorInterface'
 
 @injectable()
-export class SessionProjector implements ProjectorInterface<Session> {
+export class SessionProjector implements CustomProjectorInterface<Session> {
   static readonly CURRENT_SESSION_PROJECTION = 'CURRENT_SESSION_PROJECTION'
 
   constructor(
@@ -45,9 +45,5 @@ export class SessionProjector implements ProjectorInterface<Session> {
       default:
         throw new Error(`Not supported projection type: ${projectionType}`)
     }
-  }
-
-  projectFull(_session: Session): Record<string, unknown> {
-    throw Error('not implemented')
   }
 }

@@ -11,12 +11,4 @@ export class PermissionProjector implements ProjectorInterface<Permission> {
       name: permission.name,
     }
   }
-
-  projectCustom(_projectionType: string, _role: Permission): Record<string, unknown> {
-    throw Error('not implemented')
-  }
-
-  projectFull(_role: Permission): Record<string, unknown> {
-    throw Error('not implemented')
-  }
 }

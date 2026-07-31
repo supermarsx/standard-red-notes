@@ -11,12 +11,4 @@ export class RoleProjector implements ProjectorInterface<Role> {
       name: role.name,
     }
   }
-
-  projectCustom(_projectionType: string, _role: Role): Record<string, unknown> {
-    throw Error('not implemented')
-  }
-
-  projectFull(_role: Role): Record<string, unknown> {
-    throw Error('not implemented')
-  }
 }
