@@ -18,6 +18,7 @@ import {
   analyzeRepositoryReleaseImpact,
   analyzeWorkspacePackageImpact,
   createReleaseAnalysisContext,
+  discoverReleaseTargetSurface,
   discoverStandaloneManagedPackages,
   discoverWorkspaceInventory,
   renderReleaseImpactReport,
@@ -327,6 +328,48 @@ test("a transitive workspace dependency change releases its consumer", () => {
   }
 });
 
+test("renames out of a dependency closure retain the deleted source path", () => {
+  const context = fixture();
+  try {
+    git(context.repo, "tag", "@fixture/a@1.0.0");
+    mkdirSync(path.join(context.repo, "archive"), { recursive: true });
+    git(context.repo, "mv", "packages/b/src/index.js", "archive/removed-b.js");
+    commit(context.repo, "move dependency source outside the workspace");
+
+    const result = analyzeWorkspacePackageImpact({
+      repo: context.repo,
+      packageName: "@fixture/a",
+      workspaceRoot: "root",
+    });
+
+    assert.equal(result.changed, true);
+    assert.deepEqual(result.matchedFiles, ["packages/b/src/index.js"]);
+    assert.deepEqual(result.ignoredFiles, ["archive/removed-b.js"]);
+  } finally {
+    context.cleanup();
+  }
+});
+
+test("deleted dependency files remain release-impacting", () => {
+  const context = fixture();
+  try {
+    git(context.repo, "tag", "@fixture/a@1.0.0");
+    rmSync(path.join(context.repo, "packages/b/src/index.js"));
+    commit(context.repo, "delete dependency source");
+
+    const result = analyzeWorkspacePackageImpact({
+      repo: context.repo,
+      packageName: "@fixture/a",
+      workspaceRoot: "root",
+    });
+
+    assert.equal(result.changed, true);
+    assert.deepEqual(result.matchedFiles, ["packages/b/src/index.js"]);
+  } finally {
+    context.cleanup();
+  }
+});
+
 test("a package with no matching release tag is an auditable first release", () => {
   const context = fixture();
   try {
@@ -348,6 +391,7 @@ test("a package with no matching release tag is an auditable first release", () 
 test("an explicitly requested missing base ref fails closed", () => {
   const context = fixture();
   try {
+    git(context.repo, "branch", "@fixture/a@9.9.9");
     assert.throws(
       () =>
         analyzeWorkspacePackageImpact({
@@ -429,11 +473,44 @@ test("the latest ancestor is selected and newer divergent tags are reported", ()
     });
     assert.equal(result.baseRef, "@fixture/a@1.0.0");
     assert.equal(result.baselineStatus, "ancestor-with-newer-divergent-tags");
+    assert.equal(result.publicationGate, "blocked-release-history");
     assert.deepEqual(result.divergentNewerReleaseRefs, ["@fixture/a@2.0.0"]);
-    assert.equal(result.changed, false);
+    assert.equal(result.changed, true);
     assert.ok(
       result.reasons.some(({ code }) => code === "divergent-newer-release"),
     );
+  } finally {
+    context.cleanup();
+  }
+});
+
+test("older divergent tags are reported without being mislabeled as newer", () => {
+  const context = fixture();
+  try {
+    git(context.repo, "tag", "@fixture/a@1.0.0");
+    git(context.repo, "switch", "-c", "older-release-side");
+    write(
+      context.repo,
+      "packages/a/src/index.js",
+      "export const a = 'older release side';\n",
+    );
+    commit(context.repo, "older divergent release");
+    git(context.repo, "tag", "@fixture/a@0.9.0");
+    git(context.repo, "switch", "main");
+
+    const result = analyzeWorkspacePackageImpact({
+      repo: context.repo,
+      packageName: "@fixture/a",
+      workspaceRoot: "root",
+    });
+
+    assert.equal(result.baseRef, "@fixture/a@1.0.0");
+    assert.equal(result.baselineStatus, "ancestor-with-divergent-tags");
+    assert.equal(result.publicationGate, "blocked-release-history");
+    assert.deepEqual(result.divergentReleaseRefs, ["@fixture/a@0.9.0"]);
+    assert.deepEqual(result.divergentNewerReleaseRefs, []);
+    assert.equal(result.changed, true);
+    assert.ok(result.reasons.some(({ code }) => code === "divergent-release"));
   } finally {
     context.cleanup();
   }
@@ -460,9 +537,90 @@ test("only-divergent history is explicit and cannot become a false first release
     assert.equal(result.firstRelease, false);
     assert.equal(result.noAncestorBaseline, true);
     assert.equal(result.baselineStatus, "no-ancestor");
+    assert.equal(result.publicationGate, "blocked-release-history");
     assert.equal(result.changed, true);
     assert.deepEqual(result.divergentNewerReleaseRefs, ["@fixture/a@2.0.0"]);
     assert.equal(result.reasons[0].code, "no-ancestor-baseline");
+  } finally {
+    context.cleanup();
+  }
+});
+
+test("an explicit release request can exclude its own head tag from the prior baseline", () => {
+  const context = fixture();
+  try {
+    git(context.repo, "tag", "@fixture/a@1.0.0");
+    write(
+      context.repo,
+      "packages/a/src/index.js",
+      "export const a = 'explicit release';\n",
+    );
+    commit(context.repo, "explicit release head");
+    git(context.repo, "tag", "@fixture/a@2.0.0");
+
+    const result = analyzeWorkspacePackageImpact({
+      repo: context.repo,
+      packageName: "@fixture/a",
+      workspaceRoot: "root",
+      excludeReleaseRef: "@fixture/a@2.0.0",
+    });
+
+    assert.equal(result.excludedReleaseRef, "@fixture/a@2.0.0");
+    assert.equal(result.baseRef, "@fixture/a@1.0.0");
+    assert.equal(result.changed, true);
+    assert.equal(result.publicationGate, "build-and-compare");
+  } finally {
+    context.cleanup();
+  }
+});
+
+test("an excluded release ref must match both the product and requested head", () => {
+  const context = fixture();
+  try {
+    git(context.repo, "tag", "@fixture/a@1.0.0");
+    write(
+      context.repo,
+      "packages/a/src/index.js",
+      "export const a = 'new head';\n",
+    );
+    commit(context.repo, "new head");
+
+    assert.throws(
+      () =>
+        analyzeWorkspacePackageImpact({
+          repo: context.repo,
+          packageName: "@fixture/a",
+          workspaceRoot: "root",
+          excludeReleaseRef: "@fixture/a@1.0.0",
+        }),
+      (error) =>
+        error instanceof ReleaseImpactError &&
+        error.code === "excluded-release-ref-mismatch",
+    );
+    assert.throws(
+      () =>
+        analyzeWorkspacePackageImpact({
+          repo: context.repo,
+          packageName: "@fixture/a",
+          workspaceRoot: "root",
+          excludeReleaseRef: "@fixture/b@1.0.0",
+        }),
+      (error) =>
+        error instanceof ReleaseImpactError &&
+        error.code === "mismatched-release-ref",
+    );
+    git(context.repo, "branch", "@fixture/a@2.0.0");
+    assert.throws(
+      () =>
+        analyzeWorkspacePackageImpact({
+          repo: context.repo,
+          packageName: "@fixture/a",
+          workspaceRoot: "root",
+          excludeReleaseRef: "@fixture/a@2.0.0",
+        }),
+      (error) =>
+        error instanceof ReleaseImpactError && error.code === "missing-ref",
+    );
   } finally {
     context.cleanup();
   }
@@ -684,8 +842,9 @@ test("an explicit hybrid base reports every off-history tag without cross-profil
       identity: "srn-fixture",
       baseRef: "srn-fixture-v26.9",
     });
-    assert.equal(result.changed, false);
+    assert.equal(result.changed, true);
     assert.equal(result.baselineStatus, "ancestor-with-divergent-tags");
+    assert.equal(result.publicationGate, "blocked-release-history");
     assert.deepEqual(result.divergentReleaseRefs, ["srn-fixture-v1.2.3"]);
     assert.deepEqual(result.divergentNewerReleaseRefs, []);
   } finally {
@@ -808,7 +967,7 @@ test("forced releases require and preserve an auditable reason", () => {
       packageName: "@fixture/a",
       workspaceRoot: "root",
       force: true,
-      forceReason: "manual recovery of a compromised artifact",
+      forceReason: "  manual recovery of a compromised artifact  ",
     });
     assert.equal(result.changed, true);
     assert.equal(result.forced, true);
@@ -817,6 +976,59 @@ test("forced releases require and preserve an auditable reason", () => {
       "manual recovery of a compromised artifact",
     );
     assert.equal(result.reasons[0].code, "forced-release");
+    assert.equal(result.publicationGate, "force-requested");
+
+    assert.throws(
+      () =>
+        analyzeWorkspacePackageImpact({
+          repo: context.repo,
+          packageName: "@fixture/a",
+          workspaceRoot: "root",
+          force: true,
+          forceReason: "x".repeat(501),
+        }),
+      (error) =>
+        error instanceof ReleaseImpactError &&
+        error.code === "force-reason-too-long",
+    );
+    assert.throws(
+      () =>
+        analyzeWorkspacePackageImpact({
+          repo: context.repo,
+          packageName: "@fixture/a",
+          workspaceRoot: "root",
+          force: true,
+          forceReason: "line one\nline two",
+        }),
+      (error) =>
+        error instanceof ReleaseImpactError &&
+        error.code === "invalid-force-reason",
+    );
+    assert.throws(
+      () =>
+        analyzeWorkspacePackageImpact({
+          repo: context.repo,
+          packageName: "@fixture/a",
+          workspaceRoot: "root",
+          force: true,
+          forceReason: "line one\u2028line two",
+        }),
+      (error) =>
+        error instanceof ReleaseImpactError &&
+        error.code === "invalid-force-reason",
+    );
+    assert.throws(
+      () =>
+        analyzeWorkspacePackageImpact({
+          repo: context.repo,
+          packageName: "@fixture/a",
+          workspaceRoot: "root",
+          forceReason: "not actually forced",
+        }),
+      (error) =>
+        error instanceof ReleaseImpactError &&
+        error.code === "unexpected-force-reason",
+    );
   } finally {
     context.cleanup();
   }
@@ -878,11 +1090,24 @@ test("repository mode inventories every workspace without inventing publishers",
       ).category,
       "publishable-unmanaged",
     );
+    const unmanaged = result.workspaces.find(
+      ({ identity }) => identity === "@standardnotes/upstream",
+    );
+    assert.equal(unmanaged.analysisStatus, "inventory-only");
+    assert.equal(unmanaged.publicationPolicy, "unmanaged");
+    assert.equal(unmanaged.changed, null);
+    assert.equal(unmanaged.tagPrefix, null);
     assert.equal(
       result.workspaces.find(({ identity }) => identity === "@fixture/private")
         .category,
       "private",
     );
+    const privateWorkspace = result.workspaces.find(
+      ({ identity }) => identity === "@fixture/private",
+    );
+    assert.equal(privateWorkspace.analysisStatus, "inventory-only");
+    assert.equal(privateWorkspace.publicationPolicy, "disabled-private");
+    assert.equal(privateWorkspace.changed, null);
     assert.equal(
       result.workspaces.find(
         ({ identity }) => identity === "@standardnotes/desktop",
@@ -899,9 +1124,28 @@ test("repository mode inventories every workspace without inventing publishers",
       "@standardnotes/upstream",
       "publishable-unmanaged",
       "does not assert that this repository publishes",
+      "inventory-only",
+      "not evaluated",
     ]) {
       assert.match(report, new RegExp(required.replaceAll("*", "\\*")));
     }
+
+    const blockedReport = renderReleaseImpactReport({
+      ...result,
+      products: result.products.map((entry, index) =>
+        index === 0
+          ? {
+              ...entry,
+              changed: true,
+              publicationGate: "blocked-release-history",
+              reasons: [{ code: "divergent-release" }],
+              divergentReleaseRefs: [`${entry.tagPrefix}99.1`],
+            }
+          : entry,
+      ),
+    });
+    assert.match(blockedReport, /blocked-release-history/);
+    assert.match(blockedReport, /divergent-release/);
   } finally {
     context.cleanup();
   }
@@ -974,6 +1218,40 @@ test("the repository Yarn-workspace snapshot covers all 44 manifests", () => {
       "@standard-red-notes/srn-server\tsrn-server\tcli/srn-server/package.json",
     ],
   );
+});
+
+test("the mobile release trigger surface exposes its complete dependency closure", () => {
+  const surface = discoverReleaseTargetSurface({
+    repo: repositoryRoot,
+    target: "srn-mobile",
+  });
+
+  assert.deepEqual(surface.dependencyClosure, [
+    "@standardnotes/api",
+    "@standardnotes/encryption",
+    "@standardnotes/features",
+    "@standardnotes/filepicker",
+    "@standardnotes/files",
+    "@standardnotes/icons",
+    "@standardnotes/mobile",
+    "@standardnotes/models",
+    "@standardnotes/responses",
+    "@standardnotes/services",
+    "@standardnotes/sncrypto-common",
+    "@standardnotes/sncrypto-web",
+    "@standardnotes/snjs",
+    "@standardnotes/styles",
+    "@standardnotes/toast",
+    "@standardnotes/ui-services",
+    "@standardnotes/utils",
+    "@standardnotes/web",
+  ]);
+  assert.ok(
+    surface.configPaths.includes(
+      "app/.github/workflows/mobile.release.prod.yml",
+    ),
+  );
+  assert.deepEqual(surface.configPrefixes, ["app/.yarn/releases"]);
 });
 
 test("the CLI rejects unknown flags instead of silently weakening analysis", () => {

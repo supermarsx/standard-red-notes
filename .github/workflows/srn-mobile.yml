@@ -7,10 +7,47 @@ name: srn-mobile
 
 on:
   push:
+    branches: [main]
+    # Branch pushes only run impact analysis. This exact list covers the mobile
+    # package's computed app-workspace dependency closure; the release-contract
+    # validator fails if a future dependency edge outgrows it.
+    paths:
+      - 'app/packages/api/**'
+      - 'app/packages/encryption/**'
+      - 'app/packages/features/**'
+      - 'app/packages/filepicker/**'
+      - 'app/packages/files/**'
+      - 'app/packages/icons/**'
+      - 'app/packages/mobile/**'
+      - 'app/packages/models/**'
+      - 'app/packages/responses/**'
+      - 'app/packages/services/**'
+      - 'app/packages/sncrypto-common/**'
+      - 'app/packages/sncrypto-web/**'
+      - 'app/packages/snjs/**'
+      - 'app/packages/styles/**'
+      - 'app/packages/toast/**'
+      - 'app/packages/ui-services/**'
+      - 'app/packages/utils/**'
+      - 'app/packages/web/**'
+      - 'app/.github/workflows/mobile.release.prod.yml'
+      - 'app/.nvmrc'
+      - 'app/.yarnrc.yml'
+      - 'app/.yarn/releases/**'
+      - 'app/babel.config.js'
+      - 'app/package.json'
+      - 'app/tsconfig.base.json'
+      - 'app/yarn.lock'
+      - '.github/workflows/srn-mobile.yml'
     tags:
       - '@standardnotes/web@*'
   workflow_dispatch:
     inputs:
+      publish_release:
+        description: Explicitly request app-store and GitHub publication after impact/fingerprint checks
+        required: false
+        default: false
+        type: boolean
       force_release:
         description: Publish even when the mobile surface is unchanged
         required: false
@@ -41,8 +78,12 @@ jobs:
       changed: ${{ steps.impact.outputs.changed }}
       forced: ${{ steps.impact.outputs.forced }}
       base_ref: ${{ steps.impact.outputs.base_ref }}
+      baseline_status: ${{ steps.impact.outputs.baseline_status }}
+      publication_gate: ${{ steps.impact.outputs.publication_gate }}
       reason_codes: ${{ steps.impact.outputs.reason_codes }}
       result_json: ${{ steps.impact.outputs.result_json }}
+      publish_requested: ${{ steps.request.outputs.publish_requested }}
+      publication_source: ${{ steps.request.outputs.publication_source }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -52,6 +93,42 @@ jobs:
         with:
           node-version: "26"
           package-manager-cache: false
+
+      - id: request
+        name: Resolve analysis-only versus explicit publication intent
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          MANUAL_PUBLISH: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_release || false }}
+          FORCE_RELEASE: ${{ github.event_name == 'workflow_dispatch' && inputs.force_release || false }}
+        run: |
+          set -euo pipefail
+          publish_requested=false
+          publication_source=analysis-only
+          if [ "$EVENT_NAME" = "push" ] && [ "$REF_TYPE" = "tag" ]; then
+            case "$REF_NAME" in
+              @standardnotes/web@*)
+                publish_requested=true
+                publication_source=web-release-tag
+                ;;
+              *)
+                echo "Unexpected mobile publication tag: $REF_NAME" >&2
+                exit 1
+                ;;
+            esac
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            if [ "$FORCE_RELEASE" = "true" ] && [ "$MANUAL_PUBLISH" != "true" ]; then
+              echo "force_release requires publish_release=true; an analysis-only dispatch cannot force publication." >&2
+              exit 1
+            fi
+            if [ "$MANUAL_PUBLISH" = "true" ]; then
+              publish_requested=true
+              publication_source=manual-explicit
+            fi
+          fi
+          echo "publish_requested=$publish_requested" >> "$GITHUB_OUTPUT"
+          echo "publication_source=$publication_source" >> "$GITHUB_OUTPUT"
 
       - id: impact
         name: Compare mobile publishable surface with its latest release
@@ -73,12 +150,21 @@ jobs:
             echo '```json'
             cat release-impact.json
             echo '```'
+            echo
+            echo "Publication requested: ${{ steps.request.outputs.publish_requested }} (${{ steps.request.outputs.publication_source }})"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload mobile impact evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: srn-mobile-impact-${{ github.run_id }}
+          path: release-impact.json
+          if-no-files-found: error
 
   version:
     name: version
     needs: impact
-    if: needs.impact.outputs.changed == 'true'
+    if: needs.impact.outputs.changed == 'true' && needs.impact.outputs.publish_requested == 'true'
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -97,6 +183,15 @@ jobs:
           if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "Invalid mobile release version: $version" >&2
             exit 1
+          fi
+          if [[ "$GITHUB_REF" == refs/tags/@standardnotes/web@* ]]; then
+            requested="${GITHUB_REF_NAME#@standardnotes/web@}"
+            requested="${requested%%+*}"
+            requested="${requested%%-*}"
+            if [ "$requested" != "$version" ]; then
+              echo "Web release tag version '$requested' does not match app/packages/web/package.json '$version'." >&2
+              exit 1
+            fi
           fi
           tag="@standardnotes/mobile@$version"
           if git show-ref --verify --quiet "refs/tags/$tag"; then
@@ -197,42 +292,32 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       changed: ${{ steps.compare.outputs.changed }}
+      decision: ${{ steps.compare.outputs.decision }}
     steps:
+      - uses: actions/checkout@v7
+
       - id: compare
         name: Compare mobile release fingerprint
         env:
           BASE_REF: ${{ needs.impact.outputs.base_ref }}
+          BASELINE_STATUS: ${{ needs.impact.outputs.baseline_status }}
           FORCED: ${{ needs.impact.outputs.forced }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NEW_FP: ${{ needs.fingerprint.outputs.fingerprint }}
         run: |
           set -euo pipefail
-          [[ "$NEW_FP" =~ ^[0-9a-f]{64}$ ]]
-          if [ "$FORCED" = "true" ]; then
-            echo "Audited force request bypasses the mobile fingerprint comparison."
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            exit 0
+          if ! node scripts/compare-release-fingerprints.mjs \
+            --repository "$GITHUB_REPOSITORY" \
+            --base-ref "$BASE_REF" \
+            --baseline-status "$BASELINE_STATUS" \
+            --forced "$FORCED" \
+            --fingerprint "srn-mobile.fingerprint=${NEW_FP}" \
+            --output release-fingerprint-comparison.json \
+            --github-output "$GITHUB_OUTPUT"; then
+            cat release-fingerprint-comparison.json >> "$GITHUB_STEP_SUMMARY"
+            exit 1
           fi
-          if [ -z "$BASE_REF" ]; then
-            echo "No prior mobile release -> changed."
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          old_fp=""
-          if gh release download "$BASE_REF" \
-            --repo "$GITHUB_REPOSITORY" \
-            --pattern srn-mobile.fingerprint \
-            --output old.fingerprint \
-            --clobber 2>/dev/null; then
-            old_fp="$(tr -d '[:space:]' < old.fingerprint)"
-          fi
-          if [ -n "$old_fp" ] && [ "$old_fp" = "$NEW_FP" ]; then
-            echo "Mobile executable inputs are unchanged since ${BASE_REF} -> skip."
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "Mobile executable inputs changed since ${BASE_REF} -> release."
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          fi
+          cat release-fingerprint-comparison.json >> "$GITHUB_STEP_SUMMARY"
 
   android:
     name: android (arm64-v8a + x86_64)

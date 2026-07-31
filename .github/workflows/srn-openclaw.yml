@@ -81,6 +81,8 @@ jobs:
       changed: ${{ steps.impact.outputs.changed }}
       forced: ${{ steps.impact.outputs.forced }}
       base_ref: ${{ steps.impact.outputs.base_ref }}
+      baseline_status: ${{ steps.impact.outputs.baseline_status }}
+      publication_gate: ${{ steps.impact.outputs.publication_gate }}
       reason_codes: ${{ steps.impact.outputs.reason_codes }}
       result_json: ${{ steps.impact.outputs.result_json }}
     steps:
@@ -98,14 +100,16 @@ jobs:
       - id: impact
         name: Compare OpenClaw publishable surface with its latest release
         env:
-          FORCE_RELEASE: ${{ startsWith(github.ref, 'refs/tags/srn-openclaw-v') || (github.event_name == 'workflow_dispatch' && inputs.tag != '') || (github.event_name == 'workflow_dispatch' && inputs.force_release) }}
-          FORCE_REASON: ${{ startsWith(github.ref, 'refs/tags/srn-openclaw-v') && format('tag:{0}', github.ref_name) || (github.event_name == 'workflow_dispatch' && inputs.tag != '' && format('tag:{0}', inputs.tag)) || (github.event_name == 'workflow_dispatch' && inputs.force_reason) || '' }}
+          FORCE_RELEASE: ${{ github.event_name == 'workflow_dispatch' && inputs.force_release || false }}
+          FORCE_REASON: ${{ github.event_name == 'workflow_dispatch' && inputs.force_reason || '' }}
+          EXCLUDED_RELEASE_REF: ${{ startsWith(github.ref, 'refs/tags/srn-openclaw-v') && github.ref_name || (github.event_name == 'workflow_dispatch' && inputs.tag) || '' }}
         run: |
           set -euo pipefail
           git fetch --force --tags origin
           node scripts/analyze-release-impact.mjs \
             --target srn-openclaw \
             --head HEAD \
+            --exclude-release-ref "${EXCLUDED_RELEASE_REF}" \
             --force "${FORCE_RELEASE}" \
             --force-reason "${FORCE_REASON}" \
             --output release-impact.json \
@@ -181,7 +185,13 @@ jobs:
               n="${released#"$prefix"}"
               if [[ "$n" =~ ^[0-9]+$ ]] && [ "$n" -gt "$max" ]; then max="$n"; fi
             done < <(git tag --list "${prefix}*")
-            version="${YY}.$((max + 1))"
+            next=$((max + 1))
+            # A stable explicit tag YY.N.0 owns the same package version that a
+            # rolling YY.N release would stamp. Skip that reserved identity.
+            while git show-ref --verify --quiet "refs/tags/${TOOL}-v${YY}.${next}.0"; do
+              next=$((next + 1))
+            done
+            version="${YY}.${next}"
             # release-config.mjs demands a strict semver tag and `26.1` is not
             # semver, so the packaged artifact carries `26.1.0`.
             package_version=${version}.0
@@ -347,41 +357,31 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       changed: ${{ steps.compare.outputs.changed }}
+      decision: ${{ steps.compare.outputs.decision }}
     steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
       - id: compare
         env:
           BASE_REF: ${{ needs.impact.outputs.base_ref }}
+          BASELINE_STATUS: ${{ needs.impact.outputs.baseline_status }}
           FORCED: ${{ needs.impact.outputs.forced }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NEW_FP: ${{ needs.package.outputs.fingerprint }}
         run: |
           set -euo pipefail
-          [[ "$NEW_FP" =~ ^[0-9a-f]{64}$ ]]
-          if [ "$FORCED" = "true" ]; then
-            echo "Audited tag/force request bypasses the package fingerprint comparison."
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            exit 0
+          if ! node scripts/compare-release-fingerprints.mjs \
+            --repository "$GITHUB_REPOSITORY" \
+            --base-ref "$BASE_REF" \
+            --baseline-status "$BASELINE_STATUS" \
+            --forced "$FORCED" \
+            --fingerprint "${TOOL}.fingerprint=${NEW_FP}" \
+            --output release-fingerprint-comparison.json \
+            --github-output "$GITHUB_OUTPUT"; then
+            cat release-fingerprint-comparison.json >> "$GITHUB_STEP_SUMMARY"
+            exit 1
           fi
-          if [ -z "$BASE_REF" ]; then
-            echo "No prior OpenClaw release -> changed."
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          old_fp=""
-          if gh release download "$BASE_REF" \
-            --repo "$GITHUB_REPOSITORY" \
-            --pattern "${TOOL}.fingerprint" \
-            --output old.fingerprint \
-            --clobber 2>/dev/null; then
-            old_fp="$(tr -d '[:space:]' < old.fingerprint)"
-          fi
-          if [ -n "$old_fp" ] && [ "$old_fp" = "$NEW_FP" ]; then
-            echo "Normalized package is unchanged since ${BASE_REF} -> skip."
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "Normalized package changed since ${BASE_REF} -> release."
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          fi
+          cat release-fingerprint-comparison.json >> "$GITHUB_STEP_SUMMARY"
 
   smoke:
     name: Smoke (${{ matrix.target }})

@@ -243,7 +243,7 @@ test("dropping the namespaced OpenClaw tag is rejected", () => {
 test("reverting OpenClaw to a tag-parsed version is rejected", () => {
   const files = withFileChanged(openClawWorkflowFile, (content) =>
     content.replace(
-      'version="${YY}.$((max + 1))"',
+      'version="${YY}.${next}"',
       'version="$(date -u +%y).${GITHUB_RUN_NUMBER}"',
     ),
   );
@@ -251,6 +251,20 @@ test("reverting OpenClaw to a tag-parsed version is rejected", () => {
   assert.match(
     validateReleaseContract(files).join("\n"),
     /srn-openclaw\.yml: missing rolling YY\.N OpenClaw version/,
+  );
+});
+
+test("OpenClaw rolling versions cannot reuse an explicit SemVer package identity", () => {
+  const files = withFileChanged(openClawWorkflowFile, (content) =>
+    content.replace(
+      '            while git show-ref --verify --quiet "refs/tags/${TOOL}-v${YY}.${next}.0"; do\n',
+      "            while false; do\n",
+    ),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /srn-openclaw\.yml: missing explicit SemVer package-version reservation/,
   );
 });
 
@@ -916,7 +930,9 @@ test("release-contract CI runs when release analysis or OpenClaw gating changes"
   const files = withFileChanged(file, (content) =>
     content
       .replace("      - '.github/workflows/srn-openclaw.yml'\n", "")
-      .replace("      - 'scripts/fingerprint-release-tree.mjs'\n", ""),
+      .replace("      - 'scripts/fingerprint-release-tree.mjs'\n", "")
+      .replace("      - 'scripts/compare-release-fingerprints.mjs'\n", "")
+      .replace("      - 'scripts/validate-release-contract.mjs'\n", ""),
   );
   const errors = validateReleaseContract(files).join("\n");
 
@@ -927,6 +943,14 @@ test("release-contract CI runs when release analysis or OpenClaw gating changes"
   assert.match(
     errors,
     /release-contract\.yml: expected scripts\/fingerprint-release-tree\.mjs in both push and pull_request paths, found 1/,
+  );
+  assert.match(
+    errors,
+    /release-contract\.yml: expected scripts\/compare-release-fingerprints\.mjs in both push and pull_request paths, found 1/,
+  );
+  assert.match(
+    errors,
+    /release-contract\.yml: expected scripts\/validate-release-contract\.mjs in both push and pull_request paths, found 1/,
   );
 });
 
@@ -1069,5 +1093,263 @@ test("hybrid history ambiguity and package-version collisions stay fail-closed",
   assert.match(
     errors,
     /analyze-release-impact\.mjs: missing hybrid package-version collision guard/,
+  );
+});
+
+test("computed dependency closure must remain covered by publisher paths", () => {
+  const file = ".github/workflows/srn-mobile.yml";
+  const files = withFileChanged(file, (content) =>
+    content.replace("      - 'app/packages/api/**'\n", ""),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /srn-mobile\.yml: push paths do not cover release dependency '@standardnotes\/api' at 'app\/packages\/api\/\*\*'/,
+  );
+});
+
+test("desktop trigger paths cover reusable and shared build configuration", () => {
+  const file = ".github/workflows/srn-desktop.yml";
+  const files = withFileChanged(file, (content) =>
+    content
+      .replace(
+        "      - 'app/.github/workflows/desktop.release.reuse.yml'\n",
+        "",
+      )
+      .replace("      - 'app/babel.config.js'\n", ""),
+  );
+  const errors = validateReleaseContract(files).join("\n");
+
+  assert.match(
+    errors,
+    /srn-desktop\.yml: push paths do not cover release configuration 'app\/\.github\/workflows\/desktop\.release\.reuse\.yml'/,
+  );
+  assert.match(
+    errors,
+    /srn-desktop\.yml: push paths do not cover release configuration 'app\/babel\.config\.js'/,
+  );
+});
+
+test("product publishers do not wake for shared release-gate changes", () => {
+  const file = ".github/workflows/srn-client.yml";
+  const files = withFileChanged(file, (content) =>
+    content.replace(
+      "      - 'cli/srn-client/**'\n",
+      "      - 'cli/srn-client/**'\n      - 'scripts/**'\n",
+    ),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /srn-client\.yml: product publisher paths must not include shared release gate 'scripts\/analyze-release-impact\.mjs'/,
+  );
+});
+
+test("force inputs can only come from an audited manual dispatch", () => {
+  const file = ".github/workflows/srn-openclaw.yml";
+  const files = withFileChanged(file, (content) =>
+    content.replace(
+      "FORCE_RELEASE: ${{ github.event_name == 'workflow_dispatch' && inputs.force_release || false }}",
+      "FORCE_RELEASE: ${{ startsWith(github.ref, 'refs/tags/') || inputs.force_release }}",
+    ),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /srn-openclaw\.yml: missing manual-only force source/,
+  );
+});
+
+test("an explicit OpenClaw tag is excluded from its own prior-release baseline", () => {
+  const file = ".github/workflows/srn-openclaw.yml";
+  const files = withFileChanged(file, (content) =>
+    content
+      .replace(
+        "          EXCLUDED_RELEASE_REF: ${{ startsWith(github.ref, 'refs/tags/srn-openclaw-v') && github.ref_name || (github.event_name == 'workflow_dispatch' && inputs.tag) || '' }}\n",
+        "",
+      )
+      .replace(
+        '            --exclude-release-ref "${EXCLUDED_RELEASE_REF}" \\\n',
+        "",
+      ),
+  );
+  const errors = validateReleaseContract(files).join("\n");
+
+  assert.match(
+    errors,
+    /srn-openclaw\.yml: missing explicit OpenClaw release-ref exclusion/,
+  );
+  assert.match(
+    errors,
+    /srn-openclaw\.yml: missing explicit OpenClaw self-tag exclusion forwarding/,
+  );
+});
+
+test("mobile branch analysis cannot silently become publication", () => {
+  const file = ".github/workflows/srn-mobile.yml";
+  const files = withFileChanged(file, (content) =>
+    content
+      .replace(
+        "if: needs.impact.outputs.changed == 'true' && needs.impact.outputs.publish_requested == 'true'",
+        "if: needs.impact.outputs.changed == 'true'",
+      )
+      .replace(
+        '              echo "force_release requires publish_release=true; an analysis-only dispatch cannot force publication." >&2\n',
+        "",
+      ),
+  );
+  const errors = validateReleaseContract(files).join("\n");
+
+  assert.match(
+    errors,
+    /srn-mobile\.yml: missing mobile impact-versus-publication gate/,
+  );
+  assert.match(
+    errors,
+    /srn-mobile\.yml: missing fail-closed manual force intent/,
+  );
+});
+
+test("workflow-created mobile tags cannot recursively trigger publication", () => {
+  const file = ".github/workflows/srn-mobile.yml";
+  const files = withFileChanged(file, (content) =>
+    content.replace(
+      "      - '@standardnotes/web@*'\n",
+      "      - '@standardnotes/web@*'\n      - '@standardnotes/mobile@*'\n",
+    ),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /workflow-created mobile tags must not recursively trigger mobile publication/,
+  );
+});
+
+test("normal CI always publishes one non-releasing all-workspace report", () => {
+  const file = ".github/workflows/ci.yml";
+  const files = withFileChanged(file, (content) =>
+    content
+      .replace("          fetch-depth: 0\n", "")
+      .replace("          git fetch --force --tags origin\n", "")
+      .replace("            --all-workspaces all \\\n", "")
+      .replace(
+        "        uses: actions/upload-artifact@v7.0.0\n",
+        "        run: true\n",
+      ),
+  );
+  const errors = validateReleaseContract(files).join("\n");
+
+  assert.match(
+    errors,
+    /ci\.yml: missing complete normal-CI report history checkout/,
+  );
+  assert.match(errors, /ci\.yml: missing complete normal-CI tag fetch/);
+  assert.match(errors, /ci\.yml: missing normal-CI all-workspace analysis/);
+  assert.match(
+    errors,
+    /ci\.yml: normal CI must emit exactly one all-workspace impact report/,
+  );
+  assert.match(
+    errors,
+    /ci\.yml: missing normal-CI release-impact evidence upload/,
+  );
+});
+
+test("normal CI release reporting cannot gain a publisher", () => {
+  const file = ".github/workflows/ci.yml";
+  const files = withFileChanged(
+    file,
+    (content) =>
+      `${content}\n# accidental publisher\ngh release create bad-tag\n`,
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /normal CI impact reporting must not publish releases \(gh release create\)/,
+  );
+});
+
+test("normal CI release reporting cannot gain publication permissions", () => {
+  const file = ".github/workflows/ci.yml";
+  const files = withFileChanged(file, (content) =>
+    content.replace(
+      "permissions:\n  contents: read",
+      "permissions:\n  contents: write",
+    ),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /normal CI impact reporting must not publish releases \(contents: write\)/,
+  );
+});
+
+test("every publisher uses the fail-closed shared fingerprint comparator", () => {
+  const file = ".github/workflows/srn-client.yml";
+  const files = withFileChanged(file, (content) =>
+    content
+      .replace(
+        "node scripts/compare-release-fingerprints.mjs",
+        'gh release download "$BASE_REF"',
+      )
+      .replace(
+        "BASELINE_STATUS: ${{ needs.impact.outputs.baseline_status }}",
+        "BASELINE_STATUS: ancestor",
+      ),
+  );
+  const errors = validateReleaseContract(files).join("\n");
+
+  assert.match(
+    errors,
+    /srn-client\.yml: missing shared fail-closed fingerprint comparator/,
+  );
+  assert.match(
+    errors,
+    /srn-client\.yml: fingerprint comparison must use the shared fail-closed comparator/,
+  );
+  assert.match(
+    errors,
+    /srn-client\.yml: missing analyzer-selected baseline status/,
+  );
+});
+
+test("fingerprint comparator failure modes remain explicit and blocking", () => {
+  const file = "scripts/compare-release-fingerprints.mjs";
+  const files = withFileChanged(file, (content) =>
+    content
+      .replace('"missing-prior-fingerprint"', '"missing-prior-ignored"')
+      .replace('decision: "blocked"', 'decision: "release-changed"'),
+  );
+  const errors = validateReleaseContract(files).join("\n");
+
+  assert.match(
+    errors,
+    /compare-release-fingerprints\.mjs: missing missing baseline asset block/,
+  );
+  assert.match(
+    errors,
+    /compare-release-fingerprints\.mjs: missing persisted blocked evidence/,
+  );
+});
+
+test("unmanaged and private workspaces stay inventory-only", () => {
+  const file = "scripts/analyze-release-impact.mjs";
+  const files = withFileChanged(file, (content) =>
+    content
+      .replace(
+        'analysisStatus: "inventory-only"',
+        'analysisStatus: "release-managed"',
+      )
+      .replaceAll("publicationPolicy", "legacyPolicy"),
+  );
+  const errors = validateReleaseContract(files).join("\n");
+
+  assert.match(
+    errors,
+    /analyze-release-impact\.mjs: missing inventory-only unmanaged rows/,
+  );
+  assert.match(
+    errors,
+    /analyze-release-impact\.mjs: missing explicit workspace publication policy/,
   );
 });

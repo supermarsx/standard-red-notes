@@ -37,6 +37,9 @@ on:
       - 'app/.nvmrc'
       - 'app/.yarnrc.yml'
       - 'app/.yarn/releases/**'
+      - 'app/.github/workflows/desktop.release.reuse.yml'
+      - 'app/babel.config.js'
+      - 'app/tsconfig.base.json'
       - '.github/workflows/srn-desktop.yml'
   workflow_dispatch:
     inputs:
@@ -73,6 +76,8 @@ jobs:
       changed: ${{ steps.impact.outputs.changed }}
       forced: ${{ steps.impact.outputs.forced }}
       base_ref: ${{ steps.impact.outputs.base_ref }}
+      baseline_status: ${{ steps.impact.outputs.baseline_status }}
+      publication_gate: ${{ steps.impact.outputs.publication_gate }}
       reason_codes: ${{ steps.impact.outputs.reason_codes }}
       result_json: ${{ steps.impact.outputs.result_json }}
     steps:
@@ -296,7 +301,10 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       changed: ${{ steps.compare.outputs.changed }}
+      decision: ${{ steps.compare.outputs.decision }}
     steps:
+      - uses: actions/checkout@v7
+
       - name: Download packaged desktop payloads
         uses: actions/download-artifact@v8
         with:
@@ -308,6 +316,7 @@ jobs:
         name: Compare normalized runtime fingerprints
         env:
           BASE_REF: ${{ needs.impact.outputs.base_ref }}
+          BASELINE_STATUS: ${{ needs.impact.outputs.baseline_status }}
           FORCED: ${{ needs.impact.outputs.forced }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -317,45 +326,27 @@ jobs:
             windows-x64 windows-arm64
             linux-x64 linux-arm64
           )
+          fingerprints=()
           for target in "${targets[@]}"; do
             file="artifacts/${TOOL}-${target}.fingerprint"
             test -s "$file"
-            grep -Eq '^[0-9a-f]{64}$' "$file"
+            fingerprint="$(tr -d '[:space:]' < "$file")"
+            fingerprints+=(--fingerprint "${TOOL}-${target}.fingerprint=${fingerprint}")
           done
           actual="$(find artifacts -maxdepth 1 -type f -name "${TOOL}-*.fingerprint" | wc -l | tr -d '[:space:]')"
           test "$actual" -eq "${#targets[@]}"
-
-          if [ "$FORCED" = "true" ]; then
-            echo "Audited force request bypasses the runtime fingerprint comparison."
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            exit 0
+          if ! node scripts/compare-release-fingerprints.mjs \
+            --repository "$GITHUB_REPOSITORY" \
+            --base-ref "$BASE_REF" \
+            --baseline-status "$BASELINE_STATUS" \
+            --forced "$FORCED" \
+            "${fingerprints[@]}" \
+            --output release-fingerprint-comparison.json \
+            --github-output "$GITHUB_OUTPUT"; then
+            cat release-fingerprint-comparison.json >> "$GITHUB_STEP_SUMMARY"
+            exit 1
           fi
-          if [ -z "$BASE_REF" ]; then
-            echo "No prior desktop release -> changed."
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          mkdir -p old
-          if ! gh release download "$BASE_REF" \
-            --repo "$GITHUB_REPOSITORY" \
-            --pattern "${TOOL}-*.fingerprint" \
-            --dir old 2>/dev/null; then
-            echo "${BASE_REF} has no complete runtime fingerprint set -> changed."
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          for target in "${targets[@]}"; do
-            old_file="old/${TOOL}-${target}.fingerprint"
-            new_file="artifacts/${TOOL}-${target}.fingerprint"
-            if [ ! -s "$old_file" ] || ! cmp --silent "$old_file" "$new_file"; then
-              echo "$target changed since ${BASE_REF} -> release."
-              echo "changed=true" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-          done
-          echo "All six desktop runtime payloads are unchanged since ${BASE_REF} -> skip."
-          echo "changed=false" >> "$GITHUB_OUTPUT"
+          cat release-fingerprint-comparison.json >> "$GITHUB_STEP_SUMMARY"
 
   # 4) RELEASE — gather every leg's installers + update metadata and publish ONE
   # rolling GitHub Release (non-draft, so electron-updater can read it).

@@ -45,6 +45,8 @@ jobs:
     timeout-minutes: 12
     steps:
       - uses: actions/checkout@v7.0.0
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -61,6 +63,25 @@ jobs:
         run: yarn install --immutable
       - name: Validate CI, release, and documentation contracts
         run: yarn ci:contracts
+      - name: Test fail-closed release fingerprint comparison
+        run: node --test scripts/compare-release-fingerprints.test.mjs
+      - name: Generate all-workspace release impact report
+        run: |
+          set -euo pipefail
+          git fetch --force --tags origin
+          node scripts/analyze-release-impact.mjs \
+            --all-workspaces all \
+            --output release-impact.json \
+            --report release-impact.md
+          cat release-impact.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload all-workspace release impact report
+        uses: actions/upload-artifact@v7.0.0
+        with:
+          name: release-impact-report
+          path: |
+            release-impact.json
+            release-impact.md
+          if-no-files-found: error
       - name: Lint GitHub Actions workflows
         run: >-
           docker run --rm -v "$PWD:/repo" -w /repo

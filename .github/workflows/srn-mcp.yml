@@ -64,6 +64,8 @@ jobs:
       changed: ${{ steps.impact.outputs.changed }}
       forced: ${{ steps.impact.outputs.forced }}
       base_ref: ${{ steps.impact.outputs.base_ref }}
+      baseline_status: ${{ steps.impact.outputs.baseline_status }}
+      publication_gate: ${{ steps.impact.outputs.publication_gate }}
       reason_codes: ${{ steps.impact.outputs.reason_codes }}
       result_json: ${{ steps.impact.outputs.result_json }}
     steps:
@@ -264,6 +266,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       changed: ${{ steps.cmp.outputs.changed }}
+      decision: ${{ steps.cmp.outputs.decision }}
     steps:
       - uses: actions/checkout@v7
 
@@ -271,37 +274,24 @@ jobs:
         id: cmp
         env:
           BASE_REF: ${{ needs.impact.outputs.base_ref }}
+          BASELINE_STATUS: ${{ needs.impact.outputs.baseline_status }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NEW_FP: ${{ needs.build.outputs.fingerprint }}
           FORCED: ${{ needs.impact.outputs.forced }}
         run: |
           set -euo pipefail
-          if [ "$FORCED" = "true" ]; then
-            echo "Audited force request bypasses the bundle fingerprint comparison."
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            exit 0
+          if ! node scripts/compare-release-fingerprints.mjs \
+            --repository "$GITHUB_REPOSITORY" \
+            --base-ref "$BASE_REF" \
+            --baseline-status "$BASELINE_STATUS" \
+            --forced "$FORCED" \
+            --fingerprint "${TOOL}.fingerprint=${NEW_FP}" \
+            --output release-fingerprint-comparison.json \
+            --github-output "$GITHUB_OUTPUT"; then
+            cat release-fingerprint-comparison.json >> "$GITHUB_STEP_SUMMARY"
+            exit 1
           fi
-          if [ -z "$BASE_REF" ]; then
-            echo "No prior ${TOOL} release found -> treat as changed."
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "Last ${TOOL} release: ${BASE_REF}"
-          old_fp=""
-          if gh release download "$BASE_REF" --pattern "${TOOL}.fingerprint" --output old.fingerprint --clobber 2>/dev/null; then
-            old_fp="$(tr -d '[:space:]' < old.fingerprint)"
-          else
-            echo "Last release has no fingerprint asset -> treat as changed."
-          fi
-          echo "old=${old_fp}"
-          echo "new=${NEW_FP}"
-          if [ -n "$old_fp" ] && [ "$old_fp" = "$NEW_FP" ]; then
-            echo "No changes since ${BASE_REF}, skipping release."
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "Bundle changed since ${BASE_REF} -> release."
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          fi
+          cat release-fingerprint-comparison.json >> "$GITHUB_STEP_SUMMARY"
 
   # 4) PACKAGE — cross-compile native executables for every OS x arch from the
   # single bundled CJS entry, using @yao-pkg/pkg on one Linux runner. Skipped

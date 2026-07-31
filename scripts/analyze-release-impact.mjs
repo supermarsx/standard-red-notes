@@ -17,6 +17,7 @@ const VERSION_PROFILES = new Set([
   "rolling-year-or-semver",
   "semver",
 ]);
+const MAX_FORCE_REASON_LENGTH = 500;
 
 export const WORKSPACE_ROOTS = Object.freeze({
   root: {
@@ -249,6 +250,10 @@ function resolveCommit(context, ref, label) {
   return commit;
 }
 
+function resolveReleaseTagCommit(context, tag, label = "Release") {
+  return resolveCommit(context, `refs/tags/${tag}`, `${label} tag`);
+}
+
 function parseSemverVersion(suffix) {
   const match =
     /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/.exec(
@@ -469,7 +474,7 @@ function selectTopologicalHybridBase(context, candidates, headSha) {
   const ancestors = [];
   const nonAncestorRefs = [];
   for (const candidate of candidates) {
-    const sha = resolveCommit(context, candidate.tag, "Release");
+    const sha = resolveReleaseTagCommit(context, candidate.tag);
     if (isAncestor(context, sha, headSha)) {
       ancestors.push({ ...candidate, sha });
     } else {
@@ -499,8 +504,52 @@ function selectTopologicalHybridBase(context, candidates, headSha) {
   return { selected: latest[0], nonAncestorRefs };
 }
 
-function resolveBase(context, prefix, versioning, explicitBaseRef, headSha) {
-  const candidates = matchingReleaseTags(context, prefix, versioning);
+function resolveBase(
+  context,
+  prefix,
+  versioning,
+  explicitBaseRef,
+  headSha,
+  excludedReleaseRef,
+) {
+  let candidates = matchingReleaseTags(context, prefix, versioning);
+  if (excludedReleaseRef) {
+    const excludedVersion = numericVersion(
+      excludedReleaseRef,
+      prefix,
+      versioning,
+    );
+    if (!excludedVersion) {
+      throw new ReleaseImpactError(
+        "mismatched-release-ref",
+        `Excluded release ref '${excludedReleaseRef}' does not match release prefix '${prefix}'.`,
+      );
+    }
+    if (!candidates.some(({ tag }) => tag === excludedReleaseRef)) {
+      throw new ReleaseImpactError(
+        "missing-ref",
+        `Excluded release tag '${excludedReleaseRef}' does not exist.`,
+      );
+    }
+    const excludedSha = resolveReleaseTagCommit(
+      context,
+      excludedReleaseRef,
+      "Excluded release",
+    );
+    if (excludedSha !== headSha) {
+      throw new ReleaseImpactError(
+        "excluded-release-ref-mismatch",
+        `Excluded release ref '${excludedReleaseRef}' does not resolve to the requested head.`,
+      );
+    }
+    if (explicitBaseRef === excludedReleaseRef) {
+      throw new ReleaseImpactError(
+        "invalid-release-ref-selection",
+        `Release ref '${excludedReleaseRef}' cannot be both excluded and selected as the baseline.`,
+      );
+    }
+    candidates = candidates.filter(({ tag }) => tag !== excludedReleaseRef);
+  }
   let selected;
   const nonAncestorRefs = [];
   if (explicitBaseRef) {
@@ -511,7 +560,17 @@ function resolveBase(context, prefix, versioning, explicitBaseRef, headSha) {
         `Base ref '${explicitBaseRef}' does not match release prefix '${prefix}'.`,
       );
     }
-    const explicitSha = resolveCommit(context, explicitBaseRef, "Base");
+    if (!candidates.some(({ tag }) => tag === explicitBaseRef)) {
+      throw new ReleaseImpactError(
+        "missing-ref",
+        `Base release tag '${explicitBaseRef}' does not exist.`,
+      );
+    }
+    const explicitSha = resolveReleaseTagCommit(
+      context,
+      explicitBaseRef,
+      "Base release",
+    );
     if (!isAncestor(context, explicitSha, headSha)) {
       throw new ReleaseImpactError(
         "divergent-release-history",
@@ -533,12 +592,12 @@ function resolveBase(context, prefix, versioning, explicitBaseRef, headSha) {
     nonAncestorRefs.push(...topological.nonAncestorRefs);
   } else {
     for (const candidate of candidates) {
-      const candidateSha = resolveCommit(context, candidate.tag, "Release");
+      const candidateSha = resolveReleaseTagCommit(context, candidate.tag);
       if (isAncestor(context, candidateSha, headSha)) {
-        selected = { ...candidate, sha: candidateSha };
-        break;
+        selected ??= { ...candidate, sha: candidateSha };
+      } else {
+        nonAncestorRefs.push(candidate.tag);
       }
-      nonAncestorRefs.push(candidate.tag);
     }
   }
 
@@ -556,30 +615,22 @@ function resolveBase(context, prefix, versioning, explicitBaseRef, headSha) {
 
   if (explicitBaseRef) {
     for (const candidate of candidates) {
-      if (
-        candidate.tag === explicitBaseRef ||
-        (versioning !== "rolling-year-or-semver" &&
-          compareVersions(candidate.version, selected.version) <= 0)
-      ) {
+      if (candidate.tag === explicitBaseRef) {
         continue;
       }
-      const candidateSha = resolveCommit(context, candidate.tag, "Release");
+      const candidateSha = resolveReleaseTagCommit(context, candidate.tag);
       if (!isAncestor(context, candidateSha, headSha)) {
         nonAncestorRefs.push(candidate.tag);
       }
     }
   }
 
-  const nonAncestorNewerRefs =
-    versioning === "rolling-year-or-semver"
-      ? nonAncestorRefs.filter((tag) => {
-          const candidate = candidates.find((entry) => entry.tag === tag);
-          return (
-            candidate &&
-            compareVersions(candidate.version, selected.version) > 0
-          );
-        })
-      : nonAncestorRefs;
+  const nonAncestorNewerRefs = nonAncestorRefs.filter((tag) => {
+    const candidate = candidates.find((entry) => entry.tag === tag);
+    return (
+      candidate && compareVersions(candidate.version, selected.version) > 0
+    );
+  });
 
   return {
     ref: selected.tag,
@@ -657,7 +708,15 @@ function changedFilesBetween(context, baseSha, headSha) {
   }
   const output = git(
     context.repo,
-    ["diff", "--name-only", "--diff-filter=ACDMRTUXB", "-z", baseSha, headSha],
+    [
+      "diff",
+      "--no-renames",
+      "--name-only",
+      "--diff-filter=ACDMRTUXB",
+      "-z",
+      baseSha,
+      headSha,
+    ],
     { encoding: "buffer" },
   );
   if (!output) {
@@ -922,18 +981,33 @@ function classifyChangedFiles(
 }
 
 function validateForce(force, forceReason) {
-  if (force && !forceReason?.trim()) {
+  const normalizedReason =
+    typeof forceReason === "string" ? forceReason.trim() : "";
+  if (force && !normalizedReason) {
     throw new ReleaseImpactError(
       "unaudited-force",
       "A forced release requires a non-empty --force-reason.",
     );
   }
-  if (!force && forceReason?.trim()) {
+  if (!force && normalizedReason) {
     throw new ReleaseImpactError(
       "unexpected-force-reason",
       "--force-reason was supplied without --force true.",
     );
   }
+  if (normalizedReason.length > MAX_FORCE_REASON_LENGTH) {
+    throw new ReleaseImpactError(
+      "force-reason-too-long",
+      `--force-reason must not exceed ${MAX_FORCE_REASON_LENGTH} characters.`,
+    );
+  }
+  if (/[\u0000-\u001f\u007f\u2028\u2029]/.test(normalizedReason)) {
+    throw new ReleaseImpactError(
+      "invalid-force-reason",
+      "--force-reason must be a single printable line.",
+    );
+  }
+  return normalizedReason;
 }
 
 export function analyzeDefinitionImpact({
@@ -943,10 +1017,11 @@ export function analyzeDefinitionImpact({
   identity,
   headRef = "HEAD",
   baseRef,
+  excludeReleaseRef,
   force = false,
   forceReason = "",
 }) {
-  validateForce(force, forceReason);
+  const auditedForceReason = validateForce(force, forceReason);
   assertVersionProfile(definition.versioning, definition.tagPrefix);
   const context = analysisContext(repo, providedContext);
   ensureCompleteHistory(context);
@@ -957,6 +1032,7 @@ export function analyzeDefinitionImpact({
     definition.versioning,
     baseRef,
     headSha,
+    excludeReleaseRef,
   );
 
   const headSurface = packageSurfaceForDefinition(context, headSha, definition);
@@ -1017,22 +1093,27 @@ export function analyzeDefinitionImpact({
       refs: base.nonAncestorRefs,
     });
   } else if (base.nonAncestorRefs.length > 0) {
+    const hasNewerDivergentRelease = base.nonAncestorNewerRefs.length > 0;
     reasons.push({
       code:
         definition.versioning === "rolling-year-or-semver"
           ? "divergent-release"
-          : "divergent-newer-release",
+          : hasNewerDivergentRelease
+            ? "divergent-newer-release"
+            : "divergent-release",
       message:
         definition.versioning === "rolling-year-or-semver"
           ? "Version-valid release refs exist outside the requested head history."
-          : "Newer version-valid release refs exist outside the requested head history.",
+          : hasNewerDivergentRelease
+            ? "Newer version-valid release refs exist outside the requested head history."
+            : "Older version-valid release refs exist outside the requested head history.",
       refs: base.nonAncestorRefs,
     });
   }
   if (force) {
     reasons.unshift({
       code: "forced-release",
-      message: forceReason.trim(),
+      message: auditedForceReason,
     });
   }
 
@@ -1046,9 +1127,19 @@ export function analyzeDefinitionImpact({
       force ||
       base.firstRelease ||
       base.noAncestorBaseline ||
+      base.nonAncestorRefs.length > 0 ||
       classified.matchedFiles.length > 0,
     forced: force,
-    forceReason: force ? forceReason.trim() : null,
+    forceReason: force ? auditedForceReason : null,
+    publicationGate: force
+      ? "force-requested"
+      : base.noAncestorBaseline || base.nonAncestorRefs.length > 0
+        ? "blocked-release-history"
+        : base.firstRelease
+          ? "first-release-candidate"
+          : classified.matchedFiles.length > 0
+            ? "build-and-compare"
+            : "no-source-impact",
     firstRelease: base.firstRelease,
     noAncestorBaseline: base.noAncestorBaseline,
     baselinePolicy:
@@ -1062,12 +1153,15 @@ export function analyzeDefinitionImpact({
         : base.nonAncestorRefs.length > 0
           ? definition.versioning === "rolling-year-or-semver"
             ? "ancestor-with-divergent-tags"
-            : "ancestor-with-newer-divergent-tags"
+            : base.nonAncestorNewerRefs.length > 0
+              ? "ancestor-with-newer-divergent-tags"
+              : "ancestor-with-divergent-tags"
           : "ancestor",
     baseRef: base.ref,
     baseSha: base.sha,
     headRef,
     headSha,
+    excludedReleaseRef: excludeReleaseRef || null,
     matchingReleaseRefs: base.matchingRefs,
     latestMatchingReleaseRef: base.matchingRefs[0] ?? null,
     latestReleaseRef:
@@ -1100,6 +1194,39 @@ export function analyzeProductImpact(options) {
     definition,
     identity: options.target,
   });
+}
+
+export function discoverReleaseTargetSurface({
+  repo = process.cwd(),
+  context: providedContext,
+  target,
+  headRef = "HEAD",
+}) {
+  const definition = RELEASE_TARGETS[target];
+  if (!definition) {
+    throw new ReleaseImpactError(
+      "unknown-release-target",
+      `Unknown release target '${target}'.`,
+    );
+  }
+  const context = analysisContext(repo, providedContext);
+  const headSha = resolveCommit(context, headRef, "Head");
+  const surface = packageSurfaceForDefinition(context, headSha, definition);
+  return {
+    target,
+    headRef,
+    headSha,
+    packageDirectories: surface.packages.map(({ directory }) => directory),
+    dependencyClosure: surface.packages.map(({ name }) => name),
+    configPaths: mergeUnique([
+      ...(definition.configPaths ?? []),
+      ...surface.workspaceConfigPaths,
+    ]),
+    configPrefixes: mergeUnique([
+      ...(definition.configPrefixes ?? []),
+      ...surface.workspaceConfigPrefixes,
+    ]),
+  };
 }
 
 function workspaceRootForPackage(context, headRef, packageName, requestedRoot) {
@@ -1339,27 +1466,51 @@ export function analyzeRepositoryReleaseImpact({
     headRef,
   });
   const workspaces = inventory.workspaces.map((workspaceEntry) => {
-    const {
-      identity: packageName,
-      workspaceRoot,
-      releaseTargets,
-    } = workspaceEntry;
-    const analysis =
+    const { identity: packageName, releaseTargets } = workspaceEntry;
+    if (releaseTargets.length > 1) {
+      throw new ReleaseImpactError(
+        "ambiguous-release-management",
+        `Workspace package '${packageName}' is directly managed by multiple release targets: ${releaseTargets.join(", ")}.`,
+      );
+    }
+    const managedProduct =
       releaseTargets.length === 1
         ? productsByTarget.get(releaseTargets[0])
-        : analyzeWorkspacePackageImpact({
-            repo,
-            context,
-            packageName,
-            workspaceRoot,
-            headRef,
-            force,
-            forceReason,
-          });
+        : undefined;
+    const analysis = managedProduct
+      ? {
+          ...managedProduct,
+          analysisStatus: "release-managed",
+          publicationPolicy: "managed",
+        }
+      : {
+          schemaVersion: 1,
+          mode: "inventory-only",
+          identity: packageName,
+          changed: null,
+          analysisStatus: "inventory-only",
+          publicationPolicy:
+            workspaceEntry.category === "private"
+              ? "disabled-private"
+              : "unmanaged",
+          tagPrefix: null,
+          latestReleaseRef: null,
+          baseRef: null,
+          divergentReleaseRefs: [],
+          reasons: [
+            {
+              code: "not-release-managed",
+              message:
+                workspaceEntry.category === "private"
+                  ? "The package is private and has no repository release publisher."
+                  : "The package manifest permits publication, but this repository has no publisher for it.",
+            },
+          ],
+        };
     return {
       ...analysis,
       ...workspaceEntry,
-      productIdentity: releaseTargets.length === 1 ? releaseTargets[0] : null,
+      productIdentity: managedProduct ? releaseTargets[0] : null,
     };
   });
   const standaloneManagedPackages = standaloneInventory.packages.map(
@@ -1376,7 +1527,10 @@ export function analyzeRepositoryReleaseImpact({
     headRef,
     headSha,
     changed: products.some((entry) => entry.changed),
-    workspaceSignalsChanged: workspaces.some((entry) => entry.changed),
+    workspaceSignalsChanged: workspaces.some(
+      (entry) =>
+        entry.analysisStatus === "release-managed" && entry.changed === true,
+    ),
     categoryCounts: inventory.categoryCounts,
     workspaceCategoryCounts: inventory.categoryCounts,
     inventoryCounts: {
@@ -1388,7 +1542,10 @@ export function analyzeRepositoryReleaseImpact({
       .filter((entry) => entry.changed)
       .map((entry) => entry.identity),
     changedWorkspaces: workspaces
-      .filter((entry) => entry.changed)
+      .filter(
+        (entry) =>
+          entry.analysisStatus === "release-managed" && entry.changed === true,
+      )
       .map((entry) => entry.identity),
     products,
     standaloneManagedPackages,
@@ -1425,13 +1582,13 @@ export function renderReleaseImpactReport(result) {
     "",
     "## Managed release products",
     "",
-    "| Product | Tag prefix | Latest tag by profile policy | Selected baseline | Changed | Reasons | Divergent off-history tags |",
-    "| --- | --- | --- | --- | --- | --- | --- |",
+    "| Product | Tag prefix | Latest tag by profile policy | Selected baseline | Source impact | Publication gate | Reasons | Divergent off-history tags |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- |",
   ];
 
   for (const entry of result.products) {
     lines.push(
-      `| ${markdownCell(entry.identity)} | ${markdownCell(entry.tagPrefix)} | ${markdownCell(entry.latestReleaseRef)} | ${markdownCell(entry.baseRef)} | ${entry.changed ? "yes" : "no"} | ${markdownCell(reasonSummary(entry))} | ${markdownCell(entry.divergentReleaseRefs)} |`,
+      `| ${markdownCell(entry.identity)} | ${markdownCell(entry.tagPrefix)} | ${markdownCell(entry.latestReleaseRef)} | ${markdownCell(entry.baseRef)} | ${entry.changed ? "yes" : "no"} | ${markdownCell(entry.publicationGate)} | ${markdownCell(reasonSummary(entry))} | ${markdownCell(entry.divergentReleaseRefs)} |`,
     );
   }
 
@@ -1441,13 +1598,13 @@ export function renderReleaseImpactReport(result) {
     "",
     "These package manifests live outside the three Yarn workspace roots. Their products are already included in the managed-product table above.",
     "",
-    "| Package | Product | Manifest | Selected baseline | Changed | Reasons |",
-    "| --- | --- | --- | --- | --- | --- |",
+    "| Package | Product | Manifest | Selected baseline | Source impact | Publication gate | Reasons |",
+    "| --- | --- | --- | --- | --- | --- | --- |",
   );
 
   for (const entry of result.standaloneManagedPackages) {
     lines.push(
-      `| ${markdownCell(entry.identity)} | ${markdownCell(entry.releaseTarget)} | ${markdownCell(entry.manifestPath)} | ${markdownCell(entry.baseRef)} | ${entry.changed ? "yes" : "no"} | ${markdownCell(reasonSummary(entry))} |`,
+      `| ${markdownCell(entry.identity)} | ${markdownCell(entry.releaseTarget)} | ${markdownCell(entry.manifestPath)} | ${markdownCell(entry.baseRef)} | ${entry.changed ? "yes" : "no"} | ${markdownCell(entry.publicationGate)} | ${markdownCell(reasonSummary(entry))} |`,
     );
   }
 
@@ -1461,13 +1618,21 @@ export function renderReleaseImpactReport(result) {
       .map(([category, count]) => `${category}=${count}`)
       .join(", ")}.`,
     "",
-    "| Root | Package | Category | Managed by | Tag prefix | Latest tag by profile policy | Selected baseline | Changed | Reasons | Divergent off-history tags |",
-    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    "Only `release-managed` rows receive a release decision. Unmanaged and private rows remain inventory-only and never infer a tag or publisher.",
+    "",
+    "| Root | Package | Category | Publication policy | Managed by | Tag prefix | Latest tag by profile policy | Selected baseline | Managed source impact | Publication gate | Reasons | Divergent off-history tags |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
   );
 
   for (const entry of result.workspaces) {
+    const managedSourceImpact =
+      entry.analysisStatus === "release-managed"
+        ? entry.changed
+          ? "yes"
+          : "no"
+        : "not evaluated";
     lines.push(
-      `| ${markdownCell(entry.workspaceRoot)} | ${markdownCell(entry.identity)} | ${markdownCell(entry.category)} | ${markdownCell(entry.releaseTargets)} | ${markdownCell(entry.tagPrefix)} | ${markdownCell(entry.latestReleaseRef)} | ${markdownCell(entry.baseRef)} | ${entry.changed ? "yes" : "no"} | ${markdownCell(reasonSummary(entry))} | ${markdownCell(entry.divergentReleaseRefs)} |`,
+      `| ${markdownCell(entry.workspaceRoot)} | ${markdownCell(entry.identity)} | ${markdownCell(entry.category)} | ${markdownCell(entry.publicationPolicy)} | ${markdownCell(entry.releaseTargets)} | ${markdownCell(entry.tagPrefix)} | ${markdownCell(entry.latestReleaseRef)} | ${markdownCell(entry.baseRef)} | ${managedSourceImpact} | ${markdownCell(entry.publicationGate ?? "not-managed")} | ${markdownCell(reasonSummary(entry))} | ${markdownCell(entry.divergentReleaseRefs)} |`,
     );
   }
 
@@ -1491,6 +1656,7 @@ function parseArguments(argv) {
   const supportedArguments = new Set([
     "--all-workspaces",
     "--base-ref",
+    "--exclude-release-ref",
     "--force",
     "--force-reason",
     "--github-output",
@@ -1555,8 +1721,12 @@ function appendGithubOutputs(file, result) {
           forced: result.forced,
           forceReason: result.forceReason,
           firstRelease: result.firstRelease,
+          noAncestorBaseline: result.noAncestorBaseline,
+          baselineStatus: result.baselineStatus,
+          publicationGate: result.publicationGate,
           baseRef: result.baseRef,
           baseSha: result.baseSha,
+          excludedReleaseRef: result.excludedReleaseRef,
           headSha: result.headSha,
           matchedFiles: result.matchedFiles,
           reasons: result.reasons,
@@ -1588,6 +1758,10 @@ function appendGithubOutputs(file, result) {
     ),
     base_ref: result.mode === "single" && result.baseRef ? result.baseRef : "",
     base_sha: result.mode === "single" && result.baseSha ? result.baseSha : "",
+    baseline_status:
+      result.mode === "single" ? result.baselineStatus : "aggregate",
+    publication_gate:
+      result.mode === "single" ? result.publicationGate : "aggregate",
     head_sha: result.headSha,
     reason_codes: JSON.stringify(reasons.map(({ code }) => code)),
     changed_files: JSON.stringify(changedFiles),
@@ -1608,7 +1782,8 @@ function usage() {
     "  node scripts/analyze-release-impact.mjs --package <name> [--workspace-root root|app|server] [options]",
     "  node scripts/analyze-release-impact.mjs --all-workspaces <root|app|server|all> [options]",
     "",
-    "Options: --repo <path> --head <ref> --base-ref <tag> --force <true|false>",
+    "Options: --repo <path> --head <ref> --base-ref <tag> --exclude-release-ref <tag>",
+    "         --force <true|false>",
     "         --force-reason <text> --output <json-file> --report <markdown-file>",
     "         --github-output <file>",
   ].join("\n");
@@ -1619,6 +1794,7 @@ export function runCli(argv = process.argv.slice(2)) {
   const repo = path.resolve(args.get("--repo") ?? process.cwd());
   const headRef = args.get("--head") ?? "HEAD";
   const baseRef = args.get("--base-ref");
+  const excludeReleaseRef = args.get("--exclude-release-ref");
   const force = parseBoolean(args.get("--force") ?? "false", "--force");
   const forceReason = args.get("--force-reason") ?? "";
 
@@ -1645,6 +1821,12 @@ export function runCli(argv = process.argv.slice(2)) {
       "--report requires --all-workspaces all.",
     );
   }
+  if (excludeReleaseRef && args.has("--all-workspaces")) {
+    throw new ReleaseImpactError(
+      "invalid-argument",
+      "--exclude-release-ref is supported only with --target or --package.",
+    );
+  }
 
   let result;
   if (args.has("--target")) {
@@ -1653,6 +1835,7 @@ export function runCli(argv = process.argv.slice(2)) {
       target: args.get("--target"),
       headRef,
       baseRef,
+      excludeReleaseRef,
       force,
       forceReason,
     });
@@ -1663,6 +1846,7 @@ export function runCli(argv = process.argv.slice(2)) {
       workspaceRoot: args.get("--workspace-root"),
       headRef,
       baseRef,
+      excludeReleaseRef,
       force,
       forceReason,
     });
