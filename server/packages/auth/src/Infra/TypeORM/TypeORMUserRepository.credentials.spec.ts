@@ -1,5 +1,4 @@
-import { SettingName } from '@standardnotes/domain-core'
-import { Uuid } from '@standardnotes/domain-core'
+import { SettingName, Uuid } from '@standardnotes/domain-core'
 
 import { User } from '../../Domain/User/User'
 import { TypeORMSetting } from './TypeORMSetting'
