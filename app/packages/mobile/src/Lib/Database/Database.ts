@@ -4,6 +4,7 @@ import {
   DatabaseKeysLoadChunkResponse,
   DatabaseLoadOptions,
   GetSortedPayloadsByPriority,
+  safeErrorLogMetadata,
   TransferPayload,
 } from '@standardnotes/snjs'
 import { Platform } from 'react-native'
@@ -148,8 +149,8 @@ export class Database implements DatabaseInterface {
               results.push(item as T)
             }
           }
-        } catch (e) {
-          console.error('Error getting item', key, e)
+        } catch (error) {
+          console.error('Could not read a database item', safeErrorLogMetadata(error))
           failedItemIds.push(key)
         }
       }
@@ -168,8 +169,8 @@ export class Database implements DatabaseInterface {
             }
           }
         }
-      } catch (e) {
-        console.error('Error getting items', e)
+      } catch (error) {
+        console.error('Could not read database items', safeErrorLogMetadata(error))
       }
     }
 

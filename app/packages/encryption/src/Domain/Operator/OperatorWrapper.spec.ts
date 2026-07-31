@@ -93,7 +93,7 @@ describe('OperatorWrapper.decryptPayload — CRYPTO-1 downgrade hardening', () =
     expect(isErrorDecryptingParameters(result)).toBeFalsy()
   })
 
-  it('CRYPTO-2: on decrypt error, logs only uuid + message, never the ciphertext payload', async () => {
+  it('CRYPTO-2: on decrypt error, logs only the uuid and never exception or ciphertext content', async () => {
     const manager = buildOperatorManager()
     ;(manager.operatorForVersion as jest.Mock).mockReturnValue({
       generateDecryptedParameters: jest.fn(() => {
@@ -112,7 +112,7 @@ describe('OperatorWrapper.decryptPayload — CRYPTO-1 downgrade hardening', () =
     const loggedArgs = errorSpy.mock.calls[errorSpy.mock.calls.length - 1]
     const serialized = JSON.stringify(loggedArgs)
     expect(serialized).toContain('note-uuid')
-    expect(serialized).toContain('boom')
+    expect(serialized).not.toContain('boom')
     // No sensitive material may appear in the log.
     expect(serialized).not.toContain('some-ciphertext')
     expect(serialized).not.toContain('enc-item-key')

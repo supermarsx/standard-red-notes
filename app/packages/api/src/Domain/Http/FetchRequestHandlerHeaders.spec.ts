@@ -262,15 +262,15 @@ describe('FetchRequestHandler headers and response handling', () => {
       const data = response.data as HttpErrorResponseBody & { networkFailure: boolean; timedOut: boolean }
       expect(data.networkFailure).toBe(true)
       expect(data.timedOut).toBe(false)
-      expect(data.error?.message).toBe('Failed to fetch')
+      expect(data.error?.message).toBe('Network request failed')
     })
 
-    it('should report "Unknown error" when the rejection carries no message', async () => {
+    it('should report the same stable network error when the rejection carries no message', async () => {
       global.fetch = jest.fn().mockRejectedValue({}) as unknown as typeof global.fetch
 
       const response = await handler.handleRequest({ url: 'https://host/v1/items', verb: HttpVerb.Get })
 
-      expect((response.data as HttpErrorResponseBody).error?.message).toBe('Unknown error')
+      expect((response.data as HttpErrorResponseBody).error?.message).toBe('Network request failed')
     })
   })
 })

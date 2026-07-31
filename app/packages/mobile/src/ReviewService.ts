@@ -18,8 +18,8 @@ export class ReviewService {
       setTimeout(function () {
         try {
           StoreReview.requestReview()
-        } catch (error) {
-          console.error(error)
+        } catch {
+          console.error('Could not request an app-store review.')
         }
       }, 1000)
     }

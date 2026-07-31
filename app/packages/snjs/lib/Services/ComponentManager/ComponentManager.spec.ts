@@ -86,4 +86,27 @@ describe('featuresService', () => {
 
     expect(manager).toBeDefined()
   })
+
+  it('logs only the action when a component bridge message carries a session key', () => {
+    const manager = createManager(Environment.Web, Platform.MacWeb)
+
+    manager.onWindowMessage({
+      data: {
+        action: 'stream-items',
+        sessionKey: 'session-key-sentinel',
+        data: {
+          content: 'encrypted-content-sentinel',
+          accessToken: 'access-token-sentinel',
+        },
+      },
+    } as unknown as MessageEvent)
+
+    expect(logger.info).toHaveBeenCalledWith('Component manager received message', {
+      action: 'stream-items',
+    })
+    const serializedLogs = JSON.stringify((logger.info as jest.Mock).mock.calls)
+    expect(serializedLogs).not.toContain('session-key-sentinel')
+    expect(serializedLogs).not.toContain('encrypted-content-sentinel')
+    expect(serializedLogs).not.toContain('access-token-sentinel')
+  })
 })

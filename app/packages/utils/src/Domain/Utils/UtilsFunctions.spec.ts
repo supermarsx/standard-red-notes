@@ -561,7 +561,9 @@ describe('control helpers', () => {
 
     await sleep(1, true, 'because')
 
-    expect(warn).toHaveBeenCalledWith('Sleeping for 1ms because')
+    expect(warn).toHaveBeenCalledWith('Sleeping for 1ms', {
+      hasDescription: true,
+    })
     warn.mockRestore()
   })
 
@@ -600,6 +602,27 @@ describe('logging helpers', () => {
     log('namespace', 'msg')
 
     expect(consoleLog.mock.calls[0][1]).toBe('color: black; font-weight: bold; margin-right: 4px')
+  })
+
+  it('should project Error instances and redact structured content at the utility log sink', () => {
+    log('namespace', new Error('opaque-error-sentinel'), {
+      accessToken: 'access-token-sentinel',
+      content: 'encrypted-content-sentinel',
+      userId: 'user-123',
+    })
+
+    const [, , , errorMetadata, structured] = consoleLog.mock.calls[0]
+    expect(errorMetadata).toEqual({
+      errorType: 'Error',
+      errorCode: undefined,
+      status: undefined,
+    })
+    expect(structured).toEqual({
+      accessToken: '[REDACTED]',
+      content: '[REDACTED]',
+      userId: 'user-123',
+    })
+    expect(JSON.stringify(consoleLog.mock.calls)).not.toContain('opaque-error-sentinel')
   })
 })
 

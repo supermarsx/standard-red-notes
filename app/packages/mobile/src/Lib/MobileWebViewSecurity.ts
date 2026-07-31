@@ -93,13 +93,21 @@ export function parseMobileBridgeRequest(value: unknown): MobileBridgeRequest | 
 }
 
 export function createMobileDeviceBridgeMethodSource(): string {
-  return MobileDeviceBridgeMethods.map(
-    (functionName) => `
+  return MobileDeviceBridgeMethods.map((functionName) => {
+    if (functionName === 'consoleLog') {
+      return `
+    consoleLog(...args) {
+      return this.askReactNativeToInvokeInterfaceMethod("consoleLog", [args.length]);
+    }
+    `
+    }
+
+    return `
     ${functionName}(...args) {
       return this.askReactNativeToInvokeInterfaceMethod(${JSON.stringify(functionName)}, args);
     }
-    `,
-  ).join('')
+    `
+  }).join('')
 }
 
 function normalizedDocumentUrl(url: string): string {

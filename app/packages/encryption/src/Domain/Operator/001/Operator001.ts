@@ -162,7 +162,7 @@ export class SNProtocolOperator001 implements OperatorInterface, AsyncOperatorIn
     key: ItemsKeyInterface | SNRootKey,
   ): Promise<DecryptedParameters<C> | ErrorDecryptingParameters> {
     if (!encrypted.enc_item_key) {
-      console.error(Error('Missing item encryption key, skipping decryption.'))
+      console.error('Missing item encryption key; skipping decryption.')
       return {
         uuid: encrypted.uuid,
         errorDecrypting: true,

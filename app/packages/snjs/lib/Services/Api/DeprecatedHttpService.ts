@@ -186,8 +186,8 @@ export class DeprecatedHttpService extends AbstractService {
           Object.assign(response, body)
         }
       }
-    } catch (error) {
-      console.error(error)
+    } catch {
+      console.error('Could not parse legacy HTTP response body')
     }
     if (
       httpStatus >= DeprecatedStatusCode.HttpStatusMinSuccess &&

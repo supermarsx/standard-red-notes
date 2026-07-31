@@ -40,9 +40,28 @@ const contractSourceFiles = [
   "server/packages/home-server/src/Server/HomeServer.ts",
   "server/packages/home-server/src/Server/HomeServerRuntime.ts",
   "server/packages/home-server/src/Server/WebSocketRedisBridge.ts",
+  "app/packages/api/src/Domain/Http/HttpService.ts",
+  "app/packages/api/src/Domain/Http/FetchRequestHandler.ts",
+  "app/packages/encryption/src/Domain/Operator/OperatorWrapper.ts",
+  "app/packages/mobile/WebFrame/MessageSender.template.js",
+  "app/packages/mobile/index.js",
+  "app/packages/mobile/src/Lib/MobileDevice.ts",
+  "app/packages/mobile/src/Lib/MobileWebViewSecurity.ts",
+  "app/packages/mobile/src/MobileWebAppContainer.tsx",
+  "app/packages/snjs/lib/Log.ts",
+  "app/packages/snjs/lib/Services/ComponentManager/ComponentViewer.ts",
+  "app/packages/snjs/lib/Services/ComponentManager/ComponentManager.ts",
+  "app/packages/snjs/lib/Services/Sync/SyncService.ts",
+  "app/packages/utils/src/Domain/Logger/Logger.ts",
+  "app/packages/utils/src/Domain/Utils/Utils.ts",
 ];
 
 export const guardedRuntimeRoots = Object.freeze([
+  "app/packages/api",
+  "app/packages/encryption",
+  "app/packages/mobile",
+  "app/packages/snjs",
+  "app/packages/utils",
   "cli",
   "mcp",
   "openclaw",
@@ -92,6 +111,13 @@ function isProtectedLoggingSource(_file) {
   // production invocation supplies the complete discovered authored-runtime
   // set; tests may supply synthetic paths to prove the same rule boundaries.
   return true;
+}
+
+function isGuardedAppLoggingSource(file) {
+  return guardedRuntimeRoots.some(
+    (root) =>
+      root.startsWith("app/") && (file === root || file.startsWith(`${root}/`)),
+  );
 }
 
 const forbiddenRules = [
@@ -207,6 +233,19 @@ const forbiddenRules = [
     pattern:
       /logger\.error\(\s*`\$\{error\.stack\}`|console\.error\([^)\n]*\.stack\)/,
   },
+  {
+    id: "raw-app-snlog-console-binding",
+    pattern: /SNLog\.on(?:Error|Log)\s*=\s*console\.(?:error|log|warn)/,
+  },
+  {
+    id: "raw-mobile-web-log-forwarding",
+    pattern:
+      /ReactNativeWebView\.postMessage\([^;\n]*\[web log\][^;\n]*args\.join/,
+  },
+  {
+    id: "raw-console-error-instance",
+    pattern: /console\.(?:error|log|warn)\(\s*(?:new\s+)?Error\(/,
+  },
 ];
 
 const requiredRules = [
@@ -272,6 +311,84 @@ const requiredRules = [
     file: "server/packages/api-gateway/src/Controller/UserRateLimitMiddleware.ts",
     pattern:
       /warn:\s*\(message:\s*string,\s*metadata\?:\s*Record<string,\s*unknown>\)[^=]*=>\s*\{\s*logger\.warn\(message,\s*metadata\)/,
+  },
+  {
+    id: "app-logger-debug-redaction-boundary",
+    file: "app/packages/utils/src/Domain/Logger/Logger.ts",
+    pattern:
+      /public debug[\s\S]{0,220}logWithColor\(redactLogValue\(message\) as string,\s*\.\.\.optionalParams\.map\(safeLogParameter\)\)/,
+  },
+  {
+    id: "app-logger-info-redaction-boundary",
+    file: "app/packages/utils/src/Domain/Logger/Logger.ts",
+    pattern:
+      /public info[\s\S]{0,220}logWithColor\(redactLogValue\(message\) as string,\s*\.\.\.optionalParams\.map\(safeLogParameter\)\)/,
+  },
+  {
+    id: "app-logger-warn-redaction-boundary",
+    file: "app/packages/utils/src/Domain/Logger/Logger.ts",
+    pattern:
+      /public warn[\s\S]{0,220}console\.warn\(redactLogValue\(message\),\s*\.\.\.optionalParams\.map\(safeLogParameter\)\)/,
+  },
+  {
+    id: "app-logger-error-redaction-boundary",
+    file: "app/packages/utils/src/Domain/Logger/Logger.ts",
+    pattern:
+      /public error[\s\S]{0,220}console\.error\(redactLogValue\(message\),\s*\.\.\.optionalParams\.map\(safeLogParameter\)\)/,
+  },
+  {
+    id: "app-logger-error-object-projection",
+    file: "app/packages/utils/src/Domain/Logger/Logger.ts",
+    pattern:
+      /value instanceof Error\s*\?\s*safeErrorLogMetadata\(value\)\s*:\s*redactLogValue\(value\)/,
+  },
+  {
+    id: "app-utils-error-object-projection",
+    file: "app/packages/utils/src/Domain/Utils/Utils.ts",
+    pattern:
+      /value instanceof Error\s*\?\s*safeErrorLogMetadata\(value\)\s*:\s*redactLogValue\(value\)/,
+  },
+  {
+    id: "app-utils-variadic-log-redaction-boundary",
+    file: "app/packages/utils/src/Domain/Utils/Utils.ts",
+    pattern:
+      /Function\.prototype\.apply\.call\(console\.log,\s*console,\s*args\.map\(safeUtilityLogParameter\)\)/,
+  },
+  {
+    id: "app-snlog-message-redaction-boundary",
+    file: "app/packages/snjs/lib/Log.ts",
+    pattern:
+      /value instanceof Error\s*\?\s*safeErrorLogMetadata\(value\)\s*:\s*redactLogValue\(value\)[\s\S]{0,220}this\.onLog\(\.\.\.message\.map\(safeSNLogValue\)\)/,
+  },
+  {
+    id: "app-snlog-error-projection-boundary",
+    file: "app/packages/snjs/lib/Log.ts",
+    pattern:
+      /safeErrorLogMetadata\(error\)[\s\S]{0,220}new Error\('A Standard Notes operation failed\.'\)[\s\S]{0,220}this\.onError\(safeError\)/,
+  },
+  {
+    id: "mobile-snlog-host-log-boundary",
+    file: "app/packages/mobile/index.js",
+    pattern:
+      /safeConsoleValue[\s\S]{0,180}safeErrorLogMetadata\(value\)[\s\S]{0,180}redactLogValue\(value\)[\s\S]{0,220}forwardSafeLog[\s\S]{0,180}messages\.map\(safeConsoleValue\)[\s\S]{0,500}SNLog\.onLog = forwardSafeLog/,
+  },
+  {
+    id: "mobile-snlog-host-error-boundary",
+    file: "app/packages/mobile/index.js",
+    pattern:
+      /forwardSafeError[\s\S]{0,180}safeErrorLogMetadata\(error\)[\s\S]{0,500}SNLog\.onError = forwardSafeError/,
+  },
+  {
+    id: "mobile-console-bridge-count-projection",
+    file: "app/packages/mobile/src/Lib/MobileWebViewSecurity.ts",
+    pattern:
+      /consoleLog\(\.\.\.args\)[\s\S]{0,180}askReactNativeToInvokeInterfaceMethod\("consoleLog",\s*\[args\.length\]\)/,
+  },
+  {
+    id: "mobile-injected-console-safe-bridge",
+    file: "app/packages/mobile/src/MobileWebAppContainer.tsx",
+    pattern:
+      /console\.log = \(\.\.\.args\)[\s\S]{0,160}reactNativeDevice\?\.consoleLog\(\.\.\.args\)[\s\S]{0,220}console\.error = \(\.\.\.args\)[\s\S]{0,160}reactNativeDevice\?\.consoleLog\(\.\.\.args\)/,
   },
 ];
 
@@ -415,6 +532,39 @@ const repositoryWideCallRules = [
       return usesDynamicMessage && !forwardsReviewedMetadata;
     },
   },
+  {
+    id: "raw-app-error-alias",
+    appOnly: true,
+    matches: (call) => {
+      const withoutReviewedBoundaries = stripReviewedFunctionCalls(call, [
+        "safeErrorLogMetadata",
+        "safeHttpErrorLogMetadata",
+        "redactLogValue",
+      ]);
+
+      return (
+        /\be\b[\s\S]*?\.(?:message|stack)\b/.test(withoutReviewedBoundaries) ||
+        /\bString\(\s*e\s*\)/.test(withoutReviewedBoundaries) ||
+        /(?:\(|,)\s*e\s*[,)]/.test(withoutReviewedBoundaries)
+      );
+    },
+  },
+  {
+    id: "raw-app-domain-object",
+    appOnly: true,
+    matches: (call) => {
+      const withoutReviewedBoundaries = stripReviewedFunctionCalls(call, [
+        "safeErrorLogMetadata",
+        "safeHttpErrorLogMetadata",
+        "safeHttpLogMetadata",
+        "redactLogValue",
+      ]);
+
+      return /(?:\(|,)\s*(?:apply|args|arguments|event|message|options|payloads?|requiredPermissions|syncToken|paginationToken|cursorToken)\s*[,)]/.test(
+        withoutReviewedBoundaries,
+      );
+    },
+  },
 ];
 
 const repositoryWideSourceRules = [
@@ -499,7 +649,10 @@ export function findRepositoryWideFindings(sources) {
         if (rule.protectedOnly && !isProtectedLoggingSource(file)) {
           continue;
         }
-        if (rule.matches(call)) {
+        if (rule.appOnly && !isGuardedAppLoggingSource(file)) {
+          continue;
+        }
+        if (rule.matches(call, file)) {
           findings.push({ file, line, rule: rule.id, source: call });
         }
       }
@@ -507,6 +660,9 @@ export function findRepositoryWideFindings(sources) {
 
     for (const rule of repositoryWideSourceRules) {
       if (rule.protectedOnly && !isProtectedLoggingSource(file)) {
+        continue;
+      }
+      if (rule.appOnly && !isGuardedAppLoggingSource(file)) {
         continue;
       }
       rule.pattern.lastIndex = 0;

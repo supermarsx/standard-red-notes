@@ -13,6 +13,7 @@ import {
   Platform as SNPlatform,
   RawKeychainValue,
   RawStorageKey,
+  redactLogValue,
   removeFromArray,
   TransferPayload,
   UuidString,
@@ -67,6 +68,14 @@ export enum MobileDeviceEvent {
 
 type MobileDeviceEventHandler = (event: MobileDeviceEvent) => void
 type ApplicationEventHandler = (event: ApplicationEvent) => void
+type NativeLogEvent =
+  | 'Notification initialization failed'
+  | 'Fido2ApiModule is not available'
+  | 'Fido2ApiModule authentication failed'
+  | 'Sharing a downloaded file failed'
+  | 'Writing a downloaded file failed'
+  | 'Could not download file to preview'
+  | 'Opening a downloaded file failed'
 
 export class MobileDevice implements MobileDeviceInterface {
   environment: Environment.Mobile = Environment.Mobile
@@ -86,7 +95,7 @@ export class MobileDevice implements MobileDeviceInterface {
     private androidBackHandlerService?: AndroidBackHandlerService,
     private colorSchemeService?: ColorSchemeObserverService,
   ) {
-    this.initializeNotifications().catch(console.error)
+    this.initializeNotifications().catch(() => this.logNativeEvent('Notification initialization failed'))
     this.reloadStatusBarStyle(false)
   }
 
@@ -141,7 +150,7 @@ export class MobileDevice implements MobileDeviceInterface {
     const { Fido2ApiModule } = NativeModules
 
     if (!Fido2ApiModule) {
-      this.consoleLog('Fido2ApiModule is not available')
+      this.logNativeEvent('Fido2ApiModule is not available')
 
       return null
     }
@@ -150,8 +159,8 @@ export class MobileDevice implements MobileDeviceInterface {
       const response = await Fido2ApiModule.promptForU2FAuthentication(authenticationOptionsJSONString)
 
       return response
-    } catch (error) {
-      this.consoleLog(`Fido2ApiModule.authenticateWithU2F error: ${(error as Error).message}`)
+    } catch {
+      this.logNativeEvent('Fido2ApiModule authentication failed')
 
       return null
     }
@@ -182,8 +191,16 @@ export class MobileDevice implements MobileDeviceInterface {
   }
 
   consoleLog(...args: unknown[]): void {
+    const forwardedCount =
+      args.length === 1 && typeof args[0] === 'number' && Number.isSafeInteger(args[0]) ? args[0] : args.length
+    const argumentCount = Math.max(0, Math.min(forwardedCount, 1_000))
     // eslint-disable-next-line no-console
-    console.log(args)
+    console.log('Web client log event received', { argumentCount })
+  }
+
+  private logNativeEvent(event: NativeLogEvent): void {
+    // eslint-disable-next-line no-console
+    console.log(redactLogValue(event))
   }
 
   public async getJsonParsedRawStorageValue(key: string): Promise<unknown | undefined> {
@@ -480,8 +497,8 @@ export class MobileDevice implements MobileDeviceInterface {
         url: `file://${downloadedTempFilePath}`,
         failOnCancel: false,
       })
-    } catch (error) {
-      this.consoleLog(error)
+    } catch {
+      this.logNativeEvent('Sharing a downloaded file failed')
     } finally {
       if (downloadedTempFilePath) {
         void this.deleteFileAtPathIfExists(downloadedTempFilePath)
@@ -518,8 +535,8 @@ export class MobileDevice implements MobileDeviceInterface {
       await this.deleteFileAtPathIfExists(path)
       await writeFile(path, base64.replace(/data.*base64,/, ''), 'base64')
       return path
-    } catch (error) {
-      this.consoleLog(error)
+    } catch {
+      this.logNativeEvent('Writing a downloaded file failed')
     }
   }
 
@@ -536,7 +553,7 @@ export class MobileDevice implements MobileDeviceInterface {
     const tempLocation = await this.downloadBase64AsFile(base64, filename, true)
 
     if (!tempLocation) {
-      this.consoleLog('Error: Could not download file to preview')
+      this.logNativeEvent('Could not download file to preview')
       return false
     }
 
@@ -546,8 +563,8 @@ export class MobileDevice implements MobileDeviceInterface {
           await this.deleteFileAtPathIfExists(tempLocation)
         },
       })
-    } catch (error) {
-      this.consoleLog(error)
+    } catch {
+      this.logNativeEvent('Opening a downloaded file failed')
       await this.deleteFileAtPathIfExists(tempLocation)
       return false
     }

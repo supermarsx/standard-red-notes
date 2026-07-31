@@ -1,6 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { LogLevel } from './LogLevel'
+import { redactLogValue, safeErrorLogMetadata } from './SafeLog'
+
+function safeLogParameter(value: unknown): unknown {
+  return value instanceof Error ? safeErrorLogMetadata(value) : redactLogValue(value)
+}
 
 export class Logger {
   private level: LogLevel = 'none'
@@ -22,25 +27,25 @@ export class Logger {
 
   public debug(message: string, ...optionalParams: any[]): void {
     if (this.canLog('debug')) {
-      this.logWithColor(message, ...optionalParams)
+      this.logWithColor(redactLogValue(message) as string, ...optionalParams.map(safeLogParameter))
     }
   }
 
   public info(message: string, ...optionalParams: any[]): void {
     if (this.canLog('info')) {
-      this.logWithColor(message, ...optionalParams)
+      this.logWithColor(redactLogValue(message) as string, ...optionalParams.map(safeLogParameter))
     }
   }
 
   public warn(message: string, ...optionalParams: any[]): void {
     if (this.canLog('warn')) {
-      console.warn(message, ...optionalParams)
+      console.warn(redactLogValue(message), ...optionalParams.map(safeLogParameter))
     }
   }
 
   public error(message: string, ...optionalParams: any[]): void {
     if (this.canLog('error')) {
-      console.error(message, ...optionalParams)
+      console.error(redactLogValue(message), ...optionalParams.map(safeLogParameter))
     }
   }
 
@@ -55,9 +60,9 @@ export class Logger {
     )
   }
 
-  private customLog(..._args: any[]) {
-    // eslint-disable-next-line no-console, prefer-rest-params
-    Function.prototype.apply.call(console.log, console, arguments)
+  private customLog(...args: any[]) {
+    // eslint-disable-next-line no-console
+    Function.prototype.apply.call(console.log, console, args.map(safeLogParameter))
   }
 }
 

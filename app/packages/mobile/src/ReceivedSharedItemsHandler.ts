@@ -66,7 +66,7 @@ export class ReceivedSharedItemsHandler {
     this.isApplicationLaunched = isApplicationLaunched
 
     if (isApplicationLaunched) {
-      this.handleItemsQueue().catch(console.error)
+      this.handleItemsQueue().catch(() => console.error('Could not process the received-items queue.'))
     }
   }
 
@@ -81,13 +81,13 @@ export class ReceivedSharedItemsHandler {
       Linking.getInitialURL()
         .then((url) => {
           if (url && url.startsWith(IosUrlToCheckFor)) {
-            this.addSharedItemsToQueue(url).catch(console.error)
+            this.addSharedItemsToQueue(url).catch(() => console.error('Could not queue an iOS shared item.'))
           }
         })
-        .catch(console.error)
+        .catch(() => console.error('Could not read the initial iOS sharing URL.'))
       this.eventSub = Linking.addEventListener('url', ({ url }) => {
         if (url && url.startsWith(IosUrlToCheckFor)) {
-          this.addSharedItemsToQueue(url).catch(console.error)
+          this.addSharedItemsToQueue(url).catch(() => console.error('Could not queue an iOS shared item.'))
         }
       })
       return
@@ -95,7 +95,7 @@ export class ReceivedSharedItemsHandler {
 
     this.eventSub = AppState.addEventListener('change', (state) => {
       if (state === 'active') {
-        this.addSharedItemsToQueue().catch(console.error)
+        this.addSharedItemsToQueue().catch(() => console.error('Could not queue received shared items.'))
       }
     })
   }
@@ -107,7 +107,7 @@ export class ReceivedSharedItemsHandler {
     }
 
     if (isReceivedAndroidFile(item) || isReceivedIosFile(item)) {
-      await this.sendFileToWebView(item).catch(console.error)
+      await this.sendFileToWebView(item).catch(() => console.error('Could not send a shared file to the web view.'))
     } else if (isReceivedWeblink(item)) {
       this.webViewRef.current?.postMessage(
         JSON.stringify({
@@ -139,7 +139,7 @@ export class ReceivedSharedItemsHandler {
       return
     }
 
-    this.handleItemsQueue().catch(console.error)
+    this.handleItemsQueue().catch(() => console.error('Could not continue processing the received-items queue.'))
   }
 
   sendFileToWebView = async (item: ReceivedAndroidFile | ReceivedIosFile) => {
@@ -204,7 +204,7 @@ export class ReceivedSharedItemsHandler {
     }
 
     if (this.isApplicationLaunched) {
-      this.handleItemsQueue().catch(console.error)
+      this.handleItemsQueue().catch(() => console.error('Could not process the received-items queue.'))
     }
   }
 }

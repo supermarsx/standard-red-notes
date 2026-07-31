@@ -147,7 +147,9 @@ export class FeaturesService
     switch (event.type) {
       case ApiServiceEvent.MetaReceived: {
         if (!this.sync) {
-          this.logger.warn('Handling events interrupted. Sync service is not yet initialized.', event)
+          this.logger.warn('Handling events interrupted. Sync service is not yet initialized.', {
+            eventType: event.type,
+          })
           return
         }
 

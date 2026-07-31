@@ -4,7 +4,7 @@ export class StandardException {
     log = false,
   ) {
     if (log) {
-      console.error('StandardException raised: ', message)
+      console.error('StandardException raised.')
     }
   }
 }

@@ -65,7 +65,9 @@ export class RunWithPermissionsUseCase {
     }
 
     if (!this.areRequestedPermissionsValid(uiFeature, requiredPermissions)) {
-      console.error('Component is requesting invalid permissions', componentIdentifier, requiredPermissions)
+      console.error('Component requested invalid permissions', {
+        requestedPermissionCount: requiredPermissions.length,
+      })
       return
     }
 

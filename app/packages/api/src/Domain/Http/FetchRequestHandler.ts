@@ -11,7 +11,7 @@ import { RequestHandlerInterface } from './RequestHandlerInterface'
 import { Environment } from '@standardnotes/models'
 import { isString } from 'lodash'
 import { ErrorMessage } from '../Error'
-import { LoggerInterface } from '@standardnotes/utils'
+import { LoggerInterface, safeErrorLogMetadata } from '@standardnotes/utils'
 import { readSharedServerAccessKey, SHARED_SERVER_ACCESS_KEY_HEADER } from './SharedServerAccessKey'
 
 /**
@@ -108,7 +108,7 @@ export class FetchRequestHandler implements RequestHandlerInterface {
       const response = await this.handleFetchResponse<T>(fetchResponse)
 
       return response
-    } catch (error) {
+    } catch {
       return {
         status: HttpStatusCode.InternalServerError,
         headers: new Map<string, string | null>(),
@@ -121,11 +121,7 @@ export class FetchRequestHandler implements RequestHandlerInterface {
           networkFailure: true,
           timedOut: didTimeout,
           error: {
-            message: didTimeout
-              ? 'Request timed out'
-              : 'message' in (error as { message: string })
-                ? (error as { message: string }).message
-                : 'Unknown error',
+            message: didTimeout ? 'Request timed out' : 'Network request failed',
           },
         } as HttpErrorResponse['data'] & { networkFailure: boolean; timedOut: boolean },
       }
@@ -169,7 +165,7 @@ export class FetchRequestHandler implements RequestHandlerInterface {
         }
       }
     } catch (error) {
-      this.logger.error(JSON.stringify(error))
+      this.logger.error('Could not parse HTTP response body', safeErrorLogMetadata(error))
     }
 
     if (httpStatus >= HttpStatusCode.Success && httpStatus < HttpStatusCode.InternalServerError) {

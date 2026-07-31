@@ -70,8 +70,9 @@ provider responses, or request bodies into a public issue.
 ### Safe operational logging
 
 Security-sensitive server auth, gateway, WebSocket, sync, event, and worker
-paths emit allowlisted diagnostics rather than raw request, response, error, or
-payload objects.
+paths—and the migrated app API, encryption, mobile, SNJS, and utility
+packages—emit allowlisted diagnostics rather than raw request, response, error,
+or payload objects.
 
 | Kept for diagnosis                                 | Removed or bounded                                                                    |
 | -------------------------------------------------- | ------------------------------------------------------------------------------------- |
@@ -100,18 +101,17 @@ node scripts/validate-safe-logging.mjs --report-allowlist
 node --test scripts/validate-safe-logging.test.mjs
 ```
 
-The Wave 1 gate scans authored runtime JavaScript and TypeScript across CLI,
-MCP, OpenClaw, and server packages. Its machine-readable scope is
+The gate scans authored runtime JavaScript and TypeScript across CLI, MCP,
+OpenClaw, server packages, and these exact app package roots: `api`,
+`encryption`, `mobile`, `snjs`, and `utils`. Its machine-readable scope is
 `guardedRuntimeRoots` in the validator. It complements runtime tests by
-rejecting raw-token, raw-object, session-in-log, credential-in-path, and
-crypto-error logging patterns. Allowlist entries are exact and stale-checked:
-changing or removing an intentional match without updating the review record
-fails the gate.
+rejecting raw-token, raw-object, session-in-log, credential-in-path,
+native-bridge-message, and crypto-error logging patterns. Allowlist entries are
+exact and stale-checked: changing or removing an intentional match without
+updating the review record fails the gate.
 
-The app safe-log helper is included as shared-kernel foundation, but app runtime
-packages are not yet claimed by this gate. App coverage must be enabled
-atomically with the corresponding client, mobile-bridge, component, and sync
-consumer migrations and tests.
+Other app package roots are not claimed by this gate yet. Their coverage must be
+enabled atomically with the corresponding consumer migrations and tests.
 
 The reviewed-residual list is intentionally empty. WebSocket bridges record
 `originExcluded` as structured boolean metadata, never the underlying session

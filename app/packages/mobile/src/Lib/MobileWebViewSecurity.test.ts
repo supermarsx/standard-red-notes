@@ -99,6 +99,8 @@ describe('MobileWebViewSecurity', () => {
   it('generates wrappers and a document guard from explicit trusted inputs', () => {
     const bridgeSource = createMobileDeviceBridgeMethodSource()
     expect(bridgeSource).toContain('getDatabaseEntries(...args)')
+    expect(bridgeSource).toContain('askReactNativeToInvokeInterfaceMethod("consoleLog", [args.length])')
+    expect(bridgeSource).not.toContain('askReactNativeToInvokeInterfaceMethod("consoleLog", args)')
     expect(bridgeSource).not.toContain('getRawKeychainValue')
     expect(bridgeSource).not.toContain('deleteFileAtPathIfExists')
 

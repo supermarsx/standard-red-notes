@@ -300,11 +300,11 @@ const MobileWebAppContents = ({ destroyAndReload }: { destroyAndReload: () => vo
   }
 
   console.log = (...args) => {
-    window.ReactNativeWebView.postMessage('[web log] ' + args.join(' '));
+    window.reactNativeDevice?.consoleLog(...args);
   }
 
   console.error = (...args) => {
-    window.ReactNativeWebView.postMessage('[web log] ' + args.join(' '));
+    window.reactNativeDevice?.consoleLog(...args);
   }
 
   ${WebProcessDeviceInterface}
@@ -324,8 +324,8 @@ const MobileWebAppContents = ({ destroyAndReload }: { destroyAndReload: () => vo
         messageSender.handleReplyFromReactNative(messageId, returnValue)
       }
 
-    } catch (error) {
-      console.log('Error parsing message from React Native', message, error)
+    } catch {
+      console.log('Error parsing message from React Native')
     }
   }
 
@@ -361,7 +361,7 @@ const MobileWebAppContents = ({ destroyAndReload }: { destroyAndReload: () => vo
     } catch {
       if (LoggingEnabled) {
         // eslint-disable-next-line no-console
-        console.log('onGeneralMessage', JSON.stringify(message))
+        console.log('Could not parse native bridge message')
       }
     }
   }
@@ -484,7 +484,7 @@ const MobileWebAppContents = ({ destroyAndReload }: { destroyAndReload: () => vo
           opacity: didLoadEnd ? 1 : 0,
         }}
         originWhitelist={['*']}
-        onError={(err) => console.error('An error has occurred', err)}
+        onError={() => console.error('A WebView error occurred')}
         onHttpError={() => console.error('An HTTP error occurred')}
         onMessage={onMessage}
         onContentProcessDidTerminate={() => {

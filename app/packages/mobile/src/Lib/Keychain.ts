@@ -27,8 +27,8 @@ export default class Keychain {
           return keys
         }
       })
-      .catch(function (error) {
-        console.error("Keychain couldn't be accessed! Maybe no value set?", error)
+      .catch(function () {
+        console.error("Keychain couldn't be accessed. The key may not be set.")
         return undefined
       })
   }

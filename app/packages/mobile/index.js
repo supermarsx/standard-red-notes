@@ -1,19 +1,22 @@
-import { SNLog } from '@standardnotes/snjs'
+/* global __DEV__, console */
+/* eslint-disable no-console */
+
+import { SNLog, redactLogValue, safeErrorLogMetadata } from '@standardnotes/snjs'
 import { AppRegistry } from 'react-native'
 import { name as appName } from './app.json'
 import { MobileWebApp } from './src/MobileWebApp'
 
-/* eslint-disable no-console, @typescript-eslint/no-empty-function */
+const safeConsoleValue = (value) => (value instanceof Error ? safeErrorLogMetadata(value) : redactLogValue(value))
+const forwardSafeLog = (...messages) => console.log(...messages.map(safeConsoleValue))
+const forwardSafeError = (error) => console.error('SNJS operation failed', safeErrorLogMetadata(error))
+
 if (__DEV__ === false) {
   console.log = () => {}
   console.warn = () => {}
   console.error = () => {}
-  SNLog.onError = console.error
-  SNLog.onLog = console.log
-} else {
-  SNLog.onError = console.error
-  SNLog.onLog = console.log
 }
+SNLog.onError = forwardSafeError
+SNLog.onLog = forwardSafeLog
 /* eslint-enable no-console */
 
 const originalWarn = console.warn
@@ -23,8 +26,8 @@ console.warn = function filterWarnings(msg) {
     "[react-native-gesture-handler] Seems like you're using an old API with gesture components",
   ]
 
-  if (!supressedWarnings.some((entry) => msg.includes(entry))) {
-    originalWarn.apply(console, arguments)
+  if (typeof msg !== 'string' || !supressedWarnings.some((entry) => msg.includes(entry))) {
+    originalWarn.apply(console, Array.from(arguments, safeConsoleValue))
   }
 }
 

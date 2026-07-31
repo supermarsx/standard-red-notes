@@ -12,8 +12,13 @@ import {
   validateSafeLoggingSources,
 } from "./validate-safe-logging.mjs";
 
-test("discovers every guarded Wave 1 runtime surface, including nested server executables", async () => {
+test("discovers every guarded runtime surface, including exact app roots and nested server executables", async () => {
   assert.deepEqual(guardedRuntimeRoots, [
+    "app/packages/api",
+    "app/packages/encryption",
+    "app/packages/mobile",
+    "app/packages/snjs",
+    "app/packages/utils",
     "cli",
     "mcp",
     "openclaw",
@@ -23,6 +28,11 @@ test("discovers every guarded Wave 1 runtime surface, including nested server ex
   const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
   const discovered = new Set(await discoverLiveSourceFiles(repositoryRoot));
   const representatives = [
+    "app/packages/api/src/index.ts",
+    "app/packages/encryption/src/index.ts",
+    "app/packages/mobile/src/Lib/MobileDevice.ts",
+    "app/packages/snjs/lib/index.ts",
+    "app/packages/utils/src/index.ts",
     "cli/srn-client/src/index.ts",
     "cli/srn-server/src/index.ts",
     "mcp/src/index.ts",
@@ -46,28 +56,33 @@ test("discovers every guarded Wave 1 runtime surface, including nested server ex
   );
 });
 
-test("does not claim app runtime coverage before the app migration lands", async () => {
-  const fixtureRoot = await mkdtemp(join(tmpdir(), "safe-log-wave1-scope-"));
+test("discovers only the explicitly migrated app package roots", async () => {
+  const fixtureRoot = await mkdtemp(join(tmpdir(), "safe-log-app-scope-"));
+  const migratedPackages = ["api", "encryption", "mobile", "snjs", "utils"];
 
   try {
-    await mkdir(join(fixtureRoot, "app/packages/sample-client"), {
-      recursive: true,
-    });
-    await mkdir(join(fixtureRoot, "server/packages/sample-service"), {
-      recursive: true,
-    });
+    for (const packageName of migratedPackages) {
+      const packageRoot = join(fixtureRoot, "app/packages", packageName);
+      await mkdir(packageRoot, { recursive: true });
+      await writeFile(
+        join(packageRoot, "safe.ts"),
+        "logger.error('Operation failed.')\n",
+      );
+    }
+    await mkdir(join(fixtureRoot, "app/packages/web"), { recursive: true });
     await writeFile(
-      join(fixtureRoot, "app/packages/sample-client/unsafe.ts"),
+      join(fixtureRoot, "app/packages/web/unsafe.ts"),
       "logger.error(error)\n",
     );
-    await writeFile(
-      join(fixtureRoot, "server/packages/sample-service/safe.ts"),
-      "logger.error('Operation failed.')\n",
-    );
 
-    assert.deepEqual(await discoverLiveSourceFiles(fixtureRoot), [
-      "server/packages/sample-service/safe.ts",
-    ]);
+    assert.deepEqual(
+      (await discoverLiveSourceFiles(fixtureRoot)).filter((file) =>
+        file.startsWith("app/"),
+      ),
+      migratedPackages.map(
+        (packageName) => `app/packages/${packageName}/safe.ts`,
+      ),
+    );
   } finally {
     await rm(fixtureRoot, { force: true, recursive: true });
   }
@@ -93,6 +108,9 @@ test("reports former raw-token, raw-object, and credential-in-path patterns", ()
         this.initializeNotifications().catch(console.error)
         logger.error(\`\${error.stack}\`)
         console.error(startupError.stack)
+        SNLog.onError = console.error
+        window.ReactNativeWebView.postMessage('[web log] ' + args.join(' '))
+        console.error(Error('fixed text still carries a stack'))
       `,
     },
     {
@@ -113,6 +131,9 @@ test("reports former raw-token, raw-object, and credential-in-path patterns", ()
     "unsafe.ts: forbidden pattern interpolated-error-message-log",
     "unsafe.ts: forbidden pattern raw-mobile-console-arguments",
     "unsafe.ts: forbidden pattern raw-error-stack-log",
+    "unsafe.ts: forbidden pattern raw-app-snlog-console-binding",
+    "unsafe.ts: forbidden pattern raw-mobile-web-log-forwarding",
+    "unsafe.ts: forbidden pattern raw-console-error-instance",
   ]);
 });
 
@@ -248,6 +269,33 @@ test("repository-wide detector rejects raw failures, credentials, and PII disgui
     "server/packages/auth/src/unsafe.ts:5: unreviewed repository-wide finding raw-sensitive-interpolation",
     "server/packages/auth/src/unsafe.ts:6: unreviewed repository-wide finding pii-mislabeled-as-user-id",
     "server/packages/auth/src/unsafe.ts:2: unreviewed repository-wide finding direct-console-callback",
+  ]);
+});
+
+test("app detector rejects raw error aliases and domain objects only inside migrated package roots", () => {
+  const result = validateRepositoryWideSafeLoggingSources(
+    {
+      "app/packages/snjs/lib/unsafe.ts": `
+        console.error('operation failed', e)
+        logger.info('domain event', event)
+        logger.debug('payload batch', payloads)
+        logger.warn('sync options', options)
+        logger.error('operation failed', String(e))
+        console.error('safe failure', safeErrorLogMetadata(e))
+        logger.info('safe event', redactLogValue(event))
+      `,
+      "app/packages/web/unsafe.ts":
+        "console.error('not yet claimed by this gate', e)",
+    },
+    [],
+  );
+
+  assert.deepEqual(result.failures, [
+    "app/packages/snjs/lib/unsafe.ts:2: unreviewed repository-wide finding raw-app-error-alias",
+    "app/packages/snjs/lib/unsafe.ts:3: unreviewed repository-wide finding raw-app-domain-object",
+    "app/packages/snjs/lib/unsafe.ts:4: unreviewed repository-wide finding raw-app-domain-object",
+    "app/packages/snjs/lib/unsafe.ts:5: unreviewed repository-wide finding raw-app-domain-object",
+    "app/packages/snjs/lib/unsafe.ts:6: unreviewed repository-wide finding raw-app-error-alias",
   ]);
 });
 

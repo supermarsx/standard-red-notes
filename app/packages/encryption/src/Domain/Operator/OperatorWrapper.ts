@@ -80,14 +80,14 @@ export async function decryptPayload<C extends ItemContent = ItemContent>(
     } else {
       return operator.generateDecryptedParameters(encryptedInputParametersFromPayload(payload), key)
     }
-  } catch (e) {
+  } catch {
     /**
      * CRYPTO-2 (log hygiene): never log the full encrypted payload (nonce, ciphertext,
-     * enc_item_key, key_params). Log only the item uuid and a short error message.
+     * enc_item_key, key_params) or an exception message that may contain crypto input.
+     * The item uuid is the only allowlisted diagnostic field.
      */
     console.error('Error decrypting payload', {
       uuid: payload.uuid,
-      error: e instanceof Error ? e.message : String(e),
     })
     return {
       uuid: payload.uuid,

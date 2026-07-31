@@ -238,8 +238,8 @@ export class SessionManager
             : this.sessionStorageMapper.toDomain(rawSession)
 
         this.setSession(session, false)
-      } catch (error) {
-        console.error(`Could not deserialize session from storage: ${(error as Error).message}`)
+      } catch {
+        console.error('Could not deserialize the stored session.')
       }
     }
   }
@@ -1253,7 +1253,7 @@ export class SessionManager
       dto.session.readonly_access,
     )
     if (sessionOrError.isFailed()) {
-      console.error(sessionOrError.getError())
+      console.error('Could not create a session from the sign-in response.')
 
       return
     }
@@ -1293,7 +1293,7 @@ export class SessionManager
         data.session.readonly_access,
       )
       if (sessionOrError.isFailed()) {
-        console.error(sessionOrError.getError())
+        console.error('Could not create a session from the registration response.')
 
         return
       }

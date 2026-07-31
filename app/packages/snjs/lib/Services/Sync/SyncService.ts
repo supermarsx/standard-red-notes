@@ -7,6 +7,7 @@ import {
   isNotUndefined,
   isNullOrUndefined,
   removeFromIndex,
+  safeErrorLogMetadata,
   sleep,
   subtractFromArray,
 } from '@standardnotes/utils'
@@ -317,13 +318,13 @@ export class SyncService
    */
   private syncDetached(options: Partial<SyncOptions>, context: string): void {
     void this.sync(options).catch((error) => {
-      this.logger.error(`Detached sync failed (${context})`, error)
+      this.logger.error(`Detached sync failed (${context})`, safeErrorLogMetadata(error))
     })
   }
 
   private notifyEventDetached(event: SyncEvent, data: unknown, context: string): void {
     void this.notifyEvent(event, data).catch((error) => {
-      this.logger.error(`Detached sync event failed (${context})`, error)
+      this.logger.error(`Detached sync event failed (${context})`, safeErrorLogMetadata(error))
     })
   }
 
@@ -594,7 +595,7 @@ export class SyncService
       try {
         return CreatePayload(entry, PayloadSource.LocalDatabaseLoaded)
       } catch (e) {
-        console.error('Creating payload failed', e)
+        this.logger.error('Creating payload failed', safeErrorLogMetadata(e))
         return undefined
       }
     }
@@ -684,7 +685,10 @@ export class SyncService
       try {
         dbEntries = await entriesPromise
       } catch (e) {
-        this.logger.error('loadDatabasePayloads: chunk read failed, continuing with remaining chunks', String(e))
+        this.logger.error(
+          'loadDatabasePayloads: chunk read failed, continuing with remaining chunks',
+          safeErrorLogMetadata(e),
+        )
         if (!isChunkFullEntry(chunk)) {
           extendArray(failedChunkKeys, chunk.keys)
         }
@@ -697,7 +701,7 @@ export class SyncService
           try {
             return CreatePayload(entry, PayloadSource.LocalDatabaseLoaded)
           } catch (e) {
-            console.error('Creating payload failed', e)
+            this.logger.error('Creating payload failed', safeErrorLogMetadata(e))
             return undefined
           }
         })
@@ -707,7 +711,10 @@ export class SyncService
         await this.processPayloadBatch(payloads, totalProcessedCount, payloadCount)
         successfullyEmittedCount += payloads.length
       } catch (e) {
-        this.logger.error('loadDatabasePayloads: batch failed, continuing with remaining chunks', String(e))
+        this.logger.error(
+          'loadDatabasePayloads: batch failed, continuing with remaining chunks',
+          safeErrorLogMetadata(e),
+        )
         if (!isChunkFullEntry(chunk)) {
           extendArray(failedChunkKeys, chunk.keys)
         }
@@ -767,7 +774,7 @@ export class SyncService
           try {
             return CreatePayload(entry, PayloadSource.LocalDatabaseLoaded)
           } catch (e) {
-            console.error('Creating payload failed', e)
+            this.logger.error('Creating payload failed', safeErrorLogMetadata(e))
             return undefined
           }
         })
@@ -784,7 +791,7 @@ export class SyncService
         )
       }
     } catch (e) {
-      this.logger.error('loadDatabasePayloads: re-attempt of missing keys failed', String(e))
+      this.logger.error('loadDatabasePayloads: re-attempt of missing keys failed', safeErrorLogMetadata(e))
     }
   }
 
@@ -940,7 +947,10 @@ export class SyncService
       try {
         return createLitePayloadFromDecrypted(payload)
       } catch (e) {
-        this.logger.error('maybeStripBodiesForLazyDecrypt: failed to strip note, keeping full payload', String(e))
+        this.logger.error(
+          'maybeStripBodiesForLazyDecrypt: failed to strip note, keeping full payload',
+          safeErrorLogMetadata(e),
+        )
         return payload
       }
     })
@@ -969,7 +979,7 @@ export class SyncService
       try {
         return CreatePayload(entries[0], PayloadSource.LocalDatabaseLoaded)
       } catch (e) {
-        this.logger.error('getFullContentPayload: failed to create payload', String(e))
+        this.logger.error('getFullContentPayload: failed to create payload', safeErrorLogMetadata(e))
         return undefined
       }
     })()
@@ -1051,7 +1061,7 @@ export class SyncService
 
   private reportCriticalStorageWriteFailure(error: unknown): never {
     this.notifyEventDetached(SyncEvent.DatabaseWriteError, error, 'critical storage write failure')
-    SNLog.error(error instanceof Error ? error : Error(String(error)))
+    SNLog.error(error instanceof Error ? error : Error('Critical storage write failure'))
     this.throwLocalPersistenceFailure(error)
   }
 
@@ -1433,7 +1443,9 @@ export class SyncService
         queueStrategy: SyncQueueStrategy.ForceSpawnNew,
         source: SyncSource.External,
         ...otherSyncOptions,
-      }).catch(console.error)
+      }).catch((error) => {
+        this.logger.error('Download-first sync attempt failed', safeErrorLogMetadata(error))
+      })
 
       if (this.completedOnlineDownloadFirstSync) {
         return
@@ -1468,11 +1480,10 @@ export class SyncService
      * user-initiated sync (isUserInitiated) and all continuation sources bypass this gate.
      */
     if (this.shouldSuppressAutomaticSync(fullyResolvedOptions)) {
-      this.logger.debug(
-        'Manual sync mode is on; suppressing automatic sync',
-        SyncSource[fullyResolvedOptions.source],
-        fullyResolvedOptions.sourceDescription,
-      )
+      this.logger.debug('Manual sync mode is on; suppressing automatic sync', {
+        source: SyncSource[fullyResolvedOptions.source],
+        hasSourceDescription: fullyResolvedOptions.sourceDescription !== undefined,
+      })
       return
     }
 
@@ -1662,7 +1673,13 @@ export class SyncService
           : syncInProgress
             ? 'Attempting to sync while existing sync in progress.'
             : 'Attempting to sync before local database has loaded.',
-        options,
+        {
+          source: SyncSource[options.source],
+          mode: options.mode === undefined ? undefined : SyncMode[options.mode],
+          queueStrategy: options.queueStrategy,
+          userInitiated: options.isUserInitiated === true,
+          scopedVaultCount: options.sharedVaultUuids?.length ?? 0,
+        },
       )
     }
 
@@ -1781,17 +1798,11 @@ export class SyncService
     payloads: (DeletedPayloadInterface | DecryptedPayloadInterface)[],
     options: SyncOptions,
   ) {
-    this.logger.debug(
-      'Syncing offline user',
-      'source:',
-      SyncSource[options.source],
-      'sourceDesc',
-      options.sourceDescription,
-      'mode:',
-      options.mode && SyncMode[options.mode],
-      'payloads:',
-      payloads,
-    )
+    this.logger.debug('Preparing offline sync', {
+      source: SyncSource[options.source],
+      mode: options.mode === undefined ? undefined : SyncMode[options.mode],
+      uploadItemCount: payloads.length,
+    })
 
     const operation = new OfflineSyncOperation(payloads, async (type, response) => {
       if (this.dealloced) {
@@ -1871,23 +1882,15 @@ export class SyncService
       },
     )
 
-    this.logger.debug(
-      'Syncing online user',
-      'source',
-      SyncSource[options.source],
-      'operation id',
-      operation.id,
-      'integrity check',
-      options.checkIntegrity,
-      'mode',
-      SyncMode[mode],
-      'syncToken',
-      syncToken,
-      'cursorToken',
-      paginationToken,
-      'payloads',
-      payloads,
-    )
+    this.logger.debug('Preparing online sync', {
+      source: SyncSource[options.source],
+      operationId: operation.id,
+      integrityCheck: options.checkIntegrity === true,
+      mode: SyncMode[mode],
+      hasSyncToken: syncToken !== undefined,
+      hasCursorToken: paginationToken !== undefined,
+      uploadItemCount: payloads.length,
+    })
 
     return operation
   }
@@ -2037,9 +2040,7 @@ export class SyncService
         await operationPromise
       } catch (error) {
         if (!this.dealloced) {
-          this.logger.error(
-            `Sync operation threw while applying server response: ${(error as Error)?.message ?? error}`,
-          )
+          this.logger.error('Sync operation threw while applying the server response', safeErrorLogMetadata(error))
           releaseLock()
           this.handleThrownSyncFailure(error, online)
           this.settlePendingSyncRequestsAfterFailure(inTimeResolveQueue)
@@ -2106,7 +2107,7 @@ export class SyncService
       return undefined
     } catch (error) {
       if (!this.dealloced) {
-        this.logger.error(`Sync failed before completion: ${(error as Error)?.message ?? error}`)
+        this.logger.error('Sync failed before completion', safeErrorLogMetadata(error))
         if (this.isLocalPersistenceFailure(error)) {
           this.handleThrownSyncFailure(error, online ?? false)
         } else if (this.opStatus.syncInProgress) {
@@ -2163,7 +2164,9 @@ export class SyncService
   }
 
   private async handleOfflineResponse(response: OfflineSyncResponse) {
-    this.logger.debug('Offline Sync Response', response)
+    this.logger.debug('Offline sync response received', {
+      savedItemCount: response.savedPayloads.length,
+    })
 
     const masterCollection = this.payloadManager.getMasterCollection()
 
@@ -2179,7 +2182,9 @@ export class SyncService
   }
 
   private handleErrorServerResponse(response: ServerSyncResponse) {
-    this.logger.debug('Sync Error', response)
+    this.logger.debug('Sync server returned an error status', {
+      status: response.status,
+    })
 
     if (response.status === INVALID_SESSION_RESPONSE_STATUS) {
       void this.notifyEvent(SyncEvent.InvalidSession)
@@ -2246,14 +2251,10 @@ export class SyncService
       historyMap,
     )
 
-    this.logger.debug(
-      'Online Sync Response',
-      'Operator ID',
-      operation.id,
-      response.rawResponse.data,
-      'Decrypted payloads',
-      resolver['payloadSet'],
-    )
+    this.logger.debug('Online sync response applied', {
+      operatorId: operation.id,
+      retrievedItemCount: response.retrievedPayloads.length,
+    })
 
     const emits = resolver.result()
 
@@ -2755,7 +2756,10 @@ export class SyncService
     try {
       await this.payloadManager.emitPayloads(rollbackPayloads, PayloadEmitSource.LocalChanged)
     } catch (rollbackError) {
-      this.logger.error('Failed to restore in-memory payloads after local persistence failure', rollbackError)
+      this.logger.error(
+        'Failed to restore in-memory payloads after local persistence failure',
+        safeErrorLogMetadata(rollbackError),
+      )
     }
   }
 
@@ -3013,7 +3017,7 @@ export class SyncService
 
       this.logger.debug(`Applied ${decryptedPayloads.length} item(s) from websocket push without HTTP pull`)
     } catch (error) {
-      this.logger.error('Failed to apply websocket sync push; falling back to HTTP sync', error)
+      this.logger.error('Failed to apply websocket sync push; falling back to HTTP sync', safeErrorLogMetadata(error))
       applyFailed = true
     } finally {
       this.releaseSyncLock(lockOwner)

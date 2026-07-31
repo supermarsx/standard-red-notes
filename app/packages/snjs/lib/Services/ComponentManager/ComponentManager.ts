@@ -315,8 +315,8 @@ export class ComponentManager
           this.nativeThemesAsBase64[theme.identifier] = base64
         }
       }
-    } catch (error) {
-      console.error(error)
+    } catch {
+      console.error('Could not load a native theme asset.')
     } finally {
       this.postActiveThemesToAllViewers()
     }
@@ -361,7 +361,9 @@ export class ComponentManager
   onWindowMessage = (event: MessageEvent): void => {
     const data = event.data as ComponentMessage
     if (data.sessionKey) {
-      this.logger.info('Component manager received message', data)
+      this.logger.info('Component manager received message', {
+        action: data.action,
+      })
       this.componentViewerForSessionKey(data.sessionKey)?.handleMessage(data)
     }
   }

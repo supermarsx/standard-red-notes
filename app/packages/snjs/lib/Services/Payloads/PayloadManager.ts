@@ -181,7 +181,10 @@ export class PayloadManager extends AbstractService implements PayloadManagerInt
 
     for (const apply of applyPayloads) {
       if (!apply.uuid || !apply.content_type) {
-        console.error('Payload is corrupt', apply)
+        this.logger.error('Payload validation failed', {
+          hasUuid: Boolean(apply.uuid),
+          hasContentType: Boolean(apply.content_type),
+        })
 
         continue
       }

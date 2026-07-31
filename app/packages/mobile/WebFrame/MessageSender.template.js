@@ -1,4 +1,7 @@
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
+/* global console, document, window */
+/* eslint-disable no-console */
+
+// eslint-disable-next-line no-unused-vars, @typescript-eslint/no-unused-vars
 class WebProcessMessageSender {
   constructor() {
     this.pendingMessages = []
@@ -14,8 +17,8 @@ class WebProcessMessageSender {
       const pendingMessage = this.pendingMessages.find((m) => m.messageId === messageId)
       pendingMessage.resolve(returnValue)
       this.pendingMessages.splice(this.pendingMessages.indexOf(pendingMessage), 1)
-    } catch (error) {
-      console.log('Error parsing message from React Native', message, error)
+    } catch {
+      console.log('Error parsing message from React Native')
     }
   }
 

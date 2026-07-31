@@ -1,4 +1,4 @@
-import { LoggerInterface, joinPaths, sleep } from '@standardnotes/utils'
+import { LoggerInterface, joinPaths, safeHttpLogMetadata, sleep } from '@standardnotes/utils'
 import { Environment } from '@standardnotes/models'
 import { LegacySession, Result, Session, SessionToken } from '@standardnotes/domain-core'
 import {
@@ -166,7 +166,7 @@ export class HttpService implements HttpServiceInterface {
     const response = await this.requestHandler.handleRequest<T>(httpRequest)
 
     if (this.loggingEnabled && isErrorResponse(response)) {
-      this.logger.error('Request failed', httpRequest, response)
+      this.logger.error('Request failed', safeHttpLogMetadata(httpRequest, response))
     }
 
     if (response.meta && !httpRequest.external) {

@@ -2,6 +2,11 @@
 import { addHook, sanitize } from 'dompurify'
 import { escape, find, isArray, mergeWith, remove, uniq, uniqWith } from 'lodash'
 import { AnyRecord } from '@standardnotes/common'
+import { redactLogValue, safeErrorLogMetadata } from '../Logger/SafeLog'
+
+function safeUtilityLogParameter(value: unknown): unknown {
+  return value instanceof Error ? safeErrorLogMetadata(value) : redactLogValue(value)
+}
 
 const collator = typeof Intl !== 'undefined' ? new Intl.Collator('en', { numeric: true }) : undefined
 
@@ -525,7 +530,9 @@ export function truncateHexString(string: string, desiredBits: number) {
  */
 export async function sleep(milliseconds: number, warn = true, desc = ''): Promise<void> {
   if (warn) {
-    console.warn(`Sleeping for ${milliseconds}ms ${desc}`)
+    console.warn(`Sleeping for ${milliseconds}ms`, {
+      hasDescription: desc.length > 0,
+    })
   }
   return new Promise<void>((resolve) => {
     setTimeout(function () {
@@ -732,9 +739,9 @@ export function logWithColor(namespace: string, namespaceColor: string, ...args:
   )
 }
 
-function customLog(..._args: any[]) {
-  // eslint-disable-next-line no-console, prefer-rest-params
-  Function.prototype.apply.call(console.log, console, arguments)
+function customLog(...args: any[]) {
+  // eslint-disable-next-line no-console
+  Function.prototype.apply.call(console.log, console, args.map(safeUtilityLogParameter))
 }
 
 export function assert(value: unknown): asserts value {

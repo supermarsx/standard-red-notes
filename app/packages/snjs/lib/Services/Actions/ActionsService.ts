@@ -114,8 +114,8 @@ export class ActionsService extends AbstractService {
       item_uuid: item.uuid,
     }
 
-    const response = (await this.httpService.getAbsolute(extension.url, params).catch((response) => {
-      console.error('Error loading extension', response)
+    const response = (await this.httpService.getAbsolute(extension.url, params).catch(() => {
+      console.error('Could not load the action extension.')
       return undefined
     })) as ActionResponse
 
@@ -307,7 +307,7 @@ export class ActionsService extends AbstractService {
         return response as ActionResponse
       })
       .catch((response) => {
-        console.error('Action error response:', response)
+        console.error('The action request failed.')
         void this.alertService.alert('An issue occurred while processing this action. Please try again.')
         return response as ActionResponse
       })

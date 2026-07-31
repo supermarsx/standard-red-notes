@@ -108,4 +108,64 @@ describe('Logger', () => {
     expect(format).toMatch(/^%capp%c\d/)
     expect(rest).toEqual(['hello', 42])
   })
+
+  it('should redact credential, session, PII, and content fields at the variadic logger sink', () => {
+    logger.setLevel('debug')
+
+    logger.error('request failed', {
+      accessToken: 'access-token-sentinel',
+      refreshToken: 'refresh-token-sentinel',
+      offlineToken: 'offline-token-sentinel',
+      featuresToken: 'features-token-sentinel',
+      subscriptionToken: 'subscription-token-sentinel',
+      sessionKey: 'session-key-sentinel',
+      sessionUuid: 'session-uuid-sentinel',
+      cookie: 'cookie-sentinel',
+      password: 'password-sentinel',
+      codeVerifier: 'pkce-sentinel',
+      apiKey: 'api-key-sentinel',
+      email: 'person@example.test',
+      content: 'encrypted-content-sentinel',
+      userId: 'user-123',
+    })
+
+    const serialized = JSON.stringify(error.mock.calls)
+    for (const sentinel of [
+      'access-token-sentinel',
+      'refresh-token-sentinel',
+      'offline-token-sentinel',
+      'features-token-sentinel',
+      'subscription-token-sentinel',
+      'session-key-sentinel',
+      'session-uuid-sentinel',
+      'cookie-sentinel',
+      'password-sentinel',
+      'pkce-sentinel',
+      'api-key-sentinel',
+      'person@example.test',
+      'encrypted-content-sentinel',
+    ]) {
+      expect(serialized).not.toContain(sentinel)
+    }
+    expect(serialized).toContain('user-123')
+  })
+
+  it('should project Error instances to allowlisted metadata without message or stack text', () => {
+    logger.setLevel('debug')
+    const thrown = Object.assign(new Error('opaque-upstream-secret'), {
+      code: 'ERR_NETWORK',
+      accessToken: 'access-token-sentinel',
+    })
+
+    logger.error('request failed', thrown)
+
+    expect(error).toHaveBeenCalledWith('request failed', {
+      errorType: 'Error',
+      errorCode: 'ERR_NETWORK',
+      status: undefined,
+    })
+    const serialized = JSON.stringify(error.mock.calls)
+    expect(serialized).not.toContain('opaque-upstream-secret')
+    expect(serialized).not.toContain('access-token-sentinel')
+  })
 })

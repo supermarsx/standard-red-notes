@@ -140,7 +140,7 @@ export class SNProtocolOperator002 extends SNProtocolOperator001 {
     }
 
     if (this.crypto.timingSafeEqual(authHash, localAuthHash) === false) {
-      console.error(Error('Auth hash does not match.'))
+      console.error('Authentication hash does not match.')
       return null
     }
     return this.decryptString002(contentCiphertext, encryptionKey, iv)
@@ -209,7 +209,7 @@ export class SNProtocolOperator002 extends SNProtocolOperator001 {
     key: Models.ItemsKeyInterface | SNRootKey,
   ): Promise<DecryptedParameters<C> | ErrorDecryptingParameters> {
     if (!encrypted.enc_item_key) {
-      console.error(Error('Missing item encryption key, skipping decryption.'))
+      console.error('Missing item encryption key; skipping decryption.')
       return {
         uuid: encrypted.uuid,
         errorDecrypting: true,

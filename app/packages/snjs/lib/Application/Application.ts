@@ -473,7 +473,9 @@ export class SNApplication implements ApplicationInterface, AppGroupManagedAppli
           source: SyncSource.External,
           sourceDescription: 'Application Launch',
         })
-        this.vaultUsers.invalidateVaultUsersCache().catch(console.error)
+        this.vaultUsers
+          .invalidateVaultUsersCache()
+          .catch(() => console.error('Could not invalidate the vault-users cache after initial sync.'))
       })
       .catch((error) => {
         void this.notifyEvent(ApplicationEvent.LocalDatabaseReadError, error)

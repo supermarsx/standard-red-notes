@@ -200,7 +200,46 @@ describe('HttpService', () => {
 
       await service.get('/v1/items')
 
-      expect(logger.error).toHaveBeenCalledWith('Request failed', expect.any(Object), expect.any(Object))
+      expect(logger.error).toHaveBeenCalledWith('Request failed', {
+        method: 'GET',
+        url: `${HOST}/v1/items`,
+        status: HttpStatusCode.BadRequest,
+      })
+    })
+
+    it('should never log request authentication, params, response bodies, query values, or fragments', async () => {
+      handleRequest.mockResolvedValue({
+        status: HttpStatusCode.InternalServerError,
+        data: {
+          error: { message: 'access-token-sentinel' },
+          encryptedContent: 'encrypted-content-sentinel',
+        },
+      })
+      service.loggingEnabled = true
+
+      await service.post('/v1/items?code_verifier=pkce-sentinel#fragment-sentinel', {
+        refresh_token: 'refresh-token-sentinel',
+        content: 'encrypted-content-sentinel',
+      })
+
+      const serializedLogs = JSON.stringify(logger.error.mock.calls)
+      for (const sentinel of [
+        'access-token-sentinel',
+        'refresh-token-sentinel',
+        'encrypted-content-sentinel',
+        'pkce-sentinel',
+        'fragment-sentinel',
+      ]) {
+        expect(serializedLogs).not.toContain(sentinel)
+      }
+      expect(logger.error).toHaveBeenCalledWith(
+        'Request failed',
+        expect.objectContaining({
+          method: 'POST',
+          url: `${HOST}/v1/items [query-parameter-count=1]`,
+          status: HttpStatusCode.InternalServerError,
+        }),
+      )
     })
 
     it('should not log a successful response even with logging enabled', async () => {
@@ -438,7 +477,9 @@ describe('HttpService', () => {
       await service.get('/v1/items')
 
       expect(Date.now() - before).toBeGreaterThanOrEqual(4)
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining('Sleeping for 5ms'))
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('Sleeping for 5ms'), {
+        hasDescription: false,
+      })
       warn.mockRestore()
     })
 
