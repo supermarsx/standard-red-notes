@@ -127,3 +127,40 @@ test("server format commands cannot omit executable package sources", () => {
     );
   }
 });
+
+test("server developer runtime stays aligned with app, engine, Docker, and CI", () => {
+  const staleNvmrc = withFileChanged("server/.nvmrc", () => "20.10.0\n");
+  assert.match(
+    validateCiContract(staleNvmrc).join("\n"),
+    /server\/\.nvmrc: Node 20\.10\.0 must match app\/\.nvmrc Node 26\.5\.0/,
+  );
+
+  const staleEngine = withFileChanged("server/package.json", (content) => {
+    const packageJson = JSON.parse(content);
+    packageJson.engines.node = ">=20.0.0";
+    return JSON.stringify(packageJson);
+  });
+  assert.match(
+    validateCiContract(staleEngine).join("\n"),
+    /server\/package\.json: engines\.node must accept and share the major/,
+  );
+
+  const staleDocker = withFileChanged("server/Dockerfile", (content) =>
+    content.replace(
+      "FROM node:26.5.0-alpine AS runtime",
+      "FROM node:20.10.0-alpine AS runtime",
+    ),
+  );
+  assert.match(
+    validateCiContract(staleDocker).join("\n"),
+    /server\/Dockerfile: runtime stage must use node:26\.5\.0-alpine/,
+  );
+
+  const staleCi = withFileChanged(".github/workflows/ci.yml", (content) =>
+    content.replace('NODE_VERSION: "26"', 'NODE_VERSION: "20"'),
+  );
+  assert.match(
+    validateCiContract(staleCi).join("\n"),
+    /NODE_VERSION 20 must match server\/\.nvmrc major 26/,
+  );
+});

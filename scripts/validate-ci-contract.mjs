@@ -10,7 +10,10 @@ const defaultRepositoryRoot = path.resolve(path.dirname(scriptPath), "..");
 
 export const CI_CONTRACT_FILES = Object.freeze([
   ".github/workflows/ci.yml",
+  "app/.nvmrc",
   "package.json",
+  "server/.nvmrc",
+  "server/Dockerfile",
   "server/package.json",
   "docs/ci-production-gates.md",
   "docs/_data/navigation.yml",
@@ -29,6 +32,41 @@ function requireFragment(errors, file, text, fragment, description) {
   if (!text.includes(fragment)) {
     errors.push(`${file}: missing ${description}`);
   }
+}
+
+function exactNodeVersion(value) {
+  const raw = String(value ?? "").trim();
+  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(raw);
+  return match
+    ? {
+        raw,
+        major: Number(match[1]),
+        minor: Number(match[2]),
+        patch: Number(match[3]),
+      }
+    : null;
+}
+
+function minimumNodeEngine(value) {
+  const match = /^>=(\d+)\.(\d+)\.(\d+)$/.exec(String(value ?? "").trim());
+  return match
+    ? {
+        major: Number(match[1]),
+        minor: Number(match[2]),
+        patch: Number(match[3]),
+      }
+    : null;
+}
+
+function versionAtLeast(version, minimum) {
+  return (
+    ["major", "minor", "patch"].reduce((result, field) => {
+      if (result !== 0) {
+        return result;
+      }
+      return Math.sign(version[field] - minimum[field]);
+    }, 0) >= 0
+  );
 }
 
 function jobBlock(workflow, jobName) {
@@ -227,6 +265,61 @@ export function validateCiContract(files) {
   }
 
   const serverPackage = JSON.parse(files.get("server/package.json") ?? "{}");
+  const appNodeVersion = exactNodeVersion(files.get("app/.nvmrc"));
+  const serverNodeVersion = exactNodeVersion(files.get("server/.nvmrc"));
+  const serverNodeEngine = minimumNodeEngine(serverPackage.engines?.node);
+  const ciNodeMajor = /^\s*NODE_VERSION:\s*["']?(\d+)["']?\s*$/m.exec(
+    workflow,
+  )?.[1];
+
+  if (!appNodeVersion) {
+    errors.push("app/.nvmrc: must contain an exact Node version");
+  }
+  if (!serverNodeVersion) {
+    errors.push("server/.nvmrc: must contain an exact Node version");
+  }
+  if (
+    appNodeVersion &&
+    serverNodeVersion &&
+    appNodeVersion.raw !== serverNodeVersion.raw
+  ) {
+    errors.push(
+      `server/.nvmrc: Node ${serverNodeVersion.raw} must match app/.nvmrc Node ${appNodeVersion.raw}`,
+    );
+  }
+  if (!ciNodeMajor) {
+    errors.push(".github/workflows/ci.yml: missing active NODE_VERSION policy");
+  } else if (
+    serverNodeVersion &&
+    Number(ciNodeMajor) !== serverNodeVersion.major
+  ) {
+    errors.push(
+      `.github/workflows/ci.yml: NODE_VERSION ${ciNodeMajor} must match server/.nvmrc major ${serverNodeVersion.major}`,
+    );
+  }
+  if (
+    !serverNodeVersion ||
+    !serverNodeEngine ||
+    serverNodeEngine.major !== serverNodeVersion.major ||
+    !versionAtLeast(serverNodeVersion, serverNodeEngine)
+  ) {
+    errors.push(
+      "server/package.json: engines.node must accept and share the major of server/.nvmrc",
+    );
+  }
+
+  if (serverNodeVersion) {
+    const dockerfile = files.get("server/Dockerfile") ?? "";
+    const expectedImage = `node:${serverNodeVersion.raw}-alpine`;
+    for (const stage of ["build", "runtime"]) {
+      if (!dockerfile.includes(`FROM ${expectedImage} AS ${stage}`)) {
+        errors.push(
+          `server/Dockerfile: ${stage} stage must use ${expectedImage}`,
+        );
+      }
+    }
+  }
+
   const expectedServerFormatScripts = {
     format:
       'prettier --write "packages/*/src/**/*.{ts,tsx,js,json,md}" "packages/*/bin/**/*.{ts,tsx}"',
