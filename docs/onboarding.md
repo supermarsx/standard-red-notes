@@ -129,6 +129,10 @@ once and never sent to the server.
   AI-style local relevance ranking can be enabled in
   **Preferences -> Assistant -> Search** — both run entirely in your browser.)
 
+The crop below shows the visible, empty Search input and the unfiltered seeded
+note list. It does not show an entered query, filtered results, relevance
+ranking, or a no-results state.
+
 {% include feature-screenshot.html id="workspace-note-results" %}
 
 ### Organizing single notes
@@ -144,6 +148,10 @@ From a note's **options menu** (the "..." / context menu) you can:
 
 The navigation sidebar has built-in smart views for **Notes**, **Starred**,
 **Archived**, and **Trash**.
+
+The crop below proves only the visible LINKS, Linked items, and closed Note
+options entry points. The menu and panel are not open, so it does not show or
+prove pin, star, archive, trash, restore, protect, or relationship actions.
 
 {% include feature-screenshot.html id="workspace-note-actions" %}
 
@@ -174,6 +182,10 @@ picker and insert things like:
 There is also a dedicated **Canvas** editor for notes that are primarily a
 freeform drawing surface.
 
+The crop below proves only that a Super note is open and the Home, AI, and
+Tools ribbon tabs are visible. It does not show the slash block picker, any
+inserted block type, or the contents or behavior of the AI and Tools tabs.
+
 {% include feature-screenshot.html id="workspace-super-toolbar" %}
 
 > Some web embeds won't display: many sites refuse to be shown inside another
@@ -200,6 +212,11 @@ Standard Red Notes gives you both, and they're different on purpose:
   **subfolders**. Great when you think in terms of "one place this belongs."
 
 Use whichever model fits how you think — or mix them.
+
+The crop below shows the empty Folders and Topics sections, including their
+headings, add controls, and empty-state text. It does not show populated
+folders, nested subfolders, populated topics, subtags, or notes organized by
+either structure.
 
 {% include feature-screenshot.html id="workspace-collections" %}
 

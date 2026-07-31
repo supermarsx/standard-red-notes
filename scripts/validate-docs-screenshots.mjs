@@ -17,6 +17,74 @@ const FEATURE_INCLUDE_PATTERN = /{%\s*include\s+feature-screenshot\.html\b([\s\S
 const ATTRIBUTE_PATTERN = /\b([a-z][a-z0-9_]*)\s*=\s*"([^"]*)"/g
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
 
+export const ONBOARDING_SCREENSHOT_CONTEXTS = Object.freeze([
+  {
+    featureId: 'workspace-note-results',
+    heading: 'Finding things',
+    disclaimer:
+      'The crop below shows the visible, empty Search input and the unfiltered seeded note list. It does not show an entered query, filtered results, relevance ranking, or a no-results state.',
+    caption:
+      'The visible Search field is empty and the seeded list is unfiltered; no active query, filtered results, ranking, or no-results state is depicted.',
+    viewBox: '220 0 400 300',
+    evidenceClaims: ['note-search-entry-point', 'unfiltered-note-list', 'selected-note'],
+    targetTexts: [
+      'The visible Search input is empty; no query has been entered.',
+      'The highlighted seeded row is visible in the unfiltered note list.',
+    ],
+  },
+  {
+    featureId: 'workspace-note-actions',
+    heading: 'Organizing single notes',
+    disclaimer:
+      'The crop below proves only the visible LINKS, Linked items, and closed Note options entry points. The menu and panel are not open, so it does not show or prove pin, star, archive, trash, restore, protect, or relationship actions.',
+    caption:
+      'The stored crop proves only the visible Links, Linked items, and closed Note options entry points; no panel, menu, or note action is open.',
+    viewBox: '620 0 820 165',
+    evidenceClaims: ['note-links-entry-point', 'linked-items-entry-point', 'closed-note-options-entry-point'],
+    targetTexts: [
+      'The visible LINKS text is an entry point; no linked-items state is open.',
+      'The Linked items button is visible, but its panel is closed.',
+      'The Note options button is visible, but its menu and actions are closed.',
+    ],
+  },
+  {
+    featureId: 'workspace-super-toolbar',
+    heading: 'Super (rich blocks)',
+    disclaimer:
+      'The crop below proves only that a Super note is open and the Home, AI, and Tools ribbon tabs are visible. It does not show the slash block picker, any inserted block type, or the contents or behavior of the AI and Tools tabs.',
+    caption:
+      'The stored pixels show an open Super note and the Home, AI, and Tools tab labels; they do not show the block picker, inserted block types, or tab behavior.',
+    viewBox: '620 150 820 235',
+    evidenceClaims: ['super-editor-open', 'visible-home-tab', 'visible-ai-tab', 'visible-tools-tab'],
+    targetTexts: [
+      'The visible Home ribbon tab is selected.',
+      'The visible AI tab is closed; its actions are not shown.',
+      'The visible Tools tab is closed; its utilities are not shown.',
+    ],
+  },
+  {
+    featureId: 'workspace-collections',
+    heading: 'Folders vs tags',
+    disclaimer:
+      'The crop below shows the empty Folders and Topics sections, including their headings, add controls, and empty-state text. It does not show populated folders, nested subfolders, populated topics, subtags, or notes organized by either structure.',
+    caption:
+      'The stored crop shows empty Folders and Topics sections, their empty-state text, and visible add controls; it does not depict populated or nested organization.',
+    viewBox: '0 430 220 440',
+    evidenceClaims: [
+      'views',
+      'empty-folders-section',
+      'empty-topics-section',
+      'folder-add-entry-point',
+      'topic-add-entry-point',
+    ],
+    targetTexts: [
+      'The empty Folders heading is visible; no folder rows are present.',
+      'The visible plus control is the closed create-folder entry point.',
+      'The visible plus control is the closed create-topic entry point.',
+    ],
+  },
+])
+
 function displayPath(root, file) {
   return path.relative(root, file).replaceAll(path.sep, '/')
 }
@@ -126,6 +194,92 @@ export function extractFeatureScreenshotIncludes(source, file = '<source>') {
   }
 
   return includes
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function flexibleWhitespacePattern(value) {
+  return new RegExp(value.trim().split(/\s+/).map(escapeRegExp).join('\\s+'))
+}
+
+function markdownSection(source, heading) {
+  const lines = source.replace(/\r\n?/g, '\n').split('\n')
+  const headingLine = `### ${heading}`
+  const matches = lines.flatMap((line, index) => (line.trim() === headingLine ? [index] : []))
+  if (matches.length !== 1) {
+    return { matches }
+  }
+
+  const start = matches[0] + 1
+  let end = lines.length
+  for (let index = start; index < lines.length; index++) {
+    if (/^\s{0,3}#{1,3}\s+/.test(lines[index])) {
+      end = index
+      break
+    }
+  }
+  return { matches, source: lines.slice(start, end).join('\n') }
+}
+
+function sameList(actual, expected) {
+  return JSON.stringify(actual) === JSON.stringify(expected)
+}
+
+export function validateOnboardingScreenshotContexts(
+  source,
+  manifest = loadFeatureScreenshotManifest(),
+  file = 'docs/onboarding.md',
+) {
+  const errors = []
+  for (const contract of ONBOARDING_SCREENSHOT_CONTEXTS) {
+    const prefix = `${file}: section "${contract.heading}" screenshot "${contract.featureId}"`
+    const section = markdownSection(source, contract.heading)
+    if (section.matches.length !== 1) {
+      errors.push(`${prefix}: expected exactly one matching level-three heading, found ${section.matches.length}`)
+      continue
+    }
+
+    const includeMatches = [...section.source.matchAll(FEATURE_INCLUDE_PATTERN)].map((match) => ({
+      attributes: parseAttributes(match[1]).attributes,
+      index: match.index,
+    }))
+    if (includeMatches.length !== 1 || includeMatches[0].attributes.id !== contract.featureId) {
+      const ids = includeMatches.map((include) => include.attributes.id ?? '<missing>').join(', ') || '<none>'
+      errors.push(`${prefix}: section must contain only that screenshot include; found ${ids}`)
+    }
+
+    const disclaimerMatch = flexibleWhitespacePattern(contract.disclaimer).exec(section.source)
+    if (!disclaimerMatch) {
+      errors.push(`${prefix}: required pixel-boundary disclaimer is missing or changed`)
+    } else {
+      const expectedInclude = includeMatches.find((include) => include.attributes.id === contract.featureId)
+      if (expectedInclude && disclaimerMatch.index > expectedInclude.index) {
+        errors.push(`${prefix}: pixel-boundary disclaimer must appear before the screenshot include`)
+      }
+    }
+
+    const feature = manifest.features?.[contract.featureId]
+    if (!feature) {
+      errors.push(`${prefix}: manifest feature is missing`)
+      continue
+    }
+    if (feature.caption !== contract.caption) {
+      errors.push(`${prefix}: manifest caption no longer matches the reviewed pixel boundary`)
+    }
+    if (feature.viewBox !== contract.viewBox) {
+      errors.push(`${prefix}: viewBox must remain "${contract.viewBox}" for the reviewed controls`)
+    }
+    if (!sameList(feature.evidenceClaims, contract.evidenceClaims)) {
+      errors.push(`${prefix}: evidence claims no longer match the reviewed pixel boundary`)
+    }
+    const targetTexts = Array.isArray(feature.targets) ? feature.targets.map((target) => target?.text) : []
+    if (!sameList(targetTexts, contract.targetTexts)) {
+      errors.push(`${prefix}: numbered target text no longer matches the reviewed visible controls`)
+    }
+  }
+  return errors
 }
 
 export function collectFeatureScreenshotIncludes(root = repositoryRoot) {
@@ -498,6 +652,19 @@ export function validateDocsScreenshots({
     }
   }
   errors.push(...validateFeatureScreenshotManifest(manifest, { root }))
+
+  const onboardingPath = path.join(root, 'docs', 'onboarding.md')
+  if (!fs.existsSync(onboardingPath)) {
+    errors.push('docs/onboarding.md: onboarding screenshot context source does not exist')
+  } else {
+    errors.push(
+      ...validateOnboardingScreenshotContexts(
+        fs.readFileSync(onboardingPath, 'utf8'),
+        manifest,
+        'docs/onboarding.md',
+      ),
+    )
+  }
 
   const templatePath = path.join(root, 'docs', '_includes', 'feature-screenshot.html')
   if (!fs.existsSync(templatePath)) {

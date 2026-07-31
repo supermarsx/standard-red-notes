@@ -16,6 +16,7 @@ import {
   validateFeatureScreenshot,
   validateFeatureScreenshotManifest,
   validateFeatureScreenshotTemplate,
+  validateOnboardingScreenshotContexts,
 } from './validate-docs-screenshots.mjs'
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -67,6 +68,55 @@ test('feature includes reject duplicate, inline, and unknown metadata', () => {
   assert.match(errors, /duplicate feature-screenshot attribute "id"/)
   assert.match(errors, /metadata belongs in the manifest, not attribute "alt"/)
   assert.match(errors, /unknown manifest feature "again"/)
+})
+
+test('onboarding screenshot evidence is bound to its reviewed section and pixel-boundary disclaimer', () => {
+  const source = fs.readFileSync(path.join(repositoryRoot, 'docs', 'onboarding.md'), 'utf8')
+  const manifest = loadFeatureScreenshotManifest(repositoryRoot)
+
+  assert.deepEqual(validateOnboardingScreenshotContexts(source, manifest), [])
+
+  const wrongId = source.replace(
+    'id="workspace-note-results"',
+    'id="workspace-note-actions"',
+  )
+  assert.match(
+    validateOnboardingScreenshotContexts(wrongId, manifest).join('\n'),
+    /section "Finding things".*must contain only that screenshot include/,
+  )
+
+  const searchInclude = '{% include feature-screenshot.html id="workspace-note-results" %}'
+  const wrongSection = source
+    .replace(searchInclude, '')
+    .replace('### Organizing single notes\n', `### Organizing single notes\n\n${searchInclude}\n`)
+  assert.match(
+    validateOnboardingScreenshotContexts(wrongSection, manifest).join('\n'),
+    /section "Finding things".*found <none>/,
+  )
+
+  const missingDisclaimer = source.replace(
+    'It does not show an entered query, filtered results, relevance',
+    'It shows an entered query, filtered results, relevance',
+  )
+  assert.match(
+    validateOnboardingScreenshotContexts(missingDisclaimer, manifest).join('\n'),
+    /section "Finding things".*pixel-boundary disclaimer is missing or changed/,
+  )
+})
+
+test('onboarding screenshot context rejects captions, claims, and targets that exceed stored pixels', () => {
+  const source = fs.readFileSync(path.join(repositoryRoot, 'docs', 'onboarding.md'), 'utf8')
+  const manifest = clone(loadFeatureScreenshotManifest(repositoryRoot))
+  manifest.features['workspace-note-actions'].caption =
+    'The open menu proves that pin, archive, trash, and protect actions work.'
+  manifest.features['workspace-super-toolbar'].evidenceClaims.push('block-picker-open')
+  manifest.features['workspace-collections'].targets[0].text =
+    'A populated nested folder hierarchy is visible.'
+
+  const errors = validateOnboardingScreenshotContexts(source, manifest).join('\n')
+  assert.match(errors, /workspace-note-actions.*caption no longer matches the reviewed pixel boundary/)
+  assert.match(errors, /workspace-super-toolbar.*evidence claims no longer match the reviewed pixel boundary/)
+  assert.match(errors, /workspace-collections.*target text no longer matches the reviewed visible controls/)
 })
 
 test('manifest validation binds every feature to a real asset, crop, and exact locator', () => {

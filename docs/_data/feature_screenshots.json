@@ -26,7 +26,21 @@
         "self-hosting-administration",
         "collaboration",
         "assistant-provider-settings",
-        "mcp-openclaw"
+        "mcp-openclaw",
+        "active-search-query",
+        "filtered-search-results",
+        "search-ranking",
+        "open-note-options-menu",
+        "note-option-actions",
+        "open-linked-items-panel",
+        "block-picker-open",
+        "inserted-block-types",
+        "ai-tab-content",
+        "tools-tab-content",
+        "populated-folders",
+        "nested-folders",
+        "populated-topics",
+        "nested-topics"
       ]
     }
   },
@@ -93,28 +107,34 @@
       "viewBox": "0 430 220 440",
       "width": 220,
       "height": 440,
-      "alt": "Lower navigation sidebar with the Views, Folders, and Topics collection sections",
-      "title": "Views and collections",
-      "caption": "The lower sidebar groups smart views, nested folders, and topics in separate visible sections.",
-      "evidenceClaims": ["views", "folders", "topics"],
+      "alt": "Lower navigation sidebar with populated Views and empty Folders and Topics sections",
+      "title": "Empty folder and topic entry points",
+      "caption": "The stored crop shows empty Folders and Topics sections, their empty-state text, and visible add controls; it does not depict populated or nested organization.",
+      "evidenceClaims": [
+        "views",
+        "empty-folders-section",
+        "empty-topics-section",
+        "folder-add-entry-point",
+        "topic-add-entry-point"
+      ],
       "targets": [
         {
           "x": 74,
-          "y": 531,
-          "text": "The Views section contains built-in smart collections.",
-          "locator": { "kind": "text", "value": "Views", "exact": true }
-        },
-        {
-          "x": 74,
           "y": 687,
-          "text": "The Folders section groups nested collections.",
+          "text": "The empty Folders heading is visible; no folder rows are present.",
           "locator": { "kind": "text", "value": "Folders", "exact": true }
         },
         {
-          "x": 74,
+          "x": 192,
+          "y": 687,
+          "text": "The visible plus control is the closed create-folder entry point.",
+          "locator": { "kind": "css", "value": "button[title^='Create a new folder']" }
+        },
+        {
+          "x": 192,
           "y": 769,
-          "text": "The Topics section exposes tag-based organization.",
-          "locator": { "kind": "text", "value": "Topics", "exact": true }
+          "text": "The visible plus control is the closed create-topic entry point.",
+          "locator": { "kind": "css", "value": "button[title^='Create a new topic']" }
         }
       ]
     },
@@ -152,32 +172,27 @@
     "workspace-note-results": {
       "capture": "workspace-overview",
       "variant": "card",
-      "viewBox": "220 138 400 300",
+      "viewBox": "220 0 400 300",
       "width": 400,
       "height": 300,
-      "alt": "Notes list with a selected Super note, note previews, and other seeded note titles",
-      "title": "Scan note results",
-      "caption": "The seeded list exposes titles and preview context before a note is opened.",
-      "evidenceClaims": ["note-list", "note-preview", "selected-note"],
+      "alt": "Notes list with an empty Search input and an unfiltered seeded note list",
+      "title": "Empty search entry point and unfiltered list",
+      "caption": "The visible Search field is empty and the seeded list is unfiltered; no active query, filtered results, ranking, or no-results state is depicted.",
+      "evidenceClaims": ["note-search-entry-point", "unfiltered-note-list", "selected-note"],
       "targets": [
+        {
+          "x": 412,
+          "y": 73,
+          "text": "The visible Search input is empty; no query has been entered.",
+          "locator": { "kind": "css", "value": "input[placeholder='Search...']" }
+        },
         {
           "x": 244,
           "y": 167,
-          "text": "The highlighted Super note demo row is open in the editor.",
+          "text": "The highlighted seeded row is visible in the unfiltered note list.",
           "locator": {
             "kind": "text",
             "value": "Super note demo",
-            "exact": true,
-            "within": ".content-list-item"
-          }
-        },
-        {
-          "x": 500,
-          "y": 185,
-          "text": "The selected row shows its seeded Self-hosted launch plan preview.",
-          "locator": {
-            "kind": "text",
-            "value": "Self-hosted launch plan",
             "exact": true,
             "within": ".content-list-item"
           }
@@ -190,27 +205,27 @@
       "viewBox": "620 0 820 165",
       "width": 820,
       "height": 165,
-      "alt": "Editor header with the Links area, linked-items button, and note-options menu",
-      "title": "Link and act on the current note",
-      "caption": "The header keeps relationship and per-note actions visible while editor tools change below it.",
-      "evidenceClaims": ["note-links", "linked-items-panel", "note-options"],
+      "alt": "Editor header with visible Links, Linked items, and closed Note options entry points",
+      "title": "Closed relationship and note-action entry points",
+      "caption": "The stored crop proves only the visible Links, Linked items, and closed Note options entry points; no panel, menu, or note action is open.",
+      "evidenceClaims": ["note-links-entry-point", "linked-items-entry-point", "closed-note-options-entry-point"],
       "targets": [
         {
           "x": 663,
           "y": 124,
-          "text": "Use the visible LINKS relationship area.",
+          "text": "The visible LINKS text is an entry point; no linked-items state is open.",
           "locator": { "kind": "text", "value": "LINKS", "exact": true }
         },
         {
           "x": 1278,
           "y": 93,
-          "text": "Open the Linked items panel button.",
+          "text": "The Linked items button is visible, but its panel is closed.",
           "locator": { "kind": "role", "value": "button", "name": "Linked items panel", "exact": true }
         },
         {
           "x": 1409,
           "y": 93,
-          "text": "Open the Note options menu button.",
+          "text": "The Note options button is visible, but its menu and actions are closed.",
           "locator": { "kind": "role", "value": "button", "name": "Note options menu", "exact": true }
         }
       ]
@@ -221,27 +236,27 @@
       "viewBox": "620 150 820 235",
       "width": 820,
       "height": 235,
-      "alt": "Super editor ribbon with the Home, AI, and Tools tabs visible",
-      "title": "Use the active Super editor",
-      "caption": "This crop documents the Super editor shown here; it does not imply that other editors share this ribbon.",
-      "evidenceClaims": ["super-editor", "super-ribbon"],
+      "alt": "Open Super editor with the Home tab selected and the AI and Tools tab labels visible",
+      "title": "Visible Super ribbon tabs",
+      "caption": "The stored pixels show an open Super note and the Home, AI, and Tools tab labels; they do not show the block picker, inserted block types, or tab behavior.",
+      "evidenceClaims": ["super-editor-open", "visible-home-tab", "visible-ai-tab", "visible-tools-tab"],
       "targets": [
         {
           "x": 660,
           "y": 181,
-          "text": "Open the Home formatting ribbon.",
+          "text": "The visible Home ribbon tab is selected.",
           "locator": { "kind": "role", "value": "tab", "name": "Home", "exact": true }
         },
         {
           "x": 800,
           "y": 181,
-          "text": "Open the AI ribbon for assistant actions.",
+          "text": "The visible AI tab is closed; its actions are not shown.",
           "locator": { "kind": "role", "value": "tab", "name": "AI", "exact": true }
         },
         {
           "x": 860,
           "y": 181,
-          "text": "Open the Tools ribbon for editor utilities.",
+          "text": "The visible Tools tab is closed; its utilities are not shown.",
           "locator": { "kind": "role", "value": "tab", "name": "Tools", "exact": true }
         }
       ]

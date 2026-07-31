@@ -232,7 +232,10 @@ onboarding, client-platform, and in-app guidance. It always checks the current
 asset digest. With complete Git history it also checks that the recorded source
 commit contains the exact same PNG and timestamp; shallow source archives skip
 only that historical lookup. This offline gate does not claim it reran live
-locators.
+locators. The onboarding evidence gate additionally binds each reviewed crop to
+its exact section, pixel-boundary disclaimer, caption, view box, bounded claims,
+and numbered target text so a closed or empty UI state cannot be moved beside a
+claim about an open or populated state.
 
 ## Deeper End-to-End Gates
 
