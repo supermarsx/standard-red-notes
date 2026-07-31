@@ -177,6 +177,8 @@ import {
   ControllerContainerInterface,
   MapperInterface,
   PinnedHttpTransport,
+  RuntimeLogLevelApplier,
+  ServerSettingsLogLevelResolver,
   SharedVaultUser,
 } from '@standardnotes/domain-core'
 import { SessionTracePersistenceMapper } from '../Mapping/SessionTracePersistenceMapper'
@@ -494,7 +496,6 @@ import {
 } from '../Infra/Registration/EnvSignupLimitsConfigResolver'
 import { SignupRateLimiterInterface } from '../Domain/Registration/SignupRateLimiterInterface'
 import { RedisSignupRateLimiter } from '../Infra/Registration/RedisSignupRateLimiter'
-import { RuntimeLogLevelApplier } from '../Infra/Logging/RuntimeLogLevelApplier'
 import { CSVFileReaderInterface } from '../Domain/CSV/CSVFileReaderInterface'
 import { S3CsvFileReader } from '../Infra/S3/S3CsvFileReader'
 import { DeleteAccountsFromCSVFile } from '../Domain/UseCase/DeleteAccountsFromCSVFile/DeleteAccountsFromCSVFile'
@@ -567,27 +568,17 @@ export class ContainerConfigLoader {
     }
     container.bind<winston.Logger>(TYPES.Auth_Logger).toConstantValue(logger)
 
-    // Standard Red Notes: apply the admin-set runtime log verbosity
-    // (`logging.level` in the shared ServerSettings overlay) WITHOUT a restart.
-    // The applier reads the same overlay file the gateway admin surface writes,
-    // polls every 30s, and is DEFENSIVE — it never throws during bootstrap and
-    // its interval is unref'd so it can never keep the process alive. Skipped for
-    // the short-lived CLI (it would otherwise poll for the life of a one-shot
-    // command). Precedence: persisted logging.level > env LOG_LEVEL > 'info'.
-    if (this.mode !== 'cli') {
-      try {
-        const logLevelOverlayReader = new ServerSettingsOverlayReader(
+    // Server and worker processes own their logger and poll the shared overlay.
+    // The short-lived CLI does not poll, and home-server injects a named logger
+    // covered by its one grouped poller.
+    if (this.mode !== 'cli' && !configuration?.logger) {
+      new RuntimeLogLevelApplier(
+        logger,
+        new ServerSettingsLogLevelResolver(
           env.get('SERVER_SETTINGS_PATH', true) || undefined,
-        )
-        const logLevelApplier = new RuntimeLogLevelApplier(
-          logger,
-          () => logLevelOverlayReader.loggingLevel(),
-          env.get('LOG_LEVEL', true) || 'info',
-        )
-        logLevelApplier.start()
-      } catch {
-        // A failure to start the log-level poller must never take down bootstrap.
-      }
+          env.get('LOG_LEVEL', true) || undefined,
+        ),
+      ).start()
     }
 
     container.bind<CryptoNode>(TYPES.Auth_CryptoNode).toConstantValue(new CryptoNode())

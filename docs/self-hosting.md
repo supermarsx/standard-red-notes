@@ -179,7 +179,9 @@ to boot otherwise).
 ### Optional variables
 
 Left commented in `.env`; `docker-compose.yml` applies sensible defaults when
-they're unset. These include logging (`LOG_LEVEL`), cookie tuning
+they're unset. These include logging (`LOG_LEVEL`), the shared persisted admin
+overlay (`SERVER_SETTINGS_PATH`, normally leave it inside the mounted
+`server-data` volume), cookie tuning
 (`COOKIE_SAME_SITE`, `COOKIE_PARTITIONED`), feature/entitlement mode
 (`STANDARD_RED_FEATURES_MODE`, `STANDARD_RED_ENTITLEMENT_MODE`, defaulting to
 fully-included), revision retention (`REVISIONS_RETENTION_DAYS`,

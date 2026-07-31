@@ -143,8 +143,9 @@ export interface EnvSettingsBaseline {
   registrationInvitesPerUser?: number
   /**
    * Standard Red Notes: RUNTIME LOG VERBOSITY env baseline (LOG_LEVEL). The
-   * gateway persists + views `logging.level`; a poller applies the effective
-   * level to the live logger. undefined = env var unset (falls through to 'info').
+   * gateway persists + views `logging.level`; shared pollers apply the effective
+   * level to every deployed logger. undefined = env var unset (falls through to
+   * 'info').
    */
   logLevel?: string
   /**

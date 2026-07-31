@@ -62,6 +62,8 @@ import {
   ControllerContainer,
   ControllerContainerInterface,
   MapperInterface,
+  RuntimeLogLevelApplier,
+  ServerSettingsLogLevelResolver,
   SharedVaultUser,
 } from '@standardnotes/domain-core'
 import { BaseItemsController } from '../Infra/InversifyExpressUtils/Base/BaseItemsController'
@@ -224,6 +226,19 @@ export class ContainerConfigLoader {
       })
     }
     container.bind<winston.Logger>(TYPES.Sync_Logger).toConstantValue(logger)
+
+    // Both the supervisord server and worker run this loader in separate
+    // processes, so each polls the same persisted overlay. Home-server injects
+    // named loggers and applies one grouped poller at the outer process level.
+    if (!configuration?.logger) {
+      new RuntimeLogLevelApplier(
+        logger,
+        new ServerSettingsLogLevelResolver(
+          env.get('SERVER_SETTINGS_PATH', true) || undefined,
+          env.get('LOG_LEVEL', true) || undefined,
+        ),
+      ).start()
+    }
 
     const appDataSource = new AppDataSource({ env, runMigrations: this.mode === 'server' })
     await appDataSource.initialize()

@@ -1,4 +1,10 @@
-import { ControllerContainer, ControllerContainerInterface, MapperInterface } from '@standardnotes/domain-core'
+import {
+  ControllerContainer,
+  ControllerContainerInterface,
+  MapperInterface,
+  RuntimeLogLevelApplier,
+  ServerSettingsLogLevelResolver,
+} from '@standardnotes/domain-core'
 import { Container, ResolutionContext } from 'inversify'
 import { Repository } from 'typeorm'
 import * as winston from 'winston'
@@ -99,6 +105,18 @@ export class ContainerConfigLoader {
       })
     }
     container.bind<winston.Logger>(TYPES.Revisions_Logger).toConstantValue(logger)
+
+    // A supervisord server/worker process owns this logger. Home-server injects
+    // named loggers and uses its one grouped poller, avoiding duplicate timers.
+    if (!configuration?.logger) {
+      new RuntimeLogLevelApplier(
+        logger,
+        new ServerSettingsLogLevelResolver(
+          env.get('SERVER_SETTINGS_PATH', true) || undefined,
+          env.get('LOG_LEVEL', true) || undefined,
+        ),
+      ).start()
+    }
 
     container.bind<TimerInterface>(TYPES.Revisions_Timer).toDynamicValue(() => new Timer())
 

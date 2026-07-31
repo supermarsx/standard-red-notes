@@ -12,10 +12,70 @@ import {
   validatePairingComposeContract,
   validatePairingComposeSource,
   validatePairingDockerfileContract,
+  validateRuntimeLogLevelBootContract,
+  validateRuntimeLogLevelDeploymentContract,
   validateServerDockerfileContract,
   validateSingleEntrypointAssistantPropagation,
   validateSingleEntrypointAuthStepUpPropagation,
 } from "./validate-docker-hardening.mjs";
+
+const validRuntimeLogLevelDeployment = {
+  multiComposeSource:
+    "SERVER_SETTINGS_PATH: ${SERVER_SETTINGS_PATH:-/opt/server/packages/api-gateway/data/server-settings.json}",
+  singleComposeSource:
+    "SERVER_SETTINGS_PATH: ${SERVER_SETTINGS_PATH:-/data/server-settings.json}",
+  multiEntrypointSource: [
+    "API_GATEWAY",
+    "AUTH_SERVER",
+    "SYNCING_SERVER",
+    "FILES_SERVER",
+    "REVISIONS_SERVER",
+  ]
+    .flatMap((prefix) => [
+      `export ${prefix}_SERVER_SETTINGS_PATH="$SERVER_SETTINGS_PATH"`,
+      `export ${prefix}_LOG_LEVEL="\${LOG_LEVEL:-info}"`,
+    ])
+    .join("\n"),
+  singleEntrypointSource:
+    'put SERVER_SETTINGS_PATH "${SERVER_SETTINGS_PATH:-${DATA_DIR}/server-settings.json}"',
+};
+
+const validRuntimeLogLevelBoot = {
+  serviceContainerSources: Object.fromEntries(
+    ["api-gateway", "auth", "syncing-server", "files", "revisions"].map(
+      (serviceName) => [
+        serviceName,
+        `${serviceName === "auth" ? "if (this.mode !== 'cli' && " : "if ("}!configuration?.logger) {
+          new RuntimeLogLevelApplier(logger, new ServerSettingsLogLevelResolver(path, baseline)).start()
+        }`,
+      ],
+    ),
+  ),
+  homeServerSource: `
+    private loggerNames = ['auth-server', 'syncing-server', 'revisions-server', 'files-server', 'api-gateway', 'home-server']
+    this.loggerNames.map((name) => name)
+    this.runtimeLogLevelApplier.start()
+    this.runtimeLogLevelApplier?.stop()
+  `,
+  domainCoreIndexSource: "export * from './Runtime/Logging/RuntimeLogLevel'",
+  serverSettingsStoreSource:
+    "export const PERSISTED_LOG_LEVELS = RUNTIME_LOG_LEVELS",
+  authOverlayReaderSource: "class ServerSettingsOverlayReader {}",
+  multiSupervisorSource: [
+    "syncing-server",
+    "syncing-server-worker",
+    "auth",
+    "auth-worker",
+    "files",
+    "files-worker",
+    "revisions",
+    "revisions-worker",
+    "api-gateway",
+  ]
+    .map((name) => `[program:${name}]`)
+    .join("\n"),
+  singleSupervisorSource: "[program:home-server]\n[program:nginx]",
+};
 
 function composeFixture() {
   const hardened = {
@@ -125,6 +185,59 @@ test("accepts an installed executable srn-admin wrapper", () => {
     `),
     [],
   );
+});
+
+test("requires one runtime settings path and environment baseline across every deployed server process", () => {
+  assert.deepEqual(
+    validateRuntimeLogLevelDeploymentContract(validRuntimeLogLevelDeployment),
+    [],
+  );
+
+  const broken = structuredClone(validRuntimeLogLevelDeployment);
+  broken.multiEntrypointSource = broken.multiEntrypointSource
+    .replace(
+      'export FILES_SERVER_SERVER_SETTINGS_PATH="$SERVER_SETTINGS_PATH"',
+      "",
+    )
+    .replace(
+      'export REVISIONS_SERVER_LOG_LEVEL="${LOG_LEVEL:-info}"',
+      'export REVISIONS_SERVER_LOG_LEVEL="info"',
+    );
+  broken.singleEntrypointSource =
+    'put SERVER_SETTINGS_PATH "${DATA_DIR}/server-settings.json"';
+
+  assert.deepEqual(validateRuntimeLogLevelDeploymentContract(broken), [
+    "multi entrypoint: must write the shared SERVER_SETTINGS_PATH into FILES_SERVER package env",
+    "multi entrypoint: REVISIONS_SERVER LOG_LEVEL must fall back to the shared process baseline",
+    "single entrypoint: must preserve an explicit SERVER_SETTINGS_PATH and otherwise use DATA_DIR",
+  ]);
+});
+
+test("locks runtime log-level boot wiring to the actual supervisor topologies", () => {
+  assert.deepEqual(
+    validateRuntimeLogLevelBootContract(validRuntimeLogLevelBoot),
+    [],
+  );
+
+  const broken = structuredClone(validRuntimeLogLevelBoot);
+  broken.serviceContainerSources.files = "const logger = createLogger()";
+  broken.homeServerSource = broken.homeServerSource.replace(
+    "this.runtimeLogLevelApplier?.stop()",
+    "",
+  );
+  broken.multiSupervisorSource += "\n[program:websockets]";
+  broken.serverSettingsStoreSource =
+    "export const PERSISTED_LOG_LEVELS = ['info', 'debug']";
+  broken.authOverlayReaderSource = "static VALID_LOG_LEVELS = ['info']";
+
+  assert.deepEqual(validateRuntimeLogLevelBootContract(broken), [
+    "multi supervisor: runtime logging contract must track exact deployed programs (got syncing-server, syncing-server-worker, auth, auth-worker, files, files-worker, revisions, revisions-worker, api-gateway, websockets)",
+    "files container: must use the shared runtime log-level reader and applier",
+    "files container: must defer injected loggers to the home-server poller",
+    "home-server: missing runtime poller lifecycle contract this.runtimeLogLevelApplier?.stop()",
+    "api-gateway settings: persisted log levels must use the shared runtime list",
+    "auth overlay: must not retain a second runtime log-level validation policy",
+  ]);
 });
 
 test("rejects a missing or non-executable srn-admin wrapper", () => {

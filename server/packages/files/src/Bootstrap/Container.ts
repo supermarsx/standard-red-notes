@@ -4,6 +4,7 @@ import { SNSClient, SNSClientConfig } from '@aws-sdk/client-sns'
 import { SQSClient, SQSClientConfig } from '@aws-sdk/client-sqs'
 import { S3Client, S3ClientConfig } from '@aws-sdk/client-s3'
 import { Container } from 'inversify'
+import { RuntimeLogLevelApplier, ServerSettingsLogLevelResolver } from '@standardnotes/domain-core'
 
 import { Env } from './Env'
 import TYPES from './Types'
@@ -111,6 +112,19 @@ export class ContainerConfigLoader {
       logger = this.createLogger({ env })
     }
     container.bind<winston.Logger>(TYPES.Files_Logger).toConstantValue(logger)
+
+    // Standalone server and worker processes each own a logger and poll the
+    // gateway-owned overlay. The bundled home-server injects its named logger
+    // and applies one shared poller to the complete logger set instead.
+    if (!configuration?.logger) {
+      new RuntimeLogLevelApplier(
+        logger,
+        new ServerSettingsLogLevelResolver(
+          env.get('SERVER_SETTINGS_PATH', true) || undefined,
+          env.get('LOG_LEVEL', true) || undefined,
+        ),
+      ).start()
+    }
 
     container.bind<TimerInterface>(TYPES.Files_Timer).toConstantValue(new Timer())
 

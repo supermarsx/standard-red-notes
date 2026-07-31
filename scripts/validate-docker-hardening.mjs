@@ -49,6 +49,13 @@ const AUTH_STEP_UP_THRESHOLD_ENV_KEYS = Object.freeze([
   "APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_2",
   "APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_3",
 ]);
+const RUNTIME_LOG_PACKAGE_PREFIXES = Object.freeze([
+  "API_GATEWAY",
+  "AUTH_SERVER",
+  "SYNCING_SERVER",
+  "FILES_SERVER",
+  "REVISIONS_SERVER",
+]);
 
 function upperList(value) {
   return (Array.isArray(value) ? value : []).map((item) =>
@@ -291,6 +298,199 @@ export function validateSingleEntrypointAuthStepUpPropagation(
       ? []
       : [`single entrypoint: must write ${key} with a secure default`];
   });
+}
+
+export function validateRuntimeLogLevelDeploymentContract({
+  multiComposeSource,
+  singleComposeSource,
+  multiEntrypointSource,
+  singleEntrypointSource,
+}) {
+  const errors = [];
+  const multiCompose = String(multiComposeSource);
+  const singleCompose = String(singleComposeSource);
+  const multiEntrypoint = String(multiEntrypointSource);
+  const singleEntrypoint = String(singleEntrypointSource);
+
+  if (
+    !multiCompose.includes(
+      "SERVER_SETTINGS_PATH: ${SERVER_SETTINGS_PATH:-/opt/server/packages/api-gateway/data/server-settings.json}",
+    )
+  ) {
+    errors.push(
+      "multi compose: SERVER_SETTINGS_PATH must be operator-overridable and default inside server-data",
+    );
+  }
+  if (
+    !singleCompose.includes(
+      "SERVER_SETTINGS_PATH: ${SERVER_SETTINGS_PATH:-/data/server-settings.json}",
+    )
+  ) {
+    errors.push(
+      "single compose: SERVER_SETTINGS_PATH must be operator-overridable and default inside single-data",
+    );
+  }
+
+  for (const prefix of RUNTIME_LOG_PACKAGE_PREFIXES) {
+    if (
+      !multiEntrypoint.includes(
+        `export ${prefix}_SERVER_SETTINGS_PATH="$SERVER_SETTINGS_PATH"`,
+      )
+    ) {
+      errors.push(
+        `multi entrypoint: must write the shared SERVER_SETTINGS_PATH into ${prefix} package env`,
+      );
+    }
+    if (
+      !multiEntrypoint.includes(
+        `export ${prefix}_LOG_LEVEL="\${LOG_LEVEL:-info}"`,
+      )
+    ) {
+      errors.push(
+        `multi entrypoint: ${prefix} LOG_LEVEL must fall back to the shared process baseline`,
+      );
+    }
+  }
+
+  if (
+    !singleEntrypoint.includes(
+      'put SERVER_SETTINGS_PATH "${SERVER_SETTINGS_PATH:-${DATA_DIR}/server-settings.json}"',
+    )
+  ) {
+    errors.push(
+      "single entrypoint: must preserve an explicit SERVER_SETTINGS_PATH and otherwise use DATA_DIR",
+    );
+  }
+
+  return errors;
+}
+
+function supervisorPrograms(source) {
+  return [...String(source).matchAll(/^\s*\[program:([^\]]+)\]\s*$/gm)].map(
+    (match) => match[1],
+  );
+}
+
+export function validateRuntimeLogLevelBootContract({
+  serviceContainerSources,
+  homeServerSource,
+  domainCoreIndexSource,
+  serverSettingsStoreSource,
+  authOverlayReaderSource,
+  multiSupervisorSource,
+  singleSupervisorSource,
+}) {
+  const errors = [];
+  const expectedMultiPrograms = [
+    "syncing-server",
+    "syncing-server-worker",
+    "auth",
+    "auth-worker",
+    "files",
+    "files-worker",
+    "revisions",
+    "revisions-worker",
+    "api-gateway",
+  ];
+  const actualMultiPrograms = supervisorPrograms(multiSupervisorSource);
+  if (
+    JSON.stringify(actualMultiPrograms) !==
+    JSON.stringify(expectedMultiPrograms)
+  ) {
+    errors.push(
+      `multi supervisor: runtime logging contract must track exact deployed programs (got ${actualMultiPrograms.join(", ") || "none"})`,
+    );
+  }
+
+  const actualSinglePrograms = supervisorPrograms(singleSupervisorSource);
+  if (
+    JSON.stringify(actualSinglePrograms) !==
+    JSON.stringify(["home-server", "nginx"])
+  ) {
+    errors.push(
+      `single supervisor: expected home-server plus nginx topology (got ${actualSinglePrograms.join(", ") || "none"})`,
+    );
+  }
+
+  for (const [serviceName, sourceValue] of Object.entries(
+    serviceContainerSources ?? {},
+  )) {
+    const source = String(sourceValue);
+    if (
+      !source.includes("RuntimeLogLevelApplier") ||
+      !source.includes("ServerSettingsLogLevelResolver") ||
+      !source.includes("new RuntimeLogLevelApplier(") ||
+      !source.includes("new ServerSettingsLogLevelResolver(")
+    ) {
+      errors.push(
+        `${serviceName} container: must use the shared runtime log-level reader and applier`,
+      );
+    }
+    if (!source.includes("!configuration?.logger")) {
+      errors.push(
+        `${serviceName} container: must defer injected loggers to the home-server poller`,
+      );
+    }
+  }
+
+  if (!String(serviceContainerSources?.auth).includes("this.mode !== 'cli'")) {
+    errors.push("auth container: short-lived CLI mode must not start a poller");
+  }
+
+  const homeServer = String(homeServerSource);
+  for (const loggerName of [
+    "auth-server",
+    "syncing-server",
+    "revisions-server",
+    "files-server",
+    "api-gateway",
+    "home-server",
+  ]) {
+    if (!homeServer.includes(`'${loggerName}'`)) {
+      errors.push(
+        `home-server: grouped runtime poller must include ${loggerName}`,
+      );
+    }
+  }
+  for (const requirement of [
+    "this.loggerNames.map",
+    "this.runtimeLogLevelApplier.start()",
+    "this.runtimeLogLevelApplier?.stop()",
+  ]) {
+    if (!homeServer.includes(requirement)) {
+      errors.push(
+        `home-server: missing runtime poller lifecycle contract ${requirement}`,
+      );
+    }
+  }
+
+  if (
+    !String(domainCoreIndexSource).includes(
+      "export * from './Runtime/Logging/RuntimeLogLevel'",
+    )
+  ) {
+    errors.push(
+      "domain-core: shared runtime log-level contract must be exported",
+    );
+  }
+  if (
+    !String(serverSettingsStoreSource).includes(
+      "export const PERSISTED_LOG_LEVELS = RUNTIME_LOG_LEVELS",
+    )
+  ) {
+    errors.push(
+      "api-gateway settings: persisted log levels must use the shared runtime list",
+    );
+  }
+  if (
+    /VALID_LOG_LEVELS|loggingLevel\s*\(/.test(String(authOverlayReaderSource))
+  ) {
+    errors.push(
+      "auth overlay: must not retain a second runtime log-level validation policy",
+    );
+  }
+
+  return errors;
 }
 
 export function validatePairingComposeSource(
@@ -569,12 +769,92 @@ export function runDockerHardeningValidation(argv = process.argv.slice(2)) {
     path.join(repositoryRoot, "server", "docker", "single", "entrypoint.sh"),
     "utf8",
   );
+  const multiEntrypoint = readFileSync(
+    path.join(repositoryRoot, "server", "docker", "docker-entrypoint.sh"),
+    "utf8",
+  );
   const multiNginx = readFileSync(
     path.join(repositoryRoot, "app", "docker", "nginx.conf"),
     "utf8",
   );
   const singleNginx = readFileSync(
     path.join(repositoryRoot, "app", "docker", "single", "nginx.conf"),
+    "utf8",
+  );
+  const serviceContainerSources = Object.fromEntries(
+    ["api-gateway", "auth", "syncing-server", "files", "revisions"].map(
+      (packageName) => [
+        packageName,
+        readFileSync(
+          path.join(
+            repositoryRoot,
+            "server",
+            "packages",
+            packageName,
+            "src",
+            "Bootstrap",
+            "Container.ts",
+          ),
+          "utf8",
+        ),
+      ],
+    ),
+  );
+  const homeServerSource = readFileSync(
+    path.join(
+      repositoryRoot,
+      "server",
+      "packages",
+      "home-server",
+      "src",
+      "Server",
+      "HomeServer.ts",
+    ),
+    "utf8",
+  );
+  const domainCoreIndexSource = readFileSync(
+    path.join(
+      repositoryRoot,
+      "server",
+      "packages",
+      "domain-core",
+      "src",
+      "index.ts",
+    ),
+    "utf8",
+  );
+  const serverSettingsStoreSource = readFileSync(
+    path.join(
+      repositoryRoot,
+      "server",
+      "packages",
+      "api-gateway",
+      "src",
+      "Service",
+      "ServerSettings",
+      "ServerSettingsStore.ts",
+    ),
+    "utf8",
+  );
+  const authOverlayReaderSource = readFileSync(
+    path.join(
+      repositoryRoot,
+      "server",
+      "packages",
+      "auth",
+      "src",
+      "Infra",
+      "FS",
+      "ServerSettingsOverlayReader.ts",
+    ),
+    "utf8",
+  );
+  const multiSupervisorSource = readFileSync(
+    path.join(repositoryRoot, "server", "docker", "supervisord.conf"),
+    "utf8",
+  );
+  const singleSupervisorSource = readFileSync(
+    path.join(repositoryRoot, "server", "docker", "single", "supervisord.conf"),
     "utf8",
   );
   const multiConfig = dockerJson(["compose", "config", "--format", "json"]);
@@ -616,6 +896,21 @@ export function runDockerHardeningValidation(argv = process.argv.slice(2)) {
       label: "single compose",
     }),
     ...validateSingleEntrypointAuthStepUpPropagation(singleEntrypoint),
+    ...validateRuntimeLogLevelDeploymentContract({
+      multiComposeSource,
+      singleComposeSource,
+      multiEntrypointSource: multiEntrypoint,
+      singleEntrypointSource: singleEntrypoint,
+    }),
+    ...validateRuntimeLogLevelBootContract({
+      serviceContainerSources,
+      homeServerSource,
+      domainCoreIndexSource,
+      serverSettingsStoreSource,
+      authOverlayReaderSource,
+      multiSupervisorSource,
+      singleSupervisorSource,
+    }),
     ...validatePairingComposeSource(multiComposeSource, {
       label: "multi compose",
       defaultTokenPath:

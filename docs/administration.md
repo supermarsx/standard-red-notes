@@ -39,14 +39,14 @@ unattended administration.
 
 ## Web console tabs
 
-| Tab | Main capabilities |
-| --- | --- |
-| **Users** | Paginated/filterable users; bulk ban/unban and admin role actions; per-user feature flags, AI limits, realtime, collaboration, OCR, workflows, backups, CalDAV, storage, suspension, MFA reset, quota repair, and deletion |
-| **Groups & roles** | Roles, permission catalog, editable role permissions, groups, group membership, and an effective-permissions simulator |
-| **Server** | Health and service lifecycle, feature master switches, proxy/IP behavior, registration and approval, account limits, OCR/workflows settings, and log level |
-| **AI** | Anthropic/OpenAI/Ollama settings, provider endpoints, API-key status, and request/token limits |
-| **Logs** | Service logs and the administrative/security audit log |
-| **Security** | Security overview, rate-limit tiers, adaptive escalation, IP lists, locked accounts, and links to related user/server controls |
+| Tab                | Main capabilities                                                                                                                                                                                                          |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Users**          | Paginated/filterable users; bulk ban/unban and admin role actions; per-user feature flags, AI limits, realtime, collaboration, OCR, workflows, backups, CalDAV, storage, suspension, MFA reset, quota repair, and deletion |
+| **Groups & roles** | Roles, permission catalog, editable role permissions, groups, group membership, and an effective-permissions simulator                                                                                                     |
+| **Server**         | Health and service lifecycle, feature master switches, proxy/IP behavior, registration and approval, account limits, OCR/workflows settings, and log level                                                                 |
+| **AI**             | Anthropic/OpenAI/Ollama settings, provider endpoints, API-key status, and request/token limits                                                                                                                             |
+| **Logs**           | Service logs and the administrative/security audit log                                                                                                                                                                     |
+| **Security**       | Security overview, rate-limit tiers, adaptive escalation, IP lists, locked accounts, and links to related user/server controls                                                                                             |
 
 Some controls depend on the deployed server profile. The UI should show a
 feature as unavailable when the backing endpoint or lifecycle mechanism is not
@@ -146,6 +146,33 @@ After any lifecycle action:
 2. verify authentication, sync, files, revisions, and WebSockets;
 3. inspect bounded logs; and
 4. confirm background workers are processing events.
+
+## Runtime log level
+
+The Server tab's **Log level** control is live. A persisted
+`logging.level` wins over that process's `LOG_LEVEL` environment baseline; if
+neither is valid, the safe baseline is `info`. Changes are polled and reach all
+deployed loggers within about 30 seconds without restarting the stack.
+
+In the standard multi-service image this includes the API gateway, auth server
+and worker, syncing server and worker, files server and worker, and revisions
+server and worker. The realtime gateway runs inside the API gateway, so it uses
+the gateway logger. In the all-in-one image one poll updates the named auth,
+syncing, files, revisions, API gateway, and home-server loggers.
+
+Every process must read the same `SERVER_SETTINGS_PATH`. The supplied Compose
+files default that file inside the persistent `server-data` or `single-data`
+volume and the entrypoints propagate the exact path to every package. If you
+override the path, use an in-container path and mount it persistently yourself.
+Removing, corrupting, or setting an unknown level in the overlay makes the
+reader fall back to the environment baseline; it never disables logging or
+crashes a service.
+
+{% include safety-alert.html
+  level="warning"
+  title="Verbose logs can expose operational metadata"
+  body="Use debug, verbose, or silly only for a bounded investigation. Restrict log access, avoid sharing raw captures, review redaction, and return to info or warn when the incident is resolved. Runtime level changes affect workers as well as request-serving processes."
+%}
 
 ## Security and anti-abuse
 

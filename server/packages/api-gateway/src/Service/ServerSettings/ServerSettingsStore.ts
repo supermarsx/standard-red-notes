@@ -5,6 +5,7 @@ import {
   isSafeRecordKey,
   SecureJsonFileStore,
 } from '../../Infra/SecureJsonFileStore'
+import { RUNTIME_LOG_LEVELS } from '@standardnotes/domain-core'
 import {
   ASSIGNABLE_ROLE_NAMES,
   ASSISTANT_PROFILE_LIMITS,
@@ -194,11 +195,11 @@ export interface PersistedRegistrationSettings {
 
 /**
  * Standard Red Notes: RUNTIME LOG VERBOSITY. The api-gateway PERSISTS + VIEWS
- * `logging.level`; a small in-process poller (RuntimeLogLevelApplier) re-reads it
- * on an interval and mutates the live winston logger + transport levels, so the
- * server's log verbosity changes WITHOUT a restart. The auth server reads the
- * SAME overlay key and runs its own poller. Key name/nesting is a CONTRACT shared
- * with auth — keep it in sync. Absent = fall back to env LOG_LEVEL then 'info'.
+ * `logging.level`; the shared runtime log-level reader/applier re-reads it on an
+ * interval and mutates each deployed Winston logger + transport levels, so the
+ * server's log verbosity changes WITHOUT a restart. Key name/nesting is a
+ * cross-package contract. Absent/invalid = that process's env LOG_LEVEL, then
+ * 'info'.
  */
 export interface PersistedLoggingSettings {
   /** One of error|warn|info|http|verbose|debug|silly. */
@@ -296,7 +297,8 @@ const ISO_DATE_PATTERN =
   /^\d{4}-\d{2}-\d{2}(?:[Tt ][0-2]\d:[0-5]\d(?::[0-5]\d(?:\.\d{1,9})?)?(?:[Zz]|[+-][0-2]\d:[0-5]\d)?)?$/
 
 export const PERSISTED_REGISTRATION_ASSIGNABLE_ROLES = ['CORE_USER', 'PRO_USER', 'VAULTS_USER'] as const
-export const PERSISTED_LOG_LEVELS = ['error', 'warn', 'info', 'http', 'verbose', 'debug', 'silly'] as const
+/** Shared with every runtime logger; persisted validation must never drift. */
+export const PERSISTED_LOG_LEVELS = RUNTIME_LOG_LEVELS
 export const SERVER_SETTINGS_BOUNDS = {
   proofOfWorkDifficulty: { minimum: 0, maximum: 32 },
   proofOfWorkAdaptiveThreshold: { minimum: 0, maximum: 100 },

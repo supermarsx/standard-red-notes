@@ -16,10 +16,10 @@ import { SignupLimitsConfigOverlay } from '../../Domain/Registration/SignupLimit
  *
  * WHY IT LIVES HERE: the Nextcloud-backups master gate is ENFORCED auth-side
  * (TriggerNextcloudBackupForAllUsers), but the admin-set overlay is persisted
- * gateway-side. In the single-container image both services share a filesystem,
- * so the cleanest minimal bridge is reading the same file: the docker
- * entrypoint points both services' SERVER_SETTINGS_PATH at one path. When the
- * env var is unset (multi-service topologies without a shared volume, older
+ * gateway-side. In the supplied images all services share a filesystem, so the
+ * cleanest minimal bridge is reading the same file: the docker entrypoint points
+ * every deployed process's SERVER_SETTINGS_PATH at one path. When the env var
+ * is unset (multi-service topologies without a shared volume, older
  * containers), every read returns `undefined` and the caller falls back to the
  * NEXTCLOUD_BACKUPS_ENABLED env exactly as before.
  *
@@ -30,9 +30,6 @@ import { SignupLimitsConfigOverlay } from '../../Domain/Registration/SignupLimit
  * file degrades to `undefined`.
  */
 export class ServerSettingsOverlayReader {
-  /** Known winston levels an admin may persist under `logging.level`. */
-  static readonly VALID_LOG_LEVELS = ['error', 'warn', 'info', 'http', 'verbose', 'debug', 'silly']
-
   constructor(private readonly filePath: string | undefined) {}
 
   async nextcloudBackupsEnabled(): Promise<boolean | undefined> {
@@ -185,24 +182,6 @@ export class ServerSettingsOverlayReader {
     }
 
     return Object.keys(result).length > 0 ? result : undefined
-  }
-
-  /**
-   * Reads the admin-set runtime log level from `logging.level`. Returns the raw
-   * string an admin has persisted (validated to a known winston level), or
-   * undefined when unset/invalid so the caller falls through to env LOG_LEVEL
-   * then 'info'. Never throws.
-   */
-  async loggingLevel(): Promise<string | undefined> {
-    const overlay = await this.read()
-    const logging = overlay?.logging as { level?: unknown } | undefined
-    const level = logging?.level
-    if (typeof level !== 'string') {
-      return undefined
-    }
-    const normalized = level.trim().toLowerCase()
-
-    return ServerSettingsOverlayReader.VALID_LOG_LEVELS.includes(normalized) ? normalized : undefined
   }
 
   private async read(): Promise<Record<string, unknown> | undefined> {

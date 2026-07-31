@@ -86,8 +86,9 @@ put VALET_TOKEN_SECRET "${VALET_TOKEN_SECRET}"
 # through nginx at /files. Defaults to this container's published origin.
 put FILES_SERVER_URL "${PUBLIC_FILES_SERVER_URL:-http://localhost:${APP_PORT:-3001}/files}"
 
-# Persist admin overrides + feature JSON stores on the data volume.
-put SERVER_SETTINGS_PATH "${DATA_DIR}/server-settings.json"
+# Persist admin overrides + feature JSON stores on the data volume. Honor an
+# explicit operator path; persistence then requires mounting that path too.
+put SERVER_SETTINGS_PATH "${SERVER_SETTINGS_PATH:-${DATA_DIR}/server-settings.json}"
 put CALDAV_DATA_PATH "${DATA_DIR}/caldav"
 put REMINDER_DELIVERY_DATA_PATH "${DATA_DIR}/reminder-delivery"
 

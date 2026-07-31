@@ -53,6 +53,9 @@ services:
 
       # --- Core -----------------------------------------------------------------
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      # Shared admin overlay for all named loggers in the home-server process.
+      # A custom in-container path also needs a matching persistent mount.
+      SERVER_SETTINGS_PATH: ${SERVER_SETTINGS_PATH:-/data/server-settings.json}
       # Comma-separated emails granted the admin role (in-app Admin panel).
       ADMIN_EMAILS: ${ADMIN_EMAILS:-}
       # Current SRN clients can provide password (v2) and TOTP (v3) step-up proof.

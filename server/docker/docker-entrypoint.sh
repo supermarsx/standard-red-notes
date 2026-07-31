@@ -127,22 +127,25 @@ fi
 
 # Standard Red Notes: runtime-configurable server settings (admin pane).
 # The api-gateway persists admin-set overrides (AI provider config, update-check
-# URL, Nextcloud-backups gate) to this JSON file; PRECEDENCE: persisted wins
-# over env. The AUTH service reads the SAME file for the Nextcloud-backups
-# master gate, so both services must agree on the path. Mount/point it at a
-# volume if the overrides should survive container recreation.
+# URL, security policy, and runtime log level) to this JSON file; PRECEDENCE:
+# persisted wins over env. Every supervisord server/worker process reads the
+# SAME file, so every generated per-package .env must carry the exact path.
+# Mount/point a custom path at a volume if it should survive recreation.
 if [ -z "$SERVER_SETTINGS_PATH" ]; then
   export SERVER_SETTINGS_PATH=/opt/server/packages/api-gateway/data/server-settings.json
 fi
-export API_GATEWAY_SERVER_SETTINGS_PATH=$SERVER_SETTINGS_PATH
-export AUTH_SERVER_SERVER_SETTINGS_PATH=$SERVER_SETTINGS_PATH
+export API_GATEWAY_SERVER_SETTINGS_PATH="$SERVER_SETTINGS_PATH"
+export AUTH_SERVER_SERVER_SETTINGS_PATH="$SERVER_SETTINGS_PATH"
+export SYNCING_SERVER_SERVER_SETTINGS_PATH="$SERVER_SETTINGS_PATH"
+export FILES_SERVER_SERVER_SETTINGS_PATH="$SERVER_SETTINGS_PATH"
+export REVISIONS_SERVER_SERVER_SETTINGS_PATH="$SERVER_SETTINGS_PATH"
 
 ########
 # AUTH #
 ########
 
 if [ -z "$AUTH_SERVER_LOG_LEVEL" ]; then
-  export AUTH_SERVER_LOG_LEVEL="info"
+  export AUTH_SERVER_LOG_LEVEL="${LOG_LEVEL:-info}"
 fi
 export AUTH_SERVER_NODE_ENV="production"
 export AUTH_SERVER_VERSION="local"
@@ -336,7 +339,7 @@ printenv | grep AUTH_SERVER_ | sed 's/AUTH_SERVER_//g' > /opt/server/packages/au
 ##################
 
 if [ -z "$SYNCING_SERVER_LOG_LEVEL" ]; then
-  export SYNCING_SERVER_LOG_LEVEL="info"
+  export SYNCING_SERVER_LOG_LEVEL="${LOG_LEVEL:-info}"
 fi
 export SYNCING_SERVER_NODE_ENV=production
 export SYNCING_SERVER_VERSION=local
@@ -400,7 +403,7 @@ printenv | grep SYNCING_SERVER_ | sed 's/SYNCING_SERVER_//g' > /opt/server/packa
 ################
 
 if [ -z "$FILES_SERVER_LOG_LEVEL" ]; then
-  export FILES_SERVER_LOG_LEVEL="info"
+  export FILES_SERVER_LOG_LEVEL="${LOG_LEVEL:-info}"
 fi
 export FILES_SERVER_NODE_ENV="production"
 export FILES_SERVER_VERSION="local"
@@ -451,7 +454,7 @@ printenv | grep FILES_SERVER_ | sed 's/FILES_SERVER_//g' > /opt/server/packages/
 #############
 
 if [ -z "$REVISIONS_SERVER_LOG_LEVEL" ]; then
-  export REVISIONS_SERVER_LOG_LEVEL="info"
+  export REVISIONS_SERVER_LOG_LEVEL="${LOG_LEVEL:-info}"
 fi
 
 export REVISIONS_SERVER_NODE_ENV="production"
@@ -499,7 +502,7 @@ printenv | grep REVISIONS_SERVER_ | sed 's/REVISIONS_SERVER_//g' > /opt/server/p
 ###############
 
 if [ -z "$API_GATEWAY_LOG_LEVEL" ]; then
-  export API_GATEWAY_LOG_LEVEL="info"
+  export API_GATEWAY_LOG_LEVEL="${LOG_LEVEL:-info}"
 fi
 export API_GATEWAY_NODE_ENV=production
 export API_GATEWAY_VERSION=local

@@ -4,7 +4,7 @@ import * as path from 'path'
 
 import { ServerSettingsOverlayReader } from './ServerSettingsOverlayReader'
 
-describe('ServerSettingsOverlayReader (signup limits + logging level)', () => {
+describe('ServerSettingsOverlayReader', () => {
   let filePath: string
 
   const writeOverlay = async (contents: unknown): Promise<void> => {
@@ -68,32 +68,6 @@ describe('ServerSettingsOverlayReader (signup limits + logging level)', () => {
     it('returns undefined (never throws) when the file is missing/unset', async () => {
       expect(await new ServerSettingsOverlayReader(undefined).signupLimits()).toBeUndefined()
       expect(await new ServerSettingsOverlayReader('/no/such/file.json').signupLimits()).toBeUndefined()
-    })
-  })
-
-  describe('loggingLevel()', () => {
-    it('reads a valid persisted level', async () => {
-      await writeOverlay({ logging: { level: 'debug' } })
-
-      expect(await new ServerSettingsOverlayReader(filePath).loggingLevel()).toBe('debug')
-    })
-
-    it('normalizes case/whitespace', async () => {
-      await writeOverlay({ logging: { level: '  WARN ' } })
-
-      expect(await new ServerSettingsOverlayReader(filePath).loggingLevel()).toBe('warn')
-    })
-
-    it('returns undefined for an unknown level', async () => {
-      await writeOverlay({ logging: { level: 'chatty' } })
-
-      expect(await new ServerSettingsOverlayReader(filePath).loggingLevel()).toBeUndefined()
-    })
-
-    it('returns undefined when logging is absent or the file is unreadable', async () => {
-      await writeOverlay({ registration: {} })
-      expect(await new ServerSettingsOverlayReader(filePath).loggingLevel()).toBeUndefined()
-      expect(await new ServerSettingsOverlayReader(undefined).loggingLevel()).toBeUndefined()
     })
   })
 })

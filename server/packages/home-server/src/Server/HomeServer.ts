@@ -1,6 +1,12 @@
 import 'reflect-metadata'
 
-import { ControllerContainer, Result, ServiceContainer } from '@standardnotes/domain-core'
+import {
+  ControllerContainer,
+  Result,
+  RuntimeLogLevelApplier,
+  ServerSettingsLogLevelResolver,
+  ServiceContainer,
+} from '@standardnotes/domain-core'
 import {
   Service as ApiGatewayService,
   configureTrustProxy,
@@ -49,6 +55,9 @@ export function buildHomeServerEnvironmentOverrides(
     CACHE_TYPE: 'memory',
     DB_SQLITE_DATABASE_PATH: `${dataDirectoryPath}/database/home_server.sqlite`,
     FILE_UPLOAD_PATH: `${dataDirectoryPath}/uploads`,
+    // Gateway writes admin overrides here; the grouped logger poller reads the
+    // same file. configuredEnvironment below may deliberately override it.
+    SERVER_SETTINGS_PATH: `${dataDirectoryPath}/server-settings.json`,
     // Current Standard Red Notes clients support both password and TOTP
     // step-up proof. Default bundled deployments to v3 tokens while allowing an
     // operator's explicit, valid rollout thresholds to override these values.
@@ -72,6 +81,7 @@ export class HomeServer implements HomeServerInterface {
   private readonly runtime = new HomeServerRuntime()
   private authService: AuthServiceInterface | undefined
   private logStream: PassThrough | undefined
+  private runtimeLogLevelApplier: RuntimeLogLevelApplier | undefined
   private starting = false
   private stopPromise: Promise<Result<string>> | undefined
   private readonly loggerNames = [
@@ -510,6 +520,14 @@ export class HomeServer implements HomeServerInterface {
       errors.push(error as Error)
     }
 
+    try {
+      this.runtimeLogLevelApplier?.stop()
+    } catch (error) {
+      errors.push(error as Error)
+    } finally {
+      this.runtimeLogLevelApplier = undefined
+    }
+
     for (const loggerName of this.loggerNames) {
       try {
         winston.loggers.close(loggerName)
@@ -579,5 +597,17 @@ export class HomeServer implements HomeServerInterface {
         defaultMeta: { service: loggerName },
       })
     }
+
+    // The all-in-one topology has one process and six named loggers. One poller
+    // updates the complete set (including the outer home-server logger), while
+    // injected service containers deliberately avoid starting duplicate polls.
+    this.runtimeLogLevelApplier = new RuntimeLogLevelApplier(
+      this.loggerNames.map((loggerName) => winston.loggers.get(loggerName)),
+      new ServerSettingsLogLevelResolver(
+        env.get('SERVER_SETTINGS_PATH', true) || undefined,
+        env.get('LOG_LEVEL', true) || undefined,
+      ),
+    )
+    this.runtimeLogLevelApplier.start()
   }
 }

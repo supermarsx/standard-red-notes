@@ -49,6 +49,9 @@ x-server-env: &server-env
   # proxy". Pair with COOKIE_SECURE=true when TLS is terminated at the proxy.
   TRUST_PROXY: ${TRUST_PROXY:-loopback, linklocal, uniquelocal}
   LOG_LEVEL: ${LOG_LEVEL:-info}
+  # Shared persisted admin overlay read by every supervisord process. A custom
+  # in-container path also needs a matching persistent volume mount.
+  SERVER_SETTINGS_PATH: ${SERVER_SETTINGS_PATH:-/opt/server/packages/api-gateway/data/server-settings.json}
   # Comma-separated emails granted the AdminUser (admin) role, which
   # unlocks the in-app Admin panel and the /admin user-management endpoints.
   ADMIN_EMAILS: ${ADMIN_EMAILS:-}

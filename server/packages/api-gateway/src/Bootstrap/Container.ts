@@ -18,8 +18,14 @@ import { RedisCrossServiceTokenCache } from '../Infra/Redis/RedisCrossServiceTok
 import { WebSocketAuthMiddleware } from '../Controller/WebSocketAuthMiddleware'
 import { InMemoryCrossServiceTokenCache } from '../Infra/InMemory/InMemoryCrossServiceTokenCache'
 import { DirectCallServiceProxy } from '../Service/DirectCall/DirectCallServiceProxy'
-import { createSafeLogFormat, safeErrorLogMetadata } from '../Service/Logging/SafeLog'
-import { MapperInterface, PinnedHttpTransport, ServiceContainerInterface } from '@standardnotes/domain-core'
+import { createSafeLogFormat } from '../Service/Logging/SafeLog'
+import {
+  MapperInterface,
+  PinnedHttpTransport,
+  RuntimeLogLevelApplier,
+  ServerSettingsLogLevelResolver,
+  ServiceContainerInterface,
+} from '@standardnotes/domain-core'
 import { EndpointResolverInterface } from '../Service/Resolver/EndpointResolverInterface'
 import { EndpointResolver } from '../Service/Resolver/EndpointResolver'
 import { RequiredCrossServiceTokenMiddleware } from '../Controller/RequiredCrossServiceTokenMiddleware'
@@ -62,7 +68,6 @@ import { WhatsAppProvider } from '../Service/ReminderDelivery/Providers/WhatsApp
 import { WorkflowsService } from '../Service/Workflows/WorkflowsService'
 import { ServerSettingsStore } from '../Service/ServerSettings/ServerSettingsStore'
 import { ServerSettingsResolver } from '../Service/ServerSettings/ServerSettingsResolver'
-import { RuntimeLogLevelApplier } from '../Service/Logging/RuntimeLogLevelApplier'
 import { ServiceControlService } from '../Service/ServiceControl/ServiceControlService'
 import { DockerServiceControlService } from '../Service/ServiceControl/DockerServiceControlService'
 import { IpAccessListStore, IpAccessListRedis } from '../Controller/IpAccessList'
@@ -248,8 +253,7 @@ export class ContainerConfigLoader {
     // view) read through the resolver per request, so admin changes take effect
     // on next use without a restart. Default path sits next to the other
     // gateway JSON stores; SERVER_SETTINGS_PATH overrides it (the docker
-    // entrypoint points BOTH the gateway and the auth service at the same file
-    // so the auth-side Nextcloud gate can read the same overlay).
+    // entrypoint points every deployed server/worker process at the same file).
     const serverSettingsPath =
       env.get('SERVER_SETTINGS_PATH', true) || path.resolve(process.cwd(), 'data', 'server-settings.json')
     const serverSettingsStore = new ServerSettingsStore(serverSettingsPath)
@@ -397,9 +401,9 @@ export class ContainerConfigLoader {
         ? +env.get('REGISTRATION_INVITES_PER_USER', true)
         : undefined,
       // Standard Red Notes: RUNTIME LOG VERBOSITY env baseline (LOG_LEVEL). The
-      // gateway persists + views `logging.level`; the RuntimeLogLevelApplier poller
-      // applies the effective level to the live logger. undefined when unset so the
-      // source map reports 'default' (the resolver falls back to 'info').
+      // gateway persists + views `logging.level`; the shared runtime poller
+      // applies it across every deployed logger. undefined when unset so the source
+      // map reports 'default' (the resolver falls back to 'info').
       logLevel: env.get('LOG_LEVEL', true) || undefined,
       // Standard Red Notes: OCR env baseline. The SERVER-side knobs (OCR_SERVER_*)
       // are enforced by the gateway (OcrController/OcrService read the resolver per
@@ -449,16 +453,13 @@ export class ContainerConfigLoader {
       .bind<ServerSettingsResolver>(TYPES.ApiGateway_ServerSettingsResolver)
       .toConstantValue(serverSettingsResolver)
 
-    // Standard Red Notes: RUNTIME LOG VERBOSITY. Start an in-process poller that
-    // re-reads the effective `logging.level` from the overlay (persisted admin >
-    // env LOG_LEVEL > 'info') once at boot and every 30s, mutating the live winston
-    // logger + transport levels so an admin can change how verbose the server writes
-    // WITHOUT a restart. Fully guarded and unref'd — a broken overlay can never
-    // crash startup or keep the event loop alive (memory: verify container boot).
-    try {
-      new RuntimeLogLevelApplier(logger, () => serverSettingsResolver.resolveLoggingLevel()).start()
-    } catch (error) {
-      logger.error('Failed to start runtime log-level applier.', safeErrorLogMetadata(error))
+    // Standalone gateway owns its logger. The bundled home-server injects a
+    // named logger and updates the complete logger set through one outer poller.
+    if (!configuration?.logger) {
+      new RuntimeLogLevelApplier(
+        logger,
+        new ServerSettingsLogLevelResolver(serverSettingsPath, env.get('LOG_LEVEL', true) || undefined),
+      ).start()
     }
 
     // Standard Red Notes: anti-abuse infrastructure. The IP allow/block lists and

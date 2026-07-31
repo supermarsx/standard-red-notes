@@ -15,13 +15,16 @@ describe('HomeServer teardown', () => {
     const server = new HomeServer() as unknown as {
       authService: unknown
       logStream: { end: jest.Mock } | undefined
+      runtimeLogLevelApplier: { stop: jest.Mock } | undefined
       runtime: { isActive(): boolean; stop(): Promise<void> }
       stop(): ReturnType<HomeServer['stop']>
     }
     const end = jest.fn()
+    const stopRuntimeLogLevelApplier = jest.fn()
     const closeLogger = jest.spyOn(winston.loggers, 'close').mockImplementation(() => undefined)
     server.authService = {}
     server.logStream = { end }
+    server.runtimeLogLevelApplier = { stop: stopRuntimeLogLevelApplier }
     server.runtime = {
       isActive: () => true,
       stop: jest.fn().mockRejectedValue(new Error('bridge close failed')),
@@ -32,9 +35,11 @@ describe('HomeServer teardown', () => {
     expect(result.isFailed()).toBe(true)
     expect(result.getError()).toContain('bridge close failed')
     expect(closeLogger).toHaveBeenCalledTimes(6)
+    expect(stopRuntimeLogLevelApplier).toHaveBeenCalledTimes(1)
     expect(end).toHaveBeenCalledTimes(1)
     expect(server.authService).toBeUndefined()
     expect(server.logStream).toBeUndefined()
+    expect(server.runtimeLogLevelApplier).toBeUndefined()
   })
 
   it('continues closing every local resource when one logger close fails', async () => {
@@ -90,6 +95,20 @@ describe('HomeServer teardown', () => {
 })
 
 describe('buildHomeServerEnvironmentOverrides', () => {
+  it('defaults the shared admin overlay inside the configured data directory', () => {
+    const environment = buildHomeServerEnvironmentOverrides('/srv/notes', undefined)
+
+    expect(environment.SERVER_SETTINGS_PATH).toBe('/srv/notes/server-settings.json')
+  })
+
+  it('preserves an explicit shared admin overlay path', () => {
+    const environment = buildHomeServerEnvironmentOverrides('/srv/notes', {
+      SERVER_SETTINGS_PATH: '/mnt/runtime/server-settings.json',
+    })
+
+    expect(environment.SERVER_SETTINGS_PATH).toBe('/mnt/runtime/server-settings.json')
+  })
+
   it('defaults current Standard Red Notes clients to password and TOTP capable v3 tokens', () => {
     const environment = buildHomeServerEnvironmentOverrides('data', undefined)
 

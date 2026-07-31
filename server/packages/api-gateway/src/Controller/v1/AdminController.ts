@@ -1706,10 +1706,10 @@ export class AdminController extends BaseHttpController {
       }
     }
 
-    // Standard Red Notes: RUNTIME LOG VERBOSITY. The gateway PERSISTS `logging.level`
-    // and its own poller (RuntimeLogLevelApplier) applies it to the live logger; the
-    // auth server reads the same overlay key and runs its own poller. Must be one of
-    // the winston levels, or null to clear (fall back to LOG_LEVEL env, then 'info').
+    // Standard Red Notes: RUNTIME LOG VERBOSITY. The gateway persists
+    // `logging.level`; one shared reader/applier contract updates every deployed
+    // server/worker logger. Must be a Winston level, or null to clear (fall back
+    // to that process's LOG_LEVEL env, then 'info').
     if (root.logging !== undefined) {
       if (!root.logging || typeof root.logging !== 'object' || Array.isArray(root.logging)) {
         return { error: 'logging must be an object.' }
