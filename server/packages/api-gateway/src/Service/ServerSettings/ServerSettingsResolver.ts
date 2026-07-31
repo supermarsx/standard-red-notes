@@ -22,6 +22,7 @@ import {
   ServerSettingsPatch,
   ServerSettingsStore,
 } from './ServerSettingsStore'
+import { validateWorkflowsPublicUrl } from '../Workflows/WorkflowsPublicUrl'
 
 /**
  * Standard Red Notes: the single read path for runtime-configurable server
@@ -36,6 +37,23 @@ import {
  */
 
 export type ServerSettingSource = 'persisted' | 'env' | 'default'
+
+const resolveWorkflowsPublicUrlCandidate = (
+  persistedValue: unknown,
+  envValue: unknown,
+): { publicUrl: string | null; source: ServerSettingSource } => {
+  for (const [candidate, source] of [
+    [persistedValue, 'persisted'],
+    [envValue, 'env'],
+  ] as const) {
+    const result = validateWorkflowsPublicUrl(candidate)
+    if (result.valid) {
+      return { publicUrl: result.url, source }
+    }
+  }
+
+  return { publicUrl: null, source: 'default' }
+}
 
 export interface EnvSettingsBaseline {
   /** The env-derived assistant provider config (ASSISTANT_* vars). */
@@ -142,15 +160,11 @@ export interface EnvSettingsBaseline {
   ocrMaxImageBytes?: number
   ocrClientEnabled?: boolean
   ocrClientDefaultLanguage?: string
-  /**
-   * Standard Red Notes: WORKFLOWS (n8n) env baseline. enabled/n8nUrl/uiTokenTtl
-   * are read through the resolver per request (runtime); uiBasePath is the boot-
-   * bound Express mount path (restart to change). undefined = env var unset.
-   */
+  /** Standard Red Notes: WORKFLOWS discovery env baseline. */
   workflowsEnabled?: boolean
-  workflowsN8nUrl?: string
-  workflowsUiBasePath?: string
-  workflowsUiTokenTtlSeconds?: number
+  workflowsPublicUrl?: string
+  /** @deprecated Presence is surfaced for migration only; values are never resolved. */
+  workflowsLegacyConfigurationPresent?: boolean
   /**
    * Standard Red Notes: PLUGINS repo base URL env baseline (PLUGINS_REPO_URL).
    * Enforced ENTIRELY by the gateway (PluginsController fetches the repo server-
@@ -353,21 +367,18 @@ const OCR_DEFAULTS: ResolvedOcrConfig = {
 /** The fully-resolved WORKFLOWS (n8n) config (persisted → env → default). */
 export interface ResolvedWorkflowsConfig {
   enabled: boolean
-  n8nUrl: string
-  uiBasePath: string
-  uiTokenTtlSeconds: number
+  publicUrl: string | null
+  /** True when ignored proxy-era config remains and should be migrated. */
+  legacyConfigurationPresent: boolean
 }
 
 /**
- * Hardcoded WORKFLOWS defaults (apply last). Reproduce the historical hardcoded
- * behavior: feature OFF, internal n8n at http://n8n:5678, editor proxy mounted at
- * /workflows-ui, 12-hour editor cookie.
+ * Safe defaults: discovery off and no browser-facing n8n URL.
  */
 const WORKFLOWS_DEFAULTS: ResolvedWorkflowsConfig = {
   enabled: false,
-  n8nUrl: 'http://n8n:5678',
-  uiBasePath: '/workflows-ui',
-  uiTokenTtlSeconds: 12 * 60 * 60,
+  publicUrl: null,
+  legacyConfigurationPresent: false,
 }
 
 /**
@@ -990,60 +1001,23 @@ export class ServerSettingsResolver {
   }
 
   /**
-   * The effective WORKFLOWS (n8n) config: persisted admin values win over the
-   * WORKFLOWS_* env baseline, which falls back to the hardcoded safe defaults.
-   * enabled/n8nUrl/uiTokenTtlSeconds are re-read per call (runtime); uiBasePath is
-   * the boot-bound Express mount path, so a persisted value here is the admin
-   * intent and only takes effect after a gateway restart.
+   * Effective workflows discovery configuration. Proxy-era fields remain
+   * readable but are deliberately ignored: an internal upstream address must
+   * never become browser navigation metadata by accident.
    */
   async resolveWorkflowsConfig(): Promise<ResolvedWorkflowsConfig> {
     const wf = (await this.safeRead()).workflows ?? {}
     const env = this.envBaseline
     const d = WORKFLOWS_DEFAULTS
 
-    const url = (persisted: string | undefined, envValue: string | undefined, fallback: string): string => {
-      for (const candidate of [persisted, envValue]) {
-        if (typeof candidate === 'string' && candidate.trim().length > 0) {
-          try {
-            const parsed = new URL(candidate.trim())
-            if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
-              return candidate.trim()
-            }
-          } catch {
-            // fall through
-          }
-        }
-      }
-
-      return fallback
-    }
-
-    const path = (persisted: string | undefined, envValue: string | undefined, fallback: string): string => {
-      for (const candidate of [persisted, envValue]) {
-        if (typeof candidate === 'string' && candidate.trim().startsWith('/')) {
-          return candidate.trim()
-        }
-      }
-
-      return fallback
-    }
+    const { publicUrl } = resolveWorkflowsPublicUrlCandidate(wf.publicUrl, env.workflowsPublicUrl)
 
     return {
       enabled: typeof wf.enabled === 'boolean' ? wf.enabled : (env.workflowsEnabled ?? d.enabled),
-      n8nUrl: url(wf.n8nUrl, env.workflowsN8nUrl, d.n8nUrl),
-      uiBasePath: path(wf.uiBasePath, env.workflowsUiBasePath, d.uiBasePath),
-      uiTokenTtlSeconds:
-        boundedInt(
-          wf.uiTokenTtlSeconds,
-          SERVER_SETTINGS_BOUNDS.workflowsTokenTtlSeconds.minimum,
-          SERVER_SETTINGS_BOUNDS.workflowsTokenTtlSeconds.maximum,
-        ) ??
-        boundedInt(
-          env.workflowsUiTokenTtlSeconds,
-          SERVER_SETTINGS_BOUNDS.workflowsTokenTtlSeconds.minimum,
-          SERVER_SETTINGS_BOUNDS.workflowsTokenTtlSeconds.maximum,
-        ) ??
-        d.uiTokenTtlSeconds,
+      publicUrl,
+      legacyConfigurationPresent: Boolean(
+        wf.n8nUrl || wf.uiBasePath || wf.uiTokenTtlSeconds !== undefined || env.workflowsLegacyConfigurationPresent,
+      ),
     }
   }
 
@@ -1075,6 +1049,10 @@ export class ServerSettingsResolver {
     const ocrConfig = await this.resolveOcrConfig()
     const workflows = persisted.workflows ?? {}
     const workflowsConfig = await this.resolveWorkflowsConfig()
+    const workflowsPublicUrlSource = resolveWorkflowsPublicUrlCandidate(
+      workflows.publicUrl,
+      env.workflowsPublicUrl,
+    ).source
     const plugins = persisted.plugins ?? {}
     const pluginsRepoUrl = await this.resolvePluginsRepoUrl()
     const pluginsSameOriginRendering = await this.resolvePluginsSameOriginRendering()
@@ -1161,9 +1139,7 @@ export class ServerSettingsResolver {
       'ocr.clientEnabled': this.source(ocr.clientEnabled, env.ocrClientEnabled),
       'ocr.clientDefaultLanguage': this.source(ocr.clientDefaultLanguage, env.ocrClientDefaultLanguage),
       'workflows.enabled': this.source(workflows.enabled, env.workflowsEnabled),
-      'workflows.n8nUrl': this.source(workflows.n8nUrl, env.workflowsN8nUrl),
-      'workflows.uiBasePath': this.source(workflows.uiBasePath, env.workflowsUiBasePath),
-      'workflows.uiTokenTtlSeconds': this.source(workflows.uiTokenTtlSeconds, env.workflowsUiTokenTtlSeconds),
+      'workflows.publicUrl': workflowsPublicUrlSource,
       'plugins.repoUrl': this.source(plugins.repoUrl, env.pluginsRepoUrl),
       'plugins.sameOriginRendering': this.source(plugins.sameOriginRendering, env.pluginsSameOriginRendering),
     }

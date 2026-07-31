@@ -621,7 +621,7 @@ const AdminSecurityTab: FunctionComponent<Props> = ({ application, noteIfForbidd
               />
               <PostureRow
                 name="Workflows / n8n"
-                detail="When on, note data can be sent to the configured workflow engine. Off keeps data in-app. (Server tab)"
+                detail="When on, entitled users can discover the external n8n link. It does not send note data or grant n8n access; separately configured workflow credentials define any data exposure. (Server tab)"
                 chip={
                   <PostureChip
                     state={masterSwitches ? Boolean(masterSwitches.workflowsEnabled) : null}

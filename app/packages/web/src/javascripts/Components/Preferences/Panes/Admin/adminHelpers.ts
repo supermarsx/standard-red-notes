@@ -523,14 +523,12 @@ export type AdminServerSettings = {
     clientEnabled?: boolean
     clientDefaultLanguage?: string
   }
-  // Standard Red Notes: WORKFLOWS (n8n) config. enabled/n8nUrl/uiTokenTtlSeconds
-  // are runtime; uiBasePath is the boot-bound editor-proxy mount (restart to
-  // change).
+  // Standard Red Notes: n8n discovery. This is a public, browser-facing URL on
+  // a separately authenticated hostname; SRN never proxies the editor.
   workflows?: {
     enabled?: boolean
-    n8nUrl?: string
-    uiBasePath?: string
-    uiTokenTtlSeconds?: number
+    publicUrl?: string | null
+    legacyConfigurationPresent?: boolean
   }
   // Standard Red Notes: PLUGINS gallery repo base URL. The gateway proxies the
   // repo server-side so the browse-plugins gallery loads same-origin under the

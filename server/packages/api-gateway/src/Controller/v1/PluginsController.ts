@@ -73,7 +73,7 @@ import { ServerSettingsResolver } from '../../Service/ServerSettings/ServerSetti
  * cross-site framing (`frame-ancestors 'self'` + `X-Frame-Options: SAMEORIGIN`) so
  * only the same-origin SPA can frame it. This CSP is set explicitly on the response
  * (removeHeader → setHeader) so it OVERRIDES helmet's global gateway CSP for this
- * route — mirroring registerWorkflowsUiProxy's removeHeader pattern.
+ * route.
  */
 
 /**

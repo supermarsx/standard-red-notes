@@ -54,9 +54,9 @@ const LIVE_SYNC_ENABLED = 'LIVE_SYNC_ENABLED'
 // OPT-IN server-side PDF OCR. Defaults OFF (privacy: enabling lets this user send
 // decrypted PDF page images to the server, which leaves end-to-end encryption).
 const OCR_SERVER_ALLOWED = 'OCR_SERVER_ALLOWED'
-// OPT-IN n8n-backed workflows (automations). Defaults OFF. Keep in sync with the
-// server's SettingName.NAMES value (SettingName.WorkflowsEnabled = 'WORKFLOWS_ENABLED'
-// in server/packages/domain-core). Also requires the WORKFLOWS_ENABLED operator env.
+// OPT-IN discovery of the separately authenticated n8n service. Defaults OFF.
+// This flag reveals a link only; it does not provision or authorize an n8n user.
+// Also requires the WORKFLOWS_ENABLED operator switch.
 const WORKFLOWS_ENABLED = 'WORKFLOWS_ENABLED'
 // OPT-IN scheduled Nextcloud backups. Defaults OFF. Backups remain E2E ciphertext
 // (content stays private), but the server-stored app password grants Nextcloud file
@@ -1663,10 +1663,10 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
                 <div className="flex flex-col">
                   <Subtitle>Workflows</Subtitle>
                   <Text>
-                    Allow this user to use the n8n-backed Workflows automation engine (build visual automations that
-                    react to notebook events, run AI steps, and send emails/notes/files). The user must still explicitly
-                    connect from their Workflows pane; connecting provisions a revocable, scoped access token — never
-                    their master key or note contents. Requires the WORKFLOWS_ENABLED operator switch. Off by default.
+                    Reveal the operator-configured n8n link to this user. n8n still requires its own account, login, and
+                    authorization; this switch does not provision or revoke n8n access. Any Standard Red Notes MCP
+                    credential is created and stored separately by an operator. Requires the WORKFLOWS_ENABLED operator
+                    switch. Off by default.
                   </Text>
                 </div>
                 <Switch

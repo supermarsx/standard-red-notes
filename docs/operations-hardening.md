@@ -183,9 +183,11 @@ a high-churn instance and accept eviction semantics, choose a policy explicitly.
 
 ## Docker Image And Runtime Hardening
 
-The stack is designed so the app front door is the only published service. The
-server, database, cache, queue emulator, MCP bridge, n8n, and docker socket proxy
-remain internal-only unless you explicitly change Compose.
+The stack is designed so the app front door is the only publicly reachable
+Standard Red Notes service. The server, database, cache, queue emulator, MCP
+bridge, and docker socket proxy remain internal-only. The optional n8n profile
+publishes a loopback-only development port; production should remove that
+mapping and use a dedicated TLS proxy hostname.
 
 Runtime hardening currently includes:
 
@@ -196,6 +198,7 @@ Runtime hardening currently includes:
 | `db` | Internal-only MariaDB, least capabilities for official entrypoint ownership drop, memory/PID/no-file limits, graceful stop period. |
 | `cache` | Internal-only Redis, least capabilities for user drop, memory/PID/no-file limits, explicit Redis maxmemory. |
 | `floci` | Internal-only SNS/SQS emulator, `no-new-privileges`, all capabilities dropped, memory/PID limits. |
+| `n8n` | Optional profile, unprivileged image, all capabilities dropped, persistent credential volume, loopback-only development port; independent TLS/auth in production. |
 | `docker-socket-proxy` | Optional profile, raw socket mounted only here, all Docker API surfaces denied except restart endpoints. |
 | single-container profile | Unprivileged `srn` user, capability drop, `no-new-privileges`, memory/PID limits, tmpfs `/tmp`, one published port. |
 
@@ -212,7 +215,7 @@ Compose supports image override variables for production pinning:
 MARIADB_IMAGE=mariadb:12.3.2
 REDIS_IMAGE=redis:8.8.0-alpine
 FLOCI_IMAGE=floci/floci:1.5.33-compat
-N8N_IMAGE=n8nio/n8n:2.30.5
+N8N_IMAGE=n8nio/n8n:2.32.6
 DOCKER_SOCKET_PROXY_IMAGE=tecnativa/docker-socket-proxy:v0.4.2
 ```
 

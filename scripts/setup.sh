@@ -153,9 +153,10 @@ if [ -n "$DOMAIN" ]; then
 fi
 
 title "2) Host port"
-info "The single port published on the host machine. The app's nginx front door"
+info "The public app port. The app's nginx front door"
 info "proxies the API (/v1), files (/files/) and realtime websocket (/sockets)"
 info "same-origin, so the API gateway and files service publish no host ports."
+info "Optional profiles may bind separate development ports to host loopback."
 prompt APP_PORT       "Web app port:"            "3001"
 
 title "3) Database"
@@ -207,11 +208,16 @@ esac
 if [ -n "$DOMAIN" ]; then
   SCHEME="http"; [ "$USE_HTTPS" = "true" ] && SCHEME="https"
   PUBLIC_FILES_SERVER_URL="${SCHEME}://${DOMAIN}:${APP_PORT}/files"
-  [ "$USE_HTTPS" = "true" ] && PUBLIC_FILES_SERVER_URL="${SCHEME}://${DOMAIN}/files"
+  PUBLIC_URL="${SCHEME}://${DOMAIN}:${APP_PORT}"
+  if [ "$USE_HTTPS" = "true" ]; then
+    PUBLIC_FILES_SERVER_URL="${SCHEME}://${DOMAIN}/files"
+    PUBLIC_URL="${SCHEME}://${DOMAIN}"
+  fi
   U2F_RP_ID="$DOMAIN"
   U2F_EXPECTED_ORIGIN="${SCHEME}://${DOMAIN}:${APP_PORT},${SCHEME}://${DOMAIN}"
 else
   PUBLIC_FILES_SERVER_URL="http://localhost:${APP_PORT}/files"
+  PUBLIC_URL="http://localhost:${APP_PORT}"
   U2F_RP_ID="localhost"
   U2F_EXPECTED_ORIGIN="http://localhost:${APP_PORT},http://localhost"
 fi
@@ -244,9 +250,10 @@ cat > "$ENV_FILE" <<EOF
 # exist will lock people out, so keep this file safe and backed up.
 # =============================================================================
 
-# ----- Host port (the ONLY port published on the host machine) ---------------
+# ----- Public app port --------------------------------------------------------
 # The app's nginx front door proxies the API, files and websocket same-origin;
-# the API gateway and files service are internal-only (no host ports).
+# the API gateway and files service are internal-only (no host ports). Optional
+# profiles may bind development-only ports to host loopback.
 APP_PORT=${APP_PORT}
 
 # ----- Database (MariaDB) ----------------------------------------------------
@@ -277,6 +284,7 @@ WEB_SOCKET_CONNECTION_TOKEN_SECRET=${WEB_SOCKET_CONNECTION_TOKEN_SECRET}
 COOKIE_DOMAIN=${COOKIE_DOMAIN}
 COOKIE_SECURE=${COOKIE_SECURE}
 PUBLIC_FILES_SERVER_URL=${PUBLIC_FILES_SERVER_URL}
+PUBLIC_URL=${PUBLIC_URL}
 
 # WebAuthn / hardware-key (U2F) relying party. Should match where the app is served.
 AUTH_SERVER_U2F_RELYING_PARTY_ID=${U2F_RP_ID}
@@ -366,8 +374,7 @@ ok "Wrote ${ENV_FILE}"
 # Next steps
 # ---------------------------------------------------------------------------
 title "Done!"
-APP_URL="http://localhost:${APP_PORT}"
-[ -n "$DOMAIN" ] && { SCHEME="http"; [ "$USE_HTTPS" = "true" ] && SCHEME="https"; APP_URL="${SCHEME}://${DOMAIN}:${APP_PORT}"; }
+APP_URL="${PUBLIC_URL}"
 
 if [ "$RUN_UP" -eq 1 ] || { [ "$ASSUME_YES" -eq 0 ] && confirm "Start the stack now with '${COMPOSE} up -d'?"; }; then
   info "Building and starting the stack (first run can take several minutes)..."

@@ -1101,14 +1101,12 @@ export class LegacyApiService
       clientEnabled?: boolean | null
       clientDefaultLanguage?: string | null
     }
-    // Standard Red Notes: WORKFLOWS (n8n) knobs. enabled/n8nUrl/uiTokenTtlSeconds
-    // are runtime; uiBasePath is the boot-bound editor-proxy mount (restart to
-    // change).
+    // Standard Red Notes: WORKFLOWS discovery knobs. `publicUrl` is external
+    // navigation metadata for a separately authenticated n8n origin; the client
+    // never sends SRN credentials to it or treats this link gate as n8n auth.
     workflows?: {
       enabled?: boolean | null
-      n8nUrl?: string | null
-      uiBasePath?: string | null
-      uiTokenTtlSeconds?: number | null
+      publicUrl?: string | null
     }
     // Standard Red Notes: PLUGINS gallery repo base URL. The gateway proxies the
     // repo server-side so the client fetches the index same-origin (strict CSP).

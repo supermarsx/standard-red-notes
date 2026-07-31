@@ -11,12 +11,9 @@ import { controller, httpGet, InversifyExpressServer } from 'inversify-express-u
 
 import { TYPES } from './Bootstrap/Types'
 import { registerCaldavRoutes } from './Caldav/registerCaldavRoutes'
-import { registerWorkflowsUiProxy } from './Workflows/registerWorkflowsUiProxy'
 import { CaldavService } from './Service/Caldav/CaldavService'
 import { CaldavTokenStore } from './Service/Caldav/CaldavTokenStore'
 import { PublishedCalendarStore } from './Service/Caldav/PublishedCalendarStore'
-import { WorkflowsService } from './Service/Workflows/WorkflowsService'
-import { WorkflowsPairingStore } from './Service/Workflows/WorkflowsPairingStore'
 import { createFallbackHandler, API_GATEWAY_WELCOME_HTML } from './Controller/FallbackController'
 
 // Boot-mounted dual gate for the post-build welcome/404 fallback (t57).
@@ -29,13 +26,13 @@ import { createFallbackHandler, API_GATEWAY_WELCOME_HTML } from './Controller/Fa
 // genuinely-unmatched requests and cannot shadow anything.
 //
 // This spec boots a REAL InversifyExpressServer (ephemeral port, real Node http) that
-// mirrors the fixed bin/server.ts wiring: CalDAV + Workflows registered in setConfig
-// (BEFORE build()), real /healthcheck + /v1 + /v2 controllers, then the post-build
+// mirrors the fixed bin/server.ts wiring: CalDAV registered in setConfig (BEFORE
+// build()), real /healthcheck + /v1 + /v2 controllers, then the post-build
 // fallback. It asserts BOTH directions:
 //   (a) genuinely-unmatched -> the fallback (welcome HTML for GET /, JSON 404 else),
 //       NOT Express's default `Cannot GET`.
 //   (b) every legitimate route STILL reaches its own handler (the /healthcheck, /v1
-//       and /v2 controllers, plus the pre-build /dav 401 and /workflows-ui 403), NOT
+//       and /v2 controllers, plus the pre-build /dav 401), NOT
 //       the fallback — i.e. no new shadowing.
 
 const HEALTH_SENTINEL = 'HEALTH-OK-SENTINEL'
@@ -86,29 +83,6 @@ async function buildContainer(dir: string): Promise<Container> {
   container.bind(TYPES.ApiGateway_CaldavService).toConstantValue(caldavService)
   container.bind(TYPES.ApiGateway_CALDAV_BASE_PATH).toConstantValue('/dav')
 
-  // Real WorkflowsService, feature ENABLED — a request without the UI-access cookie
-  // hits the proxy's own 403 'workflows-ui-unauthorized' gate (a router signal).
-  const pairingStore = new WorkflowsPairingStore(path.join(dir, 'workflows-pairings.json'))
-  const workflowsService = new WorkflowsService(
-    {
-      enabled: true,
-      n8nUrl: 'http://127.0.0.1:5678',
-      uiBasePath: '/workflows-ui',
-      jwtSecret: 'spec-secret',
-      cookieSecure: false,
-      uiTokenTtlSeconds: 60,
-    },
-    pairingStore,
-  )
-  container.bind(TYPES.ApiGateway_WorkflowsService).toConstantValue(workflowsService)
-  container.bind(TYPES.ApiGateway_Logger).toConstantValue({
-    debug: () => undefined,
-    info: () => undefined,
-    warn: () => undefined,
-    error: () => undefined,
-  })
-  container.bind(TYPES.ApiGateway_CLIENT_IP_HEADER).toConstantValue('')
-
   return container
 }
 
@@ -147,11 +121,9 @@ describe('post-build welcome/404 fallback (boot-mounted)', () => {
     const container = await buildContainer(dir)
     const inversifyServer = new InversifyExpressServer(container)
 
-    // Mirror the fixed bin/server.ts: register /dav + /workflows-ui in setConfig,
-    // BEFORE build() mounts the controller router.
+    // Mirror production: only the genuine boot-mounted DAV route precedes build.
     inversifyServer.setConfig((app) => {
       registerCaldavRoutes(app, container)
-      registerWorkflowsUiProxy(app, container)
     })
 
     const app = await inversifyServer.build()
@@ -219,9 +191,10 @@ describe('post-build welcome/404 fallback (boot-mounted)', () => {
     expect(result.body).not.toContain('Not Found')
   })
 
-  it('reaches the pre-build Workflows-UI proxy (403 unauthorized gate), not the fallback', async () => {
+  it('has no legacy same-origin Workflows-UI proxy route', async () => {
     const result = await requestOf(baseUrl, 'GET', '/workflows-ui/')
-    expect(result.status).toBe(403)
-    expect(result.body).toContain('workflows-ui-unauthorized')
+    expect(result.status).toBe(404)
+    expect(result.headers['content-type']).toMatch(/application\/json/)
+    expect(JSON.parse(result.body)).toEqual({ error: { message: 'Not Found' } })
   })
 })

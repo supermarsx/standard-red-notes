@@ -1,185 +1,119 @@
-import { sign, verify } from 'jsonwebtoken'
-
-import { WorkflowsPairing, WorkflowsPairingStore } from './WorkflowsPairingStore'
+import {
+  validateWorkflowsPublicUrl,
+  WorkflowsPublicUrlValidation,
+  workflowsPublicUrlErrorMessage,
+} from './WorkflowsPublicUrl'
 
 /**
- * Minimal read seam over the gateway's ServerSettingsResolver so this service
- * does not depend on the resolver's whole type surface (and stays unit-testable
- * with a tiny stub). Optional at construction — absent = env/boot config only.
+ * Minimal read seam over the gateway's runtime server-settings resolver.
  */
 export interface WorkflowsConfigResolver {
   resolveWorkflowsConfig(): Promise<{
     enabled: boolean
-    n8nUrl: string
-    uiBasePath: string
-    uiTokenTtlSeconds: number
+    publicUrl: string | null
   }>
 }
 
-/**
- * Standard Red Notes: WORKFLOWS (n8n-backed automation) gateway service.
- *
- * Owns everything the /v1/workflows controller and the /workflows-ui editor
- * proxy need:
- *   - the operator master switch (WORKFLOWS_ENABLED env),
- *   - per-user pairing state (JSON file store — the gateway has no database),
- *   - the short-lived, signed UI-ACCESS token that lets the sandboxed editor
- *     iframe pass the proxy gate.
- *
- * WHY A DEDICATED UI-ACCESS COOKIE: the embedded n8n editor is loaded in an
- * iframe, whose subresource requests carry cookies but CANNOT carry the
- * Authorization header the normal session-validation channel requires (cookie-
- * based SRN sessions still need the header's `<version>:<privateIdentifier>`
- * half). So the session-authed /v1/workflows endpoints — which DO re-validate
- * the session + entitlement server-side — mint a short-lived HS256 JWT scoped to
- * purpose 'workflows-ui' and set it as an HttpOnly cookie whose Path is the
- * proxy base path. The proxy verifies that token AND re-checks the master
- * switch AND the pairing record on every request. Revoking = unpair (the proxy
- * fails closed immediately); the token also self-expires.
- */
-
-export const WORKFLOWS_UI_COOKIE_NAME = 'srn_workflows_ui'
-
-const UI_TOKEN_PURPOSE = 'workflows-ui'
-
-interface UiAccessTokenClaims {
-  sub?: string
-  purpose?: string
-}
-
 export interface WorkflowsServiceConfig {
-  /** Operator master switch (WORKFLOWS_ENABLED env). Off => feature invisible. */
+  /** Operator master switch. Off means the link is undiscoverable. */
   enabled: boolean
-  /** Internal n8n base URL on the docker network (WORKFLOWS_N8N_URL). */
-  n8nUrl: string
-  /** Same-origin proxy base path the editor iframe loads (WORKFLOWS_UI_BASE_PATH). */
-  uiBasePath: string
-  /** HS256 secret for the UI-access token. Reuses AUTH_JWT_SECRET (already held). */
-  jwtSecret: string
-  /** Mirror of COOKIE_SECURE so the UI cookie matches the deployment's cookies. */
-  cookieSecure: boolean
-  /** UI-access token lifetime in seconds. */
-  uiTokenTtlSeconds: number
+  /**
+   * Browser-facing n8n URL. This is navigation metadata only: the gateway never
+   * proxies, fetches, authenticates to, or appends credentials to this URL.
+   */
+  publicUrl: string | null
+  /** Canonical Standard Red Notes public URL used for hostname isolation. */
+  applicationPublicUrl: string | null
+  /** Auth cookie Domain from SRN; empty means a host-only cookie. */
+  cookieDomain?: string | null
 }
 
+export interface ResolvedWorkflowsLink {
+  enabled: boolean
+  publicUrl: string | null
+  configurationError: boolean
+}
+
+export type WorkflowsConfiguredPublicUrlValidation = { valid: true; url: string } | { valid: false; message: string }
+
+/**
+ * Exposes a strictly validated, separately authenticated n8n link.
+ *
+ * Standard Red Notes account gating controls only whether the link is visible
+ * to a user. n8n remains a separate security domain and performs its own login,
+ * session management, authorization, project isolation, and credential storage.
+ */
 export class WorkflowsService {
   constructor(
     private readonly config: WorkflowsServiceConfig,
-    private readonly pairingStore: WorkflowsPairingStore,
-    // Standard Red Notes: optional runtime overlay resolver (persisted admin value
-    // wins over env). When present, enabled/n8nUrl/uiTokenTtl are re-read per
-    // request so admin changes take effect WITHOUT a restart. When absent the
-    // boot-time env config is used (previous behavior, kept for tests).
     private readonly resolver?: WorkflowsConfigResolver,
   ) {}
 
-  /** Boot-time env value (fallback / sync callers). Prefer resolvedEnabled(). */
   isEnabled(): boolean {
     return this.config.enabled
   }
 
-  /**
-   * The effective master switch: persisted admin overlay wins over the env
-   * baseline. Re-read per request. Falls back to the boot env value if the
-   * overlay read fails, so a broken overlay never takes the feature down harder
-   * than its env config already would.
-   */
   async resolvedEnabled(): Promise<boolean> {
-    if (!this.resolver) {
-      return this.config.enabled
-    }
-    try {
-      return (await this.resolver.resolveWorkflowsConfig()).enabled
-    } catch {
-      return this.config.enabled
-    }
-  }
-
-  get n8nUrl(): string {
-    return this.config.n8nUrl
-  }
-
-  /** The effective internal n8n URL (persisted admin overlay wins over env). */
-  async resolvedN8nUrl(): Promise<string> {
-    if (!this.resolver) {
-      return this.config.n8nUrl
-    }
-    try {
-      return (await this.resolver.resolveWorkflowsConfig()).n8nUrl
-    } catch {
-      return this.config.n8nUrl
-    }
-  }
-
-  get uiBasePath(): string {
-    return this.config.uiBasePath
-  }
-
-  get cookieSecure(): boolean {
-    return this.config.cookieSecure
-  }
-
-  get uiTokenTtlSeconds(): number {
-    return this.config.uiTokenTtlSeconds
-  }
-
-  /** The effective editor-cookie lifetime (persisted admin overlay wins over env). */
-  async resolvedUiTokenTtlSeconds(): Promise<number> {
-    if (!this.resolver) {
-      return this.config.uiTokenTtlSeconds
-    }
-    try {
-      return (await this.resolver.resolveWorkflowsConfig()).uiTokenTtlSeconds
-    } catch {
-      return this.config.uiTokenTtlSeconds
-    }
-  }
-
-  /** The same-origin editor path handed to the client (`editorUrl`). */
-  editorUrl(): string {
-    return `${this.config.uiBasePath.replace(/\/+$/, '')}/`
-  }
-
-  async isPaired(userUuid: string): Promise<boolean> {
-    return this.pairingStore.isPaired(userUuid)
-  }
-
-  async pair(userUuid: string): Promise<WorkflowsPairing> {
-    return this.pairingStore.pair(userUuid)
-  }
-
-  async unpair(userUuid: string): Promise<boolean> {
-    return this.pairingStore.unpair(userUuid)
+    return (await this.resolvedConfig()).enabled
   }
 
   /**
-   * Mint the short-lived UI-access token for the editor proxy cookie. Only ever
-   * called AFTER the caller passed the session + entitlement (+ pairing) checks.
+   * Resolve and validate the external navigation target against the configured
+   * canonical PUBLIC_URL. Request Host headers are never a policy input.
    */
-  mintUiAccessToken(userUuid: string, ttlSeconds: number = this.config.uiTokenTtlSeconds): string {
-    return sign({ purpose: UI_TOKEN_PURPOSE }, this.config.jwtSecret, {
-      algorithm: 'HS256',
-      subject: userUuid,
-      expiresIn: ttlSeconds,
+  async resolveLink(): Promise<ResolvedWorkflowsLink> {
+    const config = await this.resolvedConfig()
+    if (!config.enabled) {
+      return { enabled: false, publicUrl: null, configurationError: false }
+    }
+    const validation = this.validateConfiguredPublicUrl(config.publicUrl)
+    if (!validation.valid) {
+      return { enabled: true, publicUrl: null, configurationError: true }
+    }
+    return { enabled: true, publicUrl: validation.url, configurationError: false }
+  }
+
+  /**
+   * Validate a value before persisting it through the admin API. This uses the
+   * exact same canonical app-origin and cookie-domain policy as link discovery,
+   * so the API cannot save a value that status would immediately withhold.
+   */
+  validateConfiguredPublicUrl(publicUrl: unknown): WorkflowsConfiguredPublicUrlValidation {
+    const applicationUrl = validateWorkflowsPublicUrl(this.config.applicationPublicUrl)
+    if (!applicationUrl.valid) {
+      return {
+        valid: false,
+        message: 'Canonical PUBLIC_URL is missing or invalid; configure it before saving workflows.publicUrl.',
+      }
+    }
+    const validation = this.validate(publicUrl, applicationUrl.url)
+    if (!validation.valid) {
+      return { valid: false, message: workflowsPublicUrlErrorMessage(validation.error) }
+    }
+    return validation
+  }
+
+  validate(publicUrl: unknown, applicationOrigin?: string | null): WorkflowsPublicUrlValidation {
+    return validateWorkflowsPublicUrl(publicUrl, {
+      applicationOrigin,
+      forbiddenCookieDomain: this.config.cookieDomain,
     })
   }
 
-  /**
-   * Verify a UI-access token. Returns the user uuid on success, null otherwise.
-   * Fails closed for any missing/expired/foreign-purpose token.
-   */
-  verifyUiAccessToken(token: string | undefined): string | null {
-    if (!token) {
-      return null
+  private async resolvedConfig(): Promise<WorkflowsServiceConfig> {
+    if (!this.resolver) {
+      return this.config
     }
     try {
-      const claims = verify(token, this.config.jwtSecret, { algorithms: ['HS256'] }) as UiAccessTokenClaims
-      if (claims.purpose !== UI_TOKEN_PURPOSE || typeof claims.sub !== 'string' || claims.sub.length === 0) {
-        return null
+      return {
+        ...(await this.resolver.resolveWorkflowsConfig()),
+        applicationPublicUrl: this.config.applicationPublicUrl,
+        cookieDomain: this.config.cookieDomain,
       }
-      return claims.sub
     } catch {
-      return null
+      // An unexpected resolver failure must not re-enable discovery from a
+      // looser boot fallback after an administrator disabled it.
+      return { ...this.config, enabled: false, publicUrl: null }
     }
   }
 }

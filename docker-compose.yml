@@ -74,6 +74,12 @@ x-server-env: &server-env
   # the files service publishes no host port. Override for real deployments,
   # e.g. PUBLIC_FILES_SERVER_URL=https://notes.example.com/files.
   PUBLIC_FILES_SERVER_URL: ${PUBLIC_FILES_SERVER_URL:-http://localhost:${APP_PORT:-3001}/files}
+  # Canonical browser-facing Standard Red Notes origin. Security-sensitive
+  # external-link validation uses this configured value and never trusts Host.
+  # Intentionally has NO Compose default: set it explicitly before enabling
+  # workflows or subscription pairing. The setup scripts generate it for local
+  # and production installs; a hand-written raw Compose deploy fails closed.
+  PUBLIC_URL: ${PUBLIC_URL:-}
   # Self-hosted realtime WebSocket gateway. It now runs IN-PROCESS inside the
   # api-gateway on the SAME port (:3000) — no separate listener/process. The
   # api-gateway POSTs to its own /sockets/tokens to mint connection tokens, so
@@ -163,19 +169,14 @@ x-server-env: &server-env
   # The version this deployment reports as "current" defaults to the api-gateway
   # package version; override when your release tags track the whole fork.
   # UPDATE_CHECK_CURRENT_VERSION: "1.0.0"
-  # OPT-IN Workflows (n8n-backed automation engine, /v1/workflows + the embedded
-  # editor at /workflows-ui). Two gates apply, both fail-closed: this operator
-  # master switch AND a per-user, admin-managed WORKFLOWS_ENABLED setting
-  # (default off) toggled from Preferences -> Admin — so even with this on, the
-  # feature is offered only to users an admin has explicitly allowed, and only
-  # after the user explicitly pairs ("Connect workflows"). The n8n engine itself
-  # is the OPTIONAL `n8n` service below (compose profile `workflows`); the stack
-  # runs fine without it — the gateway then reports the engine unreachable (502)
-  # on editor access while everything else stays healthy.
+  # OPT-IN Workflows discovery. Two gates apply: this operator switch and the
+  # per-user WORKFLOWS_ENABLED setting. They control link visibility only; n8n
+  # owns authentication, authorization, projects, credentials, and sessions.
   WORKFLOWS_ENABLED: ${WORKFLOWS_ENABLED:-false}
-  # Internal (docker-network) URL of the n8n engine; the editor is only ever
-  # reached through the api-gateway's authenticated /workflows-ui proxy.
-  WORKFLOWS_N8N_URL: ${WORKFLOWS_N8N_URL:-http://n8n:5678}
+  # Browser-facing n8n editor origin. Production must use a distinct HTTPS
+  # hostname outside COOKIE_DOMAIN. HTTP is accepted only for localhost/127/::1
+  # development. Never put credentials, query strings, or fragments here.
+  WORKFLOWS_PUBLIC_URL: ${WORKFLOWS_PUBLIC_URL:-}
   # Optional server-wide shared access key ("obfuscation gate"). OFF by default
   # (empty key => zero behavior change). This is OBFUSCATION / access-gating for a
   # self-hosted instance, NOT end-to-end security (that is the client-side E2E
@@ -297,9 +298,9 @@ services:
       - standard-red-notes
       # - proxy
     # Example Traefik labels (uncomment with the `proxy` network). This nginx
-    # is the SINGLE front door: it serves the web UI and proxies the /v1 API,
-    # /files/, the realtime websocket (/sockets) and /workflows-ui/ same-origin,
-    # so ONE router to this service covers the whole stack. Adjust the host
+    # is the SINGLE Standard Red Notes front door: it serves the web UI and
+    # proxies the /v1 API, /files/, and realtime websocket (/sockets). n8n must
+    # use its own hostname/router. Adjust the host
     # rule and TLS resolver, and set PUBLIC_FILES_SERVER_URL to
     # https://<your-host>/files.
     # labels:
@@ -342,7 +343,7 @@ services:
       floci:
         condition: service_healthy
     # Internal-only: NO host ports. ALL client traffic (API /v1|/v2|/auth,
-    # files /files/, realtime /sockets, workflows /workflows-ui/) enters
+    # files /files/ and realtime /sockets) enters
     # through the app front door (nginx on APP_PORT, default 3001), which
     # reaches this container by service name on the compose network
     # (server:3000 for the gateway + in-process websocket gateway, server:3104
@@ -364,7 +365,7 @@ services:
     # NOTE: an external reverse proxy (Traefik/nginx/Caddy) does NOT need to
     # route to this container at all. The app front door above already proxies
     # every backend path (/v1, /v2, /auth, /subscription, /healthcheck,
-    # /files/, /sockets, /workflows-ui/) same-origin, so a single router to the
+    # /files/, /sockets) same-origin, so a single router to the
     # `app` service covers the whole stack (see the labels example on `app`).
 
   mcp:
@@ -376,8 +377,9 @@ services:
     image: standard-red-notes/mcp:local
     restart: unless-stopped
     # Hardening: no privilege escalation, no capabilities. Internal-only — this
-    # service is NEVER published to the host (reachable only by other containers
-    # on the standard-red-notes network at mcp:3010). Keep it on the `mcp` profile
+    # service is NEVER published to the host. It is deliberately dual-homed:
+    # `standard-red-notes` reaches the API, while `workflows-mcp` exposes only
+    # this authenticated bridge to n8n at mcp:3010. Keep it on the `mcp` profile
     # so it only runs when explicitly requested (`--profile mcp`).
     security_opt:
       - "no-new-privileges:true"
@@ -429,30 +431,40 @@ services:
         condition: service_healthy
     networks:
       - standard-red-notes
+      - workflows-mcp
 
   # ---------------------------------------------------------------------------
-  # OPTIONAL workflows engine (n8n) backing the Workflows feature. Runs ONLY
+  # OPTIONAL operator-managed n8n service. Runs ONLY
   # with the `workflows` compose profile (`docker compose --profile workflows
   # up -d`), so the stack stays healthy when the image was never pulled and the
-  # `server` service intentionally does NOT depend_on it (the gateway answers
-  # 502 on editor access while the engine is down; everything else is unaffected).
+  # `server` service intentionally does NOT depend_on it.
   #
-  # SECURITY: internal network ONLY — no host port. The editor UI and REST API
-  # are reachable exclusively through the api-gateway's authenticated
-  # /workflows-ui proxy, which admits only sessions that are BOTH admin-entitled
-  # (per-user WORKFLOWS_ENABLED setting) AND explicitly paired. n8n runs in
-  # shared single-owner mode (community edition; see docs/WORKFLOWS_PLAN.md
-  # §6.2) — per-user access enforcement lives at the SRN proxy boundary.
+  # SECURITY: workflow and Code nodes are arbitrary code, so n8n is a separate
+  # security domain. It joins ONLY `workflows-mcp`, where it can reach the
+  # authenticated MCP bridge. It has no direct service-network route and cannot
+  # address the core server, MariaDB, Redis, or floci by Compose DNS. Like any
+  # external client, it can still call endpoints deliberately published on the
+  # host/public network. The default published port is loopback-only for local
+  # setup. In production, remove that port mapping and attach n8n to a deliberate
+  # reverse-proxy network/router on a DISTINCT HTTPS hostname. Complete n8n's
+  # owner setup before exposing it. SRN never forwards its cookies, bearer
+  # tokens, or identity to n8n.
   #
   # Required env when enabling for real use:
-  #   WORKFLOWS_ENABLED=true      (master switch, x-server-env above)
-  #   N8N_ENCRYPTION_KEY=<random> (STABLE key for n8n's credential store; without
-  #                                it n8n generates one into its volume — fine,
-  #                                but set it explicitly for backup/restore)
+  #   PUBLIC_URL=https://notes.example.com
+  #   WORKFLOWS_ENABLED=true
+  #   WORKFLOWS_PUBLIC_URL=https://automation.example.net
+  #   N8N_PUBLIC_URL=https://automation.example.net
+  #   N8N_HOST=automation.example.net
+  #   N8N_PROTOCOL=https
+  #   N8N_PROXY_HOPS=1
+  #   N8N_SECURE_COOKIE=true
+  #   N8N_LISTEN_ADDRESS=0.0.0.0
+  #   N8N_ENCRYPTION_KEY=<stable random secret>
   n8n:
     profiles:
       - workflows
-    image: ${N8N_IMAGE:-n8nio/n8n:2.30.5}
+    image: ${N8N_IMAGE:-n8nio/n8n:2.32.6}
     restart: unless-stopped
     # Hardening: the image runs as the unprivileged `node` user (uid 1000) and
     # only serves HTTP on 5678 internally — no capabilities needed.
@@ -462,42 +474,58 @@ services:
       - ALL
     mem_limit: ${N8N_MEM_LIMIT:-1g}
     pids_limit: 512
+    # Local development only. Production should remove this mapping and route a
+    # dedicated TLS hostname to n8n:5678 over a private proxy network.
+    ports:
+      - "${N8N_BIND_ADDRESS:-127.0.0.1}:${N8N_PORT:-5678}:5678"
     environment:
-      # Serve the whole app under the SAME base path as the gateway proxy
-      # (/workflows-ui/), so the proxy forwards paths verbatim — no rewriting.
-      N8N_PATH: /workflows-ui/
       N8N_PORT: "5678"
-      N8N_PROTOCOL: http
-      # Public host n8n uses when composing its own URLs (webhook display etc.).
-      # Point it at the host the web app is served from when exposing for real.
-      N8N_HOST: ${WORKFLOWS_PUBLIC_HOST:-localhost}
-      # The gateway proxy is a plain HTTP streaming pipe (no WebSocket upgrade
-      # handling), so run n8n's editor push channel over Server-Sent Events.
-      N8N_PUSH_BACKEND: sse
-      # The editor is reached over plain http inside the compose network (TLS —
-      # if any — terminates at the outer proxy); without this n8n refuses
-      # its auth cookie on non-https origins. Set true behind real HTTPS.
-      N8N_SECURE_COOKIE: "false"
-      # Stable encryption key for n8n's credential store (see comment above).
+      N8N_PROTOCOL: ${N8N_PROTOCOL:-http}
+      N8N_HOST: ${N8N_HOST:-127.0.0.1}
+      N8N_EDITOR_BASE_URL: ${N8N_PUBLIC_URL:-http://127.0.0.1:5678}
+      WEBHOOK_URL: ${N8N_PUBLIC_URL:-http://127.0.0.1:5678}
+      # Required behind one reverse proxy so n8n trusts the forwarded origin.
+      N8N_PROXY_HOPS: ${N8N_PROXY_HOPS:-0}
+      N8N_SECURE_COOKIE: ${N8N_SECURE_COOKIE:-false}
+      # Listen on the container network. The host publication remains bound to
+      # N8N_BIND_ADDRESS (loopback by default).
+      N8N_LISTEN_ADDRESS: ${N8N_LISTEN_ADDRESS:-0.0.0.0}
+      # An empty value makes n8n generate a key in the persistent settings file
+      # on first launch. Production must set and back up a stable value.
       N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:-}
-      N8N_DIAGNOSTICS_ENABLED: "false"
+      # n8n 2.x hardening. These controls do not disable the built-in MCP
+      # Client/MCP Client Tool used by the documented bridge integration.
+      N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS: ${N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS:-true}
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: ${N8N_BLOCK_ENV_ACCESS_IN_NODE:-true}
+      N8N_BLOCK_FILE_ACCESS_TO_N8N_FILES: ${N8N_BLOCK_FILE_ACCESS_TO_N8N_FILES:-true}
+      N8N_RESTRICT_FILE_ACCESS_TO: ${N8N_RESTRICT_FILE_ACCESS_TO:-/home/node/.n8n-files}
+      N8N_DIAGNOSTICS_ENABLED: ${N8N_DIAGNOSTICS_ENABLED:-false}
+      N8N_PERSONALIZATION_ENABLED: ${N8N_PERSONALIZATION_ENABLED:-false}
+      N8N_COMMUNITY_PACKAGES_ENABLED: ${N8N_COMMUNITY_PACKAGES_ENABLED:-false}
+      N8N_UNVERIFIED_PACKAGES_ENABLED: ${N8N_UNVERIFIED_PACKAGES_ENABLED:-false}
+      N8N_PUBLIC_API_DISABLED: ${N8N_PUBLIC_API_DISABLED:-true}
+      N8N_PUBLIC_API_SWAGGERUI_DISABLED: ${N8N_PUBLIC_API_SWAGGERUI_DISABLED:-true}
       GENERIC_TIMEZONE: ${TZ:-UTC}
     volumes:
       - n8n-data:/home/node/.n8n
     healthcheck:
-      # /healthz sits under N8N_PATH when a base path is configured; probe both
-      # forms so the check is robust across n8n versions.
-      test:
-        [
-          "CMD-SHELL",
-          "wget -qO- http://127.0.0.1:5678/workflows-ui/healthz >/dev/null 2>&1 || wget -qO- http://127.0.0.1:5678/healthz >/dev/null 2>&1 || exit 1",
-        ]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5678/healthz >/dev/null 2>&1 || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 10
       start_period: 60s
     networks:
-      - standard-red-notes
+      - workflows-mcp
+      # - proxy
+    # Production Traefik example (retain `workflows-mcp`, add the external
+    # `proxy` network, and remove the loopback `ports` mapping):
+    # labels:
+    #   - "traefik.enable=true"
+    #   - "traefik.docker.network=proxy"
+    #   - "traefik.http.routers.n8n.rule=Host(`automation.example.net`)"
+    #   - "traefik.http.routers.n8n.entrypoints=websecure"
+    #   - "traefik.http.routers.n8n.tls.certresolver=le"
+    #   - "traefik.http.services.n8n.loadbalancer.server.port=5678"
 
   db:
     image: ${MARIADB_IMAGE:-mariadb:12.3.2}
@@ -709,6 +737,10 @@ services:
 
 networks:
   standard-red-notes:
+    driver: bridge
+  # Narrow trust bridge: n8n joins only this network; the dual-homed MCP bridge
+  # is its sole path to Standard Red Notes. Never attach core data/services.
+  workflows-mcp:
     driver: bridge
   # ---------------------------------------------------------------------------
   # Optional: attach the proxy-facing services to an EXISTING reverse-proxy

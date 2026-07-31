@@ -894,63 +894,133 @@ describe('ServerSettingsStore + ServerSettingsResolver', () => {
 
       expect(await resolver.resolveWorkflowsConfig()).toEqual({
         enabled: false,
-        n8nUrl: 'http://n8n:5678',
-        uiBasePath: '/workflows-ui',
-        uiTokenTtlSeconds: 12 * 60 * 60,
+        publicUrl: null,
+        legacyConfigurationPresent: false,
       })
     })
 
-    it('uses the env baseline over defaults and rejects a non-http n8n URL', async () => {
+    it('uses a valid public env URL and ignores an invalid one', async () => {
       const resolver = makeResolver({
         workflowsEnabled: true,
-        workflowsN8nUrl: 'ftp://bad',
-        workflowsUiBasePath: '/wf',
-        workflowsUiTokenTtlSeconds: 3600,
+        workflowsPublicUrl: 'https://n8n.example.test',
       })
 
-      const config = await resolver.resolveWorkflowsConfig()
-      expect(config.enabled).toBe(true)
-      // A non-http(s) URL is ignored — falls through to the default.
-      expect(config.n8nUrl).toBe('http://n8n:5678')
-      expect(config.uiBasePath).toBe('/wf')
-      expect(config.uiTokenTtlSeconds).toBe(3600)
+      expect(await resolver.resolveWorkflowsConfig()).toEqual({
+        enabled: true,
+        publicUrl: 'https://n8n.example.test/',
+        legacyConfigurationPresent: false,
+      })
+      expect(
+        await makeResolver({ workflowsEnabled: true, workflowsPublicUrl: 'ftp://bad' }).resolveWorkflowsConfig(),
+      ).toEqual({
+        enabled: true,
+        publicUrl: null,
+        legacyConfigurationPresent: false,
+      })
     })
 
-    it('lets persisted admin values WIN over env and clamps the TTL', async () => {
-      const resolver = makeResolver({ workflowsEnabled: false, workflowsN8nUrl: 'http://env-n8n:5678' })
+    it('lets persisted admin values win over env', async () => {
+      const resolver = makeResolver({
+        workflowsEnabled: false,
+        workflowsPublicUrl: 'https://env-n8n.example.test',
+      })
       await resolver.applyPatch({
-        workflows: { enabled: true, n8nUrl: 'https://n8n.example.com', uiTokenTtlSeconds: 604800 },
+        workflows: { enabled: true, publicUrl: 'https://n8n.example.com' },
       })
 
       const config = await resolver.resolveWorkflowsConfig()
-      expect(config.enabled).toBe(true)
-      expect(config.n8nUrl).toBe('https://n8n.example.com')
-      expect(config.uiTokenTtlSeconds).toBe(7 * 24 * 60 * 60)
+      expect(config).toEqual({
+        enabled: true,
+        publicUrl: 'https://n8n.example.com/',
+        legacyConfigurationPresent: false,
+      })
     })
 
     it('persists, prunes on null, and clears back to env/default', async () => {
       const store = new ServerSettingsStore(filePath)
 
-      await store.update({ workflows: { enabled: true, n8nUrl: 'http://x:1' } })
-      expect(await store.read()).toEqual({ workflows: { enabled: true, n8nUrl: 'http://x:1' } })
+      await store.update({ workflows: { enabled: true, publicUrl: 'https://n8n.example.test' } })
+      expect(await store.read()).toEqual({
+        workflows: { enabled: true, publicUrl: 'https://n8n.example.test' },
+      })
 
       await store.update({ workflows: { enabled: null } })
-      expect(await store.read()).toEqual({ workflows: { n8nUrl: 'http://x:1' } })
+      expect(await store.read()).toEqual({ workflows: { publicUrl: 'https://n8n.example.test' } })
 
-      await store.update({ workflows: { n8nUrl: null } })
+      await store.update({ workflows: { publicUrl: null } })
       expect(await store.read()).toEqual({})
     })
 
     it('reports the resolved config + sources in the view', async () => {
       const resolver = makeResolver({ workflowsEnabled: true })
-      await resolver.applyPatch({ workflows: { n8nUrl: 'https://persisted:5678' } })
+      await resolver.applyPatch({ workflows: { publicUrl: 'https://n8n.example.test' } })
 
       const view = await resolver.view()
-      expect(view.settings.workflows).toMatchObject({ enabled: true, n8nUrl: 'https://persisted:5678' })
+      expect(view.settings.workflows).toEqual({
+        enabled: true,
+        publicUrl: 'https://n8n.example.test/',
+        legacyConfigurationPresent: false,
+      })
       expect(view.sources).toMatchObject({
         'workflows.enabled': 'env',
-        'workflows.n8nUrl': 'persisted',
-        'workflows.uiBasePath': 'default',
+        'workflows.publicUrl': 'persisted',
+      })
+    })
+
+    it('reports the env source when a corrupt legacy persisted URL is skipped', async () => {
+      await fs.writeFile(
+        filePath,
+        JSON.stringify({
+          workflows: {
+            publicUrl: 'http://n8n:5678',
+          },
+        }),
+      )
+      const resolver = makeResolver({
+        workflowsPublicUrl: 'https://env-n8n.example.test',
+      })
+
+      const view = await resolver.view()
+      expect(view.settings.workflows.publicUrl).toBe('https://env-n8n.example.test/')
+      expect(view.sources['workflows.publicUrl']).toBe('env')
+    })
+
+    it('loads proxy-era settings for migration without reinterpreting the internal URL', async () => {
+      await fs.writeFile(
+        filePath,
+        JSON.stringify({
+          workflows: {
+            enabled: true,
+            n8nUrl: 'http://n8n:5678',
+            uiBasePath: '/workflows-ui',
+            uiTokenTtlSeconds: 3600,
+          },
+        }),
+      )
+      const resolver = makeResolver()
+
+      expect(await resolver.resolveWorkflowsConfig()).toEqual({
+        enabled: true,
+        publicUrl: null,
+        legacyConfigurationPresent: true,
+      })
+
+      await resolver.applyPatch({ workflows: { publicUrl: 'https://n8n.example.test' } })
+      expect(await new ServerSettingsStore(filePath).read()).toEqual({
+        workflows: { enabled: true, publicUrl: 'https://n8n.example.test' },
+      })
+    })
+
+    it('surfaces legacy env presence without using it as a browser URL', async () => {
+      expect(
+        await makeResolver({
+          workflowsEnabled: true,
+          workflowsLegacyConfigurationPresent: true,
+        }).resolveWorkflowsConfig(),
+      ).toEqual({
+        enabled: true,
+        publicUrl: null,
+        legacyConfigurationPresent: true,
       })
     })
   })

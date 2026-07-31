@@ -1,15 +1,16 @@
-import { forwardRef, ReactNode, useCallback, useEffect, useState } from 'react'
+import { forwardRef, ReactNode, useCallback } from 'react'
 import { observer } from 'mobx-react-lite'
 import { classNames } from '@standardnotes/utils'
 import { ToastType, addToast } from '@standardnotes/toast'
 import { confirmDialog } from '@standardnotes/ui-services'
+
 import { WebApplication } from '@/Application/WebApplication'
 import Icon from '@/Components/Icon/Icon'
 import Button from '@/Components/Button/Button'
 import { ErrorBoundary } from '@/Utils/ErrorBoundary'
 import { AppPaneId } from '../Panes/AppPaneMetadata'
 import { useWorkflowsStatus } from './useWorkflowsStatus'
-import { resolveWorkflowsEditorUrl, workflowsStatusService } from './workflowsStatus'
+import { openExternalWorkflowsUrl, resolveWorkflowsPublicUrl } from './workflowsStatus'
 
 type Props = {
   application: WebApplication
@@ -18,51 +19,12 @@ type Props = {
   children?: ReactNode
 }
 
-/**
- * Iframe sandbox/allow flags for the embedded n8n editor — the vetted set from
- * WebEmbedNode.tsx (SANDBOX_DEFAULT / IFRAME_ALLOW there). Scripts, own-origin
- * storage/fetch, forms, popups (escaping to a normal tab), modals, downloads
- * and presentation are enabled — everything a rich SPA like the n8n editor
- * needs — while `allow-top-navigation` stays OFF so the frame can never
- * navigate the whole app away, and referrerPolicy="no-referrer" avoids leaking
- * the app URL. Camera/microphone/geolocation are intentionally never granted.
- */
-const EDITOR_SANDBOX = [
-  'allow-scripts',
-  'allow-same-origin',
-  'allow-forms',
-  'allow-popups',
-  'allow-popups-to-escape-sandbox',
-  'allow-modals',
-  'allow-downloads',
-  'allow-presentation',
-].join(' ')
-
-const EDITOR_IFRAME_ALLOW = 'clipboard-write; fullscreen; encrypted-media; picture-in-picture; autoplay'
-
 const EXPLAINER =
-  'Workflows let you build visual automations for your notebook: react to events (a note created or updated), ' +
-  'run AI-agent steps, send emails or messages, and share notes or files — all executed by an automation engine ' +
-  'running beside your server. It only ever talks to your account through a revocable, scoped access token; your ' +
-  'master key and note contents stay end-to-end encrypted.'
+  'This server can publish a link to an operator-managed n8n automation service. n8n is a separate application with its own accounts, sessions, authorization, and credential store.'
 
 const NOT_ENABLED_EXPLAINER =
-  'Workflows are not enabled for your account. An administrator must enable the feature for you ' +
-  '(Preferences → Admin → Workflows) before you can connect.'
+  'Workflows discovery is not enabled for this server/account. An operator controls the server switch and an administrator controls the per-user flag.'
 
-/** Header chip showing the pairing state. */
-const StatusChip = ({ paired }: { paired: boolean }) => (
-  <span
-    className={classNames(
-      'rounded-full border px-2 py-0.5 text-xs font-semibold',
-      paired ? 'border-success text-success' : 'border-border text-passive-1',
-    )}
-  >
-    {paired ? 'Connected' : 'Not connected'}
-  </span>
-)
-
-/** Simple loading skeleton shown while GET /v1/workflows/status is in flight. */
 const LoadingSkeleton = () => (
   <div className="flex flex-col gap-3 p-4" aria-label="Loading workflows status" role="status">
     <div className="bg-contrast h-5 w-48 animate-pulse rounded" />
@@ -72,114 +34,57 @@ const LoadingSkeleton = () => (
   </div>
 )
 
-/**
- * Standard Red Notes: the Workflows pane (Phase 1). Shows the pairing status
- * for the n8n-backed automation engine, lets the user connect ("pair") or
- * disconnect, and — once paired — embeds the workflow editor in a sandboxed,
- * click-to-load iframe (never auto-loaded). Degrades gracefully when the
- * server has not deployed /v1/workflows/* yet (endpoint 404s → explanatory
- * message), and hides functionality when the account is not entitled.
- */
+const AvailabilityChip = ({ available }: { available: boolean }) => (
+  <span
+    className={classNames(
+      'rounded-full border px-2 py-0.5 text-xs font-semibold',
+      available ? 'border-success text-success' : 'border-warning text-warning',
+    )}
+  >
+    {available ? 'External service' : 'Needs configuration'}
+  </span>
+)
+
 const WorkflowsView = forwardRef<HTMLDivElement, Props>(({ application, className, id, children }, ref) => {
   const { state, signedIn, refresh } = useWorkflowsStatus(application)
-
-  const [pairing, setPairing] = useState(false)
-  const [unpairing, setUnpairing] = useState(false)
-  // Click-to-load: the editor iframe is NEVER auto-loaded; the user must
-  // explicitly press "Load workflow editor" each time the pane mounts.
-  const [editorLoaded, setEditorLoaded] = useState(false)
-
   const status = state.kind === 'loaded' ? state.status : undefined
-  const paired = status?.paired === true
-  const host = application.getHost.execute().getValue()
-  const editorSrc = resolveWorkflowsEditorUrl(host, status?.editorUrl ?? null)
+  const apiHost = application.getHost.execute().getValue()
+  const browserOrigin = typeof window === 'undefined' ? null : window.location.origin
+  const publicUrl = resolveWorkflowsPublicUrl(status?.publicUrl ?? null, apiHost, browserOrigin)
 
-  // If the pairing goes away (unpair, account change), drop the loaded editor.
-  useEffect(() => {
-    if (!paired) {
-      setEditorLoaded(false)
+  const openN8n = useCallback(async () => {
+    if (!publicUrl) {
+      addToast({
+        type: ToastType.Error,
+        message: 'The server did not provide a safe, separate n8n address.',
+      })
+      return
     }
-  }, [paired])
-
-  const pair = useCallback(async () => {
-    setPairing(true)
-    try {
-      const {
-        status: httpStatus,
-        ok,
-        data,
-      } = await application.serverJsonRequest<{
-        paired?: boolean
-        editorUrl?: string
-      }>('/v1/workflows/pair', {})
-      if (ok && data?.paired === true) {
-        workflowsStatusService.setStatus({
-          enabled: true,
-          paired: true,
-          editorUrl: typeof data.editorUrl === 'string' ? data.editorUrl : null,
-        })
-        addToast({ type: ToastType.Success, message: 'Workflows connected.' })
-      } else if (httpStatus === 403) {
-        addToast({
-          type: ToastType.Error,
-          message: 'Workflows are not enabled for your account. Ask an administrator to enable them.',
-        })
-        void refresh()
-      } else {
-        addToast({ type: ToastType.Error, message: 'Failed to connect workflows. Please try again.' })
-      }
-    } catch (error) {
-      console.error(error)
-      addToast({ type: ToastType.Error, message: 'Failed to connect workflows. Please try again.' })
-    } finally {
-      setPairing(false)
-    }
-  }, [application, refresh])
-
-  const unpair = useCallback(async () => {
     const confirmed = await confirmDialog({
-      title: 'Disconnect workflows',
-      text:
-        'Disconnect workflows? Your automation account is disabled and its access token is revoked. ' +
-        'You can reconnect at any time.',
-      confirmButtonText: 'Disconnect',
-      confirmButtonStyle: 'danger',
+      title: 'Open the external n8n service?',
+      text: 'n8n is operated and authenticated separately from Standard Red Notes. Opening it does not create an n8n account or grant access. Any workflow can read or modify everything allowed by credentials you configure in n8n, including a Standard Red Notes MCP credential.',
+      confirmButtonText: 'Open n8n',
     })
     if (!confirmed) {
       return
     }
-    setUnpairing(true)
-    try {
-      const { ok, data } = await application.serverJsonRequest<{ paired?: boolean }>('/v1/workflows/unpair', {})
-      if (ok && data?.paired === false) {
-        workflowsStatusService.setStatus({ enabled: true, paired: false, editorUrl: null })
-        addToast({ type: ToastType.Success, message: 'Workflows disconnected.' })
-      } else {
-        addToast({ type: ToastType.Error, message: 'Failed to disconnect workflows. Please try again.' })
-      }
-    } catch (error) {
-      console.error(error)
-      addToast({ type: ToastType.Error, message: 'Failed to disconnect workflows. Please try again.' })
-    } finally {
-      setUnpairing(false)
-    }
-  }, [application])
+    openExternalWorkflowsUrl(publicUrl)
+  }, [publicUrl])
 
   const renderBody = () => {
     if (!signedIn) {
       return <div className="text-passive-1 px-4 py-10 text-center text-sm">Sign in to a server to use Workflows.</div>
     }
-
     if (state.kind === 'unknown' || state.kind === 'loading') {
       return <LoadingSkeleton />
     }
-
     if (state.kind === 'unavailable') {
       return (
         <div className="flex flex-col gap-3 p-4">
           <p className="text-passive-0 text-sm">{EXPLAINER}</p>
           <p className="text-passive-1 text-sm">
-            Workflows are not available on this server (the server may not have the workflows service deployed yet).
+            The workflows status could not be loaded. The server may not expose the endpoint, the session may have
+            expired, or the network may be unavailable.
           </p>
           <div>
             <Button label="Check again" onClick={() => void refresh()} />
@@ -187,7 +92,6 @@ const WorkflowsView = forwardRef<HTMLDivElement, Props>(({ application, classNam
         </div>
       )
     }
-
     if (!status?.enabled) {
       return (
         <div className="flex flex-col gap-3 p-4">
@@ -200,74 +104,46 @@ const WorkflowsView = forwardRef<HTMLDivElement, Props>(({ application, classNam
       )
     }
 
-    if (!paired) {
-      return (
-        <div className="flex flex-col gap-3 p-4">
-          <p className="text-passive-0 text-sm">{EXPLAINER}</p>
-          <p className="text-passive-1 text-sm">
-            Connecting provisions your personal automation workspace and a revocable, scoped access token. You can
-            disconnect at any time.
-          </p>
-          <div>
-            <Button
-              primary
-              label={pairing ? 'Connecting…' : 'Connect workflows'}
-              onClick={() => void pair()}
-              disabled={pairing}
-            />
-          </div>
-        </div>
-      )
-    }
-
     return (
-      <div className="flex min-h-0 flex-grow flex-col gap-3 p-4">
-        <div className="flex flex-wrap items-center gap-2">
-          <p className="text-passive-1 min-w-0 flex-grow text-sm">
-            Your workflows account is connected. Build and manage automations in the editor below.
-          </p>
-          <Button
-            label={unpairing ? 'Disconnecting…' : 'Disconnect'}
-            onClick={() => void unpair()}
-            disabled={unpairing}
-          />
-        </div>
+      <div className="flex flex-col gap-4 p-4">
+        <p className="text-passive-0 text-sm">{EXPLAINER}</p>
 
-        {!editorSrc ? (
-          <p className="text-danger text-sm">
-            The server did not provide a usable workflow editor address. Try disconnecting and reconnecting.
-          </p>
-        ) : !editorLoaded ? (
-          /* Click-to-load card: the editor is NEVER auto-loaded. */
+        {!status.available || !publicUrl ? (
+          <div className="border-warning rounded border p-4" role="alert">
+            <div className="font-semibold">The external service link is not safely configured</div>
+            <p className="text-passive-0 mt-1 text-sm">
+              An administrator must set a distinct HTTPS hostname. The n8n hostname cannot match the app or API
+              hostname, even on another port, and cannot fall inside a domain-scoped Standard Red Notes auth cookie.
+            </p>
+          </div>
+        ) : (
           <div className="border-border rounded border p-4">
             <div className="flex items-start gap-2">
               <Icon type="tune" className="text-info mt-0.5 flex-shrink-0" />
-              <div>
-                <div className="font-semibold">Workflow editor</div>
+              <div className="min-w-0">
+                <div className="font-semibold">Operator-managed n8n</div>
                 <p className="text-passive-0 mt-1 text-sm">
-                  The editor runs in an embedded, sandboxed frame served through your server. Load it when you are ready
-                  to build or manage automations.
+                  Opens in a new tab with no opener and no referrer. Standard Red Notes does not forward your session,
+                  authenticate you to n8n, provision a workspace, or embed the editor.
                 </p>
-                <p className="text-passive-1 mt-1 text-xs break-all">{editorSrc}</p>
+                <p className="text-passive-1 mt-2 text-xs break-all">{publicUrl}</p>
               </div>
             </div>
             <div className="mt-3">
-              <Button primary label="Load workflow editor" onClick={() => setEditorLoaded(true)} />
+              <Button primary label="Open n8n in a new tab" onClick={() => void openN8n()} />
             </div>
           </div>
-        ) : (
-          <div className="border-border min-h-[480px] w-full flex-grow overflow-hidden rounded border">
-            <iframe
-              title="Workflow editor"
-              src={editorSrc}
-              className="h-full w-full border-0"
-              sandbox={EDITOR_SANDBOX}
-              allow={EDITOR_IFRAME_ALLOW}
-              referrerPolicy="no-referrer"
-              loading="lazy"
-            />
-          </div>
         )}
+
+        <div className="border-warning rounded border p-4">
+          <div className="font-semibold">Credential boundary</div>
+          <p className="text-passive-0 mt-1 text-sm">
+            To let n8n call Standard Red Notes, manually create a revocable, least-privilege MCP credential and store it
+            only in n8n&apos;s credential manager. Never put it in a URL, workflow source, expression, or log. Workflows
+            can read or modify anything that credential permits, and the n8n operator can inspect workflow definitions
+            and execution data.
+          </p>
+        </div>
       </div>
     )
   }
@@ -282,7 +158,7 @@ const WorkflowsView = forwardRef<HTMLDivElement, Props>(({ application, classNam
         <div className="flex min-w-0 items-center gap-2">
           <Icon type="tune" className="text-info flex-shrink-0" />
           <span className="text-base font-bold">Workflows</span>
-          {state.kind === 'loaded' && status?.enabled ? <StatusChip paired={paired} /> : null}
+          {state.kind === 'loaded' && status?.enabled ? <AvailabilityChip available={Boolean(publicUrl)} /> : null}
         </div>
         <button
           className="hover:bg-default rounded p-1"

@@ -87,7 +87,12 @@ That's it. To stop the stack later: `docker compose down`.
 
 ## What the stack contains
 
-`docker-compose.yml` defines these services on a private bridge network:
+`docker-compose.yml` uses two private bridge networks. Core services use
+`standard-red-notes`. The arbitrary-code `n8n` trust domain uses only
+`workflows-mcp`, with the authenticated MCP service dual-homed so it can reach
+the core API without giving n8n a direct service-network route or Compose DNS
+address for the server, database, cache, or event emulator. Publicly exposed
+endpoints remain reachable like they are to any external client:
 
 | Service  | Image                       | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | -------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -96,7 +101,8 @@ That's it. To stop the stack later: `docker compose down`.
 | `db`     | `mariadb:12.3.2`            | Primary datastore for accounts, notes, sync, and revisions.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `cache`  | `redis:8.8.0-alpine`        | Cache, sessions, and pub/sub used for realtime delivery. Persists with append-only file.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `floci`  | `floci/floci:1.5.33-compat` | Local AWS SNS/SQS emulator ([floci.io](https://floci.io), MIT). The server publishes domain events to SNS topics; the in-container websocket-gateway and server workers consume SQS queues. Bootstrapped on every start (see below). Replaces LocalStack: no auth token required (LocalStack 2026.3.0+ demands one even for SNS/SQS, which is why we last pinned `localstack:4.4.0`), and it is far lighter (single native binary vs a Python runtime). It is LocalStack wire-compatible; the current LocalStack escape hatch and required auth-token migration are documented in `docker-compose.yml`. |
-| `mcp`    | built from `./mcp`          | Optional MCP stdio bridge. Only runs with the `mcp` profile: `docker compose --profile mcp run --rm mcp`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `mcp`    | built from `./mcp`          | Optional authenticated MCP bridge. It is the only service on both `standard-red-notes` and `workflows-mcp`: the first reaches the API and the second accepts n8n calls at `mcp:3010`. Only runs with the `mcp` profile. |
+| `n8n`    | `n8nio/n8n:2.32.6`          | Optional operator-managed automation service under the `workflows` profile. It joins only `workflows-mcp`, has independent authentication and a loopback-only development port; production uses a separate TLS hostname and proxy network. |
 
 ### The SNS/SQS bootstrap
 
@@ -156,8 +162,9 @@ to boot otherwise).
 | `DB_MAX_CONNECTIONS`                 | MariaDB server connection ceiling. Keep above total service pools.                                                                                                                                               | `150`                                          |
 | `DB_INNODB_BUFFER_POOL_SIZE`         | MariaDB InnoDB cache size. Tune with `DB_MEM_LIMIT`.                                                                                                                                                             | `512M`                                         |
 | `DB_MAX_ALLOWED_PACKET`              | Maximum MariaDB packet for large encrypted payloads.                                                                                                                                                             | `128M`                                         |
-| `APP_PORT`                           | The single host port. The app's nginx front door serves the web UI and proxies the API, files, and websocket same-origin — no other service publishes a host port.                                               | Your choice (default `3001`)                   |
+| `APP_PORT`                           | The public app port. The nginx front door serves the web UI and proxies the API, files, and websocket same-origin. The optional workflows profile has a separate loopback-only development port.                  | Your choice (default `3001`)                   |
 | `PUBLIC_FILES_SERVER_URL`            | Public URL clients use to reach the files service. It is the app origin + `/files` (the front door's prefix-strip proxy).                                                                                        | Computed by the script                         |
+| `PUBLIC_URL`                         | Canonical app origin used to isolate external integration hostnames.                                                                                                                                             | Computed from the app origin                   |
 | `AUTH_SERVER_U2F_RELYING_PARTY_ID`   | WebAuthn/hardware-key relying-party ID (your host).                                                                                                                                                              | Computed (host of your domain, or `localhost`) |
 | `AUTH_SERVER_U2F_EXPECTED_ORIGIN`    | Allowed WebAuthn origins.                                                                                                                                                                                        | Computed from your domain + app port           |
 
@@ -282,8 +289,9 @@ an existing stack rather than starting a server of its own.
   proxy config (`TRUST_PROXY`, nginx/Traefik examples, websocket upgrade).
 - **Port already in use?** Re-run the setup script and choose a different host
   port, or edit `APP_PORT` in `.env`, then `docker compose up -d` again. It is
-  the only published port — the API gateway and files service are internal-only
-  and reached through the app front door.
+  the only public app port — the API gateway and files service are internal-only
+  and reached through the app front door. The optional n8n development mapping
+  remains host-loopback-only.
 
 ## Running behind a reverse proxy
 
@@ -306,6 +314,7 @@ trust the proxy's forwarded headers and the cookie must be marked Secure:
 | `COOKIE_SECURE`                    | `true`                                                | The auth cookie is then only sent over HTTPS. Without this the browser may drop it on an HTTPS origin and every request 401s.                                                                                                                                                                                                                                                                                                       |
 | `COOKIE_DOMAIN`                    | your domain (e.g. `notes.example.com`)                | Scopes the auth cookie to your host. Leave empty only for bare-host/IP setups.                                                                                                                                                                                                                                                                                                                                                      |
 | `PUBLIC_FILES_SERVER_URL`          | `https://notes.example.com` (or a files subpath/host) | The public URL clients use to reach the files service - must be the HTTPS URL the browser can reach, routed by the proxy.                                                                                                                                                                                                                                                                                                           |
+| `PUBLIC_URL`                       | `https://notes.example.com`                           | Canonical app origin used for external-link hostname isolation; do not derive it from forwarded `Host`.                                                                                                                                                                                                                                                                                                                             |
 | `AUTH_SERVER_U2F_EXPECTED_ORIGIN`  | `https://notes.example.com`                           | WebAuthn/hardware-key origin must match the HTTPS origin.                                                                                                                                                                                                                                                                                                                                                                           |
 | `AUTH_SERVER_U2F_RELYING_PARTY_ID` | `notes.example.com`                                   | WebAuthn relying-party id (the host, no scheme/port).                                                                                                                                                                                                                                                                                                                                                                               |
 
@@ -313,7 +322,7 @@ trust the proxy's forwarded headers and the cookie must be marked Secure:
 > from the `X-Forwarded-*` headers when "trust proxy" is configured. Without it,
 > the server thinks every request is plain HTTP from the proxy's address.
 
-### Single external host
+### Standard Red Notes external host
 
 Route the whole hostname to the app front door (`app` container, host port
 `APP_PORT`/3001, container port 8080). The front door's nginx
@@ -331,12 +340,9 @@ Route the whole hostname to the app front door (`app` container, host port
   through too. The browser opens `wss://<host>/sockets`. (`WEB_SOCKET_SERVER_URL`
   is container-internal - the api-gateway minting tokens against itself - and
   should stay at its default.)
-- `/workflows-ui/` -> the optional embedded Workflows editor (auth-checked by
-  the api-gateway, which proxies to the internal-only n8n container).
-
 The web client does not hard-code an API origin - it defaults to its own origin
 and follows the gateway's advertised files URL - so single-origin routing works
-out of the box.
+out of the box. n8n is deliberately not part of this path router.
 
 ### Compose: dropping host ports
 
@@ -395,13 +401,13 @@ server {
         proxy_read_timeout 1h;
     }
 
-    # Everything else (web UI, /v1 API, /workflows-ui, ...) - the app front
-    # door routes by path internally.
+    # Everything else (web UI and /v1 API) - the app front door routes by path.
     location / { proxy_pass http://127.0.0.1:3001; }
 }
 ```
 
 Set in `.env`: `COOKIE_SECURE=true`, `COOKIE_DOMAIN=notes.example.com`,
+`PUBLIC_URL=https://notes.example.com`,
 `PUBLIC_FILES_SERVER_URL=https://notes.example.com/files`, and the WebAuthn
 origins. (`WEB_SOCKET_SERVER_URL` is container-internal and should stay at its
 default.) `TRUST_PROXY` can stay at its default when nginx runs on the same host
@@ -436,6 +442,17 @@ networks:
 Because the proxy and the stack share the `proxy` Docker network (a private
 subnet), the default `TRUST_PROXY` already trusts Traefik - no override needed.
 Use the same `.env` values as the nginx example.
+
+### Separate n8n hostname
+
+If you enable the `workflows` profile, give n8n a second router such as
+`automation.example.net -> n8n:5678`. Do not add an n8n path to the Standard Red
+Notes host. Configure n8n's own TLS-facing URL, trusted proxy hops, secure
+cookie, owner account, and project/user policy. The Standard Red Notes
+`WORKFLOWS_ENABLED` gates reveal only the external link.
+
+See [Workflows with n8n](workflows.md) for complete nginx/Traefik topology,
+environment values, URL rejection rules, MCP connection, and revocation.
 
 ### Manual verification
 
@@ -510,6 +527,7 @@ and container rebuilds:
 | `uploads`      | Uploaded file attachments stored by the files service.         | Back this up alongside the DB if you use file uploads. |
 | `server-logs`  | Server process logs.                                           | Disposable.                                            |
 | `mcp-data`     | MCP bridge local state (only with the `mcp` profile).          | Disposable.                                            |
+| `n8n-data`     | n8n database/config/credentials (only with `workflows`).       | Back up with the matching `N8N_ENCRYPTION_KEY`.        |
 
 List them with `docker volume ls | grep standard-red-notes`.
 

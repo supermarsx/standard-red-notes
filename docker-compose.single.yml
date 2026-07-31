@@ -60,6 +60,14 @@ services:
       # nginx /files. Defaults to this container's published origin; override for a
       # real domain, e.g. https://notes.example.com/files.
       PUBLIC_FILES_SERVER_URL: ${PUBLIC_FILES_SERVER_URL:-http://localhost:${APP_PORT:-3001}/files}
+      # No implicit localhost fallback: set this canonical origin explicitly
+      # before enabling workflows or subscription pairing. The setup scripts
+      # generate a correct local or production value.
+      PUBLIC_URL: ${PUBLIC_URL:-}
+      # Optional discovery link to an independently deployed/authenticated n8n.
+      # The single container never proxies n8n.
+      WORKFLOWS_ENABLED: ${WORKFLOWS_ENABLED:-false}
+      WORKFLOWS_PUBLIC_URL: ${WORKFLOWS_PUBLIC_URL:-}
 
       # Cookies. Defaults suit an http://localhost self-host. Behind HTTPS on a
       # domain, set COOKIE_DOMAIN and COOKIE_SECURE=true.

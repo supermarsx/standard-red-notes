@@ -560,7 +560,7 @@ export const OPERATOR_ENVS: OperatorEnvSpec[] = [
     service: 'api-gateway',
     kind: 'boolean-loose',
     defaultValue: 'false',
-    description: 'Master switch: workflows (n8n) proxying at the gateway',
+    description: 'Master switch: external n8n link discovery',
     restartRequired: true,
   },
   {
@@ -967,9 +967,7 @@ SERVER
                                      Browser OCR default language (next page load)
   workflows [show]                   Effective workflows (n8n) config + source
   workflows set-enabled <on|off>     Toggle the workflows master switch (runtime)
-  workflows set-n8n-url <url>        Internal n8n engine URL (runtime)
-  workflows set-ui-base-path </path> Editor proxy mount (next gateway restart)
-  workflows set-ui-token-ttl <secs>  Editor-cookie lifetime (runtime; new cookies)
+  workflows set-public-url <url>     Separate-origin n8n editor URL (runtime)
   plugins [show]                     Effective plugins gallery repo URL + source
   plugins set-repo-url <url>         Plugins repo base URL (runtime; same-origin proxy)
   config                             Effective operator config + source + restart info
@@ -1199,18 +1197,16 @@ env baseline over the safe defaults. Setting requires SERVER_SETTINGS_PATH set.`
 USAGE
   srn-admin workflows [show] [--json]
   srn-admin workflows set-enabled <on|off|clear>
-  srn-admin workflows set-n8n-url <http(s)://host:port|clear>
-  srn-admin workflows set-ui-base-path </path|clear>
-  srn-admin workflows set-ui-token-ttl <60..604800|clear>
+  srn-admin workflows set-public-url <https://n8n.example.com|clear>
 
-The n8n-backed automation engine. The master switch and internal engine URL are
-read per request, so they take effect at RUNTIME; the editor-proxy base path is
-bound when the gateway starts, so a change to it only applies after the gateway
-restarts. Per-user access is a separate opt-in ('flags set <user> WORKFLOWS_ENABLED
-true'). No secret lives in this config — the editor proxy authenticates with the
-gateway's own short-lived cookie, and n8n community edition needs no API key for the
-editor. 'show' reads the SAME persisted overlay the admin panel writes over the
-gateway env over defaults. Setting requires SERVER_SETTINGS_PATH configured.`,
+The master switch controls link discovery only. The public URL must be a distinct
+HTTPS hostname (HTTP is accepted only for explicit loopback development). n8n owns
+its login, authorization, projects, credentials, and session cookies; Standard Red
+Notes does not proxy or provision it. Per-user discovery is a separate opt-in
+('flags set <user> WORKFLOWS_ENABLED true'). 'show' reads the SAME persisted
+overlay the admin panel writes over the gateway env over defaults. Proxy-era
+n8nUrl/editor-path/editor-cookie fields are shown as a migration warning but are
+never reused as a browser URL. Setting requires SERVER_SETTINGS_PATH configured.`,
   plugins: `plugins — plugins (extensions) gallery repo (SERVER_SETTINGS overlay)
 
 USAGE

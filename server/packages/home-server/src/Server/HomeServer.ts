@@ -7,7 +7,6 @@ import {
   createSharedServerAccessKeyMiddleware,
   resolveSharedServerAccessKeyConfig,
   registerCaldavRoutes,
-  registerWorkflowsUiProxy,
   startReminderDeliveryScheduler,
   createFallbackHandler,
   HOME_SERVER_WELCOME_HTML,
@@ -342,31 +341,22 @@ export class HomeServer implements HomeServerInterface {
           })
         }
 
-        // Standard Red Notes: mount the read-only CalDAV router and the
-        // authenticated Workflows-UI proxy INSIDE setConfig — i.e. BEFORE
-        // server.build(). build() mounts the inversify controller router at '/'. The
+        // Standard Red Notes: mount the read-only CalDAV router INSIDE setConfig
+        // — i.e. BEFORE server.build(). build() mounts the inversify controller
+        // router at '/'. The
         // trailing unmatched handler is now a POST-BUILD app.use() fallback (see after
         // build(), replacing the former inert @controller('') FallbackController
         // catch-all), so these routes are no longer at risk of being shadowed — but
         // keeping them pre-build (ahead of the controller router) remains the correct,
         // defensive placement. Registering here also keeps them after all the middleware
-        // above (like the e2e route just above). Each router gates itself internally
-        // (CalDAV 404s when CALDAV_ENABLED is off; Workflows 404s when
-        // WORKFLOWS_ENABLED is off and 403s without the UI-access cookie + an active
-        // pairing), so mounting them unconditionally is safe.
+        // above (like the e2e route just above). CalDAV gates itself internally
+        // (404 when CALDAV_ENABLED is off), so mounting it unconditionally is safe.
         const routingLogger = winston.loggers.get('home-server')
         try {
           registerCaldavRoutes(app, container)
           routingLogger.info('CalDAV router mounted')
         } catch (error) {
           routingLogger.error(`Failed to mount CalDAV router: ${(error as Error).message}`)
-        }
-
-        try {
-          registerWorkflowsUiProxy(app, container)
-          routingLogger.info('Workflows editor proxy mounted')
-        } catch (error) {
-          routingLogger.error(`Failed to mount workflows editor proxy: ${(error as Error).message}`)
         }
       })
 
@@ -404,8 +394,8 @@ export class HomeServer implements HomeServerInterface {
       const port = env.get('PORT', true) ? +env.get('PORT', true) : 3000
 
       // Standard Red Notes: build() mounts the inversify controller router at '/'. The
-      // CalDAV router and the Workflows-UI proxy are registered INSIDE setConfig above
-      // (before this call), ahead of the controller router — see the note there.
+      // CalDAV router is registered INSIDE setConfig above (before this call),
+      // ahead of the controller router — see the note there.
       const app = await server.build()
 
       // Standard Red Notes: cosmetic welcome page (GET /) + JSON 404 fallback for the
@@ -416,7 +406,7 @@ export class HomeServer implements HomeServerInterface {
       // as a POST-BUILD app.use() so it runs strictly AFTER the controller router of
       // ALL five bundled services (and the setErrorConfig 500-handler): it catches only
       // genuinely-unmatched requests and cannot shadow any bundled controller or the
-      // pre-build CalDAV/Workflows routes. A live in-router catch-all here would front
+      // pre-build CalDAV routes. A live in-router catch-all here would front
       // every bundled service (FallbackController registered first), which is exactly
       // why this is a post-build handler and not a repaired controller.
       app.use(createFallbackHandler({ welcomeHtml: HOME_SERVER_WELCOME_HTML }))

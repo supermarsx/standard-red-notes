@@ -48,7 +48,7 @@ This page separates three important states:
 | Email backups | Operator-gated | The server master switch and per-user settings must both allow the scheduled encrypted backup. |
 | Nextcloud/WebDAV backups | Operator-gated | The server master switch and complete per-user WebDAV settings are required. |
 | OCR | Operator-gated | Server OCR has a master switch, URL, request limits, and an admin configuration surface. |
-| Workflows/n8n | Phase-limited and operator-gated | Pairing and the protected embedded editor are implemented. Automatic per-user MCP credential and webhook provisioning remain explicitly deferred in the controller. |
+| Workflows/n8n | Operator-gated link discovery | The gateway returns a strictly validated separate-origin link. n8n owns authentication, authorization, project isolation, and credentials. Operators can manually connect n8n to the SRN MCP bridge. |
 | Plugins repository | Operator-gated | The gateway can proxy a configured package index and component files with rendering isolation controls. |
 | GitHub publishing | Configured integration | A server endpoint and web client publish one converted note to a configured GitHub target. |
 | CalDAV | Read-only and per-user gated | The server exposes a read-only calendar surface when the administrator enables the user setting. |
@@ -71,6 +71,7 @@ groups needed dedicated runtime documentation:
 | All three command-line surfaces | [Command-Line Tools](command-line-tools.md) |
 | Web and CLI administration | [Administration](administration.md) |
 | Shipped integrations and their gates | [Automation and Integrations](automation-and-integrations.md) |
+| n8n deployment, isolation, and MCP bridge use | [Workflows with n8n](workflows.md) |
 | Layered diagnosis and safe incident response | [Monitoring and Troubleshooting](monitoring-and-troubleshooting.md) |
 | Release streams, assets, upgrades, and rollback | [Releases and Upgrades](releases-and-upgrades.md) |
 | Monorepo structure and verification commands | [Development Guide](development-guide.md) |
@@ -85,6 +86,7 @@ For a high-confidence answer, use more than a visible control:
 4. Find the focused test or release contract.
 5. Verify the deployed profile actually includes the required service.
 
-A plan document is useful design evidence, but it is not runtime evidence. The
-[MCP support plan](MCP_SUPPORT_PLAN.md), [OpenClaw plan](OPENCLAW_PLAN.md), and
-[workflows plan](WORKFLOWS_PLAN.md) should be read with that distinction.
+A design document is useful intent evidence, but it is not runtime evidence.
+Use [Workflows with n8n](workflows.md) for the implemented boundary. The
+[MCP support plan](MCP_SUPPORT_PLAN.md) and [OpenClaw plan](OPENCLAW_PLAN.md)
+should be read with that distinction.

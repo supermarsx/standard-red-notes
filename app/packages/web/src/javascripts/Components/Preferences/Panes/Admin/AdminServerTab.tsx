@@ -17,6 +17,7 @@ import Tab from '@/Components/Tabs/Tab'
 import TabPanel from '@/Components/Tabs/TabPanel'
 import { useTabState } from '@/Components/Tabs/useTabState'
 import { ToastType, addToast } from '@standardnotes/toast'
+import { resolveWorkflowsPublicUrl } from '@/Components/Workflows/workflowsStatus'
 import {
   AdminInviteLinkCreated,
   AdminInviteLinkView,
@@ -79,6 +80,10 @@ type ServerSettingsPatch = AdminSetServerSettingsPartial & {
     signupsOpenAt?: string | null
     signupsCloseAt?: string | null
     invitesPerUser?: number | null
+  }
+  workflows?: {
+    enabled?: boolean | null
+    publicUrl?: string | null
   }
 }
 
@@ -239,16 +244,13 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
   const [confirmationSubject, setConfirmationSubject] = useState('')
   const [confirmationBody, setConfirmationBody] = useState('')
   const [confirmationBaseUrl, setConfirmationBaseUrl] = useState('')
-  // Standard Red Notes: OCR + workflows editable free-form fields. Booleans save
-  // immediately on toggle; the string/number knobs are edited here and saved with
-  // their own button (same pattern as the update-check URL / domain list above).
+  // OCR + the external n8n discovery URL. Booleans save immediately; free-form
+  // values use explicit Save buttons.
   const [ocrDefaultLanguage, setOcrDefaultLanguage] = useState('')
   const [ocrMaxPages, setOcrMaxPages] = useState('')
   const [ocrMaxImageBytes, setOcrMaxImageBytes] = useState('')
   const [ocrClientDefaultLanguage, setOcrClientDefaultLanguage] = useState('')
-  const [workflowsN8nUrl, setWorkflowsN8nUrl] = useState('')
-  const [workflowsUiBasePath, setWorkflowsUiBasePath] = useState('')
-  const [workflowsUiTokenTtl, setWorkflowsUiTokenTtl] = useState('')
+  const [workflowsPublicUrl, setWorkflowsPublicUrl] = useState('')
   // Standard Red Notes: SIGNUP CAPS (t50). Save-on-button text rows; blank/0 max =
   // unlimited (clears the cap), windows in hours. per-device is a soft, per-browser
   // cap (see the copy on that row). Populated from the server view below.
@@ -479,11 +481,7 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
     setOcrMaxPages(data?.settings?.ocr?.maxPages != null ? String(data.settings.ocr.maxPages) : '')
     setOcrMaxImageBytes(data?.settings?.ocr?.maxImageBytes != null ? String(data.settings.ocr.maxImageBytes) : '')
     setOcrClientDefaultLanguage(data?.settings?.ocr?.clientDefaultLanguage ?? '')
-    setWorkflowsN8nUrl(data?.settings?.workflows?.n8nUrl ?? '')
-    setWorkflowsUiBasePath(data?.settings?.workflows?.uiBasePath ?? '')
-    setWorkflowsUiTokenTtl(
-      data?.settings?.workflows?.uiTokenTtlSeconds != null ? String(data.settings.workflows.uiTokenTtlSeconds) : '',
-    )
+    setWorkflowsPublicUrl(data?.settings?.workflows?.publicUrl ?? '')
     // Signup caps: show a positive max as its number, unlimited (0/absent) as blank;
     // windows always carry a resolved value, shown as-is.
     const reg = data?.settings?.registration
@@ -1088,43 +1086,25 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
     [saveServerSettings],
   )
 
-  const saveWorkflowsN8nUrl = useCallback(async () => {
-    const trimmed = workflowsN8nUrl.trim()
-    if (trimmed !== '' && !/^https?:\/\/.+/i.test(trimmed)) {
-      addToast({ type: ToastType.Error, message: 'The n8n URL must be an http(s) URL.' })
+  const saveWorkflowsPublicUrl = useCallback(async () => {
+    const trimmed = workflowsPublicUrl.trim()
+    if (trimmed === '') {
+      await saveServerSettings({ workflows: { publicUrl: null } }, 'Public n8n URL cleared.')
       return
     }
-    await saveServerSettings(
-      { workflows: { n8nUrl: trimmed === '' ? null : trimmed } },
-      trimmed === '' ? 'n8n URL cleared.' : 'n8n URL saved.',
-    )
-  }, [workflowsN8nUrl, saveServerSettings])
-
-  const saveWorkflowsUiBasePath = useCallback(async () => {
-    const trimmed = workflowsUiBasePath.trim()
-    if (trimmed !== '' && !trimmed.startsWith('/')) {
-      addToast({ type: ToastType.Error, message: 'The editor path must be an absolute path (start with /).' })
+    const apiHost = application.getHost.execute().getValue()
+    const browserOrigin = typeof window === 'undefined' ? null : window.location.origin
+    const safeUrl = resolveWorkflowsPublicUrl(trimmed, apiHost, browserOrigin)
+    if (!safeUrl) {
+      addToast({
+        type: ToastType.Error,
+        message:
+          'Use a distinct HTTPS hostname with no credentials, query, or fragment. HTTP is allowed only on a different explicit loopback hostname for development.',
+      })
       return
     }
-    await saveServerSettings(
-      { workflows: { uiBasePath: trimmed === '' ? null : trimmed } },
-      trimmed === ''
-        ? 'Workflows editor path cleared.'
-        : 'Workflows editor path saved (applies on next gateway restart).',
-    )
-  }, [workflowsUiBasePath, saveServerSettings])
-
-  const saveWorkflowsUiTokenTtl = useCallback(async () => {
-    const value = parseIntegerOrClear(workflowsUiTokenTtl)
-    if (value === undefined) {
-      addToast({ type: ToastType.Error, message: 'The editor cookie lifetime must be a whole number of seconds.' })
-      return
-    }
-    await saveServerSettings(
-      { workflows: { uiTokenTtlSeconds: value } },
-      value === null ? 'Workflows editor cookie lifetime cleared.' : 'Workflows editor cookie lifetime saved.',
-    )
-  }, [workflowsUiTokenTtl, parseIntegerOrClear, saveServerSettings])
+    await saveServerSettings({ workflows: { publicUrl: safeUrl } }, 'Public n8n URL saved.')
+  }, [application, workflowsPublicUrl, saveServerSettings])
 
   const toggleRegistration = useCallback(
     async (nextValue: boolean) => {
@@ -2534,11 +2514,11 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
 
             <HorizontalSeparator classes="my-4" />
             <PreferencesSegment>
-              <Title>Workflows (n8n automation)</Title>
+              <Title>Workflows (external n8n service)</Title>
               <Text>
-                The n8n-backed automation engine. The master switch and internal engine URL apply immediately; per-user
-                access is still managed on the Users tab. The editor-proxy path is bound when the gateway starts, so a
-                change to it only takes effect after the gateway restarts.
+                Standard Red Notes publishes a link only. n8n runs on a separate hostname and performs its own
+                authentication, authorization, project isolation, and credential management. Enabling this setting does
+                not provision an n8n account or grant access to n8n.
               </Text>
               <div className="mt-3 flex flex-col gap-4">
                 <div className="flex items-center justify-between gap-4">
@@ -2548,7 +2528,8 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
                       <SourceChip sources={settingsSources} keys={['workflows.enabled']} />
                     </div>
                     <Text className="mt-1 text-xs">
-                      Master switch (WORKFLOWS_ENABLED). A user must also be enabled on the Users tab.
+                      Discovery master switch (WORKFLOWS_ENABLED). A user must also be enabled on the Users tab. This
+                      controls visibility of the external link, not n8n authorization.
                     </Text>
                   </div>
                   {settingsSaving ? (
@@ -2563,80 +2544,52 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
 
                 <div>
                   <div className="flex items-center gap-2">
-                    <Subtitle>Internal n8n URL</Subtitle>
-                    <SourceChip sources={settingsSources} keys={['workflows.n8nUrl']} />
+                    <Subtitle>Public n8n URL</Subtitle>
+                    <SourceChip sources={settingsSources} keys={['workflows.publicUrl']} />
                   </div>
                   <Text className="mt-1 text-xs">
-                    The engine's address on the internal network (WORKFLOWS_N8N_URL). The editor is only reachable
-                    through the authenticated gateway proxy. Leave empty and save to clear the override.
+                    Browser-facing WORKFLOWS_PUBLIC_URL. Use a distinct HTTPS hostname with n8n&apos;s own login and
+                    TLS. The hostname cannot match the app or API hostname, even on another port. If COOKIE_DOMAIN spans
+                    subdomains, place n8n outside that cookie scope. Explicit loopback HTTP is development-only.
+                    PUBLIC_URL must also identify this Standard Red Notes deployment. Leave empty and save to clear the
+                    override.
                   </Text>
                   <div className="mt-2 flex flex-wrap items-center gap-2">
                     <DecoratedInput
                       className={{ container: 'w-96 max-w-full' }}
-                      placeholder="http://n8n:5678"
-                      value={workflowsN8nUrl}
-                      onChange={setWorkflowsN8nUrl}
-                      onEnter={() => void saveWorkflowsN8nUrl()}
+                      placeholder="https://automation.example.net"
+                      value={workflowsPublicUrl}
+                      onChange={setWorkflowsPublicUrl}
+                      onEnter={() => void saveWorkflowsPublicUrl()}
                       disabled={settingsSaving}
                     />
                     <Button
                       label={settingsSaving ? 'Saving…' : 'Save'}
-                      onClick={() => void saveWorkflowsN8nUrl()}
+                      onClick={() => void saveWorkflowsPublicUrl()}
                       disabled={settingsSaving}
                     />
                   </div>
                 </div>
 
-                <div>
-                  <div className="flex items-center gap-2">
-                    <Subtitle>Editor proxy path</Subtitle>
-                    <SourceChip sources={settingsSources} keys={['workflows.uiBasePath']} />
+                {serverSettings?.workflows?.legacyConfigurationPresent ? (
+                  <div className="border-warning rounded border p-3" role="alert">
+                    <div className="font-semibold">Legacy proxy configuration detected</div>
+                    <Text className="mt-1 text-xs">
+                      Old n8nUrl, editor-path, or editor-cookie settings were loaded for compatibility but are ignored.
+                      Saving the public URL removes those persisted fields. Remove obsolete WORKFLOWS_N8N_URL,
+                      WORKFLOWS_UI_BASE_PATH, WORKFLOWS_UI_TOKEN_TTL_SECONDS, and WORKFLOWS_DATA_PATH environment
+                      values.
+                    </Text>
                   </div>
-                  <Text className="mt-1 text-xs">
-                    Same-origin path the embedded editor loads (WORKFLOWS_UI_BASE_PATH).{' '}
-                    <strong>Applies on the next gateway restart.</strong> Leave empty and save to clear the override.
-                  </Text>
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <DecoratedInput
-                      className={{ container: 'w-64 max-w-full' }}
-                      placeholder="/workflows-ui"
-                      value={workflowsUiBasePath}
-                      onChange={setWorkflowsUiBasePath}
-                      onEnter={() => void saveWorkflowsUiBasePath()}
-                      disabled={settingsSaving}
-                    />
-                    <Button
-                      label={settingsSaving ? 'Saving…' : 'Save'}
-                      onClick={() => void saveWorkflowsUiBasePath()}
-                      disabled={settingsSaving}
-                    />
-                  </div>
-                </div>
+                ) : null}
 
-                <div>
-                  <div className="flex items-center gap-2">
-                    <Subtitle>Editor cookie lifetime (seconds)</Subtitle>
-                    <SourceChip sources={settingsSources} keys={['workflows.uiTokenTtlSeconds']} />
-                  </div>
+                <div className="border-warning rounded border p-3">
+                  <div className="font-semibold">Credential boundary</div>
                   <Text className="mt-1 text-xs">
-                    How long an editor-access cookie stays valid (WORKFLOWS_UI_TOKEN_TTL_SECONDS). Applies to newly
-                    issued cookies.
+                    n8n workflows can read or modify everything allowed by credentials stored in n8n. For Standard Red
+                    Notes, create a separate revocable, least-privilege MCP credential and never place it in a URL,
+                    workflow source, expression, or log.
                   </Text>
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <DecoratedInput
-                      className={{ container: 'w-40 max-w-full' }}
-                      placeholder="43200"
-                      value={workflowsUiTokenTtl}
-                      onChange={setWorkflowsUiTokenTtl}
-                      onEnter={() => void saveWorkflowsUiTokenTtl()}
-                      disabled={settingsSaving}
-                    />
-                    <Button
-                      label={settingsSaving ? 'Saving…' : 'Save'}
-                      onClick={() => void saveWorkflowsUiTokenTtl()}
-                      disabled={settingsSaving}
-                    />
-                  </div>
                 </div>
               </div>
             </PreferencesSegment>

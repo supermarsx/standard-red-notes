@@ -28,9 +28,9 @@
  * Outbound calls are additionally bounded by a short timeout and a response
  * size cap so a hostile/broken remote cannot hang or OOM the gateway.
  *
- * The trust model matches WORKFLOWS_N8N_URL: the operator points the base at a
- * host they trust (the Standard Notes CDN by default, or their own mirror), so
- * we do NOT block private/loopback targets — an internal mirror is legitimate.
+ * The operator points the base at a host they trust (the Standard Notes CDN by
+ * default, or their own mirror), so we do NOT block private/loopback targets —
+ * an internal mirror is legitimate.
  */
 
 export type PluginsFetchLike = (

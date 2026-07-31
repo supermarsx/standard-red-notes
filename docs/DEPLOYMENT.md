@@ -84,6 +84,8 @@ The home-server's `:3000` stays container-internal; nginx reverse-proxies
 | `APP_PORT` | Host port (default 3001) |
 | `ADMIN_EMAILS` | Emails granted the in-app Admin panel |
 | `PUBLIC_FILES_SERVER_URL` | Public `/files` URL behind a domain, e.g. `https://notes.example.com/files` |
+| `PUBLIC_URL` | Canonical app origin used for external-link hostname isolation |
+| `WORKFLOWS_ENABLED`, `WORKFLOWS_PUBLIC_URL` | Optional discovery link to a separately authenticated n8n origin |
 | `COOKIE_DOMAIN`, `COOKIE_SECURE` | Set `COOKIE_SECURE=true` + your domain behind HTTPS |
 | `SYNC_SERVER` | Force the app's sync origin (default: its own origin) |
 | `OCR_ENABLED` | Client-side PDF OCR toggle |
@@ -99,7 +101,11 @@ docker compose -f docker-compose.single.yml down -v       # DELETE data volume
 ```
 
 **Behind a reverse proxy / HTTPS.** Front the container with Caddy/nginx/Traefik
-and set `COOKIE_SECURE=true`, `COOKIE_DOMAIN=…`, `PUBLIC_FILES_SERVER_URL=https://…/files`.
+and set `COOKIE_SECURE=true`, `COOKIE_DOMAIN=…`,
+`PUBLIC_URL=https://notes.example.com`, and
+`PUBLIC_FILES_SERVER_URL=https://notes.example.com/files`. If n8n is enabled,
+route its distinct TLS hostname directly to n8n; see
+[Workflows with n8n](workflows.md).
 
 #### Forwarded client IP (`TRUST_PROXY` / `CLIENT_IP_HEADER`)
 

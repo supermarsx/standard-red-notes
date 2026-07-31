@@ -59,7 +59,6 @@ import { TelegramProvider } from '../Service/ReminderDelivery/Providers/Telegram
 import { EmailProvider } from '../Service/ReminderDelivery/Providers/EmailProvider'
 import { WhatsAppProvider } from '../Service/ReminderDelivery/Providers/WhatsAppProvider'
 import { WorkflowsService } from '../Service/Workflows/WorkflowsService'
-import { WorkflowsPairingStore } from '../Service/Workflows/WorkflowsPairingStore'
 import { ServerSettingsStore } from '../Service/ServerSettings/ServerSettingsStore'
 import { ServerSettingsResolver } from '../Service/ServerSettings/ServerSettingsResolver'
 import { RuntimeLogLevelApplier } from '../Service/Logging/RuntimeLogLevelApplier'
@@ -419,18 +418,20 @@ export class ContainerConfigLoader {
         ? ['true', '1', 'yes', 'on'].includes(env.get('OCR_ENABLED', true).toLowerCase())
         : undefined,
       ocrClientDefaultLanguage: env.get('OCR_DEFAULT_LANGUAGE', true) || undefined,
-      // Standard Red Notes: WORKFLOWS (n8n) env baseline. enabled/n8nUrl/uiTokenTtl
-      // are read through the resolver per request (runtime); uiBasePath is the
-      // boot-bound Express mount. undefined when unset so the source map reports
-      // 'default'.
+      // Standard Red Notes: WORKFLOWS (n8n) discovery baseline. The public URL
+      // is browser navigation metadata for a separately authenticated origin.
+      // Proxy-era variables are read only to surface a migration warning;
+      // historical internal values are never interpreted or exposed.
       workflowsEnabled: env.get('WORKFLOWS_ENABLED', true)
         ? ['true', '1', 'yes', 'on'].includes(env.get('WORKFLOWS_ENABLED', true).toLowerCase())
         : undefined,
-      workflowsN8nUrl: env.get('WORKFLOWS_N8N_URL', true) || undefined,
-      workflowsUiBasePath: env.get('WORKFLOWS_UI_BASE_PATH', true) || undefined,
-      workflowsUiTokenTtlSeconds: env.get('WORKFLOWS_UI_TOKEN_TTL_SECONDS', true)
-        ? +env.get('WORKFLOWS_UI_TOKEN_TTL_SECONDS', true)
-        : undefined,
+      workflowsPublicUrl: env.get('WORKFLOWS_PUBLIC_URL', true) || undefined,
+      workflowsLegacyConfigurationPresent: [
+        'WORKFLOWS_N8N_URL',
+        'WORKFLOWS_UI_BASE_PATH',
+        'WORKFLOWS_UI_TOKEN_TTL_SECONDS',
+        'WORKFLOWS_DATA_PATH',
+      ].some((name) => Boolean(env.get(name, true))),
       // Standard Red Notes: PLUGINS gallery repo base URL. The gateway proxies the
       // repo server-side so the client fetches it SAME-ORIGIN (strict CSP). Unset
       // => the resolver falls back to the Standard Notes default (behavior unchanged).
@@ -798,40 +799,23 @@ export class ContainerConfigLoader {
         ),
       )
 
-    // Standard Red Notes: OPT-IN WORKFLOWS (n8n-backed automation engine).
-    //
-    // Two gates, both fail-closed: this operator master switch AND the
-    // admin-managed per-user WORKFLOWS_ENABLED setting (which rides along in the
-    // cross-service token). The n8n engine itself is a peer container on the
-    // internal docker network (WORKFLOWS_N8N_URL) with no host port — its editor
-    // UI is reachable ONLY through the authenticated /workflows-ui gateway proxy,
-    // and only for entitled + explicitly PAIRED users. Pairing state is a JSON
-    // file under WORKFLOWS_DATA_PATH (default ./data/workflows), keeping the
-    // feature self-contained in the api-gateway, which has no database of its own
-    // (same pattern as the CalDAV/reminder-delivery stores). The editor-proxy
-    // UI-access token reuses AUTH_JWT_SECRET (already held by the gateway) and
-    // mirrors COOKIE_SECURE so its cookie matches the deployment's cookie policy.
+    // Standard Red Notes: OPT-IN WORKFLOWS discovery. Both the operator switch
+    // and per-user setting fail closed. The configured URL is opened by the
+    // browser on a separate origin where n8n performs its own authentication;
+    // the gateway never proxies n8n requests or forwards SRN credentials.
     const workflowsEnabled = ['true', '1', 'yes', 'on'].includes(
       (env.get('WORKFLOWS_ENABLED', true) || '').toLowerCase(),
     )
-    const workflowsDataPath = env.get('WORKFLOWS_DATA_PATH', true) || path.resolve(process.cwd(), 'data', 'workflows')
-    const workflowsUiTokenTtlSeconds = env.get('WORKFLOWS_UI_TOKEN_TTL_SECONDS', true)
-      ? +env.get('WORKFLOWS_UI_TOKEN_TTL_SECONDS', true)
-      : 12 * 60 * 60
     container.bind<boolean>(TYPES.ApiGateway_WORKFLOWS_ENABLED).toConstantValue(workflowsEnabled)
     container.bind<WorkflowsService>(TYPES.ApiGateway_WorkflowsService).toConstantValue(
       new WorkflowsService(
         {
           enabled: workflowsEnabled,
-          n8nUrl: env.get('WORKFLOWS_N8N_URL', true) || 'http://n8n:5678',
-          uiBasePath: env.get('WORKFLOWS_UI_BASE_PATH', true) || '/workflows-ui',
-          jwtSecret: env.get('AUTH_JWT_SECRET'),
-          cookieSecure: (env.get('COOKIE_SECURE', true) || '').toLowerCase() === 'true',
-          uiTokenTtlSeconds: Math.max(60, workflowsUiTokenTtlSeconds),
+          publicUrl: env.get('WORKFLOWS_PUBLIC_URL', true) || null,
+          applicationPublicUrl: env.get('PUBLIC_URL', true) || null,
+          cookieDomain: env.get('COOKIE_DOMAIN', true) || null,
         },
-        new WorkflowsPairingStore(path.join(workflowsDataPath, 'pairings.json')),
-        // Standard Red Notes: the runtime overlay resolver, so enabled/n8nUrl/
-        // uiTokenTtl are re-read per request (persisted admin value wins over env).
+        // Persisted admin values win over the environment at request time.
         serverSettingsResolver,
       ),
     )

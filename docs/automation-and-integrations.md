@@ -8,7 +8,7 @@ description: Runtime status, gates, and privacy boundaries for workflows, webhoo
 {% include mermaid.html %}
 
 Integrations are not all at the same maturity or trust boundary. This page
-describes the code that is present and calls out explicit deferrals.
+describes the code and operator boundaries that are present.
 
 {% include safety-alert.html
   level="trust"
@@ -22,7 +22,7 @@ describes the code that is present and calls out explicit deferrals.
 | -------------------------------------------- | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | MCP                                          | Shipped, with documented scope limits | Account credential or full decrypting token; server-enforced read-only/write mode; bridge writes off by default; selected-tag scope is not currently enforced |
 | OpenClaw                                     | Shipped with local MCP                | Local MCP configuration and provider                                                                                                                          |
-| Workflows/n8n                                | Phase 1 shipped                       | Operator master switch, per-user entitlement, explicit pairing                                                                                                |
+| Workflows/n8n                                | Shipped link discovery; operator-managed n8n | Operator master switch, per-user link entitlement, independent n8n authentication                                                                        |
 | Webhooks                                     | Shipped                               | Authenticated user or administrator for global hooks                                                                                                          |
 | GitHub publish                               | Shipped                               | Explicit user action and user-supplied PAT                                                                                                                    |
 | Browser OCR                                  | Shipped                               | Client setting/operator intent                                                                                                                                |
@@ -34,25 +34,23 @@ describes the code that is present and calls out explicit deferrals.
 
 ## Workflows and n8n
 
-The implemented workflow endpoints provide:
+Standard Red Notes exposes only a validated discovery link. Both the
+`WORKFLOWS_ENABLED` master switch and the user’s `WorkflowsEnabled` setting
+must be on. Selecting the link requires explicit confirmation and opens a new
+tab to a distinct n8n origin.
 
-- status (`enabled`, `paired`, and editor URL);
-- idempotent pair/unpair;
-- a short-lived, HttpOnly, path-scoped editor cookie; and
-- a same-origin proxy to the configured n8n editor.
+n8n authenticates and authorizes the user independently. Standard Red Notes
+does not proxy n8n, embed its editor, create an n8n account, forward an SRN
+cookie or token, or treat an SRN entitlement as n8n access control.
 
-Both the `WORKFLOWS_ENABLED` master switch and the user’s `WorkflowsEnabled`
-setting are checked on every call. The proxy also checks active entitlement and
-pairing.
+To let n8n read or update notes, an operator can manually connect n8n's MCP
+Client to the authenticated Standard Red Notes MCP bridge with a dedicated,
+revocable, least-privilege account token. Keep the account token out of URLs,
+workflow source, logs, and pinned execution data.
 
-Phase 1 does **not** automatically provision a per-user MCP credential or
-Standard Red Notes-to-n8n trigger webhooks. The controller explicitly defers
-those operations because MCP credential creation requires client-wrapped key
-material and a webhook target exists only after a workflow defines one. Treat
-the [Workflows plan](WORKFLOWS_PLAN.md) as roadmap context.
-
-Keep the internal n8n service private. Expose the editor only through the
-protected `/workflows-ui` proxy.
+See [Workflows with n8n](workflows.md) for the architecture, separate-hostname
+deployment, exact URL validation, MCP setup, revocation procedure, and
+troubleshooting.
 
 ## Webhooks
 

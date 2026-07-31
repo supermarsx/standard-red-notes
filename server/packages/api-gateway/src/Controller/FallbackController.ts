@@ -11,7 +11,7 @@ import { NextFunction, Request, Response } from 'express'
 // each entrypoint, i.e. after the inversify controller router and the setErrorConfig
 // 500-handler). Because it runs strictly after the controller router it catches ONLY
 // genuinely-unmatched requests and can NEVER shadow a real controller or a pre-build
-// route (CalDAV /dav, Workflows-UI /workflows-ui, POST /sockets/tokens) — independent
+// route (CalDAV /dav, POST /sockets/tokens) — independent
 // of controller import order. This is deliberately NOT an in-router catch-all: a live
 // @all('/{*splat}') controller registers FIRST on the shared router and would shadow
 // the whole service (worst in home-server, where it would front all five bundled

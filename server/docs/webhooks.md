@@ -5,6 +5,9 @@ payload** to it whenever a subscribed event occurs — ideal for driving n8n,
 Zapier, Typeform, or a custom receiver.
 
 > Auth and the REST surface are documented in [`rest-api.md`](./rest-api.md).
+> The separate n8n origin and MCP bridge path are documented in the
+> [Workflows guide](../../docs/workflows.md). SRN does not create these webhook
+> registrations automatically.
 
 ---
 

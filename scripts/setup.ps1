@@ -136,9 +136,10 @@ if (-not [string]::IsNullOrEmpty($Domain)) {
 }
 
 Write-Title '2) Host port'
-Write-Info 'The single port published on the host machine. The app''s nginx front door'
+Write-Info 'The public app port. The app''s nginx front door'
 Write-Info 'proxies the API (/v1), files (/files/) and realtime websocket (/sockets)'
 Write-Info 'same-origin, so the API gateway and files service publish no host ports.'
+Write-Info 'Optional profiles may bind separate development ports to host loopback.'
 $AppPort       = Read-Default 'Web app port:'            '3001'
 
 Write-Title '3) Database'
@@ -171,10 +172,12 @@ $RegistrationApprovalRequired = if ($GateRegistration) { 'true' } else { 'false'
 if (-not [string]::IsNullOrEmpty($Domain)) {
   $Scheme = if ($UseHttps -eq 'true') { 'https' } else { 'http' }
   $PublicFilesServerUrl = if ($UseHttps -eq 'true') { "${Scheme}://${Domain}/files" } else { "${Scheme}://${Domain}:${AppPort}/files" }
+  $PublicUrl = if ($UseHttps -eq 'true') { "${Scheme}://${Domain}" } else { "${Scheme}://${Domain}:${AppPort}" }
   $U2fRpId = $Domain
   $U2fExpectedOrigin = "${Scheme}://${Domain}:${AppPort},${Scheme}://${Domain}"
 } else {
   $PublicFilesServerUrl = "http://localhost:${AppPort}/files"
+  $PublicUrl = "http://localhost:${AppPort}"
   $U2fRpId = 'localhost'
   $U2fExpectedOrigin = "http://localhost:${AppPort},http://localhost"
 }
@@ -207,9 +210,10 @@ $content = @"
 # exist will lock people out, so keep this file safe and backed up.
 # =============================================================================
 
-# ----- Host port (the ONLY port published on the host machine) ---------------
+# ----- Public app port --------------------------------------------------------
 # The app's nginx front door proxies the API, files and websocket same-origin;
-# the API gateway and files service are internal-only (no host ports).
+# the API gateway and files service are internal-only (no host ports). Optional
+# profiles may bind development-only ports to host loopback.
 APP_PORT=$AppPort
 
 # ----- Database (MariaDB) ----------------------------------------------------
@@ -240,6 +244,7 @@ WEB_SOCKET_CONNECTION_TOKEN_SECRET=$WebSocketConnectionTokenSecret
 COOKIE_DOMAIN=$CookieDomain
 COOKIE_SECURE=$CookieSecure
 PUBLIC_FILES_SERVER_URL=$PublicFilesServerUrl
+PUBLIC_URL=$PublicUrl
 
 # WebAuthn / hardware-key (U2F) relying party. Should match where the app is served.
 AUTH_SERVER_U2F_RELYING_PARTY_ID=$U2fRpId
@@ -332,12 +337,7 @@ Write-Ok "Wrote $EnvFile"
 # Next steps
 # ---------------------------------------------------------------------------
 Write-Title 'Done!'
-if (-not [string]::IsNullOrEmpty($Domain)) {
-  $Scheme = if ($UseHttps -eq 'true') { 'https' } else { 'http' }
-  $AppUrl = "${Scheme}://${Domain}:${AppPort}"
-} else {
-  $AppUrl = "http://localhost:${AppPort}"
-}
+$AppUrl = $PublicUrl
 
 $startNow = $Up -or (Confirm-Yes "Start the stack now with '$Compose up -d'?")
 if ($startNow) {

@@ -172,6 +172,8 @@
       url: /command-line-tools.html
     - title: MCP bridge
       url: /mcp-bridge.html
+    - title: Workflows with n8n
+      url: /workflows.html
     - title: HTTP API
       url: /API.html
     - title: OpenClaw assistant
@@ -209,5 +211,3 @@
       url: /MCP_SUPPORT_PLAN.html
     - title: OpenClaw plan
       url: /OPENCLAW_PLAN.html
-    - title: Workflows plan
-      url: /WORKFLOWS_PLAN.html

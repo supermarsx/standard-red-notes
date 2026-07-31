@@ -30,6 +30,7 @@ import {
 import { DockerServiceControlService } from '../../Service/ServiceControl/DockerServiceControlService'
 import { IpAccessListStore, IpAclList } from '../IpAccessList'
 import { RateLimitMetricsStore } from '../RateLimitMetrics'
+import { WorkflowsService } from '../../Service/Workflows/WorkflowsService'
 
 /**
  * Standard Red Notes: one entry of the server-status `services` array — a
@@ -135,10 +136,14 @@ export class AdminController extends BaseHttpController {
     // Standard Red Notes: forwarded-client-IP config surfaced READ-ONLY on the admin
     // Server tab (both are boot settings — changing them needs a redeploy). trustProxy
     // is the raw Express `trust proxy` spec; clientIpHeader is the optional trusted
-    // client-IP header name (empty = off). Appended LAST so positional construction in
-    // tests is unaffected. See ClientIp.ts / docs/DEPLOYMENT.md.
+    // client-IP header name (empty = off). Keep these existing positional slots
+    // stable; new optional dependencies append after them. See ClientIp.ts /
+    // docs/DEPLOYMENT.md.
     @inject(TYPES.ApiGateway_TRUST_PROXY) @optional() private trustProxy?: string,
     @inject(TYPES.ApiGateway_CLIENT_IP_HEADER) @optional() private clientIpHeader?: string,
+    // Canonical Workflows URL policy. Optional only for legacy/unit-test
+    // construction; a save fails closed when the production binding is absent.
+    @inject(TYPES.ApiGateway_WorkflowsService) @optional() private workflowsService?: WorkflowsService,
   ) {
     super()
   }
@@ -1784,14 +1789,19 @@ export class AdminController extends BaseHttpController {
       }
     }
 
-    // Standard Red Notes: WORKFLOWS (n8n) knobs. enabled is a boolean; n8nUrl is
-    // an http(s) URL; uiBasePath is an absolute path (restart-bound Express mount);
-    // uiTokenTtlSeconds is a bounded integer. `null` clears any.
+    // Workflows discovery: only the master switch and the separate-origin,
+    // browser-facing public URL are writable. Proxy-era knobs are rejected.
     if (root.workflows !== undefined) {
       if (!root.workflows || typeof root.workflows !== 'object' || Array.isArray(root.workflows)) {
         return { error: 'workflows must be an object.' }
       }
       const workflows = root.workflows as Record<string, unknown>
+      const unknownKeys = Object.keys(workflows).filter((key) => !['enabled', 'publicUrl'].includes(key))
+      if (unknownKeys.length > 0) {
+        return {
+          error: `Unsupported workflows setting: ${unknownKeys.sort().join(', ')}. Use workflows.publicUrl for the separately authenticated n8n origin.`,
+        }
+      }
       patch.workflows = {}
       const wfPatch = patch.workflows as Record<string, unknown>
 
@@ -1803,43 +1813,20 @@ export class AdminController extends BaseHttpController {
         changedSettings.push('workflows.enabled')
       }
 
-      if (workflows.n8nUrl !== undefined) {
-        const value = url(workflows.n8nUrl, 'workflows.n8nUrl')
-        if (value !== null && typeof value === 'object') {
-          return value
-        }
-        wfPatch.n8nUrl = value
-        changedSettings.push('workflows.n8nUrl')
-      }
-
-      if (workflows.uiBasePath !== undefined) {
-        if (workflows.uiBasePath === null) {
-          wfPatch.uiBasePath = null
-        } else if (
-          typeof workflows.uiBasePath === 'string' &&
-          /^\/[A-Za-z0-9/_-]*$/.test(workflows.uiBasePath.trim())
-        ) {
-          wfPatch.uiBasePath = workflows.uiBasePath.trim()
+      if (workflows.publicUrl !== undefined) {
+        if (workflows.publicUrl === null) {
+          wfPatch.publicUrl = null
         } else {
-          return { error: 'workflows.uiBasePath must be an absolute path (e.g. "/workflows-ui"), or null to clear it.' }
+          if (!this.workflowsService) {
+            return { error: 'Workflows URL validation is unavailable on this deployment.' }
+          }
+          const result = this.workflowsService.validateConfiguredPublicUrl(workflows.publicUrl)
+          if (!result.valid) {
+            return { error: `workflows.publicUrl: ${result.message}` }
+          }
+          wfPatch.publicUrl = result.url
         }
-        changedSettings.push('workflows.uiBasePath')
-      }
-
-      if (workflows.uiTokenTtlSeconds !== undefined) {
-        if (workflows.uiTokenTtlSeconds === null) {
-          wfPatch.uiTokenTtlSeconds = null
-        } else if (
-          typeof workflows.uiTokenTtlSeconds === 'number' &&
-          Number.isInteger(workflows.uiTokenTtlSeconds) &&
-          workflows.uiTokenTtlSeconds >= SERVER_SETTINGS_BOUNDS.workflowsTokenTtlSeconds.minimum &&
-          workflows.uiTokenTtlSeconds <= SERVER_SETTINGS_BOUNDS.workflowsTokenTtlSeconds.maximum
-        ) {
-          wfPatch.uiTokenTtlSeconds = workflows.uiTokenTtlSeconds
-        } else {
-          return { error: 'workflows.uiTokenTtlSeconds must be an integer between 60 and 604800, or null to clear it.' }
-        }
-        changedSettings.push('workflows.uiTokenTtlSeconds')
+        changedSettings.push('workflows.publicUrl')
       }
     }
 

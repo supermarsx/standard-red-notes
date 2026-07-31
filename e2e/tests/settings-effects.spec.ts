@@ -69,9 +69,7 @@ async function clearRuntimeSettings(token: string): Promise<void> {
     },
     workflows: {
       enabled: null,
-      n8nUrl: null,
-      uiBasePath: null,
-      uiTokenTtlSeconds: null,
+      publicUrl: null,
     },
     security: {
       rateLimit: {
@@ -206,29 +204,39 @@ test.describe('@chromium settings effects', () => {
       expect(ocrTooLarge.data?.error?.message).toContain('too large')
 
       await setServerSettings(adminToken, { workflows: { enabled: false } })
-      const workflowServerDisabled = await apiCall('POST', '/v1/workflows/pair', { token: featureSession.access_token })
-      expect(workflowServerDisabled.status).toBe(403)
-      expect(workflowServerDisabled.data?.error?.tag).toBe('workflows-disabled')
+      const workflowServerDisabled = await apiCall('GET', '/v1/workflows/status', {
+        token: featureSession.access_token,
+      })
+      expect(workflowServerDisabled.status).toBe(200)
+      expect(workflowServerDisabled.data).toMatchObject({
+        enabled: false,
+        available: false,
+        publicUrl: null,
+        configurationError: false,
+        authentication: 'n8n',
+      })
 
       const workflowsView = await setServerSettings(adminToken, {
         workflows: {
           enabled: true,
-          n8nUrl: 'http://n8n:5678',
-          uiTokenTtlSeconds: 120,
+          publicUrl: 'https://n8n.example.test',
         },
       })
       expect(workflowsView.settings.workflows).toMatchObject({
         enabled: true,
-        n8nUrl: 'http://n8n:5678',
-        uiTokenTtlSeconds: 120,
+        publicUrl: 'https://n8n.example.test/',
+        legacyConfigurationPresent: false,
       })
-      const workflowsEditorUrl = `${String(workflowsView.settings.workflows.uiBasePath).replace(/\/+$/, '')}/`
 
-      const workflowUserDisabled = await apiCall('POST', '/v1/workflows/pair', {
+      const workflowUserDisabled = await apiCall('GET', '/v1/workflows/status', {
         token: featureSession.access_token,
       })
-      expect(workflowUserDisabled.status).toBe(403)
-      expect(workflowUserDisabled.data?.error?.tag).toBe('workflows-not-allowed')
+      expect(workflowUserDisabled.status).toBe(200)
+      expect(workflowUserDisabled.data).toMatchObject({
+        enabled: false,
+        available: false,
+        publicUrl: null,
+      })
 
       await setAdminFeatureFlag(adminToken, featureReg.uuid, WORKFLOWS_ENABLED, 'true')
       featureSession = await signInUser(featureUser)
@@ -239,32 +247,20 @@ test.describe('@chromium settings effects', () => {
       expect(workflowStatus.status).toBe(200)
       expect(workflowStatus.data).toMatchObject({
         enabled: true,
-        paired: false,
-        editorUrl: null,
+        available: true,
+        publicUrl: 'https://n8n.example.test/',
+        configurationError: false,
+        authentication: 'n8n',
       })
 
-      const workflowPair = await apiCall('POST', '/v1/workflows/pair', {
+      const removedPairRoute = await apiCall('POST', '/v1/workflows/pair', {
         token: featureSession.access_token,
       })
-      expect(workflowPair.status).toBe(200)
-      expect(workflowPair.data).toMatchObject({
-        paired: true,
-        editorUrl: workflowsEditorUrl,
-      })
-
-      const workflowPairedStatus = await apiCall('GET', '/v1/workflows/status', { token: featureSession.access_token })
-      expect(workflowPairedStatus.status).toBe(200)
-      expect(workflowPairedStatus.data).toMatchObject({
-        enabled: true,
-        paired: true,
-        editorUrl: workflowsEditorUrl,
-      })
-
-      const workflowUnpair = await apiCall('POST', '/v1/workflows/unpair', {
+      expect(removedPairRoute.status).toBe(404)
+      const removedUnpairRoute = await apiCall('POST', '/v1/workflows/unpair', {
         token: featureSession.access_token,
       })
-      expect(workflowUnpair.status).toBe(200)
-      expect(workflowUnpair.data).toMatchObject({ paired: false })
+      expect(removedUnpairRoute.status).toBe(404)
 
       const rateLimitView = await setServerSettings(adminToken, {
         security: {
@@ -336,12 +332,12 @@ test.describe('@chromium settings effects', () => {
         },
         { body: { ocr: { maxImageBytes: 100 } }, message: 'ocr.maxImageBytes' },
         {
-          body: { workflows: { n8nUrl: 'ftp://nope' } },
-          message: 'workflows.n8nUrl',
+          body: { workflows: { publicUrl: 'ftp://nope' } },
+          message: 'workflows.publicUrl',
         },
         {
-          body: { workflows: { uiTokenTtlSeconds: 59 } },
-          message: 'workflows.uiTokenTtlSeconds',
+          body: { workflows: { n8nUrl: 'https://n8n.example.test' } },
+          message: 'n8nUrl',
         },
         {
           body: { security: { rateLimit: { windowSeconds: 0 } } },

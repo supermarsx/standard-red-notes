@@ -1,95 +1,177 @@
 import { WebApplication } from '@/Application/WebApplication'
 
-/**
- * Standard Red Notes — Workflows (n8n-backed automation) client state.
- *
- * Mirrors the frozen GET /v1/workflows/status contract:
- *   { enabled: boolean, paired: boolean, editorUrl: string | null }
- *
- * The status is fetched once per sign-in and cached module-wide (the sidebar
- * button and the WorkflowsView share it), refetched on sign-in/out, and treated
- * as "unavailable" whenever the endpoint 404s (server without the feature
- * deployed), errors, or the user has no signed-in server session — in all of
- * those cases the Workflows UI hides itself entirely.
- */
 export type WorkflowsStatus = {
   enabled: boolean
-  paired: boolean
-  editorUrl: string | null
+  available: boolean
+  publicUrl: string | null
+  configurationError: boolean
+  authentication: 'n8n'
 }
 
 export type WorkflowsStatusState =
-  /** Not fetched yet (initial, or reset after a sign-in/out transition). */
-  | { kind: 'unknown' }
-  /** A fetch is in flight and there is no previous value to show. */
-  | { kind: 'loading' }
-  /** Endpoint 404'd / errored, or the user is not signed in — hide the feature. */
-  | { kind: 'unavailable' }
-  /** Successful, contract-shaped response. */
-  | { kind: 'loaded'; status: WorkflowsStatus }
+  { kind: 'unknown' } | { kind: 'loading' } | { kind: 'unavailable' } | { kind: 'loaded'; status: WorkflowsStatus }
 
-/**
- * Pure visibility resolver for the sidebar section button: visible only when
- * signed into a server AND the server reports the feature enabled for this
- * account. Loading/unknown/unavailable all resolve to hidden, so the button
- * never flashes for users who cannot use it.
- */
 export function shouldShowWorkflowsSection(signedIn: boolean, state: WorkflowsStatusState): boolean {
   return signedIn && state.kind === 'loaded' && state.status.enabled === true
 }
 
-/**
- * Resolve the server-provided editor URL into an embeddable src.
- *
- * The contract sends a SAME-ORIGIN RELATIVE path (e.g. `/workflows-ui/`) that
- * must resolve against the API host — not the web app origin — so we join it
- * with the application host. Absolute http(s) URLs are passed through
- * (operator-configured deployments); anything else (protocol-relative `//…`,
- * `javascript:`, etc.) is rejected so the iframe can never be pointed at an
- * unexpected origin or scheme.
- */
-export function resolveWorkflowsEditorUrl(host: string | undefined | null, editorUrl: string | null): string | null {
-  if (!editorUrl) {
-    return null
+const MAX_PUBLIC_URL_LENGTH = 2_048
+const LOOPBACK_IPV4_PATTERN = /^127(?:\.\d{1,3}){3}$/
+
+function containsControlCharacter(value: string): boolean {
+  for (const character of value) {
+    const code = character.charCodeAt(0)
+    if (code <= 0x1f || code === 0x7f) {
+      return true
+    }
   }
-  if (/^https?:\/\//i.test(editorUrl)) {
-    return editorUrl
-  }
-  if (!editorUrl.startsWith('/') || editorUrl.startsWith('//')) {
-    return null
-  }
-  const base = (host ?? '').replace(/\/+$/, '')
-  return base ? `${base}${editorUrl}` : null
+  return false
 }
 
-/** Parse a raw /v1/workflows/status body into the contract shape, or null. */
+function isExplicitLoopback(hostname: string): boolean {
+  const normalized = hostname.toLowerCase()
+  if (normalized === 'localhost' || normalized === '[::1]') {
+    return true
+  }
+  if (!LOOPBACK_IPV4_PATTERN.test(normalized)) {
+    return false
+  }
+  return normalized
+    .split('.')
+    .slice(1)
+    .every((part) => Number(part) >= 0 && Number(part) <= 255)
+}
+
+function safeHttpUrl(value: string | undefined | null): URL | null {
+  if (!value) {
+    return null
+  }
+  try {
+    const parsed = new URL(value)
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+function rawAuthorityHostname(authority: string): string | null {
+  const hostAndPort = authority.slice(authority.lastIndexOf('@') + 1)
+  if (hostAndPort.startsWith('[')) {
+    const close = hostAndPort.indexOf(']')
+    return close > 0 ? hostAndPort.slice(0, close + 1) : null
+  }
+  const colon = hostAndPort.lastIndexOf(':')
+  if (colon >= 0 && /^\d+$/.test(hostAndPort.slice(colon + 1))) {
+    return hostAndPort.slice(0, colon)
+  }
+  return hostAndPort
+}
+
+/**
+ * Defense-in-depth for the browser navigation target. The gateway performs the
+ * canonical validation, then the client independently rejects unsafe URLs and
+ * the actual app/API hostnames (ports do not matter for cookie delivery).
+ */
+export function resolveWorkflowsPublicUrl(
+  publicUrl: string | null,
+  apiHost: string | undefined | null,
+  browserOrigin: string | undefined | null,
+): string | null {
+  if (
+    !publicUrl ||
+    publicUrl.length > MAX_PUBLIC_URL_LENGTH ||
+    publicUrl !== publicUrl.trim() ||
+    containsControlCharacter(publicUrl) ||
+    publicUrl.includes('\\') ||
+    !/^https?:\/\//i.test(publicUrl)
+  ) {
+    return null
+  }
+  const authority = /^[a-z][a-z0-9+.-]*:\/\/([^/?#]+)/i.exec(publicUrl)?.[1]
+  const authorityHostname = authority ? rawAuthorityHostname(authority) : null
+  if (!authority || !authorityHostname || /[%\s]/.test(authority) || authorityHostname.endsWith('.')) {
+    return null
+  }
+
+  const target = safeHttpUrl(publicUrl)
+  if (!target || target.username || target.password || target.search || target.hash) {
+    return null
+  }
+  if (authorityHostname.toLowerCase() !== target.hostname.toLowerCase()) {
+    return null
+  }
+  if (target.protocol === 'http:' && !isExplicitLoopback(target.hostname)) {
+    return null
+  }
+
+  const api = safeHttpUrl(apiHost)
+  const browser = safeHttpUrl(browserOrigin)
+  const targetHostname = target.hostname.toLowerCase()
+  if (
+    (api && api.hostname.toLowerCase() === targetHostname) ||
+    (browser && browser.hostname.toLowerCase() === targetHostname)
+  ) {
+    return null
+  }
+  return target.toString()
+}
+
+/**
+ * Open the already-validated external target without an opener or referrer.
+ * Browsers may deliberately return `null` when `noopener` is requested even
+ * though the tab opened, so the return value must not be treated as a popup
+ * failure signal.
+ */
+export function openExternalWorkflowsUrl(
+  publicUrl: string,
+  openWindow: (url: string, target: string, features: string) => Window | null = window.open.bind(window),
+): void {
+  void openWindow(publicUrl, '_blank', 'noopener,noreferrer')
+}
+
 export function parseWorkflowsStatus(data: unknown): WorkflowsStatus | null {
   if (!data || typeof data !== 'object') {
     return null
   }
-  const raw = data as { enabled?: unknown; paired?: unknown; editorUrl?: unknown }
-  if (typeof raw.enabled !== 'boolean') {
+  const raw = data as Record<string, unknown>
+  if (
+    typeof raw.enabled !== 'boolean' ||
+    typeof raw.available !== 'boolean' ||
+    typeof raw.configurationError !== 'boolean' ||
+    raw.authentication !== 'n8n' ||
+    (raw.publicUrl !== null && typeof raw.publicUrl !== 'string')
+  ) {
+    return null
+  }
+  if ((!raw.enabled || !raw.available) && raw.publicUrl !== null) {
+    return null
+  }
+  if (
+    (!raw.enabled && (raw.available || raw.configurationError)) ||
+    (raw.available && raw.configurationError) ||
+    (raw.enabled && !raw.available && !raw.configurationError)
+  ) {
+    return null
+  }
+  if (raw.available && (typeof raw.publicUrl !== 'string' || raw.publicUrl.length === 0)) {
     return null
   }
   return {
     enabled: raw.enabled,
-    paired: raw.paired === true,
-    editorUrl: typeof raw.editorUrl === 'string' && raw.editorUrl.length > 0 ? raw.editorUrl : null,
+    available: raw.available,
+    publicUrl: raw.publicUrl as string | null,
+    configurationError: raw.configurationError,
+    authentication: 'n8n',
   }
 }
 
 type Listener = (state: WorkflowsStatusState) => void
 
-/**
- * Tiny module-level cache + pub/sub for the workflows status (same pattern as
- * AssistantUsageService): components subscribe via useWorkflowsStatus, and the
- * WorkflowsView pushes authoritative updates after pair/unpair so the sidebar
- * button reacts without a refetch. Deduplicates concurrent refreshes.
- */
-class WorkflowsStatusService {
+export class WorkflowsStatusService {
   private state: WorkflowsStatusState = { kind: 'unknown' }
   private listeners = new Set<Listener>()
   private inflight: Promise<void> | undefined
+  private generation = 0
 
   get(): WorkflowsStatusState {
     return this.state
@@ -102,44 +184,46 @@ class WorkflowsStatusService {
     }
   }
 
-  /** Forget the cached status (used on sign-in/out transitions). */
   reset(): void {
+    // Invalidate any response started under the previous account/session. The
+    // underlying request may still complete, but it must never publish stale
+    // discovery metadata into the next signed-in user's state.
+    this.generation += 1
+    this.inflight = undefined
     this.setState({ kind: 'unknown' })
   }
 
-  /** Push an authoritative status (e.g. from a pair/unpair response). */
-  setStatus(status: WorkflowsStatus): void {
-    this.setState({ kind: 'loaded', status })
-  }
-
-  /**
-   * Fetch GET /v1/workflows/status (authenticated). Any non-OK response —
-   * including 404 from a server that has not deployed the feature — and any
-   * network/parse failure degrade to 'unavailable' (feature hidden).
-   */
   async refresh(application: WebApplication): Promise<void> {
     if (!application.sessions.isSignedIn()) {
+      this.generation += 1
+      this.inflight = undefined
       this.setState({ kind: 'unavailable' })
       return
     }
-
     if (this.inflight) {
       return this.inflight
     }
-
     if (this.state.kind !== 'loaded') {
       this.setState({ kind: 'loading' })
     }
 
+    const generation = this.generation
     this.inflight = (async () => {
       try {
         const { ok, data } = await application.serverGetJsonRequest<unknown>('/v1/workflows/status')
+        if (generation !== this.generation) {
+          return
+        }
         const status = ok ? parseWorkflowsStatus(data) : null
         this.setState(status ? { kind: 'loaded', status } : { kind: 'unavailable' })
       } catch {
-        this.setState({ kind: 'unavailable' })
+        if (generation === this.generation) {
+          this.setState({ kind: 'unavailable' })
+        }
       } finally {
-        this.inflight = undefined
+        if (generation === this.generation) {
+          this.inflight = undefined
+        }
       }
     })()
 

@@ -49,7 +49,7 @@ when you are not typing, to search page titles, headings, and body text.
   <section class="docs-card">
     <h3><a href="command-line-tools.html">Automate and integrate</a></h3>
     <p>Use the encrypted client CLI, operator CLIs, MCP bridge, OpenClaw, HTTP API, webhooks, and integrations.</p>
-    <p><a href="mcp-bridge.html">Connect an MCP client →</a></p>
+    <p><a href="workflows.html">Connect n8n safely →</a></p>
   </section>
   <section class="docs-card">
     <h3><a href="security-and-account.html">Review security boundaries</a></h3>
@@ -72,13 +72,12 @@ as one of:
 
 - **Shipped** — executable implementation and supporting evidence are present.
 - **Operator-gated** — the implementation must be enabled or configured.
-- **Phase-limited** — a bounded slice works, but the surrounding design is not
-  complete.
 - **Planned** — the repository contains a design, not a runtime promise.
 
 That distinction is especially important for the separate
-[MCP](MCP_SUPPORT_PLAN.md), [OpenClaw](OPENCLAW_PLAN.md), and
-[workflows](WORKFLOWS_PLAN.md) plan documents.
+[MCP](MCP_SUPPORT_PLAN.md) and [OpenClaw](OPENCLAW_PLAN.md) design documents.
+The current n8n runtime and security boundary is documented in
+[Workflows with n8n](workflows.md).
 
 ## Documentation principles
 

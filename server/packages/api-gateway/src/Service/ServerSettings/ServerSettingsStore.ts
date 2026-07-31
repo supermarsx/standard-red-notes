@@ -14,6 +14,7 @@ import {
   PersistedAiProfile,
   PersistedBackendProfile,
 } from '../Assistant/profiles'
+import { validateWorkflowsPublicUrl } from '../Workflows/WorkflowsPublicUrl'
 
 /**
  * Standard Red Notes: runtime-configurable SERVER settings (admin pane).
@@ -25,8 +26,8 @@ import {
  * like an env-only deployment.
  *
  * STORAGE: a single JSON file (SERVER_SETTINGS_PATH, default
- * `<cwd>/data/server-settings.json`), mirroring the WorkflowsPairingStore /
- * CalDAV store pattern — the api-gateway has no database, and a JSON file keeps
+ * `<cwd>/data/server-settings.json`), mirroring the CalDAV store pattern — the
+ * api-gateway has no database, and a JSON file keeps
  * the feature self-contained. The shared secure-file primitive bounds and
  * validates reads, rejects unsafe link/type targets, and serializes durable
  * atomic writes across local store instances.
@@ -230,22 +231,19 @@ export interface PersistedOcrSettings {
 }
 
 /**
- * Standard Red Notes: WORKFLOWS (n8n) knobs. Enforced ENTIRELY by the api-gateway
- * (WorkflowsController + the /workflows-ui proxy). `enabled` and `n8nUrl` are read
- * through the resolver per request so they are fully runtime; `uiTokenTtlSeconds`
- * applies to newly-minted editor cookies. `uiBasePath` is the Express mount path
- * of the editor proxy — it is bound ONCE at boot, so a persisted value here is the
- * admin INTENT and only takes effect after the gateway restarts (documented). No
- * secret lives here: the editor proxy authenticates with the gateway's own
- * short-lived UI cookie, and n8n community edition needs no API key for the editor.
- * Every field is optional; absence falls through to env then the safe defaults.
+ * Standard Red Notes: WORKFLOWS discovery knobs. `publicUrl` is the separately
+ * authenticated, browser-facing n8n URL. The legacy proxy-era fields remain in
+ * the read schema only so existing settings files still load; the resolver never
+ * interprets them as a public URL and new admin writes cannot create them.
  */
 export interface PersistedWorkflowsSettings {
   enabled?: boolean
+  publicUrl?: string
+  /** @deprecated Read compatibility only; ignored by the runtime. */
   n8nUrl?: string
-  /** Restart-bound (Express mount path). */
+  /** @deprecated Read compatibility only; ignored by the runtime. */
   uiBasePath?: string
-  /** Integer 60..(7 days). */
+  /** @deprecated Read compatibility only; ignored by the runtime. */
   uiTokenTtlSeconds?: number
 }
 
@@ -670,6 +668,9 @@ function isPersistedServerSettings(value: unknown): value is PersistedServerSett
       workflows: (candidate) =>
         matchesFields(candidate, {
           enabled: isBoolean,
+          publicUrl: (entry) => validateWorkflowsPublicUrl(entry).valid,
+          // Legacy fields are accepted only to avoid bricking an existing
+          // settings file. They are not surfaced or resolved.
           n8nUrl: isHttpUrl,
           uiBasePath: isUiBasePath,
           uiTokenTtlSeconds: (entry) =>
@@ -766,9 +767,7 @@ export interface ServerSettingsPatch {
   }
   workflows?: {
     enabled?: boolean | null
-    n8nUrl?: string | null
-    uiBasePath?: string | null
-    uiTokenTtlSeconds?: number | null
+    publicUrl?: string | null
   }
   plugins?: {
     repoUrl?: string | null
@@ -911,9 +910,15 @@ export class ServerSettingsStore {
       if (patch.workflows) {
         data.workflows = data.workflows ?? {}
         this.applyKey(data.workflows, 'enabled', patch.workflows.enabled)
-        this.applyKey(data.workflows, 'n8nUrl', patch.workflows.n8nUrl)
-        this.applyKey(data.workflows, 'uiBasePath', patch.workflows.uiBasePath)
-        this.applyKey(data.workflows, 'uiTokenTtlSeconds', patch.workflows.uiTokenTtlSeconds)
+        if (patch.workflows.publicUrl !== undefined) {
+          this.applyKey(data.workflows, 'publicUrl', patch.workflows.publicUrl)
+          // A deliberate write of the new field also cleans up the obsolete
+          // proxy-era fields. Clearing removes the persisted override and
+          // resumes the environment/default resolution chain.
+          delete data.workflows.n8nUrl
+          delete data.workflows.uiBasePath
+          delete data.workflows.uiTokenTtlSeconds
+        }
         if (Object.keys(data.workflows).length === 0) {
           delete data.workflows
         }

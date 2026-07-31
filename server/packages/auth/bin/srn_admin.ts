@@ -1895,11 +1895,94 @@ async function cmdOcr(args: ParsedArgs, action: string | undefined): Promise<num
 }
 
 async function cmdWorkflows(args: ParsedArgs, action: string | undefined): Promise<number> {
+  const gatewayEnv = await readPackageEnv('api-gateway')
+  const envOf = (name: string): string | undefined =>
+    process.env[`API_GATEWAY_${name}`] ?? gatewayEnv[name] ?? undefined
+
+  const containsUnsafeCharacter = (value: string): boolean => {
+    for (const character of value) {
+      const code = character.charCodeAt(0)
+      if (code <= 0x1f || code === 0x7f || character === '\\') {
+        return true
+      }
+    }
+    return false
+  }
+
+  const parseSafePublicUrl = (raw: string, label: string): URL => {
+    if (raw !== raw.trim() || raw.length === 0 || raw.length > 2_048 || containsUnsafeCharacter(raw)) {
+      throw new UsageError(`${label} contains unsafe whitespace or characters`)
+    }
+    if (!/^https?:\/\//i.test(raw)) {
+      throw new UsageError(`${label} must be an absolute HTTP(S) URL`)
+    }
+    const authority = /^[a-z][a-z0-9+.-]*:\/\/([^/?#]+)/i.exec(raw)?.[1]
+    const hostAndPort = authority?.slice(authority.lastIndexOf('@') + 1)
+    const authorityHostname = hostAndPort?.startsWith('[')
+      ? hostAndPort.slice(0, hostAndPort.indexOf(']') + 1)
+      : hostAndPort?.replace(/:\d+$/, '')
+    if (!authority || !authorityHostname || /[%\s]/.test(authority) || authorityHostname.endsWith('.')) {
+      throw new UsageError(`${label} contains a deceptive or unsafe authority`)
+    }
+
+    let parsed: URL
+    try {
+      parsed = new URL(raw)
+    } catch {
+      throw new UsageError(`${label} is invalid`)
+    }
+    if (parsed.username || parsed.password || parsed.search || parsed.hash) {
+      throw new UsageError(`${label} must not contain credentials, a query, or a fragment`)
+    }
+    if (authorityHostname.toLowerCase() !== parsed.hostname.toLowerCase()) {
+      throw new UsageError(`${label} contains a non-canonical or deceptive hostname`)
+    }
+    const hostname = parsed.hostname.toLowerCase()
+    const loopback =
+      hostname === 'localhost' ||
+      hostname === '[::1]' ||
+      (/^127(?:\.\d{1,3}){3}$/.test(hostname) &&
+        hostname
+          .split('.')
+          .slice(1)
+          .every((part) => Number(part) >= 0 && Number(part) <= 255))
+    if (parsed.protocol === 'http:' && !loopback) {
+      throw new UsageError(`${label} must use HTTPS; HTTP is allowed only for loopback development`)
+    }
+
+    return parsed
+  }
+
+  const normalizePublicUrl = (raw: string): string => {
+    const parsed = parseSafePublicUrl(raw, 'the public n8n URL')
+    const hostname = parsed.hostname.toLowerCase()
+    const applicationUrl = envOf('PUBLIC_URL')
+    if (!applicationUrl) {
+      throw new UsageError('PUBLIC_URL is required before an n8n link can be published')
+    }
+    const application = parseSafePublicUrl(applicationUrl, 'PUBLIC_URL')
+    if (application.hostname.toLowerCase() === hostname) {
+      throw new UsageError('the public n8n URL must use a different hostname from Standard Red Notes')
+    }
+    const cookieDomain = envOf('COOKIE_DOMAIN')?.trim().replace(/^\./, '').toLowerCase()
+    if (
+      cookieDomain &&
+      (!/^[a-z0-9.-]+$/.test(cookieDomain) ||
+        cookieDomain.startsWith('.') ||
+        cookieDomain.endsWith('.') ||
+        cookieDomain.includes('..'))
+    ) {
+      throw new UsageError('COOKIE_DOMAIN is invalid; refusing to publish an n8n link')
+    }
+    if (cookieDomain && (hostname === cookieDomain || hostname.endsWith(`.${cookieDomain}`))) {
+      throw new UsageError('the public n8n hostname falls inside the Standard Red Notes cookie domain')
+    }
+
+    return parsed.toString()
+  }
+
   if (action === undefined || action === 'show' || action === 'status') {
     const { persisted, overlayPath } = await readOverlaySection('workflows')
-    const gatewayEnv = await readPackageEnv('api-gateway')
-    const envOf = (name: string): string | undefined =>
-      process.env[`API_GATEWAY_${name}`] ?? gatewayEnv[name] ?? undefined
 
     const enabled = (() => {
       if (typeof persisted.enabled === 'boolean') {
@@ -1912,44 +1995,40 @@ async function cmdWorkflows(args: ParsedArgs, action: string | undefined): Promi
 
       return { value: false, source: 'default' }
     })()
-    const strField = (key: string, envName: string, def: string): { value: string; source: string } => {
-      if (typeof persisted[key] === 'string' && (persisted[key] as string).trim() !== '') {
-        return { value: (persisted[key] as string).trim(), source: 'persisted' }
+    const publicUrl = (() => {
+      const persistedValue = typeof persisted.publicUrl === 'string' ? persisted.publicUrl : undefined
+      const raw = persistedValue ?? envOf('WORKFLOWS_PUBLIC_URL')
+      const source = persistedValue !== undefined ? 'persisted' : raw !== undefined ? 'env' : 'default'
+      if (!raw) {
+        return { value: null, source, configurationError: enabled.value }
       }
-      const raw = envOf(envName)
-      if (raw !== undefined && raw !== '') {
-        return { value: raw.trim(), source: 'env' }
+      try {
+        return { value: normalizePublicUrl(raw), source, configurationError: false }
+      } catch {
+        return { value: null, source, configurationError: enabled.value }
       }
-
-      return { value: def, source: 'default' }
-    }
-    const n8nUrl = strField('n8nUrl', 'WORKFLOWS_N8N_URL', 'http://n8n:5678')
-    const uiBasePath = strField('uiBasePath', 'WORKFLOWS_UI_BASE_PATH', '/workflows-ui')
-    const uiTokenTtl = (() => {
-      if (typeof persisted.uiTokenTtlSeconds === 'number') {
-        return { value: persisted.uiTokenTtlSeconds, source: 'persisted' }
-      }
-      const raw = envOf('WORKFLOWS_UI_TOKEN_TTL_SECONDS')
-      if (raw !== undefined && raw !== '' && Number.isFinite(Number(raw))) {
-        return { value: Number(raw), source: 'env' }
-      }
-
-      return { value: 12 * 60 * 60, source: 'default' }
     })()
+    const legacyConfigurationPresent = Boolean(
+      persisted.n8nUrl ||
+      persisted.uiBasePath ||
+      persisted.uiTokenTtlSeconds !== undefined ||
+      envOf('WORKFLOWS_N8N_URL') ||
+      envOf('WORKFLOWS_UI_BASE_PATH') ||
+      envOf('WORKFLOWS_UI_TOKEN_TTL_SECONDS') ||
+      envOf('WORKFLOWS_DATA_PATH'),
+    )
 
     if (args.options.json === true) {
       outJson({
         effective: {
           enabled: enabled.value,
-          n8nUrl: n8nUrl.value,
-          uiBasePath: uiBasePath.value,
-          uiTokenTtlSeconds: uiTokenTtl.value,
+          publicUrl: publicUrl.value,
+          configurationError: publicUrl.configurationError,
+          legacyConfigurationPresent,
         },
         sources: {
           enabled: enabled.source,
-          n8nUrl: n8nUrl.source,
-          uiBasePath: uiBasePath.source,
-          uiTokenTtlSeconds: uiTokenTtl.source,
+          publicUrl: publicUrl.source,
         },
         overlayPath: overlayPath ?? null,
       })
@@ -1957,11 +2036,17 @@ async function cmdWorkflows(args: ParsedArgs, action: string | undefined): Promi
       return 0
     }
 
-    outLine('workflows (n8n) config (effective — persisted overlay over gateway env over defaults):')
-    outLine(`  enabled:            ${enabled.value ? 'on' : 'off'} [${enabled.source}]  (runtime)`)
-    outLine(`  internal n8n URL:   ${n8nUrl.value} [${n8nUrl.source}]  (runtime)`)
-    outLine(`  editor proxy path:  ${uiBasePath.value} [${uiBasePath.source}]  (applies on next gateway restart)`)
-    outLine(`  editor cookie TTL:  ${uiTokenTtl.value}s [${uiTokenTtl.source}]  (runtime; new cookies)`)
+    outLine('workflows (n8n) discovery config (persisted overlay over gateway env over defaults):')
+    outLine(`  enabled:     ${enabled.value ? 'on' : 'off'} [${enabled.source}]  (runtime)`)
+    outLine(
+      `  public URL:  ${publicUrl.value ?? (publicUrl.configurationError ? '(invalid; link withheld)' : '(not configured)')} [${publicUrl.source}]  (runtime)`,
+    )
+    outLine('  auth model:  n8n authenticates and authorizes users independently')
+    if (legacyConfigurationPresent) {
+      outLine(
+        '  WARNING: ignored proxy-era settings remain. Set workflows.publicUrl to migrate them; they are never used as a browser URL.',
+      )
+    }
     outLine(`  overlay file: ${overlayPath ?? '(SERVER_SETTINGS_PATH unset — env/default only)'}`)
 
     return 0
@@ -1974,73 +2059,52 @@ async function cmdWorkflows(args: ParsedArgs, action: string | undefined): Promi
     if (parsed === undefined) {
       throw new UsageError('workflows set-enabled <on|off|clear>')
     }
-    const file = await updateOverlaySection('workflows', (w) => (parsed === null ? delete w.enabled : (w.enabled = parsed)))
-    outLine(`workflows.enabled ${parsed === null ? 'cleared (falls back to env/default)' : parsed ? 'enabled' : 'disabled'}. Wrote ${file}.`)
+    const file = await updateOverlaySection('workflows', (w) => {
+      if (parsed === null) {
+        delete w.enabled
+      } else {
+        w.enabled = parsed
+      }
+    })
+    outLine(
+      `workflows.enabled ${parsed === null ? 'cleared (falls back to env/default)' : parsed ? 'enabled' : 'disabled'}. Wrote ${file}.`,
+    )
 
     return 0
   }
 
-  if (action === 'set-n8n-url') {
+  if (action === 'set-public-url') {
     if (!value) {
-      throw new UsageError('workflows set-n8n-url <http(s)://host:port|clear>')
+      throw new UsageError('workflows set-public-url <https://n8n.example.com|clear>')
     }
     if (value === 'clear') {
-      const file = await updateOverlaySection('workflows', (w) => delete w.n8nUrl)
-      outLine(`workflows.n8nUrl cleared. Wrote ${file}.`)
+      const file = await updateOverlaySection('workflows', (w) => {
+        delete w.publicUrl
+        delete w.n8nUrl
+        delete w.uiBasePath
+        delete w.uiTokenTtlSeconds
+      })
+      outLine(`workflows.publicUrl cleared and obsolete proxy settings removed. Wrote ${file}.`)
 
       return 0
     }
-    if (!/^https?:\/\/.+/i.test(value)) {
-      throw new UsageError('the n8n URL must be an absolute http(s) URL, e.g. http://n8n:5678')
-    }
-    const file = await updateOverlaySection('workflows', (w) => (w.n8nUrl = value))
-    outLine(`workflows.n8nUrl set to ${value}. Wrote ${file}.`)
+    const normalized = normalizePublicUrl(value)
+    const file = await updateOverlaySection('workflows', (w) => {
+      w.publicUrl = normalized
+      delete w.n8nUrl
+      delete w.uiBasePath
+      delete w.uiTokenTtlSeconds
+    })
+    outLine(`workflows.publicUrl set to ${normalized}. Obsolete proxy settings removed. Wrote ${file}.`)
 
     return 0
   }
 
-  if (action === 'set-ui-base-path') {
-    if (!value) {
-      throw new UsageError('workflows set-ui-base-path </path|clear>')
-    }
-    if (value === 'clear') {
-      const file = await updateOverlaySection('workflows', (w) => delete w.uiBasePath)
-      outLine(`workflows.uiBasePath cleared. Wrote ${file}.`)
-
-      return 0
-    }
-    if (!/^\/[A-Za-z0-9/_-]*$/.test(value)) {
-      throw new UsageError('the editor proxy path must be an absolute path, e.g. /workflows-ui')
-    }
-    const file = await updateOverlaySection('workflows', (w) => (w.uiBasePath = value))
-    outLine(`workflows.uiBasePath set to ${value}. Applies on the next gateway restart. Wrote ${file}.`)
-
-    return 0
+  if (['set-n8n-url', 'set-ui-base-path', 'set-ui-token-ttl'].includes(action ?? '')) {
+    throw new UsageError(`workflows ${action} was removed with the embedded proxy; use set-public-url`)
   }
 
-  if (action === 'set-ui-token-ttl') {
-    if (!value) {
-      throw new UsageError('workflows set-ui-token-ttl <60..604800|clear>')
-    }
-    if (value === 'clear') {
-      const file = await updateOverlaySection('workflows', (w) => delete w.uiTokenTtlSeconds)
-      outLine(`workflows.uiTokenTtlSeconds cleared. Wrote ${file}.`)
-
-      return 0
-    }
-    const n = Number(value)
-    if (!Number.isInteger(n) || n < 60 || n > 7 * 24 * 60 * 60) {
-      throw new UsageError('workflows.uiTokenTtlSeconds must be an integer between 60 and 604800')
-    }
-    const file = await updateOverlaySection('workflows', (w) => (w.uiTokenTtlSeconds = n))
-    outLine(`workflows.uiTokenTtlSeconds set to ${n}. Wrote ${file}.`)
-
-    return 0
-  }
-
-  throw new UsageError(
-    `unknown workflows action '${action}' — show | set-enabled <on|off> | set-n8n-url <url> | set-ui-base-path </path> | set-ui-token-ttl <seconds>`,
-  )
+  throw new UsageError(`unknown workflows action '${action}' — show | set-enabled <on|off> | set-public-url <url>`)
 }
 
 const DEFAULT_PLUGINS_REPO_URL = 'https://raw.githubusercontent.com/standardnotes/plugins/main/cdn/dist'

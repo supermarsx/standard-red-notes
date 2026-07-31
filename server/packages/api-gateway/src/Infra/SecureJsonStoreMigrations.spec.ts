@@ -9,7 +9,6 @@ import { PublishedCalendarStore } from '../Service/Caldav/PublishedCalendarStore
 import { DeliveryConfigStore } from '../Service/ReminderDelivery/DeliveryConfigStore'
 import { PublishedRemindersStore } from '../Service/ReminderDelivery/PublishedRemindersStore'
 import { ServerSettingsStore } from '../Service/ServerSettings/ServerSettingsStore'
-import { WorkflowsPairingStore } from '../Service/Workflows/WorkflowsPairingStore'
 
 const TEST_ENCRYPTION_KEY = 'a'.repeat(64)
 const TEST_TIMESTAMP = 1_800_000_000_000
@@ -89,19 +88,6 @@ describe('secure JSON store migrations', () => {
         read: (filePath) => new DeliveryConfigStore(filePath).getForUser('user'),
       },
       {
-        name: 'workflows-pairing',
-        value: {
-          user: {
-            userUuid: 'user',
-            pairedAt: TEST_TIMESTAMP,
-            mcpTokenUuid: null,
-            webhookUuids: null,
-            unexpected: true,
-          },
-        },
-        read: (filePath) => new WorkflowsPairingStore(filePath).isPaired('user'),
-      },
-      {
         name: 'server-settings',
         value: { workflows: { enabled: true, unexpected: true } },
         read: (filePath) => new ServerSettingsStore(filePath).read(),
@@ -167,18 +153,6 @@ describe('secure JSON store migrations', () => {
         name: 'delivery-config-bounds',
         value: { user: { channel: 'email', destination: 'x'.repeat(8_193), enabled: true } },
         read: (filePath) => new DeliveryConfigStore(filePath).getForUser('user'),
-      },
-      {
-        name: 'workflows-pairing-bounds',
-        value: {
-          user: {
-            userUuid: 'user',
-            pairedAt: TEST_TIMESTAMP,
-            mcpTokenUuid: null,
-            webhookUuids: ['prototype'],
-          },
-        },
-        read: (filePath) => new WorkflowsPairingStore(filePath).isPaired('user'),
       },
     ]
 
@@ -412,7 +386,7 @@ describe('secure JSON store migrations', () => {
     }
   })
 
-  it('preserves the existing JSON shapes for stores that previously lacked direct round-trip specs', async () => {
+  it('preserves supported JSON shapes and loads proxy-era workflow settings without promoting them', async () => {
     const calendarPath = path.join(directoryPath, 'calendar.json')
     const calendar = new PublishedCalendarStore(calendarPath)
     await calendar.publish('user', { uid: 'todo', summary: 'Plan release' })
@@ -427,16 +401,31 @@ describe('secure JSON store migrations', () => {
       user: { channel: 'email', destination: 'person@example.test', enabled: true },
     })
 
-    const workflowsPath = path.join(directoryPath, 'workflows.json')
-    const workflows = new WorkflowsPairingStore(workflowsPath)
-    const pairing = await workflows.pair('user')
-    expect(JSON.parse(await fs.readFile(workflowsPath, 'utf8'))).toEqual({ user: pairing })
-
     const settingsPath = path.join(directoryPath, 'settings.json')
+    await fs.writeFile(
+      settingsPath,
+      JSON.stringify({
+        workflows: {
+          enabled: true,
+          n8nUrl: 'http://127.0.0.1:5678',
+          uiBasePath: '/workflows-ui',
+          uiTokenTtlSeconds: 3600,
+        },
+      }),
+    )
     const settings = new ServerSettingsStore(settingsPath)
-    await settings.update({ workflows: { enabled: true, n8nUrl: 'http://127.0.0.1:5678' } })
+    await expect(settings.read()).resolves.toEqual({
+      workflows: {
+        enabled: true,
+        n8nUrl: 'http://127.0.0.1:5678',
+        uiBasePath: '/workflows-ui',
+        uiTokenTtlSeconds: 3600,
+      },
+    })
+
+    await settings.update({ workflows: { publicUrl: 'https://n8n.example.test' } })
     expect(JSON.parse(await fs.readFile(settingsPath, 'utf8'))).toEqual({
-      workflows: { enabled: true, n8nUrl: 'http://127.0.0.1:5678' },
+      workflows: { enabled: true, publicUrl: 'https://n8n.example.test' },
     })
   })
 })

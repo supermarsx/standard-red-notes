@@ -6,7 +6,8 @@ server. It documents only endpoints that exist in this fork; there is no
 OpenAPI/Swagger document — this Markdown file is the contract.
 
 > Companion doc: outbound webhooks are documented in
-> [`webhooks.md`](./webhooks.md).
+> [`webhooks.md`](./webhooks.md). The maintained n8n boundary and MCP setup are
+> in [`../../docs/workflows.md`](../../docs/workflows.md).
 
 ---
 
@@ -40,12 +41,17 @@ a **scoped API token**. In this codebase the token entity is called an
 | Property         | Meaning                                                             |
 |------------------|--------------------------------------------------------------------|
 | `scope`          | `read` or `write`. `read` mints a **read-only** session server-side. |
-| `scopeTagUuids`  | Optional list of tag UUIDs the token is restricted to (tag-scoping). |
+| `scopeTagUuids`  | Optional advisory tag scope used by the current MCP bridge; it is not cryptographic isolation. |
 | `expiresAt`      | Optional expiry; an expired token fails authentication.             |
-| revocable        | Delete the token to revoke it immediately.                          |
+| revocable        | Delete the token to block new authentication; separately end already-issued sessions. |
 
 The plaintext token is shown **exactly once** at creation, in the form
 `<tokenUuid>.<secret>`. Store it securely; it is unrecoverable afterward.
+
+For n8n, prefer the Standard Red Notes MCP bridge instead of implementing this
+encrypted protocol in workflow nodes. The bridge handles local key unwrap and
+decryption; n8n connects to it with a separate transport bearer. See the
+[Workflows guide](../../docs/workflows.md).
 
 ---
 
@@ -167,9 +173,10 @@ Authorization: Bearer <access_token>
 - **Refresh** an expiring session: `POST /v1/sessions/refresh` with
   `{ "access_token": "...", "refresh_token": "..." }`.
 - **Revoke** the integration entirely: delete the scoped token
-  (`DELETE /v1/mcp-tokens/:mcpTokenId`) or revoke the session
-  (`DELETE /v1/sessions/:uuid`). Session revocation also emits the
-  `session.revoked` webhook (see `webhooks.md`).
+  (`DELETE /v1/mcp-tokens/:mcpTokenId`) to prevent new authentication **and**
+  end its already-issued session (for example, stop/restart the bridge or revoke
+  that session with `DELETE /v1/sessions/:uuid`). Session revocation also emits
+  the `session.revoked` webhook (see `webhooks.md`).
 
 ---
 
@@ -196,6 +203,19 @@ All routes are under the gateway base URL. "Auth" = requires
 
 Full request/response shapes and the event catalogue: see
 [`webhooks.md`](./webhooks.md).
+
+### Workflows discovery — `/v1/workflows`
+
+| Method & path | Auth | Purpose |
+| --- | --- | --- |
+| `GET /v1/workflows/status` | Authenticated Standard Red Notes client | Return a validated external n8n URL only when the operator and per-user discovery gates are both enabled. |
+
+The response contains `enabled`, `available`, `publicUrl`,
+`configurationError`, and `authentication: "n8n"`. It is private/no-store
+navigation metadata. It is not an n8n session, identity assertion, pairing
+token, reachability check, or proxy. The retired `/v1/workflows/pair`,
+`/v1/workflows/unpair`, and `/workflows-ui` routes do not exist. See the
+[Workflows guide](../../docs/workflows.md) for the complete boundary.
 
 ### Items (data plane) — `/v1/items`
 | Method & path                     | Auth   | Purpose |

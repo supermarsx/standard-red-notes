@@ -74,7 +74,6 @@ import { IpAccessListStore } from '../src/Controller/IpAccessList'
 import { RateLimitMetricsStore } from '../src/Controller/RateLimitMetrics'
 import { ServerSettingsResolver } from '../src/Service/ServerSettings/ServerSettingsResolver'
 import { registerCaldavRoutes } from '../src/Caldav/registerCaldavRoutes'
-import { registerWorkflowsUiProxy } from '../src/Workflows/registerWorkflowsUiProxy'
 import { startReminderDeliveryScheduler } from '../src/ReminderDelivery/startReminderDeliveryScheduler'
 import { requestBodyLogMetadata } from '../src/Logging/RequestBodyLogMetadata'
 import { attachWebSocketGateway } from '@standard-red-notes/websocket-gateway'
@@ -303,30 +302,21 @@ void container
     )
     app.use(createSharedServerAccessKeyMiddleware(sharedServerAccessKeyConfig))
 
-    // Standard Red Notes: mount the CalDAV router, the Workflows-UI proxy and the
-    // realtime WS token-mint route INSIDE setConfig — i.e. BEFORE server.build().
+    // Standard Red Notes: mount the CalDAV router and the realtime WS token-mint
+    // route INSIDE setConfig — i.e. BEFORE server.build().
     // build() mounts the inversify controller router at '/'. The trailing unmatched
     // handler is now a POST-BUILD app.use() fallback (see after build(), replacing the
     // former inert @controller('') catch-all), so these routes are no longer at risk
     // of being shadowed — but keeping them pre-build (ahead of the controller router)
     // remains the correct, defensive placement and matches the boot-mounted route
     // ordering guard. Registering here also keeps them after all the body/cookie/CORS/
-    // rate-limit/shared-key middleware above. CalDAV + Workflows gate themselves internally
-    // (CalDAV 404s when CALDAV_ENABLED is off; Workflows 404s when WORKFLOWS_ENABLED
-    // is off and 403s without the UI-access cookie + an active pairing), so mounting
-    // them unconditionally is safe.
+    // rate-limit/shared-key middleware above. CalDAV gates itself internally
+    // (404 when CALDAV_ENABLED is off), so mounting it unconditionally is safe.
     try {
       registerCaldavRoutes(app, container)
       logger.info('CalDAV router mounted')
     } catch (error) {
       logger.error(`Failed to mount CalDAV router: ${(error as Error).message}`)
-    }
-
-    try {
-      registerWorkflowsUiProxy(app, container)
-      logger.info('Workflows editor proxy mounted')
-    } catch (error) {
-      logger.error(`Failed to mount workflows editor proxy: ${(error as Error).message}`)
     }
 
     // The realtime WS token-mint endpoint must also precede the catch-all, but its
@@ -387,9 +377,8 @@ void container
   // so the realtime WebSocket gateway can register its token route on it, then
   // `.listen()` to get the Node http.Server the ws upgrade attaches to.
   // Standard Red Notes: build() mounts the inversify controller router at '/'. The
-  // CalDAV router, the Workflows-UI proxy and the WS token-mint route are registered
-  // INSIDE setConfig above (before this call), ahead of the controller router — see
-  // the note there.
+  // CalDAV router and the WS token-mint route are registered INSIDE setConfig
+  // above (before this call), ahead of the controller router — see the note there.
   const app = await server.build()
 
   // Standard Red Notes: cosmetic welcome page (GET /) + JSON 404 fallback. This
@@ -399,7 +388,7 @@ void container
   // `Cannot GET /path` HTML. Registered as a POST-BUILD app.use() so it runs strictly
   // AFTER the controller router (and the setErrorConfig 500-handler): it catches only
   // genuinely-unmatched requests and cannot shadow any controller or the pre-build
-  // CalDAV/Workflows/sockets routes. The old LegacyController's un-versioned legacy
+  // CalDAV/sockets routes. The old LegacyController's un-versioned legacy
   // proxy is intentionally NOT restored (dead since the Express-5 upgrade).
   app.use(createFallbackHandler({ welcomeHtml: API_GATEWAY_WELCOME_HTML }))
 

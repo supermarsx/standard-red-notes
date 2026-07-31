@@ -50,15 +50,15 @@ latest supported embedded runtime, `node24`.
 | Single-container Dockerfile frontend | `docker/dockerfile:1.7` (upgrade deferred) |
 | Single-container Node Alpine | `node:24-alpine` (upgrade deferred) |
 | Single-container Node Debian slim | `node:24-bookworm-slim` (upgrade deferred) |
-| n8n | `n8nio/n8n:2.30.5` |
+| n8n | `n8nio/n8n:2.32.6` |
 | MariaDB | `mariadb:12.3.2` |
 | Redis | `redis:8.8.0-alpine` |
 | Floci | `floci/floci:1.5.33-compat` |
 | Docker socket proxy | `tecnativa/docker-socket-proxy:v0.4.2` |
 
-`n8nio/n8n:2.31.1` exists, but the upstream npm and container registries mark
-it as `beta`/`next`/`rc`. Version `2.30.5` is the newest release on both the
-`stable` and `latest` channels, so deployments use that exact tag.
+The n8n pin was refreshed on 2026-07-31. Version `2.32.6` is the current
+official stable release and deployments use that exact tag; `2.33.2` remains a
+beta release and is not the default.
 
 ## Current Actions
 

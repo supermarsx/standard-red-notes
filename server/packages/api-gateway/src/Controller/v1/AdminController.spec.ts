@@ -18,6 +18,7 @@ import {
   ServerSettingsResolver,
 } from '../../Service/ServerSettings/ServerSettingsResolver'
 import { ServerSettingsStore } from '../../Service/ServerSettings/ServerSettingsStore'
+import { WorkflowsService } from '../../Service/Workflows/WorkflowsService'
 
 const confirmationDefaults = {
   emailConfirmationEnabled: false,
@@ -73,6 +74,7 @@ describe('AdminController server-status', () => {
       serviceProbeUrls?: Record<string, string>
       serverSettingsResolver?: ServerSettingsResolver
       logger?: { info: jest.Mock }
+      workflowsService?: WorkflowsService
     } = {},
   ) =>
     new AdminController(
@@ -96,6 +98,13 @@ describe('AdminController server-status', () => {
       options.serviceProbeUrls,
       options.serverSettingsResolver,
       options.logger,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      options.workflowsService,
     )
 
   const responseWith = (roles: Array<{ name: string }>): Response => {
@@ -382,6 +391,7 @@ describe('AdminController server-status', () => {
     let dir: string
     let resolver: ServerSettingsResolver
     let logger: { info: jest.Mock }
+    let workflowsService: WorkflowsService
 
     beforeEach(async () => {
       dir = await fs.mkdtemp(path.join(os.tmpdir(), 'srn-admin-settings-'))
@@ -390,13 +400,19 @@ describe('AdminController server-status', () => {
         updateCheckUrl: 'https://env.update.example.com',
       })
       logger = { info: jest.fn() }
+      workflowsService = new WorkflowsService({
+        enabled: true,
+        publicUrl: null,
+        applicationPublicUrl: 'https://notes.srn.test',
+        cookieDomain: '.srn.test',
+      })
     })
 
     afterEach(async () => {
       await fs.rm(dir, { recursive: true, force: true })
     })
 
-    const settingsController = () => makeController({ serverSettingsResolver: resolver, logger })
+    const settingsController = () => makeController({ serverSettingsResolver: resolver, logger, workflowsService })
 
     it('rejects a non-admin requestor with 403 on both GET and PUT', async () => {
       await settingsController().getServerSettings({} as Request, responseWith([{ name: RoleName.NAMES.CoreUser }]))
@@ -887,27 +903,40 @@ describe('AdminController server-status', () => {
     it('PUT persists the workflows config (persisted WINS over env) and returns the view', async () => {
       await settingsController().setServerSettings(
         {
-          body: { workflows: { enabled: true, n8nUrl: 'https://n8n.example.com', uiTokenTtlSeconds: 3600 } },
+          body: { workflows: { enabled: true, publicUrl: 'https://n8n.example.com' } },
         } as unknown as Request,
         responseWith([{ name: RoleName.NAMES.AdminUser }]),
       )
 
       const config = await resolver.resolveWorkflowsConfig()
-      expect(config.enabled).toBe(true)
-      expect(config.n8nUrl).toBe('https://n8n.example.com')
-      expect(config.uiTokenTtlSeconds).toBe(3600)
+      expect(config).toEqual({
+        enabled: true,
+        publicUrl: 'https://n8n.example.com/',
+        legacyConfigurationPresent: false,
+      })
 
       const payload = jsonMock.mock.calls[0][0]
-      expect(payload.settings.workflows).toMatchObject({ enabled: true, n8nUrl: 'https://n8n.example.com' })
+      expect(payload.settings.workflows).toMatchObject({
+        enabled: true,
+        publicUrl: 'https://n8n.example.com/',
+        legacyConfigurationPresent: false,
+      })
       expect(payload.sources['workflows.enabled']).toBe('persisted')
+      expect(payload.sources['workflows.publicUrl']).toBe('persisted')
     })
 
-    it('PUT rejects a non-http n8n URL, bad base path and out-of-range TTL as 400s that persist nothing', async () => {
+    it('PUT rejects unsafe public URLs and every proxy-era setting without persisting', async () => {
       const cases = [
-        { workflows: { n8nUrl: 'ftp://nope' } },
+        { workflows: { publicUrl: 'ftp://nope' } },
+        { workflows: { publicUrl: 'http://n8n.example.test' } },
+        { workflows: { publicUrl: 'https://user:secret@n8n.example.test' } },
+        { workflows: { publicUrl: 'https://n8n.example.test/?token=secret' } },
+        { workflows: { publicUrl: 'https://n8n.example.test/#workflow' } },
+        { workflows: { publicUrl: 'https://notes.srn.test:8443' } },
+        { workflows: { publicUrl: 'https://automation.srn.test' } },
+        { workflows: { n8nUrl: 'https://n8n.example.test' } },
         { workflows: { uiBasePath: 'no-leading-slash' } },
         { workflows: { uiTokenTtlSeconds: 10 } },
-        { workflows: { uiTokenTtlSeconds: 99999999 } },
         { workflows: { enabled: 'yes' } },
       ]
       for (const body of cases) {
@@ -917,7 +946,11 @@ describe('AdminController server-status', () => {
         )
         expect(statusMock).toHaveBeenCalledWith(400)
       }
-      expect(await resolver.resolveWorkflowsConfig()).toMatchObject({ enabled: false, n8nUrl: 'http://n8n:5678' })
+      expect(await resolver.resolveWorkflowsConfig()).toEqual({
+        enabled: false,
+        publicUrl: null,
+        legacyConfigurationPresent: false,
+      })
       expect(logger.info).not.toHaveBeenCalled()
     })
 

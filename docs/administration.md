@@ -126,6 +126,10 @@ Admin Server tab and `srn-admin config`, `ocr`, and `workflows` commands show
 effective values and their source. Note whether a change is live, requires a
 page load, or requires a gateway restart.
 
+The Workflows gates control discovery of a separately authenticated n8n link.
+They do not provision, disable, or sign a user out of n8n. Manage actual n8n
+access in n8n; see [Workflows with n8n](workflows.md).
+
 ## Service health and lifecycle
 
 The Server tab reports per-service health and response time. Depending on the
@@ -164,9 +168,9 @@ Query audit events after changes to:
 - feature flags, limits, and provider configuration; and
 - services and runtime settings.
 
-Workflows pairing/unpairing is currently recorded as structured gateway log
-events in its Phase 1 implementation rather than the canonical admin audit
-writer. Preserve gateway logs when investigating that action.
+Changing the Workflows master switch or per-user flag is an SRN administration
+event. n8n logins, role changes, credentials, and executions belong to n8n's
+independent audit and retention controls.
 
 For command details, see [Command-Line Tools](command-line-tools.md). For
 incident procedures, see [Monitoring and

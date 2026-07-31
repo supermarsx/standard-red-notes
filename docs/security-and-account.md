@@ -156,11 +156,12 @@ web client is not sufficient authorization.
   secrets.
 - Terminate TLS at a trusted reverse proxy and preserve the real client IP only
   through explicitly trusted proxy hops.
-- Do not expose database, Redis, internal service ports, the Docker socket, or
-  the n8n internal URL to untrusted networks.
+- Do not expose database, Redis, internal service ports, or the Docker socket
+  to untrusted networks. Put n8n on its own TLS hostname with its own login;
+  never route it through the Standard Red Notes origin.
 - Review audit logs after changes to users, roles, registration, security
   lists, feature gates, and service lifecycle.
 
 For operator controls, continue with [Administration](administration.md). For
 credential use in automation, see [MCP Bridge](mcp-bridge.md) and
-[Command-Line Tools](command-line-tools.md).
+[Workflows with n8n](workflows.md).
