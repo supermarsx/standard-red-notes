@@ -18,14 +18,14 @@ the fan-in green.
 
 ## Required Lanes
 
-| Lane               | Contract                                                                                                                                                                                            | Timeout |
-| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------: |
+| Lane               | Contract                                                                                                                                                                                                                                                  | Timeout |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------: |
 | `contracts`        | Immutable root install; CI validator tests; release impact, fingerprint, comparator, packaging-invocation, target, and artifact contracts; generated docs/search freshness, link/navigation integrity, Mermaid rendering; actionlint over root workflows. |  12 min |
-| `check`            | Immutable installs in the root, app, and server projects, followed by the coordinated type, lint, format, and test gate.                                                                            |  45 min |
-| `build`            | A second clean set of immutable installs followed by the coordinated MCP, OpenClaw, app, and server build.                                                                                          |  45 min |
-| `desktop-electron` | A production desktop build followed by the seven real Electron suites under Xvfb. The guarded runner requires the built entry point and cannot silently fall back to skipped headless tests.        |  45 min |
-| `container-smoke`  | Hadolint, BuildKit image builds, an isolated Compose stack, Chromium app-open checks, bounded parallel sync and Redis operations, MariaDB backup/restore, and image/container hardening assertions. |  70 min |
-| `production-gate`  | Fail-closed fan-in for all five implementation lanes above.                                                                                                                                         |   5 min |
+| `check`            | Immutable installs in the root, app, and server projects, followed by the coordinated type, lint, format, and test gate.                                                                                                                                  |  45 min |
+| `build`            | A second clean set of immutable installs followed by the coordinated MCP, OpenClaw, app, and server build.                                                                                                                                                |  45 min |
+| `desktop-electron` | A production desktop build followed by the seven real Electron suites under Xvfb. The guarded runner requires the built entry point and cannot silently fall back to skipped headless tests.                                                              |  45 min |
+| `container-smoke`  | Hadolint, BuildKit image builds, an isolated Compose stack, Chromium app-open checks, bounded parallel sync and Redis operations, MariaDB backup/restore, and image/container hardening assertions.                                                       |  70 min |
+| `production-gate`  | Fail-closed fan-in for all five implementation lanes above.                                                                                                                                                                                               |   5 min |
 
 The required browser selection contains three app-open tests and one combined
 sync/Redis test. The generated JSON report must contain at least four expected
@@ -38,8 +38,19 @@ containers and volumes even after a failure.
 Normal CI never publishes. Each of the eight product publishers independently
 checks out complete history, validates the repository release contract before
 impact analysis, selects an ancestry-safe product baseline, builds only after a
-managed source/configuration change, and compares the product's built payload
-plus named packaging contract with the exact prior fingerprint assets.
+managed source/configuration change, and compares its product-specific release
+surface plus named packaging contract with the exact prior fingerprint assets.
+For mobile, that comparison is a deterministic pre-sign source/configuration
+and toolchain identity; signed APK, AAB, and IPA bytes are validated and
+checksummed separately before publication.
+
+The release-policy JavaScript is parsed with the public, exact
+`@babel/parser` dependency declared in `scripts/package.json` and locked in
+`scripts/package-lock.json`. CI, local public commands, and every publisher
+install it with the same isolated immutable command immediately before policy
+analysis or native fingerprinting. A missing parser fails the gate. Changes to
+that manifest or lock are release-significant for all eight products because
+they can change how every semantic policy partition is interpreted.
 
 ```mermaid
 flowchart TD
@@ -47,8 +58,8 @@ flowchart TD
   E[Bounded publisher event] --> V[Validate complete release contract]
   V --> I{Owned source or configuration changed?}
   I -- No --> S[Skip]
-  I -- Yes --> B[Build product payload]
-  B --> F[Compute payload plus packaging-contract fingerprints]
+  I -- Yes --> B[Prepare product-specific release surface]
+  B --> F[Compute release-surface plus packaging-contract fingerprints]
   F --> P{Exact prior evidence usable?}
   P -- Same --> S
   P -- Changed or first release --> U[Run product packaging and publication fan-in]
@@ -64,11 +75,70 @@ equivalent named contracts for their deterministic inputs, toolchains, target
 matrices, and packaging behavior. Raw workflow text is not hashed, so prose,
 display-name, and permissions-only edits do not fabricate releases.
 
-Runner-image resolution, mutable action-tag resolution, and secret/signing-key
-rotation are external-state boundaries. They are documented with the audited
-manual-force procedure in [Releases and Upgrades](releases-and-upgrades.md#repository-release-contracts);
+Native executor and packaging-policy source is compared as a canonical semantic
+AST. Formatting and comments affect no product; product-owned semantics affect
+only that product; native-shared semantics affect the five native products; and
+cross-product shared semantics affect all eight. The v4 native semantic identity
+has one conservative transition from the legacy v3 exact-byte baseline: the
+first comparison may release all five native products once, after which the
+scoped rules apply. Malformed or ambiguous policy fails closed.
+
+External action references in publisher workflows are restricted to an exact
+commit-SHA allowlist. Their version comments are validated for readability but
+excluded from semantic fingerprints; the SHA itself remains release-significant.
+Runner-image resolution and secret/signing-key rotation are still external-state
+boundaries. They are documented with the audited manual-force procedure in
+[Releases and Upgrades](releases-and-upgrades.md#repository-release-contracts);
 the pre-publication fingerprint must not be presented as evidence that those
 external values stayed unchanged.
+
+The five rolling native publishers allocate one stable release identity and
+reuse a validated draft on retry. Publication checks the draft identity, uploads
+with replacement semantics, verifies the exact remote asset set and downloaded
+hashes, and only then publishes it. Validator mutations reject any return to
+version allocation inside the final release job or direct one-shot release
+creation.
+
+Those publishers authorize only the exact protected `origin/main` head and put
+identity plus publication behind the `release-production` environment. Every
+package handoff is retained for 30 days. Before publication, all six Windows,
+Linux, and macOS x64/arm64 assets execute on matching runners with network proxy
+variables cleared; the job verifies binary format, architecture, and the exact
+offline self-test response. The draft is bound to a sorted
+name/SHA-256/size-manifest marker before any remote asset deletion or upload.
+
+The root desktop publisher applies the same exact-main authorization, protected
+environment, and 30-day handoff policy. Desktop fan-in verifies each updater
+entry's exact basename, size, and Base64 SHA-512 plus real package format and
+architecture across NSIS, AppImage, ZIP/DMG, and DEB artifacts. The embedded
+Snap-capable recovery path must pass an exact-main protected gate before calling
+its reusable workflow. OpenClaw rolling sources likewise require exact main;
+explicit tags must resolve to the checked-out commit on protected-main ancestry,
+and identity, attestation, and publication are protected production jobs with
+30-day artifacts.
+
+Mobile validation requires the exact four-ABI Android matrix
+(`armeabi-v7a`, `arm64-v8a`, `x86`, `x86_64`), symmetric native-library path
+sets in APK and AAB, and valid APK/AAB signatures. iOS validation deep-checks
+the code signature and scans every extracted Mach-O for an exact device-only
+`arm64` architecture. Signing secrets use restrictive file modes and immediate
+`always()` cleanup; every later publication stage rechecks the validated
+artifact checksums and exact app/build identity.
+
+Mobile branch analysis and manual publication require the exact fetched
+protected `origin/main` head. A web-tag release must resolve to the event commit,
+that commit must be an ancestor of protected `main`, and its stable SemVer must
+match the web manifest. Release reservation, signed Android/iOS builds, every
+store mutation, and final GitHub publication are protected by the
+`mobile-production` environment. The marker-bound GitHub draft is reserved
+before any store mutation and only that reserved prerelease can be published
+after both store branches finish.
+
+Validated payloads and the same-run GitHub/store intent evidence are retained
+for exactly 30 days. Recovery must use GitHub's rerun-failed-jobs operation so
+only the failed job and its dependent jobs resume. Never rerun all jobs and
+never rebuild signed bytes under the same version/build identity; absent,
+expired, foreign, duplicate, or ambiguous markers fail closed.
 
 ## Extended Profiles
 
@@ -110,6 +180,11 @@ Run the workflow policy and its failure-case tests without starting Docker:
 yarn ci:contracts
 actionlint .github/workflows/ci.yml
 ```
+
+These public Yarn commands install the isolated parser dependency from
+`scripts/package-lock.json` automatically. `ci:contracts` installs it once and
+then invokes the direct internal `:run` scripts; callers should use the public
+commands rather than invoking a `:run` alias without that install boundary.
 
 For a focused release-contract iteration, the same gate is split into explicit
 behavior and mutation checks:

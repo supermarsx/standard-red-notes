@@ -17,7 +17,7 @@ complete product catalog.
 | Component    | Release shape                                                                                        |
 | ------------ | ---------------------------------------------------------------------------------------------------- |
 | Desktop      | macOS DMG/ZIP, Windows NSIS, Linux AppImage/DEB; x64 and arm64                                       |
-| Mobile       | Universal Android APK, Android AAB, and iOS device arm64 artifact                                    |
+| Mobile       | Universal Android APK/AAB with four ABIs, plus an arm64-only iOS device artifact                     |
 | `srn-client` | Native/standalone artifacts for Windows, Linux, and macOS on x64/arm64                               |
 | `srn-server` | Native/standalone artifacts for Windows, Linux, and macOS on x64/arm64                               |
 | `srn-admin`  | Native tool artifacts for the six OS/architecture targets and an in-container wrapper                |
@@ -44,7 +44,10 @@ For OpenClaw, GitHub build provenance can be checked with:
 
 ```bash
 gh attestation verify srn-openclaw-<version>-node-any.tgz \
-  --repo supermarsx/standard-red-notes
+  --bundle srn-openclaw-<version>-node-any.provenance.sigstore.json \
+  --repo supermarsx/standard-red-notes \
+  --source-digest <40-character-release-source-commit> \
+  --signer-workflow supermarsx/standard-red-notes/.github/workflows/srn-openclaw.yml
 ```
 
 Do not install an asset merely because its filename contains the desired
@@ -58,9 +61,13 @@ Desktop packages are produced by a complete builder matrix:
 - Windows: NSIS for x64 and arm64; and
 - Linux: AppImage and Debian packages for x64 and arm64.
 
-Mobile CI validates native payload architectures. The Android universal package
-contains `arm64-v8a` and `x86_64` libraries. The iOS package is a device arm64
-build and must not contain simulator architecture.
+Mobile CI validates signatures and the complete native payload. Both Android
+artifacts must contain exactly `armeabi-v7a`, `arm64-v8a`, `x86`, and `x86_64`;
+each ABI must expose the same normalized native-library path set. CI verifies
+the APK signature and AAB JAR signature before either store is contacted. The
+iOS IPA must pass deep code-signature verification, and every extracted Mach-O
+file must contain exactly the device `arm64` architecture with no simulator
+slice.
 
 Back up and complete sync before replacing a client. After upgrading, verify
 sign-in, a recent note, a new note round trip, representative files, and
@@ -119,6 +126,11 @@ conventions, Latest-pointer behavior, OpenClaw provenance, mobile native
 architectures, and the executable packaging contract used by each publisher.
 The release workflows remain the publishing authority; a local contract pass
 proves configuration consistency, not that a remote release completed.
+The public release-policy commands install the exact parser dependency from
+`scripts/package-lock.json` before analysis. CI and every publisher use the same
+`npm ci --prefix scripts --ignore-scripts --no-audit --no-fund` boundary, so a
+developer, pull request, and release runner interpret JavaScript release policy
+with the same pinned `@babel/parser` version.
 
 The packaging contract is active, shipped release functionality.
 Every one of the eight publisher workflows validates the complete contract
@@ -127,20 +139,23 @@ gates:
 
 1. **Source impact:** compare the product's owned package and dependency closure
    with its ancestry-selected release tag. Unrelated changes stop here.
-2. **Built release identity:** build the selected product and hash its shipped
-   payload together with that product's canonical packaging inputs. An
-   unchanged result stops before packaging or publication.
+2. **Release identity:** compute the product-specific release surface together
+   with its canonical packaging inputs. Native, desktop, and OpenClaw include
+   built or extracted payloads. Mobile uses a deterministic pre-sign
+   source/configuration/toolchain fingerprint, then independently verifies and
+   checksums the signed APK, AAB, and IPA before publication. An unchanged
+   identity stops before publication.
 
 ```mermaid
 flowchart LR
   E[Bounded product trigger] --> V[Validate repository release contract]
   V --> A[Analyze owned source since ancestor tag]
   A -- No impact --> X[Stop: no release]
-  A -- Impact --> B[Build exact publishable payload]
-  B --> F[Fingerprint payload plus named packaging contract]
+  A -- Impact --> B[Prepare the product-specific release surface]
+  B --> F[Fingerprint release surface plus named packaging contract]
   F --> C{Compare exact prior fingerprint set}
   C -- Same --> X
-  C -- Changed or first release --> P[Package, attest, and publish]
+  C -- Changed or first release --> P[Package and publish; attest where configured]
   C -- Missing, malformed, or divergent --> Q[Block or use audited manual force]
 ```
 
@@ -161,6 +176,19 @@ executor from bypassing the fingerprinted set. The home-server's migrations ZIP
 is a product-specific supplemental invocation, so changing it affects the home
 server without forcing sibling native products to publish.
 
+The executor and packaging-policy modules use a canonical semantic AST instead
+of their raw source bytes. Comments and formatting disappear from that identity;
+a product-local semantic change releases only its owner, shared native behavior
+releases all five native products, and shared cross-product policy releases all
+eight managed products. An unparseable or structurally ambiguous change fails
+closed instead of being guessed into a smaller scope.
+
+{% include safety-alert.html
+  level="caution"
+  title="The native semantic baseline has a one-time migration"
+  body="The v4 semantic identity supersedes the legacy v3 exact-byte native executor identity. The first comparison against a v3 baseline may conservatively release all five native products once because the old evidence cannot prove product-level equivalence. After that v4 baseline exists, comments and formatting release nothing, product-local semantics release only their product, and shared native semantics fan out to all five. Do not suppress the migration with force or by replacing prior fingerprint assets."
+%}
+
 Desktop fingerprints each extracted `app.asar` runtime and unpacked payload
 with the app lockfile, Yarn patches/releases, shared build configuration,
 desktop manifests, exact matrix arguments, resolved Electron and
@@ -172,7 +200,10 @@ Mobile fingerprints the generated Android and iOS JavaScript, embedded web
 bundle, native Android/iOS source inputs, app and Ruby lockfiles, native version
 files, and mobile/shared build configuration. Its named contract binds Android
 and iOS architectures, Java/Ruby/Xcode versions, runner labels, action
-references, Corepack, and the exact Fastlane publication commands.
+commit SHAs, Corepack, and the exact Fastlane publication commands. This is a
+pre-sign deterministic input fingerprint, not a claim that signing keys or the
+resulting signed bytes were unchanged. The signed artifacts receive their own
+signature, identity, architecture, checksum, and fan-in checks.
 
 OpenClaw fingerprints the extracted npm payload and the packaging implementation
 used to create it. Package version and only four volatile release-identity
@@ -181,10 +212,16 @@ fields in `release-package.json` (`tag`, `version`, `sourceCommit`, and
 runtime dependencies, README, license, Node/Yarn/Corepack versions, and pinned
 action commits remain release-significant.
 
+All external `uses:` references in publisher workflows are commit-SHA pinned.
+The nearby version comment is checked against the repository allowlist for
+readability, but is intentionally excluded from product fingerprints; changing
+only that human label cannot invent a release. Changing the pinned action SHA is
+release-significant.
+
 {% include safety-alert.html
   level="danger"
   title="External release state is outside a Git fingerprint"
-  body="Signing certificates, Android keystores, App Store credentials, repository secrets, and the concrete VM image behind a runner label can change without changing Git. Most publisher action references are version tags, so their resolved action commit can also move; OpenClaw's critical action references are commit-pinned. These external-only changes do not necessarily change the pre-publication fingerprint. Audit them and use workflow_dispatch force_release with a non-empty reason, plus publish_release for mobile, when replacement artifacts are required. Verify the resulting signatures, checksums, and provenance before rollout."
+  body="Signing certificates, Android keystores, App Store credentials, repository secrets, and the concrete VM image behind a runner label can change without changing Git. Publisher actions are commit-pinned, but those other external values remain outside the pre-publication fingerprint. Audit them before a manual force. force_release bypasses comparison evidence only: it does not override an existing tag or GitHub Release and does not make app-store calls transactional. For mobile, reuse the exact validated artifact when reconciling a partial store publication, or choose a new version; never replace published bytes under an existing identity. Verify signatures, checksums, and OpenClaw provenance before rollout."
 %}
 
 Every pull request and every push to `main` runs the normal `CI` workflow with a
@@ -216,19 +253,26 @@ permission to publish from an older baseline.
 Shared release-analysis, comparison, fingerprint, and validation scripts are
 normal-CI contract inputs, not product payloads. Changing one runs the
 repository report and focused release-contract checks. The canonical packaging
-contract is also an explicit publisher configuration input, while the native
-executor is an input only for the five native command-line publishers. Those
-changes can wake the owning workflows for evaluation, but a wake-up is not a
-release: each publisher selects only its named/product-specific contract and
-still skips when the built payload and canonical inputs match its prior
-fingerprint.
+contract is semantically partitioned by product, while the native executor is
+partitioned across the five native command-line publishers. Those changes can
+wake the owning workflows for evaluation, but a wake-up is not a release: each
+publisher compares only its applicable semantic partition and built surface
+with its prior fingerprint.
+
+`scripts/package.json` and `scripts/package-lock.json` are different: they pin
+the interpreter used to derive those semantic partitions and are explicit
+configuration inputs for all eight publishers. A parser dependency change
+therefore changes all eight release identities by design. The workflow still
+requires a valid ancestry-selected baseline and exact fingerprint comparison;
+it does not publish merely because a path filter fired.
 
 Tag validity is product-specific:
 
 - rolling products accept only `srn-<product>-vYY.N`, without prerelease or
   build metadata;
-- mobile and independent workspace-package tags require full SemVer and allow
-  valid SemVer prerelease/build metadata; and
+- production mobile accepts only an exact `@standardnotes/web@X.Y.Z` source tag
+  matching the web manifest's stable core SemVer. Prerelease/build metadata,
+  partial versions, and leading-zero numeric identifiers are rejected; and
 - OpenClaw accepts its rolling `YY.N` identity or a full SemVer identity for
   the documented explicit-tag path.
 
@@ -240,6 +284,70 @@ artifact is authoritative.
 
 Numeric components are compared at arbitrary precision, so a very large
 version cannot be rounded into another tag during baseline selection.
+
+### Retry-safe native publication
+
+Each rolling native publisher allocates one stable `YY.N` identity in a
+dedicated `identity` job and creates or reuses the matching draft GitHub
+Release. The package job receives that exact version, tag, release ID, and
+reuse decision instead of allocating a second identity. Before upload, the
+release job verifies the draft's tag, title, target commit, and expected marker;
+it refuses published releases, existing Git tags, and incompatible drafts.
+
+Impact analysis authorizes only the exact current `origin/main` commit. Release
+identity allocation and publication are protected by the
+`release-production` environment, and intermediate packages are retained for 30
+days so a failed fan-in has bounded recovery evidence. Before publication, the
+downloaded executables run on all six promised OS/architecture combinations:
+Windows x64/arm64, Linux x64/arm64, and macOS x64/arm64. Each smoke leg rejects
+the wrong binary format or architecture, clears network proxy variables, and
+requires the exact offline `--srn-release-self-test` response.
+
+Before the first asset deletion or upload, the release binds the sorted
+name/SHA-256/size manifest to the validated draft with a canonical
+`srn-release-assets-sha256` marker. Assets are then uploaded with `--clobber`;
+the workflow requires the exact expected asset-name set, downloads the remote
+assets again, and compares their hashes with the local validated files. Only
+after those checks pass does it publish the draft with `make_latest=false`. A
+rerun therefore repairs the same manifest-bound draft rather than silently
+incrementing to a new `YY.N` or publishing a mixture of old and new assets.
+
+OpenClaw uses a separate attestation-first publisher with the same stable-draft
+principle. Its identity job creates or adopts exactly one draft bound to the
+source commit, package fingerprint, and retry intent. The attestation job writes
+a Sigstore bundle into the checksummed payload and verifies that bundle against
+the exact repository, source commit, and signer workflow. Publication rechecks
+the local bundle, exact five-file inventory, checksums, fingerprint, draft
+marker, and remote API digests before a final draft PATCH. A rerun may replace
+assets only on that same validated draft; stale, duplicate, or ambiguous
+reservations fail closed.
+
+OpenClaw branch and manual rolling releases require the exact protected
+`origin/main` head. An explicit tag release requires the checked-out commit to
+equal the tag target and that commit to be an ancestor of protected `main`.
+Identity allocation, provenance attestation, and publication use the protected
+`release-production` environment, and recovery artifacts are retained for 30
+days.
+
+The root desktop publisher is the canonical change-gated route and publishes
+the six GitHub installer legs. The embedded app desktop workflow is an audited,
+manual-only recovery path that additionally handles Snap. It requires an
+explicit confirmation and bounded reason. If Snapcraft reports an existing
+revision for the version, recovery stops: the available Snapcraft metadata does
+not prove remote byte equality, so version/channel identity alone is not
+accepted as idempotency evidence.
+
+Both routes authorize the exact protected `origin/main` head before building;
+release identity and remote mutation jobs use the protected
+`release-production` environment, and all handoff artifacts are retained for 30
+days. Their fan-in rejects updater metadata unless every entry names an exact
+installer basename and matches its byte size and Base64 SHA-512. Legacy
+`path`/`sha512`/`size` entries remain accepted only under the same checks. The
+verifier reads actual formats and architectures rather than trusting filenames:
+PE for Windows, ELF for AppImage, Mach-O app executables inside ZIP/DMG, and DEB
+control metadata plus every shipped ELF executable or shared object. Every
+published architecture must have exactly one matching updater entry, and an
+opposite-architecture or mislabeled artifact fails the release.
 
 ```mermaid
 flowchart TD
@@ -268,13 +376,15 @@ flowchart TD
   M --> R
 ```
 
-Fingerprints are calculated from the built release surface plus canonical
-packaging inputs, not from a package version alone. Bundled tools therefore
-include their compiled dependency closure and exact executable invocation set;
-desktop and mobile add deterministic toolchain/configuration inputs; OpenClaw
-normalizes only release-identity fields; and the home-server fingerprint covers
-its executable bundle, every shipped migration, and the migrations-archive
-invocation.
+Fingerprints are calculated from a product-specific deterministic release
+surface plus canonical packaging inputs, not from a package version alone.
+Bundled tools therefore include their compiled dependency closure and exact
+executable invocation set; desktop includes extracted runtime payloads and
+deterministic toolchain/configuration inputs; mobile fingerprints its pre-sign
+source/configuration/toolchain surface and later validates the signed bytes;
+OpenClaw normalizes only release-identity fields; and the home-server fingerprint
+covers its executable bundle, every shipped migration, and the
+migrations-archive invocation.
 
 All eight publishers use the same fail-closed comparison contract:
 
@@ -309,8 +419,12 @@ limited to 500 characters.
 | Home server  | Server workspace                                                 | `srn-home-server-vYY.N`          | Bundle, migrations, six native invocations, and migrations ZIP       |
 | `srn-admin`  | Server workspace                                                 | `srn-admin-vYY.N`                | Bundle plus the six canonical native invocations                     |
 | OpenClaw     | OpenClaw workspace and root dependency/build configuration       | namespaced rolling/SemVer tag    | Normalized npm payload, packaging implementation, and pinned tooling |
-| Desktop      | App workspaces and shared app build configuration                | `srn-desktop-vYY.N`              | Six runtime payloads plus lock/config/toolchain/target inputs         |
-| Mobile       | Exact 18-package app dependency closure plus shared build config | `@standardnotes/mobile@<semver>` | Native/web payloads plus lock/config/toolchain/publication inputs     |
+| Desktop      | App workspaces and shared app build configuration                | `srn-desktop-vYY.N`              | Six runtime payloads plus lock/config/toolchain/target inputs        |
+| Mobile       | Exact 18-package app dependency closure plus shared build config | `@standardnotes/mobile@<semver>` | Native/web payloads plus lock/config/toolchain/publication inputs    |
+
+All rows also include the shared release-policy dependency manifest and lock.
+Changing that parser boundary is intentionally global; ordinary source changes
+remain constrained to the product ownership shown above.
 
 ### Mobile: impact is not publication intent
 
@@ -323,13 +437,59 @@ Mobile has two deliberately separate decisions:
    dispatch with `publish_release=true`. A manual force additionally requires
    `force_release=true` and a non-empty `force_reason`.
 
+Branch analysis and manual publication authorize only the exact fetched
+`origin/main` head. A web-tag publication additionally proves that the tag
+resolves to the event commit and that this commit is an ancestor of protected
+`origin/main`; its version must exactly match the stable web manifest. Every job
+that reserves a release, handles Android/iOS signing, or mutates GitHub or a
+store runs through the protected `mobile-production` environment.
+
 The established Fastlane contract uses the stable core version from
 `app/packages/web/package.json` as iOS `MARKETING_VERSION`, Android
 `versionName`, and the `@standardnotes/mobile@<version>` GitHub tag. A web-tag
-publication request must match that manifest version, and an existing mobile
-tag is rejected. The workflow-created mobile tag is not a trigger, preventing a
-recursive release. These checks do not make branch analysis an app-store
+publication request must match that manifest version. Before any store call,
+the workflow creates or adopts only the prerelease draft carrying the exact
+run/source/version/fingerprint intent marker. An unowned release, a tag without
+that recoverable release record, or a conflicting target is rejected.
+`force_release` bypasses fingerprint comparison only and cannot override those
+ownership checks. The workflow-created mobile tag is not a trigger, preventing
+a recursive release. These checks do not make branch analysis an app-store
 publisher.
+
+The production workflow builds both signed platforms before any store API is
+called. Their checksum fan-in feeds four distinct publication stages: Android
+AAB upload, iOS binary upload, TestFlight external distribution, and App Store
+submission. The final GitHub prerelease waits for Android publication and iOS
+submission.
+
+```mermaid
+flowchart LR
+  F[Approved release decision and fingerprint] --> R[Reserve marker-bound GitHub draft]
+  R --> A[Build and verify signed APK/AAB]
+  R --> I[Build and verify signed IPA]
+  A --> V[Checksum fan-in]
+  I --> V
+  V --> G[Publish exact AAB to Google Play]
+  V --> U[Upload exact IPA]
+  U --> D[Distribute existing TestFlight build]
+  D --> S[Submit existing App Store build]
+  G --> P[Publish reserved GitHub prerelease last]
+  S --> P
+```
+
+The iOS upload, distribution, and submission lanes are deliberately disjoint.
+A failed distribution or submission can resume from the exact existing app
+version and build number without uploading another binary. Every publication
+job redownloads the fan-in artifact and rechecks its checksum; Android also
+publishes the exact AAB path from that payload. Validated build payloads and the
+same-run GitHub, Google Play, App Store upload, TestFlight distribution, and App
+Store submission intent markers are retained for exactly 30 days.
+
+{% include safety-alert.html
+  level="danger"
+  title="Mobile stores do not share one transaction"
+  body="Google Play, App Store Connect, TestFlight review, App Store review, and GitHub Releases can accept work independently. An API timeout can leave a successful remote operation that the runner did not observe. Before retrying, inspect the exact Android versionName/versionCode and AAB hash or the exact iOS app version/build/review state. Use GitHub's rerun-failed-jobs operation so only the failed job and its dependent jobs resume from the same 30-day evidence. NEVER rerun all jobs or rebuild signed bytes under the same identity. The workflow reserves a marker-bound GitHub draft before the first store mutation and a same-run retry adopts only that exact draft. Exact same-run store intent markers can reconcile an already-completed upload, TestFlight group/review operation, or App Store submission; missing, conflicting, stale, duplicate, or ambiguous evidence fails closed. force_release never overrides those ownership checks."
+%}
 
 Run `yarn release:report` from a complete clone to write the same evidence
 locally:

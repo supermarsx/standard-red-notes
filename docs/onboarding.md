@@ -5,7 +5,7 @@ description: User guide for day-to-day Standard Red Notes usage.
 
 # Getting started with Standard Red Notes
 
-Welcome! This is a friendly guide to *using* Standard Red Notes day to day. If
+Welcome! This is a friendly guide to _using_ Standard Red Notes day to day. If
 you're here to set up your own server instead, see
 [docs/self-hosting.md](self-hosting.md) — this guide assumes you already have an
 instance to sign in to (your own, or one someone runs for you).
@@ -33,7 +33,7 @@ upgrade to unlock things.
 
 > Want to run your own server? The [self-hosting guide](self-hosting.md) walks
 > through a 5-minute Docker setup, every configuration option, backups, and
-> troubleshooting. The rest of *this* guide is about using the app once you can
+> troubleshooting. The rest of _this_ guide is about using the app once you can
 > reach it.
 
 ## First steps
@@ -81,7 +81,7 @@ administrator cannot choose a new password and decrypt the account for you.
 
 > Some servers may have a shared **Server Access Key** configured (an
 > obfuscation gate the operator sets). If yours does, enter it under
-> **Preferences -> Security -> Server Access Key** *before* signing in. It is
+> **Preferences -> Security -> Server Access Key** _before_ signing in. It is
 > stored only on that device and is separate from your account password.
 
 ### Enable optional account recovery
@@ -264,13 +264,13 @@ notebook, or a specific collection (a tag, a folder, or hand-picked notes) — s
 the assistant only sees what you point it at. It can also confirm before making
 write changes to your data (on by default).
 
-> **Data exposure caveat:** the assistant decrypts notes locally, but the model
-> calls themselves go to the AI provider you configure. **Any note content the
-> assistant reads while answering is sent to that provider** — especially
-> relevant with cloud providers. End-to-end-encrypted content leaves your device
-> the moment you use the assistant. Only use it with notes you're comfortable
-> sharing this way; pick a local model if you want to keep everything on your
-> machine.
+{% include safety-alert.html
+  level="danger"
+  title="Hosted AI receives the plaintext you select"
+  body="The assistant decrypts notes locally, but model requests go to the AI provider you configure. Any note or tool content the assistant reads while answering, and any note text sent for a narration rewrite, leaves end-to-end encryption and is sent to that provider. Use only content you are comfortable sharing this way, or choose a local model to keep model requests on your machine. Device-voice playback itself needs no network or provider key after the narration text exists."
+  link_url="/security-and-account.html#trust-boundary"
+  link_text="Review the AI trust boundary"
+%}
 
 ### Note narration (text-to-speech)
 
@@ -279,10 +279,9 @@ clean, listenable prose and a player reads it aloud. Playback can use **model
 voices** (when a Direct AI endpoint is configured) or your **device's built-in
 voices** (browser text-to-speech, no network or key required).
 
-> Device voices vary: which voices and languages are available depends on your
-> operating system and browser, so the same note can sound different on
-> different machines. Generating the narration text (the rewrite step) sends the
-> note's content to your configured AI provider.
+Device voices vary: which voices and languages are available depends on your
+operating system and browser, so the same note can sound different on different
+machines. The alert above describes the separate narration-rewrite data path.
 
 ### Protected notes
 
@@ -335,15 +334,15 @@ End-to-end encryption means your note **content** is encrypted locally and the
 server only ever stores ciphertext it can't read. A few features intentionally
 cross that boundary — here's an honest summary so there are no surprises:
 
-| Action | What happens to the E2E boundary |
-| --- | --- |
-| **Normal notes & sync** | Content is encrypted on-device; the server stores ciphertext only. Your password is never sent. |
-| **The AI assistant / narration** | Notes are decrypted locally, but the content you point the assistant at is **sent to the AI provider you configure**. Cloud providers see that content; local models keep it on your machine. |
-| **Sharing / collaboration** | Anyone you share with can read what you share — that content is, by design, no longer private to you alone. |
-| **Server Access Key** | An operator-set **obfuscation gate**, not encryption. It makes the server refuse clients that don't present the key; it does **not** strengthen (or replace) end-to-end encryption. |
-| **Decrypted / plaintext export** | The file is unencrypted — anyone who gets the file can read it. Prefer **encrypted** backups. |
-| **Local-only (selective sync)** | When enabled before first sync, the note never leaves the device — but it also isn't backed up to the server, so back it up yourself. It cannot be newly enabled after upload. |
-| **Optional account recovery** | The client uploads root-key material encrypted by a separate high-entropy recovery code. The server cannot decrypt it, but anyone with the code can fetch and decrypt the escrow offline; MFA does not protect a copied code. |
+| Action                           | What happens to the E2E boundary                                                                                                                                                                                              |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Normal notes & sync**          | Content is encrypted on-device; the server stores ciphertext only. Your password is never sent.                                                                                                                               |
+| **The AI assistant / narration** | Notes are decrypted locally, but the content you point the assistant at is **sent to the AI provider you configure**. Cloud providers see that content; local models keep it on your machine.                                 |
+| **Sharing / collaboration**      | Anyone you share with can read what you share — that content is, by design, no longer private to you alone.                                                                                                                   |
+| **Server Access Key**            | An operator-set **obfuscation gate**, not encryption. It makes the server refuse clients that don't present the key; it does **not** strengthen (or replace) end-to-end encryption.                                           |
+| **Decrypted / plaintext export** | The file is unencrypted — anyone who gets the file can read it. Prefer **encrypted** backups.                                                                                                                                 |
+| **Local-only (selective sync)**  | When enabled before first sync, the note never leaves the device — but it also isn't backed up to the server, so back it up yourself. It cannot be newly enabled after upload.                                                |
+| **Optional account recovery**    | The client uploads root-key material encrypted by a separate high-entropy recovery code. The server cannot decrypt it, but anyone with the code can fetch and decrypt the escrow offline; MFA does not protect a copied code. |
 
 The takeaway: your notes are private by default. Each feature above is a
 deliberate, opt-in trade-off — use them knowingly.

@@ -665,6 +665,8 @@
           url: /releases-and-upgrades.html#rollback
         - title: Release contracts
           url: /releases-and-upgrades.html#repository-release-contracts
+        - title: Retry-safe publication
+          url: /releases-and-upgrades.html#retry-safe-native-publication
         - title: Fingerprint ownership
           url: /releases-and-upgrades.html#managed-products-and-fingerprint-ownership
         - title: Mobile publication intent
