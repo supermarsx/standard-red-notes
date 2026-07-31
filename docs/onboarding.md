@@ -120,7 +120,7 @@ once and never sent to the server.
   options at the top of the list to change sort order (by date modified,
   created, or title) and what's displayed.
 
-{% include feature-screenshot.html id="onboarding-note-list" %}
+{% include feature-screenshot.html id="workspace-note-tools" %}
 
 ### Finding things
 
@@ -128,6 +128,8 @@ once and never sent to the server.
   matches titles and content. (Optionally, a faster local search index and an
   AI-style local relevance ranking can be enabled in
   **Preferences -> Assistant -> Search** — both run entirely in your browser.)
+
+{% include feature-screenshot.html id="workspace-note-results" %}
 
 ### Organizing single notes
 
@@ -142,6 +144,8 @@ From a note's **options menu** (the "..." / context menu) you can:
 
 The navigation sidebar has built-in smart views for **Notes**, **Starred**,
 **Archived**, and **Trash**.
+
+{% include feature-screenshot.html id="workspace-note-actions" %}
 
 ## Editors
 
@@ -170,6 +174,8 @@ picker and insert things like:
 There is also a dedicated **Canvas** editor for notes that are primarily a
 freeform drawing surface.
 
+{% include feature-screenshot.html id="workspace-super-toolbar" %}
+
 > Some web embeds won't display: many sites refuse to be shown inside another
 > page (via `X-Frame-Options` / frame-ancestors), so those embeds will show a
 > link or placeholder instead of the live site. That's a restriction set by the
@@ -194,6 +200,8 @@ Standard Red Notes gives you both, and they're different on purpose:
   **subfolders**. Great when you think in terms of "one place this belongs."
 
 Use whichever model fits how you think — or mix them.
+
+{% include feature-screenshot.html id="workspace-collections" %}
 
 ### Note links and backlinks
 
@@ -222,6 +230,8 @@ you want.
 Both the navigation sidebar and the note list can be **collapsed** to give the
 editor more room. Collapse them when you want to focus, expand them when you want
 to browse.
+
+{% include feature-screenshot.html id="workspace-navigation" %}
 
 ## Power features
 

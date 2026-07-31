@@ -42,6 +42,23 @@ test('markdownToText retains useful words while removing presentation syntax', (
   )
 })
 
+test('markdownToText keeps shared safety-alert guidance searchable', () => {
+  assert.equal(
+    markdownToText(
+      [
+        '{% include safety-alert.html',
+        '  level="danger"',
+        '  title="Readable backups leave the encrypted vault"',
+        '  body="Protect &quot;plaintext&quot; exports."',
+        '  link_url="/backups.html"',
+        '  link_text="Review backup safety"',
+        '%}',
+      ].join('\n'),
+    ),
+    'Readable backups leave the encrypted vault Protect "plaintext" exports. Review backup safety',
+  )
+})
+
 test('headingAnchor is deterministic and compatible with ordinary Kramdown heading ids', () => {
   assert.equal(headingAnchor('Backups & recovery'), 'backups--recovery')
   assert.equal(headingAnchor('Café sync -- setup!'), 'caf-sync----setup')

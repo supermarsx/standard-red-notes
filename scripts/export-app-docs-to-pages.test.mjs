@@ -92,7 +92,29 @@ test('renderBlock renders every supported block type', () => {
   assert.equal(renderBlock({ type: 'list', items: ['a', 'b'] }), '- a\n- b\n')
   assert.equal(renderBlock({ type: 'steps', items: ['a', 'b'] }), '1. a\n2. b\n')
   assert.equal(renderBlock({ type: 'code', code: 'yarn test' }), '```\nyarn test\n```\n')
-  assert.equal(renderBlock({ type: 'callout', variant: 'warning', text: 'Careful.' }), '> **Warning.** Careful.\n')
+  assert.equal(
+    renderBlock({ type: 'callout', variant: 'warning', text: 'Careful.' }),
+    [
+      '{% include safety-alert.html',
+      '  level="danger"',
+      '  title="Important safety warning"',
+      '  body="Careful."',
+      '%}\n',
+    ].join('\n'),
+  )
+  assert.equal(
+    renderBlock(
+      { type: 'callout', variant: 'warning', text: 'A "quoted" risk.' },
+      { pageId: 'getting-started/account-setup' },
+    ),
+    [
+      '{% include safety-alert.html',
+      '  level="danger"',
+      '  title="Protect your account password"',
+      '  body="A &quot;quoted&quot; risk."',
+      '%}\n',
+    ].join('\n'),
+  )
   assert.equal(renderBlock({ type: 'callout', variant: 'info', text: 'Note.' }), '> **Info.** Note.\n')
   assert.equal(renderBlock({ type: 'callout', variant: 'tip', text: 'Try.' }), '> **Tip.** Try.\n')
 })
@@ -179,12 +201,14 @@ test('renderMarkdown omits the Related line when a page has no related pages', (
   assert.ok(!renderMarkdown([category()]).includes('Related:'))
 })
 
-test('the online interface page receives the validated source-capture supplement only', () => {
+test('online guide supplements place genuine source crops beside the matching feature', () => {
   const supplement = renderOnlinePageSupplement('getting-started/interface-tour')
+  const firstNoteSupplement = renderOnlinePageSupplement('getting-started/create-first-note')
 
   assert.match(supplement, /include feature-screenshot\.html/)
   assert.match(supplement, /id="app-guide-interface"/)
-  assert.equal(renderOnlinePageSupplement('getting-started/create-first-note'), undefined)
+  assert.match(firstNoteSupplement, /id="onboarding-note-list"/)
+  assert.equal(renderOnlinePageSupplement('getting-started/welcome'), undefined)
 })
 
 test('renderMarkdown collapses runs of blank lines to at most one', () => {

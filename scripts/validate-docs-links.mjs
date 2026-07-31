@@ -5,8 +5,65 @@ import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 
+import { indexMarkdown } from './generate-docs-search-index.mjs'
+
 const scriptPath = fileURLToPath(import.meta.url)
 const repositoryRoot = path.resolve(path.dirname(scriptPath), '..')
+const SAFETY_ALERT_INCLUDE_PATTERN = /{%\s*include\s+safety-alert\.html\b([\s\S]*?)%}/g
+const SAFETY_ALERT_ATTRIBUTE_PATTERN = /\b([a-z][a-z0-9_]*)\s*=\s*"([^"]*)"/g
+const ALLOWED_SAFETY_ALERT_LEVELS = new Set(['danger', 'caution', 'trust', 'info'])
+const REQUIRED_SAFETY_ALERT_TITLES = new Map([
+  [
+    'docs/command-line-tools.md',
+    [
+      'Synchronized note deletion has no prompt',
+      'Resolved Compose output can expose secrets',
+      'Volume deletion is destructive',
+    ],
+  ],
+  [
+    'docs/mcp-bridge.md',
+    [
+      'Agent note deletion has no per-call prompt',
+      'A full MCP token grants decrypting access',
+      'HTTP mode listens on every IPv4 interface',
+    ],
+  ],
+  ['docs/caldav.md', ['Published calendar fields are plaintext']],
+  ['docs/administration.md', ['User deletion is irreversible', 'Verbose logs can expose operational metadata']],
+  [
+    'docs/assistant-subscription-pairing.md',
+    [
+      'The provider contract is unstable',
+      'Pairing gives the instance a renewable account credential',
+      'Preserve pairing data before the first multi-container upgrade',
+      'Do not paste subscription tokens into assistant profiles',
+    ],
+  ],
+  [
+    'docs/app-guide.md',
+    [
+      'Local-only notes need a backup',
+      'Protect your account password',
+      'Password and recovery code are separate keys',
+      'Readable backups leave the encrypted vault',
+      'Save the authenticator secret',
+      'Password changes invalidate recovery escrow',
+      'A recovery code can unlock account keys',
+      'Emptying Trash is permanent',
+      'Offline changes exist only on this device',
+      'Importing can mix datasets',
+      'Cookie-domain errors block sign-in',
+      'Magic-link requires working SMTP',
+      'Hosted AI receives selected plaintext',
+      'Automation credentials can decrypt notes',
+      'Do not clear unsynced local data',
+      'Lost MFA secrets can block sign-in',
+      'Export before clearing local data',
+    ],
+  ],
+])
+const LEGACY_CRITICAL_ALERT_FILES = new Set(REQUIRED_SAFETY_ALERT_TITLES.keys())
 
 function posixPath(value) {
   return value.replaceAll(path.sep, '/')
@@ -15,6 +72,66 @@ function posixPath(value) {
 function displayPath(root, value) {
   const relative = path.relative(root, value)
   return relative && !relative.startsWith('..') ? posixPath(relative) : posixPath(value)
+}
+
+function lineAt(source, index) {
+  return source.slice(0, index).split(/\r?\n/).length
+}
+
+export function extractSafetyAlerts(source, file = '<markdown>') {
+  const alerts = []
+  for (const match of source.matchAll(SAFETY_ALERT_INCLUDE_PATTERN)) {
+    const attributes = {}
+    const duplicates = []
+    for (const attribute of match[1].matchAll(SAFETY_ALERT_ATTRIBUTE_PATTERN)) {
+      if (Object.hasOwn(attributes, attribute[1])) {
+        duplicates.push(attribute[1])
+      }
+      attributes[attribute[1]] = attribute[2]
+    }
+    alerts.push({ attributes, duplicates, file, line: lineAt(source, match.index) })
+  }
+  return alerts
+}
+
+export function validateSafetyAlerts(source, file = '<markdown>', { requiredTitles } = {}) {
+  const diagnostics = []
+  const alerts = extractSafetyAlerts(source, file)
+  for (const alert of alerts) {
+    const prefix = `${file}:${alert.line}: safety alert`
+    for (const duplicate of alert.duplicates) {
+      diagnostics.push(`${prefix} repeats attribute "${duplicate}"`)
+    }
+    const level = alert.attributes.level ?? 'caution'
+    if (!ALLOWED_SAFETY_ALERT_LEVELS.has(level)) {
+      diagnostics.push(`${prefix} uses unsupported level "${level}"; use danger, caution, trust, or info`)
+    }
+    for (const attribute of ['title', 'body']) {
+      if (!alert.attributes[attribute]?.trim()) {
+        diagnostics.push(`${prefix} requires a non-empty ${attribute} attribute`)
+      }
+    }
+    const hasLinkUrl = Boolean(alert.attributes.link_url?.trim())
+    const hasLinkText = Boolean(alert.attributes.link_text?.trim())
+    if (hasLinkUrl !== hasLinkText) {
+      diagnostics.push(`${prefix} must provide link_url and link_text together`)
+    }
+    if (hasLinkUrl && !alert.attributes.link_url.startsWith('/')) {
+      diagnostics.push(`${prefix} link_url must be a local absolute documentation path`)
+    }
+  }
+
+  const expectedTitles = requiredTitles ?? REQUIRED_SAFETY_ALERT_TITLES.get(file) ?? []
+  const actualTitles = new Set(alerts.map((alert) => alert.attributes.title))
+  for (const title of expectedTitles) {
+    if (!actualTitles.has(title)) {
+      diagnostics.push(`${file}: required safety topic is missing its shared alert: "${title}"`)
+    }
+  }
+  if (LEGACY_CRITICAL_ALERT_FILES.has(file) && /^>\s*(?:⚠️|🔐|\*\*Warning\.\*\*)/m.test(source)) {
+    diagnostics.push(`${file}: critical warnings must use the shared safety-alert component`)
+  }
+  return diagnostics
 }
 
 function decodeUrlPart(value) {
@@ -595,10 +712,12 @@ export async function validateDocsLinks({
   root = repositoryRoot,
   docsDirectory = path.join(root, 'docs'),
   navigationPath = path.join(docsDirectory, '_data', 'navigation.yml'),
+  searchIndexPath = path.join(docsDirectory, 'assets', 'search-index.json'),
 } = {}) {
   root = path.resolve(root)
   docsDirectory = path.resolve(docsDirectory)
   navigationPath = path.resolve(navigationPath)
+  searchIndexPath = path.resolve(searchIndexPath)
 
   const diagnostics = []
   const docsFiles = await listMarkdownFiles(docsDirectory)
@@ -623,6 +742,7 @@ export async function validateDocsLinks({
     return anchorCache.get(absolute)
   }
   const navigationPages = new Set()
+  const navigationSectionUrls = new Set()
 
   for (const entry of navigationEntries) {
     if (isSkippedDestination(entry.url)) {
@@ -674,8 +794,51 @@ export async function validateDocsLinks({
         diagnostics.push(
           `${prefix} references missing anchor "#${decodedFragment}" in ${displayPath(root, resolution.path)}`,
         )
+      } else {
+        const relativePage = posixPath(path.relative(docsDirectory, resolution.path)).replace(/\.md$/i, '.html')
+        navigationSectionUrls.add(`${relativePage}#${decodedFragment}`)
       }
     }
+  }
+
+  const indexedSectionUrls = new Set()
+  for (const page of docsFiles) {
+    const relativePage = posixPath(path.relative(docsDirectory, page))
+    const source = await readFile(page, 'utf8')
+    for (const document of indexMarkdown(relativePage, source)) {
+      if (document.section) {
+        indexedSectionUrls.add(document.url)
+      }
+    }
+  }
+
+  for (const sectionUrl of indexedSectionUrls) {
+    if (!navigationSectionUrls.has(sectionUrl)) {
+      diagnostics.push(`${navigationDisplayPath}: indexed documentation section "${sectionUrl}" is missing from navigation`)
+    }
+  }
+
+  try {
+    const searchIndex = JSON.parse(await readFile(searchIndexPath, 'utf8'))
+    if (searchIndex.version !== 1 || !Array.isArray(searchIndex.documents)) {
+      diagnostics.push(`${displayPath(root, searchIndexPath)}: search index must use version 1 with a documents array`)
+    } else {
+      const committedSectionUrls = new Set(
+        searchIndex.documents.filter((document) => document?.section).map((document) => document.url),
+      )
+      for (const sectionUrl of indexedSectionUrls) {
+        if (!committedSectionUrls.has(sectionUrl)) {
+          diagnostics.push(`${displayPath(root, searchIndexPath)}: current Markdown section "${sectionUrl}" is missing`)
+        }
+      }
+      for (const sectionUrl of committedSectionUrls) {
+        if (!indexedSectionUrls.has(sectionUrl)) {
+          diagnostics.push(`${displayPath(root, searchIndexPath)}: stale or unknown section "${sectionUrl}" is indexed`)
+        }
+      }
+    }
+  } catch (error) {
+    diagnostics.push(`${displayPath(root, searchIndexPath)}: cannot read a valid generated search index (${error.message})`)
   }
 
   for (const page of topLevelPages) {
@@ -692,7 +855,16 @@ export async function validateDocsLinks({
     diagnostics.push(...validateMarkdownStructure(source, sourceDisplayPath))
     diagnostics.push(...validateShippedCapabilityLanguage(source, sourceDisplayPath))
     diagnostics.push(...validateFencedCodeBlocks(source, sourceDisplayPath))
-    for (const target of extractMarkdownTargets(source, sourceDisplayPath)) {
+    diagnostics.push(...validateSafetyAlerts(source, sourceDisplayPath))
+    const safetyAlertTargets = extractSafetyAlerts(source, sourceDisplayPath)
+      .filter((alert) => alert.attributes.link_url)
+      .map((alert) => ({
+        destination: alert.attributes.link_url,
+        file: alert.file,
+        kind: 'link',
+        line: alert.line,
+      }))
+    for (const target of [...extractMarkdownTargets(source, sourceDisplayPath), ...safetyAlertTargets]) {
       const destination = target.destination.trim()
       if (isSkippedDestination(destination)) {
         continue

@@ -27,9 +27,33 @@ const checkOnly = process.argv.includes('--check')
 
 const ONLINE_PAGE_SUPPLEMENTS = new Map([
   [
+    'getting-started/create-first-note',
+    '{% include feature-screenshot.html id="onboarding-note-list" %}',
+  ],
+  [
     'getting-started/interface-tour',
     '{% include feature-screenshot.html id="app-guide-interface" %}',
   ],
+])
+
+const ONLINE_WARNING_ALERTS = new Map([
+  ['getting-started/no-account', { level: 'danger', title: 'Local-only notes need a backup' }],
+  ['getting-started/account-setup', { level: 'danger', title: 'Protect your account password' }],
+  ['encryption/your-password', { level: 'danger', title: 'Password and recovery code are separate keys' }],
+  ['encryption/encrypted-vs-decrypted', { level: 'danger', title: 'Readable backups leave the encrypted vault' }],
+  ['security/two-factor', { level: 'danger', title: 'Save the authenticator secret' }],
+  ['security/change-password', { level: 'caution', title: 'Password changes invalidate recovery escrow' }],
+  ['security/account-recovery', { level: 'danger', title: 'A recovery code can unlock account keys' }],
+  ['organization/pinning', { level: 'danger', title: 'Emptying Trash is permanent' }],
+  ['sync/offline', { level: 'danger', title: 'Offline changes exist only on this device' }],
+  ['backups/restore', { level: 'caution', title: 'Importing can mix datasets' }],
+  ['self-hosting/cookies-auth', { level: 'caution', title: 'Cookie-domain errors block sign-in' }],
+  ['self-hosting/smtp', { level: 'caution', title: 'Magic-link requires working SMTP' }],
+  ['assistant/privacy', { level: 'trust', title: 'Hosted AI receives selected plaintext' }],
+  ['automation/mcp-setup', { level: 'danger', title: 'Automation credentials can decrypt notes' }],
+  ['troubleshooting/not-syncing', { level: 'danger', title: 'Do not clear unsynced local data' }],
+  ['troubleshooting/lost-2fa', { level: 'danger', title: 'Lost MFA secrets can block sign-in' }],
+  ['troubleshooting/reset', { level: 'danger', title: 'Export before clearing local data' }],
 ])
 
 export function findMatchingBracket(source, startIndex) {
@@ -160,7 +184,11 @@ export function renderOnlinePageSupplement(pageId) {
   return ONLINE_PAGE_SUPPLEMENTS.get(pageId)
 }
 
-export function renderBlock(block) {
+function escapeLiquidAttribute(value) {
+  return String(value).replaceAll('&', '&amp;').replaceAll('"', '&quot;').replace(/\s+/g, ' ').trim()
+}
+
+export function renderBlock(block, { pageId } = {}) {
   switch (block.type) {
     case 'heading':
       return `#### ${block.text}\n`
@@ -176,10 +204,22 @@ export function renderBlock(block) {
       return `${fence}\n${block.code}\n${fence}\n`
     }
     case 'callout': {
+      if (block.variant === 'warning') {
+        const alert = ONLINE_WARNING_ALERTS.get(pageId) ?? {
+          level: 'danger',
+          title: 'Important safety warning',
+        }
+        return [
+          '{% include safety-alert.html',
+          `  level="${alert.level}"`,
+          `  title="${escapeLiquidAttribute(alert.title)}"`,
+          `  body="${escapeLiquidAttribute(block.text)}"`,
+          '%}\n',
+        ].join('\n')
+      }
       const labels = {
         info: 'Info',
         tip: 'Tip',
-        warning: 'Warning',
       }
       return `> **${labels[block.variant]}.** ${block.text}\n`
     }
@@ -234,7 +274,7 @@ export function renderMarkdown(categories) {
       }
 
       for (const block of page.blocks) {
-        lines.push(renderBlock(block))
+        lines.push(renderBlock(block, { pageId: page.id }))
       }
 
       if (page.related?.length) {

@@ -42,10 +42,11 @@ srn-client notes create --title "Incident note" --text "Started investigation"
 srn-client export --out notes.json --format json
 ```
 
-> ⚠️ `srn-client notes delete <uuid>` tombstones and synchronizes the note
-> without an interactive confirmation. Verify the UUID with `notes get`, create
-> a current export or backup, and confirm the deletion on a second client before
-> removing recovery copies.
+{% include safety-alert.html
+  level="danger"
+  title="Synchronized note deletion has no prompt"
+  body="srn-client notes delete &lt;uuid&gt; tombstones and synchronizes the note without an interactive confirmation. Verify the UUID with notes get, create a current export or backup, and confirm the deletion on a second client before removing recovery copies."
+%}
 
 Prefer `SRN_PASSWORD` over `--password` so the password does not enter shell
 history. On POSIX, profiles are stored under `~/.srn/data/<profile>/` with a
@@ -80,15 +81,19 @@ srn-server logs server --tail 100
 `config` without extra flags reports whether required secrets are present and
 structurally valid without printing their values.
 
-> ⚠️ **Secret-output exception.** `srn-server config --compose-config` streams
-> the fully resolved `docker compose config` output. That model can contain
-> expanded environment values and secrets. Run it only in a private terminal,
-> never paste the output into an issue or shared log, and delete any captured
-> output securely.
+{% include safety-alert.html
+  level="danger"
+  title="Resolved Compose output can expose secrets"
+  body="srn-server config --compose-config streams the fully resolved docker compose config output. That model can contain expanded environment values and secrets. Run it only in a private terminal, never paste the output into an issue or shared log, and delete any captured output securely."
+%}
 
-> ⚠️ `srn-server down --yes --volumes` deletes persistent Compose volumes.
-> Verify the resolved project, exact volumes, and restorable backups before
-> adding `--volumes`.
+{% include safety-alert.html
+  level="danger"
+  title="Volume deletion is destructive"
+  body="srn-server down --yes --volumes deletes persistent Compose volumes. Verify the resolved project, exact volumes, and restorable backups before adding --volumes."
+  link_url="/backups-and-recovery.html#retention-and-deletion"
+  link_text="Review backup retention and destructive cleanup"
+%}
 
 ## `srn-admin`
 

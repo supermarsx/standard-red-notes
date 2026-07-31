@@ -71,11 +71,13 @@ Administrative states are distinct:
 
 Use the least disruptive state that meets the requirement.
 
-> ⚠️ User deletion is irreversible and can affect shared vault ownership.
-> Export required data, designate and verify a survivor for every shared vault
-> the account owns, confirm the exact email, and verify backups before
-> proceeding. The ownership change occurs when the owner account is deleted;
-> deleting a vault does not transfer it.
+{% include safety-alert.html
+  level="danger"
+  title="User deletion is irreversible"
+  body="User deletion can affect shared vault ownership. Export required data, designate and verify a survivor for every shared vault the account owns, confirm the exact email, and verify backups before proceeding. Ownership changes when the owner account is deleted; deleting a vault does not transfer it."
+  link_url="/backups-and-recovery.html"
+  link_text="Verify backups before deletion"
+%}
 
 The CLI requires `delete-user <user> --confirm <email>` and protects the last
 administrator unless `--force` is supplied.
@@ -169,7 +171,7 @@ reader fall back to the environment baseline; it never disables logging or
 crashes a service.
 
 {% include safety-alert.html
-  level="warning"
+  level="caution"
   title="Verbose logs can expose operational metadata"
   body="Use debug, verbose, or silly only for a bounded investigation. Restrict log access, avoid sharing raw captures, review redaction, and return to info or warn when the incident is resolved. Runtime level changes affect workers as well as request-serving processes."
 %}

@@ -14,17 +14,19 @@ capability: the gateway creates PKCE material, exchanges the OAuth code, stores
 the resulting credential encrypted, refreshes it when safe, and supplies it
 only to the server-side assistant provider.
 
-> ⚠️ **This integration uses an unstable provider contract.** OpenAI does not
-> publish the observed Codex/ChatGPT subscription OAuth and backend interfaces
-> as a stable API for this server use. Endpoint, client-id, redirect, scope, and
-> response behavior can change. The shipped defaults are best-effort and the
-> repository tests use a mock provider; they do not prove a live account login.
+{% include safety-alert.html
+  level="caution"
+  title="The provider contract is unstable"
+  body="OpenAI does not publish the observed Codex/ChatGPT subscription OAuth and backend interfaces as a stable API for this server use. Endpoint, client-id, redirect, scope, and response behavior can change. The shipped defaults are best-effort and repository tests use a mock provider; they do not prove a live account login."
+%}
 
-> 🔐 **Pairing gives the instance a renewable account credential.** Protect the
-> gateway host, its backups, the encrypted pairing file, and
-> `ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY`. Restrict the pairing UI to trusted
-> administrators. If the host or key may be compromised, unpair the affected
-> slot and revoke relevant provider sessions from the provider account.
+{% include safety-alert.html
+  level="danger"
+  title="Pairing gives the instance a renewable account credential"
+  body="Protect the gateway host, its backups, the encrypted pairing file, and ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY. Restrict the pairing UI to trusted administrators. If the host or key may be compromised, unpair the affected slot and revoke relevant provider sessions from the provider account."
+  link_url="/security-and-account.html#secrets-and-configuration"
+  link_text="Protect server-held secrets"
+%}
 
 ## Configure the gateway
 
@@ -49,12 +51,13 @@ The stock container paths are already wired to named persistent volumes:
 | `docker-compose.single.yml` | `/data/assistant-subscription.json`                                 | `single-data`               |
 | Direct gateway process      | `./data/assistant-subscription.json`                                | Operator-managed filesystem |
 
-> ⚠️ **First multi-container upgrade:** earlier Compose revisions did not mount
-> the gateway `data` directory. Before recreating an older `server` container,
-> inspect and copy `/opt/server/packages/api-gateway/data` if it contains
-> pairings or administrator settings. The new `server-data` volume cannot import
-> a discarded container writable layer automatically. Preserve the matching
-> encryption key with the migration.
+{% include safety-alert.html
+  level="danger"
+  title="Preserve pairing data before the first multi-container upgrade"
+  body="Earlier Compose revisions did not mount the gateway data directory. Before recreating an older server container, inspect and copy /opt/server/packages/api-gateway/data if it contains pairings or administrator settings. The new server-data volume cannot import a discarded container writable layer automatically. Preserve the matching encryption key with the migration."
+  link_url="/backups-and-recovery.html#self-hosted-infrastructure-backups"
+  link_text="Back up server-held security state"
+%}
 
 Override `ASSISTANT_SUBSCRIPTION_TOKEN_PATH` only with a path on durable,
 gateway-writable storage. Container-layer or temporary paths lose pairing,
@@ -86,13 +89,11 @@ slots never alias to it. Once durable pairing is enabled, the paired `default`
 slot is authoritative: missing, repair-required, or unreadable state fails
 closed and never silently resumes upstream traffic with the environment token.
 
-> ⚠️ **Do not paste a subscription token into an assistant profile API-key
-> field.** New or updated `codex-subscription` profiles reject inline
-> credentials. Older settings containing one remain readable for migration, but
-> the server ignores that value, reports a non-secret warning in the Admin AI
-> pane, and removes it when profiles are saved. The encrypted pairing store is
-> authoritative. A legacy environment bearer is used only when encrypted pairing
-> is not configured at boot.
+{% include safety-alert.html
+  level="danger"
+  title="Do not paste subscription tokens into assistant profiles"
+  body="New or updated codex-subscription profiles reject inline credentials. Older settings containing one remain readable for migration, but the server ignores that value, reports a non-secret warning in the Admin AI pane, and removes it when profiles are saved. The encrypted pairing store is authoritative. A legacy environment bearer is used only when encrypted pairing is not configured at boot."
+%}
 
 ## Pair a named slot
 

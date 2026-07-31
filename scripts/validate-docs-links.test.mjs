@@ -4,15 +4,19 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
+import { buildSearchIndex, renderSearchIndex } from './generate-docs-search-index.mjs'
+
 import {
   assertDocsLinks,
   extractMarkdownAnchors,
   extractMarkdownTargets,
   extractNavigationUrls,
+  extractSafetyAlerts,
   headingSlug,
   validateDocsLinks,
   validateFencedCodeBlocks,
   validateMarkdownStructure,
+  validateSafetyAlerts,
   validateShippedCapabilityLanguage,
 } from './validate-docs-links.mjs'
 
@@ -22,6 +26,11 @@ async function createFixture(files) {
     const absolutePath = path.join(root, relativePath)
     await mkdir(path.dirname(absolutePath), { recursive: true })
     await writeFile(absolutePath, contents, 'utf8')
+  }
+  if (!Object.hasOwn(files, 'docs/assets/search-index.json')) {
+    const searchIndexPath = path.join(root, 'docs', 'assets', 'search-index.json')
+    await mkdir(path.dirname(searchIndexPath), { recursive: true })
+    await writeFile(searchIndexPath, renderSearchIndex(buildSearchIndex(path.join(root, 'docs'))), 'utf8')
   }
   return root
 }
@@ -141,6 +150,51 @@ test('shipped capability language validation rejects roadmap wording but ignores
   ])
 })
 
+test('safety alerts enforce supported levels, paired local links, and required topic titles', () => {
+  const source = [
+    '{% include safety-alert.html',
+    '  level="warning"',
+    '  title="Different topic"',
+    '  body="A concrete risk."',
+    '  link_url="https://example.test/help"',
+    '%}',
+  ].join('\n')
+
+  assert.deepEqual(extractSafetyAlerts(source, 'docs/risk.md'), [
+    {
+      attributes: {
+        level: 'warning',
+        title: 'Different topic',
+        body: 'A concrete risk.',
+        link_url: 'https://example.test/help',
+      },
+      duplicates: [],
+      file: 'docs/risk.md',
+      line: 1,
+    },
+  ])
+  assert.deepEqual(validateSafetyAlerts(source, 'docs/risk.md', { requiredTitles: ['Required topic'] }), [
+    'docs/risk.md:1: safety alert uses unsupported level "warning"; use danger, caution, trust, or info',
+    'docs/risk.md:1: safety alert must provide link_url and link_text together',
+    'docs/risk.md:1: safety alert link_url must be a local absolute documentation path',
+    'docs/risk.md: required safety topic is missing its shared alert: "Required topic"',
+  ])
+})
+
+test('critical safety pages reject legacy blockquotes and missing shared alert topics', () => {
+  const source = [
+    '> ⚠️ User deletion is irreversible.',
+    '{% include safety-alert.html',
+    '  level="caution"',
+    '  title="Verbose logs can expose operational metadata"',
+    '  body="Restrict access."',
+    '%}',
+  ].join('\n')
+  const diagnostics = validateSafetyAlerts(source, 'docs/administration.md')
+  assert.ok(diagnostics.includes('docs/administration.md: required safety topic is missing its shared alert: "User deletion is irreversible"'))
+  assert.ok(diagnostics.includes('docs/administration.md: critical warnings must use the shared safety-alert component'))
+})
+
 test('target extraction ignores code and preserves link and image line numbers', () => {
   const targets = extractMarkdownTargets(
     [
@@ -188,6 +242,8 @@ test('a complete fixture validates nested navigation, anchors, images, and repos
       '      url: /',
       '    - title: Setup',
       '      url: /guide.html#setup',
+      '    - title: First repeated heading',
+      '      url: /guide.html#same',
       '    - title: Repeated heading',
       '      url: /guide.html#same-1',
       '    - title: Explicit anchor',
@@ -233,6 +289,7 @@ test('docs validation reports redundant Markdown horizontal rules outside front 
 
   try {
     assert.deepEqual(await validateDocsLinks({ root }), [
+      'docs/_data/navigation.yml: indexed documentation section "index.html#details" is missing from navigation',
       'docs/index.md:7: redundant Markdown horizontal rule; headings already provide section separation',
     ])
   } finally {
@@ -259,7 +316,7 @@ test('broken navigation reports missing pages, fragments, and unlisted top-level
 
   try {
     const diagnostics = await validateDocsLinks({ root })
-    assert.equal(diagnostics.length, 3)
+    assert.equal(diagnostics.length, 4)
     assert.ok(
       diagnostics.some((message) =>
         message.includes('docs/_data/navigation.yml:6: navigation URL "/missing.html" does not exist'),
@@ -275,6 +332,11 @@ test('broken navigation reports missing pages, fragments, and unlisted top-level
     assert.ok(
       diagnostics.some((message) =>
         message.includes('docs/unlisted.md:1: page is missing from docs/_data/navigation.yml'),
+      ),
+    )
+    assert.ok(
+      diagnostics.some((message) =>
+        message.includes('indexed documentation section "guide.html#present" is missing from navigation'),
       ),
     )
   } finally {
@@ -304,7 +366,7 @@ test('broken Markdown reports link, image, repository target, and anchor errors 
 
   try {
     const diagnostics = await validateDocsLinks({ root })
-    assert.equal(diagnostics.length, 4)
+    assert.equal(diagnostics.length, 5)
     assert.ok(diagnostics.some((message) => message.includes('docs/index.md:2: link "missing.md" does not exist')))
     assert.ok(
       diagnostics.some((message) => message.includes('docs/index.md:3: image "/assets/missing.png" does not exist')),
@@ -315,6 +377,71 @@ test('broken Markdown reports link, image, repository target, and anchor errors 
     assert.ok(
       diagnostics.some((message) =>
         message.includes('docs/index.md:5: link "guide.html#not-here" references missing anchor "#not-here"'),
+      ),
+    )
+    assert.ok(
+      diagnostics.some((message) =>
+        message.includes('indexed documentation section "guide.html#existing" is missing from navigation'),
+      ),
+    )
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('navigation and the generated search index must cover every current Markdown section', async () => {
+  const root = await createFixture({
+    'docs/_data/navigation.yml': ['- title: Start', '  items:', '    - title: Home', '      url: /'].join('\n'),
+    'docs/index.md': '# Home\n\n## Recovery drill\n',
+    'docs/assets/search-index.json': JSON.stringify({
+      version: 1,
+      documents: [
+        { id: 'index.md', title: 'Home', section: '', url: 'index.html', text: 'Home' },
+        { id: 'index.md#stale', title: 'Home', section: 'Stale', url: 'index.html#stale', text: 'Old' },
+      ],
+    }),
+  })
+
+  try {
+    const diagnostics = await validateDocsLinks({ root })
+    assert.ok(
+      diagnostics.some((message) =>
+        message.includes('indexed documentation section "index.html#recovery-drill" is missing from navigation'),
+      ),
+    )
+    assert.ok(
+      diagnostics.some((message) =>
+        message.includes('current Markdown section "index.html#recovery-drill" is missing'),
+      ),
+    )
+    assert.ok(
+      diagnostics.some((message) => message.includes('stale or unknown section "index.html#stale" is indexed')),
+    )
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('shared safety-alert links are resolved like local Markdown links', async () => {
+  const root = await createFixture({
+    'docs/_data/navigation.yml': ['- title: Start', '  items:', '    - title: Home', '      url: /'].join('\n'),
+    'docs/index.md': [
+      '# Home',
+      '{% include safety-alert.html',
+      '  level="danger"',
+      '  title="Delete carefully"',
+      '  body="Keep a backup."',
+      '  link_url="/missing.html#restore"',
+      '  link_text="Restore safely"',
+      '%}',
+    ].join('\n'),
+  })
+
+  try {
+    const diagnostics = await validateDocsLinks({ root })
+    assert.ok(
+      diagnostics.some((message) =>
+        message.includes('docs/index.md:2: link "/missing.html#restore" does not exist'),
       ),
     )
   } finally {

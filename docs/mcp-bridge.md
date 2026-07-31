@@ -34,10 +34,11 @@ configuration gates below.
 Write tools require `STANDARD_RED_NOTES_ALLOW_WRITES=1`. A read-only MCP token
 forcibly disables writes even if that environment variable is set.
 
-> ⚠️ `notes.delete` tombstones and synchronizes the note without a per-call
-> confirmation. Keep the bridge read-only unless deletion is intentionally
-> required. Before enabling it, export or back up the vault and make the agent
-> verify the exact note UUID with `notes.read`.
+{% include safety-alert.html
+  level="danger"
+  title="Agent note deletion has no per-call prompt"
+  body="notes.delete tombstones and synchronizes the note without a per-call confirmation. Keep the bridge read-only unless deletion is intentionally required. Before enabling it, export or back up the vault and make the agent verify the exact note UUID with notes.read."
+%}
 
 ## Authentication choices
 
@@ -60,10 +61,13 @@ STANDARD_RED_NOTES_MFA_CODE=<current-code>
 Do not place credentials in a checked-in MCP client configuration. Use the
 client’s secret mechanism, a protected environment file, or an OS secret store.
 
-> ⚠️ **The full three-part MCP token grants decrypting access.** It contains the
-> client-only secret needed to unwrap account items keys, so the bridge does not
-> need the account password and anyone who steals the full token can read the
-> synchronized notes. Read-only mode prevents mutation, not disclosure.
+{% include safety-alert.html
+  level="danger"
+  title="A full MCP token grants decrypting access"
+  body="The three-part token contains the client-only secret needed to unwrap account items keys, so the bridge does not need the account password and anyone who steals the full token can read synchronized notes. Read-only mode prevents mutation, not disclosure."
+  link_url="/security-and-account.html#authentication-controls"
+  link_text="Compare credential boundaries"
+%}
 
 Creating a dedicated automation account limits which notes the bridge can ever
 sync. Selecting tags while creating a token does **not** currently provide that
@@ -141,11 +145,13 @@ The bearer comparison is constant-time. This protects the MCP transport, while
 bridge to Standard Red Notes. They are separate credentials and should be
 rotated independently.
 
-> ⚠️ HTTP mode currently binds to `0.0.0.0` and has no bind-host setting. It
-> listens on every IPv4 interface visible to the process. Do not publish that
-> port directly: restrict it with the host firewall or container port mapping,
-> and place any non-local access behind a TLS-authenticated reverse proxy. The
-> bearer token does not make plaintext public-internet transport safe.
+{% include safety-alert.html
+  level="danger"
+  title="HTTP mode listens on every IPv4 interface"
+  body="HTTP mode currently binds to 0.0.0.0 and has no bind-host setting. Do not publish that port directly: restrict it with the host firewall or container port mapping, and place any non-local access behind a TLS-authenticated reverse proxy. The bearer token does not make plaintext public-internet transport safe."
+  link_url="/operations-hardening.html#docker-image-and-runtime-hardening"
+  link_text="Harden the exposed runtime"
+%}
 
 ## Runtime settings
 

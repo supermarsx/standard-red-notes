@@ -50,6 +50,15 @@
   <figcaption>
     <strong>{{ screenshot.title | escape }}</strong>
     <p>{{ screenshot.caption | escape }}</p>
+    {% if screenshot_variant == "overview" %}
+    <p class="feature-screenshot__evidence">
+      <strong>Evidence boundary.</strong>
+      {{ capture.limitation | escape }}
+      Asset SHA-256 <code title="{{ capture.sha256 | escape }}">{{ capture.sha256 | slice: 0, 16 }}…</code>
+      at source commit <code>{{ capture.sourceCommit | slice: 0, 12 }}</code>
+      ({{ capture.sourceCommitTimestamp | escape }}).
+    </p>
+    {% endif %}
     <ol class="feature-screenshot__targets">
       {% for target in screenshot.targets %}
       <li>{{ target.text | escape }}</li>

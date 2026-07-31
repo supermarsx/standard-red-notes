@@ -210,6 +210,13 @@ manifest. Multiple annotated crops may intentionally share one capture only
 when all controls are simultaneously visible in that exact state; separate
 capture entries are forbidden from silently reusing the same asset.
 
+The manifest also binds the committed PNG to its SHA-256, the historical source
+commit and commit timestamp, a machine-readable list of states the image does
+not prove, and bounded claims for each crop. The current historical capture
+records `liveLocatorRevalidated: false`: its controls are visually present, but
+the expanded locator manifest has not been rerun against a connected live app.
+Only a new successful live capture may upgrade that status.
+
 Validate the committed image and every documentation crop without launching a
 browser:
 
@@ -221,7 +228,11 @@ That gate checks the versioned manifest, unique capture assets, reproducible
 capture entry points, PNG and viewport dimensions, source references, SVG
 dimensions, accessible text, crop bounds, exact CSS/text/role locators, marker
 coordinates and descriptions, unique feature IDs, and contextual coverage in
-onboarding, client-platform, and in-app guidance.
+onboarding, client-platform, and in-app guidance. It always checks the current
+asset digest. With complete Git history it also checks that the recorded source
+commit contains the exact same PNG and timestamp; shallow source archives skip
+only that historical lookup. This offline gate does not claim it reran live
+locators.
 
 ## Deeper End-to-End Gates
 

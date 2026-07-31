@@ -1,7 +1,15 @@
 - title: Start here
   items:
     - title: Documentation home
-      url: /
+      items:
+        - title: Home overview
+          url: /
+        - title: Choose a path
+          url: /index.html#choose-a-path
+        - title: Feature atlas
+          url: /index.html#feature-atlas
+        - title: Documentation principles
+          url: /index.html#documentation-principles
     - title: Quick start
       items:
         - title: Onboarding overview
@@ -17,13 +25,55 @@
         - title: Enable account recovery
           url: /onboarding.html#enable-optional-account-recovery
         - title: Notes and search basics
-          url: /onboarding.html#the-basics
+          items:
+            - title: Basics overview
+              url: /onboarding.html#the-basics
+            - title: Creating and editing notes
+              url: /onboarding.html#creating-and-editing-notes
+            - title: Finding things
+              url: /onboarding.html#finding-things
+            - title: Organizing single notes
+              url: /onboarding.html#organizing-single-notes
         - title: Editors
-          url: /onboarding.html#editors
+          items:
+            - title: Editors overview
+              url: /onboarding.html#editors
+            - title: Plain text
+              url: /onboarding.html#plain-text
+            - title: Super rich blocks
+              url: /onboarding.html#super-rich-blocks
+            - title: Switching editors per note
+              url: /onboarding.html#switching-editors-per-note
         - title: Organize and navigate
-          url: /onboarding.html#organizing-and-navigating
+          items:
+            - title: Organization overview
+              url: /onboarding.html#organizing-and-navigating
+            - title: Folders vs tags
+              url: /onboarding.html#folders-vs-tags
+            - title: Note links and backlinks
+              url: /onboarding.html#note-links-and-backlinks
+            - title: Constellation graph
+              url: /onboarding.html#the-constellation-graph
+            - title: Command palette
+              url: /onboarding.html#the-command-palette
+            - title: Collapsible sidebars
+              url: /onboarding.html#collapsible-sidebars
         - title: Power features
-          url: /onboarding.html#power-features
+          items:
+            - title: Power features overview
+              url: /onboarding.html#power-features
+            - title: AI assistant
+              url: /onboarding.html#the-ai-assistant
+            - title: Note narration
+              url: /onboarding.html#note-narration-text-to-speech
+            - title: Protected notes
+              url: /onboarding.html#protected-notes
+            - title: Selective sync
+              url: /onboarding.html#selective-sync-local-only-notes
+            - title: Themes
+              url: /onboarding.html#themes-auto-lightdark
+            - title: Import and export
+              url: /onboarding.html#import--export
         - title: Data leaving the device
           url: /onboarding.html#security-what-leaves-your-device
         - title: Tips and shortcuts
@@ -46,6 +96,8 @@
       items:
         - title: Compatibility overview
           url: /standard-notes-compatibility.html
+        - title: Audited upstream snapshots
+          url: /standard-notes-compatibility.html#audited-upstream-snapshots
         - title: Status definitions
           url: /standard-notes-compatibility.html#status-key
         - title: Compatibility matrix
@@ -53,13 +105,25 @@
         - title: Encryption protocols 001-004
           url: /standard-notes-compatibility.html#encryption-protocol-boundary
         - title: Backups and imports
-          url: /standard-notes-compatibility.html#backups-and-imports
+          items:
+            - title: Backups and imports overview
+              url: /standard-notes-compatibility.html#backups-and-imports
+            - title: What to test after import
+              url: /standard-notes-compatibility.html#what-to-test-after-import
         - title: Clients and servers
           url: /standard-notes-compatibility.html#clients-and-servers
         - title: Content and local-only data
           url: /standard-notes-compatibility.html#content-features-and-local-only-data
         - title: Migration playbooks
-          url: /standard-notes-compatibility.html#safe-migration-playbooks
+          items:
+            - title: Migration overview
+              url: /standard-notes-compatibility.html#safe-migration-playbooks
+            - title: Original Notes to Red Notes
+              url: /standard-notes-compatibility.html#original-standard-notes-to-standard-red-notes
+            - title: Red Notes to original Notes
+              url: /standard-notes-compatibility.html#standard-red-notes-to-original-standard-notes
+            - title: Moving server deployments
+              url: /standard-notes-compatibility.html#moving-between-server-deployments
         - title: Validate a version pair
           url: /standard-notes-compatibility.html#how-to-validate-a-version-pair
         - title: Evidence and gaps
@@ -69,12 +133,18 @@
       items:
         - title: Guide overview
           url: /app-guide.html
+        - title: Guide contents
+          url: /app-guide.html#contents
         - title: Getting started
           items:
             - title: Getting started overview
               url: /app-guide.html#getting-started
             - title: Welcome
-              url: /app-guide.html#getting-started-welcome
+              items:
+                - title: Welcome overview
+                  url: /app-guide.html#getting-started-welcome
+                - title: What you get
+                  url: /app-guide.html#what-you-get
             - title: Create your first note
               url: /app-guide.html#getting-started-create-first-note
             - title: Interface tour
@@ -90,9 +160,19 @@
             - title: End-to-end encryption
               url: /app-guide.html#encryption-how-it-works
             - title: Password and key
-              url: /app-guide.html#encryption-your-password
+              items:
+                - title: Password and key overview
+                  url: /app-guide.html#encryption-your-password
+                - title: Why administrators cannot reset it
+                  url: /app-guide.html#why-an-administrator-cannot-reset-it
             - title: What the server sees
-              url: /app-guide.html#encryption-what-server-sees
+              items:
+                - title: Server visibility overview
+                  url: /app-guide.html#encryption-what-server-sees
+                - title: The server cannot see
+                  url: /app-guide.html#the-server-cannot-see
+                - title: The server does see
+                  url: /app-guide.html#the-server-does-see
             - title: Encrypted vs decrypted
               url: /app-guide.html#encryption-encrypted-vs-decrypted
         - title: Account and security
@@ -108,7 +188,15 @@
             - title: Change password
               url: /app-guide.html#security-change-password
             - title: Optional account recovery
-              url: /app-guide.html#security-account-recovery
+              items:
+                - title: Recovery overview
+                  url: /app-guide.html#security-account-recovery
+                - title: Enable and store safely
+                  url: /app-guide.html#enable-and-store-it-safely
+                - title: Recover while signed out
+                  url: /app-guide.html#recover-from-the-signed-out-screen
+                - title: Rotate or disable
+                  url: /app-guide.html#rotate-or-disable
             - title: Protected notes and app lock
               url: /app-guide.html#security-protected-notes
         - title: Notes and editors
@@ -170,7 +258,13 @@
             - title: Why backups matter
               url: /app-guide.html#backups-why-backups
             - title: Export and import
-              url: /app-guide.html#backups-export-import
+              items:
+                - title: Export and import overview
+                  url: /app-guide.html#backups-export-import
+                - title: Export
+                  url: /app-guide.html#export
+                - title: Import
+                  url: /app-guide.html#import
             - title: Automatic backups
               url: /app-guide.html#backups-automatic
             - title: Restore a backup
@@ -184,7 +278,11 @@
             - title: Architecture
               url: /app-guide.html#self-hosting-architecture
             - title: Cookie authentication
-              url: /app-guide.html#self-hosting-cookies-auth
+              items:
+                - title: Cookie authentication overview
+                  url: /app-guide.html#self-hosting-cookies-auth
+                - title: Key settings
+                  url: /app-guide.html#key-settings
             - title: Email and SMTP
               url: /app-guide.html#self-hosting-smtp
             - title: Update the server
@@ -198,11 +296,21 @@
             - title: Configure providers
               url: /app-guide.html#assistant-providers
             - title: Connection modes
-              url: /app-guide.html#assistant-connection
+              items:
+                - title: Connection modes overview
+                  url: /app-guide.html#assistant-connection
+                - title: Direct mode
+                  url: /app-guide.html#direct-mode
+                - title: Server proxy mode
+                  url: /app-guide.html#server-proxy-mode
             - title: Steering and delegation
               url: /app-guide.html#assistant-capabilities
             - title: Retrieval and AI search
-              url: /app-guide.html#assistant-retrieval-search
+              items:
+                - title: Retrieval and search overview
+                  url: /app-guide.html#assistant-retrieval-search
+                - title: AI-powered list search
+                  url: /app-guide.html#ai-powered-list-search
             - title: Privacy
               url: /app-guide.html#assistant-privacy
         - title: Collaboration
@@ -238,7 +346,13 @@
             - title: Troubleshooting overview
               url: /app-guide.html#troubleshooting
             - title: Sign-in and 401 errors
-              url: /app-guide.html#troubleshooting-cant-sign-in
+              items:
+                - title: Sign-in troubleshooting overview
+                  url: /app-guide.html#troubleshooting-cant-sign-in
+                - title: Check your password
+                  url: /app-guide.html#check-your-password
+                - title: Self-hosted cookie problems
+                  url: /app-guide.html#self-hosted-cookie-problems
             - title: Notes not syncing
               url: /app-guide.html#troubleshooting-not-syncing
             - title: Lost two-factor access
@@ -345,7 +459,13 @@
         - title: Email backups
           url: /backups-and-recovery.html#email-backups
         - title: Nextcloud and WebDAV
-          url: /backups-and-recovery.html#nextcloudwebdav-backups
+          items:
+            - title: Nextcloud and WebDAV overview
+              url: /backups-and-recovery.html#nextcloudwebdav-backups
+            - title: Rolling upgrade compatibility
+              url: /backups-and-recovery.html#rolling-upgrade-compatibility
+            - title: Verify and recover a backup
+              url: /backups-and-recovery.html#verify-and-recover-a-nextcloud-backup
         - title: Infrastructure backups
           url: /backups-and-recovery.html#self-hosted-infrastructure-backups
         - title: Restore order
@@ -362,13 +482,35 @@
         - title: Self-hosting overview
           url: /self-hosting.html
         - title: Deploy in five minutes
-          url: /self-hosting.html#deploy-in-5-minutes
+          items:
+            - title: Deployment overview
+              url: /self-hosting.html#deploy-in-5-minutes
+            - title: Get the code
+              url: /self-hosting.html#get-the-code
+            - title: Run the setup script
+              url: /self-hosting.html#run-the-setup-script
+            - title: Start the stack
+              url: /self-hosting.html#start-the-stack-if-you-didnt-use---up
+            - title: Open the app
+              url: /self-hosting.html#open-the-app
         - title: Stack components
-          url: /self-hosting.html#what-the-stack-contains
+          items:
+            - title: Stack overview
+              url: /self-hosting.html#what-the-stack-contains
+            - title: SNS and SQS bootstrap
+              url: /self-hosting.html#the-snssqs-bootstrap
         - title: Prerequisites
           url: /self-hosting.html#prerequisites
         - title: Configuration
-          url: /self-hosting.html#configuration-the-env-file
+          items:
+            - title: Configuration overview
+              url: /self-hosting.html#configuration-the-env-file
+            - title: Required variables
+              url: /self-hosting.html#required-variables
+            - title: Cookie and domain variables
+              url: /self-hosting.html#cookie--domain-variables
+            - title: Optional variables
+              url: /self-hosting.html#optional-variables
         - title: Shared access key
           url: /self-hosting.html#server-wide-shared-access-key-optional-obfuscation-gate
         - title: Home-server release
@@ -378,7 +520,23 @@
         - title: Domains and ports
           url: /self-hosting.html#choosing-a-domain-and-ports
         - title: Reverse proxy
-          url: /self-hosting.html#running-behind-a-reverse-proxy
+          items:
+            - title: Reverse proxy overview
+              url: /self-hosting.html#running-behind-a-reverse-proxy
+            - title: Required environment
+              url: /self-hosting.html#required-environment
+            - title: External host
+              url: /self-hosting.html#standard-red-notes-external-host
+            - title: Drop Compose host ports
+              url: /self-hosting.html#compose-dropping-host-ports
+            - title: nginx example
+              url: /self-hosting.html#nginx-example
+            - title: Traefik example
+              url: /self-hosting.html#traefik-example
+            - title: Separate n8n hostname
+              url: /self-hosting.html#separate-n8n-hostname
+            - title: Manual verification
+              url: /self-hosting.html#manual-verification
         - title: Start, stop, and upgrade
           url: /self-hosting.html#start-stop-and-upgrade
         - title: Data locations
@@ -394,7 +552,11 @@
         - title: Multi-container
           url: /DEPLOYMENT.html#a-full-multi-container
         - title: All-in-one container
-          url: /DEPLOYMENT.html#b-all-in-one-single-container-new
+          items:
+            - title: All-in-one overview
+              url: /DEPLOYMENT.html#b-all-in-one-single-container-new
+            - title: Forwarded client IP
+              url: /DEPLOYMENT.html#forwarded-client-ip-trustproxy--clientipheader
         - title: Architecture
           url: /DEPLOYMENT.html#architecture
         - title: LXC and systemd
@@ -421,6 +583,8 @@
           url: /administration.html#feature-gates
         - title: Service lifecycle
           url: /administration.html#service-health-and-lifecycle
+        - title: Runtime log level
+          url: /administration.html#runtime-log-level
         - title: Security and anti-abuse
           url: /administration.html#security-and-anti-abuse
         - title: Audit practice
@@ -456,9 +620,29 @@
         - title: First-response sequence
           url: /monitoring-and-troubleshooting.html#first-response-sequence
         - title: Logs and safe logging
-          url: /monitoring-and-troubleshooting.html#logs
+          items:
+            - title: Logs overview
+              url: /monitoring-and-troubleshooting.html#logs
+            - title: Safe operational logging
+              url: /monitoring-and-troubleshooting.html#safe-operational-logging
         - title: Symptom guide
-          url: /monitoring-and-troubleshooting.html#symptom-guide
+          items:
+            - title: Symptom guide overview
+              url: /monitoring-and-troubleshooting.html#symptom-guide
+            - title: Cannot sign in
+              url: /monitoring-and-troubleshooting.html#cannot-sign-in
+            - title: Sync is stale
+              url: /monitoring-and-troubleshooting.html#sync-is-stale
+            - title: Realtime updates are missing
+              url: /monitoring-and-troubleshooting.html#realtime-updates-are-missing
+            - title: Files fail but notes sync
+              url: /monitoring-and-troubleshooting.html#files-fail-but-notes-sync
+            - title: Admin console returns 403
+              url: /monitoring-and-troubleshooting.html#admin-console-returns-403
+            - title: MCP data is stale
+              url: /monitoring-and-troubleshooting.html#mcp-responds-but-data-is-old
+            - title: Backups are missing
+              url: /monitoring-and-troubleshooting.html#backups-are-missing
         - title: Safe service recovery
           url: /monitoring-and-troubleshooting.html#safe-service-recovery
         - title: Escalation bundle
@@ -537,11 +721,23 @@
         - title: Local setup
           url: /workflows.html#local-setup
         - title: Production setup
-          url: /workflows.html#production-setup
+          items:
+            - title: Production setup overview
+              url: /workflows.html#production-setup
+            - title: Container hardening defaults
+              url: /workflows.html#container-hardening-defaults
         - title: Encryption key lifecycle
           url: /workflows.html#encryption-key-lifecycle
         - title: Connect n8n to MCP
-          url: /workflows.html#connect-n8n-to-the-mcp-bridge
+          items:
+            - title: Connection overview
+              url: /workflows.html#connect-n8n-to-the-mcp-bridge
+            - title: Create a dedicated credential
+              url: /workflows.html#create-a-dedicated-account-credential
+            - title: Start the authenticated bridge
+              url: /workflows.html#start-the-authenticated-bridge
+            - title: Create the n8n credential and node
+              url: /workflows.html#create-the-n8n-credential-and-node
         - title: Credential and data boundaries
           url: /workflows.html#credential-and-data-boundaries
         - title: Revoke and respond
@@ -554,10 +750,16 @@
       items:
         - title: API overview
           url: /API.html
+        - title: API contents
+          url: /API.html#contents
         - title: Base URL and versions
           url: /API.html#base-url-and-versioning
         - title: Authentication model
-          url: /API.html#authentication-model
+          items:
+            - title: Authentication overview
+              url: /API.html#authentication-model
+            - title: Obtaining credentials and tokens
+              url: /API.html#obtaining-access-credentials-and-tokens
         - title: Curl walkthrough
           url: /API.html#how-to-call-the-api-curl
         - title: Encryption implications
@@ -675,7 +877,11 @@
         - title: Plugins gallery
           url: /automation-and-integrations.html#plugins-gallery
         - title: Reminders and providers
-          url: /automation-and-integrations.html#reminders-and-assistant-providers
+          items:
+            - title: Reminders and providers overview
+              url: /automation-and-integrations.html#reminders-and-assistant-providers
+            - title: Reminder delivery
+              url: /automation-and-integrations.html#reminder-delivery
         - title: Integration review checklist
           url: /automation-and-integrations.html#integration-review-checklist
 
@@ -741,6 +947,8 @@
           url: /ci-production-gates.html
         - title: Required lanes
           url: /ci-production-gates.html#required-lanes
+        - title: Release gates inside publishers
+          url: /ci-production-gates.html#release-gates-inside-publishers
         - title: Extended profiles
           url: /ci-production-gates.html#extended-profiles
         - title: Docker assertions

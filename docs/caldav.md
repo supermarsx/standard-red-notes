@@ -13,10 +13,13 @@ clients that support to-do collections. It does not decrypt or scan notes. The
 feed contains only items that you explicitly publish from **Preferences →
 Security → CalDAV Access**.
 
-> ⚠️ **Published calendar fields are not end-to-end encrypted.** The summary,
-> description, start and due dates, completion state, and priority are stored as
-> plaintext by the API gateway so an ordinary CalDAV client can read them. Do
-> not publish secrets that must remain inside the encrypted notebook.
+{% include safety-alert.html
+  level="trust"
+  title="Published calendar fields are plaintext"
+  body="The summary, description, start and due dates, completion state, and priority are stored as plaintext by the API gateway so an ordinary CalDAV client can read them. Do not publish secrets that must remain inside the encrypted notebook."
+  link_url="/security-and-account.html#trust-boundary"
+  link_text="Review the plaintext trust boundary"
+%}
 
 ## Enable and connect
 

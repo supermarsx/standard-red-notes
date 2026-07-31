@@ -119,6 +119,8 @@ Related: [encryption/how-it-works](#encryption-how-it-works), [getting-started/c
 
 Make a note, give it a title, and pick the editor that fits.
 
+{% include feature-screenshot.html id="onboarding-note-list" %}
+
 1. Click the “+” (Create new note) button at the top of the notes list.
 2. Type a title, then press Tab or click into the body to start writing.
 3. Open the note options menu (the “…” / info icon) to change the note type, pin, star, or protect the note.
@@ -155,7 +157,11 @@ You can use Standard Red Notes with no account at all. Your notes are stored in 
 
 When you are ready to sync across devices or keep an off-device backup, create an account and sign in — your existing local notes are uploaded and encrypted to your server on first sync.
 
-> **Warning.** With no account, there is no server-side copy of your notes. If you clear the app’s local data or lose the device, the notes are gone. Export an encrypted backup regularly.
+{% include safety-alert.html
+  level="danger"
+  title="Local-only notes need a backup"
+  body="With no account, there is no server-side copy of your notes. If you clear the app’s local data or lose the device, the notes are gone. Export an encrypted backup regularly."
+%}
 
 Related: [getting-started/account-setup](#getting-started-account-setup), [backups/export-import](#backups-export-import), [sync/how-it-works](#sync-how-it-works)
 
@@ -168,7 +174,11 @@ Register, choose a strong password, and sign in on each device.
 2. Confirm the sync server address. For a self-hosted install this is your server’s URL.
 3. Enter your email and a strong password, then create the account.
 
-> **Warning.** Your password participates in deriving your encryption keys and cannot be revealed by the server. Choose a long, unique password, save it in a password manager, and keep tested backups. If you later opt in to account recovery, its separate recovery code becomes another key to protect.
+{% include safety-alert.html
+  level="danger"
+  title="Protect your account password"
+  body="Your password participates in deriving your encryption keys and cannot be revealed by the server. Choose a long, unique password, save it in a password manager, and keep tested backups. If you later opt in to account recovery, its separate recovery code becomes another key to protect."
+%}
 
 To use a second device, install the app, point it at the same sync server, and sign in with the same credentials. Your encrypted notes download and decrypt locally.
 
@@ -214,7 +224,11 @@ Standard Red Notes ships an optional logged-out account-recovery flow, but it mu
 - If you opt in to account recovery, store its one-time code separately from the account and the only backup.
 - Changing your password re-wraps your keys; keep a recent backup before doing so.
 
-> **Warning.** Treat the account password and any recovery code as separate keys to the same safe. A copied recovery code can decrypt the escrowed account keys offline, and MFA cannot prevent that. Rotate a possibly exposed code immediately.
+{% include safety-alert.html
+  level="danger"
+  title="Password and recovery code are separate keys"
+  body="Treat the account password and any recovery code as separate keys to the same safe. A copied recovery code can decrypt the escrowed account keys offline, and MFA cannot prevent that. Rotate a possibly exposed code immediately."
+%}
 
 Related: [security/account-recovery](#security-account-recovery), [security/change-password](#security-change-password), [backups/why-backups](#backups-why-backups), [encryption/how-it-works](#encryption-how-it-works)
 
@@ -253,7 +267,11 @@ Inside the app, your notes are always shown decrypted — you just read and writ
 | Encrypted backup | Ciphertext that still deserves protected storage. Requires the correct password or backup key to restore and can be copied for offline attack. |
 | Decrypted backup | Plain, readable content. Convenient but unprotected — anyone with the file can read everything. |
 
-> **Warning.** Prefer encrypted backups for archival, but do not publish them or store their password or account-recovery code beside them. Only create a decrypted backup when you specifically need readable data, and protect or remove every copy.
+{% include safety-alert.html
+  level="danger"
+  title="Readable backups leave the encrypted vault"
+  body="Prefer encrypted backups for archival, but do not publish them or store their password or account-recovery code beside them. Only create a decrypted backup when you specifically need readable data, and protect or remove every copy."
+%}
 
 Related: [backups/export-import](#backups-export-import), [backups/why-backups](#backups-why-backups)
 
@@ -274,7 +292,11 @@ Add a TOTP authenticator app as a second factor at sign-in.
 
 After enabling, signing in requires your password plus the current code from your authenticator app.
 
-> **Warning.** Store the secret key offline (printed or in a password manager). Without it, losing your authenticator device can lock you out of new sign-ins.
+{% include safety-alert.html
+  level="danger"
+  title="Save the authenticator secret"
+  body="Store the secret key offline (printed or in a password manager). Without it, losing your authenticator device can lock you out of new sign-ins."
+%}
 
 Related: [security/magic-link](#security-magic-link), [security/sessions](#security-sessions), [troubleshooting/lost-2fa](#troubleshooting-lost-2fa)
 
@@ -318,7 +340,11 @@ Rotate your password safely without losing access to your notes.
 3. Enter your current password and the new one; your keys are re-wrapped with the new password.
 4. Sign in again on your other devices with the new password.
 
-> **Warning.** Changing the password invalidates any existing account-recovery escrow. Other signed-in devices may also need to re-authenticate. Keep the backup until every device is updated and syncing, then enable account recovery again if you still want it and save the new code.
+{% include safety-alert.html
+  level="caution"
+  title="Password changes invalidate recovery escrow"
+  body="Changing the password invalidates any existing account-recovery escrow. Other signed-in devices may also need to re-authenticate. Keep the backup until every device is updated and syncing, then enable account recovery again if you still want it and save the new code."
+%}
 
 Related: [encryption/your-password](#encryption-your-password), [security/account-recovery](#security-account-recovery), [backups/why-backups](#backups-why-backups), [security/sessions](#security-sessions)
 
@@ -336,7 +362,11 @@ Account recovery is shipped, optional, and off by default. A signed-in user enab
 3. Copy the newly generated code to a protected password manager or offline recovery package that is separate from the notes account.
 4. Confirm that the code is saved before dismissing the one-time display.
 
-> **Warning.** Anyone who obtains the code can fetch the server-held ciphertext and decrypt the escrowed account keys offline. MFA still applies to normal server sign-in, but it cannot protect a copied recovery code. Treat code compromise as account-key compromise.
+{% include safety-alert.html
+  level="danger"
+  title="A recovery code can unlock account keys"
+  body="Anyone who obtains the code can fetch the server-held ciphertext and decrypt the escrowed account keys offline. MFA still applies to normal server sign-in, but it cannot protect a copied recovery code. Treat code compromise as account-key compromise."
+%}
 
 #### Recover from the signed-out screen
 
@@ -527,7 +557,11 @@ Keep important notes up top and tidy away the rest.
 | Archive | Removes a note from the main list without deleting it. |
 | Trash | Moves a note to Trash; empty the Trash to delete permanently. |
 
-> **Warning.** Emptying the Trash is permanent. Once synced, deleted notes cannot be recovered unless they exist in a backup.
+{% include safety-alert.html
+  level="danger"
+  title="Emptying Trash is permanent"
+  body="Emptying the Trash is permanent. Once synced, deleted notes cannot be recovered unless they exist in a backup."
+%}
 
 Related: [organization/note-options](#organization-note-options), [backups/restore](#backups-restore)
 
@@ -635,7 +669,11 @@ Full functionality without a connection; sync resumes later.
 
 The app is offline-first. You can read and write everything while disconnected; changes are stored locally and sync automatically when a connection returns.
 
-> **Warning.** While offline, your changes exist only on that device until it syncs. Avoid clearing local data before a successful sync.
+{% include safety-alert.html
+  level="danger"
+  title="Offline changes exist only on this device"
+  body="While offline, your changes exist only on that device until it syncs. Avoid clearing local data before a successful sync."
+%}
 
 Related: [getting-started/no-account](#getting-started-no-account), [sync/how-it-works](#sync-how-it-works)
 
@@ -701,7 +739,11 @@ Bring data back after loss, or recover a deleted note.
 3. For an encrypted backup, enter the password that protected it.
 4. Review the imported notes; resolve any duplicates.
 
-> **Warning.** Importing adds items; it does not wipe your current data. If you are recovering into a fresh account, import into an empty state to avoid mixing datasets.
+{% include safety-alert.html
+  level="caution"
+  title="Importing can mix datasets"
+  body="Importing adds items; it does not wipe your current data. If you are recovering into a fresh account, import into an empty state to avoid mixing datasets."
+%}
 
 Related: [backups/export-import](#backups-export-import), [sync/conflicts](#sync-conflicts)
 
@@ -754,7 +796,11 @@ For browser sessions, the server authenticates requests using session cookies it
 | COOKIE_SAME_SITE | Lax is appropriate for a same-site app+API; None requires Secure. |
 | CORS | The server echoes your app’s origin and allows credentials so cookies flow across the app/API ports. |
 
-> **Warning.** If you see repeated 401 “Invalid login credentials” and the browser console reports cookies “rejected for invalid domain”, the cookie domain does not match your host. Use an empty domain (host-only) for localhost/IP setups.
+{% include safety-alert.html
+  level="caution"
+  title="Cookie-domain errors block sign-in"
+  body="If you see repeated 401 “Invalid login credentials” and the browser console reports cookies “rejected for invalid domain”, the cookie domain does not match your host. Use an empty domain (host-only) for localhost/IP setups."
+%}
 
 Related: [self-hosting/architecture](#self-hosting-architecture), [troubleshooting/cant-sign-in](#troubleshooting-cant-sign-in), [troubleshooting/not-syncing](#troubleshooting-not-syncing)
 
@@ -765,7 +811,11 @@ Configure email so magic-link codes are delivered to inboxes.
 
 The email magic-link second factor needs an email transport (SMTP) to deliver codes. Configure your server’s SMTP settings to send mail from an address you control.
 
-> **Warning.** Without working SMTP, magic-link cannot be enabled or used. Verification codes are deliberately never exposed in an unauthenticated API response or on the sign-in screen.
+{% include safety-alert.html
+  level="caution"
+  title="Magic-link requires working SMTP"
+  body="Without working SMTP, magic-link cannot be enabled or used. Verification codes are deliberately never exposed in an unauthenticated API response or on the sign-in screen."
+%}
 
 Related: [security/magic-link](#security-magic-link), [self-hosting/overview](#self-hosting-overview)
 
@@ -876,7 +926,11 @@ With a local model, nothing leaves your machine.
 
 The assistant talks to whichever provider you configure. With a local provider such as LM Studio or Ollama, your prompts and note content never leave your computer. With a hosted provider, the content you send is processed by that third party under their terms.
 
-> **Warning.** If privacy is the priority, use a local model. Be deliberate about which notes you share with a hosted provider.
+{% include safety-alert.html
+  level="trust"
+  title="Hosted AI receives selected plaintext"
+  body="If privacy is the priority, use a local model. Be deliberate about which notes you share with a hosted provider."
+%}
 
 Related: [assistant/providers](#assistant-providers), [assistant/connection](#assistant-connection), [assistant/retrieval-search](#assistant-retrieval-search), [encryption/how-it-works](#encryption-how-it-works)
 
@@ -941,7 +995,11 @@ Point the bridge at your server and provide account credentials.
 
 Configure the bridge with your server URL and account credentials (and a 2FA code if your account requires one). Enable writes only if you want the agent to make changes. Then connect your MCP-capable client to the bridge.
 
-> **Warning.** Give the bridge a dedicated account or be deliberate about which account it uses. Keep writes disabled until you trust the workflow.
+{% include safety-alert.html
+  level="danger"
+  title="Automation credentials can decrypt notes"
+  body="Give the bridge a dedicated account or be deliberate about which account it uses. Keep writes disabled until you trust the workflow."
+%}
 
 Related: [automation/mcp-overview](#automation-mcp-overview), [automation/capabilities](#automation-capabilities)
 
@@ -1028,7 +1086,11 @@ Work through connection, sign-in, and conflict causes.
 3. On a self-host, verify the server is healthy and authentication (cookies) is configured correctly.
 4. Look for conflicted copies, which indicate sync did happen but diverged.
 
-> **Warning.** Do not clear local data to “fix” sync until you have confirmed a successful upload — unsynced local changes would be lost.
+{% include safety-alert.html
+  level="danger"
+  title="Do not clear unsynced local data"
+  body="Do not clear local data to “fix” sync until you have confirmed a successful upload — unsynced local changes would be lost."
+%}
 
 Related: [troubleshooting/cant-sign-in](#troubleshooting-cant-sign-in), [sync/conflicts](#sync-conflicts), [self-hosting/cookies-auth](#self-hosting-cookies-auth)
 
@@ -1039,7 +1101,11 @@ Use your saved secret/backup key, or a previously configured emailed factor.
 
 If you lose your authenticator device, re-add the account in a new authenticator using the secret/backup key you saved when enabling 2FA. If you previously enabled email magic-link 2FA and the server can still deliver mail, you can complete sign-in with the emailed code instead.
 
-> **Warning.** Without the secret key and without an alternate factor, you may be unable to complete new sign-ins. This is why saving the secret key at setup is essential.
+{% include safety-alert.html
+  level="danger"
+  title="Lost MFA secrets can block sign-in"
+  body="Without the secret key and without an alternate factor, you may be unable to complete new sign-ins. This is why saving the secret key at setup is essential."
+%}
 
 Related: [security/two-factor](#security-two-factor), [security/magic-link](#security-magic-link)
 
@@ -1050,7 +1116,11 @@ A last resort that wipes the on-device database.
 
 Clearing local data removes the app’s on-device encrypted database. For a synced account this is recoverable — sign in again and re-download from the server. For an account-less/offline setup, it is permanent.
 
-> **Warning.** Always export a backup before clearing local data, and confirm your latest changes have synced.
+{% include safety-alert.html
+  level="danger"
+  title="Export before clearing local data"
+  body="Always export a backup before clearing local data, and confirm your latest changes have synced."
+%}
 
 Related: [troubleshooting/not-syncing](#troubleshooting-not-syncing), [backups/export-import](#backups-export-import), [sync/offline](#sync-offline)
 

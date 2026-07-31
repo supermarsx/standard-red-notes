@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+import { createHash } from 'node:crypto'
+import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
@@ -202,21 +204,91 @@ function validateCapture(captureId, capture, root) {
       errors.push(`${prefix}: captureScript "${capture.captureScript}" does not exist inside the repository`)
     }
   }
+  if (!/^[a-f0-9]{64}$/.test(capture.sha256 ?? '')) {
+    errors.push(`${prefix}: sha256 must be a lower-case SHA-256 asset digest`)
+  }
+  if (!/^[a-f0-9]{40}$/.test(capture.sourceCommit ?? '')) {
+    errors.push(`${prefix}: sourceCommit must be the full historical Git commit that last changed the asset`)
+  }
+  if (typeof capture.sourceCommitTimestamp !== 'string' || Number.isNaN(Date.parse(capture.sourceCommitTimestamp))) {
+    errors.push(`${prefix}: sourceCommitTimestamp must be an ISO-8601 timestamp`)
+  }
+  if (typeof capture.liveLocatorRevalidated !== 'boolean') {
+    errors.push(`${prefix}: liveLocatorRevalidated must explicitly record true or false`)
+  }
+  if (typeof capture.limitation !== 'string' || capture.limitation.trim().length < 80) {
+    errors.push(`${prefix}: limitation must explain the stored asset and live-locator evidence boundary`)
+  } else if (capture.liveLocatorRevalidated === false && !/not been revalidated|not revalidated/i.test(capture.limitation)) {
+    errors.push(`${prefix}: limitation must state that live locators have not been revalidated`)
+  }
+  if (
+    !Array.isArray(capture.unsupportedStates) ||
+    capture.unsupportedStates.length === 0 ||
+    capture.unsupportedStates.some((state) => typeof state !== 'string' || !/^[a-z][a-z0-9-]*$/.test(state)) ||
+    new Set(capture.unsupportedStates).size !== capture.unsupportedStates.length
+  ) {
+    errors.push(`${prefix}: unsupportedStates must be a non-empty list of unique lower-case state identifiers`)
+  }
 
   if (typeof capture.asset === 'string' && /^[a-z0-9][a-z0-9._-]*\.png$/.test(capture.asset)) {
     const assetPath = path.join(root, 'docs', 'assets', capture.asset)
+    const assetRelativePath = `docs/assets/${capture.asset}`
     if (!fs.existsSync(assetPath)) {
       errors.push(`${prefix}: docs/assets/${capture.asset} does not exist`)
     } else {
       try {
-        const dimensions = readPngDimensions(fs.readFileSync(assetPath))
+        const asset = fs.readFileSync(assetPath)
+        const dimensions = readPngDimensions(asset)
         if (dimensions.width !== capture.width || dimensions.height !== capture.height) {
           errors.push(
             `${prefix}: docs/assets/${capture.asset} is ${dimensions.width}x${dimensions.height}, expected ${capture.width}x${capture.height}`,
           )
         }
+        const actualSha256 = createHash('sha256').update(asset).digest('hex')
+        if (capture.sha256 !== actualSha256) {
+          errors.push(`${prefix}: docs/assets/${capture.asset} SHA-256 is ${actualSha256}, expected ${capture.sha256}`)
+        }
       } catch (error) {
         errors.push(`${prefix}: docs/assets/${capture.asset}: ${error.message}`)
+      }
+    }
+    if (/^[a-f0-9]{40}$/.test(capture.sourceCommit ?? '')) {
+      const shallowRepository = spawnSync(
+        'git',
+        ['rev-parse', '--is-shallow-repository'],
+        { cwd: root, encoding: 'utf8', windowsHide: true },
+      )
+      const commitAvailable = spawnSync(
+        'git',
+        ['cat-file', '-e', `${capture.sourceCommit}^{commit}`],
+        { cwd: root, encoding: 'utf8', windowsHide: true },
+      )
+      if (commitAvailable.status === 0) {
+        const provenance = spawnSync(
+          'git',
+          ['show', '-s', '--format=%aI', capture.sourceCommit],
+          { cwd: root, encoding: 'utf8', windowsHide: true },
+        )
+        const historicalAsset = spawnSync(
+          'git',
+          ['show', `${capture.sourceCommit}:${assetRelativePath}`],
+          { cwd: root, encoding: null, windowsHide: true, maxBuffer: 16 * 1024 * 1024 },
+        )
+        if (provenance.stdout.trim() !== capture.sourceCommitTimestamp) {
+          errors.push(`${prefix}: sourceCommitTimestamp must match sourceCommit author time ${provenance.stdout.trim()}`)
+        }
+        if (historicalAsset.status !== 0) {
+          errors.push(`${prefix}: sourceCommit ${capture.sourceCommit} does not contain ${assetRelativePath}`)
+        } else {
+          const historicalSha256 = createHash('sha256').update(historicalAsset.stdout).digest('hex')
+          if (historicalSha256 !== capture.sha256) {
+            errors.push(
+              `${prefix}: sourceCommit ${capture.sourceCommit} contains ${assetRelativePath} with SHA-256 ${historicalSha256}, expected ${capture.sha256}`,
+            )
+          }
+        }
+      } else if (shallowRepository.status === 0 && shallowRepository.stdout.trim() !== 'true') {
+        errors.push(`${prefix}: sourceCommit ${capture.sourceCommit} is not available in complete repository history`)
       }
     }
   }
@@ -247,6 +319,14 @@ function validateFeatureDefinition(featureId, feature, manifest) {
   if (typeof feature.caption !== 'string' || feature.caption.trim().length < 20) {
     errors.push(`${prefix}: caption must state what the capture proves`)
   }
+  if (
+    !Array.isArray(feature.evidenceClaims) ||
+    feature.evidenceClaims.length === 0 ||
+    feature.evidenceClaims.some((claim) => typeof claim !== 'string' || !/^[a-z][a-z0-9-]*$/.test(claim)) ||
+    new Set(feature.evidenceClaims).size !== feature.evidenceClaims.length
+  ) {
+    errors.push(`${prefix}: evidenceClaims must be a non-empty list of unique lower-case claim identifiers`)
+  }
 
   const viewBox = typeof feature.viewBox === 'string' ? feature.viewBox.trim().split(/\s+/).map(Number) : []
   const validViewBox = viewBox.length === 4 && viewBox.every(Number.isFinite)
@@ -267,6 +347,13 @@ function validateFeatureDefinition(featureId, feature, manifest) {
     (cropX < 0 || cropY < 0 || cropX + cropWidth > capture.width || cropY + cropHeight > capture.height)
   ) {
     errors.push(`${prefix}: viewBox "${feature.viewBox}" exceeds capture "${feature.capture}"`)
+  }
+  if (capture && Array.isArray(feature.evidenceClaims) && Array.isArray(capture.unsupportedStates)) {
+    for (const claim of feature.evidenceClaims) {
+      if (capture.unsupportedStates.includes(claim)) {
+        errors.push(`${prefix}: evidence claim "${claim}" is explicitly unsupported by capture "${feature.capture}"`)
+      }
+    }
   }
 
   if (!Array.isArray(feature.targets) || feature.targets.length < 1 || feature.targets.length > 3) {
@@ -380,6 +467,10 @@ export function validateFeatureScreenshotTemplate(source) {
     'width="{{ capture.width }}"',
     'height="{{ capture.height }}"',
     '{{ screenshot.alt | escape }}',
+    '{{ capture.limitation | escape }}',
+    '{{ capture.sha256 | slice: 0, 16 }}',
+    '{{ capture.sourceCommit | slice: 0, 12 }}',
+    '{{ capture.sourceCommitTimestamp | escape }}',
     'aria-labelledby="{{ include.id | escape }}-title"',
     '{% for target in screenshot.targets %}',
   ]

@@ -58,6 +58,12 @@ export function markdownToText(markdown) {
   return decodeEntities(
     markdown
       .replace(/<!--[\s\S]*?-->/g, ' ')
+      .replace(/{%\s*include\s+safety-alert\.html\b([\s\S]*?)%}/g, (_, attributes) => {
+        const values = Object.fromEntries(
+          [...attributes.matchAll(/\b([a-z][a-z0-9_]*)\s*=\s*"([^"]*)"/g)].map((match) => [match[1], match[2]]),
+        )
+        return [values.title, values.body, values.link_text].filter(Boolean).join(' ')
+      })
       .replace(/\{[{%][\s\S]*?[}%]\}/g, ' ')
       .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
       .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')

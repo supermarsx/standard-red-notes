@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import {
   FEATURE_SCREENSHOT_MANIFEST_PATH,
@@ -30,6 +32,12 @@ function pngHeader(width, height) {
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value))
+}
+
+function runGit(root, args) {
+  const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', windowsHide: true })
+  assert.equal(result.status, 0, result.stderr || result.stdout)
+  return result.stdout.trim()
 }
 
 test('readPngDimensions reads dimensions from the PNG IHDR header', () => {
@@ -67,6 +75,13 @@ test('manifest validation binds every feature to a real asset, crop, and exact l
 
   for (const [featureId, feature] of Object.entries(manifest.features)) {
     assert.ok(manifest.captures[feature.capture], `${featureId} has no capture`)
+    assert.ok(feature.evidenceClaims.length >= 1, `${featureId} has no bounded evidence claims`)
+    for (const claim of feature.evidenceClaims) {
+      assert.ok(
+        !manifest.captures[feature.capture].unsupportedStates.includes(claim),
+        `${featureId} claims unsupported state ${claim}`,
+      )
+    }
     assert.ok(feature.targets.length >= 1, `${featureId} has no targets`)
     for (const target of feature.targets) {
       assert.ok(['css', 'text', 'role'].includes(target.locator.kind), `${featureId} has an unknown locator`)
@@ -74,6 +89,88 @@ test('manifest validation binds every feature to a real asset, crop, and exact l
         assert.equal(target.locator.exact, true, `${featureId} locator is not exact`)
       }
     }
+  }
+})
+
+test('capture provenance binds the exact asset while recording the live-locator limitation', () => {
+  const manifest = loadFeatureScreenshotManifest(repositoryRoot)
+  const capture = manifest.captures['workspace-overview']
+
+  assert.match(capture.sha256, /^[a-f0-9]{64}$/)
+  assert.match(capture.sourceCommit, /^[a-f0-9]{40}$/)
+  assert.ok(!Number.isNaN(Date.parse(capture.sourceCommitTimestamp)))
+  assert.equal(capture.liveLocatorRevalidated, false)
+  assert.match(capture.limitation, /not been revalidated/i)
+  assert.ok(capture.unsupportedStates.length >= 1)
+})
+
+test('historical provenance lookup is shallow-safe while the current asset digest stays mandatory', () => {
+  const temporaryDirectory = fs.mkdtempSync(path.join(repositoryRoot, '.tmp-screenshot-shallow-'))
+  const sourceRoot = path.join(temporaryDirectory, 'source')
+  const shallowRoot = path.join(temporaryDirectory, 'shallow')
+  try {
+    fs.mkdirSync(path.join(sourceRoot, 'docs', 'assets'), { recursive: true })
+    fs.mkdirSync(path.join(sourceRoot, 'scripts'), { recursive: true })
+    const asset = pngHeader(100, 100)
+    fs.writeFileSync(path.join(sourceRoot, 'docs', 'assets', 'capture.png'), asset)
+    fs.writeFileSync(path.join(sourceRoot, 'scripts', 'capture.mjs'), 'export {}\n')
+    runGit(sourceRoot, ['init'])
+    runGit(sourceRoot, ['config', 'user.email', 'docs@example.test'])
+    runGit(sourceRoot, ['config', 'user.name', 'Docs Test'])
+    runGit(sourceRoot, ['add', '.'])
+    runGit(sourceRoot, ['commit', '-m', 'capture'])
+    const sourceCommit = runGit(sourceRoot, ['rev-parse', 'HEAD'])
+    const sourceCommitTimestamp = runGit(sourceRoot, ['show', '-s', '--format=%aI', 'HEAD'])
+    fs.writeFileSync(path.join(sourceRoot, 'later.txt'), 'later\n')
+    runGit(sourceRoot, ['add', 'later.txt'])
+    runGit(sourceRoot, ['commit', '-m', 'later'])
+    runGit(temporaryDirectory, ['clone', '--depth', '1', pathToFileURL(sourceRoot).href, shallowRoot])
+    assert.equal(runGit(shallowRoot, ['rev-parse', '--is-shallow-repository']), 'true')
+
+    const manifest = {
+      schemaVersion: 1,
+      captures: {
+        capture: {
+          asset: 'capture.png',
+          width: 100,
+          height: 100,
+          viewportWidth: 100,
+          viewportHeight: 100,
+          captureScript: 'scripts/capture.mjs',
+          state: 'A genuine bounded fixture state for shallow provenance validation.',
+          sha256: createHash('sha256').update(asset).digest('hex'),
+          sourceCommit,
+          sourceCommitTimestamp,
+          liveLocatorRevalidated: false,
+          limitation:
+            'The live controls have not been revalidated in this shallow fixture; only the current asset digest is available.',
+          unsupportedStates: ['account-recovery'],
+        },
+      },
+      features: {
+        navigation: {
+          capture: 'capture',
+          variant: 'card',
+          viewBox: '0 0 100 100',
+          width: 100,
+          height: 100,
+          alt: 'A visible navigation control in the fixture capture',
+          title: 'Visible navigation',
+          caption: 'This bounded fixture proves only the visible navigation control.',
+          evidenceClaims: ['navigation'],
+          targets: [{ x: 50, y: 50, text: 'Visible navigation control', locator: { kind: 'css', value: '#nav' } }],
+        },
+      },
+    }
+
+    assert.deepEqual(validateFeatureScreenshotManifest(manifest, { root: shallowRoot }), [])
+    manifest.captures.capture.sha256 = '0'.repeat(64)
+    assert.match(
+      validateFeatureScreenshotManifest(manifest, { root: shallowRoot }).join('\n'),
+      /capture\.png SHA-256 is .* expected 000000000000/,
+    )
+  } finally {
+    fs.rmSync(temporaryDirectory, { recursive: true, force: true })
   }
 })
 
@@ -89,6 +186,20 @@ test('manifest validation rejects a missing asset, wrong capture, clipped marker
   assert.match(errors, /references unknown capture "not-a-capture"/)
   assert.match(errors, /marker at 221,29 is clipped/)
   assert.match(errors, /text locator must set exact to true/)
+})
+
+test('manifest validation rejects false provenance and explicitly unsupported evidence claims', () => {
+  const manifest = clone(loadFeatureScreenshotManifest(repositoryRoot))
+  manifest.captures['workspace-overview'].sha256 = '0'.repeat(64)
+  manifest.captures['workspace-overview'].sourceCommitTimestamp = '2026-07-16T00:00:00Z'
+  manifest.captures['workspace-overview'].liveLocatorRevalidated = 'yes'
+  manifest.features['workspace-navigation'].evidenceClaims.push('account-recovery')
+  const errors = validateFeatureScreenshotManifest(manifest, { root: repositoryRoot }).join('\n')
+
+  assert.match(errors, /SHA-256 is .* expected 000000000000/)
+  assert.match(errors, /sourceCommitTimestamp must match sourceCommit author time/)
+  assert.match(errors, /liveLocatorRevalidated must explicitly record true or false/)
+  assert.match(errors, /evidence claim "account-recovery" is explicitly unsupported/)
 })
 
 test('separate capture ids cannot silently reuse one image asset', () => {
