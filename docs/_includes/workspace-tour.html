@@ -7,136 +7,14 @@
     <a href="{{ '/assets/readme-screenshot.png' | relative_url }}">Open the original 1440 × 900 capture</a>
   </div>
 
-  {% include feature-screenshot.html
-    id="workspace-overview"
-    variant="overview"
-    view_box="0 0 1440 900"
-    width="1440"
-    height="900"
-    alt="Wide Standard Red Notes workspace with navigation, notes list, and an open Super note"
-    title="Three visible panels"
-    caption="The numbered targets identify controls in the source capture, not features inferred from hidden menus."
-    marker_one_x="106"
-    marker_one_y="69"
-    marker_one_text="Search topics from the navigation sidebar."
-    marker_two_x="412"
-    marker_two_y="73"
-    marker_two_text="Search the visible Notes collection."
-    marker_three_x="790"
-    marker_three_y="181"
-    marker_three_text="Choose among the visible Home, Insert, Layout, AI, and Tools ribbon tabs."
-  %}
+  {% include feature-screenshot.html id="workspace-overview" %}
 
   <div class="feature-screenshot-grid">
-    {% include feature-screenshot.html
-      id="workspace-navigation"
-      view_box="0 0 220 455"
-      width="220"
-      height="455"
-      alt="Upper navigation sidebar with topic search and workspace shortcuts"
-      title="Workspace navigation"
-      caption="The upper sidebar keeps topic search and named workspace destinations together."
-      marker_one_x="106"
-      marker_one_y="69"
-      marker_one_text="Use the visible Search topics field."
-      marker_two_x="88"
-      marker_two_y="214"
-      marker_two_text="Open the visible Reminders, Calendar, Todos, Research, Bookmarks, Templates, or Files entries."
-    %}
-
-    {% include feature-screenshot.html
-      id="workspace-collections"
-      view_box="0 430 220 440"
-      width="220"
-      height="440"
-      alt="Lower navigation sidebar with views, folders, and topics"
-      title="Views and collections"
-      caption="Smart views and collection builders stay in the same sidebar."
-      marker_one_x="74"
-      marker_one_y="531"
-      marker_one_text="The Views section lists Notes, Files, Starred, Archived, Trash, and Untagged."
-      marker_two_x="192"
-      marker_two_y="687"
-      marker_two_text="Create a folder from the section-level plus button."
-      marker_three_x="192"
-      marker_three_y="769"
-      marker_three_text="Use the Topics section plus button; the empty-state copy identifies these as tags."
-    %}
-
-    {% include feature-screenshot.html
-      id="workspace-note-tools"
-      view_box="220 0 400 190"
-      width="400"
-      height="190"
-      alt="Notes-list header with sort, create, collapse, search, and quick-action controls"
-      title="Find or create a note"
-      caption="The list header keeps its highest-frequency actions together."
-      marker_one_x="551"
-      marker_one_y="29"
-      marker_one_text="Create a note from the red plus button."
-      marker_two_x="412"
-      marker_two_y="73"
-      marker_two_text="Search the current note collection."
-      marker_three_x="320"
-      marker_three_y="126"
-      marker_three_text="Use Add a quick action from the visible row."
-    %}
-
-    {% include feature-screenshot.html
-      id="workspace-note-results"
-      view_box="220 138 400 300"
-      width="400"
-      height="300"
-      alt="Notes list with a selected note, titles, summaries, and modification timestamps"
-      title="Scan note results"
-      caption="Each visible row exposes enough context to choose before opening."
-      marker_one_x="244"
-      marker_one_y="167"
-      marker_one_text="The highlighted first row is the note open in the editor."
-      marker_two_x="500"
-      marker_two_y="185"
-      marker_two_text="Preview text distinguishes similarly named notes."
-      marker_three_x="390"
-      marker_three_y="204"
-      marker_three_text="The visible timestamp provides recency context."
-    %}
-
-    {% include feature-screenshot.html
-      id="workspace-note-actions"
-      view_box="620 0 820 165"
-      width="820"
-      height="165"
-      alt="Editor header with note tab, linked-items entry point, and note action buttons"
-      title="Link and act on the current note"
-      caption="The header targets are visible even while the editor toolbar changes."
-      marker_one_x="663"
-      marker_one_y="124"
-      marker_one_text="Use LINKS; its visible helper text names topics, notes, and files."
-      marker_two_x="1278"
-      marker_two_y="93"
-      marker_two_text="Use the visible link button."
-      marker_three_x="1409"
-      marker_three_y="93"
-      marker_three_text="Open the note overflow menu."
-    %}
-
-    {% include feature-screenshot.html
-      id="workspace-super-toolbar"
-      view_box="620 150 820 235"
-      width="820"
-      height="235"
-      alt="Super editor ribbon with insert, layout, AI, tools, block, font, and list controls"
-      title="Use the active Super editor"
-      caption="This crop documents the Super editor shown here; it does not imply that other editors share this toolbar."
-      marker_one_x="660"
-      marker_one_y="181"
-      marker_one_text="Choose among the visible Home, Insert, Layout, AI, and Tools ribbon tabs."
-      marker_two_x="1125"
-      marker_two_y="257"
-      marker_two_text="Choose block style, font, size, emphasis, script, and color."
-      marker_three_x="1382"
-      marker_three_y="258"
-      marker_three_text="Apply list, alignment, comment, and code-oriented actions."
-    %}
+    {% include feature-screenshot.html id="workspace-navigation" %}
+    {% include feature-screenshot.html id="workspace-collections" %}
+    {% include feature-screenshot.html id="workspace-note-tools" %}
+    {% include feature-screenshot.html id="workspace-note-results" %}
+    {% include feature-screenshot.html id="workspace-note-actions" %}
+    {% include feature-screenshot.html id="workspace-super-toolbar" %}
   </div>
 </section>

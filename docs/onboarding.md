@@ -120,25 +120,7 @@ once and never sent to the server.
   options at the top of the list to change sort order (by date modified,
   created, or title) and what's displayed.
 
-{% include feature-screenshot.html
-  id="onboarding-note-list"
-  variant="inline"
-  view_box="220 0 400 300"
-  width="400"
-  height="300"
-  alt="Wide-screen notes list with create, search, quick-action, and note-row controls"
-  title="Create, search, and choose a note"
-  caption="This is a crop of the real wide-screen demo capture; the controls reflow on narrow screens."
-  marker_one_x="551"
-  marker_one_y="29"
-  marker_one_text="Create a note from the red plus button."
-  marker_two_x="412"
-  marker_two_y="73"
-  marker_two_text="Search the current Notes collection."
-  marker_three_x="244"
-  marker_three_y="167"
-  marker_three_text="The highlighted first row is open in the editor."
-%}
+{% include feature-screenshot.html id="onboarding-note-list" %}
 
 ### Finding things
 

@@ -24,7 +24,11 @@ down to its verification gates.
 
 Use the full-text search in the sidebar from any page. Press <kbd>Ctrl</kbd> +
 <kbd>K</kbd> (or <kbd>⌘</kbd> + <kbd>K</kbd> on macOS), or press <kbd>/</kbd>
-when you are not typing, to search page titles, headings, and body text.
+when you are not typing, to search page titles, headings, and body text. Every
+result shows its page, section path, and a contextual text snippet with matching
+terms highlighted. Use <kbd>↑</kbd>/<kbd>↓</kbd>, <kbd>Home</kbd>, and
+<kbd>End</kbd> to move without leaving the keyboard, then press
+<kbd>Enter</kbd> to open the selected section.
 
 {% include workspace-tour.html %}
 

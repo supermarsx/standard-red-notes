@@ -9,6 +9,8 @@ Standard Red Notes combines client-side encryption with server-side identity,
 authorization, abuse prevention, and availability controls. These layers solve
 different problems.
 
+{% include mermaid.html %}
+
 {% include safety-alert.html
   level="danger"
   title="The account password is not recoverable by an administrator"
@@ -71,6 +73,21 @@ current bridge does not enforce selected-tag scope.
 There is no conventional administrator-readable password reset that can simply
 decrypt an account. Standard Red Notes instead ships an optional,
 off-by-default recovery flow whose cryptographic work remains in the client.
+
+```mermaid
+flowchart TD
+  A[Signed-in user enables recovery] --> B[Client creates a separate secret]
+  B --> C[Client encrypts a bounded root-key record]
+  C --> D[Server stores ciphertext escrow only]
+  C --> E[User stores the one-time recovery code separately]
+  E --> F{Password later lost?}
+  F -->|No| G[Replace after exposure or re-enable after a password change]
+  F -->|Yes| H[Signed-out client fetches escrow by opaque locator]
+  H --> I[Client decrypts the root key locally]
+  I --> J[Client rotates password, sessions, and escrow]
+  J --> K[Old code is invalid; save the replacement code]
+  H -->|Escrow unavailable or code invalid| L[Stop and use an independent backup]
+```
 
 ### What must happen before password loss
 

@@ -134,25 +134,7 @@ Related: [editors/note-types](#editors-note-types), [editors/super](#editors-sup
 
 How the navigation, notes list, and editor panels fit together.
 
-{% include feature-screenshot.html
-  id="app-guide-interface"
-  variant="inline"
-  view_box="0 0 1440 440"
-  width="1440"
-  height="440"
-  alt="Upper wide-screen workspace with navigation, notes list, and the active Super editor"
-  title="The three-panel interface in context"
-  caption="This source capture shows the wide-screen arrangement described above; narrow screens reflow these panels."
-  marker_one_x="106"
-  marker_one_y="69"
-  marker_one_text="Search topics from the navigation sidebar."
-  marker_two_x="412"
-  marker_two_y="73"
-  marker_two_text="Search notes from the middle panel."
-  marker_three_x="660"
-  marker_three_y="181"
-  marker_three_text="Use the visible ribbon in the open Super note."
-%}
+{% include feature-screenshot.html id="app-guide-interface" %}
 
 The app has three main panels, left to right:
 

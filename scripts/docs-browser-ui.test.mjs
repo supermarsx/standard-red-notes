@@ -12,6 +12,10 @@ const docsSearchSource = await readFile(
   new URL("../docs/assets/docs-search.js", import.meta.url),
   "utf8",
 );
+const docsSearchMarkup = await readFile(
+  new URL("../docs/_includes/search.html", import.meta.url),
+  "utf8",
+);
 
 function createDom(html, url) {
   return new JSDOM(html, {
@@ -24,6 +28,15 @@ function createDom(html, url) {
 function flush(window) {
   return new Promise((resolve) => window.setTimeout(resolve, 0));
 }
+
+test("docs search markup names the dialog, status, results, and keyboard shortcuts", () => {
+  assert.match(docsSearchMarkup, /aria-labelledby="docs-search-title"/);
+  assert.match(docsSearchMarkup, /aria-describedby="docs-search-status"/);
+  assert.match(docsSearchMarkup, /aria-live="polite" aria-atomic="true"/);
+  assert.match(docsSearchMarkup, /aria-label="Documentation search results"/);
+  assert.match(docsSearchMarkup, /aria-keyshortcuts="Control\+K Meta\+K \/"/);
+  assert.doesNotMatch(docsSearchMarkup, /aria-autocomplete=/);
+});
 
 test("docs UI builds an active H2-H4 table of contents and operates navigation and copy controls", async () => {
   const dom = createDom(
@@ -214,13 +227,13 @@ test("docs search loads locally, supports keyboard opening, highlights results, 
           documents: [
             {
               section: "Write gate",
-              text: "Set STANDARD_RED_NOTES_ALLOW_WRITES only after reviewing the safety boundary.",
+              text: "Set STANDARD_RED_NOTES_ALLOW_WRITES only after reviewing the Café safety boundary.",
               title: "Security and account",
               url: "security-and-account.html#write-gate",
             },
             {
               section: "Read-only mode",
-              text: "Automation starts read only.",
+              text: "Automation safety starts in read-only mode.",
               title: "MCP bridge",
               url: "mcp-bridge.html#read-only-mode",
             },
@@ -262,12 +275,43 @@ test("docs search loads locally, supports keyboard opening, highlights results, 
       "https://docs.example/red-notes/security-and-account.html#write-gate",
     );
     assert.ok(resultLink.querySelectorAll("mark").length >= 1);
-    assert.equal(resultLink.getAttribute("aria-current"), "true");
+    assert.equal(resultLink.classList.contains("is-active"), true);
+    assert.equal(resultLink.hasAttribute("aria-current"), false);
+    assert.equal(resultLink.tabIndex, 0);
 
+    input.value = "safety";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    assert.equal(results.children.length, 2);
+    const safetyLinks = [...results.querySelectorAll("a")];
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", { bubbles: true, key: "ArrowUp" }),
+    );
+    assert.ok(document.activeElement.isSameNode(safetyLinks.at(-1)));
+    assert.equal(safetyLinks.at(-1).tabIndex, 0);
+    assert.equal(safetyLinks[0].tabIndex, -1);
+
+    safetyLinks.at(-1).dispatchEvent(
+      new KeyboardEvent("keydown", { bubbles: true, key: "Home" }),
+    );
+    assert.ok(document.activeElement.isSameNode(safetyLinks[0]));
+    safetyLinks[0].dispatchEvent(
+      new KeyboardEvent("keydown", { bubbles: true, key: "End" }),
+    );
+    assert.ok(document.activeElement.isSameNode(safetyLinks.at(-1)));
+
+    input.focus();
+    input.value = "cafe";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    assert.equal(results.children.length, 1);
+    assert.equal(results.querySelector("mark").textContent, "Café");
+    assert.match(results.querySelector(".docs-search-result-snippet").textContent, /Café safety/);
+
+    input.value = "standard_red_notes_allow_writes";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
     input.dispatchEvent(
       new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown" }),
     );
-    assert.equal(document.activeElement, resultLink);
+    assert.ok(document.activeElement.isSameNode(results.querySelector("a")));
 
     const cancel = new Event("cancel", { cancelable: true });
     dialog.dispatchEvent(cancel);

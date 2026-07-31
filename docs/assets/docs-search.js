@@ -3,13 +3,50 @@
 
   const resultLimit = 12
 
-  const normalize = (value) =>
-    String(value)
-      .normalize('NFKD')
-      .replace(/\p{Mark}/gu, '')
-      .toLocaleLowerCase()
-      .replace(/[^\p{Letter}\p{Number}]+/gu, ' ')
-      .trim()
+  const foldForMatching = (value) => {
+    const source = String(value)
+    const starts = []
+    const ends = []
+    let text = ''
+    let offset = 0
+    let separatorStart = -1
+    let separatorEnd = -1
+
+    for (const character of source) {
+      const start = offset
+      const end = start + character.length
+      offset = end
+      const folded = character.normalize('NFKD').replace(/\p{Mark}/gu, '').toLocaleLowerCase()
+
+      if (!folded && /^\p{Mark}$/u.test(character) && ends.length > 0) {
+        ends[ends.length - 1] = end
+      }
+
+      for (const foldedCharacter of folded) {
+        if (/^[\p{Letter}\p{Number}]$/u.test(foldedCharacter)) {
+          if (separatorStart !== -1 && text.length > 0) {
+            text += ' '
+            starts.push(separatorStart)
+            ends.push(separatorEnd)
+          }
+          separatorStart = -1
+          separatorEnd = -1
+          text += foldedCharacter
+          starts.push(start)
+          ends.push(end)
+        } else {
+          if (separatorStart === -1) {
+            separatorStart = start
+          }
+          separatorEnd = end
+        }
+      }
+    }
+
+    return { text, starts, ends }
+  }
+
+  const normalize = (value) => foldForMatching(value).text
 
   const queryTerms = (query) => [...new Set(normalize(query).split(/\s+/).filter(Boolean))]
 
@@ -89,18 +126,16 @@
   const snippetFor = (text, query) => {
     const source = String(text || '')
     const terms = queryTerms(query)
-    const lowered = source.toLocaleLowerCase()
-    const phrase = String(query).trim().toLocaleLowerCase()
-    let matchPosition = phrase ? lowered.indexOf(phrase) : -1
-    if (matchPosition === -1) {
-      matchPosition = terms.reduce((earliest, term) => {
-        const position = lowered.indexOf(term)
+    const foldedSource = foldForMatching(source)
+    const phrase = normalize(query)
+    let foldedMatchPosition = phrase ? foldedSource.text.indexOf(phrase) : -1
+    if (foldedMatchPosition === -1) {
+      foldedMatchPosition = terms.reduce((earliest, term) => {
+        const position = foldedSource.text.indexOf(term)
         return position !== -1 && (earliest === -1 || position < earliest) ? position : earliest
       }, -1)
     }
-    if (matchPosition === -1) {
-      matchPosition = 0
-    }
+    const matchPosition = foldedMatchPosition === -1 ? 0 : foldedSource.starts[foldedMatchPosition]
 
     const maximumLength = 190
     let start = Math.max(0, matchPosition - 68)
@@ -116,12 +151,43 @@
     return `${start > 0 ? '…' : ''}${source.slice(start, end).trim()}${end < source.length ? '…' : ''}`
   }
 
+  const matchingRanges = (text, terms) => {
+    const source = String(text)
+    const foldedSource = foldForMatching(source)
+    const ranges = []
+
+    for (const term of [...new Set(terms)].filter(Boolean).sort((left, right) => right.length - left.length)) {
+      let position = 0
+      while ((position = foldedSource.text.indexOf(term, position)) !== -1) {
+        const endPosition = position + term.length - 1
+        ranges.push({
+          start: foldedSource.starts[position],
+          end: foldedSource.ends[endPosition],
+        })
+        position += term.length
+      }
+    }
+
+    return ranges
+      .sort((left, right) => left.start - right.start || right.end - left.end)
+      .reduce((merged, range) => {
+        const previous = merged.at(-1)
+        if (previous && range.start <= previous.end) {
+          previous.end = Math.max(previous.end, range.end)
+        } else {
+          merged.push({ ...range })
+        }
+        return merged
+      }, [])
+  }
+
   if (globalThis.__SRN_DOCS_SEARCH_TEST__) {
     Object.assign(globalThis.__SRN_DOCS_SEARCH_TEST__, {
       normalize,
       queryTerms,
       rankDocuments,
       snippetFor,
+      matchingRanges,
     })
   }
 
@@ -152,21 +218,19 @@
   let activeResult = -1
 
   const appendHighlightedText = (element, text, terms) => {
-    const uniqueTerms = [...new Set(terms)].sort((left, right) => right.length - left.length)
-    if (uniqueTerms.length === 0) {
+    const ranges = matchingRanges(text, terms)
+    if (ranges.length === 0) {
       element.textContent = text
       return
     }
 
-    const escaped = uniqueTerms.map((term) => term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-    const matcher = new RegExp(`(${escaped.join('|')})`, 'giu')
     let position = 0
-    for (const match of String(text).matchAll(matcher)) {
-      element.append(document.createTextNode(String(text).slice(position, match.index)))
+    for (const range of ranges) {
+      element.append(document.createTextNode(String(text).slice(position, range.start)))
       const highlight = document.createElement('mark')
-      highlight.textContent = match[0]
+      highlight.textContent = String(text).slice(range.start, range.end)
       element.append(highlight)
-      position = match.index + match[0].length
+      position = range.end
     }
     element.append(document.createTextNode(String(text).slice(position)))
   }
@@ -180,7 +244,7 @@
     activeResult = (index + links.length) % links.length
     links.forEach((link, linkIndex) => {
       link.classList.toggle('is-active', linkIndex === activeResult)
-      link.setAttribute('aria-current', linkIndex === activeResult ? 'true' : 'false')
+      link.tabIndex = linkIndex === activeResult ? 0 : -1
     })
     if (focus) {
       links[activeResult].focus()
@@ -307,9 +371,9 @@
     }
   })
   input.addEventListener('keydown', (event) => {
-    if (event.key === 'ArrowDown' && resultsList.childElementCount > 0) {
+    if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && resultsList.childElementCount > 0) {
       event.preventDefault()
-      setActiveResult(0, true)
+      setActiveResult(event.key === 'ArrowDown' ? 0 : -1, true)
     } else if (event.key === 'Enter') {
       const firstResult = resultsList.querySelector('a')
       if (firstResult) {
@@ -322,6 +386,9 @@
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault()
       setActiveResult(activeResult + (event.key === 'ArrowDown' ? 1 : -1), true)
+    } else if (event.key === 'Home' || event.key === 'End') {
+      event.preventDefault()
+      setActiveResult(event.key === 'Home' ? 0 : -1, true)
     }
   })
   document.addEventListener('keydown', (event) => {

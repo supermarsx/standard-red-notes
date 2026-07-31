@@ -1,0 +1,319 @@
+{
+  "schemaVersion": 1,
+  "captures": {
+    "workspace-overview": {
+      "asset": "readme-screenshot.png",
+      "width": 1440,
+      "height": 900,
+      "viewportWidth": 1440,
+      "viewportHeight": 900,
+      "captureScript": "scripts/capture-readme-screenshot.mjs",
+      "state": "Signed-out local workspace with seeded notes and the Super editor open in dark mode."
+    }
+  },
+  "features": {
+    "workspace-overview": {
+      "capture": "workspace-overview",
+      "variant": "overview",
+      "viewBox": "0 0 1440 900",
+      "width": 1440,
+      "height": 900,
+      "alt": "Wide Standard Red Notes workspace with navigation, notes search, and an open Super note",
+      "title": "Three visible panels",
+      "caption": "The numbered targets identify controls verified in the source capture, not features inferred from hidden menus.",
+      "targets": [
+        {
+          "x": 106,
+          "y": 69,
+          "text": "Search topics from the navigation sidebar.",
+          "locator": { "kind": "css", "value": "input[placeholder='Search topics...']" }
+        },
+        {
+          "x": 412,
+          "y": 73,
+          "text": "Search the visible Notes collection.",
+          "locator": { "kind": "css", "value": "input[placeholder='Search...']" }
+        },
+        {
+          "x": 660,
+          "y": 181,
+          "text": "Open the visible Home ribbon tab in the Super editor.",
+          "locator": { "kind": "role", "value": "tab", "name": "Home", "exact": true }
+        }
+      ]
+    },
+    "workspace-navigation": {
+      "capture": "workspace-overview",
+      "variant": "card",
+      "viewBox": "0 0 220 455",
+      "width": 220,
+      "height": 455,
+      "alt": "Upper navigation sidebar with topic search and named workspace shortcuts",
+      "title": "Workspace navigation",
+      "caption": "The upper sidebar keeps topic search and named workspace destinations together.",
+      "targets": [
+        {
+          "x": 106,
+          "y": 69,
+          "text": "Use the visible Search topics field.",
+          "locator": { "kind": "css", "value": "input[placeholder='Search topics...']" }
+        },
+        {
+          "x": 88,
+          "y": 214,
+          "text": "Open the visible Reminders workspace shortcut.",
+          "locator": { "kind": "text", "value": "Reminders", "exact": true }
+        }
+      ]
+    },
+    "workspace-collections": {
+      "capture": "workspace-overview",
+      "variant": "card",
+      "viewBox": "0 430 220 440",
+      "width": 220,
+      "height": 440,
+      "alt": "Lower navigation sidebar with the Views, Folders, and Topics collection sections",
+      "title": "Views and collections",
+      "caption": "The lower sidebar groups smart views, nested folders, and topics in separate visible sections.",
+      "targets": [
+        {
+          "x": 74,
+          "y": 531,
+          "text": "The Views section contains built-in smart collections.",
+          "locator": { "kind": "text", "value": "Views", "exact": true }
+        },
+        {
+          "x": 74,
+          "y": 687,
+          "text": "The Folders section groups nested collections.",
+          "locator": { "kind": "text", "value": "Folders", "exact": true }
+        },
+        {
+          "x": 74,
+          "y": 769,
+          "text": "The Topics section exposes tag-based organization.",
+          "locator": { "kind": "text", "value": "Topics", "exact": true }
+        }
+      ]
+    },
+    "workspace-note-tools": {
+      "capture": "workspace-overview",
+      "variant": "card",
+      "viewBox": "220 0 400 190",
+      "width": 400,
+      "height": 190,
+      "alt": "Notes-list header with create, search, and quick-action controls",
+      "title": "Find or create a note",
+      "caption": "The list header keeps its highest-frequency actions together.",
+      "targets": [
+        {
+          "x": 551,
+          "y": 29,
+          "text": "Create a note from the red plus button.",
+          "locator": { "kind": "css", "value": "button[aria-label^='Create note']" }
+        },
+        {
+          "x": 412,
+          "y": 73,
+          "text": "Search the current note collection.",
+          "locator": { "kind": "css", "value": "input[placeholder='Search...']" }
+        },
+        {
+          "x": 320,
+          "y": 126,
+          "text": "Use the visible Add a quick action control.",
+          "locator": { "kind": "text", "value": "Add a quick action", "exact": true }
+        }
+      ]
+    },
+    "workspace-note-results": {
+      "capture": "workspace-overview",
+      "variant": "card",
+      "viewBox": "220 138 400 300",
+      "width": 400,
+      "height": 300,
+      "alt": "Notes list with a selected Super note, note previews, and other seeded note titles",
+      "title": "Scan note results",
+      "caption": "The seeded list exposes titles and preview context before a note is opened.",
+      "targets": [
+        {
+          "x": 244,
+          "y": 167,
+          "text": "The highlighted Super note demo row is open in the editor.",
+          "locator": {
+            "kind": "text",
+            "value": "Super note demo",
+            "exact": true,
+            "within": ".content-list-item"
+          }
+        },
+        {
+          "x": 500,
+          "y": 185,
+          "text": "The selected row shows its seeded Self-hosted launch plan preview.",
+          "locator": {
+            "kind": "text",
+            "value": "Self-hosted launch plan",
+            "exact": true,
+            "within": ".content-list-item"
+          }
+        }
+      ]
+    },
+    "workspace-note-actions": {
+      "capture": "workspace-overview",
+      "variant": "card",
+      "viewBox": "620 0 820 165",
+      "width": 820,
+      "height": 165,
+      "alt": "Editor header with the Links area, linked-items button, and note-options menu",
+      "title": "Link and act on the current note",
+      "caption": "The header keeps relationship and per-note actions visible while editor tools change below it.",
+      "targets": [
+        {
+          "x": 663,
+          "y": 124,
+          "text": "Use the visible LINKS relationship area.",
+          "locator": { "kind": "text", "value": "LINKS", "exact": true }
+        },
+        {
+          "x": 1278,
+          "y": 93,
+          "text": "Open the Linked items panel button.",
+          "locator": { "kind": "role", "value": "button", "name": "Linked items panel", "exact": true }
+        },
+        {
+          "x": 1409,
+          "y": 93,
+          "text": "Open the Note options menu button.",
+          "locator": { "kind": "role", "value": "button", "name": "Note options menu", "exact": true }
+        }
+      ]
+    },
+    "workspace-super-toolbar": {
+      "capture": "workspace-overview",
+      "variant": "card",
+      "viewBox": "620 150 820 235",
+      "width": 820,
+      "height": 235,
+      "alt": "Super editor ribbon with the Home, AI, and Tools tabs visible",
+      "title": "Use the active Super editor",
+      "caption": "This crop documents the Super editor shown here; it does not imply that other editors share this ribbon.",
+      "targets": [
+        {
+          "x": 660,
+          "y": 181,
+          "text": "Open the Home formatting ribbon.",
+          "locator": { "kind": "role", "value": "tab", "name": "Home", "exact": true }
+        },
+        {
+          "x": 800,
+          "y": 181,
+          "text": "Open the AI ribbon for assistant actions.",
+          "locator": { "kind": "role", "value": "tab", "name": "AI", "exact": true }
+        },
+        {
+          "x": 860,
+          "y": 181,
+          "text": "Open the Tools ribbon for editor utilities.",
+          "locator": { "kind": "role", "value": "tab", "name": "Tools", "exact": true }
+        }
+      ]
+    },
+    "client-wide-workspace": {
+      "capture": "workspace-overview",
+      "variant": "inline",
+      "viewBox": "0 0 1440 440",
+      "width": 1440,
+      "height": 440,
+      "alt": "Upper wide-screen workspace with navigation, notes search, and the active Super editor",
+      "title": "Shared wide-screen application surface",
+      "caption": "The real capture documents the wide web and desktop layout only; it does not depict mobile, native backup, biometric, or browser-clipper controls.",
+      "targets": [
+        {
+          "x": 106,
+          "y": 69,
+          "text": "The navigation sidebar exposes its own topic search.",
+          "locator": { "kind": "css", "value": "input[placeholder='Search topics...']" }
+        },
+        {
+          "x": 412,
+          "y": 73,
+          "text": "The notes list has a separate collection search.",
+          "locator": { "kind": "css", "value": "input[placeholder='Search...']" }
+        },
+        {
+          "x": 660,
+          "y": 181,
+          "text": "The open Super note shows its Home ribbon tab.",
+          "locator": { "kind": "role", "value": "tab", "name": "Home", "exact": true }
+        }
+      ]
+    },
+    "onboarding-note-list": {
+      "capture": "workspace-overview",
+      "variant": "inline",
+      "viewBox": "220 0 400 300",
+      "width": 400,
+      "height": 300,
+      "alt": "Wide-screen notes list with create, search, quick-action, and selected-note controls",
+      "title": "Create, search, and choose a note",
+      "caption": "This is a crop of the real wide-screen workspace capture; the controls reflow on narrow screens.",
+      "targets": [
+        {
+          "x": 551,
+          "y": 29,
+          "text": "Create a note from the red plus button.",
+          "locator": { "kind": "css", "value": "button[aria-label^='Create note']" }
+        },
+        {
+          "x": 412,
+          "y": 73,
+          "text": "Search the current Notes collection.",
+          "locator": { "kind": "css", "value": "input[placeholder='Search...']" }
+        },
+        {
+          "x": 244,
+          "y": 167,
+          "text": "The highlighted Super note demo row is open in the editor.",
+          "locator": {
+            "kind": "text",
+            "value": "Super note demo",
+            "exact": true,
+            "within": ".content-list-item"
+          }
+        }
+      ]
+    },
+    "app-guide-interface": {
+      "capture": "workspace-overview",
+      "variant": "inline",
+      "viewBox": "0 0 1440 440",
+      "width": 1440,
+      "height": 440,
+      "alt": "Upper wide-screen workspace with navigation, notes search, and the active Super editor",
+      "title": "The three-panel interface in context",
+      "caption": "This source capture shows the wide-screen arrangement described above; narrow screens reflow these panels.",
+      "targets": [
+        {
+          "x": 106,
+          "y": 69,
+          "text": "Search topics from the navigation sidebar.",
+          "locator": { "kind": "css", "value": "input[placeholder='Search topics...']" }
+        },
+        {
+          "x": 412,
+          "y": 73,
+          "text": "Search notes from the middle panel.",
+          "locator": { "kind": "css", "value": "input[placeholder='Search...']" }
+        },
+        {
+          "x": 660,
+          "y": 181,
+          "text": "Use the visible Home ribbon in the open Super note.",
+          "locator": { "kind": "role", "value": "tab", "name": "Home", "exact": true }
+        }
+      ]
+    }
+  }
+}

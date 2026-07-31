@@ -217,6 +217,25 @@ test('client snippets center the earliest match and mark clipped edges', () => {
   assert.ok(snippet.length <= 192)
 })
 
+test('client snippets and highlights preserve accented source text for unaccented queries', () => {
+  const { matchingRanges, snippetFor } = loadClientSearchApi()
+  const text = `${'prefix '.repeat(30)}Café recovery keeps résumé details.${' suffix'.repeat(30)}`
+  const snippet = snippetFor(text, 'cafe recovery')
+  const ranges = matchingRanges('Café recovery', ['cafe', 'recovery'])
+  const decomposed = `Cafe\u0301 recovery`
+  const decomposedRanges = matchingRanges(decomposed, ['', 'cafe'])
+
+  assert.match(snippet, /Café recovery/)
+  assert.deepEqual(
+    Array.from(ranges, ({ start, end }) => 'Café recovery'.slice(start, end)),
+    ['Café', 'recovery'],
+  )
+  assert.deepEqual(
+    Array.from(decomposedRanges, ({ start, end }) => decomposed.slice(start, end)),
+    [`Cafe\u0301`],
+  )
+})
+
 test('the committed search index exactly matches every current docs markdown page', () => {
   const docsDirectory = path.join(repositoryRoot, 'docs')
   const committed = fs.readFileSync(path.join(docsDirectory, 'assets', 'search-index.json'), 'utf8')

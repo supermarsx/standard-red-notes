@@ -197,11 +197,18 @@ $env:APP_URL = "http://localhost:3001"
 npm --prefix e2e run screenshot:readme
 ```
 
-The script opens the live app with Playwright, seeds local demo notes through the
-real in-page application surface, verifies the controls documented by the site
-are visible, and writes a deterministic 1440 × 900
-`docs/assets/readme-screenshot.png`. It fails instead of replacing the source
-capture with a login screen or incomplete app shell.
+The capture entry point opens the live app, seeds local demo notes through the
+real in-page application surface, and writes a deterministic 1440 × 900
+`docs/assets/readme-screenshot.png`. Before replacing the file, it resolves
+every target in `docs/_data/feature_screenshots.json`, requires that exact
+control to be visible, and checks that the numbered marker points near the
+control's live bounds. It fails instead of publishing a login screen,
+incomplete shell, stale selector, or decorative marker with no matching UI.
+
+Every additional feature state gets its own capture entry and unique PNG in the
+manifest. Multiple annotated crops may intentionally share one capture only
+when all controls are simultaneously visible in that exact state; separate
+capture entries are forbidden from silently reusing the same asset.
 
 Validate the committed image and every documentation crop without launching a
 browser:
@@ -210,10 +217,11 @@ browser:
 yarn docs:screenshots
 ```
 
-That gate checks the PNG dimensions, source asset reference, SVG image
-dimensions, accessible text, crop bounds, marker coordinates and descriptions,
-unique IDs, and contextual coverage in onboarding, client-platform, and in-app
-guidance.
+That gate checks the versioned manifest, unique capture assets, reproducible
+capture entry points, PNG and viewport dimensions, source references, SVG
+dimensions, accessible text, crop bounds, exact CSS/text/role locators, marker
+coordinates and descriptions, unique feature IDs, and contextual coverage in
+onboarding, client-platform, and in-app guidance.
 
 ## Deeper End-to-End Gates
 

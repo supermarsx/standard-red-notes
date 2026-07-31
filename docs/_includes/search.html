@@ -20,7 +20,13 @@
     <kbd data-search-shortcut>Ctrl K</kbd>
   </button>
 
-  <dialog id="docs-search-dialog" class="docs-search-dialog" data-search-dialog aria-labelledby="docs-search-title">
+  <dialog
+    id="docs-search-dialog"
+    class="docs-search-dialog"
+    data-search-dialog
+    aria-labelledby="docs-search-title"
+    aria-describedby="docs-search-status"
+  >
     <div class="docs-search-panel">
       <div class="docs-search-header">
         <span class="docs-search-icon" aria-hidden="true">⌕</span>
@@ -36,24 +42,25 @@
           data-search-input
           aria-describedby="docs-search-status"
           aria-controls="docs-search-results"
-          aria-autocomplete="list"
         />
         <button class="docs-search-close" type="button" data-search-close aria-label="Close documentation search">
           Esc
         </button>
       </div>
 
-      <p class="docs-search-status" id="docs-search-status" data-search-status aria-live="polite">
+      <p class="docs-search-status" id="docs-search-status" data-search-status aria-live="polite" aria-atomic="true">
         Type a word or phrase to search all documentation.
       </p>
       <ol
         id="docs-search-results"
         class="docs-search-results"
         data-search-results
+        aria-label="Documentation search results"
       ></ol>
 
       <footer class="docs-search-footer" aria-hidden="true">
         <span><kbd>↑</kbd><kbd>↓</kbd> move</span>
+        <span><kbd>Home</kbd><kbd>End</kbd> jump</span>
         <span><kbd>Enter</kbd> open</span>
         <span><kbd>Esc</kbd> close</span>
       </footer>

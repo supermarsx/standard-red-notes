@@ -2,7 +2,11 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
-import { README_SCREENSHOT_CONTRACT, readPngDimensions } from './validate-docs-screenshots.mjs'
+import {
+  README_SCREENSHOT_CONTRACT,
+  loadFeatureScreenshotManifest,
+  readPngDimensions,
+} from './validate-docs-screenshots.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(__dirname, '..')
@@ -161,21 +165,49 @@ async function polishForScreenshot(page) {
   await page.waitForTimeout(500)
 }
 
-async function assertDocumentedControlsAreVisible(page) {
-  const targets = [
-    ['navigation topic search', page.locator('input[placeholder="Search topics..."]').first()],
-    ['notes search', page.locator('input[placeholder="Search..."]').first()],
-    ['quick-action row', page.getByText('Add a quick action', { exact: true }).first()],
-    ['linked-items entry point', page.getByText('LINKS', { exact: true }).first()],
-    ['Super editor Home ribbon tab', page.getByRole('tab', { name: 'Home', exact: true }).first()],
-    ['Super editor Tools ribbon tab', page.getByRole('tab', { name: 'Tools', exact: true }).first()],
-    ['seeded Super note', page.getByText(DEMO_SUPER_TITLE, { exact: true }).first()],
-  ]
+function locatorForTarget(page, target) {
+  const evidence = target.locator
+  const scope = evidence.within ? page.locator(evidence.within) : page
+  if (evidence.kind === 'css') {
+    return scope.locator(evidence.value).first()
+  }
+  if (evidence.kind === 'text') {
+    return scope.getByText(evidence.value, { exact: evidence.exact }).first()
+  }
+  return scope.getByRole(evidence.value, { name: evidence.name, exact: evidence.exact }).first()
+}
 
-  for (const [label, locator] of targets) {
-    await locator.waitFor({ state: 'visible', timeout: 20_000 }).catch((error) => {
-      throw new Error(`Cannot capture the documented workspace because ${label} is not visible: ${error.message}`)
-    })
+async function assertManifestTargetsAreVisible(page) {
+  const manifest = loadFeatureScreenshotManifest(ROOT)
+  const features = Object.entries(manifest.features).filter(
+    ([, feature]) => feature.capture === README_SCREENSHOT_CONTRACT.captureId,
+  )
+
+  for (const [featureId, feature] of features) {
+    for (const [index, target] of feature.targets.entries()) {
+      const locator = locatorForTarget(page, target)
+      const label = `${featureId} target ${index + 1} (${target.text})`
+      await locator.waitFor({ state: 'visible', timeout: 20_000 }).catch((error) => {
+        throw new Error(`Cannot capture the documented workspace because ${label} is not visible: ${error.message}`)
+      })
+
+      const box = await locator.boundingBox()
+      if (!box) {
+        throw new Error(`Cannot capture the documented workspace because ${label} has no visible bounds`)
+      }
+      const tolerance = 48
+      const pointsAtControl =
+        target.x >= box.x - tolerance &&
+        target.x <= box.x + box.width + tolerance &&
+        target.y >= box.y - tolerance &&
+        target.y <= box.y + box.height + tolerance
+      if (!pointsAtControl) {
+        throw new Error(
+          `${label} marker ${target.x},${target.y} does not point near its visible control at ` +
+            `${Math.round(box.x)},${Math.round(box.y)} ${Math.round(box.width)}x${Math.round(box.height)}`,
+        )
+      }
+    }
   }
 }
 
@@ -193,7 +225,7 @@ try {
   await waitForApp(page)
   await seedDemoNotes(page)
   await polishForScreenshot(page)
-  await assertDocumentedControlsAreVisible(page)
+  await assertManifestTargetsAreVisible(page)
   await page.evaluate(async () => {
     await document.fonts?.ready
   })
