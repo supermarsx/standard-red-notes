@@ -143,6 +143,25 @@ x-server-env: &server-env
   ASSISTANT_OLLAMA_URL: ${ASSISTANT_OLLAMA_URL:-}
   ASSISTANT_DEFAULT_PROVIDER: ${ASSISTANT_DEFAULT_PROVIDER:-}
   ASSISTANT_DEFAULT_MODEL: ${ASSISTANT_DEFAULT_MODEL:-}
+  # Guided ChatGPT/Codex pairing. The key is intentionally unset by default;
+  # generate 32 random bytes as 64 hex characters to enable it. Pairing state
+  # and credentials live on the server-data volume, not the container layer.
+  ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY: ${ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY:-}
+  ASSISTANT_SUBSCRIPTION_TOKEN_PATH: ${ASSISTANT_SUBSCRIPTION_TOKEN_PATH:-/opt/server/packages/api-gateway/data/assistant-subscription.json}
+  ASSISTANT_CHATGPT_OAUTH_AUTHORIZE_URL: ${ASSISTANT_CHATGPT_OAUTH_AUTHORIZE_URL:-}
+  ASSISTANT_CHATGPT_OAUTH_TOKEN_URL: ${ASSISTANT_CHATGPT_OAUTH_TOKEN_URL:-}
+  ASSISTANT_CHATGPT_OAUTH_CLIENT_ID: ${ASSISTANT_CHATGPT_OAUTH_CLIENT_ID:-}
+  ASSISTANT_CHATGPT_OAUTH_REDIRECT_URI: ${ASSISTANT_CHATGPT_OAUTH_REDIRECT_URI:-}
+  ASSISTANT_CHATGPT_OAUTH_SCOPES: ${ASSISTANT_CHATGPT_OAUTH_SCOPES:-}
+  ASSISTANT_CHATGPT_OAUTH_ACCOUNT_ID_CLAIM: ${ASSISTANT_CHATGPT_OAUTH_ACCOUNT_ID_CLAIM:-}
+  # Legacy direct subscription-bearer mode. Once guided pairing is configured,
+  # its default slot is authoritative and these values cannot bypass unpair.
+  ASSISTANT_OPENAI_AUTH_MODE: ${ASSISTANT_OPENAI_AUTH_MODE:-}
+  ASSISTANT_OPENAI_SUBSCRIPTION_TOKEN: ${ASSISTANT_OPENAI_SUBSCRIPTION_TOKEN:-}
+  ASSISTANT_OPENAI_SUBSCRIPTION_BASE_URL: ${ASSISTANT_OPENAI_SUBSCRIPTION_BASE_URL:-}
+  ASSISTANT_OPENAI_ACCOUNT_ID: ${ASSISTANT_OPENAI_ACCOUNT_ID:-}
+  ASSISTANT_OPENAI_BETA: ${ASSISTANT_OPENAI_BETA:-}
+  ASSISTANT_OPENAI_EXTRA_HEADERS: ${ASSISTANT_OPENAI_EXTRA_HEADERS:-}
   # Global per-user daily AI request ceiling enforced by the api-gateway. 0 = unlimited.
   ASSISTANT_DAILY_REQUEST_LIMIT: ${ASSISTANT_DAILY_REQUEST_LIMIT:-0}
   # OPT-IN server-side PDF OCR (tesseract-in-Node, /v1/ocr). PRIVACY: when enabled,
@@ -353,6 +372,9 @@ services:
     volumes:
       - server-logs:/var/lib/server/logs
       - uploads:/opt/shared/uploads
+      # Owned/chowned in the image before USER srn and copied into this named
+      # volume on first use. Persists pairing, server settings, and gateway JSON.
+      - server-data:/opt/server/packages/api-gateway/data
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:3000/healthcheck >/dev/null || exit 1"]
       interval: 30s
@@ -756,6 +778,7 @@ volumes:
   mariadb-data:
   redis-data:
   server-logs:
+  server-data:
   uploads:
   mcp-data:
   n8n-data:

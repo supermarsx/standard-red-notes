@@ -115,14 +115,16 @@ Back up these together:
 - MariaDB/MySQL data;
 - Redis only if the deployment deliberately relies on persistent Redis state;
 - encrypted file-storage volumes or object storage;
-- server settings and non-secret configuration;
+- the `server-data` gateway settings and encrypted subscription-pairing store;
 - the exact secrets needed to validate sessions and decrypt protected
   configuration; and
 - deployment manifests and image/version identifiers.
 
 Do not store the only copy of `.env` beside the live host. Protect database
 credentials, JWT secrets, valet secrets, shared access keys, SMTP credentials,
-provider keys, and backup app passwords.
+provider keys, subscription-pairing encryption keys, and backup app passwords.
+Keep the pairing key separately from the only `server-data` backup: the
+encrypted pairing file cannot be recovered without both.
 
 The repository’s `yarn ops:backup-restore` gate exercises the scripted backup
 and restore contract. It is validation evidence, not a substitute for restoring

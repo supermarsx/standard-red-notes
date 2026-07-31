@@ -6,7 +6,12 @@ import {
   validateComposeHardening,
   validateContainerHardening,
   validateImageHardening,
+  validatePairingCallbackNginxContract,
+  validatePairingComposeContract,
+  validatePairingComposeSource,
+  validatePairingDockerfileContract,
   validateServerDockerfileContract,
+  validateSingleEntrypointAssistantPropagation,
 } from "./validate-docker-hardening.mjs";
 
 function composeFixture() {
@@ -41,6 +46,58 @@ function containerFixture(user = "srn:srn") {
       PidsLimit: 256,
     },
     State: { Health: { Status: "healthy" } },
+  };
+}
+
+const assistantEnvironment = Object.fromEntries(
+  [
+    "ASSISTANT_ANTHROPIC_API_KEY",
+    "ASSISTANT_OPENAI_API_KEY",
+    "ASSISTANT_OPENAI_BASE_URL",
+    "ASSISTANT_OPENAI_MODEL",
+    "ASSISTANT_OLLAMA_URL",
+    "ASSISTANT_DEFAULT_PROVIDER",
+    "ASSISTANT_DEFAULT_MODEL",
+    "ASSISTANT_DAILY_REQUEST_LIMIT",
+    "ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY",
+    "ASSISTANT_SUBSCRIPTION_TOKEN_PATH",
+    "ASSISTANT_CHATGPT_OAUTH_AUTHORIZE_URL",
+    "ASSISTANT_CHATGPT_OAUTH_TOKEN_URL",
+    "ASSISTANT_CHATGPT_OAUTH_CLIENT_ID",
+    "ASSISTANT_CHATGPT_OAUTH_REDIRECT_URI",
+    "ASSISTANT_CHATGPT_OAUTH_SCOPES",
+    "ASSISTANT_CHATGPT_OAUTH_ACCOUNT_ID_CLAIM",
+    "ASSISTANT_OPENAI_AUTH_MODE",
+    "ASSISTANT_OPENAI_SUBSCRIPTION_TOKEN",
+    "ASSISTANT_OPENAI_SUBSCRIPTION_BASE_URL",
+    "ASSISTANT_OPENAI_ACCOUNT_ID",
+    "ASSISTANT_OPENAI_BETA",
+    "ASSISTANT_OPENAI_EXTRA_HEADERS",
+    "PUBLIC_URL",
+  ].map((key) => [key, ""]),
+);
+
+function pairingComposeFixture({
+  serviceName = "server",
+  dataTarget = "/opt/server/packages/api-gateway/data",
+  volumeSource = "server-data",
+} = {}) {
+  return {
+    services: {
+      [serviceName]: {
+        environment: {
+          ...assistantEnvironment,
+          ASSISTANT_SUBSCRIPTION_TOKEN_PATH: `${dataTarget}/assistant-subscription.json`,
+        },
+        volumes: [
+          {
+            type: "volume",
+            source: volumeSource,
+            target: dataTarget,
+          },
+        ],
+      },
+    },
   };
 }
 
@@ -98,6 +155,192 @@ test("rejects a missing or non-executable srn-admin wrapper", () => {
       "server Dockerfile: must install docker/srn-admin.sh as /usr/local/bin/srn-admin",
       "server Dockerfile: /usr/local/bin/srn-admin must be executable",
     ],
+  );
+});
+
+test("requires the multi image to create and own the persistent gateway data directory", () => {
+  const valid = `
+    FROM node:26-alpine
+    RUN mkdir -p /opt/server/packages/api-gateway/data \\
+      && chown -R srn:srn /opt/server
+    USER srn:srn
+  `;
+  assert.deepEqual(validatePairingDockerfileContract(valid), []);
+  assert.deepEqual(
+    validatePairingDockerfileContract(`
+      FROM node:26-alpine
+      RUN mkdir -p /opt/server/packages/api-gateway/data
+      USER srn:srn
+      RUN chown -R srn:srn /opt/server
+    `),
+    [
+      "server Dockerfile: must make /opt/server/packages/api-gateway/data writable by srn before USER",
+    ],
+  );
+  assert.deepEqual(
+    validatePairingDockerfileContract("FROM node:26-alpine\nUSER srn:srn"),
+    [
+      "server Dockerfile: must create /opt/server/packages/api-gateway/data before USER srn",
+      "server Dockerfile: must make /opt/server/packages/api-gateway/data writable by srn before USER",
+    ],
+  );
+});
+
+test("accepts the complete multi and single pairing propagation matrix", () => {
+  assert.deepEqual(
+    validatePairingComposeContract(pairingComposeFixture(), {
+      serviceName: "server",
+      label: "multi compose",
+      dataTarget: "/opt/server/packages/api-gateway/data",
+      expectedVolumeSource: "server-data",
+    }),
+    [],
+  );
+  assert.deepEqual(
+    validatePairingComposeContract(
+      pairingComposeFixture({
+        serviceName: "app",
+        dataTarget: "/data",
+        volumeSource: "single-data",
+      }),
+      {
+        serviceName: "app",
+        label: "single compose",
+        dataTarget: "/data",
+        expectedVolumeSource: "single-data",
+      },
+    ),
+    [],
+  );
+});
+
+test("rejects missing assistant propagation, an ephemeral token path, or the wrong data volume", () => {
+  const config = pairingComposeFixture();
+  delete config.services.server.environment.ASSISTANT_DEFAULT_MODEL;
+  config.services.server.environment.ASSISTANT_SUBSCRIPTION_TOKEN_PATH =
+    "/tmp/assistant-subscription.json";
+  config.services.server.volumes[0].source = "wrong-volume";
+
+  assert.deepEqual(
+    validatePairingComposeContract(config, {
+      serviceName: "server",
+      label: "multi compose",
+      dataTarget: "/opt/server/packages/api-gateway/data",
+      expectedVolumeSource: "server-data",
+    }),
+    [
+      "multi compose server: must propagate ASSISTANT_DEFAULT_MODEL",
+      "multi compose server: pairing token path must stay inside /opt/server/packages/api-gateway/data",
+      "multi compose server: /opt/server/packages/api-gateway/data must use the server-data named volume",
+    ],
+  );
+});
+
+test("rejects traversal and sibling-prefix pairing paths outside the mounted data directory", () => {
+  for (const tokenPath of [
+    "/data/../../tmp/pairing.json",
+    "/data-backup/pairing.json",
+  ]) {
+    const config = pairingComposeFixture({
+      serviceName: "app",
+      dataTarget: "/data",
+      volumeSource: "single-data",
+    });
+    config.services.app.environment.ASSISTANT_SUBSCRIPTION_TOKEN_PATH =
+      tokenPath;
+
+    assert.deepEqual(
+      validatePairingComposeContract(config, {
+        serviceName: "app",
+        label: "single compose",
+        dataTarget: "/data",
+        expectedVolumeSource: "single-data",
+      }),
+      ["single compose app: pairing token path must stay inside /data"],
+    );
+  }
+});
+
+test("requires raw Compose to default PUBLIC_URL empty and pairing state into its named-volume path", () => {
+  const valid = `
+    PUBLIC_URL: \${PUBLIC_URL:-}
+    ASSISTANT_SUBSCRIPTION_TOKEN_PATH: \${ASSISTANT_SUBSCRIPTION_TOKEN_PATH:-/data/assistant-subscription.json}
+  `;
+  assert.deepEqual(
+    validatePairingComposeSource(valid, {
+      label: "single compose",
+      defaultTokenPath: "/data/assistant-subscription.json",
+    }),
+    [],
+  );
+  assert.deepEqual(
+    validatePairingComposeSource(
+      `
+        PUBLIC_URL: \${PUBLIC_URL:-http://localhost:3001}
+        ASSISTANT_SUBSCRIPTION_TOKEN_PATH: \${ASSISTANT_SUBSCRIPTION_TOKEN_PATH:-/tmp/pairing.json}
+      `,
+      {
+        label: "single compose",
+        defaultTokenPath: "/data/assistant-subscription.json",
+      },
+    ),
+    [
+      "single compose: PUBLIC_URL must have an explicit empty default (no localhost fallback)",
+      "single compose: pairing token path must default to /data/assistant-subscription.json",
+    ],
+  );
+});
+
+test("requires the single entrypoint to write every Compose assistant variable and persistent token path", () => {
+  const source = Object.keys(assistantEnvironment)
+    .filter((key) => key.startsWith("ASSISTANT_"))
+    .map((key) =>
+      key === "ASSISTANT_SUBSCRIPTION_TOKEN_PATH"
+        ? 'put ASSISTANT_SUBSCRIPTION_TOKEN_PATH "${ASSISTANT_SUBSCRIPTION_TOKEN_PATH:-${DATA_DIR}/assistant-subscription.json}"'
+        : `put_opt ${key} "\${${key}:-}"`,
+    )
+    .concat('put_opt PUBLIC_URL "${PUBLIC_URL:-}"')
+    .join("\n");
+  assert.deepEqual(validateSingleEntrypointAssistantPropagation(source), []);
+  assert.match(
+    validateSingleEntrypointAssistantPropagation(
+      source.replace(/^put_opt ASSISTANT_OPENAI_MODEL.*$/m, ""),
+    ).join("\n"),
+    /ASSISTANT_OPENAI_MODEL/,
+  );
+});
+
+test("requires an exact OAuth callback proxy location with access logging disabled", () => {
+  const block = `
+    location = /v1/assistant/subscription/callback {
+      access_log off;
+      proxy_pass http://127.0.0.1:3000;
+      proxy_http_version 1.1;
+      proxy_set_header Host $host;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto $scheme;
+      proxy_set_header X-Real-IP $remote_addr;
+      client_max_body_size 0;
+      proxy_request_buffering off;
+      proxy_read_timeout 300s;
+    }
+  `;
+  assert.deepEqual(
+    validatePairingCallbackNginxContract(block, {
+      label: "single nginx",
+      proxyPass: "http://127.0.0.1:3000",
+    }),
+    [],
+  );
+  assert.deepEqual(
+    validatePairingCallbackNginxContract(
+      block.replace("access_log off;", "access_log combined;"),
+      {
+        label: "single nginx",
+        proxyPass: "http://127.0.0.1:3000",
+      },
+    ),
+    ["single nginx: callback location must disable access logging"],
   );
 });
 

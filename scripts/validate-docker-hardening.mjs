@@ -21,6 +21,30 @@ const INTERNAL_ONLY_SERVICES = Object.freeze([
   "cache",
   "floci",
 ]);
+const ASSISTANT_ENV_KEYS = Object.freeze([
+  "ASSISTANT_ANTHROPIC_API_KEY",
+  "ASSISTANT_OPENAI_API_KEY",
+  "ASSISTANT_OPENAI_BASE_URL",
+  "ASSISTANT_OPENAI_MODEL",
+  "ASSISTANT_OLLAMA_URL",
+  "ASSISTANT_DEFAULT_PROVIDER",
+  "ASSISTANT_DEFAULT_MODEL",
+  "ASSISTANT_DAILY_REQUEST_LIMIT",
+  "ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY",
+  "ASSISTANT_SUBSCRIPTION_TOKEN_PATH",
+  "ASSISTANT_CHATGPT_OAUTH_AUTHORIZE_URL",
+  "ASSISTANT_CHATGPT_OAUTH_TOKEN_URL",
+  "ASSISTANT_CHATGPT_OAUTH_CLIENT_ID",
+  "ASSISTANT_CHATGPT_OAUTH_REDIRECT_URI",
+  "ASSISTANT_CHATGPT_OAUTH_SCOPES",
+  "ASSISTANT_CHATGPT_OAUTH_ACCOUNT_ID_CLAIM",
+  "ASSISTANT_OPENAI_AUTH_MODE",
+  "ASSISTANT_OPENAI_SUBSCRIPTION_TOKEN",
+  "ASSISTANT_OPENAI_SUBSCRIPTION_BASE_URL",
+  "ASSISTANT_OPENAI_ACCOUNT_ID",
+  "ASSISTANT_OPENAI_BETA",
+  "ASSISTANT_OPENAI_EXTRA_HEADERS",
+]);
 
 function upperList(value) {
   return (Array.isArray(value) ? value : []).map((item) =>
@@ -49,6 +73,28 @@ function mountSource(volume) {
     return volume.split(":", 1)[0];
   }
   return volume?.source ?? "";
+}
+
+function mountTarget(volume) {
+  if (typeof volume === "string") {
+    return volume.split(":")[1] ?? "";
+  }
+  return volume?.target ?? "";
+}
+
+function environmentMap(environment) {
+  if (!Array.isArray(environment)) {
+    return environment ?? {};
+  }
+  return Object.fromEntries(
+    environment.map((entry) => {
+      const value = String(entry);
+      const separator = value.indexOf("=");
+      return separator < 0
+        ? [value, ""]
+        : [value.slice(0, separator), value.slice(separator + 1)];
+    }),
+  );
 }
 
 export function validateServerDockerfileContract(dockerfile) {
@@ -109,6 +155,195 @@ export function validateServerDockerfileContract(dockerfile) {
     );
   }
 
+  return errors;
+}
+
+export function validatePairingDockerfileContract(dockerfile) {
+  const errors = [];
+  const normalized = String(dockerfile).replace(/\\\r?\n/g, " ");
+  const finalStageStart = [...normalized.matchAll(/^\s*FROM(?:\s|$)/gim)].at(
+    -1,
+  )?.index;
+  const finalStage = normalized.slice(finalStageStart ?? 0);
+  const userIndex = finalStage.search(/^\s*USER\s+srn(?::srn)?\s*$/im);
+  const beforeUser =
+    userIndex < 0 ? finalStage : finalStage.slice(0, userIndex);
+  const dataPath = "/opt/server/packages/api-gateway/data";
+
+  if (
+    !new RegExp(
+      `\\bmkdir\\s+-p\\b[^\\n]*${dataPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`,
+      "i",
+    ).test(beforeUser)
+  ) {
+    errors.push(`server Dockerfile: must create ${dataPath} before USER srn`);
+  }
+  if (
+    !/\bchown\s+-R\s+srn:srn\b[^\n]*(?:\/opt\/server(?:\s|$)|\/opt\/server\/packages\/api-gateway\/data)/i.test(
+      beforeUser,
+    )
+  ) {
+    errors.push(
+      `server Dockerfile: must make ${dataPath} writable by srn before USER`,
+    );
+  }
+
+  return errors;
+}
+
+export function validatePairingComposeContract(
+  config,
+  { serviceName, label, dataTarget, expectedVolumeSource },
+) {
+  const errors = [];
+  const service = config?.services?.[serviceName];
+  if (!service) {
+    return [`${label}: missing ${serviceName} service`];
+  }
+  const environment = environmentMap(service.environment);
+  for (const key of ASSISTANT_ENV_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(environment, key)) {
+      errors.push(`${label} ${serviceName}: must propagate ${key}`);
+    }
+  }
+  if (!Object.prototype.hasOwnProperty.call(environment, "PUBLIC_URL")) {
+    errors.push(`${label} ${serviceName}: must propagate PUBLIC_URL`);
+  }
+
+  const tokenPath = environment.ASSISTANT_SUBSCRIPTION_TOKEN_PATH;
+  const canonicalDataTarget = path.posix.resolve(dataTarget);
+  const canonicalTokenPath =
+    typeof tokenPath === "string" && path.posix.isAbsolute(tokenPath)
+      ? path.posix.resolve(tokenPath)
+      : undefined;
+  const tokenPathRelativeToData =
+    canonicalTokenPath === undefined
+      ? undefined
+      : path.posix.relative(canonicalDataTarget, canonicalTokenPath);
+  const tokenPathIsInsideData =
+    tokenPathRelativeToData === "" ||
+    (tokenPathRelativeToData !== undefined &&
+      tokenPathRelativeToData !== ".." &&
+      !tokenPathRelativeToData.startsWith("../") &&
+      !path.posix.isAbsolute(tokenPathRelativeToData));
+  if (!tokenPathIsInsideData) {
+    errors.push(
+      `${label} ${serviceName}: pairing token path must stay inside ${dataTarget}`,
+    );
+  }
+
+  const dataMount = (service.volumes ?? []).find(
+    (volume) => mountTarget(volume) === dataTarget,
+  );
+  if (!dataMount || mountSource(dataMount) !== expectedVolumeSource) {
+    errors.push(
+      `${label} ${serviceName}: ${dataTarget} must use the ${expectedVolumeSource} named volume`,
+    );
+  }
+
+  return errors;
+}
+
+export function validatePairingComposeSource(
+  composeSource,
+  { label, defaultTokenPath },
+) {
+  const errors = [];
+  const source = String(composeSource);
+  if (!/^\s*PUBLIC_URL:\s*\$\{PUBLIC_URL:-\}\s*$/m.test(source)) {
+    errors.push(
+      `${label}: PUBLIC_URL must have an explicit empty default (no localhost fallback)`,
+    );
+  }
+  const expected =
+    `ASSISTANT_SUBSCRIPTION_TOKEN_PATH: ` +
+    `\${ASSISTANT_SUBSCRIPTION_TOKEN_PATH:-${defaultTokenPath}}`;
+  if (!source.includes(expected)) {
+    errors.push(
+      `${label}: pairing token path must default to ${defaultTokenPath}`,
+    );
+  }
+  return errors;
+}
+
+export function validateSingleEntrypointAssistantPropagation(entrypoint) {
+  const errors = [];
+  const source = String(entrypoint);
+  for (const key of ASSISTANT_ENV_KEYS) {
+    if (!new RegExp(`\\bput(?:_opt)?\\s+${key}\\b`).test(source)) {
+      errors.push(
+        `single entrypoint: must write ${key} to the home-server env`,
+      );
+    }
+  }
+  if (
+    !source.includes(
+      'put ASSISTANT_SUBSCRIPTION_TOKEN_PATH "${ASSISTANT_SUBSCRIPTION_TOKEN_PATH:-${DATA_DIR}/assistant-subscription.json}"',
+    )
+  ) {
+    errors.push(
+      "single entrypoint: pairing token path must default inside DATA_DIR",
+    );
+  }
+  if (!/\bput_opt\s+PUBLIC_URL\b/.test(source)) {
+    errors.push(
+      "single entrypoint: must propagate PUBLIC_URL without inventing it",
+    );
+  }
+  return errors;
+}
+
+function exactLocationBody(nginxConfig, route) {
+  const escaped = route.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const matches = [
+    ...String(nginxConfig).matchAll(
+      new RegExp(
+        `location\\s*=\\s*${escaped}\\s*\\{([\\s\\S]*?)\\n\\s*\\}`,
+        "g",
+      ),
+    ),
+  ];
+  return matches.length === 1 ? matches[0][1] : undefined;
+}
+
+export function validatePairingCallbackNginxContract(
+  nginxConfig,
+  { label, proxyPass },
+) {
+  const errors = [];
+  const route = "/v1/assistant/subscription/callback";
+  const body = exactLocationBody(nginxConfig, route);
+  if (!body) {
+    return [`${label}: must define one exact ${route} location`];
+  }
+  const required = [
+    ["disable access logging", /\baccess_log\s+off\s*;/],
+    [
+      `proxy to ${proxyPass}`,
+      new RegExp(
+        `\\bproxy_pass\\s+${proxyPass.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:\\$request_uri)?\\s*;`,
+      ),
+    ],
+    ["preserve HTTP/1.1", /\bproxy_http_version\s+1\.1\s*;/],
+    ["forward Host", /\bproxy_set_header\s+Host\s+\$host\s*;/],
+    [
+      "forward client chain",
+      /\bproxy_set_header\s+X-Forwarded-For\s+\$proxy_add_x_forwarded_for\s*;/,
+    ],
+    ["forward scheme", /\bproxy_set_header\s+X-Forwarded-Proto\s+\$scheme\s*;/],
+    [
+      "forward client address",
+      /\bproxy_set_header\s+X-Real-IP\s+\$remote_addr\s*;/,
+    ],
+    ["preserve API body policy", /\bclient_max_body_size\s+0\s*;/],
+    ["preserve request streaming", /\bproxy_request_buffering\s+off\s*;/],
+    ["preserve API timeout", /\bproxy_read_timeout\s+300s\s*;/],
+  ];
+  for (const [description, pattern] of required) {
+    if (!pattern.test(body)) {
+      errors.push(`${label}: callback location must ${description}`);
+    }
+  }
   return errors;
 }
 
@@ -269,10 +504,72 @@ export function runDockerHardeningValidation(argv = process.argv.slice(2)) {
   const errors = validateServerDockerfileContract(
     readFileSync(path.join(repositoryRoot, "server", "Dockerfile"), "utf8"),
   );
+  const serverDockerfile = readFileSync(
+    path.join(repositoryRoot, "server", "Dockerfile"),
+    "utf8",
+  );
+  const multiComposeSource = readFileSync(
+    path.join(repositoryRoot, "docker-compose.yml"),
+    "utf8",
+  );
+  const singleComposeSource = readFileSync(
+    path.join(repositoryRoot, "docker-compose.single.yml"),
+    "utf8",
+  );
+  const singleEntrypoint = readFileSync(
+    path.join(repositoryRoot, "server", "docker", "single", "entrypoint.sh"),
+    "utf8",
+  );
+  const multiNginx = readFileSync(
+    path.join(repositoryRoot, "app", "docker", "nginx.conf"),
+    "utf8",
+  );
+  const singleNginx = readFileSync(
+    path.join(repositoryRoot, "app", "docker", "single", "nginx.conf"),
+    "utf8",
+  );
+  const multiConfig = dockerJson(["compose", "config", "--format", "json"]);
+  const singleConfig = dockerJson([
+    "compose",
+    "-f",
+    "docker-compose.single.yml",
+    "config",
+    "--format",
+    "json",
+  ]);
+  errors.push(...validatePairingDockerfileContract(serverDockerfile));
   errors.push(
-    ...validateComposeHardening(
-      dockerJson(["compose", "config", "--format", "json"]),
-    ),
+    ...validateComposeHardening(multiConfig),
+    ...validatePairingComposeContract(multiConfig, {
+      serviceName: "server",
+      label: "multi compose",
+      dataTarget: "/opt/server/packages/api-gateway/data",
+      expectedVolumeSource: "server-data",
+    }),
+    ...validatePairingComposeContract(singleConfig, {
+      serviceName: "app",
+      label: "single compose",
+      dataTarget: "/data",
+      expectedVolumeSource: "single-data",
+    }),
+    ...validatePairingComposeSource(multiComposeSource, {
+      label: "multi compose",
+      defaultTokenPath:
+        "/opt/server/packages/api-gateway/data/assistant-subscription.json",
+    }),
+    ...validatePairingComposeSource(singleComposeSource, {
+      label: "single compose",
+      defaultTokenPath: "/data/assistant-subscription.json",
+    }),
+    ...validateSingleEntrypointAssistantPropagation(singleEntrypoint),
+    ...validatePairingCallbackNginxContract(multiNginx, {
+      label: "multi nginx",
+      proxyPass: "http://$srn_api",
+    }),
+    ...validatePairingCallbackNginxContract(singleNginx, {
+      label: "single nginx",
+      proxyPass: "http://127.0.0.1:3000",
+    }),
   );
 
   for (const [service, image] of args.images) {

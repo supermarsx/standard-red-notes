@@ -178,6 +178,8 @@
       url: /API.html
     - title: OpenClaw assistant
       url: /openclaw.html
+    - title: ChatGPT and Codex pairing
+      url: /assistant-subscription-pairing.html
     - title: CalDAV
       url: /caldav.html
     - title: Automation and integrations

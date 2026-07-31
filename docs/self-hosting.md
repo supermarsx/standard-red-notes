@@ -525,6 +525,7 @@ and container rebuilds:
 | `mariadb-data` | The MariaDB database - **all accounts, notes, and revisions**. | The one to back up.                                    |
 | `redis-data`   | Redis append-only persistence (cache/sessions/pub-sub).        | Safe to lose; rebuilt at runtime.                      |
 | `uploads`      | Uploaded file attachments stored by the files service.         | Back this up alongside the DB if you use file uploads. |
+| `server-data`  | Gateway admin settings and encrypted subscription pairings.    | Back up with its encryption key stored separately.     |
 | `server-logs`  | Server process logs.                                           | Disposable.                                            |
 | `mcp-data`     | MCP bridge local state (only with the `mcp` profile).          | Disposable.                                            |
 | `n8n-data`     | n8n database/config/credentials (only with `workflows`).       | Back up with the matching `N8N_ENCRYPTION_KEY`.        |
@@ -533,8 +534,9 @@ List them with `docker volume ls | grep standard-red-notes`.
 
 ## Backup and restore
 
-The critical data is the MariaDB volume (and `uploads` if you store
-attachments).
+The critical data is the MariaDB volume, `uploads` if you store attachments,
+and `server-data` when you use persisted administrator settings or encrypted
+ChatGPT/Codex pairing.
 
 **Back up the database** (logical dump, while the stack is running):
 

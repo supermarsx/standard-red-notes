@@ -33,9 +33,13 @@ AI proxy, OCR, CalDAV — works the same.
   link_text="Use the recovery checklist"
 %}
 
-## A. Full multi-container (existing, unchanged)
+## A. Full multi-container
 
-The original, production-grade stack. Nothing here changed.
+The production-grade MariaDB/Redis stack keeps its existing application
+topology. This revision also mounts `server-data` at the gateway data directory
+so administrator settings and encrypted ChatGPT/Codex pairings survive a server
+container replacement. Back up that volume with its matching pairing encryption
+key; see [Backups and recovery](backups-and-recovery.md).
 
 ```sh
 cp .env.example .env          # set real secrets for any non-local deploy
