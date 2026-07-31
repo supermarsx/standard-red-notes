@@ -18,7 +18,7 @@ protocol version, backup shape, and content types involved.
 
 This audit describes what the current repository proves. It does not turn
 source-level similarity into an interoperability guarantee. Last audited:
-2026-07-30.
+2026-07-31.
 
 {% include mermaid.html %}
 
@@ -64,7 +64,8 @@ it must be treated as unsupported.
 
 | Scenario | Status | What the evidence supports |
 | --- | --- | --- |
-| Read/write encryption protocol versions `001`–`004` inside this fork | <span class="compatibility-badge compatibility-badge--confirmed">Confirmed</span> | The models declare all four versions, the encryption service registers them, and operator tests cover each implementation. Versions `001` and `002` are expired for normal account use even though import/decryption code remains. |
+| Decrypt/import legacy symmetric protocol `001`–`003` data inside this fork | <span class="compatibility-badge compatibility-badge--confirmed">Confirmed</span> | Legacy operators and import key selection remain so a matching legacy root key can decrypt and upgrade old payloads. `001` and `002` are expired, and this is a preservation/migration path rather than approval to create new legacy accounts or payloads. |
+| Create and rewrite current data with protocol `004` | <span class="compatibility-badge compatibility-badge--confirmed">Confirmed</span> | `004` is the declared latest version and the current root-key/items-key write path. New backups declare `004`; normal account and passcode upgrades move legacy key material forward rather than preserving a legacy write profile. |
 | Current fork encrypted backup exported and re-imported by the current fork | <span class="compatibility-badge compatibility-badge--confirmed">Confirmed</span> | Backup creation, classification, decryption, import, and a live fork-to-fork encrypted round-trip have repository coverage. |
 | Original Standard Notes native backup imported into Standard Red Notes | <span class="compatibility-badge compatibility-badge--conditional">Conditional</span> | The importer recognizes the native `version`, `keyParams`/`auth_params`, and `items` shape and rejects unsupported/newer protocol versions. Detector tests use synthetic examples; the repository has no captured upstream backup fixture or current upstream-to-fork restore test. |
 | Standard Red Notes native backup imported into an original Standard Notes client | <span class="compatibility-badge compatibility-badge--conditional">Conditional</span> | Plain core items and protocol `004` follow familiar shapes, but fork-only content types, editor nodes, and settings may not be understood. No fork-to-upstream restore test is present. |
@@ -73,8 +74,34 @@ it must be treated as unsupported.
 | Standard Red Notes client pointed at the hosted Standard Notes service | <span class="compatibility-badge compatibility-badge--unverified">Unverified</span> | No live test targets the hosted service. Fork-specific API calls and entitlement assumptions make a successful sign-in insufficient evidence of safe operation. |
 | Markdown, TXT, PDF, DOCX, ODT, or `srn-client` content export | <span class="compatibility-badge compatibility-badge--export">One-way / export-only</span> | These are readable escape formats, not complete encrypted-account backups. They can omit item keys, revisions, permissions, collaboration state, and other metadata. |
 | AI, OCR, public shares, MCP, app passwords, workflows, and expanded administration | <span class="compatibility-badge compatibility-badge--fork">Fork-specific</span> | These flows use fork endpoints, settings, or trust boundaries. They are not an original-client compatibility surface. |
+| Optional Standard Red Notes account recovery used from an original client | <span class="compatibility-badge compatibility-badge--fork">Fork-specific</span> | The v2 ciphertext escrow, logged-out lookup, client-side root-key recovery, credential rotation, and replacement-code lifecycle are implemented by this fork. Original clients are not expected to enroll, recover, rotate, or invalidate this escrow correctly. |
 | Direct reuse of an original Standard Notes server database or volumes | <span class="compatibility-badge compatibility-badge--unverified">Treat as incompatible</span> | No supported database migration, rollback, or cross-server fixture was found. Server migrations in this repository evolve the fork’s own schema. Use client-level export/import instead. |
-| Protocol versions newer than `004` or future upstream content types | <span class="compatibility-badge compatibility-badge--unverified">Unverified</span> | The importer deliberately rejects unsupported versions. Re-audit the exact releases before moving data. |
+| Protocol versions newer than `004` or unknown upstream content types | <span class="compatibility-badge compatibility-badge--unverified">Unverified</span> | The importer deliberately rejects unsupported versions. Re-audit the exact releases before moving data. |
+
+## Encryption protocol boundary
+
+The repository recognizes versions `001`, `002`, `003`, and `004`, but that is
+not the same as treating all four as interchangeable read/write formats:
+
+- `001`–`003` are legacy symmetric formats. Their operators and root-key import
+  rules remain so an old native backup can be decrypted with matching legacy
+  key parameters and moved forward. `001` and `002` are explicitly expired.
+- `003` is the last format before root-key-based items keys. It remains an
+  upgrade source, including the transition in which legacy payloads are read
+  with a same-version legacy key and then rewritten under current key material.
+- `004` is the latest/current account, passcode, items-key, backup, and new-write
+  behavior. It adds modern authenticated payload data and the key structures
+  used by current sharing and vault features.
+- The downgrade guard refuses to decrypt a payload whose claimed version is
+  weaker than its trusted key version. A `004` key therefore does not silently
+  honor an attacker-relabeled `003`/`002`/`001` payload. Import can still use a
+  genuine matching legacy key and report items that cannot be decrypted.
+
+{% include safety-alert.html
+  level="caution"
+  title="Legacy read support is not a legacy write guarantee"
+  body="Use versions 001–003 only to inspect, import, and upgrade data whose original key parameters you possess. Do not configure a new deployment to emit legacy payloads or infer that every historical Standard Notes release will round-trip cleanly. Create a fresh v004 backup after a successful migration."
+%}
 
 ## Backups and imports
 
@@ -87,6 +114,13 @@ The native backup model is a JSON object containing `items` and optionally
 - decrypts root keys, items keys, and vault keys when the required password is
   available; and
 - preserves still-encrypted payloads instead of silently discarding them.
+
+For legacy `001`–`003` encrypted items, the importer must have the matching
+legacy root key or derive it from the backup password and key parameters. For
+`004`, items commonly reference items keys, vault keys, or key-system material;
+having the account password alone does not make a malformed or incomplete
+backup whole. Preserve every reported encrypted/error item and stop if key
+records, vault membership, or attachments are missing.
 
 That is meaningful format support, but the only explicit “Standard Notes
 backup” detector tests in this repository construct small synthetic JSON
@@ -131,6 +165,13 @@ The server contains auth and sync response factories for API versions
 codes, error tags, sync parameters, and conflict values as wire contracts.
 Those are strong code-level continuity signals.
 
+The boundary is asymmetric: a compatible wire response does not mean a client
+understands every item type, fork setting, recovery lifecycle, or permission.
+Likewise, a client that can sign in and download ciphertext may still fail on a
+later credential change, vault operation, file transfer, or conflict response.
+Treat the client and server as a tested version pair, not independently
+swappable components.
+
 They are not a client/server certification matrix. This repository has no
 end-to-end job that runs a released original Standard Notes client against the
 fork server, or the fork client against the hosted Standard Notes service.
@@ -166,6 +207,12 @@ content moves away from that core:
   tag-hierarchy migration does not make new folder items portable.
 - **Files and vaults:** unverified across original/fork clients. Validate key
   handling, download, permissions, and deletion with a disposable account.
+- **Optional account recovery:** fork-specific. The escrow is a server-held
+  ciphertext setting, but safe use also requires the fork's signed-in opt-in,
+  one-time high-entropy code display, logged-out lookup, local decrypt/sign-in,
+  atomic credential rotation, old-escrow invalidation, and replacement-code UI.
+  An original client must not be assumed to preserve or invalidate that
+  lifecycle.
 - **Fork settings and services:** AI/OCR configuration, public shares, MCP
   credentials, workflows, expanded administration, and related server records
   should not be expected to transfer.
@@ -199,6 +246,11 @@ content moves away from that core:
 7. Move production only after defining rollback and keeping the source
    read-only for an agreed retention period.
 
+If the imported account uses legacy `001`–`003` key parameters, complete the
+client-offered protocol upgrade and create a fresh `004` encrypted backup before
+considering the migration complete. Do not delete the legacy source backup;
+the new backup is evidence of the destination, not a replacement for rollback.
+
 ### Standard Red Notes to original Standard Notes
 
 1. Export an encrypted native backup and a decrypted/readable escape copy.
@@ -209,6 +261,11 @@ content moves away from that core:
    blocks, files, vaults, and revisions.
 5. If native import rejects or degrades content, use the readable export and
    accept that it is a content migration rather than a full vault restore.
+
+Disable or separately record fork-specific automation and recovery before the
+test. An original client will not reproduce MCP tokens, workflows, AI settings,
+or Standard Red Notes account-recovery escrow. Never test by pointing an
+original client at the only live fork account.
 
 ### Moving between server deployments
 
@@ -233,6 +290,12 @@ Record the exact source and destination:
 
 A useful compatibility claim names that version pair and test scope. “Based on
 Standard Notes” or “the login worked” is not sufficient evidence.
+
+{% include safety-alert.html
+  level="danger"
+  title="Do not mix clients against the only copy of a vault"
+  body="An untested client can rewrite items, omit fork-only content, ignore local-only intent, or trigger credential and vault changes that sync everywhere. Use disposable accounts and copied backups; keep the source client and server intact until the second-client sync and second export both pass."
+%}
 
 ## Evidence reviewed
 
@@ -266,11 +329,15 @@ The status labels above are grounded in these repository contracts:
 - Local-only sync behavior:
   `app/packages/models/src/Domain/Utilities/Payload/PayloadIsLocalOnly.ts` and
   `app/packages/snjs/lib/Services/Sync/SyncService.ts`
+- Optional account recovery and escrow invalidation:
+  `app/packages/snjs/lib/Domain/UseCase/AccountRecovery`,
+  `app/packages/web/src/javascripts/Components/Preferences/Panes/Security/AccountRecovery`,
+  and `server/packages/auth/src/Domain/UseCase/GetAccountRecoveryEscrow`
 
 The upstream security documentation currently identifies `004` as the latest
 encryption specification:
 [Standard Notes security documentation](https://standardnotes.com/help/security).
-Re-check that page and the exact source revisions when auditing a future
+Re-check that page and the exact source revisions when auditing another
 version.
 
 The largest evidence gap is deliberate and important: no test fixture or CI job

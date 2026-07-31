@@ -54,7 +54,7 @@ when you are not typing, to search page titles, headings, and body text.
   <section class="docs-card">
     <h3><a href="security-and-account.html">Review security boundaries</a></h3>
     <p>Trace encryption, authentication, MFA, trusted devices, recovery, scoped credentials, sharing, and operator controls.</p>
-    <p><a href="backups-and-recovery.html">Build a recovery plan →</a></p>
+    <p><a href="backups-and-recovery.html">Build a tested recovery procedure →</a></p>
   </section>
   <section class="docs-card">
     <h3><a href="architecture.html">Build and verify</a></h3>
@@ -72,17 +72,18 @@ as one of:
 
 - **Shipped** — executable implementation and supporting evidence are present.
 - **Operator-gated** — the implementation must be enabled or configured.
-- **Planned** — the repository contains a design, not a runtime promise.
+- **Conditional** — a named implementation limit or unverified external
+  dependency narrows the claim.
 
-That distinction is especially important for the separate
-[MCP](MCP_SUPPORT_PLAN.md) and [OpenClaw](OPENCLAW_PLAN.md) design documents.
-The current n8n runtime and security boundary is documented in
-[Workflows with n8n](workflows.md).
+The shipped [MCP Bridge](mcp-bridge.md), [OpenClaw](openclaw.md), and n8n
+[workflow boundary](workflows.md) each have separate runtime and security
+guides.
 
 ## Documentation principles
 
 - Encryption boundaries and any intentional plaintext path are named directly.
-- Runtime guides and future plans are separated in navigation.
+- Runtime claims distinguish implemented, operator-gated, and conditional
+  behavior.
 - Copy-ready commands include the directory and assumptions that make them safe.
 - Destructive recovery and administration steps put backups and verification first.
 - Capability claims point back to implementation, tests, configuration, or release contracts.

@@ -162,7 +162,7 @@ export const DOC_CATEGORIES: DocCategory[] = [
           {
             type: 'callout',
             variant: 'warning',
-            text: 'Your password is also your encryption key. It is never sent to the server and there is no password reset. Choose something strong that you will not forget, and keep encrypted backups.',
+            text: 'Your password participates in deriving your encryption keys and cannot be revealed by the server. Choose a long, unique password, save it in a password manager, and keep tested backups. If you later opt in to account recovery, its separate recovery code becomes another key to protect.',
           },
           {
             type: 'paragraph',
@@ -211,7 +211,7 @@ export const DOC_CATEGORIES: DocCategory[] = [
       {
         id: 'encryption/your-password',
         title: 'Your password & key',
-        summary: 'Your password is your key. There is no reset — back up instead.',
+        summary: 'Your password derives the account keys; optional recovery must be enabled in advance.',
         blocks: [
           {
             type: 'paragraph',
@@ -219,31 +219,37 @@ export const DOC_CATEGORIES: DocCategory[] = [
           },
           {
             type: 'heading',
-            text: 'Why there is no “forgot password”',
+            text: 'Why an administrator cannot reset it',
           },
           {
             type: 'paragraph',
-            text: 'Because the server cannot decrypt your data, it also cannot reset your password and re-encrypt your notes for you. If you forget your password, the live encrypted account cannot be recovered through any supported flow. This is the cost of true privacy.',
+            text: 'Because the server cannot decrypt your data, an administrator cannot choose a new password and re-encrypt your notes for you. A password change must be proven by the client using the current root key.',
           },
           {
             type: 'paragraph',
-            text: 'This repository contains disabled, experimental recovery-escrow primitives, but no verified logged-out retrieval, credential-rotation, and sign-in flow. Do not enable or depend on that substrate as a password recovery feature.',
+            text: 'Standard Red Notes ships an optional logged-out account-recovery flow, but it must be enabled while you are still signed in. The client creates a separate high-entropy recovery code and uploads only root-key material encrypted by that code. If you lose both the password and the code, the server still cannot recover the account.',
           },
           {
             type: 'list',
             items: [
               'Use a long, memorable passphrase, or store the password in a password manager.',
               'Export encrypted backups regularly — they can be restored on any device with the password.',
+              'If you opt in to account recovery, store its one-time code separately from the account and the only backup.',
               'Changing your password re-wraps your keys; keep a recent backup before doing so.',
             ],
           },
           {
             type: 'callout',
             variant: 'warning',
-            text: 'Treat your password like the only key to a safe. An encrypted backup still requires its password; recovering after a forgotten password requires an independently usable copy whose decryption material you retained.',
+            text: 'Treat the account password and any recovery code as separate keys to the same safe. A copied recovery code can decrypt the escrowed account keys offline, and MFA cannot prevent that. Rotate a possibly exposed code immediately.',
           },
         ],
-        related: ['security/change-password', 'backups/why-backups', 'encryption/how-it-works'],
+        related: [
+          'security/account-recovery',
+          'security/change-password',
+          'backups/why-backups',
+          'encryption/how-it-works',
+        ],
       },
       {
         id: 'encryption/what-server-sees',
@@ -298,7 +304,7 @@ export const DOC_CATEGORIES: DocCategory[] = [
             rows: [
               [
                 'Encrypted backup',
-                'Ciphertext. Safe to store anywhere. Requires your password (or the backup’s key) to restore.',
+                'Ciphertext that still deserves protected storage. Requires the correct password or backup key to restore and can be copied for offline attack.',
               ],
               [
                 'Decrypted backup',
@@ -309,7 +315,7 @@ export const DOC_CATEGORIES: DocCategory[] = [
           {
             type: 'callout',
             variant: 'warning',
-            text: 'Prefer encrypted backups for archival. Only create a decrypted backup when you specifically need readable data, and store it somewhere safe.',
+            text: 'Prefer encrypted backups for archival, but do not publish them or store their password or account-recovery code beside them. Only create a decrypted backup when you specifically need readable data, and protect or remove every copy.',
           },
         ],
         related: ['backups/export-import', 'backups/why-backups'],
@@ -320,7 +326,7 @@ export const DOC_CATEGORIES: DocCategory[] = [
     id: 'security',
     title: 'Account & security',
     icon: 'safe-square',
-    description: 'Two-factor authentication, sessions, passwords, and note protection.',
+    description: 'Passwords, optional account recovery, two-factor authentication, sessions, and note protection.',
     pages: [
       {
         id: 'security/two-factor',
@@ -415,10 +421,71 @@ export const DOC_CATEGORIES: DocCategory[] = [
           {
             type: 'callout',
             variant: 'warning',
-            text: 'Other signed-in devices may need to re-authenticate after a password change. Keep the backup until every device is updated and syncing.',
+            text: 'Changing the password invalidates any existing account-recovery escrow. Other signed-in devices may also need to re-authenticate. Keep the backup until every device is updated and syncing, then enable account recovery again if you still want it and save the new code.',
           },
         ],
-        related: ['encryption/your-password', 'backups/why-backups', 'security/sessions'],
+        related: ['encryption/your-password', 'security/account-recovery', 'backups/why-backups', 'security/sessions'],
+      },
+      {
+        id: 'security/account-recovery',
+        title: 'Optional account recovery',
+        summary: 'Opt in before a password is lost, then protect the separately generated recovery code.',
+        blocks: [
+          {
+            type: 'paragraph',
+            text: 'Account recovery is shipped, optional, and off by default. A signed-in user enables it under Preferences → Security by entering the current password. The client encrypts the account root-key material with a high-entropy recovery secret and uploads only that ciphertext escrow. The recovery code, which contains the lookup identifier and secret, is shown once and is never sent to the server.',
+          },
+          {
+            type: 'heading',
+            text: 'Enable and store it safely',
+          },
+          {
+            type: 'steps',
+            items: [
+              'While signed in, open Preferences → Security → Account recovery.',
+              'Read the trust-boundary warning, enter the current account password, and choose Enable account recovery.',
+              'Copy the newly generated code to a protected password manager or offline recovery package that is separate from the notes account.',
+              'Confirm that the code is saved before dismissing the one-time display.',
+            ],
+          },
+          {
+            type: 'callout',
+            variant: 'warning',
+            text: 'Anyone who obtains the code can fetch the server-held ciphertext and decrypt the escrowed account keys offline. MFA still applies to normal server sign-in, but it cannot protect a copied recovery code. Treat code compromise as account-key compromise.',
+          },
+          {
+            type: 'heading',
+            text: 'Recover from the signed-out screen',
+          },
+          {
+            type: 'steps',
+            items: [
+              'Use only a computer you trust, open Sign in, and choose Recover account with an account recovery code.',
+              'Enter the complete recovery code and a strong new password twice.',
+              'The client retrieves the bounded ciphertext escrow, decrypts it locally, signs in with the recovered root key, and changes the credentials through the normal authenticated rotation path.',
+              'Save the replacement recovery code shown after rotation. The old password and old recovery code no longer work.',
+            ],
+          },
+          {
+            type: 'paragraph',
+            text: 'Recovery does not bypass the credential-change contract or give an administrator a reset capability. If sign-in succeeds but password rotation or recovery re-enrollment fails, follow the on-screen status: you may be signed in while still needing to retry the password change or enable recovery again from Security preferences.',
+          },
+          {
+            type: 'heading',
+            text: 'Rotate or disable',
+          },
+          {
+            type: 'list',
+            items: [
+              'Replace the code immediately if it may have been copied; replacement invalidates the previous code.',
+              'Changing account credentials deletes the existing escrow, so opt in again only after the password change completes.',
+              'Disabling recovery permanently deletes the server-side escrow and invalidates every issued account-recovery code.',
+              'Older legacy escrow is not accepted by this flow and can only be deleted.',
+              'Keep independent, tested backups even when recovery is enabled.',
+            ],
+          },
+        ],
+        related: ['encryption/your-password', 'security/change-password', 'backups/why-backups', 'security/two-factor'],
       },
       {
         id: 'security/protected-notes',
@@ -841,18 +908,19 @@ export const DOC_CATEGORIES: DocCategory[] = [
       {
         id: 'backups/why-backups',
         title: 'Why backups matter',
-        summary: 'There is no password reset — maintain independently usable backups.',
+        summary: 'Recovery is opt-in and backups still cover device loss, deletion, and escrow failure.',
         blocks: [
           {
             type: 'paragraph',
-            text: 'Because your data is end-to-end encrypted and there is no supported password reset, backups protect against a lost device or accidental deletion only when you retain the material needed to open them.',
+            text: 'The server has no administrator-readable reset that can decrypt your notes. Optional account recovery works only when you enabled it before losing the password and still have its separate recovery code. Backups remain essential for lost devices, accidental deletion, damaged accounts, unavailable escrow, and recovery-code loss.',
           },
           {
             type: 'list',
             items: [
               'Export an encrypted backup regularly and store copies in more than one place.',
               'An encrypted backup can be restored on any device with your password.',
-              'For forgotten-password recovery, retain an independently usable copy, such as a carefully protected decrypted export or an encrypted export whose password you still know.',
+              'If you enable account recovery, store its high-entropy code separately from both the account and the only backup.',
+              'For recovery without that code, retain an independently usable copy, such as a carefully protected decrypted export or an encrypted export whose password you still know.',
               'Verify occasionally that you can actually restore a backup.',
             ],
           },
@@ -1428,7 +1496,7 @@ export const DOC_CATEGORIES: DocCategory[] = [
           },
           {
             type: 'paragraph',
-            text: 'There is no supported password reset. Make sure you are using the exact account password. If you genuinely forgot it, the live encrypted account is unrecoverable; restore an independently usable backup into a new account. An encrypted backup still requires its password.',
+            text: 'Make sure you are using the exact account password. If you enabled account recovery before losing it and retained the separate code, return to the sign-in screen and choose Recover account with an account recovery code. Otherwise there is no administrator reset that can decrypt the live account; restore an independently usable backup into a new account. An encrypted backup still requires its password.',
           },
           {
             type: 'heading',
@@ -1444,7 +1512,12 @@ export const DOC_CATEGORIES: DocCategory[] = [
             text: 'After fixing cookie settings, fully reload the app and sign in again so a fresh, valid cookie is stored.',
           },
         ],
-        related: ['self-hosting/cookies-auth', 'troubleshooting/not-syncing', 'encryption/your-password'],
+        related: [
+          'self-hosting/cookies-auth',
+          'troubleshooting/not-syncing',
+          'encryption/your-password',
+          'security/account-recovery',
+        ],
       },
       {
         id: 'troubleshooting/not-syncing',

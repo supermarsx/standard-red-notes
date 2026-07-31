@@ -15,8 +15,8 @@ This page separates three important states:
 - **Shipped** means executable code and tests or release automation are present.
 - **Operator-gated** means the implementation is present but an administrator
   must enable or configure it.
-- **Planned** means the repository contains a design document, not a promise
-  that the complete design is available at runtime.
+- **Conditional** means the implementation is present but a named limitation or
+  unverified external dependency prevents a broader claim.
 
 ## Product surfaces
 
@@ -44,6 +44,7 @@ This page separates three important states:
 | Public and burn-after-reading shares | Shipped | Public links intentionally disclose the shared payload to anyone holding the link; burn links add one-time retrieval behavior. |
 | App passwords and MCP tokens | Shipped, with MCP limitations | App passwords still require the account password. A full MCP token carries wrapped items keys and can decrypt without the password; read-only/write mode is enforced, but selected-tag scope is not enforced by the current bridge. Token deletion blocks new authentication but does not erase an already-issued session or local decrypted data. |
 | Trusted-device and push MFA | Shipped | New sign-ins can be approved from a trusted session; pending challenges and trusted devices have dedicated endpoints. |
+| Optional account recovery | Shipped, user opt-in | A signed-in client creates ciphertext escrow and a one-time high-entropy code; the signed-out client retrieves by UUID locator, decrypts locally, signs in with the recovered root key, rotates credentials atomically, and issues a replacement code. MFA does not protect a copied recovery code. |
 | User administration and RBAC | Shipped | The web console and CLI cover users, roles, groups, effective permissions, registration policy, bans, suspension, and audit. |
 | Email backups | Operator-gated | The server master switch and per-user settings must both allow the scheduled encrypted backup. |
 | Nextcloud/WebDAV backups | Operator-gated | The server master switch and complete per-user WebDAV settings are required. |
@@ -66,8 +67,8 @@ groups needed dedicated runtime documentation:
 | Authentication, credentials, recovery, and trust boundaries | [Security and Account](security-and-account.md) |
 | Vault permissions, invitations, and public sharing | [Sharing and Collaboration](sharing-and-collaboration.md) |
 | User exports through infrastructure restoration | [Backups and Recovery](backups-and-recovery.md) |
-| MCP runtime rather than the design plan | [MCP Bridge](mcp-bridge.md) |
-| OpenClaw runtime rather than the design plan | [OpenClaw](openclaw.md) |
+| MCP transports, tools, credentials, and compromise response | [MCP Bridge](mcp-bridge.md) |
+| OpenClaw commands, providers, local MCP execution, and security controls | [OpenClaw](openclaw.md) |
 | All three command-line surfaces | [Command-Line Tools](command-line-tools.md) |
 | Web and CLI administration | [Administration](administration.md) |
 | Shipped integrations and their gates | [Automation and Integrations](automation-and-integrations.md) |
@@ -86,7 +87,7 @@ For a high-confidence answer, use more than a visible control:
 4. Find the focused test or release contract.
 5. Verify the deployed profile actually includes the required service.
 
-A design document is useful intent evidence, but it is not runtime evidence.
-Use [Workflows with n8n](workflows.md) for the implemented boundary. The
-[MCP support plan](MCP_SUPPORT_PLAN.md) and [OpenClaw plan](OPENCLAW_PLAN.md)
-should be read with that distinction.
+Source comments and old issue descriptions are not runtime evidence. Use the
+current [MCP Bridge](mcp-bridge.md), [OpenClaw](openclaw.md), and [Workflows with
+n8n](workflows.md) guides together with their executable tests and release
+contracts.

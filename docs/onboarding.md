@@ -50,29 +50,65 @@ upgrade to unlock things.
 That's it — there's nothing to purchase. Self-hosted instances ship with all
 features included.
 
+{% include safety-alert.html
+  level="caution"
+  title="Confirm the instance before entering credentials"
+  body="A sync server handles your account identity, encrypted payloads, sessions, and operational metadata. Check the exact HTTPS hostname and operator before entering a password or recovery code; a look-alike or untrusted host can capture sign-in material even though it cannot silently decrypt an existing vault without the client-held key."
+  link_url="/security-and-account.html#trust-boundary"
+  link_text="Review the trust boundary"
+%}
+
 ### Your password matters — a lot
 
-Because notes are end-to-end encrypted, **your password is the key to your
-data**. The server never sees it and cannot reset it for you the way a typical
-website can.
+Because notes are end-to-end encrypted, your password participates in deriving
+the keys to your data. The server never receives the plaintext password and an
+administrator cannot choose a new password and decrypt the account for you.
 
-- If you **forget your password, the live encrypted account cannot be recovered
-  through any supported flow.** There is no backdoor — that's the point of
-  end-to-end encryption.
 - Choose a strong password and store it somewhere safe (a password manager is
   ideal).
 - Make regular **encrypted backups** (see [Import / export](#import--export)) so
   you always have a copy you control.
+- If you want the shipped optional account-recovery flow, enable it **before**
+  the password is lost and save the separately generated recovery code.
 
-> The source tree contains disabled, experimental recovery-escrow primitives,
-> but it does not contain a verified logged-out retrieval, credential-rotation,
-> and sign-in flow. Do not enable or depend on that substrate as a password
-> recovery feature.
+{% include safety-alert.html
+  level="danger"
+  title="No administrator-only password reset exists"
+  body="Without the current password, a previously enabled account-recovery code, or an independently usable backup, the encrypted account cannot be recovered. An MFA reset changes only the server sign-in challenge and does not decrypt notes."
+  link_url="/security-and-account.html#recovery"
+  link_text="Understand recovery before relying on it"
+%}
 
 > Some servers may have a shared **Server Access Key** configured (an
 > obfuscation gate the operator sets). If yours does, enter it under
 > **Preferences -> Security -> Server Access Key** *before* signing in. It is
 > stored only on that device and is separate from your account password.
+
+### Enable optional account recovery
+
+Account recovery is available under **Preferences -> Security -> Account
+recovery** and is off by default. Enabling it requires the current password.
+The client creates a high-entropy recovery code, encrypts the account root-key
+material with it, and uploads only that ciphertext escrow. The code is shown
+once and never sent to the server.
+
+1. Enable recovery while signed in and on a trusted computer.
+2. Save the entire code in a protected password manager or offline recovery
+   package, separate from the notes account and the only backup.
+3. If you lose the password, choose **Recover account with an account recovery
+   code** from the signed-out screen, enter a strong replacement password, and
+   save the newly rotated recovery code.
+4. Replace the code immediately if it may have been copied. Replacing it or
+   completing recovery invalidates the old code; changing the account password
+   deletes the existing escrow and requires a new opt-in.
+
+{% include safety-alert.html
+  level="danger"
+  title="The recovery code can unlock the escrow offline"
+  body="Anyone who obtains the code can retrieve the server-held ciphertext and decrypt the escrowed account keys. MFA still protects normal sign-in, but it cannot make a copied recovery code safe. Use the code only on a computer you trust and treat exposure as account-key compromise."
+  link_url="/security-and-account.html#recovery-code-handling"
+  link_text="Store and rotate recovery material safely"
+%}
 
 ## The basics
 
@@ -245,6 +281,14 @@ Mark a note as **protected** to require re-authentication (your password or
 biometrics, depending on platform) before it can be viewed or edited. Good for
 your most sensitive notes so a glance at an unlocked app doesn't reveal them.
 
+{% include safety-alert.html
+  level="caution"
+  title="Local protection depends on the computer"
+  body="Protected-note prompts and app locks reduce casual access, but they do not stop malware, screenshots, clipboard capture, or a person using an already unlocked session. Use an OS login, full-disk encryption, automatic screen locking, and device revocation together."
+  link_url="/security-and-account.html#protected-notes-and-local-locks"
+  link_text="Review local-device security"
+%}
+
 ### Selective sync (local-only notes)
 
 You can mark a note as **local-only before its first sync** so it stays on the
@@ -270,9 +314,11 @@ In **Preferences -> Backups / Data** you can:
 - **Import** notes from a backup or from other apps' export formats.
 
 Make backups regularly. An encrypted backup protects against device or server
-loss only while you retain its password. Recovering after a forgotten password
-requires an independently usable copy, such as a carefully protected decrypted
-export or an encrypted export whose password you still know.
+loss only while you retain its password. Optional account recovery helps only
+when it was enabled in advance and its separate code still exists. Otherwise,
+recovering after a forgotten password requires an independently usable copy,
+such as a carefully protected decrypted export or an encrypted export whose
+password you still know.
 
 ## Security: what leaves your device
 
@@ -288,6 +334,7 @@ cross that boundary — here's an honest summary so there are no surprises:
 | **Server Access Key** | An operator-set **obfuscation gate**, not encryption. It makes the server refuse clients that don't present the key; it does **not** strengthen (or replace) end-to-end encryption. |
 | **Decrypted / plaintext export** | The file is unencrypted — anyone who gets the file can read it. Prefer **encrypted** backups. |
 | **Local-only (selective sync)** | When enabled before first sync, the note never leaves the device — but it also isn't backed up to the server, so back it up yourself. It cannot be newly enabled after upload. |
+| **Optional account recovery** | The client uploads root-key material encrypted by a separate high-entropy recovery code. The server cannot decrypt it, but anyone with the code can fetch and decrypt the escrow offline; MFA does not protect a copied code. |
 
 The takeaway: your notes are private by default. Each feature above is a
 deliberate, opt-in trade-off — use them knowingly.

@@ -3,9 +3,45 @@
     - title: Documentation home
       url: /
     - title: Quick start
-      url: /onboarding.html
+      items:
+        - title: Onboarding overview
+          url: /onboarding.html
+        - title: What Standard Red Notes is
+          url: /onboarding.html#what-this-is
+        - title: First steps
+          url: /onboarding.html#first-steps
+        - title: Create an account or sign in
+          url: /onboarding.html#create-an-account-or-sign-in
+        - title: Password safety
+          url: /onboarding.html#your-password-matters--a-lot
+        - title: Enable account recovery
+          url: /onboarding.html#enable-optional-account-recovery
+        - title: Notes and search basics
+          url: /onboarding.html#the-basics
+        - title: Editors
+          url: /onboarding.html#editors
+        - title: Organize and navigate
+          url: /onboarding.html#organizing-and-navigating
+        - title: Power features
+          url: /onboarding.html#power-features
+        - title: Data leaving the device
+          url: /onboarding.html#security-what-leaves-your-device
+        - title: Tips and shortcuts
+          url: /onboarding.html#tips-and-keyboard-shortcuts
+        - title: Getting help
+          url: /onboarding.html#getting-help
     - title: Capability map
-      url: /capability-map.html
+      items:
+        - title: Capability overview
+          url: /capability-map.html
+        - title: Product surfaces
+          url: /capability-map.html#product-surfaces
+        - title: Server capability groups
+          url: /capability-map.html#server-capability-groups
+        - title: Documentation taxonomy
+          url: /capability-map.html#documentation-taxonomy
+        - title: Verify a capability claim
+          url: /capability-map.html#how-to-verify-a-capability-claim
     - title: Standard Notes compatibility
       items:
         - title: Compatibility overview
@@ -14,14 +50,18 @@
           url: /standard-notes-compatibility.html#status-key
         - title: Compatibility matrix
           url: /standard-notes-compatibility.html#compatibility-matrix
+        - title: Encryption protocols 001-004
+          url: /standard-notes-compatibility.html#encryption-protocol-boundary
         - title: Backups and imports
           url: /standard-notes-compatibility.html#backups-and-imports
         - title: Clients and servers
           url: /standard-notes-compatibility.html#clients-and-servers
-        - title: Content and features
+        - title: Content and local-only data
           url: /standard-notes-compatibility.html#content-features-and-local-only-data
         - title: Migration playbooks
           url: /standard-notes-compatibility.html#safe-migration-playbooks
+        - title: Validate a version pair
+          url: /standard-notes-compatibility.html#how-to-validate-a-version-pair
         - title: Evidence and gaps
           url: /standard-notes-compatibility.html#evidence-reviewed
     - title: Complete in-app guide
@@ -30,33 +70,181 @@
         - title: Guide overview
           url: /app-guide.html
         - title: Getting started
-          url: /app-guide.html#getting-started
+          items:
+            - title: Getting started overview
+              url: /app-guide.html#getting-started
+            - title: Welcome
+              url: /app-guide.html#getting-started-welcome
+            - title: Create your first note
+              url: /app-guide.html#getting-started-create-first-note
+            - title: Interface tour
+              url: /app-guide.html#getting-started-interface-tour
+            - title: Use without an account
+              url: /app-guide.html#getting-started-no-account
+            - title: Create an account and sign in
+              url: /app-guide.html#getting-started-account-setup
         - title: Privacy and encryption
-          url: /app-guide.html#encryption
+          items:
+            - title: Encryption overview
+              url: /app-guide.html#encryption
+            - title: End-to-end encryption
+              url: /app-guide.html#encryption-how-it-works
+            - title: Password and key
+              url: /app-guide.html#encryption-your-password
+            - title: What the server sees
+              url: /app-guide.html#encryption-what-server-sees
+            - title: Encrypted vs decrypted
+              url: /app-guide.html#encryption-encrypted-vs-decrypted
         - title: Account and security
-          url: /app-guide.html#security
+          items:
+            - title: Security overview
+              url: /app-guide.html#security
+            - title: Authenticator 2FA
+              url: /app-guide.html#security-two-factor
+            - title: Email magic-link 2FA
+              url: /app-guide.html#security-magic-link
+            - title: Sessions and devices
+              url: /app-guide.html#security-sessions
+            - title: Change password
+              url: /app-guide.html#security-change-password
+            - title: Optional account recovery
+              url: /app-guide.html#security-account-recovery
+            - title: Protected notes and app lock
+              url: /app-guide.html#security-protected-notes
         - title: Notes and editors
-          url: /app-guide.html#editors
+          items:
+            - title: Editors overview
+              url: /app-guide.html#editors
+            - title: Note types
+              url: /app-guide.html#editors-note-types
+            - title: Super block editor
+              url: /app-guide.html#editors-super
+            - title: Markdown editors
+              url: /app-guide.html#editors-markdown
+            - title: Code editor
+              url: /app-guide.html#editors-code
+            - title: Spreadsheet
+              url: /app-guide.html#editors-spreadsheet
+            - title: Mermaid diagrams
+              url: /app-guide.html#editors-mermaid
+            - title: Checklists and to-dos
+              url: /app-guide.html#editors-checklists
         - title: Organizing notes
-          url: /app-guide.html#organization
+          items:
+            - title: Organization overview
+              url: /app-guide.html#organization
+            - title: Tags and nested folders
+              url: /app-guide.html#organization-tags
+            - title: Smart views
+              url: /app-guide.html#organization-smart-views
+            - title: Pin, star, archive, trash
+              url: /app-guide.html#organization-pinning
+            - title: Search notes
+              url: /app-guide.html#organization-search
+            - title: Note options
+              url: /app-guide.html#organization-note-options
         - title: Files and attachments
-          url: /app-guide.html#files
+          items:
+            - title: Files overview
+              url: /app-guide.html#files
+            - title: Upload and attach
+              url: /app-guide.html#files-uploading
+            - title: Encryption and limits
+              url: /app-guide.html#files-encryption
         - title: Sync and devices
-          url: /app-guide.html#sync
+          items:
+            - title: Sync overview
+              url: /app-guide.html#sync
+            - title: How sync works
+              url: /app-guide.html#sync-how-it-works
+            - title: Multiple devices
+              url: /app-guide.html#sync-multi-device
+            - title: Conflicts and resolution
+              url: /app-guide.html#sync-conflicts
+            - title: Offline use
+              url: /app-guide.html#sync-offline
         - title: Backups and export
-          url: /app-guide.html#backups
+          items:
+            - title: Backups overview
+              url: /app-guide.html#backups
+            - title: Why backups matter
+              url: /app-guide.html#backups-why-backups
+            - title: Export and import
+              url: /app-guide.html#backups-export-import
+            - title: Automatic backups
+              url: /app-guide.html#backups-automatic
+            - title: Restore a backup
+              url: /app-guide.html#backups-restore
         - title: Self-hosting
-          url: /app-guide.html#self-hosting
+          items:
+            - title: Self-hosting overview
+              url: /app-guide.html#self-hosting
+            - title: Stack overview
+              url: /app-guide.html#self-hosting-overview
+            - title: Architecture
+              url: /app-guide.html#self-hosting-architecture
+            - title: Cookie authentication
+              url: /app-guide.html#self-hosting-cookies-auth
+            - title: Email and SMTP
+              url: /app-guide.html#self-hosting-smtp
+            - title: Update the server
+              url: /app-guide.html#self-hosting-updating
         - title: AI assistant
-          url: /app-guide.html#assistant
+          items:
+            - title: Assistant overview
+              url: /app-guide.html#assistant
+            - title: Capabilities
+              url: /app-guide.html#assistant-overview
+            - title: Configure providers
+              url: /app-guide.html#assistant-providers
+            - title: Connection modes
+              url: /app-guide.html#assistant-connection
+            - title: Steering and delegation
+              url: /app-guide.html#assistant-capabilities
+            - title: Retrieval and AI search
+              url: /app-guide.html#assistant-retrieval-search
+            - title: Privacy
+              url: /app-guide.html#assistant-privacy
         - title: Collaboration
-          url: /app-guide.html#collaboration
+          items:
+            - title: Collaboration overview
+              url: /app-guide.html#collaboration
+            - title: Shared vaults
+              url: /app-guide.html#collaboration-vaults
+            - title: Contacts and trust
+              url: /app-guide.html#collaboration-contacts
+            - title: Realtime collaboration
+              url: /app-guide.html#collaboration-realtime
         - title: Automation with MCP
-          url: /app-guide.html#automation
+          items:
+            - title: Automation overview
+              url: /app-guide.html#automation
+            - title: MCP bridge
+              url: /app-guide.html#automation-mcp-overview
+            - title: Connect an agent
+              url: /app-guide.html#automation-mcp-setup
+            - title: Agent capabilities
+              url: /app-guide.html#automation-capabilities
+            - title: HTTP API
+              url: /app-guide.html#automation-http-api
         - title: Keyboard shortcuts
-          url: /app-guide.html#shortcuts
+          items:
+            - title: Shortcuts overview
+              url: /app-guide.html#shortcuts
+            - title: Common shortcuts
+              url: /app-guide.html#shortcuts-common
         - title: Troubleshooting
-          url: /app-guide.html#troubleshooting
+          items:
+            - title: Troubleshooting overview
+              url: /app-guide.html#troubleshooting
+            - title: Sign-in and 401 errors
+              url: /app-guide.html#troubleshooting-cant-sign-in
+            - title: Notes not syncing
+              url: /app-guide.html#troubleshooting-not-syncing
+            - title: Lost two-factor access
+              url: /app-guide.html#troubleshooting-lost-2fa
+            - title: Clear local data
+              url: /app-guide.html#troubleshooting-reset
 
 - title: Use the app
   items:
@@ -82,6 +270,8 @@
           url: /sync-and-data-lifecycle.html
         - title: Data classes
           url: /sync-and-data-lifecycle.html#data-classes
+        - title: Local-only boundary
+          url: /sync-and-data-lifecycle.html#local-only-is-a-pre-upload-boundary
         - title: Normal sync cycle
           url: /sync-and-data-lifecycle.html#normal-sync-cycle
         - title: Offline work
@@ -90,7 +280,7 @@
           url: /sync-and-data-lifecycle.html#conflicts
         - title: Shared vault sync
           url: /sync-and-data-lifecycle.html#shared-vault-sync
-        - title: Revisions and deletion
+        - title: Revisions, trash, and deletion
           url: /sync-and-data-lifecycle.html#revisions-trash-and-deletion
         - title: Files
           url: /sync-and-data-lifecycle.html#files
@@ -104,8 +294,16 @@
           url: /security-and-account.html#trust-boundary
         - title: Authentication controls
           url: /security-and-account.html#authentication-controls
-        - title: Recovery
+        - title: Recovery lifecycle
           url: /security-and-account.html#recovery
+        - title: Pre-enable recovery
+          url: /security-and-account.html#what-must-happen-before-password-loss
+        - title: Logged-out recovery
+          url: /security-and-account.html#logged-out-recovery-and-credential-rotation
+        - title: Recovery boundaries
+          url: /security-and-account.html#recovery-boundaries
+        - title: Recovery-code handling
+          url: /security-and-account.html#recovery-code-handling
         - title: Protected notes and locks
           url: /security-and-account.html#protected-notes-and-local-locks
         - title: Public sharing
@@ -130,8 +328,32 @@
           url: /sharing-and-collaboration.html#comments-and-mentions
         - title: Public share links
           url: /sharing-and-collaboration.html#public-share-links
+        - title: Survivor designation
+          url: /sharing-and-collaboration.html#survivor-designation-and-removal
+        - title: Operational controls
+          url: /sharing-and-collaboration.html#operational-controls
     - title: Backups and recovery
-      url: /backups-and-recovery.html
+      items:
+        - title: Backup overview
+          url: /backups-and-recovery.html
+        - title: Backup layers
+          url: /backups-and-recovery.html#backup-layers
+        - title: Manual account exports
+          url: /backups-and-recovery.html#manual-account-exports
+        - title: Desktop automatic backups
+          url: /backups-and-recovery.html#desktop-automatic-backups
+        - title: Email backups
+          url: /backups-and-recovery.html#email-backups
+        - title: Nextcloud and WebDAV
+          url: /backups-and-recovery.html#nextcloudwebdav-backups
+        - title: Infrastructure backups
+          url: /backups-and-recovery.html#self-hosted-infrastructure-backups
+        - title: Restore order
+          url: /backups-and-recovery.html#restore-order
+        - title: Recovery drills
+          url: /backups-and-recovery.html#recovery-drills
+        - title: Retention and deletion
+          url: /backups-and-recovery.html#retention-and-deletion
 
 - title: Self-host and operate
   items:
@@ -143,11 +365,21 @@
           url: /self-hosting.html#deploy-in-5-minutes
         - title: Stack components
           url: /self-hosting.html#what-the-stack-contains
+        - title: Prerequisites
+          url: /self-hosting.html#prerequisites
         - title: Configuration
           url: /self-hosting.html#configuration-the-env-file
+        - title: Shared access key
+          url: /self-hosting.html#server-wide-shared-access-key-optional-obfuscation-gate
+        - title: Home-server release
+          url: /self-hosting.html#standalone-home-server-release
+        - title: srn-admin binary
+          url: /self-hosting.html#the-srn-admin-binary
+        - title: Domains and ports
+          url: /self-hosting.html#choosing-a-domain-and-ports
         - title: Reverse proxy
           url: /self-hosting.html#running-behind-a-reverse-proxy
-        - title: Upgrades
+        - title: Start, stop, and upgrade
           url: /self-hosting.html#start-stop-and-upgrade
         - title: Data locations
           url: /self-hosting.html#where-your-data-lives
@@ -156,60 +388,417 @@
         - title: Troubleshooting
           url: /self-hosting.html#troubleshooting
     - title: Deployment profiles
-      url: /DEPLOYMENT.html
+      items:
+        - title: Deployment overview
+          url: /DEPLOYMENT.html
+        - title: Multi-container
+          url: /DEPLOYMENT.html#a-full-multi-container
+        - title: All-in-one container
+          url: /DEPLOYMENT.html#b-all-in-one-single-container-new
+        - title: Architecture
+          url: /DEPLOYMENT.html#architecture
+        - title: LXC and systemd
+          url: /DEPLOYMENT.html#c-lxc--systemd-new
+        - title: Container restart controls
+          url: /DEPLOYMENT.html#opt-in-container-restart-redis--mariadb
+        - title: CSP verification
+          url: /DEPLOYMENT.html#verifying-the-csp-self-heal
     - title: Administration
-      url: /administration.html
+      items:
+        - title: Administration overview
+          url: /administration.html
+        - title: Access model
+          url: /administration.html#access-model
+        - title: Web console tabs
+          url: /administration.html#web-console-tabs
+        - title: User operations
+          url: /administration.html#user-operations
+        - title: Roles and groups
+          url: /administration.html#roles-permissions-and-groups
+        - title: Registration
+          url: /administration.html#registration
+        - title: Feature gates
+          url: /administration.html#feature-gates
+        - title: Service lifecycle
+          url: /administration.html#service-health-and-lifecycle
+        - title: Security and anti-abuse
+          url: /administration.html#security-and-anti-abuse
+        - title: Audit practice
+          url: /administration.html#audit-practice
     - title: Operations hardening
-      url: /operations-hardening.html
+      items:
+        - title: Hardening overview
+          url: /operations-hardening.html
+        - title: Database resilience
+          url: /operations-hardening.html#database-resilience
+        - title: Connection budget
+          url: /operations-hardening.html#connection-budget
+        - title: Backup and restore
+          url: /operations-hardening.html#backup-and-restore
+        - title: Restart safety
+          url: /operations-hardening.html#restart-safety
+        - title: Operation limits
+          url: /operations-hardening.html#operation-limits
+        - title: Redis limits
+          url: /operations-hardening.html#redis-limits
+        - title: Container hardening
+          url: /operations-hardening.html#docker-image-and-runtime-hardening
+        - title: Image pinning
+          url: /operations-hardening.html#image-pinning
+        - title: Verification commands
+          url: /operations-hardening.html#verification-commands
     - title: Monitoring and troubleshooting
-      url: /monitoring-and-troubleshooting.html
+      items:
+        - title: Monitoring overview
+          url: /monitoring-and-troubleshooting.html
+        - title: Health layers
+          url: /monitoring-and-troubleshooting.html#health-layers
+        - title: First-response sequence
+          url: /monitoring-and-troubleshooting.html#first-response-sequence
+        - title: Logs and safe logging
+          url: /monitoring-and-troubleshooting.html#logs
+        - title: Symptom guide
+          url: /monitoring-and-troubleshooting.html#symptom-guide
+        - title: Safe service recovery
+          url: /monitoring-and-troubleshooting.html#safe-service-recovery
+        - title: Escalation bundle
+          url: /monitoring-and-troubleshooting.html#escalation-bundle
     - title: Releases and upgrades
-      url: /releases-and-upgrades.html
+      items:
+        - title: Release overview
+          url: /releases-and-upgrades.html
+        - title: Release streams
+          url: /releases-and-upgrades.html#release-streams
+        - title: Verify before installation
+          url: /releases-and-upgrades.html#verify-before-installation
+        - title: Desktop and mobile
+          url: /releases-and-upgrades.html#desktop-and-mobile
+        - title: Self-hosted upgrade sequence
+          url: /releases-and-upgrades.html#self-hosted-upgrade-sequence
+        - title: Compatibility order
+          url: /releases-and-upgrades.html#compatibility-order
+        - title: Rollback
+          url: /releases-and-upgrades.html#rollback
+        - title: Release contracts
+          url: /releases-and-upgrades.html#repository-release-contracts
+        - title: Fingerprint ownership
+          url: /releases-and-upgrades.html#managed-products-and-fingerprint-ownership
+        - title: Mobile publication intent
+          url: /releases-and-upgrades.html#mobile-impact-is-not-publication-intent
 
 - title: Automate and integrate
   items:
     - title: Command-line tools
-      url: /command-line-tools.html
+      items:
+        - title: CLI overview
+          url: /command-line-tools.html
+        - title: srn-client
+          url: /command-line-tools.html#srn-client
+        - title: srn-server
+          url: /command-line-tools.html#srn-server
+        - title: srn-admin
+          url: /command-line-tools.html#srn-admin
+        - title: High-impact operations
+          url: /command-line-tools.html#high-impact-admin-operations
+        - title: Shared server access key
+          url: /command-line-tools.html#shared-server-access-key
+        - title: Choose the right tool
+          url: /command-line-tools.html#choosing-the-right-tool
     - title: MCP bridge
-      url: /mcp-bridge.html
+      items:
+        - title: MCP overview
+          url: /mcp-bridge.html
+        - title: Available tools
+          url: /mcp-bridge.html#available-tools
+        - title: Authentication choices
+          url: /mcp-bridge.html#authentication-choices
+        - title: Scope and revocation
+          url: /mcp-bridge.html#scope-and-revocation-limits
+        - title: Local stdio transport
+          url: /mcp-bridge.html#local-stdio-transport
+        - title: Authenticated HTTP
+          url: /mcp-bridge.html#authenticated-http-transport
+        - title: Runtime settings
+          url: /mcp-bridge.html#runtime-settings
+        - title: Data path
+          url: /mcp-bridge.html#data-path
+        - title: Health and troubleshooting
+          url: /mcp-bridge.html#health-and-troubleshooting
     - title: Workflows with n8n
-      url: /workflows.html
+      items:
+        - title: Workflow overview
+          url: /workflows.html
+        - title: Implemented boundary
+          url: /workflows.html#what-is-implemented
+        - title: Access model
+          url: /workflows.html#access-model
+        - title: Public URL rules
+          url: /workflows.html#public-url-rules
+        - title: Local setup
+          url: /workflows.html#local-setup
+        - title: Production setup
+          url: /workflows.html#production-setup
+        - title: Encryption key lifecycle
+          url: /workflows.html#encryption-key-lifecycle
+        - title: Connect n8n to MCP
+          url: /workflows.html#connect-n8n-to-the-mcp-bridge
+        - title: Credential and data boundaries
+          url: /workflows.html#credential-and-data-boundaries
+        - title: Revoke and respond
+          url: /workflows.html#revoke-and-respond
+        - title: Upgrade retired configuration
+          url: /workflows.html#upgrade-from-the-retired-embedded-configuration
+        - title: Troubleshooting
+          url: /workflows.html#troubleshooting
     - title: HTTP API
-      url: /API.html
+      items:
+        - title: API overview
+          url: /API.html
+        - title: Base URL and versions
+          url: /API.html#base-url-and-versioning
+        - title: Authentication model
+          url: /API.html#authentication-model
+        - title: Curl walkthrough
+          url: /API.html#how-to-call-the-api-curl
+        - title: Encryption implications
+          url: /API.html#end-to-end-encryption-implications
+        - title: Endpoint reference
+          url: /API.html#endpoints
+        - title: Authentication and sessions
+          url: /API.html#authentication-and-sessions
+        - title: Account recovery
+          url: /API.html#account-recovery
+        - title: Users and settings
+          url: /API.html#users-settings-and-features
+        - title: Sync and items
+          url: /API.html#sync-and-items
+        - title: Revisions
+          url: /API.html#revisions
+        - title: Files
+          url: /API.html#files
+        - title: Realtime sockets
+          url: /API.html#websocket-realtime
+        - title: Subscriptions and tokens
+          url: /API.html#subscriptions-and-offline-tokens
+        - title: Two-factor authentication
+          url: /API.html#two-factor-authenticators-and-magic-link
+        - title: Collaboration
+          url: /API.html#collaboration-shared-vaults-invites-messages
+        - title: App passwords
+          url: /API.html#app-passwords-standard-red-notes
+        - title: MCP tokens
+          url: /API.html#mcp-tokens-standard-red-notes
+        - title: Trusted devices and push MFA
+          url: /API.html#trusted-devices-and-push-mfa-standard-red-notes
+        - title: Public shares
+          url: /API.html#public-share-links-standard-red-notes
+        - title: Dead man's switches
+          url: /API.html#dead-mans-switches-standard-red-notes
+        - title: Email reminders
+          url: /API.html#email-reminders-standard-red-notes
+        - title: AI assistant proxy
+          url: /API.html#ai-assistant-proxy-standard-red-notes
+        - title: Integrations
+          url: /API.html#integrations-standard-red-notes
+        - title: Administration API
+          url: /API.html#admin-standard-red-notes
+        - title: Server metadata
+          url: /API.html#server-metadata
+        - title: Related references
+          url: /API.html#see-also
     - title: OpenClaw assistant
-      url: /openclaw.html
+      items:
+        - title: OpenClaw overview
+          url: /openclaw.html
+        - title: Architecture
+          url: /openclaw.html#architecture
+        - title: Install a release
+          url: /openclaw.html#install-a-release
+        - title: Configuration
+          url: /openclaw.html#configuration
+        - title: Providers
+          url: /openclaw.html#providers
+        - title: Commands
+          url: /openclaw.html#commands
+        - title: Security controls
+          url: /openclaw.html#security-controls
+        - title: Troubleshooting
+          url: /openclaw.html#troubleshooting
     - title: ChatGPT and Codex pairing
-      url: /assistant-subscription-pairing.html
+      items:
+        - title: Pairing overview
+          url: /assistant-subscription-pairing.html
+        - title: Configure the gateway
+          url: /assistant-subscription-pairing.html#configure-the-gateway
+        - title: Pair a named slot
+          url: /assistant-subscription-pairing.html#pair-a-named-slot
+        - title: Callback and restart lifecycle
+          url: /assistant-subscription-pairing.html#state-callback-and-restart-lifecycle
+        - title: Credential storage and refresh
+          url: /assistant-subscription-pairing.html#credential-storage-and-refresh
+        - title: Inspect and unpair
+          url: /assistant-subscription-pairing.html#inspect-and-unpair-safely
+        - title: HTTP contract
+          url: /assistant-subscription-pairing.html#http-contract
+        - title: Backup and multi-instance limits
+          url: /assistant-subscription-pairing.html#backup-restore-and-multi-instance-limits
     - title: CalDAV
-      url: /caldav.html
+      items:
+        - title: CalDAV overview
+          url: /caldav.html
+        - title: Enable and connect
+          url: /caldav.html#enable-and-connect
+        - title: Publish and remove items
+          url: /caldav.html#publish-and-remove-items
+        - title: Tokens and revocation
+          url: /caldav.html#tokens-and-revocation
+        - title: Implemented DAV contract
+          url: /caldav.html#implemented-dav-contract
+        - title: Persistence and operations
+          url: /caldav.html#persistence-and-operations
     - title: Automation and integrations
-      url: /automation-and-integrations.html
+      items:
+        - title: Integration overview
+          url: /automation-and-integrations.html
+        - title: Status matrix
+          url: /automation-and-integrations.html#status-matrix
+        - title: Workflows and n8n
+          url: /automation-and-integrations.html#workflows-and-n8n
+        - title: Webhooks
+          url: /automation-and-integrations.html#webhooks
+        - title: GitHub publishing
+          url: /automation-and-integrations.html#github-publishing
+        - title: OCR
+          url: /automation-and-integrations.html#ocr
+        - title: CalDAV
+          url: /automation-and-integrations.html#caldav
+        - title: Plugins gallery
+          url: /automation-and-integrations.html#plugins-gallery
+        - title: Reminders and providers
+          url: /automation-and-integrations.html#reminders-and-assistant-providers
+        - title: Integration review checklist
+          url: /automation-and-integrations.html#integration-review-checklist
 
 - title: Build and verify
   items:
     - title: Architecture
-      url: /architecture.html
+      items:
+        - title: Architecture overview
+          url: /architecture.html
+        - title: Runtime shape
+          url: /architecture.html#runtime-shape
+        - title: Request flow
+          url: /architecture.html#request-flow
+        - title: Encryption boundary
+          url: /architecture.html#encryption-boundary
+        - title: Deployment profiles
+          url: /architecture.html#deployment-profiles
+        - title: Validation layers
+          url: /architecture.html#validation-layers
     - title: Development guide
-      url: /development-guide.html
+      items:
+        - title: Development overview
+          url: /development-guide.html
+        - title: Repository map
+          url: /development-guide.html#repository-map
+        - title: Toolchain
+          url: /development-guide.html#toolchain
+        - title: Common commands
+          url: /development-guide.html#common-commands
+        - title: Contract and operations gates
+          url: /development-guide.html#contract-and-operations-gates
+        - title: Change workflow
+          url: /development-guide.html#change-workflow
+        - title: Encryption changes
+          url: /development-guide.html#end-to-end-encryption-changes
+        - title: Settings and persistence
+          url: /development-guide.html#server-settings-and-persistence
+        - title: Documentation changes
+          url: /development-guide.html#documentation
+        - title: Commit discipline
+          url: /development-guide.html#commit-discipline
     - title: Validation
-      url: /validation.html
+      items:
+        - title: Validation overview
+          url: /validation.html
+        - title: Fast local checks
+          url: /validation.html#fast-local-checks
+        - title: Focused web tests
+          url: /validation.html#focused-web-tests
+        - title: Source coverage
+          url: /validation.html#normalized-jest-instrumented-jsts-source-coverage
+        - title: Live app smoke
+          url: /validation.html#live-app-smoke
+        - title: README screenshot
+          url: /validation.html#readme-screenshot
+        - title: Deeper end-to-end gates
+          url: /validation.html#deeper-end-to-end-gates
+        - title: Operations drills
+          url: /validation.html#operations-drills
     - title: CI production gates
-      url: /ci-production-gates.html
+      items:
+        - title: CI overview
+          url: /ci-production-gates.html
+        - title: Required lanes
+          url: /ci-production-gates.html#required-lanes
+        - title: Extended profiles
+          url: /ci-production-gates.html#extended-profiles
+        - title: Docker assertions
+          url: /ci-production-gates.html#docker-assertions
+        - title: Local validation
+          url: /ci-production-gates.html#local-validation
+        - title: Runtime tradeoffs
+          url: /ci-production-gates.html#runtime-tradeoffs
     - title: Standard Notes base
-      url: /standard-notes-base.html
+      items:
+        - title: Base overview
+          url: /standard-notes-base.html
+        - title: What is preserved
+          url: /standard-notes-base.html#what-is-preserved
+        - title: What changes in the fork
+          url: /standard-notes-base.html#what-changes-in-the-fork
+        - title: Compatibility notes
+          url: /standard-notes-base.html#compatibility-notes
     - title: Dependency upgrade audit
-      url: /DEPENDENCY_UPGRADE_AUDIT.html
+      items:
+        - title: Audit overview
+          url: /DEPENDENCY_UPGRADE_AUDIT.html
+        - title: Current toolchains
+          url: /DEPENDENCY_UPGRADE_AUDIT.html#current-toolchains
+        - title: Current images
+          url: /DEPENDENCY_UPGRADE_AUDIT.html#current-images
+        - title: Current actions
+          url: /DEPENDENCY_UPGRADE_AUDIT.html#current-actions
+        - title: Compatibility exceptions
+          url: /DEPENDENCY_UPGRADE_AUDIT.html#compatibility-exceptions
+        - title: Upgrade policy
+          url: /DEPENDENCY_UPGRADE_AUDIT.html#upgrade-policy
 
 - title: Project reference
   items:
     - title: Improvements in this fork
-      url: /improvements.html
+      items:
+        - title: Improvements overview
+          url: /improvements.html
+        - title: Product and feature access
+          url: /improvements.html#product-and-feature-access
+        - title: Operator experience
+          url: /improvements.html#operator-experience
+        - title: Privacy and security controls
+          url: /improvements.html#privacy-and-security-controls
+        - title: Developer and QA tooling
+          url: /improvements.html#developer-and-qa-tooling
+        - title: Documentation additions
+          url: /improvements.html#documentation-additions
     - title: Product comparison
-      url: /comparison.html
-
-- title: Plans and status
-  items:
-    - title: MCP support plan
-      url: /MCP_SUPPORT_PLAN.html
-    - title: OpenClaw plan
-      url: /OPENCLAW_PLAN.html
+      items:
+        - title: Comparison overview
+          url: /comparison.html
+        - title: Summary matrix
+          url: /comparison.html#summary-matrix
+        - title: Why choose Standard Red Notes
+          url: /comparison.html#why-choose-standard-red-notes
+        - title: Why choose something else
+          url: /comparison.html#why-choose-something-else
+        - title: Source notes
+          url: /comparison.html#source-notes

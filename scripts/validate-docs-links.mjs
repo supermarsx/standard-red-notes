@@ -147,13 +147,15 @@ export function validateMarkdownStructure(source, file = '<markdown>') {
   const diagnostics = []
 
   for (const [index, line] of lines.entries()) {
-    if (line.trim() !== '---') {
+    const thematicBreak = /^\s{0,3}(?:(?:-\s*){3,}|(?:\*\s*){3,}|(?:_\s*){3,})$/.test(line)
+    if (!thematicBreak) {
       continue
     }
 
-    // A hyphen line directly under text is a Setext heading underline, not a
-    // thematic break. Front matter and fenced examples are already masked.
-    if ((lines[index - 1] ?? '').trim()) {
+    // An unspaced hyphen line directly under text is a Setext heading
+    // underline, not a thematic break. Front matter and fenced examples are
+    // already masked.
+    if (/^\s{0,3}-{3,}\s*$/.test(line) && (lines[index - 1] ?? '').trim()) {
       continue
     }
 
@@ -162,6 +164,46 @@ export function validateMarkdownStructure(source, file = '<markdown>') {
     )
   }
 
+  return diagnostics
+}
+
+const SHIPPED_CAPABILITY_LANGUAGE = [
+  {
+    pattern: /\b(?:MCP support|OpenClaw) plan\b/i,
+    reason: 'shipped MCP and OpenClaw capabilities must link to their runtime guides, not a plan',
+  },
+  {
+    pattern: /\bplanned (?:capabilit(?:y|ies)|feature|implementation|runtime|status|support|surface)s?\b/i,
+    reason: 'shipped documentation must state the implemented or gated runtime status',
+  },
+  {
+    pattern: /\bfuture (?:capabilit(?:y|ies)|design|feature|implementation|plan|runtime|support|surface)s?\b/i,
+    reason: 'shipped documentation must describe the current capability boundary',
+  },
+  {
+    pattern: /\bnot yet (?:available|executable|implemented|supported|shipped|wired)\b/i,
+    reason: 'state the current unsupported or inert boundary without roadmap wording',
+  },
+  {
+    pattern: /\b(?:MCP_SUPPORT_PLAN|OPENCLAW_PLAN)\b/i,
+    reason: 'retired design-page names must not be linked from customer-facing documentation',
+  },
+]
+
+export function validateShippedCapabilityLanguage(source, file = '<markdown>') {
+  const diagnostics = []
+  if (/(?:^|[\\/])[^\\/]*_PLAN\.md$/i.test(file)) {
+    diagnostics.push(`${file}:1: shipped capability documentation must not be published as a *_PLAN page`)
+  }
+
+  const lines = visibleMarkdownLines(source)
+  for (const [index, line] of lines.entries()) {
+    for (const rule of SHIPPED_CAPABILITY_LANGUAGE) {
+      if (rule.pattern.test(line)) {
+        diagnostics.push(`${file}:${index + 1}: ${rule.reason}`)
+      }
+    }
+  }
   return diagnostics
 }
 
@@ -648,6 +690,7 @@ export async function validateDocsLinks({
     const source = await readFile(file, 'utf8')
     const sourceDisplayPath = displayPath(root, file)
     diagnostics.push(...validateMarkdownStructure(source, sourceDisplayPath))
+    diagnostics.push(...validateShippedCapabilityLanguage(source, sourceDisplayPath))
     diagnostics.push(...validateFencedCodeBlocks(source, sourceDisplayPath))
     for (const target of extractMarkdownTargets(source, sourceDisplayPath)) {
       const destination = target.destination.trim()

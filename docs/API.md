@@ -175,6 +175,12 @@ Practical consequences when talking to the API directly:
 - Public share links store only ciphertext keyed by a `shareId`; the decryption
   key lives in the link fragment and never reaches the server.
 
+{% include safety-alert.html
+  level="danger"
+  title="Do not invent encryption payloads with curl"
+  body="A syntactically accepted item can still be undecryptable, downgrade-sensitive, or destructive when synchronized. Use snjs or srn-client for key derivation, encryption, conflict handling, credential rotation, and recovery; reserve raw HTTP examples for understanding the transport contract."
+%}
+
 ## Endpoints
 
 Notation: each entry shows the **client-facing method + path** (what you call on
@@ -202,11 +208,38 @@ browser sessions, the session cookies).
 
 ### Account recovery
 
+Two different mechanisms use similar names:
+
+- **MFA recovery codes** satisfy or restore a server-side second-factor
+  challenge. They do not contain account encryption keys and cannot replace a
+  forgotten account password.
+- **Optional account recovery (v2 escrow)** is a Standard Red Notes client flow.
+  A signed-in client encrypts root-key material with a separately generated
+  high-entropy code. A signed-out client uses the code's UUID locator to fetch
+  the bounded ciphertext, decrypts it locally, obtains a normal session with the
+  recovered root key, and rotates credentials through the authenticated
+  credentials endpoint.
+
+The server never receives the v2 recovery secret or wrapping key. The only
+public lookup takes a UUID locator and returns a generic unavailable response
+for absent, malformed, or legacy escrow. The UI under **Preferences -> Security
+-> Account recovery** is the supported way to enroll, rotate, disable, and
+exercise this contract.
+
 | Method | Path | Resolver id | Notes |
 | --- | --- | --- | --- |
-| POST | `/v1/recovery/codes` | `auth.generateRecoveryCodes` | Generate recovery codes. Requires cross-service token + `x-server-password` header. |
-| POST | `/v1/recovery/login` | `auth.signInWithRecoveryCodes` | Body: `api_version`, `username`, `password`, `code_verifier`, `recovery_codes`, optional `hvm_token`. |
-| POST | `/v1/recovery/login-params` | `auth.recoveryKeyParams` | Body: `api_version`, `username`, `code_challenge`, `recovery_codes`. |
+| POST | `/v1/account-recovery/lookup` | `auth.accountRecovery.lookup` | Public, rate-limited v2 escrow lookup. Body: `user_uuid` from the complete recovery code. Returns only `{ escrow, identifier, workspace_identifier }` for a valid bounded record; the code secret is never sent. |
+| POST | `/v1/recovery/codes` | `auth.generateRecoveryCodes` | Legacy/MFA recovery-code generation. Requires cross-service token + `x-server-password`; this is not v2 password recovery. |
+| POST | `/v1/recovery/login` | `auth.signInWithRecoveryCodes` | Legacy/MFA recovery sign-in. Body: `api_version`, `username`, `password`, `code_verifier`, `recovery_codes`, optional `hvm_token`. It still requires password-derived material. |
+| POST | `/v1/recovery/login-params` | `auth.recoveryKeyParams` | Legacy/MFA key-params request. Body: `api_version`, `username`, `code_challenge`, `recovery_codes`. |
+
+{% include safety-alert.html
+  level="danger"
+  title="The full account-recovery code is a decrypting credential"
+  body="Send only its UUID locator to the lookup endpoint. Anyone with the complete code can retrieve the ciphertext escrow and decrypt the account root key offline; MFA cannot protect a copied code. Do not log it, place it in URLs, paste it into an administrator tool, or send it to the server as a header or body."
+  link_url="/security-and-account.html#recovery-code-handling"
+  link_text="Handle recovery material safely"
+%}
 
 ### Users, settings and features
 
@@ -225,6 +258,17 @@ browser sessions, the session cookies).
 | GET | `/v1/users/:userUuid/subscription` | `auth.users.getSubscription` | Read the account subscription (synthetic full-access in this fork). |
 | GET | `/v1/users/:userUuid/mfa-secret` | `auth.users.getMfaSecret` | Read the MFA secret. Authenticated. |
 | POST | `/v1/users/:userUuid/requests` | `auth.users.createRequest` | Create a user request (e.g. account-deletion / data export request). |
+
+Credential changes atomically invalidate the current account-recovery escrow.
+After a successful password change or recovery, the client must explicitly
+re-enroll and show a new one-time code. There is no administrator-only endpoint
+that installs a new password or returns decrypted recovery material.
+
+{% include safety-alert.html
+  level="danger"
+  title="Account and setting deletes are live operations"
+  body="DELETE requests can synchronize irreversible loss, invalidate recovery material, or remove the only server copy. Confirm the exact user and resource UUID, complete a current export, and exercise destructive calls only against a disposable account before automating them."
+%}
 
 ### Sync and items
 
@@ -477,4 +521,7 @@ Source:
   backups.
 - [`cli/srn-client`](../cli/srn-client/README.md) — a real, end-to-end-encrypted
   CLI client that exercises this API via an embedded snjs client.
-- [MCP support plan](MCP_SUPPORT_PLAN.md) — the MCP bridge that uses MCP tokens.
+- [MCP Bridge](mcp-bridge.md) — the implemented bridge runtime that uses MCP
+  tokens.
+- [Security and Account](security-and-account.md#recovery) — the user-visible
+  account-recovery lifecycle and trust boundary.

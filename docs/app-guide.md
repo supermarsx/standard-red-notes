@@ -27,6 +27,7 @@ The written guidance on this page mirrors the documentation bundled inside Stand
   - [Email magic-link 2FA](#security-magic-link)
   - [Managing sessions & devices](#security-sessions)
   - [Changing your password](#security-change-password)
+  - [Optional account recovery](#security-account-recovery)
   - [Protected notes & app lock](#security-protected-notes)
 - [Notes & editors](#editors)
   - [Note types overview](#editors-note-types)
@@ -185,7 +186,7 @@ Register, choose a strong password, and sign in on each device.
 2. Confirm the sync server address. For a self-hosted install this is your server’s URL.
 3. Enter your email and a strong password, then create the account.
 
-> **Warning.** Your password is also your encryption key. It is never sent to the server and there is no password reset. Choose something strong that you will not forget, and keep encrypted backups.
+> **Warning.** Your password participates in deriving your encryption keys and cannot be revealed by the server. Choose a long, unique password, save it in a password manager, and keep tested backups. If you later opt in to account recovery, its separate recovery code becomes another key to protect.
 
 To use a second device, install the app, point it at the same sync server, and sign in with the same credentials. Your encrypted notes download and decrypt locally.
 
@@ -216,23 +217,24 @@ Related: [encryption/your-password](#encryption-your-password), [encryption/what
 <a id="encryption-your-password"></a>
 ### Your password & key
 
-Your password is your key. There is no reset — back up instead.
+Your password derives the account keys; optional recovery must be enabled in advance.
 
 Your account password is used to derive your encryption key. The server stores only a value it can use to verify you can sign in; it never receives your actual password or your key.
 
-#### Why there is no “forgot password”
+#### Why an administrator cannot reset it
 
-Because the server cannot decrypt your data, it also cannot reset your password and re-encrypt your notes for you. If you forget your password, the live encrypted account cannot be recovered through any supported flow. This is the cost of true privacy.
+Because the server cannot decrypt your data, an administrator cannot choose a new password and re-encrypt your notes for you. A password change must be proven by the client using the current root key.
 
-This repository contains disabled, experimental recovery-escrow primitives, but no verified logged-out retrieval, credential-rotation, and sign-in flow. Do not enable or depend on that substrate as a password recovery feature.
+Standard Red Notes ships an optional logged-out account-recovery flow, but it must be enabled while you are still signed in. The client creates a separate high-entropy recovery code and uploads only root-key material encrypted by that code. If you lose both the password and the code, the server still cannot recover the account.
 
 - Use a long, memorable passphrase, or store the password in a password manager.
 - Export encrypted backups regularly — they can be restored on any device with the password.
+- If you opt in to account recovery, store its one-time code separately from the account and the only backup.
 - Changing your password re-wraps your keys; keep a recent backup before doing so.
 
-> **Warning.** Treat your password like the only key to a safe. An encrypted backup still requires its password; recovering after a forgotten password requires an independently usable copy whose decryption material you retained.
+> **Warning.** Treat the account password and any recovery code as separate keys to the same safe. A copied recovery code can decrypt the escrowed account keys offline, and MFA cannot prevent that. Rotate a possibly exposed code immediately.
 
-Related: [security/change-password](#security-change-password), [backups/why-backups](#backups-why-backups), [encryption/how-it-works](#encryption-how-it-works)
+Related: [security/account-recovery](#security-account-recovery), [security/change-password](#security-change-password), [backups/why-backups](#backups-why-backups), [encryption/how-it-works](#encryption-how-it-works)
 
 <a id="encryption-what-server-sees"></a>
 ### What the server can and cannot see
@@ -266,17 +268,17 @@ Inside the app, your notes are always shown decrypted — you just read and writ
 
 | Topic | Details |
 | --- | --- |
-| Encrypted backup | Ciphertext. Safe to store anywhere. Requires your password (or the backup’s key) to restore. |
+| Encrypted backup | Ciphertext that still deserves protected storage. Requires the correct password or backup key to restore and can be copied for offline attack. |
 | Decrypted backup | Plain, readable content. Convenient but unprotected — anyone with the file can read everything. |
 
-> **Warning.** Prefer encrypted backups for archival. Only create a decrypted backup when you specifically need readable data, and store it somewhere safe.
+> **Warning.** Prefer encrypted backups for archival, but do not publish them or store their password or account-recovery code beside them. Only create a decrypted backup when you specifically need readable data, and protect or remove every copy.
 
 Related: [backups/export-import](#backups-export-import), [backups/why-backups](#backups-why-backups)
 
 <a id="security"></a>
 ## Account & security
 
-Two-factor authentication, sessions, passwords, and note protection.
+Passwords, optional account recovery, two-factor authentication, sessions, and note protection.
 
 <a id="security-two-factor"></a>
 ### Two-factor authentication (authenticator app)
@@ -334,9 +336,44 @@ Rotate your password safely without losing access to your notes.
 3. Enter your current password and the new one; your keys are re-wrapped with the new password.
 4. Sign in again on your other devices with the new password.
 
-> **Warning.** Other signed-in devices may need to re-authenticate after a password change. Keep the backup until every device is updated and syncing.
+> **Warning.** Changing the password invalidates any existing account-recovery escrow. Other signed-in devices may also need to re-authenticate. Keep the backup until every device is updated and syncing, then enable account recovery again if you still want it and save the new code.
 
-Related: [encryption/your-password](#encryption-your-password), [backups/why-backups](#backups-why-backups), [security/sessions](#security-sessions)
+Related: [encryption/your-password](#encryption-your-password), [security/account-recovery](#security-account-recovery), [backups/why-backups](#backups-why-backups), [security/sessions](#security-sessions)
+
+<a id="security-account-recovery"></a>
+### Optional account recovery
+
+Opt in before a password is lost, then protect the separately generated recovery code.
+
+Account recovery is shipped, optional, and off by default. A signed-in user enables it under Preferences → Security by entering the current password. The client encrypts the account root-key material with a high-entropy recovery secret and uploads only that ciphertext escrow. The recovery code, which contains the lookup identifier and secret, is shown once and is never sent to the server.
+
+#### Enable and store it safely
+
+1. While signed in, open Preferences → Security → Account recovery.
+2. Read the trust-boundary warning, enter the current account password, and choose Enable account recovery.
+3. Copy the newly generated code to a protected password manager or offline recovery package that is separate from the notes account.
+4. Confirm that the code is saved before dismissing the one-time display.
+
+> **Warning.** Anyone who obtains the code can fetch the server-held ciphertext and decrypt the escrowed account keys offline. MFA still applies to normal server sign-in, but it cannot protect a copied recovery code. Treat code compromise as account-key compromise.
+
+#### Recover from the signed-out screen
+
+1. Use only a computer you trust, open Sign in, and choose Recover account with an account recovery code.
+2. Enter the complete recovery code and a strong new password twice.
+3. The client retrieves the bounded ciphertext escrow, decrypts it locally, signs in with the recovered root key, and changes the credentials through the normal authenticated rotation path.
+4. Save the replacement recovery code shown after rotation. The old password and old recovery code no longer work.
+
+Recovery does not bypass the credential-change contract or give an administrator a reset capability. If sign-in succeeds but password rotation or recovery re-enrollment fails, follow the on-screen status: you may be signed in while still needing to retry the password change or enable recovery again from Security preferences.
+
+#### Rotate or disable
+
+- Replace the code immediately if it may have been copied; replacement invalidates the previous code.
+- Changing account credentials deletes the existing escrow, so opt in again only after the password change completes.
+- Disabling recovery permanently deletes the server-side escrow and invalidates every issued account-recovery code.
+- Older legacy escrow is not accepted by this flow and can only be deleted.
+- Keep independent, tested backups even when recovery is enabled.
+
+Related: [encryption/your-password](#encryption-your-password), [security/change-password](#security-change-password), [backups/why-backups](#backups-why-backups), [security/two-factor](#security-two-factor)
 
 <a id="security-protected-notes"></a>
 ### Protected notes & app lock
@@ -628,13 +665,14 @@ Export, import, and protect yourself against data loss.
 <a id="backups-why-backups"></a>
 ### Why backups matter
 
-There is no password reset — maintain independently usable backups.
+Recovery is opt-in and backups still cover device loss, deletion, and escrow failure.
 
-Because your data is end-to-end encrypted and there is no supported password reset, backups protect against a lost device or accidental deletion only when you retain the material needed to open them.
+The server has no administrator-readable reset that can decrypt your notes. Optional account recovery works only when you enabled it before losing the password and still have its separate recovery code. Backups remain essential for lost devices, accidental deletion, damaged accounts, unavailable escrow, and recovery-code loss.
 
 - Export an encrypted backup regularly and store copies in more than one place.
 - An encrypted backup can be restored on any device with your password.
-- For forgotten-password recovery, retain an independently usable copy, such as a carefully protected decrypted export or an encrypted export whose password you still know.
+- If you enable account recovery, store its high-entropy code separately from both the account and the only backup.
+- For recovery without that code, retain an independently usable copy, such as a carefully protected decrypted export or an encrypted export whose password you still know.
 - Verify occasionally that you can actually restore a backup.
 
 Related: [backups/export-import](#backups-export-import), [backups/automatic](#backups-automatic), [encryption/your-password](#encryption-your-password)
@@ -988,7 +1026,7 @@ Repeated “Invalid login credentials” usually means a cookie or password issu
 
 #### Check your password
 
-There is no supported password reset. Make sure you are using the exact account password. If you genuinely forgot it, the live encrypted account is unrecoverable; restore an independently usable backup into a new account. An encrypted backup still requires its password.
+Make sure you are using the exact account password. If you enabled account recovery before losing it and retained the separate code, return to the sign-in screen and choose Recover account with an account recovery code. Otherwise there is no administrator reset that can decrypt the live account; restore an independently usable backup into a new account. An encrypted backup still requires its password.
 
 #### Self-hosted: cookie problems
 
@@ -996,7 +1034,7 @@ On a self-host, repeated 401s right after signing in — especially with browser
 
 > **Tip.** After fixing cookie settings, fully reload the app and sign in again so a fresh, valid cookie is stored.
 
-Related: [self-hosting/cookies-auth](#self-hosting-cookies-auth), [troubleshooting/not-syncing](#troubleshooting-not-syncing), [encryption/your-password](#encryption-your-password)
+Related: [self-hosting/cookies-auth](#self-hosting-cookies-auth), [troubleshooting/not-syncing](#troubleshooting-not-syncing), [encryption/your-password](#encryption-your-password), [security/account-recovery](#security-account-recovery)
 
 <a id="troubleshooting-not-syncing"></a>
 ### Notes not syncing

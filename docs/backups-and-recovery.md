@@ -34,9 +34,18 @@ flowchart TD
 | Email encrypted backup | Off-device encrypted account copy | Mailbox loss, mail retention, or forgotten decryption material |
 | Nextcloud/WebDAV encrypted backup | Scheduled off-server encrypted copy | Nextcloud account loss or incomplete WebDAV configuration |
 | Database and volume backup | Whole self-hosted service recovery | Client-only unsynchronized edits or unknown application secrets |
+| Optional account-recovery escrow | Forgotten account password when enabled beforehand and the separate code survives | Deleted items, unsynced local data, server loss, code loss, or code compromise |
 
 Use at least one user-level export and one infrastructure-level backup for a
 self-hosted deployment.
+
+{% include safety-alert.html
+  level="caution"
+  title="Recovery escrow is not another backup copy"
+  body="Account recovery stores only a client-encrypted root-key record and works only with its separate high-entropy code. It does not contain the note history, files, or unsynced local changes and cannot replace user exports or infrastructure backups."
+  link_url="/security-and-account.html#recovery"
+  link_text="Understand account recovery"
+%}
 
 ## Manual account exports
 
@@ -62,6 +71,12 @@ delete temporary copies after verification.
 The `srn-client export` command can also create JSON or Markdown exports. Its
 output is decrypted and therefore inherits the same plaintext handling rules.
 
+If account recovery is enabled, keep its code outside the account and outside
+the only backup archive. Backing up the server-side escrow without the code is
+not sufficient; putting the code beside the escrow removes the intended
+separation. A code suspected of exposure must be replaced from **Preferences ->
+Security -> Account recovery**.
+
 ## Desktop automatic backups
 
 The desktop client exposes separate backup paths:
@@ -74,6 +89,12 @@ The desktop client exposes separate backup paths:
 Keep the destination outside application data so uninstalling the client does
 not remove the only copy. For stronger resilience, replicate the folder to an
 offline or separately authenticated destination.
+
+{% include safety-alert.html
+  level="caution"
+  title="The backup folder inherits the computer's security"
+  body="Automatic encrypted backups still expose filenames, timing, and archive copies to the local account; plaintext backups expose content directly. Use full-disk encryption, restrictive filesystem permissions, a locked OS account, and an off-device copy rather than relying on the application alone."
+%}
 
 ## Email backups
 
@@ -126,6 +147,12 @@ provider keys, subscription-pairing encryption keys, and backup app passwords.
 Keep the pairing key separately from the only `server-data` backup: the
 encrypted pairing file cannot be recovered without both.
 
+{% include safety-alert.html
+  level="danger"
+  title="A server backup contains security-critical state"
+  body="Database snapshots, file volumes, gateway state, and deployment secrets can enable account takeover, metadata disclosure, or service impersonation even when note payloads remain encrypted. Encrypt backup media, restrict restore authority, and store decryption keys outside the same host and archive."
+%}
+
 The repository’s `yarn ops:backup-restore` gate exercises the scripted backup
 and restore contract. It is validation evidence, not a substitute for restoring
 your own production-size data on your own storage.
@@ -149,9 +176,11 @@ For a whole-server recovery:
 Follow the exact commands in [Self-Hosting](self-hosting.md) and
 [Operations Hardening](operations-hardening.md) for the deployed profile.
 
-> ⚠️ Do not run `srn-server down --yes --volumes` during a restore unless the
-> named volumes have been verified and independent backups exist. The
-> `--volumes` option destroys persistent data.
+{% include safety-alert.html
+  level="danger"
+  title="Volume deletion is destructive"
+  body="Do not run srn-server down --yes --volumes during a restore unless every resolved named volume has been verified and independent backups exist. The --volumes option destroys persistent data and is not required for a normal stop or upgrade."
+%}
 
 ## Recovery drills
 
@@ -166,6 +195,12 @@ A useful quarterly drill proves:
 
 Record the date, backup identifier, restore duration, gaps found, and corrective
 action. A backup that has never been restored is only an assumption.
+
+Include account recovery in a drill only with a disposable account: enable it,
+save the code outside the account, sign out, recover with a new password, save
+the replacement code, verify the old code fails, and then disable recovery if
+the production policy does not require it. Never use a production account as
+the first recovery test.
 
 ## Retention and deletion
 

@@ -13,6 +13,7 @@ import {
   validateDocsLinks,
   validateFencedCodeBlocks,
   validateMarkdownStructure,
+  validateShippedCapabilityLanguage,
 } from './validate-docs-links.mjs'
 
 async function createFixture(files) {
@@ -97,6 +98,10 @@ test('Markdown structure validation ignores front matter, fenced examples, and S
     '',
     '## Next section',
     '',
+    '* * *',
+    '',
+    '___',
+    '',
     '```md',
     '---',
     '```',
@@ -107,6 +112,32 @@ test('Markdown structure validation ignores front matter, fenced examples, and S
 
   assert.deepEqual(validateMarkdownStructure(markdown, 'docs/structure.md'), [
     'docs/structure.md:7: redundant Markdown horizontal rule; headings already provide section separation',
+    'docs/structure.md:11: redundant Markdown horizontal rule; headings already provide section separation',
+    'docs/structure.md:13: redundant Markdown horizontal rule; headings already provide section separation',
+  ])
+})
+
+test('shipped capability language validation rejects roadmap wording but ignores code examples', () => {
+  const markdown = [
+    '---',
+    'title: Runtime',
+    '---',
+    '# Runtime',
+    'The OpenClaw plan is a design document.',
+    'This planned feature is not yet executable.',
+    '```md',
+    'MCP_SUPPORT_PLAN.md',
+    '```',
+    'An MFA code controls future sign-ins.',
+  ].join('\n')
+
+  assert.deepEqual(validateShippedCapabilityLanguage(markdown, 'docs/runtime.md'), [
+    'docs/runtime.md:5: shipped MCP and OpenClaw capabilities must link to their runtime guides, not a plan',
+    'docs/runtime.md:6: shipped documentation must state the implemented or gated runtime status',
+    'docs/runtime.md:6: state the current unsupported or inert boundary without roadmap wording',
+  ])
+  assert.deepEqual(validateShippedCapabilityLanguage('# Archived', 'docs/OLD_PLAN.md'), [
+    'docs/OLD_PLAN.md:1: shipped capability documentation must not be published as a *_PLAN page',
   ])
 })
 

@@ -82,6 +82,7 @@ export function listMarkdownFiles(root = repositoryRoot) {
     .split('\0')
     .filter(Boolean)
     .map((file) => file.replaceAll('\\', '/'))
+    .filter((file) => existsSync(path.join(root, file)))
     .sort()
 }
 

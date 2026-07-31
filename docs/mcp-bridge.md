@@ -9,8 +9,10 @@ The MCP bridge is a real headless Standard Notes client. It signs in, keeps a
 local client database, decrypts notes locally, and synchronizes changes back as
 encrypted payloads. It is not a thin plaintext REST proxy.
 
-The [MCP support plan](MCP_SUPPORT_PLAN.md) describes design direction. This
-page documents the implemented runtime in [`mcp/src/index.ts`](../mcp/src/index.ts).
+This page documents the implemented runtime in
+[`mcp/src/index.ts`](../mcp/src/index.ts). Its supported transports, tools, and
+security boundaries are capabilities you can use now, subject to the explicit
+configuration gates below.
 
 {% include mermaid.html %}
 

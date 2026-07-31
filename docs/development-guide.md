@@ -152,14 +152,16 @@ and commit source plus generated output together when the contract requires it.
 # Rebuild after changing any documentation page
 yarn docs:search:index
 
-# Check generated docs, search freshness, links, navigation, code fences,
-# and every Mermaid diagram
+# Check generated docs, search freshness, screenshots, links, navigation,
+# code fences, prose contracts, and every Mermaid diagram
 yarn docs:check
 ```
 
 The link gate also requires every top-level page to appear in
-`docs/_data/navigation.yml`; add the page to the correct runtime, reference, or
-plan group rather than leaving it discoverable only through search.
+`docs/_data/navigation.yml`; add the page and its substantive headings to the
+correct runtime or reference group rather than leaving it discoverable only
+through search. It also rejects redundant Markdown horizontal rules and
+roadmap-style wording that mislabels shipped MCP or OpenClaw functionality.
 
 ## Commit discipline
 

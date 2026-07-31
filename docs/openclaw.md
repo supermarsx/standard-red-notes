@@ -12,8 +12,8 @@ installed local Standard Red Notes MCP bridge. It provides:
 - `openclaw ask "<question>"`; and
 - `openclaw chat`.
 
-The [OpenClaw plan](OPENCLAW_PLAN.md) is a design document. The implemented
-runtime is documented in [`openclaw/README.md`](../openclaw/README.md) and here.
+The implemented runtime is documented in
+[`openclaw/README.md`](../openclaw/README.md) and here.
 
 {% include mermaid.html %}
 
@@ -88,7 +88,9 @@ openclaw doctor
 The schema accepts `read`, `write`, `files`, `export`, and `admin` scopes. Start
 with `read`. A scope declaration tells OpenClaw what the child is intended to
 use; the MCP/server credential must independently enforce the same or narrower
-authority.
+authority. The current Standard Red Notes bridge implements read/write note,
+tag, and vault tools; a broader schema label does not make an absent MCP tool
+available.
 
 ## Providers
 
@@ -126,8 +128,8 @@ accumulate more context. Exit the session when its task is complete.
   server-enforced read-only token.
 
 `scratchpad_kb` and `security.allow_filesystem_paths` are accepted by the
-configuration schema but are not consumed by the current `ask` or `chat`
-runtime. They are reserved settings, **not enforced security boundaries**.
+configuration schema but are not consumed by `ask` or `chat`. They are inert
+settings, **not enforced security boundaries**.
 
 The audit file can contain sensitive metadata or content. The runtime creates
 or appends it using the process defaults, so pre-create a private directory and
@@ -143,9 +145,9 @@ On Windows, keep it inside the user profile and restrict its NTFS ACL to the
 account running OpenClaw. Rotate it as sensitive data. Do not place provider
 keys in the TOML file when an environment variable is supported.
 
-The current `ask` and `chat` implementation requires `mcp.local`. The
-configuration schema includes `mcp.remote`, but the README explicitly marks it
-as not yet executable. Do not document or deploy remote mode as available.
+`ask` and `chat` require `mcp.local`. Although the configuration parser accepts
+an `mcp.remote` table, the command runtime does not execute it. Deploy only the
+local child-process mode documented above.
 
 ## Troubleshooting
 
