@@ -2641,10 +2641,13 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
                 </div>
               </div>
               <Text className="text-passive-1 text-xs">
-                Scope: this control changes the <strong>api-gateway</strong> and <strong>auth</strong> service loggers
-                (the highest-value surfaces). Other services keep honoring their <code>LOG_LEVEL</code> environment
-                variable until a later release adds them. In deployments where services do not share the settings
-                volume, this only affects services that can read the overlay.
+                Scope: in the bundled multi-process server, this updates the <strong>api-gateway</strong> (including its
+                in-process WebSocket gateway), <strong>auth</strong>, <strong>syncing</strong>, <strong>files</strong>,
+                and <strong>revisions</strong> loggers, including their worker processes. The all-in-one home server
+                updates those named service loggers and its outer <strong>home-server</strong> logger together. Each
+                process reads the shared <code>SERVER_SETTINGS_PATH</code> at boot and polls it every 30 seconds. The
+                web client, MCP, n8n, database, cache, and supervisord keep their own logging configuration. A custom
+                deployment only updates processes that can read the same settings overlay.
               </Text>
             </div>
           )}

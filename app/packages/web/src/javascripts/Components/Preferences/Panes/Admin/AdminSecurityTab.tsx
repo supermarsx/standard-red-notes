@@ -146,13 +146,11 @@ const formatTimestamp = (createdAt: string): string => {
 }
 
 /**
- * Security overview: a Phase-1 CENTRALISATION of the app's already-exposed
- * security-relevant server state, pulled from the existing admin endpoints
- * (registration flag, server status/settings, audit log, users list). It is an
- * at-a-glance posture view — the actual controls stay on their own tabs, and
- * this tab links to each. No new server endpoints are introduced; the
- * anti-abuse / bans section is a clearly-labeled placeholder for a later wave.
- * Loaded lazily — this component only mounts when the Security tab is opened.
+ * Current security console for the instance. The overview aggregates live
+ * registration, status, audit, and administrator-role data. Dedicated subtabs
+ * expose the implemented anti-abuse tier editor, IP allow/block lists, throttle
+ * telemetry, locked-account listing/unlock flow, and authentication posture.
+ * The component mounts only while the parent Security tab is open.
  */
 const AdminSecurityTab: FunctionComponent<Props> = ({ application, noteIfForbidden, goToTab }) => {
   // Second-level tabs inside the Security pane (§2 IA): Overview / Anti-abuse &

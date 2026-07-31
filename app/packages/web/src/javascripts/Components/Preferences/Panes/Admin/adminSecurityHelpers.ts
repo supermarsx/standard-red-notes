@@ -1,9 +1,8 @@
 /**
  * Standard Red Notes: pure, unit-tested helpers backing the Admin pane's
- * Security overview tab. Keeping the posture logic and audit-event matching
- * here (rather than inline in the React component) keeps them deterministic and
- * testable. This tab is a Phase-1 CENTRALISATION of existing server data — it
- * does not talk to any new endpoints.
+ * Security console. Keeping the posture logic and audit-event matching here
+ * (rather than inline in the React component) keeps current endpoint data
+ * deterministic and testable.
  */
 
 // ---------------------------------------------------------------------------

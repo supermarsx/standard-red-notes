@@ -1,9 +1,9 @@
 /**
- * Standard Red Notes: Typography Profiles — Phase 3 (popup style editor).
+ * Standard Red Notes: Typography Profiles popup style editor.
  *
  * A modal to FULLY edit the per-block styles of the ACTIVE typography profile,
  * with a live, truthful preview. Layout:
- *   - Left: block-type selector — the P2 preview-square grid (each square is a
+ *   - Left: block-type selector — the preview-square grid (each square is a
  *     live preview of that block under the profile being edited); selecting a
  *     square loads its editable `BlockStyle`.
  *   - Right/top: a live `BlockStylePreview` re-rendering on every change.
@@ -12,13 +12,13 @@
  *     All controls are OPTIONAL — an empty value means "inherit".
  *   - Footer: Cancel (discard) / Save (persist).
  *
- * Which profile: the currently ACTIVE profile (P1's `resolveActiveTypographyProfile`).
+ * Which profile: the currently ACTIVE profile (`resolveActiveTypographyProfile`).
  * Save writes the edited blocks back and persists via
- * `application.setPreference(PrefKey.TypographyProfiles, …)`, which P1's NoteView
+ * `application.setPreference(PrefKey.TypographyProfiles, …)`, which NoteView's
  * `usePreference` already reacts to → live re-apply across editor/read/preview.
  *
- * Reuse: P1 model + `blockStyleToInlineStyle`/`resolveActiveTypographyProfile`;
- * P2 `BlockStylePreview` + `GALLERY_BLOCKS`; `blockFormatting` presets;
+ * Reuse: the profile model + `blockStyleToInlineStyle`/`resolveActiveTypographyProfile`;
+ * `BlockStylePreview` + `GALLERY_BLOCKS`; `blockFormatting` presets;
  * `editorFont` grammar (font family); the shared `Modal`/`ModalOverlay`,
  * `Dropdown`, and native colour-swatch inputs. Sanitisation +
  * profile-write live in `Utils/typographyProfileEditor`.

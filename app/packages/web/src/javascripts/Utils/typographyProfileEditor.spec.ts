@@ -1,7 +1,7 @@
 /**
  * @jest-environment jsdom
  *
- * Phase 3 popup style editor logic: sanitisation (CSP — unsafe values dropped)
+ * Popup style-editor logic: sanitisation (CSP — unsafe values dropped)
  * and the edit → BlockStyle → setPreference round-trip (writing an edited block
  * back into the active profile, immutably).
  */

@@ -606,7 +606,7 @@ const ToolbarPlugin = () => {
   const [isTextStyleMenuOpen, setIsTextStyleMenuOpen] = useState(false)
   const textStyleAnchorRef = useRef<HTMLButtonElement>(null)
 
-  // Standard Red Notes: Phase 3 popup style editor (edits the active profile).
+  // Standard Red Notes: popup style editor for the active typography profile.
   const [isTypographyEditorOpen, setIsTypographyEditorOpen] = useState(false)
 
   const [isAlignmentMenuOpen, setIsAlignmentMenuOpen] = useState(false)
@@ -746,7 +746,7 @@ const ToolbarPlugin = () => {
   const painter = useFormatPainter()
   const [marksOn, toggleMarks] = useFormattingMarks()
 
-  // Standard Red Notes: the resolved ACTIVE typography profile (Phase 1), read
+  // Standard Red Notes: the resolved ACTIVE typography profile, read
   // reactively from synced prefs. Drives the truthful preview squares and the
   // per-block style the gallery stamps on apply.
   const typographyProfiles = usePreference(PrefKey.TypographyProfiles)
@@ -3508,7 +3508,7 @@ const ToolbarPlugin = () => {
       </Popover>
       {/* Standard Red Notes: the typography-profile preview-square gallery now
           renders INLINE in the toolbar's BlockStyle group (see the activeGroups
-          renderer); only the Phase 3 style editor modal is hosted here. */}
+          renderer); only the style editor modal is hosted here. */}
       <TypographyStyleEditorModal isOpen={isTypographyEditorOpen} close={() => setIsTypographyEditorOpen(false)} />
       <Popover
         title={t('alignment')}

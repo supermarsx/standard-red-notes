@@ -32,8 +32,8 @@ export class SaveItems implements UseCaseInterface<SaveItemsResult> {
     private domainEventFactory: DomainEventFactoryInterface,
     private checkForContentLimit: CheckForContentLimit,
     private itemHttpMapper: MapperInterface<Item, ItemHttpRepresentation>,
-    // Standard Red Notes (Phase 1A "websockets as primary sync path"):
-    // when enabled, push the changed encrypted item payloads + the new sync
+    // Standard Red Notes websocket fast path: when enabled, push the changed
+    // encrypted item payloads + the new sync
     // token over the websocket so other devices can apply them WITHOUT an HTTP
     // pull. This is purely an OPTIMIZATION layered on top of the existing
     // notify-then-pull flow: the client always degrades to a normal HTTP sync

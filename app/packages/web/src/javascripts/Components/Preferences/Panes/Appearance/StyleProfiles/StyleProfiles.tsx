@@ -1,11 +1,11 @@
 /**
- * Standard Red Notes: Typography Profiles — Phase 4 (Settings management UI).
+ * Standard Red Notes: Typography Profiles settings and management UI.
  *
- * The management surface for the multiple typography profiles introduced in P1.
+ * The management surface for synced typography profiles.
  * Lives in the Appearance preferences pane (a "Style profiles" subtab). Lets the
- * user pick the ACTIVE profile (P1's NoteView re-applies live) and manage the
+ * user pick the ACTIVE profile (NoteView re-applies it live) and manage the
  * full set: create, rename, set-default (single winner), duplicate, delete
- * (guarded), edit styles (reuses the generalised P3 modal for the selected
+ * (guarded), edit styles (reuses the generalised modal for the selected
  * profile), and import / export a profile as sanitised JSON.
  *
  * All mutations persist immutably through `application.setPreference`. The pure

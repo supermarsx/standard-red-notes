@@ -1,9 +1,9 @@
 /**
- * Standard Red Notes: Typography Profiles — Phase 2 (preview-square gallery).
+ * Standard Red Notes: Typography Profiles preview-square gallery.
  *
  * The data + apply glue behind the toolbar's "block style gallery": a grid of
  * little squares, each a truthful static preview of one block type as styled by
- * the ACTIVE typography profile (Phase 1). Clicking a square (a) converts the
+ * the ACTIVE typography profile. Clicking a square (a) converts the
  * current selection to that block TYPE — reusing the existing block ops in
  * `Plugins/Blocks/*` — and (b) stamps the active profile's style for that block
  * as a PER-BLOCK override via blockFormatting's `$applyBlockStyleEntries` (#77),

@@ -661,7 +661,7 @@ describe('SaveItems', () => {
     expect(result.isFailed()).toBeFalsy()
   })
 
-  describe('websocket sync push (Phase 1A)', () => {
+  describe('websocket sync push fast path', () => {
     const baseDto = {
       userUuid: 'user-uuid',
       apiVersion: '1',

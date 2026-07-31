@@ -1,7 +1,7 @@
 /**
  * @jest-environment jsdom
  *
- * Phase 4 import / export: profile → JSON export, and JSON → SAFE profile import
+ * Typography profile import/export: profile → JSON export, and JSON → SAFE profile import
  * (schemaVersion validation, per-block sanitisation of untrusted CSS, fresh id,
  * isDefault forced off).
  */

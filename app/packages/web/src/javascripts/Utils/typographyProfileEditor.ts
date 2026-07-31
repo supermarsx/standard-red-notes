@@ -1,5 +1,5 @@
 /**
- * Standard Red Notes: Typography Profiles — Phase 3 (popup style editor logic).
+ * Standard Red Notes: Typography Profiles style-editor logic.
  *
  * The pure, React-free core behind `TypographyStyleEditorModal`: sanitising a
  * user-edited `BlockStyle` (CSP-safe, no `url()`/`@import`/etc. can be stored)
@@ -7,10 +7,10 @@
  * NEW `TypographyProfile[]` array ready to hand to
  * `application.setPreference(PrefKey.TypographyProfiles, …)`.
  *
- * Reuse: sanitisation leans on P1's `isSafeCssValue` (the single CSP gate) and
- * the vetted `resolveEditorFontFamily` font grammar; active-profile resolution
- * reuses P1's `resolveActiveTypographyProfile`. No new preference keys, no
- * schema changes — this only reshapes the existing `TypographyProfiles` blob.
+ * Reuse: sanitisation leans on `isSafeCssValue` (the single CSP gate) and the
+ * vetted `resolveEditorFontFamily` font grammar; active-profile resolution
+ * reuses `resolveActiveTypographyProfile`. No new preference keys or schema
+ * changes are needed; this only reshapes the existing `TypographyProfiles` blob.
  */
 import {
   DEFAULT_TYPOGRAPHY_PROFILE,

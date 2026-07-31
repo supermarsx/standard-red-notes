@@ -1,5 +1,5 @@
 /**
- * Standard Red Notes: Typography Profiles — Phase 2 gallery UI.
+ * Standard Red Notes: Typography Profiles gallery UI.
  *
  * "Nice little squares", each a static, non-editable, TRUTHFUL preview of a block
  * type as rendered by the ACTIVE typography profile: the block's real Lexical

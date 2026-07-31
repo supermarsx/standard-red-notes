@@ -264,6 +264,16 @@ describe('AdminServerTab — 5 subtabs mount with content (vanish guard)', () =>
 
     await clickSubtab('Logging')
     expect(container.textContent).toContain('Log level')
+    expect(container.textContent).toContain('takes effect within about 30 seconds')
+    expect(container.textContent).toContain('api-gateway')
+    expect(container.textContent).toContain('in-process WebSocket gateway')
+    expect(container.textContent).toContain('auth')
+    expect(container.textContent).toContain('syncing')
+    expect(container.textContent).toContain('files')
+    expect(container.textContent).toContain('revisions')
+    expect(container.textContent).toContain('including their worker processes')
+    expect(container.textContent).toContain('home-server')
+    expect(container.textContent).not.toContain('until a later release')
   })
 })
 

@@ -2,9 +2,8 @@
  * @jest-environment jsdom
  *
  * AdminSecurityTab render guard (MEMORY: verify UI render paths). This tab was
- * refactored from one long scroll into a 4-subtab bar (overview / antiabuse /
- * lockout / auth), with segments redistributed and the anti-abuse segment split
- * so locked accounts get their own subtab. We drive the REAL component in jsdom,
+ * exposes a 4-subtab bar (overview / antiabuse / lockout / auth), with the live
+ * anti-abuse controls and locked accounts on dedicated subtabs. We drive the REAL component in jsdom,
  * click every subtab, and assert each subtab label + a piece of its panel content
  * mounts — tsc/jest green is not proof a restructured panel actually renders.
  */
@@ -132,9 +131,16 @@ describe('AdminSecurityTab — 4 subtabs mount with content (vanish guard)', () 
     await clickSubtab('Anti-abuse & rate limits')
     expect(container.textContent).toContain('Anti-abuse & rate limiting')
     expect(container.textContent).toContain('Rate-limit tiers')
+    expect(container.textContent).toContain('Save rate-limit tiers')
+    expect(container.textContent).toContain('IP block list')
+    expect(container.textContent).toContain('IP allow list')
+    expect(container.textContent).toContain('Throttle activity (last 24h)')
+    expect(application.legacyApi.adminGetAntiAbuse).toHaveBeenCalled()
 
     await clickSubtab('Account lockout')
     expect(container.textContent).toContain('Locked accounts')
+    expect(container.textContent).toContain('No accounts are currently locked')
+    expect(application.legacyApi.adminGetLockedAccounts).toHaveBeenCalled()
 
     await clickSubtab('Authentication')
     expect(container.textContent).toContain('Two-factor authentication')

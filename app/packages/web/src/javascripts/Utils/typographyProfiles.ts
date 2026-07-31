@@ -1,5 +1,5 @@
 /**
- * Standard Red Notes: Typography Profiles — apply pipeline (Phase 1).
+ * Standard Red Notes: Typography Profiles application pipeline.
  *
  * Compiles the active `TypographyProfile` (see @standardnotes/models) into a
  * single, scoped `<style id="srn-typography-profile">` element injected on
