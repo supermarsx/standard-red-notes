@@ -39,8 +39,15 @@ export class WebController extends BaseHttpController {
       response.json(result)
     } catch (error) {
       if (error instanceof WebValidationError) {
-        // Blocked / malformed / timeout: a 400 with a safe message + tag.
-        response.status(400).json({ error: { tag: error.tag, message: error.message } })
+        const status =
+          error.tag === 'response-too-large'
+            ? 413
+            : error.tag === 'fetch-timeout'
+              ? 504
+              : error.tag === 'fetch-failed'
+                ? 502
+                : 400
+        response.status(status).json({ error: { tag: error.tag, message: error.message } })
         return
       }
       response.status(502).json({ error: { tag: 'fetch-failed', message: 'Failed to fetch the URL.' } })

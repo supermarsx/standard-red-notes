@@ -29,6 +29,35 @@ const recordingFetch = (
 const makeService = (config: WebServiceConfig, fn: WebFetchLike) =>
   new WebService(fn, config, async () => ['93.184.216.34'])
 
+const streamingFetch = (
+  chunks: Uint8Array[],
+  headers: Record<string, string> = {},
+  cancelResult: Promise<void> = Promise.resolve(),
+) => {
+  let index = 0
+  const read = jest.fn(async () => {
+    return index < chunks.length ? { done: false, value: chunks[index++] } : { done: true, value: undefined }
+  })
+  const cancel = jest.fn(() => cancelResult)
+  const releaseLock = jest.fn()
+  const fn: WebFetchLike = async () =>
+    ({
+      status: 200,
+      ok: true,
+      headers: {
+        get: (name: string) => headers[name.toLowerCase()] ?? null,
+      },
+      body: {
+        getReader: () => ({ read, cancel, releaseLock }),
+      },
+      text: async () => {
+        throw new Error('The streaming response must not use text().')
+      },
+    }) as Awaited<ReturnType<WebFetchLike>>
+
+  return { fn, read, cancel, releaseLock }
+}
+
 describe('WebService.search', () => {
   it('reports an empty query rather than calling the upstream', async () => {
     const { fn, calls } = recordingFetch('{}')
@@ -247,13 +276,13 @@ describe('WebService.search', () => {
 })
 
 describe('WebService.fetch limits and error handling', () => {
-  it('reports a timeout with the fetch-failed tag', async () => {
+  it('reports a timeout with the fetch-timeout tag', async () => {
     const fn: WebFetchLike = async () => {
       throw Object.assign(new Error('aborted'), { name: 'AbortError' })
     }
 
     await expect(makeService({}, fn).fetch('https://example.com/')).rejects.toMatchObject({
-      tag: 'fetch-failed',
+      tag: 'fetch-timeout',
       message: 'The request timed out.',
     })
   })
@@ -304,12 +333,171 @@ describe('WebService.fetch limits and error handling', () => {
     await expect(makeService({}, fn).fetch('https://example.com/')).rejects.toMatchObject({ tag: 'invalid-redirect' })
   })
 
-  it('truncates the fetched body at maxFetchBytes', async () => {
+  it('rejects a fallback body that exceeds maxFetchBytes instead of silently truncating it', async () => {
     const { fn } = recordingFetch('x'.repeat(500), { contentType: 'text/plain' })
 
-    const result = await makeService({ maxFetchBytes: 10 }, fn).fetch('https://example.com/')
+    await expect(makeService({ maxFetchBytes: 10 }, fn).fetch('https://example.com/')).rejects.toMatchObject({
+      tag: 'response-too-large',
+      message: 'The fetched response exceeds the allowed size.',
+    })
+  })
 
-    expect(result.text).toHaveLength(10)
+  it('counts UTF-8 bytes rather than JavaScript characters in the fallback path', async () => {
+    const { fn } = recordingFetch('😀😀', { contentType: 'text/plain' })
+
+    await expect(makeService({ maxFetchBytes: 7 }, fn).fetch('https://example.com/')).rejects.toMatchObject({
+      tag: 'response-too-large',
+    })
+  })
+
+  it('reassembles a multibyte character split across streamed chunks', async () => {
+    const encoded = Buffer.from('A😀B')
+    const { fn } = streamingFetch([encoded.subarray(0, 3), encoded.subarray(3)])
+
+    await expect(
+      makeService({ maxFetchBytes: encoded.byteLength }, fn).fetch('https://example.com/'),
+    ).resolves.toMatchObject({
+      text: 'A😀B',
+    })
+  })
+
+  it('ignores a misleading low Content-Length and enforces the streamed-byte ceiling', async () => {
+    const { fn, read, cancel } = streamingFetch(
+      [Buffer.from('1234'), Buffer.from('5678'), Buffer.from('unread')],
+      { 'content-length': '2', 'content-type': 'text/plain' },
+      new Promise<void>(() => undefined),
+    )
+
+    await expect(makeService({ maxFetchBytes: 6 }, fn).fetch('https://example.com/')).rejects.toMatchObject({
+      tag: 'response-too-large',
+      message: 'The fetched response exceeds the allowed size.',
+    })
+    expect(read).toHaveBeenCalledTimes(2)
+    expect(cancel).toHaveBeenCalledTimes(1)
+  })
+
+  it('accepts a bounded stream even when Content-Length misleadingly claims it is larger', async () => {
+    const { fn } = streamingFetch([Buffer.from('safe')], {
+      'content-length': '999999999',
+      'content-type': 'text/plain',
+    })
+
+    await expect(makeService({ maxFetchBytes: 4 }, fn).fetch('https://example.com/')).resolves.toMatchObject({
+      text: 'safe',
+    })
+  })
+
+  it('bounds chunked responses without relying on Content-Length', async () => {
+    const { fn, cancel } = streamingFetch([Buffer.from('abc'), Buffer.from('def')])
+
+    await expect(makeService({ maxFetchBytes: 5 }, fn).fetch('https://example.com/')).rejects.toMatchObject({
+      tag: 'response-too-large',
+    })
+    expect(cancel).toHaveBeenCalledTimes(1)
+  })
+
+  it('bounds decoded compressed expansion rather than the encoded Content-Length', async () => {
+    const { fn, cancel } = streamingFetch([Buffer.from('decoded-'), Buffer.from('expansion')], {
+      'content-encoding': 'gzip',
+      'content-length': '4',
+    })
+
+    await expect(makeService({ maxFetchBytes: 10 }, fn).fetch('https://example.com/')).rejects.toMatchObject({
+      tag: 'response-too-large',
+    })
+    expect(cancel).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the deadline active while a slow body is being consumed and cancels it', async () => {
+    jest.useFakeTimers()
+    try {
+      let markReadStarted: (() => void) | undefined
+      const readStarted = new Promise<void>((resolve) => {
+        markReadStarted = resolve
+      })
+      const read = jest.fn(() => {
+        markReadStarted?.()
+        return new Promise<{ done: boolean; value?: Uint8Array }>(() => undefined)
+      })
+      const cancel = jest.fn().mockResolvedValue(undefined)
+      const fn: WebFetchLike = async () =>
+        ({
+          status: 200,
+          ok: true,
+          headers: { get: () => 'text/plain' },
+          body: { getReader: () => ({ read, cancel, releaseLock: jest.fn() }) },
+          text: async () => '',
+        }) as Awaited<ReturnType<WebFetchLike>>
+      const request = makeService({ fetchTimeoutMs: 50 }, fn).fetch('https://example.com/')
+
+      await readStarted
+      const rejection = expect(request).rejects.toMatchObject({
+        tag: 'fetch-timeout',
+        message: 'The request timed out.',
+      })
+      await jest.advanceTimersByTimeAsync(50)
+
+      await rejection
+      expect(cancel).toHaveBeenCalledTimes(1)
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
+  it('keeps the same deadline active while validating a redirect target', async () => {
+    jest.useFakeTimers()
+    try {
+      let markRedirectResolutionStarted: (() => void) | undefined
+      const redirectResolutionStarted = new Promise<void>((resolve) => {
+        markRedirectResolutionStarted = resolve
+      })
+      const calls: string[] = []
+      const fn: WebFetchLike = async (url) => {
+        calls.push(url)
+        return {
+          status: 302,
+          ok: false,
+          headers: { get: (name: string) => (name.toLowerCase() === 'location' ? 'https://next.test/' : null) },
+          text: async () => '',
+        }
+      }
+      const resolveHost = async (host: string): Promise<string[]> => {
+        if (host === 'next.test') {
+          markRedirectResolutionStarted?.()
+          return new Promise<string[]>(() => undefined)
+        }
+        return ['93.184.216.34']
+      }
+      const request = new WebService(fn, { fetchTimeoutMs: 50 }, resolveHost).fetch('https://example.com/')
+
+      await redirectResolutionStarted
+      const rejection = expect(request).rejects.toMatchObject({ tag: 'fetch-timeout' })
+      await jest.advanceTimersByTimeAsync(50)
+
+      await rejection
+      expect(calls).toEqual(['https://example.com/'])
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
+  it('turns a body read failure into a fixed safe error', async () => {
+    const read = jest.fn().mockRejectedValue(new Error('upstream socket leaked-a-secret'))
+    const cancel = jest.fn().mockResolvedValue(undefined)
+    const fn: WebFetchLike = async () =>
+      ({
+        status: 200,
+        ok: true,
+        headers: { get: () => 'text/plain' },
+        body: { getReader: () => ({ read, cancel, releaseLock: jest.fn() }) },
+        text: async () => '',
+      }) as Awaited<ReturnType<WebFetchLike>>
+
+    await expect(makeService({}, fn).fetch('https://example.com/')).rejects.toMatchObject({
+      tag: 'fetch-failed',
+      message: 'Failed to fetch the URL.',
+    })
+    expect(cancel).toHaveBeenCalledTimes(1)
   })
 
   it('caps the extracted text at maxContentChars', async () => {

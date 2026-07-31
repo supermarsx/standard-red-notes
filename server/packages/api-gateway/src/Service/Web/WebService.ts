@@ -30,6 +30,14 @@ export type WebFetchLike = (
   status: number
   ok: boolean
   headers: { get(name: string): string | null }
+  body?: {
+    getReader(): {
+      read(): Promise<{ done: boolean; value?: Uint8Array }>
+      cancel(reason?: unknown): Promise<void> | void
+      releaseLock?(): void
+    }
+    cancel?(reason?: unknown): Promise<void> | void
+  } | null
   text: () => Promise<string>
 }>
 
@@ -41,7 +49,7 @@ export interface WebServiceConfig {
   searchApiKey?: string
   // Caps, with safe defaults applied in the constructor.
   maxContentChars?: number
-  // Max bytes to read from a fetched page before truncating (protects memory).
+  // Maximum decoded response bytes accepted from a fetched page.
   maxFetchBytes?: number
   // Per-request fetch timeout (ms).
   fetchTimeoutMs?: number
@@ -113,35 +121,106 @@ export class WebService {
   async fetch(rawUrl: string): Promise<WebFetchResult> {
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), this.fetchTimeoutMs)
-    let response
+
     try {
-      response = await this.fetchFollowingRedirects(rawUrl, controller.signal)
+      const response = await this.fetchFollowingRedirects(rawUrl, controller.signal)
+      const contentType = response.headers.get('content-type') || ''
+      const body = await this.readBoundedBody(response, controller)
+
+      const isHtml = /html|xml/i.test(contentType) || /^\s*</.test(body)
+      const title = isHtml ? extractTitle(body) : ''
+      const text = isHtml ? htmlToText(body) : body
+      const cappedText = text.length > this.maxContentChars ? text.slice(0, this.maxContentChars) : text
+
+      return {
+        status: response.status,
+        contentType,
+        title,
+        text: cappedText,
+      }
     } catch (error) {
-      // Preserve validation errors (blocked host / bad redirect) verbatim.
+      // Preserve URL validation and bounded-response errors verbatim.
       if (error instanceof WebValidationError) {
         throw error
       }
-      const message = (error as Error).name === 'AbortError' ? 'The request timed out.' : 'Failed to fetch the URL.'
-      throw new WebValidationError(message, 'fetch-failed')
+      if (controller.signal.aborted || (error as Error).name === 'AbortError') {
+        throw new WebValidationError('The request timed out.', 'fetch-timeout')
+      }
+      throw new WebValidationError('Failed to fetch the URL.', 'fetch-failed')
     } finally {
       clearTimeout(timer)
     }
+  }
 
-    const contentType = response.headers.get('content-type') || ''
-    const rawBody = await response.text()
-    const body = rawBody.length > this.maxFetchBytes ? rawBody.slice(0, this.maxFetchBytes) : rawBody
-
-    const isHtml = /html|xml/i.test(contentType) || /^\s*</.test(body)
-    const title = isHtml ? extractTitle(body) : ''
-    const text = isHtml ? htmlToText(body) : body
-    const cappedText = text.length > this.maxContentChars ? text.slice(0, this.maxContentChars) : text
-
-    return {
-      status: response.status,
-      contentType,
-      title,
-      text: cappedText,
+  /**
+   * Consume the decoded response stream under a strict byte ceiling. Node's
+   * fetch exposes decompressed bytes here, so compressed expansion is bounded
+   * as well. Content-Length is deliberately not trusted: it can be absent,
+   * forged, or describe the encoded representation.
+   */
+  private async readBoundedBody(
+    response: Awaited<ReturnType<WebFetchLike>>,
+    controller: AbortController,
+  ): Promise<string> {
+    const stream = response.body
+    if (!stream || typeof stream.getReader !== 'function') {
+      // Compatibility path for fetch doubles and responses without a body.
+      // Production fetch responses expose a stream, which is the path that
+      // prevents an oversized body from being buffered before enforcement.
+      const text = await awaitWithAbort(response.text(), controller.signal)
+      if (Buffer.byteLength(text, 'utf8') > this.maxFetchBytes) {
+        controller.abort()
+        throw new WebValidationError('The fetched response exceeds the allowed size.', 'response-too-large')
+      }
+      return text
     }
+
+    const reader = stream.getReader()
+    const chunks: Buffer[] = []
+    let totalBytes = 0
+    let cancelled = false
+    const cancel = (): void => {
+      if (cancelled) {
+        return
+      }
+      cancelled = true
+      try {
+        void Promise.resolve(reader.cancel()).catch(() => undefined)
+      } catch {
+        // Best-effort teardown; aborting the request also stops the transfer.
+      }
+    }
+
+    try {
+      for (;;) {
+        const { done, value } = await awaitWithAbort(reader.read(), controller.signal)
+        if (done) {
+          break
+        }
+        if (!value || value.byteLength === 0) {
+          continue
+        }
+
+        totalBytes += value.byteLength
+        if (totalBytes > this.maxFetchBytes) {
+          controller.abort()
+          cancel()
+          throw new WebValidationError('The fetched response exceeds the allowed size.', 'response-too-large')
+        }
+        chunks.push(Buffer.from(value))
+      }
+    } catch (error) {
+      cancel()
+      throw error
+    } finally {
+      try {
+        reader.releaseLock?.()
+      } catch {
+        // The stream may still have a pending read while cancellation settles.
+      }
+    }
+
+    return Buffer.concat(chunks, totalBytes).toString('utf8')
   }
 
   /**
@@ -278,24 +357,29 @@ export class WebService {
     signal: AbortSignal,
   ): Promise<Awaited<ReturnType<WebFetchLike>>> {
     const MAX_REDIRECTS = 5
-    let current = await this.assertPublicHttpUrl(rawUrl)
+    let current = await awaitWithAbort(this.assertPublicHttpUrl(rawUrl), signal)
 
     for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-      const response = await this.fetchFn(current.toString(), {
-        method: 'GET',
-        headers: {
-          'User-Agent': USER_AGENT,
-          Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.5',
-        },
+      const response = await awaitWithAbort(
+        this.fetchFn(current.toString(), {
+          method: 'GET',
+          headers: {
+            'User-Agent': USER_AGENT,
+            Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.5',
+          },
+          signal,
+          redirect: 'manual',
+        }),
         signal,
-        redirect: 'manual',
-      })
+      )
 
       const isRedirect = response.status >= 300 && response.status < 400
       const location = isRedirect ? response.headers.get('location') : null
       if (!location) {
         return response
       }
+
+      cancelResponseBody(response)
 
       let next: URL
       try {
@@ -304,7 +388,7 @@ export class WebService {
         throw new WebValidationError('The redirect target is malformed.', 'invalid-redirect')
       }
       // Re-run the full SSRF guard against the redirect target before following.
-      current = await this.assertPublicHttpUrl(next.toString())
+      current = await awaitWithAbort(this.assertPublicHttpUrl(next.toString()), signal)
     }
 
     throw new WebValidationError('Too many redirects.', 'too-many-redirects')
@@ -361,6 +445,69 @@ export class WebService {
     }
 
     return url
+  }
+}
+
+function awaitWithAbort<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) {
+    void operation.catch(() => undefined)
+    return Promise.reject(abortError())
+  }
+
+  return new Promise<T>((resolve, reject) => {
+    let settled = false
+    const onAbort = (): void => {
+      if (settled) {
+        return
+      }
+      settled = true
+      signal.removeEventListener('abort', onAbort)
+      reject(abortError())
+    }
+
+    signal.addEventListener('abort', onAbort, { once: true })
+    void operation.then(
+      (value) => {
+        if (settled) {
+          return
+        }
+        settled = true
+        signal.removeEventListener('abort', onAbort)
+        resolve(value)
+      },
+      (error: unknown) => {
+        if (settled) {
+          return
+        }
+        settled = true
+        signal.removeEventListener('abort', onAbort)
+        reject(error)
+      },
+    )
+  })
+}
+
+function abortError(): Error {
+  const error = new Error('The request was aborted.')
+  error.name = 'AbortError'
+  return error
+}
+
+function cancelResponseBody(response: Awaited<ReturnType<WebFetchLike>>): void {
+  const stream = response.body
+  if (!stream) {
+    return
+  }
+
+  try {
+    if (stream.cancel) {
+      void Promise.resolve(stream.cancel()).catch(() => undefined)
+      return
+    }
+    const reader = stream.getReader()
+    void Promise.resolve(reader.cancel()).catch(() => undefined)
+  } catch {
+    // Redirect bodies are discarded; cancellation is best-effort.
   }
 }
 
