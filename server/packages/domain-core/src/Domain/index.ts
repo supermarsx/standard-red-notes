@@ -57,6 +57,7 @@ export * from './Notification/NotificationType'
 export * from './Notification/NotificationTypeProps'
 
 export * from './Security/SsrfFilter'
+export * from './Security/PinnedHttpTransport'
 
 export * from './Service/ServiceConfiguration'
 export * from './Service/ServiceContainer'

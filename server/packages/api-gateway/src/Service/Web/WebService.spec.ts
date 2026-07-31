@@ -79,7 +79,7 @@ describe('WebService.fetch — SSRF guard', () => {
         { status: 302, location: 'https://elsewhere.test/final' },
         { status: 200, contentType: 'text/html', body: '<p>final page</p>' },
       ],
-      { 'elsewhere.test': ['198.51.100.7'] },
+      { 'elsewhere.test': ['1.1.1.1'] },
     )
     const result = await service.fetch('https://example.com/start')
     expect(result.text).toContain('final page')
@@ -93,7 +93,7 @@ describe('WebService.fetch — SSRF guard', () => {
       headers: { get: (name) => (name.toLowerCase() === 'location' ? `https://hop${n++}.test/` : null) },
       text: async () => '',
     })
-    const service = new WebService(fn, {}, async () => ['198.51.100.7'])
+    const service = new WebService(fn, {}, async () => ['93.184.216.34'])
     await expect(service.fetch('https://example.com/')).rejects.toMatchObject({ tag: 'too-many-redirects' })
   })
 })
@@ -108,6 +108,11 @@ describe('isBlockedIp / isBlockedHostname', () => {
       '172.16.0.1',
       '192.168.1.1',
       '100.64.0.1',
+      '192.0.0.1',
+      '192.0.2.1',
+      '198.18.0.1',
+      '198.51.100.1',
+      '203.0.113.1',
       '224.0.0.1',
     ]) {
       expect(isBlockedIp(ip)).toBe(true)
@@ -119,8 +124,20 @@ describe('isBlockedIp / isBlockedHostname', () => {
     expect(isBlockedIp('93.184.216.34')).toBe(false)
   })
 
-  it('blocks IPv6 loopback, ULA, link-local, multicast', () => {
-    for (const ip of ['::1', '::', 'fe80::1', 'fc00::1', 'fd12::1', 'ff02::1']) {
+  it('blocks normalized IPv6 loopback, ULA, full link-local/site-local ranges, and multicast', () => {
+    for (const ip of [
+      '::1',
+      '::',
+      '0:0:0:0:0:0:0:1',
+      'fe80::1',
+      'fe90::1',
+      'febf::1',
+      'fec0::1',
+      'feff::1',
+      'fc00::1',
+      'fd12::1',
+      'ff02::1',
+    ]) {
       expect(isBlockedIp(ip)).toBe(true)
     }
   })
@@ -128,6 +145,7 @@ describe('isBlockedIp / isBlockedHostname', () => {
   it('blocks IPv4-mapped and NAT64 IPv6 that embed a private IPv4 (dotted and hex)', () => {
     expect(isBlockedIp('::ffff:127.0.0.1')).toBe(true)
     expect(isBlockedIp('::ffff:7f00:1')).toBe(true) // 127.0.0.1 in hextets
+    expect(isBlockedIp('0:0:0:0:0:ffff:7f00:1')).toBe(true)
     expect(isBlockedIp('64:ff9b::169.254.169.254')).toBe(true)
     expect(isBlockedIp('64:ff9b::a9fe:a9fe')).toBe(true) // 169.254.169.254 in hextets
     expect(isBlockedIp('64:ff9b::')).toBe(true) // any NAT64 prefix fails closed
@@ -135,6 +153,7 @@ describe('isBlockedIp / isBlockedHostname', () => {
 
   it('allows a public IPv6', () => {
     expect(isBlockedIp('2606:4700:4700::1111')).toBe(false)
+    expect(isBlockedIp('2001:4860:4860::8888')).toBe(false)
   })
 
   it('blocks internal hostnames', () => {

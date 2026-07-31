@@ -1,5 +1,9 @@
-import { AxiosInstance } from 'axios'
-import { assertPublicHttpUrl, SsrfValidationError } from '@standardnotes/domain-core'
+import {
+  assertPublicHttpUrl,
+  PinnedHttpError,
+  PinnedHttpTransport,
+  SsrfValidationError,
+} from '@standardnotes/domain-core'
 import { Logger } from 'winston'
 
 import { Webhook } from '../../Domain/Webhook/Webhook'
@@ -24,7 +28,7 @@ export class WebhookDispatcher implements WebhookDispatcherInterface {
 
   constructor(
     private webhookRepository: WebhookRepositoryInterface,
-    private httpClient: AxiosInstance,
+    private httpTransport: PinnedHttpTransport,
     private logger: Logger,
   ) {}
 
@@ -71,9 +75,10 @@ export class WebhookDispatcher implements WebhookDispatcherInterface {
 
   private async deliver(webhook: Webhook, payload: Record<string, unknown>): Promise<void> {
     // SSRF guard at DELIVERY: re-validate the target right before sending. DNS
-    // records can change between registration and delivery (DNS rebinding), so
-    // resolving + checking here closes that window. A blocked target is logged
-    // and dropped (no retry — re-resolving would yield the same block).
+    // records can change between registration and delivery. This preliminary
+    // check gives blocked targets the existing no-retry behavior; the shared
+    // transport below performs the authoritative resolve-and-pin operation for
+    // the actual socket. A blocked target is logged and dropped.
     try {
       await assertPublicHttpUrl(webhook.props.targetUrl)
     } catch (error) {
@@ -93,27 +98,36 @@ export class WebhookDispatcher implements WebhookDispatcherInterface {
 
     for (let attempt = 1; attempt <= this.MAX_ATTEMPTS; attempt++) {
       try {
-        await this.httpClient.request({
+        const response = await this.httpTransport.request({
           method: 'POST',
           url: webhook.props.targetUrl,
-          data: body,
-          timeout: this.REQUEST_TIMEOUT_MS,
-          // Do NOT follow redirects: a 3xx to a private/metadata host is the
-          // classic SSRF-filter bypass. The validated target was checked above;
-          // redirects would not be re-validated, so refuse to follow them.
+          body,
+          timeoutMs: this.REQUEST_TIMEOUT_MS,
+          // Webhook signatures and payloads are origin-bound, so do not follow
+          // redirects even though the transport can safely re-pin them.
           maxRedirects: 0,
           headers: {
             'Content-Type': 'application/json',
+            'Content-Length': String(Buffer.byteLength(body)),
             'X-SRN-Signature': signature,
             'X-SRN-Event': payload.event as string,
             'X-SRN-Webhook-Id': webhook.id.toString(),
           },
-          // We treat any 2xx as success; anything else triggers a retry.
-          validateStatus: (status) => status >= 200 && status < 300,
         })
+        await response.discard()
+        if (!response.ok) {
+          throw new PinnedHttpError('Webhook delivery returned a non-success status.', 'upstream-status')
+        }
 
         return
       } catch (error) {
+        if (error instanceof SsrfValidationError) {
+          this.logger.warn('Skipping webhook delivery because the pinned target was blocked.', {
+            endpoint: sanitizeUrlForSafeLog(webhook.props.targetUrl),
+            validationFailure: true,
+          })
+          return
+        }
         const isLastAttempt = attempt === this.MAX_ATTEMPTS
         this.logger.warn('Webhook delivery attempt failed.', {
           endpoint: sanitizeUrlForSafeLog(webhook.props.targetUrl),

@@ -176,6 +176,7 @@ import {
   ControllerContainer,
   ControllerContainerInterface,
   MapperInterface,
+  PinnedHttpTransport,
   SharedVaultUser,
 } from '@standardnotes/domain-core'
 import { SessionTracePersistenceMapper } from '../Mapping/SessionTracePersistenceMapper'
@@ -1641,7 +1642,7 @@ export class ContainerConfigLoader {
       .toConstantValue(
         new WebhookDispatcher(
           container.get(TYPES.Auth_WebhookRepository),
-          container.get<AxiosInstance>(TYPES.Auth_HTTPClient),
+          new PinnedHttpTransport(),
           container.get<winston.Logger>(TYPES.Auth_Logger),
         ),
       )

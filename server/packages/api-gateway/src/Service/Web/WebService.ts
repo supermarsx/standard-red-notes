@@ -17,12 +17,17 @@
 
 import { lookup } from 'dns/promises'
 import { isIP } from 'net'
+import {
+  isBlockedHostname as isSharedBlockedHostname,
+  isBlockedIp as isSharedBlockedIp,
+} from '@standardnotes/domain-core'
 
 export type WebFetchLike = (
   url: string,
   init: {
     method: string
     headers: Record<string, string>
+    body?: string | Uint8Array
     signal?: AbortSignal
     redirect?: 'follow' | 'manual' | 'error'
   },
@@ -51,6 +56,8 @@ export interface WebServiceConfig {
   maxContentChars?: number
   // Maximum decoded response bytes accepted from a fetched page.
   maxFetchBytes?: number
+  // Maximum decoded JSON bytes accepted from the configured search backend.
+  maxSearchBytes?: number
   // Per-request fetch timeout (ms).
   fetchTimeoutMs?: number
   // Per-request search timeout (ms).
@@ -88,6 +95,7 @@ export class WebValidationError extends Error {
 
 const DEFAULT_MAX_CONTENT_CHARS = 100_000
 const DEFAULT_MAX_FETCH_BYTES = 5 * 1024 * 1024
+const DEFAULT_MAX_SEARCH_BYTES = 2 * 1024 * 1024
 const DEFAULT_FETCH_TIMEOUT_MS = 15_000
 const DEFAULT_SEARCH_TIMEOUT_MS = 12_000
 const USER_AGENT = 'standard-red-notes-web-proxy'
@@ -95,6 +103,7 @@ const USER_AGENT = 'standard-red-notes-web-proxy'
 export class WebService {
   private readonly maxContentChars: number
   private readonly maxFetchBytes: number
+  private readonly maxSearchBytes: number
   private readonly fetchTimeoutMs: number
   private readonly searchTimeoutMs: number
 
@@ -103,11 +112,16 @@ export class WebService {
     private readonly config: WebServiceConfig = {},
     // DNS resolver injectable for tests; defaults to the real resolver.
     private readonly resolveHost: (host: string) => Promise<string[]> = defaultResolveHost,
+    // Search is an operator-configured trust path, separate from arbitrary
+    // public-only URLs supplied to fetch().
+    private readonly searchFetchFn: WebFetchLike = fetchFn,
   ) {
     this.maxContentChars =
       config.maxContentChars && config.maxContentChars > 0 ? config.maxContentChars : DEFAULT_MAX_CONTENT_CHARS
     this.maxFetchBytes =
       config.maxFetchBytes && config.maxFetchBytes > 0 ? config.maxFetchBytes : DEFAULT_MAX_FETCH_BYTES
+    this.maxSearchBytes =
+      config.maxSearchBytes && config.maxSearchBytes > 0 ? config.maxSearchBytes : DEFAULT_MAX_SEARCH_BYTES
     this.fetchTimeoutMs =
       config.fetchTimeoutMs && config.fetchTimeoutMs > 0 ? config.fetchTimeoutMs : DEFAULT_FETCH_TIMEOUT_MS
     this.searchTimeoutMs =
@@ -161,16 +175,33 @@ export class WebService {
   private async readBoundedBody(
     response: Awaited<ReturnType<WebFetchLike>>,
     controller: AbortController,
+    options: {
+      maxBytes: number
+      allowTextFallback: boolean
+      tooLargeMessage: string
+      tooLargeTag: string
+    } = {
+      maxBytes: this.maxFetchBytes,
+      allowTextFallback: true,
+      tooLargeMessage: 'The fetched response exceeds the allowed size.',
+      tooLargeTag: 'response-too-large',
+    },
   ): Promise<string> {
     const stream = response.body
     if (!stream || typeof stream.getReader !== 'function') {
+      if (!options.allowTextFallback) {
+        throw new WebValidationError(
+          'The search backend response could not be streamed.',
+          'search-response-unavailable',
+        )
+      }
       // Compatibility path for fetch doubles and responses without a body.
       // Production fetch responses expose a stream, which is the path that
       // prevents an oversized body from being buffered before enforcement.
       const text = await awaitWithAbort(response.text(), controller.signal)
-      if (Buffer.byteLength(text, 'utf8') > this.maxFetchBytes) {
+      if (Buffer.byteLength(text, 'utf8') > options.maxBytes) {
         controller.abort()
-        throw new WebValidationError('The fetched response exceeds the allowed size.', 'response-too-large')
+        throw new WebValidationError(options.tooLargeMessage, options.tooLargeTag)
       }
       return text
     }
@@ -202,10 +233,10 @@ export class WebService {
         }
 
         totalBytes += value.byteLength
-        if (totalBytes > this.maxFetchBytes) {
+        if (totalBytes > options.maxBytes) {
           controller.abort()
           cancel()
-          throw new WebValidationError('The fetched response exceeds the allowed size.', 'response-too-large')
+          throw new WebValidationError(options.tooLargeMessage, options.tooLargeTag)
         }
         chunks.push(Buffer.from(value))
       }
@@ -246,15 +277,18 @@ export class WebService {
     try {
       switch (provider) {
         case 'searxng':
-          return await this.searchSearxng(trimmed, controller.signal)
+          return await this.searchSearxng(trimmed, controller)
         case 'brave':
-          return await this.searchBrave(trimmed, controller.signal)
+          return await this.searchBrave(trimmed, controller)
         case 'serper':
-          return await this.searchSerper(trimmed, controller.signal)
+          return await this.searchSerper(trimmed, controller)
         default:
           return { results: [], error: `unsupported search provider '${provider}'` }
       }
     } catch (error) {
+      if (error instanceof WebValidationError && error.tag === 'search-response-too-large') {
+        return { results: [], error: 'search response too large' }
+      }
       const message = (error as Error).name === 'AbortError' ? 'web search timed out' : 'web search failed'
       return { results: [], error: message }
     } finally {
@@ -263,17 +297,18 @@ export class WebService {
   }
 
   // SearXNG JSON endpoint: GET {apiUrl}?q=...&format=json -> { results: [{ title, url, content }] }
-  private async searchSearxng(query: string, signal: AbortSignal): Promise<WebSearchResult> {
+  private async searchSearxng(query: string, controller: AbortController): Promise<WebSearchResult> {
     const url = appendQuery(this.config.searchApiUrl as string, { q: query, format: 'json' })
     const headers: Record<string, string> = { 'User-Agent': USER_AGENT, Accept: 'application/json' }
     if (this.config.searchApiKey) {
       headers['Authorization'] = `Bearer ${this.config.searchApiKey}`
     }
-    const response = await this.fetchFn(url, { method: 'GET', headers, signal })
+    const response = await this.fetchSearchBackend(url, { method: 'GET', headers, signal: controller.signal })
     if (!response.ok) {
+      cancelResponseBody(response)
       return { results: [], error: `search upstream error (status ${response.status})` }
     }
-    const parsed = safeParseJson(await response.text())
+    const parsed = safeParseJson(await this.readBoundedSearchBody(response, controller))
     const rawResults = (parsed?.results as unknown[]) || []
     const results = rawResults
       .map((r) => r as Record<string, unknown>)
@@ -288,17 +323,18 @@ export class WebService {
 
   // Brave Search API: GET {apiUrl}?q=... with X-Subscription-Token header ->
   // { web: { results: [{ title, url, description }] } }
-  private async searchBrave(query: string, signal: AbortSignal): Promise<WebSearchResult> {
+  private async searchBrave(query: string, controller: AbortController): Promise<WebSearchResult> {
     const url = appendQuery(this.config.searchApiUrl as string, { q: query })
     const headers: Record<string, string> = { 'User-Agent': USER_AGENT, Accept: 'application/json' }
     if (this.config.searchApiKey) {
       headers['X-Subscription-Token'] = this.config.searchApiKey
     }
-    const response = await this.fetchFn(url, { method: 'GET', headers, signal })
+    const response = await this.fetchSearchBackend(url, { method: 'GET', headers, signal: controller.signal })
     if (!response.ok) {
+      cancelResponseBody(response)
       return { results: [], error: `search upstream error (status ${response.status})` }
     }
-    const parsed = safeParseJson(await response.text())
+    const parsed = safeParseJson(await this.readBoundedSearchBody(response, controller))
     const web = (parsed?.web as Record<string, unknown>) || {}
     const rawResults = (web.results as unknown[]) || []
     const results = rawResults
@@ -314,7 +350,7 @@ export class WebService {
 
   // Serper.dev (Google SERP API): POST {apiUrl} { q } with X-API-KEY header ->
   // { organic: [{ title, link, snippet }] }
-  private async searchSerper(query: string, signal: AbortSignal): Promise<WebSearchResult> {
+  private async searchSerper(query: string, controller: AbortController): Promise<WebSearchResult> {
     const headers: Record<string, string> = {
       'User-Agent': USER_AGENT,
       Accept: 'application/json',
@@ -323,17 +359,17 @@ export class WebService {
     if (this.config.searchApiKey) {
       headers['X-API-KEY'] = this.config.searchApiKey
     }
-    const response = await this.fetchFn(this.config.searchApiUrl as string, {
+    const response = await this.fetchSearchBackend(this.config.searchApiUrl as string, {
       method: 'POST',
       headers,
-      signal,
-      // body unsupported by the minimal shape's typing; cast through unknown.
-      ...({ body: JSON.stringify({ q: query }) } as unknown as object),
+      body: JSON.stringify({ q: query }),
+      signal: controller.signal,
     })
     if (!response.ok) {
+      cancelResponseBody(response)
       return { results: [], error: `search upstream error (status ${response.status})` }
     }
-    const parsed = safeParseJson(await response.text())
+    const parsed = safeParseJson(await this.readBoundedSearchBody(response, controller))
     const rawResults = (parsed?.organic as unknown[]) || []
     const results = rawResults
       .map((r) => r as Record<string, unknown>)
@@ -344,6 +380,40 @@ export class WebService {
       }))
       .filter((r) => r.url.length > 0)
     return { results }
+  }
+
+  /**
+   * Search URLs come only from SEARCH_API_URL. They use a separately injected
+   * transport because operators commonly run SearXNG on a private service
+   * network. The configured origin is the complete trust boundary: requests
+   * cannot switch origins, and redirects are rejected before credentials can
+   * be forwarded.
+   */
+  private fetchSearchBackend(
+    rawUrl: string,
+    init: Parameters<WebFetchLike>[1],
+  ): Promise<Awaited<ReturnType<WebFetchLike>>> {
+    const configured = new URL(this.config.searchApiUrl as string)
+    const requested = new URL(rawUrl)
+    if (
+      (configured.protocol !== 'http:' && configured.protocol !== 'https:') ||
+      requested.origin !== configured.origin
+    ) {
+      throw new WebValidationError('The search backend URL is not allowed.', 'invalid-search-origin')
+    }
+    return this.searchFetchFn(requested.toString(), { ...init, redirect: 'error' })
+  }
+
+  private readBoundedSearchBody(
+    response: Awaited<ReturnType<WebFetchLike>>,
+    controller: AbortController,
+  ): Promise<string> {
+    return this.readBoundedBody(response, controller, {
+      maxBytes: this.maxSearchBytes,
+      allowTextFallback: false,
+      tooLargeMessage: 'The search backend response exceeds the allowed size.',
+      tooLargeTag: 'search-response-too-large',
+    })
   }
 
   /**
@@ -399,9 +469,9 @@ export class WebService {
    * and any host literal or DNS-resolved address that is private / loopback /
    * link-local / unique-local / cloud-metadata. Throws {@link WebValidationError}.
    *
-   * Residual: a DNS-rebinding TOCTOU window remains between this resolution and
-   * the socket connect (the OS re-resolves). Operators should also restrict
-   * egress at the network layer; connection-time IP pinning is a future hardening.
+   * Production injects PinnedHttpTransport, so the later socket connection uses
+   * a freshly validated address without re-resolving. This local check remains
+   * defense in depth and supports deterministic service-level tests.
    */
   private async assertPublicHttpUrl(rawUrl: string): Promise<URL> {
     const value = typeof rawUrl === 'string' ? rawUrl.trim() : ''
@@ -516,117 +586,9 @@ async function defaultResolveHost(host: string): Promise<string[]> {
   return records.map((record) => record.address)
 }
 
-// Hostname-level blocks (before/independent of IP resolution).
-export function isBlockedHostname(host: string): boolean {
-  if (host.length === 0) {
-    return true
-  }
-  if (host === 'localhost' || host.endsWith('.localhost')) {
-    return true
-  }
-  // RFC 6761 / common internal TLDs and cloud metadata names.
-  if (host.endsWith('.internal') || host.endsWith('.local') || host === 'metadata' || host.endsWith('.metadata')) {
-    return true
-  }
-  return false
-}
-
-/**
- * Returns true if an IP literal is private, loopback, link-local (incl. the
- * 169.254.169.254 cloud metadata address), unique-local, or otherwise not a
- * routable public address.
- */
-export function isBlockedIp(ip: string): boolean {
-  const family = isIP(ip)
-  if (family === 4) {
-    return isBlockedIpv4(ip)
-  }
-  if (family === 6) {
-    return isBlockedIpv6(ip)
-  }
-  // Not a parseable IP -> treat as blocked (fail closed).
-  return true
-}
-
-function isBlockedIpv4(ip: string): boolean {
-  const parts = ip.split('.').map((p) => parseInt(p, 10))
-  if (parts.length !== 4 || parts.some((n) => Number.isNaN(n) || n < 0 || n > 255)) {
-    return true
-  }
-  const [a, b] = parts
-  // "this" network 0.0.0.0/8
-  if (a === 0) {
-    return true
-  }
-  // private 10.0.0.0/8
-  if (a === 10) {
-    return true
-  }
-  // loopback 127.0.0.0/8
-  if (a === 127) {
-    return true
-  }
-  // link-local 169.254.0.0/16 (includes the 169.254.169.254 cloud metadata IP)
-  if (a === 169 && b === 254) {
-    return true
-  }
-  // private 172.16.0.0/12
-  if (a === 172 && b >= 16 && b <= 31) {
-    return true
-  }
-  // private 192.168.0.0/16
-  if (a === 192 && b === 168) {
-    return true
-  }
-  // CGNAT 100.64.0.0/10
-  if (a === 100 && b >= 64 && b <= 127) {
-    return true
-  }
-  // multicast + reserved 224.0.0.0/3
-  if (a >= 224) {
-    return true
-  }
-  return false
-}
-
-const hextetsToIpv4 = (high: number, low: number): string =>
-  `${(high >> 8) & 0xff}.${high & 0xff}.${(low >> 8) & 0xff}.${low & 0xff}`
-
-function isBlockedIpv6(ip: string): boolean {
-  const lower = ip.toLowerCase()
-  // loopback ::1 / unspecified ::
-  if (lower === '::1' || lower === '::') {
-    return true
-  }
-  // IPv4-mapped (::ffff:…) and NAT64 (64:ff9b::…) embed an IPv4 address that can
-  // point at a private/loopback host — extract and validate it. Both the dotted
-  // (a.b.c.d) and the non-dotted hextet (HHHH:HHHH) encodings are handled.
-  const dotted = lower.match(/(?:::ffff:|64:ff9b::)(\d+\.\d+\.\d+\.\d+)$/)
-  if (dotted) {
-    return isBlockedIpv4(dotted[1])
-  }
-  const hex = lower.match(/(?:::ffff:|64:ff9b::)([0-9a-f]{1,4}):([0-9a-f]{1,4})$/)
-  if (hex) {
-    return isBlockedIpv4(hextetsToIpv4(parseInt(hex[1], 16), parseInt(hex[2], 16)))
-  }
-  // Any other address in the NAT64 well-known prefix — fail closed.
-  if (lower.startsWith('64:ff9b:')) {
-    return true
-  }
-  // link-local fe80::/10
-  if (lower.startsWith('fe80')) {
-    return true
-  }
-  // unique-local fc00::/7
-  if (lower.startsWith('fc') || lower.startsWith('fd')) {
-    return true
-  }
-  // multicast ff00::/8
-  if (lower.startsWith('ff')) {
-    return true
-  }
-  return false
-}
+// Keep the gateway's legacy exports while using the one shared SSRF policy.
+export const isBlockedHostname = isSharedBlockedHostname
+export const isBlockedIp = isSharedBlockedIp
 
 // --- HTML / text helpers (no external dependency) -------------------------
 

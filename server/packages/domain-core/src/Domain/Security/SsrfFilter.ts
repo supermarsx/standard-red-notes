@@ -13,15 +13,14 @@
  * or DNS-resolved address that is private / loopback / link-local / unique-local
  * / cloud-metadata / CGNAT / multicast / NAT64 / IPv4-mapped.
  *
- * Residual: a DNS-rebinding TOCTOU window remains between this resolution and
- * the socket connect (the OS re-resolves). Operators should also restrict egress
- * at the network layer; connection-time IP pinning is a future hardening. This
- * is why callers are expected to re-validate at delivery time (not just at the
- * point of registration) and to disable redirect-following.
+ * `assertPublicHttpUrl` is suitable for validation-only flows such as saving a
+ * target. Code that actually sends a request must use `PinnedHttpTransport`,
+ * which consumes the validated address set without a second DNS lookup and
+ * repeats that resolution/pinning for redirects.
  */
 
 import { lookup } from 'dns/promises'
-import { isIP } from 'net'
+import { BlockList, isIP } from 'net'
 
 export class SsrfValidationError extends Error {
   constructor(
@@ -34,6 +33,23 @@ export class SsrfValidationError extends Error {
 }
 
 export type ResolveHost = (host: string) => Promise<string[]>
+
+export interface ResolvedPublicHttpUrl {
+  url: URL
+  addresses: ReadonlyArray<{
+    address: string
+    family: 4 | 6
+  }>
+}
+
+export interface OutboundHttpResolutionPolicy {
+  /**
+   * Exact origins explicitly trusted by the operator. These origins may
+   * resolve to non-public addresses, but still use the returned address for a
+   * pinned connection and still reject malformed URLs and non-HTTP schemes.
+   */
+  allowedPrivateOrigins?: ReadonlySet<string>
+}
 
 async function defaultResolveHost(host: string): Promise<string[]> {
   const records = await lookup(host, { all: true })
@@ -50,6 +66,32 @@ async function defaultResolveHost(host: string): Promise<string[]> {
  * `resolveHost` is injectable for tests; it defaults to the real DNS resolver.
  */
 export async function assertPublicHttpUrl(rawUrl: string, resolveHost: ResolveHost = defaultResolveHost): Promise<URL> {
+  return (await resolvePublicHttpUrl(rawUrl, resolveHost)).url
+}
+
+/**
+ * Resolve and validate a URL for an outbound connection in one operation. Every
+ * DNS answer must be public; callers can then connect directly to one address
+ * from this immutable result without asking DNS a second time.
+ */
+export async function resolvePublicHttpUrl(
+  rawUrl: string,
+  resolveHost: ResolveHost = defaultResolveHost,
+): Promise<ResolvedPublicHttpUrl> {
+  return resolveHttpUrlForOutboundConnection(rawUrl, resolveHost)
+}
+
+/**
+ * Resolve a URL into the immutable address set used by an outbound socket.
+ * Public addresses are the default. A separately constructed operator-trust
+ * path may opt an exact origin into private addressing without weakening any
+ * other origin.
+ */
+export async function resolveHttpUrlForOutboundConnection(
+  rawUrl: string,
+  resolveHost: ResolveHost = defaultResolveHost,
+  policy: OutboundHttpResolutionPolicy = {},
+): Promise<ResolvedPublicHttpUrl> {
   const value = typeof rawUrl === 'string' ? rawUrl.trim() : ''
   if (value.length === 0) {
     throw new SsrfValidationError('A URL is required.', 'missing-url')
@@ -67,30 +109,41 @@ export async function assertPublicHttpUrl(rawUrl: string, resolveHost: ResolveHo
   }
 
   const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '')
-  if (isBlockedHostname(host)) {
+  const isAllowedPrivateOrigin = policy.allowedPrivateOrigins?.has(url.origin) ?? false
+  if (!isAllowedPrivateOrigin && isBlockedHostname(host)) {
     throw new SsrfValidationError('The requested host is not allowed.', 'blocked-host')
   }
 
   // Literal IPs are checked directly; hostnames are resolved and EVERY resolved
   // address must be public (defends against DNS-rebinding to a private address
   // and against names that resolve to metadata IPs).
+  let addresses: string[]
   if (isIP(host)) {
-    if (isBlockedIp(host)) {
+    if (!isAllowedPrivateOrigin && isBlockedIp(host)) {
       throw new SsrfValidationError('The requested host is not allowed.', 'blocked-host')
     }
+    addresses = [host]
   } else {
-    let addresses: string[]
     try {
       addresses = await resolveHost(host)
     } catch {
       throw new SsrfValidationError('The host could not be resolved.', 'unresolvable-host')
     }
-    if (addresses.length === 0 || addresses.some((address) => isBlockedIp(address))) {
+    if (
+      addresses.length === 0 ||
+      addresses.some((address) => !isIP(address) || (!isAllowedPrivateOrigin && isBlockedIp(address)))
+    ) {
       throw new SsrfValidationError('The requested host is not allowed.', 'blocked-host')
     }
   }
 
-  return url
+  return {
+    url,
+    addresses: addresses.map((address) => ({
+      address,
+      family: isIP(address) as 4 | 6,
+    })),
+  }
 }
 
 // Hostname-level blocks (before/independent of IP resolution).
@@ -114,93 +167,76 @@ export function isBlockedHostname(host: string): boolean {
  * routable public address.
  */
 export function isBlockedIp(ip: string): boolean {
-  const family = isIP(ip)
-  if (family === 4) {
-    return isBlockedIpv4(ip)
+  if (typeof ip !== 'string' || ip.includes('%')) {
+    return true
   }
-  if (family === 6) {
-    return isBlockedIpv6(ip)
+  try {
+    const family = isIP(ip)
+    if (family === 4) {
+      return isBlockedIpv4(ip)
+    }
+    if (family === 6) {
+      return isBlockedIpv6(ip)
+    }
+  } catch {
+    // Address parsing and range matching must always fail closed.
   }
   // Not a parseable IP -> treat as blocked (fail closed).
   return true
 }
 
-function isBlockedIpv4(ip: string): boolean {
-  const parts = ip.split('.').map((p) => parseInt(p, 10))
-  if (parts.length !== 4 || parts.some((n) => Number.isNaN(n) || n < 0 || n > 255)) {
-    return true
-  }
-  const [a, b] = parts
-  // "this" network 0.0.0.0/8
-  if (a === 0) {
-    return true
-  }
-  // private 10.0.0.0/8
-  if (a === 10) {
-    return true
-  }
-  // loopback 127.0.0.0/8
-  if (a === 127) {
-    return true
-  }
-  // link-local 169.254.0.0/16 (includes the 169.254.169.254 cloud metadata IP)
-  if (a === 169 && b === 254) {
-    return true
-  }
-  // private 172.16.0.0/12
-  if (a === 172 && b >= 16 && b <= 31) {
-    return true
-  }
-  // private 192.168.0.0/16
-  if (a === 192 && b === 168) {
-    return true
-  }
-  // CGNAT 100.64.0.0/10
-  if (a === 100 && b >= 64 && b <= 127) {
-    return true
-  }
-  // multicast + reserved 224.0.0.0/3
-  if (a >= 224) {
-    return true
-  }
-  return false
+const blockedIpv4Ranges = new BlockList()
+
+for (const [network, prefix] of [
+  ['0.0.0.0', 8],
+  ['10.0.0.0', 8],
+  ['100.64.0.0', 10],
+  ['127.0.0.0', 8],
+  ['169.254.0.0', 16],
+  ['172.16.0.0', 12],
+  ['192.0.0.0', 24],
+  ['192.0.2.0', 24],
+  ['192.31.196.0', 24],
+  ['192.52.193.0', 24],
+  ['192.88.99.0', 24],
+  ['192.168.0.0', 16],
+  ['192.175.48.0', 24],
+  ['198.18.0.0', 15],
+  ['198.51.100.0', 24],
+  ['203.0.113.0', 24],
+  ['224.0.0.0', 3],
+] as const) {
+  blockedIpv4Ranges.addSubnet(network, prefix, 'ipv4')
 }
 
-const hextetsToIpv4 = (high: number, low: number): string =>
-  `${(high >> 8) & 0xff}.${high & 0xff}.${(low >> 8) & 0xff}.${low & 0xff}`
+function isBlockedIpv4(ip: string): boolean {
+  return blockedIpv4Ranges.check(ip, 'ipv4')
+}
+
+/**
+ * IPv6 spellings are deliberately not inspected as strings. Node's BlockList
+ * parses and normalizes compressed, expanded, mixed IPv4/IPv6, and scoped
+ * forms before applying the prefix, closing equivalent-address bypasses.
+ *
+ * Only the currently allocated global-unicast space is admitted. Special
+ * ranges inside it are denied explicitly; everything outside it (including
+ * mapped, NAT64, ULA, link/site-local, multicast, and reserved space) fails
+ * closed. Transition ranges are unnecessary for ordinary public HTTP targets.
+ */
+const globalIpv6UnicastRange = new BlockList()
+globalIpv6UnicastRange.addSubnet('2000::', 3, 'ipv6')
+
+const blockedIpv6Ranges = new BlockList()
+
+for (const [network, prefix] of [
+  ['2001::', 23],
+  ['2001:db8::', 32],
+  ['2002::', 16],
+  ['3fff::', 20],
+] as const) {
+  blockedIpv6Ranges.addSubnet(network, prefix, 'ipv6')
+}
 
 function isBlockedIpv6(ip: string): boolean {
-  const lower = ip.toLowerCase()
-  // loopback ::1 / unspecified ::
-  if (lower === '::1' || lower === '::') {
-    return true
-  }
-  // IPv4-mapped (::ffff:…) and NAT64 (64:ff9b::…) embed an IPv4 address that can
-  // point at a private/loopback host — extract and validate it. Both the dotted
-  // (a.b.c.d) and the non-dotted hextet (HHHH:HHHH) encodings are handled.
-  const dotted = lower.match(/(?:::ffff:|64:ff9b::)(\d+\.\d+\.\d+\.\d+)$/)
-  if (dotted) {
-    return isBlockedIpv4(dotted[1])
-  }
-  const hex = lower.match(/(?:::ffff:|64:ff9b::)([0-9a-f]{1,4}):([0-9a-f]{1,4})$/)
-  if (hex) {
-    return isBlockedIpv4(hextetsToIpv4(parseInt(hex[1], 16), parseInt(hex[2], 16)))
-  }
-  // Any other address in the NAT64 well-known prefix — fail closed.
-  if (lower.startsWith('64:ff9b:')) {
-    return true
-  }
-  // link-local fe80::/10
-  if (lower.startsWith('fe80')) {
-    return true
-  }
-  // unique-local fc00::/7
-  if (lower.startsWith('fc') || lower.startsWith('fd')) {
-    return true
-  }
-  // multicast ff00::/8
-  if (lower.startsWith('ff')) {
-    return true
-  }
-  return false
+  return !globalIpv6UnicastRange.check(ip, 'ipv6') || blockedIpv6Ranges.check(ip, 'ipv6')
 }

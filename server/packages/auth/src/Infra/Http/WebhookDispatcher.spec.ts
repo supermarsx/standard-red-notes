@@ -1,4 +1,3 @@
-import { AxiosInstance } from 'axios'
 import { Logger } from 'winston'
 
 jest.mock('@standardnotes/domain-core', () => {
@@ -10,7 +9,12 @@ jest.mock('@standardnotes/domain-core', () => {
   }
 })
 
-import { assertPublicHttpUrl, SsrfValidationError } from '@standardnotes/domain-core'
+import {
+  assertPublicHttpUrl,
+  PinnedHttpResponse,
+  PinnedHttpTransport,
+  SsrfValidationError,
+} from '@standardnotes/domain-core'
 
 import { Webhook } from '../../Domain/Webhook/Webhook'
 import { WebhookProps } from '../../Domain/Webhook/WebhookProps'
@@ -21,7 +25,7 @@ import { WebhookDispatcher } from './WebhookDispatcher'
 
 describe('WebhookDispatcher', () => {
   let webhookRepository: WebhookRepositoryInterface
-  let httpClient: AxiosInstance
+  let httpTransport: jest.Mocked<PinnedHttpTransport>
   let logger: Logger
 
   const userA = '00000000-0000-0000-0000-00000000000a'
@@ -38,7 +42,13 @@ describe('WebhookDispatcher', () => {
       ...overrides,
     }).getValue()
 
-  const createDispatcher = () => new WebhookDispatcher(webhookRepository, httpClient, logger)
+  const createDispatcher = () => new WebhookDispatcher(webhookRepository, httpTransport, logger)
+  const responseOf = (status = 200): PinnedHttpResponse =>
+    ({
+      status,
+      ok: status >= 200 && status < 300,
+      discard: jest.fn().mockResolvedValue(undefined),
+    }) as unknown as PinnedHttpResponse
 
   beforeEach(() => {
     ;(assertPublicHttpUrl as jest.Mock).mockReset()
@@ -47,7 +57,9 @@ describe('WebhookDispatcher', () => {
     webhookRepository = {} as jest.Mocked<WebhookRepositoryInterface>
     webhookRepository.findAllEnabled = jest.fn().mockResolvedValue([])
 
-    httpClient = { request: jest.fn().mockResolvedValue({ status: 200 }) } as unknown as AxiosInstance
+    httpTransport = {
+      request: jest.fn().mockResolvedValue(responseOf()),
+    } as unknown as jest.Mocked<PinnedHttpTransport>
 
     logger = {} as jest.Mocked<Logger>
     logger.error = jest.fn()
@@ -60,7 +72,7 @@ describe('WebhookDispatcher', () => {
 
     await createDispatcher().dispatch('item.created', { userUuid: userA })
 
-    expect(httpClient.request).not.toHaveBeenCalled()
+    expect(httpTransport.request).not.toHaveBeenCalled()
   })
 
   it('should log and swallow a repository failure without calling the http client', async () => {
@@ -69,7 +81,7 @@ describe('WebhookDispatcher', () => {
     await expect(createDispatcher().dispatch('item.created', { userUuid: userA })).resolves.toBeUndefined()
 
     expect(logger.error).toHaveBeenCalled()
-    expect(httpClient.request).not.toHaveBeenCalled()
+    expect(httpTransport.request).not.toHaveBeenCalled()
   })
 
   it('should deliver only to enabled, subscribed and matching webhooks', async () => {
@@ -81,8 +93,8 @@ describe('WebhookDispatcher', () => {
 
     await createDispatcher().dispatch('item.created', { userUuid: userA })
 
-    expect(httpClient.request).toHaveBeenCalledTimes(1)
-    expect((httpClient.request as jest.Mock).mock.calls[0][0].url).toEqual('https://match.example.com')
+    expect(httpTransport.request).toHaveBeenCalledTimes(1)
+    expect((httpTransport.request as jest.Mock).mock.calls[0][0].url).toEqual('https://match.example.com')
   })
 
   it('should deliver to a global webhook regardless of the originating user', async () => {
@@ -92,8 +104,8 @@ describe('WebhookDispatcher', () => {
 
     await createDispatcher().dispatch('item.created', { userUuid: userB })
 
-    expect(httpClient.request).toHaveBeenCalledTimes(1)
-    expect((httpClient.request as jest.Mock).mock.calls[0][0].url).toEqual('https://global.example.com')
+    expect(httpTransport.request).toHaveBeenCalledTimes(1)
+    expect((httpTransport.request as jest.Mock).mock.calls[0][0].url).toEqual('https://global.example.com')
   })
 
   it('should POST a signed payload with the SRN headers, no redirects and a 5s timeout', async () => {
@@ -102,18 +114,19 @@ describe('WebhookDispatcher', () => {
 
     await createDispatcher().dispatch('item.created', { userUuid: userA, metadata: { timestamp: 123 } })
 
-    const request = (httpClient.request as jest.Mock).mock.calls[0][0]
+    const request = (httpTransport.request as jest.Mock).mock.calls[0][0]
 
     expect(request.method).toEqual('POST')
     expect(request.url).toEqual('https://example.com/hook')
     expect(request.maxRedirects).toEqual(0)
-    expect(request.timeout).toEqual(5000)
+    expect(request.timeoutMs).toEqual(5000)
     expect(request.headers['Content-Type']).toEqual('application/json')
+    expect(request.headers['Content-Length']).toEqual(String(Buffer.byteLength(request.body as string)))
     expect(request.headers['X-SRN-Event']).toEqual('item.created')
     expect(request.headers['X-SRN-Webhook-Id']).toEqual(webhook.id.toString())
 
     // The signature is computed over the exact serialized body sent.
-    const body = request.data as string
+    const body = request.body as string
     expect(request.headers['X-SRN-Signature']).toEqual(computeWebhookSignature('shared-secret', body))
     expect(verifyWebhookSignature('shared-secret', body, request.headers['X-SRN-Signature'])).toBe(true)
 
@@ -131,29 +144,43 @@ describe('WebhookDispatcher', () => {
 
     await createDispatcher().dispatch('item.created', { userUuid: userA })
 
-    expect(httpClient.request).not.toHaveBeenCalled()
+    expect(httpTransport.request).not.toHaveBeenCalled()
     expect(logger.warn).toHaveBeenCalled()
+  })
+
+  it('does not retry when authoritative connection pinning observes a blocked DNS answer', async () => {
+    const webhook = makeWebhook()
+    webhookRepository.findAllEnabled = jest.fn().mockResolvedValue([webhook])
+    httpTransport.request.mockRejectedValue(new SsrfValidationError('blocked', 'blocked-host'))
+
+    await createDispatcher().dispatch('item.created', { userUuid: userA })
+
+    expect(httpTransport.request).toHaveBeenCalledTimes(1)
+    expect(logger.warn).toHaveBeenCalledWith(
+      'Skipping webhook delivery because the pinned target was blocked.',
+      expect.objectContaining({ validationFailure: true }),
+    )
   })
 
   it('should retry up to MAX_ATTEMPTS=3 and then give up', async () => {
     const webhook = makeWebhook()
     webhookRepository.findAllEnabled = jest.fn().mockResolvedValue([webhook])
-    httpClient.request = jest.fn().mockRejectedValue(new Error('connection refused'))
+    httpTransport.request = jest.fn().mockRejectedValue(new Error('connection refused'))
 
     await createDispatcher().dispatch('item.created', { userUuid: userA })
 
-    expect(httpClient.request).toHaveBeenCalledTimes(3)
+    expect(httpTransport.request).toHaveBeenCalledTimes(3)
     expect(logger.error).toHaveBeenCalled()
   })
 
   it('should stop retrying once a delivery succeeds', async () => {
     const webhook = makeWebhook()
     webhookRepository.findAllEnabled = jest.fn().mockResolvedValue([webhook])
-    httpClient.request = jest.fn().mockRejectedValueOnce(new Error('transient')).mockResolvedValueOnce({ status: 200 })
+    httpTransport.request = jest.fn().mockRejectedValueOnce(new Error('transient')).mockResolvedValueOnce(responseOf())
 
     await createDispatcher().dispatch('item.created', { userUuid: userA })
 
-    expect(httpClient.request).toHaveBeenCalledTimes(2)
+    expect(httpTransport.request).toHaveBeenCalledTimes(2)
     expect(logger.warn).toHaveBeenCalledTimes(1)
     expect(logger.error).not.toHaveBeenCalled()
   })

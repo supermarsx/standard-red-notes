@@ -19,7 +19,7 @@ import { WebSocketAuthMiddleware } from '../Controller/WebSocketAuthMiddleware'
 import { InMemoryCrossServiceTokenCache } from '../Infra/InMemory/InMemoryCrossServiceTokenCache'
 import { DirectCallServiceProxy } from '../Service/DirectCall/DirectCallServiceProxy'
 import { createSafeLogFormat, safeErrorLogMetadata } from '../Service/Logging/SafeLog'
-import { MapperInterface, ServiceContainerInterface } from '@standardnotes/domain-core'
+import { MapperInterface, PinnedHttpTransport, ServiceContainerInterface } from '@standardnotes/domain-core'
 import { EndpointResolverInterface } from '../Service/Resolver/EndpointResolverInterface'
 import { EndpointResolver } from '../Service/Resolver/EndpointResolver'
 import { RequiredCrossServiceTokenMiddleware } from '../Controller/RequiredCrossServiceTokenMiddleware'
@@ -560,18 +560,34 @@ export class ContainerConfigLoader {
 
     // Standard Red Notes: server-side WEB proxy (fetch + search) for the browser
     // AI agent. fetch() has an SSRF guard (private/loopback/metadata hosts are
-    // rejected, see WebService.assertPublicHttpUrl); search() uses a configurable
-    // backend (SEARCH_PROVIDER + SEARCH_API_URL + SEARCH_API_KEY) and returns an
-    // empty result set (never 500) when unconfigured. Both routes are
-    // authenticated by the WebController so this is not an open proxy.
+    // rejected, see WebService.assertPublicHttpUrl) and the outbound socket is
+    // pinned to the same validated address. search() is a distinct operator
+    // trust path: only the exact configured SEARCH_API_URL origin may use
+    // private addressing (common for self-hosted SearXNG), the connection is
+    // still DNS-pinned, redirects are rejected, and decoded JSON is bounded.
+    // Both routes are authenticated by WebController so this is not an open
+    // proxy.
+    const searchApiUrl = env.get('SEARCH_API_URL', true) || undefined
+    const webOutboundTransport = new PinnedHttpTransport()
+    const searchOutboundTransport = new PinnedHttpTransport(undefined, undefined, {
+      allowedPrivateOrigins: searchApiUrl ? [searchApiUrl] : [],
+    })
     container.bind<WebService>(TYPES.ApiGateway_WebService).toConstantValue(
-      new WebService(globalThis.fetch.bind(globalThis) as unknown as WebFetchLike, {
-        searchProvider: env.get('SEARCH_PROVIDER', true) || undefined,
-        searchApiUrl: env.get('SEARCH_API_URL', true) || undefined,
-        searchApiKey: env.get('SEARCH_API_KEY', true) || undefined,
-        maxContentChars: env.get('WEB_FETCH_MAX_CHARS', true) ? +env.get('WEB_FETCH_MAX_CHARS', true) : undefined,
-        fetchTimeoutMs: env.get('WEB_FETCH_TIMEOUT_MS', true) ? +env.get('WEB_FETCH_TIMEOUT_MS', true) : undefined,
-      }),
+      new WebService(
+        webOutboundTransport.fetch.bind(webOutboundTransport) as WebFetchLike,
+        {
+          searchProvider: env.get('SEARCH_PROVIDER', true) || undefined,
+          searchApiUrl,
+          searchApiKey: env.get('SEARCH_API_KEY', true) || undefined,
+          maxContentChars: env.get('WEB_FETCH_MAX_CHARS', true) ? +env.get('WEB_FETCH_MAX_CHARS', true) : undefined,
+          maxFetchBytes: env.get('WEB_FETCH_MAX_BYTES', true) ? +env.get('WEB_FETCH_MAX_BYTES', true) : undefined,
+          maxSearchBytes: env.get('WEB_SEARCH_MAX_BYTES', true) ? +env.get('WEB_SEARCH_MAX_BYTES', true) : undefined,
+          fetchTimeoutMs: env.get('WEB_FETCH_TIMEOUT_MS', true) ? +env.get('WEB_FETCH_TIMEOUT_MS', true) : undefined,
+          searchTimeoutMs: env.get('WEB_SEARCH_TIMEOUT_MS', true) ? +env.get('WEB_SEARCH_TIMEOUT_MS', true) : undefined,
+        },
+        undefined,
+        searchOutboundTransport.fetch.bind(searchOutboundTransport) as WebFetchLike,
+      ),
     )
 
     // Standard Red Notes: self-hosted "Check for updates".

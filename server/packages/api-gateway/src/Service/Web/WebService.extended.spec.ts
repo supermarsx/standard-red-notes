@@ -12,12 +12,31 @@ const recordingFetch = (
 
   const fn: WebFetchLike = async (url, init) => {
     calls.push({ url, init })
+    const bytes = Buffer.from(body)
+    let consumed = false
 
     return {
       status,
       ok: status >= 200 && status < 300,
       headers: {
         get: (name: string) => (name.toLowerCase() === 'content-type' ? (options.contentType ?? null) : null),
+      },
+      body: {
+        getReader: () => ({
+          read: async () => {
+            if (consumed) {
+              return { done: true, value: undefined }
+            }
+            consumed = true
+            return { done: false, value: bytes }
+          },
+          cancel: () => {
+            consumed = true
+          },
+        }),
+        cancel: () => {
+          consumed = true
+        },
       },
       text: async () => body,
     }
@@ -26,8 +45,8 @@ const recordingFetch = (
   return { fn, calls }
 }
 
-const makeService = (config: WebServiceConfig, fn: WebFetchLike) =>
-  new WebService(fn, config, async () => ['93.184.216.34'])
+const makeService = (config: WebServiceConfig, fn: WebFetchLike, searchFn: WebFetchLike = fn) =>
+  new WebService(fn, config, async () => ['93.184.216.34'], searchFn)
 
 const streamingFetch = (
   chunks: Uint8Array[],
@@ -59,6 +78,32 @@ const streamingFetch = (
 }
 
 describe('WebService.search', () => {
+  it('uses a separate exact-origin operator path for a private configured SearXNG backend', async () => {
+    const publicFetch = recordingFetch('{}')
+    const privateSearch = recordingFetch(
+      JSON.stringify({ results: [{ title: 'Private', url: 'https://result.test', content: 'Found' }] }),
+    )
+    const service = makeService(
+      { searchProvider: 'searxng', searchApiUrl: 'http://searxng.internal:8080/search' },
+      publicFetch.fn,
+      privateSearch.fn,
+    )
+
+    await expect(service.search('notes')).resolves.toEqual({
+      results: [{ title: 'Private', url: 'https://result.test', snippet: 'Found' }],
+    })
+    expect(privateSearch.calls[0]).toMatchObject({
+      url: 'http://searxng.internal:8080/search?q=notes&format=json',
+      init: { redirect: 'error' },
+    })
+    expect(publicFetch.calls).toHaveLength(0)
+
+    await expect(service.fetch('http://searxng.internal:8080/search')).rejects.toMatchObject({
+      tag: 'blocked-host',
+    })
+    expect(publicFetch.calls).toHaveLength(0)
+  })
+
   it('reports an empty query rather than calling the upstream', async () => {
     const { fn, calls } = recordingFetch('{}')
     const service = makeService({ searchProvider: 'searxng', searchApiUrl: 'https://s.test/search' }, fn)
@@ -272,6 +317,39 @@ describe('WebService.search', () => {
     await expect(
       makeService({ searchProvider: 'brave', searchApiUrl: 'https://b.test' }, fn).search('cats'),
     ).resolves.toEqual({ results: [], error: 'web search failed' })
+  })
+
+  it('bounds the decoded search response stream without calling response.text()', async () => {
+    const publicFetch = recordingFetch('{}')
+    const oversized = streamingFetch([Buffer.from('{"results":['), Buffer.alloc(32, 0x61)])
+    const service = makeService(
+      { searchProvider: 'searxng', searchApiUrl: 'http://searxng.internal/search', maxSearchBytes: 12 },
+      publicFetch.fn,
+      oversized.fn,
+    )
+
+    await expect(service.search('notes')).resolves.toEqual({ results: [], error: 'search response too large' })
+    expect(oversized.cancel).toHaveBeenCalledTimes(1)
+    expect(publicFetch.calls).toHaveLength(0)
+  })
+
+  it('fails closed instead of buffering a non-streaming search response', async () => {
+    const text = jest.fn(async () => JSON.stringify({ results: [] }))
+    const searchFn: WebFetchLike = async () => ({
+      status: 200,
+      ok: true,
+      headers: { get: () => 'application/json' },
+      text,
+    })
+
+    await expect(
+      makeService(
+        { searchProvider: 'searxng', searchApiUrl: 'https://search.test' },
+        recordingFetch('{}').fn,
+        searchFn,
+      ).search('notes'),
+    ).resolves.toEqual({ results: [], error: 'web search failed' })
+    expect(text).not.toHaveBeenCalled()
   })
 })
 

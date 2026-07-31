@@ -1,8 +1,4 @@
-import * as https from 'https'
-import * as http from 'http'
-import { URL } from 'url'
-
-import { assertPublicHttpUrl } from '@standardnotes/domain-core'
+import { PinnedHttpError, PinnedHttpTransport } from '@standardnotes/domain-core'
 
 import { WebDAVClientInterface, WebDAVUploadDestination } from './WebDAVClientInterface'
 
@@ -18,13 +14,14 @@ import { WebDAVClientInterface, WebDAVUploadDestination } from './WebDAVClientIn
  * never receives plaintext.
  */
 export class HttpsWebDAVClient implements WebDAVClientInterface {
-  async putFile(destination: WebDAVUploadDestination, contents: string): Promise<void> {
-    // SSRF guard: the destination URL is user-supplied (NEXTCLOUD_BACKUP_URL) and
-    // we send it a Basic-auth-bearing request, so reject any host that resolves
-    // to a private / loopback / link-local / cloud-metadata address BEFORE any
-    // MKCOL/PUT. Throwing here is caught + logged by WebDAVItemBackupService.
-    await assertPublicHttpUrl(destination.url)
+  private readonly REQUEST_TIMEOUT_MS = 15_000
 
+  constructor(private readonly httpTransport: PinnedHttpTransport = new PinnedHttpTransport()) {}
+
+  async putFile(destination: WebDAVUploadDestination, contents: string): Promise<void> {
+    // The destination is user-supplied and every request bears Basic auth. The
+    // shared transport resolves, validates, and pins each MKCOL/PUT socket while
+    // preserving the original Host and HTTPS certificate identity.
     const base = this.buildFilesBaseUrl(destination)
 
     // Ensure each nested folder segment exists (MKCOL is idempotent enough: an
@@ -57,66 +54,34 @@ export class HttpsWebDAVClient implements WebDAVClientInterface {
     return encodeURIComponent(segment)
   }
 
-  private request(
+  private async request(
     method: string,
     targetUrl: string,
     destination: WebDAVUploadDestination,
     body: string | undefined,
     acceptedStatusCodes: number[],
   ): Promise<void> {
-    return new Promise((resolve, reject) => {
-      let parsed: URL
-      try {
-        parsed = new URL(targetUrl)
-      } catch (error) {
-        reject(new Error(`Invalid Nextcloud WebDAV URL: ${(error as Error).message}`))
+    const auth = Buffer.from(`${destination.username}:${destination.appPassword}`).toString('base64')
+    const headers: Record<string, string> = {
+      Authorization: `Basic ${auth}`,
+    }
+    if (body !== undefined) {
+      headers['Content-Type'] = 'application/json'
+      headers['Content-Length'] = String(Buffer.byteLength(body))
+    }
 
-        return
-      }
-
-      const transport = parsed.protocol === 'http:' ? http : https
-      const auth = Buffer.from(`${destination.username}:${destination.appPassword}`).toString('base64')
-
-      const headers: Record<string, string> = {
-        Authorization: `Basic ${auth}`,
-      }
-      if (body !== undefined) {
-        headers['Content-Type'] = 'application/json'
-        headers['Content-Length'] = String(Buffer.byteLength(body))
-      }
-
-      const req = transport.request(
-        {
-          protocol: parsed.protocol,
-          hostname: parsed.hostname,
-          port: parsed.port || undefined,
-          path: `${parsed.pathname}${parsed.search}`,
-          method,
-          headers,
-        },
-        (res) => {
-          // Drain the response so the socket can be reused/closed.
-          res.on('data', () => undefined)
-          res.on('end', () => {
-            const statusCode = res.statusCode ?? 0
-            if (acceptedStatusCodes.includes(statusCode)) {
-              resolve()
-            } else {
-              reject(new Error(`WebDAV ${method} ${targetUrl} failed with status ${statusCode}`))
-            }
-          })
-        },
-      )
-
-      req.on('error', (error) => {
-        reject(error)
-      })
-
-      if (body !== undefined) {
-        req.write(body)
-      }
-
-      req.end()
+    const response = await this.httpTransport.request({
+      url: targetUrl,
+      method,
+      headers,
+      body,
+      timeoutMs: this.REQUEST_TIMEOUT_MS,
+      redirect: 'manual',
+      maxRedirects: 0,
     })
+    await response.discard()
+    if (!acceptedStatusCodes.includes(response.status)) {
+      throw new PinnedHttpError(`WebDAV ${method} request failed with status ${response.status}.`, 'upstream-status')
+    }
   }
 }
