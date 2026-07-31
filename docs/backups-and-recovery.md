@@ -117,7 +117,7 @@ WebDAV. Both the server master switch and complete per-user settings are
 required:
 
 - Nextcloud base URL;
-- destination folder;
+- optional destination folder (blank means the WebDAV account root);
 - dedicated app password; and
 - backup frequency.
 
@@ -125,9 +125,69 @@ Create a low-privilege Nextcloud app password rather than reusing the main
 account password. The app password is sensitive server-side configuration and
 is not returned by the administrator settings API.
 
-The WebDAV client includes SSRF defenses, but operators must still restrict
-network reachability and approve the destination. After configuration, verify a
-new file appears and perform a restore drill.
+{% include safety-alert.html
+  level="danger"
+  title="HTTPS and a dedicated app password are mandatory"
+  body="The server must hold a Nextcloud credential to upload backups. Use a dedicated low-privilege app password, never the main account password. The final base URL must use HTTPS; HTTP, URL-embedded credentials, queries, fragments, and redirects are rejected. Revoke the app password immediately if either server may be compromised."
+%}
+
+The client validates the complete configuration before writing any setting. If
+an existing schedule is being edited, it disables that schedule first, saves
+the HTTPS URL, folder, and optional replacement app password, and writes the
+requested frequency last. A failed intermediate write therefore leaves the
+schedule disabled instead of activating a mixed old/new configuration.
+
+```mermaid
+flowchart LR
+  A[Validate complete configuration] --> B[Disable an active schedule]
+  B --> C[Save HTTPS URL and folder]
+  C --> D[Save replacement app password]
+  D --> E[Enable the requested frequency last]
+```
+
+Each upload attempt has these transport boundaries:
+
+- the base URL is parsed and canonicalized once and must be the final HTTPS
+  origin, without embedded credentials, query, or fragment;
+- the account identifier, every supplied folder component, and the generated
+  file name must be safe path segments. A completely empty folder preserves the
+  established account-root destination, while leading, trailing, or interior
+  empty components and dot, dot-dot, backslash, or control-character components
+  are rejected;
+- every DNS answer must be public, then one validated address is pinned to the
+  outbound socket while the original host remains the HTTP `Host` and TLS SNI
+  identity. Private, loopback, link-local, and metadata destinations fail
+  closed;
+- redirects are never followed or counted as WebDAV success, so the Basic
+  credential cannot be replayed to another origin;
+- one 60-second absolute deadline covers DNS resolution, every nested `MKCOL`,
+  the `PUT`, and response-body draining; and
+- `MKCOL` accepts only `201` (created) or `405` (already exists), while `PUT`
+  accepts only `200`, `201`, or `204`.
+
+There is no automatic retry inside an upload attempt. An interrupted upload can
+have an ambiguous outcome, so the next scheduled job is the safe retry boundary
+and uploads the same date-stamped encrypted artifact again.
+
+### Verify and recover a Nextcloud backup
+
+After configuration, confirm a new `SN-Data-YYYY-MM-DD.json` file appears, then
+perform a restore drill with a disposable account:
+
+1. Download the newest artifact without modifying the Nextcloud copy.
+2. Record its size and checksum, and preserve the original during the drill.
+3. Import it through the application’s backup import flow using the account
+   password required to decrypt its item payloads.
+4. Verify representative notes, tags, and expected metadata. This current-item
+   backup does not replace revision-history or attachment/file-volume backups.
+5. Revoke the drill credential and remove disposable restored data according to
+   the retention policy.
+
+If an upload fails, keep scheduling disabled while checking the final URL,
+public DNS answers, TLS certificate, destination folder, server master switch,
+per-user administrator opt-in, and app-password permissions. Replace rather
+than reuse a credential after any suspected disclosure. Server logs expose a
+stable failure category but do not include the URL or app password.
 
 ## Self-hosted infrastructure backups
 

@@ -25,7 +25,7 @@ describe('NextcloudBackupRequestedEventHandler', () => {
         keyParams: { identifier: 'test@standardnotes.com', version: '004' },
         nextcloudUrl: 'https://cloud.example.com',
         nextcloudAppPassword: 'app-password',
-        nextcloudFolder: '/Backups',
+        nextcloudFolder: 'Backups',
         ...overrides,
       },
     }) as jest.Mocked<NextcloudBackupRequestedEvent>
@@ -59,7 +59,7 @@ describe('NextcloudBackupRequestedEventHandler', () => {
         url: 'https://cloud.example.com',
         username: 'test@standardnotes.com',
         appPassword: 'app-password',
-        folder: '/Backups',
+        folder: 'Backups',
       },
     )
     expect(logger.info).toHaveBeenCalledWith('Nextcloud backup uploaded for user', { userId: userUuid })

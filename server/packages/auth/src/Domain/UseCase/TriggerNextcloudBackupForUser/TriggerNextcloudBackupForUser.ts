@@ -58,7 +58,9 @@ export class TriggerNextcloudBackupForUser implements UseCaseInterface<void> {
       return Result.fail(`User ${userUuid.value} does not have a Nextcloud backup app password configured`)
     }
 
-    // Folder is optional; default to an empty path (upload to the user's root).
+    // An empty folder intentionally targets the user's WebDAV root. Preserve
+    // that established behavior; the WebDAV client still rejects malformed
+    // leading, trailing, interior-empty, and dot path components.
     const folder = (await this.getUnsensitiveSetting(userUuid.value, SettingName.NAMES.NextcloudBackupFolder)) ?? ''
 
     const keyParamsResponse = await this.getUserKeyParamsUseCase.execute({

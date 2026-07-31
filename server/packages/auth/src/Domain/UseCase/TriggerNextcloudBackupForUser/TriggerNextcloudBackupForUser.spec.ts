@@ -115,7 +115,7 @@ describe('TriggerNextcloudBackupForUser (Standard Red Notes)', () => {
     expect(domainEventPublisher.publish).not.toHaveBeenCalled()
   })
 
-  it('defaults a missing optional folder to the Nextcloud root', async () => {
+  it('preserves a missing optional folder as the established Nextcloud root destination', async () => {
     settingValues[SettingName.NAMES.NextcloudBackupFolder] = null
 
     const result = await createUseCase().execute({ userUuid })

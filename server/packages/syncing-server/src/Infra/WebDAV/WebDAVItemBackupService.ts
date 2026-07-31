@@ -36,8 +36,8 @@ export class WebDAVItemBackupService implements WebDAVItemBackupServiceInterface
     destination: WebDAVBackupDestination,
   ): Promise<string | null> {
     const username = destination.username?.trim()
-    if (!destination.url || !destination.appPassword || !username) {
-      this.logger.warn('Nextcloud WebDAV backup not configured (missing url, app password, or username). Skipping.')
+    if (!destination.url?.trim() || !destination.appPassword?.trim() || !username) {
+      this.logger.warn('Nextcloud WebDAV backup has incomplete destination settings. Skipping.')
 
       return null
     }

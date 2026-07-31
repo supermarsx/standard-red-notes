@@ -22,6 +22,7 @@ export interface WebDAVUploadDestination {
   // App password (NOT the main login password) used for Basic auth.
   appPassword: string
   // Folder under the user's WebDAV files root, e.g. "Backups/StandardNotes".
+  // Empty preserves the established behavior of uploading to that root.
   folder: string
   // File name to write, e.g. "SN-Data-2026-06-21.json".
   fileName: string
@@ -32,6 +33,9 @@ export interface WebDAVClientInterface {
    * Ensure the destination folder exists then PUT the file contents.
    * Implementations MUST throw on failure; callers are responsible for swallowing
    * and logging so a single user's failed upload never crashes the batch job.
+   * The default client deliberately performs no automatic retries: an interrupted
+   * PUT can have an ambiguous outcome, and the next scheduled backup is the safe
+   * retry boundary.
    */
   putFile(destination: WebDAVUploadDestination, contents: string): Promise<void>
 }
