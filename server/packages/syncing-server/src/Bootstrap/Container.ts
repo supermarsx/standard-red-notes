@@ -1246,6 +1246,8 @@ export class ContainerConfigLoader {
         new NextcloudBackupRequestedEventHandler(
           container.get<ItemRepositoryInterface>(TYPES.Sync_SQLItemRepository),
           container.get<WebDAVItemBackupServiceInterface>(TYPES.Sync_WebDAVItemBackupService),
+          container.get<DomainEventPublisherInterface>(TYPES.Sync_DomainEventPublisher),
+          container.get<DomainEventFactoryInterface>(TYPES.Sync_DomainEventFactory),
           container.get<Logger>(TYPES.Sync_Logger),
         ),
       )

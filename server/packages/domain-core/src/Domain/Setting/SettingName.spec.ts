@@ -8,6 +8,7 @@ describe('SettingName — Nextcloud backup settings (Standard Red Notes)', () =>
       ['NextcloudBackupFolder', 'NEXTCLOUD_BACKUP_FOLDER'],
       ['NextcloudBackupAppPassword', 'NEXTCLOUD_BACKUP_APP_PASSWORD'],
       ['NextcloudBackupLastRun', 'NEXTCLOUD_BACKUP_LAST_RUN'],
+      ['NextcloudBackupDeliveryState', 'NEXTCLOUD_BACKUP_DELIVERY_STATE'],
     ] as const
 
     it.each(names)('%s resolves to %s and is creatable', (key, value) => {
@@ -28,6 +29,7 @@ describe('SettingName — Nextcloud backup settings (Standard Red Notes)', () =>
       expect(SettingName.create(SettingName.NAMES.NextcloudBackupFolder).getValue().isSensitive()).toBe(false)
       expect(SettingName.create(SettingName.NAMES.NextcloudBackupFrequency).getValue().isSensitive()).toBe(false)
       expect(SettingName.create(SettingName.NAMES.NextcloudBackupLastRun).getValue().isSensitive()).toBe(false)
+      expect(SettingName.create(SettingName.NAMES.NextcloudBackupDeliveryState).getValue().isSensitive()).toBe(true)
     })
 
     it('keeps the existing sensitive settings sensitive', () => {

@@ -9,6 +9,7 @@ import {
   ItemsChangedOnServerEvent,
   MessageSentToUserEvent,
   NotificationAddedForUserEvent,
+  NextcloudBackupCompletedEvent,
   RevisionsCopyRequestedEvent,
   SharedVaultRemovedEvent,
   UserAddedToSharedVaultEvent,
@@ -19,6 +20,11 @@ import {
 } from '@standardnotes/domain-events'
 
 export interface DomainEventFactoryInterface {
+  createNextcloudBackupCompletedEvent(dto: {
+    userUuid: string
+    requestUuid: string
+    outcome: 'succeeded' | 'failed'
+  }): NextcloudBackupCompletedEvent
   createWebSocketMessageRequestedEvent(dto: {
     userUuid: string
     message: string

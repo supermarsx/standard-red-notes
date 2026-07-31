@@ -10,6 +10,7 @@ import {
   ItemsChangedOnServerEvent,
   MessageSentToUserEvent,
   NotificationAddedForUserEvent,
+  NextcloudBackupCompletedEvent,
   RevisionsCopyRequestedEvent,
   SharedVaultRemovedEvent,
   UserAddedToSharedVaultEvent,
@@ -23,6 +24,31 @@ import { DomainEventFactoryInterface } from './DomainEventFactoryInterface'
 
 export class DomainEventFactory implements DomainEventFactoryInterface {
   constructor(private timer: TimerInterface) {}
+
+  createNextcloudBackupCompletedEvent(dto: {
+    userUuid: string
+    requestUuid: string
+    outcome: 'succeeded' | 'failed'
+  }): NextcloudBackupCompletedEvent {
+    const completedAt = this.timer.getUTCDate()
+
+    return {
+      type: 'NEXTCLOUD_BACKUP_COMPLETED',
+      createdAt: completedAt,
+      meta: {
+        correlation: {
+          userIdentifier: dto.userUuid,
+          userIdentifierType: 'uuid',
+        },
+        origin: DomainEventService.SyncingServer,
+        target: DomainEventService.Auth,
+      },
+      payload: {
+        ...dto,
+        completedAt: completedAt.getTime(),
+      },
+    }
+  }
 
   createItemsChangedOnServerEvent(dto: {
     userUuid: string

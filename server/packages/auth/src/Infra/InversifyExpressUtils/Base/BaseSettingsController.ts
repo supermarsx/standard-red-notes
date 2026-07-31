@@ -108,6 +108,16 @@ export class BaseSettingsController extends BaseHttpController {
     }
 
     const { userUuid, settingName } = request.params as Record<string, string>
+    if (settingName.toUpperCase() === SettingName.NAMES.NextcloudBackupDeliveryState) {
+      return this.json(
+        {
+          error: {
+            message: 'Operation not allowed.',
+          },
+        },
+        401,
+      )
+    }
     const serverPassword = request.headers['x-server-password'] as string | undefined
     const resultOrError = await this.doGetSetting.execute({
       allowSensitiveRetrieval: true,
@@ -188,6 +198,17 @@ export class BaseSettingsController extends BaseHttpController {
     }
 
     const { name, value, totpToken } = request.body
+
+    if (typeof name === 'string' && name.toUpperCase() === SettingName.NAMES.NextcloudBackupDeliveryState) {
+      return this.json(
+        {
+          error: {
+            message: 'Operation not allowed.',
+          },
+        },
+        401,
+      )
+    }
 
     if (name === SettingName.NAMES.MfaSecret) {
       const validationResult = await this.validateMfaToken.execute({
@@ -275,6 +296,16 @@ export class BaseSettingsController extends BaseHttpController {
     }
 
     const { userUuid, settingName } = request.params as Record<string, string>
+    if (settingName.toUpperCase() === SettingName.NAMES.NextcloudBackupDeliveryState) {
+      return this.json(
+        {
+          error: {
+            message: 'Operation not allowed.',
+          },
+        },
+        401,
+      )
+    }
     const serverPassword = request.headers['x-server-password'] as string | undefined
 
     const result = await this.doDeleteSetting.execute({

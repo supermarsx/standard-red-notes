@@ -28,7 +28,7 @@ describe('DomainEventFactory', () => {
 
   const expectEvent = (
     event: DomainEventInterface,
-    expected: { type: string; userIdentifier: string; userIdentifierType: string; payload: unknown },
+    expected: { type: string; userIdentifier: string; userIdentifierType: string; payload: unknown; target?: string },
   ) => {
     expect(event.type).toEqual(expected.type)
     expect(event.createdAt).toEqual(new Date(1))
@@ -38,6 +38,7 @@ describe('DomainEventFactory', () => {
         userIdentifierType: expected.userIdentifierType,
       },
       origin: 'auth',
+      ...(expected.target ? { target: expected.target } : {}),
     })
     expect(event.payload).toEqual(expected.payload)
   }
@@ -239,6 +240,7 @@ describe('DomainEventFactory', () => {
   it('should create a nextcloud backup requested event carrying the destination credentials', () => {
     const dto = {
       userUuid: '1-2-3',
+      requestUuid: '2-3-4',
       keyParams,
       nextcloudUrl: 'https://nextcloud.test',
       nextcloudFolder: 'backups',
@@ -250,6 +252,7 @@ describe('DomainEventFactory', () => {
       userIdentifier: '1-2-3',
       userIdentifierType: 'uuid',
       payload: dto,
+      target: 'syncing-server',
     })
   })
 

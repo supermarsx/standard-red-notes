@@ -16,6 +16,7 @@ describe('TriggerNextcloudBackupForUser (Standard Red Notes)', () => {
   let domainEventFactory: DomainEventFactoryInterface
 
   const userUuid = '00000000-0000-0000-0000-000000000001'
+  const requestUuid = '00000000-0000-0000-0000-000000000002'
 
   // Per-setting values the user has configured. Override per test.
   let settingValues: Record<string, string | null>
@@ -62,13 +63,14 @@ describe('TriggerNextcloudBackupForUser (Standard Red Notes)', () => {
   })
 
   it('proceeds and publishes the backup-requested event when the admin allow flag is true', async () => {
-    const result = await createUseCase().execute({ userUuid })
+    const result = await createUseCase().execute({ userUuid, requestUuid })
 
     expect(result.isFailed()).toBe(false)
     expect(domainEventPublisher.publish).toHaveBeenCalledTimes(1)
     expect(domainEventFactory.createNextcloudBackupRequestedEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         userUuid,
+        requestUuid,
         nextcloudUrl: 'https://cloud.example.com/remote.php/dav',
         nextcloudFolder: 'backups',
         nextcloudAppPassword: 'secret-app-password',
@@ -77,7 +79,15 @@ describe('TriggerNextcloudBackupForUser (Standard Red Notes)', () => {
   })
 
   it('rejects an invalid user uuid before reading settings', async () => {
-    const result = await createUseCase().execute({ userUuid: 'not-a-uuid' })
+    const result = await createUseCase().execute({ userUuid: 'not-a-uuid', requestUuid })
+
+    expect(result.isFailed()).toBe(true)
+    expect(getSetting.execute).not.toHaveBeenCalled()
+    expect(domainEventPublisher.publish).not.toHaveBeenCalled()
+  })
+
+  it('rejects an invalid request uuid before reading settings', async () => {
+    const result = await createUseCase().execute({ userUuid, requestUuid: 'not-a-uuid' })
 
     expect(result.isFailed()).toBe(true)
     expect(getSetting.execute).not.toHaveBeenCalled()
@@ -87,7 +97,7 @@ describe('TriggerNextcloudBackupForUser (Standard Red Notes)', () => {
   it('rejects a non-recurring backup frequency', async () => {
     settingValues[SettingName.NAMES.NextcloudBackupFrequency] = 'once'
 
-    const result = await createUseCase().execute({ userUuid })
+    const result = await createUseCase().execute({ userUuid, requestUuid })
 
     expect(result.isFailed()).toBe(true)
     expect(result.getError()).toContain('does not have a recurring Nextcloud backup frequency configured')
@@ -97,7 +107,7 @@ describe('TriggerNextcloudBackupForUser (Standard Red Notes)', () => {
   it('rejects a blank Nextcloud URL', async () => {
     settingValues[SettingName.NAMES.NextcloudBackupUrl] = '   '
 
-    const result = await createUseCase().execute({ userUuid })
+    const result = await createUseCase().execute({ userUuid, requestUuid })
 
     expect(result.isFailed()).toBe(true)
     expect(result.getError()).toContain('does not have a Nextcloud backup URL configured')
@@ -107,7 +117,7 @@ describe('TriggerNextcloudBackupForUser (Standard Red Notes)', () => {
   it('rejects a missing sensitive app password when setting retrieval fails', async () => {
     settingValues[SettingName.NAMES.NextcloudBackupAppPassword] = null
 
-    const result = await createUseCase().execute({ userUuid })
+    const result = await createUseCase().execute({ userUuid, requestUuid })
 
     expect(result.isFailed()).toBe(true)
     expect(result.getError()).toContain('does not have a Nextcloud backup app password configured')
@@ -118,7 +128,7 @@ describe('TriggerNextcloudBackupForUser (Standard Red Notes)', () => {
   it('preserves a missing optional folder as the established Nextcloud root destination', async () => {
     settingValues[SettingName.NAMES.NextcloudBackupFolder] = null
 
-    const result = await createUseCase().execute({ userUuid })
+    const result = await createUseCase().execute({ userUuid, requestUuid })
 
     expect(result.isFailed()).toBe(false)
     expect(domainEventFactory.createNextcloudBackupRequestedEvent).toHaveBeenCalledWith(
@@ -129,7 +139,7 @@ describe('TriggerNextcloudBackupForUser (Standard Red Notes)', () => {
   it('skips (fails) when the admin allow flag is not set, before reading completeness', async () => {
     settingValues[SettingName.NAMES.NextcloudBackupAllowed] = null
 
-    const result = await createUseCase().execute({ userUuid })
+    const result = await createUseCase().execute({ userUuid, requestUuid })
 
     expect(result.isFailed()).toBe(true)
     expect(result.getError()).toContain('not allowed Nextcloud backups by an administrator')
@@ -139,14 +149,14 @@ describe('TriggerNextcloudBackupForUser (Standard Red Notes)', () => {
   it('skips (fails) when the admin allow flag is explicitly false', async () => {
     settingValues[SettingName.NAMES.NextcloudBackupAllowed] = 'false'
 
-    const result = await createUseCase().execute({ userUuid })
+    const result = await createUseCase().execute({ userUuid, requestUuid })
 
     expect(result.isFailed()).toBe(true)
     expect(domainEventPublisher.publish).not.toHaveBeenCalled()
   })
 
   it('retrieves the app password as a SENSITIVE setting (allowSensitiveRetrieval: true)', async () => {
-    await createUseCase().execute({ userUuid })
+    await createUseCase().execute({ userUuid, requestUuid })
 
     expect(appPasswordRetrieval).not.toBeNull()
     expect(appPasswordRetrieval?.allowSensitiveRetrieval).toBe(true)
@@ -155,7 +165,7 @@ describe('TriggerNextcloudBackupForUser (Standard Red Notes)', () => {
   it('does not read the app password at all when the allow flag gates the backup off', async () => {
     settingValues[SettingName.NAMES.NextcloudBackupAllowed] = 'false'
 
-    await createUseCase().execute({ userUuid })
+    await createUseCase().execute({ userUuid, requestUuid })
 
     // Gated off before any completeness/credential read -> password never touched.
     expect(appPasswordRetrieval).toBeNull()

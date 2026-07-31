@@ -474,6 +474,8 @@ import { TriggerEmailBackupForUser } from '../Domain/UseCase/TriggerEmailBackupF
 import { TriggerEmailBackupForAllUsers } from '../Domain/UseCase/TriggerEmailBackupForAllUsers/TriggerEmailBackupForAllUsers'
 import { TriggerNextcloudBackupForUser } from '../Domain/UseCase/TriggerNextcloudBackupForUser/TriggerNextcloudBackupForUser'
 import { TriggerNextcloudBackupForAllUsers } from '../Domain/UseCase/TriggerNextcloudBackupForAllUsers/TriggerNextcloudBackupForAllUsers'
+import { NextcloudBackupStateStore } from '../Domain/Setting/NextcloudBackupStateStore'
+import { NextcloudBackupCompletedEventHandler } from '../Domain/Handler/NextcloudBackupCompletedEventHandler'
 import { ServerSettingsOverlayReader } from '../Infra/FS/ServerSettingsOverlayReader'
 import { ProofOfWorkChallengeRepositoryInterface } from '../Domain/ProofOfWork/ProofOfWorkChallengeRepositoryInterface'
 import { ProofOfWorkConfig } from '../Domain/ProofOfWork/ProofOfWorkConfig'
@@ -2749,6 +2751,16 @@ export class ContainerConfigLoader {
       ),
     )
     container
+      .bind<NextcloudBackupStateStore>(TYPES.Auth_NextcloudBackupStateStore)
+      .toConstantValue(
+        new NextcloudBackupStateStore(
+          container.get<GetSetting>(TYPES.Auth_GetSetting),
+          container.get<SetSettingValue>(TYPES.Auth_SetSettingValue),
+          container.get<TimerInterface>(TYPES.Auth_Timer),
+          container.get<winston.Logger>(TYPES.Auth_Logger),
+        ),
+      )
+    container
       .bind<TriggerNextcloudBackupForUser>(TYPES.Auth_TriggerNextcloudBackupForUser)
       .toConstantValue(
         new TriggerNextcloudBackupForUser(
@@ -2762,8 +2774,7 @@ export class ContainerConfigLoader {
       new TriggerNextcloudBackupForAllUsers(
         container.get<SettingRepositoryInterface>(TYPES.Auth_SettingRepository),
         container.get<TriggerNextcloudBackupForUser>(TYPES.Auth_TriggerNextcloudBackupForUser),
-        container.get<GetSetting>(TYPES.Auth_GetSetting),
-        container.get<SetSettingValue>(TYPES.Auth_SetSettingValue),
+        container.get<NextcloudBackupStateStore>(TYPES.Auth_NextcloudBackupStateStore),
         container.get<TimerInterface>(TYPES.Auth_Timer),
         container.get<winston.Logger>(TYPES.Auth_Logger),
         container.get<boolean>(TYPES.Auth_NEXTCLOUD_BACKUPS_ENABLED),
@@ -3186,6 +3197,15 @@ export class ContainerConfigLoader {
           container.get<winston.Logger>(TYPES.Auth_Logger),
         ),
       )
+    container
+      .bind<NextcloudBackupCompletedEventHandler>(TYPES.Auth_NextcloudBackupCompletedEventHandler)
+      .toConstantValue(
+        new NextcloudBackupCompletedEventHandler(
+          container.get<NextcloudBackupStateStore>(TYPES.Auth_NextcloudBackupStateStore),
+          container.get<TimerInterface>(TYPES.Auth_Timer),
+          container.get<winston.Logger>(TYPES.Auth_Logger),
+        ),
+      )
 
     const eventHandlers: Map<string, DomainEventHandlerInterface> = new Map([
       ['ACCOUNT_DELETION_REQUESTED', container.get(TYPES.Auth_AccountDeletionRequestedEventHandler)],
@@ -3214,6 +3234,7 @@ export class ContainerConfigLoader {
       ['PREDICATE_VERIFICATION_REQUESTED', container.get(TYPES.Auth_PredicateVerificationRequestedEventHandler)],
       ['EMAIL_SUBSCRIPTION_UNSUBSCRIBED', container.get(TYPES.Auth_EmailSubscriptionUnsubscribedEventHandler)],
       ['EMAIL_REQUESTED', container.get(TYPES.Auth_EmailRequestedEventHandler)],
+      ['NEXTCLOUD_BACKUP_COMPLETED', container.get(TYPES.Auth_NextcloudBackupCompletedEventHandler)],
       ['PAYMENTS_ACCOUNT_DELETED', container.get(TYPES.Auth_PaymentsAccountDeletedEventHandler)],
       ['USER_ADDED_TO_SHARED_VAULT', container.get(TYPES.Auth_UserAddedToSharedVaultEventHandler)],
       ['USER_REMOVED_FROM_SHARED_VAULT', container.get(TYPES.Auth_UserRemovedFromSharedVaultEventHandler)],

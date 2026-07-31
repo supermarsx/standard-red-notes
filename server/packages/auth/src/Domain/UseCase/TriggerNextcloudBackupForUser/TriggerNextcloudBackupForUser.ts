@@ -32,6 +32,10 @@ export class TriggerNextcloudBackupForUser implements UseCaseInterface<void> {
       return Result.fail(userUuidOrError.getError())
     }
     const userUuid = userUuidOrError.getValue()
+    const requestUuidOrError = Uuid.create(dto.requestUuid)
+    if (requestUuidOrError.isFailed()) {
+      return Result.fail(requestUuidOrError.getError())
+    }
 
     // Standard Red Notes: per-user admin gate. The operator must opt this user in
     // via the admin panel (NEXTCLOUD_BACKUP_ALLOWED === 'true'). This composes with
@@ -71,6 +75,7 @@ export class TriggerNextcloudBackupForUser implements UseCaseInterface<void> {
     await this.domainEventPublisher.publish(
       this.domainEventFactory.createNextcloudBackupRequestedEvent({
         userUuid: userUuid.value,
+        requestUuid: requestUuidOrError.getValue().value,
         keyParams: keyParamsResponse.keyParams,
         nextcloudUrl: url,
         nextcloudFolder: folder,

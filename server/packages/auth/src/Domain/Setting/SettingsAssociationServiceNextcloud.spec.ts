@@ -67,6 +67,21 @@ describe('SettingsAssociationService — Nextcloud backup settings (Standard Red
     })
   })
 
+  describe('delivery lifecycle state (server-private, CLIENT-IMMUTABLE)', () => {
+    const name = SettingName.NAMES.NextcloudBackupDeliveryState
+
+    it('is stored unencrypted but hidden from public settings reads', () => {
+      const settingName = SettingName.create(name).getValue()
+
+      expect(createService().getEncryptionVersionForSetting(settingName)).toEqual(EncryptionVersion.Unencrypted)
+      expect(createService().getSensitivityForSetting(settingName)).toBe(true)
+    })
+
+    it('is immutable by the client', () => {
+      expect(createService().isSettingMutableByClient(SettingName.create(name).getValue())).toBe(false)
+    })
+  })
+
   describe('default OFF', () => {
     const allNextcloudNames = [
       SettingName.NAMES.NextcloudBackupFrequency,
@@ -74,6 +89,7 @@ describe('SettingsAssociationService — Nextcloud backup settings (Standard Red
       SettingName.NAMES.NextcloudBackupFolder,
       SettingName.NAMES.NextcloudBackupAppPassword,
       SettingName.NAMES.NextcloudBackupLastRun,
+      SettingName.NAMES.NextcloudBackupDeliveryState,
     ]
 
     it('no Nextcloud backup setting is part of the default settings for new accounts', () => {

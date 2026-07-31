@@ -9,6 +9,11 @@ export interface WebDAVBackupDestination {
   folder: string
 }
 
+export interface WebDAVBackupArtifactIdentity {
+  /** Immutable UTC calendar date (YYYY-MM-DD) used in the destination name. */
+  artifactDate: string
+}
+
 /**
  * Standard Red Notes: backup service that uploads the user's ALREADY end-to-end
  * encrypted items to a Nextcloud instance over WebDAV. Mirrors the data shape that
@@ -23,5 +28,10 @@ export interface WebDAVItemBackupServiceInterface {
    * Returns the uploaded file name on success, or null on failure (errors are
    * logged and swallowed so the batch job is never crashed).
    */
-  uploadBackup(items: Item[], authParams: KeyParamsData, destination: WebDAVBackupDestination): Promise<string | null>
+  uploadBackup(
+    items: Item[],
+    authParams: KeyParamsData,
+    destination: WebDAVBackupDestination,
+    artifactIdentity?: WebDAVBackupArtifactIdentity,
+  ): Promise<string | null>
 }

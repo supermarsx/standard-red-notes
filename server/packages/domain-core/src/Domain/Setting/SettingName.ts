@@ -84,10 +84,14 @@ export class SettingName extends ValueObject<SettingNameProps> {
     // and excluded from the unsensitive list so a normal getSetting read returns no
     // value; only the server-side trigger job decrypts it to perform the upload.
     NextcloudBackupAppPassword: 'NEXTCLOUD_BACKUP_APP_PASSWORD',
-    // Server-written bookkeeping (CLIENT-IMMUTABLE) mirroring EmailBackupLastSent:
-    // ms-epoch string of the last Nextcloud backup run, used by the due-calculator
-    // so one cron can serve daily/weekly/monthly and catch up missed runs.
+    // Server-written bookkeeping (CLIENT-IMMUTABLE): ms-epoch string of the last
+    // confirmed successful Nextcloud upload. Publishing an asynchronous request is
+    // never enough to advance this value.
     NextcloudBackupLastRun: 'NEXTCLOUD_BACKUP_LAST_RUN',
+    // Server-private request/receipt state for the asynchronous WebDAV lifecycle.
+    // It bounds in-flight work and retries, and keeps a small completion-id history
+    // so at-least-once event delivery cannot advance or back off the schedule twice.
+    NextcloudBackupDeliveryState: 'NEXTCLOUD_BACKUP_DELIVERY_STATE',
     // Standard Red Notes: per-user, OFF-BY-DEFAULT admin gate for scheduled
     // Nextcloud backups. Mirrors OcrServerAllowed: a plain 'true'/'false' flag the
     // admin panel toggles per user. The scheduled trigger requires this flag to be
@@ -167,6 +171,9 @@ export class SettingName extends ValueObject<SettingNameProps> {
       // the user's Nextcloud account, so it is treated as sensitive (encrypted at
       // rest, never returned by a normal getSetting read).
       SettingName.NAMES.NextcloudBackupAppPassword,
+      // Server-private request identifiers and backoff receipts. This contains no
+      // credential, but must not be exposed through public settings APIs.
+      SettingName.NAMES.NextcloudBackupDeliveryState,
     ].includes(this.props.value)
   }
 

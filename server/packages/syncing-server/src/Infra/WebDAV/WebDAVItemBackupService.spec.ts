@@ -63,6 +63,35 @@ describe('WebDAVItemBackupService', () => {
     jest.useRealTimers()
   })
 
+  it('uses the immutable event date across a redelivery after UTC midnight', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-06-21T23:59:00.000Z'))
+
+    await createService().uploadBackup(items, authParams, destination, { artifactDate: '2026-06-21' })
+    jest.setSystemTime(new Date('2026-06-22T00:01:00.000Z'))
+    await createService().uploadBackup(items, authParams, destination, { artifactDate: '2026-06-21' })
+
+    expect(webDAVClient.putFile).toHaveBeenCalledTimes(2)
+    expect((webDAVClient.putFile as jest.Mock).mock.calls[0][0]).toEqual(
+      expect.objectContaining({ fileName: 'SN-Data-2026-06-21.json' }),
+    )
+    expect((webDAVClient.putFile as jest.Mock).mock.calls[1][0]).toEqual(
+      expect.objectContaining({ fileName: 'SN-Data-2026-06-21.json' }),
+    )
+
+    jest.useRealTimers()
+  })
+
+  it.each(['2026-2-03', '2026-02-30', 'not-a-date'])(
+    'rejects invalid supplied artifact date %s',
+    async (artifactDate) => {
+      const result = await createService().uploadBackup(items, authParams, destination, { artifactDate })
+
+      expect(result).toBeNull()
+      expect(webDAVClient.putFile).not.toHaveBeenCalled()
+      expect(logger.warn).toHaveBeenCalledWith('Nextcloud WebDAV backup has an invalid artifact date. Skipping.')
+    },
+  )
+
   it('writes the encrypted item projections plus auth_params as the JSON body', async () => {
     await createService().uploadBackup(items, authParams, destination)
 

@@ -45,6 +45,7 @@ export interface DomainEventFactoryInterface {
   createEmailBackupRequestedEvent(userUuid: string, keyParams: KeyParamsData): EmailBackupRequestedEvent
   createNextcloudBackupRequestedEvent(dto: {
     userUuid: string
+    requestUuid: string
     keyParams: KeyParamsData
     nextcloudUrl: string
     nextcloudFolder: string

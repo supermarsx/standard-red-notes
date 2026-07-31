@@ -165,9 +165,56 @@ Each upload attempt has these transport boundaries:
 - `MKCOL` accepts only `201` (created) or `405` (already exists), while `PUT`
   accepts only `200`, `201`, or `204`.
 
-There is no automatic retry inside an upload attempt. An interrupted upload can
-have an ambiguous outcome, so the next scheduled job is the safe retry boundary
-and uploads the same date-stamped encrypted artifact again.
+There is no automatic retry inside an upload attempt. The scheduled cadence
+advances only after the syncing service reports a confirmed upload completion; merely
+publishing the asynchronous request does not count as success. Failed requests
+remain due. A request stays in-flight for at most 30 minutes, then failed or
+expired work retries through a bounded exponential backoff from 15 minutes up
+to 6 hours, so a frequent scheduler cannot create an unbounded event storm.
+
+Domain events are delivered at least once. A redelivered request reuses the
+original event's validated UTC date and uploads the same deterministic
+`SN-Data-YYYY-MM-DD.json` path—even when redelivery crosses midnight—so it
+overwrites that encrypted artifact instead of creating an unbounded set of
+duplicates.
+Duplicate completion receipts are idempotent and retained only in a bounded
+history. The private lifecycle state and completion receipt contain request
+identifiers, outcome, and timestamps only—never the Nextcloud URL, app password,
+or raw provider error text.
+
+### Rolling upgrade compatibility
+
+When upgrading a multi-service deployment, upgrade the syncing service before
+the auth service, verify the syncing worker is consuming events, and then
+upgrade auth. This order keeps both mixed-version windows safe:
+
+- An older auth service emits backup requests without acknowledgement IDs. The
+  newer syncing service still uploads them and derives a stable UUIDv5 from the
+  original event timestamp, user UUID, and correlation identity. Queue
+  redelivery therefore uses the same acknowledgement identity and the same
+  daily destination. The older auth service ignores the completion receipt and
+  retains its established publication-based cadence.
+- A newer auth service sending to an older syncing service still gets an
+  upload, because the older consumer ignores the additional request ID. The old
+  consumer cannot send a completion receipt, so new auth does not claim a
+  confirmed success: the request expires after 30 minutes, enters bounded
+  backoff, and remains retryable. Once syncing is upgraded, a retry completes
+  the acknowledgement. Repeated attempts overwrite that day's deterministic
+  artifact rather than creating extra files.
+
+Do not downgrade both services independently after the new private delivery
+state has been written. Preserve the database, roll back the pair together, and
+verify an actual Nextcloud artifact before treating the backup as successful.
+
+```mermaid
+flowchart LR
+  A[Persist bounded in-flight request] --> B[Upload encrypted daily artifact]
+  B -->|Confirmed completion| C[Advance last-success cadence]
+  B -->|Failure| D[Keep backup due]
+  A -->|No completion in 30 minutes| D
+  D --> E[Retry after 15 min to 6 h backoff]
+  E --> A
+```
 
 ### Verify and recover a Nextcloud backup
 

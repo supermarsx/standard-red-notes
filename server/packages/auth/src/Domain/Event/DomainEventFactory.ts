@@ -305,6 +305,7 @@ export class DomainEventFactory implements DomainEventFactoryInterface {
 
   createNextcloudBackupRequestedEvent(dto: {
     userUuid: string
+    requestUuid: string
     keyParams: KeyParamsData
     nextcloudUrl: string
     nextcloudFolder: string
@@ -319,9 +320,11 @@ export class DomainEventFactory implements DomainEventFactoryInterface {
           userIdentifierType: 'uuid',
         },
         origin: DomainEventService.Auth,
+        target: DomainEventService.SyncingServer,
       },
       payload: {
         userUuid: dto.userUuid,
+        requestUuid: dto.requestUuid,
         keyParams: dto.keyParams,
         nextcloudUrl: dto.nextcloudUrl,
         nextcloudFolder: dto.nextcloudFolder,

@@ -17,7 +17,7 @@ describe('DomainEventFactory', () => {
 
   const expectEvent = (
     event: DomainEventInterface,
-    expected: { type: string; userIdentifier: string; userIdentifierType: string; payload: unknown },
+    expected: { type: string; userIdentifier: string; userIdentifierType: string; payload: unknown; target?: string },
   ) => {
     expect(event.type).toEqual(expected.type)
     expect(event.createdAt).toEqual(new Date(1))
@@ -27,9 +27,26 @@ describe('DomainEventFactory', () => {
         userIdentifierType: expected.userIdentifierType,
       },
       origin: 'syncing-server',
+      ...(expected.target ? { target: expected.target } : {}),
     })
     expect(event.payload).toEqual(expected.payload)
   }
+
+  it('creates an auth-targeted Nextcloud completion without destination or credential data', () => {
+    const dto = {
+      userUuid: '1-2-3',
+      requestUuid: '2-3-4',
+      outcome: 'succeeded' as const,
+    }
+
+    expectEvent(createFactory().createNextcloudBackupCompletedEvent(dto), {
+      type: 'NEXTCLOUD_BACKUP_COMPLETED',
+      userIdentifier: '1-2-3',
+      userIdentifierType: 'uuid',
+      target: 'auth',
+      payload: { ...dto, completedAt: 1 },
+    })
+  })
 
   it('should create an items changed on server event correlated to the user', () => {
     const dto = { userUuid: '1-2-3', sessionUuid: '2-3-4', timestamp: 123 }

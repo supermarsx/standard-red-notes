@@ -4,6 +4,7 @@ import { Logger } from 'winston'
 
 import { Item } from '../../Domain/Item/Item'
 import {
+  WebDAVBackupArtifactIdentity,
   WebDAVBackupDestination,
   WebDAVItemBackupServiceInterface,
 } from '../../Domain/Item/WebDAVItemBackupServiceInterface'
@@ -34,6 +35,7 @@ export class WebDAVItemBackupService implements WebDAVItemBackupServiceInterface
     items: Item[],
     authParams: KeyParamsData,
     destination: WebDAVBackupDestination,
+    artifactIdentity?: WebDAVBackupArtifactIdentity,
   ): Promise<string | null> {
     const username = destination.username?.trim()
     if (!destination.url?.trim() || !destination.appPassword?.trim() || !username) {
@@ -49,7 +51,12 @@ export class WebDAVItemBackupService implements WebDAVItemBackupServiceInterface
       auth_params: authParams,
     })
 
-    const dateOnly = new Date().toISOString().substring(0, 10)
+    const dateOnly = artifactIdentity?.artifactDate ?? new Date().toISOString().substring(0, 10)
+    if (!this.isValidArtifactDate(dateOnly)) {
+      this.logger.warn('Nextcloud WebDAV backup has an invalid artifact date. Skipping.')
+
+      return null
+    }
     const fileName = `SN-Data-${dateOnly}.json`
 
     try {
@@ -72,5 +79,15 @@ export class WebDAVItemBackupService implements WebDAVItemBackupServiceInterface
 
       return null
     }
+  }
+
+  private isValidArtifactDate(value: string): boolean {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+      return false
+    }
+
+    const parsed = new Date(`${value}T00:00:00.000Z`)
+
+    return !Number.isNaN(parsed.getTime()) && parsed.toISOString().substring(0, 10) === value
   }
 }

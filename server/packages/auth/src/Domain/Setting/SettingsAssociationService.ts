@@ -27,6 +27,9 @@ export class SettingsAssociationService implements SettingsAssociationServiceInt
     SettingName.NAMES.NextcloudBackupUrl,
     SettingName.NAMES.NextcloudBackupFolder,
     SettingName.NAMES.NextcloudBackupLastRun,
+    // Delivery receipts contain no credential and can stay unencrypted, but the
+    // setting remains private by omission from UNSENSITIVE_SETTINGS below.
+    SettingName.NAMES.NextcloudBackupDeliveryState,
     // Standard Red Notes: per-user admin gate for scheduled Nextcloud backups. A
     // plain 'true'/'false' flag carrying no secret; stored unencrypted so the
     // trigger job can read it without per-user key material when gating a backup.
@@ -116,6 +119,7 @@ export class SettingsAssociationService implements SettingsAssociationServiceInt
     // Standard Red Notes: last-run bookkeeping for scheduled Nextcloud backups is
     // written only by the server-side trigger job; clients may not mutate it.
     SettingName.NAMES.NextcloudBackupLastRun,
+    SettingName.NAMES.NextcloudBackupDeliveryState,
     // Standard Red Notes: the instance-wide "registration disabled" flag is an
     // ADMIN-ONLY control. It must NOT be writable through the ordinary user
     // settings endpoint (BaseSettingsController's user-settings PUT, which lets a

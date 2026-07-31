@@ -35,11 +35,19 @@ describe('GetSettings', () => {
       sensitive: false,
       timestamps: Timestamps.create(123, 123).getValue(),
     }).getValue()
+    const nextcloudDeliveryState = Setting.create({
+      name: SettingName.NAMES.NextcloudBackupDeliveryState,
+      value: '{"activeRequest":null}',
+      serverEncryptionVersion: 0,
+      userUuid: Uuid.create('00000000-0000-0000-0000-000000000000').getValue(),
+      sensitive: true,
+      timestamps: Timestamps.create(123, 123).getValue(),
+    }).getValue()
 
     settingRepository = {} as jest.Mocked<SettingRepositoryInterface>
     settingRepository.findAllByUserUuid = jest
       .fn()
-      .mockReturnValue([unsensitiveSetting, sensitiveSetting, recoveryCodesSetting])
+      .mockReturnValue([unsensitiveSetting, sensitiveSetting, recoveryCodesSetting, nextcloudDeliveryState])
 
     settingCrypter = {} as jest.Mocked<SettingCrypterInterface>
     settingCrypter.decryptSettingValue = jest.fn().mockReturnValue('decrypted')
@@ -72,6 +80,18 @@ describe('GetSettings', () => {
 
     expect(result.isFailed()).toBeFalsy()
     expect(result.getValue().map(({ setting }) => setting.props.name)).not.toContain(SettingName.NAMES.RecoveryCodes)
+  })
+
+  it('does not return private Nextcloud request and retry state', async () => {
+    const result = await createUseCase().execute({
+      userUuid: '00000000-0000-0000-0000-000000000000',
+      decrypted: true,
+    })
+
+    expect(result.isFailed()).toBeFalsy()
+    expect(result.getValue().map(({ setting }) => setting.props.name)).not.toContain(
+      SettingName.NAMES.NextcloudBackupDeliveryState,
+    )
   })
 
   it('should fail if user uuid is invalid', async () => {
