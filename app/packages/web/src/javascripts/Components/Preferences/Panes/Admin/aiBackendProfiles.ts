@@ -90,6 +90,12 @@ export const emptyBackendRow = (type: BackendProfileType = 'api-key'): BackendPr
 export type BackendValidation = { ok: true } | { ok: false; error: string }
 
 const isHttpUrl = (value: string): boolean => /^https?:\/\/.+/i.test(value.trim())
+const unsafeRecordKeys = new Set([...Object.getOwnPropertyNames(Object.prototype), 'prototype'])
+const isValidSubscriptionId = (value: string): boolean =>
+  value.length >= 1 &&
+  value.length <= 128 &&
+  !unsafeRecordKeys.has(value) &&
+  /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/.test(value)
 
 export const validateBackendRow = (row: BackendProfileRow): BackendValidation => {
   if (row.name.trim() === '') {
@@ -98,8 +104,13 @@ export const validateBackendRow = (row: BackendProfileRow): BackendValidation =>
   if (row.baseUrl.trim() !== '' && !isHttpUrl(row.baseUrl)) {
     return { ok: false, error: `${row.name || 'Backend'}: base URL must be a full http(s):// URL.` }
   }
-  if (row.type === 'subscription' && row.subscriptionId.trim() === '') {
-    return { ok: false, error: `${row.name || 'Backend'}: a subscription backend needs a subscription id.` }
+  if (row.type === 'subscription' && !isValidSubscriptionId(row.subscriptionId)) {
+    return {
+      ok: false,
+      error:
+        `${row.name || 'Backend'}: subscription id must be 1–128 ASCII letters, numbers, dots, underscores, or ` +
+        'hyphens, must begin and end with a letter or number, and must not be a reserved object-property name.',
+    }
   }
   return { ok: true }
 }
@@ -130,7 +141,7 @@ export const backendRowToPayload = (row: BackendProfileRow): BackendProfilePaylo
       payload.apiKey = null
     }
   } else {
-    payload.subscriptionId = row.subscriptionId.trim()
+    payload.subscriptionId = row.subscriptionId
     if (row.baseUrl.trim() !== '') {
       payload.baseUrl = row.baseUrl.trim()
     }

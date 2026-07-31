@@ -14,6 +14,7 @@ import {
   PersistedAiProfile,
   PersistedBackendProfile,
 } from '../Assistant/profiles'
+import { isLegacyCompatibleSubscriptionId } from '../Assistant/subscription/pairingValidation'
 import { validateWorkflowsPublicUrl } from '../Workflows/WorkflowsPublicUrl'
 
 /**
@@ -318,8 +319,6 @@ const isIntegerBetween = (value: unknown, minimum: number, maximum: number): boo
   typeof value === 'number' && Number.isSafeInteger(value) && value >= minimum && value <= maximum
 const isSecret = (value: unknown): boolean => isBoundedString(value, 1, ASSISTANT_PROFILE_LIMITS.secretLength)
 const isProfileId = (value: unknown): value is string => isSafeRecordKey(value, ASSISTANT_PROFILE_LIMITS.idLength)
-const isSubscriptionId = (value: unknown): value is string =>
-  isSafeRecordKey(value, ASSISTANT_PROFILE_LIMITS.subscriptionIdLength)
 const isModel = (value: unknown): value is string => isBoundedString(value, 1, ASSISTANT_PROFILE_LIMITS.modelLength)
 const isNullableDate = (value: unknown): boolean =>
   value === null || (isBoundedString(value, 1, 64) && ISO_DATE_PATTERN.test(value) && !Number.isNaN(Date.parse(value)))
@@ -405,7 +404,16 @@ function isPersistedBackendProfile(value: unknown): value is PersistedBackendPro
     )
   }
 
-  return value.provider === undefined && value.apiKey === undefined && isSubscriptionId(value.subscriptionId)
+  /**
+   * Read compatibility only: early builds accepted any safe record key here.
+   * Keep those values readable so admins can see and correct them without
+   * bricking unrelated settings writes. New/updated subscription backends pass
+   * the stricter shared isValidSubscriptionId gate in validateBackendProfilesPatch;
+   * resolution independently fails closed on a legacy-invalid value.
+   */
+  return (
+    value.provider === undefined && value.apiKey === undefined && isLegacyCompatibleSubscriptionId(value.subscriptionId)
+  )
 }
 
 function isPersistedBackendProfiles(value: unknown): value is PersistedBackendProfile[] {

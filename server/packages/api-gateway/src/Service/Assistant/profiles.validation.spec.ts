@@ -395,17 +395,38 @@ describe('validateBackendProfilesPatch', () => {
       )
     })
 
-    it('rejects a prototype-sensitive or overlong subscriptionId', () => {
-      expect(
-        errorOf(validateBackendProfilesPatch([subscriptionBackend({ subscriptionId: 'constructor' })], [])),
-      ).toContain('invalid')
-      expect(
-        errorOf(validateBackendProfilesPatch([subscriptionBackend({ subscriptionId: 'x'.repeat(129) })], [])),
-      ).toContain('invalid')
+    it.each([
+      'constructor',
+      'prototype',
+      'toString',
+      'hasOwnProperty',
+      'x'.repeat(129),
+      'team/name',
+      'tëam',
+      ' team ',
+      '.team',
+      'team.',
+    ])('rejects non-portable subscriptionId %p', (subscriptionId) => {
+      expect(errorOf(validateBackendProfilesPatch([subscriptionBackend({ subscriptionId })], []))).toContain('invalid')
     })
 
-    it('stores the trimmed subscriptionId and no provider', () => {
-      const result = ok(validateBackendProfilesPatch([subscriptionBackend({ subscriptionId: ' team ' })], []))
+    it('rejects every reserved object-property name in the shared store contract', () => {
+      for (const subscriptionId of [...Object.getOwnPropertyNames(Object.prototype), 'prototype']) {
+        expect(errorOf(validateBackendProfilesPatch([subscriptionBackend({ subscriptionId })], []))).toContain(
+          'invalid',
+        )
+      }
+    })
+
+    it('accepts the shared portable subscriptionId syntax without rewriting it', () => {
+      const subscriptionId = 'team_a.1-b'
+      const result = ok(validateBackendProfilesPatch([subscriptionBackend({ subscriptionId })], []))
+
+      expect(result.backendProfiles?.[0].subscriptionId).toBe(subscriptionId)
+    })
+
+    it('stores a valid subscriptionId and no provider', () => {
+      const result = ok(validateBackendProfilesPatch([subscriptionBackend({ subscriptionId: 'team' })], []))
 
       expect(result.backendProfiles?.[0].subscriptionId).toBe('team')
       expect(result.backendProfiles?.[0].provider).toBeUndefined()

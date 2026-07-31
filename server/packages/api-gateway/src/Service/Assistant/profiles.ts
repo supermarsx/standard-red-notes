@@ -1,5 +1,6 @@
 import { hasOnlyKeys, isBoundedString, isSafeRecordKey } from '../../Infra/SecureJsonFileStore'
 import { AssistantProviderConfig } from './providers/factory'
+import { isValidSubscriptionId } from './subscription/pairingValidation'
 
 /**
  * Standard Red Notes: MULTIPLE named Assistant profiles.
@@ -620,11 +621,11 @@ export function effectiveBackendProfiles(
 /**
  * Merge a referenced backend profile onto an assistant profile, producing a
  * self-contained PersistedAiProfile the existing resolveProfileProvider consumes.
- * When the profile references no backend (or the backend is missing), legacy
- * embedded behavior is preserved except that a codex-subscription profile's
- * historical inline plaintext credential is always discarded. A subscription
- * backend maps to the codex-subscription provider and carries the subscriptionId
- * through so the proxy can draw a fresh token for THAT paired subscription.
+ * A profile with no reference is returned unchanged for legacy embedded
+ * behavior. A missing explicit reference fails closed so stale configuration
+ * can never silently fall back to embedded credentials. A subscription backend
+ * maps to the codex-subscription provider and carries the subscriptionId through
+ * so the proxy can draw a fresh token for THAT paired subscription.
  */
 export function resolveEffectiveAssistantProfile(
   profile: PersistedAiProfile,
@@ -632,26 +633,34 @@ export function resolveEffectiveAssistantProfile(
 ): PersistedAiProfile {
   if (!profile.backendProfileId) {
     if (profile.provider === 'codex-subscription') {
+      const subscriptionId = profile.subscriptionId ?? DEFAULT_SUBSCRIPTION_ID
+      if (!isValidSubscriptionId(subscriptionId)) {
+        throw new Error('The subscription backend identifier is invalid.')
+      }
       return {
         ...profile,
         apiKey: undefined,
-        subscriptionId: profile.subscriptionId ?? DEFAULT_SUBSCRIPTION_ID,
+        subscriptionId,
       }
     }
     return profile
   }
   const backend = backendProfiles.find((candidate) => candidate.id === profile.backendProfileId)
   if (!backend) {
-    return profile
+    throw new Error('Referenced assistant backend profile is unavailable.')
   }
   if (backend.type === 'subscription') {
+    const subscriptionId = backend.subscriptionId ?? DEFAULT_SUBSCRIPTION_ID
+    if (!isValidSubscriptionId(subscriptionId)) {
+      throw new Error('The subscription backend identifier is invalid.')
+    }
     return {
       ...profile,
       provider: 'codex-subscription',
       baseUrl: backend.baseUrl ?? profile.baseUrl,
       model: profile.model ?? backend.model,
       apiKey: undefined,
-      subscriptionId: backend.subscriptionId ?? DEFAULT_SUBSCRIPTION_ID,
+      subscriptionId,
     }
   }
   return {
@@ -859,11 +868,11 @@ export function validateBackendProfilesPatch(
         return { error: `Backend profile ${id} apiKey must be a string, null, or omitted.` }
       }
     } else {
-      const subscriptionId = typeof raw.subscriptionId === 'string' ? raw.subscriptionId.trim() : ''
+      const subscriptionId = typeof raw.subscriptionId === 'string' ? raw.subscriptionId : ''
       if (!subscriptionId) {
         return { error: `Backend profile ${id} (subscription) requires a subscriptionId.` }
       }
-      if (!isSafeRecordKey(subscriptionId, ASSISTANT_PROFILE_LIMITS.subscriptionIdLength)) {
+      if (!isValidSubscriptionId(subscriptionId)) {
         return { error: `Backend profile ${id} has an invalid subscriptionId.` }
       }
       backend.subscriptionId = subscriptionId

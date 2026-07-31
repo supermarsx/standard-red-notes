@@ -656,6 +656,48 @@ describe('ServerSettingsStore + ServerSettingsResolver', () => {
       expect(view.sources['ai.backendProfiles']).toBe('persisted')
     })
 
+    it('keeps a safely representable legacy-invalid subscription id readable and remediable but fails resolution closed', async () => {
+      await fs.writeFile(
+        filePath,
+        JSON.stringify({
+          ai: {
+            backendProfiles: [
+              {
+                id: 'legacy-sub',
+                name: 'Legacy subscription',
+                type: 'subscription',
+                subscriptionId: 'legacy/team',
+              },
+            ],
+            profiles: [
+              {
+                id: 'assistant',
+                name: 'Assistant',
+                provider: 'openai-compatible',
+                enabled: true,
+                backendProfileId: 'legacy-sub',
+              },
+            ],
+            defaultProfileId: 'assistant',
+          },
+        }),
+      )
+      const store = new ServerSettingsStore(filePath)
+      const resolver = new ServerSettingsResolver(store, { assistant: {} })
+
+      expect((await store.read()).ai?.backendProfiles?.[0].subscriptionId).toBe('legacy/team')
+      expect((await resolver.view()).settings.ai.backendProfiles[0]).toMatchObject({
+        id: 'legacy-sub',
+        subscriptionId: 'legacy/team',
+      })
+      await expect(resolver.resolveActiveProfile()).rejects.toThrow('identifier is invalid')
+
+      await store.update({ logging: { level: 'warn' } })
+      const afterUnrelatedWrite = await store.read()
+      expect(afterUnrelatedWrite.logging?.level).toBe('warn')
+      expect(afterUnrelatedWrite.ai?.backendProfiles?.[0].subscriptionId).toBe('legacy/team')
+    })
+
     it('resolves the effective profile for a principal (USER > ROLE > default)', async () => {
       const resolver = makeResolver()
       await resolver.applyPatch({

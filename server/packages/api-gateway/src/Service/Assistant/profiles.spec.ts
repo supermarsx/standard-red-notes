@@ -354,7 +354,7 @@ describe('backend profiles', () => {
       expect(resolveEffectiveAssistantProfile(profile, [apiKeyBackend])).toBe(profile)
     })
 
-    it('returns the profile unchanged when the referenced backend is missing', () => {
+    it('fails closed when the referenced backend is missing', () => {
       const profile: PersistedAiProfile = {
         id: 'p',
         name: 'Ref',
@@ -362,7 +362,40 @@ describe('backend profiles', () => {
         enabled: true,
         backendProfileId: 'gone',
       }
-      expect(resolveEffectiveAssistantProfile(profile, [apiKeyBackend])).toBe(profile)
+      expect(() => resolveEffectiveAssistantProfile(profile, [apiKeyBackend])).toThrow(
+        'Referenced assistant backend profile is unavailable.',
+      )
+    })
+
+    it('fails closed on a legacy-invalid subscription id while leaving the stored value untouched', () => {
+      const profile: PersistedAiProfile = {
+        id: 'p',
+        name: 'Ref',
+        provider: 'openai-compatible',
+        enabled: true,
+        backendProfileId: 'legacy-sub',
+      }
+      const backend: PersistedBackendProfile = {
+        id: 'legacy-sub',
+        name: 'Legacy subscription',
+        type: 'subscription',
+        subscriptionId: 'legacy/team',
+      }
+
+      expect(() => resolveEffectiveAssistantProfile(profile, [backend])).toThrow('identifier is invalid')
+      expect(backend.subscriptionId).toBe('legacy/team')
+    })
+
+    it('fails closed on a legacy-invalid inline subscription id', () => {
+      const profile: PersistedAiProfile = {
+        id: 'p',
+        name: 'Legacy inline subscription',
+        provider: 'codex-subscription',
+        enabled: true,
+        subscriptionId: 'legacy/team',
+      }
+
+      expect(() => resolveEffectiveAssistantProfile(profile, [])).toThrow('identifier is invalid')
     })
   })
 
