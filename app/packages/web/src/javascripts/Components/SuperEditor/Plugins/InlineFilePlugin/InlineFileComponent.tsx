@@ -79,7 +79,7 @@ const InlineFileComponent = ({
       const blob = await fetch(src).then((response) => response.blob())
       const file = new File([blob], fileName || application.generateUUID(), { type: mimeType })
 
-      const { filesController, linkingController } = application
+      const { filesController } = application
 
       const uploadedFile = await filesController.uploadNewFile(file, { showToast: false })
 
@@ -91,8 +91,6 @@ const InlineFileComponent = ({
         const fileNode = $createFileNode(uploadedFile.uuid)
         node.replace(fileNode)
       })
-
-      void linkingController.linkItemToSelectedItem(uploadedFile)
     } catch (error) {
       console.error(error)
     } finally {

@@ -40,6 +40,7 @@ import { FeaturesController } from './FeaturesController'
 export class LinkingController extends AbstractViewController implements InternalEventHandlerInterface {
   shouldLinkToParentFolders: boolean
   isLinkingPanelOpen = false
+  private editorReferenceReconciliationQueues = new Map<string, Promise<void>>()
 
   constructor(
     private itemListController: ItemListController,
@@ -178,14 +179,19 @@ export class LinkingController extends AbstractViewController implements Interna
     return undefined
   }
 
-  unlinkItems = async (item: LinkableItem, itemToUnlink: LinkableItem) => {
+  unlinkItems = async (item: LinkableItem, itemToUnlink: LinkableItem, sync = true): Promise<boolean> => {
     try {
       await this.mutator.unlinkItems(item, itemToUnlink)
     } catch (error) {
       console.error(error)
+      return false
     }
 
-    void this.sync.sync()
+    if (sync) {
+      void this.sync.sync()
+    }
+
+    return true
   }
 
   unlinkItemFromSelectedItem = async (itemToUnlink: LinkableItem) => {
@@ -198,6 +204,105 @@ export class LinkingController extends AbstractViewController implements Interna
     void this.unlinkItems(selectedItem, itemToUnlink)
   }
 
+  private areItemsLinked = (itemA: LinkableItem, itemB: LinkableItem): boolean => {
+    const currentItemA = this.items.findItem(itemA.uuid) ?? itemA
+    const currentItemB = this.items.findItem(itemB.uuid) ?? itemB
+
+    return (
+      currentItemA.references.some((reference) => reference.uuid === currentItemB.uuid) ||
+      currentItemB.references.some((reference) => reference.uuid === currentItemA.uuid)
+    )
+  }
+
+  private performEditorReferenceReconciliation = async (
+    originatingNote: SNNote,
+    changes: Readonly<{ added: readonly string[]; removed: readonly string[] }>,
+  ): Promise<void> => {
+    const added = new Set(changes.added)
+    const removed = new Set(changes.removed)
+
+    // A well-formed committed-state diff cannot contain the same UUID on both
+    // sides. Treat contradictory input as no net transition rather than
+    // unlinking and relinking it (and syncing twice).
+    for (const uuid of added) {
+      if (removed.has(uuid)) {
+        added.delete(uuid)
+        removed.delete(uuid)
+      }
+    }
+
+    let didMutateRelationship = false
+    let originatingNoteStillExists = true
+
+    for (const uuid of removed) {
+      const currentNote = this.items.findItem<SNNote>(originatingNote.uuid)
+      const referencedItem = this.items.findItem<LinkableItem>(uuid)
+
+      // The originating editor may have been deallocated while this queued
+      // transaction waited. Never mutate a stale note object after deletion.
+      if (!currentNote) {
+        originatingNoteStillExists = false
+        break
+      }
+
+      if (!referencedItem || !this.areItemsLinked(currentNote, referencedItem)) {
+        continue
+      }
+
+      didMutateRelationship = (await this.unlinkItems(currentNote, referencedItem, false)) || didMutateRelationship
+    }
+
+    if (originatingNoteStillExists) {
+      for (const uuid of added) {
+        const currentNote = this.items.findItem<SNNote>(originatingNote.uuid)
+        const referencedItem = this.items.findItem<LinkableItem>(uuid)
+
+        if (!currentNote) {
+          break
+        }
+
+        if (!referencedItem || this.areItemsLinked(currentNote, referencedItem)) {
+          continue
+        }
+
+        didMutateRelationship =
+          (await this.linkItemsAndReportMutation(currentNote, referencedItem, false)) || didMutateRelationship
+      }
+    }
+
+    if (didMutateRelationship) {
+      void this.sync.sync()
+    }
+  }
+
+  /**
+   * Reconciles editor node references against the note that originated the
+   * transaction. Per-note serialization preserves delete/undo/redo ordering
+   * even when relationship mutations are still in flight, and avoids consulting
+   * a later UI selection after the user switches notes or editor tiles.
+   */
+  reconcileEditorReferenceChanges = (
+    originatingNote: SNNote,
+    changes: Readonly<{ added: readonly string[]; removed: readonly string[] }>,
+  ): Promise<void> => {
+    const noteUuid = originatingNote.uuid
+    const previous = this.editorReferenceReconciliationQueues.get(noteUuid) ?? Promise.resolve()
+
+    const queued = previous
+      .catch(() => undefined)
+      .then(() => this.performEditorReferenceReconciliation(originatingNote, changes))
+
+    this.editorReferenceReconciliationQueues.set(noteUuid, queued)
+    const removeCompletedQueue = () => {
+      if (this.editorReferenceReconciliationQueues.get(noteUuid) === queued) {
+        this.editorReferenceReconciliationQueues.delete(noteUuid)
+      }
+    }
+    void queued.then(removeCompletedQueue, removeCompletedQueue)
+
+    return queued
+  }
+
   ensureActiveItemIsInserted = async () => {
     const activeItemController = this.itemListController.getActiveItemController()
     if (activeItemController instanceof NoteViewController && activeItemController.isTemplateNote) {
@@ -205,47 +310,61 @@ export class LinkingController extends AbstractViewController implements Interna
     }
   }
 
-  linkItems = async (item: LinkableItem, itemToLink: LinkableItem, sync = true) => {
+  private linkItemsAndReportMutation = async (
+    item: LinkableItem,
+    itemToLink: LinkableItem,
+    sync = true,
+  ): Promise<boolean> => {
     const linkNoteAndFile = async (note: SNNote, file: FileItem) => {
       const updatedFile = await this.mutator.associateFileWithNote(file, note)
 
+      if (!updatedFile) {
+        return false
+      }
+
       if (this.featuresController.isVaultsEnabled()) {
-        if (updatedFile) {
-          const noteVault = this.vaults.getItemVault(note)
-          const fileVault = this.vaults.getItemVault(updatedFile)
-          if (noteVault && !fileVault) {
-            const result = await this.vaults.moveItemToVault(noteVault, file)
-            if (result.isFailed()) {
-              console.error(result.getError())
-            }
+        const noteVault = this.vaults.getItemVault(note)
+        const fileVault = this.vaults.getItemVault(updatedFile)
+        if (noteVault && !fileVault) {
+          const result = await this.vaults.moveItemToVault(noteVault, file)
+          if (result.isFailed()) {
+            console.error(result.getError())
           }
         }
       }
+
+      return true
     }
 
     const linkFileAndFile = async (file1: FileItem, file2: FileItem) => {
       await this.mutator.linkFileToFile(file1, file2)
+      return true
     }
 
     const linkNoteToNote = async (note1: SNNote, note2: SNNote) => {
       await this.mutator.linkNoteToNote(note1, note2)
       achievements.increment(METRICS.noteLinksTotal)
+      return true
     }
 
     const linkTagToNote = async (tag: SNTag, note: SNNote) => {
-      await this.addTagToItem(tag, note, sync)
+      await this.addTagToItem(tag, note, false)
+      return true
     }
 
     const linkTagToFile = async (tag: SNTag, file: FileItem) => {
-      await this.addTagToItem(tag, file, sync)
+      await this.addTagToItem(tag, file, false)
+      return true
     }
+
+    let didLink = false
 
     if (isNote(item)) {
       if (isNote(itemToLink) && !this.isEntitledToNoteLinking) {
         void this.publishCrossControllerEventSync(CrossControllerEvent.DisplayPremiumModal, {
           featureName: 'Note linking',
         })
-        return
+        return false
       }
 
       if (item.uuid === this.activeItem?.uuid) {
@@ -253,21 +372,21 @@ export class LinkingController extends AbstractViewController implements Interna
       }
 
       if (isFile(itemToLink)) {
-        await linkNoteAndFile(item, itemToLink)
+        didLink = await linkNoteAndFile(item, itemToLink)
       } else if (isNote(itemToLink)) {
-        await linkNoteToNote(item, itemToLink)
+        didLink = await linkNoteToNote(item, itemToLink)
       } else if (isTag(itemToLink)) {
-        await linkTagToNote(itemToLink, item)
+        didLink = await linkTagToNote(itemToLink, item)
       } else {
         throw Error('Invalid item type')
       }
     } else if (isFile(item)) {
       if (isNote(itemToLink)) {
-        await linkNoteAndFile(itemToLink, item)
+        didLink = await linkNoteAndFile(itemToLink, item)
       } else if (isFile(itemToLink)) {
-        await linkFileAndFile(item, itemToLink)
+        didLink = await linkFileAndFile(item, itemToLink)
       } else if (isTag(itemToLink)) {
-        await linkTagToFile(itemToLink, item)
+        didLink = await linkTagToFile(itemToLink, item)
       } else {
         throw Error('Invalid item to link')
       }
@@ -275,9 +394,15 @@ export class LinkingController extends AbstractViewController implements Interna
       throw new Error('First item must be a note or file')
     }
 
-    if (sync) {
+    if (sync && didLink) {
       void this.sync.sync()
     }
+
+    return didLink
+  }
+
+  linkItems = async (item: LinkableItem, itemToLink: LinkableItem, sync = true): Promise<void> => {
+    await this.linkItemsAndReportMutation(item, itemToLink, sync)
   }
 
   linkItemToSelectedItem = async (itemToLink: LinkableItem): Promise<boolean> => {

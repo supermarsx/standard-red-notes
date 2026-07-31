@@ -66,7 +66,7 @@ const RemoteImageComponent = ({
       const blob = await response.blob()
       const file = new File([blob], src, { type: blob.type })
 
-      const { filesController, linkingController } = application
+      const { filesController } = application
 
       const uploadedFile = await filesController.uploadNewFile(file, { showToast: false })
 
@@ -78,8 +78,6 @@ const RemoteImageComponent = ({
         const fileNode = $createFileNode(uploadedFile.uuid)
         node.replace(fileNode)
       })
-
-      void linkingController.linkItemToSelectedItem(uploadedFile)
     } catch (error) {
       console.error(error)
     } finally {

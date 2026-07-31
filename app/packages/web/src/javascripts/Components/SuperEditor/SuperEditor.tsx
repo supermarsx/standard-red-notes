@@ -12,14 +12,12 @@ import { CSSProperties, FocusEvent, FunctionComponent, useCallback, useEffect, u
 import { BlocksEditor } from './BlocksEditor'
 import { BlocksEditorComposer } from './BlocksEditorComposer'
 import { ItemSelectionPlugin } from './Plugins/ItemSelectionPlugin/ItemSelectionPlugin'
-import { FileNode } from './Plugins/EncryptedFilePlugin/Nodes/FileNode'
 import FilePlugin from './Plugins/EncryptedFilePlugin/FilePlugin'
 import { ErrorBoundary } from '@/Utils/ErrorBoundary'
 import { LinkingController } from '@/Controllers/LinkingController'
 import LinkingControllerProvider from '../../Controllers/LinkingControllerProvider'
-import { BubbleNode } from './Plugins/ItemBubblePlugin/Nodes/BubbleNode'
 import ItemBubblePlugin from './Plugins/ItemBubblePlugin/ItemBubblePlugin'
-import { NodeObserverPlugin } from './Plugins/NodeObserverPlugin/NodeObserverPlugin'
+import { EditorReferenceChanges, NodeObserverPlugin } from './Plugins/NodeObserverPlugin/NodeObserverPlugin'
 import { FilesController } from '@/Controllers/FilesController'
 import FilesControllerProvider from '@/Controllers/FilesControllerProvider'
 import { NoteViewController } from '../NoteView/Controller/NoteViewController'
@@ -228,15 +226,20 @@ export const SuperEditor: FunctionComponent<Props> = ({
     [controller],
   )
 
-  const handleBubbleRemove = useCallback(
-    (itemUuid: string) => {
-      const item = application.items.findItem(itemUuid)
-      if (item) {
-        // TODO: We should only unlink item if all link bubbles to that item have been removed from the note
-        linkingController.unlinkItemFromSelectedItem(item).catch(console.error)
-      }
+  const handleEditorReferenceChanges = useCallback(
+    (changes: EditorReferenceChanges) => {
+      void (async () => {
+        // A new-note editor starts from a non-persisted template item. Insert it
+        // before resolving newly added references, then carry this editor's own
+        // controller item through reconciliation (never the later UI selection).
+        if (changes.added.length > 0 && controller.isTemplateNote) {
+          await controller.insertTemplatedNote()
+        }
+
+        await linkingController.reconcileEditorReferenceChanges(controller.item, changes)
+      })().catch(console.error)
     },
-    [linkingController, application],
+    [controller, linkingController],
   )
 
   useEffect(() => {
@@ -359,8 +362,7 @@ export const SuperEditor: FunctionComponent<Props> = ({
                   <ChangeContentCallbackPlugin
                     providerCallback={(callback) => (changeEditorFunction.current = callback)}
                   />
-                  <NodeObserverPlugin nodeType={BubbleNode} onRemove={handleBubbleRemove} />
-                  <NodeObserverPlugin nodeType={FileNode} onRemove={handleBubbleRemove} />
+                  <NodeObserverPlugin onChange={handleEditorReferenceChanges} />
                   {readonly === undefined && (
                     <ReadonlyPlugin note={note.current} forceReadonly={featureStatus !== FeatureStatus.Entitled} />
                   )}

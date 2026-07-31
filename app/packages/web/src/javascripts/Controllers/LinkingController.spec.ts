@@ -276,4 +276,188 @@ describe('LinkingController', () => {
       expect(moveToVaultSpy).toHaveBeenCalled()
     })
   })
+
+  describe('reconcileEditorReferenceChanges', () => {
+    const fileReferenceTo = (note: SNNote): FileToNoteReference => ({
+      reference_type: ContentReferenceType.FileToNote,
+      uuid: note.uuid,
+      content_type: ContentType.TYPES.Note,
+    })
+
+    const configureItems = (note: SNNote, files: FileItem[]) => {
+      const entries: [string, SNNote | FileItem][] = [
+        [note.uuid, note],
+        ...files.map((file): [string, FileItem] => [file.uuid, file]),
+      ]
+      const allItems = new Map<string, SNNote | FileItem>(entries)
+      const linkedNoteUuids = new Map(
+        files.map((file): [string, string | undefined] => [
+          file.uuid,
+          file.references.find((reference) => reference.uuid === note.uuid)?.uuid,
+        ]),
+      )
+
+      for (const file of files) {
+        Object.defineProperty(file, 'references', {
+          configurable: true,
+          get: () => {
+            const linkedNoteUuid = linkedNoteUuids.get(file.uuid)
+            return linkedNoteUuid ? [fileReferenceTo(note)] : []
+          },
+        })
+      }
+
+      application.items.findItem = jest.fn((uuid: string) =>
+        allItems.get(uuid),
+      ) as unknown as ItemManagerInterface['findItem']
+      application.featuresController.isVaultsEnabled = jest.fn().mockReturnValue(false)
+
+      application.mutator.associateFileWithNote = jest.fn(async (file: FileItem, currentNote: SNNote) => {
+        linkedNoteUuids.set(file.uuid, currentNote.uuid)
+        return file
+      })
+      application.mutator.unlinkItems = jest.fn(async (_currentNote: SNNote, file: FileItem) => {
+        linkedNoteUuids.delete(file.uuid)
+        return file
+      })
+
+      return { allItems, linkedNoteUuids }
+    }
+
+    it('mutates the originating note even if UI selection switches before reconciliation', async () => {
+      const originatingNote = createNote('origin', { uuid: 'origin', references: [] })
+      const laterSelectedNote = createNote('later selection', { uuid: 'later', references: [] })
+      const file = createFile('attachment', {
+        uuid: 'file',
+        references: [fileReferenceTo(originatingNote)],
+      })
+      configureItems(originatingNote, [file])
+      Object.defineProperty(application.itemListController, 'firstSelectedItem', {
+        configurable: true,
+        value: laterSelectedNote,
+      })
+
+      await application.linkingController.reconcileEditorReferenceChanges(originatingNote, {
+        added: [],
+        removed: [file.uuid],
+      })
+
+      expect(application.mutator.unlinkItems).toHaveBeenCalledTimes(1)
+      expect(application.mutator.unlinkItems).toHaveBeenCalledWith(originatingNote, file)
+      expect(application.mutator.unlinkItems).not.toHaveBeenCalledWith(laterSelectedNote, file)
+      expect(application.sync.sync).toHaveBeenCalledTimes(1)
+    })
+
+    it('skips a queued change if its originating note has been deleted', async () => {
+      const deletedNote = createNote('deleted', { uuid: 'deleted', references: [] })
+      const file = createFile('attachment', { uuid: 'file', references: [] })
+      const { allItems } = configureItems(deletedNote, [file])
+      allItems.delete(deletedNote.uuid)
+
+      await application.linkingController.reconcileEditorReferenceChanges(deletedNote, {
+        added: [file.uuid],
+        removed: [],
+      })
+
+      expect(application.mutator.associateFileWithNote).not.toHaveBeenCalled()
+      expect(application.mutator.unlinkItems).not.toHaveBeenCalled()
+      expect(application.sync.sync).not.toHaveBeenCalled()
+    })
+
+    it('deduplicates UUIDs and performs one sync for a multi-item committed batch', async () => {
+      const note = createNote('origin', { uuid: 'origin', references: [] })
+      const firstFile = createFile('first', { uuid: 'first-file', references: [] })
+      const secondFile = createFile('second', { uuid: 'second-file', references: [] })
+      configureItems(note, [firstFile, secondFile])
+
+      await application.linkingController.reconcileEditorReferenceChanges(note, {
+        added: [firstFile.uuid, firstFile.uuid, secondFile.uuid, secondFile.uuid],
+        removed: [],
+      })
+
+      expect(application.mutator.associateFileWithNote).toHaveBeenCalledTimes(2)
+      expect(application.mutator.associateFileWithNote).toHaveBeenNthCalledWith(1, firstFile, note)
+      expect(application.mutator.associateFileWithNote).toHaveBeenNthCalledWith(2, secondFile, note)
+      expect(application.sync.sync).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not mutate or sync when an added editor UUID is already linked', async () => {
+      const note = createNote('origin', { uuid: 'origin', references: [] })
+      const file = createFile('attachment', {
+        uuid: 'file',
+        references: [fileReferenceTo(note)],
+      })
+      configureItems(note, [file])
+
+      await application.linkingController.reconcileEditorReferenceChanges(note, {
+        added: [file.uuid],
+        removed: [],
+      })
+
+      expect(application.mutator.associateFileWithNote).not.toHaveBeenCalled()
+      expect(application.sync.sync).not.toHaveBeenCalled()
+    })
+
+    it('serializes remove then undo-add and relinks after the final-reference removal', async () => {
+      const note = createNote('origin', { uuid: 'origin', references: [] })
+      const file = createFile('attachment', {
+        uuid: 'file',
+        references: [fileReferenceTo(note)],
+      })
+      const { linkedNoteUuids } = configureItems(note, [file])
+      const mutationOrder: string[] = []
+      application.mutator.unlinkItems = jest.fn(async () => {
+        mutationOrder.push('unlink')
+        linkedNoteUuids.delete(file.uuid)
+        return file
+      })
+      application.mutator.associateFileWithNote = jest.fn(async () => {
+        mutationOrder.push('link')
+        linkedNoteUuids.set(file.uuid, note.uuid)
+        return file
+      })
+
+      const remove = application.linkingController.reconcileEditorReferenceChanges(note, {
+        added: [],
+        removed: [file.uuid],
+      })
+      const undo = application.linkingController.reconcileEditorReferenceChanges(note, {
+        added: [file.uuid],
+        removed: [],
+      })
+
+      await Promise.all([remove, undo])
+
+      expect(mutationOrder).toEqual(['unlink', 'link'])
+      expect(file.references).toEqual([fileReferenceTo(note)])
+      expect(application.sync.sync).toHaveBeenCalledTimes(2)
+    })
+
+    it('continues later queued transactions in order after a relationship mutation fails', async () => {
+      const note = createNote('origin', { uuid: 'origin', references: [] })
+      const file = createFile('attachment', { uuid: 'file', references: [] })
+      const { linkedNoteUuids } = configureItems(note, [file])
+      application.mutator.associateFileWithNote = jest
+        .fn()
+        .mockRejectedValueOnce(new Error('first mutation failed'))
+        .mockImplementationOnce(async () => {
+          linkedNoteUuids.set(file.uuid, note.uuid)
+          return file
+        })
+
+      const failed = application.linkingController.reconcileEditorReferenceChanges(note, {
+        added: [file.uuid],
+        removed: [],
+      })
+      const retry = application.linkingController.reconcileEditorReferenceChanges(note, {
+        added: [file.uuid],
+        removed: [],
+      })
+
+      await expect(failed).rejects.toThrow('first mutation failed')
+      await expect(retry).resolves.toBeUndefined()
+      expect(application.mutator.associateFileWithNote).toHaveBeenCalledTimes(2)
+      expect(application.sync.sync).toHaveBeenCalledTimes(1)
+    })
+  })
 })

@@ -58,7 +58,6 @@ export const ItemSelectionPlugin: FunctionComponent<Props> = ({ currentNote }) =
     const options = items.map((item) => {
       return new ItemOption(item, item.title || '', {
         onSelect: (_queryString: string) => {
-          void linkingController.linkItems(currentNote, item)
           if (item.content_type === ContentType.TYPES.File) {
             editor.dispatchCommand(INSERT_FILE_COMMAND, item.uuid)
           } else {
