@@ -49,8 +49,8 @@ export class WebSocketRedisBridge implements DomainEventMessageHandlerInterface 
         lazyConnect: false,
         maxRetriesPerRequest: 1,
       })
-      this.publisher.on('error', (error) => {
-        this.logger.debug(`WebSocketRedisBridge redis error: ${(error as Error).message}`)
+      this.publisher.on('error', () => {
+        this.logger.debug('WebSocketRedisBridge redis connection error.')
       })
     }
     return this.publisher
@@ -70,8 +70,8 @@ export class WebSocketRedisBridge implements DomainEventMessageHandlerInterface 
     try {
       // payload = { userUuid, message, originatingSessionUuid? } — forwarded verbatim.
       await publisher.publish(WebSocketRedisBridge.CHANNEL, JSON.stringify(messageOrEvent.payload))
-    } catch (error) {
-      this.logger.debug(`WebSocketRedisBridge publish failed: ${(error as Error).message}`)
+    } catch {
+      this.logger.debug('WebSocketRedisBridge publish failed.')
     }
   }
 
@@ -84,13 +84,13 @@ export class WebSocketRedisBridge implements DomainEventMessageHandlerInterface 
 
     try {
       await publisher.quit()
-    } catch (error) {
-      this.logger.debug(`WebSocketRedisBridge graceful close failed: ${(error as Error).message}`)
+    } catch {
+      this.logger.debug('WebSocketRedisBridge graceful close failed.')
       publisher.disconnect()
     }
   }
 
-  async handleError(error: Error): Promise<void> {
-    this.logger.error('WebSocketRedisBridge error: %O', error)
+  async handleError(_error: Error): Promise<void> {
+    this.logger.error('WebSocketRedisBridge domain subscriber error.')
   }
 }

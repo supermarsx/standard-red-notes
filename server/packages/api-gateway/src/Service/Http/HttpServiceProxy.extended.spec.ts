@@ -447,33 +447,106 @@ describe('HttpServiceProxy', () => {
       await buildProxy().callSyncingServer(buildRequest(), buildResponse(), 'items')
 
       expect(status).toHaveBeenCalledWith(500)
-      expect(send).toHaveBeenCalledWith(
-        "Unfortunately, we couldn't handle your request. Please try again or contact our support if the error persists.",
-      )
+      expect(send).toHaveBeenCalledWith({
+        error: {
+          tag: 'service-unavailable',
+          message: 'The requested service is temporarily unavailable.',
+        },
+      })
     })
 
-    it('logs the failing target URL together with the acting user', async () => {
+    it('logs a sanitized target URL together with the acting user', async () => {
       ;(httpClient.request as jest.Mock).mockRejectedValue(new Error('ECONNRESET'))
 
       await buildProxy().callSyncingServer(buildRequest(), buildResponse({ user: { uuid: 'u-1' } }), 'items')
 
-      expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('http://syncing/items'), { userId: 'u-1' })
+      expect(logger.error).toHaveBeenCalledWith(
+        'Could not complete request on underlying service.',
+        expect.objectContaining({
+          action: 'service-proxy.request',
+          endpoint: 'http://syncing/items',
+          method: 'POST',
+          userId: 'u-1',
+        }),
+      )
     })
 
-    it('mirrors an axios error status, content-type and body back to the client', async () => {
+    it('keeps an axios error body and content-type private while preserving an upstream 5xx status', async () => {
       const error = new AxiosError('Request failed', '502')
       error.response = {
+        status: 502,
         data: { error: 'bad gateway' },
         headers: { 'content-type': 'application/problem+json' },
       } as never
-
       ;(httpClient.request as jest.Mock).mockRejectedValue(error)
 
       await buildProxy().callSyncingServer(buildRequest(), buildResponse(), 'items')
 
-      expect(setHeader).toHaveBeenCalledWith('content-type', 'application/problem+json')
+      expect(setHeader).not.toHaveBeenCalled()
       expect(status).toHaveBeenCalledWith(502)
-      expect(send).toHaveBeenCalledWith({ error: 'bad gateway' })
+      expect(send).toHaveBeenCalledWith({
+        error: {
+          tag: 'service-unavailable',
+          message: 'The requested service is temporarily unavailable.',
+        },
+      })
+    })
+
+    it('never logs or returns auth, cookie, query, body, message, or circular axios data', async () => {
+      const error: Record<string, unknown> = {
+        name: 'AxiosError',
+        code: 'ERR_BAD_RESPONSE',
+        message: 'access-token-sentinel',
+        response: {
+          status: 503,
+          data: {
+            refreshToken: 'refresh-token-sentinel',
+            content: 'encrypted-content-sentinel',
+          },
+          headers: { 'set-cookie': 'cookie-sentinel' },
+        },
+        config: {
+          headers: {
+            Authorization: 'Bearer access-token-sentinel',
+            Cookie: 'cookie-sentinel',
+          },
+          url: 'http://syncing/items?code_verifier=pkce-sentinel#fragment-sentinel',
+        },
+      }
+      error.circular = error
+      ;(httpClient.request as jest.Mock).mockRejectedValue(error)
+
+      await buildProxy().callSyncingServer(
+        buildRequest({
+          headers: {
+            authorization: 'Bearer access-token-sentinel',
+            cookie: 'sid=cookie-sentinel',
+          } as never,
+          query: { access_token: 'query-token-sentinel' } as never,
+        }),
+        buildResponse({ user: { uuid: 'u-1' } }),
+        'items',
+        { content: 'encrypted-content-sentinel' },
+      )
+
+      const serialized = JSON.stringify({
+        logs: {
+          error: logger.error.mock.calls,
+          debug: logger.debug.mock.calls,
+        },
+        response: send.mock.calls,
+      })
+      for (const sentinel of [
+        'access-token-sentinel',
+        'refresh-token-sentinel',
+        'encrypted-content-sentinel',
+        'cookie-sentinel',
+        'pkce-sentinel',
+        'fragment-sentinel',
+        'query-token-sentinel',
+      ]) {
+        expect(serialized).not.toContain(sentinel)
+      }
     })
 
     it('does not send an envelope after an error response has already been written', async () => {

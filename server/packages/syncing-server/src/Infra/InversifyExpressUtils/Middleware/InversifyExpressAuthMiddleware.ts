@@ -3,7 +3,7 @@ import { BaseMiddleware } from 'inversify-express-utils'
 import { verify } from 'jsonwebtoken'
 import { CrossServiceTokenData } from '@standardnotes/security'
 import * as winston from 'winston'
-import { RoleName } from '@standardnotes/domain-core'
+import { safeErrorLogMetadata, RoleName } from '@standardnotes/domain-core'
 import { ResponseLocals } from '../ResponseLocals'
 
 export class InversifyExpressAuthMiddleware extends BaseMiddleware {
@@ -58,7 +58,7 @@ export class InversifyExpressAuthMiddleware extends BaseMiddleware {
 
       return next()
     } catch (error) {
-      this.logger.error(`Could not verify JWT Auth Token ${(error as Error).message}`)
+      this.logger.error('Could not verify JWT Auth Token.', safeErrorLogMetadata(error))
 
       return this.sendInvalidAuthResponse(response)
     }

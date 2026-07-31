@@ -2,6 +2,7 @@ import { Result, UseCaseInterface } from '@standardnotes/domain-core'
 import { Logger } from 'winston'
 
 import { EmailSenderInterface } from '../../Email/EmailSenderInterface'
+import { safeErrorLogMetadata } from '../../Logging/SafeLog'
 
 /**
  * Standard Red Notes: emails an approved user that their account is now active and
@@ -41,7 +42,7 @@ export class SendApprovalNotification implements UseCaseInterface<boolean> {
 
       return Result.ok(emailed)
     } catch (error) {
-      this.logger.error(`[approval] Failed to send approval notification: ${(error as Error).message}`)
+      this.logger.error('[approval] Failed to send an approval notification.', safeErrorLogMetadata(error))
 
       return Result.fail('Could not send approval notification.')
     }

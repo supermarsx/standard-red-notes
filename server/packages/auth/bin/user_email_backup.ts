@@ -14,6 +14,7 @@ import { PermissionName } from '@standardnotes/features'
 import { UserRepositoryInterface } from '../src/Domain/User/UserRepositoryInterface'
 import { GetUserKeyParams } from '../src/Domain/UseCase/GetUserKeyParams/GetUserKeyParams'
 import { Email } from '@standardnotes/domain-core'
+import { safeErrorLogMetadata } from '../src/Domain/Logging/SafeLog'
 
 const inputArgs = process.argv.slice(2)
 const backupEmail = inputArgs[0]
@@ -64,7 +65,7 @@ void container.load().then((container) => {
 
   const logger: Logger = container.get(TYPES.Auth_Logger)
 
-  logger.info(`Starting email backup requesting for ${backupEmail} ...`)
+  logger.info('Starting an email-backup request.')
 
   const userRepository: UserRepositoryInterface = container.get(TYPES.Auth_UserRepository)
   const roleService: RoleServiceInterface = container.get(TYPES.Auth_RoleService)
@@ -76,12 +77,12 @@ void container.load().then((container) => {
     requestBackups(userRepository, roleService, domainEventFactory, domainEventPublisher, getUserKeyParamsUseCase),
   )
     .then(() => {
-      logger.info(`Email backup requesting complete for ${backupEmail}`)
+      logger.info('Email-backup request completed.')
 
       process.exit(0)
     })
     .catch((error) => {
-      logger.error(`Could not finish email backup requesting for ${backupEmail}: ${error.message}`)
+      logger.error('Could not finish the email-backup request.', safeErrorLogMetadata(error))
 
       process.exit(1)
     })

@@ -54,8 +54,21 @@ export class BaseSubscriptionTokensController extends BaseHttpController {
   }
 
   async validate(request: Request): Promise<results.JsonResult> {
+    const token = this.subscriptionTokenFromRequest(request)
+    if (!token) {
+      return this.json(
+        {
+          error: {
+            tag: 'invalid-auth',
+            message: 'Invalid login credentials.',
+          },
+        },
+        401,
+      )
+    }
+
     const authenticateTokenResponse = await this.authenticateToken.execute({
-      token: request.params.token as string,
+      token,
     })
 
     if (!authenticateTokenResponse.success) {
@@ -94,6 +107,16 @@ export class BaseSubscriptionTokensController extends BaseHttpController {
     const authToken = this.tokenEncoder.encodeExpirableToken(authTokenData, this.jwtTTL)
 
     return this.json({ authToken })
+  }
+
+  private subscriptionTokenFromRequest(request: Request): string | undefined {
+    const headerToken = request.headers['x-subscription-token']
+    if (typeof headerToken === 'string' && headerToken.length > 0) {
+      return headerToken
+    }
+
+    const legacyPathToken = request.params.token
+    return typeof legacyPathToken === 'string' && legacyPathToken.length > 0 ? legacyPathToken : undefined
   }
 
   private async projectUser(user: User): Promise<{ uuid: string; email: string }> {

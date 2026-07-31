@@ -115,7 +115,6 @@ describe('SubscriptionSyncRequestedEventHandler', () => {
     expect(logger.error).toHaveBeenCalledWith('Subscription ID is missing', {
       codeTag: 'SubscriptionSyncRequestedEventHandler.handle',
       subscriptionId: undefined,
-      userId: userEmail,
     })
   })
 
@@ -170,7 +169,7 @@ describe('SubscriptionSyncRequestedEventHandler', () => {
 
       await createHandler().handle(eventWith(offlinePayload))
 
-      expect(logger.error).toHaveBeenCalledWith('Could not renew shared offline subscriptions for user: renew oops', {
+      expect(logger.error).toHaveBeenCalledWith('Could not renew shared offline subscriptions for a user.', {
         subscriptionId,
       })
       expect(roleService.setOfflineUserRole).toHaveBeenCalledTimes(1)
@@ -268,7 +267,7 @@ describe('SubscriptionSyncRequestedEventHandler', () => {
 
       await createHandler().handle(eventWith(fullPayload))
 
-      expect(logger.error).toHaveBeenCalledWith('Could not renew shared subscriptions for user: renew oops', {
+      expect(logger.error).toHaveBeenCalledWith('Could not renew shared subscriptions for a user.', {
         userId: userUuid,
       })
       expect(roleService.addUserRoleBasedOnSubscription).toHaveBeenCalledTimes(1)
@@ -279,9 +278,9 @@ describe('SubscriptionSyncRequestedEventHandler', () => {
 
       await createHandler().handle(eventWith(fullPayload))
 
-      expect(logger.error).toHaveBeenCalledWith(
-        `Could not apply default subscription settings for user ${userUuid}: settings oops`,
-      )
+      expect(logger.error).toHaveBeenCalledWith('Could not apply default subscription settings for a user.', {
+        userId: userUuid,
+      })
     })
 
     it('should log if the extension key could not be stored', async () => {

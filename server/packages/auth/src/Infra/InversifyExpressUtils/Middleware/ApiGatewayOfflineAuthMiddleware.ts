@@ -34,8 +34,6 @@ export class ApiGatewayOfflineAuthMiddleware extends BaseMiddleware {
         request.headers['x-auth-offline-token'] as string,
       )
 
-      this.logger.debug('ApiGatewayOfflineAuthMiddleware decoded token %O', token)
-
       if (token === undefined) {
         this.logger.debug('ApiGatewayOfflineAuthMiddleware authentication failure.')
 
@@ -53,6 +51,8 @@ export class ApiGatewayOfflineAuthMiddleware extends BaseMiddleware {
         featuresToken: token.featuresToken,
         userEmail: token.userEmail,
       } as OfflineResponseLocals)
+
+      this.logger.debug('ApiGatewayOfflineAuthMiddleware authentication succeeded.')
 
       return next()
     } catch (error) {

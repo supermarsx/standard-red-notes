@@ -57,12 +57,13 @@ describe('StatisticPersistenceRequestedEventHandler', () => {
     expect(logger.error).not.toHaveBeenCalled()
   })
 
-  it('logs the reason when persisting the statistic fails', async () => {
+  it('logs a safe classification when persisting the statistic fails', async () => {
     persistStatistic.execute = jest.fn().mockResolvedValue(Result.fail('Invalid statistics measure name: mrr'))
 
     await createHandler().handle(event)
 
-    expect(logger.error).toHaveBeenCalledWith('Invalid statistics measure name: mrr')
+    expect(logger.error).toHaveBeenCalledWith('Operation failed.', expect.objectContaining({ errorType: 'Error' }))
+    expect(JSON.stringify(logger.error.mock.calls)).not.toContain('Invalid statistics measure name')
   })
 
   it('tracks the statistic in mixpanel under the global-stats identity', async () => {

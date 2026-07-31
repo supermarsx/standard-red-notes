@@ -243,7 +243,12 @@ describe('ProofOfWorkGate', () => {
       const result = await createGateWithEscalation().enforceSignInParams('user@example.com', {}, false, '1.2.3.4')
 
       expect(result.satisfied).toBe(true)
-      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('redis unavailable'))
+      expect(logger.warn).toHaveBeenCalledWith('Proof-of-work sign-in gate failed open.', {
+        errorType: 'Error',
+        errorCode: undefined,
+        status: undefined,
+      })
+      expect(JSON.stringify((logger.warn as jest.Mock).mock.calls)).not.toContain('redis unavailable')
     })
 
     it('still requires a challenge from the account threshold even if the IP flag is unset', async () => {

@@ -1,4 +1,11 @@
-import { Result, SharedVaultUserPermission, Timestamps, UseCaseInterface, Uuid } from '@standardnotes/domain-core'
+import {
+  safeErrorLogMetadata,
+  Result,
+  SharedVaultUserPermission,
+  Timestamps,
+  UseCaseInterface,
+  Uuid,
+} from '@standardnotes/domain-core'
 import { TimerInterface } from '@standardnotes/time'
 
 import { SharedVaultInvite } from '../../../SharedVault/User/Invite/SharedVaultInvite'
@@ -113,7 +120,8 @@ export class InviteUserToSharedVault implements UseCaseInterface<SharedVaultInvi
       this.logger.error(
         `Failed to send user invited to shared vault event to client for user ${
           sharedVaultInvite.props.userUuid.value
-        }: ${result.getError()}`,
+        }.`,
+        safeErrorLogMetadata(result.getError()),
       )
     }
 

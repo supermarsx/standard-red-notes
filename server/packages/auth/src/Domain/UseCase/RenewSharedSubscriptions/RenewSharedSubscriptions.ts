@@ -8,6 +8,7 @@ import { SharedSubscriptionInvitationRepositoryInterface } from '../../SharedSub
 import { UserSubscription } from '../../Subscription/UserSubscription'
 import { UserSubscriptionType } from '../../Subscription/UserSubscriptionType'
 import { UserSubscriptionRepositoryInterface } from '../../Subscription/UserSubscriptionRepositoryInterface'
+import { safeErrorLogMetadata } from '../../Logging/SafeLog'
 import { UserRepositoryInterface } from '../../User/UserRepositoryInterface'
 import { InviteeIdentifierType } from '../../SharedSubscription/InviteeIdentifierType'
 import { RoleServiceInterface } from '../../Role/RoleServiceInterface'
@@ -36,9 +37,10 @@ export class RenewSharedSubscriptions implements UseCaseInterface<void> {
       try {
         const user = await this.getInviteeUserUuid(invitation.inviteeIdentifier, invitation.inviteeIdentifierType)
         if (user === null) {
-          this.logger.error(
-            `[SUBSCRIPTION: ${dto.newSubscriptionId}] Could not renew shared subscription for invitation: ${invitation.uuid}: Could not find user with identifier: ${invitation.inviteeIdentifier}`,
-          )
+          this.logger.error('Could not renew a shared subscription because the invitee was not found.', {
+            subscriptionId: dto.newSubscriptionId,
+            invitationId: invitation.uuid,
+          })
           continue
         }
 
@@ -57,11 +59,11 @@ export class RenewSharedSubscriptions implements UseCaseInterface<void> {
 
         await this.sharedSubscriptionInvitationRepository.save(invitation)
       } catch (error) {
-        this.logger.error(
-          `[SUBSCRIPTION: ${dto.newSubscriptionId}] Could not renew shared subscription for invitation: ${
-            invitation.uuid
-          }: ${(error as Error).message}`,
-        )
+        this.logger.error('Could not renew a shared subscription invitation.', {
+          subscriptionId: dto.newSubscriptionId,
+          invitationId: invitation.uuid,
+          ...safeErrorLogMetadata(error),
+        })
       }
     }
 

@@ -300,7 +300,8 @@ describe('POST /sockets/tokens', () => {
     expect(status()).toBe(200)
     const minted = (body() as { token: string }).token
     expect(jwt.verify(minted, CONNECTION_SECRET)).toMatchObject({ userUuid: 'user-1', sessionUuid: 'session-1' })
-    expect(logger.info).toHaveBeenCalledWith('[token] minted (x-auth) user=user-1 session=session-1')
+    expect(logger.info).toHaveBeenCalledWith('[token] minted (x-auth) user=user-1')
+    expect(JSON.stringify(logger.info.mock.calls)).not.toContain('session-1')
   })
 
   it('rejects an x-auth-token that does not verify', async () => {
@@ -367,7 +368,8 @@ describe('POST /sockets/tokens', () => {
     expect(status()).toBe(200)
     const minted = (body() as { token: string }).token
     expect(jwt.verify(minted, CONNECTION_SECRET)).toMatchObject({ userUuid: 'user-9', sessionUuid: 'session-9' })
-    expect(logger.info).toHaveBeenCalledWith('[token] minted user=user-9 session=session-9')
+    expect(logger.info).toHaveBeenCalledWith('[token] minted user=user-9')
+    expect(JSON.stringify(logger.info.mock.calls)).not.toContain('session-9')
   })
 
   it('mints from a streamed raw body (standalone mode)', async () => {
@@ -481,7 +483,10 @@ describe('websocket connection lifecycle', () => {
 
     expect(await closedWith(socket)).toBe(1008)
     expect(attached!.registry.size()).toBe(0)
-    expect(logger.warn).toHaveBeenCalledWith('[ws] connection rejected: bad token', expect.any(String))
+    expect(logger.warn).toHaveBeenCalledWith('[ws] connection rejected: bad token', {
+      errorType: 'Error',
+      errorCode: undefined,
+    })
   })
 
   it('registers a connection presenting a valid token and deregisters it on close', async () => {
@@ -490,6 +495,7 @@ describe('websocket connection lifecycle', () => {
     const socket = connect(`?authToken=${token}`)
     await opened(socket)
     await vi.waitFor(() => expect(attached!.registry.size()).toBe(1))
+    expect(JSON.stringify(logger.info.mock.calls)).not.toContain('session-1')
 
     socket.close()
     await vi.waitFor(() => expect(attached!.registry.size()).toBe(0))

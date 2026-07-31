@@ -3,7 +3,7 @@ import 'reflect-metadata'
 import { Logger } from 'winston'
 import dayjs from 'dayjs'
 import utc from 'dayjs/plugin/utc'
-import { Uuid } from '@standardnotes/domain-core'
+import { safeErrorLogMetadata, Uuid } from '@standardnotes/domain-core'
 
 import { ContainerConfigLoader } from '../src/Bootstrap/Container'
 import TYPES from '../src/Bootstrap/Types'
@@ -60,7 +60,7 @@ void container.load().then((container) => {
       process.exit(0)
     })
     .catch((error) => {
-      logger.error(`Error while fixing roles for shared subscriptions: ${(error as Error).message}`)
+      logger.error('Error while fixing roles for shared subscriptions.', safeErrorLogMetadata(error))
 
       process.exit(1)
     })

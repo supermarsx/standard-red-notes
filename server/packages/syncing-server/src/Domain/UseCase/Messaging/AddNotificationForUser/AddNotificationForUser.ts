@@ -1,4 +1,11 @@
-import { NotificationType, Result, Timestamps, UseCaseInterface, Uuid } from '@standardnotes/domain-core'
+import {
+  safeErrorLogMetadata,
+  NotificationType,
+  Result,
+  Timestamps,
+  UseCaseInterface,
+  Uuid,
+} from '@standardnotes/domain-core'
 import { TimerInterface } from '@standardnotes/time'
 
 import { AddNotificationForUserDTO } from './AddNotificationForUserDTO'
@@ -63,7 +70,8 @@ export class AddNotificationForUser implements UseCaseInterface<Notification> {
     })
     if (result.isFailed()) {
       this.logger.error(
-        `Failed to send notification added event to client for user ${userUuid.value}: ${result.getError()}`,
+        `Failed to send notification added event to client for user ${userUuid.value}.`,
+        safeErrorLogMetadata(result.getError()),
       )
     }
 

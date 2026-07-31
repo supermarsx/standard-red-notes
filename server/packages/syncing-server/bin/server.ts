@@ -1,6 +1,6 @@
 import 'reflect-metadata'
 
-import { MapperInterface } from '@standardnotes/domain-core'
+import { safeErrorLogMetadata, MapperInterface } from '@standardnotes/domain-core'
 
 import '../src/Infra/InversifyExpressUtils/AnnotatedHealthCheckController'
 import '../src/Infra/InversifyExpressUtils/AnnotatedItemsController'
@@ -32,10 +32,9 @@ import { CheckForTrafficAbuse } from '../src/Domain/UseCase/Syncing/CheckForTraf
 // unhandled rejection or uncaught exception leaves the process in an unknown
 // state, so we log a clear FATAL line (with stack) and exit non-zero to let the
 // supervisor restart us. This makes crash-loops VISIBLE instead of swallowed.
-let fatalLogger: { error: (message: string) => void } = console
+let fatalLogger: { error: (message: string, metadata?: Record<string, unknown>) => void } = console
 const logFatal = (label: string, error: unknown): void => {
-  const err = error instanceof Error ? error : new Error(String(error))
-  fatalLogger.error(`FATAL ${label}: ${err.message}\n${err.stack ?? '(no stack)'}`)
+  fatalLogger.error(`FATAL ${label}.`, safeErrorLogMetadata(error))
 }
 process.on('unhandledRejection', (reason: unknown) => {
   logFatal('unhandledRejection', reason)
@@ -50,144 +49,146 @@ const container = new ContainerConfigLoader()
 void container
   .load()
   .then(async (container) => {
-  const env: Env = new Env()
-  env.load()
+    const env: Env = new Env()
+    env.load()
 
-  const requestPayloadLimit = env.get('HTTP_REQUEST_PAYLOAD_LIMIT_MEGABYTES', true)
-    ? `${+env.get('HTTP_REQUEST_PAYLOAD_LIMIT_MEGABYTES', true)}mb`
-    : '50mb'
+    const requestPayloadLimit = env.get('HTTP_REQUEST_PAYLOAD_LIMIT_MEGABYTES', true)
+      ? `${+env.get('HTTP_REQUEST_PAYLOAD_LIMIT_MEGABYTES', true)}mb`
+      : '50mb'
 
-  const server = new InversifyExpressServer(container)
+    const server = new InversifyExpressServer(container)
 
-  server.setConfig((app) => {
-    app.use((_request: Request, response: Response, next: NextFunction) => {
-      response.setHeader('X-SSJS-Version', container.get(TYPES.Sync_VERSION))
-      next()
+    server.setConfig((app) => {
+      app.use((_request: Request, response: Response, next: NextFunction) => {
+        response.setHeader('X-SSJS-Version', container.get(TYPES.Sync_VERSION))
+        next()
+      })
+
+      app.use(
+        helmet({
+          contentSecurityPolicy: {
+            directives: {
+              defaultSrc: ["https: 'self'"],
+              baseUri: ["'self'"],
+              childSrc: ['*', 'blob:'],
+              connectSrc: ['*'],
+              fontSrc: ['*', "'self'"],
+              formAction: ["'self'"],
+              frameAncestors: ['*'],
+              frameSrc: ['*', 'blob:'],
+              imgSrc: ["'self'", '*', 'data:'],
+              manifestSrc: ["'self'"],
+              mediaSrc: ["'self'"],
+              objectSrc: ["'self'"],
+              scriptSrc: ["'self'"],
+              styleSrc: ["'self'"],
+            },
+          },
+        }),
+      )
+
+      app.use(json({ limit: requestPayloadLimit }))
+      app.use(urlencoded({ extended: true, limit: requestPayloadLimit, parameterLimit: 5000 }))
+      app.use(cors())
     })
-    /* eslint-disable */
-    app.use(helmet({
-      contentSecurityPolicy: {
-        directives: {
-          defaultSrc: ["https: 'self'"],
-          baseUri: ["'self'"],
-          childSrc: ["*", "blob:"],
-          connectSrc: ["*"],
-          fontSrc: ["*", "'self'"],
-          formAction: ["'self'"],
-          frameAncestors: ["*"],
-          frameSrc: ["*", "blob:"],
-          imgSrc: ["'self'", "*", "data:"],
-          manifestSrc: ["'self'"],
-          mediaSrc: ["'self'"],
-          objectSrc: ["'self'"],
-          scriptSrc: ["'self'"],
-          styleSrc: ["'self'"]
-        }
-      }
-    }))
-    /* eslint-enable */
-    app.use(json({ limit: requestPayloadLimit }))
-    app.use(urlencoded({ extended: true, limit: requestPayloadLimit, parameterLimit: 5000 }))
-    app.use(cors())
-  })
 
-  const logger: winston.Logger = container.get(TYPES.Sync_Logger)
-  fatalLogger = logger
+    const logger: winston.Logger = container.get(TYPES.Sync_Logger)
+    fatalLogger = logger
 
-  server.setErrorConfig((app) => {
-    app.use((error: Record<string, unknown>, _request: Request, response: Response, _next: NextFunction) => {
-      logger.error(error.stack)
+    server.setErrorConfig((app) => {
+      app.use((error: Record<string, unknown>, _request: Request, response: Response, _next: NextFunction) => {
+        logger.error('Unhandled syncing request failed.', safeErrorLogMetadata(error))
 
-      response.status(500).send({
-        error: {
-          message:
-            "Unfortunately, we couldn't handle your request. Please try again or contact our support if the error persists.",
-        },
+        response.status(500).send({
+          error: {
+            message:
+              "Unfortunately, we couldn't handle your request. Please try again or contact our support if the error persists.",
+          },
+        })
       })
     })
-  })
 
-  const app = await server.build()
+    const app = await server.build()
 
-  // Post-build JSON-404 fallback. Mounted AFTER build() so it sits behind the
-  // controller router and the setErrorConfig 500 handler, catching only
-  // genuinely-unmatched requests. Replaces the inert empty-base
-  // AnnotatedFallbackController (dead under Express 5). See notFoundFallback.ts.
-  app.use(notFoundFallback)
+    // Post-build JSON-404 fallback. Mounted AFTER build() so it sits behind the
+    // controller router and the setErrorConfig 500 handler, catching only
+    // genuinely-unmatched requests. Replaces the inert empty-base
+    // AnnotatedFallbackController (dead under Express 5). See notFoundFallback.ts.
+    app.use(notFoundFallback)
 
-  const serverInstance = app.listen(env.get('PORT'))
+    const serverInstance = app.listen(env.get('PORT'))
 
-  const keepAliveTimeout = env.get('HTTP_KEEP_ALIVE_TIMEOUT', true) ? +env.get('HTTP_KEEP_ALIVE_TIMEOUT', true) : 5000
+    const keepAliveTimeout = env.get('HTTP_KEEP_ALIVE_TIMEOUT', true) ? +env.get('HTTP_KEEP_ALIVE_TIMEOUT', true) : 5000
 
-  serverInstance.keepAliveTimeout = keepAliveTimeout
+    serverInstance.keepAliveTimeout = keepAliveTimeout
 
-  const grpcKeepAliveTime = env.get('GRPC_KEEP_ALIVE_TIME', true) ? +env.get('GRPC_KEEP_ALIVE_TIME', true) : 7_200_000
+    const grpcKeepAliveTime = env.get('GRPC_KEEP_ALIVE_TIME', true) ? +env.get('GRPC_KEEP_ALIVE_TIME', true) : 7_200_000
 
-  const grpcKeepAliveTimeout = env.get('GRPC_KEEP_ALIVE_TIMEOUT', true)
-    ? +env.get('GRPC_KEEP_ALIVE_TIMEOUT', true)
-    : 20_000
+    const grpcKeepAliveTimeout = env.get('GRPC_KEEP_ALIVE_TIMEOUT', true)
+      ? +env.get('GRPC_KEEP_ALIVE_TIMEOUT', true)
+      : 20_000
 
-  const grpcMaxMessageSize = env.get('GRPC_MAX_MESSAGE_SIZE', true)
-    ? +env.get('GRPC_MAX_MESSAGE_SIZE', true)
-    : 1024 * 1024 * 50
+    const grpcMaxMessageSize = env.get('GRPC_MAX_MESSAGE_SIZE', true)
+      ? +env.get('GRPC_MAX_MESSAGE_SIZE', true)
+      : 1024 * 1024 * 50
 
-  const grpcServer = new grpc.Server({
-    'grpc.keepalive_time_ms': grpcKeepAliveTime,
-    'grpc.keepalive_timeout_ms': grpcKeepAliveTimeout,
-    'grpc.default_compression_algorithm': grpc.compressionAlgorithms.gzip,
-    'grpc.max_receive_message_length': grpcMaxMessageSize,
-    'grpc.max_send_message_length': grpcMaxMessageSize,
-  })
-
-  const gRPCPort = env.get('GRPC_PORT', true) ? +env.get('GRPC_PORT', true) : 50051
-
-  const syncingServer = new SyncingServer(
-    container.get<SyncItems>(TYPES.Sync_SyncItems),
-    container.get<SyncResponseFactoryResolverInterface>(TYPES.Sync_SyncResponseFactoryResolver),
-    container.get<MapperInterface<SyncResponse20200115, SyncResponse>>(TYPES.Sync_SyncResponseGRPCMapper),
-    container.get<CheckForTrafficAbuse>(TYPES.Sync_CheckForTrafficAbuse),
-    container.get<boolean>(TYPES.Sync_STRICT_ABUSE_PROTECTION),
-    container.get<number>(TYPES.Sync_ITEM_OPERATIONS_ABUSE_TIMEFRAME_LENGTH_IN_MINUTES),
-    container.get<number>(TYPES.Sync_ITEM_OPERATIONS_ABUSE_THRESHOLD),
-    container.get<number>(TYPES.Sync_FREE_USERS_ITEM_OPERATIONS_ABUSE_THRESHOLD),
-    container.get<number>(TYPES.Sync_UPLOAD_BANDWIDTH_ABUSE_THRESHOLD),
-    container.get<number>(TYPES.Sync_FREE_USERS_UPLOAD_BANDWIDTH_ABUSE_THRESHOLD),
-    container.get<number>(TYPES.Sync_UPLOAD_BANDWIDTH_ABUSE_TIMEFRAME_LENGTH_IN_MINUTES),
-    container.get<winston.Logger>(TYPES.Sync_Logger),
-  )
-
-  grpcServer.addService(SyncingService, {
-    syncItems: syncingServer.syncItems.bind(syncingServer),
-  })
-  grpcServer.bindAsync(`0.0.0.0:${gRPCPort}`, grpc.ServerCredentials.createInsecure(), (error, port) => {
-    if (error) {
-      logger.error(`Failed to bind gRPC server: ${error.message}`)
-
-      return
-    }
-
-    logger.info(`gRPC server bound on port ${port}`)
-
-    grpcServer.start()
-
-    logger.info('gRPC server started')
-  })
-
-  process.on('SIGTERM', () => {
-    logger.info('SIGTERM signal received: closing HTTP server')
-    serverInstance.close(() => {
-      logger.info('HTTP server closed')
+    const grpcServer = new grpc.Server({
+      'grpc.keepalive_time_ms': grpcKeepAliveTime,
+      'grpc.keepalive_timeout_ms': grpcKeepAliveTimeout,
+      'grpc.default_compression_algorithm': grpc.compressionAlgorithms.gzip,
+      'grpc.max_receive_message_length': grpcMaxMessageSize,
+      'grpc.max_send_message_length': grpcMaxMessageSize,
     })
-    grpcServer.tryShutdown((error?: Error) => {
+
+    const gRPCPort = env.get('GRPC_PORT', true) ? +env.get('GRPC_PORT', true) : 50051
+
+    const syncingServer = new SyncingServer(
+      container.get<SyncItems>(TYPES.Sync_SyncItems),
+      container.get<SyncResponseFactoryResolverInterface>(TYPES.Sync_SyncResponseFactoryResolver),
+      container.get<MapperInterface<SyncResponse20200115, SyncResponse>>(TYPES.Sync_SyncResponseGRPCMapper),
+      container.get<CheckForTrafficAbuse>(TYPES.Sync_CheckForTrafficAbuse),
+      container.get<boolean>(TYPES.Sync_STRICT_ABUSE_PROTECTION),
+      container.get<number>(TYPES.Sync_ITEM_OPERATIONS_ABUSE_TIMEFRAME_LENGTH_IN_MINUTES),
+      container.get<number>(TYPES.Sync_ITEM_OPERATIONS_ABUSE_THRESHOLD),
+      container.get<number>(TYPES.Sync_FREE_USERS_ITEM_OPERATIONS_ABUSE_THRESHOLD),
+      container.get<number>(TYPES.Sync_UPLOAD_BANDWIDTH_ABUSE_THRESHOLD),
+      container.get<number>(TYPES.Sync_FREE_USERS_UPLOAD_BANDWIDTH_ABUSE_THRESHOLD),
+      container.get<number>(TYPES.Sync_UPLOAD_BANDWIDTH_ABUSE_TIMEFRAME_LENGTH_IN_MINUTES),
+      container.get<winston.Logger>(TYPES.Sync_Logger),
+    )
+
+    grpcServer.addService(SyncingService, {
+      syncItems: syncingServer.syncItems.bind(syncingServer),
+    })
+    grpcServer.bindAsync(`0.0.0.0:${gRPCPort}`, grpc.ServerCredentials.createInsecure(), (error, port) => {
       if (error) {
-        logger.error(`Failed to shutdown gRPC server: ${error.message}`)
-      } else {
-        logger.info('gRPC server closed')
-      }
-    })
-  })
+        logger.error('Failed to bind gRPC server.', safeErrorLogMetadata(error))
 
-  logger.info(`Server started on port ${process.env.PORT}`)
+        return
+      }
+
+      logger.info(`gRPC server bound on port ${port}`)
+
+      grpcServer.start()
+
+      logger.info('gRPC server started')
+    })
+
+    process.on('SIGTERM', () => {
+      logger.info('SIGTERM signal received: closing HTTP server')
+      serverInstance.close(() => {
+        logger.info('HTTP server closed')
+      })
+      grpcServer.tryShutdown((error?: Error) => {
+        if (error) {
+          logger.error('Failed to shutdown gRPC server.', safeErrorLogMetadata(error))
+        } else {
+          logger.info('gRPC server closed')
+        }
+      })
+    })
+
+    logger.info(`Server started on port ${process.env.PORT}`)
   })
   .catch((error: unknown) => {
     logFatal('startup', error)

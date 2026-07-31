@@ -16,11 +16,10 @@ export class UserDesignatedAsSurvivorInSharedVaultEventHandler implements Domain
     })
 
     if (result.isFailed()) {
-      this.logger.error(
-        `Failed designate survivor for user ${event.payload.userUuid} and shared vault ${
-          event.payload.sharedVaultUuid
-        }: ${result.getError()}`,
-      )
+      this.logger.error('Failed to designate a survivor for a shared vault.', {
+        userId: event.payload.userUuid,
+        sharedVaultId: event.payload.sharedVaultUuid,
+      })
     }
   }
 }

@@ -1,5 +1,6 @@
 import { DomainEventHandlerInterface, SharedVaultFileRemovedEvent } from '@standardnotes/domain-events'
 import {
+  safeErrorLogMetadata,
   NotificationPayload,
   NotificationPayloadIdentifierType,
   NotificationType,
@@ -20,7 +21,7 @@ export class SharedVaultFileRemovedEventHandler implements DomainEventHandlerInt
   async handle(event: SharedVaultFileRemovedEvent): Promise<void> {
     const sharedVaultUuidOrError = Uuid.create(event.payload.sharedVaultUuid)
     if (sharedVaultUuidOrError.isFailed()) {
-      this.logger.error(sharedVaultUuidOrError.getError())
+      this.logger.error('Operation failed.', safeErrorLogMetadata(sharedVaultUuidOrError.getError()))
 
       return
     }
@@ -32,7 +33,7 @@ export class SharedVaultFileRemovedEventHandler implements DomainEventHandlerInt
     })
 
     if (result.isFailed()) {
-      this.logger.error(`Failed to update storage quota used in shared vault: ${result.getError()}`)
+      this.logger.error('Failed to update storage quota used in shared vault.', safeErrorLogMetadata(result.getError()))
 
       return
     }
@@ -53,7 +54,7 @@ export class SharedVaultFileRemovedEventHandler implements DomainEventHandlerInt
       version: '1.0',
     })
     if (notificationResult.isFailed()) {
-      this.logger.error(`Failed to add notification for users: ${notificationResult.getError()}`)
+      this.logger.error('Failed to add notification for users.', safeErrorLogMetadata(notificationResult.getError()))
     }
   }
 }

@@ -1,4 +1,4 @@
-import { AxiosInstance, AxiosError, AxiosResponse, Method } from 'axios'
+import { AxiosInstance, AxiosResponse, Method } from 'axios'
 import { Request, Response } from 'express'
 import { inject, injectable, optional } from 'inversify'
 import { Logger } from 'winston'
@@ -10,6 +10,7 @@ import { TimerInterface } from '@standardnotes/time'
 import { ResponseLocals } from '../../Controller/ResponseLocals'
 import { OfflineResponseLocals } from '../../Controller/OfflineResponseLocals'
 import { resolveClientIpFromRequest } from '../../Controller/ClientIp'
+import { PublicServiceFailure, publicHttpErrorStatus, safeHttpErrorLogMetadata } from '../Logging/SafeLog'
 
 @injectable()
 export class HttpServiceProxy implements ServiceProxyInterface {
@@ -275,37 +276,16 @@ export class HttpServiceProxy implements ServiceProxyInterface {
 
       return serviceResponse
     } catch (error) {
-      let detailedErrorMessage = (error as Error).message
-      if (error instanceof AxiosError) {
-        detailedErrorMessage = `Status: ${error.status}, code: ${error.code}, message: ${error.message}`
-      }
+      const safeError = safeHttpErrorLogMetadata(error, {
+        action: 'service-proxy.request',
+        endpoint: `${serverUrl}/${endpoint}`,
+        method: request.method,
+        userId: (locals as ResponseLocals).user ? (locals as ResponseLocals).user.uuid : undefined,
+      })
+      this.logger.error('Could not complete request on underlying service.', safeError)
+      this.logger.debug('Underlying service failure summary.', safeError)
 
-      this.logger.error(
-        `Could not pass the request to ${serverUrl}/${endpoint} on underlying service: ${detailedErrorMessage}`,
-        {
-          userId: (locals as ResponseLocals).user ? (locals as ResponseLocals).user.uuid : undefined,
-        },
-      )
-
-      this.logger.debug(`Response error: ${JSON.stringify(error)}`)
-
-      if ((error as AxiosError).response?.headers['content-type']) {
-        response.setHeader('content-type', (error as AxiosError).response?.headers['content-type'] as string)
-      }
-
-      const errorCode =
-        (error as AxiosError).isAxiosError && !isNaN(+((error as AxiosError).code as string))
-          ? +((error as AxiosError).code as string)
-          : 500
-
-      const responseErrorMessage = (error as AxiosError).response?.data
-
-      response
-        .status(errorCode)
-        .send(
-          responseErrorMessage ??
-            "Unfortunately, we couldn't handle your request. Please try again or contact our support if the error persists.",
-        )
+      response.status(publicHttpErrorStatus(error)).send(PublicServiceFailure)
     }
 
     return

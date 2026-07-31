@@ -38,6 +38,6 @@ describe('AccountDeletionVerificationPassedEventHandler', () => {
 
     await createHandler().handle(event)
 
-    expect(logger.error).toHaveBeenCalledWith('AccountDeletionVerificationPassedEventHandler failed: could not delete')
+    expect(logger.error).toHaveBeenCalledWith('AccountDeletionVerificationPassedEventHandler failed.')
   })
 })

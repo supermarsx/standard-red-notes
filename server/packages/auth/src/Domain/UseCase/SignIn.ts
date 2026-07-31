@@ -23,6 +23,7 @@ import { AuditAction } from '../AuditLog/AuditAction'
 import { WebhookDispatcherInterface } from '../Webhook/WebhookDispatcherInterface'
 import { WebhookEvent } from '../Webhook/WebhookEvent'
 import { RegistrationConfigResolverInterface } from '../Registration/RegistrationConfigResolverInterface'
+import { safeErrorLogMetadata } from '../Logging/SafeLog'
 
 export class SignIn implements UseCaseInterface {
   constructor(
@@ -116,7 +117,7 @@ export class SignIn implements UseCaseInterface {
     }
 
     if (!user) {
-      this.logger.debug(`User with email ${dto.email} was not found`)
+      this.logger.debug('No user was found for the supplied sign-in identifier.')
 
       return {
         success: false,
@@ -232,7 +233,7 @@ export class SignIn implements UseCaseInterface {
           metadata: { result: 'success' },
         })
       } catch (error) {
-        this.logger.error(`Could not dispatch user.login webhook: ${(error as Error).message}`)
+        this.logger.error('Could not dispatch the user.login webhook.', safeErrorLogMetadata(error))
       }
     }
   }
@@ -315,7 +316,7 @@ export class SignIn implements UseCaseInterface {
         }),
       )
     } catch (error) {
-      this.logger.error(`Could not publish sign in event: ${(error as Error).message}`)
+      this.logger.error('Could not publish the sign-in event.', safeErrorLogMetadata(error))
     }
   }
 

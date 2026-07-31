@@ -1,4 +1,5 @@
 import {
+  safeErrorLogMetadata,
   ContentType,
   Dates,
   NotificationPayload,
@@ -241,14 +242,14 @@ export class UpdateExistingItem implements UseCaseInterface<Item> {
       if (notificationsResult.isFailed()) {
         // Post-persist: a notification failure must NOT be reported as a conflict.
         this.logger.error(
-          `[${userUuid.value}] Post-persist notifications failed for updated item ${dto.existingItem.id.toString()} (item already saved). Error: ${notificationsResult.getError()}`,
+          `[${userUuid.value}] Post-persist notifications failed for updated item ${dto.existingItem.id.toString()} (item already saved).`,
+          safeErrorLogMetadata(notificationsResult.getError()),
         )
       }
     } catch (error) {
       this.logger.error(
-        `[${userUuid.value}] Post-persist side effects threw for updated item ${dto.existingItem.id.toString()} (item already saved). Error: ${
-          (error as Error).message
-        }`,
+        `[${userUuid.value}] Post-persist side effects threw for updated item ${dto.existingItem.id.toString()} (item already saved).`,
+        safeErrorLogMetadata(error),
       )
     }
 

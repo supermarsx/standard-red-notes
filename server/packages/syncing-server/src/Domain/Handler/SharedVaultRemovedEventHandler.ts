@@ -1,3 +1,4 @@
+import { safeErrorLogMetadata } from '@standardnotes/domain-core'
 import { DomainEventHandlerInterface, SharedVaultRemovedEvent } from '@standardnotes/domain-events'
 import { RemoveItemsFromSharedVault } from '../UseCase/SharedVaults/RemoveItemsFromSharedVault/RemoveItemsFromSharedVault'
 import { Logger } from 'winston'
@@ -15,7 +16,8 @@ export class SharedVaultRemovedEventHandler implements DomainEventHandlerInterfa
 
     if (result.isFailed()) {
       this.logger.error(
-        `Failed to remove items from shared vault ${event.payload.sharedVaultUuid}: ${result.getError()}`,
+        `Failed to remove items from shared vault ${event.payload.sharedVaultUuid}.`,
+        safeErrorLogMetadata(result.getError()),
       )
     }
   }

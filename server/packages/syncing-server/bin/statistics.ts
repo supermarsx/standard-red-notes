@@ -1,3 +1,4 @@
+import { safeErrorLogMetadata } from '@standardnotes/domain-core'
 import 'reflect-metadata'
 
 import { Logger } from 'winston'
@@ -111,7 +112,7 @@ void container.load().then((container) => {
       process.exit(0)
     })
     .catch((error) => {
-      logger.error('Error while sending statistics', error)
+      logger.error('Error while sending statistics', safeErrorLogMetadata(error))
 
       process.exit(1)
     })

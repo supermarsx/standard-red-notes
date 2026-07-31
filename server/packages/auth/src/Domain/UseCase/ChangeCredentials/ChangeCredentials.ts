@@ -15,6 +15,7 @@ import { getBody, getSubject } from '../../Email/UserEmailChanged'
 import { Logger } from 'winston'
 import { AuthResponseCreationResult } from '../../Auth/AuthResponseCreationResult'
 import { ApiVersion } from '../../Api/ApiVersion'
+import { safeErrorLogMetadata } from '../../Logging/SafeLog'
 
 export class ChangeCredentials implements UseCaseInterface<AuthResponseCreationResult> {
   constructor(
@@ -167,7 +168,7 @@ export class ChangeCredentials implements UseCaseInterface<AuthResponseCreationR
         }),
       )
     } catch (error) {
-      this.logger.error(`Could not publish email changed request for email: ${(error as Error).message}`)
+      this.logger.error('Could not publish the email-changed request.', safeErrorLogMetadata(error))
     }
   }
 }

@@ -63,14 +63,18 @@ describe('OpenTelemetryTracer', () => {
     expect(parentSpan.end).toHaveBeenCalledTimes(1)
   })
 
-  it('records the exception on the internal span before ending both', () => {
+  it('records only a safe exception classification on the internal span before ending both', () => {
     const tracer = createTracer()
     tracer.startSpan('handle-event', 'persist')
     const error = new Error('handler blew up')
 
     tracer.stopSpanWithError(error)
 
-    expect(internalSpan.recordException).toHaveBeenCalledWith(error)
+    expect(internalSpan.recordException).toHaveBeenCalledWith({
+      name: 'Error',
+      message: 'Operation failed; exception details were redacted.',
+    })
+    expect(JSON.stringify(internalSpan.recordException.mock.calls)).not.toContain('handler blew up')
     expect(internalSpan.end).toHaveBeenCalledTimes(1)
     expect(parentSpan.end).toHaveBeenCalledTimes(1)
     // The parent carries the failure via its child, not a second recorded exception.

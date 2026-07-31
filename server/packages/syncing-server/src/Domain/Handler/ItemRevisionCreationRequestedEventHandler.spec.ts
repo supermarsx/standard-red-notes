@@ -37,6 +37,10 @@ describe('ItemRevisionCreationRequestedEventHandler', () => {
 
     await createHandler().handle(event())
 
-    expect(logger.error).toHaveBeenCalledWith('Item revision requested handler failed: Could not find item')
+    expect(logger.error).toHaveBeenCalledWith(
+      'Item revision requested handler failed.',
+      expect.objectContaining({ errorType: 'Error' }),
+    )
+    expect(JSON.stringify((logger.error as jest.Mock).mock.calls)).not.toContain('Could not find item')
   })
 })

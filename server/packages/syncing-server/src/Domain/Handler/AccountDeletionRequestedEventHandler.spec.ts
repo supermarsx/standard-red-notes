@@ -72,27 +72,48 @@ describe('AccountDeletionRequestedEventHandler', () => {
     expect(itemRepository.deleteByUserUuidAndNotInSharedVault).not.toHaveBeenCalled()
     expect(deleteSharedVaults.execute).not.toHaveBeenCalled()
     expect(removeUserFromSharedVaults.execute).not.toHaveBeenCalled()
-    expect(logger.error).toHaveBeenCalledWith(expect.any(String), {
-      userId: 'not-a-uuid',
-      codeTag: 'AccountDeletionRequestedEventHandler',
-    })
+    expect(logger.error).toHaveBeenCalledWith(
+      'Operation failed.',
+      expect.objectContaining({
+        errorType: 'Error',
+        userId: 'not-a-uuid',
+        codeTag: 'AccountDeletionRequestedEventHandler',
+      }),
+    )
+    expect(JSON.stringify((logger.error as jest.Mock).mock.calls)).not.toContain('Expected a valid uuid')
   })
 
   it('rejects for retry and does not log completion when the user cannot be removed from other vaults', async () => {
     removeUserFromSharedVaults.execute = jest.fn().mockResolvedValue(Result.fail('Oops'))
 
-    await expect(createHandler().handle(event())).rejects.toThrow('Failed to remove user from shared vaults: Oops')
+    await expect(createHandler().handle(event())).rejects.toThrow('Failed to remove user from shared vaults.')
 
-    expect(logger.error).toHaveBeenCalledWith('Failed to remove user from shared vaults: Oops', { userId: userUuid })
+    expect(logger.error).toHaveBeenCalledWith(
+      'Account deletion cleanup operation failed.',
+      expect.objectContaining({
+        errorType: 'Error',
+        operation: 'remove-user-from-shared-vaults',
+        userId: userUuid,
+      }),
+    )
+    expect(JSON.stringify((logger.error as jest.Mock).mock.calls)).not.toContain('Oops')
     expect(logger.info).not.toHaveBeenCalled()
   })
 
   it('runs independent cleanup before rejecting for retry when shared vault deletion fails', async () => {
     deleteSharedVaults.execute = jest.fn().mockResolvedValue(Result.fail('Oops'))
 
-    await expect(createHandler().handle(event())).rejects.toThrow('Failed to delete shared vaults: Oops')
+    await expect(createHandler().handle(event())).rejects.toThrow('Failed to delete shared vaults.')
 
-    expect(logger.error).toHaveBeenCalledWith('Failed to delete shared vaults: Oops', { userId: userUuid })
+    expect(logger.error).toHaveBeenCalledWith(
+      'Account deletion cleanup operation failed.',
+      expect.objectContaining({
+        errorType: 'Error',
+        operation: 'delete-shared-vaults',
+        userId: userUuid,
+      }),
+    )
+    expect(JSON.stringify((logger.error as jest.Mock).mock.calls)).not.toContain('Oops')
     expect(itemRepository.deleteByUserUuidInSharedVaults).not.toHaveBeenCalled()
     expect(removeUserFromSharedVaults.execute).toHaveBeenCalledWith({ userUuid })
     expect(logger.info).not.toHaveBeenCalled()
@@ -103,18 +124,29 @@ describe('AccountDeletionRequestedEventHandler', () => {
     deleteSharedVaults.execute = jest.fn().mockResolvedValue(Result.fail('vault deletion failed'))
     removeUserFromSharedVaults.execute = jest.fn().mockResolvedValue(Result.fail('membership removal failed'))
 
-    await expect(createHandler().handle(event())).rejects.toThrow(
-      'Failed to delete items outside shared vaults: database unavailable',
-    )
+    await expect(createHandler().handle(event())).rejects.toThrow('Failed to delete items outside shared vaults.')
 
     expect(deleteSharedVaults.execute).toHaveBeenCalledWith({ ownerUuid: userUuid, allowSurviving: true })
     expect(removeUserFromSharedVaults.execute).toHaveBeenCalledWith({ userUuid })
-    expect(logger.error).toHaveBeenCalledWith('Failed to delete shared vaults: vault deletion failed', {
-      userId: userUuid,
-    })
-    expect(logger.error).toHaveBeenCalledWith('Failed to remove user from shared vaults: membership removal failed', {
-      userId: userUuid,
-    })
+    expect(logger.error).toHaveBeenCalledWith(
+      'Account deletion cleanup operation failed.',
+      expect.objectContaining({
+        errorType: 'Error',
+        operation: 'delete-shared-vaults',
+        userId: userUuid,
+      }),
+    )
+    expect(logger.error).toHaveBeenCalledWith(
+      'Account deletion cleanup operation failed.',
+      expect.objectContaining({
+        errorType: 'Error',
+        operation: 'remove-user-from-shared-vaults',
+        userId: userUuid,
+      }),
+    )
+    expect(JSON.stringify((logger.error as jest.Mock).mock.calls)).not.toContain('database unavailable')
+    expect(JSON.stringify((logger.error as jest.Mock).mock.calls)).not.toContain('vault deletion failed')
+    expect(JSON.stringify((logger.error as jest.Mock).mock.calls)).not.toContain('membership removal failed')
     expect(logger.info).not.toHaveBeenCalled()
   })
 
@@ -123,11 +155,18 @@ describe('AccountDeletionRequestedEventHandler', () => {
     deleteSharedVaults.execute = jest.fn().mockResolvedValue(Result.ok(new Map([[deletedVaultUuid, []]])))
     itemRepository.deleteByUserUuidInSharedVaults = jest.fn().mockRejectedValue(Error('database unavailable'))
 
-    await expect(createHandler().handle(event())).rejects.toThrow(
-      'Failed to delete items from shared vaults: database unavailable',
-    )
+    await expect(createHandler().handle(event())).rejects.toThrow('Failed to delete items from shared vaults.')
 
     expect(removeUserFromSharedVaults.execute).toHaveBeenCalledWith({ userUuid })
+    expect(logger.error).toHaveBeenCalledWith(
+      'Account deletion cleanup operation failed.',
+      expect.objectContaining({
+        errorType: 'Error',
+        operation: 'delete-items-from-shared-vaults',
+        userId: userUuid,
+      }),
+    )
+    expect(JSON.stringify((logger.error as jest.Mock).mock.calls)).not.toContain('database unavailable')
     expect(logger.info).not.toHaveBeenCalled()
   })
 })

@@ -54,7 +54,7 @@ describe('SQSDomainEventSubscriber', () => {
     expect(consumer.start).toHaveBeenCalled()
   })
 
-  it('routes both error and processing_error to the logger', () => {
+  it('routes both error and processing_error to safe logger metadata', () => {
     createSubscriber().start()
     const error = new Error('sqs blew up')
 
@@ -65,7 +65,11 @@ describe('SQSDomainEventSubscriber', () => {
     registeredOn('processing_error')[0](error as never)
 
     expect(logger.error).toHaveBeenCalledTimes(2)
-    expect(logger.error).toHaveBeenCalledWith('Error occured while handling SQS message: %O', error)
+    expect(logger.error).toHaveBeenCalledWith(
+      'Error occurred while handling an SQS message.',
+      expect.objectContaining({ errorType: 'Error' }),
+    )
+    expect(JSON.stringify(logger.error.mock.calls)).not.toContain('sqs blew up')
   })
 
   it('forwards a received message body to the domain event message handler', async () => {

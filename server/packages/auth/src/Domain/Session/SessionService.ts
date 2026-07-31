@@ -23,6 +23,7 @@ import { UserSubscriptionRepositoryInterface } from '../Subscription/UserSubscri
 import { GetSetting } from '../UseCase/GetSetting/GetSetting'
 import { SessionCreationResult } from './SessionCreationResult'
 import { ApiVersion } from '../Api/ApiVersion'
+import { safeErrorLogMetadata } from '../Logging/SafeLog'
 
 export class SessionService implements SessionServiceInterface {
   static readonly SESSION_TOKEN_VERSION = 1
@@ -73,10 +74,10 @@ export class SessionService implements SessionServiceInterface {
         subscriptionPlanName: userSubscription ? userSubscription.planName : null,
       })
       if (traceSessionResult.isFailed()) {
-        this.logger.error(traceSessionResult.getError())
+        this.logger.error('Could not trace the session while creating a cross-service token.')
       }
     } catch (error) {
-      this.logger.error(`Could not trace session while creating cross service token.: ${(error as Error).message}`)
+      this.logger.error('Could not trace session while creating a cross-service token.', safeErrorLogMetadata(error))
     }
 
     return {
@@ -149,7 +150,7 @@ export class SessionService implements SessionServiceInterface {
 
       return osInfo
     } catch (error) {
-      this.logger.warn(`Could not parse operating system info. User agent: ${userAgent}: ${(error as Error).message}`)
+      this.logger.warn('Could not parse operating-system information from the user agent.', safeErrorLogMetadata(error))
 
       return 'Unknown OS'
     }
@@ -170,7 +171,7 @@ export class SessionService implements SessionServiceInterface {
 
       return clientInfo
     } catch (error) {
-      this.logger.warn(`Could not parse browser info. User agent: ${userAgent}: ${(error as Error).message}`)
+      this.logger.warn('Could not parse browser information from the user agent.', safeErrorLogMetadata(error))
 
       return 'Unknown Client'
     }

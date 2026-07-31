@@ -1,3 +1,4 @@
+import { safeErrorLogMetadata } from '@standardnotes/domain-core'
 import { Consumer } from 'sqs-consumer'
 import * as OpenTelemetryApi from '@opentelemetry/api'
 import { Message, SQSClient } from '@aws-sdk/client-sqs'
@@ -61,10 +62,14 @@ export class SQSOpenTelemetryDomainEventSubscriber implements DomainEventSubscri
   }
 
   handleError(error: Error): void {
-    this.logger.error('Error occured while handling SQS message: %O', error)
+    const safeError = safeErrorLogMetadata(error)
+    this.logger.error('Error occurred while handling an SQS message.', safeError)
 
     if (this.currentSpan) {
-      this.currentSpan.recordException(error)
+      this.currentSpan.recordException({
+        name: safeError.errorType,
+        message: 'SQS message handling failed; exception details were redacted.',
+      })
       this.currentSpan.end()
       this.currentSpan = undefined
     }

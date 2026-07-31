@@ -1,3 +1,4 @@
+import { safeErrorLogMetadata } from '@standardnotes/domain-core'
 import { inject, injectable } from 'inversify'
 import { Logger } from 'winston'
 
@@ -64,7 +65,8 @@ export class UploadFileChunk implements UseCaseInterface {
       }
     } catch (error) {
       this.logger.error(
-        `Could not upload file chunk for resource: ${dto.resourceRemoteIdentifier} - ${(error as Error).message}`,
+        `Could not upload file chunk for resource: ${dto.resourceRemoteIdentifier}.`,
+        safeErrorLogMetadata(error),
       )
 
       return {

@@ -78,7 +78,7 @@ export class TriggerEmailBackupForAllUsers implements UseCaseInterface<void> {
 
         const result = await this.triggerEmailBackupForUserUseCase.execute({ userUuid })
         if (result.isFailed()) {
-          this.logger.error(`Failed to trigger email backup for user: ${result.getError()}`, { userId: userUuid })
+          this.logger.error('Failed to trigger an email backup for a user.', { userId: userUuid })
           failedUsers++
           continue
         }

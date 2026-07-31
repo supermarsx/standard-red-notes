@@ -1,5 +1,6 @@
 import { Redis } from 'ioredis'
 import { ConnectionRegistry, dispatch, parseDispatchMessage, type SendableSocket } from './registry.js'
+import { safeErrorLogMetadata } from './safeLog.js'
 
 /** Redis pub/sub channel carrying push messages, per the SN contract. */
 export const WEBSOCKET_MESSAGES_CHANNEL = 'websocket-messages'
@@ -31,7 +32,7 @@ export function startRedisBridge<S extends SendableSocket>(
   })
 
   client.on('error', (err) => {
-    opts.logger.error('[redis] connection error', err instanceof Error ? err.message : err)
+    opts.logger.error('[redis] connection error', safeErrorLogMetadata(err))
   })
 
   client.on('ready', () => {
@@ -40,14 +41,16 @@ export function startRedisBridge<S extends SendableSocket>(
 
   client.subscribe(WEBSOCKET_MESSAGES_CHANNEL, (err, count) => {
     if (err) {
-      opts.logger.error('[redis] subscribe failed', err.message)
+      opts.logger.error('[redis] subscribe failed', safeErrorLogMetadata(err))
       return
     }
     opts.logger.info(`[redis] subscribed to ${WEBSOCKET_MESSAGES_CHANNEL} (${count} channels)`)
   })
 
   client.on('message', (channel, raw) => {
-    if (channel !== WEBSOCKET_MESSAGES_CHANNEL) return
+    if (channel !== WEBSOCKET_MESSAGES_CHANNEL) {
+      return
+    }
     handleRawMessage(registry, raw, opts.logger)
   })
 
@@ -68,14 +71,15 @@ export function handleRawMessage<S extends SendableSocket>(
   try {
     parsed = parseDispatchMessage(raw)
   } catch (err) {
-    logger.warn('[redis] dropping malformed message', err instanceof Error ? err.message : err)
+    logger.warn('[redis] dropping malformed message', safeErrorLogMetadata(err))
     return 0
   }
 
   const sent = dispatch(registry, parsed)
-  logger.info(
-    `[push] user=${parsed.userUuid} sockets=${sent}` +
-      (parsed.originatingSessionUuid ? ` excludeSession=${parsed.originatingSessionUuid}` : ''),
-  )
+  logger.info('[push] dispatched websocket message', {
+    userId: parsed.userUuid,
+    socketCount: sent,
+    originExcluded: parsed.originatingSessionUuid !== undefined,
+  })
   return sent
 }

@@ -1,5 +1,5 @@
 import { KeyParamsData } from '@standardnotes/responses'
-import { MapperInterface } from '@standardnotes/domain-core'
+import { safeErrorLogMetadata, MapperInterface } from '@standardnotes/domain-core'
 import { Logger } from 'winston'
 
 import { Item } from '../../Domain/Item/Item'
@@ -68,7 +68,7 @@ export class WebDAVItemBackupService implements WebDAVItemBackupServiceInterface
     } catch (error) {
       // Errors are logged and swallowed so a single user's failed upload never
       // crashes the batch job. The app password is never logged.
-      this.logger.error(`Could not upload Nextcloud WebDAV backup: ${(error as Error).message}`)
+      this.logger.error('Could not upload Nextcloud WebDAV backup.', safeErrorLogMetadata(error))
 
       return null
     }

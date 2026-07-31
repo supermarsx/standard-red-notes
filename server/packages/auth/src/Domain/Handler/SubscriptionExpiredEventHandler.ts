@@ -26,7 +26,6 @@ export class SubscriptionExpiredEventHandler implements DomainEventHandlerInterf
       this.logger.error('Subscription ID is missing', {
         codeTag: 'SubscriptionExpiredEventHandler.handle',
         subscriptionId: event.payload.subscriptionId,
-        userId: event.payload.userEmail,
       })
 
       return
@@ -60,7 +59,7 @@ export class SubscriptionExpiredEventHandler implements DomainEventHandlerInterf
     for (const userSubscription of userSubscriptions) {
       const userUuidOrError = Uuid.create(userSubscription.userUuid)
       if (userUuidOrError.isFailed()) {
-        this.logger.warn(`Could not remove role from user with uuid: ${userUuidOrError.getError()}`)
+        this.logger.warn('Could not remove a role because a stored user UUID was invalid.')
 
         continue
       }

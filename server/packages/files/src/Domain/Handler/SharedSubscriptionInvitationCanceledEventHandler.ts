@@ -1,3 +1,4 @@
+import { safeErrorLogMetadata } from '@standardnotes/domain-core'
 import {
   SharedSubscriptionInvitationCanceledEvent,
   DomainEventHandlerInterface,
@@ -27,7 +28,8 @@ export class SharedSubscriptionInvitationCanceledEventHandler implements DomainE
 
     if (result.isFailed()) {
       this.logger.error(
-        `Could not mark files to be removed for invitee: ${event.payload.inviteeIdentifier}: ${result.getError()}`,
+        `Could not mark files to be removed for invitee: ${event.payload.inviteeIdentifier}.`,
+        safeErrorLogMetadata(result.getError()),
       )
 
       return

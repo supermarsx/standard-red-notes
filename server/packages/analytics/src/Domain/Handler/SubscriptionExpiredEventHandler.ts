@@ -1,4 +1,4 @@
-import { Username } from '@standardnotes/domain-core'
+import { safeErrorLogMetadata, Username } from '@standardnotes/domain-core'
 import { DomainEventHandlerInterface, SubscriptionExpiredEvent } from '@standardnotes/domain-events'
 import { inject, injectable, optional } from 'inversify'
 import { Logger } from 'winston'
@@ -57,7 +57,8 @@ export class SubscriptionExpiredEventHandler implements DomainEventHandlerInterf
 
     if (result.isFailed()) {
       this.logger.error(
-        `[${event.type}][${event.payload.subscriptionId}] Could not save revenue modification: ${result.getError()}`,
+        `[${event.type}][${event.payload.subscriptionId}] Could not save revenue modification.`,
+        safeErrorLogMetadata(result.getError()),
       )
     }
 

@@ -72,8 +72,8 @@ export class HomeServerRuntime {
       this.scheduler = options.startScheduler()
 
       this.signalHandler = () => {
-        void options.onSigterm().catch((error: unknown) => {
-          options.logger.error(`Failed to stop home server after SIGTERM: ${(error as Error).message}`)
+        void options.onSigterm().catch(() => {
+          options.logger.error('Failed to stop home server after SIGTERM.')
         })
       }
       this.signalTarget.on('SIGTERM', this.signalHandler)

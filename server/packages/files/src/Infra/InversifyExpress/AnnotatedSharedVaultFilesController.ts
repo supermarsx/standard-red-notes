@@ -1,3 +1,4 @@
+import { safeErrorLogMetadata } from '@standardnotes/domain-core'
 import { BaseHttpController, controller, httpDelete, httpGet, httpPost, results } from 'inversify-express-utils'
 import { Request, Response } from 'express'
 import { inject } from 'inversify'
@@ -136,7 +137,7 @@ export class AnnotatedSharedVaultFilesController extends BaseHttpController {
     })
 
     if (result.isFailed()) {
-      this.logger.error(result.getError())
+      this.logger.error('Operation failed.', safeErrorLogMetadata(result.getError()))
 
       return this.badRequest(result.getError())
     }
@@ -251,7 +252,7 @@ export class AnnotatedSharedVaultFilesController extends BaseHttpController {
       // and tear both streams down. Also destroy the read stream if the client
       // disconnects, so we do not leak storage sockets.
       readStream.on('error', (error: Error) => {
-        this.logger.error(`Error while streaming file download: ${error.message}`)
+        this.logger.error('Error while streaming file download.', safeErrorLogMetadata(error))
         readStream.destroy()
         response.destroy(error)
       })

@@ -4637,7 +4637,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@standardnotes/domain-core@npm:^1.40.0, @standardnotes/domain-core@workspace:^, @standardnotes/domain-core@workspace:packages/domain-core":
+"@standardnotes/domain-core@npm:^1.40.0, @standardnotes/domain-core@workspace:*, @standardnotes/domain-core@workspace:^, @standardnotes/domain-core@workspace:packages/domain-core":
   version: 0.0.0-use.local
   resolution: "@standardnotes/domain-core@workspace:packages/domain-core"
   dependencies:
@@ -4673,6 +4673,7 @@ __metadata:
     "@opentelemetry/resource-detector-aws": "npm:^2.20.0"
     "@opentelemetry/sdk-node": "npm:^0.220.0"
     "@opentelemetry/semantic-conventions": "npm:^1.43.0"
+    "@standardnotes/domain-core": "workspace:*"
     "@standardnotes/domain-events": "workspace:*"
     "@swc/core": "npm:^1.15.43"
     "@swc/jest": "npm:^0.2.39"

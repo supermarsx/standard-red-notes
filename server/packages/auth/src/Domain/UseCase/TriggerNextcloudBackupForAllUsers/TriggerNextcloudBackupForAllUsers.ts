@@ -89,7 +89,7 @@ export class TriggerNextcloudBackupForAllUsers implements UseCaseInterface<void>
 
         const result = await this.triggerNextcloudBackupForUserUseCase.execute({ userUuid })
         if (result.isFailed()) {
-          this.logger.error(`Failed to trigger Nextcloud backup for user: ${result.getError()}`, { userId: userUuid })
+          this.logger.error('Failed to trigger a Nextcloud backup for a user.', { userId: userUuid })
           failedUsers++
           continue
         }
@@ -141,7 +141,9 @@ export class TriggerNextcloudBackupForAllUsers implements UseCaseInterface<void>
     })
 
     if (result.isFailed()) {
-      this.logger.error(`Failed to record Nextcloud backup last-run for user ${userUuid}: ${result.getError()}`)
+      this.logger.error('Failed to record the Nextcloud backup last-run time.', {
+        userId: userUuid,
+      })
     }
   }
 }

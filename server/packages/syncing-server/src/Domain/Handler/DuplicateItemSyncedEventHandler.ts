@@ -1,3 +1,4 @@
+import { safeErrorLogMetadata } from '@standardnotes/domain-core'
 import {
   DomainEventHandlerInterface,
   DomainEventPublisherInterface,
@@ -50,9 +51,8 @@ export class DuplicateItemSyncedEventHandler implements DomainEventHandlerInterf
         )
       } catch (error) {
         this.logger.error(
-          `Failed to publish revisions copy requested event for item ${item.id.toString()} (item already persisted). Error: ${
-            (error as Error).message
-          }`,
+          `Failed to publish revisions copy requested event for item ${item.id.toString()} (item already persisted).`,
+          safeErrorLogMetadata(error),
         )
       }
     }

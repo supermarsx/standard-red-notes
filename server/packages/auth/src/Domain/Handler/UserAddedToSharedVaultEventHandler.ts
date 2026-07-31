@@ -18,7 +18,7 @@ export class UserAddedToSharedVaultEventHandler implements DomainEventHandlerInt
     })
 
     if (result.isFailed()) {
-      this.logger.error(`Failed to add user to shared vault: ${result.getError()}`)
+      this.logger.error('Failed to add a user to a shared vault.')
     }
   }
 }

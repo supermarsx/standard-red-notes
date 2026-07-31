@@ -133,7 +133,7 @@ export class VerifyMFA implements UseCaseInterface {
           authenticatorResponse: dto.requestParams.authenticator_response as AuthenticationResponseJSON,
         })
         if (verificationResultOrError.isFailed()) {
-          this.logger.debug(`Could not verify U2F authentication: ${verificationResultOrError.getError()}`)
+          this.logger.debug('Could not verify U2F authentication.')
 
           return {
             success: false,
@@ -258,7 +258,7 @@ export class VerifyMFA implements UseCaseInterface {
     })
 
     if (verificationResultOrError.isFailed()) {
-      this.logger.debug(`Could not verify magic link code: ${verificationResultOrError.getError()}`)
+      this.logger.debug('Could not verify the magic-link code.')
 
       return {
         success: false,

@@ -118,7 +118,11 @@ describe('SharedVaultFileMovedEventHandler', () => {
 
     expect(updateStorageQuotaUsedInSharedVault.execute).toHaveBeenCalledTimes(1)
     expect(addNotificationsForUsers.execute).not.toHaveBeenCalled()
-    expect(logger.error).toHaveBeenCalledWith('Failed to update storage quota used in shared vault: Oops')
+    expect(logger.error).toHaveBeenCalledWith(
+      'Failed to update storage quota used in shared vault.',
+      expect.objectContaining({ errorType: 'Error' }),
+    )
+    expect(JSON.stringify((logger.error as jest.Mock).mock.calls)).not.toContain('Oops')
   })
 
   it('stops after the source vault when crediting the target vault failed', async () => {
@@ -130,7 +134,11 @@ describe('SharedVaultFileMovedEventHandler', () => {
     await createHandler().handle(event(sourceVaultUuid, targetVaultUuid))
 
     expect(addNotificationsForUsers.execute).toHaveBeenCalledTimes(1)
-    expect(logger.error).toHaveBeenCalledWith('Failed to update storage quota used in shared vault: Oops')
+    expect(logger.error).toHaveBeenCalledWith(
+      'Failed to update storage quota used in shared vault.',
+      expect.objectContaining({ errorType: 'Error' }),
+    )
+    expect(JSON.stringify((logger.error as jest.Mock).mock.calls)).not.toContain('Oops')
   })
 
   it('logs a failure to notify either vault', async () => {
@@ -138,7 +146,16 @@ describe('SharedVaultFileMovedEventHandler', () => {
 
     await createHandler().handle(event(sourceVaultUuid, targetVaultUuid))
 
-    expect(logger.error).toHaveBeenNthCalledWith(1, 'Failed to add notification for users: Oops')
-    expect(logger.error).toHaveBeenNthCalledWith(2, 'Failed to add notification for users: Oops')
+    expect(logger.error).toHaveBeenNthCalledWith(
+      1,
+      'Failed to add notification for users.',
+      expect.objectContaining({ errorType: 'Error' }),
+    )
+    expect(logger.error).toHaveBeenNthCalledWith(
+      2,
+      'Failed to add notification for users.',
+      expect.objectContaining({ errorType: 'Error' }),
+    )
+    expect(JSON.stringify((logger.error as jest.Mock).mock.calls)).not.toContain('Oops')
   })
 })

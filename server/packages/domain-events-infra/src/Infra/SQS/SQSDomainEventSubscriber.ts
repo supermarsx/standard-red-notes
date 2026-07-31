@@ -1,3 +1,4 @@
+import { safeErrorLogMetadata } from '@standardnotes/domain-core'
 import { Consumer } from 'sqs-consumer'
 import { Message, SQSClient } from '@aws-sdk/client-sqs'
 import { DomainEventSubscriberInterface, DomainEventMessageHandlerInterface } from '@standardnotes/domain-events'
@@ -47,6 +48,6 @@ export class SQSDomainEventSubscriber implements DomainEventSubscriberInterface 
   }
 
   handleError(error: Error): void {
-    this.logger.error('Error occured while handling SQS message: %O', error)
+    this.logger.error('Error occurred while handling an SQS message.', safeErrorLogMetadata(error))
   }
 }

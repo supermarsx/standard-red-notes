@@ -1,3 +1,4 @@
+import { safeErrorLogMetadata } from '@standardnotes/domain-core'
 import 'reflect-metadata'
 
 import { Logger } from 'winston'
@@ -10,10 +11,9 @@ import { ContainerConfigLoader } from '../src/Bootstrap/Container'
 // Standard Red Notes: fail-fast global crash handlers (see bin/server.ts). Log a
 // clear FATAL line with stack and exit non-zero so the supervisor restarts us
 // instead of the worker silently wedging.
-let fatalLogger: { error: (message: string) => void } = console
+let fatalLogger: { error: (message: string, metadata?: Record<string, unknown>) => void } = console
 const logFatal = (label: string, error: unknown): void => {
-  const err = error instanceof Error ? error : new Error(String(error))
-  fatalLogger.error(`FATAL ${label}: ${err.message}\n${err.stack ?? '(no stack)'}`)
+  fatalLogger.error(`FATAL ${label}.`, safeErrorLogMetadata(error))
 }
 process.on('unhandledRejection', (reason: unknown) => {
   logFatal('unhandledRejection', reason)
@@ -28,23 +28,23 @@ const container = new ContainerConfigLoader('worker')
 void container
   .load()
   .then((container) => {
-  const env: Env = new Env()
-  env.load()
+    const env: Env = new Env()
+    env.load()
 
-  const logger: Logger = container.get(TYPES.Sync_Logger)
-  fatalLogger = logger
+    const logger: Logger = container.get(TYPES.Sync_Logger)
+    fatalLogger = logger
 
-  logger.info('Starting worker...')
+    logger.info('Starting worker...')
 
-  const subscriber = container.get<DomainEventSubscriberInterface>(TYPES.Sync_DomainEventSubscriber)
+    const subscriber = container.get<DomainEventSubscriberInterface>(TYPES.Sync_DomainEventSubscriber)
 
-  process.on('SIGTERM', () => {
-    logger.info('SIGTERM received. Stopping worker...')
-    subscriber.stop()
-    logger.info('Worker stopped.')
-  })
+    process.on('SIGTERM', () => {
+      logger.info('SIGTERM received. Stopping worker...')
+      subscriber.stop()
+      logger.info('Worker stopped.')
+    })
 
-  subscriber.start()
+    subscriber.start()
   })
   .catch((error: unknown) => {
     logFatal('startup', error)

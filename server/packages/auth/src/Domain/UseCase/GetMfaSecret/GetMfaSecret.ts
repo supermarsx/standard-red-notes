@@ -7,6 +7,7 @@ import { GetMfaSecretDto } from './GetMfaSecretDto'
 import { MfaSecretRepositoryInterface } from '../../Mfa/MfaSecretRepositoryInterface'
 import { SettingRepositoryInterface } from '../../Setting/SettingRepositoryInterface'
 import TYPES from '../../../Bootstrap/Types'
+import { safeErrorLogMetadata } from '../../Logging/SafeLog'
 
 @injectable()
 export class GetMfaSecret implements UseCaseInterface<{ secret: string }> {
@@ -45,7 +46,10 @@ export class GetMfaSecret implements UseCaseInterface<{ secret: string }> {
       this.logger.debug(`Generated new MFA secret for user ${userUuid}`)
       return Result.ok({ secret: newSecret })
     } catch (error) {
-      this.logger.error(`Failed to generate MFA secret for user ${userUuid}: ${String(error)}`)
+      this.logger.error('Failed to generate an MFA secret.', {
+        userId: userUuid,
+        ...safeErrorLogMetadata(error),
+      })
       return Result.fail('Failed to generate MFA secret.')
     }
   }

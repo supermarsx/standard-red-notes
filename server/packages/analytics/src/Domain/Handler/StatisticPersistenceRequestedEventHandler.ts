@@ -1,3 +1,4 @@
+import { safeErrorLogMetadata } from '@standardnotes/domain-core'
 import { DomainEventHandlerInterface, StatisticPersistenceRequestedEvent } from '@standardnotes/domain-events'
 import { TimerInterface } from '@standardnotes/time'
 import { Logger } from 'winston'
@@ -20,7 +21,7 @@ export class StatisticPersistenceRequestedEventHandler implements DomainEventHan
     })
 
     if (result.isFailed()) {
-      this.logger.error(result.getError())
+      this.logger.error('Operation failed.', safeErrorLogMetadata(result.getError()))
     }
 
     if (this.mixpanelClient !== null) {

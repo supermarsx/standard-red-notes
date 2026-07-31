@@ -31,6 +31,7 @@ describe('AuthResponseFactory20161215', () => {
   })
 
   it('should create a 20161215 auth response', async () => {
+    user.uuid = 'user-123'
     const result = await createFactory().createResponse({
       user,
       apiVersion: ApiVersion.create(ApiVersion.VERSIONS.v20161215).getValue(),
@@ -43,5 +44,9 @@ describe('AuthResponseFactory20161215', () => {
       user: { foo: 'bar' },
       token: 'foobar',
     })
+    expect(logger.debug).toHaveBeenCalledWith('Created JWT authentication response', {
+      userId: 'user-123',
+    })
+    expect(JSON.stringify((logger.debug as jest.Mock).mock.calls)).not.toContain('foobar')
   })
 })

@@ -66,7 +66,7 @@ describe('RateLimitMiddleware (config provider + IP lists + headers)', () => {
 
   it('fails open (next) when config resolution throws', async () => {
     const provider = jest.fn(async (): Promise<RateLimitConfig> => {
-      throw new Error('overlay broken')
+      throw new Error('rate-config-credential-sentinel')
     })
     const next: NextFunction = jest.fn()
     const warn = jest.fn()
@@ -76,7 +76,11 @@ describe('RateLimitMiddleware (config provider + IP lists + headers)', () => {
     await flush()
     expect(next).toHaveBeenCalledTimes(1)
     expect(status).not.toHaveBeenCalled()
-    expect(warn).toHaveBeenCalled()
+    expect(warn).toHaveBeenCalledWith(
+      'Rate-limit config resolution failed open.',
+      expect.objectContaining({ errorType: 'Error' }),
+    )
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('rate-config-credential-sentinel')
   })
 
   it('rejects a blocklisted IP with 403 and records the block, before any tier', async () => {
@@ -121,7 +125,9 @@ describe('RateLimitMiddleware (config provider + IP lists + headers)', () => {
     const redis = buildRedis()
     const next: NextFunction = jest.fn()
     const warn = jest.fn()
-    const ipAccessList = { classify: jest.fn((): Promise<IpAclDecision> => Promise.reject(new Error('redis down'))) }
+    const ipAccessList = {
+      classify: jest.fn((): Promise<IpAclDecision> => Promise.reject(new Error('ip-list-credential-sentinel'))),
+    }
     const middleware = createRateLimitMiddleware({
       redis,
       config: staticConfig,
@@ -130,7 +136,11 @@ describe('RateLimitMiddleware (config provider + IP lists + headers)', () => {
     })
     middleware(buildRequest(), buildResponse().response, next)
     await flush()
-    expect(warn).toHaveBeenCalled()
+    expect(warn).toHaveBeenCalledWith(
+      'IP access-list check failed open.',
+      expect.objectContaining({ errorType: 'Error' }),
+    )
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('ip-list-credential-sentinel')
     expect(redis.incr).toHaveBeenCalled()
     expect(next).toHaveBeenCalledTimes(1)
   })
@@ -233,5 +243,50 @@ describe('createUserRateLimitMiddleware (per-user tier)', () => {
     expect(res.status).toHaveBeenCalledWith(429)
     expect(redis.incr).toHaveBeenCalledWith('rl:user:assistant:user-1')
     expect(next).toHaveBeenCalledTimes(2)
+  })
+
+  it('fails open without logging a per-user config exception message', async () => {
+    const next: NextFunction = jest.fn()
+    const warn = jest.fn()
+    const middleware = createUserRateLimitMiddleware({
+      redis: buildRedis(),
+      config: async () => {
+        throw new Error('user-config-credential-sentinel')
+      },
+      logger: { warn },
+    })
+    const res = buildResponse()
+    res.locals.user = { uuid: 'user-1' }
+
+    middleware(buildRequest(), res.response, next)
+    await flush()
+
+    expect(next).toHaveBeenCalledTimes(1)
+    expect(warn).toHaveBeenCalledWith(
+      'Per-user rate-limit config resolution failed open.',
+      expect.objectContaining({ errorType: 'Error' }),
+    )
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('user-config-credential-sentinel')
+  })
+
+  it('fails open without logging a per-user Redis exception message', async () => {
+    const next: NextFunction = jest.fn()
+    const warn = jest.fn()
+    const redis = buildRedis({
+      incr: jest.fn(() => Promise.reject(new Error('user-redis-credential-sentinel'))),
+    })
+    const middleware = createUserRateLimitMiddleware({ redis, config: userConfig, logger: { warn } })
+    const res = buildResponse()
+    res.locals.user = { uuid: 'user-1' }
+
+    middleware(buildRequest(), res.response, next)
+    await flush()
+
+    expect(next).toHaveBeenCalledTimes(1)
+    expect(warn).toHaveBeenCalledWith(
+      'Per-user rate limiter failed open.',
+      expect.objectContaining({ errorType: 'Error' }),
+    )
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('user-redis-credential-sentinel')
   })
 })

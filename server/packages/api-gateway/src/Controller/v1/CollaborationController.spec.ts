@@ -121,10 +121,21 @@ describe('CollaborationController', () => {
   })
 
   it('DENIES (403) when the access-check call THROWS', async () => {
-    serviceProxy.callSyncingServer = jest.fn().mockRejectedValue(new Error('syncing down'))
+    serviceProxy.callSyncingServer = jest.fn().mockRejectedValue(new Error('collaboration-credential-sentinel'))
     const response = responseWith('user-1')
     await makeController().authorize(requestWith('note-1'), response)
+
     expect(statusMock).toHaveBeenCalledWith(403)
+    expect(logger.error).toHaveBeenCalledWith(
+      'Collaboration access check call failed.',
+      expect.objectContaining({
+        action: 'collaboration.access-check',
+        endpoint: '/items/collaboration-authorization',
+        method: 'POST',
+        errorType: 'Error',
+      }),
+    )
+    expect(JSON.stringify(logger.error.mock.calls)).not.toContain('collaboration-credential-sentinel')
   })
 
   it('DENIES (403) when no signing secret is configured', async () => {

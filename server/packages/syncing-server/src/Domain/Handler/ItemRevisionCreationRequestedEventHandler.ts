@@ -1,3 +1,4 @@
+import { safeErrorLogMetadata } from '@standardnotes/domain-core'
 import { ItemRevisionCreationRequestedEvent, DomainEventHandlerInterface } from '@standardnotes/domain-events'
 
 import { DumpItem } from '../UseCase/Syncing/DumpItem/DumpItem'
@@ -15,7 +16,7 @@ export class ItemRevisionCreationRequestedEventHandler implements DomainEventHan
     })
 
     if (result.isFailed()) {
-      this.logger.error(`Item revision requested handler failed: ${result.getError()}`)
+      this.logger.error('Item revision requested handler failed.', safeErrorLogMetadata(result.getError()))
     }
   }
 }

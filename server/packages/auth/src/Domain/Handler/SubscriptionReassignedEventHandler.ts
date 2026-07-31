@@ -26,7 +26,6 @@ export class SubscriptionReassignedEventHandler implements DomainEventHandlerInt
       this.logger.error('Subscription ID is missing', {
         codeTag: 'SubscriptionReassignedEventHandler.handle',
         subscriptionId: event.payload.subscriptionId,
-        userId: event.payload.userEmail,
       })
 
       return
@@ -71,9 +70,9 @@ export class SubscriptionReassignedEventHandler implements DomainEventHandlerInt
       userSubscriptionUuid: userSubscription.uuid,
     })
     if (applyingSettingsResult.isFailed()) {
-      this.logger.error(
-        `Could not apply default subscription settings for user ${user.uuid}: ${applyingSettingsResult.getError()}`,
-      )
+      this.logger.error('Could not apply default subscription settings for a user.', {
+        userId: user.uuid,
+      })
     }
   }
 

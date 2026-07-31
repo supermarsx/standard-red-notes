@@ -2,6 +2,7 @@ import { AxiosInstance } from 'axios'
 import { Logger } from 'winston'
 
 import { CaptchaServerInterface } from '../../../Domain/HumanVerification/CaptchaServerInterface'
+import { safeErrorLogMetadata } from '../../../Domain/Logging/SafeLog'
 
 export class HttpCaptchaServer implements CaptchaServerInterface {
   constructor(
@@ -24,7 +25,7 @@ export class HttpCaptchaServer implements CaptchaServerInterface {
 
       return data.status === 'pass'
     } catch (error) {
-      this.logger.error('Could not get result from captcha server', error)
+      this.logger.error('Could not get a result from the captcha server.', safeErrorLogMetadata(error))
       return false
     }
   }

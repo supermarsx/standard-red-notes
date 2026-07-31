@@ -3,11 +3,17 @@ import { NextFunction, Request, Response } from 'express'
 import { inject, injectable } from 'inversify'
 import { BaseMiddleware } from 'inversify-express-utils'
 import { verify } from 'jsonwebtoken'
-import { AxiosError, AxiosInstance } from 'axios'
+import { AxiosInstance } from 'axios'
 import { Logger } from 'winston'
 
 import { TYPES } from '../Bootstrap/Types'
 import { ResponseLocals } from './ResponseLocals'
+import {
+  PublicServiceFailure,
+  publicHttpErrorStatus,
+  safePublicErrorData,
+  safeHttpErrorLogMetadata,
+} from '../Service/Logging/SafeLog'
 
 @injectable()
 export class WebSocketAuthMiddleware extends BaseMiddleware {
@@ -48,8 +54,12 @@ export class WebSocketAuthMiddleware extends BaseMiddleware {
       })
 
       if (authResponse.status > 200) {
-        response.setHeader('content-type', authResponse.headers['content-type'] as string)
-        response.status(authResponse.status).send(authResponse.data)
+        const status = authResponse.status >= 400 && authResponse.status <= 599 ? authResponse.status : 500
+        const contentType = authResponse.headers['content-type']
+        if (typeof contentType === 'string' && contentType.trim().length > 0) {
+          response.setHeader('content-type', contentType)
+        }
+        response.status(status).send(safePublicErrorData(authResponse.data))
 
         return
       }
@@ -65,26 +75,15 @@ export class WebSocketAuthMiddleware extends BaseMiddleware {
         roles: decodedToken.roles,
       } as ResponseLocals)
     } catch (error) {
-      const errorMessage = (error as AxiosError).isAxiosError
-        ? JSON.stringify((error as AxiosError).response?.data)
-        : (error as Error).message
+      const safeError = safeHttpErrorLogMetadata(error, {
+        action: 'websocket-token.validate',
+        endpoint: `${this.authServerUrl}/sockets/tokens/validate`,
+        method: 'POST',
+      })
+      this.logger.error('Could not validate websocket token on underlying service.', safeError)
+      this.logger.debug('Websocket token validation failure summary.', safeError)
 
-      this.logger.error(
-        `Could not pass the request to ${this.authServerUrl}/sockets/tokens/validate on underlying service: ${errorMessage}`,
-      )
-
-      this.logger.debug('Response error: %O', (error as AxiosError).response ?? error)
-
-      if ((error as AxiosError).response?.headers['content-type']) {
-        response.setHeader('content-type', (error as AxiosError).response?.headers['content-type'] as string)
-      }
-
-      const errorCode =
-        (error as AxiosError).isAxiosError && !isNaN(+((error as AxiosError).code as string))
-          ? +((error as AxiosError).code as string)
-          : 500
-
-      response.status(errorCode).send(errorMessage)
+      response.status(publicHttpErrorStatus(error)).send(PublicServiceFailure)
 
       return
     }

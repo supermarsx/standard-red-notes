@@ -71,6 +71,11 @@ describe('CreateOfflineSubscriptionToken', () => {
 
     expect(domainEventFactory.createEmailRequestedEvent).toHaveBeenCalled()
     expect(domainEventPublisher.publish).toHaveBeenCalled()
+    expect(logger.debug).toHaveBeenCalledWith('Created offline subscription token', {
+      expiresAt: 1,
+    })
+    expect(JSON.stringify((logger.debug as jest.Mock).mock.calls)).not.toContain('random-string')
+    expect(JSON.stringify((logger.debug as jest.Mock).mock.calls)).not.toContain('test@test.com')
   })
 
   it('should not create an offline subscription token if email has no offline subscription', async () => {

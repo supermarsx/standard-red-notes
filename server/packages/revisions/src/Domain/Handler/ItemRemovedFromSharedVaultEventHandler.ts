@@ -1,3 +1,4 @@
+import { safeErrorLogMetadata } from '@standardnotes/domain-core'
 import { DomainEventHandlerInterface, ItemRemovedFromSharedVaultEvent } from '@standardnotes/domain-events'
 import { RemoveRevisionsFromSharedVault } from '../UseCase/RemoveRevisionsFromSharedVault/RemoveRevisionsFromSharedVault'
 import { Logger } from 'winston'
@@ -21,7 +22,7 @@ export class ItemRemovedFromSharedVaultEventHandler implements DomainEventHandle
     })
 
     if (result.isFailed()) {
-      this.logger.error(`Failed to remove revisions from shared vault: ${result.getError()}`)
+      this.logger.error('Failed to remove revisions from shared vault.', safeErrorLogMetadata(result.getError()))
     }
   }
 }

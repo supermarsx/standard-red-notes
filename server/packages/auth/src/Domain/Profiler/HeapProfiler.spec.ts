@@ -98,9 +98,10 @@ describe('HeapProfiler', () => {
 
     expect(s3Client.send).not.toHaveBeenCalled()
     expect(logger.error).toHaveBeenCalledWith(
-      'Failed to take or send heap snapshot: out of disk',
-      expect.objectContaining({ error: expect.any(String) }),
+      'Failed to take or send heap snapshot.',
+      expect.objectContaining({ errorType: 'Error' }),
     )
+    expect(JSON.stringify((logger.error as jest.Mock).mock.calls)).not.toContain('out of disk')
   })
 
   it('should log the upload failure and leave the local file in place', async () => {
@@ -111,14 +112,15 @@ describe('HeapProfiler', () => {
 
     expect(fs.unlinkSync).not.toHaveBeenCalled()
     expect(logger.error).toHaveBeenCalledWith(
-      'Failed to upload heap snapshot to S3: s3 refused',
+      'Failed to upload heap snapshot to S3.',
       expect.objectContaining({ bucketName: 'snapshots' }),
     )
     // The rethrown error is caught by takeHeapSnapshot's own handler.
     expect(logger.error).toHaveBeenCalledWith(
-      'Failed to take or send heap snapshot: s3 refused',
-      expect.objectContaining({ error: expect.any(String) }),
+      'Failed to take or send heap snapshot.',
+      expect.objectContaining({ errorType: 'Error' }),
     )
+    expect(JSON.stringify((logger.error as jest.Mock).mock.calls)).not.toContain('s3 refused')
   })
 
   it('should tag each profiler instance with its own uuid in the snapshot filename', async () => {

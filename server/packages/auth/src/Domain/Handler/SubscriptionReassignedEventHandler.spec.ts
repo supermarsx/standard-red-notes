@@ -75,7 +75,6 @@ describe('SubscriptionReassignedEventHandler', () => {
     expect(logger.error).toHaveBeenCalledWith('Subscription ID is missing', {
       codeTag: 'SubscriptionReassignedEventHandler.handle',
       subscriptionId: undefined,
-      userId: userEmail,
     })
   })
 
@@ -141,8 +140,8 @@ describe('SubscriptionReassignedEventHandler', () => {
 
     await createHandler().handle(eventWith(fullPayload))
 
-    expect(logger.error).toHaveBeenCalledWith(
-      `Could not apply default subscription settings for user ${userUuid}: settings oops`,
-    )
+    expect(logger.error).toHaveBeenCalledWith('Could not apply default subscription settings for a user.', {
+      userId: userUuid,
+    })
   })
 })

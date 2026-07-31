@@ -1,4 +1,4 @@
-import { MapperInterface, Result, UseCaseInterface, Uuid } from '@standardnotes/domain-core'
+import { safeErrorLogMetadata, MapperInterface, Result, UseCaseInterface, Uuid } from '@standardnotes/domain-core'
 
 import { SaveItemsResult } from './SaveItemsResult'
 import { SaveItemsDTO } from './SaveItemsDTO'
@@ -58,7 +58,8 @@ export class SaveItems implements UseCaseInterface<SaveItemsResult> {
         itemsBeingModified: dto.itemHashes,
       })
       if (checkForContentLimitResult.isFailed()) {
-        this.logger.warn(`Checking for content limit failed. Error: ${checkForContentLimitResult.getError()}`, {
+        this.logger.warn('Checking for content limit failed.', {
+          ...safeErrorLogMetadata(checkForContentLimitResult.getError()),
           userId: dto.userUuid,
         })
 
@@ -128,7 +129,8 @@ export class SaveItems implements UseCaseInterface<SaveItemsResult> {
           })
           if (udpatedItemOrError.isFailed()) {
             this.logger.error(
-              `[${dto.userUuid}] Updating item ${itemHash.props.uuid} failed. Error: ${udpatedItemOrError.getError()}`,
+              `[${dto.userUuid}] Updating item ${itemHash.props.uuid} failed.`,
+              safeErrorLogMetadata(udpatedItemOrError.getError()),
             )
 
             conflicts.push({
@@ -143,7 +145,8 @@ export class SaveItems implements UseCaseInterface<SaveItemsResult> {
           savedItems.push(updatedItem)
         } catch (error) {
           this.logger.error(
-            `[${dto.userUuid}] Updating item ${itemHash.props.uuid} threw. Error: ${(error as Error).message}`,
+            `[${dto.userUuid}] Updating item ${itemHash.props.uuid} threw.`,
+            safeErrorLogMetadata(error),
           )
 
           conflicts.push({
@@ -162,7 +165,8 @@ export class SaveItems implements UseCaseInterface<SaveItemsResult> {
           })
           if (newItemOrError.isFailed()) {
             this.logger.error(
-              `[${dto.userUuid}] Saving item ${itemHash.props.uuid} failed. Error: ${newItemOrError.getError()}`,
+              `[${dto.userUuid}] Saving item ${itemHash.props.uuid} failed.`,
+              safeErrorLogMetadata(newItemOrError.getError()),
             )
 
             conflicts.push({
@@ -176,9 +180,7 @@ export class SaveItems implements UseCaseInterface<SaveItemsResult> {
 
           savedItems.push(newItem)
         } catch (error) {
-          this.logger.error(
-            `[${dto.userUuid}] Saving item ${itemHash.props.uuid} failed. Error: ${(error as Error).message}`,
-          )
+          this.logger.error(`[${dto.userUuid}] Saving item ${itemHash.props.uuid} failed.`, safeErrorLogMetadata(error))
 
           conflicts.push({
             unsavedItem: itemHash,
@@ -214,9 +216,8 @@ export class SaveItems implements UseCaseInterface<SaveItemsResult> {
       )
     } catch (error) {
       this.logger.error(
-        `[${dto.userUuid}] Notifying other clients of changed items failed post-persist (items already saved). Error: ${
-          (error as Error).message
-        }`,
+        `[${dto.userUuid}] Notifying other clients of changed items failed post-persist (items already saved).`,
+        safeErrorLogMetadata(error),
       )
     }
 
@@ -320,7 +321,8 @@ export class SaveItems implements UseCaseInterface<SaveItemsResult> {
         event: personalMessage,
       })
       if (result.isFailed()) {
-        this.logger.error(`Sending items changed event to client failed. Error: ${result.getError()}`, {
+        this.logger.error('Sending items changed event to client failed.', {
+          ...safeErrorLogMetadata(result.getError()),
           userId: dto.userUuid,
         })
       }
@@ -340,7 +342,8 @@ export class SaveItems implements UseCaseInterface<SaveItemsResult> {
         originatingUserUuid: dto.userUuid,
       })
       if (result.isFailed()) {
-        this.logger.error(`Sending items changed event to clients failed. Error: ${result.getError()}`, {
+        this.logger.error('Sending items changed event to clients failed.', {
+          ...safeErrorLogMetadata(result.getError()),
           userId: dto.userUuid,
           sharedVaultUuid,
         })

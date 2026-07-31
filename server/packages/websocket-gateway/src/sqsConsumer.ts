@@ -2,6 +2,7 @@ import * as zlib from 'node:zlib'
 import { DeleteMessageCommand, ReceiveMessageCommand, SQSClient, type SQSClientConfig } from '@aws-sdk/client-sqs'
 import { ConnectionRegistry, dispatch, type DispatchMessage, type SendableSocket } from './registry.js'
 import type { Logger } from './redisBridge.js'
+import { safeErrorLogMetadata } from './safeLog.js'
 
 /**
  * Decode an SQS message body (an SNS->SQS envelope) into the dispatch shape the
@@ -84,7 +85,10 @@ export function startSqsConsumer<S extends SendableSocket>(
   opts.logger.info(`[sqs] consuming ${opts.queueUrl}`)
 
   const loop = async (): Promise<void> => {
-    while (running) {
+    while (true) {
+      if (!running) {
+        break
+      }
       try {
         const result = await client.send(
           new ReceiveMessageCommand({
@@ -98,10 +102,11 @@ export function startSqsConsumer<S extends SendableSocket>(
             const parsed = decodeSqsBodyToDispatch(msg.Body)
             if (parsed) {
               const sent = dispatch(registry, parsed)
-              opts.logger.info(
-                `[push:sqs] user=${parsed.userUuid} sockets=${sent}` +
-                  (parsed.originatingSessionUuid ? ` excludeSession=${parsed.originatingSessionUuid}` : ''),
-              )
+              opts.logger.info('[push:sqs] dispatched websocket message', {
+                userId: parsed.userUuid,
+                socketCount: sent,
+                originExcluded: parsed.originatingSessionUuid !== undefined,
+              })
             }
           }
           if (msg.ReceiptHandle) {
@@ -110,7 +115,7 @@ export function startSqsConsumer<S extends SendableSocket>(
         }
       } catch (err) {
         if (running) {
-          opts.logger.error('[sqs] poll error', err instanceof Error ? err.message : err)
+          opts.logger.error('[sqs] poll error', safeErrorLogMetadata(err))
           await new Promise((r) => setTimeout(r, 2000))
         }
       }

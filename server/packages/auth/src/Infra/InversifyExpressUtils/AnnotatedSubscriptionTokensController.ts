@@ -35,4 +35,9 @@ export class AnnotatedSubscriptionTokensController extends BaseSubscriptionToken
   override async validate(request: Request): Promise<results.JsonResult> {
     return super.validate(request)
   }
+
+  @httpPost('/validate')
+  async validateFromHeader(request: Request): Promise<results.JsonResult> {
+    return super.validate(request)
+  }
 }

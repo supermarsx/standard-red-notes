@@ -1,6 +1,7 @@
 import { createServer } from 'node:http'
 import { attachWebSocketGateway, type GatewayConfig } from './gateway.js'
 import { type Logger } from './redisBridge.js'
+import { safeErrorLogMetadata, safeLogArguments } from './safeLog.js'
 
 // ---------------------------------------------------------------------------
 // Standalone entry.
@@ -20,9 +21,10 @@ const REDIS_HOST = process.env.REDIS_HOST ?? '127.0.0.1'
 const REDIS_PORT = Number(process.env.REDIS_PORT ?? 6379)
 
 const logger: Logger = {
-  info: (...args) => console.log(new Date().toISOString(), '[info]', ...args),
-  warn: (...args) => console.warn(new Date().toISOString(), '[warn]', ...args),
-  error: (...args) => console.error(new Date().toISOString(), '[error]', ...args),
+  // eslint-disable-next-line no-console
+  info: (...args) => console.log(new Date().toISOString(), '[info]', ...safeLogArguments(args)),
+  warn: (...args) => console.warn(new Date().toISOString(), '[warn]', ...safeLogArguments(args)),
+  error: (...args) => console.error(new Date().toISOString(), '[error]', ...safeLogArguments(args)),
 }
 
 const config: GatewayConfig = {
@@ -88,7 +90,7 @@ async function stopGatewaySafely(): Promise<void> {
   try {
     await gateway.stop()
   } catch (error) {
-    logger.error('[shutdown] gateway stop failed', error instanceof Error ? error.message : error)
+    logger.error('[shutdown] gateway stop failed', safeErrorLogMetadata(error))
   }
 }
 
@@ -97,7 +99,7 @@ async function closeHttpServerSafely(): Promise<void> {
     try {
       httpServer.close(() => resolveClose())
     } catch (error) {
-      logger.error('[shutdown] http server close failed', error instanceof Error ? error.message : error)
+      logger.error('[shutdown] http server close failed', safeErrorLogMetadata(error))
       resolveClose()
     }
   })
@@ -123,7 +125,7 @@ function shutdown(signal: string): void {
       process.exit(0)
     })
     .catch((error) => {
-      logger.error('[shutdown] unexpected shutdown failure', error instanceof Error ? error.message : error)
+      logger.error('[shutdown] unexpected shutdown failure', safeErrorLogMetadata(error))
       clearTimeout(forceExitTimer)
       process.exit(0)
     })

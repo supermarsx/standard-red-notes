@@ -15,6 +15,7 @@ import { DomainEventFactoryInterface } from '../Event/DomainEventFactoryInterfac
 import { SessionCreationResult } from '../Session/SessionCreationResult'
 import { AuthResponseCreationResult } from './AuthResponseCreationResult'
 import { ApiVersion } from '../Api/ApiVersion'
+import { safeErrorLogMetadata } from '../Logging/SafeLog'
 
 @injectable()
 export class AuthResponseFactory20200115 extends AuthResponseFactory20190520 {
@@ -48,9 +49,10 @@ export class AuthResponseFactory20200115 extends AuthResponseFactory20190520 {
 
     const sessionCreationResult = await this.createSession(dto)
 
-    this.logger.debug('Created session payload for user', {
+    this.logger.debug('Created session authentication response', {
       userId: dto.user.uuid,
-      session: sessionCreationResult,
+      ephemeralSession: dto.ephemeralSession,
+      readonlyAccess: dto.readonlyAccess,
     })
 
     return {
@@ -85,7 +87,10 @@ export class AuthResponseFactory20200115 extends AuthResponseFactory20190520 {
         this.domainEventFactory.createSessionCreatedEvent({ userUuid: dto.user.uuid }),
       )
     } catch (error) {
-      this.logger.error(`Failed to publish session created event: ${(error as Error).message}`)
+      this.logger.error('Failed to publish session created event', {
+        userId: dto.user.uuid,
+        ...safeErrorLogMetadata(error),
+      })
     }
 
     return sessionCreationResult

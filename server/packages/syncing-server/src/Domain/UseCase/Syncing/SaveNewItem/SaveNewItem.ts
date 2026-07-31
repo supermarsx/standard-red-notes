@@ -1,4 +1,5 @@
 import {
+  safeErrorLogMetadata,
   ContentType,
   Dates,
   Result,
@@ -183,9 +184,8 @@ export class SaveNewItem implements UseCaseInterface<Item> {
       }
     } catch (error) {
       this.logger.error(
-        `[${userUuid.value}] Post-persist side effects threw for new item ${newItem.id.toString()} (item already saved). Error: ${
-          (error as Error).message
-        }`,
+        `[${userUuid.value}] Post-persist side effects threw for new item ${newItem.id.toString()} (item already saved).`,
+        safeErrorLogMetadata(error),
       )
     }
 

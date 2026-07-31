@@ -9,6 +9,7 @@ import { DomainEventFactoryInterface } from '../../Event/DomainEventFactoryInter
 
 import { CreatePendingMfaApprovalDTO } from './CreatePendingMfaApprovalDTO'
 import { CreatePendingMfaApprovalResult } from './CreatePendingMfaApprovalResult'
+import { safeErrorLogMetadata } from '../../Logging/SafeLog'
 
 /**
  * Standard Red Notes: push-MFA approval. When an UNTRUSTED device hits the 2FA
@@ -85,7 +86,7 @@ export class CreatePendingMfaApproval implements UseCaseInterface<CreatePendingM
         }),
       )
     } catch (error) {
-      this.logger.error(`Could not push MFA approval request frame: ${(error as Error).message}`)
+      this.logger.error('Could not push the MFA approval-request frame.', safeErrorLogMetadata(error))
     }
 
     return Result.ok({ challengeId, expiresAt })

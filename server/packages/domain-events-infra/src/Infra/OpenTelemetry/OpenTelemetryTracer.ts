@@ -1,4 +1,5 @@
 import * as OpenTelemetryApi from '@opentelemetry/api'
+import { safeErrorLogMetadata } from '@standardnotes/domain-core'
 
 import { OpenTelemetryTracerInterface } from './OpenTelemetryTracerInterface'
 
@@ -29,7 +30,11 @@ export class OpenTelemetryTracer implements OpenTelemetryTracerInterface {
 
   stopSpanWithError(error: Error): void {
     if (this.internalSpan) {
-      this.internalSpan.recordException(error)
+      const safeError = safeErrorLogMetadata(error)
+      this.internalSpan.recordException({
+        name: safeError.errorType,
+        message: 'Operation failed; exception details were redacted.',
+      })
       this.internalSpan.end()
       this.internalSpan = undefined
     }

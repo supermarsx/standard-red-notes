@@ -39,7 +39,9 @@ export class AuthResponseFactory20161215 implements AuthResponseFactoryInterface
 
     const token = this.tokenEncoder.encodeToken(data)
 
-    this.logger.debug(`Created JWT token for user ${dto.user.uuid}: ${token}`)
+    this.logger.debug('Created JWT authentication response', {
+      userId: dto.user.uuid,
+    })
 
     return {
       legacyResponse: {

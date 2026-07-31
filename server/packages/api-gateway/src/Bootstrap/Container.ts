@@ -18,6 +18,7 @@ import { RedisCrossServiceTokenCache } from '../Infra/Redis/RedisCrossServiceTok
 import { WebSocketAuthMiddleware } from '../Controller/WebSocketAuthMiddleware'
 import { InMemoryCrossServiceTokenCache } from '../Infra/InMemory/InMemoryCrossServiceTokenCache'
 import { DirectCallServiceProxy } from '../Service/DirectCall/DirectCallServiceProxy'
+import { createSafeLogFormat, safeErrorLogMetadata } from '../Service/Logging/SafeLog'
 import { MapperInterface, ServiceContainerInterface } from '@standardnotes/domain-core'
 import { EndpointResolverInterface } from '../Service/Resolver/EndpointResolverInterface'
 import { EndpointResolver } from '../Service/Resolver/EndpointResolver'
@@ -122,7 +123,7 @@ export class ContainerConfigLoader {
         )
     }
 
-    const winstonFormatters = [winston.format.splat(), winston.format.json()]
+    const winstonFormatters = [winston.format.splat(), createSafeLogFormat(), winston.format.json()]
 
     let logger: winston.Logger
     if (configuration?.logger) {
@@ -457,7 +458,7 @@ export class ContainerConfigLoader {
     try {
       new RuntimeLogLevelApplier(logger, () => serverSettingsResolver.resolveLoggingLevel()).start()
     } catch (error) {
-      logger.error(`Failed to start runtime log-level applier: ${(error as Error).message}`)
+      logger.error('Failed to start runtime log-level applier.', safeErrorLogMetadata(error))
     }
 
     // Standard Red Notes: anti-abuse infrastructure. The IP allow/block lists and

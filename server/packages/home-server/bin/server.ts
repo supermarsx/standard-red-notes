@@ -1,3 +1,4 @@
+import { safeErrorLogMetadata } from '@standardnotes/domain-core'
 import { Env } from '../src/Bootstrap/Env'
 import { HomeServer } from '../src/Server/HomeServer'
 
@@ -17,10 +18,8 @@ try {
       environment: env.getAll(),
     }),
   ).catch((error) => {
-     
-    console.error(`Could not start server: ${error.message}`)
+    console.error('Could not start server.', safeErrorLogMetadata(error))
   })
 } catch (error) {
-   
-  console.error((error as Error).stack)
+  console.error('Could not initialize the home server.', safeErrorLogMetadata(error))
 }

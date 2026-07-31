@@ -3,6 +3,7 @@ import { Logger } from 'winston'
 import { AuditLogEntry } from './AuditLogEntry'
 import { AuditLogRepositoryInterface } from './AuditLogRepositoryInterface'
 import { AuditLogWriteParams, AuditLogWriterInterface } from './AuditLogWriterInterface'
+import { safeErrorLogMetadata } from '../Logging/SafeLog'
 
 /**
  * Standard Red Notes: best-effort audit-log writer. Persists a security-relevant
@@ -28,14 +29,19 @@ export class AuditLogWriter implements AuditLogWriterInterface {
       })
 
       if (entryOrError.isFailed()) {
-        this.logger.warn(`Could not build audit log entry for action ${params.action}: ${entryOrError.getError()}`)
+        this.logger.warn('Could not build an audit-log entry.', {
+          action: params.action,
+        })
 
         return
       }
 
       await this.auditLogRepository.save(entryOrError.getValue())
     } catch (error) {
-      this.logger.error(`Could not write audit log entry for action ${params.action}: ${(error as Error).message}`)
+      this.logger.error('Could not write audit log entry.', {
+        action: params.action,
+        ...safeErrorLogMetadata(error),
+      })
     }
   }
 }

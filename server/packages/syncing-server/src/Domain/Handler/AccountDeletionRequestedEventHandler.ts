@@ -1,5 +1,5 @@
 import { AccountDeletionRequestedEvent, DomainEventHandlerInterface } from '@standardnotes/domain-events'
-import { Uuid } from '@standardnotes/domain-core'
+import { safeErrorLogMetadata, Uuid } from '@standardnotes/domain-core'
 import { Logger } from 'winston'
 
 import { DeleteSharedVaults } from '../UseCase/SharedVaults/DeleteSharedVaults/DeleteSharedVaults'
@@ -17,7 +17,8 @@ export class AccountDeletionRequestedEventHandler implements DomainEventHandlerI
   async handle(event: AccountDeletionRequestedEvent): Promise<void> {
     const userUuidOrError = Uuid.create(event.payload.userUuid)
     if (userUuidOrError.isFailed()) {
-      this.logger.error(userUuidOrError.getError(), {
+      this.logger.error('Operation failed.', {
+        ...safeErrorLogMetadata(userUuidOrError.getError()),
         userId: event.payload.userUuid,
         codeTag: 'AccountDeletionRequestedEventHandler',
       })
@@ -26,18 +27,19 @@ export class AccountDeletionRequestedEventHandler implements DomainEventHandlerI
     }
     const userUuid = userUuidOrError.getValue()
     let firstFailure: Error | undefined
-    const recordFailure = (message: string): void => {
-      this.logger.error(message, {
+    const recordFailure = (operation: string, publicFailureMessage: string, error: unknown): void => {
+      this.logger.error('Account deletion cleanup operation failed.', {
+        ...safeErrorLogMetadata(error),
         userId: event.payload.userUuid,
+        operation,
       })
-      firstFailure ??= new Error(message)
+      firstFailure ??= new Error(publicFailureMessage)
     }
-    const describeError = (error: unknown): string => (error instanceof Error ? error.message : String(error))
 
     try {
       await this.itemRepository.deleteByUserUuidAndNotInSharedVault(userUuid)
     } catch (error) {
-      recordFailure(`Failed to delete items outside shared vaults: ${describeError(error)}`)
+      recordFailure('delete-items-outside-shared-vaults', 'Failed to delete items outside shared vaults.', error)
     }
 
     try {
@@ -47,7 +49,7 @@ export class AccountDeletionRequestedEventHandler implements DomainEventHandlerI
       })
 
       if (deletingVaultsResult.isFailed()) {
-        recordFailure(`Failed to delete shared vaults: ${deletingVaultsResult.getError()}`)
+        recordFailure('delete-shared-vaults', 'Failed to delete shared vaults.', deletingVaultsResult.getError())
       } else {
         const deletedSharedVaultUuids = Array.from(deletingVaultsResult.getValue().keys())
 
@@ -59,12 +61,12 @@ export class AccountDeletionRequestedEventHandler implements DomainEventHandlerI
           try {
             await this.itemRepository.deleteByUserUuidInSharedVaults(userUuid, deletedSharedVaultUuids)
           } catch (error) {
-            recordFailure(`Failed to delete items from shared vaults: ${describeError(error)}`)
+            recordFailure('delete-items-from-shared-vaults', 'Failed to delete items from shared vaults.', error)
           }
         }
       }
     } catch (error) {
-      recordFailure(`Failed to delete shared vaults: ${describeError(error)}`)
+      recordFailure('delete-shared-vaults', 'Failed to delete shared vaults.', error)
     }
 
     try {
@@ -72,10 +74,14 @@ export class AccountDeletionRequestedEventHandler implements DomainEventHandlerI
         userUuid: event.payload.userUuid,
       })
       if (deletingUserFromOtherVaultsResult.isFailed()) {
-        recordFailure(`Failed to remove user from shared vaults: ${deletingUserFromOtherVaultsResult.getError()}`)
+        recordFailure(
+          'remove-user-from-shared-vaults',
+          'Failed to remove user from shared vaults.',
+          deletingUserFromOtherVaultsResult.getError(),
+        )
       }
     } catch (error) {
-      recordFailure(`Failed to remove user from shared vaults: ${describeError(error)}`)
+      recordFailure('remove-user-from-shared-vaults', 'Failed to remove user from shared vaults.', error)
     }
 
     if (firstFailure) {

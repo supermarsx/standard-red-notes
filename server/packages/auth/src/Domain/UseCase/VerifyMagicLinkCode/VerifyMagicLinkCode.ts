@@ -4,6 +4,7 @@ import { Logger } from 'winston'
 import { MagicLinkTokenRepositoryInterface } from '../../MagicLink/MagicLinkTokenRepositoryInterface'
 
 import { VerifyMagicLinkCodeDto } from './VerifyMagicLinkCodeDto'
+import { safeErrorLogMetadata } from '../../Logging/SafeLog'
 
 export class VerifyMagicLinkCode implements UseCaseInterface<boolean> {
   constructor(
@@ -40,7 +41,7 @@ export class VerifyMagicLinkCode implements UseCaseInterface<boolean> {
 
       return Result.ok(true)
     } catch (error) {
-      this.logger.error(`Failed to verify magic link code: ${(error as Error).message}`)
+      this.logger.error('Failed to verify a magic-link code.', safeErrorLogMetadata(error))
 
       return Result.fail('Could not verify magic link code.')
     }

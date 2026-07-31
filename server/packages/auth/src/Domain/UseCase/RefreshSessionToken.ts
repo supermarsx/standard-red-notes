@@ -15,6 +15,7 @@ import { SessionService } from '../Session/SessionService'
 import { ApiVersion } from '../Api/ApiVersion'
 import { CooldownSessionTokens } from './CooldownSessionTokens/CooldownSessionTokens'
 import { GetSessionFromToken } from './GetSessionFromToken/GetSessionFromToken'
+import { safeErrorLogMetadata } from '../Logging/SafeLog'
 
 export class RefreshSessionToken {
   constructor(
@@ -148,7 +149,7 @@ export class RefreshSessionToken {
         this.domainEventFactory.createSessionRefreshedEvent({ userUuid: session.userUuid }),
       )
     } catch (error) {
-      this.logger.error(`Failed to publish session refreshed event: ${(error as Error).message}`)
+      this.logger.error('Failed to publish the session-refreshed event.', safeErrorLogMetadata(error))
     }
 
     return {

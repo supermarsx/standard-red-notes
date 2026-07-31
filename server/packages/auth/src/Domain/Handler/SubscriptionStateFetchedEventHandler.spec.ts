@@ -75,7 +75,6 @@ describe('SubscriptionStateFetchedEventHandler', () => {
     expect(logger.error).toHaveBeenCalledWith('Subscription ID is missing', {
       codeTag: 'SubscriptionStateFetchedEventHandler.handle',
       subscriptionId: undefined,
-      userId: userEmail,
     })
   })
 
@@ -88,7 +87,6 @@ describe('SubscriptionStateFetchedEventHandler', () => {
     expect(logger.error).toHaveBeenCalledWith('Subscription ID is missing', {
       codeTag: 'SubscriptionStateFetchedEventHandler.handle',
       subscriptionId: 0,
-      userId: userEmail,
     })
   })
 

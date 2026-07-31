@@ -45,7 +45,9 @@ export class CreateOfflineSubscriptionToken implements UseCaseInterface {
       expiresAt: this.timer.convertStringDateToMicroseconds(this.timer.getUTCDateNHoursAhead(3).toString()),
     }
 
-    this.logger.debug('Created offline subscription token: %O', offlineSubscriptionToken)
+    this.logger.debug('Created offline subscription token', {
+      expiresAt: offlineSubscriptionToken.expiresAt,
+    })
 
     await this.offlineSubscriptionTokenRepository.save(offlineSubscriptionToken)
 

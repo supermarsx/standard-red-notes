@@ -21,7 +21,6 @@ export class SubscriptionCancelledEventHandler implements DomainEventHandlerInte
       this.logger.error('Subscription ID is missing', {
         codeTag: 'SubscriptionCancelledEventHandler.handle',
         subscriptionId: event.payload.subscriptionId,
-        userId: event.payload.userEmail,
       })
 
       return

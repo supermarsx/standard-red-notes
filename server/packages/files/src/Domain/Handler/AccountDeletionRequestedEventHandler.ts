@@ -1,3 +1,4 @@
+import { safeErrorLogMetadata } from '@standardnotes/domain-core'
 import {
   AccountDeletionRequestedEvent,
   DomainEventHandlerInterface,
@@ -26,7 +27,10 @@ export class AccountDeletionRequestedEventHandler implements DomainEventHandlerI
     })
 
     if (result.isFailed()) {
-      this.logger.error(`Could not mark files for removal for user ${event.payload.userUuid}: ${result.getError()}`)
+      this.logger.error(
+        `Could not mark files for removal for user ${event.payload.userUuid}.`,
+        safeErrorLogMetadata(result.getError()),
+      )
 
       return
     }

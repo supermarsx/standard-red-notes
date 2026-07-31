@@ -193,7 +193,10 @@ export class HomeServer implements HomeServerInterface {
         app.use(
           createRateLimitMiddleware({
             redis: rateLimitRedis,
-            logger: { warn: (message: string) => winston.loggers.get('home-server').warn(message) },
+            logger: {
+              warn: (message: string, metadata?: Record<string, unknown>) =>
+                winston.loggers.get('home-server').warn(message, metadata),
+            },
             config: async (): Promise<RateLimitConfig> => {
               const resolved = await rateLimitResolver.resolveRateLimitConfig()
 
@@ -355,8 +358,8 @@ export class HomeServer implements HomeServerInterface {
         try {
           registerCaldavRoutes(app, container)
           routingLogger.info('CalDAV router mounted')
-        } catch (error) {
-          routingLogger.error(`Failed to mount CalDAV router: ${(error as Error).message}`)
+        } catch {
+          routingLogger.error('Failed to mount CalDAV router.')
         }
       })
 
@@ -364,7 +367,7 @@ export class HomeServer implements HomeServerInterface {
 
       server.setErrorConfig((app) => {
         app.use((error: Record<string, unknown>, request: Request, response: Response, _next: NextFunction) => {
-          logger.error(`${error.stack}`, {
+          logger.error('Unhandled home-server request error.', {
             method: request.method,
             url: sanitizeRequestUrlForLogging(request.url),
             snjs: request.headers['x-snjs-version'],
@@ -455,7 +458,7 @@ export class HomeServer implements HomeServerInterface {
       } else {
         this.authService = undefined
       }
-      console.error(startupError.stack)
+      console.error('Home server startup failed.')
 
       return Result.fail(
         cleanupError ? `${startupError.message}; startup cleanup failed: ${cleanupError}` : startupError.message,

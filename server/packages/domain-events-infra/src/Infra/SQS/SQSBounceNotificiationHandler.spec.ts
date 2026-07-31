@@ -110,11 +110,15 @@ describe('SQSBounceNotificiationHandler', () => {
     await expect(createHandler().handleMessage('not-json')).rejects.toThrow()
   })
 
-  it('logs an error passed to handleError', async () => {
+  it('logs a safe classification for an error passed to handleError', async () => {
     const error = new Error('subscriber failure')
 
     await createHandler().handleError(error)
 
-    expect(logger.error).toHaveBeenCalledWith('Error occured while handling SQS message: %O', error)
+    expect(logger.error).toHaveBeenCalledWith(
+      'Error occurred while handling an SQS message.',
+      expect.objectContaining({ errorType: 'Error' }),
+    )
+    expect(JSON.stringify(logger.error.mock.calls)).not.toContain('subscriber failure')
   })
 })

@@ -23,15 +23,15 @@ flowchart TD
 
 ## Health layers
 
-| Layer | Check | What it proves |
-| --- | --- | --- |
-| Public edge | `GET /healthcheck` or `srn-server health` | The public gateway path responds |
-| Service liveness | Internal `/healthcheck` | The process/event loop responds |
-| Service readiness | Internal `/healthcheck/readiness` | The service can reach required dependencies such as database or Redis |
-| Stack state | `srn-server status` / `docker compose ps` | Container lifecycle and Docker health |
-| Server aggregate | Admin Server tab or `srn-admin status` | Per-sibling readiness and response time |
-| Client data path | Manual sync and a second client | Authentication, encrypted sync, reconciliation, and local persistence |
-| MCP | `standard_red_notes_status` | Bridge sign-in and background-sync health |
+| Layer             | Check                                     | What it proves                                                        |
+| ----------------- | ----------------------------------------- | --------------------------------------------------------------------- |
+| Public edge       | `GET /healthcheck` or `srn-server health` | The public gateway path responds                                      |
+| Service liveness  | Internal `/healthcheck`                   | The process/event loop responds                                       |
+| Service readiness | Internal `/healthcheck/readiness`         | The service can reach required dependencies such as database or Redis |
+| Stack state       | `srn-server status` / `docker compose ps` | Container lifecycle and Docker health                                 |
+| Server aggregate  | Admin Server tab or `srn-admin status`    | Per-sibling readiness and response time                               |
+| Client data path  | Manual sync and a second client           | Authentication, encrypted sync, reconciliation, and local persistence |
+| MCP               | `standard_red_notes_status`               | Bridge sign-in and background-sync health                             |
 
 The public access-key gate exempts health paths so infrastructure probes remain
 usable. A successful health probe does not authenticate a user or prove note
@@ -66,6 +66,56 @@ event backlog, retry, mail, backup, or scheduler failures.
 
 Never paste unredacted logs containing tokens, email addresses, IP addresses,
 provider responses, or request bodies into a public issue.
+
+### Safe operational logging
+
+Security-sensitive server auth, gateway, WebSocket, sync, event, and worker
+paths emit allowlisted diagnostics rather than raw request, response, error, or
+payload objects.
+
+| Kept for diagnosis                                 | Removed or bounded                                                                    |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| Event/action name                                  | Access, refresh, offline, feature, subscription, and WebSocket tokens                 |
+| HTTP method, status, and safe error code/type      | Authorization and cookie headers                                                      |
+| URL origin and path                                | URL user info, query values, and fragments                                            |
+| Query-parameter count                              | Email addresses, passwords, PKCE values, API keys, and session identifiers            |
+| Explicit user, request, or ephemeral connection ID | Request/response bodies, provider payloads, encrypted content, and exception messages |
+
+The sanitizer is defensive against nested and circular objects, accessors,
+hostile proxies, oversized strings, and oversized collections. It does not
+invoke getters while preparing a log entry. Internal subscription validation
+also carries its credential in `x-subscription-token`; the token is not placed
+in the request path.
+
+Client-safe 4xx responses retain their established status, content type, and
+allowlisted error tag. Thrown or untrusted 5xx failures return a stable generic
+service error rather than reflecting an upstream body, header, or exception
+message.
+
+Before merging changes to these surfaces, run the source regression gate:
+
+```bash
+node scripts/validate-safe-logging.mjs
+node scripts/validate-safe-logging.mjs --report-allowlist
+node --test scripts/validate-safe-logging.test.mjs
+```
+
+The Wave 1 gate scans authored runtime JavaScript and TypeScript across CLI,
+MCP, OpenClaw, and server packages. Its machine-readable scope is
+`guardedRuntimeRoots` in the validator. It complements runtime tests by
+rejecting raw-token, raw-object, session-in-log, credential-in-path, and
+crypto-error logging patterns. Allowlist entries are exact and stale-checked:
+changing or removing an intentional match without updating the review record
+fails the gate.
+
+The app safe-log helper is included as shared-kernel foundation, but app runtime
+packages are not yet claimed by this gate. App coverage must be enabled
+atomically with the corresponding client, mobile-bridge, component, and sync
+consumer migrations and tests.
+
+The reviewed-residual list is intentionally empty. WebSocket bridges record
+`originExcluded` as structured boolean metadata, never the underlying session
+UUID, so those diagnostics need no exception.
 
 ## Symptom guide
 

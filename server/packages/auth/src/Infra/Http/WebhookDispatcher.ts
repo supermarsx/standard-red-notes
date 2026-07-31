@@ -6,6 +6,7 @@ import { Webhook } from '../../Domain/Webhook/Webhook'
 import { WebhookRepositoryInterface } from '../../Domain/Webhook/WebhookRepositoryInterface'
 import { WebhookDispatcherInterface, WebhookEventContext } from '../../Domain/Webhook/WebhookDispatcherInterface'
 import { computeWebhookSignature } from '../../Domain/Webhook/WebhookSignature'
+import { safeErrorLogMetadata, sanitizeUrlForSafeLog } from '../../Domain/Logging/SafeLog'
 
 /**
  * Standard Red Notes: outbound webhook dispatcher. Fans a domain event out to
@@ -32,7 +33,10 @@ export class WebhookDispatcher implements WebhookDispatcherInterface {
     try {
       webhooks = await this.webhookRepository.findAllEnabled()
     } catch (error) {
-      this.logger.error(`Could not load webhooks for event ${event}: ${(error as Error).message}`)
+      this.logger.error('Could not load webhooks for an event.', {
+        event,
+        ...safeErrorLogMetadata(error),
+      })
 
       return
     }
@@ -73,8 +77,11 @@ export class WebhookDispatcher implements WebhookDispatcherInterface {
     try {
       await assertPublicHttpUrl(webhook.props.targetUrl)
     } catch (error) {
-      const reason = error instanceof SsrfValidationError ? error.message : (error as Error).message
-      this.logger.warn(`Skipping webhook delivery to ${webhook.props.targetUrl}: ${reason}`)
+      this.logger.warn('Skipping webhook delivery because target validation failed.', {
+        endpoint: sanitizeUrlForSafeLog(webhook.props.targetUrl),
+        validationFailure: error instanceof SsrfValidationError,
+        ...safeErrorLogMetadata(error),
+      })
 
       return
     }
@@ -108,16 +115,18 @@ export class WebhookDispatcher implements WebhookDispatcherInterface {
         return
       } catch (error) {
         const isLastAttempt = attempt === this.MAX_ATTEMPTS
-        this.logger.warn(
-          `Webhook delivery to ${webhook.props.targetUrl} failed (attempt ${attempt}/${this.MAX_ATTEMPTS}): ${
-            (error as Error).message
-          }`,
-        )
+        this.logger.warn('Webhook delivery attempt failed.', {
+          endpoint: sanitizeUrlForSafeLog(webhook.props.targetUrl),
+          attempt,
+          maxAttempts: this.MAX_ATTEMPTS,
+          ...safeErrorLogMetadata(error),
+        })
 
         if (isLastAttempt) {
-          this.logger.error(
-            `Giving up webhook delivery to ${webhook.props.targetUrl} for event ${payload.event as string}`,
-          )
+          this.logger.error('Giving up webhook delivery.', {
+            endpoint: sanitizeUrlForSafeLog(webhook.props.targetUrl),
+            event: payload.event as string,
+          })
 
           return
         }

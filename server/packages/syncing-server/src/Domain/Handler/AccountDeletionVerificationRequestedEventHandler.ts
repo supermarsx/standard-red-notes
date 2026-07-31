@@ -3,7 +3,7 @@ import {
   DomainEventHandlerInterface,
   DomainEventPublisherInterface,
 } from '@standardnotes/domain-events'
-import { Uuid } from '@standardnotes/domain-core'
+import { safeErrorLogMetadata, Uuid } from '@standardnotes/domain-core'
 import { Logger } from 'winston'
 
 import { ItemRepositoryInterface } from '../Item/ItemRepositoryInterface'
@@ -20,7 +20,10 @@ export class AccountDeletionVerificationRequestedEventHandler implements DomainE
   async handle(event: AccountDeletionVerificationRequestedEvent): Promise<void> {
     const userUuidOrError = Uuid.create(event.payload.userUuid)
     if (userUuidOrError.isFailed()) {
-      this.logger.error(`AccountDeletionVerificationRequestedEventHandler failed: ${userUuidOrError.getError()}`)
+      this.logger.error(
+        'AccountDeletionVerificationRequestedEventHandler failed.',
+        safeErrorLogMetadata(userUuidOrError.getError()),
+      )
 
       return
     }

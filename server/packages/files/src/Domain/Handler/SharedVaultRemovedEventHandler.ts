@@ -3,6 +3,7 @@ import {
   DomainEventPublisherInterface,
   SharedVaultRemovedEvent,
 } from '@standardnotes/domain-events'
+import { safeErrorLogMetadata } from '@standardnotes/domain-core'
 import { Logger } from 'winston'
 
 import { MarkFilesToBeRemoved } from '../UseCase/MarkFilesToBeRemoved/MarkFilesToBeRemoved'
@@ -22,12 +23,12 @@ export class SharedVaultRemovedEventHandler implements DomainEventHandlerInterfa
     })
 
     if (result.isFailed()) {
-      const message = `Could not mark files to be removed for shared vault: ${
-        event.payload.sharedVaultUuid
-      }: ${result.getError()}`
-      this.logger.error(message)
+      this.logger.error('Could not mark files to be removed for a shared vault.', {
+        ...safeErrorLogMetadata(result.getError()),
+        sharedVaultUuid: event.payload.sharedVaultUuid,
+      })
 
-      throw new Error(message)
+      throw new Error('Could not mark files to be removed for a shared vault.')
     }
 
     const filesRemoved = result.getValue()

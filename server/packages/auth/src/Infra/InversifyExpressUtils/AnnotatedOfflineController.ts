@@ -49,6 +49,11 @@ export class AnnotatedOfflineController extends BaseOfflineController {
     return super.validate(request)
   }
 
+  @httpPost('/subscription-tokens/validate')
+  async validateFromHeader(request: Request): Promise<results.JsonResult> {
+    return super.validate(request)
+  }
+
   @httpGet('/users/subscription', TYPES.Auth_ApiGatewayOfflineAuthMiddleware)
   override async getSubscription(_request: Request, response: Response): Promise<results.JsonResult> {
     return super.getSubscription(_request, response)

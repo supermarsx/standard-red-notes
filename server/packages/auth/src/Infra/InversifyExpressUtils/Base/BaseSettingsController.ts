@@ -234,7 +234,7 @@ export class BaseSettingsController extends BaseHttpController {
       unencryptedValue: value,
     })
     if (triggerResult.isFailed()) {
-      this.logger.error(`Failed to trigger post setting update actions: ${triggerResult.getError()}`)
+      this.logger.error('Failed to trigger post-setting-update actions.')
     }
 
     // Settings projected into cross-service tokens (including CalDAV, AI,

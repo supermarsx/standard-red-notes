@@ -9,6 +9,7 @@ import { Logger } from 'winston'
 import { SyncResponseHttpRepresentation } from '../../Mapping/Sync/Http/SyncResponseHttpRepresentation'
 import { ResponseLocals } from '../../Controller/ResponseLocals'
 import { DomainEventFactoryInterface } from '../../Event/DomainEventFactoryInterface'
+import { safeErrorLogMetadata } from '../Logging/SafeLog'
 
 export class GRPCSyncingServerServiceProxy {
   constructor(
@@ -60,9 +61,10 @@ export class GRPCSyncingServerServiceProxy {
             }
 
             if (error.code === Status.INTERNAL) {
-              this.logger.error(`Internal gRPC error: ${error.message}`, {
+              this.logger.error('Internal gRPC error.', {
                 codeTag: 'GRPCSyncingServerServiceProxy',
                 userId: locals.user.uuid,
+                ...safeErrorLogMetadata(error),
               })
             }
 
@@ -78,13 +80,12 @@ export class GRPCSyncingServerServiceProxy {
           return resolve({ status: 200, data: this.syncResponseGRPCMapper.toProjection(syncResponse) })
         })
       } catch (error) {
-        if (
-          'code' in (error as Record<string, unknown>) &&
-          (error as Record<string, unknown>).code === Status.INTERNAL
-        ) {
-          this.logger.error(`Internal gRPC error: ${(error as Error).message}`, {
+        const safeError = safeErrorLogMetadata(error)
+        if (safeError.errorCode === Status.INTERNAL) {
+          this.logger.error('Internal gRPC error.', {
             codeTag: 'GRPCSyncingServerServiceProxy.catch',
             userId: locals.user.uuid,
+            ...safeError,
           })
         }
 

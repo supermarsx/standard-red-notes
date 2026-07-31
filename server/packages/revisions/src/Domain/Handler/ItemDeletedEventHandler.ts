@@ -1,3 +1,4 @@
+import { safeErrorLogMetadata } from '@standardnotes/domain-core'
 import { DomainEventHandlerInterface, ItemDeletedEvent } from '@standardnotes/domain-events'
 import { Logger } from 'winston'
 
@@ -13,7 +14,8 @@ export class ItemDeletedEventHandler implements DomainEventHandlerInterface {
     const result = await this.deleteRevisions.execute({ itemUuid: event.payload.itemUuid })
 
     if (result.isFailed()) {
-      this.logger.error(`Could not delete revisions for item ${event.payload.itemUuid}: ${result.getError()}`, {
+      this.logger.error(`Could not delete revisions for item ${event.payload.itemUuid}.`, {
+        ...safeErrorLogMetadata(result.getError()),
         userId: event.payload.userUuid,
       })
     }

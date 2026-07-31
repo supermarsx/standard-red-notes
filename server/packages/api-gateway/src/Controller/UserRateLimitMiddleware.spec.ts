@@ -91,4 +91,18 @@ describe('UserRateLimitMiddleware', () => {
 
     expect(next).toHaveBeenCalled()
   })
+
+  it('preserves safe error metadata when the wrapped limiter fails open', async () => {
+    serverSettingsResolver.resolveRateLimitConfig.mockRejectedValue(new TypeError('credential-sentinel'))
+    const redis: RateLimitRedis = { incr: jest.fn(), expire: jest.fn(), ttl: jest.fn() }
+
+    const { next } = await run(createMiddleware(redis))
+
+    expect(next).toHaveBeenCalled()
+    expect(logger.warn).toHaveBeenCalledWith(
+      'Per-user rate-limit config resolution failed open.',
+      expect.objectContaining({ errorType: 'TypeError' }),
+    )
+    expect(JSON.stringify((logger.warn as jest.Mock).mock.calls)).not.toContain('credential-sentinel')
+  })
 })

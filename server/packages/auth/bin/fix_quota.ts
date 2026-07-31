@@ -6,6 +6,7 @@ import { ContainerConfigLoader } from '../src/Bootstrap/Container'
 import TYPES from '../src/Bootstrap/Types'
 import { Env } from '../src/Bootstrap/Env'
 import { FixStorageQuotaForUser } from '../src/Domain/UseCase/FixStorageQuotaForUser/FixStorageQuotaForUser'
+import { safeErrorLogMetadata } from '../src/Domain/Logging/SafeLog'
 
 const inputArgs = process.argv.slice(2)
 const userEmail = inputArgs[0]
@@ -17,9 +18,7 @@ void container.load().then((container) => {
 
   const logger: Logger = container.get(TYPES.Auth_Logger)
 
-  logger.info('Starting storage quota fix...', {
-    userId: userEmail,
-  })
+  logger.info('Starting a storage-quota fix.')
 
   const fixStorageQuota = container.get<FixStorageQuotaForUser>(TYPES.Auth_FixStorageQuotaForUser)
 
@@ -29,16 +28,12 @@ void container.load().then((container) => {
     }),
   )
     .then(() => {
-      logger.info('Storage quota fixed', {
-        userId: userEmail,
-      })
+      logger.info('Storage quota fixed.')
 
       process.exit(0)
     })
     .catch((error) => {
-      logger.error(`Could not fix storage quota: ${error.message}`, {
-        userId: userEmail,
-      })
+      logger.error('Could not fix storage quota.', safeErrorLogMetadata(error))
 
       process.exit(1)
     })

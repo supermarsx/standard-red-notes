@@ -6,6 +6,7 @@ import { Logger } from 'winston'
 
 import { TYPES } from '../../Bootstrap/Types'
 import { isValidCollaborationCapabilityTtlSeconds } from '../../Bootstrap/CollaborationCapabilityTtl'
+import { safeHttpErrorLogMetadata } from '../../Service/Logging/SafeLog'
 import { ServiceProxyInterface } from '../../Service/Proxy/ServiceProxyInterface'
 import { EndpointResolverInterface } from '../../Service/Resolver/EndpointResolverInterface'
 
@@ -101,7 +102,14 @@ export class CollaborationController extends BaseHttpController {
 
       response.status(200).json({ capability, room: noteUuid, expiresIn: this.capabilityTtlSeconds })
     } catch (error) {
-      this.logger.error(`Collaboration authorize failed: ${(error as Error).message}`)
+      this.logger.error(
+        'Collaboration authorize failed.',
+        safeHttpErrorLogMetadata(error, {
+          action: 'collaboration.authorize',
+          endpoint: '/v1/collaboration/authorize',
+          method: 'POST',
+        }),
+      )
       denied()
     }
   }
@@ -146,7 +154,14 @@ export class CollaborationController extends BaseHttpController {
         { itemUuid: noteUuid },
       )
     } catch (error) {
-      this.logger.error(`Collaboration access check call failed: ${(error as Error).message}`)
+      this.logger.error(
+        'Collaboration access check call failed.',
+        safeHttpErrorLogMetadata(error, {
+          action: 'collaboration.access-check',
+          endpoint: 'items/collaboration-authorization',
+          method: 'POST',
+        }),
+      )
       return false
     }
 

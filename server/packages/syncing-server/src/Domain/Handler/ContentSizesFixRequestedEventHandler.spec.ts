@@ -39,7 +39,11 @@ describe('ContentSizesFixRequestedEventHandler', () => {
 
     await createHandler().handle(event())
 
-    expect(logger.error).toHaveBeenCalledWith('Failed to fix content sizes: Oops', { userId: userUuid })
+    expect(logger.error).toHaveBeenCalledWith(
+      'Failed to fix content sizes.',
+      expect.objectContaining({ errorType: 'Error', userId: userUuid }),
+    )
+    expect(JSON.stringify((logger.error as jest.Mock).mock.calls)).not.toContain('Oops')
     expect(logger.info).not.toHaveBeenCalled()
   })
 })

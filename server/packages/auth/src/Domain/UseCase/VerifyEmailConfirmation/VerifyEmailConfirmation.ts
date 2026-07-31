@@ -8,6 +8,7 @@ import { TimerInterface } from '@standardnotes/time'
 
 import { VerifyEmailConfirmationDTO } from './VerifyEmailConfirmationDTO'
 import { VerifyEmailConfirmationResponse } from './VerifyEmailConfirmationResponse'
+import { safeErrorLogMetadata } from '../../Logging/SafeLog'
 
 /**
  * Standard Red Notes: consumes an email-confirmation token. On success it marks
@@ -76,7 +77,7 @@ export class VerifyEmailConfirmation implements UseCaseInterface<VerifyEmailConf
 
       return Result.ok({ success: true })
     } catch (error) {
-      this.logger.error(`[email-confirmation] Verification failed: ${(error as Error).message}`)
+      this.logger.error('[email-confirmation] Verification failed.', safeErrorLogMetadata(error))
 
       return Result.fail('Could not verify the confirmation link.')
     }

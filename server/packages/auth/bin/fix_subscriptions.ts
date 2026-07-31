@@ -9,7 +9,7 @@ import { UserSubscriptionRepositoryInterface } from '../src/Domain/Subscription/
 import { DomainEventFactoryInterface } from '../src/Domain/Event/DomainEventFactoryInterface'
 import { DomainEventPublisherInterface } from '@standardnotes/domain-events'
 import { UserRepositoryInterface } from '../src/Domain/User/UserRepositoryInterface'
-import { Uuid } from '@standardnotes/domain-core'
+import { safeErrorLogMetadata, Uuid } from '@standardnotes/domain-core'
 
 const fixSubscriptions = async (
   userRepository: UserRepositoryInterface,
@@ -64,10 +64,7 @@ void container.load().then((container) => {
       process.exit(0)
     })
     .catch((error) => {
-      logger.error('Failed to fix subscriptions with missing subscriptionId.', {
-        error: error.message,
-        stack: error.stack,
-      })
+      logger.error('Failed to fix subscriptions with missing subscriptionId.', safeErrorLogMetadata(error))
 
       process.exit(1)
     })

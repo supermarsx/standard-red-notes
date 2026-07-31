@@ -95,8 +95,10 @@ describe('WebSocketRedisBridge lifecycle', () => {
     const redisErrorHandler = publisher.on.mock.calls[0][1]
     redisErrorHandler(new Error('redis unavailable'))
 
-    expect(logger.debug).toHaveBeenCalledWith('WebSocketRedisBridge publish failed: publish unavailable')
-    expect(logger.debug).toHaveBeenCalledWith('WebSocketRedisBridge redis error: redis unavailable')
+    expect(logger.debug).toHaveBeenCalledWith('WebSocketRedisBridge publish failed.')
+    expect(logger.debug).toHaveBeenCalledWith('WebSocketRedisBridge redis connection error.')
+    expect(JSON.stringify(logger.debug.mock.calls)).not.toContain('publish unavailable')
+    expect(JSON.stringify(logger.debug.mock.calls)).not.toContain('redis unavailable')
   })
 
   it('quits the lazily-created Redis publisher and can create a fresh one after close', async () => {
@@ -118,7 +120,8 @@ describe('WebSocketRedisBridge lifecycle', () => {
     await bridge.close()
 
     expect(publisher.disconnect).toHaveBeenCalledTimes(1)
-    expect(logger.debug).toHaveBeenCalledWith('WebSocketRedisBridge graceful close failed: connection lost')
+    expect(logger.debug).toHaveBeenCalledWith('WebSocketRedisBridge graceful close failed.')
+    expect(JSON.stringify(logger.debug.mock.calls)).not.toContain('connection lost')
   })
 
   it('does not allocate Redis merely to close a disabled bridge', async () => {
@@ -135,6 +138,7 @@ describe('WebSocketRedisBridge lifecycle', () => {
 
     await bridge.handleError(error)
 
-    expect(logger.error).toHaveBeenCalledWith('WebSocketRedisBridge error: %O', error)
+    expect(logger.error).toHaveBeenCalledWith('WebSocketRedisBridge domain subscriber error.')
+    expect(JSON.stringify(logger.error.mock.calls)).not.toContain('handler failed')
   })
 })

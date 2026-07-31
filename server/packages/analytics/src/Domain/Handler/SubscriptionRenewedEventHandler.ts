@@ -1,6 +1,6 @@
 import { DomainEventHandlerInterface, SubscriptionRenewedEvent } from '@standardnotes/domain-events'
 import { inject, injectable, optional } from 'inversify'
-import { Username } from '@standardnotes/domain-core'
+import { safeErrorLogMetadata, Username } from '@standardnotes/domain-core'
 import { Mixpanel } from 'mixpanel'
 
 import TYPES from '../../Bootstrap/Types'
@@ -55,7 +55,8 @@ export class SubscriptionRenewedEventHandler implements DomainEventHandlerInterf
 
     if (result.isFailed()) {
       this.logger.error(
-        `[${event.type}][${event.payload.subscriptionId}] Could not save revenue modification: ${result.getError()}`,
+        `[${event.type}][${event.payload.subscriptionId}] Could not save revenue modification.`,
+        safeErrorLogMetadata(result.getError()),
       )
     }
 

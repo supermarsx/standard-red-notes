@@ -43,15 +43,13 @@ export class CrypterNode implements CrypterInterface {
   }
 
   async decryptForUser(formattedEncryptedValue: string, user: User): Promise<string> {
-    this.logger.debug('Decrypting for user value: %s', formattedEncryptedValue)
+    this.logger.debug('Decrypting protected value for user.', {
+      userId: user.uuid,
+    })
 
     const decryptedUserServerKey = await this.decryptUserServerKey(user)
 
-    this.logger.debug('Decrypted user server key: %s', decryptedUserServerKey)
-
     const encrypted = this.parseVersionedEncrypted(formattedEncryptedValue)
-
-    this.logger.debug('Encrypted value: %O', encrypted)
 
     return this.cryptoNode.aes256GcmDecrypt(encrypted, decryptedUserServerKey)
   }

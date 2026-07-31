@@ -1,6 +1,6 @@
 import { inject, injectable } from 'inversify'
 import { Logger } from 'winston'
-import { Result, UseCaseInterface } from '@standardnotes/domain-core'
+import { safeErrorLogMetadata, Result, UseCaseInterface } from '@standardnotes/domain-core'
 
 import TYPES from '../../../Bootstrap/Types'
 import { WebSocketsConnectionRepositoryInterface } from '../../WebSockets/WebSocketsConnectionRepositoryInterface'
@@ -22,7 +22,8 @@ export class RemoveWebSocketsConnection implements UseCaseInterface<void> {
 
       return Result.ok()
     } catch (error) {
-      this.logger.error(`Error removing connection: ${(error as Error).message}`, {
+      this.logger.error('Error removing connection.', {
+        ...safeErrorLogMetadata(error),
         connectionId: dto.connectionId,
       })
 

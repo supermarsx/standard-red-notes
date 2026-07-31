@@ -97,10 +97,13 @@ describe('BaseAuthController registration', () => {
     expect(logger.error).toHaveBeenCalledWith(
       'Failed to publish USER_REGISTERED event after registration was committed.',
       {
-        userUuid: registeredUser.uuid,
-        error: 'SNS request timed out',
+        userId: registeredUser.uuid,
+        errorType: 'Error',
+        errorCode: undefined,
+        status: undefined,
       },
     )
+    expect(JSON.stringify((logger.error as jest.Mock).mock.calls)).not.toContain('SNS request timed out')
     expect(result.statusCode).toBe(200)
     expect(result.json).toEqual(legacyResponse)
     expect(response.setHeader).not.toHaveBeenCalled()

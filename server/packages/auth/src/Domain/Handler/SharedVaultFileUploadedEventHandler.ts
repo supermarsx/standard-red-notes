@@ -16,7 +16,7 @@ export class SharedVaultFileUploadedEventHandler implements DomainEventHandlerIn
     })
 
     if (result.isFailed()) {
-      this.logger.error(`Failed to update storage quota used for user: ${result.getError()}`)
+      this.logger.error('Failed to update storage quota after a shared-vault file was uploaded.')
     }
   }
 }

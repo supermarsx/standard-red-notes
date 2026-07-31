@@ -72,7 +72,9 @@ describe('AccountDeletionVerificationRequestedEventHandler', () => {
     expect(itemRepository.countAll).not.toHaveBeenCalled()
     expect(domainEventPublisher.publish).not.toHaveBeenCalled()
     expect(logger.error).toHaveBeenCalledWith(
-      expect.stringContaining('AccountDeletionVerificationRequestedEventHandler failed:'),
+      'AccountDeletionVerificationRequestedEventHandler failed.',
+      expect.objectContaining({ errorType: 'Error' }),
     )
+    expect(JSON.stringify((logger.error as jest.Mock).mock.calls)).not.toContain('not-a-uuid')
   })
 })

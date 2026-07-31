@@ -40,6 +40,7 @@ describe('EmailSubscriptionUnsubscribedEventHandler', () => {
 
     await createHandler().handle(event)
 
-    expect(logger.error).toHaveBeenCalledWith('Failed to disable email setting for user: nope', { userId: userEmail })
+    expect(logger.error).toHaveBeenCalledWith('Failed to disable an email setting for a user.')
+    expect(JSON.stringify((logger.error as jest.Mock).mock.calls)).not.toContain(userEmail)
   })
 })

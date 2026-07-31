@@ -6,6 +6,7 @@ import { verify } from 'jsonwebtoken'
 import { Logger } from 'winston'
 import { ConnectionValidationResponse, IAuthClient, WebsocketConnectionAuthorizationHeader } from '@standardnotes/grpc'
 import { RoleName } from '@standardnotes/domain-core'
+import { safeErrorLogMetadata } from '../Service/Logging/SafeLog'
 import { ResponseLocals } from './ResponseLocals'
 
 export class GRPCWebSocketAuthMiddleware extends BaseMiddleware {
@@ -104,9 +105,8 @@ export class GRPCWebSocketAuthMiddleware extends BaseMiddleware {
       } as ResponseLocals)
     } catch (error) {
       this.logger.error(
-        `Could not pass the request to websocket connection validation on underlying service: ${
-          (error as Error).message
-        }`,
+        'Could not pass the request to websocket connection validation on the underlying service.',
+        safeErrorLogMetadata(error),
       )
 
       response

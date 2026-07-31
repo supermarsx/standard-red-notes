@@ -9,6 +9,7 @@ import { VerifyProofOfWork } from '../UseCase/VerifyProofOfWork/VerifyProofOfWor
 import { IpEscalationCheckerInterface } from './IpEscalationCheckerInterface'
 import { ProofOfWorkConfigResolverInterface } from './ProofOfWorkConfigResolverInterface'
 import { ProofOfWorkScope, ProofOfWorkScopeConfig } from './ProofOfWorkConfig'
+import { safeErrorLogMetadata } from '../Logging/SafeLog'
 
 export interface ProofOfWorkChallengePayload {
   seed: string
@@ -57,7 +58,7 @@ export class ProofOfWorkGate {
 
       return await this.verifyOrIssue('register', config, requestBody)
     } catch (error) {
-      this.logger.warn(`Proof-of-work register gate failed open: ${(error as Error).message}`)
+      this.logger.warn('Proof-of-work register gate failed open.', safeErrorLogMetadata(error))
 
       return { satisfied: true }
     }
@@ -100,7 +101,7 @@ export class ProofOfWorkGate {
 
       return await this.verifyOrIssue('signIn', config, requestBody)
     } catch (error) {
-      this.logger.warn(`Proof-of-work sign-in gate failed open: ${(error as Error).message}`)
+      this.logger.warn('Proof-of-work sign-in gate failed open.', safeErrorLogMetadata(error))
 
       return { satisfied: true }
     }

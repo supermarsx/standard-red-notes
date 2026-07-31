@@ -134,7 +134,7 @@ export class BaseSubscriptionSettingsController extends BaseHttpController {
       unencryptedValue: value,
     })
     if (triggerResult.isFailed()) {
-      this.logger.error(`Failed to trigger post setting update actions: ${triggerResult.getError()}`)
+      this.logger.error('Failed to trigger post-setting-update actions.')
     }
 
     return this.json({

@@ -1,3 +1,4 @@
+import { safeErrorLogMetadata } from '@standardnotes/domain-core'
 import 'reflect-metadata'
 
 import '../src/Infra/InversifyExpressUtils/AnnotatedHealthCheckController'
@@ -33,7 +34,7 @@ void container.load().then(async (container) => {
 
   server.setErrorConfig((app) => {
     app.use((error: Record<string, unknown>, _request: Request, response: Response, _next: NextFunction) => {
-      logger.error(error.stack)
+      logger.error('Unhandled websocket request failed.', safeErrorLogMetadata(error))
 
       response.status(500).send({
         error: {

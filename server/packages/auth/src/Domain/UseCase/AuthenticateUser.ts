@@ -10,6 +10,7 @@ import { AuthenticateUserDTO } from './AuthenticateUserDTO'
 import { AuthenticateUserResponse } from './AuthenticateUserResponse'
 import { UseCaseInterface } from './UseCaseInterface'
 import { Logger } from 'winston'
+import { safeRequestLogMetadata } from '../Logging/SafeLog'
 
 @injectable()
 export class AuthenticateUser implements UseCaseInterface {
@@ -25,7 +26,13 @@ export class AuthenticateUser implements UseCaseInterface {
   async execute(dto: AuthenticateUserDTO): Promise<AuthenticateUserResponse> {
     const authenticationMethod = await this.authenticationMethodResolver.resolve(dto)
     if (!authenticationMethod) {
-      this.logger.debug(`[authenticate-user] No authentication method found for tokens: ${JSON.stringify(dto)}`)
+      this.logger.debug('[authenticate-user] Authentication failed', {
+        reason: 'authentication-method-not-found',
+        ...safeRequestLogMetadata({
+          method: dto.requestMetadata.method,
+          url: dto.requestMetadata.url,
+        }),
+      })
 
       return {
         success: false,
@@ -34,7 +41,13 @@ export class AuthenticateUser implements UseCaseInterface {
     }
 
     if (authenticationMethod.type === 'revoked') {
-      this.logger.debug(`[authenticate-user] Session has been revoked: ${dto.authTokenFromHeaders}`)
+      this.logger.debug('[authenticate-user] Authentication failed', {
+        reason: 'session-revoked',
+        ...safeRequestLogMetadata({
+          method: dto.requestMetadata.method,
+          url: dto.requestMetadata.url,
+        }),
+      })
 
       return {
         success: false,
@@ -44,7 +57,13 @@ export class AuthenticateUser implements UseCaseInterface {
 
     const user = authenticationMethod.user
     if (!user) {
-      this.logger.debug(`[authenticate-user] No user found for authentication method. Token: ${JSON.stringify(dto)}`)
+      this.logger.debug('[authenticate-user] Authentication failed', {
+        reason: 'user-not-found',
+        ...safeRequestLogMetadata({
+          method: dto.requestMetadata.method,
+          url: dto.requestMetadata.url,
+        }),
+      })
 
       return {
         success: false,
@@ -126,14 +145,12 @@ export class AuthenticateUser implements UseCaseInterface {
 
         if (authenticationMethod.givenTokensWereInCooldown) {
           this.logger.warn('Request was authenticated with tokens that were in cooldown.', {
-            userId: user.uuid,
-            sessionUuid: session.uuid,
-            snjs: dto.requestMetadata.snjs,
-            application: dto.requestMetadata.application,
-            url: dto.requestMetadata.url,
-            method: dto.requestMetadata.method,
-            userAgent: session.userAgent,
-            secChUa: session.userAgent ? dto.requestMetadata.secChUa : undefined,
+            reason: 'token-cooldown',
+            ...safeRequestLogMetadata({
+              userId: user.uuid,
+              method: dto.requestMetadata.method,
+              url: dto.requestMetadata.url,
+            }),
           })
 
           return {

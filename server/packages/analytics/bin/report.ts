@@ -16,7 +16,7 @@ import { CalculateMonthlyRecurringRevenue } from '../src/Domain/UseCase/Calculat
 import { getBody, getSubject } from '../src/Domain/Email/DailyAnalyticsReport'
 import { TimerInterface } from '@standardnotes/time'
 import { StatisticMeasureName } from '../src/Domain/Statistics/StatisticMeasureName'
-import { EmailLevel } from '@standardnotes/domain-core'
+import { safeErrorLogMetadata, EmailLevel } from '@standardnotes/domain-core'
 
 const requestReport = async (
   analyticsStore: AnalyticsStoreInterface,
@@ -268,7 +268,9 @@ void container.load().then((container) => {
   )
   const adminEmails = container.get(TYPES.ADMIN_EMAILS) as string[]
 
-  logger.info(`Sending report to following admins: ${adminEmails}`)
+  logger.info('Sending analytics report to configured administrators.', {
+    recipientCount: adminEmails.length,
+  })
 
   Promise.resolve(
     requestReport(
@@ -288,7 +290,7 @@ void container.load().then((container) => {
       process.exit(0)
     })
     .catch((error) => {
-      logger.error(`Could not finish usage report generation: ${error.message}`)
+      logger.error('Could not finish usage report generation.', safeErrorLogMetadata(error))
 
       process.exit(1)
     })

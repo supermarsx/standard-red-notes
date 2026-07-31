@@ -38,6 +38,7 @@ describe('PaymentsAccountDeletedEventHandler', () => {
 
     await createHandler().handle(event)
 
-    expect(logger.error).toHaveBeenCalledWith(`Failed to delete account for user ${username}: could not delete`)
+    expect(logger.error).toHaveBeenCalledWith('Failed to delete an account after the payments-account-deleted event.')
+    expect(JSON.stringify((logger.error as jest.Mock).mock.calls)).not.toContain(username)
   })
 })

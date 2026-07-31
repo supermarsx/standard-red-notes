@@ -111,10 +111,18 @@ describe('startRedisBridge', () => {
     startRedisBridge(makeRegistry().registry, { host: 'h', port: 1, logger })
 
     redis.instances[0].emit('error', new Error('ECONNREFUSED'))
-    expect(logger.error).toHaveBeenCalledWith('[redis] connection error', 'ECONNREFUSED')
+    expect(logger.error).toHaveBeenCalledWith('[redis] connection error', {
+      errorType: 'Error',
+      errorCode: undefined,
+    })
 
     redis.instances[0].emit('error', 'plain string failure')
-    expect(logger.error).toHaveBeenCalledWith('[redis] connection error', 'plain string failure')
+    expect(logger.error).toHaveBeenCalledWith('[redis] connection error', {
+      errorType: 'Error',
+      errorCode: undefined,
+    })
+    expect(JSON.stringify(logger.error.mock.calls)).not.toContain('ECONNREFUSED')
+    expect(JSON.stringify(logger.error.mock.calls)).not.toContain('plain string failure')
   })
 
   it('logs host and port once the client reports ready', () => {
@@ -138,7 +146,11 @@ describe('startRedisBridge', () => {
     startRedisBridge(makeRegistry().registry, { host: 'h', port: 1, logger })
 
     redis.instances[0].subscribeCallback?.(new Error('NOPERM'))
-    expect(logger.error).toHaveBeenCalledWith('[redis] subscribe failed', 'NOPERM')
+    expect(logger.error).toHaveBeenCalledWith('[redis] subscribe failed', {
+      errorType: 'Error',
+      errorCode: undefined,
+    })
+    expect(JSON.stringify(logger.error.mock.calls)).not.toContain('NOPERM')
     expect(logger.info).not.toHaveBeenCalledWith(expect.stringContaining('subscribed to'))
   })
 
@@ -154,7 +166,11 @@ describe('startRedisBridge', () => {
     )
 
     expect(send).toHaveBeenCalledWith('payload-a')
-    expect(logger.info).toHaveBeenCalledWith('[push] user=user-1 sockets=1')
+    expect(logger.info).toHaveBeenCalledWith('[push] dispatched websocket message', {
+      userId: 'user-1',
+      socketCount: 1,
+      originExcluded: false,
+    })
   })
 
   it('ignores messages published on any other channel', () => {
@@ -178,7 +194,11 @@ describe('startRedisBridge', () => {
     redis.instances[0].emit('message', WEBSOCKET_MESSAGES_CHANNEL, '{ not json')
 
     expect(send).not.toHaveBeenCalled()
-    expect(logger.warn).toHaveBeenCalledWith('[redis] dropping malformed message', expect.any(String))
+    expect(logger.warn).toHaveBeenCalledWith('[redis] dropping malformed message', {
+      errorType: 'Error',
+      errorCode: undefined,
+    })
+    expect(JSON.stringify(logger.warn.mock.calls)).not.toContain('{ not json')
   })
 
   it('excludes the originating session from a dispatched message', () => {
@@ -208,6 +228,11 @@ describe('startRedisBridge', () => {
 
     expect(send).not.toHaveBeenCalled()
     expect(otherSend).toHaveBeenCalledWith('m')
-    expect(logger.info).toHaveBeenCalledWith('[push] user=user-1 sockets=1 excludeSession=session-origin')
+    expect(logger.info).toHaveBeenCalledWith('[push] dispatched websocket message', {
+      userId: 'user-1',
+      socketCount: 1,
+      originExcluded: true,
+    })
+    expect(JSON.stringify(logger.info.mock.calls)).not.toContain('session-origin')
   })
 })

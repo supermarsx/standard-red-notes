@@ -112,7 +112,7 @@ describe('GRPCSyncingServerServiceProxy', () => {
   })
 
   it('does not log encrypted request content when gRPC returns an internal error', async () => {
-    const error = Object.assign(new Error('upstream failed'), {
+    const error = Object.assign(new Error('grpc-credential-sentinel'), {
       code: Status.INTERNAL,
       metadata: new Metadata(),
     }) as ServiceError
@@ -129,10 +129,14 @@ describe('GRPCSyncingServerServiceProxy', () => {
       }),
     ).rejects.toBe(error)
 
-    expect(logger.error).toHaveBeenCalledWith('Internal gRPC error: upstream failed', {
+    expect(logger.error).toHaveBeenCalledWith('Internal gRPC error.', {
       codeTag: 'GRPCSyncingServerServiceProxy',
       userId: 'user-1',
+      errorType: 'Error',
+      errorCode: Status.INTERNAL,
+      status: undefined,
     })
+    expect(JSON.stringify(logger.error.mock.calls)).not.toContain('grpc-credential-sentinel')
     expect(JSON.stringify(logger.error.mock.calls)).not.toContain('sentinel-encrypted-content')
     expect(JSON.stringify(logger.error.mock.calls)).not.toContain('sentinel-auth-hash')
   })

@@ -16,7 +16,7 @@ export class SharedVaultFileRemovedEventHandler implements DomainEventHandlerInt
     })
 
     if (result.isFailed()) {
-      this.logger.error(`Failed to update storage quota used for user: ${result.getError()}`)
+      this.logger.error('Failed to update storage quota after a shared-vault file was removed.')
     }
   }
 }

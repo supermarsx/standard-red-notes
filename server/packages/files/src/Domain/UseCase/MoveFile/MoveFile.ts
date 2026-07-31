@@ -1,5 +1,5 @@
 import { Logger } from 'winston'
-import { Result, UseCaseInterface, Uuid } from '@standardnotes/domain-core'
+import { safeErrorLogMetadata, Result, UseCaseInterface, Uuid } from '@standardnotes/domain-core'
 import { DomainEventPublisherInterface } from '@standardnotes/domain-events'
 
 import { FileMoverInterface } from '../../Services/FileMoverInterface'
@@ -94,7 +94,7 @@ export class MoveFile implements UseCaseInterface<boolean> {
 
       return Result.ok()
     } catch (error) {
-      this.logger.error(`Could not move resource: ${dto.resourceRemoteIdentifier} - ${(error as Error).message}`)
+      this.logger.error(`Could not move resource: ${dto.resourceRemoteIdentifier}.`, safeErrorLogMetadata(error))
 
       return Result.fail('Could not move resource')
     }

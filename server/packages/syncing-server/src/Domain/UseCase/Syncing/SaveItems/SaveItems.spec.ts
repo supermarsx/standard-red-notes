@@ -252,7 +252,11 @@ describe('SaveItems', () => {
         type: 'uuid_conflict',
       },
     ])
-    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('update blew up'))
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('Updating item'),
+      expect.objectContaining({ errorType: 'Error' }),
+    )
+    expect(JSON.stringify(logger.error.mock.calls)).not.toContain('update blew up')
   })
 
   it('should still report the save as successful when post-persist notification throws', async () => {
@@ -279,7 +283,11 @@ describe('SaveItems', () => {
     expect(result.isFailed()).toBeFalsy()
     expect(result.getValue().savedItems).toEqual([savedItem])
     expect(result.getValue().conflicts).toEqual([])
-    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('publish blip'))
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('Notifying other clients of changed items failed post-persist'),
+      expect.objectContaining({ errorType: 'Error' }),
+    )
+    expect(JSON.stringify(logger.error.mock.calls)).not.toContain('publish blip')
   })
 
   it('should not save items if in read-only mode', async () => {
@@ -394,9 +402,13 @@ describe('SaveItems', () => {
     expect(result.isFailed()).toBeFalsy()
     expect(result.getValue().savedItems).toEqual([savedItem])
     expect(logger.error).toHaveBeenCalledWith(
-      'Sending items changed event to client failed. Error: websocket gateway unreachable',
-      { userId: 'user-uuid' },
+      'Sending items changed event to client failed.',
+      expect.objectContaining({
+        errorType: 'Error',
+        userId: 'user-uuid',
+      }),
     )
+    expect(JSON.stringify(logger.error.mock.calls)).not.toContain('websocket gateway unreachable')
   })
 
   it('should log, but not fail the save, when the shared vault fan-out cannot be delivered', async () => {
@@ -437,9 +449,14 @@ describe('SaveItems', () => {
     expect(result.isFailed()).toBeFalsy()
     expect(sendEventToClients.execute).toHaveBeenCalled()
     expect(logger.error).toHaveBeenCalledWith(
-      'Sending items changed event to clients failed. Error: shared vault gateway unreachable',
-      { userId: '00000000-0000-0000-0000-000000000000', sharedVaultUuid: '00000000-0000-0000-0000-000000000001' },
+      'Sending items changed event to clients failed.',
+      expect.objectContaining({
+        errorType: 'Error',
+        userId: '00000000-0000-0000-0000-000000000000',
+        sharedVaultUuid: '00000000-0000-0000-0000-000000000001',
+      }),
     )
+    expect(JSON.stringify(logger.error.mock.calls)).not.toContain('shared vault gateway unreachable')
   })
 
   it('should update existing shared vault items', async () => {

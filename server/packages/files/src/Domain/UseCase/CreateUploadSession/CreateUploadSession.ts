@@ -1,3 +1,4 @@
+import { safeErrorLogMetadata } from '@standardnotes/domain-core'
 import { inject, injectable } from 'inversify'
 import { Logger } from 'winston'
 
@@ -34,7 +35,8 @@ export class CreateUploadSession implements UseCaseInterface {
       }
     } catch (error) {
       this.logger.error(
-        `Could not create upload session for resource: ${dto.resourceRemoteIdentifier} - ${(error as Error).message}`,
+        `Could not create upload session for resource: ${dto.resourceRemoteIdentifier}.`,
+        safeErrorLogMetadata(error),
       )
 
       return {

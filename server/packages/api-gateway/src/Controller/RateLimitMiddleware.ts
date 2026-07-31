@@ -2,6 +2,7 @@ import { NextFunction, Request, Response } from 'express'
 
 import { IpAclDecision } from './IpAccessList'
 import { resolveClientIpFromRequest } from './ClientIp'
+import { safeErrorLogMetadata } from '../Service/Logging/SafeLog'
 
 /**
  * Redis-backed IP rate limiting for the UNAUTHENTICATED, auth-adjacent gateway
@@ -46,7 +47,7 @@ export interface RateLimitRedis {
 }
 
 export interface RateLimitLogger {
-  warn(message: string): void
+  warn(message: string, metadata?: Record<string, unknown>): void
 }
 
 export interface RateLimitRule {
@@ -221,7 +222,7 @@ export const createRateLimitMiddleware = (options: {
             return
           }
         } catch (error) {
-          logger.warn(`IP access-list check failing open (Redis error): ${(error as Error).message}`)
+          logger.warn('IP access-list check failed open.', safeErrorLogMetadata(error))
         }
       }
 
@@ -230,7 +231,7 @@ export const createRateLimitMiddleware = (options: {
         resolved = await resolveConfig()
       } catch (error) {
         // A broken overlay must not take the auth surfaces down.
-        logger.warn(`Rate-limit config resolution failing open: ${(error as Error).message}`)
+        logger.warn('Rate-limit config resolution failed open.', safeErrorLogMetadata(error))
         next()
         return
       }
@@ -278,7 +279,7 @@ export const createRateLimitMiddleware = (options: {
         response.status(429).send(TOO_MANY_REQUESTS)
       } catch (error) {
         // FAIL-OPEN: a Redis outage must not lock users out of auth endpoints.
-        logger.warn(`Rate limiter failing open (Redis error) for ${rule.bucket}: ${(error as Error).message}`)
+        logger.warn('Rate limiter failed open.', safeErrorLogMetadata(error))
         next()
       }
     })()
@@ -326,7 +327,7 @@ export const createUserRateLimitMiddleware = (options: {
       try {
         resolved = await resolveConfig()
       } catch (error) {
-        logger.warn(`Per-user rate-limit config resolution failing open: ${(error as Error).message}`)
+        logger.warn('Per-user rate-limit config resolution failed open.', safeErrorLogMetadata(error))
         next()
         return
       }
@@ -377,9 +378,7 @@ export const createUserRateLimitMiddleware = (options: {
         })
         response.status(429).send(TOO_MANY_REQUESTS)
       } catch (error) {
-        logger.warn(
-          `Per-user rate limiter failing open (Redis error) for ${resolved.bucket}: ${(error as Error).message}`,
-        )
+        logger.warn('Per-user rate limiter failed open.', safeErrorLogMetadata(error))
         next()
       }
     })()

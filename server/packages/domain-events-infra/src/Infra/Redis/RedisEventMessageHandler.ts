@@ -1,3 +1,4 @@
+import { safeErrorLogMetadata } from '@standardnotes/domain-core'
 import * as zlib from 'zlib'
 import { Logger } from 'winston'
 
@@ -33,6 +34,6 @@ export class RedisEventMessageHandler implements DomainEventMessageHandlerInterf
   }
 
   async handleError(error: Error): Promise<void> {
-    this.logger.error('Error occured while handling Redis message: %O', error)
+    this.logger.error('Error occurred while handling a Redis message.', safeErrorLogMetadata(error))
   }
 }

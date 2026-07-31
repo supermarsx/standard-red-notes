@@ -158,9 +158,10 @@ describe('TriggerNextcloudBackupForAllUsers master gate', () => {
 
     expect(result.isFailed()).toBe(false)
     expect(setSettingValue.execute).not.toHaveBeenCalled()
-    expect(logger.error).toHaveBeenCalledWith('Failed to trigger Nextcloud backup for user: Nextcloud unavailable', {
+    expect(logger.error).toHaveBeenCalledWith('Failed to trigger a Nextcloud backup for a user.', {
       userId: USER_UUID,
     })
+    expect(JSON.stringify((logger.error as jest.Mock).mock.calls)).not.toContain('Nextcloud unavailable')
     expect(logger.error).toHaveBeenCalledWith('Failed to trigger Nextcloud backup for 1 users')
   })
 
@@ -172,8 +173,9 @@ describe('TriggerNextcloudBackupForAllUsers master gate', () => {
     const result = await makeUseCase(true).execute({ backupFrequency: 'daily' })
 
     expect(result.isFailed()).toBe(false)
-    expect(logger.error).toHaveBeenCalledWith(
-      `Failed to record Nextcloud backup last-run for user ${USER_UUID}: database unavailable`,
-    )
+    expect(logger.error).toHaveBeenCalledWith('Failed to record the Nextcloud backup last-run time.', {
+      userId: USER_UUID,
+    })
+    expect(JSON.stringify((logger.error as jest.Mock).mock.calls)).not.toContain('database unavailable')
   })
 })

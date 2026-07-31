@@ -1,3 +1,4 @@
+import { safeErrorLogMetadata } from '@standardnotes/domain-core'
 import { Logger } from 'winston'
 
 import {
@@ -30,6 +31,6 @@ export class DirectCallEventMessageHandler implements DomainEventMessageHandlerI
   }
 
   async handleError(error: Error): Promise<void> {
-    this.logger.error('Error occured while handling SQS message: %O', error)
+    this.logger.error('Error occurred while handling a direct-call event.', safeErrorLogMetadata(error))
   }
 }

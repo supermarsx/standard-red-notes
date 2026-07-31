@@ -33,14 +33,18 @@ describe('ItemDeletedEventHandler', () => {
     expect(logger.error).not.toHaveBeenCalled()
   })
 
-  it('should log the failure reason when the revisions cannot be deleted', async () => {
+  it('should log a safe failure classification when the revisions cannot be deleted', async () => {
     deleteRevisions.execute = jest.fn().mockResolvedValue(Result.fail('Oops'))
 
     await createHandler().handle(event)
 
     expect(logger.error).toHaveBeenCalledWith(
-      'Could not delete revisions for item 00000000-0000-0000-0000-000000000000: Oops',
-      { userId: '84c0f8e8-544a-4c7e-9adf-26209303bc1d' },
+      'Could not delete revisions for item 00000000-0000-0000-0000-000000000000.',
+      expect.objectContaining({
+        errorType: 'Error',
+        userId: '84c0f8e8-544a-4c7e-9adf-26209303bc1d',
+      }),
     )
+    expect(JSON.stringify(logger.error.mock.calls)).not.toContain('Oops')
   })
 })

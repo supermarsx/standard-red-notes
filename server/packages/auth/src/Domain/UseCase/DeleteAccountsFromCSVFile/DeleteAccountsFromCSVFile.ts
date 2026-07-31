@@ -28,10 +28,9 @@ export class DeleteAccountsFromCSVFile implements UseCaseInterface<void> {
     }
 
     if (dto.dryRun) {
-      const firstTenEmails = emails.slice(0, 10)
-      this.logger.info(
-        `Dry run mode enabled. Would delete ${emails.length} accounts. First 10 emails: ${firstTenEmails}`,
-      )
+      this.logger.info('Account-deletion CSV dry run completed.', {
+        accountCount: emails.length,
+      })
 
       return Result.ok()
     }

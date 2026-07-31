@@ -1,3 +1,4 @@
+import { safeErrorLogMetadata } from '@standardnotes/domain-core'
 import 'reflect-metadata'
 
 import { Logger } from 'winston'
@@ -37,7 +38,7 @@ void container.load().then((container) => {
       process.exit(0)
     })
     .catch((error) => {
-      logger.error(`Could not clean sessions and session traces: ${error.message}`)
+      logger.error('Could not clean sessions and session traces.', safeErrorLogMetadata(error))
 
       process.exit(1)
     })

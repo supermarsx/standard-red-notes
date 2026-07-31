@@ -37,6 +37,10 @@ describe('SharedVaultRemovedEventHandler', () => {
 
     await createHandler().handle(event())
 
-    expect(logger.error).toHaveBeenCalledWith(`Failed to remove items from shared vault ${sharedVaultUuid}: Oops`)
+    expect(logger.error).toHaveBeenCalledWith(
+      `Failed to remove items from shared vault ${sharedVaultUuid}.`,
+      expect.objectContaining({ errorType: 'Error' }),
+    )
+    expect(JSON.stringify((logger.error as jest.Mock).mock.calls)).not.toContain('Oops')
   })
 })

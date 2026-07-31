@@ -1,5 +1,6 @@
 import { DomainEventHandlerInterface, SharedVaultFileMovedEvent } from '@standardnotes/domain-events'
 import {
+  safeErrorLogMetadata,
   NotificationPayload,
   NotificationPayloadIdentifierType,
   NotificationType,
@@ -21,7 +22,7 @@ export class SharedVaultFileMovedEventHandler implements DomainEventHandlerInter
     if (event.payload.from.sharedVaultUuid !== undefined) {
       const sharedVaultUuidOrError = Uuid.create(event.payload.from.sharedVaultUuid)
       if (sharedVaultUuidOrError.isFailed()) {
-        this.logger.error(sharedVaultUuidOrError.getError())
+        this.logger.error('Operation failed.', safeErrorLogMetadata(sharedVaultUuidOrError.getError()))
 
         return
       }
@@ -33,7 +34,10 @@ export class SharedVaultFileMovedEventHandler implements DomainEventHandlerInter
       })
 
       if (subtractResult.isFailed()) {
-        this.logger.error(`Failed to update storage quota used in shared vault: ${subtractResult.getError()}`)
+        this.logger.error(
+          'Failed to update storage quota used in shared vault.',
+          safeErrorLogMetadata(subtractResult.getError()),
+        )
 
         return
       }
@@ -54,14 +58,14 @@ export class SharedVaultFileMovedEventHandler implements DomainEventHandlerInter
         version: '1.0',
       })
       if (notificationResult.isFailed()) {
-        this.logger.error(`Failed to add notification for users: ${notificationResult.getError()}`)
+        this.logger.error('Failed to add notification for users.', safeErrorLogMetadata(notificationResult.getError()))
       }
     }
 
     if (event.payload.to.sharedVaultUuid !== undefined) {
       const sharedVaultUuidOrError = Uuid.create(event.payload.to.sharedVaultUuid)
       if (sharedVaultUuidOrError.isFailed()) {
-        this.logger.error(sharedVaultUuidOrError.getError())
+        this.logger.error('Operation failed.', safeErrorLogMetadata(sharedVaultUuidOrError.getError()))
 
         return
       }
@@ -73,7 +77,10 @@ export class SharedVaultFileMovedEventHandler implements DomainEventHandlerInter
       })
 
       if (addResult.isFailed()) {
-        this.logger.error(`Failed to update storage quota used in shared vault: ${addResult.getError()}`)
+        this.logger.error(
+          'Failed to update storage quota used in shared vault.',
+          safeErrorLogMetadata(addResult.getError()),
+        )
 
         return
       }
@@ -94,7 +101,7 @@ export class SharedVaultFileMovedEventHandler implements DomainEventHandlerInter
         version: '1.0',
       })
       if (notificationResult.isFailed()) {
-        this.logger.error(`Failed to add notification for users: ${notificationResult.getError()}`)
+        this.logger.error('Failed to add notification for users.', safeErrorLogMetadata(notificationResult.getError()))
       }
     }
   }

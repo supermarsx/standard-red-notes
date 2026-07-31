@@ -12,6 +12,7 @@ import { EmailSenderInterface } from '../../Email/EmailSenderInterface'
 import { buildConfirmationUrl, renderConfirmationEmailBody } from '../../Registration/RegistrationConfig'
 
 import { SendEmailConfirmationDTO } from './SendEmailConfirmationDTO'
+import { safeErrorLogMetadata } from '../../Logging/SafeLog'
 
 /**
  * Standard Red Notes: issues a single-use, expiring email-confirmation token for
@@ -68,7 +69,7 @@ export class SendEmailConfirmation implements UseCaseInterface<boolean> {
       try {
         await this.tokenRepository.deleteExpiredOrConsumed(now)
       } catch (cleanupError) {
-        this.logger.warn(`[email-confirmation] Token cleanup failed (non-fatal): ${(cleanupError as Error).message}`)
+        this.logger.warn('[email-confirmation] Token cleanup failed (non-fatal).', safeErrorLogMetadata(cleanupError))
       }
 
       if (!this.emailSender.isConfigured()) {
@@ -88,9 +89,10 @@ export class SendEmailConfirmation implements UseCaseInterface<boolean> {
 
       return Result.ok(emailed)
     } catch (error) {
-      this.logger.error(
-        `[email-confirmation] Failed to send confirmation for user ${dto.userUuid}: ${(error as Error).message}`,
-      )
+      this.logger.error('[email-confirmation] Failed to send a confirmation email.', {
+        userId: dto.userUuid,
+        ...safeErrorLogMetadata(error),
+      })
 
       return Result.fail('Could not send email confirmation.')
     }

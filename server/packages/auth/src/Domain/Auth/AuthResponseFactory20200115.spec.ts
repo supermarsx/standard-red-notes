@@ -97,6 +97,7 @@ describe('AuthResponseFactory20200115', () => {
   })
 
   it('should create a 20200115 auth response', async () => {
+    user.uuid = 'user-123'
     user.supportsSessions = jest.fn().mockReturnValue(true)
 
     const result = await createFactory().createResponse({
@@ -154,6 +155,12 @@ describe('AuthResponseFactory20200115', () => {
         foo: 'bar',
       },
     })
+    const serializedLogs = JSON.stringify({
+      debug: (logger.debug as jest.Mock).mock.calls,
+      error: (logger.error as jest.Mock).mock.calls,
+    })
+    expect(serializedLogs).not.toContain('access_token')
+    expect(serializedLogs).not.toContain('refresh_token')
   })
 
   it('should create a 20200115 auth response with an ephemeral session', async () => {

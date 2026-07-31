@@ -1,3 +1,4 @@
+import { safeErrorLogMetadata } from '@standardnotes/domain-core'
 import 'reflect-metadata'
 
 import busboy from 'connect-busboy'
@@ -22,10 +23,9 @@ import { registerNotFoundFallback } from '../src/Infra/InversifyExpress/register
 // rejection or uncaught exception leaves the process in an unknown state, so we
 // log a clear FATAL line (with stack) and exit non-zero to let the supervisor
 // restart us. This keeps crash-loops VISIBLE instead of silently swallowed.
-let fatalLogger: { error: (message: string) => void } = console
+let fatalLogger: { error: (message: string, metadata?: Record<string, unknown>) => void } = console
 const logFatal = (label: string, error: unknown): void => {
-  const err = error instanceof Error ? error : new Error(String(error))
-  fatalLogger.error(`FATAL ${label}: ${err.message}\n${err.stack ?? '(no stack)'}`)
+  fatalLogger.error(`FATAL ${label}.`, safeErrorLogMetadata(error))
 }
 process.on('unhandledRejection', (reason: unknown) => {
   logFatal('unhandledRejection', reason)
@@ -40,153 +40,156 @@ const container = new ContainerConfigLoader('server')
 void container
   .load()
   .then(async (container) => {
-  const env: Env = new Env()
-  env.load()
+    const env: Env = new Env()
+    env.load()
 
-  const requestPayloadLimit = env.get('HTTP_REQUEST_PAYLOAD_LIMIT_MEGABYTES', true)
-    ? `${+env.get('HTTP_REQUEST_PAYLOAD_LIMIT_MEGABYTES', true)}mb`
-    : '50mb'
+    const requestPayloadLimit = env.get('HTTP_REQUEST_PAYLOAD_LIMIT_MEGABYTES', true)
+      ? `${+env.get('HTTP_REQUEST_PAYLOAD_LIMIT_MEGABYTES', true)}mb`
+      : '50mb'
 
-  const server = new InversifyExpressServer(container)
+    const server = new InversifyExpressServer(container)
 
-  server.setConfig((app) => {
-    // Standard Red Notes: honor X-Forwarded-Proto / X-Forwarded-For when the
-    // files service runs behind a TLS-terminating reverse proxy, so req.secure /
-    // req.protocol / req.ip reflect the real client. Configurable via TRUST_PROXY.
-    // Default trusts only loopback/private (Docker) networks, so direct access
-    // keeps working and a remote client cannot spoof the forwarded headers.
-    app.set('trust proxy', parseTrustProxyValue(env.get('TRUST_PROXY', true)))
+    server.setConfig((app) => {
+      // Standard Red Notes: honor X-Forwarded-Proto / X-Forwarded-For when the
+      // files service runs behind a TLS-terminating reverse proxy, so req.secure /
+      // req.protocol / req.ip reflect the real client. Configurable via TRUST_PROXY.
+      // Default trusts only loopback/private (Docker) networks, so direct access
+      // keeps working and a remote client cannot spoof the forwarded headers.
+      app.set('trust proxy', parseTrustProxyValue(env.get('TRUST_PROXY', true)))
 
-    app.use((_request: Request, response: Response, next: NextFunction) => {
-      response.setHeader('X-Files-Version', container.get(TYPES.Files_VERSION))
-      next()
-    })
-    app.use(
-      busboy({
-        highWaterMark: 2 * 1024 * 1024,
-      }) as never,
-    )
-    /* eslint-disable */
-    app.use(helmet({
-      contentSecurityPolicy: {
-        directives: {
-          defaultSrc: ["https: 'self'"],
-          baseUri: ["'self'"],
-          childSrc: ["*", "blob:"],
-          connectSrc: ["*"],
-          fontSrc: ["*", "'self'"],
-          formAction: ["'self'"],
-          frameAncestors: ["*", "*.standardnotes.org", "*.standardnotes.com"],
-          frameSrc: ["*", "blob:"],
-          imgSrc: ["'self'", "*", "data:"],
-          manifestSrc: ["'self'"],
-          mediaSrc: ["'self'"],
-          objectSrc: ["'self'"],
-          scriptSrc: ["'self'"],
-          styleSrc: ["'self'"]
-        }
-      }
-    }))
-    /* eslint-enable */
-    app.use(json({ limit: requestPayloadLimit }))
-    app.use(raw({ limit: requestPayloadLimit, type: 'application/octet-stream' }))
-    app.use(urlencoded({ extended: true, limit: requestPayloadLimit }))
+      app.use((_request: Request, response: Response, next: NextFunction) => {
+        response.setHeader('X-Files-Version', container.get(TYPES.Files_VERSION))
+        next()
+      })
+      app.use(
+        busboy({
+          highWaterMark: 2 * 1024 * 1024,
+        }) as never,
+      )
 
-    const corsAllowedOrigins = container.get<string[]>(TYPES.Files_CORS_ALLOWED_ORIGINS)
+      app.use(
+        helmet({
+          contentSecurityPolicy: {
+            directives: {
+              defaultSrc: ["https: 'self'"],
+              baseUri: ["'self'"],
+              childSrc: ['*', 'blob:'],
+              connectSrc: ['*'],
+              fontSrc: ['*', "'self'"],
+              formAction: ["'self'"],
+              frameAncestors: ['*', '*.standardnotes.org', '*.standardnotes.com'],
+              frameSrc: ['*', 'blob:'],
+              imgSrc: ["'self'", '*', 'data:'],
+              manifestSrc: ["'self'"],
+              mediaSrc: ["'self'"],
+              objectSrc: ["'self'"],
+              scriptSrc: ["'self'"],
+              styleSrc: ["'self'"],
+            },
+          },
+        }),
+      )
 
-    app.use(
-      cors({
-        credentials: true,
-        exposedHeaders: [
-          'Content-Range',
-          'Accept-Ranges',
-          'Access-Control-Allow-Credentials',
-          'Access-Control-Allow-Origin',
-        ],
-        origin: (requestOrigin: string | undefined, callback: (err: Error | null, origin?: string[]) => void) => {
-          const originStrictModeEnabled = env.get('CORS_ORIGIN_STRICT_MODE_ENABLED', true)
-            ? env.get('CORS_ORIGIN_STRICT_MODE_ENABLED', true) === 'true'
-            : false
+      app.use(json({ limit: requestPayloadLimit }))
+      app.use(raw({ limit: requestPayloadLimit, type: 'application/octet-stream' }))
+      app.use(urlencoded({ extended: true, limit: requestPayloadLimit }))
 
-          if (!originStrictModeEnabled) {
-            callback(null, [requestOrigin as string])
+      const corsAllowedOrigins = container.get<string[]>(TYPES.Files_CORS_ALLOWED_ORIGINS)
 
-            return
-          }
+      app.use(
+        cors({
+          credentials: true,
+          exposedHeaders: [
+            'Content-Range',
+            'Accept-Ranges',
+            'Access-Control-Allow-Credentials',
+            'Access-Control-Allow-Origin',
+          ],
+          origin: (requestOrigin: string | undefined, callback: (err: Error | null, origin?: string[]) => void) => {
+            const originStrictModeEnabled = env.get('CORS_ORIGIN_STRICT_MODE_ENABLED', true)
+              ? env.get('CORS_ORIGIN_STRICT_MODE_ENABLED', true) === 'true'
+              : false
 
-          const requstOriginIsNotFilled = !requestOrigin || requestOrigin === 'null'
-          const requestOriginatesFromTheDesktopApp = requestOrigin?.startsWith('file://')
-          const requestOriginatesFromClipperForFirefox = requestOrigin?.startsWith('moz-extension://')
-          const requestOriginatesFromSelfHostedAppOnHttpPort = requestOrigin === 'http://localhost'
-          const requestOriginatesFromSelfHostedAppOnCustomPort = requestOrigin?.match(/http:\/\/localhost:\d+/) !== null
-          const requestOriginatesFromSelfHostedApp =
-            requestOriginatesFromSelfHostedAppOnHttpPort || requestOriginatesFromSelfHostedAppOnCustomPort
+            if (!originStrictModeEnabled) {
+              callback(null, [requestOrigin as string])
 
-          const requestIsWhitelisted =
-            corsAllowedOrigins.length === 0 ||
-            requstOriginIsNotFilled ||
-            requestOriginatesFromTheDesktopApp ||
-            requestOriginatesFromClipperForFirefox ||
-            requestOriginatesFromSelfHostedApp
-
-          if (requestIsWhitelisted) {
-            callback(null, [requestOrigin as string])
-          } else {
-            if (corsAllowedOrigins.includes(requestOrigin)) {
-              callback(null, [requestOrigin])
-            } else {
-              callback(new Error('Not allowed by CORS', { cause: 'origin not allowed' }))
+              return
             }
-          }
-        },
-      }),
-    )
-    app.use((req: Request, res: Response, next: NextFunction) => {
-      if (req.path === '/robots.txt') {
-        res.type('text/plain').send('User-agent: *\nDisallow: /\n')
-        return
-      }
-      next()
-    })
-  })
 
-  const logger: winston.Logger = container.get(TYPES.Files_Logger)
-  fatalLogger = logger
+            const requstOriginIsNotFilled = !requestOrigin || requestOrigin === 'null'
+            const requestOriginatesFromTheDesktopApp = requestOrigin?.startsWith('file://')
+            const requestOriginatesFromClipperForFirefox = requestOrigin?.startsWith('moz-extension://')
+            const requestOriginatesFromSelfHostedAppOnHttpPort = requestOrigin === 'http://localhost'
+            const requestOriginatesFromSelfHostedAppOnCustomPort =
+              requestOrigin?.match(/http:\/\/localhost:\d+/) !== null
+            const requestOriginatesFromSelfHostedApp =
+              requestOriginatesFromSelfHostedAppOnHttpPort || requestOriginatesFromSelfHostedAppOnCustomPort
 
-  server.setErrorConfig((app) => {
-    app.use((error: Record<string, unknown>, _request: Request, response: Response, _next: NextFunction) => {
-      logger.error(error.stack)
+            const requestIsWhitelisted =
+              corsAllowedOrigins.length === 0 ||
+              requstOriginIsNotFilled ||
+              requestOriginatesFromTheDesktopApp ||
+              requestOriginatesFromClipperForFirefox ||
+              requestOriginatesFromSelfHostedApp
 
-      response.status(500).send({
-        error: {
-          message:
-            "Unfortunately, we couldn't handle your request. Please try again or contact our support if the error persists.",
-        },
+            if (requestIsWhitelisted) {
+              callback(null, [requestOrigin as string])
+            } else {
+              if (corsAllowedOrigins.includes(requestOrigin)) {
+                callback(null, [requestOrigin])
+              } else {
+                callback(new Error('Not allowed by CORS', { cause: 'origin not allowed' }))
+              }
+            }
+          },
+        }),
+      )
+      app.use((req: Request, res: Response, next: NextFunction) => {
+        if (req.path === '/robots.txt') {
+          res.type('text/plain').send('User-agent: *\nDisallow: /\n')
+          return
+        }
+        next()
       })
     })
-  })
 
-  const app = await server.build()
+    const logger: winston.Logger = container.get(TYPES.Files_Logger)
+    fatalLogger = logger
 
-  // Standard Red Notes: replaces the inert empty-base AnnotatedFallbackController.
-  // Registered AFTER build() so it catches only genuinely-unmatched requests and
-  // never shadows a real route. See registerNotFoundFallback for the full rationale.
-  registerNotFoundFallback(app)
+    server.setErrorConfig((app) => {
+      app.use((error: Record<string, unknown>, _request: Request, response: Response, _next: NextFunction) => {
+        logger.error('Unhandled files request failed.', safeErrorLogMetadata(error))
 
-  const serverInstance = app.listen(env.get('PORT'))
-
-  const keepAliveTimeout = env.get('HTTP_KEEP_ALIVE_TIMEOUT', true) ? +env.get('HTTP_KEEP_ALIVE_TIMEOUT', true) : 5000
-
-  serverInstance.keepAliveTimeout = keepAliveTimeout
-
-  process.on('SIGTERM', () => {
-    logger.info('SIGTERM signal received: closing HTTP server')
-    serverInstance.close(() => {
-      logger.info('HTTP server closed')
+        response.status(500).send({
+          error: {
+            message:
+              "Unfortunately, we couldn't handle your request. Please try again or contact our support if the error persists.",
+          },
+        })
+      })
     })
-  })
 
-  logger.info(`Server started on port ${process.env.PORT}`)
+    const app = await server.build()
+
+    // Standard Red Notes: replaces the inert empty-base AnnotatedFallbackController.
+    // Registered AFTER build() so it catches only genuinely-unmatched requests and
+    // never shadows a real route. See registerNotFoundFallback for the full rationale.
+    registerNotFoundFallback(app)
+
+    const serverInstance = app.listen(env.get('PORT'))
+
+    const keepAliveTimeout = env.get('HTTP_KEEP_ALIVE_TIMEOUT', true) ? +env.get('HTTP_KEEP_ALIVE_TIMEOUT', true) : 5000
+
+    serverInstance.keepAliveTimeout = keepAliveTimeout
+
+    process.on('SIGTERM', () => {
+      logger.info('SIGTERM signal received: closing HTTP server')
+      serverInstance.close(() => {
+        logger.info('HTTP server closed')
+      })
+    })
+
+    logger.info(`Server started on port ${process.env.PORT}`)
   })
   .catch((error: unknown) => {
     logFatal('startup', error)

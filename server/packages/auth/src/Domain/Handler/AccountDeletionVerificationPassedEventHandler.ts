@@ -15,7 +15,7 @@ export class AccountDeletionVerificationPassedEventHandler implements DomainEven
     })
 
     if (result.isFailed()) {
-      this.logger.error(`AccountDeletionVerificationPassedEventHandler failed: ${result.getError()}`)
+      this.logger.error('AccountDeletionVerificationPassedEventHandler failed.')
     }
   }
 }

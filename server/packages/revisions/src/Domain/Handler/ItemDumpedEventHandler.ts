@@ -1,3 +1,4 @@
+import { safeErrorLogMetadata } from '@standardnotes/domain-core'
 import { DomainEventHandlerInterface, ItemDumpedEvent } from '@standardnotes/domain-events'
 
 import { Logger } from 'winston'
@@ -15,7 +16,7 @@ export class ItemDumpedEventHandler implements DomainEventHandlerInterface {
     })
 
     if (result.isFailed()) {
-      this.logger.error(`Item dumped event handler failed: ${result.getError()}`)
+      this.logger.error('Item dumped event handler failed.', safeErrorLogMetadata(result.getError()))
     }
   }
 }

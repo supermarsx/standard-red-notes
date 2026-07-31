@@ -7,6 +7,7 @@ import { TYPES } from '../Bootstrap/Types'
 import { CrossServiceTokenCacheInterface } from '../Service/Cache/CrossServiceTokenCacheInterface'
 import { ServiceProxyInterface } from '../Service/Proxy/ServiceProxyInterface'
 import { AuthMiddleware } from './AuthMiddleware'
+import { PublicInvalidAuthFailure, safePublicErrorData } from '../Service/Logging/SafeLog'
 
 @injectable()
 export class RequiredCrossServiceTokenMiddleware extends AuthMiddleware {
@@ -28,8 +29,12 @@ export class RequiredCrossServiceTokenMiddleware extends AuthMiddleware {
     _next: NextFunction,
   ): boolean {
     if (authResponse.status > 200) {
-      response.setHeader('content-type', authResponse.headers.contentType)
-      response.status(authResponse.status).send(authResponse.data)
+      const status = authResponse.status >= 400 && authResponse.status <= 599 ? authResponse.status : 500
+      const contentType = authResponse.headers.contentType
+      if (typeof contentType === 'string' && contentType.trim().length > 0) {
+        response.setHeader('content-type', contentType)
+      }
+      response.status(status).send(safePublicErrorData(authResponse.data))
 
       return false
     }
@@ -45,12 +50,7 @@ export class RequiredCrossServiceTokenMiddleware extends AuthMiddleware {
     if (!authHeaderValue) {
       this.logger.debug('Missing auth header')
 
-      response.status(401).send({
-        error: {
-          tag: 'invalid-auth',
-          message: 'Invalid login credentials.',
-        },
-      })
+      response.status(401).send(PublicInvalidAuthFailure)
 
       return false
     }

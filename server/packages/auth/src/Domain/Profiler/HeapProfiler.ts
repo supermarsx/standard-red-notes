@@ -7,6 +7,8 @@ import * as os from 'os'
 import { Buffer } from 'buffer'
 import { randomUUID } from 'crypto'
 
+import { safeErrorLogMetadata } from '../Logging/SafeLog'
+
 const PROFILING_INTERVAL_IN_MINUTES = 15
 
 export class HeapProfiler {
@@ -60,9 +62,7 @@ export class HeapProfiler {
         this.logger.info(`Heap snapshot ${filename} uploaded to S3 successfully`)
       }
     } catch (error) {
-      this.logger.error(`Failed to take or send heap snapshot: ${(error as Error).message}`, {
-        error: (error as Error).stack,
-      })
+      this.logger.error('Failed to take or send heap snapshot.', safeErrorLogMetadata(error))
     }
   }
 
@@ -80,11 +80,11 @@ export class HeapProfiler {
       await this.s3Client.send(command)
       this.logger.info(`Successfully uploaded heap snapshot to S3: s3://${this.s3BucketName}/${key}`)
     } catch (error) {
-      this.logger.error(`Failed to upload heap snapshot to S3: ${(error as Error).message}`, {
+      this.logger.error('Failed to upload heap snapshot to S3.', {
         filename,
         bucketName: this.s3BucketName,
         key,
-        error: (error as Error).stack,
+        ...safeErrorLogMetadata(error),
       })
       throw error
     }

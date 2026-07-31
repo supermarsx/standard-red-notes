@@ -2,7 +2,7 @@ import * as grpc from '@grpc/grpc-js'
 import { Status } from '@grpc/grpc-js/build/src/constants'
 import { ISyncingServer, SyncRequest, SyncResponse } from '@standardnotes/grpc'
 import { Logger } from 'winston'
-import { MapperInterface } from '@standardnotes/domain-core'
+import { safeErrorLogMetadata, MapperInterface } from '@standardnotes/domain-core'
 
 import { ItemHash } from '../../Domain/Item/ItemHash'
 import { SyncItems } from '../../Domain/UseCase/Syncing/SyncItems/SyncItems'
@@ -44,7 +44,8 @@ export class SyncingServer implements ISyncingServer {
         timeframeLengthInMinutes: this.itemOperationsAbuseTimeframeLengthInMinutes,
       })
       if (checkForItemOperationsAbuseResult.isFailed()) {
-        this.logger.warn(checkForItemOperationsAbuseResult.getError(), {
+        this.logger.warn('Operation failed.', {
+          ...safeErrorLogMetadata(checkForItemOperationsAbuseResult.getError()),
           userId: userUuid,
         })
         if (this.strictAbuseProtection) {
@@ -74,7 +75,8 @@ export class SyncingServer implements ISyncingServer {
         timeframeLengthInMinutes: this.payloadSizeAbuseTimeframeLengthInMinutes,
       })
       if (checkForPayloadSizeAbuseResult.isFailed()) {
-        this.logger.warn(checkForPayloadSizeAbuseResult.getError(), {
+        this.logger.warn('Operation failed.', {
+          ...safeErrorLogMetadata(checkForPayloadSizeAbuseResult.getError()),
           userId: userUuid,
         })
 
@@ -204,7 +206,7 @@ export class SyncingServer implements ISyncingServer {
 
       callback(null, projection)
     } catch (error) {
-      this.logger.error(`[SyncingServer] Error syncing items via gRPC: ${(error as Error).message}`)
+      this.logger.error('[SyncingServer] Error syncing items via gRPC.', safeErrorLogMetadata(error))
 
       return callback(
         {

@@ -1,4 +1,4 @@
-import { ContentType, Result, UseCaseInterface } from '@standardnotes/domain-core'
+import { safeErrorLogMetadata, ContentType, Result, UseCaseInterface } from '@standardnotes/domain-core'
 
 import { Item } from '../../../Item/Item'
 import { ItemConflict } from '../../../Item/ItemConflict'
@@ -123,7 +123,8 @@ export class SyncItems implements UseCaseInterface<SyncItemsResponse> {
     } catch (error) {
       const itemHashUuids = dto.itemHashes.map((itemHash) => itemHash.props.uuid)
       this.logger.error(
-        `Sync error for user ${dto.userUuid} syncing items ${itemHashUuids.join(',')}: ${(error as Error).message}`,
+        `Sync error for user ${dto.userUuid} syncing items ${itemHashUuids.join(',')}.`,
+        safeErrorLogMetadata(error),
       )
       throw error
     }

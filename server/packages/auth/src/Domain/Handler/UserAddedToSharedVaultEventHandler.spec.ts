@@ -42,6 +42,6 @@ describe('UserAddedToSharedVaultEventHandler', () => {
 
     await createHandler().handle(event)
 
-    expect(logger.error).toHaveBeenCalledWith('Failed to add user to shared vault: nope')
+    expect(logger.error).toHaveBeenCalledWith('Failed to add a user to a shared vault.')
   })
 })

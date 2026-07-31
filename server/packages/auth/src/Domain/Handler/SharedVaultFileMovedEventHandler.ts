@@ -16,7 +16,7 @@ export class SharedVaultFileMovedEventHandler implements DomainEventHandlerInter
     })
 
     if (subtractResult.isFailed()) {
-      this.logger.error(`Failed to update storage quota used for user: ${subtractResult.getError()}`)
+      this.logger.error('Failed to subtract storage quota after a shared-vault file move.')
     }
 
     const addResult = await this.updateStorageQuotaUsedForUserUseCase.execute({
@@ -25,7 +25,7 @@ export class SharedVaultFileMovedEventHandler implements DomainEventHandlerInter
     })
 
     if (addResult.isFailed()) {
-      this.logger.error(`Failed to update storage quota used for user: ${addResult.getError()}`)
+      this.logger.error('Failed to add storage quota after a shared-vault file move.')
     }
   }
 }

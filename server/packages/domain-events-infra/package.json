@@ -47,6 +47,7 @@
     "@opentelemetry/resource-detector-aws": "^2.20.0",
     "@opentelemetry/sdk-node": "^0.220.0",
     "@opentelemetry/semantic-conventions": "^1.43.0",
+    "@standardnotes/domain-core": "workspace:*",
     "@standardnotes/domain-events": "workspace:*",
     "ioredis": "^5.11.1",
     "reflect-metadata": "^0.2.2",

@@ -11,7 +11,9 @@ export class UserRemovedFromSharedVaultEventHandler implements DomainEventHandle
 
   async handle(event: UserRemovedFromSharedVaultEvent): Promise<void> {
     if (!event.payload.sharedVaultUuid) {
-      this.logger.error(`Shared vault uuid is missing from event: ${JSON.stringify(event)}`)
+      this.logger.error('Shared-vault UUID is missing from the user-removed event.', {
+        userId: event.payload.userUuid,
+      })
 
       return
     }
@@ -22,7 +24,7 @@ export class UserRemovedFromSharedVaultEventHandler implements DomainEventHandle
     })
 
     if (result.isFailed()) {
-      this.logger.error(`Failed to remove user from shared vault: ${result.getError()}`)
+      this.logger.error('Failed to remove a user from a shared vault.')
     }
   }
 }

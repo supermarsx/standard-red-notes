@@ -202,7 +202,7 @@ describe('AuthenticateUser', () => {
     expect(response.failureType).toEqual('COOLEDDOWN_TOKEN')
   })
 
-  it('should omit the client hint from the cooldown warning when the session has no user agent', async () => {
+  it('should log only bounded request metadata when a token is in cooldown', async () => {
     user.uuid = '1-2-3'
     user.supportsSessions = jest.fn().mockReturnValue(true)
     session.uuid = '2-3-4'
@@ -220,13 +220,15 @@ describe('AuthenticateUser', () => {
       requestMetadata: { url: '/foobar', method: 'GET', secChUa: 'Chromium;v=124' },
     })
 
-    expect(logger.warn).toHaveBeenCalledWith(
-      'Request was authenticated with tokens that were in cooldown.',
-      expect.objectContaining({ userAgent: undefined, secChUa: undefined }),
-    )
+    expect(logger.warn).toHaveBeenCalledWith('Request was authenticated with tokens that were in cooldown.', {
+      reason: 'token-cooldown',
+      userId: '1-2-3',
+      method: 'GET',
+      url: '/foobar',
+    })
   })
 
-  it('should include the client hint in the cooldown warning when the session has a user agent', async () => {
+  it('should not log session identifiers, client fingerprints, or version metadata in cooldown warnings', async () => {
     user.uuid = '1-2-3'
     user.supportsSessions = jest.fn().mockReturnValue(true)
     session.uuid = '2-3-4'
@@ -251,14 +253,10 @@ describe('AuthenticateUser', () => {
     })
 
     expect(logger.warn).toHaveBeenCalledWith('Request was authenticated with tokens that were in cooldown.', {
+      reason: 'token-cooldown',
       userId: '1-2-3',
-      sessionUuid: '2-3-4',
-      snjs: '2.0.0',
-      application: 'web',
-      url: '/foobar',
       method: 'GET',
-      userAgent: 'Mozilla/5.0',
-      secChUa: 'Chromium;v=124',
+      url: '/foobar',
     })
   })
 

@@ -1,5 +1,5 @@
 import { Repository, SelectQueryBuilder } from 'typeorm'
-import { MapperInterface, Uuid } from '@standardnotes/domain-core'
+import { safeErrorLogMetadata, MapperInterface, Uuid } from '@standardnotes/domain-core'
 import { Logger } from 'winston'
 
 import { Item } from '../../Domain/Item/Item'
@@ -117,9 +117,8 @@ export class SQLItemRepository implements ItemRepositoryInterface {
       const ItemContentSizeDescriptorOrError = ItemContentSizeDescriptor.create(item.uuid, item.contentSize)
       if (ItemContentSizeDescriptorOrError.isFailed()) {
         this.logger.error(
-          `Failed to create ItemContentSizeDescriptor for item ${
-            item.uuid
-          }: ${ItemContentSizeDescriptorOrError.getError()}`,
+          `Failed to create ItemContentSizeDescriptor for item ${item.uuid}.`,
+          safeErrorLogMetadata(ItemContentSizeDescriptorOrError.getError()),
         )
         continue
       }
@@ -160,7 +159,8 @@ export class SQLItemRepository implements ItemRepositoryInterface {
       return item
     } catch (error) {
       this.logger.error(
-        `Failed to map item ${uuid.value} for user ${persistence.userUuid} by uuid: ${(error as Error).message}`,
+        `Failed to map item ${uuid.value} for user ${persistence.userUuid} by uuid.`,
+        safeErrorLogMetadata(error),
       )
 
       return null
@@ -210,7 +210,8 @@ export class SQLItemRepository implements ItemRepositoryInterface {
       return item
     } catch (error) {
       this.logger.error(
-        `Failed to map item ${uuid} for user ${persistence.userUuid} by uuid and userUuid: ${(error as Error).message}`,
+        `Failed to map item ${uuid} for user ${persistence.userUuid} by uuid and userUuid.`,
+        safeErrorLogMetadata(error),
       )
 
       return null
@@ -226,9 +227,8 @@ export class SQLItemRepository implements ItemRepositoryInterface {
         domainItems.push(this.mapper.toDomain(persistencItem))
       } catch (error) {
         this.logger.error(
-          `Failed to map item ${persistencItem.uuid} for user ${persistencItem.userUuid} to domain: ${
-            (error as Error).message
-          }`,
+          `Failed to map item ${persistencItem.uuid} for user ${persistencItem.userUuid} to domain.`,
+          safeErrorLogMetadata(error),
         )
       }
     }

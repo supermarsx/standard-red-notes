@@ -1,3 +1,4 @@
+import { safeErrorLogMetadata } from '@standardnotes/domain-core'
 import { ContentSizesFixRequestedEvent, DomainEventHandlerInterface } from '@standardnotes/domain-events'
 import { Logger } from 'winston'
 
@@ -13,7 +14,8 @@ export class ContentSizesFixRequestedEventHandler implements DomainEventHandlerI
     const result = await this.fixContentSizes.execute({ userUuid: event.payload.userUuid })
 
     if (result.isFailed()) {
-      this.logger.error(`Failed to fix content sizes: ${result.getError()}`, {
+      this.logger.error('Failed to fix content sizes.', {
+        ...safeErrorLogMetadata(result.getError()),
         userId: event.payload.userUuid,
       })
 

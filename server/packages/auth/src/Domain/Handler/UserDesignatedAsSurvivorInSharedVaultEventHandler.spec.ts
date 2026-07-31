@@ -44,8 +44,9 @@ describe('UserDesignatedAsSurvivorInSharedVaultEventHandler', () => {
 
     await createHandler().handle(event)
 
-    expect(logger.error).toHaveBeenCalledWith(
-      `Failed designate survivor for user ${payload.userUuid} and shared vault ${payload.sharedVaultUuid}: nope`,
-    )
+    expect(logger.error).toHaveBeenCalledWith('Failed to designate a survivor for a shared vault.', {
+      userId: payload.userUuid,
+      sharedVaultId: payload.sharedVaultUuid,
+    })
   })
 })

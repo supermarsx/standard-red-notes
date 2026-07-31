@@ -6,6 +6,7 @@ import { RegistrationConfigResolverInterface } from '../../Registration/Registra
 import { SendEmailConfirmation } from '../SendEmailConfirmation/SendEmailConfirmation'
 
 import { ResendEmailConfirmationDTO } from './ResendEmailConfirmationDTO'
+import { safeErrorLogMetadata } from '../../Logging/SafeLog'
 
 /**
  * Standard Red Notes: re-sends the confirmation email for an unconfirmed account.
@@ -60,15 +61,15 @@ export class ResendEmailConfirmation implements UseCaseInterface<boolean> {
         })
         .then((result) => {
           if (result.isFailed()) {
-            this.logger.error(`[email-confirmation] Resend send failed: ${result.getError()}`)
+            this.logger.error('[email-confirmation] Resend send failed.')
           }
         })
         .catch((error) => {
-          this.logger.error(`[email-confirmation] Resend send failed: ${(error as Error).message}`)
+          this.logger.error('[email-confirmation] Resend send failed.', safeErrorLogMetadata(error))
         })
     } catch (error) {
       // Never surface internal failures to the caller (no enumeration, no 500).
-      this.logger.error(`[email-confirmation] Resend failed: ${(error as Error).message}`)
+      this.logger.error('[email-confirmation] Resend failed.', safeErrorLogMetadata(error))
     }
 
     return uniformSuccess

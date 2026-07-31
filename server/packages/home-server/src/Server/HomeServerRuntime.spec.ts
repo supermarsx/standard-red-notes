@@ -111,7 +111,8 @@ describe('HomeServerRuntime', () => {
     await Promise.resolve()
     await Promise.resolve()
 
-    expect(logger.error).toHaveBeenCalledWith('Failed to stop home server after SIGTERM: shutdown failed')
+    expect(logger.error).toHaveBeenCalledWith('Failed to stop home server after SIGTERM.')
+    expect(JSON.stringify(logger.error.mock.calls)).not.toContain('shutdown failed')
 
     await runtime.stop()
   })

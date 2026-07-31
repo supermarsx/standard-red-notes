@@ -65,6 +65,25 @@ describe('SubscriptionTokenAuthMiddleware', () => {
     expect(next).not.toHaveBeenCalled()
   })
 
+  it('preserves the exact 401 contract when the body is undefined', async () => {
+    await createMiddleware().handler(
+      makeRequest({ query: {} as never, body: undefined as unknown as Request['body'] }),
+      response,
+      next,
+    )
+
+    expect(status).toHaveBeenCalledWith(401)
+    expect(send).toHaveBeenCalledWith({
+      error: {
+        tag: 'invalid-auth',
+        message: 'Invalid login credentials.',
+      },
+    })
+    expect(setHeader).not.toHaveBeenCalled()
+    expect(httpClient.request).not.toHaveBeenCalled()
+    expect(next).not.toHaveBeenCalled()
+  })
+
   it('accepts the subscription token from the request body when the query string omits it', async () => {
     await createMiddleware().handler(
       makeRequest({ query: {} as never, body: { subscription_token: 'from-body' } }),
@@ -72,9 +91,9 @@ describe('SubscriptionTokenAuthMiddleware', () => {
       next,
     )
 
-    expect((httpClient.request as jest.Mock).mock.calls[0][0].url).toBe(
-      'https://auth/subscription-tokens/from-body/validate',
-    )
+    const config = (httpClient.request as jest.Mock).mock.calls[0][0]
+    expect(config.url).toBe('https://auth/subscription-tokens/validate')
+    expect(config.headers['x-subscription-token']).toBe('from-body')
     expect(next).toHaveBeenCalled()
   })
 
@@ -85,7 +104,11 @@ describe('SubscriptionTokenAuthMiddleware', () => {
     expect(httpClient.request).toHaveBeenCalledWith(
       expect.objectContaining({
         method: 'POST',
-        url: 'https://auth/subscription-tokens/sub-token/validate',
+        url: 'https://auth/subscription-tokens/validate',
+        headers: {
+          Accept: 'application/json',
+          'x-subscription-token': 'sub-token',
+        },
         data: { email: undefined },
       }),
     )
@@ -101,7 +124,11 @@ describe('SubscriptionTokenAuthMiddleware', () => {
     expect(locals.tokenAuthenticationMethod).toBe(TokenAuthenticationMethod.OfflineSubscriptionToken)
     expect(httpClient.request).toHaveBeenCalledWith(
       expect.objectContaining({
-        url: 'https://auth/offline/subscription-tokens/sub-token/validate',
+        url: 'https://auth/offline/subscription-tokens/validate',
+        headers: {
+          Accept: 'application/json',
+          'x-subscription-token': 'sub-token',
+        },
         data: { email: 'offline@test.te' },
       }),
     )
@@ -143,7 +170,7 @@ describe('SubscriptionTokenAuthMiddleware', () => {
     expect(validateStatus(199)).toBe(false)
   })
 
-  it('forwards a non-200 auth response verbatim and does NOT continue the chain', async () => {
+  it('preserves an allowlisted non-200 auth tag/status/content-type and does NOT continue the chain', async () => {
     ;(httpClient.request as jest.Mock).mockResolvedValue({
       status: 402,
       data: { error: { tag: 'no-subscription' } },
@@ -152,36 +179,65 @@ describe('SubscriptionTokenAuthMiddleware', () => {
 
     await createMiddleware().handler(makeRequest(), response, next)
 
-    expect(setHeader).toHaveBeenCalledWith('content-type', 'application/json')
     expect(status).toHaveBeenCalledWith(402)
     expect(send).toHaveBeenCalledWith({ error: { tag: 'no-subscription' } })
+    expect(setHeader).toHaveBeenCalledWith('content-type', 'application/json')
     expect(next).not.toHaveBeenCalled()
     expect(locals.authToken).toBeUndefined()
   })
 
-  it('responds 500 with the plain message when a non-axios error is thrown', async () => {
+  it('preserves a safe 402 tag when the upstream content-type header is absent', async () => {
+    ;(httpClient.request as jest.Mock).mockResolvedValue({
+      status: 402,
+      data: { error: { tag: 'no-subscription' } },
+      headers: {},
+    })
+
+    await createMiddleware().handler(makeRequest(), response, next)
+
+    expect(status).toHaveBeenCalledWith(402)
+    expect(send).toHaveBeenCalledWith({ error: { tag: 'no-subscription' } })
+    expect(setHeader).not.toHaveBeenCalled()
+    expect(next).not.toHaveBeenCalled()
+  })
+
+  it('responds with a stable public error when a non-axios error is thrown', async () => {
     ;(httpClient.request as jest.Mock).mockRejectedValue(new Error('socket hang up'))
 
     await createMiddleware().handler(makeRequest(), response, next)
 
     expect(status).toHaveBeenCalledWith(500)
-    expect(send).toHaveBeenCalledWith('socket hang up')
+    expect(send).toHaveBeenCalledWith({
+      error: {
+        tag: 'service-unavailable',
+        message: 'The requested service is temporarily unavailable.',
+      },
+    })
     expect(setHeader).not.toHaveBeenCalled()
     expect(next).not.toHaveBeenCalled()
   })
 
-  it('serializes the axios error body, mirrors its content-type and uses a numeric error code as status', async () => {
+  it('does not serialize an axios error body or mirror its content type', async () => {
     ;(httpClient.request as jest.Mock).mockRejectedValue({
       isAxiosError: true,
       code: '503',
-      response: { data: { error: 'unavailable' }, headers: { 'content-type': 'application/problem+json' } },
+      response: {
+        status: 503,
+        data: { error: 'unavailable' },
+        headers: { 'content-type': 'application/problem+json' },
+      },
     })
 
     await createMiddleware().handler(makeRequest(), response, next)
 
-    expect(setHeader).toHaveBeenCalledWith('content-type', 'application/problem+json')
+    expect(setHeader).not.toHaveBeenCalled()
     expect(status).toHaveBeenCalledWith(503)
-    expect(send).toHaveBeenCalledWith(JSON.stringify({ error: 'unavailable' }))
+    expect(send).toHaveBeenCalledWith({
+      error: {
+        tag: 'service-unavailable',
+        message: 'The requested service is temporarily unavailable.',
+      },
+    })
   })
 
   it('falls back to 500 when the axios error code is not numeric', async () => {
@@ -194,5 +250,49 @@ describe('SubscriptionTokenAuthMiddleware', () => {
     await createMiddleware().handler(makeRequest(), response, next)
 
     expect(status).toHaveBeenCalledWith(500)
+  })
+
+  it('keeps the subscription credential out of the fixed URL, request body, and all log arguments', async () => {
+    const sentinel = 'subscription-token-sentinel'
+    const error: Record<string, unknown> = {
+      name: 'AxiosError',
+      code: 'ERR_BAD_RESPONSE',
+      message: `request failed for ${sentinel}`,
+      response: {
+        status: 503,
+        data: {
+          accessToken: 'access-token-sentinel',
+          encryptedContent: 'encrypted-content-sentinel',
+        },
+        headers: {
+          'set-cookie': 'cookie-sentinel',
+        },
+      },
+      config: {
+        headers: {
+          Authorization: 'Bearer access-token-sentinel',
+          'x-subscription-token': sentinel,
+        },
+      },
+    }
+    error.circular = error
+    ;(httpClient.request as jest.Mock).mockRejectedValue(error)
+
+    await createMiddleware().handler(makeRequest({ query: { subscription_token: sentinel } as never }), response, next)
+
+    const config = (httpClient.request as jest.Mock).mock.calls[0][0]
+    expect(config.url).toBe('https://auth/subscription-tokens/validate')
+    expect(config.url).not.toContain(sentinel)
+    expect(JSON.stringify(config.data)).not.toContain(sentinel)
+    expect(config.headers['x-subscription-token']).toBe(sentinel)
+
+    const serializedLogs = JSON.stringify({
+      error: (logger.error as jest.Mock).mock.calls,
+      debug: (logger.debug as jest.Mock).mock.calls,
+    })
+    expect(serializedLogs).not.toContain(sentinel)
+    expect(serializedLogs).not.toContain('access-token-sentinel')
+    expect(serializedLogs).not.toContain('encrypted-content-sentinel')
+    expect(serializedLogs).not.toContain('cookie-sentinel')
   })
 })

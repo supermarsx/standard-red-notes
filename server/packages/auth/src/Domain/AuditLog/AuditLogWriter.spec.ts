@@ -55,9 +55,9 @@ describe('AuditLogWriter', () => {
     await createWriter().write({ actorUuid, action: '' })
 
     expect(auditLogRepository.save).not.toHaveBeenCalled()
-    expect(logger.warn).toHaveBeenCalledWith(
-      'Could not build audit log entry for action : Audit log action cannot be empty',
-    )
+    expect(logger.warn).toHaveBeenCalledWith('Could not build an audit-log entry.', {
+      action: '',
+    })
   })
 
   it('should swallow a repository failure so the audited action is never broken', async () => {
@@ -65,6 +65,12 @@ describe('AuditLogWriter', () => {
 
     await expect(createWriter().write({ actorUuid, action: 'user.login' })).resolves.toBeUndefined()
 
-    expect(logger.error).toHaveBeenCalledWith('Could not write audit log entry for action user.login: db down')
+    expect(logger.error).toHaveBeenCalledWith('Could not write audit log entry.', {
+      action: 'user.login',
+      errorType: 'Error',
+      errorCode: undefined,
+      status: undefined,
+    })
+    expect(JSON.stringify((logger.error as jest.Mock).mock.calls)).not.toContain('db down')
   })
 })

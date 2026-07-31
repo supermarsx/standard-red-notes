@@ -107,9 +107,13 @@ describe('GetMfaSecret', () => {
 
       expect(result.isFailed()).toBe(true)
       expect(result.getError()).toEqual('Failed to generate MFA secret.')
-      expect(logger.error).toHaveBeenCalledWith(
-        `Failed to generate MFA secret for user ${userUuid}: Error: Crypto generation failed`,
-      )
+      expect(logger.error).toHaveBeenCalledWith('Failed to generate an MFA secret.', {
+        userId: userUuid,
+        errorType: 'Error',
+        errorCode: undefined,
+        status: undefined,
+      })
+      expect(JSON.stringify((logger.error as jest.Mock).mock.calls)).not.toContain('Crypto generation failed')
     })
   })
 })

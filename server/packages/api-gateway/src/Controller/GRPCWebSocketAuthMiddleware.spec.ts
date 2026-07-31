@@ -179,7 +179,11 @@ describe('GRPCWebSocketAuthMiddleware', () => {
     expect(send).toHaveBeenCalledWith(
       "Unfortunately, we couldn't handle your request. Please try again or contact our support if the error persists.",
     )
-    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('upstream down'))
+    expect(logger.error).toHaveBeenCalledWith(
+      'Could not pass the request to websocket connection validation on the underlying service.',
+      { errorCode: undefined, errorType: 'Error', status: undefined },
+    )
+    expect(JSON.stringify((logger.error as unknown as jest.Mock).mock.calls)).not.toContain('upstream down')
     expect(next).not.toHaveBeenCalled()
   })
 
@@ -191,7 +195,11 @@ describe('GRPCWebSocketAuthMiddleware', () => {
     await createMiddleware().handler(request, response, next)
 
     expect(status).toHaveBeenCalledWith(500)
-    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('channel closed'))
+    expect(logger.error).toHaveBeenCalledWith(
+      'Could not pass the request to websocket connection validation on the underlying service.',
+      { errorCode: undefined, errorType: 'Error', status: undefined },
+    )
+    expect(JSON.stringify((logger.error as unknown as jest.Mock).mock.calls)).not.toContain('channel closed')
     expect(next).not.toHaveBeenCalled()
   })
 

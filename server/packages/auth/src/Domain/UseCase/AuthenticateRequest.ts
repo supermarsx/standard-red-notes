@@ -1,6 +1,7 @@
 import { inject, injectable } from 'inversify'
 import { Logger } from 'winston'
 import TYPES from '../../Bootstrap/Types'
+import { safeErrorLogMetadata } from '../Logging/SafeLog'
 import { AuthenticateRequestDTO } from './AuthenticateRequestDTO'
 import { AuthenticateRequestResponse } from './AuthenticateRequestResponse'
 import { AuthenticateUser } from './AuthenticateUser'
@@ -35,7 +36,8 @@ export class AuthenticateRequest implements UseCaseInterface {
       })
     } catch (error) {
       this.logger.error(
-        `[authenticate-request] Error occurred during authentication of a user ${(error as Error).message}`,
+        '[authenticate-request] Error occurred during authentication of a user.',
+        safeErrorLogMetadata(error),
       )
 
       return {

@@ -15,6 +15,7 @@ import { CreateCrossServiceToken } from '../../Domain/UseCase/CreateCrossService
 import { Logger } from 'winston'
 import { ErrorTag } from '@standardnotes/responses'
 import { TokenDecoderInterface, WebSocketConnectionTokenData } from '@standardnotes/security'
+import { safeErrorLogMetadata } from '../../Domain/Logging/SafeLog'
 
 export class AuthServer implements IAuthServer {
   constructor(
@@ -74,7 +75,10 @@ export class AuthServer implements IAuthServer {
 
       callback(null, response)
     } catch (error) {
-      this.logger.error(`[SessionsServer] Error validating websocket connection via gRPC: ${(error as Error).message}`)
+      this.logger.error(
+        '[SessionsServer] Error validating a websocket connection via gRPC.',
+        safeErrorLogMetadata(error),
+      )
 
       callback(
         {
@@ -172,7 +176,7 @@ export class AuthServer implements IAuthServer {
 
       callback(null, response)
     } catch (error) {
-      this.logger.error(`[SessionsServer] Error validating session via gRPC: ${(error as Error).message}`)
+      this.logger.error('[SessionsServer] Error validating a session via gRPC.', safeErrorLogMetadata(error))
 
       callback(
         {

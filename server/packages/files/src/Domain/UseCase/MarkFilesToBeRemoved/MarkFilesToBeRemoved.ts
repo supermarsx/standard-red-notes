@@ -1,6 +1,6 @@
 import { inject, injectable } from 'inversify'
 import { Logger } from 'winston'
-import { Result, UseCaseInterface } from '@standardnotes/domain-core'
+import { safeErrorLogMetadata, Result, UseCaseInterface } from '@standardnotes/domain-core'
 
 import TYPES from '../../../Bootstrap/Types'
 import { FileRemoverInterface } from '../../Services/FileRemoverInterface'
@@ -22,7 +22,7 @@ export class MarkFilesToBeRemoved implements UseCaseInterface<RemovedFileDescrip
 
       return Result.ok(filesRemoved)
     } catch (error) {
-      this.logger.error(`Could not mark resources for removal: ${dto.ownerUuid} - ${(error as Error).message}`)
+      this.logger.error(`Could not mark resources for removal: ${dto.ownerUuid}.`, safeErrorLogMetadata(error))
 
       return Result.fail('Could not mark resources for removal')
     }

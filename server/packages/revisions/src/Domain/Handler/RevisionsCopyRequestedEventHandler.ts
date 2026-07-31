@@ -1,3 +1,4 @@
+import { safeErrorLogMetadata } from '@standardnotes/domain-core'
 import { DomainEventHandlerInterface, RevisionsCopyRequestedEvent } from '@standardnotes/domain-events'
 import { Logger } from 'winston'
 import { CopyRevisions } from '../UseCase/CopyRevisions/CopyRevisions'
@@ -15,7 +16,7 @@ export class RevisionsCopyRequestedEventHandler implements DomainEventHandlerInt
     })
 
     if (result.isFailed()) {
-      this.logger.error(`Could not copy revisions: ${result.getError()}`)
+      this.logger.error('Could not copy revisions.', safeErrorLogMetadata(result.getError()))
     }
   }
 }

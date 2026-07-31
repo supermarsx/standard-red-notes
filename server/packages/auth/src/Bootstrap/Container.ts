@@ -18,6 +18,7 @@ type UAParserInstance = InstanceType<typeof UAParser>
 
 import { Env } from './Env'
 import TYPES from './Types'
+import { createSafeLogFormat } from '../Domain/Logging/SafeLog'
 import { AuthenticateUser } from '../Domain/UseCase/AuthenticateUser'
 import { Repository } from 'typeorm'
 import { AppDataSource } from './DataSource'
@@ -549,7 +550,7 @@ export class ContainerConfigLoader {
 
     const container = configuration?.container ?? new Container()
 
-    const winstonFormatters = [winston.format.splat(), winston.format.json()]
+    const winstonFormatters = [winston.format.splat(), createSafeLogFormat(), winston.format.json()]
 
     let logger: winston.Logger
     if (configuration?.logger) {

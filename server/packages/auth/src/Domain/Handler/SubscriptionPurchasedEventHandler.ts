@@ -29,7 +29,6 @@ export class SubscriptionPurchasedEventHandler implements DomainEventHandlerInte
       this.logger.error('Subscription ID is missing', {
         codeTag: 'SubscriptionPurchasedEventHandler.handle',
         subscriptionId: event.payload.subscriptionId,
-        userId: event.payload.userEmail,
       })
 
       return
@@ -52,7 +51,7 @@ export class SubscriptionPurchasedEventHandler implements DomainEventHandlerInte
         timestamp: event.payload.timestamp,
       })
       if (renewalResult.isFailed()) {
-        this.logger.error(`Could not renew shared offline subscriptions: ${renewalResult.getError()}`, {
+        this.logger.error('Could not renew shared offline subscriptions.', {
           subscriptionId: event.payload.subscriptionId,
         })
       }
@@ -91,7 +90,9 @@ export class SubscriptionPurchasedEventHandler implements DomainEventHandlerInte
       timestamp: event.payload.timestamp,
     })
     if (renewalResult.isFailed()) {
-      this.logger.error(`Could not renew shared subscriptions for user ${user.uuid}: ${renewalResult.getError()}`)
+      this.logger.error('Could not renew shared subscriptions for a user.', {
+        userId: user.uuid,
+      })
     }
 
     await this.addUserRole(user, event.payload.subscriptionName)
@@ -103,7 +104,9 @@ export class SubscriptionPurchasedEventHandler implements DomainEventHandlerInte
     })
 
     if (result.isFailed()) {
-      this.logger.error(`Could not apply default subscription settings for user ${user.uuid}: ${result.getError()}`)
+      this.logger.error('Could not apply default subscription settings for a user.', {
+        userId: user.uuid,
+      })
     }
   }
 

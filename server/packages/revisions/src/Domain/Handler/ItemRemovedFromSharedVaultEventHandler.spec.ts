@@ -47,11 +47,15 @@ describe('ItemRemovedFromSharedVaultEventHandler', () => {
     expect(logger.error).toHaveBeenCalledWith('ItemRemovedFromSharedVaultEvent is missing itemUuid')
   })
 
-  it('should log the failure reason when the revisions cannot be removed', async () => {
+  it('should log a safe failure classification when the revisions cannot be removed', async () => {
     removeRevisionsFromSharedVault.execute = jest.fn().mockResolvedValue(Result.fail('Oops'))
 
     await createHandler().handle(event)
 
-    expect(logger.error).toHaveBeenCalledWith('Failed to remove revisions from shared vault: Oops')
+    expect(logger.error).toHaveBeenCalledWith(
+      'Failed to remove revisions from shared vault.',
+      expect.objectContaining({ errorType: 'Error' }),
+    )
+    expect(JSON.stringify(logger.error.mock.calls)).not.toContain('Oops')
   })
 })

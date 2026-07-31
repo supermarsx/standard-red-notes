@@ -1,3 +1,4 @@
+import { safeErrorLogMetadata } from '@standardnotes/domain-core'
 import { Logger } from 'winston'
 
 import {
@@ -57,6 +58,6 @@ export class SQSBounceNotificiationHandler implements DomainEventMessageHandlerI
   }
 
   async handleError(error: Error): Promise<void> {
-    this.logger.error('Error occured while handling SQS message: %O', error)
+    this.logger.error('Error occurred while handling an SQS message.', safeErrorLogMetadata(error))
   }
 }

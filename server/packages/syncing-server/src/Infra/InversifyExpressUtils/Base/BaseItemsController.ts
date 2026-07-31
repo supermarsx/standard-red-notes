@@ -1,4 +1,9 @@
-import { ControllerContainerInterface, MapperInterface, Validator } from '@standardnotes/domain-core'
+import {
+  safeErrorLogMetadata,
+  ControllerContainerInterface,
+  MapperInterface,
+  Validator,
+} from '@standardnotes/domain-core'
 import { BaseHttpController, results } from 'inversify-express-utils'
 import { Request, Response } from 'express'
 import { HttpStatusCode } from '@standardnotes/responses'
@@ -82,7 +87,8 @@ export class BaseItemsController extends BaseHttpController {
 
       return this.json({ authorized: result.getValue() === true }, HttpStatusCode.Success)
     } catch (error) {
-      this.logger.error(`Collaboration authorization check failed: ${(error as Error).message}`, {
+      this.logger.error('Collaboration authorization check failed.', {
+        ...safeErrorLogMetadata(error),
         userId: locals.user?.uuid,
       })
 
@@ -99,7 +105,8 @@ export class BaseItemsController extends BaseHttpController {
       timeframeLengthInMinutes: this.itemOperationsAbuseTimeframeLengthInMinutes,
     })
     if (checkForItemOperationsAbuseResult.isFailed()) {
-      this.logger.warn(checkForItemOperationsAbuseResult.getError(), {
+      this.logger.warn('Operation failed.', {
+        ...safeErrorLogMetadata(checkForItemOperationsAbuseResult.getError()),
         userId: locals.user.uuid,
       })
       if (this.strictAbuseProtection) {
@@ -122,7 +129,8 @@ export class BaseItemsController extends BaseHttpController {
       timeframeLengthInMinutes: this.payloadSizeAbuseTimeframeLengthInMinutes,
     })
     if (checkForPayloadSizeAbuseResult.isFailed()) {
-      this.logger.warn(checkForPayloadSizeAbuseResult.getError(), {
+      this.logger.warn('Operation failed.', {
+        ...safeErrorLogMetadata(checkForPayloadSizeAbuseResult.getError()),
         userId: locals.user.uuid,
       })
 

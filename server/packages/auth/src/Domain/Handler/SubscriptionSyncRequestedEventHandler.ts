@@ -37,7 +37,6 @@ export class SubscriptionSyncRequestedEventHandler implements DomainEventHandler
       this.logger.error('Subscription ID is missing', {
         codeTag: 'SubscriptionSyncRequestedEventHandler.handle',
         subscriptionId: event.payload.subscriptionId,
-        userId: event.payload.userEmail,
       })
 
       return
@@ -69,7 +68,7 @@ export class SubscriptionSyncRequestedEventHandler implements DomainEventHandler
         timestamp: event.payload.timestamp,
       })
       if (renewalResult.isFailed()) {
-        this.logger.error(`Could not renew shared offline subscriptions for user: ${renewalResult.getError()}`, {
+        this.logger.error('Could not renew shared offline subscriptions for a user.', {
           subscriptionId: event.payload.subscriptionId,
         })
       }
@@ -102,7 +101,7 @@ export class SubscriptionSyncRequestedEventHandler implements DomainEventHandler
 
     const usernameOrError = Username.create(event.payload.userEmail, { skipValidation: true })
     if (usernameOrError.isFailed()) {
-      this.logger.warn(`Could not sync subscription: ${usernameOrError.getError()}`, {
+      this.logger.warn('Could not sync a subscription because the user identifier was invalid.', {
         subscriptionId: event.payload.subscriptionId,
       })
 
@@ -142,7 +141,7 @@ export class SubscriptionSyncRequestedEventHandler implements DomainEventHandler
       timestamp: event.payload.timestamp,
     })
     if (renewalResult.isFailed()) {
-      this.logger.error(`Could not renew shared subscriptions for user: ${renewalResult.getError()}`, {
+      this.logger.error('Could not renew shared subscriptions for a user.', {
         userId: user.uuid,
       })
     }
@@ -155,9 +154,9 @@ export class SubscriptionSyncRequestedEventHandler implements DomainEventHandler
       subscriptionPlanName: event.payload.subscriptionName,
     })
     if (applyingSettingsResult.isFailed()) {
-      this.logger.error(
-        `Could not apply default subscription settings for user ${user.uuid}: ${applyingSettingsResult.getError()}`,
-      )
+      this.logger.error('Could not apply default subscription settings for a user.', {
+        userId: user.uuid,
+      })
     }
 
     const result = await this.setSettingValue.execute({

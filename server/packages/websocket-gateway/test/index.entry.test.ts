@@ -44,7 +44,7 @@ const harness = vi.hoisted(() => {
         return state.stopPromise
       }
       if (state.stopRejects) {
-        throw new Error('stop failed')
+        throw new Error('stop-exception-credential-sentinel')
       }
     })
 
@@ -215,6 +215,28 @@ describe('standalone entry', () => {
     expect(harness.state.attachOptions?.httpServer).toBeDefined()
   })
 
+  it('sanitizes every argument at the standalone console boundary', async () => {
+    await importEntry()
+    const logger = harness.state.attachOptions?.logger as {
+      error: (...args: unknown[]) => void
+    }
+    const metadata: Record<string, unknown> = {
+      sessionUuid: 'session-uuid-sentinel',
+      accessToken: 'access-token-sentinel',
+      userId: 'user-1',
+    }
+    metadata.circular = metadata
+
+    logger.error('[test] failed', metadata, new Error('exception-credential-sentinel'))
+
+    const serialized = JSON.stringify(vi.mocked(console.error).mock.calls)
+    expect(serialized).toContain('user-1')
+    expect(serialized).toContain('[REDACTED]')
+    expect(serialized).not.toContain('session-uuid-sentinel')
+    expect(serialized).not.toContain('access-token-sentinel')
+    expect(serialized).not.toContain('exception-credential-sentinel')
+  })
+
   it('answers GET /health with a plain-text ok', async () => {
     await importEntry()
     const { res, status, body } = fakeResponse()
@@ -280,12 +302,11 @@ describe('standalone entry', () => {
     await vi.waitFor(() => expect(harness.state.stop).toHaveBeenCalled())
     await vi.waitFor(() => expect(exitSpy).toHaveBeenCalledWith(0))
     expect(harness.state.closeCallbacks).toHaveLength(1)
-    expect(console.error).toHaveBeenCalledWith(
-      expect.any(String),
-      '[error]',
-      '[shutdown] gateway stop failed',
-      'stop failed',
-    )
+    expect(console.error).toHaveBeenCalledWith(expect.any(String), '[error]', '[shutdown] gateway stop failed', {
+      errorType: 'Error',
+      errorCode: undefined,
+    })
+    expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain('stop-exception-credential-sentinel')
   })
 
   it('runs the shutdown path on SIGINT as well as SIGTERM', async () => {
@@ -316,6 +337,7 @@ describe('standalone entry', () => {
 
     expect(harness.state.stop).toHaveBeenCalledTimes(1)
     expect(harness.state.closeCallbacks).toHaveLength(1)
+    // eslint-disable-next-line no-console
     expect(console.log).toHaveBeenCalledWith(
       expect.any(String),
       '[info]',

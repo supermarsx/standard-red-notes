@@ -169,7 +169,12 @@ describe('VerifyEmailConfirmation', () => {
 
     expect(result.isFailed()).toBe(true)
     expect(result.getError()).toBe('Could not verify the confirmation link.')
-    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('database unavailable'))
+    expect(logger.error).toHaveBeenCalledWith('[email-confirmation] Verification failed.', {
+      errorType: 'Error',
+      errorCode: undefined,
+      status: undefined,
+    })
+    expect(JSON.stringify((logger.error as jest.Mock).mock.calls)).not.toContain('database unavailable')
   })
 
   it('rejects an empty token without hitting the repository', async () => {

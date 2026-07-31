@@ -1,4 +1,4 @@
-import { Result, Timestamps, UseCaseInterface, Uuid, Validator } from '@standardnotes/domain-core'
+import { safeErrorLogMetadata, Result, Timestamps, UseCaseInterface, Uuid, Validator } from '@standardnotes/domain-core'
 import { TimerInterface } from '@standardnotes/time'
 
 import { SendMessageToUserDTO } from './SendMessageToUserDTO'
@@ -81,9 +81,8 @@ export class SendMessageToUser implements UseCaseInterface<Message> {
     })
     if (result.isFailed()) {
       this.logger.error(
-        `Failed to send message sent event to client for user ${
-          message.props.recipientUuid.value
-        }: ${result.getError()}`,
+        `Failed to send message sent event to client for user ${message.props.recipientUuid.value}.`,
+        safeErrorLogMetadata(result.getError()),
       )
     }
 

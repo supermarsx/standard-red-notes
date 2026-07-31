@@ -31,6 +31,7 @@ import { ProofOfWorkGate, ProofOfWorkChallengePayload } from '../../../Domain/Pr
 import { VerifyEmailConfirmation } from '../../../Domain/UseCase/VerifyEmailConfirmation/VerifyEmailConfirmation'
 import { ResendEmailConfirmation } from '../../../Domain/UseCase/ResendEmailConfirmation/ResendEmailConfirmation'
 import { GetAccountRecoveryEscrow } from '../../../Domain/UseCase/GetAccountRecoveryEscrow/GetAccountRecoveryEscrow'
+import { safeErrorLogMetadata } from '../../../Domain/Logging/SafeLog'
 
 const PROOF_OF_WORK_REQUIRED_TAG = 'proof-of-work-required'
 
@@ -266,7 +267,7 @@ export class BaseAuthController extends BaseHttpController {
           }
         }
       } catch (error) {
-        this.logger.debug(`Could not create pending MFA approval: ${(error as Error).message}`)
+        this.logger.debug('Could not create a pending MFA approval.', safeErrorLogMetadata(error))
       }
 
       return this.json(
@@ -338,7 +339,7 @@ export class BaseAuthController extends BaseHttpController {
         skipUsernameValidation: true,
       })
       if (resultOrError.isFailed()) {
-        this.logger.error(`Failed to increase login attempts: ${resultOrError.getError()}`, {
+        this.logger.error('Failed to increase login attempts.', {
           application: request.headers['x-application-version'] as string,
         })
       } else {
@@ -411,18 +412,15 @@ export class BaseAuthController extends BaseHttpController {
     })
 
     if (result.isFailed()) {
-      this.logger.debug(`Failed to sign in with recovery codes: ${result.getError()}`)
+      this.logger.debug('Failed to sign in with recovery codes.')
 
       const increasLoginAttemtpsResultOrError = await this.increaseLoginAttempts.execute({
         email: request.body.username,
       })
       if (increasLoginAttemtpsResultOrError.isFailed()) {
-        this.logger.error(
-          `Failed to increase login attempts on recovery login: ${increasLoginAttemtpsResultOrError.getError()}`,
-          {
-            application: request.headers['x-application-version'] as string,
-          },
-        )
+        this.logger.error('Failed to increase login attempts on recovery login.', {
+          application: request.headers['x-application-version'] as string,
+        })
       } else {
         const increasLoginAttemtpsResult = increasLoginAttemtpsResultOrError.getValue()
         if (increasLoginAttemtpsResult.isNonCaptchaLimitReached) {
@@ -653,8 +651,8 @@ export class BaseAuthController extends BaseHttpController {
       )
     } catch (error) {
       this.logger.error('Failed to publish USER_REGISTERED event after registration was committed.', {
-        userUuid: registeredUser.uuid,
-        error: error instanceof Error ? error.message : String(error),
+        userId: registeredUser.uuid,
+        ...safeErrorLogMetadata(error),
       })
     }
 

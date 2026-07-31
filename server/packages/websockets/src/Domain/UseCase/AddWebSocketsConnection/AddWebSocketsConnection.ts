@@ -1,5 +1,5 @@
 import { Logger } from 'winston'
-import { Result, Timestamps, UseCaseInterface, Uuid } from '@standardnotes/domain-core'
+import { safeErrorLogMetadata, Result, Timestamps, UseCaseInterface, Uuid } from '@standardnotes/domain-core'
 import { TimerInterface } from '@standardnotes/time'
 
 import { WebSocketsConnectionRepositoryInterface } from '../../WebSockets/WebSocketsConnectionRepositoryInterface'
@@ -48,7 +48,8 @@ export class AddWebSocketsConnection implements UseCaseInterface<void> {
 
       return Result.ok()
     } catch (error) {
-      this.logger.error(`Error persisting connection for user: ${(error as Error).message}`, {
+      this.logger.error('Error persisting connection for user.', {
+        ...safeErrorLogMetadata(error),
         userId: dto.userUuid,
         connectionId: dto.connectionId,
       })

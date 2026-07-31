@@ -3,13 +3,21 @@ import { NextFunction, Request, Response } from 'express'
 import { inject, injectable } from 'inversify'
 import { BaseMiddleware } from 'inversify-express-utils'
 import { verify } from 'jsonwebtoken'
-import { AxiosError, AxiosInstance, AxiosResponse } from 'axios'
+import { AxiosInstance, AxiosResponse } from 'axios'
 import { Logger } from 'winston'
 import { TYPES } from '../Bootstrap/Types'
 import { TokenAuthenticationMethod } from './TokenAuthenticationMethod'
 import { ResponseLocals } from './ResponseLocals'
 import { OfflineResponseLocals } from './OfflineResponseLocals'
 import { SubscriptionResponseLocals } from './SubscriptionResponseLocals'
+import {
+  PublicServiceFailure,
+  publicHttpErrorStatus,
+  safeHttpErrorLogMetadata,
+  safePublicErrorData,
+} from '../Service/Logging/SafeLog'
+
+const SubscriptionTokenHeader = 'x-subscription-token'
 
 @injectable()
 export class SubscriptionTokenAuthMiddleware extends BaseMiddleware {
@@ -23,9 +31,15 @@ export class SubscriptionTokenAuthMiddleware extends BaseMiddleware {
   }
 
   async handler(request: Request, response: Response, next: NextFunction): Promise<void> {
-    const subscriptionToken = request.query.subscription_token || request.body.subscription_token
+    const bodyTokenCandidate =
+      request.body && typeof request.body === 'object'
+        ? (request.body as Record<string, unknown>).subscription_token
+        : undefined
+    const tokenCandidate = request.query.subscription_token || bodyTokenCandidate
+    const subscriptionToken = typeof tokenCandidate === 'string' ? tokenCandidate : undefined
 
-    const email = request.headers['x-offline-email']
+    const emailCandidate = request.headers['x-offline-email']
+    const email = typeof emailCandidate === 'string' ? emailCandidate : undefined
     if (!subscriptionToken) {
       response.status(401).send({
         error: {
@@ -47,13 +61,14 @@ export class SubscriptionTokenAuthMiddleware extends BaseMiddleware {
     try {
       const url =
         locals.tokenAuthenticationMethod == TokenAuthenticationMethod.OfflineSubscriptionToken
-          ? `${this.authServerUrl}/offline/subscription-tokens/${subscriptionToken}/validate`
-          : `${this.authServerUrl}/subscription-tokens/${subscriptionToken}/validate`
+          ? `${this.authServerUrl}/offline/subscription-tokens/validate`
+          : `${this.authServerUrl}/subscription-tokens/validate`
 
       const authResponse = await this.httpClient.request({
         method: 'POST',
         headers: {
           Accept: 'application/json',
+          [SubscriptionTokenHeader]: subscriptionToken,
         },
         data: {
           email,
@@ -65,8 +80,7 @@ export class SubscriptionTokenAuthMiddleware extends BaseMiddleware {
       })
 
       if (authResponse.status > 200) {
-        response.setHeader('content-type', authResponse.headers['content-type'] as string)
-        response.status(authResponse.status).send(authResponse.data)
+        this.sendValidationFailure(response, authResponse)
 
         return
       }
@@ -81,29 +95,31 @@ export class SubscriptionTokenAuthMiddleware extends BaseMiddleware {
 
       return next()
     } catch (error) {
-      const errorMessage = (error as AxiosError).isAxiosError
-        ? JSON.stringify((error as AxiosError).response?.data)
-        : (error as Error).message
+      const endpoint =
+        locals.tokenAuthenticationMethod == TokenAuthenticationMethod.OfflineSubscriptionToken
+          ? `${this.authServerUrl}/offline/subscription-tokens/validate`
+          : `${this.authServerUrl}/subscription-tokens/validate`
+      const safeError = safeHttpErrorLogMetadata(error, {
+        action: 'subscription-token.validate',
+        endpoint,
+        method: 'POST',
+      })
+      this.logger.error('Could not validate subscription token on underlying service.', safeError)
+      this.logger.debug('Subscription token validation failure summary.', safeError)
 
-      this.logger.error(
-        `Could not pass the request to ${this.authServerUrl}/subscription-tokens/${subscriptionToken}/validate on underlying service: ${errorMessage}`,
-      )
-
-      this.logger.debug('Response error: %O', (error as AxiosError).response ?? error)
-
-      if ((error as AxiosError).response?.headers['content-type']) {
-        response.setHeader('content-type', (error as AxiosError).response?.headers['content-type'] as string)
-      }
-
-      const errorCode =
-        (error as AxiosError).isAxiosError && !isNaN(+((error as AxiosError).code as string))
-          ? +((error as AxiosError).code as string)
-          : 500
-
-      response.status(errorCode).send(errorMessage)
+      response.status(publicHttpErrorStatus(error)).send(PublicServiceFailure)
 
       return
     }
+  }
+
+  private sendValidationFailure(response: Response, authResponse: AxiosResponse): void {
+    const status = authResponse.status >= 400 && authResponse.status <= 599 ? authResponse.status : 500
+    const contentType = authResponse.headers?.['content-type']
+    if (typeof contentType === 'string' && contentType.length > 0) {
+      response.setHeader('content-type', contentType)
+    }
+    response.status(status).send(safePublicErrorData(authResponse.data))
   }
 
   private handleOfflineAuthTokenValidationResponse(response: Response, authResponse: AxiosResponse) {

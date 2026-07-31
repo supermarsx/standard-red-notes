@@ -6,7 +6,7 @@ import TYPES from '../../../Bootstrap/Types'
 import { DomainEventFactoryInterface } from '../../Event/DomainEventFactoryInterface'
 import { FileRemoverInterface } from '../../Services/FileRemoverInterface'
 import { RemoveFileDTO } from './RemoveFileDTO'
-import { Result, UseCaseInterface } from '@standardnotes/domain-core'
+import { safeErrorLogMetadata, Result, UseCaseInterface } from '@standardnotes/domain-core'
 import { ValetTokenRepositoryInterface } from '../../ValetToken/ValetTokenRepositoryInterface'
 
 @injectable()
@@ -58,7 +58,7 @@ export class RemoveFile implements UseCaseInterface<boolean> {
 
       return Result.ok()
     } catch (error) {
-      this.logger.error(`Could not remove resource: ${resourceUuid} - ${(error as Error).message}`)
+      this.logger.error(`Could not remove resource: ${resourceUuid}.`, safeErrorLogMetadata(error))
 
       return Result.fail('Could not remove resource')
     }

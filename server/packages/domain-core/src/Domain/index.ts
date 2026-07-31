@@ -47,6 +47,8 @@ export * from './Env/AbstractEnv'
 
 export * from './Mapping/MapperInterface'
 
+export * from './Logging/SafeErrorLogMetadata'
+
 export * from './Notification/NotificationPayload'
 export * from './Notification/NotificationPayloadIdentifierType'
 export * from './Notification/NotificationPayloadIdentifierTypeProps'

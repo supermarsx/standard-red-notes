@@ -32,11 +32,15 @@ describe('ItemDumpedEventHandler', () => {
     expect(logger.error).not.toHaveBeenCalled()
   })
 
-  it('should log the failure reason when the revision cannot be created', async () => {
+  it('should log a safe failure classification when the revision cannot be created', async () => {
     createRevisionFromDump.execute = jest.fn().mockResolvedValue(Result.fail('Could not read the dump'))
 
     await createHandler().handle(event)
 
-    expect(logger.error).toHaveBeenCalledWith('Item dumped event handler failed: Could not read the dump')
+    expect(logger.error).toHaveBeenCalledWith(
+      'Item dumped event handler failed.',
+      expect.objectContaining({ errorType: 'Error' }),
+    )
+    expect(JSON.stringify(logger.error.mock.calls)).not.toContain('Could not read the dump')
   })
 })

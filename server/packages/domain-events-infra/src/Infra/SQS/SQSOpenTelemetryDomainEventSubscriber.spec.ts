@@ -100,7 +100,7 @@ describe('SQSOpenTelemetryDomainEventSubscriber', () => {
     expect(span.end).not.toHaveBeenCalled()
   })
 
-  it('records the exception on the open span and ends it on error', async () => {
+  it('records only a safe exception classification on the open span and ends it on error', async () => {
     const subscriber = createSubscriber()
     subscriber.start()
     await subscriber.startParentSpan()
@@ -108,8 +108,15 @@ describe('SQSOpenTelemetryDomainEventSubscriber', () => {
 
     registeredOn('processing_error')[0](error as never)
 
-    expect(logger.error).toHaveBeenCalledWith('Error occured while handling SQS message: %O', error)
-    expect(span.recordException).toHaveBeenCalledWith(error)
+    expect(logger.error).toHaveBeenCalledWith(
+      'Error occurred while handling an SQS message.',
+      expect.objectContaining({ errorType: 'Error' }),
+    )
+    expect(span.recordException).toHaveBeenCalledWith({
+      name: 'Error',
+      message: 'SQS message handling failed; exception details were redacted.',
+    })
+    expect(JSON.stringify([logger.error.mock.calls, span.recordException.mock.calls])).not.toContain('sqs blew up')
     expect(span.end).toHaveBeenCalledTimes(1)
   })
 

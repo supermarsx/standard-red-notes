@@ -116,7 +116,9 @@ describe('TriggerDueDeadManSwitches', () => {
 
     expect(result.getValue()).toBe(0)
     expect(deadManSwitchRepository.save).not.toHaveBeenCalled()
-    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('Could not mark dead man switch'))
+    expect(logger.error).toHaveBeenCalledWith('Could not mark a dead-man switch as triggered.', {
+      deadManSwitchId: invalidSwitch.id.toString(),
+    })
   })
 
   it('should log and skip a failed delivery whose retry state can no longer be reconstructed', async () => {
@@ -129,7 +131,9 @@ describe('TriggerDueDeadManSwitches', () => {
 
     expect(result.getValue()).toBe(0)
     expect(deadManSwitchRepository.save).not.toHaveBeenCalled()
-    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('Could not record dead man switch'))
+    expect(logger.error).toHaveBeenCalledWith('Could not record a dead-man-switch failure.', {
+      deadManSwitchId: invalidSwitch.id.toString(),
+    })
   })
 
   it('should contain a retry persistence failure and leave the switch due for a later scan', async () => {
@@ -140,8 +144,13 @@ describe('TriggerDueDeadManSwitches', () => {
     const result = await createUseCase().execute({})
 
     expect(result.getValue()).toBe(0)
-    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('Error recording dead man switch'))
-    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('database unavailable'))
+    expect(logger.error).toHaveBeenCalledWith('Error recording a dead-man-switch failure.', {
+      deadManSwitchId: '11111111-1111-1111-1111-111111111111',
+      errorType: 'Error',
+      errorCode: undefined,
+      status: undefined,
+    })
+    expect(JSON.stringify((logger.error as jest.Mock).mock.calls)).not.toContain('database unavailable')
   })
 
   it('should schedule the next attempt ~5 min out and increment attempts on a failed send', async () => {

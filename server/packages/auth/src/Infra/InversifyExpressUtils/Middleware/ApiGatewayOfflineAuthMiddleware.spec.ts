@@ -44,6 +44,10 @@ describe('ApiGatewayOfflineAuthMiddleware', () => {
     expect(response.locals.featuresToken).toEqual('abc')
 
     expect(next).toHaveBeenCalled()
+    const serializedLogs = JSON.stringify((logger.debug as jest.Mock).mock.calls)
+    expect(serializedLogs).not.toContain('auth-jwt-token')
+    expect(serializedLogs).not.toContain('abc')
+    expect(serializedLogs).not.toContain('test@test.te')
   })
 
   it('should not authorize if request is missing auth jwt token in headers', async () => {

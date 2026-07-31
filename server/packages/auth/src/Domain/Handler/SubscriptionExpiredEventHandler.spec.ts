@@ -67,7 +67,6 @@ describe('SubscriptionExpiredEventHandler', () => {
     expect(logger.error).toHaveBeenCalledWith('Subscription ID is missing', {
       codeTag: 'SubscriptionExpiredEventHandler.handle',
       subscriptionId: undefined,
-      userId: userEmail,
     })
   })
 

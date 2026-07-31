@@ -6,7 +6,7 @@ import { ContainerConfigLoader } from '../src/Bootstrap/Container'
 import TYPES from '../src/Bootstrap/Types'
 import { Env } from '../src/Bootstrap/Env'
 import { FixContentSizes } from '../src/Domain/UseCase/Syncing/FixContentSizes/FixContentSizes'
-import { Result } from '@standardnotes/domain-core'
+import { safeErrorLogMetadata, Result } from '@standardnotes/domain-core'
 
 const inputArgs = process.argv.slice(2)
 const userUuid = inputArgs[0]
@@ -27,7 +27,8 @@ void container.load().then((container) => {
   Promise.resolve(fixContentSizes.execute({ userUuid }))
     .then((result: Result<void>) => {
       if (result.isFailed()) {
-        logger.error(`Error while fixing content sizes: ${result.getError()}`, {
+        logger.error('Error while fixing content sizes.', {
+          ...safeErrorLogMetadata(result.getError()),
           userId: userUuid,
         })
 
@@ -41,7 +42,8 @@ void container.load().then((container) => {
       process.exit(0)
     })
     .catch((error) => {
-      logger.error(`Error while fixing content sizes: ${error.message}`, {
+      logger.error('Error while fixing content sizes.', {
+        ...safeErrorLogMetadata(error),
         userId: userUuid,
       })
 

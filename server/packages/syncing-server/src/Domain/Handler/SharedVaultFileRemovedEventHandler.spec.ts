@@ -66,7 +66,11 @@ describe('SharedVaultFileRemovedEventHandler', () => {
     await createHandler().handle(event())
 
     expect(addNotificationsForUsers.execute).not.toHaveBeenCalled()
-    expect(logger.error).toHaveBeenCalledWith('Failed to update storage quota used in shared vault: Oops')
+    expect(logger.error).toHaveBeenCalledWith(
+      'Failed to update storage quota used in shared vault.',
+      expect.objectContaining({ errorType: 'Error' }),
+    )
+    expect(JSON.stringify((logger.error as jest.Mock).mock.calls)).not.toContain('Oops')
   })
 
   it('logs a failure to notify the vault members', async () => {
@@ -74,6 +78,10 @@ describe('SharedVaultFileRemovedEventHandler', () => {
 
     await createHandler().handle(event())
 
-    expect(logger.error).toHaveBeenCalledWith('Failed to add notification for users: Oops')
+    expect(logger.error).toHaveBeenCalledWith(
+      'Failed to add notification for users.',
+      expect.objectContaining({ errorType: 'Error' }),
+    )
+    expect(JSON.stringify((logger.error as jest.Mock).mock.calls)).not.toContain('Oops')
   })
 })

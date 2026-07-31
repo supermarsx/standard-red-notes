@@ -53,7 +53,7 @@ describe('SharedVaultFileMovedEventHandler', () => {
 
     expect(updateStorageQuotaUsedForUser.execute).toHaveBeenCalledTimes(2)
     expect(logger.error).toHaveBeenCalledTimes(1)
-    expect(logger.error).toHaveBeenCalledWith('Failed to update storage quota used for user: subtract oops')
+    expect(logger.error).toHaveBeenCalledWith('Failed to subtract storage quota after a shared-vault file move.')
   })
 
   it('should log an error if crediting the destination owner fails', async () => {
@@ -65,6 +65,6 @@ describe('SharedVaultFileMovedEventHandler', () => {
     await createHandler().handle(event)
 
     expect(logger.error).toHaveBeenCalledTimes(1)
-    expect(logger.error).toHaveBeenCalledWith('Failed to update storage quota used for user: add oops')
+    expect(logger.error).toHaveBeenCalledWith('Failed to add storage quota after a shared-vault file move.')
   })
 })

@@ -8,6 +8,7 @@ import { UserRepositoryInterface } from '../../User/UserRepositoryInterface'
 import { GetSetting } from '../GetSetting/GetSetting'
 
 import { TriggerDueEmailRemindersDTO } from './TriggerDueEmailRemindersDTO'
+import { safeErrorLogMetadata } from '../../Logging/SafeLog'
 
 const EMAIL_SUBJECT_PREFIX = 'Reminder: '
 
@@ -73,7 +74,10 @@ export class TriggerDueEmailReminders implements UseCaseInterface<number> {
         // A single failure must never block the rest of the batch. Leave the row
         // unsent so it retries on the next scan. Avoid logging message content even
         // outside no-records mode here; the reminder id is enough to diagnose.
-        this.logger.error(`Error processing email reminder ${reminder.id.toString()}: ${(error as Error).message}`)
+        this.logger.error('Error processing an email reminder.', {
+          reminderId: reminder.id.toString(),
+          ...safeErrorLogMetadata(error),
+        })
       }
     }
 
@@ -125,7 +129,9 @@ export class TriggerDueEmailReminders implements UseCaseInterface<number> {
       new UniqueEntityId(reminder.id.toString()),
     )
     if (sentOrError.isFailed()) {
-      this.logger.error(`Could not mark email reminder ${reminder.id.toString()} sent: ${sentOrError.getError()}`)
+      this.logger.error('Could not mark an email reminder as sent.', {
+        reminderId: reminder.id.toString(),
+      })
 
       return false
     }

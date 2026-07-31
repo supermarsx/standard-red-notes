@@ -228,11 +228,12 @@ describe('AnnotatedSharedVaultFilesController', () => {
       expect(finishUploadSession.execute).not.toHaveBeenCalled()
     })
 
-    it('logs and returns a close-session failure', async () => {
+    it('logs a safe classification and returns a close-session failure', async () => {
       finishUploadSession.execute = jest.fn().mockResolvedValue(Result.fail('close failed'))
 
       expectBadRequest(await createController().finishUpload(request, response))
-      expect(logger.error).toHaveBeenCalledWith('close failed')
+      expect(logger.error).toHaveBeenCalledWith('Operation failed.', expect.objectContaining({ errorType: 'Error' }))
+      expect(JSON.stringify(logger.error.mock.calls)).not.toContain('close failed')
     })
   })
 
@@ -383,7 +384,11 @@ describe('AnnotatedSharedVaultFilesController', () => {
 
       errorHandler(new Error('stream failed'))
 
-      expect(logger.error).toHaveBeenCalledWith('Error while streaming file download: stream failed')
+      expect(logger.error).toHaveBeenCalledWith(
+        'Error while streaming file download.',
+        expect.objectContaining({ errorType: 'Error' }),
+      )
+      expect(JSON.stringify(logger.error.mock.calls)).not.toContain('stream failed')
       expect(readStream.destroy).toHaveBeenCalled()
       expect(response.destroy).toHaveBeenCalledWith(expect.any(Error))
     })

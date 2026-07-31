@@ -4,6 +4,7 @@ import { Logger } from 'winston'
 import { DeadManSwitch } from '../../DeadManSwitch/DeadManSwitch'
 import { DeadManSwitchRepositoryInterface } from '../../DeadManSwitch/DeadManSwitchRepositoryInterface'
 import { EmailSenderInterface } from '../../Email/EmailSenderInterface'
+import { safeErrorLogMetadata } from '../../Logging/SafeLog'
 
 import { TriggerDueDeadManSwitchesDTO } from './TriggerDueDeadManSwitchesDTO'
 
@@ -72,9 +73,9 @@ export class TriggerDueDeadManSwitches implements UseCaseInterface<number> {
           new UniqueEntityId(deadManSwitch.id.toString()),
         )
         if (triggeredOrError.isFailed()) {
-          this.logger.error(
-            `Could not mark dead man switch ${deadManSwitch.id.toString()} triggered: ${triggeredOrError.getError()}`,
-          )
+          this.logger.error('Could not mark a dead-man switch as triggered.', {
+            deadManSwitchId: deadManSwitch.id.toString(),
+          })
 
           continue
         }
@@ -101,10 +102,12 @@ export class TriggerDueDeadManSwitches implements UseCaseInterface<number> {
       const backoffIndex = Math.min(sendAttempts - 1, RETRY_BACKOFF_MS.length - 1)
       const nextAttemptAt = now + RETRY_BACKOFF_MS[backoffIndex]
 
-      this.logger.error(
-        `Failed to deliver dead man switch ${deadManSwitch.id.toString()} email (attempt ${sendAttempts}): ` +
-          `${errorMessage}. Next retry at ${new Date(nextAttemptAt).toISOString()}.`,
-      )
+      this.logger.error('Failed to deliver a dead-man-switch email.', {
+        deadManSwitchId: deadManSwitch.id.toString(),
+        sendAttempt: sendAttempts,
+        nextAttemptAt: new Date(nextAttemptAt).toISOString(),
+        senderReportedNotSent: errorMessage === 'Email sender reported the message was not sent.',
+      })
 
       const updatedOrError = DeadManSwitch.create(
         {
@@ -117,18 +120,19 @@ export class TriggerDueDeadManSwitches implements UseCaseInterface<number> {
         new UniqueEntityId(deadManSwitch.id.toString()),
       )
       if (updatedOrError.isFailed()) {
-        this.logger.error(
-          `Could not record dead man switch ${deadManSwitch.id.toString()} failure: ${updatedOrError.getError()}`,
-        )
+        this.logger.error('Could not record a dead-man-switch failure.', {
+          deadManSwitchId: deadManSwitch.id.toString(),
+        })
 
         return
       }
 
       await this.deadManSwitchRepository.save(updatedOrError.getValue())
     } catch (error) {
-      this.logger.error(
-        `Error recording dead man switch ${deadManSwitch.id.toString()} failure: ${(error as Error).message}`,
-      )
+      this.logger.error('Error recording a dead-man-switch failure.', {
+        deadManSwitchId: deadManSwitch.id.toString(),
+        ...safeErrorLogMetadata(error),
+      })
     }
   }
 

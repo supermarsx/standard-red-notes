@@ -84,8 +84,23 @@ export class BaseOfflineController extends BaseHttpController {
       )
     }
 
+    const token = this.subscriptionTokenFromRequest(request)
+    if (!token) {
+      this.logger.debug('[Offline Subscription Token Validation] missing token')
+
+      return this.json(
+        {
+          error: {
+            tag: 'invalid-auth',
+            message: 'Invalid login credentials.',
+          },
+        },
+        401,
+      )
+    }
+
     const authenticateTokenResponse = await this.authenticateToken.execute({
-      token: request.params.token as string,
+      token,
       userEmail: request.body.email,
     })
 
@@ -110,11 +125,19 @@ export class BaseOfflineController extends BaseHttpController {
 
     const authToken = this.tokenEncoder.encodeExpirableToken(offlineAuthTokenData, this.jwtTTL)
 
-    this.logger.debug(
-      `[Offline Subscription Token Validation] authenticated token for user ${authenticateTokenResponse.email}`,
-    )
+    this.logger.debug('[Offline Subscription Token Validation] authenticated token')
 
     return this.json({ authToken })
+  }
+
+  private subscriptionTokenFromRequest(request: Request): string | undefined {
+    const headerToken = request.headers['x-subscription-token']
+    if (typeof headerToken === 'string' && headerToken.length > 0) {
+      return headerToken
+    }
+
+    const legacyPathToken = request.params.token
+    return typeof legacyPathToken === 'string' && legacyPathToken.length > 0 ? legacyPathToken : undefined
   }
 
   async getSubscription(_request: Request, response: Response): Promise<results.JsonResult> {

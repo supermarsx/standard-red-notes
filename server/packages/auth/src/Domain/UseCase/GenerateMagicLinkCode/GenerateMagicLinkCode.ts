@@ -8,6 +8,7 @@ import { MagicLinkTokenRepositoryInterface } from '../../MagicLink/MagicLinkToke
 import { EmailSenderInterface } from '../../Email/EmailSenderInterface'
 
 import { GenerateMagicLinkCodeDto } from './GenerateMagicLinkCodeDto'
+import { safeErrorLogMetadata } from '../../Logging/SafeLog'
 
 export class GenerateMagicLinkCode implements UseCaseInterface<{ emailed: true }> {
   private static readonly CODE_LENGTH = 6
@@ -61,7 +62,7 @@ export class GenerateMagicLinkCode implements UseCaseInterface<{ emailed: true }
 
       return Result.ok({ emailed: true })
     } catch (error) {
-      this.logger.error(`Failed to generate magic link code: ${(error as Error).message}`)
+      this.logger.error('Failed to generate a magic-link code.', safeErrorLogMetadata(error))
 
       return Result.fail('Could not generate magic link code.')
     }

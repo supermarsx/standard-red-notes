@@ -731,7 +731,12 @@ describe('SignIn', () => {
       const result = await signIn('qweqwe123123')
 
       expect(result.success).toBe(true)
-      expect(logger.error).toHaveBeenCalledWith('Could not dispatch user.login webhook: endpoint unreachable')
+      expect(logger.error).toHaveBeenCalledWith('Could not dispatch the user.login webhook.', {
+        errorType: 'Error',
+        errorCode: undefined,
+        status: undefined,
+      })
+      expect(JSON.stringify((logger.error as jest.Mock).mock.calls)).not.toContain('endpoint unreachable')
     })
 
     it('signs in without touching either hook when neither is configured', async () => {

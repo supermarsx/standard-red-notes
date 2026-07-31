@@ -38,6 +38,6 @@ describe('SharedVaultFileRemovedEventHandler', () => {
 
     await createHandler().handle(event)
 
-    expect(logger.error).toHaveBeenCalledWith('Failed to update storage quota used for user: quota oops')
+    expect(logger.error).toHaveBeenCalledWith('Failed to update storage quota after a shared-vault file was removed.')
   })
 })

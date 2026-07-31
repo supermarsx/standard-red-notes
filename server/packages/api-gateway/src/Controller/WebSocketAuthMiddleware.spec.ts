@@ -97,7 +97,7 @@ describe('WebSocketAuthMiddleware', () => {
     expect(next).toHaveBeenCalled()
   })
 
-  it('forwards a non-200 auth response verbatim and does NOT continue the chain', async () => {
+  it('preserves a safe non-200 auth tag/status/content-type and does NOT continue the chain', async () => {
     ;(httpClient.request as jest.Mock).mockResolvedValue({
       status: 401,
       data: { error: { tag: 'invalid-auth' } },
@@ -106,11 +106,28 @@ describe('WebSocketAuthMiddleware', () => {
 
     await createMiddleware().handler(request, response, next)
 
-    expect(setHeader).toHaveBeenCalledWith('content-type', 'application/json')
     expect(status).toHaveBeenCalledWith(401)
-    expect(send).toHaveBeenCalledWith({ error: { tag: 'invalid-auth' } })
+    expect(send).toHaveBeenCalledWith({ error: { tag: 'invalid-auth', message: 'Invalid login credentials.' } })
+    expect(setHeader).toHaveBeenCalledWith('content-type', 'application/json')
     expect(next).not.toHaveBeenCalled()
     expect(locals).toEqual({})
+  })
+
+  it('preserves a safe non-200 auth response when content-type is absent', async () => {
+    ;(httpClient.request as jest.Mock).mockResolvedValue({
+      status: 401,
+      data: { error: { tag: 'invalid-auth' } },
+      headers: {},
+    })
+
+    await createMiddleware().handler(request, response, next)
+
+    expect(status).toHaveBeenCalledWith(401)
+    expect(send).toHaveBeenCalledWith({
+      error: { tag: 'invalid-auth', message: 'Invalid login credentials.' },
+    })
+    expect(setHeader).not.toHaveBeenCalled()
+    expect(next).not.toHaveBeenCalled()
   })
 
   it('does NOT populate locals when the cross service token fails verification', async () => {
@@ -123,21 +140,31 @@ describe('WebSocketAuthMiddleware', () => {
     expect(locals).toEqual({})
     expect(next).not.toHaveBeenCalled()
     expect(status).toHaveBeenCalledWith(500)
-    expect(send).toHaveBeenCalledWith('bad signature')
+    expect(send).toHaveBeenCalledWith({
+      error: {
+        tag: 'service-unavailable',
+        message: 'The requested service is temporarily unavailable.',
+      },
+    })
   })
 
-  it('responds 500 with the plain message when a non-axios error is thrown', async () => {
+  it('responds 500 with a stable public error when a non-axios error is thrown', async () => {
     ;(httpClient.request as jest.Mock).mockRejectedValue(new Error('socket hang up'))
 
     await createMiddleware().handler(request, response, next)
 
     expect(status).toHaveBeenCalledWith(500)
-    expect(send).toHaveBeenCalledWith('socket hang up')
+    expect(send).toHaveBeenCalledWith({
+      error: {
+        tag: 'service-unavailable',
+        message: 'The requested service is temporarily unavailable.',
+      },
+    })
     expect(setHeader).not.toHaveBeenCalled()
     expect(next).not.toHaveBeenCalled()
   })
 
-  it('serializes the axios error response body and mirrors its content-type', async () => {
+  it('does not serialize an axios error response body or mirror its content-type', async () => {
     ;(httpClient.request as jest.Mock).mockRejectedValue({
       isAxiosError: true,
       code: 'ECONNREFUSED',
@@ -146,20 +173,62 @@ describe('WebSocketAuthMiddleware', () => {
 
     await createMiddleware().handler(request, response, next)
 
-    expect(setHeader).toHaveBeenCalledWith('content-type', 'application/problem+json')
+    expect(setHeader).not.toHaveBeenCalled()
     expect(status).toHaveBeenCalledWith(500)
-    expect(send).toHaveBeenCalledWith(JSON.stringify({ error: 'nope' }))
+    expect(send).toHaveBeenCalledWith({
+      error: {
+        tag: 'service-unavailable',
+        message: 'The requested service is temporarily unavailable.',
+      },
+    })
   })
 
-  it('uses a numeric axios error code as the response status', async () => {
+  it('uses an upstream 5xx response status while keeping the body private', async () => {
     ;(httpClient.request as jest.Mock).mockRejectedValue({
       isAxiosError: true,
       code: '503',
-      response: { data: { error: 'unavailable' }, headers: {} },
+      response: { status: 503, data: { error: 'unavailable' }, headers: {} },
     })
 
     await createMiddleware().handler(request, response, next)
 
     expect(status).toHaveBeenCalledWith(503)
+    expect(send).toHaveBeenCalledWith({
+      error: {
+        tag: 'service-unavailable',
+        message: 'The requested service is temporarily unavailable.',
+      },
+    })
+  })
+
+  it('never logs authorization, cookies, upstream bodies, circular axios config, or raw error messages', async () => {
+    const error: Record<string, unknown> = {
+      name: 'AxiosError',
+      code: 'ERR_BAD_RESPONSE',
+      message: 'access-token-sentinel',
+      response: {
+        status: 503,
+        data: { encryptedContent: 'encrypted-content-sentinel' },
+        headers: { 'set-cookie': 'cookie-sentinel' },
+      },
+      config: {
+        headers: {
+          Authorization: 'Bearer access-token-sentinel',
+          Cookie: 'cookie-sentinel',
+        },
+      },
+    }
+    error.circular = error
+    ;(httpClient.request as jest.Mock).mockRejectedValue(error)
+
+    await createMiddleware().handler(request, response, next)
+
+    const serializedLogs = JSON.stringify({
+      error: (logger.error as jest.Mock).mock.calls,
+      debug: (logger.debug as jest.Mock).mock.calls,
+    })
+    expect(serializedLogs).not.toContain('access-token-sentinel')
+    expect(serializedLogs).not.toContain('encrypted-content-sentinel')
+    expect(serializedLogs).not.toContain('cookie-sentinel')
   })
 })

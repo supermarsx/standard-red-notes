@@ -1,4 +1,4 @@
-import { AxiosInstance, AxiosError, AxiosResponse, Method } from 'axios'
+import { AxiosInstance, AxiosResponse, Method } from 'axios'
 import { Request, Response } from 'express'
 import { Logger } from 'winston'
 import { TimerInterface } from '@standardnotes/time'
@@ -11,6 +11,12 @@ import { GRPCSyncingServerServiceProxy } from './GRPCSyncingServerServiceProxy'
 import { Status } from '@grpc/grpc-js/build/src/constants'
 import { ResponseLocals } from '../../Controller/ResponseLocals'
 import { OfflineResponseLocals } from '../../Controller/OfflineResponseLocals'
+import {
+  PublicServiceFailure,
+  publicHttpErrorStatus,
+  safeHttpErrorLogMetadata,
+  sanitizeUrlForSafeLog,
+} from '../Logging/SafeLog'
 
 export class GRPCServiceProxy implements ServiceProxyInterface {
   constructor(
@@ -337,7 +343,10 @@ export class GRPCServiceProxy implements ServiceProxyInterface {
       }
 
       if (retryAttempt) {
-        this.logger.debug(`Request to ${serverUrl}/${endpoint} succeeded after ${retryAttempt} retries`)
+        this.logger.debug('Underlying service request succeeded after retry.', {
+          endpoint: sanitizeUrlForSafeLog(`${serverUrl}/${endpoint}`),
+          retryAttempt,
+        })
       }
 
       return serviceResponse
@@ -349,44 +358,32 @@ export class GRPCServiceProxy implements ServiceProxyInterface {
 
         const nextRetryAttempt = retryAttempt ? retryAttempt + 1 : 1
 
-        this.logger.debug(`Retrying request to ${serverUrl}/${endpoint} for the ${nextRetryAttempt} time`)
+        this.logger.debug('Retrying underlying service request.', {
+          endpoint: sanitizeUrlForSafeLog(`${serverUrl}/${endpoint}`),
+          retryAttempt: nextRetryAttempt,
+        })
 
         return this.getServerResponse(serverUrl, request, response, endpoint, payload, nextRetryAttempt)
       }
 
-      let detailedErrorMessage = (error as Error).message
-      if (error instanceof AxiosError) {
-        detailedErrorMessage = `Status: ${error.status}, code: ${error.code}, message: ${error.message}`
-      }
-
+      const safeError = safeHttpErrorLogMetadata(error, {
+        action: tooManyRetryAttempts ? 'service-proxy.retry-exhausted' : 'service-proxy.request',
+        endpoint: `${serverUrl}/${endpoint}`,
+        method: request.method,
+        userId: (locals as ResponseLocals).user ? (locals as ResponseLocals).user.uuid : undefined,
+      })
       this.logger.error(
         tooManyRetryAttempts
-          ? `Request to ${serverUrl}/${endpoint} timed out after ${retryAttempt} retries`
-          : `Could not pass the request to ${serverUrl}/${endpoint} on underlying service: ${detailedErrorMessage}`,
+          ? 'Request to underlying service exhausted its retry budget.'
+          : 'Could not complete request on underlying service.',
         {
-          userId: (locals as ResponseLocals).user ? (locals as ResponseLocals).user.uuid : undefined,
+          ...safeError,
+          retryAttempt: tooManyRetryAttempts ? retryAttempt : undefined,
         },
       )
+      this.logger.debug('Underlying service failure summary.', safeError)
 
-      this.logger.debug(`Response error: ${JSON.stringify(error)}`)
-
-      if ((error as AxiosError).response?.headers['content-type']) {
-        response.setHeader('content-type', (error as AxiosError).response?.headers['content-type'] as string)
-      }
-
-      const errorCode =
-        (error as AxiosError).isAxiosError && !isNaN(+((error as AxiosError).code as string))
-          ? +((error as AxiosError).code as string)
-          : 500
-
-      const responseErrorMessage = (error as AxiosError).response?.data
-
-      response
-        .status(errorCode)
-        .send(
-          responseErrorMessage ??
-            "Unfortunately, we couldn't handle your request. Please try again or contact our support if the error persists.",
-        )
+      response.status(publicHttpErrorStatus(error)).send(PublicServiceFailure)
     }
 
     return

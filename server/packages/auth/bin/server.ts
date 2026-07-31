@@ -1,3 +1,4 @@
+import { safeErrorLogMetadata } from '@standardnotes/domain-core'
 import 'reflect-metadata'
 
 import '../src/Infra/InversifyExpressUtils/AnnotatedAuthController'
@@ -58,10 +59,9 @@ const EMAIL_REMINDER_SCAN_INTERVAL_MS = 60 * 1000
 // genuinely unhandled rejection or uncaught exception is logged as a clear FATAL
 // line (with stack) and the process exits non-zero so the supervisor restarts
 // it. This keeps crash-loops VISIBLE instead of silently swallowed.
-let fatalLogger: { error: (message: string) => void } = console
+let fatalLogger: { error: (message: string, metadata?: Record<string, unknown>) => void } = console
 const logFatal = (label: string, error: unknown): void => {
-  const err = error instanceof Error ? error : new Error(String(error))
-  fatalLogger.error(`FATAL ${label}: ${err.message}\n${err.stack ?? '(no stack)'}`)
+  fatalLogger.error(`FATAL ${label}.`, safeErrorLogMetadata(error))
 }
 process.on('unhandledRejection', (reason: unknown) => {
   logFatal('unhandledRejection', reason)
@@ -76,204 +76,205 @@ const container = new ContainerConfigLoader()
 void container
   .load()
   .then(async (container) => {
-  dayjs.extend(utc)
+    dayjs.extend(utc)
 
-  const env: Env = new Env()
-  env.load()
+    const env: Env = new Env()
+    env.load()
 
-  const server = new InversifyExpressServer(container)
+    const server = new InversifyExpressServer(container)
 
-  server.setConfig((app) => {
-    app.use((_request: Request, response: Response, next: NextFunction) => {
-      response.setHeader('X-Auth-Version', container.get(TYPES.Auth_VERSION))
-      next()
-    })
-    app.use(json())
-    app.use(urlencoded({ extended: true }))
-    app.use(cookieParser() as never)
-    app.use(cors() as never)
-  })
-
-  const logger: winston.Logger = container.get(TYPES.Auth_Logger)
-  fatalLogger = logger
-
-  server.setErrorConfig((app) => {
-    app.use((error: Record<string, unknown>, request: Request, response: Response, _next: NextFunction) => {
-      const locals = response.locals as ResponseLocals
-      logger.error(`${error.stack}`, {
-        method: request.method,
-        url: sanitizeRequestUrlForLogging(request.url),
-        snjs: request.headers['x-snjs-version'],
-        application: request.headers['x-application-version'],
-        userId: locals.user ? locals.user.uuid : undefined,
+    server.setConfig((app) => {
+      app.use((_request: Request, response: Response, next: NextFunction) => {
+        response.setHeader('X-Auth-Version', container.get(TYPES.Auth_VERSION))
+        next()
       })
+      app.use(json())
+      app.use(urlencoded({ extended: true }))
+      app.use(cookieParser() as never)
+      app.use(cors() as never)
+    })
 
-      response.status(500).send({
-        error: {
-          message:
-            "Unfortunately, we couldn't handle your request. Please try again or contact our support if the error persists.",
-        },
+    const logger: winston.Logger = container.get(TYPES.Auth_Logger)
+    fatalLogger = logger
+
+    server.setErrorConfig((app) => {
+      app.use((error: Record<string, unknown>, request: Request, response: Response, _next: NextFunction) => {
+        const locals = response.locals as ResponseLocals
+        logger.error('Request failed.', {
+          ...safeErrorLogMetadata(error),
+          method: request.method,
+          url: sanitizeRequestUrlForLogging(request.url),
+          snjs: request.headers['x-snjs-version'],
+          application: request.headers['x-application-version'],
+          userId: locals.user ? locals.user.uuid : undefined,
+        })
+
+        response.status(500).send({
+          error: {
+            message:
+              "Unfortunately, we couldn't handle your request. Please try again or contact our support if the error persists.",
+          },
+        })
       })
     })
-  })
 
-  const app = await server.build()
-  const serverInstance = app.listen(env.get('PORT'))
+    const app = await server.build()
+    const serverInstance = app.listen(env.get('PORT'))
 
-  const httpKeepAliveTimeout = env.get('HTTP_KEEP_ALIVE_TIMEOUT', true)
-    ? +env.get('HTTP_KEEP_ALIVE_TIMEOUT', true)
-    : 10_000
+    const httpKeepAliveTimeout = env.get('HTTP_KEEP_ALIVE_TIMEOUT', true)
+      ? +env.get('HTTP_KEEP_ALIVE_TIMEOUT', true)
+      : 10_000
 
-  serverInstance.keepAliveTimeout = httpKeepAliveTimeout
+    serverInstance.keepAliveTimeout = httpKeepAliveTimeout
 
-  const grpcKeepAliveTime = env.get('GRPC_KEEP_ALIVE_TIME', true) ? +env.get('GRPC_KEEP_ALIVE_TIME', true) : 7_200_000
+    const grpcKeepAliveTime = env.get('GRPC_KEEP_ALIVE_TIME', true) ? +env.get('GRPC_KEEP_ALIVE_TIME', true) : 7_200_000
 
-  const grpcKeepAliveTimeout = env.get('GRPC_KEEP_ALIVE_TIMEOUT', true)
-    ? +env.get('GRPC_KEEP_ALIVE_TIMEOUT', true)
-    : 20_000
+    const grpcKeepAliveTimeout = env.get('GRPC_KEEP_ALIVE_TIMEOUT', true)
+      ? +env.get('GRPC_KEEP_ALIVE_TIMEOUT', true)
+      : 20_000
 
-  const grpcMaxMessageSize = env.get('GRPC_MAX_MESSAGE_SIZE', true)
-    ? +env.get('GRPC_MAX_MESSAGE_SIZE', true)
-    : 1024 * 1024 * 50
+    const grpcMaxMessageSize = env.get('GRPC_MAX_MESSAGE_SIZE', true)
+      ? +env.get('GRPC_MAX_MESSAGE_SIZE', true)
+      : 1024 * 1024 * 50
 
-  const grpcServer = new grpc.Server({
-    'grpc.keepalive_time_ms': grpcKeepAliveTime,
-    'grpc.keepalive_timeout_ms': grpcKeepAliveTimeout,
-    'grpc.default_compression_algorithm': grpc.compressionAlgorithms.gzip,
-    'grpc.max_receive_message_length': grpcMaxMessageSize,
-    'grpc.max_send_message_length': grpcMaxMessageSize,
-  })
+    const grpcServer = new grpc.Server({
+      'grpc.keepalive_time_ms': grpcKeepAliveTime,
+      'grpc.keepalive_timeout_ms': grpcKeepAliveTimeout,
+      'grpc.default_compression_algorithm': grpc.compressionAlgorithms.gzip,
+      'grpc.max_receive_message_length': grpcMaxMessageSize,
+      'grpc.max_send_message_length': grpcMaxMessageSize,
+    })
 
-  const gRPCPort = env.get('GRPC_PORT', true) ? +env.get('GRPC_PORT', true) : 50051
+    const gRPCPort = env.get('GRPC_PORT', true) ? +env.get('GRPC_PORT', true) : 50051
 
-  const authServer = new AuthServer(
-    container.get<AuthenticateRequest>(TYPES.Auth_AuthenticateRequest),
-    container.get<CreateCrossServiceToken>(TYPES.Auth_CreateCrossServiceToken),
-    container.get<TokenDecoderInterface<WebSocketConnectionTokenData>>(TYPES.Auth_WebSocketConnectionTokenDecoder),
-    container.get<winston.Logger>(TYPES.Auth_Logger),
-  )
+    const authServer = new AuthServer(
+      container.get<AuthenticateRequest>(TYPES.Auth_AuthenticateRequest),
+      container.get<CreateCrossServiceToken>(TYPES.Auth_CreateCrossServiceToken),
+      container.get<TokenDecoderInterface<WebSocketConnectionTokenData>>(TYPES.Auth_WebSocketConnectionTokenDecoder),
+      container.get<winston.Logger>(TYPES.Auth_Logger),
+    )
 
-  grpcServer.addService(AuthService, {
-    validate: authServer.validate.bind(authServer),
-    validateWebsocket: authServer.validateWebsocket.bind(authServer),
-  })
-  grpcServer.bindAsync(`0.0.0.0:${gRPCPort}`, grpc.ServerCredentials.createInsecure(), (error, port) => {
-    if (error) {
-      logger.error(`Failed to bind gRPC server: ${error.message}`)
+    grpcServer.addService(AuthService, {
+      validate: authServer.validate.bind(authServer),
+      validateWebsocket: authServer.validateWebsocket.bind(authServer),
+    })
+    grpcServer.bindAsync(`0.0.0.0:${gRPCPort}`, grpc.ServerCredentials.createInsecure(), (error, port) => {
+      if (error) {
+        logger.error('Failed to bind gRPC server.', safeErrorLogMetadata(error))
 
-      return
-    }
-
-    logger.info(`gRPC server bound on port ${port}`)
-
-    grpcServer.start()
-
-    logger.info('gRPC server started')
-  })
-
-  if (env.get('PROFILER_ENABLED', true) === 'true') {
-    try {
-      const heapProfiler = container.get<HeapProfiler>(TYPES.Auth_HeapProfiler)
-      heapProfiler.start()
-      logger.info('Heap profiler started successfully')
-    } catch (error) {
-      logger.error(`Failed to start heap profiler: ${(error as Error).message}`)
-    }
-  }
-
-  // Dead man's switch scanner. Runs in-process on the auth server (which has DB
-  // and SMTP access). Every interval it triggers any switch whose deadline has
-  // elapsed without a check-in, emailing the recipient the share link. The
-  // `isRunning` guard prevents overlapping scans; `unref()` keeps the timer from
-  // holding the process open during shutdown.
-  const triggerDueDeadManSwitches = container.get<TriggerDueDeadManSwitches>(TYPES.Auth_TriggerDueDeadManSwitches)
-  let deadManSwitchScanRunning = false
-  const scanDeadManSwitches = async (): Promise<void> => {
-    if (deadManSwitchScanRunning) {
-      return
-    }
-    deadManSwitchScanRunning = true
-    try {
-      const result = await triggerDueDeadManSwitches.execute({})
-      if (!result.isFailed()) {
-        const triggered = result.getValue()
-        if (triggered > 0) {
-          logger.info(`Dead man switch scan triggered ${triggered} switch(es).`)
-        }
-      } else {
-        logger.error(`Dead man switch scan failed: ${result.getError()}`)
+        return
       }
-    } catch (error) {
-      logger.error(`Dead man switch scan threw: ${(error as Error).message}`)
-    } finally {
-      deadManSwitchScanRunning = false
-    }
-  }
-  const deadManSwitchInterval = setInterval(() => {
-    void scanDeadManSwitches()
-  }, DEAD_MAN_SWITCH_SCAN_INTERVAL_MS)
-  deadManSwitchInterval.unref()
 
-  // Email reminder scanner. Runs in-process on the auth server (DB + SMTP access).
-  // Every interval it emails any due, unsent email reminder whose user has opted in,
-  // then marks it sent (or, in EMAIL_REMINDER_NO_RECORDS mode, deletes the record).
-  // Gated internally on EMAIL_REMINDERS_ENABLED + SMTP configured + per-user opt-in,
-  // so a fresh install scans cheaply and sends nothing. Same isRunning/unref guards.
-  const triggerDueEmailReminders = container.get<TriggerDueEmailReminders>(TYPES.Auth_TriggerDueEmailReminders)
-  let emailReminderScanRunning = false
-  const scanEmailReminders = async (): Promise<void> => {
-    if (emailReminderScanRunning) {
-      return
-    }
-    emailReminderScanRunning = true
-    try {
-      const result = await triggerDueEmailReminders.execute({})
-      if (!result.isFailed()) {
-        const sent = result.getValue()
-        if (sent > 0) {
-          logger.info(`Email reminder scan sent ${sent} reminder(s).`)
-        }
-      } else {
-        logger.error(`Email reminder scan failed: ${result.getError()}`)
-      }
-    } catch (error) {
-      logger.error(`Email reminder scan threw: ${(error as Error).message}`)
-    } finally {
-      emailReminderScanRunning = false
-    }
-  }
-  const emailReminderInterval = setInterval(() => {
-    void scanEmailReminders()
-  }, EMAIL_REMINDER_SCAN_INTERVAL_MS)
-  emailReminderInterval.unref()
+      logger.info(`gRPC server bound on port ${port}`)
 
-  process.on('SIGTERM', () => {
-    logger.info('SIGTERM signal received: closing HTTP server')
-    clearInterval(deadManSwitchInterval)
+      grpcServer.start()
+
+      logger.info('gRPC server started')
+    })
 
     if (env.get('PROFILER_ENABLED', true) === 'true') {
       try {
         const heapProfiler = container.get<HeapProfiler>(TYPES.Auth_HeapProfiler)
-        heapProfiler.stop()
-        logger.info('Heap profiler stopped')
+        heapProfiler.start()
+        logger.info('Heap profiler started successfully')
       } catch (error) {
-        logger.error(`Failed to stop heap profiler: ${(error as Error).message}`)
+        logger.error('Failed to start heap profiler.', safeErrorLogMetadata(error))
       }
     }
 
-    serverInstance.close(() => {
-      logger.info('HTTP server closed')
-    })
-    grpcServer.tryShutdown((error?: Error) => {
-      if (error) {
-        logger.error(`Failed to shutdown gRPC server: ${error.message}`)
-      } else {
-        logger.info('gRPC server closed')
+    // Dead man's switch scanner. Runs in-process on the auth server (which has DB
+    // and SMTP access). Every interval it triggers any switch whose deadline has
+    // elapsed without a check-in, emailing the recipient the share link. The
+    // `isRunning` guard prevents overlapping scans; `unref()` keeps the timer from
+    // holding the process open during shutdown.
+    const triggerDueDeadManSwitches = container.get<TriggerDueDeadManSwitches>(TYPES.Auth_TriggerDueDeadManSwitches)
+    let deadManSwitchScanRunning = false
+    const scanDeadManSwitches = async (): Promise<void> => {
+      if (deadManSwitchScanRunning) {
+        return
       }
-    })
-  })
+      deadManSwitchScanRunning = true
+      try {
+        const result = await triggerDueDeadManSwitches.execute({})
+        if (!result.isFailed()) {
+          const triggered = result.getValue()
+          if (triggered > 0) {
+            logger.info(`Dead man switch scan triggered ${triggered} switch(es).`)
+          }
+        } else {
+          logger.error('Dead man switch scan failed.', safeErrorLogMetadata(result.getError()))
+        }
+      } catch (error) {
+        logger.error('Dead man switch scan threw.', safeErrorLogMetadata(error))
+      } finally {
+        deadManSwitchScanRunning = false
+      }
+    }
+    const deadManSwitchInterval = setInterval(() => {
+      void scanDeadManSwitches()
+    }, DEAD_MAN_SWITCH_SCAN_INTERVAL_MS)
+    deadManSwitchInterval.unref()
 
-  logger.info(`Server started on port ${process.env.PORT}`)
+    // Email reminder scanner. Runs in-process on the auth server (DB + SMTP access).
+    // Every interval it emails any due, unsent email reminder whose user has opted in,
+    // then marks it sent (or, in EMAIL_REMINDER_NO_RECORDS mode, deletes the record).
+    // Gated internally on EMAIL_REMINDERS_ENABLED + SMTP configured + per-user opt-in,
+    // so a fresh install scans cheaply and sends nothing. Same isRunning/unref guards.
+    const triggerDueEmailReminders = container.get<TriggerDueEmailReminders>(TYPES.Auth_TriggerDueEmailReminders)
+    let emailReminderScanRunning = false
+    const scanEmailReminders = async (): Promise<void> => {
+      if (emailReminderScanRunning) {
+        return
+      }
+      emailReminderScanRunning = true
+      try {
+        const result = await triggerDueEmailReminders.execute({})
+        if (!result.isFailed()) {
+          const sent = result.getValue()
+          if (sent > 0) {
+            logger.info(`Email reminder scan sent ${sent} reminder(s).`)
+          }
+        } else {
+          logger.error('Email reminder scan failed.', safeErrorLogMetadata(result.getError()))
+        }
+      } catch (error) {
+        logger.error('Email reminder scan threw.', safeErrorLogMetadata(error))
+      } finally {
+        emailReminderScanRunning = false
+      }
+    }
+    const emailReminderInterval = setInterval(() => {
+      void scanEmailReminders()
+    }, EMAIL_REMINDER_SCAN_INTERVAL_MS)
+    emailReminderInterval.unref()
+
+    process.on('SIGTERM', () => {
+      logger.info('SIGTERM signal received: closing HTTP server')
+      clearInterval(deadManSwitchInterval)
+
+      if (env.get('PROFILER_ENABLED', true) === 'true') {
+        try {
+          const heapProfiler = container.get<HeapProfiler>(TYPES.Auth_HeapProfiler)
+          heapProfiler.stop()
+          logger.info('Heap profiler stopped')
+        } catch (error) {
+          logger.error('Failed to stop heap profiler.', safeErrorLogMetadata(error))
+        }
+      }
+
+      serverInstance.close(() => {
+        logger.info('HTTP server closed')
+      })
+      grpcServer.tryShutdown((error?: Error) => {
+        if (error) {
+          logger.error('Failed to shutdown gRPC server.', safeErrorLogMetadata(error))
+        } else {
+          logger.info('gRPC server closed')
+        }
+      })
+    })
+
+    logger.info(`Server started on port ${process.env.PORT}`)
   })
   .catch((error: unknown) => {
     logFatal('startup', error)

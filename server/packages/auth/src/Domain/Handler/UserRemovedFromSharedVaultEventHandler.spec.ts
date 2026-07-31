@@ -37,9 +37,9 @@ describe('UserRemovedFromSharedVaultEventHandler', () => {
     await createHandler().handle(eventWith({ userUuid }))
 
     expect(removeSharedVaultUser.execute).not.toHaveBeenCalled()
-    expect(logger.error).toHaveBeenCalledWith(
-      `Shared vault uuid is missing from event: ${JSON.stringify({ payload: { userUuid } })}`,
-    )
+    expect(logger.error).toHaveBeenCalledWith('Shared-vault UUID is missing from the user-removed event.', {
+      userId: userUuid,
+    })
   })
 
   it('should log an error if the removal fails', async () => {
@@ -47,6 +47,6 @@ describe('UserRemovedFromSharedVaultEventHandler', () => {
 
     await createHandler().handle(eventWith({ userUuid, sharedVaultUuid }))
 
-    expect(logger.error).toHaveBeenCalledWith('Failed to remove user from shared vault: nope')
+    expect(logger.error).toHaveBeenCalledWith('Failed to remove a user from a shared vault.')
   })
 })

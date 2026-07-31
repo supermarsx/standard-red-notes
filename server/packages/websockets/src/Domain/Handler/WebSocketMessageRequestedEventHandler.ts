@@ -1,3 +1,4 @@
+import { safeErrorLogMetadata } from '@standardnotes/domain-core'
 import { DomainEventHandlerInterface, WebSocketMessageRequestedEvent } from '@standardnotes/domain-events'
 import { Logger } from 'winston'
 import { SendMessageToClient } from '../UseCase/SendMessageToClient/SendMessageToClient'
@@ -16,7 +17,8 @@ export class WebSocketMessageRequestedEventHandler implements DomainEventHandler
     })
 
     if (result.isFailed()) {
-      this.logger.error(`Could not send message to user. Error: ${result.getError()}`, {
+      this.logger.error('Could not send message to user.', {
+        ...safeErrorLogMetadata(result.getError()),
         userId: event.payload.userUuid,
       })
     }

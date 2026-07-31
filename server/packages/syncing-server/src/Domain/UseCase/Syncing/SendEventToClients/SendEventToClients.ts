@@ -1,4 +1,4 @@
-import { Result, UseCaseInterface, Uuid } from '@standardnotes/domain-core'
+import { safeErrorLogMetadata, Result, UseCaseInterface, Uuid } from '@standardnotes/domain-core'
 import { Logger } from 'winston'
 
 import { SendEventToClientsDTO } from './SendEventToClientsDTO'
@@ -38,7 +38,8 @@ export class SendEventToClients implements UseCaseInterface<void> {
       })
 
       if (result.isFailed()) {
-        this.logger.error(`Failed to send event to client: ${result.getError()}`, {
+        this.logger.error('Failed to send event to client.', {
+          ...safeErrorLogMetadata(result.getError()),
           userId: sharedVaultUser.props.userUuid.value,
           sharedVaultUuid: sharedVaultUuid.value,
         })

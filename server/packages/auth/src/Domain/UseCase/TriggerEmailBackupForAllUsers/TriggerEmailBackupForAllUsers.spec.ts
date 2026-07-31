@@ -119,9 +119,10 @@ describe('TriggerEmailBackupForAllUsers', () => {
     const result = await createUseCase().execute({ backupFrequency: 'daily' })
 
     expect(result.isFailed()).toBeFalsy()
-    expect(logger.error).toHaveBeenCalledWith('Failed to trigger email backup for user: SMTP unavailable', {
+    expect(logger.error).toHaveBeenCalledWith('Failed to trigger an email backup for a user.', {
       userId: USER_UUID,
     })
+    expect(JSON.stringify((logger.error as jest.Mock).mock.calls)).not.toContain('SMTP unavailable')
     expect(logger.error).toHaveBeenCalledWith('Failed to trigger email backup for 1 users')
   })
 

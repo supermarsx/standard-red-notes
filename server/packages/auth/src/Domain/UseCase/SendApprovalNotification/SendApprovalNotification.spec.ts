@@ -83,6 +83,11 @@ describe('SendApprovalNotification', () => {
 
     expect(result.isFailed()).toBe(true)
     expect(result.getError()).toEqual('Could not send approval notification.')
-    expect(logger.error).toHaveBeenCalledWith('[approval] Failed to send approval notification: smtp down')
+    expect(logger.error).toHaveBeenCalledWith('[approval] Failed to send an approval notification.', {
+      errorType: 'Error',
+      errorCode: undefined,
+      status: undefined,
+    })
+    expect(JSON.stringify((logger.error as jest.Mock).mock.calls)).not.toContain('smtp down')
   })
 })

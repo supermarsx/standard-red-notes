@@ -44,7 +44,9 @@ export class GetUserKeyParams implements UseCaseInterface {
         user = await this.userRepository.findOneByUsernameOrEmail(username)
       }
       if (!user) {
-        this.logger.debug(`No user with email ${dto.email}. Creating pseudo key params.`)
+        this.logger.debug('No matching user found. Creating pseudo key params.', {
+          lookupType: 'email',
+        })
 
         return {
           keyParams: this.keyParamsFactory.createPseudoParams(dto.email),
@@ -61,12 +63,17 @@ export class GetUserKeyParams implements UseCaseInterface {
     }
 
     if (!user) {
-      this.logger.debug('Could not find user with given parameters: %O', dto)
+      this.logger.debug('Could not find user with given parameters.', {
+        lookupType: dto.userUuid ? 'user-uuid' : dto.email ? 'email' : 'none',
+      })
 
       throw Error('Could not find user')
     }
 
-    this.logger.debug(`Creating key params for user ${user.email}. Authentication: ${dto.authenticated}`)
+    this.logger.debug('Creating key params for user.', {
+      userId: user.uuid,
+      authenticated: dto.authenticated,
+    })
 
     const keyParams = await this.createKeyParams(dto, user, dto.authenticated)
 

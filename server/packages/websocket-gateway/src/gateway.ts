@@ -10,6 +10,7 @@ import {
 import { ConnectionRegistry, type Conn } from './registry.js'
 import { RoomRegistry, parseRelayFrame, handleRelayFrame, type RoomJoinAuthorizer } from './rooms.js'
 import { startRedisBridge, type Logger } from './redisBridge.js'
+import { safeErrorLogMetadata } from './safeLog.js'
 import { startSqsConsumer } from './sqsConsumer.js'
 
 // ---------------------------------------------------------------------------
@@ -164,7 +165,6 @@ export interface GatewayConfig {
  * which Express's `Request`/`Response` subtypes accept.
  */
 export interface RouteRegistrar {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   post(path: string, handler: (...args: any[]) => void): unknown
 }
 
@@ -233,7 +233,7 @@ function buildMintTokenHandler(
         return
       }
       const token = mintConnectionToken(identity, config.connectionTokenSecret, config.connectionTokenTtl)
-      logger.info(`[token] minted (x-auth) user=${identity.userUuid} session=${identity.sessionUuid}`)
+      logger.info(`[token] minted (x-auth) user=${identity.userUuid}`)
       res.writeHead(200, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ token }))
       return
@@ -297,7 +297,7 @@ function mintFromBody(
     return
   }
   const token = mintConnectionToken({ userUuid, sessionUuid }, config.connectionTokenSecret, config.connectionTokenTtl)
-  logger.info(`[token] minted user=${userUuid} session=${sessionUuid}`)
+  logger.info(`[token] minted user=${userUuid}`)
   res.writeHead(200, { 'content-type': 'application/json' })
   res.end(JSON.stringify({ token }))
 }
@@ -378,7 +378,7 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
     try {
       identity = verifyConnectionToken(token, config.connectionTokenSecret)
     } catch (err) {
-      logger.warn('[ws] connection rejected: bad token', err instanceof Error ? err.message : err)
+      logger.warn('[ws] connection rejected: bad token', safeErrorLogMetadata(err))
       socket.close(1008, 'invalid authToken')
       return
     }
@@ -398,10 +398,7 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
     registry.add(identity.userUuid, conn)
     alive.set(socket, true)
     const ingressLimiter = new WebSocketIngressLimiter(ingressLimits)
-    logger.info(
-      `[ws] connect user=${identity.userUuid} session=${identity.sessionUuid} ` +
-        `conn=${conn.connectionId} total=${registry.size()}`,
-    )
+    logger.info(`[ws] connect user=${identity.userUuid} conn=${conn.connectionId} total=${registry.size()}`)
 
     let connectionClosed = false
     // Preserve frame order while async room authorization is in flight. Without
@@ -429,7 +426,7 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
 
     socket.on('close', cleanup)
     socket.on('error', (err) => {
-      logger.warn('[ws] socket error', err instanceof Error ? err.message : err)
+      logger.warn('[ws] socket error', safeErrorLogMetadata(err))
       cleanup()
     })
 
@@ -464,7 +461,7 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
           )
           .then(() => undefined)
           .catch((err) => {
-            logger.warn('[ws] relay frame handling failed', err instanceof Error ? err.message : err)
+            logger.warn('[ws] relay frame handling failed', safeErrorLogMetadata(err))
           })
       }
     })
@@ -509,7 +506,9 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
 
   const stop = async (): Promise<void> => {
     clearInterval(heartbeat)
-    for (const socket of wss.clients) socket.close(1001, 'server shutting down')
+    for (const socket of wss.clients) {
+      socket.close(1001, 'server shutting down')
+    }
     wss.close()
     stopSqs?.()
     try {

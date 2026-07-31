@@ -45,14 +45,19 @@ describe('WebSocketMessageRequestedEventHandler', () => {
     expect(logger.error).not.toHaveBeenCalled()
   })
 
-  it('logs the use case error together with the user id when delivery fails', async () => {
+  it('logs a safe error classification together with the user id when delivery fails', async () => {
     sendMessageToClient.execute = jest.fn().mockResolvedValue(Result.fail('connection is gone'))
 
     await createHandler().handle(createEvent({ userUuid: '22222222-2222-2222-2222-222222222222' }))
 
-    expect(logger.error).toHaveBeenCalledWith('Could not send message to user. Error: connection is gone', {
-      userId: '22222222-2222-2222-2222-222222222222',
-    })
+    expect(logger.error).toHaveBeenCalledWith(
+      'Could not send message to user.',
+      expect.objectContaining({
+        errorType: 'Error',
+        userId: '22222222-2222-2222-2222-222222222222',
+      }),
+    )
+    expect(JSON.stringify(logger.error.mock.calls)).not.toContain('connection is gone')
   })
 
   it('resolves rather than rejecting when the use case fails', async () => {

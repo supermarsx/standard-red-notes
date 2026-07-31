@@ -85,7 +85,6 @@ describe('SubscriptionPurchasedEventHandler', () => {
     expect(logger.error).toHaveBeenCalledWith('Subscription ID is missing', {
       codeTag: 'SubscriptionPurchasedEventHandler.handle',
       subscriptionId: undefined,
-      userId: userEmail,
     })
   })
 
@@ -123,7 +122,7 @@ describe('SubscriptionPurchasedEventHandler', () => {
 
     await createHandler().handle(eventWith({ ...fullPayload, offline: true }))
 
-    expect(logger.error).toHaveBeenCalledWith('Could not renew shared offline subscriptions: renew oops', {
+    expect(logger.error).toHaveBeenCalledWith('Could not renew shared offline subscriptions.', {
       subscriptionId,
     })
     expect(roleService.setOfflineUserRole).toHaveBeenCalledTimes(1)
@@ -176,7 +175,9 @@ describe('SubscriptionPurchasedEventHandler', () => {
 
     await createHandler().handle(eventWith(fullPayload))
 
-    expect(logger.error).toHaveBeenCalledWith(`Could not renew shared subscriptions for user ${userUuid}: renew oops`)
+    expect(logger.error).toHaveBeenCalledWith('Could not renew shared subscriptions for a user.', {
+      userId: userUuid,
+    })
     expect(roleService.addUserRoleBasedOnSubscription).toHaveBeenCalledTimes(1)
   })
 
@@ -185,8 +186,8 @@ describe('SubscriptionPurchasedEventHandler', () => {
 
     await createHandler().handle(eventWith(fullPayload))
 
-    expect(logger.error).toHaveBeenCalledWith(
-      `Could not apply default subscription settings for user ${userUuid}: settings oops`,
-    )
+    expect(logger.error).toHaveBeenCalledWith('Could not apply default subscription settings for a user.', {
+      userId: userUuid,
+    })
   })
 })

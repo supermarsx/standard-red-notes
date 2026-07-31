@@ -68,7 +68,7 @@ export class AuthController {
     })
 
     if (result.isFailed()) {
-      this.logger.debug(`Failed to get recovery key params: ${result.getError()}`)
+      this.logger.debug('Failed to get recovery key parameters.')
 
       return {
         status: HttpStatusCode.Unauthorized,

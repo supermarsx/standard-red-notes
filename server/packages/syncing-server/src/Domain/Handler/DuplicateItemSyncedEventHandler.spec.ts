@@ -103,6 +103,10 @@ describe('DuplicateItemSyncedEventHandler', () => {
 
     await expect(createHandler().handle(event())).resolves.toBeUndefined()
 
-    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('Event bus is down'))
+    expect(logger.error).toHaveBeenCalledWith(
+      `Failed to publish revisions copy requested event for item ${itemUuid} (item already persisted).`,
+      expect.objectContaining({ errorType: 'Error' }),
+    )
+    expect(JSON.stringify((logger.error as jest.Mock).mock.calls)).not.toContain('Event bus is down')
   })
 })

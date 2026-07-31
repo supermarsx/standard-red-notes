@@ -44,8 +44,8 @@ export class UserRateLimitMiddleware extends BaseMiddleware {
     this.delegate = createUserRateLimitMiddleware({
       redis,
       logger: {
-        warn: (message: string): void => {
-          logger.warn(message)
+        warn: (message: string, metadata?: Record<string, unknown>): void => {
+          logger.warn(message, metadata)
         },
       },
       // The bucket namespaces the per-user counter; 'assistant' groups all the

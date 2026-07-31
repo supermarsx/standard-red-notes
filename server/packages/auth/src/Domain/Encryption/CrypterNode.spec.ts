@@ -65,11 +65,21 @@ describe('CrypterNode', () => {
   })
 
   it('should decrypt a value for user', async () => {
+    user.uuid = 'user-123'
     expect(await createCrypter().decryptForUser(version(encrypted), user)).toEqual(decrypted)
 
     expect(crypto.aes256GcmDecrypt).toHaveBeenNthCalledWith(1, encryptedUserKey, serverKey)
 
     expect(crypto.aes256GcmDecrypt).toHaveBeenNthCalledWith(2, encrypted, decrypted)
+
+    expect(logger.debug).toHaveBeenCalledWith('Decrypting protected value for user.', {
+      userId: 'user-123',
+    })
+    const serializedLogs = JSON.stringify((logger.debug as jest.Mock).mock.calls)
+    expect(serializedLogs).not.toContain('encryptedUserKey')
+    expect(serializedLogs).not.toContain('encrypted')
+    expect(serializedLogs).not.toContain('decrypted')
+    expect(serializedLogs).not.toContain(serverKey)
   })
 
   it('should generate an encrypted user server key', async () => {

@@ -114,14 +114,31 @@ describe('AuthMiddleware (via its Required/Optional subclasses)', () => {
       })
     })
 
-    it('Required forwards the upstream status, content-type and body and stops the chain', async () => {
+    it('Required preserves the safe upstream 4xx tag/status/content-type and stops the chain', async () => {
       await required().handler(makeRequest(), response, next)
 
-      expect(setHeader).toHaveBeenCalledWith('content-type', 'application/json')
       expect(status).toHaveBeenCalledWith(401)
-      expect(send).toHaveBeenCalledWith({ error: { tag: 'invalid-auth' } })
+      expect(send).toHaveBeenCalledWith({ error: { tag: 'invalid-auth', message: 'Invalid login credentials.' } })
+      expect(setHeader).toHaveBeenCalledWith('content-type', 'application/json')
       expect(next).not.toHaveBeenCalled()
       expect(locals).toEqual({})
+    })
+
+    it('Required preserves the safe upstream 4xx response when content-type is absent at runtime', async () => {
+      ;(serviceProxy.validateSession as jest.Mock).mockResolvedValue({
+        status: 401,
+        data: { error: { tag: 'invalid-auth' } },
+        headers: {},
+      })
+
+      await required().handler(makeRequest(), response, next)
+
+      expect(status).toHaveBeenCalledWith(401)
+      expect(send).toHaveBeenCalledWith({
+        error: { tag: 'invalid-auth', message: 'Invalid login credentials.' },
+      })
+      expect(setHeader).not.toHaveBeenCalled()
+      expect(next).not.toHaveBeenCalled()
     })
 
     it('Optional continues anonymously and never decodes a token', async () => {
@@ -353,16 +370,23 @@ describe('AuthMiddleware (via its Required/Optional subclasses)', () => {
   })
 
   describe('error handling', () => {
-    it('responds 500 with a generic message when session validation throws a plain error', async () => {
+    it('responds 500 with a stable public error when session validation throws a plain error', async () => {
       ;(serviceProxy.validateSession as jest.Mock).mockRejectedValue(new Error('boom'))
 
       await required().handler(makeRequest(), response, next)
 
       expect(status).toHaveBeenCalledWith(500)
-      expect(send).toHaveBeenCalledWith(
-        "Unfortunately, we couldn't handle your request. Please try again or contact our support if the error persists.",
+      expect(send).toHaveBeenCalledWith({
+        error: {
+          tag: 'service-unavailable',
+          message: 'The requested service is temporarily unavailable.',
+        },
+      })
+      expect(logger.error).toHaveBeenCalledWith(
+        'Could not validate session on underlying service.',
+        expect.objectContaining({ action: 'session.validate', endpoint: '/sessions/validate' }),
       )
-      expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('boom'))
+      expect(JSON.stringify(logger.error.mock.calls)).not.toContain('boom')
       expect(next).not.toHaveBeenCalled()
     })
 
@@ -378,9 +402,10 @@ describe('AuthMiddleware (via its Required/Optional subclasses)', () => {
       expect(status).toHaveBeenCalledWith(500)
     })
 
-    it('logs an AxiosError with its status and code, and mirrors the upstream content-type and body', async () => {
+    it('logs only an allowlisted AxiosError summary and keeps the upstream body and headers private', async () => {
       const error = new AxiosError('Request failed', '502')
       error.response = {
+        status: 502,
         data: { error: 'bad gateway' },
         headers: { 'content-type': 'application/problem+json' },
       } as never
@@ -389,10 +414,22 @@ describe('AuthMiddleware (via its Required/Optional subclasses)', () => {
 
       await required().handler(makeRequest(), response, next)
 
-      expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('code: 502'))
-      expect(setHeader).toHaveBeenCalledWith('content-type', 'application/problem+json')
+      expect(logger.error).toHaveBeenCalledWith(
+        'Could not validate session on underlying service.',
+        expect.objectContaining({
+          action: 'session.validate',
+          endpoint: '/sessions/validate',
+          status: 502,
+        }),
+      )
+      expect(setHeader).not.toHaveBeenCalled()
       expect(status).toHaveBeenCalledWith(502)
-      expect(send).toHaveBeenCalledWith({ error: 'bad gateway' })
+      expect(send).toHaveBeenCalledWith({
+        error: {
+          tag: 'service-unavailable',
+          message: 'The requested service is temporarily unavailable.',
+        },
+      })
     })
 
     it('falls back to 500 when the axios error code is not numeric', async () => {
@@ -404,7 +441,63 @@ describe('AuthMiddleware (via its Required/Optional subclasses)', () => {
       await required().handler(makeRequest(), response, next)
 
       expect(status).toHaveBeenCalledWith(500)
-      expect(send).toHaveBeenCalledWith({ error: 'down' })
+      expect(send).toHaveBeenCalledWith({
+        error: {
+          tag: 'service-unavailable',
+          message: 'The requested service is temporarily unavailable.',
+        },
+      })
+    })
+
+    it('never logs raw auth, cookie, response-body, URL-query, message, or circular axios config data', async () => {
+      const error: Record<string, unknown> = {
+        name: 'AxiosError',
+        code: 'ERR_BAD_RESPONSE',
+        message: 'access-token-sentinel',
+        response: {
+          status: 503,
+          data: {
+            refreshToken: 'refresh-token-sentinel',
+            encryptedContent: 'encrypted-content-sentinel',
+          },
+          headers: {
+            'set-cookie': 'cookie-sentinel',
+          },
+        },
+        config: {
+          headers: {
+            Authorization: 'Bearer access-token-sentinel',
+            Cookie: 'cookie-sentinel',
+          },
+          url: '/sessions/validate?code_verifier=pkce-sentinel#fragment-sentinel',
+        },
+      }
+      error.circular = error
+      ;(serviceProxy.validateSession as jest.Mock).mockRejectedValue(error)
+
+      await required().handler(
+        makeRequest({
+          authorization: 'Bearer access-token-sentinel',
+          cookie: 'sid=cookie-sentinel',
+        }),
+        response,
+        next,
+      )
+
+      const serializedLogs = JSON.stringify({
+        error: logger.error.mock.calls,
+        debug: logger.debug.mock.calls,
+      })
+      for (const sentinel of [
+        'access-token-sentinel',
+        'refresh-token-sentinel',
+        'encrypted-content-sentinel',
+        'cookie-sentinel',
+        'pkce-sentinel',
+        'fragment-sentinel',
+      ]) {
+        expect(serializedLogs).not.toContain(sentinel)
+      }
     })
   })
 })

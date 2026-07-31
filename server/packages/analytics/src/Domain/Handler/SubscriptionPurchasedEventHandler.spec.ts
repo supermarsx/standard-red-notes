@@ -161,14 +161,16 @@ describe('SubscriptionPurchasedEventHandler', () => {
     expect(dto.payedAmount).toEqual(12.99)
   })
 
-  it('logs the reason when the revenue modification cannot be saved', async () => {
+  it('logs a safe classification when the revenue modification cannot be saved', async () => {
     saveRevenueModification.execute = jest.fn().mockResolvedValue(Result.fail('database is down'))
 
     await createHandler().handle(createEvent())
 
     expect(logger.error).toHaveBeenCalledWith(
-      '[SUBSCRIPTION_PURCHASED][3] Could not save revenue modification: database is down',
+      '[SUBSCRIPTION_PURCHASED][3] Could not save revenue modification.',
+      expect.objectContaining({ errorType: 'Error' }),
     )
+    expect(JSON.stringify(logger.error.mock.calls)).not.toContain('database is down')
   })
 
   it('tracks the purchase and sets the mixpanel profile plan', async () => {

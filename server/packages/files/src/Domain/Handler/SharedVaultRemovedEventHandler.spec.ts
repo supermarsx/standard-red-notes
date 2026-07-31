@@ -82,12 +82,17 @@ describe('SharedVaultRemovedEventHandler (files)', () => {
     markFilesToBeRemoved.execute = jest.fn().mockResolvedValue(Result.fail('Oops'))
 
     await expect(createHandler().handle(event())).rejects.toThrow(
-      `Could not mark files to be removed for shared vault: ${sharedVaultUuid}: Oops`,
+      'Could not mark files to be removed for a shared vault.',
     )
 
     expect(logger.error).toHaveBeenCalledWith(
-      `Could not mark files to be removed for shared vault: ${sharedVaultUuid}: Oops`,
+      'Could not mark files to be removed for a shared vault.',
+      expect.objectContaining({
+        errorType: 'Error',
+        sharedVaultUuid,
+      }),
     )
+    expect(JSON.stringify((logger.error as unknown as jest.Mock).mock.calls)).not.toContain('Oops')
     expect(domainEventPublisher.publish).not.toHaveBeenCalled()
   })
 })

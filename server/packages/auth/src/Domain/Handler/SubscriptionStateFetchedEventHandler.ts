@@ -20,7 +20,6 @@ export class SubscriptionStateFetchedEventHandler implements DomainEventHandlerI
       this.logger.error('Subscription ID is missing', {
         codeTag: 'SubscriptionStateFetchedEventHandler.handle',
         subscriptionId,
-        userId: event.payload.userEmail,
       })
 
       return
@@ -70,7 +69,7 @@ export class SubscriptionStateFetchedEventHandler implements DomainEventHandlerI
 
     const usernameOrError = Username.create(event.payload.userEmail)
     if (usernameOrError.isFailed()) {
-      this.logger.warn(`Could not update subscription: ${usernameOrError.getError()}`, {
+      this.logger.warn('Could not update a subscription because the user identifier was invalid.', {
         subscriptionId,
       })
 

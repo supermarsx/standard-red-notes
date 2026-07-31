@@ -163,14 +163,16 @@ describe('SubscriptionRefundedEventHandler', () => {
     expect(dto.newSubscriber).toEqual(true)
   })
 
-  it('logs the reason when the revenue modification cannot be saved', async () => {
+  it('logs a safe classification when the revenue modification cannot be saved', async () => {
     saveRevenueModification.execute = jest.fn().mockResolvedValue(Result.fail('database is down'))
 
     await createHandler().handle(createEvent())
 
     expect(logger.error).toHaveBeenCalledWith(
-      '[SUBSCRIPTION_REFUNDED][11] Could not save revenue modification: database is down',
+      '[SUBSCRIPTION_REFUNDED][11] Could not save revenue modification.',
+      expect.objectContaining({ errorType: 'Error' }),
     )
+    expect(JSON.stringify(logger.error.mock.calls)).not.toContain('database is down')
   })
 
   it('downgrades the mixpanel profile to the free plan', async () => {

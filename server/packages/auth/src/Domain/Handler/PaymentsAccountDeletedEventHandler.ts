@@ -15,7 +15,7 @@ export class PaymentsAccountDeletedEventHandler implements DomainEventHandlerInt
     })
 
     if (result.isFailed()) {
-      this.logger.error(`Failed to delete account for user ${event.payload.username}: ${result.getError()}`)
+      this.logger.error('Failed to delete an account after the payments-account-deleted event.')
     }
   }
 }

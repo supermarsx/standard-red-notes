@@ -1,4 +1,4 @@
-import { Uuid } from '@standardnotes/domain-core'
+import { safeErrorLogMetadata, Uuid } from '@standardnotes/domain-core'
 import { AccountDeletionRequestedEvent, DomainEventHandlerInterface } from '@standardnotes/domain-events'
 import { Logger } from 'winston'
 import { RevisionRepositoryInterface } from '../Revision/RevisionRepositoryInterface'
@@ -12,7 +12,10 @@ export class AccountDeletionRequestedEventHandler implements DomainEventHandlerI
   async handle(event: AccountDeletionRequestedEvent): Promise<void> {
     const userUuidOrError = Uuid.create(event.payload.userUuid)
     if (userUuidOrError.isFailed()) {
-      this.logger.warn(`Failed account cleanup: ${userUuidOrError.getError()}`, { userId: event.payload.userUuid })
+      this.logger.warn('Failed account cleanup.', {
+        ...safeErrorLogMetadata(userUuidOrError.getError()),
+        userId: event.payload.userUuid,
+      })
 
       return
     }

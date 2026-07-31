@@ -1,3 +1,4 @@
+import { safeErrorLogMetadata } from '@standardnotes/domain-core'
 import 'reflect-metadata'
 
 import { Logger } from 'winston'
@@ -38,7 +39,7 @@ void container.load().then((container) => {
       process.exit(0)
     })
     .catch((error) => {
-      logger.error(`Could not finish ${backupFrequency} email backup requesting: ${error.message}`)
+      logger.error(`Could not finish ${backupFrequency} email backup requesting.`, safeErrorLogMetadata(error))
 
       process.exit(1)
     })

@@ -175,7 +175,11 @@ describe('startSqsConsumer', () => {
     await drained
 
     expect(send).toHaveBeenCalledWith('payload-a')
-    expect(logger.info).toHaveBeenCalledWith('[push:sqs] user=user-1 sockets=1')
+    expect(logger.info).toHaveBeenCalledWith('[push:sqs] dispatched websocket message', {
+      userId: 'user-1',
+      socketCount: 1,
+      originExcluded: false,
+    })
     expect(sqs.state.sent).toContainEqual({
       kind: 'delete',
       input: { QueueUrl: 'https://sqs/q', ReceiptHandle: 'rh-1' },
@@ -193,7 +197,12 @@ describe('startSqsConsumer', () => {
     const stop = startSqsConsumer(registry, { queueUrl: 'https://sqs/q', logger })
     await drained
 
-    expect(logger.info).toHaveBeenCalledWith('[push:sqs] user=user-1 sockets=0 excludeSession=session-1')
+    expect(logger.info).toHaveBeenCalledWith('[push:sqs] dispatched websocket message', {
+      userId: 'user-1',
+      socketCount: 0,
+      originExcluded: true,
+    })
+    expect(JSON.stringify(logger.info.mock.calls)).not.toContain('session-1')
     stop()
   })
 
@@ -246,7 +255,11 @@ describe('startSqsConsumer', () => {
     const stop = startSqsConsumer(makeRegistry().registry, { queueUrl: 'https://sqs/q', logger })
     await drained
 
-    expect(logger.error).toHaveBeenCalledWith('[sqs] poll error', 'throttled')
+    expect(logger.error).toHaveBeenCalledWith('[sqs] poll error', {
+      errorType: 'Error',
+      errorCode: undefined,
+    })
+    expect(JSON.stringify(logger.error.mock.calls)).not.toContain('throttled')
     // Three receives: the failing one, the retry, then the park.
     expect(sqs.state.sent.filter((command) => command.kind === 'receive')).toHaveLength(3)
     stop()

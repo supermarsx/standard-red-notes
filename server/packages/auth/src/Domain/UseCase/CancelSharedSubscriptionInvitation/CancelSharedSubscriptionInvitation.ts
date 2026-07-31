@@ -50,9 +50,7 @@ export class CancelSharedSubscriptionInvitation implements UseCaseInterface {
     }
 
     if (dto.inviterEmail !== sharedSubscriptionInvitation.inviterIdentifier) {
-      this.logger.debug(
-        `Subscription belongs to a different inviter (${sharedSubscriptionInvitation.inviterIdentifier}). Modifier: ${dto.inviterEmail}`,
-      )
+      this.logger.debug('Shared-subscription invitation belongs to a different inviter.')
 
       return {
         success: false,
