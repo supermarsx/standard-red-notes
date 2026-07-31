@@ -176,17 +176,90 @@ Domain events are delivered at least once. A redelivered request reuses the
 original event's validated UTC date and uploads the same deterministic
 `SN-Data-YYYY-MM-DD.json` path—even when redelivery crosses midnight—so it
 overwrites that encrypted artifact instead of creating an unbounded set of
-duplicates.
-Duplicate completion receipts are idempotent and retained only in a bounded
-history. The private lifecycle state and completion receipt contain request
-identifiers, outcome, and timestamps only—never the Nextcloud URL, app password,
-or raw provider error text.
+duplicates. Completion truth is monotonic: a confirmed success always wins;
+an earlier failed receipt may be upgraded by a later success for the same
+request, while a later failure cannot downgrade a recorded success. This matters
+when queue visibility expires while a 60-second WebDAV attempt is still running.
+
+Auth serializes each user's claim, completion history, and last-success cadence
+through a database transaction shared across workers and processes. The state
+and `NEXTCLOUD_BACKUP_LAST_RUN` mirror commit together, so overlapping scheduler
+passes cannot double-dispatch and out-of-order completions cannot regress the
+cadence or overwrite another active request. Lock rows are deleted with their
+user; a late completion for a deleted account is terminally discarded rather
+than retried forever. Completion history is bounded. Lifecycle state and
+completion receipts contain request identifiers, outcome, and timestamps
+only—never the Nextcloud URL, app password, or raw provider error text.
+
+Outside direct-call home-server mode, credential-bearing
+`NEXTCLOUD_BACKUP_REQUESTED` events use a dedicated SNS topic configured by
+`NEXTCLOUD_BACKUP_SNS_TOPIC_ARN`. It must be a valid SNS topic ARN, must differ
+from the general auth topic, and must have exactly one SQS subscription: the
+syncing worker queue. Auth, files, websocket, analytics, and other consumers
+must not subscribe. Auth validates that the ARN is present, structurally valid,
+and different from its general topic; it cannot inspect an external topic's
+subscription inventory. A missing, malformed, or general-topic ARN fails backup
+dispatch closed, and auth never falls back to the general topic. The bundled
+Compose/floci topology provisions the isolated route automatically.
+
+{% include safety-alert.html
+  level="danger"
+  title="The dedicated backup event topic carries a live credential"
+  body="The request payload contains the per-user Nextcloud app password. It is compressed/base64 for the event envelope, not application-encrypted. For an external AWS deployment, require TLS endpoints; enable SNS and SQS server-side encryption (prefer a scoped KMS key where applicable); create a separate topic; subscribe only the syncing SQS queue; grant least-privilege auth-publish and syncing-consume permissions; and configure NEXTCLOUD_BACKUP_SNS_TOPIC_ARN before enabling backups. Never attach auth, files, websocket, analytics, inspection, export, or other general-purpose subscribers directly to this topic."
+%}
+
+If the syncing queue uses a dead-letter queue, the redrive path can legitimately
+carry the same credential payload. Protect that DLQ to the same standard: server-side
+encryption, narrowly scoped access, short and audited retention, no broad
+inspection/export tooling, and a documented purge procedure. Rotate affected
+app passwords after any uncertain queue or DLQ exposure.
 
 ### Rolling upgrade compatibility
 
-When upgrading a multi-service deployment, upgrade the syncing service before
-the auth service, verify the syncing worker is consuming events, and then
-upgrade auth. This order keeps both mixed-version windows safe:
+This release adds both the dedicated credential topic and transaction-backed
+lifecycle locks. Do not perform an ordinary unconstrained rolling deployment.
+
+{% include safety-alert.html
+  level="danger"
+  title="Pause scheduled Nextcloud backups during this rolling upgrade"
+  body="Old auth workers bypass the new lifecycle lock and publish credentials to the general auth topic. Disable the persisted and environment master gate, stop every Nextcloud backup cron, provision and verify the dedicated route, replace old auth workers, and only then re-enable scheduling. If pre-upgrade requests may remain in unrelated queues, purge them under your retention procedure and rotate the affected Nextcloud app passwords."
+%}
+
+Use this order for bundled or external multi-service deployments:
+
+1. Set the persisted `nextcloudBackupsEnabled` override and
+   `NEXTCLOUD_BACKUPS_ENABLED` to false, then stop every daily, weekly, and
+   monthly Nextcloud cron. Confirm no scheduler can start a new request.
+2. Apply the auth database migrations. Verify
+   `nextcloud_backup_user_locks.user_uuid` is a primary key with a foreign key
+   to `users.uuid` using `ON DELETE CASCADE`.
+3. Create the dedicated SNS topic. Subscribe only the syncing SQS queue, grant
+   auth publish permission and syncing consume permission, and set
+   `NEXTCLOUD_BACKUP_SNS_TOPIC_ARN` on every new auth server and worker. Keep the
+   legacy general-auth-topic subscription on syncing temporarily so queued
+   requests from old auth can drain.
+4. Deploy syncing first and verify it consumes both the legacy route and the
+   dedicated route. Use a credential-free topology probe or subscription
+   inventory; do not place a real app password in a test message.
+5. Drain or stop every old auth server, worker, and scheduler. Confirm none can
+   publish or write lifecycle state, then deploy the new auth version. A new
+   auth worker refuses backup dispatch when the dedicated ARN is missing,
+   malformed, or equal to the configured general auth topic. Separately verify
+   the external subscription inventory; auth cannot detect reuse of a different
+   multi-subscriber topic.
+6. Inspect the auth, files, websocket, analytics, and other unrelated queues for
+   pre-fix backup events according to the operator's secure queue procedure.
+   These are shared queues: never purge an entire queue casually. Drain or
+   filter backup events with an audited operator procedure that preserves
+   unrelated messages, or explicitly accept and document the unrelated-message
+   loss before a whole-queue purge. Inspect the syncing DLQ without exporting
+   payloads, remove retained credential copies safely, and rotate affected app
+   passwords when exposure cannot be ruled out.
+7. Run one controlled backup, verify the deterministic Nextcloud artifact and
+   confirmed completion, then re-enable the persisted/environment master gate
+   and cron schedules.
+
+The mixed-version behavior while the gate is paused remains compatible:
 
 - An older auth service emits backup requests without acknowledgement IDs. The
   newer syncing service still uploads them and derives a stable UUIDv5 from the
@@ -202,9 +275,11 @@ upgrade auth. This order keeps both mixed-version windows safe:
   the acknowledgement. Repeated attempts overwrite that day's deterministic
   artifact rather than creating extra files.
 
-Do not downgrade both services independently after the new private delivery
-state has been written. Preserve the database, roll back the pair together, and
-verify an actual Nextcloud artifact before treating the backup as successful.
+Do not downgrade services independently after the new private delivery state or
+lock rows have been written. Pause the gate and cron again, preserve the
+database, roll back auth and syncing together, restore the legacy event topology
+only if the older pair requires it, and verify an actual Nextcloud artifact
+before treating the backup as successful.
 
 ```mermaid
 flowchart LR

@@ -110,7 +110,14 @@ On every start, floci runs
 `server/docker/localstack_bootstrap.sh` (mounted into its LocalStack-compatible
 `init/ready.d` directory — the script name is historical). That script creates
 the SNS topics and SQS queues and wires up the subscriptions the server relies
-on - including the `websocket-local-queue` that the realtime gateway consumes.
+on—including the `websocket-local-queue` that the realtime gateway consumes.
+Credential-bearing Nextcloud backup requests use
+`nextcloud-backup-local-topic`, which has exactly one subscription to
+`syncing-server-local-queue`; it is deliberately absent from the auth, files,
+and websocket queues. The server entrypoint supplies the matching
+`AUTH_SERVER_NEXTCLOUD_BACKUP_SNS_TOPIC_ARN` automatically. External AWS
+deployments must provision the same isolated topology before enabling scheduled
+Nextcloud backups; see [Backups and recovery](backups-and-recovery.md#rolling-upgrade-compatibility).
 floci's queue state is in-memory, so the bootstrap re-runs on each container
 start (all its calls are idempotent) — there is no emulator data volume to
 manage. See [Troubleshooting](#troubleshooting) if realtime updates aren't

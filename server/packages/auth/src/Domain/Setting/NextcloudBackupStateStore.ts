@@ -1,9 +1,10 @@
-import { SettingName } from '@standardnotes/domain-core'
 import { Logger } from 'winston'
 import { TimerInterface } from '@standardnotes/time'
 
-import { GetSetting } from '../UseCase/GetSetting/GetSetting'
-import { SetSettingValue } from '../UseCase/SetSettingValue/SetSettingValue'
+import {
+  NextcloudBackupStateRepositoryInterface,
+  PersistedNextcloudBackupState,
+} from './NextcloudBackupStateRepositoryInterface'
 import {
   NextcloudBackupDeliveryState,
   emptyNextcloudBackupDeliveryState,
@@ -12,135 +13,96 @@ import {
   parseNextcloudBackupDeliveryState,
 } from './NextcloudBackupDeliveryState'
 
-export type NextcloudBackupStateRead<T> = { status: 'available'; value: T } | { status: 'unavailable' }
+export type NextcloudBackupStateRead<T> =
+  { status: 'available'; value: T } | { status: 'user-not-found' } | { status: 'unavailable' }
+
+export interface NextcloudBackupLifecycleState {
+  deliveryState: NextcloudBackupDeliveryState
+  lastSuccessAt: number | null
+}
+
+export interface NextcloudBackupLifecycleMutation<T> {
+  result: T
+  deliveryState?: NextcloudBackupDeliveryState
+  lastSuccessAt?: number
+}
+
+class InvalidNextcloudBackupStateError extends Error {}
 
 export class NextcloudBackupStateStore {
   private static readonly MAX_CLOCK_SKEW_MS = 5 * 60 * 1_000
 
   constructor(
-    private getSetting: GetSetting,
-    private setSettingValue: SetSettingValue,
+    private repository: NextcloudBackupStateRepositoryInterface,
     private timer: TimerInterface,
     private logger: Logger,
   ) {}
 
-  async readDeliveryState(userUuid: string): Promise<NextcloudBackupStateRead<NextcloudBackupDeliveryState>> {
+  /**
+   * Runs a complete per-user lifecycle transition behind the repository's
+   * cross-process transaction. The callback is synchronous by design: callers
+   * may calculate state only, never publish an event or perform network I/O
+   * while holding the database lock.
+   */
+  async runExclusive<T>(
+    userUuid: string,
+    transition: (state: NextcloudBackupLifecycleState) => NextcloudBackupLifecycleMutation<T>,
+  ): Promise<NextcloudBackupStateRead<T>> {
     try {
-      const result = await this.getSetting.execute({
-        userUuid,
-        settingName: SettingName.NAMES.NextcloudBackupDeliveryState,
-        allowSensitiveRetrieval: true,
-        decrypted: true,
+      const repositoryResult = await this.repository.runExclusive(userUuid, (persistedState) => {
+        const state = this.decodeState(persistedState)
+        const mutation = transition(state)
+
+        let deliveryStateValue: string | undefined
+        if (mutation.deliveryState !== undefined) {
+          deliveryStateValue = JSON.stringify(mutation.deliveryState)
+          if (parseNextcloudBackupDeliveryState(deliveryStateValue) === null) {
+            throw new InvalidNextcloudBackupStateError('Invalid delivery-state mutation')
+          }
+        }
+
+        let lastSuccessAtValue: string | undefined
+        if (mutation.lastSuccessAt !== undefined) {
+          if (!isValidNextcloudBackupTimestamp(mutation.lastSuccessAt)) {
+            throw new InvalidNextcloudBackupStateError('Invalid last-success mutation')
+          }
+          lastSuccessAtValue = String(mutation.lastSuccessAt)
+        }
+
+        return {
+          result: mutation.result,
+          deliveryStateValue,
+          lastSuccessAtValue,
+        }
       })
-      if (result.isFailed()) {
-        return result.getError().toLowerCase().includes('not found')
-          ? { status: 'available', value: emptyNextcloudBackupDeliveryState() }
-          : { status: 'unavailable' }
+
+      if (repositoryResult.status === 'user-not-found') {
+        return { status: 'user-not-found' }
       }
 
-      const value = result.getValue().decryptedValue
-      const state = typeof value === 'string' ? parseNextcloudBackupDeliveryState(value) : null
-      if (state === null) {
-        this.logger.error('Nextcloud backup delivery state is malformed; dispatch is paused.', {
-          codeTag: 'NextcloudBackupStateStore',
-          userId: userUuid,
-        })
-
-        return { status: 'unavailable' }
-      }
-
-      const nowMs = this.nowMs()
-      if (
-        (state.activeRequest &&
-          state.activeRequest.requestedAt > nowMs + NextcloudBackupStateStore.MAX_CLOCK_SKEW_MS) ||
-        (state.retryNotBefore !== null &&
-          state.retryNotBefore >
-            nowMs + NEXTCLOUD_BACKUP_MAX_RETRY_DELAY_MS + NextcloudBackupStateStore.MAX_CLOCK_SKEW_MS) ||
-        state.completed.some(
-          (completion) => completion.completedAt > nowMs + NextcloudBackupStateStore.MAX_CLOCK_SKEW_MS,
-        )
-      ) {
-        this.logger.error('Nextcloud backup delivery state has implausible timestamps; dispatch is paused.', {
-          codeTag: 'NextcloudBackupStateStore',
-          userId: userUuid,
-        })
-
-        return { status: 'unavailable' }
-      }
-
-      return { status: 'available', value: state }
+      return { status: 'available', value: repositoryResult.value }
     } catch {
-      this.logger.error('Nextcloud backup delivery state could not be read.', {
+      this.logger.error('Nextcloud backup lifecycle transaction failed; dispatch is paused.', {
         codeTag: 'NextcloudBackupStateStore',
         userId: userUuid,
       })
 
       return { status: 'unavailable' }
     }
+  }
+
+  async readDeliveryState(userUuid: string): Promise<NextcloudBackupStateRead<NextcloudBackupDeliveryState>> {
+    return this.runExclusive(userUuid, ({ deliveryState }) => ({ result: deliveryState }))
   }
 
   async writeDeliveryState(userUuid: string, state: NextcloudBackupDeliveryState): Promise<boolean> {
-    return this.writeServerSetting(
-      userUuid,
-      SettingName.NAMES.NextcloudBackupDeliveryState,
-      JSON.stringify(state),
-      'Nextcloud backup delivery state could not be recorded.',
-    )
+    const result = await this.runExclusive(userUuid, () => ({ result: true, deliveryState: state }))
+
+    return result.status === 'available'
   }
 
   async readLastSuccessAt(userUuid: string): Promise<NextcloudBackupStateRead<number | null>> {
-    try {
-      const result = await this.getSetting.execute({
-        userUuid,
-        settingName: SettingName.NAMES.NextcloudBackupLastRun,
-        allowSensitiveRetrieval: false,
-        decrypted: true,
-      })
-      if (result.isFailed()) {
-        return result.getError().toLowerCase().includes('not found')
-          ? { status: 'available', value: null }
-          : { status: 'unavailable' }
-      }
-
-      const value = result.getValue().decryptedValue
-      if (!value || !/^\d+$/.test(value)) {
-        this.logger.error('Nextcloud backup last-success time is malformed; dispatch is paused.', {
-          codeTag: 'NextcloudBackupStateStore',
-          userId: userUuid,
-        })
-
-        return { status: 'unavailable' }
-      }
-
-      const parsed = Number(value)
-
-      if (!isValidNextcloudBackupTimestamp(parsed)) {
-        this.logger.error('Nextcloud backup last-success time is out of range; dispatch is paused.', {
-          codeTag: 'NextcloudBackupStateStore',
-          userId: userUuid,
-        })
-
-        return { status: 'unavailable' }
-      }
-
-      if (parsed > this.nowMs() + NextcloudBackupStateStore.MAX_CLOCK_SKEW_MS) {
-        this.logger.error('Nextcloud backup last-success time is in the future; dispatch is paused.', {
-          codeTag: 'NextcloudBackupStateStore',
-          userId: userUuid,
-        })
-
-        return { status: 'unavailable' }
-      }
-
-      return { status: 'available', value: parsed }
-    } catch {
-      this.logger.error('Nextcloud backup last-success time could not be read.', {
-        codeTag: 'NextcloudBackupStateStore',
-        userId: userUuid,
-      })
-
-      return { status: 'unavailable' }
-    }
+    return this.runExclusive(userUuid, ({ lastSuccessAt }) => ({ result: lastSuccessAt }))
   }
 
   async writeLastSuccessAt(userUuid: string, timestamp: number): Promise<boolean> {
@@ -153,40 +115,54 @@ export class NextcloudBackupStateStore {
       return false
     }
 
-    return this.writeServerSetting(
-      userUuid,
-      SettingName.NAMES.NextcloudBackupLastRun,
-      String(timestamp),
-      'Nextcloud backup last-success time could not be recorded.',
-    )
+    const result = await this.runExclusive(userUuid, () => ({ result: true, lastSuccessAt: timestamp }))
+
+    return result.status === 'available'
   }
 
-  private async writeServerSetting(
-    userUuid: string,
-    settingName: string,
-    value: string,
-    logMessage: string,
-  ): Promise<boolean> {
-    try {
-      const result = await this.setSettingValue.execute({
-        settingName,
-        value,
-        userUuid,
-        checkUserPermissions: false,
-      })
-      if (result.isFailed()) {
-        throw new Error('Setting write was rejected')
+  private decodeState(persistedState: PersistedNextcloudBackupState): NextcloudBackupLifecycleState {
+    let deliveryState: NextcloudBackupDeliveryState
+    if (!persistedState.deliveryState.exists) {
+      deliveryState = emptyNextcloudBackupDeliveryState()
+    } else if (typeof persistedState.deliveryState.value === 'string') {
+      const parsed = parseNextcloudBackupDeliveryState(persistedState.deliveryState.value)
+      if (parsed === null) {
+        throw new InvalidNextcloudBackupStateError('Malformed delivery state')
       }
-
-      return true
-    } catch {
-      this.logger.error(logMessage, {
-        codeTag: 'NextcloudBackupStateStore',
-        userId: userUuid,
-      })
-
-      return false
+      deliveryState = parsed
+    } else {
+      throw new InvalidNextcloudBackupStateError('Missing delivery state value')
     }
+
+    let lastSuccessAt: number | null = null
+    if (persistedState.lastSuccessAt.exists) {
+      const value = persistedState.lastSuccessAt.value
+      if (typeof value !== 'string' || !/^\d+$/.test(value)) {
+        throw new InvalidNextcloudBackupStateError('Malformed last-success value')
+      }
+      const parsed = Number(value)
+      if (!isValidNextcloudBackupTimestamp(parsed)) {
+        throw new InvalidNextcloudBackupStateError('Out-of-range last-success value')
+      }
+      lastSuccessAt = parsed
+    }
+
+    const nowMs = this.nowMs()
+    if (
+      (deliveryState.activeRequest &&
+        deliveryState.activeRequest.requestedAt > nowMs + NextcloudBackupStateStore.MAX_CLOCK_SKEW_MS) ||
+      (deliveryState.retryNotBefore !== null &&
+        deliveryState.retryNotBefore >
+          nowMs + NEXTCLOUD_BACKUP_MAX_RETRY_DELAY_MS + NextcloudBackupStateStore.MAX_CLOCK_SKEW_MS) ||
+      deliveryState.completed.some(
+        (completion) => completion.completedAt > nowMs + NextcloudBackupStateStore.MAX_CLOCK_SKEW_MS,
+      ) ||
+      (lastSuccessAt !== null && lastSuccessAt > nowMs + NextcloudBackupStateStore.MAX_CLOCK_SKEW_MS)
+    ) {
+      throw new InvalidNextcloudBackupStateError('Implausible lifecycle timestamp')
+    }
+
+    return { deliveryState, lastSuccessAt }
   }
 
   private nowMs(): number {

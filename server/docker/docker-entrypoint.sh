@@ -283,6 +283,9 @@ file_env 'AUTH_SERVER_S3_SECRET_ACCESS_KEY'
 if [ -z "$AUTH_SERVER_SNS_TOPIC_ARN" ]; then
   export AUTH_SERVER_SNS_TOPIC_ARN="arn:aws:sns:us-east-1:000000000000:auth-local-topic"
 fi
+if [ -z "$AUTH_SERVER_NEXTCLOUD_BACKUP_SNS_TOPIC_ARN" ]; then
+  export AUTH_SERVER_NEXTCLOUD_BACKUP_SNS_TOPIC_ARN="arn:aws:sns:us-east-1:000000000000:nextcloud-backup-local-topic"
+fi
 if [ -z "$AUTH_SERVER_SNS_ENDPOINT" ]; then
   export AUTH_SERVER_SNS_ENDPOINT="http://floci:4566"
 fi

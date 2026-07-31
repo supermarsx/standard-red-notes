@@ -154,6 +154,7 @@ const TYPES = {
   Auth_REDIS_URL: Symbol.for('Auth_REDIS_URL'),
   Auth_DISABLE_USER_REGISTRATION: Symbol.for('Auth_DISABLE_USER_REGISTRATION'),
   Auth_SNS_TOPIC_ARN: Symbol.for('Auth_SNS_TOPIC_ARN'),
+  Auth_NextcloudBackupDomainEventPublisher: Symbol.for('Auth_NextcloudBackupDomainEventPublisher'),
   Auth_SNS_AWS_REGION: Symbol.for('Auth_SNS_AWS_REGION'),
   Auth_SQS_QUEUE_URL: Symbol.for('Auth_SQS_QUEUE_URL'),
   Auth_SQS_AWS_REGION: Symbol.for('Auth_SQS_AWS_REGION'),

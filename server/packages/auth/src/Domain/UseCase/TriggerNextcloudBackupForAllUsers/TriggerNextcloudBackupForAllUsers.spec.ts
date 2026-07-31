@@ -53,15 +53,15 @@ describe('TriggerNextcloudBackupForAllUsers', () => {
     deliveryState = emptyNextcloudBackupDeliveryState()
     lastSuccessAt = null
     stateStore = {
-      readDeliveryState: jest.fn().mockImplementation(async () => ({ status: 'available', value: deliveryState })),
-      readLastSuccessAt: jest.fn().mockImplementation(async () => ({ status: 'available', value: lastSuccessAt })),
-      writeDeliveryState: jest.fn().mockImplementation(async (_userUuid, nextState) => {
-        deliveryState = nextState
-        return true
-      }),
-      writeLastSuccessAt: jest.fn().mockImplementation(async (_userUuid, timestamp) => {
-        lastSuccessAt = timestamp
-        return true
+      runExclusive: jest.fn().mockImplementation(async (_userUuid, transition) => {
+        const mutation = transition({ deliveryState, lastSuccessAt })
+        if (mutation.deliveryState !== undefined) {
+          deliveryState = mutation.deliveryState
+        }
+        if (mutation.lastSuccessAt !== undefined) {
+          lastSuccessAt = mutation.lastSuccessAt
+        }
+        return { status: 'available', value: mutation.result }
       }),
     } as unknown as jest.Mocked<NextcloudBackupStateStore>
     timer = {
@@ -123,8 +123,34 @@ describe('TriggerNextcloudBackupForAllUsers', () => {
       userUuid: USER_UUID,
       requestUuid: expect.stringMatching(/^[0-9a-f-]{36}$/),
     })
-    expect(stateStore.writeLastSuccessAt).not.toHaveBeenCalled()
     expect(lastSuccessAt).toBeNull()
+  })
+
+  it('allows only one dispatch when two scheduler passes overlap for the same user', async () => {
+    makeUserDue()
+    let releasePublish!: () => void
+    let signalPublishEntered!: () => void
+    const publishBlocked = new Promise<void>((resolve) => {
+      releasePublish = resolve
+    })
+    const publishEntered = new Promise<void>((resolve) => {
+      signalPublishEntered = resolve
+    })
+    triggerNextcloudBackupForUser.execute.mockImplementation(async () => {
+      signalPublishEntered()
+      await publishBlocked
+      return Result.ok()
+    })
+
+    const firstPass = makeUseCase(true).execute({ backupFrequency: 'daily' })
+    await publishEntered
+    const secondPass = makeUseCase(true).execute({ backupFrequency: 'daily' })
+    await secondPass
+
+    expect(triggerNextcloudBackupForUser.execute).toHaveBeenCalledTimes(1)
+    releasePublish()
+    await firstPass
+    expect(triggerNextcloudBackupForUser.execute).toHaveBeenCalledTimes(1)
   })
 
   it('keeps a new-auth request safely retryable while an old syncing service cannot acknowledge it', async () => {
@@ -192,8 +218,46 @@ describe('TriggerNextcloudBackupForAllUsers', () => {
     expect(deliveryState.activeRequest).toBeNull()
     expect(deliveryState.consecutiveFailures).toBe(1)
     expect(deliveryState.retryNotBefore).toBe(NOW_MS + NEXTCLOUD_BACKUP_INITIAL_RETRY_DELAY_MS)
-    expect(deliveryState.completed[0].outcome).toBe('failed')
+    // A publish error is ambiguous: the broker may have accepted the event.
+    // Do not mark it terminal so a later success acknowledgement can win.
+    expect(deliveryState.completed).toHaveLength(0)
     expect(JSON.stringify(logger.error.mock.calls)).not.toContain('secret upstream failure')
+  })
+
+  it('lets a delayed success acknowledgement override an ambiguous publish failure', async () => {
+    makeUserDue()
+    let publishedRequestUuid = ''
+    triggerNextcloudBackupForUser.execute.mockImplementation(async ({ requestUuid }) => {
+      publishedRequestUuid = requestUuid
+      return Result.fail('publish timed out after broker acceptance')
+    })
+
+    await makeUseCase(true).execute({ backupFrequency: 'daily' })
+    expect(deliveryState.completed).toHaveLength(0)
+    expect(deliveryState.retryNotBefore).not.toBeNull()
+
+    const completionHandler = new NextcloudBackupCompletedEventHandler(stateStore, timer, logger)
+    await completionHandler.handle({
+      type: 'NEXTCLOUD_BACKUP_COMPLETED',
+      createdAt: new Date(NOW_MS),
+      meta: {
+        correlation: { userIdentifier: USER_UUID, userIdentifierType: 'uuid' },
+        origin: DomainEventService.SyncingServer,
+        target: DomainEventService.Auth,
+      },
+      payload: {
+        userUuid: USER_UUID,
+        requestUuid: publishedRequestUuid,
+        outcome: 'succeeded',
+        completedAt: NOW_MS,
+      },
+    } as NextcloudBackupCompletedEvent)
+
+    expect(lastSuccessAt).toBe(NOW_MS)
+    expect(deliveryState.retryNotBefore).toBeNull()
+    expect(deliveryState.completed).toEqual([
+      expect.objectContaining({ requestUuid: publishedRequestUuid, outcome: 'succeeded' }),
+    ])
   })
 
   it('does not publish while a request is still in flight', async () => {
@@ -233,18 +297,13 @@ describe('TriggerNextcloudBackupForAllUsers', () => {
     expect(triggerNextcloudBackupForUser.execute).not.toHaveBeenCalled()
   })
 
-  it.each(['delivery', 'last-success'])('fails closed when %s state cannot be read', async (unavailableState) => {
+  it('fails closed when the lifecycle transaction is unavailable', async () => {
     makeUserDue()
-    if (unavailableState === 'delivery') {
-      stateStore.readDeliveryState.mockResolvedValue({ status: 'unavailable' })
-    } else {
-      stateStore.readLastSuccessAt.mockResolvedValue({ status: 'unavailable' })
-    }
+    stateStore.runExclusive.mockResolvedValue({ status: 'unavailable' })
 
     await makeUseCase(true).execute({ backupFrequency: 'daily' })
 
     expect(triggerNextcloudBackupForUser.execute).not.toHaveBeenCalled()
-    expect(stateStore.writeLastSuccessAt).not.toHaveBeenCalled()
   })
 
   it('fails closed on a persisted far-future success timestamp', async () => {

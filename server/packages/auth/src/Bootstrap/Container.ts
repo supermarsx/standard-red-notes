@@ -464,6 +464,7 @@ import { SubscriptionSettingHttpRepresentation } from '../Mapping/Http/Subscript
 import { SettingHttpMapper } from '../Mapping/Http/SettingHttpMapper'
 import { SubscriptionSettingHttpMapper } from '../Mapping/Http/SubscriptionSettingHttpMapper'
 import { TypeORMSetting } from '../Infra/TypeORM/TypeORMSetting'
+import { TypeORMNextcloudBackupStateRepository } from '../Infra/TypeORM/TypeORMNextcloudBackupStateRepository'
 import { SettingPersistenceMapper } from '../Mapping/Persistence/SettingPersistenceMapper'
 import { SubscriptionSettingPersistenceMapper } from '../Mapping/Persistence/SubscriptionSettingPersistenceMapper'
 import { ApplyDefaultSettings } from '../Domain/UseCase/ApplyDefaultSettings/ApplyDefaultSettings'
@@ -530,6 +531,10 @@ import {
   buildSnsDomainEventPublisher,
   LazyDomainEventPublisher,
 } from './LazyDomainEventPublisher'
+import {
+  isValidDedicatedNextcloudBackupTopicArn,
+  UnavailableNextcloudBackupDomainEventPublisher,
+} from './NextcloudBackupDomainEventPublisher'
 
 export class ContainerConfigLoader {
   // Standard Red Notes: 'cli' is an additive lean-boot mode for the srn-admin
@@ -720,6 +725,31 @@ export class ContainerConfigLoader {
       )
     }
     container.bind<DomainEventPublisherInterface>(TYPES.Auth_DomainEventPublisher).toConstantValue(domainEventPublisher)
+
+    const nextcloudBackupTopicArn = env.get('NEXTCLOUD_BACKUP_SNS_TOPIC_ARN', true)
+    let nextcloudBackupDomainEventPublisher: DomainEventPublisherInterface
+    if (isConfiguredForHomeServer) {
+      // Direct-call mode has no broker queues and therefore no credential fan-out.
+      nextcloudBackupDomainEventPublisher = directCallDomainEventPublisher
+    } else if (!isValidDedicatedNextcloudBackupTopicArn(nextcloudBackupTopicArn, env.get('SNS_TOPIC_ARN', true))) {
+      logger.error(
+        'Scheduled Nextcloud backup delivery is unavailable: configure a dedicated NEXTCLOUD_BACKUP_SNS_TOPIC_ARN distinct from SNS_TOPIC_ARN.',
+      )
+      nextcloudBackupDomainEventPublisher = new UnavailableNextcloudBackupDomainEventPublisher()
+    } else if (isConfiguredForCli) {
+      nextcloudBackupDomainEventPublisher = new LazyDomainEventPublisher(() =>
+        buildSnsDomainEventPublisher(new SNSClient(buildSnsClientConfig(env)), nextcloudBackupTopicArn, env),
+      )
+    } else {
+      nextcloudBackupDomainEventPublisher = buildSnsDomainEventPublisher(
+        container.get(TYPES.Auth_SNS),
+        nextcloudBackupTopicArn,
+        env,
+      )
+    }
+    container
+      .bind<DomainEventPublisherInterface>(TYPES.Auth_NextcloudBackupDomainEventPublisher)
+      .toConstantValue(nextcloudBackupDomainEventPublisher)
 
     // Mapping
     container
@@ -2754,8 +2784,10 @@ export class ContainerConfigLoader {
       .bind<NextcloudBackupStateStore>(TYPES.Auth_NextcloudBackupStateStore)
       .toConstantValue(
         new NextcloudBackupStateStore(
-          container.get<GetSetting>(TYPES.Auth_GetSetting),
-          container.get<SetSettingValue>(TYPES.Auth_SetSettingValue),
+          new TypeORMNextcloudBackupStateRepository(
+            appDataSource.dataSource,
+            container.get<TimerInterface>(TYPES.Auth_Timer),
+          ),
           container.get<TimerInterface>(TYPES.Auth_Timer),
           container.get<winston.Logger>(TYPES.Auth_Logger),
         ),
@@ -2766,7 +2798,7 @@ export class ContainerConfigLoader {
         new TriggerNextcloudBackupForUser(
           container.get<GetUserKeyParams>(TYPES.Auth_GetUserKeyParams),
           container.get<GetSetting>(TYPES.Auth_GetSetting),
-          container.get<DomainEventPublisherInterface>(TYPES.Auth_DomainEventPublisher),
+          container.get<DomainEventPublisherInterface>(TYPES.Auth_NextcloudBackupDomainEventPublisher),
           container.get<DomainEventFactoryInterface>(TYPES.Auth_DomainEventFactory),
         ),
       )

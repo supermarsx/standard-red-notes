@@ -17,7 +17,7 @@ describe('TypeORMUserRepository credential transition', () => {
   }
   let transactionalUsers: { createQueryBuilder: jest.Mock; findOneByOrFail: jest.Mock }
   let transactionalSettings: { delete: jest.Mock }
-  let manager: { getRepository: jest.Mock; transaction: jest.Mock }
+  let manager: { getRepository: jest.Mock; transaction: jest.Mock; connection?: unknown }
   let repository: TypeORMUserRepository
 
   beforeEach(() => {
@@ -64,6 +64,10 @@ describe('TypeORMUserRepository credential transition', () => {
       transaction: jest.fn().mockImplementation(async (callback: (value: unknown) => Promise<unknown>) => {
         return callback(manager)
       }),
+    }
+    manager.connection = {
+      options: { type: 'mysql' },
+      transaction: manager.transaction,
     }
     repository = new TypeORMUserRepository({ manager } as never)
   })

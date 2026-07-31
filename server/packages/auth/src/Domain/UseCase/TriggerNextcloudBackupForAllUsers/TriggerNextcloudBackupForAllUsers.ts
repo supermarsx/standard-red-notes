@@ -2,29 +2,31 @@ import { Result, SettingName, UseCaseInterface } from '@standardnotes/domain-cor
 import { NextcloudBackupFrequency } from '@standardnotes/settings'
 import { TimerInterface } from '@standardnotes/time'
 import { v4 as uuidv4 } from 'uuid'
-import { TriggerNextcloudBackupForUser } from '../TriggerNextcloudBackupForUser/TriggerNextcloudBackupForUser'
-import { SettingRepositoryInterface } from '../../Setting/SettingRepositoryInterface'
-import { TriggerNextcloudBackupForAllUsersDTO } from './TriggerNextcloudBackupForAllUsersDTO'
-import { isNextcloudBackupDue } from './NextcloudBackupDueCalculator'
 import { Logger } from 'winston'
+
+import { NextcloudBackupStateStore } from '../../Setting/NextcloudBackupStateStore'
 import {
   NEXTCLOUD_BACKUP_IN_FLIGHT_TIMEOUT_MS,
-  NEXTCLOUD_BACKUP_MAX_RETRY_DELAY_MS,
   NextcloudBackupDeliveryState,
-  appendNextcloudBackupCompletion,
   nextFailureCount,
   nextNextcloudBackupRetryDelayMs,
 } from '../../Setting/NextcloudBackupDeliveryState'
-import { NextcloudBackupStateStore } from '../../Setting/NextcloudBackupStateStore'
+import { SettingRepositoryInterface } from '../../Setting/SettingRepositoryInterface'
+import { TriggerNextcloudBackupForUser } from '../TriggerNextcloudBackupForUser/TriggerNextcloudBackupForUser'
+import { isNextcloudBackupDue } from './NextcloudBackupDueCalculator'
+import { TriggerNextcloudBackupForAllUsersDTO } from './TriggerNextcloudBackupForAllUsersDTO'
 
-const MAX_SCHEDULER_CLOCK_SKEW_MS = 5 * 60 * 1_000
+type SchedulerDecision =
+  | { kind: 'dispatch'; requestUuid: string }
+  | { kind: 'not-due' }
+  | { kind: 'in-flight-or-backoff' }
+  | { kind: 'expired' }
 
 /**
  * Standard Red Notes: scheduled Nextcloud-backup trigger over the whole cohort of
- * users on a given frequency. Mirrors TriggerEmailBackupForAllUsers. The operator
- * switch (NEXTCLOUD_BACKUPS_ENABLED) defaults OFF so a fresh install never uploads.
- * Per-user completeness (URL + app password + frequency) is enforced downstream in
- * TriggerNextcloudBackupForUser.
+ * users on a given frequency. The operator switch defaults OFF, and each user's
+ * due check plus pending claim is one cross-process database transaction. Only
+ * the process that commits the claim publishes after the transaction releases.
  */
 export class TriggerNextcloudBackupForAllUsers implements UseCaseInterface<void> {
   private PAGING_LIMIT = 100
@@ -36,13 +38,6 @@ export class TriggerNextcloudBackupForAllUsers implements UseCaseInterface<void>
     private timer: TimerInterface,
     private logger: Logger,
     private nextcloudBackupsEnabled: boolean,
-    // Standard Red Notes: OPTIONAL runtime override of the master gate. Resolves
-    // the admin-persisted server-settings overlay (written gateway-side via
-    // PUT /v1/admin/server-settings, read here through the shared
-    // SERVER_SETTINGS_PATH file). PRECEDENCE: a persisted admin value WINS over
-    // the boot-time env boolean above; `undefined` (no override persisted / no
-    // shared file) falls back to the env value. Consulted per execute() so an
-    // admin toggle takes effect on the next scheduled run without a restart.
     private nextcloudBackupsEnabledOverride?: () => Promise<boolean | undefined>,
   ) {}
 
@@ -62,7 +57,6 @@ export class TriggerNextcloudBackupForAllUsers implements UseCaseInterface<void>
     const nextcloudBackupFrequencySettingName = SettingName.create(
       SettingName.NAMES.NextcloudBackupFrequency,
     ).getValue()
-
     const allSettingsCount = await this.settingRepository.countAllByNameAndValue({
       name: nextcloudBackupFrequencySettingName,
       value: dto.backupFrequency,
@@ -71,11 +65,11 @@ export class TriggerNextcloudBackupForAllUsers implements UseCaseInterface<void>
     this.logger.info(`Found ${allSettingsCount} users with Nextcloud backup frequency set to ${dto.backupFrequency}`)
 
     const nowMs = this.timer.convertMicrosecondsToMilliseconds(this.timer.getTimestampInMicroseconds())
-
     let failedUsers = 0
     let skippedNotDue = 0
     let skippedInFlightOrBackoff = 0
     const numberOfPages = Math.ceil(allSettingsCount / this.PAGING_LIMIT)
+
     for (let i = 0; i < numberOfPages; i++) {
       const settings = await this.settingRepository.findAllByNameAndValue({
         name: nextcloudBackupFrequencySettingName,
@@ -86,102 +80,49 @@ export class TriggerNextcloudBackupForAllUsers implements UseCaseInterface<void>
 
       for (const setting of settings) {
         const userUuid = setting.props.userUuid.value
-
-        // Per-user due-calculation: respect the last-run timestamp so a single
-        // (more-frequent) cron can serve daily/weekly/monthly and catch up missed
-        // runs. dto.backupFrequency selects the cohort; the calculator decides if
-        // this specific user is actually due now.
-        const lastSuccessRead = await this.stateStore.readLastSuccessAt(userUuid)
-        const stateRead = await this.stateStore.readDeliveryState(userUuid)
-        if (lastSuccessRead.status === 'unavailable' || stateRead.status === 'unavailable') {
+        const claim = await this.claimDueBackup(userUuid, dto.backupFrequency, nowMs)
+        if (claim.status === 'unavailable') {
           this.logger.error('Skipped a Nextcloud backup because lifecycle state is unavailable.', {
             userId: userUuid,
           })
           failedUsers++
           continue
         }
-
-        const lastSuccessAtMs = lastSuccessRead.value
-        let state = stateRead.value
-        if (!this.hasPlausibleSchedulingTimestamps(state, lastSuccessAtMs, nowMs)) {
-          this.logger.error('Skipped a Nextcloud backup because lifecycle timestamps are invalid.', {
-            userId: userUuid,
-          })
-          failedUsers++
+        if (claim.status === 'user-not-found') {
+          this.logger.info('Skipped a Nextcloud backup for a deleted user.', { userId: userUuid })
           continue
         }
 
-        // A prior success can be durable even if its follow-up state write was
-        // interrupted. Heal that stale active marker before making a due decision.
-        if (state.activeRequest && lastSuccessAtMs !== null && state.activeRequest.requestedAt <= lastSuccessAtMs) {
-          state = {
-            ...state,
-            activeRequest: null,
-            consecutiveFailures: 0,
-            retryNotBefore: null,
-          }
-          if (!(await this.stateStore.writeDeliveryState(userUuid, state))) {
-            failedUsers++
-            continue
-          }
-        }
-
-        if (!isNextcloudBackupDue(dto.backupFrequency as NextcloudBackupFrequency, lastSuccessAtMs, nowMs)) {
+        const decision = claim.value
+        if (decision.kind === 'not-due') {
           skippedNotDue++
           continue
         }
-
-        if (state.activeRequest) {
-          if (nowMs < state.activeRequest.requestedAt + NEXTCLOUD_BACKUP_IN_FLIGHT_TIMEOUT_MS) {
-            skippedInFlightOrBackoff++
-            continue
+        if (decision.kind === 'in-flight-or-backoff' || decision.kind === 'expired') {
+          if (decision.kind === 'expired') {
+            this.logger.warn('A Nextcloud backup request expired; retry is delayed.', {
+              userId: userUuid,
+            })
           }
-
-          const consecutiveFailures = nextFailureCount(state.consecutiveFailures)
-          const expiredState: NextcloudBackupDeliveryState = {
-            ...state,
-            activeRequest: null,
-            consecutiveFailures,
-            retryNotBefore: nowMs + nextNextcloudBackupRetryDelayMs(consecutiveFailures),
-          }
-          if (!(await this.stateStore.writeDeliveryState(userUuid, expiredState))) {
-            failedUsers++
-            continue
-          }
-
-          this.logger.warn('A Nextcloud backup request expired; retry is delayed.', {
-            userId: userUuid,
-          })
           skippedInFlightOrBackoff++
           continue
         }
 
-        if (state.retryNotBefore !== null && nowMs < state.retryNotBefore) {
-          skippedInFlightOrBackoff++
-          continue
-        }
-
-        const requestUuid = uuidv4()
-        const pendingState: NextcloudBackupDeliveryState = {
-          ...state,
-          activeRequest: { requestUuid, requestedAt: nowMs },
-        }
-        if (!(await this.stateStore.writeDeliveryState(userUuid, pendingState))) {
-          failedUsers++
-          continue
-        }
-
+        // The claim transaction has committed and released before this call.
+        // Never hold a database lock across SNS or direct-call event delivery.
         let result: Result<void>
         try {
-          result = await this.triggerNextcloudBackupForUserUseCase.execute({ userUuid, requestUuid })
+          result = await this.triggerNextcloudBackupForUserUseCase.execute({
+            userUuid,
+            requestUuid: decision.requestUuid,
+          })
         } catch {
           result = Result.fail('Nextcloud backup request publication failed')
         }
         if (result.isFailed()) {
-          await this.recordDispatchFailure(userUuid, requestUuid, nowMs)
+          await this.recordDispatchFailure(userUuid, decision.requestUuid, nowMs)
           this.logger.error('Failed to dispatch a Nextcloud backup for a user.', { userId: userUuid })
           failedUsers++
-          continue
         }
       }
     }
@@ -197,51 +138,83 @@ export class TriggerNextcloudBackupForAllUsers implements UseCaseInterface<void>
     return Result.ok()
   }
 
-  private async recordDispatchFailure(userUuid: string, requestUuid: string, nowMs: number): Promise<void> {
-    const stateRead = await this.stateStore.readDeliveryState(userUuid)
-    if (stateRead.status === 'unavailable') {
-      return
-    }
-    const state = stateRead.value
-    if (
-      state.activeRequest?.requestUuid !== requestUuid ||
-      state.completed.some((entry) => entry.requestUuid === requestUuid)
-    ) {
-      return
-    }
+  private claimDueBackup(userUuid: string, frequency: string, nowMs: number) {
+    return this.stateStore.runExclusive<SchedulerDecision>(
+      userUuid,
+      ({ deliveryState: persistedState, lastSuccessAt }) => {
+        let state = persistedState
+        let healed = false
 
-    const consecutiveFailures = nextFailureCount(state.consecutiveFailures)
-    await this.stateStore.writeDeliveryState(userUuid, {
-      ...state,
-      activeRequest: null,
-      consecutiveFailures,
-      retryNotBefore: nowMs + nextNextcloudBackupRetryDelayMs(consecutiveFailures),
-      completed: appendNextcloudBackupCompletion(state, {
-        requestUuid,
-        outcome: 'failed',
-        completedAt: nowMs,
-      }),
-    })
+        // A success and its state update now commit atomically. This healing path
+        // remains for rows written by older versions during a rolling upgrade.
+        if (state.activeRequest && lastSuccessAt !== null && state.activeRequest.requestedAt <= lastSuccessAt) {
+          state = {
+            ...state,
+            activeRequest: null,
+            consecutiveFailures: 0,
+            retryNotBefore: null,
+          }
+          healed = true
+        }
+
+        if (!isNextcloudBackupDue(frequency as NextcloudBackupFrequency, lastSuccessAt, nowMs)) {
+          return {
+            result: { kind: 'not-due' },
+            deliveryState: healed ? state : undefined,
+          }
+        }
+
+        if (state.activeRequest) {
+          if (nowMs < state.activeRequest.requestedAt + NEXTCLOUD_BACKUP_IN_FLIGHT_TIMEOUT_MS) {
+            return { result: { kind: 'in-flight-or-backoff' } }
+          }
+
+          const consecutiveFailures = nextFailureCount(state.consecutiveFailures)
+          return {
+            result: { kind: 'expired' },
+            deliveryState: {
+              ...state,
+              activeRequest: null,
+              consecutiveFailures,
+              retryNotBefore: nowMs + nextNextcloudBackupRetryDelayMs(consecutiveFailures),
+            },
+          }
+        }
+
+        if (state.retryNotBefore !== null && nowMs < state.retryNotBefore) {
+          return { result: { kind: 'in-flight-or-backoff' } }
+        }
+
+        const requestUuid = uuidv4()
+        return {
+          result: { kind: 'dispatch', requestUuid },
+          deliveryState: {
+            ...state,
+            activeRequest: { requestUuid, requestedAt: nowMs },
+          },
+        }
+      },
+    )
   }
 
-  private hasPlausibleSchedulingTimestamps(
-    state: NextcloudBackupDeliveryState,
-    lastSuccessAtMs: number | null,
-    nowMs: number,
-  ): boolean {
-    if (lastSuccessAtMs !== null && lastSuccessAtMs > nowMs + MAX_SCHEDULER_CLOCK_SKEW_MS) {
-      return false
-    }
-    if (state.activeRequest && state.activeRequest.requestedAt > nowMs + MAX_SCHEDULER_CLOCK_SKEW_MS) {
-      return false
-    }
-    if (
-      state.retryNotBefore !== null &&
-      state.retryNotBefore > nowMs + NEXTCLOUD_BACKUP_MAX_RETRY_DELAY_MS + MAX_SCHEDULER_CLOCK_SKEW_MS
-    ) {
-      return false
-    }
+  private async recordDispatchFailure(userUuid: string, requestUuid: string, nowMs: number): Promise<void> {
+    await this.stateStore.runExclusive(userUuid, ({ deliveryState: state }) => {
+      if (
+        state.activeRequest?.requestUuid !== requestUuid ||
+        state.completed.some((entry) => entry.requestUuid === requestUuid)
+      ) {
+        return { result: undefined }
+      }
 
-    return true
+      const consecutiveFailures = nextFailureCount(state.consecutiveFailures)
+      const failedState: NextcloudBackupDeliveryState = {
+        ...state,
+        activeRequest: null,
+        consecutiveFailures,
+        retryNotBefore: nowMs + nextNextcloudBackupRetryDelayMs(consecutiveFailures),
+      }
+
+      return { result: undefined, deliveryState: failedState }
+    })
   }
 }

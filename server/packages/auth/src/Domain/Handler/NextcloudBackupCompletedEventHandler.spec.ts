@@ -22,6 +22,7 @@ describe('NextcloudBackupCompletedEventHandler', () => {
   let timer: jest.Mocked<TimerInterface>
   let logger: jest.Mocked<Logger>
   let state: NextcloudBackupDeliveryState
+  let lastSuccessAt: number | null
 
   const createHandler = () => new NextcloudBackupCompletedEventHandler(stateStore, timer, logger)
   const event = (overrides: Partial<NextcloudBackupCompletedEvent['payload']> = {}): NextcloudBackupCompletedEvent =>
@@ -47,11 +48,18 @@ describe('NextcloudBackupCompletedEventHandler', () => {
       ...emptyNextcloudBackupDeliveryState(),
       activeRequest: { requestUuid, requestedAt: nowMs - 2_000 },
     }
+    lastSuccessAt = null
     stateStore = {
-      readDeliveryState: jest.fn().mockResolvedValue({ status: 'available', value: state }),
-      readLastSuccessAt: jest.fn().mockResolvedValue({ status: 'available', value: null }),
-      writeDeliveryState: jest.fn().mockResolvedValue(true),
-      writeLastSuccessAt: jest.fn().mockResolvedValue(true),
+      runExclusive: jest.fn().mockImplementation(async (_userUuid, transition) => {
+        const mutation = transition({ deliveryState: state, lastSuccessAt })
+        if (mutation.deliveryState !== undefined) {
+          state = mutation.deliveryState
+        }
+        if (mutation.lastSuccessAt !== undefined) {
+          lastSuccessAt = mutation.lastSuccessAt
+        }
+        return { status: 'available', value: mutation.result }
+      }),
     } as unknown as jest.Mocked<NextcloudBackupStateStore>
     timer = {
       getTimestampInMicroseconds: jest.fn().mockReturnValue(nowMs * 1_000),
@@ -65,13 +73,11 @@ describe('NextcloudBackupCompletedEventHandler', () => {
     } as unknown as jest.Mocked<Logger>
   })
 
-  it('advances LAST_RUN only to the confirmed upload time and clears the matching request', async () => {
+  it('atomically advances LAST_RUN to the confirmed upload time and clears the matching request', async () => {
     await createHandler().handle(event())
 
-    expect(stateStore.writeLastSuccessAt).toHaveBeenCalledWith(userUuid, completedAt)
-    expect(stateStore.writeLastSuccessAt).not.toHaveBeenCalledWith(userUuid, nowMs)
-    expect(stateStore.writeDeliveryState).toHaveBeenCalledWith(
-      userUuid,
+    expect(lastSuccessAt).toBe(completedAt)
+    expect(state).toEqual(
       expect.objectContaining({
         activeRequest: null,
         consecutiveFailures: 0,
@@ -79,6 +85,7 @@ describe('NextcloudBackupCompletedEventHandler', () => {
         completed: [{ requestUuid, outcome: 'succeeded', completedAt }],
       }),
     )
+    expect(stateStore.runExclusive).toHaveBeenCalledTimes(1)
   })
 
   it('does not make a late old success look fresh at acknowledgement time', async () => {
@@ -87,26 +94,35 @@ describe('NextcloudBackupCompletedEventHandler', () => {
 
     await createHandler().handle(event({ completedAt: lateCompletion }))
 
-    expect(stateStore.writeLastSuccessAt).toHaveBeenCalledWith(userUuid, lateCompletion)
-    expect(stateStore.writeLastSuccessAt).not.toHaveBeenCalledWith(userUuid, nowMs)
+    expect(lastSuccessAt).toBe(lateCompletion)
   })
 
-  it('updates LAST_RUN monotonically when an older success arrives out of order', async () => {
-    const existingSuccess = completedAt + 500
-    state.activeRequest = null
-    stateStore.readLastSuccessAt.mockResolvedValue({ status: 'available', value: existingSuccess })
+  it('merges concurrent out-of-order successes without regressing cadence or clobbering unrelated active work', async () => {
+    const olderRequest = '00000000-0000-0000-0000-000000000010'
+    const newerRequest = '00000000-0000-0000-0000-000000000011'
+    const unrelatedActive = '00000000-0000-0000-0000-000000000012'
+    state.activeRequest = { requestUuid: unrelatedActive, requestedAt: completedAt - 10_000 }
 
-    await createHandler().handle(event())
+    await Promise.all([
+      createHandler().handle(event({ requestUuid: newerRequest, completedAt: completedAt + 500 })),
+      createHandler().handle(event({ requestUuid: olderRequest, completedAt })),
+    ])
 
-    expect(stateStore.writeLastSuccessAt).toHaveBeenCalledWith(userUuid, existingSuccess)
+    expect(lastSuccessAt).toBe(completedAt + 500)
+    expect(state.activeRequest).toEqual({ requestUuid: unrelatedActive, requestedAt: completedAt - 10_000 })
+    expect(state.completed).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ requestUuid: olderRequest, outcome: 'succeeded' }),
+        expect.objectContaining({ requestUuid: newerRequest, outcome: 'succeeded' }),
+      ]),
+    )
   })
 
   it('leaves LAST_RUN unchanged on failure and schedules bounded retry from auth time', async () => {
     await createHandler().handle(event({ outcome: 'failed' }))
 
-    expect(stateStore.writeLastSuccessAt).not.toHaveBeenCalled()
-    expect(stateStore.writeDeliveryState).toHaveBeenCalledWith(
-      userUuid,
+    expect(lastSuccessAt).toBeNull()
+    expect(state).toEqual(
       expect.objectContaining({
         activeRequest: null,
         consecutiveFailures: 1,
@@ -118,19 +134,52 @@ describe('NextcloudBackupCompletedEventHandler', () => {
 
   it('does not apply the same completion twice', async () => {
     state.completed = [{ requestUuid, outcome: 'succeeded', completedAt }]
+    const before = structuredClone(state)
 
     await createHandler().handle(event())
 
-    expect(stateStore.writeLastSuccessAt).not.toHaveBeenCalled()
-    expect(stateStore.writeDeliveryState).not.toHaveBeenCalled()
+    expect(state).toEqual(before)
+    expect(lastSuccessAt).toBeNull()
   })
 
-  it('rejects a structurally valid far-future completion without mutating state', async () => {
+  it('upgrades a failed receipt to success for an overlapping delivery of the same request', async () => {
+    await createHandler().handle(event({ outcome: 'failed' }))
+    expect(state.completed).toEqual([{ requestUuid, outcome: 'failed', completedAt }])
+
+    await createHandler().handle(event({ outcome: 'succeeded', completedAt: completedAt + 500 }))
+
+    expect(state.completed).toEqual([{ requestUuid, outcome: 'succeeded', completedAt: completedAt + 500 }])
+    expect(lastSuccessAt).toBe(completedAt + 500)
+    expect(state.retryNotBefore).toBeNull()
+  })
+
+  it('never lets a later failed receipt downgrade an existing success', async () => {
+    await createHandler().handle(event({ outcome: 'succeeded' }))
+    const successfulState = structuredClone(state)
+
+    await createHandler().handle(event({ outcome: 'failed', completedAt: completedAt + 500 }))
+
+    expect(state).toEqual(successfulState)
+    expect(lastSuccessAt).toBe(completedAt)
+  })
+
+  it.each([
+    ['failure then success', ['failed', 'succeeded']],
+    ['success then failure', ['succeeded', 'failed']],
+  ] as const)('converges overlapping %s deliveries to success', async (_description, outcomes) => {
+    await Promise.all(
+      outcomes.map((outcome, index) => createHandler().handle(event({ outcome, completedAt: completedAt + index }))),
+    )
+
+    expect(state.completed).toHaveLength(1)
+    expect(state.completed[0]).toEqual(expect.objectContaining({ requestUuid, outcome: 'succeeded' }))
+    expect(lastSuccessAt).not.toBeNull()
+  })
+
+  it('rejects a structurally valid far-future completion without opening a transaction', async () => {
     await createHandler().handle(event({ completedAt: nowMs + 60 * 60 * 1_000 }))
 
-    expect(stateStore.readDeliveryState).not.toHaveBeenCalled()
-    expect(stateStore.writeLastSuccessAt).not.toHaveBeenCalled()
-    expect(stateStore.writeDeliveryState).not.toHaveBeenCalled()
+    expect(stateStore.runExclusive).not.toHaveBeenCalled()
   })
 
   it.each([
@@ -151,9 +200,7 @@ describe('NextcloudBackupCompletedEventHandler', () => {
 
     await createHandler().handle(mismatchedEvent)
 
-    expect(stateStore.readDeliveryState).not.toHaveBeenCalled()
-    expect(stateStore.writeLastSuccessAt).not.toHaveBeenCalled()
-    expect(stateStore.writeDeliveryState).not.toHaveBeenCalled()
+    expect(stateStore.runExclusive).not.toHaveBeenCalled()
   })
 
   it('rejects a completion whose UUID correlation does not match its payload user', async () => {
@@ -162,9 +209,7 @@ describe('NextcloudBackupCompletedEventHandler', () => {
 
     await createHandler().handle(mismatchedEvent)
 
-    expect(stateStore.readDeliveryState).not.toHaveBeenCalled()
-    expect(stateStore.writeLastSuccessAt).not.toHaveBeenCalled()
-    expect(stateStore.writeDeliveryState).not.toHaveBeenCalled()
+    expect(stateStore.runExclusive).not.toHaveBeenCalled()
   })
 
   it('rejects a completion with missing provenance metadata', async () => {
@@ -173,30 +218,33 @@ describe('NextcloudBackupCompletedEventHandler', () => {
 
     await createHandler().handle(malformedEvent)
 
-    expect(stateStore.readDeliveryState).not.toHaveBeenCalled()
-    expect(stateStore.writeLastSuccessAt).not.toHaveBeenCalled()
-    expect(stateStore.writeDeliveryState).not.toHaveBeenCalled()
+    expect(stateStore.runExclusive).not.toHaveBeenCalled()
   })
 
   it('rejects a completion timestamp earlier than its matching active request', async () => {
+    const before = structuredClone(state)
     await createHandler().handle(
       event({ completedAt: (state.activeRequest as { requestedAt: number }).requestedAt - 1 }),
     )
 
-    expect(stateStore.writeLastSuccessAt).not.toHaveBeenCalled()
-    expect(stateStore.writeDeliveryState).not.toHaveBeenCalled()
+    expect(state).toEqual(before)
+    expect(lastSuccessAt).toBeNull()
   })
 
-  it.each(['delivery', 'last-success'])('retries when %s state cannot be read', async (unavailableState) => {
-    if (unavailableState === 'delivery') {
-      stateStore.readDeliveryState.mockResolvedValue({ status: 'unavailable' })
-    } else {
-      stateStore.readLastSuccessAt.mockResolvedValue({ status: 'unavailable' })
-    }
+  it('retries when the lifecycle transaction is unavailable', async () => {
+    stateStore.runExclusive.mockResolvedValue({ status: 'unavailable' })
 
     await expect(createHandler().handle(event())).rejects.toThrow('completion state is unavailable')
-    expect(stateStore.writeLastSuccessAt).not.toHaveBeenCalled()
-    expect(stateStore.writeDeliveryState).not.toHaveBeenCalled()
+  })
+
+  it('drops a completion for a deleted user without causing queue redelivery', async () => {
+    stateStore.runExclusive.mockResolvedValue({ status: 'user-not-found' })
+
+    await expect(createHandler().handle(event())).resolves.toBeUndefined()
+    expect(logger.info).toHaveBeenCalledWith(
+      'Dropped a Nextcloud backup completion for a deleted user.',
+      expect.objectContaining({ userId: userUuid, requestId: requestUuid }),
+    )
   })
 
   it('never logs payload extras that could contain destination credentials', async () => {

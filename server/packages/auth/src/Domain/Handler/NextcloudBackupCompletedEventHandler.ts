@@ -17,6 +17,8 @@ import { NextcloudBackupStateStore } from '../Setting/NextcloudBackupStateStore'
 
 const MAX_COMPLETION_CLOCK_SKEW_MS = 5 * 60 * 1_000
 
+type CompletionDecision = 'recorded' | 'duplicate' | 'older-than-request'
+
 export class NextcloudBackupCompletedEventHandler implements DomainEventHandlerInterface {
   constructor(
     private stateStore: NextcloudBackupStateStore,
@@ -34,20 +36,75 @@ export class NextcloudBackupCompletedEventHandler implements DomainEventHandlerI
       return
     }
 
-    const { userUuid, requestUuid, outcome } = event.payload
-    const [stateRead, lastSuccessRead] = await Promise.all([
-      this.stateStore.readDeliveryState(userUuid),
-      this.stateStore.readLastSuccessAt(userUuid),
-    ])
-    if (stateRead.status === 'unavailable' || lastSuccessRead.status === 'unavailable') {
+    const { userUuid, requestUuid, outcome, completedAt } = event.payload
+    const transition = await this.stateStore.runExclusive<CompletionDecision>(
+      userUuid,
+      ({ deliveryState: state, lastSuccessAt }) => {
+        if (state.activeRequest?.requestUuid === requestUuid && completedAt < state.activeRequest.requestedAt) {
+          return { result: 'older-than-request' }
+        }
+
+        const existingCompletion = state.completed.find((entry) => entry.requestUuid === requestUuid)
+        // Completion truth is monotonic: success is terminal, while a failed
+        // observation may be upgraded when an overlapping/redelivered worker
+        // later confirms that the same request actually uploaded successfully.
+        if (existingCompletion?.outcome === 'succeeded' || (existingCompletion && outcome === 'failed')) {
+          return { result: 'duplicate' }
+        }
+
+        const activeRequestMatches = state.activeRequest?.requestUuid === requestUuid
+        let nextState = {
+          ...state,
+          completed: appendNextcloudBackupCompletion(state, {
+            requestUuid,
+            outcome,
+            completedAt,
+          }),
+        }
+
+        if (outcome === 'succeeded') {
+          nextState = {
+            ...nextState,
+            activeRequest: activeRequestMatches ? null : nextState.activeRequest,
+            consecutiveFailures: 0,
+            retryNotBefore: null,
+          }
+
+          return {
+            result: 'recorded',
+            deliveryState: nextState,
+            // Monotonic inside the same transaction as the completion receipt.
+            lastSuccessAt: Math.max(lastSuccessAt ?? 0, completedAt),
+          }
+        }
+
+        if (activeRequestMatches) {
+          const consecutiveFailures = nextFailureCount(state.consecutiveFailures)
+          nextState = {
+            ...nextState,
+            activeRequest: null,
+            consecutiveFailures,
+            retryNotBefore: nowMs + nextNextcloudBackupRetryDelayMs(consecutiveFailures),
+          }
+        }
+
+        return { result: 'recorded', deliveryState: nextState }
+      },
+    )
+
+    if (transition.status === 'unavailable') {
       throw new Error('Nextcloud backup completion state is unavailable')
     }
-    const state = stateRead.value
+    if (transition.status === 'user-not-found') {
+      this.logger.info('Dropped a Nextcloud backup completion for a deleted user.', {
+        codeTag: 'NextcloudBackupCompletedEventHandler',
+        userId: userUuid,
+        requestId: requestUuid,
+      })
 
-    if (
-      state.activeRequest?.requestUuid === requestUuid &&
-      event.payload.completedAt < state.activeRequest.requestedAt
-    ) {
+      return
+    }
+    if (transition.value === 'older-than-request') {
       this.logger.warn('Rejected a Nextcloud backup completion older than its request.', {
         codeTag: 'NextcloudBackupCompletedEventHandler',
         userId: userUuid,
@@ -56,8 +113,7 @@ export class NextcloudBackupCompletedEventHandler implements DomainEventHandlerI
 
       return
     }
-
-    if (state.completed.some((entry) => entry.requestUuid === requestUuid)) {
+    if (transition.value === 'duplicate') {
       this.logger.debug('Ignored a duplicate Nextcloud backup completion.', {
         codeTag: 'NextcloudBackupCompletedEventHandler',
         userId: userUuid,
@@ -65,44 +121,6 @@ export class NextcloudBackupCompletedEventHandler implements DomainEventHandlerI
       })
 
       return
-    }
-
-    const activeRequestMatches = state.activeRequest?.requestUuid === requestUuid
-    let nextState = {
-      ...state,
-      completed: appendNextcloudBackupCompletion(state, {
-        requestUuid,
-        outcome,
-        completedAt: event.payload.completedAt,
-      }),
-    }
-
-    if (outcome === 'succeeded') {
-      // The syncing completion clock describes when the upload actually finished;
-      // auth validates it and updates monotonically so late/out-of-order delivery
-      // can neither make an old upload look fresh nor move the cadence backward.
-      const lastSuccessAt = Math.max(lastSuccessRead.value ?? 0, event.payload.completedAt)
-      if (!(await this.stateStore.writeLastSuccessAt(userUuid, lastSuccessAt))) {
-        throw new Error('Nextcloud backup success could not be recorded')
-      }
-      nextState = {
-        ...nextState,
-        activeRequest: activeRequestMatches ? null : nextState.activeRequest,
-        consecutiveFailures: 0,
-        retryNotBefore: null,
-      }
-    } else if (activeRequestMatches) {
-      const consecutiveFailures = nextFailureCount(state.consecutiveFailures)
-      nextState = {
-        ...nextState,
-        activeRequest: null,
-        consecutiveFailures,
-        retryNotBefore: nowMs + nextNextcloudBackupRetryDelayMs(consecutiveFailures),
-      }
-    }
-
-    if (!(await this.stateStore.writeDeliveryState(userUuid, nextState))) {
-      throw new Error('Nextcloud backup completion could not be recorded')
     }
 
     this.logger.info(`Nextcloud backup ${outcome}.`, {

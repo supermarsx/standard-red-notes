@@ -33,6 +33,44 @@ import { Env } from './Env'
 import { TypeORMSharedVaultUser } from '../Infra/TypeORM/TypeORMSharedVaultUser'
 import { TypeORMSubscriptionSetting } from '../Infra/TypeORM/TypeORMSubscriptionSetting'
 import { TypeORMSetting } from '../Infra/TypeORM/TypeORMSetting'
+import { TypeORMNextcloudBackupUserLock } from '../Infra/TypeORM/TypeORMNextcloudBackupUserLock'
+
+export const AUTH_TYPEORM_ENTITIES = [
+  User,
+  UserSubscription,
+  OfflineUserSubscription,
+  Session,
+  RevokedSession,
+  Role,
+  Permission,
+  TypeORMSetting,
+  TypeORMNextcloudBackupUserLock,
+  OfflineSetting,
+  SharedSubscriptionInvitation,
+  TypeORMSubscriptionSetting,
+  TypeORMSessionTrace,
+  TypeORMAuthenticator,
+  TypeORMAppPassword,
+  TypeORMMcpToken,
+  TypeORMWebhook,
+  TypeORMAuditLogEntry,
+  TypeORMShare,
+  TypeORMGroup,
+  TypeORMGroupRole,
+  TypeORMUserGroup,
+  TypeORMDeadManSwitch,
+  TypeORMEmailReminder,
+  TypeORMTrustedDevice,
+  TypeORMPendingMfaApproval,
+  TypeORMAuthenticatorChallenge,
+  TypeORMMagicLinkToken,
+  TypeORMEmailConfirmationToken,
+  TypeORMSignupInviteLink,
+  TypeORMSignupInviteUse,
+  TypeORMEmergencyAccessInvitation,
+  TypeORMCacheEntry,
+  TypeORMSharedVaultUser,
+]
 
 export class AppDataSource {
   private _dataSource: DataSource | undefined
@@ -57,6 +95,10 @@ export class AppDataSource {
   }
 
   get dataSource(): DataSource {
+    if (this._dataSource) {
+      return this._dataSource
+    }
+
     this.configuration.env.load()
 
     const isConfiguredForMySQL = this.configuration.env.get('DB_TYPE') === 'mysql'
@@ -67,41 +109,7 @@ export class AppDataSource {
 
     const commonDataSourceOptions = {
       maxQueryExecutionTime,
-      entities: [
-        User,
-        UserSubscription,
-        OfflineUserSubscription,
-        Session,
-        RevokedSession,
-        Role,
-        Permission,
-        TypeORMSetting,
-        OfflineSetting,
-        SharedSubscriptionInvitation,
-        TypeORMSubscriptionSetting,
-        TypeORMSessionTrace,
-        TypeORMAuthenticator,
-        TypeORMAppPassword,
-        TypeORMMcpToken,
-        TypeORMWebhook,
-        TypeORMAuditLogEntry,
-        TypeORMShare,
-        TypeORMGroup,
-        TypeORMGroupRole,
-        TypeORMUserGroup,
-        TypeORMDeadManSwitch,
-        TypeORMEmailReminder,
-        TypeORMTrustedDevice,
-        TypeORMPendingMfaApproval,
-        TypeORMAuthenticatorChallenge,
-        TypeORMMagicLinkToken,
-        TypeORMEmailConfirmationToken,
-        TypeORMSignupInviteLink,
-        TypeORMSignupInviteUse,
-        TypeORMEmergencyAccessInvitation,
-        TypeORMCacheEntry,
-        TypeORMSharedVaultUser,
-      ],
+      entities: AUTH_TYPEORM_ENTITIES,
       // SRN_MIGRATIONS_DIR lets the standalone server binary point migrations at
       // a real on-disk folder next to the executable (the bundled __dirname is a
       // read-only pkg snapshot whose glob is unreliable). Falls back to the
@@ -171,6 +179,7 @@ export class AppDataSource {
         type: 'better-sqlite3',
         database: this.configuration.env.get('DB_SQLITE_DATABASE_PATH'),
         enableWAL: true,
+        prepareDatabase: (database) => database.pragma('busy_timeout = 5000'),
       }
 
       this._dataSource = new DataSource(sqliteDataSourceOptions)

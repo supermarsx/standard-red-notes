@@ -40,7 +40,7 @@ link_queue_and_topic() {
 
 get_queue_arn_from_name() {
   local QUEUE_NAME=$1
-  echo "arn:aws:sns:${AWS_REGION}:${LOCALSTACK_DUMMY_ID}:$QUEUE_NAME"
+  echo "arn:aws:sqs:${AWS_REGION}:${LOCALSTACK_DUMMY_ID}:$QUEUE_NAME"
 }
 
 get_topic_arn_from_name() {
@@ -68,6 +68,15 @@ echo "creating topic $AUTH_TOPIC_NAME"
 TOPIC_CREATED_RESULT=$(create_topic ${AUTH_TOPIC_NAME})
 echo "created topic: $TOPIC_CREATED_RESULT"
 AUTH_TOPIC_ARN=$(get_topic_arn_from_name $AUTH_TOPIC_NAME)
+
+# Credential-bearing Nextcloud requests use a dedicated topic. It is linked
+# only to the syncing queue below; never add auth/files/websocket subscribers.
+NEXTCLOUD_BACKUP_TOPIC_NAME="nextcloud-backup-local-topic"
+
+echo "creating topic $NEXTCLOUD_BACKUP_TOPIC_NAME"
+TOPIC_CREATED_RESULT=$(create_topic ${NEXTCLOUD_BACKUP_TOPIC_NAME})
+echo "created topic: $TOPIC_CREATED_RESULT"
+NEXTCLOUD_BACKUP_TOPIC_ARN=$(get_topic_arn_from_name $NEXTCLOUD_BACKUP_TOPIC_NAME)
 
 FILES_TOPIC_NAME="files-local-topic"
 
@@ -174,6 +183,11 @@ echo "$LINKING_RESULT"
 
 echo "linking topic $AUTH_TOPIC_ARN to queue $SYNCING_SERVER_QUEUE_ARN"
 LINKING_RESULT=$(link_queue_and_topic $AUTH_TOPIC_ARN $SYNCING_SERVER_QUEUE_ARN)
+echo "linking done:"
+echo "$LINKING_RESULT"
+
+echo "linking topic $NEXTCLOUD_BACKUP_TOPIC_ARN to queue $SYNCING_SERVER_QUEUE_ARN"
+LINKING_RESULT=$(link_queue_and_topic $NEXTCLOUD_BACKUP_TOPIC_ARN $SYNCING_SERVER_QUEUE_ARN)
 echo "linking done:"
 echo "$LINKING_RESULT"
 

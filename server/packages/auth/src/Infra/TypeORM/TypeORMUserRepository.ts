@@ -6,6 +6,7 @@ import TYPES from '../../Bootstrap/Types'
 
 import { User } from '../../Domain/User/User'
 import { TypeORMSetting } from './TypeORMSetting'
+import { runAuthTypeORMTransaction } from './AuthTypeORMTransactionCoordinator'
 import {
   AdminUserListQuery,
   AdminUserListResult,
@@ -254,7 +255,7 @@ export class TypeORMUserRepository implements UserRepositoryInterface {
     expectedEncryptedPassword: string
     expectedProtocolVersion: string | null
   }): Promise<User | null> {
-    return this.ormRepository.manager.transaction(async (manager) => {
+    return runAuthTypeORMTransaction(this.ormRepository.manager.connection, async (manager) => {
       const transactionalUsers = manager.getRepository(User)
       const updateQuery = transactionalUsers
         .createQueryBuilder()

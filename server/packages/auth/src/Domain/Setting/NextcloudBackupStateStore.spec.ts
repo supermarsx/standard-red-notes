@@ -1,11 +1,8 @@
 import 'reflect-metadata'
 
-import { Result, SettingName } from '@standardnotes/domain-core'
 import { Logger } from 'winston'
 import { TimerInterface } from '@standardnotes/time'
 
-import { GetSetting } from '../UseCase/GetSetting/GetSetting'
-import { SetSettingValue } from '../UseCase/SetSettingValue/SetSettingValue'
 import {
   NEXTCLOUD_BACKUP_MAX_COMPLETED_HISTORY,
   NEXTCLOUD_BACKUP_MAX_CONSECUTIVE_FAILURES,
@@ -16,25 +13,39 @@ import {
   nextNextcloudBackupRetryDelayMs,
   parseNextcloudBackupDeliveryState,
 } from './NextcloudBackupDeliveryState'
+import {
+  NextcloudBackupStateRepositoryInterface,
+  PersistedNextcloudBackupState,
+} from './NextcloudBackupStateRepositoryInterface'
 import { NextcloudBackupStateStore } from './NextcloudBackupStateStore'
 
 describe('NextcloudBackupStateStore', () => {
   const userUuid = '00000000-0000-0000-0000-000000000001'
-  let getSetting: jest.Mocked<GetSetting>
-  let setSettingValue: jest.Mocked<SetSettingValue>
+  const nowMs = 1_700_000_000_000
+  let persisted: PersistedNextcloudBackupState
+  let repository: jest.Mocked<NextcloudBackupStateRepositoryInterface>
   let timer: jest.Mocked<TimerInterface>
   let logger: jest.Mocked<Logger>
-  const nowMs = 1_700_000_000_000
 
-  const createStore = () => new NextcloudBackupStateStore(getSetting, setSettingValue, timer, logger)
+  const createStore = () => new NextcloudBackupStateStore(repository, timer, logger)
 
   beforeEach(() => {
-    getSetting = {
-      execute: jest.fn().mockResolvedValue(Result.fail('not found')),
-    } as unknown as jest.Mocked<GetSetting>
-    setSettingValue = {
-      execute: jest.fn().mockResolvedValue(Result.ok({})),
-    } as unknown as jest.Mocked<SetSettingValue>
+    persisted = {
+      deliveryState: { exists: false, value: null },
+      lastSuccessAt: { exists: false, value: null },
+    }
+    repository = {
+      runExclusive: jest.fn().mockImplementation(async (_userUuid, transition) => {
+        const mutation = transition(persisted)
+        if (mutation.deliveryStateValue !== undefined) {
+          persisted.deliveryState = { exists: true, value: mutation.deliveryStateValue }
+        }
+        if (mutation.lastSuccessAtValue !== undefined) {
+          persisted.lastSuccessAt = { exists: true, value: mutation.lastSuccessAtValue }
+        }
+        return { status: 'available', value: mutation.result }
+      }),
+    } as jest.Mocked<NextcloudBackupStateRepositoryInterface>
     timer = {
       getTimestampInMicroseconds: jest.fn().mockReturnValue(nowMs * 1_000),
       convertMicrosecondsToMilliseconds: jest.fn().mockReturnValue(nowMs),
@@ -44,90 +55,84 @@ describe('NextcloudBackupStateStore', () => {
     } as unknown as jest.Mocked<Logger>
   })
 
-  it('treats an absent delivery-state setting as a legitimate empty initial state', async () => {
-    const result = await createStore().readDeliveryState(userUuid)
+  it('treats absent settings as a legitimate empty initial lifecycle', async () => {
+    const store = createStore()
 
-    expect(result).toEqual({ status: 'available', value: emptyNextcloudBackupDeliveryState() })
+    expect(await store.readDeliveryState(userUuid)).toEqual({
+      status: 'available',
+      value: emptyNextcloudBackupDeliveryState(),
+    })
+    expect(await store.readLastSuccessAt(userUuid)).toEqual({ status: 'available', value: null })
   })
 
-  it('fails closed when delivery-state storage is unavailable', async () => {
-    getSetting.execute.mockResolvedValue(Result.fail('database unavailable'))
+  it('fails closed when the lock, read, write, or commit rejects', async () => {
+    repository.runExclusive.mockRejectedValue(new Error('database unavailable'))
 
     expect(await createStore().readDeliveryState(userUuid)).toEqual({ status: 'unavailable' })
   })
 
-  it('fails closed when storage or decryption throws', async () => {
-    getSetting.execute.mockRejectedValue(new Error('raw database row'))
-
-    expect(await createStore().readDeliveryState(userUuid)).toEqual({ status: 'unavailable' })
-    expect(JSON.stringify(logger.error.mock.calls)).not.toContain('raw database row')
-  })
-
-  it('fails closed and logs safely when persisted delivery state is corrupt', async () => {
+  it('does not log storage errors or corrupt values that could contain credentials', async () => {
     const rawState =
       '{"activeRequest":{"requestUuid":"bad"},"nextcloudUrl":"https://secret.example","appPassword":"secret-value"}'
-    getSetting.execute.mockResolvedValue(Result.ok({ decryptedValue: rawState }))
+    persisted.deliveryState = { exists: true, value: rawState }
 
     expect(await createStore().readDeliveryState(userUuid)).toEqual({ status: 'unavailable' })
     expect(JSON.stringify(logger.error.mock.calls)).not.toContain(rawState)
     expect(JSON.stringify(logger.error.mock.calls)).not.toContain('secret.example')
     expect(JSON.stringify(logger.error.mock.calls)).not.toContain('secret-value')
+
+    repository.runExclusive.mockRejectedValue(new Error('secret-app-password'))
+    await createStore().writeDeliveryState(userUuid, emptyNextcloudBackupDeliveryState())
+    expect(JSON.stringify(logger.error.mock.calls)).not.toContain('secret-app-password')
   })
 
   it('fails closed on implausible future lifecycle timestamps', async () => {
-    getSetting.execute.mockResolvedValue(
-      Result.ok({
-        decryptedValue: JSON.stringify({
-          activeRequest: {
-            requestUuid: '00000000-0000-0000-0000-000000000002',
-            requestedAt: nowMs + 60 * 60 * 1_000,
-          },
-          consecutiveFailures: 0,
-          retryNotBefore: null,
-          completed: [],
-        }),
+    persisted.deliveryState = {
+      exists: true,
+      value: JSON.stringify({
+        activeRequest: {
+          requestUuid: '00000000-0000-0000-0000-000000000002',
+          requestedAt: nowMs + 60 * 60 * 1_000,
+        },
+        consecutiveFailures: 0,
+        retryNotBefore: null,
+        completed: [],
       }),
-    )
+    }
 
     expect(await createStore().readDeliveryState(userUuid)).toEqual({ status: 'unavailable' })
   })
 
-  it('fails closed when LAST_RUN cannot be read or is malformed', async () => {
-    getSetting.execute.mockResolvedValueOnce(Result.fail('database unavailable'))
+  it('fails closed when LAST_RUN is malformed or in the future', async () => {
+    persisted.lastSuccessAt = { exists: true, value: '123garbage' }
     expect(await createStore().readLastSuccessAt(userUuid)).toEqual({ status: 'unavailable' })
 
-    getSetting.execute.mockResolvedValueOnce(Result.ok({ decryptedValue: String(nowMs + 60 * 60 * 1_000) }))
-    expect(await createStore().readLastSuccessAt(userUuid)).toEqual({ status: 'unavailable' })
-
-    getSetting.execute.mockResolvedValueOnce(Result.ok({ decryptedValue: '123garbage' }))
+    persisted.lastSuccessAt = { exists: true, value: String(nowMs + 60 * 60 * 1_000) }
     expect(await createStore().readLastSuccessAt(userUuid)).toEqual({ status: 'unavailable' })
   })
 
-  it('uses sensitive retrieval for private lifecycle state and ordinary retrieval for LAST_RUN', async () => {
-    await createStore().readDeliveryState(userUuid)
-    await createStore().readLastSuccessAt(userUuid)
+  it('writes delivery state and LAST_RUN in one repository transaction', async () => {
+    const state = {
+      ...emptyNextcloudBackupDeliveryState(),
+      completed: [
+        {
+          requestUuid: '00000000-0000-0000-0000-000000000002',
+          outcome: 'succeeded' as const,
+          completedAt: nowMs,
+        },
+      ],
+    }
 
-    expect(getSetting.execute).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        settingName: SettingName.NAMES.NextcloudBackupDeliveryState,
-        allowSensitiveRetrieval: true,
-      }),
-    )
-    expect(getSetting.execute).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        settingName: SettingName.NAMES.NextcloudBackupLastRun,
-        allowSensitiveRetrieval: false,
-      }),
-    )
-  })
+    const result = await createStore().runExclusive(userUuid, () => ({
+      result: 'committed',
+      deliveryState: state,
+      lastSuccessAt: nowMs,
+    }))
 
-  it('never logs setting-write values when persistence is rejected', async () => {
-    setSettingValue.execute.mockResolvedValue(Result.fail('contains secret-app-password'))
-
-    expect(await createStore().writeDeliveryState(userUuid, emptyNextcloudBackupDeliveryState())).toBe(false)
-    expect(JSON.stringify(logger.error.mock.calls)).not.toContain('secret-app-password')
+    expect(result).toEqual({ status: 'available', value: 'committed' })
+    expect(repository.runExclusive).toHaveBeenCalledTimes(1)
+    expect(persisted.deliveryState.value).toBe(JSON.stringify(state))
+    expect(persisted.lastSuccessAt.value).toBe(String(nowMs))
   })
 })
 

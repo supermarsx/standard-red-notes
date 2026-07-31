@@ -11,6 +11,7 @@ describe('Nextcloud backup event topology contract', () => {
   const authFactory = readRepositoryFile('server/packages/auth/src/Domain/Event/DomainEventFactory.ts')
   const syncingFactory = readRepositoryFile('server/packages/syncing-server/src/Domain/Event/DomainEventFactory.ts')
   const queueBootstrap = readRepositoryFile('server/docker/localstack_bootstrap.sh')
+  const dockerEntrypoint = readRepositoryFile('server/docker/docker-entrypoint.sh')
 
   it('registers exactly one request owner in syncing and one completion owner in auth', () => {
     expect(
@@ -47,8 +48,44 @@ describe('Nextcloud backup event topology contract', () => {
     expect(completionFactory).not.toMatch(/nextcloud(?:Url|Folder|AppPassword)/)
   })
 
-  it('links auth and syncing topics in both directions for standalone SNS/SQS deployment', () => {
+  it('keeps the legacy auth-to-syncing route during the rolling upgrade', () => {
     expect(count(queueBootstrap, 'link_queue_and_topic $SYNCING_SERVER_TOPIC_ARN $AUTH_QUEUE_ARN')).toBe(1)
     expect(count(queueBootstrap, 'link_queue_and_topic $AUTH_TOPIC_ARN $SYNCING_SERVER_QUEUE_ARN')).toBe(1)
+  })
+
+  it('publishes new credential-bearing requests through the dedicated publisher only', () => {
+    const triggerBinding = authContainer.slice(
+      authContainer.indexOf('new TriggerNextcloudBackupForUser('),
+      authContainer.indexOf('container.bind<TriggerNextcloudBackupForAllUsers>'),
+    )
+
+    expect(triggerBinding).toContain('TYPES.Auth_NextcloudBackupDomainEventPublisher')
+    expect(triggerBinding).not.toContain('TYPES.Auth_DomainEventPublisher')
+    expect(authContainer).toContain("env.get('NEXTCLOUD_BACKUP_SNS_TOPIC_ARN', true)")
+    expect(authContainer).toContain('new UnavailableNextcloudBackupDomainEventPublisher()')
+  })
+
+  it('subscribes the dedicated topic exactly once and only to the syncing queue', () => {
+    const dedicatedLinks = queueBootstrap
+      .split('\n')
+      .filter((line) => line.includes('link_queue_and_topic $NEXTCLOUD_BACKUP_TOPIC_ARN'))
+
+    expect(dedicatedLinks).toEqual([
+      'LINKING_RESULT=$(link_queue_and_topic $NEXTCLOUD_BACKUP_TOPIC_ARN $SYNCING_SERVER_QUEUE_ARN)',
+    ])
+    expect(queueBootstrap).not.toMatch(/NEXTCLOUD_BACKUP_TOPIC_ARN \$(?:AUTH|FILES|WEBSOCKET)_QUEUE_ARN/)
+    expect(dockerEntrypoint).toContain(
+      'AUTH_SERVER_NEXTCLOUD_BACKUP_SNS_TOPIC_ARN="arn:aws:sns:us-east-1:000000000000:nextcloud-backup-local-topic"',
+    )
+  })
+
+  it('uses SQS ARNs for queue subscription endpoints', () => {
+    const queueArnFunction = queueBootstrap.slice(
+      queueBootstrap.indexOf('get_queue_arn_from_name()'),
+      queueBootstrap.indexOf('get_topic_arn_from_name()'),
+    )
+
+    expect(queueArnFunction).toContain('arn:aws:sqs:')
+    expect(queueArnFunction).not.toContain('arn:aws:sns:')
   })
 })
