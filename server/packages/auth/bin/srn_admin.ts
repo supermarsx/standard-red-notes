@@ -377,7 +377,12 @@ async function cmdUser(args: ParsedArgs): Promise<number> {
 
   // Effective roles/permissions (direct + group-conferred).
   let effective:
-    | { directRoleNames: string[]; groupRoleNames: string[]; effectiveRoleNames: string[]; effectivePermissionNames: string[] }
+    | {
+        directRoleNames: string[]
+        groupRoleNames: string[]
+        effectiveRoleNames: string[]
+        effectivePermissionNames: string[]
+      }
     | undefined
   try {
     const getEffective = container.get<UseCase<{ userUuid: string }>>(TYPES.Auth_GetUserEffectivePermissions)
@@ -474,7 +479,9 @@ async function cmdUser(args: ParsedArgs): Promise<number> {
   if (row?.subscription) {
     outLine(`plan:     ${row.subscription.plan ?? '-'} (${row.subscription.active ? 'active' : 'inactive'})`)
   }
-  outLine(`storage:  ${formatBytes(row?.storageUsedBytes ?? null)} used / ${formatBytes(row?.storageLimitBytes ?? null)} limit`)
+  outLine(
+    `storage:  ${formatBytes(row?.storageUsedBytes ?? null)} used / ${formatBytes(row?.storageLimitBytes ?? null)} limit`,
+  )
   outLine('')
   outLine(`direct roles:          ${directRoles.join(', ') || '(none)'}`)
   if (effective) {
@@ -518,7 +525,13 @@ async function cmdBan(args: ParsedArgs, banned: boolean): Promise<number> {
 
   const setUserBanStatus = container.get<
     UseCase<
-      { userUuid: string; banned: boolean; banReason: string | null; banType?: BanType | null; bannedUntil?: Date | null },
+      {
+        userUuid: string
+        banned: boolean
+        banReason: string | null
+        banType?: BanType | null
+        bannedUntil?: Date | null
+      },
       User
     >
   >(TYPES.Auth_SetUserBanStatus)
@@ -605,9 +618,7 @@ async function cmdDeleteUser(args: ParsedArgs): Promise<number> {
   // <user> can never delete the wrong account.
   const confirm = stringOption(args.options, 'confirm')
   if (typeof confirm !== 'string' || confirm.trim().toLowerCase() !== user.email.trim().toLowerCase()) {
-    throw new UsageError(
-      `refusing to delete: --confirm must equal the target email (${user.email}).`,
-    )
+    throw new UsageError(`refusing to delete: --confirm must equal the target email (${user.email}).`)
   }
 
   // Last-admin guard: refuse deleting the final administrator unless --force.
@@ -662,7 +673,12 @@ async function cmdResetMfa(args: ParsedArgs): Promise<number> {
     throw new Error(result.error?.message ?? `No 2FA configuration found for ${user.email}.`)
   }
 
-  await writeAudit(container, AuditAction.MfaReset, { type: 'user', uuid: user.uuid }, { name: SettingName.NAMES.MfaSecret })
+  await writeAudit(
+    container,
+    AuditAction.MfaReset,
+    { type: 'user', uuid: user.uuid },
+    { name: SettingName.NAMES.MfaSecret },
+  )
 
   outLine(`Cleared 2FA (and recovery codes) for ${user.email} (${user.uuid})`)
 
@@ -692,7 +708,11 @@ async function cmdFixQuota(args: ParsedArgs): Promise<number> {
  * ROLES
  * ------------------------------------------------------------------------- */
 
-async function cmdRolesMutate(identifier: string | undefined, roleNameRaw: string | undefined, grant: boolean): Promise<number> {
+async function cmdRolesMutate(
+  identifier: string | undefined,
+  roleNameRaw: string | undefined,
+  grant: boolean,
+): Promise<number> {
   if (!identifier || !roleNameRaw) {
     throw new UsageError(`roles ${grant ? 'grant' : 'revoke'} <user> <ROLE_NAME> — see 'srn-admin roles list'`)
   }
@@ -713,7 +733,12 @@ async function cmdRolesMutate(identifier: string | undefined, roleNameRaw: strin
     await roleService.removeRoleFromUser(userUuid, roleName)
   }
 
-  await writeAudit(container, AuditAction.RoleChanged, { type: 'user', uuid: user.uuid }, { role: roleName.value, granted: grant })
+  await writeAudit(
+    container,
+    AuditAction.RoleChanged,
+    { type: 'user', uuid: user.uuid },
+    { role: roleName.value, granted: grant },
+  )
 
   outLine(`${grant ? 'Granted' : 'Revoked'} ${roleName.value} ${grant ? 'to' : 'from'} ${user.email} (${user.uuid})`)
 
@@ -792,7 +817,9 @@ async function cmdFlagsSet(args: ParsedArgs, unset: boolean): Promise<number> {
   // The storage limit is a SUBSCRIPTION setting with a dedicated path.
   if (settingRaw.toUpperCase() === STORAGE_LIMIT_SETTING) {
     if (unset) {
-      throw new UsageError(`${STORAGE_LIMIT_SETTING} cannot be unset — use 'storage-limit set <user> <bytes|unlimited>'`)
+      throw new UsageError(
+        `${STORAGE_LIMIT_SETTING} cannot be unset — use 'storage-limit set <user> <bytes|unlimited>'`,
+      )
     }
 
     return setStorageLimit(identifier, valueRaw)
@@ -900,7 +927,9 @@ async function cmdStorageLimitGet(args: ParsedArgs): Promise<number> {
     return 0
   }
   outLine(`used:  ${formatBytes(info.used)}${info.used !== null ? ` (${info.used} bytes)` : ''}`)
-  outLine(`limit: ${formatBytes(info.limit)}${info.limit !== null && info.limit !== -1 ? ` (${info.limit} bytes)` : ''}`)
+  outLine(
+    `limit: ${formatBytes(info.limit)}${info.limit !== null && info.limit !== -1 ? ` (${info.limit} bytes)` : ''}`,
+  )
 
   return 0
 }
@@ -935,7 +964,12 @@ async function setStorageLimit(identifier: string, rawValue: string): Promise<nu
     }),
   )
 
-  await writeAudit(container, AuditAction.SettingChanged, { type: 'user', uuid: user.uuid }, { name: STORAGE_LIMIT_SETTING })
+  await writeAudit(
+    container,
+    AuditAction.SettingChanged,
+    { type: 'user', uuid: user.uuid },
+    { name: STORAGE_LIMIT_SETTING },
+  )
 
   outLine(
     `Set storage limit for ${user.email} to ${formatBytes(Number(parsed.value))}. New upload valet tokens honor it immediately; tokens issued earlier keep the old limit until they expire.`,
@@ -986,9 +1020,7 @@ async function resolveRegistrationPolicy(): Promise<{
  * overlay JSON (the same file the gateway admin surface writes). Atomic via a
  * tmp file + rename. Requires SERVER_SETTINGS_PATH to be configured.
  */
-async function updateRegistrationOverlay(
-  mutate: (registration: Record<string, unknown>) => void,
-): Promise<string> {
+async function updateRegistrationOverlay(mutate: (registration: Record<string, unknown>) => void): Promise<string> {
   const authEnv = await readPackageEnv('auth')
   const overlayPath = process.env.SERVER_SETTINGS_PATH ?? authEnv.SERVER_SETTINGS_PATH ?? undefined
   if (!overlayPath) {
@@ -1008,9 +1040,9 @@ async function updateRegistrationOverlay(
     data = {}
   }
 
-  const registration = (data.registration && typeof data.registration === 'object'
-    ? (data.registration as Record<string, unknown>)
-    : {}) as Record<string, unknown>
+  const registration = (
+    data.registration && typeof data.registration === 'object' ? (data.registration as Record<string, unknown>) : {}
+  ) as Record<string, unknown>
   mutate(registration)
   if (Object.keys(registration).length === 0) {
     delete data.registration
@@ -1037,7 +1069,9 @@ async function cmdRegistrationPolicy(args: ParsedArgs, action: string | undefine
     outLine('registration policy (effective — persisted overlay over env, then default):')
     outLine(`  default role for new users: ${effective.defaultRole}`)
     outLine(`  email-domain mode:          ${effective.domainMode}`)
-    outLine(`  email-domain list:          ${effective.domainList.length ? effective.domainList.join(', ') : '(empty)'}`)
+    outLine(
+      `  email-domain list:          ${effective.domainList.length ? effective.domainList.join(', ') : '(empty)'}`,
+    )
     outLine(`  email confirmation:         ${effective.emailConfirmationEnabled ? 'ENABLED' : 'disabled'}`)
     outLine(`  confirmation gating mode:   ${effective.emailConfirmationGating}`)
     outLine(
@@ -1111,7 +1145,9 @@ async function cmdRegistrationPolicy(args: ParsedArgs, action: string | undefine
       throw new UsageError('registration policy email-confirmation <on|off|clear>')
     }
     const file = await updateRegistrationOverlay((r) => (r.emailConfirmationEnabled = value === 'on'))
-    outLine(`email confirmation ${value === 'on' ? 'ENABLED' : 'disabled'}. Effective on the next signup. Wrote ${file}.`)
+    outLine(
+      `email confirmation ${value === 'on' ? 'ENABLED' : 'disabled'}. Effective on the next signup. Wrote ${file}.`,
+    )
 
     return 0
   }
@@ -1125,7 +1161,9 @@ async function cmdRegistrationPolicy(args: ParsedArgs, action: string | undefine
       return 0
     }
     if (!isEmailConfirmationGatingMode(mode)) {
-      throw new UsageError(`registration policy email-confirmation-gating <${EMAIL_CONFIRMATION_GATING_MODES.join('|')}|clear>`)
+      throw new UsageError(
+        `registration policy email-confirmation-gating <${EMAIL_CONFIRMATION_GATING_MODES.join('|')}|clear>`,
+      )
     }
     const file = await updateRegistrationOverlay((r) => (r.emailConfirmationGating = mode))
     outLine(`confirmation gating mode set to ${mode}. Wrote ${file}.`)
@@ -1177,8 +1215,15 @@ async function cmdRegistration(args: ParsedArgs, sub: string | undefined): Promi
     if (args.options.json === true) {
       outJson({
         registrationDisabled: effective,
-        env: { disableUserRegistration: envDisabled, note: 'read at boot; change requires editing the operator .env and restarting' },
-        persisted: { registrationDisabled: persistedDisabled, trueRows: persistedCount, note: 'runtime flag; toggle with registration enable|disable' },
+        env: {
+          disableUserRegistration: envDisabled,
+          note: 'read at boot; change requires editing the operator .env and restarting',
+        },
+        persisted: {
+          registrationDisabled: persistedDisabled,
+          trueRows: persistedCount,
+          note: 'runtime flag; toggle with registration enable|disable',
+        },
       })
 
       return 0
@@ -1190,7 +1235,9 @@ async function cmdRegistration(args: ParsedArgs, sub: string | undefined): Promi
       `  persisted runtime flag:        ${persistedDisabled ? `true (${persistedCount} REGISTRATION_DISABLED row(s))` : 'false'}`,
     )
     if (envDisabled) {
-      outLine("  NOTE: the env switch is on — 'registration enable' alone cannot re-open signups; edit the operator .env and restart.")
+      outLine(
+        "  NOTE: the env switch is on — 'registration enable' alone cannot re-open signups; edit the operator .env and restart.",
+      )
     }
 
     return 0
@@ -1232,11 +1279,18 @@ async function cmdRegistration(args: ParsedArgs, sub: string | undefined): Promi
       }),
     )
 
-    await writeAudit(container, AuditAction.SettingChanged, { type: 'user', uuid: target.uuid }, {
-      name: SettingName.NAMES.RegistrationDisabled,
-    })
+    await writeAudit(
+      container,
+      AuditAction.SettingChanged,
+      { type: 'user', uuid: target.uuid },
+      {
+        name: SettingName.NAMES.RegistrationDisabled,
+      },
+    )
 
-    outLine(`Registration DISABLED (persisted flag written to ${target.email}). Effective immediately — no restart needed.`)
+    outLine(
+      `Registration DISABLED (persisted flag written to ${target.email}). Effective immediately — no restart needed.`,
+    )
 
     return 0
   }
@@ -1270,16 +1324,23 @@ async function cmdRegistration(args: ParsedArgs, sub: string | undefined): Promi
       }
     }
 
-    await writeAudit(container, AuditAction.SettingChanged, { type: 'user', uuid: null }, {
-      name: SettingName.NAMES.RegistrationDisabled,
-      clearedRows: cleared,
-    })
+    await writeAudit(
+      container,
+      AuditAction.SettingChanged,
+      { type: 'user', uuid: null },
+      {
+        name: SettingName.NAMES.RegistrationDisabled,
+        clearedRows: cleared,
+      },
+    )
 
     const authEnv = await readPackageEnv('auth')
     const envDisabled = (process.env.DISABLE_USER_REGISTRATION ?? authEnv.DISABLE_USER_REGISTRATION) === 'true'
     outLine(`Registration persisted flag cleared (${cleared} row(s) set to 'false').`)
     if (envDisabled) {
-      outLine('WARNING: env DISABLE_USER_REGISTRATION is still true — signups remain blocked until you change the operator .env and restart.')
+      outLine(
+        'WARNING: env DISABLE_USER_REGISTRATION is still true — signups remain blocked until you change the operator .env and restart.',
+      )
     }
 
     return 0
@@ -1302,11 +1363,16 @@ async function cmdRegistration(args: ParsedArgs, sub: string | undefined): Promi
     user.emailConfirmedAt = new Date()
     await userRepository.save(user)
 
-    await writeAudit(container, AuditAction.SettingChanged, { type: 'user', uuid: user.uuid }, {
-      name: 'email_confirmed',
-      value: 'true',
-      via: 'cli',
-    })
+    await writeAudit(
+      container,
+      AuditAction.SettingChanged,
+      { type: 'user', uuid: user.uuid },
+      {
+        name: 'email_confirmed',
+        value: 'true',
+        via: 'cli',
+      },
+    )
 
     outLine(`Marked ${user.email} email-confirmed. They can now sign in.`)
 
@@ -1518,11 +1584,16 @@ async function cmdIp(args: ParsedArgs, sub: string | undefined): Promise<number>
     await redis.srem(key, validated.value)
   }
 
-  await writeAudit(container, 'admin.anti-abuse.ip-list', { type: 'ip', uuid: null }, {
-    list: action.list,
-    action: action.add ? 'add' : 'remove',
-    entry: validated.value,
-  })
+  await writeAudit(
+    container,
+    'admin.anti-abuse.ip-list',
+    { type: 'ip', uuid: null },
+    {
+      list: action.list,
+      action: action.add ? 'add' : 'remove',
+      entry: validated.value,
+    },
+  )
 
   outLine(
     `${action.add ? 'Added' : 'Removed'} ${validated.value} ${action.add ? 'to' : 'from'} the ${action.list} list. Effective within a few seconds (the gateway caches the list briefly).`,
@@ -1586,7 +1657,10 @@ async function cmdLimits(args: ParsedArgs): Promise<number> {
   const enabled =
     typeof persisted.enabled === 'boolean'
       ? { value: persisted.enabled, source: 'persisted' }
-      : { value: (process.env.API_GATEWAY_RATE_LIMIT_ENABLED ?? gatewayEnv.RATE_LIMIT_ENABLED) !== 'false', source: 'env/default' }
+      : {
+          value: (process.env.API_GATEWAY_RATE_LIMIT_ENABLED ?? gatewayEnv.RATE_LIMIT_ENABLED) !== 'false',
+          source: 'env/default',
+        }
   const userMax = num('userMax', 0)
   const adaptive =
     typeof persisted.adaptiveEscalation === 'boolean'
@@ -1672,10 +1746,7 @@ async function cmdLimits(args: ParsedArgs): Promise<number> {
  * JSON (e.g. 'ocr', 'workflows'). Atomic via tmp + rename. Prunes the section
  * when it empties. Requires SERVER_SETTINGS_PATH to be configured.
  */
-async function updateOverlaySection(
-  section: string,
-  mutate: (obj: Record<string, unknown>) => void,
-): Promise<string> {
+async function updateOverlaySection(section: string, mutate: (obj: Record<string, unknown>) => void): Promise<string> {
   const authEnv = await readPackageEnv('auth')
   const overlayPath = process.env.SERVER_SETTINGS_PATH ?? authEnv.SERVER_SETTINGS_PATH ?? undefined
   if (!overlayPath) {
@@ -1695,9 +1766,9 @@ async function updateOverlaySection(
     data = {}
   }
 
-  const current = (data[section] && typeof data[section] === 'object'
-    ? (data[section] as Record<string, unknown>)
-    : {}) as Record<string, unknown>
+  const current = (
+    data[section] && typeof data[section] === 'object' ? (data[section] as Record<string, unknown>) : {}
+  ) as Record<string, unknown>
   mutate(current)
   if (Object.keys(current).length === 0) {
     delete data[section]
@@ -1714,7 +1785,9 @@ async function updateOverlaySection(
 }
 
 /** Read a top-level overlay section (never throws — missing/corrupt → {}). */
-async function readOverlaySection(section: string): Promise<{ persisted: Record<string, unknown>; overlayPath: string | undefined }> {
+async function readOverlaySection(
+  section: string,
+): Promise<{ persisted: Record<string, unknown>; overlayPath: string | undefined }> {
   const authEnv = await readPackageEnv('auth')
   const overlayPath = process.env.SERVER_SETTINGS_PATH ?? authEnv.SERVER_SETTINGS_PATH ?? undefined
   let persisted: Record<string, unknown> = {}
@@ -1826,8 +1899,12 @@ async function cmdOcr(args: ParsedArgs, action: string | undefined): Promise<num
     outLine(`  server default language:  ${defaultLanguage.value} [${defaultLanguage.source}]  (runtime)`)
     outLine(`  server max pages:         ${maxPages.value} [${maxPages.source}]  (runtime)`)
     outLine(`  server max image bytes:   ${maxImageBytes.value} [${maxImageBytes.source}]  (runtime)`)
-    outLine(`  browser (on-device) OCR:  ${clientEnabled.value ? 'on' : 'off'} [${clientEnabled.source}]  (applies on next page load)`)
-    outLine(`  browser default language: ${clientDefaultLanguage.value} [${clientDefaultLanguage.source}]  (applies on next page load)`)
+    outLine(
+      `  browser (on-device) OCR:  ${clientEnabled.value ? 'on' : 'off'} [${clientEnabled.source}]  (applies on next page load)`,
+    )
+    outLine(
+      `  browser default language: ${clientDefaultLanguage.value} [${clientDefaultLanguage.source}]  (applies on next page load)`,
+    )
     outLine(`  overlay file: ${overlayPath ?? '(SERVER_SETTINGS_PATH unset — env/default only)'}`)
 
     return 0
@@ -1842,7 +1919,9 @@ async function cmdOcr(args: ParsedArgs, action: string | undefined): Promise<num
       throw new UsageError(`ocr ${action} <on|off|clear>`)
     }
     const file = await updateOverlaySection('ocr', (o) => (parsed === null ? delete o[key] : (o[key] = parsed)))
-    outLine(`ocr.${key} ${parsed === null ? 'cleared (falls back to env/default)' : parsed ? 'enabled' : 'disabled'}. Wrote ${file}.`)
+    outLine(
+      `ocr.${key} ${parsed === null ? 'cleared (falls back to env/default)' : parsed ? 'enabled' : 'disabled'}. Wrote ${file}.`,
+    )
 
     return 0
   }
@@ -2182,7 +2261,13 @@ async function cmdPlugins(args: ParsedArgs, action: string | undefined): Promise
  * WEBHOOKS
  * ------------------------------------------------------------------------- */
 
-function webhookToRow(webhook: Webhook): { uuid: string; scope: string; enabled: boolean; events: string[]; targetUrl: string } {
+function webhookToRow(webhook: Webhook): {
+  uuid: string
+  scope: string
+  enabled: boolean
+  events: string[]
+  targetUrl: string
+} {
   return {
     uuid: webhook.id.toString(),
     scope: webhook.props.userUuid === null ? 'global' : webhook.props.userUuid,
@@ -2232,7 +2317,7 @@ async function cmdWebhooks(args: ParsedArgs, sub: string | undefined): Promise<n
   if (sub === 'create') {
     const [targetUrl, eventsCsv] = args.positionals
     if (!targetUrl || !eventsCsv) {
-      throw new UsageError('webhooks create <url> <event,event> [--user <user>] — see \'srn-admin help webhooks\'')
+      throw new UsageError("webhooks create <url> <event,event> [--user <user>] — see 'srn-admin help webhooks'")
     }
     const events = eventsCsv
       .split(',')
@@ -2260,10 +2345,15 @@ async function cmdWebhooks(args: ParsedArgs, sub: string | undefined): Promise<n
       }),
     )
 
-    await writeAudit(container, AuditAction.WebhookCreated, { type: 'webhook', uuid: created.uuid }, {
-      global: scopedUser === null,
-      events,
-    })
+    await writeAudit(
+      container,
+      AuditAction.WebhookCreated,
+      { type: 'webhook', uuid: created.uuid },
+      {
+        global: scopedUser === null,
+        events,
+      },
+    )
 
     outLine(`Created ${scopedUser === null ? 'GLOBAL' : `user-scoped (${scopedUser.email})`} webhook ${created.uuid}`)
     outLine(`  target: ${created.targetUrl}`)
@@ -2428,7 +2518,11 @@ async function cmdStatus(args: ParsedArgs): Promise<number> {
     chip(probe.status),
     probe.name,
     `:${probe.port}`,
-    probe.checks ? Object.entries(probe.checks).map(([key, ok]) => `${key}:${ok ? 'ok' : 'FAIL'}`).join(' ') : (probe.detail ?? ''),
+    probe.checks
+      ? Object.entries(probe.checks)
+          .map(([key, ok]) => `${key}:${ok ? 'ok' : 'FAIL'}`)
+          .join(' ')
+      : (probe.detail ?? ''),
   ])
   const dependencyRow = (label: string, host: string | undefined, reachable: boolean | null): string[] => [
     reachable === null ? '[ ?? ]' : reachable ? '[ OK ]' : '[DOWN]',
@@ -2440,7 +2534,9 @@ async function cmdStatus(args: ParsedArgs): Promise<number> {
   rows.push(dependencyRow('redis', redisHost, redisReachable))
 
   outLine(formatTable(['STATE', 'SERVICE', 'ADDR', 'DETAIL'], rows))
-  outLine('\nWorker processes (auth-worker, files-worker, ...) expose no health port — see: srn-admin logs --service auth-worker')
+  outLine(
+    '\nWorker processes (auth-worker, files-worker, ...) expose no health port — see: srn-admin logs --service auth-worker',
+  )
 
   return 0
 }
@@ -2506,7 +2602,8 @@ async function cmdConfig(args: ParsedArgs): Promise<number> {
       honesty: {
         envValues:
           'every env above is read at BOOT and is read-only from this CLI — change it in the operator .env (compose level) and restart the stack',
-        runtimeSettable: "only the persisted registration gate is runtime-settable: 'srn-admin registration enable|disable'",
+        runtimeSettable:
+          "only the persisted registration gate is runtime-settable: 'srn-admin registration enable|disable'",
       },
     })
 
@@ -2662,7 +2759,9 @@ async function cmdGroup(args: string[]): Promise<number> {
       const symbol = sub === 'add-user' ? TYPES.Auth_AddUserToGroup : TYPES.Auth_RemoveUserFromGroup
       const useCase = container.get<UseCase<{ groupUuid: string; userUuid: string }>>(symbol)
       requireResult(await useCase.execute({ groupUuid, userUuid: user.uuid }))
-      outLine(`${sub === 'add-user' ? 'Added' : 'Removed'} ${identifier} ${sub === 'add-user' ? 'to' : 'from'} group ${groupUuid}`)
+      outLine(
+        `${sub === 'add-user' ? 'Added' : 'Removed'} ${identifier} ${sub === 'add-user' ? 'to' : 'from'} group ${groupUuid}`,
+      )
 
       return 0
     }
