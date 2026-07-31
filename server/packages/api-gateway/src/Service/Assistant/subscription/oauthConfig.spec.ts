@@ -1,4 +1,4 @@
-import { buildAuthorizeUrl, buildDefaultOAuthConfig } from './oauthConfig'
+import { assertSafeOAuthConfig, buildAuthorizeUrl, buildDefaultOAuthConfig, parseSafeOAuthUrl } from './oauthConfig'
 
 /** Builds an env accessor over a plain object (undefined for absent keys). */
 function envFrom(values: Record<string, string>): (key: string) => string | undefined {
@@ -14,7 +14,6 @@ describe('buildDefaultOAuthConfig', () => {
     expect(config.clientId).toBe('app_EMoamEEZ73f0CkXaXp7hrann')
     expect(config.scopes).toBe('openid profile email offline_access')
     expect(config.accountIdClaimPath).toBe('https://api.openai.com/auth.chatgpt_account_id')
-    expect(config.revokeUrl).toBeUndefined()
   })
 
   it('derives the redirect URI from PUBLIC_URL', () => {
@@ -26,6 +25,14 @@ describe('buildDefaultOAuthConfig', () => {
     expect(buildDefaultOAuthConfig(envFrom({})).redirectUri).toBe('')
   })
 
+  it('fails closed before authorization when PUBLIC_URL and the explicit redirect are both absent', () => {
+    const config = buildDefaultOAuthConfig(envFrom({}))
+
+    expect(() => buildAuthorizeUrl(config, { state: 'state', codeChallenge: 'challenge' })).toThrow(
+      /OAuth redirect URI/,
+    )
+  })
+
   it('lets every value be overridden via env', () => {
     const config = buildDefaultOAuthConfig(
       envFrom({
@@ -35,7 +42,6 @@ describe('buildDefaultOAuthConfig', () => {
         ASSISTANT_CHATGPT_OAUTH_REDIRECT_URI: 'http://localhost:1455/auth/callback',
         ASSISTANT_CHATGPT_OAUTH_SCOPES: 'openid',
         ASSISTANT_CHATGPT_OAUTH_ACCOUNT_ID_CLAIM: 'account_id',
-        ASSISTANT_CHATGPT_OAUTH_REVOKE_URL: 'https://id.local/revoke',
         PUBLIC_URL: 'https://ignored.example',
       }),
     )
@@ -46,7 +52,6 @@ describe('buildDefaultOAuthConfig', () => {
     expect(config.redirectUri).toBe('http://localhost:1455/auth/callback')
     expect(config.scopes).toBe('openid')
     expect(config.accountIdClaimPath).toBe('account_id')
-    expect(config.revokeUrl).toBe('https://id.local/revoke')
   })
 })
 
@@ -63,5 +68,48 @@ describe('buildAuthorizeUrl', () => {
     expect(url.searchParams.get('code_challenge')).toBe('chal-abc')
     expect(url.searchParams.get('code_challenge_method')).toBe('S256')
     expect(url.searchParams.get('state')).toBe('st-123')
+  })
+
+  it('rejects configured endpoint/redirect query strings so configured secrets cannot enter request logs', () => {
+    const base = buildDefaultOAuthConfig(envFrom({ PUBLIC_URL: 'https://notes.example.test' }))
+    for (const field of ['authorizeUrl', 'tokenUrl', 'redirectUri'] as const) {
+      expect(() => assertSafeOAuthConfig({ ...base, [field]: `${base[field]}?secret=sentinel` })).toThrow(
+        /query parameters/,
+      )
+    }
+  })
+
+  it('rejects credentials, fragments, active schemes, and non-loopback plain HTTP', () => {
+    expect(() => parseSafeOAuthUrl('javascript:alert(1)', 'endpoint')).toThrow()
+    expect(() => parseSafeOAuthUrl('https://user:pass@id.test/oauth', 'endpoint')).toThrow()
+    expect(() => parseSafeOAuthUrl('https://id.test/oauth#fragment', 'endpoint')).toThrow()
+    expect(() => parseSafeOAuthUrl('https://id.test/oauth#', 'endpoint')).toThrow()
+    expect(() => parseSafeOAuthUrl('https://id.test/oauth?', 'endpoint')).toThrow()
+    expect(() => parseSafeOAuthUrl('http://id.test/oauth', 'endpoint')).toThrow()
+    for (const raw of [
+      'http://2130706433/oauth',
+      'http://0x7f000001/oauth',
+      'http://0177.0.0.1/oauth',
+      'http://0x7f.0.0.1/oauth',
+      'http://127.1/oauth',
+      'http://127.0.1/oauth',
+    ]) {
+      expect(() => parseSafeOAuthUrl(raw, 'endpoint')).toThrow()
+    }
+    for (const raw of ['http://localhost:1455/oauth', 'http://127.0.0.1:1455/oauth', 'http://[::1]:1455/oauth']) {
+      expect(parseSafeOAuthUrl(raw, 'endpoint')).toBeInstanceOf(URL)
+    }
+  })
+
+  it.each([
+    ' https://id.test/oauth',
+    'https://id.test/oauth ',
+    'https://id.test/\toauth',
+    String.raw`https:\\id.test\oauth`,
+    String.raw`https://trusted.test\@evil.test/oauth`,
+    'https://trusted.test@evil.test/oauth',
+    'https://id.test/oauth\u202e',
+  ])('rejects raw URL syntax that parsers could normalize deceptively: %s', (raw) => {
+    expect(() => parseSafeOAuthUrl(raw, 'endpoint')).toThrow()
   })
 })

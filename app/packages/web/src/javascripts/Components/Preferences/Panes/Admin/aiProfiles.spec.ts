@@ -19,6 +19,7 @@ const baseRow = (overrides: Partial<ProfileRow> = {}): ProfileRow => ({
   models: [],
   enabled: true,
   keyConfigured: false,
+  legacyInlineCredentialIgnored: false,
   newKey: '',
   clearKey: false,
   backendProfileId: '',
@@ -36,6 +37,7 @@ describe('aiProfiles helpers', () => {
         model: 'gpt-4o',
         enabled: true,
         keyConfigured: true,
+        legacyInlineCredentialIgnored: false,
       }
       const row = maskedProfileToRow(masked)
       expect(row).toMatchObject({
@@ -98,6 +100,19 @@ describe('aiProfiles helpers', () => {
     it('sends null to clear when clearKey is set', () => {
       const payload = rowToPayload(baseRow({ keyConfigured: true, clearKey: true }))
       expect(payload.apiKey).toBeNull()
+    })
+    it('never serializes a subscription token into a profile payload', () => {
+      const payload = rowToPayload(
+        baseRow({
+          provider: 'codex-subscription',
+          newKey: 'LEGACY_PLAINTEXT_SUBSCRIPTION_SECRET',
+          keyConfigured: true,
+          clearKey: true,
+          legacyInlineCredentialIgnored: true,
+        }),
+      )
+      expect('apiKey' in payload).toBe(false)
+      expect(JSON.stringify(payload)).not.toContain('LEGACY_PLAINTEXT_SUBSCRIPTION_SECRET')
     })
     it('drops a base URL for providers that do not support one', () => {
       const payload = rowToPayload(baseRow({ provider: 'anthropic', baseUrl: '' }))

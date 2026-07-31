@@ -103,16 +103,22 @@ export const normalizeRateLimitPath = (path: string): string => {
 }
 
 /**
- * The default rule set: a login tier (login + recovery-login) and a stricter
- * "sensitive" tier (registration, MCP-token authenticate, magic-link request).
- * Paths are matched exactly against the normalized request path; only POST is
- * limited. Extend/retune via the limits passed in from the overlay/env.
+ * The default rule set: a login tier (login + recovery-login), a stricter
+ * "sensitive" tier (registration, MCP-token authenticate, magic-link request),
+ * and an exact GET rule for the public subscription OAuth callback. The callback
+ * gets its own bucket so random valid-looking state/code probes cannot consume
+ * login allowance; it reuses the more generous login ceiling to avoid disrupting
+ * legitimate provider redirects. Extend/retune via the overlay/env limits.
  */
 export const buildDefaultRateLimitRules = (limits: RateLimitLimits): RateLimitRule[] => {
   const postTo =
     (paths: string[]) =>
     (method: string, normalizedPath: string): boolean =>
       method.toUpperCase() === 'POST' && paths.includes(normalizedPath)
+  const getTo =
+    (paths: string[]) =>
+    (method: string, normalizedPath: string): boolean =>
+      method.toUpperCase() === 'GET' && paths.includes(normalizedPath)
 
   return [
     {
@@ -137,6 +143,12 @@ export const buildDefaultRateLimitRules = (limits: RateLimitLimits): RateLimitRu
         '/v1/mfa/magic-link/request',
         '/v1/users/email-confirmation/resend',
       ]),
+    },
+    {
+      bucket: 'assistant-pairing-callback',
+      limit: limits.loginMax,
+      windowSeconds: limits.windowSeconds,
+      match: getTo(['/v1/assistant/subscription/callback']),
     },
   ]
 }

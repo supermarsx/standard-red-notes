@@ -210,6 +210,43 @@ describe('validateProfilesPatch', () => {
 
       expect(result.profiles?.[0].apiKey).toBeUndefined()
     })
+
+    it('rejects inline subscription credentials and clears a legacy one when omitted or null', () => {
+      const legacy: PersistedAiProfile[] = [
+        {
+          id: 'p1',
+          name: 'Legacy subscription',
+          provider: 'codex-subscription',
+          enabled: true,
+          apiKey: 'LEGACY_PLAINTEXT_SUBSCRIPTION_SECRET',
+        },
+      ]
+      const subscription = (apiKey?: unknown) =>
+        validProfile({
+          provider: 'codex-subscription',
+          ...(apiKey === undefined ? {} : { apiKey }),
+        })
+
+      expect(errorOf(validateProfilesPatch([subscription('new-secret')], undefined, legacy))).toContain('cannot store')
+      expect(ok(validateProfilesPatch([subscription()], undefined, legacy)).profiles?.[0].apiKey).toBeUndefined()
+      expect(ok(validateProfilesPatch([subscription(null)], undefined, legacy)).profiles?.[0].apiKey).toBeUndefined()
+    })
+
+    it('does not carry a legacy subscription token across a provider change', () => {
+      const legacy: PersistedAiProfile[] = [
+        {
+          id: 'p1',
+          name: 'Legacy subscription',
+          provider: 'codex-subscription',
+          enabled: true,
+          apiKey: 'LEGACY_PLAINTEXT_SUBSCRIPTION_SECRET',
+        },
+      ]
+
+      expect(
+        ok(validateProfilesPatch([validProfile({ provider: 'anthropic' })], undefined, legacy)).profiles?.[0].apiKey,
+      ).toBeUndefined()
+    })
   })
 })
 

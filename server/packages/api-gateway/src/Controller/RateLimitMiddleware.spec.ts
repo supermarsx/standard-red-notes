@@ -84,7 +84,14 @@ describe('RateLimitMiddleware', () => {
       expect(matchesAny('POST', '/v1/mcp-tokens/authenticate')).toBe(true)
       expect(matchesAny('POST', '/v1/mfa/magic-link/request')).toBe(true)
     })
-    it('does not match authenticated/other paths or non-POST methods', () => {
+    it('matches only GET on the exact public subscription callback path', () => {
+      const callback = rules.find((rule) => rule.bucket === 'assistant-pairing-callback')
+      expect(callback?.limit).toBe(limits.loginMax)
+      expect(matchesAny('GET', '/v1/assistant/subscription/callback')).toBe(true)
+      expect(matchesAny('POST', '/v1/assistant/subscription/callback')).toBe(false)
+      expect(matchesAny('GET', '/v1/assistant/subscription/callback/extra')).toBe(false)
+    })
+    it('does not match authenticated/other paths or unrelated GET methods', () => {
       expect(matchesAny('POST', '/v1/items/sync')).toBe(false)
       expect(matchesAny('GET', '/v1/login')).toBe(false)
       expect(matchesAny('POST', '/v1/login-params')).toBe(false)

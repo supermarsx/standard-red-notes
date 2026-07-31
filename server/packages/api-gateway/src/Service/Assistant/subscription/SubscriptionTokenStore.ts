@@ -6,9 +6,16 @@ import {
   isBoundedString,
   isEpochMilliseconds,
   isJsonObject,
-  isSafeRecordKey,
   SecureJsonFileStore,
+  SecureJsonFileTransaction,
 } from '../../../Infra/SecureJsonFileStore'
+import {
+  isLegacyCompatibleSubscriptionId,
+  isValidAdminUuid,
+  isValidPairingState,
+  isValidPkceVerifier,
+  isValidSubscriptionId,
+} from './pairingValidation'
 
 /**
  * Encrypted, server-held storage for the single ChatGPT / Codex subscription
@@ -50,15 +57,30 @@ export interface SubscriptionTokenRecord {
    * used upstream while this is true.
    */
   needsRepair?: boolean
+  /** Stable, non-secret reason the operator must authorize again. */
+  needsRepairReason?: 'refresh-token-missing' | 'refresh-token-rejected'
+  /** Epoch ms before another transient refresh attempt should be made. */
+  refreshRetryAt?: number
+  /** Sanitized failure class; never an upstream response body or token. */
+  refreshFailureCode?: 'network' | 'rate-limited' | 'provider-unavailable' | 'provider-error'
+  /** Bounded counter used to calculate transient exponential backoff. */
+  refreshFailureCount?: number
 }
 
 /** Non-secret status view — NEVER contains a token. Safe to return in responses. */
 export interface SubscriptionStatus {
   paired: boolean
+  /** Read-compatible historical id that is intentionally unusable until removed. */
+  legacyInvalidId?: boolean
+  /** The encrypted envelope exists but could not be authenticated/decoded. */
+  storeUnreadable?: boolean
   accountId?: string
   accountLabel?: string
   expiresAt?: number
   needsRepair?: boolean
+  needsRepairReason?: SubscriptionTokenRecord['needsRepairReason']
+  refreshRetryAt?: number
+  refreshFailureCode?: SubscriptionTokenRecord['refreshFailureCode']
 }
 
 /** A status entry tagged with the paired-subscription id it belongs to. */
@@ -74,6 +96,31 @@ interface EncryptedEnvelope {
   data: string
 }
 
+/** Encrypted-at-rest pending OAuth state. Never returned through HTTP. */
+export interface PendingPairingRecord {
+  verifier: string
+  adminUuid: string
+  subscriptionId: string
+  expiresAt: number
+}
+
+/** Encrypted lease held only while an authorization code is exchanged. */
+interface PairingClaimRecord {
+  adminUuid: string
+  subscriptionId: string
+  expiresAt: number
+}
+
+export interface ClaimedPairing extends PendingPairingRecord {
+  claimId: string
+}
+
+interface DecryptedPayload {
+  records: Record<string, SubscriptionTokenRecord>
+  pendingPairings: Record<string, PendingPairingRecord>
+  pairingClaims: Record<string, PairingClaimRecord>
+}
+
 /**
  * The decrypted payload. Standard Red Notes: to hold MULTIPLE paired
  * subscriptions the payload is a map of id -> record. LEGACY files hold a bare
@@ -83,14 +130,21 @@ interface EncryptedEnvelope {
 const ALGORITHM = 'aes-256-gcm'
 const IV_BYTES = 12
 const MAX_SUBSCRIPTIONS = 1_000
-const MAX_SUBSCRIPTION_ID_LENGTH = 128
 const MAX_TOKEN_LENGTH = 256 * 1024
 const MAX_ACCOUNT_ID_LENGTH = 1_024
 const MAX_ACCOUNT_LABEL_LENGTH = 1_024
 const MAX_ENCRYPTED_DATA_HEX_LENGTH = 1024 * 1024
+export const MAX_PENDING_PAIRINGS = 256
+export const MAX_PENDING_PAIRINGS_PER_ADMIN = 16
+const MAX_PAIRING_CLAIMS = MAX_PENDING_PAIRINGS
+const MAX_REFRESH_FAILURE_COUNT = 32
 
 /** The reserved id of the first/legacy paired subscription credential. */
 export const DEFAULT_SUBSCRIPTION_ID = 'default'
+
+function isControlFreeBoundedString(value: unknown, minimumLength: number, maximumLength: number): value is string {
+  return isBoundedString(value, minimumLength, maximumLength) && !/[\u0000-\u001f\u007f]/.test(value)
+}
 
 function isEncryptedEnvelope(value: unknown): value is EncryptedEnvelope {
   return (
@@ -119,15 +173,33 @@ function isSubscriptionTokenRecord(value: unknown): value is SubscriptionTokenRe
       'accountLabel',
       'pairedAt',
       'needsRepair',
+      'needsRepairReason',
+      'refreshRetryAt',
+      'refreshFailureCode',
+      'refreshFailureCount',
     ]) &&
-    isBoundedString(value.accessToken, 1, MAX_TOKEN_LENGTH) &&
+    isControlFreeBoundedString(value.accessToken, 1, MAX_TOKEN_LENGTH) &&
     isEpochMilliseconds(value.expiresAt) &&
     isEpochMilliseconds(value.pairedAt) &&
-    (value.refreshToken === undefined || isBoundedString(value.refreshToken, 1, MAX_TOKEN_LENGTH)) &&
-    (value.idToken === undefined || isBoundedString(value.idToken, 1, MAX_TOKEN_LENGTH)) &&
-    (value.accountId === undefined || isBoundedString(value.accountId, 1, MAX_ACCOUNT_ID_LENGTH)) &&
-    (value.accountLabel === undefined || isBoundedString(value.accountLabel, 1, MAX_ACCOUNT_LABEL_LENGTH)) &&
-    (value.needsRepair === undefined || typeof value.needsRepair === 'boolean')
+    (value.refreshToken === undefined || isControlFreeBoundedString(value.refreshToken, 1, MAX_TOKEN_LENGTH)) &&
+    (value.idToken === undefined || isControlFreeBoundedString(value.idToken, 1, MAX_TOKEN_LENGTH)) &&
+    (value.accountId === undefined || isControlFreeBoundedString(value.accountId, 1, MAX_ACCOUNT_ID_LENGTH)) &&
+    (value.accountLabel === undefined || isControlFreeBoundedString(value.accountLabel, 1, MAX_ACCOUNT_LABEL_LENGTH)) &&
+    (value.needsRepair === undefined || typeof value.needsRepair === 'boolean') &&
+    (value.needsRepairReason === undefined ||
+      value.needsRepairReason === 'refresh-token-missing' ||
+      value.needsRepairReason === 'refresh-token-rejected') &&
+    (value.refreshRetryAt === undefined || isEpochMilliseconds(value.refreshRetryAt)) &&
+    (value.refreshFailureCode === undefined ||
+      value.refreshFailureCode === 'network' ||
+      value.refreshFailureCode === 'rate-limited' ||
+      value.refreshFailureCode === 'provider-unavailable' ||
+      value.refreshFailureCode === 'provider-error') &&
+    (value.refreshFailureCount === undefined ||
+      (typeof value.refreshFailureCount === 'number' &&
+        Number.isSafeInteger(value.refreshFailureCount) &&
+        value.refreshFailureCount >= 1 &&
+        value.refreshFailureCount <= MAX_REFRESH_FAILURE_COUNT))
   )
 }
 
@@ -138,9 +210,7 @@ function isSubscriptionRecordMap(value: unknown): value is Record<string, Subscr
   const entries = Object.entries(value)
   return (
     entries.length <= MAX_SUBSCRIPTIONS &&
-    entries.every(
-      ([id, record]) => isSafeRecordKey(id, MAX_SUBSCRIPTION_ID_LENGTH) && isSubscriptionTokenRecord(record),
-    )
+    entries.every(([id, record]) => isLegacyCompatibleSubscriptionId(id) && isSubscriptionTokenRecord(record))
   )
 }
 
@@ -150,6 +220,63 @@ function copyRecordMap(records: Record<string, SubscriptionTokenRecord>): Record
     copy[id] = record
   }
   return copy
+}
+
+function isPendingPairingRecord(value: unknown): value is PendingPairingRecord {
+  return (
+    hasOnlyKeys(value, ['verifier', 'adminUuid', 'subscriptionId', 'expiresAt']) &&
+    isValidPkceVerifier(value.verifier) &&
+    isValidAdminUuid(value.adminUuid) &&
+    isValidSubscriptionId(value.subscriptionId) &&
+    isEpochMilliseconds(value.expiresAt)
+  )
+}
+
+function isPairingClaimRecord(value: unknown): value is PairingClaimRecord {
+  return (
+    hasOnlyKeys(value, ['adminUuid', 'subscriptionId', 'expiresAt']) &&
+    isValidAdminUuid(value.adminUuid) &&
+    isValidSubscriptionId(value.subscriptionId) &&
+    isEpochMilliseconds(value.expiresAt)
+  )
+}
+
+function isPendingPairingMap(value: unknown): value is Record<string, PendingPairingRecord> {
+  if (!isJsonObject(value)) {
+    return false
+  }
+  const entries = Object.entries(value)
+  return (
+    entries.length <= MAX_PENDING_PAIRINGS &&
+    entries.every(([state, pending]) => isValidPairingState(state) && isPendingPairingRecord(pending))
+  )
+}
+
+function isPairingClaimMap(value: unknown): value is Record<string, PairingClaimRecord> {
+  if (!isJsonObject(value)) {
+    return false
+  }
+  const entries = Object.entries(value)
+  return (
+    entries.length <= MAX_PAIRING_CLAIMS &&
+    entries.every(([claimId, claim]) => isValidPairingState(claimId) && isPairingClaimRecord(claim))
+  )
+}
+
+function copyMap<T>(records: Record<string, T>): Record<string, T> {
+  const copy = Object.create(null) as Record<string, T>
+  for (const [id, record] of Object.entries(records)) {
+    copy[id] = record
+  }
+  return copy
+}
+
+function emptyPayload(): DecryptedPayload {
+  return {
+    records: Object.create(null) as Record<string, SubscriptionTokenRecord>,
+    pendingPairings: Object.create(null) as Record<string, PendingPairingRecord>,
+    pairingClaims: Object.create(null) as Record<string, PairingClaimRecord>,
+  }
 }
 
 @injectable()
@@ -195,14 +322,14 @@ export class SubscriptionTokenStore {
 
   /** Non-secret status for the DEFAULT subscription. Never returns a token. */
   async getStatus(id: string = DEFAULT_SUBSCRIPTION_ID): Promise<SubscriptionStatus> {
-    if (!isSafeRecordKey(id, MAX_SUBSCRIPTION_ID_LENGTH)) {
+    if (!isValidSubscriptionId(id)) {
       return { paired: false }
     }
     let records: Record<string, SubscriptionTokenRecord>
     try {
       records = await this.loadAll()
     } catch {
-      return { paired: true, needsRepair: true }
+      return { paired: false, needsRepair: true, storeUnreadable: true }
     }
     return this.statusOf(records[id])
   }
@@ -213,7 +340,7 @@ export class SubscriptionTokenStore {
 
   /** Encrypts and persists a record under an explicit subscription id. */
   async saveRecord(id: string, record: SubscriptionTokenRecord): Promise<void> {
-    if (!isSafeRecordKey(id, MAX_SUBSCRIPTION_ID_LENGTH)) {
+    if (!isValidSubscriptionId(id)) {
       throw new Error('Refusing to store a subscription credential under an invalid id.')
     }
     if (!isSubscriptionTokenRecord(record)) {
@@ -221,16 +348,72 @@ export class SubscriptionTokenStore {
     }
     const key = this.requireKey()
     await this.store.runExclusive(async (transaction) => {
-      const records = this.recordsFromEnvelope(await transaction.read())
-      records[id] = record
-      const envelope = this.encrypt({ records }, key)
-      await transaction.write(envelope)
+      const payload = this.payloadFromEnvelope(await transaction.read())
+      payload.records[id] = record
+      await this.writePayload(transaction, payload, key)
+    })
+  }
+
+  /**
+   * Compare-and-swap a record under the secure-file lock. Refresh losers cannot
+   * overwrite a token rotated (or re-paired) by another process.
+   */
+  async replaceRecordIfUnchanged(
+    id: string,
+    expected: SubscriptionTokenRecord,
+    replacement: SubscriptionTokenRecord,
+  ): Promise<boolean> {
+    if (!isValidSubscriptionId(id) || !isSubscriptionTokenRecord(expected) || !isSubscriptionTokenRecord(replacement)) {
+      throw new Error('Refusing an invalid subscription credential compare-and-swap.')
+    }
+    const key = this.requireKey()
+    return this.store.runExclusive(async (transaction) => {
+      const payload = this.payloadFromEnvelope(await transaction.read())
+      const current = payload.records[id]
+      if (!current || !this.sameRecordVersion(current, expected)) {
+        return false
+      }
+      payload.records[id] = replacement
+      await this.writePayload(transaction, payload, key)
+      return true
+    })
+  }
+
+  /**
+   * Commit a successful token rotation when the credential generation is still
+   * the one that was refreshed. A competing process may have recorded only
+   * repair/backoff metadata for that same generation; successful rotation is
+   * authoritative over those failure annotations. Re-pairing, unpairing, or a
+   * different token/account generation still blocks the write.
+   */
+  async replaceRecordAfterSuccessfulRefresh(
+    id: string,
+    expectedGeneration: SubscriptionTokenRecord,
+    replacement: SubscriptionTokenRecord,
+  ): Promise<boolean> {
+    if (
+      !isValidSubscriptionId(id) ||
+      !isSubscriptionTokenRecord(expectedGeneration) ||
+      !isSubscriptionTokenRecord(replacement)
+    ) {
+      throw new Error('Refusing an invalid successful-refresh compare-and-swap.')
+    }
+    const key = this.requireKey()
+    return this.store.runExclusive(async (transaction) => {
+      const payload = this.payloadFromEnvelope(await transaction.read())
+      const current = payload.records[id]
+      if (!current || !this.sameCredentialGeneration(current, expectedGeneration)) {
+        return false
+      }
+      payload.records[id] = replacement
+      await this.writePayload(transaction, payload, key)
+      return true
     })
   }
 
   /** Returns one record by id, or null. Throws (fail closed) on decrypt failure. */
   async loadRecord(id: string = DEFAULT_SUBSCRIPTION_ID): Promise<SubscriptionTokenRecord | null> {
-    if (!isSafeRecordKey(id, MAX_SUBSCRIPTION_ID_LENGTH)) {
+    if (!isValidSubscriptionId(id)) {
       return null
     }
     const records = await this.loadAll()
@@ -243,48 +426,210 @@ export class SubscriptionTokenStore {
   }
 
   /**
-   * Removes ONE record by id. When it was the last one the file is deleted.
-   * Best-effort: a missing store is a no-op.
+   * Persist a pending PKCE state inside the encrypted credential envelope.
+   * Starting a newer attempt for the same target invalidates pending and
+   * in-flight older attempts, preventing a late code exchange from overwriting
+   * the newer pairing.
    */
-  async removeRecord(id: string): Promise<void> {
-    if (!isSafeRecordKey(id, MAX_SUBSCRIPTION_ID_LENGTH)) {
-      return
+  async putPendingPairing(
+    state: string,
+    pending: PendingPairingRecord,
+    now: number,
+    maximumTotal: number = MAX_PENDING_PAIRINGS,
+    maximumPerAdmin: number = MAX_PENDING_PAIRINGS_PER_ADMIN,
+  ): Promise<void> {
+    if (
+      !isValidPairingState(state) ||
+      !isPendingPairingRecord(pending) ||
+      !isEpochMilliseconds(now) ||
+      !Number.isSafeInteger(maximumTotal) ||
+      maximumTotal < 1 ||
+      maximumTotal > MAX_PENDING_PAIRINGS ||
+      !Number.isSafeInteger(maximumPerAdmin) ||
+      maximumPerAdmin < 1 ||
+      maximumPerAdmin > MAX_PENDING_PAIRINGS_PER_ADMIN
+    ) {
+      throw new Error('Refusing to store invalid pending pairing state.')
     }
     const key = this.requireKey()
     await this.store.runExclusive(async (transaction) => {
-      let records: Record<string, SubscriptionTokenRecord>
-      try {
-        records = this.recordsFromEnvelope(await transaction.read())
-      } catch {
-        // Undecryptable store — clearing one id is meaningless; drop the file.
-        await transaction.delete()
-        return
+      const payload = this.payloadFromEnvelope(await transaction.read())
+      this.prunePairingLifecycle(payload, now)
+
+      for (const [existingState, entry] of Object.entries(payload.pendingPairings)) {
+        if (entry.subscriptionId === pending.subscriptionId) {
+          delete payload.pendingPairings[existingState]
+        }
       }
-      if (!(id in records)) {
-        return
+      for (const [claimId, claim] of Object.entries(payload.pairingClaims)) {
+        if (claim.subscriptionId === pending.subscriptionId) {
+          delete payload.pairingClaims[claimId]
+        }
       }
-      delete records[id]
-      if (Object.keys(records).length === 0) {
-        await transaction.delete()
-        return
+
+      const adminCount =
+        Object.values(payload.pendingPairings).filter((entry) => entry.adminUuid === pending.adminUuid).length +
+        Object.values(payload.pairingClaims).filter((entry) => entry.adminUuid === pending.adminUuid).length
+      if (adminCount >= maximumPerAdmin) {
+        throw new Error('This administrator already has the maximum number of pending pairing attempts.')
       }
-      const envelope = this.encrypt({ records }, key)
-      await transaction.write(envelope)
+      if (Object.keys(payload.pendingPairings).length + Object.keys(payload.pairingClaims).length >= maximumTotal) {
+        throw new Error('The server has reached the bounded pending-pairing limit. Retry after an attempt expires.')
+      }
+
+      payload.pendingPairings[state] = pending
+      await this.writePayload(transaction, payload, key)
     })
   }
 
   /**
-   * Non-secret status for EVERY paired subscription. Never returns a token. On a
-   * decrypt failure reports a single needs-repair entry so the UI can prompt.
+   * Atomically consume a state and replace it with a short encrypted claim
+   * lease. The lease prevents a concurrent callback from exchanging the same
+   * code and lets unpair/newer-pairing operations invalidate an exchange that is
+   * still in flight.
+   */
+  async claimPendingPairing(
+    state: string,
+    expectedAdminUuid: string | undefined,
+    now: number,
+    claimTtlMs: number,
+  ): Promise<ClaimedPairing | null> {
+    if (
+      !isValidPairingState(state) ||
+      (expectedAdminUuid !== undefined && !isValidAdminUuid(expectedAdminUuid)) ||
+      !isEpochMilliseconds(now) ||
+      !Number.isSafeInteger(claimTtlMs) ||
+      claimTtlMs <= 0
+    ) {
+      return null
+    }
+    const key = this.requireKey()
+    return this.store.runExclusive(async (transaction) => {
+      const payload = this.payloadFromEnvelope(await transaction.read())
+      const pruned = this.prunePairingLifecycle(payload, now)
+      const pending = payload.pendingPairings[state]
+      if (!pending || (expectedAdminUuid !== undefined && pending.adminUuid !== expectedAdminUuid)) {
+        if (pruned) {
+          await this.writePayload(transaction, payload, key)
+        }
+        return null
+      }
+
+      delete payload.pendingPairings[state]
+      const claimId = crypto.randomBytes(32).toString('base64url')
+      payload.pairingClaims[claimId] = {
+        adminUuid: pending.adminUuid,
+        subscriptionId: pending.subscriptionId,
+        expiresAt: now + claimTtlMs,
+      }
+      await this.writePayload(transaction, payload, key)
+      return { ...pending, claimId }
+    })
+  }
+
+  /**
+   * Commit an exchanged credential only while its claim lease still exists.
+   * A restart-safe unpair, a newer attempt for the target, or lease expiry makes
+   * this return false rather than resurrecting/overwriting a pairing.
+   */
+  async commitPairingClaim(claimId: string, record: SubscriptionTokenRecord, now: number): Promise<boolean> {
+    if (!isValidPairingState(claimId) || !isSubscriptionTokenRecord(record) || !isEpochMilliseconds(now)) {
+      return false
+    }
+    const key = this.requireKey()
+    return this.store.runExclusive(async (transaction) => {
+      const payload = this.payloadFromEnvelope(await transaction.read())
+      this.prunePairingLifecycle(payload, now)
+      const claim = payload.pairingClaims[claimId]
+      if (!claim) {
+        await this.writePayload(transaction, payload, key)
+        return false
+      }
+      payload.records[claim.subscriptionId] = record
+      delete payload.pairingClaims[claimId]
+      await this.writePayload(transaction, payload, key)
+      return true
+    })
+  }
+
+  /** Drop a failed exchange claim without exposing or restoring its OAuth state. */
+  async abortPairingClaim(claimId: string): Promise<void> {
+    if (!isValidPairingState(claimId)) {
+      return
+    }
+    const key = this.requireKey()
+    await this.store.runExclusive(async (transaction) => {
+      const payload = this.payloadFromEnvelope(await transaction.read())
+      if (!(claimId in payload.pairingClaims)) {
+        return
+      }
+      delete payload.pairingClaims[claimId]
+      await this.writePayload(transaction, payload, key)
+    })
+  }
+
+  /**
+   * Removes ONE record by id. When it was the last one the file is deleted.
+   * Best-effort: a missing store is a no-op.
+   */
+  async removeRecord(id: string): Promise<void> {
+    if (!isValidSubscriptionId(id)) {
+      throw new Error('Refusing to remove a subscription credential with an invalid id.')
+    }
+    const key = this.requireKey()
+    await this.store.runExclusive(async (transaction) => {
+      // Deliberately no decrypt-error catch: targeted removal must fail closed.
+      // It must never turn wrong-key/tamper damage into deletion of all pairings.
+      const payload = this.payloadFromEnvelope(await transaction.read())
+      delete payload.records[id]
+      for (const [state, pending] of Object.entries(payload.pendingPairings)) {
+        if (pending.subscriptionId === id) {
+          delete payload.pendingPairings[state]
+        }
+      }
+      for (const [claimId, claim] of Object.entries(payload.pairingClaims)) {
+        if (claim.subscriptionId === id) {
+          delete payload.pairingClaims[claimId]
+        }
+      }
+      await this.writePayload(transaction, payload, key)
+    })
+  }
+
+  /**
+   * Explicit remediation path for a historical safe record key that no longer
+   * meets the portable subscription-id grammar. It cannot remove a current
+   * valid id; callers must use removeRecord for that path.
+   */
+  async removeLegacyRecord(id: string): Promise<void> {
+    if (!isLegacyCompatibleSubscriptionId(id) || isValidSubscriptionId(id)) {
+      throw new Error('A legacy-invalid subscription id is required for legacy removal.')
+    }
+    const key = this.requireKey()
+    await this.store.runExclusive(async (transaction) => {
+      const payload = this.payloadFromEnvelope(await transaction.read())
+      if (!isLegacyCompatibleSubscriptionId(id) || isValidSubscriptionId(id) || !(id in payload.records)) {
+        throw new Error('The legacy-invalid subscription pairing no longer exists.')
+      }
+      delete payload.records[id]
+      await this.writePayload(transaction, payload, key)
+    })
+  }
+
+  /**
+   * Non-secret status for EVERY paired subscription. Never returns a token.
+   * Throws (fail closed) when the store cannot be decrypted or authenticated;
+   * callers must not fabricate a status entry for unreadable credentials.
    */
   async listStatuses(): Promise<SubscriptionStatusEntry[]> {
-    let records: Record<string, SubscriptionTokenRecord>
-    try {
-      records = await this.loadAll()
-    } catch {
-      return [{ id: DEFAULT_SUBSCRIPTION_ID, paired: true, needsRepair: true }]
-    }
-    return Object.entries(records).map(([id, record]) => ({ id, ...this.statusOf(record) }))
+    const records = await this.loadAll()
+    return Object.entries(records)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([id, record]) => ({
+        id,
+        ...this.statusOf(record),
+        ...(!isValidSubscriptionId(id) ? { legacyInvalidId: true } : {}),
+      }))
   }
 
   private statusOf(record: SubscriptionTokenRecord | undefined): SubscriptionStatus {
@@ -297,6 +642,9 @@ export class SubscriptionTokenStore {
       accountLabel: record.accountLabel,
       expiresAt: record.expiresAt,
       needsRepair: record.needsRepair,
+      needsRepairReason: record.needsRepairReason,
+      refreshRetryAt: record.refreshRetryAt,
+      refreshFailureCode: record.refreshFailureCode,
     }
   }
 
@@ -306,29 +654,99 @@ export class SubscriptionTokenStore {
    * Throws (fail closed) when a stored payload cannot be authenticated.
    */
   private async readRecordsMap(): Promise<Record<string, SubscriptionTokenRecord>> {
-    return this.recordsFromEnvelope(await this.store.read())
+    return this.payloadFromEnvelope(await this.store.read()).records
   }
 
-  private recordsFromEnvelope(envelope: EncryptedEnvelope | null): Record<string, SubscriptionTokenRecord> {
+  private payloadFromEnvelope(envelope: EncryptedEnvelope | null): DecryptedPayload {
     if (!envelope) {
-      return Object.create(null) as Record<string, SubscriptionTokenRecord>
+      return emptyPayload()
     }
     const key = this.requireKey()
     const payload = this.decrypt(envelope, key)
-    if (hasOnlyKeys(payload, ['records']) && 'records' in payload) {
+    if (hasOnlyKeys(payload, ['records', 'pendingPairings', 'pairingClaims']) && 'records' in payload) {
       const records = payload.records
-      if (!isSubscriptionRecordMap(records)) {
+      const pendingPairings = payload.pendingPairings ?? Object.create(null)
+      const pairingClaims = payload.pairingClaims ?? Object.create(null)
+      if (
+        !isSubscriptionRecordMap(records) ||
+        !isPendingPairingMap(pendingPairings) ||
+        !isPairingClaimMap(pairingClaims)
+      ) {
         throw new Error('The stored subscription credential contains an invalid record map.')
       }
-      return copyRecordMap(records)
+      return {
+        records: copyRecordMap(records),
+        pendingPairings: copyMap(pendingPairings),
+        pairingClaims: copyMap(pairingClaims),
+      }
     }
     if (!isSubscriptionTokenRecord(payload)) {
       throw new Error('The stored subscription credential contains an invalid legacy record.')
     }
     // Legacy bare record → migrate under the default id.
-    const records = Object.create(null) as Record<string, SubscriptionTokenRecord>
-    records[DEFAULT_SUBSCRIPTION_ID] = payload
-    return records
+    const migrated = emptyPayload()
+    migrated.records[DEFAULT_SUBSCRIPTION_ID] = payload
+    return migrated
+  }
+
+  private prunePairingLifecycle(payload: DecryptedPayload, now: number): boolean {
+    let changed = false
+    for (const [state, pending] of Object.entries(payload.pendingPairings)) {
+      if (pending.expiresAt <= now) {
+        delete payload.pendingPairings[state]
+        changed = true
+      }
+    }
+    for (const [claimId, claim] of Object.entries(payload.pairingClaims)) {
+      if (claim.expiresAt <= now) {
+        delete payload.pairingClaims[claimId]
+        changed = true
+      }
+    }
+    return changed
+  }
+
+  private async writePayload(
+    transaction: SecureJsonFileTransaction<EncryptedEnvelope>,
+    payload: DecryptedPayload,
+    key: Buffer,
+  ): Promise<void> {
+    if (
+      Object.keys(payload.records).length === 0 &&
+      Object.keys(payload.pendingPairings).length === 0 &&
+      Object.keys(payload.pairingClaims).length === 0
+    ) {
+      await transaction.delete()
+      return
+    }
+    await transaction.write(this.encrypt(payload, key))
+  }
+
+  private sameRecordVersion(left: SubscriptionTokenRecord, right: SubscriptionTokenRecord): boolean {
+    return (
+      this.sameCredentialGeneration(left, right) &&
+      left.needsRepair === right.needsRepair &&
+      left.needsRepairReason === right.needsRepairReason &&
+      left.refreshRetryAt === right.refreshRetryAt &&
+      left.refreshFailureCode === right.refreshFailureCode &&
+      left.refreshFailureCount === right.refreshFailureCount
+    )
+  }
+
+  /**
+   * Fields that identify the credential generation independently of mutable
+   * refresh-failure annotations.
+   */
+  private sameCredentialGeneration(left: SubscriptionTokenRecord, right: SubscriptionTokenRecord): boolean {
+    return (
+      left.accessToken === right.accessToken &&
+      left.refreshToken === right.refreshToken &&
+      left.idToken === right.idToken &&
+      left.expiresAt === right.expiresAt &&
+      left.accountId === right.accountId &&
+      left.accountLabel === right.accountLabel &&
+      left.pairedAt === right.pairedAt
+    )
   }
 
   private requireKey(): Buffer {

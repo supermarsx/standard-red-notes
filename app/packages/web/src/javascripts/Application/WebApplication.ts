@@ -1167,11 +1167,21 @@ export class WebApplication extends SNApplication implements WebApplicationInter
    * expiry, whether the env-token fallback is in use, whether re-pairing is
    * needed). Returns `paired: false` on any error so the UI degrades gracefully.
    */
-  public async assistantSubscriptionStatus(): Promise<AssistantSubscriptionStatus> {
+  public async assistantSubscriptionStatus(subscriptionId = 'default'): Promise<AssistantSubscriptionStatus> {
     try {
-      return await this.assistantConfigRequest<AssistantSubscriptionStatus>('/v1/assistant/subscription/status')
-    } catch (error) {
-      return { paired: false, reason: error instanceof Error ? error.message : String(error) }
+      const result = await this.assistantConfigRequest<AssistantSubscriptionStatus>(
+        `/v1/assistant/subscription/status?subscriptionId=${encodeURIComponent(subscriptionId)}`,
+      )
+      if (result.subscriptionId !== subscriptionId) {
+        return {
+          paired: false,
+          subscriptionId,
+          reason: 'The server returned pairing status for a different subscription id.',
+        }
+      }
+      return result
+    } catch {
+      return { paired: false, subscriptionId, reason: 'Could not load pairing status from the server.' }
     }
   }
 
@@ -1182,25 +1192,33 @@ export class WebApplication extends SNApplication implements WebApplicationInter
    * `authorizeUrl` (containing the challenge + state) plus the opaque `state`.
    * The PKCE verifier never leaves the server.
    */
-  public async assistantSubscriptionStart(): Promise<{
+  public async assistantSubscriptionStart(subscriptionId = 'default'): Promise<{
     status: number
     ok: boolean
     data: AssistantSubscriptionStart
   }> {
-    return this.serverJsonRequest<AssistantSubscriptionStart>('/v1/assistant/subscription/start', {})
+    return this.serverJsonRequest<AssistantSubscriptionStart>('/v1/assistant/subscription/start', { subscriptionId })
   }
 
   /**
-   * Clear the server-held subscription pairing (admin-gated,
-   * POST /v1/assistant/subscription/unpair). Best-effort token revoke happens
-   * server-side; this returns `{ ok }`.
+   * Remove exactly one server-held subscription pairing (admin-gated,
+   * POST /v1/assistant/subscription/unpair). The id is always explicit; this
+   * helper can never clear every pairing accidentally.
    */
-  public async assistantSubscriptionUnpair(): Promise<{
+  public async assistantSubscriptionUnpair(
+    subscriptionId = 'default',
+    confirmReferencedProfiles = false,
+    legacySubscriptionIdConfirmation?: string,
+  ): Promise<{
     status: number
     ok: boolean
     data: { ok?: boolean }
   }> {
-    return this.serverJsonRequest<{ ok?: boolean }>('/v1/assistant/subscription/unpair', {})
+    return this.serverJsonRequest<{ ok?: boolean }>('/v1/assistant/subscription/unpair', {
+      subscriptionId,
+      confirmReferencedProfiles,
+      ...(legacySubscriptionIdConfirmation ? { legacySubscriptionIdConfirmation } : {}),
+    })
   }
 
   /**
@@ -1226,12 +1244,20 @@ export class WebApplication extends SNApplication implements WebApplicationInter
  */
 export type AssistantSubscriptionStatus = {
   paired: boolean
+  subscriptionId?: string
+  legacyInvalidId?: boolean
+  storeUnreadable?: boolean
   mode?: string
   accountId?: string
   accountLabel?: string
   expiresAt?: number | string
   usingEnvFallback?: boolean
   needsRepair?: boolean
+  needsRepairReason?: 'refresh-token-missing' | 'refresh-token-rejected'
+  refreshRetryAt?: number
+  refreshFailureCode?: 'network' | 'rate-limited' | 'provider-unavailable' | 'provider-error'
+  referencedByProfiles?: { id: string; name: string }[]
+  profileReferencesKnown?: boolean
   reason?: string
 }
 
@@ -1239,6 +1265,7 @@ export type AssistantSubscriptionStatus = {
 export type AssistantSubscriptionStart = {
   authorizeUrl?: string
   state?: string
+  subscriptionId?: string
 }
 
 /** One rolling window of SRN-metered subscription token usage. */

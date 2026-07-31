@@ -12,10 +12,28 @@ import {
   listProviderModels,
   resolveProvider,
 } from '../../Service/Assistant/providers/factory'
+import {
+  DEFAULT_CODEX_SUBSCRIPTION_BASE_URL,
+  openAiCompatibleConfigured,
+  safeSubscriptionBaseUrl,
+} from '../../Service/Assistant/providers/openaiAuth'
 import { ChatMessage, Provider, ProviderEvent, ToolDescriptor } from '../../Service/Assistant/providers/types'
-import { resolveProfileProvider } from '../../Service/Assistant/profiles'
+import {
+  ASSISTANT_PROFILE_LIMITS,
+  effectiveBackendProfiles,
+  resolveProfileProvider,
+} from '../../Service/Assistant/profiles'
 import { SubscriptionCredentialProviderInterface } from '../../Service/Assistant/subscription/SubscriptionCredentialProvider'
+import {
+  isLegacyCompatibleSubscriptionId,
+  isValidAdminUuid,
+  isValidAuthorizationCode,
+  isValidPairingState,
+  isValidSubscriptionId,
+} from '../../Service/Assistant/subscription/pairingValidation'
+import { DEFAULT_SUBSCRIPTION_ID } from '../../Service/Assistant/subscription/SubscriptionTokenStore'
 import { ServerSettingsResolver } from '../../Service/ServerSettings/ServerSettingsResolver'
+import { isBoundedString, isSafeRecordKey } from '../../Infra/SecureJsonFileStore'
 import {
   RedisTokenUsageStore,
   SUBSCRIPTION_USAGE_SUBJECT,
@@ -133,6 +151,87 @@ export class AssistantController extends BaseHttpController {
     const roles = ((response.locals as { roles?: Role[] }).roles ?? []) as Role[]
 
     return roles.some((role) => role.name === RoleName.NAMES.AdminUser)
+  }
+
+  private authenticatedAdminUuid(response: Response): string | undefined {
+    const uuid = (response.locals as { user?: { uuid?: unknown } }).user?.uuid
+    return isValidAdminUuid(uuid) ? uuid : undefined
+  }
+
+  /**
+   * Pairing administration responses contain account labels, pairing state, and
+   * profile references. Mark every authenticated route response private and
+   * non-cacheable before any validation/auth branch so intermediaries cannot
+   * retain either successful payloads or error details.
+   */
+  private setPrivatePairingResponseHeaders(response: Response): void {
+    response.setHeader('Cache-Control', 'private, no-store, max-age=0')
+    response.setHeader('Pragma', 'no-cache')
+  }
+
+  private async subscriptionProfileReferences(
+    subscriptionId: string,
+  ): Promise<{ known: boolean; profiles: { id: string; name: string }[] }> {
+    if (!this.serverSettingsResolver) {
+      return { known: false, profiles: [] }
+    }
+    try {
+      const [persistedBackends, assistantProfileSet] = await Promise.all([
+        this.serverSettingsResolver.getPersistedBackendProfiles(),
+        this.serverSettingsResolver.resolveAssistantProfiles(),
+      ])
+      const explicitBackends = persistedBackends ?? []
+      const effectiveBackends = effectiveBackendProfiles(explicitBackends, assistantProfileSet.profiles)
+      const references: { id: string; name: string }[] = []
+
+      for (const backend of explicitBackends) {
+        if (backend.type === 'subscription' && (backend.subscriptionId ?? DEFAULT_SUBSCRIPTION_ID) === subscriptionId) {
+          references.push(this.safeSubscriptionProfileReference(backend.id, backend.name))
+        }
+      }
+
+      for (const profile of assistantProfileSet.profiles) {
+        const backend = profile.backendProfileId
+          ? effectiveBackends.find((candidate) => candidate.id === profile.backendProfileId)
+          : undefined
+        if (profile.backendProfileId && !backend) {
+          throw new Error('Referenced assistant backend profile is unavailable.')
+        }
+        const referencesSubscription =
+          backend?.type === 'subscription'
+            ? (backend.subscriptionId ?? DEFAULT_SUBSCRIPTION_ID) === subscriptionId
+            : !profile.backendProfileId &&
+              profile.provider === 'codex-subscription' &&
+              (profile.subscriptionId ?? DEFAULT_SUBSCRIPTION_ID) === subscriptionId
+        if (referencesSubscription) {
+          references.push(this.safeSubscriptionProfileReference(profile.id, profile.name))
+        }
+      }
+
+      references.sort((left, right) => left.id.localeCompare(right.id) || left.name.localeCompare(right.name))
+      const uniqueReferences = references.filter(
+        (reference, index) => index === 0 || reference.id !== references[index - 1].id,
+      )
+
+      return {
+        known: true,
+        profiles: uniqueReferences,
+      }
+    } catch {
+      return { known: false, profiles: [] }
+    }
+  }
+
+  private safeSubscriptionProfileReference(id: unknown, name: unknown): { id: string; name: string } {
+    if (
+      !isSafeRecordKey(id, ASSISTANT_PROFILE_LIMITS.idLength) ||
+      !isBoundedString(name, 1, ASSISTANT_PROFILE_LIMITS.nameLength) ||
+      name.trim() !== name ||
+      /[\u0000-\u001f\u007f]/.test(name)
+    ) {
+      throw new Error('Assistant profile reference metadata is invalid.')
+    }
+    return { id, name }
   }
 
   /**
@@ -309,45 +408,83 @@ export class AssistantController extends BaseHttpController {
   // ---------------------------------------------------------------------------
 
   @httpGet('/subscription/status', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
-  async subscriptionStatus(_request: Request, response: Response): Promise<void> {
+  async subscriptionStatus(request: Request, response: Response): Promise<void> {
+    this.setPrivatePairingResponseHeaders(response)
     if (!this.requestorIsAdmin(response)) {
       response.status(403).json({ error: { message: 'Admin role required.' } })
       return
     }
 
+    const rawSubscriptionId = request.query.subscriptionId
+    const subscriptionId =
+      rawSubscriptionId === undefined || rawSubscriptionId === ''
+        ? DEFAULT_SUBSCRIPTION_ID
+        : typeof rawSubscriptionId === 'string' && isValidSubscriptionId(rawSubscriptionId)
+          ? rawSubscriptionId
+          : undefined
+    if (!subscriptionId) {
+      response.status(400).json({ error: { message: 'A valid subscriptionId query parameter is required.' } })
+      return
+    }
+
     const config = await this.effectiveProviderConfig()
-    const usingEnvFallback = config.openaiAuthMode === 'subscription' && Boolean(config.openaiSubscriptionToken)
+    const usingEnvFallback = config.openaiAuthMode === 'subscription' && openAiCompatibleConfigured(config)
 
     if (!this.subscriptionCredentialProvider) {
       // Not wired (no encryption key). Report the non-secret truth so the wizard
       // can explain that server-managed pairing is unavailable on this deployment.
       response.json({
         paired: false,
+        subscriptionId,
         mode: config.openaiAuthMode ?? undefined,
-        usingEnvFallback,
+        usingEnvFallback: subscriptionId === DEFAULT_SUBSCRIPTION_ID && usingEnvFallback,
         reason: 'Subscription pairing is not configured on this server (ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY unset).',
       })
       return
     }
 
     try {
-      const status = await this.subscriptionCredentialProvider.getStatus()
-      response.json({
+      const status = await this.subscriptionCredentialProvider.getStatus(subscriptionId)
+      const references = await this.subscriptionProfileReferences(subscriptionId)
+      const payload = {
+        subscriptionId,
         paired: status.paired,
+        storeUnreadable: status.storeUnreadable,
         mode: config.openaiAuthMode ?? undefined,
         accountId: status.accountId,
         accountLabel: status.accountLabel,
         expiresAt: status.expiresAt,
         needsRepair: status.needsRepair,
-        usingEnvFallback: !status.paired && usingEnvFallback,
+        needsRepairReason: status.needsRepairReason,
+        refreshRetryAt: status.refreshRetryAt,
+        refreshFailureCode: status.refreshFailureCode,
+        referencedByProfiles: references.profiles,
+        profileReferencesKnown: references.known,
+        // Once durable pairing is configured, an absent/repair/unreadable slot
+        // fails closed. The legacy env bearer is a boot-time fallback only when
+        // the pairing subsystem itself is not configured.
+        usingEnvFallback: false,
+      }
+      if (status.storeUnreadable) {
+        response.status(503).json({
+          ...payload,
+          reason: 'The encrypted pairing store could not be authenticated. No pairing status can be inferred.',
+        })
+        return
+      }
+      response.json(payload)
+    } catch {
+      response.status(503).json({
+        paired: false,
+        subscriptionId,
+        reason: 'The encrypted pairing store could not be read. Check its key and integrity.',
       })
-    } catch (error) {
-      response.json({ paired: false, reason: (error as Error).message })
     }
   }
 
   @httpPost('/subscription/start', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
   async subscriptionStart(request: Request, response: Response): Promise<void> {
+    this.setPrivatePairingResponseHeaders(response)
     if (!this.requestorIsAdmin(response)) {
       response.status(403).json({ error: { message: 'Admin role required.' } })
       return
@@ -361,15 +498,27 @@ export class AssistantController extends BaseHttpController {
     // slot this pairing lands in, so adding another never drops the existing ones.
     const body = (request.body ?? {}) as { subscriptionId?: unknown }
     const subscriptionId =
-      typeof body.subscriptionId === 'string' && body.subscriptionId.trim() !== ''
-        ? body.subscriptionId.trim()
-        : undefined
-    const adminUuid = ((response.locals as { user?: { uuid?: string } }).user ?? {}).uuid ?? 'admin'
+      body.subscriptionId === undefined || body.subscriptionId === ''
+        ? DEFAULT_SUBSCRIPTION_ID
+        : typeof body.subscriptionId === 'string' && isValidSubscriptionId(body.subscriptionId)
+          ? body.subscriptionId
+          : undefined
+    if (!subscriptionId) {
+      response.status(400).json({ error: { message: 'A valid subscriptionId is required.' } })
+      return
+    }
+    const adminUuid = this.authenticatedAdminUuid(response)
+    if (!adminUuid) {
+      response.status(401).json({ error: { message: 'A valid authenticated administrator identity is required.' } })
+      return
+    }
     try {
-      const { authorizeUrl, state } = this.subscriptionCredentialProvider.beginPairing(adminUuid, subscriptionId)
-      response.json({ authorizeUrl, state, subscriptionId: subscriptionId ?? null })
-    } catch (error) {
-      response.status(500).json({ error: { message: (error as Error).message } })
+      const { authorizeUrl, state } = await this.subscriptionCredentialProvider.beginPairing(adminUuid, subscriptionId)
+      response.json({ authorizeUrl, state, subscriptionId })
+    } catch {
+      response.status(503).json({
+        error: { message: 'Pairing could not be started. Check the encrypted store and OAuth endpoint configuration.' },
+      })
     }
   }
 
@@ -380,6 +529,7 @@ export class AssistantController extends BaseHttpController {
    */
   @httpGet('/subscription/list', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
   async subscriptionList(_request: Request, response: Response): Promise<void> {
+    this.setPrivatePairingResponseHeaders(response)
     if (!this.requestorIsAdmin(response)) {
       response.status(403).json({ error: { message: 'Admin role required.' } })
       return
@@ -389,10 +539,20 @@ export class AssistantController extends BaseHttpController {
       return
     }
     try {
-      const subscriptions = await this.subscriptionCredentialProvider.listStatuses()
+      const statuses = await this.subscriptionCredentialProvider.listStatuses()
+      const subscriptions = await Promise.all(
+        statuses.map(async (status) => {
+          const references = await this.subscriptionProfileReferences(status.id)
+          return {
+            ...status,
+            referencedByProfiles: references.profiles,
+            profileReferencesKnown: references.known,
+          }
+        }),
+      )
       response.json({ subscriptions })
-    } catch (error) {
-      response.status(500).json({ error: { message: (error as Error).message } })
+    } catch {
+      response.status(503).json({ error: { message: 'The encrypted pairing store could not be read.' } })
     }
   }
 
@@ -401,6 +561,7 @@ export class AssistantController extends BaseHttpController {
   // this server). Exchanges the code for tokens and persists the credential.
   @httpPost('/subscription/complete', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
   async subscriptionComplete(request: Request, response: Response): Promise<void> {
+    this.setPrivatePairingResponseHeaders(response)
     if (!this.requestorIsAdmin(response)) {
       response.status(403).json({ error: { message: 'Admin role required.' } })
       return
@@ -411,59 +572,62 @@ export class AssistantController extends BaseHttpController {
     }
 
     const body = (request.body ?? {}) as { state?: unknown; code?: unknown }
-    const state = typeof body.state === 'string' ? body.state.trim() : ''
-    const code = typeof body.code === 'string' ? body.code.trim() : ''
-    if (!state || !code) {
-      response.status(400).json({ error: { message: 'Both `state` and `code` are required to complete pairing.' } })
+    const state = typeof body.state === 'string' ? body.state : ''
+    const code = typeof body.code === 'string' ? body.code : ''
+    const adminUuid = this.authenticatedAdminUuid(response)
+    if (!adminUuid) {
+      response.status(401).json({ error: { message: 'A valid authenticated administrator identity is required.' } })
+      return
+    }
+    if (!isValidPairingState(state) || !isValidAuthorizationCode(code)) {
+      response.status(400).json({ error: { message: 'The pairing state or authorization code is invalid.' } })
       return
     }
 
     try {
-      const record = await this.subscriptionCredentialProvider.completePairing(state, code)
+      const record = await this.subscriptionCredentialProvider.completePairing(state, code, adminUuid)
       response.json({ ok: true, paired: true, accountLabel: record.accountLabel, accountId: record.accountId })
-    } catch (error) {
-      response.status(400).json({ ok: false, error: { message: (error as Error).message } })
+    } catch {
+      response.status(400).json({
+        ok: false,
+        error: { message: 'Pairing could not be completed. Generate a new authorization link and try again.' },
+      })
     }
   }
 
-  // PUBLIC OAuth redirect landing. The browser arrives here (no session) after the
-  // user authorizes; `state` is the single-use CSRF token. Returns a tiny HTML page
-  // that notifies the opener and closes — never JSON, never a token.
+  // PUBLIC OAuth redirect landing. The browser arrives here (no session) after
+  // the user authorizes; `state` is the single-use CSRF token. Returns a tiny
+  // inert HTML page with no script/opener communication — never JSON or a token.
   @httpGet('/subscription/callback')
   async subscriptionCallback(request: Request, response: Response): Promise<void> {
     const query = request.query as Record<string, string | undefined>
-    const state = (query.state ?? '').trim()
-    const code = (query.code ?? '').trim()
+    const state = query.state ?? ''
+    const code = query.code ?? ''
 
     if (!this.subscriptionCredentialProvider) {
-      response.status(503).type('html').send(this.pairingResultHtml(false, 'Subscription pairing is not configured.'))
+      this.sendPairingResult(response, 503, false, 'Subscription pairing is not configured.')
       return
     }
     if (query.error) {
-      response
-        .status(400)
-        .type('html')
-        .send(this.pairingResultHtml(false, `Authorization failed: ${query.error}`))
+      this.sendPairingResult(response, 400, false, 'Authorization was declined or failed at the provider.')
       return
     }
-    if (!state || !code) {
-      response.status(400).type('html').send(this.pairingResultHtml(false, 'Missing authorization code or state.'))
+    if (!isValidPairingState(state) || !isValidAuthorizationCode(code)) {
+      this.sendPairingResult(response, 400, false, 'Missing authorization code or state.')
       return
     }
 
     try {
       await this.subscriptionCredentialProvider.completePairing(state, code)
-      response.type('html').send(this.pairingResultHtml(true, 'Pairing complete. You can close this window.'))
-    } catch (error) {
-      response
-        .status(400)
-        .type('html')
-        .send(this.pairingResultHtml(false, (error as Error).message))
+      this.sendPairingResult(response, 200, true, 'Pairing complete. You can close this window.')
+    } catch {
+      this.sendPairingResult(response, 400, false, 'Pairing failed or the one-time link was no longer valid.')
     }
   }
 
   @httpPost('/subscription/unpair', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
   async subscriptionUnpair(request: Request, response: Response): Promise<void> {
+    this.setPrivatePairingResponseHeaders(response)
     if (!this.requestorIsAdmin(response)) {
       response.status(403).json({ error: { message: 'Admin role required.' } })
       return
@@ -473,18 +637,95 @@ export class AssistantController extends BaseHttpController {
       return
     }
 
-    // Standard Red Notes: an explicit subscriptionId removes ONE pairing; omitting
-    // it clears ALL (back-compat with the original single-pairing unpair button).
-    const body = (request.body ?? {}) as { subscriptionId?: unknown }
+    const body = (request.body ?? {}) as {
+      subscriptionId?: unknown
+      confirmReferencedProfiles?: unknown
+      legacySubscriptionIdConfirmation?: unknown
+    }
+    const rawSubscriptionId = body.subscriptionId
+    const currentId = isValidSubscriptionId(rawSubscriptionId)
+    const legacyInvalidId =
+      !currentId &&
+      isLegacyCompatibleSubscriptionId(rawSubscriptionId) &&
+      body.legacySubscriptionIdConfirmation === rawSubscriptionId
     const subscriptionId =
-      typeof body.subscriptionId === 'string' && body.subscriptionId.trim() !== ''
-        ? body.subscriptionId.trim()
-        : undefined
+      typeof rawSubscriptionId === 'string' && (currentId || legacyInvalidId) ? rawSubscriptionId : undefined
+    if (!subscriptionId) {
+      response.status(400).json({
+        ok: false,
+        error: {
+          message:
+            'An explicit valid subscriptionId is required. A listed legacy-invalid id additionally requires an exact legacySubscriptionIdConfirmation. This endpoint never clears every pairing.',
+        },
+      })
+      return
+    }
+    const references = await this.subscriptionProfileReferences(subscriptionId)
+    if (!references.known) {
+      response.status(503).json({
+        ok: false,
+        error: {
+          tag: 'profile-references-unavailable',
+          message: 'Pairing was not removed because assistant profile references could not be checked safely.',
+        },
+      })
+      return
+    }
+    if (references.profiles.length > 0 && body.confirmReferencedProfiles !== true) {
+      response.status(409).json({
+        ok: false,
+        error: {
+          tag: 'subscription-in-use',
+          message: 'Assistant backend profiles still reference this pairing.',
+          referencedByProfiles: references.profiles,
+        },
+      })
+      return
+    }
     try {
-      await this.subscriptionCredentialProvider.unpair(subscriptionId)
+      if (legacyInvalidId) {
+        await this.subscriptionCredentialProvider.unpairLegacy(subscriptionId)
+      } else {
+        await this.subscriptionCredentialProvider.unpair(subscriptionId)
+      }
+      response.json({ ok: true, subscriptionId, legacyInvalidId, referencedByProfiles: references.profiles })
+    } catch {
+      response.status(503).json({
+        ok: false,
+        error: { message: 'The encrypted pairing store could not be updated. Check its key and integrity.' },
+      })
+    }
+  }
+
+  @httpPost('/subscription/unpair-all', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async subscriptionUnpairAll(request: Request, response: Response): Promise<void> {
+    this.setPrivatePairingResponseHeaders(response)
+    if (!this.requestorIsAdmin(response)) {
+      response.status(403).json({ error: { message: 'Admin role required.' } })
+      return
+    }
+    if (!this.subscriptionCredentialProvider) {
+      response.status(503).json({ error: { message: 'Subscription pairing is not configured on this server.' } })
+      return
+    }
+    const confirmation = (request.body as { confirmation?: unknown } | undefined)?.confirmation
+    if (confirmation !== 'UNPAIR ALL SUBSCRIPTIONS') {
+      response.status(400).json({
+        ok: false,
+        error: {
+          message: 'Set confirmation to `UNPAIR ALL SUBSCRIPTIONS` to clear every pairing and pending attempt.',
+        },
+      })
+      return
+    }
+    try {
+      await this.subscriptionCredentialProvider.unpairAll()
       response.json({ ok: true })
-    } catch (error) {
-      response.status(500).json({ ok: false, error: { message: (error as Error).message } })
+    } catch {
+      response.status(503).json({
+        ok: false,
+        error: { message: 'The encrypted pairing store could not be cleared.' },
+      })
     }
   }
 
@@ -501,6 +742,7 @@ export class AssistantController extends BaseHttpController {
    */
   @httpGet('/subscription/usage', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
   async subscriptionUsage(request: Request, response: Response): Promise<void> {
+    this.setPrivatePairingResponseHeaders(response)
     if (!this.requestorIsAdmin(response)) {
       response.status(403).json({ error: { message: 'Admin role required.' } })
       return
@@ -509,10 +751,17 @@ export class AssistantController extends BaseHttpController {
     // Standard Red Notes: an optional subscriptionId scopes usage to ONE paired
     // subscription; omitting it reports the cross-subscription aggregate (as
     // before). Each paired subscription is metered under its own subject too.
+    const rawRequestedId = request.query.subscriptionId
     const requestedId =
-      typeof request.query.subscriptionId === 'string' && request.query.subscriptionId.trim() !== ''
-        ? request.query.subscriptionId.trim()
-        : undefined
+      rawRequestedId === undefined || rawRequestedId === ''
+        ? undefined
+        : typeof rawRequestedId === 'string' && isValidSubscriptionId(rawRequestedId)
+          ? rawRequestedId
+          : null
+    if (requestedId === null) {
+      response.status(400).json({ error: { message: 'A valid subscriptionId query parameter is required.' } })
+      return
+    }
     const subject = requestedId ? subscriptionUsageSubject(requestedId) : SUBSCRIPTION_USAGE_SUBJECT
 
     const now = Date.now()
@@ -540,21 +789,32 @@ export class AssistantController extends BaseHttpController {
   }
 
   /**
-   * Minimal self-contained HTML for the OAuth callback window: it postMessages the
-   * opener (best-effort success signal; the wizard also polls /status) and closes.
-   * No secrets — only the success/failure boolean and a human message.
+   * Minimal inert HTML for the OAuth callback tab. The admin UI polls status;
+   * this page never receives an opener reference, sends a cross-window message,
+   * embeds upstream text, or returns any credential material.
    */
   private pairingResultHtml(success: boolean, message: string): string {
     const safeMessage = message.replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' })[c] as string)
     return `<!doctype html><html><head><meta charset="utf-8"><title>ChatGPT pairing</title></head>
-<body style="font-family: system-ui, sans-serif; padding: 2rem; text-align: center;">
+<body>
 <h2>${success ? 'Pairing complete' : 'Pairing failed'}</h2>
 <p>${safeMessage}</p>
-<script>
-try { if (window.opener) { window.opener.postMessage({ type: 'chatgpt-paired', success: ${success ? 'true' : 'false'} }, '*') } } catch (e) {}
-setTimeout(function(){ try { window.close() } catch (e) {} }, ${success ? 1200 : 4000})
-</script>
+<p>You may close this tab and return to Standard Red Notes.</p>
 </body></html>`
+  }
+
+  private sendPairingResult(response: Response, status: number, success: boolean, message: string): void {
+    response.setHeader('Cache-Control', 'no-store, max-age=0')
+    response.setHeader('Pragma', 'no-cache')
+    response.setHeader('Referrer-Policy', 'no-referrer')
+    response.setHeader('X-Content-Type-Options', 'nosniff')
+    response.setHeader('X-Frame-Options', 'DENY')
+    response.setHeader('Cross-Origin-Opener-Policy', 'same-origin')
+    response.setHeader(
+      'Content-Security-Policy',
+      "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
+    )
+    response.status(status).type('html').send(this.pairingResultHtml(success, message))
   }
 
   // Standard Red Notes: the assistant streaming proxy is the canonical expensive
@@ -808,24 +1068,62 @@ setTimeout(function(){ try { window.close() } catch (e) {} }, ${success ? 1200 :
           this.resolvePrincipal(response),
         )
       } catch {
-        profile = undefined
+        throw new Error('The assistant profile configuration could not be resolved safely.')
       }
 
       if (profile) {
         const resolution = resolveProfileProvider(profile, body.model)
         if (
           profile.provider === 'codex-subscription' &&
-          !resolution.config.openaiSubscriptionToken &&
-          this.subscriptionCredentialProvider
+          !safeSubscriptionBaseUrl(
+            resolution.config.openaiSubscriptionBaseURL ||
+              resolution.config.openaiBaseURL ||
+              DEFAULT_CODEX_SUBSCRIPTION_BASE_URL,
+          )
         ) {
-          // Draw a fresh token for the SPECIFIC paired subscription the backend
-          // profile names (falls back to the default/first pairing).
-          const credential = await this.subscriptionCredentialProvider.getFreshCredential(profile.subscriptionId)
-          if (credential) {
+          throw new Error('OpenAI-compatible provider is not configured on this server')
+        }
+        if (profile.provider === 'codex-subscription') {
+          if (this.subscriptionCredentialProvider) {
+            // Draw a fresh token for the SPECIFIC paired subscription the backend
+            // profile names (falls back to the default/first pairing). Durable
+            // pairing is authoritative whenever it is configured.
+            let credential
+            try {
+              credential = await this.subscriptionCredentialProvider.getFreshCredential(profile.subscriptionId)
+            } catch {
+              throw new Error(
+                'The paired subscription credential is unavailable or requires repair. Ask an administrator to re-pair it.',
+              )
+            }
+            if (!credential) {
+              throw new Error(
+                'The paired subscription credential is unavailable or requires repair. Ask an administrator to re-pair it.',
+              )
+            }
             resolution.config.openaiSubscriptionToken = credential.token
             if (credential.accountId) {
               resolution.config.openaiAccountId = credential.accountId
             }
+          } else {
+            // Back-compat is limited to the boot-time ENV bearer. A plaintext
+            // apiKey persisted on the profile is ignored by resolveProfileProvider
+            // and cannot bypass an unpair. The single env bearer represents only
+            // the legacy DEFAULT slot; never alias a named subscription id to it.
+            const legacySubscriptionId = profile.subscriptionId ?? DEFAULT_SUBSCRIPTION_ID
+            if (legacySubscriptionId !== DEFAULT_SUBSCRIPTION_ID) {
+              throw new Error(
+                'The named subscription credential is unavailable. Configure encrypted pairing for this id.',
+              )
+            }
+            const legacyConfig = await this.effectiveProviderConfig()
+            if (legacyConfig.openaiAuthMode !== 'subscription' || !legacyConfig.openaiSubscriptionToken) {
+              throw new Error('The paired subscription credential is unavailable. Ask an administrator to pair it.')
+            }
+            resolution.config.openaiSubscriptionToken = legacyConfig.openaiSubscriptionToken
+            resolution.config.openaiAccountId = legacyConfig.openaiAccountId
+            resolution.config.openaiBeta = legacyConfig.openaiBeta
+            resolution.config.openaiExtraHeaders = legacyConfig.openaiExtraHeaders
           }
         }
         return {
@@ -836,19 +1134,54 @@ setTimeout(function(){ try { window.close() } catch (e) {} }, ${success ? 1200 :
       }
 
       if (requestedProfileId) {
-        throw new Error(`Requested assistant profile "${requestedProfileId}" is not configured or is disabled.`)
+        throw new Error('The requested assistant profile is not configured or is disabled.')
       }
     }
 
-    // Legacy path (fully back-compat): honor the client's chosen provider + model.
+    // Legacy path: honor the client's chosen provider + model. When durable
+    // pairing is configured, the DEFAULT paired credential is authoritative and
+    // any absent/repair/unreadable state fails closed before network I/O. The
+    // legacy env bearer remains usable only when pairing is unavailable at boot.
     const providerId = body.provider || this.defaultProvider
     const model = body.model || this.defaultModel
-    const config = await this.effectiveProviderConfig()
+    const config = { ...(await this.effectiveProviderConfig()) }
+    const openAiProvider = providerId === 'openai' || providerId === 'openai-compatible'
+    const isSubscription = openAiProvider && config.openaiAuthMode === 'subscription'
+    if (
+      isSubscription &&
+      !safeSubscriptionBaseUrl(
+        config.openaiSubscriptionBaseURL || config.openaiBaseURL || DEFAULT_CODEX_SUBSCRIPTION_BASE_URL,
+      )
+    ) {
+      throw new Error('OpenAI-compatible provider is not configured on this server')
+    }
+    if (isSubscription && this.subscriptionCredentialProvider) {
+      let credential
+      try {
+        credential = await this.subscriptionCredentialProvider.getFreshCredential(DEFAULT_SUBSCRIPTION_ID)
+      } catch {
+        throw new Error(
+          'The paired subscription credential is unavailable or requires repair. Ask an administrator to re-pair it.',
+        )
+      }
+      if (!credential) {
+        throw new Error(
+          'The paired subscription credential is unavailable or requires repair. Ask an administrator to re-pair it.',
+        )
+      }
+      config.openaiSubscriptionToken = credential.token
+      if (credential.accountId) {
+        config.openaiAccountId = credential.accountId
+      }
+    } else if (isSubscription && !config.openaiSubscriptionToken) {
+      throw new Error('The paired subscription credential is unavailable. Ask an administrator to pair it.')
+    }
     return {
       provider: resolveProvider(providerId, model, config),
       // The legacy single-provider path is subscription-backed when the OpenAI
       // provider is configured in subscription (Codex/ChatGPT) auth mode.
-      isSubscription: providerId === 'openai' && config.openaiAuthMode === 'subscription',
+      isSubscription,
+      subscriptionId: isSubscription ? DEFAULT_SUBSCRIPTION_ID : undefined,
     }
   }
 

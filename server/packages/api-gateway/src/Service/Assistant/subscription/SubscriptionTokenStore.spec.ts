@@ -22,6 +22,30 @@ function sampleRecord(overrides: Partial<SubscriptionTokenRecord> = {}): Subscri
   }
 }
 
+async function writeHistoricalRecordMap(
+  filePath: string,
+  key: string,
+  records: Record<string, SubscriptionTokenRecord>,
+): Promise<void> {
+  const iv = crypto.randomBytes(12)
+  const cipher = crypto.createCipheriv('aes-256-gcm', Buffer.from(key, 'hex'), iv)
+  const plaintext = Buffer.from(
+    JSON.stringify({ records, pendingPairings: Object.create(null), pairingClaims: Object.create(null) }),
+    'utf8',
+  )
+  const data = Buffer.concat([cipher.update(plaintext), cipher.final()])
+  await fs.writeFile(
+    filePath,
+    JSON.stringify({
+      v: 1,
+      iv: iv.toString('hex'),
+      tag: cipher.getAuthTag().toString('hex'),
+      data: data.toString('hex'),
+    }),
+    'utf8',
+  )
+}
+
 describe('SubscriptionTokenStore', () => {
   let dir: string
   let filePath: string
@@ -114,7 +138,12 @@ describe('SubscriptionTokenStore', () => {
     it('reports needsRepair when the store cannot be decrypted', async () => {
       await new SubscriptionTokenStore(filePath, key).save(sampleRecord())
       const wrongKeyStore = new SubscriptionTokenStore(filePath, keyHex())
-      expect(await wrongKeyStore.getStatus()).toEqual({ paired: true, needsRepair: true })
+      expect(await wrongKeyStore.getStatus()).toEqual({
+        paired: false,
+        needsRepair: true,
+        storeUnreadable: true,
+      })
+      await expect(wrongKeyStore.listStatuses()).rejects.toThrow(/Could not decrypt/)
     })
 
     it('surfaces a persisted needsRepair flag', async () => {
@@ -173,6 +202,66 @@ describe('SubscriptionTokenStore', () => {
       expect(all.two.accountLabel).toBe('two@team.test')
     })
 
+    it('fails closed when targeted removal sees a wrong key and preserves every byte', async () => {
+      const store = new SubscriptionTokenStore(filePath, key)
+      await store.saveRecord('one', sampleRecord({ accessToken: 'one-secret' }))
+      await store.saveRecord('two', sampleRecord({ accessToken: 'two-secret' }))
+      const before = await fs.readFile(filePath)
+
+      await expect(new SubscriptionTokenStore(filePath, keyHex()).removeRecord('one')).rejects.toThrow(
+        /Could not decrypt/,
+      )
+      expect(await fs.readFile(filePath)).toEqual(before)
+      expect(Object.keys(await store.loadAll()).sort()).toEqual(['one', 'two'])
+    })
+
+    it('fails closed when targeted removal sees authenticated-data tampering and preserves the file', async () => {
+      const store = new SubscriptionTokenStore(filePath, key)
+      await store.saveRecord('one', sampleRecord())
+      const envelope = JSON.parse(await fs.readFile(filePath, 'utf8')) as { data: string }
+      envelope.data = `${envelope.data[0] === '0' ? '1' : '0'}${envelope.data.slice(1)}`
+      await fs.writeFile(filePath, JSON.stringify(envelope), 'utf8')
+      const before = await fs.readFile(filePath)
+
+      await expect(store.removeRecord('one')).rejects.toThrow(/Could not decrypt/)
+      expect(await fs.readFile(filePath)).toEqual(before)
+    })
+
+    it('compare-and-swaps every persisted field and rejects a stale metadata version', async () => {
+      const store = new SubscriptionTokenStore(filePath, key)
+      const original = sampleRecord({ accountLabel: 'first@example.test' })
+      await store.saveRecord('one', original)
+      const changed = { ...original, accountLabel: 'new@example.test', refreshFailureCode: 'network' as const }
+      expect(await store.replaceRecordIfUnchanged('one', original, changed)).toBe(true)
+
+      expect(
+        await store.replaceRecordIfUnchanged(
+          'one',
+          { ...original, accountLabel: 'stale@example.test' },
+          { ...original, accessToken: 'should-not-win' },
+        ),
+      ).toBe(false)
+      expect(await store.loadRecord('one')).toEqual(changed)
+    })
+
+    it('lists a historical invalid id as unusable and supports only its explicit legacy-removal path', async () => {
+      const store = new SubscriptionTokenStore(filePath, key)
+      await writeHistoricalRecordMap(filePath, key, {
+        'legacy/team': sampleRecord({ accessToken: 'legacy-inaccessible-secret' }),
+      })
+
+      expect(await store.listStatuses()).toEqual([
+        expect.objectContaining({ id: 'legacy/team', paired: true, legacyInvalidId: true }),
+      ])
+      expect(await store.loadRecord('legacy/team')).toBeNull()
+      await expect(store.removeRecord('legacy/team')).rejects.toThrow(/invalid id/)
+      await expect(store.removeLegacyRecord('default')).rejects.toThrow(/legacy-invalid/)
+
+      await store.removeLegacyRecord('legacy/team')
+      expect(await store.listStatuses()).toEqual([])
+      await expect(store.removeLegacyRecord('legacy/team')).rejects.toThrow(/no longer exists/)
+    })
+
     it('migrates a legacy bare-record file into the default id', async () => {
       // A legacy single-record store written via save().
       const legacy = new SubscriptionTokenStore(filePath, key)
@@ -185,5 +274,12 @@ describe('SubscriptionTokenStore', () => {
       // And it is listed with the default id.
       expect((await store.listStatuses())[0].id).toBe('default')
     })
+  })
+
+  it('rejects control-bearing token and account-id fields before persistence', async () => {
+    const store = new SubscriptionTokenStore(filePath, key)
+    await expect(store.save(sampleRecord({ accessToken: 'token\r\nInjected: yes' }))).rejects.toThrow(/invalid/)
+    await expect(store.save(sampleRecord({ accountId: 'acct\nInjected' }))).rejects.toThrow(/invalid/)
+    await expect(fs.readFile(filePath, 'utf8')).rejects.toThrow(/ENOENT/)
   })
 })

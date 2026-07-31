@@ -23,10 +23,15 @@ type Props = {
 type SubscriptionEntry = {
   id: string
   paired: boolean
+  legacyInvalidId?: boolean
   accountLabel?: string
   accountId?: string
   expiresAt?: number
   needsRepair?: boolean
+  refreshRetryAt?: number
+  refreshFailureCode?: string
+  referencedByProfiles?: { id: string; name: string }[]
+  profileReferencesKnown?: boolean
 }
 
 type WindowRowProps = {
@@ -98,12 +103,14 @@ const AdminSubscriptionUsageCard: FunctionComponent<Props> = ({ application, onC
       const entries = list.ok ? (list.data?.subscriptions ?? []) : []
       setSubscriptions(entries)
       const usageByIdEntries = await Promise.all(
-        entries.map(async (entry) => {
-          const usage = await application.serverGetJsonRequest<AssistantSubscriptionUsage>(
-            `/v1/assistant/subscription/usage?subscriptionId=${encodeURIComponent(entry.id)}`,
-          )
-          return [entry.id, usage.ok ? usage.data : {}] as const
-        }),
+        entries
+          .filter((entry) => !entry.legacyInvalidId)
+          .map(async (entry) => {
+            const usage = await application.serverGetJsonRequest<AssistantSubscriptionUsage>(
+              `/v1/assistant/subscription/usage?subscriptionId=${encodeURIComponent(entry.id)}`,
+            )
+            return [entry.id, usage.ok ? usage.data : {}] as const
+          }),
       )
       setPerId(Object.fromEntries(usageByIdEntries))
     } catch {
@@ -120,19 +127,30 @@ const AdminSubscriptionUsageCard: FunctionComponent<Props> = ({ application, onC
 
   const removeOne = useCallback(
     async (id: string) => {
+      const entry = subscriptions.find((candidate) => candidate.id === id)
+      const references = entry?.referencedByProfiles ?? []
       if (
         !(await confirmDialog({
-          title: `Unpair subscription "${id}"?`,
-          text: 'The stored credential for this pairing is removed from the server. Other pairings are unaffected.',
-          confirmButtonText: 'Unpair',
+          title: entry?.legacyInvalidId ? `Remove legacy pairing "${id}"?` : `Unpair subscription "${id}"?`,
+          text:
+            entry?.profileReferencesKnown === false
+              ? 'Profile references could not be checked. The server will fail closed and refuse this operation.'
+              : references.length > 0
+                ? `This leaves ${references.length} assistant or backend profile(s) without a credential until the same id is re-paired or those profiles are changed.`
+                : entry?.legacyInvalidId
+                  ? 'This historical id is visible for remediation but is already blocked from runtime use. Its stored credential will be permanently removed; other pairings are unaffected.'
+                  : 'The stored credential and pending attempts for this id are removed. Other pairings are unaffected.',
+          confirmButtonText: entry?.legacyInvalidId ? 'Remove legacy pairing' : 'Unpair',
           confirmButtonStyle: 'danger',
         }))
       ) {
         return
       }
-      const { ok } = await application.serverJsonRequest<{ ok?: boolean }>('/v1/assistant/subscription/unpair', {
-        subscriptionId: id,
-      })
+      const { ok } = await application.assistantSubscriptionUnpair(
+        id,
+        references.length > 0,
+        entry?.legacyInvalidId ? id : undefined,
+      )
       if (ok) {
         addToast({ type: ToastType.Success, message: `Subscription "${id}" unpaired.` })
         onChange?.()
@@ -141,7 +159,7 @@ const AdminSubscriptionUsageCard: FunctionComponent<Props> = ({ application, onC
         addToast({ type: ToastType.Error, message: 'The server rejected the unpair request.' })
       }
     },
-    [application, onChange, load],
+    [application, onChange, load, subscriptions],
   )
 
   if (!available) {
@@ -180,15 +198,31 @@ const AdminSubscriptionUsageCard: FunctionComponent<Props> = ({ application, onC
                       <span className="text-foreground text-sm font-medium">
                         {entry.id}
                         {entry.accountLabel ? ` · ${entry.accountLabel}` : ''}
+                        {entry.legacyInvalidId && (
+                          <span className="text-danger ml-2">legacy id — runtime disabled; remove or re-pair</span>
+                        )}
                         {entry.needsRepair && <span className="text-warning ml-2">needs re-pair</span>}
+                        {!entry.needsRepair && entry.refreshRetryAt && entry.refreshRetryAt > Date.now() && (
+                          <span className="text-warning ml-2">refresh retry scheduled</span>
+                        )}
                       </span>
                       <Button
-                        label="Unpair"
+                        label={entry.legacyInvalidId ? 'Remove legacy pairing' : 'Unpair'}
                         colorStyle="danger"
                         onClick={() => void removeOne(entry.id)}
                         disabled={loading}
                       />
                     </div>
+                    {entry.profileReferencesKnown === false && (
+                      <Text className="text-danger mt-1">
+                        Profile references are unavailable; targeted unpairing will fail closed.
+                      </Text>
+                    )}
+                    {(entry.referencedByProfiles?.length ?? 0) > 0 && (
+                      <Text className="text-passive-1 mt-1">
+                        Used by: {entry.referencedByProfiles?.map((profile) => profile.name).join(', ')}
+                      </Text>
+                    )}
                     <div className="divide-border mt-1 divide-y">
                       <WindowRow label="Last 5 hours" window={perId[entry.id]?.tokens?.fiveHour} />
                       <WindowRow label="Last 7 days" window={perId[entry.id]?.tokens?.weekly} />

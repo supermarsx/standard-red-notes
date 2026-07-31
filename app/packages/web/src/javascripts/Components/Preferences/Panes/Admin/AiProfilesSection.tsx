@@ -41,8 +41,9 @@ const viewSignature = (profiles: MaskedAiProfile[], defaultProfileId: string | n
  * Standard Red Notes: MULTIPLE named assistant profiles — add / edit / delete,
  * a default selector, per-profile enable toggle, provider dropdown, base URL,
  * model (with server-side "fetch models" discovery for saved profiles), and a
- * write-only API key. Secrets are never prefilled; the server reports only a
- * "configured" boolean.
+ * write-only API key for API-key providers. Subscription profiles use only the
+ * encrypted pairing store; legacy plaintext tokens are visibly ignored and
+ * cleared on save.
  */
 const AiProfilesSection: FunctionComponent<Props> = ({
   application,
@@ -57,6 +58,7 @@ const AiProfilesSection: FunctionComponent<Props> = ({
   const [defaultId, setDefaultId] = useState<string | null>(defaultProfileId)
   const [dirty, setDirty] = useState(false)
   const [savingModelsFor, setSavingModelsFor] = useState<string | null>(null)
+  const migrationNeeded = rows.some((row) => row.legacyInlineCredentialIgnored)
 
   // Re-sync from the server view whenever it actually changes (after a save /
   // reload). Local unsaved edits are intentionally reset at that point.
@@ -141,7 +143,7 @@ const AiProfilesSection: FunctionComponent<Props> = ({
             label={busy ? 'Saving…' : 'Save profiles'}
             primary
             onClick={() => void handleSave()}
-            disabled={busy || !dirty}
+            disabled={busy || (!dirty && !migrationNeeded)}
           />
         </div>
       </div>
@@ -215,9 +217,14 @@ const AiProfilesSection: FunctionComponent<Props> = ({
                 <select
                   className="border-border bg-default text-foreground mt-1 w-full rounded border px-2 py-1.5"
                   value={row.provider}
-                  onChange={(event) =>
-                    mutateRow(row.id, { provider: event.target.value as ProfileRow['provider'], models: [] })
-                  }
+                  onChange={(event) => {
+                    const provider = event.target.value as ProfileRow['provider']
+                    mutateRow(row.id, {
+                      provider,
+                      models: [],
+                      ...(provider === 'codex-subscription' ? { newKey: '', clearKey: false } : {}),
+                    })
+                  }}
                   disabled={busy}
                 >
                   {PROFILE_PROVIDER_OPTIONS.map((opt) => (
@@ -294,28 +301,48 @@ const AiProfilesSection: FunctionComponent<Props> = ({
                 )}
               </div>
 
-              <div>
-                <label className="text-sm font-semibold">{option.keyLabel}</label>
-                <div className="mt-1 flex items-center gap-2">
-                  <DecoratedInput
-                    className={{ container: 'flex-1' }}
-                    type="password"
-                    placeholder={row.keyConfigured ? 'Set a new key (leave blank to keep)' : 'Set key (write-only)'}
-                    value={row.newKey}
-                    onChange={(value) => mutateRow(row.id, { newKey: value, clearKey: false })}
-                    disabled={busy}
-                  />
-                  {row.keyConfigured && (
-                    <Button
-                      label={row.clearKey ? 'Will clear' : 'Clear key'}
-                      colorStyle={row.clearKey ? 'danger' : 'default'}
-                      onClick={() => mutateRow(row.id, { clearKey: !row.clearKey, newKey: '' })}
+              {row.provider === 'codex-subscription' ? (
+                <div>
+                  <label className="text-sm font-semibold">{option.keyLabel}</label>
+                  <Text className="text-passive-1 mt-1 text-xs">
+                    Pair a named subscription in the secure wizard below, then select the matching subscription backend.
+                    Profile JSON never stores or accepts this token.
+                  </Text>
+                </div>
+              ) : (
+                <div>
+                  <label className="text-sm font-semibold">{option.keyLabel}</label>
+                  <div className="mt-1 flex items-center gap-2">
+                    <DecoratedInput
+                      className={{ container: 'flex-1' }}
+                      type="password"
+                      placeholder={row.keyConfigured ? 'Set a new key (leave blank to keep)' : 'Set key (write-only)'}
+                      value={row.newKey}
+                      onChange={(value) => mutateRow(row.id, { newKey: value, clearKey: false })}
                       disabled={busy}
                     />
-                  )}
+                    {row.keyConfigured && (
+                      <Button
+                        label={row.clearKey ? 'Will clear' : 'Clear key'}
+                        colorStyle={row.clearKey ? 'danger' : 'default'}
+                        onClick={() => mutateRow(row.id, { clearKey: !row.clearKey, newKey: '' })}
+                        disabled={busy}
+                      />
+                    )}
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
+
+            {row.legacyInlineCredentialIgnored && (
+              <div className="border-danger bg-danger-faded mt-3 rounded border border-solid p-3">
+                <Subtitle className="text-danger">Legacy plaintext subscription credential ignored</Subtitle>
+                <Text className="mt-1 text-xs">
+                  This saved profile contains an older inline credential. The server does not use or return it. Save
+                  profiles to remove it from plaintext settings, then pair the subscription with the secure wizard.
+                </Text>
+              </div>
+            )}
 
             {option.notes && <Text className="text-passive-1 mt-2 text-xs">{option.notes}</Text>}
           </div>

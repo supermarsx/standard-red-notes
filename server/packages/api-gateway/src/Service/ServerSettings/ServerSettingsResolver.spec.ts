@@ -565,6 +565,7 @@ describe('ServerSettingsStore + ServerSettingsResolver', () => {
           model: null,
           enabled: true,
           keyConfigured: true,
+          legacyInlineCredentialIgnored: false,
         },
       ])
       expect(view.settings.ai.defaultProfileId).toBe('a')
@@ -578,6 +579,37 @@ describe('ServerSettingsStore + ServerSettingsResolver', () => {
       })
       const raw = await resolver.getPersistedAiProfiles()
       expect(raw?.[0].apiKey).toBe('sk-a')
+    })
+
+    it('surfaces a non-secret migration warning and ignores a legacy plaintext subscription credential', async () => {
+      const secret = 'LEGACY_PLAINTEXT_SUBSCRIPTION_SECRET'
+      await fs.writeFile(
+        filePath,
+        JSON.stringify({
+          ai: {
+            profiles: [
+              {
+                id: 'legacy-codex',
+                name: 'Legacy Codex',
+                provider: 'codex-subscription',
+                enabled: true,
+                apiKey: secret,
+              },
+            ],
+            defaultProfileId: 'legacy-codex',
+          },
+        }),
+      )
+      const resolver = makeResolver()
+
+      const view = await resolver.view()
+      expect(view.settings.ai.profiles[0]).toMatchObject({
+        id: 'legacy-codex',
+        keyConfigured: false,
+        legacyInlineCredentialIgnored: true,
+      })
+      expect(JSON.stringify(view)).not.toContain(secret)
+      expect((await resolver.resolveActiveProfile())?.apiKey).toBeUndefined()
     })
   })
 

@@ -31,6 +31,12 @@ import { loadContextualSearchSettings, saveContextualSearchSettings } from '@/As
 import { loadDeepResearchSettings, saveDeepResearchSettings } from '@/Assistant/deepResearchSettings'
 import { loadResearchModeSettings, saveResearchModeSettings } from '@/Assistant/researchModeSettings'
 import {
+  DEFAULT_ASSISTANT_SUBSCRIPTION_ID,
+  isValidAssistantPairingState,
+  safeAssistantAuthorizeUrl,
+} from '@/Assistant/subscriptionPairing'
+import { confirmDialog } from '@standardnotes/ui-services'
+import {
   createPersonaProfile,
   loadPersonaProfiles,
   loadPersonaSettings,
@@ -78,8 +84,7 @@ const PRESETS: { label: string; baseURL: string }[] = [
 ]
 
 // Poll cadence + ceiling for the pairing popup. Polling /status is the PRIMARY
-// signal that the OAuth round-trip finished; the callback postMessage below is a
-// best-effort enhancement (the popup may be cross-origin and unable to reach us).
+// signal that the OAuth round-trip finished. The external tab has no opener.
 const PAIR_POLL_INTERVAL_MS = 2000
 const PAIR_POLL_TIMEOUT_MS = 120000
 
@@ -110,11 +115,10 @@ const SubscriptionPairing = ({ application }: { application: WebApplication }) =
 
   const pollRef = useRef<number | null>(null)
   const timeoutRef = useRef<number | null>(null)
-  const popupRef = useRef<Window | null>(null)
   const mountedRef = useRef(true)
 
   const refreshStatus = useCallback(async () => {
-    const result = await application.assistantSubscriptionStatus()
+    const result = await application.assistantSubscriptionStatus(DEFAULT_ASSISTANT_SUBSCRIPTION_ID)
     if (mountedRef.current) {
       setStatus(result)
     }
@@ -155,42 +159,30 @@ const SubscriptionPairing = ({ application }: { application: WebApplication }) =
     }
   }, [refreshStatus])
 
-  // Enhancement: the callback page may postMessage the opener when pairing lands.
-  // Polling is the source of truth; this just makes success feel instant when it
-  // works. We don't trust the payload beyond its shape — we re-fetch /status.
-  useEffect(() => {
-    const onMessage = (event: MessageEvent) => {
-      const data = event.data as { type?: string } | undefined
-      if (data && data.type === 'chatgpt-paired') {
-        void refreshStatus().then((result) => {
-          if (result.paired) {
-            stopPolling()
-          }
-        })
-      }
-    }
-    window.addEventListener('message', onMessage)
-    return () => window.removeEventListener('message', onMessage)
-  }, [refreshStatus, stopPolling])
-
   const handlePair = useCallback(async () => {
     setError(null)
     setPairing(true)
     try {
-      const { ok, data } = await application.assistantSubscriptionStart()
-      if (!ok || !data?.authorizeUrl) {
+      const { ok, data } = await application.assistantSubscriptionStart(DEFAULT_ASSISTANT_SUBSCRIPTION_ID)
+      if (
+        !ok ||
+        !data?.authorizeUrl ||
+        !isValidAssistantPairingState(data.state) ||
+        data.subscriptionId !== DEFAULT_ASSISTANT_SUBSCRIPTION_ID
+      ) {
         throw new Error(
           'The server did not return an authorization URL. Check that pairing is configured on the server.',
         )
       }
-      // Named popup so repeated attempts reuse one window. Kept without `noopener`
-      // so the callback page can postMessage us; the primary signal is polling.
-      popupRef.current = window.open(data.authorizeUrl, 'chatgpt-pairing', 'width=520,height=720')
+      const authorizeUrl = safeAssistantAuthorizeUrl(data.authorizeUrl, data.state)
+      if (!authorizeUrl) {
+        throw new Error('The server returned an unsafe authorization URL.')
+      }
+      window.open(authorizeUrl, '_blank', 'noopener,noreferrer,width=520,height=720')
       pollRef.current = window.setInterval(() => {
         void refreshStatus().then((result) => {
           if (result.paired) {
             stopPolling()
-            popupRef.current?.close?.()
           }
         })
       }, PAIR_POLL_INTERVAL_MS)
@@ -212,9 +204,30 @@ const SubscriptionPairing = ({ application }: { application: WebApplication }) =
 
   const handleUnpair = useCallback(async () => {
     setError(null)
+    if (status?.profileReferencesKnown === false) {
+      setError('Assistant or backend profile references could not be checked, so the server blocks unpairing safely.')
+      return
+    }
+    const references = status?.referencedByProfiles ?? []
+    if (
+      !(await confirmDialog({
+        title: 'Unpair the default ChatGPT subscription?',
+        text:
+          references.length > 0
+            ? `This leaves ${references.length} assistant or backend profile(s) without a credential until you re-pair this id.`
+            : 'The encrypted server-held credential will be removed. Other pairing ids are unaffected.',
+        confirmButtonText: 'Unpair',
+        confirmButtonStyle: 'danger',
+      }))
+    ) {
+      return
+    }
     setLoading(true)
     try {
-      const { ok } = await application.assistantSubscriptionUnpair()
+      const { ok } = await application.assistantSubscriptionUnpair(
+        DEFAULT_ASSISTANT_SUBSCRIPTION_ID,
+        references.length > 0,
+      )
       if (!ok) {
         throw new Error('The server rejected the unpair request.')
       }
@@ -228,7 +241,7 @@ const SubscriptionPairing = ({ application }: { application: WebApplication }) =
         setLoading(false)
       }
     }
-  }, [application, refreshStatus])
+  }, [application, refreshStatus, status?.profileReferencesKnown, status?.referencedByProfiles])
 
   const paired = status?.paired === true
   const expiry = formatExpiry(status?.expiresAt)
@@ -277,9 +290,22 @@ const SubscriptionPairing = ({ application }: { application: WebApplication }) =
                 The stored token could not be refreshed and needs re-pairing. Click Pair with ChatGPT again.
               </Text>
             )}
+            {!status?.needsRepair && status?.refreshRetryAt && status.refreshRetryAt > Date.now() && (
+              <Text className="text-warning mt-1">
+                The provider is temporarily unavailable. Automatic refresh will retry after{' '}
+                {new Date(status.refreshRetryAt).toLocaleString()}; re-pairing is not required.
+              </Text>
+            )}
+            {status?.profileReferencesKnown === false && (
+              <Text className="text-danger mt-1">
+                Assistant or backend profile references are unavailable; unpairing is blocked until settings are
+                readable.
+              </Text>
+            )}
             {status?.usingEnvFallback && (
               <Text className="text-passive-1 mt-1">
-                The server is currently falling back to its environment-configured token.
+                The server is using its explicitly configured legacy environment bearer because durable pairing is not
+                configured.
               </Text>
             )}
           </>
@@ -288,8 +314,8 @@ const SubscriptionPairing = ({ application }: { application: WebApplication }) =
             <Text>Not paired.</Text>
             {status?.usingEnvFallback && (
               <Text className="text-passive-1 mt-1">
-                The server is using an environment-configured subscription token as a fallback. Pairing here takes
-                precedence over that token.
+                The server is using an explicitly configured legacy environment bearer because durable pairing is not
+                configured. Once durable pairing is enabled, missing, repair-required, or unreadable slots fail closed.
               </Text>
             )}
             {status?.reason && <Text className="text-passive-1 mt-1">{status.reason}</Text>}

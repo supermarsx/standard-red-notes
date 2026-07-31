@@ -448,6 +448,74 @@ describe('AdminController server-status', () => {
       })
     })
 
+    it('GET warns about an ignored legacy inline Codex token and PUT removes it without exposing it', async () => {
+      const legacySecret = 'LEGACY_PLAINTEXT_SUBSCRIPTION_SECRET'
+      const profile = {
+        id: 'legacy-codex',
+        name: 'Legacy Codex',
+        provider: 'codex-subscription' as const,
+        enabled: true,
+      }
+      await resolver.applyPatch({ ai: { profiles: [{ ...profile, apiKey: legacySecret }] } })
+
+      await settingsController().getServerSettings({} as Request, responseWith([{ name: RoleName.NAMES.AdminUser }]))
+
+      const getPayload = jsonMock.mock.calls[0][0]
+      expect(JSON.stringify(getPayload)).not.toContain(legacySecret)
+      expect(getPayload.settings.ai.profiles).toEqual([
+        expect.objectContaining({
+          id: profile.id,
+          keyConfigured: false,
+          legacyInlineCredentialIgnored: true,
+        }),
+      ])
+
+      await settingsController().setServerSettings(
+        { body: { ai: { profiles: [profile] } } } as unknown as Request,
+        responseWith([{ name: RoleName.NAMES.AdminUser }]),
+      )
+
+      expect(await resolver.getPersistedAiProfiles()).toEqual([profile])
+      const putPayload = jsonMock.mock.calls[0][0]
+      expect(JSON.stringify(putPayload)).not.toContain(legacySecret)
+      expect(putPayload.settings.ai.profiles).toEqual([
+        expect.objectContaining({
+          id: profile.id,
+          keyConfigured: false,
+          legacyInlineCredentialIgnored: false,
+        }),
+      ])
+      expect(JSON.stringify(logger.info.mock.calls)).not.toContain(legacySecret)
+    })
+
+    it('PUT rejects a new inline Codex token without persisting or logging it', async () => {
+      const secret = 'NEW_PLAINTEXT_SUBSCRIPTION_SECRET'
+
+      await settingsController().setServerSettings(
+        {
+          body: {
+            ai: {
+              profiles: [
+                {
+                  id: 'codex',
+                  name: 'Codex',
+                  provider: 'codex-subscription',
+                  enabled: true,
+                  apiKey: secret,
+                },
+              ],
+            },
+          },
+        } as unknown as Request,
+        responseWith([{ name: RoleName.NAMES.AdminUser }]),
+      )
+
+      expect(statusMock).toHaveBeenCalledWith(400)
+      expect(await resolver.getPersistedAiProfiles()).toBeUndefined()
+      expect(JSON.stringify(jsonMock.mock.calls)).not.toContain(secret)
+      expect(JSON.stringify(logger.info.mock.calls)).not.toContain(secret)
+    })
+
     it('PUT validates: bad URL, negative limit, empty key and empty body are 400s that persist nothing', async () => {
       const cases = [
         { updateCheck: { url: 'not-a-url' } },

@@ -422,6 +422,8 @@ export type AdminAiProfileView = {
   models?: string[]
   enabled: boolean
   keyConfigured: boolean
+  /** Legacy plaintext subscription credential exists but is ignored server-side. */
+  legacyInlineCredentialIgnored?: boolean
 }
 
 /** A masked backend (provider/connection) profile from the server view. */

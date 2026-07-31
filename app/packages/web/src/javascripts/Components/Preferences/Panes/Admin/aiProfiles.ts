@@ -22,6 +22,8 @@ export type MaskedAiProfile = {
   models?: string[]
   enabled: boolean
   keyConfigured: boolean
+  /** A legacy plaintext subscription credential is present but ignored. */
+  legacyInlineCredentialIgnored?: boolean
   /** Standard Red Notes: optional reference to a named backend profile. */
   backendProfileId?: string | null
 }
@@ -51,6 +53,8 @@ export type ProfileRow = {
   models: string[]
   enabled: boolean
   keyConfigured: boolean
+  /** Non-secret server warning; cleared after the migrated profile set is saved. */
+  legacyInlineCredentialIgnored: boolean
   /** Newly-typed key (write-only); empty means "unchanged". */
   newKey: string
   /** When true, send apiKey:null to clear the stored key. */
@@ -109,9 +113,10 @@ export const PROFILE_PROVIDER_OPTIONS: ProviderOption[] = [
     supportsBaseUrl: true,
     supportsModelDiscovery: false,
     keyRequired: false,
-    keyLabel: 'Subscription token (optional if paired below)',
+    keyLabel: 'Encrypted subscription pairing',
     baseUrlPlaceholder: 'https://chatgpt.com/backend-api/codex',
-    notes: 'Uses the paired ChatGPT/Codex subscription credential; pair it with the wizard below.',
+    notes:
+      'Uses only the encrypted ChatGPT/Codex pairing store. Inline subscription tokens are rejected and never used.',
   },
 ]
 
@@ -139,6 +144,7 @@ export const maskedProfileToRow = (profile: MaskedAiProfile): ProfileRow => ({
   models: profile.models ?? [],
   enabled: profile.enabled,
   keyConfigured: profile.keyConfigured,
+  legacyInlineCredentialIgnored: Boolean(profile.legacyInlineCredentialIgnored),
   newKey: '',
   clearKey: false,
   backendProfileId: profile.backendProfileId ?? '',
@@ -154,6 +160,7 @@ export const emptyProfileRow = (): ProfileRow => ({
   models: [],
   enabled: true,
   keyConfigured: false,
+  legacyInlineCredentialIgnored: false,
   newKey: '',
   clearKey: false,
   backendProfileId: '',
@@ -174,6 +181,12 @@ export const validateProfileRow = (row: ProfileRow): ProfileValidation => {
   }
   if (!option.supportsBaseUrl && row.baseUrl.trim() !== '') {
     return { ok: false, error: `${row.name}: ${option.label} does not use a base URL.` }
+  }
+  if (row.provider === 'codex-subscription' && row.newKey.trim() !== '') {
+    return {
+      ok: false,
+      error: `${row.name || 'Profile'}: pair the subscription below instead of storing a token in the profile.`,
+    }
   }
   return { ok: true }
 }
@@ -218,7 +231,10 @@ export const rowToPayload = (row: ProfileRow): AiProfilePayload => {
   // is sent so the server clears any prior link (falls back to embedded fields).
   payload.backendProfileId = row.backendProfileId.trim()
   // Secret: new key wins; explicit clear sends null; otherwise omit to preserve.
-  if (row.newKey.trim() !== '') {
+  if (row.provider === 'codex-subscription') {
+    // Omit the secret field. The server treats omission as a migration save and
+    // removes any legacy plaintext subscription token.
+  } else if (row.newKey.trim() !== '') {
     payload.apiKey = row.newKey.trim()
   } else if (row.clearKey) {
     payload.apiKey = null

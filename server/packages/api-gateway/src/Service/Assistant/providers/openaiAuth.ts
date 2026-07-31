@@ -37,6 +37,8 @@ export const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1'
 export const DEFAULT_CODEX_SUBSCRIPTION_BASE_URL = 'https://chatgpt.com/backend-api/codex'
 
 export type OpenAiAuthMode = 'api-key' | 'subscription'
+const MAX_SUBSCRIPTION_BEARER_LENGTH = 256 * 1024
+const MAX_UPSTREAM_HEADER_VALUE_LENGTH = 8 * 1024
 
 /**
  * Fully-resolved upstream connection parameters the OpenAI client/provider needs.
@@ -61,6 +63,80 @@ function normalizeMode(raw: string | undefined): OpenAiAuthMode {
   return raw === 'subscription' ? 'subscription' : 'api-key'
 }
 
+function isHeaderSafeValue(value: unknown, maximumLength: number): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= maximumLength &&
+    !/[\u0000-\u001f\u007f]/.test(value)
+  )
+}
+
+function isRealSubscriptionBearer(value: unknown): value is string {
+  return isHeaderSafeValue(value, MAX_SUBSCRIPTION_BEARER_LENGTH) && !/^\s*$/.test(value)
+}
+
+function isLoopbackHost(hostname: string): boolean {
+  const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, '')
+  return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1'
+}
+
+function hasUnambiguousNetworkUrlSyntax(raw: string): boolean {
+  if (raw.trim() !== raw) {
+    return false
+  }
+  for (const character of raw) {
+    const codePoint = character.codePointAt(0) ?? 0
+    if (
+      character === '\\' ||
+      /\s/u.test(character) ||
+      codePoint <= 0x1f ||
+      (codePoint >= 0x7f && codePoint <= 0x9f) ||
+      codePoint === 0x200e ||
+      codePoint === 0x200f ||
+      (codePoint >= 0x202a && codePoint <= 0x202e) ||
+      (codePoint >= 0x2066 && codePoint <= 0x2069)
+    ) {
+      return false
+    }
+  }
+  const authority = /^(?:https?):\/\/([^/?#]+)/i.exec(raw)?.[1]
+  return Boolean(authority && !authority.includes('@'))
+}
+
+function hasExplicitRawLoopbackAuthority(raw: string): boolean {
+  const authority = /^(?:http):\/\/([^/?#]+)/i.exec(raw)?.[1]
+  return /^(?:localhost|127\.0\.0\.1|\[::1\])(?::[0-9]{1,5})?$/i.test(authority ?? '')
+}
+
+/**
+ * Subscription credentials are more privileged than ordinary API keys. Never
+ * transport them to URL userinfo/query/fragment components or cleartext remote
+ * HTTP. Paths are allowed because the observed Codex backend uses one.
+ */
+export function safeSubscriptionBaseUrl(raw: string): string | null {
+  if (!hasUnambiguousNetworkUrlSyntax(raw)) {
+    return null
+  }
+  let url: URL
+  try {
+    url = new URL(raw)
+  } catch {
+    return null
+  }
+  const safeProtocol =
+    url.protocol === 'https:' ||
+    (url.protocol === 'http:' && isLoopbackHost(url.hostname) && hasExplicitRawLoopbackAuthority(raw))
+  if (!safeProtocol || url.username || url.password || raw.includes('?') || raw.includes('#')) {
+    return null
+  }
+  return url.toString().replace(/\/$/, '')
+}
+
+function isHeaderName(value: string): boolean {
+  return /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(value)
+}
+
 /**
  * Parses the optional ASSISTANT_OPENAI_EXTRA_HEADERS env value. Accepts either a
  * JSON object (`{"X-Foo":"bar"}`) or a comma-separated `Key: Value` list. Invalid
@@ -77,8 +153,9 @@ export function parseExtraHeaders(raw: string | undefined): Record<string, strin
       const parsed = JSON.parse(trimmed) as Record<string, unknown>
       const out: Record<string, string> = {}
       for (const [k, v] of Object.entries(parsed)) {
-        if (k && v != null) {
-          out[k] = `${v}`
+        const stringValue = v == null ? '' : `${v}`
+        if (isHeaderName(k) && isHeaderSafeValue(stringValue, MAX_UPSTREAM_HEADER_VALUE_LENGTH)) {
+          out[k] = stringValue
         }
       }
       return out
@@ -95,7 +172,7 @@ export function parseExtraHeaders(raw: string | undefined): Record<string, strin
     }
     const key = pair.slice(0, idx).trim()
     const value = pair.slice(idx + 1).trim()
-    if (key) {
+    if (isHeaderName(key) && isHeaderSafeValue(value, MAX_UPSTREAM_HEADER_VALUE_LENGTH)) {
       out[key] = value
     }
   }
@@ -111,24 +188,36 @@ export function resolveOpenAiUpstream(config: AssistantProviderConfig): Resolved
   const mode = normalizeMode(config.openaiAuthMode)
 
   if (mode === 'subscription') {
-    const baseURL = config.openaiSubscriptionBaseURL || config.openaiBaseURL || DEFAULT_CODEX_SUBSCRIPTION_BASE_URL
+    if (!isRealSubscriptionBearer(config.openaiSubscriptionToken)) {
+      throw new Error('ChatGPT/Codex subscription credential is unavailable or invalid.')
+    }
+    const baseURL = safeSubscriptionBaseUrl(
+      config.openaiSubscriptionBaseURL || config.openaiBaseURL || DEFAULT_CODEX_SUBSCRIPTION_BASE_URL,
+    )
+    if (!baseURL) {
+      throw new Error('ChatGPT/Codex subscription endpoint is unsafe or invalid.')
+    }
 
-    // The subscription token is the bearer credential. We deliberately do NOT
-    // fall back to the API key here: subscription mode is an explicit opt-in and
-    // mixing credentials silently would be surprising. A missing token surfaces
-    // as an auth failure upstream rather than leaking the API key.
-    const apiKey = (config.openaiSubscriptionToken || '').trim() || 'missing-subscription-token'
+    // Preserve the opaque, control-free bearer exactly. Trimming would mutate a
+    // credential returned by the provider.
+    const apiKey = config.openaiSubscriptionToken
 
     const defaultHeaders: Record<string, string> = {
       ...parseExtraHeaders(config.openaiExtraHeaders),
     }
-    if (config.openaiAccountId) {
+    if (config.openaiAccountId !== undefined) {
+      if (!isHeaderSafeValue(config.openaiAccountId, MAX_UPSTREAM_HEADER_VALUE_LENGTH)) {
+        throw new Error('ChatGPT/Codex account id is unsafe or invalid.')
+      }
       // Header name is configurable upstream-contract detail; this is the
       // commonly-observed name. Override via ASSISTANT_OPENAI_EXTRA_HEADERS if the
       // live backend expects a different one.
       defaultHeaders['ChatGPT-Account-Id'] = config.openaiAccountId
     }
-    if (config.openaiBeta) {
+    if (config.openaiBeta !== undefined) {
+      if (!isHeaderSafeValue(config.openaiBeta, MAX_UPSTREAM_HEADER_VALUE_LENGTH)) {
+        throw new Error('ChatGPT/Codex beta header is unsafe or invalid.')
+      }
       defaultHeaders['OpenAI-Beta'] = config.openaiBeta
     }
 
@@ -147,12 +236,17 @@ export function resolveOpenAiUpstream(config: AssistantProviderConfig): Resolved
 
 /**
  * Whether the OpenAI-compatible provider has enough config to be advertised.
- * In subscription mode a token (or base URL) is what makes it "configured"; in
- * api-key mode an API key or an explicit base URL does.
+ * Subscription mode requires both a real bearer and a safe credential
+ * destination; API-key mode requires an API key or an explicit base URL.
  */
 export function openAiCompatibleConfigured(config: AssistantProviderConfig): boolean {
   if (normalizeMode(config.openaiAuthMode) === 'subscription') {
-    return Boolean(config.openaiSubscriptionToken || config.openaiSubscriptionBaseURL || config.openaiBaseURL)
+    return (
+      isRealSubscriptionBearer(config.openaiSubscriptionToken) &&
+      safeSubscriptionBaseUrl(
+        config.openaiSubscriptionBaseURL || config.openaiBaseURL || DEFAULT_CODEX_SUBSCRIPTION_BASE_URL,
+      ) !== null
+    )
   }
   return Boolean(config.openaiBaseURL || config.openaiApiKey)
 }

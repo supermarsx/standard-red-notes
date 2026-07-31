@@ -15,9 +15,11 @@ import { AssistantProviderConfig } from './providers/factory'
  * are persisted they are mapped into synthesized default profiles, so a fresh /
  * upgraded install behaves exactly as before.
  *
- * SECRETS: a profile's `apiKey` is persisted (same trust level as the env file it
- * replaces) but is NEVER returned by any endpoint — the masked view only reports
- * a `keyConfigured` boolean, exactly like the pre-existing single-provider cards.
+ * SECRETS: an ordinary provider profile's `apiKey` is persisted (same trust level
+ * as the env file it replaces) but is NEVER returned by any endpoint — the masked
+ * view only reports a `keyConfigured` boolean. Subscription credentials are the
+ * exception: they belong only in the encrypted pairing store, and inline values
+ * are rejected or removed during legacy migration.
  */
 
 /** The provider kinds a profile can target. */
@@ -76,7 +78,12 @@ export interface PersistedAiProfile {
   subscriptionId?: string
 }
 
-/** A profile as returned in the masked admin view — the secret is replaced by a boolean. */
+/**
+ * A profile as returned in the masked admin view. Ordinary provider secrets are
+ * replaced by a boolean. Legacy plaintext subscription tokens are never treated
+ * as configured; a non-secret warning tells the admin that the ignored value
+ * will be removed the next time profiles are saved.
+ */
 export interface MaskedAiProfile {
   id: string
   name: string
@@ -86,6 +93,7 @@ export interface MaskedAiProfile {
   models?: string[]
   enabled: boolean
   keyConfigured: boolean
+  legacyInlineCredentialIgnored: boolean
 }
 
 /** A fully-resolved profile ready to be built into a concrete provider. */
@@ -100,6 +108,7 @@ export interface ResolvedProfileProvider {
 
 /** Masks a persisted profile for the admin view (drops the secret). */
 export function maskProfile(profile: PersistedAiProfile): MaskedAiProfile {
+  const legacyInlineCredentialIgnored = profile.provider === 'codex-subscription' && Boolean(profile.apiKey)
   return {
     id: profile.id,
     name: profile.name,
@@ -108,7 +117,8 @@ export function maskProfile(profile: PersistedAiProfile): MaskedAiProfile {
     model: profile.model ?? null,
     ...(profile.models && profile.models.length > 0 ? { models: profile.models } : {}),
     enabled: profile.enabled,
-    keyConfigured: Boolean(profile.apiKey),
+    keyConfigured: profile.provider !== 'codex-subscription' && Boolean(profile.apiKey),
+    legacyInlineCredentialIgnored,
   }
 }
 
@@ -120,7 +130,8 @@ export function maskProfiles(profiles: PersistedAiProfile[]): MaskedAiProfile[] 
  * Maps one profile onto the AssistantProviderConfig + factory provider id the
  * existing provider factory understands. Pure — no I/O. For codex-subscription
  * the caller may inject a fresh subscription token (see AssistantController); the
- * profile's own apiKey is used as the token fallback.
+ * durable pairing is authoritative. A legacy plaintext apiKey on such a profile
+ * is deliberately ignored and never copied into provider configuration.
  */
 export function resolveProfileProvider(profile: PersistedAiProfile, requestedModel?: string): ResolvedProfileProvider {
   const model = (requestedModel && requestedModel.trim()) || profile.model || ''
@@ -144,7 +155,7 @@ export function resolveProfileProvider(profile: PersistedAiProfile, requestedMod
         model,
         config: {
           openaiAuthMode: 'subscription',
-          openaiSubscriptionToken: profile.apiKey,
+          openaiSubscriptionToken: undefined,
           openaiSubscriptionBaseURL: profile.baseUrl,
           openaiModel: profile.model,
         },
@@ -195,7 +206,10 @@ export function legacyProfilesFromConfig(config: AssistantProviderConfig): Persi
       baseUrl: subscription ? config.openaiSubscriptionBaseURL || config.openaiBaseURL : config.openaiBaseURL,
       model: config.openaiModel,
       enabled: true,
-      apiKey: subscription ? config.openaiSubscriptionToken : config.openaiApiKey,
+      // Never project a legacy subscription bearer into the profile's plaintext
+      // apiKey field. The controller can consult the boot-time env config only
+      // when encrypted pairing is not configured.
+      apiKey: subscription ? undefined : config.openaiApiKey,
     })
   }
 
@@ -423,11 +437,19 @@ export function validateProfilesPatch(
           profile.backendProfileId = backendProfileId
         }
 
-        // Secret handling: undefined => preserve existing key; null => clear;
-        // non-empty string => set the new key.
-        if (raw.apiKey === undefined) {
+        // Subscription credentials belong only in the encrypted pairing store.
+        // Omission/null/empty clears any legacy plaintext value on save; a new
+        // inline value is rejected. For other providers, omission preserves an
+        // existing non-subscription key by id.
+        if (provider === 'codex-subscription') {
+          if (raw.apiKey !== undefined && raw.apiKey !== null && raw.apiKey !== '') {
+            return {
+              error: `Profile ${id} cannot store a ChatGPT/Codex subscription credential inline. Use subscription pairing.`,
+            }
+          }
+        } else if (raw.apiKey === undefined) {
           const prior = existingById.get(id)
-          if (prior?.apiKey) {
+          if (prior?.provider !== 'codex-subscription' && prior?.apiKey) {
             profile.apiKey = prior.apiKey
           }
         } else if (raw.apiKey === null || raw.apiKey === '') {
@@ -598,16 +620,24 @@ export function effectiveBackendProfiles(
 /**
  * Merge a referenced backend profile onto an assistant profile, producing a
  * self-contained PersistedAiProfile the existing resolveProfileProvider consumes.
- * When the profile references no backend (or the backend is missing) it is
- * returned unchanged (legacy embedded behavior). A subscription backend maps to
- * the codex-subscription provider and carries the subscriptionId through so the
- * proxy can draw a fresh token for THAT paired subscription.
+ * When the profile references no backend (or the backend is missing), legacy
+ * embedded behavior is preserved except that a codex-subscription profile's
+ * historical inline plaintext credential is always discarded. A subscription
+ * backend maps to the codex-subscription provider and carries the subscriptionId
+ * through so the proxy can draw a fresh token for THAT paired subscription.
  */
 export function resolveEffectiveAssistantProfile(
   profile: PersistedAiProfile,
   backendProfiles: PersistedBackendProfile[],
 ): PersistedAiProfile {
   if (!profile.backendProfileId) {
+    if (profile.provider === 'codex-subscription') {
+      return {
+        ...profile,
+        apiKey: undefined,
+        subscriptionId: profile.subscriptionId ?? DEFAULT_SUBSCRIPTION_ID,
+      }
+    }
     return profile
   }
   const backend = backendProfiles.find((candidate) => candidate.id === profile.backendProfileId)

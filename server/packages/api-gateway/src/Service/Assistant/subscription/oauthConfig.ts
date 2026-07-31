@@ -31,12 +31,81 @@ export interface ChatGptOAuthConfig {
   scopes: string
   /** Dot-path of the account-id claim inside the decoded id_token JWT payload. */
   accountIdClaimPath: string
-  /** Optional token-revocation endpoint (best-effort revoke on unpair). */
-  revokeUrl?: string
 }
 
 /** Accessor over the environment so this stays pure and unit-testable. */
 export type EnvGetter = (key: string) => string | undefined
+
+function isLoopbackHost(hostname: string): boolean {
+  const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, '')
+  return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1'
+}
+
+/**
+ * WHATWG URL parsing deliberately repairs backslashes and strips surrounding
+ * whitespace/control bytes. OAuth configuration must not depend on that
+ * browser-style error recovery because different intermediaries can interpret
+ * the raw authority differently.
+ */
+function hasUnambiguousNetworkUrlSyntax(raw: string): boolean {
+  if (raw.trim() !== raw) {
+    return false
+  }
+  for (const character of raw) {
+    const codePoint = character.codePointAt(0) ?? 0
+    if (
+      character === '\\' ||
+      /\s/u.test(character) ||
+      codePoint <= 0x1f ||
+      (codePoint >= 0x7f && codePoint <= 0x9f) ||
+      codePoint === 0x200e ||
+      codePoint === 0x200f ||
+      (codePoint >= 0x202a && codePoint <= 0x202e) ||
+      (codePoint >= 0x2066 && codePoint <= 0x2069)
+    ) {
+      return false
+    }
+  }
+  const authority = /^(?:https?):\/\/([^/?#]+)/i.exec(raw)?.[1]
+  return Boolean(authority && !authority.includes('@'))
+}
+
+function hasExplicitRawLoopbackAuthority(raw: string): boolean {
+  const authority = /^(?:http):\/\/([^/?#]+)/i.exec(raw)?.[1]
+  return /^(?:localhost|127\.0\.0\.1|\[::1\])(?::[0-9]{1,5})?$/i.test(authority ?? '')
+}
+
+/**
+ * OAuth navigation/token endpoints must be HTTPS, with the narrow loopback-HTTP
+ * exception required by native/CLI OAuth clients. Credentials and fragments
+ * are never valid endpoint configuration.
+ */
+export function parseSafeOAuthUrl(raw: string, label: string): URL {
+  if (!hasUnambiguousNetworkUrlSyntax(raw)) {
+    throw new Error(`${label} must use unambiguous absolute HTTP(S) URL syntax.`)
+  }
+  let url: URL
+  try {
+    url = new URL(raw)
+  } catch {
+    throw new Error(`${label} must be an absolute HTTPS URL (or HTTP loopback URL).`)
+  }
+  const safeProtocol =
+    url.protocol === 'https:' ||
+    (url.protocol === 'http:' && isLoopbackHost(url.hostname) && hasExplicitRawLoopbackAuthority(raw))
+  if (!safeProtocol || url.username || url.password || raw.includes('?') || raw.includes('#')) {
+    throw new Error(
+      `${label} must be an absolute HTTPS URL (or HTTP loopback URL) without credentials, query parameters, or a fragment.`,
+    )
+  }
+  return url
+}
+
+export function assertSafeOAuthConfig(config: ChatGptOAuthConfig): void {
+  parseSafeOAuthUrl(config.authorizeUrl, 'OAuth authorize URL')
+  parseSafeOAuthUrl(config.tokenUrl, 'OAuth token URL')
+  parseSafeOAuthUrl(config.redirectUri, 'OAuth redirect URI')
+}
 
 // ---- UNVERIFIED best-effort defaults (see module header) ----
 
@@ -76,7 +145,6 @@ export function buildDefaultOAuthConfig(env: EnvGetter): ChatGptOAuthConfig {
     redirectUri: env('ASSISTANT_CHATGPT_OAUTH_REDIRECT_URI') || defaultRedirectUri,
     scopes: env('ASSISTANT_CHATGPT_OAUTH_SCOPES') || DEFAULT_SCOPES,
     accountIdClaimPath: env('ASSISTANT_CHATGPT_OAUTH_ACCOUNT_ID_CLAIM') || DEFAULT_ACCOUNT_ID_CLAIM,
-    revokeUrl: env('ASSISTANT_CHATGPT_OAUTH_REVOKE_URL') || undefined,
   }
 }
 
@@ -88,7 +156,8 @@ export function buildAuthorizeUrl(
   config: ChatGptOAuthConfig,
   params: { state: string; codeChallenge: string },
 ): string {
-  const url = new URL(config.authorizeUrl)
+  assertSafeOAuthConfig(config)
+  const url = parseSafeOAuthUrl(config.authorizeUrl, 'OAuth authorize URL')
   url.searchParams.set('response_type', 'code')
   url.searchParams.set('client_id', config.clientId)
   url.searchParams.set('redirect_uri', config.redirectUri)

@@ -50,6 +50,18 @@ describe('assistant profiles', () => {
       expect(masked[0]).toMatchObject({ id: 'p1', name: 'Work Claude', provider: 'anthropic', keyConfigured: true })
       expect(masked[2]).toMatchObject({ id: 'p3', keyConfigured: false, enabled: false })
     })
+
+    it('reports but never exposes or treats a legacy inline subscription credential as configured', () => {
+      const secret = 'LEGACY_PLAINTEXT_SUBSCRIPTION_SECRET'
+      const [masked] = maskProfiles([{ ...codex, apiKey: secret }])
+
+      expect(masked).toMatchObject({
+        id: 'p3',
+        keyConfigured: false,
+        legacyInlineCredentialIgnored: true,
+      })
+      expect(JSON.stringify(masked)).not.toContain(secret)
+    })
   })
 
   describe('resolveProfileProvider', () => {
@@ -71,12 +83,13 @@ describe('assistant profiles', () => {
     })
 
     it('maps codex-subscription to the openai provider in subscription mode', () => {
-      const r = resolveProfileProvider(codex)
+      const r = resolveProfileProvider({ ...codex, apiKey: 'LEGACY_PLAINTEXT_SUBSCRIPTION_SECRET' })
       expect(r.providerId).toBe('openai')
       expect(r.config).toMatchObject({
         openaiAuthMode: 'subscription',
         openaiSubscriptionBaseURL: 'https://chatgpt.com/backend-api/codex',
       })
+      expect(r.config.openaiSubscriptionToken).toBeUndefined()
     })
 
     it('maps ollama to the native ollama provider with its base URL', () => {
@@ -112,7 +125,7 @@ describe('assistant profiles', () => {
       })
       expect(profiles).toHaveLength(1)
       expect(profiles[0].provider).toBe('codex-subscription')
-      expect(profiles[0].apiKey).toBe('tok')
+      expect(profiles[0].apiKey).toBeUndefined()
     })
 
     it('returns no profiles when nothing is configured', () => {
@@ -190,6 +203,29 @@ describe('assistant profiles', () => {
         [openai],
       )
       expect('error' in clearResult ? 'err' : clearResult.profiles?.[0].apiKey).toBeUndefined()
+    })
+
+    it('rejects new inline subscription credentials and clears a legacy value when omitted', () => {
+      const legacy: PersistedAiProfile = {
+        id: 'codex',
+        name: 'Legacy Codex',
+        provider: 'codex-subscription',
+        enabled: true,
+        apiKey: 'LEGACY_PLAINTEXT_SUBSCRIPTION_SECRET',
+      }
+      const rejected = validateProfilesPatch(
+        [{ id: 'codex', name: 'Legacy Codex', provider: 'codex-subscription', enabled: true, apiKey: 'new-token' }],
+        undefined,
+        [legacy],
+      )
+      expect('error' in rejected ? rejected.error : '').toContain('cannot store')
+
+      const migrated = validateProfilesPatch(
+        [{ id: 'codex', name: 'Legacy Codex', provider: 'codex-subscription', enabled: true }],
+        undefined,
+        [legacy],
+      )
+      expect('error' in migrated ? 'error' : migrated.profiles?.[0].apiKey).toBeUndefined()
     })
 
     it('clears everything with profiles: null', () => {
