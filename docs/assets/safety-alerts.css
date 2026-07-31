@@ -100,6 +100,11 @@
 }
 
 .compatibility-badge--unverified {
+  background: #f2f4f7;
+  color: #4b5563;
+}
+
+.compatibility-badge--incompatible {
   background: #fff0f1;
   color: #8b1722;
 }

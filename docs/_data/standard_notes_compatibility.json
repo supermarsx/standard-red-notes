@@ -1,0 +1,42 @@
+{
+  "auditedAt": "2026-07-31",
+  "upstream": {
+    "app": {
+      "repository": "https://github.com/standardnotes/app",
+      "commit": "1e7ddb7c40a8d0e0d226301e071cc85d29288513",
+      "exactLocalFiles": {
+        "app/packages/models/src/Domain/Local/Protocol/ProtocolVersion.ts": "43efdf207a2db853176097095f5f4f729b15468ade2dd84fbd306e15fb4a8bbb",
+        "app/packages/models/src/Domain/Abstract/Contextual/BackupFile.ts": "36e150bd00b80e80145782422e3359f2e7684622617b0f2abf02ea31dd0fa3ca",
+        "app/packages/encryption/src/Domain/Operator/Functions.ts": "121861e46d955ed4096003c01ddd794da9b2e49ad9309a31004d7996d5ebb95d"
+      }
+    },
+    "server": {
+      "repository": "https://github.com/standardnotes/server",
+      "commit": "31d2b8a092d8e85982c367197ffcf97cc07e2669",
+      "exactLocalFiles": {
+        "server/packages/auth/src/Domain/Api/ApiVersion.ts": "b2b1918df9a411ef0d8773d16f4f7c34b4a918f8879027c107213e83f6cf8607",
+        "server/packages/auth/src/Domain/Auth/AuthResponseFactoryResolver.ts": "f72a475e19f10e7730309eb110ee4b4f6d28d91bb9a92685b329a017b0c97c9d",
+        "server/packages/syncing-server/src/Domain/Api/ApiVersion.ts": "4d673de58769479c68baa91cd344a614203ea9c8706afcd792abd4b9b25aca03",
+        "server/packages/syncing-server/src/Domain/Item/SyncResponse/SyncResponseFactoryResolver.ts": "b9c60e9ef4f657811e670ba31fff9082ef9b63be09a7d53ebc637e169c5c7654"
+      }
+    }
+  },
+  "forkAuditedFiles": {
+    "app/packages/services/src/Domain/Import/CreateEncryptedBackupFile.ts": "4e0b84ca51d4ad7b27d82c82825f9ec8506c00f3d8f7d047ae1226be337e75e2",
+    "app/packages/services/src/Domain/Import/ImportData.ts": "523226adbcdaa699773cb4952ca094fdc9ee0ebab0f91ca3149911885d937ddc",
+    "app/packages/services/src/Domain/Import/DecryptBackupFile.ts": "412c4ff692722874b89cd7639964af4070b943340efde5a5e444c1fef7a1d911",
+    "app/packages/services/src/Domain/Encryption/EncryptionService.ts": "97607cb6a465eb137b10aee5350bc7ac93ecc9ede12fb1e5824447b3699eac8b",
+    "app/packages/encryption/src/Domain/Operator/OperatorWrapper.ts": "dfe208dfed9c3f0563894feb9f149a9a90b64cbceeb62ed919c9a9c1c2db8c41",
+    "app/packages/models/src/Domain/Syncable/Folder/FolderContentType.ts": "8a7cf65bb8488b48156721a60717737ebdd521f2f30be08eff9b5fe2f19b9911",
+    "server/packages/domain-core/src/Domain/Common/ContentType.ts": "f3a78c1a8f4703a929dfee73076c27d9b4090eb3e24da2a282233d00fc2de4af",
+    "app/packages/snjs/lib/Domain/UseCase/AccountRecovery/AccountRecoveryEscrowTypes.ts": "add31da11b55e06a101a0cf3e0ea0452f93ca06c6a165c8e7f007c83218cd9d3",
+    "server/packages/auth/src/Domain/UseCase/GetAccountRecoveryEscrow/GetAccountRecoveryEscrow.ts": "d9c82a110055544ba15e8502b060388d0bab900eabaf4e07326bc8fa489259d7"
+  },
+  "contracts": {
+    "protocolVersions": ["001", "002", "003", "004"],
+    "latestProtocolVersion": "004",
+    "apiVersions": ["20161215", "20190520", "20200115", "20240226"],
+    "modernResponseFactory": "20200115",
+    "forkOnlyContentTypes": ["Folder"]
+  }
+}

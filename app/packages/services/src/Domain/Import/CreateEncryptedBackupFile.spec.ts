@@ -55,6 +55,10 @@ describe('CreateEncryptedBackupFile', () => {
     expect(contentTypes).toContain(ContentType.TYPES.UserPrefs)
     expect(contentTypes).toContain(ContentType.TYPES.Note)
     expect(result.getValue().items).toHaveLength(3)
+    expect(result.getValue()).toMatchObject({
+      version: '004',
+      keyParams: { version: '004' },
+    })
   })
 
   it('preserves unreadable ciphertext instead of silently omitting it', async () => {

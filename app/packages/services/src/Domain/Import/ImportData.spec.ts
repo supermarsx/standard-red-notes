@@ -1,4 +1,5 @@
 import {
+  BackupFile,
   DecryptedPayload,
   EncryptedPayload,
   FillItemContent,
@@ -8,7 +9,7 @@ import {
   EncryptedPayloadInterface,
 } from '@standardnotes/models'
 import { ContentType, Result } from '@standardnotes/domain-core'
-import { BackupFile } from '@standardnotes/models'
+import { ProtocolVersion } from '@standardnotes/common'
 
 import { ImportData } from './ImportData'
 
@@ -141,5 +142,74 @@ describe('ImportData', () => {
     expect(result.getValue().encryptedItemUuids).toEqual([])
     expect(result.getValue().errorCount).toBe(0)
     expect(payloads.importPayloads.mock.calls[0][0]).toHaveLength(2)
+  })
+
+  it.each([ProtocolVersion.V001, ProtocolVersion.V002, ProtocolVersion.V003, ProtocolVersion.V004])(
+    'accepts registered native backup protocol %s',
+    async (version) => {
+      encryption.supportedVersions.mockReturnValue([
+        ProtocolVersion.V001,
+        ProtocolVersion.V002,
+        ProtocolVersion.V003,
+        ProtocolVersion.V004,
+      ])
+      decryptBackupFile.execute.mockResolvedValue(Result.ok([]))
+
+      const result = await useCase.execute({ version, items: [] })
+
+      expect(result.isFailed()).toBe(false)
+      expect(decryptBackupFile.execute).toHaveBeenCalled()
+      expect(payloads.importPayloads).toHaveBeenCalledWith([], {})
+    },
+  )
+
+  it('rejects an unsupported backup version before decrypting or authorizing import', async () => {
+    encryption.supportedVersions.mockReturnValue([
+      ProtocolVersion.V001,
+      ProtocolVersion.V002,
+      ProtocolVersion.V003,
+      ProtocolVersion.V004,
+    ])
+
+    const result = await useCase.execute({ version: '999' as ProtocolVersion, items: [] })
+
+    expect(result.isFailed()).toBe(true)
+    expect(decryptBackupFile.execute).not.toHaveBeenCalled()
+    expect(protections.authorizeFileImport).not.toHaveBeenCalled()
+  })
+
+  it('rejects a 004 backup when the destination account is still 003', async () => {
+    encryption.supportedVersions.mockReturnValue([
+      ProtocolVersion.V001,
+      ProtocolVersion.V002,
+      ProtocolVersion.V003,
+      ProtocolVersion.V004,
+    ])
+    encryption.getUserVersion.mockReturnValue(ProtocolVersion.V003)
+
+    const result = await useCase.execute({ version: ProtocolVersion.V004, items: [] })
+
+    expect(result.isFailed()).toBe(true)
+    expect(decryptBackupFile.execute).not.toHaveBeenCalled()
+  })
+
+  it('accepts a versionless pre-003 envelope and recognizes legacy auth_params', async () => {
+    decryptBackupFile.execute.mockResolvedValue(Result.ok([]))
+    const legacyBackup = {
+      auth_params: {
+        email: 'legacy@example.test',
+        pw_cost: 110_000,
+        pw_nonce: 'nonce',
+        pw_salt: 'salt',
+        version: ProtocolVersion.V002,
+      },
+      items: [],
+    } as BackupFile
+
+    const result = await useCase.execute(legacyBackup)
+
+    expect(result.isFailed()).toBe(false)
+    expect(getFilePassword.execute).toHaveBeenCalledTimes(1)
+    expect(decryptBackupFile.execute).toHaveBeenCalledWith(legacyBackup, 'password')
   })
 })
