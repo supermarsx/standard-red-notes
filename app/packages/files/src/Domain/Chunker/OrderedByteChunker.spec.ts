@@ -97,8 +97,8 @@ describe('ordered byte chunker', () => {
     { chunkSizes: [Number.NaN] },
     { chunkSizes: [Number.MAX_SAFE_INTEGER, 1] },
   ])('rejects invalid chunk metadata $chunkSizes', ({ chunkSizes }) => {
-      expect(
-        () => new OrderedByteChunker(chunkSizes, 'network', jest.fn().mockResolvedValue(undefined)),
-      ).toThrow(OrderedByteChunkerError)
+    expect(() => new OrderedByteChunker(chunkSizes, 'network', jest.fn().mockResolvedValue(undefined))).toThrow(
+      OrderedByteChunkerError,
+    )
   })
 })

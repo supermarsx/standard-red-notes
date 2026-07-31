@@ -550,9 +550,9 @@ describe('fileService', () => {
       tag: SodiumTag.CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_TAG_PUSH,
     })
 
-    await expect(
-      fileService.readBackupFileBytesDecrypted({} as FileHandleRead, file, fileSystem),
-    ).rejects.toThrow('Unable to authenticate and decrypt backup file')
+    await expect(fileService.readBackupFileBytesDecrypted({} as FileHandleRead, file, fileSystem)).rejects.toThrow(
+      'Unable to authenticate and decrypt backup file',
+    )
   })
 
   it('reports a failed destination stream close instead of a successful decrypted backup save', async () => {
@@ -575,8 +575,8 @@ describe('fileService', () => {
       closeFileWriteStream: jest.fn().mockResolvedValue('failed'),
     } as unknown as FileSystemApi
 
-    await expect(
-      fileService.readBackupFileAndSaveDecrypted({} as FileHandleRead, file, fileSystem),
-    ).resolves.toBe('failed')
+    await expect(fileService.readBackupFileAndSaveDecrypted({} as FileHandleRead, file, fileSystem)).resolves.toBe(
+      'failed',
+    )
   })
 })

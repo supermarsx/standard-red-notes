@@ -89,19 +89,17 @@ describe('file downloader', () => {
     expect(apiService.downloadFile).not.toHaveBeenCalled()
   })
 
-  it.each([
-    { chunkSizes: [0] },
-    { chunkSizes: [-1] },
-    { chunkSizes: [1.5] },
-    { chunkSizes: [Number.NaN] },
-  ])('rejects invalid encrypted chunk sizes $chunkSizes', async ({ chunkSizes }) => {
-    downloader = new FileDownloader({ ...file, encryptedChunkSizes: chunkSizes }, apiService, 'valet-token')
+  it.each([{ chunkSizes: [0] }, { chunkSizes: [-1] }, { chunkSizes: [1.5] }, { chunkSizes: [Number.NaN] }])(
+    'rejects invalid encrypted chunk sizes $chunkSizes',
+    async ({ chunkSizes }) => {
+      downloader = new FileDownloader({ ...file, encryptedChunkSizes: chunkSizes }, apiService, 'valet-token')
 
-    const result = await downloader.run(jest.fn())
+      const result = await downloader.run(jest.fn())
 
-    expect(result).toEqual(expect.objectContaining({ text: expect.stringContaining('invalid encrypted chunk size') }))
-    expect(apiService.downloadFile).not.toHaveBeenCalled()
-  })
+      expect(result).toEqual(expect.objectContaining({ text: expect.stringContaining('invalid encrypted chunk size') }))
+      expect(apiService.downloadFile).not.toHaveBeenCalled()
+    },
+  )
 
   it('rejects encrypted metadata whose aggregate exceeds a safe integer', async () => {
     downloader = new FileDownloader(

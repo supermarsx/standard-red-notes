@@ -150,25 +150,22 @@ describe('LegacyApiService.downloadFile integrity contract', () => {
     expect(headerResult?.text).toContain('Content-Range')
   })
 
-  it.each([
-    'bytes NaN-1/5',
-    'bytes 0-1/*',
-    'bytes 0-/5',
-    'bytes 0-1/5 trailing',
-    'items 0-1/5',
-  ])('rejects malformed or wildcard Content-Range %s', async (contentRange) => {
-    const { service, runHttp } = createService()
-    runHttp.mockResolvedValue(partialResponse(contentRange, 2))
-    const onBytesReceived = jest.fn()
+  it.each(['bytes NaN-1/5', 'bytes 0-1/*', 'bytes 0-/5', 'bytes 0-1/5 trailing', 'items 0-1/5'])(
+    'rejects malformed or wildcard Content-Range %s',
+    async (contentRange) => {
+      const { service, runHttp } = createService()
+      runHttp.mockResolvedValue(partialResponse(contentRange, 2))
+      const onBytesReceived = jest.fn()
 
-    const result = await service.downloadFile({
-      ...baseParams,
-      onBytesReceived,
-    })
+      const result = await service.downloadFile({
+        ...baseParams,
+        onBytesReceived,
+      })
 
-    expect(result?.text).toContain('malformed Content-Range')
-    expect(onBytesReceived).not.toHaveBeenCalled()
-  })
+      expect(result?.text).toContain('malformed Content-Range')
+      expect(onBytesReceived).not.toHaveBeenCalled()
+    },
+  )
 
   it.each([
     ['start', 'bytes 1-2/5'],

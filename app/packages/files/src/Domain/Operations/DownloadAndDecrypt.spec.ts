@@ -27,18 +27,20 @@ describe('download and decrypt', () => {
   const downloadDeclaredChunks = () => {
     apiService.downloadFile = jest
       .fn()
-      .mockImplementation(async (params: {
-        file: { encryptedChunkSizes: number[] }
-        onBytesReceived: (bytes: Uint8Array) => Promise<void>
-        shouldAbort?: () => boolean
-      }) => {
-        for (const size of params.file.encryptedChunkSizes) {
-          if (params.shouldAbort?.()) {
-            break
+      .mockImplementation(
+        async (params: {
+          file: { encryptedChunkSizes: number[] }
+          onBytesReceived: (bytes: Uint8Array) => Promise<void>
+          shouldAbort?: () => boolean
+        }) => {
+          for (const size of params.file.encryptedChunkSizes) {
+            if (params.shouldAbort?.()) {
+              break
+            }
+            await params.onBytesReceived(chunkOfSize(size))
           }
-          await params.onBytesReceived(chunkOfSize(size))
-        }
-      })
+        },
+      )
   }
 
   beforeEach(() => {
