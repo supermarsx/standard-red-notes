@@ -39,6 +39,7 @@ on:
       - "yarn.lock"
       - ".yarnrc.yml"
       - ".yarn/releases/**"
+      - "scripts/release-packaging-contract.mjs"
       - ".github/workflows/srn-openclaw.yml"
     tags:
       - "srn-openclaw-v*"
@@ -96,6 +97,9 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           architecture: x64
           package-manager-cache: false
+
+      - name: Validate release packaging contract
+        run: node scripts/validate-release-contract.mjs
 
       - id: impact
         name: Compare OpenClaw publishable surface with its latest release
@@ -321,10 +325,10 @@ jobs:
             --out-dir out
           (cd out && sha256sum --check SHA256SUMS.txt)
 
-      # Hash the exact npm payload after extraction. The rolling package version
-      # is normalized and release-package.json is excluded because it contains
-      # source/tag timestamps only; every executable, bundled dependency,
-      # install contract, README and license byte remains fingerprinted.
+      # Hash the exact npm payload after extraction. Only release identity fields
+      # (tag/version/source commit/date) are normalized; every semantic field in
+      # release-package.json remains covered. The canonical contract also binds
+      # the package implementation and pinned toolchain/action inputs.
       - id: fingerprint
         name: Fingerprint normalized package payload
         run: |
@@ -334,11 +338,19 @@ jobs:
           rm -rf "$extract"
           mkdir -p "$extract"
           tar -xzf "$archive" -C "$extract"
-          node scripts/fingerprint-release-tree.mjs \
+          mkdir -p "$extract/.srn-release-contract"
+          cp openclaw/scripts/package-release.mjs "$extract/.srn-release-contract/package-release.mjs"
+          cp openclaw/scripts/release-config.mjs "$extract/.srn-release-contract/release-config.mjs"
+          node scripts/release-packaging-contract.mjs \
+            --contract openclaw \
             --root "$extract" \
             --path package \
-            --exclude package/release-package.json \
+            --path .srn-release-contract \
             --normalize-package-version package/package.json \
+            --normalize-json-field package/release-package.json=/release/sourceCommit \
+            --normalize-json-field package/release-package.json=/release/sourceDate \
+            --normalize-json-field package/release-package.json=/release/tag \
+            --normalize-json-field package/release-package.json=/release/version \
             --output "out/${TOOL}.fingerprint" \
             --github-output "$GITHUB_OUTPUT"
           grep -Eq '^[0-9a-f]{64}$' "out/${TOOL}.fingerprint"

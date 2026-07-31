@@ -115,10 +115,77 @@ and Recovery](backups-and-recovery.md).
 ## Repository release contracts
 
 `yarn release:contract` validates workflow coverage, target matrices, asset
-conventions, Latest-pointer behavior, OpenClaw provenance, and mobile native
-architectures. The release workflows remain the publishing authority; a local
-contract pass proves configuration consistency, not that a remote release
-completed.
+conventions, Latest-pointer behavior, OpenClaw provenance, mobile native
+architectures, and the executable packaging contract used by each publisher.
+The release workflows remain the publishing authority; a local contract pass
+proves configuration consistency, not that a remote release completed.
+
+The packaging contract is active, shipped release functionality.
+Every one of the eight publisher workflows validates the complete contract
+before its impact analyzer runs. A publisher then applies two independent
+gates:
+
+1. **Source impact:** compare the product's owned package and dependency closure
+   with its ancestry-selected release tag. Unrelated changes stop here.
+2. **Built release identity:** build the selected product and hash its shipped
+   payload together with that product's canonical packaging inputs. An
+   unchanged result stops before packaging or publication.
+
+```mermaid
+flowchart LR
+  E[Bounded product trigger] --> V[Validate repository release contract]
+  V --> A[Analyze owned source since ancestor tag]
+  A -- No impact --> X[Stop: no release]
+  A -- Impact --> B[Build exact publishable payload]
+  B --> F[Fingerprint payload plus named packaging contract]
+  F --> C{Compare exact prior fingerprint set}
+  C -- Same --> X
+  C -- Changed or first release --> P[Package, attest, and publish]
+  C -- Missing, malformed, or divergent --> Q[Block or use audited manual force]
+```
+
+The canonical document in
+`scripts/release-packaging-contract.mjs` is serialized deterministically and
+versioned independently from the raw workflow text. Therefore a comment,
+display-name, or permissions-only workflow edit can trigger validation without
+inventing a product release. Material changes to a named product contract,
+resolved toolchain metadata, build configuration, target set, or output command
+change its fingerprint. Missing selected inputs and malformed normalization
+requests fail closed.
+
+For the five native command-line products, fingerprinting and packaging consume
+the same canonical invocation set. It contains all six target/output names, the
+embedded Node runtime, exact `@yao-pkg/pkg` version and flags, executable, and
+arguments. Tests capture every invocation and the validator prevents the
+executor from bypassing the fingerprinted set. The home-server's migrations ZIP
+is a product-specific supplemental invocation, so changing it affects the home
+server without forcing sibling native products to publish.
+
+Desktop fingerprints each extracted `app.asar` runtime and unpacked payload
+with the app lockfile, Yarn patches/releases, shared build configuration,
+desktop manifests, exact matrix arguments, resolved Electron and
+electron-builder versions, and Node version. The desktop contract additionally
+binds fixed builder flags, runner labels, action references, Python, Corepack,
+and signing auto-discovery behavior.
+
+Mobile fingerprints the generated Android and iOS JavaScript, embedded web
+bundle, native Android/iOS source inputs, app and Ruby lockfiles, native version
+files, and mobile/shared build configuration. Its named contract binds Android
+and iOS architectures, Java/Ruby/Xcode versions, runner labels, action
+references, Corepack, and the exact Fastlane publication commands.
+
+OpenClaw fingerprints the extracted npm payload and the packaging implementation
+used to create it. Package version and only four volatile release-identity
+fields in `release-package.json` (`tag`, `version`, `sourceCommit`, and
+`sourceDate`) are normalized. The remaining manifest semantics, package scripts,
+runtime dependencies, README, license, Node/Yarn/Corepack versions, and pinned
+action commits remain release-significant.
+
+{% include safety-alert.html
+  level="danger"
+  title="External release state is outside a Git fingerprint"
+  body="Signing certificates, Android keystores, App Store credentials, repository secrets, and the concrete VM image behind a runner label can change without changing Git. Most publisher action references are version tags, so their resolved action commit can also move; OpenClaw's critical action references are commit-pinned. These external-only changes do not necessarily change the pre-publication fingerprint. Audit them and use workflow_dispatch force_release with a non-empty reason, plus publish_release for mobile, when replacement artifacts are required. Verify the resulting signatures, checksums, and provenance before rollout."
+%}
 
 Every pull request and every push to `main` runs the normal `CI` workflow with a
 complete checkout and fetched tags. Its contracts job writes and uploads one
@@ -148,9 +215,13 @@ permission to publish from an older baseline.
 
 Shared release-analysis, comparison, fingerprint, and validation scripts are
 normal-CI contract inputs, not product payloads. Changing one runs the
-repository report and focused release-contract checks. It does not wake every
-product publisher; product triggers remain limited to their computed
-package/configuration surfaces.
+repository report and focused release-contract checks. The canonical packaging
+contract is also an explicit publisher configuration input, while the native
+executor is an input only for the five native command-line publishers. Those
+changes can wake the owning workflows for evaluation, but a wake-up is not a
+release: each publisher selects only its named/product-specific contract and
+still skips when the built payload and canonical inputs match its prior
+fingerprint.
 
 Tag validity is product-specific:
 
@@ -197,11 +268,13 @@ flowchart TD
   M --> R
 ```
 
-Fingerprints are calculated from the built release surface, not from a package
-version alone. Bundled tools therefore include their compiled dependency
-closure; desktop, mobile, and OpenClaw normalize release-only manifest versions;
-and the home-server fingerprint covers both its executable bundle and every
-shipped migration.
+Fingerprints are calculated from the built release surface plus canonical
+packaging inputs, not from a package version alone. Bundled tools therefore
+include their compiled dependency closure and exact executable invocation set;
+desktop and mobile add deterministic toolchain/configuration inputs; OpenClaw
+normalizes only release-identity fields; and the home-server fingerprint covers
+its executable bundle, every shipped migration, and the migrations-archive
+invocation.
 
 All eight publishers use the same fail-closed comparison contract:
 
@@ -228,16 +301,16 @@ limited to 500 characters.
 
 ### Managed products and fingerprint ownership
 
-| Product      | Automatic source trigger                                         | Release baseline                 | Fingerprint evidence                               |
-| ------------ | ---------------------------------------------------------------- | -------------------------------- | -------------------------------------------------- |
-| `srn-client` | `cli/srn-client/**` plus its release/build configuration         | `srn-client-vYY.N`               | `srn-client.fingerprint`                           |
-| `srn-server` | `cli/srn-server/**` plus its release/build configuration         | `srn-server-vYY.N`               | `srn-server.fingerprint`                           |
-| MCP bridge   | MCP workspace and root dependency/build configuration            | `srn-mcp-vYY.N`                  | `srn-mcp.fingerprint`                              |
-| Home server  | Server workspace                                                 | `srn-home-server-vYY.N`          | executable-and-migrations fingerprint              |
-| `srn-admin`  | Server workspace                                                 | `srn-admin-vYY.N`                | bundled admin CLI fingerprint                      |
-| OpenClaw     | OpenClaw workspace and root dependency/build configuration       | namespaced rolling/SemVer tag    | normalized package fingerprint                     |
-| Desktop      | App workspaces and shared app build configuration                | `srn-desktop-vYY.N`              | six OS/architecture runtime fingerprints           |
-| Mobile       | Exact 18-package app dependency closure plus shared build config | `@standardnotes/mobile@<semver>` | deterministic native/web release-input fingerprint |
+| Product      | Automatic source trigger                                         | Release baseline                 | Compared release surface                                             |
+| ------------ | ---------------------------------------------------------------- | -------------------------------- | -------------------------------------------------------------------- |
+| `srn-client` | `cli/srn-client/**` plus its release/build configuration         | `srn-client-vYY.N`               | Bundle plus the six canonical native invocations                     |
+| `srn-server` | `cli/srn-server/**` plus its release/build configuration         | `srn-server-vYY.N`               | Bundle plus the six canonical native invocations                     |
+| MCP bridge   | MCP workspace and root dependency/build configuration            | `srn-mcp-vYY.N`                  | Bundle plus the six canonical native invocations                     |
+| Home server  | Server workspace                                                 | `srn-home-server-vYY.N`          | Bundle, migrations, six native invocations, and migrations ZIP       |
+| `srn-admin`  | Server workspace                                                 | `srn-admin-vYY.N`                | Bundle plus the six canonical native invocations                     |
+| OpenClaw     | OpenClaw workspace and root dependency/build configuration       | namespaced rolling/SemVer tag    | Normalized npm payload, packaging implementation, and pinned tooling |
+| Desktop      | App workspaces and shared app build configuration                | `srn-desktop-vYY.N`              | Six runtime payloads plus lock/config/toolchain/target inputs         |
+| Mobile       | Exact 18-package app dependency closure plus shared build config | `@standardnotes/mobile@<semver>` | Native/web payloads plus lock/config/toolchain/publication inputs     |
 
 ### Mobile: impact is not publication intent
 

@@ -81,7 +81,7 @@
     "test:coverage-tools": "node --test scripts/coverage.test.mjs",
     "test:mcp": "yarn workspace @standard-red-notes/mcp test",
     "test:openclaw": "yarn workspace @standard-red-notes/openclaw test",
-    "test:release-impact": "node --test scripts/analyze-release-impact.test.mjs scripts/fingerprint-release-tree.test.mjs",
+    "test:release-impact": "node --test scripts/analyze-release-impact.test.mjs scripts/fingerprint-release-tree.test.mjs scripts/release-packaging-contract.test.mjs scripts/compare-release-fingerprints.test.mjs",
     "test:release-contract": "node --test scripts/validate-release-contract.test.mjs",
     "test:script-tools": "node --test scripts/docs-browser-ui.test.mjs scripts/export-app-docs-to-pages.test.mjs scripts/generate-brand-assets.test.mjs scripts/generate-docs-search-index.test.mjs scripts/validate-docs-links.test.mjs scripts/validate-docs-screenshots.test.mjs scripts/validate-mermaid-docs.test.mjs scripts/validate-nextcloud-backup-docs.test.mjs scripts/validate-standard-notes-compatibility.test.mjs scripts/verify-backup-restore.test.mjs",
     "test:server": "cd server && yarn build && yarn test",

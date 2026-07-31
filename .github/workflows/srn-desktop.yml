@@ -36,10 +36,12 @@ on:
       - 'app/yarn.lock'
       - 'app/.nvmrc'
       - 'app/.yarnrc.yml'
+      - 'app/.yarn/patches/**'
       - 'app/.yarn/releases/**'
       - 'app/.github/workflows/desktop.release.reuse.yml'
       - 'app/babel.config.js'
       - 'app/tsconfig.base.json'
+      - 'scripts/release-packaging-contract.mjs'
       - '.github/workflows/srn-desktop.yml'
   workflow_dispatch:
     inputs:
@@ -51,7 +53,7 @@ on:
       force_reason:
         description: Required audit reason when force_release is true
         required: false
-        default: ""
+        default: ''
         type: string
 
 permissions:
@@ -87,8 +89,11 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: "26"
+          node-version: '26'
           package-manager-cache: false
+
+      - name: Validate release packaging contract
+        run: node scripts/validate-release-contract.mjs
 
       - id: impact
         name: Compare desktop publishable surface with its latest release
@@ -162,10 +167,26 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { label: macos, os: macos-latest, builder: '--mac dmg zip --x64 --arm64' }
-          - { label: windows, os: windows-latest, builder: '--win nsis --x64 --arm64' }
-          - { label: linux-x64, os: ubuntu-latest, builder: '--linux AppImage deb --x64' }
-          - { label: linux-arm64, os: ubuntu-24.04-arm, builder: '--linux AppImage deb --arm64' }
+          - {
+              label: macos,
+              os: macos-latest,
+              builder: '--mac dmg zip --x64 --arm64',
+            }
+          - {
+              label: windows,
+              os: windows-latest,
+              builder: '--win nsis --x64 --arm64',
+            }
+          - {
+              label: linux-x64,
+              os: ubuntu-latest,
+              builder: '--linux AppImage deb --x64',
+            }
+          - {
+              label: linux-arm64,
+              os: ubuntu-24.04-arm,
+              builder: '--linux AppImage deb --arm64',
+            }
     env:
       # Never attempt to auto-discover a macOS signing identity.
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
@@ -252,10 +273,29 @@ jobs:
             if [ -d "${asar}.unpacked" ]; then
               cp -a "${asar}.unpacked" "$extract/app.asar.unpacked"
             fi
-            node ../../../scripts/fingerprint-release-tree.mjs \
+            contract="$extract/.srn-release-contract"
+            mkdir -p "$contract"
+            cp ../../package.json "$contract/app-package.json"
+            cp ../../yarn.lock "$contract/app-yarn.lock"
+            cp ../../.nvmrc "$contract/app-nvmrc"
+            cp ../../.yarnrc.yml "$contract/app-yarnrc.yml"
+            cp ../../babel.config.js "$contract/app-babel.config.js"
+            cp ../../tsconfig.base.json "$contract/app-tsconfig.base.json"
+            cp package.json "$contract/desktop-package.json"
+            cp app/package.json "$contract/desktop-runtime-package.json"
+            cp -a ../../.yarn/patches "$contract/yarn-patches"
+            cp -a ../../.yarn/releases "$contract/yarn-releases"
+            electron_version="$(yarn node -p "require('electron/package.json').version")"
+            builder_version="$(yarn node -p "require('electron-builder/package.json').version")"
+            node ../../../scripts/release-packaging-contract.mjs \
+              --contract desktop \
               --root "$extract" \
               --path . \
               --normalize-package-version package.json \
+              --metadata "builderArguments=${{ matrix.builder }}" \
+              --metadata "electronBuilderVersion=${builder_version}" \
+              --metadata "electronVersion=${electron_version}" \
+              --metadata "nodeVersion=$(node --version)" \
               --output "$output"
             grep -Eq '^[0-9a-f]{64}$' "$output"
             count=$((count + 1))

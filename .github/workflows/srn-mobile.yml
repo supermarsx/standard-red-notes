@@ -33,11 +33,13 @@ on:
       - 'app/.github/workflows/mobile.release.prod.yml'
       - 'app/.nvmrc'
       - 'app/.yarnrc.yml'
+      - 'app/.yarn/patches/**'
       - 'app/.yarn/releases/**'
       - 'app/babel.config.js'
       - 'app/package.json'
       - 'app/tsconfig.base.json'
       - 'app/yarn.lock'
+      - 'scripts/release-packaging-contract.mjs'
       - '.github/workflows/srn-mobile.yml'
     tags:
       - '@standardnotes/web@*'
@@ -56,7 +58,7 @@ on:
       force_reason:
         description: Required audit reason when force_release is true
         required: false
-        default: ""
+        default: ''
         type: string
 
 permissions:
@@ -91,8 +93,11 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: "26"
+          node-version: '26'
           package-manager-cache: false
+
+      - name: Validate release packaging contract
+        run: node scripts/validate-release-contract.mjs
 
       - id: request
         name: Resolve analysis-only versus explicit publication intent
@@ -259,12 +264,21 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p release-fingerprint
-          node scripts/fingerprint-release-tree.mjs \
+          node scripts/release-packaging-contract.mjs \
+            --contract mobile \
             --root . \
             --path app/packages/mobile/.release-impact \
             --path app/packages/mobile/html/Web.bundle \
             --path app/packages/mobile/package.json \
             --normalize-package-version app/packages/mobile/package.json \
+            --path app/packages/mobile/Gemfile \
+            --path app/packages/mobile/Gemfile.lock \
+            --path app/packages/mobile/.java-version \
+            --path app/packages/mobile/.ruby-version \
+            --path app/packages/mobile/app.json \
+            --path app/packages/mobile/babel.config.js \
+            --path app/packages/mobile/metro.config.js \
+            --path app/packages/mobile/react-native.config.js \
             --path app/packages/mobile/android \
             --exclude app/packages/mobile/android/app/debug.keystore \
             --exclude app/packages/mobile/android/app/src/androidTest \
@@ -274,6 +288,14 @@ jobs:
             --exclude app/packages/mobile/ios/Dev.xcassets \
             --exclude app/packages/mobile/ios/StandardNotesTests \
             --exclude app/packages/mobile/ios/StandardNotesDev-Info.plist \
+            --path app/package.json \
+            --path app/yarn.lock \
+            --path app/.nvmrc \
+            --path app/.yarnrc.yml \
+            --path app/.yarn/patches \
+            --path app/.yarn/releases \
+            --path app/babel.config.js \
+            --path app/tsconfig.base.json \
             --output "release-fingerprint/srn-mobile.fingerprint" \
             --github-output "$GITHUB_OUTPUT"
           grep -Eq '^[0-9a-f]{64}$' release-fingerprint/srn-mobile.fingerprint

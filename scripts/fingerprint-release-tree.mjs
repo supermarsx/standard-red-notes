@@ -13,6 +13,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 const FINGERPRINT_SCHEMA = "srn-release-tree-v1";
+const NORMALIZED_JSON_VALUE = "__srn_release_fingerprint_normalized__";
 
 function compareText(left, right) {
   return left === right ? 0 : left < right ? -1 : 1;
@@ -112,23 +113,28 @@ function updateHeader(hash, type, relativePath, size) {
   hash.update(`\0${size}\0`);
 }
 
-function normalizedPackageManifest(file) {
+function parsedJsonObject(file, operation) {
   let manifest;
   try {
     manifest = JSON.parse(readFileSync(file, "utf8"));
   } catch (error) {
     throw new ReleaseTreeFingerprintError(
-      `cannot normalize package version in ${file}: ${
+      `cannot ${operation} in ${file}: ${
         error instanceof Error ? error.message : String(error)
       }`,
     );
   }
-  if (
-    !manifest ||
-    typeof manifest !== "object" ||
-    Array.isArray(manifest) ||
-    typeof manifest.version !== "string"
-  ) {
+  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
+    throw new ReleaseTreeFingerprintError(
+      `cannot ${operation} in ${file}: expected a JSON object`,
+    );
+  }
+  return manifest;
+}
+
+function normalizedPackageManifest(file) {
+  const manifest = parsedJsonObject(file, "normalize package version");
+  if (typeof manifest.version !== "string") {
     throw new ReleaseTreeFingerprintError(
       `cannot normalize package version in ${file}: missing string version`,
     );
@@ -137,7 +143,70 @@ function normalizedPackageManifest(file) {
   return Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
 }
 
-async function updateFile(hash, entry, normalizedPackageVersions) {
+function jsonPointerParts(pointer) {
+  if (!pointer.startsWith("/") || pointer === "/") {
+    throw new ReleaseTreeFingerprintError(
+      `normalized JSON field must be a non-root JSON pointer: ${pointer}`,
+    );
+  }
+  return pointer
+    .slice(1)
+    .split("/")
+    .map((part) => part.replaceAll("~1", "/").replaceAll("~0", "~"));
+}
+
+function normalizedJsonDocument(file, pointers) {
+  const document = parsedJsonObject(file, "normalize JSON fields");
+  for (const pointer of pointers) {
+    const parts = jsonPointerParts(pointer);
+    let parent = document;
+    for (const part of parts.slice(0, -1)) {
+      if (
+        !parent ||
+        typeof parent !== "object" ||
+        Array.isArray(parent) ||
+        !Object.hasOwn(parent, part)
+      ) {
+        throw new ReleaseTreeFingerprintError(
+          `cannot normalize JSON field ${pointer} in ${file}: field is missing`,
+        );
+      }
+      parent = parent[part];
+    }
+    const key = parts.at(-1);
+    if (
+      !parent ||
+      typeof parent !== "object" ||
+      Array.isArray(parent) ||
+      !Object.hasOwn(parent, key)
+    ) {
+      throw new ReleaseTreeFingerprintError(
+        `cannot normalize JSON field ${pointer} in ${file}: field is missing`,
+      );
+    }
+    if (typeof parent[key] !== "string") {
+      throw new ReleaseTreeFingerprintError(
+        `cannot normalize JSON field ${pointer} in ${file}: expected a string field`,
+      );
+    }
+    parent[key] = NORMALIZED_JSON_VALUE;
+  }
+  return Buffer.from(`${JSON.stringify(document, null, 2)}\n`);
+}
+
+async function updateFile(
+  hash,
+  entry,
+  normalizedPackageVersions,
+  normalizedJsonFields,
+) {
+  const jsonFields = normalizedJsonFields.get(entry.relativePath);
+  if (jsonFields) {
+    const content = normalizedJsonDocument(entry.absolutePath, jsonFields);
+    updateHeader(hash, "file", entry.relativePath, content.length);
+    hash.update(content);
+    return;
+  }
   if (normalizedPackageVersions.has(entry.relativePath)) {
     const content = normalizedPackageManifest(entry.absolutePath);
     updateHeader(hash, "file", entry.relativePath, content.length);
@@ -159,6 +228,7 @@ export async function fingerprintReleaseTree({
   paths,
   exclude = [],
   normalizePackageVersion = [],
+  normalizeJsonField = [],
 }) {
   if (!root) {
     throw new ReleaseTreeFingerprintError("a fingerprint root is required");
@@ -174,6 +244,29 @@ export async function fingerprintReleaseTree({
   const normalizedPackageVersions = new Set(
     normalizePackageVersion.map(normalizeRelativePath),
   );
+  const normalizedJsonFields = new Map();
+  for (const specification of normalizeJsonField) {
+    const separator = specification.indexOf("=");
+    if (separator <= 0 || separator === specification.length - 1) {
+      throw new ReleaseTreeFingerprintError(
+        `normalized JSON field must use <path>=<json-pointer>: ${specification}`,
+      );
+    }
+    const relativePath = normalizeRelativePath(
+      specification.slice(0, separator),
+    );
+    const pointer = specification.slice(separator + 1);
+    const pointers = normalizedJsonFields.get(relativePath) ?? [];
+    if (pointers.includes(pointer)) {
+      throw new ReleaseTreeFingerprintError(
+        `normalized JSON field was supplied more than once: ${specification}`,
+      );
+    }
+    jsonPointerParts(pointer);
+    pointers.push(pointer);
+    pointers.sort(compareText);
+    normalizedJsonFields.set(relativePath, pointers);
+  }
   const entries = new Map();
 
   for (const requestedPath of paths) {
@@ -194,6 +287,19 @@ export async function fingerprintReleaseTree({
       );
     }
   }
+  for (const normalizedPath of normalizedJsonFields.keys()) {
+    const entry = entries.get(normalizedPath);
+    if (!entry || entry.type !== "file") {
+      throw new ReleaseTreeFingerprintError(
+        `normalized JSON document is not part of the fingerprint surface: ${normalizedPath}`,
+      );
+    }
+    if (normalizedPackageVersions.has(normalizedPath)) {
+      throw new ReleaseTreeFingerprintError(
+        `a file cannot use package-version and JSON-field normalization together: ${normalizedPath}`,
+      );
+    }
+  }
 
   const hash = createHash("sha256");
   hash.update(`${FINGERPRINT_SCHEMA}\0`);
@@ -206,7 +312,12 @@ export async function fingerprintReleaseTree({
       updateHeader(hash, "symlink", entry.relativePath, entry.content.length);
       hash.update(entry.content);
     } else {
-      await updateFile(hash, entry, normalizedPackageVersions);
+      await updateFile(
+        hash,
+        entry,
+        normalizedPackageVersions,
+        normalizedJsonFields,
+      );
     }
   }
   return hash.digest("hex");
@@ -217,6 +328,7 @@ function parseArguments(argv) {
     ["--path", []],
     ["--exclude", []],
     ["--normalize-package-version", []],
+    ["--normalize-json-field", []],
   ]);
   const single = new Map();
   for (let index = 0; index < argv.length; index += 2) {
@@ -248,6 +360,7 @@ function parseArguments(argv) {
     exclude: repeated.get("--exclude"),
     githubOutput: single.get("--github-output"),
     normalizePackageVersion: repeated.get("--normalize-package-version"),
+    normalizeJsonField: repeated.get("--normalize-json-field"),
     output: single.get("--output"),
     paths: repeated.get("--path"),
     root: single.get("--root"),

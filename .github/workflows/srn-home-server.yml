@@ -26,6 +26,8 @@ on:
     branches: [main]
     paths:
       - 'server/**'
+      - 'scripts/native-cli-release.mjs'
+      - 'scripts/release-packaging-contract.mjs'
       - '.github/workflows/srn-home-server.yml'
   workflow_dispatch:
     inputs:
@@ -55,8 +57,6 @@ env:
   TOOL: srn-home-server
   SERVER_DIR: server
   HS_DIR: server/packages/home-server
-  PKG_NODE: node24
-  PKG_VERSION: '6.21.0'
 
 jobs:
   impact:
@@ -79,6 +79,9 @@ jobs:
         with:
           node-version: '26'
           package-manager-cache: false
+
+      - name: Validate release packaging contract
+        run: node scripts/validate-release-contract.mjs
 
       - id: impact
         name: Compare home-server publishable surface with its latest release
@@ -142,15 +145,18 @@ jobs:
         working-directory: ${{ env.SERVER_DIR }}
         run: yarn workspace @standardnotes/home-server build:bundle
 
-      - name: Compute release-surface fingerprint
+      - name: Compute payload and native-packaging contract fingerprint
         id: fp
         working-directory: ${{ env.HS_DIR }}
         run: |
           set -euo pipefail
-          node ../../../scripts/fingerprint-release-tree.mjs \
-            --root dist/bundle \
-            --path home-server.cjs \
-            --path migrations \
+          node ../../../scripts/native-cli-release.mjs fingerprint \
+            --tool "$TOOL" \
+            --bundle bundle/home-server.cjs \
+            --out-dir out \
+            --root . \
+            --path dist/bundle/home-server.cjs \
+            --path dist/bundle/migrations \
             --output "dist/bundle/${TOOL}.fingerprint" \
             --github-output "$GITHUB_OUTPUT"
           grep -Eq '^[0-9a-f]{64}$' "dist/bundle/${TOOL}.fingerprint"
@@ -207,6 +213,8 @@ jobs:
     if: needs.decide.outputs.changed == 'true'
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v7
+
       - uses: actions/setup-node@v7
         with:
           node-version: '26'
@@ -223,29 +231,11 @@ jobs:
       - name: Package native executables
         run: |
           set -euo pipefail
-          mkdir -p out
-          declare -A TARGETS=(
-            ["${TOOL}-windows-x64.exe"]="${PKG_NODE}-win-x64"
-            ["${TOOL}-windows-arm64.exe"]="${PKG_NODE}-win-arm64"
-            ["${TOOL}-macos-x64"]="${PKG_NODE}-macos-x64"
-            ["${TOOL}-macos-arm64"]="${PKG_NODE}-macos-arm64"
-            ["${TOOL}-linux-x64"]="${PKG_NODE}-linux-x64"
-            ["${TOOL}-linux-arm64"]="${PKG_NODE}-linux-arm64"
-          )
-          for out_name in "${!TARGETS[@]}"; do
-            echo "::group::pkg ${TARGETS[$out_name]} -> $out_name"
-            npx --yes "@yao-pkg/pkg@${PKG_VERSION}" \
-              --no-signature \
-              --targets "${TARGETS[$out_name]}" \
-              --output "out/${out_name}" \
-              bundle/home-server.cjs
-            echo "::endgroup::"
-          done
+          node scripts/native-cli-release.mjs package \
+            --tool "$TOOL" \
+            --bundle bundle/home-server.cjs \
+            --out-dir out
           cp "bundle/${TOOL}.fingerprint" "out/${TOOL}.fingerprint"
-          # Ship the merged migrations next to the binaries. Operators extract this
-          # beside the executable (or set SRN_MIGRATIONS_DIR) so the binary can run
-          # TypeORM migrations on first boot.
-          ( cd bundle && zip -qr "../out/${TOOL}-migrations.zip" migrations )
           ls -la out
 
       - name: Generate checksums

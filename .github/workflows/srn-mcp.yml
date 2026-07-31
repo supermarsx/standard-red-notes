@@ -24,6 +24,8 @@ on:
       - 'yarn.lock'
       - '.yarnrc.yml'
       - '.yarn/releases/**'
+      - 'scripts/native-cli-release.mjs'
+      - 'scripts/release-packaging-contract.mjs'
       - '.github/workflows/srn-mcp.yml'
   workflow_dispatch:
     inputs:
@@ -53,8 +55,6 @@ env:
   TOOL: srn-mcp
   TOOL_DIR: mcp
   NODE_VERSION: '26'
-  PKG_NODE: node24
-  PKG_VERSION: '6.21.0'
 
 jobs:
   impact:
@@ -77,6 +77,9 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
+
+      - name: Validate release packaging contract
+        run: node scripts/validate-release-contract.mjs
 
       - id: impact
         name: Compare srn-mcp publishable surface with its latest release
@@ -237,15 +240,19 @@ jobs:
           printf '%s\n' "$out"
           echo "$out" | grep -q "requires MCP_HTTP_TOKEN"
 
-      - name: Compute content fingerprint
+      - name: Compute payload and native-packaging contract fingerprint
         id: fp
         working-directory: ${{ env.TOOL_DIR }}
         run: |
           set -euo pipefail
-          fp="$(sha256sum dist/index.cjs | awk '{print $1}')"
-          echo "fingerprint=${fp}" >> "$GITHUB_OUTPUT"
-          printf '%s\n' "$fp" > "dist/${TOOL}.fingerprint"
-          echo "Bundle fingerprint: ${fp}"
+          node ../scripts/native-cli-release.mjs fingerprint \
+            --tool "$TOOL" \
+            --bundle dist/index.cjs \
+            --out-dir out \
+            --root . \
+            --path dist/index.cjs \
+            --output "dist/${TOOL}.fingerprint" \
+            --github-output "$GITHUB_OUTPUT"
 
       - name: Upload bundle artifact
         uses: actions/upload-artifact@v7
@@ -321,25 +328,10 @@ jobs:
         working-directory: ${{ env.TOOL_DIR }}
         run: |
           set -euo pipefail
-          mkdir -p out
-          declare -A TARGETS=(
-            ["${TOOL}-windows-x64.exe"]="${PKG_NODE}-win-x64"
-            ["${TOOL}-windows-arm64.exe"]="${PKG_NODE}-win-arm64"
-            ["${TOOL}-macos-x64"]="${PKG_NODE}-macos-x64"
-            ["${TOOL}-macos-arm64"]="${PKG_NODE}-macos-arm64"
-            ["${TOOL}-linux-x64"]="${PKG_NODE}-linux-x64"
-            ["${TOOL}-linux-arm64"]="${PKG_NODE}-linux-arm64"
-          )
-          for out_name in "${!TARGETS[@]}"; do
-            target="${TARGETS[$out_name]}"
-            echo "::group::pkg $target -> $out_name"
-            npx --yes "@yao-pkg/pkg@${PKG_VERSION}" \
-              --no-signature \
-              --targets "$target" \
-              --output "out/${out_name}" \
-              dist/index.cjs
-            echo "::endgroup::"
-          done
+          node ../scripts/native-cli-release.mjs package \
+            --tool "$TOOL" \
+            --bundle dist/index.cjs \
+            --out-dir out
           cp "dist/${TOOL}.fingerprint" "out/${TOOL}.fingerprint"
           echo "Produced:"
           ls -la out

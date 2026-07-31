@@ -32,6 +32,8 @@ on:
     branches: [main]
     paths:
       - 'server/**'
+      - 'scripts/native-cli-release.mjs'
+      - 'scripts/release-packaging-contract.mjs'
       - '.github/workflows/srn-admin.yml'
   workflow_dispatch:
     inputs:
@@ -61,8 +63,6 @@ env:
   TOOL: srn-admin
   SERVER_DIR: server
   AUTH_DIR: server/packages/auth
-  PKG_NODE: node24
-  PKG_VERSION: '6.21.0'
 
 jobs:
   impact:
@@ -85,6 +85,9 @@ jobs:
         with:
           node-version: '26'
           package-manager-cache: false
+
+      - name: Validate release packaging contract
+        run: node scripts/validate-release-contract.mjs
 
       - id: impact
         name: Compare srn-admin publishable surface with its latest release
@@ -147,15 +150,19 @@ jobs:
         working-directory: ${{ env.SERVER_DIR }}
         run: yarn workspace @standardnotes/auth-server build:bundle
 
-      - name: Compute content fingerprint
+      - name: Compute payload and native-packaging contract fingerprint
         id: fp
         working-directory: ${{ env.AUTH_DIR }}
         run: |
           set -euo pipefail
-          fp="$(sha256sum dist/bundle/srn-admin.cjs | awk '{print $1}')"
-          echo "fingerprint=${fp}" >> "$GITHUB_OUTPUT"
-          printf '%s\n' "$fp" > "dist/bundle/${TOOL}.fingerprint"
-          echo "Bundle fingerprint: ${fp}"
+          node ../../../scripts/native-cli-release.mjs fingerprint \
+            --tool "$TOOL" \
+            --bundle bundle/srn-admin.cjs \
+            --out-dir out \
+            --root . \
+            --path dist/bundle/srn-admin.cjs \
+            --output "dist/bundle/${TOOL}.fingerprint" \
+            --github-output "$GITHUB_OUTPUT"
 
       - name: Upload bundle artifact
         uses: actions/upload-artifact@v7
@@ -208,6 +215,8 @@ jobs:
     if: needs.decide.outputs.changed == 'true'
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v7
+
       - uses: actions/setup-node@v7
         with:
           node-version: '26'
@@ -224,26 +233,10 @@ jobs:
       - name: Package native executables
         run: |
           set -euo pipefail
-          mkdir -p out
-          # OS/arch matrix -> deterministic output names. pkg names a target as
-          # "<node>-<os>-<arch>"; Windows binaries get a .exe suffix.
-          declare -A TARGETS=(
-            ["${TOOL}-windows-x64.exe"]="${PKG_NODE}-win-x64"
-            ["${TOOL}-windows-arm64.exe"]="${PKG_NODE}-win-arm64"
-            ["${TOOL}-macos-x64"]="${PKG_NODE}-macos-x64"
-            ["${TOOL}-macos-arm64"]="${PKG_NODE}-macos-arm64"
-            ["${TOOL}-linux-x64"]="${PKG_NODE}-linux-x64"
-            ["${TOOL}-linux-arm64"]="${PKG_NODE}-linux-arm64"
-          )
-          for out_name in "${!TARGETS[@]}"; do
-            echo "::group::pkg ${TARGETS[$out_name]} -> $out_name"
-            npx --yes "@yao-pkg/pkg@${PKG_VERSION}" \
-              --no-signature \
-              --targets "${TARGETS[$out_name]}" \
-              --output "out/${out_name}" \
-              bundle/srn-admin.cjs
-            echo "::endgroup::"
-          done
+          node scripts/native-cli-release.mjs package \
+            --tool "$TOOL" \
+            --bundle bundle/srn-admin.cjs \
+            --out-dir out
           # Carry the fingerprint forward so it gets attached to the release.
           cp "bundle/${TOOL}.fingerprint" "out/${TOOL}.fingerprint"
           echo "Produced:"

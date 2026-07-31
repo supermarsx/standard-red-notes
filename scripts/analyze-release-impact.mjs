@@ -37,7 +37,7 @@ export const WORKSPACE_ROOTS = Object.freeze({
       "app/babel.config.js",
       "app/tsconfig.base.json",
     ],
-    configPrefixes: ["app/.yarn/releases/"],
+    configPrefixes: ["app/.yarn/patches/", "app/.yarn/releases/"],
   },
   server: {
     directory: "server",
@@ -72,7 +72,11 @@ export const RELEASE_TARGETS = Object.freeze({
     tagPrefix: "srn-admin-v",
     versioning: "rolling-year",
     packageNames: ["@standardnotes/auth-server"],
-    configPaths: [".github/workflows/srn-admin.yml"],
+    configPaths: [
+      ".github/workflows/srn-admin.yml",
+      "scripts/native-cli-release.mjs",
+      "scripts/release-packaging-contract.mjs",
+    ],
   },
   "srn-client": {
     tagPrefix: "srn-client-v",
@@ -83,7 +87,12 @@ export const RELEASE_TARGETS = Object.freeze({
         directory: "cli/srn-client",
       },
     ],
-    configPaths: [".github/workflows/srn-client.yml", "cli/.prettierrc"],
+    configPaths: [
+      ".github/workflows/srn-client.yml",
+      "cli/.prettierrc",
+      "scripts/native-cli-release.mjs",
+      "scripts/release-packaging-contract.mjs",
+    ],
     configPrefixes: [],
   },
   "srn-desktop": {
@@ -94,6 +103,7 @@ export const RELEASE_TARGETS = Object.freeze({
     configPaths: [
       ".github/workflows/srn-desktop.yml",
       "app/.github/workflows/desktop.release.reuse.yml",
+      "scripts/release-packaging-contract.mjs",
     ],
   },
   "srn-home-server": {
@@ -101,14 +111,22 @@ export const RELEASE_TARGETS = Object.freeze({
     tagPrefix: "srn-home-server-v",
     versioning: "rolling-year",
     packageNames: ["@standardnotes/home-server"],
-    configPaths: [".github/workflows/srn-home-server.yml"],
+    configPaths: [
+      ".github/workflows/srn-home-server.yml",
+      "scripts/native-cli-release.mjs",
+      "scripts/release-packaging-contract.mjs",
+    ],
   },
   "srn-mcp": {
     workspaceRoot: "root",
     tagPrefix: "srn-mcp-v",
     versioning: "rolling-year",
     packageNames: ["@standard-red-notes/mcp"],
-    configPaths: [".github/workflows/srn-mcp.yml"],
+    configPaths: [
+      ".github/workflows/srn-mcp.yml",
+      "scripts/native-cli-release.mjs",
+      "scripts/release-packaging-contract.mjs",
+    ],
     configPrefixes: [],
   },
   "srn-mobile": {
@@ -119,6 +137,7 @@ export const RELEASE_TARGETS = Object.freeze({
     configPaths: [
       ".github/workflows/srn-mobile.yml",
       "app/.github/workflows/mobile.release.prod.yml",
+      "scripts/release-packaging-contract.mjs",
     ],
   },
   "srn-openclaw": {
@@ -126,7 +145,10 @@ export const RELEASE_TARGETS = Object.freeze({
     tagPrefix: "srn-openclaw-v",
     versioning: "rolling-year-or-semver",
     packageNames: ["@standard-red-notes/openclaw"],
-    configPaths: [".github/workflows/srn-openclaw.yml"],
+    configPaths: [
+      ".github/workflows/srn-openclaw.yml",
+      "scripts/release-packaging-contract.mjs",
+    ],
     configPrefixes: [],
   },
   "srn-server": {
@@ -138,7 +160,12 @@ export const RELEASE_TARGETS = Object.freeze({
         directory: "cli/srn-server",
       },
     ],
-    configPaths: [".github/workflows/srn-server.yml", "cli/.prettierrc"],
+    configPaths: [
+      ".github/workflows/srn-server.yml",
+      "cli/.prettierrc",
+      "scripts/native-cli-release.mjs",
+      "scripts/release-packaging-contract.mjs",
+    ],
     configPrefixes: [],
   },
 });

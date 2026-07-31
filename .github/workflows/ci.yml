@@ -64,7 +64,7 @@ jobs:
       - name: Validate CI, release, and documentation contracts
         run: yarn ci:contracts
       - name: Test fail-closed release fingerprint comparison
-        run: node --test scripts/compare-release-fingerprints.test.mjs
+        run: node --test scripts/compare-release-fingerprints.test.mjs scripts/release-packaging-contract.test.mjs
       - name: Generate all-workspace release impact report
         run: |
           set -euo pipefail

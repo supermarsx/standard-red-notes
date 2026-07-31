@@ -5,6 +5,8 @@ description: Required, scheduled, and manually dispatched validation for product
 
 # CI Production Gates
 
+{% include mermaid.html %}
+
 The root [CI workflow](../.github/workflows/ci.yml) is the non-publishing
 production gate for the complete repository. It runs on every pull request and
 push to `main`, uses read-only repository permissions, and does not publish
@@ -18,7 +20,7 @@ the fan-in green.
 
 | Lane               | Contract                                                                                                                                                                                            | Timeout |
 | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------: |
-| `contracts`        | Immutable root install; CI validator tests; release target and artifact contract; generated docs/search freshness, link/navigation integrity, Mermaid rendering; actionlint over root workflows.    |  12 min |
+| `contracts`        | Immutable root install; CI validator tests; release impact, fingerprint, comparator, packaging-invocation, target, and artifact contracts; generated docs/search freshness, link/navigation integrity, Mermaid rendering; actionlint over root workflows. |  12 min |
 | `check`            | Immutable installs in the root, app, and server projects, followed by the coordinated type, lint, format, and test gate.                                                                            |  45 min |
 | `build`            | A second clean set of immutable installs followed by the coordinated MCP, OpenClaw, app, and server build.                                                                                          |  45 min |
 | `desktop-electron` | A production desktop build followed by the seven real Electron suites under Xvfb. The guarded runner requires the built entry point and cannot silently fall back to skipped headless tests.        |  45 min |
@@ -30,6 +32,43 @@ sync/Redis test. The generated JSON report must contain at least four expected
 tests and exactly zero skipped, unexpected, or flaky tests. The stack uses a
 run-specific Compose project and generated credentials, then removes its
 containers and volumes even after a failure.
+
+## Release gates inside publishers
+
+Normal CI never publishes. Each of the eight product publishers independently
+checks out complete history, validates the repository release contract before
+impact analysis, selects an ancestry-safe product baseline, builds only after a
+managed source/configuration change, and compares the product's built payload
+plus named packaging contract with the exact prior fingerprint assets.
+
+```mermaid
+flowchart TD
+  C[Normal CI contracts lane] --> R[Read-only repository release report]
+  E[Bounded publisher event] --> V[Validate complete release contract]
+  V --> I{Owned source or configuration changed?}
+  I -- No --> S[Skip]
+  I -- Yes --> B[Build product payload]
+  B --> F[Compute payload plus packaging-contract fingerprints]
+  F --> P{Exact prior evidence usable?}
+  P -- Same --> S
+  P -- Changed or first release --> U[Run product packaging and publication fan-in]
+  P -- Missing, malformed, draft, or divergent --> X[Fail closed]
+```
+
+The native release tests capture the actual shell-free executable and argument
+array used for every target, including the pinned packager/runtime/flags and
+target-specific output name. The fingerprint contains that same canonical
+invocation set, and home-server migration archive creation is included as a
+product-specific supplemental invocation. Desktop, mobile, and OpenClaw have
+equivalent named contracts for their deterministic inputs, toolchains, target
+matrices, and packaging behavior. Raw workflow text is not hashed, so prose,
+display-name, and permissions-only edits do not fabricate releases.
+
+Runner-image resolution, mutable action-tag resolution, and secret/signing-key
+rotation are external-state boundaries. They are documented with the audited
+manual-force procedure in [Releases and Upgrades](releases-and-upgrades.md#repository-release-contracts);
+the pre-publication fingerprint must not be presented as evidence that those
+external values stayed unchanged.
 
 ## Extended Profiles
 
@@ -71,6 +110,20 @@ Run the workflow policy and its failure-case tests without starting Docker:
 yarn ci:contracts
 actionlint .github/workflows/ci.yml
 ```
+
+For a focused release-contract iteration, the same gate is split into explicit
+behavior and mutation checks:
+
+```bash
+yarn test:release-impact
+yarn test:release-contract
+yarn release:contract
+```
+
+`test:release-impact` covers source ancestry, product scoping, tree
+normalization, canonical packaging inputs, exact native invocations, and
+fail-closed fingerprint comparison. `test:release-contract` mutates protected
+workflow/helper fragments and requires the validator to reject each drift.
 
 Run the same desktop artifact and live Electron suite locally on a machine with
 a display:

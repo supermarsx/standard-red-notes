@@ -1251,7 +1251,10 @@ test("the mobile release trigger surface exposes its complete dependency closure
       "app/.github/workflows/mobile.release.prod.yml",
     ),
   );
-  assert.deepEqual(surface.configPrefixes, ["app/.yarn/releases"]);
+  assert.deepEqual(surface.configPrefixes, [
+    "app/.yarn/patches",
+    "app/.yarn/releases",
+  ]);
 });
 
 test("the CLI rejects unknown flags instead of silently weakening analysis", () => {

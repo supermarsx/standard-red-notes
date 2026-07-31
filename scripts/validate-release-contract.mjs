@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { discoverReleaseTargetSurface } from "./analyze-release-impact.mjs";
+import { RELEASE_PACKAGING_CONTRACTS } from "./release-packaging-contract.mjs";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const defaultRepositoryRoot = path.resolve(path.dirname(scriptPath), "..");
@@ -34,6 +35,9 @@ export const RELEASE_CONTRACT_FILES = Object.freeze([
   "scripts/compare-release-fingerprints.test.mjs",
   "scripts/fingerprint-release-tree.mjs",
   "scripts/fingerprint-release-tree.test.mjs",
+  "scripts/native-cli-release.mjs",
+  "scripts/release-packaging-contract.mjs",
+  "scripts/release-packaging-contract.test.mjs",
 ]);
 
 const TOOL_WORKFLOWS = Object.freeze([
@@ -44,14 +48,17 @@ const TOOL_WORKFLOWS = Object.freeze([
   ".github/workflows/srn-admin.yml",
 ]);
 
-const TOOL_TARGETS = Object.freeze([
-  ["windows-x64.exe", "win-x64"],
-  ["windows-arm64.exe", "win-arm64"],
-  ["macos-x64", "macos-x64"],
-  ["macos-arm64", "macos-arm64"],
-  ["linux-x64", "linux-x64"],
-  ["linux-arm64", "linux-arm64"],
-]);
+const NATIVE_CLI_CONTRACT = RELEASE_PACKAGING_CONTRACTS["native-cli"];
+const TOOL_TARGETS = Object.freeze(
+  [
+    ["windows-x64.exe", "win-x64"],
+    ["windows-arm64.exe", "win-arm64"],
+    ["macos-x64", "macos-x64"],
+    ["macos-arm64", "macos-arm64"],
+    ["linux-x64", "linux-x64"],
+    ["linux-arm64", "linux-arm64"],
+  ].map((target) => Object.freeze(target)),
+);
 
 const OPENCLAW_SMOKE_TARGETS = Object.freeze([
   ["windows-x64", "windows-2025", "x64"],
@@ -279,6 +286,10 @@ export function validateReleaseContract(files) {
     } else {
       for (const [fragment, description] of [
         ["fetch-depth: 0", "complete Git history checkout"],
+        [
+          "node scripts/validate-release-contract.mjs",
+          "in-chain packaging contract validation",
+        ],
         ["git fetch --force --tags origin", "complete release tag fetch"],
         [
           "node scripts/analyze-release-impact.mjs",
@@ -301,6 +312,14 @@ export function validateReleaseContract(files) {
         ["reason_codes:", "machine-readable impact reasons"],
       ]) {
         requireFragment(errors, file, impact, fragment, description);
+      }
+      if (
+        impact.indexOf("node scripts/validate-release-contract.mjs") >
+        impact.indexOf("node scripts/analyze-release-impact.mjs")
+      ) {
+        errors.push(
+          `${file}: packaging contract validation must run before release-impact analysis`,
+        );
       }
     }
 
@@ -415,27 +434,205 @@ export function validateReleaseContract(files) {
     }
   }
 
+  const nativeWorkflowInputs = new Map([
+    [
+      ".github/workflows/srn-client.yml",
+      { bundle: "dist/index.cjs", payload: "--path dist/index.cjs" },
+    ],
+    [
+      ".github/workflows/srn-server.yml",
+      { bundle: "dist/index.cjs", payload: "--path dist/index.cjs" },
+    ],
+    [
+      ".github/workflows/srn-mcp.yml",
+      { bundle: "dist/index.cjs", payload: "--path dist/index.cjs" },
+    ],
+    [
+      ".github/workflows/srn-home-server.yml",
+      {
+        bundle: "bundle/home-server.cjs",
+        payload: "--path dist/bundle/home-server.cjs",
+      },
+    ],
+    [
+      ".github/workflows/srn-admin.yml",
+      {
+        bundle: "bundle/srn-admin.cjs",
+        payload: "--path dist/bundle/srn-admin.cjs",
+      },
+    ],
+  ]);
   for (const file of TOOL_WORKFLOWS) {
     const workflow = files.get(file) ?? "";
-    requireFragment(
-      errors,
-      file,
-      workflow,
-      '"@yao-pkg/pkg@${PKG_VERSION}"',
-      "@yao-pkg/pkg packaging command",
-    );
-
-    for (const [output, target] of TOOL_TARGETS) {
-      const declaration = `["\${TOOL}-${output}"]="\${PKG_NODE}-${target}"`;
-      const count = countOccurrences(workflow, declaration);
-      if (count !== 1) {
+    const nativeInput = nativeWorkflowInputs.get(file);
+    for (const [fragment, description] of [
+      [
+        "native-cli-release.mjs fingerprint",
+        "canonical native fingerprint command",
+      ],
+      ["native-cli-release.mjs package", "canonical native package command"],
+      [nativeInput.payload, "native executable payload input"],
+      ["- 'scripts/native-cli-release.mjs'", "native contract trigger"],
+      [
+        "- 'scripts/release-packaging-contract.mjs'",
+        "packaging contract trigger",
+      ],
+    ]) {
+      requireFragment(errors, file, workflow, fragment, description);
+    }
+    for (const forbidden of [
+      "PKG_NODE:",
+      "PKG_VERSION:",
+      "declare -A TARGETS=",
+    ]) {
+      if (workflow.includes(forbidden)) {
         errors.push(
-          `${file}: expected one ${target} target declaration, found ${count}`,
+          `${file}: native packaging duplicates canonical contract via '${forbidden}'`,
         );
       }
     }
+    const nativeBuildRuntime = NATIVE_CLI_CONTRACT.buildRuntime.replace(
+      /^node/,
+      "",
+    );
+    if (
+      !workflow.includes(`NODE_VERSION: '${nativeBuildRuntime}'`) &&
+      !workflow.includes(`node-version: '${nativeBuildRuntime}'`)
+    ) {
+      errors.push(`${file}: missing contract-bound native build runtime`);
+    }
+    for (const action of [
+      `actions/checkout@${NATIVE_CLI_CONTRACT.actions.checkout}`,
+      `actions/download-artifact@${NATIVE_CLI_CONTRACT.actions.downloadArtifact}`,
+      `actions/setup-node@${NATIVE_CLI_CONTRACT.actions.setupNode}`,
+    ]) {
+      requireFragment(
+        errors,
+        file,
+        workflow,
+        action,
+        "contract-bound native action",
+      );
+    }
+    const packageJob = jobBlock(workflow, "package");
+    const buildJob = jobBlock(workflow, "build");
+    for (const [job, description] of [
+      [buildJob, "fingerprinted native invocation plan"],
+      [packageJob, "executed native invocation plan"],
+    ]) {
+      requireFragment(
+        errors,
+        file,
+        job,
+        `--bundle ${nativeInput.bundle}`,
+        description,
+      );
+      requireFragment(errors, file, job, "--out-dir out", description);
+    }
+    for (const action of [
+      `actions/checkout@${NATIVE_CLI_CONTRACT.actions.checkout}`,
+      `actions/download-artifact@${NATIVE_CLI_CONTRACT.actions.downloadArtifact}`,
+      `actions/setup-node@${NATIVE_CLI_CONTRACT.actions.setupNode}`,
+    ]) {
+      requireFragment(
+        errors,
+        file,
+        packageJob,
+        action,
+        "contract-bound native package action",
+      );
+    }
   }
 
+  const nativeReleaseFile = "scripts/native-cli-release.mjs";
+  const nativeRelease = files.get(nativeReleaseFile) ?? "";
+  for (const [fragment, description] of [
+    [
+      "packagingContract.targets.map((target) =>",
+      "contract-driven target plan",
+    ],
+    [
+      "`${packagingContract.embeddedRuntime}-${target.target}`",
+      "contract-driven runtime",
+    ],
+    [
+      "`${packagingContract.packager.name}@${packagingContract.packager.version}`",
+      "contract-driven packager",
+    ],
+    ["...packagingContract.packager.flags", "contract-driven package flags"],
+    ['platform === "win32" ? "npx.cmd" : "npx"', "shell-free npx selection"],
+    ["executionPlan,", "fingerprinted native invocation plan"],
+    [
+      "for (const invocation of plan.invocations)",
+      "canonical invocation execution loop",
+    ],
+    [
+      "spawn(invocation.executable, invocation.args",
+      "canonical shell-free invocation execution",
+    ],
+    ["shell: false", "explicit shell-free invocation"],
+    ["spawn = spawnSync", "production spawn implementation"],
+    [
+      "product?.supplementalArtifacts ?? []",
+      "product supplemental artifact plan",
+    ],
+  ]) {
+    requireFragment(
+      errors,
+      nativeReleaseFile,
+      nativeRelease,
+      fragment,
+      description,
+    );
+  }
+
+  const packagingContractFile = "scripts/release-packaging-contract.mjs";
+  const packagingContract = files.get(packagingContractFile) ?? "";
+  for (const [fragment, description] of [
+    [
+      `embeddedRuntime: "${NATIVE_CLI_CONTRACT.embeddedRuntime}"`,
+      "native embedded runtime contract",
+    ],
+    [
+      `version: "${NATIVE_CLI_CONTRACT.packager.version}"`,
+      "native packager version contract",
+    ],
+    [
+      `flags: Object.freeze(["${NATIVE_CLI_CONTRACT.packager.flags.join('", "')}"])`,
+      "native packager flag contract",
+    ],
+    [
+      "srn-release-packaging-contract-v1",
+      "versioned packaging fingerprint schema",
+    ],
+  ]) {
+    requireFragment(
+      errors,
+      packagingContractFile,
+      packagingContract,
+      fragment,
+      description,
+    );
+  }
+  for (const [output, target] of TOOL_TARGETS) {
+    requireFragment(
+      errors,
+      packagingContractFile,
+      packagingContract,
+      `Object.freeze({ output: "${output}", target: "${target}" })`,
+      `native target contract ${target}`,
+    );
+  }
+  requireFragment(
+    errors,
+    packagingContractFile,
+    packagingContract,
+    `targets: Object.freeze([\n${TOOL_TARGETS.map(
+      ([output, target]) =>
+        `      Object.freeze({ output: "${output}", target: "${target}" }),`,
+    ).join("\n")}\n    ]),`,
+    "exact native target matrix",
+  );
   const homeServerWorkflowFile = ".github/workflows/srn-home-server.yml";
   const homeServerBuild = jobBlock(
     files.get(homeServerWorkflowFile) ?? "",
@@ -443,11 +640,17 @@ export function validateReleaseContract(files) {
   );
   for (const [fragment, description] of [
     [
-      "node ../../../scripts/fingerprint-release-tree.mjs",
+      "node ../../../scripts/native-cli-release.mjs fingerprint",
       "normalized home-server release fingerprint",
     ],
-    ["--path home-server.cjs", "home-server executable fingerprint input"],
-    ["--path migrations", "home-server migration fingerprint input"],
+    [
+      "--path dist/bundle/home-server.cjs",
+      "home-server executable fingerprint input",
+    ],
+    [
+      "--path dist/bundle/migrations",
+      "home-server migration fingerprint input",
+    ],
   ]) {
     requireFragment(
       errors,
@@ -455,6 +658,31 @@ export function validateReleaseContract(files) {
       homeServerBuild,
       fragment,
       description,
+    );
+  }
+  requireFragment(
+    errors,
+    packagingContractFile,
+    packagingContract,
+    'output: "srn-home-server-migrations.zip"',
+    "home-server migration archive output contract",
+  );
+  for (const [fragment, description] of [
+    ['executable: "zip"', "home-server migration archive executable"],
+    ['flags: Object.freeze(["-qr"])', "home-server migration archive flags"],
+    ['input: "migrations"', "home-server migration archive input"],
+  ]) {
+    requireFragment(
+      errors,
+      packagingContractFile,
+      packagingContract,
+      fragment,
+      description,
+    );
+  }
+  if ((files.get(homeServerWorkflowFile) ?? "").includes("zip -qr")) {
+    errors.push(
+      `${homeServerWorkflowFile}: home-server migration packaging bypasses the canonical invocation plan`,
     );
   }
   for (const file of [
@@ -472,6 +700,7 @@ export function validateReleaseContract(files) {
 
   const openClawWorkflowFile = ".github/workflows/srn-openclaw.yml";
   const openClawWorkflow = files.get(openClawWorkflowFile) ?? "";
+  const openClawContract = RELEASE_PACKAGING_CONTRACTS.openclaw;
   const openClawImpact = jobBlock(openClawWorkflow, "impact");
   for (const [fragment, description] of [
     [
@@ -496,8 +725,22 @@ export function validateReleaseContract(files) {
     ['- "openclaw/**"', "OpenClaw workspace release trigger path"],
     ['- "srn-openclaw-v*"', "OpenClaw explicit release tag trigger"],
     ["workflow_dispatch:", "manual OpenClaw release trigger"],
-    ['NODE_VERSION: "26.5.0"', "pinned Node 26 release runtime"],
-    ['YARN_VERSION: "4.17.1"', "pinned Yarn release version"],
+    [
+      `NODE_VERSION: "${openClawContract.nodeVersion}"`,
+      "contract-bound Node release runtime",
+    ],
+    [
+      `YARN_VERSION: "${openClawContract.packageManager.split("@")[1]}"`,
+      "contract-bound Yarn release version",
+    ],
+    [
+      `COREPACK_VERSION: "${openClawContract.corepackVersion}"`,
+      "contract-bound Corepack release version",
+    ],
+    [
+      '- "scripts/release-packaging-contract.mjs"',
+      "OpenClaw packaging contract trigger",
+    ],
     ["yarn install --immutable", "immutable workspace install"],
     [
       "yarn workspace @standard-red-notes/openclaw test:e2e",
@@ -532,6 +775,21 @@ export function validateReleaseContract(files) {
       openClawWorkflow,
       fragment,
       description,
+    );
+  }
+  for (const [action, reference] of Object.entries(openClawContract.actions)) {
+    const owner = {
+      checkout: "actions/checkout",
+      downloadArtifact: "actions/download-artifact",
+      setupNode: "actions/setup-node",
+      uploadArtifact: "actions/upload-artifact",
+    }[action];
+    requireFragment(
+      errors,
+      openClawWorkflowFile,
+      openClawWorkflow,
+      `${owner}@${reference}`,
+      `contract-bound OpenClaw ${action} action`,
     );
   }
 
@@ -600,8 +858,29 @@ export function validateReleaseContract(files) {
         "rolling package-version normalization",
       ],
       [
-        "--exclude package/release-package.json",
-        "volatile source metadata exclusion",
+        "node scripts/release-packaging-contract.mjs",
+        "canonical OpenClaw packaging contract fingerprint",
+      ],
+      ["--contract openclaw", "OpenClaw packaging contract selection"],
+      [
+        "--path .srn-release-contract",
+        "OpenClaw package implementation inputs",
+      ],
+      [
+        "--normalize-json-field package/release-package.json=/release/sourceCommit",
+        "volatile source-commit normalization",
+      ],
+      [
+        "--normalize-json-field package/release-package.json=/release/sourceDate",
+        "volatile source-date normalization",
+      ],
+      [
+        "--normalize-json-field package/release-package.json=/release/tag",
+        "volatile release-tag normalization",
+      ],
+      [
+        "--normalize-json-field package/release-package.json=/release/version",
+        "volatile release-version normalization",
       ],
       [
         '--output "out/${TOOL}.fingerprint"',
@@ -614,6 +893,11 @@ export function validateReleaseContract(files) {
         openClawPackageJob,
         fragment,
         description,
+      );
+    }
+    if (openClawPackageJob.includes("--exclude package/release-package.json")) {
+      errors.push(
+        `${openClawWorkflowFile}: shipped release-package.json must not be excluded wholesale`,
       );
     }
   }
@@ -961,6 +1245,7 @@ export function validateReleaseContract(files) {
 
   const rootDesktopFile = ".github/workflows/srn-desktop.yml";
   const rootDesktop = files.get(rootDesktopFile) ?? "";
+  const desktopContract = RELEASE_PACKAGING_CONTRACTS.desktop;
   for (const [fragment, description] of [
     ["- 'app/packages/**'", "packaged app workspace trigger"],
     ["builder: '--mac dmg zip --x64 --arm64'", "macOS x64+arm64 build leg"],
@@ -972,6 +1257,18 @@ export function validateReleaseContract(files) {
       "per-leg desktop artifact upload",
     ],
     ["pattern: srn-desktop-*", "desktop release artifact fan-in"],
+    [
+      `actions/setup-python@${desktopContract.actions.setupPython}`,
+      "contract-bound desktop Python action",
+    ],
+    [
+      `python-version: '${desktopContract.pythonVersion}'`,
+      "contract-bound desktop Python version",
+    ],
+    [
+      `softprops/action-gh-release@${desktopContract.actions.release}`,
+      "contract-bound desktop release action",
+    ],
   ]) {
     requireFragment(
       errors,
@@ -979,6 +1276,35 @@ export function validateReleaseContract(files) {
       rootDesktop,
       fragment,
       description,
+    );
+  }
+
+  for (const value of [
+    ...desktopContract.targets,
+    ...desktopContract.runners,
+  ]) {
+    requireFragment(
+      errors,
+      rootDesktopFile,
+      rootDesktop,
+      value,
+      "contract-bound desktop target or runner",
+    );
+  }
+  for (const [name, owner] of Object.entries({
+    checkout: "actions/checkout",
+    downloadArtifact: "actions/download-artifact",
+    release: "softprops/action-gh-release",
+    setupNode: "actions/setup-node",
+    setupPython: "actions/setup-python",
+    uploadArtifact: "actions/upload-artifact",
+  })) {
+    requireFragment(
+      errors,
+      rootDesktopFile,
+      rootDesktop,
+      `${owner}@${desktopContract.actions[name]}`,
+      `contract-bound desktop ${name} action`,
     );
   }
 
@@ -1021,6 +1347,13 @@ export function validateReleaseContract(files) {
     "-c.extraMetadata.version=${{ needs.version.outputs.app_version }}",
     "semver app version injected into electron-builder",
   );
+  requireFragment(
+    errors,
+    rootDesktopFile,
+    rootDesktop,
+    "run: yarn electron-builder ${{ matrix.builder }} --publish never -c.extraMetadata.version=${{ needs.version.outputs.app_version }}",
+    "contract-bound electron-builder command shape",
+  );
 
   // The Snap target was removed outright (snapcraft 8 dropped the `snapcraft
   // snap` subcommand electron-builder's legacy core22 path hardcodes), so the
@@ -1048,6 +1381,31 @@ export function validateReleaseContract(files) {
     for (const [fragment, description] of [
       ["find dist -type f -name app.asar", "actual packaged asar discovery"],
       ["yarn exec asar extract", "packaged desktop runtime extraction"],
+      [
+        "node ../../../scripts/release-packaging-contract.mjs",
+        "canonical desktop packaging fingerprint",
+      ],
+      ["--contract desktop", "desktop packaging contract selection"],
+      ["cp ../../yarn.lock", "desktop lockfile packaging input"],
+      ["cp ../../.nvmrc", "desktop Node runtime input"],
+      ["cp -a ../../.yarn/patches", "desktop Yarn patch inputs"],
+      ["cp -a ../../.yarn/releases", "desktop Yarn runtime inputs"],
+      ["cp package.json", "desktop electron-builder configuration input"],
+      [
+        'electron_version="$(yarn node -p',
+        "resolved Electron toolchain metadata",
+      ],
+      [
+        'builder_version="$(yarn node -p',
+        "resolved electron-builder toolchain metadata",
+      ],
+      ['--metadata "builderArguments=', "effective desktop target metadata"],
+      [
+        '--metadata "electronBuilderVersion=',
+        "effective electron-builder metadata",
+      ],
+      ['--metadata "electronVersion=', "effective Electron metadata"],
+      ['--metadata "nodeVersion=', "effective desktop Node metadata"],
       [
         "--normalize-package-version package.json",
         "rolling desktop version normalization",
@@ -1250,6 +1608,7 @@ export function validateReleaseContract(files) {
 
   const rootMobileFile = ".github/workflows/srn-mobile.yml";
   const rootMobile = files.get(rootMobileFile) ?? "";
+  const mobileContract = RELEASE_PACKAGING_CONTRACTS.mobile;
   for (const [fragment, description] of [
     ["branches: [main]", "mobile branch analysis trigger"],
     ["- '@standardnotes/web@*'", "mobile release tag trigger"],
@@ -1264,8 +1623,80 @@ export function validateReleaseContract(files) {
     ["node-version-file: app/.nvmrc", "app-relative Node version path"],
     ["path: app/.yarn/cache", "app-relative Yarn cache path"],
     ["hashFiles('app/yarn.lock')", "app-relative Yarn lock hash"],
+    [
+      `actions/cache@${mobileContract.actions.cache}`,
+      "contract-bound mobile cache action",
+    ],
+    [
+      `actions/setup-java@${mobileContract.actions.setupJava}`,
+      "contract-bound Android Java action",
+    ],
+    [
+      `ruby/setup-ruby@${mobileContract.actions.setupRuby}`,
+      "contract-bound mobile Ruby action",
+    ],
+    [
+      `maxim-lobanov/setup-xcode@${mobileContract.actions.setupXcode}`,
+      "contract-bound Xcode action",
+    ],
+    [
+      `webfactory/ssh-agent@${mobileContract.actions.setupSshAgent}`,
+      "contract-bound iOS SSH action",
+    ],
+    [
+      `softprops/action-gh-release@${mobileContract.actions.release}`,
+      "contract-bound mobile release action",
+    ],
+    [
+      `distribution: ${mobileContract.javaDistribution}`,
+      "contract-bound Java distribution",
+    ],
+    [
+      `java-version: '${mobileContract.javaVersion}'`,
+      "contract-bound Java version",
+    ],
+    [
+      `ruby-version: '${mobileContract.rubyVersion}'`,
+      "contract-bound Ruby version",
+    ],
+    [
+      `xcode-version: '${mobileContract.xcodeVersion}'`,
+      "contract-bound Xcode version",
+    ],
   ]) {
     requireFragment(errors, rootMobileFile, rootMobile, fragment, description);
+  }
+  for (const value of [
+    ...mobileContract.runners,
+    ...mobileContract.publicationCommands,
+  ]) {
+    requireFragment(
+      errors,
+      rootMobileFile,
+      rootMobile,
+      value,
+      "contract-bound mobile runner or publication command",
+    );
+  }
+  for (const [name, owner] of Object.entries({
+    cache: "actions/cache",
+    checkout: "actions/checkout",
+    downloadArtifact: "actions/download-artifact",
+    release: "softprops/action-gh-release",
+    setupJava: "actions/setup-java",
+    setupNode: "actions/setup-node",
+    setupRuby: "ruby/setup-ruby",
+    setupSshAgent: "webfactory/ssh-agent",
+    setupXcode: "maxim-lobanov/setup-xcode",
+    uploadArtifact: "actions/upload-artifact",
+  })) {
+    requireFragment(
+      errors,
+      rootMobileFile,
+      rootMobile,
+      `${owner}@${mobileContract.actions[name]}`,
+      `contract-bound mobile ${name} action`,
+    );
   }
   if (pushBlock(rootMobile).includes("@standardnotes/mobile@")) {
     errors.push(
@@ -1317,6 +1748,11 @@ export function validateReleaseContract(files) {
         "rolling mobile version normalization",
       ],
       [
+        "node scripts/release-packaging-contract.mjs",
+        "canonical mobile packaging fingerprint",
+      ],
+      ["--contract mobile", "mobile packaging contract selection"],
+      [
         '--output "release-fingerprint/srn-mobile.fingerprint"',
         "normalized mobile release fingerprint",
       ],
@@ -1328,6 +1764,15 @@ export function validateReleaseContract(files) {
         rootMobileFingerprint,
         fragment,
         description,
+      );
+    }
+    for (const input of mobileContract.deterministicInputs) {
+      requireFragment(
+        errors,
+        rootMobileFile,
+        rootMobileFingerprint,
+        `--path ${input}`,
+        `mobile deterministic packaging input '${input}'`,
       );
     }
   }
@@ -1342,6 +1787,26 @@ export function validateReleaseContract(files) {
         "Android app-relative working directory",
       ],
       ["bundle exec fastlane android prod", "Android production release lane"],
+      [
+        `actions/cache@${mobileContract.actions.cache}`,
+        "Android contract-bound cache action",
+      ],
+      [
+        `actions/setup-java@${mobileContract.actions.setupJava}`,
+        "Android contract-bound Java action",
+      ],
+      [
+        `ruby/setup-ruby@${mobileContract.actions.setupRuby}`,
+        "Android contract-bound Ruby action",
+      ],
+      [
+        `java-version: '${mobileContract.javaVersion}'`,
+        "Android contract-bound Java version",
+      ],
+      [
+        `ruby-version: '${mobileContract.rubyVersion}'`,
+        "Android contract-bound Ruby version",
+      ],
       [
         "Verify universal Android release architectures",
         "Android architecture assertion step",
@@ -1373,6 +1838,30 @@ export function validateReleaseContract(files) {
         "iOS app-relative working directory",
       ],
       ["bundle exec fastlane ios prod", "iOS production release lane"],
+      [
+        `actions/cache@${mobileContract.actions.cache}`,
+        "iOS contract-bound cache action",
+      ],
+      [
+        `maxim-lobanov/setup-xcode@${mobileContract.actions.setupXcode}`,
+        "iOS contract-bound Xcode action",
+      ],
+      [
+        `ruby/setup-ruby@${mobileContract.actions.setupRuby}`,
+        "iOS contract-bound Ruby action",
+      ],
+      [
+        `webfactory/ssh-agent@${mobileContract.actions.setupSshAgent}`,
+        "iOS contract-bound SSH action",
+      ],
+      [
+        `ruby-version: '${mobileContract.rubyVersion}'`,
+        "iOS contract-bound Ruby version",
+      ],
+      [
+        `xcode-version: '${mobileContract.xcodeVersion}'`,
+        "iOS contract-bound Xcode version",
+      ],
       [
         "Verify iOS device arm64 artifact",
         "iOS device architecture assertion step",
@@ -1485,6 +1974,9 @@ export function validateReleaseContract(files) {
     "scripts/compare-release-fingerprints.test.mjs",
     "scripts/fingerprint-release-tree.mjs",
     "scripts/fingerprint-release-tree.test.mjs",
+    "scripts/native-cli-release.mjs",
+    "scripts/release-packaging-contract.mjs",
+    "scripts/release-packaging-contract.test.mjs",
     "scripts/validate-release-contract.mjs",
     "scripts/validate-release-contract.test.mjs",
     "docs/releases-and-upgrades.md",
@@ -1614,10 +2106,10 @@ export function validateReleaseContract(files) {
   }
   if (
     rootPackage.scripts?.["test:release-impact"] !==
-    "node --test scripts/analyze-release-impact.test.mjs scripts/fingerprint-release-tree.test.mjs"
+    "node --test scripts/analyze-release-impact.test.mjs scripts/fingerprint-release-tree.test.mjs scripts/release-packaging-contract.test.mjs scripts/compare-release-fingerprints.test.mjs"
   ) {
     errors.push(
-      "package.json: test:release-impact script is not wired to analyzer and fingerprint tests",
+      "package.json: test:release-impact script is not wired to every release-gating test",
     );
   }
 

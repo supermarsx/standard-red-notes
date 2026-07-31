@@ -24,6 +24,9 @@ on:
       - 'scripts/compare-release-fingerprints.test.mjs'
       - 'scripts/fingerprint-release-tree.mjs'
       - 'scripts/fingerprint-release-tree.test.mjs'
+      - 'scripts/native-cli-release.mjs'
+      - 'scripts/release-packaging-contract.mjs'
+      - 'scripts/release-packaging-contract.test.mjs'
       - 'scripts/validate-release-contract.mjs'
       - 'scripts/validate-release-contract.test.mjs'
   pull_request:
@@ -48,6 +51,9 @@ on:
       - 'scripts/compare-release-fingerprints.test.mjs'
       - 'scripts/fingerprint-release-tree.mjs'
       - 'scripts/fingerprint-release-tree.test.mjs'
+      - 'scripts/native-cli-release.mjs'
+      - 'scripts/release-packaging-contract.mjs'
+      - 'scripts/release-packaging-contract.test.mjs'
       - 'scripts/validate-release-contract.mjs'
       - 'scripts/validate-release-contract.test.mjs'
   workflow_dispatch:
@@ -70,7 +76,7 @@ jobs:
       - name: Test validator failure cases
         run: node --test scripts/validate-release-contract.test.mjs
       - name: Test release impact and fingerprint behavior
-        run: node --test scripts/analyze-release-impact.test.mjs scripts/fingerprint-release-tree.test.mjs scripts/compare-release-fingerprints.test.mjs
+        run: node --test scripts/analyze-release-impact.test.mjs scripts/fingerprint-release-tree.test.mjs scripts/release-packaging-contract.test.mjs scripts/compare-release-fingerprints.test.mjs
       - name: Validate release targets and artifacts
         run: node scripts/validate-release-contract.mjs
       - name: Generate repository release inventory and impact report

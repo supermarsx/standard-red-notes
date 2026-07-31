@@ -25,29 +25,128 @@ test("the repository satisfies the release contract", () => {
 });
 
 test("a missing native tool target is rejected", () => {
-  const file = ".github/workflows/srn-client.yml";
+  const file = "scripts/release-packaging-contract.mjs";
   const files = withFileChanged(file, (content) =>
     content.replace(
-      '["${TOOL}-windows-arm64.exe"]="${PKG_NODE}-win-arm64"',
+      '      Object.freeze({ output: "windows-arm64.exe", target: "win-arm64" }),\n',
       "",
     ),
   );
 
   assert.match(
     validateReleaseContract(files).join("\n"),
-    /srn-client\.yml: expected one win-arm64 target/,
+    /release-packaging-contract\.mjs: missing native target contract win-arm64/,
   );
 });
 
-test("a missing srn-admin native tool target is rejected", () => {
-  const file = ".github/workflows/srn-admin.yml";
+test("an extra native tool target is rejected", () => {
+  const file = "scripts/release-packaging-contract.mjs";
   const files = withFileChanged(file, (content) =>
-    content.replace('["${TOOL}-linux-arm64"]="${PKG_NODE}-linux-arm64"', ""),
+    content.replace(
+      '      Object.freeze({ output: "linux-arm64", target: "linux-arm64" }),\n',
+      '      Object.freeze({ output: "linux-arm64", target: "linux-arm64" }),\n      Object.freeze({ output: "linux-riscv64", target: "linux-riscv64" }),\n',
+    ),
   );
 
   assert.match(
     validateReleaseContract(files).join("\n"),
-    /srn-admin\.yml: expected one linux-arm64 target/,
+    /release-packaging-contract\.mjs: missing exact native target matrix/,
+  );
+});
+
+test("native workflows cannot bypass the canonical target plan", () => {
+  const file = "scripts/native-cli-release.mjs";
+  const files = withFileChanged(file, (content) =>
+    content.replace(
+      "packagingContract.targets.map((target) =>",
+      "[].map((target) =>",
+    ),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /native-cli-release\.mjs: missing contract-driven target plan/,
+  );
+});
+
+test("native execution cannot bypass its fingerprinted invocation plan", () => {
+  const file = "scripts/native-cli-release.mjs";
+  const files = withFileChanged(file, (content) =>
+    content.replace(
+      "spawn(invocation.executable, invocation.args",
+      'spawn("npx", ["--yes", "@yao-pkg/pkg@latest"]',
+    ),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /native-cli-release\.mjs: missing canonical shell-free invocation execution/,
+  );
+});
+
+test("native runtime, packager flags, and workflow actions cannot drift from the contract", () => {
+  const contractFile = "scripts/release-packaging-contract.mjs";
+  let files = withFileChanged(contractFile, (content) =>
+    content
+      .replace('embeddedRuntime: "node24"', 'embeddedRuntime: "node26"')
+      .replace(
+        'flags: Object.freeze(["--no-signature"])',
+        "flags: Object.freeze([])",
+      ),
+  );
+  let errors = validateReleaseContract(files).join("\n");
+  assert.match(errors, /missing native embedded runtime contract/);
+  assert.match(errors, /missing native packager flag contract/);
+
+  files = withFileChanged(".github/workflows/srn-client.yml", (content) =>
+    content.replaceAll("actions/setup-node@v7", "actions/setup-node@v8"),
+  );
+  errors = validateReleaseContract(files).join("\n");
+  assert.match(errors, /srn-client\.yml: missing contract-bound native action/);
+});
+
+test("all publishers self-validate the release contract before impact analysis", () => {
+  for (const file of [
+    ".github/workflows/srn-admin.yml",
+    ".github/workflows/srn-client.yml",
+    ".github/workflows/srn-desktop.yml",
+    ".github/workflows/srn-home-server.yml",
+    ".github/workflows/srn-mcp.yml",
+    ".github/workflows/srn-mobile.yml",
+    ".github/workflows/srn-openclaw.yml",
+    ".github/workflows/srn-server.yml",
+  ]) {
+    const files = withFileChanged(file, (content) =>
+      content.replace(
+        "        run: node scripts/validate-release-contract.mjs\n",
+        "",
+      ),
+    );
+    assert.match(
+      validateReleaseContract(files).join("\n"),
+      new RegExp(
+        `${path.basename(file).replace(".", "\\.")}: missing in-chain packaging contract validation`,
+      ),
+    );
+  }
+});
+
+test("publisher contract validation cannot move behind impact analysis", () => {
+  const file = ".github/workflows/srn-mcp.yml";
+  const files = withFileChanged(file, (content) =>
+    content
+      .replace(
+        "      - name: Validate release packaging contract\n        run: node scripts/validate-release-contract.mjs\n\n      - id: impact",
+        "      - id: impact",
+      )
+      .replace(
+        '          } >> "$GITHUB_STEP_SUMMARY"\n',
+        '          } >> "$GITHUB_STEP_SUMMARY"\n\n      - name: Validate release packaging contract\n        run: node scripts/validate-release-contract.mjs\n',
+      ),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /srn-mcp\.yml: packaging contract validation must run before release-impact analysis/,
   );
 });
 
@@ -888,7 +987,7 @@ test("fingerprints must compare against the analyzer-selected base", () => {
 test("home-server fingerprints include the shipped migration payload", () => {
   const file = ".github/workflows/srn-home-server.yml";
   const files = withFileChanged(file, (content) =>
-    content.replace("            --path migrations \\\n", ""),
+    content.replace("            --path dist/bundle/migrations \\\n", ""),
   );
 
   assert.match(
@@ -897,17 +996,103 @@ test("home-server fingerprints include the shipped migration payload", () => {
   );
 });
 
+test("home-server migration packaging remains in the canonical product plan", () => {
+  const file = "scripts/release-packaging-contract.mjs";
+  const files = withFileChanged(file, (content) =>
+    content.replace('            executable: "zip",\n', ""),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /release-packaging-contract\.mjs: missing home-server migration archive executable/,
+  );
+});
+
+test("desktop packaging fingerprints bind lock, patches, config, toolchain, and target args", () => {
+  const file = ".github/workflows/srn-desktop.yml";
+  const files = withFileChanged(file, (content) =>
+    content
+      .replace('            cp ../../yarn.lock "$contract/app-yarn.lock"\n', "")
+      .replace(
+        '            cp -a ../../.yarn/patches "$contract/yarn-patches"\n',
+        "",
+      )
+      .replace(
+        '            cp package.json "$contract/desktop-package.json"\n',
+        "",
+      )
+      .replace(
+        '              --metadata "electronVersion=${electron_version}" \\\n',
+        "",
+      )
+      .replace("actions/setup-python@v6", "actions/setup-python@v7")
+      .replace(
+        "builder: '--linux AppImage deb --arm64'",
+        "builder: '--linux AppImage rpm --arm64'",
+      ),
+  );
+  const errors = validateReleaseContract(files).join("\n");
+  assert.match(errors, /missing desktop lockfile packaging input/);
+  assert.match(errors, /missing desktop Yarn patch inputs/);
+  assert.match(errors, /missing desktop electron-builder configuration input/);
+  assert.match(errors, /missing effective Electron metadata/);
+  assert.match(errors, /missing contract-bound desktop Python action/);
+  assert.match(errors, /missing Linux arm64 build leg/);
+  assert.match(errors, /missing contract-bound desktop target or runner/);
+});
+
 test("OpenClaw package fingerprints normalize release-only metadata", () => {
   const file = ".github/workflows/srn-openclaw.yml";
   const files = withFileChanged(file, (content) =>
     content
       .replace("--normalize-package-version package/package.json \\\n", "")
-      .replace("--exclude package/release-package.json \\\n", ""),
+      .replace(
+        "--normalize-json-field package/release-package.json=/release/sourceCommit \\\n",
+        "",
+      ),
   );
   const errors = validateReleaseContract(files).join("\n");
 
   assert.match(errors, /missing rolling package-version normalization/);
-  assert.match(errors, /missing volatile source metadata exclusion/);
+  assert.match(errors, /missing volatile source-commit normalization/);
+});
+
+test("mobile packaging fingerprints bind dependency locks and native toolchains", () => {
+  const file = ".github/workflows/srn-mobile.yml";
+  const files = withFileChanged(file, (content) =>
+    content
+      .replace("            --path app/yarn.lock \\\n", "")
+      .replace("            --path app/packages/mobile/Gemfile.lock \\\n", "")
+      .replace("actions/setup-java@v5.5.0", "actions/setup-java@v6")
+      .replaceAll("ruby/setup-ruby@v1.319.0", "ruby/setup-ruby@v2")
+      .replace(
+        "maxim-lobanov/setup-xcode@v1.7.0",
+        "maxim-lobanov/setup-xcode@v2",
+      )
+      .replace("java-version: '17'", "java-version: '21'")
+      .replaceAll("ruby-version: '3.4.7'", "ruby-version: '3.5.0'")
+      .replace("xcode-version: '26'", "xcode-version: '27'")
+      .replace("runs-on: macos-15", "runs-on: macos-16"),
+  );
+  const errors = validateReleaseContract(files).join("\n");
+  assert.match(
+    errors,
+    /missing mobile deterministic packaging input 'app\/yarn\.lock'/,
+  );
+  assert.match(
+    errors,
+    /missing mobile deterministic packaging input 'app\/packages\/mobile\/Gemfile\.lock'/,
+  );
+  assert.match(errors, /missing contract-bound Android Java action/);
+  assert.match(errors, /missing contract-bound mobile Ruby action/);
+  assert.match(errors, /missing contract-bound Xcode action/);
+  assert.match(errors, /missing contract-bound Java version/);
+  assert.match(errors, /missing contract-bound Ruby version/);
+  assert.match(errors, /missing contract-bound Xcode version/);
+  assert.match(
+    errors,
+    /missing contract-bound mobile runner or publication command/,
+  );
 });
 
 test("mobile publication cannot include a stale embedded web payload", () => {
