@@ -15,26 +15,28 @@
 # srn-home-server.yml — Corepack -> Yarn 4 -> `yarn install --immutable` in
 # server/ -> `yarn build` (tsc, all server packages) -> esbuild-bundle the built
 # CLI entry (dist/bin/srn_admin.js) into one CJS, reusing home-server's proven
-# native-SQLite/CBOR externals. The PACKAGE/DECIDE/RELEASE stages mirror
+# native-SQLite/CBOR externals. The DECIDE/IDENTITY/PACKAGE/RELEASE stages mirror
 # srn-client.yml: the 6-target @yao-pkg/pkg matrix, a content-fingerprint gate,
-# SHA256SUMS.txt, a rolling `srn-admin-v<YY>.<N>` tag and `gh release create`.
+# a commit-and-fingerprint-bound draft, SHA256SUMS.txt, and exact asset checks.
 #
 # Unlike home-server there is NO migrations.zip — srn-admin never runs
 # migrations (it starts the container in the lean 'cli' mode); it targets an
 # already-migrated database.
 #
-# Stages (gated): build -> decide -> package -> release. A new rolling release is
-# cut only when the bundle's content fingerprint changes.
+# Stages (gated): build -> decide -> identity -> package -> release. A new
+# rolling release is cut only when the bundle's content fingerprint changes.
 name: srn-admin
 
 on:
   push:
     branches: [main]
     paths:
-      - 'server/**'
-      - 'scripts/native-cli-release.mjs'
-      - 'scripts/release-packaging-contract.mjs'
-      - '.github/workflows/srn-admin.yml'
+      - "server/**"
+      - "scripts/native-cli-release.mjs"
+      - "scripts/package.json"
+      - "scripts/package-lock.json"
+      - "scripts/release-packaging-contract.mjs"
+      - ".github/workflows/srn-admin.yml"
   workflow_dispatch:
     inputs:
       force_release:
@@ -45,7 +47,7 @@ on:
       force_reason:
         description: Required audit reason when force_release is true
         required: false
-        default: ''
+        default: ""
         type: string
 
 permissions:
@@ -77,14 +79,26 @@ jobs:
       reason_codes: ${{ steps.impact.outputs.reason_codes }}
       result_json: ${{ steps.impact.outputs.result_json }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           fetch-depth: 0
 
-      - uses: actions/setup-node@v7
+      - name: Authorize exact protected release source
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --force origin refs/heads/main:refs/remotes/origin/main
+          protected_sha="$(git rev-parse refs/remotes/origin/main^{commit})"
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_SHA" = "$protected_sha"
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: '26'
+          node-version: "26"
           package-manager-cache: false
+
+      - name: Install release policy dependencies
+        run: npm ci --prefix scripts --ignore-scripts --no-audit --no-fund
 
       - name: Validate release packaging contract
         run: node scripts/validate-release-contract.mjs
@@ -121,11 +135,13 @@ jobs:
     outputs:
       fingerprint: ${{ steps.fp.outputs.fingerprint }}
     steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          node-version: '26'
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "26"
           # The repo root declares packageManager: yarn@4. setup-node's default
           # cache probing runs before Corepack is enabled and sees global Yarn 1.x.
           package-manager-cache: false
@@ -150,6 +166,9 @@ jobs:
         working-directory: ${{ env.SERVER_DIR }}
         run: yarn workspace @standardnotes/auth-server build:bundle
 
+      - name: Install release policy dependencies
+        run: npm ci --prefix scripts --ignore-scripts --no-audit --no-fund
+
       - name: Compute payload and native-packaging contract fingerprint
         id: fp
         working-directory: ${{ env.AUTH_DIR }}
@@ -165,13 +184,13 @@ jobs:
             --github-output "$GITHUB_OUTPUT"
 
       - name: Upload bundle artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: srn-admin-bundle
           path: |
             ${{ env.AUTH_DIR }}/dist/bundle/srn-admin.cjs
             ${{ env.AUTH_DIR }}/dist/bundle/srn-admin.fingerprint
-          retention-days: 1
+          retention-days: 30
           if-no-files-found: error
 
   # 2) DECIDE — release only if the bundle changed since the last release.
@@ -183,7 +202,9 @@ jobs:
       changed: ${{ steps.cmp.outputs.changed }}
       decision: ${{ steps.cmp.outputs.decision }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Compare against last released fingerprint
         id: cmp
@@ -208,24 +229,211 @@ jobs:
           fi
           cat release-fingerprint-comparison.json >> "$GITHUB_STEP_SUMMARY"
 
+  # Reserve one commit-bound draft before packaging. A rerun reuses this exact
+  # reservation instead of consuming another rolling version.
+  identity:
+    name: reserve release identity
+    needs: [build, decide, impact]
+    if: needs.decide.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    environment: release-production
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.identity.outputs.version }}
+      tag: ${{ steps.identity.outputs.tag }}
+      release_id: ${{ steps.identity.outputs.release_id }}
+      reused: ${{ steps.identity.outputs.reused }}
+      published: ${{ steps.identity.outputs.published }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Reserve or reuse exact draft release
+        id: identity
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EXPECTED_FINGERPRINT: ${{ needs.build.outputs.fingerprint }}
+          FORCED: ${{ needs.impact.outputs.forced }}
+          IMPACT_RESULT: ${{ needs.impact.outputs.result_json }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          [[ "$EXPECTED_FINGERPRINT" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$FORCED" == "true" || "$FORCED" == "false" ]]
+          jq -e --arg sha "$GITHUB_SHA" --argjson forced "$FORCED" '
+            .headSha == $sha
+            and .forced == $forced
+            and (
+              ($forced and (.forceReason | type == "string") and ((.forceReason | gsub("^\\s+|\\s+$"; "")) | length > 0))
+              or (($forced | not) and .forceReason == null)
+            )
+          ' <<< "$IMPACT_RESULT" >/dev/null
+          if [ "$FORCED" = "true" ]; then
+            [[ "$GITHUB_RUN_ID" =~ ^[0-9]+$ ]]
+            intent="forced-${GITHUB_RUN_ID}"
+          else
+            intent="automatic"
+          fi
+          git fetch --force --tags origin
+
+          yy="$(date -u +%y)"
+          prefix="${TOOL}-v${yy}."
+          marker="<!-- srn-release-reservation tool=${TOOL} commit=${GITHUB_SHA} fingerprint=${EXPECTED_FINGERPRINT} intent=${intent} -->"
+          releases_file="$(mktemp)"
+          gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --paginate --slurp |
+            jq 'flatten' > "$releases_file"
+
+          mapfile -t reservations < <(
+            jq -r --arg marker "$marker" --arg sha "$GITHUB_SHA" --arg tool_prefix "${TOOL}-v" '
+              .[]
+              | select(.target_commitish == $sha)
+              | select((.body // "") | contains($marker))
+              | select(.tag_name | startswith($tool_prefix))
+              | .id
+            ' "$releases_file"
+          )
+          marker_prefix="<!-- srn-release-reservation tool=${TOOL} "
+          mapfile -t stale_reservations < <(
+            jq -r --arg marker "$marker" --arg marker_prefix "$marker_prefix" --arg sha "$GITHUB_SHA" --arg tool_prefix "${TOOL}-v" '
+              .[]
+              | select(.draft == true)
+              | select((.body // "") | contains($marker_prefix))
+              | select((
+                  (.target_commitish == $sha)
+                  and (.tag_name | startswith($tool_prefix))
+                  and ((.body // "") | contains($marker))
+                ) | not)
+              | "\(.id)\t\(.tag_name)\t\(.target_commitish)"
+            ' "$releases_file"
+          )
+          if [ "${#stale_reservations[@]}" -gt 0 ]; then
+            echo "Refusing to allocate past stale ${TOOL} draft reservations:" >&2
+            printf '  %s\n' "${stale_reservations[@]}" >&2
+            echo "Reconcile or delete the stale drafts explicitly, then rerun." >&2
+            exit 1
+          fi
+          if [ "${#reservations[@]}" -gt 1 ]; then
+            echo "Multiple reservations match ${TOOL}, ${GITHUB_SHA}, ${EXPECTED_FINGERPRINT}, and ${intent}" >&2
+            exit 1
+          fi
+
+          reused=false
+          if [ "${#reservations[@]}" -eq 1 ]; then
+            release_id="${reservations[0]}"
+            release="$(jq -c --argjson id "$release_id" '.[] | select(.id == $id)' "$releases_file")"
+            tag="$(jq -r '.tag_name' <<< "$release")"
+            version="${tag#"${TOOL}-v"}"
+            name="${TOOL} ${version}"
+            [[ "$version" =~ ^[0-9]{2}\.[1-9][0-9]*$ ]]
+            jq -e --arg tag "$tag" --arg name "$name" --arg sha "$GITHUB_SHA" --arg marker "$marker" '
+              .tag_name == $tag
+              and .name == $name
+              and .target_commitish == $sha
+              and (.draft == true or .draft == false)
+              and .prerelease == false
+              and ((.body // "") | contains($marker))
+            ' <<< "$release" >/dev/null
+            tag_count="$(jq --arg tag "$tag" '[.[] | select(.tag_name == $tag)] | length' "$releases_file")"
+            test "$tag_count" -eq 1
+            published="$(jq -r '.draft | not' <<< "$release")"
+            if [ "$published" = "true" ]; then
+              git show-ref --verify --quiet "refs/tags/${tag}"
+              test "$(git rev-list -n 1 "$tag")" = "$GITHUB_SHA"
+            elif git show-ref --verify --quiet "refs/tags/${tag}"; then
+              echo "Draft reservation ${tag} collides with an existing Git tag" >&2
+              exit 1
+            fi
+            reused=true
+          else
+            max=0
+            while read -r candidate; do
+              [ -z "$candidate" ] && continue
+              n="${candidate#"$prefix"}"
+              if [[ "$n" =~ ^[1-9][0-9]*$ ]] && [ "$n" -gt "$max" ]; then
+                max="$n"
+              fi
+            done < <(
+              {
+                git tag --list "${prefix}*"
+                jq -r --arg prefix "$prefix" '.[] | select(.tag_name | startswith($prefix)) | .tag_name' "$releases_file"
+              } | LC_ALL=C sort -u
+            )
+            version="${yy}.$((max + 1))"
+            tag="${TOOL}-v${version}"
+            name="${TOOL} ${version}"
+            if git show-ref --verify --quiet "refs/tags/${tag}"; then
+              echo "Refusing to reserve existing tag ${tag}" >&2
+              exit 1
+            fi
+            tag_count="$(jq --arg tag "$tag" '[.[] | select(.tag_name == $tag)] | length' "$releases_file")"
+            test "$tag_count" -eq 0
+            created="$(
+              gh api --method POST "repos/${GITHUB_REPOSITORY}/releases" \
+                -f tag_name="$tag" \
+                -f target_commitish="$GITHUB_SHA" \
+                -f name="$name" \
+                -f body="$marker" \
+                -F draft=true \
+                -F prerelease=false \
+                -F generate_release_notes=true
+            )"
+            release_id="$(jq -r '.id' <<< "$created")"
+            published=false
+            jq -e --arg tag "$tag" --arg name "$name" --arg sha "$GITHUB_SHA" --arg marker "$marker" '
+              (.id | type == "number")
+              and .tag_name == $tag
+              and .name == $name
+              and .target_commitish == $sha
+              and .draft == true
+              and .prerelease == false
+              and ((.body // "") | contains($marker))
+            ' <<< "$created" >/dev/null
+          fi
+
+          {
+            echo "version=$version"
+            echo "tag=$tag"
+            echo "release_id=$release_id"
+            echo "reused=$reused"
+            echo "published=$published"
+          } >> "$GITHUB_OUTPUT"
+          echo "Reserved ${tag} for ${GITHUB_SHA} at ${EXPECTED_FINGERPRINT} with intent ${intent} (release id ${release_id}; reused=${reused}; published=${published})" >> "$GITHUB_STEP_SUMMARY"
+
   # 3) PACKAGE — cross-compile the 6 native executables from the single bundle.
   package:
     name: package
-    needs: [build, decide]
-    if: needs.decide.outputs.changed == 'true'
+    needs: [build, decide, identity]
+    if: needs.decide.outputs.changed == 'true' && needs.identity.outputs.published != 'true'
     runs-on: ubuntu-latest
+    env:
+      RELEASE_VERSION: ${{ needs.identity.outputs.version }}
+      RELEASE_TAG: ${{ needs.identity.outputs.tag }}
+      RELEASE_ID: ${{ needs.identity.outputs.release_id }}
+      RELEASE_COMMIT: ${{ github.sha }}
     steps:
-      - uses: actions/checkout@v7
+      - name: Verify reserved release identity
+        run: |
+          set -euo pipefail
+          test "$RELEASE_TAG" = "${TOOL}-v${RELEASE_VERSION}"
+          [[ "$RELEASE_ID" =~ ^[0-9]+$ ]]
+          test "$RELEASE_COMMIT" = "$GITHUB_SHA"
 
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          node-version: '26'
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "26"
           # This job only runs npx against a downloaded artifact; avoid setup-node
           # auto-detecting the repo's Yarn 4 packageManager field.
           package-manager-cache: false
 
       - name: Download bundle artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: srn-admin-bundle
           path: bundle
@@ -246,73 +454,294 @@ jobs:
         working-directory: out
         run: |
           # Checksum only the executables (exclude the fingerprint helper file).
-          sha256sum "${TOOL}"-* > SHA256SUMS.txt && cat SHA256SUMS.txt
+          sha256sum "${TOOL}"-* > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          sha256sum --check SHA256SUMS.txt
 
       - name: Upload packaged binaries
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: srn-admin-binaries
           path: out/*
-          retention-days: 1
+          retention-days: 30
           if-no-files-found: error
 
-  # 4) RELEASE — rolling YY.N version, namespaced tag, GitHub Release with the 6
-  # binaries + checksums + fingerprint.
-  release:
-    name: release
-    needs: [decide, package]
-    if: needs.decide.outputs.changed == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
+  smoke:
+    name: native smoke (${{ matrix.asset }})
+    needs: [decide, identity, package]
+    if: needs.decide.outputs.changed == 'true' && needs.identity.outputs.published != 'true'
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {
+              runner: windows-2025,
+              asset: windows-x64.exe,
+              platform: win32,
+              node_arch: x64,
+              file_pattern: 'PE32\+.*x86-64',
+            }
+          - {
+              runner: windows-11-arm,
+              asset: windows-arm64.exe,
+              platform: win32,
+              node_arch: arm64,
+              file_pattern: 'PE32\+.*(Aarch64|ARM64|aarch64)',
+            }
+          - {
+              runner: ubuntu-24.04,
+              asset: linux-x64,
+              platform: linux,
+              node_arch: x64,
+              file_pattern: "ELF 64-bit.*x86-64",
+            }
+          - {
+              runner: ubuntu-24.04-arm,
+              asset: linux-arm64,
+              platform: linux,
+              node_arch: arm64,
+              file_pattern: "ELF 64-bit.*(aarch64|ARM64)",
+            }
+          - {
+              runner: macos-15-intel,
+              asset: macos-x64,
+              platform: darwin,
+              node_arch: x64,
+              file_pattern: "Mach-O 64-bit.*x86_64",
+            }
+          - {
+              runner: macos-15,
+              asset: macos-arm64,
+              platform: darwin,
+              node_arch: arm64,
+              file_pattern: "Mach-O 64-bit.*arm64",
+            }
     steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-
-      - name: Download packaged binaries
-        uses: actions/download-artifact@v8
+      - name: Download exact packaged payload
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: srn-admin-binaries
           path: out
 
-      # Rolling version: YY.N, resetting N each calendar year, namespaced per
-      # tool. List existing releases for THIS tool's "srn-admin-v<YY>." tag
-      # prefix, take the max N, and add 1 (default 1 if none yet).
-      - name: Compute rolling version
-        id: ver
+      - name: Verify checksum, architecture, and offline executable self-test
+        env:
+          ASSET: ${{ matrix.asset }}
+          EXPECTED_PLATFORM: ${{ matrix.platform }}
+          EXPECTED_NODE_ARCH: ${{ matrix.node_arch }}
+          FILE_PATTERN: ${{ matrix.file_pattern }}
+          HTTP_PROXY: http://127.0.0.1:9
+          HTTPS_PROXY: http://127.0.0.1:9
+          ALL_PROXY: http://127.0.0.1:9
+          NO_PROXY: ""
+        run: |
+          set -euo pipefail
+          cd out
+          sha256sum --check SHA256SUMS.txt
+          executable="${TOOL}-${ASSET}"
+          test -s "$executable"
+          file "$executable" | grep -E "$FILE_PATTERN"
+          chmod +x "$executable"
+          output="$(./"$executable" --srn-release-self-test)"
+          test "$output" = "srn-native-self-test-v1 ${EXPECTED_PLATFORM} ${EXPECTED_NODE_ARCH}"
+
+  # Publish only the previously reserved identity. Asset upload and verification
+  # are retry-safe; publishing is deliberately the final command.
+  release:
+    name: release
+    needs: [impact, build, decide, identity, package, smoke]
+    if: always() && needs.impact.result == 'success' && needs.decide.outputs.changed == 'true' && needs.identity.result == 'success' && ((needs.package.result == 'success' && needs.smoke.result == 'success') || (needs.identity.outputs.published == 'true' && needs.package.result == 'skipped' && needs.smoke.result == 'skipped'))
+    runs-on: ubuntu-latest
+    environment: release-production
+    permissions:
+      contents: write
+    env:
+      RELEASE_VERSION: ${{ needs.identity.outputs.version }}
+      RELEASE_TAG: ${{ needs.identity.outputs.tag }}
+      RELEASE_ID: ${{ needs.identity.outputs.release_id }}
+      IDENTITY_PUBLISHED: ${{ needs.identity.outputs.published }}
+      EXPECTED_FINGERPRINT: ${{ needs.build.outputs.fingerprint }}
+      FORCED: ${{ needs.impact.outputs.forced }}
+      IMPACT_RESULT: ${{ needs.impact.outputs.result_json }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Download packaged binaries
+        if: needs.identity.outputs.published != 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: srn-admin-binaries
+          path: out
+
+      - name: Validate, upload, and publish exact release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          git fetch --force --tags origin
-          YY="$(date -u +%y)"
-          prefix="${TOOL}-v${YY}."
-          max=0
-          while read -r tag; do
-            [ -z "$tag" ] && continue
-            n="${tag#"$prefix"}"
-            if [[ "$n" =~ ^[0-9]+$ ]] && [ "$n" -gt "$max" ]; then
-              max="$n"
-            fi
-          done < <(git tag --list "${prefix}*")
-          next=$((max + 1))
-          version="${YY}.${next}"
-          tag="${TOOL}-v${version}"
-          echo "version=${version}" >> "$GITHUB_OUTPUT"
-          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
-          echo "Next ${TOOL} release: ${tag} (version ${version})"
+          test "$RELEASE_TAG" = "${TOOL}-v${RELEASE_VERSION}"
+          [[ "$RELEASE_ID" =~ ^[0-9]+$ ]]
+          [[ "$EXPECTED_FINGERPRINT" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$FORCED" == "true" || "$FORCED" == "false" ]]
+          jq -e --arg sha "$GITHUB_SHA" --argjson forced "$FORCED" '
+            .headSha == $sha
+            and .forced == $forced
+            and (
+              ($forced and (.forceReason | type == "string") and ((.forceReason | gsub("^\\s+|\\s+$"; "")) | length > 0))
+              or (($forced | not) and .forceReason == null)
+            )
+          ' <<< "$IMPACT_RESULT" >/dev/null
+          if [ "$FORCED" = "true" ]; then
+            [[ "$GITHUB_RUN_ID" =~ ^[0-9]+$ ]]
+            intent="forced-${GITHUB_RUN_ID}"
+          else
+            intent="automatic"
+          fi
+          marker="<!-- srn-release-reservation tool=${TOOL} commit=${GITHUB_SHA} fingerprint=${EXPECTED_FINGERPRINT} intent=${intent} -->"
+          expected_name="${TOOL} ${RELEASE_VERSION}"
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: ${{ steps.ver.outputs.tag }}
-          name: ${{ env.TOOL }} ${{ steps.ver.outputs.version }}
-          target_commitish: ${{ github.sha }}
-          generate_release_notes: true
-          # /releases/latest is repo-global and electron-updater resolves the
-          # desktop channel file through it; only srn-desktop may claim it.
-          make_latest: 'false'
-          fail_on_unmatched_files: true
-          files: |
-            out/*
+          expected_assets="$(mktemp)"
+          {
+            echo SHA256SUMS.txt
+            echo "${TOOL}.fingerprint"
+            echo "${TOOL}-windows-x64.exe"
+            echo "${TOOL}-windows-arm64.exe"
+            echo "${TOOL}-macos-x64"
+            echo "${TOOL}-macos-arm64"
+            echo "${TOOL}-linux-x64"
+            echo "${TOOL}-linux-arm64"
+            if [ "$TOOL" = "srn-home-server" ]; then
+              echo "${TOOL}-migrations.zip"
+            fi
+          } | LC_ALL=C sort > "$expected_assets"
+
+          release="$(gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}")"
+          jq -e --arg tag "$RELEASE_TAG" --arg name "$expected_name" --arg sha "$GITHUB_SHA" --arg marker "$marker" '
+            .tag_name == $tag
+            and .name == $name
+            and .target_commitish == $sha
+            and (.draft == true or .draft == false)
+            and .prerelease == false
+            and ((.body // "") | contains($marker))
+          ' <<< "$release" >/dev/null
+          draft="$(jq -r '.draft' <<< "$release")"
+          if [ "$IDENTITY_PUBLISHED" = "true" ]; then test "$draft" = "false"; fi
+
+          git fetch --force --tags origin
+          if [ "$draft" = "true" ]; then
+            if git show-ref --verify --quiet "refs/tags/${RELEASE_TAG}"; then
+              echo "Draft ${RELEASE_TAG} collides with an existing Git tag" >&2
+              exit 1
+            fi
+          else
+            git show-ref --verify --quiet "refs/tags/${RELEASE_TAG}"
+            test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$GITHUB_SHA"
+          fi
+
+          load_remote_assets() {
+            assets_file="$(mktemp)"
+            gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}/assets?per_page=100" --paginate --slurp |
+              jq 'flatten' > "$assets_file"
+            jq -e '
+              all(.[];
+                .state == "uploaded"
+                and .size > 0
+                and (.digest | type == "string")
+                and (.digest | test("^sha256:[0-9a-f]{64}$"))
+              )
+            ' "$assets_file" >/dev/null
+            remote_assets="$(mktemp)"
+            jq -r '.[].name' "$assets_file" | LC_ALL=C sort > "$remote_assets"
+            diff -u "$expected_assets" "$remote_assets"
+          }
+
+          bind_asset_manifest() {
+            directory="$1"
+            manifest_file="$(mktemp)"
+            while IFS= read -r asset_name; do
+              digest="$(sha256sum -- "${directory}/${asset_name}" | cut -d ' ' -f 1)"
+              size="$(stat -c '%s' -- "${directory}/${asset_name}")"
+              jq -n --arg name "$asset_name" --arg digest "sha256:${digest}" --argjson size "$size" \
+                '{name: $name, digest: $digest, size: $size}'
+            done < "$expected_assets" | jq -s 'sort_by(.name)' > "$manifest_file"
+            asset_manifest_sha="$(jq -cS . "$manifest_file" | sha256sum | cut -d ' ' -f 1)"
+            asset_marker="<!-- srn-release-assets-sha256:${asset_manifest_sha} -->"
+            release="$(gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}")"
+            existing_asset_markers="$(jq '[.body // "" | scan("<!-- srn-release-assets-sha256:[0-9a-f]{64} -->")] | length' <<< "$release")"
+            if [ "$existing_asset_markers" -eq 0 ]; then
+              test "$(jq -r '.draft' <<< "$release")" = true
+              current_body="$(jq -r '.body // ""' <<< "$release")"
+              next_body="${current_body}"$'\n'"${asset_marker}"
+              release="$(gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" -f body="$next_body")"
+            elif [ "$existing_asset_markers" -ne 1 ]; then
+              echo "Reserved native draft asset manifest drifted from the exact local payload." >&2
+              exit 1
+            fi
+            jq -e --arg marker "$asset_marker" '
+              ((.body // "") | contains($marker))
+              and (((.body // "") | [scan("<!-- srn-release-assets-sha256:[0-9a-f]{64} -->")] | length) == 1)
+            ' <<< "$release" >/dev/null || {
+              echo "Reserved native draft asset manifest drifted from the exact local payload." >&2
+              exit 1
+            }
+          }
+
+          verify_directory() {
+            directory="$1"
+            local_assets="$(mktemp)"
+            find "$directory" -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort > "$local_assets"
+            diff -u "$expected_assets" "$local_assets"
+            (cd "$directory" && sha256sum --check SHA256SUMS.txt)
+            test "$(tr -d '\r\n' < "${directory}/${TOOL}.fingerprint")" = "$EXPECTED_FINGERPRINT"
+            bind_asset_manifest "$directory"
+            load_remote_assets
+            while IFS=$'\t' read -r asset_name digest; do
+              actual="$(sha256sum -- "${directory}/${asset_name}" | cut -d ' ' -f 1)"
+              test "$digest" = "sha256:${actual}"
+            done < <(jq -r '.[] | [.name, .digest] | @tsv' "$assets_file")
+          }
+
+          if [ "$draft" = "false" ]; then
+            if [ -d out ]; then
+              verify_directory out
+            else
+              downloaded="$(mktemp -d)"
+              gh release download "$RELEASE_TAG" --dir "$downloaded" --repo "$GITHUB_REPOSITORY"
+              verify_directory "$downloaded"
+            fi
+            echo "${RELEASE_TAG} was already published by this workflow run; verified exact assets." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          test -d out
+          local_assets="$(mktemp)"
+          find out -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort > "$local_assets"
+          diff -u "$expected_assets" "$local_assets"
+          (cd out && sha256sum --check SHA256SUMS.txt)
+          test "$(tr -d '\r\n' < "out/${TOOL}.fingerprint")" = "$EXPECTED_FINGERPRINT"
+          bind_asset_manifest out
+
+          # Only this already validated, marker-bound draft may be cleaned.
+          assets_file="$(mktemp)"
+          gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}/assets?per_page=100" --paginate --slurp |
+            jq 'flatten' > "$assets_file"
+          while IFS=$'\t' read -r asset_id asset_name; do
+            if ! grep -Fqx -- "$asset_name" "$expected_assets"; then
+              gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}"
+            fi
+          done < <(jq -r '.[] | [.id, .name] | @tsv' "$assets_file")
+
+          shopt -s nullglob
+          files=(out/*)
+          test "${#files[@]}" -eq "$(wc -l < "$expected_assets")"
+          gh release upload "$RELEASE_TAG" "${files[@]}" --clobber --repo "$GITHUB_REPOSITORY"
+          verify_directory out
+
+          # No fallible command follows publication. If the response is lost
+          # after GitHub publishes, a rerun recognizes and verifies this run's
+          # marker-bound published release instead of allocating a new version.
+          gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
+            -F draft=false \
+            -f make_latest=false >/dev/null

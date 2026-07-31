@@ -6,10 +6,21 @@ on:
       channel:
         required: true
         type: string
+      audit_reason:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-release-${{ inputs.channel }}
+  cancel-in-progress: false
 
 jobs:
   Mac:
     runs-on: macos-latest
+    environment: release-production
     env:
       CSC_LINK: ${{ secrets.MAC_CI_KEYS }}
       CSC_KEY_PASSWORD: ${{ secrets.MAC_CI_KEYS_PASSWORD }}
@@ -20,8 +31,10 @@ jobs:
       run:
         working-directory: packages/desktop
     steps:
-      - uses: actions/checkout@v7.0.0
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           registry-url: 'https://registry.npmjs.org'
           node-version-file: '.nvmrc'
@@ -31,14 +44,14 @@ jobs:
           corepack enable
           yarn --version
       - name: Cache Yarn
-        uses: actions/cache@v6.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .yarn/cache
           key: ${{ runner.os }}-yarn-${{ hashFiles('yarn.lock') }}
           restore-keys: |
             ${{ runner.os }}-yarn-
       - name: Setup Python
-        uses: actions/setup-python@v6.3.0
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: '3.10'
       - run: yarn install --immutable
@@ -49,15 +62,24 @@ jobs:
 
       - name: Compile Mac
         run: yarn run webpack --config desktop.webpack.prod.js
-      - name: MacX64
+      # One builder invocation is the canonical authority for latest-mac.yml.
+      # It merges both architectures into one coherent updater document.
+      - name: Build macOS X64 and ARM64
+        run: yarn run electron-builder --mac dmg zip --x64 --arm64 --publish=never --c.extraMetadata.version=${{ env.APP_VERSION }}
+
+      - name: Verify macOS installer and updater inventory
         run: |
-          yarn run electron-builder --mac --x64 --publish=never --c.extraMetadata.version=${{ env.APP_VERSION }}
-          node scripts/fixMacZip.js ${{ env.APP_VERSION }}
-      - name: MacArm64
-        run: yarn run electron-builder --mac --arm64 --publish=never --c.extraMetadata.version=${{ env.APP_VERSION }}
+          set -euo pipefail
+          test -f "dist/standard-red-notes-${APP_VERSION}-mac-x64.dmg"
+          test -f "dist/standard-red-notes-${APP_VERSION}-mac-arm64.dmg"
+          test -f "dist/standard-red-notes-${APP_VERSION}-mac-x64.zip"
+          test -f "dist/standard-red-notes-${APP_VERSION}-mac-arm64.zip"
+          test -s dist/latest-mac.yml
+          test "$(find dist -maxdepth 1 -type f -name 'latest*.yml' | wc -l | tr -d ' ')" -eq 1
+          test "$(find dist -maxdepth 1 -type f -name '*.yaml' | wc -l | tr -d ' ')" -eq 0
 
       - name: Upload
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dist-macos
           path: |
@@ -65,7 +87,8 @@ jobs:
             packages/desktop/dist/*.zip
             packages/desktop/dist/*.blockmap
             packages/desktop/dist/*.yml
-            packages/desktop/dist/*.yaml
+          retention-days: 30
+          if-no-files-found: error
 
   Windows:
     name: Windows X64 and ARM64
@@ -74,8 +97,10 @@ jobs:
       run:
         working-directory: packages/desktop
     steps:
-      - uses: actions/checkout@v7.0.0
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           registry-url: 'https://registry.npmjs.org'
           node-version-file: '.nvmrc'
@@ -85,14 +110,14 @@ jobs:
           corepack enable
           yarn --version
       - name: Cache Yarn
-        uses: actions/cache@v6.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .yarn/cache
           key: ${{ runner.os }}-yarn-${{ hashFiles('yarn.lock') }}
           restore-keys: |
             ${{ runner.os }}-yarn-
       - name: Setup Python
-        uses: actions/setup-python@v6.3.0
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: '3.10'
       - run: yarn install --immutable
@@ -108,26 +133,48 @@ jobs:
         run: yarn run webpack --config desktop.webpack.prod.js
       - name: Build Windows X64 and ARM64
         run: yarn run electron-builder --win nsis --x64 --arm64 --publish=never --c.extraMetadata.version=${{ env.APP_VERSION }}
+
+      - name: Verify Windows installer and updater inventory
+        shell: pwsh
+        run: |
+          $expected = @(
+            "dist/standard-red-notes-$env:APP_VERSION-win-x64.exe",
+            "dist/standard-red-notes-$env:APP_VERSION-win-arm64.exe",
+            "dist/latest.yml"
+          )
+          foreach ($path in $expected) {
+            if (!(Test-Path -LiteralPath $path -PathType Leaf) -or (Get-Item -LiteralPath $path).Length -eq 0) {
+              throw "Missing or empty canonical Windows release artifact: $path"
+            }
+          }
+          if ((Get-ChildItem -LiteralPath dist -File -Filter 'latest*.yml').Count -ne 1) {
+            throw 'Windows must have exactly one updater metadata authority: latest.yml'
+          }
+          if ((Get-ChildItem -LiteralPath dist -File -Filter '*.yaml').Count -ne 0) {
+            throw 'Unexpected YAML debug/effective configuration in Windows release output'
+          }
       - name: Upload
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dist-windows
           path: |
             packages/desktop/dist/*.exe
             packages/desktop/dist/*.blockmap
             packages/desktop/dist/*.yml
-            packages/desktop/dist/*.yaml
+          retention-days: 30
           if-no-files-found: error
 
   Linux-AppImage-X64:
-    name: Linux AppImage X64
+    name: Linux AppImage and Deb X64
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: packages/desktop
     steps:
-      - uses: actions/checkout@v7.0.0
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           registry-url: 'https://registry.npmjs.org'
           node-version-file: '.nvmrc'
@@ -137,14 +184,14 @@ jobs:
           corepack enable
           yarn --version
       - name: Cache Yarn
-        uses: actions/cache@v6.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .yarn/cache
           key: ${{ runner.os }}-yarn-${{ hashFiles('yarn.lock') }}
           restore-keys: |
             ${{ runner.os }}-yarn-
       - name: Setup Python
-        uses: actions/setup-python@v6.3.0
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: '3.10'
       - name: Install FPM
@@ -159,31 +206,46 @@ jobs:
 
       - run: echo APP_VERSION=$(node -p "require('./../web/package.json').version") >> $GITHUB_ENV
 
-      - name: Compile for AppImage
+      - name: Compile Linux X64
         run: yarn run webpack --config desktop.webpack.prod.js
 
-      - name: AppImageX64
+      # One builder invocation is the canonical authority for latest-linux.yml.
+      - name: Build AppImage and Deb X64
         run: |
-          yarn run electron-builder --linux --x64 -c.linux.target=AppImage --publish=never --c.extraMetadata.version=${{ env.APP_VERSION }}
+          yarn run electron-builder --linux AppImage deb --x64 --publish=never --c.extraMetadata.version=${{ env.APP_VERSION }}
+
+      - name: Verify Linux X64 installer and updater inventory
+        run: |
+          set -euo pipefail
+          test -f "dist/standard-red-notes-${APP_VERSION}-linux-x64.AppImage"
+          test -f "dist/standard-red-notes-${APP_VERSION}-linux-x64.deb"
+          test -s dist/latest-linux.yml
+          test "$(find dist -maxdepth 1 -type f -name 'latest*.yml' | wc -l | tr -d ' ')" -eq 1
+          test "$(find dist -maxdepth 1 -type f -name '*.yaml' | wc -l | tr -d ' ')" -eq 0
 
       - name: Upload
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: dist-linux-appimage-x64
+          name: dist-linux-x64
           path: |
             packages/desktop/dist/*.AppImage
+            packages/desktop/dist/*.deb
+            packages/desktop/dist/*.blockmap
             packages/desktop/dist/*.yml
-            packages/desktop/dist/*.yaml
+          retention-days: 30
+          if-no-files-found: error
 
   Linux-AppImage-ARM64:
-    name: Linux AppImage ARM64
+    name: Linux AppImage and Deb ARM64
     runs-on: ubuntu-24.04-arm
     defaults:
       run:
         working-directory: packages/desktop
     steps:
-      - uses: actions/checkout@v7.0.0
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           registry-url: 'https://registry.npmjs.org'
           node-version-file: '.nvmrc'
@@ -193,14 +255,14 @@ jobs:
           corepack enable
           yarn --version
       - name: Cache Yarn
-        uses: actions/cache@v6.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .yarn/cache
           key: ${{ runner.os }}-yarn-${{ hashFiles('yarn.lock') }}
           restore-keys: |
             ${{ runner.os }}-yarn-
       - name: Setup Python
-        uses: actions/setup-python@v6.3.0
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: '3.10'
       - name: Install FPM
@@ -215,21 +277,34 @@ jobs:
 
       - run: echo APP_VERSION=$(node -p "require('./../web/package.json').version") >> $GITHUB_ENV
 
-      - name: Compile for AppImage
+      - name: Compile Linux ARM64
         run: yarn run webpack --config desktop.webpack.prod.js
 
-      - name: AppImageArm64
+      # ARM64 owns latest-linux-arm64.yml; x64 owns latest-linux.yml.
+      - name: Build AppImage and Deb ARM64
         run: |
-          yarn run electron-builder --linux --arm64 -c.linux.target=AppImage --publish=never --c.extraMetadata.version=${{ env.APP_VERSION }}
+          yarn run electron-builder --linux AppImage deb --arm64 --publish=never --c.extraMetadata.version=${{ env.APP_VERSION }}
+
+      - name: Verify Linux ARM64 installer and updater inventory
+        run: |
+          set -euo pipefail
+          test -f "dist/standard-red-notes-${APP_VERSION}-linux-arm64.AppImage"
+          test -f "dist/standard-red-notes-${APP_VERSION}-linux-arm64.deb"
+          test -s dist/latest-linux-arm64.yml
+          test "$(find dist -maxdepth 1 -type f -name 'latest*.yml' | wc -l | tr -d ' ')" -eq 1
+          test "$(find dist -maxdepth 1 -type f -name '*.yaml' | wc -l | tr -d ' ')" -eq 0
 
       - name: Upload
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: dist-linux-appimage-arm64
+          name: dist-linux-arm64
           path: |
             packages/desktop/dist/*.AppImage
+            packages/desktop/dist/*.deb
+            packages/desktop/dist/*.blockmap
             packages/desktop/dist/*.yml
-            packages/desktop/dist/*.yaml
+          retention-days: 30
+          if-no-files-found: error
 
   Linux-Dir-X64:
     name: Linux Dir X64
@@ -238,8 +313,10 @@ jobs:
       run:
         working-directory: packages/desktop
     steps:
-      - uses: actions/checkout@v7.0.0
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           registry-url: 'https://registry.npmjs.org'
           node-version-file: '.nvmrc'
@@ -249,14 +326,14 @@ jobs:
           corepack enable
           yarn --version
       - name: Cache Yarn
-        uses: actions/cache@v6.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .yarn/cache
           key: ${{ runner.os }}-yarn-${{ hashFiles('yarn.lock') }}
           restore-keys: |
             ${{ runner.os }}-yarn-
       - name: Setup Python
-        uses: actions/setup-python@v6.3.0
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: '3.10'
       - name: Install FPM
@@ -283,8 +360,10 @@ jobs:
       run:
         working-directory: packages/desktop
     steps:
-      - uses: actions/checkout@v7.0.0
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           registry-url: 'https://registry.npmjs.org'
           node-version-file: '.nvmrc'
@@ -294,14 +373,14 @@ jobs:
           corepack enable
           yarn --version
       - name: Cache Yarn
-        uses: actions/cache@v6.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .yarn/cache
           key: ${{ runner.os }}-yarn-${{ hashFiles('yarn.lock') }}
           restore-keys: |
             ${{ runner.os }}-yarn-
       - name: Setup Python
-        uses: actions/setup-python@v6.3.0
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: '3.10'
       - name: Install FPM
@@ -322,124 +401,51 @@ jobs:
           yarn run electron-builder --linux --arm64 -c.linux.target=dir --publish=never --c.extraMetadata.version=${{ env.APP_VERSION }}
 
   Linux-Deb-X64:
-    name: Linux Deb X64
+    name: Validate Linux Deb X64
+    needs: Linux-AppImage-X64
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: packages/desktop
     steps:
-      - uses: actions/checkout@v7.0.0
-      - uses: actions/setup-node@v7.0.0
+      - name: Download canonical Linux X64 build
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          registry-url: 'https://registry.npmjs.org'
-          node-version-file: '.nvmrc'
-      - name: Enable Corepack
+          name: dist-linux-x64
+          path: dist-linux-x64
+      - name: Validate Deb architecture without rebuilding metadata
         run: |
-          npm install --global corepack@0.35.0
-          corepack enable
-          yarn --version
-      - name: Cache Yarn
-        uses: actions/cache@v6.1.0
-        with:
-          path: .yarn/cache
-          key: ${{ runner.os }}-yarn-${{ hashFiles('yarn.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-yarn-
-      - name: Setup Python
-        uses: actions/setup-python@v6.3.0
-        with:
-          python-version: '3.10'
-      - name: Install FPM
-        run: sudo gem install fpm -f
-
-      - run: yarn install --immutable
-
-      - name: Rebuild Electron Native Modules
-        run: yarn workspace @standardnotes/desktop rebuild:home-server
-
-      - run: yarn build:desktop
-
-      - run: echo APP_VERSION=$(node -p "require('./../web/package.json').version") >> $GITHUB_ENV
-
-      - name: Deb
-        run: |
-          yarn run webpack --config desktop.webpack.prod.js --env deb
-          yarn run electron-builder --linux --x64 -c.linux.target=deb --publish=never --c.extraMetadata.version=${{ env.APP_VERSION }}
-
-      - name: Upload
-        uses: actions/upload-artifact@v7.0.1
-        with:
-          name: dist-linux-deb-x64
-          path: |
-            packages/desktop/dist/*.deb
-            packages/desktop/dist/*.yml
-            packages/desktop/dist/*.yaml
+          set -euo pipefail
+          mapfile -t packages < <(find dist-linux-x64 -maxdepth 1 -type f -name '*.deb')
+          test "${#packages[@]}" -eq 1
+          test "$(dpkg-deb --field "${packages[0]}" Architecture)" = amd64
 
   Linux-Deb-ARM64:
-    name: Linux Deb ARM64
+    name: Validate Linux Deb ARM64
+    needs: Linux-AppImage-ARM64
     runs-on: ubuntu-24.04-arm
-    defaults:
-      run:
-        working-directory: packages/desktop
     steps:
-      - uses: actions/checkout@v7.0.0
-      - uses: actions/setup-node@v7.0.0
+      - name: Download canonical Linux ARM64 build
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          registry-url: 'https://registry.npmjs.org'
-          node-version-file: '.nvmrc'
-      - name: Enable Corepack
+          name: dist-linux-arm64
+          path: dist-linux-arm64
+      - name: Validate Deb architecture without rebuilding metadata
         run: |
-          npm install --global corepack@0.35.0
-          corepack enable
-          yarn --version
-      - name: Cache Yarn
-        uses: actions/cache@v6.1.0
-        with:
-          path: .yarn/cache
-          key: ${{ runner.os }}-yarn-${{ hashFiles('yarn.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-yarn-
-      - name: Setup Python
-        uses: actions/setup-python@v6.3.0
-        with:
-          python-version: '3.10'
-      - name: Install FPM
-        run: sudo gem install fpm -f
-
-      - run: yarn install --immutable
-
-      - name: Rebuild Electron Native Modules
-        run: yarn workspace @standardnotes/desktop rebuild:home-server
-
-      - run: yarn build:desktop
-
-      - run: echo APP_VERSION=$(node -p "require('./../web/package.json').version") >> $GITHUB_ENV
-
-      - name: DebArm64
-        env:
-          USE_SYSTEM_FPM: 'true'
-        run: |
-          yarn run webpack --config desktop.webpack.prod.js --env deb
-          yarn run electron-builder --linux --arm64 -c.linux.target=deb --publish=never --c.extraMetadata.version=${{ env.APP_VERSION }}
-
-      - name: Upload
-        uses: actions/upload-artifact@v7.0.1
-        with:
-          name: dist-linux-deb-arm64
-          path: |
-            packages/desktop/dist/*.deb
-            packages/desktop/dist/*.yml
-            packages/desktop/dist/*.yaml
+          set -euo pipefail
+          mapfile -t packages < <(find dist-linux-arm64 -maxdepth 1 -type f -name '*.deb')
+          test "${#packages[@]}" -eq 1
+          test "$(dpkg-deb --field "${packages[0]}" Architecture)" = arm64
 
   Linux-Snap:
     name: Linux Snap
     runs-on: ubuntu-latest
+    environment: release-production
     defaults:
       run:
         working-directory: packages/desktop
     steps:
-      - uses: actions/checkout@v7.0.0
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           registry-url: 'https://registry.npmjs.org'
           node-version-file: '.nvmrc'
@@ -449,14 +455,14 @@ jobs:
           corepack enable
           yarn --version
       - name: Cache Yarn
-        uses: actions/cache@v6.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .yarn/cache
           key: ${{ runner.os }}-yarn-${{ hashFiles('yarn.lock') }}
           restore-keys: |
             ${{ runner.os }}-yarn-
       - name: Setup Python
-        uses: actions/setup-python@v6.3.0
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: '3.10'
       - name: Install FPM
@@ -473,7 +479,7 @@ jobs:
           sudo snap install snapcraft --classic
 
       - name: Setup LXD
-        uses: canonical/setup-lxd@v0.1.3
+        uses: canonical/setup-lxd@a3c85fc6fb7fff43fcfeae87659e41a8f635b7dd # v0.1.3
 
       - name: Install Review Tools
         run: sudo snap install review-tools
@@ -484,22 +490,22 @@ jobs:
           yarn run electron-builder --linux --x64 -c.linux.target=snap --publish=never --c.extraMetadata.version=${{ env.APP_VERSION }}
 
       - name: Review Snap
-        run: review-tools.snap-review dist/standard-notes-${{ env.APP_VERSION }}-linux-amd64.snap
+        run: |
+          set -euo pipefail
+          mapfile -t snaps < <(find dist -maxdepth 1 -type f -name "standard-red-notes-${APP_VERSION}-linux-*.snap")
+          test "${#snaps[@]}" -eq 1
+          review-tools.snap-review "${snaps[0]}"
 
       - name: Upload
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dist-linux-snap
-          path: |
-            packages/desktop/dist/*.snap
-            packages/desktop/dist/*.yml
-            packages/desktop/dist/*.yaml
+          path: packages/desktop/dist/*.snap
+          retention-days: 30
+          if-no-files-found: error
 
-  Publish:
+  FanIn:
     runs-on: ubuntu-latest
-    env:
-      SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
-    if: ${{ always() }}
     needs:
       [
         Mac,
@@ -512,40 +518,280 @@ jobs:
         Linux-Deb-ARM64,
         Linux-Snap,
       ]
-    defaults:
-      run:
-        working-directory: packages/desktop
+    outputs:
+      version: ${{ steps.identity.outputs.version }}
+      tag: ${{ steps.identity.outputs.tag }}
+      manifest_sha: ${{ steps.inventory.outputs.manifest_sha }}
     steps:
-      - uses: actions/checkout@v7.0.0
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          registry-url: 'https://registry.npmjs.org'
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
           node-version-file: '.nvmrc'
-      - name: Enable Corepack
+
+      - name: Install updater inspection tools
+        run: sudo apt-get update && sudo apt-get install -y file p7zip-full unzip
+
+      - name: Bind release identity to the checked-out commit
+        id: identity
+        env:
+          AUDIT_REASON: ${{ inputs.audit_reason }}
         run: |
-          npm install --global corepack@0.35.0
-          corepack enable
-          yarn --version
-      - name: Cache Yarn
-        uses: actions/cache@v6.1.0
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          reason="$(printf '%s' "$AUDIT_REASON" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          test -n "$reason"
+          test "${#reason}" -le 500
+          test "$(printf '%s' "$reason" | wc -l)" -eq 0
+          version="$(node -p "require('./packages/web/package.json').version")"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=@standardnotes/desktop@${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Download macOS artifacts into an isolated namespace
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          path: .yarn/cache
-          key: ${{ runner.os }}-yarn-${{ hashFiles('yarn.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-yarn-
+          name: dist-macos
+          path: staged/dist-macos
 
-      - run: echo APP_VERSION=$(node -p "require('./../web/package.json').version") >> $GITHUB_ENV
-
-      - run: yarn install --immutable
-
-      - uses: actions/download-artifact@v8.0.1
+      - name: Download Windows artifacts into an isolated namespace
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: dist-*
-          path: packages/desktop/dist
-          merge-multiple: true
+          name: dist-windows
+          path: staged/dist-windows
 
-      - name: Generate Checksums
-        run: node scripts/sums.mjs
+      - name: Download Linux X64 artifacts into an isolated namespace
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist-linux-x64
+          path: staged/dist-linux-x64
+
+      - name: Download Linux ARM64 artifacts into an isolated namespace
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist-linux-arm64
+          path: staged/dist-linux-arm64
+
+      - name: Download Snap artifact into an isolated namespace
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist-linux-snap
+          path: staged/dist-linux-snap
+
+      - name: Validate authorities, reject collisions, and build exact inventory
+        id: inventory
+        env:
+          APP_VERSION: ${{ steps.identity.outputs.version }}
+          RELEASE_TAG: ${{ steps.identity.outputs.tag }}
+          AUDIT_REASON: ${{ inputs.audit_reason }}
+        run: |
+          set -euo pipefail
+
+          validate_source() {
+            source_dir="$1"
+            metadata="$2"
+            shift 2
+            required=("$@")
+            test -d "$source_dir"
+            if [ "$metadata" != "-" ]; then
+              test -s "${source_dir}/${metadata}"
+              metadata_version="$(awk '$1 == "version:" {print $2; exit}' "${source_dir}/${metadata}" | tr -d "\"'")"
+              test "$metadata_version" = "$APP_VERSION"
+              mapfile -t update_urls < <(awk '$1 == "-" && $2 == "url:" {print $3} $1 == "url:" {print $2}' "${source_dir}/${metadata}" | tr -d "\"'" | LC_ALL=C sort -u)
+              test "${#update_urls[@]}" -gt 0
+              for url in "${update_urls[@]}"; do
+                test "$url" = "$(basename "$url")"
+                case "$url" in *.dmg|*.zip|*.exe|*.AppImage|*.deb) ;; *) exit 1 ;; esac
+                test -s "${source_dir}/${url}"
+                declared=false
+                for name in "${required[@]}"; do if [ "$url" = "$name" ]; then declared=true; fi; done
+                test "$declared" = true
+              done
+            fi
+            for name in "${required[@]}"; do
+              test -s "${source_dir}/${name}"
+            done
+            while IFS= read -r -d '' source; do
+              base="$(basename "$source")"
+              allowed=false
+              if [ "$metadata" != "-" ] && [ "$base" = "$metadata" ]; then
+                allowed=true
+              fi
+              for name in "${required[@]}"; do
+                if [ "$base" = "$name" ] || [ "$base" = "${name}.blockmap" ]; then
+                  allowed=true
+                fi
+              done
+              if [ "$allowed" != "true" ]; then
+                echo "Unexpected release artifact in ${source_dir}: ${base}" >&2
+                exit 1
+              fi
+            done < <(find "$source_dir" -maxdepth 1 -type f -print0)
+          }
+
+          validate_source staged/dist-macos latest-mac.yml \
+            "standard-red-notes-${APP_VERSION}-mac-x64.dmg" \
+            "standard-red-notes-${APP_VERSION}-mac-arm64.dmg" \
+            "standard-red-notes-${APP_VERSION}-mac-x64.zip" \
+            "standard-red-notes-${APP_VERSION}-mac-arm64.zip"
+          validate_source staged/dist-windows latest.yml \
+            "standard-red-notes-${APP_VERSION}-win-x64.exe" \
+            "standard-red-notes-${APP_VERSION}-win-arm64.exe"
+          validate_source staged/dist-linux-x64 latest-linux.yml \
+            "standard-red-notes-${APP_VERSION}-linux-x64.AppImage" \
+            "standard-red-notes-${APP_VERSION}-linux-x64.deb"
+          validate_source staged/dist-linux-arm64 latest-linux-arm64.yml \
+            "standard-red-notes-${APP_VERSION}-linux-arm64.AppImage" \
+            "standard-red-notes-${APP_VERSION}-linux-arm64.deb"
+
+          ruby scripts/verify-desktop-updater-metadata.rb \
+            --metadata staged/dist-macos/latest-mac.yml \
+            --source-dir staged/dist-macos \
+            --expected-version "$APP_VERSION" \
+            --allow "standard-red-notes-${APP_VERSION}-mac-x64.dmg" \
+            --allow "standard-red-notes-${APP_VERSION}-mac-arm64.dmg" \
+            --allow "standard-red-notes-${APP_VERSION}-mac-x64.zip" \
+            --allow "standard-red-notes-${APP_VERSION}-mac-arm64.zip" \
+            --architecture "standard-red-notes-${APP_VERSION}-mac-x64.dmg=dmg-x64" \
+            --architecture "standard-red-notes-${APP_VERSION}-mac-arm64.dmg=dmg-arm64" \
+            --architecture "standard-red-notes-${APP_VERSION}-mac-x64.zip=zip-x64" \
+            --architecture "standard-red-notes-${APP_VERSION}-mac-arm64.zip=zip-arm64"
+          ruby scripts/verify-desktop-updater-metadata.rb \
+            --metadata staged/dist-windows/latest.yml \
+            --source-dir staged/dist-windows \
+            --expected-version "$APP_VERSION" \
+            --allow "standard-red-notes-${APP_VERSION}-win-x64.exe" \
+            --allow "standard-red-notes-${APP_VERSION}-win-arm64.exe" \
+            --architecture "standard-red-notes-${APP_VERSION}-win-x64.exe=windows-x64" \
+            --architecture "standard-red-notes-${APP_VERSION}-win-arm64.exe=windows-arm64"
+          ruby scripts/verify-desktop-updater-metadata.rb \
+            --metadata staged/dist-linux-x64/latest-linux.yml \
+            --source-dir staged/dist-linux-x64 \
+            --expected-version "$APP_VERSION" \
+            --allow "standard-red-notes-${APP_VERSION}-linux-x64.AppImage" \
+            --allow "standard-red-notes-${APP_VERSION}-linux-x64.deb" \
+            --architecture "standard-red-notes-${APP_VERSION}-linux-x64.AppImage=appimage-x64" \
+            --architecture "standard-red-notes-${APP_VERSION}-linux-x64.deb=deb-x64"
+          ruby scripts/verify-desktop-updater-metadata.rb \
+            --metadata staged/dist-linux-arm64/latest-linux-arm64.yml \
+            --source-dir staged/dist-linux-arm64 \
+            --expected-version "$APP_VERSION" \
+            --allow "standard-red-notes-${APP_VERSION}-linux-arm64.AppImage" \
+            --allow "standard-red-notes-${APP_VERSION}-linux-arm64.deb" \
+            --architecture "standard-red-notes-${APP_VERSION}-linux-arm64.AppImage=appimage-arm64" \
+            --architecture "standard-red-notes-${APP_VERSION}-linux-arm64.deb=deb-arm64"
+
+          mapfile -t snaps < <(find staged/dist-linux-snap -maxdepth 1 -type f -name "standard-red-notes-${APP_VERSION}-linux-*.snap" -printf '%f\n')
+          test "${#snaps[@]}" -eq 1
+          validate_source staged/dist-linux-snap - "${snaps[0]}"
+
+          declare -A authority=(
+            [latest-mac.yml]=dist-macos
+            [latest.yml]=dist-windows
+            [latest-linux.yml]=dist-linux-x64
+            [latest-linux-arm64.yml]=dist-linux-arm64
+          )
+          for metadata in "${!authority[@]}"; do
+            mapfile -t producers < <(find staged -mindepth 2 -maxdepth 2 -type f -name "$metadata" -printf '%h\n')
+            test "${#producers[@]}" -eq 1
+            test "$(basename "${producers[0]}")" = "${authority[$metadata]}"
+          done
+          test "$(find staged -mindepth 2 -maxdepth 2 -type f \( -name 'latest*.yml' -o -name '*.yaml' \) | wc -l | tr -d ' ')" -eq 4
+
+          mkdir -p payload
+          collisions="$(mktemp)"
+          while IFS= read -r -d '' source; do
+            base="$(basename "$source")"
+            destination="payload/${base}"
+            if [ -e "$destination" ]; then
+              source_sha="$(sha256sum -- "$source" | cut -d ' ' -f 1)"
+              destination_sha="$(sha256sum -- "$destination" | cut -d ' ' -f 1)"
+              printf '%s\t%s\t%s\n' "$base" "$destination_sha" "$source_sha" >> "$collisions"
+              if [ "$source_sha" != "$destination_sha" ]; then
+                echo "Conflicting artifacts share basename ${base}" >&2
+                cat "$collisions" >&2
+                exit 1
+              fi
+            else
+              cp -- "$source" "$destination"
+            fi
+          done < <(find staged -mindepth 2 -maxdepth 2 -type f -print0)
+
+          asset_names="$(find payload -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort | jq -R . | jq -s .)"
+          jq -n \
+            --arg commit "$GITHUB_SHA" \
+            --arg tag "$RELEASE_TAG" \
+            --arg version "$APP_VERSION" \
+            --arg auditReason "$AUDIT_REASON" \
+            --arg snap "${snaps[0]}" \
+            --argjson assets "$asset_names" \
+            '{
+              schemaVersion: 1,
+              commit: $commit,
+              tag: $tag,
+              version: $version,
+              auditReason: $auditReason,
+              snapAsset: $snap,
+              updaterAuthorities: {
+                "latest-mac.yml": "dist-macos",
+                "latest.yml": "dist-windows",
+                "latest-linux.yml": "dist-linux-x64",
+                "latest-linux-arm64.yml": "dist-linux-arm64"
+              },
+              assets: $assets
+            }' > payload/DESKTOP-ARTIFACTS.json
+
+          find payload -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\n' |
+            LC_ALL=C sort |
+            while IFS= read -r name; do sha256sum -- "payload/${name}"; done |
+            sed 's#  payload/#  #' > payload/SHA256SUMS
+          test -s payload/SHA256SUMS
+          (cd payload && sha256sum --check SHA256SUMS)
+          manifest_sha="$(sha256sum payload/SHA256SUMS | cut -d ' ' -f 1)"
+          echo "manifest_sha=${manifest_sha}" >> "$GITHUB_OUTPUT"
+          echo "Validated $(find payload -maxdepth 1 -type f | wc -l | tr -d ' ') exact desktop release assets; manifest ${manifest_sha}." >> "$GITHUB_STEP_SUMMARY"
+          (cd payload && sha256sum --check SHA256SUMS)
+
+      - name: Upload immutable publication payload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-release-payload
+          path: payload/*
+          retention-days: 30
+          if-no-files-found: error
+
+  # GitHub and Snap are intentionally independent publication systems. Each
+  # consumes the same verified payload; neither rebuilds or mutates the other.
+  PublishGitHub:
+    needs: FanIn
+    runs-on: ubuntu-latest
+    environment: release-production
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download exact publication payload
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: desktop-release-payload
+          path: dist
+
+      - name: Verify payload checksums and identity
+        env:
+          APP_VERSION: ${{ needs.FanIn.outputs.version }}
+          RELEASE_TAG: ${{ needs.FanIn.outputs.tag }}
+          MANIFEST_SHA: ${{ needs.FanIn.outputs.manifest_sha }}
+        run: |
+          set -euo pipefail
+          test "$(sha256sum dist/SHA256SUMS | cut -d ' ' -f 1)" = "$MANIFEST_SHA"
+          (cd dist && sha256sum --check SHA256SUMS)
+          jq -e --arg commit "$GITHUB_SHA" --arg tag "$RELEASE_TAG" --arg version "$APP_VERSION" '
+            .schemaVersion == 1 and .commit == $commit and .tag == $tag and .version == $version
+          ' dist/DESKTOP-ARTIFACTS.json >/dev/null
 
       - name: Generate Release Notes
         uses: ./actions/release-notes
@@ -553,18 +799,241 @@ jobs:
           package: web desktop
         id: release-notes
 
-      - name: Release
-        uses: softprops/action-gh-release@v3.0.2
-        with:
-          token: ${{ secrets.CI_PAT_TOKEN }}
-          tag_name: '@standardnotes/desktop@${{ env.APP_VERSION }}'
-          name: 'Desktop ${{ env.APP_VERSION }}'
-          body: ${{ steps.release-notes.outputs.result }}
-          prerelease: true
-          draft: false
-          files: packages/desktop/dist/*
-
-      - name: Publish Snap
+      - name: Reserve, reconcile, and publish exact GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APP_VERSION: ${{ needs.FanIn.outputs.version }}
+          RELEASE_TAG: ${{ needs.FanIn.outputs.tag }}
+          MANIFEST_SHA: ${{ needs.FanIn.outputs.manifest_sha }}
+          RELEASE_NOTES: ${{ steps.release-notes.outputs.result }}
         run: |
+          set -euo pipefail
+          test "$(sha256sum dist/SHA256SUMS | cut -d ' ' -f 1)" = "$MANIFEST_SHA"
+          (cd dist && sha256sum --check SHA256SUMS)
+          jq -e --arg commit "$GITHUB_SHA" --arg tag "$RELEASE_TAG" --arg version "$APP_VERSION" '
+            .schemaVersion == 1 and .commit == $commit and .tag == $tag and .version == $version
+          ' dist/DESKTOP-ARTIFACTS.json >/dev/null
+          expected_name="Desktop ${APP_VERSION}"
+          reservation_marker="<!-- srn-standalone-desktop-release commit=${GITHUB_SHA} tag=${RELEASE_TAG} -->"
+          asset_marker="<!-- srn-standalone-desktop-assets manifest=${MANIFEST_SHA} -->"
+          releases_file="$(mktemp)"
+          gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --paginate --slurp |
+            jq 'flatten' > "$releases_file"
+          mapfile -t matches < <(jq -r --arg tag "$RELEASE_TAG" '.[] | select(.tag_name == $tag) | .id' "$releases_file")
+          if [ "${#matches[@]}" -gt 1 ]; then
+            echo "Multiple GitHub releases use ${RELEASE_TAG}" >&2
+            exit 1
+          fi
+
+          if [ "${#matches[@]}" -eq 1 ]; then
+            release_id="${matches[0]}"
+            release="$(jq -c --argjson id "$release_id" '.[] | select(.id == $id)' "$releases_file")"
+            jq -e --arg tag "$RELEASE_TAG" --arg name "$expected_name" --arg sha "$GITHUB_SHA" --arg marker "$reservation_marker" '
+              .tag_name == $tag
+              and .name == $name
+              and .target_commitish == $sha
+              and .prerelease == true
+              and (.draft == true or .draft == false)
+              and ((.body // "") | contains($marker))
+            ' <<< "$release" >/dev/null
+          else
+            body="${reservation_marker}"
+            if [ -n "$RELEASE_NOTES" ]; then body="${reservation_marker}"$'\n\n'"${RELEASE_NOTES}"; fi
+            payload="$(jq -n \
+              --arg tag "$RELEASE_TAG" \
+              --arg sha "$GITHUB_SHA" \
+              --arg name "$expected_name" \
+              --arg body "$body" \
+              '{tag_name:$tag,target_commitish:$sha,name:$name,body:$body,draft:true,prerelease:true,generate_release_notes:false}')"
+            release="$(gh api --method POST "repos/${GITHUB_REPOSITORY}/releases" --input - <<< "$payload")"
+            release_id="$(jq -r '.id' <<< "$release")"
+            jq -e --arg tag "$RELEASE_TAG" --arg name "$expected_name" --arg sha "$GITHUB_SHA" --arg marker "$reservation_marker" '
+              (.id | type == "number")
+              and .tag_name == $tag
+              and .name == $name
+              and .target_commitish == $sha
+              and .draft == true
+              and .prerelease == true
+              and ((.body // "") | contains($marker))
+            ' <<< "$release" >/dev/null
+          fi
+
+          expected_assets="$(mktemp)"
+          find dist -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort > "$expected_assets"
+          test "$(wc -l < "$expected_assets")" -gt 0
+
+          load_remote_assets() {
+            directory="$1"
+            expected_names="$2"
+            remote_json="$(mktemp)"
+            gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?per_page=100" --paginate --slurp |
+              jq 'flatten' > "$remote_json"
+            jq -e 'all(.[]; .state == "uploaded" and .size > 0 and (.digest | type == "string") and (.digest | test("^sha256:[0-9a-f]{64}$")))' "$remote_json" >/dev/null
+            remote_names="$(mktemp)"
+            jq -r '.[].name' "$remote_json" | LC_ALL=C sort > "$remote_names"
+            diff -u "$expected_names" "$remote_names"
+            while IFS=$'\t' read -r name digest; do
+              test "$digest" = "sha256:$(sha256sum -- "${directory}/${name}" | cut -d ' ' -f 1)"
+            done < <(jq -r '.[] | [.name, .digest] | @tsv' "$remote_json")
+          }
+
+          draft="$(jq -r '.draft' <<< "$release")"
+          if [ "$draft" = "false" ]; then
+            git fetch --force --tags origin
+            git show-ref --verify --quiet "refs/tags/${RELEASE_TAG}"
+            test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$GITHUB_SHA"
+            downloaded="$(mktemp -d)"
+            gh release download "$RELEASE_TAG" --dir "$downloaded" --repo "$GITHUB_REPOSITORY"
+            remote_manifest_sha="$(sha256sum "${downloaded}/SHA256SUMS" | cut -d ' ' -f 1)"
+            test "$remote_manifest_sha" = "$MANIFEST_SHA"
+            (cd "$downloaded" && sha256sum --check SHA256SUMS)
+            jq -e --arg commit "$GITHUB_SHA" --arg tag "$RELEASE_TAG" --arg version "$APP_VERSION" '
+              .schemaVersion == 1 and .commit == $commit and .tag == $tag and .version == $version
+            ' "${downloaded}/DESKTOP-ARTIFACTS.json" >/dev/null
+            remote_asset_marker="<!-- srn-standalone-desktop-assets manifest=${remote_manifest_sha} -->"
+            jq -e --arg marker "$remote_asset_marker" '(.body // "") | contains($marker)' <<< "$release" >/dev/null
+            remote_expected_assets="$(mktemp)"
+            find "$downloaded" -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort > "$remote_expected_assets"
+            load_remote_assets "$downloaded" "$remote_expected_assets"
+            echo "${RELEASE_TAG} was already published; exact manifest and asset digests verified." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          git fetch --force --tags origin
+          if git show-ref --verify --quiet "refs/tags/${RELEASE_TAG}"; then
+            echo "Draft ${RELEASE_TAG} collides with an existing Git tag" >&2
+            exit 1
+          fi
+          body="$(jq -r '.body // ""' <<< "$release")"
+          mapfile -t prior_asset_markers < <(grep -o '<!-- srn-standalone-desktop-assets manifest=[^ ]* -->' <<< "$body" || true)
+          if [ "${#prior_asset_markers[@]}" -gt 1 ]; then
+            echo "Multiple asset manifests are bound to draft ${RELEASE_TAG}" >&2
+            exit 1
+          fi
+          if [ "${#prior_asset_markers[@]}" -eq 1 ] && [ "${prior_asset_markers[0]}" != "$asset_marker" ]; then
+            echo "Draft ${RELEASE_TAG} is already bound to a different payload manifest" >&2
+            exit 1
+          fi
+          if [ "${#prior_asset_markers[@]}" -eq 0 ]; then
+            body="${body}"$'\n'"${asset_marker}"
+            release="$(gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${release_id}" -f body="$body")"
+          fi
+          jq -e --arg reservation "$reservation_marker" --arg assets "$asset_marker" '
+            .draft == true and ((.body // "") | contains($reservation)) and ((.body // "") | contains($assets))
+          ' <<< "$release" >/dev/null
+          remote_json="$(mktemp)"
+          gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?per_page=100" --paginate --slurp |
+            jq 'flatten' > "$remote_json"
+          while IFS=$'\t' read -r id name; do
+            if ! grep -Fqx -- "$name" "$expected_assets"; then
+              gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/assets/${id}"
+            fi
+          done < <(jq -r '.[] | [.id, .name] | @tsv' "$remote_json")
+          shopt -s nullglob
+          files=(dist/*)
+          test "${#files[@]}" -eq "$(wc -l < "$expected_assets")"
+          gh release upload "$RELEASE_TAG" "${files[@]}" --clobber --repo "$GITHUB_REPOSITORY"
+          load_remote_assets dist "$expected_assets"
+
+          # Publication is last: a lost response is reconciled by exact marker,
+          # target, tag, inventory, and API-provided SHA-256 digests on retry.
+          gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
+            -F draft=false \
+            -F prerelease=true \
+            -f make_latest=false >/dev/null
+
+  PublishSnap:
+    needs: FanIn
+    runs-on: ubuntu-latest
+    environment: release-production
+    env:
+      SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}
+      APP_VERSION: ${{ needs.FanIn.outputs.version }}
+      MANIFEST_SHA: ${{ needs.FanIn.outputs.manifest_sha }}
+    steps:
+      - name: Download exact publication payload
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: desktop-release-payload
+          path: dist
+
+      - name: Verify payload checksums
+        run: |
+          set -euo pipefail
+          test "$(sha256sum dist/SHA256SUMS | cut -d ' ' -f 1)" = "$MANIFEST_SHA"
+          (cd dist && sha256sum --check SHA256SUMS)
+
+      - name: Publish or reconcile the exact Snap revision
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes squashfs-tools
           sudo snap install snapcraft --classic
-          snapcraft upload dist/standard-notes-${{ env.APP_VERSION }}-linux-amd64.snap --release stable,candidate,beta,edge
+          mapfile -t snaps < <(find dist -maxdepth 1 -type f -name '*.snap')
+          test "${#snaps[@]}" -eq 1
+          snap_file="${snaps[0]}"
+          snap_yaml="$(unsquashfs -cat "$snap_file" meta/snap.yaml)"
+          snap_name="$(awk '$1 == "name:" {print $2; exit}' <<< "$snap_yaml" | tr -d "\"'")"
+          snap_version="$(awk '$1 == "version:" {print $2; exit}' <<< "$snap_yaml" | tr -d "\"'")"
+          arch_inline="$(awk '/^architectures:/ {sub(/^architectures:[[:space:]]*/, ""); print; exit}' <<< "$snap_yaml")"
+          if [ -n "$(printf '%s' "$arch_inline" | tr -d '[:space:]')" ]; then
+            mapfile -t declared_arches < <(printf '%s' "$arch_inline" | tr -d "[]\"'" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | sed '/^$/d')
+          else
+            mapfile -t declared_arches < <(awk '/^architectures:/{found=1; next} found && /^[^[:space:]]/{exit} found && $1 == "-" {print $2}' <<< "$snap_yaml" | tr -d "\"'")
+          fi
+          test "${#declared_arches[@]}" -eq 1
+          snap_arch="${declared_arches[0]}"
+          test -n "$snap_name"
+          test "$snap_version" = "$APP_VERSION"
+          test "$snap_arch" = amd64
+
+          revisions="$(mktemp)"
+          snapcraft revisions "$snap_name" --arch "$snap_arch" > "$revisions"
+          mapfile -t candidates < <(awk -v version="$APP_VERSION" 'NR > 1 && $4 == version {print $1}' "$revisions")
+          if [ "${#candidates[@]}" -gt 1 ]; then
+            echo "Multiple ${snap_name} revisions already use version ${APP_VERSION}; refusing an ambiguous upload." >&2
+            exit 1
+          fi
+
+          channels_match() {
+            revision="$1"
+            status="$(mktemp)"
+            snapcraft status "$snap_name" --arch "$snap_arch" > "$status"
+            for channel in stable candidate beta edge; do
+              if ! grep -E "(^|[[:space:]])${channel}[[:space:]]+.*[[:space:]]${revision}([[:space:]]|$)" "$status" >/dev/null; then
+                return 1
+              fi
+            done
+          }
+
+          if [ "${#candidates[@]}" -eq 1 ]; then
+            echo "Version ${APP_VERSION} already exists as Snap revision ${candidates[0]}." >&2
+            echo "Snapcraft does not expose a remote payload digest that this workflow can bind to MANIFEST_SHA." >&2
+            echo "Failing closed: verify and reconcile that revision manually instead of treating identity and channels as byte proof." >&2
+            exit 1
+          fi
+
+          test "$(sha256sum dist/SHA256SUMS | cut -d ' ' -f 1)" = "$MANIFEST_SHA"
+          (cd dist && sha256sum --check SHA256SUMS)
+          snapcraft upload "$snap_file" --release stable,candidate,beta,edge
+          snapcraft revisions "$snap_name" --arch "$snap_arch" > "$revisions"
+          mapfile -t candidates < <(awk -v version="$APP_VERSION" 'NR > 1 && $4 == version {print $1}' "$revisions")
+          test "${#candidates[@]}" -eq 1
+          channels_match "${candidates[0]}"
+
+  ReleaseStatus:
+    if: always()
+    needs: [FanIn, PublishGitHub, PublishSnap]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require verified fan-in and both publication systems
+        env:
+          FAN_IN_RESULT: ${{ needs.FanIn.result }}
+          GITHUB_RESULT: ${{ needs.PublishGitHub.result }}
+          SNAP_RESULT: ${{ needs.PublishSnap.result }}
+        run: |
+          set -euo pipefail
+          test "$FAN_IN_RESULT" = success
+          test "$GITHUB_RESULT" = success
+          test "$SNAP_RESULT" = success
+          echo "GitHub Release and Snap Store publication both completed and reconciled." >> "$GITHUB_STEP_SUMMARY"

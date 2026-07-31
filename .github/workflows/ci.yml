@@ -61,6 +61,8 @@ jobs:
           restore-keys: ci-root-yarn-${{ runner.os }}-node${{ env.NODE_VERSION }}-
       - name: Install root dependencies immutably
         run: yarn install --immutable
+      - name: Install release policy dependencies
+        run: npm ci --prefix scripts --ignore-scripts --no-audit --no-fund
       - name: Validate CI, release, and documentation contracts
         run: yarn ci:contracts
       - name: Test fail-closed release fingerprint comparison

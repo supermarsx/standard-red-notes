@@ -41,6 +41,11 @@ import { checkRequiredSecret, parseEnvFile, REQUIRED_KEYS, resolveEnvValue, shar
 
 const CLI_VERSION = '0.1.0'
 
+if (process.argv.length === 3 && process.argv[2] === '--srn-release-self-test') {
+  process.stdout.write(`srn-native-self-test-v1 ${process.platform} ${process.arch}\n`)
+  process.exit(0)
+}
+
 /** Thrown by exit() to unwind the stack; main() swallows it. */
 class ExitSignal extends Error {
   // Declared as an explicit field rather than a constructor parameter property:

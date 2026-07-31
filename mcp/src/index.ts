@@ -35,6 +35,16 @@ import {
 import { AsyncMutex } from "./AsyncMutex.js";
 import { redactDiagnosticMessage } from "./diagnostics.js";
 
+if (
+  process.argv.length === 3 &&
+  process.argv[2] === "--srn-release-self-test"
+) {
+  process.stdout.write(
+    `srn-native-self-test-v1 ${process.platform} ${process.arch}\n`,
+  );
+  process.exit(0);
+}
+
 // Transport selection. `stdio` (default) preserves the original single-client
 // behavior. `http` runs the bridge as a long-lived, authenticated network
 // service (an always-on tooling side-car behind compose).

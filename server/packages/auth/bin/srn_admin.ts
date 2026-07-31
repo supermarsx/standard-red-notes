@@ -85,6 +85,11 @@ import {
   type RegistrationConfigOverlay,
 } from '../src/Domain/Registration/RegistrationConfig'
 
+if (process.argv.length === 3 && process.argv[2] === '--srn-release-self-test') {
+  process.stdout.write(`srn-native-self-test-v1 ${process.platform} ${process.arch}\n`)
+  process.exit(0)
+}
+
 /* ---------------------------------------------------------------------------
  * Small shared shapes so use cases can be driven through the container without
  * importing each one's module (keeps the lazy-boot property).

@@ -1,7 +1,7 @@
 # Rolling release pipeline for the Standard Red Notes DESKTOP app (electron-builder).
 #
 # Electron apps are built on native runners (no cross-compile). Stages:
-#   version -> build (matrix) -> release
+#   impact -> identity -> build -> decide -> fan-in -> release
 #
 # Trigger: push to `main` touching any packaged app workspace or dependency
 # manifest, or manual dispatch. The desktop embeds the web UI and its shared
@@ -31,18 +31,21 @@ on:
   push:
     branches: [main]
     paths:
-      - 'app/packages/**'
-      - 'app/package.json'
-      - 'app/yarn.lock'
-      - 'app/.nvmrc'
-      - 'app/.yarnrc.yml'
-      - 'app/.yarn/patches/**'
-      - 'app/.yarn/releases/**'
-      - 'app/.github/workflows/desktop.release.reuse.yml'
-      - 'app/babel.config.js'
-      - 'app/tsconfig.base.json'
-      - 'scripts/release-packaging-contract.mjs'
-      - '.github/workflows/srn-desktop.yml'
+      - "app/packages/**"
+      - "app/package.json"
+      - "app/yarn.lock"
+      - "app/.nvmrc"
+      - "app/.yarnrc.yml"
+      - "app/.yarn/patches/**"
+      - "app/.yarn/releases/**"
+      - "app/.github/workflows/desktop.release.reuse.yml"
+      - "app/babel.config.js"
+      - "app/tsconfig.base.json"
+      - "app/scripts/verify-desktop-updater-metadata.rb"
+      - "scripts/package.json"
+      - "scripts/package-lock.json"
+      - "scripts/release-packaging-contract.mjs"
+      - ".github/workflows/srn-desktop.yml"
   workflow_dispatch:
     inputs:
       force_release:
@@ -53,7 +56,7 @@ on:
       force_reason:
         description: Required audit reason when force_release is true
         required: false
-        default: ''
+        default: ""
         type: string
 
 permissions:
@@ -83,14 +86,26 @@ jobs:
       reason_codes: ${{ steps.impact.outputs.reason_codes }}
       result_json: ${{ steps.impact.outputs.result_json }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           fetch-depth: 0
 
-      - uses: actions/setup-node@v7
+      - name: Authorize exact protected release source
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --force origin refs/heads/main:refs/remotes/origin/main
+          protected_sha="$(git rev-parse refs/remotes/origin/main^{commit})"
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_SHA" = "$protected_sha"
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: '26'
+          node-version: "26"
           package-manager-cache: false
+
+      - name: Install release policy dependencies
+        run: npm ci --prefix scripts --ignore-scripts --no-audit --no-fund
 
       - name: Validate release packaging contract
         run: node scripts/validate-release-contract.mjs
@@ -117,51 +132,171 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # 1) VERSION — compute the rolling YY.N version once so every leg bakes the
-  # same version and the release tags it identically. N is discovered by
-  # scanning the existing `srn-desktop-v<YY>.` releases, exactly as every other
-  # srn-* workflow does; the versioning state lives in GitHub Releases.
-  version:
-    name: version
+  # Reserve a commit-and-intent-bound draft before native packaging. The same
+  # workflow run reuses it on retry; a new forced invocation gets a new YY.N.
+  identity:
+    name: reserve release identity
     needs: impact
     if: needs.impact.outputs.changed == 'true'
     runs-on: ubuntu-latest
+    environment: release-production
+    permissions:
+      contents: write
     outputs:
-      version: ${{ steps.v.outputs.version }}
-      app_version: ${{ steps.v.outputs.app_version }}
-      tag: ${{ steps.v.outputs.tag }}
+      version: ${{ steps.identity.outputs.version }}
+      app_version: ${{ steps.identity.outputs.app_version }}
+      tag: ${{ steps.identity.outputs.tag }}
+      release_id: ${{ steps.identity.outputs.release_id }}
+      reused: ${{ steps.identity.outputs.reused }}
+      published: ${{ steps.identity.outputs.published }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           fetch-depth: 0
 
-      - id: v
+      - id: identity
+        name: Reserve or reuse exact desktop draft
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FORCED: ${{ needs.impact.outputs.forced }}
+          IMPACT_RESULT: ${{ needs.impact.outputs.result_json }}
         run: |
           set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          [[ "$FORCED" == "true" || "$FORCED" == "false" ]]
+          jq -e --arg sha "$GITHUB_SHA" --argjson forced "$FORCED" '
+            .headSha == $sha
+            and .forced == $forced
+            and (
+              ($forced and (.forceReason | type == "string") and ((.forceReason | gsub("^\\s+|\\s+$"; "")) | length > 0))
+              or (($forced | not) and .forceReason == null)
+            )
+          ' <<< "$IMPACT_RESULT" >/dev/null
+          if [ "$FORCED" = true ]; then
+            [[ "$GITHUB_RUN_ID" =~ ^[0-9]+$ ]]
+            intent="forced-${GITHUB_RUN_ID}"
+          else
+            intent=automatic
+          fi
           git fetch --force --tags origin
-          YY="$(date -u +%y)"
-          prefix="${TOOL}-v${YY}."
-          max=0
-          while read -r tag; do
-            [ -z "$tag" ] && continue
-            n="${tag#"$prefix"}"
-            if [[ "$n" =~ ^[0-9]+$ ]] && [ "$n" -gt "$max" ]; then max="$n"; fi
-          done < <(git tag --list "${prefix}*")
-          version="${YY}.$((max + 1))"
+
+          yy="$(date -u +%y)"
+          prefix="${TOOL}-v${yy}."
+          marker="<!-- srn-release-reservation tool=${TOOL} commit=${GITHUB_SHA} intent=${intent} -->"
+          releases_file="$(mktemp)"
+          gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --paginate --slurp |
+            jq 'flatten' > "$releases_file"
+
+          mapfile -t reservations < <(
+            jq -r --arg marker "$marker" --arg sha "$GITHUB_SHA" --arg tool_prefix "${TOOL}-v" '
+              .[]
+              | select(.target_commitish == $sha)
+              | select((.body // "") | contains($marker))
+              | select(.tag_name | startswith($tool_prefix))
+              | .id
+            ' "$releases_file"
+          )
+          marker_prefix="<!-- srn-release-reservation tool=${TOOL} "
+          mapfile -t stale_reservations < <(
+            jq -r --arg marker "$marker" --arg marker_prefix "$marker_prefix" --arg sha "$GITHUB_SHA" --arg tool_prefix "${TOOL}-v" '
+              .[]
+              | select(.draft == true)
+              | select((.body // "") | contains($marker_prefix))
+              | select(((.target_commitish == $sha) and (.tag_name | startswith($tool_prefix)) and ((.body // "") | contains($marker))) | not)
+              | "\(.id)\t\(.tag_name)\t\(.target_commitish)"
+            ' "$releases_file"
+          )
+          if [ "${#stale_reservations[@]}" -gt 0 ]; then
+            echo "Refusing to allocate past stale ${TOOL} draft reservations:" >&2
+            printf '  %s\n' "${stale_reservations[@]}" >&2
+            exit 1
+          fi
+          if [ "${#reservations[@]}" -gt 1 ]; then
+            echo "Multiple desktop reservations match ${GITHUB_SHA} and ${intent}" >&2
+            exit 1
+          fi
+
+          reused=false
+          if [ "${#reservations[@]}" -eq 1 ]; then
+            release_id="${reservations[0]}"
+            release="$(jq -c --argjson id "$release_id" '.[] | select(.id == $id)' "$releases_file")"
+            tag="$(jq -r '.tag_name' <<< "$release")"
+            version="${tag#"${TOOL}-v"}"
+            name="${TOOL} ${version}"
+            [[ "$version" =~ ^[0-9]{2}\.[1-9][0-9]*$ ]]
+            jq -e --arg tag "$tag" --arg name "$name" --arg sha "$GITHUB_SHA" --arg marker "$marker" '
+              .tag_name == $tag
+              and .name == $name
+              and .target_commitish == $sha
+              and (.draft == true or .draft == false)
+              and .prerelease == false
+              and ((.body // "") | contains($marker))
+            ' <<< "$release" >/dev/null
+            test "$(jq --arg tag "$tag" '[.[] | select(.tag_name == $tag)] | length' "$releases_file")" -eq 1
+            published="$(jq -r '.draft | not' <<< "$release")"
+            if [ "$published" = true ]; then
+              git show-ref --verify --quiet "refs/tags/${tag}"
+              test "$(git rev-list -n 1 "$tag")" = "$GITHUB_SHA"
+            elif git show-ref --verify --quiet "refs/tags/${tag}"; then
+              echo "Draft reservation ${tag} collides with an existing Git tag" >&2
+              exit 1
+            fi
+            reused=true
+          else
+            max=0
+            while read -r candidate; do
+              [ -z "$candidate" ] && continue
+              n="${candidate#"$prefix"}"
+              if [[ "$n" =~ ^[1-9][0-9]*$ ]] && [ "$n" -gt "$max" ]; then max="$n"; fi
+            done < <(
+              {
+                git tag --list "${prefix}*"
+                jq -r --arg prefix "$prefix" '.[] | select(.tag_name | startswith($prefix)) | .tag_name' "$releases_file"
+              } | LC_ALL=C sort -u
+            )
+            version="${yy}.$((max + 1))"
+            tag="${TOOL}-v${version}"
+            name="${TOOL} ${version}"
+            ! git show-ref --verify --quiet "refs/tags/${tag}"
+            test "$(jq --arg tag "$tag" '[.[] | select(.tag_name == $tag)] | length' "$releases_file")" -eq 0
+            created="$(gh api --method POST "repos/${GITHUB_REPOSITORY}/releases" \
+              -f tag_name="$tag" \
+              -f target_commitish="$GITHUB_SHA" \
+              -f name="$name" \
+              -f body="$marker" \
+              -F draft=true \
+              -F prerelease=false \
+              -F generate_release_notes=true)"
+            release_id="$(jq -r '.id' <<< "$created")"
+            published=false
+            jq -e --arg tag "$tag" --arg name "$name" --arg sha "$GITHUB_SHA" --arg marker "$marker" '
+              (.id | type == "number")
+              and .tag_name == $tag
+              and .name == $name
+              and .target_commitish == $sha
+              and .draft == true
+              and .prerelease == false
+              and ((.body // "") | contains($marker))
+            ' <<< "$created" >/dev/null
+          fi
+
           {
             echo "version=${version}"
             echo "app_version=${version}.0"
-            echo "tag=${TOOL}-v${version}"
+            echo "tag=${tag}"
+            echo "release_id=${release_id}"
+            echo "reused=${reused}"
+            echo "published=${published}"
           } >> "$GITHUB_OUTPUT"
-          echo "Desktop release ${TOOL} ${version} (tag ${TOOL}-v${version}, app semver ${version}.0)"
+          echo "Reserved ${tag} for ${GITHUB_SHA} with intent ${intent} (id ${release_id}; reused=${reused}; published=${published})." >> "$GITHUB_STEP_SUMMARY"
 
   # 2) BUILD — electron-builder per OS. Each OS builds BOTH arches in one run so
   # the per-platform update metadata (latest*.yml) is produced once, not twice.
   build:
     name: build (${{ matrix.label }})
-    needs: version
+    needs: identity
+    if: needs.identity.outputs.published != 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -170,30 +305,32 @@ jobs:
           - {
               label: macos,
               os: macos-latest,
-              builder: '--mac dmg zip --x64 --arm64',
+              builder: "--mac dmg zip --x64 --arm64",
             }
           - {
               label: windows,
               os: windows-latest,
-              builder: '--win nsis --x64 --arm64',
+              builder: "--win nsis --x64 --arm64",
             }
           - {
               label: linux-x64,
               os: ubuntu-latest,
-              builder: '--linux AppImage deb --x64',
+              builder: "--linux AppImage deb --x64",
             }
           - {
               label: linux-arm64,
               os: ubuntu-24.04-arm,
-              builder: '--linux AppImage deb --arm64',
+              builder: "--linux AppImage deb --arm64",
             }
     env:
       # Never attempt to auto-discover a macOS signing identity.
-      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: app/.nvmrc
           package-manager-cache: false
@@ -210,9 +347,9 @@ jobs:
 
       - name: Set up Python (macOS native build)
         if: runner.os == 'macOS'
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
-          python-version: '3.14.6'
+          python-version: "3.14.6"
 
       - name: Install workspace dependencies
         working-directory: app
@@ -234,7 +371,7 @@ jobs:
         working-directory: app/packages/desktop
         # app_version, not version: electron-updater refuses to run against a
         # non-semver app version, and the release identity `YY.N` is not semver.
-        run: yarn electron-builder ${{ matrix.builder }} --publish never -c.extraMetadata.version=${{ needs.version.outputs.app_version }}
+        run: yarn electron-builder ${{ matrix.builder }} --publish never -c.extraMetadata.version=${{ needs.identity.outputs.app_version }}
 
       # Fingerprint the ACTUAL packaged application payload, not the installer:
       # installers carry timestamps/signature containers and are not byte
@@ -311,25 +448,83 @@ jobs:
             exit 1
           }
 
-      - name: Collect installers
+      - name: Collect exact installers and canonical updater metadata
         working-directory: app/packages/desktop
+        env:
+          MATRIX_LABEL: ${{ matrix.label }}
+          APP_VERSION: ${{ needs.identity.outputs.app_version }}
         run: |
           set -euo pipefail
-          mkdir -p staged
-          # Distributables + electron-updater metadata (latest*.yml, blockmaps).
-          find dist -maxdepth 1 -type f \
-            \( -name '*.exe' -o -name '*.dmg' -o -name '*.zip' \
-               -o -name '*.AppImage' -o -name '*.deb' \
-               -o -name '*.yml' -o -name '*.blockmap' \) \
-            -exec cp -v {} staged/ \; || true
-          echo "Staged:" && ls -la staged
+          case "$MATRIX_LABEL" in
+            macos)
+              metadata=latest-mac.yml
+              required=(
+                "standard-red-notes-${APP_VERSION}-mac-x64.dmg"
+                "standard-red-notes-${APP_VERSION}-mac-arm64.dmg"
+                "standard-red-notes-${APP_VERSION}-mac-x64.zip"
+                "standard-red-notes-${APP_VERSION}-mac-arm64.zip"
+              )
+              fingerprints=(srn-desktop-macos-x64.fingerprint srn-desktop-macos-arm64.fingerprint)
+              ;;
+            windows)
+              metadata=latest.yml
+              required=(
+                "standard-red-notes-${APP_VERSION}-win-x64.exe"
+                "standard-red-notes-${APP_VERSION}-win-arm64.exe"
+              )
+              fingerprints=(srn-desktop-windows-x64.fingerprint srn-desktop-windows-arm64.fingerprint)
+              ;;
+            linux-x64)
+              metadata=latest-linux.yml
+              required=(
+                "standard-red-notes-${APP_VERSION}-linux-x64.AppImage"
+                "standard-red-notes-${APP_VERSION}-linux-x64.deb"
+              )
+              fingerprints=(srn-desktop-linux-x64.fingerprint)
+              ;;
+            linux-arm64)
+              metadata=latest-linux-arm64.yml
+              required=(
+                "standard-red-notes-${APP_VERSION}-linux-arm64.AppImage"
+                "standard-red-notes-${APP_VERSION}-linux-arm64.deb"
+              )
+              fingerprints=(srn-desktop-linux-arm64.fingerprint)
+              ;;
+            *) echo "Unknown desktop matrix label: $MATRIX_LABEL" >&2; exit 1 ;;
+          esac
+
+          mapfile -t metadata_files < <(find dist -maxdepth 1 -type f \( -name '*.yml' -o -name '*.yaml' \) -printf '%f\n')
+          test "${#metadata_files[@]}" -eq 1
+          test "${metadata_files[0]}" = "$metadata"
+          test -s "dist/${metadata}"
+          cp -- "dist/${metadata}" staged/
+          for name in "${required[@]}"; do
+            test -s "dist/${name}"
+            cp -- "dist/${name}" staged/
+            if [ -f "dist/${name}.blockmap" ]; then cp -- "dist/${name}.blockmap" staged/; fi
+          done
+          while IFS= read -r -d '' blockmap; do
+            base="$(basename "${blockmap%.blockmap}")"
+            allowed=false
+            for name in "${required[@]}"; do if [ "$base" = "$name" ]; then allowed=true; fi; done
+            test "$allowed" = true
+          done < <(find dist -maxdepth 1 -type f -name '*.blockmap' -print0)
+          for fingerprint in "${fingerprints[@]}"; do test -s "staged/${fingerprint}"; done
+          echo "Staged exact ${MATRIX_LABEL} release inventory:" && ls -la staged
+          leg_manifest="$RUNNER_TEMP/${TOOL}-${MATRIX_LABEL}-SHA256SUMS"
+          (
+            cd staged
+            find . -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort |
+              while IFS= read -r name; do sha256sum -- "$name"; done > "$leg_manifest"
+            sha256sum --check "$leg_manifest"
+          )
 
       - name: Upload installers
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: srn-desktop-${{ matrix.label }}
           path: app/packages/desktop/staged/*
-          retention-days: 2
+          retention-days: 30
           if-no-files-found: error
 
   # 3) DECIDE — all native builds ran because source impact was detected. Stop
@@ -337,20 +532,39 @@ jobs:
   # byte-identical to the analyzer-selected prior release.
   decide:
     name: decide
-    needs: [impact, version, build]
+    needs: [impact, identity, build]
     runs-on: ubuntu-latest
     outputs:
       changed: ${{ steps.compare.outputs.changed }}
       decision: ${{ steps.compare.outputs.decision }}
     steps:
-      - uses: actions/checkout@v7
-
-      - name: Download packaged desktop payloads
-        uses: actions/download-artifact@v8
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          pattern: srn-desktop-*
-          path: artifacts
-          merge-multiple: true
+          persist-credentials: false
+
+      - name: Download macOS payload into an isolated namespace
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: srn-desktop-macos
+          path: artifacts/macos
+
+      - name: Download Windows payload into an isolated namespace
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: srn-desktop-windows
+          path: artifacts/windows
+
+      - name: Download Linux X64 payload into an isolated namespace
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: srn-desktop-linux-x64
+          path: artifacts/linux-x64
+
+      - name: Download Linux ARM64 payload into an isolated namespace
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: srn-desktop-linux-arm64
+          path: artifacts/linux-arm64
 
       - id: compare
         name: Compare normalized runtime fingerprints
@@ -368,12 +582,19 @@ jobs:
           )
           fingerprints=()
           for target in "${targets[@]}"; do
-            file="artifacts/${TOOL}-${target}.fingerprint"
+            case "$target" in
+              macos-*) source_dir=macos ;;
+              windows-*) source_dir=windows ;;
+              linux-x64) source_dir=linux-x64 ;;
+              linux-arm64) source_dir=linux-arm64 ;;
+              *) echo "Unknown fingerprint target ${target}" >&2; exit 1 ;;
+            esac
+            file="artifacts/${source_dir}/${TOOL}-${target}.fingerprint"
             test -s "$file"
             fingerprint="$(tr -d '[:space:]' < "$file")"
             fingerprints+=(--fingerprint "${TOOL}-${target}.fingerprint=${fingerprint}")
           done
-          actual="$(find artifacts -maxdepth 1 -type f -name "${TOOL}-*.fingerprint" | wc -l | tr -d '[:space:]')"
+          actual="$(find artifacts -mindepth 2 -maxdepth 2 -type f -name "${TOOL}-*.fingerprint" | wc -l | tr -d '[:space:]')"
           test "$actual" -eq "${#targets[@]}"
           if ! node scripts/compare-release-fingerprints.mjs \
             --repository "$GITHUB_REPOSITORY" \
@@ -388,46 +609,401 @@ jobs:
           fi
           cat release-fingerprint-comparison.json >> "$GITHUB_STEP_SUMMARY"
 
-  # 4) RELEASE — gather every leg's installers + update metadata and publish ONE
-  # rolling GitHub Release (non-draft, so electron-updater can read it).
-  #
-  # The Snap target was removed, not descoped: electron-builder's legacy core22
-  # path hardcodes the `snapcraft snap` subcommand that snapcraft 8 renamed to
-  # `pack`, and migrating to snapcraft.core24 was declined. Linux ships as
-  # AppImage + deb from the build matrix.
-  release:
-    name: release
-    needs: [version, build, decide]
-    if: needs.decide.outputs.changed == 'true'
+  # A runtime-identical build does not deserve a release. Remove only the exact,
+  # still-empty marker-bound draft allocated by this invocation.
+  discard_unchanged:
+    name: discard unchanged reservation
+    needs: [impact, identity, decide]
+    if: always() && needs.identity.result == 'success' && needs.identity.outputs.published != 'true' && needs.decide.result == 'success' && needs.decide.outputs.changed == 'false'
     runs-on: ubuntu-latest
+    environment: release-production
     permissions:
       contents: write
     steps:
-      - name: Download all installers
-        uses: actions/download-artifact@v8
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          pattern: srn-desktop-*
-          path: artifacts
-          merge-multiple: true
-
-      - name: Checksums
-        working-directory: artifacts
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Delete exact empty draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ needs.identity.outputs.release_id }}
+          RELEASE_TAG: ${{ needs.identity.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.identity.outputs.version }}
+          FORCED: ${{ needs.impact.outputs.forced }}
         run: |
           set -euo pipefail
-          ls -la
-          mapfile -d '' files < <(find . -maxdepth 1 -type f ! -name SHA256SUMS.txt -print0 | sort -z)
-          test "${#files[@]}" -gt 0
-          sha256sum "${files[@]}" > SHA256SUMS.txt
-          sha256sum --check SHA256SUMS.txt
+          [[ "$RELEASE_ID" =~ ^[0-9]+$ ]]
+          if [ "$FORCED" = true ]; then intent="forced-${GITHUB_RUN_ID}"; else intent=automatic; fi
+          marker="<!-- srn-release-reservation tool=${TOOL} commit=${GITHUB_SHA} intent=${intent} -->"
+          release="$(gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}")"
+          jq -e --arg tag "$RELEASE_TAG" --arg name "${TOOL} ${RELEASE_VERSION}" --arg sha "$GITHUB_SHA" --arg marker "$marker" '
+            .tag_name == $tag
+            and .name == $name
+            and .target_commitish == $sha
+            and .draft == true
+            and .prerelease == false
+            and ((.body // "") | contains($marker))
+            and (.assets | length == 0)
+          ' <<< "$release" >/dev/null
+          git fetch --force --tags origin
+          ! git show-ref --verify --quiet "refs/tags/${RELEASE_TAG}"
+          gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}"
+          echo "Removed unchanged empty draft ${RELEASE_TAG}; no release was published." >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
+  # Validate every source namespace before flattening. Each updater metadata
+  # basename has exactly one canonical producer and all collisions are hashed.
+  fan_in:
+    name: fan-in
+    needs: [identity, build, decide]
+    if: needs.identity.outputs.published != 'true' && needs.decide.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      manifest_sha: ${{ steps.inventory.outputs.manifest_sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          tag_name: ${{ needs.version.outputs.tag }}
-          name: srn-desktop ${{ needs.version.outputs.version }}
-          target_commitish: ${{ github.sha }}
-          generate_release_notes: true
-          draft: false
-          prerelease: false
-          files: |
-            artifacts/*
+          persist-credentials: false
+
+      - name: Install updater inspection tools
+        run: sudo apt-get update && sudo apt-get install -y file p7zip-full unzip
+
+      - name: Download macOS artifacts into an isolated namespace
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: srn-desktop-macos
+          path: staged/macos
+      - name: Download Windows artifacts into an isolated namespace
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: srn-desktop-windows
+          path: staged/windows
+      - name: Download Linux X64 artifacts into an isolated namespace
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: srn-desktop-linux-x64
+          path: staged/linux-x64
+      - name: Download Linux ARM64 artifacts into an isolated namespace
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: srn-desktop-linux-arm64
+          path: staged/linux-arm64
+
+      - name: Validate authorities, reject collisions, and checksum payload
+        id: inventory
+        env:
+          APP_VERSION: ${{ needs.identity.outputs.app_version }}
+          RELEASE_VERSION: ${{ needs.identity.outputs.version }}
+          RELEASE_TAG: ${{ needs.identity.outputs.tag }}
+        run: |
+          set -euo pipefail
+          validate_source() {
+            source_dir="$1"
+            metadata="$2"
+            shift 2
+            required=("$@")
+            test -s "${source_dir}/${metadata}"
+            metadata_version="$(awk '$1 == "version:" {print $2; exit}' "${source_dir}/${metadata}" | tr -d "\"'")"
+            test "$metadata_version" = "$APP_VERSION"
+            mapfile -t update_urls < <(awk '$1 == "-" && $2 == "url:" {print $3} $1 == "url:" {print $2}' "${source_dir}/${metadata}" | tr -d "\"'" | LC_ALL=C sort -u)
+            test "${#update_urls[@]}" -gt 0
+            for url in "${update_urls[@]}"; do
+              test "$url" = "$(basename "$url")"
+              case "$url" in *.dmg|*.zip|*.exe|*.AppImage|*.deb) ;; *) exit 1 ;; esac
+              test -s "${source_dir}/${url}"
+              declared=false
+              for name in "${required[@]}"; do if [ "$url" = "$name" ]; then declared=true; fi; done
+              test "$declared" = true
+            done
+            for name in "${required[@]}"; do test -s "${source_dir}/${name}"; done
+            while IFS= read -r -d '' source; do
+              base="$(basename "$source")"
+              allowed=false
+              if [ "$base" = "$metadata" ]; then allowed=true; fi
+              for name in "${required[@]}"; do
+                if [ "$base" = "$name" ] || [ "$base" = "${name}.blockmap" ]; then allowed=true; fi
+              done
+              if [ "$allowed" != true ]; then
+                echo "Unexpected desktop release artifact in ${source_dir}: ${base}" >&2
+                exit 1
+              fi
+            done < <(find "$source_dir" -maxdepth 1 -type f -print0)
+          }
+
+          validate_source staged/macos latest-mac.yml \
+            "standard-red-notes-${APP_VERSION}-mac-x64.dmg" \
+            "standard-red-notes-${APP_VERSION}-mac-arm64.dmg" \
+            "standard-red-notes-${APP_VERSION}-mac-x64.zip" \
+            "standard-red-notes-${APP_VERSION}-mac-arm64.zip" \
+            srn-desktop-macos-x64.fingerprint srn-desktop-macos-arm64.fingerprint
+          validate_source staged/windows latest.yml \
+            "standard-red-notes-${APP_VERSION}-win-x64.exe" \
+            "standard-red-notes-${APP_VERSION}-win-arm64.exe" \
+            srn-desktop-windows-x64.fingerprint srn-desktop-windows-arm64.fingerprint
+          validate_source staged/linux-x64 latest-linux.yml \
+            "standard-red-notes-${APP_VERSION}-linux-x64.AppImage" \
+            "standard-red-notes-${APP_VERSION}-linux-x64.deb" \
+            srn-desktop-linux-x64.fingerprint
+          validate_source staged/linux-arm64 latest-linux-arm64.yml \
+            "standard-red-notes-${APP_VERSION}-linux-arm64.AppImage" \
+            "standard-red-notes-${APP_VERSION}-linux-arm64.deb" \
+            srn-desktop-linux-arm64.fingerprint
+
+          ruby app/scripts/verify-desktop-updater-metadata.rb \
+            --metadata staged/macos/latest-mac.yml \
+            --source-dir staged/macos \
+            --expected-version "$APP_VERSION" \
+            --allow "standard-red-notes-${APP_VERSION}-mac-x64.dmg" \
+            --allow "standard-red-notes-${APP_VERSION}-mac-arm64.dmg" \
+            --allow "standard-red-notes-${APP_VERSION}-mac-x64.zip" \
+            --allow "standard-red-notes-${APP_VERSION}-mac-arm64.zip" \
+            --allow srn-desktop-macos-x64.fingerprint \
+            --allow srn-desktop-macos-arm64.fingerprint \
+            --architecture "standard-red-notes-${APP_VERSION}-mac-x64.dmg=dmg-x64" \
+            --architecture "standard-red-notes-${APP_VERSION}-mac-arm64.dmg=dmg-arm64" \
+            --architecture "standard-red-notes-${APP_VERSION}-mac-x64.zip=zip-x64" \
+            --architecture "standard-red-notes-${APP_VERSION}-mac-arm64.zip=zip-arm64"
+          ruby app/scripts/verify-desktop-updater-metadata.rb \
+            --metadata staged/windows/latest.yml \
+            --source-dir staged/windows \
+            --expected-version "$APP_VERSION" \
+            --allow "standard-red-notes-${APP_VERSION}-win-x64.exe" \
+            --allow "standard-red-notes-${APP_VERSION}-win-arm64.exe" \
+            --allow srn-desktop-windows-x64.fingerprint \
+            --allow srn-desktop-windows-arm64.fingerprint \
+            --architecture "standard-red-notes-${APP_VERSION}-win-x64.exe=windows-x64" \
+            --architecture "standard-red-notes-${APP_VERSION}-win-arm64.exe=windows-arm64"
+          ruby app/scripts/verify-desktop-updater-metadata.rb \
+            --metadata staged/linux-x64/latest-linux.yml \
+            --source-dir staged/linux-x64 \
+            --expected-version "$APP_VERSION" \
+            --allow "standard-red-notes-${APP_VERSION}-linux-x64.AppImage" \
+            --allow "standard-red-notes-${APP_VERSION}-linux-x64.deb" \
+            --allow srn-desktop-linux-x64.fingerprint \
+            --architecture "standard-red-notes-${APP_VERSION}-linux-x64.AppImage=appimage-x64" \
+            --architecture "standard-red-notes-${APP_VERSION}-linux-x64.deb=deb-x64"
+          ruby app/scripts/verify-desktop-updater-metadata.rb \
+            --metadata staged/linux-arm64/latest-linux-arm64.yml \
+            --source-dir staged/linux-arm64 \
+            --expected-version "$APP_VERSION" \
+            --allow "standard-red-notes-${APP_VERSION}-linux-arm64.AppImage" \
+            --allow "standard-red-notes-${APP_VERSION}-linux-arm64.deb" \
+            --allow srn-desktop-linux-arm64.fingerprint \
+            --architecture "standard-red-notes-${APP_VERSION}-linux-arm64.AppImage=appimage-arm64" \
+            --architecture "standard-red-notes-${APP_VERSION}-linux-arm64.deb=deb-arm64"
+
+          declare -A authority=(
+            [latest-mac.yml]=macos
+            [latest.yml]=windows
+            [latest-linux.yml]=linux-x64
+            [latest-linux-arm64.yml]=linux-arm64
+          )
+          for metadata in "${!authority[@]}"; do
+            mapfile -t producers < <(find staged -mindepth 2 -maxdepth 2 -type f -name "$metadata" -printf '%h\n')
+            test "${#producers[@]}" -eq 1
+            test "$(basename "${producers[0]}")" = "${authority[$metadata]}"
+          done
+          test "$(find staged -mindepth 2 -maxdepth 2 -type f \( -name '*.yml' -o -name '*.yaml' \) | wc -l | tr -d ' ')" -eq 4
+
+          mkdir -p payload
+          collisions="$(mktemp)"
+          while IFS= read -r -d '' source; do
+            base="$(basename "$source")"
+            destination="payload/${base}"
+            if [ -e "$destination" ]; then
+              source_sha="$(sha256sum -- "$source" | cut -d ' ' -f 1)"
+              destination_sha="$(sha256sum -- "$destination" | cut -d ' ' -f 1)"
+              printf '%s\t%s\t%s\n' "$base" "$destination_sha" "$source_sha" >> "$collisions"
+              if [ "$source_sha" != "$destination_sha" ]; then
+                echo "Conflicting desktop artifacts share basename ${base}" >&2
+                cat "$collisions" >&2
+                exit 1
+              fi
+            else
+              cp -- "$source" "$destination"
+            fi
+          done < <(find staged -mindepth 2 -maxdepth 2 -type f -print0)
+
+          asset_names="$(find payload -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort | jq -R . | jq -s .)"
+          jq -n \
+            --arg appVersion "$APP_VERSION" \
+            --arg commit "$GITHUB_SHA" \
+            --arg tag "$RELEASE_TAG" \
+            --arg version "$RELEASE_VERSION" \
+            --argjson assets "$asset_names" \
+            '{schemaVersion:1,commit:$commit,tag:$tag,version:$version,appVersion:$appVersion,
+              updaterAuthorities:{"latest-mac.yml":"macos","latest.yml":"windows","latest-linux.yml":"linux-x64","latest-linux-arm64.yml":"linux-arm64"},
+              assets:$assets}' > payload/DESKTOP-ARTIFACTS.json
+          find payload -maxdepth 1 -type f ! -name SHA256SUMS.txt -printf '%f\n' |
+            LC_ALL=C sort |
+            while IFS= read -r name; do sha256sum -- "payload/${name}"; done |
+            sed 's#  payload/#  #' > payload/SHA256SUMS.txt
+          test -s payload/SHA256SUMS.txt
+          (cd payload && sha256sum --check SHA256SUMS.txt)
+          manifest_sha="$(sha256sum payload/SHA256SUMS.txt | cut -d ' ' -f 1)"
+          echo "manifest_sha=${manifest_sha}" >> "$GITHUB_OUTPUT"
+          echo "Canonical desktop payload manifest: ${manifest_sha}" >> "$GITHUB_STEP_SUMMARY"
+          (cd payload && sha256sum --check SHA256SUMS.txt)
+
+      - name: Upload exact desktop release payload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: srn-desktop-release-payload
+          path: payload/*
+          retention-days: 30
+          if-no-files-found: error
+
+  # Publish only the reserved release. Ambiguous success is reconciled from the
+  # marker-bound published release and its exact remote SHA-256 asset digests.
+  release:
+    name: release
+    needs: [impact, identity, build, decide, fan_in]
+    if: always() && needs.identity.result == 'success' && ((needs.identity.outputs.published == 'true' && needs.build.result == 'skipped' && needs.decide.result == 'skipped' && needs.fan_in.result == 'skipped') || (needs.identity.outputs.published != 'true' && needs.build.result == 'success' && needs.decide.result == 'success' && needs.decide.outputs.changed == 'true' && needs.fan_in.result == 'success'))
+    runs-on: ubuntu-latest
+    environment: release-production
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      RELEASE_ID: ${{ needs.identity.outputs.release_id }}
+      RELEASE_TAG: ${{ needs.identity.outputs.tag }}
+      RELEASE_VERSION: ${{ needs.identity.outputs.version }}
+      APP_VERSION: ${{ needs.identity.outputs.app_version }}
+      IDENTITY_PUBLISHED: ${{ needs.identity.outputs.published }}
+      EXPECTED_MANIFEST_SHA: ${{ needs.fan_in.outputs.manifest_sha }}
+      FORCED: ${{ needs.impact.outputs.forced }}
+      IMPACT_RESULT: ${{ needs.impact.outputs.result_json }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Download exact fan-in payload
+        if: needs.identity.outputs.published != 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: srn-desktop-release-payload
+          path: payload
+
+      - name: Validate, upload, and publish exact desktop release
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_ID" =~ ^[0-9]+$ ]]
+          test "$RELEASE_TAG" = "${TOOL}-v${RELEASE_VERSION}"
+          test "$APP_VERSION" = "${RELEASE_VERSION}.0"
+          [[ "$FORCED" == true || "$FORCED" == false ]]
+          jq -e --arg sha "$GITHUB_SHA" --argjson forced "$FORCED" '
+            .headSha == $sha
+            and .forced == $forced
+            and (($forced and (.forceReason | type == "string") and ((.forceReason | gsub("^\\s+|\\s+$"; "")) | length > 0)) or (($forced | not) and .forceReason == null))
+          ' <<< "$IMPACT_RESULT" >/dev/null
+          if [ "$FORCED" = true ]; then intent="forced-${GITHUB_RUN_ID}"; else intent=automatic; fi
+          reservation_marker="<!-- srn-release-reservation tool=${TOOL} commit=${GITHUB_SHA} intent=${intent} -->"
+          expected_name="${TOOL} ${RELEASE_VERSION}"
+
+          release="$(gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}")"
+          jq -e --arg tag "$RELEASE_TAG" --arg name "$expected_name" --arg sha "$GITHUB_SHA" --arg marker "$reservation_marker" '
+            .tag_name == $tag
+            and .name == $name
+            and .target_commitish == $sha
+            and (.draft == true or .draft == false)
+            and .prerelease == false
+            and ((.body // "") | contains($marker))
+          ' <<< "$release" >/dev/null
+          draft="$(jq -r '.draft' <<< "$release")"
+          if [ "$IDENTITY_PUBLISHED" = true ]; then test "$draft" = false; fi
+
+          verify_payload() {
+            directory="$1"
+            manifest_sha="$(sha256sum "${directory}/SHA256SUMS.txt" | cut -d ' ' -f 1)"
+            [[ "$manifest_sha" =~ ^[0-9a-f]{64}$ ]]
+            (cd "$directory" && sha256sum --check SHA256SUMS.txt) >/dev/null
+            jq -e --arg appVersion "$APP_VERSION" --arg commit "$GITHUB_SHA" --arg tag "$RELEASE_TAG" --arg version "$RELEASE_VERSION" '
+              .schemaVersion == 1 and .appVersion == $appVersion and .commit == $commit and .tag == $tag and .version == $version
+              and .updaterAuthorities == {"latest-mac.yml":"macos","latest.yml":"windows","latest-linux.yml":"linux-x64","latest-linux-arm64.yml":"linux-arm64"}
+            ' "${directory}/DESKTOP-ARTIFACTS.json" >/dev/null
+            expected_assets="$(mktemp)"
+            { awk '{print $2}' "${directory}/SHA256SUMS.txt"; echo SHA256SUMS.txt; } | LC_ALL=C sort > "$expected_assets"
+            local_assets="$(mktemp)"
+            find "$directory" -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort > "$local_assets"
+            diff -u "$expected_assets" "$local_assets"
+            printf '%s' "$manifest_sha"
+          }
+
+          verify_remote_assets() {
+            directory="$1"
+            expected_assets="$2"
+            remote_json="$(mktemp)"
+            gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}/assets?per_page=100" --paginate --slurp |
+              jq 'flatten' > "$remote_json"
+            jq -e 'all(.[]; .state == "uploaded" and .size > 0 and (.digest | type == "string") and (.digest | test("^sha256:[0-9a-f]{64}$")))' "$remote_json" >/dev/null
+            remote_names="$(mktemp)"
+            jq -r '.[].name' "$remote_json" | LC_ALL=C sort > "$remote_names"
+            diff -u "$expected_assets" "$remote_names"
+            while IFS=$'\t' read -r name digest; do
+              test "$digest" = "sha256:$(sha256sum -- "${directory}/${name}" | cut -d ' ' -f 1)"
+            done < <(jq -r '.[] | [.name, .digest] | @tsv' "$remote_json")
+          }
+
+          git fetch --force --tags origin
+          if [ "$draft" = false ]; then
+            git show-ref --verify --quiet "refs/tags/${RELEASE_TAG}"
+            test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$GITHUB_SHA"
+            downloaded="$(mktemp -d)"
+            gh release download "$RELEASE_TAG" --dir "$downloaded" --repo "$GITHUB_REPOSITORY"
+            manifest_sha="$(verify_payload "$downloaded")"
+            asset_marker="<!-- srn-desktop-release-assets manifest=${manifest_sha} -->"
+            jq -e --arg marker "$asset_marker" '(.body // "") | contains($marker)' <<< "$release" >/dev/null
+            expected_assets="$(mktemp)"
+            find "$downloaded" -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort > "$expected_assets"
+            verify_remote_assets "$downloaded" "$expected_assets"
+            echo "${RELEASE_TAG} was already published; exact identity, inventory, checksums, and API digests verified." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          ! git show-ref --verify --quiet "refs/tags/${RELEASE_TAG}"
+          test -d payload
+          manifest_sha="$(verify_payload payload)"
+          test "$manifest_sha" = "$EXPECTED_MANIFEST_SHA"
+          asset_marker="<!-- srn-desktop-release-assets manifest=${manifest_sha} -->"
+          body="$(jq -r '.body // ""' <<< "$release")"
+          mapfile -t prior_asset_markers < <(grep -o '<!-- srn-desktop-release-assets manifest=[^ ]* -->' <<< "$body" || true)
+          if [ "${#prior_asset_markers[@]}" -gt 1 ]; then
+            echo "Multiple asset manifests are bound to draft ${RELEASE_TAG}" >&2
+            exit 1
+          fi
+          if [ "${#prior_asset_markers[@]}" -eq 1 ] && [ "${prior_asset_markers[0]}" != "$asset_marker" ]; then
+            echo "Draft ${RELEASE_TAG} is already bound to a different payload manifest" >&2
+            exit 1
+          fi
+          if [ "${#prior_asset_markers[@]}" -eq 0 ]; then
+            body="${body}"$'\n'"${asset_marker}"
+            release="$(gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" -f body="$body")"
+          fi
+          jq -e --arg reservation "$reservation_marker" --arg assets "$asset_marker" '
+            .draft == true and ((.body // "") | contains($reservation)) and ((.body // "") | contains($assets))
+          ' <<< "$release" >/dev/null
+
+          expected_assets="$(mktemp)"
+          find payload -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort > "$expected_assets"
+          remote_json="$(mktemp)"
+          gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}/assets?per_page=100" --paginate --slurp |
+            jq 'flatten' > "$remote_json"
+          while IFS=$'\t' read -r id name; do
+            if ! grep -Fqx -- "$name" "$expected_assets"; then
+              gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/assets/${id}"
+            fi
+          done < <(jq -r '.[] | [.id, .name] | @tsv' "$remote_json")
+          shopt -s nullglob
+          files=(payload/*)
+          test "${#files[@]}" -eq "$(wc -l < "$expected_assets")"
+          gh release upload "$RELEASE_TAG" "${files[@]}" --clobber --repo "$GITHUB_REPOSITORY"
+          verify_remote_assets payload "$expected_assets"
+
+          # Publishing is the final fallible command. A lost response is
+          # recovered by the published-release verification branch above.
+          gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
+            -F draft=false \
+            -F prerelease=false \
+            -f make_latest=true >/dev/null

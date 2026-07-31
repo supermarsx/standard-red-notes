@@ -1,15 +1,61 @@
 name: Desktop Release
 
 on:
-  push:
-    tags:
-      - '*standardnotes/*web*'
-      - '!*standardnotes/*inner-desktop*'
+  # Root srn-desktop is the canonical change-gated publisher. This nested-app
+  # workflow is deliberately manual-only for audited recovery operations.
   workflow_dispatch:
+    inputs:
+      confirm_publish:
+        description: Type-safe confirmation that this recovery run may publish
+        required: true
+        type: boolean
+        default: false
+      audit_reason:
+        description: Nonempty reason for bypassing the canonical root publisher
+        required: true
+        type: string
 
 jobs:
+  Gate:
+    runs-on: ubuntu-latest
+    environment: release-production
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Authorize exact protected recovery source
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --force origin refs/heads/main:refs/remotes/origin/main
+          protected_sha="$(git rev-parse refs/remotes/origin/main^{commit})"
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_SHA" = "$protected_sha"
+
+      - name: Validate explicit recovery authorization
+        env:
+          CONFIRM_PUBLISH: ${{ inputs.confirm_publish }}
+          AUDIT_REASON: ${{ inputs.audit_reason }}
+        run: |
+          set -euo pipefail
+          test "$CONFIRM_PUBLISH" = true
+          reason="$(printf '%s' "$AUDIT_REASON" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          test -n "$reason"
+          test "${#reason}" -le 500
+          test "$(printf '%s' "$reason" | wc -l)" -eq 0
+          echo "Authorized manual desktop recovery: ${reason}" >> "$GITHUB_STEP_SUMMARY"
+
   Build:
-    uses: standardnotes/app/.github/workflows/desktop.release.reuse.yml@main
+    needs: Gate
+    # The reusable workflow downgrades every build job to read-only and grants
+    # this caller-provided ceiling only to its final publication job.
+    permissions:
+      contents: write
+    uses: ./.github/workflows/desktop.release.reuse.yml
     secrets: inherit
     with:
       channel: prod
+      audit_reason: ${{ inputs.audit_reason }}

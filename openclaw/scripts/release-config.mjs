@@ -45,12 +45,12 @@ export const SMOKE_TARGETS = Object.freeze([
 ]);
 
 const RELEASE_TAG_PATTERN =
-  /^srn-openclaw-v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$/;
+  /^srn-openclaw-v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 
 export function versionFromReleaseTag(tag) {
   if (!RELEASE_TAG_PATTERN.test(tag)) {
     throw new Error(
-      `release tag must be ${TOOL_NAME}-v<semver> without build metadata; received ${JSON.stringify(tag)}`,
+      `release tag must be ${TOOL_NAME}-v<semver>; received ${JSON.stringify(tag)}`,
     );
   }
 

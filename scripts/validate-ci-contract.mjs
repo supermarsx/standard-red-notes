@@ -250,11 +250,18 @@ export function validateCiContract(files) {
   const rootPackage = JSON.parse(files.get("package.json") ?? "{}");
   const expectedScripts = {
     "ci:contracts":
-      "yarn test:ci-tools && node scripts/validate-ci-contract.mjs && yarn test:release-impact && yarn test:release-contract && yarn release:contract && yarn docs:check",
+      "yarn release:policy:install && yarn test:ci-tools && node scripts/validate-ci-contract.mjs && yarn test:release-impact:run && yarn test:release-contract:run && yarn release:contract:run && yarn docs:check",
     "ci:docker-hardening": "node scripts/validate-docker-hardening.mjs",
     "ci:verify-playwright": "node scripts/verify-playwright-report.mjs",
+    "release:contract:run": "node scripts/validate-release-contract.mjs",
+    "release:policy:install":
+      "npm ci --prefix scripts --ignore-scripts --no-audit --no-fund",
     "test:ci-tools":
       "node --test scripts/validate-ci-contract.test.mjs scripts/validate-docker-hardening.test.mjs scripts/verify-playwright-report.test.mjs",
+    "test:release-contract:run":
+      "node --test scripts/validate-release-contract.test.mjs",
+    "test:release-impact:run":
+      "node --test scripts/analyze-release-impact.test.mjs scripts/fingerprint-release-tree.test.mjs scripts/release-packaging-contract.test.mjs scripts/compare-release-fingerprints.test.mjs",
   };
   for (const [name, command] of Object.entries(expectedScripts)) {
     if (rootPackage.scripts?.[name] !== command) {

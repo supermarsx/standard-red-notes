@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import {
+  copyFileSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
@@ -10,7 +11,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   analyzeDefinitionImpact,
   analyzeAllWorkspacePackages,
@@ -20,10 +21,18 @@ import {
   createReleaseAnalysisContext,
   discoverReleaseTargetSurface,
   discoverStandaloneManagedPackages,
+  discoverWorkflowOwnership,
   discoverWorkspaceInventory,
   renderReleaseImpactReport,
   ReleaseImpactError,
 } from "./analyze-release-impact.mjs";
+import {
+  classifyNativeCliExecutorSemanticChange,
+  classifyReleasePackagingContractSemanticChange,
+  nativeCliExecutorIdentity,
+  NATIVE_CLI_RELEASE_PRODUCTS,
+  RELEASE_PACKAGING_CONTRACT_PRODUCTS,
+} from "./native-cli-release.mjs";
 
 const repositoryRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -34,7 +43,7 @@ const EXPECTED_REPOSITORY_WORKSPACES = `
 root	@standard-red-notes/mcp	release-managed
 root	@standard-red-notes/openclaw	release-managed
 app	@standardnotes/api	publishable-unmanaged
-app	@standardnotes/clipper	private
+app	@standardnotes/clipper	distribution-surface
 app	@standardnotes/desktop	release-managed
 app	@standardnotes/encryption	private
 app	@standardnotes/features	publishable-unmanaged
@@ -53,7 +62,7 @@ app	@standardnotes/styles	publishable-unmanaged
 app	@standardnotes/toast	private
 app	@standardnotes/ui-services	private
 app	@standardnotes/utils	publishable-unmanaged
-app	@standardnotes/web	private
+app	@standardnotes/web	distribution-surface
 server	@standard-red-notes/websocket-gateway	private
 server	@standardnotes/analytics	private
 server	@standardnotes/api-gateway	publishable-unmanaged
@@ -106,6 +115,249 @@ function manifest(name, dependencies = {}, isPrivate = false) {
   )}\n`;
 }
 
+const FIXTURE_CANONICAL_WORKFLOWS = [
+  ["srn-admin", "srn-admin"],
+  ["srn-client", "srn-client"],
+  ["srn-desktop", "srn-desktop"],
+  ["srn-home-server", "srn-home-server"],
+  ["srn-mcp", "srn-mcp"],
+  ["srn-mobile", "srn-mobile"],
+  ["srn-openclaw", "srn-openclaw"],
+  ["srn-server", "srn-server"],
+];
+
+const FIXTURE_NATIVE_EXECUTOR = `
+export const NATIVE_CLI_PRODUCT_SEMANTICS = Object.freeze({
+  "srn-admin": Object.freeze({ planSchema: 1 }),
+  "srn-client": Object.freeze({ planSchema: 1 }),
+  "srn-home-server": Object.freeze({ planSchema: 1, supplementalArtifactPlanSchema: 1 }),
+  "srn-mcp": Object.freeze({ planSchema: 1 }),
+  "srn-server": Object.freeze({ planSchema: 1 }),
+});
+
+const NATIVE_CLI_PRODUCT_AST_BINDINGS = Object.freeze({
+  "srn-home-server": Object.freeze(["appendHomeServerSupplementalInvocations"]),
+});
+
+function appendHomeServerSupplementalInvocations(invocations) {
+  invocations.push("home-v1");
+}
+
+const NATIVE_CLI_PRODUCT_PLAN_APPENDERS = Object.freeze({
+  "srn-home-server": appendHomeServerSupplementalInvocations,
+});
+
+export function sharedPlan(value) {
+  return value + 1;
+}
+`.trimStart();
+
+const REFORMATTED_FIXTURE_NATIVE_EXECUTOR = `
+// Trivia and layout must not create five product releases.
+export const NATIVE_CLI_PRODUCT_SEMANTICS = Object.freeze(
+  {
+    'srn-admin': Object.freeze({ planSchema: 1 }),
+    'srn-client': Object.freeze({ planSchema: 1 }),
+    'srn-home-server': Object.freeze({
+      planSchema: 1,
+      supplementalArtifactPlanSchema: 1,
+    }),
+    'srn-mcp': Object.freeze({ planSchema: 1 }),
+    'srn-server': Object.freeze({ planSchema: 1 }),
+  },
+)
+
+const NATIVE_CLI_PRODUCT_AST_BINDINGS = Object.freeze({
+  'srn-home-server': Object.freeze([
+    'appendHomeServerSupplementalInvocations',
+  ]),
+})
+
+function appendHomeServerSupplementalInvocations(invocations) {
+  // Home-server packaging comment.
+  invocations.push('home-v1')
+}
+
+const NATIVE_CLI_PRODUCT_PLAN_APPENDERS = Object.freeze({
+  'srn-home-server': appendHomeServerSupplementalInvocations,
+})
+
+export function sharedPlan(value) { return value + 1 }
+`.trimStart();
+
+const FIXTURE_RELEASE_PACKAGING_CONTRACT = `
+export const RELEASE_PACKAGING_CONTRACTS = Object.freeze({
+  "native-cli": Object.freeze({
+    schemaVersion: 1,
+    embeddedRuntime: "node24",
+    products: Object.freeze({
+      "srn-home-server": Object.freeze({ supplementalArtifact: "home-v1" }),
+    }),
+  }),
+  desktop: Object.freeze({ schemaVersion: 1, builder: "desktop-v1" }),
+  mobile: Object.freeze({ schemaVersion: 1, builder: "mobile-v1" }),
+  openclaw: Object.freeze({ schemaVersion: 1, builder: "openclaw-v1" }),
+});
+
+export function fingerprintContract(value) {
+  return value + 1;
+}
+`.trimStart();
+
+const REFORMATTED_FIXTURE_RELEASE_PACKAGING_CONTRACT = `
+// Contract layout is not release impact.
+export const RELEASE_PACKAGING_CONTRACTS = Object.freeze(
+  {
+    'native-cli': Object.freeze({
+      schemaVersion: 1,
+      embeddedRuntime: 'node24',
+      products: Object.freeze({
+        'srn-home-server': Object.freeze({
+          supplementalArtifact: 'home-v1',
+        }),
+      }),
+    }),
+    desktop: Object.freeze({ schemaVersion: 1, builder: 'desktop-v1' }),
+    mobile: Object.freeze({ schemaVersion: 1, builder: 'mobile-v1' }),
+    openclaw: Object.freeze({ schemaVersion: 1, builder: 'openclaw-v1' }),
+  },
+)
+
+export function fingerprintContract(value) { return value + 1 }
+`.trimStart();
+
+const FIXTURE_QUARANTINED_WORKFLOWS = [
+  "clipper.release.prod.yml",
+  "git-sync.yml",
+  "ios.testflight.yml",
+  "publish.yml",
+  "releases.notify.yml",
+  "web.release.prod.yml",
+];
+
+const FIXTURE_SERVER_QUARANTINED_WORKFLOWS = [
+  "analytics.yml",
+  "api-gateway.yml",
+  "auth.yml",
+  "common-deploy.yml",
+  "common-docker-image.yml",
+  "common-self-hosting.yml",
+  "common-server-application.yml",
+  "files.yml",
+  "publish.yml",
+  "revisions.yml",
+  "scheduler.yml",
+  "syncing-server.yml",
+  "websockets.yml",
+];
+
+function writeRepositoryWorkflowInventory(repo) {
+  for (const [filename, target] of FIXTURE_CANONICAL_WORKFLOWS) {
+    write(
+      repo,
+      `.github/workflows/${filename}.yml`,
+      `name: ${filename}\non:\n  push:\n    branches: [main]\n    paths:\n      - '${filename}/**'\n  workflow_dispatch:\njobs:\n  impact:\n    runs-on: ubuntu-latest\n    steps:\n      - run: node scripts/analyze-release-impact.mjs --target ${target}\n  release:\n    runs-on: ubuntu-latest\n    steps:\n      - run: gh release create fixture\n`,
+    );
+  }
+  write(
+    repo,
+    ".github/workflows/ci.yml",
+    "name: ci\non:\n  push:\n    branches: [main]\n  pull_request:\n  schedule:\n    - cron: '0 0 * * *'\n  workflow_dispatch:\njobs:\n  check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo check\n",
+  );
+  write(
+    repo,
+    ".github/workflows/release-contract.yml",
+    "name: release contract\non:\n  push:\n    branches: [main]\n    paths:\n      - '.github/workflows/**'\n  pull_request:\n  workflow_dispatch:\njobs:\n  check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo check\n",
+  );
+  for (const filename of [
+    "desktop.release.prod.yml",
+    "mobile.release.prod.yml",
+  ]) {
+    write(
+      repo,
+      `app/.github/workflows/${filename}`,
+      `name: ${filename}\non:\n  workflow_dispatch:\njobs:\n  release:\n    runs-on: ubuntu-latest\n    steps:\n      - run: gh release create fixture\n`,
+    );
+  }
+  write(
+    repo,
+    "app/.github/workflows/desktop.release.reuse.yml",
+    "name: desktop reuse\non:\n  workflow_call:\njobs:\n  release:\n    runs-on: ubuntu-latest\n    steps:\n      - run: gh release create fixture\n",
+  );
+  write(
+    repo,
+    "app/.github/workflows/codeql-analysis.yml",
+    "name: codeql\non:\n  push:\n  pull_request:\n  schedule:\n    - cron: '0 0 * * *'\njobs:\n  check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo check\n",
+  );
+  write(
+    repo,
+    "app/.github/workflows/pr.yml",
+    "name: app pr\non:\n  pull_request:\njobs:\n  check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo check\n",
+  );
+  for (const filename of FIXTURE_QUARANTINED_WORKFLOWS) {
+    const triggers = ["clipper.release.prod.yml", "git-sync.yml"].includes(
+      filename,
+    )
+      ? "  push:\n  workflow_dispatch:\n"
+      : ["ios.testflight.yml", "releases.notify.yml"].includes(filename)
+        ? "  workflow_dispatch:\n"
+        : "  push:\n";
+    write(
+      repo,
+      `app/.github/upstream-workflows-disabled/${filename}`,
+      `name: quarantined ${filename}\non:\n${triggers}jobs:\n  mutate:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo disabled\n`,
+    );
+  }
+  write(
+    repo,
+    ".github/workflows/docs-pages.yml",
+    "name: docs pages\non:\n  push:\n    branches: [main]\n  pull_request:\n    branches: [main]\n  workflow_dispatch:\njobs:\n  deploy:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/deploy-pages@fixture\n",
+  );
+  write(
+    repo,
+    "app/.github/workflows/snjs.pr.yml",
+    "name: snjs pr\non:\n  pull_request:\n  workflow_dispatch:\njobs:\n  publish-test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: docker push standardnotes/snjs:test\n",
+  );
+  write(
+    repo,
+    "app/.github/workflows/snjs.upgrade.event.yml",
+    "name: snjs upgrade\non:\n  workflow_dispatch:\n  repository_dispatch:\njobs:\n  update:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: peter-evans/create-pull-request@fixture\n",
+  );
+  for (const filename of [
+    "common-e2e.yml",
+    "e2e-home-server.yml",
+    "e2e-self-hosted.yml",
+  ]) {
+    write(
+      repo,
+      `server/.github/workflows/${filename}`,
+      `name: ${filename}\non:\n  workflow_call:\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo test\n`,
+    );
+  }
+  write(
+    repo,
+    "server/.github/workflows/e2e-test-suite.yml",
+    "name: e2e suite\non:\n  schedule:\n    - cron: '0 0 * * *'\n  workflow_dispatch:\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo test\n",
+  );
+  write(
+    repo,
+    "server/.github/workflows/pr.yml",
+    "name: server pr\non:\n  pull_request:\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo test\n",
+  );
+  for (const filename of FIXTURE_SERVER_QUARANTINED_WORKFLOWS) {
+    const triggers = filename.startsWith("common-")
+      ? "  workflow_call:\n"
+      : filename === "publish.yml"
+        ? "  push:\n"
+        : "  push:\n  workflow_dispatch:\n";
+    write(
+      repo,
+      `server/.github/upstream-workflows-disabled/${filename}`,
+      `name: quarantined server ${filename}\non:\n${triggers}jobs:\n  mutate:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo disabled\n`,
+    );
+  }
+}
+
 function repositoryFixture() {
   const repo = mkdtempSync(path.join(os.tmpdir(), "srn-release-repository-"));
   git(repo, "init", "--initial-branch=main");
@@ -153,8 +405,10 @@ function repositoryFixture() {
     [
       "app",
       [
+        ["clipper", "@standardnotes/clipper", true],
         ["desktop", "@standardnotes/desktop", true],
         ["mobile", "@standardnotes/mobile", true],
+        ["web", "@standardnotes/web", true],
       ],
     ],
     [
@@ -210,6 +464,28 @@ function repositoryFixture() {
     manifest("@standard-red-notes/srn-server", {}, true),
   );
   write(repo, "cli/srn-server/index.js", "export {};\n");
+  write(repo, "scripts/native-cli-release.mjs", FIXTURE_NATIVE_EXECUTOR);
+  write(
+    repo,
+    "scripts/release-packaging-contract.mjs",
+    FIXTURE_RELEASE_PACKAGING_CONTRACT,
+  );
+  write(
+    repo,
+    "scripts/package.json",
+    '{"private":true,"dependencies":{"@babel/parser":"7.29.7"}}\n',
+  );
+  write(
+    repo,
+    "scripts/package-lock.json",
+    '{"lockfileVersion":3,"packages":{}}\n',
+  );
+  write(
+    repo,
+    "app/scripts/verify-desktop-updater-metadata.rb",
+    "abort 'invalid' unless ARGV.length == 2\n",
+  );
+  writeRepositoryWorkflowInventory(repo);
   commit(repo, "repository fixture");
   return {
     repo,
@@ -265,6 +541,40 @@ function tagAll(repo) {
   git(repo, "tag", "@fixture/a@1.0.0");
   git(repo, "tag", "@fixture/b@1.0.0");
   git(repo, "tag", "@fixture/c@1.0.0");
+}
+
+function tagNativeProducts(repo) {
+  for (const target of NATIVE_CLI_RELEASE_PRODUCTS) {
+    git(repo, "tag", `${target}-v26.1`);
+  }
+}
+
+function analyzeNativeProducts(repo) {
+  return Object.fromEntries(
+    NATIVE_CLI_RELEASE_PRODUCTS.map((target) => [
+      target,
+      analyzeProductImpact({ repo, target }),
+    ]),
+  );
+}
+
+function tagReleasePackagingProducts(repo) {
+  for (const target of RELEASE_PACKAGING_CONTRACT_PRODUCTS) {
+    const tag =
+      target === "srn-mobile"
+        ? "@standardnotes/mobile@1.0.0"
+        : `${target}-v26.1`;
+    git(repo, "tag", tag);
+  }
+}
+
+function analyzeReleasePackagingProducts(repo) {
+  return Object.fromEntries(
+    RELEASE_PACKAGING_CONTRACT_PRODUCTS.map((target) => [
+      target,
+      analyzeProductImpact({ repo, target }),
+    ]),
+  );
 }
 
 test("docs-only and unrelated workspace changes do not release a package", () => {
@@ -946,6 +1256,404 @@ test("a migration-only dependency change selects the home-server product", () =>
   }
 });
 
+test("native executor trivia and formatting release no native product", () => {
+  const context = repositoryFixture();
+  try {
+    tagNativeProducts(context.repo);
+    write(
+      context.repo,
+      "scripts/native-cli-release.mjs",
+      REFORMATTED_FIXTURE_NATIVE_EXECUTOR,
+    );
+    commit(context.repo, "format native executor");
+
+    for (const result of Object.values(analyzeNativeProducts(context.repo))) {
+      assert.equal(result.changed, false);
+      assert.deepEqual(result.matchedFiles, []);
+      assert.ok(result.ignoredFiles.includes("scripts/native-cli-release.mjs"));
+    }
+  } finally {
+    context.cleanup();
+  }
+});
+
+test("native executor identities are semantic and product-scoped", () => {
+  const clientChange = FIXTURE_NATIVE_EXECUTOR.replace(
+    '"srn-client": Object.freeze({ planSchema: 1 })',
+    '"srn-client": Object.freeze({ planSchema: 2 })',
+  );
+  const homeChange = FIXTURE_NATIVE_EXECUTOR.replace('"home-v1"', '"home-v2"');
+  for (const product of NATIVE_CLI_RELEASE_PRODUCTS) {
+    const base = nativeCliExecutorIdentity(FIXTURE_NATIVE_EXECUTOR, product);
+    const reformatted = nativeCliExecutorIdentity(
+      REFORMATTED_FIXTURE_NATIVE_EXECUTOR,
+      product,
+    );
+    const client = nativeCliExecutorIdentity(clientChange, product);
+    const home = nativeCliExecutorIdentity(homeChange, product);
+    assert.equal(reformatted.sha256, base.sha256);
+    assert.equal(client.sha256 === base.sha256, product !== "srn-client");
+    assert.equal(home.sha256 === base.sha256, product !== "srn-home-server");
+    assert.deepEqual(base.normalizer, {
+      encoding: "canonical-json",
+      name: "srn-babel-semantic-ast",
+      version: "1",
+    });
+  }
+});
+
+test("a missing native semantic parser fails closed explicitly", (t) => {
+  const isolated = mkdtempSync(
+    path.join(os.tmpdir(), "srn-native-semantic-parser-"),
+  );
+  t.after(() => rmSync(isolated, { recursive: true, force: true }));
+  for (const file of [
+    "fingerprint-release-tree.mjs",
+    "native-cli-release.mjs",
+    "release-packaging-contract.mjs",
+  ]) {
+    copyFileSync(
+      path.join(repositoryRoot, "scripts", file),
+      path.join(isolated, file),
+    );
+  }
+  const entry = pathToFileURL(
+    path.join(isolated, "native-cli-release.mjs"),
+  ).href;
+  const result = spawnSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "--eval",
+      `const module = await import(${JSON.stringify(entry)});
+       const source = module.nativeCliExecutorImplementationSource();
+       const result = module.classifyNativeCliExecutorSemanticChange({ beforeSource: source, afterSource: source + "\\n// trivia\\n" });
+       let identityError;
+       try { module.nativeCliExecutorIdentity(source, "srn-client"); } catch (error) { identityError = error; }
+       if (result.classification !== "ambiguous" || !result.error?.includes("semantic JavaScript parser is unavailable") || !identityError?.message.includes("npm ci --prefix scripts")) process.exit(9);`,
+    ],
+    {
+      cwd: isolated,
+      encoding: "utf8",
+      env: { ...process.env, NODE_PATH: "" },
+    },
+  );
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test("shared native executor behavior releases every native product", () => {
+  const context = repositoryFixture();
+  try {
+    tagNativeProducts(context.repo);
+    write(
+      context.repo,
+      "scripts/native-cli-release.mjs",
+      FIXTURE_NATIVE_EXECUTOR.replace("return value + 1", "return value + 2"),
+    );
+    commit(context.repo, "change shared native behavior");
+
+    for (const result of Object.values(analyzeNativeProducts(context.repo))) {
+      assert.equal(result.changed, true);
+      assert.deepEqual(result.matchedFiles, ["scripts/native-cli-release.mjs"]);
+      assert.ok(
+        result.reasons.some(
+          ({ code, products }) =>
+            code === "native-executor-shared-semantic-change" &&
+            products.length === NATIVE_CLI_RELEASE_PRODUCTS.length,
+        ),
+      );
+    }
+  } finally {
+    context.cleanup();
+  }
+});
+
+test("product-local native semantics release only that product", () => {
+  const context = repositoryFixture();
+  try {
+    tagNativeProducts(context.repo);
+    write(
+      context.repo,
+      "scripts/native-cli-release.mjs",
+      FIXTURE_NATIVE_EXECUTOR.replace(
+        '"srn-client": Object.freeze({ planSchema: 1 })',
+        '"srn-client": Object.freeze({ planSchema: 2 })',
+      ),
+    );
+    commit(context.repo, "change client native semantics");
+
+    const decisions = analyzeNativeProducts(context.repo);
+    for (const [target, result] of Object.entries(decisions)) {
+      assert.equal(result.changed, target === "srn-client");
+    }
+    assert.ok(
+      decisions["srn-client"].reasons.some(
+        ({ code, products }) =>
+          code === "native-executor-product-semantic-change" &&
+          products.join(",") === "srn-client",
+      ),
+    );
+  } finally {
+    context.cleanup();
+  }
+});
+
+test("home-server supplemental behavior releases only home-server", () => {
+  const context = repositoryFixture();
+  try {
+    tagNativeProducts(context.repo);
+    write(
+      context.repo,
+      "scripts/native-cli-release.mjs",
+      FIXTURE_NATIVE_EXECUTOR.replace('"home-v1"', '"home-v2"'),
+    );
+    commit(context.repo, "change home-server supplemental packaging");
+
+    const decisions = analyzeNativeProducts(context.repo);
+    for (const [target, result] of Object.entries(decisions)) {
+      assert.equal(result.changed, target === "srn-home-server");
+    }
+  } finally {
+    context.cleanup();
+  }
+});
+
+test("ambiguous native executor edits fail closed for every native product", () => {
+  const context = repositoryFixture();
+  try {
+    tagNativeProducts(context.repo);
+    write(
+      context.repo,
+      "scripts/native-cli-release.mjs",
+      "export const malformed = ;\n",
+    );
+    commit(context.repo, "make native semantics ambiguous");
+
+    for (const target of NATIVE_CLI_RELEASE_PRODUCTS) {
+      assert.throws(
+        () => analyzeProductImpact({ repo: context.repo, target }),
+        (error) =>
+          error instanceof ReleaseImpactError &&
+          error.code === "ambiguous-native-executor-semantics",
+      );
+    }
+  } finally {
+    context.cleanup();
+  }
+});
+
+test("release packaging contracts classify semantic scopes exactly", () => {
+  const cases = [
+    {
+      affectedProducts: [],
+      source: REFORMATTED_FIXTURE_RELEASE_PACKAGING_CONTRACT,
+    },
+    {
+      affectedProducts: [...RELEASE_PACKAGING_CONTRACT_PRODUCTS],
+      source: FIXTURE_RELEASE_PACKAGING_CONTRACT.replace(
+        "return value + 1",
+        "return value + 2",
+      ),
+    },
+    {
+      affectedProducts: [...NATIVE_CLI_RELEASE_PRODUCTS],
+      source: FIXTURE_RELEASE_PACKAGING_CONTRACT.replace(
+        'embeddedRuntime: "node24"',
+        'embeddedRuntime: "node25"',
+      ),
+    },
+    {
+      affectedProducts: ["srn-desktop"],
+      source: FIXTURE_RELEASE_PACKAGING_CONTRACT.replace(
+        'builder: "desktop-v1"',
+        'builder: "desktop-v2"',
+      ),
+    },
+    {
+      affectedProducts: ["srn-home-server"],
+      source: FIXTURE_RELEASE_PACKAGING_CONTRACT.replace(
+        'supplementalArtifact: "home-v1"',
+        'supplementalArtifact: "home-v2"',
+      ),
+    },
+  ];
+  for (const { affectedProducts, source } of cases) {
+    assert.deepEqual(
+      classifyReleasePackagingContractSemanticChange({
+        beforeSource: FIXTURE_RELEASE_PACKAGING_CONTRACT,
+        afterSource: source,
+      }).affectedProducts,
+      affectedProducts,
+    );
+  }
+});
+
+test("legacy semantic baselines migrate with conservative full fanout", () => {
+  const native = classifyNativeCliExecutorSemanticChange({
+    beforeSource: "export const legacyNativeExecutor = true;\n",
+    afterSource: FIXTURE_NATIVE_EXECUTOR,
+  });
+  assert.equal(native.classification, "shared");
+  assert.equal(native.migration, true);
+  assert.deepEqual(native.affectedProducts, NATIVE_CLI_RELEASE_PRODUCTS);
+
+  const packaging = classifyReleasePackagingContractSemanticChange({
+    beforeSource: "export const legacyPackaging = true;\n",
+    afterSource: FIXTURE_RELEASE_PACKAGING_CONTRACT,
+  });
+  assert.equal(packaging.classification, "shared");
+  assert.equal(packaging.migration, true);
+  assert.deepEqual(
+    packaging.affectedProducts,
+    RELEASE_PACKAGING_CONTRACT_PRODUCTS,
+  );
+});
+
+test("home-server packaging contract changes release only home-server", () => {
+  const context = repositoryFixture();
+  try {
+    tagReleasePackagingProducts(context.repo);
+    write(
+      context.repo,
+      "scripts/release-packaging-contract.mjs",
+      FIXTURE_RELEASE_PACKAGING_CONTRACT.replace(
+        'supplementalArtifact: "home-v1"',
+        'supplementalArtifact: "home-v2"',
+      ),
+    );
+    commit(context.repo, "change home-server packaging contract");
+
+    const decisions = analyzeReleasePackagingProducts(context.repo);
+    for (const [target, result] of Object.entries(decisions)) {
+      assert.equal(result.changed, target === "srn-home-server");
+    }
+    assert.ok(
+      decisions["srn-home-server"].reasons.some(
+        ({ code, products }) =>
+          code === "release-packaging-contract-product-semantic-change" &&
+          products.join(",") === "srn-home-server",
+      ),
+    );
+  } finally {
+    context.cleanup();
+  }
+});
+
+test("release packaging contract trivia releases no managed product", () => {
+  const context = repositoryFixture();
+  try {
+    tagReleasePackagingProducts(context.repo);
+    write(
+      context.repo,
+      "scripts/release-packaging-contract.mjs",
+      REFORMATTED_FIXTURE_RELEASE_PACKAGING_CONTRACT,
+    );
+    commit(context.repo, "format release packaging contract");
+
+    for (const result of Object.values(
+      analyzeReleasePackagingProducts(context.repo),
+    )) {
+      assert.equal(result.changed, false);
+      assert.ok(
+        result.ignoredFiles.includes("scripts/release-packaging-contract.mjs"),
+      );
+    }
+  } finally {
+    context.cleanup();
+  }
+});
+
+test("ambiguous release packaging contracts fail closed for every product", () => {
+  const context = repositoryFixture();
+  try {
+    tagReleasePackagingProducts(context.repo);
+    write(
+      context.repo,
+      "scripts/release-packaging-contract.mjs",
+      "export const RELEASE_PACKAGING_CONTRACTS = ;\n",
+    );
+    commit(context.repo, "make release packaging contract ambiguous");
+
+    for (const target of RELEASE_PACKAGING_CONTRACT_PRODUCTS) {
+      assert.throws(
+        () => analyzeProductImpact({ repo: context.repo, target }),
+        (error) =>
+          error instanceof ReleaseImpactError &&
+          error.code === "ambiguous-release-packaging-contract-semantics",
+      );
+    }
+  } finally {
+    context.cleanup();
+  }
+});
+
+test("desktop updater metadata verification releases only desktop", () => {
+  const context = repositoryFixture();
+  try {
+    tagReleasePackagingProducts(context.repo);
+    write(
+      context.repo,
+      "app/scripts/verify-desktop-updater-metadata.rb",
+      "abort 'invalid' unless ARGV.length == 3\n",
+    );
+    commit(context.repo, "harden desktop updater verification");
+
+    const decisions = analyzeReleasePackagingProducts(context.repo);
+    for (const [target, result] of Object.entries(decisions)) {
+      assert.equal(result.changed, target === "srn-desktop");
+    }
+    assert.ok(
+      decisions["srn-desktop"].reasons.some(
+        ({ code, paths }) =>
+          code === "release-build-config-change" &&
+          paths.join(",") === "app/scripts/verify-desktop-updater-metadata.rb",
+      ),
+    );
+
+    const surface = discoverReleaseTargetSurface({
+      repo: context.repo,
+      target: "srn-desktop",
+    });
+    assert.ok(
+      surface.configPaths.includes(
+        "app/scripts/verify-desktop-updater-metadata.rb",
+      ),
+    );
+  } finally {
+    context.cleanup();
+  }
+});
+
+test("semantic parser dependency changes release every managed product", () => {
+  const context = repositoryFixture();
+  try {
+    tagReleasePackagingProducts(context.repo);
+    write(
+      context.repo,
+      "scripts/package-lock.json",
+      '{"lockfileVersion":3,"packages":{"node_modules/@babel/parser":{"version":"7.29.7"}}}\n',
+    );
+    commit(context.repo, "update semantic parser dependency lock");
+
+    for (const result of Object.values(
+      analyzeReleasePackagingProducts(context.repo),
+    )) {
+      assert.equal(result.changed, true);
+      assert.ok(
+        result.reasons.some(
+          ({ code, paths }) =>
+            code === "release-build-config-change" &&
+            paths.join(",") === "scripts/package-lock.json",
+        ),
+      );
+      assert.ok(result.configPaths.includes("scripts/package.json"));
+      assert.ok(result.configPaths.includes("scripts/package-lock.json"));
+    }
+  } finally {
+    context.cleanup();
+  }
+});
+
 test("forced releases require and preserve an auditable reason", () => {
   const context = fixture();
   try {
@@ -1075,15 +1783,18 @@ test("repository mode inventories every workspace without inventing publishers",
     assert.equal(result.standaloneManagedPackages.length, 2);
     assert.deepEqual(result.inventoryCounts, {
       managedProducts: 8,
-      yarnWorkspaces: 8,
+      yarnWorkspaces: 10,
       standaloneManagedPackages: 2,
+      workflowOwners: 42,
+      distributionSurfaces: 2,
     });
     assert.deepEqual(result.categoryCounts, {
       "release-managed": 6,
+      "distribution-surface": 2,
       "publishable-unmanaged": 1,
       private: 1,
     });
-    assert.equal(result.workspaces.length, 8);
+    assert.equal(result.workspaces.length, 10);
     assert.equal(
       result.workspaces.find(
         ({ identity }) => identity === "@standardnotes/upstream",
@@ -1114,11 +1825,99 @@ test("repository mode inventories every workspace without inventing publishers",
       ).category,
       "release-managed",
     );
+    for (const identity of ["@standardnotes/clipper", "@standardnotes/web"]) {
+      const surface = result.workspaces.find(
+        (entry) => entry.identity === identity,
+      );
+      assert.equal(surface.category, "distribution-surface");
+      assert.equal(surface.analysisStatus, "distribution-surface");
+      assert.equal(
+        surface.publicationPolicy,
+        "upstream-distribution-publisher-quarantined",
+      );
+      assert.equal(
+        surface.packagePublicationPolicy,
+        "not-applicable-distribution-surface",
+      );
+      assert.notEqual(surface.publicationPolicy, "disabled-private");
+    }
+    assert.deepEqual(result.workflowOwnership.classificationCounts, {
+      "canonical-change-gated": 8,
+      "noncanonical-manual-recovery": 2,
+      "canonical-support": 1,
+      "quarantined-upstream-mutation": 19,
+      "noncanonical-external-mutation": 3,
+      "root-nonmutating-support": 2,
+      "embedded-nonmutating-support": 7,
+    });
+    assert.deepEqual(result.workflowOwnership.scopeCounts, {
+      rootDiscoverable: 11,
+      embeddedPortable: 12,
+      quarantined: 19,
+    });
+    assert.deepEqual(result.workflowOwnership.quarantineCounts, {
+      app: 6,
+      server: 13,
+      total: 19,
+    });
+    assert.deepEqual(result.workflowOwnership.embeddedSupportCounts, {
+      app: 2,
+      server: 5,
+      total: 7,
+    });
+    const workflowsByPath = new Map(
+      result.workflowOwnership.workflows.map((entry) => [entry.path, entry]),
+    );
+    const rootDesktop = workflowsByPath.get(
+      ".github/workflows/srn-desktop.yml",
+    );
+    assert.equal(rootDesktop.rootDiscoverable, true);
+    assert.equal(rootDesktop.embeddedPortable, false);
+    assert.equal(rootDesktop.status, "root-active");
+    assert.deepEqual(rootDesktop.rootTriggers, ["push", "workflow_dispatch"]);
+    assert.deepEqual(rootDesktop.targets, [
+      "GitHub Releases: desktop installers",
+    ]);
+    const embeddedDesktop = workflowsByPath.get(
+      "app/.github/workflows/desktop.release.prod.yml",
+    );
+    assert.equal(embeddedDesktop.rootDiscoverable, false);
+    assert.equal(embeddedDesktop.embeddedPortable, true);
+    assert.equal(embeddedDesktop.status, "non-root-active");
+    assert.deepEqual(embeddedDesktop.portableTriggers, ["workflow_dispatch"]);
+    assert.ok(embeddedDesktop.targets.includes("Snap Store"));
+    assert.deepEqual(
+      workflowsByPath.get(".github/workflows/docs-pages.yml").rootTriggers,
+      ["pull_request", "push", "workflow_dispatch"],
+    );
+    assert.equal(
+      result.workflowOwnership.workflows.filter(
+        (entry) =>
+          entry.classification === "embedded-nonmutating-support" &&
+          entry.path.startsWith("server/"),
+      ).length,
+      5,
+    );
+    assert.equal(result.distributionSurfaces.length, 2);
+    assert.equal(
+      result.workflowOwnership.workflows.find(({ path: workflowPath }) =>
+        workflowPath.endsWith("releases.notify.yml"),
+      ).targetKind,
+      "non-package-external-mutation",
+    );
+    assert.equal(
+      result.workflowOwnership.workflows.find(({ path: workflowPath }) =>
+        workflowPath.endsWith("git-sync.yml"),
+      ).targetKind,
+      "non-package-external-mutation",
+    );
     assert.ok(analysisContext.workspaces.size >= 3);
 
     const report = renderReleaseImpactReport(result);
     for (const required of [
       "## Managed release products",
+      "## Workflow and distribution ownership",
+      "### Shipped workspace distribution surfaces",
       "## Standalone managed packages",
       "## Yarn workspace inventory",
       "@standardnotes/upstream",
@@ -1126,6 +1925,12 @@ test("repository mode inventories every workspace without inventing publishers",
       "does not assert that this repository publishes",
       "inventory-only",
       "not evaluated",
+      "upstream-distribution-publisher-quarantined",
+      "non-package-external-mutation",
+      "rootDiscoverable",
+      "embeddedPortable",
+      "non-root-active",
+      "server=13",
     ]) {
       assert.match(report, new RegExp(required.replaceAll("*", "\\*")));
     }
@@ -1146,6 +1951,262 @@ test("repository mode inventories every workspace without inventing publishers",
     });
     assert.match(blockedReport, /blocked-release-history/);
     assert.match(blockedReport, /divergent-release/);
+  } finally {
+    context.cleanup();
+  }
+});
+
+test("workflow ownership fails closed when a quarantined publisher is reactivated", () => {
+  const context = repositoryFixture();
+  try {
+    const filename = "clipper.release.prod.yml";
+    write(
+      context.repo,
+      `app/.github/workflows/${filename}`,
+      readFileSync(
+        path.join(
+          context.repo,
+          "app/.github/upstream-workflows-disabled",
+          filename,
+        ),
+        "utf8",
+      ),
+    );
+    commit(context.repo, "reactivate quarantined workflow");
+
+    assert.throws(
+      () => discoverWorkflowOwnership({ repo: context.repo }),
+      (error) =>
+        error instanceof ReleaseImpactError &&
+        error.code === "quarantined-workflow-reactivated",
+    );
+  } finally {
+    context.cleanup();
+  }
+});
+
+test("workflow ownership fails closed when the exact quarantine inventory is incomplete", () => {
+  const context = repositoryFixture();
+  try {
+    rmSync(
+      path.join(
+        context.repo,
+        "app/.github/upstream-workflows-disabled/releases.notify.yml",
+      ),
+    );
+    commit(context.repo, "remove quarantined workflow");
+
+    assert.throws(
+      () => discoverWorkflowOwnership({ repo: context.repo }),
+      (error) =>
+        error instanceof ReleaseImpactError &&
+        error.code === "missing-quarantined-workflow",
+    );
+  } finally {
+    context.cleanup();
+  }
+});
+
+test("server workflow ownership fails closed when a quarantined publisher is reactivated", () => {
+  const context = repositoryFixture();
+  try {
+    const filename = "analytics.yml";
+    write(
+      context.repo,
+      `server/.github/workflows/${filename}`,
+      readFileSync(
+        path.join(
+          context.repo,
+          "server/.github/upstream-workflows-disabled",
+          filename,
+        ),
+        "utf8",
+      ),
+    );
+    commit(context.repo, "reactivate server publisher");
+
+    assert.throws(
+      () => discoverWorkflowOwnership({ repo: context.repo }),
+      (error) =>
+        error instanceof ReleaseImpactError &&
+        error.code === "quarantined-workflow-reactivated",
+    );
+  } finally {
+    context.cleanup();
+  }
+});
+
+test("server workflow ownership requires all 13 quarantined mutations", () => {
+  const context = repositoryFixture();
+  try {
+    rmSync(
+      path.join(
+        context.repo,
+        "server/.github/upstream-workflows-disabled/common-deploy.yml",
+      ),
+    );
+    commit(context.repo, "remove server quarantine entry");
+
+    assert.throws(
+      () => discoverWorkflowOwnership({ repo: context.repo }),
+      (error) =>
+        error instanceof ReleaseImpactError &&
+        error.code === "missing-quarantined-workflow",
+    );
+  } finally {
+    context.cleanup();
+  }
+});
+
+test("server workflow ownership rejects unknown embedded mutations", () => {
+  const context = repositoryFixture();
+  try {
+    write(
+      context.repo,
+      "server/.github/workflows/automation.yml",
+      "name: server automation\non:\n  workflow_dispatch:\njobs:\n  mutate:\n    runs-on: ubuntu-latest\n    steps:\n      - run: docker push standardnotes/unknown:latest\n",
+    );
+    commit(context.repo, "add unknown server mutation");
+
+    assert.throws(
+      () => discoverWorkflowOwnership({ repo: context.repo }),
+      (error) =>
+        error instanceof ReleaseImpactError &&
+        error.code === "unclassified-external-mutation-workflow",
+    );
+  } finally {
+    context.cleanup();
+  }
+});
+
+test("server workflow ownership rejects moving embedded support across its boundary", () => {
+  const context = repositoryFixture();
+  try {
+    const filename = "common-e2e.yml";
+    const activePath = path.join(
+      context.repo,
+      "server/.github/workflows",
+      filename,
+    );
+    write(
+      context.repo,
+      `server/.github/upstream-workflows-disabled/${filename}`,
+      readFileSync(activePath, "utf8"),
+    );
+    rmSync(activePath);
+    commit(context.repo, "move server support workflow");
+
+    assert.throws(
+      () => discoverWorkflowOwnership({ repo: context.repo }),
+      (error) =>
+        error instanceof ReleaseImpactError &&
+        error.code === "release-workflow-misplaced",
+    );
+  } finally {
+    context.cleanup();
+  }
+});
+
+test("every activation class enforces its exact trigger contract", () => {
+  const context = repositoryFixture();
+  try {
+    write(
+      context.repo,
+      ".github/workflows/docs-pages.yml",
+      "name: docs pages\non:\n  push:\n    branches: [main]\n  workflow_dispatch:\njobs:\n  deploy:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/deploy-pages@fixture\n",
+    );
+    commit(context.repo, "drop docs pull request trigger");
+
+    assert.throws(
+      () => discoverWorkflowOwnership({ repo: context.repo }),
+      (error) =>
+        error instanceof ReleaseImpactError &&
+        error.code === "workflow-activation-mismatch",
+    );
+  } finally {
+    context.cleanup();
+  }
+});
+
+test("workflow ownership rejects an unclassified production workflow", () => {
+  const context = repositoryFixture();
+  try {
+    write(
+      context.repo,
+      ".github/workflows/mystery.release.prod.yml",
+      "name: mystery publisher\non:\n  workflow_dispatch:\njobs:\n  release:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo publish\n",
+    );
+    commit(context.repo, "add unknown production workflow");
+
+    assert.throws(
+      () => discoverWorkflowOwnership({ repo: context.repo }),
+      (error) =>
+        error instanceof ReleaseImpactError &&
+        error.code === "unclassified-external-mutation-workflow",
+    );
+  } finally {
+    context.cleanup();
+  }
+});
+
+test("workflow ownership rejects an unclassified external mutation hidden behind a neutral filename", () => {
+  const context = repositoryFixture();
+  try {
+    write(
+      context.repo,
+      "app/.github/workflows/automation.yml",
+      "name: automation\non:\n  workflow_dispatch:\njobs:\n  mutate:\n    runs-on: ubuntu-latest\n    steps:\n      - run: docker push standardnotes/unknown:latest\n",
+    );
+    commit(context.repo, "add unknown external mutation");
+
+    assert.throws(
+      () => discoverWorkflowOwnership({ repo: context.repo }),
+      (error) =>
+        error instanceof ReleaseImpactError &&
+        error.code === "unclassified-external-mutation-workflow",
+    );
+  } finally {
+    context.cleanup();
+  }
+});
+
+test("distribution surfaces reject a false private-package policy claim", () => {
+  const context = repositoryFixture();
+  try {
+    write(
+      context.repo,
+      "app/packages/clipper/package.json",
+      manifest("@standardnotes/clipper", {}, false),
+    );
+    commit(context.repo, "make clipper package publishable");
+
+    assert.throws(
+      () => analyzeRepositoryReleaseImpact({ repo: context.repo }),
+      (error) =>
+        error instanceof ReleaseImpactError &&
+        error.code === "distribution-workspace-policy-mismatch",
+    );
+  } finally {
+    context.cleanup();
+  }
+});
+
+test("standalone recovery publishers remain manual-only", () => {
+  const context = repositoryFixture();
+  try {
+    write(
+      context.repo,
+      "app/.github/workflows/mobile.release.prod.yml",
+      "name: mobile recovery\non:\n  push:\n    tags: ['*']\n  workflow_dispatch:\njobs:\n  release:\n    runs-on: ubuntu-latest\n    steps:\n      - run: gh release create fixture\n",
+    );
+    commit(context.repo, "add automatic standalone mobile trigger");
+
+    assert.throws(
+      () => discoverWorkflowOwnership({ repo: context.repo }),
+      (error) =>
+        error instanceof ReleaseImpactError &&
+        error.code === "workflow-activation-mismatch",
+    );
   } finally {
     context.cleanup();
   }
@@ -1178,11 +2239,13 @@ test("repository CLI writes JSON, Markdown, and GitHub outputs", () => {
       readFileSync(path.join(context.repo, "release-impact.json"), "utf8"),
     );
     assert.equal(machine.products.length, 8);
-    assert.equal(machine.workspaces.length, 8);
+    assert.equal(machine.workspaces.length, 10);
     assert.equal(machine.standaloneManagedPackages.length, 2);
+    assert.equal(machine.workflowOwnership.workflows.length, 42);
+    assert.equal(machine.distributionSurfaces.length, 2);
     assert.match(
       readFileSync(path.join(context.repo, "release-impact.md"), "utf8"),
-      /## Yarn workspace inventory/,
+      /## Workflow and distribution ownership/,
     );
     assert.match(readFileSync(githubOutput, "utf8"), /result_json=/);
   } finally {
@@ -1200,8 +2263,9 @@ test("the repository Yarn-workspace snapshot covers all 44 manifests", () => {
   assert.equal(actual.length, 44);
   assert.deepEqual(result.categoryCounts, {
     "release-managed": 6,
+    "distribution-surface": 2,
     "publishable-unmanaged": 24,
-    private: 14,
+    private: 12,
   });
   assert.deepEqual(actual, EXPECTED_REPOSITORY_WORKSPACES);
 

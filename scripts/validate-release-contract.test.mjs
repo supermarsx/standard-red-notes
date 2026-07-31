@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
   loadReleaseContractFiles,
+  runReleaseContractValidation,
   validateReleaseContract,
 } from "./validate-release-contract.mjs";
 
@@ -16,12 +18,433 @@ const baseline = loadReleaseContractFiles(repositoryRoot);
 
 function withFileChanged(file, update) {
   const files = new Map(baseline);
-  files.set(file, update(files.get(file)));
+  const original = files.get(file);
+  const changed = update(original);
+  assert.notEqual(changed, original, `mutation must change ${file}`);
+  files.set(file, changed);
   return files;
+}
+
+function withJobChanged(file, jobName, nextJobName, update) {
+  return withFileChanged(file, (content) => {
+    const start = content.indexOf(`\n  ${jobName}:`);
+    const end = content.indexOf(`\n  ${nextJobName}:`, start);
+    assert.notEqual(start, -1, `${file} must contain ${jobName}`);
+    assert.notEqual(end, -1, `${file} must contain ${nextJobName}`);
+    return `${content.slice(0, start)}${update(content.slice(start, end))}${content.slice(end)}`;
+  });
 }
 
 test("the repository satisfies the release contract", () => {
   assert.deepEqual(validateReleaseContract(baseline), []);
+});
+
+test("YAML scalar quote-only formatting does not change release validation", () => {
+  const files = new Map(baseline);
+  for (const [file, replacements] of [
+    [
+      ".github/workflows/srn-client.yml",
+      [
+        [
+          '- "scripts/native-cli-release.mjs"',
+          "- 'scripts/native-cli-release.mjs'",
+        ],
+        ['NODE_VERSION: "26"', "NODE_VERSION: '26'"],
+      ],
+    ],
+    [
+      ".github/workflows/srn-desktop.yml",
+      [
+        ['- "app/packages/**"', "- 'app/packages/**'"],
+        [
+          'builder: "--mac dmg zip --x64 --arm64"',
+          "builder: '--mac dmg zip --x64 --arm64'",
+        ],
+        ['python-version: "3.14.6"', "python-version: '3.14.6'"],
+      ],
+    ],
+    [
+      ".github/workflows/srn-mobile.yml",
+      [
+        ['java-version: "17"', "java-version: '17'"],
+        ['ruby-version: "3.4.7"', "ruby-version: '3.4.7'"],
+        ['xcode-version: "26"', "xcode-version: '26'"],
+      ],
+    ],
+    [
+      ".github/workflows/release-contract.yml",
+      [
+        [
+          '- ".github/workflows/srn-mobile.yml"',
+          "- '.github/workflows/srn-mobile.yml'",
+        ],
+      ],
+    ],
+  ]) {
+    const original = files.get(file);
+    let changed = original;
+    for (const [before, after] of replacements) {
+      changed = changed.replaceAll(before, after);
+    }
+    assert.notEqual(changed, original, `quote mutation must change ${file}`);
+    files.set(file, changed);
+  }
+  assert.deepEqual(validateReleaseContract(files), []);
+});
+
+test("the release validator CLI executes without a top-level crash", () => {
+  const result = spawnSync(
+    process.execPath,
+    [path.join(repositoryRoot, "scripts", "validate-release-contract.mjs")],
+    { cwd: repositoryRoot, encoding: "utf8" },
+  );
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.match(result.stdout, /Release contract valid:/);
+});
+
+test("release payload integrity steps cannot be separated from their consumers", () => {
+  for (const [file, consumer, expected] of [
+    [
+      ".github/workflows/srn-client.yml",
+      "      - name: Upload packaged binaries",
+      /package integrity step 'Generate checksums' must be immediately followed/,
+    ],
+    [
+      ".github/workflows/srn-openclaw.yml",
+      "      - name: Upload attested release package",
+      /attest integrity step 'Add provenance bundle and verify final checksums' must be immediately followed/,
+    ],
+    [
+      ".github/workflows/srn-desktop.yml",
+      "      - name: Upload exact desktop release payload",
+      /fan_in integrity step 'Validate authorities, reject collisions, and checksum payload' must be immediately followed/,
+    ],
+    [
+      "app/.github/workflows/desktop.release.reuse.yml",
+      "      - name: Upload immutable publication payload",
+      /FanIn integrity step 'Validate authorities, reject collisions, and build exact inventory' must be immediately followed/,
+    ],
+  ]) {
+    const files = withFileChanged(file, (content) =>
+      content.replace(
+        consumer,
+        "      - run: echo tamper-after-verification\n\n" + consumer,
+      ),
+    );
+    assert.match(validateReleaseContract(files).join("\n"), expected);
+  }
+});
+
+test("terminal checksum commands cannot gain a post-verification mutation", () => {
+  for (const [file, fragment, expected] of [
+    [
+      ".github/workflows/srn-client.yml",
+      "          sha256sum --check SHA256SUMS.txt\n\n      - name: Upload packaged binaries",
+      /native checksum verification must be the final command before packaged upload/,
+    ],
+    [
+      ".github/workflows/srn-openclaw.yml",
+      "          (cd out && sha256sum --check SHA256SUMS.txt)\n\n      - name: Upload attested release package",
+      /provenance and checksum verification must be terminal before attested upload/,
+    ],
+    [
+      ".github/workflows/srn-desktop.yml",
+      "          (cd payload && sha256sum --check SHA256SUMS.txt)\n\n      - name: Upload exact desktop release payload",
+      /desktop fan-in checksum verification must be terminal before upload/,
+    ],
+  ]) {
+    const files = withFileChanged(file, (content) =>
+      content.replace(
+        fragment,
+        fragment.replace(
+          "\n\n      - name:",
+          "\n          echo tamper-after-check\n\n      - name:",
+        ),
+      ),
+    );
+    assert.match(validateReleaseContract(files).join("\n"), expected);
+  }
+});
+
+test("pinned but unplanned actions cannot cross release security boundaries", () => {
+  for (const [file, marker, injected, expected] of [
+    [
+      ".github/workflows/srn-client.yml",
+      "      - name: Upload packaged binaries",
+      "      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1\n\n",
+      /package action sequence must be exactly/,
+    ],
+    [
+      ".github/workflows/srn-openclaw.yml",
+      "      - name: Upload attested release package",
+      "      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1\n\n",
+      /attest action sequence must be exactly/,
+    ],
+    [
+      "app/.github/workflows/desktop.release.reuse.yml",
+      "      - name: Upload\n        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1",
+      "      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1\n\n",
+      /Mac action sequence must be exactly/,
+    ],
+    [
+      ".github/workflows/release-contract.yml",
+      "      - name: Upload machine and readable release reports",
+      "      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0\n\n",
+      /validate action sequence must be exactly/,
+    ],
+  ]) {
+    const files = withFileChanged(file, (content) =>
+      content.replace(marker, injected + marker),
+    );
+    assert.match(validateReleaseContract(files).join("\n"), expected);
+  }
+});
+
+test("release validation reports all four mobile publication stages", () => {
+  const result = runReleaseContractValidation(repositoryRoot);
+  assert.equal(result.mobilePublicationStages, 4);
+  assert.equal("mobilePublishers" in result, false);
+});
+
+test("mobile root and recovery job graphs remain exact", () => {
+  let files = withFileChanged(".github/workflows/srn-mobile.yml", (content) =>
+    content.replace(
+      "  release:\n",
+      "  shadow_publish:\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n\n  release:\n",
+    ),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /srn-mobile\.yml: job set must exactly match the release contract/,
+  );
+
+  files = withFileChanged(".github/workflows/srn-mobile.yml", (content) =>
+    content.replace(
+      "needs: [version, decide, validated, publish_android, submit_ios]",
+      "needs: [version, decide, validated, publish_android]",
+    ),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /srn-mobile\.yml: release dependencies must be exactly/,
+  );
+
+  files = withFileChanged(
+    "app/.github/workflows/mobile.release.prod.yml",
+    (content) =>
+      content.replace(
+        "needs: [context, validated, distribute_ios]",
+        "needs: [context, validated]",
+      ),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /mobile\.release\.prod\.yml: submit_ios dependencies must be exactly/,
+  );
+});
+
+test("mobile action boundaries, checkout credentials, and recovery retention remain exact", () => {
+  let files = withJobChanged(
+    ".github/workflows/srn-mobile.yml",
+    "android",
+    "ios",
+    (job) =>
+      job.replace(
+        "      - name: Upload validated Android artifacts",
+        "      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1\n\n      - name: Upload validated Android artifacts",
+      ),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /srn-mobile\.yml: android action sequence must be exactly/,
+  );
+
+  files = withFileChanged(".github/workflows/srn-mobile.yml", (content) =>
+    content.replace("persist-credentials: false", "persist-credentials: true"),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /every mobile checkout must disable credential persistence/,
+  );
+
+  files = withFileChanged(
+    "app/.github/workflows/mobile.release.prod.yml",
+    (content) => content.replace("retention-days: 30", "retention-days: 2"),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /every mobile artifact and intent marker must retain for exactly 30 days/,
+  );
+});
+
+test("mobile production credentials and recovery entry stay protected", () => {
+  let files = withJobChanged(
+    ".github/workflows/srn-mobile.yml",
+    "reserve_release",
+    "android",
+    (job) => job.replace("    environment: mobile-production\n", ""),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /reserve_release protected production environment/,
+  );
+
+  files = withFileChanged(
+    "app/.github/workflows/mobile.release.prod.yml",
+    (content) =>
+      content.replace(
+        "on:\n  workflow_dispatch:",
+        "on:\n  push:\n  workflow_dispatch:",
+      ),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /recovery publisher must remain manual-only/,
+  );
+
+  files = withFileChanged(
+    "app/.github/workflows/mobile.release.prod.yml",
+    (content) =>
+      content.replace(
+        '[ "$GITHUB_REF" != refs/heads/main ] || [ "$GITHUB_SHA" != "$protected_sha" ]',
+        "false",
+      ),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /missing recovery protected-main head equality guard/,
+  );
+});
+
+test("mobile GitHub publication can only adopt its early marker-bound draft", () => {
+  let files = withFileChanged(".github/workflows/srn-mobile.yml", (content) =>
+    content.replace(
+      'gh release upload "$RELEASE_TAG" "${release_files[@]}" --clobber',
+      'gh release create "$RELEASE_TAG" --draft',
+    ),
+  );
+  let errors = validateReleaseContract(files).join("\n");
+  assert.match(errors, /final mobile publication must adopt the early draft/);
+  assert.match(errors, /must create at most one exact marker-bound draft/);
+
+  files = withFileChanged(".github/workflows/srn-mobile.yml", (content) =>
+    content.replace(";fingerprint=${FINGERPRINT};", ";"),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /missing run\/commit\/version\/fingerprint release reservation marker/,
+  );
+
+  files = withFileChanged(
+    "app/.github/workflows/mobile.release.prod.yml",
+    (content) =>
+      content.replaceAll("verify_remote_assets", "skip_remote_assets"),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /missing remote GitHub asset verification/,
+  );
+});
+
+test("mobile platform identity and export-compliance inputs cannot drift", () => {
+  let files = withFileChanged(".github/workflows/srn-mobile.yml", (content) =>
+    content.replace(
+      "EXPECTED_ANDROID_UPLOAD_CERT_SHA256: ${{ secrets.EXPECTED_ANDROID_UPLOAD_CERT_SHA256 }}",
+      "EXPECTED_ANDROID_UPLOAD_CERT_SHA256: legacy-debug-key",
+    ),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /missing protected Android upload-certificate fingerprint/,
+  );
+
+  files = withFileChanged(
+    "app/.github/workflows/mobile.release.prod.yml",
+    (content) =>
+      content.replaceAll(
+        "IOS_USES_NON_EXEMPT_ENCRYPTION: ${{ vars.IOS_USES_NON_EXEMPT_ENCRYPTION }}",
+        "IOS_USES_NON_EXEMPT_ENCRYPTION: false",
+      ),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /missing operator-reviewed iOS encryption classification/,
+  );
+
+  files = withFileChanged("app/packages/mobile/fastlane/Fastfile", (content) =>
+    content.replace(
+      "plist['ITSAppUsesNonExemptEncryption'] = export_compliance[:uses_non_exempt_encryption]",
+      "plist['ITSAppUsesNonExemptEncryption'] = false",
+    ),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /missing Fastlane embedded export classification/,
+  );
+});
+
+test("mobile provider stages persist intent before exact mutation and proof", () => {
+  let files = withFileChanged(".github/workflows/srn-mobile.yml", (content) =>
+    content.replace(
+      "      - name: Publish or verify exact Google Play bundle digest and track state",
+      "      - run: echo bypass\n\n      - name: Publish or verify exact Google Play bundle digest and track state",
+    ),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /integrity step 'Persist Google Play intent before external mutation' must be immediately followed/,
+  );
+
+  files = withFileChanged(
+    "app/.github/workflows/mobile.release.prod.yml",
+    (content) => content.replace(".remoteMd5 == $md5", "true"),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /missing upload_ios exact provider-state proof 'remoteMd5 == \$md5'/,
+  );
+
+  files = withFileChanged(".github/workflows/srn-mobile.yml", (content) =>
+    content.replaceAll(
+      "standard-red-notes-ios-arm64-${VERSION}.ipa",
+      "standard-red-notes-ios-${VERSION}.ipa",
+    ),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /missing validated mobile release file 'standard-red-notes-ios-arm64-<version>\.ipa'/,
+  );
+});
+
+test("partial TestFlight state must reconcile exactly the missing same-run operation", () => {
+  for (const file of [
+    ".github/workflows/srn-mobile.yml",
+    "app/.github/workflows/mobile.release.prod.yml",
+  ]) {
+    const files = withFileChanged(file, (content) =>
+      content.replace(
+        /(pending:true\)[\s\S]*?echo 'create_marker=false' >> "\$GITHUB_OUTPUT"; echo 'mutation_required=)true/,
+        "$1false",
+      ),
+    );
+    assert.match(
+      validateReleaseContract(files).join("\n"),
+      /same-run partial-state idempotent reconciliation/,
+    );
+  }
+
+  const files = withFileChanged(
+    "app/packages/mobile/fastlane/Fastfile",
+    (content) =>
+      content.replace(
+        "operations.include?('public-group-membership')",
+        "false",
+      ),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /missing idempotent missing-membership mutation/,
+  );
 });
 
 test("a missing native tool target is rejected", () => {
@@ -84,6 +507,36 @@ test("native execution cannot bypass its fingerprinted invocation plan", () => {
   );
 });
 
+test("the complete native command dispatcher remains fingerprinted", () => {
+  const file = "scripts/native-cli-release.mjs";
+  const files = withFileChanged(file, (content) =>
+    content.replace(
+      'if (options.command === "package")',
+      'if (options.command === "fingerprint")',
+    ),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /native-cli-release\.mjs: missing native package command dispatch branch/,
+  );
+});
+
+test("native executor identity cannot fall back to selected function bodies", () => {
+  const file = "scripts/native-cli-release.mjs";
+  const files = withFileChanged(file, (content) =>
+    content.replace(
+      'return readFileSync(NATIVE_EXECUTOR_IMPLEMENTATION_FILE, "utf8");',
+      "return packageNativeCli.toString();",
+    ),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /native-cli-release\.mjs: missing complete native executor module source/,
+  );
+});
+
 test("native runtime, packager flags, and workflow actions cannot drift from the contract", () => {
   const contractFile = "scripts/release-packaging-contract.mjs";
   let files = withFileChanged(contractFile, (content) =>
@@ -99,10 +552,382 @@ test("native runtime, packager flags, and workflow actions cannot drift from the
   assert.match(errors, /missing native packager flag contract/);
 
   files = withFileChanged(".github/workflows/srn-client.yml", (content) =>
-    content.replaceAll("actions/setup-node@v7", "actions/setup-node@v8"),
+    content.replaceAll(
+      "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0",
+      "actions/setup-node@1111111111111111111111111111111111111111 # v7.0.0",
+    ),
   );
   errors = validateReleaseContract(files).join("\n");
   assert.match(errors, /srn-client\.yml: missing contract-bound native action/);
+  assert.match(
+    errors,
+    /unexpected external action outside contract actions\/setup-node@1111111111111111111111111111111111111111/,
+  );
+});
+
+test("native publishers enforce exact action SHAs and version labels", () => {
+  for (const file of [
+    ".github/workflows/srn-client.yml",
+    ".github/workflows/srn-server.yml",
+    ".github/workflows/srn-mcp.yml",
+    ".github/workflows/srn-home-server.yml",
+    ".github/workflows/srn-admin.yml",
+  ]) {
+    let files = withFileChanged(file, (content) =>
+      content.replace(
+        "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
+        "actions/checkout@v7.0.1 # v7.0.1",
+      ),
+    );
+    assert.match(
+      validateReleaseContract(files).join("\n"),
+      /mutable external action reference actions\/checkout@v7\.0\.1/,
+    );
+
+    files = withFileChanged(file, (content) =>
+      content.replace(
+        "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
+        "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.0",
+      ),
+    );
+    assert.match(
+      validateReleaseContract(files).join("\n"),
+      /incorrect human version label for actions\/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1; expected v7\.0\.1/,
+    );
+
+    files = withFileChanged(file, (content) =>
+      content.replace(
+        "jobs:\n",
+        "jobs:\n  rogue_action:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: evil/example@1111111111111111111111111111111111111111 # v1\n\n",
+      ),
+    );
+    assert.match(
+      validateReleaseContract(files).join("\n"),
+      /unexpected external action outside contract evil\/example@1111111111111111111111111111111111111111/,
+    );
+  }
+});
+
+test("native release identity and publication remain retry-safe", () => {
+  const file = ".github/workflows/srn-client.yml";
+  for (const [jobName, nextJobName, fragment, replacement, expected] of [
+    [
+      "identity",
+      "package",
+      "needs: [build, decide, impact]",
+      "needs: decide",
+      /missing native identity dependency on build, decision, and force intent/,
+    ],
+    [
+      "identity",
+      "package",
+      "EXPECTED_FINGERPRINT: ${{ needs.build.outputs.fingerprint }}",
+      "EXPECTED_FINGERPRINT: missing",
+      /missing identity deterministic fingerprint input/,
+    ],
+    [
+      "identity",
+      "package",
+      "fingerprint=${EXPECTED_FINGERPRINT} intent=${intent}",
+      "fingerprint=${EXPECTED_FINGERPRINT}",
+      /missing tool-commit-fingerprint-intent release marker/,
+    ],
+    [
+      "identity",
+      "package",
+      "mapfile -t stale_reservations",
+      "mapfile -t ignored_reservations",
+      /missing stale native draft enumeration/,
+    ],
+    [
+      "identity",
+      "package",
+      'if [ "${#stale_reservations[@]}" -gt 0 ]; then',
+      "if false; then",
+      /missing stale native draft fail-closed gate/,
+    ],
+    [
+      "identity",
+      "package",
+      "published: ${{ steps.identity.outputs.published }}",
+      "published_state: ${{ steps.identity.outputs.published }}",
+      /missing published reservation output/,
+    ],
+    [
+      "package",
+      "release",
+      "if: needs.decide.outputs.changed == 'true' && needs.identity.outputs.published != 'true'",
+      "if: needs.decide.outputs.changed == 'true'",
+      /missing package skip for already-published same-run release/,
+    ],
+  ]) {
+    const files = withJobChanged(file, jobName, nextJobName, (job) =>
+      job.replace(fragment, replacement),
+    );
+    assert.match(validateReleaseContract(files).join("\n"), expected);
+  }
+
+  for (const [fragment, replacement, expected] of [
+    [
+      "needs: [impact, build, decide, identity, package, smoke]",
+      "needs: [build, decide, package]",
+      /missing native publication fan-in including force intent/,
+    ],
+    [
+      "if: always() && needs.impact.result == 'success' && needs.decide.outputs.changed == 'true' && needs.identity.result == 'success' && ((needs.package.result == 'success' && needs.smoke.result == 'success') || (needs.identity.outputs.published == 'true' && needs.package.result == 'skipped' && needs.smoke.result == 'skipped'))",
+      "if: needs.decide.outputs.changed == 'true'",
+      /missing retry-safe native publication result gate/,
+    ],
+    [
+      'echo "${TOOL}-windows-arm64.exe"',
+      "true # asset removed",
+      /missing Windows arm64 asset contract/,
+    ],
+    [
+      '.digest | test("^sha256:[0-9a-f]{64}$")',
+      ".digest != null",
+      /missing remote native asset SHA-256 digest assertion/,
+    ],
+    [
+      'test "$digest" = "sha256:${actual}"',
+      'test -n "$digest"',
+      /missing remote native asset digest equality/,
+    ],
+    [
+      'gh release upload "$RELEASE_TAG" "${files[@]}" --clobber --repo "$GITHUB_REPOSITORY"',
+      'gh release upload "$RELEASE_TAG" "${files[@]}" --repo "$GITHUB_REPOSITORY"',
+      /missing retry-safe native asset replacement/,
+    ],
+    [
+      'if [ "$draft" = "false" ]; then',
+      "if false; then",
+      /missing already-published native recovery branch/,
+    ],
+    [
+      "          verify_directory out\n\n          # No fallible command follows publication.",
+      "          true # post-upload verification removed\n\n          # No fallible command follows publication.",
+      /missing post-upload native asset verification|native draft publication must follow remote asset hash verification/,
+    ],
+    [
+      "            -f make_latest=false >/dev/null",
+      "            >/dev/null",
+      /missing native Latest-pointer opt-out|gh api release PATCH.*opt-out/,
+    ],
+  ]) {
+    const files = withFileChanged(file, (content) =>
+      content.replace(fragment, replacement),
+    );
+    assert.match(validateReleaseContract(files).join("\n"), expected);
+  }
+});
+
+test("native forced reservations are invocation-scoped and retry-stable", () => {
+  const file = ".github/workflows/srn-client.yml";
+  for (const [fragment, replacement, expected] of [
+    [
+      "FORCED: ${{ needs.impact.outputs.forced }}",
+      "FORCED: 'false'",
+      /missing identity force-state input|missing publication force-state input/,
+    ],
+    [
+      "IMPACT_RESULT: ${{ needs.impact.outputs.result_json }}",
+      "IMPACT_RESULT: '{}'",
+      /missing identity analyzed-impact input|missing publication analyzed-impact input/,
+    ],
+    [
+      "and .forced == $forced",
+      "and true",
+      /missing identity force-result state assertion|missing publication force-result state assertion/,
+    ],
+    [
+      "(($forced | not) and .forceReason == null)",
+      "($forced | not)",
+      /missing unforced null-reason assertion|missing publication unforced null-reason assertion/,
+    ],
+    [
+      '(.forceReason | gsub("^\\\\s+|\\\\s+$"; "")) | length > 0',
+      "(.forceReason | length > 0)",
+      /missing forced nonempty-reason assertion|missing publication forced nonempty-reason assertion/,
+    ],
+    [
+      'intent="forced-${GITHUB_RUN_ID}"',
+      'intent="forced"',
+      /missing force invocation-scoped intent|missing publication force invocation-scoped intent/,
+    ],
+    [
+      'intent="automatic"',
+      'intent="forced-${GITHUB_RUN_ID}"',
+      /missing automatic retry intent|missing publication automatic retry intent/,
+    ],
+  ]) {
+    const files = withFileChanged(file, (content) =>
+      content.replaceAll(fragment, replacement),
+    );
+    assert.match(validateReleaseContract(files).join("\n"), expected);
+  }
+
+  const attemptScoped = withFileChanged(file, (content) =>
+    content.replaceAll("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT"),
+  );
+  assert.match(
+    validateReleaseContract(attemptScoped).join("\n"),
+    /native forced identity must stay stable across attempts|native publication force intent must stay stable across attempts/,
+  );
+});
+
+test("native source, smoke, recovery, and asset-manifest gates remain fail-closed", () => {
+  const workflowFile = ".github/workflows/srn-client.yml";
+  for (const [fragment, replacement, expected] of [
+    [
+      "git fetch --no-tags --force origin refs/heads/main:refs/remotes/origin/main",
+      "true # protected source fetch removed",
+      /missing protected main source fetch/,
+    ],
+    [
+      "runner: windows-11-arm",
+      "runner: windows-2025",
+      /missing exact windows-11-arm windows-arm64\.exe native smoke target/,
+    ],
+    [
+      'file "$executable" | grep -E "$FILE_PATTERN"',
+      'file "$executable" | grep -E "$FILE_PATTERN" || true',
+      /native smoke checks must remain fail-closed/,
+    ],
+    [
+      "environment: release-production",
+      "environment: unprotected",
+      /missing identity protected production environment|must be scoped exactly to identity and release/,
+    ],
+    [
+      "retention-days: 30",
+      "retention-days: 1",
+      /every native recovery artifact must be retained for exactly 30 days/,
+    ],
+    [
+      "bind_asset_manifest out",
+      "true # asset manifest binding removed",
+      /missing pre-mutation native asset binding|asset manifest must bind the validated draft/,
+    ],
+    [
+      "done < \"$expected_assets\" | jq -s 'sort_by(.name)'",
+      "done < \"$expected_assets\" | jq -s '.'",
+      /missing sorted native asset-manifest entries/,
+    ],
+    [
+      'elif [ "$existing_asset_markers" -ne 1 ]; then',
+      "elif false; then",
+      /missing exactly one existing native asset-manifest marker/,
+    ],
+    [
+      '| [scan("<!-- srn-release-assets-sha256:[0-9a-f]{64} -->")] | length) == 1)',
+      '| [scan("<!-- srn-release-assets-sha256:[0-9a-f]{64} -->")] | length) >= 1)',
+      /missing exactly one total native asset-manifest marker/,
+    ],
+  ]) {
+    const files = withFileChanged(workflowFile, (content) =>
+      content.replace(fragment, replacement),
+    );
+    assert.match(validateReleaseContract(files).join("\n"), expected);
+  }
+
+  const entrypoint = "cli/srn-client/src/index.ts";
+  const files = withFileChanged(entrypoint, (content) =>
+    content.replace("--srn-release-self-test", "--unchecked-self-test"),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /missing exact native self-test argument gate/,
+  );
+});
+
+test("release-policy dependencies install exactly before every parser-backed gate", () => {
+  const command =
+    "npm ci --prefix scripts --ignore-scripts --no-audit --no-fund";
+
+  let files = withFileChanged(".github/workflows/srn-client.yml", (content) =>
+    content.replace(`${command}\n`, ""),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /expected exactly 2 release-policy dependency install\(s\), found 1|dependencies must install before contract validation/,
+  );
+
+  files = withJobChanged(
+    ".github/workflows/srn-client.yml",
+    "build",
+    "decide",
+    (job) => job.replace(`${command}\n`, ""),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /expected exactly 2 release-policy dependency install\(s\), found 1|Install release policy dependencies.*must be immediately followed/,
+  );
+
+  files = withFileChanged(".github/workflows/srn-openclaw.yml", (content) =>
+    content.replace(
+      `      - name: Install release policy dependencies\n        run: ${command}\n\n      - name: Validate release packaging contract`,
+      `      - name: Validate release packaging contract\n        run: node scripts/validate-release-contract.mjs\n\n      - name: Install release policy dependencies\n        run: ${command}`,
+    ),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /dependencies must install before contract validation and impact analysis|integrity step 'Install release policy dependencies' must be immediately followed/,
+  );
+
+  for (const file of [
+    ".github/workflows/release-contract.yml",
+    ".github/workflows/ci.yml",
+  ]) {
+    files = withFileChanged(file, (content) =>
+      content.replace(command, "true"),
+    );
+    assert.match(
+      validateReleaseContract(files).join("\n"),
+      /must install release-policy dependencies exactly once|dependencies must install before/,
+    );
+  }
+
+  files = withFileChanged("package.json", (content) =>
+    content.replace(
+      "yarn release:policy:install && yarn release:impact:run",
+      "node scripts/analyze-release-impact.mjs",
+    ),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /release:impact must use the explicit pinned release-policy dependency boundary/,
+  );
+
+  files = withFileChanged("scripts/package.json", (content) =>
+    content.replace('"@babel/parser": "7.29.7"', '"@babel/parser": "^7.29.7"'),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /must contain only exact @babel\/parser@7\.29\.7/,
+  );
+
+  files = withFileChanged(
+    "scripts/native-cli-release.mjs",
+    (content) =>
+      `${content}\n// process.binding must never load a private parser\n`,
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /private Node parser access is forbidden/,
+  );
+
+  files = withFileChanged(
+    "scripts/analyze-release-impact.test.mjs",
+    (content) =>
+      content.replace(
+        "legacy semantic baselines migrate with conservative full fanout",
+        "legacy migration is untested",
+      ),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /missing one-time legacy native fanout regression/,
+  );
 });
 
 test("all publishers self-validate the release contract before impact analysis", () => {
@@ -188,7 +1013,43 @@ test("mutable OpenClaw action references are rejected", () => {
 
   assert.match(
     validateReleaseContract(files).join("\n"),
-    /mutable action reference actions\/checkout@v7/,
+    /mutable external action reference actions\/checkout@v7/,
+  );
+});
+
+test("OpenClaw action SHAs, labels, and inventory remain exact", () => {
+  const file = ".github/workflows/srn-openclaw.yml";
+  let files = withFileChanged(file, (content) =>
+    content.replace(
+      "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0",
+      "actions/checkout@1111111111111111111111111111111111111111 # v7.0.0",
+    ),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /unexpected external action outside contract actions\/checkout@1111111111111111111111111111111111111111/,
+  );
+
+  files = withFileChanged(file, (content) =>
+    content.replace(
+      "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0",
+      "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.1",
+    ),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /incorrect human version label for actions\/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0; expected v7\.0\.0/,
+  );
+
+  files = withFileChanged(file, (content) =>
+    content.replace(
+      "jobs:\n",
+      "jobs:\n  rogue_action:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: evil/example@1111111111111111111111111111111111111111 # v1\n\n",
+    ),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /unexpected external action outside contract evil\/example@1111111111111111111111111111111111111111/,
   );
 });
 
@@ -371,9 +1232,9 @@ test("OpenClaw rolling versions cannot reuse an explicit SemVer package identity
 // semver, so the packaged artifact must carry `26.1.0`.
 test("packaging OpenClaw under the non-semver release version is rejected", () => {
   const files = withFileChanged(openClawWorkflowFile, (content) =>
-    content.replace(
-      "            package_version=${version}.0\n",
-      "            package_version=${version}\n",
+    content.replaceAll(
+      '            package_version="${version}.0"\n',
+      '            package_version="${version}"\n',
     ),
   );
 
@@ -428,25 +1289,25 @@ test("dropping the explicit-tag version assertion is rejected", () => {
   );
 });
 
-// --verify-tag must stay conditional on an explicitly requested tag: unguarded
-// it would abort every rolling release, and dropping the guard's condition
-// would let a mistyped manual tag be created by the release step.
-test("dropping the OpenClaw explicit-tag verification gate is rejected", () => {
+test("OpenClaw explicit tags cannot be combined with forced rolling intent", () => {
   const files = withFileChanged(openClawWorkflowFile, (content) =>
-    content.replace('if [ "${VERIFY_TAG}" = "true" ]; then', "if true; then"),
+    content.replace(
+      'if [ "$FORCED" = "true" ]; then\n              echo "force_release cannot be combined with an explicit OpenClaw tag." >&2',
+      'if false; then\n              echo "force accepted with an explicit tag" >&2',
+    ),
   );
 
   assert.match(
     validateReleaseContract(files).join("\n"),
-    /srn-openclaw\.yml: missing explicit-tag verification gate/,
+    /srn-openclaw\.yml: missing force and explicit-tag mutual exclusion/,
   );
 });
 
 test("a non-srn-* OpenClaw release title is rejected", () => {
   const files = withFileChanged(openClawWorkflowFile, (content) =>
     content.replace(
-      '--title "${TOOL} ${VERSION}"',
-      '--title "OpenClaw ${VERSION}"',
+      '-f name="${TOOL} ${VERSION}"',
+      '-f name="OpenClaw ${VERSION}"',
     ),
   );
 
@@ -454,6 +1315,104 @@ test("a non-srn-* OpenClaw release title is rejected", () => {
     validateReleaseContract(files).join("\n"),
     /srn-openclaw\.yml: missing srn-\* OpenClaw release title convention/,
   );
+});
+
+test("OpenClaw reservations are invocation-stable, fingerprint-bound, and stale-draft safe", () => {
+  for (const [fragment, replacement, expected] of [
+    [
+      'intent="forced-${GITHUB_RUN_ID}"',
+      'intent="forced-${GITHUB_RUN_ATTEMPT}"',
+      /forced OpenClaw identity must remain stable across rerun attempts/,
+    ],
+    [
+      "fingerprint=${EXPECTED_FINGERPRINT} intent=${INTENT}",
+      "intent=${INTENT}",
+      /missing OpenClaw commit-fingerprint-intent marker|missing publication OpenClaw commit-fingerprint-intent marker/,
+    ],
+    [
+      "mapfile -t stale_reservations",
+      "mapfile -t ignored_reservations",
+      /missing stale OpenClaw draft enumeration|missing fingerprint-mismatched OpenClaw draft enumeration/,
+    ],
+    [
+      "Reconcile or delete the stale drafts explicitly, then rerun.",
+      "continue past stale drafts",
+      /missing stale OpenClaw draft recovery instruction/,
+    ],
+    [
+      "mapfile -t exact_reservations",
+      "mapfile -t ignored_exact_reservations",
+      /missing live exact OpenClaw reservation recovery/,
+    ],
+    [
+      'elif [ "${#exact_reservations[@]}" -eq 1 ]; then',
+      "elif false; then",
+      /missing failed-job OpenClaw reservation adoption/,
+    ],
+    ["-F draft=true", "-F draft=false", /missing OpenClaw draft-only creation/],
+    [
+      'gh api --method POST "repos/${GITHUB_REPOSITORY}/releases"',
+      'gh release create "$TAG"',
+      /missing draft-only OpenClaw reservation|OpenClaw identity must reserve a draft through the exact release API/,
+    ],
+  ]) {
+    const files = withFileChanged(openClawWorkflowFile, (content) =>
+      content.replaceAll(fragment, replacement),
+    );
+    assert.match(validateReleaseContract(files).join("\n"), expected);
+  }
+});
+
+test("OpenClaw publication verifies exact attested assets before finalizing its draft", () => {
+  for (const [fragment, replacement, expected] of [
+    [
+      "needs: [context, package, decide, identity, attest]",
+      "needs: [context, package, decide, attest]",
+      /missing reserved and attested OpenClaw release fan-in/,
+    ],
+    [
+      "if: always() && needs.decide.outputs.changed == 'true' && needs.identity.result == 'success' && (needs.attest.result == 'success' || (needs.identity.outputs.published == 'true' && needs.attest.result == 'skipped'))",
+      "if: needs.decide.outputs.changed == 'true'",
+      /missing retry-safe OpenClaw publication result gate/,
+    ],
+    [
+      'echo "${TOOL}-${PACKAGE_VERSION}-node-any.provenance.sigstore.json"',
+      "true # provenance omitted",
+      /missing exact OpenClaw provenance asset identity/,
+    ],
+    [
+      'test "$digest" = "sha256:${actual}"',
+      'test -n "$digest"',
+      /missing remote OpenClaw asset digest equality/,
+    ],
+    [
+      'gh release upload "$TAG" "${files[@]}" --clobber --repo "$GITHUB_REPOSITORY"',
+      'gh release upload "$TAG" "${files[@]}" --repo "$GITHUB_REPOSITORY"',
+      /missing retry-safe OpenClaw asset replacement/,
+    ],
+    [
+      'verify_remote out "$release"',
+      "true # remote verification removed",
+      /OpenClaw publication must validate identity, local assets, upload, verify remote digests, then publish/,
+    ],
+    [
+      "<!-- srn-release-assets sha256=${asset_plan_sha} -->",
+      "<!-- unbound-assets -->",
+      /missing exact published OpenClaw asset-plan marker/,
+    ],
+    [
+      'gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}"',
+      'gh release create "$TAG"',
+      /missing final OpenClaw draft publication|OpenClaw publication must reuse its reserved draft/,
+    ],
+  ]) {
+    const files = withFileChanged(openClawWorkflowFile, (content) =>
+      fragment.includes("srn-release-assets")
+        ? content.replaceAll(fragment, replacement)
+        : content.replace(fragment, replacement),
+    );
+    assert.match(validateReleaseContract(files).join("\n"), expected);
+  }
 });
 
 // Signing and publishing are separate jobs because permissions are per-job.
@@ -475,8 +1434,8 @@ test("removing the OpenClaw attestation job is rejected", () => {
 test("an attestation scope on the OpenClaw publish job is rejected", () => {
   const files = withFileChanged(openClawWorkflowFile, (content) =>
     content.replace(
-      "      contents: write\n    steps:\n      - name: Download attested release package",
-      "      contents: write\n      attestations: write\n    steps:\n      - name: Download attested release package",
+      "    name: Verify and publish exact GitHub release\n    needs: [context, package, decide, identity, attest]\n",
+      "    name: Verify and publish exact GitHub release\n    permissions:\n      attestations: write\n    needs: [context, package, decide, identity, attest]\n",
     ),
   );
 
@@ -489,14 +1448,14 @@ test("an attestation scope on the OpenClaw publish job is rejected", () => {
 test("dropping the attested payload from the OpenClaw release fan-in is rejected", () => {
   const files = withFileChanged(openClawWorkflowFile, (content) =>
     content.replace(
-      "needs: [context, decide, attest]",
-      "needs: [context, attest]",
+      "needs: [context, package, decide, identity, attest]",
+      "needs: [context, package, identity, attest]",
     ),
   );
 
   assert.match(
     validateReleaseContract(files).join("\n"),
-    /srn-openclaw\.yml: missing attested OpenClaw release fan-in/,
+    /srn-openclaw\.yml: missing reserved and attested OpenClaw release fan-in|release publication does not depend on decide/,
   );
 });
 
@@ -511,6 +1470,95 @@ test("a best-effort attested payload handoff is rejected", () => {
   assert.match(
     validateReleaseContract(files).join("\n"),
     /srn-openclaw\.yml: missing required attested payload upload/,
+  );
+});
+
+test("OpenClaw provenance action identity is bound in workflow and fingerprint contract", () => {
+  let files = withFileChanged(openClawWorkflowFile, (content) =>
+    content.replace(
+      "actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373",
+      "actions/attest-build-provenance@1111111111111111111111111111111111111111",
+    ),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /missing contract-bound provenance action/,
+  );
+
+  files = withFileChanged("scripts/release-packaging-contract.mjs", (content) =>
+    content.replace(
+      'attestBuildProvenance: "0f67c3f4856b2e3261c31976d6725780e5e4c373"',
+      'attestBuildProvenance: "mutable-tag"',
+    ),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /missing fingerprinted OpenClaw provenance action/,
+  );
+});
+
+test("OpenClaw provenance subjects and bundle filename cannot drift", () => {
+  let files = withFileChanged(openClawWorkflowFile, (content) =>
+    content.replaceAll(
+      "out/srn-openclaw-${{ needs.context.outputs.package_version }}-node-any.manifest.json",
+      "out/unattested-manifest.json",
+    ),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /missing contract-bound provenance subject/,
+  );
+
+  files = withFileChanged(openClawWorkflowFile, (content) =>
+    content.replace(
+      "srn-openclaw-${{ needs.context.outputs.package_version }}-node-any.provenance.sigstore.json",
+      "unbound-provenance.json",
+    ),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /missing contract-bound provenance bundle filename/,
+  );
+});
+
+test("OpenClaw provenance verification is bound to repository, source, and signer", () => {
+  for (const [fragment, replacement, expected] of [
+    [
+      '--repo "$GITHUB_REPOSITORY"',
+      '--repo "untrusted/repository"',
+      /missing exact OpenClaw repository binding/,
+    ],
+    [
+      '--source-digest "${{ needs.context.outputs.source_sha }}"',
+      '--source-digest "0000000000000000000000000000000000000000"',
+      /missing exact OpenClaw source-digest binding/,
+    ],
+    [
+      '--signer-workflow "$GITHUB_REPOSITORY/.github/workflows/srn-openclaw.yml"',
+      '--signer-workflow "$GITHUB_REPOSITORY/.github/workflows/untrusted.yml"',
+      /missing exact OpenClaw signer-workflow binding/,
+    ],
+  ]) {
+    const files = withFileChanged(openClawWorkflowFile, (content) =>
+      content.replace(fragment, replacement),
+    );
+    assert.match(validateReleaseContract(files).join("\n"), expected);
+  }
+});
+
+test("OpenClaw provenance predicate remains fingerprinted", () => {
+  const files = withFileChanged(
+    "scripts/release-packaging-contract.mjs",
+    (content) =>
+      content.replace(
+        'predicate: "slsa-build-provenance"',
+        'predicate: "custom-provenance"',
+      ),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /missing fingerprinted OpenClaw provenance predicate/,
   );
 });
 
@@ -636,6 +1684,157 @@ test("the native addon rejection survives the symlink allowance", () => {
   );
 });
 
+test("standalone desktop toolchains, targets, and artifacts are exact", () => {
+  const file = "app/.github/workflows/desktop.release.reuse.yml";
+  for (const [fragment, replacement, expected] of [
+    [
+      "runs-on: ubuntu-24.04-arm",
+      "runs-on: ubuntu-latest",
+      /missing Linux-AppImage-ARM64 contract-bound runner|standalone desktop runner matrix/,
+    ],
+    [
+      "python-version: '3.10'",
+      "python-version: '3.11'",
+      /expected 7 standalone Python 3\.10 setup legs/,
+    ],
+    [
+      "yarn run electron-builder --mac dmg zip --x64 --arm64 --publish=never --c.extraMetadata.version=${{ env.APP_VERSION }}",
+      "true # combined macOS builder removed",
+      /missing Mac contract-bound builder invocation|standalone desktop builder set must exactly match/,
+    ],
+    [
+      "name: dist-linux-x64",
+      "name: dist-linux-unbound",
+      /missing Linux-AppImage-X64 artifact name|upload paths must exactly match/,
+    ],
+    [
+      "packages/desktop/dist/*.AppImage",
+      "packages/desktop/dist/*.tar.gz",
+      /missing Linux-AppImage-X64 artifact glob/,
+    ],
+    [
+      'review-tools.snap-review "${snaps[0]}"',
+      "true # Snap validation removed",
+      /missing Linux-Snap contract-bound validation command/,
+    ],
+    [
+      'snapcraft upload "$snap_file" --release stable,candidate,beta,edge',
+      "true # Snap publication removed",
+      /missing contract-bound standalone desktop publication command/,
+    ],
+  ]) {
+    const files = withFileChanged(file, (content) =>
+      content.replace(fragment, replacement),
+    );
+    assert.match(validateReleaseContract(files).join("\n"), expected);
+  }
+
+  let files = withJobChanged(
+    file,
+    "Linux-AppImage-X64",
+    "Linux-AppImage-ARM64",
+    (job) => job.replace("          if-no-files-found: error\n", ""),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /missing Linux-AppImage-X64 required artifact upload/,
+  );
+
+  files = withFileChanged(file, (content) =>
+    content.replace(
+      "  PublishGitHub:\n",
+      "  Unexpected-Package:\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n\n  PublishGitHub:\n",
+    ),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /standalone desktop job set must exactly match the fingerprint contract/,
+  );
+});
+
+test("standalone desktop publication stays least-privilege and fail-closed", () => {
+  const file = "app/.github/workflows/desktop.release.reuse.yml";
+  for (const [fragment, replacement, expected] of [
+    [
+      "permissions:\n  contents: read",
+      "permissions:\n  contents: write",
+      /missing read-only reusable desktop permissions/,
+    ],
+    [
+      "group: desktop-release-${{ inputs.channel }}",
+      "group: desktop-release",
+      /missing channel-scoped non-cancelling reusable desktop concurrency/,
+    ],
+    [
+      "  FanIn:\n    runs-on: ubuntu-latest\n",
+      "  FanIn:\n    if: always()\n    runs-on: ubuntu-latest\n",
+      /Publish must not bypass failed or skipped platform dependencies/,
+    ],
+    [
+      ".target_commitish == $sha",
+      '.target_commitish == "main"',
+      /missing same-commit reusable desktop release target assertion/,
+    ],
+    [
+      "SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_STORE_CREDENTIALS }}",
+      "CI_PAT_TOKEN: ${{ secrets.CI_PAT_TOKEN }}",
+      /broad CI PAT is forbidden for reusable desktop release/,
+    ],
+  ]) {
+    const files = withFileChanged(file, (content) =>
+      fragment === ".target_commitish == $sha"
+        ? content.replaceAll(fragment, replacement)
+        : content.replace(fragment, replacement),
+    );
+    assert.match(validateReleaseContract(files).join("\n"), expected);
+  }
+});
+
+test("desktop production calls only the same-commit reusable workflow", () => {
+  const file = "app/.github/workflows/desktop.release.prod.yml";
+  const files = withFileChanged(file, (content) =>
+    content.replace(
+      "uses: ./.github/workflows/desktop.release.reuse.yml",
+      "uses: standardnotes/app/.github/workflows/desktop.release.reuse.yml@main",
+    ),
+  );
+  const errors = validateReleaseContract(files).join("\n");
+  assert.match(errors, /missing same-commit reusable desktop workflow caller/);
+  assert.match(
+    errors,
+    /desktop production must not call a remote or mutable reusable workflow/,
+  );
+});
+
+test("desktop action inventories reject SHA, label, and owner drift", () => {
+  for (const file of [
+    ".github/workflows/srn-desktop.yml",
+    "app/.github/workflows/desktop.release.reuse.yml",
+  ]) {
+    let files = withFileChanged(file, (content) =>
+      content.replace(
+        "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0",
+        "actions/setup-python@1111111111111111111111111111111111111111 # v6.3.0",
+      ),
+    );
+    assert.match(
+      validateReleaseContract(files).join("\n"),
+      /unexpected external action outside contract actions\/setup-python@1111111111111111111111111111111111111111/,
+    );
+
+    files = withFileChanged(file, (content) =>
+      content.replace(
+        "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0",
+        "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.2.0",
+      ),
+    );
+    assert.match(
+      validateReleaseContract(files).join("\n"),
+      /incorrect human version label for actions\/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1; expected v6\.3\.0/,
+    );
+  }
+});
+
 test("a missing app Windows release job is rejected", () => {
   const file = "app/.github/workflows/desktop.release.reuse.yml";
   const files = withFileChanged(file, (content) =>
@@ -648,10 +1847,166 @@ test("a missing app Windows release job is rejected", () => {
   );
 });
 
-// The desktop Snap target was removed outright: snapcraft 8 dropped the
-// `snapcraft snap` subcommand that electron-builder's legacy core22 path
-// hardcodes, and migrating to snapcraft.core24 was declined. What remains --
-// the OS/arch build matrix -- must still gate the release completely.
+test("desktop updater metadata, architecture, recovery, and environment guards cannot drift", () => {
+  let files = withFileChanged(".github/workflows/srn-desktop.yml", (content) =>
+    content.replace("=dmg-arm64", "=dmg-x64"),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /missing macOS DMG ARM64 architecture verification/,
+  );
+
+  files = withFileChanged(".github/workflows/srn-desktop.yml", (content) =>
+    content.replace(
+      "ruby app/scripts/verify-desktop-updater-metadata.rb",
+      "ruby -c app/scripts/verify-desktop-updater-metadata.rb",
+    ),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /root fan-in must verify exactly four updater authorities/,
+  );
+
+  files = withJobChanged(
+    "app/.github/workflows/desktop.release.reuse.yml",
+    "Linux-Snap",
+    "FanIn",
+    (job) =>
+      job.replace("environment: release-production", "environment: test"),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /missing Linux-Snap protected production environment|must be scoped exactly to signing, Snap build/,
+  );
+
+  files = withFileChanged(
+    "app/.github/workflows/desktop.release.reuse.yml",
+    (content) => content.replace("retention-days: 30", "retention-days: 1"),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /every standalone desktop recovery artifact must be retained for exactly 30 days/,
+  );
+
+  files = withFileChanged(
+    "app/.github/workflows/desktop.release.prod.yml",
+    (content) =>
+      content.replace(
+        'test "$GITHUB_SHA" = "$protected_sha"',
+        "true # protected commit check removed",
+      ),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /missing exact desktop recovery source commit/,
+  );
+
+  files = withFileChanged(
+    "app/scripts/verify-desktop-updater-metadata.rb",
+    (content) => content.replace("declared == actual", "declared != actual"),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /missing exact updater SHA-512 equality/,
+  );
+
+  files = withFileChanged(
+    "app/scripts/verify-desktop-updater-metadata.test.rb",
+    (content) =>
+      content.replace(
+        "test_rejects_wrong_architecture_for_every_supported_format",
+        "test_skips_wrong_architecture",
+      ),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /missing all-format updater architecture rejection test/,
+  );
+});
+
+test("OpenClaw release sources, recovery artifacts, and privileged jobs stay protected", () => {
+  let files = withFileChanged(".github/workflows/srn-openclaw.yml", (content) =>
+    content.replace(
+      'git merge-base --is-ancestor "$tagged_sha" "$protected_sha"',
+      "true # ancestry removed",
+    ),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /missing OpenClaw tag ancestry from protected main/,
+  );
+
+  files = withJobChanged(
+    ".github/workflows/srn-openclaw.yml",
+    "attest",
+    "release",
+    (job) =>
+      job.replace("environment: release-production", "environment: test"),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /missing attest protected production environment|must be scoped exactly to identity, attestation, and release/,
+  );
+
+  files = withFileChanged(".github/workflows/srn-openclaw.yml", (content) =>
+    content.replace("retention-days: 30", "retention-days: 1"),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /every OpenClaw recovery artifact must be retained for exactly 30 days/,
+  );
+
+  files = withFileChanged(".github/workflows/srn-openclaw.yml", (content) =>
+    content.replace(
+      '[[ "$tag" =~ ^srn-openclaw-v[0-9A-Za-z.+-]+$ ]]',
+      '[[ "$tag" =~ ^srn-openclaw-v[0-9A-Za-z.-]+$ ]]',
+    ),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /missing build-metadata-capable OpenClaw source tag authorization/,
+  );
+});
+
+test("OpenClaw build metadata remains accepted by the authoritative tag gates", () => {
+  let files = withFileChanged(".github/workflows/srn-openclaw.yml", (content) =>
+    content.replace(
+      'if [[ ! "${tag}" =~ ^srn-openclaw-v[0-9A-Za-z.+-]+$ ]]; then',
+      'if [[ ! "${tag}" =~ ^srn-openclaw-v[0-9A-Za-z.-]+$ ]]; then',
+    ),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /missing build-metadata-capable authoritative OpenClaw tag gate/,
+  );
+
+  files = withFileChanged("openclaw/scripts/release-config.mjs", (content) =>
+    content.replace("(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?", ""),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /missing full SemVer build-metadata release-tag grammar/,
+  );
+});
+
+test("OpenClaw retry recovery uses the central full SemVer parser", () => {
+  const files = withFileChanged(
+    ".github/workflows/srn-openclaw.yml",
+    (content) =>
+      content.replace(
+        'elif package_version="$(parse_explicit_version "${tag}")"; then',
+        'elif [[ "$version" =~ ^[0-9]+\\.[0-9]+\\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then',
+      ),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /missing recovered explicit OpenClaw tag parsing/,
+  );
+});
+
+// The canonical root desktop publisher intentionally carries no Snap target.
+// Snap is isolated to the audited manual-only embedded recovery workflow; the
+// root OS/arch installer matrix must still gate GitHub publication completely.
 const desktopWorkflowFile = ".github/workflows/srn-desktop.yml";
 
 test("the desktop pipeline carries no Snap target", () => {
@@ -718,8 +2073,8 @@ test("a best-effort desktop build leg is rejected", () => {
 test("dropping the build matrix from the desktop release fan-in is rejected", () => {
   const files = withFileChanged(desktopWorkflowFile, (content) =>
     content.replace(
-      "needs: [version, build, decide]",
-      "needs: [version, decide]",
+      "needs: [impact, identity, build, decide, fan_in]",
+      "needs: [impact, identity, decide, fan_in]",
     ),
   );
 
@@ -734,7 +2089,7 @@ test("dropping the build matrix from the desktop release fan-in is rejected", ()
 // bare `v*`, taking the repo-global tag namespace and the "Latest" badge.
 test("an unnamespaced desktop release tag is rejected", () => {
   const files = withFileChanged(desktopWorkflowFile, (content) =>
-    content.replace('echo "tag=${TOOL}-v${version}"', 'echo "tag=v${version}"'),
+    content.replace('tag="${TOOL}-v${version}"', 'tag="v${version}"'),
   );
 
   assert.match(
@@ -746,8 +2101,8 @@ test("an unnamespaced desktop release tag is rejected", () => {
 test("dropping the namespaced desktop tag is rejected", () => {
   const files = withFileChanged(desktopWorkflowFile, (content) =>
     content.replace(
-      'echo "tag=${TOOL}-v${version}"',
-      'echo "tag=srn-desktop-${version}"',
+      'tag="${TOOL}-v${version}"',
+      'tag="srn-desktop-${version}"',
     ),
   );
 
@@ -760,7 +2115,7 @@ test("dropping the namespaced desktop tag is rejected", () => {
 test("reverting the desktop version to the run-number scheme is rejected", () => {
   const files = withFileChanged(desktopWorkflowFile, (content) =>
     content.replace(
-      'version="${YY}.$((max + 1))"',
+      'version="${yy}.$((max + 1))"',
       'version="$(date -u +%y).$(date -u +%-m).${GITHUB_RUN_NUMBER}"',
     ),
   );
@@ -776,8 +2131,8 @@ test("reverting the desktop version to the run-number scheme is rejected", () =>
 test("baking the non-semver release version into the app is rejected", () => {
   const files = withFileChanged(desktopWorkflowFile, (content) =>
     content.replace(
-      "-c.extraMetadata.version=${{ needs.version.outputs.app_version }}",
-      "-c.extraMetadata.version=${{ needs.version.outputs.version }}",
+      "-c.extraMetadata.version=${{ needs.identity.outputs.app_version }}",
+      "-c.extraMetadata.version=${{ needs.identity.outputs.version }}",
     ),
   );
 
@@ -789,9 +2144,9 @@ test("baking the non-semver release version into the app is rejected", () => {
 
 test("a non-srn-* desktop release title is rejected", () => {
   const files = withFileChanged(desktopWorkflowFile, (content) =>
-    content.replace(
-      "name: srn-desktop ${{ needs.version.outputs.version }}",
-      "name: Standard Red Notes Desktop ${{ needs.version.outputs.version }}",
+    content.replaceAll(
+      'name="${TOOL} ${version}"',
+      'name="Standard Red Notes Desktop ${version}"',
     ),
   );
 
@@ -805,8 +2160,8 @@ test("suppressed desktop checksum failures are rejected", () => {
   const file = ".github/workflows/srn-desktop.yml";
   const files = withFileChanged(file, (content) =>
     content.replace(
-      'sha256sum "${files[@]}" > SHA256SUMS.txt',
-      'sha256sum "${files[@]}" > SHA256SUMS.txt || true',
+      '(cd "$directory" && sha256sum --check SHA256SUMS.txt) >/dev/null',
+      '(cd "$directory" && sha256sum --check SHA256SUMS.txt || true) >/dev/null',
     ),
   );
 
@@ -816,90 +2171,33 @@ test("suppressed desktop checksum failures are rejected", () => {
   );
 });
 
-test("root mobile release paths must be monorepo-relative", () => {
-  const file = ".github/workflows/srn-mobile.yml";
-  const files = withFileChanged(file, (content) =>
-    content.replaceAll(
-      "node-version-file: app/.nvmrc",
-      "node-version-file: .nvmrc",
-    ),
-  );
-
-  assert.match(
-    validateReleaseContract(files).join("\n"),
-    /missing app-relative Node version path/,
-  );
-});
-
-test("root Android architecture validation is required", () => {
-  const file = ".github/workflows/srn-mobile.yml";
-  const files = withFileChanged(file, (content) =>
-    content.replace("for arch in arm64-v8a x86_64", "for arch in arm64-v8a"),
-  );
-
-  assert.match(
-    validateReleaseContract(files).join("\n"),
-    /missing required Android native architectures/,
-  );
-});
-
-test("root iOS release artifact upload is required", () => {
-  const file = ".github/workflows/srn-mobile.yml";
-  const files = withFileChanged(file, (content) =>
-    content.replace("name: srn-mobile-ios", "name: removed-ios-artifact"),
-  );
-
-  assert.match(
-    validateReleaseContract(files).join("\n"),
-    /missing validated iOS artifact upload/,
-  );
-});
-
-test("missing Android release architectures are rejected", () => {
-  const file = "app/packages/mobile/android/gradle.properties";
-  const files = withFileChanged(file, (content) =>
-    content.replace(",x86_64", ""),
-  );
-
-  assert.match(
-    validateReleaseContract(files).join("\n"),
-    /reactNativeArchitectures is missing x86_64/,
-  );
-});
-
-test("a missing iOS arm64 artifact assertion is rejected", () => {
-  const file = "app/.github/workflows/mobile.release.prod.yml";
-  const files = withFileChanged(file, (content) =>
-    content.replace("Verify iOS device arm64 artifact", "Verify iOS artifact"),
-  );
-
-  assert.match(
-    validateReleaseContract(files).join("\n"),
-    /missing iOS device architecture assertion step/,
-  );
-});
-
-test("a non-desktop softprops release that claims the Latest pointer is rejected", () => {
-  const file = ".github/workflows/srn-admin.yml";
-  const files = withFileChanged(file, (content) =>
-    content.replace("          make_latest: 'false'\n", ""),
-  );
-
-  assert.match(
-    validateReleaseContract(files).join("\n"),
-    /srn-admin\.yml: 1 'uses: softprops\/action-gh-release' release step\(s\) but 0 'make_latest: 'false'' opt-out\(s\)/,
-  );
-});
-
 test("a non-desktop gh release that claims the Latest pointer is rejected", () => {
-  const file = ".github/workflows/srn-server.yml";
+  const file = ".github/workflows/srn-openclaw.yml";
   const files = withFileChanged(file, (content) =>
-    content.replace("--latest=false", "--draft=false"),
+    content.replace("-f make_latest=false", "-f make_latest=true"),
   );
 
   assert.match(
     validateReleaseContract(files).join("\n"),
-    /srn-server\.yml: 1 'gh release create' release step\(s\) but 0 '--latest=false' opt-out\(s\)/,
+    /srn-openclaw\.yml: 1 'gh api release PATCH' release step\(s\) but 0 '-f make_latest=false' opt-out\(s\)/,
+  );
+});
+
+test("GitHub release API fields preserve their REST scalar types", () => {
+  let files = withFileChanged(".github/workflows/srn-openclaw.yml", (content) =>
+    content.replace("-f make_latest=false", "-F make_latest=false"),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /make_latest is a REST string enum and must use raw-field '-f'/,
+  );
+
+  files = withFileChanged(".github/workflows/srn-openclaw.yml", (content) =>
+    content.replace("-F draft=false", "-f draft=false"),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /draft and prerelease are REST booleans and must use typed-field '-F'/,
   );
 });
 
@@ -907,24 +2205,21 @@ test("a second non-desktop release step without the opt-out is rejected", () => 
   const file = ".github/workflows/srn-openclaw.yml";
   const files = withFileChanged(file, (content) =>
     content.replace(
-      'gh release create "${TAG}"',
-      'gh release create "${TAG}-extra"\n          gh release create "${TAG}"',
+      'gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}"',
+      'gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}"\n          gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}"',
     ),
   );
 
   assert.match(
     validateReleaseContract(files).join("\n"),
-    /srn-openclaw\.yml: 2 'gh release create' release step\(s\) but 1 '--latest=false' opt-out\(s\)/,
+    /srn-openclaw\.yml: 2 'gh api release PATCH' release step\(s\) but 1 '-f make_latest=false' opt-out\(s\)/,
   );
 });
 
 test("srn-desktop giving away the Latest pointer is rejected", () => {
   const file = ".github/workflows/srn-desktop.yml";
   const files = withFileChanged(file, (content) =>
-    content.replace(
-      "          draft: false\n",
-      "          draft: false\n          make_latest: 'false'\n",
-    ),
+    content.replace("-f make_latest=true", "-f make_latest=false"),
   );
 
   assert.match(
@@ -952,10 +2247,15 @@ test("every publisher must fetch complete history and tags before impact analysi
 test("a publisher cannot tag without the unchanged-artifact decision", () => {
   const file = ".github/workflows/srn-home-server.yml";
   const files = withFileChanged(file, (content) =>
-    content.replace(
-      "  release:\n    name: release\n    needs: [decide, package]\n    if: needs.decide.outputs.changed == 'true'\n",
-      "  release:\n    name: release\n    needs: [package]\n",
-    ),
+    content
+      .replace(
+        "    needs: [impact, build, decide, identity, package, smoke]\n",
+        "    needs: [impact, build, identity, package, smoke]\n",
+      )
+      .replace(
+        "    if: always() && needs.impact.result == 'success' && needs.decide.outputs.changed == 'true' && needs.identity.result == 'success' && ((needs.package.result == 'success' && needs.smoke.result == 'success') || (needs.identity.outputs.published == 'true' && needs.package.result == 'skipped' && needs.smoke.result == 'skipped'))\n",
+        "    if: always() && needs.identity.result == 'success'\n",
+      ),
   );
   const errors = validateReleaseContract(files).join("\n");
 
@@ -1025,10 +2325,13 @@ test("desktop packaging fingerprints bind lock, patches, config, toolchain, and 
         '              --metadata "electronVersion=${electron_version}" \\\n',
         "",
       )
-      .replace("actions/setup-python@v6", "actions/setup-python@v7")
       .replace(
-        "builder: '--linux AppImage deb --arm64'",
-        "builder: '--linux AppImage rpm --arm64'",
+        "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0",
+        "actions/setup-python@1111111111111111111111111111111111111111 # v6.3.0",
+      )
+      .replace(
+        'builder: "--linux AppImage deb --arm64"',
+        'builder: "--linux AppImage rpm --arm64"',
       ),
   );
   const errors = validateReleaseContract(files).join("\n");
@@ -1063,16 +2366,26 @@ test("mobile packaging fingerprints bind dependency locks and native toolchains"
     content
       .replace("            --path app/yarn.lock \\\n", "")
       .replace("            --path app/packages/mobile/Gemfile.lock \\\n", "")
-      .replace("actions/setup-java@v5.5.0", "actions/setup-java@v6")
-      .replaceAll("ruby/setup-ruby@v1.319.0", "ruby/setup-ruby@v2")
       .replace(
-        "maxim-lobanov/setup-xcode@v1.7.0",
-        "maxim-lobanov/setup-xcode@v2",
+        "            --path app/packages/mobile/fastlane/Fastfile \\\n",
+        "",
       )
-      .replace("java-version: '17'", "java-version: '21'")
-      .replaceAll("ruby-version: '3.4.7'", "ruby-version: '3.5.0'")
-      .replace("xcode-version: '26'", "xcode-version: '27'")
-      .replace("runs-on: macos-15", "runs-on: macos-16"),
+      .replaceAll(
+        "actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a",
+        "actions/setup-java@1111111111111111111111111111111111111111",
+      )
+      .replaceAll(
+        "ruby/setup-ruby@003a5c4d8d6321bd302e38f6f0ec593f77f06600",
+        "ruby/setup-ruby@2222222222222222222222222222222222222222",
+      )
+      .replaceAll(
+        "maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90",
+        "maxim-lobanov/setup-xcode@3333333333333333333333333333333333333333",
+      )
+      .replace('java-version: "17"', 'java-version: "21"')
+      .replaceAll('ruby-version: "3.4.7"', 'ruby-version: "3.5.0"')
+      .replaceAll('xcode-version: "26"', 'xcode-version: "27"')
+      .replaceAll("runs-on: macos-15", "runs-on: macos-16"),
   );
   const errors = validateReleaseContract(files).join("\n");
   assert.match(
@@ -1083,15 +2396,25 @@ test("mobile packaging fingerprints bind dependency locks and native toolchains"
     errors,
     /missing mobile deterministic packaging input 'app\/packages\/mobile\/Gemfile\.lock'/,
   );
-  assert.match(errors, /missing contract-bound Android Java action/);
-  assert.match(errors, /missing contract-bound mobile Ruby action/);
-  assert.match(errors, /missing contract-bound Xcode action/);
+  assert.match(
+    errors,
+    /unexpected external action outside contract actions\/setup-java/,
+  );
+  assert.match(
+    errors,
+    /unexpected external action outside contract ruby\/setup-ruby/,
+  );
+  assert.match(
+    errors,
+    /unexpected external action outside contract maxim-lobanov\/setup-xcode/,
+  );
   assert.match(errors, /missing contract-bound Java version/);
   assert.match(errors, /missing contract-bound Ruby version/);
   assert.match(errors, /missing contract-bound Xcode version/);
+  assert.match(errors, /missing iOS macOS runner/);
   assert.match(
     errors,
-    /missing contract-bound mobile runner or publication command/,
+    /missing mobile deterministic packaging input 'app\/packages\/mobile\/fastlane\/Fastfile'/,
   );
 });
 
@@ -1114,10 +2437,12 @@ test("release-contract CI runs when release analysis or OpenClaw gating changes"
   const file = ".github/workflows/release-contract.yml";
   const files = withFileChanged(file, (content) =>
     content
-      .replace("      - '.github/workflows/srn-openclaw.yml'\n", "")
-      .replace("      - 'scripts/fingerprint-release-tree.mjs'\n", "")
-      .replace("      - 'scripts/compare-release-fingerprints.mjs'\n", "")
-      .replace("      - 'scripts/validate-release-contract.mjs'\n", ""),
+      .replace('      - ".github/workflows/srn-openclaw.yml"\n', "")
+      .replace('      - "scripts/fingerprint-release-tree.mjs"\n', "")
+      .replace('      - "scripts/compare-release-fingerprints.mjs"\n', "")
+      .replace('      - "app/packages/mobile/fastlane/**"\n', "")
+      .replace('      - "docs/ci-production-gates.md"\n', "")
+      .replace('      - "scripts/validate-release-contract.mjs"\n', ""),
   );
   const errors = validateReleaseContract(files).join("\n");
 
@@ -1137,6 +2462,14 @@ test("release-contract CI runs when release analysis or OpenClaw gating changes"
     errors,
     /release-contract\.yml: expected scripts\/validate-release-contract\.mjs in both push and pull_request paths, found 1/,
   );
+  assert.match(
+    errors,
+    /release-contract\.yml: expected app\/packages\/mobile\/fastlane\/\*\* in both push and pull_request paths, found 1/,
+  );
+  assert.match(
+    errors,
+    /release-contract\.yml: expected docs\/ci-production-gates\.md in both push and pull_request paths, found 1/,
+  );
 });
 
 test("publisher concurrency and write permissions stay product-scoped", () => {
@@ -1151,7 +2484,7 @@ test("publisher concurrency and write permissions stay product-scoped", () => {
         "concurrency:\n  group: srn-admin-release\n  cancel-in-progress: false\n\n",
         "",
       )
-      .replace("    permissions:\n      contents: write\n", ""),
+      .replaceAll("    permissions:\n      contents: write\n", ""),
   );
   const errors = validateReleaseContract(files).join("\n");
 
@@ -1164,6 +2497,7 @@ test("publisher concurrency and write permissions stay product-scoped", () => {
     errors,
     /srn-admin\.yml: missing non-cancelling release concurrency/,
   );
+  assert.match(errors, /srn-admin\.yml: missing native draft permission/);
   assert.match(
     errors,
     /srn-admin\.yml: missing publication-only write permission/,
@@ -1213,7 +2547,7 @@ test("release-contract CI produces both complete report formats", () => {
       .replace("            --output release-impact.json \\\n", "")
       .replace("            --report release-impact.md\n", "")
       .replace(
-        "        uses: actions/upload-artifact@v7\n",
+        "        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1\n",
         "        run: true\n",
       ),
   );
@@ -1233,7 +2567,7 @@ test("release-contract CI produces both complete report formats", () => {
   );
   assert.match(
     errors,
-    /release-contract\.yml: missing release report artifact publication/,
+    /release-contract\.yml: missing immutable release report artifact publication/,
   );
 });
 
@@ -1284,7 +2618,7 @@ test("hybrid history ambiguity and package-version collisions stay fail-closed",
 test("computed dependency closure must remain covered by publisher paths", () => {
   const file = ".github/workflows/srn-mobile.yml";
   const files = withFileChanged(file, (content) =>
-    content.replace("      - 'app/packages/api/**'\n", ""),
+    content.replace('      - "app/packages/api/**"\n', ""),
   );
 
   assert.match(
@@ -1298,10 +2632,10 @@ test("desktop trigger paths cover reusable and shared build configuration", () =
   const files = withFileChanged(file, (content) =>
     content
       .replace(
-        "      - 'app/.github/workflows/desktop.release.reuse.yml'\n",
+        '      - "app/.github/workflows/desktop.release.reuse.yml"\n',
         "",
       )
-      .replace("      - 'app/babel.config.js'\n", ""),
+      .replace('      - "app/babel.config.js"\n', ""),
   );
   const errors = validateReleaseContract(files).join("\n");
 
@@ -1319,8 +2653,8 @@ test("product publishers do not wake for shared release-gate changes", () => {
   const file = ".github/workflows/srn-client.yml";
   const files = withFileChanged(file, (content) =>
     content.replace(
-      "      - 'cli/srn-client/**'\n",
-      "      - 'cli/srn-client/**'\n      - 'scripts/**'\n",
+      '      - "cli/srn-client/**"\n',
+      '      - "cli/srn-client/**"\n      - "scripts/**"\n',
     ),
   );
 
@@ -1354,7 +2688,7 @@ test("an explicit OpenClaw tag is excluded from its own prior-release baseline",
         "",
       )
       .replace(
-        '            --exclude-release-ref "${EXCLUDED_RELEASE_REF}" \\\n',
+        '            --exclude-release-ref "${excluded_release_ref}" \\\n',
         "",
       ),
   );
@@ -1399,8 +2733,8 @@ test("workflow-created mobile tags cannot recursively trigger publication", () =
   const file = ".github/workflows/srn-mobile.yml";
   const files = withFileChanged(file, (content) =>
     content.replace(
-      "      - '@standardnotes/web@*'\n",
-      "      - '@standardnotes/web@*'\n      - '@standardnotes/mobile@*'\n",
+      '      - "@standardnotes/web@*"\n',
+      '      - "@standardnotes/web@*"\n      - "@standardnotes/mobile@*"\n',
     ),
   );
 
@@ -1537,4 +2871,70 @@ test("unmanaged and private workspaces stay inventory-only", () => {
     errors,
     /analyze-release-impact\.mjs: missing explicit workspace publication policy/,
   );
+});
+
+test("workflow ownership remains complete, scoped, and fail-closed", () => {
+  const file = "scripts/analyze-release-impact.mjs";
+  const files = withFileChanged(file, (content) =>
+    content
+      .replaceAll("discoverWorkflowOwnership", "discoverLegacyOwnership")
+      .replaceAll(
+        '"unclassified-external-mutation-workflow"',
+        '"ignored-external-mutation-workflow"',
+      )
+      .replaceAll(
+        '"quarantined-workflow-reactivated"',
+        '"quarantined-workflow-allowed"',
+      )
+      .replaceAll("declaredTriggers", "implicitTriggers")
+      .replaceAll("rootDiscoverable", "rootMaybeDiscoverable")
+      .replaceAll("embeddedPortable", "embeddedMaybePortable"),
+  );
+  const errors = validateReleaseContract(files).join("\n");
+
+  assert.match(
+    errors,
+    /analyze-release-impact\.mjs: missing complete workflow ownership inventory/,
+  );
+  assert.match(
+    errors,
+    /analyze-release-impact\.mjs: missing unclassified external mutation guard/,
+  );
+  assert.match(
+    errors,
+    /analyze-release-impact\.mjs: missing quarantined publisher reactivation guard/,
+  );
+  assert.match(
+    errors,
+    /analyze-release-impact\.mjs: missing reported declared workflow triggers/,
+  );
+  assert.match(
+    errors,
+    /analyze-release-impact\.mjs: missing root-discoverability workflow metadata/,
+  );
+  assert.match(
+    errors,
+    /analyze-release-impact\.mjs: missing embedded-portability workflow metadata/,
+  );
+});
+
+test("release workflow job inventories reject hidden extra jobs", () => {
+  for (const file of [
+    ".github/workflows/srn-client.yml",
+    ".github/workflows/srn-openclaw.yml",
+    ".github/workflows/srn-desktop.yml",
+    ".github/workflows/release-contract.yml",
+  ]) {
+    const files = withFileChanged(
+      file,
+      (content) =>
+        `${content}\n  unreviewed_job:\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n`,
+    );
+    assert.match(
+      validateReleaseContract(files).join("\n"),
+      new RegExp(
+        `${file.replaceAll(".", "\\.")}: job set must exactly match the release contract`,
+      ),
+    );
+  }
 });

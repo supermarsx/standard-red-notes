@@ -109,6 +109,63 @@ test("root CI script wiring is enforced", () => {
   );
 });
 
+test("CI contracts install release policy dependencies before direct checks", () => {
+  for (const [current, replacement] of [
+    ["yarn release:policy:install && ", ""],
+    ["yarn test:release-impact:run", "yarn test:release-impact"],
+    ["yarn test:release-contract:run", "yarn test:release-contract"],
+    ["yarn release:contract:run", "yarn release:contract"],
+  ]) {
+    const files = withFileChanged("package.json", (content) => {
+      const packageJson = JSON.parse(content);
+      packageJson.scripts["ci:contracts"] = packageJson.scripts[
+        "ci:contracts"
+      ].replace(current, replacement);
+      return JSON.stringify(packageJson);
+    });
+
+    assert.match(
+      validateCiContract(files).join("\n"),
+      /ci:contracts script is not wired/,
+    );
+  }
+});
+
+test("release policy dependency installation stays locked and non-executing", () => {
+  const files = withFileChanged("package.json", (content) => {
+    const packageJson = JSON.parse(content);
+    packageJson.scripts["release:policy:install"] =
+      "npm install --prefix scripts";
+    return JSON.stringify(packageJson);
+  });
+
+  assert.match(
+    validateCiContract(files).join("\n"),
+    /release:policy:install script is not wired/,
+  );
+});
+
+test("direct release checks cannot reinstall policy dependencies", () => {
+  for (const scriptName of [
+    "test:release-impact:run",
+    "test:release-contract:run",
+    "release:contract:run",
+  ]) {
+    const files = withFileChanged("package.json", (content) => {
+      const packageJson = JSON.parse(content);
+      packageJson.scripts[scriptName] =
+        `yarn release:policy:install && ${packageJson.scripts[scriptName]}`;
+      return JSON.stringify(packageJson);
+    });
+
+    assert.ok(
+      validateCiContract(files).includes(
+        `package.json: ${scriptName} script is not wired to the CI contract`,
+      ),
+    );
+  }
+});
+
 test("server format commands cannot omit executable package sources", () => {
   for (const scriptName of ["format", "format:check"]) {
     const files = withFileChanged("server/package.json", (content) => {

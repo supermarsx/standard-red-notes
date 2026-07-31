@@ -1,12 +1,666 @@
 # frozen_string_literal: true
 
+require 'base64'
+require 'digest'
+require 'fileutils'
+require 'json'
+require 'net/http'
+require 'openssl'
+require 'stringio'
+require 'uri'
+
 fastlane_version '2.207.0'
+
+ANDROID_PRODUCTION_PACKAGE_ID = 'com.standardnotes'
+IOS_PRODUCTION_BUNDLE_ID = 'com.standardnotes.standardnotes'
+IOS_SHARE_EXTENSION_BUNDLE_ID = 'com.standardnotes.standardnotes.Share-To-SN'
+IOS_PRODUCTION_TEAM_ID = 'HKF9BXSN95'
+
+def required_artifact_path(value, label)
+  candidate = value.to_s.strip
+  UI.user_error!("#{label} path is required") if candidate.empty?
+  path = File.expand_path(candidate)
+  UI.user_error!("#{label} is missing: #{path}") unless File.file?(path)
+  path
+end
+
+def required_numeric_build_number(value, label)
+  build_number = value.to_s.strip
+  UI.user_error!("#{label} must be a positive integer") unless build_number.match?(/\A[1-9][0-9]*\z/)
+  build_number
+end
+
+def required_app_version(value, label)
+  app_version = value.to_s.strip
+  UI.user_error!("#{label} must use stable core SemVer") unless app_version.match?(/\A(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\z/)
+  app_version
+end
+
+def required_output_path(value, label)
+  candidate = value.to_s.strip
+  UI.user_error!("#{label} path is required") if candidate.empty?
+  File.expand_path(candidate)
+end
+
+def write_json_evidence(path, value)
+  FileUtils.mkdir_p(File.dirname(path))
+  File.open(path, File::WRONLY | File::CREAT | File::TRUNC, 0o600) do |file|
+    file.write("#{JSON.pretty_generate(value)}\n")
+  end
+end
+
+def http_json(uri, request, accepted_statuses: [200])
+  response = Net::HTTP.start(uri.hostname, uri.port, use_ssl: uri.scheme == 'https') do |http|
+    http.open_timeout = 30
+    http.read_timeout = 90
+    http.request(request)
+  end
+  unless accepted_statuses.include?(response.code.to_i)
+    UI.user_error!("Provider API #{request.method} #{uri.path} failed (HTTP #{response.code}): #{response.body}")
+  end
+  return {} if response.body.to_s.empty?
+
+  JSON.parse(response.body)
+rescue JSON::ParserError => e
+  UI.user_error!("Provider API returned invalid JSON for #{uri}: #{e.message}")
+end
+
+def inspect_google_play_release
+  require 'googleauth'
+
+  package_name = ANDROID_PRODUCTION_PACKAGE_ID
+  expected_version_code = required_numeric_build_number ENV['ANDROID_VERSION_CODE'], 'Android versionCode'
+  expected_sha256 = ENV['ANDROID_AAB_SHA256'].to_s.strip.downcase
+  UI.user_error!('Android AAB SHA-256 must contain exactly 64 hexadecimal characters') unless expected_sha256.match?(/\A[0-9a-f]{64}\z/)
+  track_name = ENV.fetch('ANDROID_TRACK', 'beta').to_s.strip
+  UI.user_error!('Android track is required') if track_name.empty?
+
+  credentials = Google::Auth::ServiceAccountCredentials.make_creds(
+    json_key_io: StringIO.new(ENV.fetch('GOOGLE_PLAY_JSON_KEY_DATA')),
+    scope: ['https://www.googleapis.com/auth/androidpublisher']
+  )
+  token = credentials.fetch_access_token!.fetch('access_token')
+  encoded_package = URI.encode_www_form_component(package_name)
+  base = "https://androidpublisher.googleapis.com/androidpublisher/v3/applications/#{encoded_package}"
+
+  request_json = lambda do |method, suffix, body = nil, accepted = [200]|
+    uri = URI("#{base}#{suffix}")
+    request_class = {
+      get: Net::HTTP::Get,
+      post: Net::HTTP::Post,
+      delete: Net::HTTP::Delete
+    }.fetch(method)
+    request = request_class.new(uri)
+    request['Authorization'] = "Bearer #{token}"
+    request['Accept'] = 'application/json'
+    unless body.nil?
+      request['Content-Type'] = 'application/json'
+      request.body = body
+    end
+    http_json(uri, request, accepted_statuses: accepted)
+  end
+
+  edit = request_json.call(:post, '/edits', '{}', [200])
+  edit_id = edit.fetch('id')
+  UI.user_error!('Google Play returned an empty edit identifier') if edit_id.to_s.empty?
+
+  begin
+    bundles = request_json.call(:get, "/edits/#{URI.encode_www_form_component(edit_id)}/bundles").fetch('bundles', [])
+    track = request_json.call(
+      :get,
+      "/edits/#{URI.encode_www_form_component(edit_id)}/tracks/#{URI.encode_www_form_component(track_name)}"
+    )
+  ensure
+    request_json.call(:delete, "/edits/#{URI.encode_www_form_component(edit_id)}", nil, [200, 204])
+  end
+
+  matching_bundles = bundles.select { |bundle| bundle['versionCode'].to_s == expected_version_code }
+  matching_releases = Array(track['releases']).select do |release|
+    Array(release['versionCodes']).map(&:to_s).include?(expected_version_code)
+  end
+  present = !matching_bundles.empty? || !matching_releases.empty?
+  remote_sha256 = matching_bundles.one? ? matching_bundles.first['sha256'].to_s.downcase : nil
+  track_status = matching_releases.one? ? matching_releases.first['status'].to_s : nil
+  valid = matching_bundles.one? && matching_releases.one? &&
+          remote_sha256 == expected_sha256 && track_status == 'completed'
+
+  {
+    'schema' => 1,
+    'provider' => 'google-play',
+    'status' => valid ? 'valid' : (present ? 'invalid' : 'absent'),
+    'present' => present,
+    'valid' => valid,
+    'packageName' => package_name,
+    'versionCode' => expected_version_code,
+    'expectedSha256' => expected_sha256,
+    'remoteSha256' => remote_sha256,
+    'track' => track_name,
+    'trackStatus' => track_status,
+    'matchingBundleCount' => matching_bundles.length,
+    'matchingTrackReleaseCount' => matching_releases.length
+  }
+end
+
+def base64url(value)
+  Base64.urlsafe_encode64(value, padding: false)
+end
+
+def app_store_connect_jwt
+  key_id = ENV.fetch('APPSTORE_CONNECT_KEY_ID').to_s.strip
+  issuer_id = ENV.fetch('APPSTORE_CONNECT_KEY_ISSUER_ID').to_s.strip
+  UI.user_error!('App Store Connect key ID is required') if key_id.empty?
+  UI.user_error!('App Store Connect issuer ID is required') if issuer_id.empty?
+  key = OpenSSL::PKey::EC.new(File.read('ios/Authkey.p8'))
+  issued_at = Time.now.to_i
+  header = base64url(JSON.generate({ alg: 'ES256', kid: key_id, typ: 'JWT' }))
+  payload = base64url(JSON.generate({ iss: issuer_id, iat: issued_at, exp: issued_at + 600, aud: 'appstoreconnect-v1' }))
+  signing_input = "#{header}.#{payload}"
+  der_signature = key.dsa_sign_asn1(Digest::SHA256.digest(signing_input))
+  integers = OpenSSL::ASN1.decode(der_signature).value
+  raw_signature = integers.map { |integer| integer.value.to_s(2).rjust(32, "\0") }.join
+  "#{signing_input}.#{base64url(raw_signature)}"
+end
+
+def app_store_connect_get(path, query = {})
+  uri = URI("https://api.appstoreconnect.apple.com#{path}")
+  uri.query = URI.encode_www_form(query) unless query.empty?
+  request = Net::HTTP::Get.new(uri)
+  request['Authorization'] = "Bearer #{app_store_connect_jwt}"
+  request['Accept'] = 'application/json'
+  http_json(uri, request)
+end
+
+def app_store_connect_post(path, payload, accepted_statuses: [200, 201, 204])
+  uri = URI("https://api.appstoreconnect.apple.com#{path}")
+  request = Net::HTTP::Post.new(uri)
+  request['Authorization'] = "Bearer #{app_store_connect_jwt}"
+  request['Accept'] = 'application/json'
+  request['Content-Type'] = 'application/json'
+  request.body = JSON.generate(payload)
+  http_json(uri, request, accepted_statuses: accepted_statuses)
+end
+
+def reviewed_export_compliance
+  raw_value = ENV['IOS_USES_NON_EXEMPT_ENCRYPTION'].to_s.strip
+  unless %w[true false].include?(raw_value)
+    UI.user_error!('IOS_USES_NON_EXEMPT_ENCRYPTION must be an operator-reviewed protected value of exactly true or false')
+  end
+
+  compliance_code = ENV['IOS_EXPORT_COMPLIANCE_CODE'].to_s.strip
+  if raw_value == 'true' && compliance_code.empty?
+    UI.user_error!('IOS_EXPORT_COMPLIANCE_CODE is required when the approved build classification uses non-exempt encryption')
+  end
+  if raw_value == 'false' && !compliance_code.empty?
+    UI.user_error!('IOS_EXPORT_COMPLIANCE_CODE must be empty when the approved build classification is exempt')
+  end
+
+  {
+    uses_non_exempt_encryption: raw_value == 'true',
+    compliance_code: compliance_code
+  }
+end
+
+def exact_source_file_md5(source_file_checksums)
+  return nil unless source_file_checksums.is_a?(Hash)
+  return nil unless (source_file_checksums.keys - %w[file composite]).empty?
+  return nil unless source_file_checksums.key?('file')
+
+  file_checksum = source_file_checksums['file']
+  return nil unless file_checksum.is_a?(Hash) && file_checksum.keys.sort == %w[algorithm hash]
+  return nil unless file_checksum['algorithm'].to_s == 'MD5'
+
+  if source_file_checksums.key?('composite')
+    composite = source_file_checksums['composite']
+    return nil unless composite.is_a?(Hash) && composite.keys.sort == %w[algorithm hash]
+    return nil if composite['algorithm'].to_s.empty? || composite['hash'].to_s.empty?
+  end
+
+  value = file_checksum['hash'].to_s.downcase
+  value if value.match?(/\A[0-9a-f]{32}\z/)
+end
+
+def exact_app_store_app
+  expected_apple_id = required_numeric_build_number ENV['APPLE_APP_ID'], 'App Store app ID'
+  response = app_store_connect_get('/v1/apps', {
+    'filter[bundleId]' => IOS_PRODUCTION_BUNDLE_ID,
+    'limit' => 2
+  })
+  UI.user_error!('App Store Connect app identity query unexpectedly returned another page') if response.dig('links', 'next')
+  apps = response.fetch('data', [])
+  UI.user_error!("Expected exactly one App Store Connect app for #{IOS_PRODUCTION_BUNDLE_ID}, found #{apps.length}") unless apps.one?
+  app_id = apps.first.fetch('id').to_s
+  UI.user_error!("App Store Connect app ID '#{app_id}' does not match configured '#{expected_apple_id}'") unless app_id == expected_apple_id
+  app_id
+end
+
+def exact_app_store_build(app_id, app_version, build_number)
+  response = app_store_connect_get('/v1/builds', {
+    'filter[app]' => app_id,
+    'filter[version]' => build_number,
+    'filter[preReleaseVersion.version]' => app_version,
+    'filter[preReleaseVersion.platform]' => 'IOS',
+    'include' => 'preReleaseVersion',
+    'fields[builds]' => 'version,processingState,usesNonExemptEncryption,preReleaseVersion,appEncryptionDeclaration',
+    'fields[preReleaseVersions]' => 'version,platform',
+    'limit' => 200
+  })
+  UI.user_error!('App Store Connect build identity evidence exceeded the exact 200-item query boundary') if response.dig('links', 'next')
+  included_versions = response.fetch('included', []).select { |resource| resource['type'] == 'preReleaseVersions' }.to_h do |resource|
+    [resource.fetch('id').to_s, resource.fetch('attributes', {})]
+  end
+  matches = response.fetch('data', []).select do |build|
+    prerelease_id = build.dig('relationships', 'preReleaseVersion', 'data', 'id').to_s
+    prerelease = included_versions[prerelease_id] || {}
+    build.fetch('attributes', {})['version'].to_s == build_number &&
+      prerelease['version'].to_s == app_version && prerelease['platform'].to_s == 'IOS'
+  end
+  return { 'status' => 'pending', 'matchingBuildCount' => 0 } if matches.empty?
+  return { 'status' => 'invalid', 'matchingBuildCount' => matches.length } unless matches.one?
+
+  build = matches.first
+  attributes = build.fetch('attributes', {})
+  {
+    'status' => attributes['processingState'].to_s == 'VALID' ? 'valid' :
+      (%w[PROCESSING].include?(attributes['processingState'].to_s) ? 'pending' : 'invalid'),
+    'matchingBuildCount' => 1,
+    'buildId' => build.fetch('id').to_s,
+    'processingState' => attributes['processingState'].to_s,
+    'usesNonExemptEncryption' => attributes['usesNonExemptEncryption'],
+    'encryptionDeclarationId' => build.dig('relationships', 'appEncryptionDeclaration', 'data', 'id').to_s
+  }
+end
+
+def exact_export_compliance_evidence(build_evidence)
+  approved = reviewed_export_compliance
+  remote_value = build_evidence['usesNonExemptEncryption']
+  return { 'valid' => false, 'reason' => 'App Store Connect omitted usesNonExemptEncryption' } unless [true, false].include?(remote_value)
+  return { 'valid' => false, 'reason' => 'App Store Connect encryption classification differs from the approved release value' } unless remote_value == approved[:uses_non_exempt_encryption]
+
+  declaration_id = build_evidence['encryptionDeclarationId'].to_s
+  if approved[:uses_non_exempt_encryption]
+    return { 'valid' => false, 'reason' => 'Non-exempt build has no App Store Connect encryption declaration' } if declaration_id.empty?
+
+    declaration = app_store_connect_get("/v1/appEncryptionDeclarations/#{URI.encode_www_form_component(declaration_id)}", {
+      'fields[appEncryptionDeclarations]' => 'usesEncryption,exempt,appEncryptionDeclarationState,codeValue'
+    })
+    attributes = declaration.fetch('data', {}).fetch('attributes', {})
+    declaration_valid = attributes['exempt'] == false && attributes['codeValue'].to_s == approved[:compliance_code] &&
+                        attributes['appEncryptionDeclarationState'].to_s == 'APPROVED'
+    return {
+      'valid' => declaration_valid,
+      'declarationId' => declaration_id,
+      'declarationState' => attributes['appEncryptionDeclarationState'].to_s,
+      'codeMatches' => attributes['codeValue'].to_s == approved[:compliance_code],
+      'deprecatedUsesEncryption' => attributes['usesEncryption']
+    }
+  end
+
+  return { 'valid' => true, 'declarationId' => nil } if declaration_id.empty?
+
+  declaration = app_store_connect_get("/v1/appEncryptionDeclarations/#{URI.encode_www_form_component(declaration_id)}", {
+    'fields[appEncryptionDeclarations]' => 'usesEncryption,exempt,appEncryptionDeclarationState,codeValue'
+  })
+  attributes = declaration.fetch('data', {}).fetch('attributes', {})
+  {
+    'valid' => attributes['exempt'] == true && attributes['appEncryptionDeclarationState'].to_s == 'APPROVED',
+    'declarationId' => declaration_id,
+    'declarationState' => attributes['appEncryptionDeclarationState'].to_s,
+    'declaredExempt' => attributes['exempt']
+  }
+end
+
+def inspect_app_store_upload_once(ipa_path, app_version, build_number)
+  approved_export = reviewed_export_compliance
+  expected_size = File.size(ipa_path)
+  expected_md5 = Digest::MD5.file(ipa_path).hexdigest
+  app_id = exact_app_store_app
+
+  uploads_response = app_store_connect_get("/v1/apps/#{URI.encode_www_form_component(app_id)}/buildUploads", {
+    'filter[cfBundleShortVersionString]' => app_version,
+    'filter[cfBundleVersion]' => build_number,
+    'filter[platform]' => 'IOS',
+    'fields[buildUploads]' => 'cfBundleShortVersionString,cfBundleVersion,state,platform,uploadedDate,buildUploadFiles',
+    'limit' => 200,
+    'sort' => '-uploadedDate'
+  })
+  UI.user_error!('App Store Connect build-upload evidence exceeded the exact 200-item query boundary') if uploads_response.dig('links', 'next')
+  uploads = uploads_response.fetch('data', [])
+  exact_uploads = uploads.select do |upload|
+    attributes = upload.fetch('attributes', {})
+    attributes['cfBundleShortVersionString'].to_s == app_version &&
+      attributes['cfBundleVersion'].to_s == build_number &&
+      attributes['platform'].to_s == 'IOS'
+  end
+
+  if exact_uploads.empty?
+    return {
+      'schema' => 1,
+      'provider' => 'app-store-connect',
+      'status' => 'absent',
+      'present' => false,
+      'valid' => false,
+      'appId' => app_id,
+      'bundleId' => IOS_PRODUCTION_BUNDLE_ID,
+      'appVersion' => app_version,
+      'buildNumber' => build_number,
+      'expectedFileName' => File.basename(ipa_path),
+      'expectedFileSize' => expected_size,
+      'expectedMd5' => expected_md5,
+      'matchingUploadCount' => 0
+    }
+  end
+
+  if exact_uploads.length != 1
+    return {
+      'schema' => 1,
+      'provider' => 'app-store-connect',
+      'status' => 'invalid',
+      'present' => true,
+      'valid' => false,
+      'appId' => app_id,
+      'bundleId' => IOS_PRODUCTION_BUNDLE_ID,
+      'appVersion' => app_version,
+      'buildNumber' => build_number,
+      'matchingUploadCount' => exact_uploads.length,
+      'reason' => 'App Store Connect returned more than one exact build upload identity'
+    }
+  end
+
+  upload = exact_uploads.first
+  upload_state_detail = upload.fetch('attributes', {})['state']
+  upload_state = if upload_state_detail.is_a?(Hash)
+                   upload_state_detail['state'].to_s
+                 else
+                   upload_state_detail.to_s
+                 end
+  upload_state_errors = upload_state_detail.is_a?(Hash) ? Array(upload_state_detail['errors']) : []
+  upload_state_warnings = upload_state_detail.is_a?(Hash) ? Array(upload_state_detail['warnings']) : []
+  files_response = app_store_connect_get("/v1/buildUploads/#{URI.encode_www_form_component(upload.fetch('id'))}/buildUploadFiles", {
+    'fields[buildUploadFiles]' => 'assetDeliveryState,fileName,fileSize,sourceFileChecksums,uti',
+    'limit' => 200
+  })
+  UI.user_error!('App Store Connect build-upload file evidence exceeded the exact 200-item query boundary') if files_response.dig('links', 'next')
+  files = files_response.fetch('data', [])
+  ipa_files = files.select do |file|
+    attributes = file.fetch('attributes', {})
+    attributes['uti'].to_s == 'com.apple.ipa' || attributes['fileName'].to_s.downcase.end_with?('.ipa')
+  end
+  ipa_file = ipa_files.one? ? ipa_files.first : nil
+  attributes = ipa_file&.fetch('attributes', {}) || {}
+  remote_file_name = attributes['fileName'].to_s
+  remote_file_size = attributes['fileSize']
+  remote_md5 = exact_source_file_md5(attributes['sourceFileChecksums'])
+  delivery_state = attributes.dig('assetDeliveryState', 'state').to_s
+  delivery_errors = Array(attributes.dig('assetDeliveryState', 'errors'))
+
+  build_evidence = exact_app_store_build(app_id, app_version, build_number)
+  compliance_evidence = build_evidence['status'] == 'valid' ? exact_export_compliance_evidence(build_evidence) : { 'valid' => false }
+  complete = upload_state == 'COMPLETE' && upload_state_errors.empty? && delivery_state == 'COMPLETE' &&
+             build_evidence['status'] == 'valid'
+  pending = %w[AWAITING_UPLOAD PROCESSING].include?(upload_state) ||
+            %w[AWAITING_UPLOAD UPLOAD_COMPLETE].include?(delivery_state) || ipa_files.empty?
+  exact_file = ipa_files.one? && remote_file_name == File.basename(ipa_path) &&
+               remote_file_size.to_i == expected_size && remote_md5 == expected_md5 && delivery_errors.empty?
+  valid = complete && exact_file && compliance_evidence['valid']
+  status = if valid
+             'valid'
+           elsif (pending || build_evidence['status'] == 'pending') && upload_state != 'FAILED' &&
+                 upload_state_errors.empty? && delivery_state != 'FAILED'
+             'pending'
+           else
+             'invalid'
+           end
+
+  {
+    'schema' => 1,
+    'provider' => 'app-store-connect',
+    'status' => status,
+    'present' => true,
+    'valid' => valid,
+    'appId' => app_id,
+    'bundleId' => IOS_PRODUCTION_BUNDLE_ID,
+    'appVersion' => app_version,
+    'buildNumber' => build_number,
+    'buildUploadId' => upload.fetch('id'),
+    'buildUploadState' => upload_state,
+    'buildUploadStateErrors' => upload_state_errors,
+    'buildUploadStateWarnings' => upload_state_warnings,
+    'matchingUploadCount' => exact_uploads.length,
+    'matchingIpaFileCount' => ipa_files.length,
+    'expectedFileName' => File.basename(ipa_path),
+    'remoteFileName' => remote_file_name,
+    'expectedFileSize' => expected_size,
+    'remoteFileSize' => remote_file_size,
+    'expectedMd5' => expected_md5,
+    'remoteMd5' => remote_md5,
+    'assetDeliveryState' => delivery_state,
+    'assetDeliveryErrors' => delivery_errors,
+    'buildId' => build_evidence['buildId'],
+    'matchingBuildCount' => build_evidence['matchingBuildCount'],
+    'buildProcessingState' => build_evidence['processingState'],
+    'approvedUsesNonExemptEncryption' => approved_export[:uses_non_exempt_encryption],
+    'remoteUsesNonExemptEncryption' => build_evidence['usesNonExemptEncryption'],
+    'exportCompliance' => compliance_evidence
+  }
+end
+
+def inspect_app_store_upload
+  ipa_path = required_artifact_path ENV['IOS_IPA_PATH'], 'Validated iOS IPA'
+  app_version = required_app_version ENV['APP_VERSION'], 'Validated iOS artifact app version'
+  build_number = required_numeric_build_number ENV['BUILD_NUMBER'], 'Validated iOS artifact build number'
+  output_path = required_output_path ENV['PROVIDER_EVIDENCE_PATH'], 'App Store provider evidence'
+  wait_seconds = ENV.fetch('PROVIDER_WAIT_SECONDS', '0').to_i
+  UI.user_error!('App Store provider wait seconds must be between 0 and 3600') unless wait_seconds.between?(0, 3600)
+  deadline = Time.now + wait_seconds
+
+  loop do
+    evidence = inspect_app_store_upload_once ipa_path, app_version, build_number
+    write_json_evidence output_path, evidence
+    return evidence if evidence['status'] == 'valid' || wait_seconds.zero?
+    UI.user_error!("App Store Connect returned invalid build-upload evidence: #{JSON.generate(evidence)}") if evidence['status'] == 'invalid'
+    UI.user_error!("Timed out waiting for exact App Store build-upload evidence: #{JSON.generate(evidence)}") if Time.now >= deadline
+    sleep 30
+  end
+end
+
+def app_store_distribution_reconciliation_operations(evidence)
+  return nil unless evidence.is_a?(Hash)
+  return nil unless evidence['provider'] == 'app-store-connect'
+  return nil unless evidence['stage'] == 'testflight-external-distribution'
+  return nil unless evidence['matchingPublicGroupCount'] == 1
+
+  membership_count = evidence['matchingBuildMembershipCount']
+  submission_count = evidence['matchingBetaReviewSubmissionCount']
+  review_state = evidence['betaReviewState'].to_s
+  accepted_review_states = %w[WAITING_FOR_REVIEW IN_REVIEW APPROVED]
+
+  case evidence['status']
+  when 'valid'
+    return [] if membership_count == 1 && submission_count == 1 && accepted_review_states.include?(review_state)
+  when 'absent'
+    return %w[public-group-membership beta-review-submission] if membership_count == 0 && submission_count == 0 && review_state.empty?
+  when 'pending'
+    return ['public-group-membership'] if membership_count == 0 && submission_count == 1 && accepted_review_states.include?(review_state)
+    return ['beta-review-submission'] if membership_count == 1 && submission_count == 0 && review_state.empty?
+  end
+
+  nil
+end
+
+def inspect_app_store_distribution_once(app_version, build_number)
+  app_id = exact_app_store_app
+  build = exact_app_store_build(app_id, app_version, build_number)
+  base = {
+    'schema' => 1,
+    'provider' => 'app-store-connect',
+    'stage' => 'testflight-external-distribution',
+    'appId' => app_id,
+    'bundleId' => IOS_PRODUCTION_BUNDLE_ID,
+    'appVersion' => app_version,
+    'buildNumber' => build_number,
+    'matchingBuildCount' => build['matchingBuildCount'],
+    'buildId' => build['buildId'],
+    'buildProcessingState' => build['processingState']
+  }
+  return base.merge('status' => build['status'], 'present' => false, 'valid' => false) unless build['status'] == 'valid'
+
+  compliance = exact_export_compliance_evidence(build)
+  return base.merge('status' => 'invalid', 'present' => true, 'valid' => false, 'exportCompliance' => compliance) unless compliance['valid']
+
+  groups_response = app_store_connect_get('/v1/betaGroups', {
+    'filter[app]' => app_id,
+    'filter[name]' => 'Public',
+    'filter[isInternalGroup]' => 'false',
+    'fields[betaGroups]' => 'name,isInternalGroup,builds',
+    'limit' => 200
+  })
+  UI.user_error!('App Store Connect beta-group evidence exceeded the exact 200-item query boundary') if groups_response.dig('links', 'next')
+  public_groups = groups_response.fetch('data', []).select do |group|
+    attributes = group.fetch('attributes', {})
+    attributes['name'].to_s == 'Public' && attributes['isInternalGroup'] == false
+  end
+  return base.merge('status' => 'invalid', 'present' => true, 'valid' => false,
+                    'matchingPublicGroupCount' => public_groups.length,
+                    'reason' => 'Expected exactly one external TestFlight group named Public') unless public_groups.one?
+
+  group_id = public_groups.first.fetch('id').to_s
+  group_builds_response = app_store_connect_get("/v1/betaGroups/#{URI.encode_www_form_component(group_id)}/builds", {
+    'fields[builds]' => 'version',
+    'limit' => 200
+  })
+  UI.user_error!('App Store Connect beta-group build evidence exceeded the exact 200-item query boundary') if group_builds_response.dig('links', 'next')
+  matching_memberships = group_builds_response.fetch('data', []).count { |candidate| candidate.fetch('id').to_s == build['buildId'] }
+
+  review_response = app_store_connect_get('/v1/betaAppReviewSubmissions', {
+    'filter[build]' => build['buildId'],
+    'fields[betaAppReviewSubmissions]' => 'betaReviewState,submittedDate,build',
+    'limit' => 200
+  })
+  UI.user_error!('App Store Connect beta-review evidence exceeded the exact 200-item query boundary') if review_response.dig('links', 'next')
+  submissions = review_response.fetch('data', []).select do |submission|
+    submission.dig('relationships', 'build', 'data', 'id').to_s == build['buildId']
+  end
+  review_state = submissions.one? ? submissions.first.fetch('attributes', {})['betaReviewState'].to_s : nil
+  valid_states = %w[WAITING_FOR_REVIEW IN_REVIEW APPROVED]
+  invalid_states = %w[REJECTED]
+  valid = matching_memberships == 1 && submissions.one? && valid_states.include?(review_state)
+  absent = matching_memberships.zero? && submissions.empty?
+  pending = !absent && !valid && matching_memberships <= 1 && submissions.length <= 1 && !invalid_states.include?(review_state)
+  status = valid ? 'valid' : (absent ? 'absent' : (pending ? 'pending' : 'invalid'))
+
+  evidence = base.merge(
+    'status' => status,
+    'present' => !absent,
+    'valid' => valid,
+    'exportCompliance' => compliance,
+    'publicGroupId' => group_id,
+    'matchingPublicGroupCount' => public_groups.length,
+    'matchingBuildMembershipCount' => matching_memberships,
+    'matchingBetaReviewSubmissionCount' => submissions.length,
+    'betaReviewState' => review_state
+  )
+  operations = app_store_distribution_reconciliation_operations(evidence)
+  evidence.merge(
+    'reconcilable' => !operations.nil?,
+    'reconciliationOperations' => operations || []
+  )
+end
+
+def inspect_app_store_submission_once(app_version, build_number)
+  app_id = exact_app_store_app
+  build = exact_app_store_build(app_id, app_version, build_number)
+  base = {
+    'schema' => 1,
+    'provider' => 'app-store-connect',
+    'stage' => 'app-store-review-submission',
+    'appId' => app_id,
+    'bundleId' => IOS_PRODUCTION_BUNDLE_ID,
+    'appVersion' => app_version,
+    'buildNumber' => build_number,
+    'matchingBuildCount' => build['matchingBuildCount'],
+    'buildId' => build['buildId'],
+    'buildProcessingState' => build['processingState']
+  }
+  return base.merge('status' => build['status'], 'present' => false, 'valid' => false) unless build['status'] == 'valid'
+
+  compliance = exact_export_compliance_evidence(build)
+  return base.merge('status' => 'invalid', 'present' => true, 'valid' => false, 'exportCompliance' => compliance) unless compliance['valid']
+
+  versions_response = app_store_connect_get("/v1/apps/#{URI.encode_www_form_component(app_id)}/appStoreVersions", {
+    'filter[platform]' => 'IOS',
+    'filter[versionString]' => app_version,
+    'include' => 'build',
+    'fields[appStoreVersions]' => 'platform,versionString,appStoreState,appVersionState,build',
+    'fields[builds]' => 'version',
+    'limit' => 200
+  })
+  UI.user_error!('App Store Connect version evidence exceeded the exact 200-item query boundary') if versions_response.dig('links', 'next')
+  versions = versions_response.fetch('data', []).select do |version|
+    attributes = version.fetch('attributes', {})
+    attributes['platform'].to_s == 'IOS' && attributes['versionString'].to_s == app_version
+  end
+  return base.merge('status' => 'absent', 'present' => false, 'valid' => false,
+                    'exportCompliance' => compliance, 'matchingAppStoreVersionCount' => 0) if versions.empty?
+  return base.merge('status' => 'invalid', 'present' => true, 'valid' => false,
+                    'exportCompliance' => compliance, 'matchingAppStoreVersionCount' => versions.length,
+                    'reason' => 'App Store Connect returned duplicate exact iOS version identities') unless versions.one?
+
+  version = versions.first
+  remote_build_id = version.dig('relationships', 'build', 'data', 'id').to_s
+  review_state = version.fetch('attributes', {})['appVersionState'].to_s
+  review_state = version.fetch('attributes', {})['appStoreState'].to_s if review_state.empty? || review_state == 'NOT_APPLICABLE'
+  valid_states = %w[
+    WAITING_FOR_REVIEW IN_REVIEW PENDING_APPLE_RELEASE PENDING_DEVELOPER_RELEASE
+    PROCESSING_FOR_APP_STORE PROCESSING_FOR_DISTRIBUTION READY_FOR_SALE READY_FOR_DISTRIBUTION PREORDER_READY_FOR_SALE
+    ACCEPTED
+  ]
+  action_required_states = %w[READY_FOR_REVIEW PREPARE_FOR_SUBMISSION]
+  exact_build = remote_build_id == build['buildId']
+  selectable_build = remote_build_id.empty? || exact_build
+  valid = exact_build && valid_states.include?(review_state)
+  action_required = selectable_build && action_required_states.include?(review_state)
+  status = valid ? 'valid' : (action_required ? 'ready' : 'invalid')
+
+  base.merge(
+    'status' => status,
+    'present' => true,
+    'valid' => valid,
+    'exportCompliance' => compliance,
+    'matchingAppStoreVersionCount' => versions.length,
+    'appStoreVersionId' => version.fetch('id').to_s,
+    'remoteBuildId' => remote_build_id,
+    'reviewState' => review_state
+  )
+end
+
+def inspect_app_store_stage(stage)
+  app_version = required_app_version ENV['APP_VERSION'], 'Validated iOS artifact app version'
+  build_number = required_numeric_build_number ENV['BUILD_NUMBER'], 'Validated iOS artifact build number'
+  output_path = required_output_path ENV['PROVIDER_EVIDENCE_PATH'], 'App Store stage evidence'
+  wait_seconds = ENV.fetch('PROVIDER_WAIT_SECONDS', '0').to_i
+  UI.user_error!('App Store provider wait seconds must be between 0 and 3600') unless wait_seconds.between?(0, 3600)
+  deadline = Time.now + wait_seconds
+
+  loop do
+    evidence = if stage == :distribution
+                 inspect_app_store_distribution_once(app_version, build_number)
+               else
+                 inspect_app_store_submission_once(app_version, build_number)
+               end
+    write_json_evidence output_path, evidence
+    return evidence if evidence['status'] == 'valid' || wait_seconds.zero?
+    UI.user_error!("App Store Connect returned invalid #{stage} evidence: #{JSON.generate(evidence)}") if evidence['status'] == 'invalid'
+    UI.user_error!("Timed out waiting for exact App Store #{stage} evidence: #{JSON.generate(evidence)}") if Time.now >= deadline
+    sleep 30
+  end
+end
 
 platform :ios do
   def sign_ios(type = 'appstore')
     match(
       git_url: ENV['MATCH_CERTIFICATES_URL'],
-      team_id: ENV['APPLE_TEAM_ID'],
+      app_identifier: [IOS_PRODUCTION_BUNDLE_ID, IOS_SHARE_EXTENSION_BUNDLE_ID],
+      team_id: IOS_PRODUCTION_TEAM_ID,
       keychain_name: 'snkeychain',
       keychain_password: ENV['MATCH_PASSWORD'],
       readonly: is_ci,
@@ -15,12 +669,28 @@ platform :ios do
   end
 
   def build_ios(scheme)
+    requested_app_version = required_app_version ENV['PACKAGE_VERSION'], 'iOS app version input'
+    requested_build_number = required_numeric_build_number ENV['BUILD_NUMBER'], 'iOS build number input'
+    if scheme == 'StandardNotes'
+      export_compliance = reviewed_export_compliance
+      update_info_plist(
+        plist_path: 'ios/StandardNotes/Info.plist',
+        block: proc do |plist|
+          plist['ITSAppUsesNonExemptEncryption'] = export_compliance[:uses_non_exempt_encryption]
+          if export_compliance[:compliance_code].empty?
+            plist.delete('ITSEncryptionExportComplianceCode')
+          else
+            plist['ITSEncryptionExportComplianceCode'] = export_compliance[:compliance_code]
+          end
+        end
+      )
+    end
     increment_version_number(
-      version_number: ENV['PACKAGE_VERSION'],
+      version_number: requested_app_version,
       xcodeproj: 'ios/StandardNotes.xcodeproj'
     )
     build_number = increment_build_number(
-      build_number: ENV['BUILD_NUMBER'],
+      build_number: requested_build_number,
       xcodeproj: 'ios/StandardNotes.xcodeproj'
     )
     gym(
@@ -31,12 +701,16 @@ platform :ios do
       xcargs: 'DEBUG_INFORMATION_FORMAT=dwarf-with-dsym'
     )
 
-    build_number
+    {
+      app_version: requested_app_version,
+      build_number: build_number,
+      ipa_path: lane_context[SharedValues::IPA_OUTPUT_PATH]
+    }
   end
 
-  def deploy_ios(scheme, is_testflight = false)
-    sign_ios
-    build_number = build_ios(scheme)
+  def upload_ios_artifact(ipa_path)
+    ipa_path = required_artifact_path ipa_path, 'Validated iOS IPA'
+    export_compliance = reviewed_export_compliance
     app_store_connect_api_key(
       key_id: ENV['APPSTORE_CONNECT_KEY_ID'],
       issuer_id: ENV['APPSTORE_CONNECT_KEY_ISSUER_ID'],
@@ -44,48 +718,169 @@ platform :ios do
       in_house: false
     )
 
-    is_prod = scheme == 'StandardNotes'
-
     upload_to_testflight(
       apple_id: ENV['APPLE_APP_ID'],
-      distribute_external: is_prod,
-      groups: ['Public'],
-      notify_external_testers: is_prod,
-      submit_beta_review: is_prod,
-      changelog: 'Fixes and improvements.'
+      ipa: ipa_path,
+      uses_non_exempt_encryption: export_compliance[:uses_non_exempt_encryption],
+      skip_submission: true,
+      skip_waiting_for_build_processing: true
+    )
+  end
+
+  def distribute_ios_build(app_version, build_number)
+    app_version = required_app_version app_version, 'Validated iOS artifact app version'
+    build_number = required_numeric_build_number build_number, 'Validated iOS artifact build number'
+    reviewed_export_compliance
+    evidence = inspect_app_store_distribution_once(app_version, build_number)
+    operations = app_store_distribution_reconciliation_operations(evidence)
+    UI.user_error!("TestFlight distribution state is not safely reconcilable: #{JSON.generate(evidence)}") if operations.nil?
+    return if operations.empty?
+
+    app_store_connect_api_key(
+      key_id: ENV['APPSTORE_CONNECT_KEY_ID'],
+      issuer_id: ENV['APPSTORE_CONNECT_KEY_ISSUER_ID'],
+      key_filepath: 'ios/Authkey.p8',
+      in_house: false
     )
 
-    if is_prod && !is_testflight
-      upload_to_app_store(
+    if operations == %w[public-group-membership beta-review-submission]
+      upload_to_testflight(
+        apple_id: ENV['APPLE_APP_ID'],
+        app_version: app_version,
         build_number: build_number,
-        submit_for_review: true,
-        automatic_release: false,
-        force: true,
-        skip_metadata: true,
-        skip_screenshots: true,
-        skip_binary_upload: true,
-        run_precheck_before_submit: false,
-        submission_information: { add_id_info_uses_idfa: false },
-        release_notes: {
-          'en-US': 'Fixes and improvements.'
-        }
+        distribute_only: true,
+        distribute_external: true,
+        groups: ['Public'],
+        notify_external_testers: true,
+        submit_beta_review: true,
+        changelog: 'Fixes and improvements.'
+      )
+      return
+    end
+
+    build_id = evidence.fetch('buildId')
+    group_id = evidence.fetch('publicGroupId')
+    if operations.include?('public-group-membership')
+      app_store_connect_post(
+        "/v1/betaGroups/#{URI.encode_www_form_component(group_id)}/relationships/builds",
+        { 'data' => [{ 'type' => 'builds', 'id' => build_id }] },
+        # A concurrent same-run retry can complete the relationship after the
+        # exact preflight. Only the exact post-inspector may accept that race.
+        accepted_statuses: [200, 204, 409]
+      )
+    end
+    if operations.include?('beta-review-submission')
+      app_store_connect_post(
+        '/v1/betaAppReviewSubmissions',
+        {
+          'data' => {
+            'type' => 'betaAppReviewSubmissions',
+            'relationships' => {
+              'build' => { 'data' => { 'type' => 'builds', 'id' => build_id } }
+            }
+          }
+        },
+        # Duplicate creation races are not trusted here; the workflow's exact
+        # final inspector must still prove one submission in an accepted state.
+        accepted_statuses: [200, 201, 409]
       )
     end
   end
 
+  def upload_ios_development_artifact(ipa_path)
+    ipa_path = required_artifact_path ipa_path, 'Development iOS IPA'
+    app_store_connect_api_key(
+      key_id: ENV['APPSTORE_CONNECT_KEY_ID'],
+      issuer_id: ENV['APPSTORE_CONNECT_KEY_ISSUER_ID'],
+      key_filepath: 'ios/Authkey.p8',
+      in_house: false
+    )
+    upload_to_testflight(
+      apple_id: ENV['APPLE_APP_ID'],
+      ipa: ipa_path,
+      distribute_external: false,
+      groups: ['Public'],
+      notify_external_testers: false,
+      submit_beta_review: false,
+      changelog: 'Fixes and improvements.'
+    )
+  end
+
+  def submit_ios_build(app_version, build_number)
+    app_version = required_app_version app_version, 'Validated iOS artifact app version'
+    build_number = required_numeric_build_number build_number, 'Validated iOS artifact build number'
+    export_compliance = reviewed_export_compliance
+    app_store_connect_api_key(
+      key_id: ENV['APPSTORE_CONNECT_KEY_ID'],
+      issuer_id: ENV['APPSTORE_CONNECT_KEY_ISSUER_ID'],
+      key_filepath: 'ios/Authkey.p8',
+      in_house: false
+    )
+    upload_to_app_store(
+      app_version: app_version,
+      build_number: build_number,
+      submit_for_review: true,
+      automatic_release: false,
+      force: true,
+      skip_metadata: true,
+      skip_screenshots: true,
+      skip_binary_upload: true,
+      run_precheck_before_submit: false,
+      submission_information: {
+        add_id_info_uses_idfa: false,
+        export_compliance_uses_encryption: export_compliance[:uses_non_exempt_encryption]
+      },
+      release_notes: {
+        'en-US': 'Fixes and improvements.'
+      }
+    )
+  end
+
+  def deploy_ios_development
+    sign_ios
+    build = build_ios 'StandardNotesDev'
+    upload_ios_development_artifact build[:ipa_path]
+  end
+
   desc 'Deploy dev app'
   lane :dev do
-    deploy_ios 'StandardNotesDev'
+    deploy_ios_development
   end
 
-  desc 'Deploy production app'
-  lane :prod do
-    deploy_ios 'StandardNotes'
+  desc 'Build and sign the production IPA without publishing it'
+  lane :build_prod do
+    sign_ios
+    build_ios 'StandardNotes'
   end
 
-  desc 'Deploy prod app to tesflight'
-  lane :testflight_beta do
-    deploy_ios 'StandardNotes', true
+  desc 'Upload a previously validated production IPA to TestFlight'
+  lane :upload_prod do
+    upload_ios_artifact ENV['IOS_IPA_PATH']
+  end
+
+  desc 'Inspect exact App Store Connect build-upload identity and binary evidence'
+  lane :inspect_upload do
+    inspect_app_store_upload
+  end
+
+  desc 'Inspect exact external TestFlight group membership and beta-review state'
+  lane :inspect_distribution do
+    inspect_app_store_stage :distribution
+  end
+
+  desc 'Inspect exact App Store version, build selection, and review state'
+  lane :inspect_submission do
+    inspect_app_store_stage :submission
+  end
+
+  desc 'Distribute or reconcile only the missing TestFlight operation for a validated production build'
+  lane :distribute_prod do
+    distribute_ios_build ENV['APP_VERSION'], ENV['BUILD_NUMBER']
+  end
+
+  desc 'Submit a previously uploaded and validated production build'
+  lane :submit_prod do
+    submit_ios_build ENV['APP_VERSION'], ENV['BUILD_NUMBER']
   end
 
   desc 'Setup iOS for running on CI'
@@ -128,26 +923,39 @@ platform :android do
     )
   end
 
-  def deploy_android(variant, versionCode, track = 'beta')
+  def build_android_artifacts(variant, versionCode)
     sh('yarn run android:bundle')
     build_android(variant, versionCode)
-    upload_to_play_store(
-      track: track,
-      json_key_data: (ENV['GOOGLE_PLAY_JSON_KEY_DATA']).to_s,
-      skip_upload_metadata: true,
-      skip_upload_images: true,
-      skip_upload_screenshots: true
-    )
+    aab_path = lane_context[SharedValues::GRADLE_AAB_OUTPUT_PATH]
     bundletool(
       ks_path: 'android/app/keystore.keystore',
       ks_password: ENV['ANDROID_KEYSTORE_PASSWORD'],
       ks_key_alias: ENV['ANDROID_KEYSTORE_ALIAS'],
       ks_key_alias_password: ENV['ANDROID_KEYSTORE_PRIVATE_KEY_PASSWORD'],
       bundletool_version: '1.0.0',
-      aab_path: lane_context[SharedValues::GRADLE_AAB_OUTPUT_PATH],
+      aab_path: aab_path,
       apk_output_path: "android/app/build/outputs/apk/#{variant}/release/app-#{variant}-release.apk",
       verbose: true
     )
+    aab_path
+  end
+
+  def publish_android_artifact(aab_path, track = 'beta')
+    aab_path = required_artifact_path aab_path, 'Validated Android AAB'
+    upload_to_play_store(
+      aab: aab_path,
+      package_name: ANDROID_PRODUCTION_PACKAGE_ID,
+      track: track,
+      release_status: 'completed',
+      json_key_data: (ENV['GOOGLE_PLAY_JSON_KEY_DATA']).to_s,
+      skip_upload_metadata: true,
+      skip_upload_images: true,
+      skip_upload_screenshots: true
+    )
+  end
+
+  def deploy_android(variant, versionCode, track = 'beta')
+    publish_android_artifact build_android_artifacts(variant, versionCode), track
   end
 
   desc 'Deploy dev app'
@@ -156,9 +964,34 @@ platform :android do
     deploy_android 'dev', version
   end
 
-  desc 'Deploy production app'
-  lane :prod do
-    version = 3_004_000 + ENV['BUILD_NUMBER'].to_i
-    deploy_android 'prod', version
+  desc 'Build and sign production AAB/APK artifacts without publishing them'
+  lane :build_prod do
+    required_app_version ENV['PACKAGE_VERSION'], 'Android app version input'
+    build_number = required_numeric_build_number ENV['BUILD_NUMBER'], 'Android build number input'
+    version = 3_004_000 + build_number.to_i
+    build_android_artifacts 'prod', version
+  end
+
+  desc 'Publish a previously validated production AAB'
+  lane :publish_prod do
+    publish_android_artifact ENV['ANDROID_AAB_PATH']
+  end
+
+
+  desc 'Inspect exact Google Play bundle digest and track state'
+  lane :inspect_prod do
+    output_path = required_output_path ENV['PROVIDER_EVIDENCE_PATH'], 'Google Play provider evidence'
+    wait_seconds = ENV.fetch('PROVIDER_WAIT_SECONDS', '0').to_i
+    UI.user_error!('Google Play provider wait seconds must be between 0 and 600') unless wait_seconds.between?(0, 600)
+    deadline = Time.now + wait_seconds
+
+    loop do
+      evidence = inspect_google_play_release
+      write_json_evidence output_path, evidence
+      break if evidence['status'] == 'valid' || wait_seconds.zero?
+      UI.user_error!("Google Play returned invalid release evidence: #{JSON.generate(evidence)}") if evidence['status'] == 'invalid'
+      UI.user_error!("Timed out waiting for exact Google Play release evidence: #{JSON.generate(evidence)}") if Time.now >= deadline
+      sleep 15
+    end
   end
 end

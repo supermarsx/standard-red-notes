@@ -18,6 +18,11 @@ import {
 
 const CLI_VERSION = '0.1.0'
 
+if (process.argv.length === 3 && process.argv[2] === '--srn-release-self-test') {
+  process.stdout.write(`srn-native-self-test-v1 ${process.platform} ${process.arch}\n`)
+  process.exit(0)
+}
+
 /**
  * Exit after a short tick so closing async handles (sockets opened by snjs sync)
  * finish closing first; otherwise process.exit() mid-close trips a libuv

@@ -5,6 +5,13 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
 
+import {
+  classifyNativeCliExecutorSemanticChange,
+  classifyReleasePackagingContractSemanticChange,
+  NATIVE_CLI_RELEASE_PRODUCTS,
+  RELEASE_PACKAGING_CONTRACT_PRODUCTS,
+} from "./native-cli-release.mjs";
+
 const DEPENDENCY_FIELDS = [
   "dependencies",
   "devDependencies",
@@ -18,6 +25,9 @@ const VERSION_PROFILES = new Set([
   "semver",
 ]);
 const MAX_FORCE_REASON_LENGTH = 500;
+const NATIVE_EXECUTOR_PATH = "scripts/native-cli-release.mjs";
+const RELEASE_PACKAGING_CONTRACT_PATH =
+  "scripts/release-packaging-contract.mjs";
 
 export const WORKSPACE_ROOTS = Object.freeze({
   root: {
@@ -75,6 +85,8 @@ export const RELEASE_TARGETS = Object.freeze({
     configPaths: [
       ".github/workflows/srn-admin.yml",
       "scripts/native-cli-release.mjs",
+      "scripts/package-lock.json",
+      "scripts/package.json",
       "scripts/release-packaging-contract.mjs",
     ],
   },
@@ -91,6 +103,8 @@ export const RELEASE_TARGETS = Object.freeze({
       ".github/workflows/srn-client.yml",
       "cli/.prettierrc",
       "scripts/native-cli-release.mjs",
+      "scripts/package-lock.json",
+      "scripts/package.json",
       "scripts/release-packaging-contract.mjs",
     ],
     configPrefixes: [],
@@ -103,6 +117,9 @@ export const RELEASE_TARGETS = Object.freeze({
     configPaths: [
       ".github/workflows/srn-desktop.yml",
       "app/.github/workflows/desktop.release.reuse.yml",
+      "app/scripts/verify-desktop-updater-metadata.rb",
+      "scripts/package-lock.json",
+      "scripts/package.json",
       "scripts/release-packaging-contract.mjs",
     ],
   },
@@ -114,6 +131,8 @@ export const RELEASE_TARGETS = Object.freeze({
     configPaths: [
       ".github/workflows/srn-home-server.yml",
       "scripts/native-cli-release.mjs",
+      "scripts/package-lock.json",
+      "scripts/package.json",
       "scripts/release-packaging-contract.mjs",
     ],
   },
@@ -125,6 +144,8 @@ export const RELEASE_TARGETS = Object.freeze({
     configPaths: [
       ".github/workflows/srn-mcp.yml",
       "scripts/native-cli-release.mjs",
+      "scripts/package-lock.json",
+      "scripts/package.json",
       "scripts/release-packaging-contract.mjs",
     ],
     configPrefixes: [],
@@ -137,6 +158,8 @@ export const RELEASE_TARGETS = Object.freeze({
     configPaths: [
       ".github/workflows/srn-mobile.yml",
       "app/.github/workflows/mobile.release.prod.yml",
+      "scripts/package-lock.json",
+      "scripts/package.json",
       "scripts/release-packaging-contract.mjs",
     ],
   },
@@ -147,6 +170,8 @@ export const RELEASE_TARGETS = Object.freeze({
     packageNames: ["@standard-red-notes/openclaw"],
     configPaths: [
       ".github/workflows/srn-openclaw.yml",
+      "scripts/package-lock.json",
+      "scripts/package.json",
       "scripts/release-packaging-contract.mjs",
     ],
     configPrefixes: [],
@@ -164,10 +189,681 @@ export const RELEASE_TARGETS = Object.freeze({
       ".github/workflows/srn-server.yml",
       "cli/.prettierrc",
       "scripts/native-cli-release.mjs",
+      "scripts/package-lock.json",
+      "scripts/package.json",
       "scripts/release-packaging-contract.mjs",
     ],
     configPrefixes: [],
   },
+});
+
+const CANONICAL_RELEASE_WORKFLOWS = Object.freeze([
+  {
+    path: ".github/workflows/srn-admin.yml",
+    owner: "srn-admin",
+    classification: "canonical-change-gated",
+    status: "root-active",
+    activation: "push-main-paths-and-manual",
+    targetKind: "product-distribution",
+    targets: ["GitHub Releases: srn-admin native executables"],
+    reason:
+      "The root workflow is the canonical source-impact and artifact-fingerprint-gated srn-admin publisher.",
+  },
+  {
+    path: ".github/workflows/srn-client.yml",
+    owner: "srn-client",
+    classification: "canonical-change-gated",
+    status: "root-active",
+    activation: "push-main-paths-and-manual",
+    targetKind: "product-distribution",
+    targets: ["GitHub Releases: srn-client native executables"],
+    reason:
+      "The root workflow is the canonical source-impact and artifact-fingerprint-gated srn-client publisher.",
+  },
+  {
+    path: ".github/workflows/srn-desktop.yml",
+    owner: "srn-desktop",
+    classification: "canonical-change-gated",
+    status: "root-active",
+    activation: "push-main-paths-and-manual",
+    targetKind: "application-distribution",
+    targets: ["GitHub Releases: desktop installers"],
+    reason:
+      "The root workflow is the canonical change-gated GitHub desktop publisher and owns release identity selection; Snap publication exists only in the embedded recovery implementation.",
+  },
+  {
+    path: ".github/workflows/srn-home-server.yml",
+    owner: "srn-home-server",
+    classification: "canonical-change-gated",
+    status: "root-active",
+    activation: "push-main-paths-and-manual",
+    targetKind: "product-distribution",
+    targets: ["GitHub Releases: home-server native executables and migrations"],
+    reason:
+      "The root workflow is the canonical source-impact and artifact-fingerprint-gated home-server publisher.",
+  },
+  {
+    path: ".github/workflows/srn-mcp.yml",
+    owner: "srn-mcp",
+    classification: "canonical-change-gated",
+    status: "root-active",
+    activation: "push-main-paths-and-manual",
+    targetKind: "product-distribution",
+    targets: ["GitHub Releases: MCP bridge native executables"],
+    reason:
+      "The root workflow is the canonical source-impact and artifact-fingerprint-gated MCP publisher.",
+  },
+  {
+    path: ".github/workflows/srn-mobile.yml",
+    owner: "srn-mobile",
+    classification: "canonical-change-gated",
+    status: "root-active",
+    activation: "push-main-paths-and-manual",
+    targetKind: "application-distribution",
+    targets: [
+      "Google Play",
+      "Apple App Store and TestFlight",
+      "GitHub Releases",
+    ],
+    reason:
+      "The root workflow is the canonical change-gated mobile publisher and coordinates the validated store payload.",
+  },
+  {
+    path: ".github/workflows/srn-openclaw.yml",
+    owner: "srn-openclaw",
+    classification: "canonical-change-gated",
+    status: "root-active",
+    activation: "push-main-paths-and-manual",
+    targetKind: "product-distribution",
+    targets: ["GitHub Releases: OpenClaw package tarball and provenance"],
+    reason:
+      "The root workflow is the canonical source-impact and package-fingerprint-gated OpenClaw publisher.",
+  },
+  {
+    path: ".github/workflows/srn-server.yml",
+    owner: "srn-server",
+    classification: "canonical-change-gated",
+    status: "root-active",
+    activation: "push-main-paths-and-manual",
+    targetKind: "product-distribution",
+    targets: ["GitHub Releases: srn-server native executables"],
+    reason:
+      "The root workflow is the canonical source-impact and artifact-fingerprint-gated srn-server publisher.",
+  },
+]);
+
+const STANDALONE_RECOVERY_WORKFLOWS = Object.freeze([
+  {
+    path: "app/.github/workflows/desktop.release.prod.yml",
+    owner: "srn-desktop",
+    classification: "noncanonical-manual-recovery",
+    status: "non-root-active",
+    activation: "manual-only",
+    targetKind: "application-distribution",
+    targets: ["GitHub Releases: desktop installers", "Snap Store"],
+    reason:
+      "This nested-app entry point is retained only for explicitly authorized standalone recovery; the root srn-desktop workflow remains canonical.",
+  },
+  {
+    path: "app/.github/workflows/mobile.release.prod.yml",
+    owner: "srn-mobile",
+    classification: "noncanonical-manual-recovery",
+    status: "non-root-active",
+    activation: "manual-only",
+    targetKind: "application-distribution",
+    targets: [
+      "Google Play",
+      "Apple App Store and TestFlight",
+      "GitHub Releases",
+    ],
+    reason:
+      "This nested-app entry point is retained only for explicitly authorized standalone recovery; the root srn-mobile workflow remains canonical.",
+  },
+]);
+
+const SUPPORTING_RELEASE_WORKFLOWS = Object.freeze([
+  {
+    path: "app/.github/workflows/desktop.release.reuse.yml",
+    owner: "srn-desktop",
+    classification: "canonical-support",
+    status: "non-root-active",
+    activation: "workflow-call-only",
+    targetKind: "application-distribution",
+    targets: ["GitHub Releases: desktop installers", "Snap Store"],
+    reason:
+      "The reusable desktop build and publication implementation is invoked by the canonical root publisher and the manual recovery entry point.",
+  },
+]);
+
+const QUARANTINED_UPSTREAM_WORKFLOWS = Object.freeze([
+  {
+    path: "app/.github/upstream-workflows-disabled/clipper.release.prod.yml",
+    owner: "@standardnotes/clipper",
+    classification: "quarantined-upstream-mutation",
+    status: "quarantined",
+    activation: "disabled-directory",
+    targetKind: "application-distribution",
+    targets: [
+      "Firefox AMO",
+      "Chrome Web Store extension heapafmadojoodklnkhjanbinemaagok",
+      "upstream @standardnotes/clipper GitHub Releases",
+    ],
+    reason:
+      "The preserved workflow targets upstream browser-store listings and credentials and has no fork-owned release gate.",
+    workspacePackages: ["@standardnotes/clipper"],
+  },
+  {
+    path: "app/.github/upstream-workflows-disabled/git-sync.yml",
+    owner: "upstream-repository-sync",
+    classification: "quarantined-upstream-mutation",
+    status: "quarantined",
+    activation: "disabled-directory",
+    targetKind: "non-package-external-mutation",
+    targets: ["standardnotes/app", "standardnotes/internal-app pull requests"],
+    reason:
+      "The preserved workflow synchronizes every branch into an upstream private repository with SSH and PAT credentials.",
+  },
+  {
+    path: "app/.github/upstream-workflows-disabled/ios.testflight.yml",
+    owner: "srn-mobile",
+    classification: "quarantined-upstream-mutation",
+    status: "quarantined",
+    activation: "disabled-directory",
+    targetKind: "application-distribution",
+    targets: ["upstream Standard Notes TestFlight application"],
+    reason:
+      "The preserved legacy TestFlight workflow duplicates the active mobile path and names upstream credentials and signing assets.",
+  },
+  {
+    path: "app/.github/upstream-workflows-disabled/publish.yml",
+    owner: "upstream-package-publishing",
+    classification: "quarantined-upstream-mutation",
+    status: "quarantined",
+    activation: "disabled-directory",
+    targetKind: "mixed-package-and-distribution",
+    targets: [
+      "npm packages",
+      "Docker Hub standardnotes/snjs",
+      "Docker Hub standardnotes/web",
+      "upstream Standard Notes release commits",
+    ],
+    reason:
+      "The preserved workflow publishes upstream packages, mutable container tags, and release commits with upstream identities.",
+  },
+  {
+    path: "app/.github/upstream-workflows-disabled/releases.notify.yml",
+    owner: "upstream-release-notification",
+    classification: "quarantined-upstream-mutation",
+    status: "quarantined",
+    activation: "disabled-directory",
+    targetKind: "non-package-external-mutation",
+    targets: ["secret-selected upstream release-marketing repository dispatch"],
+    reason:
+      "The preserved workflow mutates a secret-selected external repository with an upstream PAT.",
+  },
+  {
+    path: "app/.github/upstream-workflows-disabled/web.release.prod.yml",
+    owner: "@standardnotes/web",
+    classification: "quarantined-upstream-mutation",
+    status: "quarantined",
+    activation: "disabled-directory",
+    targetKind: "application-distribution",
+    targets: [
+      "s3://app.standardnotes.com",
+      "upstream CloudFront distribution",
+      "upstream Discord webhook",
+    ],
+    reason:
+      "The preserved workflow deploys and deletes objects in upstream Standard Notes web infrastructure.",
+    workspacePackages: ["@standardnotes/web"],
+  },
+]);
+
+const ACTIVE_NONCANONICAL_EXTERNAL_WORKFLOWS = Object.freeze([
+  {
+    path: ".github/workflows/docs-pages.yml",
+    owner: "repository-documentation",
+    classification: "noncanonical-external-mutation",
+    status: "root-active",
+    activation: "push-main-and-manual",
+    targetKind: "documentation-deployment",
+    targets: ["GitHub Pages"],
+    reason:
+      "The documentation site deployment mutates GitHub Pages but is not a package or product release publisher.",
+  },
+  {
+    path: "app/.github/workflows/snjs.pr.yml",
+    owner: "upstream-snjs-test-infrastructure",
+    classification: "noncanonical-external-mutation",
+    status: "non-root-active",
+    activation: "pull-request-and-manual",
+    targetKind: "non-package-external-mutation",
+    targets: [
+      "Docker Hub standardnotes/snjs test tags",
+      "standardnotes/server E2E workflow dispatch",
+    ],
+    reason:
+      "The standalone app PR workflow publishes upstream test images and dispatches upstream E2E workflows; it is not a package release policy.",
+  },
+  {
+    path: "app/.github/workflows/snjs.upgrade.event.yml",
+    owner: "upstream-snjs-update-automation",
+    classification: "noncanonical-external-mutation",
+    status: "non-root-active",
+    activation: "repository-dispatch-and-manual",
+    targetKind: "non-package-external-mutation",
+    targets: ["repository dependency-update commits and pull requests"],
+    reason:
+      "The standalone app workflow opens dependency-update pull requests; it is not a package release publisher.",
+  },
+]);
+
+const ROOT_NONMUTATING_SUPPORT_WORKFLOWS = Object.freeze([
+  {
+    path: ".github/workflows/ci.yml",
+    owner: "repository-ci",
+    classification: "root-nonmutating-support",
+    status: "root-active",
+    activation: "push-pull-schedule-and-manual",
+    targetKind: "validation-support",
+    targets: ["repository checks and test artifacts"],
+    reason:
+      "The repository-root CI workflow validates code and uploads test evidence without publishing a product.",
+  },
+  {
+    path: ".github/workflows/release-contract.yml",
+    owner: "release-contract",
+    classification: "root-nonmutating-support",
+    status: "root-active",
+    activation: "push-pull-and-manual",
+    targetKind: "validation-support",
+    targets: ["release contract and impact report artifacts"],
+    reason:
+      "The repository-root release-contract workflow validates publishers and uploads reports without publishing a product.",
+  },
+]);
+
+const APP_EMBEDDED_NONMUTATING_SUPPORT_WORKFLOWS = Object.freeze([
+  {
+    path: "app/.github/workflows/codeql-analysis.yml",
+    owner: "embedded-app-security-checks",
+    classification: "embedded-nonmutating-support",
+    status: "non-root-active",
+    activation: "push-pull-and-schedule-portable",
+    targetKind: "validation-support",
+    targets: ["CodeQL analysis results"],
+    reason:
+      "This nested app definition is non-root-active in the monorepo and remains portable security-check reference material.",
+  },
+  {
+    path: "app/.github/workflows/pr.yml",
+    owner: "embedded-app-pr-checks",
+    classification: "embedded-nonmutating-support",
+    status: "non-root-active",
+    activation: "pull-request-portable",
+    targetKind: "validation-support",
+    targets: ["app pull-request checks"],
+    reason:
+      "This nested app definition is non-root-active in the monorepo and remains portable pull-request test material.",
+  },
+]);
+
+const SERVER_EMBEDDED_NONMUTATING_SUPPORT_WORKFLOWS = Object.freeze([
+  {
+    path: "server/.github/workflows/common-e2e.yml",
+    owner: "embedded-server-e2e",
+    classification: "embedded-nonmutating-support",
+    status: "non-root-active",
+    activation: "workflow-call-portable",
+    targetKind: "test-support",
+    targets: ["self-hosted and home-server E2E suites"],
+    reason:
+      "This nested server reusable definition is non-root-active in the monorepo and coordinates test-only E2E jobs.",
+  },
+  {
+    path: "server/.github/workflows/e2e-home-server.yml",
+    owner: "embedded-server-e2e",
+    classification: "embedded-nonmutating-support",
+    status: "non-root-active",
+    activation: "workflow-call-portable",
+    targetKind: "test-support",
+    targets: ["home-server E2E test artifacts"],
+    reason:
+      "This nested server reusable definition is non-root-active in the monorepo and runs test-only home-server E2E coverage.",
+  },
+  {
+    path: "server/.github/workflows/e2e-self-hosted.yml",
+    owner: "embedded-server-e2e",
+    classification: "embedded-nonmutating-support",
+    status: "non-root-active",
+    activation: "workflow-call-portable",
+    targetKind: "test-support",
+    targets: ["self-hosted E2E test artifacts"],
+    reason:
+      "This nested server reusable definition is non-root-active in the monorepo and runs test-only self-hosted E2E coverage.",
+  },
+  {
+    path: "server/.github/workflows/e2e-test-suite.yml",
+    owner: "embedded-server-e2e",
+    classification: "embedded-nonmutating-support",
+    status: "non-root-active",
+    activation: "schedule-and-manual-portable",
+    targetKind: "test-support",
+    targets: ["scheduled or manual server E2E suites"],
+    reason:
+      "This nested server definition is non-root-active in the monorepo and remains a portable scheduled/manual E2E entry point.",
+  },
+  {
+    path: "server/.github/workflows/pr.yml",
+    owner: "embedded-server-pr-checks",
+    classification: "embedded-nonmutating-support",
+    status: "non-root-active",
+    activation: "pull-request-portable",
+    targetKind: "validation-support",
+    targets: ["server pull-request checks"],
+    reason:
+      "This nested server definition is non-root-active in the monorepo and remains portable pull-request test material.",
+  },
+]);
+
+const SERVER_QUARANTINED_UPSTREAM_WORKFLOWS = Object.freeze([
+  {
+    path: "server/.github/upstream-workflows-disabled/analytics.yml",
+    owner: "@standardnotes/analytics",
+    classification: "quarantined-upstream-mutation",
+    status: "quarantined",
+    activation: "disabled-directory",
+    targetKind: "container-distribution",
+    targets: ["Docker Hub standardnotes/analytics", "upstream Amazon ECR"],
+    reason:
+      "The preserved tag/manual publisher inherits secrets into mutable upstream reusable workflows.",
+    workspacePackages: ["@standardnotes/analytics"],
+  },
+  {
+    path: "server/.github/upstream-workflows-disabled/api-gateway.yml",
+    owner: "@standardnotes/api-gateway",
+    classification: "quarantined-upstream-mutation",
+    status: "quarantined",
+    activation: "disabled-directory",
+    targetKind: "container-distribution",
+    targets: ["Docker Hub standardnotes/api-gateway", "upstream Amazon ECR"],
+    reason:
+      "The preserved tag/manual publisher inherits secrets into mutable upstream reusable workflows.",
+    workspacePackages: ["@standardnotes/api-gateway"],
+  },
+  {
+    path: "server/.github/upstream-workflows-disabled/auth.yml",
+    owner: "@standardnotes/auth-server",
+    classification: "quarantined-upstream-mutation",
+    status: "quarantined",
+    activation: "disabled-directory",
+    targetKind: "container-distribution",
+    targets: ["Docker Hub standardnotes/auth", "upstream Amazon ECR"],
+    reason:
+      "The preserved tag/manual publisher inherits secrets into mutable upstream reusable workflows.",
+    workspacePackages: ["@standardnotes/auth-server"],
+  },
+  {
+    path: "server/.github/upstream-workflows-disabled/common-deploy.yml",
+    owner: "upstream-server-deployment",
+    classification: "quarantined-upstream-mutation",
+    status: "quarantined",
+    activation: "disabled-directory",
+    targetKind: "infrastructure-deployment",
+    targets: ["upstream Amazon ECS prod cluster and services"],
+    reason:
+      "The preserved reusable workflow rewrites production task definitions and deploys them with upstream AWS credentials.",
+  },
+  {
+    path: "server/.github/upstream-workflows-disabled/common-docker-image.yml",
+    owner: "upstream-server-container-publishing",
+    classification: "quarantined-upstream-mutation",
+    status: "quarantined",
+    activation: "disabled-directory",
+    targetKind: "container-distribution",
+    targets: ["upstream Docker Hub and Amazon ECR mutable image tags"],
+    reason:
+      "The preserved reusable workflow pushes multi-architecture latest and commit-SHA tags to upstream registries.",
+  },
+  {
+    path: "server/.github/upstream-workflows-disabled/common-self-hosting.yml",
+    owner: "upstream-server-self-hosting-publishing",
+    classification: "quarantined-upstream-mutation",
+    status: "quarantined",
+    activation: "disabled-directory",
+    targetKind: "container-distribution",
+    targets: ["Docker Hub standardnotes/server mutable image tags"],
+    reason:
+      "The preserved reusable workflow pushes upstream self-hosting latest and commit-SHA images.",
+  },
+  {
+    path: "server/.github/upstream-workflows-disabled/common-server-application.yml",
+    owner: "upstream-server-application-publishing",
+    classification: "quarantined-upstream-mutation",
+    status: "quarantined",
+    activation: "disabled-directory",
+    targetKind: "container-and-infrastructure-distribution",
+    targets: [
+      "upstream container registries",
+      "upstream Amazon ECS deployment",
+    ],
+    reason:
+      "The preserved reusable coordinator inherits secrets into mutable upstream publishing and deployment workflows.",
+  },
+  {
+    path: "server/.github/upstream-workflows-disabled/files.yml",
+    owner: "@standardnotes/files-server",
+    classification: "quarantined-upstream-mutation",
+    status: "quarantined",
+    activation: "disabled-directory",
+    targetKind: "container-distribution",
+    targets: ["Docker Hub standardnotes/files", "upstream Amazon ECR"],
+    reason:
+      "The preserved tag/manual publisher inherits secrets into mutable upstream reusable workflows.",
+    workspacePackages: ["@standardnotes/files-server"],
+  },
+  {
+    path: "server/.github/upstream-workflows-disabled/publish.yml",
+    owner: "upstream-server-package-publishing",
+    classification: "quarantined-upstream-mutation",
+    status: "quarantined",
+    activation: "disabled-directory",
+    targetKind: "mixed-package-and-distribution",
+    targets: [
+      "npm server workspaces",
+      "Docker Hub standardnotes/server",
+      "upstream signed release commits",
+    ],
+    reason:
+      "The preserved main-branch workflow publishes upstream packages, containers, and signed release commits.",
+  },
+  {
+    path: "server/.github/upstream-workflows-disabled/revisions.yml",
+    owner: "@standardnotes/revisions-server",
+    classification: "quarantined-upstream-mutation",
+    status: "quarantined",
+    activation: "disabled-directory",
+    targetKind: "container-distribution",
+    targets: ["Docker Hub standardnotes/revisions", "upstream Amazon ECR"],
+    reason:
+      "The preserved tag/manual publisher inherits secrets into mutable upstream reusable workflows.",
+    workspacePackages: ["@standardnotes/revisions-server"],
+  },
+  {
+    path: "server/.github/upstream-workflows-disabled/scheduler.yml",
+    owner: "@standardnotes/scheduler-server",
+    classification: "quarantined-upstream-mutation",
+    status: "quarantined",
+    activation: "disabled-directory",
+    targetKind: "container-distribution",
+    targets: ["Docker Hub standardnotes/scheduler", "upstream Amazon ECR"],
+    reason:
+      "The preserved tag/manual publisher inherits secrets into mutable upstream reusable workflows.",
+    workspacePackages: ["@standardnotes/scheduler-server"],
+  },
+  {
+    path: "server/.github/upstream-workflows-disabled/syncing-server.yml",
+    owner: "@standardnotes/syncing-server",
+    classification: "quarantined-upstream-mutation",
+    status: "quarantined",
+    activation: "disabled-directory",
+    targetKind: "container-distribution",
+    targets: [
+      "Docker Hub standardnotes/syncing-server-js",
+      "upstream Amazon ECR",
+    ],
+    reason:
+      "The preserved tag/manual publisher inherits secrets into mutable upstream reusable workflows.",
+    workspacePackages: ["@standardnotes/syncing-server"],
+  },
+  {
+    path: "server/.github/upstream-workflows-disabled/websockets.yml",
+    owner: "@standardnotes/websockets-server",
+    classification: "quarantined-upstream-mutation",
+    status: "quarantined",
+    activation: "disabled-directory",
+    targetKind: "container-distribution",
+    targets: ["Docker Hub standardnotes/websockets", "upstream Amazon ECR"],
+    reason:
+      "The preserved tag/manual publisher inherits secrets into mutable upstream reusable workflows.",
+    workspacePackages: ["@standardnotes/websockets-server"],
+  },
+]);
+
+const DISTRIBUTION_WORKSPACE_SURFACES = Object.freeze({
+  "@standardnotes/clipper": {
+    kind: "shipped-application",
+    expectedPrivate: true,
+    packagePublicationPolicy: "not-applicable-distribution-surface",
+    distributionStatus: "upstream-publisher-quarantined",
+    workflowPaths: [
+      "app/.github/upstream-workflows-disabled/clipper.release.prod.yml",
+    ],
+    targets: ["Firefox add-on", "Chromium extension"],
+  },
+  "@standardnotes/web": {
+    kind: "shipped-application",
+    expectedPrivate: true,
+    packagePublicationPolicy: "not-applicable-distribution-surface",
+    distributionStatus: "upstream-publisher-quarantined",
+    workflowPaths: [
+      "app/.github/upstream-workflows-disabled/web.release.prod.yml",
+    ],
+    targets: [
+      "embedded web application in desktop and mobile products",
+      "standalone web deployment (upstream publisher quarantined)",
+    ],
+  },
+});
+
+const WORKFLOW_TRIGGER_CONTRACTS = Object.freeze({
+  ".github/workflows/ci.yml": [
+    "pull_request",
+    "push",
+    "schedule",
+    "workflow_dispatch",
+  ],
+  ".github/workflows/docs-pages.yml": [
+    "pull_request",
+    "push",
+    "workflow_dispatch",
+  ],
+  ".github/workflows/release-contract.yml": [
+    "pull_request",
+    "push",
+    "workflow_dispatch",
+  ],
+  ".github/workflows/srn-admin.yml": ["push", "workflow_dispatch"],
+  ".github/workflows/srn-client.yml": ["push", "workflow_dispatch"],
+  ".github/workflows/srn-desktop.yml": ["push", "workflow_dispatch"],
+  ".github/workflows/srn-home-server.yml": ["push", "workflow_dispatch"],
+  ".github/workflows/srn-mcp.yml": ["push", "workflow_dispatch"],
+  ".github/workflows/srn-mobile.yml": ["push", "workflow_dispatch"],
+  ".github/workflows/srn-openclaw.yml": ["push", "workflow_dispatch"],
+  ".github/workflows/srn-server.yml": ["push", "workflow_dispatch"],
+  "app/.github/workflows/codeql-analysis.yml": [
+    "pull_request",
+    "push",
+    "schedule",
+  ],
+  "app/.github/workflows/desktop.release.prod.yml": ["workflow_dispatch"],
+  "app/.github/workflows/desktop.release.reuse.yml": ["workflow_call"],
+  "app/.github/workflows/mobile.release.prod.yml": ["workflow_dispatch"],
+  "app/.github/workflows/pr.yml": ["pull_request"],
+  "app/.github/workflows/snjs.pr.yml": ["pull_request", "workflow_dispatch"],
+  "app/.github/workflows/snjs.upgrade.event.yml": [
+    "repository_dispatch",
+    "workflow_dispatch",
+  ],
+  "app/.github/upstream-workflows-disabled/clipper.release.prod.yml": [
+    "push",
+    "workflow_dispatch",
+  ],
+  "app/.github/upstream-workflows-disabled/git-sync.yml": [
+    "push",
+    "workflow_dispatch",
+  ],
+  "app/.github/upstream-workflows-disabled/ios.testflight.yml": [
+    "workflow_dispatch",
+  ],
+  "app/.github/upstream-workflows-disabled/publish.yml": ["push"],
+  "app/.github/upstream-workflows-disabled/releases.notify.yml": [
+    "workflow_dispatch",
+  ],
+  "app/.github/upstream-workflows-disabled/web.release.prod.yml": ["push"],
+  "server/.github/workflows/common-e2e.yml": ["workflow_call"],
+  "server/.github/workflows/e2e-home-server.yml": ["workflow_call"],
+  "server/.github/workflows/e2e-self-hosted.yml": ["workflow_call"],
+  "server/.github/workflows/e2e-test-suite.yml": [
+    "schedule",
+    "workflow_dispatch",
+  ],
+  "server/.github/workflows/pr.yml": ["pull_request"],
+  "server/.github/upstream-workflows-disabled/analytics.yml": [
+    "push",
+    "workflow_dispatch",
+  ],
+  "server/.github/upstream-workflows-disabled/api-gateway.yml": [
+    "push",
+    "workflow_dispatch",
+  ],
+  "server/.github/upstream-workflows-disabled/auth.yml": [
+    "push",
+    "workflow_dispatch",
+  ],
+  "server/.github/upstream-workflows-disabled/common-deploy.yml": [
+    "workflow_call",
+  ],
+  "server/.github/upstream-workflows-disabled/common-docker-image.yml": [
+    "workflow_call",
+  ],
+  "server/.github/upstream-workflows-disabled/common-self-hosting.yml": [
+    "workflow_call",
+  ],
+  "server/.github/upstream-workflows-disabled/common-server-application.yml": [
+    "workflow_call",
+  ],
+  "server/.github/upstream-workflows-disabled/files.yml": [
+    "push",
+    "workflow_dispatch",
+  ],
+  "server/.github/upstream-workflows-disabled/publish.yml": ["push"],
+  "server/.github/upstream-workflows-disabled/revisions.yml": [
+    "push",
+    "workflow_dispatch",
+  ],
+  "server/.github/upstream-workflows-disabled/scheduler.yml": [
+    "push",
+    "workflow_dispatch",
+  ],
+  "server/.github/upstream-workflows-disabled/syncing-server.yml": [
+    "push",
+    "workflow_dispatch",
+  ],
+  "server/.github/upstream-workflows-disabled/websockets.yml": [
+    "push",
+    "workflow_dispatch",
+  ],
 });
 
 export class ReleaseImpactError extends Error {
@@ -1007,6 +1703,108 @@ function classifyChangedFiles(
   };
 }
 
+function applyNativeExecutorSemanticImpact({
+  classified,
+  context,
+  baseSha,
+  headSha,
+  identity,
+}) {
+  const beforeSource = readAtRef(context, baseSha, NATIVE_EXECUTOR_PATH);
+  const afterSource = readAtRef(context, headSha, NATIVE_EXECUTOR_PATH);
+  const semanticChange = classifyNativeCliExecutorSemanticChange({
+    beforeSource,
+    afterSource,
+  });
+  if (semanticChange.classification === "ambiguous") {
+    throw new ReleaseImpactError(
+      "ambiguous-native-executor-semantics",
+      `Native executor semantics cannot be classified safely: ${semanticChange.error ?? "unknown semantic parser error"}.`,
+    );
+  }
+  const affectsTarget = semanticChange.affectedProducts.includes(identity);
+  const destination = affectsTarget
+    ? classified.matchedFiles
+    : classified.ignoredFiles;
+  destination.push(NATIVE_EXECUTOR_PATH);
+  destination.sort();
+
+  if (!affectsTarget) {
+    return semanticChange;
+  }
+  const code =
+    semanticChange.classification === "shared"
+      ? "native-executor-shared-semantic-change"
+      : "native-executor-product-semantic-change";
+  classified.reasons.push({
+    code,
+    paths: [NATIVE_EXECUTOR_PATH],
+    products: semanticChange.affectedProducts,
+    ...(semanticChange.migration
+      ? {
+          migration: true,
+          migrationReason: semanticChange.migrationReason,
+        }
+      : {}),
+    ...(semanticChange.error ? { error: semanticChange.error } : {}),
+  });
+  classified.reasons.sort((left, right) => left.code.localeCompare(right.code));
+  return semanticChange;
+}
+
+function applyReleasePackagingContractSemanticImpact({
+  classified,
+  context,
+  baseSha,
+  headSha,
+  identity,
+}) {
+  const beforeSource = readAtRef(
+    context,
+    baseSha,
+    RELEASE_PACKAGING_CONTRACT_PATH,
+  );
+  const afterSource = readAtRef(
+    context,
+    headSha,
+    RELEASE_PACKAGING_CONTRACT_PATH,
+  );
+  const semanticChange = classifyReleasePackagingContractSemanticChange({
+    beforeSource,
+    afterSource,
+  });
+  if (semanticChange.classification === "ambiguous") {
+    throw new ReleaseImpactError(
+      "ambiguous-release-packaging-contract-semantics",
+      `Release packaging contract semantics cannot be classified safely: ${semanticChange.error ?? "unknown semantic parser error"}.`,
+    );
+  }
+  const affectsTarget = semanticChange.affectedProducts.includes(identity);
+  const destination = affectsTarget
+    ? classified.matchedFiles
+    : classified.ignoredFiles;
+  destination.push(RELEASE_PACKAGING_CONTRACT_PATH);
+  destination.sort();
+
+  if (!affectsTarget) {
+    return semanticChange;
+  }
+  classified.reasons.push({
+    code: `release-packaging-contract-${semanticChange.classification}-semantic-change`,
+    paths: [RELEASE_PACKAGING_CONTRACT_PATH],
+    products: semanticChange.affectedProducts,
+    ...(semanticChange.migration
+      ? {
+          migration: true,
+          migrationReason: semanticChange.migrationReason,
+        }
+      : {}),
+    ...(semanticChange.error ? { error: semanticChange.error } : {}),
+  });
+  classified.reasons.sort((left, right) => left.code.localeCompare(right.code));
+  return semanticChange;
+}
+
 function validateForce(force, forceReason) {
   const normalizedReason =
     typeof forceReason === "string" ? forceReason.trim() : "";
@@ -1098,13 +1896,48 @@ export function analyzeDefinitionImpact({
   const changedFiles = base.sha
     ? changedFilesBetween(context, base.sha, headSha)
     : [];
+  const hasNativeExecutorChange =
+    base.sha &&
+    NATIVE_CLI_RELEASE_PRODUCTS.includes(identity) &&
+    changedFiles.includes(NATIVE_EXECUTOR_PATH);
+  const hasReleasePackagingContractChange =
+    base.sha &&
+    RELEASE_PACKAGING_CONTRACT_PRODUCTS.includes(identity) &&
+    changedFiles.includes(RELEASE_PACKAGING_CONTRACT_PATH);
+  const semanticConfigPaths = new Set([
+    ...(hasNativeExecutorChange ? [NATIVE_EXECUTOR_PATH] : []),
+    ...(hasReleasePackagingContractChange
+      ? [RELEASE_PACKAGING_CONTRACT_PATH]
+      : []),
+  ]);
+  const genericallyClassifiedFiles = changedFiles.filter(
+    (file) => !semanticConfigPaths.has(file),
+  );
   const classified = classifyChangedFiles(
-    changedFiles,
+    genericallyClassifiedFiles,
     packages,
     configPaths,
     configPrefixes,
     definition.packageNames ?? definition.packageDirs.map(({ name }) => name),
   );
+  if (hasNativeExecutorChange) {
+    applyNativeExecutorSemanticImpact({
+      classified,
+      context,
+      baseSha: base.sha,
+      headSha,
+      identity,
+    });
+  }
+  if (hasReleasePackagingContractChange) {
+    applyReleasePackagingContractSemanticImpact({
+      classified,
+      context,
+      baseSha: base.sha,
+      headSha,
+      identity,
+    });
+  }
 
   const reasons = [...classified.reasons];
   if (base.firstRelease) {
@@ -1376,6 +2209,9 @@ function releaseCategory(workspacePackage, releaseTargets) {
   if (releaseTargets.length > 0) {
     return "release-managed";
   }
+  if (DISTRIBUTION_WORKSPACE_SURFACES[workspacePackage.name]) {
+    return "distribution-surface";
+  }
   return workspacePackage.manifest.private === true
     ? "private"
     : "publishable-unmanaged";
@@ -1398,13 +2234,19 @@ export function discoverWorkspaceInventory({
         identity: packageName,
         workspaceRoot,
         manifestPath: workspacePackage.manifestPath,
+        manifestPrivate: workspacePackage.manifest.private === true,
         category: releaseCategory(workspacePackage, releaseTargets),
         releaseTargets,
       });
     }
   }
   const categoryCounts = Object.fromEntries(
-    ["release-managed", "publishable-unmanaged", "private"].map((category) => [
+    [
+      "release-managed",
+      "distribution-surface",
+      "publishable-unmanaged",
+      "private",
+    ].map((category) => [
       category,
       workspaces.filter((entry) => entry.category === category).length,
     ]),
@@ -1456,6 +2298,413 @@ export function discoverStandaloneManagedPackages({
   };
 }
 
+const WORKFLOW_INVENTORY_PREFIXES = Object.freeze([
+  ".github/workflows/",
+  "app/.github/workflows/",
+  "app/.github/upstream-workflows-disabled/",
+  "server/.github/workflows/",
+  "server/.github/upstream-workflows-disabled/",
+]);
+
+function workflowFilesAtRef(context, ref) {
+  return filesAtRef(context, ref).filter(
+    (file) =>
+      WORKFLOW_INVENTORY_PREFIXES.some((prefix) => file.startsWith(prefix)) &&
+      /\.ya?ml$/i.test(file),
+  );
+}
+
+function workflowTriggers(content) {
+  const lines = content.replaceAll("\r\n", "\n").split("\n");
+  const onLine = lines.findIndex((line) => /^on\s*:/.test(line));
+  if (onLine === -1) {
+    return [];
+  }
+  const inline = lines[onLine].replace(/^on\s*:\s*/, "").trim();
+  if (inline) {
+    return inline
+      .replace(/^\[|\]$/g, "")
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter(Boolean)
+      .sort();
+  }
+  const triggers = [];
+  for (const line of lines.slice(onLine + 1)) {
+    if (/^\S/.test(line) && !/^\s*#/.test(line)) {
+      break;
+    }
+    const match = /^ {2}([A-Za-z_][\w-]*)\s*:/.exec(line);
+    if (match) {
+      triggers.push(match[1]);
+    }
+  }
+  return [...new Set(triggers)].sort();
+}
+
+function isReleaseOrExternalMutationWorkflow(file, content) {
+  const basename = path.posix.basename(file).toLowerCase();
+  if (
+    /(?:^srn-|\.release(?:\.|-)|^publish\.|^releases?\.notify\.|^git-sync\.|testflight|deploy)/.test(
+      basename,
+    )
+  ) {
+    return true;
+  }
+  return [
+    /\bgh release (?:create|upload)\b/,
+    /softprops\/action-gh-release@/,
+    /\b(?:npm publish|yarn npm publish|docker push|snapcraft upload)\b/,
+    /\baws s3 sync\b/,
+    /\bupload_to_(?:testflight|app_store|play_store)\b/,
+    /\bbundle exec fastlane (?:android|ios) (?:publish|upload|distribute|submit)_prod\b/,
+    /peter-evans\/repository-dispatch@/,
+    /peter-evans\/create-pull-request@/,
+    /convictional\/trigger-workflow-and-wait@/,
+    /(?:^|\s)uses:\s*actions\/deploy-pages@/m,
+    /(?:^|\s)uses:\s*wei\/git-sync@/m,
+  ].some((pattern) => pattern.test(content));
+}
+
+function workflowRepositoryMetadata(workflowPath) {
+  if (workflowPath.startsWith(".github/workflows/")) {
+    return {
+      status: "root-active",
+      rootDiscoverable: true,
+      embeddedPortable: false,
+    };
+  }
+  if (
+    workflowPath.startsWith("app/.github/workflows/") ||
+    workflowPath.startsWith("server/.github/workflows/")
+  ) {
+    return {
+      status: "non-root-active",
+      rootDiscoverable: false,
+      embeddedPortable: true,
+    };
+  }
+  return {
+    status: "quarantined",
+    rootDiscoverable: false,
+    embeddedPortable: false,
+  };
+}
+
+function cloneWorkflowEntry(entry, declaredTriggers) {
+  const repositoryMetadata = workflowRepositoryMetadata(entry.path);
+  return {
+    ...entry,
+    ...repositoryMetadata,
+    declaredTriggers: [...declaredTriggers],
+    ...(repositoryMetadata.rootDiscoverable
+      ? { rootTriggers: [...declaredTriggers] }
+      : { portableTriggers: [...declaredTriggers] }),
+    targets: [...entry.targets],
+    ...(entry.workspacePackages
+      ? { workspacePackages: [...entry.workspacePackages] }
+      : {}),
+  };
+}
+
+function assertExpectedWorkflowPath(context, headSha, entry, trackedWorkflows) {
+  if (trackedWorkflows.has(entry.path)) {
+    return readAtRef(context, headSha, entry.path);
+  }
+  const basename = path.posix.basename(entry.path);
+  const familyPrefix = entry.path.startsWith("app/")
+    ? "app/.github/"
+    : entry.path.startsWith("server/")
+      ? "server/.github/"
+      : ".github/";
+  const misplaced = [...trackedWorkflows].find(
+    (candidate) =>
+      candidate.startsWith(familyPrefix) &&
+      path.posix.basename(candidate) === basename,
+  );
+  if (misplaced) {
+    throw new ReleaseImpactError(
+      "release-workflow-misplaced",
+      `Expected release workflow '${entry.path}' is missing at ${headSha}; '${basename}' is active or preserved at '${misplaced}' instead.`,
+    );
+  }
+  const code =
+    entry.classification === "quarantined-upstream-mutation"
+      ? "missing-quarantined-workflow"
+      : "missing-release-workflow";
+  throw new ReleaseImpactError(
+    code,
+    `Expected ${entry.classification} workflow '${entry.path}' is missing at ${headSha}.`,
+  );
+}
+
+function assertWorkflowActivation(entry, content) {
+  const triggers = workflowTriggers(content);
+  const expectedTriggers = WORKFLOW_TRIGGER_CONTRACTS[entry.path];
+  if (!expectedTriggers) {
+    throw new ReleaseImpactError(
+      "missing-workflow-trigger-contract",
+      `Workflow '${entry.path}' has no trigger contract.`,
+    );
+  }
+  if (
+    triggers.length !== expectedTriggers.length ||
+    triggers.some((trigger, index) => trigger !== expectedTriggers[index])
+  ) {
+    throw new ReleaseImpactError(
+      "workflow-activation-mismatch",
+      `Workflow '${entry.path}' is classified as '${entry.activation}' and must declare exactly [${expectedTriggers.join(", ")}], but declares [${triggers.join(", ")}].`,
+    );
+  }
+  if (
+    entry.classification === "canonical-change-gated" &&
+    (!/^ {4}branches:\s*\[\s*main\s*\]\s*$/m.test(content) ||
+      !/^ {4}paths:\s*$/m.test(content))
+  ) {
+    throw new ReleaseImpactError(
+      "workflow-activation-mismatch",
+      `Canonical workflow '${entry.path}' must scope push activation to main and an explicit path inventory.`,
+    );
+  }
+  return triggers;
+}
+
+function validateDistributionWorkspaceSurfaces(workspaces, workflows) {
+  const workflowsByPath = new Map(
+    workflows.map((entry) => [entry.path, entry]),
+  );
+  const surfaces = [];
+  for (const [identity, policy] of Object.entries(
+    DISTRIBUTION_WORKSPACE_SURFACES,
+  ).sort(([left], [right]) => left.localeCompare(right))) {
+    const matches = workspaces.filter((entry) => entry.identity === identity);
+    if (matches.length !== 1) {
+      throw new ReleaseImpactError(
+        "distribution-workspace-missing",
+        `Distribution surface '${identity}' must resolve to exactly one Yarn workspace; found ${matches.length}.`,
+      );
+    }
+    const workspace = matches[0];
+    if (
+      workspace.manifestPrivate !== policy.expectedPrivate ||
+      workspace.releaseTargets.length !== 0 ||
+      workspace.category !== "distribution-surface"
+    ) {
+      throw new ReleaseImpactError(
+        "distribution-workspace-policy-mismatch",
+        `Distribution surface '${identity}' must remain a private, non-package-published workspace owned by quarantined distribution workflows; observed private=${workspace.manifestPrivate}, releaseTargets=${workspace.releaseTargets.join(",") || "none"}, category=${workspace.category}.`,
+      );
+    }
+    for (const workflowPath of policy.workflowPaths) {
+      const workflow = workflowsByPath.get(workflowPath);
+      if (
+        workflow?.classification !== "quarantined-upstream-mutation" ||
+        workflow.targetKind !== "application-distribution"
+      ) {
+        throw new ReleaseImpactError(
+          "distribution-workflow-policy-mismatch",
+          `Distribution surface '${identity}' expects quarantined application publisher '${workflowPath}'.`,
+        );
+      }
+    }
+    surfaces.push({
+      identity,
+      workspaceRoot: workspace.workspaceRoot,
+      manifestPath: workspace.manifestPath,
+      manifestPrivate: workspace.manifestPrivate,
+      kind: policy.kind,
+      packagePublicationPolicy: policy.packagePublicationPolicy,
+      distributionStatus: policy.distributionStatus,
+      workflowPaths: [...policy.workflowPaths],
+      targets: [...policy.targets],
+    });
+  }
+  return surfaces;
+}
+
+export function discoverWorkflowOwnership({
+  repo = process.cwd(),
+  context: providedContext,
+  headRef = "HEAD",
+} = {}) {
+  const context = analysisContext(repo, providedContext);
+  const headSha = resolveCommit(context, headRef, "Head");
+  const trackedWorkflowPaths = workflowFilesAtRef(context, headSha);
+  const trackedWorkflows = new Set(trackedWorkflowPaths);
+  const expectedEntries = [
+    ...CANONICAL_RELEASE_WORKFLOWS,
+    ...STANDALONE_RECOVERY_WORKFLOWS,
+    ...SUPPORTING_RELEASE_WORKFLOWS,
+    ...QUARANTINED_UPSTREAM_WORKFLOWS,
+    ...ACTIVE_NONCANONICAL_EXTERNAL_WORKFLOWS,
+    ...ROOT_NONMUTATING_SUPPORT_WORKFLOWS,
+    ...APP_EMBEDDED_NONMUTATING_SUPPORT_WORKFLOWS,
+    ...SERVER_EMBEDDED_NONMUTATING_SUPPORT_WORKFLOWS,
+    ...SERVER_QUARANTINED_UPSTREAM_WORKFLOWS,
+  ];
+  const expectedPaths = new Set(expectedEntries.map((entry) => entry.path));
+  if (expectedPaths.size !== expectedEntries.length) {
+    throw new ReleaseImpactError(
+      "duplicate-workflow-ownership",
+      "The workflow ownership ledger assigns at least one path more than once.",
+    );
+  }
+  const triggerContractPaths = Object.keys(WORKFLOW_TRIGGER_CONTRACTS).sort();
+  const sortedExpectedPaths = [...expectedPaths].sort();
+  if (
+    triggerContractPaths.length !== sortedExpectedPaths.length ||
+    triggerContractPaths.some(
+      (workflowPath, index) => workflowPath !== sortedExpectedPaths[index],
+    )
+  ) {
+    throw new ReleaseImpactError(
+      "workflow-trigger-inventory-mismatch",
+      "Every owned workflow must have exactly one trigger contract and no stale trigger contracts may remain.",
+    );
+  }
+
+  const declaredTriggersByPath = new Map();
+  for (const entry of expectedEntries) {
+    const content = assertExpectedWorkflowPath(
+      context,
+      headSha,
+      entry,
+      trackedWorkflows,
+    );
+    declaredTriggersByPath.set(
+      entry.path,
+      assertWorkflowActivation(entry, content),
+    );
+    if (entry.classification === "canonical-change-gated") {
+      const definition = RELEASE_TARGETS[entry.owner];
+      if (!definition?.configPaths.includes(entry.path)) {
+        throw new ReleaseImpactError(
+          "canonical-workflow-owner-mismatch",
+          `Canonical workflow '${entry.path}' is not owned by release target '${entry.owner}'.`,
+        );
+      }
+    }
+  }
+
+  const quarantineContracts = [
+    {
+      scope: "app",
+      prefix: "app/.github/upstream-workflows-disabled/",
+      entries: QUARANTINED_UPSTREAM_WORKFLOWS,
+      exactCount: 6,
+    },
+    {
+      scope: "server",
+      prefix: "server/.github/upstream-workflows-disabled/",
+      entries: SERVER_QUARANTINED_UPSTREAM_WORKFLOWS,
+      exactCount: 13,
+    },
+  ];
+  for (const contract of quarantineContracts) {
+    const expectedQuarantinedPaths = new Set(
+      contract.entries.map((entry) => entry.path),
+    );
+    const actualQuarantinedPaths = trackedWorkflowPaths.filter((file) =>
+      file.startsWith(contract.prefix),
+    );
+    if (
+      expectedQuarantinedPaths.size !== contract.exactCount ||
+      actualQuarantinedPaths.length !== contract.exactCount ||
+      actualQuarantinedPaths.some((file) => !expectedQuarantinedPaths.has(file))
+    ) {
+      throw new ReleaseImpactError(
+        "quarantined-workflow-inventory-mismatch",
+        `The ${contract.scope} disabled upstream workflow directory must contain exactly ${contract.exactCount} registered workflows: ${[...expectedQuarantinedPaths].sort().join(", ")}. Observed: ${actualQuarantinedPaths.join(", ") || "none"}.`,
+      );
+    }
+    for (const quarantinedPath of expectedQuarantinedPaths) {
+      const basename = path.posix.basename(quarantinedPath);
+      const reactivated = trackedWorkflowPaths.find(
+        (candidate) =>
+          /\.github\/workflows\//.test(candidate) &&
+          path.posix.basename(candidate) === basename,
+      );
+      if (reactivated) {
+        throw new ReleaseImpactError(
+          "quarantined-workflow-reactivated",
+          `Quarantined upstream workflow '${quarantinedPath}' is also active or portable at '${reactivated}'.`,
+        );
+      }
+    }
+  }
+
+  for (const workflowPath of trackedWorkflowPaths) {
+    if (expectedPaths.has(workflowPath)) {
+      continue;
+    }
+    const content = readAtRef(context, headSha, workflowPath) ?? "";
+    if (isReleaseOrExternalMutationWorkflow(workflowPath, content)) {
+      throw new ReleaseImpactError(
+        "unclassified-external-mutation-workflow",
+        `Production or external-mutation workflow '${workflowPath}' is not classified in the workflow ownership ledger.`,
+      );
+    }
+    throw new ReleaseImpactError(
+      "unclassified-workflow",
+      `Workflow '${workflowPath}' is not classified in the workflow ownership ledger.`,
+    );
+  }
+
+  const workflows = expectedEntries
+    .map((entry) =>
+      cloneWorkflowEntry(entry, declaredTriggersByPath.get(entry.path)),
+    )
+    .sort((left, right) => left.path.localeCompare(right.path));
+  const classificationCounts = Object.fromEntries(
+    [
+      "canonical-change-gated",
+      "noncanonical-manual-recovery",
+      "canonical-support",
+      "quarantined-upstream-mutation",
+      "noncanonical-external-mutation",
+      "root-nonmutating-support",
+      "embedded-nonmutating-support",
+    ].map((classification) => [
+      classification,
+      workflows.filter((entry) => entry.classification === classification)
+        .length,
+    ]),
+  );
+  const scopeCounts = {
+    rootDiscoverable: workflows.filter((entry) => entry.rootDiscoverable)
+      .length,
+    embeddedPortable: workflows.filter((entry) => entry.embeddedPortable)
+      .length,
+    quarantined: workflows.filter((entry) => entry.status === "quarantined")
+      .length,
+  };
+  const quarantineCounts = {
+    app: QUARANTINED_UPSTREAM_WORKFLOWS.length,
+    server: SERVER_QUARANTINED_UPSTREAM_WORKFLOWS.length,
+    total:
+      QUARANTINED_UPSTREAM_WORKFLOWS.length +
+      SERVER_QUARANTINED_UPSTREAM_WORKFLOWS.length,
+  };
+  const embeddedSupportCounts = {
+    app: APP_EMBEDDED_NONMUTATING_SUPPORT_WORKFLOWS.length,
+    server: SERVER_EMBEDDED_NONMUTATING_SUPPORT_WORKFLOWS.length,
+    total:
+      APP_EMBEDDED_NONMUTATING_SUPPORT_WORKFLOWS.length +
+      SERVER_EMBEDDED_NONMUTATING_SUPPORT_WORKFLOWS.length,
+  };
+
+  return {
+    schemaVersion: 2,
+    headRef,
+    headSha,
+    classificationCounts,
+    scopeCounts,
+    quarantineCounts,
+    embeddedSupportCounts,
+    workflows,
+  };
+}
+
 export function analyzeRepositoryReleaseImpact({
   repo = process.cwd(),
   context: providedContext,
@@ -1492,6 +2741,18 @@ export function analyzeRepositoryReleaseImpact({
     context,
     headRef,
   });
+  const workflowOwnership = discoverWorkflowOwnership({
+    repo,
+    context,
+    headRef,
+  });
+  const distributionSurfaces = validateDistributionWorkspaceSurfaces(
+    inventory.workspaces,
+    workflowOwnership.workflows,
+  );
+  const distributionSurfacesByIdentity = new Map(
+    distributionSurfaces.map((surface) => [surface.identity, surface]),
+  );
   const workspaces = inventory.workspaces.map((workspaceEntry) => {
     const { identity: packageName, releaseTargets } = workspaceEntry;
     if (releaseTargets.length > 1) {
@@ -1504,36 +2765,65 @@ export function analyzeRepositoryReleaseImpact({
       releaseTargets.length === 1
         ? productsByTarget.get(releaseTargets[0])
         : undefined;
+    const distributionSurface = distributionSurfacesByIdentity.get(packageName);
     const analysis = managedProduct
       ? {
           ...managedProduct,
           analysisStatus: "release-managed",
           publicationPolicy: "managed",
+          releaseSurfaceKind: "managed-product",
         }
-      : {
-          schemaVersion: 1,
-          mode: "inventory-only",
-          identity: packageName,
-          changed: null,
-          analysisStatus: "inventory-only",
-          publicationPolicy:
-            workspaceEntry.category === "private"
-              ? "disabled-private"
-              : "unmanaged",
-          tagPrefix: null,
-          latestReleaseRef: null,
-          baseRef: null,
-          divergentReleaseRefs: [],
-          reasons: [
-            {
-              code: "not-release-managed",
-              message:
-                workspaceEntry.category === "private"
-                  ? "The package is private and has no repository release publisher."
-                  : "The package manifest permits publication, but this repository has no publisher for it.",
-            },
-          ],
-        };
+      : distributionSurface
+        ? {
+            schemaVersion: 1,
+            mode: "distribution-inventory",
+            identity: packageName,
+            changed: null,
+            analysisStatus: "distribution-surface",
+            publicationPolicy: "upstream-distribution-publisher-quarantined",
+            releaseSurfaceKind: distributionSurface.kind,
+            packagePublicationPolicy:
+              distributionSurface.packagePublicationPolicy,
+            distributionStatus: distributionSurface.distributionStatus,
+            distributionWorkflowPaths: distributionSurface.workflowPaths,
+            distributionTargets: distributionSurface.targets,
+            tagPrefix: null,
+            latestReleaseRef: null,
+            baseRef: null,
+            divergentReleaseRefs: [],
+            reasons: [
+              {
+                code: "shipped-distribution-upstream-publisher-quarantined",
+                message:
+                  "This private workspace is a shipped application surface, not a releasable package policy. Its preserved upstream publisher is quarantined.",
+              },
+            ],
+          }
+        : {
+            schemaVersion: 1,
+            mode: "inventory-only",
+            identity: packageName,
+            changed: null,
+            analysisStatus: "inventory-only",
+            publicationPolicy:
+              workspaceEntry.category === "private"
+                ? "disabled-private"
+                : "unmanaged",
+            releaseSurfaceKind: "package-inventory",
+            tagPrefix: null,
+            latestReleaseRef: null,
+            baseRef: null,
+            divergentReleaseRefs: [],
+            reasons: [
+              {
+                code: "not-release-managed",
+                message:
+                  workspaceEntry.category === "private"
+                    ? "The package is private and has no repository release publisher."
+                    : "The package manifest permits publication, but this repository has no publisher for it.",
+              },
+            ],
+          };
     return {
       ...analysis,
       ...workspaceEntry,
@@ -1549,7 +2839,7 @@ export function analyzeRepositoryReleaseImpact({
   );
 
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     mode: "repository",
     headRef,
     headSha,
@@ -1564,6 +2854,8 @@ export function analyzeRepositoryReleaseImpact({
       managedProducts: products.length,
       yarnWorkspaces: workspaces.length,
       standaloneManagedPackages: standaloneManagedPackages.length,
+      workflowOwners: workflowOwnership.workflows.length,
+      distributionSurfaces: distributionSurfaces.length,
     },
     changedProducts: products
       .filter((entry) => entry.changed)
@@ -1576,6 +2868,8 @@ export function analyzeRepositoryReleaseImpact({
       .map((entry) => entry.identity),
     products,
     standaloneManagedPackages,
+    workflowOwnership,
+    distributionSurfaces,
     workspaces,
   };
 }
@@ -1621,6 +2915,51 @@ export function renderReleaseImpactReport(result) {
 
   lines.push(
     "",
+    "## Workflow and distribution ownership",
+    "",
+    "Only workflows under the repository-root `.github/workflows/` directory are `rootDiscoverable` and active in this monorepo. Definitions under `app/.github/workflows/` and `server/.github/workflows/` are `embeddedPortable`: they are non-root-active here, while `portableTriggers` records what would activate them if that subtree became a repository. Mutation-capable upstream definitions remain quarantined outside every workflow directory.",
+    "",
+    `Workflow counts: ${Object.entries(
+      result.workflowOwnership.classificationCounts,
+    )
+      .map(([classification, count]) => `${classification}=${count}`)
+      .join(", ")}.`,
+    "",
+    `Scope counts: rootDiscoverable=${result.workflowOwnership.scopeCounts.rootDiscoverable}, embeddedPortable=${result.workflowOwnership.scopeCounts.embeddedPortable}, quarantined=${result.workflowOwnership.scopeCounts.quarantined}. Quarantine counts: app=${result.workflowOwnership.quarantineCounts.app}, server=${result.workflowOwnership.quarantineCounts.server}. Embedded nonmutating support: app=${result.workflowOwnership.embeddedSupportCounts.app}, server=${result.workflowOwnership.embeddedSupportCounts.server}.`,
+    "",
+    "| Workflow | Repository scope | Status | Classification | Owner | Declared or portable triggers | Target kind | Targets | Reason |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+  );
+
+  for (const entry of result.workflowOwnership.workflows) {
+    const repositoryScope = entry.rootDiscoverable
+      ? "rootDiscoverable"
+      : entry.embeddedPortable
+        ? "embeddedPortable"
+        : "quarantined";
+    lines.push(
+      `| ${markdownCell(entry.path)} | ${repositoryScope} | ${markdownCell(entry.status)} | ${markdownCell(entry.classification)} | ${markdownCell(entry.owner)} | ${markdownCell(entry.rootTriggers ?? entry.portableTriggers)} | ${markdownCell(entry.targetKind)} | ${markdownCell(entry.targets)} | ${markdownCell(entry.reason)} |`,
+    );
+  }
+
+  lines.push(
+    "",
+    "### Shipped workspace distribution surfaces",
+    "",
+    "The `distribution-surface` category records private workspaces that ship as applications. A manifest's `private` flag prevents package-registry publication; it does not disable the application or turn it into a private-package release policy. Their upstream standalone publishers remain quarantined.",
+    "",
+    "| Workspace | Root | Manifest | Manifest private | Surface kind | Package publication policy | Distribution status | Workflows | Targets |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+  );
+
+  for (const entry of result.distributionSurfaces) {
+    lines.push(
+      `| ${markdownCell(entry.identity)} | ${markdownCell(entry.workspaceRoot)} | ${markdownCell(entry.manifestPath)} | ${entry.manifestPrivate ? "yes" : "no"} | ${markdownCell(entry.kind)} | ${markdownCell(entry.packagePublicationPolicy)} | ${markdownCell(entry.distributionStatus)} | ${markdownCell(entry.workflowPaths)} | ${markdownCell(entry.targets)} |`,
+    );
+  }
+
+  lines.push(
+    "",
     "## Standalone managed packages",
     "",
     "These package manifests live outside the three Yarn workspace roots. Their products are already included in the managed-product table above.",
@@ -1645,7 +2984,7 @@ export function renderReleaseImpactReport(result) {
       .map(([category, count]) => `${category}=${count}`)
       .join(", ")}.`,
     "",
-    "Only `release-managed` rows receive a release decision. Unmanaged and private rows remain inventory-only and never infer a tag or publisher.",
+    "Only `release-managed` rows receive a release decision. `distribution-surface` rows describe shipped applications and quarantined upstream publishers without inventing a package release. Unmanaged and private rows remain inventory-only and never infer a tag or publisher.",
     "",
     "| Root | Package | Category | Publication policy | Managed by | Tag prefix | Latest tag by profile policy | Selected baseline | Managed source impact | Publication gate | Reasons | Divergent off-history tags |",
     "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",

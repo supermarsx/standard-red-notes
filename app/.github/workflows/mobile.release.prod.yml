@@ -1,218 +1,1444 @@
 name: Mobile Release Production
 
 on:
-  push:
-    tags:
-      - '*standardnotes/web*'
   workflow_dispatch:
+    inputs:
+      confirm_recovery:
+        description: Confirm this noncanonical recovery publisher is intentionally being used
+        required: true
+        default: false
+        type: boolean
+      recovery_reason:
+        description: Audit reason (minimum 20 non-whitespace characters)
+        required: true
+        type: string
+
+concurrency:
+  group: standard-notes-mobile-production-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
 
 jobs:
+  context:
+    runs-on: ubuntu-latest
+    environment: mobile-production
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+      recovery_reason_sha256: ${{ steps.version.outputs.recovery_reason_sha256 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - id: version
+        name: Validate explicit recovery dispatch and reserve mobile release identity
+        env:
+          CONFIRM_RECOVERY: ${{ inputs.confirm_recovery }}
+          RECOVERY_REASON: ${{ inputs.recovery_reason }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" != workflow_dispatch ] || [ "$CONFIRM_RECOVERY" != true ]; then
+            echo 'This noncanonical mobile publisher requires an explicit confirmed recovery dispatch.' >&2
+            exit 1
+          fi
+          git fetch --no-tags --force origin refs/heads/main:refs/remotes/origin/main
+          protected_sha="$(git rev-parse refs/remotes/origin/main^{commit})"
+          if [ "$GITHUB_REF" != refs/heads/main ] || [ "$GITHUB_SHA" != "$protected_sha" ]; then
+            echo "Recovery publication must run from the fetched protected main head ($protected_sha), not $GITHUB_REF at $GITHUB_SHA." >&2
+            exit 1
+          fi
+          normalized_reason="$(printf '%s' "$RECOVERY_REASON" | python3 -c 'import sys; print(" ".join(sys.stdin.read().split()))')"
+          non_whitespace_reason="$(printf '%s' "$normalized_reason" | tr -d '[:space:]')"
+          if [ "${#non_whitespace_reason}" -lt 20 ]; then
+            echo 'recovery_reason must contain at least 20 non-whitespace characters.' >&2
+            exit 1
+          fi
+          reason_sha="$(printf '%s' "$normalized_reason" | sha256sum | cut -d' ' -f1)"
+          manifest_version="$(node -p "require('./packages/web/package.json').version")"
+          [[ "$manifest_version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+
+          version="$manifest_version"
+          tag="@standardnotes/mobile@$version"
+          tag_exists=false
+          if git show-ref --verify --quiet "refs/tags/$tag"; then tag_exists=true; fi
+
+          api_tag="$(node -p "encodeURIComponent(process.argv[1])" "$tag")"
+          intent_marker="<!-- srn-mobile-recovery-release-intent:run=${GITHUB_RUN_ID};sha=${GITHUB_SHA};version=${version};reason=${reason_sha}; -->"
+          status="$(curl --silent --show-error \
+            --output "$RUNNER_TEMP/mobile-release.json" \
+            --write-out '%{http_code}' \
+            --header 'Accept: application/vnd.github+json' \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header 'X-GitHub-Api-Version: 2022-11-28' \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${api_tag}")"
+          case "$status" in
+            404)
+              if [ "$tag_exists" = true ]; then
+                echo "Mobile tag exists without a recoverable release record: $tag" >&2
+                exit 1
+              fi
+              gh release create "$tag" --draft --prerelease --latest=false --title "Mobile $version" --target "$GITHUB_SHA" \
+                --generate-notes --notes "$intent_marker"
+              status="$(curl --silent --show-error --output "$RUNNER_TEMP/mobile-release.json" --write-out '%{http_code}' \
+                --header 'Accept: application/vnd.github+json' --header "Authorization: Bearer $GH_TOKEN" \
+                --header 'X-GitHub-Api-Version: 2022-11-28' \
+                "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${api_tag}")"
+              [ "$status" = 200 ] || { cat "$RUNNER_TEMP/mobile-release.json" >&2; exit 1; }
+              ;;
+            200)
+              jq -e --arg tag "$tag" --arg sha "$GITHUB_SHA" --arg run "$GITHUB_RUN_ID" \
+                --arg version "$version" --arg reason "$reason_sha" \
+                '.tag_name == $tag and .target_commitish == $sha and (.body // "" | contains("<!-- srn-mobile-recovery-release-intent:run=" + $run + ";sha=" + $sha + ";version=" + $version + ";reason=" + $reason + ";"))' \
+                "$RUNNER_TEMP/mobile-release.json" >/dev/null || {
+                  echo "Mobile recovery release identity is owned by another run, commit, or audit reason: $tag" >&2
+                  exit 1
+                }
+              ;;
+            *) cat "$RUNNER_TEMP/mobile-release.json" >&2; echo "Unable to reserve mobile release identity (HTTP $status)" >&2; exit 1 ;;
+          esac
+          jq -e --arg tag "$tag" --arg sha "$GITHUB_SHA" --arg marker "$intent_marker" \
+            '.tag_name == $tag and .target_commitish == $sha and .prerelease == true and (.body // "" | contains($marker))' \
+            "$RUNNER_TEMP/mobile-release.json" >/dev/null
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "recovery_reason_sha256=$reason_sha" >> "$GITHUB_OUTPUT"
+          {
+            echo '### Standalone mobile recovery publication'
+            echo "Actor: $GITHUB_ACTOR"
+            echo "Commit: $GITHUB_SHA"
+            echo "Audit reason SHA-256: $reason_sha"
+            echo
+            echo "$normalized_reason"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   android:
+    name: Build and validate Android
+    needs: context
     defaults:
       run:
         working-directory: packages/mobile
     runs-on: ubuntu-latest
+    environment: mobile-production
     timeout-minutes: 45
+    env:
+      PACKAGE_VERSION: ${{ needs.context.outputs.version }}
+      BUILD_NUMBER: ${{ github.run_number }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
       - name: Set up Node
-        uses: actions/setup-node@v7.0.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           registry-url: 'https://registry.npmjs.org'
           node-version-file: '.nvmrc'
+
       - name: Enable Corepack
         run: |
           npm install --global corepack@0.35.0
           corepack enable
           yarn --version
+
       - name: Cache Yarn
-        uses: actions/cache@v6.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .yarn/cache
           key: ${{ runner.os }}-yarn-${{ hashFiles('yarn.lock') }}
           restore-keys: |
             ${{ runner.os }}-yarn-
-      - name: Setup Java version
-        uses: actions/setup-java@v5.5.0
+
+      - name: Set up Java
+        uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a # v5.5.0
         with:
           distribution: 'zulu'
           java-version: '17'
-      - name: Export version from package.json
-        run:
-          echo "PACKAGE_VERSION=$(grep '"version"' ../web/package.json | cut -d '"' -f 4 | cut -d "-" -f 1)" >> $GITHUB_ENV
-      - name: Setup react-native kernel and increase watchers
-        run: echo fs.inotify.max_user_watches=524288 | sudo tee -a /etc/sysctl.conf && sudo sysctl -p
-      - name: Decode Production Android keystore
-        run: |
-          echo "${{ secrets.ANDROID_KEYSTORE }}" > keystore.keystore.asc
-          gpg -d --passphrase "${{ secrets.KEYSTORE_PASSPHRASE }}" --batch keystore.keystore.asc > android/app/keystore.keystore
+
+      - name: Increase file watcher limit
+        run: echo fs.inotify.max_user_watches=524288 | sudo tee /etc/sysctl.d/99-standard-red-notes.conf && sudo sysctl --system
+
       - name: Install dependencies
         run: yarn install --immutable
+
       - run: yarn build:mobile
-      - name: Ruby Setup for Fastlane
-        uses: ruby/setup-ruby@v1.318.0
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@003a5c4d8d6321bd302e38f6f0ec593f77f06600 # v1.319.0
         with:
-          working-directory: 'packages/mobile'
-      - name: fastlane
-        uses: maierj/fastlane-action@v3.2.0
+          ruby-version: '3.4.7'
+          bundler-cache: true
+          working-directory: packages/mobile
+
+      - name: Decode production Android keystore
         env:
-          PACKAGE_VERSION: ${{ env.PACKAGE_VERSION }}
-          BUILD_NUMBER: ${{ github.run_number }}
+          ANDROID_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
+          KEYSTORE_PASSPHRASE: ${{ secrets.KEYSTORE_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test -n "$ANDROID_KEYSTORE"
+          test -n "$KEYSTORE_PASSPHRASE"
+          printf '%s' "$ANDROID_KEYSTORE" > keystore.keystore.asc
+          printf '%s' "$KEYSTORE_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback \
+            --passphrase-fd 0 \
+            --decrypt keystore.keystore.asc > android/app/keystore.keystore
+          test -s android/app/keystore.keystore
+
+      - name: Build signed production AAB and APK without publishing
+        env:
           ANDROID_KEYSTORE_ALIAS: ${{ secrets.ANDROID_KEYSTORE_ALIAS }}
           ANDROID_KEYSTORE_PRIVATE_KEY_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PRIVATE_KEY_PASSWORD }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          GOOGLE_PLAY_JSON_KEY_DATA: ${{ secrets.GOOGLE_PLAY_JSON_KEY_DATA }}
-        with:
-          lane: 'android prod'
-          subdirectory: 'packages/mobile'
+        run: bundle exec fastlane android build_prod
 
-      - name: Verify universal Android release architectures
+      - name: Remove Android signing material
+        if: always()
+        run: rm -f -- keystore.keystore.asc android/app/keystore.keystore
+
+      - name: Verify Android package, signer, version, and four-ABI symmetry
+        env:
+          EXPECTED_ANDROID_UPLOAD_CERT_SHA256: ${{ secrets.EXPECTED_ANDROID_UPLOAD_CERT_SHA256 }}
         run: |
           set -euo pipefail
           apk='android/app/build/outputs/apk/prod/release/app-prod-release.apk'
           aab='android/app/build/outputs/bundle/prodRelease/app-prod-release.aab'
+          expected_application_id='com.standardnotes'
           test -s "$apk"
           test -s "$aab"
 
           configured="$(sed -n 's/^reactNativeArchitectures=//p' android/gradle.properties)"
+          built_application_id="$(apkanalyzer manifest application-id "$apk")"
+          built_version_name="$(apkanalyzer manifest version-name "$apk")"
+          built_version_code="$(apkanalyzer manifest version-code "$apk")"
+          expected_version_code="$((3004000 + BUILD_NUMBER))"
+          [ "$built_application_id" = "$expected_application_id" ] || {
+            echo "Android APK application ID '$built_application_id' does not match '$expected_application_id'" >&2
+            exit 1
+          }
+          if [ "$built_version_name" != "$PACKAGE_VERSION" ]; then
+            echo "Android APK versionName '$built_version_name' does not match release '$PACKAGE_VERSION'" >&2
+            exit 1
+          fi
+          if [ "$built_version_code" != "$expected_version_code" ]; then
+            echo "Android APK versionCode '$built_version_code' does not match expected '$expected_version_code'" >&2
+            exit 1
+          fi
+
+          apksigner_bin="$(find "${ANDROID_HOME:?}/build-tools" -type f -name apksigner -print | sort -V | tail -n 1)"
+          test -n "$apksigner_bin"
+          test -x "$apksigner_bin"
+          expected_signer="$(printf '%s' "$EXPECTED_ANDROID_UPLOAD_CERT_SHA256" | tr -d '[:space:]:-' | tr '[:upper:]' '[:lower:]')"
+          [[ "$expected_signer" =~ ^[0-9a-f]{64}$ ]] || {
+            echo 'EXPECTED_ANDROID_UPLOAD_CERT_SHA256 must be the protected 64-hex production upload-certificate fingerprint.' >&2
+            exit 1
+          }
+          apksigner_output="$("$apksigner_bin" verify --Werr --verbose --print-certs "$apk" 2>&1)"
+          printf '%s\n' "$apksigner_output"
+          mapfile -t apk_signers < <(sed -n 's/^Signer #[0-9][0-9]* certificate SHA-256 digest: //p' <<< "$apksigner_output" |
+            tr -d '[:space:]:-' | tr '[:upper:]' '[:lower:]' | sort -u)
+          [ "${#apk_signers[@]}" -eq 1 ] || { echo 'Android APK must have exactly one certificate signer.' >&2; exit 1; }
+          apk_signer="${apk_signers[0]}"
+          mapfile -t aab_signature_blocks < <(unzip -Z1 "$aab" | grep -Ei '^META-INF/[^/]+\.(RSA|DSA|EC)$' | sort -u)
+          [ "${#aab_signature_blocks[@]}" -eq 1 ] || { echo 'Android AAB must have exactly one JAR signature block.' >&2; exit 1; }
+          jarsigner_output="$(LC_ALL=C jarsigner -verify -strict -verbose -certs "$aab" 2>&1)"
+          printf '%s\n' "$jarsigner_output"
+          grep -Fq 'jar verified.' <<< "$jarsigner_output"
+          mapfile -t aab_signers < <(LC_ALL=C keytool -printcert -jarfile "$aab" |
+            sed -n 's/^[[:space:]]*SHA256: //p' | tr -d '[:space:]:-' | tr '[:upper:]' '[:lower:]' | sort -u)
+          [ "${#aab_signers[@]}" -eq 1 ] || { echo 'Android AAB must expose exactly one leaf certificate fingerprint.' >&2; exit 1; }
+          aab_signer="${aab_signers[0]}"
+          [ "$apk_signer" = "$aab_signer" ] && [ "$apk_signer" = "$expected_signer" ] || {
+            echo 'APK/AAB signing certificates do not both match the protected production fingerprint.' >&2
+            exit 1
+          }
+
           unzip -Z1 "$apk" > "$RUNNER_TEMP/android-apk-entries.txt"
           unzip -Z1 "$aab" > "$RUNNER_TEMP/android-aab-entries.txt"
 
-          for arch in arm64-v8a x86_64; do
+          required_arches=(armeabi-v7a arm64-v8a x86 x86_64)
+          for arch in "${required_arches[@]}"; do
             case ",$configured," in
               *",$arch,"*) ;;
               *) echo "reactNativeArchitectures is missing $arch" >&2; exit 1 ;;
             esac
-            grep -Eq "^lib/$arch/.+\\.so$" "$RUNNER_TEMP/android-apk-entries.txt" || {
-              echo "Universal APK is missing native $arch payloads" >&2
-              exit 1
-            }
-            grep -Eq "^base/lib/$arch/.+\\.so$" "$RUNNER_TEMP/android-aab-entries.txt" || {
-              echo "App Bundle is missing native $arch payloads" >&2
-              exit 1
-            }
           done
 
-      - name: Generate Release Notes
-        uses: ./actions/release-notes
-        with:
-          package: mobile
-        id: release-notes
-        continue-on-error: true
+          configured_set="$(tr ',' '\n' <<< "$configured" | sed '/^$/d' | LC_ALL=C sort -u)"
+          expected_set="$(printf '%s\n' "${required_arches[@]}" | LC_ALL=C sort -u)"
+          if [ "$configured_set" != "$expected_set" ]; then
+            echo "reactNativeArchitectures must contain exactly armeabi-v7a, arm64-v8a, x86, and x86_64" >&2
+            exit 1
+          fi
 
-      - name: Release
-        uses: softprops/action-gh-release@v3.0.2
+          printf '%s\n' "${required_arches[@]}" | LC_ALL=C sort -u > "$RUNNER_TEMP/android-expected-abis.txt"
+          grep -E '^lib/[^/]+/.+\.so$' "$RUNNER_TEMP/android-apk-entries.txt" | cut -d/ -f2 | LC_ALL=C sort -u > "$RUNNER_TEMP/android-apk-abis.txt"
+          grep -E '^base/lib/[^/]+/.+\.so$' "$RUNNER_TEMP/android-aab-entries.txt" | cut -d/ -f3 | LC_ALL=C sort -u > "$RUNNER_TEMP/android-aab-abis.txt"
+          diff -u "$RUNNER_TEMP/android-expected-abis.txt" "$RUNNER_TEMP/android-apk-abis.txt"
+          diff -u "$RUNNER_TEMP/android-expected-abis.txt" "$RUNNER_TEMP/android-aab-abis.txt"
+
+          for arch in "${required_arches[@]}"; do
+            grep -E "^lib/$arch/.+\\.so$" "$RUNNER_TEMP/android-apk-entries.txt" | sed "s#^lib/$arch/##" | LC_ALL=C sort -u > "$RUNNER_TEMP/android-apk-$arch-libs.txt"
+            grep -E "^base/lib/$arch/.+\\.so$" "$RUNNER_TEMP/android-aab-entries.txt" | sed "s#^base/lib/$arch/##" | LC_ALL=C sort -u > "$RUNNER_TEMP/android-aab-$arch-libs.txt"
+            test -s "$RUNNER_TEMP/android-apk-$arch-libs.txt"
+            test -s "$RUNNER_TEMP/android-aab-$arch-libs.txt"
+          done
+          for arch in armeabi-v7a x86 x86_64; do
+            diff -u "$RUNNER_TEMP/android-apk-arm64-v8a-libs.txt" "$RUNNER_TEMP/android-apk-$arch-libs.txt"
+            diff -u "$RUNNER_TEMP/android-aab-arm64-v8a-libs.txt" "$RUNNER_TEMP/android-aab-$arch-libs.txt"
+          done
+
+          stage="$RUNNER_TEMP/srn-mobile-android"
+          mkdir -p "$stage"
+          staged_apk="$stage/standard-red-notes-android-universal-${PACKAGE_VERSION}.apk"
+          staged_aab="$stage/standard-red-notes-android-${PACKAGE_VERSION}.aab"
+          cp "$apk" "$staged_apk"
+          cp "$aab" "$staged_aab"
+          jq -n --arg applicationId "$built_application_id" --arg versionName "$built_version_name" \
+            --arg versionCode "$built_version_code" --arg signerSha256 "$apk_signer" \
+            --arg apkFile "$(basename "$staged_apk")" --arg apkSha256 "$(sha256sum "$staged_apk" | cut -d' ' -f1)" \
+            --argjson apkSize "$(stat -c '%s' "$staged_apk")" --arg aabFile "$(basename "$staged_aab")" \
+            --arg aabSha256 "$(sha256sum "$staged_aab" | cut -d' ' -f1)" --argjson aabSize "$(stat -c '%s' "$staged_aab")" \
+            '{schema: 1, platform: "android", applicationId: $applicationId, versionName: $versionName,
+              versionCode: $versionCode, signerSha256: $signerSha256,
+              abis: ["armeabi-v7a", "arm64-v8a", "x86", "x86_64"],
+              artifacts: {apk: {file: $apkFile, sha256: $apkSha256, size: $apkSize},
+                          aab: {file: $aabFile, sha256: $aabSha256, size: $aabSize}}}' \
+            > "$stage/standard-red-notes-android-identity.json"
+
+      - name: Upload validated Android artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          token: ${{ secrets.CI_PAT_TOKEN }}
-          tag_name: "@standardnotes/mobile@${{ env.PACKAGE_VERSION }}"
-          name: "Mobile ${{ env.PACKAGE_VERSION }}"
-          body: ${{ steps.release-notes.outputs.result }}
-          prerelease: true
-          draft: false
-          files: |
-            packages/mobile/android/app/build/outputs/bundle/prodRelease/app-prod-release.aab
-            packages/mobile/android/app/build/outputs/apk/prod/release/app-prod-release.apk
+          name: srn-mobile-platform-android
+          path: ${{ runner.temp }}/srn-mobile-android/*
+          if-no-files-found: error
+          retention-days: 30
 
   ios:
+    name: Build and validate iOS
+    needs: context
     defaults:
       run:
         working-directory: packages/mobile
     runs-on: macos-15
+    environment: mobile-production
     timeout-minutes: 90
+    env:
+      PACKAGE_VERSION: ${{ needs.context.outputs.version }}
+      BUILD_NUMBER: ${{ github.run_number }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
       - name: Set up Node
-        uses: actions/setup-node@v7.0.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           registry-url: 'https://registry.npmjs.org'
           node-version-file: '.nvmrc'
+
       - name: Enable Corepack
         run: |
           npm install --global corepack@0.35.0
           corepack enable
           yarn --version
+
       - name: Cache Yarn
-        uses: actions/cache@v6.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .yarn/cache
           key: ${{ runner.os }}-yarn-${{ hashFiles('yarn.lock') }}
           restore-keys: |
             ${{ runner.os }}-yarn-
+
       - name: Select Xcode 26
-        uses: maxim-lobanov/setup-xcode@v1.7.0
+        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1.7.0
         with:
-          xcode-version: "26"
-      - name: Export version from package.json
-        run:
-          echo "PACKAGE_VERSION=$(grep '"version"' ../web/package.json | cut -d '"' -f 4 | cut -d "-" -f 1)" >> $GITHUB_ENV
-      - name: Ruby Setup for Fastlane
-        uses: ruby/setup-ruby@v1.318.0
+          xcode-version: '26'
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@003a5c4d8d6321bd302e38f6f0ec593f77f06600 # v1.319.0
         with:
-          working-directory: 'packages/mobile'
+          ruby-version: '3.4.7'
+          bundler-cache: true
+          working-directory: packages/mobile
+
       - name: Install dependencies
-        run: yarn install --immutable 
-      - name: Bundle install
-        run: bundle install
+        run: yarn install --immutable
+
       - name: Install pods
         run: yarn install:pods
+
       - run: yarn build:mobile
-      - name: Set ssh connection to Github
-        uses: webfactory/ssh-agent@v0.10.0
-        with:
-          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
-      - name: Export Apple AppStore Connect API key
-        run: echo "${{ secrets.APPSTORE_CONNECT_KEY }}" > ios/Authkey.p8
-      - name: Setup fastlane
-        uses: maierj/fastlane-action@v3.2.0
+
+      - name: Configure certificate repository access
         env:
-          FASTLANE_USER: ${{ secrets.FASTLANE_USER }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$SSH_PRIVATE_KEY"
+          trap 'status=$?; if [ "$status" -ne 0 ] && [ -n "${SSH_AGENT_PID:-}" ]; then ssh-agent -k >/dev/null 2>&1 || true; fi; exit "$status"' EXIT
+          eval "$(ssh-agent -a "$RUNNER_TEMP/srn-mobile-ssh-agent.sock" -s)"
+          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
+          echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
+          printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add -
+          trap - EXIT
+
+      - name: Set up iOS signing keychain
+        env:
           MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
-        with:
-          lane: 'ios setup'
-          subdirectory: 'packages/mobile'
-      - name: fastlane
-        uses: maierj/fastlane-action@v3.2.0
+        run: bundle exec fastlane ios setup
+
+      - name: Build signed production IPA without publishing
         env:
-          APPLE_APP_ID: ${{ secrets.APP_APPLE_ID }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPSTORE_CONNECT_KEY_ID: ${{ secrets.APPSTORE_CONNECT_KEY_ID }}
-          APPSTORE_CONNECT_KEY_ISSUER_ID: ${{ secrets.APPSTORE_CONNECT_KEY_ISSUER_ID }}
-          BUILD_NUMBER: ${{ github.run_number }}
-          FASTLANE_PASSWORD: ${{ secrets.FASTLANE_PASSWORD }}
-          FASTLANE_SESSION: ${{ secrets.FASTLANE_SESSION }}
-          FASTLANE_USER: ${{ secrets.FASTLANE_USER }}
+          IOS_USES_NON_EXEMPT_ENCRYPTION: ${{ vars.IOS_USES_NON_EXEMPT_ENCRYPTION }}
+          IOS_EXPORT_COMPLIANCE_CODE: ${{ secrets.IOS_EXPORT_COMPLIANCE_CODE }}
           MATCH_CERTIFICATES_URL: ${{ secrets.MATCH_CERTIFICATES_URL }}
           MATCH_GIT_BASIC_AUTHORIZATION: ${{ secrets.MATCH_GIT_BASIC_AUTHORIZATION }}
           MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
-          PACKAGE_VERSION: ${{ env.PACKAGE_VERSION }}
-        with:
-          lane: 'ios prod'
-          subdirectory: 'packages/mobile'
+        run: bundle exec fastlane ios build_prod
 
-      - name: Verify iOS device arm64 artifact
+      - name: Clean up iOS signing access
+        if: always()
         run: |
           set -euo pipefail
+          cleanup_status=0
+          if [ -n "${SSH_AGENT_PID:-}" ]; then
+            ssh-agent -k || cleanup_status=$?
+          fi
+          keychain_list="$(security list-keychains -d user)" || cleanup_status=$?
+          signing_keychain="$(printf '%s\n' "$keychain_list" | tr -d ' \"' | awk '/\/snkeychain(-db)?$/ { print; exit }')"
+          if [ -n "$signing_keychain" ]; then
+            security lock-keychain "$signing_keychain" || cleanup_status=$?
+            security delete-keychain "$signing_keychain" || cleanup_status=$?
+          fi
+          exit "$cleanup_status"
+
+      - name: Verify iOS application, extension, provisioning, signature, and device architecture
+        env:
+          IOS_USES_NON_EXEMPT_ENCRYPTION: ${{ vars.IOS_USES_NON_EXEMPT_ENCRYPTION }}
+          IOS_EXPORT_COMPLIANCE_CODE: ${{ secrets.IOS_EXPORT_COMPLIANCE_CODE }}
+        run: |
+          set -euo pipefail
+          expected_bundle_id='com.standardnotes.standardnotes'
+          expected_extension_id='com.standardnotes.standardnotes.Share-To-SN'
+          expected_team_id='HKF9BXSN95'
+          expected_app_group='group.com.standardnotes.standardnotes'
           ipa="$(find . -type f -name 'StandardNotes.ipa' -print -quit)"
           test -n "$ipa"
           test -s "$ipa"
 
-          extract_dir="$RUNNER_TEMP/standard-notes-ios-release"
+          extract_dir="$RUNNER_TEMP/standard-red-notes-ios-release"
           rm -rf "$extract_dir"
           unzip -q "$ipa" -d "$extract_dir"
           app_bundle="$(find "$extract_dir/Payload" -maxdepth 1 -type d -name '*.app' -print -quit)"
           test -n "$app_bundle"
-          executable="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app_bundle/Info.plist")"
-          archs="$(lipo -archs "$app_bundle/$executable")"
-          echo "iOS device architectures: $archs"
+          codesign --verify --deep --strict --verbose=2 "$app_bundle"
 
-          case " $archs " in
-            *' arm64 '*) ;;
-            *) echo 'iOS device artifact is missing arm64' >&2; exit 1 ;;
-          esac
-          case " $archs " in
-            *' x86_64 '*|*' i386 '*) echo 'Simulator architecture found in iOS device artifact' >&2; exit 1 ;;
+          mapfile -d '' extensions < <(find "$app_bundle/PlugIns" -maxdepth 1 -type d -name '*.appex' -print0 2>/dev/null | sort -z)
+          [ "${#extensions[@]}" -eq 1 ] || { echo 'Expected exactly one signed iOS app extension.' >&2; exit 1; }
+          extension_bundle="${extensions[0]}"
+          verify_signed_bundle() {
+            local bundle="$1" expected_id="$2" role="$3"
+            local actual_id team_id requirement entitlements profile cert_dir leaf_der leaf_sha
+            actual_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$bundle/Info.plist")"
+            [ "$actual_id" = "$expected_id" ] || { echo "$role bundle ID '$actual_id' does not match '$expected_id'." >&2; return 1; }
+            codesign --verify --strict --verbose=2 "$bundle"
+            team_id="$(codesign -dv --verbose=4 "$bundle" 2>&1 | sed -n 's/^TeamIdentifier=//p')"
+            [ "$team_id" = "$expected_team_id" ] || { echo "$role TeamIdentifier '$team_id' is invalid." >&2; return 1; }
+            codesign --verify --strict -R="identifier \"$expected_id\" and certificate leaf[subject.OU] = \"$expected_team_id\"" "$bundle"
+            requirement="$(codesign -d -r- "$bundle" 2>&1 | sed -n 's/^designated => //p')"
+            test -n "$requirement"
+            grep -Fq "identifier \"$expected_id\"" <<< "$requirement"
+            cert_dir="$RUNNER_TEMP/${role}-signing-certificates"
+            rm -rf "$cert_dir"
+            mkdir -p "$cert_dir"
+            (cd "$cert_dir" && codesign -d --extract-certificates "$bundle")
+            leaf_der="$cert_dir/codesign0"
+            test -s "$leaf_der"
+            openssl x509 -inform DER -in "$leaf_der" -noout
+            leaf_sha="$(shasum -a 256 "$leaf_der" | awk '{print $1}')"
+            [[ "$leaf_sha" =~ ^[0-9a-f]{64}$ ]]
+            printf '%s\n' "$leaf_sha" > "$RUNNER_TEMP/${role}-leaf-cert-sha256"
+            entitlements="$RUNNER_TEMP/${role}-entitlements.plist"
+            codesign -d --entitlements :- "$bundle" > "$entitlements" 2>/dev/null
+            /usr/libexec/PlistBuddy -c 'Print :application-identifier' "$entitlements" | grep -Fx "${expected_team_id}.${expected_id}" >/dev/null
+            /usr/libexec/PlistBuddy -c 'Print :com.apple.developer.team-identifier' "$entitlements" | grep -Fx "$expected_team_id" >/dev/null
+            if /usr/libexec/PlistBuddy -c 'Print :get-task-allow' "$entitlements" 2>/dev/null | grep -Fxq true; then return 1; fi
+            profile="$RUNNER_TEMP/${role}-provisioning.plist"
+            test -s "$bundle/embedded.mobileprovision"
+            security cms -D -i "$bundle/embedded.mobileprovision" > "$profile"
+            python3 - "$profile" "$entitlements" "$leaf_der" "$expected_team_id" "$expected_id" "$expected_app_group" <<'PY'
+          import datetime
+          import hashlib
+          import plistlib
+          import sys
+          profile_path, signed_path, leaf_path, team, bundle_id, app_group = sys.argv[1:]
+          with open(profile_path, 'rb') as handle:
+              profile = plistlib.load(handle)
+          with open(signed_path, 'rb') as handle:
+              signed = plistlib.load(handle)
+          with open(leaf_path, 'rb') as handle:
+              leaf_der = handle.read()
+          assert profile.get('TeamIdentifier') == [team]
+          entitlements = profile.get('Entitlements', {})
+          assert entitlements.get('application-identifier') == f'{team}.{bundle_id}'
+          assert entitlements.get('com.apple.developer.team-identifier') == team
+          assert entitlements.get('get-task-allow') is not True
+          assert signed.get('application-identifier') == f'{team}.{bundle_id}'
+          assert signed.get('com.apple.developer.team-identifier') == team
+          assert signed.get('get-task-allow') is not True
+          assert sorted(signed.get('com.apple.security.application-groups', [])) == [app_group]
+          assert sorted(entitlements.get('com.apple.security.application-groups', [])) == [app_group]
+          assert signed.get('com.apple.security.application-groups') == entitlements.get('com.apple.security.application-groups')
+          assert 'ProvisionedDevices' not in profile
+          assert profile.get('ProvisionsAllDevices') is not True
+          developer_certificates = profile.get('DeveloperCertificates', [])
+          assert isinstance(developer_certificates, list) and developer_certificates
+          leaf_sha256 = hashlib.sha256(leaf_der).digest()
+          assert any(hashlib.sha256(bytes(certificate)).digest() == leaf_sha256 for certificate in developer_certificates)
+          assert profile.get('UUID')
+          expiration = profile.get('ExpirationDate')
+          assert isinstance(expiration, datetime.datetime)
+          now = datetime.datetime.now(expiration.tzinfo) if expiration.tzinfo else datetime.datetime.utcnow()
+          assert expiration > now
+          PY
+            printf '%s\n' "$requirement"
+          }
+          main_requirement="$(verify_signed_bundle "$app_bundle" "$expected_bundle_id" main)"
+          extension_requirement="$(verify_signed_bundle "$extension_bundle" "$expected_extension_id" extension)"
+
+          mach_o_count=0
+          while IFS= read -r -d '' candidate; do
+            if file -b "$candidate" | grep -q 'Mach-O'; then
+              mach_o_count=$((mach_o_count + 1))
+              candidate_archs="$(lipo -archs "$candidate")"
+              relative_candidate="${candidate#"$app_bundle"/}"
+              echo "iOS Mach-O architectures ($relative_candidate): $candidate_archs"
+              case " $candidate_archs " in
+                *' arm64 '*) ;;
+                *) echo "iOS Mach-O '$relative_candidate' is missing arm64" >&2; exit 1 ;;
+              esac
+              case " $candidate_archs " in
+                *' x86_64 '*|*' i386 '*) echo "Simulator architecture found in iOS Mach-O '$relative_candidate'" >&2; exit 1 ;;
+              esac
+              if [ "$candidate_archs" != 'arm64' ]; then
+                echo "iOS Mach-O '$relative_candidate' must contain exactly arm64, found '$candidate_archs'" >&2
+                exit 1
+              fi
+            fi
+          done < <(find "$app_bundle" -type f -print0)
+          test "$mach_o_count" -gt 0
+
+          built_app_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app_bundle/Info.plist")"
+          built_number="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app_bundle/Info.plist")"
+          extension_app_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$extension_bundle/Info.plist")"
+          extension_build_number="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$extension_bundle/Info.plist")"
+
+          if [ "$built_app_version" != "$PACKAGE_VERSION" ]; then
+            echo "iOS IPA app version '$built_app_version' does not match release '$PACKAGE_VERSION'" >&2
+            exit 1
+          fi
+          if [ "$built_number" != "$BUILD_NUMBER" ]; then
+            echo "iOS IPA build number '$built_number' does not match requested '$BUILD_NUMBER'" >&2
+            exit 1
+          fi
+          [ "$extension_app_version" = "$built_app_version" ] && [ "$extension_app_version" = "$PACKAGE_VERSION" ] || {
+            echo "Share extension app version '$extension_app_version' does not match host/release '$built_app_version'." >&2
+            exit 1
+          }
+          [ "$extension_build_number" = "$built_number" ] && [ "$extension_build_number" = "$BUILD_NUMBER" ] || {
+            echo "Share extension build '$extension_build_number' does not match host/release '$built_number'." >&2
+            exit 1
+          }
+          case "$IOS_USES_NON_EXEMPT_ENCRYPTION" in
+            true)
+              test -n "$IOS_EXPORT_COMPLIANCE_CODE"
+              [ "$(/usr/libexec/PlistBuddy -c 'Print :ITSAppUsesNonExemptEncryption' "$app_bundle/Info.plist")" = true ]
+              [ "$(/usr/libexec/PlistBuddy -c 'Print :ITSEncryptionExportComplianceCode' "$app_bundle/Info.plist")" = "$IOS_EXPORT_COMPLIANCE_CODE" ]
+              ;;
+            false)
+              test -z "$IOS_EXPORT_COMPLIANCE_CODE"
+              [ "$(/usr/libexec/PlistBuddy -c 'Print :ITSAppUsesNonExemptEncryption' "$app_bundle/Info.plist")" = false ]
+              if /usr/libexec/PlistBuddy -c 'Print :ITSEncryptionExportComplianceCode' "$app_bundle/Info.plist" >/dev/null 2>&1; then
+                echo 'Exempt iOS build unexpectedly embeds an export compliance code.' >&2
+                exit 1
+              fi
+              ;;
+            *) echo 'Protected IOS_USES_NON_EXEMPT_ENCRYPTION must be exactly true or false.' >&2; exit 1 ;;
           esac
 
+          stage="$RUNNER_TEMP/srn-mobile-ios"
+          mkdir -p "$stage"
+          staged_ipa="$stage/standard-red-notes-ios-arm64-${PACKAGE_VERSION}.ipa"
+          cp "$ipa" "$staged_ipa"
+          main_profile_uuid="$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$RUNNER_TEMP/main-provisioning.plist")"
+          extension_profile_uuid="$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$RUNNER_TEMP/extension-provisioning.plist")"
+          main_leaf_sha256="$(tr -d '[:space:]' < "$RUNNER_TEMP/main-leaf-cert-sha256")"
+          extension_leaf_sha256="$(tr -d '[:space:]' < "$RUNNER_TEMP/extension-leaf-cert-sha256")"
+          jq -n --arg bundleId "$expected_bundle_id" --arg extensionBundleId "$expected_extension_id" \
+            --arg teamId "$expected_team_id" --arg appVersion "$built_app_version" --arg buildNumber "$built_number" \
+            --arg extensionAppVersion "$extension_app_version" --arg extensionBuildNumber "$extension_build_number" \
+            --arg appGroup "$expected_app_group" --arg mainLeafCertificateSha256 "$main_leaf_sha256" \
+            --arg extensionLeafCertificateSha256 "$extension_leaf_sha256" \
+            --argjson usesNonExemptEncryption "$IOS_USES_NON_EXEMPT_ENCRYPTION" \
+            --arg mainRequirement "$main_requirement" --arg extensionRequirement "$extension_requirement" \
+            --arg mainProvisioningUuid "$main_profile_uuid" --arg extensionProvisioningUuid "$extension_profile_uuid" \
+            --arg ipaFile "$(basename "$staged_ipa")" --arg ipaSha256 "$(shasum -a 256 "$staged_ipa" | awk '{print $1}')" \
+            --arg ipaMd5 "$(md5 -q "$staged_ipa")" --argjson ipaSize "$(stat -f '%z' "$staged_ipa")" \
+            '{schema: 1, platform: "ios", bundleId: $bundleId, extensionBundleId: $extensionBundleId,
+              teamId: $teamId, appVersion: $appVersion, buildNumber: $buildNumber,
+              extensionAppVersion: $extensionAppVersion, extensionBuildNumber: $extensionBuildNumber,
+              appGroup: $appGroup, usesNonExemptEncryption: $usesNonExemptEncryption,
+              architectures: ["arm64"], designatedRequirements: {app: $mainRequirement, extension: $extensionRequirement},
+              provisioningProfiles: {app: $mainProvisioningUuid, extension: $extensionProvisioningUuid},
+              signingCertificateSha256: {app: $mainLeafCertificateSha256, extension: $extensionLeafCertificateSha256},
+              artifact: {file: $ipaFile, sha256: $ipaSha256, md5: $ipaMd5, size: $ipaSize}}' \
+            > "$stage/standard-red-notes-ios-identity.json"
+
+      - name: Upload validated iOS artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: srn-mobile-platform-ios
+          path: ${{ runner.temp }}/srn-mobile-ios/*
+          if-no-files-found: error
+          retention-days: 30
+
+  validated:
+    name: Fan in both validated platforms
+    needs: [context, android, ios]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download both validated platform artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: srn-mobile-platform-*
+          path: validated
+          merge-multiple: true
+
+      - name: Verify complete pre-publication payload
+        working-directory: validated
+        env:
+          VERSION: ${{ needs.context.outputs.version }}
+          EXPECTED_BUILD_NUMBER: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          test -s "standard-red-notes-android-universal-${VERSION}.apk"
+          test -s "standard-red-notes-android-${VERSION}.aab"
+          test -s "standard-red-notes-ios-arm64-${VERSION}.ipa"
+          test -s standard-red-notes-android-identity.json
+          test -s standard-red-notes-ios-identity.json
+          jq -e --arg version "$VERSION" --arg build "$EXPECTED_BUILD_NUMBER" \
+            '.schema == 1 and .applicationId == "com.standardnotes" and .versionName == $version and
+             .versionCode == ((3004000 + ($build | tonumber)) | tostring) and
+             (.signerSha256 | test("^[0-9a-f]{64}$")) and
+             .abis == ["armeabi-v7a", "arm64-v8a", "x86", "x86_64"]' standard-red-notes-android-identity.json
+          jq -e --arg version "$VERSION" --arg build "$EXPECTED_BUILD_NUMBER" \
+            '.schema == 1 and .bundleId == "com.standardnotes.standardnotes" and
+             .extensionBundleId == "com.standardnotes.standardnotes.Share-To-SN" and
+             .teamId == "HKF9BXSN95" and .appVersion == $version and .buildNumber == $build and
+             .extensionAppVersion == $version and .extensionBuildNumber == $build and
+             .appGroup == "group.com.standardnotes.standardnotes" and (.usesNonExemptEncryption | type) == "boolean" and
+             (.signingCertificateSha256.app | test("^[0-9a-f]{64}$")) and
+             (.signingCertificateSha256.extension | test("^[0-9a-f]{64}$")) and
+             .architectures == ["arm64"]' standard-red-notes-ios-identity.json
+          apk_sha="$(sha256sum "standard-red-notes-android-universal-${VERSION}.apk" | cut -d' ' -f1)"
+          aab_sha="$(sha256sum "standard-red-notes-android-${VERSION}.aab" | cut -d' ' -f1)"
+          ipa_sha="$(sha256sum "standard-red-notes-ios-arm64-${VERSION}.ipa" | cut -d' ' -f1)"
+          jq -e --arg sha "$apk_sha" '.artifacts.apk.sha256 == $sha' standard-red-notes-android-identity.json
+          jq -e --arg sha "$aab_sha" '.artifacts.aab.sha256 == $sha' standard-red-notes-android-identity.json
+          jq -e --arg sha "$ipa_sha" '.artifact.sha256 == $sha' standard-red-notes-ios-identity.json
+          jq -n --slurpfile android standard-red-notes-android-identity.json --slurpfile ios standard-red-notes-ios-identity.json \
+            '{schema: 1, android: $android[0], ios: $ios[0]}' > standard-red-notes-mobile-identity.json
+          rm -f -- standard-red-notes-android-identity.json standard-red-notes-ios-identity.json
+          jq -cS . standard-red-notes-mobile-identity.json | sha256sum | cut -d' ' -f1 > srn-mobile.fingerprint
+          grep -Eq '^[0-9a-f]{64}$' srn-mobile.fingerprint
+          mapfile -d '' files < <(find . -maxdepth 1 -type f ! -name SHA256SUMS.txt -print0 | sort -z)
+          test "${#files[@]}" -eq 5
+          sha256sum "${files[@]}" > SHA256SUMS.txt
+          sha256sum --check SHA256SUMS.txt
+
+      - name: Upload complete validated release payload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: srn-mobile-validated-release
+          path: validated/*
+          if-no-files-found: error
+          retention-days: 30
+
+  publish_android:
+    name: Publish or reconcile the validated Android AAB
+    needs: [context, validated]
+    runs-on: ubuntu-latest
+    environment: mobile-production
+    timeout-minutes: 35
+    permissions:
+      actions: read
+      contents: read
+    defaults:
+      run:
+        shell: bash
+        working-directory: packages/mobile
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ruby/setup-ruby@003a5c4d8d6321bd302e38f6f0ec593f77f06600 # v1.319.0
+        with:
+          ruby-version: '3.4.7'
+          bundler-cache: true
+          working-directory: packages/mobile
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: srn-mobile-validated-release
+          path: validated
+
+      - id: play_preflight
+        name: Reserve or reconcile exact Google Play recovery intent
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GOOGLE_PLAY_JSON_KEY_DATA: ${{ secrets.GOOGLE_PLAY_JSON_KEY_DATA }}
+          RELEASE_VERSION: ${{ needs.context.outputs.version }}
+          RECOVERY_REASON_SHA256: ${{ needs.context.outputs.recovery_reason_sha256 }}
+          EXPECTED_BUILD_NUMBER: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          payload="$GITHUB_WORKSPACE/validated"
+          (cd "$payload" && sha256sum --check SHA256SUMS.txt)
+          identity="$payload/standard-red-notes-mobile-identity.json"
+          aab="$payload/standard-red-notes-android-${RELEASE_VERSION}.aab"
+          fingerprint="$(tr -d '[:space:]' < "$payload/srn-mobile.fingerprint")"
+          manifest_sha="$(sha256sum "$payload/SHA256SUMS.txt" | cut -d' ' -f1)"
+          aab_sha="$(sha256sum "$aab" | cut -d' ' -f1)"
+          aab_size="$(stat -c '%s' "$aab")"
+          version_code="$(jq -r '.android.versionCode' "$identity")"
+          jq -e --arg version "$RELEASE_VERSION" --arg build "$EXPECTED_BUILD_NUMBER" --arg sha "$aab_sha" --argjson size "$aab_size" \
+            '.android.applicationId == "com.standardnotes" and .android.versionName == $version and
+             .android.versionCode == ((3004000 + ($build | tonumber)) | tostring) and
+             .android.artifacts.aab.sha256 == $sha and .android.artifacts.aab.size == $size' "$identity"
+          [[ "$RECOVERY_REASON_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          marker_name="srn-mobile-google-play-intent-${GITHUB_RUN_ID}"
+          marker_dir="$RUNNER_TEMP/google-play-intent"
+          marker="$marker_dir/marker.json"
+          mkdir -p "$marker_dir"
+          artifacts="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?name=${marker_name}&per_page=100")"
+          marker_count="$(jq '[.artifacts[] | select(.expired == false)] | length' <<< "$artifacts")"
+          [ "$marker_count" -le 1 ] || { echo 'Multiple same-run Google Play intent artifacts exist.' >&2; exit 1; }
+          if [ "$marker_count" -eq 1 ]; then
+            marker_id="$(jq -r '[.artifacts[] | select(.expired == false)][0].id' <<< "$artifacts")"
+            gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${marker_id}/zip" > "$RUNNER_TEMP/google-play-intent.zip"
+            unzip -q "$RUNNER_TEMP/google-play-intent.zip" -d "$marker_dir"
+          fi
+          marker_present=false
+          if [ -s "$marker" ]; then
+            marker_present=true
+            jq -e --arg run "$GITHUB_RUN_ID" --arg current_attempt "$GITHUB_RUN_ATTEMPT" --arg sha "$GITHUB_SHA" --arg reason "$RECOVERY_REASON_SHA256" \
+              --arg version "$RELEASE_VERSION" --arg build "$EXPECTED_BUILD_NUMBER" --arg code "$version_code" \
+              --arg fp "$fingerprint" --arg artifact_sha "$aab_sha" --argjson artifact_size "$aab_size" --arg manifest_sha "$manifest_sha" \
+              '.schema == 1 and .provider == "google-play" and .runId == $run and
+               (.originatingRunAttempt | test("^[1-9][0-9]*$")) and
+               ((.originatingRunAttempt | tonumber) <= ($current_attempt | tonumber)) and .headSha == $sha and
+               .recoveryReasonSha256 == $reason and .applicationId == "com.standardnotes" and
+               .versionName == $version and .buildNumber == $build and .versionCode == $code and
+               .fingerprint == $fp and .artifact.sha256 == $artifact_sha and .artifact.size == $artifact_size and
+               .checksumManifestSha256 == $manifest_sha and .track == "beta"' "$marker"
+          fi
+          PROVIDER_EVIDENCE_PATH="$RUNNER_TEMP/google-play-preflight.json" ANDROID_VERSION_CODE="$version_code" \
+          ANDROID_AAB_SHA256="$aab_sha" ANDROID_TRACK=beta bundle exec fastlane android inspect_prod
+          provider_status="$(jq -r '.status' "$RUNNER_TEMP/google-play-preflight.json")"
+          case "$provider_status:$marker_present" in
+            absent:false)
+              jq -n --arg run "$GITHUB_RUN_ID" --arg attempt "$GITHUB_RUN_ATTEMPT" --arg sha "$GITHUB_SHA" \
+                --arg reason "$RECOVERY_REASON_SHA256" --arg version "$RELEASE_VERSION" --arg build "$EXPECTED_BUILD_NUMBER" \
+                --arg code "$version_code" --arg fp "$fingerprint" --arg file "$(basename "$aab")" \
+                --arg artifact_sha "$aab_sha" --argjson artifact_size "$aab_size" --arg manifest_sha "$manifest_sha" \
+                '{schema: 1, provider: "google-play", runId: $run, originatingRunAttempt: $attempt, headSha: $sha,
+                  recoveryReasonSha256: $reason, applicationId: "com.standardnotes", versionName: $version,
+                  buildNumber: $build, versionCode: $code, fingerprint: $fp, track: "beta",
+                  checksumManifestSha256: $manifest_sha, artifact: {file: $file, sha256: $artifact_sha, size: $artifact_size}}' > "$marker"
+              echo 'create_marker=true' >> "$GITHUB_OUTPUT"; echo 'upload_required=true' >> "$GITHUB_OUTPUT" ;;
+            absent:true) echo 'create_marker=false' >> "$GITHUB_OUTPUT"; echo 'upload_required=true' >> "$GITHUB_OUTPUT" ;;
+            valid:true) echo 'create_marker=false' >> "$GITHUB_OUTPUT"; echo 'upload_required=false' >> "$GITHUB_OUTPUT" ;;
+            valid:false) echo 'Google Play exact binary exists without this recovery run intent.' >&2; exit 1 ;;
+            *) cat "$RUNNER_TEMP/google-play-preflight.json" >&2; exit 1 ;;
+          esac
+
+      - name: Persist Google Play recovery intent before external mutation
+        if: steps.play_preflight.outputs.create_marker == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: srn-mobile-google-play-intent-${{ github.run_id }}
+          path: ${{ runner.temp }}/google-play-intent/marker.json
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Publish or verify exact Google Play bundle digest and track state
+        env:
+          GOOGLE_PLAY_JSON_KEY_DATA: ${{ secrets.GOOGLE_PLAY_JSON_KEY_DATA }}
+          RELEASE_VERSION: ${{ needs.context.outputs.version }}
+          EXPECTED_BUILD_NUMBER: ${{ github.run_number }}
+          RECOVERY_REASON_SHA256: ${{ needs.context.outputs.recovery_reason_sha256 }}
+          UPLOAD_REQUIRED: ${{ steps.play_preflight.outputs.upload_required }}
+        run: |
+          set -euo pipefail
+          payload="$GITHUB_WORKSPACE/validated"
+          (cd "$payload" && sha256sum --check SHA256SUMS.txt)
+          identity="$payload/standard-red-notes-mobile-identity.json"
+          aab="$payload/standard-red-notes-android-${RELEASE_VERSION}.aab"
+          marker="$RUNNER_TEMP/google-play-intent/marker.json"
+          aab_sha="$(sha256sum "$aab" | cut -d' ' -f1)"; aab_size="$(stat -c '%s' "$aab")"
+          version_code="$(jq -r '.android.versionCode' "$identity")"; fingerprint="$(tr -d '[:space:]' < "$payload/srn-mobile.fingerprint")"
+          jq -e --arg run "$GITHUB_RUN_ID" --arg current_attempt "$GITHUB_RUN_ATTEMPT" --arg sha "$GITHUB_SHA" --arg reason "$RECOVERY_REASON_SHA256" \
+            --arg fp "$fingerprint" --arg artifact_sha "$aab_sha" --argjson artifact_size "$aab_size" \
+            '.runId == $run and (.originatingRunAttempt | test("^[1-9][0-9]*$")) and
+             ((.originatingRunAttempt | tonumber) <= ($current_attempt | tonumber)) and
+             .headSha == $sha and .recoveryReasonSha256 == $reason and .fingerprint == $fp and
+             .artifact.sha256 == $artifact_sha and .artifact.size == $artifact_size' "$marker"
+          if [ "$UPLOAD_REQUIRED" = true ]; then
+            (cd "$payload" && sha256sum --check SHA256SUMS.txt)
+            ANDROID_AAB_PATH="$aab" bundle exec fastlane android publish_prod
+          else
+            (cd "$payload" && sha256sum --check SHA256SUMS.txt)
+          fi
+          PROVIDER_EVIDENCE_PATH="$RUNNER_TEMP/google-play-final.json" PROVIDER_WAIT_SECONDS=300 \
+          ANDROID_VERSION_CODE="$version_code" ANDROID_AAB_SHA256="$aab_sha" ANDROID_TRACK=beta bundle exec fastlane android inspect_prod
+          jq -e --arg sha "$aab_sha" --arg code "$version_code" \
+            '.status == "valid" and .valid == true and .versionCode == $code and .remoteSha256 == $sha and
+             .trackStatus == "completed" and .matchingBundleCount == 1 and .matchingTrackReleaseCount == 1' \
+            "$RUNNER_TEMP/google-play-final.json"
+
+  upload_ios:
+    name: Upload or reconcile the validated iOS IPA
+    needs: [context, validated]
+    runs-on: macos-15
+    environment: mobile-production
+    timeout-minutes: 50
+    permissions:
+      actions: read
+      contents: read
+    env:
+      IOS_USES_NON_EXEMPT_ENCRYPTION: ${{ vars.IOS_USES_NON_EXEMPT_ENCRYPTION }}
+      IOS_EXPORT_COMPLIANCE_CODE: ${{ secrets.IOS_EXPORT_COMPLIANCE_CODE }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: packages/mobile
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1.7.0
+        with:
+          xcode-version: '26'
+
+      - uses: ruby/setup-ruby@003a5c4d8d6321bd302e38f6f0ec593f77f06600 # v1.319.0
+        with:
+          ruby-version: '3.4.7'
+          bundler-cache: true
+          working-directory: packages/mobile
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: srn-mobile-validated-release
+          path: validated
+
+      - id: ios_preflight
+        name: Reserve or reconcile exact App Store recovery intent
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPLE_APP_ID: ${{ secrets.APP_APPLE_ID }}
+          APPSTORE_CONNECT_KEY: ${{ secrets.APPSTORE_CONNECT_KEY }}
+          APPSTORE_CONNECT_KEY_ID: ${{ secrets.APPSTORE_CONNECT_KEY_ID }}
+          APPSTORE_CONNECT_KEY_ISSUER_ID: ${{ secrets.APPSTORE_CONNECT_KEY_ISSUER_ID }}
+          RELEASE_VERSION: ${{ needs.context.outputs.version }}
+          EXPECTED_BUILD_NUMBER: ${{ github.run_number }}
+          RECOVERY_REASON_SHA256: ${{ needs.context.outputs.recovery_reason_sha256 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test -n "$APPSTORE_CONNECT_KEY"; printf '%s' "$APPSTORE_CONNECT_KEY" > ios/Authkey.p8
+          trap 'rm -f -- ios/Authkey.p8' EXIT
+          payload="$GITHUB_WORKSPACE/validated"
+          (cd "$payload" && shasum -a 256 -c SHA256SUMS.txt)
+          identity="$payload/standard-red-notes-mobile-identity.json"; ipa="$payload/standard-red-notes-ios-arm64-${RELEASE_VERSION}.ipa"
+          fingerprint="$(tr -d '[:space:]' < "$payload/srn-mobile.fingerprint")"; manifest_sha="$(shasum -a 256 "$payload/SHA256SUMS.txt" | awk '{print $1}')"
+          ipa_sha="$(shasum -a 256 "$ipa" | awk '{print $1}')"; ipa_md5="$(md5 -q "$ipa")"; ipa_size="$(stat -f '%z' "$ipa")"
+          app_version="$(jq -r '.ios.appVersion' "$identity")"; build_number="$(jq -r '.ios.buildNumber' "$identity")"
+          jq -e --arg version "$RELEASE_VERSION" --arg build "$EXPECTED_BUILD_NUMBER" --arg sha "$ipa_sha" --arg md5 "$ipa_md5" --argjson size "$ipa_size" \
+            --argjson uses_non_exempt "$IOS_USES_NON_EXEMPT_ENCRYPTION" \
+            '.ios.bundleId == "com.standardnotes.standardnotes" and .ios.extensionBundleId == "com.standardnotes.standardnotes.Share-To-SN" and
+             .ios.teamId == "HKF9BXSN95" and .ios.appVersion == $version and .ios.buildNumber == $build and
+             .ios.extensionAppVersion == $version and .ios.extensionBuildNumber == $build and
+             .ios.appGroup == "group.com.standardnotes.standardnotes" and .ios.usesNonExemptEncryption == $uses_non_exempt and
+             .ios.artifact.sha256 == $sha and .ios.artifact.md5 == $md5 and .ios.artifact.size == $size' "$identity"
+          [[ "$RECOVERY_REASON_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          marker_name="srn-mobile-app-store-intent-${GITHUB_RUN_ID}"; marker_dir="$RUNNER_TEMP/app-store-intent"; marker="$marker_dir/marker.json"
+          mkdir -p "$marker_dir"
+          artifacts="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?name=${marker_name}&per_page=100")"
+          marker_count="$(jq '[.artifacts[] | select(.expired == false)] | length' <<< "$artifacts")"
+          [ "$marker_count" -le 1 ] || { echo 'Multiple same-run App Store intent artifacts exist.' >&2; exit 1; }
+          if [ "$marker_count" -eq 1 ]; then
+            marker_id="$(jq -r '[.artifacts[] | select(.expired == false)][0].id' <<< "$artifacts")"
+            gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${marker_id}/zip" > "$RUNNER_TEMP/app-store-intent.zip"
+            unzip -q "$RUNNER_TEMP/app-store-intent.zip" -d "$marker_dir"
+          fi
+          marker_present=false
+          if [ -s "$marker" ]; then
+            marker_present=true
+            jq -e --arg run "$GITHUB_RUN_ID" --arg current_attempt "$GITHUB_RUN_ATTEMPT" --arg sha "$GITHUB_SHA" --arg reason "$RECOVERY_REASON_SHA256" \
+              --arg version "$app_version" --arg build "$build_number" --arg fp "$fingerprint" --arg artifact_sha "$ipa_sha" \
+              --arg artifact_md5 "$ipa_md5" --argjson artifact_size "$ipa_size" --arg manifest_sha "$manifest_sha" \
+              '.schema == 1 and .provider == "app-store-connect" and .runId == $run and
+               (.originatingRunAttempt | test("^[1-9][0-9]*$")) and
+               ((.originatingRunAttempt | tonumber) <= ($current_attempt | tonumber)) and .headSha == $sha and
+               .recoveryReasonSha256 == $reason and .bundleId == "com.standardnotes.standardnotes" and .teamId == "HKF9BXSN95" and
+               .appVersion == $version and .buildNumber == $build and .fingerprint == $fp and
+               .artifact.sha256 == $artifact_sha and .artifact.md5 == $artifact_md5 and
+               .artifact.size == $artifact_size and .checksumManifestSha256 == $manifest_sha' "$marker"
+          fi
+          IOS_IPA_PATH="$ipa" APP_VERSION="$app_version" BUILD_NUMBER="$build_number" \
+          PROVIDER_EVIDENCE_PATH="$RUNNER_TEMP/app-store-preflight.json" bundle exec fastlane ios inspect_upload
+          provider_status="$(jq -r '.status' "$RUNNER_TEMP/app-store-preflight.json")"
+          case "$provider_status:$marker_present" in
+            absent:false)
+              jq -n --arg run "$GITHUB_RUN_ID" --arg attempt "$GITHUB_RUN_ATTEMPT" --arg sha "$GITHUB_SHA" \
+                --arg reason "$RECOVERY_REASON_SHA256" --arg version "$app_version" --arg build "$build_number" --arg fp "$fingerprint" \
+                --arg file "$(basename "$ipa")" --arg artifact_sha "$ipa_sha" --arg artifact_md5 "$ipa_md5" \
+                --argjson artifact_size "$ipa_size" --arg manifest_sha "$manifest_sha" \
+                '{schema: 1, provider: "app-store-connect", runId: $run, originatingRunAttempt: $attempt, headSha: $sha,
+                  recoveryReasonSha256: $reason, bundleId: "com.standardnotes.standardnotes",
+                  extensionBundleId: "com.standardnotes.standardnotes.Share-To-SN", teamId: "HKF9BXSN95",
+                  appVersion: $version, buildNumber: $build, fingerprint: $fp, checksumManifestSha256: $manifest_sha,
+                  artifact: {file: $file, sha256: $artifact_sha, md5: $artifact_md5, size: $artifact_size}}' > "$marker"
+              echo 'create_marker=true' >> "$GITHUB_OUTPUT"; echo 'upload_required=true' >> "$GITHUB_OUTPUT" ;;
+            absent:true) echo 'create_marker=false' >> "$GITHUB_OUTPUT"; echo 'upload_required=true' >> "$GITHUB_OUTPUT" ;;
+            pending:true|valid:true) echo 'create_marker=false' >> "$GITHUB_OUTPUT"; echo 'upload_required=false' >> "$GITHUB_OUTPUT" ;;
+            pending:false|valid:false) echo 'App Store build identity exists without this recovery run intent.' >&2; exit 1 ;;
+            *) cat "$RUNNER_TEMP/app-store-preflight.json" >&2; exit 1 ;;
+          esac
+
+      - name: Persist App Store recovery intent before external mutation
+        if: steps.ios_preflight.outputs.create_marker == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: srn-mobile-app-store-intent-${{ github.run_id }}
+          path: ${{ runner.temp }}/app-store-intent/marker.json
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Upload or verify exact App Store build-upload binary evidence
+        env:
+          APPLE_APP_ID: ${{ secrets.APP_APPLE_ID }}
+          APPSTORE_CONNECT_KEY: ${{ secrets.APPSTORE_CONNECT_KEY }}
+          APPSTORE_CONNECT_KEY_ID: ${{ secrets.APPSTORE_CONNECT_KEY_ID }}
+          APPSTORE_CONNECT_KEY_ISSUER_ID: ${{ secrets.APPSTORE_CONNECT_KEY_ISSUER_ID }}
+          RELEASE_VERSION: ${{ needs.context.outputs.version }}
+          RECOVERY_REASON_SHA256: ${{ needs.context.outputs.recovery_reason_sha256 }}
+          UPLOAD_REQUIRED: ${{ steps.ios_preflight.outputs.upload_required }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test -n "$APPSTORE_CONNECT_KEY"; printf '%s' "$APPSTORE_CONNECT_KEY" > ios/Authkey.p8
+          trap 'rm -f -- ios/Authkey.p8' EXIT
+          payload="$GITHUB_WORKSPACE/validated"; (cd "$payload" && shasum -a 256 -c SHA256SUMS.txt)
+          identity="$payload/standard-red-notes-mobile-identity.json"; ipa="$payload/standard-red-notes-ios-arm64-${RELEASE_VERSION}.ipa"
+          app_version="$(jq -r '.ios.appVersion' "$identity")"; build_number="$(jq -r '.ios.buildNumber' "$identity")"
+          ipa_sha="$(shasum -a 256 "$ipa" | awk '{print $1}')"; ipa_md5="$(md5 -q "$ipa")"; ipa_size="$(stat -f '%z' "$ipa")"
+          fingerprint="$(tr -d '[:space:]' < "$payload/srn-mobile.fingerprint")"; marker="$RUNNER_TEMP/app-store-intent/marker.json"
+          jq -e --arg run "$GITHUB_RUN_ID" --arg current_attempt "$GITHUB_RUN_ATTEMPT" --arg sha "$GITHUB_SHA" --arg reason "$RECOVERY_REASON_SHA256" --arg fp "$fingerprint" \
+            --arg artifact_sha "$ipa_sha" --arg artifact_md5 "$ipa_md5" --argjson artifact_size "$ipa_size" \
+            '.runId == $run and (.originatingRunAttempt | test("^[1-9][0-9]*$")) and
+             ((.originatingRunAttempt | tonumber) <= ($current_attempt | tonumber)) and
+             .headSha == $sha and .recoveryReasonSha256 == $reason and .fingerprint == $fp and
+             .artifact.sha256 == $artifact_sha and .artifact.md5 == $artifact_md5 and .artifact.size == $artifact_size' "$marker"
+          if [ "$UPLOAD_REQUIRED" = true ]; then
+            (cd "$payload" && shasum -a 256 -c SHA256SUMS.txt)
+            IOS_IPA_PATH="$ipa" bundle exec fastlane ios upload_prod
+          else
+            (cd "$payload" && shasum -a 256 -c SHA256SUMS.txt)
+          fi
+          IOS_IPA_PATH="$ipa" APP_VERSION="$app_version" BUILD_NUMBER="$build_number" \
+          PROVIDER_EVIDENCE_PATH="$RUNNER_TEMP/app-store-final.json" PROVIDER_WAIT_SECONDS=1800 bundle exec fastlane ios inspect_upload
+          jq -e --arg md5 "$ipa_md5" --argjson size "$ipa_size" \
+            '.status == "valid" and .valid == true and .matchingUploadCount == 1 and .matchingIpaFileCount == 1 and
+             .buildUploadState == "COMPLETE" and .assetDeliveryState == "COMPLETE" and
+             .remoteFileSize == $size and .remoteMd5 == $md5 and .matchingBuildCount == 1 and
+             .buildProcessingState == "VALID" and .exportCompliance.valid == true' "$RUNNER_TEMP/app-store-final.json"
+
+  distribute_ios:
+    name: Distribute the exact validated existing iOS beta build
+    needs: [context, validated, upload_ios]
+    runs-on: macos-15
+    environment: mobile-production
+    timeout-minutes: 35
+    permissions:
+      actions: read
+      contents: read
+    env:
+      IOS_USES_NON_EXEMPT_ENCRYPTION: ${{ vars.IOS_USES_NON_EXEMPT_ENCRYPTION }}
+      IOS_EXPORT_COMPLIANCE_CODE: ${{ secrets.IOS_EXPORT_COMPLIANCE_CODE }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: packages/mobile
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ruby/setup-ruby@003a5c4d8d6321bd302e38f6f0ec593f77f06600 # v1.319.0
+        with:
+          ruby-version: '3.4.7'
+          bundler-cache: true
+          working-directory: packages/mobile
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: srn-mobile-validated-release
+          path: validated
+
+      - id: distribution_preflight
+        name: Reserve or reconcile exact TestFlight recovery distribution intent
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPLE_APP_ID: ${{ secrets.APP_APPLE_ID }}
+          APPSTORE_CONNECT_KEY: ${{ secrets.APPSTORE_CONNECT_KEY }}
+          APPSTORE_CONNECT_KEY_ID: ${{ secrets.APPSTORE_CONNECT_KEY_ID }}
+          APPSTORE_CONNECT_KEY_ISSUER_ID: ${{ secrets.APPSTORE_CONNECT_KEY_ISSUER_ID }}
+          RELEASE_VERSION: ${{ needs.context.outputs.version }}
+          RECOVERY_REASON_SHA256: ${{ needs.context.outputs.recovery_reason_sha256 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          payload="$GITHUB_WORKSPACE/validated"; (cd "$payload" && shasum -a 256 -c SHA256SUMS.txt)
+          identity="$payload/standard-red-notes-mobile-identity.json"; ipa="$payload/standard-red-notes-ios-arm64-${RELEASE_VERSION}.ipa"
+          app_version="$(jq -r '.ios.appVersion' "$identity")"; build_number="$(jq -r '.ios.buildNumber' "$identity")"
+          artifacts="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?name=srn-mobile-app-store-intent-${GITHUB_RUN_ID}&per_page=100")"
+          [ "$(jq '[.artifacts[] | select(.expired == false)] | length' <<< "$artifacts")" -eq 1 ]
+          marker_id="$(jq -r '[.artifacts[] | select(.expired == false)][0].id' <<< "$artifacts")"; mkdir -p "$RUNNER_TEMP/app-store-intent"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${marker_id}/zip" > "$RUNNER_TEMP/app-store-intent.zip"
+          unzip -q "$RUNNER_TEMP/app-store-intent.zip" -d "$RUNNER_TEMP/app-store-intent"
+          ipa_sha="$(shasum -a 256 "$ipa" | awk '{print $1}')"; ipa_md5="$(md5 -q "$ipa")"; ipa_size="$(stat -f '%z' "$ipa")"
+          fingerprint="$(tr -d '[:space:]' < "$payload/srn-mobile.fingerprint")"
+          jq -e --arg run "$GITHUB_RUN_ID" --arg current_attempt "$GITHUB_RUN_ATTEMPT" --arg sha "$GITHUB_SHA" --arg reason "$RECOVERY_REASON_SHA256" \
+            --arg fp "$fingerprint" --arg artifact_sha "$ipa_sha" --arg artifact_md5 "$ipa_md5" --argjson artifact_size "$ipa_size" \
+            '.runId == $run and (.originatingRunAttempt | test("^[1-9][0-9]*$")) and
+             ((.originatingRunAttempt | tonumber) <= ($current_attempt | tonumber)) and
+             .headSha == $sha and .recoveryReasonSha256 == $reason and .fingerprint == $fp and
+             .artifact.sha256 == $artifact_sha and .artifact.md5 == $artifact_md5 and .artifact.size == $artifact_size' \
+            "$RUNNER_TEMP/app-store-intent/marker.json"
+          test -n "$APPSTORE_CONNECT_KEY"; printf '%s' "$APPSTORE_CONNECT_KEY" > ios/Authkey.p8
+          trap 'rm -f -- ios/Authkey.p8' EXIT
+          IOS_IPA_PATH="$ipa" APP_VERSION="$app_version" BUILD_NUMBER="$build_number" \
+          PROVIDER_EVIDENCE_PATH="$RUNNER_TEMP/app-store-distribute.json" PROVIDER_WAIT_SECONDS=1800 bundle exec fastlane ios inspect_upload
+          jq -e '.status == "valid" and .valid == true' "$RUNNER_TEMP/app-store-distribute.json"
+          build_id="$(jq -r '.buildId' "$RUNNER_TEMP/app-store-distribute.json")"; test -n "$build_id"; test "$build_id" != null
+          marker="$RUNNER_TEMP/app-store-intent/marker.json"
+          manifest_sha="$(shasum -a 256 "$payload/SHA256SUMS.txt" | awk '{print $1}')"; upload_intent_sha="$(shasum -a 256 "$marker" | awk '{print $1}')"
+          stage_name="srn-mobile-testflight-distribution-intent-${GITHUB_RUN_ID}"
+          stage_dir="$RUNNER_TEMP/testflight-distribution-intent"; stage_marker="$stage_dir/marker.json"
+          stage_artifacts="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?name=${stage_name}&per_page=100")"
+          stage_count="$(jq '[.artifacts[] | select(.expired == false)] | length' <<< "$stage_artifacts")"; [ "$stage_count" -le 1 ]
+          stage_present=false
+          if [ "$stage_count" -eq 1 ]; then
+            stage_present=true; mkdir -p "$stage_dir"
+            stage_id="$(jq -r '[.artifacts[] | select(.expired == false)][0].id' <<< "$stage_artifacts")"
+            gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${stage_id}/zip" > "$RUNNER_TEMP/testflight-distribution-intent.zip"
+            unzip -q "$RUNNER_TEMP/testflight-distribution-intent.zip" -d "$stage_dir"
+            jq -e --arg run "$GITHUB_RUN_ID" --arg current_attempt "$GITHUB_RUN_ATTEMPT" --arg sha "$GITHUB_SHA" --arg reason "$RECOVERY_REASON_SHA256" \
+              --arg version "$app_version" --arg build "$build_number" --arg build_id "$build_id" --arg fp "$fingerprint" \
+              --arg upload_sha "$upload_intent_sha" --arg artifact_sha "$ipa_sha" --arg artifact_md5 "$ipa_md5" \
+              --argjson artifact_size "$ipa_size" --arg manifest_sha "$manifest_sha" \
+              '.schema == 1 and .stage == "testflight-external-distribution" and .runId == $run and
+               (.originatingRunAttempt | test("^[1-9][0-9]*$")) and ((.originatingRunAttempt | tonumber) <= ($current_attempt | tonumber)) and
+               .headSha == $sha and .recoveryReasonSha256 == $reason and .appVersion == $version and .buildNumber == $build and
+               .buildId == $build_id and .fingerprint == $fp and .uploadIntentSha256 == $upload_sha and
+               .checksumManifestSha256 == $manifest_sha and .artifact.sha256 == $artifact_sha and
+               .artifact.md5 == $artifact_md5 and .artifact.size == $artifact_size' "$stage_marker"
+          fi
+          APP_VERSION="$app_version" BUILD_NUMBER="$build_number" \
+            PROVIDER_EVIDENCE_PATH="$RUNNER_TEMP/testflight-distribution-preflight.json" bundle exec fastlane ios inspect_distribution
+          stage_status="$(jq -r '.status' "$RUNNER_TEMP/testflight-distribution-preflight.json")"
+          case "$stage_status:$stage_present" in
+            absent:false)
+              jq -e '.reconcilable == true and
+                .reconciliationOperations == ["public-group-membership", "beta-review-submission"]' \
+                "$RUNNER_TEMP/testflight-distribution-preflight.json"
+              mkdir -p "$stage_dir"
+              jq -n --arg run "$GITHUB_RUN_ID" --arg attempt "$GITHUB_RUN_ATTEMPT" --arg sha "$GITHUB_SHA" --arg reason "$RECOVERY_REASON_SHA256" \
+                --arg version "$app_version" --arg build "$build_number" --arg build_id "$build_id" --arg fp "$fingerprint" \
+                --arg upload_sha "$upload_intent_sha" --arg artifact_sha "$ipa_sha" --arg artifact_md5 "$ipa_md5" \
+                --argjson artifact_size "$ipa_size" --arg manifest_sha "$manifest_sha" \
+                '{schema: 1, provider: "app-store-connect", stage: "testflight-external-distribution", runId: $run,
+                  originatingRunAttempt: $attempt, headSha: $sha, recoveryReasonSha256: $reason,
+                  bundleId: "com.standardnotes.standardnotes", appVersion: $version, buildNumber: $build,
+                  buildId: $build_id, fingerprint: $fp, uploadIntentSha256: $upload_sha,
+                  checksumManifestSha256: $manifest_sha, artifact: {sha256: $artifact_sha, md5: $artifact_md5, size: $artifact_size}}' > "$stage_marker"
+              echo 'create_marker=true' >> "$GITHUB_OUTPUT"; echo 'mutation_required=true' >> "$GITHUB_OUTPUT" ;;
+            absent:true)
+              jq -e '.reconcilable == true and
+                .reconciliationOperations == ["public-group-membership", "beta-review-submission"]' \
+                "$RUNNER_TEMP/testflight-distribution-preflight.json"
+              echo 'create_marker=false' >> "$GITHUB_OUTPUT"; echo 'mutation_required=true' >> "$GITHUB_OUTPUT" ;;
+            pending:true)
+              jq -e '.reconcilable == true and
+                (.reconciliationOperations == ["public-group-membership"] or
+                 .reconciliationOperations == ["beta-review-submission"])' \
+                "$RUNNER_TEMP/testflight-distribution-preflight.json"
+              echo 'create_marker=false' >> "$GITHUB_OUTPUT"; echo 'mutation_required=true' >> "$GITHUB_OUTPUT" ;;
+            valid:true)
+              jq -e '.reconcilable == true and .reconciliationOperations == []' \
+                "$RUNNER_TEMP/testflight-distribution-preflight.json"
+              echo 'create_marker=false' >> "$GITHUB_OUTPUT"; echo 'mutation_required=false' >> "$GITHUB_OUTPUT" ;;
+            pending:false|valid:false) echo 'TestFlight stage exists without this recovery stage intent.' >&2; exit 1 ;;
+            *) cat "$RUNNER_TEMP/testflight-distribution-preflight.json" >&2; exit 1 ;;
+          esac
+
+      - name: Persist TestFlight recovery distribution intent before external mutation
+        if: steps.distribution_preflight.outputs.create_marker == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: srn-mobile-testflight-distribution-intent-${{ github.run_id }}
+          path: ${{ runner.temp }}/testflight-distribution-intent/marker.json
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Distribute once or reconcile exact TestFlight recovery state
+        env:
+          APPLE_APP_ID: ${{ secrets.APP_APPLE_ID }}
+          APPSTORE_CONNECT_KEY: ${{ secrets.APPSTORE_CONNECT_KEY }}
+          APPSTORE_CONNECT_KEY_ID: ${{ secrets.APPSTORE_CONNECT_KEY_ID }}
+          APPSTORE_CONNECT_KEY_ISSUER_ID: ${{ secrets.APPSTORE_CONNECT_KEY_ISSUER_ID }}
+          RELEASE_VERSION: ${{ needs.context.outputs.version }}
+          RECOVERY_REASON_SHA256: ${{ needs.context.outputs.recovery_reason_sha256 }}
+          MUTATION_REQUIRED: ${{ steps.distribution_preflight.outputs.mutation_required }}
+        run: |
+          set -euo pipefail
+          umask 077
+          payload="$GITHUB_WORKSPACE/validated"; identity="$payload/standard-red-notes-mobile-identity.json"
+          app_version="$(jq -r '.ios.appVersion' "$identity")"; build_number="$(jq -r '.ios.buildNumber' "$identity")"
+          jq -e --arg run "$GITHUB_RUN_ID" --arg current_attempt "$GITHUB_RUN_ATTEMPT" --arg sha "$GITHUB_SHA" --arg reason "$RECOVERY_REASON_SHA256" \
+            --arg version "$app_version" --arg build "$build_number" \
+            '.stage == "testflight-external-distribution" and .runId == $run and
+             (.originatingRunAttempt | test("^[1-9][0-9]*$")) and ((.originatingRunAttempt | tonumber) <= ($current_attempt | tonumber)) and
+             .headSha == $sha and .recoveryReasonSha256 == $reason and .appVersion == $version and .buildNumber == $build' \
+            "$RUNNER_TEMP/testflight-distribution-intent/marker.json"
+          test -n "$APPSTORE_CONNECT_KEY"; printf '%s' "$APPSTORE_CONNECT_KEY" > ios/Authkey.p8
+          trap 'rm -f -- ios/Authkey.p8' EXIT
+          jq -e --arg version "$RELEASE_VERSION" --arg build "$build_number" \
+            '.ios.bundleId == "com.standardnotes.standardnotes" and .ios.appVersion == $version and .ios.buildNumber == $build' "$identity"
+          if [ "$MUTATION_REQUIRED" = true ]; then
+            (cd "$payload" && shasum -a 256 -c SHA256SUMS.txt)
+            APP_VERSION="$app_version" BUILD_NUMBER="$build_number" bundle exec fastlane ios distribute_prod
+          else
+            (cd "$payload" && shasum -a 256 -c SHA256SUMS.txt)
+          fi
+          APP_VERSION="$app_version" BUILD_NUMBER="$build_number" PROVIDER_WAIT_SECONDS=1800 \
+            PROVIDER_EVIDENCE_PATH="$RUNNER_TEMP/testflight-distribution-final.json" bundle exec fastlane ios inspect_distribution
+          jq -e '.status == "valid" and .valid == true and .matchingPublicGroupCount == 1 and
+            .matchingBuildMembershipCount == 1 and .matchingBetaReviewSubmissionCount == 1 and
+            .reconcilable == true and .reconciliationOperations == [] and
+            (.betaReviewState == "WAITING_FOR_REVIEW" or .betaReviewState == "IN_REVIEW" or .betaReviewState == "APPROVED")' \
+            "$RUNNER_TEMP/testflight-distribution-final.json"
+
+  submit_ios:
+    name: Submit the exact validated existing iOS build
+    needs: [context, validated, distribute_ios]
+    runs-on: macos-15
+    environment: mobile-production
+    timeout-minutes: 35
+    permissions:
+      actions: read
+      contents: read
+    env:
+      IOS_USES_NON_EXEMPT_ENCRYPTION: ${{ vars.IOS_USES_NON_EXEMPT_ENCRYPTION }}
+      IOS_EXPORT_COMPLIANCE_CODE: ${{ secrets.IOS_EXPORT_COMPLIANCE_CODE }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: packages/mobile
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ruby/setup-ruby@003a5c4d8d6321bd302e38f6f0ec593f77f06600 # v1.319.0
+        with:
+          ruby-version: '3.4.7'
+          bundler-cache: true
+          working-directory: packages/mobile
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: srn-mobile-validated-release
+          path: validated
+
+      - id: submission_preflight
+        name: Reserve or reconcile exact App Store recovery submission intent
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPLE_APP_ID: ${{ secrets.APP_APPLE_ID }}
+          APPSTORE_CONNECT_KEY: ${{ secrets.APPSTORE_CONNECT_KEY }}
+          APPSTORE_CONNECT_KEY_ID: ${{ secrets.APPSTORE_CONNECT_KEY_ID }}
+          APPSTORE_CONNECT_KEY_ISSUER_ID: ${{ secrets.APPSTORE_CONNECT_KEY_ISSUER_ID }}
+          RELEASE_VERSION: ${{ needs.context.outputs.version }}
+          RECOVERY_REASON_SHA256: ${{ needs.context.outputs.recovery_reason_sha256 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          payload="$GITHUB_WORKSPACE/validated"; (cd "$payload" && shasum -a 256 -c SHA256SUMS.txt)
+          identity="$payload/standard-red-notes-mobile-identity.json"; ipa="$payload/standard-red-notes-ios-arm64-${RELEASE_VERSION}.ipa"
+          app_version="$(jq -r '.ios.appVersion' "$identity")"; build_number="$(jq -r '.ios.buildNumber' "$identity")"
+          artifacts="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?name=srn-mobile-app-store-intent-${GITHUB_RUN_ID}&per_page=100")"
+          [ "$(jq '[.artifacts[] | select(.expired == false)] | length' <<< "$artifacts")" -eq 1 ]
+          marker_id="$(jq -r '[.artifacts[] | select(.expired == false)][0].id' <<< "$artifacts")"; mkdir -p "$RUNNER_TEMP/app-store-intent"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${marker_id}/zip" > "$RUNNER_TEMP/app-store-intent.zip"
+          unzip -q "$RUNNER_TEMP/app-store-intent.zip" -d "$RUNNER_TEMP/app-store-intent"
+          ipa_sha="$(shasum -a 256 "$ipa" | awk '{print $1}')"; ipa_md5="$(md5 -q "$ipa")"; ipa_size="$(stat -f '%z' "$ipa")"
+          fingerprint="$(tr -d '[:space:]' < "$payload/srn-mobile.fingerprint")"
+          jq -e --arg run "$GITHUB_RUN_ID" --arg current_attempt "$GITHUB_RUN_ATTEMPT" --arg sha "$GITHUB_SHA" --arg reason "$RECOVERY_REASON_SHA256" \
+            --arg fp "$fingerprint" --arg artifact_sha "$ipa_sha" --arg artifact_md5 "$ipa_md5" --argjson artifact_size "$ipa_size" \
+            '.runId == $run and (.originatingRunAttempt | test("^[1-9][0-9]*$")) and
+             ((.originatingRunAttempt | tonumber) <= ($current_attempt | tonumber)) and
+             .headSha == $sha and .recoveryReasonSha256 == $reason and .fingerprint == $fp and
+             .artifact.sha256 == $artifact_sha and .artifact.md5 == $artifact_md5 and .artifact.size == $artifact_size' \
+            "$RUNNER_TEMP/app-store-intent/marker.json"
+          test -n "$APPSTORE_CONNECT_KEY"; printf '%s' "$APPSTORE_CONNECT_KEY" > ios/Authkey.p8
+          trap 'rm -f -- ios/Authkey.p8' EXIT
+          IOS_IPA_PATH="$ipa" APP_VERSION="$app_version" BUILD_NUMBER="$build_number" \
+          PROVIDER_EVIDENCE_PATH="$RUNNER_TEMP/app-store-submit.json" PROVIDER_WAIT_SECONDS=1800 bundle exec fastlane ios inspect_upload
+          jq -e '.status == "valid" and .valid == true' "$RUNNER_TEMP/app-store-submit.json"
+          build_id="$(jq -r '.buildId' "$RUNNER_TEMP/app-store-submit.json")"; test -n "$build_id"; test "$build_id" != null
+          distribution_name="srn-mobile-testflight-distribution-intent-${GITHUB_RUN_ID}"
+          distribution_artifacts="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?name=${distribution_name}&per_page=100")"
+          [ "$(jq '[.artifacts[] | select(.expired == false)] | length' <<< "$distribution_artifacts")" -eq 1 ]
+          distribution_id="$(jq -r '[.artifacts[] | select(.expired == false)][0].id' <<< "$distribution_artifacts")"
+          distribution_dir="$RUNNER_TEMP/testflight-distribution-intent"; mkdir -p "$distribution_dir"
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${distribution_id}/zip" > "$RUNNER_TEMP/testflight-distribution-intent.zip"
+          unzip -q "$RUNNER_TEMP/testflight-distribution-intent.zip" -d "$distribution_dir"
+          distribution_marker="$distribution_dir/marker.json"
+          upload_marker="$RUNNER_TEMP/app-store-intent/marker.json"
+          manifest_sha="$(shasum -a 256 "$payload/SHA256SUMS.txt" | awk '{print $1}')"; upload_intent_sha="$(shasum -a 256 "$upload_marker" | awk '{print $1}')"
+          jq -e --arg run "$GITHUB_RUN_ID" --arg current_attempt "$GITHUB_RUN_ATTEMPT" --arg sha "$GITHUB_SHA" --arg reason "$RECOVERY_REASON_SHA256" \
+            --arg version "$app_version" --arg build "$build_number" --arg build_id "$build_id" --arg fp "$fingerprint" \
+            --arg upload_sha "$upload_intent_sha" --arg artifact_sha "$ipa_sha" --arg artifact_md5 "$ipa_md5" \
+            --argjson artifact_size "$ipa_size" --arg manifest_sha "$manifest_sha" \
+            '.stage == "testflight-external-distribution" and .runId == $run and
+             (.originatingRunAttempt | test("^[1-9][0-9]*$")) and ((.originatingRunAttempt | tonumber) <= ($current_attempt | tonumber)) and
+             .headSha == $sha and .recoveryReasonSha256 == $reason and .appVersion == $version and .buildNumber == $build and
+             .buildId == $build_id and .fingerprint == $fp and .uploadIntentSha256 == $upload_sha and
+             .checksumManifestSha256 == $manifest_sha and .artifact.sha256 == $artifact_sha and
+             .artifact.md5 == $artifact_md5 and .artifact.size == $artifact_size' "$distribution_marker"
+          APP_VERSION="$app_version" BUILD_NUMBER="$build_number" \
+            PROVIDER_EVIDENCE_PATH="$RUNNER_TEMP/testflight-before-submission.json" bundle exec fastlane ios inspect_distribution
+          jq -e '.status == "valid" and .valid == true' "$RUNNER_TEMP/testflight-before-submission.json"
+          distribution_intent_sha="$(shasum -a 256 "$distribution_marker" | awk '{print $1}')"
+          stage_name="srn-mobile-app-store-submission-intent-${GITHUB_RUN_ID}"
+          stage_dir="$RUNNER_TEMP/app-store-submission-intent"; stage_marker="$stage_dir/marker.json"
+          stage_artifacts="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?name=${stage_name}&per_page=100")"
+          stage_count="$(jq '[.artifacts[] | select(.expired == false)] | length' <<< "$stage_artifacts")"; [ "$stage_count" -le 1 ]
+          stage_present=false
+          if [ "$stage_count" -eq 1 ]; then
+            stage_present=true; mkdir -p "$stage_dir"
+            stage_id="$(jq -r '[.artifacts[] | select(.expired == false)][0].id' <<< "$stage_artifacts")"
+            gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${stage_id}/zip" > "$RUNNER_TEMP/app-store-submission-intent.zip"
+            unzip -q "$RUNNER_TEMP/app-store-submission-intent.zip" -d "$stage_dir"
+            jq -e --arg run "$GITHUB_RUN_ID" --arg current_attempt "$GITHUB_RUN_ATTEMPT" --arg sha "$GITHUB_SHA" --arg reason "$RECOVERY_REASON_SHA256" \
+              --arg version "$app_version" --arg build "$build_number" --arg build_id "$build_id" --arg fp "$fingerprint" \
+              --arg distribution_sha "$distribution_intent_sha" --arg artifact_sha "$ipa_sha" --arg artifact_md5 "$ipa_md5" \
+              --argjson artifact_size "$ipa_size" --arg manifest_sha "$manifest_sha" \
+              '.schema == 1 and .stage == "app-store-review-submission" and .runId == $run and
+               (.originatingRunAttempt | test("^[1-9][0-9]*$")) and ((.originatingRunAttempt | tonumber) <= ($current_attempt | tonumber)) and
+               .headSha == $sha and .recoveryReasonSha256 == $reason and .appVersion == $version and .buildNumber == $build and
+               .buildId == $build_id and .fingerprint == $fp and .distributionIntentSha256 == $distribution_sha and
+               .checksumManifestSha256 == $manifest_sha and .artifact.sha256 == $artifact_sha and
+               .artifact.md5 == $artifact_md5 and .artifact.size == $artifact_size' "$stage_marker"
+          fi
+          APP_VERSION="$app_version" BUILD_NUMBER="$build_number" \
+            PROVIDER_EVIDENCE_PATH="$RUNNER_TEMP/app-store-submission-preflight.json" bundle exec fastlane ios inspect_submission
+          stage_status="$(jq -r '.status' "$RUNNER_TEMP/app-store-submission-preflight.json")"
+          case "$stage_status:$stage_present" in
+            absent:false|ready:false)
+              mkdir -p "$stage_dir"
+              jq -n --arg run "$GITHUB_RUN_ID" --arg attempt "$GITHUB_RUN_ATTEMPT" --arg sha "$GITHUB_SHA" --arg reason "$RECOVERY_REASON_SHA256" \
+                --arg version "$app_version" --arg build "$build_number" --arg build_id "$build_id" --arg fp "$fingerprint" \
+                --arg distribution_sha "$distribution_intent_sha" --arg artifact_sha "$ipa_sha" --arg artifact_md5 "$ipa_md5" \
+                --argjson artifact_size "$ipa_size" --arg manifest_sha "$manifest_sha" \
+                '{schema: 1, provider: "app-store-connect", stage: "app-store-review-submission", runId: $run,
+                  originatingRunAttempt: $attempt, headSha: $sha, recoveryReasonSha256: $reason,
+                  bundleId: "com.standardnotes.standardnotes", appVersion: $version, buildNumber: $build,
+                  buildId: $build_id, fingerprint: $fp, distributionIntentSha256: $distribution_sha,
+                  checksumManifestSha256: $manifest_sha, artifact: {sha256: $artifact_sha, md5: $artifact_md5, size: $artifact_size}}' > "$stage_marker"
+              echo 'create_marker=true' >> "$GITHUB_OUTPUT"; echo 'mutation_required=true' >> "$GITHUB_OUTPUT" ;;
+            absent:true|ready:true) echo 'create_marker=false' >> "$GITHUB_OUTPUT"; echo 'mutation_required=true' >> "$GITHUB_OUTPUT" ;;
+            valid:true) echo 'create_marker=false' >> "$GITHUB_OUTPUT"; echo 'mutation_required=false' >> "$GITHUB_OUTPUT" ;;
+            valid:false) echo 'App Store review stage exists without this recovery stage intent.' >&2; exit 1 ;;
+            *) cat "$RUNNER_TEMP/app-store-submission-preflight.json" >&2; exit 1 ;;
+          esac
+
+      - name: Persist App Store recovery submission intent before external mutation
+        if: steps.submission_preflight.outputs.create_marker == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: srn-mobile-app-store-submission-intent-${{ github.run_id }}
+          path: ${{ runner.temp }}/app-store-submission-intent/marker.json
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Submit once or reconcile exact App Store recovery state
+        env:
+          APPLE_APP_ID: ${{ secrets.APP_APPLE_ID }}
+          APPSTORE_CONNECT_KEY: ${{ secrets.APPSTORE_CONNECT_KEY }}
+          APPSTORE_CONNECT_KEY_ID: ${{ secrets.APPSTORE_CONNECT_KEY_ID }}
+          APPSTORE_CONNECT_KEY_ISSUER_ID: ${{ secrets.APPSTORE_CONNECT_KEY_ISSUER_ID }}
+          RELEASE_VERSION: ${{ needs.context.outputs.version }}
+          RECOVERY_REASON_SHA256: ${{ needs.context.outputs.recovery_reason_sha256 }}
+          MUTATION_REQUIRED: ${{ steps.submission_preflight.outputs.mutation_required }}
+        run: |
+          set -euo pipefail
+          umask 077
+          payload="$GITHUB_WORKSPACE/validated"; identity="$payload/standard-red-notes-mobile-identity.json"
+          app_version="$(jq -r '.ios.appVersion' "$identity")"; build_number="$(jq -r '.ios.buildNumber' "$identity")"
+          jq -e --arg run "$GITHUB_RUN_ID" --arg current_attempt "$GITHUB_RUN_ATTEMPT" --arg sha "$GITHUB_SHA" --arg reason "$RECOVERY_REASON_SHA256" \
+            --arg version "$app_version" --arg build "$build_number" \
+            '.stage == "app-store-review-submission" and .runId == $run and
+             (.originatingRunAttempt | test("^[1-9][0-9]*$")) and ((.originatingRunAttempt | tonumber) <= ($current_attempt | tonumber)) and
+             .headSha == $sha and .recoveryReasonSha256 == $reason and .appVersion == $version and .buildNumber == $build' \
+            "$RUNNER_TEMP/app-store-submission-intent/marker.json"
+          test -n "$APPSTORE_CONNECT_KEY"; printf '%s' "$APPSTORE_CONNECT_KEY" > ios/Authkey.p8
+          trap 'rm -f -- ios/Authkey.p8' EXIT
+          jq -e --arg version "$RELEASE_VERSION" --arg build "$build_number" \
+            '.ios.bundleId == "com.standardnotes.standardnotes" and .ios.appVersion == $version and .ios.buildNumber == $build' "$identity"
+          if [ "$MUTATION_REQUIRED" = true ]; then
+            (cd "$payload" && shasum -a 256 -c SHA256SUMS.txt)
+            APP_VERSION="$app_version" BUILD_NUMBER="$build_number" bundle exec fastlane ios submit_prod
+          else
+            (cd "$payload" && shasum -a 256 -c SHA256SUMS.txt)
+          fi
+          APP_VERSION="$app_version" BUILD_NUMBER="$build_number" PROVIDER_WAIT_SECONDS=1800 \
+            PROVIDER_EVIDENCE_PATH="$RUNNER_TEMP/app-store-submission-final.json" bundle exec fastlane ios inspect_submission
+          jq -e '.status == "valid" and .valid == true and .matchingAppStoreVersionCount == 1 and .remoteBuildId == .buildId' \
+            "$RUNNER_TEMP/app-store-submission-final.json"
+
+  release:
+    name: Publish or verify the exact GitHub recovery prerelease
+    needs: [context, validated, publish_android, submit_ios]
+    runs-on: ubuntu-latest
+    environment: mobile-production
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: srn-mobile-validated-release
+          path: validated
+
+      - name: Adopt only the same-run draft, attest exact assets, and publish last
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.context.outputs.version }}
+          RELEASE_TAG: ${{ needs.context.outputs.tag }}
+          RECOVERY_REASON_SHA256: ${{ needs.context.outputs.recovery_reason_sha256 }}
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/validated"
+          test -s "standard-red-notes-android-universal-${VERSION}.apk"
+          test -s "standard-red-notes-android-${VERSION}.aab"
+          test -s "standard-red-notes-ios-arm64-${VERSION}.ipa"
+          test -s standard-red-notes-mobile-identity.json
+          test -s srn-mobile.fingerprint
+          test -s SHA256SUMS.txt
+          mapfile -d '' release_files < <(find . -maxdepth 1 -type f -print0 | sort -z)
+          test "${#release_files[@]}" -eq 6
+          sha256sum --check SHA256SUMS.txt
+          fingerprint="$(tr -d '[:space:]' < srn-mobile.fingerprint)"
+          [[ "$fingerprint" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$RECOVERY_REASON_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          jq -e --arg version "$VERSION" \
+            '.schema == 1 and .android.applicationId == "com.standardnotes" and .android.versionName == $version and
+             .ios.bundleId == "com.standardnotes.standardnotes" and .ios.teamId == "HKF9BXSN95" and
+             .ios.extensionBundleId == "com.standardnotes.standardnotes.Share-To-SN" and
+             .ios.appVersion == $version and .ios.extensionAppVersion == $version and
+             .ios.appGroup == "group.com.standardnotes.standardnotes" and
+             (.ios.usesNonExemptEncryption | type) == "boolean"' standard-red-notes-mobile-identity.json
+
+          : > "$RUNNER_TEMP/mobile-expected-assets.jsonl"
+          for file in "${release_files[@]}"; do
+            name="${file#./}"; size="$(stat -c '%s' "$file")"; digest="$(sha256sum "$file" | cut -d' ' -f1)"
+            jq -nc --arg name "$name" --arg digest "sha256:$digest" --argjson size "$size" \
+              '{name: $name, size: $size, digest: $digest}' >> "$RUNNER_TEMP/mobile-expected-assets.jsonl"
+          done
+          jq -s 'sort_by(.name)' "$RUNNER_TEMP/mobile-expected-assets.jsonl" > "$RUNNER_TEMP/mobile-expected-assets.json"
+          asset_manifest_sha="$(jq -cS . "$RUNNER_TEMP/mobile-expected-assets.json" | sha256sum | cut -d' ' -f1)"
+          intent_marker="<!-- srn-mobile-recovery-release-intent:run=${GITHUB_RUN_ID};sha=${GITHUB_SHA};version=${VERSION};reason=${RECOVERY_REASON_SHA256}; -->"
+          fingerprint_marker="<!-- srn-mobile-release-fingerprint-sha256:${fingerprint} -->"
+          asset_marker="<!-- srn-mobile-release-assets-sha256:${asset_manifest_sha} -->"
+          api_tag="$(jq -rn --arg value "$RELEASE_TAG" '$value | @uri')"; release_json="$RUNNER_TEMP/mobile-github-release.json"
+          query_release() {
+            curl --silent --show-error --output "$release_json" --write-out '%{http_code}' \
+              --header 'Accept: application/vnd.github+json' --header "Authorization: Bearer $GH_TOKEN" \
+              --header 'X-GitHub-Api-Version: 2022-11-28' \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${api_tag}"
+          }
+          verify_release_identity() {
+            jq -e --arg tag "$RELEASE_TAG" --arg sha "$GITHUB_SHA" --arg marker "$intent_marker" \
+              '.tag_name == $tag and .target_commitish == $sha and (.body // "" | contains($marker))' "$release_json" >/dev/null
+          }
+          verify_remote_assets() {
+            jq -e --slurpfile expected "$RUNNER_TEMP/mobile-expected-assets.json" \
+              '([.assets[] | {name, size, digest}] | sort_by(.name)) == $expected[0]' "$release_json" >/dev/null
+          }
+          verify_not_latest() {
+            latest_status="$(curl --silent --show-error --output "$RUNNER_TEMP/mobile-latest-release.json" --write-out '%{http_code}' \
+              --header 'Accept: application/vnd.github+json' --header "Authorization: Bearer $GH_TOKEN" \
+              --header 'X-GitHub-Api-Version: 2022-11-28' \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/latest")"
+            case "$latest_status" in
+              200) jq -e --arg tag "$RELEASE_TAG" '.tag_name != $tag' "$RUNNER_TEMP/mobile-latest-release.json" >/dev/null ;;
+              404) ;;
+              *) cat "$RUNNER_TEMP/mobile-latest-release.json" >&2; return 1 ;;
+            esac
+          }
+          status="$(query_release)"
+          [ "$status" = 200 ] || { cat "$release_json" >&2; echo 'The pre-mutation recovery draft is missing.' >&2; exit 1; }
+          verify_release_identity || { echo 'Existing recovery release is not owned by this exact run and audit intent.' >&2; exit 1; }
+          if jq -e '.draft == false' "$release_json" >/dev/null; then
+            jq -e --arg marker "$asset_marker" --arg fingerprint_marker "$fingerprint_marker" \
+              '.prerelease == true and (.body // "" | contains($marker)) and (.body // "" | contains($fingerprint_marker))' "$release_json" >/dev/null
+            verify_remote_assets
+            verify_not_latest
+            exit 0
+          fi
+          jq -r '.assets[] | [.id, .name] | @tsv' "$release_json" | while IFS=$'\t' read -r asset_id asset_name; do
+            if ! jq -e --arg name "$asset_name" 'any(.[]; .name == $name)' "$RUNNER_TEMP/mobile-expected-assets.json" >/dev/null; then
+              gh api --method DELETE "/repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}"
+            fi
+          done
+          sha256sum --check SHA256SUMS.txt
+          gh release upload "$RELEASE_TAG" "${release_files[@]}" --clobber
+          status="$(query_release)"; [ "$status" = 200 ]; verify_release_identity; verify_remote_assets
+          current_body="$(jq -r '.body // ""' "$release_json" | sed '/<!-- srn-mobile-release-assets-sha256:/d;/<!-- srn-mobile-release-fingerprint-sha256:/d')"
+          final_body="${current_body}"$'\n'"${fingerprint_marker}"$'\n'"${asset_marker}"; release_id="$(jq -r '.id' "$release_json")"
+          verify_remote_assets
+          gh api --method PATCH "/repos/${GITHUB_REPOSITORY}/releases/${release_id}" -F draft=false -F prerelease=true \
+            -f make_latest=false -f name="Mobile $VERSION" -f body="$final_body" > "$RUNNER_TEMP/mobile-published-release.json"
+          mv "$RUNNER_TEMP/mobile-published-release.json" "$release_json"
+          jq -e --arg marker "$asset_marker" --arg fingerprint_marker "$fingerprint_marker" \
+            '.draft == false and .prerelease == true and (.body // "" | contains($marker)) and (.body // "" | contains($fingerprint_marker))' "$release_json" >/dev/null
+          verify_release_identity
+          verify_remote_assets
+          verify_not_latest

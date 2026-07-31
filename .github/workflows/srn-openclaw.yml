@@ -39,6 +39,8 @@ on:
       - "yarn.lock"
       - ".yarnrc.yml"
       - ".yarn/releases/**"
+      - "scripts/package.json"
+      - "scripts/package-lock.json"
       - "scripts/release-packaging-contract.mjs"
       - ".github/workflows/srn-openclaw.yml"
     tags:
@@ -91,12 +93,58 @@ jobs:
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
           fetch-depth: 0
+          persist-credentials: false
+
+      - name: Authorize exact protected main or release-tag source
+        env:
+          REQUESTED_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || '' }}
+        run: |
+          set -euo pipefail
+          git fetch --force --tags origin
+          git fetch --no-tags --force origin refs/heads/main:refs/remotes/origin/main
+          protected_sha="$(git rev-parse refs/remotes/origin/main^{commit})"
+          authorize_tag() {
+            tag="$1"
+            [[ "$tag" =~ ^srn-openclaw-v[0-9A-Za-z.+-]+$ ]]
+            tagged_sha="$(git rev-parse --verify "refs/tags/${tag}^{commit}")"
+            test "$tagged_sha" = "$GITHUB_SHA"
+            git merge-base --is-ancestor "$tagged_sha" "$protected_sha"
+          }
+          case "$GITHUB_EVENT_NAME:$GITHUB_REF_TYPE" in
+            push:branch)
+              test "$GITHUB_REF" = refs/heads/main
+              test "$GITHUB_SHA" = "$protected_sha"
+              test -z "$REQUESTED_TAG"
+              ;;
+            push:tag)
+              test -z "$REQUESTED_TAG"
+              authorize_tag "$GITHUB_REF_NAME"
+              ;;
+            workflow_dispatch:branch)
+              test -z "$REQUESTED_TAG"
+              test "$GITHUB_REF" = refs/heads/main
+              test "$GITHUB_SHA" = "$protected_sha"
+              ;;
+            workflow_dispatch:tag)
+              test -n "$REQUESTED_TAG"
+              test "$REQUESTED_TAG" = "$GITHUB_REF_NAME"
+              authorize_tag "$REQUESTED_TAG"
+              ;;
+            *)
+              echo "Unsupported OpenClaw release source: $GITHUB_EVENT_NAME $GITHUB_REF" >&2
+              exit 1
+              ;;
+          esac
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           architecture: x64
           package-manager-cache: false
+
+      - name: Install release policy dependencies
+        run: npm ci --prefix scripts --ignore-scripts --no-audit --no-fund
 
       - name: Validate release packaging contract
         run: node scripts/validate-release-contract.mjs
@@ -106,14 +154,42 @@ jobs:
         env:
           FORCE_RELEASE: ${{ github.event_name == 'workflow_dispatch' && inputs.force_release || false }}
           FORCE_REASON: ${{ github.event_name == 'workflow_dispatch' && inputs.force_reason || '' }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           EXCLUDED_RELEASE_REF: ${{ startsWith(github.ref, 'refs/tags/srn-openclaw-v') && github.ref_name || (github.event_name == 'workflow_dispatch' && inputs.tag) || '' }}
         run: |
           set -euo pipefail
-          git fetch --force --tags origin
+          excluded_release_ref="$EXCLUDED_RELEASE_REF"
+          if [ -z "$excluded_release_ref" ]; then
+            if [ "$FORCE_RELEASE" = "true" ]; then
+              [[ "$GITHUB_RUN_ID" =~ ^[0-9]+$ ]]
+              retry_intent="forced-${GITHUB_RUN_ID}"
+            else
+              retry_intent="automatic"
+            fi
+            retry_marker_prefix="<!-- srn-release-reservation tool=${TOOL} commit=${GITHUB_SHA} "
+            retry_intent_fragment=" intent=${retry_intent} -->"
+            mapfile -t retry_tags < <(
+              gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --paginate --slurp |
+                jq -r --arg sha "$GITHUB_SHA" --arg marker_prefix "$retry_marker_prefix" --arg intent_fragment "$retry_intent_fragment" '
+                  flatten[]
+                  | select(.target_commitish == $sha)
+                  | select((.body // "") | contains($marker_prefix))
+                  | select((.body // "") | contains($intent_fragment))
+                  | .tag_name
+                '
+            )
+            if [ "${#retry_tags[@]}" -gt 1 ]; then
+              echo "Multiple OpenClaw releases match this commit and retry intent." >&2
+              exit 1
+            fi
+            if [ "${#retry_tags[@]}" -eq 1 ]; then
+              excluded_release_ref="${retry_tags[0]}"
+            fi
+          fi
           node scripts/analyze-release-impact.mjs \
             --target srn-openclaw \
             --head HEAD \
-            --exclude-release-ref "${EXCLUDED_RELEASE_REF}" \
+            --exclude-release-ref "${excluded_release_ref}" \
             --force "${FORCE_RELEASE}" \
             --force-reason "${FORCE_REASON}" \
             --output release-impact.json \
@@ -126,13 +202,17 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   context:
-    name: Resolve release version
+    name: Resolve or recover release version
     needs: impact
     if: needs.impact.outputs.changed == 'true'
     runs-on: ubuntu-24.04
     outputs:
+      intent: ${{ steps.release.outputs.intent }}
       package_tag: ${{ steps.release.outputs.package_tag }}
       package_version: ${{ steps.release.outputs.package_version }}
+      published: ${{ steps.release.outputs.published }}
+      release_id: ${{ steps.release.outputs.release_id }}
+      reused: ${{ steps.release.outputs.reused }}
       source_epoch: ${{ steps.release.outputs.source_epoch }}
       source_sha: ${{ steps.release.outputs.source_sha }}
       tag: ${{ steps.release.outputs.tag }}
@@ -142,6 +222,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -152,24 +233,33 @@ jobs:
       - name: Resolve and validate release source
         id: release
         env:
+          FORCED: ${{ needs.impact.outputs.forced }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMPACT_RESULT: ${{ needs.impact.outputs.result_json }}
           REQUESTED_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || (startsWith(github.ref, 'refs/tags/') && github.ref_name || '') }}
         run: |
           set -euo pipefail
-          git fetch --force --tags origin
+          parse_explicit_version() {
+            TAG="$1" node --input-type=module -e \
+              'import { versionFromReleaseTag } from "./openclaw/scripts/release-config.mjs"; process.stdout.write(versionFromReleaseTag(process.env.TAG));'
+          }
           tag="${REQUESTED_TAG}"
+          [[ "$FORCED" == "true" || "$FORCED" == "false" ]]
           if [ -n "${tag}" ]; then
+            if [ "$FORCED" = "true" ]; then
+              echo "force_release cannot be combined with an explicit OpenClaw tag." >&2
+              exit 1
+            fi
             # Explicit tag release: the version comes from the tag, the tag must
             # already exist, and openclaw/package.json must already declare it.
-            if [[ ! "${tag}" =~ ^srn-openclaw-v[0-9A-Za-z.-]+$ ]]; then
+            if [[ ! "${tag}" =~ ^srn-openclaw-v[0-9A-Za-z.+-]+$ ]]; then
               echo "Invalid OpenClaw release tag: ${tag}" >&2
               exit 1
             fi
 
             source_sha="$(git rev-parse --verify "refs/tags/${tag}^{commit}")"
             git checkout --detach "${source_sha}"
-            version="$(TAG="${tag}" node --input-type=module -e \
-              'import { versionFromReleaseTag } from "./openclaw/scripts/release-config.mjs"; process.stdout.write(versionFromReleaseTag(process.env.TAG));')"
+            version="$(parse_explicit_version "${tag}")"
             declared_version="$(node -p "require('./openclaw/package.json').version")"
             if [ "${version}" != "${declared_version}" ]; then
               echo "Tag version ${version} does not match openclaw/package.json ${declared_version}." >&2
@@ -177,10 +267,107 @@ jobs:
             fi
             package_version="${version}"
             verify_tag=true
+            intent="explicit-${tag}"
           else
-            # Rolling release: N is one past the highest N already released this
-            # year, discovered from every `srn-openclaw-v<YY>.` tag,
-            # exactly as every other srn-* workflow does.
+            source_sha="${GITHUB_SHA}"
+            verify_tag=false
+            if [ "$FORCED" = "true" ]; then
+              [[ "$GITHUB_RUN_ID" =~ ^[0-9]+$ ]]
+              intent="forced-${GITHUB_RUN_ID}"
+            else
+              intent="automatic"
+            fi
+          fi
+
+          jq -e --arg sha "$source_sha" --argjson forced "$FORCED" '
+            .headSha == $sha
+            and .forced == $forced
+            and (
+              ($forced and (.forceReason | type == "string") and ((.forceReason | gsub("^\\s+|\\s+$"; "")) | length > 0))
+              or (($forced | not) and .forceReason == null)
+            )
+          ' <<< "$IMPACT_RESULT" >/dev/null
+
+          releases_file="$(mktemp)"
+          gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --paginate --slurp |
+            jq 'flatten' > "$releases_file"
+          marker_prefix="<!-- srn-release-reservation tool=${TOOL} commit=${source_sha} "
+          intent_fragment=" intent=${intent} -->"
+          tool_marker_prefix="<!-- srn-release-reservation tool=${TOOL} "
+
+          mapfile -t reservations < <(
+            jq -r --arg marker_prefix "$marker_prefix" --arg intent_fragment "$intent_fragment" --arg sha "$source_sha" '
+              .[]
+              | select(.target_commitish == $sha)
+              | select((.body // "") | contains($marker_prefix))
+              | select((.body // "") | contains($intent_fragment))
+              | .id
+            ' "$releases_file"
+          )
+          if [ "${#reservations[@]}" -gt 1 ]; then
+            echo "Multiple OpenClaw reservations match this commit and intent." >&2
+            printf 'release id %s\n' "${reservations[@]}" >&2
+            exit 1
+          fi
+
+          mapfile -t stale_reservations < <(
+            jq -r --arg marker_prefix "$marker_prefix" --arg intent_fragment "$intent_fragment" --arg tool_marker_prefix "$tool_marker_prefix" --arg sha "$source_sha" '
+              .[]
+              | select(.draft == true)
+              | select((.body // "") | contains($tool_marker_prefix))
+              | select((
+                  (.target_commitish == $sha)
+                  and ((.body // "") | contains($marker_prefix))
+                  and ((.body // "") | contains($intent_fragment))
+                ) | not)
+              | "\(.id)\t\(.tag_name)\t\(.target_commitish)"
+            ' "$releases_file"
+          )
+          if [ "${#stale_reservations[@]}" -gt 0 ]; then
+            echo "Refusing to allocate past stale OpenClaw draft reservations:" >&2
+            printf '%s\n' "${stale_reservations[@]}" >&2
+            echo "Reconcile or delete the stale drafts explicitly, then rerun." >&2
+            exit 1
+          fi
+
+          release_id=""
+          published=false
+          reused=false
+          if [ "${#reservations[@]}" -eq 1 ]; then
+            release_id="${reservations[0]}"
+            release="$(jq -c --argjson id "$release_id" '.[] | select(.id == $id)' "$releases_file")"
+            test -n "$release"
+            tag="$(jq -r '.tag_name' <<< "$release")"
+            version="${tag#"${TOOL}-v"}"
+            if [[ "$version" =~ ^[0-9]{2}\.[0-9]+$ ]]; then
+              package_version="${version}.0"
+              verify_tag=false
+            elif package_version="$(parse_explicit_version "${tag}")"; then
+              version="$package_version"
+              verify_tag=true
+            else
+              echo "Recovered OpenClaw reservation has an invalid tag: ${tag}" >&2
+              exit 1
+            fi
+            if [ -n "$REQUESTED_TAG" ]; then test "$tag" = "$REQUESTED_TAG"; fi
+            expected_name="${TOOL} ${version}"
+            jq -e --arg tag "$tag" --arg name "$expected_name" --arg sha "$source_sha" --arg marker_prefix "$marker_prefix" --arg intent_fragment "$intent_fragment" '
+              .tag_name == $tag
+              and .name == $name
+              and .target_commitish == $sha
+              and (.draft == true or .draft == false)
+              and .prerelease == false
+              and ((.body // "") | contains($marker_prefix))
+              and ((.body // "") | contains($intent_fragment))
+            ' <<< "$release" >/dev/null
+            published="$(jq -r '.draft | not' <<< "$release")"
+            reused=true
+            if [ "$published" = "true" ]; then
+              test "$(git rev-list -n 1 "$tag")" = "$source_sha"
+            fi
+          elif [ -z "$tag" ]; then
+            # Allocate from every tag and release record. Draft releases do not
+            # necessarily create a Git tag, so both inventories are required.
             YY="$(date -u +%y)"
             prefix="${TOOL}-v${YY}."
             max=0
@@ -188,26 +375,33 @@ jobs:
               [ -z "$released" ] && continue
               n="${released#"$prefix"}"
               if [[ "$n" =~ ^[0-9]+$ ]] && [ "$n" -gt "$max" ]; then max="$n"; fi
-            done < <(git tag --list "${prefix}*")
+            done < <(
+              {
+                git tag --list "${prefix}*"
+                jq -r --arg prefix "$prefix" '.[] | .tag_name | select(startswith($prefix))' "$releases_file"
+              } | LC_ALL=C sort -u
+            )
             next=$((max + 1))
-            # A stable explicit tag YY.N.0 owns the same package version that a
-            # rolling YY.N release would stamp. Skip that reserved identity.
             while git show-ref --verify --quiet "refs/tags/${TOOL}-v${YY}.${next}.0"; do
               next=$((next + 1))
             done
             version="${YY}.${next}"
-            # release-config.mjs demands a strict semver tag and `26.1` is not
-            # semver, so the packaged artifact carries `26.1.0`.
-            package_version=${version}.0
+            package_version="${version}.0"
             tag="${TOOL}-v${version}"
-            source_sha="${GITHUB_SHA}"
-            verify_tag=false
+          else
+            # An explicit tag may not reuse an unmarked or foreign release.
+            collision="$(jq -r --arg tag "$tag" '[.[] | select(.tag_name == $tag)] | length' "$releases_file")"
+            test "$collision" = "0"
           fi
 
           source_epoch="$(git show -s --format=%ct "${source_sha}")"
           {
+            echo "intent=${intent}"
             echo "package_tag=${TOOL}-v${package_version}"
             echo "package_version=${package_version}"
+            echo "published=${published}"
+            echo "release_id=${release_id}"
+            echo "reused=${reused}"
             echo "source_epoch=${source_epoch}"
             echo "source_sha=${source_sha}"
             echo "tag=${tag}"
@@ -225,6 +419,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ needs.context.outputs.source_sha }}
+          persist-credentials: false
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -264,7 +459,7 @@ jobs:
           name: srn-openclaw-dist
           path: openclaw/dist/**
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 30
 
   package:
     name: Package dependency-bundled Node tarball
@@ -277,6 +472,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ needs.context.outputs.source_sha }}
+          persist-credentials: false
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -329,8 +525,8 @@ jobs:
       # (tag/version/source commit/date) are normalized; every semantic field in
       # release-package.json remains covered. The canonical contract also binds
       # the package implementation and pinned toolchain/action inputs.
-      - id: fingerprint
-        name: Fingerprint normalized package payload
+      - name: Fingerprint normalized package payload
+        id: fingerprint
         run: |
           set -euo pipefail
           archive="out/srn-openclaw-${{ needs.context.outputs.package_version }}-node-any.tgz"
@@ -361,7 +557,7 @@ jobs:
           name: srn-openclaw-release-package
           path: out/*
           if-no-files-found: error
-          retention-days: 2
+          retention-days: 30
 
   decide:
     name: Compare normalized package fingerprint
@@ -372,6 +568,8 @@ jobs:
       decision: ${{ steps.compare.outputs.decision }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - id: compare
         env:
@@ -427,6 +625,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ needs.context.outputs.source_sha }}
+          persist-credentials: false
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -448,6 +647,140 @@ jobs:
           --manifest "out/srn-openclaw-${{ needs.context.outputs.package_version }}-node-any.manifest.json"
           --target "${{ matrix.target }}"
 
+  # Reserve a fingerprint-bound draft after every native smoke leg succeeds.
+  # The context job recovers the same commit/intent reservation on reruns, so
+  # an ambiguous API response cannot consume a second rolling version.
+  identity:
+    name: Reserve or recover exact GitHub release
+    needs: [context, package, decide, smoke]
+    if: needs.decide.outputs.changed == 'true'
+    runs-on: ubuntu-24.04
+    environment: release-production
+    permissions:
+      contents: write
+    outputs:
+      published: ${{ steps.identity.outputs.published }}
+      release_id: ${{ steps.identity.outputs.release_id }}
+      reused: ${{ steps.identity.outputs.reused }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - id: identity
+        name: Validate, reserve, or recover the exact draft
+        env:
+          EXPECTED_FINGERPRINT: ${{ needs.package.outputs.fingerprint }}
+          EXISTING_RELEASE_ID: ${{ needs.context.outputs.release_id }}
+          INTENT: ${{ needs.context.outputs.intent }}
+          SOURCE_SHA: ${{ needs.context.outputs.source_sha }}
+          TAG: ${{ needs.context.outputs.tag }}
+          VERSION: ${{ needs.context.outputs.version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_FINGERPRINT" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$INTENT" =~ ^(automatic|forced-[0-9]+|explicit-srn-openclaw-v[0-9A-Za-z.+-]+)$ ]]
+          test "$TAG" = "${TOOL}-v${VERSION}"
+
+          marker="<!-- srn-release-reservation tool=${TOOL} commit=${SOURCE_SHA} fingerprint=${EXPECTED_FINGERPRINT} intent=${INTENT} -->"
+          releases_file="$(mktemp)"
+          gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --paginate --slurp |
+            jq 'flatten' > "$releases_file"
+
+          mapfile -t stale_reservations < <(
+            jq -r --arg marker "$marker" --arg tool_prefix "<!-- srn-release-reservation tool=${TOOL} " '
+              .[]
+              | select(.draft == true)
+              | select((.body // "") | contains($tool_prefix))
+              | select(((.body // "") | contains($marker)) | not)
+              | "\(.id)\t\(.tag_name)\t\(.target_commitish)"
+            ' "$releases_file"
+          )
+          if [ "${#stale_reservations[@]}" -gt 0 ]; then
+            echo "Refusing to publish past stale or fingerprint-mismatched OpenClaw drafts:" >&2
+            printf '%s\n' "${stale_reservations[@]}" >&2
+            echo "Reconcile or delete the stale drafts explicitly, then rerun." >&2
+            exit 1
+          fi
+
+          mapfile -t exact_reservations < <(
+            jq -r --arg marker "$marker" --arg tag "$TAG" --arg name "${TOOL} ${VERSION}" --arg sha "$SOURCE_SHA" '
+              .[]
+              | select(.tag_name == $tag)
+              | select(.name == $name)
+              | select(.target_commitish == $sha)
+              | select(.prerelease == false)
+              | select((.body // "") | contains($marker))
+              | .id
+            ' "$releases_file"
+          )
+          if [ "${#exact_reservations[@]}" -gt 1 ]; then
+            echo "Multiple exact OpenClaw reservations match this release identity." >&2
+            printf 'release id %s\n' "${exact_reservations[@]}" >&2
+            exit 1
+          fi
+
+          release_id="$EXISTING_RELEASE_ID"
+          reused=false
+          if [ -n "$release_id" ]; then
+            [[ "$release_id" =~ ^[0-9]+$ ]]
+            test "${#exact_reservations[@]}" -eq 1
+            test "$release_id" = "${exact_reservations[0]}"
+            release="$(gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}")"
+            reused=true
+          elif [ "${#exact_reservations[@]}" -eq 1 ]; then
+            # Failed-job reruns keep successful upstream outputs. If the POST
+            # created a draft but its response was lost, context may still have
+            # emitted an empty ID; adopt the exact marker from live state.
+            release_id="${exact_reservations[0]}"
+            release="$(gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}")"
+            reused=true
+          else
+            collision="$(jq -r --arg tag "$TAG" '[.[] | select(.tag_name == $tag)] | length' "$releases_file")"
+            test "$collision" = "0"
+            if git show-ref --verify --quiet "refs/tags/${TAG}"; then
+              test "$(git rev-list -n 1 "$TAG")" = "$SOURCE_SHA"
+              [[ "$INTENT" == explicit-* ]]
+            else
+              [[ "$INTENT" != explicit-* ]]
+            fi
+            response="$(mktemp)"
+            if ! gh api --method POST "repos/${GITHUB_REPOSITORY}/releases" \
+              -f tag_name="$TAG" \
+              -f target_commitish="$SOURCE_SHA" \
+              -f name="${TOOL} ${VERSION}" \
+              -f body="$marker" \
+              -F draft=true \
+              -F prerelease=false \
+              -F generate_release_notes=true > "$response"; then
+              echo "Draft reservation response was ambiguous. Rerun failed jobs; identity will adopt the exact live marker." >&2
+              exit 1
+            fi
+            release="$(cat "$response")"
+            release_id="$(jq -r '.id' <<< "$release")"
+          fi
+
+          jq -e --arg tag "$TAG" --arg name "${TOOL} ${VERSION}" --arg sha "$SOURCE_SHA" --arg marker "$marker" '
+            .tag_name == $tag
+            and .name == $name
+            and .target_commitish == $sha
+            and (.draft == true or .draft == false)
+            and .prerelease == false
+            and ((.body // "") | contains($marker))
+          ' <<< "$release" >/dev/null
+          published="$(jq -r '.draft | not' <<< "$release")"
+          if [ "$published" = "true" ]; then
+            test "$(git rev-list -n 1 "$TAG")" = "$SOURCE_SHA"
+          fi
+          {
+            echo "published=${published}"
+            echo "release_id=${release_id}"
+            echo "reused=${reused}"
+          } >> "$GITHUB_OUTPUT"
+
   # Attestation and publication are separate JOBS because permissions are
   # per-job. The attester needs the Sigstore/attestation trio and only read
   # access to the repository; the publisher needs `contents: write` and nothing
@@ -458,9 +791,10 @@ jobs:
   # more -- creates releases in this repository without trouble.
   attest:
     name: Attest release package provenance
-    needs: [context, package, decide, smoke]
-    if: needs.decide.outputs.changed == 'true'
+    needs: [context, package, decide, identity]
+    if: needs.decide.outputs.changed == 'true' && needs.identity.outputs.published != 'true'
     runs-on: ubuntu-24.04
+    environment: release-production
     permissions:
       artifact-metadata: write
       attestations: write
@@ -486,6 +820,8 @@ jobs:
             out/srn-openclaw.fingerprint
 
       - name: Add provenance bundle and verify final checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           provenance="srn-openclaw-${{ needs.context.outputs.package_version }}-node-any.provenance.sigstore.json"
           cp "${{ steps.provenance.outputs.bundle-path }}" "out/${provenance}"
@@ -493,8 +829,20 @@ jobs:
             cd out
             sha256sum "${TOOL}.fingerprint" >> SHA256SUMS.txt
             sha256sum "${provenance}" >> SHA256SUMS.txt
+            LC_ALL=C sort -o SHA256SUMS.txt SHA256SUMS.txt
             sha256sum --check SHA256SUMS.txt
           )
+          for subject in \
+            "${TOOL}-${{ needs.context.outputs.package_version }}-node-any.tgz" \
+            "${TOOL}-${{ needs.context.outputs.package_version }}-node-any.manifest.json" \
+            "${TOOL}.fingerprint"; do
+            gh attestation verify "out/${subject}" \
+              --bundle "out/${provenance}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --source-digest "${{ needs.context.outputs.source_sha }}" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/srn-openclaw.yml" >/dev/null
+          done
+          (cd out && sha256sum --check SHA256SUMS.txt)
 
       - name: Upload attested release package
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -502,55 +850,155 @@ jobs:
           name: srn-openclaw-attested-package
           path: out/*
           if-no-files-found: error
-          retention-days: 2
+          retention-days: 30
 
   release:
-    name: Publish GitHub release
-    needs: [context, decide, attest]
-    if: needs.decide.outputs.changed == 'true'
+    name: Verify and publish exact GitHub release
+    needs: [context, package, decide, identity, attest]
+    if: always() && needs.decide.outputs.changed == 'true' && needs.identity.result == 'success' && (needs.attest.result == 'success' || (needs.identity.outputs.published == 'true' && needs.attest.result == 'skipped'))
     runs-on: ubuntu-24.04
-    # `contents: write` and nothing else -- the exact token every other srn-*
-    # publisher holds. Publishing needs no attestation scope, and the attested
-    # payload is re-verified below before anything is uploaded.
+    environment: release-production
+    # `contents: write` is the only publication scope. The Sigstore bundle is
+    # downloaded with the artifact and verified locally, so this job never
+    # fetches attestations through the API. Signing stays isolated above.
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
       - name: Download attested release package
+        if: needs.identity.outputs.published != 'true'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: srn-openclaw-attested-package
           path: out
 
-      - name: Recheck attested package checksums
-        run: (cd out && sha256sum --check SHA256SUMS.txt)
-
-      - name: Publish immutable tagged GitHub release
+      - name: Reconcile, verify, and publish exact assets
         env:
+          EXPECTED_FINGERPRINT: ${{ needs.package.outputs.fingerprint }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IDENTITY_PUBLISHED: ${{ needs.identity.outputs.published }}
+          INTENT: ${{ needs.context.outputs.intent }}
+          PACKAGE_VERSION: ${{ needs.context.outputs.package_version }}
+          RELEASE_ID: ${{ needs.identity.outputs.release_id }}
           SOURCE_SHA: ${{ needs.context.outputs.source_sha }}
           TAG: ${{ needs.context.outputs.tag }}
-          VERIFY_TAG: ${{ needs.context.outputs.verify_tag }}
           VERSION: ${{ needs.context.outputs.version }}
         run: |
           set -euo pipefail
-          # A tag supplied by a human must already exist and must never be
-          # created here, so a typo cannot silently publish a new tag. A rolling
-          # release derives its own tag, so there is nothing to verify against
-          # and gh creates it at the resolved source commit.
-          verify=()
-          if [ "${VERIFY_TAG}" = "true" ]; then
-            verify=(--verify-tag)
+          [[ "$RELEASE_ID" =~ ^[0-9]+$ ]]
+          [[ "$EXPECTED_FINGERPRINT" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$TAG" = "${TOOL}-v${VERSION}"
+          marker="<!-- srn-release-reservation tool=${TOOL} commit=${SOURCE_SHA} fingerprint=${EXPECTED_FINGERPRINT} intent=${INTENT} -->"
+          expected_name="${TOOL} ${VERSION}"
+
+          expected_assets="$(mktemp)"
+          {
+            echo SHA256SUMS.txt
+            echo "${TOOL}.fingerprint"
+            echo "${TOOL}-${PACKAGE_VERSION}-node-any.manifest.json"
+            echo "${TOOL}-${PACKAGE_VERSION}-node-any.provenance.sigstore.json"
+            echo "${TOOL}-${PACKAGE_VERSION}-node-any.tgz"
+          } | LC_ALL=C sort > "$expected_assets"
+          expected_checksummed="$(mktemp)"
+          grep -v '^SHA256SUMS.txt$' "$expected_assets" > "$expected_checksummed"
+
+          verify_directory() {
+            directory="$1"
+            actual_assets="$(mktemp)"
+            find "$directory" -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort > "$actual_assets"
+            diff -u "$expected_assets" "$actual_assets"
+            LC_ALL=C sort -c "$directory/SHA256SUMS.txt"
+            actual_checksummed="$(mktemp)"
+            awk 'NF == 2 && $1 ~ /^[0-9a-f]{64}$/ { sub(/^\*/, "", $2); print $2 }' "$directory/SHA256SUMS.txt" |
+              LC_ALL=C sort > "$actual_checksummed"
+            diff -u "$expected_checksummed" "$actual_checksummed"
+            (cd "$directory" && sha256sum --check SHA256SUMS.txt)
+            test "$(tr -d '\r\n' < "$directory/${TOOL}.fingerprint")" = "$EXPECTED_FINGERPRINT"
+            provenance="${TOOL}-${PACKAGE_VERSION}-node-any.provenance.sigstore.json"
+            for subject in \
+              "${TOOL}-${PACKAGE_VERSION}-node-any.tgz" \
+              "${TOOL}-${PACKAGE_VERSION}-node-any.manifest.json" \
+              "${TOOL}.fingerprint"; do
+              gh attestation verify "${directory}/${subject}" \
+                --bundle "${directory}/${provenance}" \
+                --repo "$GITHUB_REPOSITORY" \
+                --source-digest "$SOURCE_SHA" \
+                --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/srn-openclaw.yml" >/dev/null
+            done
+          }
+
+          verify_remote() {
+            directory="$1"
+            release_json="$2"
+            remote_assets="$(mktemp)"
+            jq -r '.assets[].name' <<< "$release_json" | LC_ALL=C sort > "$remote_assets"
+            diff -u "$expected_assets" "$remote_assets"
+            while read -r asset; do
+              digest="$(jq -r --arg name "$asset" '.assets[] | select(.name == $name) | .digest' <<< "$release_json")"
+              [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+              actual="$(sha256sum "$directory/$asset" | awk '{print $1}')"
+              test "$digest" = "sha256:${actual}"
+            done < "$expected_assets"
+          }
+
+          release="$(gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}")"
+          jq -e --arg tag "$TAG" --arg name "$expected_name" --arg sha "$SOURCE_SHA" --arg marker "$marker" '
+            .tag_name == $tag
+            and .name == $name
+            and .target_commitish == $sha
+            and (.draft == true or .draft == false)
+            and .prerelease == false
+            and ((.body // "") | contains($marker))
+          ' <<< "$release" >/dev/null
+          draft="$(jq -r '.draft' <<< "$release")"
+          if [ "$IDENTITY_PUBLISHED" = "true" ]; then test "$draft" = "false"; fi
+
+          if [ "$draft" = "false" ]; then
+            test "$(git rev-list -n 1 "$TAG")" = "$SOURCE_SHA"
+            recovered="$(mktemp -d)"
+            gh release download "$TAG" --dir "$recovered" --repo "$GITHUB_REPOSITORY"
+            verify_directory "$recovered"
+            verify_remote "$recovered" "$release"
+            asset_plan_sha="$(sha256sum "$recovered/SHA256SUMS.txt" | awk '{print $1}')"
+            assets_marker="<!-- srn-release-assets sha256=${asset_plan_sha} -->"
+            jq -e --arg assets_marker "$assets_marker" '(.body // "") | contains($assets_marker)' <<< "$release" >/dev/null
+            echo "${TAG} was already published by this workflow intent; verified exact attested assets."
+            exit 0
           fi
-          # Do not claim the repo-global Latest pointer: electron-updater
-          # resolves the desktop channel file through /releases/latest, so only
-          # srn-desktop may hold it.
-          # This job never checks the repository out, so gh has no git remote to
-          # infer the repository from.
-          gh release create "${TAG}" \
-            "${verify[@]}" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --target "${SOURCE_SHA}" \
-            --title "${TOOL} ${VERSION}" \
-            --latest=false \
-            --generate-notes \
-            out/*
+
+          verify_directory out
+          # Remove assets outside the exact contract before retry-safe clobbering.
+          while IFS=$'\t' read -r asset_id asset_name; do
+            if ! grep -Fxq "$asset_name" "$expected_assets"; then
+              gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}"
+            fi
+          done < <(jq -r '.assets[] | [.id, .name] | @tsv' <<< "$release")
+
+          shopt -s nullglob
+          files=(out/*)
+          test "${#files[@]}" -eq "$(wc -l < "$expected_assets")"
+          gh release upload "$TAG" "${files[@]}" --clobber --repo "$GITHUB_REPOSITORY"
+          release="$(gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}")"
+          test "$(jq -r '.draft' <<< "$release")" = "true"
+          verify_remote out "$release"
+          asset_plan_sha="$(sha256sum out/SHA256SUMS.txt | awk '{print $1}')"
+          assets_marker="<!-- srn-release-assets sha256=${asset_plan_sha} -->"
+          body="$(jq -r '.body' <<< "$release")"
+          if grep -Fq '<!-- srn-release-assets ' <<< "$body"; then
+            echo "Draft already contains an unexpected finalized asset marker." >&2
+            exit 1
+          fi
+          final_body="${body}"$'\n'"${assets_marker}"
+
+          # Publication is deliberately the final fallible command. If GitHub
+          # publishes but its response is lost, the next run recovers this same
+          # marker-bound release and verifies every remote digest.
+          gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
+            -f body="$final_body" \
+            -F draft=false \
+            -f make_latest=false >/dev/null

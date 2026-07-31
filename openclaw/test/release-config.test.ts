@@ -27,9 +27,12 @@ describe("versionFromReleaseTag", () => {
     );
   });
 
-  it("rejects build metadata, which npm cannot express in a filename", () => {
-    expect(() => versionFromReleaseTag("srn-openclaw-v1.2.3+build.5")).toThrow(
-      /without build metadata/,
+  it("accepts and preserves SemVer build metadata", () => {
+    expect(versionFromReleaseTag("srn-openclaw-v1.2.3+build.5")).toBe(
+      "1.2.3+build.5",
+    );
+    expect(versionFromReleaseTag("srn-openclaw-v1.2.3-rc.1+linux.arm64")).toBe(
+      "1.2.3-rc.1+linux.arm64",
     );
   });
 
@@ -51,6 +54,10 @@ describe("versionFromReleaseTag", () => {
       "srn-desktop-v1.2.3",
       "srn-openclaw-v1.2",
       "srn-openclaw-v1.2.3.4",
+      "srn-openclaw-v1.2.3+",
+      "srn-openclaw-v1.2.3+build..5",
+      "srn-openclaw-v1.2.3+build_5",
+      "srn-openclaw-v1.2.3-01",
       "",
     ]) {
       expect(() => versionFromReleaseTag(tag)).toThrow(/release tag must be/);
