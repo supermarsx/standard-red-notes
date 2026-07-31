@@ -3,6 +3,8 @@ import test from "node:test";
 
 import {
   runDockerHardeningValidation,
+  validateAuthStepUpComposeContract,
+  validateAuthStepUpComposeSource,
   validateComposeHardening,
   validateContainerHardening,
   validateImageHardening,
@@ -12,6 +14,7 @@ import {
   validatePairingDockerfileContract,
   validateServerDockerfileContract,
   validateSingleEntrypointAssistantPropagation,
+  validateSingleEntrypointAuthStepUpPropagation,
 } from "./validate-docker-hardening.mjs";
 
 function composeFixture() {
@@ -211,6 +214,83 @@ test("accepts the complete multi and single pairing propagation matrix", () => {
       },
     ),
     [],
+  );
+});
+
+test("requires secure auth step-up thresholds in multi and single runtime environments", () => {
+  for (const serviceName of ["server", "app"]) {
+    const config = {
+      services: {
+        [serviceName]: {
+          environment: {
+            APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_2: "0.0.0",
+            APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_3: "0.0.0",
+          },
+        },
+      },
+    };
+
+    assert.deepEqual(
+      validateAuthStepUpComposeContract(config, {
+        serviceName,
+        label: `${serviceName} compose`,
+      }),
+      [],
+    );
+
+    delete config.services[serviceName].environment
+      .APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_3;
+    assert.deepEqual(
+      validateAuthStepUpComposeContract(config, {
+        serviceName,
+        label: `${serviceName} compose`,
+      }),
+      [
+        `${serviceName} compose ${serviceName}: must propagate APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_3`,
+      ],
+    );
+  }
+});
+
+test("requires operator-overridable secure defaults in raw Compose and the single entrypoint", () => {
+  const composeSource = `
+    APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_2: \${APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_2:-0.0.0}
+    APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_3: \${APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_3:-0.0.0}
+  `;
+  const entrypointSource = `
+    put APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_2 "\${APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_2:-0.0.0}"
+    put APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_3 "\${APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_3:-0.0.0}"
+  `;
+
+  assert.deepEqual(
+    validateAuthStepUpComposeSource(composeSource, {
+      label: "single compose",
+    }),
+    [],
+  );
+  assert.deepEqual(
+    validateSingleEntrypointAuthStepUpPropagation(entrypointSource),
+    [],
+  );
+
+  assert.match(
+    validateAuthStepUpComposeSource(
+      composeSource.replace(
+        /^.*APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_3.*$/m,
+        "",
+      ),
+      { label: "single compose" },
+    ).join("\n"),
+    /TOKEN_VERSION_3/,
+  );
+  assert.match(
+    validateSingleEntrypointAuthStepUpPropagation(
+      entrypointSource.replace(
+        /^.*APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_2.*$/m,
+        "",
+      ),
+    ).join("\n"),
+    /TOKEN_VERSION_2/,
   );
 });
 

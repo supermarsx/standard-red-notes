@@ -45,6 +45,10 @@ const ASSISTANT_ENV_KEYS = Object.freeze([
   "ASSISTANT_OPENAI_BETA",
   "ASSISTANT_OPENAI_EXTRA_HEADERS",
 ]);
+const AUTH_STEP_UP_THRESHOLD_ENV_KEYS = Object.freeze([
+  "APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_2",
+  "APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_3",
+]);
 
 function upperList(value) {
   return (Array.isArray(value) ? value : []).map((item) =>
@@ -242,6 +246,51 @@ export function validatePairingComposeContract(
   }
 
   return errors;
+}
+
+export function validateAuthStepUpComposeContract(
+  config,
+  { serviceName, label },
+) {
+  const service = config?.services?.[serviceName];
+  if (!service) {
+    return [`${label}: missing ${serviceName} service`];
+  }
+
+  const environment = environmentMap(service.environment);
+  return AUTH_STEP_UP_THRESHOLD_ENV_KEYS.flatMap((key) => {
+    if (!Object.prototype.hasOwnProperty.call(environment, key)) {
+      return [`${label} ${serviceName}: must propagate ${key}`];
+    }
+    if (String(environment[key] ?? "").trim().length === 0) {
+      return [`${label} ${serviceName}: ${key} must have a secure default`];
+    }
+    return [];
+  });
+}
+
+export function validateAuthStepUpComposeSource(composeSource, { label }) {
+  const source = String(composeSource);
+  return AUTH_STEP_UP_THRESHOLD_ENV_KEYS.flatMap((key) => {
+    const expected = `${key}: \${${key}:-0.0.0}`;
+    return source.includes(expected)
+      ? []
+      : [
+          `${label}: ${key} must expose an operator override defaulting to 0.0.0`,
+        ];
+  });
+}
+
+export function validateSingleEntrypointAuthStepUpPropagation(
+  entrypointSource,
+) {
+  const source = String(entrypointSource);
+  return AUTH_STEP_UP_THRESHOLD_ENV_KEYS.flatMap((key) => {
+    const expected = `put ${key} "\${${key}:-0.0.0}"`;
+    return source.includes(expected)
+      ? []
+      : [`single entrypoint: must write ${key} with a secure default`];
+  });
 }
 
 export function validatePairingComposeSource(
@@ -552,6 +601,21 @@ export function runDockerHardeningValidation(argv = process.argv.slice(2)) {
       dataTarget: "/data",
       expectedVolumeSource: "single-data",
     }),
+    ...validateAuthStepUpComposeContract(multiConfig, {
+      serviceName: "server",
+      label: "multi compose",
+    }),
+    ...validateAuthStepUpComposeContract(singleConfig, {
+      serviceName: "app",
+      label: "single compose",
+    }),
+    ...validateAuthStepUpComposeSource(multiComposeSource, {
+      label: "multi compose",
+    }),
+    ...validateAuthStepUpComposeSource(singleComposeSource, {
+      label: "single compose",
+    }),
+    ...validateSingleEntrypointAuthStepUpPropagation(singleEntrypoint),
     ...validatePairingComposeSource(multiComposeSource, {
       label: "multi compose",
       defaultTokenPath:

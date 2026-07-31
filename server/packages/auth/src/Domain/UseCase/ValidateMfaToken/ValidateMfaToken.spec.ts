@@ -1,15 +1,21 @@
 import 'reflect-metadata'
 
 import { CryptoNode } from '@standardnotes/sncrypto-node'
+import { Logger } from 'winston'
 
 import { ValidateMfaToken } from './ValidateMfaToken'
 import { ValidateMfaTokenDTO } from './ValidateMfaTokenDTO'
 import { MfaSecretRepositoryInterface } from '../../Mfa/MfaSecretRepositoryInterface'
+import {
+  SECURITY_STEP_UP_UPDATE_REQUIRED_MESSAGE,
+  SECURITY_STEP_UP_VALIDATION_FAILED_MESSAGE,
+} from '../../Auth/SecurityStepUp'
 
 describe('ValidateMfaToken', () => {
   let useCase: ValidateMfaToken
   let mockCryptoNode: jest.Mocked<CryptoNode>
   let mockMfaSecretRepository: jest.Mocked<MfaSecretRepositoryInterface>
+  let logger: jest.Mocked<Pick<Logger, 'warn'>>
 
   beforeEach(() => {
     mockCryptoNode = {
@@ -22,35 +28,25 @@ describe('ValidateMfaToken', () => {
       deleteMfaSecret: jest.fn(),
     }
 
-    useCase = new ValidateMfaToken(mockCryptoNode, mockMfaSecretRepository)
+    logger = {
+      warn: jest.fn(),
+    }
+
+    useCase = new ValidateMfaToken(mockCryptoNode, mockMfaSecretRepository, logger as Logger)
   })
 
   describe('when authTokenVersion is less than 3', () => {
-    it('should return success without validation', async () => {
+    it.each([1, 2])('should require a client update for token version %s', async (authTokenVersion) => {
       const dto: ValidateMfaTokenDTO = {
         userUuid: 'user-123',
         totpToken: '123456',
-        authTokenVersion: 2,
+        authTokenVersion,
       }
 
       const result = await useCase.execute(dto)
 
-      expect(result.isFailed()).toBe(false)
-      expect(mockMfaSecretRepository.getMfaSecret).not.toHaveBeenCalled()
-      expect(mockCryptoNode.totpToken).not.toHaveBeenCalled()
-      expect(mockMfaSecretRepository.deleteMfaSecret).not.toHaveBeenCalled()
-    })
-
-    it('should return success when authTokenVersion is 1', async () => {
-      const dto: ValidateMfaTokenDTO = {
-        userUuid: 'user-123',
-        totpToken: '123456',
-        authTokenVersion: 1,
-      }
-
-      const result = await useCase.execute(dto)
-
-      expect(result.isFailed()).toBe(false)
+      expect(result.isFailed()).toBe(true)
+      expect(result.getError()).toBe(SECURITY_STEP_UP_UPDATE_REQUIRED_MESSAGE)
       expect(mockMfaSecretRepository.getMfaSecret).not.toHaveBeenCalled()
       expect(mockCryptoNode.totpToken).not.toHaveBeenCalled()
       expect(mockMfaSecretRepository.deleteMfaSecret).not.toHaveBeenCalled()
@@ -154,78 +150,19 @@ describe('ValidateMfaToken', () => {
   })
 
   describe('when authTokenVersion is not provided', () => {
-    it('should fail when no TOTP token is provided', async () => {
+    it('should require a client update before validating any supplied proof', async () => {
       const dto: ValidateMfaTokenDTO = {
         userUuid: 'user-123',
-        totpToken: undefined,
+        totpToken: '123456',
       }
 
       const result = await useCase.execute(dto)
 
       expect(result.isFailed()).toBe(true)
-      expect(result.getError()).toBe('No TOTP token provided.')
+      expect(result.getError()).toBe(SECURITY_STEP_UP_UPDATE_REQUIRED_MESSAGE)
       expect(mockMfaSecretRepository.getMfaSecret).not.toHaveBeenCalled()
       expect(mockCryptoNode.totpToken).not.toHaveBeenCalled()
       expect(mockMfaSecretRepository.deleteMfaSecret).not.toHaveBeenCalled()
-    })
-
-    it('should fail when no MFA secret is found', async () => {
-      const dto: ValidateMfaTokenDTO = {
-        userUuid: 'user-123',
-        totpToken: '123456',
-      }
-
-      mockMfaSecretRepository.getMfaSecret.mockResolvedValue(null)
-
-      const result = await useCase.execute(dto)
-
-      expect(result.isFailed()).toBe(true)
-      expect(result.getError()).toBe('No MFA secret found. Please generate a new secret first.')
-      expect(mockMfaSecretRepository.getMfaSecret).toHaveBeenCalledWith('user-123')
-      expect(mockCryptoNode.totpToken).not.toHaveBeenCalled()
-      expect(mockMfaSecretRepository.deleteMfaSecret).not.toHaveBeenCalled()
-    })
-
-    it('should fail when TOTP token is invalid', async () => {
-      const dto: ValidateMfaTokenDTO = {
-        userUuid: 'user-123',
-        totpToken: '123456',
-      }
-
-      const cachedSecret = 'JBSWY3DPEHPK3PXP'
-      const expectedToken = '654321'
-
-      mockMfaSecretRepository.getMfaSecret.mockResolvedValue(cachedSecret)
-      mockCryptoNode.totpToken.mockResolvedValue(expectedToken)
-
-      const result = await useCase.execute(dto)
-
-      expect(result.isFailed()).toBe(true)
-      expect(result.getError()).toBe('Invalid TOTP token.')
-      expect(mockMfaSecretRepository.getMfaSecret).toHaveBeenCalledWith('user-123')
-      expect(mockCryptoNode.totpToken).toHaveBeenCalledWith(cachedSecret, expect.any(Number), 6, 30)
-      expect(mockMfaSecretRepository.deleteMfaSecret).not.toHaveBeenCalled()
-    })
-
-    it('should succeed when TOTP token is valid', async () => {
-      const dto: ValidateMfaTokenDTO = {
-        userUuid: 'user-123',
-        totpToken: '123456',
-      }
-
-      const cachedSecret = 'JBSWY3DPEHPK3PXP'
-      const expectedToken = '123456'
-
-      mockMfaSecretRepository.getMfaSecret.mockResolvedValue(cachedSecret)
-      mockCryptoNode.totpToken.mockResolvedValue(expectedToken)
-      mockMfaSecretRepository.deleteMfaSecret.mockResolvedValue()
-
-      const result = await useCase.execute(dto)
-
-      expect(result.isFailed()).toBe(false)
-      expect(mockMfaSecretRepository.getMfaSecret).toHaveBeenCalledWith('user-123')
-      expect(mockCryptoNode.totpToken).toHaveBeenCalledWith(cachedSecret, expect.any(Number), 6, 30)
-      expect(mockMfaSecretRepository.deleteMfaSecret).toHaveBeenCalledWith('user-123')
     })
   })
 
@@ -243,7 +180,14 @@ describe('ValidateMfaToken', () => {
       const result = await useCase.execute(dto)
 
       expect(result.isFailed()).toBe(true)
-      expect(result.getError()).toBe('Failed to validate MFA token: Database connection failed')
+      expect(result.getError()).toBe(SECURITY_STEP_UP_VALIDATION_FAILED_MESSAGE)
+      expect(logger.warn).toHaveBeenCalledWith('Failed to validate MFA token.', {
+        userId: 'user-123',
+        errorType: 'Error',
+        errorCode: undefined,
+        status: undefined,
+      })
+      expect(JSON.stringify(logger.warn.mock.calls)).not.toContain('Database connection failed')
       expect(mockMfaSecretRepository.getMfaSecret).toHaveBeenCalledWith('user-123')
       expect(mockCryptoNode.totpToken).not.toHaveBeenCalled()
       expect(mockMfaSecretRepository.deleteMfaSecret).not.toHaveBeenCalled()
@@ -265,7 +209,8 @@ describe('ValidateMfaToken', () => {
       const result = await useCase.execute(dto)
 
       expect(result.isFailed()).toBe(true)
-      expect(result.getError()).toBe('Failed to validate MFA token: Crypto operation failed')
+      expect(result.getError()).toBe(SECURITY_STEP_UP_VALIDATION_FAILED_MESSAGE)
+      expect(JSON.stringify(logger.warn.mock.calls)).not.toContain('Crypto operation failed')
       expect(mockMfaSecretRepository.getMfaSecret).toHaveBeenCalledWith('user-123')
       expect(mockCryptoNode.totpToken).toHaveBeenCalledWith(cachedSecret, expect.any(Number), 6, 30)
       expect(mockMfaSecretRepository.deleteMfaSecret).not.toHaveBeenCalled()
@@ -289,10 +234,27 @@ describe('ValidateMfaToken', () => {
       const result = await useCase.execute(dto)
 
       expect(result.isFailed()).toBe(true)
-      expect(result.getError()).toBe('Failed to validate MFA token: Delete operation failed')
+      expect(result.getError()).toBe(SECURITY_STEP_UP_VALIDATION_FAILED_MESSAGE)
+      expect(JSON.stringify(logger.warn.mock.calls)).not.toContain('Delete operation failed')
       expect(mockMfaSecretRepository.getMfaSecret).toHaveBeenCalledWith('user-123')
       expect(mockCryptoNode.totpToken).toHaveBeenCalledWith(cachedSecret, expect.any(Number), 6, 30)
       expect(mockMfaSecretRepository.deleteMfaSecret).toHaveBeenCalledWith('user-123')
+    })
+
+    it('still returns the fixed failure when the logger transport throws', async () => {
+      mockMfaSecretRepository.getMfaSecret.mockRejectedValue(new Error('repository detail'))
+      logger.warn.mockImplementation(() => {
+        throw new Error('logger unavailable')
+      })
+
+      const result = await useCase.execute({
+        userUuid: 'user-123',
+        totpToken: '123456',
+        authTokenVersion: 3,
+      })
+
+      expect(result.isFailed()).toBe(true)
+      expect(result.getError()).toBe(SECURITY_STEP_UP_VALIDATION_FAILED_MESSAGE)
     })
   })
 

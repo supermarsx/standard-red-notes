@@ -4,7 +4,7 @@ jest.mock('@standardnotes/auth-server', () => ({
   Service: jest.fn(),
 }))
 
-import { HomeServer } from './HomeServer'
+import { buildHomeServerEnvironmentOverrides, HomeServer } from './HomeServer'
 
 describe('HomeServer teardown', () => {
   afterEach(() => {
@@ -86,5 +86,24 @@ describe('HomeServer teardown', () => {
     expect(result.isFailed()).toBe(true)
     expect(result.getError()).toBe('Home server is not running.')
     expect(activatePremiumFeatures).not.toHaveBeenCalled()
+  })
+})
+
+describe('buildHomeServerEnvironmentOverrides', () => {
+  it('defaults current Standard Red Notes clients to password and TOTP capable v3 tokens', () => {
+    const environment = buildHomeServerEnvironmentOverrides('data', undefined)
+
+    expect(environment.APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_2).toBe('0.0.0')
+    expect(environment.APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_3).toBe('0.0.0')
+  })
+
+  it('allows an operator to stage a deliberate client-version rollout', () => {
+    const environment = buildHomeServerEnvironmentOverrides('data', {
+      APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_2: '3.20.0',
+      APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_3: '3.30.0',
+    })
+
+    expect(environment.APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_2).toBe('3.20.0')
+    expect(environment.APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_3).toBe('3.30.0')
   })
 })

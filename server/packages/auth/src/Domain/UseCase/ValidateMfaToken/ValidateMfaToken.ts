@@ -1,23 +1,31 @@
 import { Result, UseCaseInterface } from '@standardnotes/domain-core'
 import { CryptoNode } from '@standardnotes/sncrypto-node'
 import { inject, injectable } from 'inversify'
+import { Logger } from 'winston'
 
 import { MfaSecretRepositoryInterface } from '../../Mfa/MfaSecretRepositoryInterface'
 import TYPES from '../../../Bootstrap/Types'
 import { ValidateMfaTokenDTO } from './ValidateMfaTokenDTO'
+import {
+  SECURITY_STEP_UP_UPDATE_REQUIRED_MESSAGE,
+  SECURITY_STEP_UP_VALIDATION_FAILED_MESSAGE,
+  supportsTotpStepUp,
+} from '../../Auth/SecurityStepUp'
+import { safeErrorLogMetadata } from '../../Logging/SafeLog'
 
 @injectable()
 export class ValidateMfaToken implements UseCaseInterface<void> {
   constructor(
     @inject(TYPES.Auth_CryptoNode) private cryptoNode: CryptoNode,
     @inject(TYPES.Auth_MfaSecretRepository) private mfaSecretRepository: MfaSecretRepositoryInterface,
+    @inject(TYPES.Auth_Logger) private logger: Logger,
   ) {}
 
   async execute(dto: ValidateMfaTokenDTO): Promise<Result<void>> {
     const { userUuid, totpToken, authTokenVersion } = dto
     try {
-      if (authTokenVersion && authTokenVersion < 3) {
-        return Result.ok()
+      if (!supportsTotpStepUp(authTokenVersion)) {
+        return Result.fail(SECURITY_STEP_UP_UPDATE_REQUIRED_MESSAGE)
       }
 
       if (!totpToken) {
@@ -40,7 +48,17 @@ export class ValidateMfaToken implements UseCaseInterface<void> {
 
       return Result.ok()
     } catch (error) {
-      return Result.fail(`Failed to validate MFA token: ${(error as Error).message}`)
+      try {
+        this.logger.warn('Failed to validate MFA token.', {
+          userId: userUuid,
+          ...safeErrorLogMetadata(error),
+        })
+      } catch {
+        // Logging is best-effort; proof validation must still fail closed with
+        // the same public response if the configured transport is unavailable.
+      }
+
+      return Result.fail(SECURITY_STEP_UP_VALIDATION_FAILED_MESSAGE)
     }
   }
 }

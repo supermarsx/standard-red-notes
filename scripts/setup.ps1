@@ -232,6 +232,10 @@ VALET_TOKEN_SECRET=$ValetTokenSecret
 # changes on every restart; pin it here so login key-params stay stable.
 AUTH_SERVER_PSEUDO_KEY_PARAMS_KEY=$AuthServerPseudoKeyParamsKey
 
+# ----- Security step-up client compatibility ---------------------------------
+APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_2=0.0.0
+APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_3=0.0.0
+
 # ----- Realtime websocket gateway --------------------------------------------
 # Shared secrets between the server and the websocket-gateway. Must match.
 WEBSOCKET_GATEWAY_INTERNAL_SECRET=$WebsocketGatewayInternalSecret

@@ -4,6 +4,7 @@ import { GetSetting } from './GetSetting'
 import { Setting } from '../../Setting/Setting'
 import { Uuid, Timestamps, SettingName, Result } from '@standardnotes/domain-core'
 import { VerifyUserServerPassword } from '../VerifyUserServerPassword/VerifyUserServerPassword'
+import { SECURITY_STEP_UP_UPDATE_REQUIRED_MESSAGE } from '../../Auth/SecurityStepUp'
 
 describe('GetSetting', () => {
   let settingRepository: SettingRepositoryInterface
@@ -101,6 +102,25 @@ describe('GetSetting', () => {
       serverPassword: 'correct-password',
     })
     expect(result.isFailed()).toBeFalsy()
+  })
+
+  it('does not read recovery codes for a legacy v1 token', async () => {
+    verifyUserServerPassword = new VerifyUserServerPassword({ findOneByUuid: jest.fn() } as never)
+
+    const result = await createUseCase().execute({
+      userUuid: '00000000-0000-0000-0000-000000000000',
+      settingName: SettingName.NAMES.RecoveryCodes,
+      allowSensitiveRetrieval: true,
+      decrypted: true,
+      serverPassword: 'present-but-unsupported',
+      authTokenVersion: 1,
+      shouldVerifyUserServerPassword: true,
+    })
+
+    expect(result.isFailed()).toBe(true)
+    expect(result.getError()).toBe(SECURITY_STEP_UP_UPDATE_REQUIRED_MESSAGE)
+    expect(settingRepository.findLastByNameAndUserUuid).not.toHaveBeenCalled()
+    expect(settingCrypter.decryptSettingValue).not.toHaveBeenCalled()
   })
 
   it('should return recovery codes setting', async () => {

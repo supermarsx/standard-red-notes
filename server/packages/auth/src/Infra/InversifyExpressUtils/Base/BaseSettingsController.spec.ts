@@ -4,6 +4,7 @@ import { Result, SettingName } from '@standardnotes/domain-core'
 import { Request, Response } from 'express'
 
 import { BaseSettingsController } from './BaseSettingsController'
+import { SECURITY_STEP_UP_UPDATE_REQUIRED_MESSAGE } from '../../../Domain/Auth/SecurityStepUp'
 
 describe('BaseSettingsController cross-service token cache invalidation', () => {
   const user = { uuid: 'user-1', email: 'user@example.com' }
@@ -11,6 +12,7 @@ describe('BaseSettingsController cross-service token cache invalidation', () => 
   let setSettingValue: { execute: jest.Mock }
   let triggerPostSettingUpdateActions: { execute: jest.Mock }
   let doDeleteSetting: { execute: jest.Mock }
+  let validateMfaToken: { execute: jest.Mock }
   let settingHttMapper: { toProjection: jest.Mock }
   let controller: BaseSettingsController
 
@@ -38,6 +40,7 @@ describe('BaseSettingsController cross-service token cache invalidation', () => 
     }
     triggerPostSettingUpdateActions = { execute: jest.fn().mockResolvedValue(Result.ok(undefined)) }
     doDeleteSetting = { execute: jest.fn().mockResolvedValue({ success: true }) }
+    validateMfaToken = { execute: jest.fn().mockResolvedValue(Result.ok()) }
     settingHttMapper = { toProjection: jest.fn().mockReturnValue({ name: SettingName.NAMES.CaldavEnabled }) }
 
     controller = new BaseSettingsController(
@@ -47,7 +50,7 @@ describe('BaseSettingsController cross-service token cache invalidation', () => 
       triggerPostSettingUpdateActions as never,
       doDeleteSetting as never,
       {} as never,
-      {} as never,
+      validateMfaToken as never,
       settingHttMapper as never,
       {} as never,
       { error: jest.fn() } as never,
@@ -92,6 +95,26 @@ describe('BaseSettingsController cross-service token cache invalidation', () => 
     setHeader.mockClear()
     doDeleteSetting.execute.mockResolvedValueOnce({ success: false })
     await controller.deleteSetting(request, response())
+    expect(setHeader).not.toHaveBeenCalled()
+  })
+
+  it('does not update MFA when a legacy token cannot provide TOTP step-up proof', async () => {
+    validateMfaToken.execute.mockResolvedValueOnce(Result.fail(SECURITY_STEP_UP_UPDATE_REQUIRED_MESSAGE))
+
+    await controller.updateSetting(
+      {
+        params: { userUuid: user.uuid },
+        body: { name: SettingName.NAMES.MfaSecret, value: 'encrypted-secret', totpToken: '123456' },
+      } as unknown as Request,
+      response(),
+    )
+
+    expect(validateMfaToken.execute).toHaveBeenCalledWith({
+      userUuid: user.uuid,
+      totpToken: '123456',
+      authTokenVersion: 1,
+    })
+    expect(setSettingValue.execute).not.toHaveBeenCalled()
     expect(setHeader).not.toHaveBeenCalled()
   })
 })

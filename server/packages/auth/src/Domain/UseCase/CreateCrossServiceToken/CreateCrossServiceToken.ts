@@ -1,6 +1,6 @@
 import { CrossServiceTokenData, TokenEncoderInterface } from '@standardnotes/security'
 import { Result, RoleName, SettingName, UseCaseInterface, Uuid } from '@standardnotes/domain-core'
-import { gt } from 'semver'
+import { gt, valid } from 'semver'
 
 import { ProjectorInterface } from '../../../Projection/ProjectorInterface'
 import { Role } from '../../Role/Role'
@@ -360,7 +360,7 @@ export class CreateCrossServiceToken implements UseCaseInterface<string> {
 
     for (const [version, threshold] of Object.entries(applicationVersionThresholds)) {
       const versionNumber = parseInt(version, 10)
-      if (threshold && gt(semver, threshold) && versionNumber > tokenVersion) {
+      if (threshold && valid(threshold) && gt(semver, threshold) && versionNumber > tokenVersion) {
         tokenVersion = versionNumber
       }
     }

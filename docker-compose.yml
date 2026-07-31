@@ -24,6 +24,10 @@ x-server-env: &server-env
   # Must be a 64-char hex string (32 bytes); auth's CrypterNode validates this. Override in prod.
   AUTH_SERVER_ENCRYPTION_SERVER_KEY: ${AUTH_SERVER_ENCRYPTION_SERVER_KEY:-deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef}
   VALET_TOKEN_SECRET: ${VALET_TOKEN_SECRET:-dev-valet-token-secret-change-me}
+  # Current SRN clients can provide password (v2) and TOTP (v3) step-up proof.
+  # Operators may raise these thresholds for a deliberate staged rollout.
+  APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_2: ${APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_2:-0.0.0}
+  APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_3: ${APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_3:-0.0.0}
   # Auth session cookies. The auth service authenticates browser requests off the
   # access_token_<session> cookie, so these MUST suit the deployment or every
   # authed request 401s. Defaults below are for an http://localhost self-host:

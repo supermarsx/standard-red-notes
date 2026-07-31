@@ -869,6 +869,21 @@ describe('CreateCrossServiceToken', () => {
     })
 
     describe('when both thresholds are configured', () => {
+      it('issues a v3 token to a current web client with the secure stock defaults', async () => {
+        const useCase = createUseCase('0.0.0', '0.0.0')
+        tokenEncoder.encodeExpirableToken = jest.fn().mockImplementation((data: CrossServiceTokenData) => {
+          expect(data.version).toBe(3)
+          return 'mocked-token'
+        })
+
+        await useCase.execute({
+          user,
+          applicationVersion: 'web-3.0.0',
+        })
+
+        expect(tokenEncoder.encodeExpirableToken).toHaveBeenCalled()
+      })
+
       it('should set version to 1 when application version is below both thresholds', async () => {
         const useCase = createUseCase('2.0.0', '3.0.0')
         tokenEncoder.encodeExpirableToken = jest.fn().mockImplementation((data: CrossServiceTokenData) => {
@@ -955,6 +970,23 @@ describe('CreateCrossServiceToken', () => {
           user,
           applicationVersion: 'web-3.0.0',
         })
+
+        expect(tokenEncoder.encodeExpirableToken).toHaveBeenCalled()
+      })
+
+      it('does not throw or upgrade a token for malformed thresholds passed by an embedding caller', async () => {
+        const useCase = createUseCase('not-semver', 'also-invalid')
+        tokenEncoder.encodeExpirableToken = jest.fn().mockImplementation((data: CrossServiceTokenData) => {
+          expect(data.version).toBe(1)
+          return 'mocked-token'
+        })
+
+        await expect(
+          useCase.execute({
+            user,
+            applicationVersion: 'web-3.0.0',
+          }),
+        ).resolves.toBeDefined()
 
         expect(tokenEncoder.encodeExpirableToken).toHaveBeenCalled()
       })

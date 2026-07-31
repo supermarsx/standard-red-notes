@@ -55,6 +55,9 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-info}
       # Comma-separated emails granted the admin role (in-app Admin panel).
       ADMIN_EMAILS: ${ADMIN_EMAILS:-}
+      # Current SRN clients can provide password (v2) and TOTP (v3) step-up proof.
+      APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_2: ${APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_2:-0.0.0}
+      APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_3: ${APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_3:-0.0.0}
 
       # Public URL the browser uses for file up/downloads, served same-origin via
       # nginx /files. Defaults to this container's published origin; override for a

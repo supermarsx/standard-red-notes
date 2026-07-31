@@ -60,6 +60,8 @@ put NODE_ENV production
 put LOG_LEVEL "${LOG_LEVEL:-info}"
 put E2E_TESTING false
 put PORT 3000
+put APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_2 "${APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_2:-0.0.0}"
+put APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_3 "${APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_3:-0.0.0}"
 
 # Minimal dependency footprint: embedded sqlite + in-memory cache + in-process
 # events. (HomeServer.ts also forces these, but we set them explicitly so the

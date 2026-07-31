@@ -8,6 +8,7 @@ import { SettingRepositoryInterface } from '../../Setting/SettingRepositoryInter
 import { DeleteSetting } from './DeleteSetting'
 import { SettingName, Timestamps, Uuid, Result } from '@standardnotes/domain-core'
 import { VerifyUserServerPassword } from '../VerifyUserServerPassword/VerifyUserServerPassword'
+import { SECURITY_STEP_UP_UPDATE_REQUIRED_MESSAGE } from '../../Auth/SecurityStepUp'
 
 describe('DeleteSetting', () => {
   let setting: Setting
@@ -96,6 +97,26 @@ describe('DeleteSetting', () => {
         userUuid: '00000000-0000-0000-0000-000000000000',
         settingName: SettingName.NAMES.MfaSecret,
       })
+    })
+
+    it('does not delete MFA or recovery codes for a legacy v1 token', async () => {
+      verifyUserServerPassword = new VerifyUserServerPassword({ findOneByUuid: jest.fn() } as never)
+
+      const result = await createUseCase().execute({
+        settingName: SettingName.NAMES.MfaSecret,
+        userUuid: '00000000-0000-0000-0000-000000000000',
+        serverPassword: 'present-but-unsupported',
+        authTokenVersion: 1,
+        shouldVerifyUserServerPassword: true,
+      })
+
+      expect(result).toEqual({
+        success: false,
+        error: {
+          message: SECURITY_STEP_UP_UPDATE_REQUIRED_MESSAGE,
+        },
+      })
+      expect(settingRepository.deleteByUserUuid).not.toHaveBeenCalled()
     })
 
     it('should fail with incorrect server password for sensitive settings', async () => {

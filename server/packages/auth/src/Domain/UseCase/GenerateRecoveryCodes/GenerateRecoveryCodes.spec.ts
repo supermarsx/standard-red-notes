@@ -5,6 +5,7 @@ import { GenerateRecoveryCodes } from './GenerateRecoveryCodes'
 import { SetSettingValue } from '../SetSettingValue/SetSettingValue'
 import { VerifyUserServerPassword } from '../VerifyUserServerPassword/VerifyUserServerPassword'
 import { Result } from '@standardnotes/domain-core'
+import { SECURITY_STEP_UP_UPDATE_REQUIRED_MESSAGE } from '../../Auth/SecurityStepUp'
 
 // Mock bcrypt
 jest.mock('bcryptjs', () => ({
@@ -79,6 +80,22 @@ describe('GenerateRecoveryCodes', () => {
     expect(verifyUserServerPassword.execute).not.toHaveBeenCalled()
     expect(setSettingValue.execute).toHaveBeenCalled()
     expect(result.getValue()).toEqual('RAND OMKE Y123')
+  })
+
+  it('does not generate or persist recovery codes for a legacy v1 token', async () => {
+    verifyUserServerPassword = new VerifyUserServerPassword(userRepository)
+
+    const result = await createUseCase().execute({
+      userUuid: '2221101c-1da9-4d2b-9b32-b8be2a8d1c82',
+      serverPassword: 'present-but-unsupported',
+      authTokenVersion: 1,
+      shouldVerifyUserServerPassword: true,
+    })
+
+    expect(result.isFailed()).toBe(true)
+    expect(result.getError()).toBe(SECURITY_STEP_UP_UPDATE_REQUIRED_MESSAGE)
+    expect(cryptoNode.generateRandomKey).not.toHaveBeenCalled()
+    expect(setSettingValue.execute).not.toHaveBeenCalled()
   })
 
   it('should fail when password is incorrect', async () => {

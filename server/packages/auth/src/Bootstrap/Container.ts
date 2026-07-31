@@ -163,6 +163,7 @@ import { VerifyPredicate } from '../Domain/UseCase/VerifyPredicate/VerifyPredica
 import { PredicateVerificationRequestedEventHandler } from '../Domain/Handler/PredicateVerificationRequestedEventHandler'
 import { SubscriptionInvitesController } from '../Controller/SubscriptionInvitesController'
 import { CreateCrossServiceToken } from '../Domain/UseCase/CreateCrossServiceToken/CreateCrossServiceToken'
+import { resolveCrossServiceTokenVersionConfig } from '../Domain/Auth/CrossServiceTokenVersionConfig'
 import { ProcessUserRequest } from '../Domain/UseCase/ProcessUserRequest/ProcessUserRequest'
 import { UserRequestsController } from '../Controller/UserRequestsController'
 import { EmailSubscriptionUnsubscribedEventHandler } from '../Domain/Handler/EmailSubscriptionUnsubscribedEventHandler'
@@ -2658,6 +2659,16 @@ export class ContainerConfigLoader {
           standardRedFeaturesMode,
         ),
       )
+    const crossServiceTokenVersionConfig = resolveCrossServiceTokenVersionConfig(
+      env.get('APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_2', true),
+      env.get('APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_3', true),
+    )
+    if (crossServiceTokenVersionConfig.defaultedConfigurationKeys.length > 0) {
+      logger.warn('Cross-service token version thresholds were missing or invalid; secure defaults were applied.', {
+        configurationKeys: crossServiceTokenVersionConfig.defaultedConfigurationKeys,
+      })
+    }
+
     container.bind<CreateCrossServiceToken>(TYPES.Auth_CreateCrossServiceToken).toConstantValue(
       new CreateCrossServiceToken(
         container.get<ProjectorInterface<User>>(TYPES.Auth_UserProjector),
@@ -2670,8 +2681,8 @@ export class ContainerConfigLoader {
         container.get<GetSubscriptionSetting>(TYPES.Auth_GetSubscriptionSetting),
         container.get<SharedVaultUserRepositoryInterface>(TYPES.Auth_SharedVaultUserRepository),
         container.get<GetActiveSessionsForUser>(TYPES.Auth_GetActiveSessionsForUser),
-        env.get('APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_2', true),
-        env.get('APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_3', true),
+        crossServiceTokenVersionConfig.version2Threshold,
+        crossServiceTokenVersionConfig.version3Threshold,
         container.get<SettingRepositoryInterface>(TYPES.Auth_SettingRepository),
         // Standard Red Notes: RBAC groups — tokens carry group-conferred roles
         // (direct ∪ group) so e.g. admin granted via a group works.

@@ -9,6 +9,7 @@ import { GenerateRecoveryCodes } from '../Domain/UseCase/GenerateRecoveryCodes/G
 import { GenerateRecoveryCodesRequestParams } from '../Infra/Http/Request/GenerateRecoveryCodesRequestParams'
 import { Logger } from 'winston'
 import { UserUpdateResponse } from '@standardnotes/api/dist/Domain/Response/User/UserUpdateResponse'
+import { SECURITY_STEP_UP_UPDATE_REQUIRED_MESSAGE } from '../Domain/Auth/SecurityStepUp'
 
 /**
  * DEPRECATED: This controller is deprecated and will be removed in the future.
@@ -39,11 +40,16 @@ export class AuthController {
     })
 
     if (result.isFailed()) {
+      const message =
+        result.getError() === SECURITY_STEP_UP_UPDATE_REQUIRED_MESSAGE
+          ? SECURITY_STEP_UP_UPDATE_REQUIRED_MESSAGE
+          : 'Could not generate recovery codes.'
+
       return {
         status: HttpStatusCode.BadRequest,
         data: {
           error: {
-            message: 'Could not generate recovery codes.',
+            message,
           },
         },
       }

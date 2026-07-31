@@ -40,6 +40,34 @@ import { HomeServerConfiguration } from './HomeServerConfiguration'
 import { WebSocketRedisBridge } from './WebSocketRedisBridge'
 import { HomeServerRuntime } from './HomeServerRuntime'
 
+export function buildHomeServerEnvironmentOverrides(
+  dataDirectoryPath: string,
+  configuredEnvironment: { [name: string]: string } | undefined,
+): { [name: string]: string } {
+  return {
+    DB_TYPE: 'sqlite',
+    CACHE_TYPE: 'memory',
+    DB_SQLITE_DATABASE_PATH: `${dataDirectoryPath}/database/home_server.sqlite`,
+    FILE_UPLOAD_PATH: `${dataDirectoryPath}/uploads`,
+    // Current Standard Red Notes clients support both password and TOTP
+    // step-up proof. Default bundled deployments to v3 tokens while allowing an
+    // operator's explicit, valid rollout thresholds to override these values.
+    APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_2: '0.0.0',
+    APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_3: '0.0.0',
+    // Standard Red Notes: default the CalDAV JSON stores under the data dir so
+    // published reminders + scoped tokens persist with the rest of the
+    // instance. The feature stays OFF until CALDAV_ENABLED=true.
+    CALDAV_DATA_PATH: `${dataDirectoryPath}/caldav`,
+    // Standard Red Notes: default the reminder-delivery JSON stores (published
+    // reminders + per-user delivery config) under the data dir so they persist
+    // with the rest of the instance. The feature stays OFF until
+    // REMINDER_DELIVERY_ENABLED=true.
+    REMINDER_DELIVERY_DATA_PATH: `${dataDirectoryPath}/reminder-delivery`,
+    ...configuredEnvironment,
+    MODE: 'home-server',
+  }
+}
+
 export class HomeServer implements HomeServerInterface {
   private readonly runtime = new HomeServerRuntime()
   private authService: AuthServiceInterface | undefined
@@ -66,23 +94,10 @@ export class HomeServer implements HomeServerInterface {
       const serviceContainer = new ServiceContainer()
       const directCallDomainEventPublisher = new DirectCallDomainEventPublisher()
 
-      const environmentOverrides = {
-        DB_TYPE: 'sqlite',
-        CACHE_TYPE: 'memory',
-        DB_SQLITE_DATABASE_PATH: `${configuration.dataDirectoryPath}/database/home_server.sqlite`,
-        FILE_UPLOAD_PATH: `${configuration.dataDirectoryPath}/uploads`,
-        // Standard Red Notes: default the CalDAV JSON stores under the data dir so
-        // published reminders + scoped tokens persist with the rest of the
-        // instance. The feature stays OFF until CALDAV_ENABLED=true.
-        CALDAV_DATA_PATH: `${configuration.dataDirectoryPath}/caldav`,
-        // Standard Red Notes: default the reminder-delivery JSON stores (published
-        // reminders + per-user delivery config) under the data dir so they persist
-        // with the rest of the instance. The feature stays OFF until
-        // REMINDER_DELIVERY_ENABLED=true.
-        REMINDER_DELIVERY_DATA_PATH: `${configuration.dataDirectoryPath}/reminder-delivery`,
-        ...configuration.environment,
-        MODE: 'home-server',
-      }
+      const environmentOverrides = buildHomeServerEnvironmentOverrides(
+        configuration.dataDirectoryPath,
+        configuration.environment,
+      )
 
       const env: Env = new Env(environmentOverrides)
       env.load()

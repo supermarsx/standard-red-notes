@@ -4,6 +4,7 @@ import { Uuid } from '@standardnotes/domain-core'
 import { User } from '../../User/User'
 import { UserRepositoryInterface } from '../../User/UserRepositoryInterface'
 import { VerifyUserServerPassword } from './VerifyUserServerPassword'
+import { SECURITY_STEP_UP_UPDATE_REQUIRED_MESSAGE } from '../../Auth/SecurityStepUp'
 
 // Mock bcrypt
 jest.mock('bcryptjs', () => ({
@@ -48,14 +49,15 @@ describe('VerifyUserServerPassword', () => {
       expect(userRepository.findOneByUuid).not.toHaveBeenCalled()
     })
 
-    it('should succeed without checking password if version is less than 2', async () => {
+    it('should require a client update instead of bypassing password proof for version 1', async () => {
       const result = await createUseCase().execute({
         user,
         serverPassword: 'any-password',
         authTokenVersion: 1,
       })
 
-      expect(result.isFailed()).toBeFalsy()
+      expect(result.isFailed()).toBeTruthy()
+      expect(result.getError()).toBe(SECURITY_STEP_UP_UPDATE_REQUIRED_MESSAGE)
       expect(mockBcryptCompare).not.toHaveBeenCalled()
       expect(userRepository.findOneByUuid).not.toHaveBeenCalled()
     })
@@ -74,13 +76,14 @@ describe('VerifyUserServerPassword', () => {
       expect(userRepository.findOneByUuid).not.toHaveBeenCalled()
     })
 
-    it('should succeed without checking password if version is undefined', async () => {
+    it('should require a client update instead of bypassing password proof for an unversioned token', async () => {
       const result = await createUseCase().execute({
         user,
         serverPassword: 'any-password',
       })
 
-      expect(result.isFailed()).toBeFalsy()
+      expect(result.isFailed()).toBeTruthy()
+      expect(result.getError()).toBe(SECURITY_STEP_UP_UPDATE_REQUIRED_MESSAGE)
       expect(mockBcryptCompare).not.toHaveBeenCalled()
       expect(userRepository.findOneByUuid).not.toHaveBeenCalled()
     })
@@ -100,6 +103,21 @@ describe('VerifyUserServerPassword', () => {
       expect(userRepository.findOneByUuid).not.toHaveBeenCalled()
     })
 
+    it('should fail with incorrect server password and version 3', async () => {
+      mockBcryptCompare.mockResolvedValue(false)
+
+      const result = await createUseCase().execute({
+        user,
+        serverPassword: 'wrong-password',
+        authTokenVersion: 3,
+      })
+
+      expect(result.isFailed()).toBeTruthy()
+      expect(result.getError()).toEqual('The password you entered is incorrect. Please try again.')
+      expect(mockBcryptCompare).toHaveBeenCalledWith('wrong-password', 'hashed-password')
+      expect(userRepository.findOneByUuid).not.toHaveBeenCalled()
+    })
+
     it('should fail when server password is not provided and version is 2', async () => {
       const result = await createUseCase().execute({
         user,
@@ -108,7 +126,7 @@ describe('VerifyUserServerPassword', () => {
       })
 
       expect(result.isFailed()).toBeTruthy()
-      expect(result.getError()).toEqual('Please update your application to the latest version.')
+      expect(result.getError()).toEqual(SECURITY_STEP_UP_UPDATE_REQUIRED_MESSAGE)
       expect(mockBcryptCompare).not.toHaveBeenCalled()
       expect(userRepository.findOneByUuid).not.toHaveBeenCalled()
     })
@@ -121,7 +139,7 @@ describe('VerifyUserServerPassword', () => {
       })
 
       expect(result.isFailed()).toBeTruthy()
-      expect(result.getError()).toEqual('Please update your application to the latest version.')
+      expect(result.getError()).toEqual(SECURITY_STEP_UP_UPDATE_REQUIRED_MESSAGE)
       expect(mockBcryptCompare).not.toHaveBeenCalled()
       expect(userRepository.findOneByUuid).not.toHaveBeenCalled()
     })
@@ -144,14 +162,15 @@ describe('VerifyUserServerPassword', () => {
       )
     })
 
-    it('should succeed without checking password if version is less than 2', async () => {
+    it('should require a client update before looking up the user for version 1', async () => {
       const result = await createUseCase().execute({
         userUuid: '00000000-0000-0000-0000-000000000000',
         serverPassword: 'any-password',
         authTokenVersion: 1,
       })
 
-      expect(result.isFailed()).toBeFalsy()
+      expect(result.isFailed()).toBeTruthy()
+      expect(result.getError()).toBe(SECURITY_STEP_UP_UPDATE_REQUIRED_MESSAGE)
       expect(mockBcryptCompare).not.toHaveBeenCalled()
       expect(userRepository.findOneByUuid).not.toHaveBeenCalled()
     })
@@ -227,7 +246,7 @@ describe('VerifyUserServerPassword', () => {
       })
 
       expect(result.isFailed()).toBeTruthy()
-      expect(result.getError()).toEqual('Please update your application to the latest version.')
+      expect(result.getError()).toEqual(SECURITY_STEP_UP_UPDATE_REQUIRED_MESSAGE)
       expect(mockBcryptCompare).not.toHaveBeenCalled()
       expect(userRepository.findOneByUuid).not.toHaveBeenCalled()
     })
