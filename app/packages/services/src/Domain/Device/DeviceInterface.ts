@@ -83,9 +83,9 @@ export interface DeviceInterface {
 
   openUrl(url: string): void
 
-  performSoftReset(): void
+  performSoftReset(): Promise<void>
 
-  performHardReset(): void
+  performHardReset(): Promise<void>
 
   isDeviceDestroyed(): boolean
 }

@@ -2,7 +2,6 @@ import {
   AbstractService,
   AppGroupManagedApplication,
   DeinitSource,
-  DeinitCallback,
   DeviceInterface,
   DeinitMode,
   InternalEventBus,
@@ -124,48 +123,72 @@ export class SNApplicationGroup<D extends DeviceInterface = DeviceInterface> ext
     await this.primaryApplication.user.signOut(false, DeinitSource.SignOutAll)
   }
 
-  onApplicationDeinit: DeinitCallback = (
+  onApplicationDeinit = async (
     application: AppGroupManagedApplication,
     mode: DeinitMode,
     source: DeinitSource,
-  ) => {
+  ): Promise<void> => {
     if (this.primaryApplication === application) {
       ;(this.primaryApplication as unknown) = undefined
     }
 
-    const performSyncronously = async () => {
-      if (source === DeinitSource.SignOut) {
-        void this.removeDescriptor(this.descriptorForApplication(application))
+    if (source === DeinitSource.SignOut) {
+      try {
+        await this.removeDescriptor(this.descriptorForApplication(application))
+      } catch (error) {
+        /** The in-memory descriptor is already removed; stale metadata must not strand the reset. */
+        console.error('Failed to persist descriptor removal before device reset.', error)
       }
+    }
 
-      const descriptors = this.getDescriptors()
+    const descriptors = this.getDescriptors()
 
-      if (descriptors.length === 0 || source === DeinitSource.SignOutAll) {
-        const identifiers = descriptors.map((d) => d.identifier)
+    if (descriptors.length === 0 || source === DeinitSource.SignOutAll) {
+      const identifiers = descriptors.map((d) => d.identifier)
 
-        this.descriptorRecord = {}
+      this.descriptorRecord = {}
 
+      try {
         const { killsApplication } = await this.device.clearAllDataFromDevice(identifiers)
 
         if (killsApplication) {
           return
         }
-      }
-
-      const device = this.device
-
-      void this.notifyEvent(ApplicationGroupEvent.DeviceWillRestart, { source, mode })
-
-      this.deinit()
-
-      if (mode === DeinitMode.Hard) {
-        device.performHardReset()
-      } else {
-        device.performSoftReset()
+      } catch (error) {
+        /**
+         * Fail stopped: reloading after an incomplete clear could rehydrate
+         * credentials that the user explicitly asked us to remove.
+         */
+        console.error('Failed to clear all device data before reset.', error)
+        return
       }
     }
 
-    void performSyncronously()
+    const device = this.device
+
+    /**
+     * Deinit callbacks are fire-and-forget, and a UI observer must never be
+     * able to block the security reset by hanging or rejecting.
+     */
+    void this.notifyEvent(ApplicationGroupEvent.DeviceWillRestart, { source, mode }).catch((error) => {
+      console.error('Failed to notify observers before device reset.', error)
+    })
+
+    try {
+      this.deinit()
+    } catch (error) {
+      console.error('Failed to deinitialize application group before device reset.', error)
+    }
+
+    try {
+      if (mode === DeinitMode.Hard) {
+        await device.performHardReset()
+      } else {
+        await device.performSoftReset()
+      }
+    } catch (error) {
+      console.error('Failed to reset device after application deinit.', error)
+    }
   }
 
   public setDescriptorAsPrimary(primaryDescriptor: ApplicationDescriptor) {

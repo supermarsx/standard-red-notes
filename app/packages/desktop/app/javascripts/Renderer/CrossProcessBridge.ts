@@ -24,7 +24,7 @@ export interface CrossProcessBridge extends FileBackupsDevice, DirectoryManagerI
   displayAppMenu(): void
   syncComponents(components: Component[]): void
   onSearch(text: string): void
-  destroyAllData(): void
+  destroyAllData(): Promise<void>
   askForMediaAccess(type: 'camera' | 'microphone'): Promise<boolean>
   isSpellCheckerManagerAvailable(): boolean
   getSpellCheckerLanguages(): SpellcheckerLanguage[]

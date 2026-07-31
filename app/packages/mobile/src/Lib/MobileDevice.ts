@@ -424,8 +424,10 @@ export class MobileDevice implements MobileDeviceInterface {
     return { killsApplication: false }
   }
 
-  performSoftReset() {
+  performSoftReset(): Promise<void> {
     this.notifyMobileDeviceEvent(MobileDeviceEvent.RequestsWebViewReload)
+
+    return Promise.resolve()
   }
 
   addMobileDeviceEventReceiver(handler: MobileDeviceEventHandler): () => void {
@@ -474,7 +476,9 @@ export class MobileDevice implements MobileDeviceInterface {
     }
   }
 
-  performHardReset() {}
+  performHardReset(): Promise<void> {
+    return this.performSoftReset()
+  }
 
   isDeviceDestroyed() {
     return false

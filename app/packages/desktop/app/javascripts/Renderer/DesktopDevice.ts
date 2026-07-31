@@ -135,7 +135,7 @@ export class DesktopDevice extends WebOrDesktopDevice implements DesktopDeviceIn
   async clearAllDataFromDevice(workspaceIdentifiers: string[]): Promise<{ killsApplication: boolean }> {
     await super.clearAllDataFromDevice(workspaceIdentifiers)
 
-    this.remoteBridge.destroyAllData()
+    await this.remoteBridge.destroyAllData()
 
     return { killsApplication: true }
   }
@@ -202,7 +202,7 @@ export class DesktopDevice extends WebOrDesktopDevice implements DesktopDeviceIn
   }
 
   async performHardReset(): Promise<void> {
-    console.error('performHardReset is not yet implemented')
+    return this.performSoftReset()
   }
 
   isDeviceDestroyed(): boolean {

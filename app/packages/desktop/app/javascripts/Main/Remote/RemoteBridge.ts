@@ -357,8 +357,10 @@ export class RemoteBridge implements CrossProcessBridge {
     this.search.findInPage(text)
   }
 
-  destroyAllData() {
+  destroyAllData(): Promise<void> {
     this.data.destroySensitiveDirectories()
+
+    return Promise.resolve()
   }
 
   displayAppMenu() {
