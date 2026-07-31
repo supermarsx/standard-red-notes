@@ -11,6 +11,7 @@ const defaultRepositoryRoot = path.resolve(path.dirname(scriptPath), "..");
 export const CI_CONTRACT_FILES = Object.freeze([
   ".github/workflows/ci.yml",
   "package.json",
+  "server/package.json",
   "docs/ci-production-gates.md",
   "docs/_data/navigation.yml",
 ]);
@@ -221,6 +222,21 @@ export function validateCiContract(files) {
     if (rootPackage.scripts?.[name] !== command) {
       errors.push(
         `package.json: ${name} script is not wired to the CI contract`,
+      );
+    }
+  }
+
+  const serverPackage = JSON.parse(files.get("server/package.json") ?? "{}");
+  const expectedServerFormatScripts = {
+    format:
+      'prettier --write "packages/*/src/**/*.{ts,tsx,js,json,md}" "packages/*/bin/**/*.{ts,tsx}"',
+    "format:check":
+      'prettier --check "packages/*/src/**/*.{ts,tsx,js,json,md}" "packages/*/bin/**/*.{ts,tsx}"',
+  };
+  for (const [name, command] of Object.entries(expectedServerFormatScripts)) {
+    if (serverPackage.scripts?.[name] !== command) {
+      errors.push(
+        `server/package.json: ${name} script must format package src and executable bin TypeScript sources`,
       );
     }
   }

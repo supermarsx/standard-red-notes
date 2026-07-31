@@ -108,3 +108,22 @@ test("root CI script wiring is enforced", () => {
     /ci:contracts script is not wired/,
   );
 });
+
+test("server format commands cannot omit executable package sources", () => {
+  for (const scriptName of ["format", "format:check"]) {
+    const files = withFileChanged("server/package.json", (content) => {
+      const packageJson = JSON.parse(content);
+      packageJson.scripts[scriptName] = packageJson.scripts[scriptName].replace(
+        ' "packages/*/bin/**/*.{ts,tsx}"',
+        "",
+      );
+      return JSON.stringify(packageJson);
+    });
+
+    assert.ok(
+      validateCiContract(files).includes(
+        `server/package.json: ${scriptName} script must format package src and executable bin TypeScript sources`,
+      ),
+    );
+  }
+});
