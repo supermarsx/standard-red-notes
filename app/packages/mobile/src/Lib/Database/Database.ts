@@ -59,7 +59,8 @@ export class Database implements DatabaseInterface {
 
   async deleteAll(): Promise<void> {
     const keys = await this.getAllKeys()
-    return this.multiDelete(keys)
+    await this.multiDelete(keys)
+    this.metadataStore.deleteAll()
   }
 
   async setItems(items: TransferPayload[]): Promise<void> {

@@ -416,7 +416,14 @@ export class MobileDevice implements MobileDeviceInterface {
       .catch(() => showAlert())
   }
 
-  async clearAllDataFromDevice(_workspaceIdentifiers: string[]): Promise<{ killsApplication: boolean }> {
+  async clearAllDataFromDevice(workspaceIdentifiers: string[]): Promise<{ killsApplication: boolean }> {
+    const identifiers = new Set([...workspaceIdentifiers, ...this.databases.keys()])
+
+    for (const identifier of identifiers) {
+      await this.findOrCreateDatabase(identifier).deleteAll()
+      this.databases.delete(identifier)
+    }
+
     await this.removeAllRawStorageValues()
 
     await this.clearRawKeychainValue()

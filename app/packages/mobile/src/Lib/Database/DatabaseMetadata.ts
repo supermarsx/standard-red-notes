@@ -29,6 +29,10 @@ export class DatabaseMetadata {
     this.flashStorage.delete(key)
   }
 
+  deleteAll() {
+    this.flashStorage.deleteAll()
+  }
+
   getAllMetadataItems(): DatabaseItemMetadata[] {
     const keys = this.flashStorage.getAllKeys()
     const metadataKeys = keys.filter((key) => key.endsWith('-Metadata'))
