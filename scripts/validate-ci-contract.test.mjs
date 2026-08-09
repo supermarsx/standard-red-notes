@@ -63,6 +63,19 @@ test("a missing backup and restore drill is rejected", () => {
   );
 });
 
+test("the disposable stack preserves server runtime logs on failure", () => {
+  const files = withFileChanged(".github/workflows/ci.yml", (content) =>
+    content.replace(
+      "docker compose cp server:/var/lib/server/logs/. artifacts/server-logs",
+      "echo server-runtime-logs-disabled",
+    ),
+  );
+  assert.match(
+    validateCiContract(files).join("\n"),
+    /container-smoke server runtime log diagnostics/,
+  );
+});
+
 test("the desktop lane cannot silently drop its virtual display", () => {
   const files = withFileChanged(".github/workflows/ci.yml", (content) =>
     content.replace(

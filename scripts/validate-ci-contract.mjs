@@ -228,6 +228,10 @@ export function validateCiContract(files) {
     ["yarn ops:backup-restore", "backup and restore drill"],
     ["yarn ci:docker-hardening", "live hardening validation"],
     [
+      "docker compose cp server:/var/lib/server/logs/. artifacts/server-logs",
+      "server runtime log diagnostics",
+    ],
+    [
       "docker compose down --volumes --remove-orphans",
       "isolated volume cleanup",
     ],

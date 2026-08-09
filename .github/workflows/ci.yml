@@ -304,10 +304,16 @@ jobs:
       - name: Collect stack diagnostics
         if: always()
         run: |
-          mkdir -p artifacts
+          mkdir -p artifacts/server-logs
           docker compose ps --all > artifacts/compose-ps.txt 2>&1
           docker compose logs --no-color > artifacts/compose.log 2>&1
           docker inspect "${COMPOSE_PROJECT_NAME}-app-1" "${COMPOSE_PROJECT_NAME}-server-1" > artifacts/container-inspect.json 2>&1
+          if ! docker compose exec -T server supervisorctl status > artifacts/supervisor-status.txt 2>&1; then
+            echo "server supervisor status was unavailable" >> artifacts/supervisor-status.txt
+          fi
+          if ! docker compose cp server:/var/lib/server/logs/. artifacts/server-logs > artifacts/server-log-copy.txt 2>&1; then
+            echo "server runtime logs were unavailable" >> artifacts/server-log-copy.txt
+          fi
       - name: Upload stack diagnostics
         if: always()
         uses: actions/upload-artifact@v7.0.1
