@@ -91,7 +91,7 @@ describe("MCP Compose deployment contract", () => {
       expect(exampleEnvironment, variable).toContain(`# ${variable}=`);
     }
     expect(exampleEnvironment).toMatch(
-      /Empty or short values make\s+# the MCP process fail closed/,
+      /Empty or short values make the MCP process fail\s+# closed/,
     );
     expect(exampleEnvironment).toContain(
       "MUST be different from MCP_HTTP_TOKEN",
