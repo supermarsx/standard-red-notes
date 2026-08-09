@@ -669,7 +669,7 @@ jobs:
               test "$(jq -r '.draft' <<< "$release")" = true
               current_body="$(jq -r '.body // ""' <<< "$release")"
               next_body="${current_body}"$'\n'"${asset_marker}"
-              release="$(gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" -f body="$next_body")"
+              release="$(gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" -f tag_name="$RELEASE_TAG" -f body="$next_body")"
             elif [ "$existing_asset_markers" -ne 1 ]; then
               echo "Reserved native draft asset manifest drifted from the exact local payload." >&2
               exit 1

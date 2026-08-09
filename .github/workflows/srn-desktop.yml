@@ -988,7 +988,7 @@ jobs:
           fi
           if [ "${#prior_asset_markers[@]}" -eq 0 ]; then
             body="${body}"$'\n'"${asset_marker}"
-            release="$(gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" -f body="$body")"
+            release="$(gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" -f tag_name="$RELEASE_TAG" -f body="$body")"
           fi
           jq -e --arg reservation "$reservation_marker" --arg assets "$asset_marker" '
             .draft == true and ((.body // "") | contains($reservation)) and ((.body // "") | contains($assets))

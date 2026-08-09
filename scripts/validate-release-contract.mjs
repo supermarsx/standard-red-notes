@@ -1810,6 +1810,10 @@ export function validateReleaseContract(files) {
         "sorted native asset-manifest entries",
       ],
       [
+        '-f tag_name="$RELEASE_TAG" -f body="$next_body"',
+        "draft tag preservation during native manifest binding",
+      ],
+      [
         'asset_manifest_sha="$(jq -cS . "$manifest_file" | sha256sum | cut -d \' \' -f 1)"',
         "canonical native asset-manifest SHA-256",
       ],
@@ -3879,6 +3883,10 @@ export function validateReleaseContract(files) {
     [
       "<!-- srn-desktop-release-assets manifest=${manifest_sha} -->",
       "desktop payload-manifest release marker",
+    ],
+    [
+      '-f tag_name="$RELEASE_TAG" -f body="$body"',
+      "draft tag preservation during desktop manifest binding",
     ],
     [
       "was already published; exact identity, inventory, checksums, and API digests verified.",

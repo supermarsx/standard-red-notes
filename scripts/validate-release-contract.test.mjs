@@ -819,6 +819,11 @@ test("native source, smoke, recovery, and asset-manifest gates remain fail-close
       /missing exactly one existing native asset-manifest marker/,
     ],
     [
+      '-f tag_name="$RELEASE_TAG" -f body="$next_body"',
+      '-f body="$next_body"',
+      /missing draft tag preservation during native manifest binding/,
+    ],
+    [
       '| [scan("<!-- srn-release-assets-sha256:[0-9a-f]{64} -->")] | length) == 1)',
       '| [scan("<!-- srn-release-assets-sha256:[0-9a-f]{64} -->")] | length) >= 1)',
       /missing exactly one total native asset-manifest marker/,
@@ -2180,6 +2185,20 @@ test("suppressed desktop checksum failures are rejected", () => {
   assert.match(
     validateReleaseContract(files).join("\n"),
     /desktop checksum failures must not be suppressed/,
+  );
+});
+
+test("desktop manifest binding preserves the reserved draft tag", () => {
+  const files = withFileChanged(desktopWorkflowFile, (content) =>
+    content.replace(
+      '-f tag_name="$RELEASE_TAG" -f body="$body"',
+      '-f body="$body"',
+    ),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /missing draft tag preservation during desktop manifest binding/,
   );
 });
 
