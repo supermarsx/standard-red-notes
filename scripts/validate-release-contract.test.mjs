@@ -543,7 +543,7 @@ test("native runtime, packager flags, and workflow actions cannot drift from the
     content
       .replace('embeddedRuntime: "node24"', 'embeddedRuntime: "node26"')
       .replace(
-        'flags: Object.freeze(["--no-signature"])',
+        'flags: Object.freeze(["--no-signature", "--fallback-to-source"])',
         "flags: Object.freeze([])",
       ),
   );

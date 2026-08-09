@@ -28,7 +28,7 @@ export const RELEASE_PACKAGING_CONTRACTS = Object.freeze({
       uploadArtifact: "v7.0.1",
     }),
     packager: Object.freeze({
-      flags: Object.freeze(["--no-signature"]),
+      flags: Object.freeze(["--no-signature", "--fallback-to-source"]),
       name: "@yao-pkg/pkg",
       version: "6.21.0",
     }),

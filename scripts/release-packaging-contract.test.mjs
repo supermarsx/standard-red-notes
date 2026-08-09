@@ -757,6 +757,7 @@ test("native fingerprint and executor share the exact canonical invocation plan"
           "--yes",
           "@yao-pkg/pkg@6.21.0",
           "--no-signature",
+          "--fallback-to-source",
           "--targets",
           `node24-${target.target}`,
           "--output",
