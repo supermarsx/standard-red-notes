@@ -96,6 +96,8 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7.0.0
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -183,6 +185,11 @@ jobs:
       - name: Install app dependencies immutably
         working-directory: app
         run: yarn install --immutable
+      - name: Configure Electron sandbox
+        working-directory: app
+        run: |
+          sudo chown root:root packages/desktop/node_modules/electron/dist/chrome-sandbox
+          sudo chmod 4755 packages/desktop/node_modules/electron/dist/chrome-sandbox
       - name: Build the desktop test artifact
         working-directory: app
         run: yarn build:desktop

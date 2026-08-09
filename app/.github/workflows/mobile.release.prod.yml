@@ -50,7 +50,7 @@ jobs:
             exit 1
           fi
           git fetch --no-tags --force origin refs/heads/main:refs/remotes/origin/main
-          protected_sha="$(git rev-parse refs/remotes/origin/main^{commit})"
+          protected_sha="$(git rev-parse "refs/remotes/origin/main^{commit}")"
           if [ "$GITHUB_REF" != refs/heads/main ] || [ "$GITHUB_SHA" != "$protected_sha" ]; then
             echo "Recovery publication must run from the fetched protected main head ($protected_sha), not $GITHUB_REF at $GITHUB_SHA." >&2
             exit 1

@@ -76,6 +76,47 @@ test("the desktop lane cannot silently drop its virtual display", () => {
   );
 });
 
+test("the check lane retains full history for provenance validation", () => {
+  const files = withFileChanged(".github/workflows/ci.yml", (content) =>
+    content.replace(/(  check:[\s\S]*?)(          fetch-depth: 0\n)/, "$1"),
+  );
+  assert.match(
+    validateCiContract(files).join("\n"),
+    /check full history checkout/,
+  );
+});
+
+test("the desktop lane configures the Electron sandbox safely", () => {
+  for (const [current, replacement, expected] of [
+    [
+      "sudo chown root:root packages/desktop/node_modules/electron/dist/chrome-sandbox",
+      "echo sandbox-owner-disabled",
+      /desktop-electron Electron sandbox ownership/,
+    ],
+    [
+      "sudo chmod 4755 packages/desktop/node_modules/electron/dist/chrome-sandbox",
+      "echo sandbox-mode-disabled",
+      /desktop-electron Electron sandbox mode/,
+    ],
+  ]) {
+    const files = withFileChanged(".github/workflows/ci.yml", (content) =>
+      content.replace(current, replacement),
+    );
+    assert.match(validateCiContract(files).join("\n"), expected);
+  }
+
+  const files = withFileChanged(".github/workflows/ci.yml", (content) =>
+    content.replace(
+      "          sudo chown root:root packages/desktop/node_modules/electron/dist/chrome-sandbox\n          sudo chmod 4755 packages/desktop/node_modules/electron/dist/chrome-sandbox",
+      "          sudo chmod 4755 packages/desktop/node_modules/electron/dist/chrome-sandbox\n          sudo chown root:root packages/desktop/node_modules/electron/dist/chrome-sandbox",
+    ),
+  );
+  assert.match(
+    validateCiContract(files).join("\n"),
+    /must set Electron sandbox ownership before mode/,
+  );
+});
+
 test("publishing permissions are rejected", () => {
   const files = withFileChanged(".github/workflows/ci.yml", (content) =>
     content.replace("contents: read", "contents: write"),

@@ -147,13 +147,17 @@ export function validateCiContract(files) {
     ["check", "yarn check"],
     ["build", "yarn build"],
   ]) {
-    requireJob(errors, workflow, job, [
+    const requirements = [
       ["run: yarn install --immutable", "immutable root install"],
       ["working-directory: app", "app workspace install"],
       ["working-directory: server", "server workspace install"],
       ["actions/cache@v6.1.0", "dependency cache"],
       [command, `${command} command`],
-    ]);
+    ];
+    if (job === "check") {
+      requirements.push(["fetch-depth: 0", "full history checkout"]);
+    }
+    requireJob(errors, workflow, job, requirements);
     const block = jobBlock(workflow, job);
     const immutableInstalls =
       block.split("run: yarn install --immutable").length - 1;
@@ -169,6 +173,14 @@ export function validateCiContract(files) {
     ["sudo apt-get install --yes xvfb", "Xvfb installation"],
     ["working-directory: app", "app workspace"],
     ["run: yarn install --immutable", "immutable app install"],
+    [
+      "sudo chown root:root packages/desktop/node_modules/electron/dist/chrome-sandbox",
+      "Electron sandbox ownership",
+    ],
+    [
+      "sudo chmod 4755 packages/desktop/node_modules/electron/dist/chrome-sandbox",
+      "Electron sandbox mode",
+    ],
     ["run: yarn build:desktop", "desktop artifact build"],
     ["xvfb-run --auto-servernum", "virtual display"],
     [
@@ -176,6 +188,18 @@ export function validateCiContract(files) {
       "guarded real Electron suite",
     ],
   ]);
+  const desktopElectronBlock = jobBlock(workflow, "desktop-electron");
+  const sandboxOwnership = desktopElectronBlock.indexOf("sudo chown root:root");
+  const sandboxMode = desktopElectronBlock.indexOf("sudo chmod 4755");
+  if (
+    sandboxOwnership >= 0 &&
+    sandboxMode >= 0 &&
+    sandboxOwnership > sandboxMode
+  ) {
+    errors.push(
+      `${file}: desktop-electron must set Electron sandbox ownership before mode`,
+    );
+  }
 
   requireJob(errors, workflow, "container-smoke", [
     ["hadolint/hadolint@sha256:", "pinned hadolint image"],

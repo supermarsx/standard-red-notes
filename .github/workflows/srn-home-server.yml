@@ -82,7 +82,7 @@ jobs:
         run: |
           set -euo pipefail
           git fetch --no-tags --force origin refs/heads/main:refs/remotes/origin/main
-          protected_sha="$(git rev-parse refs/remotes/origin/main^{commit})"
+          protected_sha="$(git rev-parse "refs/remotes/origin/main^{commit}")"
           test "$GITHUB_REF" = refs/heads/main
           test "$GITHUB_SHA" = "$protected_sha"
 

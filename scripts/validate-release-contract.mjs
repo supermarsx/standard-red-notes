@@ -1444,7 +1444,7 @@ export function validateReleaseContract(files) {
         "protected main source fetch",
       ],
       [
-        'protected_sha="$(git rev-parse refs/remotes/origin/main^{commit})"',
+        'protected_sha="$(git rev-parse "refs/remotes/origin/main^{commit}")"',
         "protected main commit resolution",
       ],
       ['test "$GITHUB_REF" = refs/heads/main', "exact main ref authorization"],
@@ -2275,7 +2275,7 @@ export function validateReleaseContract(files) {
       "protected OpenClaw main fetch",
     ],
     [
-      'protected_sha="$(git rev-parse refs/remotes/origin/main^{commit})"',
+      'protected_sha="$(git rev-parse "refs/remotes/origin/main^{commit}")"',
       "protected OpenClaw main commit",
     ],
     [
@@ -3425,7 +3425,7 @@ export function validateReleaseContract(files) {
       "protected desktop main fetch",
     ],
     [
-      'protected_sha="$(git rev-parse refs/remotes/origin/main^{commit})"',
+      'protected_sha="$(git rev-parse "refs/remotes/origin/main^{commit}")"',
       "protected desktop main commit",
     ],
     [
@@ -4167,7 +4167,7 @@ export function validateReleaseContract(files) {
       "protected desktop recovery main fetch",
     ],
     [
-      'protected_sha="$(git rev-parse refs/remotes/origin/main^{commit})"',
+      'protected_sha="$(git rev-parse "refs/remotes/origin/main^{commit}")"',
       "protected desktop recovery main commit",
     ],
     ['test "$GITHUB_REF" = refs/heads/main', "exact desktop recovery main ref"],
@@ -6035,9 +6035,14 @@ export function validateReleaseContract(files) {
 
   const normalCiFile = ".github/workflows/ci.yml";
   const normalCi = files.get(normalCiFile) ?? "";
+  const normalCiContracts = jobBlock(normalCi, "contracts");
   for (const [fragment, description] of [
     ["push:\n    branches: [main]", "main-push CI trigger"],
     ["pull_request:\n    branches: [main]", "main pull-request CI trigger"],
+  ]) {
+    requireFragment(errors, normalCiFile, normalCi, fragment, description);
+  }
+  for (const [fragment, description] of [
     ["fetch-depth: 0", "complete normal-CI report history checkout"],
     ["git fetch --force --tags origin", "complete normal-CI tag fetch"],
     ["--all-workspaces all", "normal-CI all-workspace analysis"],
@@ -6060,7 +6065,13 @@ export function validateReleaseContract(files) {
       "normal-CI release-policy dependency install",
     ],
   ]) {
-    requireFragment(errors, normalCiFile, normalCi, fragment, description);
+    requireFragment(
+      errors,
+      normalCiFile,
+      normalCiContracts,
+      fragment,
+      description,
+    );
   }
   if (countOccurrences(ci, RELEASE_POLICY_INSTALL_COMMAND) !== 1) {
     errors.push(
@@ -6090,7 +6101,6 @@ export function validateReleaseContract(files) {
       `${normalCiFile}: normal CI must emit exactly one all-workspace impact report`,
     );
   }
-  const normalCiContracts = jobBlock(normalCi, "contracts");
   requireAdjacentNamedSteps(
     errors,
     normalCiFile,

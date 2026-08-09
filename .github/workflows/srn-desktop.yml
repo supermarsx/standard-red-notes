@@ -95,7 +95,7 @@ jobs:
         run: |
           set -euo pipefail
           git fetch --no-tags --force origin refs/heads/main:refs/remotes/origin/main
-          protected_sha="$(git rev-parse refs/remotes/origin/main^{commit})"
+          protected_sha="$(git rev-parse "refs/remotes/origin/main^{commit}")"
           test "$GITHUB_REF" = refs/heads/main
           test "$GITHUB_SHA" = "$protected_sha"
 
@@ -258,7 +258,10 @@ jobs:
             version="${yy}.$((max + 1))"
             tag="${TOOL}-v${version}"
             name="${TOOL} ${version}"
-            ! git show-ref --verify --quiet "refs/tags/${tag}"
+            if git show-ref --verify --quiet "refs/tags/${tag}"; then
+              echo "Refusing to reserve existing tag ${tag}" >&2
+              exit 1
+            fi
             test "$(jq --arg tag "$tag" '[.[] | select(.tag_name == $tag)] | length' "$releases_file")" -eq 0
             created="$(gh api --method POST "repos/${GITHUB_REPOSITORY}/releases" \
               -f tag_name="$tag" \
@@ -647,7 +650,10 @@ jobs:
             and (.assets | length == 0)
           ' <<< "$release" >/dev/null
           git fetch --force --tags origin
-          ! git show-ref --verify --quiet "refs/tags/${RELEASE_TAG}"
+          if git show-ref --verify --quiet "refs/tags/${RELEASE_TAG}"; then
+            echo "Refusing to delete a draft whose tag exists: ${RELEASE_TAG}" >&2
+            exit 1
+          fi
           gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}"
           echo "Removed unchanged empty draft ${RELEASE_TAG}; no release was published." >> "$GITHUB_STEP_SUMMARY"
 
@@ -962,7 +968,10 @@ jobs:
             exit 0
           fi
 
-          ! git show-ref --verify --quiet "refs/tags/${RELEASE_TAG}"
+          if git show-ref --verify --quiet "refs/tags/${RELEASE_TAG}"; then
+            echo "Refusing to publish over existing tag ${RELEASE_TAG}" >&2
+            exit 1
+          fi
           test -d payload
           manifest_sha="$(verify_payload payload)"
           test "$manifest_sha" = "$EXPECTED_MANIFEST_SHA"

@@ -102,7 +102,7 @@ jobs:
           set -euo pipefail
           git fetch --force --tags origin
           git fetch --no-tags --force origin refs/heads/main:refs/remotes/origin/main
-          protected_sha="$(git rev-parse refs/remotes/origin/main^{commit})"
+          protected_sha="$(git rev-parse "refs/remotes/origin/main^{commit}")"
           authorize_tag() {
             tag="$1"
             [[ "$tag" =~ ^srn-openclaw-v[0-9A-Za-z.+-]+$ ]]
