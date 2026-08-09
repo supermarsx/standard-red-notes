@@ -4,7 +4,7 @@ import Redis from 'ioredis'
 import { SNSClient } from '@aws-sdk/client-sns'
 import axios, { AxiosInstance } from 'axios'
 import { SQSClient, SQSClientConfig } from '@aws-sdk/client-sqs'
-import { S3Client, S3ClientConfig } from '@aws-sdk/client-s3'
+import { S3Client } from '@aws-sdk/client-s3'
 import { Container } from 'inversify'
 import {
   DomainEventHandlerInterface,
@@ -17,6 +17,7 @@ import { UAParser } from 'ua-parser-js'
 type UAParserInstance = InstanceType<typeof UAParser>
 
 import { Env } from './Env'
+import { createS3ClientConfig } from './S3ClientConfigFactory'
 import TYPES from './Types'
 import { createSafeLogFormat } from '../Domain/Logging/SafeLog'
 import { AuthenticateUser } from '../Domain/UseCase/AuthenticateUser'
@@ -667,19 +668,12 @@ export class ContainerConfigLoader {
       const sqsClient = new SQSClient(sqsConfig)
       container.bind<SQSClient>(TYPES.Auth_SQS).toConstantValue(sqsClient)
 
-      const s3Config: S3ClientConfig = {
-        apiVersion: 'latest',
+      const s3Config = createS3ClientConfig({
+        accessKeyId: env.get('S3_ACCESS_KEY_ID', true),
+        endpoint: env.get('S3_ENDPOINT', true),
         region: env.get('S3_AWS_REGION', true),
-      }
-      if (env.get('S3_ENDPOINT', true)) {
-        s3Config.endpoint = env.get('S3_ENDPOINT', true)
-      }
-      if (env.get('S3_ACCESS_KEY_ID', true) && env.get('S3_SECRET_ACCESS_KEY', true)) {
-        s3Config.credentials = {
-          accessKeyId: env.get('S3_ACCESS_KEY_ID', true),
-          secretAccessKey: env.get('S3_SECRET_ACCESS_KEY', true),
-        }
-      }
+        secretAccessKey: env.get('S3_SECRET_ACCESS_KEY', true),
+      })
       container.bind<S3Client>(TYPES.Auth_S3).toConstantValue(new S3Client(s3Config))
 
       container
