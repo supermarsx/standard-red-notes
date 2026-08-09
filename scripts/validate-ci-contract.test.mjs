@@ -102,8 +102,23 @@ test("the check lane retains full history for provenance validation", () => {
 test("the desktop lane configures the Electron sandbox safely", () => {
   for (const [current, replacement, expected] of [
     [
-      "path.dirname(require('electron')), 'chrome-sandbox'",
-      "path.dirname(process.execPath), 'chrome-sandbox'",
+      "require.resolve('electron/package.json')",
+      "require.resolve('electron')",
+      /desktop-electron Electron package resolution/,
+    ],
+    [
+      'electron_dir="$(dirname "$electron_package")"',
+      'electron_dir="."',
+      /desktop-electron Electron package directory/,
+    ],
+    [
+      'node "$electron_dir/install.js"',
+      "echo electron-install-disabled",
+      /desktop-electron explicit Electron installation/,
+    ],
+    [
+      'sandbox="$electron_dir/dist/chrome-sandbox"',
+      'sandbox="$electron_dir/chrome-sandbox"',
       /desktop-electron Electron sandbox resolution/,
     ],
     [
@@ -134,6 +149,19 @@ test("the desktop lane configures the Electron sandbox safely", () => {
     /must set Electron sandbox ownership before mode/,
   );
 
+  const installAfterValidation = withFileChanged(
+    ".github/workflows/ci.yml",
+    (content) =>
+      content.replace(
+        '          yarn workspace @standardnotes/desktop node "$electron_dir/install.js"\n          sandbox="$electron_dir/dist/chrome-sandbox"\n          test -f "$sandbox"',
+        '          sandbox="$electron_dir/dist/chrome-sandbox"\n          test -f "$sandbox"\n          yarn workspace @standardnotes/desktop node "$electron_dir/install.js"',
+      ),
+  );
+  assert.match(
+    validateCiContract(installAfterValidation).join("\n"),
+    /must install Electron before validating its sandbox/,
+  );
+
   const buildStep = `      - name: Build the desktop test artifact
         working-directory: app
         run: yarn build:desktop
@@ -141,7 +169,10 @@ test("the desktop lane configures the Electron sandbox safely", () => {
   const sandboxStep = `      - name: Configure Electron sandbox
         working-directory: app
         run: |
-          sandbox="$(yarn workspace @standardnotes/desktop node -e "const path = require('node:path'); process.stdout.write(path.join(path.dirname(require('electron')), 'chrome-sandbox'))")"
+          electron_package="$(yarn workspace @standardnotes/desktop node -p "require.resolve('electron/package.json')")"
+          electron_dir="$(dirname "$electron_package")"
+          yarn workspace @standardnotes/desktop node "$electron_dir/install.js"
+          sandbox="$electron_dir/dist/chrome-sandbox"
           test -f "$sandbox"
           sudo chown root:root "$sandbox"
           sudo chmod 4755 "$sandbox"

@@ -191,7 +191,10 @@ jobs:
       - name: Configure Electron sandbox
         working-directory: app
         run: |
-          sandbox="$(yarn workspace @standardnotes/desktop node -e "const path = require('node:path'); process.stdout.write(path.join(path.dirname(require('electron')), 'chrome-sandbox'))")"
+          electron_package="$(yarn workspace @standardnotes/desktop node -p "require.resolve('electron/package.json')")"
+          electron_dir="$(dirname "$electron_package")"
+          yarn workspace @standardnotes/desktop node "$electron_dir/install.js"
+          sandbox="$electron_dir/dist/chrome-sandbox"
           test -f "$sandbox"
           sudo chown root:root "$sandbox"
           sudo chmod 4755 "$sandbox"

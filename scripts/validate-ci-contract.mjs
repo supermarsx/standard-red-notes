@@ -173,8 +173,14 @@ export function validateCiContract(files) {
     ["sudo apt-get install --yes xvfb", "Xvfb installation"],
     ["working-directory: app", "app workspace"],
     ["run: yarn install --immutable", "immutable app install"],
+    ["require.resolve('electron/package.json')", "Electron package resolution"],
     [
-      "path.dirname(require('electron')), 'chrome-sandbox'",
+      'electron_dir="$(dirname "$electron_package")"',
+      "Electron package directory",
+    ],
+    ['node "$electron_dir/install.js"', "explicit Electron installation"],
+    [
+      'sandbox="$electron_dir/dist/chrome-sandbox"',
       "Electron sandbox resolution",
     ],
     ['sudo chown root:root "$sandbox"', "Electron sandbox ownership"],
@@ -191,6 +197,10 @@ export function validateCiContract(files) {
   const sandboxOwnership = desktopElectronBlock.indexOf(
     'sudo chown root:root "$sandbox"',
   );
+  const electronInstall = desktopElectronBlock.indexOf(
+    'node "$electron_dir/install.js"',
+  );
+  const sandboxExistence = desktopElectronBlock.indexOf('test -f "$sandbox"');
   const sandboxMode = desktopElectronBlock.indexOf(
     'sudo chmod 4755 "$sandbox"',
   );
@@ -198,6 +208,15 @@ export function validateCiContract(files) {
   const electronSuite = desktopElectronBlock.indexOf(
     "yarn workspace @standardnotes/desktop ava:electron",
   );
+  if (
+    electronInstall >= 0 &&
+    sandboxExistence >= 0 &&
+    electronInstall > sandboxExistence
+  ) {
+    errors.push(
+      `${file}: desktop-electron must install Electron before validating its sandbox`,
+    );
+  }
   if (
     sandboxOwnership >= 0 &&
     sandboxMode >= 0 &&
