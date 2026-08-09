@@ -49,6 +49,7 @@ describe('SecureJsonFileStore', () => {
     const syncs: string[] = []
     const mkdirs: Array<{ directoryPath: string; mode: number }> = []
     const pathsByDescriptor = new Map<number, string>()
+    const privateDirectory = path.join(directoryPath, '.state.json.secure')
 
     const operations: Partial<SecureJsonFileOperations> = {
       platform: 'linux',
@@ -60,7 +61,11 @@ describe('SecureJsonFileStore', () => {
         opened.push({ filePath: candidate, flags, mode })
         const handle = await defaultSecureJsonFileOperations.open(candidate, flags, mode)
         pathsByDescriptor.set(handle.fd, candidate)
-        return instrumentHandle(candidate, handle, { handleChmods, skipChmod: true })
+        return instrumentHandle(candidate, handle, {
+          forceMode: candidate === privateDirectory ? 0o755 : undefined,
+          handleChmods,
+          skipChmod: true,
+        })
       },
       fsync: async (fileDescriptor) => {
         const candidate = pathsByDescriptor.get(fileDescriptor) ?? `unknown:${fileDescriptor}`
@@ -74,7 +79,6 @@ describe('SecureJsonFileStore', () => {
     const store = createStore({ operations })
     await store.write({ saved: 1 })
 
-    const privateDirectory = path.join(directoryPath, '.state.json.secure')
     expect(mkdirs).toContainEqual({ directoryPath: privateDirectory, mode: 0o700 })
     expect(handleChmods).toContainEqual({ filePath: privateDirectory, mode: 0o700 })
     expect(handleChmods.some((call) => call.filePath === directoryPath)).toBe(false)
