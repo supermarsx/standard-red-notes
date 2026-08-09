@@ -27,7 +27,7 @@
     "ci:verify-playwright": "node scripts/verify-playwright-report.mjs",
     "coverage": "yarn coverage:clean && yarn coverage:collect:app-core && yarn coverage:collect:app-web && yarn coverage:collect:server && yarn coverage:report",
     "coverage:clean": "node -e \"require('node:fs').rmSync('coverage/raw',{recursive:true,force:true})\"",
-    "coverage:collect:app-core": "node scripts/coverage.mjs collect --workspace-root app --output coverage/raw/app-core --jobs 2 --jest-workers 1 --workspace packages/api --workspace packages/encryption --workspace packages/features --workspace packages/filepicker --workspace packages/files --workspace packages/models --workspace packages/responses --workspace packages/services --workspace packages/snjs --workspace packages/ui-services --workspace packages/utils",
+    "coverage:collect:app-core": "node scripts/coverage.mjs collect --workspace-root app --output coverage/raw/app-core --jobs 2 --jest-workers 1 --workspace packages/api --workspace packages/encryption --workspace packages/features --workspace packages/filepicker --workspace packages/files --workspace packages/mobile --workspace packages/models --workspace packages/responses --workspace packages/services --workspace packages/snjs --workspace packages/ui-services --workspace packages/utils",
     "coverage:collect:app-web": "node scripts/coverage.mjs collect --workspace-root app --output coverage/raw/app-web --jobs 2 --jest-workers 1 --timeout-ms 1800000 --workspace packages/web",
     "coverage:collect:server": "node scripts/coverage.mjs collect --workspace-root server --output coverage/raw/server --jobs 2 --jest-workers 1 --timeout-ms 900000",
     "coverage:mcp": "yarn workspace @standard-red-notes/mcp coverage",

@@ -80,6 +80,7 @@ export const EXPECTED_COVERAGE_WORKSPACES = Object.freeze({
     { location: "packages/features", name: "@standardnotes/features" },
     { location: "packages/filepicker", name: "@standardnotes/filepicker" },
     { location: "packages/files", name: "@standardnotes/files" },
+    { location: "packages/mobile", name: "@standardnotes/mobile" },
     { location: "packages/models", name: "@standardnotes/models" },
     { location: "packages/responses", name: "@standardnotes/responses" },
     { location: "packages/services", name: "@standardnotes/services" },
@@ -108,6 +109,10 @@ export const EXPECTED_COVERAGE_WORKSPACES = Object.freeze({
       name: "@standardnotes/domain-events-infra",
     },
     { location: "packages/files", name: "@standardnotes/files-server" },
+    {
+      location: "packages/home-server",
+      name: "@standardnotes/home-server",
+    },
     {
       location: "packages/predicates",
       name: "@standardnotes/predicates",

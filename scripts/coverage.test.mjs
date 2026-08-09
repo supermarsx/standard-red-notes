@@ -32,6 +32,8 @@ import {
   workspaceSlug,
 } from "./coverage.mjs";
 
+const repositoryRoot = path.resolve(import.meta.dirname, "..");
+
 test("normalizes package Jest arguments to one bounded worker count", () => {
   const args = buildWorkspaceCoverageArgs(
     "coverage-output",
@@ -623,6 +625,48 @@ test("fails when discovered Jest workspaces drift from the expected inventory", 
       ],
     }),
     /inventory drift.*missing: packages\/expected.*unexpected: packages\/actual/,
+  );
+});
+
+test("canonical coverage inventories match the repository's current Jest workspaces", async () => {
+  for (const [scope, requiredLocation] of [
+    ["app", "packages/mobile"],
+    ["server", "packages/home-server"],
+  ]) {
+    const resolved = await resolveCoverageWorkspaces({
+      repoRoot: repositoryRoot,
+      workspaceRoot: scope,
+    });
+    const requiredWorkspace = resolved.workspaces.find(
+      ({ location }) => location === requiredLocation,
+    );
+
+    assert.ok(requiredWorkspace, `${scope}/${requiredLocation} is inventoried`);
+    assert.ok(
+      requiredWorkspace.sourceFiles.length > 0,
+      `${scope}/${requiredLocation} contributes eligible source`,
+    );
+  }
+});
+
+test("coverage shard commands select the complete canonical inventory exactly once", async () => {
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(repositoryRoot, "package.json"), "utf8"),
+  );
+  const selectors = (script) =>
+    [...script.matchAll(/--workspace\s+(\S+)/g)].map((match) => match[1]);
+  const appCore = selectors(manifest.scripts["coverage:collect:app-core"]);
+  const appWeb = selectors(manifest.scripts["coverage:collect:app-web"]);
+  const expectedApp = EXPECTED_COVERAGE_WORKSPACES.app.map(
+    ({ location }) => location,
+  );
+
+  assert.deepEqual([...appCore, ...appWeb].sort(), [...expectedApp].sort());
+  assert.equal(new Set([...appCore, ...appWeb]).size, expectedApp.length);
+  assert.deepEqual(appWeb, ["packages/web"]);
+  assert.doesNotMatch(
+    manifest.scripts["coverage:collect:server"],
+    /--workspace\s+/,
   );
 });
 
@@ -1377,16 +1421,16 @@ test("merges the complete app-core, app-web, and server manifest union without a
   });
   const metrics = computeCoverageMetrics(coverageMap);
 
-  assert.equal(appCore.manifest.selected.length, 11);
+  assert.equal(appCore.manifest.selected.length, 12);
   assert.equal(appWeb.manifest.selected.length, 1);
-  assert.equal(server.manifest.selected.length, 17);
-  assert.equal(reportCount, 29);
-  assert.equal(coverageMap.files().length, 29);
+  assert.equal(server.manifest.selected.length, 18);
+  assert.equal(reportCount, 31);
+  assert.equal(coverageMap.files().length, 31);
   assert.deepEqual(scopes, ["app", "server"]);
-  assert.deepEqual(metrics.statements, { covered: 4, total: 58, pct: 6.9 });
-  assert.deepEqual(metrics.lines, { covered: 4, total: 58, pct: 6.9 });
-  assert.deepEqual(metrics.functions, { covered: 2, total: 29, pct: 6.9 });
-  assert.deepEqual(metrics.branches, { covered: 3, total: 58, pct: 5.2 });
+  assert.deepEqual(metrics.statements, { covered: 4, total: 62, pct: 6.5 });
+  assert.deepEqual(metrics.lines, { covered: 4, total: 62, pct: 6.5 });
+  assert.deepEqual(metrics.functions, { covered: 2, total: 31, pct: 6.5 });
+  assert.deepEqual(metrics.branches, { covered: 3, total: 62, pct: 4.8 });
 });
 
 test("rejects a workspace missing from the selected manifest union", async (t) => {

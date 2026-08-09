@@ -85,17 +85,16 @@ workspace with no eligible source must carry an explicit `emptySourceReason`;
 an undocumented empty workspace fails.
 
 The current app scope is `api`, `encryption`, `features`, `filepicker`, `files`,
-`models`, `responses`, `services`, `snjs`, `ui-services`, `utils`, and `web`.
+`mobile`, `models`, `responses`, `services`, `snjs`, `ui-services`, `utils`, and `web`.
 The current server scope is `analytics`, `api-gateway`, `auth`, `common`,
-`domain-core`, `domain-events`, `domain-events-infra`, `files`, `predicates`,
-`revisions`, `scheduler`, `security`, `settings`, `sncrypto-node`,
+`domain-core`, `domain-events`, `domain-events-infra`, `files`, `home-server`,
+`predicates`, `revisions`, `scheduler`, `security`, `settings`, `sncrypto-node`,
 `syncing-server`, `time`, and `websockets`.
 
 The source denominator excludes non-Jest app workspaces (`clipper`, `desktop`,
-`filepicker/example`, `icons`, `mobile`, `releases`, `sncrypto-common`,
-`sncrypto-web`, `styles`, and `toast`), non-Jest server workspaces (`grpc`,
-`home-server`, and `websocket-gateway`), and the root `mcp` and `openclaw`
-workspaces.
+`filepicker/example`, `icons`, `releases`, `sncrypto-common`, `sncrypto-web`,
+`styles`, and `toast`), non-Jest server workspaces (`grpc` and
+`websocket-gateway`), and the root `mcp` and `openclaw` workspaces.
 
 The excluded non-Jest suites are the Playwright suites under `e2e/`; desktop's
 AVA suite; the app and `sncrypto-web` Mocha/Chai browser harnesses; the
@@ -137,8 +136,9 @@ limits the pool to two active Jest processes and each Jest process to
 
 `yarn coverage` writes ignored reports and the JSON summary to `coverage/`. The
 tracked `docs/assets/coverage.svg` contains the most recently verified numeric
-baseline, currently **40.7%**. A local full run overwrites it, and CI regenerates
-it before building and publishing the Pages site.
+baseline, currently **40.7%** from the preceding inventory. A local full run
+recalculates and overwrites it, and CI regenerates it before building and
+publishing the Pages site.
 
 Aggregation uses `istanbul-lib-coverage`. Every source path is canonicalized to
 one repository-relative path, and any source overlap is rejected before file
@@ -151,8 +151,8 @@ branches, functions, and lines.
 
 In CI, three isolated matrix entries run in parallel after installing the root
 instrumentation tooling and the selected scope's own lockfile. `app-core`
-collects the 11 expected app workspaces other than `packages/web`; `app-web`
-collects only `packages/web`; and `server` collects all 16 expected server
+collects the 12 expected app workspaces other than `packages/web`; `app-web`
+collects only `packages/web`; and `server` collects all 18 expected server
 workspaces. Each entry uploads its completed manifest and reports as a separate
 artifact. The build job downloads all three artifacts and validates their union
 before aggregation, badge generation, and the Jekyll build. Pull requests and
