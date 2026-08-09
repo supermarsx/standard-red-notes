@@ -1863,6 +1863,33 @@ test("desktop updater metadata, architecture, recovery, and environment guards c
 
   files = withFileChanged(".github/workflows/srn-desktop.yml", (content) =>
     content.replace(
+      "-name 'latest*.yml'",
+      "\\( -name '*.yml' -o -name '*.yaml' \\)",
+    ),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /missing updater-only desktop metadata inventory/,
+  );
+
+  files = withFileChanged(".github/workflows/srn-desktop.yml", (content) =>
+    content.replaceAll("linux-x86_64.AppImage", "linux-x64.AppImage"),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /missing electron-builder Linux x64 AppImage filename|missing electron-builder Linux x64 AppImage architecture binding/,
+  );
+
+  files = withFileChanged(".github/workflows/srn-desktop.yml", (content) =>
+    content.replaceAll("linux-amd64.deb", "linux-x64.deb"),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /missing electron-builder Linux x64 Debian filename|missing electron-builder Linux x64 Debian architecture binding/,
+  );
+
+  files = withFileChanged(".github/workflows/srn-desktop.yml", (content) =>
+    content.replace(
       "ruby app/scripts/verify-desktop-updater-metadata.rb",
       "ruby -c app/scripts/verify-desktop-updater-metadata.rb",
     ),

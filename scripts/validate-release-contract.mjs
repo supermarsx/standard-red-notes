@@ -3669,6 +3669,18 @@ export function validateReleaseContract(files) {
       ["find dist -type f -name app.asar", "actual packaged asar discovery"],
       ["yarn exec asar extract", "packaged desktop runtime extraction"],
       [
+        "find dist -maxdepth 1 -type f -name 'latest*.yml' -printf '%f\\n'",
+        "updater-only desktop metadata inventory",
+      ],
+      [
+        '"standard-red-notes-${APP_VERSION}-linux-x86_64.AppImage"',
+        "electron-builder Linux x64 AppImage filename",
+      ],
+      [
+        '"standard-red-notes-${APP_VERSION}-linux-amd64.deb"',
+        "electron-builder Linux x64 Debian filename",
+      ],
+      [
         "node ../../../scripts/release-packaging-contract.mjs",
         "canonical desktop packaging fingerprint",
       ],
@@ -3808,6 +3820,14 @@ export function validateReleaseContract(files) {
     ["=appimage-arm64", "AppImage ARM64 architecture verification"],
     ["=deb-x64", "Debian x64 architecture verification"],
     ["=deb-arm64", "Debian ARM64 architecture verification"],
+    [
+      '"standard-red-notes-${APP_VERSION}-linux-x86_64.AppImage=appimage-x64"',
+      "electron-builder Linux x64 AppImage architecture binding",
+    ],
+    [
+      '"standard-red-notes-${APP_VERSION}-linux-amd64.deb=deb-x64"',
+      "electron-builder Linux x64 Debian architecture binding",
+    ],
   ]) {
     requireFragment(
       errors,

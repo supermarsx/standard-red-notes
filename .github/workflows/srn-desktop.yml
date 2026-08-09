@@ -480,8 +480,8 @@ jobs:
             linux-x64)
               metadata=latest-linux.yml
               required=(
-                "standard-red-notes-${APP_VERSION}-linux-x64.AppImage"
-                "standard-red-notes-${APP_VERSION}-linux-x64.deb"
+                "standard-red-notes-${APP_VERSION}-linux-x86_64.AppImage"
+                "standard-red-notes-${APP_VERSION}-linux-amd64.deb"
               )
               fingerprints=(srn-desktop-linux-x64.fingerprint)
               ;;
@@ -496,7 +496,7 @@ jobs:
             *) echo "Unknown desktop matrix label: $MATRIX_LABEL" >&2; exit 1 ;;
           esac
 
-          mapfile -t metadata_files < <(find dist -maxdepth 1 -type f \( -name '*.yml' -o -name '*.yaml' \) -printf '%f\n')
+          mapfile -t metadata_files < <(find dist -maxdepth 1 -type f -name 'latest*.yml' -printf '%f\n')
           test "${#metadata_files[@]}" -eq 1
           test "${metadata_files[0]}" = "$metadata"
           test -s "dist/${metadata}"
@@ -747,8 +747,8 @@ jobs:
             "standard-red-notes-${APP_VERSION}-win-arm64.exe" \
             srn-desktop-windows-x64.fingerprint srn-desktop-windows-arm64.fingerprint
           validate_source staged/linux-x64 latest-linux.yml \
-            "standard-red-notes-${APP_VERSION}-linux-x64.AppImage" \
-            "standard-red-notes-${APP_VERSION}-linux-x64.deb" \
+            "standard-red-notes-${APP_VERSION}-linux-x86_64.AppImage" \
+            "standard-red-notes-${APP_VERSION}-linux-amd64.deb" \
             srn-desktop-linux-x64.fingerprint
           validate_source staged/linux-arm64 latest-linux-arm64.yml \
             "standard-red-notes-${APP_VERSION}-linux-arm64.AppImage" \
@@ -783,11 +783,11 @@ jobs:
             --metadata staged/linux-x64/latest-linux.yml \
             --source-dir staged/linux-x64 \
             --expected-version "$APP_VERSION" \
-            --allow "standard-red-notes-${APP_VERSION}-linux-x64.AppImage" \
-            --allow "standard-red-notes-${APP_VERSION}-linux-x64.deb" \
+            --allow "standard-red-notes-${APP_VERSION}-linux-x86_64.AppImage" \
+            --allow "standard-red-notes-${APP_VERSION}-linux-amd64.deb" \
             --allow srn-desktop-linux-x64.fingerprint \
-            --architecture "standard-red-notes-${APP_VERSION}-linux-x64.AppImage=appimage-x64" \
-            --architecture "standard-red-notes-${APP_VERSION}-linux-x64.deb=deb-x64"
+            --architecture "standard-red-notes-${APP_VERSION}-linux-x86_64.AppImage=appimage-x64" \
+            --architecture "standard-red-notes-${APP_VERSION}-linux-amd64.deb=deb-x64"
           ruby app/scripts/verify-desktop-updater-metadata.rb \
             --metadata staged/linux-arm64/latest-linux-arm64.yml \
             --source-dir staged/linux-arm64 \
