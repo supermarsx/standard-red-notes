@@ -1,19 +1,43 @@
-<aside class="docs-sidebar" aria-label="Documentation navigation" data-docs-sidebar>
+<aside
+  class="docs-sidebar"
+  aria-label="Documentation navigation"
+  data-docs-sidebar
+>
   <div class="docs-brand-row">
     <a class="docs-brand" href="{{ '/' | relative_url }}">
-      <img src="{{ '/assets/icon.svg' | relative_url }}" alt="" width="32" height="32" />
+      <img
+        src="{{ '/assets/icon.svg' | relative_url }}"
+        alt=""
+        width="32"
+        height="32"
+      />
       <span>Standard Red Notes</span>
     </a>
-    <button
-      class="docs-nav-toggle"
-      type="button"
-      aria-controls="docs-sidebar-content"
-      aria-expanded="false"
-      data-docs-nav-toggle
-    >
-      <span aria-hidden="true">☰</span>
-      <span data-docs-nav-toggle-label>Browse docs</span>
-    </button>
+    <div class="docs-header-actions">
+      <button
+        class="docs-theme-toggle"
+        type="button"
+        data-docs-theme-toggle
+        aria-label="Switch to light theme"
+        title="Switch to light theme"
+        hidden
+      >
+        <span aria-hidden="true" data-docs-theme-icon>☀</span>
+        <span class="visually-hidden" data-docs-theme-label
+          >Switch to light theme</span
+        >
+      </button>
+      <button
+        class="docs-nav-toggle"
+        type="button"
+        aria-controls="docs-sidebar-content"
+        aria-expanded="false"
+        data-docs-nav-toggle
+      >
+        <span aria-hidden="true">☰</span>
+        <span data-docs-nav-toggle-label>Browse docs</span>
+      </button>
+    </div>
   </div>
 
   {% include search.html %}
@@ -22,10 +46,10 @@
     <div data-docs-page-toc></div>
     <nav aria-label="All documentation">
       {% for group in site.data.navigation %}
-        <section>
-          <h2>{{ group.title }}</h2>
-          {% include navigation-items.html items=group.items level=0 %}
-        </section>
+      <section>
+        <h2>{{ group.title }}</h2>
+        {% include navigation-items.html items=group.items level=0 %}
+      </section>
       {% endfor %}
     </nav>
   </div>

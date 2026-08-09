@@ -94,6 +94,8 @@ jobs:
         run: yarn docs:links
       - name: Validate Mermaid diagrams
         run: yarn docs:mermaid
+      - name: Test documentation theme and browser controls
+        run: yarn docs:ui:test
       - uses: actions/configure-pages@v6
       - uses: actions/jekyll-build-pages@v1
         with:

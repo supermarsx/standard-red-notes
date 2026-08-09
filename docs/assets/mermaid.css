@@ -2,7 +2,10 @@
   margin: 1.5rem 0;
   max-width: 100%;
   overflow-x: auto;
-  padding: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  padding: 1rem;
   text-align: center;
 }
 

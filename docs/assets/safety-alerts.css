@@ -1,7 +1,7 @@
 .safety-alert {
-  --alert-accent: #8f5b00;
-  --alert-bg: #fff8df;
-  --alert-border: #e3c778;
+  --alert-accent: #f4c66a;
+  --alert-bg: #211a0b;
+  --alert-border: #705a2a;
   align-items: flex-start;
   background: var(--alert-bg);
   border: 1px solid var(--alert-border);
@@ -15,28 +15,28 @@
 }
 
 .safety-alert--danger {
-  --alert-accent: #a31320;
-  --alert-bg: #fff0f1;
-  --alert-border: #e8aeb4;
+  --alert-accent: #ff8792;
+  --alert-bg: #251114;
+  --alert-border: #71313a;
 }
 
 .safety-alert--trust {
-  --alert-accent: #315d75;
-  --alert-bg: #eef7fb;
-  --alert-border: #accfdf;
+  --alert-accent: #82c9ee;
+  --alert-bg: #0d1c24;
+  --alert-border: #315c73;
 }
 
 .safety-alert--info {
-  --alert-accent: #3c5f2f;
-  --alert-bg: #f1f8ed;
-  --alert-border: #b7d2a9;
+  --alert-accent: #93d77f;
+  --alert-bg: #10200e;
+  --alert-border: #416637;
 }
 
 .safety-alert__icon {
   align-items: center;
   background: var(--alert-accent);
   border-radius: 999px;
-  color: #fff;
+  color: #171213;
   display: inline-flex;
   flex: 0 0 1.7rem;
   font-size: 0.9rem;
@@ -80,31 +80,89 @@
 }
 
 .compatibility-badge--confirmed {
+  background: #172713;
+  color: #a8e594;
+}
+
+.compatibility-badge--conditional {
+  background: #2a210e;
+  color: #f4cf78;
+}
+
+.compatibility-badge--export {
+  background: #101f31;
+  color: #9bc7ff;
+}
+
+.compatibility-badge--fork {
+  background: #21182f;
+  color: #c9a9ef;
+}
+
+.compatibility-badge--unverified {
+  background: #232326;
+  color: #c6c7cb;
+}
+
+.compatibility-badge--incompatible {
+  background: #2b1317;
+  color: #ff9ca5;
+}
+
+:root[data-theme="light"] .safety-alert {
+  --alert-accent: #8f5b00;
+  --alert-bg: #fff8df;
+  --alert-border: #e3c778;
+}
+
+:root[data-theme="light"] .safety-alert--danger {
+  --alert-accent: #a31320;
+  --alert-bg: #fff0f1;
+  --alert-border: #e8aeb4;
+}
+
+:root[data-theme="light"] .safety-alert--trust {
+  --alert-accent: #315d75;
+  --alert-bg: #eef7fb;
+  --alert-border: #accfdf;
+}
+
+:root[data-theme="light"] .safety-alert--info {
+  --alert-accent: #3c5f2f;
+  --alert-bg: #f1f8ed;
+  --alert-border: #b7d2a9;
+}
+
+:root[data-theme="light"] .safety-alert__icon {
+  color: #fff;
+}
+
+:root[data-theme="light"] .compatibility-badge--confirmed {
   background: #edf8ea;
   color: #315f24;
 }
 
-.compatibility-badge--conditional {
+:root[data-theme="light"] .compatibility-badge--conditional {
   background: #fff8df;
   color: #765000;
 }
 
-.compatibility-badge--export {
+:root[data-theme="light"] .compatibility-badge--export {
   background: #eef4ff;
   color: #2f568a;
 }
 
-.compatibility-badge--fork {
+:root[data-theme="light"] .compatibility-badge--fork {
   background: #f4eeff;
   color: #63449a;
 }
 
-.compatibility-badge--unverified {
+:root[data-theme="light"] .compatibility-badge--unverified {
   background: #f2f4f7;
   color: #4b5563;
 }
 
-.compatibility-badge--incompatible {
+:root[data-theme="light"] .compatibility-badge--incompatible {
   background: #fff0f1;
   color: #8b1722;
 }
@@ -117,10 +175,62 @@
 }
 
 @media print {
-  .safety-alert,
+  .safety-alert {
+    --alert-accent: #8f5b00;
+    --alert-bg: transparent;
+    --alert-border: #8f5b00;
+    background: transparent;
+    break-inside: avoid;
+  }
+
+  .safety-alert--danger {
+    --alert-accent: #a31320;
+    --alert-border: #a31320;
+  }
+
+  .safety-alert--trust {
+    --alert-accent: #315d75;
+    --alert-border: #315d75;
+  }
+
+  .safety-alert--info {
+    --alert-accent: #3c5f2f;
+    --alert-border: #3c5f2f;
+  }
+
+  .safety-alert__icon {
+    background: transparent;
+    border: 1px solid currentcolor;
+    color: var(--alert-accent);
+  }
+
   .compatibility-badge {
     background: transparent;
     break-inside: avoid;
+  }
+
+  .compatibility-badge--confirmed {
+    color: #315f24;
+  }
+
+  .compatibility-badge--conditional {
+    color: #765000;
+  }
+
+  .compatibility-badge--export {
+    color: #2f568a;
+  }
+
+  .compatibility-badge--fork {
+    color: #63449a;
+  }
+
+  .compatibility-badge--unverified {
+    color: #4b5563;
+  }
+
+  .compatibility-badge--incompatible {
+    color: #8b1722;
   }
 }
 

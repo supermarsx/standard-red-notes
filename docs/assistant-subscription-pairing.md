@@ -1,5 +1,5 @@
 ---
-layout: docs
+layout: default
 title: ChatGPT and Codex subscription pairing
 description: Pair, refresh, inspect, and revoke encrypted server-held subscription credentials safely.
 ---

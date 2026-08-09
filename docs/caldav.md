@@ -1,5 +1,5 @@
 ---
-layout: docs
+layout: default
 title: CalDAV
 description: Publish an explicit plaintext to-do calendar, issue scoped client tokens, and operate the read-only DAV surface safely.
 ---
