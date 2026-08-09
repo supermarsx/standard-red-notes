@@ -174,13 +174,12 @@ export function validateCiContract(files) {
     ["working-directory: app", "app workspace"],
     ["run: yarn install --immutable", "immutable app install"],
     [
-      "sudo chown root:root packages/desktop/node_modules/electron/dist/chrome-sandbox",
-      "Electron sandbox ownership",
+      "path.dirname(require('electron')), 'chrome-sandbox'",
+      "Electron sandbox resolution",
     ],
-    [
-      "sudo chmod 4755 packages/desktop/node_modules/electron/dist/chrome-sandbox",
-      "Electron sandbox mode",
-    ],
+    ['sudo chown root:root "$sandbox"', "Electron sandbox ownership"],
+    ['sudo chmod 4755 "$sandbox"', "Electron sandbox mode"],
+    ["root:root 4755", "verified Electron sandbox metadata"],
     ["run: yarn build:desktop", "desktop artifact build"],
     ["xvfb-run --auto-servernum", "virtual display"],
     [
@@ -189,8 +188,12 @@ export function validateCiContract(files) {
     ],
   ]);
   const desktopElectronBlock = jobBlock(workflow, "desktop-electron");
-  const sandboxOwnership = desktopElectronBlock.indexOf("sudo chown root:root");
-  const sandboxMode = desktopElectronBlock.indexOf("sudo chmod 4755");
+  const sandboxOwnership = desktopElectronBlock.indexOf(
+    'sudo chown root:root "$sandbox"',
+  );
+  const sandboxMode = desktopElectronBlock.indexOf(
+    'sudo chmod 4755 "$sandbox"',
+  );
   if (
     sandboxOwnership >= 0 &&
     sandboxMode >= 0 &&

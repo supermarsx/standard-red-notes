@@ -102,12 +102,17 @@ test("the check lane retains full history for provenance validation", () => {
 test("the desktop lane configures the Electron sandbox safely", () => {
   for (const [current, replacement, expected] of [
     [
-      "sudo chown root:root packages/desktop/node_modules/electron/dist/chrome-sandbox",
+      "path.dirname(require('electron')), 'chrome-sandbox'",
+      "path.dirname(process.execPath), 'chrome-sandbox'",
+      /desktop-electron Electron sandbox resolution/,
+    ],
+    [
+      'sudo chown root:root "$sandbox"',
       "echo sandbox-owner-disabled",
       /desktop-electron Electron sandbox ownership/,
     ],
     [
-      "sudo chmod 4755 packages/desktop/node_modules/electron/dist/chrome-sandbox",
+      'sudo chmod 4755 "$sandbox"',
       "echo sandbox-mode-disabled",
       /desktop-electron Electron sandbox mode/,
     ],
@@ -120,8 +125,8 @@ test("the desktop lane configures the Electron sandbox safely", () => {
 
   const files = withFileChanged(".github/workflows/ci.yml", (content) =>
     content.replace(
-      "          sudo chown root:root packages/desktop/node_modules/electron/dist/chrome-sandbox\n          sudo chmod 4755 packages/desktop/node_modules/electron/dist/chrome-sandbox",
-      "          sudo chmod 4755 packages/desktop/node_modules/electron/dist/chrome-sandbox\n          sudo chown root:root packages/desktop/node_modules/electron/dist/chrome-sandbox",
+      '          sudo chown root:root "$sandbox"\n          sudo chmod 4755 "$sandbox"',
+      '          sudo chmod 4755 "$sandbox"\n          sudo chown root:root "$sandbox"',
     ),
   );
   assert.match(
