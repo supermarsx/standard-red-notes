@@ -2009,6 +2009,18 @@ test("OpenClaw retry recovery uses the central full SemVer parser", () => {
 // root OS/arch installer matrix must still gate GitHub publication completely.
 const desktopWorkflowFile = ".github/workflows/srn-desktop.yml";
 
+test("desktop runtime fingerprinting declares its ASAR tool directly", () => {
+  const files = withFileChanged(
+    "app/packages/desktop/package.json",
+    (content) => content.replace('    "@electron/asar": "3.4.1",\n', ""),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /missing exact direct @electron\/asar 3\.4\.1 devDependency/,
+  );
+});
+
 test("the desktop pipeline carries no Snap target", () => {
   const workflow = baseline.get(desktopWorkflowFile);
 

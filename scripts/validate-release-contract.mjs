@@ -25,6 +25,7 @@ export const RELEASE_CONTRACT_FILES = Object.freeze([
   "app/.github/workflows/desktop.release.prod.yml",
   "app/.github/workflows/desktop.release.reuse.yml",
   "app/.github/workflows/mobile.release.prod.yml",
+  "app/packages/desktop/package.json",
   "app/.github/upstream-workflows-disabled/clipper.release.prod.yml",
   "app/.github/upstream-workflows-disabled/git-sync.yml",
   "app/.github/upstream-workflows-disabled/ios.testflight.yml",
@@ -3385,6 +3386,18 @@ export function validateReleaseContract(files) {
 
   const rootDesktopFile = ".github/workflows/srn-desktop.yml";
   const rootDesktop = files.get(rootDesktopFile) ?? "";
+  const rootDesktopPackageFile = "app/packages/desktop/package.json";
+  const rootDesktopPackage = files.get(rootDesktopPackageFile) ?? "";
+  try {
+    const rootDesktopManifest = JSON.parse(rootDesktopPackage);
+    if (rootDesktopManifest.devDependencies?.["@electron/asar"] !== "3.4.1") {
+      errors.push(
+        `${rootDesktopPackageFile}: missing exact direct @electron/asar 3.4.1 devDependency`,
+      );
+    }
+  } catch {
+    errors.push(`${rootDesktopPackageFile}: invalid desktop package manifest`);
+  }
   const desktopContract = RELEASE_PACKAGING_CONTRACTS.desktop;
   for (const [fragment, description] of [
     ["- 'app/packages/**'", "packaged app workspace trigger"],
