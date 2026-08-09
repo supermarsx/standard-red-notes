@@ -185,6 +185,9 @@ jobs:
       - name: Install app dependencies immutably
         working-directory: app
         run: yarn install --immutable
+      - name: Build the desktop test artifact
+        working-directory: app
+        run: yarn build:desktop
       - name: Configure Electron sandbox
         working-directory: app
         run: |
@@ -193,9 +196,6 @@ jobs:
           sudo chown root:root "$sandbox"
           sudo chmod 4755 "$sandbox"
           test "$(stat -c '%U:%G %a' "$sandbox")" = "root:root 4755"
-      - name: Build the desktop test artifact
-        working-directory: app
-        run: yarn build:desktop
       - name: Run the real Electron suites
         working-directory: app
         run: >-

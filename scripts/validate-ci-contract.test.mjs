@@ -133,6 +133,32 @@ test("the desktop lane configures the Electron sandbox safely", () => {
     validateCiContract(files).join("\n"),
     /must set Electron sandbox ownership before mode/,
   );
+
+  const buildStep = `      - name: Build the desktop test artifact
+        working-directory: app
+        run: yarn build:desktop
+`;
+  const sandboxStep = `      - name: Configure Electron sandbox
+        working-directory: app
+        run: |
+          sandbox="$(yarn workspace @standardnotes/desktop node -e "const path = require('node:path'); process.stdout.write(path.join(path.dirname(require('electron')), 'chrome-sandbox'))")"
+          test -f "$sandbox"
+          sudo chown root:root "$sandbox"
+          sudo chmod 4755 "$sandbox"
+          test "$(stat -c '%U:%G %a' "$sandbox")" = "root:root 4755"
+`;
+  const reorderedFiles = withFileChanged(
+    ".github/workflows/ci.yml",
+    (content) =>
+      content
+        .replace(buildStep, "__DESKTOP_BUILD_STEP__\n")
+        .replace(sandboxStep, buildStep)
+        .replace("__DESKTOP_BUILD_STEP__\n", sandboxStep),
+  );
+  assert.match(
+    validateCiContract(reorderedFiles).join("\n"),
+    /must build before configuring the Electron sandbox/,
+  );
 });
 
 test("publishing permissions are rejected", () => {

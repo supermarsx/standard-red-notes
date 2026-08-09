@@ -194,6 +194,10 @@ export function validateCiContract(files) {
   const sandboxMode = desktopElectronBlock.indexOf(
     'sudo chmod 4755 "$sandbox"',
   );
+  const desktopBuild = desktopElectronBlock.indexOf("run: yarn build:desktop");
+  const electronSuite = desktopElectronBlock.indexOf(
+    "yarn workspace @standardnotes/desktop ava:electron",
+  );
   if (
     sandboxOwnership >= 0 &&
     sandboxMode >= 0 &&
@@ -201,6 +205,20 @@ export function validateCiContract(files) {
   ) {
     errors.push(
       `${file}: desktop-electron must set Electron sandbox ownership before mode`,
+    );
+  }
+  if (
+    desktopBuild >= 0 &&
+    sandboxOwnership >= 0 &&
+    desktopBuild > sandboxOwnership
+  ) {
+    errors.push(
+      `${file}: desktop-electron must build before configuring the Electron sandbox`,
+    );
+  }
+  if (sandboxMode >= 0 && electronSuite >= 0 && sandboxMode > electronSuite) {
+    errors.push(
+      `${file}: desktop-electron must configure the Electron sandbox before running tests`,
     );
   }
 
