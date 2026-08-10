@@ -69,10 +69,12 @@ describe('AccountDeletionRequestedEventHandler (files)', () => {
     expect(domainEventPublisher.publish).not.toHaveBeenCalled()
   })
 
-  it('announces nothing and logs safely when the files could not be marked for removal', async () => {
+  it('announces nothing, logs safely, and rejects for retry when files could not be marked for removal', async () => {
     markFilesToBeRemoved.execute = jest.fn().mockResolvedValue(Result.fail('Oops'))
 
-    await createHandler().handle(event())
+    await expect(createHandler().handle(event())).rejects.toThrow(
+      'Could not mark files for removal for deleted account.',
+    )
 
     expect(domainEventPublisher.publish).not.toHaveBeenCalled()
     expect(logger.error).toHaveBeenCalledWith(

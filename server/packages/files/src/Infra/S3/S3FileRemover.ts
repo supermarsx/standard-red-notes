@@ -4,6 +4,7 @@ import {
   DeleteObjectCommand,
   HeadObjectCommand,
   ListObjectsV2Command,
+  type ListObjectsV2CommandOutput,
   S3Client,
 } from '@aws-sdk/client-s3'
 
@@ -19,51 +20,79 @@ export class S3FileRemover implements FileRemoverInterface {
   ) {}
 
   async markFilesToBeRemoved(userUuid: string): Promise<Array<RemovedFileDescription>> {
-    const filesResponse = await this.s3Client.send(
-      new ListObjectsV2Command({
-        Bucket: this.s3BuckeName,
-        Prefix: `${userUuid}/`,
-      }),
-    )
+    const fileDescriptionsByPath = new Map<string, RemovedFileDescription>()
+    const continuationTokens = new Set<string>()
+    const prefix = `${userUuid}/`
+    let continuationToken: string | undefined
 
-    if (filesResponse.Contents === undefined) {
-      return []
-    }
+    do {
+      const filesResponse: ListObjectsV2CommandOutput = await this.s3Client.send(
+        new ListObjectsV2Command({
+          Bucket: this.s3BuckeName,
+          Prefix: prefix,
+          ...(continuationToken === undefined ? {} : { ContinuationToken: continuationToken }),
+        }),
+      )
 
-    const files = filesResponse.Contents
+      const nextContinuationToken = this.getNextContinuationToken(filesResponse, continuationTokens)
+      for (const file of filesResponse.Contents ?? []) {
+        if (file.Key === undefined || fileDescriptionsByPath.has(file.Key)) {
+          continue
+        }
 
-    const removedFileDescriptions: Array<RemovedFileDescription> = []
-
-    for (const file of files) {
-      if (file.Key === undefined) {
-        continue
+        fileDescriptionsByPath.set(file.Key, {
+          fileByteSize: file.Size as number,
+          fileName: file.Key.replace(prefix, ''),
+          filePath: file.Key,
+          userOrSharedVaultUuid: userUuid,
+        })
       }
 
+      continuationToken = nextContinuationToken
+    } while (continuationToken !== undefined)
+
+    const fileDescriptions = [...fileDescriptionsByPath.values()]
+
+    for (const file of fileDescriptions) {
       await this.s3Client.send(
         new CopyObjectCommand({
           Bucket: this.s3BuckeName,
-          Key: `expiration-chamber/${file.Key}`,
-          CopySource: `${this.s3BuckeName}/${file.Key}`,
+          Key: `expiration-chamber/${file.filePath}`,
+          CopySource: `${this.s3BuckeName}/${file.filePath}`,
           StorageClass: 'DEEP_ARCHIVE',
         }),
       )
+    }
 
+    for (const file of fileDescriptions) {
       await this.s3Client.send(
         new DeleteObjectCommand({
           Bucket: this.s3BuckeName,
-          Key: file.Key,
+          Key: file.filePath,
         }),
       )
-
-      removedFileDescriptions.push({
-        fileByteSize: file.Size as number,
-        fileName: file.Key.replace(`${userUuid}/`, ''),
-        filePath: file.Key,
-        userOrSharedVaultUuid: userUuid,
-      })
     }
 
-    return removedFileDescriptions
+    return fileDescriptions
+  }
+
+  private getNextContinuationToken(
+    filesResponse: ListObjectsV2CommandOutput,
+    continuationTokens: Set<string>,
+  ): string | undefined {
+    if (filesResponse.IsTruncated !== true) {
+      return undefined
+    }
+
+    const nextContinuationToken = filesResponse.NextContinuationToken
+
+    if (!nextContinuationToken || continuationTokens.has(nextContinuationToken)) {
+      throw new Error('Could not completely list files marked for removal')
+    }
+
+    continuationTokens.add(nextContinuationToken)
+
+    return nextContinuationToken
   }
 
   async remove(filePath: string): Promise<number> {

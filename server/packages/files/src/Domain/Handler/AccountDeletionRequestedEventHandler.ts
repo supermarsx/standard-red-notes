@@ -32,7 +32,7 @@ export class AccountDeletionRequestedEventHandler implements DomainEventHandlerI
         safeErrorLogMetadata(result.getError()),
       )
 
-      return
+      throw new Error('Could not mark files for removal for deleted account.')
     }
 
     const filesRemoved = result.getValue()
