@@ -29,6 +29,7 @@ source "$1"
           .replace(/^([A-Za-z]):[\\/]/, (_match, drive: string) => `/mnt/${drive.toLowerCase()}/`)
           .replaceAll('\\', '/')
       const command = process.platform === 'win32' ? 'wsl.exe' : 'bash'
+      const subprocessTimeoutMs = process.platform === 'win32' ? 30_000 : 10_000
       const commandArguments =
         process.platform === 'win32'
           ? [
@@ -44,7 +45,7 @@ source "$1"
       const result = spawnSync(command, commandArguments, {
         encoding: 'utf8',
         env: process.env,
-        timeout: 10_000,
+        timeout: subprocessTimeoutMs,
         windowsHide: true,
       })
       expect({ status: result.status, stderr: result.stderr }).toEqual({ status: 0, stderr: '' })
