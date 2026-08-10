@@ -323,6 +323,14 @@ Back up these together:
   configuration; and
 - deployment manifests and image/version identifiers.
 
+If upgrading a Compose installation that still has an initialized
+`mysql-data` volume, create a logical dump with the old MySQL service before
+starting MariaDB. A raw MySQL datadir is useful only as a protected recovery
+copy for the matching MySQL engine; it is not a MariaDB restore artifact. Follow
+the [legacy MySQL volume migration](self-hosting.md#upgrade-from-the-legacy-mysql-volume)
+and keep the dump plus the untouched legacy volume until the MariaDB restore has
+passed application-level checks.
+
 Do not store the only copy of `.env` beside the live host. Protect database
 credentials, JWT secrets, valet secrets, shared access keys, SMTP credentials,
 provider keys, subscription-pairing encryption keys, and backup app passwords.

@@ -541,6 +541,8 @@
           url: /self-hosting.html#start-stop-and-upgrade
         - title: Data locations
           url: /self-hosting.html#where-your-data-lives
+        - title: Legacy MySQL migration
+          url: /self-hosting.html#upgrade-from-the-legacy-mysql-volume
         - title: Backup and restore
           url: /self-hosting.html#backup-and-restore
         - title: Troubleshooting

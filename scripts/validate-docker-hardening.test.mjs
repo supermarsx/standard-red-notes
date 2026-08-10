@@ -22,6 +22,7 @@ import {
   validateComposeHardening,
   validateContainerHardening,
   validateDatabaseCredentialGateContract,
+  validateDatabaseVolumeMigrationGateContract,
   validateFilesStorageDeploymentContract,
   validateImageHardening,
   validatePairingCallbackNginxContract,
@@ -423,6 +424,60 @@ function databaseCredentialGateFixture() {
       MYSQL_PASSWORD: \${MYSQL_PASSWORD:?required}
       MYSQL_ROOT_PASSWORD: \${MYSQL_ROOT_PASSWORD:?required}
     `,
+    singleComposeSource:
+      "services:\n  app:\n    environment:\n      DB_TYPE: sqlite",
+  };
+}
+
+function databaseVolumeMigrationGateFixture() {
+  const preflightCommand = `
+    legacy_initialized=false
+    current_initialized=false
+    [ -d /legacy-mysql/mysql ] && legacy_initialized=true
+    [ -d /current-mariadb/mysql ] && current_initialized=true
+    if "$\${legacy_initialized}" && ! "$\${current_initialized}"; then
+      printf '%s\\n' 'Follow the documented logical dump/restore migration; never copy the raw database directory between engines.' >&2
+      exit 1
+    fi
+  `;
+  return {
+    multiConfig: {
+      services: {
+        "db-volume-preflight": {
+          image: "mariadb:test",
+          restart: "no",
+          user: "999:999",
+          read_only: true,
+          network_mode: "none",
+          cap_drop: ["ALL"],
+          security_opt: ["no-new-privileges:true"],
+          mem_limit: 33_554_432,
+          pids_limit: 32,
+          volumes: [
+            {
+              source: "mysql-data",
+              target: "/legacy-mysql",
+              read_only: true,
+            },
+            {
+              source: "mariadb-data",
+              target: "/current-mariadb",
+              read_only: true,
+            },
+          ],
+          entrypoint: ["/bin/sh", "-ec"],
+          command: [preflightCommand],
+        },
+        db: {
+          image: "mariadb:test",
+          depends_on: {
+            "db-volume-preflight": {
+              condition: "service_completed_successfully",
+            },
+          },
+        },
+      },
+    },
     singleComposeSource:
       "services:\n  app:\n    environment:\n      DB_TYPE: sqlite",
   };
@@ -1049,6 +1104,79 @@ test("requires a least-privilege, networkless database credential preflight", ()
     "multi compose db-credential-preflight: must set no-new-privileges:true",
     "multi compose db-credential-preflight: must set a positive memory limit",
     "multi compose db-credential-preflight: must set a positive PID limit",
+  ]);
+});
+
+test("accepts a read-only fail-closed legacy database volume gate", () => {
+  assert.deepEqual(
+    validateDatabaseVolumeMigrationGateContract(
+      databaseVolumeMigrationGateFixture(),
+    ),
+    [],
+  );
+});
+
+test("rejects writable or missing database migration volumes", () => {
+  const fixture = databaseVolumeMigrationGateFixture();
+  const preflight = fixture.multiConfig.services["db-volume-preflight"];
+  preflight.volumes[0].read_only = false;
+  preflight.volumes = preflight.volumes.filter(
+    (volume) => volume.source !== "mariadb-data",
+  );
+
+  assert.deepEqual(validateDatabaseVolumeMigrationGateContract(fixture), [
+    "multi compose db-volume-preflight: mysql-data mount must be read-only",
+    "multi compose db-volume-preflight: must mount mariadb-data at /current-mariadb",
+  ]);
+});
+
+test("rejects a bypassable database volume preflight", () => {
+  const fixture = databaseVolumeMigrationGateFixture();
+  const preflight = fixture.multiConfig.services["db-volume-preflight"];
+  preflight.command[0] = preflight.command[0]
+    .replace("/current-mariadb/mysql", "/current-mariadb/not-a-marker")
+    .replace("exit 1", "exit 0");
+  fixture.multiConfig.services.db.depends_on["db-volume-preflight"].condition =
+    "service_started";
+
+  assert.deepEqual(validateDatabaseVolumeMigrationGateContract(fixture), [
+    "multi compose db-volume-preflight: must inspect initialized marker /current-mariadb/mysql",
+    "multi compose db-volume-preflight: must fail when only the legacy database is initialized",
+    "multi compose db: must wait for successful database volume preflight",
+  ]);
+});
+
+test("requires a least-privilege, networkless database volume preflight", () => {
+  const fixture = databaseVolumeMigrationGateFixture();
+  const preflight = fixture.multiConfig.services["db-volume-preflight"];
+  preflight.image = "busybox:latest";
+  preflight.restart = "always";
+  preflight.user = "root";
+  preflight.read_only = false;
+  preflight.network_mode = "default";
+  preflight.cap_drop = [];
+  preflight.security_opt = [];
+  preflight.mem_limit = 0;
+  preflight.pids_limit = 0;
+
+  assert.deepEqual(validateDatabaseVolumeMigrationGateContract(fixture), [
+    "multi compose db-volume-preflight: must reuse the MariaDB image",
+    "multi compose db-volume-preflight: restart policy must be no",
+    "multi compose db-volume-preflight: root filesystem must be read-only",
+    "multi compose db-volume-preflight: must run as the MariaDB numeric user 999:999",
+    "multi compose db-volume-preflight: network mode must be none",
+    "multi compose db-volume-preflight: must drop ALL capabilities",
+    "multi compose db-volume-preflight: must set no-new-privileges:true",
+    "multi compose db-volume-preflight: must set a positive memory limit",
+    "multi compose db-volume-preflight: must set a positive PID limit",
+  ]);
+});
+
+test("keeps SQLite independent of legacy database migration volumes", () => {
+  const fixture = databaseVolumeMigrationGateFixture();
+  fixture.singleComposeSource += "\nvolumes:\n  mysql-data:";
+  assert.deepEqual(validateDatabaseVolumeMigrationGateContract(fixture), [
+    "single compose: SQLite topology must remain independent of database migration volumes",
   ]);
 });
 

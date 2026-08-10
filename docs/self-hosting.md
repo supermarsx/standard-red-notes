@@ -547,6 +547,7 @@ and container rebuilds:
 
 | Volume         | Holds                                                          | Notes                                                  |
 | -------------- | -------------------------------------------------------------- | ------------------------------------------------------ |
+| `mysql-data`   | Legacy MySQL 8.4 database from older Compose releases.         | Migration source only; never mount it into MariaDB.    |
 | `mariadb-data` | The MariaDB database - **all accounts, notes, and revisions**. | The one to back up.                                    |
 | `redis-data`   | Redis append-only persistence (cache/sessions/pub-sub).        | Safe to lose; rebuilt at runtime.                      |
 | `uploads`      | Uploaded file attachments stored by the files service.         | Back this up alongside the DB if you use file uploads. |
@@ -556,6 +557,77 @@ and container rebuilds:
 | `n8n-data`     | n8n database/config/credentials (only with `workflows`).       | Back up with the matching `N8N_ENCRYPTION_KEY`.        |
 
 List them with `docker volume ls | grep standard-red-notes`.
+
+## Upgrade from the legacy MySQL volume
+
+Older Compose releases ran `mysql:8.4` on `mysql-data`. Current releases run
+MariaDB on a separate `mariadb-data` volume. The `db-volume-preflight` one-shot
+service checks both datastores before `db` starts. If it finds an initialized
+legacy database and an uninitialized MariaDB database, startup fails instead of
+silently presenting an empty installation.
+
+MySQL and MariaDB datadirs are not interchangeable. Do not rename the volume,
+copy its files into `mariadb-data`, or point the MariaDB service at
+`mysql-data`. Migrate with SQL while the old MySQL service is still available:
+
+```bash
+set -eu
+
+# 1. On the old release, stop every application writer but leave MySQL running.
+docker compose stop app server
+
+# 2. Export the application database with routines, events, and triggers.
+docker compose exec -T db sh -ec \
+  'exec mysqldump -uroot -p"$MYSQL_ROOT_PASSWORD" --single-transaction --routines --events --triggers --hex-blob --set-gtid-purged=OFF --column-statistics=0 "$MYSQL_DATABASE"' \
+  > legacy-mysql.sql
+test -s legacy-mysql.sql
+
+# 3. Stop the old stack without deleting either named volume, then update.
+docker compose down
+git pull
+
+# 4. Initialize only the new MariaDB volume. --no-deps intentionally bypasses
+#    the legacy-volume gate for this isolated migration container.
+docker compose run --detach --name srn-mariadb-migration --no-deps db
+health=starting
+for attempt in $(seq 1 90); do
+  health=$(docker inspect --format '{{.State.Health.Status}}' srn-mariadb-migration)
+  [ "$health" = healthy ] && break
+  [ "$(docker inspect --format '{{.State.Running}}' srn-mariadb-migration)" = true ] || {
+    docker logs srn-mariadb-migration
+    exit 1
+  }
+  sleep 2
+done
+[ "$health" = healthy ] || {
+  docker logs srn-mariadb-migration
+  exit 1
+}
+
+# 5. Restore the logical dump, then stop and remove only the one-off container.
+docker exec -i srn-mariadb-migration sh -ec \
+  'exec mariadb -uroot -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE"' \
+  < legacy-mysql.sql
+docker stop --time 60 srn-mariadb-migration
+docker rm srn-mariadb-migration
+
+# 6. The normal gate now sees an initialized mariadb-data and permits startup.
+docker compose up -d --build
+docker compose ps
+```
+
+If the preflight already blocks and no logical dump exists, do not remove or
+rename either volume. Restore the pre-upgrade Compose manifest in a separate
+working directory and use its MySQL 8.4 service against `mysql-data` only long
+enough to take the dump, or restore a previously tested logical backup. For a
+custom Compose project name, inspect the exact volume names first with
+`docker volume inspect`; the default names are
+`standard-red-notes_mysql-data` and `standard-red-notes_mariadb-data`.
+
+Before reopening writes, verify representative accounts, note/revision counts,
+attachments, authentication, sync, and a fresh database backup. Retain
+`legacy-mysql.sql` and the untouched `mysql-data` volume until those checks and
+a restore drill pass. Do not run `docker compose down -v` during migration.
 
 ## Backup and restore
 
