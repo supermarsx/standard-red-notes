@@ -238,6 +238,26 @@ test("the app security graph preserves patched legacy and current majors", () =>
   );
   assert.match(
     validateAppSecurityGraph(
+      appPackage.replace(
+        '"nanoid@npm:3.3.3": "3.3.18"',
+        '"nanoid@npm:3.3.3": "3.3.3"',
+      ),
+      appLock,
+    ).join("\n"),
+    /security resolution nanoid@npm:3\.3\.3 must remain 3\.3\.18/,
+  );
+  assert.match(
+    validateAppSecurityGraph(
+      appPackage.replace(
+        '"lodash-es@npm:4.17.21": "4.18.1"',
+        '"lodash-es@npm:4.17.21": "4.17.21"',
+      ),
+      appLock,
+    ).join("\n"),
+    /security resolution lodash-es@npm:4\.17\.21 must remain 4\.18\.1/,
+  );
+  assert.match(
+    validateAppSecurityGraph(
       appPackage,
       appLock.replace("hash=7b308c", "hash=000000"),
     ).join("\n"),
@@ -255,6 +275,35 @@ test("every Yarn domain keeps security-sensitive packages on patched floors", ()
     safeVersion,
     vulnerableVersion,
   ] of [
+    [
+      "server/yarn.lock",
+      "ip-address",
+      '"ip-address@npm:^10.1.1":',
+      "10.5.0",
+      "10.3.0",
+    ],
+    [
+      "app/yarn.lock",
+      "picomatch",
+      '"picomatch@npm:^2.0.4, picomatch@npm:^2.2.1, picomatch@npm:^2.2.3, picomatch@npm:^2.3.1":',
+      "2.3.2",
+      "2.3.1",
+    ],
+    [
+      "app/yarn.lock",
+      "picomatch",
+      '"picomatch@npm:^4.0.0, picomatch@npm:^4.0.2, picomatch@npm:^4.0.3, picomatch@npm:^4.0.4":',
+      "4.0.5",
+      "4.0.3",
+    ],
+    ["yarn.lock", "postcss", '"postcss@npm:^8.5.15":', "8.5.26", "8.5.17"],
+    [
+      "app/packages/filepicker/example/yarn.lock",
+      "terser",
+      '"terser@npm:^5.10.0, terser@npm:^5.31.1":',
+      "5.49.2",
+      "5.14.1",
+    ],
     ["app/yarn.lock", "undici", '"undici@npm:^6.25.0":', "6.28.0", "6.26.0"],
     [
       "app/yarn.lock",

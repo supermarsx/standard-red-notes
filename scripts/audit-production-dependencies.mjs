@@ -355,6 +355,31 @@ function yarnVersions(lockfile, packageName) {
 // These floors mirror the first patched releases published for the vulnerable
 // major lines currently present in the committed Yarn dependency graph.
 const yarnSecurityPatchFloors = Object.freeze({
+  "ip-address": Object.freeze({
+    minimumMajor: 10,
+    floors: Object.freeze({
+      10: Object.freeze([10, 3, 1]),
+    }),
+  }),
+  picomatch: Object.freeze({
+    minimumMajor: 2,
+    floors: Object.freeze({
+      2: Object.freeze([2, 3, 2]),
+      4: Object.freeze([4, 0, 4]),
+    }),
+  }),
+  postcss: Object.freeze({
+    minimumMajor: 8,
+    floors: Object.freeze({
+      8: Object.freeze([8, 5, 18]),
+    }),
+  }),
+  terser: Object.freeze({
+    minimumMajor: 5,
+    floors: Object.freeze({
+      5: Object.freeze([5, 14, 2]),
+    }),
+  }),
   undici: Object.freeze({
     minimumMajor: 6,
     floors: Object.freeze({
@@ -433,6 +458,8 @@ export function validateAppSecurityGraph(packageJsonText, lockfile) {
     "fast-xml-parser@npm:4.2.5": "4.5.7",
     "form-data": "4.0.6",
     "jws@npm:^3.2.2": "3.2.3",
+    "lodash-es@npm:4.17.21": "4.18.1",
+    "nanoid@npm:3.3.3": "3.3.18",
     "path-to-regexp@npm:0.1.7": "0.1.13",
     "path-to-regexp@npm:~0.1.12": "0.1.13",
     protobufjs: "7.6.5",
