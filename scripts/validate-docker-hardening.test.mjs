@@ -15,6 +15,7 @@ import { execFileSync } from "node:child_process";
 import test from "node:test";
 
 import {
+  collectSQLiteMigrationSources,
   runDockerHardeningValidation,
   validateAuthStepUpComposeContract,
   validateAuthStepUpComposeSource,
@@ -30,7 +31,108 @@ import {
   validateServerDockerfileContract,
   validateSingleEntrypointAssistantPropagation,
   validateSingleEntrypointAuthStepUpPropagation,
+  validateSingleContainerSQLiteMigrationContract,
 } from "./validate-docker-hardening.mjs";
+
+test("collects every SQLite migration recursively in deterministic order", () => {
+  const root = mkdtempSync(join(tmpdir(), "srn-sqlite-migrations-"));
+  const packages = join(root, "packages");
+  const firstDirectory = join(
+    packages,
+    "alpha",
+    "migrations",
+    "sqlite",
+    "nested",
+  );
+  const secondDirectory = join(packages, "zeta", "migrations", "sqlite");
+  mkdirSync(firstDirectory, { recursive: true });
+  mkdirSync(secondDirectory, { recursive: true });
+  writeFileSync(join(firstDirectory, "002-second.ts"), "second");
+  writeFileSync(join(firstDirectory, "001-first.ts"), "first");
+  writeFileSync(join(secondDirectory, "003-third.ts"), "third");
+  writeFileSync(join(secondDirectory, "ignored.js"), "ignored");
+
+  try {
+    assert.deepEqual(collectSQLiteMigrationSources(packages, root), [
+      {
+        relativePath: join(
+          "packages",
+          "alpha",
+          "migrations",
+          "sqlite",
+          "nested",
+          "001-first.ts",
+        ),
+        source: "first",
+      },
+      {
+        relativePath: join(
+          "packages",
+          "alpha",
+          "migrations",
+          "sqlite",
+          "nested",
+          "002-second.ts",
+        ),
+        source: "second",
+      },
+      {
+        relativePath: join(
+          "packages",
+          "zeta",
+          "migrations",
+          "sqlite",
+          "003-third.ts",
+        ),
+        source: "third",
+      },
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("accepts source-owned SQLite migrations without runtime rewriting", () => {
+  assert.deepEqual(
+    validateSingleContainerSQLiteMigrationContract({
+      singleDockerfileSource: "COPY server /opt/server",
+      singleEntrypointSource: "exec supervisord -c /etc/supervisord.conf",
+      sqliteMigrationSources: [
+        {
+          relativePath: "safe.ts",
+          source: `queryRunner.query("UPDATE items SET content_type = 'Note'")`,
+        },
+      ],
+      legacyShimExists: false,
+    }),
+    [],
+  );
+});
+
+test("rejects SQLite migration runtime rewrites and double-quoted SQL values", () => {
+  assert.deepEqual(
+    validateSingleContainerSQLiteMigrationContract({
+      singleDockerfileSource:
+        "COPY rewrite-migrations.js /usr/local/bin/fix-sqlite-migrations.js",
+      singleEntrypointSource:
+        "node /usr/local/bin/fix-sqlite-migrations.js /opt/server/packages/dist/migrations/sqlite",
+      sqliteMigrationSources: [
+        {
+          relativePath: "unsafe.ts",
+          source:
+            'queryRunner.query(\'UPDATE "items" SET "content_type" = "Note"\')',
+        },
+      ],
+      legacyShimExists: true,
+    }),
+    [
+      "single container SQLite: runtime migration rewrite shim must not exist",
+      "single container SQLite: runtime must not invoke the legacy migration rewrite shim",
+      "single container SQLite: image build and entrypoint must not mutate compiled migrations",
+      "single container SQLite: unsafe.ts uses a double-quoted SQL value",
+    ],
+  );
+});
 
 const validRuntimeLogLevelDeployment = {
   multiComposeSource:

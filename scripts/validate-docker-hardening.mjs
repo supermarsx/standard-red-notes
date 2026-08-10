@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -106,6 +106,46 @@ function environmentMap(environment) {
         : [value.slice(0, separator), value.slice(separator + 1)];
     }),
   );
+}
+
+function readTypeScriptFilesRecursively(directory) {
+  return readdirSync(directory, { withFileTypes: true })
+    .sort((left, right) => left.name.localeCompare(right.name))
+    .flatMap((entry) => {
+      const entryPath = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        return readTypeScriptFilesRecursively(entryPath);
+      }
+      return entry.isFile() && entry.name.endsWith(".ts") ? [entryPath] : [];
+    });
+}
+
+export function collectSQLiteMigrationSources(
+  packagesDirectory,
+  relativeRoot = repositoryRoot,
+) {
+  return readdirSync(packagesDirectory, { withFileTypes: true })
+    .sort((left, right) => left.name.localeCompare(right.name))
+    .flatMap((packageEntry) => {
+      if (!packageEntry.isDirectory()) {
+        return [];
+      }
+      const migrationDirectory = path.join(
+        packagesDirectory,
+        packageEntry.name,
+        "migrations",
+        "sqlite",
+      );
+      if (!existsSync(migrationDirectory)) {
+        return [];
+      }
+      return readTypeScriptFilesRecursively(migrationDirectory).map(
+        (migrationPath) => ({
+          relativePath: path.relative(relativeRoot, migrationPath),
+          source: readFileSync(migrationPath, "utf8"),
+        }),
+      );
+    });
 }
 
 export function validateServerDockerfileContract(dockerfile) {
@@ -542,6 +582,48 @@ export function validateSingleEntrypointAssistantPropagation(entrypoint) {
   return errors;
 }
 
+export function validateSingleContainerSQLiteMigrationContract({
+  singleDockerfileSource,
+  singleEntrypointSource,
+  sqliteMigrationSources,
+  legacyShimExists,
+}) {
+  const errors = [];
+  const runtimeSources = [singleDockerfileSource, singleEntrypointSource];
+
+  if (legacyShimExists) {
+    errors.push(
+      "single container SQLite: runtime migration rewrite shim must not exist",
+    );
+  }
+  if (runtimeSources.some((source) => /fix-sqlite-migrations/i.test(source))) {
+    errors.push(
+      "single container SQLite: runtime must not invoke the legacy migration rewrite shim",
+    );
+  }
+  if (
+    runtimeSources.some((source) =>
+      /(?:dist\/)?migrations\/sqlite/i.test(source),
+    )
+  ) {
+    errors.push(
+      "single container SQLite: image build and entrypoint must not mutate compiled migrations",
+    );
+  }
+
+  const doubleQuotedLiteral =
+    /(?:=|<>|!=|\bLIKE)\s*"[^"\r\n]+"|\bIN\s*\(\s*"|\bVALUES\s*\(\s*"/i;
+  for (const { relativePath, source } of sqliteMigrationSources) {
+    if (doubleQuotedLiteral.test(source)) {
+      errors.push(
+        `single container SQLite: ${relativePath} uses a double-quoted SQL value`,
+      );
+    }
+  }
+
+  return errors;
+}
+
 function exactLocationBody(nginxConfig, route) {
   const escaped = route.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const matches = [
@@ -769,6 +851,9 @@ export function runDockerHardeningValidation(argv = process.argv.slice(2)) {
     path.join(repositoryRoot, "server", "docker", "single", "entrypoint.sh"),
     "utf8",
   );
+  const sqliteMigrationSources = collectSQLiteMigrationSources(
+    path.join(repositoryRoot, "server", "packages"),
+  );
   const multiEntrypoint = readFileSync(
     path.join(repositoryRoot, "server", "docker", "docker-entrypoint.sh"),
     "utf8",
@@ -896,6 +981,23 @@ export function runDockerHardeningValidation(argv = process.argv.slice(2)) {
       label: "single compose",
     }),
     ...validateSingleEntrypointAuthStepUpPropagation(singleEntrypoint),
+    ...validateSingleContainerSQLiteMigrationContract({
+      singleDockerfileSource: readFileSync(
+        path.join(repositoryRoot, "Dockerfile.single"),
+        "utf8",
+      ),
+      singleEntrypointSource: singleEntrypoint,
+      sqliteMigrationSources,
+      legacyShimExists: existsSync(
+        path.join(
+          repositoryRoot,
+          "server",
+          "docker",
+          "single",
+          "fix-sqlite-migrations.js",
+        ),
+      ),
+    }),
     ...validateRuntimeLogLevelDeploymentContract({
       multiComposeSource,
       singleComposeSource,

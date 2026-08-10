@@ -145,16 +145,6 @@ put_opt WORKFLOWS_PUBLIC_URL "${WORKFLOWS_PUBLIC_URL:-}"
 
 echo "[entrypoint] wrote ${ENV_FILE} (DB=sqlite, cache=memory, data=${DATA_DIR})"
 
-# --- 3b. sqlite migration compatibility shim -------------------------------
-# The server's sqlite migrations were authored MySQL-first (double-quoted SQL
-# string literals) and fail under better-sqlite3's DQS-off SQLite. Rewrite the
-# COMPILED sqlite migrations in place (dist only; never repo source) so the
-# instance boots. Idempotent + a no-op once fixed upstream. See the script.
-if [ -f /usr/local/bin/fix-sqlite-migrations.js ]; then
-  node /usr/local/bin/fix-sqlite-migrations.js /opt/server/packages || \
-    echo "[entrypoint] WARNING: sqlite migration shim reported a problem." >&2
-fi
-
 # --- 4. App runtime-config templating + CSP inline-script self-heal ---------
 # Reuse the app image's entrypoint UNMODIFIED. It rewrites window.* runtime flags
 # (OCR_ENABLED / OCR_DEFAULT_LANGUAGE / SYNC_SERVER) in the served index.html,

@@ -98,7 +98,6 @@ COPY app/docker/docker-entrypoint.sh /usr/local/bin/csp-runtime-config.sh
 COPY server/docker/single/supervisord.conf /etc/supervisord.conf
 COPY server/docker/single/entrypoint.sh /usr/local/bin/srn-entrypoint.sh
 COPY server/docker/single/home-server-run.sh /usr/local/bin/home-server-run.sh
-COPY server/docker/single/fix-sqlite-migrations.js /usr/local/bin/fix-sqlite-migrations.js
 COPY server/docker/srn-admin.sh /usr/local/bin/srn-admin
 
 # Normalize line endings (CRLF checkout), make scripts executable, create the
