@@ -171,6 +171,7 @@ export function validateCiContract(files) {
   requireJob(errors, workflow, "desktop-electron", [
     ["actions/cache@v6.1.0", "dependency cache"],
     ["sudo apt-get install --yes xvfb", "Xvfb installation"],
+    ["libsecret-1-0", "native keychain runtime"],
     ["working-directory: app", "app workspace"],
     ["run: yarn install --immutable", "immutable app install"],
     ["require.resolve('electron/package.json')", "Electron package resolution"],

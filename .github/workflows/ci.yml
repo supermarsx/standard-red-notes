@@ -180,8 +180,8 @@ jobs:
           path: app/.yarn/cache
           key: ci-desktop-yarn-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('app/yarn.lock') }}
           restore-keys: ci-desktop-yarn-${{ runner.os }}-node${{ env.NODE_VERSION }}-
-      - name: Install Xvfb
-        run: sudo apt-get update && sudo apt-get install --yes xvfb
+      - name: Install headless desktop runtime
+        run: sudo apt-get update && sudo apt-get install --yes xvfb libsecret-1-0
       - name: Install app dependencies immutably
         working-directory: app
         run: yarn install --immutable

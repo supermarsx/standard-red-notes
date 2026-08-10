@@ -89,6 +89,16 @@ test("the desktop lane cannot silently drop its virtual display", () => {
   );
 });
 
+test("the desktop lane provisions the native keychain runtime", () => {
+  const files = withFileChanged(".github/workflows/ci.yml", (content) =>
+    content.replace("xvfb libsecret-1-0", "xvfb"),
+  );
+  assert.match(
+    validateCiContract(files).join("\n"),
+    /desktop-electron native keychain runtime/,
+  );
+});
+
 test("the check lane retains full history for provenance validation", () => {
   const files = withFileChanged(".github/workflows/ci.yml", (content) =>
     content.replace(/(  check:[\s\S]*?)(          fetch-depth: 0\n)/, "$1"),
