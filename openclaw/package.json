@@ -48,7 +48,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.111.0",
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "openai": "^6.47.0",
     "toml": "^5.0.0",
     "zod": "^4.4.3"
