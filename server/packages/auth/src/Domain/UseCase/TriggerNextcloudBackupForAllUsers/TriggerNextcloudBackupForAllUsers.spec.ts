@@ -224,6 +224,35 @@ describe('TriggerNextcloudBackupForAllUsers', () => {
     expect(JSON.stringify(logger.error.mock.calls)).not.toContain('secret upstream failure')
   })
 
+  it('turns a thrown dispatch into the same bounded retry state without leaking the error', async () => {
+    makeUserDue()
+    triggerNextcloudBackupForUser.execute.mockRejectedValue(new Error('secret thrown failure'))
+
+    await makeUseCase(true).execute({ backupFrequency: 'daily' })
+
+    expect(deliveryState.activeRequest).toBeNull()
+    expect(deliveryState.consecutiveFailures).toBe(1)
+    expect(deliveryState.retryNotBefore).toBe(NOW_MS + NEXTCLOUD_BACKUP_INITIAL_RETRY_DELAY_MS)
+    expect(JSON.stringify(logger.error.mock.calls)).not.toContain('secret thrown failure')
+  })
+
+  it('does not overwrite a completed request when dispatch reports an ambiguous failure', async () => {
+    makeUserDue()
+    triggerNextcloudBackupForUser.execute.mockImplementation(async ({ requestUuid }) => {
+      deliveryState.completed = [{ requestUuid, outcome: 'succeeded', completedAt: NOW_MS }]
+      return Result.fail('publish returned after completion')
+    })
+
+    await makeUseCase(true).execute({ backupFrequency: 'daily' })
+
+    expect(deliveryState.activeRequest).toEqual({
+      requestUuid: deliveryState.completed[0].requestUuid,
+      requestedAt: NOW_MS,
+    })
+    expect(deliveryState.completed).toEqual([expect.objectContaining({ outcome: 'succeeded', completedAt: NOW_MS })])
+    expect(deliveryState.retryNotBefore).toBeNull()
+  })
+
   it('lets a delayed success acknowledgement override an ambiguous publish failure', async () => {
     makeUserDue()
     let publishedRequestUuid = ''
@@ -297,6 +326,24 @@ describe('TriggerNextcloudBackupForAllUsers', () => {
     expect(triggerNextcloudBackupForUser.execute).not.toHaveBeenCalled()
   })
 
+  it('heals a legacy active request already covered by a confirmed success', async () => {
+    makeUserDue()
+    deliveryState.activeRequest = {
+      requestUuid: '00000000-0000-0000-0000-000000000002',
+      requestedAt: NOW_MS - 2 * 60 * 60 * 1_000,
+    }
+    deliveryState.consecutiveFailures = 3
+    deliveryState.retryNotBefore = NOW_MS + NEXTCLOUD_BACKUP_INITIAL_RETRY_DELAY_MS
+    lastSuccessAt = NOW_MS - 60 * 60 * 1_000
+
+    await makeUseCase(true).execute({ backupFrequency: 'daily' })
+
+    expect(triggerNextcloudBackupForUser.execute).not.toHaveBeenCalled()
+    expect(deliveryState.activeRequest).toBeNull()
+    expect(deliveryState.consecutiveFailures).toBe(0)
+    expect(deliveryState.retryNotBefore).toBeNull()
+  })
+
   it('fails closed when the lifecycle transaction is unavailable', async () => {
     makeUserDue()
     stateStore.runExclusive.mockResolvedValue({ status: 'unavailable' })
@@ -304,6 +351,18 @@ describe('TriggerNextcloudBackupForAllUsers', () => {
     await makeUseCase(true).execute({ backupFrequency: 'daily' })
 
     expect(triggerNextcloudBackupForUser.execute).not.toHaveBeenCalled()
+  })
+
+  it('skips a setting whose user was deleted before the lifecycle claim', async () => {
+    makeUserDue()
+    stateStore.runExclusive.mockResolvedValue({ status: 'user-not-found' })
+
+    await makeUseCase(true).execute({ backupFrequency: 'daily' })
+
+    expect(triggerNextcloudBackupForUser.execute).not.toHaveBeenCalled()
+    expect(logger.info).toHaveBeenCalledWith('Skipped a Nextcloud backup for a deleted user.', {
+      userId: USER_UUID,
+    })
   })
 
   it('fails closed on a persisted far-future success timestamp', async () => {

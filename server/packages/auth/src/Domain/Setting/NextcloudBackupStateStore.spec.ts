@@ -65,6 +65,12 @@ describe('NextcloudBackupStateStore', () => {
     expect(await store.readLastSuccessAt(userUuid)).toEqual({ status: 'available', value: null })
   })
 
+  it('preserves the repository user-not-found result', async () => {
+    repository.runExclusive.mockResolvedValue({ status: 'user-not-found' })
+
+    expect(await createStore().readDeliveryState(userUuid)).toEqual({ status: 'user-not-found' })
+  })
+
   it('fails closed when the lock, read, write, or commit rejects', async () => {
     repository.runExclusive.mockRejectedValue(new Error('database unavailable'))
 
@@ -133,6 +139,57 @@ describe('NextcloudBackupStateStore', () => {
     expect(repository.runExclusive).toHaveBeenCalledTimes(1)
     expect(persisted.deliveryState.value).toBe(JSON.stringify(state))
     expect(persisted.lastSuccessAt.value).toBe(String(nowMs))
+  })
+
+  it('persists valid delivery and success state through the public write helpers', async () => {
+    const state = {
+      ...emptyNextcloudBackupDeliveryState(),
+      completed: [
+        {
+          requestUuid: '00000000-0000-0000-0000-000000000002',
+          outcome: 'succeeded' as const,
+          completedAt: nowMs,
+        },
+      ],
+    }
+    const store = createStore()
+
+    expect(await store.writeDeliveryState(userUuid, state)).toBe(true)
+    expect(await store.writeLastSuccessAt(userUuid, nowMs)).toBe(true)
+
+    expect(persisted.deliveryState.value).toBe(JSON.stringify(state))
+    expect(persisted.lastSuccessAt.value).toBe(String(nowMs))
+  })
+
+  it('rejects invalid lifecycle mutations before they can be committed', async () => {
+    const store = createStore()
+
+    expect(await store.writeLastSuccessAt(userUuid, Number.NaN)).toBe(false)
+    expect(repository.runExclusive).not.toHaveBeenCalled()
+
+    expect(
+      await store.writeDeliveryState(userUuid, {
+        ...emptyNextcloudBackupDeliveryState(),
+        retryNotBefore: -1,
+      }),
+    ).toBe(false)
+    expect(
+      await store.runExclusive(userUuid, () => ({
+        result: undefined,
+        lastSuccessAt: Number.MAX_SAFE_INTEGER,
+      })),
+    ).toEqual({ status: 'unavailable' })
+  })
+
+  it('fails closed when persisted lifecycle values are missing or out of range', async () => {
+    const store = createStore()
+
+    persisted.deliveryState = { exists: true, value: null }
+    expect(await store.readDeliveryState(userUuid)).toEqual({ status: 'unavailable' })
+
+    persisted.deliveryState = { exists: false, value: null }
+    persisted.lastSuccessAt = { exists: true, value: '8640000000000001' }
+    expect(await store.readLastSuccessAt(userUuid)).toEqual({ status: 'unavailable' })
   })
 })
 
