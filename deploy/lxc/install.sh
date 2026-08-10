@@ -9,8 +9,8 @@
 # sqlite + in-memory cache + in-process events — NO MySQL/Redis), installs a
 # systemd service for it, and points nginx at the built SPA + the API.
 #
-# Idempotent: safe to re-run to upgrade (re-pulls, rebuilds, restarts). Generated
-# secrets are created ONCE and persisted under the data dir.
+# Idempotent: upgrades build and health-check a release before atomically moving
+# the live `current` symlink. Generated secrets are created once under DATA_DIR.
 #
 # Usage (inside the container, as root):
 #   REPO_URL=https://github.com/<owner>/standard-red-notes.git ./install.sh
@@ -19,11 +19,11 @@
 #
 # Environment overrides (all optional):
 #   REPO_URL     git URL to clone when $APP_DIR has no checkout (default: unset)
-#   REPO_REF     branch/tag/commit to check out                 (default: main)
+#   REPO_REF     explicit branch/tag/commit to resolve (default: checkout HEAD)
+#   EXPECTED_COMMIT  optional required full SHA after ref resolution
 #   APP_DIR      repo checkout location        (default: /opt/standard-red-notes)
 #   DATA_DIR     persistent data (sqlite+uploads+secrets)
 #                                        (default: /var/lib/standard-red-notes)
-#   WEB_ROOT     served SPA location   (default: /var/www/standard-red-notes/html)
 #   APP_USER     service account               (default: standard-red-notes)
 #   HTTP_PORT    nginx listen port                                (default: 80)
 #   NODE_MAJOR   Node.js major version                            (default: 26)
@@ -31,18 +31,25 @@
 set -euo pipefail
 
 REPO_URL="${REPO_URL:-}"
-REPO_REF="${REPO_REF:-main}"
+REPO_REF="${REPO_REF:-}"
+EXPECTED_COMMIT="${EXPECTED_COMMIT:-}"
 APP_DIR="${APP_DIR:-/opt/standard-red-notes}"
 DATA_DIR="${DATA_DIR:-/var/lib/standard-red-notes}"
-WEB_ROOT="${WEB_ROOT:-/var/www/standard-red-notes/html}"
 APP_USER="${APP_USER:-standard-red-notes}"
 HTTP_PORT="${HTTP_PORT:-80}"
 NODE_MAJOR="${NODE_MAJOR:-26}"
 
-HS_DIR="${APP_DIR}/server/packages/home-server"
+RELEASES_DIR="${APP_DIR}/.releases"
+CURRENT_LINK="${APP_DIR}/current"
+PREVIOUS_LINK="${APP_DIR}/previous"
+WEB_ROOT="${CURRENT_LINK}/app/packages/web/dist"
 LAUNCHER="/usr/local/bin/standard-red-notes-run"
 ADMIN_LAUNCHER="/usr/local/bin/srn-admin"
+NGINX_SITE="/etc/nginx/sites-available/standard-red-notes.conf"
+NGINX_SITE_LINK="/etc/nginx/sites-enabled/standard-red-notes.conf"
 UNIT_SRC_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck disable=SC1091
+. "${UNIT_SRC_DIR}/release.sh"
 
 log() { printf '\n\033[1;32m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33mWARN:\033[0m %s\n' "$*" >&2; }
@@ -50,6 +57,41 @@ die() { printf '\033[1;31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
 [ "$(id -u)" -eq 0 ] || die "Run as root (needs to install packages + a systemd unit)."
 command -v systemctl >/dev/null 2>&1 || die "systemd is required (run inside a system container, not an app container)."
+
+wait_live_health() {
+  local elapsed=0
+  while [ "${elapsed}" -lt 120 ]; do
+    curl -fsS --max-time 3 "http://127.0.0.1:${HTTP_PORT}/healthcheck" >/dev/null 2>&1 && return 0
+    sleep 1
+    elapsed=$((elapsed + 1))
+  done
+  return 1
+}
+
+if [ "${1:-}" = "--rollback" ]; then
+  log "Switching current and previous releases"
+  ACTIVE_RELEASE="$(release_link_target "${CURRENT_LINK}" "${RELEASES_DIR}")" || \
+    die "Current release is not a valid managed release."
+  release_swap_current_previous "${CURRENT_LINK}" "${PREVIOUS_LINK}" "${RELEASES_DIR}" || \
+    die "No valid previous release is available."
+  ROLLBACK_RELEASE="$(release_link_target "${CURRENT_LINK}" "${RELEASES_DIR}")"
+  if install -o root -g root -m 0644 "${ROLLBACK_RELEASE}/.srn-nginx.conf" "${NGINX_SITE}" && \
+    nginx -t && systemctl restart standard-red-notes.service nginx && wait_live_health; then
+    log "Rollback complete."
+    exit 0
+  fi
+  warn "Rollback target was unhealthy; restoring the release that was active."
+  release_swap_current_previous "${CURRENT_LINK}" "${PREVIOUS_LINK}" "${RELEASES_DIR}" || \
+    die "Rollback recovery could not restore the release links."
+  install -o root -g root -m 0644 "${ACTIVE_RELEASE}/.srn-nginx.conf" "${NGINX_SITE}" || \
+    die "Release links were restored, but the active nginx config could not be restored."
+  if ! nginx -t || ! systemctl restart standard-red-notes.service nginx || ! wait_live_health; then
+    die "Release links and config were restored, but live health did not recover."
+  fi
+  die "Rollback target was unhealthy; the previously active release was restored."
+elif [ -n "${1:-}" ]; then
+  die "Unknown argument: $1 (supported: --rollback)"
+fi
 
 # -----------------------------------------------------------------------------
 log "Installing OS packages"
@@ -61,7 +103,17 @@ apt-get install -y --no-install-recommends \
 # -----------------------------------------------------------------------------
 log "Installing Node.js ${NODE_MAJOR}.x + Yarn (Corepack 0.35.0)"
 if ! command -v node >/dev/null 2>&1 || [ "$(node -v | sed 's/v\([0-9]*\).*/\1/')" != "${NODE_MAJOR}" ]; then
-  curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash -
+  key_file="$(mktemp)"
+  curl --proto '=https' --tlsv1.2 -fsSL \
+    https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key -o "${key_file}"
+  key_fingerprint="$(gpg --batch --show-keys --with-colons "${key_file}" | awk -F: '$1 == "fpr" { print toupper($10); exit }')"
+  [ "${key_fingerprint}" = "6F71F525282841EEDAF851B42F59B5F99B1BE0B4" ] || \
+    die "NodeSource signing-key fingerprint mismatch."
+  gpg --batch --yes --dearmor --output /usr/share/keyrings/nodesource.gpg "${key_file}"
+  rm -f -- "${key_file}"
+  printf 'deb [signed-by=/usr/share/keyrings/nodesource.gpg] https://deb.nodesource.com/node_%s.x nodistro main\n' \
+    "${NODE_MAJOR}" > /etc/apt/sources.list.d/nodesource.list
+  apt-get update -y
   apt-get install -y --no-install-recommends nodejs
 fi
 npm install --global corepack@0.35.0
@@ -75,45 +127,69 @@ if ! id "${APP_USER}" >/dev/null 2>&1; then
   useradd --system --home-dir "${DATA_DIR}" --shell /usr/sbin/nologin "${APP_USER}"
 fi
 mkdir -p "${APP_DIR}" "${DATA_DIR}/database" "${DATA_DIR}/uploads" \
-         "${DATA_DIR}/caldav" "${DATA_DIR}/reminder-delivery" \
-         "$(dirname "${WEB_ROOT}")"
+         "${DATA_DIR}/caldav" "${DATA_DIR}/reminder-delivery" "${RELEASES_DIR}"
 
 # -----------------------------------------------------------------------------
-log "Fetching source into ${APP_DIR}"
+log "Resolving an immutable source commit"
 if [ -d "${APP_DIR}/.git" ]; then
-  git -C "${APP_DIR}" fetch --all --tags --prune
-  git -C "${APP_DIR}" checkout "${REPO_REF}"
-  git -C "${APP_DIR}" pull --ff-only origin "${REPO_REF}" || true
-elif [ -f "${APP_DIR}/server/packages/home-server/package.json" ]; then
-  log "Using existing (non-git) checkout at ${APP_DIR}"
+  SOURCE_DIR="${APP_DIR}"
+elif [ -d "${APP_DIR}/source/.git" ]; then
+  SOURCE_DIR="${APP_DIR}/source"
 elif [ -n "${REPO_URL}" ]; then
-  git clone --branch "${REPO_REF}" "${REPO_URL}" "${APP_DIR}"
+  [ -n "${REPO_REF}" ] || die "REPO_REF is required when cloning; use a full commit SHA or immutable tag."
+  SOURCE_DIR="${APP_DIR}/source"
+  git clone --no-checkout "${REPO_URL}" "${SOURCE_DIR}"
 else
-  die "No checkout at ${APP_DIR} and REPO_URL is unset. Set REPO_URL=<git url> or place the repo at ${APP_DIR}."
+  die "No Git checkout found. Set REPO_URL with REPO_REF, or place a checkout at ${APP_DIR}."
 fi
+if [ -n "${EXPECTED_COMMIT}" ]; then
+  printf '%s' "${EXPECTED_COMMIT}" | grep -Eqi '^[0-9a-f]{40}$' || die "EXPECTED_COMMIT must be a full SHA."
+fi
+if [ -n "${REPO_REF}" ]; then
+  if ! printf '%s' "${REPO_REF}" | grep -Eqi '^[0-9a-f]{40}$' && [ -z "${EXPECTED_COMMIT}" ]; then
+    die "Symbolic REPO_REF values require EXPECTED_COMMIT=<full-sha>."
+  fi
+  git -C "${SOURCE_DIR}" fetch --all --tags --prune
+  if git -C "${SOURCE_DIR}" show-ref --verify --quiet "refs/tags/${REPO_REF}"; then
+    DEPLOY_COMMIT="$(git -C "${SOURCE_DIR}" rev-parse --verify "refs/tags/${REPO_REF}^{commit}")"
+  elif git -C "${SOURCE_DIR}" show-ref --verify --quiet "refs/remotes/origin/${REPO_REF}"; then
+    DEPLOY_COMMIT="$(git -C "${SOURCE_DIR}" rev-parse --verify "refs/remotes/origin/${REPO_REF}^{commit}")"
+  else
+    DEPLOY_COMMIT="$(git -C "${SOURCE_DIR}" rev-parse --verify "${REPO_REF}^{commit}")" || \
+      die "REPO_REF does not resolve to a commit: ${REPO_REF}"
+  fi
+else
+  DEPLOY_COMMIT="$(git -C "${SOURCE_DIR}" rev-parse --verify "HEAD^{commit}")"
+fi
+printf '%s' "${DEPLOY_COMMIT}" | grep -Eq '^[0-9a-f]{40}$' || die "Source ref did not resolve to a full commit SHA."
+if printf '%s' "${REPO_REF}" | grep -Eqi '^[0-9a-f]{40}$' && \
+  [ "${DEPLOY_COMMIT}" != "$(printf '%s' "${REPO_REF}" | tr '[:upper:]' '[:lower:]')" ]; then
+  die "Resolved commit ${DEPLOY_COMMIT} does not match full-SHA REPO_REF ${REPO_REF}."
+fi
+if [ -n "${EXPECTED_COMMIT}" ] && \
+  [ "${DEPLOY_COMMIT}" != "$(printf '%s' "${EXPECTED_COMMIT}" | tr '[:upper:]' '[:lower:]')" ]; then
+  die "Resolved commit ${DEPLOY_COMMIT} does not match EXPECTED_COMMIT ${EXPECTED_COMMIT}."
+fi
+git -C "${SOURCE_DIR}" cat-file -e "${DEPLOY_COMMIT}^{commit}"
+release_create_stage "${SOURCE_DIR}" "${RELEASES_DIR}" "${DEPLOY_COMMIT}"
+trap 'release_cleanup_stage "${RELEASE_STAGE:-}" "${RELEASES_DIR}"' EXIT
+DEPLOY_ROOT="${RELEASE_STAGE}"
+HS_DIR="${DEPLOY_ROOT}/server/packages/home-server"
 
 # -----------------------------------------------------------------------------
 log "Building the server workspace (home-server)"
-( cd "${APP_DIR}/server" && CI=true yarn install --immutable && CI=true yarn build )
+( cd "${DEPLOY_ROOT}/server" && CI=true yarn install --immutable && CI=true yarn build )
 
 log "Building the web app bundle"
 (
-  cd "${APP_DIR}/app"
+  cd "${DEPLOY_ROOT}/app"
   printf -- '--ignore-engines true\n' > "${HOME:-/root}/.yarnrc"
   CI=true yarn workspaces focus @standardnotes/web
   CI=true NODE_OPTIONS=--no-deprecation yarn build:web
 )
 
-log "Publishing SPA to ${WEB_ROOT}"
-rm -rf "${WEB_ROOT}"
-mkdir -p "${WEB_ROOT}"
-cp -a "${APP_DIR}/app/packages/web/dist/." "${WEB_ROOT}/"
-
-log "Applying sqlite migration compatibility shim"
-# The server's sqlite migrations were authored MySQL-first (double-quoted SQL
-# string literals) and fail under better-sqlite3's DQS-off SQLite. Rewrite the
-# compiled sqlite migrations in place so the instance boots. Idempotent.
-node "${APP_DIR}/server/docker/single/fix-sqlite-migrations.js" "${APP_DIR}/server/packages"
+[ -f "${DEPLOY_ROOT}/app/packages/web/dist/index.html" ] || die "Staged web bundle is missing index.html."
+[ -f "${HS_DIR}/dist/bin/server.js" ] || die "Staged backend entrypoint is missing."
 
 # -----------------------------------------------------------------------------
 log "Generating / loading persistent secrets"
@@ -167,31 +243,34 @@ EOF
 
 # -----------------------------------------------------------------------------
 log "Installing the launcher + systemd unit"
-cat > "${LAUNCHER}" <<EOF
+STAGED_LAUNCHER="${DEPLOY_ROOT}/.srn-launcher"
+STAGED_ADMIN_LAUNCHER="${DEPLOY_ROOT}/.srn-admin-launcher"
+STAGED_SERVICE_UNIT="${DEPLOY_ROOT}/.srn-service.unit"
+cat > "${STAGED_LAUNCHER}" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-cd "${HS_DIR}"
-exec "${NODE_BIN}" --require "${APP_DIR}/server/.pnp.cjs" dist/bin/server.js
+cd "${CURRENT_LINK}/server/packages/home-server"
+exec "${NODE_BIN}" --require "${CURRENT_LINK}/server/.pnp.cjs" dist/bin/server.js
 EOF
-chmod +x "${LAUNCHER}"
+chmod +x "${STAGED_LAUNCHER}"
 
-cat > "${ADMIN_LAUNCHER}" <<EOF
+cat > "${STAGED_ADMIN_LAUNCHER}" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-cd "${HS_DIR}"
-exec runuser -u "${APP_USER}" -- "${NODE_BIN}" "${APP_DIR}/server/.yarn/releases/yarn-4.17.1.cjs" node \
-  "${APP_DIR}/server/packages/auth/dist/bin/srn_admin.js" "\$@"
+cd "${CURRENT_LINK}/server/packages/home-server"
+exec runuser -u "${APP_USER}" -- "${NODE_BIN}" "${CURRENT_LINK}/server/.yarn/releases/yarn-4.17.1.cjs" node \
+  "${CURRENT_LINK}/server/packages/auth/dist/bin/srn_admin.js" "\$@"
 EOF
-chmod +x "${ADMIN_LAUNCHER}"
+chmod +x "${STAGED_ADMIN_LAUNCHER}"
 
-# Install the unit, templating the user in.
-sed "s|__APP_USER__|${APP_USER}|g; s|__WORKING_DIR__|${HS_DIR}|g; s|__LAUNCHER__|${LAUNCHER}|g" \
-  "${UNIT_SRC_DIR}/standard-red-notes.service" > /etc/systemd/system/standard-red-notes.service
+# Stage the unit; live control files are installed only during activation.
+sed "s|__APP_USER__|${APP_USER}|g; s|__WORKING_DIR__|${CURRENT_LINK}/server/packages/home-server|g; s|__LAUNCHER__|${LAUNCHER}|g; s|__DATA_DIR__|${DATA_DIR}|g" \
+  "${DEPLOY_ROOT}/deploy/lxc/standard-red-notes.service" > "${STAGED_SERVICE_UNIT}"
 
 # -----------------------------------------------------------------------------
 log "Configuring nginx"
 install_nginx_site() {
-  local conf="/etc/nginx/sites-available/standard-red-notes.conf"
+  local conf="$1"
   cat > "${conf}" <<EOF
 map \$http_upgrade \$connection_upgrade { default upgrade; '' close; }
 
@@ -250,16 +329,15 @@ server {
   }
 }
 EOF
-  ln -sf "${conf}" /etc/nginx/sites-enabled/standard-red-notes.conf
-  rm -f /etc/nginx/sites-enabled/default
 }
-install_nginx_site
+STAGED_NGINX_SITE="${DEPLOY_ROOT}/.srn-nginx.conf"
+install_nginx_site "${STAGED_NGINX_SITE}"
 
 # Self-heal the CSP inline-script hash against the SERVED index.html — the same
 # approach as app/docker/docker-entrypoint.sh, run here at install/upgrade time.
 apply_csp_hash() {
-  local index="${WEB_ROOT}/index.html"
-  local conf="/etc/nginx/sites-available/standard-red-notes.conf"
+  local index="${DEPLOY_ROOT}/app/packages/web/dist/index.html"
+  local conf="${STAGED_NGINX_SITE}"
   [ -f "${index}" ] || { warn "index.html missing; leaving CSP fallback"; return 1; }
   local body hex b64
   body="$(awk '
@@ -287,21 +365,164 @@ apply_csp_hash() {
   sed -i "s|'sha256-[A-Za-z0-9+/=_]*'|'sha256-${b64}'|" "${conf}"
   log "CSP inline-script hash: sha256-${b64}"
 }
-if ! apply_csp_hash; then
-  warn "Falling back to 'unsafe-inline' for script-src (app still boots)."
-  sed -i "s|'sha256-[A-Za-z0-9+/=_]*'|'unsafe-inline'|" \
-    /etc/nginx/sites-available/standard-red-notes.conf || true
-fi
+apply_csp_hash || die "Could not derive the staged web CSP hash; live release was not switched."
+cat > "${DEPLOY_ROOT}/.srn-nginx-test.conf" <<EOF
+events {}
+http {
+  include /etc/nginx/mime.types;
+  include ${STAGED_NGINX_SITE};
+}
+EOF
+nginx -t -q -c "${DEPLOY_ROOT}/.srn-nginx-test.conf" || \
+  die "Staged nginx configuration is invalid; live configuration was not changed."
+rm -f -- "${DEPLOY_ROOT}/.srn-nginx-test.conf"
 
 # -----------------------------------------------------------------------------
-log "Setting ownership + starting services"
+log "Health-checking and sealing the staged release"
 chown -R "${APP_USER}:${APP_USER}" "${DATA_DIR}" "${HS_DIR}/.env"
-chown -R "${APP_USER}:${APP_USER}" "${APP_DIR}" 2>/dev/null || true
+release_smoke_backend "${DEPLOY_ROOT}" "${APP_USER}" "${NODE_BIN}" 120 || \
+  die "Staged backend failed its health preflight; live release was not switched."
+release_seal "${RELEASE_STAGE}" "${RELEASE_FINAL}" "${APP_USER}"
+trap - EXIT
 
-nginx -t
-systemctl daemon-reload
-systemctl enable --now standard-red-notes.service
-systemctl restart nginx
+OLD_RELEASE="$(release_link_target "${CURRENT_LINK}" "${RELEASES_DIR}" 2>/dev/null || true)"
+atomic_install_control() {
+  local source="$1" target="$2" mode="$3" temporary
+  temporary="${target}.new.$$"
+  install -o root -g root -m "${mode}" "${source}" "${temporary}" || return 1
+  if ! mv -Tf -- "${temporary}" "${target}"; then
+    rm -f -- "${temporary}"
+    return 1
+  fi
+}
+
+backup_live_control() {
+  local target="$1" backup
+  if [ -e "${target}" ]; then
+    [ -f "${target}" ] || return 1
+    backup="$(mktemp)" || return 1
+    cp -a -- "${target}" "${backup}" || { rm -f -- "${backup}"; return 1; }
+    printf '%s\n' "${backup}"
+  fi
+}
+
+restore_live_control() {
+  local backup="$1" target="$2" mode="$3"
+  if [ -n "${backup}" ]; then
+    atomic_install_control "${backup}" "${target}" "${mode}"
+  else
+    rm -f -- "${target}"
+  fi
+}
+
+LAUNCHER_BACKUP=""
+ADMIN_LAUNCHER_BACKUP=""
+SERVICE_UNIT_BACKUP=""
+NGINX_BACKUP=""
+cleanup_control_backups() {
+  local backup
+  for backup in "${LAUNCHER_BACKUP}" "${ADMIN_LAUNCHER_BACKUP}" "${SERVICE_UNIT_BACKUP}" "${NGINX_BACKUP}"; do
+    [ -z "${backup}" ] || rm -f -- "${backup}"
+  done
+  rm -f -- "${LAUNCHER}.new.$$" "${ADMIN_LAUNCHER}.new.$$" \
+    /etc/systemd/system/standard-red-notes.service.new.$$ "${NGINX_SITE}.new.$$"
+}
+trap cleanup_control_backups EXIT
+
+LAUNCHER_BACKUP="$(backup_live_control "${LAUNCHER}")"
+ADMIN_LAUNCHER_BACKUP="$(backup_live_control "${ADMIN_LAUNCHER}")"
+SERVICE_UNIT_BACKUP="$(backup_live_control /etc/systemd/system/standard-red-notes.service)"
+NGINX_BACKUP="$(backup_live_control "${NGINX_SITE}")"
+SRN_SERVICE_WAS_INSTALLED=false
+SRN_SERVICE_WAS_ACTIVE=false
+SRN_SERVICE_WAS_ENABLED=false
+NGINX_WAS_ACTIVE=false
+systemctl is-active --quiet standard-red-notes.service && SRN_SERVICE_WAS_ACTIVE=true
+systemctl is-enabled --quiet standard-red-notes.service && SRN_SERVICE_WAS_ENABLED=true
+systemctl is-active --quiet nginx && NGINX_WAS_ACTIVE=true
+[ -n "${SERVICE_UNIT_BACKUP}" ] && SRN_SERVICE_WAS_INSTALLED=true
+NGINX_LINK_TARGET=""
+DEFAULT_LINK_TARGET=""
+[ ! -e "${NGINX_SITE_LINK}" ] || [ -L "${NGINX_SITE_LINK}" ] || \
+  die "Refusing to replace non-symlink nginx site entry: ${NGINX_SITE_LINK}"
+if [ -L "${NGINX_SITE_LINK}" ]; then
+  NGINX_LINK_TARGET="$(readlink -- "${NGINX_SITE_LINK}")"
+fi
+if [ -e /etc/nginx/sites-enabled/default ] && [ ! -L /etc/nginx/sites-enabled/default ]; then
+  die "Refusing to replace non-symlink nginx default site."
+elif [ -L /etc/nginx/sites-enabled/default ]; then
+  DEFAULT_LINK_TARGET="$(readlink -- /etc/nginx/sites-enabled/default)"
+fi
+
+restore_live_controls() {
+  restore_live_control "${LAUNCHER_BACKUP}" "${LAUNCHER}" 0755
+  restore_live_control "${ADMIN_LAUNCHER_BACKUP}" "${ADMIN_LAUNCHER}" 0755
+  restore_live_control "${SERVICE_UNIT_BACKUP}" /etc/systemd/system/standard-red-notes.service 0644
+  restore_live_control "${NGINX_BACKUP}" "${NGINX_SITE}" 0644
+  if [ -n "${NGINX_LINK_TARGET}" ]; then
+    ln -sfn "${NGINX_LINK_TARGET}" "${NGINX_SITE_LINK}"
+  else
+    rm -f -- "${NGINX_SITE_LINK}"
+  fi
+  if [ -n "${DEFAULT_LINK_TARGET}" ]; then
+    ln -sfn "${DEFAULT_LINK_TARGET}" /etc/nginx/sites-enabled/default
+  fi
+}
+
+log "Atomically activating commit ${DEPLOY_COMMIT}"
+if release_activate "${RELEASE_FINAL}" "${CURRENT_LINK}" "${PREVIOUS_LINK}" "${RELEASES_DIR}" && \
+  atomic_install_control "${RELEASE_FINAL}/.srn-launcher" "${LAUNCHER}" 0755 && \
+  atomic_install_control "${RELEASE_FINAL}/.srn-admin-launcher" "${ADMIN_LAUNCHER}" 0755 && \
+  atomic_install_control "${RELEASE_FINAL}/.srn-service.unit" /etc/systemd/system/standard-red-notes.service 0644 && \
+  atomic_install_control "${RELEASE_FINAL}/.srn-nginx.conf" "${NGINX_SITE}" 0644 && \
+  ln -sfn "${NGINX_SITE}" "${NGINX_SITE_LINK}" && \
+  rm -f /etc/nginx/sites-enabled/default; then
+  :
+else
+  LINKS_RESTORED=true
+  if [ -n "${OLD_RELEASE}" ]; then
+    if ! release_swap_current_previous "${CURRENT_LINK}" "${PREVIOUS_LINK}" "${RELEASES_DIR}"; then
+      LINKS_RESTORED=false
+    fi
+  elif [ -L "${CURRENT_LINK}" ]; then
+    unlink -- "${CURRENT_LINK}"
+  fi
+  restore_live_controls
+  [ "${LINKS_RESTORED}" = true ] || \
+    die "Activation failed and the previous release links could not be restored."
+  die "Activation transaction failed; release links and nginx config were restored."
+fi
+
+if nginx -t && systemctl daemon-reload && \
+  systemctl enable --now standard-red-notes.service && systemctl restart nginx && \
+  wait_live_health; then
+  log "Live health check passed."
+else
+  warn "New release was unhealthy; restoring the previous release."
+  if [ -n "${OLD_RELEASE}" ]; then
+    release_swap_current_previous "${CURRENT_LINK}" "${PREVIOUS_LINK}" "${RELEASES_DIR}" || \
+      die "Automatic rollback could not restore the release links."
+    restore_live_controls
+    release_restore_service_state "${SRN_SERVICE_WAS_INSTALLED}" "${SRN_SERVICE_WAS_ENABLED}" \
+      "${SRN_SERVICE_WAS_ACTIVE}" "${NGINX_WAS_ACTIVE}" || \
+      die "Previous release and controls were restored, but prior service state did not recover."
+    if [ "${SRN_SERVICE_WAS_ACTIVE}" = true ] && [ "${NGINX_WAS_ACTIVE}" = true ]; then
+      wait_live_health || die "Previous release was restored, but its prior live health did not recover."
+    fi
+    die "Deployment failed its live health check; the previous release was restored."
+  else
+    [ -L "${CURRENT_LINK}" ] && unlink -- "${CURRENT_LINK}"
+    restore_live_controls
+    release_restore_service_state "${SRN_SERVICE_WAS_INSTALLED}" "${SRN_SERVICE_WAS_ENABLED}" \
+      "${SRN_SERVICE_WAS_ACTIVE}" "${NGINX_WAS_ACTIVE}" || \
+      die "Prior controls were restored, but prior service state did not recover."
+    die "Initial deployment failed its live health check; no prior release existed."
+  fi
+fi
+cleanup_control_backups
+trap - EXIT
+release_prune "${RELEASES_DIR}" "${CURRENT_LINK}" "${PREVIOUS_LINK}" || \
+  warn "Deployment is healthy, but stale managed releases could not be pruned."
 
 # -----------------------------------------------------------------------------
 log "Done. Standard Red Notes is starting."
@@ -313,6 +534,8 @@ cat <<EOF
   Service:     systemctl status standard-red-notes
   Logs:        journalctl -u standard-red-notes -f
   Data dir:    ${DATA_DIR}   (sqlite DB, uploads, secrets — back this up)
+  Commit:      ${DEPLOY_COMMIT}
+  Rollback:    ${CURRENT_LINK}/deploy/lxc/install.sh --rollback
 
   First run builds the sqlite schema on boot; give it ~30-60s, then register a
   user in the web UI and persist its role locally:

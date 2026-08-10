@@ -18,16 +18,18 @@ RestartSec=5
 # Give the sqlite schema build room on first boot.
 TimeoutStartSec=120
 
-# Hardening — the service only needs to read its checkout and write its data dir.
+# The root-owned release is read-only; only persistent data may be mutated.
 NoNewPrivileges=true
 PrivateTmp=true
-ProtectSystem=full
+ProtectSystem=strict
 ProtectHome=true
 ProtectControlGroups=true
 ProtectKernelModules=true
 ProtectKernelTunables=true
 RestrictSUIDSGID=true
 LockPersonality=true
+ReadWritePaths=__DATA_DIR__
+UMask=0027
 
 [Install]
 WantedBy=multi-user.target

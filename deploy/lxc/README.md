@@ -13,13 +13,22 @@ serving the web app. Zero external services (no MySQL, no Redis).
 container:
 
 1. Installs Node.js, Yarn (corepack), nginx, git, openssl, build tools.
-2. Fetches the repo (`REPO_URL`) or uses an existing checkout at `APP_DIR`.
-3. Builds the server workspace and the web SPA bundle.
+2. Resolves an explicit Git ref to a full commit (or pins an existing checkout's
+   current `HEAD`) and fails closed on fetch/ref errors.
+3. Builds and boots the server plus web SPA in an isolated staging release.
 4. Generates + persists per-instance secrets under the data dir.
 5. Writes the home-server `.env` (sqlite + in-memory cache) and installs a
    **systemd** unit (`standard-red-notes.service`) that runs it.
-6. Configures nginx to serve the SPA and reverse-proxy the API same-origin,
-   self-healing the CSP inline-script hash (same method as the Docker image).
+6. Switches one `current` symlink only after the staged backend health check
+   passes. nginx and systemd both use that link; `previous` is retained for an
+   explicit rollback. Releases are root-owned/read-only at runtime.
+
+The staged boot uses an isolated fresh SQLite database. It verifies startup and
+schema creation without reading or changing the production database.
+
+The NodeSource setup script is not piped into a shell. The installer downloads
+the repository signing key, verifies its pinned fingerprint, and then lets APT
+verify signed Node.js packages.
 
 ## Proxmox — create the container
 
@@ -57,12 +66,15 @@ apt-get update && apt-get install -y git
 git clone https://github.com/<owner>/standard-red-notes.git /opt/standard-red-notes
 cd /opt/standard-red-notes/deploy/lxc
 
-# Build + install + start everything
-REPO_URL=https://github.com/<owner>/standard-red-notes.git ./install.sh
+# Build + install + start exactly the checked-out commit
+REPO_REF="$(git rev-parse HEAD)" ./install.sh
 ```
 
-If you already cloned to `/opt/standard-red-notes` (as above), `REPO_URL` is
-optional — the script uses the existing checkout.
+If no checkout exists, set both `REPO_URL` and `REPO_REF`. A full 40-character
+commit SHA is accepted directly. Every symbolic branch or tag also requires
+`EXPECTED_COMMIT=<full-sha>`, and deployment stops if resolution differs.
+Omitting `REPO_REF` is allowed only with an existing checkout and deploys its
+already-concrete current `HEAD` without fetching.
 
 Optional overrides, e.g. bind to port 8080 and a custom data dir:
 
@@ -94,14 +106,29 @@ systemctl restart standard-red-notes
 nginx -t && systemctl reload nginx
 ```
 
-## Upgrade
+## Upgrade and rollback
 
-Re-run the installer — it re-pulls `REPO_REF` (default `main`), rebuilds, and
-restarts. Secrets and data under `DATA_DIR` are preserved:
+Fetch deliberately, inspect the commit, then deploy that exact SHA. Fetch,
+build, staging health, and the live health check are fail-closed. Secrets and
+data under `DATA_DIR` are preserved:
 
 ```sh
-cd /opt/standard-red-notes/deploy/lxc && ./install.sh
+cd /opt/standard-red-notes
+git fetch --all --tags --prune
+commit="$(git rev-parse origin/main^{commit})"
+REPO_REF="$commit" EXPECTED_COMMIT="$commit" ./deploy/lxc/install.sh
 ```
+
+The prior successful release remains at `previous`. Roll back with the copy of
+the installer in the live release (custom `APP_DIR` values must be exported):
+
+```sh
+/opt/standard-red-notes/current/deploy/lxc/install.sh --rollback
+```
+
+Rollback switches `current`, updates `previous` with immediate link recovery on
+partial failure, restarts both services, and switches back automatically if the
+rollback target does not become healthy.
 
 ## Back up
 
@@ -126,11 +153,13 @@ the home-server `.env`: `COOKIE_SECURE=true`, `COOKIE_DOMAIN=notes.example.com`,
 and `PUBLIC_FILES_SERVER_URL=https://notes.example.com/files`. Restart the
 service.
 
-## Verification (manual — cannot be run in CI here)
+## Verification
 
 ```sh
 bash -n deploy/lxc/install.sh          # syntax check (run in this repo)
+bash -n deploy/lxc/release.sh
 shellcheck deploy/lxc/install.sh       # if shellcheck is installed
+node --test scripts/validate-lxc-deploy.test.mjs # fail-closed mutation checks
 
 # After install, inside the container:
 systemctl is-active standard-red-notes # -> active
