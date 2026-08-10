@@ -55,13 +55,13 @@ docker compose up -d
 # open http://localhost:3001
 ```
 
-The interactive `scripts/setup.sh` and `scripts/setup.ps1` helpers make a
-timestamped backup before replacing an existing `.env`. Their non-interactive
-`--yes` / `-Yes` modes refuse an existing file: silently regenerating database,
-session, encryption, and WebSocket credentials can disconnect an initialized
-MariaDB volume and invalidate live sessions. Use `--force-overwrite` or
-`-ForceOverwrite` only for an intentional credential rotation with a tested
-database, volume, and `.env` recovery plan.
+The `scripts/setup.sh` and `scripts/setup.ps1` helpers validate and reuse an
+existing `.env` on every normal rerun; they never prompt to regenerate its
+secrets. Silently rotating database, session, encryption, and WebSocket
+credentials can disconnect an initialized MariaDB volume and invalidate live
+sessions. Use `--force-overwrite` or `-ForceOverwrite` only for an intentional
+rotation. If setup was overwritten accidentally, recover the complete prior
+environment with `npm run recover:database`; do not delete the database volume.
 
 See the top of `docker-compose.yml` and `docs/self-hosting.md` for the full env
 reference, reverse-proxy (Traefik) examples, and optional profiles (`mcp`,

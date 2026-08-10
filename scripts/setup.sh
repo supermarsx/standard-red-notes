@@ -124,19 +124,30 @@ ok "Found Docker and Compose (${COMPOSE})."
 # ---------------------------------------------------------------------------
 # Existing .env handling
 # ---------------------------------------------------------------------------
+BACKUP=""
 if [ -f "$ENV_FILE" ]; then
   warn "An .env file already exists at: ${ENV_FILE}"
-  if [ "$ASSUME_YES" -eq 1 ] && [ "$FORCE_OVERWRITE" -ne 1 ]; then
-    err "Refusing to overwrite an existing .env in non-interactive mode."
-    err "Re-run without --yes to confirm interactively, or add --force-overwrite only when credential rotation is intentional."
-    exit 1
-  fi
-  if [ "$FORCE_OVERWRITE" -ne 1 ] && ! confirm "Overwrite it? A timestamped backup will be made first."; then
-    err "Aborted. Existing .env left untouched."
-    exit 1
+  if [ "$FORCE_OVERWRITE" -ne 1 ]; then
+    info "Reusing the existing configuration; normal setup reruns never regenerate secrets."
+    ( cd "$REPO_ROOT" && $COMPOSE config --quiet )
+    ok "Existing .env validated."
+    if [ "$RUN_UP" -eq 1 ]; then
+      info "Building and starting the existing stack..."
+      ( cd "$REPO_ROOT" && $COMPOSE up -d --build )
+      ok "Stack started."
+    else
+      info "Start it with: ${COMPOSE} up -d --build"
+    fi
+    info "Intentional rotation requires --force-overwrite. If an accidental overwrite already happened, run: npm run recover:database"
+    exit 0
   fi
   BACKUP="${ENV_FILE}.bak.$(date +%Y%m%d%H%M%S)"
+  if [ -e "$BACKUP" ]; then
+    err "Refusing to overwrite existing environment backup: ${BACKUP}"
+    exit 1
+  fi
   cp "$ENV_FILE" "$BACKUP"
+  chmod 600 "$BACKUP"
   ok "Backed up existing .env to: ${BACKUP}"
 fi
 
@@ -398,6 +409,10 @@ REGISTRATION_APPROVAL_REQUIRED=${REGISTRATION_APPROVAL_REQUIRED}
 EOF
 
 ok "Wrote ${ENV_FILE}"
+chmod 600 "$ENV_FILE"
+if [ -n "$BACKUP" ]; then
+  warn "The complete environment was rotated. If that was accidental or startup now fails, run: npm run recover:database"
+fi
 
 # ---------------------------------------------------------------------------
 # Next steps
@@ -407,7 +422,12 @@ APP_URL="${PUBLIC_URL}"
 
 if [ "$RUN_UP" -eq 1 ] || { [ "$ASSUME_YES" -eq 0 ] && confirm "Start the stack now with '${COMPOSE} up -d'?"; }; then
   info "Building and starting the stack (first run can take several minutes)..."
-  ( cd "$REPO_ROOT" && $COMPOSE up -d --build )
+  if ! ( cd "$REPO_ROOT" && $COMPOSE up -d --build ); then
+    if [ -n "$BACKUP" ]; then
+      err "Startup failed after credential rotation. Recover the prior full environment with: npm run recover:database"
+    fi
+    exit 1
+  fi
   ok "Stack started. Open: ${APP_URL}"
   info "Watch logs:  ${COMPOSE} logs -f"
   info "Stop:        ${COMPOSE} down"
