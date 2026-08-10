@@ -41,7 +41,12 @@ if (canRunElectron) {
     t.is(extServerHost.protocol, 'http:')
     t.is(extServerHost.port, '45653')
 
-    t.is(data.useNativeKeychain, null)
+    if (process.platform === 'linux') {
+      /** Linux probes Secret Service during startup and persists whether native keychain access succeeded. */
+      t.is(typeof data.useNativeKeychain, 'boolean')
+    } else {
+      t.is(data.useNativeKeychain, null)
+    }
 
     t.is(typeof data.LastRunVersion, 'string')
 
