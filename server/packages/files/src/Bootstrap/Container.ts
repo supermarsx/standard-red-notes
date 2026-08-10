@@ -47,6 +47,7 @@ import { MarkFilesToBeRemoved } from '../Domain/UseCase/MarkFilesToBeRemoved/Mar
 import { AccountDeletionRequestedEventHandler } from '../Domain/Handler/AccountDeletionRequestedEventHandler'
 import { SharedSubscriptionInvitationCanceledEventHandler } from '../Domain/Handler/SharedSubscriptionInvitationCanceledEventHandler'
 import { InMemoryUploadRepository } from '../Infra/InMemory/InMemoryUploadRepository'
+import { InMemoryValetTokenRepository } from '../Infra/InMemory/InMemoryValetTokenRepository'
 import { Transform } from 'stream'
 import { FileMoverInterface } from '../Domain/Services/FileMoverInterface'
 import { S3FileMover } from '../Infra/S3/S3FileMover'
@@ -57,6 +58,9 @@ import { RecalculateQuota } from '../Domain/UseCase/RecalculateQuota/Recalculate
 import { FileQuotaRecalculationRequestedEventHandler } from '../Domain/Handler/FileQuotaRecalculationRequestedEventHandler'
 import { ValetTokenRepositoryInterface } from '../Domain/ValetToken/ValetTokenRepositoryInterface'
 import { RedisValetTokenRepository } from '../Infra/Redis/RedisValetTokenRepository'
+import { StorageReadinessInterface } from '../Domain/Services/StorageReadinessInterface'
+import { FSStorageReadiness } from '../Infra/FS/FSStorageReadiness'
+import { S3StorageReadiness } from '../Infra/S3/S3StorageReadiness'
 
 export class ContainerConfigLoader {
   constructor(private mode: 'server' | 'worker' = 'server') {}
@@ -128,29 +132,31 @@ export class ContainerConfigLoader {
 
     container.bind<TimerInterface>(TYPES.Files_Timer).toConstantValue(new Timer())
 
-    container.bind(TYPES.Files_REDIS_URL).toConstantValue(env.get('REDIS_URL'))
+    if (!isConfiguredForInMemoryCache) {
+      container.bind(TYPES.Files_REDIS_URL).toConstantValue(env.get('REDIS_URL'))
 
-    const redisUrl = container.get(TYPES.Files_REDIS_URL) as string
-    const isRedisInClusterMode = redisUrl.indexOf(',') > 0
-    // Standard Red Notes: bounded exponential reconnection backoff (cap 5s) plus
-    // an explicit per-request retry ceiling so a brief Redis blip self-heals
-    // instead of wedging the process. No BullMQ here, so a finite
-    // maxRetriesPerRequest is safe. Connection target/secrets are unchanged.
-    const redisRetryStrategy = (times: number): number => Math.min(times * 200, 5000)
-    let redis
-    if (isRedisInClusterMode) {
-      redis = new Redis.Cluster(redisUrl.split(','), {
-        clusterRetryStrategy: redisRetryStrategy,
-        redisOptions: { maxRetriesPerRequest: 20 },
-      })
-    } else {
-      redis = new Redis(redisUrl, {
-        maxRetriesPerRequest: 20,
-        retryStrategy: redisRetryStrategy,
-      })
+      const redisUrl = container.get(TYPES.Files_REDIS_URL) as string
+      const isRedisInClusterMode = redisUrl.indexOf(',') > 0
+      // Standard Red Notes: bounded exponential reconnection backoff (cap 5s) plus
+      // an explicit per-request retry ceiling so a brief Redis blip self-heals
+      // instead of wedging the process. No BullMQ here, so a finite
+      // maxRetriesPerRequest is safe. Connection target/secrets are unchanged.
+      const redisRetryStrategy = (times: number): number => Math.min(times * 200, 5000)
+      let redis
+      if (isRedisInClusterMode) {
+        redis = new Redis.Cluster(redisUrl.split(','), {
+          clusterRetryStrategy: redisRetryStrategy,
+          redisOptions: { maxRetriesPerRequest: 20 },
+        })
+      } else {
+        redis = new Redis(redisUrl, {
+          maxRetriesPerRequest: 20,
+          retryStrategy: redisRetryStrategy,
+        })
+      }
+
+      container.bind(TYPES.Files_Redis).toConstantValue(redis)
     }
-
-    container.bind(TYPES.Files_Redis).toConstantValue(redis)
 
     // services
     container
@@ -160,15 +166,17 @@ export class ContainerConfigLoader {
       .bind<DomainEventFactoryInterface>(TYPES.Files_DomainEventFactory)
       .toConstantValue(new DomainEventFactory(container.get<TimerInterface>(TYPES.Files_Timer)))
 
-    container
-      .bind<ValetTokenRepositoryInterface>(TYPES.Files_ValetTokenRepository)
-      .toConstantValue(new RedisValetTokenRepository(container.get<Redis>(TYPES.Files_Redis)))
-
     if (isConfiguredForInMemoryCache) {
+      container
+        .bind<ValetTokenRepositoryInterface>(TYPES.Files_ValetTokenRepository)
+        .toConstantValue(new InMemoryValetTokenRepository(container.get(TYPES.Files_Timer)))
       container
         .bind<UploadRepositoryInterface>(TYPES.Files_UploadRepository)
         .toConstantValue(new InMemoryUploadRepository(container.get(TYPES.Files_Timer)))
     } else {
+      container
+        .bind<ValetTokenRepositoryInterface>(TYPES.Files_ValetTokenRepository)
+        .toConstantValue(new RedisValetTokenRepository(container.get<Redis>(TYPES.Files_Redis)))
       container.bind<UploadRepositoryInterface>(TYPES.Files_UploadRepository).to(RedisUploadRepository)
     }
 
@@ -237,11 +245,17 @@ export class ContainerConfigLoader {
       }
       const s3Client = new S3Client(s3Opts)
       container.bind<S3Client>(TYPES.Files_S3).toConstantValue(s3Client)
+      container
+        .bind<StorageReadinessInterface>(TYPES.Files_StorageReadiness)
+        .toConstantValue(new S3StorageReadiness(s3Client, container.get(TYPES.Files_S3_BUCKET_NAME)))
       container.bind<FileDownloaderInterface>(TYPES.Files_FileDownloader).to(S3FileDownloader)
       container.bind<FileUploaderInterface>(TYPES.Files_FileUploader).to(S3FileUploader)
       container.bind<FileRemoverInterface>(TYPES.Files_FileRemover).to(S3FileRemover)
       container.bind<FileMoverInterface>(TYPES.Files_FileMover).to(S3FileMover)
     } else {
+      container
+        .bind<StorageReadinessInterface>(TYPES.Files_StorageReadiness)
+        .toConstantValue(new FSStorageReadiness(container.get(TYPES.Files_FILE_UPLOAD_PATH)))
       container.bind<FileDownloaderInterface>(TYPES.Files_FileDownloader).to(FSFileDownloader)
       container
         .bind<FileUploaderInterface>(TYPES.Files_FileUploader)

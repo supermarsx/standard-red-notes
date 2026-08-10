@@ -3,13 +3,18 @@ import { controller, httpGet, response } from 'inversify-express-utils'
 import { Response } from 'express'
 
 import TYPES from '../../Bootstrap/Types'
+import { StorageReadinessInterface } from '../../Domain/Services/StorageReadinessInterface'
 
 @controller('/healthcheck')
 export class AnnotatedHealthCheckController {
   constructor(
-    // Optional so the unit test can construct the controller without a container.
-    // In production Files_Redis is always bound and injected.
+    // Redis is intentionally absent when CACHE_TYPE=memory (the zero-Redis
+    // home-server profile), so its absence is healthy for that topology.
     @inject(TYPES.Files_Redis) @optional() private redis?: { ping(): Promise<string> },
+    // Optional only for direct unit construction. Production always binds the
+    // topology-specific filesystem or S3 capability probe and absence fails
+    // readiness closed.
+    @inject(TYPES.Files_StorageReadiness) @optional() private storage?: StorageReadinessInterface,
   ) {}
 
   // Cheap liveness: the process is up and the event loop is responsive. Kept
@@ -20,25 +25,31 @@ export class AnnotatedHealthCheckController {
   }
 
   // Readiness: verifies the service can actually serve traffic by pinging its
-  // hard dependency (Redis PING) under a short timeout, and returns 503 when it
-  // is down so the orchestrator stops routing to us until it recovers. The files
-  // service has no SQL database, so Redis is the only cheap dependency to probe.
+  // hard dependencies (Redis when configured plus the active filesystem/S3
+  // storage capability) under a short timeout, and returns 503 when either is
+  // down so the orchestrator stops routing to us until it recovers.
   @httpGet('/readiness')
   public async readiness(@response() res: Response): Promise<void> {
-    const checks = { redis: false }
+    const checks = { redis: this.redis === undefined, storage: false }
 
-    if (this.redis) {
-      try {
-        await this.withTimeout(this.redis.ping(), 2000)
-        checks.redis = true
-      } catch {
-        checks.redis = false
-      }
-    } else {
-      checks.redis = true
-    }
+    await Promise.all([
+      this.redis
+        ? this.withTimeout(this.redis.ping(), 2000)
+            .then(() => {
+              checks.redis = true
+            })
+            .catch(() => undefined)
+        : Promise.resolve(),
+      this.storage
+        ? this.withTimeout(this.storage.check(), 2000)
+            .then(() => {
+              checks.storage = true
+            })
+            .catch(() => undefined)
+        : Promise.resolve(),
+    ])
 
-    const healthy = checks.redis
+    const healthy = checks.redis && checks.storage
     res.status(healthy ? 200 : 503).json({ status: healthy ? 'ready' : 'unavailable', checks })
   }
 

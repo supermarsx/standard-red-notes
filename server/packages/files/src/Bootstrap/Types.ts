@@ -26,6 +26,7 @@ const TYPES = {
   Files_FileDownloader: Symbol.for('Files_FileDownloader'),
   Files_FileRemover: Symbol.for('Files_FileRemover'),
   Files_FileMover: Symbol.for('Files_FileMover'),
+  Files_StorageReadiness: Symbol.for('Files_StorageReadiness'),
 
   // repositories
   Files_UploadRepository: Symbol.for('Files_UploadRepository'),
