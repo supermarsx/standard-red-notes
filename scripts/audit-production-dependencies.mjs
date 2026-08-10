@@ -60,6 +60,10 @@ function auditKey(advisory) {
   return `${advisory.domain}\0${advisory.advisoryId}\0${advisory.package}`;
 }
 
+function auditEvidenceValues(value) {
+  return Array.isArray(value) ? value.map(String).sort() : [];
+}
+
 function isUtcCalendarDate(value) {
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/u.test(value)) {
     return false;
@@ -135,6 +139,9 @@ export function parseYarnAudit(output, domain) {
       severity: String(advisory.Severity).toLowerCase(),
       title: String(advisory.Issue ?? ""),
       url: String(advisory.URL ?? ""),
+      vulnerableVersions: String(advisory["Vulnerable Versions"] ?? ""),
+      versions: auditEvidenceValues(advisory["Tree Versions"]),
+      dependents: auditEvidenceValues(advisory.Dependents),
     });
   }
   return advisories;
@@ -184,7 +191,33 @@ export function enforceableAdvisories(advisories) {
       );
     }
     if (rank >= minimum) {
-      unique.set(auditKey(advisory), advisory);
+      const key = auditKey(advisory);
+      const existing = unique.get(key);
+      if (!existing) {
+        unique.set(key, advisory);
+        continue;
+      }
+
+      const merged = { ...existing };
+      const vulnerableVersions = [
+        existing.vulnerableVersions,
+        advisory.vulnerableVersions,
+      ].filter((value) => typeof value === "string" && value.length > 0);
+      if (vulnerableVersions.length > 0) {
+        merged.vulnerableVersions = [...new Set(vulnerableVersions)]
+          .sort()
+          .join(" || ");
+      }
+      for (const field of ["versions", "dependents"]) {
+        const values = [
+          ...auditEvidenceValues(existing[field]),
+          ...auditEvidenceValues(advisory[field]),
+        ];
+        if (values.length > 0) {
+          merged[field] = [...new Set(values)].sort();
+        }
+      }
+      unique.set(key, merged);
     }
   }
   return [...unique.values()].sort((left, right) =>
@@ -199,6 +232,9 @@ export function validateAllowlist(advisories, allowlist, today) {
     "advisoryId",
     "package",
     "domain",
+    "vulnerableVersions",
+    "versions",
+    "dependents",
     "rationale",
     "expiry",
   ];
@@ -228,6 +264,27 @@ export function validateAllowlist(advisories, allowlist, today) {
     if (typeof entry.package !== "string" || entry.package.length === 0) {
       errors.push(`${label}: package must be non-empty`);
     }
+    if (
+      typeof entry.vulnerableVersions !== "string" ||
+      entry.vulnerableVersions.length === 0
+    ) {
+      errors.push(`${label}: vulnerableVersions must be non-empty`);
+    }
+    for (const field of ["versions", "dependents"]) {
+      if (
+        !Array.isArray(entry[field]) ||
+        entry[field].length === 0 ||
+        entry[field].some(
+          (value) => typeof value !== "string" || value.length === 0,
+        ) ||
+        JSON.stringify(entry[field]) !==
+          JSON.stringify([...new Set(entry[field])].sort())
+      ) {
+        errors.push(
+          `${label}: ${field} must be a non-empty sorted array of unique strings`,
+        );
+      }
+    }
     if (typeof entry.rationale !== "string" || entry.rationale.length < 40) {
       errors.push(
         `${label}: rationale must explain the compatibility exception`,
@@ -250,10 +307,21 @@ export function validateAllowlist(advisories, allowlist, today) {
     advisories.map((advisory) => [auditKey(advisory), advisory]),
   );
   for (const [key, advisory] of observed) {
-    if (!allowed.has(key)) {
+    const exception = allowed.get(key);
+    if (!exception) {
       errors.push(
         `${advisory.domain}: unallowlisted ${advisory.severity} advisory ${advisory.advisoryId} for ${advisory.package}`,
       );
+      continue;
+    }
+    for (const field of ["vulnerableVersions", "versions", "dependents"]) {
+      if (
+        JSON.stringify(advisory[field]) !== JSON.stringify(exception[field])
+      ) {
+        errors.push(
+          `${advisory.domain}: advisory ${advisory.advisoryId} exception evidence changed for ${field}`,
+        );
+      }
     }
   }
   for (const [key, entry] of allowed) {
@@ -282,6 +350,76 @@ function yarnVersions(lockfile, packageName) {
     }
   }
   return versions;
+}
+
+// These floors mirror the first patched releases published for the vulnerable
+// major lines currently present in the committed Yarn dependency graph.
+const yarnSecurityPatchFloors = Object.freeze({
+  undici: Object.freeze({
+    minimumMajor: 6,
+    floors: Object.freeze({
+      6: Object.freeze([6, 28, 0]),
+      7: Object.freeze([7, 29, 0]),
+      8: Object.freeze([8, 9, 0]),
+    }),
+  }),
+  "websocket-driver": Object.freeze({
+    minimumMajor: 0,
+    floors: Object.freeze({
+      0: Object.freeze([0, 7, 5]),
+    }),
+  }),
+  tar: Object.freeze({
+    minimumMajor: 6,
+    floors: Object.freeze({
+      7: Object.freeze([7, 5, 21]),
+    }),
+  }),
+});
+
+function compareVersions(left, right) {
+  for (let index = 0; index < 3; index += 1) {
+    if (left[index] !== right[index]) {
+      return Math.sign(left[index] - right[index]);
+    }
+  }
+  return 0;
+}
+
+export function validateYarnSecurityGraph(lockfiles) {
+  const errors = [];
+  for (const [lockfilePath, lockfile] of Object.entries(lockfiles)) {
+    for (const [packageName, policy] of Object.entries(
+      yarnSecurityPatchFloors,
+    )) {
+      for (const version of yarnVersions(lockfile, packageName)) {
+        const match =
+          /^(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u.exec(
+            version,
+          );
+        if (!match) {
+          errors.push(
+            `${lockfilePath}: ${packageName} has an invalid version ${version}`,
+          );
+          continue;
+        }
+        const parsed = match.slice(1, 4).map(Number);
+        const floor = policy.floors[parsed[0]];
+        const isPrerelease = Boolean(match[4]);
+        if (
+          parsed[0] < policy.minimumMajor ||
+          (floor &&
+            (compareVersions(parsed, floor) < 0 ||
+              (compareVersions(parsed, floor) === 0 && isPrerelease)))
+        ) {
+          errors.push(
+            `${lockfilePath}: ${packageName} ${version} is below its patched security floor`,
+          );
+        }
+      }
+    }
+  }
+  return errors;
 }
 
 export function validateAppSecurityGraph(packageJsonText, lockfile) {
@@ -443,6 +581,22 @@ export function runProductionAudit(root = repositoryRoot, runner = spawnSync) {
   if (graphErrors.length > 0) {
     throw new Error(
       `production dependency graph contract failed:\n- ${graphErrors.join("\n- ")}`,
+    );
+  }
+
+  const yarnGraphErrors = validateYarnSecurityGraph(
+    Object.fromEntries(
+      auditDomains
+        .filter((domain) => domain.manager === "yarn")
+        .map((domain) => [
+          domain.lockfile,
+          fs.readFileSync(path.join(root, domain.lockfile), "utf8"),
+        ]),
+    ),
+  );
+  if (yarnGraphErrors.length > 0) {
+    throw new Error(
+      `production Yarn dependency graph contract failed:\n- ${yarnGraphErrors.join("\n- ")}`,
     );
   }
 
