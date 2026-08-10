@@ -147,8 +147,8 @@ $MysqlDatabase = Read-Default 'Database name:' 'standard_notes_db'
 $MysqlUser     = Read-Default 'Database user:' 'std_notes_user'
 
 Write-Title '4) Admin'
-Write-Info 'Comma-separated emails granted the in-app Admin panel (optional).'
-$AdminEmails = Read-Default 'Admin email(s):' ''
+Write-Info 'Admin access is a persisted role. Register the account after startup, then run:'
+Write-Info "$Compose exec server srn-admin roles grant <user> ADMIN_USER"
 
 Write-Title '5) Safety posture'
 $PublicDefault = if ([string]::IsNullOrEmpty($Domain)) { 'no' } else { 'yes' }
@@ -254,9 +254,9 @@ PUBLIC_URL=$PublicUrl
 AUTH_SERVER_U2F_RELYING_PARTY_ID=$U2fRpId
 AUTH_SERVER_U2F_EXPECTED_ORIGIN=$U2fExpectedOrigin
 
-# ----- Admin -----------------------------------------------------------------
-# Comma-separated emails granted the in-app Admin panel and /admin endpoints.
-ADMIN_EMAILS=$AdminEmails
+# ----- Analytics reports -----------------------------------------------------
+# Optional analytics report recipients. This does not grant administrator access.
+ADMIN_EMAILS=
 
 # ----- Operational safety defaults ------------------------------------------
 # These values make the generated install match the documented production
@@ -377,3 +377,4 @@ if ($startNow) {
   Write-Host "  2. $Compose up -d --build"
   Write-Host "  3. Open $AppUrl"
 }
+Write-Info "After registering an administrator: $Compose exec server srn-admin roles grant <user> ADMIN_USER"

@@ -1,4 +1,17 @@
 import assert from "node:assert/strict";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { execFileSync } from "node:child_process";
 import test from "node:test";
 
 import {
@@ -272,6 +285,85 @@ test("rejects a missing or non-executable srn-admin wrapper", () => {
       "server Dockerfile: /usr/local/bin/srn-admin must be executable",
     ],
   );
+});
+
+test("srn-admin wrapper uses the generated home-server env directory without sourcing it", () => {
+  const shellPath = (value) => {
+    if (process.platform !== "win32") {
+      return value;
+    }
+    const normalized = value.replaceAll("\\", "/");
+    return `/mnt/${normalized[0].toLowerCase()}${normalized.slice(2)}`;
+  };
+  const fixtureRoot = mkdtempSync(join(tmpdir(), "srn-admin-wrapper-"));
+  const authDir = join(fixtureRoot, "packages", "auth");
+  const homeServerDir = join(fixtureRoot, "packages", "home-server");
+  const resultDir = join(fixtureRoot, "result");
+  const fakeNode = join(fixtureRoot, "fake-node.sh");
+  const sentinel = join(fixtureRoot, "env-was-evaluated");
+  const wrapper = shellPath(resolve("server/docker/srn-admin.sh"));
+  const shellFixtureRoot = shellPath(fixtureRoot);
+  const shellAuthDir = shellPath(authDir);
+  const shellHomeServerDir = shellPath(homeServerDir);
+  const shellFakeNode = shellPath(fakeNode);
+  const shellSentinel = shellPath(sentinel);
+  const shellQuote = (value) => `'${value.replaceAll("'", `'"'"'`)}'`;
+  const runWrapper = (args) =>
+    execFileSync(
+      "bash",
+      [
+        "-lc",
+        `export SRN_SERVER_ROOT=${shellQuote(shellFixtureRoot)} SRN_ADMIN_NODE_BIN=${shellQuote(shellFakeNode)}; exec ${[wrapper, ...args].map(shellQuote).join(" ")}`,
+      ],
+      { env: process.env },
+    );
+
+  try {
+    mkdirSync(join(authDir, "dist", "bin"), { recursive: true });
+    mkdirSync(homeServerDir, { recursive: true });
+    mkdirSync(resultDir, { recursive: true });
+    writeFileSync(join(fixtureRoot, ".pnp.cjs"), "");
+    writeFileSync(join(authDir, "dist", "bin", "srn_admin.js"), "");
+    writeFileSync(
+      join(homeServerDir, ".env"),
+      `UNTRUSTED=\$(touch ${shellSentinel})\n`,
+    );
+    writeFileSync(
+      fakeNode,
+      `#!/bin/sh\nprintf '%s' "$PWD" > "${shellPath(join(resultDir, "cwd"))}"\nprintf '%s\\n' "$@" > "${shellPath(join(resultDir, "args"))}"\n`,
+    );
+    chmodSync(fakeNode, 0o755);
+
+    runWrapper(["roles", "grant", "person@example.com", "ADMIN_USER"]);
+
+    assert.equal(
+      readFileSync(join(resultDir, "cwd"), "utf8"),
+      shellHomeServerDir,
+    );
+    assert.deepEqual(
+      readFileSync(join(resultDir, "args"), "utf8").trim().split("\n"),
+      [
+        `${shellFixtureRoot}/.yarn/releases/yarn-4.17.1.cjs`,
+        "node",
+        `${shellAuthDir}/dist/bin/srn_admin.js`,
+        "roles",
+        "grant",
+        "person@example.com",
+        "ADMIN_USER",
+      ],
+    );
+    assert.equal(
+      existsSync(sentinel),
+      false,
+      "the wrapper must never evaluate .env as shell",
+    );
+
+    unlinkSync(join(homeServerDir, ".env"));
+    runWrapper(["roles", "list"]);
+    assert.equal(readFileSync(join(resultDir, "cwd"), "utf8"), shellAuthDir);
+  } finally {
+    rmSync(fixtureRoot, { recursive: true, force: true });
+  }
 });
 
 test("requires the multi image to create and own the persistent gateway data directory", () => {

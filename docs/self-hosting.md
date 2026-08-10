@@ -181,7 +181,6 @@ to boot otherwise).
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ------- |
 | `COOKIE_DOMAIN` | Domain scope for the auth session cookie. Empty = host-only (works on localhost and bare hosts/IPs). Set to your domain for an HTTPS deployment. | empty   |
 | `COOKIE_SECURE` | Send the auth cookie only over HTTPS. Set `true` for real HTTPS deployments; `false` for plain-http localhost.                                   | `false` |
-| `ADMIN_EMAILS`  | Comma-separated emails granted the in-app Admin panel and `/admin` endpoints.                                                                    | empty   |
 
 ### Optional variables
 
@@ -277,6 +276,14 @@ container, which already holds the database connection and server configuration:
 
 ```bash
 docker compose exec server srn-admin help
+```
+
+Administrator access is a persisted server-side role, not an email-based
+environment setting. Register the intended account first, then bootstrap it
+locally:
+
+```bash
+docker compose exec server srn-admin roles grant <user> ADMIN_USER
 ```
 
 You can download and checksum the binary like the other published tools to keep

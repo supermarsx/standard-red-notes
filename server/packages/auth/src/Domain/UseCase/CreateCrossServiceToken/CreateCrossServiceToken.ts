@@ -117,7 +117,7 @@ export class CreateCrossServiceToken implements UseCaseInterface<string> {
 
     const authTokenData: CrossServiceTokenData = {
       user: this.projectUser(user),
-      roles: this.projectRoles(roles, user.email, await this.groupConferredRoleNames(user.uuid)),
+      roles: this.projectRoles(roles, await this.groupConferredRoleNames(user.uuid)),
       shared_vault_owner_context: undefined,
       belongs_to_shared_vaults: sharedVaultAssociations.map((association) => ({
         shared_vault_uuid: association.props.sharedVaultUuid.value,
@@ -305,7 +305,6 @@ export class CreateCrossServiceToken implements UseCaseInterface<string> {
 
   private projectRoles(
     roles: Array<Role>,
-    email?: string,
     groupConferredRoleNames: string[] = [],
   ): Array<{ uuid: string; name: string }> {
     const projected = roles.map((role) => this.roleProjector.projectSimple(role) as { uuid: string; name: string })
@@ -315,21 +314,9 @@ export class CreateCrossServiceToken implements UseCaseInterface<string> {
     if (!projected.some((role) => role.name === RoleName.NAMES.ProUser)) {
       projected.push({ uuid: `singletier-${RoleName.NAMES.ProUser}`, name: RoleName.NAMES.ProUser })
     }
-    // Designate admins via the ADMIN_EMAILS env (comma-separated). These users
-    // carry the AdminUser role, which unlocks the in-app Admin panel and
-    // the /admin endpoints that manage other users' feature flags.
-    const adminEmails = (process.env.ADMIN_EMAILS ?? '')
-      .split(',')
-      .map((value) => value.trim().toLowerCase())
-      .filter(Boolean)
-    if (email && adminEmails.includes(email.toLowerCase())) {
-      if (!projected.some((role) => role.name === RoleName.NAMES.AdminUser)) {
-        projected.push({ uuid: `admin-${RoleName.NAMES.AdminUser}`, name: RoleName.NAMES.AdminUser })
-      }
-    }
     // Standard Red Notes: union in RBAC group-conferred role names so the token
     // reflects the user's EFFECTIVE roles (direct ∪ group). Synthetic uuids,
-    // mirroring the Pro/admin injections above — consumers key off `name`.
+    // mirroring the synthetic Pro role above — consumers key off `name`.
     for (const roleName of groupConferredRoleNames) {
       if (!projected.some((role) => role.name === roleName)) {
         projected.push({ uuid: `group-${roleName}`, name: roleName })

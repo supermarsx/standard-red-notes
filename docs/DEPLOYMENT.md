@@ -86,7 +86,6 @@ The home-server's `:3000` stays container-internal; nginx reverse-proxies
 | Var | Purpose |
 | --- | --- |
 | `APP_PORT` | Host port (default 3001) |
-| `ADMIN_EMAILS` | Emails granted the in-app Admin panel |
 | `PUBLIC_FILES_SERVER_URL` | Public `/files` URL behind a domain, e.g. `https://notes.example.com/files` |
 | `PUBLIC_URL` | Canonical app origin used for external-link hostname isolation |
 | `WORKFLOWS_ENABLED`, `WORKFLOWS_PUBLIC_URL` | Optional discovery link to a separately authenticated n8n origin |
@@ -95,6 +94,12 @@ The home-server's `:3000` stays container-internal; nginx reverse-proxies
 | `OCR_ENABLED` | Client-side PDF OCR toggle |
 | `SHARED_SERVER_ACCESS_KEY` | Optional access gate (`X-Shared-Server-Key`) |
 | `ASSISTANT_*` | AI assistant proxy (Anthropic / OpenAI-compatible / Ollama) |
+
+After registering the intended administrator, persist the server-controlled role locally:
+
+```sh
+docker compose -f docker-compose.single.yml exec app srn-admin roles grant <user> ADMIN_USER
+```
 
 **Manage:**
 

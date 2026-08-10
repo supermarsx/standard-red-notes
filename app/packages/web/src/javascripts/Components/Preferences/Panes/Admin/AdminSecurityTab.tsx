@@ -15,8 +15,7 @@ import TabPanel from '@/Components/Tabs/TabPanel'
 import { useTabState } from '@/Components/Tabs/useTabState'
 import { filterSecurityAuditEntries, registrationBlockSource, registrationIsOpen } from './adminSecurityHelpers'
 
-// Must match the server's RoleName.NAMES.AdminUser value (the admin role
-// granted to ADMIN_EMAILS at sign-in).
+// Must match the server's persisted RoleName.NAMES.AdminUser value.
 const ADMIN_USER = 'ADMIN_USER'
 
 // How many recent security-relevant audit rows to preview here. The full,
@@ -521,11 +520,10 @@ const AdminSecurityTab: FunctionComponent<Props> = ({ application, noteIfForbidd
             />
           </div>
           <Text className="mt-1">
-            Admin access is the <strong>{ADMIN_USER}</strong> role. On sign-in, any account whose email is listed in the
-            server&apos;s <strong>ADMIN_EMAILS</strong> environment variable is granted this role; it can also be
-            assigned directly or via a group on the Groups &amp; roles tab. Every admin action is re-verified against
-            this role on the server, so removing an email from ADMIN_EMAILS (or the role) revokes access on the next
-            session refresh.
+            Admin access is the persisted <strong>{ADMIN_USER}</strong> role. Bootstrap it locally after registration
+            with <strong>srn-admin roles grant &lt;user&gt; ADMIN_USER</strong>, then manage it directly or through a
+            group on the Groups &amp; roles tab. Every admin action is re-verified against this server-controlled role,
+            so revoking the role takes effect on the next session refresh.
           </Text>
           <div className="mt-2 flex flex-wrap gap-2">
             <Button label="Review admins in Users" onClick={() => goToTab('users')} small />
@@ -688,9 +686,9 @@ const AdminSecurityTab: FunctionComponent<Props> = ({ application, noteIfForbidd
           <Subtitle>Configured via the server environment</Subtitle>
           <Text className="mt-1">
             Several security-relevant settings are intentionally not runtime-editable and are changed only by editing
-            the server environment and redeploying: <strong>ADMIN_EMAILS</strong> (who is an admin),{' '}
-            <strong>DISABLE_USER_REGISTRATION</strong> (hard signup block), token lifetimes, and the OCR / Workflows /
-            AI-provider master switches shown above. This tab reflects their live values but does not change them.
+            the server environment and redeploying: <strong>DISABLE_USER_REGISTRATION</strong> (hard signup block),
+            token lifetimes, and the OCR / Workflows / AI-provider master switches shown above. This tab reflects their
+            live values but does not change them. Administrator roles are persisted server-side and managed separately.
           </Text>
         </PreferencesSegment>
       </TabPanel>

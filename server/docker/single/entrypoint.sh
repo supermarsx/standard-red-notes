@@ -98,7 +98,6 @@ put COOKIE_SAME_SITE "${COOKIE_SAME_SITE:-Lax}"
 put COOKIE_SECURE "${COOKIE_SECURE:-false}"
 
 # Optional passthroughs — appended only when set (see put_opt).
-put_opt ADMIN_EMAILS "${ADMIN_EMAILS:-}"
 put_opt TRUST_PROXY "${TRUST_PROXY:-}"
 put_opt CORS_ORIGIN_STRICT_MODE_ENABLED "${CORS_ORIGIN_STRICT_MODE_ENABLED:-}"
 put_opt CORS_ALLOWED_ORIGINS "${CORS_ALLOWED_ORIGINS:-}"

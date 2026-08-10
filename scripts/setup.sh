@@ -164,8 +164,8 @@ prompt MYSQL_DATABASE "Database name:" "standard_notes_db"
 prompt MYSQL_USER     "Database user:" "std_notes_user"
 
 title "4) Admin"
-info "Comma-separated emails granted the in-app Admin panel (optional)."
-prompt ADMIN_EMAILS "Admin email(s):" ""
+info "Admin access is a persisted role. Register the account after startup, then run:"
+info "${COMPOSE} exec server srn-admin roles grant <user> ADMIN_USER"
 
 title "5) Safety posture"
 PUBLIC_DEFAULT="no"
@@ -294,9 +294,9 @@ PUBLIC_URL=${PUBLIC_URL}
 AUTH_SERVER_U2F_RELYING_PARTY_ID=${U2F_RP_ID}
 AUTH_SERVER_U2F_EXPECTED_ORIGIN=${U2F_EXPECTED_ORIGIN}
 
-# ----- Admin -----------------------------------------------------------------
-# Comma-separated emails granted the in-app Admin panel and /admin endpoints.
-ADMIN_EMAILS=${ADMIN_EMAILS}
+# ----- Analytics reports -----------------------------------------------------
+# Optional analytics report recipients. This does not grant administrator access.
+ADMIN_EMAILS=
 
 # ----- Operational safety defaults ------------------------------------------
 # These values make the generated install match the documented production
@@ -409,3 +409,4 @@ else
   printf '  2. %s up -d --build\n' "$COMPOSE"
   printf '  3. Open %s\n' "$APP_URL"
 fi
+info "After registering an administrator: ${COMPOSE} exec server srn-admin roles grant <user> ADMIN_USER"

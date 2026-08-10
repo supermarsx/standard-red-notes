@@ -79,10 +79,11 @@ curl -fsS http://<container-ip>/healthcheck        # -> {"...":"ok"} style 200
 http://<container-ip>/
 ```
 
-Register a user in the web UI. To grant the in-app Admin panel, set
-`ADMIN_EMAILS=you@example.com` in
-`/opt/standard-red-notes/server/packages/home-server/.env` and
-`systemctl restart standard-red-notes`.
+Register a user in the web UI, then persist its administrator role locally:
+
+```sh
+srn-admin roles grant you@example.com ADMIN_USER
+```
 
 ## Operate
 

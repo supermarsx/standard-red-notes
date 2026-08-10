@@ -573,6 +573,32 @@ describe('Register', () => {
       await expect(savedUser.roles).resolves.toEqual([proRole])
     })
 
+    it('does not grant admin to a new account whose normalized email is listed in ADMIN_EMAILS', async () => {
+      const previousAdminEmails = process.env.ADMIN_EMAILS
+      process.env.ADMIN_EMAILS = 'other@example.com, PERSON@EXAMPLE.COM '
+      const coreRole = { name: RoleName.NAMES.CoreUser } as unknown as Role
+      roleRepository.findOneByName = jest.fn().mockResolvedValue(coreRole)
+
+      try {
+        const result = await createUseCaseWithResolver(makeResolver({ defaultRole: RoleName.NAMES.CoreUser })).execute(
+          dtoFor('person@example.com'),
+        )
+
+        expect(result.success).toBe(true)
+        const savedUser = (userRepository.save as jest.Mock).mock.calls[0][0] as User
+        await expect(savedUser.roles).resolves.toEqual([coreRole])
+        await expect(savedUser.roles).resolves.not.toContainEqual(
+          expect.objectContaining({ name: RoleName.NAMES.AdminUser }),
+        )
+      } finally {
+        if (previousAdminEmails === undefined) {
+          delete process.env.ADMIN_EMAILS
+        } else {
+          process.env.ADMIN_EMAILS = previousAdminEmails
+        }
+      }
+    })
+
     it('defaults to CORE_USER when no resolver is wired (legacy behavior)', async () => {
       roleRepository.findOneByName = jest.fn().mockResolvedValue(null)
 

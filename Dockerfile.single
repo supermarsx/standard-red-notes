@@ -99,6 +99,7 @@ COPY server/docker/single/supervisord.conf /etc/supervisord.conf
 COPY server/docker/single/entrypoint.sh /usr/local/bin/srn-entrypoint.sh
 COPY server/docker/single/home-server-run.sh /usr/local/bin/home-server-run.sh
 COPY server/docker/single/fix-sqlite-migrations.js /usr/local/bin/fix-sqlite-migrations.js
+COPY server/docker/srn-admin.sh /usr/local/bin/srn-admin
 
 # Normalize line endings (CRLF checkout), make scripts executable, create the
 # unprivileged user, create the writable runtime dirs and hand ownership to it.
@@ -108,11 +109,13 @@ RUN sed -i 's/\r$//' \
       /usr/local/bin/csp-runtime-config.sh \
       /usr/local/bin/srn-entrypoint.sh \
       /usr/local/bin/home-server-run.sh \
+      /usr/local/bin/srn-admin \
       /etc/supervisord.conf \
   && chmod +x \
       /usr/local/bin/csp-runtime-config.sh \
       /usr/local/bin/srn-entrypoint.sh \
       /usr/local/bin/home-server-run.sh \
+      /usr/local/bin/srn-admin \
   && addgroup -g 10001 -S srn \
   && adduser -u 10001 -S srn -G srn \
   && mkdir -p /data /var/lib/nginx /var/log/nginx \

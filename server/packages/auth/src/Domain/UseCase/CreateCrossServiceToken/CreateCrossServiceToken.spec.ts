@@ -227,7 +227,7 @@ describe('CreateCrossServiceToken', () => {
     expect(payload.mcp_scope).toBeUndefined()
   })
 
-  it('adds the admin role when the projected user email is configured in ADMIN_EMAILS', async () => {
+  it('does not derive the admin role from a normalized ADMIN_EMAILS match', async () => {
     const previousAdminEmails = process.env.ADMIN_EMAILS
     process.env.ADMIN_EMAILS = 'other@example.com, TEST@TEST.TE '
 
@@ -235,8 +235,32 @@ describe('CreateCrossServiceToken', () => {
       await createUseCase().execute({ user, session })
 
       const payload = (tokenEncoder.encodeExpirableToken as jest.Mock).mock.calls[0][0] as CrossServiceTokenData
+      expect(payload.roles.some((projectedRole) => projectedRole.name === RoleName.NAMES.AdminUser)).toBe(false)
+    } finally {
+      if (previousAdminEmails === undefined) {
+        delete process.env.ADMIN_EMAILS
+      } else {
+        process.env.ADMIN_EMAILS = previousAdminEmails
+      }
+    }
+  })
+
+  it('includes a persisted admin role in the issued token regardless of ADMIN_EMAILS', async () => {
+    const previousAdminEmails = process.env.ADMIN_EMAILS
+    process.env.ADMIN_EMAILS = 'other@example.com'
+    const adminRole = { name: RoleName.NAMES.AdminUser } as Role
+    user.roles = Promise.resolve([adminRole])
+    roleProjector.projectSimple = jest.fn().mockReturnValue({
+      uuid: 'persisted-admin-role-uuid',
+      name: RoleName.NAMES.AdminUser,
+    })
+
+    try {
+      await createUseCase().execute({ user, session })
+
+      const payload = (tokenEncoder.encodeExpirableToken as jest.Mock).mock.calls[0][0] as CrossServiceTokenData
       expect(payload.roles.filter((projectedRole) => projectedRole.name === RoleName.NAMES.AdminUser)).toEqual([
-        { uuid: `admin-${RoleName.NAMES.AdminUser}`, name: RoleName.NAMES.AdminUser },
+        { uuid: 'persisted-admin-role-uuid', name: RoleName.NAMES.AdminUser },
       ])
     } finally {
       if (previousAdminEmails === undefined) {

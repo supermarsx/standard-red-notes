@@ -41,6 +41,7 @@ NODE_MAJOR="${NODE_MAJOR:-26}"
 
 HS_DIR="${APP_DIR}/server/packages/home-server"
 LAUNCHER="/usr/local/bin/standard-red-notes-run"
+ADMIN_LAUNCHER="/usr/local/bin/srn-admin"
 UNIT_SRC_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 log() { printf '\n\033[1;32m==>\033[0m %s\n' "$*"; }
@@ -162,7 +163,6 @@ STANDARD_RED_FEATURES_MODE=${STANDARD_RED_FEATURES_MODE:-included}
 STANDARD_RED_ENTITLEMENT_MODE=${STANDARD_RED_ENTITLEMENT_MODE:-included}
 STANDARD_RED_FULL_FEATURE_DURATION_DAYS=${STANDARD_RED_FULL_FEATURE_DURATION_DAYS:-36500}
 STANDARD_RED_FULL_FEATURE_FILE_UPLOAD_BYTES_LIMIT=${STANDARD_RED_FULL_FEATURE_FILE_UPLOAD_BYTES_LIMIT:--1}
-ADMIN_EMAILS=${ADMIN_EMAILS:-}
 EOF
 
 # -----------------------------------------------------------------------------
@@ -174,6 +174,15 @@ cd "${HS_DIR}"
 exec "${NODE_BIN}" --require "${APP_DIR}/server/.pnp.cjs" dist/bin/server.js
 EOF
 chmod +x "${LAUNCHER}"
+
+cat > "${ADMIN_LAUNCHER}" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+cd "${HS_DIR}"
+exec runuser -u "${APP_USER}" -- "${NODE_BIN}" "${APP_DIR}/server/.yarn/releases/yarn-4.17.1.cjs" node \
+  "${APP_DIR}/server/packages/auth/dist/bin/srn_admin.js" "\$@"
+EOF
+chmod +x "${ADMIN_LAUNCHER}"
 
 # Install the unit, templating the user in.
 sed "s|__APP_USER__|${APP_USER}|g; s|__WORKING_DIR__|${HS_DIR}|g; s|__LAUNCHER__|${LAUNCHER}|g" \
@@ -306,6 +315,6 @@ cat <<EOF
   Data dir:    ${DATA_DIR}   (sqlite DB, uploads, secrets — back this up)
 
   First run builds the sqlite schema on boot; give it ~30-60s, then register a
-  user in the web UI. Grant admin by setting ADMIN_EMAILS in
-  ${HS_DIR}/.env and: systemctl restart standard-red-notes
+  user in the web UI and persist its role locally:
+    srn-admin roles grant <user> ADMIN_USER
 EOF

@@ -52,8 +52,8 @@ x-server-env: &server-env
   # Shared persisted admin overlay read by every supervisord process. A custom
   # in-container path also needs a matching persistent volume mount.
   SERVER_SETTINGS_PATH: ${SERVER_SETTINGS_PATH:-/opt/server/packages/api-gateway/data/server-settings.json}
-  # Comma-separated emails granted the AdminUser (admin) role, which
-  # unlocks the in-app Admin panel and the /admin user-management endpoints.
+  # Optional analytics report recipients. This does not grant authorization;
+  # administrator access is a persisted ADMIN_USER role managed with srn-admin.
   ADMIN_EMAILS: ${ADMIN_EMAILS:-}
   STANDARD_RED_FEATURES_MODE: ${STANDARD_RED_FEATURES_MODE:-included}
   STANDARD_RED_ENTITLEMENT_MODE: ${STANDARD_RED_ENTITLEMENT_MODE:-included}
