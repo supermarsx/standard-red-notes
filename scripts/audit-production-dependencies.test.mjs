@@ -284,6 +284,7 @@ test("every Yarn domain keeps security-sensitive packages on patched floors", ()
     safeVersion,
     vulnerableVersion,
   ] of [
+    ["app/yarn.lock", "adm-zip", '"adm-zip@npm:~0.6.x":', "0.6.0", "0.5.10"],
     [
       "server/yarn.lock",
       "ip-address",

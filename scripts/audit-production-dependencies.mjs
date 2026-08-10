@@ -355,6 +355,12 @@ function yarnVersions(lockfile, packageName) {
 // These floors mirror the first patched releases published for the vulnerable
 // major lines currently present in the committed Yarn dependency graph.
 const yarnSecurityPatchFloors = Object.freeze({
+  "adm-zip": Object.freeze({
+    minimumMajor: 0,
+    floors: Object.freeze({
+      0: Object.freeze([0, 6, 0]),
+    }),
+  }),
   "ip-address": Object.freeze({
     minimumMajor: 10,
     floors: Object.freeze({
