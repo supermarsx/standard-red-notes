@@ -11,6 +11,7 @@
 #   ./scripts/setup.sh --up       # interactive, then `docker compose up -d`
 #   ./scripts/setup.sh --yes      # non-interactive, accept all defaults
 #   ./scripts/setup.sh --yes --up # non-interactive + start the stack
+#   ./scripts/setup.sh --yes --force-overwrite # explicitly replace an existing .env
 #
 set -euo pipefail
 
@@ -26,10 +27,12 @@ ENV_FILE="${REPO_ROOT}/.env"
 # ---------------------------------------------------------------------------
 ASSUME_YES=0
 RUN_UP=0
+FORCE_OVERWRITE=0
 for arg in "$@"; do
   case "$arg" in
     -y|--yes) ASSUME_YES=1 ;;
     --up) RUN_UP=1 ;;
+    --force-overwrite) FORCE_OVERWRITE=1 ;;
     -h|--help)
       grep -E '^#( |$)' "$0" | sed -E 's/^# ?//'
       exit 0
@@ -123,7 +126,12 @@ ok "Found Docker and Compose (${COMPOSE})."
 # ---------------------------------------------------------------------------
 if [ -f "$ENV_FILE" ]; then
   warn "An .env file already exists at: ${ENV_FILE}"
-  if ! confirm "Overwrite it? A timestamped backup will be made first."; then
+  if [ "$ASSUME_YES" -eq 1 ] && [ "$FORCE_OVERWRITE" -ne 1 ]; then
+    err "Refusing to overwrite an existing .env in non-interactive mode."
+    err "Re-run without --yes to confirm interactively, or add --force-overwrite only when credential rotation is intentional."
+    exit 1
+  fi
+  if [ "$FORCE_OVERWRITE" -ne 1 ] && ! confirm "Overwrite it? A timestamped backup will be made first."; then
     err "Aborted. Existing .env left untouched."
     exit 1
   fi

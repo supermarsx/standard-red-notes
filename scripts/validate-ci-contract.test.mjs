@@ -1,4 +1,16 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import {
+  chmodSync,
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -7,6 +19,7 @@ import {
   approvedWorkflowAction,
   loadCiContractFiles,
   validateCiContract,
+  validateSetupOverwriteContract,
 } from "./validate-ci-contract.mjs";
 
 const repositoryRoot = path.resolve(
@@ -23,6 +36,92 @@ function withFileChanged(file, update) {
 
 test("the repository satisfies the CI production-gate contract", () => {
   assert.deepEqual(validateCiContract(baseline), []);
+});
+
+test("non-interactive setup cannot silently replace production credentials", () => {
+  const shell = baseline.get("scripts/setup.sh");
+  const powershell = baseline.get("scripts/setup.ps1");
+  assert.deepEqual(validateSetupOverwriteContract(shell, powershell), []);
+
+  assert.match(
+    validateSetupOverwriteContract(
+      shell.replace(
+        'if [ "$ASSUME_YES" -eq 1 ] && [ "$FORCE_OVERWRITE" -ne 1 ]; then',
+        'if [ "$ASSUME_YES" -eq 0 ]; then',
+      ),
+      powershell,
+    ).join("\n"),
+    /scripts\/setup\.sh: missing non-interactive existing-config guard/,
+  );
+
+  assert.match(
+    validateSetupOverwriteContract(
+      shell,
+      powershell.replace(
+        "if ($Yes -and -not $ForceOverwrite)",
+        "if (-not $Yes)",
+      ),
+    ).join("\n"),
+    /scripts\/setup\.ps1: missing non-interactive existing-config guard/,
+  );
+});
+
+test("non-interactive setup leaves an existing environment file byte-for-byte intact", () => {
+  const temporary = mkdtempSync(path.join(tmpdir(), "srn-setup-safety-"));
+  const fixtureRoot = path.join(temporary, "repo");
+  const fixtureScripts = path.join(fixtureRoot, "scripts");
+  const fixtureBin = path.join(temporary, "bin");
+  const environmentFile = path.join(fixtureRoot, ".env");
+  const sentinel = "EXISTING_PRODUCTION_CONFIGURATION=true\n";
+
+  try {
+    mkdirSync(fixtureScripts, { recursive: true });
+    mkdirSync(fixtureBin, { recursive: true });
+    writeFileSync(environmentFile, sentinel);
+
+    let command;
+    let args;
+    if (process.platform === "win32") {
+      const setup = path.join(fixtureScripts, "setup.ps1");
+      copyFileSync(path.join(repositoryRoot, "scripts", "setup.ps1"), setup);
+      writeFileSync(
+        path.join(fixtureBin, "docker.cmd"),
+        "@echo off\r\nexit /b 0\r\n",
+      );
+      command = "powershell.exe";
+      args = ["-NoProfile", "-File", setup, "-Yes"];
+    } else {
+      const setup = path.join(fixtureScripts, "setup.sh");
+      const docker = path.join(fixtureBin, "docker");
+      copyFileSync(path.join(repositoryRoot, "scripts", "setup.sh"), setup);
+      writeFileSync(docker, "#!/bin/sh\nexit 0\n");
+      chmodSync(docker, 0o755);
+      command = "bash";
+      args = [setup, "--yes"];
+    }
+
+    const result = spawnSync(command, args, {
+      cwd: fixtureRoot,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: `${fixtureBin}${path.delimiter}${process.env.PATH ?? ""}`,
+      },
+    });
+
+    assert.equal(result.status, 1, result.stderr || result.stdout);
+    assert.match(
+      `${result.stdout}\n${result.stderr}`,
+      /Refusing to overwrite an existing \.env in non-interactive mode\./,
+    );
+    assert.equal(readFileSync(environmentFile, "utf8"), sentinel);
+    assert.deepEqual(
+      readdirSync(fixtureRoot).filter((entry) => entry.startsWith(".env.bak.")),
+      [],
+    );
+  } finally {
+    rmSync(temporary, { recursive: true, force: true });
+  }
 });
 
 test("CI and Pages actions require approved full SHAs and exact version labels", () => {

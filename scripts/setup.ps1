@@ -15,15 +15,20 @@
 .PARAMETER Up
   After writing .env, run `docker compose up -d --build`.
 
+.PARAMETER ForceOverwrite
+  Explicitly replace an existing .env after making a timestamped backup.
+
 .EXAMPLE
   ./scripts/setup.ps1
   ./scripts/setup.ps1 -Up
   ./scripts/setup.ps1 -Yes -Up
+  ./scripts/setup.ps1 -Yes -ForceOverwrite
 #>
 [CmdletBinding()]
 param(
   [switch]$Yes,
-  [switch]$Up
+  [switch]$Up,
+  [switch]$ForceOverwrite
 )
 
 Set-StrictMode -Version Latest
@@ -106,7 +111,12 @@ Write-Ok "Found Docker and Compose ($Compose)."
 # ---------------------------------------------------------------------------
 if (Test-Path $EnvFile) {
   Write-Warn "An .env file already exists at: $EnvFile"
-  if (-not (Confirm-Yes 'Overwrite it? A timestamped backup will be made first.')) {
+  if ($Yes -and -not $ForceOverwrite) {
+    Write-Err 'Refusing to overwrite an existing .env in non-interactive mode.'
+    Write-Err 'Re-run without -Yes to confirm interactively, or add -ForceOverwrite only when credential rotation is intentional.'
+    exit 1
+  }
+  if (-not $ForceOverwrite -and -not (Confirm-Yes 'Overwrite it? A timestamped backup will be made first.')) {
     Write-Err 'Aborted. Existing .env left untouched.'
     exit 1
   }
