@@ -5,6 +5,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { discoverReleaseTargetSurface } from "./analyze-release-impact.mjs";
 import { RELEASE_PACKAGING_CONTRACTS } from "./release-packaging-contract.mjs";
+import {
+  approvedWorkflowAction,
+  validateImmutableWorkflowActions,
+} from "./validate-ci-contract.mjs";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const defaultRepositoryRoot = path.resolve(path.dirname(scriptPath), "..");
@@ -13,6 +17,7 @@ const RELEASE_POLICY_INSTALL_COMMAND =
 
 export const RELEASE_CONTRACT_FILES = Object.freeze([
   ".github/workflows/ci.yml",
+  ".github/workflows/docs-pages.yml",
   ".github/workflows/srn-client.yml",
   ".github/workflows/srn-server.yml",
   ".github/workflows/srn-mcp.yml",
@@ -731,6 +736,18 @@ export function loadReleaseContractFiles(
 
 export function validateReleaseContract(files) {
   const errors = [];
+
+  for (const actionWorkflow of [
+    ".github/workflows/ci.yml",
+    ".github/workflows/docs-pages.yml",
+  ]) {
+    errors.push(
+      ...validateImmutableWorkflowActions(
+        actionWorkflow,
+        files.get(actionWorkflow) ?? "",
+      ),
+    );
+  }
 
   for (const [file, content] of files) {
     const isDocumentationOrWorkflow = REPOSITORY_TEXT_SCAN_EXTENSIONS.has(
@@ -6349,7 +6366,7 @@ export function validateReleaseContract(files) {
     ["--output release-impact.json", "normal-CI machine report"],
     ["--report release-impact.md", "normal-CI readable report"],
     [
-      "actions/upload-artifact@v7.0.0",
+      approvedWorkflowAction("uploadArtifact"),
       "normal-CI release-impact evidence upload",
     ],
     [

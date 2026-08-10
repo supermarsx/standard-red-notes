@@ -4,6 +4,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { approvedWorkflowAction } from "./validate-ci-contract.mjs";
 import {
   loadReleaseContractFiles,
   runReleaseContractValidation,
@@ -2959,7 +2960,7 @@ test("normal CI always publishes one non-releasing all-workspace report", () => 
       .replace("          git fetch --force --tags origin\n", "")
       .replace("            --all-workspaces all \\\n", "")
       .replace(
-        "        uses: actions/upload-artifact@v7.0.0\n",
+        `        uses: ${approvedWorkflowAction("uploadArtifact")}\n`,
         "        run: true\n",
       ),
   );
@@ -2979,6 +2980,33 @@ test("normal CI always publishes one non-releasing all-workspace report", () => 
     errors,
     /ci\.yml: missing normal-CI release-impact evidence upload/,
   );
+});
+
+test("release validation also enforces the CI and Pages action allowlist", () => {
+  for (const [file, actionName] of [
+    [".github/workflows/ci.yml", "checkout"],
+    [".github/workflows/docs-pages.yml", "checkout"],
+  ]) {
+    const approved = approvedWorkflowAction(actionName);
+    const [immutableUse, version] = approved.split(" # ");
+    const action = immutableUse.slice(0, immutableUse.lastIndexOf("@"));
+
+    let files = withFileChanged(file, (content) =>
+      content.replace(approved, `${action}@${version} # ${version}`),
+    );
+    assert.match(
+      validateReleaseContract(files).join("\n"),
+      /mutable external action reference/,
+    );
+
+    files = withFileChanged(file, (content) =>
+      content.replace(approved, `${action}@${"1".repeat(40)} # ${version}`),
+    );
+    assert.match(
+      validateReleaseContract(files).join("\n"),
+      /unapproved external action reference/,
+    );
+  }
 });
 
 test("normal CI release reporting cannot gain a publisher", () => {

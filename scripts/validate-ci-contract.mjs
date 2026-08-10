@@ -10,6 +10,7 @@ const defaultRepositoryRoot = path.resolve(path.dirname(scriptPath), "..");
 
 export const CI_CONTRACT_FILES = Object.freeze([
   ".github/workflows/ci.yml",
+  ".github/workflows/docs-pages.yml",
   "app/.nvmrc",
   "package.json",
   "server/.nvmrc",
@@ -18,6 +19,125 @@ export const CI_CONTRACT_FILES = Object.freeze([
   "docs/ci-production-gates.md",
   "docs/_data/navigation.yml",
 ]);
+
+export const CI_PAGES_ACTIONS = Object.freeze({
+  cache: Object.freeze({
+    action: "actions/cache",
+    sha: "55cc8345863c7cc4c66a329aec7e433d2d1c52a9",
+    version: "v6.1.0",
+  }),
+  checkout: Object.freeze({
+    action: "actions/checkout",
+    sha: "3d3c42e5aac5ba805825da76410c181273ba90b1",
+    version: "v7.0.1",
+  }),
+  configurePages: Object.freeze({
+    action: "actions/configure-pages",
+    sha: "45bfe0192ca1faeb007ade9deae92b16b8254a0d",
+    version: "v6.0.0",
+  }),
+  deployPages: Object.freeze({
+    action: "actions/deploy-pages",
+    sha: "cd2ce8fcbc39b97be8ca5fce6e763baed58fa128",
+    version: "v5.0.0",
+  }),
+  downloadArtifact: Object.freeze({
+    action: "actions/download-artifact",
+    sha: "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+    version: "v8.0.1",
+  }),
+  jekyllBuildPages: Object.freeze({
+    action: "actions/jekyll-build-pages",
+    sha: "44a6e6beabd48582f863aeeb6cb2151cc1716697",
+    version: "v1.0.13",
+  }),
+  setupBuildx: Object.freeze({
+    action: "docker/setup-buildx-action",
+    sha: "bb05f3f5519dd87d3ba754cc423b652a5edd6d2c",
+    version: "v4.2.0",
+  }),
+  setupNode: Object.freeze({
+    action: "actions/setup-node",
+    sha: "820762786026740c76f36085b0efc47a31fe5020",
+    version: "v7.0.0",
+  }),
+  uploadArtifact: Object.freeze({
+    action: "actions/upload-artifact",
+    sha: "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+    version: "v7.0.1",
+  }),
+  uploadPagesArtifact: Object.freeze({
+    action: "actions/upload-pages-artifact",
+    sha: "fc324d3547104276b827a68afc52ff2a11cc49c9",
+    version: "v5.0.0",
+  }),
+  buildPush: Object.freeze({
+    action: "docker/build-push-action",
+    sha: "53b7df96c91f9c12dcc8a07bcb9ccacbed38856a",
+    version: "v7.3.0",
+  }),
+});
+
+const approvedActionsByReference = new Map(
+  Object.values(CI_PAGES_ACTIONS).map((entry) => [
+    `${entry.action}@${entry.sha}`,
+    entry.version,
+  ]),
+);
+
+export function approvedWorkflowAction(name) {
+  const entry = CI_PAGES_ACTIONS[name];
+  if (!entry) {
+    throw new Error(`Unknown CI/Pages action policy key: ${name}`);
+  }
+  return `${entry.action}@${entry.sha} # ${entry.version}`;
+}
+
+export function validateImmutableWorkflowActions(file, workflow) {
+  const errors = [];
+  for (const [index, line] of workflow.split(/\r?\n/).entries()) {
+    if (line.trimStart().startsWith("#")) {
+      continue;
+    }
+    const uses = /^\s*(?:-\s*)?uses:\s+(\S+)/.exec(line)?.[1];
+    if (!uses || uses.startsWith("./")) {
+      continue;
+    }
+
+    const lineNumber = index + 1;
+    const external = /^([^\s@]+)@([^\s@]+)$/.exec(uses);
+    if (!external) {
+      errors.push(
+        `${file}:${lineNumber}: unsupported action reference ${uses}`,
+      );
+      continue;
+    }
+
+    const [, , reference] = external;
+    if (!/^[0-9a-f]{40}$/.test(reference)) {
+      errors.push(
+        `${file}:${lineNumber}: mutable external action reference ${uses}`,
+      );
+      continue;
+    }
+
+    const approvedVersion = approvedActionsByReference.get(uses);
+    if (!approvedVersion) {
+      errors.push(
+        `${file}:${lineNumber}: unapproved external action reference ${uses}`,
+      );
+      continue;
+    }
+
+    const versionLabel = /\s+#\s*(\S+)\s*$/.exec(line)?.[1];
+    if (versionLabel !== approvedVersion) {
+      errors.push(
+        `${file}:${lineNumber}: incorrect human version label for ${uses}; expected ${approvedVersion}`,
+      );
+    }
+  }
+  return errors;
+}
 
 export function loadCiContractFiles(repositoryRoot = defaultRepositoryRoot) {
   return new Map(
@@ -107,6 +227,15 @@ export function validateCiContract(files) {
   const file = ".github/workflows/ci.yml";
   const workflow = files.get(file) ?? "";
 
+  for (const actionWorkflow of [file, ".github/workflows/docs-pages.yml"]) {
+    errors.push(
+      ...validateImmutableWorkflowActions(
+        actionWorkflow,
+        files.get(actionWorkflow) ?? "",
+      ),
+    );
+  }
+
   for (const [fragment, description] of [
     ["name: CI", "stable workflow name"],
     ["\n  push:\n    branches: [main]", "push trigger"],
@@ -151,7 +280,7 @@ export function validateCiContract(files) {
       ["run: yarn install --immutable", "immutable root install"],
       ["working-directory: app", "app workspace install"],
       ["working-directory: server", "server workspace install"],
-      ["actions/cache@v6.1.0", "dependency cache"],
+      [approvedWorkflowAction("cache"), "dependency cache"],
       [command, `${command} command`],
     ];
     if (job === "check") {
@@ -169,7 +298,7 @@ export function validateCiContract(files) {
   }
 
   requireJob(errors, workflow, "desktop-electron", [
-    ["actions/cache@v6.1.0", "dependency cache"],
+    [approvedWorkflowAction("cache"), "dependency cache"],
     ["sudo apt-get install --yes xvfb", "Xvfb installation"],
     ["libsecret-1-0", "native keychain runtime"],
     ["working-directory: app", "app workspace"],
@@ -244,7 +373,7 @@ export function validateCiContract(files) {
 
   requireJob(errors, workflow, "container-smoke", [
     ["hadolint/hadolint@sha256:", "pinned hadolint image"],
-    ["docker/build-push-action@v7.3.0", "BuildKit image builds"],
+    [approvedWorkflowAction("buildPush"), "BuildKit image builds"],
     ["push: false", "non-publishing image builds"],
     [
       "COMPOSE_PROJECT_NAME: srn-ci-${{ github.run_id }}-${{ github.run_attempt }}-smoke",

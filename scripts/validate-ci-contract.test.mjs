@@ -4,6 +4,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
+  approvedWorkflowAction,
   loadCiContractFiles,
   validateCiContract,
 } from "./validate-ci-contract.mjs";
@@ -22,6 +23,56 @@ function withFileChanged(file, update) {
 
 test("the repository satisfies the CI production-gate contract", () => {
   assert.deepEqual(validateCiContract(baseline), []);
+});
+
+test("CI and Pages actions require approved full SHAs and exact version labels", () => {
+  for (const [file, actionName] of [
+    [".github/workflows/ci.yml", "checkout"],
+    [".github/workflows/docs-pages.yml", "checkout"],
+  ]) {
+    const approved = approvedWorkflowAction(actionName);
+    const [immutableUse, version] = approved.split(" # ");
+    const action = immutableUse.slice(0, immutableUse.lastIndexOf("@"));
+
+    const mutable = withFileChanged(file, (content) =>
+      content.replace(approved, `${action}@${version} # ${version}`),
+    );
+    assert.match(
+      validateCiContract(mutable).join("\n"),
+      new RegExp(
+        `mutable external action reference ${action.replace("/", "\\/")}@`,
+      ),
+    );
+
+    const unapproved = withFileChanged(file, (content) =>
+      content.replace(approved, `${action}@${"1".repeat(40)} # ${version}`),
+    );
+    assert.match(
+      validateCiContract(unapproved).join("\n"),
+      new RegExp(
+        `unapproved external action reference ${action.replace("/", "\\/")}@`,
+      ),
+    );
+
+    const mislabeled = withFileChanged(file, (content) =>
+      content.replace(approved, `${immutableUse} # v0.0.0`),
+    );
+    assert.match(
+      validateCiContract(mislabeled).join("\n"),
+      /incorrect human version label/,
+    );
+
+    const rogue = withFileChanged(file, (content) =>
+      content.replace(
+        "jobs:\n",
+        `jobs:\n  rogue-action:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: evil/example@${"2".repeat(40)} # v1.0.0\n`,
+      ),
+    );
+    assert.match(
+      validateCiContract(rogue).join("\n"),
+      /unapproved external action reference evil\/example@/,
+    );
+  }
 });
 
 test("continue-on-error is rejected", () => {

@@ -44,17 +44,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 12
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
       - name: Install Corepack
         run: npm install --global "corepack@${COREPACK_VERSION}" && corepack enable
       - name: Cache root Yarn packages
-        uses: actions/cache@v6.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .yarn/cache
           key: ci-root-yarn-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('yarn.lock') }}
@@ -77,7 +77,7 @@ jobs:
             --report release-impact.md
           cat release-impact.md >> "$GITHUB_STEP_SUMMARY"
       - name: Upload all-workspace release impact report
-        uses: actions/upload-artifact@v7.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-impact-report
           path: |
@@ -95,17 +95,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
       - name: Install Corepack
         run: npm install --global "corepack@${COREPACK_VERSION}" && corepack enable
       - name: Cache Yarn packages
-        uses: actions/cache@v6.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             .yarn/cache
@@ -135,15 +135,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v7.0.0
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
       - name: Install Corepack
         run: npm install --global "corepack@${COREPACK_VERSION}" && corepack enable
       - name: Cache Yarn packages
-        uses: actions/cache@v6.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             .yarn/cache
@@ -167,15 +167,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v7.0.0
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
       - name: Install Corepack
         run: npm install --global "corepack@${COREPACK_VERSION}" && corepack enable
       - name: Cache app Yarn packages
-        uses: actions/cache@v6.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: app/.yarn/cache
           key: ci-desktop-yarn-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('app/yarn.lock') }}
@@ -212,15 +212,15 @@ jobs:
     env:
       COMPOSE_PROJECT_NAME: srn-ci-${{ github.run_id }}-${{ github.run_attempt }}-smoke
     steps:
-      - uses: actions/checkout@v7.0.0
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
       - name: Install Corepack
         run: npm install --global "corepack@${COREPACK_VERSION}" && corepack enable
       - name: Cache root Yarn and npm packages
-        uses: actions/cache@v6.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             .yarn/cache
@@ -244,9 +244,9 @@ jobs:
               < "$dockerfile"
             echo "::endgroup::"
           done < <(git ls-files '*Dockerfile*' | grep -v '\.dockerignore$')
-      - uses: docker/setup-buildx-action@v4.2.0
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
       - name: Build hardened app image
-        uses: docker/build-push-action@v7.3.0
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: app
           file: app/Dockerfile
@@ -256,7 +256,7 @@ jobs:
           cache-from: type=gha,scope=ci-app
           cache-to: type=gha,mode=max,scope=ci-app
       - name: Build hardened server image
-        uses: docker/build-push-action@v7.3.0
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: server
           file: server/Dockerfile
@@ -322,7 +322,7 @@ jobs:
           fi
       - name: Upload stack diagnostics
         if: always()
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: required-stack-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -346,15 +346,15 @@ jobs:
     env:
       COMPOSE_PROJECT_NAME: srn-ci-${{ github.run_id }}-${{ github.run_attempt }}-load
     steps:
-      - uses: actions/checkout@v7.0.0
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
       - name: Install Corepack
         run: npm install --global "corepack@${COREPACK_VERSION}" && corepack enable
       - name: Cache root Yarn and npm packages
-        uses: actions/cache@v6.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             .yarn/cache
@@ -367,9 +367,9 @@ jobs:
         run: npm --prefix e2e install --no-package-lock --no-audit --no-fund --ignore-scripts --save=false @playwright/test@1.61.1
       - name: Install Chromium
         run: npm --prefix e2e exec -- playwright install --with-deps chromium
-      - uses: docker/setup-buildx-action@v4.2.0
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
       - name: Restore app image from build cache
-        uses: docker/build-push-action@v7.3.0
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: app
           file: app/Dockerfile
@@ -378,7 +378,7 @@ jobs:
           tags: ${{ env.APP_IMAGE }}
           cache-from: type=gha,scope=ci-app
       - name: Restore server image from build cache
-        uses: docker/build-push-action@v7.3.0
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: server
           file: server/Dockerfile
@@ -425,7 +425,7 @@ jobs:
           docker stats --no-stream > artifacts/docker-stats.txt 2>&1
       - name: Upload load diagnostics
         if: always()
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: heavy-load-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -449,15 +449,15 @@ jobs:
     env:
       COMPOSE_PROJECT_NAME: srn-ci-${{ github.run_id }}-${{ github.run_attempt }}-e2e
     steps:
-      - uses: actions/checkout@v7.0.0
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
       - name: Install Corepack
         run: npm install --global "corepack@${COREPACK_VERSION}" && corepack enable
       - name: Cache root Yarn and npm packages
-        uses: actions/cache@v6.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             .yarn/cache
@@ -470,9 +470,9 @@ jobs:
         run: npm --prefix e2e install --no-package-lock --no-audit --no-fund --ignore-scripts --save=false @playwright/test@1.61.1
       - name: Install browser matrix
         run: npm --prefix e2e exec -- playwright install --with-deps chromium firefox webkit
-      - uses: docker/setup-buildx-action@v4.2.0
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
       - name: Restore app image from build cache
-        uses: docker/build-push-action@v7.3.0
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: app
           file: app/Dockerfile
@@ -481,7 +481,7 @@ jobs:
           tags: ${{ env.APP_IMAGE }}
           cache-from: type=gha,scope=ci-app
       - name: Restore server image from build cache
-        uses: docker/build-push-action@v7.3.0
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: server
           file: server/Dockerfile
@@ -529,7 +529,7 @@ jobs:
           docker stats --no-stream > artifacts/docker-stats.txt 2>&1
       - name: Upload exhaustive diagnostics
         if: always()
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: exhaustive-e2e-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
