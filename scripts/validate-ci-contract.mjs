@@ -17,6 +17,8 @@ export const CI_CONTRACT_FILES = Object.freeze([
   "server/.nvmrc",
   "server/Dockerfile",
   "server/package.json",
+  "scripts/setup.ps1",
+  "scripts/setup.sh",
   "docs/ci-production-gates.md",
   "docs/_data/navigation.yml",
 ]);
@@ -153,6 +155,50 @@ function requireFragment(errors, file, text, fragment, description) {
   if (!text.includes(fragment)) {
     errors.push(`${file}: missing ${description}`);
   }
+}
+
+export function validateSetupOverwriteContract(shellSetup, powershellSetup) {
+  const errors = [];
+  for (const [file, source, fragments] of [
+    [
+      "scripts/setup.sh",
+      shellSetup,
+      [
+        [
+          "--force-overwrite) FORCE_OVERWRITE=1",
+          "explicit force-overwrite flag",
+        ],
+        [
+          'if [ "$ASSUME_YES" -eq 1 ] && [ "$FORCE_OVERWRITE" -ne 1 ]; then',
+          "non-interactive existing-config guard",
+        ],
+        [
+          "Refusing to overwrite an existing .env in non-interactive mode.",
+          "fail-closed overwrite diagnostic",
+        ],
+      ],
+    ],
+    [
+      "scripts/setup.ps1",
+      powershellSetup,
+      [
+        ["[switch]$ForceOverwrite", "explicit ForceOverwrite switch"],
+        [
+          "if ($Yes -and -not $ForceOverwrite)",
+          "non-interactive existing-config guard",
+        ],
+        [
+          "Refusing to overwrite an existing .env in non-interactive mode.",
+          "fail-closed overwrite diagnostic",
+        ],
+      ],
+    ],
+  ]) {
+    for (const [fragment, description] of fragments) {
+      requireFragment(errors, file, source, fragment, description);
+    }
+  }
+  return errors;
 }
 
 function exactNodeVersion(value) {
@@ -438,6 +484,10 @@ export function validateCiContract(files) {
   errors.push(
     ...validateMcpReleaseDependencyContract(
       files.get(".github/workflows/srn-mcp.yml") ?? "",
+    ),
+    ...validateSetupOverwriteContract(
+      files.get("scripts/setup.sh") ?? "",
+      files.get("scripts/setup.ps1") ?? "",
     ),
   );
 
