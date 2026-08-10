@@ -1985,6 +1985,35 @@ test("desktop updater metadata, architecture, recovery, and environment guards c
   );
 
   files = withFileChanged(
+    "app/scripts/verify-desktop-updater-metadata.rb",
+    (content) => content.replace(".to_s.tr('\\\\', '/')", ".to_s"),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /missing Windows archive path separator normalization/,
+  );
+
+  files = withFileChanged(
+    "app/scripts/verify-desktop-updater-metadata.rb",
+    (content) =>
+      content.replace("File.basename(relative).match?", "relative.match?"),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /missing all-path Windows payload discovery/,
+  );
+
+  files = withFileChanged(
+    "app/scripts/verify-desktop-updater-metadata.rb",
+    (content) =>
+      content.replace("optional_magic == 0x20b", "optional_magic != 0x20b"),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /missing Windows PE32\+ optional-header assertion/,
+  );
+
+  files = withFileChanged(
     "app/scripts/verify-desktop-updater-metadata.test.rb",
     (content) =>
       content.replace(

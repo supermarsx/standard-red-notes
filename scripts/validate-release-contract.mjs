@@ -5907,7 +5907,32 @@ export function validateReleaseContract(files) {
       "architecture coverage for every installer",
     ],
     ["when 'windows'", "Windows PE verifier"],
-    ["/PE32\\+/i", "Windows PE format assertion"],
+    ["/PE32.*Nullsoft Installer/i", "Windows NSIS launcher assertion"],
+    [
+      `command!('7z', 'x', '-y', "-o#{installer_directory}", path)`,
+      "full isolated Windows NSIS extraction",
+    ],
+    [".to_s.tr('\\\\', '/')", "Windows archive path separator normalization"],
+    [
+      "payload_name = expected == 'x64' ? 'app-64.7z' : 'app-arm64.7z'",
+      "Windows payload architecture binding",
+    ],
+    [
+      'expected_payload_path = "$PLUGINSDIR/#{payload_name}"',
+      "exact Windows NSIS payload path",
+    ],
+    ["File.basename(relative).match?", "all-path Windows payload discovery"],
+    [
+      "payload_paths == [expected_payload_path]",
+      "exact Windows payload inventory",
+    ],
+    [
+      "executable_names == ['Standard Red Notes.exe']",
+      "exact top-level Windows application executable",
+    ],
+    ["optional_magic == 0x20b", "Windows PE32+ optional-header assertion"],
+    ["when 'x64' then 0x8664", "Windows x64 PE machine assertion"],
+    ["when 'arm64' then 0xaa64", "Windows arm64 PE machine assertion"],
     ["when 'appimage'", "AppImage verifier"],
     ["/ELF 64-bit/i", "AppImage ELF format assertion"],
     ["when 'zip'", "macOS ZIP verifier"],
@@ -5954,6 +5979,38 @@ export function validateReleaseContract(files) {
     [
       "test_dmg_inspection_excludes_standard_applications_symlink",
       "standard macOS Applications symlink regression test",
+    ],
+    [
+      "test_accepts_windows_payloads_with_forward_and_backslash_archive_paths",
+      "portable Windows archive path regression test",
+    ],
+    [
+      "test_rejects_opposite_windows_payload",
+      "opposite Windows payload rejection test",
+    ],
+    [
+      "test_rejects_wrong_windows_payload",
+      "unknown Windows payload rejection test",
+    ],
+    [
+      "test_rejects_multiple_windows_payloads",
+      "multiple Windows payload rejection test",
+    ],
+    [
+      "test_rejects_missing_windows_payload",
+      "missing Windows payload rejection test",
+    ],
+    [
+      "test_rejects_windows_payload_outside_plugin_directory",
+      "misplaced Windows payload rejection test",
+    ],
+    [
+      "test_rejects_non_nsis_windows_container",
+      "non-NSIS Windows container rejection test",
+    ],
+    [
+      "test_rejects_windows_payload_with_wrong_pe_machine",
+      "wrong Windows payload PE machine rejection test",
     ],
     ["test_rejects_non_basename_urls", "updater basename rejection test"],
     ["test_rejects_wrong_size", "updater size rejection test"],

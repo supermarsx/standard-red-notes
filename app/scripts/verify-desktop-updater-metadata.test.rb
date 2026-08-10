@@ -30,7 +30,7 @@ class VerifyDesktopUpdaterMetadataTest
         machine = architecture == 'arm64' ? 'Aarch64' : 'x86-64'
         case format
         when 'mac' then "Mach-O 64-bit #{architecture == 'arm64' ? 'arm64' : 'x86_64'} executable"
-        when 'windows' then "PE32+ executable (GUI) #{machine}, for MS Windows"
+        when 'windows' then 'PE32 executable (GUI) Intel 80386, Nullsoft Installer self-extracting archive'
         when 'appimage', 'deb' then "ELF 64-bit LSB pie executable, #{machine}, dynamically linked"
         else 'ASCII text'
         end
@@ -40,6 +40,16 @@ class VerifyDesktopUpdaterMetadataTest
         FileUtils.mkdir_p(File.dirname(executable))
         FileUtils.cp(archive, executable)
       end
+      write_pe = lambda do |path, architecture|
+        bytes = "\0".b * 0x100
+        bytes[0, 2] = 'MZ'.b
+        bytes[0x3c, 4] = [0x80].pack('V')
+        bytes[0x80, 4] = "PE\0\0".b
+        bytes[0x84, 2] = [architecture == 'arm64' ? 0xaa64 : 0x8664].pack('v')
+        bytes[0x98, 2] = [0x20b].pack('v')
+        FileUtils.mkdir_p(File.dirname(path))
+        File.binwrite(path, bytes)
+      end
 
       case tool
       when 'file'
@@ -47,12 +57,33 @@ class VerifyDesktopUpdaterMetadataTest
       when 'unzip'
         extract_app.call(ARGV.fetch(1), ARGV.fetch(ARGV.index('-d') + 1))
       when '7z'
-        unless ARGV.include?('-ir!*.app/Contents/MacOS/*')
-          warn 'ERROR: Dangerous link path was ignored : Standard Red Notes/Applications : /Applications'
-          exit 2
-        end
         output = ARGV.find { |argument| argument.start_with?('-o') }.delete_prefix('-o')
-        extract_app.call(ARGV.last, output)
+        archive = ARGV.last
+        if ARGV.include?('-ir!*.app/Contents/MacOS/*')
+          extract_app.call(archive, output)
+        elsif File.binread(archive).start_with?('windows-payload:')
+          _format, architecture, executable_name = File.binread(archive).split(':', 3)
+          write_pe.call(File.join(output, executable_name || 'Standard Red Notes.exe'), architecture)
+        else
+          format, architecture, layout, machine_architecture, executable_name = File.read(archive).strip.split(':', 5)
+          abort 'expected a Windows NSIS fixture' unless format == 'windows'
+          payload_names = case layout
+                          when 'multiple' then %w[app-64.7z app-arm64.7z]
+                          when 'missing' then []
+                          when 'wrong' then ['app-ia32.7z']
+                          else [architecture == 'arm64' ? 'app-arm64.7z' : 'app-64.7z']
+                          end
+          payload_names.each do |payload_name|
+            relative = case layout
+                       when 'backslash' then "$PLUGINSDIR\\#{payload_name}"
+                       when 'outside' then File.join('resources', payload_name)
+                       else File.join('$PLUGINSDIR', payload_name)
+                       end
+            payload = File.join(output, relative)
+            FileUtils.mkdir_p(File.dirname(payload))
+            File.write(payload, "windows-payload:#{machine_architecture || architecture}:#{executable_name || 'Standard Red Notes.exe'}")
+          end
+        end
       when 'dpkg-deb'
         if ARGV.first == '-f'
           _format, architecture = File.read(ARGV.fetch(1)).strip.split(':', 2)
@@ -165,6 +196,80 @@ class VerifyDesktopUpdaterMetadataTest
     with_fixture(assets) do |_root, source_dir, bin_dir|
       _stdout, stderr, status = run_verifier(source_dir, bin_dir, assets, metadata_document(source_dir, assets))
       assert status.success?, stderr
+    end
+  end
+
+  def test_accepts_windows_payloads_with_forward_and_backslash_archive_paths
+    { 'x64' => 'forward', 'arm64' => 'backslash' }.each do |architecture, layout|
+      name = "desktop-#{architecture}.exe"
+      assets = { name => ["windows-#{architecture}", "windows:#{architecture}:#{layout}"] }
+      with_fixture(assets) do |_root, source_dir, bin_dir|
+        _stdout, stderr, status = run_verifier(source_dir, bin_dir, assets, metadata_document(source_dir, assets))
+        assert status.success?, stderr
+      end
+    end
+  end
+
+  def test_rejects_opposite_windows_payload
+    assets = { 'desktop.exe' => ['windows-x64', 'windows:arm64:backslash'] }
+    with_fixture(assets) do |_root, source_dir, bin_dir|
+      _stdout, stderr, status = run_verifier(source_dir, bin_dir, assets, metadata_document(source_dir, assets))
+      assert_contract_failure(status, stderr)
+      assert_includes stderr, 'wrong architecture payload'
+    end
+  end
+
+  def test_rejects_wrong_windows_payload
+    assets = { 'desktop.exe' => ['windows-x64', 'windows:x64:wrong'] }
+    with_fixture(assets) do |_root, source_dir, bin_dir|
+      _stdout, stderr, status = run_verifier(source_dir, bin_dir, assets, metadata_document(source_dir, assets))
+      assert_contract_failure(status, stderr)
+      assert_includes stderr, '$PLUGINSDIR/app-ia32.7z'
+    end
+  end
+
+  def test_rejects_multiple_windows_payloads
+    assets = { 'desktop.exe' => ['windows-x64', 'windows:x64:multiple'] }
+    with_fixture(assets) do |_root, source_dir, bin_dir|
+      _stdout, stderr, status = run_verifier(source_dir, bin_dir, assets, metadata_document(source_dir, assets))
+      assert_contract_failure(status, stderr)
+      assert_includes stderr, '$PLUGINSDIR/app-64.7z, $PLUGINSDIR/app-arm64.7z'
+    end
+  end
+
+  def test_rejects_missing_windows_payload
+    assets = { 'desktop.exe' => ['windows-x64', 'windows:x64:missing'] }
+    with_fixture(assets) do |_root, source_dir, bin_dir|
+      _stdout, stderr, status = run_verifier(source_dir, bin_dir, assets, metadata_document(source_dir, assets))
+      assert_contract_failure(status, stderr)
+      assert_includes stderr, 'found none'
+    end
+  end
+
+  def test_rejects_windows_payload_outside_plugin_directory
+    assets = { 'desktop.exe' => ['windows-x64', 'windows:x64:outside'] }
+    with_fixture(assets) do |_root, source_dir, bin_dir|
+      _stdout, stderr, status = run_verifier(source_dir, bin_dir, assets, metadata_document(source_dir, assets))
+      assert_contract_failure(status, stderr)
+      assert_includes stderr, 'found resources/app-64.7z'
+    end
+  end
+
+  def test_rejects_non_nsis_windows_container
+    assets = { 'desktop.exe' => ['windows-x64', 'plain:x64'] }
+    with_fixture(assets) do |_root, source_dir, bin_dir|
+      _stdout, stderr, status = run_verifier(source_dir, bin_dir, assets, metadata_document(source_dir, assets))
+      assert_contract_failure(status, stderr)
+      assert_includes stderr, 'not an inspectable NSIS launcher'
+    end
+  end
+
+  def test_rejects_windows_payload_with_wrong_pe_machine
+    assets = { 'desktop.exe' => ['windows-x64', 'windows:x64:forward:arm64'] }
+    with_fixture(assets) do |_root, source_dir, bin_dir|
+      _stdout, stderr, status = run_verifier(source_dir, bin_dir, assets, metadata_document(source_dir, assets))
+      assert_contract_failure(status, stderr)
+      assert_includes stderr, 'wrong architecture: PE machine'
     end
   end
 

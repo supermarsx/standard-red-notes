@@ -86,14 +86,77 @@ def app_executable!(directory, name)
   candidates.first
 end
 
+def normalized_relative_path(directory, candidate)
+  Pathname.new(candidate).relative_path_from(Pathname.new(directory)).to_s.tr('\\', '/')
+end
+
+def verify_pe32_plus_machine!(path, expected, name)
+  expected_machine = case expected
+                     when 'x64' then 0x8664
+                     when 'arm64' then 0xaa64
+                     else fail_contract("unknown architecture #{expected} for #{name}")
+                     end
+
+  File.open(path, 'rb') do |file|
+    fail_contract("#{name} payload is not a valid PE executable") unless file.read(2) == 'MZ'
+    file.seek(0x3c)
+    offset_bytes = file.read(4)
+    fail_contract("#{name} payload has a truncated PE header") unless offset_bytes&.bytesize == 4
+    pe_offset = offset_bytes.unpack1('V')
+    fail_contract("#{name} payload has an invalid PE header offset") if pe_offset < 0x40 || pe_offset > File.size(path) - 26
+    file.seek(pe_offset)
+    fail_contract("#{name} payload is not a valid PE executable") unless file.read(4) == "PE\0\0"
+    machine_bytes = file.read(2)
+    fail_contract("#{name} payload has a truncated PE machine field") unless machine_bytes&.bytesize == 2
+    machine = machine_bytes.unpack1('v')
+    file.seek(pe_offset + 24)
+    magic_bytes = file.read(2)
+    fail_contract("#{name} payload has a truncated PE optional header") unless magic_bytes&.bytesize == 2
+    optional_magic = magic_bytes.unpack1('v')
+    fail_contract("#{name} payload is not PE32+") unless optional_magic == 0x20b
+    unless machine == expected_machine
+      fail_contract(format('%s payload has wrong architecture: PE machine 0x%04x, expected 0x%04x', name, machine,
+                           expected_machine))
+    end
+  end
+rescue Errno::EACCES, Errno::ENOENT, Errno::EINVAL => error
+  fail_contract("could not inspect #{name} payload PE header: #{error.message}")
+end
+
 def verify_architecture!(path, kind, name)
   format, expected = kind.split('-', 2)
   fail_contract("invalid architecture kind for #{name}: #{kind}") unless format && expected
   case format
   when 'windows'
-    description = file_description(path)
-    require_format!(description, /PE32\+/i, 'PE32+', name)
-    require_architecture!(description, expected, name)
+    launcher = file_description(path)
+    require_format!(launcher, /PE32.*Nullsoft Installer/i, 'NSIS launcher', name)
+    payload_name = expected == 'x64' ? 'app-64.7z' : 'app-arm64.7z'
+    expected_payload_path = "$PLUGINSDIR/#{payload_name}"
+    Dir.mktmpdir('srn-updater-windows-installer-') do |installer_directory|
+      command!('7z', 'x', '-y', "-o#{installer_directory}", path)
+      payloads = Dir.glob(File.join(installer_directory, '**', '*'), File::FNM_DOTMATCH)
+                    .select { |candidate| File.file?(candidate) }
+                    .map { |candidate| [candidate, normalized_relative_path(installer_directory, candidate)] }
+                    .select { |_candidate, relative| File.basename(relative).match?(%r{\Aapp-[^/]+\.7z\z}) }
+      payload_paths = payloads.map(&:last).sort
+      unless payload_paths == [expected_payload_path]
+        found = payload_paths.empty? ? 'none' : payload_paths.join(', ')
+        fail_contract("#{name} has wrong architecture payload: found #{found}, expected #{expected_payload_path}")
+      end
+      Dir.mktmpdir('srn-updater-windows-payload-') do |payload_directory|
+        command!('7z', 'x', '-y', "-o#{payload_directory}", payloads.first.first)
+        executable_names = Dir.children(payload_directory).select do |entry|
+          candidate = File.join(payload_directory, entry)
+          File.file?(candidate) && File.extname(entry).casecmp?('.exe')
+        end.sort
+        unless executable_names == ['Standard Red Notes.exe']
+          found = executable_names.empty? ? 'none' : executable_names.join(', ')
+          fail_contract("#{name} payload has wrong top-level application executables: found #{found}, " \
+                        'expected Standard Red Notes.exe')
+        end
+        verify_pe32_plus_machine!(File.join(payload_directory, executable_names.first), expected, name)
+      end
+    end
   when 'appimage'
     description = file_description(path)
     require_format!(description, /ELF 64-bit/i, 'ELF', name)
