@@ -74,6 +74,11 @@ export interface ServiceControlServiceOptions {
   timeoutMs?: number
 }
 
+export type ProgramStatusSnapshot = {
+  available: boolean
+  statuses: Record<string, string>
+}
+
 /**
  * Standard Red Notes: shells out to `supervisorctl` to restart/stop/start the
  * sibling server processes running under supervisord in the single-container
@@ -127,6 +132,28 @@ export class ServiceControlService {
     // a working control channel. Only a genuine connection/config failure counts
     // as unavailable.
     return !this.looksUnavailable(result)
+  }
+
+  /**
+   * Read every allowlisted program state with one supervisorctl invocation.
+   * A stopped/fatal program makes supervisorctl exit non-zero, so availability
+   * is determined from the control channel and parsed output, not the exit code.
+   */
+  async getProgramStatuses(): Promise<ProgramStatusSnapshot> {
+    const result = await this.safeRun(['status'])
+    if (result.error || this.looksUnavailable(result)) {
+      return { available: false, statuses: {} }
+    }
+
+    const statuses: Record<string, string> = {}
+    for (const line of (result.stdout || '').split(/\r?\n/)) {
+      const [program, status] = line.trim().split(/\s+/, 2)
+      if (program && status && this.isControllable(program)) {
+        statuses[program] = status
+      }
+    }
+
+    return { available: Object.keys(statuses).length > 0, statuses }
   }
 
   /**

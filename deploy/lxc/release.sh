@@ -66,7 +66,7 @@ PY
   pid="$!"
   while [ "${elapsed}" -lt "${timeout}" ]; do
     if curl --fail --silent --show-error --max-time 3 \
-      "http://127.0.0.1:${port}/healthcheck" >/dev/null 2>&1; then
+      "http://127.0.0.1:${port}/healthcheck/readiness" >/dev/null 2>&1; then
       kill "${pid}" >/dev/null 2>&1 || true
       wait "${pid}" >/dev/null 2>&1 || true
       pid=""

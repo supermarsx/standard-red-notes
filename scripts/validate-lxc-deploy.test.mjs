@@ -64,6 +64,16 @@ function validate(files) {
   if (smokeIndex < stageIndex || activateIndex < smokeIndex) {
     errors.push("staging health must pass before the live switch");
   }
+  if (!release.includes('"http://127.0.0.1:${port}/healthcheck/readiness"')) {
+    errors.push("staged acceptance must use aggregate readiness");
+  }
+  if (
+    !installer.includes(
+      'curl -fsS --max-time 3 "http://127.0.0.1:${HTTP_PORT}/healthcheck/readiness"',
+    )
+  ) {
+    errors.push("live acceptance must use aggregate readiness");
+  }
   if (!release.includes('env -C "${release}/server/packages/home-server"')) {
     errors.push("staged backend smoke must load dotenv from home-server cwd");
   }
@@ -289,6 +299,29 @@ test("LXC contract rejects lost staging, health, atomic switch, and rollback", (
   ]) {
     assert.match(validate(mutate(file, text)).join("\n"), new RegExp(error));
   }
+});
+
+test("LXC staged and live acceptance reject liveness-only probes", () => {
+  assert.match(
+    validate(
+      mutate(
+        "release",
+        '"http://127.0.0.1:${port}/healthcheck/readiness"',
+        '"http://127.0.0.1:${port}/healthcheck"',
+      ),
+    ).join("\n"),
+    /staged acceptance must use aggregate readiness/,
+  );
+  assert.match(
+    validate(
+      mutate(
+        "installer",
+        '"http://127.0.0.1:${HTTP_PORT}/healthcheck/readiness"',
+        '"http://127.0.0.1:${HTTP_PORT}/healthcheck"',
+      ),
+    ).join("\n"),
+    /live acceptance must use aggregate readiness/,
+  );
 });
 
 test("LXC preflight keeps live link and nginx config untouched", () => {

@@ -86,7 +86,7 @@ HTTP_PORT=8080 DATA_DIR=/srv/notes-data ./install.sh
 
 ```sh
 # From the host or another machine on the network:
-curl -fsS http://<container-ip>/healthcheck        # -> {"...":"ok"} style 200
+curl -fsS http://<container-ip>/healthcheck/readiness # -> aggregate 200 only when ready
 # Browser:
 http://<container-ip>/
 ```
@@ -163,7 +163,7 @@ node --test scripts/validate-lxc-deploy.test.mjs # fail-closed mutation checks
 
 # After install, inside the container:
 systemctl is-active standard-red-notes # -> active
-curl -fsS http://127.0.0.1/healthcheck # -> 200
+curl -fsS http://127.0.0.1/healthcheck/readiness # -> aggregate 200 only when ready
 curl -fsSI http://127.0.0.1/ | grep -i content-security-policy   # served CSP
 # Confirm the served CSP hash matches the served inline script (self-heal):
 #   see docs/DEPLOYMENT.md "Verifying the CSP self-heal".

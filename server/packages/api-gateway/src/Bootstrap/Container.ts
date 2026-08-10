@@ -73,6 +73,8 @@ import { DockerServiceControlService } from '../Service/ServiceControl/DockerSer
 import { IpAccessListStore, IpAccessListRedis } from '../Controller/IpAccessList'
 import { parseClientIpHeaderName } from '../Controller/ClientIp'
 import { RateLimitMetricsStore, RateLimitMetricsRedis } from '../Controller/RateLimitMetrics'
+import { AggregateReadinessService } from '../Service/Readiness/AggregateReadinessService'
+import { ReadinessState } from '../Service/Readiness/ReadinessState'
 import { SubscriptionTokenStore } from '../Service/Assistant/subscription/SubscriptionTokenStore'
 import { SubscriptionCredentialProvider } from '../Service/Assistant/subscription/SubscriptionCredentialProvider'
 import { buildDefaultOAuthConfig } from '../Service/Assistant/subscription/oauthConfig'
@@ -216,6 +218,9 @@ export class ContainerConfigLoader {
       .bind(TYPES.ApiGateway_CROSS_SERVICE_TOKEN_CACHE_TTL)
       .toConstantValue(+env.get('CROSS_SERVICE_TOKEN_CACHE_TTL', true))
     container.bind(TYPES.ApiGateway_IS_CONFIGURED_FOR_HOME_SERVER).toConstantValue(isConfiguredForHomeServer)
+    container
+      .bind<ReadinessState>(TYPES.ApiGateway_ReadinessState)
+      .toConstantValue(new ReadinessState(!isConfiguredForHomeServer))
     container
       .bind<string[]>(TYPES.ApiGateway_CORS_ALLOWED_ORIGINS)
       .toConstantValue(env.get('CORS_ALLOWED_ORIGINS', true) ? env.get('CORS_ALLOWED_ORIGINS', true).split(',') : [])
@@ -687,6 +692,29 @@ export class ContainerConfigLoader {
     container.bind<ServiceControlService>(TYPES.ApiGateway_ServiceControlService).toConstantValue(
       new ServiceControlService({
         configPath: env.get('SUPERVISORCTL_CONFIG_PATH', true) || '/etc/supervisord.conf',
+      }),
+    )
+
+    const databaseReadinessCheck = (repositoryIdentifier: symbol) => async (): Promise<void> => {
+      const repository = container.get<{ manager: { query(sql: string): Promise<unknown> } }>(repositoryIdentifier)
+      await repository.manager.query('SELECT 1')
+    }
+    const inProcessChecks = isConfiguredForHomeServer
+      ? {
+          auth: databaseReadinessCheck(Symbol.for('Auth_ORMRoleRepository')),
+          'syncing-server': databaseReadinessCheck(Symbol.for('Sync_ORMItemRepository')),
+          revisions: databaseReadinessCheck(Symbol.for('Revisions_ORMRevisionRepository')),
+          files: () => container.get<{ check(): Promise<void> }>(Symbol.for('Files_StorageReadiness')).check(),
+        }
+      : undefined
+    container.bind<AggregateReadinessService>(TYPES.ApiGateway_AggregateReadinessService).toConstantValue(
+      new AggregateReadinessService({
+        homeServer: isConfiguredForHomeServer,
+        state: container.get(TYPES.ApiGateway_ReadinessState),
+        redis: container.isBound(TYPES.ApiGateway_Redis) ? container.get(TYPES.ApiGateway_Redis) : undefined,
+        serviceProbeUrls,
+        serviceControlService: container.get(TYPES.ApiGateway_ServiceControlService),
+        inProcessChecks,
       }),
     )
 

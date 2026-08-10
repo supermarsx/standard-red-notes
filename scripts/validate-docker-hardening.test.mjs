@@ -26,6 +26,8 @@ import {
   validatePairingComposeContract,
   validatePairingComposeSource,
   validatePairingDockerfileContract,
+  validateReadinessAcceptanceContract,
+  validateReadinessBootContract,
   validateRuntimeLogLevelBootContract,
   validateRuntimeLogLevelDeploymentContract,
   validateServerDockerfileContract,
@@ -33,6 +35,87 @@ import {
   validateSingleEntrypointAuthStepUpPropagation,
   validateSingleContainerSQLiteMigrationContract,
 } from "./validate-docker-hardening.mjs";
+
+test("requires aggregate readiness as the container acceptance path in both topologies", () => {
+  const valid = {
+    multiDockerfileSource:
+      "HEALTHCHECK CMD curl -fsS http://localhost:3000/healthcheck/readiness >/dev/null || exit 1",
+    singleDockerfileSource:
+      "HEALTHCHECK CMD curl -fsS http://127.0.0.1:8080/healthcheck/readiness >/dev/null || exit 1",
+    multiComposeSource:
+      'healthcheck:\n  test: ["CMD-SHELL", "curl -fsS http://localhost:3000/healthcheck/readiness >/dev/null || exit 1"]',
+    singleComposeSource:
+      'healthcheck:\n  test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/healthcheck/readiness >/dev/null || exit 1"]',
+  };
+
+  assert.deepEqual(validateReadinessAcceptanceContract(valid), []);
+
+  const broken = Object.fromEntries(
+    Object.entries(valid).map(([key, value]) => [
+      key,
+      value.replace("/healthcheck/readiness", "/healthcheck"),
+    ]),
+  );
+  assert.deepEqual(validateReadinessAcceptanceContract(broken), [
+    "multi Dockerfile: container health must use aggregate /healthcheck/readiness",
+    "single Dockerfile: container health must use aggregate /healthcheck/readiness",
+    "multi compose: container health must use aggregate /healthcheck/readiness",
+    "single compose: container health must use aggregate /healthcheck/readiness",
+  ]);
+});
+
+test("locks aggregate readiness to startup lifecycle, service, worker, and storage signals", () => {
+  const valid = {
+    homeServerSource: `
+      app.get('/healthcheck/readiness', handler)
+      await server.build()
+    `,
+    homeServerRuntimeSource: `
+      this.scheduler = options.startScheduler()
+      options.readinessState.markReady()
+      readinessState?.markUnavailable()
+      scheduler?.stop()
+    `,
+    aggregateReadinessSource: `
+      const required = ['auth', 'syncing-server', 'files', 'revisions']
+      DEFAULT_CONTROLLABLE_PROGRAMS
+      this.options.serviceControlService.getProgramStatuses()
+      this.options.state.isReady()
+    `,
+    filesContainerSource:
+      "bind(new S3StorageReadiness())\nbind(new FSStorageReadiness())",
+    filesHealthControllerSource:
+      "@inject(TYPES.Files_StorageReadiness) storage",
+  };
+  assert.deepEqual(validateReadinessBootContract(valid), []);
+
+  const broken = structuredClone(valid);
+  broken.homeServerSource = broken.homeServerSource.replace(
+    "app.get('/healthcheck/readiness', handler)",
+    "",
+  );
+  broken.homeServerRuntimeSource = broken.homeServerRuntimeSource.replace(
+    "options.readinessState.markReady()",
+    "",
+  );
+  broken.aggregateReadinessSource = broken.aggregateReadinessSource.replace(
+    "getProgramStatuses()",
+    "isAvailable()",
+  );
+  broken.filesContainerSource = broken.filesContainerSource.replace(
+    "S3StorageReadiness",
+    "UnknownStorage",
+  );
+  broken.filesHealthControllerSource = "class HealthController {}";
+
+  assert.deepEqual(validateReadinessBootContract(broken), [
+    "home-server runtime: readiness must open after scheduler startup and close before resource shutdown",
+    "home-server: aggregate readiness route must be deterministic before controller discovery",
+    "api-gateway readiness: missing aggregate requirement getProgramStatuses()",
+    "files readiness: missing S3StorageReadiness binding",
+    "files readiness: controller must require the storage probe",
+  ]);
+});
 
 test("collects every SQLite migration recursively in deterministic order", () => {
   const root = mkdtempSync(join(tmpdir(), "srn-sqlite-migrations-"));

@@ -12,11 +12,11 @@ worker, or downstream service is unavailable.
 
 ```mermaid
 flowchart TD
-  A[User symptom] --> B{Public /healthcheck}
-  B -->|Down| C[Proxy, container, process]
-  B -->|Up| D{Internal readiness}
-  D -->|Dependency failed| E[Database, Redis, service network]
-  D -->|Ready| F{Client sync health}
+  A[User symptom] --> B{Public /healthcheck/readiness}
+  B -->|Unavailable| C{Public /healthcheck liveness}
+  C -->|Down| D[Proxy, container, process]
+  C -->|Up| E[Database, Redis, storage, service, or worker]
+  B -->|Ready| F{Client sync health}
   F -->|Failed| G[Session, cursor, conflict, realtime]
   F -->|Healthy| H[Feature gate or data-specific path]
 ```
@@ -25,17 +25,24 @@ flowchart TD
 
 | Layer             | Check                                     | What it proves                                                        |
 | ----------------- | ----------------------------------------- | --------------------------------------------------------------------- |
-| Public edge       | `GET /healthcheck` or `srn-server health` | The public gateway path responds                                      |
-| Service liveness  | Internal `/healthcheck`                   | The process/event loop responds                                       |
-| Service readiness | Internal `/healthcheck/readiness`         | The service can reach required dependencies such as database or Redis |
+| Public readiness  | `GET /healthcheck/readiness`              | Every required service, dependency, storage path, and worker is ready |
+| Public liveness   | `GET /healthcheck`                        | The gateway process and public route respond; not safe for acceptance |
+| Service liveness  | Internal `/healthcheck`                   | The individual process/event loop responds                            |
+| Service readiness | Internal `/healthcheck/readiness`         | The service can reach its required database, Redis, or storage         |
 | Stack state       | `srn-server status` / `docker compose ps` | Container lifecycle and Docker health                                 |
 | Server aggregate  | Admin Server tab or `srn-admin status`    | Per-sibling readiness and response time                               |
 | Client data path  | Manual sync and a second client           | Authentication, encrypted sync, reconciliation, and local persistence |
 | MCP               | `standard_red_notes_status`               | Bridge sign-in and background-sync health                             |
 
 The public access-key gate exempts health paths so infrastructure probes remain
-usable. A successful health probe does not authenticate a user or prove note
-sync.
+usable. Docker and LXC acceptance use aggregate readiness; keep liveness for
+diagnosis only. Even successful readiness does not authenticate a user or prove
+an end-to-end encrypted client sync.
+
+Files readiness checks read/write access and available filesystem blocks for
+local storage. S3 storage uses the authenticated, non-mutating `HeadBucket`
+probe; its credential must grant `s3:ListBucket`, which is also required by the
+existing file-list/quota path.
 
 ## First-response sequence
 

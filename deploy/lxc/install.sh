@@ -61,7 +61,7 @@ command -v systemctl >/dev/null 2>&1 || die "systemd is required (run inside a s
 wait_live_health() {
   local elapsed=0
   while [ "${elapsed}" -lt 120 ]; do
-    curl -fsS --max-time 3 "http://127.0.0.1:${HTTP_PORT}/healthcheck" >/dev/null 2>&1 && return 0
+    curl -fsS --max-time 3 "http://127.0.0.1:${HTTP_PORT}/healthcheck/readiness" >/dev/null 2>&1 && return 0
     sleep 1
     elapsed=$((elapsed + 1))
   done
@@ -529,7 +529,7 @@ log "Done. Standard Red Notes is starting."
 cat <<EOF
 
   Web UI:      http://<this-container-ip>:${HTTP_PORT}/
-  API health:  curl -fsS http://127.0.0.1:${HTTP_PORT}/healthcheck
+  API health:  curl -fsS http://127.0.0.1:${HTTP_PORT}/healthcheck/readiness
 
   Service:     systemctl status standard-red-notes
   Logs:        journalctl -u standard-red-notes -f

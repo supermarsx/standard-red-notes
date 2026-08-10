@@ -34,12 +34,15 @@ describe('HomeServerRuntime', () => {
   let bridge: { close: jest.Mock }
   let logger: { info: jest.Mock; warn: jest.Mock; error: jest.Mock }
   let onSigterm: jest.Mock
+  let ready: boolean
+  let readinessState: { markReady: jest.Mock; markUnavailable: jest.Mock }
 
   const start = (runtime: HomeServerRuntime, server: FakeServer) =>
     runtime.start({
       server: server as unknown as http.Server,
       bridge,
       logger,
+      readinessState,
       startScheduler: () => scheduler,
       onSigterm,
     })
@@ -50,6 +53,15 @@ describe('HomeServerRuntime', () => {
     bridge = { close: jest.fn().mockResolvedValue(undefined) }
     logger = { info: jest.fn(), warn: jest.fn(), error: jest.fn() }
     onSigterm = jest.fn().mockResolvedValue(undefined)
+    ready = false
+    readinessState = {
+      markReady: jest.fn(() => {
+        ready = true
+      }),
+      markUnavailable: jest.fn(() => {
+        ready = false
+      }),
+    }
   })
 
   afterEach(() => {
@@ -62,6 +74,8 @@ describe('HomeServerRuntime', () => {
     const startPromise = start(runtime, server)
 
     expect(runtime.isRunning()).toBe(false)
+    expect(ready).toBe(false)
+    expect(readinessState.markReady).not.toHaveBeenCalled()
     expect(signalTarget.listeners.size).toBe(0)
 
     server.listening = true
@@ -69,6 +83,8 @@ describe('HomeServerRuntime', () => {
     await startPromise
 
     expect(runtime.isRunning()).toBe(true)
+    expect(ready).toBe(true)
+    expect(readinessState.markReady).toHaveBeenCalledTimes(1)
     expect(signalTarget.listeners.size).toBe(1)
   })
 
@@ -129,6 +145,7 @@ describe('HomeServerRuntime', () => {
         server: server as unknown as http.Server,
         bridge,
         logger,
+        readinessState,
         startScheduler: () => {
           throw new Error('scheduler unavailable')
         },
@@ -141,6 +158,8 @@ describe('HomeServerRuntime', () => {
     expect(bridge.close).toHaveBeenCalledTimes(1)
     expect(signalTarget.listeners.size).toBe(0)
     expect(runtime.isActive()).toBe(false)
+    expect(ready).toBe(false)
+    expect(readinessState.markReady).not.toHaveBeenCalled()
   })
 
   it('awaits HTTP close and stops each owned resource once across concurrent stop calls', async () => {
@@ -161,6 +180,8 @@ describe('HomeServerRuntime', () => {
     })
 
     await Promise.resolve()
+    expect(ready).toBe(false)
+    expect(readinessState.markUnavailable).toHaveBeenCalled()
     expect(stopped).toBe(false)
     expect(server.close).toHaveBeenCalledTimes(1)
     expect(scheduler.stop).toHaveBeenCalledTimes(1)
@@ -195,6 +216,24 @@ describe('HomeServerRuntime', () => {
     await start(runtime, server)
 
     await expect(runtime.stop()).rejects.toThrow('scheduler stop failed')
+    expect(server.close).toHaveBeenCalledTimes(1)
+    expect(bridge.close).toHaveBeenCalledTimes(1)
+    expect(runtime.isActive()).toBe(false)
+  })
+
+  it('still tears down every resource when closing the readiness gate throws', async () => {
+    const runtime = new HomeServerRuntime(signalTarget)
+    const server = new FakeServer()
+    server.listening = true
+    server.close.mockImplementation((callback) => callback())
+
+    await start(runtime, server)
+    readinessState.markUnavailable.mockImplementation(() => {
+      throw new Error('readiness close failed')
+    })
+
+    await expect(runtime.stop()).rejects.toThrow('readiness close failed')
+    expect(scheduler.stop).toHaveBeenCalledTimes(1)
     expect(server.close).toHaveBeenCalledTimes(1)
     expect(bridge.close).toHaveBeenCalledTimes(1)
     expect(runtime.isActive()).toBe(false)

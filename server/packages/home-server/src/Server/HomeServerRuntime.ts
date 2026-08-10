@@ -14,6 +14,11 @@ export interface HomeServerRuntimeBridge {
   close(): Promise<void>
 }
 
+export interface HomeServerRuntimeReadinessState {
+  markReady(): void
+  markUnavailable(): void
+}
+
 export interface HomeServerSignalTarget {
   on(event: 'SIGTERM', listener: () => void): unknown
   removeListener(event: 'SIGTERM', listener: () => void): unknown
@@ -23,6 +28,7 @@ export interface HomeServerRuntimeStartOptions {
   server: http.Server
   bridge: HomeServerRuntimeBridge
   logger: HomeServerRuntimeLogger
+  readinessState: HomeServerRuntimeReadinessState
   startScheduler: () => HomeServerRuntimeScheduler
   onSigterm: () => Promise<void>
 }
@@ -38,6 +44,7 @@ export class HomeServerRuntime {
   private scheduler: HomeServerRuntimeScheduler | undefined
   private bridge: HomeServerRuntimeBridge | undefined
   private logger: HomeServerRuntimeLogger | undefined
+  private readinessState: HomeServerRuntimeReadinessState | undefined
   private signalHandler: (() => void) | undefined
   private starting = false
   private stopPromise: Promise<void> | undefined
@@ -63,11 +70,13 @@ export class HomeServerRuntime {
     this.starting = true
     let resourcesAdopted = false
     try {
+      options.readinessState.markUnavailable()
       await this.waitUntilListening(options.server)
 
       this.server = options.server
       this.bridge = options.bridge
       this.logger = options.logger
+      this.readinessState = options.readinessState
       resourcesAdopted = true
       this.scheduler = options.startScheduler()
 
@@ -77,6 +86,7 @@ export class HomeServerRuntime {
         })
       }
       this.signalTarget.on('SIGTERM', this.signalHandler)
+      options.readinessState.markReady()
     } catch (error) {
       if (resourcesAdopted) {
         await this.stopResources().catch(() => undefined)
@@ -135,6 +145,16 @@ export class HomeServerRuntime {
     const scheduler = this.scheduler
     const bridge = this.bridge
     const logger = this.logger
+    const readinessState = this.readinessState
+    const errors: Error[] = []
+
+    // Stop advertising readiness before any scheduler/HTTP/bridge teardown so
+    // an orchestrator cannot route new work into a draining runtime.
+    try {
+      readinessState?.markUnavailable()
+    } catch (error) {
+      errors.push(error as Error)
+    }
 
     if (this.signalHandler) {
       this.signalTarget.removeListener('SIGTERM', this.signalHandler)
@@ -145,8 +165,8 @@ export class HomeServerRuntime {
     this.scheduler = undefined
     this.bridge = undefined
     this.logger = undefined
+    this.readinessState = undefined
 
-    const errors: Error[] = []
     try {
       scheduler?.stop()
     } catch (error) {

@@ -209,7 +209,7 @@ x-server-env: &server-env
   # encryption). When set, the api-gateway requires clients to present this key in
   # the X-Shared-Server-Key header. SHARED_SERVER_ACCESS_KEY_MODE selects what is
   # gated: "all" (every request, healthcheck exempt) or "registration" (only new
-  # sign-ups). The container healthcheck path (/healthcheck) is always exempt.
+  # sign-ups). The container readiness path (/healthcheck/readiness) is always exempt.
   SHARED_SERVER_ACCESS_KEY: ${SHARED_SERVER_ACCESS_KEY:-}
   SHARED_SERVER_ACCESS_KEY_MODE: ${SHARED_SERVER_ACCESS_KEY_MODE:-all}
   # CORS. The gateway now defaults to STRICT (safe for self-host): it reflects
@@ -383,7 +383,7 @@ services:
       # volume on first use. Persists pairing, server settings, and gateway JSON.
       - server-data:/opt/server/packages/api-gateway/data
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:3000/healthcheck >/dev/null || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS http://localhost:3000/healthcheck/readiness >/dev/null || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 10

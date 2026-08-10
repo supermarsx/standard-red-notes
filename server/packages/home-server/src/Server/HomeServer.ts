@@ -350,6 +350,25 @@ export class HomeServer implements HomeServerInterface {
         )
         app.use(createSharedServerAccessKeyMiddleware(sharedServerAccessKeyConfig))
 
+        // Every bundled service declares the same healthcheck controller path.
+        // Register the aggregate route before server.build() mounts those
+        // controllers so home-server readiness is deterministic rather than
+        // depending on controller discovery order. It stays after the standard
+        // security middleware; the shared-key middleware explicitly exempts the
+        // healthcheck path for container probes.
+        app.get('/healthcheck/readiness', (_request: Request, response: Response, next: NextFunction) => {
+          const readiness = container.get<{
+            check(): Promise<{
+              status: 'ready' | 'unavailable'
+              checks: Record<string, unknown>
+            }>
+          }>(ApiGatewayTypes.ApiGateway_AggregateReadinessService)
+          void readiness
+            .check()
+            .then((report) => response.status(report.status === 'ready' ? 200 : 503).json(report))
+            .catch(next)
+        })
+
         if (env.get('E2E_TESTING', true) === 'true') {
           app.post('/e2e/activate-premium', (request: Request, response: Response) => {
             void this.activatePremiumFeatures({
@@ -441,6 +460,10 @@ export class HomeServer implements HomeServerInterface {
 
       const serverInstance = app.listen(port)
 
+      const readinessState = container.get<{ markReady(): void; markUnavailable(): void }>(
+        ApiGatewayTypes.ApiGateway_ReadinessState,
+      )
+
       const keepAliveTimeout = env.get('HTTP_KEEP_ALIVE_TIMEOUT', true)
         ? +env.get('HTTP_KEEP_ALIVE_TIMEOUT', true)
         : 5000
@@ -451,6 +474,7 @@ export class HomeServer implements HomeServerInterface {
         server: serverInstance,
         bridge: webSocketRedisBridge,
         logger,
+        readinessState,
         startScheduler: () => {
           const scheduler = container.get<{ stop(): void }>(ApiGatewayTypes.ApiGateway_ReminderDeliveryScheduler)
           if (startReminderDeliveryScheduler(container)) {

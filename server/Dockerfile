@@ -110,6 +110,6 @@ USER srn:srn
 EXPOSE 3000 3104
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=10 \
-  CMD curl -fsS http://localhost:3000/healthcheck >/dev/null || exit 1
+  CMD curl -fsS http://localhost:3000/healthcheck/readiness >/dev/null || exit 1
 
 ENTRYPOINT ["docker-entrypoint.sh"]

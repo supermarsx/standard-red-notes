@@ -38,6 +38,36 @@ describe('ServiceControlService', () => {
     expect(service.isControllable('nope')).toBe(false)
   })
 
+  it('reads every allowlisted program status in one supervisorctl call', async () => {
+    const stdout = DEFAULT_CONTROLLABLE_PROGRAMS.map(
+      (program, index) => `${program} ${index === 1 ? 'STOPPED' : 'RUNNING'} pid 42`,
+    ).join('\n')
+    const runner = jest.fn(async (): Promise<SupervisorctlRunResult> => ({ stdout, stderr: '', code: 3 }))
+    const service = new ServiceControlService({ runner })
+
+    await expect(service.getProgramStatuses()).resolves.toEqual({
+      available: true,
+      statuses: Object.fromEntries(
+        DEFAULT_CONTROLLABLE_PROGRAMS.map((program, index) => [program, index === 1 ? 'STOPPED' : 'RUNNING']),
+      ),
+    })
+    expect(runner).toHaveBeenCalledTimes(1)
+    expect(runner).toHaveBeenCalledWith(['-c', '/etc/supervisord.conf', 'status'])
+  })
+
+  it('ignores non-allowlisted supervisor output and fails closed when no required status is parseable', async () => {
+    const runner: SupervisorctlRunner = async () => ({
+      stdout: 'unrelated RUNNING pid 99',
+      stderr: '',
+      code: 0,
+    })
+
+    await expect(new ServiceControlService({ runner }).getProgramStatuses()).resolves.toEqual({
+      available: false,
+      statuses: {},
+    })
+  })
+
   it('rejects a non-allowlisted program WITHOUT spawning anything (injection-safe)', async () => {
     const runner = makeRunner()
     const service = new ServiceControlService({ runner })
@@ -115,6 +145,7 @@ describe('ServiceControlService', () => {
       expect(outcome.kind).toBe('unavailable')
 
       expect(await service.isAvailable()).toBe(false)
+      expect(await service.getProgramStatuses()).toEqual({ available: false, statuses: {} })
     })
 
     it('reports available when a plain status call succeeds', async () => {

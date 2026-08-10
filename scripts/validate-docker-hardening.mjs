@@ -624,6 +624,104 @@ export function validateSingleContainerSQLiteMigrationContract({
   return errors;
 }
 
+export function validateReadinessAcceptanceContract({
+  multiDockerfileSource,
+  singleDockerfileSource,
+  multiComposeSource,
+  singleComposeSource,
+}) {
+  const errors = [];
+  for (const [label, sourceValue] of Object.entries({
+    "multi Dockerfile": multiDockerfileSource,
+    "single Dockerfile": singleDockerfileSource,
+    "multi compose": multiComposeSource,
+    "single compose": singleComposeSource,
+  })) {
+    const healthCommands = String(sourceValue)
+      .split(/\r?\n/)
+      .filter((line) => /curl\b.*\/healthcheck\b/i.test(line));
+    if (
+      healthCommands.length === 0 ||
+      healthCommands.some(
+        (command) => !/\/healthcheck\/readiness(?:\s|["'\]])/i.test(command),
+      )
+    ) {
+      errors.push(
+        `${label}: container health must use aggregate /healthcheck/readiness`,
+      );
+    }
+  }
+
+  return errors;
+}
+
+export function validateReadinessBootContract({
+  homeServerSource,
+  homeServerRuntimeSource,
+  aggregateReadinessSource,
+  filesContainerSource,
+  filesHealthControllerSource,
+}) {
+  const errors = [];
+  const homeServer = String(homeServerSource);
+  const aggregateRoute = homeServer.indexOf("app.get('/healthcheck/readiness'");
+  const controllerBuild = homeServer.indexOf("await server.build()");
+  const runtime = String(homeServerRuntimeSource);
+  const schedulerStarted = runtime.indexOf(
+    "this.scheduler = options.startScheduler()",
+  );
+  const markedReady = runtime.indexOf("options.readinessState.markReady()");
+  const markedUnavailable = runtime.indexOf(
+    "readinessState?.markUnavailable()",
+  );
+  const schedulerStopped = runtime.indexOf("scheduler?.stop()");
+  if (
+    schedulerStarted < 0 ||
+    markedReady < schedulerStarted ||
+    markedUnavailable < 0 ||
+    schedulerStopped < markedUnavailable
+  ) {
+    errors.push(
+      "home-server runtime: readiness must open after scheduler startup and close before resource shutdown",
+    );
+  }
+  if (aggregateRoute < 0 || controllerBuild < aggregateRoute) {
+    errors.push(
+      "home-server: aggregate readiness route must be deterministic before controller discovery",
+    );
+  }
+
+  const aggregate = String(aggregateReadinessSource);
+  for (const requirement of [
+    "['auth', 'syncing-server', 'files', 'revisions']",
+    "DEFAULT_CONTROLLABLE_PROGRAMS",
+    "getProgramStatuses()",
+    "this.options.state.isReady()",
+  ]) {
+    if (!aggregate.includes(requirement)) {
+      errors.push(
+        `api-gateway readiness: missing aggregate requirement ${requirement}`,
+      );
+    }
+  }
+
+  const filesContainer = String(filesContainerSource);
+  for (const storageProbe of ["S3StorageReadiness", "FSStorageReadiness"]) {
+    if (!filesContainer.includes(storageProbe)) {
+      errors.push(`files readiness: missing ${storageProbe} binding`);
+    }
+  }
+  if (
+    !String(filesHealthControllerSource).includes(
+      "TYPES.Files_StorageReadiness",
+    )
+  ) {
+    errors.push("files readiness: controller must require the storage probe");
+  }
+
+  return errors;
+}
+
 function exactLocationBody(nginxConfig, route) {
   const escaped = route.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const matches = [
@@ -839,6 +937,10 @@ export function runDockerHardeningValidation(argv = process.argv.slice(2)) {
     path.join(repositoryRoot, "server", "Dockerfile"),
     "utf8",
   );
+  const singleDockerfile = readFileSync(
+    path.join(repositoryRoot, "Dockerfile.single"),
+    "utf8",
+  );
   const multiComposeSource = readFileSync(
     path.join(repositoryRoot, "docker-compose.yml"),
     "utf8",
@@ -894,6 +996,44 @@ export function runDockerHardeningValidation(argv = process.argv.slice(2)) {
       "src",
       "Server",
       "HomeServer.ts",
+    ),
+    "utf8",
+  );
+  const homeServerRuntimeSource = readFileSync(
+    path.join(
+      repositoryRoot,
+      "server",
+      "packages",
+      "home-server",
+      "src",
+      "Server",
+      "HomeServerRuntime.ts",
+    ),
+    "utf8",
+  );
+  const aggregateReadinessSource = readFileSync(
+    path.join(
+      repositoryRoot,
+      "server",
+      "packages",
+      "api-gateway",
+      "src",
+      "Service",
+      "Readiness",
+      "AggregateReadinessService.ts",
+    ),
+    "utf8",
+  );
+  const filesHealthControllerSource = readFileSync(
+    path.join(
+      repositoryRoot,
+      "server",
+      "packages",
+      "files",
+      "src",
+      "Infra",
+      "InversifyExpress",
+      "AnnotatedHealthCheckController.ts",
     ),
     "utf8",
   );
@@ -982,10 +1122,7 @@ export function runDockerHardeningValidation(argv = process.argv.slice(2)) {
     }),
     ...validateSingleEntrypointAuthStepUpPropagation(singleEntrypoint),
     ...validateSingleContainerSQLiteMigrationContract({
-      singleDockerfileSource: readFileSync(
-        path.join(repositoryRoot, "Dockerfile.single"),
-        "utf8",
-      ),
+      singleDockerfileSource: singleDockerfile,
       singleEntrypointSource: singleEntrypoint,
       sqliteMigrationSources,
       legacyShimExists: existsSync(
@@ -997,6 +1134,12 @@ export function runDockerHardeningValidation(argv = process.argv.slice(2)) {
           "fix-sqlite-migrations.js",
         ),
       ),
+    }),
+    ...validateReadinessAcceptanceContract({
+      multiDockerfileSource: serverDockerfile,
+      singleDockerfileSource: singleDockerfile,
+      multiComposeSource,
+      singleComposeSource,
     }),
     ...validateRuntimeLogLevelDeploymentContract({
       multiComposeSource,
@@ -1012,6 +1155,13 @@ export function runDockerHardeningValidation(argv = process.argv.slice(2)) {
       authOverlayReaderSource,
       multiSupervisorSource,
       singleSupervisorSource,
+    }),
+    ...validateReadinessBootContract({
+      homeServerSource,
+      homeServerRuntimeSource,
+      aggregateReadinessSource,
+      filesContainerSource: serviceContainerSources.files,
+      filesHealthControllerSource,
     }),
     ...validatePairingComposeSource(multiComposeSource, {
       label: "multi compose",
