@@ -45,7 +45,21 @@
   },
   "resolutions": {
     "@standardnotes/component-relay": "2.2.2",
-    "@standardnotes/editor-kit": "2.3.1"
+    "@standardnotes/editor-kit": "2.3.1",
+    "@grpc/grpc-js@npm:^1.7.1": "1.14.4",
+    "@grpc/grpc-js@npm:^1.9.13": "1.14.4",
+    "axios@npm:^1.6.1": "1.19.0",
+    "body-parser@npm:1.20.1": "1.20.6",
+    "fast-xml-parser@npm:4.2.5": "4.5.7",
+    "form-data": "4.0.6",
+    "jws@npm:^3.2.2": "3.2.3",
+    "path-to-regexp@npm:0.1.7": "0.1.13",
+    "path-to-regexp@npm:~0.1.12": "0.1.13",
+    "protobufjs": "7.6.5",
+    "sha.js": "2.4.12",
+    "shell-quote": "1.10.0",
+    "typeorm@npm:^0.3.17": "0.3.31",
+    "websocket-driver": "0.7.5"
   },
   "dependencies": {
     "@standardnotes/snjs": "workspace:*"
