@@ -702,13 +702,14 @@ it: `docker volume rm standard-red-notes_localstack-data`.
 
 **"Port is already allocated" on startup.**
 Another process owns one of your host ports. Change the `*_PORT` values in
-`.env` (or re-run the setup script) and `docker compose up -d` again.
+`.env` and run `docker compose up -d` again.
 
 **The stack exits immediately complaining a variable is "not set".**
 Your `.env` is missing a required secret (e.g. `AUTH_JWT_SECRET`,
-`VALET_TOKEN_SECRET`, or `AUTH_SERVER_ENCRYPTION_SERVER_KEY`). Re-run the setup
-script to regenerate a complete file, or copy `.env.example` and fill in real
-64-char hex values.
+`VALET_TOKEN_SECRET`, or `AUTH_SERVER_ENCRYPTION_SERVER_KEY`). Restore the
+known-good protected environment backup, or compare `.env.example` and fill in
+real 64-char hex values. Normal setup reruns deliberately do not regenerate an
+existing file.
 
 **Logged in but every request returns 401.**
 Cookie settings don't match how you're reaching the app. For plain-http
@@ -718,8 +719,60 @@ domain set `COOKIE_DOMAIN` to your domain and `COOKIE_SECURE=true`.
 **Database connection errors on first boot.**
 MariaDB takes a few seconds to initialize a brand-new `mariadb-data` volume. The
 server waits on the db healthcheck, but if you changed `MYSQL_*` values after the
-volume was already initialized, the credentials won't match - reset with
-`docker compose down -v` (destroys data) or fix the volume's existing user.
+volume was already initialized, the credentials will not change inside the
+database. Do not use `docker compose down -v`: that deletes the database.
+
+If this started after setup was rerun or `.env` was overwritten, run one command
+from the repository checkout on the affected Docker host:
+
+```bash
+npm run recover:database
+```
+
+The automatic path does not change MariaDB credentials. Setup rotates JWT,
+encryption, token, WebSocket, and integration secrets as well as database
+passwords, so repairing only MariaDB can silently strand encrypted data and
+sessions. Recovery instead:
+
+1. Stops writers and creates an independently verified cold archive of the
+   exact MariaDB volume.
+2. Checks at most the 20 newest, strictly named `.env.bak.YYYYMMDDHHMMSS`
+   siblings, newest first. It accepts only regular, operator-owned, protected
+   files with bounded database/user identifiers, validates each through its own
+   scoped Compose config, and requires both its root and app credentials to
+   authenticate to its declared database. Secrets go to MariaDB over standard
+   input; logs contain fingerprints, never values.
+3. Protects the overwritten current `.env` in the durable recovery directory,
+   then atomically restores the complete authenticated prior environment.
+4. Recreates the intended `db`, `server`, and `app` stack, requires database,
+   backend, and front-door readiness, and runs a logical backup/restore drill.
+
+The printed recovery directory is outside the repository and OS temporary
+folders: `%LOCALAPPDATA%\StandardRedNotes\recovery` on Windows,
+`~/Library/Application Support/StandardRedNotes/recovery` on macOS, or
+`${XDG_STATE_HOME:-~/.local/state}/standard-red-notes/recovery` on Linux. Backup
+archives, checksums, and the displaced environment are operator-only.
+
+Normal setup reruns now validate and reuse an existing `.env`; they never
+regenerate its secrets. `--force-overwrite` / `-ForceOverwrite` is required for
+an intentional rotation.
+
+<details>
+<summary>Exceptional and intentional rotation controls</summary>
+
+Use `--previous-env-file` to select a specific protected backup, `--backup-dir`
+to select another protected durable location, and `--env-file`,
+`--compose-file`, or `--project-name` for an isolated deployment. These are
+advanced overrides; the normal recovery needs none of them.
+
+An intentional database-only rotation, where every non-database server secret
+was deliberately kept stable, uses `--rotate-database-credentials`. That mode
+backs up first, bounds every MariaDB account host it will touch, and repairs the
+root/app accounts. It never starts `--skip-grant-tables`. If no trusted prior
+credential authenticates, it changes no SQL and prints the manual maintenance
+boundary.
+
+</details>
 
 For deployment security, continue with [Operations
 Hardening](operations-hardening.md). Before mixing original Standard Notes

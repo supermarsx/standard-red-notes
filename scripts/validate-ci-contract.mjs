@@ -169,12 +169,16 @@ export function validateSetupOverwriteContract(shellSetup, powershellSetup) {
           "explicit force-overwrite flag",
         ],
         [
-          'if [ "$ASSUME_YES" -eq 1 ] && [ "$FORCE_OVERWRITE" -ne 1 ]; then',
-          "non-interactive existing-config guard",
+          'if [ "$FORCE_OVERWRITE" -ne 1 ]; then',
+          "normal-rerun existing-config guard",
         ],
         [
-          "Refusing to overwrite an existing .env in non-interactive mode.",
-          "fail-closed overwrite diagnostic",
+          "normal setup reruns never regenerate secrets",
+          "existing-config reuse diagnostic",
+        ],
+        [
+          "npm run recover:database",
+          "one-command accidental-overwrite recovery",
         ],
       ],
     ],
@@ -183,13 +187,14 @@ export function validateSetupOverwriteContract(shellSetup, powershellSetup) {
       powershellSetup,
       [
         ["[switch]$ForceOverwrite", "explicit ForceOverwrite switch"],
+        ["if (-not $ForceOverwrite)", "normal-rerun existing-config guard"],
         [
-          "if ($Yes -and -not $ForceOverwrite)",
-          "non-interactive existing-config guard",
+          "normal setup reruns never regenerate secrets",
+          "existing-config reuse diagnostic",
         ],
         [
-          "Refusing to overwrite an existing .env in non-interactive mode.",
-          "fail-closed overwrite diagnostic",
+          "npm run recover:database",
+          "one-command accidental-overwrite recovery",
         ],
       ],
     ],

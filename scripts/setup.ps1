@@ -109,19 +109,36 @@ Write-Ok "Found Docker and Compose ($Compose)."
 # ---------------------------------------------------------------------------
 # Existing .env handling
 # ---------------------------------------------------------------------------
+$backup = $null
 if (Test-Path $EnvFile) {
   Write-Warn "An .env file already exists at: $EnvFile"
-  if ($Yes -and -not $ForceOverwrite) {
-    Write-Err 'Refusing to overwrite an existing .env in non-interactive mode.'
-    Write-Err 'Re-run without -Yes to confirm interactively, or add -ForceOverwrite only when credential rotation is intentional.'
-    exit 1
-  }
-  if (-not $ForceOverwrite -and -not (Confirm-Yes 'Overwrite it? A timestamped backup will be made first.')) {
-    Write-Err 'Aborted. Existing .env left untouched.'
-    exit 1
+  if (-not $ForceOverwrite) {
+    Write-Info 'Reusing the existing configuration; normal setup reruns never regenerate secrets.'
+    Push-Location $RepoRoot
+    try {
+      if ($Compose -eq 'docker compose') { docker compose config --quiet }
+      else { docker-compose config --quiet }
+      if ($LASTEXITCODE -ne 0) { Write-Err 'Existing .env validation failed.'; exit 1 }
+      Write-Ok 'Existing .env validated.'
+      if ($Up) {
+        Write-Info 'Building and starting the existing stack...'
+        if ($Compose -eq 'docker compose') { docker compose up -d --build }
+        else { docker-compose up -d --build }
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        Write-Ok 'Stack started.'
+      } else {
+        Write-Info "Start it with: $Compose up -d --build"
+      }
+    } finally { Pop-Location }
+    Write-Info 'Intentional rotation requires -ForceOverwrite. If an accidental overwrite already happened, run: npm run recover:database'
+    exit 0
   }
   $backup = "$EnvFile.bak.$(Get-Date -Format 'yyyyMMddHHmmss')"
-  Copy-Item -Path $EnvFile -Destination $backup -Force
+  if (Test-Path -LiteralPath $backup) {
+    Write-Err "Refusing to overwrite existing environment backup: $backup"
+    exit 1
+  }
+  Copy-Item -LiteralPath $EnvFile -Destination $backup
   Write-Ok "Backed up existing .env to: $backup"
 }
 
@@ -363,6 +380,9 @@ REGISTRATION_APPROVAL_REQUIRED=$RegistrationApprovalRequired
 $content = $content -replace "`r`n", "`n"
 [System.IO.File]::WriteAllText($EnvFile, $content, (New-Object System.Text.UTF8Encoding($false)))
 Write-Ok "Wrote $EnvFile"
+if ($backup) {
+  Write-Warn 'The complete environment was rotated. If that was accidental or startup now fails, run: npm run recover:database'
+}
 
 # ---------------------------------------------------------------------------
 # Next steps
@@ -378,6 +398,10 @@ if ($startNow) {
     if ($Compose -eq 'docker compose') { docker compose up -d --build }
     else { docker-compose up -d --build }
   } finally { Pop-Location }
+  if ($LASTEXITCODE -ne 0) {
+    if ($backup) { Write-Err 'Startup failed after credential rotation. Recover the prior full environment with: npm run recover:database' }
+    exit $LASTEXITCODE
+  }
   Write-Ok "Stack started. Open: $AppUrl"
   Write-Info "Watch logs:  $Compose logs -f"
   Write-Info "Stop:        $Compose down"

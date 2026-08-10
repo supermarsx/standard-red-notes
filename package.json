@@ -45,6 +45,7 @@
     "docker:config": "docker compose config",
     "docker:down": "docker compose down",
     "docker:up": "docker compose up --build",
+    "recover:database": "node scripts/reconcile-database-credentials.mjs --execute",
     "docs:check": "node scripts/export-app-docs-to-pages.mjs --check && yarn docs:screenshots && yarn docs:search:check && yarn docs:links && yarn docs:mermaid && yarn docs:compatibility && yarn docs:ui:test",
     "docs:compatibility": "node scripts/validate-standard-notes-compatibility.mjs",
     "docs:links": "node scripts/validate-docs-links.mjs",

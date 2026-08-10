@@ -38,7 +38,7 @@ test("the repository satisfies the CI production-gate contract", () => {
   assert.deepEqual(validateCiContract(baseline), []);
 });
 
-test("non-interactive setup cannot silently replace production credentials", () => {
+test("normal setup reruns reuse rather than replace production credentials", () => {
   const shell = baseline.get("scripts/setup.sh");
   const powershell = baseline.get("scripts/setup.ps1");
   assert.deepEqual(validateSetupOverwriteContract(shell, powershell), []);
@@ -46,27 +46,24 @@ test("non-interactive setup cannot silently replace production credentials", () 
   assert.match(
     validateSetupOverwriteContract(
       shell.replace(
-        'if [ "$ASSUME_YES" -eq 1 ] && [ "$FORCE_OVERWRITE" -ne 1 ]; then',
-        'if [ "$ASSUME_YES" -eq 0 ]; then',
+        'if [ "$FORCE_OVERWRITE" -ne 1 ]; then',
+        'if [ "$FORCE_OVERWRITE" -eq 1 ]; then',
       ),
       powershell,
     ).join("\n"),
-    /scripts\/setup\.sh: missing non-interactive existing-config guard/,
+    /scripts\/setup\.sh: missing normal-rerun existing-config guard/,
   );
 
   assert.match(
     validateSetupOverwriteContract(
       shell,
-      powershell.replace(
-        "if ($Yes -and -not $ForceOverwrite)",
-        "if (-not $Yes)",
-      ),
+      powershell.replace("if (-not $ForceOverwrite)", "if ($ForceOverwrite)"),
     ).join("\n"),
-    /scripts\/setup\.ps1: missing non-interactive existing-config guard/,
+    /scripts\/setup\.ps1: missing normal-rerun existing-config guard/,
   );
 });
 
-test("non-interactive setup leaves an existing environment file byte-for-byte intact", () => {
+test("normal setup rerun validates and leaves an existing environment byte-for-byte intact", () => {
   const temporary = mkdtempSync(path.join(tmpdir(), "srn-setup-safety-"));
   const fixtureRoot = path.join(temporary, "repo");
   const fixtureScripts = path.join(fixtureRoot, "scripts");
@@ -109,10 +106,10 @@ test("non-interactive setup leaves an existing environment file byte-for-byte in
       },
     });
 
-    assert.equal(result.status, 1, result.stderr || result.stdout);
+    assert.equal(result.status, 0, result.stderr || result.stdout);
     assert.match(
       `${result.stdout}\n${result.stderr}`,
-      /Refusing to overwrite an existing \.env in non-interactive mode\./,
+      /normal setup reruns never regenerate secrets/i,
     );
     assert.equal(readFileSync(environmentFile, "utf8"), sentinel);
     assert.deepEqual(
