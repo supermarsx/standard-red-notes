@@ -289,7 +289,7 @@ test("only critical production advisories reach the exception policy", () => {
   );
 });
 
-test("the app security graph preserves patched legacy and current majors", () => {
+test("the app security graph preserves the patched dependency graph", () => {
   assert.deepEqual(validateAppSecurityGraph(appPackage, appLock), []);
 
   assert.match(
@@ -297,7 +297,7 @@ test("the app security graph preserves patched legacy and current majors", () =>
       appPackage,
       appLock.replace(/"fast-xml-parser@npm:\^5\.3\.6":[\s\S]*?\n\n/u, ""),
     ).join("\n"),
-    /supported fast-xml-parser 5\.x graph was collapsed/,
+    /fast-xml-parser must resolve exactly to patched graph 5\.8\.0/,
   );
   assert.match(
     validateAppSecurityGraph(
@@ -311,6 +311,7 @@ test("the app security graph preserves patched legacy and current majors", () =>
   );
   for (const [descriptor, safeVersion, vulnerableVersion, packageName] of [
     ['"ajv@npm:^6.12.5, ajv@npm:^6.14.0":', "6.15.0", "6.13.0", "ajv"],
+    ['"fast-xml-parser@npm:^5.3.6":', "5.8.0", "5.6.9", "fast-xml-parser"],
     [
       '"follow-redirects@npm:^1.0.0, follow-redirects@npm:^1.16.0":',
       "1.16.0",
@@ -335,16 +336,6 @@ test("the app security graph preserves patched legacy and current majors", () =>
       new RegExp(`${packageName} must resolve exactly to patched graph`),
     );
   }
-  assert.match(
-    validateAppSecurityGraph(
-      appPackage.replace(
-        '"fast-xml-parser@npm:4.2.5": "4.5.7"',
-        '"fast-xml-parser": "4.5.7"',
-      ),
-      appLock,
-    ).join("\n"),
-    /security resolution fast-xml-parser@npm:4\.2\.5 must remain 4\.5\.7/,
-  );
   assert.match(
     validateAppSecurityGraph(
       appPackage.replace(
