@@ -10652,6 +10652,31 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@standardnotes/home-server@patch:@standardnotes/home-server@npm%3A1.23.2#~/.yarn/patches/@standardnotes-home-server-npm-1.23.2-3bc84fcdc6.patch":
+  version: 1.23.2
+  resolution: "@standardnotes/home-server@patch:@standardnotes/home-server@npm%3A1.23.2#~/.yarn/patches/@standardnotes-home-server-npm-1.23.2-3bc84fcdc6.patch::version=1.23.2&hash=aa5613"
+  dependencies:
+    "@standardnotes/api-gateway": "npm:^1.92.2"
+    "@standardnotes/auth-server": "npm:^1.178.6"
+    "@standardnotes/domain-core": "npm:^1.41.3"
+    "@standardnotes/domain-events-infra": "npm:^1.23.4"
+    "@standardnotes/files-server": "npm:^1.38.3"
+    "@standardnotes/revisions-server": "npm:^1.51.19"
+    "@standardnotes/syncing-server": "npm:^1.136.5"
+    cookie-parser: "npm:^1.4.6"
+    cors: "npm:2.8.5"
+    dotenv: "npm:^16.0.1"
+    express: "npm:^4.18.2"
+    express-robots-txt: "npm:^1.0.0"
+    helmet: "npm:^7.0.0"
+    inversify: "npm:^6.0.1"
+    inversify-express-utils: "npm:^6.4.3"
+    reflect-metadata: "npm:^0.2.1"
+    winston: "npm:^3.8.1"
+  checksum: 10/54e07007e51ee7c934b35c2b09920dd58221787af0d006a1eada69abb57f3a39c7f40c96c6c88a052f3b888e43c13da1003c07962a72a26f2361df2d3d7cfdda
+  languageName: node
+  linkType: hard
+
 "@standardnotes/icons@workspace:*, @standardnotes/icons@workspace:packages/icons":
   version: 0.0.0-use.local
   resolution: "@standardnotes/icons@workspace:packages/icons"
@@ -10680,7 +10705,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@standardnotes/inner-desktop@workspace:packages/desktop/app"
   dependencies:
-    "@standardnotes/home-server": "npm:1.23.2"
+    "@standardnotes/home-server": "patch:@standardnotes/home-server@npm%3A1.23.2#~/.yarn/patches/@standardnotes-home-server-npm-1.23.2-3bc84fcdc6.patch"
     keytar: "npm:^7.9.0"
   languageName: unknown
   linkType: soft

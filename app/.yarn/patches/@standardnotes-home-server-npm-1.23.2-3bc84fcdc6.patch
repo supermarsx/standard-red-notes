@@ -1,0 +1,44 @@
+diff --git a/dist/src/Server/HomeServer.js b/dist/src/Server/HomeServer.js
+index fd5b143beada32256dcdf0ff8a505626cb2f77bc..86317b076385afba9f541dd838a7701afea1baa3 100644
+--- a/dist/src/Server/HomeServer.js
++++ b/dist/src/Server/HomeServer.js
+@@ -195,7 +195,7 @@ class HomeServer {
+                 });
+             });
+             const port = env.get('PORT', true) ? +env.get('PORT', true) : 3000;
+-            const serverInstance = server.build().listen(port);
++            const serverInstance = server.build().listen(port, '127.0.0.1');
+             const keepAliveTimeout = env.get('HTTP_KEEP_ALIVE_TIMEOUT', true)
+                 ? +env.get('HTTP_KEEP_ALIVE_TIMEOUT', true)
+                 : 5000;
+@@ -207,7 +207,7 @@ class HomeServer {
+                     logger.info('HTTP server closed');
+                 });
+             });
+-            logger.info(`Server started on port ${port}. Log level: ${env.get('LOG_LEVEL', true)}.`);
++            logger.info(`Server started on 127.0.0.1:${port}. Log level: ${env.get('LOG_LEVEL', true)}.`);
+             return domain_core_1.Result.ok('Server started.');
+         }
+         catch (error) {
+diff --git a/src/Server/HomeServer.ts b/src/Server/HomeServer.ts
+index c724bb942726d33e5db9ce925c5c754ffe00d170..b252e288fde27f059f16086b9d6c1f12bd6817d6 100644
+--- a/src/Server/HomeServer.ts
++++ b/src/Server/HomeServer.ts
+@@ -239,7 +239,7 @@ export class HomeServer implements HomeServerInterface {
+ 
+       const port = env.get('PORT', true) ? +env.get('PORT', true) : 3000
+ 
+-      const serverInstance = server.build().listen(port)
++      const serverInstance = server.build().listen(port, '127.0.0.1')
+ 
+       const keepAliveTimeout = env.get('HTTP_KEEP_ALIVE_TIMEOUT', true)
+         ? +env.get('HTTP_KEEP_ALIVE_TIMEOUT', true)
+@@ -256,7 +256,7 @@ export class HomeServer implements HomeServerInterface {
+         })
+       })
+ 
+-      logger.info(`Server started on port ${port}. Log level: ${env.get('LOG_LEVEL', true)}.`)
++      logger.info(`Server started on 127.0.0.1:${port}. Log level: ${env.get('LOG_LEVEL', true)}.`)
+ 
+       return Result.ok('Server started.')
+     } catch (error) {

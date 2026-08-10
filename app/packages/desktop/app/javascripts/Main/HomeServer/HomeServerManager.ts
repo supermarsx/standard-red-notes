@@ -1,5 +1,4 @@
 import path from 'path'
-import os from 'os'
 import { randomBytes } from 'crypto'
 
 import {
@@ -12,6 +11,7 @@ import { WebContents } from 'electron'
 import { MessageToWebApp } from '../../Shared/IpcMessages'
 import { FilesManagerInterface } from '../File/FilesManagerInterface'
 import { HomeServerConfigurationFile } from './HomeServerConfigurationFile'
+import { getLoopbackHomeServerUrl } from './HomeServerNetwork'
 
 export class HomeServerManager implements HomeServerManagerInterface {
   private readonly HOME_SERVER_CONFIGURATION_FILE_NAME = 'config.json'
@@ -36,7 +36,7 @@ export class HomeServerManager implements HomeServerManagerInterface {
       return undefined
     }
 
-    return `http://${this.getLocalIP()}:${homeServerConfiguration.port}`
+    return getLoopbackHomeServerUrl(homeServerConfiguration.port)
   }
 
   async isHomeServerRunning(): Promise<boolean> {
@@ -217,29 +217,6 @@ export class HomeServerManager implements HomeServerManagerInterface {
 
   private generateRandomKey(length: number): string {
     return randomBytes(length).toString('hex')
-  }
-
-  private getLocalIP() {
-    const interfaces = os.networkInterfaces()
-    let internalAddress = undefined
-    for (const interfaceName in interfaces) {
-      const addresses = interfaces[interfaceName]
-      if (!addresses) {
-        continue
-      }
-
-      for (const address of addresses) {
-        if (address.family === 'IPv4') {
-          if (!address.internal) {
-            return address.address
-          }
-
-          internalAddress = address.address
-        }
-      }
-    }
-
-    return internalAddress
   }
 
   private async getHomeServerConfigurationObject(): Promise<HomeServerEnvironmentConfiguration | undefined> {
