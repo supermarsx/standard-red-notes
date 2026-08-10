@@ -3227,35 +3227,28 @@ export function validateReleaseContract(files) {
 
   const openClawPackageFile = "openclaw/package.json";
   const openClawPackage = JSON.parse(files.get(openClawPackageFile) ?? "{}");
-  // `yarn install` rewrites workspace manifests in place, and Yarn 4 does not
-  // serialize values that already match its defaults. `private: false` is
-  // therefore dropped on every install, so an absent field is as publishable as
-  // an explicit `false`; only an explicit `true` blocks the release.
+  // Yarn 4 rewrites workspace manifests in place and omits values that match
+  // its defaults. Keeping the publishable default implicit makes immutable
+  // installs idempotent; an explicit false would be behaviorally equivalent
+  // but non-canonical and would dirty every checkout during install.
   if (openClawPackage.private === true) {
     errors.push(`${openClawPackageFile}: release package must not be private`);
+  } else if (Object.hasOwn(openClawPackage, "private")) {
+    errors.push(
+      `${openClawPackageFile}: release package must omit the default private field`,
+    );
   }
   if (openClawPackage.engines?.node !== ">=26.0.0") {
     errors.push(
       `${openClawPackageFile}: release package must require Node >=26.0.0`,
     );
   }
-  // Same install rewrite: a lone `bin` entry whose key equals the unscoped
-  // package name collapses to the bare string form. Both spellings declare the
-  // identical `openclaw` executable, and the target itself is still asserted.
-  const openClawBin = openClawPackage.bin;
-  const openClawUnscopedName = String(openClawPackage.name ?? "").replace(
-    /^@[^/]+\//,
-    "",
-  );
-  const openClawBinTarget =
-    typeof openClawBin === "string"
-      ? openClawUnscopedName === "openclaw"
-        ? openClawBin
-        : undefined
-      : openClawBin?.openclaw;
-  if (openClawBinTarget !== "dist/index.js") {
+  // A single executable whose key matches the unscoped package name is
+  // equivalent to this string form, but Yarn collapses that object during
+  // install. Require the serialized form Yarn preserves byte-for-byte.
+  if (openClawPackage.bin !== "dist/index.js") {
     errors.push(
-      `${openClawPackageFile}: release package must expose bin.openclaw as dist/index.js`,
+      `${openClawPackageFile}: release package must expose bin.openclaw as dist/index.js using Yarn's canonical string form`,
     );
   }
   for (const [field, expected] of [

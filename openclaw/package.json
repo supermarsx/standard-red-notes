@@ -1,7 +1,6 @@
 {
   "name": "@standard-red-notes/openclaw",
   "version": "0.1.0",
-  "private": false,
   "type": "module",
   "license": "AGPL-3.0-only",
   "homepage": "https://github.com/supermarsx/standard-red-notes/tree/main/openclaw#readme",
@@ -26,9 +25,7 @@
     "x64"
   ],
   "description": "Open Claw — Standard Red Notes personal assistant agent.",
-  "bin": {
-    "openclaw": "dist/index.js"
-  },
+  "bin": "dist/index.js",
   "files": [
     "dist",
     "LICENSE.md",

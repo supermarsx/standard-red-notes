@@ -1438,16 +1438,29 @@ function withOpenClawPackage(update) {
   });
 }
 
-test("the Yarn-normalized OpenClaw manifest still satisfies the contract", () => {
-  // `yarn install` rewrites the workspace manifest: `private: false` is dropped
-  // because it is Yarn's default, and the single-entry `bin` map collapses to a
-  // bare string. Both forms declare the same release package.
-  const files = withOpenClawPackage((packageJson) => {
-    delete packageJson.private;
-    packageJson.bin = "dist/index.js";
-  });
+test("the OpenClaw manifest stays in Yarn's install-idempotent form", () => {
+  const packageJson = JSON.parse(baseline.get("openclaw/package.json"));
+  assert.equal(Object.hasOwn(packageJson, "private"), false);
+  assert.equal(packageJson.bin, "dist/index.js");
+  assert.deepEqual(validateReleaseContract(baseline), []);
+});
 
-  assert.deepEqual(validateReleaseContract(files), []);
+test("behaviorally equivalent non-canonical OpenClaw fields are rejected", () => {
+  let files = withOpenClawPackage((packageJson) => {
+    packageJson.private = false;
+  });
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /must omit the default private field/,
+  );
+
+  files = withOpenClawPackage((packageJson) => {
+    packageJson.bin = { openclaw: "dist/index.js" };
+  });
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /using Yarn's canonical string form/,
+  );
 });
 
 test("a private OpenClaw release package is rejected", () => {
