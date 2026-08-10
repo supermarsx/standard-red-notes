@@ -3399,6 +3399,11 @@ export function validateReleaseContract(files) {
         `${rootDesktopPackageFile}: missing exact direct @electron/asar 3.4.1 devDependency`,
       );
     }
+    if (rootDesktopManifest.build?.nsis?.buildUniversalInstaller !== false) {
+      errors.push(
+        `${rootDesktopPackageFile}: missing disabled universal Windows installer`,
+      );
+    }
   } catch {
     errors.push(`${rootDesktopPackageFile}: invalid desktop package manifest`);
   }

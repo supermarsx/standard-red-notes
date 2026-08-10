@@ -141,6 +141,7 @@
       }
     },
     "nsis": {
+      "buildUniversalInstaller": false,
       "deleteAppDataOnUninstall": true
     },
     "linux": {
