@@ -309,6 +309,32 @@ test("the app security graph preserves patched legacy and current majors", () =>
     ).join("\n"),
     /axios must resolve exactly to patched graph 1\.18\.1, 1\.19\.0/,
   );
+  for (const [descriptor, safeVersion, vulnerableVersion, packageName] of [
+    ['"ajv@npm:^6.12.5, ajv@npm:^6.14.0":', "6.15.0", "6.13.0", "ajv"],
+    [
+      '"follow-redirects@npm:^1.0.0, follow-redirects@npm:^1.16.0":',
+      "1.16.0",
+      "1.15.11",
+      "follow-redirects",
+    ],
+    [
+      '"micromatch@npm:^4.0.2, micromatch@npm:^4.0.4, micromatch@npm:^4.0.8":',
+      "4.0.8",
+      "4.0.7",
+      "micromatch",
+    ],
+  ]) {
+    assert.match(
+      validateAppSecurityGraph(
+        appPackage,
+        appLock.replace(
+          `${descriptor}\n  version: ${safeVersion}`,
+          `${descriptor}\n  version: ${vulnerableVersion}`,
+        ),
+      ).join("\n"),
+      new RegExp(`${packageName} must resolve exactly to patched graph`),
+    );
+  }
   assert.match(
     validateAppSecurityGraph(
       appPackage.replace(
@@ -359,6 +385,27 @@ test("every Yarn domain keeps security-sensitive packages on patched floors", ()
     vulnerableVersion,
   ] of [
     [
+      "app/yarn.lock",
+      "@babel/core",
+      '"@babel/core@npm:^7.21.3, @babel/core@npm:^7.23.9, @babel/core@npm:^7.24.4, @babel/core@npm:^7.25.2, @babel/core@npm:^7.27.4, @babel/core@npm:^7.29.7":',
+      "7.29.7",
+      "7.29.0",
+    ],
+    [
+      "app/yarn.lock",
+      "@babel/runtime",
+      '"@babel/runtime@npm:^7.13.10, @babel/runtime@npm:^7.20.13, @babel/runtime@npm:^7.23.2, @babel/runtime@npm:^7.25.0, @babel/runtime@npm:^7.29.2, @babel/runtime@npm:^7.29.7, @babel/runtime@npm:^7.8.4":',
+      "7.29.7",
+      "7.26.9",
+    ],
+    [
+      "app/yarn.lock",
+      "@babel/runtime",
+      '"@babel/runtime@npm:8.0.0":',
+      "8.0.0",
+      "8.0.0-rc.5",
+    ],
+    [
       "yarn.lock",
       "@modelcontextprotocol/sdk",
       '"@modelcontextprotocol/sdk@npm:^1.30.0":',
@@ -375,6 +422,20 @@ test("every Yarn domain keeps security-sensitive packages on patched floors", ()
     ["app/yarn.lock", "adm-zip", '"adm-zip@npm:~0.6.x":', "0.6.0", "0.5.10"],
     [
       "app/yarn.lock",
+      "body-parser",
+      '"body-parser@npm:~1.20.5":',
+      "1.20.6",
+      "1.20.5",
+    ],
+    [
+      "app/yarn.lock",
+      "body-parser",
+      '"body-parser@npm:^2.2.2":',
+      "2.3.0",
+      "2.2.2",
+    ],
+    [
+      "app/yarn.lock",
       "dompurify",
       '"dompurify@npm:^3.3.3, dompurify@npm:^3.4.13":',
       "3.4.13",
@@ -386,6 +447,20 @@ test("every Yarn domain keeps security-sensitive packages on patched floors", ()
       '"ip-address@npm:^10.1.1":',
       "10.5.0",
       "10.3.0",
+    ],
+    [
+      "app/yarn.lock",
+      "express",
+      '"express@npm:^4.17.1, express@npm:^4.18.2, express@npm:^4.22.1":',
+      "4.22.2",
+      "4.19.2",
+    ],
+    [
+      "app/yarn.lock",
+      "http-proxy-middleware",
+      '"http-proxy-middleware@npm:^2.0.9":',
+      "2.0.10",
+      "2.0.9",
     ],
     [
       "app/yarn.lock",
@@ -408,6 +483,14 @@ test("every Yarn domain keeps security-sensitive packages on patched floors", ()
       '"mermaid@npm:^11.12.1, mermaid@npm:^11.16.1":',
       "11.16.1",
       "11.16.0",
+    ],
+    ["app/yarn.lock", "qs", '"qs@npm:~6.15.1":', "6.15.2", "6.14.1"],
+    [
+      "app/yarn.lock",
+      "socks",
+      '"socks@npm:^2.6.2, socks@npm:^2.8.3":',
+      "2.8.9",
+      "2.7.1",
     ],
     [
       "app/packages/filepicker/example/yarn.lock",

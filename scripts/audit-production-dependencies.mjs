@@ -415,6 +415,20 @@ function yarnVersions(lockfile, packageName) {
 // These floors mirror the first patched releases published for the vulnerable
 // major lines currently present in the committed Yarn dependency graph.
 const yarnSecurityPatchFloors = Object.freeze({
+  "@babel/core": Object.freeze({
+    minimumMajor: 7,
+    floors: Object.freeze({
+      7: Object.freeze([7, 29, 6]),
+      8: Object.freeze([8, 0, 0]),
+    }),
+  }),
+  "@babel/runtime": Object.freeze({
+    minimumMajor: 7,
+    floors: Object.freeze({
+      7: Object.freeze([7, 26, 10]),
+      8: Object.freeze([8, 0, 0]),
+    }),
+  }),
   "@modelcontextprotocol/sdk": Object.freeze({
     minimumMajor: 1,
     floors: Object.freeze({
@@ -433,6 +447,13 @@ const yarnSecurityPatchFloors = Object.freeze({
       0: Object.freeze([0, 6, 0]),
     }),
   }),
+  "body-parser": Object.freeze({
+    minimumMajor: 1,
+    floors: Object.freeze({
+      1: Object.freeze([1, 20, 6]),
+      2: Object.freeze([2, 3, 0]),
+    }),
+  }),
   "ip-address": Object.freeze({
     minimumMajor: 10,
     floors: Object.freeze({
@@ -443,6 +464,21 @@ const yarnSecurityPatchFloors = Object.freeze({
     minimumMajor: 3,
     floors: Object.freeze({
       3: Object.freeze([3, 4, 13]),
+    }),
+  }),
+  express: Object.freeze({
+    minimumMajor: 4,
+    floors: Object.freeze({
+      4: Object.freeze([4, 20, 0]),
+      5: Object.freeze([5, 0, 0]),
+    }),
+  }),
+  "http-proxy-middleware": Object.freeze({
+    minimumMajor: 2,
+    floors: Object.freeze({
+      2: Object.freeze([2, 0, 10]),
+      3: Object.freeze([3, 0, 6]),
+      4: Object.freeze([4, 1, 0]),
     }),
   }),
   mermaid: Object.freeze({
@@ -462,6 +498,18 @@ const yarnSecurityPatchFloors = Object.freeze({
     minimumMajor: 8,
     floors: Object.freeze({
       8: Object.freeze([8, 5, 18]),
+    }),
+  }),
+  qs: Object.freeze({
+    minimumMajor: 6,
+    floors: Object.freeze({
+      6: Object.freeze([6, 14, 2]),
+    }),
+  }),
+  socks: Object.freeze({
+    minimumMajor: 2,
+    floors: Object.freeze({
+      2: Object.freeze([2, 8, 7]),
     }),
   }),
   terser: Object.freeze({
@@ -578,10 +626,13 @@ export function validateAppSecurityGraph(packageJsonText, lockfile) {
 
   for (const [name, expected] of Object.entries({
     "@grpc/grpc-js": ["1.14.4"],
+    ajv: ["6.15.0", "8.20.0"],
     axios: ["1.18.1", "1.19.0"],
-    "body-parser": ["1.20.5", "1.20.6", "2.2.2"],
+    "body-parser": ["1.20.6", "2.3.0"],
+    "follow-redirects": ["1.16.0"],
     "form-data": ["4.0.6"],
     jws: ["3.2.3", "4.0.1"],
+    micromatch: ["4.0.8"],
     "path-to-regexp": ["0.1.13"],
     protobufjs: ["7.6.5"],
     "sha.js": ["2.4.12"],
