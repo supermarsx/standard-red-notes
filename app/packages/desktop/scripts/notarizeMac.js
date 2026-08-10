@@ -1,46 +1,43 @@
-/** @see: https://medium.com/@TwitterArchiveEraser/notarize-electron-apps-7a5f988406db */
-
 const fs = require('fs')
 const path = require('path')
-const electronNotarize = require('@electron/notarize')
 
-module.exports = async function (params) {
-  const platformName = params.electronPlatformName
-  if (platformName !== 'darwin') {
+const APPLE_CREDENTIALS = ['APPLE_TEAM_ID', 'NOTARIZE_APPLE_ID', 'NOTARIZE_APPLE_ID_PASSWORD']
+
+function missingCredentials(env) {
+  return APPLE_CREDENTIALS.filter((name) => !env[name])
+}
+
+module.exports = async function notarizeMac(params, dependencies = {}) {
+  if (params.electronPlatformName !== 'darwin') {
     return
   }
 
-  // Skip notarization entirely when the Apple credentials are not provided
-  // (e.g. unsigned CI / local builds). Without this guard electronNotarize is
-  // called with undefined credentials and the build fails.
-  if (!process.env.APPLE_TEAM_ID || !process.env.NOTARIZE_APPLE_ID || !process.env.NOTARIZE_APPLE_ID_PASSWORD) {
-    console.log('Skipping notarization: APPLE_TEAM_ID / NOTARIZE_APPLE_ID / NOTARIZE_APPLE_ID_PASSWORD not set')
+  const env = dependencies.env || process.env
+  const log = dependencies.log || console.log
+  const missing = missingCredentials(env)
+  if (missing.length > 0) {
+    const message = `macOS release authenticity credentials missing: ${missing.join(', ')}`
+    if (env.REQUIRE_DESKTOP_AUTHENTICITY === 'true') {
+      throw new Error(message)
+    }
+    log(`Skipping macOS notarization for this non-publishing build: ${message}`)
     return
   }
 
-  console.log('afterSign hook triggered')
-
-  const { appId } = JSON.parse(await fs.promises.readFile('./package.json')).build
-
+  const promises = dependencies.fsPromises || fs.promises
+  const electronNotarize = dependencies.electronNotarize || require('@electron/notarize')
+  const { appId } = JSON.parse(await promises.readFile('./package.json')).build
   const appPath = path.join(params.appOutDir, `${params.packager.appInfo.productFilename}.app`)
-  await fs.promises.access(appPath)
 
-  console.log(`Notarizing ${appId} found at ${appPath}`)
-
-  try {
-    electronNotarize
-      .notarize({
-        teamId: process.env.APPLE_TEAM_ID,
-        appBundleId: appId,
-        appPath: appPath,
-        appleId: process.env.NOTARIZE_APPLE_ID,
-        appleIdPassword: process.env.NOTARIZE_APPLE_ID_PASSWORD,
-      })
-      .then(() => {
-        console.log(`Done notarizing ${appId}`)
-      })
-  } catch (error) {
-    console.error(error)
-    throw error
-  }
+  await promises.access(appPath)
+  log(`Notarizing ${appId} at ${appPath}`)
+  await electronNotarize.notarize({
+    teamId: env.APPLE_TEAM_ID,
+    appBundleId: appId,
+    appPath,
+    appleId: env.NOTARIZE_APPLE_ID,
+    appleIdPassword: env.NOTARIZE_APPLE_ID_PASSWORD,
+  })
+  await electronNotarize.staple({ appPath })
+  log(`Notarized and stapled ${appId}`)
 }

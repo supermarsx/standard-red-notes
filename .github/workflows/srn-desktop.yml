@@ -21,10 +21,11 @@
 # the release identity (tag/title) and the app's internal semver are computed
 # together but formatted differently on purpose.
 #
-# Builds are UNSIGNED: macOS notarization (scripts/notarizeMac.js) and Windows
-# signing (scripts/windowsSign.js) both no-op when their credentials are absent.
-# Auto-update via electron-updater still works for unsigned Windows; unsigned
-# macOS falls back to the in-app "newer version available" notification.
+# Production artifacts fail closed: macOS must be Developer ID signed,
+# notarized, and stapled; Windows installers must carry a valid timestamped
+# Authenticode signature from the configured certificate. The hooks still
+# allow unsigned local/non-publishing builds unless
+# REQUIRE_DESKTOP_AUTHENTICITY=true is set explicitly.
 name: srn-desktop
 
 on:
@@ -301,6 +302,7 @@ jobs:
     needs: identity
     if: needs.identity.outputs.published != 'true'
     runs-on: ${{ matrix.os }}
+    environment: release-production
     strategy:
       fail-fast: false
       matrix:
@@ -339,6 +341,111 @@ jobs:
         with:
           node-version-file: app/.nvmrc
           package-manager-cache: false
+
+      - name: Require macOS signing and notarization credentials
+        if: runner.os == 'macOS'
+        env:
+          CSC_LINK: ${{ secrets.MAC_CI_KEYS }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CI_KEYS_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          NOTARIZE_APPLE_ID: ${{ secrets.NOTARIZE_APPLE_ID }}
+          NOTARIZE_APPLE_ID_PASSWORD: ${{ secrets.NOTARIZE_APPLE_ID_PASSWORD }}
+        run: |
+          set -euo pipefail
+          missing=()
+          for name in CSC_LINK CSC_KEY_PASSWORD APPLE_TEAM_ID NOTARIZE_APPLE_ID NOTARIZE_APPLE_ID_PASSWORD; do
+            test -n "$(printenv "$name" 2>/dev/null || true)" || missing+=("$name")
+          done
+          if [ "${#missing[@]}" -ne 0 ]; then
+            printf 'Production macOS authenticity credentials are missing: %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
+
+      - name: Require and validate Windows signing credentials
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          SM_HOST: ${{ secrets.SM_HOST }}
+          SM_TLS_SKIP_VERIFY: "false"
+          SM_API_KEY: ${{ secrets.SM_API_KEY }}
+          SM_CLIENT_CERT_FILE_B64: ${{ secrets.SM_CLIENT_CERT_FILE_B64 }}
+          SM_CLIENT_CERT_PASSWORD: ${{ secrets.SM_CLIENT_CERT_PASSWORD }}
+          SM_KEYPAIR_ALIAS: ${{ secrets.SM_KEYPAIR_ALIAS }}
+          SM_CODE_SIGNING_CERT_SHA1_HASH: ${{ secrets.SM_CODE_SIGNING_CERT_SHA1_HASH }}
+          SM_CLIENT_TOOLS_MSI_SHA256: ${{ secrets.SM_CLIENT_TOOLS_MSI_SHA256 }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $required = @(
+            'SM_HOST',
+            'SM_API_KEY',
+            'SM_CLIENT_CERT_FILE_B64',
+            'SM_CLIENT_CERT_PASSWORD',
+            'SM_KEYPAIR_ALIAS',
+            'SM_CODE_SIGNING_CERT_SHA1_HASH',
+            'SM_CLIENT_TOOLS_MSI_SHA256'
+          )
+          $missing = @($required | Where-Object { [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_)) })
+          if ($missing.Count -ne 0) {
+            throw "Production Windows authenticity credentials are missing: $($missing -join ', ')"
+          }
+          if ($env:SM_CODE_SIGNING_CERT_SHA1_HASH -notmatch '^[0-9A-Fa-f]{40}$') {
+            throw 'SM_CODE_SIGNING_CERT_SHA1_HASH must be exactly 40 hexadecimal characters'
+          }
+          $expectedMsiHash = $env:SM_CLIENT_TOOLS_MSI_SHA256.Trim().ToUpperInvariant()
+          if ($expectedMsiHash -notmatch '^[0-9A-F]{64}$') {
+            throw 'SM_CLIENT_TOOLS_MSI_SHA256 must be exactly 64 hexadecimal characters'
+          }
+          $allowedHosts = @(
+            'https://clientauth.one.digicert.com',
+            'https://clientauth.one.nl.digicert.com'
+          )
+          if ($allowedHosts -notcontains $env:SM_HOST.TrimEnd('/')) {
+            throw 'SM_HOST must use an approved DigiCert ONE production authority'
+          }
+
+          # DigiCert's Windows clients installer guidance requires downloading
+          # Keylockertools-windows-x64.msi, running it, then configuring SMCTL.
+          $toolsUri = [Uri]'https://one.digicert.com/signingmanager/api-ui/v1/releases/Keylockertools-windows-x64.msi/download'
+          if ($toolsUri.Scheme -ne 'https' -or $toolsUri.Host -ne 'one.digicert.com') {
+            throw 'DigiCert client tools must come from the approved HTTPS authority'
+          }
+          $msiPath = Join-Path $env:RUNNER_TEMP 'digicert-keylocker-tools.msi'
+          Invoke-WebRequest -Uri $toolsUri -Headers @{ 'x-api-key' = $env:SM_API_KEY } -OutFile $msiPath
+          $actualMsiHash = (Get-FileHash -LiteralPath $msiPath -Algorithm SHA256).Hash.ToUpperInvariant()
+          if ($actualMsiHash -ne $expectedMsiHash) {
+            throw 'DigiCert client tools MSI SHA-256 does not match SM_CLIENT_TOOLS_MSI_SHA256'
+          }
+          $msiSignature = Get-AuthenticodeSignature -LiteralPath $msiPath
+          if ($msiSignature.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or
+              $null -eq $msiSignature.SignerCertificate) {
+            throw "DigiCert client tools MSI has an invalid Authenticode signature: $($msiSignature.Status)"
+          }
+          $installer = Start-Process -FilePath msiexec.exe -ArgumentList @('/i', "`"$msiPath`"", '/qn', '/norestart') -Wait -PassThru -WindowStyle Hidden
+          if (@(0, 1641, 3010) -notcontains $installer.ExitCode) {
+            throw "DigiCert client tools installation failed with exit code $($installer.ExitCode)"
+          }
+          $toolsDirectory = 'C:\Program Files\DigiCert\DigiCert Keylocker Tools'
+          if (-not (Test-Path -LiteralPath $toolsDirectory -PathType Container)) {
+            throw "DigiCert client tools installation directory is missing: $toolsDirectory"
+          }
+          $env:PATH = "$toolsDirectory;$env:PATH"
+          $toolsDirectory | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $smctl = Get-Command smctl -CommandType Application -ErrorAction Stop
+
+          $certificatePath = Join-Path $env:RUNNER_TEMP 'digicert-client-auth.p12'
+          [IO.File]::WriteAllBytes(
+            $certificatePath,
+            [Convert]::FromBase64String($env:SM_CLIENT_CERT_FILE_B64)
+          )
+          if ((Get-Item -LiteralPath $certificatePath).Length -eq 0) {
+            throw 'Decoded DigiCert client authentication certificate is empty'
+          }
+          $env:SM_CLIENT_CERT_FILE = $certificatePath
+          "SM_CLIENT_CERT_FILE=$certificatePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          & $smctl.Source healthcheck
+          if ($LASTEXITCODE -ne 0) {
+            throw "smctl healthcheck failed with exit code $LASTEXITCODE"
+          }
 
       - name: Install Corepack (Yarn 4.17.1)
         run: npm install --global --force corepack@0.35.0 && corepack enable
@@ -383,7 +490,118 @@ jobs:
         working-directory: app/packages/desktop
         # app_version, not version: electron-updater refuses to run against a
         # non-semver app version, and the release identity `YY.N` is not semver.
+        env:
+          REQUIRE_DESKTOP_AUTHENTICITY: "true"
+          CSC_LINK: ${{ runner.os == 'macOS' && secrets.MAC_CI_KEYS || '' }}
+          CSC_KEY_PASSWORD: ${{ runner.os == 'macOS' && secrets.MAC_CI_KEYS_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ runner.os == 'macOS' && secrets.APPLE_TEAM_ID || '' }}
+          NOTARIZE_APPLE_ID: ${{ runner.os == 'macOS' && secrets.NOTARIZE_APPLE_ID || '' }}
+          NOTARIZE_APPLE_ID_PASSWORD: ${{ runner.os == 'macOS' && secrets.NOTARIZE_APPLE_ID_PASSWORD || '' }}
+          SM_HOST: ${{ runner.os == 'Windows' && secrets.SM_HOST || '' }}
+          SM_TLS_SKIP_VERIFY: "false"
+          SM_API_KEY: ${{ runner.os == 'Windows' && secrets.SM_API_KEY || '' }}
+          SM_CLIENT_CERT_PASSWORD: ${{ runner.os == 'Windows' && secrets.SM_CLIENT_CERT_PASSWORD || '' }}
+          SM_KEYPAIR_ALIAS: ${{ runner.os == 'Windows' && secrets.SM_KEYPAIR_ALIAS || '' }}
         run: yarn electron-builder ${{ matrix.builder }} --publish never -c.extraMetadata.version=${{ needs.identity.outputs.app_version }}
+
+      - name: Verify macOS signatures and stapled notarization tickets
+        if: runner.os == 'macOS'
+        working-directory: app/packages/desktop
+        env:
+          EXPECTED_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          test -n "$EXPECTED_APPLE_TEAM_ID"
+          count=0
+          while IFS= read -r -d '' app; do
+            codesign --verify --deep --strict --verbose=2 "$app"
+            actual_team="$(codesign -dv --verbose=4 "$app" 2>&1 | sed -n 's/^TeamIdentifier=//p')"
+            test "$actual_team" = "$EXPECTED_APPLE_TEAM_ID"
+            xcrun stapler validate "$app"
+            spctl --assess --type execute --verbose=4 "$app"
+            count=$((count + 1))
+          done < <(find dist -mindepth 2 -maxdepth 2 -type d -name '*.app' -print0 | sort -z)
+          test "$count" -eq 2 || {
+            echo "Expected two signed and notarized macOS application bundles, found $count" >&2
+            exit 1
+          }
+
+      - name: Verify Windows published and runtime signatures and timestamps
+        if: runner.os == 'Windows'
+        shell: pwsh
+        working-directory: app/packages/desktop
+        env:
+          APP_VERSION: ${{ needs.identity.outputs.app_version }}
+          EXPECTED_WINDOWS_SIGNER_SHA1: ${{ secrets.SM_CODE_SIGNING_CERT_SHA1_HASH }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $expected = $env:EXPECTED_WINDOWS_SIGNER_SHA1.ToUpperInvariant()
+          if ($expected -notmatch '^[0-9A-F]{40}$') {
+            throw 'Expected Windows signer fingerprint must be exactly 40 hexadecimal characters'
+          }
+          $expectedPublished = @(
+            "dist/standard-red-notes-$($env:APP_VERSION)-win-x64.exe",
+            "dist/standard-red-notes-$($env:APP_VERSION)-win-arm64.exe"
+          )
+          $publishedExecutables = @(
+            Get-ChildItem -LiteralPath dist -File -Filter '*.exe' |
+              ForEach-Object { $_.FullName }
+          )
+          if ($publishedExecutables.Count -ne 2) {
+            throw "Expected exactly two published Windows executable packages, found $($publishedExecutables.Count)"
+          }
+          $expectedPublishedFull = @($expectedPublished | ForEach-Object { [IO.Path]::GetFullPath($_) })
+          if (@(Compare-Object $expectedPublishedFull $publishedExecutables).Count -ne 0) {
+            throw 'Published Windows executable inventory does not match the two canonical NSIS installers'
+          }
+
+          $expectedRuntime = @(
+            'dist/win-unpacked/standard-red-notes.exe',
+            'dist/win-arm64-unpacked/standard-red-notes.exe'
+          )
+          $runtimeExecutables = @(
+            Get-ChildItem -LiteralPath dist -Recurse -File -Filter 'standard-red-notes.exe' |
+              Where-Object { $_.Directory.Name -in @('win-unpacked', 'win-arm64-unpacked') } |
+              ForEach-Object { $_.FullName }
+          )
+          if ($runtimeExecutables.Count -ne 2) {
+            throw "Expected exactly two unpacked Windows application executables, found $($runtimeExecutables.Count)"
+          }
+          $expectedRuntimeFull = @($expectedRuntime | ForEach-Object { [IO.Path]::GetFullPath($_) })
+          if (@(Compare-Object $expectedRuntimeFull $runtimeExecutables).Count -ne 0) {
+            throw 'Unpacked Windows application executable inventory does not match both release architectures'
+          }
+
+          foreach ($artifact in @($expectedPublished + $expectedRuntime)) {
+            if (-not (Test-Path -LiteralPath $artifact -PathType Leaf)) {
+              throw "Missing expected Windows executable: $artifact"
+            }
+            $signature = Get-AuthenticodeSignature -LiteralPath $artifact
+            if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
+              throw "Invalid Authenticode signature on $artifact`: $($signature.Status)"
+            }
+            if ($null -eq $signature.SignerCertificate -or $signature.SignerCertificate.Thumbprint -ne $expected) {
+              throw "Unexpected Authenticode signer on $artifact"
+            }
+            if ($null -eq $signature.TimeStamperCertificate) {
+              throw "Missing Authenticode timestamp on $artifact"
+            }
+          }
+
+      - name: Remove Windows signing bootstrap material
+        if: always() && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $temporaryFiles = @(
+            (Join-Path $env:RUNNER_TEMP 'digicert-keylocker-tools.msi'),
+            (Join-Path $env:RUNNER_TEMP 'digicert-client-auth.p12')
+          )
+          foreach ($temporaryFile in $temporaryFiles) {
+            if (Test-Path -LiteralPath $temporaryFile -PathType Leaf) {
+              Remove-Item -LiteralPath $temporaryFile -Force
+            }
+          }
 
       # Fingerprint the ACTUAL packaged application payload, not the installer:
       # installers carry timestamps/signature containers and are not byte
@@ -432,6 +650,9 @@ jobs:
             cp ../../tsconfig.base.json "$contract/app-tsconfig.base.json"
             cp package.json "$contract/desktop-package.json"
             cp app/package.json "$contract/desktop-runtime-package.json"
+            cp build/entitlements.mac.inherit.plist "$contract/desktop-mac-entitlements.plist"
+            cp scripts/notarizeMac.js "$contract/desktop-notarize-mac.js"
+            cp scripts/windowsSign.js "$contract/desktop-windows-sign.js"
             cp -a ../../.yarn/patches "$contract/yarn-patches"
             cp -a ../../.yarn/releases "$contract/yarn-releases"
             electron_version="$(yarn node -p "require('electron/package.json').version")"

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -16,6 +17,27 @@ const repositoryRoot = path.resolve(
   "..",
 );
 const baseline = loadReleaseContractFiles(repositoryRoot);
+const require = createRequire(import.meta.url);
+const notarizeMac = require(
+  path.join(
+    repositoryRoot,
+    "app",
+    "packages",
+    "desktop",
+    "scripts",
+    "notarizeMac.js",
+  ),
+);
+const { windowsSign } = require(
+  path.join(
+    repositoryRoot,
+    "app",
+    "packages",
+    "desktop",
+    "scripts",
+    "windowsSign.js",
+  ),
+);
 
 function withFileChanged(file, update) {
   const files = new Map(baseline);
@@ -38,6 +60,293 @@ function withJobChanged(file, jobName, nextJobName, update) {
 
 test("the repository satisfies the release contract", () => {
   assert.deepEqual(validateReleaseContract(baseline), []);
+});
+
+const macHookParameters = Object.freeze({
+  electronPlatformName: "darwin",
+  appOutDir: "/tmp/output",
+  packager: { appInfo: { productFilename: "Standard Red Notes" } },
+});
+
+const completeAppleEnvironment = Object.freeze({
+  REQUIRE_DESKTOP_AUTHENTICITY: "true",
+  APPLE_TEAM_ID: "TESTTEAM1",
+  NOTARIZE_APPLE_ID: "release@example.invalid",
+  NOTARIZE_APPLE_ID_PASSWORD: "test-only-password",
+});
+
+function macHookDependencies(overrides = {}) {
+  return {
+    env: completeAppleEnvironment,
+    fsPromises: {
+      access: async () => {},
+      readFile: async () =>
+        JSON.stringify({ build: { appId: "org.standardrednotes.test" } }),
+    },
+    log: () => {},
+    ...overrides,
+  };
+}
+
+test("production desktop hooks fail closed when authenticity credentials are missing", async () => {
+  await assert.rejects(
+    notarizeMac(macHookParameters, {
+      env: { REQUIRE_DESKTOP_AUTHENTICITY: "true" },
+      log: () => {},
+    }),
+    /APPLE_TEAM_ID, NOTARIZE_APPLE_ID, NOTARIZE_APPLE_ID_PASSWORD/,
+  );
+  await assert.rejects(
+    windowsSign(
+      { path: "C:\\build\\Standard Red Notes.exe" },
+      {
+        env: { REQUIRE_DESKTOP_AUTHENTICITY: "true" },
+        log: () => {},
+      },
+    ),
+    /SM_KEYPAIR_ALIAS/,
+  );
+});
+
+test("explicitly non-publishing desktop hooks preserve unsigned local builds", async () => {
+  const messages = [];
+  await notarizeMac(macHookParameters, {
+    env: {},
+    log: (message) => messages.push(message),
+  });
+  await windowsSign(
+    { path: "C:\\build\\Standard Red Notes.exe" },
+    { env: {}, log: (message) => messages.push(message) },
+  );
+  assert.equal(messages.length, 2);
+  assert.match(messages[0], /non-publishing build/);
+  assert.match(messages[1], /non-publishing build/);
+});
+
+test("macOS notarization and stapling are awaited in order", async () => {
+  const events = [];
+  let releaseNotarization;
+  const notarizationGate = new Promise((resolve) => {
+    releaseNotarization = resolve;
+  });
+  let completed = false;
+  const hook = notarizeMac(
+    macHookParameters,
+    macHookDependencies({
+      electronNotarize: {
+        notarize: async () => {
+          events.push("notarize-start");
+          await notarizationGate;
+          events.push("notarize-finish");
+        },
+        staple: async () => events.push("staple"),
+      },
+    }),
+  ).then(() => {
+    completed = true;
+  });
+
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(completed, false);
+  assert.deepEqual(events, ["notarize-start"]);
+  releaseNotarization();
+  await hook;
+  assert.deepEqual(events, ["notarize-start", "notarize-finish", "staple"]);
+});
+
+test("macOS notarization failures reject the electron-builder hook", async () => {
+  await assert.rejects(
+    notarizeMac(
+      macHookParameters,
+      macHookDependencies({
+        electronNotarize: {
+          notarize: async () => {
+            throw new Error("notary service rejected upload");
+          },
+          staple: async () =>
+            assert.fail("staple must not run after rejection"),
+        },
+      }),
+    ),
+    /notary service rejected upload/,
+  );
+});
+
+test("Windows signing passes aliases and paths without shell interpolation", async () => {
+  const calls = [];
+  const alias = 'release-key" & echo injected';
+  const artifact = "C:\\build output\\Standard Red Notes & Notes.exe";
+  await windowsSign(
+    { path: artifact },
+    {
+      env: {
+        REQUIRE_DESKTOP_AUTHENTICITY: "true",
+        SM_KEYPAIR_ALIAS: alias,
+      },
+      execFileSync: (...args) => calls.push(args),
+    },
+  );
+  assert.deepEqual(calls, [
+    [
+      "smctl",
+      ["sign", "--keypair-alias", alias, "--input", artifact, "--verbose"],
+      { stdio: "inherit" },
+    ],
+  ]);
+});
+
+test("desktop authenticity fail-closed controls are mutation protected", () => {
+  for (const [file, before, after, expected] of [
+    [
+      "app/packages/desktop/scripts/notarizeMac.js",
+      "await electronNotarize.notarize({",
+      "electronNotarize.notarize({",
+      /missing awaited Apple notarization submission/,
+    ],
+    [
+      "app/packages/desktop/scripts/notarizeMac.js",
+      "      throw new Error(message)",
+      "      return log(message)",
+      /missing production Apple credential failure/,
+    ],
+    [
+      "app/packages/desktop/scripts/notarizeMac.js",
+      "await electronNotarize.staple({ appPath })",
+      "electronNotarize.staple({ appPath })",
+      /missing awaited Apple notarization ticket stapling/,
+    ],
+    [
+      "app/packages/desktop/scripts/windowsSign.js",
+      "  run('smctl',",
+      "  execSync('smctl',",
+      /must not interpolate credentials or paths/,
+    ],
+    [
+      "app/packages/desktop/scripts/windowsSign.js",
+      "      throw new Error(message)",
+      "      return log(message)",
+      /missing production Windows credential failure/,
+    ],
+    [
+      "app/packages/desktop/build/entitlements.mac.inherit.plist",
+      "<key>com.apple.security.cs.allow-jit</key>",
+      "<key>com.apple.security.cs.allow-jit-disabled</key>",
+      /missing Electron JIT entitlement/,
+    ],
+    [
+      ".github/workflows/srn-desktop.yml",
+      "Verify macOS signatures and stapled notarization tickets",
+      "Verify macOS build outputs",
+      /missing macOS signature and notarization verification/,
+    ],
+    [
+      ".github/workflows/srn-desktop.yml",
+      "Verify Windows published and runtime signatures and timestamps",
+      "Verify Windows build outputs",
+      /missing Windows signature verification/,
+    ],
+    [
+      ".github/workflows/srn-desktop.yml",
+      "          SM_CLIENT_TOOLS_MSI_SHA256: ${{ secrets.SM_CLIENT_TOOLS_MSI_SHA256 }}\n",
+      "",
+      /missing DigiCert client tools MSI hash secret/,
+    ],
+    [
+      ".github/workflows/srn-desktop.yml",
+      "if ($actualMsiHash -ne $expectedMsiHash)",
+      "if ($actualMsiHash -eq $expectedMsiHash)",
+      /missing fail-closed DigiCert MSI hash comparison/,
+    ],
+    [
+      ".github/workflows/srn-desktop.yml",
+      "$msiSignature.Status -ne [System.Management.Automation.SignatureStatus]::Valid",
+      "$msiSignature.Status -eq [System.Management.Automation.SignatureStatus]::Valid",
+      /missing fail-closed DigiCert MSI Authenticode validation/,
+    ],
+    [
+      ".github/workflows/srn-desktop.yml",
+      "if (@(0, 1641, 3010) -notcontains $installer.ExitCode)",
+      "if ($false)",
+      /missing bounded DigiCert MSI success exit codes/,
+    ],
+    [
+      ".github/workflows/srn-desktop.yml",
+      "& $smctl.Source healthcheck",
+      "& $smctl.Source --version",
+      /missing DigiCert credential health check/,
+    ],
+    [
+      ".github/workflows/srn-desktop.yml",
+      "if ($LASTEXITCODE -ne 0)",
+      "if ($LASTEXITCODE -eq 0)",
+      /missing fail-closed DigiCert credential health check/,
+    ],
+    [
+      ".github/workflows/srn-desktop.yml",
+      "https://one.digicert.com/signingmanager/api-ui/v1/releases/Keylockertools-windows-x64.msi/download",
+      "http://downloads.example.invalid/keylocker.msi",
+      /missing official DigiCert client tools HTTPS endpoint/,
+    ],
+    [
+      ".github/workflows/srn-desktop.yml",
+      "if: always() && runner.os == 'Windows'",
+      "if: runner.os == 'Windows'",
+      /missing unconditional Windows signing material cleanup/,
+    ],
+    [
+      ".github/workflows/srn-desktop.yml",
+      "            'dist/win-arm64-unpacked/standard-red-notes.exe'\n",
+      "",
+      /missing Windows ARM64 unpacked runtime signature target/,
+    ],
+    [
+      "app/.github/workflows/desktop.release.reuse.yml",
+      "Verify macOS signatures and stapled notarization tickets",
+      "Verify macOS build outputs",
+      /missing macOS signature and notarization verification/,
+    ],
+    [
+      "app/.github/workflows/desktop.release.reuse.yml",
+      "Verify Windows published and runtime signatures and timestamps",
+      "Verify Windows build outputs",
+      /missing Windows signature verification/,
+    ],
+    [
+      "app/.github/workflows/desktop.release.reuse.yml",
+      "          SM_CLIENT_TOOLS_MSI_SHA256: ${{ secrets.SM_CLIENT_TOOLS_MSI_SHA256 }}\n",
+      "",
+      /missing DigiCert client tools MSI hash secret/,
+    ],
+    [
+      "app/.github/workflows/desktop.release.reuse.yml",
+      "if ($toolsUri.Scheme -ne 'https' -or $toolsUri.Host -ne 'one.digicert.com')",
+      "if ($false)",
+      /missing official DigiCert client tools authority enforcement/,
+    ],
+    [
+      "app/.github/workflows/desktop.release.reuse.yml",
+      "            'dist/win-unpacked/standard-red-notes.exe',\n",
+      "",
+      /missing Windows x64 unpacked runtime signature target/,
+    ],
+  ]) {
+    const files = withFileChanged(file, (content) =>
+      content.replace(before, after),
+    );
+    assert.match(validateReleaseContract(files).join("\n"), expected);
+  }
+
+  const unprotectedWindows = withJobChanged(
+    "app/.github/workflows/desktop.release.reuse.yml",
+    "Windows",
+    "Linux-AppImage-X64",
+    (job) =>
+      job.replace("environment: release-production", "environment: test"),
+  );
+  assert.match(
+    validateReleaseContract(unprotectedWindows).join("\n"),
+    /missing Windows protected production environment|must be scoped exactly to macOS signing, Windows signing/,
+  );
 });
 
 test("YAML scalar quote-only formatting does not change release validation", () => {
@@ -1938,7 +2247,7 @@ test("desktop updater metadata, architecture, recovery, and environment guards c
   );
   assert.match(
     validateReleaseContract(files).join("\n"),
-    /missing Linux-Snap protected production environment|must be scoped exactly to signing, Snap build/,
+    /missing Linux-Snap protected production environment|must be scoped exactly to .*Snap build/,
   );
 
   files = withFileChanged(
@@ -2530,6 +2839,18 @@ test("desktop packaging fingerprints bind lock, patches, config, toolchain, and 
         "",
       )
       .replace(
+        '            cp build/entitlements.mac.inherit.plist "$contract/desktop-mac-entitlements.plist"\n',
+        "",
+      )
+      .replace(
+        '            cp scripts/notarizeMac.js "$contract/desktop-notarize-mac.js"\n',
+        "",
+      )
+      .replace(
+        '            cp scripts/windowsSign.js "$contract/desktop-windows-sign.js"\n',
+        "",
+      )
+      .replace(
         '              --metadata "electronVersion=${electron_version}" \\\n',
         "",
       )
@@ -2546,6 +2867,15 @@ test("desktop packaging fingerprints bind lock, patches, config, toolchain, and 
   assert.match(errors, /missing desktop lockfile packaging input/);
   assert.match(errors, /missing desktop Yarn patch inputs/);
   assert.match(errors, /missing desktop electron-builder configuration input/);
+  assert.match(errors, /missing desktop macOS entitlement fingerprint input/);
+  assert.match(
+    errors,
+    /missing desktop macOS notarization policy fingerprint input/,
+  );
+  assert.match(
+    errors,
+    /missing desktop Windows signing policy fingerprint input/,
+  );
   assert.match(errors, /missing effective Electron metadata/);
   assert.match(errors, /missing contract-bound desktop Python action/);
   assert.match(errors, /missing Linux arm64 build leg/);

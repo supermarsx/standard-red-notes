@@ -31,8 +31,11 @@ export const RELEASE_CONTRACT_FILES = Object.freeze([
   "app/.github/workflows/desktop.release.reuse.yml",
   "app/.github/workflows/mobile.release.prod.yml",
   "app/packages/desktop/package.json",
+  "app/packages/desktop/build/entitlements.mac.inherit.plist",
+  "app/packages/desktop/scripts/notarizeMac.js",
   "app/packages/desktop/scripts/pruneLinuxNativePrebuilds.js",
   "app/packages/desktop/scripts/pruneLinuxNativePrebuilds.test.js",
+  "app/packages/desktop/scripts/windowsSign.js",
   "app/.github/upstream-workflows-disabled/clipper.release.prod.yml",
   "app/.github/upstream-workflows-disabled/git-sync.yml",
   "app/.github/upstream-workflows-disabled/ios.testflight.yml",
@@ -3411,6 +3414,14 @@ export function validateReleaseContract(files) {
   const rootDesktop = files.get(rootDesktopFile) ?? "";
   const rootDesktopPackageFile = "app/packages/desktop/package.json";
   const rootDesktopPackage = files.get(rootDesktopPackageFile) ?? "";
+  const rootDesktopNotarizeFile = "app/packages/desktop/scripts/notarizeMac.js";
+  const rootDesktopNotarize = files.get(rootDesktopNotarizeFile) ?? "";
+  const rootDesktopWindowsSignFile =
+    "app/packages/desktop/scripts/windowsSign.js";
+  const rootDesktopWindowsSign = files.get(rootDesktopWindowsSignFile) ?? "";
+  const rootDesktopEntitlementsFile =
+    "app/packages/desktop/build/entitlements.mac.inherit.plist";
+  const rootDesktopEntitlements = files.get(rootDesktopEntitlementsFile) ?? "";
   try {
     const rootDesktopManifest = JSON.parse(rootDesktopPackage);
     if (rootDesktopManifest.devDependencies?.["@electron/asar"] !== "3.4.1") {
@@ -3423,8 +3434,84 @@ export function validateReleaseContract(files) {
         `${rootDesktopPackageFile}: missing disabled universal Windows installer`,
       );
     }
+    if (rootDesktopManifest.build?.afterSign !== "scripts/notarizeMac.js") {
+      errors.push(
+        `${rootDesktopPackageFile}: macOS afterSign must use the fail-closed notarization hook`,
+      );
+    }
+    if (
+      rootDesktopManifest.build?.win?.signtoolOptions?.sign !==
+      "./scripts/windowsSign.js"
+    ) {
+      errors.push(
+        `${rootDesktopPackageFile}: Windows signtoolOptions must use the fail-closed signing hook`,
+      );
+    }
   } catch {
     errors.push(`${rootDesktopPackageFile}: invalid desktop package manifest`);
+  }
+  for (const [fragment, description] of [
+    [
+      "env.REQUIRE_DESKTOP_AUTHENTICITY === 'true'",
+      "explicit production notarization mode",
+    ],
+    ["throw new Error(message)", "production Apple credential failure"],
+    [
+      "await electronNotarize.notarize({",
+      "awaited Apple notarization submission",
+    ],
+    [
+      "await electronNotarize.staple({ appPath })",
+      "awaited Apple notarization ticket stapling",
+    ],
+  ]) {
+    requireFragment(
+      errors,
+      rootDesktopNotarizeFile,
+      rootDesktopNotarize,
+      fragment,
+      description,
+    );
+  }
+  if (/\.notarize\([^)]*\)\s*\.then\(/s.test(rootDesktopNotarize)) {
+    errors.push(
+      `${rootDesktopNotarizeFile}: notarization must not escape the awaited afterSign hook`,
+    );
+  }
+  for (const [fragment, description] of [
+    [
+      "env.REQUIRE_DESKTOP_AUTHENTICITY === 'true'",
+      "explicit production Windows signing mode",
+    ],
+    ["throw new Error(message)", "production Windows credential failure"],
+    ["execFileSync", "shell-free Windows signer invocation"],
+    ["'--keypair-alias'", "separate Windows signer alias argument"],
+    ["'--input'", "separate Windows signer input argument"],
+  ]) {
+    requireFragment(
+      errors,
+      rootDesktopWindowsSignFile,
+      rootDesktopWindowsSign,
+      fragment,
+      description,
+    );
+  }
+  if (/\bexecSync\s*\(/.test(rootDesktopWindowsSign)) {
+    errors.push(
+      `${rootDesktopWindowsSignFile}: Windows signing must not interpolate credentials or paths into a shell command`,
+    );
+  }
+  for (const [fragment, description] of [
+    ["<key>com.apple.security.cs.allow-jit</key>", "Electron JIT entitlement"],
+    ["<key>com.apple.security.device.camera</key>", "camera entitlement"],
+  ]) {
+    requireFragment(
+      errors,
+      rootDesktopEntitlementsFile,
+      rootDesktopEntitlements,
+      fragment,
+      description,
+    );
   }
   const desktopContract = RELEASE_PACKAGING_CONTRACTS.desktop;
   for (const [fragment, description] of [
@@ -3494,7 +3581,7 @@ export function validateReleaseContract(files) {
       description,
     );
   }
-  for (const jobName of ["identity", "discard_unchanged", "release"]) {
+  for (const jobName of ["identity", "build", "discard_unchanged", "release"]) {
     requireFragment(
       errors,
       rootDesktopFile,
@@ -3503,9 +3590,9 @@ export function validateReleaseContract(files) {
       `${jobName} protected production environment`,
     );
   }
-  if (countOccurrences(rootDesktop, "environment: release-production") !== 3) {
+  if (countOccurrences(rootDesktop, "environment: release-production") !== 4) {
     errors.push(
-      `${rootDesktopFile}: desktop production environment must be scoped exactly to identity, unchanged-draft deletion, and release`,
+      `${rootDesktopFile}: desktop production environment must be scoped exactly to identity, authenticated build, unchanged-draft deletion, and release`,
     );
   }
 
@@ -3698,6 +3785,149 @@ export function validateReleaseContract(files) {
       "required desktop installer upload",
     );
     for (const [fragment, description] of [
+      [
+        "Require macOS signing and notarization credentials",
+        "fail-closed macOS authenticity preflight",
+      ],
+      [
+        "Require and validate Windows signing credentials",
+        "fail-closed Windows authenticity preflight",
+      ],
+      [
+        "SM_CLIENT_CERT_FILE_B64: ${{ secrets.SM_CLIENT_CERT_FILE_B64 }}",
+        "DigiCert client authentication certificate secret",
+      ],
+      [
+        "SM_CLIENT_TOOLS_MSI_SHA256: ${{ secrets.SM_CLIENT_TOOLS_MSI_SHA256 }}",
+        "DigiCert client tools MSI hash secret",
+      ],
+      [
+        "https://one.digicert.com/signingmanager/api-ui/v1/releases/Keylockertools-windows-x64.msi/download",
+        "official DigiCert client tools HTTPS endpoint",
+      ],
+      [
+        "if ($toolsUri.Scheme -ne 'https' -or $toolsUri.Host -ne 'one.digicert.com')",
+        "official DigiCert client tools authority enforcement",
+      ],
+      [
+        "-Headers @{ 'x-api-key' = $env:SM_API_KEY }",
+        "authenticated DigiCert client tools download",
+      ],
+      [
+        "Get-FileHash -LiteralPath $msiPath -Algorithm SHA256",
+        "downloaded DigiCert MSI SHA-256 calculation",
+      ],
+      [
+        "if ($actualMsiHash -ne $expectedMsiHash)",
+        "fail-closed DigiCert MSI hash comparison",
+      ],
+      [
+        "$msiSignature.Status -ne [System.Management.Automation.SignatureStatus]::Valid",
+        "fail-closed DigiCert MSI Authenticode validation",
+      ],
+      [
+        "Start-Process -FilePath msiexec.exe",
+        "quiet DigiCert MSI installation",
+      ],
+      [
+        "if (@(0, 1641, 3010) -notcontains $installer.ExitCode)",
+        "bounded DigiCert MSI success exit codes",
+      ],
+      [
+        "C:\\Program Files\\DigiCert\\DigiCert Keylocker Tools",
+        "fixed DigiCert client tools install directory",
+      ],
+      [
+        "$toolsDirectory | Out-File -FilePath $env:GITHUB_PATH",
+        "DigiCert client tools future-step PATH",
+      ],
+      [
+        "Get-Command smctl -CommandType Application -ErrorAction Stop",
+        "required DigiCert signing client",
+      ],
+      ["& $smctl.Source healthcheck", "DigiCert credential health check"],
+      [
+        "if ($LASTEXITCODE -ne 0)",
+        "fail-closed DigiCert credential health check",
+      ],
+      ['SM_TLS_SKIP_VERIFY: "false"', "DigiCert TLS verification enforcement"],
+      [
+        "https://clientauth.one.digicert.com",
+        "approved DigiCert US production authority",
+      ],
+      [
+        "https://clientauth.one.nl.digicert.com",
+        "approved DigiCert Netherlands production authority",
+      ],
+      [
+        "if ($allowedHosts -notcontains $env:SM_HOST.TrimEnd('/'))",
+        "DigiCert production authority enforcement",
+      ],
+      [
+        'REQUIRE_DESKTOP_AUTHENTICITY: "true"',
+        "production authenticity hook enforcement",
+      ],
+      [
+        "Verify macOS signatures and stapled notarization tickets",
+        "macOS signature and notarization verification",
+      ],
+      [
+        'codesign --verify --deep --strict --verbose=2 "$app"',
+        "macOS code signature validation",
+      ],
+      [
+        'test "$actual_team" = "$EXPECTED_APPLE_TEAM_ID"',
+        "expected Apple Team ID binding",
+      ],
+      ['xcrun stapler validate "$app"', "stapled notarization validation"],
+      [
+        'spctl --assess --type execute --verbose=4 "$app"',
+        "Gatekeeper assessment",
+      ],
+      [
+        "Verify Windows published and runtime signatures and timestamps",
+        "Windows signature verification",
+      ],
+      [
+        "Get-AuthenticodeSignature -LiteralPath $artifact",
+        "Authenticode trust validation",
+      ],
+      [
+        "Expected exactly two published Windows executable packages",
+        "closed published Windows executable inventory",
+      ],
+      [
+        "Expected exactly two unpacked Windows application executables",
+        "closed unpacked Windows runtime inventory",
+      ],
+      [
+        "'dist/win-unpacked/standard-red-notes.exe'",
+        "Windows x64 unpacked runtime signature target",
+      ],
+      [
+        "'dist/win-arm64-unpacked/standard-red-notes.exe'",
+        "Windows ARM64 unpacked runtime signature target",
+      ],
+      [
+        "$signature.SignerCertificate.Thumbprint -ne $expected",
+        "expected Windows signer binding",
+      ],
+      [
+        "$null -eq $signature.TimeStamperCertificate",
+        "Windows timestamp enforcement",
+      ],
+      [
+        "Remove Windows signing bootstrap material",
+        "Windows signing material cleanup",
+      ],
+      [
+        "digicert-keylocker-tools.msi",
+        "downloaded DigiCert MSI cleanup target",
+      ],
+      [
+        "digicert-client-auth.p12",
+        "DigiCert client authentication cleanup target",
+      ],
       ["find dist -type f -name app.asar", "actual packaged asar discovery"],
       ["yarn exec asar extract", "packaged desktop runtime extraction"],
       [
@@ -3728,6 +3958,18 @@ export function validateReleaseContract(files) {
       ["cp -a ../../.yarn/releases", "desktop Yarn runtime inputs"],
       ["cp package.json", "desktop electron-builder configuration input"],
       [
+        "cp build/entitlements.mac.inherit.plist",
+        "desktop macOS entitlement fingerprint input",
+      ],
+      [
+        "cp scripts/notarizeMac.js",
+        "desktop macOS notarization policy fingerprint input",
+      ],
+      [
+        "cp scripts/windowsSign.js",
+        "desktop Windows signing policy fingerprint input",
+      ],
+      [
         'electron_version="$(yarn node -p',
         "resolved Electron toolchain metadata",
       ],
@@ -3755,6 +3997,43 @@ export function validateReleaseContract(files) {
         errors,
         rootDesktopFile,
         rootDesktopBuild,
+        fragment,
+        description,
+      );
+    }
+    if (
+      countOccurrences(rootDesktopBuild, 'SM_TLS_SKIP_VERIFY: "false"') !== 2
+    ) {
+      errors.push(
+        `${rootDesktopFile}: DigiCert TLS verification must be enforced in preflight and signing`,
+      );
+    }
+    const rootDesktopWindowsCleanup = namedStepBlock(
+      rootDesktopBuild,
+      "Remove Windows signing bootstrap material",
+    );
+    for (const [fragment, description] of [
+      [
+        "if: always() && runner.os == 'Windows'",
+        "unconditional Windows signing material cleanup",
+      ],
+      [
+        "Join-Path $env:RUNNER_TEMP 'digicert-keylocker-tools.msi'",
+        "downloaded DigiCert MSI cleanup",
+      ],
+      [
+        "Join-Path $env:RUNNER_TEMP 'digicert-client-auth.p12'",
+        "DigiCert client authentication cleanup",
+      ],
+      [
+        "Remove-Item -LiteralPath $temporaryFile -Force",
+        "exact Windows signing material removal",
+      ],
+    ]) {
+      requireFragment(
+        errors,
+        rootDesktopFile,
+        rootDesktopWindowsCleanup,
         fragment,
         description,
       );
@@ -4575,7 +4854,13 @@ export function validateReleaseContract(files) {
     file: appDesktopFile,
     workflow: appDesktop,
   });
-  for (const jobName of ["Mac", "Linux-Snap", "PublishGitHub", "PublishSnap"]) {
+  for (const jobName of [
+    "Mac",
+    "Windows",
+    "Linux-Snap",
+    "PublishGitHub",
+    "PublishSnap",
+  ]) {
     requireFragment(
       errors,
       appDesktopFile,
@@ -4584,9 +4869,9 @@ export function validateReleaseContract(files) {
       `${jobName} protected production environment`,
     );
   }
-  if (countOccurrences(appDesktop, "environment: release-production") !== 4) {
+  if (countOccurrences(appDesktop, "environment: release-production") !== 5) {
     errors.push(
-      `${appDesktopFile}: reusable desktop production environment must be scoped exactly to signing, Snap build, GitHub publication, and Snap publication`,
+      `${appDesktopFile}: reusable desktop production environment must be scoped exactly to macOS signing, Windows signing, Snap build, GitHub publication, and Snap publication`,
     );
   }
   for (const uploadStep of actionStepBlocks(
@@ -4760,6 +5045,115 @@ export function validateReleaseContract(files) {
   } else {
     for (const [fragment, description] of [
       ["runs-on: windows-latest", "Windows runner"],
+      [
+        "Require and validate Windows signing credentials",
+        "fail-closed Windows authenticity preflight",
+      ],
+      [
+        "SM_CLIENT_TOOLS_MSI_SHA256: ${{ secrets.SM_CLIENT_TOOLS_MSI_SHA256 }}",
+        "DigiCert client tools MSI hash secret",
+      ],
+      [
+        "https://one.digicert.com/signingmanager/api-ui/v1/releases/Keylockertools-windows-x64.msi/download",
+        "official DigiCert client tools HTTPS endpoint",
+      ],
+      [
+        "if ($toolsUri.Scheme -ne 'https' -or $toolsUri.Host -ne 'one.digicert.com')",
+        "official DigiCert client tools authority enforcement",
+      ],
+      [
+        "-Headers @{ 'x-api-key' = $env:SM_API_KEY }",
+        "authenticated DigiCert client tools download",
+      ],
+      [
+        "Get-FileHash -LiteralPath $msiPath -Algorithm SHA256",
+        "downloaded DigiCert MSI SHA-256 calculation",
+      ],
+      [
+        "if ($actualMsiHash -ne $expectedMsiHash)",
+        "fail-closed DigiCert MSI hash comparison",
+      ],
+      [
+        "$msiSignature.Status -ne [System.Management.Automation.SignatureStatus]::Valid",
+        "fail-closed DigiCert MSI Authenticode validation",
+      ],
+      [
+        "Start-Process -FilePath msiexec.exe",
+        "quiet DigiCert MSI installation",
+      ],
+      [
+        "if (@(0, 1641, 3010) -notcontains $installer.ExitCode)",
+        "bounded DigiCert MSI success exit codes",
+      ],
+      [
+        "C:\\Program Files\\DigiCert\\DigiCert Keylocker Tools",
+        "fixed DigiCert client tools install directory",
+      ],
+      [
+        "$toolsDirectory | Out-File -FilePath $env:GITHUB_PATH",
+        "DigiCert client tools future-step PATH",
+      ],
+      [
+        "Get-Command smctl -CommandType Application -ErrorAction Stop",
+        "required DigiCert signing client",
+      ],
+      ["& $smctl.Source healthcheck", "DigiCert credential health check"],
+      [
+        "if ($LASTEXITCODE -ne 0)",
+        "fail-closed DigiCert credential health check",
+      ],
+      [
+        "if ($allowedHosts -notcontains $env:SM_HOST.TrimEnd('/'))",
+        "DigiCert production authority enforcement",
+      ],
+      [
+        "REQUIRE_DESKTOP_AUTHENTICITY: 'true'",
+        "production Windows signing hook enforcement",
+      ],
+      [
+        "Verify Windows published and runtime signatures and timestamps",
+        "Windows signature verification",
+      ],
+      [
+        "Get-AuthenticodeSignature -LiteralPath $artifact",
+        "Authenticode trust validation",
+      ],
+      [
+        "Expected exactly two published Windows executable packages",
+        "closed published Windows executable inventory",
+      ],
+      [
+        "Expected exactly two unpacked Windows application executables",
+        "closed unpacked Windows runtime inventory",
+      ],
+      [
+        "'dist/win-unpacked/standard-red-notes.exe'",
+        "Windows x64 unpacked runtime signature target",
+      ],
+      [
+        "'dist/win-arm64-unpacked/standard-red-notes.exe'",
+        "Windows ARM64 unpacked runtime signature target",
+      ],
+      [
+        "$signature.SignerCertificate.Thumbprint -ne $expected",
+        "expected Windows signer binding",
+      ],
+      [
+        "$null -eq $signature.TimeStamperCertificate",
+        "Windows timestamp enforcement",
+      ],
+      [
+        "Remove Windows signing bootstrap material",
+        "Windows signing material cleanup",
+      ],
+      [
+        "digicert-keylocker-tools.msi",
+        "downloaded DigiCert MSI cleanup target",
+      ],
+      [
+        "digicert-client-auth.p12",
+        "DigiCert client authentication cleanup target",
+      ],
       ["--win nsis --x64 --arm64", "Windows NSIS x64+arm64 build"],
       ["name: dist-windows", "Windows artifact upload"],
       ["packages/desktop/dist/*.exe", "Windows installer artifact path"],
@@ -4767,16 +5161,71 @@ export function validateReleaseContract(files) {
     ]) {
       requireFragment(errors, appDesktopFile, windows, fragment, description);
     }
+    if (countOccurrences(windows, "SM_TLS_SKIP_VERIFY: 'false'") !== 2) {
+      errors.push(
+        `${appDesktopFile}: standalone DigiCert TLS verification must be enforced in preflight and signing`,
+      );
+    }
+    const standaloneWindowsCleanup = namedStepBlock(
+      windows,
+      "Remove Windows signing bootstrap material",
+    );
+    for (const [fragment, description] of [
+      ["if: always()", "unconditional Windows signing material cleanup"],
+      [
+        "Join-Path $env:RUNNER_TEMP 'digicert-keylocker-tools.msi'",
+        "downloaded DigiCert MSI cleanup",
+      ],
+      [
+        "Join-Path $env:RUNNER_TEMP 'digicert-client-auth.p12'",
+        "DigiCert client authentication cleanup",
+      ],
+      [
+        "Remove-Item -LiteralPath $temporaryFile -Force",
+        "exact Windows signing material removal",
+      ],
+    ]) {
+      requireFragment(
+        errors,
+        appDesktopFile,
+        standaloneWindowsCleanup,
+        fragment,
+        description,
+      );
+    }
   }
 
   const mac = jobBlock(appDesktop, "Mac");
-  requireFragment(
-    errors,
-    appDesktopFile,
-    mac,
-    "--mac dmg zip --x64 --arm64",
-    "combined macOS x64 and arm64 build",
-  );
+  for (const [fragment, description] of [
+    ["--mac dmg zip --x64 --arm64", "combined macOS x64 and arm64 build"],
+    [
+      "REQUIRE_DESKTOP_AUTHENTICITY: 'true'",
+      "production macOS notarization hook enforcement",
+    ],
+    [
+      "Require macOS signing and notarization credentials",
+      "fail-closed macOS authenticity preflight",
+    ],
+    [
+      "Verify macOS signatures and stapled notarization tickets",
+      "macOS signature and notarization verification",
+    ],
+    [
+      'codesign --verify --deep --strict --verbose=2 "$app"',
+      "macOS code signature validation",
+    ],
+    [
+      'test "$actual_team" = "$APPLE_TEAM_ID"',
+      "expected Apple Team ID binding",
+    ],
+    ['xcrun stapler validate "$app"', "stapled notarization validation"],
+    [
+      'spctl --assess --type execute --verbose=4 "$app"',
+      "Gatekeeper assessment",
+    ],
+  ]) {
+    requireFragment(errors, appDesktopFile, mac, fragment, description);
+  }
 
   for (const [job, builder] of [
     ["Linux-AppImage-X64", "--linux AppImage deb --x64"],
@@ -6225,8 +6674,11 @@ export function validateReleaseContract(files) {
     "server/.github/workflows/**",
     "server/.github/upstream-workflows-disabled/**",
     "app/packages/mobile/fastlane/**",
+    "app/packages/desktop/build/entitlements.mac.inherit.plist",
+    "app/packages/desktop/scripts/notarizeMac.js",
     "app/packages/desktop/scripts/pruneLinuxNativePrebuilds.js",
     "app/packages/desktop/scripts/pruneLinuxNativePrebuilds.test.js",
+    "app/packages/desktop/scripts/windowsSign.js",
     "app/scripts/verify-desktop-updater-metadata.rb",
     "app/scripts/verify-desktop-updater-metadata.test.rb",
     "scripts/analyze-release-impact.mjs",

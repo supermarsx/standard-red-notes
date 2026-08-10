@@ -12,6 +12,9 @@ node_modules/
 
 dist/
 build/
+!app/packages/desktop/build/
+app/packages/desktop/build/*
+!app/packages/desktop/build/entitlements.mac.inherit.plist
 coverage/
 release-impact.json
 release-impact.md
