@@ -70,5 +70,10 @@ describe('safeErrorLogMetadata', () => {
       errorCode: undefined,
       status: undefined,
     })
+    expect(safeErrorLogMetadata({ name: 'Error', code: 429 })).toEqual({
+      errorType: 'Error',
+      errorCode: 429,
+      status: undefined,
+    })
   })
 })

@@ -9,6 +9,10 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 
 describe('runtime log level', () => {
+  afterEach(() => {
+    jest.restoreAllMocks()
+  })
+
   it('normalizes only supported Winston levels', () => {
     expect(normalizeRuntimeLogLevel(' WARN ')).toBe('warn')
     expect(normalizeRuntimeLogLevel('chatty')).toBeUndefined()
@@ -28,6 +32,7 @@ describe('runtime log level', () => {
     ['unreadable file', () => Promise.reject(new Error('denied'))],
     ['malformed JSON', () => Promise.resolve('{')],
     ['invalid overlay level', () => Promise.resolve(JSON.stringify({ logging: { level: 'chatty' } }))],
+    ['invalid overlay root', () => Promise.resolve(JSON.stringify(null))],
     ['invalid overlay shape', () => Promise.resolve(JSON.stringify({ logging: [] }))],
   ])('falls back to the environment baseline for a %s', async (_description, readTextFile) => {
     const resolver = new ServerSettingsLogLevelResolver('/data/server-settings.json', 'error', readTextFile)
@@ -55,6 +60,18 @@ describe('runtime log level', () => {
 
       await expect(new ServerSettingsLogLevelResolver(oversizedPath, 'warn').resolve()).resolves.toBe('warn')
       await expect(new ServerSettingsLogLevelResolver(directory, 'error').resolve()).resolves.toBe('error')
+    } finally {
+      await fs.rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('reads a bounded regular overlay and closes it before cleanup', async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'srn-runtime-log-'))
+    const settingsPath = path.join(directory, 'server-settings.json')
+    try {
+      await fs.writeFile(settingsPath, JSON.stringify({ logging: { level: 'verbose' } }), 'utf8')
+
+      await expect(new ServerSettingsLogLevelResolver(settingsPath, 'warn').resolve()).resolves.toBe('verbose')
     } finally {
       await fs.rm(directory, { recursive: true, force: true })
     }
@@ -116,6 +133,52 @@ describe('runtime log level', () => {
     } finally {
       jest.useRealTimers()
     }
+  })
+
+  it('fails closed when interval setup throws and remains restartable', async () => {
+    const logger = makeLogger('info', ['info'])
+    const resolver = { resolve: jest.fn().mockResolvedValue('debug' as const) }
+    const applier = new RuntimeLogLevelApplier(logger, resolver)
+    const setIntervalSpy = jest.spyOn(globalThis, 'setInterval').mockImplementationOnce(() => {
+      throw new Error('scheduler unavailable')
+    })
+
+    applier.stop()
+    expect(() => applier.start()).not.toThrow()
+    await flushPromises()
+    expect(logger.level).toBe('info')
+    expect(logger.transports[0].level).toBe('info')
+
+    setIntervalSpy.mockRestore()
+    applier.start()
+    await flushPromises()
+    expect(logger.level).toBe('debug')
+    expect(logger.transports[0].level).toBe('debug')
+    applier.stop()
+  })
+
+  it('ignores a stale scheduled callback after stop', async () => {
+    const logger = makeLogger('info', ['info'])
+    const resolver = { resolve: jest.fn().mockResolvedValue('debug' as const) }
+    const applier = new RuntimeLogLevelApplier(logger, resolver)
+    let scheduledCallback: Parameters<typeof setInterval>[0] | undefined
+    const timer = { unref: jest.fn() } as unknown as ReturnType<typeof setInterval>
+    jest.spyOn(globalThis, 'setInterval').mockImplementation(((callback: Parameters<typeof setInterval>[0]) => {
+      scheduledCallback = callback
+      return timer
+    }) as typeof setInterval)
+    const clearIntervalSpy = jest.spyOn(globalThis, 'clearInterval').mockImplementation(() => undefined)
+
+    applier.start()
+    await flushPromises()
+    expect(resolver.resolve).toHaveBeenCalledTimes(1)
+
+    applier.stop()
+    scheduledCallback?.()
+    await flushPromises()
+
+    expect(resolver.resolve).toHaveBeenCalledTimes(1)
+    expect(clearIntervalSpy).toHaveBeenCalledWith(timer)
   })
 
   it('serializes slow polls and coalesces any number of overlapping interval ticks', async () => {
