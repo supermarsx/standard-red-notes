@@ -6656,7 +6656,7 @@ const RAW_RUNTIME_STATE =
         "packageDependencies": [\
           ["@standardnotes/common", "workspace:packages/common"],\
           ["@standardnotes/utils", "npm:1.17.15"],\
-          ["dompurify", "npm:3.4.12"],\
+          ["dompurify", "npm:3.4.13"],\
           ["lodash", "npm:4.18.1"],\
           ["reflect-metadata", "npm:0.1.13"]\
         ],\
@@ -9873,11 +9873,11 @@ const RAW_RUNTIME_STATE =
       }]\
     ]],\
     ["dompurify", [\
-      ["npm:3.4.12", {\
-        "packageLocation": "./.yarn/cache/dompurify-npm-3.4.12-9e2dc63475-f826b68920.zip/node_modules/dompurify/",\
+      ["npm:3.4.13", {\
+        "packageLocation": "./.yarn/cache/dompurify-npm-3.4.13-71386e31f7-0db0a309a8.zip/node_modules/dompurify/",\
         "packageDependencies": [\
           ["@types/trusted-types", "npm:2.0.7"],\
-          ["dompurify", "npm:3.4.12"]\
+          ["dompurify", "npm:3.4.13"]\
         ],\
         "linkType": "HARD"\
       }]\

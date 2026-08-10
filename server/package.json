@@ -50,7 +50,7 @@
   "packageManager": "yarn@4.17.1",
   "resolutions": {
     "babel-plugin-istanbul": "npm:8.0.0",
-    "dompurify": "npm:3.4.12",
+    "dompurify": "npm:3.4.13",
     "glob": "npm:13.0.6",
     "handlebars": "npm:4.7.9"
   },
