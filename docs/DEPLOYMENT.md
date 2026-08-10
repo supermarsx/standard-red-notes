@@ -41,6 +41,14 @@ so administrator settings and encrypted ChatGPT/Codex pairings survive a server
 container replacement. Back up that volume with its matching pairing encryption
 key; see [Backups and recovery](backups-and-recovery.md).
 
+{% include safety-alert.html
+  level="danger"
+  title="Migrate releases that used the legacy MySQL volume"
+  body="Older releases stored a MySQL 8.4 database in mysql-data; current releases use MariaDB and mariadb-data. Compose now stops before an empty MariaDB can mask an initialized legacy volume. Export from MySQL and restore logically into MariaDB. Never mount or copy the raw MySQL datadir into MariaDB."
+  link_url="/self-hosting.html#upgrade-from-the-legacy-mysql-volume"
+  link_text="Follow the legacy database migration"
+%}
+
 ```sh
 cp .env.example .env          # set real secrets for any non-local deploy
 docker compose up -d

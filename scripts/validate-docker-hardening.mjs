@@ -93,6 +93,13 @@ function mountTarget(volume) {
   return volume?.target ?? "";
 }
 
+function mountReadOnly(volume) {
+  if (typeof volume === "string") {
+    return volume.split(":").slice(2).includes("ro");
+  }
+  return volume?.read_only === true;
+}
+
 function environmentMap(environment) {
   if (!Array.isArray(environment)) {
     return environment ?? {};
@@ -1029,6 +1036,144 @@ export function validateDatabaseCredentialGateContract({
   return errors;
 }
 
+export function validateDatabaseVolumeMigrationGateContract({
+  multiConfig,
+  singleComposeSource,
+}) {
+  const errors = [];
+  const services = multiConfig?.services ?? {};
+  const preflight = services["db-volume-preflight"];
+  const database = services.db;
+
+  if (!preflight) {
+    errors.push("multi compose: missing db-volume-preflight service");
+  } else {
+    if (!database || preflight.image !== database.image) {
+      errors.push(
+        "multi compose db-volume-preflight: must reuse the MariaDB image",
+      );
+    }
+    if (String(preflight.restart) !== "no") {
+      errors.push(
+        "multi compose db-volume-preflight: restart policy must be no",
+      );
+    }
+    if (preflight.read_only !== true) {
+      errors.push(
+        "multi compose db-volume-preflight: root filesystem must be read-only",
+      );
+    }
+    if (String(preflight.user) !== "999:999") {
+      errors.push(
+        "multi compose db-volume-preflight: must run as the MariaDB numeric user 999:999",
+      );
+    }
+    if (String(preflight.network_mode).toLowerCase() !== "none") {
+      errors.push(
+        "multi compose db-volume-preflight: network mode must be none",
+      );
+    }
+    if (!upperList(preflight.cap_drop).includes("ALL")) {
+      errors.push(
+        "multi compose db-volume-preflight: must drop ALL capabilities",
+      );
+    }
+    if (!hasNoNewPrivileges(preflight.security_opt)) {
+      errors.push(
+        "multi compose db-volume-preflight: must set no-new-privileges:true",
+      );
+    }
+    if (!positiveNumber(preflight.mem_limit)) {
+      errors.push(
+        "multi compose db-volume-preflight: must set a positive memory limit",
+      );
+    }
+    if (!positiveNumber(preflight.pids_limit)) {
+      errors.push(
+        "multi compose db-volume-preflight: must set a positive PID limit",
+      );
+    }
+    if ((preflight.profiles ?? []).length > 0) {
+      errors.push(
+        "multi compose db-volume-preflight: must not be hidden behind a profile",
+      );
+    }
+
+    const mounts = preflight.volumes ?? [];
+    for (const [source, target] of [
+      ["mysql-data", "/legacy-mysql"],
+      ["mariadb-data", "/current-mariadb"],
+    ]) {
+      const mount = mounts.find(
+        (candidate) =>
+          mountSource(candidate) === source &&
+          mountTarget(candidate) === target,
+      );
+      if (!mount) {
+        errors.push(
+          `multi compose db-volume-preflight: must mount ${source} at ${target}`,
+        );
+      } else if (!mountReadOnly(mount)) {
+        errors.push(
+          `multi compose db-volume-preflight: ${source} mount must be read-only`,
+        );
+      }
+    }
+
+    const entrypoint = Array.isArray(preflight.entrypoint)
+      ? preflight.entrypoint.map(String)
+      : [];
+    if (entrypoint[0] !== "/bin/sh" || entrypoint[1] !== "-ec") {
+      errors.push(
+        "multi compose db-volume-preflight: must execute the fail-closed shell check",
+      );
+    }
+    const command = commandText(preflight.command);
+    for (const marker of ["/legacy-mysql/mysql", "/current-mariadb/mysql"]) {
+      if (!command.includes(`[ -d ${marker} ]`)) {
+        errors.push(
+          `multi compose db-volume-preflight: must inspect initialized marker ${marker}`,
+        );
+      }
+    }
+    if (
+      !/if\s+"\$\$\{legacy_initialized\}"\s+&&\s+!\s+"\$\$\{current_initialized\}";\s*then/.test(
+        command,
+      ) ||
+      !/exit\s+[1-9][0-9]*/.test(command)
+    ) {
+      errors.push(
+        "multi compose db-volume-preflight: must fail when only the legacy database is initialized",
+      );
+    }
+    if (
+      !/logical dump\/restore/i.test(command) ||
+      !/never copy the raw database directory/i.test(command)
+    ) {
+      errors.push(
+        "multi compose db-volume-preflight: failure must direct operators to logical migration",
+      );
+    }
+  }
+
+  if (
+    database?.depends_on?.["db-volume-preflight"]?.condition !==
+    "service_completed_successfully"
+  ) {
+    errors.push(
+      "multi compose db: must wait for successful database volume preflight",
+    );
+  }
+
+  if (/db-volume-preflight|mysql-data|mariadb-data/.test(singleComposeSource)) {
+    errors.push(
+      "single compose: SQLite topology must remain independent of database migration volumes",
+    );
+  }
+
+  return errors;
+}
+
 export function validateImageHardening(serviceName, inspect) {
   const errors = [];
   const config = inspect?.Config ?? {};
@@ -1308,6 +1453,10 @@ export function runDockerHardeningValidation(argv = process.argv.slice(2)) {
     ...validateDatabaseCredentialGateContract({
       multiConfig,
       multiComposeSource,
+      singleComposeSource,
+    }),
+    ...validateDatabaseVolumeMigrationGateContract({
+      multiConfig,
       singleComposeSource,
     }),
     ...validatePairingComposeContract(multiConfig, {

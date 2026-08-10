@@ -309,6 +309,45 @@ services:
         fi
         printf '%s\n' 'Database credential preflight passed.'
 
+  # A previous release used mysql:8.4 with the mysql-data volume. Starting
+  # MariaDB against a new mariadb-data volume would otherwise look like a
+  # successful clean install while leaving every existing account behind in
+  # the legacy volume. Detect that state before db starts and fail closed.
+  # Both volumes are read-only here: MySQL and MariaDB datadirs must be moved
+  # with a documented logical dump/restore, never copied between engines.
+  db-volume-preflight:
+    image: ${MARIADB_IMAGE:-mariadb:12.3.2}
+    restart: "no"
+    user: "999:999"
+    read_only: true
+    network_mode: none
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    mem_limit: 32m
+    pids_limit: 32
+    volumes:
+      - mysql-data:/legacy-mysql:ro
+      - mariadb-data:/current-mariadb:ro
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        legacy_initialized=false
+        current_initialized=false
+        [ -d /legacy-mysql/mysql ] && legacy_initialized=true
+        [ -d /current-mariadb/mysql ] && current_initialized=true
+
+        if "$${legacy_initialized}" && ! "$${current_initialized}"; then
+          printf '%s\n' 'Database volume preflight failed: a legacy MySQL 8.4 database exists in mysql-data, but mariadb-data is not initialized. Deployment stopped to prevent an empty-database startup. Follow the documented logical dump/restore migration; never copy the raw database directory between engines.' >&2
+          exit 1
+        fi
+
+        if "$${legacy_initialized}" && "$${current_initialized}"; then
+          printf '%s\n' 'Database volume preflight notice: both legacy mysql-data and current mariadb-data are initialized; MariaDB will use mariadb-data.' >&2
+        fi
+        printf '%s\n' 'Database volume preflight passed.'
+
   app:
     build:
       context: ./app
@@ -632,6 +671,8 @@ services:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD is required; run the repository setup script}
     depends_on:
       db-credential-preflight:
+        condition: service_completed_successfully
+      db-volume-preflight:
         condition: service_completed_successfully
     command:
       - --character-set-server=utf8mb4
