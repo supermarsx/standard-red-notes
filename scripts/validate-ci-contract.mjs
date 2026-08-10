@@ -268,6 +268,7 @@ export function validateCiContract(files) {
 
   requireJob(errors, workflow, "contracts", [
     ["yarn install --immutable", "immutable root install"],
+    ["yarn deps:security:production", "production dependency audit"],
     ["yarn ci:contracts", "CI contract command"],
     ["rhysd/actionlint@sha256:", "pinned actionlint image"],
   ]);
@@ -451,11 +452,13 @@ export function validateCiContract(files) {
       "yarn release:policy:install && yarn test:ci-tools && node scripts/validate-ci-contract.mjs && yarn test:release-impact:run && yarn test:release-contract:run && yarn release:contract:run && yarn docs:check",
     "ci:docker-hardening": "node scripts/validate-docker-hardening.mjs",
     "ci:verify-playwright": "node scripts/verify-playwright-report.mjs",
+    "deps:security:production":
+      "node scripts/audit-production-dependencies.mjs",
     "release:contract:run": "node scripts/validate-release-contract.mjs",
     "release:policy:install":
       "npm ci --prefix scripts --ignore-scripts --no-audit --no-fund",
     "test:ci-tools":
-      "node --test scripts/validate-ci-contract.test.mjs scripts/validate-docker-hardening.test.mjs scripts/verify-playwright-report.test.mjs",
+      "node --test scripts/audit-production-dependencies.test.mjs scripts/validate-ci-contract.test.mjs scripts/validate-docker-hardening.test.mjs scripts/verify-playwright-report.test.mjs",
     "test:release-contract:run":
       "node --test scripts/validate-release-contract.test.mjs",
     "test:release-impact:run":
@@ -548,6 +551,11 @@ export function validateCiContract(files) {
     ["`exhaustive`", "exhaustive profile documentation"],
     ["does not publish", "non-publishing guarantee"],
     ["yarn ci:contracts", "local contract command"],
+    ["yarn deps:security:production", "dependency audit command"],
+    [
+      "production-audit-allowlist.json",
+      "expiring dependency advisory exception policy",
+    ],
   ]) {
     requireFragment(
       errors,

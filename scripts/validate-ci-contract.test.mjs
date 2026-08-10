@@ -101,6 +101,19 @@ test("a missing immutable app install is rejected", () => {
   );
 });
 
+test("the contracts lane cannot drop the production dependency audit", () => {
+  const files = withFileChanged(".github/workflows/ci.yml", (content) =>
+    content.replace(
+      "run: yarn deps:security:production",
+      "run: echo dependency-audit-disabled",
+    ),
+  );
+  assert.match(
+    validateCiContract(files).join("\n"),
+    /contracts production dependency audit/,
+  );
+});
+
 test("a missing backup and restore drill is rejected", () => {
   const files = withFileChanged(".github/workflows/ci.yml", (content) =>
     content.replace(
