@@ -22,7 +22,7 @@
     "format:check": "prettier --check \"src/**/*.{ts,tsx,js,json,md}\""
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@standardnotes/domain-core": "^1.41.3",
     "@standardnotes/sncrypto-web": "1.14.11",
     "@standardnotes/snjs": "2.211.6",
