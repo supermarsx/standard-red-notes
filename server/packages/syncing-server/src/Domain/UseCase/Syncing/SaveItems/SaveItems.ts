@@ -17,6 +17,7 @@ import { SendEventToClients } from '../SendEventToClients/SendEventToClients'
 import { CheckForContentLimit } from '../CheckForContentLimit/CheckForContentLimit'
 import { ItemHttpRepresentation } from '../../../../Mapping/Http/ItemHttpRepresentation'
 import { DomainEventInterface } from '@standardnotes/domain-events'
+import { ConcurrentItemUpdateError } from '../../../Item/ConcurrentItemUpdateError'
 
 export class SaveItems implements UseCaseInterface<SaveItemsResult> {
   private readonly SYNC_TOKEN_VERSION = 2
@@ -144,6 +145,16 @@ export class SaveItems implements UseCaseInterface<SaveItemsResult> {
 
           savedItems.push(updatedItem)
         } catch (error) {
+          if (error instanceof ConcurrentItemUpdateError) {
+            conflicts.push({
+              unsavedItem: itemHash,
+              serverItem: error.serverItem,
+              type: ConflictType.ConflictingData,
+            })
+
+            continue
+          }
+
           this.logger.error(
             `[${dto.userUuid}] Updating item ${itemHash.props.uuid} threw.`,
             safeErrorLogMetadata(error),

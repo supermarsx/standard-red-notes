@@ -50,6 +50,8 @@ export class UpdateExistingItem implements UseCaseInterface<Item> {
       return Result.fail(`User uuid is invalid: ${userUuidOrError.getError()}`)
     }
     const userUuid = userUuidOrError.getValue()
+    const expectedUpdatedAtTimestamp = dto.existingItem.props.timestamps.updatedAt
+    const expectedOwnerUuid = dto.existingItem.props.userUuid.value
 
     let sharedVaultOperation: SharedVaultOperationOnItem | null = null
     if (dto.itemHash.representsASharedVaultItem() || dto.existingItem.isAssociatedWithASharedVault()) {
@@ -111,7 +113,7 @@ export class UpdateExistingItem implements UseCaseInterface<Item> {
       dto.existingItem.props.itemsKeyId = dto.itemHash.props.items_key_id
     }
 
-    const updatedAtTimestamp = this.timer.getTimestampInMicroseconds()
+    const updatedAtTimestamp = Math.max(this.timer.getTimestampInMicroseconds(), expectedUpdatedAtTimestamp + 1)
     const secondsFromLastUpdate = this.timer.convertMicrosecondsToSeconds(
       updatedAtTimestamp - dto.existingItem.props.timestamps.updatedAt,
     )
@@ -177,7 +179,10 @@ export class UpdateExistingItem implements UseCaseInterface<Item> {
       wasMarkedAsDeleted = true
     }
 
-    await this.itemRepository.update(dto.existingItem)
+    await this.itemRepository.update(dto.existingItem, {
+      userUuid: expectedOwnerUuid,
+      updatedAtTimestamp: expectedUpdatedAtTimestamp,
+    })
 
     // Standard Red Notes: the item is now durably persisted. Everything below —
     // metric stores (RedisMetricStore pipeline.exec), revision/duplicate/deletion

@@ -15,6 +15,7 @@ import { SendEventToClients } from '../SendEventToClients/SendEventToClients'
 import { SharedVaultAssociation } from '../../../SharedVault/SharedVaultAssociation'
 import { CheckForContentLimit } from '../CheckForContentLimit/CheckForContentLimit'
 import { ItemHttpRepresentation } from '../../../../Mapping/Http/ItemHttpRepresentation'
+import { ConcurrentItemUpdateError } from '../../../Item/ConcurrentItemUpdateError'
 
 describe('SaveItems', () => {
   let itemSaveValidator: ItemSaveValidatorInterface
@@ -257,6 +258,37 @@ describe('SaveItems', () => {
       expect.objectContaining({ errorType: 'Error' }),
     )
     expect(JSON.stringify(logger.error.mock.calls)).not.toContain('update blew up')
+  })
+
+  it('returns the persisted winner as a sync conflict when a concurrent update loses', async () => {
+    const useCase = createUseCase()
+
+    itemRepository.findByUuid = jest.fn().mockResolvedValue(savedItem)
+    updateExistingItem.execute = jest.fn().mockRejectedValue(new ConcurrentItemUpdateError(savedItem))
+
+    const result = await useCase.execute({
+      itemHashes: [itemHash1],
+      userUuid: 'user-uuid',
+      apiVersion: '1',
+      readOnlyAccess: false,
+      sessionUuid: 'session-uuid',
+      snjsVersion: '2.200.0',
+      isFreeUser: false,
+      hasContentLimit: false,
+      liveSyncEnabled: true,
+    })
+
+    expect(result.isFailed()).toBeFalsy()
+    expect(result.getValue().savedItems).toEqual([])
+    expect(result.getValue().conflicts).toEqual([
+      {
+        unsavedItem: itemHash1,
+        serverItem: savedItem,
+        type: 'sync_conflict',
+      },
+    ])
+    expect(sendEventToClient.execute).not.toHaveBeenCalled()
+    expect(sendEventToClients.execute).not.toHaveBeenCalled()
   })
 
   it('should still report the save as successful when post-persist notification throws', async () => {

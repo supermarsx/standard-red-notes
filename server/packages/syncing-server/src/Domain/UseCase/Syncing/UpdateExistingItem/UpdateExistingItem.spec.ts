@@ -147,6 +147,7 @@ describe('UpdateExistingItem', () => {
 
   it('should update item', async () => {
     const useCase = createUseCase()
+    const expectedUpdatedAtTimestamp = item1.props.timestamps.updatedAt
 
     const result = await useCase.execute({
       existingItem: item1,
@@ -157,7 +158,11 @@ describe('UpdateExistingItem', () => {
     })
 
     expect(result.isFailed()).toBeFalsy()
-    expect(itemRepository.update).toHaveBeenCalled()
+    expect(itemRepository.update).toHaveBeenCalledWith(item1, {
+      userUuid: '00000000-0000-0000-0000-000000000000',
+      updatedAtTimestamp: expectedUpdatedAtTimestamp,
+    })
+    expect(item1.props.timestamps.updatedAt).toBe(expectedUpdatedAtTimestamp + 1)
   })
 
   describe('revision frequency', () => {

@@ -7,6 +7,7 @@ import { ItemQuery } from '../../Domain/Item/ItemQuery'
 import { ItemRepositoryInterface } from '../../Domain/Item/ItemRepositoryInterface'
 import { ExtendedIntegrityPayload } from '../../Domain/Item/ExtendedIntegrityPayload'
 import { ItemContentSizeDescriptor } from '../../Domain/Item/ItemContentSizeDescriptor'
+import { ConcurrentItemUpdateError } from '../../Domain/Item/ConcurrentItemUpdateError'
 import { SQLItem } from './SQLItem'
 
 export class SQLItemRepository implements ItemRepositoryInterface {
@@ -80,12 +81,62 @@ export class SQLItemRepository implements ItemRepositoryInterface {
     await this.ormRepository.insert(projection)
   }
 
-  async update(item: Item): Promise<void> {
+  async update(item: Item, expected: { userUuid: string; updatedAtTimestamp: number }): Promise<void> {
     const projection = this.mapper.toProjection(item)
 
-    const { uuid, ...updateValues } = projection
+    const { uuid, userUuid: _userUuid, ...updateValues } = projection
 
-    await this.ormRepository.update({ uuid: uuid }, updateValues)
+    const result = await this.ormRepository
+      .createQueryBuilder()
+      .update()
+      .set(updateValues)
+      .where('uuid = :uuid', { uuid })
+      .andWhere('user_uuid = :userUuid', { userUuid: expected.userUuid })
+      .andWhere('updated_at_timestamp = :expectedUpdatedAtTimestamp', {
+        expectedUpdatedAtTimestamp: expected.updatedAtTimestamp,
+      })
+      .execute()
+
+    if (result.affected === 1) {
+      return
+    }
+
+    const serverItem = await this.findByUuidAndUserUuidOnPrimary(uuid, expected.userUuid)
+    if (serverItem) {
+      throw new ConcurrentItemUpdateError(serverItem)
+    }
+
+    throw new Error(`Item ${uuid} disappeared before it could be updated`)
+  }
+
+  private async findByUuidAndUserUuidOnPrimary(uuid: string, userUuid: string): Promise<Item | null> {
+    const queryRunner = this.ormRepository.manager.dataSource.createQueryRunner('master')
+    await queryRunner.connect()
+
+    try {
+      const persistence = await queryRunner.manager
+        .getRepository(SQLItem)
+        .createQueryBuilder('item')
+        .where('item.uuid = :uuid AND item.user_uuid = :userUuid', { uuid, userUuid })
+        .getOne()
+
+      if (persistence === null) {
+        return null
+      }
+
+      try {
+        return this.mapper.toDomain(persistence)
+      } catch (error) {
+        this.logger.error(
+          `Failed to map item ${uuid} for user ${persistence.userUuid} after a concurrent update.`,
+          safeErrorLogMetadata(error),
+        )
+
+        return null
+      }
+    } finally {
+      await queryRunner.release()
+    }
   }
 
   async remove(item: Item): Promise<void> {

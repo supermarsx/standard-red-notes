@@ -19,7 +19,7 @@ export interface ItemRepositoryInterface {
   remove(item: Item): Promise<void>
   removeByUuid(uuid: Uuid): Promise<void>
   insert(item: Item): Promise<void>
-  update(item: Item): Promise<void>
+  update(item: Item, expected: { userUuid: string; updatedAtTimestamp: number }): Promise<void>
   markItemsAsDeleted(itemUuids: Array<string>, updatedAtTimestamp: number): Promise<void>
   updateContentSize(itemUuid: string, contentSize: number): Promise<void>
   unassignFromSharedVault(sharedVaultUuid: Uuid): Promise<void>
