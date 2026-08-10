@@ -10654,7 +10654,7 @@ __metadata:
 
 "@standardnotes/home-server@patch:@standardnotes/home-server@npm%3A1.23.2#~/.yarn/patches/@standardnotes-home-server-npm-1.23.2-3bc84fcdc6.patch":
   version: 1.23.2
-  resolution: "@standardnotes/home-server@patch:@standardnotes/home-server@npm%3A1.23.2#~/.yarn/patches/@standardnotes-home-server-npm-1.23.2-3bc84fcdc6.patch::version=1.23.2&hash=aa5613"
+  resolution: "@standardnotes/home-server@patch:@standardnotes/home-server@npm%3A1.23.2#~/.yarn/patches/@standardnotes-home-server-npm-1.23.2-3bc84fcdc6.patch::version=1.23.2&hash=7b308c"
   dependencies:
     "@standardnotes/api-gateway": "npm:^1.92.2"
     "@standardnotes/auth-server": "npm:^1.178.6"
