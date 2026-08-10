@@ -593,7 +593,6 @@ export function validateAppSecurityGraph(packageJsonText, lockfile) {
     "@grpc/grpc-js@npm:^1.9.13": "1.14.4",
     "axios@npm:^1.6.1": "1.19.0",
     "body-parser@npm:1.20.1": "1.20.6",
-    "fast-xml-parser@npm:4.2.5": "4.5.7",
     "form-data": "4.0.6",
     "jws@npm:^3.2.2": "3.2.3",
     "lodash-es@npm:4.17.21": "4.18.1",
@@ -614,21 +613,12 @@ export function validateAppSecurityGraph(packageJsonText, lockfile) {
     }
   }
 
-  const fastXmlVersions = yarnVersions(lockfile, "fast-xml-parser");
-  if (!fastXmlVersions.includes("4.5.7")) {
-    errors.push("app/yarn.lock: patched fast-xml-parser 4.5.7 is missing");
-  }
-  if (!fastXmlVersions.some((version) => version.startsWith("5."))) {
-    errors.push(
-      "app/yarn.lock: the supported fast-xml-parser 5.x graph was collapsed",
-    );
-  }
-
   for (const [name, expected] of Object.entries({
     "@grpc/grpc-js": ["1.14.4"],
     ajv: ["6.15.0", "8.20.0"],
     axios: ["1.18.1", "1.19.0"],
     "body-parser": ["1.20.6", "2.3.0"],
+    "fast-xml-parser": ["5.8.0"],
     "follow-redirects": ["1.16.0"],
     "form-data": ["4.0.6"],
     jws: ["3.2.3", "4.0.1"],
