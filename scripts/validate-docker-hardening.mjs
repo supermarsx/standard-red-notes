@@ -108,6 +108,12 @@ function environmentMap(environment) {
   );
 }
 
+function commandText(command) {
+  return (Array.isArray(command) ? command : [command ?? ""])
+    .map((part) => String(part))
+    .join("\n");
+}
+
 function readTypeScriptFilesRecursively(directory) {
   return readdirSync(directory, { withFileTypes: true })
     .sort((left, right) => left.name.localeCompare(right.name))
@@ -841,6 +847,162 @@ export function validateComposeHardening(config) {
   return errors;
 }
 
+export function validateDatabaseCredentialGateContract({
+  multiConfig,
+  multiComposeSource,
+  singleComposeSource,
+}) {
+  const errors = [];
+  const source = String(multiComposeSource);
+  const singleSource = String(singleComposeSource);
+  const services = multiConfig?.services ?? {};
+  const preflight = services["db-credential-preflight"];
+  const database = services.db;
+
+  for (const [label, pattern] of [
+    [
+      "server DB_PASSWORD",
+      /^\s*DB_PASSWORD:\s*\$\{MYSQL_PASSWORD:\?[^}\r\n]+\}\s*$/m,
+    ],
+    [
+      "MariaDB MYSQL_PASSWORD",
+      /^\s*MYSQL_PASSWORD:\s*\$\{MYSQL_PASSWORD:\?[^}\r\n]+\}\s*$/m,
+    ],
+    [
+      "MariaDB MYSQL_ROOT_PASSWORD",
+      /^\s*MYSQL_ROOT_PASSWORD:\s*\$\{MYSQL_ROOT_PASSWORD:\?[^}\r\n]+\}\s*$/m,
+    ],
+    [
+      "preflight app password",
+      /^\s*SRN_DB_APP_PASSWORD:\s*\$\{MYSQL_PASSWORD:\?[^}\r\n]+\}\s*$/m,
+    ],
+    [
+      "preflight root password",
+      /^\s*SRN_DB_ROOT_PASSWORD:\s*\$\{MYSQL_ROOT_PASSWORD:\?[^}\r\n]+\}\s*$/m,
+    ],
+  ]) {
+    if (!pattern.test(source)) {
+      errors.push(
+        `multi compose: ${label} must use required, non-empty interpolation`,
+      );
+    }
+  }
+
+  if (!preflight) {
+    errors.push("multi compose: missing db-credential-preflight service");
+  } else {
+    if (!database || preflight.image !== database.image) {
+      errors.push(
+        "multi compose db-credential-preflight: must reuse the MariaDB image",
+      );
+    }
+    if (String(preflight.restart) !== "no") {
+      errors.push(
+        "multi compose db-credential-preflight: restart policy must be no",
+      );
+    }
+    if (preflight.read_only !== true) {
+      errors.push(
+        "multi compose db-credential-preflight: root filesystem must be read-only",
+      );
+    }
+    if (String(preflight.user) !== "65534:65534") {
+      errors.push(
+        "multi compose db-credential-preflight: must run as the unprivileged numeric user 65534:65534",
+      );
+    }
+    if (String(preflight.network_mode).toLowerCase() !== "none") {
+      errors.push(
+        "multi compose db-credential-preflight: network mode must be none",
+      );
+    }
+    if (!upperList(preflight.cap_drop).includes("ALL")) {
+      errors.push(
+        "multi compose db-credential-preflight: must drop ALL capabilities",
+      );
+    }
+    if (!hasNoNewPrivileges(preflight.security_opt)) {
+      errors.push(
+        "multi compose db-credential-preflight: must set no-new-privileges:true",
+      );
+    }
+    if (!positiveNumber(preflight.mem_limit)) {
+      errors.push(
+        "multi compose db-credential-preflight: must set a positive memory limit",
+      );
+    }
+    if (!positiveNumber(preflight.pids_limit)) {
+      errors.push(
+        "multi compose db-credential-preflight: must set a positive PID limit",
+      );
+    }
+    if ((preflight.profiles ?? []).length > 0) {
+      errors.push(
+        "multi compose db-credential-preflight: must not be hidden behind a profile",
+      );
+    }
+
+    const environment = environmentMap(preflight.environment);
+    for (const name of ["SRN_DB_APP_PASSWORD", "SRN_DB_ROOT_PASSWORD"]) {
+      if (!String(environment[name] ?? "")) {
+        errors.push(`multi compose db-credential-preflight: missing ${name}`);
+      }
+    }
+
+    const entrypoint = Array.isArray(preflight.entrypoint)
+      ? preflight.entrypoint.map(String)
+      : [];
+    if (entrypoint[0] !== "/bin/sh" || entrypoint[1] !== "-ec") {
+      errors.push(
+        "multi compose db-credential-preflight: must execute the fail-closed shell check",
+      );
+    }
+    const command = commandText(preflight.command);
+    for (const placeholder of ["changeme123", "change-me-random-hex-32"]) {
+      if (!command.toLowerCase().includes(placeholder)) {
+        errors.push(
+          `multi compose db-credential-preflight: must reject published placeholder ${placeholder}`,
+        );
+      }
+    }
+    if (
+      !command.includes(
+        '"$${SRN_DB_APP_PASSWORD}" = "$${SRN_DB_ROOT_PASSWORD}"',
+      )
+    ) {
+      errors.push(
+        "multi compose db-credential-preflight: must reject app/root credential reuse",
+      );
+    }
+    if (
+      /\bset\s+-[^\r\n]*x\b|\bprintenv\b|^\s*(?:echo|printf\b)[^\r\n]*(?:SRN_DB_(?:APP|ROOT)_PASSWORD|credential_value)/im.test(
+        command,
+      )
+    ) {
+      errors.push(
+        "multi compose db-credential-preflight: must not log credential values",
+      );
+    }
+  }
+
+  if (
+    database?.depends_on?.["db-credential-preflight"]?.condition !==
+    "service_completed_successfully"
+  ) {
+    errors.push(
+      "multi compose db: must wait for successful database credential preflight",
+    );
+  }
+
+  if (/db-credential-preflight|MYSQL_(?:ROOT_)?PASSWORD/.test(singleSource)) {
+    errors.push(
+      "single compose: SQLite topology must remain independent of MariaDB credentials",
+    );
+  }
+
+  return errors;
+}
+
 export function validateImageHardening(serviceName, inspect) {
   const errors = [];
   const config = inspect?.Config ?? {};
@@ -1117,6 +1279,11 @@ export function runDockerHardeningValidation(argv = process.argv.slice(2)) {
   errors.push(...validatePairingDockerfileContract(serverDockerfile));
   errors.push(
     ...validateComposeHardening(multiConfig),
+    ...validateDatabaseCredentialGateContract({
+      multiConfig,
+      multiComposeSource,
+      singleComposeSource,
+    }),
     ...validatePairingComposeContract(multiConfig, {
       serviceName: "server",
       label: "multi compose",

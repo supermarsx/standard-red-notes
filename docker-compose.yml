@@ -9,7 +9,7 @@ x-server-env: &server-env
   DB_HOST: db
   DB_PORT: 3306
   DB_USERNAME: ${MYSQL_USER:-std_notes_user}
-  DB_PASSWORD: ${MYSQL_PASSWORD:-changeme123}
+  DB_PASSWORD: ${MYSQL_PASSWORD:?MYSQL_PASSWORD is required; run the repository setup script}
   DB_DATABASE: ${MYSQL_DATABASE:-standard_notes_db}
   DB_TYPE: mysql
   # Database client safety knobs. DB_CONNECTION_LIMIT is the per-process TypeORM
@@ -265,6 +265,50 @@ x-server-env: &server-env
   SERVICE_CONTROL_DOCKER_PROJECT: ${SERVICE_CONTROL_DOCKER_PROJECT:-standard-red-notes}
 
 services:
+  # Fail closed before MariaDB starts. Compose interpolation rejects missing or
+  # empty values while this networkless one-shot rejects published placeholders
+  # (and app/root credential reuse) without ever writing secret values to logs.
+  # The setup scripts generate independent 32-byte random values automatically.
+  db-credential-preflight:
+    image: ${MARIADB_IMAGE:-mariadb:12.3.2}
+    restart: "no"
+    user: "65534:65534"
+    read_only: true
+    network_mode: none
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    mem_limit: 32m
+    pids_limit: 32
+    environment:
+      SRN_DB_APP_PASSWORD: ${MYSQL_PASSWORD:?MYSQL_PASSWORD is required; run the repository setup script}
+      SRN_DB_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD is required; run the repository setup script}
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        reject_credential() {
+          printf '%s\n' "Database credential preflight failed: $${1} is unset or uses a published placeholder." >&2
+          exit 1
+        }
+        validate_credential() {
+          credential_name="$${1}"
+          credential_value="$${2}"
+          normalized="$$(printf '%s' "$${credential_value}" | tr '[:upper:]' '[:lower:]')"
+          case "$${normalized}" in
+            ""|changeme123|change-me-random-hex-32)
+              reject_credential "$${credential_name}"
+              ;;
+          esac
+        }
+        validate_credential MYSQL_PASSWORD "$${SRN_DB_APP_PASSWORD}"
+        validate_credential MYSQL_ROOT_PASSWORD "$${SRN_DB_ROOT_PASSWORD}"
+        if [ "$${SRN_DB_APP_PASSWORD}" = "$${SRN_DB_ROOT_PASSWORD}" ]; then
+          printf '%s\n' 'Database credential preflight failed: MYSQL_PASSWORD and MYSQL_ROOT_PASSWORD must be distinct.' >&2
+          exit 1
+        fi
+        printf '%s\n' 'Database credential preflight passed.'
+
   app:
     build:
       context: ./app
@@ -584,8 +628,11 @@ services:
     environment:
       MYSQL_DATABASE: ${MYSQL_DATABASE:-standard_notes_db}
       MYSQL_USER: ${MYSQL_USER:-std_notes_user}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-changeme123}
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-changeme123}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?MYSQL_PASSWORD is required; run the repository setup script}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD is required; run the repository setup script}
+    depends_on:
+      db-credential-preflight:
+        condition: service_completed_successfully
     command:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci

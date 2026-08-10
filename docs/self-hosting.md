@@ -146,6 +146,15 @@ generate it for you; `.env.example` documents every key with placeholder values.
 The real `.env` is git-ignored and **must never be committed** - it holds your
 secrets.
 
+The multi-container Compose file fails closed when either MariaDB password is
+missing or empty. Before the database can start, a networkless one-shot check
+also rejects the published example placeholders and reuse of the same value for
+the application and root accounts. It reports variable names only, never secret
+values. Run one of the setup scripts to generate independent random values. The
+SQLite-based `docker-compose.single.yml` topology does not use MariaDB and is
+therefore intentionally outside this gate; isolated server CI/test Compose files
+retain their explicit test-only credentials.
+
 ### Required variables
 
 These must be present and non-empty or the stack will not start. The secrets are

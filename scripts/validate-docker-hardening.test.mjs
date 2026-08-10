@@ -21,6 +21,7 @@ import {
   validateAuthStepUpComposeSource,
   validateComposeHardening,
   validateContainerHardening,
+  validateDatabaseCredentialGateContract,
   validateImageHardening,
   validatePairingCallbackNginxContract,
   validatePairingComposeContract,
@@ -323,6 +324,57 @@ function composeFixture() {
       cache: { ...hardened },
       floci: { ...hardened },
     },
+  };
+}
+
+function databaseCredentialGateFixture() {
+  const preflightCommand = `
+    case "$\${normalized}" in
+      ""|changeme123|change-me-random-hex-32) exit 1 ;;
+    esac
+    if [ "$\${SRN_DB_APP_PASSWORD}" = "$\${SRN_DB_ROOT_PASSWORD}" ]; then
+      exit 1
+    fi
+  `;
+  return {
+    multiConfig: {
+      services: {
+        "db-credential-preflight": {
+          image: "mariadb:test",
+          restart: "no",
+          user: "65534:65534",
+          read_only: true,
+          network_mode: "none",
+          cap_drop: ["ALL"],
+          security_opt: ["no-new-privileges:true"],
+          mem_limit: 33_554_432,
+          pids_limit: 32,
+          environment: {
+            SRN_DB_APP_PASSWORD: "test-app-password",
+            SRN_DB_ROOT_PASSWORD: "test-root-password",
+          },
+          entrypoint: ["/bin/sh", "-ec"],
+          command: [preflightCommand],
+        },
+        db: {
+          image: "mariadb:test",
+          depends_on: {
+            "db-credential-preflight": {
+              condition: "service_completed_successfully",
+            },
+          },
+        },
+      },
+    },
+    multiComposeSource: `
+      DB_PASSWORD: \${MYSQL_PASSWORD:?required}
+      SRN_DB_APP_PASSWORD: \${MYSQL_PASSWORD:?required}
+      SRN_DB_ROOT_PASSWORD: \${MYSQL_ROOT_PASSWORD:?required}
+      MYSQL_PASSWORD: \${MYSQL_PASSWORD:?required}
+      MYSQL_ROOT_PASSWORD: \${MYSQL_ROOT_PASSWORD:?required}
+    `,
+    singleComposeSource:
+      "services:\n  app:\n    environment:\n      DB_TYPE: sqlite",
   };
 }
 
@@ -846,6 +898,108 @@ test("requires an exact OAuth callback proxy location with access logging disabl
 
 test("accepts the hardened default Compose shape", () => {
   assert.deepEqual(validateComposeHardening(composeFixture()), []);
+});
+
+test("accepts fail-closed MariaDB credential gating without changing SQLite", () => {
+  assert.deepEqual(
+    validateDatabaseCredentialGateContract(databaseCredentialGateFixture()),
+    [],
+  );
+});
+
+test("rejects missing or fallback MariaDB password interpolation", () => {
+  const serverFallback = databaseCredentialGateFixture();
+  serverFallback.multiComposeSource = serverFallback.multiComposeSource.replace(
+    "DB_PASSWORD: ${MYSQL_PASSWORD:?required}",
+    "DB_PASSWORD: ${MYSQL_PASSWORD:-changeme123}",
+  );
+  assert.match(
+    validateDatabaseCredentialGateContract(serverFallback).join("\n"),
+    /server DB_PASSWORD must use required, non-empty interpolation/,
+  );
+
+  const rootFallback = databaseCredentialGateFixture();
+  rootFallback.multiComposeSource = rootFallback.multiComposeSource.replace(
+    "MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?required}",
+    "MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-changeme123}",
+  );
+  assert.match(
+    validateDatabaseCredentialGateContract(rootFallback).join("\n"),
+    /MariaDB MYSQL_ROOT_PASSWORD must use required, non-empty interpolation/,
+  );
+});
+
+test("rejects a bypassable or secret-logging database credential preflight", () => {
+  const missingPlaceholder = databaseCredentialGateFixture();
+  missingPlaceholder.multiConfig.services[
+    "db-credential-preflight"
+  ].command[0] = missingPlaceholder.multiConfig.services[
+    "db-credential-preflight"
+  ].command[0].replace("changeme123", "not-the-published-default");
+  assert.match(
+    validateDatabaseCredentialGateContract(missingPlaceholder).join("\n"),
+    /must reject published placeholder changeme123/,
+  );
+
+  const logging = databaseCredentialGateFixture();
+  logging.multiConfig.services["db-credential-preflight"].command[0] +=
+    '\necho "$${SRN_DB_APP_PASSWORD}"';
+  assert.match(
+    validateDatabaseCredentialGateContract(logging).join("\n"),
+    /must not log credential values/,
+  );
+
+  const profiled = databaseCredentialGateFixture();
+  profiled.multiConfig.services["db-credential-preflight"].profiles = ["prod"];
+  assert.match(
+    validateDatabaseCredentialGateContract(profiled).join("\n"),
+    /must not be hidden behind a profile/,
+  );
+});
+
+test("rejects a database that can start without successful credential preflight", () => {
+  const fixture = databaseCredentialGateFixture();
+  fixture.multiConfig.services.db.depends_on[
+    "db-credential-preflight"
+  ].condition = "service_started";
+  assert.deepEqual(validateDatabaseCredentialGateContract(fixture), [
+    "multi compose db: must wait for successful database credential preflight",
+  ]);
+});
+
+test("keeps the single-container SQLite topology independent of MariaDB secrets", () => {
+  const fixture = databaseCredentialGateFixture();
+  fixture.singleComposeSource +=
+    "\nMYSQL_PASSWORD: ${MYSQL_PASSWORD:?required}";
+  assert.deepEqual(validateDatabaseCredentialGateContract(fixture), [
+    "single compose: SQLite topology must remain independent of MariaDB credentials",
+  ]);
+});
+
+test("requires a least-privilege, networkless database credential preflight", () => {
+  const fixture = databaseCredentialGateFixture();
+  const preflight = fixture.multiConfig.services["db-credential-preflight"];
+  preflight.image = "busybox:latest";
+  preflight.restart = "always";
+  preflight.user = "root";
+  preflight.read_only = false;
+  preflight.network_mode = "default";
+  preflight.cap_drop = [];
+  preflight.security_opt = [];
+  preflight.mem_limit = 0;
+  preflight.pids_limit = 0;
+
+  assert.deepEqual(validateDatabaseCredentialGateContract(fixture), [
+    "multi compose db-credential-preflight: must reuse the MariaDB image",
+    "multi compose db-credential-preflight: restart policy must be no",
+    "multi compose db-credential-preflight: root filesystem must be read-only",
+    "multi compose db-credential-preflight: must run as the unprivileged numeric user 65534:65534",
+    "multi compose db-credential-preflight: network mode must be none",
+    "multi compose db-credential-preflight: must drop ALL capabilities",
+    "multi compose db-credential-preflight: must set no-new-privileges:true",
+    "multi compose db-credential-preflight: must set a positive memory limit",
+    "multi compose db-credential-preflight: must set a positive PID limit",
+  ]);
 });
 
 test("rejects a missing capability drop and resource limits", () => {
