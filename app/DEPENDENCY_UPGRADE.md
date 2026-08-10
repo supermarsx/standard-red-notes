@@ -39,6 +39,14 @@ directory is shown.
 - `decrypt` remains pinned to the upstream archive at commit
   `83e11f45c1461a7a1bde5a8bbc1ada4c4c712797`. Yarn installs and links it without
   granting a broad Git repository exception.
+- SheetJS CE is pinned to the official `xlsx` 0.20.3 tarball at
+  `https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz`. The inspected upstream
+  archive is Apache-2.0 licensed and has SHA-256
+  `8dc73fc3b00203e72d176e85b50938627c7b086e607c682e8d3c22c02bb99fe8`.
+  Current SheetJS releases are not published to npm, so Dependabot and registry
+  audit visibility may be incomplete for this URL dependency. The production
+  dependency gate compensates by pinning its exact URL, version, Yarn checksum,
+  and fail-closed immutable-install configuration.
 - The filepicker example uses published packages rather than parent-workspace
   references. `@standardnotes/snjs` is set to `^2.211.6`, the latest published
   npm release; `2.211.7` has no published candidate.

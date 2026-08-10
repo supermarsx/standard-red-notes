@@ -519,6 +519,64 @@ export function validateAppSecurityGraph(packageJsonText, lockfile) {
   return errors;
 }
 
+const sheetJsDistribution = Object.freeze({
+  url: "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
+  version: "0.20.3",
+  checksum:
+    "10/895c589c5f6ffc665184165b5aa5d337de0e2ee24ccd53d517d2378f3a8a7df82405b023fdcfde9f49d7de3d4ef1622cf2ef145316c9732c634a86ee313bad4f",
+});
+
+// SheetJS stopped publishing current releases to npm. Dependabot and registry
+// audits may not inventory the official CDN tarball, so this lock contract is
+// the fail-closed coverage for its source, version, and immutable checksum.
+export function validateSheetJsDistribution(
+  webPackageJsonText,
+  lockfile,
+  yarnConfig,
+) {
+  const errors = [];
+  const webPackage = JSON.parse(webPackageJsonText);
+  if (webPackage.dependencies?.xlsx !== sheetJsDistribution.url) {
+    errors.push(
+      `app/packages/web/package.json: xlsx must remain pinned to ${sheetJsDistribution.url}`,
+    );
+  }
+
+  const expectedHeader = `"xlsx@${sheetJsDistribution.url}":`;
+  const xlsxHeaders = lockfile.match(/^"xlsx@[^\n]+":$/gmu) ?? [];
+  if (xlsxHeaders.length !== 1 || xlsxHeaders[0] !== expectedHeader) {
+    errors.push(
+      "app/yarn.lock: xlsx must have exactly one official SheetJS distribution entry",
+    );
+  }
+
+  const entryStart = lockfile.indexOf(expectedHeader);
+  const entryEnd = lockfile.indexOf("\n\n", entryStart);
+  const entry =
+    entryStart >= 0
+      ? lockfile.slice(entryStart, entryEnd >= 0 ? entryEnd : lockfile.length)
+      : "";
+  if (!entry.includes(`\n  version: ${sheetJsDistribution.version}\n`)) {
+    errors.push(
+      `app/yarn.lock: xlsx must remain version ${sheetJsDistribution.version}`,
+    );
+  }
+  if (!entry.includes(`\n  resolution: "xlsx@${sheetJsDistribution.url}"\n`)) {
+    errors.push("app/yarn.lock: xlsx resolution source changed");
+  }
+  if (!entry.includes(`\n  checksum: ${sheetJsDistribution.checksum}\n`)) {
+    errors.push("app/yarn.lock: xlsx immutable checksum changed");
+  }
+  if (!/^checksumBehavior:\s*throw\s*$/mu.test(yarnConfig)) {
+    errors.push("app/.yarnrc.yml: checksum failures must remain fatal");
+  }
+  if (!/^enableImmutableInstalls:\s*true\s*$/mu.test(yarnConfig)) {
+    errors.push("app/.yarnrc.yml: immutable installs must remain enabled");
+  }
+
+  return errors;
+}
+
 function runAudit(domain, root, runner = spawnSync) {
   const cwd = path.join(root, domain.directory);
   const tool =
@@ -601,10 +659,24 @@ export function runProductionAudit(root = repositoryRoot, runner = spawnSync) {
     );
   }
 
-  const graphErrors = validateAppSecurityGraph(
-    fs.readFileSync(path.join(root, "app", "package.json"), "utf8"),
-    fs.readFileSync(path.join(root, "app", "yarn.lock"), "utf8"),
+  const appLockfile = fs.readFileSync(
+    path.join(root, "app", "yarn.lock"),
+    "utf8",
   );
+  const graphErrors = [
+    ...validateAppSecurityGraph(
+      fs.readFileSync(path.join(root, "app", "package.json"), "utf8"),
+      appLockfile,
+    ),
+    ...validateSheetJsDistribution(
+      fs.readFileSync(
+        path.join(root, "app", "packages", "web", "package.json"),
+        "utf8",
+      ),
+      appLockfile,
+      fs.readFileSync(path.join(root, "app", ".yarnrc.yml"), "utf8"),
+    ),
+  ];
   if (graphErrors.length > 0) {
     throw new Error(
       `production dependency graph contract failed:\n- ${graphErrors.join("\n- ")}`,

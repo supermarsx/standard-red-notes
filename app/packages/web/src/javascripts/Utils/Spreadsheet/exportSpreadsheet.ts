@@ -36,7 +36,7 @@ const gridsOrEmpty = (noteText: string): SpreadsheetGrid[] => {
  * sheet becomes a worksheet; numeric/boolean cell values keep their type.
  * Empty sheets export as a valid workbook with empty worksheets.
  */
-export const exportSpreadsheetNoteToXLSX = async (noteText: string, noteTitle: string): Promise<void> => {
+export const buildSpreadsheetXlsx = async (noteText: string): Promise<ArrayBuffer> => {
   const XLSX = await import('xlsx')
   const grids = gridsOrEmpty(noteText)
 
@@ -60,7 +60,11 @@ export const exportSpreadsheetNoteToXLSX = async (noteText: string, noteTitle: s
     XLSX.utils.book_append_sheet(workbook, worksheet, name)
   })
 
-  const arrayBuffer = XLSX.write(workbook, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer
+  return XLSX.write(workbook, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer
+}
+
+export const exportSpreadsheetNoteToXLSX = async (noteText: string, noteTitle: string): Promise<void> => {
+  const arrayBuffer = await buildSpreadsheetXlsx(noteText)
   const blob = new Blob([arrayBuffer], {
     type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   })

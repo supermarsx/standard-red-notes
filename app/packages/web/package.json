@@ -138,7 +138,7 @@
     "ttag": "^1.8.12",
     "unicode-script": "^1.2.0",
     "wavedrom": "^3.6.2",
-    "xlsx": "^0.18.5",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "y-protocols": "^1.0.7",
     "yjs": "^13.6.31"
   }

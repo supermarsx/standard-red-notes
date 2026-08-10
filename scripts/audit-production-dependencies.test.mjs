@@ -13,6 +13,7 @@ import {
   validateAllowlist,
   validateAppSecurityGraph,
   validateLockfileInventory,
+  validateSheetJsDistribution,
   validateYarnSecurityGraph,
 } from "./audit-production-dependencies.mjs";
 
@@ -26,6 +27,14 @@ const appPackage = fs.readFileSync(
 );
 const appLock = fs.readFileSync(
   path.join(repositoryRoot, "app", "yarn.lock"),
+  "utf8",
+);
+const appYarnConfig = fs.readFileSync(
+  path.join(repositoryRoot, "app", ".yarnrc.yml"),
+  "utf8",
+);
+const webPackage = fs.readFileSync(
+  path.join(repositoryRoot, "app", "packages", "web", "package.json"),
   "utf8",
 );
 const yarnLockfiles = Object.fromEntries(
@@ -363,4 +372,50 @@ test("every Yarn domain keeps security-sensitive packages on patched floors", ()
     ),
   };
   assert.deepEqual(validateYarnSecurityGraph(buildMetadata), []);
+});
+
+test("the official SheetJS distribution stays source- and checksum-pinned", () => {
+  assert.deepEqual(
+    validateSheetJsDistribution(webPackage, appLock, appYarnConfig),
+    [],
+  );
+
+  assert.match(
+    validateSheetJsDistribution(
+      webPackage.replace("xlsx-0.20.3", "xlsx-0.20.2"),
+      appLock,
+      appYarnConfig,
+    ).join("\n"),
+    /xlsx must remain pinned to https:\/\/cdn\.sheetjs\.com\/xlsx-0\.20\.3/,
+  );
+  assert.match(
+    validateSheetJsDistribution(
+      webPackage,
+      appLock.replace("  version: 0.20.3", "  version: 0.20.2"),
+      appYarnConfig,
+    ).join("\n"),
+    /xlsx must remain version 0\.20\.3/,
+  );
+  assert.match(
+    validateSheetJsDistribution(
+      webPackage,
+      appLock.replace(
+        "10/895c589c5f6ffc665184165b5aa5d337de0e2ee24ccd53d517d2378f3a8a7df82405b023fdcfde9f49d7de3d4ef1622cf2ef145316c9732c634a86ee313bad4f",
+        "10/00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      ),
+      appYarnConfig,
+    ).join("\n"),
+    /xlsx immutable checksum changed/,
+  );
+  assert.match(
+    validateSheetJsDistribution(
+      webPackage,
+      appLock,
+      appYarnConfig.replace(
+        "checksumBehavior: throw",
+        "checksumBehavior: reset",
+      ),
+    ).join("\n"),
+    /checksum failures must remain fatal/,
+  );
 });
