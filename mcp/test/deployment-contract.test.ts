@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -21,6 +21,45 @@ const exampleEnvironment = readFileSync(
   resolve(repositoryRoot, ".env.example"),
   "utf8",
 );
+const dockerComposeProbeTimeoutMs = 10_000;
+const dockerComposeRenderTimeoutMs = 15_000;
+const dockerComposeContractTestTimeoutMs =
+  dockerComposeProbeTimeoutMs + dockerComposeRenderTimeoutMs + 5_000;
+
+type ComposeCommandResult = Pick<
+  SpawnSyncReturns<string>,
+  "error" | "signal" | "status" | "stderr"
+>;
+
+function requireCompletedCommand(
+  result: ComposeCommandResult,
+  operation: string,
+): number {
+  if (result.error) {
+    const code = (result.error as NodeJS.ErrnoException).code;
+    throw new Error(
+      `${operation} failed to complete${code ? ` (${code})` : ""}: ${result.error.message}`,
+    );
+  }
+  if (result.status === null) {
+    throw new Error(
+      `${operation} failed to complete with status null${result.signal ? ` after signal ${result.signal}` : ""}`,
+    );
+  }
+  return result.status;
+}
+
+function composeCapability(
+  result: ComposeCommandResult,
+): "available" | "unavailable" {
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+    return "unavailable";
+  }
+  return requireCompletedCommand(result, "docker compose capability probe") ===
+    0
+    ? "available"
+    : "unavailable";
+}
 
 function serviceBlock(name: string): string {
   const header = `\n  ${name}:\n`;
@@ -101,37 +140,98 @@ describe("MCP Compose deployment contract", () => {
     );
   });
 
-  it("renders the profiled Compose model when Docker Compose is available", () => {
-    const version = spawnSync("docker", ["compose", "version"], {
-      cwd: repositoryRoot,
-      encoding: "utf8",
-      windowsHide: true,
-    });
-    if (version.status !== 0) {
-      return;
-    }
-    const rendered = spawnSync(
-      "docker",
-      [
-        "compose",
-        "--env-file",
-        ".env.example",
-        "--profile",
-        "mcp",
-        "config",
-        "--quiet",
-      ],
-      {
+  it(
+    "renders the profiled Compose model when Docker Compose is available",
+    () => {
+      const version = spawnSync("docker", ["compose", "version"], {
         cwd: repositoryRoot,
         encoding: "utf8",
+        timeout: dockerComposeProbeTimeoutMs,
         windowsHide: true,
-      },
-    );
-    if (rendered.status !== 0) {
-      throw new Error(
-        `docker compose config failed: ${rendered.stderr.trim()}`,
+      });
+      if (composeCapability(version) === "unavailable") {
+        return;
+      }
+      const rendered = spawnSync(
+        "docker",
+        [
+          "compose",
+          "--env-file",
+          ".env.example",
+          "--profile",
+          "mcp",
+          "config",
+          "--quiet",
+        ],
+        {
+          cwd: repositoryRoot,
+          encoding: "utf8",
+          timeout: dockerComposeRenderTimeoutMs,
+          windowsHide: true,
+        },
       );
-    }
+      const renderedStatus = requireCompletedCommand(
+        rendered,
+        "docker compose config",
+      );
+      if (renderedStatus !== 0) {
+        const diagnostic =
+          rendered.stderr.trim() || "unknown Docker Compose error";
+        throw new Error(`docker compose config failed: ${diagnostic}`);
+      }
+    },
+    dockerComposeContractTestTimeoutMs,
+  );
+
+  it("treats only confirmed command unavailability as an unavailable Compose capability", () => {
+    const missingCommand = Object.assign(new Error("spawn docker ENOENT"), {
+      code: "ENOENT",
+    });
+
+    expect(
+      composeCapability({
+        error: missingCommand,
+        signal: null,
+        status: null,
+        stderr: "",
+      }),
+    ).toBe("unavailable");
+    expect(
+      composeCapability({ signal: null, status: 1, stderr: "not available" }),
+    ).toBe("unavailable");
+  });
+
+  it("fails explicitly when Compose commands time out or lose their exit status", () => {
+    const timedOut = Object.assign(new Error("spawnSync docker ETIMEDOUT"), {
+      code: "ETIMEDOUT",
+    });
+
+    expect(() =>
+      composeCapability({
+        error: timedOut,
+        signal: "SIGTERM",
+        status: null,
+        stderr: "",
+      }),
+    ).toThrow(/ETIMEDOUT/);
+    expect(() =>
+      composeCapability({
+        signal: "SIGTERM",
+        status: null,
+        stderr: "",
+      }),
+    ).toThrow(/status null after signal SIGTERM/);
+    expect(() =>
+      requireCompletedCommand(
+        {
+          error: timedOut,
+          signal: "SIGTERM",
+          status: null,
+          stderr: "",
+        },
+        "docker compose config",
+      ),
+    ).toThrow(/docker compose config failed to complete \(ETIMEDOUT\)/);
   });
 });
 
