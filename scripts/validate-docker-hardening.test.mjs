@@ -22,6 +22,7 @@ import {
   validateComposeHardening,
   validateContainerHardening,
   validateDatabaseCredentialGateContract,
+  validateFilesStorageDeploymentContract,
   validateImageHardening,
   validatePairingCallbackNginxContract,
   validatePairingComposeContract,
@@ -37,6 +38,55 @@ import {
   validateSingleEntrypointAuthStepUpPropagation,
   validateSingleContainerSQLiteMigrationContract,
 } from "./validate-docker-hardening.mjs";
+
+test("pins multi-container files storage to the durable writable uploads volume", () => {
+  const valid = {
+    multiConfig: {
+      services: {
+        server: {
+          volumes: [
+            { source: "server-logs", target: "/var/lib/server/logs" },
+            { source: "uploads", target: "/opt/shared/uploads" },
+          ],
+        },
+      },
+    },
+    multiEntrypointSource: `
+      if [ -z "$FILES_SERVER_FILE_UPLOAD_PATH" ]; then
+        export FILES_SERVER_FILE_UPLOAD_PATH="/opt/shared/uploads"
+      fi
+    `,
+  };
+
+  assert.deepEqual(validateFilesStorageDeploymentContract(valid), []);
+  assert.deepEqual(
+    validateFilesStorageDeploymentContract({
+      multiConfig: valid.multiConfig,
+      multiEntrypointSource: valid.multiEntrypointSource.replace(
+        'export FILES_SERVER_FILE_UPLOAD_PATH="/opt/shared/uploads"',
+        'export FILES_SERVER_FILE_UPLOAD_PATH="/opt/server/packages/files/uploads"',
+      ),
+    }),
+    [
+      "multi entrypoint: files storage must default to the shared uploads volume without overriding operators",
+    ],
+  );
+  assert.deepEqual(
+    validateFilesStorageDeploymentContract({
+      multiConfig: {
+        services: {
+          server: {
+            volumes: [
+              { source: "other", target: "/opt/shared/uploads" },
+            ],
+          },
+        },
+      },
+      multiEntrypointSource: valid.multiEntrypointSource,
+    }),
+    ["multi compose: files storage path must use the uploads named volume"],
+  );
+});
 
 test("requires aggregate readiness as the container acceptance path in both topologies", () => {
   const valid = {

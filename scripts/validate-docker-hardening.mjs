@@ -346,6 +346,32 @@ export function validateSingleEntrypointAuthStepUpPropagation(
   });
 }
 
+export function validateFilesStorageDeploymentContract({
+  multiConfig,
+  multiEntrypointSource,
+}) {
+  const errors = [];
+  const expectedDefault =
+    /if\s+\[\s+-z\s+"\$FILES_SERVER_FILE_UPLOAD_PATH"\s+\];\s*then\s+export\s+FILES_SERVER_FILE_UPLOAD_PATH="\/opt\/shared\/uploads"\s+fi/;
+
+  if (!expectedDefault.test(String(multiEntrypointSource))) {
+    errors.push(
+      "multi entrypoint: files storage must default to the shared uploads volume without overriding operators",
+    );
+  }
+
+  const uploadsMount = (multiConfig?.services?.server?.volumes ?? []).find(
+    (volume) => mountTarget(volume) === "/opt/shared/uploads",
+  );
+  if (mountSource(uploadsMount) !== "uploads") {
+    errors.push(
+      "multi compose: files storage path must use the uploads named volume",
+    );
+  }
+
+  return errors;
+}
+
 export function validateRuntimeLogLevelDeploymentContract({
   multiComposeSource,
   singleComposeSource,
@@ -1311,6 +1337,10 @@ export function runDockerHardeningValidation(argv = process.argv.slice(2)) {
       label: "single compose",
     }),
     ...validateSingleEntrypointAuthStepUpPropagation(singleEntrypoint),
+    ...validateFilesStorageDeploymentContract({
+      multiConfig,
+      multiEntrypointSource: multiEntrypoint,
+    }),
     ...validateSingleContainerSQLiteMigrationContract({
       singleDockerfileSource: singleDockerfile,
       singleEntrypointSource: singleEntrypoint,

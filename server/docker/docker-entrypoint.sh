@@ -411,6 +411,14 @@ fi
 export FILES_SERVER_NODE_ENV="production"
 export FILES_SERVER_VERSION="local"
 
+# The TypeScript fallback resolves relative to dist/src/Bootstrap at runtime,
+# which points inside the compiled tree rather than at the shared uploads
+# volume. Keep the files service on the same durable, writable path used by
+# auth and syncing, while preserving an operator-supplied override.
+if [ -z "$FILES_SERVER_FILE_UPLOAD_PATH" ]; then
+  export FILES_SERVER_FILE_UPLOAD_PATH="/opt/shared/uploads"
+fi
+
 if [ -z "$FILES_SERVER_MAX_CHUNK_BYTES" ]; then
   export FILES_SERVER_MAX_CHUNK_BYTES=100000000
 fi
