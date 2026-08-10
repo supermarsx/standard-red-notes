@@ -496,7 +496,11 @@ jobs:
             *) echo "Unknown desktop matrix label: $MATRIX_LABEL" >&2; exit 1 ;;
           esac
 
-          mapfile -t metadata_files < <(find dist -maxdepth 1 -type f -name 'latest*.yml' -printf '%f\n')
+          metadata_files=()
+          for metadata_path in dist/latest*.yml; do
+            [ -f "$metadata_path" ] || continue
+            metadata_files+=("${metadata_path##*/}")
+          done
           test "${#metadata_files[@]}" -eq 1
           test "${metadata_files[0]}" = "$metadata"
           test -s "dist/${metadata}"
@@ -506,20 +510,30 @@ jobs:
             cp -- "dist/${name}" staged/
             if [ -f "dist/${name}.blockmap" ]; then cp -- "dist/${name}.blockmap" staged/; fi
           done
-          while IFS= read -r -d '' blockmap; do
+          for blockmap in dist/*.blockmap; do
+            [ -f "$blockmap" ] || continue
             base="$(basename "${blockmap%.blockmap}")"
             allowed=false
             for name in "${required[@]}"; do if [ "$base" = "$name" ]; then allowed=true; fi; done
             test "$allowed" = true
-          done < <(find dist -maxdepth 1 -type f -name '*.blockmap' -print0)
+          done
           for fingerprint in "${fingerprints[@]}"; do test -s "staged/${fingerprint}"; done
           echo "Staged exact ${MATRIX_LABEL} release inventory:" && ls -la staged
           leg_manifest="$RUNNER_TEMP/${TOOL}-${MATRIX_LABEL}-SHA256SUMS"
+          if command -v sha256sum >/dev/null 2>&1; then
+            checksum=(sha256sum)
+            checksum_check=(sha256sum --check)
+          else
+            checksum=(shasum -a 256)
+            checksum_check=(shasum -a 256 --check)
+          fi
           (
             cd staged
-            find . -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort |
-              while IFS= read -r name; do sha256sum -- "$name"; done > "$leg_manifest"
-            sha256sum --check "$leg_manifest"
+            for path in *; do
+              [ -f "$path" ] && printf '%s\n' "$path"
+            done | LC_ALL=C sort |
+              while IFS= read -r name; do "${checksum[@]}" -- "$name"; done > "$leg_manifest"
+            "${checksum_check[@]}" "$leg_manifest"
           )
 
       - name: Upload installers

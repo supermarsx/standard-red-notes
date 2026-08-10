@@ -152,6 +152,11 @@ test("terminal checksum commands cannot gain a post-verification mutation", () =
       "          (cd payload && sha256sum --check SHA256SUMS.txt)\n\n      - name: Upload exact desktop release payload",
       /desktop fan-in checksum verification must be terminal before upload/,
     ],
+    [
+      ".github/workflows/srn-desktop.yml",
+      '            "${checksum_check[@]}" "$leg_manifest"\n          )\n\n      - name: Upload installers',
+      /per-leg desktop checksum verification must be terminal before upload/,
+    ],
   ]) {
     const files = withFileChanged(file, (content) =>
       content.replace(
@@ -1862,14 +1867,38 @@ test("desktop updater metadata, architecture, recovery, and environment guards c
   );
 
   files = withFileChanged(".github/workflows/srn-desktop.yml", (content) =>
-    content.replace(
-      "-name 'latest*.yml'",
-      "\\( -name '*.yml' -o -name '*.yaml' \\)",
-    ),
+    content.replace("dist/latest*.yml", "dist/*.yml"),
   );
   assert.match(
     validateReleaseContract(files).join("\n"),
     /missing updater-only desktop metadata inventory/,
+  );
+
+  files = withFileChanged(".github/workflows/srn-desktop.yml", (content) =>
+    content.replace("metadata_files=()", "mapfile -t metadata_files=()"),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /must not use Bash-4-only mapfile/,
+  );
+
+  files = withFileChanged(".github/workflows/srn-desktop.yml", (content) =>
+    content.replace(
+      "for path in *; do",
+      "find . -type f -printf '%f\\n'\n            for path in *; do",
+    ),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /must not use GNU-only find -printf/,
+  );
+
+  files = withFileChanged(".github/workflows/srn-desktop.yml", (content) =>
+    content.replace("checksum=(shasum -a 256)", "checksum=(sha256sum)"),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /missing macOS desktop checksum fallback/,
   );
 
   files = withFileChanged(".github/workflows/srn-desktop.yml", (content) =>

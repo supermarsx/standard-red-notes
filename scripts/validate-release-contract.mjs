@@ -3669,9 +3669,14 @@ export function validateReleaseContract(files) {
       ["find dist -type f -name app.asar", "actual packaged asar discovery"],
       ["yarn exec asar extract", "packaged desktop runtime extraction"],
       [
-        "find dist -maxdepth 1 -type f -name 'latest*.yml' -printf '%f\\n'",
+        "for metadata_path in dist/latest*.yml",
         "updater-only desktop metadata inventory",
       ],
+      [
+        "for blockmap in dist/*.blockmap",
+        "portable desktop blockmap inventory",
+      ],
+      ["checksum=(shasum -a 256)", "macOS desktop checksum fallback"],
       [
         '"standard-red-notes-${APP_VERSION}-linux-x86_64.AppImage"',
         "electron-builder Linux x64 AppImage filename",
@@ -3720,6 +3725,16 @@ export function validateReleaseContract(files) {
         rootDesktopBuild,
         fragment,
         description,
+      );
+    }
+    if (/\bmapfile\b/.test(rootDesktopBuild)) {
+      errors.push(
+        `${rootDesktopFile}: root desktop build must not use Bash-4-only mapfile`,
+      );
+    }
+    if (rootDesktopBuild.includes("-printf")) {
+      errors.push(
+        `${rootDesktopFile}: root desktop build must not use GNU-only find -printf`,
       );
     }
     const configuredRootLegs = [
@@ -4028,7 +4043,7 @@ export function validateReleaseContract(files) {
   if (
     !rootDesktopLegIntegrity
       .trimEnd()
-      .endsWith('sha256sum --check "$leg_manifest"\n          )')
+      .endsWith('"${checksum_check[@]}" "$leg_manifest"\n          )')
   ) {
     errors.push(
       `${rootDesktopFile}: per-leg desktop checksum verification must be terminal before upload`,
