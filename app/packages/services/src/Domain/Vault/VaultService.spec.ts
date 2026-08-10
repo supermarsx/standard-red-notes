@@ -34,6 +34,7 @@ import {
 } from '../..'
 import { AuthorizeVaultDeletion } from './UseCase/AuthorizeVaultDeletion'
 import { ContentType } from '@standardnotes/domain-core'
+import { ClientDisplayableError } from '@standardnotes/responses'
 
 let currentId = 0
 
@@ -122,7 +123,7 @@ describe('VaultService', () => {
     _getVaults = {} as jest.Mocked<GetVaults>
     _changeVaultKeyOptions = {} as jest.Mocked<ChangeVaultKeyOptions>
     _moveItemsToVault = {} as jest.Mocked<MoveItemsToVault>
-    _moveItemsToVault.execute = jest.fn().mockResolvedValue({})
+    _moveItemsToVault.execute = jest.fn().mockResolvedValue(undefined)
     _createVault = {} as jest.Mocked<CreateVault>
     _removeItemFromVault = {} as jest.Mocked<RemoveItemFromVault>
     _deleteVault = {} as jest.Mocked<DeleteVault>
@@ -169,6 +170,26 @@ describe('VaultService', () => {
     })
 
     describe('moving note/file into vault', () => {
+      it('returns a failed result when file relocation fails', async () => {
+        const vault = {
+          uuid: '123',
+          systemIdentifier: '456',
+        } as VaultListingInterface
+        const file = createFile('file')
+        const moveError = { text: 'Could not relocate file' } as ClientDisplayableError
+        _moveItemsToVault.execute = jest.fn().mockResolvedValue(moveError)
+        items.getItemLinkedFiles = jest.fn().mockReturnValue([])
+        items.getItemLinkedNotes = jest.fn().mockReturnValue([])
+        items.getUnsortedTagsForItem = jest.fn().mockReturnValue([])
+        items.findSureItem = jest.fn()
+
+        const result = await service.moveItemToVault(vault, file)
+
+        expect(result.isFailed()).toBe(true)
+        expect(result.getError()).toBe(moveError.text)
+        expect(items.findSureItem).not.toHaveBeenCalled()
+      })
+
       it('should not move note/file if any item linked to it is already in another vault', async () => {
         const vault = {
           uuid: '123',

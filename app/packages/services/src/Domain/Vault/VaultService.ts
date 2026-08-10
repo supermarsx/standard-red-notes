@@ -181,7 +181,10 @@ export class VaultService
       moveableSubtags = deepSubtags
     }
 
-    await this._moveItemsToVault.execute({ vault, items: [item, ...moveableSubtags] })
+    const moveError = await this._moveItemsToVault.execute({ vault, items: [item, ...moveableSubtags] })
+    if (moveError) {
+      return Result.fail(moveError.text)
+    }
 
     return Result.ok(this.items.findSureItem(item.uuid))
   }

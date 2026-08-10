@@ -39,7 +39,10 @@ export class ConvertToSharedVault {
 
     const vaultItems = this._getVaultItems.execute(sharedVaultListing).getValue()
 
-    await this._moveItemsToVault.execute({ vault: sharedVaultListing, items: vaultItems })
+    const moveError = await this._moveItemsToVault.execute({ vault: sharedVaultListing, items: vaultItems })
+    if (moveError) {
+      return moveError
+    }
 
     return sharedVaultListing as SharedVaultListingInterface
   }
