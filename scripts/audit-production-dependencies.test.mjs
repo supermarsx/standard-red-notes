@@ -13,6 +13,7 @@ import {
   validateAllowlist,
   validateAppSecurityGraph,
   validateLockfileInventory,
+  validateSecurityManifestDeclarations,
   validateSheetJsDistribution,
   validateYarnSecurityGraph,
 } from "./audit-production-dependencies.mjs";
@@ -36,6 +37,18 @@ const appYarnConfig = fs.readFileSync(
 const webPackage = fs.readFileSync(
   path.join(repositoryRoot, "app", "packages", "web", "package.json"),
   "utf8",
+);
+const securityManifests = Object.fromEntries(
+  [
+    "mcp/package.json",
+    "openclaw/package.json",
+    "app/packages/utils/package.json",
+    "app/packages/web/package.json",
+    "server/package.json",
+  ].map((file) => [
+    file,
+    fs.readFileSync(path.join(repositoryRoot, file), "utf8"),
+  ]),
 );
 const yarnLockfiles = Object.fromEntries(
   auditDomains
@@ -81,6 +94,67 @@ test("every committed JavaScript lock domain is explicitly covered", () => {
       "new-service/package-lock.json",
     ]).join("\n"),
     /uncovered committed lockfiles: new-service\/package-lock\.json/,
+  );
+});
+
+test("owned security manifests preserve supported direct dependency floors", () => {
+  assert.deepEqual(validateSecurityManifestDeclarations(securityManifests), []);
+
+  for (const [file, current, vulnerable, expectedError] of [
+    [
+      "mcp/package.json",
+      '"@modelcontextprotocol/sdk": "^1.30.0"',
+      '"@modelcontextprotocol/sdk": "^1.29.0"',
+      /dependencies\.@modelcontextprotocol\/sdk must remain \^1\.30\.0/,
+    ],
+    [
+      "openclaw/package.json",
+      '"@modelcontextprotocol/sdk": "^1.30.0"',
+      '"@modelcontextprotocol/sdk": "^1.29.0"',
+      /dependencies\.@modelcontextprotocol\/sdk must remain \^1\.30\.0/,
+    ],
+    [
+      "app/packages/utils/package.json",
+      '"dompurify": "^3.4.13"',
+      '"dompurify": "^3.4.12"',
+      /dependencies\.dompurify must remain \^3\.4\.13/,
+    ],
+    [
+      "app/packages/web/package.json",
+      '"mermaid": "^11.16.1"',
+      '"mermaid": "^11.16.0"',
+      /dependencies\.mermaid must remain \^11\.16\.1/,
+    ],
+    [
+      "server/package.json",
+      '"dompurify": "npm:3.4.13"',
+      '"dompurify": "npm:3.4.12"',
+      /resolutions\.dompurify must remain npm:3\.4\.13/,
+    ],
+  ]) {
+    const mutated = {
+      ...securityManifests,
+      [file]: securityManifests[file].replace(current, vulnerable),
+    };
+    assert.match(
+      validateSecurityManifestDeclarations(mutated).join("\n"),
+      expectedError,
+    );
+  }
+
+  assert.match(
+    validateSecurityManifestDeclarations({
+      ...securityManifests,
+      "mcp/package.json": undefined,
+    }).join("\n"),
+    /mcp\/package\.json: security manifest is missing/,
+  );
+  assert.match(
+    validateSecurityManifestDeclarations({
+      ...securityManifests,
+      "mcp/package.json": "{",
+    }).join("\n"),
+    /mcp\/package\.json: security manifest is invalid JSON/,
   );
 });
 
@@ -284,7 +358,28 @@ test("every Yarn domain keeps security-sensitive packages on patched floors", ()
     safeVersion,
     vulnerableVersion,
   ] of [
+    [
+      "yarn.lock",
+      "@modelcontextprotocol/sdk",
+      '"@modelcontextprotocol/sdk@npm:^1.30.0":',
+      "1.30.0",
+      "1.29.0",
+    ],
+    [
+      "yarn.lock",
+      "@hono/node-server",
+      '"@hono/node-server@npm:^1.19.9 || ^2.0.5":',
+      "2.1.0",
+      "1.19.17",
+    ],
     ["app/yarn.lock", "adm-zip", '"adm-zip@npm:~0.6.x":', "0.6.0", "0.5.10"],
+    [
+      "app/yarn.lock",
+      "dompurify",
+      '"dompurify@npm:^3.3.3, dompurify@npm:^3.4.13":',
+      "3.4.13",
+      "3.4.12",
+    ],
     [
       "server/yarn.lock",
       "ip-address",
@@ -307,6 +402,13 @@ test("every Yarn domain keeps security-sensitive packages on patched floors", ()
       "4.0.3",
     ],
     ["yarn.lock", "postcss", '"postcss@npm:^8.5.15":', "8.5.26", "8.5.17"],
+    [
+      "app/yarn.lock",
+      "mermaid",
+      '"mermaid@npm:^11.12.1, mermaid@npm:^11.16.1":',
+      "11.16.1",
+      "11.16.0",
+    ],
     [
       "app/packages/filepicker/example/yarn.lock",
       "terser",
