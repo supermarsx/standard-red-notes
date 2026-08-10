@@ -2027,6 +2027,70 @@ test("desktop updater metadata, architecture, recovery, and environment guards c
   );
 });
 
+test("desktop Linux packages prune every foreign native prebuild before packaging", () => {
+  let files = withFileChanged(".github/workflows/srn-desktop.yml", (content) =>
+    content.replace("target_arch: x64", "target_arch: arm64"),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /missing Linux x64 native prebuild target/,
+  );
+
+  files = withFileChanged(".github/workflows/srn-desktop.yml", (content) =>
+    content.replace(" --node-modules app/dist/node_modules", ""),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /missing both Linux packaged dependency graphs pruned/,
+  );
+
+  files = withFileChanged(".github/workflows/srn-desktop.yml", (content) =>
+    content.replace(
+      "      - name: electron-builder",
+      "      - run: echo intervening-step\n\n      - name: electron-builder",
+    ),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /integrity step 'Prune foreign Linux native prebuilds' must be immediately followed by 'electron-builder'/,
+  );
+
+  files = withFileChanged(
+    "app/packages/desktop/scripts/pruneLinuxNativePrebuilds.js",
+    (content) =>
+      content.replace(
+        "expected: `cbor-extract-linux-${architecture}`",
+        "expected: 'cbor-extract-linux-any'",
+      ),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /missing target-specific cbor-extract prebuild/,
+  );
+
+  files = withFileChanged(
+    "app/packages/desktop/scripts/pruneLinuxNativePrebuilds.js",
+    (content) => content.replace("force: false", "force: true"),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /missing fail-closed foreign prebuild removal/,
+  );
+
+  files = withFileChanged(
+    "app/packages/desktop/scripts/pruneLinuxNativePrebuilds.test.js",
+    (content) =>
+      content.replace(
+        "arm64 pruning keeps only arm64 Linux native prebuilds in both packaged graphs",
+        "arm64 pruning is skipped",
+      ),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /missing dual-graph arm64 native prebuild pruning test/,
+  );
+});
+
 test("OpenClaw release sources, recovery artifacts, and privileged jobs stay protected", () => {
   let files = withFileChanged(".github/workflows/srn-openclaw.yml", (content) =>
     content.replace(

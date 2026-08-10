@@ -26,6 +26,8 @@ export const RELEASE_CONTRACT_FILES = Object.freeze([
   "app/.github/workflows/desktop.release.reuse.yml",
   "app/.github/workflows/mobile.release.prod.yml",
   "app/packages/desktop/package.json",
+  "app/packages/desktop/scripts/pruneLinuxNativePrebuilds.js",
+  "app/packages/desktop/scripts/pruneLinuxNativePrebuilds.test.js",
   "app/.github/upstream-workflows-disabled/clipper.release.prod.yml",
   "app/.github/upstream-workflows-disabled/git-sync.yml",
   "app/.github/upstream-workflows-disabled/ios.testflight.yml",
@@ -3419,6 +3421,14 @@ export function validateReleaseContract(files) {
     ["builder: '--linux AppImage deb --x64'", "Linux x64 build leg"],
     ["builder: '--linux AppImage deb --arm64'", "Linux arm64 build leg"],
     [
+      /label:\s*linux-x64,\s*\r?\n\s*os:\s*ubuntu-latest,\s*\r?\n\s*builder:\s*["']--linux AppImage deb --x64["'],\s*\r?\n\s*target_arch:\s*x64,/,
+      "Linux x64 native prebuild target",
+    ],
+    [
+      /label:\s*linux-arm64,\s*\r?\n\s*os:\s*ubuntu-24\.04-arm,\s*\r?\n\s*builder:\s*["']--linux AppImage deb --arm64["'],\s*\r?\n\s*target_arch:\s*arm64,/,
+      "Linux arm64 native prebuild target",
+    ],
+    [
       "name: srn-desktop-${{ matrix.label }}",
       "per-leg desktop artifact upload",
     ],
@@ -3732,6 +3742,49 @@ export function validateReleaseContract(files) {
         description,
       );
     }
+    const rootDesktopPruner = namedStepBlock(
+      rootDesktopBuild,
+      "Prune foreign Linux native prebuilds",
+    );
+    for (const [fragment, description] of [
+      ["if: runner.os == 'Linux'", "Linux-only native prebuild pruning"],
+      [
+        "working-directory: app/packages/desktop",
+        "desktop native prebuild pruning workspace",
+      ],
+      [
+        "TARGET_ARCH: ${{ matrix.target_arch }}",
+        "matrix-bound Linux native prebuild architecture",
+      ],
+      [
+        'run: node scripts/pruneLinuxNativePrebuilds.js --arch "$TARGET_ARCH" --node-modules node_modules --node-modules app/dist/node_modules',
+        "both Linux packaged dependency graphs pruned",
+      ],
+    ]) {
+      requireFragment(
+        errors,
+        rootDesktopFile,
+        rootDesktopPruner,
+        fragment,
+        description,
+      );
+    }
+    requireAdjacentNamedSteps(
+      errors,
+      rootDesktopFile,
+      rootDesktop,
+      "build",
+      "Build desktop bundle (webpack)",
+      "Prune foreign Linux native prebuilds",
+    );
+    requireAdjacentNamedSteps(
+      errors,
+      rootDesktopFile,
+      rootDesktop,
+      "build",
+      "Prune foreign Linux native prebuilds",
+      "electron-builder",
+    );
     if (/\bmapfile\b/.test(rootDesktopBuild)) {
       errors.push(
         `${rootDesktopFile}: root desktop build must not use Bash-4-only mapfile`,
@@ -5878,6 +5931,118 @@ export function validateReleaseContract(files) {
     );
   }
 
+  const linuxPrunerFile =
+    "app/packages/desktop/scripts/pruneLinuxNativePrebuilds.js";
+  const linuxPruner = files.get(linuxPrunerFile) ?? "";
+  for (const [fragment, description] of [
+    [
+      "SUPPORTED_ARCHITECTURES = new Set(['x64', 'arm64'])",
+      "closed Linux prebuild architecture allowlist",
+    ],
+    [
+      "nodeModulesDirectories.length !== 2",
+      "exact dual packaged dependency graph requirement",
+    ],
+    [
+      "nodeModulesDirectories.map((directory) => path.resolve(directory))",
+      "all packaged dependency graph resolution",
+    ],
+    [
+      "new Set(nodeModulesRoots).size !== nodeModulesRoots.length",
+      "distinct packaged dependency graph requirement",
+    ],
+    ["fs.promises.lstat(directory)", "symlink-aware prebuild inspection"],
+    [
+      "!stat.isDirectory() || stat.isSymbolicLink()",
+      "real prebuild directory enforcement",
+    ],
+    [
+      "expected: `cbor-extract-linux-${architecture}`",
+      "target-specific cbor-extract prebuild",
+    ],
+    ["expected: `linux-${architecture}`", "target-specific microtime prebuild"],
+    [
+      "if (!plan.inventory.includes(plan.expected))",
+      "target preflight before destructive pruning",
+    ],
+    [
+      "await fs.promises.rm(candidate, { recursive: true, force: false })",
+      "fail-closed foreign prebuild removal",
+    ],
+    [
+      "remaining.length !== 1 || remaining[0] !== plan.expected",
+      "exact post-prune native inventory",
+    ],
+  ]) {
+    requireFragment(
+      errors,
+      linuxPrunerFile,
+      linuxPruner,
+      fragment,
+      description,
+    );
+  }
+  const preflightIndex = linuxPruner.indexOf(
+    "for (const plan of plans) {\n    plan.inventory =",
+  );
+  const removalIndex = linuxPruner.indexOf(
+    "await fs.promises.rm(candidate, { recursive: true, force: false })",
+  );
+  if (
+    preflightIndex < 0 ||
+    removalIndex < 0 ||
+    preflightIndex >= removalIndex
+  ) {
+    errors.push(
+      `${linuxPrunerFile}: every expected target must be preflighted before native prebuild pruning`,
+    );
+  }
+
+  const linuxPrunerTestFile =
+    "app/packages/desktop/scripts/pruneLinuxNativePrebuilds.test.js";
+  const linuxPrunerTest = files.get(linuxPrunerTestFile) ?? "";
+  for (const [fragment, description] of [
+    [
+      "x64 pruning keeps only x64 Linux native prebuilds in both packaged graphs",
+      "dual-graph x64 native prebuild pruning test",
+    ],
+    [
+      "arm64 pruning keeps only arm64 Linux native prebuilds in both packaged graphs",
+      "dual-graph arm64 native prebuild pruning test",
+    ],
+    [
+      "unknown Linux architecture is rejected without pruning",
+      "unknown native prebuild architecture rejection test",
+    ],
+    [
+      "missing expected target in copied graph is rejected before any graph is pruned",
+      "atomic dual-graph native prebuild preflight test",
+    ],
+    [
+      "CLI requires both real desktop build node_modules paths",
+      "exact desktop build dependency graph CLI test",
+    ],
+    ["path.join(root, 'node_modules')", "source dependency graph fixture"],
+    [
+      "path.join(root, 'app', 'dist', 'node_modules')",
+      "webpack-copied dependency graph fixture",
+    ],
+    ["cbor-extract-darwin-arm64", "foreign Darwin ARM cbor fixture"],
+    ["cbor-extract-win32-x64", "foreign Windows cbor fixture"],
+    ["linux-arm", "foreign Linux ARMv7 fixture"],
+    ["darwin-x64+arm64", "foreign universal Darwin microtime fixture"],
+    ["win32-ia32", "foreign Windows IA32 microtime fixture"],
+    ["win32-x64", "foreign Windows microtime fixture"],
+  ]) {
+    requireFragment(
+      errors,
+      linuxPrunerTestFile,
+      linuxPrunerTest,
+      fragment,
+      description,
+    );
+  }
+
   const updaterVerifierFile = "app/scripts/verify-desktop-updater-metadata.rb";
   const updaterVerifier = files.get(updaterVerifierFile) ?? "";
   for (const [fragment, description] of [
@@ -6043,6 +6208,8 @@ export function validateReleaseContract(files) {
     "server/.github/workflows/**",
     "server/.github/upstream-workflows-disabled/**",
     "app/packages/mobile/fastlane/**",
+    "app/packages/desktop/scripts/pruneLinuxNativePrebuilds.js",
+    "app/packages/desktop/scripts/pruneLinuxNativePrebuilds.test.js",
     "app/scripts/verify-desktop-updater-metadata.rb",
     "app/scripts/verify-desktop-updater-metadata.test.rb",
     "scripts/analyze-release-impact.mjs",
@@ -6078,6 +6245,13 @@ export function validateReleaseContract(files) {
     ci,
     "node --test scripts/validate-release-contract.test.mjs",
     "validator tests",
+  );
+  requireFragment(
+    errors,
+    ciFile,
+    ci,
+    "node --test app/packages/desktop/scripts/pruneLinuxNativePrebuilds.test.js",
+    "desktop Linux native prebuild pruning tests",
   );
   requireFragment(
     errors,

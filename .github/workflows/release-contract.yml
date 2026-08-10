@@ -19,6 +19,8 @@ on:
       - "server/.github/upstream-workflows-disabled/**"
       - "app/packages/mobile/android/gradle.properties"
       - "app/packages/mobile/fastlane/**"
+      - "app/packages/desktop/scripts/pruneLinuxNativePrebuilds.js"
+      - "app/packages/desktop/scripts/pruneLinuxNativePrebuilds.test.js"
       - "app/scripts/verify-desktop-updater-metadata.rb"
       - "app/scripts/verify-desktop-updater-metadata.test.rb"
       - "package.json"
@@ -54,6 +56,8 @@ on:
       - "server/.github/upstream-workflows-disabled/**"
       - "app/packages/mobile/android/gradle.properties"
       - "app/packages/mobile/fastlane/**"
+      - "app/packages/desktop/scripts/pruneLinuxNativePrebuilds.js"
+      - "app/packages/desktop/scripts/pruneLinuxNativePrebuilds.test.js"
       - "app/scripts/verify-desktop-updater-metadata.rb"
       - "app/scripts/verify-desktop-updater-metadata.test.rb"
       - "package.json"
@@ -96,6 +100,8 @@ jobs:
         run: node --test scripts/validate-release-contract.test.mjs
       - name: Test desktop updater metadata verification
         run: ruby app/scripts/verify-desktop-updater-metadata.test.rb
+      - name: Test desktop Linux native prebuild pruning
+        run: node --test app/packages/desktop/scripts/pruneLinuxNativePrebuilds.test.js
       - name: Test release impact and fingerprint behavior
         run: node --test scripts/analyze-release-impact.test.mjs scripts/fingerprint-release-tree.test.mjs scripts/release-packaging-contract.test.mjs scripts/compare-release-fingerprints.test.mjs
       - name: Validate release targets and artifacts

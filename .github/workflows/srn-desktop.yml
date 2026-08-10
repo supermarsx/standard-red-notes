@@ -294,8 +294,8 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "Reserved ${tag} for ${GITHUB_SHA} with intent ${intent} (id ${release_id}; reused=${reused}; published=${published})." >> "$GITHUB_STEP_SUMMARY"
 
-  # 2) BUILD — electron-builder per OS. Each OS builds BOTH arches in one run so
-  # the per-platform update metadata (latest*.yml) is produced once, not twice.
+  # 2) BUILD — electron-builder on native runners. macOS and Windows build both
+  # arches in one run; Linux uses one runner per architecture.
   build:
     name: build (${{ matrix.label }})
     needs: identity
@@ -319,11 +319,13 @@ jobs:
               label: linux-x64,
               os: ubuntu-latest,
               builder: "--linux AppImage deb --x64",
+              target_arch: x64,
             }
           - {
               label: linux-arm64,
               os: ubuntu-24.04-arm,
               builder: "--linux AppImage deb --arm64",
+              target_arch: arm64,
             }
     env:
       # Never attempt to auto-discover a macOS signing identity.
@@ -369,6 +371,13 @@ jobs:
       - name: Build desktop bundle (webpack)
         working-directory: app/packages/desktop
         run: yarn build
+
+      - name: Prune foreign Linux native prebuilds
+        if: runner.os == 'Linux'
+        working-directory: app/packages/desktop
+        env:
+          TARGET_ARCH: ${{ matrix.target_arch }}
+        run: node scripts/pruneLinuxNativePrebuilds.js --arch "$TARGET_ARCH" --node-modules node_modules --node-modules app/dist/node_modules
 
       - name: electron-builder
         working-directory: app/packages/desktop
