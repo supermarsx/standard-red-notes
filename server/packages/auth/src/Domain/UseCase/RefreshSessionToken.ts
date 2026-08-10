@@ -1,7 +1,7 @@
 import * as crypto from 'crypto'
 import { DomainEventPublisherInterface } from '@standardnotes/domain-events'
 import { TimerInterface } from '@standardnotes/time'
-import { SettingName } from '@standardnotes/domain-core'
+import { SettingName, Uuid } from '@standardnotes/domain-core'
 import { LogSessionUserAgentOption } from '@standardnotes/settings'
 import { Logger } from 'winston'
 
@@ -16,6 +16,9 @@ import { ApiVersion } from '../Api/ApiVersion'
 import { CooldownSessionTokens } from './CooldownSessionTokens/CooldownSessionTokens'
 import { GetSessionFromToken } from './GetSessionFromToken/GetSessionFromToken'
 import { safeErrorLogMetadata } from '../Logging/SafeLog'
+import { UserRepositoryInterface } from '../User/UserRepositoryInterface'
+import { RegistrationConfigResolverInterface } from '../Registration/RegistrationConfigResolverInterface'
+import { emailConfirmationPolicyBlocksAccess } from '../Registration/RegistrationConfig'
 
 export class RefreshSessionToken {
   constructor(
@@ -27,6 +30,8 @@ export class RefreshSessionToken {
     private cooldownSessionTokens: CooldownSessionTokens,
     private getSessionFromToken: GetSessionFromToken,
     private logger: Logger,
+    private userRepository?: UserRepositoryInterface,
+    private registrationConfigResolver?: RegistrationConfigResolverInterface,
   ) {}
 
   async execute(dto: RefreshSessionTokenDTO): Promise<RefreshSessionTokenResponse> {
@@ -123,6 +128,21 @@ export class RefreshSessionToken {
       }
     }
 
+    // Check only after both presented tokens and expiry are valid. The response
+    // deliberately matches an invalid refresh token, disclosing no confirmation
+    // state and rotating/persisting nothing while the account is blocked.
+    if (await this.emailConfirmationBlocksRefresh(session.userUuid)) {
+      this.logger.debug('Refresh token rejected by account access policy', {
+        codeTag: 'RefreshSessionToken',
+      })
+
+      return {
+        success: false,
+        errorTag: 'invalid-refresh-token',
+        errorMessage: 'The refresh token is not valid.',
+      }
+    }
+
     if (await this.isLoggingUserAgentEnabledOnSessions(session.userUuid)) {
       session.userAgent = dto.requestMetadata.userAgent as string
     }
@@ -172,6 +192,39 @@ export class RefreshSessionToken {
     const loggingSetting = loggingSettingOrError.getValue()
 
     return loggingSetting.decryptedValue === LogSessionUserAgentOption.Enabled
+  }
+
+  private async emailConfirmationBlocksRefresh(userUuid: string): Promise<boolean> {
+    if (this.registrationConfigResolver === undefined || this.userRepository === undefined) {
+      return false
+    }
+
+    let config
+    try {
+      config = await this.registrationConfigResolver.resolve()
+    } catch {
+      // Resolve the confirmation state before failing closed so a policy
+      // dependency failure does not become a global outage for confirmed users.
+      return this.userIsMissingOrUnconfirmed(userUuid)
+    }
+
+    // Avoid an extra user read in the normal off/warn modes.
+    if (!emailConfirmationPolicyBlocksAccess(config, false)) {
+      return false
+    }
+
+    return this.userIsMissingOrUnconfirmed(userUuid)
+  }
+
+  private async userIsMissingOrUnconfirmed(userUuid: string): Promise<boolean> {
+    const userUuidOrError = Uuid.create(userUuid)
+    if (userUuidOrError.isFailed()) {
+      return true
+    }
+
+    const user = await this.userRepository?.findOneByUuid(userUuidOrError.getValue())
+
+    return user === null || user === undefined || !user.isEmailConfirmed()
   }
 
   private isRefreshTokenMatchingHashedSessionToken(

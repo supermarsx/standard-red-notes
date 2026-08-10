@@ -661,6 +661,18 @@ describe('UserService', () => {
       expect(syncService.unlockSyncing).toHaveBeenCalledTimes(1)
     })
 
+    it('returns pending email confirmation without publishing a signed-in account event', async () => {
+      const response = { emailConfirmationRequired: true }
+      sessionManager.register = jest.fn().mockResolvedValue(response)
+      internalEventBus.publishSync = jest.fn()
+
+      await expect(createService().register('user@example.com', 'password', '')).resolves.toBe(response)
+
+      expect(syncService.lockSyncing).toHaveBeenCalledTimes(1)
+      expect(syncService.unlockSyncing).toHaveBeenCalledTimes(1)
+      expect(internalEventBus.publishSync).not.toHaveBeenCalled()
+    })
+
     it('routes recovered-root sign-in through reconciliation and the normal account event lifecycle', async () => {
       const recoveredRootKey = { uuid: 'recovered-root' }
       sessionManager.reconcileCredentialRotationSignIn = jest.fn().mockResolvedValue(successSessionResponse.response)

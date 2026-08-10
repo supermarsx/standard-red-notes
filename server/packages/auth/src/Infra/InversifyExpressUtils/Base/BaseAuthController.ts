@@ -635,6 +635,14 @@ export class BaseAuthController extends BaseHttpController {
       return this.json({ pendingApproval: true })
     }
 
+    // Strict email-confirmation registration is also terminal: the user exists
+    // but Register intentionally created no session. Return a stable 200 marker
+    // with no Set-Cookie or token-shaped fields so clients can show the inbox
+    // prompt without mistaking the account for authenticated.
+    if ('emailConfirmationRequired' in registerResult) {
+      return this.json({ emailConfirmationRequired: true })
+    }
+
     const registeredUser = registerResult.result.response
       ? registerResult.result.response.user
       : (registerResult.result.legacyResponse as AuthResponse20161215).user

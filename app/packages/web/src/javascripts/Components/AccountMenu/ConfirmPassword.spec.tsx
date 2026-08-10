@@ -157,6 +157,18 @@ describe('ConfirmPassword — invite token threading + pending-approval handling
     expect(mockApplication.accountMenuController.setCurrentPane).not.toHaveBeenCalledWith(AccountMenuPane.GeneralMenu)
   })
 
+  it('shows the inbox prompt on an emailConfirmationRequired response, not a signed-in state', async () => {
+    mockApplication = makeApplication({ type: 'none' }, { emailConfirmationRequired: true })
+
+    await render()
+    await submitRegistration()
+
+    expect(container.textContent).toContain('emailConfirmationRequiredTitle')
+    expect(container.textContent).toContain('emailConfirmationRequiredMessage')
+    expect(mockApplication.accountMenuController.closeAccountMenu).not.toHaveBeenCalled()
+    expect(mockApplication.accountMenuController.setCurrentPane).not.toHaveBeenCalledWith(AccountMenuPane.GeneralMenu)
+  })
+
   it('proceeds to a signed-in state on a normal (non-pending) registration', async () => {
     mockApplication = makeApplication({ type: 'none' })
 

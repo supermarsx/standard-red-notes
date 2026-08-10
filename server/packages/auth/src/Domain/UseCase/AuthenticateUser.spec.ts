@@ -8,6 +8,8 @@ import { RevokedSession } from '../Session/RevokedSession'
 import { AuthenticationMethodResolverInterface } from '../Auth/AuthenticationMethodResolverInterface'
 import { TimerInterface } from '@standardnotes/time'
 import { Logger } from 'winston'
+import { RegistrationConfigResolverInterface } from '../Registration/RegistrationConfigResolverInterface'
+import { RegistrationConfig } from '../Registration/RegistrationConfig'
 
 describe('AuthenticateUser', () => {
   let user: User
@@ -19,6 +21,14 @@ describe('AuthenticateUser', () => {
   const accessTokenAge = 3600
 
   const createUseCase = () => new AuthenticateUser(authenticationMethodResolver, timer, accessTokenAge, logger)
+  const createUseCaseWithConfirmation = (overrides: Partial<RegistrationConfig>) =>
+    new AuthenticateUser(authenticationMethodResolver, timer, accessTokenAge, logger, 10, {
+      resolve: jest.fn().mockResolvedValue({
+        emailConfirmationEnabled: true,
+        emailConfirmationGating: 'block_signin',
+        ...overrides,
+      } as RegistrationConfig),
+    } as RegistrationConfigResolverInterface)
 
   beforeEach(() => {
     logger = {} as jest.Mocked<Logger>
@@ -110,6 +120,91 @@ describe('AuthenticateUser', () => {
 
     expect(response.success).toBeFalsy()
     expect((response as { failureType?: string }).failureType).toEqual('INVALID_AUTH')
+  })
+
+  it('rejects an existing access token until strict email confirmation is completed', async () => {
+    user.uuid = 'user-uuid'
+    user.supportsSessions = jest.fn().mockReturnValue(true)
+    user.isEmailConfirmed = jest.fn().mockReturnValue(false)
+    authenticationMethodResolver.resolve = jest.fn().mockReturnValue({
+      type: 'session_token',
+      session,
+      user,
+    })
+
+    const useCase = createUseCaseWithConfirmation({})
+    await expect(
+      useCase.execute({
+        authTokenFromHeaders: 'existing-access-token',
+        requestMetadata: { url: '/v1/items', method: 'GET' },
+      }),
+    ).resolves.toEqual({ success: false, failureType: 'INVALID_AUTH' })
+
+    user.isEmailConfirmed = jest.fn().mockReturnValue(true)
+    await expect(
+      useCase.execute({
+        authTokenFromHeaders: 'existing-access-token',
+        requestMetadata: { url: '/v1/items', method: 'GET' },
+      }),
+    ).resolves.toEqual({ success: true, user, session })
+  })
+
+  it('fails closed for an unconfirmed user when confirmation policy resolution fails', async () => {
+    user.uuid = 'user-uuid'
+    user.supportsSessions = jest.fn().mockReturnValue(true)
+    user.isEmailConfirmed = jest.fn().mockReturnValue(false)
+    authenticationMethodResolver.resolve = jest.fn().mockReturnValue({
+      type: 'session_token',
+      session,
+      user,
+    })
+    const registrationConfigResolver = {
+      resolve: jest.fn().mockRejectedValue(new Error('configuration unavailable')),
+    } as RegistrationConfigResolverInterface
+    const useCase = new AuthenticateUser(
+      authenticationMethodResolver,
+      timer,
+      accessTokenAge,
+      logger,
+      10,
+      registrationConfigResolver,
+    )
+
+    await expect(
+      useCase.execute({
+        authTokenFromHeaders: 'existing-access-token',
+        requestMetadata: { url: '/v1/items', method: 'GET' },
+      }),
+    ).resolves.toEqual({ success: false, failureType: 'INVALID_AUTH' })
+
+    user.isEmailConfirmed = jest.fn().mockReturnValue(true)
+    await expect(
+      useCase.execute({
+        authTokenFromHeaders: 'existing-access-token',
+        requestMetadata: { url: '/v1/items', method: 'GET' },
+      }),
+    ).resolves.toEqual({ success: true, user, session })
+    expect(registrationConfigResolver.resolve).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    { emailConfirmationEnabled: false, emailConfirmationGating: 'block_signin' as const },
+    { emailConfirmationEnabled: true, emailConfirmationGating: 'warn' as const },
+  ])('keeps existing access tokens permissive for $emailConfirmationGating/off policy', async (policy) => {
+    user.supportsSessions = jest.fn().mockReturnValue(true)
+    user.isEmailConfirmed = jest.fn().mockReturnValue(false)
+    authenticationMethodResolver.resolve = jest.fn().mockReturnValue({
+      type: 'session_token',
+      session,
+      user,
+    })
+
+    await expect(
+      createUseCaseWithConfirmation(policy).execute({
+        authTokenFromHeaders: 'existing-access-token',
+        requestMetadata: { url: '/v1/items', method: 'GET' },
+      }),
+    ).resolves.toEqual({ success: true, user, session })
   })
 
   it('should not authenticate a user if the password hashed in JWT token is inavlid', async () => {

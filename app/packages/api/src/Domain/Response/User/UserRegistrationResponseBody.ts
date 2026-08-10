@@ -16,4 +16,9 @@ export type UserRegistrationResponseBody = {
    * that DID return a session.
    */
   pendingApproval?: boolean
+  /**
+   * Strict email-confirmation registration terminal response. The account was
+   * created, but the server returned no session, cookies, or token material.
+   */
+  emailConfirmationRequired?: boolean
 }

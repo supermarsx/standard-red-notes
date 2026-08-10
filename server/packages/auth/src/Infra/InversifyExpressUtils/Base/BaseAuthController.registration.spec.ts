@@ -108,4 +108,61 @@ describe('BaseAuthController registration', () => {
     expect(result.json).toEqual(legacyResponse)
     expect(response.setHeader).not.toHaveBeenCalled()
   })
+
+  it('returns a token-free 200 marker and no cookie when email confirmation is required', async () => {
+    const registerUser = {
+      execute: jest.fn().mockResolvedValue({ success: true, emailConfirmationRequired: true }),
+    } as unknown as jest.Mocked<Register>
+    const proofOfWorkGate = {
+      enforceRegister: jest.fn().mockResolvedValue({ satisfied: true }),
+    } as unknown as jest.Mocked<ProofOfWorkGate>
+    const humanVerification = {
+      execute: jest.fn().mockResolvedValue(Result.ok()),
+    } as unknown as jest.Mocked<VerifyHumanInteraction>
+    const cookieFactory = { createCookieHeaderValue: jest.fn() }
+    const controller = new BaseAuthController(
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      { error: jest.fn() } as never,
+      {} as never,
+      registerUser,
+      {} as never,
+      {} as never,
+      {} as never,
+      humanVerification,
+      cookieFactory as never,
+      {} as never,
+      {} as never,
+      '',
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      proofOfWorkGate,
+      {} as never,
+      {} as never,
+      {} as never,
+    )
+    const request = {
+      body: {
+        email: 'unconfirmed@example.com',
+        password: 'test-password',
+        api: '20200115',
+        ephemeral: false,
+      },
+      headers: { 'user-agent': 'jest' },
+    } as unknown as Request
+    const response = { setHeader: jest.fn() } as unknown as Response
+
+    const result = await controller.register(request, response)
+
+    expect(result.statusCode).toBe(200)
+    expect(result.json).toEqual({ emailConfirmationRequired: true })
+    expect(JSON.stringify(result.json)).not.toMatch(/access|refresh|session|token/i)
+    expect(response.setHeader).not.toHaveBeenCalled()
+    expect(cookieFactory.createCookieHeaderValue).not.toHaveBeenCalled()
+  })
 })

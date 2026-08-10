@@ -23,6 +23,7 @@ import { AuditAction } from '../AuditLog/AuditAction'
 import { WebhookDispatcherInterface } from '../Webhook/WebhookDispatcherInterface'
 import { WebhookEvent } from '../Webhook/WebhookEvent'
 import { RegistrationConfigResolverInterface } from '../Registration/RegistrationConfigResolverInterface'
+import { emailConfirmationPolicyBlocksAccess } from '../Registration/RegistrationConfig'
 import { safeErrorLogMetadata } from '../Logging/SafeLog'
 
 export class SignIn implements UseCaseInterface {
@@ -271,9 +272,7 @@ export class SignIn implements UseCaseInterface {
     try {
       const config = await this.registrationConfigResolver.resolve()
 
-      return (
-        config.emailConfirmationEnabled && config.emailConfirmationGating === 'block_signin' && !user.isEmailConfirmed()
-      )
+      return emailConfirmationPolicyBlocksAccess(config, user.isEmailConfirmed())
     } catch {
       return false
     }

@@ -1059,7 +1059,8 @@ describe('Register', () => {
       const sender = { execute: jest.fn().mockResolvedValue(Result.ok(true)) }
       const result = await createWith(makeResolver({ emailConfirmationEnabled: true }), sender).execute(dto)
 
-      expect(result.success).toBe(true)
+      expect(result).toEqual({ success: true, emailConfirmationRequired: true })
+      expect(authResponseFactory.createResponse).not.toHaveBeenCalled()
       const savedUser = (userRepository.save as jest.Mock).mock.calls[0][0] as User
       expect(savedUser.emailConfirmed).toBe(false)
       expect(sender.execute).toHaveBeenCalledWith(
@@ -1075,6 +1076,18 @@ describe('Register', () => {
       const savedUser = (userRepository.save as jest.Mock).mock.calls[0][0] as User
       expect(savedUser.emailConfirmed).toBeUndefined()
       expect(sender.execute).not.toHaveBeenCalled()
+      expect(authResponseFactory.createResponse).toHaveBeenCalledTimes(1)
+    })
+
+    it('keeps warn mode permissive and returns the normal live session', async () => {
+      const sender = { execute: jest.fn().mockResolvedValue(Result.ok(true)) }
+      const result = await createWith(
+        makeResolver({ emailConfirmationEnabled: true, emailConfirmationGating: 'warn' }),
+        sender,
+      ).execute(dto)
+
+      expect(result).toEqual({ success: true, result: { response: { foo: 'bar' }, session } })
+      expect(authResponseFactory.createResponse).toHaveBeenCalledTimes(1)
     })
 
     it('does NOT create an unconfirmed user when enabled but no sender is wired (never lock out)', async () => {
@@ -1089,7 +1102,16 @@ describe('Register', () => {
       const sender = { execute: jest.fn().mockRejectedValue(new Error('smtp down')) }
       const result = await createWith(makeResolver({ emailConfirmationEnabled: true }), sender).execute(dto)
 
-      expect(result.success).toBe(true)
+      expect(result).toEqual({ success: true, emailConfirmationRequired: true })
+      expect(authResponseFactory.createResponse).not.toHaveBeenCalled()
+    })
+
+    it('withholds the session when confirmation delivery returns a failure result', async () => {
+      const sender = { execute: jest.fn().mockResolvedValue(Result.fail('smtp unavailable')) }
+      const result = await createWith(makeResolver({ emailConfirmationEnabled: true }), sender).execute(dto)
+
+      expect(result).toEqual({ success: true, emailConfirmationRequired: true })
+      expect(authResponseFactory.createResponse).not.toHaveBeenCalled()
     })
   })
 

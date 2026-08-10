@@ -672,7 +672,7 @@ export class SessionManager
       // server creates the account pending and returns `pendingApproval: true` with
       // NO session — there is nothing to authenticate. Return the terminal response
       // as-is so the caller can show "awaiting approval" instead of signing in.
-      if (registerResponse.data.pendingApproval) {
+      if (registerResponse.data.pendingApproval || registerResponse.data.emailConfirmationRequired) {
         return registerResponse.data
       }
 

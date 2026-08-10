@@ -11,6 +11,9 @@ import { AuthenticateUserResponse } from './AuthenticateUserResponse'
 import { UseCaseInterface } from './UseCaseInterface'
 import { Logger } from 'winston'
 import { safeRequestLogMetadata } from '../Logging/SafeLog'
+import { RegistrationConfigResolverInterface } from '../Registration/RegistrationConfigResolverInterface'
+import { emailConfirmationPolicyBlocksAccess } from '../Registration/RegistrationConfig'
+import { User } from '../User/User'
 
 @injectable()
 export class AuthenticateUser implements UseCaseInterface {
@@ -21,6 +24,8 @@ export class AuthenticateUser implements UseCaseInterface {
     @inject(TYPES.Auth_ACCESS_TOKEN_AGE) private accessTokenAge: number,
     @inject(TYPES.Auth_Logger) private logger: Logger,
     @inject(TYPES.Auth_SESSION_FRESHNESS_BUFFER) private freshlyCreatedSessionSafetyBufferSeconds: number = 10,
+    @inject(TYPES.Auth_RegistrationConfigResolver)
+    private registrationConfigResolver?: RegistrationConfigResolverInterface,
   ) {}
 
   async execute(dto: AuthenticateUserDTO): Promise<AuthenticateUserResponse> {
@@ -81,6 +86,18 @@ export class AuthenticateUser implements UseCaseInterface {
      */
     if (user.isAccessBlocked()) {
       this.logger.debug(`[authenticate-user][${user.uuid}] Banned user attempted to authenticate.`)
+
+      return {
+        success: false,
+        failureType: 'INVALID_AUTH',
+      }
+    }
+
+    // Existing access/JWT tokens must not outlive a strict confirmation gate.
+    // Return the same generic failure as bad credentials so this does not become
+    // an account-confirmation oracle.
+    if (await this.emailConfirmationBlocksAccess(user)) {
+      this.logger.debug(`[authenticate-user][${user.uuid}] Unconfirmed user denied by confirmation policy.`)
 
       return {
         success: false,
@@ -180,5 +197,22 @@ export class AuthenticateUser implements UseCaseInterface {
     const sessionIsLongerThanCurrentConfiguration = session.accessExpiration > currentConfigurationAccessTokenExpiration
 
     return sessionIsExpired || sessionIsLongerThanCurrentConfiguration
+  }
+
+  private async emailConfirmationBlocksAccess(user: User): Promise<boolean> {
+    if (this.registrationConfigResolver === undefined || user.isEmailConfirmed()) {
+      return false
+    }
+
+    try {
+      const config = await this.registrationConfigResolver.resolve()
+
+      return emailConfirmationPolicyBlocksAccess(config, false)
+    } catch {
+      // The production resolver already degrades to its environment baseline.
+      // If an alternate resolver violates its never-throw contract, do not
+      // silently reopen access for an account we already know is unconfirmed.
+      return true
+    }
   }
 }

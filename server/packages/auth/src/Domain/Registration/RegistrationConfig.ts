@@ -136,6 +136,18 @@ export const DEFAULT_REGISTRATION_CONFIG: RegistrationConfig = {
   invitesPerUser: 0,
 }
 
+/**
+ * Whether the effective policy requires mailbox ownership before an account may
+ * receive or use a session. Keep this predicate shared by registration,
+ * sign-in, access-token authentication, and refresh so `block_signin` cannot
+ * drift into four subtly different gates. `warn` and disabled confirmation are
+ * deliberately permissive.
+ */
+export const emailConfirmationPolicyBlocksAccess = (
+  config: Pick<RegistrationConfig, 'emailConfirmationEnabled' | 'emailConfirmationGating'>,
+  emailConfirmed: boolean,
+): boolean => config.emailConfirmationEnabled && config.emailConfirmationGating === 'block_signin' && !emailConfirmed
+
 export const isRegistrationDomainMode = (value: unknown): value is RegistrationDomainMode =>
   typeof value === 'string' && (REGISTRATION_DOMAIN_MODES as string[]).includes(value)
 

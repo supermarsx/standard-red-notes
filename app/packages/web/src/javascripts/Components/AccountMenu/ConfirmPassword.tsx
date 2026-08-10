@@ -51,6 +51,7 @@ const ConfirmPassword: FunctionComponent<Props> = ({ setMenuPane, email, passwor
   // with a pending-approval response so we show an "awaiting approval" screen
   // instead of proceeding to a signed-in state.
   const [awaitingApproval, setAwaitingApproval] = useState(false)
+  const [awaitingEmailConfirmation, setAwaitingEmailConfirmation] = useState(false)
 
   // Standard Red Notes: INVITE-URL signup control. Read the invite token captured
   // from `?invite=<token>` at launch (RouteType.Invite). Computed once — the
@@ -74,6 +75,10 @@ const ConfirmPassword: FunctionComponent<Props> = ({ setMenuPane, email, passwor
         // show the awaiting-approval screen instead.
         if (response?.pendingApproval) {
           setAwaitingApproval(true)
+          return
+        }
+        if (response?.emailConfirmationRequired) {
+          setAwaitingEmailConfirmation(true)
           return
         }
         application.accountMenuController.closeAccountMenu()
@@ -249,6 +254,26 @@ const ConfirmPassword: FunctionComponent<Props> = ({ setMenuPane, email, passwor
           <div className="text-base font-bold">{t('awaitingApprovalTitle')}</div>
         </div>
         <div className="mb-3 px-3 text-sm">{t('awaitingApprovalMessage')}</div>
+        <div className="px-3">
+          <Button
+            primary
+            fullWidth
+            className="mb-3"
+            label={t('close')}
+            onClick={() => application.accountMenuController.closeAccountMenu()}
+          />
+        </div>
+      </>
+    )
+  }
+
+  if (awaitingEmailConfirmation) {
+    return (
+      <>
+        <div className="mt-1 mb-3 flex items-center px-3">
+          <div className="text-base font-bold">{t('emailConfirmationRequiredTitle')}</div>
+        </div>
+        <div className="mb-3 px-3 text-sm">{t('emailConfirmationRequiredMessage')}</div>
         <div className="px-3">
           <Button
             primary

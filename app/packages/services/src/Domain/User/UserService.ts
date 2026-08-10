@@ -212,7 +212,7 @@ export class UserService
       // never established a session (SessionManager returned early with no root
       // key), so there is nothing to sync or set up — skip the account-setup event
       // and hand the terminal response back for the UI to show "awaiting approval".
-      if (response.pendingApproval) {
+      if (response.pendingApproval || response.emailConfirmationRequired) {
         this.unlockSyncing()
         this.registering = false
 

@@ -24,6 +24,11 @@ describe('SessionManager invite-URL signup control', () => {
     data: { success: true, pendingApproval: true },
   }
 
+  const emailConfirmationRequiredResponse = {
+    status: 200,
+    data: { success: true, emailConfirmationRequired: true },
+  }
+
   const createSessionManager = (): SessionManager => {
     handleAuthentication = jest
       .spyOn(
@@ -90,6 +95,16 @@ describe('SessionManager invite-URL signup control', () => {
     const result = await manager.register('user@example.com', 'a-strong-password', '', false, undefined, 'tok')
 
     expect(result).toEqual(pendingApprovalResponse.data)
+    expect(handleAuthentication).not.toHaveBeenCalled()
+  })
+
+  it('returns an email-confirmation response WITHOUT authenticating (no session to handle)', async () => {
+    userApiService.register.mockResolvedValueOnce(emailConfirmationRequiredResponse)
+
+    const manager = createSessionManager()
+    const result = await manager.register('user@example.com', 'a-strong-password', '', false)
+
+    expect(result).toEqual(emailConfirmationRequiredResponse.data)
     expect(handleAuthentication).not.toHaveBeenCalled()
   })
 

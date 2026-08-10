@@ -16,6 +16,10 @@ import { SessionCreationResult } from '../Session/SessionCreationResult'
 import { ApiVersion } from '../Api/ApiVersion'
 import { CooldownSessionTokens } from './CooldownSessionTokens/CooldownSessionTokens'
 import { GetSessionFromToken } from './GetSessionFromToken/GetSessionFromToken'
+import { UserRepositoryInterface } from '../User/UserRepositoryInterface'
+import { User } from '../User/User'
+import { RegistrationConfigResolverInterface } from '../Registration/RegistrationConfigResolverInterface'
+import { RegistrationConfig } from '../Registration/RegistrationConfig'
 
 describe('RefreshSessionToken', () => {
   let sessionService: SessionServiceInterface
@@ -28,6 +32,7 @@ describe('RefreshSessionToken', () => {
   let sessionCreationResult: SessionCreationResult
   let cooldownSessionTokens: CooldownSessionTokens
   let getSessionFromToken: GetSessionFromToken
+  let userRepository: UserRepositoryInterface
 
   const createUseCase = () =>
     new RefreshSessionToken(
@@ -40,6 +45,28 @@ describe('RefreshSessionToken', () => {
       getSessionFromToken,
       logger,
     )
+  const createUseCaseWithConfirmation = (user: User | null, overrides: Partial<RegistrationConfig> = {}) => {
+    userRepository.findOneByUuid = jest.fn().mockResolvedValue(user)
+
+    return new RefreshSessionToken(
+      sessionService,
+      domainEventFactory,
+      domainEventPublisher,
+      timer,
+      getSetting,
+      cooldownSessionTokens,
+      getSessionFromToken,
+      logger,
+      userRepository,
+      {
+        resolve: jest.fn().mockResolvedValue({
+          emailConfirmationEnabled: true,
+          emailConfirmationGating: 'block_signin',
+          ...overrides,
+        } as RegistrationConfig),
+      } as RegistrationConfigResolverInterface,
+    )
+  }
 
   beforeEach(() => {
     session = {} as jest.Mocked<Session>
@@ -76,6 +103,8 @@ describe('RefreshSessionToken', () => {
     logger.error = jest.fn()
     logger.debug = jest.fn()
     logger.warn = jest.fn()
+
+    userRepository = {} as jest.Mocked<UserRepositoryInterface>
   })
 
   it('should refresh session token', async () => {
@@ -98,6 +127,104 @@ describe('RefreshSessionToken', () => {
     })
 
     expect(domainEventPublisher.publish).toHaveBeenCalled()
+  })
+
+  it('rejects refresh without rotating tokens until strict email confirmation is completed', async () => {
+    session.userUuid = '00000000-0000-4000-8000-000000000001'
+    const user = new User()
+    user.uuid = session.userUuid
+    user.emailConfirmed = false
+    const useCase = createUseCaseWithConfirmation(user)
+    const dto = {
+      authTokenFromHeaders: '123',
+      refreshTokenFromHeaders: '1:2:3',
+      requestMetadata: { url: '/v1/sessions/refresh', method: 'POST' },
+      apiVersion: ApiVersion.VERSIONS.v20200115,
+    }
+
+    await expect(useCase.execute(dto)).resolves.toEqual({
+      success: false,
+      errorTag: 'invalid-refresh-token',
+      errorMessage: 'The refresh token is not valid.',
+    })
+    expect(sessionService.refreshTokens).not.toHaveBeenCalled()
+    expect(cooldownSessionTokens.execute).not.toHaveBeenCalled()
+
+    user.emailConfirmed = true
+    await expect(useCase.execute(dto)).resolves.toEqual({
+      success: true,
+      result: sessionCreationResult,
+      userUuid: session.userUuid,
+    })
+    expect(sessionService.refreshTokens).toHaveBeenCalledTimes(1)
+  })
+
+  it('fails closed for an unconfirmed user when confirmation policy resolution fails', async () => {
+    session.userUuid = '00000000-0000-4000-8000-000000000001'
+    const user = new User()
+    user.uuid = session.userUuid
+    user.emailConfirmed = false
+    userRepository.findOneByUuid = jest.fn().mockResolvedValue(user)
+    const registrationConfigResolver = {
+      resolve: jest.fn().mockRejectedValue(new Error('configuration unavailable')),
+    } as RegistrationConfigResolverInterface
+    const useCase = new RefreshSessionToken(
+      sessionService,
+      domainEventFactory,
+      domainEventPublisher,
+      timer,
+      getSetting,
+      cooldownSessionTokens,
+      getSessionFromToken,
+      logger,
+      userRepository,
+      registrationConfigResolver,
+    )
+    const dto = {
+      authTokenFromHeaders: '123',
+      refreshTokenFromHeaders: '1:2:3',
+      requestMetadata: { url: '/v1/sessions/refresh', method: 'POST' },
+      apiVersion: ApiVersion.VERSIONS.v20200115,
+    }
+
+    await expect(useCase.execute(dto)).resolves.toEqual({
+      success: false,
+      errorTag: 'invalid-refresh-token',
+      errorMessage: 'The refresh token is not valid.',
+    })
+    expect(sessionService.refreshTokens).not.toHaveBeenCalled()
+
+    user.emailConfirmed = true
+    await expect(useCase.execute(dto)).resolves.toEqual({
+      success: true,
+      result: sessionCreationResult,
+      userUuid: session.userUuid,
+    })
+    expect(sessionService.refreshTokens).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    { emailConfirmationEnabled: false, emailConfirmationGating: 'block_signin' as const },
+    { emailConfirmationEnabled: true, emailConfirmationGating: 'warn' as const },
+  ])('keeps refresh permissive for warn/off confirmation policy', async (policy) => {
+    session.userUuid = '00000000-0000-4000-8000-000000000001'
+    const user = new User()
+    user.uuid = session.userUuid
+    user.emailConfirmed = false
+
+    await expect(
+      createUseCaseWithConfirmation(user, policy).execute({
+        authTokenFromHeaders: '123',
+        refreshTokenFromHeaders: '1:2:3',
+        requestMetadata: { url: '/v1/sessions/refresh', method: 'POST' },
+        apiVersion: ApiVersion.VERSIONS.v20200115,
+      }),
+    ).resolves.toEqual({
+      success: true,
+      result: sessionCreationResult,
+      userUuid: session.userUuid,
+    })
+    expect(userRepository.findOneByUuid).not.toHaveBeenCalled()
   })
 
   it('should match a cooled-down refresh token against the cooldown hash rather than the session hash', async () => {

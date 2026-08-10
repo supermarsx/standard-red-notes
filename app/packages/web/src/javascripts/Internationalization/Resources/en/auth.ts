@@ -36,6 +36,9 @@ const auth = {
   awaitingApprovalTitle: 'Awaiting approval',
   awaitingApprovalMessage:
     'Your account has been created and is awaiting administrator approval. You will be able to sign in once an administrator approves it.',
+  emailConfirmationRequiredTitle: 'Check your inbox',
+  emailConfirmationRequiredMessage:
+    'Your account has been created, but it is not signed in yet. Confirm your email address using the link we sent, then return here to sign in.',
   close: 'Close',
 
   // CreateAccount

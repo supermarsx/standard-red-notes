@@ -15,6 +15,13 @@ export type RegisterResponse =
       pendingApproval: true
     }
   | {
+      // EMAIL CONFIRMATION. Strict block_signin registrations persist the
+      // account and send/resend confirmation out of band, but create no session
+      // and expose no access/refresh credentials in the HTTP response.
+      success: true
+      emailConfirmationRequired: true
+    }
+  | {
       success: false
       errorMessage: string
     }

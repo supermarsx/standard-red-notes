@@ -19,6 +19,7 @@ import { RegistrationConfigResolverInterface } from '../Registration/Registratio
 import {
   DEFAULT_REGISTRATION_CONFIG,
   emailAllowedByPolicy,
+  emailConfirmationPolicyBlocksAccess,
   RegistrationConfig,
   sanitizeDefaultRole,
 } from '../Registration/RegistrationConfig'
@@ -328,16 +329,21 @@ export class Register implements UseCaseInterface {
       }
     }
 
-    // Standard Red Notes: a PENDING user gets NO session — a session that dies on
-    // its next authenticated request (isAccessBlocked) is a bad UX. Return the
-    // distinct terminal response instead; the controller returns a 200 with the
-    // pendingApproval flag and NO Set-Cookie, and the web UI shows "awaiting
-    // approval". (Contrast email-confirmation, which DOES return a session and
-    // gates only at later sign-in — approval is stricter, so no session at all.)
+    // A pending-approval user gets no session. Likewise strict email
+    // confirmation must withhold the initial session: otherwise registration
+    // itself bypasses block_signin, and a failed best-effort email delivery
+    // leaves a fully authenticated, indefinitely refreshable account.
     if (pendingApproval) {
       return {
         success: true,
         pendingApproval: true,
+      }
+    }
+
+    if (emailConfirmationPolicyBlocksAccess(registrationConfig, user.isEmailConfirmed())) {
+      return {
+        success: true,
+        emailConfirmationRequired: true,
       }
     }
 

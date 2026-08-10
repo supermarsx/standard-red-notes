@@ -2236,6 +2236,8 @@ export class ContainerConfigLoader {
           container.get<CooldownSessionTokens>(TYPES.Auth_CooldownSessionTokens),
           container.get<GetSessionFromToken>(TYPES.Auth_GetSessionFromToken),
           container.get<winston.Logger>(TYPES.Auth_Logger),
+          container.get<UserRepositoryInterface>(TYPES.Auth_UserRepository),
+          container.get<RegistrationConfigResolverInterface>(TYPES.Auth_RegistrationConfigResolver),
         ),
       )
     container
