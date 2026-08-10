@@ -77,6 +77,23 @@ function validate(files) {
   if (!release.includes('env -C "${release}/server/packages/home-server"')) {
     errors.push("staged backend smoke must load dotenv from home-server cwd");
   }
+  if (!installer.includes("PORT=3000\nBIND_ADDRESS=127.0.0.1\nDB_TYPE=sqlite")) {
+    errors.push("generated LXC home-server env must bind the backend to loopback");
+  }
+  if (
+    !installer.includes(
+      'exec env BIND_ADDRESS=127.0.0.1 "${NODE_BIN}" --require',
+    )
+  ) {
+    errors.push("LXC launcher must enforce a loopback backend bind");
+  }
+  if (
+    !release.includes(
+      'NODE_ENV=production PORT="${port}" BIND_ADDRESS=127.0.0.1 DB_TYPE=sqlite',
+    )
+  ) {
+    errors.push("staged LXC backend smoke must bind only to loopback");
+  }
   if (
     !installer.includes('STAGED_NGINX_SITE="${DEPLOY_ROOT}/.srn-nginx.conf"') ||
     !installer.includes('install_nginx_site "${STAGED_NGINX_SITE}"') ||
@@ -386,6 +403,39 @@ test("LXC smoke starts from the staged home-server working directory", () => {
       ),
     ).join("\n"),
     /load dotenv from home-server cwd/,
+  );
+});
+
+test("LXC generated env, launcher, and staged smoke pin the backend to loopback", () => {
+  assert.match(
+    validate(
+      mutate(
+        "installer",
+        "PORT=3000\nBIND_ADDRESS=127.0.0.1\nDB_TYPE=sqlite",
+        "PORT=3000\nBIND_ADDRESS=0.0.0.0\nDB_TYPE=sqlite",
+      ),
+    ).join("\n"),
+    /generated LXC home-server env must bind the backend to loopback/,
+  );
+  assert.match(
+    validate(
+      mutate(
+        "installer",
+        'exec env BIND_ADDRESS=127.0.0.1 "${NODE_BIN}" --require',
+        'exec env BIND_ADDRESS=0.0.0.0 "${NODE_BIN}" --require',
+      ),
+    ).join("\n"),
+    /LXC launcher must enforce a loopback backend bind/,
+  );
+  assert.match(
+    validate(
+      mutate(
+        "release",
+        'NODE_ENV=production PORT="${port}" BIND_ADDRESS=127.0.0.1 DB_TYPE=sqlite',
+        'NODE_ENV=production PORT="${port}" BIND_ADDRESS=0.0.0.0 DB_TYPE=sqlite',
+      ),
+    ).join("\n"),
+    /staged LXC backend smoke must bind only to loopback/,
   );
 });
 

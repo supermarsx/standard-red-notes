@@ -38,6 +38,7 @@ import helmet from 'helmet'
 import cors from 'cors'
 import cookieParser from 'cookie-parser'
 import { text, json, Request, Response, NextFunction, raw } from 'express'
+import * as http from 'http'
 import * as winston from 'winston'
 import { PassThrough } from 'stream'
 import { Env } from '../Bootstrap/Env'
@@ -75,6 +76,21 @@ export function buildHomeServerEnvironmentOverrides(
     ...configuredEnvironment,
     MODE: 'home-server',
   }
+}
+
+export interface HomeServerListener {
+  listen(port: number): http.Server
+  listen(port: number, hostname: string): http.Server
+}
+
+/**
+ * Bind to an explicit interface only when configured. Keeping the one-argument
+ * listen call as the default preserves the standalone home-server's existing
+ * network behavior, while packaged single-host deployments can make nginx the
+ * only public edge by selecting loopback.
+ */
+export function listenHomeServer(app: HomeServerListener, port: number, bindAddress?: string): http.Server {
+  return bindAddress ? app.listen(port, bindAddress) : app.listen(port)
 }
 
 export class HomeServer implements HomeServerInterface {
@@ -439,6 +455,7 @@ export class HomeServer implements HomeServerInterface {
       })
 
       const port = env.get('PORT', true) ? +env.get('PORT', true) : 3000
+      const bindAddress = env.get('BIND_ADDRESS', true) || undefined
 
       // Standard Red Notes: build() mounts the inversify controller router at '/'. The
       // CalDAV router is registered INSIDE setConfig above (before this call),
@@ -458,7 +475,7 @@ export class HomeServer implements HomeServerInterface {
       // why this is a post-build handler and not a repaired controller.
       app.use(createFallbackHandler({ welcomeHtml: HOME_SERVER_WELCOME_HTML }))
 
-      const serverInstance = app.listen(port)
+      const serverInstance = listenHomeServer(app, port, bindAddress)
 
       const readinessState = container.get<{ markReady(): void; markUnavailable(): void }>(
         ApiGatewayTypes.ApiGateway_ReadinessState,

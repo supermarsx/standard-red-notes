@@ -60,6 +60,9 @@ put NODE_ENV production
 put LOG_LEVEL "${LOG_LEVEL:-info}"
 put E2E_TESTING false
 put PORT 3000
+# nginx is the only public edge in this single-host topology. Do not inherit an
+# operator-supplied wildcard address into the backend process.
+put BIND_ADDRESS 127.0.0.1
 put APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_2 "${APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_2:-0.0.0}"
 put APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_3 "${APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_3:-0.0.0}"
 

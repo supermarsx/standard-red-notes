@@ -55,7 +55,7 @@ PY
 )"
   log_file="${scratch}/server.log"
   runuser -u "${app_user}" -- env -C "${release}/server/packages/home-server" \
-    NODE_ENV=production PORT="${port}" DB_TYPE=sqlite CACHE_TYPE=memory \
+    NODE_ENV=production PORT="${port}" BIND_ADDRESS=127.0.0.1 DB_TYPE=sqlite CACHE_TYPE=memory \
     DB_SQLITE_DATABASE_PATH="${scratch}/database/home_server.sqlite" \
     FILE_UPLOAD_PATH="${scratch}/uploads" \
     SERVER_SETTINGS_PATH="${scratch}/server-settings.json" \

@@ -217,6 +217,7 @@ NODE_ENV=production
 LOG_LEVEL=${LOG_LEVEL:-info}
 E2E_TESTING=false
 PORT=3000
+BIND_ADDRESS=127.0.0.1
 DB_TYPE=sqlite
 CACHE_TYPE=memory
 DB_SQLITE_DATABASE_PATH=${DATA_DIR}/database/home_server.sqlite
@@ -250,7 +251,7 @@ cat > "${STAGED_LAUNCHER}" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 cd "${CURRENT_LINK}/server/packages/home-server"
-exec "${NODE_BIN}" --require "${CURRENT_LINK}/server/.pnp.cjs" dist/bin/server.js
+exec env BIND_ADDRESS=127.0.0.1 "${NODE_BIN}" --require "${CURRENT_LINK}/server/.pnp.cjs" dist/bin/server.js
 EOF
 chmod +x "${STAGED_LAUNCHER}"
 

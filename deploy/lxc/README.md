@@ -23,6 +23,9 @@ container:
    passes. nginx and systemd both use that link; `previous` is retained for an
    explicit rollback. Releases are root-owned/read-only at runtime.
 
+The home-server backend is pinned to `127.0.0.1:3000` in both the generated
+environment and launcher. nginx is the only network-facing listener.
+
 The staged boot uses an isolated fresh SQLite database. It verifies startup and
 schema creation without reading or changing the production database.
 

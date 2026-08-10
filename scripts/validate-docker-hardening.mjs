@@ -655,6 +655,29 @@ export function validateReadinessAcceptanceContract({
   return errors;
 }
 
+export function validateSingleHomeServerBindContract({
+  homeServerSource,
+  singleEntrypointSource,
+}) {
+  const errors = [];
+  const homeServer = String(homeServerSource);
+  if (
+    !homeServer.includes("env.get('BIND_ADDRESS', true)") ||
+    !homeServer.includes("listenHomeServer(app, port, bindAddress)")
+  ) {
+    errors.push(
+      "home-server: BIND_ADDRESS must select listen(host) while preserving the default listener",
+    );
+  }
+  if (!String(singleEntrypointSource).includes("put BIND_ADDRESS 127.0.0.1")) {
+    errors.push(
+      "single entrypoint: home-server backend must be pinned to 127.0.0.1",
+    );
+  }
+
+  return errors;
+}
+
 export function validateReadinessBootContract({
   homeServerSource,
   homeServerRuntimeSource,
@@ -1140,6 +1163,10 @@ export function runDockerHardeningValidation(argv = process.argv.slice(2)) {
       singleDockerfileSource: singleDockerfile,
       multiComposeSource,
       singleComposeSource,
+    }),
+    ...validateSingleHomeServerBindContract({
+      homeServerSource,
+      singleEntrypointSource: singleEntrypoint,
     }),
     ...validateRuntimeLogLevelDeploymentContract({
       multiComposeSource,

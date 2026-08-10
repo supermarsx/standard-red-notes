@@ -78,8 +78,9 @@ uploaded files, generated secrets, admin overrides and feature stores (all under
 `/data`). Back it up to back up the whole instance.
 
 **Ports.** Only `8080` (nginx) is published, mapped to `APP_PORT` (default 3001).
-The home-server's `:3000` stays container-internal; nginx reverse-proxies
-`/v1`, `/auth`, `/files`, `/sockets` to it same-origin.
+The home-server binds `127.0.0.1:3000` inside the container, so nginx is its
+only network edge; nginx reverse-proxies `/v1`, `/auth`, `/files`, `/sockets`
+to it same-origin.
 
 **Common env** (all optional; see `.env.single.example`):
 
@@ -209,7 +210,8 @@ REPO_URL=https://github.com/<owner>/standard-red-notes.git ./install.sh
 Full copy-paste steps (Proxmox `pct` / `incus` container creation, upgrade,
 backup, HTTPS) are in **`deploy/lxc/README.md`**. The installer is idempotent,
 persists secrets under `/var/lib/standard-red-notes`, and installs
-`standard-red-notes.service` (`journalctl -u standard-red-notes -f`).
+`standard-red-notes.service` (`journalctl -u standard-red-notes -f`). The Node
+backend binds only `127.0.0.1:3000`; nginx is the public listener.
 
 ## Opt-in container restart (Redis / MariaDB)
 

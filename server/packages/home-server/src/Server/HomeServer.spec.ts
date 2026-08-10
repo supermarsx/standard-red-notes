@@ -4,7 +4,31 @@ jest.mock('@standardnotes/auth-server', () => ({
   Service: jest.fn(),
 }))
 
-import { buildHomeServerEnvironmentOverrides, HomeServer } from './HomeServer'
+import * as http from 'http'
+
+import { buildHomeServerEnvironmentOverrides, HomeServer, HomeServerListener, listenHomeServer } from './HomeServer'
+
+describe('listenHomeServer', () => {
+  it('passes an explicit bind address to the HTTP listener', () => {
+    const expectedServer = {} as http.Server
+    const listen = jest.fn().mockReturnValue(expectedServer)
+
+    const server = listenHomeServer({ listen } as unknown as HomeServerListener, 3000, '127.0.0.1')
+
+    expect(server).toBe(expectedServer)
+    expect(listen).toHaveBeenCalledWith(3000, '127.0.0.1')
+  })
+
+  it('preserves the existing unspecified-interface default when no bind address is configured', () => {
+    const expectedServer = {} as http.Server
+    const listen = jest.fn().mockReturnValue(expectedServer)
+
+    const server = listenHomeServer({ listen } as unknown as HomeServerListener, 3000)
+
+    expect(server).toBe(expectedServer)
+    expect(listen).toHaveBeenCalledWith(3000)
+  })
+})
 
 describe('HomeServer teardown', () => {
   afterEach(() => {

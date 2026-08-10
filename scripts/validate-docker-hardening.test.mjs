@@ -31,6 +31,7 @@ import {
   validateRuntimeLogLevelBootContract,
   validateRuntimeLogLevelDeploymentContract,
   validateServerDockerfileContract,
+  validateSingleHomeServerBindContract,
   validateSingleEntrypointAssistantPropagation,
   validateSingleEntrypointAuthStepUpPropagation,
   validateSingleContainerSQLiteMigrationContract,
@@ -62,6 +63,35 @@ test("requires aggregate readiness as the container acceptance path in both topo
     "multi compose: container health must use aggregate /healthcheck/readiness",
     "single compose: container health must use aggregate /healthcheck/readiness",
   ]);
+});
+
+test("pins the single-container backend to loopback without changing the standalone default", () => {
+  const valid = {
+    homeServerSource: `
+      const bindAddress = env.get('BIND_ADDRESS', true) || undefined
+      const serverInstance = listenHomeServer(app, port, bindAddress)
+    `,
+    singleEntrypointSource: "put BIND_ADDRESS 127.0.0.1",
+  };
+
+  assert.deepEqual(validateSingleHomeServerBindContract(valid), []);
+
+  assert.deepEqual(
+    validateSingleHomeServerBindContract({
+      homeServerSource: valid.homeServerSource.replace(
+        "env.get('BIND_ADDRESS', true)",
+        "undefined",
+      ),
+      singleEntrypointSource: valid.singleEntrypointSource.replace(
+        "127.0.0.1",
+        "0.0.0.0",
+      ),
+    }),
+    [
+      "home-server: BIND_ADDRESS must select listen(host) while preserving the default listener",
+      "single entrypoint: home-server backend must be pinned to 127.0.0.1",
+    ],
+  );
 });
 
 test("locks aggregate readiness to startup lifecycle, service, worker, and storage signals", () => {
