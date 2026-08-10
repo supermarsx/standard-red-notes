@@ -7,6 +7,7 @@ import { discoverReleaseTargetSurface } from "./analyze-release-impact.mjs";
 import { RELEASE_PACKAGING_CONTRACTS } from "./release-packaging-contract.mjs";
 import {
   approvedWorkflowAction,
+  validateMcpReleaseDependencyContract,
   validateImmutableWorkflowActions,
 } from "./validate-ci-contract.mjs";
 
@@ -740,6 +741,12 @@ export function loadReleaseContractFiles(
 export function validateReleaseContract(files) {
   const errors = [];
 
+  errors.push(
+    ...validateMcpReleaseDependencyContract(
+      files.get(".github/workflows/srn-mcp.yml") ?? "",
+    ),
+  );
+
   for (const actionWorkflow of [
     ".github/workflows/ci.yml",
     ".github/workflows/docs-pages.yml",
@@ -879,6 +886,7 @@ export function validateReleaseContract(files) {
       ".github/workflows/srn-mcp.yml",
       [
         "impact",
+        "audit",
         "lint",
         "format",
         "test",
@@ -1249,7 +1257,7 @@ export function validateReleaseContract(files) {
       {
         bundle: "dist/index.cjs",
         entrypoint: "mcp/src/index.ts",
-        payload: "--path dist/index.cjs",
+        payload: "--path mcp/dist/index.cjs",
       },
     ],
     [
@@ -1358,6 +1366,12 @@ export function validateReleaseContract(files) {
       release: [nativeAction("checkout"), nativeAction("downloadArtifact")],
       smoke: [nativeAction("downloadArtifact")],
     };
+    if (file === ".github/workflows/srn-mcp.yml") {
+      nativeJobActions.audit = [
+        nativeAction("checkout"),
+        nativeAction("setupNode"),
+      ];
+    }
     if (
       new Set([
         ".github/workflows/srn-client.yml",
@@ -1658,7 +1672,9 @@ export function validateReleaseContract(files) {
 
     for (const [fragment, description] of [
       [
-        "needs: [build, decide, identity]",
+        file === ".github/workflows/srn-mcp.yml"
+          ? "needs: [audit, build, decide, identity]"
+          : "needs: [build, decide, identity]",
         "package fan-in over reserved identity",
       ],
       [
@@ -1690,11 +1706,15 @@ export function validateReleaseContract(files) {
     const releaseJob = jobBlock(workflow, "release");
     for (const [fragment, description] of [
       [
-        "needs: [impact, build, decide, identity, package, smoke]",
+        file === ".github/workflows/srn-mcp.yml"
+          ? "needs: [impact, audit, build, decide, identity, package, smoke]"
+          : "needs: [impact, build, decide, identity, package, smoke]",
         "native publication fan-in including force intent",
       ],
       [
-        "if: always() && needs.impact.result == 'success' && needs.decide.outputs.changed == 'true' && needs.identity.result == 'success' && ((needs.package.result == 'success' && needs.smoke.result == 'success') || (needs.identity.outputs.published == 'true' && needs.package.result == 'skipped' && needs.smoke.result == 'skipped'))",
+        file === ".github/workflows/srn-mcp.yml"
+          ? "if: always() && needs.impact.result == 'success' && needs.audit.result == 'success' && needs.decide.outputs.changed == 'true' && needs.identity.result == 'success' && ((needs.package.result == 'success' && needs.smoke.result == 'success') || (needs.identity.outputs.published == 'true' && needs.package.result == 'skipped' && needs.smoke.result == 'skipped'))"
+          : "if: always() && needs.impact.result == 'success' && needs.decide.outputs.changed == 'true' && needs.identity.result == 'success' && ((needs.package.result == 'success' && needs.smoke.result == 'success') || (needs.identity.outputs.published == 'true' && needs.package.result == 'skipped' && needs.smoke.result == 'skipped'))",
         "retry-safe native publication result gate",
       ],
       [

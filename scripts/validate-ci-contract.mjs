@@ -11,6 +11,7 @@ const defaultRepositoryRoot = path.resolve(path.dirname(scriptPath), "..");
 export const CI_CONTRACT_FILES = Object.freeze([
   ".github/workflows/ci.yml",
   ".github/workflows/docs-pages.yml",
+  ".github/workflows/srn-mcp.yml",
   "app/.nvmrc",
   "package.json",
   "server/.nvmrc",
@@ -222,12 +223,210 @@ function requireJob(errors, workflow, jobName, fragments) {
   }
 }
 
+export function validateMcpReleaseDependencyContract(workflow) {
+  const errors = [];
+  const file = ".github/workflows/srn-mcp.yml";
+
+  for (const [fragment, description] of [
+    ['COREPACK_VERSION: "0.35.0"', "pinned Corepack version"],
+    ['YARN_VERSION: "4.17.1"', "root Yarn version"],
+  ]) {
+    requireFragment(errors, file, workflow, fragment, description);
+  }
+
+  for (const [pattern, description] of [
+    [/\bnpm\s+install\b[^\r\n]*--no-package-lock\b/, "unlocked npm install"],
+    [/\byarn\s+install\b(?!\s+--immutable\b)/, "non-immutable Yarn install"],
+  ]) {
+    if (pattern.test(workflow)) {
+      errors.push(`${file}: forbidden ${description}`);
+    }
+  }
+  for (const line of workflow.split(/\r?\n/)) {
+    if (
+      /\bnpm\s+(?:install|i)\b/.test(line) &&
+      !line.includes('npm install --global "corepack@${COREPACK_VERSION}"')
+    ) {
+      errors.push(`${file}: forbidden non-Corepack npm install`);
+      break;
+    }
+  }
+
+  const audit = jobBlock(workflow, "audit");
+  for (const [fragment, description] of [
+    ["needs: impact", "release-impact dependency"],
+    [
+      "audited_sha: ${{ steps.source.outputs.audited_sha }}",
+      "audited SHA output",
+    ],
+    [
+      "lock_sha256: ${{ steps.source.outputs.lock_sha256 }}",
+      "audited lock digest output",
+    ],
+    [
+      'npm install --global "corepack@${COREPACK_VERSION}"',
+      "pinned Corepack install",
+    ],
+    [
+      'test "$(yarn --version)" = "$YARN_VERSION"',
+      "exact Yarn version assertion",
+    ],
+    ["yarn install --immutable", "immutable root install"],
+    [
+      'test "$(git rev-parse HEAD)" = "$GITHUB_SHA"',
+      "exact audit SHA assertion",
+    ],
+    ["sha256sum yarn.lock", "audited lock digest"],
+    ["yarn deps:security:production", "production dependency audit"],
+  ]) {
+    requireFragment(errors, file, audit, fragment, `audit ${description}`);
+  }
+
+  const dependencyJobs = new Map([
+    ["lint", "yarn workspace @standard-red-notes/mcp typecheck"],
+    ["format", "yarn workspace @standard-red-notes/mcp format:check"],
+    ["test", "yarn workspace @standard-red-notes/mcp build"],
+    ["build", "yarn workspace @standard-red-notes/mcp build"],
+  ]);
+  for (const [jobName, workspaceCommand] of dependencyJobs) {
+    const block = jobBlock(workflow, jobName);
+    for (const [fragment, description] of [
+      ["audit", "audit dependency"],
+      [
+        'npm install --global "corepack@${COREPACK_VERSION}"',
+        "pinned Corepack install",
+      ],
+      [
+        'test "$(yarn --version)" = "$YARN_VERSION"',
+        "exact Yarn version assertion",
+      ],
+      [
+        "AUDITED_SHA: ${{ needs.audit.outputs.audited_sha }}",
+        "audited SHA input",
+      ],
+      [
+        "AUDITED_LOCK_SHA256: ${{ needs.audit.outputs.lock_sha256 }}",
+        "audited lock digest input",
+      ],
+      ["yarn install --immutable", "immutable root install"],
+      [workspaceCommand, "workspace-scoped command"],
+    ]) {
+      requireFragment(
+        errors,
+        file,
+        block,
+        fragment,
+        `${jobName} ${description}`,
+      );
+    }
+    const installs = block.split("yarn install --immutable").length - 1;
+    if (block && installs !== 1) {
+      errors.push(
+        `${file}: ${jobName} must perform exactly one immutable root install, found ${installs}`,
+      );
+    }
+  }
+
+  const build = jobBlock(workflow, "build");
+  for (const [fragment, description] of [
+    [
+      "needs: [impact, audit, lint, test, format]",
+      "audit-bearing check fan-in",
+    ],
+    ["--root ..", "repository-root fingerprint boundary"],
+    ["--path mcp/dist/index.cjs", "MCP bundle fingerprint input"],
+    ["--path yarn.lock", "root lock fingerprint input"],
+  ]) {
+    requireFragment(errors, file, build, fragment, `build ${description}`);
+  }
+
+  const packageJob = jobBlock(workflow, "package");
+  for (const [fragment, description] of [
+    [
+      "needs: [audit, build, decide, identity]",
+      "direct audited package fan-in",
+    ],
+    [
+      "AUDITED_SHA: ${{ needs.audit.outputs.audited_sha }}",
+      "audited SHA input",
+    ],
+    [
+      "AUDITED_LOCK_SHA256: ${{ needs.audit.outputs.lock_sha256 }}",
+      "audited lock digest input",
+    ],
+    [
+      'test "$AUDITED_SHA" = "$GITHUB_SHA"',
+      "exact audited package SHA assertion",
+    ],
+    ["sha256sum yarn.lock", "audited package lock assertion"],
+  ]) {
+    requireFragment(
+      errors,
+      file,
+      packageJob,
+      fragment,
+      `package ${description}`,
+    );
+  }
+
+  const release = jobBlock(workflow, "release");
+  for (const [fragment, description] of [
+    [
+      "needs: [impact, audit, build, decide, identity, package, smoke]",
+      "direct audited publication fan-in",
+    ],
+    ["needs.audit.result == 'success'", "successful audit publication gate"],
+    [
+      "AUDITED_SHA: ${{ needs.audit.outputs.audited_sha }}",
+      "audited SHA input",
+    ],
+    [
+      "AUDITED_LOCK_SHA256: ${{ needs.audit.outputs.lock_sha256 }}",
+      "audited lock digest input",
+    ],
+    [
+      'test "$AUDITED_SHA" = "$GITHUB_SHA"',
+      "exact audited publication SHA assertion",
+    ],
+    ["sha256sum yarn.lock", "audited publication lock assertion"],
+  ]) {
+    requireFragment(errors, file, release, fragment, `release ${description}`);
+  }
+
+  const immutableInstalls =
+    workflow.split("yarn install --immutable").length - 1;
+  if (immutableInstalls !== dependencyJobs.size + 1) {
+    errors.push(
+      `${file}: audit and dependency jobs must perform exactly ${dependencyJobs.size + 1} immutable root installs, found ${immutableInstalls}`,
+    );
+  }
+  if (
+    (workflow.match(/\byarn deps:security:production\b/g) ?? []).length !== 1
+  ) {
+    errors.push(`${file}: production dependency audit must run exactly once`);
+  }
+  const corepackInstalls =
+    workflow.split('npm install --global "corepack@${COREPACK_VERSION}"')
+      .length - 1;
+  if (corepackInstalls !== dependencyJobs.size + 1) {
+    errors.push(
+      `${file}: audit and dependency jobs must perform exactly ${dependencyJobs.size + 1} pinned Corepack installs, found ${corepackInstalls}`,
+    );
+  }
+
+  return errors;
+}
+
 export function validateCiContract(files) {
   const errors = [];
   const file = ".github/workflows/ci.yml";
   const workflow = files.get(file) ?? "";
 
-  for (const actionWorkflow of [file, ".github/workflows/docs-pages.yml"]) {
+  for (const actionWorkflow of [
+    file,
+    ".github/workflows/docs-pages.yml",
+    ".github/workflows/srn-mcp.yml",
+  ]) {
     errors.push(
       ...validateImmutableWorkflowActions(
         actionWorkflow,
@@ -235,6 +434,12 @@ export function validateCiContract(files) {
       ),
     );
   }
+
+  errors.push(
+    ...validateMcpReleaseDependencyContract(
+      files.get(".github/workflows/srn-mcp.yml") ?? "",
+    ),
+  );
 
   for (const [fragment, description] of [
     ["name: CI", "stable workflow name"],

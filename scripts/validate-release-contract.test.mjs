@@ -923,6 +923,32 @@ test("native publishers enforce exact action SHAs and version labels", () => {
   }
 });
 
+test("the MCP native publisher preserves its audited locked dependency chain", () => {
+  const file = ".github/workflows/srn-mcp.yml";
+  for (const [fragment, replacement, expected] of [
+    [
+      "run: yarn install --immutable",
+      "run: npm install --no-package-lock --no-audit --no-fund",
+      /forbidden unlocked npm install/,
+    ],
+    [
+      "            --path yarn.lock \\\n",
+      "",
+      /missing build root lock fingerprint input/,
+    ],
+    [
+      "needs: [impact, audit, build, decide, identity, package, smoke]",
+      "needs: [impact, build, decide, identity, package, smoke]",
+      /missing release direct audited publication fan-in/,
+    ],
+  ]) {
+    const files = withFileChanged(file, (content) =>
+      content.replace(fragment, replacement),
+    );
+    assert.match(validateReleaseContract(files).join("\n"), expected);
+  }
+});
+
 test("native release identity and publication remain retry-safe", () => {
   const file = ".github/workflows/srn-client.yml";
   for (const [jobName, nextJobName, fragment, replacement, expected] of [

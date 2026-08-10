@@ -114,6 +114,73 @@ test("the contracts lane cannot drop the production dependency audit", () => {
   );
 });
 
+test("the MCP publisher rejects unlocked dependency resolution", () => {
+  const files = withFileChanged(".github/workflows/srn-mcp.yml", (content) =>
+    content.replace(
+      "run: yarn install --immutable",
+      "run: npm install --no-package-lock --no-audit --no-fund",
+    ),
+  );
+  const errors = validateCiContract(files).join("\n");
+  assert.match(errors, /srn-mcp\.yml: forbidden unlocked npm install/);
+  assert.match(errors, /srn-mcp\.yml: forbidden non-Corepack npm install/);
+  assert.match(errors, /missing audit immutable root install/);
+});
+
+test("the MCP publisher cannot omit immutable installation or production audit", () => {
+  let files = withFileChanged(".github/workflows/srn-mcp.yml", (content) =>
+    content.replace("run: yarn install --immutable", "run: yarn install"),
+  );
+  let errors = validateCiContract(files).join("\n");
+  assert.match(errors, /srn-mcp\.yml: forbidden non-immutable Yarn install/);
+  assert.match(errors, /missing audit immutable root install/);
+
+  files = withFileChanged(".github/workflows/srn-mcp.yml", (content) =>
+    content.replace(
+      "run: yarn deps:security:production",
+      "run: echo production-audit-disabled",
+    ),
+  );
+  errors = validateCiContract(files).join("\n");
+  assert.match(errors, /missing audit production dependency audit/);
+  assert.match(errors, /production dependency audit must run exactly once/);
+});
+
+test("the MCP release fingerprint cannot omit the root lock graph", () => {
+  const files = withFileChanged(".github/workflows/srn-mcp.yml", (content) =>
+    content.replace("            --path yarn.lock \\\n", ""),
+  );
+  assert.match(
+    validateCiContract(files).join("\n"),
+    /missing build root lock fingerprint input/,
+  );
+});
+
+test("MCP packaging and publication depend directly on the exact-SHA audit", () => {
+  let files = withFileChanged(".github/workflows/srn-mcp.yml", (content) =>
+    content.replace(
+      "needs: [audit, build, decide, identity]",
+      "needs: [build, decide, identity]",
+    ),
+  );
+  assert.match(
+    validateCiContract(files).join("\n"),
+    /missing package direct audited package fan-in/,
+  );
+
+  files = withFileChanged(".github/workflows/srn-mcp.yml", (content) =>
+    content
+      .replace(
+        "needs: [impact, audit, build, decide, identity, package, smoke]",
+        "needs: [impact, build, decide, identity, package, smoke]",
+      )
+      .replace(" && needs.audit.result == 'success'", ""),
+  );
+  const errors = validateCiContract(files).join("\n");
+  assert.match(errors, /missing release direct audited publication fan-in/);
+  assert.match(errors, /missing release successful audit publication gate/);
+});
+
 test("a missing backup and restore drill is rejected", () => {
   const files = withFileChanged(".github/workflows/ci.yml", (content) =>
     content.replace(

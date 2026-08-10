@@ -1,8 +1,9 @@
 # Rolling release pipeline for the `srn-mcp` server (the MCP bridge).
 #
 # Gated stages (each only runs if the previous succeeded, via `needs:`):
-#   (lint, test, format) -> build -> decide -> identity -> package -> release
-# The three check jobs run in parallel; build fans in on all three.
+#   audit -> (lint, test, format) -> build -> decide -> identity -> package -> release
+# The three check jobs run in parallel after the exact-SHA dependency audit;
+# build fans in on all four gates.
 #
 # Trigger: push to `main` that touches the tool (or manual dispatch). A new
 # rolling release `srn-mcp <YY.N>` is cut ONLY when the freshly built bundle
@@ -57,6 +58,8 @@ env:
   TOOL: srn-mcp
   TOOL_DIR: mcp
   NODE_VERSION: "26"
+  COREPACK_VERSION: "0.35.0"
+  YARN_VERSION: "4.17.1"
 
 jobs:
   impact:
@@ -117,18 +120,58 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # 1) CHECK — typecheck, format and "does it build + run" run as three
-  # INDEPENDENT parallel jobs; `build` fans in on all three. The MCP package is a
-  # standalone npm package (its own node_modules at mcp/), so each job installs
-  # its own deps. Unlike srn-server, typecheck + build genuinely need the
-  # installed dependencies (snjs/sdk types + sources to bundle), so every job
-  # that needs them runs `npm install`.
+  # 1) AUDIT + CHECK — every dependency-consuming job installs the repository's
+  # immutable Yarn graph. The audit binds that graph to this exact workflow SHA;
+  # the parallel typecheck, format and runtime checks verify the same lock digest.
+
+  audit:
+    name: production dependency audit
+    needs: impact
+    if: needs.impact.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      audited_sha: ${{ steps.source.outputs.audited_sha }}
+      lock_sha256: ${{ steps.source.outputs.lock_sha256 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
+      - name: Enable pinned Corepack and Yarn
+        run: |
+          set -euo pipefail
+          npm install --global "corepack@${COREPACK_VERSION}"
+          corepack enable
+          test "$(yarn --version)" = "$YARN_VERSION"
+
+      - name: Install immutable root dependency graph
+        run: yarn install --immutable
+
+      - id: source
+        name: Bind audit to exact source and lock
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          lock_sha256="$(sha256sum yarn.lock | cut -d ' ' -f 1)"
+          [[ "$lock_sha256" =~ ^[0-9a-f]{64}$ ]]
+          {
+            echo "audited_sha=${GITHUB_SHA}"
+            echo "lock_sha256=${lock_sha256}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Audit every production lock graph
+        run: yarn deps:security:production
 
   # 1a) LINT — strict typecheck (tsc --noEmit) is this TS bridge's lint gate, plus
   # a package-shape assertion so a missing/renamed entry point or bin fails loudly.
   lint:
     name: lint
-    needs: impact
+    needs: [impact, audit]
     if: needs.impact.outputs.changed == 'true'
     runs-on: ubuntu-latest
     steps:
@@ -139,16 +182,27 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: ${{ env.TOOL_DIR }}/package.json
+          package-manager-cache: false
 
-      - name: Install tool dependencies
-        working-directory: ${{ env.TOOL_DIR }}
-        run: npm install --no-package-lock --no-audit --no-fund
+      - name: Enable pinned Corepack and Yarn
+        run: |
+          set -euo pipefail
+          npm install --global "corepack@${COREPACK_VERSION}"
+          corepack enable
+          test "$(yarn --version)" = "$YARN_VERSION"
+
+      - name: Install exact audited dependency graph
+        env:
+          AUDITED_SHA: ${{ needs.audit.outputs.audited_sha }}
+          AUDITED_LOCK_SHA256: ${{ needs.audit.outputs.lock_sha256 }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$AUDITED_SHA"
+          test "$(sha256sum yarn.lock | cut -d ' ' -f 1)" = "$AUDITED_LOCK_SHA256"
+          yarn install --immutable
 
       - name: Typecheck
-        working-directory: ${{ env.TOOL_DIR }}
-        run: npm run typecheck
+        run: yarn workspace @standard-red-notes/mcp typecheck
 
       - name: Verify package shape
         working-directory: ${{ env.TOOL_DIR }}
@@ -161,7 +215,7 @@ jobs:
   # script) so the config/version match exactly how the source was formatted.
   format:
     name: format
-    needs: impact
+    needs: [impact, audit]
     if: needs.impact.outputs.changed == 'true'
     runs-on: ubuntu-latest
     steps:
@@ -172,16 +226,27 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: ${{ env.TOOL_DIR }}/package.json
+          package-manager-cache: false
 
-      - name: Install tool dependencies
-        working-directory: ${{ env.TOOL_DIR }}
-        run: npm install --no-package-lock --no-audit --no-fund
+      - name: Enable pinned Corepack and Yarn
+        run: |
+          set -euo pipefail
+          npm install --global "corepack@${COREPACK_VERSION}"
+          corepack enable
+          test "$(yarn --version)" = "$YARN_VERSION"
+
+      - name: Install exact audited dependency graph
+        env:
+          AUDITED_SHA: ${{ needs.audit.outputs.audited_sha }}
+          AUDITED_LOCK_SHA256: ${{ needs.audit.outputs.lock_sha256 }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$AUDITED_SHA"
+          test "$(sha256sum yarn.lock | cut -d ' ' -f 1)" = "$AUDITED_LOCK_SHA256"
+          yarn install --immutable
 
       - name: Check formatting
-        working-directory: ${{ env.TOOL_DIR }}
-        run: npm run format:check
+        run: yarn workspace @standard-red-notes/mcp format:check
 
   # 1c) TEST — no unit suite (the e2e harness needs a live stack, so it can't run
   # here). The functional gate is "the bundle builds and the produced server
@@ -192,7 +257,7 @@ jobs:
   # stdio default, which would block forever waiting on stdin.
   test:
     name: test
-    needs: impact
+    needs: [impact, audit]
     if: needs.impact.outputs.changed == 'true'
     runs-on: ubuntu-latest
     steps:
@@ -203,16 +268,27 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: ${{ env.TOOL_DIR }}/package.json
+          package-manager-cache: false
 
-      - name: Install tool dependencies
-        working-directory: ${{ env.TOOL_DIR }}
-        run: npm install --no-package-lock --no-audit --no-fund
+      - name: Enable pinned Corepack and Yarn
+        run: |
+          set -euo pipefail
+          npm install --global "corepack@${COREPACK_VERSION}"
+          corepack enable
+          test "$(yarn --version)" = "$YARN_VERSION"
+
+      - name: Install exact audited dependency graph
+        env:
+          AUDITED_SHA: ${{ needs.audit.outputs.audited_sha }}
+          AUDITED_LOCK_SHA256: ${{ needs.audit.outputs.lock_sha256 }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$AUDITED_SHA"
+          test "$(sha256sum yarn.lock | cut -d ' ' -f 1)" = "$AUDITED_LOCK_SHA256"
+          yarn install --immutable
 
       - name: Build single-file bundle
-        working-directory: ${{ env.TOOL_DIR }}
-        run: npm run build
+        run: yarn workspace @standard-red-notes/mcp build
 
       - name: Smoke-test bundle (fail-closed http guard)
         working-directory: ${{ env.TOOL_DIR }}
@@ -235,7 +311,7 @@ jobs:
   # (pkg bakes in non-reproducible node-version/timestamps).
   build:
     name: build
-    needs: [impact, lint, test, format]
+    needs: [impact, audit, lint, test, format]
     if: needs.impact.outputs.changed == 'true'
     runs-on: ubuntu-latest
     outputs:
@@ -248,16 +324,27 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: ${{ env.TOOL_DIR }}/package.json
+          package-manager-cache: false
 
-      - name: Install tool dependencies
-        working-directory: ${{ env.TOOL_DIR }}
-        run: npm install --no-package-lock --no-audit --no-fund
+      - name: Enable pinned Corepack and Yarn
+        run: |
+          set -euo pipefail
+          npm install --global "corepack@${COREPACK_VERSION}"
+          corepack enable
+          test "$(yarn --version)" = "$YARN_VERSION"
+
+      - name: Install exact audited dependency graph
+        env:
+          AUDITED_SHA: ${{ needs.audit.outputs.audited_sha }}
+          AUDITED_LOCK_SHA256: ${{ needs.audit.outputs.lock_sha256 }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$AUDITED_SHA"
+          test "$(sha256sum yarn.lock | cut -d ' ' -f 1)" = "$AUDITED_LOCK_SHA256"
+          yarn install --immutable
 
       - name: Build single-file bundle
-        working-directory: ${{ env.TOOL_DIR }}
-        run: npm run build
+        run: yarn workspace @standard-red-notes/mcp build
 
       - name: Smoke-test bundle (fail-closed http guard)
         working-directory: ${{ env.TOOL_DIR }}
@@ -284,8 +371,9 @@ jobs:
             --tool "$TOOL" \
             --bundle dist/index.cjs \
             --out-dir out \
-            --root . \
-            --path dist/index.cjs \
+            --root .. \
+            --path mcp/dist/index.cjs \
+            --path yarn.lock \
             --output "dist/${TOOL}.fingerprint" \
             --github-output "$GITHUB_OUTPUT"
 
@@ -515,7 +603,7 @@ jobs:
   # when the bundle is unchanged.
   package:
     name: package
-    needs: [build, decide, identity]
+    needs: [audit, build, decide, identity]
     if: needs.decide.outputs.changed == 'true' && needs.identity.outputs.published != 'true'
     runs-on: ubuntu-latest
     env:
@@ -523,6 +611,8 @@ jobs:
       RELEASE_TAG: ${{ needs.identity.outputs.tag }}
       RELEASE_ID: ${{ needs.identity.outputs.release_id }}
       RELEASE_COMMIT: ${{ github.sha }}
+      AUDITED_SHA: ${{ needs.audit.outputs.audited_sha }}
+      AUDITED_LOCK_SHA256: ${{ needs.audit.outputs.lock_sha256 }}
     steps:
       - name: Verify reserved release identity
         run: |
@@ -534,6 +624,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      - name: Verify exact audited source and lock
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$AUDITED_SHA"
+          test "$AUDITED_SHA" = "$GITHUB_SHA"
+          test "$(sha256sum yarn.lock | cut -d ' ' -f 1)" = "$AUDITED_LOCK_SHA256"
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -658,8 +755,8 @@ jobs:
   # are retry-safe; publishing is deliberately the final command.
   release:
     name: release
-    needs: [impact, build, decide, identity, package, smoke]
-    if: always() && needs.impact.result == 'success' && needs.decide.outputs.changed == 'true' && needs.identity.result == 'success' && ((needs.package.result == 'success' && needs.smoke.result == 'success') || (needs.identity.outputs.published == 'true' && needs.package.result == 'skipped' && needs.smoke.result == 'skipped'))
+    needs: [impact, audit, build, decide, identity, package, smoke]
+    if: always() && needs.impact.result == 'success' && needs.audit.result == 'success' && needs.decide.outputs.changed == 'true' && needs.identity.result == 'success' && ((needs.package.result == 'success' && needs.smoke.result == 'success') || (needs.identity.outputs.published == 'true' && needs.package.result == 'skipped' && needs.smoke.result == 'skipped'))
     runs-on: ubuntu-latest
     environment: release-production
     permissions:
@@ -672,6 +769,8 @@ jobs:
       EXPECTED_FINGERPRINT: ${{ needs.build.outputs.fingerprint }}
       FORCED: ${{ needs.impact.outputs.forced }}
       IMPACT_RESULT: ${{ needs.impact.outputs.result_json }}
+      AUDITED_SHA: ${{ needs.audit.outputs.audited_sha }}
+      AUDITED_LOCK_SHA256: ${{ needs.audit.outputs.lock_sha256 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -690,6 +789,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$AUDITED_SHA"
+          test "$AUDITED_SHA" = "$GITHUB_SHA"
+          test "$(sha256sum yarn.lock | cut -d ' ' -f 1)" = "$AUDITED_LOCK_SHA256"
           test "$RELEASE_TAG" = "${TOOL}-v${RELEASE_VERSION}"
           [[ "$RELEASE_ID" =~ ^[0-9]+$ ]]
           [[ "$EXPECTED_FINGERPRINT" =~ ^[0-9a-f]{64}$ ]]
