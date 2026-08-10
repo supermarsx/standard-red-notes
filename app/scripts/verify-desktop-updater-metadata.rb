@@ -11,6 +11,7 @@ require 'uri'
 require 'yaml'
 
 options = { allowed: [], architectures: [] }
+DMG_EXECUTABLE_SELECTOR = '-ir!*.app/Contents/MacOS/*'
 OptionParser.new do |parser|
   parser.on('--metadata PATH') { |value| options[:metadata] = value }
   parser.on('--source-dir PATH') { |value| options[:source_dir] = value }
@@ -106,7 +107,7 @@ def verify_architecture!(path, kind, name)
     end
   when 'dmg'
     Dir.mktmpdir('srn-updater-dmg-') do |directory|
-      command!('7z', 'x', '-y', "-o#{directory}", path)
+      command!('7z', 'x', '-y', DMG_EXECUTABLE_SELECTOR, "-o#{directory}", path)
       description = file_description(app_executable!(directory, name))
       require_format!(description, /Mach-O 64-bit/i, 'Mach-O', name)
       require_architecture!(description, expected, name)

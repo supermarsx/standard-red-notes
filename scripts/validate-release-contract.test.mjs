@@ -1972,6 +1972,19 @@ test("desktop updater metadata, architecture, recovery, and environment guards c
   );
 
   files = withFileChanged(
+    "app/scripts/verify-desktop-updater-metadata.rb",
+    (content) =>
+      content.replace(
+        "DMG_EXECUTABLE_SELECTOR = '-ir!*.app/Contents/MacOS/*'",
+        "DMG_EXECUTABLE_SELECTOR = '*'",
+      ),
+  );
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /missing selective macOS DMG executable extraction/,
+  );
+
+  files = withFileChanged(
     "app/scripts/verify-desktop-updater-metadata.test.rb",
     (content) =>
       content.replace(

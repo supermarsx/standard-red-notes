@@ -5912,6 +5912,10 @@ export function validateReleaseContract(files) {
     ["/ELF 64-bit/i", "AppImage ELF format assertion"],
     ["when 'zip'", "macOS ZIP verifier"],
     ["when 'dmg'", "macOS DMG verifier"],
+    [
+      "DMG_EXECUTABLE_SELECTOR = '-ir!*.app/Contents/MacOS/*'",
+      "selective macOS DMG executable extraction",
+    ],
     ["/Mach-O 64-bit/i", "macOS executable format assertion"],
     ["when 'deb'", "Debian package verifier"],
     ["dpkg-deb", "Debian control and payload inspection"],
@@ -5946,6 +5950,10 @@ export function validateReleaseContract(files) {
     [
       "test_accepts_matching_legacy_fields",
       "valid legacy updater metadata test",
+    ],
+    [
+      "test_dmg_inspection_excludes_standard_applications_symlink",
+      "standard macOS Applications symlink regression test",
     ],
     ["test_rejects_non_basename_urls", "updater basename rejection test"],
     ["test_rejects_wrong_size", "updater size rejection test"],

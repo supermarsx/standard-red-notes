@@ -47,6 +47,10 @@ class VerifyDesktopUpdaterMetadataTest
       when 'unzip'
         extract_app.call(ARGV.fetch(1), ARGV.fetch(ARGV.index('-d') + 1))
       when '7z'
+        unless ARGV.include?('-ir!*.app/Contents/MacOS/*')
+          warn 'ERROR: Dangerous link path was ignored : Standard Red Notes/Applications : /Applications'
+          exit 2
+        end
         output = ARGV.find { |argument| argument.start_with?('-o') }.delete_prefix('-o')
         extract_app.call(ARGV.last, output)
       when 'dpkg-deb'
@@ -152,6 +156,14 @@ class VerifyDesktopUpdaterMetadataTest
     assets = { 'desktop.exe' => FORMATS.fetch('desktop.exe') }
     with_fixture(assets) do |_root, source_dir, bin_dir|
       _stdout, stderr, status = run_verifier(source_dir, bin_dir, assets, metadata_document(source_dir, assets, legacy: true))
+      assert status.success?, stderr
+    end
+  end
+
+  def test_dmg_inspection_excludes_standard_applications_symlink
+    assets = { 'desktop.dmg' => FORMATS.fetch('desktop.dmg') }
+    with_fixture(assets) do |_root, source_dir, bin_dir|
+      _stdout, stderr, status = run_verifier(source_dir, bin_dir, assets, metadata_document(source_dir, assets))
       assert status.success?, stderr
     end
   end
