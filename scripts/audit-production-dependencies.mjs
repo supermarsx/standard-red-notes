@@ -113,6 +113,66 @@ export function validateLockfileInventory(
   return errors;
 }
 
+const securityManifestDeclarations = Object.freeze([
+  Object.freeze({
+    file: "mcp/package.json",
+    section: "dependencies",
+    packageName: "@modelcontextprotocol/sdk",
+    expected: "^1.30.0",
+  }),
+  Object.freeze({
+    file: "openclaw/package.json",
+    section: "dependencies",
+    packageName: "@modelcontextprotocol/sdk",
+    expected: "^1.30.0",
+  }),
+  Object.freeze({
+    file: "app/packages/utils/package.json",
+    section: "dependencies",
+    packageName: "dompurify",
+    expected: "^3.4.13",
+  }),
+  Object.freeze({
+    file: "app/packages/web/package.json",
+    section: "dependencies",
+    packageName: "mermaid",
+    expected: "^11.16.1",
+  }),
+  Object.freeze({
+    file: "server/package.json",
+    section: "resolutions",
+    packageName: "dompurify",
+    expected: "npm:3.4.13",
+  }),
+]);
+
+export function validateSecurityManifestDeclarations(manifests) {
+  const errors = [];
+  for (const requirement of securityManifestDeclarations) {
+    const text = manifests[requirement.file];
+    if (typeof text !== "string") {
+      errors.push(`${requirement.file}: security manifest is missing`);
+      continue;
+    }
+
+    let manifest;
+    try {
+      manifest = JSON.parse(text);
+    } catch {
+      errors.push(`${requirement.file}: security manifest is invalid JSON`);
+      continue;
+    }
+
+    const actual = manifest[requirement.section]?.[requirement.packageName];
+    if (actual !== requirement.expected) {
+      errors.push(
+        `${requirement.file}: ${requirement.section}.${requirement.packageName} must remain ${requirement.expected}`,
+      );
+    }
+  }
+  return errors;
+}
+
 export function parseYarnAudit(output, domain) {
   const advisories = [];
   for (const line of output.split(/\r?\n/u)) {
@@ -355,6 +415,18 @@ function yarnVersions(lockfile, packageName) {
 // These floors mirror the first patched releases published for the vulnerable
 // major lines currently present in the committed Yarn dependency graph.
 const yarnSecurityPatchFloors = Object.freeze({
+  "@modelcontextprotocol/sdk": Object.freeze({
+    minimumMajor: 1,
+    floors: Object.freeze({
+      1: Object.freeze([1, 30, 0]),
+    }),
+  }),
+  "@hono/node-server": Object.freeze({
+    minimumMajor: 2,
+    floors: Object.freeze({
+      2: Object.freeze([2, 0, 5]),
+    }),
+  }),
   "adm-zip": Object.freeze({
     minimumMajor: 0,
     floors: Object.freeze({
@@ -365,6 +437,18 @@ const yarnSecurityPatchFloors = Object.freeze({
     minimumMajor: 10,
     floors: Object.freeze({
       10: Object.freeze([10, 3, 1]),
+    }),
+  }),
+  dompurify: Object.freeze({
+    minimumMajor: 3,
+    floors: Object.freeze({
+      3: Object.freeze([3, 4, 13]),
+    }),
+  }),
+  mermaid: Object.freeze({
+    minimumMajor: 11,
+    floors: Object.freeze({
+      11: Object.freeze([11, 16, 1]),
     }),
   }),
   picomatch: Object.freeze({
@@ -670,6 +754,14 @@ export function runProductionAudit(root = repositoryRoot, runner = spawnSync) {
     "utf8",
   );
   const graphErrors = [
+    ...validateSecurityManifestDeclarations(
+      Object.fromEntries(
+        securityManifestDeclarations.map((requirement) => [
+          requirement.file,
+          fs.readFileSync(path.join(root, requirement.file), "utf8"),
+        ]),
+      ),
+    ),
     ...validateAppSecurityGraph(
       fs.readFileSync(path.join(root, "app", "package.json"), "utf8"),
       appLockfile,
