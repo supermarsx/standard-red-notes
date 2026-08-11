@@ -26,6 +26,7 @@ import { EncryptionVersion } from '../../Encryption/EncryptionVersion'
 import { GetActiveSessionsForUser } from '../GetActiveSessionsForUser'
 import { Permission } from '../../Permission/Permission'
 import { SettingRepositoryInterface } from '../../Setting/SettingRepositoryInterface'
+import { GetSetting } from '../GetSetting/GetSetting'
 
 describe('CreateCrossServiceToken', () => {
   let userProjector: ProjectorInterface<User>
@@ -38,6 +39,7 @@ describe('CreateCrossServiceToken', () => {
   let sharedVaultUserRepository: SharedVaultUserRepositoryInterface
   let getActiveSessionsForUser: GetActiveSessionsForUser
   let settingRepository: SettingRepositoryInterface
+  let getSetting: GetSetting
   const jwtTTL = 60
 
   let session: Session
@@ -62,7 +64,7 @@ describe('CreateCrossServiceToken', () => {
       getActiveSessionsForUser,
       applicationVersionThresholdForTokenVersion2,
       applicationVersionThresholdForTokenVersion3,
-      settingRepository,
+      getSetting,
     )
 
   beforeEach(() => {
@@ -76,6 +78,14 @@ describe('CreateCrossServiceToken', () => {
 
     settingRepository = {} as jest.Mocked<SettingRepositoryInterface>
     settingRepository.findLastByNameAndUserUuid = jest.fn().mockResolvedValue(null)
+    getSetting = {} as jest.Mocked<GetSetting>
+    getSetting.execute = jest.fn().mockImplementation(async ({ settingName, userUuid }) => {
+      const found = await settingRepository.findLastByNameAndUserUuid(settingName, userUuid)
+      if (found === null) {
+        return Result.fail('not found')
+      }
+      return Result.ok({ setting: found, decryptedValue: found.props.value })
+    })
     getActiveSessionsForUser.execute = jest.fn().mockReturnValue({ sessions: [session] })
 
     role = {
@@ -210,7 +220,43 @@ describe('CreateCrossServiceToken', () => {
     )
   })
 
-  it.each(['not-a-number', '0'])('omits invalid AI request limit %s and malformed MCP tag scope', async (value) => {
+  it('projects the canonical decrypted value from a legacy encrypted AI row', async () => {
+    getSetting.execute = jest.fn().mockImplementation(({ settingName }) => {
+      if (settingName === SettingName.NAMES.AiEnabled) {
+        return Promise.resolve(Result.ok({ setting: {} as never, decryptedValue: 'false' }))
+      }
+      return Promise.resolve(Result.fail('not found'))
+    })
+
+    await createUseCase().execute({ user, session })
+
+    const payload = (tokenEncoder.encodeExpirableToken as jest.Mock).mock.calls[0][0] as CrossServiceTokenData
+    expect(payload.ai_enabled).toBe(false)
+    expect(getSetting.execute).toHaveBeenCalledWith({
+      userUuid: user.uuid,
+      settingName: SettingName.NAMES.AiEnabled,
+      allowSensitiveRetrieval: true,
+      decrypted: true,
+    })
+  })
+
+  it('fails the AI gate closed when a stored value cannot be decrypted', async () => {
+    getSetting.execute = jest.fn().mockImplementation(({ settingName }) => {
+      if (settingName === SettingName.NAMES.AiEnabled) {
+        return Promise.reject(new Error('corrupt ciphertext'))
+      }
+      return Promise.resolve(Result.fail('not found'))
+    })
+
+    await createUseCase().execute({ user, session })
+
+    const payload = (tokenEncoder.encodeExpirableToken as jest.Mock).mock.calls[0][0] as CrossServiceTokenData
+    expect(payload.ai_enabled).toBe(false)
+  })
+
+  it.each(['not-a-number', '25junk', '0', '9007199254740992'])(
+    'omits invalid AI request limit %s and malformed MCP tag scope',
+    async (value) => {
     settingRepository.findLastByNameAndUserUuid = jest.fn().mockImplementation((settingName: string) => {
       if (settingName === SettingName.NAMES.AiRequestLimit) {
         return Promise.resolve({ props: { value } })
@@ -225,7 +271,8 @@ describe('CreateCrossServiceToken', () => {
     const payload = (tokenEncoder.encodeExpirableToken as jest.Mock).mock.calls[0][0] as CrossServiceTokenData
     expect(payload.ai_request_limit).toBeUndefined()
     expect(payload.mcp_scope).toBeUndefined()
-  })
+    },
+  )
 
   it('does not derive the admin role from a normalized ADMIN_EMAILS match', async () => {
     const previousAdminEmails = process.env.ADMIN_EMAILS
@@ -507,7 +554,7 @@ describe('CreateCrossServiceToken', () => {
         getActiveSessionsForUser,
         undefined,
         undefined,
-        settingRepository,
+        getSetting,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         groupRepository as any,
       )
@@ -543,7 +590,7 @@ describe('CreateCrossServiceToken', () => {
         getActiveSessionsForUser,
         undefined,
         undefined,
-        settingRepository,
+        getSetting,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         groupRepository as any,
       )

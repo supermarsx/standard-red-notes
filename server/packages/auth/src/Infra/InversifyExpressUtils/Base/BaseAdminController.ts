@@ -69,6 +69,8 @@ import { RejectUser } from '../../../Domain/UseCase/RejectUser/RejectUser'
 const ADMIN_MANAGEABLE_SETTINGS: string[] = [
   SettingName.NAMES.AiEnabled,
   SettingName.NAMES.AiRequestLimit,
+  SettingName.NAMES.CollaborationEnabled,
+  SettingName.NAMES.LiveSyncEnabled,
   // Standard Red Notes: admin override of a user's scheduled email-backup cadence.
   // Reuses the same get/set feature-flag endpoints; value is validated below.
   SettingName.NAMES.EmailBackupFrequency,
@@ -108,6 +110,15 @@ const ADMIN_MANAGEABLE_SETTINGS: string[] = [
  * Only settings with stricter-than-free-form constraints need an entry.
  */
 const VALID_EMAIL_BACKUP_FREQUENCIES: string[] = Object.values(EmailBackupFrequency)
+const STRICT_BOOLEAN_ADMIN_SETTINGS = new Set<string>([
+  SettingName.NAMES.AiEnabled,
+  SettingName.NAMES.CollaborationEnabled,
+  SettingName.NAMES.LiveSyncEnabled,
+  SettingName.NAMES.EmailRemindersEnabled,
+  SettingName.NAMES.OcrServerAllowed,
+  SettingName.NAMES.NextcloudBackupAllowed,
+  SettingName.NAMES.WorkflowsEnabled,
+])
 
 export class BaseAdminController extends BaseHttpController {
   constructor(
@@ -329,6 +340,7 @@ export class BaseAdminController extends BaseHttpController {
       settingName: SettingName.NAMES.MfaSecret,
       timestamp: updatedAt,
       softDelete: true,
+      allowClientImmutable: true,
     })
 
     if (result.success) {
@@ -395,6 +407,7 @@ export class BaseAdminController extends BaseHttpController {
     const result = await this.doDeleteSetting.execute({
       userUuid,
       settingName: SettingName.NAMES.EmailBackupFrequency,
+      allowClientImmutable: true,
     })
 
     if (result.success) {
@@ -419,8 +432,10 @@ export class BaseAdminController extends BaseHttpController {
 
   /**
    * Standard Red Notes: read the admin-managed per-user feature flags
-   * (AI_ENABLED, AI_REQUEST_LIMIT) for a given user. Defaults are returned when a
-   * setting has never been written for the user.
+   * for a given user. Defaults are returned when a setting has never been written
+   * for the user. Sensitive retrieval is deliberately limited to the tight
+   * ADMIN_MANAGEABLE_SETTINGS allow-list so legacy encrypted gate rows can be
+   * migrated without exposing arbitrary user settings.
    */
   async getUserFeatureFlags(request: Request, response?: Response): Promise<results.JsonResult> {
     if (!this.requestorIsAdmin(response)) {
@@ -434,7 +449,7 @@ export class BaseAdminController extends BaseHttpController {
       const result = await this.doGetSetting.execute({
         userUuid,
         settingName,
-        allowSensitiveRetrieval: false,
+        allowSensitiveRetrieval: true,
         decrypted: true,
       })
 
@@ -536,31 +551,26 @@ export class BaseAdminController extends BaseHttpController {
       return this.json({ error: { message: `Invalid email backup frequency '${value}'.` } }, 400)
     }
 
-    // Standard Red Notes: the server-OCR opt-in is a strict boolean flag; only
-    // 'true' or 'false' are accepted so the gateway gate reads an unambiguous value.
-    if (name === SettingName.NAMES.OcrServerAllowed && value != null && value !== 'true' && value !== 'false') {
+    // Authorization gates are canonical booleans. Rejecting lookalike/free-form
+    // values prevents different readers from assigning different semantics.
+    if (
+      STRICT_BOOLEAN_ADMIN_SETTINGS.has(name) &&
+      value != null &&
+      (typeof value !== 'string' || (value !== 'true' && value !== 'false'))
+    ) {
       return this.json(
-        { error: { message: `Invalid OCR server-allowed value '${value}'. Use 'true' or 'false'.` } },
+        { error: { message: `Invalid ${name} value '${value}'. Use 'true' or 'false'.` } },
         400,
       )
     }
 
-    // Standard Red Notes: the Nextcloud-backup admin gate is likewise a strict
-    // boolean flag; only 'true' or 'false' are accepted so the trigger job reads
-    // an unambiguous value.
-    if (name === SettingName.NAMES.NextcloudBackupAllowed && value != null && value !== 'true' && value !== 'false') {
+    if (
+      name === SettingName.NAMES.AiRequestLimit &&
+      value != null &&
+      (typeof value !== 'string' || !/^[1-9]\d*$/.test(value) || !Number.isSafeInteger(Number(value)))
+    ) {
       return this.json(
-        { error: { message: `Invalid Nextcloud backup-allowed value '${value}'. Use 'true' or 'false'.` } },
-        400,
-      )
-    }
-
-    // Standard Red Notes: the workflows admin gate is likewise a strict boolean
-    // flag; only 'true' or 'false' are accepted so the api-gateway gate (and the
-    // cross-service token minting) reads an unambiguous value.
-    if (name === SettingName.NAMES.WorkflowsEnabled && value != null && value !== 'true' && value !== 'false') {
-      return this.json(
-        { error: { message: `Invalid workflows-enabled value '${value}'. Use 'true' or 'false'.` } },
+        { error: { message: `Invalid AI request limit '${value}'. Use a positive integer or clear the value.` } },
         400,
       )
     }
@@ -594,6 +604,10 @@ export class BaseAdminController extends BaseHttpController {
       // E2E-safe: setting NAME only, never its value.
       metadata: { name },
     })
+
+    // Cross-service JWTs can be cached by the gateway. Invalidate the target
+    // user (not the administrator) so authorization changes apply next request.
+    response?.setHeader?.('x-invalidate-cache', userUuid)
 
     return this.json({ success: true, userUuid, name, value: value ?? null })
   }
@@ -1131,6 +1145,7 @@ export class BaseAdminController extends BaseHttpController {
       userUuid,
       settingName: SettingName.NAMES.MfaSecret,
       softDelete: true,
+      allowClientImmutable: true,
     })
 
     if (!result.success) {

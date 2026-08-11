@@ -314,6 +314,7 @@ export class BaseSettingsController extends BaseHttpController {
       serverPassword,
       authTokenVersion: locals.authTokenVersion,
       shouldVerifyUserServerPassword: true,
+      allowClientImmutable: false,
     })
 
     if (result.success) {

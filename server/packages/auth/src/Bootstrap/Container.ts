@@ -2718,7 +2718,7 @@ export class ContainerConfigLoader {
         container.get<GetActiveSessionsForUser>(TYPES.Auth_GetActiveSessionsForUser),
         crossServiceTokenVersionConfig.version2Threshold,
         crossServiceTokenVersionConfig.version3Threshold,
-        container.get<SettingRepositoryInterface>(TYPES.Auth_SettingRepository),
+        container.get<GetSetting>(TYPES.Auth_GetSetting),
         // Standard Red Notes: RBAC groups — tokens carry group-conferred roles
         // (direct ∪ group) so e.g. admin granted via a group works.
         container.get<GroupRepositoryInterface>(TYPES.Auth_GroupRepository),

@@ -175,7 +175,10 @@ describe('BaseAdminController OCR server-allowed flag (admin-manageable)', () =>
     setSettingValue = {} as jest.Mocked<SetSettingValue>
     setSettingValue.execute = jest.fn().mockResolvedValue(Result.ok({}))
 
-    adminResponse = { locals: { roles: [{ name: RoleName.NAMES.AdminUser }] } } as unknown as Response
+    adminResponse = {
+      locals: { roles: [{ name: RoleName.NAMES.AdminUser }] },
+      setHeader: jest.fn(),
+    } as unknown as Response
     nonAdminResponse = { locals: { roles: [{ name: RoleName.NAMES.CoreUser }] } } as unknown as Response
   })
 
@@ -192,6 +195,110 @@ describe('BaseAdminController OCR server-allowed flag (admin-manageable)', () =>
       checkUserPermissions: false,
     })
     expect(result.json).toMatchObject({ success: true, name: SettingName.NAMES.OcrServerAllowed, value: 'true' })
+  })
+
+  it.each([
+    SettingName.NAMES.AiEnabled,
+    SettingName.NAMES.CollaborationEnabled,
+    SettingName.NAMES.LiveSyncEnabled,
+  ])('persists the strict administrator gate %s and invalidates the target token cache', async (name) => {
+    const result = await createController().setUserFeatureFlag(flagRequest(name, 'false'), adminResponse)
+
+    expect(result.statusCode).toEqual(200)
+    expect(setSettingValue.execute).toHaveBeenCalledWith({
+      settingName: name,
+      value: 'false',
+      userUuid: '1-2-3',
+      checkUserPermissions: false,
+    })
+    expect(adminResponse.setHeader).toHaveBeenCalledWith('x-invalidate-cache', '1-2-3')
+  })
+
+  it.each([
+    SettingName.NAMES.AiEnabled,
+    SettingName.NAMES.CollaborationEnabled,
+    SettingName.NAMES.LiveSyncEnabled,
+  ])('rejects a non-boolean value for %s', async (name) => {
+    const result = await createController().setUserFeatureFlag(flagRequest(name, 'yes'), adminResponse)
+
+    expect(result.statusCode).toEqual(400)
+    expect(setSettingValue.execute).not.toHaveBeenCalled()
+    expect(adminResponse.setHeader).not.toHaveBeenCalled()
+  })
+
+  it('rejects JSON booleans and numbers instead of coercing administrator gate values', async () => {
+    const booleanResult = await createController().setUserFeatureFlag(
+      flagRequest(SettingName.NAMES.AiEnabled, true as unknown as string),
+      adminResponse,
+    )
+    const numberResult = await createController().setUserFeatureFlag(
+      flagRequest(SettingName.NAMES.AiRequestLimit, 25 as unknown as string),
+      adminResponse,
+    )
+
+    expect(booleanResult.statusCode).toEqual(400)
+    expect(numberResult.statusCode).toEqual(400)
+    expect(setSettingValue.execute).not.toHaveBeenCalled()
+  })
+
+  it.each(['0', '-1', '25junk', '9007199254740992'])(
+    'rejects the non-canonical AI request limit %s',
+    async (value) => {
+      const result = await createController().setUserFeatureFlag(
+        flagRequest(SettingName.NAMES.AiRequestLimit, value),
+        adminResponse,
+      )
+
+      expect(result.statusCode).toEqual(400)
+      expect(setSettingValue.execute).not.toHaveBeenCalled()
+    },
+  )
+
+  it('accepts a positive AI request limit and a cleared limit', async () => {
+    await createController().setUserFeatureFlag(flagRequest(SettingName.NAMES.AiRequestLimit, '25'), adminResponse)
+    await createController().setUserFeatureFlag(flagRequest(SettingName.NAMES.AiRequestLimit, null), adminResponse)
+
+    expect(setSettingValue.execute).toHaveBeenNthCalledWith(1, {
+      settingName: SettingName.NAMES.AiRequestLimit,
+      value: '25',
+      userUuid: '1-2-3',
+      checkUserPermissions: false,
+    })
+    expect(setSettingValue.execute).toHaveBeenNthCalledWith(2, {
+      settingName: SettingName.NAMES.AiRequestLimit,
+      value: null,
+      userUuid: '1-2-3',
+      checkUserPermissions: false,
+    })
+  })
+
+  it('decrypts only the tightly allow-listed legacy feature rows for the admin read', async () => {
+    await createController().getUserFeatureFlags(flagRequest(), adminResponse)
+
+    expect(doGetSetting.execute).toHaveBeenCalledWith({
+      userUuid: '1-2-3',
+      settingName: SettingName.NAMES.AiEnabled,
+      allowSensitiveRetrieval: true,
+      decrypted: true,
+    })
+    expect(doGetSetting.execute).toHaveBeenCalledWith({
+      userUuid: '1-2-3',
+      settingName: SettingName.NAMES.CollaborationEnabled,
+      allowSensitiveRetrieval: true,
+      decrypted: true,
+    })
+  })
+
+  it('does not invalidate the target cache when persistence fails', async () => {
+    setSettingValue.execute = jest.fn().mockResolvedValue(Result.fail('write failed'))
+
+    const result = await createController().setUserFeatureFlag(
+      flagRequest(SettingName.NAMES.AiEnabled, 'false'),
+      adminResponse,
+    )
+
+    expect(result.statusCode).toEqual(400)
+    expect(adminResponse.setHeader).not.toHaveBeenCalled()
   })
 
   it('rejects a non-boolean OCR_SERVER_ALLOWED value', async () => {
@@ -612,6 +719,7 @@ describe('BaseAdminController admin-role / reset-MFA / fix-quota endpoints', () 
       userUuid: targetUuid,
       settingName: SettingName.NAMES.MfaSecret,
       softDelete: true,
+      allowClientImmutable: true,
     })
     expect(auditLogWriter.write).toHaveBeenCalledWith(
       expect.objectContaining({

@@ -9,6 +9,7 @@ import TYPES from '../../../Bootstrap/Types'
 import { SettingRepositoryInterface } from '../../Setting/SettingRepositoryInterface'
 import { Setting } from '../../Setting/Setting'
 import { VerifyUserServerPassword } from '../VerifyUserServerPassword/VerifyUserServerPassword'
+import { SettingsAssociationServiceInterface } from '../../Setting/SettingsAssociationServiceInterface'
 
 @injectable()
 export class DeleteSetting implements UseCaseInterface {
@@ -16,6 +17,8 @@ export class DeleteSetting implements UseCaseInterface {
     @inject(TYPES.Auth_SettingRepository) private settingRepository: SettingRepositoryInterface,
     @inject(TYPES.Auth_VerifyUserServerPassword) private verifyUserServerPassword: VerifyUserServerPassword,
     @inject(TYPES.Auth_Timer) private timer: TimerInterface,
+    @inject(TYPES.Auth_SettingsAssociationService)
+    private settingsAssociationService: SettingsAssociationServiceInterface,
   ) {}
 
   async execute(dto: DeleteSettingDto): Promise<DeleteSettingResponse> {
@@ -28,6 +31,20 @@ export class DeleteSetting implements UseCaseInterface {
         success: false,
         error: {
           message: `Setting ${settingName} for user ${userUuid} not found.`,
+        },
+      }
+    }
+
+    const canonicalSettingName = SettingName.create(setting.props.name)
+    if (
+      !dto.allowClientImmutable &&
+      (canonicalSettingName.isFailed() ||
+        !this.settingsAssociationService.isSettingMutableByClient(canonicalSettingName.getValue()))
+    ) {
+      return {
+        success: false,
+        error: {
+          message: `Setting ${setting.props.name} cannot be deleted by a client.`,
         },
       }
     }

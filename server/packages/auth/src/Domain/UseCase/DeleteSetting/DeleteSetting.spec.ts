@@ -9,6 +9,7 @@ import { DeleteSetting } from './DeleteSetting'
 import { SettingName, Timestamps, Uuid, Result } from '@standardnotes/domain-core'
 import { VerifyUserServerPassword } from '../VerifyUserServerPassword/VerifyUserServerPassword'
 import { SECURITY_STEP_UP_UPDATE_REQUIRED_MESSAGE } from '../../Auth/SecurityStepUp'
+import { SettingsAssociationServiceInterface } from '../../Setting/SettingsAssociationServiceInterface'
 
 describe('DeleteSetting', () => {
   let setting: Setting
@@ -16,8 +17,10 @@ describe('DeleteSetting', () => {
   let settingRepository: SettingRepositoryInterface
   let verifyUserServerPassword: VerifyUserServerPassword
   let timer: TimerInterface
+  let settingsAssociationService: SettingsAssociationServiceInterface
 
-  const createUseCase = () => new DeleteSetting(settingRepository, verifyUserServerPassword, timer)
+  const createUseCase = () =>
+    new DeleteSetting(settingRepository, verifyUserServerPassword, timer, settingsAssociationService)
 
   beforeEach(() => {
     setting = Setting.create({
@@ -49,6 +52,39 @@ describe('DeleteSetting', () => {
 
     timer = {} as jest.Mocked<TimerInterface>
     timer.getTimestampInMicroseconds = jest.fn().mockReturnValue(1)
+
+    settingsAssociationService = {} as jest.Mocked<SettingsAssociationServiceInterface>
+    settingsAssociationService.isSettingMutableByClient = jest.fn().mockReturnValue(true)
+  })
+
+  it('refuses to delete a client-immutable authorization gate', async () => {
+    setting.props.name = SettingName.NAMES.AiEnabled
+    settingsAssociationService.isSettingMutableByClient = jest.fn().mockReturnValue(false)
+
+    const result = await createUseCase().execute({
+      settingName: SettingName.NAMES.AiEnabled,
+      userUuid: '00000000-0000-0000-0000-000000000000',
+    })
+
+    expect(result).toEqual({
+      success: false,
+      error: { message: `Setting ${SettingName.NAMES.AiEnabled} cannot be deleted by a client.` },
+    })
+    expect(settingRepository.deleteByUserUuid).not.toHaveBeenCalled()
+  })
+
+  it('allows an explicit trusted server bypass for a client-immutable gate', async () => {
+    setting.props.name = SettingName.NAMES.AiEnabled
+    settingsAssociationService.isSettingMutableByClient = jest.fn().mockReturnValue(false)
+
+    const result = await createUseCase().execute({
+      settingName: SettingName.NAMES.AiEnabled,
+      userUuid: '00000000-0000-0000-0000-000000000000',
+      allowClientImmutable: true,
+    })
+
+    expect(result.success).toBe(true)
+    expect(settingRepository.deleteByUserUuid).toHaveBeenCalled()
   })
 
   describe('password validation for sensitive settings', () => {

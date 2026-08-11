@@ -1,4 +1,4 @@
-import { FunctionComponent, useCallback, useEffect, useState } from 'react'
+import { FunctionComponent, useCallback, useEffect, useRef, useState } from 'react'
 import { HttpResponse, isErrorResponse } from '@standardnotes/snjs'
 import {
   ADMIN_USERS_DEFAULT_PAGE_SIZE,
@@ -136,7 +136,9 @@ type Props = {
 const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden, email, setEmail, user, setUser }) => {
   const [lookingUp, setLookingUp] = useState(false)
 
-  const [aiEnabled, setAiEnabled] = useState(false)
+  // The server contract is default-on: only an explicit canonical 'false'
+  // disables AI. Keep the initial/rendered state consistent with enforcement.
+  const [aiEnabled, setAiEnabled] = useState(true)
   const [aiRequestLimit, setAiRequestLimit] = useState('')
   // Collaboration and live sync default to ENABLED; they are gated off only when
   // the per-user setting is explicitly 'false'.
@@ -158,6 +160,8 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
   const [storageLimitUnit, setStorageLimitUnit] = useState<'MB' | 'GB' | 'unlimited'>('unlimited')
   const [savingStorageLimit, setSavingStorageLimit] = useState(false)
   const [flagsLoading, setFlagsLoading] = useState(false)
+  const [savingAiEnabled, setSavingAiEnabled] = useState(false)
+  const aiSaveInFlight = useRef(false)
   const [savingLimit, setSavingLimit] = useState(false)
 
   const [banned, setBanned] = useState(false)
@@ -214,7 +218,7 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
           }
         ).data
         const flags = data?.flags ?? {}
-        setAiEnabled(flags[AI_ENABLED] === 'true')
+        setAiEnabled(flags[AI_ENABLED] !== 'false')
         setAiRequestLimit(flags[AI_REQUEST_LIMIT] ?? '')
         setCollaborationEnabled(flags[COLLABORATION_ENABLED] !== 'false')
         setLiveSyncEnabled(flags[LIVE_SYNC_ENABLED] !== 'false')
@@ -690,10 +694,12 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
 
   const toggleAiEnabled = useCallback(
     async (nextValue: boolean) => {
-      if (!user) {
+      if (!user || aiSaveInFlight.current) {
         return
       }
+      aiSaveInFlight.current = true
       const previous = aiEnabled
+      setSavingAiEnabled(true)
       setAiEnabled(nextValue)
       try {
         const response = await application.legacyApi.adminSetUserFeatureFlag(
@@ -702,13 +708,33 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
           nextValue ? 'true' : 'false',
         )
         if (isErrorResponse(response)) {
-          setAiEnabled(previous)
-          addToast({ type: ToastType.Error, message: 'Failed to update AI access.' })
+          throw new Error('The server rejected the AI access update.')
         }
+
+        // Do not treat a 2xx write as durable until the canonical admin read sees
+        // the same effective value. This also exercises legacy-row migration.
+        const readback = await application.legacyApi.adminGetUserFeatureFlags(user.uuid)
+        if (isErrorResponse(readback)) {
+          throw new Error('The saved AI access value could not be confirmed.')
+        }
+        const persistedFlags = (readback as { data?: { flags?: Record<string, string | null> } }).data?.flags ?? {}
+        const persistedEnabled = persistedFlags[AI_ENABLED] !== 'false'
+        setAiEnabled(persistedEnabled)
+        if (persistedEnabled !== nextValue) {
+          addToast({ type: ToastType.Error, message: 'AI access did not persist. The server value was restored.' })
+          return
+        }
+        addToast({
+          type: ToastType.Success,
+          message: `AI access ${nextValue ? 'enabled' : 'disabled'}.`,
+        })
       } catch (error) {
         console.error(error)
         setAiEnabled(previous)
         addToast({ type: ToastType.Error, message: 'Failed to update AI access.' })
+      } finally {
+        aiSaveInFlight.current = false
+        setSavingAiEnabled(false)
       }
     },
     [application, user, aiEnabled],
@@ -1569,7 +1595,11 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
                   <Subtitle>AI access</Subtitle>
                   <Text>Allow this user to use AI-powered features.</Text>
                 </div>
-                <Switch checked={aiEnabled} onChange={(checked) => void toggleAiEnabled(checked)} />
+                <Switch
+                  checked={aiEnabled}
+                  disabled={savingAiEnabled}
+                  onChange={(checked) => void toggleAiEnabled(checked)}
+                />
               </div>
 
               <HorizontalSeparator classes="my-3" />

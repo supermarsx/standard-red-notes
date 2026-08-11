@@ -76,6 +76,28 @@ describe('SettingsAssociationService', () => {
     expect(settings.get(SettingName.NAMES.LogSessionUserAgent)?.value).toEqual('disabled')
   })
 
+  describe('administrator-managed cross-service authorization gates', () => {
+    const gateSettings = [
+      SettingName.NAMES.AiEnabled,
+      SettingName.NAMES.AiRequestLimit,
+      SettingName.NAMES.CollaborationEnabled,
+      SettingName.NAMES.LiveSyncEnabled,
+    ]
+
+    it.each(gateSettings)('%s is plaintext, non-sensitive, and client-immutable', (name) => {
+      const settingName = SettingName.create(name).getValue()
+
+      expect(createService().getEncryptionVersionForSetting(settingName)).toBe(EncryptionVersion.Unencrypted)
+      expect(createService().getSensitivityForSetting(settingName)).toBe(false)
+      expect(createService().isSettingMutableByClient(settingName)).toBe(false)
+    })
+
+    it.each(gateSettings)('%s is not seeded for new accounts', (name) => {
+      expect(createService().getDefaultSettingsAndValuesForNewUser().has(name)).toBe(false)
+      expect(createService().getDefaultSettingsAndValuesForNewPrivateUsernameAccount().has(name)).toBe(false)
+    })
+  })
+
   it('should return a permission name associated to a given setting', () => {
     expect(
       createService().getPermissionAssociatedWithSetting(

@@ -80,6 +80,11 @@ export class SetSettingValue implements UseCaseInterface<Setting> {
 
     const { setting } = settingExists.getValue()
     setting.props.value = settingValue
+    // Classification is code-owned and may become stricter over time. Normalize
+    // existing rows whenever they are rewritten so a legacy encrypted feature
+    // gate is atomically migrated to its current plaintext/non-sensitive shape.
+    setting.props.sensitive = sensitive
+    setting.props.serverEncryptionVersion = encryptionVersion
     setting.props.timestamps = Timestamps.create(
       setting.props.timestamps.createdAt,
       this.timer.getTimestampInMicroseconds(),
