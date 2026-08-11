@@ -849,12 +849,14 @@ export class NotesController
               } as unknown as SNNote)
             : undefined
           const storedMutationList = getBoundedNoteCommentMutationRecords({
-            getAppDomainValue: (key: unknown) =>
-              key === NoteCommentMutationsKey ? storedMutationCandidates : undefined,
+            getAppDomainValue: (key: unknown) => {
+              return key === NoteCommentMutationsKey ? storedMutationCandidates : undefined
+            },
           } as unknown as SNNote)
           const storedClockList = getBoundedNoteCommentActorClocks({
-            getAppDomainValue: (key: unknown) =>
-              key === NoteCommentActorClocksKey ? storedClockCandidates : undefined,
+            getAppDomainValue: (key: unknown) => {
+              return key === NoteCommentActorClocksKey ? storedClockCandidates : undefined
+            },
           } as unknown as SNNote)
           if (
             !next ||
