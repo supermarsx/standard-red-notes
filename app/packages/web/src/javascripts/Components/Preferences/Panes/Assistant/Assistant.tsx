@@ -875,7 +875,8 @@ const Assistant = ({ application }: { application: WebApplication }) => {
               <Subtitle>Base URL</Subtitle>
               <Text>
                 OpenAI-compatible API root (e.g. http://localhost:1234/v1). A bare host or full /chat/completions URL is
-                normalized automatically.
+                normalized automatically. Plain HTTP is limited to localhost or 127.0.0.1; use HTTPS for every other
+                host.
               </Text>
               <input
                 className="border-border bg-default mt-2 w-full rounded border px-2 py-1.5 text-sm"
