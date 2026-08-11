@@ -340,6 +340,90 @@ describe('useNoteComments realtime fallback', () => {
     )
   })
 
+  it('never renders a previous note plaintext during a note switch or after authoritative removal', async () => {
+    const noteA = {
+      uuid: 'note-a',
+      getAppDomainValue: () => [
+        {
+          id: 'comment-a',
+          authorUuid: 'user-1',
+          authorName: 'Alice',
+          text: 'private note A comment',
+          createdAt: new Date(0).toISOString(),
+        },
+      ],
+    } as unknown as SNNote
+    const noteB = {
+      uuid: 'note-b',
+      getAppDomainValue: () => [
+        {
+          id: 'comment-b',
+          authorUuid: 'user-1',
+          authorName: 'Alice',
+          text: 'private note B comment',
+          createdAt: new Date(1).toISOString(),
+        },
+      ],
+    } as unknown as SNNote
+    const authoritative = new Map([
+      [noteA.uuid, noteA],
+      [noteB.uuid, noteB],
+    ])
+    const application = {
+      sessions: { getUser: () => sessionUser },
+      items: {
+        findItem: (uuid: string) => authoritative.get(uuid),
+        streamItems: () => jest.fn(),
+      },
+      notesController: {
+        upsertNoteComment: jest.fn(),
+        removeNoteComment: jest.fn(),
+        setNoteCommentResolved: jest.fn(),
+      },
+    } as never
+    mockedUseApplication.mockReturnValue(application)
+    mockedUseCollaborationRoomAccess.mockImplementation((_application, currentNote) => ({
+      status: 'disabled',
+      reason: `offline:${currentNote.uuid}`,
+    }))
+
+    const renderSnapshots: Array<{ noteUuid: string; texts: string[] }> = []
+    const View = ({ note }: { note: SNNote }) => {
+      const commentsApi = useNoteComments(note)
+      renderSnapshots.push({ noteUuid: note.uuid, texts: commentsApi.comments.map((comment) => comment.text) })
+      return createElement('div', null, commentsApi.comments.map((comment) => comment.text).join(','))
+    }
+
+    await act(async () => {
+      root.render(createElement(View, { note: noteA }))
+      await Promise.resolve()
+    })
+    expect(container.textContent).toBe('private note A comment')
+
+    renderSnapshots.length = 0
+    await act(async () => {
+      root.render(createElement(View, { note: noteB }))
+      await Promise.resolve()
+    })
+
+    const noteBSnapshots = renderSnapshots.filter((snapshot) => snapshot.noteUuid === noteB.uuid)
+    expect(noteBSnapshots.length).toBeGreaterThan(0)
+    expect(noteBSnapshots.every((snapshot) => !snapshot.texts.includes('private note A comment'))).toBe(true)
+    expect(container.textContent).toBe('private note B comment')
+
+    authoritative.delete(noteB.uuid)
+    renderSnapshots.length = 0
+    await act(async () => {
+      root.render(createElement(View, { note: noteB }))
+      await Promise.resolve()
+    })
+
+    const removedSnapshots = renderSnapshots.filter((snapshot) => snapshot.noteUuid === noteB.uuid)
+    expect(removedSnapshots.length).toBeGreaterThan(0)
+    expect(removedSnapshots.every((snapshot) => snapshot.texts.length === 0)).toBe(true)
+    expect(container.textContent).toBe('')
+  })
+
   it('broadcasts the exact mutation-boundary comment after a deferred resolve rebase', async () => {
     let releaseResolve: (() => void) | undefined
     const rebasedComment = {

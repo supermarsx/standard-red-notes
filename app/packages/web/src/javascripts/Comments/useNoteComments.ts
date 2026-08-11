@@ -9,7 +9,7 @@ import {
   type NoteEncryptionIdentity,
   resolveNoteEncryptionIdentity,
 } from '@/Components/SuperEditor/Collaboration/CollaborationKeyDerivation'
-import { DisplayNoteComment, readDisplayNoteComments } from './CommentAuthorship'
+import { DisplayNoteComment, DisplayNoteComments, readDisplayNoteComments } from './CommentAuthorship'
 
 function sameEncryptionIdentity(
   left: NoteEncryptionIdentity | undefined,
@@ -28,6 +28,40 @@ function sameEncryptionIdentity(
       left.sharedVaultUuid === right.sharedVaultUuid,
     )
   )
+}
+
+type BoundCommentDisplayState = {
+  noteUuid: string
+  identity: NoteEncryptionIdentity | undefined
+  display: DisplayNoteComments
+}
+
+const emptyCommentDisplayState = (): DisplayNoteComments => ({ comments: [], quarantinedCount: 0 })
+
+/**
+ * Resolve display plaintext only from the authoritative current item and the
+ * exact session/root-key identity that owns this render. A retained prop or
+ * state snapshot must not survive note removal, a controller switch, or a
+ * same-UUID session replacement.
+ */
+function authorizedCommentDisplayNote(
+  application: ReturnType<typeof useApplication>,
+  noteUuid: string,
+  expectedIdentity: NoteEncryptionIdentity | undefined,
+): SNNote | undefined {
+  if (!expectedIdentity || expectedIdentity.noteUuid !== noteUuid) {
+    return undefined
+  }
+  try {
+    const current = application.items.findItem<SNNote>(noteUuid)
+    if (!current) {
+      return undefined
+    }
+    const currentIdentity = resolveNoteEncryptionIdentity(application, current)
+    return sameEncryptionIdentity(expectedIdentity, currentIdentity) ? current : undefined
+  } catch {
+    return undefined
+  }
 }
 
 export type CommentsApi = {
@@ -55,7 +89,6 @@ export type CommentsApi = {
  */
 export function useNoteComments(note: SNNote): CommentsApi {
   const application = useApplication()
-  const [commentState, setCommentState] = useState(() => readDisplayNoteComments(application, note))
   const relayRef = useRef<CommentRelay | null>(null)
   const collaborationAccess = useCollaborationRoomAccess(application, note)
   const collaborationStatus = collaborationAccess.status
@@ -73,6 +106,25 @@ export function useNoteComments(note: SNNote): CommentsApi {
     commentIdentityRef.current = resolvedCommentIdentity
   }
   const commentIdentity = commentIdentityRef.current
+
+  const noteUuid = note.uuid
+  const authorizedDisplayNote = authorizedCommentDisplayNote(application, noteUuid, commentIdentity)
+  const [commentState, setCommentState] = useState<BoundCommentDisplayState>(() => ({
+    noteUuid,
+    identity: commentIdentity,
+    display: authorizedDisplayNote
+      ? readDisplayNoteComments(application, authorizedDisplayNote)
+      : emptyCommentDisplayState(),
+  }))
+  const storedDisplayIsCurrent =
+    Boolean(authorizedDisplayNote) &&
+    commentState.noteUuid === noteUuid &&
+    sameEncryptionIdentity(commentState.identity, commentIdentity)
+  const visibleCommentState = storedDisplayIsCurrent
+    ? commentState.display
+    : authorizedDisplayNote
+      ? readDisplayNoteComments(application, authorizedDisplayNote)
+      : emptyCommentDisplayState()
 
   const accessSourceId = collaborationAccess.status === 'ready' ? collaborationAccess.sourceId : undefined
   const accessUserUuid = collaborationAccess.status === 'ready' ? collaborationAccess.userUuid : undefined
@@ -93,7 +145,6 @@ export function useNoteComments(note: SNNote): CommentsApi {
 
   const selfUuid = application.sessions.getUser()?.uuid
   const selfEmail = application.sessions.getUser()?.email
-  const noteUuid = note.uuid
 
   useEffect(() => {
     if (collaborationStatus !== 'ready' || !collaborationRoomKey || !collaborationCapability || !relayIdentity) {
@@ -110,9 +161,13 @@ export function useNoteComments(note: SNNote): CommentsApi {
       if (!persisted) {
         return false
       }
-      const currentNote = application.items.findItem<SNNote>(noteUuid)
+      const currentNote = authorizedCommentDisplayNote(application, noteUuid, relayIdentity)
       if (currentNote) {
-        setCommentState(readDisplayNoteComments(application, currentNote))
+        setCommentState({
+          noteUuid,
+          identity: relayIdentity,
+          display: readDisplayNoteComments(application, currentNote),
+        })
       }
       return true
     }
@@ -145,24 +200,29 @@ export function useNoteComments(note: SNNote): CommentsApi {
   // Re-read comments whenever this note changes on disk (local edit or HTTP sync
   // from a collaborator). Uses the same streamItems pattern as useItemVaultInfo.
   useEffect(() => {
-    setCommentState(readDisplayNoteComments(application, note))
+    const updateDisplayState = (): void => {
+      const current = authorizedCommentDisplayNote(application, noteUuid, commentIdentity)
+      setCommentState({
+        noteUuid,
+        identity: commentIdentity,
+        display: current ? readDisplayNoteComments(application, current) : emptyCommentDisplayState(),
+      })
+    }
+    updateDisplayState()
     const stopNotes = application.items.streamItems(ContentType.TYPES.Note, ({ changed }) => {
       const updated = changed.find((item) => item.uuid === noteUuid)
       if (updated) {
-        setCommentState(readDisplayNoteComments(application, updated as SNNote))
+        updateDisplayState()
       }
     })
     const stopContacts = application.items.streamItems(ContentType.TYPES.TrustedContact, () => {
-      const currentNote = application.items.findItem<SNNote>(noteUuid)
-      if (currentNote) {
-        setCommentState(readDisplayNoteComments(application, currentNote))
-      }
+      updateDisplayState()
     })
     return () => {
       stopNotes()
       stopContacts()
     }
-  }, [application, application.items, note, noteUuid])
+  }, [application, application.items, commentIdentity, noteUuid])
 
   const addComment = useCallback<CommentsApi['addComment']>(
     async ({ text, parentId, anchor }) => {
@@ -233,8 +293,8 @@ export function useNoteComments(note: SNNote): CommentsApi {
   )
 
   return {
-    comments: commentState.comments,
-    quarantinedCount: commentState.quarantinedCount,
+    comments: visibleCommentState.comments,
+    quarantinedCount: visibleCommentState.quarantinedCount,
     addComment,
     removeComment,
     setResolved,
