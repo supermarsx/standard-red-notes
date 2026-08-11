@@ -1,6 +1,7 @@
 import { PrefKey } from '@standardnotes/snjs'
 import { WebApplication } from '@/Application/WebApplication'
 import { DirectProvider } from './DirectProvider'
+import { directEndpointConfigurationError } from './OpenAICompatibleEndpoint'
 import { ProxyProvider } from './ProxyProvider'
 import { Provider } from './types'
 import { composeSystemPromptWithPersona, getActiveProfile } from './personaSettings'
@@ -252,15 +253,19 @@ export function getSelectionAIAvailability(application: WebApplication): { avail
     if (!application.hasAccount()) {
       return { available: false, reason: 'Sign in to use the AI assistant.' }
     }
-    if (!application.getPreference(PrefKey.AssistantProvider, '')) {
-      return { available: false, reason: 'Choose an AI provider in Preferences → Assistant.' }
-    }
+    // An empty provider is intentional: the server resolves the requesting
+    // user's assigned profile, then its default profile/provider. Requiring a
+    // client-side provider here bypassed that profile resolution path.
     return { available: true }
   }
   const baseURL = application.getPreference(PrefKey.AssistantBaseUrl, '')
   const model = application.getPreference(PrefKey.AssistantModel, '')
   if (!baseURL || !model) {
     return { available: false, reason: 'Configure the AI endpoint and model in Preferences → Assistant.' }
+  }
+  const endpointError = directEndpointConfigurationError(baseURL)
+  if (endpointError) {
+    return { available: false, reason: endpointError }
   }
   return { available: true }
 }
@@ -356,13 +361,16 @@ export function resolveActiveProfileOverrides(application: WebApplication): {
   }
 }
 
-function buildProvider(application: WebApplication, signal?: AbortSignal): Provider {
+export function buildAssistantProvider(application: WebApplication, signal?: AbortSignal): Provider {
   const mode = application.getPreference(PrefKey.AssistantConnectionMode, 'direct')
   const overrides = resolveActiveProfileOverrides(application)
   if (mode === 'proxy') {
+    const provider = application.getPreference(PrefKey.AssistantProvider, '')
     return new ProxyProvider({
-      provider: application.getPreference(PrefKey.AssistantProvider, ''),
-      model: overrides.model,
+      provider,
+      // With Automatic provider selection (empty provider), omit the client
+      // model too so the assigned/default server profile remains authoritative.
+      model: provider ? overrides.model : '',
       sampling: overrides.sampling,
       signal,
       postStream: (body, sig) => application.assistantStreamRequest('/v1/assistant/stream', body, sig),
@@ -391,7 +399,7 @@ export async function runOneShotCompletion(
   user: string,
   options: { signal?: AbortSignal; onDelta?: (full: string) => void } = {},
 ): Promise<string> {
-  const provider = buildProvider(application, options.signal)
+  const provider = buildAssistantProvider(application, options.signal)
   let text = ''
   for await (const event of provider.send({
     system,

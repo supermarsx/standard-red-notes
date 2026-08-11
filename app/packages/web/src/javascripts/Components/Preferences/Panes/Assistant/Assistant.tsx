@@ -60,11 +60,14 @@ import {
   TOP_P_MAX,
   TOP_P_MIN,
 } from '@/Assistant/samplingSettings'
+import { assistantHttpError, assistantNetworkError } from '@/Assistant/AssistantHttpError'
+import { normalizeOpenAICompatibleBaseURL, openAICompatibleEndpointURL } from '@/Assistant/OpenAICompatibleEndpoint'
 
 type AssistantConfig = {
   providers: string[]
   defaultProvider: string
   defaultModel: string
+  profileConfigured?: boolean
 }
 
 type ConnectionMode = 'direct' | 'proxy'
@@ -107,7 +110,13 @@ const formatExpiry = (expiresAt?: number | string): string | null => {
  * trivial to merge. Talks only to the server /v1/assistant/subscription/* endpoints;
  * the OAuth tokens live server-side and are never seen here.
  */
-const SubscriptionPairing = ({ application }: { application: WebApplication }) => {
+const SubscriptionPairing = ({
+  application,
+  onUseServerProxy,
+}: {
+  application: WebApplication
+  onUseServerProxy: () => void
+}) => {
   const [status, setStatus] = useState<AssistantSubscriptionStatus | null>(null)
   const [loading, setLoading] = useState(false)
   const [pairing, setPairing] = useState(false)
@@ -183,6 +192,7 @@ const SubscriptionPairing = ({ application }: { application: WebApplication }) =
         void refreshStatus().then((result) => {
           if (result.paired) {
             stopPolling()
+            onUseServerProxy()
           }
         })
       }, PAIR_POLL_INTERVAL_MS)
@@ -200,7 +210,7 @@ const SubscriptionPairing = ({ application }: { application: WebApplication }) =
         setError(e instanceof Error ? e.message : String(e))
       }
     }
-  }, [application, refreshStatus, stopPolling])
+  }, [application, onUseServerProxy, refreshStatus, stopPolling])
 
   const handleUnpair = useCallback(async () => {
     setError(null)
@@ -333,6 +343,7 @@ const SubscriptionPairing = ({ application }: { application: WebApplication }) =
             disabled={pairing || loading}
           />
           <Button label="Refresh status" onClick={() => void refreshStatus()} disabled={loading} />
+          {paired && <Button label="Use in assistant" onClick={onUseServerProxy} disabled={loading || pairing} />}
           {paired && <Button label="Unpair" onClick={() => void handleUnpair()} disabled={loading || pairing} />}
         </div>
       </PreferencesSegment>
@@ -403,6 +414,7 @@ const Assistant = ({ application }: { application: WebApplication }) => {
 
   const [availableModels, setAvailableModels] = useState<string[]>([])
   const [modelsError, setModelsError] = useState<string | null>(null)
+  const [baseURLError, setBaseURLError] = useState<string | null>(null)
   const [fetchingModels, setFetchingModels] = useState(false)
 
   // The server-proxy config endpoint is only relevant in proxy mode.
@@ -418,14 +430,6 @@ const Assistant = ({ application }: { application: WebApplication }) => {
           return
         }
         setConfig(result)
-        if (!application.getPreference(PrefKey.AssistantProvider, '') && result.defaultProvider) {
-          setProvider(result.defaultProvider)
-          void application.setPreference(PrefKey.AssistantProvider, result.defaultProvider)
-        }
-        if (!application.getPreference(PrefKey.AssistantModel, '') && result.defaultModel) {
-          setModel(result.defaultModel)
-          void application.setPreference(PrefKey.AssistantModel, result.defaultModel)
-        }
       })
       .catch((error) => {
         if (!cancelled) {
@@ -445,6 +449,17 @@ const Assistant = ({ application }: { application: WebApplication }) => {
     [application],
   )
 
+  const useAutomaticServerProxy = useCallback(() => {
+    setConnectionMode('proxy')
+    setProvider('')
+    setAvailableModels([])
+    setModelsError(null)
+    void Promise.all([
+      application.setPreference(PrefKey.AssistantConnectionMode, 'proxy'),
+      application.setPreference(PrefKey.AssistantProvider, ''),
+    ])
+  }, [application])
+
   const handleProviderChange = useCallback(
     (value: string) => {
       setProvider(value)
@@ -459,10 +474,24 @@ const Assistant = ({ application }: { application: WebApplication }) => {
   const handleBaseURLChange = useCallback(
     (value: string) => {
       setBaseURL(value)
+      setBaseURLError(null)
       void application.setPreference(PrefKey.AssistantBaseUrl, value)
     },
     [application],
   )
+
+  const handleBaseURLBlur = useCallback(() => {
+    try {
+      const normalized = normalizeOpenAICompatibleBaseURL(baseURL)
+      setBaseURLError(null)
+      if (normalized !== baseURL) {
+        setBaseURL(normalized)
+        void application.setPreference(PrefKey.AssistantBaseUrl, normalized)
+      }
+    } catch (error) {
+      setBaseURLError(error instanceof Error ? error.message : String(error))
+    }
+  }, [application, baseURL])
 
   const handleApiKeyChange = useCallback(
     (value: string) => {
@@ -597,7 +626,7 @@ const Assistant = ({ application }: { application: WebApplication }) => {
     setModelsError(null)
     setFetchingModels(true)
     try {
-      const url = `${baseURL.replace(/\/$/, '')}/models`
+      const url = openAICompatibleEndpointURL(baseURL, 'models')
       const headers: Record<string, string> = {}
       const bearer = authMode === 'subscription' ? subscriptionToken.trim() : apiKey.trim()
       if (bearer) {
@@ -605,7 +634,7 @@ const Assistant = ({ application }: { application: WebApplication }) => {
       }
       const response = await fetch(url, { headers })
       if (!response.ok) {
-        throw new Error(`${response.status} ${response.statusText}`)
+        throw new Error(await assistantHttpError(response, 'direct'))
       }
       const json = (await response.json()) as { data?: Array<{ id?: string }> }
       const ids = (json.data ?? []).map((entry) => entry.id).filter((id): id is string => Boolean(id))
@@ -614,22 +643,24 @@ const Assistant = ({ application }: { application: WebApplication }) => {
         setModelsError('The endpoint returned no models.')
       }
     } catch (error) {
-      setModelsError(error instanceof Error ? error.message : String(error))
+      setModelsError(
+        error instanceof TypeError
+          ? assistantNetworkError(error, 'direct')
+          : error instanceof Error
+            ? error.message
+            : String(error),
+      )
     } finally {
       setFetchingModels(false)
     }
   }, [baseURL, apiKey, authMode, subscriptionToken])
 
   const handleFetchServerModels = useCallback(async () => {
-    if (!provider) {
-      setModelsError('Select a provider first.')
-      return
-    }
     setModelsError(null)
     setFetchingModels(true)
     try {
       const result = await application.assistantConfigRequest<{ provider: string; models: string[] }>(
-        `/v1/assistant/models?provider=${encodeURIComponent(provider)}`,
+        provider ? `/v1/assistant/models?provider=${encodeURIComponent(provider)}` : '/v1/assistant/models',
       )
       const ids = Array.isArray(result?.models) ? result.models : []
       setAvailableModels(ids)
@@ -842,14 +873,19 @@ const Assistant = ({ application }: { application: WebApplication }) => {
               <HorizontalSeparator classes="my-4" />
 
               <Subtitle>Base URL</Subtitle>
-              <Text>OpenAI-compatible base URL, ending in /v1 (e.g. http://localhost:1234/v1).</Text>
+              <Text>
+                OpenAI-compatible API root (e.g. http://localhost:1234/v1). A bare host or full /chat/completions URL is
+                normalized automatically.
+              </Text>
               <input
                 className="border-border bg-default mt-2 w-full rounded border px-2 py-1.5 text-sm"
                 type="text"
                 value={baseURL}
                 placeholder="http://localhost:1234/v1"
                 onChange={(event) => handleBaseURLChange(event.target.value)}
+                onBlur={handleBaseURLBlur}
               />
+              {baseURLError && <Text className="text-danger mt-2">{baseURLError}</Text>}
 
               <HorizontalSeparator classes="my-4" />
 
@@ -962,32 +998,31 @@ const Assistant = ({ application }: { application: WebApplication }) => {
             <PreferencesSegment>
               <Subtitle>Provider</Subtitle>
               {loadError && <Text className="text-danger">Could not load server configuration: {loadError}</Text>}
-              {!loadError && providers.length === 0 && (
-                <Text>No providers are configured on the server. Set ASSISTANT_*_API_KEY environment variables.</Text>
+              {!loadError && providers.length === 0 && !config?.profileConfigured && (
+                <Text>
+                  The server advertises no legacy provider. Automatic selection can still use a profile assigned by an
+                  administrator; otherwise configure a provider under Preferences → Admin → AI.
+                </Text>
               )}
-              {providers.length > 0 && (
-                <select
-                  className="border-border bg-default mt-2 rounded border px-2 py-1.5 text-sm"
-                  value={provider}
-                  onChange={(event) => handleProviderChange(event.target.value)}
-                >
-                  <option value="" disabled>
-                    Select a provider
+              <select
+                className="border-border bg-default mt-2 rounded border px-2 py-1.5 text-sm"
+                value={provider}
+                onChange={(event) => handleProviderChange(event.target.value)}
+              >
+                <option value="">Automatic (assigned/default server profile)</option>
+                {providers.map((id) => (
+                  <option key={id} value={id}>
+                    {id}
                   </option>
-                  {providers.map((id) => (
-                    <option key={id} value={id}>
-                      {id}
-                    </option>
-                  ))}
-                </select>
-              )}
+                ))}
+              </select>
 
               <HorizontalSeparator classes="my-4" />
 
               <Subtitle>Model</Subtitle>
               <Text>
-                Identifier of the model to use, or fetch the list the server’s provider offers (queried with the
-                server-held key).
+                Optional model override. Leave blank with Automatic to use the assigned/default server profile’s model,
+                or fetch the models available to you.
               </Text>
               <div className="mt-2 flex items-center gap-2">
                 <input
@@ -1000,7 +1035,7 @@ const Assistant = ({ application }: { application: WebApplication }) => {
                 <Button
                   label={fetchingModels ? 'Loading…' : 'Fetch models'}
                   onClick={() => void handleFetchServerModels()}
-                  disabled={!provider || fetchingModels}
+                  disabled={fetchingModels}
                 />
               </div>
               {modelsError && <Text className="text-danger mt-2">Could not fetch models: {modelsError}</Text>}
@@ -1024,7 +1059,9 @@ const Assistant = ({ application }: { application: WebApplication }) => {
           </PreferencesGroup>
         )}
 
-        {application.featuresController.isAdminUser() && <SubscriptionPairing application={application} />}
+        {application.featuresController.isAdminUser() && (
+          <SubscriptionPairing application={application} onUseServerProxy={useAutomaticServerProxy} />
+        )}
       </TabPanel>
 
       <TabPanel state={tabState} id="behavior">

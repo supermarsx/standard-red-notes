@@ -297,11 +297,26 @@ export class AssistantController extends BaseHttpController {
   @httpGet('/config')
   async config(_request: Request, response: Response): Promise<void> {
     const providers = configuredProviders(await this.effectiveProviderConfig())
+    let profileConfigured = false
+    let profileDefaultModel = ''
+    if (this.serverSettingsResolver) {
+      try {
+        const { profiles, defaultProfileId } = await this.serverSettingsResolver.resolveAssistantProfiles()
+        const enabledProfiles = profiles.filter((profile) => profile.enabled)
+        profileConfigured = enabledProfiles.length > 0
+        const defaultProfile = enabledProfiles.find((profile) => profile.id === defaultProfileId) ?? enabledProfiles[0]
+        profileDefaultModel = defaultProfile?.model ?? ''
+      } catch {
+        // Public config is best-effort; the authenticated stream still resolves
+        // profiles fail-closed when the settings store is unhealthy.
+      }
+    }
 
     response.json({
       providers,
       defaultProvider: providers.includes(this.defaultProvider) ? this.defaultProvider : (providers[0] ?? ''),
-      defaultModel: this.defaultModel,
+      defaultModel: profileDefaultModel || this.defaultModel,
+      profileConfigured,
     })
   }
 
@@ -330,8 +345,28 @@ export class AssistantController extends BaseHttpController {
       return
     }
 
+    // Empty provider means "Automatic", matching /stream: resolve the
+    // authenticated user's assignment first, then the server default profile.
+    // This keeps model discovery and the actual completion on the same backend.
+    const requestedProvider = typeof request.query.provider === 'string' ? request.query.provider.trim() : ''
+    if (!requestedProvider && this.serverSettingsResolver) {
+      let profile
+      try {
+        profile = await this.serverSettingsResolver.resolveActiveProfile(undefined, this.resolvePrincipal(response))
+      } catch {
+        response.status(503).json({ error: { message: 'Assistant profile configuration is unavailable.' } })
+        return
+      }
+      if (profile) {
+        const resolution = resolveProfileProvider(profile)
+        const models = await listProviderModels(resolution.providerId, resolution.config)
+        response.json({ provider: resolution.providerId, profileId: profile.id, models })
+        return
+      }
+    }
+
     const providerConfig = await this.effectiveProviderConfig()
-    const requested = typeof request.query.provider === 'string' ? request.query.provider : ''
+    const requested = requestedProvider
     const providers = configuredProviders(providerConfig)
     const provider = requested || (providers.includes(this.defaultProvider) ? this.defaultProvider : providers[0] || '')
 
@@ -1145,6 +1180,11 @@ export class AssistantController extends BaseHttpController {
     const providerId = body.provider || this.defaultProvider
     const model = body.model || this.defaultModel
     const config = { ...(await this.effectiveProviderConfig()) }
+    if (!providerId) {
+      throw new Error(
+        'No assistant provider or assigned/default profile is configured on this server. Ask an administrator to configure one under Admin → AI.',
+      )
+    }
     const openAiProvider = providerId === 'openai' || providerId === 'openai-compatible'
     const isSubscription = openAiProvider && config.openaiAuthMode === 'subscription'
     if (

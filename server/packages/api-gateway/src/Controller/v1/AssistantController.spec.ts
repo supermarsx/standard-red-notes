@@ -4,7 +4,7 @@ import { Request, Response } from 'express'
 import { SettingName } from '@standardnotes/domain-core'
 
 import { AssistantController } from './AssistantController'
-import { AssistantProviderConfig } from '../../Service/Assistant/providers/factory'
+import { AssistantProviderConfig, listProviderModels } from '../../Service/Assistant/providers/factory'
 
 // The provider factory is mocked so the controller never reaches a real LLM
 // provider: these tests only exercise the per-user gate + metering logic that
@@ -187,6 +187,70 @@ describe('AssistantController', () => {
           }),
         }),
       )
+    })
+  })
+
+  describe('assigned/default profile discovery', () => {
+    const profile = {
+      id: 'assigned-local',
+      name: 'Assigned local model',
+      provider: 'openai-compatible' as const,
+      baseUrl: 'http://127.0.0.1:1234/v1',
+      model: 'local-model',
+      enabled: true,
+    }
+
+    let resolver: {
+      resolveAssistantProfiles: jest.Mock
+      resolveActiveProfile: jest.Mock
+    }
+
+    beforeEach(() => {
+      resolver = {
+        resolveAssistantProfiles: jest.fn().mockResolvedValue({
+          profiles: [profile],
+          defaultProfileId: profile.id,
+        }),
+        resolveActiveProfile: jest.fn().mockResolvedValue(profile),
+      }
+    })
+
+    const controller = () =>
+      new AssistantController(
+        {} as AssistantProviderConfig,
+        '',
+        'fallback-model',
+        0,
+        [],
+        redis as never,
+        resolver as never,
+      )
+
+    it('advertises that a named server profile is configured without exposing its secret', async () => {
+      const response = responseWith({})
+
+      await controller().config({} as Request, response)
+
+      expect(jsonMock).toHaveBeenCalledWith(
+        expect.objectContaining({ profileConfigured: true, defaultModel: 'local-model' }),
+      )
+    })
+
+    it('uses the authenticated user assignment for Automatic model discovery', async () => {
+      ;(listProviderModels as jest.Mock).mockResolvedValueOnce(['local-model'])
+      const response = responseWith({})
+
+      await controller().models({ query: {}, headers: {} } as unknown as Request, response)
+
+      expect(resolver.resolveActiveProfile).toHaveBeenCalledWith(
+        undefined,
+        expect.objectContaining({ userIdentifiers: ['user-1'] }),
+      )
+      expect(jsonMock).toHaveBeenCalledWith({
+        provider: 'openai',
+        profileId: 'assigned-local',
+        models: ['local-model'],
+      })
     })
   })
 })

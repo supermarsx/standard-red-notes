@@ -263,7 +263,7 @@ describe('getSelectionAIAvailability', () => {
       expect(result.reason).toBe('Sign in to use the AI assistant.')
     })
 
-    it('is unavailable with an account but no provider chosen', () => {
+    it('uses automatic server profile resolution when no provider is chosen', () => {
       const app = fakeApplication(
         {
           [PrefKey.AssistantConnectionMode]: 'proxy',
@@ -271,9 +271,7 @@ describe('getSelectionAIAvailability', () => {
         },
         true,
       )
-      const result = getSelectionAIAvailability(app)
-      expect(result.available).toBe(false)
-      expect(result.reason).toBe('Choose an AI provider in Preferences → Assistant.')
+      expect(getSelectionAIAvailability(app)).toEqual({ available: true })
     })
 
     it('is available with an account and a provider configured', () => {
