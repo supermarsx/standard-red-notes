@@ -104,7 +104,11 @@ export class VaultDisplayService
     return this.options.isInExclusiveDisplayMode()
   }
 
-  getItemVault(item: DecryptedItemInterface): VaultListingInterface | undefined {
+  getItemVault(item: DecryptedItemInterface | undefined): VaultListingInterface | undefined {
+    if (!item) {
+      return undefined
+    }
+
     if (this.application.items.isTemplateItem(item)) {
       if (this.exclusivelyShownVault) {
         return this.exclusivelyShownVault

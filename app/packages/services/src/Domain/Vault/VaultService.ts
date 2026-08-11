@@ -267,7 +267,13 @@ export class VaultService
     return item.key_system_identifier !== undefined
   }
 
-  getItemVault(item: DecryptedItemInterface): VaultListingInterface | undefined {
+  getItemVault(item: DecryptedItemInterface | undefined): VaultListingInterface | undefined {
+    // Note selection can change between render and MobX evaluation. Treat that
+    // transient empty selection as "no vault" instead of dereferencing uuid.
+    if (!item) {
+      return undefined
+    }
+
     const latestItem = this.items.findItem(item.uuid)
 
     if (this.items.isTemplateItem(item)) {

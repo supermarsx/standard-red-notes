@@ -155,6 +155,15 @@ describe('VaultService', () => {
     )
   })
 
+  describe('getItemVault', () => {
+    it('returns no vault for a transiently empty item selection', () => {
+      items.findItem = jest.fn()
+
+      expect(service.getItemVault(undefined)).toBeUndefined()
+      expect(items.findItem).not.toHaveBeenCalled()
+    })
+  })
+
   describe('moveItemToVault', () => {
     it('should throw error if vault is locked', async () => {
       vaultLocks.isVaultLocked = jest.fn().mockReturnValue(true)

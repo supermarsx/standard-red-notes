@@ -14,7 +14,7 @@ type ItemVaultInfo = {
   sharedByContact?: TrustedContactInterface
 }
 
-export const useItemVaultInfo = (item: DecryptedItemInterface): ItemVaultInfo => {
+export const useItemVaultInfo = (item: DecryptedItemInterface | undefined): ItemVaultInfo => {
   const application = useApplication()
 
   const [vault, setVault] = useState<VaultListingInterface>()
@@ -23,7 +23,10 @@ export const useItemVaultInfo = (item: DecryptedItemInterface): ItemVaultInfo =>
   const [sharedByContact, setSharedByContact] = useState<TrustedContactInterface>()
 
   const updateInfo = useCallback(() => {
-    if (!application.featuresController.isVaultsEnabled()) {
+    if (!item || !application.featuresController.isVaultsEnabled()) {
+      setVault(undefined)
+      setLastEditedByContact(undefined)
+      setSharedByContact(undefined)
       return
     }
 
@@ -37,22 +40,30 @@ export const useItemVaultInfo = (item: DecryptedItemInterface): ItemVaultInfo =>
   }, [updateInfo])
 
   useEffect(() => {
+    if (!item) {
+      return
+    }
+
     return application.items.streamItems(ContentType.TYPES.VaultListing, ({ changed, inserted }) => {
       const matchingItem = changed.concat(inserted).find((vault) => vault.uuid === vaultRef.current?.uuid)
       if (matchingItem) {
         setVault(matchingItem as VaultListingInterface)
       }
     })
-  }, [application.items, vaultRef])
+  }, [application.items, item, vaultRef])
 
   useEffect(() => {
+    if (!item) {
+      return
+    }
+
     return application.items.streamItems(ContentType.TYPES.Note, ({ changed }) => {
       const matchingItem = changed.find((note) => note.uuid === item.uuid)
       if (matchingItem) {
         updateInfo()
       }
     })
-  }, [application.items, item.uuid, updateInfo])
+  }, [application.items, item, updateInfo])
 
   return {
     vault,
