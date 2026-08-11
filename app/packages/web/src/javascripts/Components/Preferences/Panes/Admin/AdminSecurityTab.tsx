@@ -440,8 +440,8 @@ const AdminSecurityTab: FunctionComponent<Props> = ({ application, noteIfForbidd
           This instance&apos;s security posture and the runtime anti-abuse controls, grouped into subtabs. The Overview
           is a read-only summary; each item links to where its control actually lives.
         </Text>
-        <div className="border-border mt-3 border-b">
-          <TabList state={subTab} className="flex flex-wrap">
+        <div className="border-border mt-3 overflow-x-auto border-b">
+          <TabList state={subTab} className="flex min-w-max whitespace-nowrap">
             <Tab id="overview" className="inline-flex items-center gap-1.5 !text-xs">
               <Icon type="security" size="medium" />
               Overview
