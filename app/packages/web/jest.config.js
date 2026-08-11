@@ -11,6 +11,12 @@ module.exports = {
     ...pathsToModuleNameMapper(pathsFromTsconfig, {
       prefix: '<rootDir>',
     }),
+    // PDF.js 6 is ESM-only and uses `import.meta` in its prebuilt runtime. The
+    // production webpack build consumes that module directly; CommonJS Jest
+    // suites use explicit fail-closed shims so importing PdfPreview does not
+    // crash unrelated suites before their tests can run.
+    '^pdfjs-dist/legacy/build/pdf\\.mjs$': '<rootDir>/src/javascripts/__mocks__/pdfjsRuntimeMock.ts',
+    '^pdfjs-dist/legacy/build/pdf\\.worker\\.min\\.mjs$': '<rootDir>/src/javascripts/__mocks__/pdfjsWorkerMock.ts',
     // Webpack inline-loader specifiers (`!css-loader?{…}!sass-loader?{…}!….scss`)
     // import raw stylesheet TEXT, which product code calls `.toString()` on. They
     // must be matched BEFORE the generic rule below (first match wins): the generic

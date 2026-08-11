@@ -4,6 +4,7 @@ import path from 'path'
 const FIXED_PDFJS_VERSION = '6.2.108'
 const PDFJS_RUNTIME_IMPORT = 'pdfjs-dist/legacy/build/pdf.mjs'
 const PDFJS_WORKER_IMPORT = 'pdfjs-dist/legacy/build/pdf.worker.min.mjs'
+const pdfjsPackageRoot = path.dirname(require.resolve('pdfjs-dist/package.json'))
 
 describe('PDF.js preview package contract', () => {
   it('pins the first release that fixes malicious-PDF JavaScript execution', () => {
@@ -21,8 +22,10 @@ describe('PDF.js preview package contract', () => {
   it('loads the locally bundled runtime and worker entry points from that package', () => {
     const integrationSource = fs.readFileSync(path.resolve(__dirname, 'pdfjs.ts'), 'utf8')
 
-    expect(() => require.resolve(PDFJS_RUNTIME_IMPORT)).not.toThrow()
-    expect(() => require.resolve(PDFJS_WORKER_IMPORT)).not.toThrow()
+    // Resolve from the installed package root rather than through Jest's
+    // moduleNameMapper, which intentionally substitutes CommonJS-safe shims.
+    expect(fs.existsSync(path.join(pdfjsPackageRoot, 'legacy/build/pdf.mjs'))).toBe(true)
+    expect(fs.existsSync(path.join(pdfjsPackageRoot, 'legacy/build/pdf.worker.min.mjs'))).toBe(true)
     expect(integrationSource).toContain(`from '${PDFJS_RUNTIME_IMPORT}'`)
     expect(integrationSource).toContain(`from '${PDFJS_WORKER_IMPORT}'`)
   })
