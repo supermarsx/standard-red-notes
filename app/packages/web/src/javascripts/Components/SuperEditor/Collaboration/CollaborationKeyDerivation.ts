@@ -1,6 +1,11 @@
-import type { SNNote, KeySystemRootKeyInterface, RootKeyInterface } from '@standardnotes/snjs'
+import { isLitePayload, type SNNote, type KeySystemRootKeyInterface, type RootKeyInterface } from '@standardnotes/snjs'
 import type { WebApplication } from '@/Application/WebApplication'
-import { getSuperCollaborationAvailability, SuperCollaborationAvailability } from './CollaborationAvailability'
+import {
+  getSuperCollaborationAvailability,
+  SUPER_COLLABORATION_SIGN_IN_REASON,
+  SUPER_COLLABORATION_VAULT_KEY_REASON,
+  SuperCollaborationAvailability,
+} from './CollaborationAvailability'
 
 const COLLABORATION_HKDF_SALT = 'Standard Red Notes encrypted collaboration room key v1'
 
@@ -82,6 +87,8 @@ type AvailableKeySource = {
   keyScope: string
   rootKeySecret: string
   userUuid: string
+  /** Opaque in-memory sign-in epoch; strict identity changes on sign-out/login. */
+  sessionUser: object
   username: string
   sourceId: string
 }
@@ -93,37 +100,59 @@ type UnavailableKeySource = {
 
 export type CollaborationKeySource = AvailableKeySource | UnavailableKeySource
 
+export type NoteEncryptionIdentity = Readonly<{
+  noteUuid: string
+  userUuid: string
+  sessionUser: object
+  sourceId: string
+  keySystemIdentifier: string | null
+  sharedVaultUuid: string | null
+}>
+
 /**
  * Resolve and cross-check the live key source synchronously. Vault notes use the
  * exact unlocked key-system root; ordinary notes use the signed-in account root.
  * Every identifier must agree, and locked notes fail closed.
  */
-export function resolveCollaborationKeySource(application: WebApplication, note: SNNote): CollaborationKeySource {
-  const platformAvailability = getSuperCollaborationAvailability()
-  if (!platformAvailability.available) {
-    return platformAvailability
+function resolveEncryptionKeySource(application: WebApplication, note: SNNote): CollaborationKeySource {
+  if (isLitePayload(note.payload)) {
+    return {
+      available: false,
+      reason: 'Live collaboration is waiting for the full encrypted note body to load.',
+    }
+  }
+  try {
+    if (!application.isAuthorizedToRenderItem(note)) {
+      return {
+        available: false,
+        reason: 'Unlock protected note access to use live collaboration.',
+      }
+    }
+  } catch {
+    return {
+      available: false,
+      reason: 'Unlock protected note access to use live collaboration.',
+    }
   }
 
   const user = application.sessions.getUser()
   const authenticated = application.sessions.isSignedIn() && user !== undefined
+  if (!authenticated || !user) {
+    return { available: false, reason: SUPER_COLLABORATION_SIGN_IN_REASON }
+  }
   const vault = application.vaults.getItemVault(note)
+  if (!vault && note.user_uuid !== user.uuid) {
+    return {
+      available: false,
+      reason: 'Live collaboration stopped because the note and account encryption key do not match.',
+    }
+  }
   const vaultRootKey = vault && !note.locked ? application.vaultLocks.getUnlockedVaultRootKey(vault) : undefined
   const accountRootKey = !vault && !note.locked ? application.encryption.getRootKey() : undefined
   const encryptionKeyAvailable = vault ? Boolean(vaultRootKey?.key) : Boolean(accountRootKey?.masterKey)
 
-  const availability = getSuperCollaborationAvailability({
-    authenticated,
-    encryptionKeyAvailable,
-  })
-  if (!availability.available) {
-    return availability
-  }
-
-  if (!user) {
-    return {
-      available: false,
-      reason: 'Sign in to use live collaboration.',
-    }
+  if (!encryptionKeyAvailable) {
+    return { available: false, reason: SUPER_COLLABORATION_VAULT_KEY_REASON }
   }
 
   if (!vault) {
@@ -140,6 +169,7 @@ export function resolveCollaborationKeySource(application: WebApplication, note:
       keyScope,
       rootKeySecret: accountRootKey.masterKey,
       userUuid: user.uuid,
+      sessionUser: user,
       username: user.email || 'Collaborator',
       sourceId: accountRootKeySourceId(accountRootKey, user.uuid, note.uuid),
     }
@@ -166,9 +196,62 @@ export function resolveCollaborationKeySource(application: WebApplication, note:
     keyScope,
     rootKeySecret: vaultRootKey.key,
     userUuid: user.uuid,
+    sessionUser: user,
     username: user.email || 'Collaborator',
     sourceId: vaultRootKeySourceId(vaultRootKey, keyScope, note.uuid),
   }
+}
+
+export function resolveCollaborationKeySource(application: WebApplication, note: SNNote): CollaborationKeySource {
+  const platformAvailability = getSuperCollaborationAvailability()
+  return platformAvailability.available ? resolveEncryptionKeySource(application, note) : platformAvailability
+}
+
+export function noteEncryptionIdentityFromSource(
+  note: SNNote,
+  source: Pick<AvailableKeySource, 'noteUuid' | 'userUuid' | 'sessionUser' | 'sourceId'>,
+): NoteEncryptionIdentity {
+  return {
+    noteUuid: source.noteUuid,
+    userUuid: source.userUuid,
+    sessionUser: source.sessionUser,
+    sourceId: source.sourceId,
+    keySystemIdentifier: note.key_system_identifier ?? null,
+    sharedVaultUuid: note.shared_vault_uuid ?? null,
+  }
+}
+
+/**
+ * Resolve immutable session + root-key identity without depending on realtime
+ * platform/transport availability. Durable comment writes use this primitive
+ * even when collaboration itself is unavailable.
+ */
+export function resolveNoteEncryptionIdentity(
+  application: WebApplication,
+  note: SNNote,
+): NoteEncryptionIdentity | undefined {
+  const source = resolveEncryptionKeySource(application, note)
+  return source.available ? noteEncryptionIdentityFromSource(note, source) : undefined
+}
+
+export function matchesNoteEncryptionIdentity(
+  application: WebApplication,
+  expected: NoteEncryptionIdentity,
+  candidate = application.items.findItem<SNNote>(expected.noteUuid),
+): boolean {
+  if (!candidate || candidate.uuid !== expected.noteUuid) {
+    return false
+  }
+  const current = resolveEncryptionKeySource(application, candidate)
+  return (
+    current.available &&
+    current.noteUuid === expected.noteUuid &&
+    current.userUuid === expected.userUuid &&
+    current.sessionUser === expected.sessionUser &&
+    current.sourceId === expected.sourceId &&
+    (candidate.key_system_identifier ?? null) === expected.keySystemIdentifier &&
+    (candidate.shared_vault_uuid ?? null) === expected.sharedVaultUuid
+  )
 }
 
 export type PreparedCollaborationAccess =
@@ -179,10 +262,13 @@ export type PreparedCollaborationAccess =
     }
   | {
       available: true
+      noteUuid: string
       sourceId: string
       roomKey: CryptoKey
       capability: string
+      serverUpdatedAtTimestamp: number
       userUuid: string
+      sessionUser: object
       username: string
     }
 
@@ -194,6 +280,10 @@ export type PreparedCollaborationAccess =
 export async function prepareCollaborationAccess(
   application: WebApplication,
   note: SNNote,
+  authorizationContext?: {
+    leaseRequestId?: string
+    bootstrapChallenge?: string
+  },
 ): Promise<PreparedCollaborationAccess> {
   const before = resolveCollaborationKeySource(application, note)
   if (!before.available) {
@@ -201,15 +291,19 @@ export async function prepareCollaborationAccess(
   }
 
   let roomKey: CryptoKey
-  let capability: string | undefined
+  let authorization: { capability: string; serverUpdatedAtTimestamp: number } | undefined
   try {
-    ;[roomKey, capability] = await Promise.all([
+    ;[roomKey, authorization] = await Promise.all([
       deriveCollaborationRoomKey({
         rootKeySecret: before.rootKeySecret,
         keyScope: before.keyScope,
         noteUuid: before.noteUuid,
       }),
-      application.sockets.authorizeCollaborationRoom(before.noteUuid),
+      application.sockets.authorizeCollaborationRoom(
+        before.noteUuid,
+        authorizationContext?.leaseRequestId,
+        authorizationContext?.bootstrapChallenge,
+      ),
     ])
   } catch {
     return {
@@ -219,7 +313,7 @@ export async function prepareCollaborationAccess(
     }
   }
 
-  if (!capability) {
+  if (!authorization) {
     return {
       available: false,
       reason: 'The server did not authorize live editing for this note. Edit permission is required.',
@@ -228,7 +322,15 @@ export async function prepareCollaborationAccess(
   }
 
   const after = resolveCollaborationKeySource(application, note)
-  if (!after.available || after.sourceId !== before.sourceId || after.noteUuid !== before.noteUuid) {
+  if (
+    !after.available ||
+    after.sourceId !== before.sourceId ||
+    after.noteUuid !== before.noteUuid ||
+    after.userUuid !== before.userUuid ||
+    after.sessionUser !== before.sessionUser ||
+    after.keyScope !== before.keyScope ||
+    after.rootKeySecret !== before.rootKeySecret
+  ) {
     return {
       available: false,
       reason: after.available ? 'The note encryption key changed while collaboration was starting.' : after.reason,
@@ -238,10 +340,13 @@ export async function prepareCollaborationAccess(
 
   return {
     available: true,
+    noteUuid: after.noteUuid,
     sourceId: after.sourceId,
     roomKey,
-    capability,
+    capability: authorization.capability,
+    serverUpdatedAtTimestamp: authorization.serverUpdatedAtTimestamp,
     userUuid: after.userUuid,
+    sessionUser: after.sessionUser,
     username: after.username,
   }
 }

@@ -43,6 +43,7 @@ import { FormatPainterPlugin } from './Plugins/FormatPainterPlugin'
 import { SuperCollaborationPlugin, CollaborationConfig } from './Collaboration/CollaborationPlugin'
 import NavigationSidebar from './Plugins/NavigationSidebarPlugin/NavigationSidebarPlugin'
 import { WebApplication } from '@/Application/WebApplication'
+import { CollaborationEditabilityPlugin } from './Collaboration/CollaborationEditabilityPlugin'
 
 type BlocksEditorProps = {
   /**
@@ -87,6 +88,24 @@ export const BlocksEditor: FunctionComponent<BlocksEditorProps> = ({
   registerDebounceControl,
 }) => {
   const [didIgnoreFirstChange, setDidIgnoreFirstChange] = useState(false)
+  const collaborationLifetimeKey = collaboration
+    ? `${collaboration.room}:${collaboration.editorLease.requestId}`
+    : undefined
+  const [readyCollaborationLifetime, setReadyCollaborationLifetime] = useState<string | undefined>()
+  const collaborationCanonicalReady =
+    collaborationLifetimeKey === undefined || readyCollaborationLifetime === collaborationLifetimeKey
+
+  const handleCanonicalReadyChange = useCallback(
+    (ready: boolean) => {
+      setReadyCollaborationLifetime((current) => {
+        if (ready) {
+          return collaborationLifetimeKey
+        }
+        return current === collaborationLifetimeKey ? undefined : current
+      })
+    },
+    [collaborationLifetimeKey],
+  )
 
   /**
    * Standard Red Notes (FIX 1): serializing the whole document
@@ -136,6 +155,18 @@ export const BlocksEditor: FunctionComponent<BlocksEditorProps> = ({
     }
   }, [])
 
+  const persistCanonicalEditorState = useCallback((editorState: EditorState) => {
+    // The provider's correlated/bootstrap snapshot may have updated Lexical
+    // while OnChange was deliberately gated. Persist that exact visible state
+    // immediately so it survives even if the originating peer disappears before
+    // its own save debounce. This is a read only operation on Lexical/Yjs.
+    editorState.read(() => {
+      handleEditorChange(editorState, previewLengthRef.current, (value, previewText) => {
+        onChangeRef.current?.(value, previewText, true)
+      })
+    })
+  }, [])
+
   /**
    * Standard Red Notes (last-edit-loss fix): expose the debounce's flush + hasPending
    * to the owner (SuperEditor -> NoteViewController, and the beforeunload hook) so
@@ -155,6 +186,13 @@ export const BlocksEditor: FunctionComponent<BlocksEditorProps> = ({
 
   const handleChange = useCallback(
     (editorState: EditorState, _editor: LexicalEditor) => {
+      // Lexical emits binding/bootstrap changes as well as user changes. Until
+      // the provider has proved canonical state, neither kind may enter the
+      // ordinary encrypted note-save debounce: doing so could persist an empty
+      // or partially typed pre-bootstrap document over the real note.
+      if (!collaborationCanonicalReady) {
+        return
+      }
       if (ignoreFirstChange && !didIgnoreFirstChange) {
         setDidIgnoreFirstChange(true)
         return
@@ -163,7 +201,7 @@ export const BlocksEditor: FunctionComponent<BlocksEditorProps> = ({
       // Always remember the latest state; the trailing flush serializes it.
       debouncedSerializeRef.current(editorState)
     },
-    [ignoreFirstChange, didIgnoreFirstChange],
+    [collaborationCanonicalReady, ignoreFirstChange, didIgnoreFirstChange],
   )
 
   // Flush any pending serialize when the editor loses focus so a save triggered
@@ -261,8 +299,18 @@ export const BlocksEditor: FunctionComponent<BlocksEditorProps> = ({
       <MarkdownShortcutPlugin transformers={MarkdownTransformers} />
       <TablePlugin hasCellMerge />
       <OnChangePlugin onChange={handleChange} ignoreSelectionChange={true} />
+      <CollaborationEditabilityPlugin
+        editable={!readonly && collaborationCanonicalReady}
+        canonicalReady={collaborationCanonicalReady}
+        collaborationLifetimeKey={collaborationLifetimeKey}
+        onCanonicalState={persistCanonicalEditorState}
+      />
       {collaboration && application ? (
-        <SuperCollaborationPlugin application={application} config={collaboration} />
+        <SuperCollaborationPlugin
+          application={application}
+          config={collaboration}
+          onCanonicalReadyChange={handleCanonicalReadyChange}
+        />
       ) : (
         <SuperHistoryPlugin />
       )}

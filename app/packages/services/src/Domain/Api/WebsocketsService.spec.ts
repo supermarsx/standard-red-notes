@@ -44,6 +44,71 @@ describe('webSocketsService', () => {
     })
   })
 
+  describe('authorizeCollaborationRoom()', () => {
+    it('returns only a capability bound to the requested room and canonical server revision', async () => {
+      webSocketApiService.authorizeCollaboration = jest.fn().mockResolvedValue({
+        status: 200,
+        data: {
+          capability: 'capability-1',
+          room: 'note-1',
+          expiresIn: 300,
+          serverUpdatedAtTimestamp: 1_723_456_789_000_000,
+          collaborationProtocolVersion: 2,
+        },
+      })
+
+      await expect(createService().authorizeCollaborationRoom('note-1')).resolves.toEqual({
+        capability: 'capability-1',
+        serverUpdatedAtTimestamp: 1_723_456_789_000_000,
+        collaborationProtocolVersion: 2,
+      })
+    })
+
+    it.each([
+      [
+        'wrong room',
+        { capability: 'cap', room: 'note-2', collaborationProtocolVersion: 2, serverUpdatedAtTimestamp: 123 },
+      ],
+      ['missing revision', { capability: 'cap', room: 'note-1', collaborationProtocolVersion: 2 }],
+      [
+        'unsafe revision',
+        {
+          capability: 'cap',
+          room: 'note-1',
+          collaborationProtocolVersion: 2,
+          serverUpdatedAtTimestamp: Number.MAX_VALUE,
+        },
+      ],
+      [
+        'legacy protocol',
+        { capability: 'cap', room: 'note-1', collaborationProtocolVersion: 1, serverUpdatedAtTimestamp: 123 },
+      ],
+    ])('fails closed for %s', async (_case, data) => {
+      webSocketApiService.authorizeCollaboration = jest.fn().mockResolvedValue({ status: 200, data })
+      await expect(createService().authorizeCollaborationRoom('note-1')).resolves.toBeUndefined()
+    })
+
+    it('requires exact lease and bootstrap-challenge echoes', async () => {
+      webSocketApiService.authorizeCollaboration = jest.fn().mockResolvedValue({
+        status: 200,
+        data: {
+          capability: 'capability-1',
+          room: 'note-1',
+          expiresIn: 300,
+          serverUpdatedAtTimestamp: 123,
+          collaborationProtocolVersion: 2,
+          leaseRequestId: 'lease-1',
+          bootstrapChallenge: 'different-challenge',
+        },
+      })
+
+      await expect(
+        createService().authorizeCollaborationRoom('note-1', 'lease-1', 'challenge-1'),
+      ).resolves.toBeUndefined()
+      expect(webSocketApiService.authorizeCollaboration).toHaveBeenCalledWith('note-1', 'lease-1', 'challenge-1')
+    })
+  })
+
   describe('SYNC_ITEMS_PUSHED message (Phase 1A)', () => {
     const emitMessage = (service: WebSocketsService, data: unknown): WebSocketsServiceEvent[] => {
       const events: WebSocketsServiceEvent[] = []
@@ -164,6 +229,23 @@ describe('webSocketsService', () => {
       expect(run).not.toThrow()
       expect(events).toContain(WebSocketsServiceEvent.ItemsChangedOnServer)
     })
+
+    it('dispatches the gateway response-claim grant to collaboration subscribers', () => {
+      const service = createService()
+      const handler = jest.fn()
+      service.onCollaborationFrame(handler)
+      const frame = {
+        t: 'yjs-response-granted',
+        room: 'note-1',
+        stateRequestId: 'state-request-1',
+        leaseRequestId: 'lease-1',
+        protocolVersion: 2,
+      }
+      const { run } = pumpRaw(service, JSON.stringify(frame))
+
+      expect(run).not.toThrow()
+      expect(handler).toHaveBeenCalledWith(frame)
+    })
   })
 
   describe('connecting guard (concurrent-dial timing)', () => {
@@ -204,6 +286,9 @@ describe('webSocketsService', () => {
       fireClose(code: number): void {
         this.readyState = FakeWebSocket.CLOSED
         this.onclose?.({ code })
+      }
+      fireMessage(data: unknown): void {
+        this.onmessage?.({ data })
       }
     }
 
@@ -293,6 +378,40 @@ describe('webSocketsService', () => {
       const again = await service.startWebSocketConnection()
       expect(again.isFailed()).toBe(false)
       expect(FakeWebSocket.instances).toHaveLength(2)
+    })
+
+    it('ignores stale message, open, and close callbacks after a replacement socket becomes current', async () => {
+      const setIntervalSpy = jest
+        .spyOn(global, 'setInterval')
+        .mockReturnValue(11 as unknown as ReturnType<typeof setInterval>)
+      const clearIntervalSpy = jest.spyOn(global, 'clearInterval').mockImplementation(() => undefined)
+      const service = createDialService()
+      const collaborationHandler = jest.fn()
+      service.onCollaborationFrame(collaborationHandler)
+
+      await service.startWebSocketConnection()
+      const staleSocket = FakeWebSocket.instances[0]
+      staleSocket.fireOpen()
+      expect(setIntervalSpy).toHaveBeenCalledTimes(1)
+
+      // Model close/restart overlap: A is closing, so a manual start is allowed
+      // to install B before A's delayed close callback arrives.
+      staleSocket.readyState = FakeWebSocket.CLOSING
+      await service.startWebSocketConnection()
+      const currentSocket = FakeWebSocket.instances[1]
+      currentSocket.fireOpen()
+      expect(setIntervalSpy).toHaveBeenCalledTimes(2)
+
+      collaborationHandler.mockClear()
+      clearIntervalSpy.mockClear()
+      staleSocket.fireMessage(JSON.stringify({ t: 'room-sync', room: 'old-session-note' }))
+      staleSocket.fireOpen()
+      staleSocket.fireClose(1006)
+
+      expect(collaborationHandler).not.toHaveBeenCalled()
+      expect(setIntervalSpy).toHaveBeenCalledTimes(2)
+      expect(clearIntervalSpy).not.toHaveBeenCalled()
+      expect(service.isWebSocketConnectionOpen()).toBe(true)
     })
   })
 })

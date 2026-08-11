@@ -29,7 +29,11 @@ export const BlocksEditorComposer: FunctionComponent<BlocksEditorComposerProps> 
       initialConfig={{
         namespace: 'BlocksEditor',
         theme: BlocksEditorTheme,
-        editable: !readonly,
+        // A collaboration composer starts with an intentionally empty Y.Doc.
+        // Keep Lexical itself non-editable until the encrypted provider proves
+        // that canonical state was seeded or received; a DOM-only readonly flag
+        // would still leave command/plugin mutation paths open.
+        editable: !readonly && !collaborating,
         onError: (error: Error) => console.error(error),
         editorState: collaborating
           ? null

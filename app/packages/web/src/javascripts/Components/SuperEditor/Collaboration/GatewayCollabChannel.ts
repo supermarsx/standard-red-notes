@@ -25,6 +25,11 @@ export function createGatewayCollabChannel(application: WebApplication): CollabC
         return Promise.resolve()
       }),
     // Standard Red Notes: fetch the gateway-required room capability for this note.
-    authorize: (room: string) => application.sockets.authorizeCollaborationRoom(room),
+    authorize: async (room: string, leaseRequestId?: string, bootstrapChallenge?: string) =>
+      (
+        await (leaseRequestId || bootstrapChallenge
+          ? application.sockets.authorizeCollaborationRoom(room, leaseRequestId, bootstrapChallenge)
+          : application.sockets.authorizeCollaborationRoom(room))
+      )?.capability,
   }
 }
