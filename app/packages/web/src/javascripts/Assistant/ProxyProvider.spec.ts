@@ -44,6 +44,7 @@ describe('ProxyProvider automatic profile routing', () => {
 
     expect(submitted).not.toHaveProperty('provider')
     expect(submitted).not.toHaveProperty('model')
+    expect(submitted).not.toHaveProperty('profileId')
     expect(events).toContainEqual({ kind: 'finish', stopReason: 'end_turn' })
   })
 
@@ -74,5 +75,6 @@ describe('ProxyProvider automatic profile routing', () => {
 
     expect(submitted).not.toHaveProperty('provider')
     expect(submitted).not.toHaveProperty('model')
+    expect(submitted).not.toHaveProperty('profileId')
   })
 })

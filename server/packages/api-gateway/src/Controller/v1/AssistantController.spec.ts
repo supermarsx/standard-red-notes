@@ -314,6 +314,40 @@ describe('AssistantController', () => {
         models: ['local-model'],
       })
     })
+
+    it('ignores caller provider, model, profile body, and profile header hints for streams', async () => {
+      const assignedProvider = {
+        id: 'openai-compatible',
+        async *send() {
+          yield { kind: 'finish' as const, stopReason: 'end_turn' as const }
+        },
+      }
+      ;(resolveProvider as jest.Mock).mockReturnValueOnce(assignedProvider)
+      const response = responseWith({})
+      const request = {
+        body: {
+          messages: [],
+          provider: 'anthropic',
+          model: 'caller-expensive-model',
+          profileId: 'other-users-profile',
+        },
+        headers: { 'x-assistant-profile': 'header-profile' },
+        on: jest.fn(),
+      } as unknown as Request
+
+      await controller().streamCompletion(request, response)
+
+      expect(resolver.resolveActiveProfile).toHaveBeenCalledWith(undefined, {
+        userIdentifiers: ['user-1', 'user@example.test'],
+        roleNames: [RoleName.NAMES.ProUser],
+      })
+      expect(resolveProvider).toHaveBeenLastCalledWith(
+        'openai',
+        'local-model',
+        expect.objectContaining({ openaiBaseURL: 'http://127.0.0.1:1234/v1' }),
+      )
+      expect(response.end).toHaveBeenCalled()
+    })
   })
 
   it('keeps the legacy server default discoverable when no profile resolver is configured', async () => {
@@ -361,5 +395,26 @@ describe('AssistantController', () => {
 
     expect(resolveProvider).toHaveBeenCalledWith('ollama', 'fallback-model', providerConfig)
     expect(streamResponse.end).toHaveBeenCalled()
+  })
+
+  it('ignores caller provider and model hints in legacy server-managed mode', async () => {
+    const providerConfig = { ollamaUrl: 'http://127.0.0.1:11434' }
+    ;(configuredProviders as jest.Mock).mockReturnValue(['ollama'])
+    ;(resolveProvider as jest.Mock).mockReturnValueOnce({
+      id: 'ollama',
+      async *send() {
+        yield { kind: 'finish' as const, stopReason: 'end_turn' as const }
+      },
+    })
+    const controller = new AssistantController(providerConfig, 'ollama', 'server-model', 0, [], redis as never)
+    const request = {
+      body: { messages: [], provider: 'anthropic', model: 'caller-model', profileId: 'caller-profile' },
+      headers: { 'x-assistant-profile': 'caller-header-profile' },
+      on: jest.fn(),
+    } as unknown as Request
+
+    await controller.streamCompletion(request, responseWith({}))
+
+    expect(resolveProvider).toHaveBeenLastCalledWith('ollama', 'server-model', providerConfig)
   })
 })
