@@ -37,11 +37,10 @@ describe('decodeCrossServiceToken', () => {
   })
 
   it('rejects an expired token', () => {
-    const expired = jwt.sign(
-      { user: { uuid: 'u' }, session: { uuid: 's' } },
-      AUTH_SECRET,
-      { algorithm: 'HS256', expiresIn: -10 },
-    )
+    const expired = jwt.sign({ user: { uuid: 'u' }, session: { uuid: 's' } }, AUTH_SECRET, {
+      algorithm: 'HS256',
+      expiresIn: -10,
+    })
     expect(decodeCrossServiceToken(expired, AUTH_SECRET)).toBeUndefined()
   })
 
