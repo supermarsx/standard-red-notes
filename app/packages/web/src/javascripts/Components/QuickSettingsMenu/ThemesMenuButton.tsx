@@ -40,7 +40,7 @@ const ThemesMenuButton: FunctionComponent<Props> = ({ uiFeature }) => {
     const themeIsLayerableOrNotActive = isThemeLayerable || !application.componentManager.isThemeActive(uiFeature)
 
     if (themeIsLayerableOrNotActive) {
-      void application.componentManager.toggleTheme(uiFeature)
+      void application.themeManager.selectTheme(uiFeature)
     }
   }, [application, canActivateTheme, uiFeature, premiumModal])
 

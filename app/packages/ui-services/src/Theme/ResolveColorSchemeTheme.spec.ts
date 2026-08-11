@@ -5,6 +5,12 @@ import {
 } from './ResolveColorSchemeTheme'
 
 describe('resolveColorSchemeTheme', () => {
+  it('manual mode never replaces the explicitly selected theme', () => {
+    expect(resolveColorSchemeTheme('manual', true)).toBeUndefined()
+    expect(resolveColorSchemeTheme('manual', false)).toBeUndefined()
+    expect(resolveColorSchemeTheme('manual', undefined)).toBeUndefined()
+  })
+
   it('light mode always resolves to Standard Blue regardless of OS', () => {
     expect(resolveColorSchemeTheme('light', true)).toBe(StandardBlueThemeIdentifier)
     expect(resolveColorSchemeTheme('light', false)).toBe(StandardBlueThemeIdentifier)
