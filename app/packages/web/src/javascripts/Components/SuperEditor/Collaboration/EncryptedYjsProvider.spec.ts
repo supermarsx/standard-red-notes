@@ -69,6 +69,73 @@ class LoopbackHub {
   }
 }
 
+class ReconnectableLoopbackHub {
+  private readonly handlers = new Map<symbol, (f: CollabFrame) => void>()
+  private readonly statusHandlers = new Map<symbol, (connected: boolean) => void>()
+  private readonly connected = new Map<symbol, boolean>()
+  private readonly rooms = new Map<string, Set<symbol>>()
+
+  channel(): { channel: CollabChannel; setConnected(connected: boolean): void } {
+    const id = Symbol('reconnectable-channel')
+    this.connected.set(id, true)
+    return {
+      channel: {
+        isConnected: () => this.connected.get(id) === true,
+        subscribe: (handler) => {
+          this.handlers.set(id, handler)
+          return () => this.handlers.delete(id)
+        },
+        subscribeStatus: (handler) => {
+          this.statusHandlers.set(id, handler)
+          return () => this.statusHandlers.delete(id)
+        },
+        send: (frame) => {
+          if (this.connected.get(id)) {
+            this.relay(id, frame)
+          }
+        },
+        authorize: async () => 'fresh-capability',
+      },
+      setConnected: (connected) => {
+        if (this.connected.get(id) === connected) {
+          return
+        }
+        this.connected.set(id, connected)
+        if (!connected) {
+          for (const members of this.rooms.values()) {
+            members.delete(id)
+          }
+        }
+        this.statusHandlers.get(id)?.(connected)
+      },
+    }
+  }
+
+  private relay(from: symbol, frame: CollabFrame): void {
+    if (frame.t === 'room-join') {
+      const members = this.rooms.get(frame.room) ?? new Set<symbol>()
+      members.add(from)
+      this.rooms.set(frame.room, members)
+      this.handlers.get(from)?.({ t: 'room-joined', room: frame.room, requestId: frame.requestId })
+      for (const member of members) {
+        if (member !== from) {
+          this.handlers.get(member)?.({ t: 'room-sync', room: frame.room })
+        }
+      }
+      return
+    }
+    if (frame.t === 'room-leave') {
+      this.rooms.get(frame.room)?.delete(from)
+      return
+    }
+    for (const member of this.rooms.get(frame.room) ?? []) {
+      if (member !== from && this.connected.get(member)) {
+        this.handlers.get(member)?.(frame)
+      }
+    }
+  }
+}
+
 async function settle(...providers: EncryptedYjsProvider[]): Promise<void> {
   // Updates may cascade (full-state replies, etc.); flush a few rounds.
   for (let i = 0; i < 6; i++) {
@@ -156,6 +223,46 @@ describe('EncryptedYjsProvider convergence', () => {
     expect(provider.isRoomJoined()).toBe(false)
     expect(sent.filter((frame) => frame.t === 'yjs')).toHaveLength(0)
     provider.disconnect()
+  })
+
+  it('retries a transient capability failure without sending an unauthorized frame', async () => {
+    jest.useFakeTimers()
+    try {
+      const sent: CollabFrame[] = []
+      let inbound: ((frame: CollabFrame) => void) | undefined
+      const authorize = jest.fn().mockResolvedValueOnce(undefined).mockResolvedValueOnce('recovered-capability')
+      const channel: CollabChannel = {
+        isConnected: () => true,
+        authorize,
+        subscribe: (handler) => {
+          inbound = handler
+          return () => undefined
+        },
+        send: (frame) => sent.push(frame),
+      }
+      const provider = new EncryptedYjsProvider(
+        new Y.Doc(),
+        'transient-auth-room',
+        channel,
+        createTestTransportCipher(),
+      )
+      provider.connect()
+      await Promise.resolve()
+      await Promise.resolve()
+      expect(sent).toHaveLength(0)
+
+      await jest.advanceTimersByTimeAsync(1_000)
+      const join = sent.find((frame): frame is Extract<CollabFrame, { t: 'room-join' }> => frame.t === 'room-join')
+      expect(join).toMatchObject({ cap: 'recovered-capability' })
+      expect(authorize).toHaveBeenCalledTimes(2)
+
+      inbound?.({ t: 'room-joined', room: 'transient-auth-room', requestId: join?.requestId })
+      await provider.flush()
+      expect(provider.isRoomJoined()).toBe(true)
+      provider.disconnect()
+    } finally {
+      jest.useRealTimers()
+    }
   })
 
   it('reauthorizes with the same logical lease after an accepted membership expires', async () => {
@@ -318,6 +425,44 @@ describe('EncryptedYjsProvider convergence', () => {
     await settle(a, b)
 
     expect(docB.getText('content').toString()).toBe('existing content')
+    a.disconnect()
+    b.disconnect()
+  })
+
+  it('preserves both Y.Docs while offline and converges concurrent edits after reconnect', async () => {
+    const hub = new ReconnectableLoopbackHub()
+    const transportA = hub.channel()
+    const transportB = hub.channel()
+    const docA = new Y.Doc()
+    const docB = new Y.Doc()
+    const a = new EncryptedYjsProvider(docA, 'reconnect-room', transportA.channel, createTestTransportCipher())
+    const b = new EncryptedYjsProvider(docB, 'reconnect-room', transportB.channel, createTestTransportCipher())
+    a.connect()
+    b.connect()
+    await settle(a, b)
+
+    docA.getText('content').insert(0, 'base')
+    await settle(a, b)
+    expect(docB.getText('content').toString()).toBe('base')
+
+    transportA.setConnected(false)
+    transportB.setConnected(false)
+    expect(a.isRoomJoined()).toBe(false)
+    expect(b.isRoomJoined()).toBe(false)
+    docA.getText('content').insert(docA.getText('content').length, '-offline-a')
+    docB.getText('content').insert(0, 'offline-b-')
+    await settle(a, b)
+    expect(docA.getText('content').toString()).not.toBe(docB.getText('content').toString())
+
+    transportA.setConnected(true)
+    transportB.setConnected(true)
+    await settle(a, b)
+
+    expect(a.isRoomJoined()).toBe(true)
+    expect(b.isRoomJoined()).toBe(true)
+    expect(docA.getText('content').toString()).toBe(docB.getText('content').toString())
+    expect(docA.getText('content').toString()).toContain('offline-a')
+    expect(docA.getText('content').toString()).toContain('offline-b')
     a.disconnect()
     b.disconnect()
   })

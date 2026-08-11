@@ -1,14 +1,10 @@
-import type { SNNote, KeySystemRootKeyInterface, SharedVaultListingInterface } from '@standardnotes/snjs'
+import type { SNNote, KeySystemRootKeyInterface, RootKeyInterface } from '@standardnotes/snjs'
 import type { WebApplication } from '@/Application/WebApplication'
 import { getSuperCollaborationAvailability, SuperCollaborationAvailability } from './CollaborationAvailability'
 
 const COLLABORATION_HKDF_SALT = 'Standard Red Notes encrypted collaboration room key v1'
 
-function collaborationRootKeySourceId(
-  rootKey: KeySystemRootKeyInterface,
-  sharedVaultUuid: string,
-  noteUuid: string,
-): string {
+function vaultRootKeySourceId(rootKey: KeySystemRootKeyInterface, keyScope: string, noteUuid: string): string {
   // This non-key rotation identity is retained only in memory and is never
   // rendered, logged, serialized, or persisted. The token is encrypted root-key
   // payload metadata (not key material). Vault + note identity ensures a render
@@ -16,13 +12,21 @@ function collaborationRootKeySourceId(
   // key, or editor lease before React runs effect cleanup; root-key metadata
   // ensures in-place rotation invalidates every provider.
   return JSON.stringify([
-    sharedVaultUuid,
+    'vault',
+    keyScope,
     noteUuid,
     rootKey.uuid,
     rootKey.keyParams.creationTimestamp,
     rootKey.token,
     rootKey.serverUpdatedAtTimestamp,
   ])
+}
+
+function accountRootKeySourceId(rootKey: RootKeyInterface, userUuid: string, noteUuid: string): string {
+  // Account key parameters are public KDF metadata and change with credential
+  // rotation. They let us synchronously invalidate a mounted provider without
+  // retaining or serializing a fingerprint of the account master key itself.
+  return JSON.stringify(['account', userUuid, noteUuid, rootKey.keyVersion, rootKey.keyParams.getPortableValue()])
 }
 
 const subtle = (): SubtleCrypto => {
@@ -34,20 +38,21 @@ const subtle = (): SubtleCrypto => {
 }
 
 /**
- * Derive a per-note AES-256-GCM key from the current shared-vault root secret.
+ * Derive a per-note AES-256-GCM key from the note's current client-only root
+ * secret (account root for an ordinary note, key-system root for a vault note).
  *
- * HKDF uses an explicit SRN collaboration domain plus both the shared-vault UUID
+ * HKDF uses an explicit SRN collaboration domain plus a stable encryption scope
  * and note UUID. The resulting key is non-extractable and can only encrypt or
  * decrypt; neither the root secret nor derived key is serialized, logged, or
- * sent to the relay.
+ * sent to the relay. Public UUIDs alone are never accepted as key material.
  */
 export async function deriveCollaborationRoomKey(input: {
   rootKeySecret: string
-  sharedVaultUuid: string
+  keyScope: string
   noteUuid: string
 }): Promise<CryptoKey> {
-  if (!input.rootKeySecret || !input.sharedVaultUuid || !input.noteUuid) {
-    throw new Error('Shared-vault root key, vault UUID, and note UUID are required')
+  if (!input.rootKeySecret || !input.keyScope || !input.noteUuid) {
+    throw new Error('Root key, encryption scope, and note UUID are required')
   }
 
   const encoder = new TextEncoder()
@@ -59,7 +64,7 @@ export async function deriveCollaborationRoomKey(input: {
         name: 'HKDF',
         hash: 'SHA-256',
         salt: encoder.encode(COLLABORATION_HKDF_SALT),
-        info: encoder.encode(`vault=${input.sharedVaultUuid}\u0000note=${input.noteUuid}`),
+        info: encoder.encode(`scope=${input.keyScope}\u0000note=${input.noteUuid}`),
       },
       sourceKey,
       { name: 'AES-GCM', length: 256 },
@@ -74,9 +79,8 @@ export async function deriveCollaborationRoomKey(input: {
 type AvailableKeySource = {
   available: true
   noteUuid: string
-  sharedVaultUuid: string
-  rootKey: KeySystemRootKeyInterface
-  vault: SharedVaultListingInterface
+  keyScope: string
+  rootKeySecret: string
   userUuid: string
   username: string
   sourceId: string
@@ -90,9 +94,9 @@ type UnavailableKeySource = {
 export type CollaborationKeySource = AvailableKeySource | UnavailableKeySource
 
 /**
- * Resolve and cross-check the live key source synchronously. Every identifier
- * must agree (note -> vault listing -> root key); a root key for another vault
- * is rejected even if a caller accidentally supplies it.
+ * Resolve and cross-check the live key source synchronously. Vault notes use the
+ * exact unlocked key-system root; ordinary notes use the signed-in account root.
+ * Every identifier must agree, and locked notes fail closed.
  */
 export function resolveCollaborationKeySource(application: WebApplication, note: SNNote): CollaborationKeySource {
   const platformAvailability = getSuperCollaborationAvailability()
@@ -100,56 +104,70 @@ export function resolveCollaborationKeySource(application: WebApplication, note:
     return platformAvailability
   }
 
-  const authenticated = application.sessions.isSignedIn() && application.sessions.getUser() !== undefined
+  const user = application.sessions.getUser()
+  const authenticated = application.sessions.isSignedIn() && user !== undefined
   const vault = application.vaults.getItemVault(note)
-  const sharedVault = vault?.isSharedVaultListing() === true
-  let rootKey: KeySystemRootKeyInterface | undefined
-
-  if (sharedVault && vault && !note.locked && !application.vaultLocks.isVaultLocked(vault)) {
-    rootKey = application.vaultLocks.getUnlockedSharedVaultRootKey(vault)
-  }
+  const vaultRootKey = vault && !note.locked ? application.vaultLocks.getUnlockedVaultRootKey(vault) : undefined
+  const accountRootKey = !vault && !note.locked ? application.encryption.getRootKey() : undefined
+  const encryptionKeyAvailable = vault ? Boolean(vaultRootKey?.key) : Boolean(accountRootKey?.masterKey)
 
   const availability = getSuperCollaborationAvailability({
     authenticated,
-    sharedVault,
-    vaultKeyAvailable: Boolean(rootKey) && !note.locked,
-    transportConnected: application.sockets.isWebSocketConnectionOpen(),
+    encryptionKeyAvailable,
   })
   if (!availability.available) {
     return availability
   }
 
-  if (!vault?.isSharedVaultListing()) {
+  if (!user) {
     return {
       available: false,
-      reason: 'Live collaboration is only available for notes in a shared vault.',
+      reason: 'Sign in to use live collaboration.',
     }
   }
 
-  const sharedVaultListing: SharedVaultListingInterface = vault
-  const user = application.sessions.getUser()
-  const sharedVaultUuid = sharedVaultListing.sharing.sharedVaultUuid
+  if (!vault) {
+    if (!accountRootKey?.masterKey || note.key_system_identifier || note.shared_vault_uuid) {
+      return {
+        available: false,
+        reason: 'Live collaboration stopped because the note and account encryption key do not match.',
+      }
+    }
+    const keyScope = `account:${user.uuid}`
+    return {
+      available: true,
+      noteUuid: note.uuid,
+      keyScope,
+      rootKeySecret: accountRootKey.masterKey,
+      userUuid: user.uuid,
+      username: user.email || 'Collaborator',
+      sourceId: accountRootKeySourceId(accountRootKey, user.uuid, note.uuid),
+    }
+  }
+
+  const sharedVaultUuid = vault.isSharedVaultListing() ? vault.sharing.sharedVaultUuid : undefined
   const identifiersMatch =
-    note.key_system_identifier === sharedVaultListing.systemIdentifier &&
+    note.key_system_identifier === vault.systemIdentifier &&
     note.shared_vault_uuid === sharedVaultUuid &&
-    rootKey?.systemIdentifier === sharedVaultListing.systemIdentifier
-
-  if (!user || !rootKey || !rootKey.key || !sharedVaultUuid || !identifiersMatch) {
+    vaultRootKey?.systemIdentifier === vault.systemIdentifier
+  if (!vaultRootKey?.key || !identifiersMatch) {
     return {
       available: false,
-      reason: 'Live collaboration stopped because the note and shared-vault encryption key do not match.',
+      reason: 'Live collaboration stopped because the note and vault encryption key do not match.',
     }
   }
 
+  const keyScope = vault.isSharedVaultListing()
+    ? `shared-vault:${sharedVaultUuid}`
+    : `vault:${vault.uuid}:${vault.systemIdentifier}`
   return {
     available: true,
     noteUuid: note.uuid,
-    sharedVaultUuid,
-    rootKey,
-    vault: sharedVaultListing,
+    keyScope,
+    rootKeySecret: vaultRootKey.key,
     userUuid: user.uuid,
     username: user.email || 'Collaborator',
-    sourceId: collaborationRootKeySourceId(rootKey, sharedVaultUuid, note.uuid),
+    sourceId: vaultRootKeySourceId(vaultRootKey, keyScope, note.uuid),
   }
 }
 
@@ -187,8 +205,8 @@ export async function prepareCollaborationAccess(
   try {
     ;[roomKey, capability] = await Promise.all([
       deriveCollaborationRoomKey({
-        rootKeySecret: before.rootKey.key,
-        sharedVaultUuid: before.sharedVaultUuid,
+        rootKeySecret: before.rootKeySecret,
+        keyScope: before.keyScope,
         noteUuid: before.noteUuid,
       }),
       application.sockets.authorizeCollaborationRoom(before.noteUuid),
@@ -213,7 +231,7 @@ export async function prepareCollaborationAccess(
   if (!after.available || after.sourceId !== before.sourceId || after.noteUuid !== before.noteUuid) {
     return {
       available: false,
-      reason: after.available ? 'The shared-vault key changed while collaboration was starting.' : after.reason,
+      reason: after.available ? 'The note encryption key changed while collaboration was starting.' : after.reason,
       sourceId: before.sourceId,
     }
   }

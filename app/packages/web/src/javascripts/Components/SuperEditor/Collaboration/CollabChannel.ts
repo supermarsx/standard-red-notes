@@ -29,6 +29,11 @@ export interface CollabChannel {
   /** Subscribe to ALL inbound frames; the provider filters by room. Returns an unsubscribe. */
   subscribe(handler: (frame: CollabFrame) => void): () => void
   /**
+   * Observe transport reconnects without destroying the Y.Doc. Optional for
+   * deterministic test transports that never disconnect.
+   */
+  subscribeStatus?(handler: (connected: boolean) => void): () => void
+  /**
    * Standard Red Notes: obtain a signed capability authorizing a join to `room`
    * (the gateway requires it). Returns undefined when the server denies access or
    * the request fails; the provider then must NOT join.

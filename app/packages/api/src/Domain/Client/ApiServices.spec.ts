@@ -226,12 +226,17 @@ describe('WebSocketApiService', () => {
     expect(server.authorizeCollaboration).toHaveBeenCalledWith({ noteUuid: 'note-1' })
   })
 
-  it('authorizeCollaboration should reject a concurrent call', async () => {
-    const service = new WebSocketApiService({ authorizeCollaboration: pending() } as never)
+  it('authorizeCollaboration coalesces the same note while allowing different notes concurrently', () => {
+    const authorizeCollaboration = pending()
+    const service = new WebSocketApiService({ authorizeCollaboration } as never)
 
     void service.authorizeCollaboration('note-1')
+    void service.authorizeCollaboration('note-1')
+    void service.authorizeCollaboration('note-2')
 
-    await expect(service.authorizeCollaboration('note-1')).rejects.toThrow(ErrorMessage.GenericInProgress)
+    expect(authorizeCollaboration).toHaveBeenCalledTimes(2)
+    expect(authorizeCollaboration).toHaveBeenNthCalledWith(1, { noteUuid: 'note-1' })
+    expect(authorizeCollaboration).toHaveBeenNthCalledWith(2, { noteUuid: 'note-2' })
   })
 
   it('authorizeCollaboration should release the lock after a failure', async () => {

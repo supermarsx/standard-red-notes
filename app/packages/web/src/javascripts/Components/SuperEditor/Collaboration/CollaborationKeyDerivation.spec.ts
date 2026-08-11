@@ -17,7 +17,7 @@ maybe('collaboration room-key derivation', () => {
   it('derives the same non-extractable AES-256-GCM key for two vault members', async () => {
     const input = {
       rootKeySecret: 'client-only-shared-vault-root-secret',
-      sharedVaultUuid: 'vault-uuid',
+      keyScope: 'shared-vault:vault-uuid',
       noteUuid: 'note-uuid',
     }
     const first = await deriveCollaborationRoomKey(input)
@@ -37,14 +37,14 @@ maybe('collaboration room-key derivation', () => {
   it('isolates notes and vaults through HKDF domain separation', async () => {
     const shared = {
       rootKeySecret: 'same-root-secret',
-      sharedVaultUuid: 'vault-a',
+      keyScope: 'shared-vault:vault-a',
       noteUuid: 'note-a',
     }
     const ciphertext = await createRoomCipher(await deriveCollaborationRoomKey(shared)).encrypt(
       new TextEncoder().encode('secret'),
     )
     const wrongNote = await deriveCollaborationRoomKey({ ...shared, noteUuid: 'note-b' })
-    const wrongVault = await deriveCollaborationRoomKey({ ...shared, sharedVaultUuid: 'vault-b' })
+    const wrongVault = await deriveCollaborationRoomKey({ ...shared, keyScope: 'shared-vault:vault-b' })
 
     await expect(createRoomCipher(wrongNote).decrypt(ciphertext)).rejects.toBeDefined()
     await expect(createRoomCipher(wrongVault).decrypt(ciphertext)).rejects.toBeDefined()
@@ -80,8 +80,9 @@ describe('resolveCollaborationKeySource', () => {
       vaults: { getItemVault: () => vault },
       vaultLocks: {
         isVaultLocked: () => false,
-        getUnlockedSharedVaultRootKey: () => rootKey,
+        getUnlockedVaultRootKey: () => rootKey,
       },
+      encryption: { getRootKey: () => undefined },
       sockets: { isWebSocketConnectionOpen: () => true },
     }) as never
 
@@ -101,7 +102,7 @@ describe('resolveCollaborationKeySource', () => {
     ).toMatchObject({
       available: true,
       noteUuid: 'note-a',
-      sharedVaultUuid: 'shared-vault-a',
+      keyScope: 'shared-vault:shared-vault-a',
       sourceId: expect.stringContaining('"note-a"'),
     })
   })
@@ -169,7 +170,79 @@ describe('resolveCollaborationKeySource', () => {
       ),
     ).toEqual({
       available: false,
-      reason: 'Live collaboration stopped because the note and shared-vault encryption key do not match.',
+      reason: 'Live collaboration stopped because the note and vault encryption key do not match.',
+    })
+  })
+
+  it('uses the account root for an ordinary personal note and isolates it by account', () => {
+    const accountRoot = {
+      masterKey: 'account-master-key',
+      keyVersion: '004',
+      keyParams: { getPortableValue: () => ({ identifier: 'alice', pw_nonce: 'rotation-a' }) },
+    }
+    const personalApplication = {
+      sessions: {
+        isSignedIn: () => true,
+        getUser: () => ({ uuid: 'user-a', email: 'alice@example.com' }),
+      },
+      vaults: { getItemVault: () => undefined },
+      vaultLocks: { getUnlockedVaultRootKey: () => undefined },
+      encryption: { getRootKey: () => accountRoot },
+    } as never
+
+    expect(
+      resolveCollaborationKeySource(personalApplication, {
+        uuid: 'personal-note',
+        locked: false,
+        key_system_identifier: undefined,
+        shared_vault_uuid: undefined,
+      } as never),
+    ).toMatchObject({
+      available: true,
+      keyScope: 'account:user-a',
+      rootKeySecret: 'account-master-key',
+      sourceId: expect.stringContaining('personal-note'),
+    })
+  })
+
+  it('uses an unlocked private-vault root and rejects a locked note', () => {
+    const privateVault = {
+      uuid: 'private-vault-listing',
+      systemIdentifier: 'private-system',
+      isSharedVaultListing: () => false,
+    }
+    const privateRoot = {
+      uuid: 'private-root',
+      systemIdentifier: 'private-system',
+      key: 'private-vault-secret',
+      token: 'private-rotation',
+      keyParams: { creationTimestamp: 100 },
+      serverUpdatedAtTimestamp: 100,
+    }
+    const privateApplication = {
+      sessions: {
+        isSignedIn: () => true,
+        getUser: () => ({ uuid: 'user-a', email: 'alice@example.com' }),
+      },
+      vaults: { getItemVault: () => privateVault },
+      vaultLocks: { getUnlockedVaultRootKey: () => privateRoot },
+      encryption: { getRootKey: () => undefined },
+    } as never
+    const privateNote = {
+      uuid: 'private-note',
+      locked: false,
+      key_system_identifier: 'private-system',
+      shared_vault_uuid: undefined,
+    }
+
+    expect(resolveCollaborationKeySource(privateApplication, privateNote as never)).toMatchObject({
+      available: true,
+      keyScope: 'vault:private-vault-listing:private-system',
+      rootKeySecret: 'private-vault-secret',
+    })
+    expect(resolveCollaborationKeySource(privateApplication, { ...privateNote, locked: true } as never)).toEqual({
+      available: false,
+      reason: 'Unlock or sync the note encryption key to use live collaboration.',
     })
   })
 })

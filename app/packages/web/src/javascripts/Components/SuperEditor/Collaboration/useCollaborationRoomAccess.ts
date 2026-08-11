@@ -14,6 +14,7 @@ import {
 } from './CollaborationKeyDerivation'
 import { createCollaborationRequestId } from './CollabChannel'
 import { createGatewayCollabChannel } from './GatewayCollabChannel'
+import { SUPER_COLLABORATION_TRANSPORT_REASON } from './CollaborationAvailability'
 
 export type EditorCollaborationLease = {
   requestId: string
@@ -135,6 +136,8 @@ export function useCollaborationRoomAccess(
   const noteRef = useRef(note)
   noteRef.current = note
   const [revision, refresh] = useReducer((value: number) => value + 1, 0)
+  const [connectionRevision, retryAfterConnectionOpen] = useReducer((value: number) => value + 1, 0)
+  const hasReadyAccess = useRef(false)
 
   useEffect(() => {
     const disposeItems = application.items.streamItems(
@@ -148,8 +151,11 @@ export function useCollaborationRoomAccess(
       return Promise.resolve()
     })
     const disposeSocket = application.sockets.addEventObserver((event) => {
-      if (event === WebSocketsServiceEvent.WebSocketDidOpen || event === WebSocketsServiceEvent.WebSocketDidClose) {
-        refresh()
+      // Once a Y.Doc is mounted it owns reconnect: destroying it on close would
+      // discard the CRDT history needed to merge edits made while offline. An
+      // editor that first opened offline, however, retries preparation on open.
+      if (event === WebSocketsServiceEvent.WebSocketDidOpen && !hasReadyAccess.current) {
+        retryAfterConnectionOpen()
       }
       return Promise.resolve()
     })
@@ -182,6 +188,7 @@ export function useCollaborationRoomAccess(
   const [prepared, setPrepared] = useState<{ sourceId: string; result?: PreparedRoomAccess }>(() => ({
     sourceId,
   }))
+  hasReadyAccess.current = prepared.sourceId === sourceId && prepared.result !== undefined && prepared.result.available
 
   useEffect(() => {
     let cancelled = false
@@ -190,6 +197,13 @@ export function useCollaborationRoomAccess(
 
     if (sourceUnavailableReason) {
       setPrepared({ sourceId, result: { available: false, reason: sourceUnavailableReason } })
+      return
+    }
+    if (application.sockets.isWebSocketConnectionOpen?.() === false) {
+      setPrepared({
+        sourceId,
+        result: { available: false, reason: SUPER_COLLABORATION_TRANSPORT_REASON, sourceId },
+      })
       return
     }
 
@@ -245,7 +259,7 @@ export function useCollaborationRoomAccess(
       cancelled = true
       reservation?.cancel()
     }
-  }, [application, electEditorBootstrap, noteUuid, sourceId, sourceUnavailableReason])
+  }, [application, connectionRevision, electEditorBootstrap, noteUuid, sourceId, sourceUnavailableReason])
 
   // A key/vault/session transition invalidates the prior result immediately,
   // before the effect runs, so a stale provider is synchronously unmounted.

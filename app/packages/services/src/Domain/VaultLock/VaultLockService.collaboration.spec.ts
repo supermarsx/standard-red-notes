@@ -24,14 +24,16 @@ describe('VaultLockService collaboration key boundary', () => {
     return { service, keys }
   }
 
-  it('returns the current root key only for an unlocked shared vault', () => {
+  it('returns the current root key for an unlocked private or shared vault', () => {
     const rootKey = { systemIdentifier: 'vault-a', key: 'client-only-secret' }
     const { service } = createService(rootKey)
 
+    expect(service.getUnlockedVaultRootKey(vault('vault-a', false) as never)).toBe(rootKey)
+    expect(service.getUnlockedVaultRootKey(vault('vault-a', true) as never)).toBe(rootKey)
     expect(service.getUnlockedSharedVaultRootKey(vault('vault-a') as never)).toBe(rootKey)
   })
 
-  it('fails closed for personal and locked vaults', () => {
+  it('keeps the legacy shared-only boundary and fails closed for locked vaults', () => {
     const rootKey = { systemIdentifier: 'vault-a', key: 'client-only-secret' }
     const { service, keys } = createService(rootKey)
 
@@ -39,7 +41,7 @@ describe('VaultLockService collaboration key boundary', () => {
     expect(keys.getPrimaryKeySystemRootKey).not.toHaveBeenCalled()
 
     jest.mocked(service.isVaultLocked).mockReturnValue(true)
-    expect(service.getUnlockedSharedVaultRootKey(vault('vault-a') as never)).toBeUndefined()
+    expect(service.getUnlockedVaultRootKey(vault('vault-a') as never)).toBeUndefined()
   })
 
   it('rejects a root key returned for a different vault', () => {

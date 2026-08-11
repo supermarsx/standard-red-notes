@@ -9,6 +9,7 @@ import { WebSocketConnectionTokenResponseBody, CollaborationAuthorizationRespons
 
 export class WebSocketApiService implements WebSocketApiServiceInterface {
   private operationsInProgress: Map<WebSocketApiOperations, boolean>
+  private collaborationAuthorizations = new Map<string, Promise<HttpResponse<CollaborationAuthorizationResponseBody>>>()
 
   constructor(private webSocketServer: WebSocketServerInterface) {
     this.operationsInProgress = new Map()
@@ -33,21 +34,24 @@ export class WebSocketApiService implements WebSocketApiServiceInterface {
   }
 
   async authorizeCollaboration(noteUuid: string): Promise<HttpResponse<CollaborationAuthorizationResponseBody>> {
-    if (this.operationsInProgress.get(WebSocketApiOperations.AuthorizingCollaboration)) {
-      throw new ApiCallError(ErrorMessage.GenericInProgress)
+    const existing = this.collaborationAuthorizations.get(noteUuid)
+    if (existing) {
+      return existing
     }
 
-    this.operationsInProgress.set(WebSocketApiOperations.AuthorizingCollaboration, true)
-
-    try {
-      const response = await this.webSocketServer.authorizeCollaboration({ noteUuid })
-
-      this.operationsInProgress.set(WebSocketApiOperations.AuthorizingCollaboration, false)
-
-      return response
-    } catch {
-      this.operationsInProgress.set(WebSocketApiOperations.AuthorizingCollaboration, false)
-      throw new ApiCallError(ErrorMessage.GenericFail)
-    }
+    // Multiple open editors reauthorize together after one socket reconnect.
+    // Coalesce duplicate requests for the same note, but allow different notes
+    // to authorize concurrently; a single global lock would strand every editor
+    // except the first until another reconnect happened.
+    const request = this.webSocketServer
+      .authorizeCollaboration({ noteUuid })
+      .catch(() => {
+        throw new ApiCallError(ErrorMessage.GenericFail)
+      })
+      .finally(() => {
+        this.collaborationAuthorizations.delete(noteUuid)
+      })
+    this.collaborationAuthorizations.set(noteUuid, request)
+    return request
   }
 }

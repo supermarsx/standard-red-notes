@@ -135,6 +135,7 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
     expiresAt = Number.POSITIVE_INFINITY,
     requestId?: string,
     role: RoomLeaseRole = 'editor',
+    shouldBootstrapOverride?: boolean,
   ): { joined: boolean; shouldBootstrap: boolean } {
     if (expiresAt <= this.now() || (expiresAt !== Number.POSITIVE_INFINITY && !Number.isFinite(expiresAt))) {
       return { joined: false, shouldBootstrap: false }
@@ -158,7 +159,9 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
     if (existingLease && existingLease.role !== role) {
       return { joined: false, shouldBootstrap: false }
     }
-    const shouldBootstrap = existingLease?.shouldBootstrap ?? (role === 'editor' && !this.hasEditorLease(room))
+    const shouldBootstrap =
+      existingLease?.shouldBootstrap ??
+      (role === 'editor' ? (shouldBootstrapOverride ?? !this.hasEditorLease(room)) : false)
     if (membership) {
       if (requestId) {
         membership.requestIds.set(requestId, { role, shouldBootstrap, expiresAt })
@@ -324,6 +327,31 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
     }
     return sent
   }
+
+  /** Broadcast a frame received from another gateway replica to all local members. */
+  broadcastAll(room: string, message: string): number {
+    let sent = 0
+    for (const member of this.members(room)) {
+      try {
+        member.socket.send(message)
+        sent += 1
+      } catch {
+        /* peer socket unwritable; skip it */
+      }
+    }
+    return sent
+  }
+}
+
+export interface RoomRelayLifecycle<S extends SendableSocket = SendableSocket> {
+  reserveEditorLease(
+    conn: Conn<S>,
+    room: string,
+    requestId: string | undefined,
+    expiresAt: number,
+  ): Promise<{ shouldBootstrap?: boolean }>
+  releaseLease(conn: Conn<S>, room: string, requestId: string | undefined): Promise<void>
+  publish(frame: Extract<RelayFrame, { t: 'yjs' | 'awareness' | 'comment' }> | { t: 'room-sync'; room: string }): void
 }
 
 /**
@@ -370,6 +398,7 @@ export async function handleRelayFrame<S extends SendableSocket>(
   frame: RelayFrame,
   authorize?: RoomJoinAuthorizer,
   isConnectionActive?: () => boolean,
+  lifecycle?: RoomRelayLifecycle<S>,
 ): Promise<number> {
   if (isConnectionActive && !isConnectionActive()) {
     return 0
@@ -408,8 +437,33 @@ export async function handleRelayFrame<S extends SendableSocket>(
       if (isConnectionActive && !isConnectionActive()) {
         return 0
       }
-      const joinResult = rooms.join(frame.room, conn, authorization.expiresAt, frame.requestId, frame.role ?? 'editor')
+      let shouldBootstrapOverride: boolean | undefined
+      let reservedEditorLease = false
+      if ((frame.role ?? 'editor') === 'editor' && lifecycle) {
+        try {
+          shouldBootstrapOverride = (
+            await lifecycle.reserveEditorLease(conn, frame.room, frame.requestId, authorization.expiresAt)
+          ).shouldBootstrap
+          reservedEditorLease = true
+        } catch {
+          // Redis coordination is an availability aid, not an authorization
+          // source. Falling back to local election keeps a single replica usable;
+          // replicated deployments must keep Redis healthy for cross-node rooms.
+          shouldBootstrapOverride = undefined
+        }
+      }
+      const joinResult = rooms.join(
+        frame.room,
+        conn,
+        authorization.expiresAt,
+        frame.requestId,
+        frame.role ?? 'editor',
+        shouldBootstrapOverride,
+      )
       if (!joinResult.joined) {
+        if (lifecycle && reservedEditorLease) {
+          await lifecycle.releaseLease(conn, frame.room, frame.requestId).catch(() => undefined)
+        }
         try {
           conn.socket.send(
             JSON.stringify({
@@ -434,15 +488,24 @@ export async function handleRelayFrame<S extends SendableSocket>(
         )
       } catch {
         rooms.leave(frame.room, conn, frame.requestId)
+        if (lifecycle && reservedEditorLease) {
+          await lifecycle.releaseLease(conn, frame.room, frame.requestId).catch(() => undefined)
+        }
         return 0
       }
       // Ask existing members to re-broadcast their state so the newcomer syncs.
-      return frame.role === 'comment'
-        ? 0
-        : rooms.broadcast(frame.room, JSON.stringify({ t: 'room-sync', room: frame.room }), conn)
+      if (frame.role === 'comment') {
+        return 0
+      }
+      const syncFrame = { t: 'room-sync' as const, room: frame.room }
+      lifecycle?.publish(syncFrame)
+      return rooms.broadcast(frame.room, JSON.stringify(syncFrame), conn)
     }
     case 'room-leave':
       rooms.leave(frame.room, conn, frame.requestId)
+      if (lifecycle) {
+        await lifecycle.releaseLease(conn, frame.room, frame.requestId).catch(() => undefined)
+      }
       return 0
     case 'yjs':
     case 'awareness':
@@ -453,6 +516,7 @@ export async function handleRelayFrame<S extends SendableSocket>(
       if (!rooms.isMember(frame.room, conn)) {
         return 0
       }
+      lifecycle?.publish(frame)
       return rooms.broadcast(frame.room, JSON.stringify(frame), conn)
   }
 }
