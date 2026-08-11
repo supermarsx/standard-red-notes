@@ -1,7 +1,4 @@
-import {
-  getAccountPasskeyRegistrationUnavailableReason,
-  getWebAuthnUnavailableReason,
-} from './passkeyAvailability'
+import { getAccountPasskeyRegistrationUnavailableReason, getWebAuthnUnavailableReason } from './passkeyAvailability'
 
 describe('passkey availability', () => {
   it('explains insecure and unsupported WebAuthn runtimes', () => {
