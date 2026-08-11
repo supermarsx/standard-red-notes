@@ -17,6 +17,9 @@ export class WebSocketServer implements WebSocketServerInterface {
 
   async authorizeCollaboration(params: {
     noteUuid: string
+    collaborationProtocolVersion: number
+    leaseRequestId?: string
+    bootstrapChallenge?: string
   }): Promise<HttpResponse<CollaborationAuthorizationResponseBody>> {
     return this.httpService.post(Paths.v1.authorizeCollaboration, params)
   }

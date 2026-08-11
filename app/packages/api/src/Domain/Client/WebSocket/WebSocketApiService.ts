@@ -33,8 +33,13 @@ export class WebSocketApiService implements WebSocketApiServiceInterface {
     }
   }
 
-  async authorizeCollaboration(noteUuid: string): Promise<HttpResponse<CollaborationAuthorizationResponseBody>> {
-    const existing = this.collaborationAuthorizations.get(noteUuid)
+  async authorizeCollaboration(
+    noteUuid: string,
+    leaseRequestId?: string,
+    bootstrapChallenge?: string,
+  ): Promise<HttpResponse<CollaborationAuthorizationResponseBody>> {
+    const authorizationKey = JSON.stringify([noteUuid, leaseRequestId ?? null, bootstrapChallenge ?? null])
+    const existing = this.collaborationAuthorizations.get(authorizationKey)
     if (existing) {
       return existing
     }
@@ -44,14 +49,19 @@ export class WebSocketApiService implements WebSocketApiServiceInterface {
     // to authorize concurrently; a single global lock would strand every editor
     // except the first until another reconnect happened.
     const request = this.webSocketServer
-      .authorizeCollaboration({ noteUuid })
+      .authorizeCollaboration({
+        noteUuid,
+        collaborationProtocolVersion: 2,
+        ...(leaseRequestId ? { leaseRequestId } : {}),
+        ...(bootstrapChallenge ? { bootstrapChallenge } : {}),
+      })
       .catch(() => {
         throw new ApiCallError(ErrorMessage.GenericFail)
       })
       .finally(() => {
-        this.collaborationAuthorizations.delete(noteUuid)
+        this.collaborationAuthorizations.delete(authorizationKey)
       })
-    this.collaborationAuthorizations.set(noteUuid, request)
+    this.collaborationAuthorizations.set(authorizationKey, request)
     return request
   }
 }

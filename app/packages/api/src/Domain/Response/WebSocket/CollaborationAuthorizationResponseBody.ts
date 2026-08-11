@@ -5,4 +5,9 @@ export type CollaborationAuthorizationResponseBody = {
   capability: string
   room: string
   expiresIn: number
+  /** Canonical encrypted item revision observed by the authorization decision. */
+  serverUpdatedAtTimestamp: number
+  collaborationProtocolVersion: 2
+  leaseRequestId?: string
+  bootstrapChallenge?: string
 }

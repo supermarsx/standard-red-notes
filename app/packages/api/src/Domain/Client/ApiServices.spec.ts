@@ -223,7 +223,10 @@ describe('WebSocketApiService', () => {
 
     await new WebSocketApiService(server as never).authorizeCollaboration('note-1')
 
-    expect(server.authorizeCollaboration).toHaveBeenCalledWith({ noteUuid: 'note-1' })
+    expect(server.authorizeCollaboration).toHaveBeenCalledWith({
+      noteUuid: 'note-1',
+      collaborationProtocolVersion: 2,
+    })
   })
 
   it('authorizeCollaboration coalesces the same note while allowing different notes concurrently', () => {
@@ -235,8 +238,35 @@ describe('WebSocketApiService', () => {
     void service.authorizeCollaboration('note-2')
 
     expect(authorizeCollaboration).toHaveBeenCalledTimes(2)
-    expect(authorizeCollaboration).toHaveBeenNthCalledWith(1, { noteUuid: 'note-1' })
-    expect(authorizeCollaboration).toHaveBeenNthCalledWith(2, { noteUuid: 'note-2' })
+    expect(authorizeCollaboration).toHaveBeenNthCalledWith(1, {
+      noteUuid: 'note-1',
+      collaborationProtocolVersion: 2,
+    })
+    expect(authorizeCollaboration).toHaveBeenNthCalledWith(2, {
+      noteUuid: 'note-2',
+      collaborationProtocolVersion: 2,
+    })
+  })
+
+  it('does not coalesce independently challenge-bound leases for the same note', () => {
+    const authorizeCollaboration = pending()
+    const service = new WebSocketApiService({ authorizeCollaboration } as never)
+
+    void service.authorizeCollaboration('note-1', 'lease-1', 'challenge-1')
+    void service.authorizeCollaboration('note-1', 'lease-2', 'challenge-2')
+
+    expect(authorizeCollaboration).toHaveBeenNthCalledWith(1, {
+      noteUuid: 'note-1',
+      collaborationProtocolVersion: 2,
+      leaseRequestId: 'lease-1',
+      bootstrapChallenge: 'challenge-1',
+    })
+    expect(authorizeCollaboration).toHaveBeenNthCalledWith(2, {
+      noteUuid: 'note-1',
+      collaborationProtocolVersion: 2,
+      leaseRequestId: 'lease-2',
+      bootstrapChallenge: 'challenge-2',
+    })
   })
 
   it('authorizeCollaboration should release the lock after a failure', async () => {

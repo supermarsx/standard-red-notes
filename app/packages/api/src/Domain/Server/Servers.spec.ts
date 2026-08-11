@@ -107,9 +107,15 @@ describe('Servers', () => {
     })
 
     it('authorizeCollaboration should POST the note uuid to the collaboration path', async () => {
-      await new WebSocketServer(http).authorizeCollaboration({ noteUuid: 'note-1' })
+      const params = {
+        noteUuid: 'note-1',
+        collaborationProtocolVersion: 2,
+        leaseRequestId: 'lease-1',
+        bootstrapChallenge: 'challenge-1',
+      }
+      await new WebSocketServer(http).authorizeCollaboration(params)
 
-      expect(http.post).toHaveBeenCalledWith('/v1/collaboration/authorize', { noteUuid: 'note-1' })
+      expect(http.post).toHaveBeenCalledWith('/v1/collaboration/authorize', params)
     })
   })
 
