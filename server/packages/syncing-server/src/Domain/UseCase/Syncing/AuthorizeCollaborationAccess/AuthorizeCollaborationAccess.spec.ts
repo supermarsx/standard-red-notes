@@ -11,6 +11,7 @@ const USER = '00000000-0000-0000-0000-0000000000aa'
 const OTHER_USER = '00000000-0000-0000-0000-0000000000bb'
 const ITEM = '00000000-0000-0000-0000-0000000000c1'
 const VAULT = '00000000-0000-0000-0000-0000000000d1'
+const SERVER_REVISION = 1_723_456_789_000_000
 
 describe('AuthorizeCollaborationAccess', () => {
   let itemRepository: jest.Mocked<ItemRepositoryInterface>
@@ -19,9 +20,13 @@ describe('AuthorizeCollaborationAccess', () => {
   const createUseCase = () => new AuthorizeCollaborationAccess(itemRepository, sharedVaultUserRepository)
 
   // Build a fake Item: owner = ownerUuid, optionally in a shared vault.
-  const fakeItem = (ownerUuid: string, sharedVaultUuid: string | null): Item =>
+  const fakeItem = (ownerUuid: string, sharedVaultUuid: string | null, deleted = false): Item =>
     ({
-      props: { userUuid: Uuid.create(ownerUuid).getValue() },
+      props: {
+        userUuid: Uuid.create(ownerUuid).getValue(),
+        timestamps: { updatedAt: SERVER_REVISION },
+        deleted,
+      },
       sharedVaultUuid: sharedVaultUuid === null ? null : Uuid.create(sharedVaultUuid).getValue(),
     }) as unknown as Item
 
@@ -46,7 +51,7 @@ describe('AuthorizeCollaborationAccess', () => {
     const result = await createUseCase().execute({ userUuid: USER, itemUuid: ITEM, readOnlyAccess: false })
 
     expect(result.isFailed()).toBe(false)
-    expect(result.getValue()).toBe(true)
+    expect(result.getValue()).toEqual({ authorized: true, serverUpdatedAtTimestamp: SERVER_REVISION })
   })
 
   it.each([SharedVaultUserPermission.PERMISSIONS.Write, SharedVaultUserPermission.PERMISSIONS.Admin])(
@@ -59,7 +64,7 @@ describe('AuthorizeCollaborationAccess', () => {
 
       const result = await createUseCase().execute({ userUuid: USER, itemUuid: ITEM, readOnlyAccess: false })
 
-      expect(result.getValue()).toBe(true)
+      expect(result.getValue()).toEqual({ authorized: true, serverUpdatedAtTimestamp: SERVER_REVISION })
       expect(sharedVaultUserRepository.findByUserUuidAndSharedVaultUuid).toHaveBeenCalled()
     },
   )
@@ -72,7 +77,7 @@ describe('AuthorizeCollaborationAccess', () => {
 
     const result = await createUseCase().execute({ userUuid: USER, itemUuid: ITEM, readOnlyAccess: false })
 
-    expect(result.getValue()).toBe(false)
+    expect(result.getValue()).toEqual({ authorized: false })
   })
 
   it('DENIES a shared-note creator after their vault permission is downgraded to read', async () => {
@@ -83,7 +88,7 @@ describe('AuthorizeCollaborationAccess', () => {
 
     const result = await createUseCase().execute({ userUuid: USER, itemUuid: ITEM, readOnlyAccess: false })
 
-    expect(result.getValue()).toBe(false)
+    expect(result.getValue()).toEqual({ authorized: false })
   })
 
   it('DENIES a read-only session even when the user owns the note', async () => {
@@ -91,7 +96,7 @@ describe('AuthorizeCollaborationAccess', () => {
 
     const result = await createUseCase().execute({ userUuid: USER, itemUuid: ITEM, readOnlyAccess: true })
 
-    expect(result.getValue()).toBe(false)
+    expect(result.getValue()).toEqual({ authorized: false })
     expect(itemRepository.findByUuid).not.toHaveBeenCalled()
   })
 
@@ -101,7 +106,7 @@ describe('AuthorizeCollaborationAccess', () => {
 
     const result = await createUseCase().execute({ userUuid: USER, itemUuid: ITEM, readOnlyAccess: false })
 
-    expect(result.getValue()).toBe(false)
+    expect(result.getValue()).toEqual({ authorized: false })
   })
 
   it('DENIES a non-owner on a NON-shared note', async () => {
@@ -109,7 +114,7 @@ describe('AuthorizeCollaborationAccess', () => {
 
     const result = await createUseCase().execute({ userUuid: USER, itemUuid: ITEM, readOnlyAccess: false })
 
-    expect(result.getValue()).toBe(false)
+    expect(result.getValue()).toEqual({ authorized: false })
     expect(sharedVaultUserRepository.findByUserUuidAndSharedVaultUuid).not.toHaveBeenCalled()
   })
 
@@ -118,7 +123,15 @@ describe('AuthorizeCollaborationAccess', () => {
 
     const result = await createUseCase().execute({ userUuid: USER, itemUuid: ITEM, readOnlyAccess: false })
 
-    expect(result.getValue()).toBe(false)
+    expect(result.getValue()).toEqual({ authorized: false })
+  })
+
+  it('DENIES a deleted note even when the user owns it', async () => {
+    itemRepository.findByUuid = jest.fn().mockResolvedValue(fakeItem(USER, null, true))
+
+    const result = await createUseCase().execute({ userUuid: USER, itemUuid: ITEM, readOnlyAccess: false })
+
+    expect(result.getValue()).toEqual({ authorized: false })
   })
 
   it('FAILS (caller denies) when the item lookup THROWS', async () => {

@@ -13,7 +13,15 @@ import { EndpointResolverInterface } from '../../Service/Resolver/EndpointResolv
 interface AuthorizeRequestBody {
   /** Note (item) uuid the client wants to collaborate on; equals the relay room id. */
   noteUuid?: string
+  collaborationProtocolVersion?: number
+  leaseRequestId?: string
+  bootstrapChallenge?: string
 }
+
+const COLLABORATION_PROTOCOL_VERSION = 2
+const MAX_BOUND_IDENTIFIER_LENGTH = 128
+
+type CollaborationAccessCheck = { authorized: false } | { authorized: true; serverUpdatedAtTimestamp: number }
 
 /**
  * Standard Red Notes: mints a SHORT-LIVED, SIGNED capability proving that the
@@ -25,11 +33,10 @@ interface AuthorizeRequestBody {
  *     of truth for note ownership + shared-vault write permission) whether this
  *     user may edit the note.
  *  3. ONLY on an explicit `authorized: true` do we mint an HS256 capability
- *     `{ purpose: 'collab-room', userUuid, room, exp }`, signed with the same
- *     secret the websocket-gateway verifies connection tokens with, so the
- *     gateway can verify the capability LOCALLY (no per-join cross-service call).
- *  4. The client presents the capability on `room-join`; the gateway rejects any
- *     join lacking a valid, matching, unexpired capability.
+ *     binding the user, room, v2 protocol, canonical server revision, and any
+ *     lease request/bootstrap challenge supplied by the two-phase handshake.
+ *  4. The gateway verifies that capability locally and requires exact bindings
+ *     first on `room-reserve`, then on challenge-bound `room-join` activation.
  *
  * FAILS CLOSED everywhere: missing/invalid input, no signing secret configured,
  * a read-only session, an unauthorized result, a non-2xx / unparseable
@@ -88,19 +95,60 @@ export class CollaborationController extends BaseHttpController {
         denied()
         return
       }
-
-      const authorized = await this.checkAccessWithSyncingServer(request, response, noteUuid)
-      if (!authorized) {
+      const body = request.body as AuthorizeRequestBody
+      if (body.collaborationProtocolVersion !== COLLABORATION_PROTOCOL_VERSION) {
+        denied()
+        return
+      }
+      const leaseRequestId = body.leaseRequestId
+      const bootstrapChallenge = body.bootstrapChallenge
+      if (
+        (leaseRequestId !== undefined &&
+          (typeof leaseRequestId !== 'string' ||
+            leaseRequestId.length === 0 ||
+            leaseRequestId.length > MAX_BOUND_IDENTIFIER_LENGTH)) ||
+        (bootstrapChallenge !== undefined &&
+          (typeof bootstrapChallenge !== 'string' ||
+            bootstrapChallenge.length === 0 ||
+            bootstrapChallenge.length > MAX_BOUND_IDENTIFIER_LENGTH)) ||
+        (bootstrapChallenge !== undefined && leaseRequestId === undefined)
+      ) {
         denied()
         return
       }
 
-      const capability = sign({ purpose: 'collab-room', userUuid, room: noteUuid }, this.capabilitySecret, {
-        algorithm: 'HS256',
-        expiresIn: this.capabilityTtlSeconds,
-      })
+      const access = await this.checkAccessWithSyncingServer(request, response, noteUuid)
+      if (!access.authorized) {
+        denied()
+        return
+      }
 
-      response.status(200).json({ capability, room: noteUuid, expiresIn: this.capabilityTtlSeconds })
+      const capability = sign(
+        {
+          purpose: 'collab-room',
+          userUuid,
+          room: noteUuid,
+          collaborationProtocolVersion: COLLABORATION_PROTOCOL_VERSION,
+          serverUpdatedAtTimestamp: access.serverUpdatedAtTimestamp,
+          ...(leaseRequestId ? { leaseRequestId } : {}),
+          ...(bootstrapChallenge ? { bootstrapChallenge } : {}),
+        },
+        this.capabilitySecret,
+        {
+          algorithm: 'HS256',
+          expiresIn: this.capabilityTtlSeconds,
+        },
+      )
+
+      response.status(200).json({
+        capability,
+        room: noteUuid,
+        expiresIn: this.capabilityTtlSeconds,
+        serverUpdatedAtTimestamp: access.serverUpdatedAtTimestamp,
+        collaborationProtocolVersion: COLLABORATION_PROTOCOL_VERSION,
+        ...(leaseRequestId ? { leaseRequestId } : {}),
+        ...(bootstrapChallenge ? { bootstrapChallenge } : {}),
+      })
     } catch (error) {
       this.logger.error(
         'Collaboration authorize failed.',
@@ -118,11 +166,15 @@ export class CollaborationController extends BaseHttpController {
    * Ask the syncing-server (via the existing proxy, which works in both the
    * in-process home-server and the standalone HTTP deployment) whether the user
    * may access the note. We pass a CAPTURE shim as the response so we can read the
-   * `{ authorized }` body the syncing-server writes instead of streaming it to the
-   * client. Returns true ONLY on a 2xx body with `authorized === true`; ANY other
-   * outcome (non-2xx, unparseable, missing flag, thrown error) returns false.
+   * `{ authorized, serverUpdatedAtTimestamp }` body the syncing-server writes
+   * instead of streaming it to the client. Returns an allow ONLY on a 2xx body
+   * with an exact positive safe-integer revision; ANY other outcome fails closed.
    */
-  private async checkAccessWithSyncingServer(request: Request, response: Response, noteUuid: string): Promise<boolean> {
+  private async checkAccessWithSyncingServer(
+    request: Request,
+    response: Response,
+    noteUuid: string,
+  ): Promise<CollaborationAccessCheck> {
     let capturedStatus = 0
     let capturedBody: unknown = undefined
 
@@ -162,18 +214,27 @@ export class CollaborationController extends BaseHttpController {
           method: 'POST',
         }),
       )
-      return false
+      return { authorized: false }
     }
 
     if (capturedStatus !== 0 && (capturedStatus < 200 || capturedStatus >= 300)) {
-      return false
+      return { authorized: false }
     }
 
-    // The syncing-server returns { authorized } directly; the home-server proxy
-    // wraps service responses as { data: { authorized }, meta }. Handle both.
-    const body = capturedBody as { authorized?: unknown; data?: { authorized?: unknown } } | undefined
+    // The syncing-server returns the authorization and canonical revision
+    // directly; the home-server proxy wraps that pair in { data, meta }.
+    const body = capturedBody as
+      | {
+          authorized?: unknown
+          serverUpdatedAtTimestamp?: unknown
+          data?: { authorized?: unknown; serverUpdatedAtTimestamp?: unknown }
+        }
+      | undefined
     const authorized = body?.authorized ?? body?.data?.authorized
+    const serverUpdatedAtTimestamp = body?.serverUpdatedAtTimestamp ?? body?.data?.serverUpdatedAtTimestamp
 
-    return authorized === true
+    return authorized === true && Number.isSafeInteger(serverUpdatedAtTimestamp) && Number(serverUpdatedAtTimestamp) > 0
+      ? { authorized: true, serverUpdatedAtTimestamp: Number(serverUpdatedAtTimestamp) }
+      : { authorized: false }
   }
 }
