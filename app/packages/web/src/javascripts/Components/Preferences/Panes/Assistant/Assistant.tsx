@@ -62,13 +62,8 @@ import {
 } from '@/Assistant/samplingSettings'
 import { assistantHttpError, assistantNetworkError } from '@/Assistant/AssistantHttpError'
 import { normalizeOpenAICompatibleBaseURL, openAICompatibleEndpointURL } from '@/Assistant/OpenAICompatibleEndpoint'
-
-type AssistantConfig = {
-  providers: string[]
-  defaultProvider: string
-  defaultModel: string
-  profileConfigured?: boolean
-}
+import { ServerManagedAssistantConfiguration } from './ServerManagedAssistantConfiguration'
+import { useServerManagedAssistantConfig } from './useServerManagedAssistantConfig'
 
 type ConnectionMode = 'direct' | 'proxy'
 
@@ -365,13 +360,11 @@ const ASSISTANT_TABS: { id: string; title: string; icon: VectorIconNameOrEmoji }
 
 const Assistant = ({ application }: { application: WebApplication }) => {
   const tabState = useTabState({ defaultTab: 'connection' })
-  const [config, setConfig] = useState<AssistantConfig | null>(null)
-  const [loadError, setLoadError] = useState<string | null>(null)
 
   const [connectionMode, setConnectionMode] = useState<ConnectionMode>(() =>
     application.getPreference(PrefKey.AssistantConnectionMode, 'direct'),
   )
-  const [provider, setProvider] = useState(() => application.getPreference(PrefKey.AssistantProvider, ''))
+  const { config, loadError } = useServerManagedAssistantConfig(application, connectionMode === 'proxy')
   const [baseURL, setBaseURL] = useState(() => application.getPreference(PrefKey.AssistantBaseUrl, ''))
   const [apiKey, setApiKey] = useState(() => application.getPreference(PrefKey.AssistantApiKey, ''))
   const [authMode, setAuthMode] = useState<'api-key' | 'subscription'>(() =>
@@ -417,30 +410,6 @@ const Assistant = ({ application }: { application: WebApplication }) => {
   const [baseURLError, setBaseURLError] = useState<string | null>(null)
   const [fetchingModels, setFetchingModels] = useState(false)
 
-  // The server-proxy config endpoint is only relevant in proxy mode.
-  useEffect(() => {
-    if (connectionMode !== 'proxy') {
-      return
-    }
-    let cancelled = false
-    application
-      .assistantConfigRequest<AssistantConfig>('/v1/assistant/config')
-      .then((result) => {
-        if (cancelled) {
-          return
-        }
-        setConfig(result)
-      })
-      .catch((error) => {
-        if (!cancelled) {
-          setLoadError(error instanceof Error ? error.message : String(error))
-        }
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [application, connectionMode])
-
   const handleConnectionModeChange = useCallback(
     (value: ConnectionMode) => {
       setConnectionMode(value)
@@ -451,7 +420,6 @@ const Assistant = ({ application }: { application: WebApplication }) => {
 
   const useAutomaticServerProxy = useCallback(() => {
     setConnectionMode('proxy')
-    setProvider('')
     setAvailableModels([])
     setModelsError(null)
     void Promise.all([
@@ -459,17 +427,6 @@ const Assistant = ({ application }: { application: WebApplication }) => {
       application.setPreference(PrefKey.AssistantProvider, ''),
     ])
   }, [application])
-
-  const handleProviderChange = useCallback(
-    (value: string) => {
-      setProvider(value)
-      void application.setPreference(PrefKey.AssistantProvider, value)
-      // The model list is provider-specific; clear it until re-fetched.
-      setAvailableModels([])
-      setModelsError(null)
-    },
-    [application],
-  )
 
   const handleBaseURLChange = useCallback(
     (value: string) => {
@@ -655,27 +612,6 @@ const Assistant = ({ application }: { application: WebApplication }) => {
     }
   }, [baseURL, apiKey, authMode, subscriptionToken])
 
-  const handleFetchServerModels = useCallback(async () => {
-    setModelsError(null)
-    setFetchingModels(true)
-    try {
-      const result = await application.assistantConfigRequest<{ provider: string; models: string[] }>(
-        provider ? `/v1/assistant/models?provider=${encodeURIComponent(provider)}` : '/v1/assistant/models',
-      )
-      const ids = Array.isArray(result?.models) ? result.models : []
-      setAvailableModels(ids)
-      if (ids.length === 0) {
-        setModelsError('The server returned no models for this provider.')
-      }
-    } catch (error) {
-      setModelsError(error instanceof Error ? error.message : String(error))
-    } finally {
-      setFetchingModels(false)
-    }
-  }, [application, provider])
-
-  const providers = config?.providers ?? []
-
   // Dictation / speech-to-text settings (device-local; persisted in localStorage).
   // dictationEnabled is DEFAULT OFF — it gates the editor mic toggle.
   const [dictation, setDictation] = useState<DictationSettings>(() => loadDictationSettings())
@@ -827,15 +763,15 @@ const Assistant = ({ application }: { application: WebApplication }) => {
             <Text className="mt-2">
               {connectionMode === 'direct'
                 ? 'In Direct mode the browser talks straight to the OpenAI-compatible endpoint you configure below (e.g. LM Studio, Ollama, OpenRouter, OpenAI, or any custom server). Your API key, if any, is stored in your encrypted synced preferences and sent only to that endpoint.'
-                : 'In Server proxy mode your Standard Red Notes server relays one model turn at a time to the AI provider using a server-held API key.'}
+                : 'In Server proxy mode your Standard Red Notes server relays one model turn at a time using your server-assigned profile and a server-held credential.'}
             </Text>
 
             <div className="border-warning bg-warning-faded mt-4 rounded border border-solid p-3">
               <Subtitle className="text-warning">The assistant sends note content to an external AI provider</Subtitle>
               <Text className="mt-1">
                 Tool execution runs locally in your browser, but the model calls do not. Your messages, and any note
-                content the assistant reads while answering, are sent to the AI model you configure. This can expose
-                information you did not intend to share — especially with cloud providers.
+                content the assistant reads while answering, are sent to the AI model selected for your active
+                connection. This can expose information you did not intend to share — especially with cloud providers.
               </Text>
               <Text className="mt-1">
                 In Direct mode the content goes straight from your browser to the endpoint you configure below (e.g.
@@ -994,71 +930,7 @@ const Assistant = ({ application }: { application: WebApplication }) => {
           </PreferencesGroup>
         )}
 
-        {connectionMode === 'proxy' && (
-          <PreferencesGroup>
-            <PreferencesSegment>
-              <Subtitle>Provider</Subtitle>
-              {loadError && <Text className="text-danger">Could not load server configuration: {loadError}</Text>}
-              {!loadError && providers.length === 0 && !config?.profileConfigured && (
-                <Text>
-                  The server advertises no legacy provider. Automatic selection can still use a profile assigned by an
-                  administrator; otherwise configure a provider under Preferences → Admin → AI.
-                </Text>
-              )}
-              <select
-                className="border-border bg-default mt-2 rounded border px-2 py-1.5 text-sm"
-                value={provider}
-                onChange={(event) => handleProviderChange(event.target.value)}
-              >
-                <option value="">Automatic (assigned/default server profile)</option>
-                {providers.map((id) => (
-                  <option key={id} value={id}>
-                    {id}
-                  </option>
-                ))}
-              </select>
-
-              <HorizontalSeparator classes="my-4" />
-
-              <Subtitle>Model</Subtitle>
-              <Text>
-                Optional model override. Leave blank with Automatic to use the assigned/default server profile’s model,
-                or fetch the models available to you.
-              </Text>
-              <div className="mt-2 flex items-center gap-2">
-                <input
-                  className="border-border bg-default w-full rounded border px-2 py-1.5 text-sm"
-                  type="text"
-                  value={model}
-                  placeholder={config?.defaultModel || 'model identifier'}
-                  onChange={(event) => handleModelChange(event.target.value)}
-                />
-                <Button
-                  label={fetchingModels ? 'Loading…' : 'Fetch models'}
-                  onClick={() => void handleFetchServerModels()}
-                  disabled={fetchingModels}
-                />
-              </div>
-              {modelsError && <Text className="text-danger mt-2">Could not fetch models: {modelsError}</Text>}
-              {availableModels.length > 0 && (
-                <select
-                  className="border-border bg-default mt-2 w-full rounded border px-2 py-1.5 text-sm"
-                  value={availableModels.includes(model) ? model : ''}
-                  onChange={(event) => handleModelChange(event.target.value)}
-                >
-                  <option value="" disabled>
-                    Select a model
-                  </option>
-                  {availableModels.map((id) => (
-                    <option key={id} value={id}>
-                      {id}
-                    </option>
-                  ))}
-                </select>
-              )}
-            </PreferencesSegment>
-          </PreferencesGroup>
-        )}
+        {connectionMode === 'proxy' && <ServerManagedAssistantConfiguration config={config} loadError={loadError} />}
 
         {application.featuresController.isAdminUser() && (
           <SubscriptionPairing application={application} onUseServerProxy={useAutomaticServerProxy} />
@@ -1102,8 +974,9 @@ const Assistant = ({ application }: { application: WebApplication }) => {
                 <Subtitle>AI contextual search (provider re-ranking)</Subtitle>
                 <Text>
                   Adds a “Search with AI” action to the search bar. After the normal algorithmic search narrows results,
-                  it sends the top candidates to your configured AI provider to re-rank them by semantic relevance to
-                  your query. Off by default. Runs only when you click the action (not on every keystroke).
+                  it sends the top candidates to the effective AI provider for your connection to re-rank them by
+                  semantic relevance to your query. Off by default. Runs only when you click the action (not on every
+                  keystroke).
                 </Text>
               </div>
               <Switch checked={contextualSearch} onChange={handleContextualSearchToggle} />
@@ -1116,10 +989,10 @@ const Assistant = ({ application }: { application: WebApplication }) => {
                 </Subtitle>
                 <Text className="mt-1">
                   When you run “Search with AI”, the titles and short snippets of the top ~20 matching notes, together
-                  with your search query, are sent to the AI provider you configure above to be re-ranked. With cloud
-                  providers this exposes that content to a third party. Prefer a local model (e.g. LM Studio / Ollama in
-                  Direct mode) to keep it on your device. Only the bounded candidate set is sent — never your whole
-                  library and never full note bodies.
+                  with your search query, are sent to the effective AI provider for this connection to be re-ranked.
+                  With cloud providers this exposes that content to a third party. Prefer a local model (e.g. LM Studio
+                  / Ollama in Direct mode) to keep it on your device. Only the bounded candidate set is sent — never
+                  your whole library and never full note bodies.
                 </Text>
                 <Text className="text-passive-1 mt-1">
                   This is provider-dependent re-ranking of a small candidate set, not a semantic index over all your
@@ -1425,10 +1298,10 @@ const Assistant = ({ application }: { application: WebApplication }) => {
 
             <Subtitle>Profiles</Subtitle>
             <Text>
-              Optional named profiles bundle a persona with a model, an optional Direct-mode base URL, and sampling
-              params. When a profile is active it overrides the global persona, model, base URL, and sampling for
-              assistant runs. Leave a profile field empty to inherit the global setting. With no profiles, the single
-              persona above is used.
+              Optional named profiles bundle a persona with Direct-mode model/base URL overrides and sampling params.
+              Persona and sampling apply to assistant runs in either connection mode; model and base URL apply only in
+              Direct mode because Server proxy provider/model selection is administrator-managed. Leave a profile field
+              empty to inherit the global setting. With no profiles, the single persona above is used.
             </Text>
 
             <div className="mt-2 flex items-center gap-2">
@@ -1474,7 +1347,7 @@ const Assistant = ({ application }: { application: WebApplication }) => {
 
                 <div className="mt-3 flex flex-wrap gap-3">
                   <div className="flex flex-col">
-                    <Text>Model (optional)</Text>
+                    <Text>Model (optional, Direct mode)</Text>
                     <input
                       className="border-border bg-default mt-1 rounded border px-2 py-1.5 text-sm"
                       type="text"

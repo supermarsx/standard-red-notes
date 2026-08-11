@@ -47,14 +47,14 @@ describe('ProxyProvider automatic profile routing', () => {
     expect(events).toContainEqual({ kind: 'finish', stopReason: 'end_turn' })
   })
 
-  it('does not send a stale Direct-mode model when Automatic proxy selection is active', async () => {
+  it('does not send stale Direct-mode provider/model preferences in proxy mode', async () => {
     ;(globalThis as { TextDecoder?: unknown }).TextDecoder = NodeTextDecoder
     let submitted: unknown
     const application = {
       getPreference: (key: PrefKey, defaultValue?: unknown) => {
         const prefs: Partial<Record<PrefKey, unknown>> = {
           [PrefKey.AssistantConnectionMode]: 'proxy',
-          [PrefKey.AssistantProvider]: '',
+          [PrefKey.AssistantProvider]: 'openai',
           [PrefKey.AssistantModel]: 'stale-direct-model',
         }
         return prefs[key] ?? defaultValue

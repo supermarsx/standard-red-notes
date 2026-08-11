@@ -1,10 +1,15 @@
 import 'reflect-metadata'
 
 import { Request, Response } from 'express'
-import { SettingName } from '@standardnotes/domain-core'
+import { RoleName, SettingName } from '@standardnotes/domain-core'
 
 import { AssistantController } from './AssistantController'
-import { AssistantProviderConfig, listProviderModels } from '../../Service/Assistant/providers/factory'
+import {
+  AssistantProviderConfig,
+  configuredProviders,
+  listProviderModels,
+  resolveProvider,
+} from '../../Service/Assistant/providers/factory'
 
 // The provider factory is mocked so the controller never reaches a real LLM
 // provider: these tests only exercise the per-user gate + metering logic that
@@ -47,18 +52,41 @@ describe('AssistantController', () => {
   const responseWith = (settings?: Record<string, unknown>): Response => {
     jsonMock = jest.fn()
     statusMock = jest.fn(() => ({ json: jsonMock }))
-    return {
-      locals: { user: { uuid: 'user-1' }, settings },
+    const headers = new Map<string, string>([['vary', 'Origin']])
+    const setHeader = jest.fn((name: string, value: string) => {
+      headers.set(name.toLowerCase(), value)
+      return response
+    })
+    const vary = jest.fn((name: string) => {
+      const fields = (headers.get('vary') ?? '')
+        .split(',')
+        .map((field) => field.trim())
+        .filter(Boolean)
+      if (!fields.some((field) => field.toLowerCase() === name.toLowerCase())) {
+        fields.push(name)
+      }
+      headers.set('vary', fields.join(', '))
+      return response
+    })
+    const response = {
+      locals: {
+        user: { uuid: 'user-1', email: 'user@example.test' },
+        roles: [{ name: RoleName.NAMES.ProUser }],
+        settings,
+      },
       status: statusMock,
       json: jsonMock,
-      setHeader: jest.fn(),
+      setHeader,
+      getHeader: jest.fn((name: string) => headers.get(name.toLowerCase())),
+      vary,
       flushHeaders: jest.fn(),
       write: jest.fn(),
       end: jest.fn(),
     } as unknown as Response
+    return response
   }
 
-  const streamRequest = (): Request => ({ body: { messages: [] }, on: jest.fn() }) as unknown as Request
+  const streamRequest = (): Request => ({ body: { messages: [] }, headers: {}, on: jest.fn() }) as unknown as Request
 
   beforeEach(() => {
     redis = {
@@ -198,6 +226,7 @@ describe('AssistantController', () => {
       baseUrl: 'http://127.0.0.1:1234/v1',
       model: 'local-model',
       enabled: true,
+      apiKey: 'server-only-secret',
     }
 
     let resolver: {
@@ -226,14 +255,47 @@ describe('AssistantController', () => {
         resolver as never,
       )
 
-    it('advertises that a named server profile is configured without exposing its secret', async () => {
+    it('returns only the authenticated user assignment and marks it private without exposing connection secrets', async () => {
       const response = responseWith({})
 
       await controller().config({} as Request, response)
 
-      expect(jsonMock).toHaveBeenCalledWith(
-        expect.objectContaining({ profileConfigured: true, defaultModel: 'local-model' }),
-      )
+      expect(resolver.resolveActiveProfile).toHaveBeenCalledWith(undefined, {
+        userIdentifiers: ['user-1', 'user@example.test'],
+        roleNames: [RoleName.NAMES.ProUser],
+      })
+      expect(response.setHeader).toHaveBeenCalledWith('Cache-Control', 'private, no-store, max-age=0')
+      expect(response.setHeader).toHaveBeenCalledWith('Pragma', 'no-cache')
+      expect(response.vary).toHaveBeenCalledWith('Authorization')
+      expect(response.getHeader('Vary')).toBe('Origin, Authorization')
+      expect(jsonMock).toHaveBeenCalledWith({
+        providers: ['openai'],
+        defaultProvider: 'openai',
+        defaultModel: 'local-model',
+        profileConfigured: true,
+        effectiveProfile: {
+          id: 'assigned-local',
+          name: 'Assigned local model',
+          provider: 'openai-compatible',
+          model: 'local-model',
+        },
+      })
+      const serialized = JSON.stringify(jsonMock.mock.calls[0][0])
+      expect(serialized).not.toContain('server-only-secret')
+      expect(serialized).not.toContain('127.0.0.1')
+    })
+
+    it('fails closed when the authenticated assignment cannot be resolved', async () => {
+      resolver.resolveActiveProfile.mockRejectedValueOnce(new Error('settings unavailable'))
+      const response = responseWith({})
+
+      await controller().config({} as Request, response)
+
+      expect(statusMock).toHaveBeenCalledWith(503)
+      expect(jsonMock).toHaveBeenCalledWith({
+        error: { message: 'Assistant profile configuration is unavailable.' },
+      })
+      expect(response.setHeader).toHaveBeenCalledWith('Cache-Control', 'private, no-store, max-age=0')
     })
 
     it('uses the authenticated user assignment for Automatic model discovery', async () => {
@@ -244,7 +306,7 @@ describe('AssistantController', () => {
 
       expect(resolver.resolveActiveProfile).toHaveBeenCalledWith(
         undefined,
-        expect.objectContaining({ userIdentifiers: ['user-1'] }),
+        expect.objectContaining({ userIdentifiers: ['user-1', 'user@example.test'] }),
       )
       expect(jsonMock).toHaveBeenCalledWith({
         provider: 'openai',
@@ -252,5 +314,52 @@ describe('AssistantController', () => {
         models: ['local-model'],
       })
     })
+  })
+
+  it('keeps the legacy server default discoverable when no profile resolver is configured', async () => {
+    const response = responseWith({})
+
+    await makeController().config({} as Request, response)
+
+    expect(jsonMock).toHaveBeenCalledWith({
+      providers: ['openai'],
+      defaultProvider: 'openai',
+      defaultModel: 'gpt-test',
+      profileConfigured: false,
+      effectiveProfile: null,
+    })
+  })
+
+  it('uses the first configured legacy provider for both config and provider-less streams when the injected default is unavailable', async () => {
+    const providerConfig = { ollamaUrl: 'http://127.0.0.1:11434' }
+    const provider = {
+      id: 'ollama',
+      async *send() {
+        yield { kind: 'finish' as const, stopReason: 'end_turn' as const }
+      },
+    }
+    ;(configuredProviders as jest.Mock).mockReturnValue(['ollama'])
+    ;(resolveProvider as jest.Mock).mockReturnValueOnce(provider)
+    const controller = new AssistantController(
+      providerConfig,
+      'unavailable-default',
+      'fallback-model',
+      0,
+      [],
+      redis as never,
+    )
+    const configResponse = responseWith({})
+
+    await controller.config({} as Request, configResponse)
+
+    expect(jsonMock).toHaveBeenCalledWith(
+      expect.objectContaining({ defaultProvider: 'ollama', defaultModel: 'fallback-model' }),
+    )
+
+    const streamResponse = responseWith({})
+    await controller.streamCompletion(streamRequest(), streamResponse)
+
+    expect(resolveProvider).toHaveBeenCalledWith('ollama', 'fallback-model', providerConfig)
+    expect(streamResponse.end).toHaveBeenCalled()
   })
 })

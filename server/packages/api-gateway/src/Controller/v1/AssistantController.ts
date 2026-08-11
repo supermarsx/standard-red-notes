@@ -81,10 +81,9 @@ interface ResolvedUserLimits {
  * the provider API key and forwards ONE model turn at a time as Server-Sent
  * Events. Tool execution never happens here.
  */
-// `/config` is intentionally public: it returns only which LLM providers the
-// server proxy has configured (non-sensitive), and the client may query it
-// before/without a session. `/stream` and `/usage` stay authenticated because
-// they spend / report on the server-held provider API key budget.
+// `/config`, `/stream`, and `/usage` are authenticated. Config is resolved for
+// the requesting principal because USER > ROLE > default profile assignments
+// can select different providers/models for different users.
 @controller('/v1/assistant')
 export class AssistantController extends BaseHttpController {
   constructor(
@@ -159,14 +158,14 @@ export class AssistantController extends BaseHttpController {
   }
 
   /**
-   * Pairing administration responses contain account labels, pairing state, and
-   * profile references. Mark every authenticated route response private and
-   * non-cacheable before any validation/auth branch so intermediaries cannot
-   * retain either successful payloads or error details.
+   * Authenticated assistant metadata can contain a user's effective profile,
+   * account labels, or pairing state. Keep both successful responses and error
+   * details out of browser/shared intermediary caches.
    */
-  private setPrivatePairingResponseHeaders(response: Response): void {
+  private setPrivateAuthenticatedResponseHeaders(response: Response): void {
     response.setHeader('Cache-Control', 'private, no-store, max-age=0')
     response.setHeader('Pragma', 'no-cache')
+    response.vary('Authorization')
   }
 
   private async subscriptionProfileReferences(
@@ -284,39 +283,61 @@ export class AssistantController extends BaseHttpController {
     return this.globalDailyLimit
   }
 
-  // `/transcription/models` is intentionally public, like `/config`: it returns only
-  // the operator-configured speech-to-text model ids (from the TRANSCRIPTION_MODELS
-  // env, empty by default), which are non-sensitive. The web client queries it to
-  // populate the audio-recorder model picker; an empty list (or a missing endpoint on
-  // older servers) makes the client fall back to a free-text model field.
+  // `/transcription/models` intentionally remains public: unlike the user-specific
+  // `/config`, it returns only deployment-wide speech-to-text model ids (from the
+  // TRANSCRIPTION_MODELS env, empty by default). The web client queries it to populate
+  // the audio-recorder model picker; an empty list (or a missing endpoint on older
+  // servers) makes the client fall back to a free-text model field.
   @httpGet('/transcription/models')
   async transcriptionModelList(_request: Request, response: Response): Promise<void> {
     response.json({ models: this.transcriptionModels })
   }
 
-  @httpGet('/config')
+  @httpGet('/config', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
   async config(_request: Request, response: Response): Promise<void> {
+    this.setPrivateAuthenticatedResponseHeaders(response)
+
     const providers = configuredProviders(await this.effectiveProviderConfig())
-    let profileConfigured = false
-    let profileDefaultModel = ''
+    let effectiveProfile:
+      | {
+          id: string
+          name: string
+          provider: string
+          model: string
+        }
+      | undefined
+    let effectiveProviderId: string | undefined
+
     if (this.serverSettingsResolver) {
       try {
-        const { profiles, defaultProfileId } = await this.serverSettingsResolver.resolveAssistantProfiles()
-        const enabledProfiles = profiles.filter((profile) => profile.enabled)
-        profileConfigured = enabledProfiles.length > 0
-        const defaultProfile = enabledProfiles.find((profile) => profile.id === defaultProfileId) ?? enabledProfiles[0]
-        profileDefaultModel = defaultProfile?.model ?? ''
+        const profile = await this.serverSettingsResolver.resolveActiveProfile(
+          undefined,
+          this.resolvePrincipal(response),
+        )
+        if (profile) {
+          const resolution = resolveProfileProvider(profile)
+          effectiveProviderId = resolution.providerId
+          effectiveProfile = {
+            id: profile.id,
+            name: profile.name,
+            provider: profile.provider,
+            model: resolution.model || this.defaultModel,
+          }
+        }
       } catch {
-        // Public config is best-effort; the authenticated stream still resolves
-        // profiles fail-closed when the settings store is unhealthy.
+        response.status(503).json({ error: { message: 'Assistant profile configuration is unavailable.' } })
+        return
       }
     }
 
+    const legacyDefaultProvider = providers.includes(this.defaultProvider) ? this.defaultProvider : (providers[0] ?? '')
+
     response.json({
       providers,
-      defaultProvider: providers.includes(this.defaultProvider) ? this.defaultProvider : (providers[0] ?? ''),
-      defaultModel: profileDefaultModel || this.defaultModel,
-      profileConfigured,
+      defaultProvider: effectiveProviderId ?? legacyDefaultProvider,
+      defaultModel: effectiveProfile?.model ?? this.defaultModel,
+      profileConfigured: effectiveProfile !== undefined,
+      effectiveProfile: effectiveProfile ?? null,
     })
   }
 
@@ -444,7 +465,7 @@ export class AssistantController extends BaseHttpController {
 
   @httpGet('/subscription/status', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
   async subscriptionStatus(request: Request, response: Response): Promise<void> {
-    this.setPrivatePairingResponseHeaders(response)
+    this.setPrivateAuthenticatedResponseHeaders(response)
     if (!this.requestorIsAdmin(response)) {
       response.status(403).json({ error: { message: 'Admin role required.' } })
       return
@@ -519,7 +540,7 @@ export class AssistantController extends BaseHttpController {
 
   @httpPost('/subscription/start', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
   async subscriptionStart(request: Request, response: Response): Promise<void> {
-    this.setPrivatePairingResponseHeaders(response)
+    this.setPrivateAuthenticatedResponseHeaders(response)
     if (!this.requestorIsAdmin(response)) {
       response.status(403).json({ error: { message: 'Admin role required.' } })
       return
@@ -564,7 +585,7 @@ export class AssistantController extends BaseHttpController {
    */
   @httpGet('/subscription/list', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
   async subscriptionList(_request: Request, response: Response): Promise<void> {
-    this.setPrivatePairingResponseHeaders(response)
+    this.setPrivateAuthenticatedResponseHeaders(response)
     if (!this.requestorIsAdmin(response)) {
       response.status(403).json({ error: { message: 'Admin role required.' } })
       return
@@ -596,7 +617,7 @@ export class AssistantController extends BaseHttpController {
   // this server). Exchanges the code for tokens and persists the credential.
   @httpPost('/subscription/complete', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
   async subscriptionComplete(request: Request, response: Response): Promise<void> {
-    this.setPrivatePairingResponseHeaders(response)
+    this.setPrivateAuthenticatedResponseHeaders(response)
     if (!this.requestorIsAdmin(response)) {
       response.status(403).json({ error: { message: 'Admin role required.' } })
       return
@@ -662,7 +683,7 @@ export class AssistantController extends BaseHttpController {
 
   @httpPost('/subscription/unpair', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
   async subscriptionUnpair(request: Request, response: Response): Promise<void> {
-    this.setPrivatePairingResponseHeaders(response)
+    this.setPrivateAuthenticatedResponseHeaders(response)
     if (!this.requestorIsAdmin(response)) {
       response.status(403).json({ error: { message: 'Admin role required.' } })
       return
@@ -734,7 +755,7 @@ export class AssistantController extends BaseHttpController {
 
   @httpPost('/subscription/unpair-all', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
   async subscriptionUnpairAll(request: Request, response: Response): Promise<void> {
-    this.setPrivatePairingResponseHeaders(response)
+    this.setPrivateAuthenticatedResponseHeaders(response)
     if (!this.requestorIsAdmin(response)) {
       response.status(403).json({ error: { message: 'Admin role required.' } })
       return
@@ -777,7 +798,7 @@ export class AssistantController extends BaseHttpController {
    */
   @httpGet('/subscription/usage', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
   async subscriptionUsage(request: Request, response: Response): Promise<void> {
-    this.setPrivatePairingResponseHeaders(response)
+    this.setPrivateAuthenticatedResponseHeaders(response)
     if (!this.requestorIsAdmin(response)) {
       response.status(403).json({ error: { message: 'Admin role required.' } })
       return
@@ -1177,9 +1198,13 @@ export class AssistantController extends BaseHttpController {
     // pairing is configured, the DEFAULT paired credential is authoritative and
     // any absent/repair/unreadable state fails closed before network I/O. The
     // legacy env bearer remains usable only when pairing is unavailable at boot.
-    const providerId = body.provider || this.defaultProvider
-    const model = body.model || this.defaultModel
     const config = { ...(await this.effectiveProviderConfig()) }
+    const availableProviders = configuredProviders(config)
+    const configuredDefaultProvider = availableProviders.includes(this.defaultProvider)
+      ? this.defaultProvider
+      : (availableProviders[0] ?? '')
+    const providerId = body.provider || configuredDefaultProvider
+    const model = body.model || this.defaultModel
     if (!providerId) {
       throw new Error(
         'No assistant provider or assigned/default profile is configured on this server. Ask an administrator to configure one under Admin → AI.',

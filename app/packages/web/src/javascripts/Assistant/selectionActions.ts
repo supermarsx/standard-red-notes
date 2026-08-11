@@ -365,12 +365,14 @@ export function buildAssistantProvider(application: WebApplication, signal?: Abo
   const mode = application.getPreference(PrefKey.AssistantConnectionMode, 'direct')
   const overrides = resolveActiveProfileOverrides(application)
   if (mode === 'proxy') {
-    const provider = application.getPreference(PrefKey.AssistantProvider, '')
     return new ProxyProvider({
-      provider,
-      // With Automatic provider selection (empty provider), omit the client
-      // model too so the assigned/default server profile remains authoritative.
-      model: provider ? overrides.model : '',
+      // The authenticated server assignment is authoritative in proxy mode.
+      // Never forward provider/model preferences left behind by Direct mode or
+      // older clients: either value would bypass USER > ROLE > default profile
+      // resolution on the server. The server retains explicit-provider support
+      // for legacy/external callers that post to the stream endpoint directly.
+      provider: '',
+      model: '',
       sampling: overrides.sampling,
       signal,
       postStream: (body, sig) => application.assistantStreamRequest('/v1/assistant/stream', body, sig),
