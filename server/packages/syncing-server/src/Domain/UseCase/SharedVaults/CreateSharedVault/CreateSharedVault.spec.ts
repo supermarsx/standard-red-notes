@@ -98,6 +98,33 @@ describe('CreateSharedVault', () => {
     expect(sharedVaultRepository.save).toHaveBeenCalled()
   })
 
+  it('should let a full user create shared vaults without a count limit', async () => {
+    const useCase = createUseCase()
+    sharedVaultRepository.countByUserUuid = jest.fn()
+
+    const result = await useCase.execute({
+      userUuid: '00000000-0000-0000-0000-000000000000',
+      userRoleNames: [RoleName.NAMES.ProUser],
+    })
+
+    expect(result.isFailed()).toBe(false)
+    expect(sharedVaultRepository.countByUserUuid).not.toHaveBeenCalled()
+    expect(sharedVaultRepository.save).toHaveBeenCalled()
+  })
+
+  it('should let a vaults user create their first shared vault', async () => {
+    const useCase = createUseCase()
+    sharedVaultRepository.countByUserUuid = jest.fn().mockResolvedValue(0)
+
+    const result = await useCase.execute({
+      userUuid: '00000000-0000-0000-0000-000000000000',
+      userRoleNames: [RoleName.NAMES.VaultsUser],
+    })
+
+    expect(result.isFailed()).toBe(false)
+    expect(sharedVaultRepository.save).toHaveBeenCalled()
+  })
+
   it('should return a failure result if a plus user has reached the limit of shared vaults', async () => {
     const useCase = createUseCase()
 
