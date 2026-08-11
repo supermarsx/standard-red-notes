@@ -1,1 +1,44 @@
-[]
+[
+  {
+    "advisoryId": "1124011",
+    "package": "@opentelemetry/propagator-jaeger",
+    "domain": "app",
+    "vulnerableVersions": "<2.9.0",
+    "versions": ["1.19.0"],
+    "dependents": [
+      "@opentelemetry/sdk-trace-node@virtual:a84ed6132578ddc74117561c3d24886f0e13f22a111a95cadb2664ed8640456323a0e58348830c2cb38f062f9bfe9a34f0c2a6c8f8a0222f557ef1189dbc9455#npm:1.19.0"
+    ],
+    "rationale": "The bundled desktop home server explicitly supplies AWSXRayPropagator and never constructs JaegerPropagator; this exact unused transitive path remains only for upstream compatibility.",
+    "expiry": "2026-09-11"
+  },
+  {
+    "advisoryId": "1120252",
+    "package": "@opentelemetry/sdk-node",
+    "domain": "app",
+    "vulnerableVersions": "<0.217.0",
+    "versions": ["0.46.0"],
+    "dependents": ["@standardnotes/domain-events-infra@npm:1.23.4"],
+    "rationale": "The bundled desktop home server supplies an explicit OTLP metric reader and does not install the Prometheus exporter, so the vulnerable built-in Prometheus listener is unreachable.",
+    "expiry": "2026-09-11"
+  },
+  {
+    "advisoryId": "1138808",
+    "package": "image-size",
+    "domain": "app",
+    "vulnerableVersions": "<=2.0.2",
+    "versions": ["1.0.2"],
+    "dependents": ["metro@npm:0.84.4"],
+    "rationale": "Metro is repository-controlled mobile build tooling; shipped application and server runtimes do not include or invoke this parser, and no patched image-size release currently exists.",
+    "expiry": "2026-09-11"
+  },
+  {
+    "advisoryId": "1138809",
+    "package": "image-size",
+    "domain": "app",
+    "vulnerableVersions": "<=2.0.2",
+    "versions": ["1.0.2"],
+    "dependents": ["metro@npm:0.84.4"],
+    "rationale": "Metro is repository-controlled mobile build tooling; shipped application and server runtimes do not include or invoke this parser, and no patched image-size release currently exists.",
+    "expiry": "2026-09-11"
+  }
+]

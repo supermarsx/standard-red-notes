@@ -11,7 +11,7 @@ const allowlistPath = path.join(
   "production-audit-allowlist.json",
 );
 
-export const enforcementSeverity = "critical";
+export const enforcementSeverity = "high";
 
 export const auditDomains = Object.freeze([
   { id: "root", directory: ".", manager: "yarn", lockfile: "yarn.lock" },
@@ -937,8 +937,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === scriptPath) {
     const exceptionCount = result.advisories.length;
     const exceptionSummary =
       exceptionCount === 0
-        ? "no critical advisory exceptions are active"
-        : `${exceptionCount} critical advisory exception${exceptionCount === 1 ? " is" : "s are"} active and expire${exceptionCount === 1 ? "s" : ""} ${result.allowlist[0]?.expiry ?? "n/a"}`;
+        ? "no high-or-critical advisory exceptions are active"
+        : `${exceptionCount} high-or-critical advisory exception${exceptionCount === 1 ? " is" : "s are"} active and expire${exceptionCount === 1 ? "s" : ""} ${result.allowlist[0]?.expiry ?? "n/a"}`;
     console.log(
       `Production dependency audit passed across ${result.domains} committed lock domains; ` +
         `${exceptionSummary}.`,
