@@ -34,6 +34,65 @@ function withFileChanged(file, update) {
   return files;
 }
 
+function createSetupFixture({ environment, probeExit = 0 } = {}) {
+  const temporary = mkdtempSync(path.join(tmpdir(), "srn-setup-safety-"));
+  const fixtureRoot = path.join(temporary, "repo");
+  const fixtureScripts = path.join(fixtureRoot, "scripts");
+  const fixtureBin = path.join(temporary, "bin");
+  const environmentFile = path.join(fixtureRoot, ".env");
+  mkdirSync(fixtureScripts, { recursive: true });
+  mkdirSync(fixtureBin, { recursive: true });
+  if (environment !== undefined) {
+    writeFileSync(environmentFile, environment);
+  }
+
+  let command;
+  let setup;
+  if (process.platform === "win32") {
+    setup = path.join(fixtureScripts, "setup.ps1");
+    copyFileSync(path.join(repositoryRoot, "scripts", "setup.ps1"), setup);
+    writeFileSync(
+      path.join(fixtureBin, "docker.cmd"),
+      [
+        "@echo off",
+        'if "%1"=="compose" if "%2"=="run" exit /b %FAKE_ASSISTANT_PROBE_EXIT%',
+        "exit /b 0",
+        "",
+      ].join("\r\n"),
+    );
+    command = "powershell.exe";
+  } else {
+    setup = path.join(fixtureScripts, "setup.sh");
+    const docker = path.join(fixtureBin, "docker");
+    copyFileSync(path.join(repositoryRoot, "scripts", "setup.sh"), setup);
+    writeFileSync(
+      docker,
+      '#!/bin/sh\nif [ "$1" = "compose" ] && [ "$2" = "run" ]; then exit "${FAKE_ASSISTANT_PROBE_EXIT}"; fi\nexit 0\n',
+    );
+    chmodSync(docker, 0o755);
+    command = "bash";
+  }
+
+  const run = (scriptArguments) =>
+    spawnSync(
+      command,
+      process.platform === "win32"
+        ? ["-NoProfile", "-File", setup, ...scriptArguments]
+        : [setup, ...scriptArguments],
+      {
+        cwd: fixtureRoot,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          FAKE_ASSISTANT_PROBE_EXIT: String(probeExit),
+          PATH: `${fixtureBin}${path.delimiter}${process.env.PATH ?? ""}`,
+        },
+      },
+    );
+
+  return { environmentFile, fixtureRoot, run, temporary };
+}
+
 test("the repository satisfies the CI production-gate contract", () => {
   assert.deepEqual(validateCiContract(baseline), []);
 });
@@ -64,60 +123,159 @@ test("normal setup reruns reuse rather than replace production credentials", () 
 });
 
 test("normal setup rerun validates and leaves an existing environment byte-for-byte intact", () => {
-  const temporary = mkdtempSync(path.join(tmpdir(), "srn-setup-safety-"));
-  const fixtureRoot = path.join(temporary, "repo");
-  const fixtureScripts = path.join(fixtureRoot, "scripts");
-  const fixtureBin = path.join(temporary, "bin");
-  const environmentFile = path.join(fixtureRoot, ".env");
-  const sentinel = "EXISTING_PRODUCTION_CONFIGURATION=true\n";
+  const sentinel = `EXISTING_PRODUCTION_CONFIGURATION=true\nASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=${"a".repeat(64)}\n`;
+  const fixture = createSetupFixture({ environment: sentinel });
 
   try {
-    mkdirSync(fixtureScripts, { recursive: true });
-    mkdirSync(fixtureBin, { recursive: true });
-    writeFileSync(environmentFile, sentinel);
-
-    let command;
-    let args;
-    if (process.platform === "win32") {
-      const setup = path.join(fixtureScripts, "setup.ps1");
-      copyFileSync(path.join(repositoryRoot, "scripts", "setup.ps1"), setup);
-      writeFileSync(
-        path.join(fixtureBin, "docker.cmd"),
-        "@echo off\r\nexit /b 0\r\n",
-      );
-      command = "powershell.exe";
-      args = ["-NoProfile", "-File", setup, "-Yes"];
-    } else {
-      const setup = path.join(fixtureScripts, "setup.sh");
-      const docker = path.join(fixtureBin, "docker");
-      copyFileSync(path.join(repositoryRoot, "scripts", "setup.sh"), setup);
-      writeFileSync(docker, "#!/bin/sh\nexit 0\n");
-      chmodSync(docker, 0o755);
-      command = "bash";
-      args = [setup, "--yes"];
-    }
-
-    const result = spawnSync(command, args, {
-      cwd: fixtureRoot,
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        PATH: `${fixtureBin}${path.delimiter}${process.env.PATH ?? ""}`,
-      },
-    });
+    const result = fixture.run(
+      process.platform === "win32" ? ["-Yes"] : ["--yes"],
+    );
 
     assert.equal(result.status, 0, result.stderr || result.stdout);
     assert.match(
       `${result.stdout}\n${result.stderr}`,
-      /normal setup reruns never regenerate secrets/i,
+      /normal setup reruns never rotate existing secrets/i,
     );
-    assert.equal(readFileSync(environmentFile, "utf8"), sentinel);
+    assert.equal(readFileSync(fixture.environmentFile, "utf8"), sentinel);
     assert.deepEqual(
-      readdirSync(fixtureRoot).filter((entry) => entry.startsWith(".env.bak.")),
+      readdirSync(fixture.fixtureRoot).filter((entry) =>
+        entry.startsWith(".env.bak."),
+      ),
       [],
     );
   } finally {
-    rmSync(temporary, { recursive: true, force: true });
+    rmSync(fixture.temporary, { recursive: true, force: true });
+  }
+});
+
+test("fresh setup generates exactly one persistent 32-byte assistant pairing key", () => {
+  const fixture = createSetupFixture();
+  try {
+    const result = fixture.run(
+      process.platform === "win32" ? ["-Yes"] : ["--yes"],
+    );
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const environment = readFileSync(fixture.environmentFile, "utf8");
+    const assignments =
+      environment.match(
+        /^ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=([0-9a-f]{64})$/gm,
+      ) ?? [];
+    assert.equal(assignments.length, 1);
+  } finally {
+    rmSync(fixture.temporary, { recursive: true, force: true });
+  }
+});
+
+test("setup rejects a malformed configured assistant pairing key without changing the environment", () => {
+  const sentinel = "ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=too-short\n";
+  const fixture = createSetupFixture({ environment: sentinel });
+  try {
+    const result = fixture.run(
+      process.platform === "win32" ? ["-Yes"] : ["--yes"],
+    );
+    assert.notEqual(result.status, 0);
+    assert.match(
+      `${result.stdout}\n${result.stderr}`,
+      /exactly 64 hexadecimal characters/i,
+    );
+    assert.equal(readFileSync(fixture.environmentFile, "utf8"), sentinel);
+  } finally {
+    rmSync(fixture.temporary, { recursive: true, force: true });
+  }
+});
+
+test("setup rejects duplicate assistant pairing key assignments as ambiguous", () => {
+  const sentinel = `ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=${"a".repeat(64)}\nASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=${"b".repeat(64)}\n`;
+  const fixture = createSetupFixture({ environment: sentinel });
+  try {
+    const result = fixture.run(
+      process.platform === "win32" ? ["-Yes"] : ["--yes"],
+    );
+    assert.notEqual(result.status, 0);
+    assert.match(
+      `${result.stdout}\n${result.stderr}`,
+      /assigned more than once/i,
+    );
+    assert.equal(readFileSync(fixture.environmentFile, "utf8"), sentinel);
+  } finally {
+    rmSync(fixture.temporary, { recursive: true, force: true });
+  }
+});
+
+test("intentional full overwrite preserves the existing assistant pairing key", () => {
+  const key = "c".repeat(64);
+  const fixture = createSetupFixture({
+    environment: `EXISTING_PRODUCTION_CONFIGURATION=true\nASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=${key}\n`,
+  });
+  try {
+    const result = fixture.run(
+      process.platform === "win32"
+        ? ["-Yes", "-ForceOverwrite"]
+        : ["--yes", "--force-overwrite"],
+    );
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.match(
+      readFileSync(fixture.environmentFile, "utf8"),
+      new RegExp(`^ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=${key}$`, "m"),
+    );
+  } finally {
+    rmSync(fixture.temporary, { recursive: true, force: true });
+  }
+});
+
+test("ordinary setup rerun safely adds one missing key, backs up the keyless environment, and then preserves it", () => {
+  const sentinel = "EXISTING_PRODUCTION_CONFIGURATION=true\n";
+  const fixture = createSetupFixture({ environment: sentinel });
+  try {
+    const migration = fixture.run(
+      process.platform === "win32" ? ["-Yes"] : ["--yes"],
+    );
+    assert.equal(migration.status, 0, migration.stderr || migration.stdout);
+    const migrated = readFileSync(fixture.environmentFile, "utf8");
+    assert.match(
+      migrated,
+      /^ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=[0-9a-f]{64}$/m,
+    );
+    const backups = readdirSync(fixture.fixtureRoot).filter((entry) =>
+      entry.startsWith(".env.bak."),
+    );
+    assert.equal(backups.length, 1);
+    assert.equal(
+      readFileSync(path.join(fixture.fixtureRoot, backups[0]), "utf8"),
+      sentinel,
+    );
+
+    const rerun = fixture.run(
+      process.platform === "win32" ? ["-Yes"] : ["--yes"],
+    );
+    assert.equal(rerun.status, 0, rerun.stderr || rerun.stdout);
+    assert.equal(readFileSync(fixture.environmentFile, "utf8"), migrated);
+  } finally {
+    rmSync(fixture.temporary, { recursive: true, force: true });
+  }
+});
+
+test("ordinary setup rerun refuses to generate over possible encrypted pairing data", () => {
+  const sentinel = "EXISTING_PRODUCTION_CONFIGURATION=true\n";
+  const fixture = createSetupFixture({ environment: sentinel, probeExit: 43 });
+  try {
+    const result = fixture.run(
+      process.platform === "win32" ? ["-Yes"] : ["--yes"],
+    );
+    assert.notEqual(result.status, 0);
+    assert.match(
+      `${result.stdout}\n${result.stderr}`,
+      /pairing file already exists/i,
+    );
+    assert.equal(readFileSync(fixture.environmentFile, "utf8"), sentinel);
+    assert.deepEqual(
+      readdirSync(fixture.fixtureRoot).filter((entry) =>
+        entry.startsWith(".env.bak."),
+      ),
+      [],
+    );
+  } finally {
+    rmSync(fixture.temporary, { recursive: true, force: true });
   }
 });
 

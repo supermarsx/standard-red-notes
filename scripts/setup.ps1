@@ -18,17 +18,22 @@
 .PARAMETER ForceOverwrite
   Explicitly replace an existing .env after making a timestamped backup.
 
+.PARAMETER GenerateAssistantSubscriptionKey
+  Safely add a persistent pairing-encryption key to an existing keyless .env.
+
 .EXAMPLE
   ./scripts/setup.ps1
   ./scripts/setup.ps1 -Up
   ./scripts/setup.ps1 -Yes -Up
   ./scripts/setup.ps1 -Yes -ForceOverwrite
+  ./scripts/setup.ps1 -GenerateAssistantSubscriptionKey
 #>
 [CmdletBinding()]
 param(
   [switch]$Yes,
   [switch]$Up,
-  [switch]$ForceOverwrite
+  [switch]$ForceOverwrite,
+  [switch]$GenerateAssistantSubscriptionKey
 )
 
 Set-StrictMode -Version Latest
@@ -80,6 +85,146 @@ function New-Hex32 {
   -join ($bytes | ForEach-Object { $_.ToString('x2') })
 }
 
+function Get-AssistantSubscriptionKeyState {
+  param([string]$Path)
+
+  $assignments = @(Get-Content -LiteralPath $Path | Where-Object {
+    $_ -match '^\s*ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY\s*='
+  })
+  if ($assignments.Count -gt 1) {
+    throw 'ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY is assigned more than once in .env. Refusing ambiguous configuration.'
+  }
+  if ($assignments.Count -eq 0) {
+    return [pscustomobject]@{ State = 'missing'; Value = '' }
+  }
+
+  $value = ($assignments[0] -replace '^[^=]*=', '').Trim()
+  if ([string]::IsNullOrEmpty($value)) {
+    return [pscustomobject]@{ State = 'missing'; Value = '' }
+  }
+  if (($value.StartsWith('"') -and $value.EndsWith('"')) -or
+      ($value.StartsWith("'") -and $value.EndsWith("'"))) {
+    $value = $value.Substring(1, $value.Length - 2)
+  }
+  if ($value -notmatch '^[0-9a-fA-F]{64}$') {
+    throw 'ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY must be exactly 64 hexadecimal characters (32 bytes).'
+  }
+
+  return [pscustomobject]@{ State = 'valid'; Value = $value }
+}
+
+function Invoke-ComposeCommand {
+  param([string[]]$Arguments)
+  if ($Compose -eq 'docker compose') {
+    & docker compose @Arguments
+  } else {
+    & docker-compose @Arguments
+  }
+}
+
+$AssistantPairingProbeScript = @'
+path="${ASSISTANT_SUBSCRIPTION_TOKEN_PATH:-/opt/server/packages/api-gateway/data/assistant-subscription.json}"
+case "$path" in
+  /opt/server/packages/api-gateway/data/*) ;;
+  *) exit 42 ;;
+esac
+[ ! -e "$path" ] || exit 43
+'@
+
+function Assert-NoExistingAssistantPairingData {
+  Push-Location $RepoRoot
+  try {
+    $containerIds = @(Invoke-ComposeCommand -Arguments @('ps', '--all', '-q', 'server') |
+      ForEach-Object { $_.ToString().Trim() } | Where-Object { $_ })
+  } finally {
+    Pop-Location
+  }
+  if ($containerIds.Count -gt 1) {
+    throw 'Multiple Compose server containers were found. Refusing to guess which pairing store is authoritative.'
+  }
+
+  if ($containerIds.Count -eq 1) {
+    $running = (& docker inspect --format '{{.State.Running}}' $containerIds[0] 2>$null | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0) {
+      throw 'The existing server container cannot be inspected. Refusing automatic key generation.'
+    }
+    if ($running -eq 'true') {
+      & docker exec $containerIds[0] /bin/sh -ec $AssistantPairingProbeScript
+      $probeStatus = $LASTEXITCODE
+    } else {
+      $mountDestinations = @(& docker inspect --format '{{range .Mounts}}{{println .Destination}}{{end}}' $containerIds[0] 2>$null |
+        ForEach-Object { $_.ToString().Trim() } | Where-Object { $_ })
+      if ($LASTEXITCODE -ne 0 -or $mountDestinations -notcontains '/opt/server/packages/api-gateway/data') {
+        throw 'The stopped server container has no inspectable persistent gateway-data mount. It may contain legacy pairing data; start/recover it before setup generates a key.'
+      }
+      Push-Location $RepoRoot
+      try {
+        Invoke-ComposeCommand -Arguments @(
+          'run', '--rm', '--no-deps', '--entrypoint', '/bin/sh', 'server', '-ec', $AssistantPairingProbeScript
+        )
+        $probeStatus = $LASTEXITCODE
+      } finally {
+        Pop-Location
+      }
+    }
+  } else {
+    Push-Location $RepoRoot
+    try {
+      Invoke-ComposeCommand -Arguments @(
+        'run', '--rm', '--no-deps', '--entrypoint', '/bin/sh', 'server', '-ec', $AssistantPairingProbeScript
+      )
+      $probeStatus = $LASTEXITCODE
+    } finally {
+      Pop-Location
+    }
+  }
+
+  switch ($probeStatus) {
+    0 { return }
+    42 { throw 'ASSISTANT_SUBSCRIPTION_TOKEN_PATH is outside the persistent gateway data directory. Refusing automatic key generation.' }
+    43 { throw 'An assistant subscription pairing file already exists. Restore its original encryption key or unpair it before generating a replacement.' }
+    default { throw 'Could not prove that the persistent assistant pairing store is empty. Refusing automatic key generation.' }
+  }
+}
+
+function Add-AssistantSubscriptionKey {
+  param([string]$Path, [string]$Key)
+
+  $backup = "$Path.bak.$(Get-Date -Format 'yyyyMMddHHmmss')"
+  $temporary = "$Path.assistant-key.tmp.$PID"
+  if ((Test-Path -LiteralPath $backup) -or (Test-Path -LiteralPath $temporary)) {
+    throw 'Refusing to overwrite an existing environment backup or migration temporary file.'
+  }
+  Copy-Item -LiteralPath $Path -Destination $backup
+
+  $replaced = $false
+  $updated = foreach ($line in Get-Content -LiteralPath $Path) {
+    if ($line -match '^\s*ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY\s*=') {
+      $replaced = $true
+      "ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=$Key"
+    } else {
+      $line
+    }
+  }
+  if (-not $replaced) {
+    $updated = @($updated) + @(
+      '',
+      '# Guided ChatGPT/Codex pairing credential encryption (32 random bytes).',
+      "ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=$Key"
+    )
+  }
+  try {
+    [System.IO.File]::WriteAllText($temporary, (($updated -join "`n") + "`n"), (New-Object System.Text.UTF8Encoding($false)))
+    Move-Item -LiteralPath $temporary -Destination $Path -Force
+  } finally {
+    if (Test-Path -LiteralPath $temporary) {
+      Remove-Item -LiteralPath $temporary -Force
+    }
+  }
+  Write-Ok 'Added a persistent assistant subscription encryption key.'
+  Write-Ok "Backed up the previous .env to: $backup"
+}
+
 # ---------------------------------------------------------------------------
 # Prerequisite checks
 # ---------------------------------------------------------------------------
@@ -112,8 +257,74 @@ Write-Ok "Found Docker and Compose ($Compose)."
 $backup = $null
 if (Test-Path $EnvFile) {
   Write-Warn "An .env file already exists at: $EnvFile"
+  try {
+    $assistantKey = Get-AssistantSubscriptionKeyState -Path $EnvFile
+  } catch {
+    Write-Err $_.Exception.Message
+    exit 1
+  }
+  if ($GenerateAssistantSubscriptionKey) {
+    if ($ForceOverwrite) {
+      Write-Err 'Use -GenerateAssistantSubscriptionKey separately before -ForceOverwrite.'
+      exit 2
+    }
+    if ($assistantKey.State -eq 'valid') {
+      Write-Ok 'ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY is already configured; leaving .env unchanged.'
+    } else {
+      Push-Location $RepoRoot
+      try {
+        Invoke-ComposeCommand -Arguments @('config', '--quiet')
+        if ($LASTEXITCODE -ne 0) { Write-Err 'Existing .env validation failed.'; exit 1 }
+      } finally { Pop-Location }
+      try {
+        Assert-NoExistingAssistantPairingData
+        $AssistantSubscriptionEncryptionKey = New-Hex32
+        Add-AssistantSubscriptionKey -Path $EnvFile -Key $AssistantSubscriptionEncryptionKey
+        $assistantKey = Get-AssistantSubscriptionKeyState -Path $EnvFile
+      } catch {
+        Write-Err $_.Exception.Message
+        exit 1
+      }
+      Push-Location $RepoRoot
+      try {
+        Invoke-ComposeCommand -Arguments @('config', '--quiet')
+        if ($LASTEXITCODE -ne 0) { Write-Err 'Migrated .env validation failed.'; exit 1 }
+      } finally { Pop-Location }
+    }
+    if ($Up) {
+      Push-Location $RepoRoot
+      try {
+        Invoke-ComposeCommand -Arguments @('up', '-d', '--build')
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      } finally { Pop-Location }
+      Write-Ok 'Stack started.'
+    }
+    exit 0
+  }
   if (-not $ForceOverwrite) {
-    Write-Info 'Reusing the existing configuration; normal setup reruns never regenerate secrets.'
+    if ($assistantKey.State -eq 'missing') {
+      Write-Info 'ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY is missing; checking the persistent pairing store before generating it.'
+      Push-Location $RepoRoot
+      try {
+        Invoke-ComposeCommand -Arguments @('config', '--quiet')
+        if ($LASTEXITCODE -ne 0) { Write-Err 'Existing .env validation failed.'; exit 1 }
+      } finally { Pop-Location }
+      try {
+        Assert-NoExistingAssistantPairingData
+        $AssistantSubscriptionEncryptionKey = New-Hex32
+        Add-AssistantSubscriptionKey -Path $EnvFile -Key $AssistantSubscriptionEncryptionKey
+        $assistantKey = Get-AssistantSubscriptionKeyState -Path $EnvFile
+      } catch {
+        Write-Err $_.Exception.Message
+        exit 1
+      }
+      Push-Location $RepoRoot
+      try {
+        Invoke-ComposeCommand -Arguments @('config', '--quiet')
+        if ($LASTEXITCODE -ne 0) { Write-Err 'Migrated .env validation failed.'; exit 1 }
+      } finally { Pop-Location }
+    }
+    Write-Info 'Reusing the existing configuration; normal setup reruns never rotate existing secrets.'
     Push-Location $RepoRoot
     try {
       if ($Compose -eq 'docker compose') { docker compose config --quiet }
@@ -133,6 +344,11 @@ if (Test-Path $EnvFile) {
     Write-Info 'Intentional rotation requires -ForceOverwrite. If an accidental overwrite already happened, run: npm run recover:database'
     exit 0
   }
+  if ($assistantKey.State -eq 'missing') {
+    Write-Err 'The existing .env has no assistant subscription encryption key. Run normal setup once to add it safely before a full overwrite.'
+    exit 1
+  }
+  $AssistantSubscriptionEncryptionKey = $assistantKey.Value
   $backup = "$EnvFile.bak.$(Get-Date -Format 'yyyyMMddHHmmss')"
   if (Test-Path -LiteralPath $backup) {
     Write-Err "Refusing to overwrite existing environment backup: $backup"
@@ -221,6 +437,9 @@ $WebsocketGatewayInternalSecret = New-Hex32
 $WebSocketConnectionTokenSecret = New-Hex32
 $MysqlPassword                  = New-Hex32
 $MysqlRootPassword              = New-Hex32
+if (-not (Get-Variable -Name AssistantSubscriptionEncryptionKey -ErrorAction SilentlyContinue)) {
+  $AssistantSubscriptionEncryptionKey = New-Hex32
+}
 Write-Ok 'Secrets generated.'
 
 # ---------------------------------------------------------------------------
@@ -233,8 +452,8 @@ $content = @"
 # Generated by scripts/setup.ps1 on $generatedAt
 #
 # DO NOT COMMIT THIS FILE. It contains secrets. (.gitignore already excludes it.)
-# Re-run scripts/setup.ps1 to regenerate. Changing the secrets below after users
-# exist will lock people out, so keep this file safe and backed up.
+# Keep this file safe and backed up. Normal setup reruns preserve existing
+# secrets; intentional rotation can lock users out or disconnect persisted data.
 # =============================================================================
 
 # ----- Public app port --------------------------------------------------------
@@ -352,8 +571,9 @@ REGISTRATION_APPROVAL_REQUIRED=$RegistrationApprovalRequired
 # ASSISTANT_DEFAULT_PROVIDER=
 # ASSISTANT_DEFAULT_MODEL=
 # # Guided ChatGPT/Codex pairing. PUBLIC_URL above must stay the exact public
-# # origin. Generate a dedicated key with: openssl rand -hex 32
-# ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=
+# # origin. This dedicated key is generated once and must never be rotated while
+# # an encrypted pairing file exists.
+ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=$AssistantSubscriptionEncryptionKey
 # ASSISTANT_SUBSCRIPTION_TOKEN_PATH=/opt/server/packages/api-gateway/data/assistant-subscription.json
 # ASSISTANT_CHATGPT_OAUTH_AUTHORIZE_URL=
 # ASSISTANT_CHATGPT_OAUTH_TOKEN_URL=

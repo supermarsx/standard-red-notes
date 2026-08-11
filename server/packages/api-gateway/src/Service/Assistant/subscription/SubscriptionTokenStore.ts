@@ -292,6 +292,13 @@ export class SubscriptionTokenStore {
     filePath: string,
     private readonly encryptionKeyHex: string | undefined,
   ) {
+    // The provider is bound during gateway bootstrap whenever a non-empty env
+    // value is present. Validate that configured value immediately so a typo
+    // fails startup instead of surfacing only after an administrator begins
+    // pairing. Undefined remains supported for direct fail-closed store tests.
+    if ((encryptionKeyHex ?? '').trim() !== '') {
+      this.requireKey()
+    }
     this.store = new SecureJsonFileStore({
       filePath,
       validate: isEncryptedEnvelope,

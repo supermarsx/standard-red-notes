@@ -56,8 +56,10 @@ docker compose up -d
 ```
 
 The `scripts/setup.sh` and `scripts/setup.ps1` helpers validate and reuse an
-existing `.env` on every normal rerun; they never prompt to regenerate its
-secrets. Silently rotating database, session, encryption, and WebSocket
+existing `.env` on every normal rerun without rotating configured secrets. An
+older keyless environment receives a one-time assistant subscription encryption
+key only after setup proves that no encrypted pairing file exists. Silently
+rotating database, session, encryption, and WebSocket
 credentials can disconnect an initialized MariaDB volume and invalidate live
 sessions. Use `--force-overwrite` or `-ForceOverwrite` only for an intentional
 rotation. If setup was overwritten accidentally, recover the complete prior

@@ -170,6 +170,7 @@ to boot otherwise).
 | `AUTH_SERVER_PSEUDO_KEY_PARAMS_KEY`  | Seed for pseudo key-params returned on login for unknown accounts (prevents user enumeration). The container auto-generates one if unset, but it would then change on every restart - so it is pinned in `.env`. | `openssl rand -hex 32` / .NET RNG              |
 | `WEBSOCKET_GATEWAY_INTERNAL_SECRET`  | Shared secret authenticating the server -> websocket-gateway internal calls. Must match on both.                                                                                                                 | `openssl rand -hex 32` / .NET RNG              |
 | `WEB_SOCKET_CONNECTION_TOKEN_SECRET` | Signs the short-lived tokens browsers use to open a realtime websocket connection.                                                                                                                               | `openssl rand -hex 32` / .NET RNG              |
+| `ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY` | Encrypts optional guided ChatGPT/Codex pairing credentials in the persistent gateway store. Fresh setup-script installs generate it once; never rotate it while pairing data exists. | `openssl rand -hex 32` / .NET RNG |
 | `MYSQL_PASSWORD`                     | Password for the application database user.                                                                                                                                                                      | `openssl rand -hex 32` / .NET RNG              |
 | `MYSQL_ROOT_PASSWORD`                | MariaDB root password.                                                                                                                                                                                           | `openssl rand -hex 32` / .NET RNG              |
 | `MYSQL_DATABASE`                     | Database name.                                                                                                                                                                                                   | Your choice (default `standard_notes_db`)      |
@@ -201,7 +202,7 @@ overlay (`SERVER_SETTINGS_PATH`, normally leave it inside the mounted
 (`STANDARD_RED_FEATURES_MODE`, `STANDARD_RED_ENTITLEMENT_MODE`, defaulting to
 fully-included), revision retention (`REVISIONS_RETENTION_DAYS`,
 `REVISIONS_MAX_COUNT_PER_ITEM`), the optional Assistant/LLM proxy
-(`ASSISTANT_*`), operation limits (`RATE_LIMIT_*`, `REGISTRATION_*`, upload and
+(`ASSISTANT_*`, except the setup-generated subscription encryption key), operation limits (`RATE_LIMIT_*`, `REGISTRATION_*`, upload and
 request caps), and the optional MCP bridge (`STANDARD_RED_NOTES_*`). See
 `.env.example` for the full list and [Operations hardening](operations-hardening.md)
 for the database, Redis, operation-limit, and image-pinning model.
@@ -753,9 +754,11 @@ folders: `%LOCALAPPDATA%\StandardRedNotes\recovery` on Windows,
 `${XDG_STATE_HOME:-~/.local/state}/standard-red-notes/recovery` on Linux. Backup
 archives, checksums, and the displaced environment are operator-only.
 
-Normal setup reruns now validate and reuse an existing `.env`; they never
-regenerate its secrets. `--force-overwrite` / `-ForceOverwrite` is required for
-an intentional rotation.
+Normal setup reruns validate and reuse an existing `.env` without rotating any
+configured secret. The one migration exception is an older keyless environment:
+setup adds `ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY` only after proving that no
+encrypted pairing file exists. `--force-overwrite` / `-ForceOverwrite` is
+required for an intentional rotation.
 
 <details>
 <summary>Exceptional and intentional rotation controls</summary>

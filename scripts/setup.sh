@@ -12,6 +12,7 @@
 #   ./scripts/setup.sh --yes      # non-interactive, accept all defaults
 #   ./scripts/setup.sh --yes --up # non-interactive + start the stack
 #   ./scripts/setup.sh --yes --force-overwrite # explicitly replace an existing .env
+#   ./scripts/setup.sh --generate-assistant-subscription-key # safely add the key to an existing .env
 #
 set -euo pipefail
 
@@ -21,6 +22,15 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 ENV_FILE="${REPO_ROOT}/.env"
+ASSISTANT_MIGRATION_TEMPORARY=""
+
+cleanup_assistant_migration_temporary() {
+  if [ -n "$ASSISTANT_MIGRATION_TEMPORARY" ] && [ -f "$ASSISTANT_MIGRATION_TEMPORARY" ]; then
+    rm -f -- "$ASSISTANT_MIGRATION_TEMPORARY"
+  fi
+}
+trap cleanup_assistant_migration_temporary EXIT
+trap 'cleanup_assistant_migration_temporary; exit 130' HUP INT TERM
 
 # ---------------------------------------------------------------------------
 # Flags
@@ -28,11 +38,13 @@ ENV_FILE="${REPO_ROOT}/.env"
 ASSUME_YES=0
 RUN_UP=0
 FORCE_OVERWRITE=0
+GENERATE_ASSISTANT_SUBSCRIPTION_KEY=0
 for arg in "$@"; do
   case "$arg" in
     -y|--yes) ASSUME_YES=1 ;;
     --up) RUN_UP=1 ;;
     --force-overwrite) FORCE_OVERWRITE=1 ;;
+    --generate-assistant-subscription-key) GENERATE_ASSISTANT_SUBSCRIPTION_KEY=1 ;;
     -h|--help)
       grep -E '^#( |$)' "$0" | sed -E 's/^# ?//'
       exit 0
@@ -101,6 +113,134 @@ gen_hex32() {
   fi
 }
 
+# Read and validate the optional persisted pairing key without sourcing .env.
+# Globals set: ASSISTANT_KEY_STATE (missing|valid), ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY.
+read_assistant_subscription_key() {
+  local line_count=0 line raw first_character last_character
+  ASSISTANT_KEY_STATE="missing"
+  ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=""
+
+  while IFS= read -r line; do
+    line_count=$((line_count + 1))
+    raw="${line#*=}"
+    ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY="$(printf '%s' "$raw" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+  done < <(grep -E '^[[:space:]]*ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY[[:space:]]*=' "$ENV_FILE" || true)
+
+  if [ "$line_count" -gt 1 ]; then
+    err "ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY is assigned more than once in .env. Refusing ambiguous configuration."
+    exit 1
+  fi
+  if [ "$line_count" -eq 0 ] || [ -z "$ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY" ]; then
+    ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=""
+    return
+  fi
+
+  first_character="${ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY:0:1}"
+  last_character="${ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY: -1}"
+  if [ "$first_character" = '"' ] || [ "$first_character" = "'" ] || [ "$last_character" = '"' ] || [ "$last_character" = "'" ]; then
+    if [ "$first_character" != "$last_character" ]; then
+      err "ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY has unbalanced or mismatched quotes."
+      exit 1
+    fi
+    ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY="${ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY:1:${#ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY}-2}"
+  fi
+  if ! [[ "$ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY" =~ ^[0-9a-fA-F]{64}$ ]]; then
+    err "ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY must be exactly 64 hexadecimal characters (32 bytes)."
+    exit 1
+  fi
+  ASSISTANT_KEY_STATE="valid"
+}
+
+assistant_pairing_probe_script='path="${ASSISTANT_SUBSCRIPTION_TOKEN_PATH:-/opt/server/packages/api-gateway/data/assistant-subscription.json}"
+case "$path" in
+  /opt/server/packages/api-gateway/data/*) ;;
+  *) exit 42 ;;
+esac
+[ ! -e "$path" ] || exit 43'
+
+assert_no_existing_assistant_pairing_data() {
+  local container_ids container_id running mount_destinations probe_status use_compose_probe=0
+  container_ids="$(cd "$REPO_ROOT" && $COMPOSE ps --all -q server)"
+  if [ -n "$container_ids" ] && [ "$(printf '%s\n' "$container_ids" | grep -c .)" -ne 1 ]; then
+    err "Multiple Compose server containers were found. Refusing to guess which pairing store is authoritative."
+    exit 1
+  fi
+
+  set +e
+  if [ -n "$container_ids" ]; then
+    container_id="$container_ids"
+    running="$(docker inspect --format '{{.State.Running}}' "$container_id" 2>/dev/null)"
+    if [ "$running" = "true" ]; then
+      docker exec "$container_id" /bin/sh -ec "$assistant_pairing_probe_script"
+      probe_status=$?
+    else
+      mount_destinations="$(docker inspect --format '{{range .Mounts}}{{println .Destination}}{{end}}' "$container_id" 2>/dev/null)"
+      if printf '%s\n' "$mount_destinations" | grep -Fxq '/opt/server/packages/api-gateway/data'; then
+        # A current stopped container stores pairing state in server-data. Inspect
+        # that same volume through a disposable no-dependencies container.
+        use_compose_probe=1
+      else
+        set -e
+        err "The stopped server container has no inspectable persistent gateway-data mount. It may contain legacy pairing data; start/recover it before setup generates a key."
+        exit 1
+      fi
+    fi
+  else
+    use_compose_probe=1
+  fi
+  if [ "$use_compose_probe" -eq 1 ]; then
+    (cd "$REPO_ROOT" && $COMPOSE run --rm --no-deps --entrypoint /bin/sh server -ec "$assistant_pairing_probe_script")
+    probe_status=$?
+  fi
+  set -e
+
+  case "$probe_status" in
+    0) return ;;
+    42)
+      err "ASSISTANT_SUBSCRIPTION_TOKEN_PATH is outside the persistent gateway data directory. Refusing automatic key generation."
+      ;;
+    43)
+      err "An assistant subscription pairing file already exists. Restore its original encryption key or unpair it before generating a replacement."
+      ;;
+    *)
+      err "Could not prove that the persistent assistant pairing store is empty. Refusing automatic key generation."
+      ;;
+  esac
+  exit 1
+}
+
+persist_assistant_subscription_key() {
+  local backup temporary line replaced=0
+  backup="${ENV_FILE}.bak.$(date +%Y%m%d%H%M%S)"
+  temporary="${ENV_FILE}.assistant-key.tmp.$$"
+  if [ -e "$backup" ] || [ -e "$temporary" ]; then
+    err "Refusing to overwrite an existing environment backup or migration temporary file."
+    exit 1
+  fi
+  cp "$ENV_FILE" "$backup"
+  chmod 600 "$backup"
+  ASSISTANT_MIGRATION_TEMPORARY="$temporary"
+  umask 077
+  : > "$temporary"
+  while IFS= read -r line || [ -n "$line" ]; do
+    if [[ "$line" =~ ^[[:space:]]*ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY[[:space:]]*= ]]; then
+      printf 'ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=%s\n' "$ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY" >> "$temporary"
+      replaced=1
+    else
+      printf '%s\n' "$line" >> "$temporary"
+    fi
+  done < "$ENV_FILE"
+  if [ "$replaced" -eq 0 ]; then
+    printf '\n# Guided ChatGPT/Codex pairing credential encryption (32 random bytes).\n' >> "$temporary"
+    printf 'ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=%s\n' "$ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY" >> "$temporary"
+  fi
+  mv "$temporary" "$ENV_FILE"
+  ASSISTANT_MIGRATION_TEMPORARY=""
+  chmod 600 "$ENV_FILE"
+  ok "Added a persistent assistant subscription encryption key."
+  ok "Backed up the previous .env to: ${backup}"
+}
+
 # ---------------------------------------------------------------------------
 # Prerequisite checks
 # ---------------------------------------------------------------------------
@@ -127,8 +267,39 @@ ok "Found Docker and Compose (${COMPOSE})."
 BACKUP=""
 if [ -f "$ENV_FILE" ]; then
   warn "An .env file already exists at: ${ENV_FILE}"
+  read_assistant_subscription_key
+  if [ "$GENERATE_ASSISTANT_SUBSCRIPTION_KEY" -eq 1 ]; then
+    if [ "$FORCE_OVERWRITE" -eq 1 ]; then
+      err "Use --generate-assistant-subscription-key separately before --force-overwrite."
+      exit 2
+    fi
+    if [ "$ASSISTANT_KEY_STATE" = "valid" ]; then
+      ok "ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY is already configured; leaving .env unchanged."
+    else
+      ( cd "$REPO_ROOT" && $COMPOSE config --quiet )
+      assert_no_existing_assistant_pairing_data
+      ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY="$(gen_hex32)"
+      persist_assistant_subscription_key
+      read_assistant_subscription_key
+      ( cd "$REPO_ROOT" && $COMPOSE config --quiet )
+    fi
+    if [ "$RUN_UP" -eq 1 ]; then
+      ( cd "$REPO_ROOT" && $COMPOSE up -d --build )
+      ok "Stack started."
+    fi
+    exit 0
+  fi
   if [ "$FORCE_OVERWRITE" -ne 1 ]; then
-    info "Reusing the existing configuration; normal setup reruns never regenerate secrets."
+    if [ "$ASSISTANT_KEY_STATE" = "missing" ]; then
+      info "ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY is missing; checking the persistent pairing store before generating it."
+      ( cd "$REPO_ROOT" && $COMPOSE config --quiet )
+      assert_no_existing_assistant_pairing_data
+      ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY="$(gen_hex32)"
+      persist_assistant_subscription_key
+      read_assistant_subscription_key
+      ( cd "$REPO_ROOT" && $COMPOSE config --quiet )
+    fi
+    info "Reusing the existing configuration; normal setup reruns never rotate existing secrets."
     ( cd "$REPO_ROOT" && $COMPOSE config --quiet )
     ok "Existing .env validated."
     if [ "$RUN_UP" -eq 1 ]; then
@@ -140,6 +311,10 @@ if [ -f "$ENV_FILE" ]; then
     fi
     info "Intentional rotation requires --force-overwrite. If an accidental overwrite already happened, run: npm run recover:database"
     exit 0
+  fi
+  if [ "$ASSISTANT_KEY_STATE" = "missing" ]; then
+    err "The existing .env has no assistant subscription encryption key. Run normal setup once to add it safely before a full overwrite."
+    exit 1
   fi
   BACKUP="${ENV_FILE}.bak.$(date +%Y%m%d%H%M%S)"
   if [ -e "$BACKUP" ]; then
@@ -253,6 +428,9 @@ WEBSOCKET_GATEWAY_INTERNAL_SECRET="$(gen_hex32)"
 WEB_SOCKET_CONNECTION_TOKEN_SECRET="$(gen_hex32)"
 MYSQL_PASSWORD="$(gen_hex32)"
 MYSQL_ROOT_PASSWORD="$(gen_hex32)"
+if [ -z "${ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY:-}" ]; then
+  ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY="$(gen_hex32)"
+fi
 ok "Secrets generated."
 
 # ---------------------------------------------------------------------------
@@ -265,8 +443,8 @@ cat > "$ENV_FILE" <<EOF
 # Generated by scripts/setup.sh on $(date -u +"%Y-%m-%dT%H:%M:%SZ")
 #
 # DO NOT COMMIT THIS FILE. It contains secrets. (.gitignore already excludes it.)
-# Re-run scripts/setup.sh to regenerate. Changing the secrets below after users
-# exist will lock people out, so keep this file safe and backed up.
+# Keep this file safe and backed up. Normal setup reruns preserve existing
+# secrets; intentional rotation can lock users out or disconnect persisted data.
 # =============================================================================
 
 # ----- Public app port --------------------------------------------------------
@@ -384,8 +562,9 @@ REGISTRATION_APPROVAL_REQUIRED=${REGISTRATION_APPROVAL_REQUIRED}
 # ASSISTANT_DEFAULT_PROVIDER=
 # ASSISTANT_DEFAULT_MODEL=
 # # Guided ChatGPT/Codex pairing. PUBLIC_URL above must stay the exact public
-# # origin. Generate a dedicated key with: openssl rand -hex 32
-# ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=
+# # origin. This dedicated key is generated once and must never be rotated while
+# # an encrypted pairing file exists.
+ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=${ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY}
 # ASSISTANT_SUBSCRIPTION_TOKEN_PATH=/opt/server/packages/api-gateway/data/assistant-subscription.json
 # ASSISTANT_CHATGPT_OAUTH_AUTHORIZE_URL=
 # ASSISTANT_CHATGPT_OAUTH_TOKEN_URL=
