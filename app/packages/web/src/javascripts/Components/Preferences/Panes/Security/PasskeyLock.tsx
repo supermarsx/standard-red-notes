@@ -9,6 +9,7 @@ import { addToast, ToastType } from '@standardnotes/toast'
 import { ApplicationEvent } from '@standardnotes/snjs'
 import {
   getAppLockPasskeyCredential,
+  getAppLockPasskeyUnavailableReason,
   hasAppLockPasscodeFallback,
   isAppLockPasskeySupported,
   registerAppLockPasskey,
@@ -31,6 +32,7 @@ type Props = {
  * set) remains in force as the fallback.
  */
 const PasskeyLock = ({ application }: Props) => {
+  const unavailableReason = getAppLockPasskeyUnavailableReason(application)
   const supported = isAppLockPasskeySupported(application)
   const [hasPasskey, setHasPasskey] = useState(() => getAppLockPasskeyCredential(application) !== null)
   const [hasPasscodeFallback, setHasPasscodeFallback] = useState(() => hasAppLockPasscodeFallback(application))
@@ -92,9 +94,11 @@ const PasskeyLock = ({ application }: Props) => {
     })
   }, [application, refresh])
 
-  if (!supported) {
-    return null
-  }
+  const registrationDisabledReason =
+    unavailableReason ??
+    (!hasPasscodeFallback
+      ? 'Set an app passcode first. The passcode is required as a recovery method if the passkey becomes unavailable.'
+      : undefined)
 
   return (
     <PreferencesGroup>
@@ -108,14 +112,15 @@ const PasskeyLock = ({ application }: Props) => {
 
         {!hasPasskey && (
           <>
-            {!hasPasscodeFallback && (
+            {registrationDisabledReason && (
               <Text className="text-warning mb-3">
-                Set an app passcode first. Passkey lock is not enabled without a separate recovery method.
+                Passkey registration is unavailable: {registrationDisabledReason}
               </Text>
             )}
             <Button
               label={isRegistering ? 'Waiting for passkey…' : 'Register passkey'}
-              disabled={isRegistering || !hasPasscodeFallback}
+              disabled={isRegistering || !supported || !hasPasscodeFallback}
+              disabledReason={registrationDisabledReason}
               onClick={onRegister}
               primary
             />

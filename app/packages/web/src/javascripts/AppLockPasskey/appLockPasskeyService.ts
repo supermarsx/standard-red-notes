@@ -9,6 +9,7 @@ import {
   normalizeAppLockPasskeyCredential,
   rpIdFromHostname,
 } from './appLockPasskey'
+import { getWebAuthnUnavailableReason } from './passkeyAvailability'
 
 /**
  * Standard Red Notes: Passkey app-lock — application-bound side effects.
@@ -70,10 +71,16 @@ export function isAppLockPasskeyRegistered(application: WebApplication): boolean
  * WebAuthn API and excludes native mobile web (which uses biometrics instead).
  */
 export function isAppLockPasskeySupported(application: WebApplication): boolean {
+  return getAppLockPasskeyUnavailableReason(application) === undefined
+}
+
+/** A user-facing explanation for every known app-lock passkey blocker. */
+export function getAppLockPasskeyUnavailableReason(application: WebApplication): string | undefined {
   if (application.isNativeMobileWeb()) {
-    return false
+    return 'Passkey app lock is not used in the mobile app. Use the mobile biometric lock instead.'
   }
-  return typeof window !== 'undefined' && typeof window.PublicKeyCredential !== 'undefined'
+
+  return getWebAuthnUnavailableReason()
 }
 
 function currentRpId(): string {
