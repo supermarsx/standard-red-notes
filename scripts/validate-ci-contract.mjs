@@ -173,12 +173,20 @@ export function validateSetupOverwriteContract(shellSetup, powershellSetup) {
           "normal-rerun existing-config guard",
         ],
         [
-          "normal setup reruns never regenerate secrets",
+          "normal setup reruns never rotate existing secrets",
           "existing-config reuse diagnostic",
         ],
         [
           "npm run recover:database",
           "one-command accidental-overwrite recovery",
+        ],
+        [
+          "--generate-assistant-subscription-key) GENERATE_ASSISTANT_SUBSCRIPTION_KEY=1",
+          "explicit assistant pairing key migration flag",
+        ],
+        [
+          "ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=${ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY}",
+          "fresh-install assistant pairing key persistence",
         ],
       ],
     ],
@@ -189,12 +197,20 @@ export function validateSetupOverwriteContract(shellSetup, powershellSetup) {
         ["[switch]$ForceOverwrite", "explicit ForceOverwrite switch"],
         ["if (-not $ForceOverwrite)", "normal-rerun existing-config guard"],
         [
-          "normal setup reruns never regenerate secrets",
+          "normal setup reruns never rotate existing secrets",
           "existing-config reuse diagnostic",
         ],
         [
           "npm run recover:database",
           "one-command accidental-overwrite recovery",
+        ],
+        [
+          "[switch]$GenerateAssistantSubscriptionKey",
+          "explicit assistant pairing key migration switch",
+        ],
+        [
+          "ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=$AssistantSubscriptionEncryptionKey",
+          "fresh-install assistant pairing key persistence",
         ],
       ],
     ],

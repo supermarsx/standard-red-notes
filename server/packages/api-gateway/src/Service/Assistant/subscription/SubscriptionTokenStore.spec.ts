@@ -93,8 +93,8 @@ describe('SubscriptionTokenStore', () => {
   })
 
   it('rejects a malformed (non 32-byte hex) key', async () => {
-    const store = new SubscriptionTokenStore(filePath, 'too-short')
-    await expect(store.save(sampleRecord())).rejects.toThrow(/32 bytes/)
+    expect(() => new SubscriptionTokenStore(filePath, 'too-short')).toThrow(/32 bytes/)
+    await expect(fs.readFile(filePath, 'utf8')).rejects.toThrow(/ENOENT/)
   })
 
   it('fails closed on load with the wrong key (does not return the record)', async () => {

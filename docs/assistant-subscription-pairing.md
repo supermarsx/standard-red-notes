@@ -30,7 +30,9 @@ only to the server-side assistant provider.
 
 ## Configure the gateway
 
-Generate a 32-byte key and provide it as exactly 64 hexadecimal characters:
+Fresh installs created with `scripts/setup.sh` or `scripts/setup.ps1` generate
+and persist this key automatically. If you maintain `.env` manually, generate a
+32-byte key and provide it as exactly 64 hexadecimal characters:
 
 ```powershell
 [Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32)).ToLower()
@@ -42,6 +44,39 @@ Set:
 ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=<64-hex-character key>
 PUBLIC_URL=https://notes.example.com
 ```
+
+The gateway validates any configured value during bootstrap. A malformed,
+non-empty value stops the gateway before pairing becomes available; an absent
+value remains a supported way to keep guided pairing disabled.
+
+**Adding the key to an older setup-generated environment.**
+
+Normal setup reruns preserve every existing secret. For an older generated
+environment that has no pairing key, rerun the matching setup script normally:
+
+```bash
+./scripts/setup.sh
+```
+
+```powershell
+./scripts/setup.ps1
+```
+
+The explicit `--generate-assistant-subscription-key` /
+`-GenerateAssistantSubscriptionKey` forms perform the same operation when a
+non-interactive migration command is preferable. Before writing anything, the
+migration validates Compose and inspects the
+current server container or its mounted gateway data directory. It refuses to
+generate a key if an encrypted pairing file exists, if a stopped container or
+custom token path prevents a reliable inspection, or if the current `.env`
+already contains a malformed or ambiguous assignment. On success it makes a
+timestamped `.env.bak.*`, writes one 64-hex key atomically, and validates Compose
+again. If pairing data already exists, recover its original key; a new key cannot
+decrypt it.
+
+Run normal setup or the explicit migration separately before
+`--force-overwrite` / `-ForceOverwrite`. Full environment rotation preserves a
+valid existing pairing key rather than silently invalidating the durable store.
 
 The stock container paths are already wired to named persistent volumes:
 
