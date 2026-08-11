@@ -1172,7 +1172,6 @@ export class AssistantController extends BaseHttpController {
           subscriptionId: profile.provider === 'codex-subscription' ? profile.subscriptionId : undefined,
         }
       }
-
     }
 
     // Legacy server configuration remains supported when no profile is assigned,

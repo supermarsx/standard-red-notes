@@ -257,20 +257,20 @@ describe('CreateCrossServiceToken', () => {
   it.each(['not-a-number', '25junk', '0', '9007199254740992'])(
     'omits invalid AI request limit %s and malformed MCP tag scope',
     async (value) => {
-    settingRepository.findLastByNameAndUserUuid = jest.fn().mockImplementation((settingName: string) => {
-      if (settingName === SettingName.NAMES.AiRequestLimit) {
-        return Promise.resolve({ props: { value } })
-      }
-      return Promise.resolve(null)
-    })
-    session.readonlyAccess = false
-    session.mcpScopeTagUuids = '{invalid-json'
+      settingRepository.findLastByNameAndUserUuid = jest.fn().mockImplementation((settingName: string) => {
+        if (settingName === SettingName.NAMES.AiRequestLimit) {
+          return Promise.resolve({ props: { value } })
+        }
+        return Promise.resolve(null)
+      })
+      session.readonlyAccess = false
+      session.mcpScopeTagUuids = '{invalid-json'
 
-    await createUseCase().execute({ user, session })
+      await createUseCase().execute({ user, session })
 
-    const payload = (tokenEncoder.encodeExpirableToken as jest.Mock).mock.calls[0][0] as CrossServiceTokenData
-    expect(payload.ai_request_limit).toBeUndefined()
-    expect(payload.mcp_scope).toBeUndefined()
+      const payload = (tokenEncoder.encodeExpirableToken as jest.Mock).mock.calls[0][0] as CrossServiceTokenData
+      expect(payload.ai_request_limit).toBeUndefined()
+      expect(payload.mcp_scope).toBeUndefined()
     },
   )
 

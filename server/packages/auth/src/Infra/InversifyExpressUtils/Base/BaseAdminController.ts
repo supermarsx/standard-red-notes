@@ -558,10 +558,7 @@ export class BaseAdminController extends BaseHttpController {
       value != null &&
       (typeof value !== 'string' || (value !== 'true' && value !== 'false'))
     ) {
-      return this.json(
-        { error: { message: `Invalid ${name} value '${value}'. Use 'true' or 'false'.` } },
-        400,
-      )
+      return this.json({ error: { message: `Invalid ${name} value '${value}'. Use 'true' or 'false'.` } }, 400)
     }
 
     if (

@@ -197,34 +197,32 @@ describe('BaseAdminController OCR server-allowed flag (admin-manageable)', () =>
     expect(result.json).toMatchObject({ success: true, name: SettingName.NAMES.OcrServerAllowed, value: 'true' })
   })
 
-  it.each([
-    SettingName.NAMES.AiEnabled,
-    SettingName.NAMES.CollaborationEnabled,
-    SettingName.NAMES.LiveSyncEnabled,
-  ])('persists the strict administrator gate %s and invalidates the target token cache', async (name) => {
-    const result = await createController().setUserFeatureFlag(flagRequest(name, 'false'), adminResponse)
+  it.each([SettingName.NAMES.AiEnabled, SettingName.NAMES.CollaborationEnabled, SettingName.NAMES.LiveSyncEnabled])(
+    'persists the strict administrator gate %s and invalidates the target token cache',
+    async (name) => {
+      const result = await createController().setUserFeatureFlag(flagRequest(name, 'false'), adminResponse)
 
-    expect(result.statusCode).toEqual(200)
-    expect(setSettingValue.execute).toHaveBeenCalledWith({
-      settingName: name,
-      value: 'false',
-      userUuid: '1-2-3',
-      checkUserPermissions: false,
-    })
-    expect(adminResponse.setHeader).toHaveBeenCalledWith('x-invalidate-cache', '1-2-3')
-  })
+      expect(result.statusCode).toEqual(200)
+      expect(setSettingValue.execute).toHaveBeenCalledWith({
+        settingName: name,
+        value: 'false',
+        userUuid: '1-2-3',
+        checkUserPermissions: false,
+      })
+      expect(adminResponse.setHeader).toHaveBeenCalledWith('x-invalidate-cache', '1-2-3')
+    },
+  )
 
-  it.each([
-    SettingName.NAMES.AiEnabled,
-    SettingName.NAMES.CollaborationEnabled,
-    SettingName.NAMES.LiveSyncEnabled,
-  ])('rejects a non-boolean value for %s', async (name) => {
-    const result = await createController().setUserFeatureFlag(flagRequest(name, 'yes'), adminResponse)
+  it.each([SettingName.NAMES.AiEnabled, SettingName.NAMES.CollaborationEnabled, SettingName.NAMES.LiveSyncEnabled])(
+    'rejects a non-boolean value for %s',
+    async (name) => {
+      const result = await createController().setUserFeatureFlag(flagRequest(name, 'yes'), adminResponse)
 
-    expect(result.statusCode).toEqual(400)
-    expect(setSettingValue.execute).not.toHaveBeenCalled()
-    expect(adminResponse.setHeader).not.toHaveBeenCalled()
-  })
+      expect(result.statusCode).toEqual(400)
+      expect(setSettingValue.execute).not.toHaveBeenCalled()
+      expect(adminResponse.setHeader).not.toHaveBeenCalled()
+    },
+  )
 
   it('rejects JSON booleans and numbers instead of coercing administrator gate values', async () => {
     const booleanResult = await createController().setUserFeatureFlag(
@@ -241,18 +239,15 @@ describe('BaseAdminController OCR server-allowed flag (admin-manageable)', () =>
     expect(setSettingValue.execute).not.toHaveBeenCalled()
   })
 
-  it.each(['0', '-1', '25junk', '9007199254740992'])(
-    'rejects the non-canonical AI request limit %s',
-    async (value) => {
-      const result = await createController().setUserFeatureFlag(
-        flagRequest(SettingName.NAMES.AiRequestLimit, value),
-        adminResponse,
-      )
+  it.each(['0', '-1', '25junk', '9007199254740992'])('rejects the non-canonical AI request limit %s', async (value) => {
+    const result = await createController().setUserFeatureFlag(
+      flagRequest(SettingName.NAMES.AiRequestLimit, value),
+      adminResponse,
+    )
 
-      expect(result.statusCode).toEqual(400)
-      expect(setSettingValue.execute).not.toHaveBeenCalled()
-    },
-  )
+    expect(result.statusCode).toEqual(400)
+    expect(setSettingValue.execute).not.toHaveBeenCalled()
+  })
 
   it('accepts a positive AI request limit and a cleared limit', async () => {
     await createController().setUserFeatureFlag(flagRequest(SettingName.NAMES.AiRequestLimit, '25'), adminResponse)
