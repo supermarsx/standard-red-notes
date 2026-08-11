@@ -23,6 +23,8 @@ type Props = {
   onFloatChange: (float: ImageFloat) => void
   isSelected: boolean
   onImageLoad?: () => void
+  onImageError?: () => void
+  referrerPolicy?: 'no-referrer'
 }
 
 /**
@@ -48,6 +50,8 @@ export default function SuperEmbeddedImage({
   onFloatChange,
   isSelected,
   onImageLoad,
+  onImageError,
+  referrerPolicy,
 }: Props) {
   const wrapperRef = useRef<HTMLDivElement>(null)
   const [liveWidth, setLiveWidth] = useState<number | undefined>(width)
@@ -107,7 +111,14 @@ export default function SuperEmbeddedImage({
         className="relative inline-block max-w-full overflow-visible"
         style={{ width: liveWidth ? `${liveWidth}px` : undefined, maxWidth: '100%' }}
       >
-        <img className="block h-auto w-full max-w-full" alt={alt} src={src} onLoad={onImageLoad} />
+        <img
+          className="block h-auto w-full max-w-full"
+          alt={alt}
+          src={src}
+          onLoad={onImageLoad}
+          onError={onImageError}
+          referrerPolicy={referrerPolicy}
+        />
         <ImageResizer
           active={isSelected}
           targetRef={wrapperRef}

@@ -12,6 +12,7 @@ import Icon from '@/Components/Icon/Icon'
 import Spinner from '@/Components/Spinner/Spinner'
 import SuperEmbeddedImage from '../ImageTools/SuperEmbeddedImage'
 import { ImageFloat } from '../ImageTools/ImageToolsTypes'
+import PdfPreview from '@/Components/FilePreview/PdfPreview'
 
 type Props = {
   fileName: string | undefined
@@ -99,6 +100,45 @@ const InlineFileComponent = ({
   }, [application, editor, fileName, mimeType, node, src])
 
   const isPDF = mimeType === 'application/pdf'
+  const [pdfBytes, setPdfBytes] = useState<Uint8Array>()
+  const [pdfLoadError, setPdfLoadError] = useState(false)
+
+  useEffect(() => {
+    if (!isPDF) {
+      setPdfBytes(undefined)
+      setPdfLoadError(false)
+      return
+    }
+
+    const controller = new AbortController()
+    setPdfBytes(undefined)
+    setPdfLoadError(false)
+
+    void fetch(src, {
+      signal: controller.signal,
+      credentials: 'omit',
+      referrerPolicy: 'no-referrer',
+    })
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error(`Unable to load inline PDF (${response.status})`)
+        }
+        return response.arrayBuffer()
+      })
+      .then((buffer) => {
+        if (!controller.signal.aborted) {
+          setPdfBytes(new Uint8Array(buffer))
+        }
+      })
+      .catch((error: unknown) => {
+        if (!controller.signal.aborted) {
+          console.error('Failed to load inline PDF', error)
+          setPdfLoadError(true)
+        }
+      })
+
+    return () => controller.abort()
+  }, [isPDF, src])
 
   const changeAlignment = useCallback(
     (format: ElementFormatType) => {
@@ -153,11 +193,32 @@ const InlineFileComponent = ({
             <source src={src} type={mimeType} />
           </audio>
         </div>
+      ) : isPDF ? (
+        <div
+          className="h-[clamp(20rem,65vh,48rem)] w-full overflow-hidden"
+          data-inline-pdf-viewport="true"
+        >
+          {pdfBytes ? (
+            <PdfPreview application={application} bytes={pdfBytes} />
+          ) : pdfLoadError ? (
+            <div className="border-border text-danger flex min-h-[12rem] items-center justify-center rounded border p-4 text-center">
+              This PDF could not be previewed. You can still save it to Files below.
+            </div>
+          ) : (
+            <div
+              className="text-passive-1 flex min-h-[12rem] items-center justify-center gap-2"
+              role="status"
+              aria-label="Loading PDF preview"
+            >
+              <Spinner className="h-5 w-5" />
+              Loading PDF preview...
+            </div>
+          )}
+        </div>
       ) : (
-        <object
-          className={classNames('h-full w-full', isPDF && 'min-h-[65vh]')}
-          data={isPDF ? src + '#view=FitV' : src}
-        />
+        <div className="border-border text-passive-1 rounded border p-4 text-center">
+          Preview is not available for this file type. You can save it to Files below.
+        </div>
       )}
       <button
         className={classNames(

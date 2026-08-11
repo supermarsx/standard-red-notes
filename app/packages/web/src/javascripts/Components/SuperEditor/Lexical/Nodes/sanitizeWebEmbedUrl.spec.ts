@@ -6,8 +6,8 @@ describe('sanitizeWebEmbedUrl', () => {
     expect(sanitizeWebEmbedUrl('https://example.com/path?q=1#frag')).toBe('https://example.com/path?q=1#frag')
   })
 
-  it('accepts http URLs', () => {
-    expect(sanitizeWebEmbedUrl('http://example.com')).toBe('http://example.com/')
+  it('rejects plain http URLs', () => {
+    expect(sanitizeWebEmbedUrl('http://example.com')).toBe('')
   })
 
   it('trims surrounding whitespace before validating', () => {
@@ -48,8 +48,8 @@ describe('sanitizeWebEmbedUrl', () => {
     expect(sanitizeWebEmbedUrl('https://notes.example:443/account', 'https://notes.example/editor')).toBe('')
   })
 
-  it('still accepts different scheme and port origins', () => {
-    expect(sanitizeWebEmbedUrl('http://notes.example/page', 'https://notes.example')).toBe('http://notes.example/page')
+  it('rejects a transport downgrade but accepts a different HTTPS port', () => {
+    expect(sanitizeWebEmbedUrl('http://notes.example/page', 'https://notes.example')).toBe('')
     expect(sanitizeWebEmbedUrl('https://notes.example:8443/page', 'https://notes.example')).toBe(
       'https://notes.example:8443/page',
     )

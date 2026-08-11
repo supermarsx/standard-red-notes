@@ -3,10 +3,12 @@
  *
  * Unlike the YouTube/Vimeo `toEmbedUrl` normalizer, this block embeds an
  * arbitrary web page directly in a sandboxed iframe. Because the iframe `src`
- * is loaded straight from a remote origin, we only allow cross-origin http(s)
+ * is loaded straight from a remote origin, we only allow cross-origin HTTPS
  * URLs and explicitly reject dangerous schemes (`javascript:`, `data:`,
  * `blob:`, `file:`, `vbscript:`, etc.) which could otherwise execute in the
- * editor's context or smuggle markup into the frame.
+ * editor's context or smuggle markup into the frame. Plain HTTP is rejected so
+ * a persisted embed can never downgrade transport security or require a mixed-
+ * content exception that production CSP deliberately does not provide.
  *
  * Returns the normalized absolute URL string when valid, or '' when the input
  * is empty/invalid. Callers treat '' as "not loadable".
@@ -37,11 +39,11 @@ export function sanitizeWebEmbedUrl(
     return ''
   }
 
-  // Require an explicit http/https scheme up front. We intentionally do NOT
+  // Require an explicit HTTPS scheme up front. We intentionally do NOT
   // auto-prepend https:// for scheme-less input, so that strings like
   // "javascript:alert(1)" can never be coerced into a "valid" URL, and so the
   // user is always aware they are embedding an external origin.
-  if (!/^https?:\/\//i.test(input)) {
+  if (!/^https:\/\//i.test(input)) {
     return ''
   }
 
@@ -52,8 +54,8 @@ export function sanitizeWebEmbedUrl(
     return ''
   }
 
-  // Belt-and-suspenders: only allow the http/https protocols.
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+  // Belt-and-suspenders: only encrypted HTTPS embeds are supported.
+  if (parsed.protocol !== 'https:') {
     return ''
   }
 

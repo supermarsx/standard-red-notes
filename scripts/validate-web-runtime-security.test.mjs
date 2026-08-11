@@ -65,6 +65,20 @@ function directive(policy, name) {
   return value.split(/\s+/).slice(1);
 }
 
+function pdfWorkerLocation(source, relativePath) {
+  const candidates = [
+    "location ~ ^/assets/pdf/[^/]+\\.mjs$ {",
+    "location ~ ^/assets/pdf/[^/]+\\.mjs\\$ {",
+  ];
+  const start = candidates
+    .map((candidate) => source.indexOf(candidate))
+    .find((index) => index >= 0);
+  assert.notEqual(start, undefined, `${relativePath}: PDF worker location missing`);
+  const end = source.indexOf("\n  }", start);
+  assert.ok(end > start, `${relativePath}: PDF worker location is not bounded`);
+  return source.slice(start, end);
+}
+
 function sandboxRunnerHash() {
   const runnerScript = runnerHtml.match(/<script>([\s\S]*?)<\/script>/);
   assert.ok(
@@ -132,6 +146,23 @@ test("the app and isolated sandbox use distinct, least-privilege CSPs", () => {
     }
     assert.ok(!parentConnections.includes("http:"), relativePath);
 
+    assert.deepEqual(directive(parentPolicy, "img-src"), [
+      "'self'",
+      "data:",
+      "blob:",
+      "https:",
+    ]);
+    assert.deepEqual(directive(parentPolicy, "frame-src"), [
+      "'self'",
+      "blob:",
+      "https:",
+    ]);
+    assert.deepEqual(directive(parentPolicy, "object-src"), ["'none'"]);
+
+    const workerLocation = pdfWorkerLocation(source, relativePath);
+    assert.match(workerLocation, /default_type application\/javascript;/);
+    assert.match(workerLocation, /try_files \\?\$uri =404;/);
+
     const sandboxPolicy = policyForLocation(source, "=\\s*/sandbox\\.html");
     assert.deepEqual(directive(sandboxPolicy, "script-src"), [
       "'unsafe-eval'",
@@ -140,6 +171,7 @@ test("the app and isolated sandbox use distinct, least-privilege CSPs", () => {
     assert.deepEqual(directive(sandboxPolicy, "worker-src"), ["blob:"]);
     assert.deepEqual(directive(sandboxPolicy, "connect-src"), ["'none'"]);
     assert.deepEqual(directive(sandboxPolicy, "frame-src"), ["'none'"]);
+    assert.deepEqual(directive(sandboxPolicy, "object-src"), ["'none'"]);
     assert.deepEqual(directive(sandboxPolicy, "sandbox"), ["allow-scripts"]);
     assert.ok(
       !sandboxPolicy.includes("script-src 'unsafe-inline'"),

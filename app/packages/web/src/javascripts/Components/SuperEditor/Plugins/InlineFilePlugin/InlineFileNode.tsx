@@ -170,7 +170,7 @@ export class InlineFileNode extends DecoratorBlockNode {
             if (!(domNode instanceof HTMLSourceElement)) {
               return null
             }
-            const mimeType = domNode.type || parent.tagName === 'VIDEO' ? 'video/mp4' : 'audio/mp3'
+            const mimeType = domNode.type || (parent.tagName === 'VIDEO' ? 'video/mp4' : 'audio/mp3')
             const src = domNode.src
             const fileName = domNode.getAttribute('data-file-name') || undefined
             return {

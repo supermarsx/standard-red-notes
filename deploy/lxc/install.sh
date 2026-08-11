@@ -434,8 +434,15 @@ server {
     proxy_send_timeout 3600s;
   }
 
+  # pdf.js loads the emitted .mjs worker as an ES module. Scope the MIME
+  # override to that generated asset directory; do not replace mime.types.
+  location ~ ^/assets/pdf/[^/]+\.mjs\$ {
+    default_type application/javascript;
+    try_files \$uri =404;
+  }
+
   location / {
-    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'sha256-__CSP_INLINE_SCRIPT_HASH__'; script-src-attr 'self' 'unsafe-hashes' 'sha256-nIvOnptGOkcUoTPVOYWoDnWbMyGMgUTK8pMzXf87azw='; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob: data:; connect-src 'self' https: http://localhost:* http://127.0.0.1:* ws: wss:; frame-src 'self' blob:; frame-ancestors 'self'; base-uri 'self'; form-action 'self'; object-src 'none'" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'sha256-__CSP_INLINE_SCRIPT_HASH__'; script-src-attr 'self' 'unsafe-hashes' 'sha256-nIvOnptGOkcUoTPVOYWoDnWbMyGMgUTK8pMzXf87azw='; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; media-src 'self' blob: data:; connect-src 'self' https: http://localhost:* http://127.0.0.1:* ws: wss:; frame-src 'self' blob: https:; frame-ancestors 'self'; base-uri 'self'; form-action 'self'; object-src 'none'" always;
     try_files \$uri \$uri/ /index.html;
   }
 

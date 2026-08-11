@@ -52,12 +52,21 @@ const RemoteImageComponent = ({
   const [editor] = useLexicalComposerContext()
 
   const [didImageLoad, setDidImageLoad] = useState(false)
+  const [imageFailed, setImageFailed] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
+
+  useEffect(() => {
+    setDidImageLoad(false)
+    setImageFailed(false)
+  }, [src])
 
   const fetchAndUploadImage = useCallback(async () => {
     setIsSaving(true)
     try {
-      const response = await fetch(src)
+      const response = await fetch(src, {
+        credentials: 'omit',
+        referrerPolicy: 'no-referrer',
+      })
 
       if (!response.ok) {
         return
@@ -87,6 +96,14 @@ const RemoteImageComponent = ({
 
   const isBase64OrDataUrl = src.startsWith('data:')
   const canShowSaveButton = application.isNativeMobileWeb() || isDesktopApplication() || isBase64OrDataUrl
+  const openableRemoteUrl = (() => {
+    try {
+      const parsed = new URL(src)
+      return parsed.protocol === 'https:' ? parsed.toString() : undefined
+    } catch {
+      return undefined
+    }
+  })()
 
   const ref = useRef<HTMLDivElement>(null)
   const [isSelected, setSelected] = useLexicalNodeSelection(nodeKey)
@@ -141,20 +158,61 @@ const RemoteImageComponent = ({
           e.stopPropagation()
         }}
       >
-        <SuperEmbeddedImage
-          src={src}
-          alt={alt}
-          alignment={format ?? ''}
-          onAlignmentChange={changeAlignment}
-          width={width}
-          onWidthChange={changeWidth}
-          caption={caption}
-          onCaptionChange={changeCaption}
-          float={float}
-          onFloatChange={changeFloat}
-          isSelected={isSelected}
-          onImageLoad={() => setDidImageLoad(true)}
-        />
+        {imageFailed ? (
+          <div
+            className="border-border bg-contrast flex min-h-32 flex-col items-center justify-center gap-2 rounded border p-4 text-center"
+            role="alert"
+          >
+            <span className="text-passive-0">This image could not be loaded.</span>
+            <div className="flex flex-wrap items-center justify-center gap-2" data-srn-print-exclude="true">
+              <button
+                type="button"
+                className="border-border hover:bg-default rounded border px-2.5 py-1.5 text-sm"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  setImageFailed(false)
+                }}
+              >
+                Retry
+              </button>
+              {openableRemoteUrl ? (
+                <a
+                  href={openableRemoteUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  referrerPolicy="no-referrer"
+                  className="border-border hover:bg-default rounded border px-2.5 py-1.5 text-sm"
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  Open image in a new tab
+                </a>
+              ) : null}
+            </div>
+          </div>
+        ) : (
+          <SuperEmbeddedImage
+            src={src}
+            alt={alt}
+            alignment={format ?? ''}
+            onAlignmentChange={changeAlignment}
+            width={width}
+            onWidthChange={changeWidth}
+            caption={caption}
+            onCaptionChange={changeCaption}
+            float={float}
+            onFloatChange={changeFloat}
+            isSelected={isSelected}
+            onImageLoad={() => {
+              setImageFailed(false)
+              setDidImageLoad(true)
+            }}
+            onImageError={() => {
+              setDidImageLoad(false)
+              setImageFailed(true)
+            }}
+            referrerPolicy="no-referrer"
+          />
+        )}
         {didImageLoad && canShowSaveButton && (
           <button
             className={classNames(

@@ -49,7 +49,7 @@ const DEFAULT_WEB_EMBED: WebEmbedData = { url: '' }
  *     warning about that pair only applies when the framed document's origin is
  *     the SAME as the embedder's origin (the frame could then reach back into
  *     the parent app's storage/DOM and lift the sandbox on itself). In this
- *     block the `src` is always an EXTERNAL http(s) origin (enforced and
+ *     block the `src` is always an EXTERNAL HTTPS origin (enforced and
  *     re-evaluated at render time by sanitizeWebEmbedUrl) that is cross-origin
  *     to Standard Notes, so
  *     `allow-same-origin` only ever grants the frame access to its OWN site's
@@ -190,7 +190,7 @@ function WebEmbedComponent({ data, nodeKey }: { data: WebEmbedData; nodeKey: Nod
           />
           {draft.trim() && !sanitizeWebEmbedUrl(draft) ? (
             <div className="text-danger mt-1 text-xs" data-srn-print-exclude="true">
-              Enter a valid external http(s) website URL. Standard Notes pages cannot be embedded.
+              Enter a valid external HTTPS website URL. Standard Notes pages cannot be embedded.
             </div>
           ) : null}
           <button
@@ -235,7 +235,7 @@ function WebEmbedComponent({ data, nodeKey }: { data: WebEmbedData; nodeKey: Nod
 
       {!safeUrl ? (
         <div className="text-danger p-2 text-sm" data-srn-print-exclude="true">
-          Enter a valid external http(s) website URL. Standard Notes pages cannot be embedded.
+          Enter a valid external HTTPS website URL. Standard Notes pages cannot be embedded.
         </div>
       ) : !loaded ? (
         /* Risk-alert placeholder card: shown FIRST instead of an auto-loaded
