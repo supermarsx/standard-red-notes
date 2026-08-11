@@ -96,6 +96,7 @@ COPY --from=deployment-identity --chown=0:0 --chmod=0555 /srn-deployment /usr/sh
 COPY --from=deployment-identity --chown=0:0 --chmod=0444 /srn-deployment/deployment.json /usr/share/srn-deployment/deployment.json
 LABEL org.opencontainers.image.revision="${SRN_DEPLOY_REVISION}"
 LABEL org.opencontainers.image.version="${SRN_DEPLOY_VERSION}"
+LABEL org.opencontainers.image.source="https://github.com/supermarsx/standard-red-notes"
 
 ENV NODE_ENV=production
 

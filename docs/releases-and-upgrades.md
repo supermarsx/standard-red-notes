@@ -14,16 +14,17 @@ complete product catalog.
 
 ## Release streams
 
-| Component    | Release shape                                                                                        |
-| ------------ | ---------------------------------------------------------------------------------------------------- |
-| Desktop      | macOS DMG/ZIP, Windows NSIS, Linux AppImage/DEB; x64 and arm64                                       |
-| Mobile       | Universal Android APK/AAB with four ABIs, plus an arm64-only iOS device artifact                     |
-| `srn-client` | Native/standalone artifacts for Windows, Linux, and macOS on x64/arm64                               |
-| `srn-server` | Native/standalone artifacts for Windows, Linux, and macOS on x64/arm64                               |
-| `srn-admin`  | Native tool artifacts for the six OS/architecture targets and an in-container wrapper                |
-| MCP bridge   | Release artifacts for the six OS/architecture targets                                                |
-| Home server  | Release artifacts for the six OS/architecture targets                                                |
-| OpenClaw     | One Node-any `.tgz`, manifest, checksums, and signed provenance; smoke-tested across the six targets |
+| Component             | Release shape                                                                                        |
+| --------------------- | ---------------------------------------------------------------------------------------------------- |
+| Desktop               | macOS DMG/ZIP, Windows NSIS, Linux AppImage/DEB; x64 and arm64                                       |
+| Mobile                | Universal Android APK/AAB with four ABIs, plus an arm64-only iOS device artifact                     |
+| `srn-client`          | Native/standalone artifacts for Windows, Linux, and macOS on x64/arm64                               |
+| `srn-server`          | Native/standalone artifacts for Windows, Linux, and macOS on x64/arm64                               |
+| `srn-admin`           | Native tool artifacts for the six OS/architecture targets and an in-container wrapper                |
+| MCP bridge            | Release artifacts for the six OS/architecture targets                                                |
+| Home server           | Release artifacts for the six OS/architecture targets                                                |
+| OpenClaw              | One Node-any `.tgz`, manifest, checksums, and signed provenance; smoke-tested across the six targets |
+| App/server containers | One coordinated, attested GHCR pair for `linux/amd64`, identified by source commit and CI run        |
 
 Desktop and the rolling `srn-*` streams use namespaced component tags. OpenClaw
 also supports explicit namespaced release tags. Non-desktop publishers are
@@ -53,6 +54,35 @@ gh attestation verify srn-openclaw-<version>-node-any.tgz \
 Do not install an asset merely because its filename contains the desired
 architecture. Use the release manifest and checksum.
 
+## Paired GHCR app/server containers
+
+Trusted-main CI promotes the exact container bytes that passed the required
+stack and hardening checks to these packages:
+
+- `ghcr.io/supermarsx/standard-red-notes-app`
+- `ghcr.io/supermarsx/standard-red-notes-server`
+
+Select the same unique, non-floating
+`sha-<40-character-commit>-run-<run-id>.<producer-attempt>` tag for both. The
+workflow does not publish floating `main` or `latest` tags. This initial stream
+is `linux/amd64` only. A tag is retry-stable rather than registry-enforced
+immutable: consume it only after `publish-containers` succeeds and its summary
+lists both immutable digest-qualified references. A failed partial tag is not a
+release.
+
+GHCR packages start private unless an owner changes their visibility. Private
+pulls require `docker login ghcr.io` with narrowly scoped `read:packages`
+access; public packages need no registry credentials. Production rollouts
+should use the two digest-qualified references from one successful workflow
+summary, because the app and server have different manifest digests even though
+they share one coordinated tag.
+
+The normal setup `--up` path remains a clean-checkout source build. Registry
+deployment is explicit and uses `APP_IMAGE`, `SERVER_IMAGE`, and
+`docker compose up --no-build`; see [Deploy a verified GHCR image
+pair](self-hosting.md#deploy-a-verified-ghcr-image-pair) for the complete pull,
+architecture, readiness, and rollback procedure.
+
 ## Desktop and mobile
 
 Desktop packages are produced by a complete builder matrix:
@@ -81,7 +111,8 @@ platform integrations such as the share target or automatic backups.
 4. Complete a restore test or confirm the most recent drill.
 5. Validate configuration with `srn-server config` and
    `docker compose config`.
-6. Pull/build the intended immutable versions.
+6. Pull/build the intended immutable versions. For GHCR, select both digest
+   references from one coordinated app/server run.
 7. Start dependencies, then application services.
 8. Wait for migrations and readiness.
 9. Run smoke checks for authentication, sync, files, revisions, WebSockets,
@@ -118,6 +149,11 @@ Application rollback and data rollback are different:
 When schema compatibility is unknown, stop writes, preserve the failed state,
 and restore the database and file store as one recovery point. Follow [Backups
 and Recovery](backups-and-recovery.md).
+
+For a container-only rollback, restore both previous app/server digest
+references together and start with `--no-build --pull never`. Never use
+`docker compose down -v`; it destroys the volumes needed for either a forward
+repair or a controlled data restore.
 
 ## Repository release contracts
 

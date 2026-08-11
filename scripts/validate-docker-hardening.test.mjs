@@ -126,6 +126,46 @@ test("ratchets immutable deployment identity across every container topology", (
   }
 });
 
+test("binds published images to their source and preserves operator image overrides", () => {
+  const valid = deploymentIdentityFixture();
+
+  for (const [field, current, replacement, expected] of [
+    [
+      "appDockerfileSource",
+      'LABEL org.opencontainers.image.source="https://github.com/supermarsx/standard-red-notes"',
+      "# app source label removed",
+      /app Dockerfile: must bind the published image to the canonical GitHub source exactly once/,
+    ],
+    [
+      "serverDockerfileSource",
+      'LABEL org.opencontainers.image.source="https://github.com/supermarsx/standard-red-notes"',
+      "# server source label removed",
+      /server Dockerfile: must bind the published image to the canonical GitHub source exactly once/,
+    ],
+    [
+      "multiComposeSource",
+      "image: ${APP_IMAGE:-standard-red-notes/app:local}",
+      "image: standard-red-notes/app:local",
+      /multi compose: app image must use APP_IMAGE with the standard-red-notes\/app:local source-build default exactly once/,
+    ],
+    [
+      "multiComposeSource",
+      "image: ${SERVER_IMAGE:-standard-red-notes/server:local}",
+      "image: standard-red-notes/server:local",
+      /multi compose: server image must use SERVER_IMAGE with the standard-red-notes\/server:local source-build default exactly once/,
+    ],
+  ]) {
+    const broken = {
+      ...valid,
+      [field]: valid[field].replace(current, replacement),
+    };
+    assert.match(
+      validateDeploymentIdentityContract(broken).join("\n"),
+      expected,
+    );
+  }
+});
+
 test(
   "multi entrypoint helper defeats direct prefixed deployment identity injection",
   { skip: process.platform === "win32" },

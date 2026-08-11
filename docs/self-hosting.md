@@ -29,6 +29,7 @@ Standard Notes. See the [license](../license.md) file for details.
 - [Choosing a domain and ports](#choosing-a-domain-and-ports)
 - [Running behind a reverse proxy](#running-behind-a-reverse-proxy)
 - [Start, stop, and upgrade](#start-stop-and-upgrade)
+- [Deploy a verified GHCR image pair](#deploy-a-verified-ghcr-image-pair)
 - [Where your data lives](#where-your-data-lives)
 - [Backup and restore](#backup-and-restore)
 - [Troubleshooting](#troubleshooting)
@@ -94,15 +95,15 @@ the core API without giving n8n a direct service-network route or Compose DNS
 address for the server, database, cache, or event emulator. Publicly exposed
 endpoints remain reachable like they are to any external client:
 
-| Service  | Image                       | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| -------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `app`    | built from `./app`          | The web client (nginx serving the built web app). Published on `APP_PORT` (default 3001).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `server` | built from `./server`       | The all-in-one Standard Notes server: api-gateway, auth, syncing-server, files, and revisions run together under supervisord (`MODE=self-hosted`). The realtime websocket gateway runs IN-PROCESS inside the api-gateway on the SAME port (no separate process). Internal-only — publishes NO host ports; the `app` front door proxies the API + websocket (container port 3000) and files (container port 3104) same-origin.                                                                                                                                                                     |
-| `db`     | `mariadb:12.3.2`            | Primary datastore for accounts, notes, sync, and revisions.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `cache`  | `redis:8.8.0-alpine`        | Cache, sessions, and pub/sub used for realtime delivery. Persists with append-only file.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Service  | Image                       | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| -------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app`    | built from `./app`          | The web client (nginx serving the built web app). Published on `APP_PORT` (default 3001).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `server` | built from `./server`       | The all-in-one Standard Notes server: api-gateway, auth, syncing-server, files, and revisions run together under supervisord (`MODE=self-hosted`). The realtime websocket gateway runs IN-PROCESS inside the api-gateway on the SAME port (no separate process). Internal-only — publishes NO host ports; the `app` front door proxies the API + websocket (container port 3000) and files (container port 3104) same-origin.                                                                                                                                                                           |
+| `db`     | `mariadb:12.3.2`            | Primary datastore for accounts, notes, sync, and revisions.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `cache`  | `redis:8.8.0-alpine`        | Cache, sessions, and pub/sub used for realtime delivery. Persists with append-only file.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `floci`  | `floci/floci:1.5.33-compat` | Local AWS SNS/SQS emulator ([floci.io](https://floci.io), MIT). The server publishes domain events to SNS topics; the in-container websocket-gateway and server workers consume SQS queues. Bootstrapped on every start (see below). Replaces LocalStack: no auth token required (LocalStack 2026.3.0+ demands one even for SNS/SQS, which is why we last pinned `localstack:4.4.0`), and it is far lighter (single native binary vs a Python runtime). It is LocalStack wire-compatible; the current LocalStack escape hatch and required auth-token migration are documented in `docker-compose.yml`. |
-| `mcp`    | built from `./mcp`          | Optional authenticated MCP bridge. It is the only service on both `standard-red-notes` and `workflows-mcp`: the first reaches the API and the second accepts n8n calls at `mcp:3010`. Only runs with the `mcp` profile. |
-| `n8n`    | `n8nio/n8n:2.32.6`          | Optional operator-managed automation service under the `workflows` profile. It joins only `workflows-mcp`, has independent authentication and a loopback-only development port; production uses a separate TLS hostname and proxy network. |
+| `mcp`    | built from `./mcp`          | Optional authenticated MCP bridge. It is the only service on both `standard-red-notes` and `workflows-mcp`: the first reaches the API and the second accepts n8n calls at `mcp:3010`. Only runs with the `mcp` profile.                                                                                                                                                                                                                                                                                                                                                                                 |
+| `n8n`    | `n8nio/n8n:2.32.6`          | Optional operator-managed automation service under the `workflows` profile. It joins only `workflows-mcp`, has independent authentication and a loopback-only development port; production uses a separate TLS hostname and proxy network.                                                                                                                                                                                                                                                                                                                                                              |
 
 ### The SNS/SQS bootstrap
 
@@ -162,28 +163,28 @@ These must be present and non-empty or the stack will not start. The secrets are
 **must** be exactly 32 bytes of hex (the auth service validates this and refuses
 to boot otherwise).
 
-| Variable                             | Purpose                                                                                                                                                                                                          | How it's generated                             |
-| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| `AUTH_JWT_SECRET`                    | Signs/verifies cross-service JWTs across the server and the websocket-gateway.                                                                                                                                   | `openssl rand -hex 32` / .NET RNG              |
-| `AUTH_SERVER_ENCRYPTION_SERVER_KEY`  | Server-side encryption key for sensitive auth data (e.g. MFA secrets). Must be exactly 32 bytes of hex.                                                                                                          | `openssl rand -hex 32` / .NET RNG              |
-| `VALET_TOKEN_SECRET`                 | Signs the short-lived valet tokens that authorize file uploads/downloads.                                                                                                                                        | `openssl rand -hex 32` / .NET RNG              |
-| `AUTH_SERVER_PSEUDO_KEY_PARAMS_KEY`  | Seed for pseudo key-params returned on login for unknown accounts (prevents user enumeration). The container auto-generates one if unset, but it would then change on every restart - so it is pinned in `.env`. | `openssl rand -hex 32` / .NET RNG              |
-| `WEBSOCKET_GATEWAY_INTERNAL_SECRET`  | Shared secret authenticating the server -> websocket-gateway internal calls. Must match on both.                                                                                                                 | `openssl rand -hex 32` / .NET RNG              |
-| `WEB_SOCKET_CONNECTION_TOKEN_SECRET` | Signs the short-lived tokens browsers use to open a realtime websocket connection.                                                                                                                               | `openssl rand -hex 32` / .NET RNG              |
+| Variable                                | Purpose                                                                                                                                                                                                                   | How it's generated                                                 |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `AUTH_JWT_SECRET`                       | Signs/verifies cross-service JWTs across the server and the websocket-gateway.                                                                                                                                            | `openssl rand -hex 32` / .NET RNG                                  |
+| `AUTH_SERVER_ENCRYPTION_SERVER_KEY`     | Server-side encryption key for sensitive auth data (e.g. MFA secrets). Must be exactly 32 bytes of hex.                                                                                                                   | `openssl rand -hex 32` / .NET RNG                                  |
+| `VALET_TOKEN_SECRET`                    | Signs the short-lived valet tokens that authorize file uploads/downloads.                                                                                                                                                 | `openssl rand -hex 32` / .NET RNG                                  |
+| `AUTH_SERVER_PSEUDO_KEY_PARAMS_KEY`     | Seed for pseudo key-params returned on login for unknown accounts (prevents user enumeration). The container auto-generates one if unset, but it would then change on every restart - so it is pinned in `.env`.          | `openssl rand -hex 32` / .NET RNG                                  |
+| `WEBSOCKET_GATEWAY_INTERNAL_SECRET`     | Shared secret authenticating the server -> websocket-gateway internal calls. Must match on both.                                                                                                                          | `openssl rand -hex 32` / .NET RNG                                  |
+| `WEB_SOCKET_CONNECTION_TOKEN_SECRET`    | Signs the short-lived tokens browsers use to open a realtime websocket connection.                                                                                                                                        | `openssl rand -hex 32` / .NET RNG                                  |
 | `ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY` | Encrypts optional guided ChatGPT/Codex pairing credentials in the persistent gateway store. Supported setup and LXC installers generate it once and preserve it automatically; never rotate it while pairing data exists. | Automatic installer secret; manual RNG only for custom deployments |
-| `MYSQL_PASSWORD`                     | Password for the application database user.                                                                                                                                                                      | `openssl rand -hex 32` / .NET RNG              |
-| `MYSQL_ROOT_PASSWORD`                | MariaDB root password.                                                                                                                                                                                           | `openssl rand -hex 32` / .NET RNG              |
-| `MYSQL_DATABASE`                     | Database name.                                                                                                                                                                                                   | Your choice (default `standard_notes_db`)      |
-| `MYSQL_USER`                         | Application database user.                                                                                                                                                                                       | Your choice (default `std_notes_user`)         |
-| `DB_CONNECTION_LIMIT`                | Per-process TypeORM connection pool ceiling.                                                                                                                                                                     | `20`                                           |
-| `DB_MAX_CONNECTIONS`                 | MariaDB server connection ceiling. Keep above total service pools.                                                                                                                                               | `150`                                          |
-| `DB_INNODB_BUFFER_POOL_SIZE`         | MariaDB InnoDB cache size. Tune with `DB_MEM_LIMIT`.                                                                                                                                                             | `512M`                                         |
-| `DB_MAX_ALLOWED_PACKET`              | Maximum MariaDB packet for large encrypted payloads.                                                                                                                                                             | `128M`                                         |
-| `APP_PORT`                           | The public app port. The nginx front door serves the web UI and proxies the API, files, and websocket same-origin. The optional workflows profile has a separate loopback-only development port.                  | Your choice (default `3001`)                   |
-| `PUBLIC_FILES_SERVER_URL`            | Public URL clients use to reach the files service. It is the app origin + `/files` (the front door's prefix-strip proxy).                                                                                        | Computed by the script                         |
-| `PUBLIC_URL`                         | Canonical app origin used to isolate external integration hostnames.                                                                                                                                             | Computed from the app origin                   |
-| `AUTH_SERVER_U2F_RELYING_PARTY_ID`   | WebAuthn/hardware-key relying-party ID (your host).                                                                                                                                                              | Computed (host of your domain, or `localhost`) |
-| `AUTH_SERVER_U2F_EXPECTED_ORIGIN`    | Allowed WebAuthn origins.                                                                                                                                                                                        | Computed from your domain + app port           |
+| `MYSQL_PASSWORD`                        | Password for the application database user.                                                                                                                                                                               | `openssl rand -hex 32` / .NET RNG                                  |
+| `MYSQL_ROOT_PASSWORD`                   | MariaDB root password.                                                                                                                                                                                                    | `openssl rand -hex 32` / .NET RNG                                  |
+| `MYSQL_DATABASE`                        | Database name.                                                                                                                                                                                                            | Your choice (default `standard_notes_db`)                          |
+| `MYSQL_USER`                            | Application database user.                                                                                                                                                                                                | Your choice (default `std_notes_user`)                             |
+| `DB_CONNECTION_LIMIT`                   | Per-process TypeORM connection pool ceiling.                                                                                                                                                                              | `20`                                                               |
+| `DB_MAX_CONNECTIONS`                    | MariaDB server connection ceiling. Keep above total service pools.                                                                                                                                                        | `150`                                                              |
+| `DB_INNODB_BUFFER_POOL_SIZE`            | MariaDB InnoDB cache size. Tune with `DB_MEM_LIMIT`.                                                                                                                                                                      | `512M`                                                             |
+| `DB_MAX_ALLOWED_PACKET`                 | Maximum MariaDB packet for large encrypted payloads.                                                                                                                                                                      | `128M`                                                             |
+| `APP_PORT`                              | The public app port. The nginx front door serves the web UI and proxies the API, files, and websocket same-origin. The optional workflows profile has a separate loopback-only development port.                          | Your choice (default `3001`)                                       |
+| `PUBLIC_FILES_SERVER_URL`               | Public URL clients use to reach the files service. It is the app origin + `/files` (the front door's prefix-strip proxy).                                                                                                 | Computed by the script                                             |
+| `PUBLIC_URL`                            | Canonical app origin used to isolate external integration hostnames.                                                                                                                                                      | Computed from the app origin                                       |
+| `AUTH_SERVER_U2F_RELYING_PARTY_ID`      | WebAuthn/hardware-key relying-party ID (your host).                                                                                                                                                                       | Computed (host of your domain, or `localhost`)                     |
+| `AUTH_SERVER_U2F_EXPECTED_ORIGIN`       | Allowed WebAuthn origins.                                                                                                                                                                                                 | Computed from your domain + app port                               |
 
 ### Cookie / domain variables
 
@@ -334,17 +335,17 @@ and one certificate.
 TLS is terminated at the proxy, so the containers receive plain HTTP. They must
 trust the proxy's forwarded headers and the cookie must be marked Secure:
 
-| Variable                           | Set to                                                | Why                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| ---------------------------------- | ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `TRUST_PROXY`                      | usually leave at the default                          | Makes the server honor `X-Forwarded-Proto` / `X-Forwarded-For` so `req.secure` and the client IP are correct. The default (`loopback, linklocal, uniquelocal`) trusts a proxy on loopback or a private/Docker network - which is exactly the case when the proxy is another container or runs on the same host. Set it to `true`, a hop count, or a CSV of proxy IPs/subnets only if your proxy reaches the stack from a public IP. |
+| Variable                           | Set to                                                | Why                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ---------------------------------- | ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `TRUST_PROXY`                      | usually leave at the default                          | Makes the server honor `X-Forwarded-Proto` / `X-Forwarded-For` so `req.secure` and the client IP are correct. The default (`loopback, linklocal, uniquelocal`) trusts a proxy on loopback or a private/Docker network - which is exactly the case when the proxy is another container or runs on the same host. Set it to `true`, a hop count, or a CSV of proxy IPs/subnets only if your proxy reaches the stack from a public IP.    |
 | `ENFORCE_HTTPS_FROM_PROXY`         | `true`                                                | Enables the validated outer-proxy contract: the app front door trusts one exact `X-Forwarded-Proto: http` or `https` value and preserves the proxy's sanitized `X-Forwarded-For` chain. `http` redirects to `PUBLIC_URL`; `https` enables HSTS. Startup fails without a pathless HTTPS origin and loopback bind. Keep the app port private, and make the outer proxy overwrite both headers so clients cannot enter the trusted chain. |
-| `APP_BIND_ADDRESS`                 | `127.0.0.1`                                           | Keeps the published inner HTTP port reachable only by a reverse proxy on the same host. Trusted-proxy mode refuses to start with any other declared bind. If Traefik reaches `app:8080` over a private Docker network, remove the Compose `ports` entry and leave this safety declaration at `127.0.0.1`. Direct HTTP/LAN mode retains the compatible `0.0.0.0` default only while proxy trust is disabled. |
-| `COOKIE_SECURE`                    | `true`                                                | The auth cookie is then only sent over HTTPS. Without this the browser may drop it on an HTTPS origin and every request 401s.                                                                                                                                                                                                                                                                                                       |
-| `COOKIE_DOMAIN`                    | your domain (e.g. `notes.example.com`)                | Scopes the auth cookie to your host. Leave empty only for bare-host/IP setups.                                                                                                                                                                                                                                                                                                                                                      |
-| `PUBLIC_FILES_SERVER_URL`          | `https://notes.example.com` (or a files subpath/host) | The public URL clients use to reach the files service - must be the HTTPS URL the browser can reach, routed by the proxy.                                                                                                                                                                                                                                                                                                           |
-| `PUBLIC_URL`                       | `https://notes.example.com`                           | Canonical app origin used for external-link hostname isolation; do not derive it from forwarded `Host`.                                                                                                                                                                                                                                                                                                                             |
-| `AUTH_SERVER_U2F_EXPECTED_ORIGIN`  | `https://notes.example.com`                           | WebAuthn/hardware-key origin must match the HTTPS origin.                                                                                                                                                                                                                                                                                                                                                                           |
-| `AUTH_SERVER_U2F_RELYING_PARTY_ID` | `notes.example.com`                                   | WebAuthn relying-party id (the host, no scheme/port).                                                                                                                                                                                                                                                                                                                                                                               |
+| `APP_BIND_ADDRESS`                 | `127.0.0.1`                                           | Keeps the published inner HTTP port reachable only by a reverse proxy on the same host. Trusted-proxy mode refuses to start with any other declared bind. If Traefik reaches `app:8080` over a private Docker network, remove the Compose `ports` entry and leave this safety declaration at `127.0.0.1`. Direct HTTP/LAN mode retains the compatible `0.0.0.0` default only while proxy trust is disabled.                            |
+| `COOKIE_SECURE`                    | `true`                                                | The auth cookie is then only sent over HTTPS. Without this the browser may drop it on an HTTPS origin and every request 401s.                                                                                                                                                                                                                                                                                                          |
+| `COOKIE_DOMAIN`                    | your domain (e.g. `notes.example.com`)                | Scopes the auth cookie to your host. Leave empty only for bare-host/IP setups.                                                                                                                                                                                                                                                                                                                                                         |
+| `PUBLIC_FILES_SERVER_URL`          | `https://notes.example.com` (or a files subpath/host) | The public URL clients use to reach the files service - must be the HTTPS URL the browser can reach, routed by the proxy.                                                                                                                                                                                                                                                                                                              |
+| `PUBLIC_URL`                       | `https://notes.example.com`                           | Canonical app origin used for external-link hostname isolation; do not derive it from forwarded `Host`.                                                                                                                                                                                                                                                                                                                                |
+| `AUTH_SERVER_U2F_EXPECTED_ORIGIN`  | `https://notes.example.com`                           | WebAuthn/hardware-key origin must match the HTTPS origin.                                                                                                                                                                                                                                                                                                                                                                              |
+| `AUTH_SERVER_U2F_RELYING_PARTY_ID` | `notes.example.com`                                   | WebAuthn relying-party id (the host, no scheme/port).                                                                                                                                                                                                                                                                                                                                                                                  |
 
 > Why `TRUST_PROXY`? Express only fills `req.secure` / `req.protocol` / `req.ip`
 > from the `X-Forwarded-*` headers when "trust proxy" is configured. Without it,
@@ -368,9 +369,9 @@ Route the whole hostname to the app front door (`app` container, host port
   through too. The browser opens `wss://<host>/sockets`. (`WEB_SOCKET_SERVER_URL`
   is container-internal - the api-gateway minting tokens against itself - and
   should stay at its default.)
-The web client does not hard-code an API origin - it defaults to its own origin
-and follows the gateway's advertised files URL - so single-origin routing works
-out of the box. n8n is deliberately not part of this path router.
+  The web client does not hard-code an API origin - it defaults to its own origin
+  and follows the gateway's advertised files URL - so single-origin routing works
+  out of the box. n8n is deliberately not part of this path router.
 
 `ENFORCE_HTTPS_FROM_PROXY=true` is defense in depth, not a TLS terminator. The
 outer proxy is the public trust boundary: it must overwrite (not append to)
@@ -616,6 +617,101 @@ git pull
 docker compose pull            # refresh mariadb / redis / floci images
 docker compose up -d --build   # rebuild app/server/gateway and restart
 ```
+
+This source-build path remains the default. `./scripts/setup.sh --up` and
+`./scripts/setup.ps1 -Up` still build the checked-out `app` and `server`
+Dockerfiles and verify that clean checkout's deployment identity; they do not
+silently select registry images.
+
+### Deploy a verified GHCR image pair
+
+Successful trusted-main CI publishes the exact app and server images that
+passed the disposable-stack and hardening gates. They are a coordinated pair:
+
+- `ghcr.io/supermarsx/standard-red-notes-app`
+- `ghcr.io/supermarsx/standard-red-notes-server`
+
+Both use the same unique, non-floating, retry-stable tag
+`sha-<40-character-commit>-run-<run-id>.<producer-attempt>`. No `main` or
+`latest` tag is published. The initial container stream is `linux/amd64` only;
+do not deploy it as a native arm64 image. Treat the pair as consumable only
+after the `publish-containers` job succeeds and its summary lists **both**
+digest-qualified references. A failed job can leave one retry-stable tag in
+GHCR; that partial tag is not a release or a deployment input.
+
+GHCR packages are private when first created unless the repository owner makes
+them public. Public packages can be pulled anonymously. For a private package,
+authenticate with a GitHub token that has only the required `read:packages`
+access:
+
+```bash
+printf '%s' "$GHCR_TOKEN" | docker login ghcr.io \
+  --username "$GITHUB_USER" --password-stdin
+unset GHCR_TOKEN
+```
+
+Start from a configured checkout whose database and application secrets are
+already present. Select one tag from one successful workflow summary for
+**both** images, pull the complete pair, prove its operating system and
+architecture, take the required data snapshot, and then start without invoking
+either Dockerfile:
+
+```bash
+export SRN_IMAGE_TAG='sha-<40-character-commit>-run-<run-id>.<producer-attempt>'
+export APP_IMAGE="ghcr.io/supermarsx/standard-red-notes-app:${SRN_IMAGE_TAG}"
+export SERVER_IMAGE="ghcr.io/supermarsx/standard-red-notes-server:${SRN_IMAGE_TAG}"
+
+docker compose pull app server
+test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$APP_IMAGE")" = linux/amd64
+test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$SERVER_IMAGE")" = linux/amd64
+
+# Back up MariaDB, uploads, server-data, and the protected environment first.
+docker compose up -d --no-build --pull never --wait --wait-timeout 900
+docker compose ps
+```
+
+For production, prefer the two digest-qualified references written to the
+successful workflow summary. The app and server manifest digests are different;
+copy both from the **same** coordinated run:
+
+```bash
+export APP_IMAGE='ghcr.io/supermarsx/standard-red-notes-app@sha256:<app-manifest-digest>'
+export SERVER_IMAGE='ghcr.io/supermarsx/standard-red-notes-server@sha256:<server-manifest-digest>'
+docker compose pull app server
+docker compose up -d --no-build --pull never --wait --wait-timeout 900
+```
+
+The successful CI job verifies each provenance bundle from GHCR. An operator
+can repeat that check for both selected digest references (while authenticated
+to a private package):
+
+```bash
+gh attestation verify "oci://${APP_IMAGE}" \
+  --bundle-from-oci \
+  --deny-self-hosted-runners \
+  --repo supermarsx/standard-red-notes \
+  --source-digest '<40-character-source-commit>' \
+  --source-ref refs/heads/main \
+  --signer-workflow supermarsx/standard-red-notes/.github/workflows/ci.yml
+
+gh attestation verify "oci://${SERVER_IMAGE}" \
+  --bundle-from-oci \
+  --deny-self-hosted-runners \
+  --repo supermarsx/standard-red-notes \
+  --source-digest '<40-character-source-commit>' \
+  --source-ref refs/heads/main \
+  --signer-workflow supermarsx/standard-red-notes/.github/workflows/ci.yml
+```
+
+Verify the exposed `/.well-known/srn-deployment.json` after startup. Its
+revision and version must agree with the selected pair. Keep the previous app
+and server digest references until the observation window passes.
+
+Rollback uses those two previous digest references with the same `pull` and
+`up --no-build --pull never` commands. Do not run `docker compose down -v`:
+application rollback must preserve the current volumes, while a database/files
+rollback is a separate recovery decision based on schema compatibility and the
+pre-upgrade snapshot.
 
 {% include safety-alert.html
   level="danger"
