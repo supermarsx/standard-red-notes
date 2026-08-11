@@ -139,6 +139,7 @@ async function mint(userUuid, sessionUuid) {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-internal-secret': INTERNAL_SECRET },
     body: JSON.stringify({ userUuid, sessionUuid }),
+    signal: AbortSignal.timeout(8_000),
   })
   if (!response.ok) {
     throw new Error(`token mint returned ${response.status}`)
@@ -155,7 +156,10 @@ function open(token) {
     const url = new URL(GATEWAY_WS)
     url.searchParams.set('authToken', token)
     const socket = new WebSocket(url)
-    const timeout = setTimeout(() => reject(new Error('websocket open timeout')), 8_000)
+    const timeout = setTimeout(() => {
+      socket.terminate()
+      reject(new Error('websocket open timeout'))
+    }, 8_000)
     socket.once('open', () => {
       clearTimeout(timeout)
       resolve(socket)
@@ -519,7 +523,7 @@ async function settle(...peers) {
 
 async function main() {
   const healthUrl = new URL(GATEWAY_HEALTH_PATH, GATEWAY_HTTP)
-  const health = await fetch(healthUrl)
+  const health = await fetch(healthUrl, { signal: AbortSignal.timeout(8_000) })
     .then((response) => response.status)
     .catch(() => 0)
   if (health !== 200) {
