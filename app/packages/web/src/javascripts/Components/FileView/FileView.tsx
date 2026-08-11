@@ -3,14 +3,15 @@ import { useCallback, useEffect, useState } from 'react'
 import ProtectedItemOverlay from '@/Components/ProtectedItemOverlay/ProtectedItemOverlay'
 import FileViewWithoutProtection from './FileViewWithoutProtection'
 import { FileViewProps } from './FileViewProps'
-import { ApplicationEvent } from '@standardnotes/snjs'
+import { useItemAuthorization } from '@/Hooks/useItemAuthorization'
 
 const FileView = ({ application, file }: FileViewProps) => {
   const [shouldShowProtectedOverlay, setShouldShowProtectedOverlay] = useState(false)
+  const isAuthorized = useItemAuthorization(application, file)
 
   useEffect(() => {
-    application.filesController.setShowProtectedOverlay(!application.isAuthorizedToRenderItem(file))
-  }, [application, file, application.filesController])
+    application.filesController.setShowProtectedOverlay(!isAuthorized)
+  }, [application.filesController, isAuthorized])
 
   useEffect(() => {
     setShouldShowProtectedOverlay(application.filesController.showProtectedOverlay)
@@ -23,24 +24,12 @@ const FileView = ({ application, file }: FileViewProps) => {
       showFileContents = await application.protections.authorizeItemAccess(file)
     }
 
-    if (showFileContents) {
+    if (showFileContents && application.isAuthorizedToRenderItem(file)) {
       setShouldShowProtectedOverlay(false)
     }
   }, [application, file])
 
-  useEffect(() => {
-    const disposer = application.addEventObserver(async (event) => {
-      if (event === ApplicationEvent.UnprotectedSessionBegan) {
-        setShouldShowProtectedOverlay(false)
-      } else if (event === ApplicationEvent.UnprotectedSessionExpired) {
-        setShouldShowProtectedOverlay(!application.isAuthorizedToRenderItem(file))
-      }
-    })
-
-    return disposer
-  }, [application, file])
-
-  return shouldShowProtectedOverlay ? (
+  return shouldShowProtectedOverlay || !isAuthorized ? (
     <ProtectedItemOverlay
       showAccountMenu={application.showAccountMenu}
       hasProtectionSources={application.hasProtectionSources()}

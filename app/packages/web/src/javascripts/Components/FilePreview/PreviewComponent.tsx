@@ -1,12 +1,11 @@
 import { WebApplication } from '@/Application/WebApplication'
 import { getBase64FromBlob } from '@/Utils'
 import { FileItem } from '@standardnotes/snjs'
-import { FunctionComponent, Suspense, useCallback, useEffect, useMemo, useRef } from 'react'
+import { FunctionComponent, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Spinner from '@/Components/Spinner/Spinner'
 import { lazyWithRetry } from '@/Utils/lazyWithRetry'
 import ComponentErrorBoundary from '@/Components/ComponentErrorBoundary/ComponentErrorBoundary'
 import Button from '../Button/Button'
-import { createObjectURLWithRef } from './CreateObjectURLWithRef'
 import ImagePreview from './ImagePreview'
 import { OptionalSuperEmbeddedImageProps } from './OptionalSuperEmbeddedImageProps'
 import { PreviewableTextFileTypes, RequiresNativeFilePreview } from './isFilePreviewable'
@@ -47,25 +46,53 @@ const PreviewComponent: FunctionComponent<Props> = ({
   pdfTarget,
 }) => {
   const { t } = useTranslation('files')
-  const objectUrlRef = useRef<string | undefined>(undefined)
-
-  const objectUrl = useMemo(() => {
-    return createObjectURLWithRef(file.mimeType, bytes, objectUrlRef)
-  }, [bytes, file.mimeType])
-
-  useEffect(() => {
-    const objectUrl = objectUrlRef.current
-
-    return () => {
-      if (objectUrl) {
-        URL.revokeObjectURL(objectUrl)
-        objectUrlRef.current = ''
-      }
-    }
-  }, [])
-
+  const mountedRef = useRef(true)
+  const currentInputRef = useRef({ file, bytes })
+  currentInputRef.current = { file, bytes }
   const isNativeMobileWeb = application.isNativeMobileWeb()
   const requiresNativePreview = RequiresNativeFilePreview.includes(file.mimeType)
+  const usesNativePreview = isNativeMobileWeb && requiresNativePreview
+  const isImage = file.mimeType.startsWith('image/')
+  const isVideo = file.mimeType.startsWith('video/')
+  const isAudio = file.mimeType.startsWith('audio/')
+  const isText = PreviewableTextFileTypes.includes(file.mimeType)
+  const isPDF = file.mimeType === 'application/pdf'
+  const requiresObjectUrl = !usesNativePreview && (isImage || isVideo || isAudio || (!isText && !isPDF))
+  const objectUrlInput = useMemo(
+    () => ({ byteLength: bytes.byteLength, mimeType: file.mimeType }),
+    [bytes, file.mimeType],
+  )
+  const [objectUrlState, setObjectUrlState] = useState<{
+    input: object
+    url: string
+  }>()
+  const objectUrl = requiresObjectUrl && objectUrlState?.input === objectUrlInput ? objectUrlState.url : undefined
+
+  useEffect(() => {
+    if (!requiresObjectUrl) {
+      setObjectUrlState(undefined)
+      return
+    }
+
+    const url = URL.createObjectURL(
+      new Blob([bytes as BlobPart], {
+        type: file.mimeType,
+      }),
+    )
+    setObjectUrlState({ input: objectUrlInput, url })
+
+    return () => {
+      URL.revokeObjectURL(url)
+    }
+  }, [bytes, file.mimeType, objectUrlInput, requiresObjectUrl])
+
+  useEffect(() => {
+    mountedRef.current = true
+
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
 
   const openNativeFilePreview = useCallback(async () => {
     if (!isNativeMobileWeb) {
@@ -78,14 +105,24 @@ const PreviewComponent: FunctionComponent<Props> = ({
       }),
     )
 
+    const currentInput = currentInputRef.current
+    if (
+      !mountedRef.current ||
+      currentInput.file !== file ||
+      currentInput.bytes !== bytes ||
+      !application.isAuthorizedToRenderItem(file)
+    ) {
+      return
+    }
+
     const { name, ext } = parseFileName(file.name)
     const sanitizedName = sanitizeFileName(name)
     const filename = `${sanitizedName}.${ext}`
 
     void application.mobileDevice.previewFile(fileBase64, filename)
-  }, [application, bytes, file.mimeType, file.name, isNativeMobileWeb])
+  }, [application, bytes, file, isNativeMobileWeb])
 
-  if (isNativeMobileWeb && requiresNativePreview) {
+  if (usesNativePreview) {
     return (
       <div className="flex flex-grow flex-col items-center justify-center">
         <div className="max-w-[30ch] text-center text-base font-bold">{t('externalAppOnly')}</div>
@@ -96,10 +133,18 @@ const PreviewComponent: FunctionComponent<Props> = ({
     )
   }
 
-  if (file.mimeType.startsWith('image/')) {
+  if (requiresObjectUrl && !objectUrl) {
+    return (
+      <div className="flex flex-grow items-center justify-center">
+        <Spinner className="h-6 w-6" />
+      </div>
+    )
+  }
+
+  if (isImage) {
     return (
       <ImagePreview
-        objectUrl={objectUrl}
+        objectUrl={objectUrl!}
         isEmbeddedInSuper={isEmbeddedInSuper}
         imageZoomLevel={imageZoomLevel}
         setImageZoomLevel={setImageZoomLevel}
@@ -116,26 +161,24 @@ const PreviewComponent: FunctionComponent<Props> = ({
     )
   }
 
-  if (file.mimeType.startsWith('video/')) {
+  if (isVideo) {
     return (
       <VideoPreview
         file={file}
         filesController={application.filesController}
-        objectUrl={objectUrl}
+        objectUrl={objectUrl!}
         isEmbeddedInSuper={isEmbeddedInSuper}
       />
     )
   }
 
-  if (file.mimeType.startsWith('audio/')) {
-    return <AudioPreview file={file} filesController={application.filesController} objectUrl={objectUrl} />
+  if (isAudio) {
+    return <AudioPreview file={file} filesController={application.filesController} objectUrl={objectUrl!} />
   }
 
-  if (PreviewableTextFileTypes.includes(file.mimeType)) {
+  if (isText) {
     return <TextPreview bytes={bytes} />
   }
-
-  const isPDF = file.mimeType === 'application/pdf'
 
   if (isPDF) {
     return (
@@ -160,7 +203,7 @@ const PreviewComponent: FunctionComponent<Props> = ({
     )
   }
 
-  return <object className="h-full w-full" data={objectUrl} />
+  return <object className="h-full w-full" data={objectUrl!} />
 }
 
 export default PreviewComponent

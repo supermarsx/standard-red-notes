@@ -752,7 +752,21 @@ export class WebApplication extends SNApplication implements WebApplicationInter
   }
 
   isAuthorizedToRenderItem(item: DecryptedItem): boolean {
-    if (item.protected && this.hasProtectionSources()) {
+    const authoritativeItem = this.items.isTemplateItem(item) ? item : this.items.findItem<DecryptedItem>(item.uuid)
+    if (!authoritativeItem) {
+      return false
+    }
+
+    if (authoritativeItem.key_system_identifier !== undefined) {
+      const vault = this.vaults.getItemVault(authoritativeItem)
+      if (!vault || this.vaultLocks.isVaultLocked(vault)) {
+        // A retained item whose vault listing/key is gone must never fall back
+        // to ordinary-item rendering while removal/lock lifecycle cleanup runs.
+        return false
+      }
+    }
+
+    if (authoritativeItem.protected && this.hasProtectionSources()) {
       return this.protections.hasUnprotectedAccessSession()
     }
 

@@ -224,7 +224,7 @@ export class WebDependencies extends DependencyContainer {
     })
 
     this.bind(Web_TYPES.FilePreviewModalController, () => {
-      return new FilePreviewModalController(application.items)
+      return new FilePreviewModalController(application.items, application.vaultLocks, application.vaults)
     })
 
     this.bind(Web_TYPES.PaneController, () => {
