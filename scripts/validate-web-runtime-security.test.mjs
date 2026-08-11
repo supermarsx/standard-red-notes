@@ -30,6 +30,11 @@ const webPackage = JSON.parse(read("app/packages/web/package.json"));
 const portableBundleAssertion = read(
   "app/packages/web/scripts/AssertPortableBundle.mjs",
 );
+const composeSources = [
+  read("docker-compose.yml"),
+  read("docker-compose.single.yml"),
+];
+const selfHostingGuide = read("docs/self-hosting.md");
 
 function policyForLocation(source, locationPattern) {
   const block = source.match(
@@ -128,6 +133,240 @@ test("the app and isolated sandbox use distinct, least-privilege CSPs", () => {
       !sandboxPolicy.includes("script-src 'unsafe-inline'"),
       relativePath,
     );
+  }
+});
+
+test("trusted proxy transport is opt-in, exact-value only, and HSTS is HTTPS-only", () => {
+  assert.match(
+    selfHostingGuide,
+    /return 308 https:\/\/notes\.example\.com\$request_uri;/,
+  );
+  assert.match(
+    selfHostingGuide,
+    /add_header Strict-Transport-Security "max-age=31536000" always;/,
+  );
+  const documentedSocketProxy = selfHostingGuide.match(
+    /location \/sockets \{([\s\S]*?)\n    \}/,
+  )?.[1];
+  assert.ok(documentedSocketProxy, "documented outer websocket location missing");
+  for (const header of [
+    "Host              $host",
+    "X-Real-IP         $remote_addr",
+    "X-Forwarded-For   $proxy_add_x_forwarded_for",
+    "X-Forwarded-Proto https",
+    "X-Forwarded-Host  $host",
+    "Upgrade    $http_upgrade",
+    "Connection $connection_upgrade",
+  ]) {
+    assert.ok(
+      documentedSocketProxy.includes(`proxy_set_header ${header};`),
+      `documented websocket proxy must set ${header}`,
+    );
+  }
+  for (const source of composeSources) {
+    assert.match(
+      source,
+      /APP_BIND_ADDRESS: \$\{APP_BIND_ADDRESS:-0\.0\.0\.0\}/,
+    );
+    assert.match(
+      source,
+      /"\$\{APP_BIND_ADDRESS:-0\.0\.0\.0\}:\$\{APP_PORT:-3001\}:8080"/,
+    );
+  }
+  for (const relativePath of [
+    "app/docker/nginx.conf",
+    "app/docker/single/nginx.conf",
+  ]) {
+    const source = read(relativePath);
+    assert.match(
+      source,
+      /map "disabled" \$srn_proxy_https_mode \{ default disabled; \}/,
+      relativePath,
+    );
+    assert.match(
+      source,
+      /map "https:\/\/invalid\.invalid" \$srn_https_public_origin \{ default "https:\/\/invalid\.invalid"; \}/,
+      relativePath,
+    );
+
+    const transportMap = source.match(
+      /map "\$srn_proxy_https_mode:\$http_x_forwarded_proto" \$srn_proxy_transport \{([\s\S]*?)\n\}/,
+    )?.[1];
+    assert.ok(transportMap, `${relativePath}: transport map missing`);
+    const rules = [...transportMap.matchAll(/~\^([^$]+)\$\s+(\w+)\s*;/g)].map(
+      ([, pattern, result]) => [new RegExp(`^${pattern}$`), result],
+    );
+    const resolve = (mode, header = "") =>
+      rules.find(([pattern]) => pattern.test(`${mode}:${header}`))?.[1] ??
+      "direct";
+    assert.equal(resolve("enabled", "http"), "forwarded_http", relativePath);
+    assert.equal(resolve("enabled", "https"), "forwarded_https", relativePath);
+    for (const [mode, header] of [
+      ["disabled", "http"],
+      ["disabled", "https"],
+      ["enabled", ""],
+      ["enabled", "HTTP"],
+      ["enabled", "https,http"],
+      ["enabled", "ftp"],
+    ]) {
+      assert.equal(
+        resolve(mode, header),
+        "direct",
+        `${relativePath}: ${mode}/${header}`,
+      );
+    }
+
+    assert.match(
+      source,
+      /map "\$srn_proxy_transport:\$uri" \$srn_redirect_to_https \{[\s\S]*~\^forwarded_http:\/health\$\s+0;[\s\S]*~\^forwarded_http:\/healthcheck\(\/\|\$\)\s+0;[\s\S]*~\^forwarded_http:\s+1;/,
+      relativePath,
+    );
+    assert.match(
+      source,
+      /return 308 \$srn_https_public_origin\$request_uri;/,
+      relativePath,
+    );
+    assert.equal(
+      (
+        source.match(
+          /proxy_set_header X-Forwarded-Proto \$srn_forwarded_proto;/g,
+        ) ?? []
+      ).length,
+      4,
+      relativePath,
+    );
+    assert.doesNotMatch(
+      source,
+      /proxy_set_header X-Forwarded-Proto \$(?:http_x_forwarded_proto|scheme);/,
+      relativePath,
+    );
+    assert.match(
+      source,
+      /map \$srn_proxy_transport \$srn_hsts_header \{[\s\S]*forwarded_https\s+"max-age=31536000";/,
+      relativePath,
+    );
+    assert.match(
+      source,
+      /gzip_types[^\n]+;[\s\S]{0,300}?add_header Strict-Transport-Security \$srn_hsts_header always;/,
+      `${relativePath}: proxied API responses must inherit conditional HSTS`,
+    );
+    assert.match(
+      source,
+      /location = \/health \{[\s\S]*?add_header Strict-Transport-Security \$srn_hsts_header always;[\s\S]*?return 200 "ok\\n";/,
+      `${relativePath}: health must retain HSTS when reached through trusted HTTPS`,
+    );
+    assert.ok(
+      (
+        source.match(
+          /add_header Strict-Transport-Security \$srn_hsts_header always;/g,
+        ) ?? []
+      ).length >= 4,
+      `${relativePath}: server, health, SPA and sandbox HSTS coverage is required`,
+    );
+    assert.doesNotMatch(source, /includeSubDomains|\bpreload\b/, relativePath);
+  }
+});
+
+test("runtime proxy transport templating is idempotent and rejects unsafe public origins", () => {
+  const temporaryDirectory = mkdtempSync(
+    path.join(root, ".tmp-proxy-transport-"),
+  );
+  const relative = (filePath) =>
+    path.relative(root, filePath).split(path.sep).join("/");
+  const indexPath = path.join(temporaryDirectory, "index.html");
+  const configPath = path.join(temporaryDirectory, "nginx.conf");
+
+  const run = (enforce, publicUrl, bindAddress = "127.0.0.1") =>
+    spawnSync("sh", ["app/docker/docker-entrypoint.sh"], {
+      cwd: root,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        ENFORCE_HTTPS_FROM_PROXY: enforce,
+        PUBLIC_URL: publicUrl,
+        APP_BIND_ADDRESS: bindAddress,
+        SRN_ENTRYPOINT_INDEX_HTML: relative(indexPath),
+        SRN_ENTRYPOINT_NGINX_CONF: relative(configPath),
+      },
+    });
+
+  try {
+    writeFileSync(indexPath, read("app/packages/web/src/index.html"));
+    writeFileSync(configPath, read("app/docker/nginx.conf"));
+
+    const enabled = run("true", "https://notes.example.test:8443");
+    assert.equal(enabled.status, 0, enabled.stderr || enabled.error?.message);
+    assert.match(enabled.stdout, /trusted proxy HTTPS mode: enabled/);
+    let configured = readFileSync(configPath, "utf8");
+    assert.match(
+      configured,
+      /map "enabled" \$srn_proxy_https_mode \{ default enabled; \}/,
+    );
+    assert.match(
+      configured,
+      /map "https:\/\/notes\.example\.test:8443" \$srn_https_public_origin \{ default "https:\/\/notes\.example\.test:8443"; \}/,
+    );
+
+    const disabledAgain = run("false", "https://ignored.example.test");
+    assert.equal(
+      disabledAgain.status,
+      0,
+      disabledAgain.stderr || disabledAgain.error?.message,
+    );
+    configured = readFileSync(configPath, "utf8");
+    assert.match(
+      configured,
+      /map "disabled" \$srn_proxy_https_mode \{ default disabled; \}/,
+    );
+    assert.match(
+      configured,
+      /map "https:\/\/invalid\.invalid" \$srn_https_public_origin/,
+    );
+    assert.doesNotMatch(
+      configured,
+      /notes\.example\.test|ignored\.example\.test/,
+    );
+
+    for (const publicUrl of [
+      "",
+      "http://notes.example.test",
+      "https://",
+      "https://.example.test",
+      "https://example..test",
+      "https://user@example.test",
+      "https://notes.example.test/path",
+      "https://notes.example.test?query=1",
+      "https://notes.example.test#fragment",
+      "https://notes.example.test:0",
+      "https://notes.example.test:65536",
+      "https://notes.example.test\r\nX-Injected: yes",
+    ]) {
+      writeFileSync(configPath, read("app/docker/nginx.conf"));
+      const rejected = run("true", publicUrl);
+      assert.notEqual(
+        rejected.status,
+        0,
+        `unexpectedly accepted ${JSON.stringify(publicUrl)}`,
+      );
+      assert.match(
+        rejected.stderr,
+        /requires PUBLIC_URL to be one canonical HTTPS origin/,
+      );
+    }
+
+    writeFileSync(configPath, read("app/docker/nginx.conf"));
+    const invalidMode = run("TRUE", "https://notes.example.test");
+    assert.notEqual(invalidMode.status, 0);
+    assert.match(invalidMode.stderr, /must be exactly true or false/);
+
+    for (const bindAddress of ["0.0.0.0", "192.0.2.10", ""]) {
+      writeFileSync(configPath, read("app/docker/nginx.conf"));
+      const unsafeBind = run("true", "https://notes.example.test", bindAddress);
+      assert.notEqual(unsafeBind.status, 0);
+      assert.match(unsafeBind.stderr, /requires APP_BIND_ADDRESS=127\.0\.0\.1/);
+    }
+  } finally {
+    rmSync(temporaryDirectory, { recursive: true, force: true });
   }
 });
 

@@ -93,6 +93,10 @@ services:
       OCR_ENABLED: ${OCR_ENABLED:-false}
       OCR_DEFAULT_LANGUAGE: ${OCR_DEFAULT_LANGUAGE:-eng}
       SYNC_SERVER: ${SYNC_SERVER:-}
+      # Enables trusted X-Forwarded-Proto redirect/HSTS handling in the nginx
+      # front door only when PUBLIC_URL is a validated canonical HTTPS origin.
+      ENFORCE_HTTPS_FROM_PROXY: ${ENFORCE_HTTPS_FROM_PROXY:-false}
+      APP_BIND_ADDRESS: ${APP_BIND_ADDRESS:-0.0.0.0}
 
       # --- Optional access gating / rate limiting ------------------------------
       CORS_ORIGIN_STRICT_MODE_ENABLED: ${CORS_ORIGIN_STRICT_MODE_ENABLED:-}
@@ -154,7 +158,7 @@ services:
       ASSISTANT_OPENAI_EXTRA_HEADERS: ${ASSISTANT_OPENAI_EXTRA_HEADERS:-}
 
     ports:
-      - "${APP_PORT:-3001}:8080"
+      - "${APP_BIND_ADDRESS:-0.0.0.0}:${APP_PORT:-3001}:8080"
 
     # Persistent state: sqlite DB, uploaded files, generated secrets, admin
     # overrides + feature JSON stores all live under /data.

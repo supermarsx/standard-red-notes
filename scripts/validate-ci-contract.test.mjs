@@ -161,6 +161,8 @@ test("fresh setup generates exactly one persistent 32-byte assistant pairing key
         /^ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=([0-9a-f]{64})$/gm,
       ) ?? [];
     assert.equal(assignments.length, 1);
+    assert.match(environment, /^ENFORCE_HTTPS_FROM_PROXY=false$/m);
+    assert.match(environment, /^APP_BIND_ADDRESS=0\.0\.0\.0$/m);
   } finally {
     rmSync(fixture.temporary, { recursive: true, force: true });
   }

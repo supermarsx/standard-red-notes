@@ -16,6 +16,10 @@ const baseline = Object.freeze({
   readme: readFileSync(path.join(root, "deploy/lxc/README.md"), "utf8"),
 });
 
+function occurrences(source, fragment) {
+  return source.split(fragment).length - 1;
+}
+
 function validate(files) {
   const errors = [];
   const { installer, release, unit, readme } = files;
@@ -141,6 +145,27 @@ function validate(files) {
   }
   if (!readme.includes("--rollback") || !readme.includes("EXPECTED_COMMIT")) {
     errors.push("operators need documented pinning and rollback procedures");
+  }
+  if (
+    !installer.includes('PUBLIC_URL_CONFIG_FILE="${PUBLIC_URL_CONFIG_DIR}/public-url"') ||
+    !installer.includes('validate_public_url_origin "${PUBLIC_URL}"') ||
+    !installer.includes("PUBLIC_URL=${PUBLIC_URL}")
+  ) {
+    errors.push("LXC upgrades must persist, validate, and propagate PUBLIC_URL");
+  }
+  if (
+    installer.includes('. "${PUBLIC_URL_CONFIG_FILE}"') ||
+    installer.includes('source "${PUBLIC_URL_CONFIG_FILE}"')
+  ) {
+    errors.push("persisted PUBLIC_URL must remain inert data, never sourced as shell");
+  }
+  if (
+    occurrences(installer, "proxy_set_header X-Forwarded-Proto \\$scheme;") !== 3 ||
+    installer.includes("ENFORCE_HTTPS_FROM_PROXY") ||
+    installer.includes("srn_hsts_header") ||
+    installer.includes("srn_redirect_to_https")
+  ) {
+    errors.push("LXC must leave HTTPS redirect and HSTS enforcement to its outer proxy");
   }
   return errors;
 }
@@ -338,6 +363,43 @@ test("LXC staged and live acceptance reject liveness-only probes", () => {
       ),
     ).join("\n"),
     /live acceptance must use aggregate readiness/,
+  );
+});
+
+test("LXC contract persists public origin without trusting forwarded transport", () => {
+  for (const [from, to, error] of [
+    [
+      'PUBLIC_URL_CONFIG_FILE="${PUBLIC_URL_CONFIG_DIR}/public-url"',
+      'PUBLIC_URL_CONFIG_FILE="${DEPLOY_ROOT}/public-url"',
+      "persist, validate, and propagate PUBLIC_URL",
+    ],
+    [
+      'validate_public_url_origin "${PUBLIC_URL}"',
+      'test -n "${PUBLIC_URL}"',
+      "persist, validate, and propagate PUBLIC_URL",
+    ],
+    [
+      "PUBLIC_URL=${PUBLIC_URL}",
+      "PUBLIC_URL=",
+      "persist, validate, and propagate PUBLIC_URL",
+    ],
+    [
+      "proxy_set_header X-Forwarded-Proto \\$scheme;",
+      "proxy_set_header X-Forwarded-Proto \\$http_x_forwarded_proto;",
+      "outer proxy",
+    ],
+  ]) {
+    assert.match(
+      validate(mutate("installer", from, to)).join("\n"),
+      new RegExp(error),
+    );
+  }
+  assert.match(
+    validate({
+      ...baseline,
+      installer: `${baseline.installer}\n. "\${PUBLIC_URL_CONFIG_FILE}"`,
+    }).join("\n"),
+    /never sourced as shell/,
   );
 });
 

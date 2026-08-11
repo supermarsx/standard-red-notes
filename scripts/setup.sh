@@ -338,10 +338,12 @@ prompt DOMAIN "Public domain or hostname (blank = localhost):" ""
 USE_HTTPS="false"
 COOKIE_SECURE="false"
 COOKIE_DOMAIN=""
+APP_BIND_ADDRESS="0.0.0.0"
 if [ -n "$DOMAIN" ]; then
   if confirm "Is this domain served over HTTPS (recommended for real deployments)?"; then
     USE_HTTPS="true"
     COOKIE_SECURE="true"
+    APP_BIND_ADDRESS="127.0.0.1"
   fi
   COOKIE_DOMAIN="$DOMAIN"
 fi
@@ -452,6 +454,9 @@ cat > "$ENV_FILE" <<EOF
 # the API gateway and files service are internal-only (no host ports). Optional
 # profiles may bind development-only ports to host loopback.
 APP_PORT=${APP_PORT}
+# Keep the inner HTTP front door reachable only by a same-host reverse proxy.
+# Direct LAN users may deliberately change this only while proxy HTTPS trust is off.
+APP_BIND_ADDRESS=${APP_BIND_ADDRESS}
 
 # ----- Database (MariaDB) ----------------------------------------------------
 MYSQL_DATABASE=${MYSQL_DATABASE}
@@ -486,6 +491,9 @@ COOKIE_DOMAIN=${COOKIE_DOMAIN}
 COOKIE_SECURE=${COOKIE_SECURE}
 PUBLIC_FILES_SERVER_URL=${PUBLIC_FILES_SERVER_URL}
 PUBLIC_URL=${PUBLIC_URL}
+# Trust X-Forwarded-Proto only for the HTTPS reverse-proxy mode explicitly
+# selected above. Local/direct HTTP installs keep this disabled.
+ENFORCE_HTTPS_FROM_PROXY=${USE_HTTPS}
 
 # WebAuthn / hardware-key (U2F) relying party. Should match where the app is served.
 AUTH_SERVER_U2F_RELYING_PARTY_ID=${U2F_RP_ID}

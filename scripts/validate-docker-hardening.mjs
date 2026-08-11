@@ -821,7 +821,10 @@ export function validatePairingCallbackNginxContract(
       "forward client chain",
       /\bproxy_set_header\s+X-Forwarded-For\s+\$proxy_add_x_forwarded_for\s*;/,
     ],
-    ["forward scheme", /\bproxy_set_header\s+X-Forwarded-Proto\s+\$scheme\s*;/],
+    [
+      "forward validated scheme",
+      /\bproxy_set_header\s+X-Forwarded-Proto\s+\$srn_forwarded_proto\s*;/,
+    ],
     [
       "forward client address",
       /\bproxy_set_header\s+X-Real-IP\s+\$remote_addr\s*;/,

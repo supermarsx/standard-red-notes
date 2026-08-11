@@ -27,6 +27,7 @@
 #   APP_USER     service account               (default: standard-red-notes)
 #   HTTP_PORT    nginx listen port                                (default: 80)
 #   NODE_MAJOR   Node.js major version                            (default: 26)
+#   PUBLIC_URL   canonical browser-facing origin (persisted across upgrades)
 # =============================================================================
 set -euo pipefail
 
@@ -38,6 +39,8 @@ DATA_DIR="${DATA_DIR:-/var/lib/standard-red-notes}"
 APP_USER="${APP_USER:-standard-red-notes}"
 HTTP_PORT="${HTTP_PORT:-80}"
 NODE_MAJOR="${NODE_MAJOR:-26}"
+PUBLIC_URL_WAS_SET="${PUBLIC_URL+x}"
+PUBLIC_URL="${PUBLIC_URL:-}"
 
 RELEASES_DIR="${APP_DIR}/.releases"
 CURRENT_LINK="${APP_DIR}/current"
@@ -54,6 +57,19 @@ UNIT_SRC_DIR="$(cd "$(dirname "$0")" && pwd)"
 log() { printf '\n\033[1;32m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33mWARN:\033[0m %s\n' "$*" >&2; }
 die() { printf '\033[1;31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
+
+validate_public_url_origin() {
+  PUBLIC_URL_CANDIDATE="${1:-}" "${NODE_BIN}" -e '
+    const value = process.env.PUBLIC_URL_CANDIDATE ?? ""
+    if (value === "") process.exit(0)
+    if (value.length > 2048) process.exit(1)
+    let parsed
+    try { parsed = new URL(value) } catch { process.exit(1) }
+    if (!new Set(["http:", "https:"]).has(parsed.protocol)) process.exit(1)
+    if (!parsed.hostname || parsed.username || parsed.password) process.exit(1)
+    if (parsed.origin !== value) process.exit(1)
+  '
+}
 
 [ "$(id -u)" -eq 0 ] || die "Run as root (needs to install packages + a systemd unit)."
 command -v systemctl >/dev/null 2>&1 || die "systemd is required (run inside a system container, not an app container)."
@@ -128,6 +144,41 @@ if ! id "${APP_USER}" >/dev/null 2>&1; then
 fi
 mkdir -p "${APP_DIR}" "${DATA_DIR}/database" "${DATA_DIR}/uploads" \
          "${DATA_DIR}/caldav" "${DATA_DIR}/reminder-delivery" "${RELEASES_DIR}"
+
+# PUBLIC_URL is operational identity, not release content. Persist it outside
+# the immutable release tree so upgrades cannot silently clear assistant OAuth,
+# workflow-host isolation, or any other canonical-origin consumer. Never source
+# this file as shell; it is parsed as one inert line and validated as an origin.
+PUBLIC_URL_CONFIG_DIR="/etc/standard-red-notes"
+PUBLIC_URL_CONFIG_FILE="${PUBLIC_URL_CONFIG_DIR}/public-url"
+install -d -o root -g root -m 0755 "${PUBLIC_URL_CONFIG_DIR}"
+if [ -z "${PUBLIC_URL_WAS_SET}" ] && [ -e "${PUBLIC_URL_CONFIG_FILE}" ]; then
+  [ -f "${PUBLIC_URL_CONFIG_FILE}" ] && [ ! -L "${PUBLIC_URL_CONFIG_FILE}" ] || \
+    die "Persisted PUBLIC_URL must be a regular non-symlink file: ${PUBLIC_URL_CONFIG_FILE}"
+  [ "$(stat -c '%u:%a' "${PUBLIC_URL_CONFIG_FILE}")" = "0:600" ] || \
+    die "Persisted PUBLIC_URL must be owned by root with mode 600: ${PUBLIC_URL_CONFIG_FILE}"
+  mapfile -t PUBLIC_URL_LINES < "${PUBLIC_URL_CONFIG_FILE}"
+  [ "${#PUBLIC_URL_LINES[@]}" -eq 1 ] || \
+    die "Persisted PUBLIC_URL must contain exactly one line."
+  PUBLIC_URL="${PUBLIC_URL_LINES[0]}"
+elif [ -z "${PUBLIC_URL_WAS_SET}" ] && [ -f "${CURRENT_LINK}/server/packages/home-server/.env" ]; then
+  mapfile -t PUBLIC_URL_LINES < <(grep -E '^PUBLIC_URL=' "${CURRENT_LINK}/server/packages/home-server/.env" || true)
+  [ "${#PUBLIC_URL_LINES[@]}" -le 1 ] || die "Existing home-server .env contains duplicate PUBLIC_URL values."
+  if [ "${#PUBLIC_URL_LINES[@]}" -eq 1 ]; then
+    PUBLIC_URL="${PUBLIC_URL_LINES[0]#PUBLIC_URL=}"
+    PUBLIC_URL_WAS_SET="migrated"
+  fi
+fi
+validate_public_url_origin "${PUBLIC_URL}" || \
+  die "PUBLIC_URL must be empty or one canonical HTTP(S) origin with no path, credentials, query, or fragment."
+if [ -n "${PUBLIC_URL_WAS_SET}" ]; then
+  PUBLIC_URL_TEMP="$(mktemp "${PUBLIC_URL_CONFIG_DIR}/public-url.new.XXXXXX")"
+  printf '%s\n' "${PUBLIC_URL}" > "${PUBLIC_URL_TEMP}"
+  chown root:root "${PUBLIC_URL_TEMP}"
+  chmod 0600 "${PUBLIC_URL_TEMP}"
+  mv -Tf -- "${PUBLIC_URL_TEMP}" "${PUBLIC_URL_CONFIG_FILE}"
+  log "Persisted canonical PUBLIC_URL in ${PUBLIC_URL_CONFIG_FILE}"
+fi
 
 # -----------------------------------------------------------------------------
 log "Resolving an immutable source commit"
@@ -236,6 +287,7 @@ COOKIE_DOMAIN=${COOKIE_DOMAIN:-}
 COOKIE_SAME_SITE=${COOKIE_SAME_SITE:-Lax}
 COOKIE_SECURE=${COOKIE_SECURE:-false}
 TRUST_PROXY=${TRUST_PROXY:-loopback, linklocal, uniquelocal}
+PUBLIC_URL=${PUBLIC_URL}
 STANDARD_RED_FEATURES_MODE=${STANDARD_RED_FEATURES_MODE:-included}
 STANDARD_RED_ENTITLEMENT_MODE=${STANDARD_RED_ENTITLEMENT_MODE:-included}
 STANDARD_RED_FULL_FEATURE_DURATION_DAYS=${STANDARD_RED_FULL_FEATURE_DURATION_DAYS:-36500}
@@ -283,7 +335,6 @@ server {
 
   gzip on;
   gzip_types text/plain text/css application/javascript application/json image/svg+xml;
-
   location = /health { access_log off; add_header Content-Type text/plain; return 200 "ok\n"; }
 
   location /sockets {

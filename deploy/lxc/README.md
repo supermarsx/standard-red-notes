@@ -151,10 +151,24 @@ systemctl start standard-red-notes
 ## HTTPS
 
 Terminate TLS at a reverse proxy in front (Caddy/nginx/Traefik on the host or
-another container) pointing at `http://<container-ip>:<HTTP_PORT>`, then set in
-the home-server `.env`: `COOKIE_SECURE=true`, `COOKIE_DOMAIN=notes.example.com`,
-and `PUBLIC_FILES_SERVER_URL=https://notes.example.com/files`. Restart the
-service.
+another container) pointing at `http://<container-ip>:<HTTP_PORT>`. The outer
+proxy must redirect its public HTTP listener to HTTPS, overwrite forwarded
+headers, and emit `Strict-Transport-Security: max-age=31536000` on HTTPS
+responses. The LXC nginx deliberately does not trust client-supplied
+`X-Forwarded-Proto`; restrict its HTTP port to the proxy with the host/LXC
+firewall.
+
+Pass the canonical public origin on install and every intentional change:
+
+```sh
+PUBLIC_URL=https://notes.example.com ./install.sh
+```
+
+The installer validates it as one pathless HTTP(S) origin, persists it in the
+root-only `/etc/standard-red-notes/public-url`, reloads it automatically on
+upgrades, and writes it into the staged home-server `.env`. Also set
+`COOKIE_SECURE=true`, `COOKIE_DOMAIN=notes.example.com`, and
+`PUBLIC_FILES_SERVER_URL=https://notes.example.com/files` for the service.
 
 ## Verification
 

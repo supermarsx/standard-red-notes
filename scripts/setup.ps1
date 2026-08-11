@@ -370,10 +370,12 @@ $Domain = Read-Default 'Public domain or hostname (blank = localhost):' ''
 $UseHttps    = 'false'
 $CookieSecure = 'false'
 $CookieDomain = ''
+$AppBindAddress = '0.0.0.0'
 if (-not [string]::IsNullOrEmpty($Domain)) {
   if (Confirm-Yes 'Is this domain served over HTTPS (recommended for real deployments)?') {
     $UseHttps = 'true'
     $CookieSecure = 'true'
+    $AppBindAddress = '127.0.0.1'
   }
   $CookieDomain = $Domain
 }
@@ -461,6 +463,9 @@ $content = @"
 # the API gateway and files service are internal-only (no host ports). Optional
 # profiles may bind development-only ports to host loopback.
 APP_PORT=$AppPort
+# Keep the inner HTTP front door reachable only by a same-host reverse proxy.
+# Direct LAN users may deliberately change this only while proxy HTTPS trust is off.
+APP_BIND_ADDRESS=$AppBindAddress
 
 # ----- Database (MariaDB) ----------------------------------------------------
 MYSQL_DATABASE=$MysqlDatabase
@@ -495,6 +500,9 @@ COOKIE_DOMAIN=$CookieDomain
 COOKIE_SECURE=$CookieSecure
 PUBLIC_FILES_SERVER_URL=$PublicFilesServerUrl
 PUBLIC_URL=$PublicUrl
+# Trust X-Forwarded-Proto only for the HTTPS reverse-proxy mode explicitly
+# selected above. Local/direct HTTP installs keep this disabled.
+ENFORCE_HTTPS_FROM_PROXY=$UseHttps
 
 # WebAuthn / hardware-key (U2F) relying party. Should match where the app is served.
 AUTH_SERVER_U2F_RELYING_PARTY_ID=$U2fRpId

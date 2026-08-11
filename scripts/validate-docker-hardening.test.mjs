@@ -975,7 +975,7 @@ test("requires an exact OAuth callback proxy location with access logging disabl
       proxy_http_version 1.1;
       proxy_set_header Host $host;
       proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-      proxy_set_header X-Forwarded-Proto $scheme;
+      proxy_set_header X-Forwarded-Proto $srn_forwarded_proto;
       proxy_set_header X-Real-IP $remote_addr;
       client_max_body_size 0;
       proxy_request_buffering off;

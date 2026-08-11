@@ -188,6 +188,14 @@ export function validateSetupOverwriteContract(shellSetup, powershellSetup) {
           "ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=${ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY}",
           "fresh-install assistant pairing key persistence",
         ],
+        [
+          "ENFORCE_HTTPS_FROM_PROXY=${USE_HTTPS}",
+          "fresh-install trusted proxy transport selection",
+        ],
+        [
+          "APP_BIND_ADDRESS=${APP_BIND_ADDRESS}",
+          "fresh-install proxy-safe app bind selection",
+        ],
       ],
     ],
     [
@@ -211,6 +219,14 @@ export function validateSetupOverwriteContract(shellSetup, powershellSetup) {
         [
           "ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=$AssistantSubscriptionEncryptionKey",
           "fresh-install assistant pairing key persistence",
+        ],
+        [
+          "ENFORCE_HTTPS_FROM_PROXY=$UseHttps",
+          "fresh-install trusted proxy transport selection",
+        ],
+        [
+          "APP_BIND_ADDRESS=$AppBindAddress",
+          "fresh-install proxy-safe app bind selection",
         ],
       ],
     ],
