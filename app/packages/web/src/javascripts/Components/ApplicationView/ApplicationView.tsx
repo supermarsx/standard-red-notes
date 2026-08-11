@@ -71,7 +71,11 @@ import FloatingNarrationPlayer from '../Narration/FloatingNarrationPlayer'
 import AppLockPasskeyScreen from './AppLockPasskeyScreen'
 import { isAppLockPasskeyRegistered } from '@/AppLockPasskey/appLockPasskeyService'
 import { addChallengeToList, removeChallengeFromList } from './challengeList'
-import { installNativeNotePrinting, PRINT_NOTE_UUID_ATTRIBUTE } from '../NoteView/Print/PrintNote'
+import {
+  createPersistedPrintOptions,
+  installNativeNotePrinting,
+  PRINT_NOTE_UUID_ATTRIBUTE,
+} from '../NoteView/Print/PrintNote'
 
 type Props = {
   application: WebApplication
@@ -245,13 +249,8 @@ const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicatio
             application.itemListController.activeControllerItem?.uuid ??
             undefined
           const note = noteUuid ? application.items.findItem<SNNote>(noteUuid) : undefined
-          return {
-            noteUuid,
-            fallbackTitle: note?.title,
-            fallbackBody: note?.text,
-            fallbackNoteType: note?.noteType,
-            fallbackEditorIdentifier: note?.editorIdentifier,
-          }
+          const editor = note ? application.componentManager.editorForNote(note) : undefined
+          return (note ? createPersistedPrintOptions(note, editor) : undefined) ?? { noteUuid }
         },
         (reason) => {
           addToast({ type: ToastType.Error, message: reason })
