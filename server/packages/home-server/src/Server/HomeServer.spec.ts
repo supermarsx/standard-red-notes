@@ -149,4 +149,14 @@ describe('buildHomeServerEnvironmentOverrides', () => {
     expect(environment.APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_2).toBe('3.20.0')
     expect(environment.APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_3).toBe('3.30.0')
   })
+
+  it('preserves deployment identity for aggregate readiness', () => {
+    const environment = buildHomeServerEnvironmentOverrides('data', {
+      SRN_DEPLOY_REVISION: '0123456789abcdef0123456789abcdef01234567',
+      SRN_DEPLOY_VERSION: 'v26.8.11',
+    })
+
+    expect(environment.SRN_DEPLOY_REVISION).toBe('0123456789abcdef0123456789abcdef01234567')
+    expect(environment.SRN_DEPLOY_VERSION).toBe('v26.8.11')
+  })
 })

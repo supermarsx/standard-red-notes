@@ -1,5 +1,28 @@
 # syntax=docker/dockerfile:1.7
 
+ARG SRN_DEPLOY_REVISION=""
+ARG SRN_DEPLOY_VERSION=""
+
+FROM alpine:3.23 AS deployment-identity
+
+ARG SRN_DEPLOY_REVISION
+ARG SRN_DEPLOY_VERSION
+RUN set -eu; \
+  revision="${SRN_DEPLOY_REVISION}"; \
+  version="${SRN_DEPLOY_VERSION}"; \
+  if [ -n "${revision}" ]; then \
+    [ "${#revision}" -eq 40 ] && case "${revision}" in *[!0-9a-f]*) false ;; *) true ;; esac \
+      || { echo 'SRN_DEPLOY_REVISION must be empty or exactly 40 lowercase hexadecimal characters.' >&2; exit 64; }; \
+  fi; \
+  if [ -n "${version}" ]; then \
+    [ "${#version}" -le 128 ] && case "${version}" in [0-9A-Za-z]*) true ;; *) false ;; esac \
+      && case "${version}" in *[!0-9A-Za-z._+-]*) false ;; *) true ;; esac \
+      || { echo 'SRN_DEPLOY_VERSION must be empty or a 1-128 character safe ASCII version token.' >&2; exit 64; }; \
+  fi; \
+  install -d -m 0555 /srn-deployment; \
+  printf '{"revision":"%s","version":"%s"}\n' "${revision}" "${version}" > /srn-deployment/deployment.json; \
+  chmod 0444 /srn-deployment/deployment.json
+
 FROM node:26.5.0-bookworm-slim AS build
 
 WORKDIR /opt/standard-red-notes/app
@@ -74,6 +97,13 @@ RUN --mount=type=cache,target=/opt/standard-red-notes/app/node_modules/.cache \
 # templating/entrypoint scripts as the stock image, so the OCR drop-in below
 # still executes at container start.
 FROM nginxinc/nginx-unprivileged:1.30.3-alpine3.23
+
+ARG SRN_DEPLOY_REVISION
+ARG SRN_DEPLOY_VERSION
+COPY --from=deployment-identity --chown=0:0 --chmod=0555 /srn-deployment /usr/share/srn-deployment
+COPY --from=deployment-identity --chown=0:0 --chmod=0444 /srn-deployment/deployment.json /usr/share/srn-deployment/deployment.json
+LABEL org.opencontainers.image.revision="${SRN_DEPLOY_REVISION}"
+LABEL org.opencontainers.image.version="${SRN_DEPLOY_VERSION}"
 
 # nginx.conf below listens on 8080 (the unprivileged default) instead of :80 so
 # the worker can bind without root. Compose maps the host port to 8080.

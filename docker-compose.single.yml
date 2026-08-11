@@ -24,6 +24,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.single
+      args:
+        SRN_DEPLOY_REVISION: "${SRN_DEPLOY_REVISION:-}"
+        SRN_DEPLOY_VERSION: "${SRN_DEPLOY_VERSION:-}"
     image: standard-red-notes/single:local
     restart: unless-stopped
 
@@ -53,6 +56,9 @@ services:
 
       # --- Core -----------------------------------------------------------------
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      # Optional public deployment identity. Empty values preserve local starts.
+      SRN_DEPLOY_REVISION: "${SRN_DEPLOY_REVISION:-}"
+      SRN_DEPLOY_VERSION: "${SRN_DEPLOY_VERSION:-}"
       # Shared admin overlay for all named loggers in the home-server process.
       # A custom in-container path also needs a matching persistent mount.
       SERVER_SETTINGS_PATH: ${SERVER_SETTINGS_PATH:-/data/server-settings.json}

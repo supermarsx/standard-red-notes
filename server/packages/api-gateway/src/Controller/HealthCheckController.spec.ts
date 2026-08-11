@@ -14,6 +14,7 @@ describe('HealthCheckController', () => {
   it('returns 503 with the aggregate report when any required component is unavailable', async () => {
     const report = {
       status: 'unavailable' as const,
+      deployment: { revision: null, version: null },
       checks: { gateway: { redis: true, runtime: true }, services: { auth: false } },
     }
     const aggregate = { check: jest.fn().mockResolvedValue(report) } as unknown as AggregateReadinessService

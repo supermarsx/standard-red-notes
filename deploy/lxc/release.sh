@@ -18,6 +18,53 @@ release_link_target() {
   printf '%s\n' "${target}"
 }
 
+release_read_deployment_identity() {
+  local release="$1" node_bin="$2"
+  "${node_bin}" - "${release}" <<'NODE'
+const fs = require("node:fs")
+const path = require("node:path")
+
+const release = process.argv[2]
+const releaseStat = fs.lstatSync(release)
+if (!releaseStat.isDirectory() || releaseStat.isSymbolicLink()) process.exit(1)
+if (
+  process.platform !== "win32" &&
+  (releaseStat.uid !== 0 || (releaseStat.mode & 0o222) !== 0)
+) process.exit(1)
+
+function readSealedRegularFile(name, maximumBytes) {
+  const file = path.join(release, name)
+  const stat = fs.lstatSync(file)
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > maximumBytes) process.exit(1)
+  if (
+    process.platform !== "win32" &&
+    (stat.uid !== 0 || (stat.mode & 0o222) !== 0)
+  ) process.exit(1)
+  return fs.readFileSync(file, "utf8")
+}
+
+const seal = readSealedRegularFile(".srn-release", 128)
+const sealMatch = /^commit=([0-9a-f]{40})\n$/.exec(seal)
+if (!sealMatch) process.exit(1)
+
+let marker
+try {
+  marker = JSON.parse(readSealedRegularFile(".srn-deployment.json", 512))
+} catch {
+  process.exit(1)
+}
+if (!marker || Array.isArray(marker) || typeof marker !== "object") process.exit(1)
+if (Object.keys(marker).sort().join(",") !== "revision,version") process.exit(1)
+if (!/^[0-9a-f]{40}$/.test(marker.revision) || marker.revision !== sealMatch[1]) process.exit(1)
+if (
+  typeof marker.version !== "string" ||
+  (marker.version !== "" && !/^[0-9A-Za-z][0-9A-Za-z._+-]{0,127}$/.test(marker.version))
+) process.exit(1)
+
+process.stdout.write(`${marker.revision}|${marker.version}\n`)
+NODE
+}
+
 release_atomic_link() {
   local target="$1" link="$2" temporary
   temporary="${link}.new.$$"
@@ -67,6 +114,17 @@ PY
   while [ "${elapsed}" -lt "${timeout}" ]; do
     if curl --fail --silent --show-error --max-time 3 \
       "http://127.0.0.1:${port}/healthcheck/readiness" >/dev/null 2>&1; then
+      local identity_args=(
+        --readiness-url "http://127.0.0.1:${port}/healthcheck/readiness"
+        --expected-revision "${DEPLOY_COMMIT}"
+      )
+      if [ -n "${SRN_DEPLOY_VERSION:-}" ]; then
+        identity_args+=(--expected-version "${SRN_DEPLOY_VERSION}")
+      fi
+      if ! "${node_bin}" "${release}/scripts/verify-deployment-identity.mjs" "${identity_args[@]}"; then
+        tail -n 80 "${log_file}" >&2 || true
+        return 1
+      fi
       kill "${pid}" >/dev/null 2>&1 || true
       wait "${pid}" >/dev/null 2>&1 || true
       pid=""

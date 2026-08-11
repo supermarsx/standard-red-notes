@@ -55,9 +55,26 @@ fi
 : > "${ENV_FILE}"
 put() { printf '%s=%s\n' "$1" "$2" >> "${ENV_FILE}"; }
 put_opt() { [ -n "${2:-}" ] && printf '%s=%s\n' "$1" "$2" >> "${ENV_FILE}" || true; }
+put_deploy_revision() {
+  [ "${#1}" -eq 40 ] || return 0
+  case "$1" in *[!0-9a-f]*) return 0 ;; esac
+  put SRN_DEPLOY_REVISION "$1"
+}
+put_deploy_version() {
+  [ -n "$1" ] && [ "${#1}" -le 128 ] || return 0
+  case "$1" in [0-9A-Za-z]*) ;; *) return 0 ;; esac
+  case "$1" in *[!0-9A-Za-z._+-]*) return 0 ;; esac
+  put SRN_DEPLOY_VERSION "$1"
+}
+
+# The marker path is fixed in application code; discard attempts to redirect
+# the verifier to a runtime-controlled file.
+unset SRN_DEPLOY_MARKER_PATH
 
 put NODE_ENV production
 put LOG_LEVEL "${LOG_LEVEL:-info}"
+put_deploy_revision "${SRN_DEPLOY_REVISION:-}"
+put_deploy_version "${SRN_DEPLOY_VERSION:-}"
 put E2E_TESTING false
 put PORT 3000
 # nginx is the only public edge in this single-host topology. Do not inherit an

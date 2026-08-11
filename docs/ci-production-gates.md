@@ -18,20 +18,28 @@ the fan-in green.
 
 ## Required Lanes
 
-| Lane               | Contract                                                                                                                                                                                                                                                                                                                            | Timeout |
-| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------: |
-| `contracts`        | Immutable root install; fail-closed production dependency audits for every committed lock domain; CI validator tests; release impact, fingerprint, comparator, packaging-invocation, target, and artifact contracts; generated docs/search freshness, link/navigation integrity, Mermaid rendering; actionlint over root workflows. |  12 min |
-| `check`            | Immutable installs in the root, app, and server projects, followed by the coordinated type, lint, format, and test gate.                                                                                                                                                                                                            |  45 min |
-| `build`            | A second clean set of immutable installs followed by the coordinated MCP, OpenClaw, app, and server build.                                                                                                                                                                                                                          |  45 min |
-| `desktop-electron` | A production desktop build followed by the seven real Electron suites under Xvfb. The guarded runner requires the built entry point and cannot silently fall back to skipped headless tests.                                                                                                                                        |  45 min |
-| `container-smoke`  | Hadolint, BuildKit image builds, an isolated Compose stack, required encrypted two-editor online/offline convergence, Chromium app-open checks, bounded parallel sync and Redis operations, MariaDB backup/restore, and image/container hardening assertions.                                                                       |  70 min |
-| `production-gate`  | Fail-closed fan-in for all five implementation lanes above.                                                                                                                                                                                                                                                                         |   5 min |
+| Lane               | Contract                                                                                                                                                                                                                                                                                                                               | Timeout |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------: |
+| `contracts`        | Immutable root install; fail-closed production dependency audits for every committed lock domain; CI validator tests; release impact, fingerprint, comparator, packaging-invocation, target, and artifact contracts; generated docs/search freshness, link/navigation integrity, Mermaid rendering; actionlint over root workflows.    |  12 min |
+| `check`            | Immutable installs in the root, app, and server projects, followed by the coordinated type, lint, format, and test gate.                                                                                                                                                                                                               |  45 min |
+| `build`            | A second clean set of immutable installs followed by the coordinated MCP, OpenClaw, app, and server build.                                                                                                                                                                                                                             |  45 min |
+| `desktop-electron` | A production desktop build followed by the seven real Electron suites under Xvfb. The guarded runner requires the built entry point and cannot silently fall back to skipped headless tests.                                                                                                                                           |  45 min |
+| `container-smoke`  | Hadolint, exact clean-commit BuildKit image identity, immutable app/server marker and OCI-label equality, an isolated Compose stack, required encrypted two-editor online/offline convergence, Chromium app-open checks, bounded parallel sync and Redis operations, MariaDB backup/restore, and image/container hardening assertions. |  70 min |
+| `production-gate`  | Fail-closed fan-in for all five implementation lanes above.                                                                                                                                                                                                                                                                            |   5 min |
 
 The required browser selection contains three app-open tests and one combined
 sync/Redis test. The generated JSON report must contain at least four expected
 tests and exactly zero skipped, unexpected, or flaky tests. The stack uses a
 run-specific Compose project and generated credentials, then removes its
 containers and volumes even after a failure.
+
+Before browser work begins, the required stack proves that the checkout is
+clean and exactly `GITHUB_SHA`, builds both images with the same validated
+revision/version, checks their OCI labels and root-owned marker bytes, and then
+compares the public app marker with the server's aggregate-readiness identity.
+A null or mixed-revision deployment fails even when its ordinary liveness
+checks are otherwise healthy. Scheduled cache restores receive the same build
+and runtime identity inputs.
 
 Before browser smoke, the live server container must also pass the encrypted
 Yjs two-editor drill with gateway availability required. It covers late join,

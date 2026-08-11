@@ -1,4 +1,5 @@
 import { DEFAULT_CONTROLLABLE_PROGRAMS, ServiceControlService } from '../ServiceControl/ServiceControlService'
+import { DeploymentIdentity, verifiedDeploymentIdentity } from './DeploymentIdentity'
 import { ReadinessState } from './ReadinessState'
 
 export type ReadinessFetch = (
@@ -14,6 +15,7 @@ export type AggregateReadinessChecks = {
 
 export type AggregateReadinessReport = {
   status: 'ready' | 'unavailable'
+  deployment: DeploymentIdentity
   checks: AggregateReadinessChecks
 }
 
@@ -28,6 +30,9 @@ export interface AggregateReadinessServiceOptions {
   timeoutMs?: number
   cacheTtlMs?: number
   now?: () => number
+  deploymentRevision?: string
+  deploymentVersion?: string
+  deploymentMarker?: DeploymentIdentity
 }
 
 /**
@@ -46,6 +51,7 @@ export class AggregateReadinessService {
   private readonly now: () => number
   private cached: { expiresAt: number; report: AggregateReadinessReport } | undefined
   private inFlight: Promise<AggregateReadinessReport> | undefined
+  private readonly deployment: AggregateReadinessReport['deployment']
 
   constructor(private readonly options: AggregateReadinessServiceOptions) {
     this.fetchFn = options.fetchFn ?? (globalThis.fetch.bind(globalThis) as unknown as ReadinessFetch)
@@ -54,6 +60,13 @@ export class AggregateReadinessService {
     // from becoming a process-spawn/internal-request amplification primitive.
     this.cacheTtlMs = options.cacheTtlMs ?? 5_000
     this.now = options.now ?? Date.now
+    // Deployment identity is public metadata, never a health gate. Reject
+    // malformed or unbounded operator input instead of reflecting it verbatim.
+    this.deployment = verifiedDeploymentIdentity(
+      options.deploymentRevision,
+      options.deploymentVersion,
+      options.deploymentMarker,
+    )
   }
 
   async check(): Promise<AggregateReadinessReport> {
@@ -103,7 +116,7 @@ export class AggregateReadinessService {
       Object.values(checks.services).every(Boolean) &&
       (checks.programs === undefined || Object.values(checks.programs).every(Boolean))
 
-    return { status: healthy ? 'ready' : 'unavailable', checks }
+    return { status: healthy ? 'ready' : 'unavailable', deployment: this.deployment, checks }
   }
 
   private async checkRedis(): Promise<boolean> {

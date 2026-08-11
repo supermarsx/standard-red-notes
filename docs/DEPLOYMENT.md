@@ -6,19 +6,19 @@ description: Deployment profiles and production guidance.
 # Deploying Standard Red Notes
 
 There are **three** ways to run Standard Red Notes. All three self-host to
-*themselves* (the web app syncs to its own origin — never `api.standardnotes.com`)
+_themselves_ (the web app syncs to its own origin — never `api.standardnotes.com`)
 and keep your notes end-to-end encrypted.
 
-| Mode | Containers / services | Datastore | Best for |
-| --- | --- | --- | --- |
-| **A. Full multi-container** (default) | app, server (6 node services under supervisord), MariaDB, Redis, floci (SNS/SQS) | MySQL + Redis | Production, many users, horizontal scaling, realtime push |
-| **B. All-in-one single container** | 1 container (home-server + nginx under supervisord) | embedded **sqlite** + **in-memory** cache | Local use, a household/small team, the simplest Docker deploy |
-| **C. LXC / systemd** | native systemd service + nginx (no Docker) | embedded **sqlite** + **in-memory** cache | Proxmox / lxd system containers, bare VMs, Docker-averse hosts |
+| Mode                                  | Containers / services                                                            | Datastore                                 | Best for                                                       |
+| ------------------------------------- | -------------------------------------------------------------------------------- | ----------------------------------------- | -------------------------------------------------------------- |
+| **A. Full multi-container** (default) | app, server (6 node services under supervisord), MariaDB, Redis, floci (SNS/SQS) | MySQL + Redis                             | Production, many users, horizontal scaling, realtime push      |
+| **B. All-in-one single container**    | 1 container (home-server + nginx under supervisord)                              | embedded **sqlite** + **in-memory** cache | Local use, a household/small team, the simplest Docker deploy  |
+| **C. LXC / systemd**                  | native systemd service + nginx (no Docker)                                       | embedded **sqlite** + **in-memory** cache | Proxmox / lxd system containers, bare VMs, Docker-averse hosts |
 
 Modes B and C run the **home-server**: a single Node process that mounts auth,
 syncing, files, revisions and the api-gateway together, with **in-process domain
 events** (no SNS/SQS) — so they need **no MySQL, no Redis, and no floci**. The
-trade-off vs. Mode A: no horizontal scaling, and live realtime *push* (the
+trade-off vs. Mode A: no horizontal scaling, and live realtime _push_ (the
 websocket bridge) is disabled without Redis, so clients fall back to normal
 periodic sync. Everything else — accounts, notes, files, revisions, admin panel,
 AI proxy, OCR, CalDAV — works the same.
@@ -65,6 +65,19 @@ sessions. Use `--force-overwrite` or `-ForceOverwrite` only for an intentional
 rotation. If setup was overwritten accidentally, recover the complete prior
 environment with `npm run recover:database`; do not delete the database volume.
 
+When setup starts the stack (`--up` / `-Up`), it also refuses a dirty Git
+checkout, stamps both app and server images with the exact checked-out commit,
+and waits until the live same-origin app proves that both tiers are that same
+release. The immutable root-owned marker is public at
+`/.well-known/srn-deployment.json`; the server exposes its independently read
+copy as `deployment` in `/healthcheck/readiness`. Missing, malformed, writable,
+runtime-redirected, or mismatched markers are never reported as release
+identity. Empty markers remain supported for anonymous local builds.
+
+This provenance contract covers the core app/server images, the all-in-one
+image, and the LXC release. The optional MCP profile is a separate client/tool
+release and is intentionally outside the app/server equality gate.
+
 See the top of `docker-compose.yml` and `docs/self-hosting.md` for the full env
 reference, reverse-proxy (Traefik) examples, and optional profiles (`mcp`,
 `workflows`).
@@ -102,17 +115,17 @@ to it same-origin.
 
 **Common env** (all optional; see `.env.single.example`):
 
-| Var | Purpose |
-| --- | --- |
-| `APP_PORT` | Host port (default 3001) |
-| `PUBLIC_FILES_SERVER_URL` | Public `/files` URL behind a domain, e.g. `https://notes.example.com/files` |
-| `PUBLIC_URL` | Canonical app origin used for external-link hostname isolation |
-| `WORKFLOWS_ENABLED`, `WORKFLOWS_PUBLIC_URL` | Optional discovery link to a separately authenticated n8n origin |
-| `COOKIE_DOMAIN`, `COOKIE_SECURE` | Set `COOKIE_SECURE=true` + your domain behind HTTPS |
-| `SYNC_SERVER` | Force the app's sync origin (default: its own origin) |
-| `OCR_ENABLED` | Client-side PDF OCR toggle |
-| `SHARED_SERVER_ACCESS_KEY` | Optional access gate (`X-Shared-Server-Key`) |
-| `ASSISTANT_*` | AI assistant proxy (Anthropic / OpenAI-compatible / Ollama) |
+| Var                                         | Purpose                                                                     |
+| ------------------------------------------- | --------------------------------------------------------------------------- |
+| `APP_PORT`                                  | Host port (default 3001)                                                    |
+| `PUBLIC_FILES_SERVER_URL`                   | Public `/files` URL behind a domain, e.g. `https://notes.example.com/files` |
+| `PUBLIC_URL`                                | Canonical app origin used for external-link hostname isolation              |
+| `WORKFLOWS_ENABLED`, `WORKFLOWS_PUBLIC_URL` | Optional discovery link to a separately authenticated n8n origin            |
+| `COOKIE_DOMAIN`, `COOKIE_SECURE`            | Set `COOKIE_SECURE=true` + your domain behind HTTPS                         |
+| `SYNC_SERVER`                               | Force the app's sync origin (default: its own origin)                       |
+| `OCR_ENABLED`                               | Client-side PDF OCR toggle                                                  |
+| `SHARED_SERVER_ACCESS_KEY`                  | Optional access gate (`X-Shared-Server-Key`)                                |
+| `ASSISTANT_*`                               | AI assistant proxy (Anthropic / OpenAI-compatible / Ollama)                 |
 
 After registering the intended administrator, persist the server-controlled role locally:
 
@@ -162,7 +175,7 @@ proxy that sets them and strips inbound copies.**
     `127.0.0.1, 172.16.0.0/12`, or `loopback`, `linklocal`, `uniquelocal`) → trust
     exactly those. Recommended when you know your proxy's address.
 
-- **`CLIENT_IP_HEADER`** *(optional, default empty = OFF)* — when set (e.g.
+- **`CLIENT_IP_HEADER`** _(optional, default empty = OFF)_ — when set (e.g.
   `X-Real-IP`, or Cloudflare's `CF-Connecting-IP`), the client IP is taken from
   that single named header (leftmost value) and it **takes precedence** over
   `req.ip`. When empty, behavior is exactly today's `req.ip`.
@@ -237,10 +250,10 @@ The admin panel (Preferences → Admin → Server) can restart the sibling **ser
 processes out of the box — they run under supervisord inside the server container,
 so the gateway drives them with allow-listed `supervisorctl` calls (no extra
 setup). The **WebSocket gateway** control lives here too; because the realtime
-gateway runs *in-process* inside the API gateway, that button restarts the
+gateway runs _in-process_ inside the API gateway, that button restarts the
 `api-gateway` program under the hood (it will briefly drop your admin connection).
 
-The **Redis `cache`** and **MariaDB `db`** containers, however, run *outside* that
+The **Redis `cache`** and **MariaDB `db`** containers, however, run _outside_ that
 supervisord. Restarting them requires talking to the Docker daemon, which the
 server container deliberately cannot do (the raw docker socket is never mounted
 into it). This capability is therefore **OFF by default** and gated behind an
@@ -251,7 +264,7 @@ opt-in, least-privilege `docker-socket-proxy` sidecar.
 - The raw `/var/run/docker.sock` is mounted **only** into the `docker-socket-proxy`
   container (read-only), **never** into the server container.
 - The proxy denies everything by default; only `ALLOW_RESTARTS=1` is enabled, so
-  the sole reachable Docker operation is *restart a container*. No image pull, no
+  the sole reachable Docker operation is _restart a container_. No image pull, no
   container create/exec, no volume/network access.
 - The gateway restarts only an **allowlist** of container names (`cache`, `db`);
   any other name is rejected before any HTTP call.
@@ -293,7 +306,7 @@ feature back off, unset `SERVICE_CONTROL_DOCKER_ENABLED` and stop the proxy
 
 Modes B and C serve the SPA with a Content-Security-Policy that pins the single
 inline bootstrap `<script>` by its sha256. The served hash is recomputed from the
-*actual served* script at start/install, so it always matches. To verify:
+_actual served_ script at start/install, so it always matches. To verify:
 
 ```sh
 BASE=http://localhost:3001        # or your host

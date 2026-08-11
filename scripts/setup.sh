@@ -69,6 +69,53 @@ warn()  { printf '%s\n' "${YELLOW}$*${RESET}"; }
 err()   { printf '%s\n' "${RED}$*${RESET}" >&2; }
 title() { printf '\n%s\n' "${BOLD}$*${RESET}"; }
 
+resolve_clean_deployment_revision() {
+  local revision dirty
+  command -v git >/dev/null 2>&1 || { err "Git is required to identify the source being deployed."; return 1; }
+  revision="$(git -C "$REPO_ROOT" rev-parse --verify 'HEAD^{commit}' 2>/dev/null)" || {
+    err "Could not resolve the repository HEAD commit."; return 1;
+  }
+  [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || {
+    err "Repository HEAD did not resolve to a lowercase full Git commit."; return 1;
+  }
+  dirty="$(git -C "$REPO_ROOT" status --porcelain=v1 --untracked-files=all)" || {
+    err "Could not inspect repository cleanliness."; return 1;
+  }
+  [ -z "$dirty" ] || {
+    err "Refusing to build a deployment identity from a dirty checkout. Commit or remove source changes first."
+    return 1
+  }
+  export SRN_DEPLOY_REVISION="$revision"
+  export SRN_DEPLOY_VERSION="setup-${revision:0:12}"
+  ok "Deploying exact clean commit: ${revision}"
+}
+
+deployment_identity_probe_script='const expected={revision:process.env.EXPECTED_REVISION,version:process.env.EXPECTED_VERSION||null};
+const normalize=(value)=>({revision:value?.revision,version:value?.version===""?null:value?.version});
+Promise.all([fetch("http://app:8080/healthcheck/readiness",{cache:"no-store"}),fetch("http://app:8080/.well-known/srn-deployment.json",{cache:"no-store"})])
+  .then(async ([readyResponse,markerResponse])=>{
+    if(!readyResponse.ok||!markerResponse.ok)throw new Error("identity endpoint unavailable");
+    const readiness=await readyResponse.json();const marker=normalize(await markerResponse.json());const server=normalize(readiness.deployment);
+    if(readiness.status!=="ready"||server.revision!==expected.revision||server.version!==expected.version||marker.revision!==expected.revision||marker.version!==expected.version)throw new Error("deployment identity mismatch");
+  }).catch((error)=>{console.error(error.message);process.exit(1)})'
+
+verify_started_deployment_identity() {
+  local attempt=0
+  while [ "$attempt" -lt 120 ]; do
+    attempt=$((attempt + 1))
+    if ( cd "$REPO_ROOT" && $COMPOSE exec -T \
+      -e "EXPECTED_REVISION=${SRN_DEPLOY_REVISION}" \
+      -e "EXPECTED_VERSION=${SRN_DEPLOY_VERSION:-}" \
+      server node -e "$deployment_identity_probe_script" ); then
+      ok "App and server deployment identity verified."
+      return 0
+    fi
+    sleep 2
+  done
+  err "The stack started but did not prove the expected app/server deployment identity."
+  return 1
+}
+
 # ---------------------------------------------------------------------------
 # Prompt helper: prompt VARNAME "Question" "default"
 # Honors --yes (uses default without asking).
@@ -284,7 +331,9 @@ if [ -f "$ENV_FILE" ]; then
       ( cd "$REPO_ROOT" && $COMPOSE config --quiet )
     fi
     if [ "$RUN_UP" -eq 1 ]; then
+      resolve_clean_deployment_revision
       ( cd "$REPO_ROOT" && $COMPOSE up -d --build )
+      verify_started_deployment_identity
       ok "Stack started."
     fi
     exit 0
@@ -304,10 +353,12 @@ if [ -f "$ENV_FILE" ]; then
     ok "Existing .env validated."
     if [ "$RUN_UP" -eq 1 ]; then
       info "Building and starting the existing stack..."
+      resolve_clean_deployment_revision
       ( cd "$REPO_ROOT" && $COMPOSE up -d --build )
+      verify_started_deployment_identity
       ok "Stack started."
     else
-      info "Start it with: ${COMPOSE} up -d --build"
+      info "Start it with: ./scripts/setup.sh --up"
     fi
     info "Intentional rotation requires --force-overwrite. If an accidental overwrite already happened, run: npm run recover:database"
     exit 0
@@ -609,19 +660,21 @@ APP_URL="${PUBLIC_URL}"
 
 if [ "$RUN_UP" -eq 1 ] || { [ "$ASSUME_YES" -eq 0 ] && confirm "Start the stack now with '${COMPOSE} up -d'?"; }; then
   info "Building and starting the stack (first run can take several minutes)..."
+  resolve_clean_deployment_revision
   if ! ( cd "$REPO_ROOT" && $COMPOSE up -d --build ); then
     if [ -n "$BACKUP" ]; then
       err "Startup failed after credential rotation. Recover the prior full environment with: npm run recover:database"
     fi
     exit 1
   fi
+  verify_started_deployment_identity
   ok "Stack started. Open: ${APP_URL}"
   info "Watch logs:  ${COMPOSE} logs -f"
   info "Stop:        ${COMPOSE} down"
 else
   info "Next steps:"
   printf '  1. cd %s\n' "$REPO_ROOT"
-  printf '  2. %s up -d --build\n' "$COMPOSE"
+  printf '  2. ./scripts/setup.sh --up\n'
   printf '  3. Open %s\n' "$APP_URL"
 fi
 info "After registering an administrator: ${COMPOSE} exec server srn-admin roles grant <user> ADMIN_USER"

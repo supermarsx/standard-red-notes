@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import test from "node:test";
 
 import {
@@ -23,6 +23,7 @@ import {
   validateContainerHardening,
   validateDatabaseCredentialGateContract,
   validateDatabaseVolumeMigrationGateContract,
+  validateDeploymentIdentityContract,
   validateFilesStorageDeploymentContract,
   validateImageHardening,
   validatePairingCallbackNginxContract,
@@ -39,6 +40,114 @@ import {
   validateSingleEntrypointAuthStepUpPropagation,
   validateSingleContainerSQLiteMigrationContract,
 } from "./validate-docker-hardening.mjs";
+
+function deploymentIdentityFixture() {
+  const read = (relativePath) => readFileSync(resolve(relativePath), "utf8");
+  return {
+    appDockerfileSource: read("app/Dockerfile"),
+    serverDockerfileSource: read("server/Dockerfile"),
+    singleDockerfileSource: read("Dockerfile.single"),
+    multiComposeSource: read("docker-compose.yml"),
+    singleComposeSource: read("docker-compose.single.yml"),
+    multiNginxSource: read("app/docker/nginx.conf"),
+    singleNginxSource: read("app/docker/single/nginx.conf"),
+    multiEntrypointSource: read("server/docker/docker-entrypoint.sh"),
+    singleEntrypointSource: read("server/docker/single/entrypoint.sh"),
+    identityHelperSource: read("server/docker/deployment-identity-env.sh"),
+    serviceWorkerSource: read("app/packages/web/src/service-worker.js"),
+    apiGatewayContainerSource: read(
+      "server/packages/api-gateway/src/Bootstrap/Container.ts",
+    ),
+  };
+}
+
+test("ratchets immutable deployment identity across every container topology", () => {
+  const valid = deploymentIdentityFixture();
+  assert.deepEqual(validateDeploymentIdentityContract(valid), []);
+
+  for (const [field, current, replacement, expected] of [
+    [
+      "appDockerfileSource",
+      "exactly 40 lowercase hexadecimal characters",
+      "unchecked revision",
+      /app Dockerfile: missing strict revision validation/,
+    ],
+    [
+      "serverDockerfileSource",
+      "COPY --from=deployment-identity --chown=0:0 --chmod=0555 /srn-deployment /usr/share/srn-deployment\nCOPY --from=deployment-identity --chown=0:0 --chmod=0444 /srn-deployment/deployment.json /usr/share/srn-deployment/deployment.json",
+      "COPY --from=deployment-identity --chown=0:0 --chmod=0444 /srn-deployment/deployment.json /usr/share/srn-deployment/deployment.json",
+      /server Dockerfile: must set the root-owned marker directory to 0555/,
+    ],
+    [
+      "singleDockerfileSource",
+      'LABEL org.opencontainers.image.version="${SRN_DEPLOY_VERSION}"',
+      "# version label removed",
+      /single Dockerfile: OCI revision and version labels must follow/,
+    ],
+    [
+      "multiComposeSource",
+      'SRN_DEPLOY_VERSION: "${SRN_DEPLOY_VERSION:-}"',
+      "SRN_DEPLOY_VERSION: unquoted",
+      /multi compose: must propagate quoted SRN_DEPLOY_VERSION/,
+    ],
+    [
+      "multiNginxSource",
+      "alias /usr/share/srn-deployment/deployment.json;",
+      "try_files /index.html =404;",
+      /multi nginx: deployment marker must alias/,
+    ],
+    [
+      "identityHelperSource",
+      "unset API_GATEWAY_SRN_DEPLOY_REVISION",
+      "# direct revision injection retained",
+      /multi identity helper: must clear injected API_GATEWAY_SRN_DEPLOY_REVISION/,
+    ],
+    [
+      "serviceWorkerSource",
+      "url.pathname === DEPLOYMENT_MARKER_PATH",
+      "false",
+      /service worker: deployment marker must have an explicit bypass/,
+    ],
+    [
+      "apiGatewayContainerSource",
+      "readDeploymentMarker(DEFAULT_DEPLOYMENT_MARKER_PATH)",
+      "readDeploymentMarker(env.get('SRN_DEPLOY_MARKER_PATH', true))",
+      /api-gateway identity: marker path must not be runtime configurable/,
+    ],
+  ]) {
+    const broken = {
+      ...valid,
+      [field]: valid[field].replace(current, replacement),
+    };
+    assert.match(
+      validateDeploymentIdentityContract(broken).join("\n"),
+      expected,
+    );
+  }
+});
+
+test(
+  "multi entrypoint helper defeats direct prefixed deployment identity injection",
+  { skip: process.platform === "win32" },
+  () => {
+    const helper = resolve("server/docker/deployment-identity-env.sh");
+    const command = `. '${helper}'; printf '%s|%s|%s|%s\\n' "\${API_GATEWAY_SRN_DEPLOY_REVISION-}" "\${API_GATEWAY_SRN_DEPLOY_VERSION-}" "\${API_GATEWAY_SRN_DEPLOY_MARKER_PATH-}" "\${SRN_DEPLOY_MARKER_PATH-}"`;
+    const result = spawnSync("sh", ["-c", command], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        API_GATEWAY_SRN_DEPLOY_REVISION: "f".repeat(40),
+        API_GATEWAY_SRN_DEPLOY_VERSION: "injected",
+        API_GATEWAY_SRN_DEPLOY_MARKER_PATH: "/tmp/forged.json",
+        SRN_DEPLOY_MARKER_PATH: "/tmp/forged.json",
+        SRN_DEPLOY_REVISION: "0".repeat(40),
+        SRN_DEPLOY_VERSION: "v1.2.3",
+      },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), `${"0".repeat(40)}|v1.2.3||`);
+  },
+);
 
 test("pins multi-container files storage to the durable writable uploads volume", () => {
   const valid = {
@@ -77,9 +186,7 @@ test("pins multi-container files storage to the durable writable uploads volume"
       multiConfig: {
         services: {
           server: {
-            volumes: [
-              { source: "other", target: "/opt/shared/uploads" },
-            ],
+            volumes: [{ source: "other", target: "/opt/shared/uploads" }],
           },
         },
       },

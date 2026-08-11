@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
   copyFileSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -34,12 +35,17 @@ function withFileChanged(file, update) {
   return files;
 }
 
-function createSetupFixture({ environment, probeExit = 0 } = {}) {
+function createSetupFixture({
+  environment,
+  probeExit = 0,
+  initializeGit = true,
+} = {}) {
   const temporary = mkdtempSync(path.join(tmpdir(), "srn-setup-safety-"));
   const fixtureRoot = path.join(temporary, "repo");
   const fixtureScripts = path.join(fixtureRoot, "scripts");
   const fixtureBin = path.join(temporary, "bin");
   const environmentFile = path.join(fixtureRoot, ".env");
+  const deploymentCapture = path.join(temporary, "deployment-capture.txt");
   mkdirSync(fixtureScripts, { recursive: true });
   mkdirSync(fixtureBin, { recursive: true });
   if (environment !== undefined) {
@@ -56,6 +62,7 @@ function createSetupFixture({ environment, probeExit = 0 } = {}) {
       [
         "@echo off",
         'if "%1"=="compose" if "%2"=="run" exit /b %FAKE_ASSISTANT_PROBE_EXIT%',
+        'if "%1"=="compose" if "%2"=="up" echo %SRN_DEPLOY_REVISION%^|%SRN_DEPLOY_VERSION%>"%FAKE_DEPLOY_CAPTURE%"',
         "exit /b 0",
         "",
       ].join("\r\n"),
@@ -67,10 +74,25 @@ function createSetupFixture({ environment, probeExit = 0 } = {}) {
     copyFileSync(path.join(repositoryRoot, "scripts", "setup.sh"), setup);
     writeFileSync(
       docker,
-      '#!/bin/sh\nif [ "$1" = "compose" ] && [ "$2" = "run" ]; then exit "${FAKE_ASSISTANT_PROBE_EXIT}"; fi\nexit 0\n',
+      '#!/bin/sh\nif [ "$1" = "compose" ] && [ "$2" = "run" ]; then exit "${FAKE_ASSISTANT_PROBE_EXIT}"; fi\nif [ "$1" = "compose" ] && [ "$2" = "up" ]; then printf "%s|%s\\n" "$SRN_DEPLOY_REVISION" "$SRN_DEPLOY_VERSION" > "$FAKE_DEPLOY_CAPTURE"; fi\nexit 0\n',
     );
     chmodSync(docker, 0o755);
     command = "bash";
+  }
+
+  if (initializeGit) {
+    writeFileSync(path.join(fixtureRoot, ".gitignore"), ".env*\n");
+    execFileSync("git", ["init", "--quiet"], { cwd: fixtureRoot });
+    execFileSync("git", ["config", "user.name", "CI Test"], {
+      cwd: fixtureRoot,
+    });
+    execFileSync("git", ["config", "user.email", "ci@example.invalid"], {
+      cwd: fixtureRoot,
+    });
+    execFileSync("git", ["add", "."], { cwd: fixtureRoot });
+    execFileSync("git", ["commit", "--quiet", "-m", "fixture"], {
+      cwd: fixtureRoot,
+    });
   }
 
   const run = (scriptArguments) =>
@@ -85,12 +107,13 @@ function createSetupFixture({ environment, probeExit = 0 } = {}) {
         env: {
           ...process.env,
           FAKE_ASSISTANT_PROBE_EXIT: String(probeExit),
+          FAKE_DEPLOY_CAPTURE: deploymentCapture,
           PATH: `${fixtureBin}${path.delimiter}${process.env.PATH ?? ""}`,
         },
       },
     );
 
-  return { environmentFile, fixtureRoot, run, temporary };
+  return { deploymentCapture, environmentFile, fixtureRoot, run, temporary };
 }
 
 test("the repository satisfies the CI production-gate contract", () => {
@@ -143,6 +166,54 @@ test("normal setup rerun validates and leaves an existing environment byte-for-b
       ),
       [],
     );
+  } finally {
+    rmSync(fixture.temporary, { recursive: true, force: true });
+  }
+});
+
+test("setup stamps a clean checkout with its exact commit before Compose build", () => {
+  const sentinel = `EXISTING_PRODUCTION_CONFIGURATION=true\nASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=${"a".repeat(64)}\n`;
+  const fixture = createSetupFixture({
+    environment: sentinel,
+    initializeGit: true,
+  });
+  try {
+    const revision = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: fixture.fixtureRoot,
+      encoding: "utf8",
+    }).trim();
+    const result = fixture.run(
+      process.platform === "win32" ? ["-Yes", "-Up"] : ["--yes", "--up"],
+    );
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    assert.equal(
+      readFileSync(fixture.deploymentCapture, "utf8").trim(),
+      `${revision}|setup-${revision.slice(0, 12)}`,
+    );
+    assert.equal(readFileSync(fixture.environmentFile, "utf8"), sentinel);
+  } finally {
+    rmSync(fixture.temporary, { recursive: true, force: true });
+  }
+});
+
+test("setup refuses a dirty checkout before Compose build without changing the environment", () => {
+  const sentinel = `EXISTING_PRODUCTION_CONFIGURATION=true\nASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=${"b".repeat(64)}\n`;
+  const fixture = createSetupFixture({
+    environment: sentinel,
+    initializeGit: true,
+  });
+  try {
+    writeFileSync(
+      path.join(fixture.fixtureRoot, "dirty-source.txt"),
+      "uncommitted\n",
+    );
+    const result = fixture.run(
+      process.platform === "win32" ? ["-Yes", "-Up"] : ["--yes", "--up"],
+    );
+    assert.notEqual(result.status, 0);
+    assert.match(`${result.stdout}\n${result.stderr}`, /dirty checkout/i);
+    assert.equal(existsSync(fixture.deploymentCapture), false);
+    assert.equal(readFileSync(fixture.environmentFile, "utf8"), sentinel);
   } finally {
     rmSync(fixture.temporary, { recursive: true, force: true });
   }
@@ -447,6 +518,63 @@ test("a missing backup and restore drill is rejected", () => {
   assert.match(
     validateCiContract(files).join("\n"),
     /container-smoke backup and restore drill/,
+  );
+});
+
+test("container CI cannot drop exact immutable deployment acceptance", () => {
+  for (const [current, replacement, expected] of [
+    [
+      "node scripts/resolve-deployment-identity.mjs",
+      "node scripts/identity-disabled.mjs",
+      /container-smoke clean checkout identity resolution/,
+    ],
+    [
+      "SRN_DEPLOY_REVISION=${{ github.sha }}",
+      "SRN_DEPLOY_REVISION=unknown",
+      /container-smoke must pass the revision build argument to both images, found 1/,
+    ],
+    [
+      "org.opencontainers.image.revision",
+      "org.opencontainers.image.disabled",
+      /container-smoke live OCI revision assertion/,
+    ],
+    [
+      "cmp artifacts-app-deployment.json artifacts-server-deployment.json",
+      "echo marker-compare-disabled",
+      /container-smoke byte-equal app\/server marker assertion/,
+    ],
+    [
+      "node scripts/verify-deployment-identity.mjs",
+      "node scripts/identity-disabled.mjs",
+      /container-smoke same-origin app\/server deployment acceptance/,
+    ],
+  ]) {
+    const files = withFileChanged(".github/workflows/ci.yml", (content) =>
+      content.replace(current, replacement),
+    );
+    assert.match(validateCiContract(files).join("\n"), expected);
+  }
+});
+
+test("all setup start paths must resolve and verify immutable deployment identity", () => {
+  const shell = baseline.get("scripts/setup.sh");
+  const powershell = baseline.get("scripts/setup.ps1");
+  assert.match(
+    validateSetupOverwriteContract(
+      shell.replace("      resolve_clean_deployment_revision\n", ""),
+      powershell,
+    ).join("\n"),
+    /every one of the three build\/start paths must resolve and verify deployment identity/,
+  );
+  assert.match(
+    validateSetupOverwriteContract(
+      shell,
+      powershell.replace(
+        "      try { Assert-StartedDeploymentIdentity -Revision $deploymentRevision } catch { Write-Err $_.Exception.Message; exit 1 }\n",
+        "",
+      ),
+    ).join("\n"),
+    /every one of the three build\/start paths must resolve and verify deployment identity/,
   );
 });
 
