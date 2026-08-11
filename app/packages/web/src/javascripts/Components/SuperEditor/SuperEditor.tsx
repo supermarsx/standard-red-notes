@@ -1,14 +1,29 @@
 import { WebApplication } from '@/Application/WebApplication'
 import {
   ApplicationEvent,
+  isLitePayload,
   isPayloadSourceRetrieved,
   NativeFeatureIdentifier,
   FeatureStatus,
   EditorLineHeightValues,
   WebAppEvent,
   LocalPrefKey,
+  MutationType,
+  NoteContent,
+  NoteMutator,
+  SNNote,
 } from '@standardnotes/snjs'
-import { CSSProperties, FocusEvent, FunctionComponent, useCallback, useEffect, useRef, useState } from 'react'
+import {
+  CSSProperties,
+  FocusEvent,
+  FunctionComponent,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import { BlocksEditor } from './BlocksEditor'
 import { BlocksEditorComposer } from './BlocksEditorComposer'
 import { ItemSelectionPlugin } from './Plugins/ItemSelectionPlugin/ItemSelectionPlugin'
@@ -24,6 +39,7 @@ import { NoteViewController } from '../NoteView/Controller/NoteViewController'
 import {
   ChangeContentCallbackPlugin,
   ChangeEditorFunction,
+  registerLatestChangeEditorFunction,
 } from './Plugins/ChangeContentCallback/ChangeContentCallback'
 import { SUPER_SHOW_MARKDOWN_PREVIEW, getPrimaryModifier } from '@standardnotes/ui-services'
 import { SuperNoteMarkdownPreview } from './SuperNoteMarkdownPreview'
@@ -39,8 +55,142 @@ import { ElementIds } from '@/Constants/ElementIDs'
 import { NoteFromSelectionPlugin } from './Plugins/NoteFromSelectionPlugin'
 import { useCollaborationRoomAccess } from './Collaboration/useCollaborationRoomAccess'
 import { collaboratorColor } from './Collaboration/collaboratorColor'
+import {
+  matchesNoteEncryptionIdentity,
+  resolveNoteEncryptionIdentity,
+} from './Collaboration/CollaborationKeyDerivation'
+import {
+  authorizedRetrievedEditorSurfaceNote,
+  bindRetrievedReconciliationLifetime,
+  buildRetrievedEditorFallbackContent,
+  commitRetrievedEditorSurfaceForLifetime,
+  flushAuthorizedRetrievedEditorSurfaceBeforeTransition,
+  ownsRetrievedEditorBody,
+  reconcileRetrievedNoteContent,
+  persistAndVerifyRetrievedPayloadPair,
+  persistedPayloadEnvelopesEqual,
+  RetrievedEditorSurfaceState,
+  RetrievedEditorUpdateToken,
+  RetrievedReconciliationLifetime,
+  retrievedEditorComposerLifetimeKey,
+  scheduleRetrievedSyncAfterPreservation,
+  serializeRetrievedConflictPreservation,
+} from './Collaboration/RetrievedNoteReconciliation'
 
 export const SuperNotePreviewCharLimit = 160
+
+function cloneJsonValue<Value>(value: Value): Value {
+  return JSON.parse(JSON.stringify(value)) as Value
+}
+
+const AbortRetrievedConflictMutation = Symbol('abort-retrieved-conflict-mutation')
+const surfaceKeyEpochs = new WeakMap<object, number>()
+let nextSurfaceKeyEpoch = 1
+
+function surfaceKeyEpoch(value: object): number {
+  const existing = surfaceKeyEpochs.get(value)
+  if (existing !== undefined) {
+    return existing
+  }
+  const created = nextSurfaceKeyEpoch
+  nextSurfaceKeyEpoch += 1
+  surfaceKeyEpochs.set(value, created)
+  return created
+}
+
+function currentSurfacePrincipal(application: WebApplication): string {
+  try {
+    const user = application.sessions.isSignedIn() ? application.sessions.getUser() : undefined
+    return user ? `user:${user.uuid}` : 'anonymous'
+  } catch {
+    return 'unavailable'
+  }
+}
+
+function isRetrievedConflictWriteAuthorized(
+  application: WebApplication,
+  expectedIdentity: NonNullable<ReturnType<typeof resolveNoteEncryptionIdentity>>,
+  candidate: SNNote | undefined,
+): candidate is SNNote {
+  if (!candidate || candidate.locked || isLitePayload(candidate.payload)) {
+    return false
+  }
+  try {
+    const vault = application.vaults.getItemVault(candidate)
+    const ownsOrdinaryItem =
+      expectedIdentity.keySystemIdentifier !== null ||
+      expectedIdentity.sharedVaultUuid !== null ||
+      candidate.user_uuid === expectedIdentity.userUuid
+    return (
+      ownsOrdinaryItem &&
+      !application.sessions.isCurrentSessionReadOnly() &&
+      !(vault?.isSharedVaultListing() && application.vaultUsers.isCurrentUserReadonlyVaultMember(vault)) &&
+      application.isAuthorizedToRenderItem(candidate) &&
+      matchesNoteEncryptionIdentity(application, expectedIdentity, candidate)
+    )
+  } catch {
+    return false
+  }
+}
+
+function resolveRetrievedLifetimeIdentity(
+  application: WebApplication,
+  candidate: SNNote,
+  ownerMatchesCurrentPrincipal: boolean,
+) {
+  if (!ownerMatchesCurrentPrincipal) {
+    return undefined
+  }
+  try {
+    const identity = resolveNoteEncryptionIdentity(application, candidate)
+    if (identity) {
+      return identity
+    }
+
+    // Templates and unsynced local notes have no server user_uuid yet. Give
+    // their solo editor a local-only identity bound to the exact session/root
+    // object; it can authorize rendering but can never match a relay lease.
+    if (
+      candidate.locked ||
+      isLitePayload(candidate.payload) ||
+      candidate.key_system_identifier !== undefined ||
+      candidate.shared_vault_uuid !== undefined ||
+      !application.isAuthorizedToRenderItem(candidate)
+    ) {
+      return undefined
+    }
+    const user = application.sessions.isSignedIn() ? application.sessions.getUser() : undefined
+    if (!user) {
+      return candidate.user_uuid === undefined
+        ? {
+            noteUuid: candidate.uuid,
+            userUuid: 'local-anonymous',
+            sessionUser: application,
+            sourceId: `local-anonymous:${surfaceKeyEpoch(application)}:${candidate.uuid}`,
+            keySystemIdentifier: null,
+            sharedVaultUuid: null,
+          }
+        : undefined
+    }
+    if (candidate.user_uuid !== undefined && candidate.user_uuid !== user.uuid) {
+      return undefined
+    }
+    const rootKey = application.encryption.getRootKey()
+    if (!rootKey?.masterKey) {
+      return undefined
+    }
+    return {
+      noteUuid: candidate.uuid,
+      userUuid: user.uuid,
+      sessionUser: user,
+      sourceId: `local-unsynced:${surfaceKeyEpoch(rootKey)}:${candidate.uuid}`,
+      keySystemIdentifier: null,
+      sharedVaultUuid: null,
+    }
+  } catch {
+    return undefined
+  }
+}
 
 type Props = {
   application: WebApplication
@@ -55,6 +205,13 @@ type Props = {
   customTextColor?: string
 }
 
+type RetrievedEditorSurfaceOwner = {
+  controller: NoteViewController
+  principal: string
+}
+
+type RetrievedEditorSurface = RetrievedEditorSurfaceState<RetrievedEditorSurfaceOwner, SNNote>
+
 export const SuperEditor: FunctionComponent<Props> = ({
   application,
   linkingController,
@@ -67,12 +224,132 @@ export const SuperEditor: FunctionComponent<Props> = ({
   customBackgroundColor,
   customTextColor,
 }) => {
-  const note = useRef(controller.item)
+  const [initialEditorSurface] = useState<RetrievedEditorSurface>(() => {
+    const principal = currentSurfacePrincipal(application)
+    const authoritativeNote = application.items.findItem<SNNote>(controller.item.uuid)
+    const initialNote = authoritativeNote ?? controller.item
+    const identity = resolveRetrievedLifetimeIdentity(application, initialNote, true)
+    return {
+      owner: { controller, principal },
+      lifetime: bindRetrievedReconciliationLifetime(undefined, {
+        identity,
+        noteUuid: initialNote.uuid,
+        serverUpdatedAtTimestamp: initialNote.serverUpdatedAtTimestamp ?? 0,
+        text: initialNote.text,
+        previewPlain: initialNote.preview_plain,
+        previewHtml: initialNote.preview_html || undefined,
+      }),
+      generation: 1,
+      note: initialNote,
+    }
+  })
+  const committedEditorSurface = useRef(initialEditorSurface)
+  const note = useRef(initialEditorSurface.note)
+  const surfaceOwner = useRef(initialEditorSurface.owner)
+  const surfaceGeneration = useRef(initialEditorSurface.generation)
+  const retrievedLifetimeRef = useRef<RetrievedReconciliationLifetime>(initialEditorSurface.lifetime)
   const changeEditorFunction = useRef<ChangeEditorFunction | undefined>(undefined)
-  const ignoreNextChange = useRef(false)
+  const ignoreNextChange = useRef<RetrievedEditorUpdateToken | undefined>(undefined)
   const [showMarkdownPreview, setShowMarkdownPreview] = useState(false)
   const getMarkdownPlugin = useRef<GetMarkdownPluginInterface | null>(null)
   const [featureStatus, setFeatureStatus] = useState<FeatureStatus>(FeatureStatus.Entitled)
+  const [, requestSurfaceReconciliation] = useState(0)
+
+  const activeSurfacePrincipal = currentSurfacePrincipal(application)
+  const committedSurfaceAtRender = committedEditorSurface.current
+  const controllerChanged = committedSurfaceAtRender.owner.controller !== controller
+  const nextSurfaceOwner = useMemo(
+    () => (controllerChanged ? { controller, principal: activeSurfacePrincipal } : committedSurfaceAtRender.owner),
+    [activeSurfacePrincipal, committedSurfaceAtRender.owner, controller, controllerChanged],
+  )
+  const authoritativeControllerNote = application.items.findItem<SNNote>(controller.item.uuid)
+  const lifetimeNote = authoritativeControllerNote ?? controller.item
+  const lifetimeIdentity = resolveRetrievedLifetimeIdentity(
+    application,
+    lifetimeNote,
+    nextSurfaceOwner.principal === activeSurfacePrincipal,
+  )
+  const retrievedLifetime = bindRetrievedReconciliationLifetime(committedSurfaceAtRender.lifetime, {
+    identity: lifetimeIdentity,
+    noteUuid: lifetimeNote.uuid,
+    serverUpdatedAtTimestamp: lifetimeNote.serverUpdatedAtTimestamp ?? 0,
+    text: lifetimeNote.text,
+    previewPlain: lifetimeNote.preview_plain,
+    previewHtml: lifetimeNote.preview_html || undefined,
+  })
+  const resetEditorSurface = controllerChanged || committedSurfaceAtRender.lifetime !== retrievedLifetime
+  const plannedEditorSurface = useMemo<RetrievedEditorSurface>(
+    () => ({
+      owner: nextSurfaceOwner,
+      lifetime: retrievedLifetime,
+      generation: committedSurfaceAtRender.generation + (resetEditorSurface ? 1 : 0),
+      note: lifetimeNote,
+    }),
+    [committedSurfaceAtRender.generation, lifetimeNote, nextSurfaceOwner, resetEditorSurface, retrievedLifetime],
+  )
+
+  useLayoutEffect(() => {
+    const expectedOwner = nextSurfaceOwner
+    const expectedLifetime = retrievedLifetime
+    return () => {
+      flushAuthorizedRetrievedEditorSurfaceBeforeTransition({
+        expectedOwner,
+        expectedLifetime,
+        ownerRef: surfaceOwner,
+        lifetimeRef: retrievedLifetimeRef,
+        validateAuthorization: () => {
+          if (expectedOwner.principal !== currentSurfacePrincipal(application)) {
+            return false
+          }
+          const candidate = application.items.findItem<SNNote>(expectedLifetime.noteUuid)
+          if (!candidate) {
+            return false
+          }
+          const liveIdentity = resolveRetrievedLifetimeIdentity(application, candidate, true)
+          return Boolean(
+            authorizedRetrievedEditorSurfaceNote({
+              lifetime: expectedLifetime,
+              identity: liveIdentity,
+              note: candidate,
+            }),
+          )
+        },
+        hasPendingChanges: () => controller.editorHasPendingChanges(),
+        flushPendingChanges: () => controller.flushEditorSerialize(),
+      })
+    }
+  }, [application, controller, nextSurfaceOwner, retrievedLifetime])
+
+  useLayoutEffect(() => {
+    const committed = commitRetrievedEditorSurfaceForLifetime({
+      expectedPrevious: committedSurfaceAtRender,
+      next: plannedEditorSurface,
+      committedSurfaceRef: committedEditorSurface,
+      ownerRef: surfaceOwner,
+      lifetimeRef: retrievedLifetimeRef,
+      generationRef: surfaceGeneration,
+      noteRef: note,
+      changeEditorFunctionRef: changeEditorFunction,
+      ignoreNextChangeRef: ignoreNextChange,
+    })
+    if (!committed) {
+      // A newer commit won the race. Re-plan synchronously before the browser
+      // can dispatch input against a render whose handlers have stale ownership.
+      requestSurfaceReconciliation((version) => version + 1)
+      return
+    }
+    if (resetEditorSurface) {
+      getMarkdownPlugin.current = null
+    }
+  }, [committedSurfaceAtRender, plannedEditorSurface, resetEditorSurface])
+
+  const { latestEditorText, latestEditorPreview, durableState: retrievedDurableState } = retrievedLifetime
+  const { conflictPreservationQueue } = retrievedLifetime
+  const authorizedEditorNote = authorizedRetrievedEditorSurfaceNote({
+    lifetime: retrievedLifetime,
+    identity: lifetimeIdentity,
+    note: lifetimeNote,
+  })
 
   const reloadFeatureStatus = useCallback(() => {
     setFeatureStatus(
@@ -102,21 +379,38 @@ export const SuperEditor: FunctionComponent<Props> = ({
   }, [application, reloadFeatureStatus])
 
   const keyboardService = application.keyboardService
-  const isEditorReadonly = note.current.locked || Boolean(readonly) || featureStatus !== FeatureStatus.Entitled
-  const collaborationAccess = useCollaborationRoomAccess(application, note.current, true)
+  const isEditorReadonly =
+    !authorizedEditorNote ||
+    authorizedEditorNote.locked ||
+    Boolean(readonly) ||
+    featureStatus !== FeatureStatus.Entitled
+  const collaborationAccess = useCollaborationRoomAccess(application, lifetimeNote, true)
   const editorLease = collaborationAccess.status === 'ready' ? collaborationAccess.editorLease : undefined
+  const collaborationIdentity =
+    collaborationAccess.status === 'ready' &&
+    retrievedLifetime.identity &&
+    collaborationAccess.sourceId === retrievedLifetime.identity.sourceId &&
+    collaborationAccess.userUuid === retrievedLifetime.identity.userUuid &&
+    collaborationAccess.sessionUser === retrievedLifetime.identity.sessionUser
+      ? retrievedLifetime.identity
+      : undefined
+  // The elected bootstrapper may seed only the clean, revision-matched body
+  // returned by the freshness barrier; never fall back to a render-time note.
   const collaboration =
-    collaborationAccess.status === 'ready' && editorLease
+    authorizedEditorNote &&
+    collaborationIdentity &&
+    collaborationAccess.status === 'ready' &&
+    editorLease &&
+    typeof collaborationAccess.initialEditorState === 'string'
       ? {
-          room: note.current.uuid,
+          room: authorizedEditorNote.uuid,
           roomKey: collaborationAccess.roomKey,
-          capability: collaborationAccess.capability,
           username: collaborationAccess.username,
           userUuid: collaborationAccess.userUuid,
           cursorColor: collaboratorColor(collaborationAccess.userUuid),
           shouldBootstrap: editorLease.shouldBootstrap,
-          leaseRequestId: editorLease.requestId,
-          initialEditorState: note.current.text,
+          editorLease,
+          initialEditorState: collaborationAccess.initialEditorState,
         }
       : undefined
 
@@ -172,8 +466,18 @@ export const SuperEditor: FunctionComponent<Props> = ({
 
   useEffect(() => {
     return application.actions.addPayloadRequestHandler((uuid) => {
-      if (uuid === note.current.uuid) {
-        const basePayload = note.current.payload.ejected()
+      const candidate = note.current
+      const lifetime = retrievedLifetimeRef.current
+      const liveIdentity = resolveRetrievedLifetimeIdentity(
+        application,
+        candidate,
+        surfaceOwner.current.principal === currentSurfacePrincipal(application),
+      )
+      const authorized = lifetime
+        ? authorizedRetrievedEditorSurfaceNote({ lifetime, identity: liveIdentity, note: candidate })
+        : undefined
+      if (uuid === authorized?.uuid) {
+        const basePayload = authorized.payload.ejected()
         return {
           ...basePayload,
           content: {
@@ -187,8 +491,20 @@ export const SuperEditor: FunctionComponent<Props> = ({
 
   const handleChange = useCallback(
     async (value: string, preview: string, bypassDebounce?: boolean) => {
-      if (ignoreNextChange.current === true) {
-        ignoreNextChange.current = false
+      if (
+        surfaceOwner.current !== nextSurfaceOwner ||
+        retrievedLifetimeRef.current !== retrievedLifetime ||
+        !retrievedLifetime.identity
+      ) {
+        return
+      }
+      // This ref is updated synchronously, including when a retrieved payload
+      // flushes the editor's pending serialize. It is therefore the exact
+      // retained Y.Doc body used for divergent durable-state reconciliation.
+      latestEditorText.current = value
+      latestEditorPreview.current = { previewPlain: preview, previewHtml: undefined }
+      if (ignoreNextChange.current !== undefined) {
+        ignoreNextChange.current = undefined
         return
       }
       if (isEditorReadonly) {
@@ -209,7 +525,7 @@ export const SuperEditor: FunctionComponent<Props> = ({
         },
       })
     },
-    [controller, isEditorReadonly],
+    [controller, isEditorReadonly, latestEditorPreview, latestEditorText, nextSurfaceOwner, retrievedLifetime],
   )
 
   /**
@@ -229,6 +545,9 @@ export const SuperEditor: FunctionComponent<Props> = ({
   const handleEditorReferenceChanges = useCallback(
     (changes: EditorReferenceChanges) => {
       void (async () => {
+        if (surfaceOwner.current !== nextSurfaceOwner || retrievedLifetimeRef.current !== retrievedLifetime) {
+          return
+        }
         // A new-note editor starts from a non-persisted template item. Insert it
         // before resolving newly added references, then carry this editor's own
         // controller item through reconciliation (never the later UI selection).
@@ -236,19 +555,81 @@ export const SuperEditor: FunctionComponent<Props> = ({
           await controller.insertTemplatedNote()
         }
 
+        if (surfaceOwner.current !== nextSurfaceOwner || retrievedLifetimeRef.current !== retrievedLifetime) {
+          return
+        }
         await linkingController.reconcileEditorReferenceChanges(controller.item, changes)
       })().catch(console.error)
     },
-    [controller, linkingController],
+    [controller, linkingController, nextSurfaceOwner, retrievedLifetime],
   )
 
+  const registerChangeEditorFunction = useCallback((callback: ChangeEditorFunction) => {
+    return registerLatestChangeEditorFunction(changeEditorFunction, callback)
+  }, [])
+
   useEffect(() => {
+    // Bind this observer lifetime to the exact session/root-key lease that
+    // mounted it. A later same-UUID account/vault render must never substitute
+    // its lease or key source into already-queued plaintext work.
+    const expectedIdentity = collaborationIdentity
+    const receiptLease = editorLease
+    const expectedSurfaceOwner = nextSurfaceOwner
     const disposer = controller.addNoteInnerValueChangeObserver((updatedNote, source) => {
+      if (surfaceOwner.current !== expectedSurfaceOwner || retrievedLifetimeRef.current !== retrievedLifetime) {
+        return
+      }
+      const liveIdentity = resolveRetrievedLifetimeIdentity(
+        application,
+        updatedNote,
+        surfaceOwner.current.principal === currentSurfacePrincipal(application),
+      )
+      if (
+        !authorizedRetrievedEditorSurfaceNote({
+          lifetime: retrievedLifetime,
+          identity: liveIdentity,
+          note: updatedNote,
+        })
+      ) {
+        return
+      }
       if (updatedNote.uuid !== note.current.uuid) {
         throw Error('Editor received changes for non-current note')
       }
 
       if (isPayloadSourceRetrieved(source)) {
+        const authoritativeIncoming = expectedIdentity
+          ? application.items.findItem<SNNote>(expectedIdentity.noteUuid)
+          : undefined
+        let incomingContentSnapshot: NoteContent | undefined
+        try {
+          const receiptIsValid = Boolean(
+            expectedIdentity &&
+            receiptLease &&
+            ownsRetrievedEditorBody({
+              committedLifetime: retrievedLifetimeRef.current,
+              expectedLifetime: retrievedLifetime,
+              expectedIdentity,
+              liveIdentity,
+              ownerMatchesCurrentPrincipal: surfaceOwner.current.principal === currentSurfacePrincipal(application),
+              collaboration: receiptLease,
+              latestEditorText: latestEditorText.current,
+              durableText: retrievedDurableState.text,
+            }) &&
+            authoritativeIncoming &&
+            isRetrievedConflictWriteAuthorized(application, expectedIdentity, updatedNote) &&
+            isRetrievedConflictWriteAuthorized(application, expectedIdentity, authoritativeIncoming) &&
+            authoritativeIncoming.serverUpdatedAtTimestamp === updatedNote.serverUpdatedAtTimestamp &&
+            authoritativeIncoming.text === updatedNote.text,
+          )
+          if (receiptIsValid) {
+            // Eject and deep-copy only after proving this is the full payload
+            // from the exact mounted session/root-key identity.
+            incomingContentSnapshot = cloneJsonValue(updatedNote.payload.ejected().content)
+          }
+        } catch {
+          incomingContentSnapshot = undefined
+        }
         /**
          * Standard Red Notes (last-edit-loss fix): a retrieved sync payload is about
          * to REPLACE the editor contents. If a local keystroke is still sitting in the
@@ -258,18 +639,236 @@ export const SuperEditor: FunctionComponent<Props> = ({
          * as a conflicted copy, instead of silently discarding it. No-op when there is
          * no pending local edit, so the normal retrieved-update path is unchanged.
          */
-        if (controller.editorHasPendingChanges()) {
-          controller.flushEditorSerialize()
-        }
-        ignoreNextChange.current = true
-        changeEditorFunction.current?.(updatedNote.text)
+        reconcileRetrievedNoteContent({
+          text: updatedNote.text,
+          serverUpdatedAtTimestamp: updatedNote.serverUpdatedAtTimestamp,
+          collaboration: receiptLease,
+          collaborationHasLocalDivergence: () =>
+            Boolean(receiptLease && latestEditorText.current !== retrievedDurableState.text),
+          currentCollaborativeText: () => latestEditorText.current,
+          durableState: retrievedDurableState,
+          editorHasPendingChanges: () => controller.editorHasPendingChanges(),
+          flushEditorSerialize: () => controller.flushEditorSerialize(),
+          changeEditor: changeEditorFunction.current,
+          ignoreNextChangeRef: ignoreNextChange,
+          isEditorLifetimeCurrent: () =>
+            surfaceOwner.current === expectedSurfaceOwner && retrievedLifetimeRef.current === retrievedLifetime,
+          preserveDivergentRetrieved:
+            expectedIdentity && receiptLease && incomingContentSnapshot
+              ? () => {
+                  const capturedIncomingContent = incomingContentSnapshot
+                  let incomingConflict: SNNote | undefined
+                  const currentOriginal = () => application.items.findItem<SNNote>(expectedIdentity.noteUuid)
+                  const originalIsWritable = () =>
+                    isRetrievedConflictWriteAuthorized(application, expectedIdentity, currentOriginal())
+                  const stillOwnsCollaborativeBody = () => {
+                    if (surfaceOwner.current !== expectedSurfaceOwner) {
+                      return false
+                    }
+                    const current = currentOriginal()
+                    const currentIdentity = current
+                      ? resolveRetrievedLifetimeIdentity(
+                          application,
+                          current,
+                          surfaceOwner.current.principal === currentSurfacePrincipal(application),
+                        )
+                      : undefined
+                    return ownsRetrievedEditorBody({
+                      committedLifetime: retrievedLifetimeRef.current,
+                      expectedLifetime: retrievedLifetime,
+                      expectedIdentity,
+                      liveIdentity: currentIdentity,
+                      ownerMatchesCurrentPrincipal:
+                        surfaceOwner.current.principal === currentSurfacePrincipal(application),
+                      collaboration: receiptLease,
+                      latestEditorText: latestEditorText.current,
+                      durableText: retrievedDurableState.text,
+                    })
+                  }
+                  const livePayloadMatches = (uuid: string, expected: SNNote['payload']): boolean => {
+                    const live = application.items.findItem<SNNote>(uuid)
+                    return Boolean(
+                      live &&
+                      !isLitePayload(live.payload) &&
+                      persistedPayloadEnvelopesEqual(live.payloadRepresentation(), expected),
+                    )
+                  }
+                  const persistPair = async (first: SNNote, second: SNNote, validate: () => boolean): Promise<void> => {
+                    const firstPayload = first.payloadRepresentation()
+                    const secondPayload = second.payloadRepresentation()
+                    await persistAndVerifyRetrievedPayloadPair({
+                      first: firstPayload,
+                      second: secondPayload,
+                      validate: () =>
+                        validate() &&
+                        livePayloadMatches(first.uuid, firstPayload) &&
+                        livePayloadMatches(second.uuid, secondPayload),
+                      persist: (payloads) => application.sync.persistPayloads(payloads),
+                      read: (uuid) => application.sync.getFullContentPayload(uuid),
+                    })
+                  }
+
+                  const serialized = serializeRetrievedConflictPreservation({
+                    previous: conflictPreservationQueue.current,
+                    validateBeforeDuplicate: () => {
+                      return originalIsWritable() && stillOwnsCollaborativeBody()
+                    },
+                    duplicate: async () => {
+                      const current = currentOriginal()
+                      if (!isRetrievedConflictWriteAuthorized(application, expectedIdentity, current)) {
+                        throw AbortRetrievedConflictMutation
+                      }
+                      // Keep the genuinely newer retrieved body as a normal
+                      // conflicted copy. Never inject divergent HTTP JSON into an
+                      // actively-owned Y.Doc, which would emit CRDT deletions.
+                      const duplicated = await application.mutator.duplicateItem(current, true, capturedIncomingContent)
+                      if (
+                        !originalIsWritable() ||
+                        isLitePayload(duplicated.payload) ||
+                        duplicated.duplicate_of !== expectedIdentity.noteUuid ||
+                        duplicated.conflictOf !== expectedIdentity.noteUuid
+                      ) {
+                        throw AbortRetrievedConflictMutation
+                      }
+                      incomingConflict = duplicated
+                    },
+                    validateBeforeSave: () => originalIsWritable() && Boolean(incomingConflict),
+                    getLatestValue: () => ({
+                      text: latestEditorText.current,
+                      previews: { ...latestEditorPreview.current },
+                    }),
+                    save: async ({ text, previews }) => {
+                      const conflict = incomingConflict
+                      const saveTarget = currentOriginal()
+                      if (
+                        !conflict ||
+                        !isRetrievedConflictWriteAuthorized(application, expectedIdentity, saveTarget) ||
+                        !stillOwnsCollaborativeBody()
+                      ) {
+                        throw AbortRetrievedConflictMutation
+                      }
+
+                      // Mutate directly so the conflict copy and restored E3 can
+                      // be submitted to storage together. NoteSyncController's
+                      // save promise resolves before its unawaited sync and cannot
+                      // serve as a durability acknowledgement here.
+                      await application.mutator.changeItem<NoteMutator>(
+                        saveTarget,
+                        (mutator) => {
+                          const boundary = currentOriginal()
+                          if (
+                            !isRetrievedConflictWriteAuthorized(application, expectedIdentity, boundary) ||
+                            !stillOwnsCollaborativeBody()
+                          ) {
+                            throw AbortRetrievedConflictMutation
+                          }
+                          mutator.text = text
+                          mutator.preview_plain = previews.previewPlain
+                          mutator.preview_html = previews.previewHtml
+                        },
+                        MutationType.UpdateUserTimestamps,
+                      )
+
+                      const restored = currentOriginal()
+                      const latestValueStillMatches = () =>
+                        latestEditorText.current === text &&
+                        latestEditorPreview.current.previewPlain === previews.previewPlain &&
+                        latestEditorPreview.current.previewHtml === previews.previewHtml
+                      if (
+                        !isRetrievedConflictWriteAuthorized(application, expectedIdentity, restored) ||
+                        !stillOwnsCollaborativeBody() ||
+                        !latestValueStillMatches() ||
+                        restored.text !== text ||
+                        restored.preview_plain !== previews.previewPlain ||
+                        (restored.preview_html || undefined) !== previews.previewHtml
+                      ) {
+                        throw AbortRetrievedConflictMutation
+                      }
+
+                      await persistPair(conflict, restored, () => {
+                        return originalIsWritable() && stillOwnsCollaborativeBody() && latestValueStillMatches()
+                      })
+                    },
+                    preserveLatestFallback: async ({ text, previews }) => {
+                      const conflict = incomingConflict
+                      const current = currentOriginal()
+                      const latestValueStillMatches = () =>
+                        latestEditorText.current === text &&
+                        latestEditorPreview.current.previewPlain === previews.previewPlain &&
+                        latestEditorPreview.current.previewHtml === previews.previewHtml
+                      if (
+                        !conflict ||
+                        !isRetrievedConflictWriteAuthorized(application, expectedIdentity, current) ||
+                        !latestValueStillMatches()
+                      ) {
+                        throw AbortRetrievedConflictMutation
+                      }
+                      const currentPayloadSnapshot = current.payloadRepresentation()
+                      const fallbackContent = buildRetrievedEditorFallbackContent({
+                        currentContent: current.payload.ejected().content,
+                        text,
+                        previewPlain: previews.previewPlain,
+                        previewHtml: previews.previewHtml,
+                      })
+                      // If the provider/editor lifetime ended after the incoming
+                      // copy, never let the stale controller overwrite the primary.
+                      // Preserve the latest editor body plus every independently
+                      // copied live metadata field as a second conflict copy.
+                      const fallback = await application.mutator.duplicateItem(current, true, fallbackContent)
+                      if (
+                        !originalIsWritable() ||
+                        !livePayloadMatches(current.uuid, currentPayloadSnapshot) ||
+                        !latestValueStillMatches() ||
+                        isLitePayload(fallback.payload) ||
+                        fallback.duplicate_of !== expectedIdentity.noteUuid ||
+                        fallback.conflictOf !== expectedIdentity.noteUuid
+                      ) {
+                        throw AbortRetrievedConflictMutation
+                      }
+                      await persistPair(
+                        conflict,
+                        fallback,
+                        () =>
+                          originalIsWritable() &&
+                          livePayloadMatches(current.uuid, currentPayloadSnapshot) &&
+                          latestValueStillMatches(),
+                      )
+                    },
+                  })
+                  const work = scheduleRetrievedSyncAfterPreservation({
+                    work: serialized.work,
+                    validate: originalIsWritable,
+                    schedule: () => {
+                      void application.sync.sync().catch(console.error)
+                    },
+                  })
+                  conflictPreservationQueue.current = work.then(
+                    () => undefined,
+                    () => undefined,
+                  )
+                  return work
+                }
+              : undefined,
+        })
       }
 
       note.current = updatedNote
     })
 
     return disposer
-  }, [controller, controller.item.uuid])
+  }, [
+    application,
+    collaborationIdentity,
+    conflictPreservationQueue,
+    controller,
+    controller.item.uuid,
+    editorLease,
+    latestEditorPreview,
+    latestEditorText,
+    nextSurfaceOwner,
+    retrievedDurableState,
+    retrievedLifetime,
+  ])
 
   const [lineHeight] = useLocalPreference(LocalPrefKey.EditorLineHeight)
   const [fontSize] = useLocalPreference(LocalPrefKey.EditorFontSize)
@@ -332,15 +931,21 @@ export const SuperEditor: FunctionComponent<Props> = ({
               <div className="text-passive-1 flex h-full items-center justify-center text-sm">
                 Preparing encrypted collaboration…
               </div>
+            ) : !authorizedEditorNote ? (
+              <div className="text-passive-1 flex h-full items-center justify-center text-sm">
+                Editor unavailable while encrypted note access is changing…
+              </div>
             ) : (
               <BlocksEditorComposer
-                key={
-                  collaborationAccess.status === 'ready' && editorLease
-                    ? editorLease.requestId
-                    : `${note.current.uuid}:solo`
-                }
+                key={retrievedEditorComposerLifetimeKey({
+                  noteUuid: authorizedEditorNote.uuid,
+                  generation: plannedEditorSurface.generation,
+                  ...(collaborationAccess.status === 'ready' && editorLease
+                    ? { leaseRequestId: editorLease.requestId }
+                    : {}),
+                })}
                 readonly={isEditorReadonly}
-                initialValue={note.current.text}
+                initialValue={authorizedEditorNote.text}
                 collaborating={Boolean(collaboration)}
               >
                 <BlocksEditor
@@ -355,28 +960,31 @@ export const SuperEditor: FunctionComponent<Props> = ({
                   collaboration={collaboration}
                   registerDebounceControl={registerDebounceControl}
                 >
-                  <ItemSelectionPlugin currentNote={note.current} />
-                  <FilePlugin currentNote={note.current} />
+                  <ItemSelectionPlugin currentNote={authorizedEditorNote} />
+                  <FilePlugin currentNote={authorizedEditorNote} />
                   <ItemBubblePlugin />
                   <GetMarkdownPlugin ref={getMarkdownPlugin} />
-                  <ChangeContentCallbackPlugin
-                    providerCallback={(callback) => (changeEditorFunction.current = callback)}
-                  />
+                  <ChangeContentCallbackPlugin providerCallback={registerChangeEditorFunction} />
                   <NodeObserverPlugin onChange={handleEditorReferenceChanges} />
                   {readonly === undefined && (
-                    <ReadonlyPlugin note={note.current} forceReadonly={featureStatus !== FeatureStatus.Entitled} />
+                    <ReadonlyPlugin
+                      note={authorizedEditorNote}
+                      forceReadonly={featureStatus !== FeatureStatus.Entitled}
+                    />
                   )}
                   <AutoFocusPlugin isEnabled={controller.isTemplateNote} />
                   <BlockPickerMenuPlugin />
-                  <NoteFromSelectionPlugin currentNote={note.current} />
+                  <NoteFromSelectionPlugin currentNote={authorizedEditorNote} />
                 </BlocksEditor>
               </BlocksEditorComposer>
             )}
           </FilesControllerProvider>
         </LinkingControllerProvider>
-        <ModalOverlay isOpen={showMarkdownPreview} close={closeMarkdownPreview}>
-          <SuperNoteMarkdownPreview note={note.current} closeDialog={closeMarkdownPreview} />
-        </ModalOverlay>
+        {authorizedEditorNote && (
+          <ModalOverlay isOpen={showMarkdownPreview} close={closeMarkdownPreview}>
+            <SuperNoteMarkdownPreview note={authorizedEditorNote} closeDialog={closeMarkdownPreview} />
+          </ModalOverlay>
+        )}
       </ErrorBoundary>
     </div>
   )
