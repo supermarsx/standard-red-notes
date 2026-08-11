@@ -11,9 +11,12 @@ import type { Conn, SendableSocket } from './registry.js'
 //
 // Protocol is JSON text frames (so it coexists with the existing `ping`/`pong`
 // and push messages on the same socket) with a base64 binary payload:
-//   { t: 'room-join',  room }
-//   { t: 'room-leave', room }
-//   { t: 'yjs',        room, payload }   // base64 yjs sync update
+//   { t: 'room-reserve', room, cap, requestId, role: 'editor', protocolVersion: 2 }
+//   { t: 'room-join', room, cap, requestId, role, protocolVersion: 2 }
+//   { t: 'room-leave', room, requestId }
+//   { t: 'yjs', room, payload, transferId?, stateRequestId? } // base64 encrypted update
+//   { t: 'yjs-chunk',  room, ... }       // bounded chunk of a large encrypted update
+//   { t: 'yjs-retry', room, requestId, requesterClientId } // correlated full-state retry
 //   { t: 'awareness',  room, payload }   // base64 yjs awareness update
 // `yjs`/`awareness` frames are re-broadcast verbatim to every OTHER member of
 // the room. On join, the gateway tells existing members to re-announce state so
@@ -26,25 +29,98 @@ export type RelayFrame =
   // malformed/legacy frame still parses), but the production authorizer REQUIRES
   // a valid one and denies otherwise.
   | {
+      t: 'room-reserve'
+      room: string
+      cap?: string
+      requestId: string
+      role: 'editor'
+      protocolVersion: 2
+    }
+  | {
       t: 'room-join'
       room: string
       cap?: string
       requestId?: string
       role?: RoomLeaseRole
+      protocolVersion?: number
     }
   | { t: 'room-leave'; room: string; requestId?: string }
-  | { t: 'yjs'; room: string; payload: string }
+  | { t: 'yjs'; room: string; payload: string; transferId?: string; stateRequestId?: string }
+  | {
+      t: 'yjs-chunk'
+      room: string
+      transferId: string
+      index: number
+      count: number
+      totalBytes: number
+      payload: string
+      stateRequestId?: string
+    }
+  | { t: 'yjs-retry'; room: string; requestId: string; requesterClientId: number }
   | { t: 'awareness'; room: string; payload: string }
   | { t: 'comment'; room: string; payload: string }
 
-const RELAY_TYPES = new Set(['room-join', 'room-leave', 'yjs', 'awareness', 'comment'])
+const RELAY_TYPES = new Set([
+  'room-reserve',
+  'room-join',
+  'room-leave',
+  'yjs',
+  'yjs-chunk',
+  'yjs-retry',
+  'awareness',
+  'comment',
+])
+export const COLLABORATION_PROTOCOL_VERSION = 2
 const MAX_ROOM_ID = 200
 const MAX_PAYLOAD = 512 * 1024 // 512 KiB per frame; a yjs update is normally tiny.
+export const YJS_CHUNK_PLAINTEXT_BYTES = 128 * 1024
+export const MAX_YJS_TRANSFER_BYTES = 4 * 1024 * 1024
+export const MAX_YJS_TRANSFER_CHUNKS = MAX_YJS_TRANSFER_BYTES / YJS_CHUNK_PLAINTEXT_BYTES
 // A signed JWT capability is small; cap the field so a junk frame can't blow up
 // memory and so verification stays cheap.
 const MAX_CAP = 4096
 const MAX_REQUEST_ID = 128
+export const MAX_YJS_CLIENT_ID = 0xffff_ffff
 export type RoomLeaseRole = 'editor' | 'comment'
+
+// Reservations exist before normal room membership, so the membership cap below
+// cannot bound them. Keep this ledger deliberately smaller than the normal room
+// cap: an editor reservation should be activated almost immediately.
+export const MAX_PENDING_EDITOR_RESERVATIONS_PER_CONNECTION = 8
+export const MAX_PENDING_EDITOR_RESERVATIONS_PER_ROOM = 32
+export const PENDING_EDITOR_RESERVATION_ACTIVATION_TIMEOUT_MS = 15_000
+export const MAX_REQUEST_LEASES_PER_CONNECTION = 128
+export const MAX_REQUEST_LEASES_PER_CONNECTION_PER_ROOM = 8
+export const MAX_REQUEST_LEASES_PER_ROOM = 256
+export const MAX_CONNECTIONS_PER_ROOM = 128
+
+// Control frames are far more expensive than opaque updates: reserve invokes
+// capability verification and distributed lease coordination, while retry asks
+// every peer to regenerate a full Yjs state. Unique request ids must not bypass
+// these fixed-window budgets.
+export const CONTROL_FRAME_WINDOW_MS = 10_000
+export const MAX_ROOM_RESERVE_FRAMES_PER_CONNECTION = 12
+export const MAX_ROOM_RESERVE_FRAMES_PER_ROOM = 48
+export const MAX_ROOM_JOIN_FRAMES_PER_CONNECTION = 16
+export const MAX_ROOM_JOIN_FRAMES_PER_ROOM = 64
+export const MAX_YJS_RETRY_FRAMES_PER_CONNECTION = 3
+export const MAX_YJS_RETRY_FRAMES_PER_ROOM = 12
+const MAX_TRACKED_CONTROL_ROOMS = 2_048
+
+const CONTROL_FRAME_LIMITS = Object.freeze({
+  'room-reserve': {
+    connection: MAX_ROOM_RESERVE_FRAMES_PER_CONNECTION,
+    room: MAX_ROOM_RESERVE_FRAMES_PER_ROOM,
+  },
+  'room-join': {
+    connection: MAX_ROOM_JOIN_FRAMES_PER_CONNECTION,
+    room: MAX_ROOM_JOIN_FRAMES_PER_ROOM,
+  },
+  'yjs-retry': {
+    connection: MAX_YJS_RETRY_FRAMES_PER_CONNECTION,
+    room: MAX_YJS_RETRY_FRAMES_PER_ROOM,
+  },
+})
 
 /**
  * Parse a raw text frame into a RelayFrame, or return null if it is not a
@@ -73,10 +149,27 @@ export function parseRelayFrame(raw: string): RelayFrame | null {
     }
     return { t, room, ...(requestId ? { requestId } : {}) }
   }
-  if (t === 'room-join') {
+  if (t === 'yjs-retry') {
+    const requestId = obj.requestId
+    const requesterClientId = obj.requesterClientId
+    if (
+      typeof requestId !== 'string' ||
+      requestId.length === 0 ||
+      requestId.length > MAX_REQUEST_ID ||
+      typeof requesterClientId !== 'number' ||
+      !Number.isSafeInteger(requesterClientId) ||
+      requesterClientId < 0 ||
+      requesterClientId > MAX_YJS_CLIENT_ID
+    ) {
+      return null
+    }
+    return { t, room, requestId, requesterClientId }
+  }
+  if (t === 'room-reserve' || t === 'room-join') {
     const cap = obj.cap
     const requestId = obj.requestId
     const role = obj.role
+    const protocolVersion = obj.protocolVersion
     if (
       requestId !== undefined &&
       (typeof requestId !== 'string' || requestId.length === 0 || requestId.length > MAX_REQUEST_ID)
@@ -86,8 +179,32 @@ export function parseRelayFrame(raw: string): RelayFrame | null {
     if (role !== undefined && role !== 'editor' && role !== 'comment') {
       return null
     }
+    if (t === 'room-reserve') {
+      if (
+        typeof requestId !== 'string' ||
+        requestId.length === 0 ||
+        requestId.length > MAX_REQUEST_ID ||
+        role !== 'editor' ||
+        protocolVersion !== COLLABORATION_PROTOCOL_VERSION
+      ) {
+        return null
+      }
+    } else if (
+      protocolVersion !== undefined &&
+      (!Number.isSafeInteger(protocolVersion) || protocolVersion !== COLLABORATION_PROTOCOL_VERSION)
+    ) {
+      return null
+    }
     if (cap === undefined || cap === null) {
-      return { t, room, ...(requestId ? { requestId } : {}), ...(role ? { role } : {}) }
+      return {
+        t,
+        room,
+        ...(requestId ? { requestId } : {}),
+        ...(role ? { role } : {}),
+        ...(protocolVersion === COLLABORATION_PROTOCOL_VERSION
+          ? { protocolVersion: COLLABORATION_PROTOCOL_VERSION }
+          : {}),
+      } as RelayFrame
     }
     if (typeof cap !== 'string' || cap.length === 0 || cap.length > MAX_CAP) {
       // A present-but-malformed capability is itself suspicious: drop the whole
@@ -95,10 +212,75 @@ export function parseRelayFrame(raw: string): RelayFrame | null {
       // production authorizer, denied) join with side effects.
       return null
     }
-    return { t, room, cap, ...(requestId ? { requestId } : {}), ...(role ? { role } : {}) }
+    return {
+      t,
+      room,
+      cap,
+      ...(requestId ? { requestId } : {}),
+      ...(role ? { role } : {}),
+      ...(protocolVersion === COLLABORATION_PROTOCOL_VERSION
+        ? { protocolVersion: COLLABORATION_PROTOCOL_VERSION }
+        : {}),
+    } as RelayFrame
   }
   const payload = obj.payload
   if (typeof payload !== 'string' || payload.length === 0 || payload.length > MAX_PAYLOAD) return null
+  const stateRequestId = obj.stateRequestId
+  if (
+    stateRequestId !== undefined &&
+    (typeof stateRequestId !== 'string' || stateRequestId.length === 0 || stateRequestId.length > MAX_REQUEST_ID)
+  ) {
+    return null
+  }
+  if (t === 'yjs') {
+    const transferId = obj.transferId
+    if (
+      transferId !== undefined &&
+      (typeof transferId !== 'string' || transferId.length === 0 || transferId.length > MAX_REQUEST_ID)
+    ) {
+      return null
+    }
+    return {
+      t,
+      room,
+      payload,
+      ...(transferId ? { transferId } : {}),
+      ...(stateRequestId ? { stateRequestId } : {}),
+    }
+  }
+  if (t === 'yjs-chunk') {
+    const transferId = obj.transferId
+    const index = obj.index
+    const count = obj.count
+    const totalBytes = obj.totalBytes
+    if (
+      typeof transferId !== 'string' ||
+      transferId.length === 0 ||
+      transferId.length > MAX_REQUEST_ID ||
+      !Number.isSafeInteger(index) ||
+      !Number.isSafeInteger(count) ||
+      !Number.isSafeInteger(totalBytes) ||
+      (count as number) < 2 ||
+      (count as number) > MAX_YJS_TRANSFER_CHUNKS ||
+      (index as number) < 0 ||
+      (index as number) >= (count as number) ||
+      (totalBytes as number) <= YJS_CHUNK_PLAINTEXT_BYTES ||
+      (totalBytes as number) > MAX_YJS_TRANSFER_BYTES ||
+      Math.ceil((totalBytes as number) / YJS_CHUNK_PLAINTEXT_BYTES) !== count
+    ) {
+      return null
+    }
+    return {
+      t,
+      room,
+      transferId,
+      index: index as number,
+      count: count as number,
+      totalBytes: totalBytes as number,
+      payload,
+      ...(stateRequestId ? { stateRequestId } : {}),
+    }
+  }
   return { t: t as 'yjs' | 'awareness' | 'comment', room, payload }
 }
 
@@ -122,11 +304,254 @@ type RoomMembership = {
   legacyLease?: RoomLease
 }
 
+type PendingEditorReservation = {
+  expiresAt: number
+}
+
+export type ExpiredPendingEditorReservation<S extends SendableSocket = SendableSocket> = {
+  conn: Conn<S>
+  room: string
+  requestId: string
+}
+
+type ControlFrameKind = 'room-reserve' | 'room-join' | 'yjs-retry'
+
+type ControlWindow = {
+  startedAt: number
+  count: number
+}
+
+type ControlWindows = Record<ControlFrameKind, ControlWindow>
+
 export class RoomRegistry<S extends SendableSocket = SendableSocket> {
   private readonly byRoom = new Map<string, Map<Conn<S>, RoomMembership>>()
   private readonly byConn = new WeakMap<Conn<S>, Set<string>>()
+  private readonly pendingReservationsByRoom = new Map<string, Map<Conn<S>, Map<string, PendingEditorReservation>>>()
+  private readonly pendingReservationsByConn = new WeakMap<Conn<S>, Map<string, Set<string>>>()
+  private readonly controlWindowsByConn = new WeakMap<Conn<S>, ControlWindows>()
+  private readonly controlWindowsByRoom = new Map<string, ControlWindows>()
 
   constructor(private readonly now: () => number = Date.now) {}
+
+  /**
+   * Claim a bounded slot before awaiting capability authorization. The short
+   * provisional expiry prevents a stalled authorizer from pinning capacity.
+   * Replays of the same request are idempotent and do not consume another slot.
+   */
+  reservePendingEditorSlot(room: string, conn: Conn<S>, requestId: string): { accepted: boolean; created: boolean } {
+    const existing = this.pendingReservationsByRoom.get(room)?.get(conn)?.get(requestId)
+    if (existing) {
+      return { accepted: true, created: false }
+    }
+
+    if (
+      this.pendingReservationCountForConn(conn) >= MAX_PENDING_EDITOR_RESERVATIONS_PER_CONNECTION ||
+      this.pendingReservationCountForRoom(room) >= MAX_PENDING_EDITOR_RESERVATIONS_PER_ROOM
+    ) {
+      return { accepted: false, created: false }
+    }
+
+    let roomReservations = this.pendingReservationsByRoom.get(room)
+    if (!roomReservations) {
+      roomReservations = new Map()
+      this.pendingReservationsByRoom.set(room, roomReservations)
+    }
+    let connectionReservations = roomReservations.get(conn)
+    if (!connectionReservations) {
+      connectionReservations = new Map()
+      roomReservations.set(conn, connectionReservations)
+    }
+    connectionReservations.set(requestId, {
+      expiresAt: this.now() + PENDING_EDITOR_RESERVATION_ACTIVATION_TIMEOUT_MS,
+    })
+
+    let connectionRooms = this.pendingReservationsByConn.get(conn)
+    if (!connectionRooms) {
+      connectionRooms = new Map()
+      this.pendingReservationsByConn.set(conn, connectionRooms)
+    }
+    let roomRequestIds = connectionRooms.get(room)
+    if (!roomRequestIds) {
+      roomRequestIds = new Set()
+      connectionRooms.set(room, roomRequestIds)
+    }
+    roomRequestIds.add(requestId)
+    return { accepted: true, created: true }
+  }
+
+  /** Bind the slot to the verified capability without extending its short activation deadline. */
+  confirmPendingEditorReservation(
+    room: string,
+    conn: Conn<S>,
+    requestId: string,
+    expiresAt: number,
+  ): number | undefined {
+    const reservation = this.pendingReservationsByRoom.get(room)?.get(conn)?.get(requestId)
+    const now = this.now()
+    if (!reservation || reservation.expiresAt <= now || !Number.isFinite(expiresAt) || expiresAt <= now) {
+      this.releasePendingEditorReservation(room, conn, requestId)
+      return undefined
+    }
+    reservation.expiresAt = Math.min(
+      reservation.expiresAt,
+      expiresAt,
+      now + PENDING_EDITOR_RESERVATION_ACTIVATION_TIMEOUT_MS,
+    )
+    return reservation.expiresAt
+  }
+
+  hasPendingEditorReservation(room: string, conn: Conn<S>, requestId: string): boolean {
+    const reservation = this.pendingReservationsByRoom.get(room)?.get(conn)?.get(requestId)
+    return reservation !== undefined && reservation.expiresAt > this.now()
+  }
+
+  releasePendingEditorReservation(room: string, conn: Conn<S>, requestId?: string): void {
+    const roomReservations = this.pendingReservationsByRoom.get(room)
+    const connectionReservations = roomReservations?.get(conn)
+    if (!roomReservations || !connectionReservations) {
+      return
+    }
+
+    const connectionRooms = this.pendingReservationsByConn.get(conn)
+    const roomRequestIds = connectionRooms?.get(room)
+    if (requestId) {
+      connectionReservations.delete(requestId)
+      roomRequestIds?.delete(requestId)
+    } else {
+      connectionReservations.clear()
+      roomRequestIds?.clear()
+    }
+    if (connectionReservations.size === 0) {
+      roomReservations.delete(conn)
+      connectionRooms?.delete(room)
+    }
+    if (roomReservations.size === 0) {
+      this.pendingReservationsByRoom.delete(room)
+    }
+    if (connectionRooms?.size === 0) {
+      this.pendingReservationsByConn.delete(conn)
+    }
+  }
+
+  pendingReservationCountForConn(conn: Conn<S>): number {
+    let count = 0
+    for (const requestIds of this.pendingReservationsByConn.get(conn)?.values() ?? []) {
+      count += requestIds.size
+    }
+    return count
+  }
+
+  pendingReservationCountForRoom(room: string): number {
+    let count = 0
+    for (const reservations of this.pendingReservationsByRoom.get(room)?.values() ?? []) {
+      count += reservations.size
+    }
+    return count
+  }
+
+  takeExpiredPendingEditorReservationsForConn(conn: Conn<S>): ExpiredPendingEditorReservation<S>[] {
+    const connectionRooms = this.pendingReservationsByConn.get(conn)
+    if (!connectionRooms) {
+      return []
+    }
+    return [...connectionRooms.keys()].flatMap((room) => this.takeExpiredPendingEditorReservationsInRoom(room, conn))
+  }
+
+  takeExpiredPendingEditorReservationsForRoom(room: string): ExpiredPendingEditorReservation<S>[] {
+    if (!this.pendingReservationsByRoom.has(room)) {
+      return []
+    }
+    return this.takeExpiredPendingEditorReservationsInRoom(room)
+  }
+
+  /** Atomically consume both the connection and aggregate room control budget. */
+  allowControlFrame(kind: ControlFrameKind, room: string, conn: Conn<S>): boolean {
+    const now = this.now()
+    this.pruneControlRooms(now)
+    const connectionWindows = this.controlWindowsByConn.get(conn) ?? this.newControlWindows(now)
+    const connectionWindow = this.currentControlWindow(connectionWindows[kind], now)
+    const limits = CONTROL_FRAME_LIMITS[kind]
+    if (connectionWindow.count >= limits.connection) {
+      return false
+    }
+    let roomWindows = this.controlWindowsByRoom.get(room)
+    if (!roomWindows) {
+      if (this.controlWindowsByRoom.size >= MAX_TRACKED_CONTROL_ROOMS) {
+        return false
+      }
+      roomWindows = this.newControlWindows(now)
+      this.controlWindowsByRoom.set(room, roomWindows)
+    }
+
+    const roomWindow = this.currentControlWindow(roomWindows[kind], now)
+    if (roomWindow.count >= limits.room) {
+      return false
+    }
+    connectionWindow.count += 1
+    roomWindow.count += 1
+    this.controlWindowsByConn.set(conn, connectionWindows)
+    return true
+  }
+
+  requestLease(
+    room: string,
+    conn: Conn<S>,
+    requestId: string,
+  ): { role: RoomLeaseRole; shouldBootstrap: boolean } | undefined {
+    const membership = this.byRoom.get(room)?.get(conn)
+    if (!membership || !this.pruneExpiredLeases(room, conn, membership)) {
+      return undefined
+    }
+    const lease = membership.requestIds.get(requestId)
+    return lease ? { role: lease.role, shouldBootstrap: lease.shouldBootstrap } : undefined
+  }
+
+  /** Read-only admission check used before expensive capability authorization. */
+  canAcceptJoin(room: string, conn: Conn<S>, requestId?: string): boolean {
+    this.members(room)
+    const connectionRooms = this.byConn.get(conn)
+    if (!connectionRooms?.has(room) && (connectionRooms?.size ?? 0) >= MAX_ROOMS_PER_CONNECTION) {
+      return false
+    }
+    const members = this.byRoom.get(room)
+    const membership = members?.get(conn)
+    if (!membership && (members?.size ?? 0) >= MAX_CONNECTIONS_PER_ROOM) {
+      return false
+    }
+    if (!requestId || membership?.requestIds.has(requestId)) {
+      return true
+    }
+    if ((membership?.requestIds.size ?? 0) >= MAX_REQUEST_LEASES_PER_CONNECTION_PER_ROOM) {
+      return false
+    }
+    if (this.requestLeaseCountForConn(conn) >= MAX_REQUEST_LEASES_PER_CONNECTION) {
+      return false
+    }
+    return this.requestLeaseCountForRoom(room) < MAX_REQUEST_LEASES_PER_ROOM
+  }
+
+  private requestLeaseCountForConn(conn: Conn<S>): number {
+    const connectionRooms = this.byConn.get(conn)
+    if (!connectionRooms) {
+      return 0
+    }
+    let count = 0
+    for (const room of [...connectionRooms]) {
+      const membership = this.byRoom.get(room)?.get(conn)
+      if (membership && this.pruneExpiredLeases(room, conn, membership)) {
+        count += membership.requestIds.size
+      }
+    }
+    return count
+  }
+
+  private requestLeaseCountForRoom(room: string): number {
+    let count = 0
+    for (const membership of this.byRoom.get(room)?.values() ?? []) {
+      count += membership.requestIds.size
+    }
+    return count
+  }
 
   /** Joins one logical lease and elects exactly one editor bootstrapper. */
   join(
@@ -141,6 +566,14 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
       return { joined: false, shouldBootstrap: false }
     }
     this.members(room) // prune expired leases before bootstrap election
+    const existingMembership = this.byRoom.get(room)?.get(conn)
+    const existingLease = requestId ? existingMembership?.requestIds.get(requestId) : existingMembership?.legacyLease
+    if (existingLease && existingLease.role !== role) {
+      return { joined: false, shouldBootstrap: false }
+    }
+    if (!this.canAcceptJoin(room, conn, requestId)) {
+      return { joined: false, shouldBootstrap: false }
+    }
     let rooms = this.byConn.get(conn)
     if (!rooms) {
       rooms = new Set<string>()
@@ -155,10 +588,6 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
       this.byRoom.set(room, members)
     }
     const membership = members.get(conn)
-    const existingLease = requestId ? membership?.requestIds.get(requestId) : membership?.legacyLease
-    if (existingLease && existingLease.role !== role) {
-      return { joined: false, shouldBootstrap: false }
-    }
     const shouldBootstrap =
       existingLease?.shouldBootstrap ??
       (role === 'editor' ? (shouldBootstrapOverride ?? !this.hasEditorLease(room)) : false)
@@ -215,6 +644,10 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
 
   /** Remove a connection from every room it joined (on socket close). */
   leaveAll(conn: Conn<S>): void {
+    for (const room of [...(this.pendingReservationsByConn.get(conn)?.keys() ?? [])]) {
+      this.releasePendingEditorReservation(room, conn)
+    }
+    this.controlWindowsByConn.delete(conn)
     const rooms = this.byConn.get(conn)
     if (!rooms) return
     for (const room of rooms) {
@@ -225,6 +658,39 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
       }
     }
     this.byConn.delete(conn)
+  }
+
+  /** Fail closed when the distributed relay can no longer guarantee convergence. */
+  denyRoom(room: string): void {
+    const members = this.byRoom.get(room)
+    if (members) {
+      for (const [conn, membership] of members) {
+        for (const requestId of membership.requestIds.keys()) {
+          this.sendDenied(conn, room, requestId)
+        }
+        if (membership.legacyLease) {
+          this.sendDenied(conn, room)
+        }
+        this.byConn.get(conn)?.delete(room)
+      }
+      this.byRoom.delete(room)
+    }
+    const pending = this.pendingReservationsByRoom.get(room)
+    if (pending) {
+      for (const [conn, reservations] of [...pending]) {
+        for (const requestId of reservations.keys()) {
+          this.sendDenied(conn, room, requestId)
+        }
+        this.releasePendingEditorReservation(room, conn)
+      }
+    }
+  }
+
+  denyAllRooms(): void {
+    const rooms = new Set([...this.byRoom.keys(), ...this.pendingReservationsByRoom.keys()])
+    for (const room of rooms) {
+      this.denyRoom(room)
+    }
   }
 
   members(room: string): Conn<S>[] {
@@ -254,11 +720,31 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
     return this.pruneExpiredLeases(room, conn, membership)
   }
 
-  /** Proactively evict expired memberships even while a room is idle. */
-  evictExpired(): void {
+  /** True only while this connection owns at least one live lease for `role`. */
+  hasRole(room: string, conn: Conn<S>, role: RoomLeaseRole): boolean {
+    const membership = this.byRoom.get(room)?.get(conn)
+    if (!membership || !this.pruneExpiredLeases(room, conn, membership)) {
+      return false
+    }
+    if (membership.legacyLease?.role === role) {
+      return true
+    }
+    for (const lease of membership.requestIds.values()) {
+      if (lease.role === role) {
+        return true
+      }
+    }
+    return false
+  }
+
+  /** Proactively evict expired memberships and return reservations needing distributed release. */
+  evictExpired(): ExpiredPendingEditorReservation<S>[] {
     for (const room of [...this.byRoom.keys()]) {
       this.members(room)
     }
+    return [...this.pendingReservationsByRoom.keys()].flatMap((room) =>
+      this.takeExpiredPendingEditorReservationsInRoom(room),
+    )
   }
 
   private pruneExpiredLeases(room: string, conn: Conn<S>, membership: RoomMembership): boolean {
@@ -278,6 +764,58 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
     }
     this.leave(room, conn)
     return false
+  }
+
+  private takeExpiredPendingEditorReservationsInRoom(
+    room: string,
+    onlyConnection?: Conn<S>,
+  ): ExpiredPendingEditorReservation<S>[] {
+    const now = this.now()
+    const expired: ExpiredPendingEditorReservation<S>[] = []
+    const roomReservations = this.pendingReservationsByRoom.get(room)
+    if (!roomReservations) {
+      return expired
+    }
+    for (const [conn, reservations] of [...roomReservations]) {
+      if (onlyConnection && conn !== onlyConnection) {
+        continue
+      }
+      for (const [requestId, reservation] of [...reservations]) {
+        if (reservation.expiresAt <= now) {
+          expired.push({ conn, room, requestId })
+          this.releasePendingEditorReservation(room, conn, requestId)
+        }
+      }
+    }
+    return expired
+  }
+
+  private newControlWindows(now: number): ControlWindows {
+    return {
+      'room-reserve': { startedAt: now, count: 0 },
+      'room-join': { startedAt: now, count: 0 },
+      'yjs-retry': { startedAt: now, count: 0 },
+    }
+  }
+
+  private currentControlWindow(window: ControlWindow, now: number): ControlWindow {
+    if (now - window.startedAt >= CONTROL_FRAME_WINDOW_MS) {
+      window.startedAt = now
+      window.count = 0
+    }
+    return window
+  }
+
+  private pruneControlRooms(now: number): void {
+    for (const [room, windows] of this.controlWindowsByRoom) {
+      if (
+        now - windows['room-reserve'].startedAt >= CONTROL_FRAME_WINDOW_MS &&
+        now - windows['room-join'].startedAt >= CONTROL_FRAME_WINDOW_MS &&
+        now - windows['yjs-retry'].startedAt >= CONTROL_FRAME_WINDOW_MS
+      ) {
+        this.controlWindowsByRoom.delete(room)
+      }
+    }
   }
 
   private sendDenied(conn: Conn<S>, room: string, requestId?: string): void {
@@ -347,11 +885,26 @@ export interface RoomRelayLifecycle<S extends SendableSocket = SendableSocket> {
   reserveEditorLease(
     conn: Conn<S>,
     room: string,
-    requestId: string | undefined,
+    requestId: string,
     expiresAt: number,
-  ): Promise<{ shouldBootstrap?: boolean }>
+    protocolVersion: 2,
+    serverUpdatedAtTimestamp: number,
+  ): Promise<{ shouldBootstrap: boolean; bootstrapChallenge?: string }>
+  activateEditorLease(
+    conn: Conn<S>,
+    room: string,
+    requestId: string,
+    expiresAt: number,
+    protocolVersion: 2,
+    serverUpdatedAtTimestamp: number,
+    bootstrapChallenge?: string,
+  ): Promise<{ shouldBootstrap: boolean }>
   releaseLease(conn: Conn<S>, room: string, requestId: string | undefined): Promise<void>
-  publish(frame: Extract<RelayFrame, { t: 'yjs' | 'awareness' | 'comment' }> | { t: 'room-sync'; room: string }): void
+  publish(
+    frame:
+      | Extract<RelayFrame, { t: 'yjs' | 'yjs-chunk' | 'yjs-retry' | 'awareness' | 'comment' }>
+      | { t: 'room-sync'; room: string },
+  ): Promise<void>
 }
 
 /**
@@ -369,6 +922,10 @@ export type RoomJoinAuthorization =
       authorized: true
       /** Epoch milliseconds; continued send and receive access ends here. */
       expiresAt: number
+      serverUpdatedAtTimestamp: number
+      collaborationProtocolVersion: 2
+      leaseRequestId?: string
+      bootstrapChallenge?: string
     }
 
 export type RoomJoinAuthorizer = (
@@ -376,6 +933,10 @@ export type RoomJoinAuthorizer = (
   room: string,
   capability?: string,
 ) => RoomJoinAuthorization | Promise<RoomJoinAuthorization>
+
+function ignoreLifecycleReleaseFailure(): undefined {
+  return undefined
+}
 
 /**
  * Handle one parsed relay frame against the room registry on behalf of `conn`.
@@ -403,53 +964,232 @@ export async function handleRelayFrame<S extends SendableSocket>(
   if (isConnectionActive && !isConnectionActive()) {
     return 0
   }
-  switch (frame.t) {
-    case 'room-join': {
-      let authorization: RoomJoinAuthorization = {
+  const deny = (room: string, requestId?: string): number => {
+    try {
+      conn.socket.send(JSON.stringify({ t: 'room-denied', room, ...(requestId ? { requestId } : {}) }))
+    } catch {
+      /* socket unwritable */
+    }
+    return 0
+  }
+  const authorizeCapability = async (room: string, capability?: string): Promise<RoomJoinAuthorization> => {
+    if (!authorize) {
+      return {
         authorized: true,
         expiresAt: Number.POSITIVE_INFINITY,
+        serverUpdatedAtTimestamp: 1,
+        collaborationProtocolVersion: COLLABORATION_PROTOCOL_VERSION,
       }
-      if (authorize !== undefined) {
-        try {
-          authorization = await authorize(conn.userUuid, frame.room, frame.cap)
-        } catch {
-          authorization = { authorized: false } // fail closed on authorizer error
+    }
+    try {
+      return await authorize(conn.userUuid, room, capability)
+    } catch {
+      return { authorized: false }
+    }
+  }
+  switch (frame.t) {
+    case 'room-reserve': {
+      if (!lifecycle) {
+        return deny(frame.room, frame.requestId)
+      }
+      if (!rooms.allowControlFrame('room-reserve', frame.room, conn)) {
+        return deny(frame.room, frame.requestId)
+      }
+      const expiredReservations = [
+        ...rooms.takeExpiredPendingEditorReservationsForConn(conn),
+        ...rooms.takeExpiredPendingEditorReservationsForRoom(frame.room),
+      ]
+      await Promise.all(
+        expiredReservations.map((expired) =>
+          lifecycle.releaseLease(expired.conn, expired.room, expired.requestId).catch(ignoreLifecycleReleaseFailure),
+        ),
+      )
+      const slot = rooms.reservePendingEditorSlot(frame.room, conn, frame.requestId)
+      if (!slot.accepted) {
+        return deny(frame.room, frame.requestId)
+      }
+      const authorization = await authorizeCapability(frame.room, frame.cap)
+      if (
+        !authorization.authorized ||
+        authorization.collaborationProtocolVersion !== COLLABORATION_PROTOCOL_VERSION ||
+        authorization.leaseRequestId !== frame.requestId ||
+        authorization.bootstrapChallenge !== undefined
+      ) {
+        if (slot.created) {
+          rooms.releasePendingEditorReservation(frame.room, conn, frame.requestId)
         }
-        if (!authorization.authorized) {
-          // Tell the client its join was refused (so it can stop the provider)
-          // and do NOT add it to the room.
-          try {
-            conn.socket.send(
-              JSON.stringify({
-                t: 'room-denied',
-                room: frame.room,
-                ...(frame.requestId ? { requestId: frame.requestId } : {}),
-              }),
-            )
-          } catch {
-            /* socket unwritable; nothing else to do */
+        return deny(frame.room, frame.requestId)
+      }
+      if (isConnectionActive && !isConnectionActive()) {
+        rooms.releasePendingEditorReservation(frame.room, conn, frame.requestId)
+        return 0
+      }
+      const activationDeadline = rooms.confirmPendingEditorReservation(
+        frame.room,
+        conn,
+        frame.requestId,
+        authorization.expiresAt,
+      )
+      if (activationDeadline === undefined) {
+        return deny(frame.room, frame.requestId)
+      }
+      try {
+        const reservation = await lifecycle.reserveEditorLease(
+          conn,
+          frame.room,
+          frame.requestId,
+          activationDeadline,
+          COLLABORATION_PROTOCOL_VERSION,
+          authorization.serverUpdatedAtTimestamp,
+        )
+        if (
+          (isConnectionActive && !isConnectionActive()) ||
+          !rooms.hasPendingEditorReservation(frame.room, conn, frame.requestId)
+        ) {
+          rooms.releasePendingEditorReservation(frame.room, conn, frame.requestId)
+          await lifecycle.releaseLease(conn, frame.room, frame.requestId).catch(ignoreLifecycleReleaseFailure)
+          return 0
+        }
+        conn.socket.send(
+          JSON.stringify({
+            t: 'room-reserved',
+            room: frame.room,
+            requestId: frame.requestId,
+            bootstrap: reservation.shouldBootstrap,
+            ...(reservation.bootstrapChallenge ? { bootstrapChallenge: reservation.bootstrapChallenge } : {}),
+            protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+            maxTransferBytes: MAX_YJS_TRANSFER_BYTES,
+          }),
+        )
+      } catch {
+        rooms.releasePendingEditorReservation(frame.room, conn, frame.requestId)
+        await lifecycle.releaseLease(conn, frame.room, frame.requestId).catch(ignoreLifecycleReleaseFailure)
+        return deny(frame.room, frame.requestId)
+      }
+      return 0
+    }
+    case 'room-join': {
+      const requestedRole = frame.role ?? 'editor'
+      const productionProtocolRequired = authorize !== undefined || lifecycle !== undefined
+      const existingRequestLease = frame.requestId ? rooms.requestLease(frame.room, conn, frame.requestId) : undefined
+
+      // React StrictMode and reconnect churn may replay an already-active
+      // logical join. Acknowledge that exact lease without re-authorizing,
+      // refreshing its expiry, activating Redis again, or broadcasting another
+      // room-wide sync request. Conflicting role reuse is ignored without
+      // evicting the valid lease that already owns this request id.
+      if (existingRequestLease) {
+        if (existingRequestLease.role !== requestedRole) {
+          if (existingRequestLease.role === 'comment' && requestedRole === 'editor' && frame.requestId) {
+            rooms.releasePendingEditorReservation(frame.room, conn, frame.requestId)
+            if (lifecycle) {
+              await lifecycle.releaseLease(conn, frame.room, frame.requestId).catch(ignoreLifecycleReleaseFailure)
+            }
           }
           return 0
         }
+        if (productionProtocolRequired && frame.protocolVersion !== COLLABORATION_PROTOCOL_VERSION) {
+          return 0
+        }
+        if (requestedRole === 'editor' && frame.requestId) {
+          rooms.releasePendingEditorReservation(frame.room, conn, frame.requestId)
+        }
+        if (isConnectionActive && !isConnectionActive()) {
+          return 0
+        }
+        try {
+          conn.socket.send(
+            JSON.stringify({
+              t: 'room-joined',
+              room: frame.room,
+              ...(frame.requestId ? { requestId: frame.requestId } : {}),
+              ...(requestedRole === 'editor' ? { bootstrap: existingRequestLease.shouldBootstrap } : {}),
+              ...(productionProtocolRequired
+                ? {
+                    protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+                    maxTransferBytes: MAX_YJS_TRANSFER_BYTES,
+                  }
+                : {}),
+            }),
+          )
+        } catch {
+          /* An unwritable replay does not revoke the still-valid logical lease. */
+        }
+        return 0
+      }
+
+      const releaseJoinAttempt = async (): Promise<void> => {
+        if (requestedRole === 'editor' && frame.requestId) {
+          rooms.releasePendingEditorReservation(frame.room, conn, frame.requestId)
+          if (lifecycle) {
+            await lifecycle.releaseLease(conn, frame.room, frame.requestId).catch(ignoreLifecycleReleaseFailure)
+          }
+        }
+      }
+      const denyJoin = async (): Promise<number> => {
+        await releaseJoinAttempt()
+        return deny(frame.room, frame.requestId)
+      }
+      if (
+        lifecycle &&
+        requestedRole === 'editor' &&
+        (!frame.requestId || !rooms.hasPendingEditorReservation(frame.room, conn, frame.requestId))
+      ) {
+        return denyJoin()
+      }
+      if (!rooms.canAcceptJoin(frame.room, conn, frame.requestId)) {
+        return denyJoin()
+      }
+      if (!rooms.allowControlFrame('room-join', frame.room, conn)) {
+        return denyJoin()
+      }
+      const authorization = await authorizeCapability(frame.room, frame.cap)
+      if (!authorization.authorized) {
+        return denyJoin()
       }
       // Authorization can be asynchronous. A socket that closed while it was
       // in flight must never be resurrected into a room or receive an ack.
       if (isConnectionActive && !isConnectionActive()) {
+        await releaseJoinAttempt()
         return 0
       }
       let shouldBootstrapOverride: boolean | undefined
       let reservedEditorLease = false
-      if ((frame.role ?? 'editor') === 'editor' && lifecycle) {
+      if (
+        productionProtocolRequired &&
+        (frame.protocolVersion !== COLLABORATION_PROTOCOL_VERSION ||
+          authorization.collaborationProtocolVersion !== COLLABORATION_PROTOCOL_VERSION)
+      ) {
+        return denyJoin()
+      }
+      if (requestedRole === 'editor' && lifecycle) {
+        if (
+          !frame.requestId ||
+          authorization.leaseRequestId !== frame.requestId ||
+          frame.protocolVersion !== COLLABORATION_PROTOCOL_VERSION
+        ) {
+          return denyJoin()
+        }
         try {
           shouldBootstrapOverride = (
-            await lifecycle.reserveEditorLease(conn, frame.room, frame.requestId, authorization.expiresAt)
+            await lifecycle.activateEditorLease(
+              conn,
+              frame.room,
+              frame.requestId,
+              authorization.expiresAt,
+              COLLABORATION_PROTOCOL_VERSION,
+              authorization.serverUpdatedAtTimestamp,
+              authorization.bootstrapChallenge,
+            )
           ).shouldBootstrap
           reservedEditorLease = true
+          if (isConnectionActive && !isConnectionActive()) {
+            rooms.releasePendingEditorReservation(frame.room, conn, frame.requestId)
+            await lifecycle.releaseLease(conn, frame.room, frame.requestId).catch(ignoreLifecycleReleaseFailure)
+            return 0
+          }
         } catch {
-          // Redis coordination is an availability aid, not an authorization
-          // source. Falling back to local election keeps a single replica usable;
-          // replicated deployments must keep Redis healthy for cross-node rooms.
-          shouldBootstrapOverride = undefined
+          return denyJoin()
         }
       }
       const joinResult = rooms.join(
@@ -457,12 +1197,13 @@ export async function handleRelayFrame<S extends SendableSocket>(
         conn,
         authorization.expiresAt,
         frame.requestId,
-        frame.role ?? 'editor',
+        requestedRole,
         shouldBootstrapOverride,
       )
       if (!joinResult.joined) {
+        rooms.releasePendingEditorReservation(frame.room, conn, frame.requestId)
         if (lifecycle && reservedEditorLease) {
-          await lifecycle.releaseLease(conn, frame.room, frame.requestId).catch(() => undefined)
+          await lifecycle.releaseLease(conn, frame.room, frame.requestId).catch(ignoreLifecycleReleaseFailure)
         }
         try {
           conn.socket.send(
@@ -477,46 +1218,102 @@ export async function handleRelayFrame<S extends SendableSocket>(
         }
         return 0
       }
+      if (reservedEditorLease && frame.requestId) {
+        rooms.releasePendingEditorReservation(frame.room, conn, frame.requestId)
+      }
       try {
         conn.socket.send(
           JSON.stringify({
             t: 'room-joined',
             room: frame.room,
             ...(frame.requestId ? { requestId: frame.requestId } : {}),
-            ...(frame.role === 'editor' ? { bootstrap: joinResult.shouldBootstrap } : {}),
+            ...(requestedRole === 'editor' ? { bootstrap: joinResult.shouldBootstrap } : {}),
+            ...(productionProtocolRequired
+              ? {
+                  protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+                  maxTransferBytes: MAX_YJS_TRANSFER_BYTES,
+                }
+              : {}),
           }),
         )
       } catch {
         rooms.leave(frame.room, conn, frame.requestId)
         if (lifecycle && reservedEditorLease) {
-          await lifecycle.releaseLease(conn, frame.room, frame.requestId).catch(() => undefined)
+          await lifecycle.releaseLease(conn, frame.room, frame.requestId).catch(ignoreLifecycleReleaseFailure)
         }
         return 0
       }
-      // Ask existing members to re-broadcast their state so the newcomer syncs.
-      if (frame.role === 'comment') {
+      // Protocol-v2 editors explicitly request one correlated full-state retry
+      // after activation. Do not also fan out the legacy room-sync request: it
+      // creates redundant full-state responses and defeats responder election.
+      if (requestedRole === 'comment' || frame.protocolVersion === COLLABORATION_PROTOCOL_VERSION) {
         return 0
       }
       const syncFrame = { t: 'room-sync' as const, room: frame.room }
-      lifecycle?.publish(syncFrame)
+      if (lifecycle) {
+        try {
+          await lifecycle.publish(syncFrame)
+        } catch {
+          rooms.denyRoom(frame.room)
+          return 0
+        }
+      }
       return rooms.broadcast(frame.room, JSON.stringify(syncFrame), conn)
     }
     case 'room-leave':
       rooms.leave(frame.room, conn, frame.requestId)
+      rooms.releasePendingEditorReservation(frame.room, conn, frame.requestId)
       if (lifecycle) {
-        await lifecycle.releaseLease(conn, frame.room, frame.requestId).catch(() => undefined)
+        await lifecycle.releaseLease(conn, frame.room, frame.requestId).catch(ignoreLifecycleReleaseFailure)
       }
       return 0
     case 'yjs':
+    case 'yjs-chunk':
+    case 'yjs-retry':
     case 'awareness':
     case 'comment':
       // Fail closed on the SEND path too: only a current, unexpired member may
-      // inject edit/awareness/comment frames. The receive side is likewise
-      // checked by RoomRegistry.broadcast before each delivery.
-      if (!rooms.isMember(frame.room, conn)) {
+      // inject content. Comment-only leases deliberately cannot inject editor
+      // or presence traffic; an editor lease may also comment. A mixed socket
+      // retains only the privileges of whichever leases remain unexpired.
+      if (
+        (frame.t === 'comment' && !rooms.isMember(frame.room, conn)) ||
+        (frame.t !== 'comment' && !rooms.hasRole(frame.room, conn, 'editor'))
+      ) {
         return 0
       }
-      lifecycle?.publish(frame)
-      return rooms.broadcast(frame.room, JSON.stringify(frame), conn)
+      if (frame.t === 'yjs-retry' && !rooms.allowControlFrame('yjs-retry', frame.room, conn)) {
+        return 0
+      }
+      if (lifecycle) {
+        try {
+          await lifecycle.publish(frame)
+        } catch {
+          rooms.denyRoom(frame.room)
+          return 0
+        }
+      }
+      const reached = rooms.broadcast(frame.room, JSON.stringify(frame), conn)
+      const acceptedTransferId =
+        frame.t === 'yjs'
+          ? frame.transferId
+          : frame.t === 'yjs-chunk' && frame.index === frame.count - 1
+            ? frame.transferId
+            : undefined
+      if (acceptedTransferId) {
+        try {
+          conn.socket.send(
+            JSON.stringify({
+              t: 'yjs-accepted',
+              room: frame.room,
+              transferId: acceptedTransferId,
+              protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+            }),
+          )
+        } catch {
+          rooms.leave(frame.room, conn)
+        }
+      }
+      return reached
   }
 }

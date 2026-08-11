@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import jwt from 'jsonwebtoken'
 import { defaultRoomJoinAuthorizer } from '../src/gateway.js'
-import { handleRelayFrame, RoomRegistry } from '../src/rooms.js'
+import { COLLABORATION_PROTOCOL_VERSION, handleRelayFrame, MAX_YJS_TRANSFER_BYTES, RoomRegistry } from '../src/rooms.js'
 import type { Conn } from '../src/registry.js'
 
 // Proves the PRODUCTION wiring is fail-closed: the authorizer attachWebSocketGateway
@@ -22,10 +22,20 @@ function fakeConn(userUuid: string): Conn & { sent: string[] } {
 }
 
 function capabilityFor(userUuid: string, room: string, opts: { secret?: string } = {}): string {
-  return jwt.sign({ purpose: 'collab-room', userUuid, room }, opts.secret ?? SECRET, {
-    algorithm: 'HS256',
-    expiresIn: 300,
-  })
+  return jwt.sign(
+    {
+      purpose: 'collab-room',
+      userUuid,
+      room,
+      collaborationProtocolVersion: COLLABORATION_PROTOCOL_VERSION,
+      serverUpdatedAtTimestamp: 1,
+    },
+    opts.secret ?? SECRET,
+    {
+      algorithm: 'HS256',
+      expiresIn: 300,
+    },
+  )
 }
 
 describe('default (production) room authorization is fail-closed', () => {
@@ -84,21 +94,40 @@ describe('default (production) room authorization is fail-closed', () => {
     await handleRelayFrame(
       rooms,
       a,
-      { t: 'room-join', room: 'note-1', cap: capabilityFor('user-a', 'note-1') },
+      {
+        t: 'room-join',
+        room: 'note-1',
+        cap: capabilityFor('user-a', 'note-1'),
+        protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+      },
       authorize,
     )
     const reached = await handleRelayFrame(
       rooms,
       b,
-      { t: 'room-join', room: 'note-1', cap: capabilityFor('user-b', 'note-1') },
+      {
+        t: 'room-join',
+        room: 'note-1',
+        cap: capabilityFor('user-b', 'note-1'),
+        protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+      },
       authorize,
     )
 
-    // B's join asks the existing member (A) to re-sync.
-    expect(reached).toBe(1)
+    // Protocol v2 uses the joiner's explicit correlated retry, so activation
+    // does not also trigger a redundant room-wide full-state fanout.
+    expect(reached).toBe(0)
     expect(rooms.members('note-1')).toHaveLength(2)
-    expect(b.sent).toContain(JSON.stringify({ t: 'room-joined', room: 'note-1' }))
-    expect(a.sent).toContain(JSON.stringify({ t: 'room-sync', room: 'note-1' }))
+    expect(b.sent).toContain(
+      JSON.stringify({
+        t: 'room-joined',
+        room: 'note-1',
+        bootstrap: false,
+        protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+        maxTransferBytes: MAX_YJS_TRANSFER_BYTES,
+      }),
+    )
+    expect(a.sent).not.toContain(JSON.stringify({ t: 'room-sync', room: 'note-1' }))
   })
 
   it('evicts a joined member when its production JWT capability expires', async () => {
@@ -111,7 +140,13 @@ describe('default (production) room authorization is fail-closed', () => {
     await handleRelayFrame(
       rooms,
       conn,
-      { t: 'room-join', room: 'note-1', cap: capability, requestId: 'join-request' },
+      {
+        t: 'room-join',
+        room: 'note-1',
+        cap: capability,
+        requestId: 'join-request',
+        protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+      },
       authorize,
     )
     expect(rooms.isMember('note-1', conn)).toBe(true)

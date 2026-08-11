@@ -13,7 +13,9 @@ const redis = vi.hoisted(() => {
     on(): this {
       return this
     }
-    subscribe(): void {}
+    subscribe(_channel: string, callback: (error: null, count: number) => void): void {
+      callback(null, 1)
+    }
     async eval(): Promise<number> {
       return 1
     }
@@ -21,7 +23,7 @@ const redis = vi.hoisted(() => {
       return 1
     }
     async publish(): Promise<number> {
-      return 0
+      return 1
     }
     async quit(): Promise<void> {
       state.quitCalls += 1
@@ -47,6 +49,7 @@ import {
   type GatewayConfig,
 } from '../src/gateway.js'
 import { mintConnectionToken } from '../src/auth.js'
+import { COLLABORATION_PROTOCOL_VERSION } from '../src/rooms.js'
 
 const CONNECTION_SECRET = 'connection-secret'
 const AUTH_SECRET = 'auth-jwt-secret'
@@ -256,7 +259,13 @@ describe('defaultRoomJoinAuthorizer', () => {
   }
 
   it('admits a capability minted for exactly this user and room', () => {
-    const cap = capability({ purpose: 'collab-room', userUuid: 'user-1', room: 'note-1' })
+    const cap = capability({
+      purpose: 'collab-room',
+      userUuid: 'user-1',
+      room: 'note-1',
+      collaborationProtocolVersion: 2,
+      serverUpdatedAtTimestamp: 1,
+    })
     expect(authorizer('user-1', 'note-1', cap)).toMatchObject({
       authorized: true,
       expiresAt: expect.any(Number),
@@ -538,13 +547,25 @@ describe('websocket connection lifecycle', () => {
     })
   })
 
-  it('does not resurrect a room join whose authorization resolves after socket close', async () => {
-    let resolveAuthorization!: (value: { authorized: true; expiresAt: number }) => void
+  it('does not resurrect a room reservation whose authorization resolves after socket close', async () => {
+    let resolveAuthorization!: (value: {
+      authorized: true
+      expiresAt: number
+      serverUpdatedAtTimestamp: number
+      collaborationProtocolVersion: 2
+      leaseRequestId: string
+    }) => void
     let markAuthorizationStarted!: () => void
     const authorizationStarted = new Promise<void>((resolve) => {
       markAuthorizationStarted = resolve
     })
-    const delayedAuthorization = new Promise<{ authorized: true; expiresAt: number }>((resolve) => {
+    const delayedAuthorization = new Promise<{
+      authorized: true
+      expiresAt: number
+      serverUpdatedAtTimestamp: number
+      collaborationProtocolVersion: 2
+      leaseRequestId: string
+    }>((resolve) => {
       resolveAuthorization = resolve
     })
     await attachGateway({
@@ -560,10 +581,11 @@ describe('websocket connection lifecycle', () => {
     await opened(socket)
     socket.send(
       JSON.stringify({
-        t: 'room-join',
+        t: 'room-reserve',
         room: 'note-race',
         requestId: 'delayed-join',
         role: 'editor',
+        protocolVersion: COLLABORATION_PROTOCOL_VERSION,
       }),
     )
     await authorizationStarted
@@ -571,12 +593,18 @@ describe('websocket connection lifecycle', () => {
     const closed = closedWith(socket)
     socket.close()
     await closed
-    resolveAuthorization({ authorized: true, expiresAt: Date.now() + 60_000 })
+    resolveAuthorization({
+      authorized: true,
+      expiresAt: Date.now() + 60_000,
+      serverUpdatedAtTimestamp: 1,
+      collaborationProtocolVersion: COLLABORATION_PROTOCOL_VERSION,
+      leaseRequestId: 'delayed-join',
+    })
     await new Promise((resolve) => setTimeout(resolve, 20))
 
     expect(attached!.registry.size()).toBe(0)
     expect(attached!.rooms.roomCount()).toBe(0)
-    expect(messages.some((message) => message.includes('room-joined'))).toBe(false)
+    expect(messages.some((message) => message.includes('room-reserved'))).toBe(false)
     expect(
       logger.info.mock.calls.filter(([message]) => String(message).includes('disconnect user=user-race')),
     ).toHaveLength(1)
@@ -675,7 +703,17 @@ describe('websocket connection lifecycle', () => {
 
   it('relays a yjs frame between two sockets that joined the same room', async () => {
     await attachGateway({
-      authorizeRoomJoin: () => ({ authorized: true, expiresAt: Date.now() + 60_000 }),
+      authorizeRoomJoin: (_userUuid, _room, capability) => {
+        const binding = JSON.parse(capability ?? '{}') as { requestId?: string; challenge?: string }
+        return {
+          authorized: true,
+          expiresAt: Date.now() + 60_000,
+          serverUpdatedAtTimestamp: 1,
+          collaborationProtocolVersion: 2,
+          ...(binding.requestId ? { leaseRequestId: binding.requestId } : {}),
+          ...(binding.challenge ? { bootstrapChallenge: binding.challenge } : {}),
+        }
+      },
     })
     const tokenA = mintConnectionToken({ userUuid: 'user-A', sessionUuid: 'session-A' }, CONNECTION_SECRET, '60s')
     const tokenB = mintConnectionToken({ userUuid: 'user-B', sessionUuid: 'session-B' }, CONNECTION_SECRET, '60s')
@@ -683,9 +721,36 @@ describe('websocket connection lifecycle', () => {
     const socketB = connect(`?authToken=${tokenB}`)
     await Promise.all([opened(socketA), opened(socketB)])
 
-    socketA.send(JSON.stringify({ t: 'room-join', room: 'note-1' }))
+    const activate = async (socket: WebSocket, requestId: string): Promise<void> => {
+      const reservedMessage = nextMessage(socket)
+      socket.send(
+        JSON.stringify({
+          t: 'room-reserve',
+          room: 'note-1',
+          requestId,
+          role: 'editor',
+          protocolVersion: 2,
+          cap: JSON.stringify({ requestId }),
+        }),
+      )
+      const reserved = JSON.parse(await reservedMessage) as { bootstrapChallenge?: string }
+      const joinedMessage = nextMessage(socket)
+      socket.send(
+        JSON.stringify({
+          t: 'room-join',
+          room: 'note-1',
+          requestId,
+          role: 'editor',
+          protocolVersion: 2,
+          cap: JSON.stringify({ requestId, challenge: reserved.bootstrapChallenge }),
+        }),
+      )
+      expect(JSON.parse(await joinedMessage)).toMatchObject({ t: 'room-joined', room: 'note-1', requestId })
+    }
+
+    await activate(socketA, 'lease-a')
     await vi.waitFor(() => expect(attached!.rooms.members('note-1').length).toBe(1))
-    socketB.send(JSON.stringify({ t: 'room-join', room: 'note-1' }))
+    await activate(socketB, 'lease-b')
     await vi.waitFor(() => expect(attached!.rooms.members('note-1').length).toBe(2))
 
     const relayed = nextMessage(socketB)
