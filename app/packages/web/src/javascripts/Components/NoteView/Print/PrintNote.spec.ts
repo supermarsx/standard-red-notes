@@ -354,6 +354,37 @@ describe('isolated note printing', () => {
     }
   })
 
+  it('keeps explicitly projected document labels as inert body text and removes decorator prompts', () => {
+    document.body.innerHTML = `
+      <input id="${ElementIds.NoteTitleEditor}" value="Structured note" />
+      <div id="${SuperEditorContentId}">
+        <p>Semantic paragraph</p>
+        <div data-srn-print-exclude="true">Add a task to render the chart.</div>
+        <div data-srn-print-exclude="true">No items yet. Use + Item to add one.</div>
+        <ul>
+          <li><button data-srn-print-static-text="true">First heading</button></li>
+        </ul>
+        <p>
+          Body with a footnote
+          <sup role="button" tabindex="0" data-srn-print-static-text="true">[1]</sup>
+          and <span role="button" tabindex="0" data-srn-print-static-text="true"><em>x²</em></span>.
+        </p>
+        <button>Add card</button>
+      </div>
+    `
+
+    const snapshot = createPrintSnapshot()
+
+    expect(snapshot?.textContent).toContain('Semantic paragraph')
+    expect(snapshot?.textContent).toContain('First heading')
+    expect(snapshot?.textContent).toContain('[1]')
+    expect(snapshot?.querySelector('em')?.textContent).toBe('x²')
+    expect(snapshot?.textContent).not.toContain('Add a task')
+    expect(snapshot?.textContent).not.toContain('No items yet')
+    expect(snapshot?.textContent).not.toContain('Add card')
+    expect(snapshot?.querySelector('button, [role="button"], [data-srn-print-exclude]')).toBeNull()
+  })
+
   it('prints the live plain-text value rather than a stale value attribute', () => {
     document.body.innerHTML = `
       <input id="${ElementIds.NoteTitleEditor}" value="Title" />
@@ -399,6 +430,39 @@ describe('isolated note printing', () => {
     expect(document.getElementById(PRINT_LAYOUT_STYLE_ID)).toBeNull()
     expect(document.body.classList.contains(PRINTING_BODY_CLASS)).toBe(false)
     expect(document.getElementById('live-app')).not.toBeNull()
+  })
+
+  it('cancels a superseded explicit print before its deferred window.print call', () => {
+    document.body.innerHTML = `
+      <input id="${ElementIds.NoteTitleEditor}" ${PRINT_NOTE_UUID_ATTRIBUTE}="note-1" value="First title" />
+      <textarea id="${ElementIds.NoteTextEditor}">First body</textarea>
+    `
+    const print = jest.spyOn(window, 'print').mockImplementation(() => undefined)
+    const frameCallbacks: FrameRequestCallback[] = []
+    jest.spyOn(window, 'requestAnimationFrame').mockImplementation((callback: FrameRequestCallback) => {
+      frameCallbacks.push(callback)
+      return frameCallbacks.length
+    })
+
+    printActiveNote({ noteUuid: 'note-1' })
+
+    const title = document.getElementById(ElementIds.NoteTitleEditor) as HTMLInputElement
+    const body = document.getElementById(ElementIds.NoteTextEditor) as HTMLTextAreaElement
+    title.setAttribute(PRINT_NOTE_UUID_ATTRIBUTE, 'note-2')
+    title.value = 'Second title'
+    body.value = 'Second body'
+    printActiveNote({ noteUuid: 'note-2' })
+
+    const firstAnimationFrame = frameCallbacks.splice(0)
+    firstAnimationFrame.forEach((callback) => callback(0))
+    const secondAnimationFrame = frameCallbacks.splice(0)
+    secondAnimationFrame.forEach((callback) => callback(0))
+
+    expect(print).toHaveBeenCalledTimes(1)
+    expect(document.querySelector(`#${PRINT_TITLE_ID}`)?.textContent).toBe('Second title')
+    expect(document.querySelector(`#${PRINT_BODY_ID}`)?.textContent).toBe('Second body')
+
+    window.dispatchEvent(new Event('afterprint'))
   })
 
   it('replaces a paginated Super DataTable with its complete semantic all-row projection', () => {
@@ -732,6 +796,68 @@ describe('isolated note printing', () => {
     window.dispatchEvent(new Event('afterprint'))
     expect(document.getElementById(PRINT_ROOT_ID)).toBeNull()
     expect(document.body.classList.contains(PRINTING_BODY_CLASS)).toBe(false)
+    dispose()
+  })
+
+  it('keeps an inactive context-menu snapshot for the explicit print beforeprint event', () => {
+    document.body.innerHTML = `
+      <input id="${ElementIds.NoteTitleEditor}" ${PRINT_NOTE_UUID_ATTRIBUTE}="active-note" value="Active title" />
+      <textarea id="${ElementIds.NoteTextEditor}">Active body</textarea>
+    `
+    const dispose = installNativeNotePrinting()
+    jest.spyOn(window, 'requestAnimationFrame').mockImplementation((callback: FrameRequestCallback) => {
+      callback(0)
+      return 1
+    })
+    const print = jest.spyOn(window, 'print').mockImplementation(() => {
+      window.dispatchEvent(new Event('beforeprint'))
+    })
+
+    printActiveNote({
+      noteUuid: 'inactive-note',
+      fallbackTitle: 'Inactive title',
+      fallbackBody: 'Inactive body',
+      fallbackNoteType: NoteType.Plain,
+      fallbackSource: 'verified-native-plaintext',
+    })
+
+    expect(print).toHaveBeenCalledTimes(1)
+    expect(document.querySelector(`#${PRINT_TITLE_ID}`)?.textContent).toBe('Inactive title')
+    expect(document.querySelector(`#${PRINT_BODY_ID}`)?.textContent).toBe('Inactive body')
+    expect(document.getElementById(PRINT_ROOT_ID)?.textContent).not.toContain('Active body')
+
+    window.dispatchEvent(new Event('afterprint'))
+    dispose()
+  })
+
+  it('rebuilds a stale explicit snapshot for a later native print when afterprint was omitted', () => {
+    document.body.innerHTML = `
+      <input id="${ElementIds.NoteTitleEditor}" ${PRINT_NOTE_UUID_ATTRIBUTE}="note-1" value="First title" />
+      <textarea id="${ElementIds.NoteTextEditor}">First body</textarea>
+    `
+    const dispose = installNativeNotePrinting()
+    jest.spyOn(window, 'requestAnimationFrame').mockImplementation((callback: FrameRequestCallback) => {
+      callback(0)
+      return 1
+    })
+    jest.spyOn(window, 'print').mockImplementation(() => undefined)
+
+    printActiveNote({ noteUuid: 'note-1' })
+    expect(document.querySelector(`#${PRINT_TITLE_ID}`)?.textContent).toBe('First title')
+
+    const title = document.getElementById(ElementIds.NoteTitleEditor) as HTMLInputElement
+    const body = document.getElementById(ElementIds.NoteTextEditor) as HTMLTextAreaElement
+    title.setAttribute(PRINT_NOTE_UUID_ATTRIBUTE, 'note-2')
+    title.value = 'Second title'
+    body.value = 'Second body'
+
+    window.dispatchEvent(new Event('beforeprint'))
+
+    expect(document.querySelector(`#${PRINT_TITLE_ID}`)?.textContent).toBe('Second title')
+    expect(document.querySelector(`#${PRINT_BODY_ID}`)?.textContent).toBe('Second body')
+    expect(document.getElementById(PRINT_ROOT_ID)?.textContent).not.toContain('First body')
+
+    window.dispatchEvent(new Event('afterprint'))
     dispose()
   })
 

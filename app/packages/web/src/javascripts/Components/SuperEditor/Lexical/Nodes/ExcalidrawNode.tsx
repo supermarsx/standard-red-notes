@@ -96,7 +96,13 @@ export class ExcalidrawNode extends DecoratorNode<React.JSX.Element> {
   decorate(_editor: LexicalEditor, _config: EditorConfig): React.JSX.Element {
     return (
       <ComponentErrorBoundary label="The drawing">
-        <Suspense fallback={<div className="text-passive-1 my-2 p-4 text-sm">Loading drawing…</div>}>
+        <Suspense
+          fallback={
+            <div className="text-passive-1 my-2 p-4 text-sm" data-srn-print-exclude="true">
+              Loading drawing…
+            </div>
+          }
+        >
           <LazyExcalidraw data={this.getSceneData()} nodeKey={this.getKey()} />
         </Suspense>
       </ComponentErrorBoundary>

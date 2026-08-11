@@ -20,6 +20,7 @@ export const PRINT_EMPTY_ATTRIBUTE = 'data-srn-print-empty'
 
 const PRINT_FALLBACK_CLEANUP_MS = 60_000
 let activePrintCleanup: (() => void) | undefined
+let pendingExplicitPrintCleanup: (() => void) | undefined
 
 export type PrintNoteOptions = {
   noteUuid?: string
@@ -409,6 +410,25 @@ export function sanitizePrintBody(body: HTMLElement, sourceBody?: HTMLElement): 
 
   body.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input, textarea').forEach(replaceWithStaticValue)
 
+  // Some persisted document structures use buttons for on-screen navigation
+  // even though their labels are semantic note content (for example, table of
+  // contents entries and footnote numbers). Preserve only explicitly marked
+  // labels as inert text before the general action-control denylist runs.
+  body.querySelectorAll<HTMLElement>('[data-srn-print-static-text]').forEach((control) => {
+    if (control instanceof HTMLButtonElement) {
+      const text = body.ownerDocument.createElement('span')
+      text.className = 'srn-print-static-text'
+      text.append(...Array.from(control.childNodes))
+      control.replaceWith(text)
+      return
+    }
+
+    control.removeAttribute('data-srn-print-static-text')
+    control.removeAttribute('role')
+    control.removeAttribute('tabindex')
+    control.removeAttribute('aria-haspopup')
+  })
+
   body
     .querySelectorAll(
       [
@@ -584,6 +604,7 @@ export function removePrintSnapshot(): void {
   document.getElementById(PRINT_ROOT_ID)?.remove()
   document.body.classList.remove(PRINTING_BODY_CLASS)
   removePrintLayout()
+  pendingExplicitPrintCleanup = undefined
 }
 
 function attachPrintSnapshot(snapshot: HTMLElement, noteUuid?: string): () => void {
@@ -657,10 +678,18 @@ export function printActiveNote(options: PrintNoteOptions = {}): (() => void) | 
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
       try {
+        if (activePrintCleanup !== cleanup) {
+          return
+        }
+        pendingExplicitPrintCleanup = cleanup
         window.print()
       } catch (error) {
         cleanup()
         console.error(error)
+      } finally {
+        if (pendingExplicitPrintCleanup === cleanup) {
+          pendingExplicitPrintCleanup = undefined
+        }
       }
     })
   })
@@ -704,9 +733,22 @@ export function installNativeNotePrinting(
   }
 
   const handleBeforePrint = () => {
-    if (document.getElementById(PRINT_ROOT_ID) && document.body.classList.contains(PRINTING_BODY_CLASS)) {
+    if (
+      pendingExplicitPrintCleanup &&
+      pendingExplicitPrintCleanup === activePrintCleanup &&
+      document.getElementById(PRINT_ROOT_ID) &&
+      document.body.classList.contains(PRINTING_BODY_CLASS)
+    ) {
+      // window.print() synchronously emits beforeprint in supported browsers.
+      // Consume this exemption once so the snapshot deliberately prepared by an
+      // inactive-note/context-menu action survives that event. Any later native
+      // print event must rebuild from current state, even when afterprint was
+      // omitted and the old snapshot is still awaiting fallback cleanup.
+      pendingExplicitPrintCleanup = undefined
       return
     }
+
+    pendingExplicitPrintCleanup = undefined
 
     try {
       const options = getOptions() ?? {}

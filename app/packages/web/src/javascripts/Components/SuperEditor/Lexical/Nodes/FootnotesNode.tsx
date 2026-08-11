@@ -122,6 +122,7 @@ function FootnoteEntryRow({
     >
       <button
         type="button"
+        data-srn-print-static-text="true"
         className="text-info hover:bg-info-backdrop mt-0.5 shrink-0 cursor-pointer rounded px-1 text-xs font-semibold"
         title="Back to reference"
         data-footnote-backlink="true"

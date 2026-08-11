@@ -83,7 +83,9 @@ function MathComponent({ equation, nodeKey }: { equation: string; nodeKey: NodeK
         {html ? (
           <div dangerouslySetInnerHTML={{ __html: html }} />
         ) : (
-          <div className="text-passive-1 text-sm">Empty equation</div>
+          <div className="text-passive-1 text-sm" data-srn-print-exclude="true">
+            Empty equation
+          </div>
         )}
       </div>
     </div>

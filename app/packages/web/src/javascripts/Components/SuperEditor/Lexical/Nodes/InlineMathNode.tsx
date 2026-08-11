@@ -85,13 +85,16 @@ function InlineMathComponent({ equation, nodeKey }: { equation: string; nodeKey:
       className="cursor-pointer align-middle"
       role="button"
       tabIndex={0}
+      data-srn-print-static-text="true"
       onClick={() => setEditing(true)}
       data-inline-math="true"
     >
       {html ? (
         <span dangerouslySetInnerHTML={{ __html: html }} />
       ) : (
-        <span className="text-passive-1">[empty math]</span>
+        <span className="text-passive-1" data-srn-print-exclude="true">
+          [empty math]
+        </span>
       )}
     </span>
   )

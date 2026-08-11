@@ -169,7 +169,10 @@ function WebEmbedComponent({ data, nodeKey }: { data: WebEmbedData; nodeKey: Nod
           <span className="font-semibold">Embed website</span>
         </div>
         <div className="p-2">
-          <div className="border-warning bg-warning-faded text-warning mb-2 flex items-start gap-2 rounded border p-2 text-xs">
+          <div
+            className="border-warning bg-warning-faded text-warning mb-2 flex items-start gap-2 rounded border p-2 text-xs"
+            data-srn-print-exclude="true"
+          >
             <Icon type="warning" className="mt-0.5 flex-shrink-0" />
             <p className="break-words">{INSERT_WARNING}</p>
           </div>
@@ -186,7 +189,7 @@ function WebEmbedComponent({ data, nodeKey }: { data: WebEmbedData; nodeKey: Nod
             autoFocus
           />
           {draft.trim() && !sanitizeWebEmbedUrl(draft) ? (
-            <div className="text-danger mt-1 text-xs">
+            <div className="text-danger mt-1 text-xs" data-srn-print-exclude="true">
               Enter a valid external http(s) website URL. Standard Notes pages cannot be embedded.
             </div>
           ) : null}
@@ -214,6 +217,7 @@ function WebEmbedComponent({ data, nodeKey }: { data: WebEmbedData; nodeKey: Nod
           {safeUrl ? (
             <a
               href={safeUrl}
+              data-srn-print-exclude="true"
               target="_blank"
               rel="noopener noreferrer"
               className="hover:bg-contrast flex items-center rounded px-2 py-0.5"
@@ -230,13 +234,13 @@ function WebEmbedComponent({ data, nodeKey }: { data: WebEmbedData; nodeKey: Nod
       </div>
 
       {!safeUrl ? (
-        <div className="text-danger p-2 text-sm">
+        <div className="text-danger p-2 text-sm" data-srn-print-exclude="true">
           Enter a valid external http(s) website URL. Standard Notes pages cannot be embedded.
         </div>
       ) : !loaded ? (
         /* Risk-alert placeholder card: shown FIRST instead of an auto-loaded
            iframe. The user must explicitly opt in to loading external content. */
-        <div className="p-3">
+        <div className="p-3" data-srn-print-exclude="true">
           <div className="border-warning bg-warning-faded text-foreground flex items-start gap-2 rounded border p-2 text-sm">
             <Icon type="warning" className="text-warning mt-0.5 flex-shrink-0" />
             <div>
@@ -299,7 +303,7 @@ function WebEmbedComponent({ data, nodeKey }: { data: WebEmbedData; nodeKey: Nod
           </div>
           {/* We cannot reliably detect X-Frame-Options / CSP frame-ancestors
               denial from script, so we always surface this fallback hint. */}
-          <p className="text-passive-1 mt-1 text-xs">
+          <p className="text-passive-1 mt-1 text-xs" data-srn-print-exclude="true">
             If the page is blank, the site blocks embedding —{' '}
             <a href={safeUrl} target="_blank" rel="noopener noreferrer" className="underline">
               open it in a new tab

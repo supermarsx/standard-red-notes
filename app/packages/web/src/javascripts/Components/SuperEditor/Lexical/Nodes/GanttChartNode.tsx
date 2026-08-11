@@ -306,9 +306,17 @@ function GanttChartComponent({ data, nodeKey }: { data: GanttChartData; nodeKey:
         {svg ? (
           <div dangerouslySetInnerHTML={{ __html: svg }} />
         ) : (
-          !error && <div className="text-passive-1 text-sm">Add a task to render the chart.</div>
+          !error && (
+            <div className="text-passive-1 text-sm" data-srn-print-exclude="true">
+              Add a task to render the chart.
+            </div>
+          )
         )}
-        {error ? <div className="text-danger mt-1 text-xs">{error}</div> : null}
+        {error ? (
+          <div className="text-danger mt-1 text-xs" data-srn-print-exclude="true">
+            {error}
+          </div>
+        ) : null}
       </div>
     </div>
   )

@@ -245,7 +245,10 @@ function TradingViewComponent({ data, nodeKey }: { data: TradingViewData; nodeKe
       </div>
 
       {showNote ? (
-        <div className="border-border bg-contrast text-passive-0 flex items-start justify-between gap-2 border-b px-2 py-1 text-xs">
+        <div
+          className="border-border bg-contrast text-passive-0 flex items-start justify-between gap-2 border-b px-2 py-1 text-xs"
+          data-srn-print-exclude="true"
+        >
           <span>
             This block loads a live chart directly from tradingview.com. The request is sent to TradingView and is not
             end-to-end encrypted.
@@ -270,7 +273,7 @@ function TradingViewComponent({ data, nodeKey }: { data: TradingViewData; nodeKe
             }}
             autoFocus
           />
-          <p className="text-passive-1 mt-1 text-xs">
+          <p className="text-passive-1 mt-1 text-xs" data-srn-print-exclude="true">
             Use TradingView&apos;s EXCHANGE:TICKER format for best results (a bare ticker may resolve ambiguously).
           </p>
         </div>
@@ -292,7 +295,9 @@ function TradingViewComponent({ data, nodeKey }: { data: TradingViewData; nodeKe
           />
         </div>
       ) : (
-        <div className="text-danger p-2 text-sm">Enter a symbol to load a chart.</div>
+        <div className="text-danger p-2 text-sm" data-srn-print-exclude="true">
+          Enter a symbol to load a chart.
+        </div>
       )}
     </div>
   )

@@ -284,7 +284,9 @@ function TimelineComponent({ data, nodeKey }: { data: TimelineData; nodeKey: Nod
           screens so bars stay readable rather than squashing. */}
       <div className="overflow-x-auto p-2">
         {data.items.length === 0 ? (
-          <div className="text-passive-1 px-1 py-2 text-sm">No items yet. Use “+ Item” to add one.</div>
+          <div className="text-passive-1 px-1 py-2 text-sm" data-srn-print-exclude="true">
+            No items yet. Use “+ Item” to add one.
+          </div>
         ) : (
           <div className="flex min-w-[20rem] flex-col gap-1.5">
             {data.items.map((item) => {

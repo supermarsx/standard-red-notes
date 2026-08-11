@@ -203,7 +203,7 @@ function StockChartComponent({ data, nodeKey }: { data: StockChartData; nodeKey:
             }}
             autoFocus
           />
-          <p className="text-passive-1 mt-1 text-xs">
+          <p className="text-passive-1 mt-1 text-xs" data-srn-print-exclude="true">
             Charts render via TradingView&apos;s embeddable widget. Yahoo Finance has no free embeddable widget and its
             API is CORS-blocked from the browser, so this shows TradingView data, not Yahoo data.
           </p>
@@ -224,7 +224,9 @@ function StockChartComponent({ data, nodeKey }: { data: StockChartData; nodeKey:
           />
         </div>
       ) : (
-        <div className="text-danger p-2 text-sm">Enter a symbol to load a chart.</div>
+        <div className="text-danger p-2 text-sm" data-srn-print-exclude="true">
+          Enter a symbol to load a chart.
+        </div>
       )}
     </div>
   )

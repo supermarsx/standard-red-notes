@@ -58,6 +58,7 @@ function FootnoteReferenceComponent({ footnoteId }: { footnoteId: string }): Rea
       className="text-info cursor-pointer px-0.5 align-super text-[0.7em] font-semibold select-none"
       role="button"
       tabIndex={0}
+      data-srn-print-static-text="true"
       data-footnote-reference="true"
       data-footnote-id={footnoteId}
       title="Go to footnote"

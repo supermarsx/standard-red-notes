@@ -114,12 +114,20 @@ export default function DataTableChart({ columns, rows, types, config }: Props):
   }, [lib, signature])
 
   if (failed) {
-    return <div className="text-passive-1 p-3 text-sm">Could not load the charting library.</div>
+    return (
+      <div className="text-passive-1 p-3 text-sm" data-srn-print-exclude="true">
+        Could not load the charting library.
+      </div>
+    )
   }
 
   return (
     <div className="relative w-full">
-      {!lib && <div className="text-passive-1 p-3 text-sm">Loading chart…</div>}
+      {!lib && (
+        <div className="text-passive-1 p-3 text-sm" data-srn-print-exclude="true">
+          Loading chart…
+        </div>
+      )}
       <div ref={containerRef} className="text-text h-80 w-full" />
     </div>
   )
