@@ -17,5 +17,6 @@ export interface EmailSenderInterface {
    */
   sendEmail(to: string, subject: string, body: string, options?: SendEmailOptions): Promise<boolean>
 
-  isConfigured(): boolean
+  /** May resolve a shared runtime overlay before reporting configuration. */
+  isConfigured(): boolean | Promise<boolean>
 }

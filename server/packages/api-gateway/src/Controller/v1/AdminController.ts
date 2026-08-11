@@ -1,7 +1,7 @@
 import { Request, Response } from 'express'
 import { inject, optional } from 'inversify'
 import { BaseHttpController, controller, httpDelete, httpGet, httpPost, httpPut } from 'inversify-express-utils'
-import { RoleName } from '@standardnotes/domain-core'
+import { EMAIL_DELIVERY_LIMITS, RoleName, validateEmailRecipient } from '@standardnotes/domain-core'
 import { Role } from '@standardnotes/security'
 import { TYPES } from '../../Bootstrap/Types'
 import { ServiceProxyInterface } from '../../Service/Proxy/ServiceProxyInterface'
@@ -31,6 +31,7 @@ import { DockerServiceControlService } from '../../Service/ServiceControl/Docker
 import { IpAccessListStore, IpAclList } from '../IpAccessList'
 import { RateLimitMetricsStore } from '../RateLimitMetrics'
 import { WorkflowsService } from '../../Service/Workflows/WorkflowsService'
+import { EmailProvider } from '../../Service/ReminderDelivery/Providers/EmailProvider'
 
 /**
  * Standard Red Notes: one entry of the server-status `services` array — a
@@ -1113,6 +1114,17 @@ export class AdminController extends BaseHttpController {
       return
     }
 
+    if (parsed.patch.emailDelivery) {
+      const emailDeliveryError = await this.serverSettingsResolver.validateEmailDeliveryPatch(
+        parsed.patch.emailDelivery,
+      )
+      if (emailDeliveryError) {
+        response.status(400).json({ error: { message: emailDeliveryError } })
+
+        return
+      }
+    }
+
     await this.serverSettingsResolver.applyPatch(parsed.patch)
 
     // Audit: setting NAMES only — never values, never key material.
@@ -1124,6 +1136,64 @@ export class AdminController extends BaseHttpController {
     })
 
     response.json(await this.serverSettingsResolver.view())
+  }
+
+  /** Admin-only, redacted SMTP smoke test using the same live resolver as reminders. */
+  @httpPost('/email-delivery/test', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async testEmailDelivery(request: Request, response: Response): Promise<void> {
+    if (!this.requestorIsAdmin(response)) {
+      response.status(403).json({ error: { message: 'Admin role required.' } })
+
+      return
+    }
+    if (!this.serverSettingsResolver) {
+      response.status(503).json({ error: { message: 'Email delivery settings are not available.' } })
+
+      return
+    }
+
+    const recipient = validateEmailRecipient((request.body as { recipient?: unknown } | undefined)?.recipient)
+    if (!recipient) {
+      response.status(400).json({ error: { message: 'A valid test recipient email address is required.' } })
+
+      return
+    }
+
+    const adminUuid = ((response.locals as { user?: { uuid?: string } }).user ?? {}).uuid ?? null
+    let outcome = 'failed'
+    try {
+      const provider = new EmailProvider(() => this.serverSettingsResolver!.resolveEmailDeliveryConfig())
+      const result = await provider.sendTest(recipient)
+      outcome = result.ok ? 'accepted' : result.notConfigured ? 'not-configured' : 'failed'
+      this.logger?.info('admin email-delivery test completed', {
+        audit: 'admin.email-delivery.test',
+        adminUuid,
+        outcome,
+      })
+
+      if (result.ok) {
+        response.json({ ok: true, message: 'The SMTP server accepted the test email.' })
+
+        return
+      }
+
+      response.status(result.notConfigured ? 400 : 502).json({
+        ok: false,
+        message: result.notConfigured
+          ? 'Email delivery is not configured correctly.'
+          : 'The email delivery test failed. Check the server logs and SMTP configuration.',
+      })
+    } catch {
+      this.logger?.info('admin email-delivery test completed', {
+        audit: 'admin.email-delivery.test',
+        adminUuid,
+        outcome,
+      })
+      response.status(502).json({
+        ok: false,
+        message: 'The email delivery test failed. Check the server logs and SMTP configuration.',
+      })
+    }
   }
 
   /**
@@ -1172,6 +1242,75 @@ export class AdminController extends BaseHttpController {
       }
 
       return { error: `${name} must be a URL string, or null to clear it.` }
+    }
+
+    const smtpText = (value: unknown, name: string, maximum: number): string | null | { error: string } => {
+      if (value === null) {
+        return null
+      }
+      if (
+        typeof value === 'string' &&
+        value.trim().length > 0 &&
+        value.trim().length <= maximum &&
+        !/[\r\n\0]/.test(value)
+      ) {
+        return value.trim()
+      }
+
+      return { error: `${name} must be a bounded string without line breaks, or null to clear it.` }
+    }
+
+    if (root.emailDelivery !== undefined) {
+      if (!root.emailDelivery || typeof root.emailDelivery !== 'object' || Array.isArray(root.emailDelivery)) {
+        return { error: 'emailDelivery must be an object.' }
+      }
+      const emailDelivery = root.emailDelivery as Record<string, unknown>
+      patch.emailDelivery = {}
+
+      for (const [key, maximum] of [
+        ['host', EMAIL_DELIVERY_LIMITS.host],
+        ['username', EMAIL_DELIVERY_LIMITS.username],
+        ['from', EMAIL_DELIVERY_LIMITS.from],
+      ] as const) {
+        if (emailDelivery[key] !== undefined) {
+          const value = smtpText(emailDelivery[key], `emailDelivery.${key}`, maximum)
+          if (value !== null && typeof value === 'object') {
+            return value
+          }
+          patch.emailDelivery[key] = value
+          changedSettings.push(`emailDelivery.${key}`)
+        }
+      }
+      if (emailDelivery.password !== undefined) {
+        const value = emailDelivery.password
+        if (
+          value !== null &&
+          (typeof value !== 'string' ||
+            value.length < 1 ||
+            value.length > EMAIL_DELIVERY_LIMITS.password ||
+            value.includes('\0'))
+        ) {
+          return { error: 'emailDelivery.password must be a bounded non-empty string, or null to clear it.' }
+        }
+        patch.emailDelivery.password = value as string | null
+        changedSettings.push('emailDelivery.password')
+      }
+      if (emailDelivery.port !== undefined) {
+        const value = emailDelivery.port
+        if (value !== null && (!Number.isSafeInteger(value) || (value as number) < 1 || (value as number) > 65_535)) {
+          return { error: 'emailDelivery.port must be an integer between 1 and 65535, or null to clear it.' }
+        }
+        patch.emailDelivery.port = value as number | null
+        changedSettings.push('emailDelivery.port')
+      }
+      if (emailDelivery.tlsMode !== undefined) {
+        const value = emailDelivery.tlsMode
+        if (value !== null && value !== 'implicit' && value !== 'starttls' && value !== 'insecure') {
+          return { error: 'emailDelivery.tlsMode must be implicit, starttls, insecure, or null to clear it.' }
+        }
+        patch.emailDelivery.tlsMode = value as 'implicit' | 'starttls' | 'insecure' | null
+        changedSettings.push('emailDelivery.tlsMode')
+      }
     }
 
     if (root.ai !== undefined) {

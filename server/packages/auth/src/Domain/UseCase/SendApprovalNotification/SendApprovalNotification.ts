@@ -29,7 +29,7 @@ export class SendApprovalNotification implements UseCaseInterface<boolean> {
     }
 
     try {
-      if (!this.emailSender.isConfigured()) {
+      if (!(await this.emailSender.isConfigured())) {
         return Result.ok(false)
       }
 

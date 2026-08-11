@@ -1255,6 +1255,17 @@ export class ContainerConfigLoader {
     container.bind(TYPES.Auth_SMTP_USER).toConstantValue(env.get('SMTP_USER', true))
     container.bind(TYPES.Auth_SMTP_PASS).toConstantValue(env.get('SMTP_PASS', true))
     container.bind(TYPES.Auth_SMTP_FROM).toConstantValue(env.get('SMTP_FROM', true))
+    const smtpSecureValue = env.get('SMTP_SECURE', true)
+    const smtpTlsMode = ['true', '1', 'yes', 'on'].includes((env.get('SMTP_ALLOW_INSECURE', true) || '').toLowerCase())
+      ? ('insecure' as const)
+      : smtpSecureValue
+        ? ['true', '1', 'yes', 'on'].includes(smtpSecureValue.toLowerCase())
+          ? ('implicit' as const)
+          : ('starttls' as const)
+        : undefined
+    const emailDeliveryOverlayReader = new ServerSettingsOverlayReader(
+      env.get('SERVER_SETTINGS_PATH', true) || undefined,
+    )
     container.bind(TYPES.Auth_FILE_UPLOAD_PATH).toConstantValue(env.get('FILE_UPLOAD_PATH', true))
     container.bind(TYPES.Auth_S3_BACKUP_BUCKET_NAME).toConstantValue(env.get('S3_BACKUP_BUCKET_NAME', true))
     container
@@ -1301,8 +1312,10 @@ export class ContainerConfigLoader {
           user: container.get(TYPES.Auth_SMTP_USER),
           pass: container.get(TYPES.Auth_SMTP_PASS),
           from: container.get(TYPES.Auth_SMTP_FROM),
+          tlsMode: smtpTlsMode,
         },
         container.get<winston.Logger>(TYPES.Auth_Logger),
+        () => emailDeliveryOverlayReader.emailDelivery(),
       ),
     )
     container
@@ -1326,8 +1339,10 @@ export class ContainerConfigLoader {
           user: container.get(TYPES.Auth_SMTP_USER),
           pass: container.get(TYPES.Auth_SMTP_PASS),
           from: env.get('EMAIL_REMINDER_FROM', true) || container.get(TYPES.Auth_SMTP_FROM),
+          tlsMode: smtpTlsMode,
         },
         container.get<winston.Logger>(TYPES.Auth_Logger),
+        () => emailDeliveryOverlayReader.emailDelivery(),
       ),
     )
     container
@@ -2773,7 +2788,7 @@ export class ContainerConfigLoader {
         container.get<boolean>(TYPES.Auth_EMAIL_BACKUPS_ENABLED),
         // Email delivery is "configured" when the SMTP sender reports itself
         // configured (host + from present). Mirrors SmtpEmailSender.isConfigured().
-        container.get<EmailSenderInterface>(TYPES.Auth_EmailSender).isConfigured(),
+        () => container.get<EmailSenderInterface>(TYPES.Auth_EmailSender).isConfigured(),
       ),
     )
     container

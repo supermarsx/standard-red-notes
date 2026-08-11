@@ -1,5 +1,6 @@
 import * as nodemailer from 'nodemailer'
 import { Logger } from 'winston'
+import { EmailDeliveryConfig } from '@standardnotes/domain-core'
 
 import { SmtpEmailSender } from './SmtpEmailSender'
 
@@ -44,7 +45,15 @@ describe('SmtpEmailSender', () => {
       host: 'smtp.example.com',
       port: 465,
       secure: true,
+      requireTLS: false,
+      ignoreTLS: false,
       auth: { user: 'smtp-user', pass: 'smtp-password' },
+      connectionTimeout: 10_000,
+      greetingTimeout: 10_000,
+      socketTimeout: 30_000,
+      name: 'standard-red-notes',
+      disableFileAccess: true,
+      disableUrlAccess: true,
     })
     expect(sendMail).toHaveBeenCalledWith({
       from: 'notes@example.com',
@@ -113,5 +122,54 @@ describe('SmtpEmailSender', () => {
       codeTag: 'SmtpEmailSender',
     })
     expect(JSON.stringify(logger.error.mock.calls)).not.toContain('person@example.com')
+  })
+
+  it('re-reads the shared overlay and creates a fresh transport when runtime settings change', async () => {
+    let overlay: EmailDeliveryConfig | undefined
+    const overlayResolver = jest.fn(async () => overlay)
+    const sender = new SmtpEmailSender({}, logger, overlayResolver)
+
+    await expect(sender.isConfigured()).resolves.toBe(false)
+    overlay = {
+      host: '127.0.0.1',
+      port: 2525,
+      from: 'first@example.com',
+      tlsMode: 'insecure',
+    }
+    await expect(sender.sendEmail('person@example.com', 'first', 'body')).resolves.toBe(true)
+
+    overlay = {
+      host: 'smtp.example.com',
+      port: 587,
+      username: 'runtime-user',
+      password: 'runtime-password',
+      from: 'second@example.com',
+      tlsMode: 'starttls',
+    }
+    await expect(sender.sendEmail('person@example.com', 'second', 'body')).resolves.toBe(true)
+
+    expect(overlayResolver).toHaveBeenCalledTimes(3)
+    expect(nodemailer.createTransport).toHaveBeenCalledTimes(2)
+    expect(nodemailer.createTransport).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ host: '127.0.0.1', port: 2525, ignoreTLS: true }),
+    )
+    expect(nodemailer.createTransport).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        host: 'smtp.example.com',
+        port: 587,
+        requireTLS: true,
+        auth: { user: 'runtime-user', pass: 'runtime-password' },
+      }),
+    )
+  })
+
+  it('rejects insecure SMTP for a public or unresolved single-label host', async () => {
+    for (const host of ['smtp.example.com', 'mail-relay']) {
+      const sender = new SmtpEmailSender({ host, from: 'notes@example.com', tlsMode: 'insecure' }, logger)
+      await expect(sender.isConfigured()).resolves.toBe(false)
+    }
+    expect(nodemailer.createTransport).not.toHaveBeenCalled()
   })
 })

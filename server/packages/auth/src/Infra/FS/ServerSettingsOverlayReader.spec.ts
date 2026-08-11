@@ -70,4 +70,25 @@ describe('ServerSettingsOverlayReader', () => {
       expect(await new ServerSettingsOverlayReader('/no/such/file.json').signupLimits()).toBeUndefined()
     })
   })
+
+  describe('emailDelivery()', () => {
+    it('reads the shared write-only SMTP overlay lazily on every call', async () => {
+      const reader = new ServerSettingsOverlayReader(filePath)
+      await writeOverlay({ emailDelivery: { host: 'smtp.example.com', password: 'first', tlsMode: 'starttls' } })
+      expect(await reader.emailDelivery()).toEqual({
+        host: 'smtp.example.com',
+        password: 'first',
+        tlsMode: 'starttls',
+      })
+
+      await writeOverlay({ emailDelivery: { host: '127.0.0.1', password: 'second', tlsMode: 'insecure' } })
+      expect(await reader.emailDelivery()).toEqual({ host: '127.0.0.1', password: 'second', tlsMode: 'insecure' })
+    })
+
+    it('never throws for a missing or malformed overlay', async () => {
+      expect(await new ServerSettingsOverlayReader(undefined).emailDelivery()).toBeUndefined()
+      await fs.writeFile(filePath, '{bad json', 'utf8')
+      expect(await new ServerSettingsOverlayReader(filePath).emailDelivery()).toBeUndefined()
+    })
+  })
 })

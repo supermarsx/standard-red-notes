@@ -276,6 +276,17 @@ fi
 
 # Outbound email and optional S3 backup credentials support Docker secrets.
 file_env 'AUTH_SERVER_SMTP_PASS'
+# Keep both outbound-email consumers on one baseline, including deployments
+# upgraded from Compose revisions that only injected AUTH_SERVER_SMTP_*.
+if [ -z "${API_GATEWAY_SMTP_HOST:-}" ]; then export API_GATEWAY_SMTP_HOST="${AUTH_SERVER_SMTP_HOST:-}"; fi
+if [ -z "${API_GATEWAY_SMTP_PORT:-}" ]; then export API_GATEWAY_SMTP_PORT="${AUTH_SERVER_SMTP_PORT:-}"; fi
+if [ -z "${API_GATEWAY_SMTP_USER:-}" ]; then export API_GATEWAY_SMTP_USER="${AUTH_SERVER_SMTP_USER:-}"; fi
+if [ -z "${API_GATEWAY_SMTP_PASS:-}" ]; then export API_GATEWAY_SMTP_PASS="${AUTH_SERVER_SMTP_PASS:-}"; fi
+if [ -z "${API_GATEWAY_SMTP_FROM:-}" ]; then export API_GATEWAY_SMTP_FROM="${AUTH_SERVER_SMTP_FROM:-}"; fi
+if [ -z "${API_GATEWAY_SMTP_SECURE:-}" ]; then export API_GATEWAY_SMTP_SECURE="${AUTH_SERVER_SMTP_SECURE:-}"; fi
+if [ -z "${API_GATEWAY_SMTP_ALLOW_INSECURE:-}" ]; then
+  export API_GATEWAY_SMTP_ALLOW_INSECURE="${AUTH_SERVER_SMTP_ALLOW_INSECURE:-false}"
+fi
 file_env 'AUTH_SERVER_S3_ACCESS_KEY_ID'
 file_env 'AUTH_SERVER_S3_SECRET_ACCESS_KEY'
 

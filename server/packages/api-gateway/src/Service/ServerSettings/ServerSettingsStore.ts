@@ -5,7 +5,12 @@ import {
   isSafeRecordKey,
   SecureJsonFileStore,
 } from '../../Infra/SecureJsonFileStore'
-import { RUNTIME_LOG_LEVELS } from '@standardnotes/domain-core'
+import {
+  EMAIL_DELIVERY_LIMITS,
+  EMAIL_DELIVERY_TLS_MODES,
+  EmailDeliveryTlsMode,
+  RUNTIME_LOG_LEVELS,
+} from '@standardnotes/domain-core'
 import {
   ASSIGNABLE_ROLE_NAMES,
   ASSISTANT_PROFILE_LIMITS,
@@ -207,6 +212,19 @@ export interface PersistedLoggingSettings {
 }
 
 /**
+ * Shared outbound-email overlay consumed by both the gateway reminder provider
+ * and auth's SMTP sender. Password is write-only at the API boundary.
+ */
+export interface PersistedEmailDeliverySettings {
+  host?: string
+  port?: number
+  username?: string
+  password?: string
+  from?: string
+  tlsMode?: EmailDeliveryTlsMode
+}
+
+/**
  * Standard Red Notes: OCR knobs. Two distinct paths, both persisted here:
  *   - SERVER-side OCR (the E2E-downgrade /v1/ocr/recognize endpoint): serverEnabled
  *     (master switch), defaultLanguage, and the per-request bounds maxPages /
@@ -283,6 +301,7 @@ export interface PersistedServerSettings {
   security?: PersistedSecuritySettings
   registration?: PersistedRegistrationSettings
   logging?: PersistedLoggingSettings
+  emailDelivery?: PersistedEmailDeliverySettings
   ocr?: PersistedOcrSettings
   workflows?: PersistedWorkflowsSettings
   plugins?: PersistedPluginsSettings
@@ -312,6 +331,7 @@ export const SERVER_SETTINGS_BOUNDS = {
   workflowsTokenTtlSeconds: { minimum: 60, maximum: 7 * 24 * 60 * 60 },
   emailSubjectLength: { minimum: 0, maximum: 1_000 },
   emailBodyLength: { minimum: 0, maximum: 20_000 },
+  emailDeliveryPort: { minimum: 1, maximum: 65_535 },
 } as const
 
 const isBoolean = (value: unknown): boolean => typeof value === 'boolean'
@@ -328,6 +348,12 @@ const isOcrLanguage = (value: unknown): boolean =>
   isBoundedString(value, 2, 256) && /^[a-zA-Z]{2,}([_+][a-zA-Z]{2,})*$/.test(value)
 const isUiBasePath = (value: unknown): boolean =>
   isBoundedString(value, 1, MAX_PATH_LENGTH) && /^\/[A-Za-z0-9/_-]*$/.test(value)
+const isBoundedHeaderValue = (value: unknown, maximum: number): boolean =>
+  isBoundedString(value, 1, maximum) && !/[\r\n\0]/.test(value)
+const isSmtpHost = (value: unknown): boolean =>
+  isBoundedHeaderValue(value, EMAIL_DELIVERY_LIMITS.host) && !/[\s/?#]/.test(value as string)
+const isSmtpPassword = (value: unknown): boolean =>
+  isBoundedString(value, 1, EMAIL_DELIVERY_LIMITS.password) && !(value as string).includes('\0')
 
 function isHttpUrl(value: unknown, allowEmpty = false): boolean {
   if (allowEmpty && value === '') {
@@ -660,6 +686,20 @@ function isPersistedServerSettings(value: unknown): value is PersistedServerSett
         matchesFields(candidate, {
           level: (entry) => (PERSISTED_LOG_LEVELS as readonly unknown[]).includes(entry),
         }),
+      emailDelivery: (candidate) =>
+        matchesFields(candidate, {
+          host: isSmtpHost,
+          port: (entry) =>
+            isIntegerBetween(
+              entry,
+              SERVER_SETTINGS_BOUNDS.emailDeliveryPort.minimum,
+              SERVER_SETTINGS_BOUNDS.emailDeliveryPort.maximum,
+            ),
+          username: (entry) => isBoundedHeaderValue(entry, EMAIL_DELIVERY_LIMITS.username),
+          password: isSmtpPassword,
+          from: (entry) => isBoundedHeaderValue(entry, EMAIL_DELIVERY_LIMITS.from),
+          tlsMode: (entry) => (EMAIL_DELIVERY_TLS_MODES as readonly unknown[]).includes(entry),
+        }),
       ocr: (candidate) =>
         matchesFields(candidate, {
           serverEnabled: isBoolean,
@@ -766,6 +806,14 @@ export interface ServerSettingsPatch {
   }
   logging?: {
     level?: string | null
+  }
+  emailDelivery?: {
+    host?: string | null
+    port?: number | null
+    username?: string | null
+    password?: string | null
+    from?: string | null
+    tlsMode?: EmailDeliveryTlsMode | null
   }
   ocr?: {
     serverEnabled?: boolean | null
@@ -903,6 +951,18 @@ export class ServerSettingsStore {
         this.applyKey(data.logging, 'level', patch.logging.level)
         if (Object.keys(data.logging).length === 0) {
           delete data.logging
+        }
+      }
+      if (patch.emailDelivery) {
+        data.emailDelivery = data.emailDelivery ?? {}
+        this.applyKey(data.emailDelivery, 'host', patch.emailDelivery.host)
+        this.applyKey(data.emailDelivery, 'port', patch.emailDelivery.port)
+        this.applyKey(data.emailDelivery, 'username', patch.emailDelivery.username)
+        this.applyKey(data.emailDelivery, 'password', patch.emailDelivery.password)
+        this.applyKey(data.emailDelivery, 'from', patch.emailDelivery.from)
+        this.applyKey(data.emailDelivery, 'tlsMode', patch.emailDelivery.tlsMode)
+        if (Object.keys(data.emailDelivery).length === 0) {
+          delete data.emailDelivery
         }
       }
       if (patch.ocr) {

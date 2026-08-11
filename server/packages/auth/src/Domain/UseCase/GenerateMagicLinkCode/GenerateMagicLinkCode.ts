@@ -20,7 +20,7 @@ export class GenerateMagicLinkCode implements UseCaseInterface<{ emailed: true }
     private logger: Logger,
   ) {}
 
-  isDeliveryConfigured(): boolean {
+  async isDeliveryConfigured(): Promise<boolean> {
     return this.emailSender.isConfigured()
   }
 
@@ -30,7 +30,7 @@ export class GenerateMagicLinkCode implements UseCaseInterface<{ emailed: true }
     }
 
     try {
-      if (!this.isDeliveryConfigured()) {
+      if (!(await this.isDeliveryConfigured())) {
         return Result.fail('Email delivery is not configured. Magic-link sign-in is unavailable.')
       }
 

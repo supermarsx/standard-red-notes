@@ -30,7 +30,7 @@ describe('SendApprovalNotification', () => {
   })
 
   it('should skip cleanly when SMTP is not configured', async () => {
-    emailSender.isConfigured = jest.fn().mockReturnValue(false)
+    emailSender.isConfigured = jest.fn().mockResolvedValue(false)
 
     const result = await createUseCase().execute({ email })
 

@@ -50,6 +50,7 @@ describe('AdminController auth-server pass-through routes', () => {
     'getLogs',
     'getServerSettings',
     'setServerSettings',
+    'testEmailDelivery',
     'getAntiAbuse',
     'blockIp',
     'unblockIp',

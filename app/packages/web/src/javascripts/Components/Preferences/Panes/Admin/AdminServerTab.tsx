@@ -18,6 +18,7 @@ import TabPanel from '@/Components/Tabs/TabPanel'
 import { useTabState } from '@/Components/Tabs/useTabState'
 import { ToastType, addToast } from '@standardnotes/toast'
 import { resolveWorkflowsPublicUrl } from '@/Components/Workflows/workflowsStatus'
+import AdminEmailDeliveryTab from './AdminEmailDeliveryTab'
 import {
   AdminInviteLinkCreated,
   AdminInviteLinkView,
@@ -190,7 +191,7 @@ const SourceChip: FunctionComponent<{ sources: Record<string, string> | null; ke
 
 const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden }) => {
   // Second-level tabs inside the Server pane (§2 IA): split the long single
-  // scroll into General / Registration / Health / Integrations / Logging.
+  // scroll into General / Registration / Health / Integrations / Email / Logging.
   const subTab = useTabState({ defaultTab: 'general' })
 
   // Instance-wide switches. Loaded lazily: this component only mounts when the
@@ -1156,6 +1157,10 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
             <Tab id="integrations" className="inline-flex items-center gap-1.5 !text-xs">
               <Icon type="dashboard" size="medium" />
               Integrations
+            </Tab>
+            <Tab id="email-delivery" className="inline-flex items-center gap-1.5 !text-xs">
+              <Icon type="email" size="medium" />
+              Email delivery
             </Tab>
             <Tab id="logging" className="inline-flex items-center gap-1.5 !text-xs">
               <Icon type="list-bulleted" size="medium" />
@@ -2595,6 +2600,22 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
             </PreferencesSegment>
           </>
         )}
+      </TabPanel>
+
+      {/* ================= EMAIL DELIVERY ================= */}
+      <TabPanel state={subTab} id="email-delivery">
+        <AdminEmailDeliveryTab
+          application={application}
+          settings={serverSettings}
+          sources={settingsSources}
+          loading={settingsLoading}
+          unavailable={settingsNotAvailable}
+          error={settingsError}
+          saving={settingsSaving}
+          noteIfForbidden={noteIfForbidden}
+          onRetry={() => void loadServerSettings()}
+          saveSettings={saveServerSettings}
+        />
       </TabPanel>
 
       {/* ================= LOGGING ================= */}

@@ -1,4 +1,13 @@
 import { AssistantProviderConfig } from '../Assistant/providers/factory'
+import {
+  EMAIL_DELIVERY_TLS_MODES,
+  EmailDeliveryConfig,
+  EmailDeliveryTlsMode,
+  ResolvedEmailDeliveryConfig,
+  emailDeliveryConfigurationError,
+  isEmailDeliveryConfigured,
+  resolveEmailDeliveryConfig as resolveSharedEmailDeliveryConfig,
+} from '@standardnotes/domain-core'
 import { openAiCompatibleConfigured } from '../Assistant/providers/openaiAuth'
 import {
   AssistantProfileAssignments,
@@ -148,6 +157,8 @@ export interface EnvSettingsBaseline {
    * 'info').
    */
   logLevel?: string
+  /** Shared SMTP baseline. Persisted emailDelivery fields override this per key. */
+  emailDelivery?: EmailDeliveryConfig
   /**
    * Standard Red Notes: OCR env baseline. serverEnabled/defaultLanguage/maxPages/
    * maxImageBytes drive the SERVER-side /v1/ocr endpoint (gateway-enforced,
@@ -528,6 +539,16 @@ export interface ServerSettingsView {
      * selectable level set (for the admin dropdown).
      */
     logging: { level: string; levels: string[] }
+    emailDelivery: {
+      host: string
+      port: number
+      username: string | null
+      passwordConfigured: boolean
+      from: string
+      tlsMode: EmailDeliveryTlsMode
+      tlsModes: EmailDeliveryTlsMode[]
+      configured: boolean
+    }
     ocr: ResolvedOcrConfig
     workflows: ResolvedWorkflowsConfig
     /**
@@ -566,6 +587,36 @@ export class ServerSettingsResolver {
       ...(ai.openaiBaseUrl !== undefined ? { openaiBaseURL: ai.openaiBaseUrl } : {}),
       ...(ai.ollamaUrl !== undefined ? { ollamaUrl: ai.ollamaUrl } : {}),
     }
+  }
+
+  /**
+   * Effective outbound-email config, re-read on every call so gateway sends and
+   * auth (through the shared file) observe admin changes without a restart.
+   * An optional patch is applied in memory for controller-side validation.
+   */
+  async resolveEmailDeliveryConfig(patch?: ServerSettingsPatch['emailDelivery']): Promise<ResolvedEmailDeliveryConfig> {
+    const persisted = await this.safeRead()
+    const emailDelivery = { ...(persisted.emailDelivery ?? {}) }
+    if (patch) {
+      for (const key of ['host', 'port', 'username', 'password', 'from', 'tlsMode'] as const) {
+        const value = patch[key]
+        if (value === null) {
+          delete emailDelivery[key]
+        } else if (value !== undefined) {
+          emailDelivery[key] = value as never
+        }
+      }
+    }
+
+    return resolveSharedEmailDeliveryConfig(emailDelivery, this.envBaseline.emailDelivery)
+  }
+
+  async validateEmailDeliveryPatch(patch: ServerSettingsPatch['emailDelivery']): Promise<string | undefined> {
+    const config = await this.resolveEmailDeliveryConfig(patch)
+    const entirelyUnconfigured =
+      config.host === '' && config.from === '' && config.username === undefined && config.password === undefined
+
+    return entirelyUnconfigured ? undefined : emailDeliveryConfigurationError(config)
   }
 
   /**
@@ -1046,6 +1097,8 @@ export class ServerSettingsResolver {
     const registrationConfig = await this.resolveRegistrationConfig()
     const logging = persisted.logging ?? {}
     const loggingLevel = await this.resolveLoggingLevel()
+    const emailDelivery = persisted.emailDelivery ?? {}
+    const emailDeliveryConfig = await this.resolveEmailDeliveryConfig()
     const ocr = persisted.ocr ?? {}
     const ocrConfig = await this.resolveOcrConfig()
     const workflows = persisted.workflows ?? {}
@@ -1133,6 +1186,12 @@ export class ServerSettingsResolver {
       'registration.signupsCloseAt': this.source(registration.signupsCloseAt, env.registrationSignupsCloseAt),
       'registration.invitesPerUser': this.source(registration.invitesPerUser, env.registrationInvitesPerUser),
       'logging.level': this.source(logging.level, env.logLevel),
+      'emailDelivery.host': this.source(emailDelivery.host, env.emailDelivery?.host),
+      'emailDelivery.port': this.source(emailDelivery.port, env.emailDelivery?.port),
+      'emailDelivery.username': this.source(emailDelivery.username, env.emailDelivery?.username),
+      'emailDelivery.password': this.source(emailDelivery.password, env.emailDelivery?.password),
+      'emailDelivery.from': this.source(emailDelivery.from, env.emailDelivery?.from),
+      'emailDelivery.tlsMode': this.source(emailDelivery.tlsMode, env.emailDelivery?.tlsMode),
       'ocr.serverEnabled': this.source(ocr.serverEnabled, env.ocrServerEnabled),
       'ocr.defaultLanguage': this.source(ocr.defaultLanguage, env.ocrDefaultLanguage),
       'ocr.maxPages': this.source(ocr.maxPages, env.ocrMaxPages),
@@ -1174,6 +1233,16 @@ export class ServerSettingsResolver {
           gatingModes: EMAIL_CONFIRMATION_GATING_MODES,
         },
         logging: { level: loggingLevel, levels: LOG_LEVELS },
+        emailDelivery: {
+          host: emailDeliveryConfig.host,
+          port: emailDeliveryConfig.port,
+          username: emailDeliveryConfig.username ?? null,
+          passwordConfigured: Boolean(emailDeliveryConfig.password),
+          from: emailDeliveryConfig.from,
+          tlsMode: emailDeliveryConfig.tlsMode,
+          tlsModes: [...EMAIL_DELIVERY_TLS_MODES],
+          configured: isEmailDeliveryConfigured(emailDeliveryConfig),
+        },
         ocr: ocrConfig,
         workflows: workflowsConfig,
         plugins: { repoUrl: pluginsRepoUrl, sameOriginRendering: pluginsSameOriginRendering },

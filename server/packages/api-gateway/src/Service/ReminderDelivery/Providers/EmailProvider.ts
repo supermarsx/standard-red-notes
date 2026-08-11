@@ -1,6 +1,12 @@
 import * as nodemailer from 'nodemailer'
 import SMTPTransport from 'nodemailer/lib/smtp-transport'
-import { isIP } from 'net'
+import {
+  EmailDeliveryConfig,
+  ResolvedEmailDeliveryConfig,
+  isEmailDeliveryConfigured,
+  resolveEmailDeliveryConfig,
+  validateEmailRecipient,
+} from '@standardnotes/domain-core'
 
 import { DeliveryChannel, DeliveryResult, ReminderDeliveryProvider } from '../Types'
 
@@ -13,12 +19,15 @@ export interface SmtpConfig {
   host?: string
   port?: number
   user?: string
+  username?: string
   password?: string
   from?: string
   /** true selects implicit TLS. false/undefined selects STARTTLS unless allowInsecure is explicitly enabled. */
   secure?: boolean
   /** Explicit operator opt-out for trusted loopback or internal plaintext relays. */
   allowInsecure?: boolean
+  /** Canonical runtime-overlay TLS mode. Legacy secure/allowInsecure remain supported. */
+  tlsMode?: EmailDeliveryConfig['tlsMode']
   connectionTimeoutMs?: number
   greetingTimeoutMs?: number
   socketTimeoutMs?: number
@@ -34,36 +43,30 @@ export interface SmtpConfig {
 export class EmailProvider implements ReminderDeliveryProvider {
   readonly channel: DeliveryChannel = 'email'
 
-  private transporter: nodemailer.Transporter<SMTPTransport.SentMessageInfo> | undefined
-
-  constructor(private readonly config: SmtpConfig) {}
+  constructor(private readonly configSource: SmtpConfig | (() => Promise<SmtpConfig>)) {}
 
   isConfigured(): boolean {
-    const host = this.config.host?.trim()
-    const from = this.config.from?.trim()
-    const user = this.config.user?.trim()
-    const password = this.config.password
-    const credentialsArePaired = Boolean(user) === Boolean(password)
-    const usesImplicitTls = this.config.secure ?? this.config.port === 465
-    const plaintextOverrideIsSafe =
-      this.config.allowInsecure !== true || usesImplicitTls || (host !== undefined && isTrustedInsecureRelayHost(host))
-    const portIsValid =
-      this.config.port === undefined ||
-      (Number.isSafeInteger(this.config.port) && this.config.port > 0 && this.config.port <= 65_535)
-
-    return (
-      Boolean(host) &&
-      Boolean(from) &&
-      !containsHeaderBreak(host as string) &&
-      !containsHeaderBreak(from as string) &&
-      credentialsArePaired &&
-      plaintextOverrideIsSafe &&
-      portIsValid
-    )
+    return typeof this.configSource === 'function'
+      ? false
+      : isEmailDeliveryConfigured(normalizeSmtpConfig(this.configSource))
   }
 
   async send(destination: string, message: string): Promise<DeliveryResult> {
-    if (!this.isConfigured()) {
+    return this.sendMessage(destination, 'Reminder', message)
+  }
+
+  async sendTest(destination: string): Promise<DeliveryResult> {
+    return this.sendMessage(
+      destination,
+      'Standard Red Notes email delivery test',
+      'This message confirms that your Standard Red Notes server can deliver email using the active SMTP settings.',
+    )
+  }
+
+  private async sendMessage(destination: string, subject: string, message: string): Promise<DeliveryResult> {
+    const sourceConfig = await this.resolveConfig()
+    const config = normalizeSmtpConfig(sourceConfig)
+    if (!isEmailDeliveryConfigured(config)) {
       return {
         ok: false,
         notConfigured: true,
@@ -71,19 +74,19 @@ export class EmailProvider implements ReminderDeliveryProvider {
       }
     }
 
-    const to = (destination ?? '').trim()
-    if (to.length === 0) {
-      return { ok: false, reason: 'A recipient email address (destination) is required.' }
-    }
-    if (containsHeaderBreak(to)) {
+    if (/[\r\n]/.test(destination ?? '')) {
       return { ok: false, reason: 'The recipient email address contains invalid line breaks.' }
+    }
+    const to = validateEmailRecipient(destination)
+    if (!to) {
+      return { ok: false, reason: 'A recipient email address (destination) is required.' }
     }
 
     try {
-      const result = await this.getTransporter().sendMail({
-        from: this.config.from?.trim(),
+      const result = await nodemailer.createTransport(smtpTransportOptions({ ...sourceConfig, ...config })).sendMail({
+        from: config.from,
         to,
-        subject: 'Reminder',
+        subject,
         text: message,
         disableFileAccess: true,
         disableUrlAccess: true,
@@ -99,70 +102,63 @@ export class EmailProvider implements ReminderDeliveryProvider {
     }
   }
 
-  private getTransporter(): nodemailer.Transporter<SMTPTransport.SentMessageInfo> {
-    if (this.transporter !== undefined) {
-      return this.transporter
-    }
-
-    this.transporter = nodemailer.createTransport(smtpTransportOptions(this.config))
-
-    return this.transporter
+  private async resolveConfig(): Promise<SmtpConfig> {
+    return typeof this.configSource === 'function' ? this.configSource() : this.configSource
   }
 }
 
-export function smtpTransportOptions(config: SmtpConfig): SMTPTransport.Options {
-  const secure = config.secure ?? config.port === 465
-  const allowInsecure = config.allowInsecure === true
-  const user = config.user?.trim()
-  const auth = user && config.password ? { user, pass: config.password } : undefined
+export function smtpTransportOptions(config: SmtpConfig | ResolvedEmailDeliveryConfig): SMTPTransport.Options {
+  const resolved = normalizeSmtpConfig(config)
+  const secure = resolved.tlsMode === 'implicit'
+  const allowInsecure = resolved.tlsMode === 'insecure'
+  const auth = resolved.username && resolved.password ? { user: resolved.username, pass: resolved.password } : undefined
 
   return {
-    host: config.host?.trim(),
-    port: config.port ?? (secure ? 465 : 587),
+    host: resolved.host,
+    port: resolved.port,
     secure,
     requireTLS: !secure && !allowInsecure,
     ignoreTLS: !secure && allowInsecure,
     auth,
-    connectionTimeout: boundedTimeout(config.connectionTimeoutMs, DEFAULT_CONNECTION_TIMEOUT_MS),
-    greetingTimeout: boundedTimeout(config.greetingTimeoutMs, DEFAULT_GREETING_TIMEOUT_MS),
-    socketTimeout: boundedTimeout(config.socketTimeoutMs, DEFAULT_SOCKET_TIMEOUT_MS),
+    connectionTimeout: boundedTimeout(
+      'connectionTimeoutMs' in config ? config.connectionTimeoutMs : undefined,
+      DEFAULT_CONNECTION_TIMEOUT_MS,
+    ),
+    greetingTimeout: boundedTimeout(
+      'greetingTimeoutMs' in config ? config.greetingTimeoutMs : undefined,
+      DEFAULT_GREETING_TIMEOUT_MS,
+    ),
+    socketTimeout: boundedTimeout(
+      'socketTimeoutMs' in config ? config.socketTimeoutMs : undefined,
+      DEFAULT_SOCKET_TIMEOUT_MS,
+    ),
     name: 'standard-red-notes',
     disableFileAccess: true,
     disableUrlAccess: true,
   }
 }
 
-function containsHeaderBreak(value: string): boolean {
-  return /[\r\n]/.test(value)
-}
+function normalizeSmtpConfig(config: SmtpConfig | ResolvedEmailDeliveryConfig): ResolvedEmailDeliveryConfig {
+  const legacy = config as SmtpConfig
+  const tlsMode =
+    config.tlsMode ??
+    (legacy.allowInsecure === true
+      ? 'insecure'
+      : legacy.secure === true || (legacy.secure === undefined && config.port === 465)
+        ? 'implicit'
+        : 'starttls')
 
-function isTrustedInsecureRelayHost(host: string): boolean {
-  const normalizedHost = host
-    .trim()
-    .toLowerCase()
-    .replace(/^\[|\]$/g, '')
-  const ipVersion = isIP(normalizedHost)
-  if (ipVersion === 4) {
-    const [first, second] = normalizedHost.split('.').map(Number)
-
-    return (
-      first === 10 ||
-      first === 127 ||
-      (first === 169 && second === 254) ||
-      (first === 172 && second >= 16 && second <= 31) ||
-      (first === 192 && second === 168)
-    )
-  }
-  if (ipVersion === 6) {
-    return (
-      normalizedHost === '::1' ||
-      normalizedHost.startsWith('fc') ||
-      normalizedHost.startsWith('fd') ||
-      /^fe[89ab]/.test(normalizedHost)
-    )
-  }
-
-  return normalizedHost.endsWith('.localhost') || !normalizedHost.includes('.')
+  return resolveEmailDeliveryConfig(
+    {
+      host: config.host,
+      port: config.port,
+      username: config.username ?? legacy.user,
+      password: config.password,
+      from: config.from,
+      tlsMode,
+    },
+    undefined,
+  )
 }
 
 function boundedTimeout(value: number | undefined, fallback: number): number {

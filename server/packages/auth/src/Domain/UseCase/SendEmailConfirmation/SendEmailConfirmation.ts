@@ -72,7 +72,7 @@ export class SendEmailConfirmation implements UseCaseInterface<boolean> {
         this.logger.warn('[email-confirmation] Token cleanup failed (non-fatal).', safeErrorLogMetadata(cleanupError))
       }
 
-      if (!this.emailSender.isConfigured()) {
+      if (!(await this.emailSender.isConfigured())) {
         // Token is stored; without SMTP there is simply no way to deliver the link.
         this.logger.warn(
           `[email-confirmation] SMTP is not configured; confirmation email for user ${dto.userUuid} was not sent.`,

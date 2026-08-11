@@ -19,6 +19,7 @@ import {
 } from '../../Service/ServerSettings/ServerSettingsResolver'
 import { ServerSettingsStore } from '../../Service/ServerSettings/ServerSettingsStore'
 import { WorkflowsService } from '../../Service/Workflows/WorkflowsService'
+import { EmailProvider } from '../../Service/ReminderDelivery/Providers/EmailProvider'
 
 const confirmationDefaults = {
   emailConfirmationEnabled: false,
@@ -409,6 +410,7 @@ describe('AdminController server-status', () => {
     })
 
     afterEach(async () => {
+      jest.restoreAllMocks()
       await fs.rm(dir, { recursive: true, force: true })
     })
 
@@ -446,6 +448,102 @@ describe('AdminController server-status', () => {
         'updateCheck.url': 'env',
         'nextcloudBackups.enabled': 'default',
       })
+    })
+
+    it('PUT persists a write-only email password, preserves it on partial updates, and never returns or audits it', async () => {
+      const password = 'smtp-write-only-secret'
+      await settingsController().setServerSettings(
+        {
+          body: {
+            emailDelivery: {
+              host: 'smtp.example.com',
+              port: 587,
+              username: 'mailer',
+              password,
+              from: 'notes@example.com',
+              tlsMode: 'starttls',
+            },
+          },
+        } as unknown as Request,
+        responseWith([{ name: RoleName.NAMES.AdminUser }]),
+      )
+
+      expect((await resolver.resolveEmailDeliveryConfig()).password).toBe(password)
+      expect(JSON.stringify(jsonMock.mock.calls)).not.toContain(password)
+      expect(JSON.stringify(logger.info.mock.calls)).not.toContain(password)
+
+      await settingsController().setServerSettings(
+        { body: { emailDelivery: { host: 'smtp2.example.com' } } } as unknown as Request,
+        responseWith([{ name: RoleName.NAMES.AdminUser }]),
+      )
+      expect(await resolver.resolveEmailDeliveryConfig()).toMatchObject({
+        host: 'smtp2.example.com',
+        password,
+      })
+      expect(jsonMock.mock.calls[0][0].settings.emailDelivery).toMatchObject({
+        passwordConfigured: true,
+        configured: true,
+      })
+      expect(jsonMock.mock.calls[0][0].settings.emailDelivery).not.toHaveProperty('password')
+    })
+
+    it('PUT rejects header injection, unpaired credentials, and insecure unresolved/public relays', async () => {
+      for (const body of [
+        {
+          emailDelivery: {
+            host: 'smtp.example.com\r\nX-Bad: yes',
+            from: 'notes@example.com',
+            tlsMode: 'starttls',
+          },
+        },
+        {
+          emailDelivery: {
+            host: 'smtp.example.com',
+            username: 'unpaired',
+            from: 'notes@example.com',
+            tlsMode: 'starttls',
+          },
+        },
+        {
+          emailDelivery: { host: 'mail-relay', from: 'notes@example.com', tlsMode: 'insecure' },
+        },
+      ]) {
+        await settingsController().setServerSettings(
+          { body } as unknown as Request,
+          responseWith([{ name: RoleName.NAMES.AdminUser }]),
+        )
+        expect(statusMock).toHaveBeenCalledWith(400)
+      }
+      expect((await resolver.resolveEmailDeliveryConfig()).host).toBe('')
+    })
+
+    it('test delivery is admin-only and returns a redacted failure without recipient or provider details', async () => {
+      const sendTest = jest
+        .spyOn(EmailProvider.prototype, 'sendTest')
+        .mockResolvedValue({ ok: false, reason: '550 raw-provider-detail' })
+      const recipient = 'operator-secret@example.com'
+
+      await settingsController().testEmailDelivery(
+        { body: { recipient } } as unknown as Request,
+        responseWith([{ name: RoleName.NAMES.CoreUser }]),
+      )
+      expect(statusMock).toHaveBeenCalledWith(403)
+      expect(sendTest).not.toHaveBeenCalled()
+
+      await settingsController().testEmailDelivery(
+        { body: { recipient } } as unknown as Request,
+        responseWith([{ name: RoleName.NAMES.AdminUser }]),
+      )
+      expect(statusMock).toHaveBeenCalledWith(502)
+      expect(sendTest).toHaveBeenCalledWith(recipient)
+      expect(JSON.stringify(jsonMock.mock.calls)).not.toContain(recipient)
+      expect(JSON.stringify(jsonMock.mock.calls)).not.toContain('raw-provider-detail')
+      expect(JSON.stringify(logger.info.mock.calls)).not.toContain(recipient)
+      expect(JSON.stringify(logger.info.mock.calls)).not.toContain('raw-provider-detail')
+      expect(logger.info).toHaveBeenLastCalledWith(
+        'admin email-delivery test completed',
+        expect.objectContaining({ audit: 'admin.email-delivery.test', outcome: 'failed' }),
+      )
     })
 
     it('GET warns about an ignored legacy inline Codex token and PUT removes it without exposing it', async () => {

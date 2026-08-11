@@ -38,7 +38,7 @@ export class TriggerDueDeadManSwitches implements UseCaseInterface<number> {
     // If email delivery is not configured we cannot fulfil a switch. Skip the
     // whole scan WITHOUT marking anything triggered so it retries once SMTP is
     // configured.
-    if (!this.emailSender.isConfigured()) {
+    if (!(await this.emailSender.isConfigured())) {
       this.logger.debug('SMTP is not configured. Skipping dead man switch scan.')
 
       return Result.ok(0)

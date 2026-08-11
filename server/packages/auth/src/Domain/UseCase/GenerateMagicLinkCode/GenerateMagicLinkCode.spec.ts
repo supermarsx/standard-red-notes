@@ -54,7 +54,7 @@ describe('GenerateMagicLinkCode', () => {
   })
 
   it('should fail closed without generating or persisting a code when SMTP is not configured', async () => {
-    emailSender.isConfigured.mockReturnValue(false)
+    emailSender.isConfigured.mockResolvedValue(false)
 
     const result = await createUseCase().execute({ userIdentifier: 'test@test.te' })
 

@@ -53,7 +53,7 @@ export class TriggerDueEmailReminders implements UseCaseInterface<number> {
       return Result.ok(0)
     }
 
-    if (!this.emailSender.isConfigured()) {
+    if (!(await this.emailSender.isConfigured())) {
       this.logger.debug('SMTP is not configured. Skipping email reminder scan.')
 
       return Result.ok(0)

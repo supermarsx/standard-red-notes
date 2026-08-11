@@ -1051,6 +1051,14 @@ export class LegacyApiService
     nextcloudBackups?: {
       enabled?: boolean | null
     }
+    emailDelivery?: {
+      host?: string | null
+      port?: number | null
+      username?: string | null
+      password?: string | null
+      from?: string | null
+      tlsMode?: 'implicit' | 'starttls' | 'insecure' | null
+    }
     registration?: {
       defaultRole?: string | null
       domainMode?: 'off' | 'allowlist' | 'blocklist' | null
@@ -1121,6 +1129,17 @@ export class LegacyApiService
       authentication: this.getSessionAccessToken(),
       fallbackErrorMessage: 'Failed to update server settings.',
       params: partial,
+    })
+  }
+
+  /** Admin-only redacted SMTP smoke test. The server never returns provider errors. */
+  async adminTestEmailDelivery(recipient: string): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Post,
+      url: joinPaths(this.host, Paths.v1.emailDeliveryTest),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to test email delivery.',
+      params: { recipient },
     })
   }
 

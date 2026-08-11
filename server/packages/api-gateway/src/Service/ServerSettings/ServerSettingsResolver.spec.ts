@@ -83,6 +83,122 @@ describe('ServerSettingsStore + ServerSettingsResolver', () => {
       await store.update({ ai: { dailyRequestLimit: null } })
       expect(await store.read()).toEqual({})
     })
+
+    it('preserves a write-only SMTP password across partial patches and clears it only explicitly', async () => {
+      const store = new ServerSettingsStore(filePath)
+      await store.update({
+        emailDelivery: {
+          host: 'smtp.example.com',
+          port: 587,
+          username: 'mailer',
+          password: 'saved-secret',
+          from: 'notes@example.com',
+          tlsMode: 'starttls',
+        },
+      })
+
+      await store.update({ emailDelivery: { host: 'smtp2.example.com' } })
+      expect((await store.read()).emailDelivery).toEqual({
+        host: 'smtp2.example.com',
+        port: 587,
+        username: 'mailer',
+        password: 'saved-secret',
+        from: 'notes@example.com',
+        tlsMode: 'starttls',
+      })
+
+      await store.update({ emailDelivery: { password: null } })
+      expect((await store.read()).emailDelivery).not.toHaveProperty('password')
+    })
+  })
+
+  describe('email delivery', () => {
+    const environment = {
+      host: 'env.smtp.example.com',
+      port: 587,
+      username: 'env-user',
+      password: 'env-secret',
+      from: 'env-notes@example.com',
+      tlsMode: 'starttls' as const,
+    }
+
+    it('resolves persisted fields over environment fields and returns to env on explicit clear', async () => {
+      const resolver = makeResolver({ emailDelivery: environment })
+      expect(await resolver.resolveEmailDeliveryConfig()).toEqual(environment)
+
+      await resolver.applyPatch({
+        emailDelivery: {
+          host: '127.0.0.1',
+          port: 2525,
+          username: 'saved-user',
+          password: 'saved-secret',
+          from: 'saved-notes@example.com',
+          tlsMode: 'insecure',
+        },
+      })
+      expect(await resolver.resolveEmailDeliveryConfig()).toEqual({
+        host: '127.0.0.1',
+        port: 2525,
+        username: 'saved-user',
+        password: 'saved-secret',
+        from: 'saved-notes@example.com',
+        tlsMode: 'insecure',
+      })
+
+      await resolver.applyPatch({ emailDelivery: { host: null, password: null } })
+      expect(await resolver.resolveEmailDeliveryConfig()).toMatchObject({
+        host: environment.host,
+        password: environment.password,
+      })
+    })
+
+    it('masks the password while reporting configuration and per-field sources', async () => {
+      const resolver = makeResolver({ emailDelivery: environment })
+      await resolver.applyPatch({ emailDelivery: { password: 'persisted-secret', from: 'saved@example.com' } })
+
+      const view = await resolver.view()
+      expect(JSON.stringify(view)).not.toContain('persisted-secret')
+      expect(JSON.stringify(view)).not.toContain('env-secret')
+      expect(view.settings.emailDelivery).toMatchObject({
+        host: environment.host,
+        username: environment.username,
+        passwordConfigured: true,
+        from: 'saved@example.com',
+        tlsMode: 'starttls',
+        configured: true,
+      })
+      expect(view.sources).toMatchObject({
+        'emailDelivery.host': 'env',
+        'emailDelivery.password': 'persisted',
+        'emailDelivery.from': 'persisted',
+        'emailDelivery.tlsMode': 'env',
+      })
+    })
+
+    it('validates effective credential pairing and restricts insecure SMTP to literal private relays', async () => {
+      const resolver = makeResolver()
+      await expect(
+        resolver.validateEmailDeliveryPatch({
+          host: 'smtp.example.com',
+          from: 'notes@example.com',
+          username: 'unpaired-user',
+        }),
+      ).resolves.toContain('configured together')
+      await expect(
+        resolver.validateEmailDeliveryPatch({
+          host: 'mail-relay',
+          from: 'notes@example.com',
+          tlsMode: 'insecure',
+        }),
+      ).resolves.toContain('loopback or private')
+      await expect(
+        resolver.validateEmailDeliveryPatch({
+          host: '192.168.10.20',
+          from: 'notes@example.com',
+          tlsMode: 'insecure',
+        }),
+      ).resolves.toBeUndefined()
+    })
   })
 
   describe('registration policy', () => {
@@ -371,13 +487,14 @@ describe('ServerSettingsStore + ServerSettingsResolver', () => {
         'nextcloudBackups',
         'security',
         'registration',
+        'emailDelivery',
         'ocr',
         'workflows',
         'plugins',
       ] as const) {
         expect(view.settings).toHaveProperty(section)
       }
-      // The new logging section joins them.
+      // Runtime logging remains present alongside the email-delivery overlay.
       expect(view.settings).toHaveProperty('logging')
 
       // A representative pre-existing source key from each section must survive
@@ -392,6 +509,7 @@ describe('ServerSettingsStore + ServerSettingsResolver', () => {
         'security.rateLimit.enabled',
         'registration.defaultRole',
         'registration.emailConfirmationEnabled',
+        'emailDelivery.host',
         'ocr.serverEnabled',
         'workflows.enabled',
         'plugins.repoUrl',
