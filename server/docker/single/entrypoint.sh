@@ -171,9 +171,14 @@ echo "[entrypoint] wrote ${ENV_FILE} (DB=sqlite, cache=memory, data=${DATA_DIR})
 # then recomputes and substitutes the CSP inline-script sha256 in the served
 # nginx conf so the two always match. It operates on the standard paths
 # (/usr/share/nginx/html/index.html and /etc/nginx/conf.d/default.conf).
-if [ -f /usr/local/bin/csp-runtime-config.sh ]; then
-  sh /usr/local/bin/csp-runtime-config.sh || \
-    echo "[entrypoint] WARNING: CSP/runtime-config templating reported a problem (app still boots)." >&2
+CSP_RUNTIME_CONFIG_HELPER=/usr/local/bin/csp-runtime-config.sh
+if [ ! -f "${CSP_RUNTIME_CONFIG_HELPER}" ]; then
+  echo "[entrypoint] ERROR: required CSP/runtime-config helper is missing: ${CSP_RUNTIME_CONFIG_HELPER}; refusing to start supervisord." >&2
+  exit 1
+fi
+if ! sh "${CSP_RUNTIME_CONFIG_HELPER}"; then
+  echo "[entrypoint] ERROR: CSP/runtime-config templating failed; refusing to start supervisord." >&2
+  exit 1
 fi
 
 # --- 5. Hand off to supervisord --------------------------------------------

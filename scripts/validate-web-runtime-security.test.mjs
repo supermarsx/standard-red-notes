@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -25,6 +31,7 @@ const sandboxDocument = read(
   "app/packages/web/src/javascripts/Components/NoteView/SandboxEditor/SandboxDocument.ts",
 );
 const dockerEntrypoint = read("app/docker/docker-entrypoint.sh");
+const singleContainerEntrypoint = read("server/docker/single/entrypoint.sh");
 const lxcInstaller = read("deploy/lxc/install.sh");
 const serviceWorker = read("app/packages/web/src/service-worker.js");
 const webWebpack = read("app/packages/web/web.webpack.config.js");
@@ -620,7 +627,80 @@ test("runtime CSP hashing cannot overwrite the fixed sandbox hash", () => {
   );
 });
 
-test("docker CSP hashing rotates the parent hash across consecutive starts without changing the sandbox hash", () => {
+test("single-container startup requires successful CSP runtime configuration before supervisord", () => {
+  const temporaryDirectory = mkdtempSync(
+    path.join(root, ".tmp-single-csp-gate-"),
+  );
+  const relative = (filePath) =>
+    path.relative(root, filePath).split(path.sep).join("/");
+  const helperPath = path.join(temporaryDirectory, "csp-runtime-config.sh");
+  const harnessPath = path.join(temporaryDirectory, "entrypoint-tail.sh");
+  const supervisorMarkerPath = path.join(
+    temporaryDirectory,
+    "supervisord-reached",
+  );
+
+  try {
+    const tailMarker =
+      "# --- 4. App runtime-config templating + CSP inline-script self-heal";
+    const tailStart = singleContainerEntrypoint.indexOf(tailMarker);
+    assert.notEqual(tailStart, -1, "single-container CSP gate is missing");
+
+    const runtimeTail = singleContainerEntrypoint
+      .slice(tailStart)
+      .replace(
+        "CSP_RUNTIME_CONFIG_HELPER=/usr/local/bin/csp-runtime-config.sh",
+        `CSP_RUNTIME_CONFIG_HELPER="${relative(helperPath)}"`,
+      )
+      .replace(
+        "exec supervisord -c /etc/supervisord.conf",
+        `printf 'reached\\n' > "${relative(supervisorMarkerPath)}"`,
+      );
+    assert.notEqual(
+      runtimeTail,
+      singleContainerEntrypoint.slice(tailStart),
+      "test harness must substitute the production paths",
+    );
+    assert.doesNotMatch(
+      runtimeTail,
+      /\/usr\/local\/bin\/csp-runtime-config\.sh/,
+    );
+    assert.doesNotMatch(runtimeTail, /exec supervisord/);
+    writeFileSync(harnessPath, `set -eu\n${runtimeTail}`);
+
+    const run = () =>
+      spawnSync("sh", [relative(harnessPath)], {
+        cwd: root,
+        encoding: "utf8",
+      });
+
+    const missingHelper = run();
+    assert.notEqual(missingHelper.status, 0);
+    assert.match(
+      missingHelper.stderr,
+      /required CSP\/runtime-config helper is missing/,
+    );
+    assert.equal(existsSync(supervisorMarkerPath), false);
+
+    writeFileSync(helperPath, "exit 42\n");
+    const failedHelper = run();
+    assert.notEqual(failedHelper.status, 0);
+    assert.match(
+      failedHelper.stderr,
+      /CSP\/runtime-config templating failed; refusing to start supervisord/,
+    );
+    assert.equal(existsSync(supervisorMarkerPath), false);
+
+    writeFileSync(helperPath, "exit 0\n");
+    const successfulHelper = run();
+    assert.equal(successfulHelper.status, 0, successfulHelper.stderr);
+    assert.equal(existsSync(supervisorMarkerPath), true);
+  } finally {
+    rmSync(temporaryDirectory, { recursive: true, force: true });
+  }
+});
+
+test("docker CSP hashing rotates the parent hash and fails closed without changing the sandbox hash", () => {
   const temporaryDirectory = mkdtempSync(path.join(root, ".tmp-csp-restart-"));
   const relative = (filePath) =>
     path.relative(root, filePath).split(path.sep).join("/");
@@ -684,20 +764,29 @@ test("docker CSP hashing rotates the parent hash across consecutive starts witho
 
     writeFileSync(indexPath, "<!doctype html><title>missing bootstrap</title>");
     const failedHashing = run("true");
-    assert.equal(
+    assert.notEqual(
       failedHashing.status,
       0,
-      failedHashing.stderr || failedHashing.error?.message,
+      "a missing bootstrap must abort container startup",
     );
-    const fallbackConfig = readFileSync(configPath, "utf8");
     assert.match(
-      fallbackConfig,
-      /script-src 'self' 'wasm-unsafe-eval' 'unsafe-inline'/,
+      failedHashing.stderr,
+      /ERROR: failed to compute and install the CSP inline-script hash; refusing to start nginx/,
     );
+    const failedConfig = readFileSync(configPath, "utf8");
+    assert.equal(
+      failedConfig,
+      twiceStartedConfig,
+      "failed hashing must not mutate the last restrictive configuration",
+    );
+    assert.doesNotMatch(
+      failedConfig,
+      /script-src 'self' 'wasm-unsafe-eval' 'unsafe-inline'/,
+      "failed hashing must never weaken the parent script policy",
+    );
+    assert.match(failedConfig, new RegExp(`wasm-unsafe-eval' '${secondHash}`));
     assert.ok(
-      fallbackConfig.includes(
-        `script-src 'unsafe-eval' '${sandboxRunnerHash()}`,
-      ),
+      failedConfig.includes(`script-src 'unsafe-eval' '${sandboxRunnerHash()}`),
       "a failed parent hash refresh must leave the fixed sandbox hash intact",
     );
   } finally {

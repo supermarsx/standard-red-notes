@@ -304,7 +304,7 @@ feature back off, unset `SERVICE_CONTROL_DOCKER_ENABLED` and stop the proxy
 
 ## Verifying the CSP self-heal
 
-Modes B and C serve the SPA with a Content-Security-Policy that pins the single
+All three modes serve the SPA with a Content-Security-Policy that pins the single
 inline bootstrap `<script>` by its sha256. The served hash is recomputed from the
 _actual served_ script at start/install, so it always matches. To verify:
 
@@ -321,7 +321,8 @@ curl -fsS "$BASE/" \
 printf 'sha256-%s\n' "$(openssl dgst -binary -sha256 /tmp/inline.js | openssl base64)"
 ```
 
-The token from step 1 and step 2 must match (when they do, the pin is intact; if
-the entrypoint ever falls back, step 1 shows `unsafe-inline` instead and the app
-still boots). The container's own build/curl verification is captured in the PR
-description.
+The token from step 1 and step 2 must match. If runtime templating or hash
+installation fails, Mode A stops before nginx, Mode B stops before supervisord
+can launch nginx, and the Mode C installer stops before switching the live
+release. None substitutes `unsafe-inline` to serve an unpinned app shell. The
+container's own build/curl verification is captured in the PR description.
