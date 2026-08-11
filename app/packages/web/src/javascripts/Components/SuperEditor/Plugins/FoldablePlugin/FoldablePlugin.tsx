@@ -34,25 +34,50 @@ const FOLDABLE_CLASS = 'Lexical__foldable'
 const TOGGLE_CLASS = 'Lexical__foldToggle'
 const TOGGLE_ATTR = 'data-fold-toggle'
 const KEY_ATTR = 'data-fold-key'
+const TOGGLE_KIND_ATTR = 'data-fold-kind'
+const TOGGLE_RAIL_ATTR = 'data-fold-control-rail'
+const PRINT_EXCLUDE_ATTR = 'data-srn-print-exclude'
+
+export type FoldControlKind = 'heading' | 'list' | 'checklist'
+
+const FOLDABLE_KIND_CLASSES: Record<FoldControlKind, string> = {
+  heading: `${FOLDABLE_CLASS}--heading`,
+  list: `${FOLDABLE_CLASS}--list`,
+  checklist: `${FOLDABLE_CLASS}--checklist`,
+}
+
+const TOGGLE_KIND_CLASSES: Record<FoldControlKind, string> = {
+  heading: `${TOGGLE_CLASS}--heading`,
+  list: `${TOGGLE_CLASS}--list`,
+  checklist: `${TOGGLE_CLASS}--checklist`,
+}
 
 /**
  * Build the fold-toggle button element, marked Lexical-UNMANAGED.
  *
  * Exported so the regression test can assert the unmanaged flag is present
  * WITHOUT a full editor mount. The unmanaged flag is the load-bearing part of
- * the no-hang fix (see `ensureToggle`): the toggle is injected into a
+ * the no-hang fix (see `syncFoldControl`): the toggle is injected into a
  * Lexical-owned `<li>`/heading, so Lexical's DOM MutationObserver would
  * otherwise `removeChild` it and revert the selection, scheduling an update that
  * re-inserts it — an unbounded insert/observe/remove/update loop that froze the
  * app the instant a list item became foldable (e.g. Tab-nesting a list item).
  */
-export function createFoldToggle(): HTMLElement {
+export function createFoldToggle(kind: FoldControlKind = 'heading'): HTMLElement {
   const toggle = document.createElement('span')
   toggle.setAttribute(TOGGLE_ATTR, 'true')
+  toggle.setAttribute(TOGGLE_KIND_ATTR, kind)
+  toggle.setAttribute(TOGGLE_RAIL_ATTR, 'opposite-drag-handle')
+  toggle.setAttribute(PRINT_EXCLUDE_ATTR, 'true')
   toggle.setAttribute('contenteditable', 'false')
   toggle.setAttribute('role', 'button')
   toggle.setAttribute('aria-label', 'Toggle fold')
-  toggle.className = TOGGLE_CLASS
+  toggle.setAttribute('aria-expanded', 'true')
+  // Keep the injected control out of the editor's keyboard/caret order. It is
+  // deliberately click-only so Home/End/arrow selection remains owned by
+  // Lexical, just as it was before the action rail was introduced.
+  toggle.tabIndex = -1
+  toggle.className = `${TOGGLE_CLASS} ${TOGGLE_KIND_CLASSES[kind]}`
   // CRITICAL (no-hang fix): mark this externally-injected span as
   // Lexical-UNMANAGED before it is inserted so Lexical's MutationObserver skips
   // it instead of removing it and reverting selection (which re-triggers the
@@ -60,6 +85,54 @@ export function createFoldToggle(): HTMLElement {
   // MutationObserver, so the loop is invisible to jest — only a real browser
   // (the super-tab-no-hang e2e) reproduces it.
   setDOMUnmanaged(toggle)
+  return toggle
+}
+
+/**
+ * Synchronize the externally injected control and its host's semantic layout
+ * markers. The modifier classes are intentionally explicit: CSS can reserve a
+ * checklist's checkbox rail separately from the fold-control rail, including
+ * for inherited RTL direction, without inspecting or rearranging Lexical's
+ * managed text children.
+ */
+export function syncFoldControl(
+  element: HTMLElement,
+  key: string,
+  kind: FoldControlKind | null,
+  collapsed: boolean,
+): HTMLElement | null {
+  const existing = element.querySelector<HTMLElement>(`:scope > [${TOGGLE_ATTR}]`)
+
+  element.classList.remove(...Object.values(FOLDABLE_KIND_CLASSES))
+  if (!kind) {
+    existing?.remove()
+    element.removeAttribute(KEY_ATTR)
+    return null
+  }
+
+  element.setAttribute(KEY_ATTR, key)
+  element.classList.add(FOLDABLE_KIND_CLASSES[kind])
+
+  const toggle = existing ?? createFoldToggle(kind)
+  toggle.classList.remove(...Object.values(TOGGLE_KIND_CLASSES))
+  toggle.classList.add(TOGGLE_CLASS, TOGGLE_KIND_CLASSES[kind])
+  toggle.setAttribute(TOGGLE_KIND_ATTR, kind)
+  toggle.setAttribute(TOGGLE_RAIL_ATTR, 'opposite-drag-handle')
+  toggle.setAttribute(PRINT_EXCLUDE_ATTR, 'true')
+  toggle.setAttribute('contenteditable', 'false')
+  toggle.setAttribute('role', 'button')
+  toggle.setAttribute('aria-label', 'Toggle fold')
+  toggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true')
+  toggle.tabIndex = -1
+
+  if (!existing) {
+    // APPEND the control rather than inserting it before the managed text.
+    // Although it is visually placed in its own action rail, keeping it last
+    // prevents Home/click-at-column-zero from seating the caret around a
+    // non-editable child.
+    element.appendChild(toggle)
+  }
+
   return toggle
 }
 
@@ -100,13 +173,17 @@ function collectNestedKeys(item: ListItemNode): string[] {
 }
 
 /** Read every foldable list item (one that contains a nested list) as FoldListItems. */
-function $readFoldableListItems(): FoldListItem[] {
-  const items: FoldListItem[] = []
+type FoldableListItem = FoldListItem & { kind: Extract<FoldControlKind, 'list' | 'checklist'> }
+
+function $readFoldableListItems(): FoldableListItem[] {
+  const items: FoldableListItem[] = []
   const walk = (node: LexicalNode) => {
     if ($isListItemNode(node)) {
       const childKeys = collectNestedKeys(node)
       if (childKeys.length > 0) {
-        items.push({ key: node.getKey(), childKeys })
+        const parent = node.getParent()
+        const kind = $isListNode(parent) && parent.getListType() === 'check' ? 'checklist' : 'list'
+        items.push({ key: node.getKey(), childKeys, kind })
       }
     }
     if ($isListItemNode(node) || $isListNode(node)) {
@@ -128,33 +205,12 @@ export default function FoldablePlugin(): null {
     // Session-local collapsed-key sets, scoped to this editor instance.
     const collapsedHeadings = new Set<string>()
     const collapsedItems = new Set<string>()
-
-    /** Inject (or remove) the click-target toggle button for a foldable element. */
-    const ensureToggle = (el: HTMLElement, key: string, foldable: boolean) => {
-      const existing = el.querySelector<HTMLElement>(`:scope > [${TOGGLE_ATTR}]`)
-      if (!foldable) {
-        existing?.remove()
-        el.removeAttribute(KEY_ATTR)
-        return
-      }
-      el.setAttribute(KEY_ATTR, key)
-      if (existing) {
-        return
-      }
-      // `createFoldToggle` marks the span Lexical-UNMANAGED — see its doc and the
-      // module-level note: without it, inserting into the Lexical-owned `<li>`
-      // triggers the MutationObserver to remove the span + revert selection,
-      // re-firing this update listener in an unbounded re-insert loop (the freeze).
-      const toggle = createFoldToggle()
-      // APPEND the toggle (rather than inserting it as the first child). The
-      // toggle is absolutely positioned in the left gutter via CSS
-      // (`.Lexical__foldToggle`), so its position in the DOM child order does not
-      // affect its rendered location. But being the element's FIRST inline child
-      // meant clicking column 0 of a foldable heading (or pressing Home) could
-      // seat the caret on/around this non-editable span. Appending it keeps the
-      // caret at the real text start unaffected while preserving the click target.
-      el.appendChild(toggle)
-    }
+    // Include the previous pass's keys when applying the next pass. Otherwise a
+    // paragraph/list subtree hidden by a fold drops out of `hidden` as soon as
+    // it is expanded and never gets visited to remove `Lexical__folded`.
+    // Tracking also removes stale controls when a heading/list is converted to
+    // a non-foldable node.
+    const previouslyManagedKeys = new Set<string>()
 
     /**
      * Recompute which DOM elements should be hidden / marked-foldable and apply
@@ -187,8 +243,18 @@ export default function FoldablePlugin(): null {
         }
 
         const foldableKeys = new Set<string>([...validHeadingKeys, ...validItemKeys])
+        const foldableKinds = new Map<string, FoldControlKind>()
+        for (const block of blocks) {
+          if (block.headingLevel !== null) {
+            foldableKinds.set(block.key, 'heading')
+          }
+        }
+        for (const item of listItems) {
+          foldableKinds.set(item.key, item.kind)
+        }
 
-        const allKeys = new Set<string>([...foldableKeys, ...hidden])
+        const currentlyManagedKeys = new Set<string>([...foldableKeys, ...hidden])
+        const allKeys = new Set<string>([...currentlyManagedKeys, ...previouslyManagedKeys])
         for (const key of allKeys) {
           const el = editor.getElementByKey(key)
           if (!el) {
@@ -197,8 +263,14 @@ export default function FoldablePlugin(): null {
           const isFoldable = foldableKeys.has(key)
           el.classList.toggle(FOLDABLE_CLASS, isFoldable)
           el.classList.toggle(FOLDED_CLASS, hidden.has(key))
-          el.classList.toggle(COLLAPSED_CLASS, collapsedHeadings.has(key) || collapsedItems.has(key))
-          ensureToggle(el, key, isFoldable)
+          const isCollapsed = collapsedHeadings.has(key) || collapsedItems.has(key)
+          el.classList.toggle(COLLAPSED_CLASS, isCollapsed)
+          syncFoldControl(el, key, foldableKinds.get(key) ?? null, isCollapsed)
+        }
+
+        previouslyManagedKeys.clear()
+        for (const key of currentlyManagedKeys) {
+          previouslyManagedKeys.add(key)
         }
       })
     }

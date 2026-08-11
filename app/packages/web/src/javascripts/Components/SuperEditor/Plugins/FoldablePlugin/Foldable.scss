@@ -1,12 +1,11 @@
 /**
  * Styles for heading / list-item folding (FoldablePlugin).
  *
- * - `.Lexical__foldable` marks a heading or list item that can be folded; it
- *   gets a disclosure chevron in the left gutter.
- * - `.Lexical__foldCollapsed` is set on a foldable element whose fold is active.
- * - `.Lexical__folded` hides an element (the content under a collapsed heading,
- *   or the nested list under a collapsed list item).
- * - `.Lexical__foldToggle` is the injected, click-only chevron target.
+ * The draggable-block handle is a portal in the editor's physical LEFT rail.
+ * Fold controls therefore own an explicit, reserved RIGHT action rail inside
+ * their host block. Keeping those rails structurally separate prevents either
+ * hit target from covering the other, including for nested lists and RTL text.
+ * RTL checklists reserve one extra right-side slot for their checkbox.
  */
 
 .Lexical__folded {
@@ -15,20 +14,35 @@
 }
 
 .Lexical__foldable {
+  --sn-fold-control-size: 1.5rem;
+  --sn-fold-control-gap: 0.25rem;
   position: relative;
+  box-sizing: border-box;
 }
 
-.Lexical__foldToggle {
+// Reserve an in-block right rail instead of pulling the disclosure into the
+// editor's left gutter, where the portal-based reorder handle lives.
+.Lexical__foldable.Lexical__foldable--heading,
+.Lexical__foldable.Lexical__foldable--list,
+.Lexical__foldable.Lexical__foldable--checklist {
+  padding-right: calc(var(--sn-fold-control-size) + var(--sn-fold-control-gap));
+}
+
+.Lexical__foldToggle[data-fold-control-rail='opposite-drag-handle'] {
   position: absolute;
-  left: -1.15em;
+  right: 0;
+  left: auto;
   top: 0;
-  width: 1em;
-  height: 1.4em;
+  z-index: 1;
+  box-sizing: border-box;
+  width: var(--sn-fold-control-size);
+  height: var(--sn-fold-control-size);
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   user-select: none;
+  touch-action: manipulation;
   opacity: 0;
   transition: opacity 0.1s ease-in-out;
   color: var(--sn-stylekit-passive-color-1);
@@ -43,37 +57,79 @@
   }
 }
 
-// Show the chevron on hover of the foldable element, or always when collapsed.
+// A checklist whose inherited direction is RTL draws its checkbox at physical
+// right: 0. Move the disclosure one slot inward and reserve both independent
+// hit areas. `:dir()` covers direction inherited from a parent editor/list;
+// the class/attribute forms cover Lexical's explicit direction markers.
+.Lexical__foldable.Lexical__foldable--checklist:dir(rtl),
+.Lexical__foldable.Lexical__foldable--checklist.Lexical__rtl,
+.Lexical__foldable.Lexical__foldable--checklist[dir='rtl'] {
+  padding-right: calc(
+    var(--checkbox-size) + var(--sn-fold-control-size) + var(--sn-fold-control-gap) + var(--sn-fold-control-gap)
+  );
+
+  > .Lexical__foldToggle {
+    right: calc(var(--checkbox-size) + var(--sn-fold-control-gap));
+  }
+}
+
+// Show the chevron while its block is hovered, whenever it is collapsed, or
+// while the editor is moving focus through the block.
 .Lexical__foldable:hover > .Lexical__foldToggle,
+.Lexical__foldable:focus-within > .Lexical__foldToggle,
 .Lexical__foldCollapsed > .Lexical__foldToggle {
   opacity: 1;
 }
 
-// Collapsed: rotate the chevron to point right.
+// Collapsed LTR/default: point toward the hidden content on the right.
 .Lexical__foldCollapsed > .Lexical__foldToggle::before {
   transform: rotate(-90deg);
 }
 
-// Always show a subtle indicator that a collapsed heading has hidden content.
-.Lexical__foldCollapsed.Lexical__foldable::after {
-  content: '…';
-  margin-left: 0.4em;
-  color: var(--sn-stylekit-passive-color-1);
-  font-weight: normal;
-  cursor: pointer;
+// Collapsed RTL: mirror the directional affordance. The control remains in the
+// physical right action rail so it never crosses into the left drag rail.
+.Lexical__foldCollapsed:dir(rtl) > .Lexical__foldToggle::before,
+.Lexical__foldCollapsed.Lexical__rtl > .Lexical__foldToggle::before,
+.Lexical__foldCollapsed[dir='rtl'] > .Lexical__foldToggle::before {
+  transform: rotate(90deg);
 }
 
-// On touch / coarse pointers the chevron is always visible and larger so it is
-// reliably tappable, consistent with recent mobile work.
+// Narrow layouts keep a compact but explicit reserved hit area. This is
+// separate from pointer capability because a narrow window can still use a
+// mouse or stylus.
+@media screen and (max-width: 450px) {
+  .Lexical__foldable {
+    --sn-fold-control-size: 1.75rem;
+    --sn-fold-control-gap: 0.125rem;
+  }
+
+  .Lexical__foldToggle {
+    opacity: 0.72;
+  }
+}
+
+// Coarse pointers get an always-visible 32px target; the host's variable-driven
+// reservation grows with it, so the larger control still cannot cover text,
+// checkbox, or reorder affordances.
 @media (pointer: coarse) {
+  .Lexical__foldable {
+    --sn-fold-control-size: 2rem;
+    --sn-fold-control-gap: 0.25rem;
+  }
+
   .Lexical__foldToggle {
     opacity: 1;
-    left: -1.4em;
-    width: 1.4em;
-    height: 1.6em;
 
     &::before {
       border-width: 7px 5px 0 5px;
     }
+  }
+}
+
+// The explicit print sanitizer removes these controls from its detached clone.
+// This is a second fail-closed guard for any browser/native print path.
+@media print {
+  .Lexical__foldToggle {
+    display: none !important;
   }
 }
