@@ -1139,8 +1139,8 @@ const AdminServerTab: FunctionComponent<Props> = ({ application, noteIfForbidden
           Instance configuration, health and integrations, grouped into subtabs. Editable settings are persisted and
           override the matching environment variable until cleared.
         </Text>
-        <div className="border-border mt-3 border-b">
-          <TabList state={subTab} className="flex flex-wrap">
+        <div className="border-border mt-3 overflow-x-auto border-b">
+          <TabList state={subTab} className="flex min-w-max whitespace-nowrap">
             <Tab id="general" className="inline-flex items-center gap-1.5 !text-xs">
               <Icon type="tune" size="medium" />
               General

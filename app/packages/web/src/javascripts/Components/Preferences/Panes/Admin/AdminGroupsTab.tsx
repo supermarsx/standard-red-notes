@@ -537,8 +537,8 @@ const AdminGroupsTab: FunctionComponent<Props> = ({ application, noteIfForbidden
           members. A user&apos;s effective permissions are the union of their own roles and the roles their groups
           confer.
         </Text>
-        <div className="border-border mt-3 border-b">
-          <TabList state={subTab} className="flex">
+        <div className="border-border mt-3 overflow-x-auto border-b">
+          <TabList state={subTab} className="flex min-w-max whitespace-nowrap">
             <Tab id="roles" className="inline-flex items-center gap-1.5 !text-xs">
               <Icon type="accessibility" size="medium" />
               Roles

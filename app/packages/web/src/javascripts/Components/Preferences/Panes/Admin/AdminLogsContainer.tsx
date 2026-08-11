@@ -35,8 +35,8 @@ const AdminLogsContainer: FunctionComponent<Props> = ({ application, noteIfForbi
           Server logs are the live tail of the running services. Audit logs are the durable record of admin and
           security-relevant actions.
         </Text>
-        <div className="border-border mt-3 border-b">
-          <TabList state={subTab} className="flex">
+        <div className="border-border mt-3 overflow-x-auto border-b">
+          <TabList state={subTab} className="flex min-w-max whitespace-nowrap">
             <Tab id="logs" className="inline-flex items-center gap-1.5 !text-xs">
               <Icon type="list-bulleted" size="medium" />
               Logs
