@@ -47,6 +47,7 @@ import RoundIconButton from '@/Components/Button/RoundIconButton'
 import Menu from '@/Components/Menu/Menu'
 import MenuItem from '@/Components/Menu/MenuItem'
 import MenuItemSeparator from '@/Components/Menu/MenuItemSeparator'
+import { registerRafCoalescedScrollListener } from './registerRafCoalescedScrollListener'
 
 function computeSelectionCount(selection: TableSelection): {
   columns: number
@@ -529,15 +530,11 @@ function TableCellActionMenuContainer({
     }
 
     window.addEventListener('resize', update)
-    if (scrollerElem) {
-      scrollerElem.addEventListener('scroll', update)
-    }
+    const unregisterScrollListener = scrollerElem ? registerRafCoalescedScrollListener(scrollerElem, update) : undefined
 
     return () => {
       window.removeEventListener('resize', update)
-      if (scrollerElem) {
-        scrollerElem.removeEventListener('scroll', update)
-      }
+      unregisterScrollListener?.()
     }
   }, [editor, anchorElem, setMenuButtonPosition])
 
