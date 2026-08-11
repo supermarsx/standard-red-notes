@@ -667,7 +667,7 @@ describe('AssistantController subscription pairing contract', () => {
 
     expect(provider.getFreshCredential).not.toHaveBeenCalled()
     expect(fetchMock).not.toHaveBeenCalled()
-    expect(harness.write).toHaveBeenCalledWith(expect.stringContaining('not configured'))
+    expect(harness.write).toHaveBeenCalledWith(expect.stringContaining('No assistant provider'))
   })
 
   it('performs zero upstream calls when an explicit backend reference cannot be resolved', async () => {
