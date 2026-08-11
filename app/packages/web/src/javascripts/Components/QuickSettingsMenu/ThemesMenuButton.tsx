@@ -9,12 +9,14 @@ import { useKeyboardService } from '../KeyboardServiceProvider'
 import { TOGGLE_DARK_MODE_COMMAND } from '@standardnotes/ui-services'
 import { KeyboardShortcutIndicator } from '../KeyboardShortcutIndicator/KeyboardShortcutIndicator'
 import { useApplication } from '../ApplicationProvider'
+import { selectBuiltInTheme } from '../Preferences/Panes/Appearance/ThemeSelection'
 
 type Props = {
   uiFeature: UIFeature<ThemeFeatureDescription>
+  customThemeActive?: boolean
 }
 
-const ThemesMenuButton: FunctionComponent<Props> = ({ uiFeature }) => {
+const ThemesMenuButton: FunctionComponent<Props> = ({ uiFeature, customThemeActive = false }) => {
   const application = useApplication()
   const keyboardService = useKeyboardService()
   const premiumModal = usePremiumModal()
@@ -37,12 +39,17 @@ const ThemesMenuButton: FunctionComponent<Props> = ({ uiFeature }) => {
 
     const isThemeLayerable = uiFeature.layerable
 
-    const themeIsLayerableOrNotActive = isThemeLayerable || !application.componentManager.isThemeActive(uiFeature)
+    const themeIsLayerableOrNotActive =
+      isThemeLayerable || customThemeActive || !application.componentManager.isThemeActive(uiFeature)
 
     if (themeIsLayerableOrNotActive) {
-      void application.themeManager.selectTheme(uiFeature)
+      if (isThemeLayerable) {
+        void application.themeManager.selectTheme(uiFeature)
+      } else {
+        void selectBuiltInTheme(application, uiFeature)
+      }
     }
-  }, [application, canActivateTheme, uiFeature, premiumModal])
+  }, [application, canActivateTheme, customThemeActive, uiFeature, premiumModal])
 
   const onClick: MouseEventHandler<HTMLButtonElement> = useCallback(
     (event) => {
@@ -65,7 +72,8 @@ const ThemesMenuButton: FunctionComponent<Props> = ({ uiFeature }) => {
     return null
   }
 
-  const themeActive = uiFeature ? application.componentManager.isThemeActive(uiFeature) : false
+  const themeActive =
+    application.componentManager.isThemeActive(uiFeature) && (uiFeature.layerable || !customThemeActive)
 
   const dockIcon = uiFeature.dockIcon
 

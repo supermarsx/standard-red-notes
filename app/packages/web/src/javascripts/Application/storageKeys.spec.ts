@@ -4,6 +4,7 @@ import { TimeZoneSettingKey } from '@/Timezone/timezoneService'
 import { AppLockPasskeyStorageKey } from '@/AppLockPasskey/appLockPasskey'
 import { LANGUAGE_STORAGE_KEY } from '@/Internationalization/i18n'
 import { CHAT_TABS_KEY } from '@/Assistant/chatTabs'
+import { LEGACY_CUSTOM_THEMES_STORAGE_KEY } from '@/Components/Preferences/Panes/Appearance/CustomThemes/CustomThemeManager'
 
 /**
  * Standard Red Notes: storage-key registry & uniqueness guard.
@@ -44,7 +45,7 @@ const APP_KV_KEYS = {
  */
 const LOCAL_STORAGE_KEYS = {
   DiaryLastPrompted: 'DiaryMode.lastPromptedDate',
-  CustomThemes: 'sn-custom-themes',
+  LegacyCustomThemes: 'sn-custom-themes',
   StripImageMetadata: 'sn_strip_image_metadata_on_upload',
   ManualSyncMode: 'sn_manual_sync_mode',
   AutoEmptyTrashInterval: 'sn-auto-empty-trash-interval-ms',
@@ -114,6 +115,7 @@ describe('storage key registry — exported constants match the registry', () =>
     expect(DiaryLastPromptedKey).toBe(LOCAL_STORAGE_KEYS.DiaryLastPrompted)
     expect(LANGUAGE_STORAGE_KEY).toBe(LOCAL_STORAGE_KEYS.Language)
     expect(CHAT_TABS_KEY).toBe(LOCAL_STORAGE_KEYS.ChatTabs)
+    expect(LEGACY_CUSTOM_THEMES_STORAGE_KEY).toBe(LOCAL_STORAGE_KEYS.LegacyCustomThemes)
   })
 
   it('the diary localStorage marker is namespaced under the diary app-KV key', () => {

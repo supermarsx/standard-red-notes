@@ -14,6 +14,7 @@ import PreferencesSegment from '../PreferencesComponents/PreferencesSegment'
 import PreferencesSubtabs, { PreferencesSubtab } from '../PreferencesComponents/PreferencesSubtabs'
 import EditorAppearance from './Appearance/EditorAppearance'
 import ColorSchemeModeControl from './Appearance/ColorSchemeModeControl'
+import BaseThemePalette from './Appearance/BaseThemePalette'
 import CustomThemesSection from './Appearance/CustomThemes/CustomThemesSection'
 import StyleProfiles from './Appearance/StyleProfiles/StyleProfiles'
 import { useTabState } from '@/Components/Tabs/useTabState'
@@ -127,6 +128,7 @@ const Appearance: FunctionComponent<Props> = ({ application }) => {
           <Title>Themes</Title>
           <div className="mt-2">
             <ColorSchemeModeControl />
+            <BaseThemePalette application={application} />
             <HorizontalSeparator classes="my-4" />
             <div className="flex justify-between gap-2 md:items-center">
               <div className="flex flex-col">

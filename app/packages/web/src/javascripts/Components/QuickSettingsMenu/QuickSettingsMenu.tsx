@@ -20,6 +20,12 @@ import MenuRadioButtonItem from '../Menu/MenuRadioButtonItem'
 import { useApplication } from '../ApplicationProvider'
 import { GetAllThemesUseCase } from '@standardnotes/ui-services'
 import MenuSection from '../Menu/MenuSection'
+import { loadCustomThemesState } from '../Preferences/Panes/Appearance/CustomThemes/CustomThemeManager'
+import {
+  selectBuiltInTheme,
+  selectCustomTheme,
+  STANDARD_RED_SWATCH,
+} from '../Preferences/Panes/Appearance/ThemeSelection'
 
 type MenuProps = {
   closeMenu: () => void
@@ -34,7 +40,9 @@ const QuickSettingsMenu: FunctionComponent<MenuProps> = ({ closeMenu }) => {
 
   const activeThemes = application.componentManager.getActiveThemes()
   const hasNonLayerableActiveTheme = activeThemes.find((theme) => !theme.layerable)
-  const defaultThemeOn = !hasNonLayerableActiveTheme
+  const customThemesState = loadCustomThemesState(application.preferences)
+  const customThemeActive = customThemesState.selectedId !== null
+  const defaultThemeOn = !customThemeActive && !hasNonLayerableActiveTheme
 
   const prefsButtonRef = useRef<HTMLButtonElement>(null)
   const defaultThemeButtonRef = useRef<HTMLButtonElement>(null)
@@ -104,7 +112,7 @@ const QuickSettingsMenu: FunctionComponent<MenuProps> = ({ closeMenu }) => {
   )
 
   const toggleDefaultTheme = useCallback(() => {
-    void application.themeManager.selectDefaultTheme()
+    void selectBuiltInTheme(application)
   }, [application])
 
   return (
@@ -127,11 +135,37 @@ const QuickSettingsMenu: FunctionComponent<MenuProps> = ({ closeMenu }) => {
       )}
       <MenuSection title="Appearance">
         <MenuRadioButtonItem checked={defaultThemeOn} onClick={toggleDefaultTheme} ref={defaultThemeButtonRef}>
-          Standard Red
+          <span className="mr-auto">Standard Red</span>
+          <span
+            className="border-contrast h-5 w-5 rounded-full border"
+            style={{ backgroundColor: STANDARD_RED_SWATCH }}
+            aria-hidden="true"
+          />
         </MenuRadioButtonItem>
         {themes.map((theme) => (
-          <ThemesMenuButton uiFeature={theme} key={theme.uniqueIdentifier.value} />
+          <ThemesMenuButton
+            uiFeature={theme}
+            customThemeActive={customThemeActive}
+            key={theme.uniqueIdentifier.value}
+          />
         ))}
+        {customThemesState.themes.map((theme) => {
+          const active = customThemesState.selectedId === theme.id
+          return (
+            <MenuRadioButtonItem
+              checked={active}
+              onClick={() => selectCustomTheme(application, theme.id)}
+              key={theme.id}
+            >
+              <span className={active ? 'mr-auto font-semibold' : 'mr-auto'}>{theme.name}</span>
+              <span
+                className="border-contrast h-5 w-5 rounded-full border"
+                style={{ backgroundColor: theme.colors.accent }}
+                aria-hidden="true"
+              />
+            </MenuRadioButtonItem>
+          )
+        })}
       </MenuSection>
 
       <FocusModeSwitch

@@ -190,6 +190,35 @@ describe('ThemeManager persistence and color-scheme ownership', () => {
     expect(components.toggleTheme).toHaveBeenCalledWith(selectedTheme)
   })
 
+  it('persists Standard Red as Manual even when no non-layerable theme is currently active', async () => {
+    const { manager, components, preferences, values } = createHarness({
+      [LocalPrefKey.ColorSchemeMode]: 'auto',
+      [LocalPrefKey.UseSystemColorScheme]: true,
+    })
+
+    await manager.selectDefaultTheme()
+
+    expect(values.get(LocalPrefKey.ColorSchemeMode)).toBe('manual')
+    expect(values.get(LocalPrefKey.UseSystemColorScheme)).toBe(false)
+    expect(preferences.setLocalValue).toHaveBeenNthCalledWith(1, LocalPrefKey.UseSystemColorScheme, false)
+    expect(preferences.setLocalValue).toHaveBeenNthCalledWith(2, LocalPrefKey.ColorSchemeMode, 'manual')
+    expect(components.toggleTheme).not.toHaveBeenCalled()
+  })
+
+  it('persists Standard Red and removes the active non-layerable theme', async () => {
+    const selectedTheme = nativeTheme(NativeFeatureIdentifier.TYPES.StandardNotesBlueTheme)
+    const { manager, components, activeThemes, values } = createHarness({
+      [LocalPrefKey.ColorSchemeMode]: 'light',
+    })
+    activeThemes.push(selectedTheme)
+
+    await manager.selectDefaultTheme()
+
+    expect(values.get(LocalPrefKey.ColorSchemeMode)).toBe('manual')
+    expect(components.toggleTheme).toHaveBeenCalledWith(selectedTheme)
+    expect(activeThemes).toHaveLength(0)
+  })
+
   it('keeps layerable theme overlays independent from the base color-scheme mode', async () => {
     const overlay = nativeTheme(NativeFeatureIdentifier.TYPES.DynamicTheme)
     const { manager, components, preferences, values } = createHarness({
