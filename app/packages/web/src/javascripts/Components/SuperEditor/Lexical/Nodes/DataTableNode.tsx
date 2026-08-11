@@ -554,7 +554,12 @@ function DataTableComponent({ data, nodeKey }: { data: DataTableData; nodeKey: N
   }
 
   return (
-    <div ref={setPrintElement} className="border-border bg-default my-2 rounded border" data-datatable-block="true">
+    <div
+      ref={setPrintElement}
+      className="border-border bg-default my-2 rounded border"
+      data-datatable-block="true"
+      data-super-widget-layout="data"
+    >
       <div className="border-border text-passive-1 flex flex-wrap items-center gap-1 border-b px-2 py-1 text-xs">
         <span className="mr-1 font-semibold">Data table</span>
         <input
@@ -605,7 +610,7 @@ function DataTableComponent({ data, nodeKey }: { data: DataTableData; nodeKey: N
       </div>
 
       <div className="overflow-x-auto p-1">
-        <table className="w-full border-collapse text-sm">
+        <table className="border-collapse text-sm">
           <thead>
             <tr>
               {columns.map((col, c) => (

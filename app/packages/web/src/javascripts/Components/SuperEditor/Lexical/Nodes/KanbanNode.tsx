@@ -145,7 +145,11 @@ function KanbanComponent({ data, nodeKey }: { data: KanbanData; nodeKey: NodeKey
     })
 
   return (
-    <div className="border-border bg-default my-2 rounded border" data-kanban-block="true">
+    <div
+      className="border-border bg-default my-2 rounded border"
+      data-kanban-block="true"
+      data-super-widget-layout="data"
+    >
       <div className="border-border text-passive-1 flex items-center justify-between gap-2 border-b px-2 py-1 text-xs">
         <input
           key={`board-title-${nodeKey}`}

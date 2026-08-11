@@ -1,11 +1,78 @@
 import {
+  $createTableNodeWithDimensions,
+  setScrollableTablesActive,
+  TableCellNode,
+  TableNode,
+  TableRowNode,
+} from '@lexical/table'
+import { $getRoot, createEditor } from 'lexical'
+import {
   clampTableDimension,
   MAX_TABLE_COLUMNS,
   MAX_TABLE_ROWS,
   MIN_TABLE_COLUMNS,
   MIN_TABLE_ROWS,
   parseTableDimension,
+  markTableWidgetLayout,
+  SUPER_WIDGET_LAYOUT_ATTRIBUTE,
 } from './TablePlugin'
+
+describe('table widget layout marker', () => {
+  it('marks only the supplied Lexical table wrapper as a data widget', () => {
+    const wrapper = document.createElement('div')
+
+    markTableWidgetLayout(wrapper)
+    markTableWidgetLayout(null)
+
+    expect(wrapper.getAttribute(SUPER_WIDGET_LAYOUT_ATTRIBUTE)).toBe('data')
+  })
+
+  it('marks the actual horizontal-scroll wrapper rendered for an ordinary two-column table', () => {
+    const editor = createEditor({
+      namespace: 'table-widget-layout-test',
+      nodes: [TableNode, TableRowNode, TableCellNode],
+      theme: {
+        table: 'Lexical__table',
+        tableScrollableWrapper: 'Lexical__tableScrollableWrapper',
+      },
+      onError: (error) => {
+        throw error
+      },
+    })
+    const root = document.createElement('div')
+    document.body.append(root)
+    editor.setRootElement(root)
+    setScrollableTablesActive(editor, true)
+
+    try {
+      let tableKey = ''
+      editor.update(
+        () => {
+          const table = $createTableNodeWithDimensions(2, 2, true)
+          tableKey = table.getKey()
+          $getRoot().append(table)
+        },
+        { discrete: true },
+      )
+
+      const wrapper = editor.getElementByKey(tableKey)
+      expect(wrapper).toBeInstanceOf(HTMLDivElement)
+      expect(wrapper?.classList.contains('Lexical__tableScrollableWrapper')).toBe(true)
+      const table = wrapper?.querySelector(':scope > table.Lexical__table')
+      expect(table).toBeInstanceOf(HTMLTableElement)
+      expect(table?.querySelectorAll('tr')).toHaveLength(2)
+      expect(table?.querySelectorAll('th, td')).toHaveLength(4)
+
+      markTableWidgetLayout(wrapper)
+
+      expect(wrapper?.getAttribute(SUPER_WIDGET_LAYOUT_ATTRIBUTE)).toBe('data')
+    } finally {
+      setScrollableTablesActive(editor, false)
+      editor.setRootElement(null)
+      root.remove()
+    }
+  })
+})
 
 describe('parseTableDimension', () => {
   it('accepts whole numbers within the inclusive range', () => {

@@ -184,11 +184,11 @@ const InlineFileComponent = ({
           />
         </div>
       ) : mimeType.startsWith('video') ? (
-        <video className="h-full w-full" controls autoPlay>
+        <video className="h-full w-full" controls autoPlay data-super-widget-layout="media">
           <source src={src} type={mimeType} />
         </video>
       ) : mimeType.startsWith('audio') ? (
-        <div className="flex h-full w-full items-center justify-center">
+        <div className="flex h-full w-full items-center justify-center" data-super-widget-layout="compact">
           <audio controls>
             <source src={src} type={mimeType} />
           </audio>
@@ -197,6 +197,7 @@ const InlineFileComponent = ({
         <div
           className="h-[clamp(20rem,65vh,48rem)] w-full overflow-hidden"
           data-inline-pdf-viewport="true"
+          data-super-widget-layout="media"
         >
           {pdfBytes ? (
             <PdfPreview application={application} bytes={pdfBytes} />

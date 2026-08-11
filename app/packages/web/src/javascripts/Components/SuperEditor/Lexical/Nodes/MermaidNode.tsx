@@ -457,7 +457,11 @@ function MermaidComponent({
   const showGraphical = viewMode === 'graphical'
 
   return (
-    <div className="border-border bg-default my-2 rounded border" data-mermaid-block="true">
+    <div
+      className="border-border bg-default my-2 rounded border"
+      data-mermaid-block="true"
+      data-super-widget-layout="canvas"
+    >
       <div className="border-border text-passive-1 flex flex-wrap items-center justify-between gap-2 border-b px-2 py-1 text-xs">
         <span className="font-semibold">Mermaid diagram</span>
         <div className="flex flex-wrap items-center gap-2">

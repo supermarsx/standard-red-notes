@@ -137,7 +137,12 @@ function CalendarComponent({ data, nodeKey }: { data: CalendarData; nodeKey: Nod
   }
 
   return (
-    <div ref={setPrintElement} className="border-border bg-default my-2 rounded border" data-calendar-block="true">
+    <div
+      ref={setPrintElement}
+      className="border-border bg-default my-2 rounded border"
+      data-calendar-block="true"
+      data-super-widget-layout="data"
+    >
       <div className="border-border flex items-center justify-between border-b px-2 py-1 text-sm">
         <button className="hover:bg-contrast rounded px-2 py-0.5" onClick={() => shiftMonth(-1)} type="button">
           ‹

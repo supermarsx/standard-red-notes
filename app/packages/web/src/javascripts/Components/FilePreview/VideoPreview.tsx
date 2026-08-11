@@ -26,7 +26,7 @@ const VideoPreview = ({ file, filesController, objectUrl, isEmbeddedInSuper }: P
 
   if (showError) {
     return (
-      <div className="flex flex-grow flex-col items-center justify-center">
+      <div className="flex flex-grow flex-col items-center justify-center" data-super-widget-layout="media">
         <NoPreviewIllustration className="mb-4 h-30 w-30" />
         <div className="mb-2 text-base font-bold">{t('videoCannotBePreviewed')}</div>
         <div className="text-passive-0 mb-4 max-w-[35ch] text-center text-sm">{t('downloadToView')}</div>
@@ -50,6 +50,7 @@ const VideoPreview = ({ file, filesController, objectUrl, isEmbeddedInSuper }: P
   if (shouldTryFallback) {
     return (
       <video
+        data-super-widget-layout="media"
         className="h-full w-full"
         controls
         autoPlay
@@ -64,6 +65,7 @@ const VideoPreview = ({ file, filesController, objectUrl, isEmbeddedInSuper }: P
 
   return (
     <video
+      data-super-widget-layout="media"
       className="h-full w-full"
       controls
       autoPlay={!isEmbeddedInSuper}

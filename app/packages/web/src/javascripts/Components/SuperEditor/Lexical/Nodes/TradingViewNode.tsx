@@ -205,7 +205,11 @@ function TradingViewComponent({ data, nodeKey }: { data: TradingViewData; nodeKe
   const reloadKey = `${data.symbol}|${data.interval}|${data.theme}`
 
   return (
-    <div className="border-border bg-default my-2 rounded border" data-tradingview-block="true">
+    <div
+      className="border-border bg-default my-2 rounded border"
+      data-tradingview-block="true"
+      data-super-widget-layout="media"
+    >
       <div className="border-border text-passive-1 flex flex-wrap items-center justify-between gap-2 border-b px-2 py-1 text-xs">
         <span className="font-semibold">TradingView chart</span>
         <div className="flex items-center gap-1">

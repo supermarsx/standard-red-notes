@@ -181,7 +181,11 @@ function SqlQueryComponent({ data, nodeKey }: { data: SqlQueryData; nodeKey: Nod
   }, [persist, setupDraft, queryDraft])
 
   return (
-    <div className="border-border bg-default my-2 rounded border" data-sql-query-block="true">
+    <div
+      className="border-border bg-default my-2 rounded border"
+      data-sql-query-block="true"
+      data-super-widget-layout="data"
+    >
       <div className="border-border text-passive-1 flex items-center justify-between border-b px-2 py-1 text-xs">
         <span className="font-semibold">SQL query (local, in-browser)</span>
         <button
@@ -242,7 +246,7 @@ function SqlQueryComponent({ data, nodeKey }: { data: SqlQueryData; nodeKey: Nod
             </div>
           ) : (
             <div className="overflow-auto">
-              <table className="w-full border-collapse text-sm">
+              <table className="border-collapse text-sm">
                 <thead>
                   <tr>
                     {result.columns.map((col, i) => (

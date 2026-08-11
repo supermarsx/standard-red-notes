@@ -30,7 +30,7 @@ const AudioPreview = ({ file, filesController, objectUrl }: Props) => {
 
   if (showError) {
     return (
-      <div className="flex flex-grow flex-col items-center justify-center">
+      <div className="flex flex-grow flex-col items-center justify-center" data-super-widget-layout="compact">
         <NoPreviewIllustration className="mb-4 h-30 w-30" />
         <div className="mb-2 text-base font-bold">{t('audioCannotBePlayed')}</div>
         <div className="text-passive-0 mb-4 max-w-[35ch] text-center text-sm">{t('downloadToListen')}</div>
@@ -53,7 +53,7 @@ const AudioPreview = ({ file, filesController, objectUrl }: Props) => {
 
   if (shouldTryFallback) {
     return (
-      <div className="flex h-full w-full items-center justify-center p-4">
+      <div className="flex h-full w-full items-center justify-center p-4" data-super-widget-layout="compact">
         <audio
           className="w-full max-w-2xl"
           controls
@@ -68,7 +68,7 @@ const AudioPreview = ({ file, filesController, objectUrl }: Props) => {
   }
 
   return (
-    <div className="flex h-full w-full items-center justify-center p-4">
+    <div className="flex h-full w-full items-center justify-center p-4" data-super-widget-layout="compact">
       <audio
         className="w-full max-w-2xl"
         controls

@@ -94,7 +94,11 @@ export function CommentView({
   onChangeAuthor: (value: string) => void
 }): React.JSX.Element {
   return (
-    <div className="border-info bg-contrast my-3 flex flex-col gap-1 rounded border-l-4 p-2" data-comment-block="true">
+    <div
+      className="border-info bg-contrast my-3 flex flex-col gap-1 rounded border-l-4 p-2"
+      data-comment-block="true"
+      data-super-widget-layout="content"
+    >
       <div className="text-passive-1 flex items-center justify-between gap-2 text-xs">
         <input
           className="text-foreground min-w-0 flex-1 bg-transparent font-semibold outline-none"

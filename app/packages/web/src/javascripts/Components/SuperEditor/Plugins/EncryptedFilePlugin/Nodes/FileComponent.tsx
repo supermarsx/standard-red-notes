@@ -257,7 +257,7 @@ function FileComponent({
   if (isCollapsed) {
     return (
       <BlockWithAlignableContents className={className} format={format} nodeKey={nodeKey}>
-        <div ref={setBlockWrapper}>
+        <div ref={setBlockWrapper} data-super-widget-layout="compact">
           <div className="border-border bg-default flex items-center gap-2 rounded border px-3 py-2">
             <button
               className="text-neutral hover:bg-contrast flex flex-shrink-0 items-center justify-center rounded p-1"

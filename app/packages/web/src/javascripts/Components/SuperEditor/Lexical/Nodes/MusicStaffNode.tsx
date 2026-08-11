@@ -127,7 +127,11 @@ function MusicStaffComponent({ data, nodeKey }: { data: MusicStaffData; nodeKey:
   }, [draft, editor, nodeKey, render])
 
   return (
-    <div className="border-border bg-default my-2 rounded border" data-music-staff-block="true">
+    <div
+      className="border-border bg-default my-2 rounded border"
+      data-music-staff-block="true"
+      data-super-widget-layout="canvas"
+    >
       <div className="border-border text-passive-1 flex items-center justify-between border-b px-2 py-1 text-xs">
         <span className="font-semibold">Music staff</span>
         <button
