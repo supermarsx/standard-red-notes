@@ -28,6 +28,10 @@ import {
   pluralize,
   NoteType,
   NativeFeatureIdentifier,
+  isLitePayload,
+  DefaultAppDomain,
+  SyncMode,
+  SyncQueueStrategy,
 } from '@standardnotes/snjs'
 import { NotePart, SplitNoteOptions, splitNoteContent } from '../../Utils/NoteSplitting/splitNoteContent'
 import { makeObservable, observable, action, computed, runInAction, reaction } from 'mobx'
@@ -66,15 +70,48 @@ import {
 } from '../../Bookmarks/bookmarks'
 import {
   NoteCommentsKey,
+  NoteCommentActorClocksKey,
+  NoteCommentMutationsKey,
   NoteComment,
-  getNoteComments,
+  AuthenticatedNoteCommentMutationRecord,
+  NoteCommentActorClock,
+  NoteCommentMutationRecord,
+  UnsignedNoteCommentMutationRecord,
+  commentActorClocksFitBudgets,
+  commentCollectionFitsBudgets,
+  commentMutationRecordsFitBudgets,
+  compactCommentMutationRecords,
+  compareCommentMutationStamps,
+  getBoundedNoteCommentActorClocks,
+  getBoundedNoteCommentMutationRecords,
+  getBoundedNoteComments,
+  generateCommentId,
+  normalizeComment,
+  normalizeCommentMutationRecord,
   upsertComment as upsertCommentInList,
   removeComment as removeCommentFromList,
   setCommentResolved as setCommentResolvedInList,
 } from '../../Comments/comments'
+import {
+  attestLocalComment,
+  attestLocalCommentMutation,
+  captureCommentSigningPublicKey,
+  commentsAllowedForPersistence,
+  clockProofForAuthenticatedMutation,
+  readVerifiedCommentMutationState,
+  verifyCommentAuthorship,
+  verifyCommentMutationAuthorship,
+} from '../../Comments/CommentAuthorship'
 import { NoteIsTemplateKey, noteIsTemplate } from '../../Templates/templates'
 import { WebApplication } from '../../Application/WebApplication'
 import { downloadOrShareBlobBasedOnPlatform } from '../../Utils/DownloadOrShareBasedOnPlatform'
+import {
+  matchesNoteEncryptionIdentity,
+  NoteEncryptionIdentity,
+  resolveNoteEncryptionIdentity,
+} from '../../Components/SuperEditor/Collaboration/CollaborationKeyDerivation'
+
+const AbortCommentMutation = Symbol('AbortCommentMutation')
 
 export class NotesController
   extends AbstractViewController
@@ -89,6 +126,7 @@ export class NotesController
   shouldShowSuperExportModal = false
 
   commandRegisterDisposers: (() => void)[] = []
+  private readonly commentMutationQueues = new WeakMap<object, Map<string, Promise<void>>>()
 
   constructor(
     private application: WebApplication,
@@ -741,31 +779,600 @@ export class NotesController
    * (and the realtime relay) never see it. No models/server change. Writing an
    * empty list clears the key. Never bypasses a locked note.
    */
-  private async writeNoteComments(note: SNNote, comments: NoteComment[]) {
-    if (note.locked) {
-      return
+  private async writeNoteComments<Result>(
+    note: SNNote,
+    expectedIdentity: NoteEncryptionIdentity,
+    update: (
+      authoritative: SNNote,
+      comments: NoteComment[],
+      mutations: AuthenticatedNoteCommentMutationRecord[],
+      clocks: NoteCommentActorClock[],
+    ) =>
+      | {
+          comments: NoteComment[]
+          mutations: AuthenticatedNoteCommentMutationRecord[]
+          clocks: NoteCommentActorClock[]
+          result: Result
+        }
+      | undefined,
+  ): Promise<Result | undefined> {
+    if (!this.isNoteCommentAccessAuthorized(note, expectedIdentity)) {
+      return undefined
     }
-    await this.changeNoteMetadata(note, (mutator) => {
-      mutator.setAppDataItem(NoteCommentsKey, comments.length > 0 ? comments : undefined)
+    let result: Result | undefined
+    let durableComments: NoteComment[] | undefined
+    let durableMutableComments: NoteComment[] | undefined
+    let durableMutations: NoteCommentMutationRecord[] | undefined
+    let durableClocks: NoteCommentActorClock[] | undefined
+    let durableWritePrepared = false
+    let mutationWritten = false
+    try {
+      await this.application.mutator.changeItem<NoteMutator>(
+        note,
+        (mutator) => {
+          // changeItem re-reads the item synchronously before invoking this
+          // callback. Throwing the private sentinel aborts before getResult,
+          // payload emission, dirtying, or sync when the origin session/key has
+          // changed or the requested operation is a durable no-op.
+          const authoritative = this.application.items.findItem<SNNote>(note.uuid)
+          if (!authoritative || !this.isNoteCommentAccessAuthorized(authoritative, expectedIdentity)) {
+            throw AbortCommentMutation
+          }
+          const boundedComments = getBoundedNoteComments(authoritative)
+          const mutationState = readVerifiedCommentMutationState(this.application, note.uuid, authoritative)
+          if (!boundedComments || !mutationState) {
+            throw AbortCommentMutation
+          }
+          // Signed comments with invalid/untrusted proofs are quarantined: they
+          // cannot influence a mutation, but they must remain in encrypted
+          // storage. Trust can be temporarily unavailable while contacts or a
+          // rotated key chain are still syncing; deleting those entries during
+          // an unrelated mutation would make that transient state permanent.
+          // Unsigned legacy comments remain readable but unauthenticated.
+          const currentComments = commentsAllowedForPersistence(this.application, note.uuid, boundedComments)
+          const next = update(authoritative, currentComments, mutationState.mutations, mutationState.clocks)
+          const mutableIds = new Set(next?.comments.map((comment) => comment.id) ?? [])
+          const quarantinedComments = boundedComments.filter(
+            (comment) => !currentComments.some((current) => current.id === comment.id) && !mutableIds.has(comment.id),
+          )
+          const nextComments = next ? [...quarantinedComments, ...next.comments] : undefined
+          const compacted = next
+            ? compactCommentMutationRecords(nextComments ?? [], next.mutations, next.clocks)
+            : undefined
+          const storedMutationCandidates = compacted
+            ? [...mutationState.quarantinedMutations, ...compacted.mutations]
+            : []
+          const storedClockCandidates = compacted ? [...mutationState.quarantinedClocks, ...compacted.clocks] : []
+          const storedCommentList = nextComments
+            ? getBoundedNoteComments({
+                getAppDomainValue: (key: unknown) => (key === NoteCommentsKey ? nextComments : undefined),
+              } as unknown as SNNote)
+            : undefined
+          const storedMutationList = getBoundedNoteCommentMutationRecords({
+            getAppDomainValue: (key: unknown) =>
+              key === NoteCommentMutationsKey ? storedMutationCandidates : undefined,
+          } as unknown as SNNote)
+          const storedClockList = getBoundedNoteCommentActorClocks({
+            getAppDomainValue: (key: unknown) =>
+              key === NoteCommentActorClocksKey ? storedClockCandidates : undefined,
+          } as unknown as SNNote)
+          if (
+            !next ||
+            !nextComments ||
+            !compacted ||
+            !storedCommentList ||
+            !storedMutationList ||
+            !storedClockList ||
+            storedCommentList.length !== nextComments.length ||
+            storedMutationList.length !== storedMutationCandidates.length ||
+            storedClockList.length !== storedClockCandidates.length ||
+            !commentCollectionFitsBudgets(next.comments) ||
+            !commentMutationRecordsFitBudgets(compacted.mutations) ||
+            !commentActorClocksFitBudgets(compacted.clocks)
+          ) {
+            throw AbortCommentMutation
+          }
+          const comments = storedCommentList
+          const storedComments = comments.length > 0 ? comments : undefined
+          const storedMutations = storedMutationList.length > 0 ? storedMutationList : undefined
+          const storedClocks = storedClockList.length > 0 ? storedClockList : undefined
+          mutator.setAppDataItem(NoteCommentsKey, storedComments)
+          // Signed event records protect each target while compact signed actor
+          // floors reject events removed from the bounded ledger after reload.
+          mutator.setAppDataItem(NoteCommentMutationsKey, storedMutations)
+          mutator.setAppDataItem(NoteCommentActorClocksKey, storedClocks)
+          durableComments = storedComments
+          durableMutableComments = next.comments
+          durableMutations = storedMutations
+          durableClocks = storedClocks
+          durableWritePrepared = true
+          result = next.result
+        },
+        MutationType.NoUpdateUserTimestamps,
+      )
+      mutationWritten = durableWritePrepared
+    } catch (error) {
+      if (error === AbortCommentMutation) {
+        return undefined
+      }
+      throw error
+    }
+    if (mutationWritten) {
+      // The independent LocalOnly checkpoint below gates realtime relay, but a
+      // failed checkpoint must not strand an already-emitted dirty mutation in
+      // memory. Always schedule the ordinary policy-respecting upload after a
+      // successful mutator write, regardless of proof/readback outcome.
+      void this.application.sync.sync().catch(() => undefined)
+    }
+    const hasCurrentIdentity = () => {
+      const current = this.application.items.findItem<SNNote>(note.uuid)
+      return Boolean(current && this.isNoteCommentAccessAuthorized(current, expectedIdentity))
+    }
+    if (!durableWritePrepared || !hasCurrentIdentity()) {
+      return undefined
+    }
+    try {
+      // Realtime publication is an acknowledgement of durable local storage,
+      // not merely an in-memory item-manager emit. SyncService can resolve after
+      // storage failures, so independently read back and compare the exact
+      // encrypted appData state before the caller is allowed to broadcast.
+      await this.application.sync.sync({
+        mode: SyncMode.LocalOnly,
+        queueStrategy: SyncQueueStrategy.ForceSpawnNew,
+        awaitAll: true,
+        isUserInitiated: true,
+      })
+      if (!hasCurrentIdentity()) {
+        return undefined
+      }
+      const persisted = await this.application.sync.getFullContentPayload(note.uuid)
+      if (
+        !persisted ||
+        persisted.uuid !== expectedIdentity.noteUuid ||
+        isLitePayload(persisted) ||
+        !hasCurrentIdentity()
+      ) {
+        return undefined
+      }
+      const content = persisted.content as Partial<NoteContent>
+      const domain = content.appData?.[DefaultAppDomain]
+      const persistedComments = domain?.[NoteCommentsKey]
+      const persistedMutations = domain?.[NoteCommentMutationsKey]
+      const persistedClocks = domain?.[NoteCommentActorClocksKey]
+      if (
+        (persisted.key_system_identifier ?? null) !== expectedIdentity.keySystemIdentifier ||
+        (persisted.shared_vault_uuid ?? null) !== expectedIdentity.sharedVaultUuid ||
+        JSON.stringify(persistedComments) !== JSON.stringify(durableComments) ||
+        JSON.stringify(persistedMutations) !== JSON.stringify(durableMutations) ||
+        JSON.stringify(persistedClocks) !== JSON.stringify(durableClocks)
+      ) {
+        return undefined
+      }
+      const mutableComments = durableMutableComments ?? []
+      if (
+        commentsAllowedForPersistence(this.application, note.uuid, mutableComments).length !== mutableComments.length
+      ) {
+        return undefined
+      }
+    } catch {
+      return undefined
+    }
+    return result
+  }
+
+  private isNoteCommentAccessAuthorized(note: SNNote, expectedIdentity: NoteEncryptionIdentity): boolean {
+    try {
+      const vault = this.application.vaults.getItemVault(note)
+      return (
+        !note.locked &&
+        !isLitePayload(note.payload) &&
+        !this.application.sessions.isCurrentSessionReadOnly() &&
+        !(vault?.isSharedVaultListing() && this.application.vaultUsers.isCurrentUserReadonlyVaultMember(vault)) &&
+        this.application.isAuthorizedToRenderItem(note) &&
+        matchesNoteEncryptionIdentity(this.application, expectedIdentity, note)
+      )
+    } catch {
+      return false
+    }
+  }
+
+  private createCommentMutation(
+    note: SNNote,
+    expectedIdentity: NoteEncryptionIdentity,
+    expectedSigningPublicKey: string,
+    current: AuthenticatedNoteCommentMutationRecord[],
+    clocks: NoteCommentActorClock[],
+    commentId: string,
+    operation: NoteCommentMutationRecord['operation'],
+    affectedCommentIds: string[],
+    resolved?: boolean,
+  ):
+    | {
+        event: AuthenticatedNoteCommentMutationRecord
+        durable: AuthenticatedNoteCommentMutationRecord[]
+        clocks: NoteCommentActorClock[]
+      }
+    | undefined {
+    const actorUuid = this.application.sessions.getUser()?.uuid
+    if (
+      !actorUuid ||
+      actorUuid !== expectedIdentity.userUuid ||
+      !this.isNoteCommentAccessAuthorized(note, expectedIdentity)
+    ) {
+      return undefined
+    }
+    const actorClock = clocks.find((clock) => clock.actorUuid === actorUuid)
+    const counter = (actorClock?.highWater.stamp.counter ?? 0) + 1
+    if (!Number.isSafeInteger(counter)) {
+      return undefined
+    }
+    const stamp = { counter, actorUuid, eventId: generateCommentId() }
+    const uniqueAffected = [...new Set(affectedCommentIds)]
+    // Validate every identity even when a very large legitimate local removal
+    // must fall back to durable sync instead of one realtime event.
+    const identityProbe: UnsignedNoteCommentMutationRecord = {
+      commentId,
+      operation,
+      stamp,
+      affectedCommentIds: [commentId],
+      ...(operation === 'resolve' ? { resolved } : {}),
+    }
+    if (!normalizeCommentMutationRecord(identityProbe)) {
+      return undefined
+    }
+    const event = attestLocalCommentMutation(this.application, expectedIdentity, expectedSigningPublicKey, {
+      commentId,
+      operation,
+      stamp,
+      affectedCommentIds: uniqueAffected,
+      ...(operation === 'resolve' ? { resolved } : {}),
     })
+    if (!event) {
+      return undefined
+    }
+    const proof = clockProofForAuthenticatedMutation(event)
+    const nextClocks = clocks.filter((clock) => clock.actorUuid !== actorUuid)
+    nextClocks.push({
+      actorUuid,
+      highWater: proof,
+      ...(actorClock?.replayFloor ? { replayFloor: actorClock.replayFloor } : {}),
+    })
+    return { event, durable: [...current, event], clocks: nextClocks }
+  }
+
+  private enqueueCommentMutation<T>(
+    noteUuid: string,
+    expectedIdentity: NoteEncryptionIdentity,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    let sessionQueues = this.commentMutationQueues.get(expectedIdentity.sessionUser)
+    if (!sessionQueues) {
+      sessionQueues = new Map<string, Promise<void>>()
+      this.commentMutationQueues.set(expectedIdentity.sessionUser, sessionQueues)
+    }
+    const queueKey = `${expectedIdentity.sourceId}\u0000${noteUuid}`
+    const previous = sessionQueues.get(queueKey) ?? Promise.resolve()
+    const result = previous.catch(() => undefined).then(operation)
+    const tail = result.then(
+      () => undefined,
+      () => undefined,
+    )
+    sessionQueues.set(queueKey, tail)
+    void tail.finally(() => {
+      if (sessionQueues?.get(queueKey) === tail) {
+        sessionQueues.delete(queueKey)
+      }
+    })
+    return result
   }
 
   /** Add or replace a comment on a note (matched by id). */
-  async upsertNoteComment(note: SNNote, comment: NoteComment) {
-    const next = upsertCommentInList(getNoteComments(note), comment)
-    await this.writeNoteComments(note, next)
+  async upsertNoteComment(
+    note: SNNote,
+    comment: NoteComment,
+    expectedIdentity = resolveNoteEncryptionIdentity(this.application, note),
+  ) {
+    if (!expectedIdentity) {
+      return undefined
+    }
+    const expectedSigningPublicKey = captureCommentSigningPublicKey(this.application, expectedIdentity)
+    if (!expectedSigningPublicKey) {
+      return undefined
+    }
+    return this.enqueueCommentMutation(note.uuid, expectedIdentity, async () => {
+      const liveNote = this.application.items.findItem<SNNote>(note.uuid)
+      const normalizedComment = normalizeComment(comment)
+      if (
+        !liveNote ||
+        !normalizedComment ||
+        normalizedComment.authorUuid !== expectedIdentity.userUuid ||
+        !this.isNoteCommentAccessAuthorized(liveNote, expectedIdentity)
+      ) {
+        return undefined
+      }
+      return this.writeNoteComments(
+        liveNote,
+        expectedIdentity,
+        (authoritative, currentComments, currentMutations, clocks) => {
+          const signedComment = attestLocalComment(
+            this.application,
+            expectedIdentity,
+            expectedSigningPublicKey,
+            normalizedComment,
+          )
+          if (!signedComment || !this.isNoteCommentAccessAuthorized(authoritative, expectedIdentity)) {
+            return undefined
+          }
+          const mutation = this.createCommentMutation(
+            authoritative,
+            expectedIdentity,
+            expectedSigningPublicKey,
+            currentMutations,
+            clocks,
+            signedComment.id,
+            'upsert',
+            [signedComment.id],
+          )
+          if (!mutation?.event) {
+            return undefined
+          }
+          return {
+            comments: upsertCommentInList(currentComments, signedComment),
+            mutations: mutation.durable,
+            clocks: mutation.clocks,
+            result: { comment: signedComment, mutation: mutation.event },
+          }
+        },
+      )
+    })
   }
 
   /** Remove a comment (and its replies) from a note by id. */
-  async removeNoteComment(note: SNNote, commentId: string) {
-    const next = removeCommentFromList(getNoteComments(note), commentId)
-    await this.writeNoteComments(note, next)
+  async removeNoteComment(
+    note: SNNote,
+    commentId: string,
+    expectedIdentity = resolveNoteEncryptionIdentity(this.application, note),
+  ) {
+    if (!expectedIdentity) {
+      return undefined
+    }
+    const expectedSigningPublicKey = captureCommentSigningPublicKey(this.application, expectedIdentity)
+    if (!expectedSigningPublicKey) {
+      return undefined
+    }
+    return this.enqueueCommentMutation(note.uuid, expectedIdentity, async () => {
+      const liveNote = this.application.items.findItem<SNNote>(note.uuid)
+      if (!liveNote || !this.isNoteCommentAccessAuthorized(liveNote, expectedIdentity)) {
+        return undefined
+      }
+      return this.writeNoteComments(
+        liveNote,
+        expectedIdentity,
+        (authoritative, currentComments, currentMutations, clocks) => {
+          const target = currentComments.find((comment) => comment.id === commentId)
+          const targetVerification = target ? verifyCommentAuthorship(this.application, note.uuid, target) : undefined
+          if (
+            targetVerification?.status !== 'verified' ||
+            targetVerification.comment.authorUuid !== expectedIdentity.userUuid
+          ) {
+            return undefined
+          }
+          const affectedCommentIds = currentComments
+            .filter((comment) => comment.id === commentId || comment.parentId === commentId)
+            .map((comment) => comment.id)
+          if (!affectedCommentIds.includes(commentId)) {
+            affectedCommentIds.push(commentId)
+          }
+          const mutation = this.createCommentMutation(
+            authoritative,
+            expectedIdentity,
+            expectedSigningPublicKey,
+            currentMutations,
+            clocks,
+            commentId,
+            'remove',
+            affectedCommentIds,
+          )
+          if (!mutation?.event) {
+            return undefined
+          }
+          return {
+            comments: removeCommentFromList(currentComments, commentId),
+            mutations: mutation.durable,
+            clocks: mutation.clocks,
+            result: mutation.event,
+          }
+        },
+      )
+    })
   }
 
   /** Set/clear the resolved flag on a comment by id. */
-  async setNoteCommentResolved(note: SNNote, commentId: string, resolved: boolean) {
-    const next = setCommentResolvedInList(getNoteComments(note), commentId, resolved)
-    await this.writeNoteComments(note, next)
+  async setNoteCommentResolved(
+    note: SNNote,
+    commentId: string,
+    resolved: boolean,
+    expectedIdentity = resolveNoteEncryptionIdentity(this.application, note),
+  ) {
+    if (!expectedIdentity) {
+      return undefined
+    }
+    const expectedSigningPublicKey = captureCommentSigningPublicKey(this.application, expectedIdentity)
+    if (!expectedSigningPublicKey) {
+      return undefined
+    }
+    return this.enqueueCommentMutation(note.uuid, expectedIdentity, async () => {
+      const liveNote = this.application.items.findItem<SNNote>(note.uuid)
+      if (!liveNote || !this.isNoteCommentAccessAuthorized(liveNote, expectedIdentity)) {
+        return undefined
+      }
+      return this.writeNoteComments(
+        liveNote,
+        expectedIdentity,
+        (authoritative, currentComments, currentMutations, clocks) => {
+          if (!currentComments.some((comment) => comment.id === commentId)) {
+            return undefined
+          }
+          const mutation = this.createCommentMutation(
+            authoritative,
+            expectedIdentity,
+            expectedSigningPublicKey,
+            currentMutations,
+            clocks,
+            commentId,
+            'resolve',
+            [commentId],
+            resolved,
+          )
+          if (!mutation?.event) {
+            return undefined
+          }
+          const nextComments = setCommentResolvedInList(currentComments, commentId, resolved)
+          const resultingComment = nextComments.find((comment) => comment.id === commentId)
+          if (!resultingComment) {
+            return undefined
+          }
+          return {
+            comments: nextComments,
+            mutations: mutation.durable,
+            clocks: mutation.clocks,
+            result: { mutation: mutation.event, comment: resultingComment },
+          }
+        },
+      )
+    })
+  }
+
+  /** Persist an authenticated relay mutation without echoing it back to the relay. */
+  async applyRemoteCommentMutation(
+    noteUuid: string,
+    event:
+      | { operation: 'upsert'; comment: NoteComment; mutation: NoteCommentMutationRecord }
+      | { operation: 'remove'; commentId: string; mutation: NoteCommentMutationRecord }
+      | { operation: 'resolve'; commentId: string; resolved: boolean; mutation: NoteCommentMutationRecord },
+    expectedIdentity = (() => {
+      const current = this.application.items.findItem<SNNote>(noteUuid)
+      return current ? resolveNoteEncryptionIdentity(this.application, current) : undefined
+    })(),
+  ): Promise<boolean> {
+    if (!expectedIdentity) {
+      return false
+    }
+    return this.enqueueCommentMutation(noteUuid, expectedIdentity, async () => {
+      const note = this.application.items.findItem<SNNote>(noteUuid)
+      const mutationVerification = verifyCommentMutationAuthorship(this.application, noteUuid, event.mutation)
+      const mutation = mutationVerification.status === 'verified' ? mutationVerification.mutation : undefined
+      if (
+        !note ||
+        !this.isNoteCommentAccessAuthorized(note, expectedIdentity) ||
+        !mutation ||
+        mutation.operation !== event.operation
+      ) {
+        return false
+      }
+      if (
+        (event.operation === 'upsert' && mutation.commentId !== event.comment.id) ||
+        (event.operation !== 'upsert' && mutation.commentId !== event.commentId) ||
+        (event.operation === 'resolve' && mutation.resolved !== event.resolved)
+      ) {
+        return false
+      }
+      const verifiedComment =
+        event.operation === 'upsert' ? verifyCommentAuthorship(this.application, noteUuid, event.comment) : undefined
+      const normalizedComment = verifiedComment?.status === 'verified' ? verifiedComment.comment : undefined
+      if (
+        event.operation === 'upsert' &&
+        (!normalizedComment ||
+          mutation.affectedCommentIds.length !== 1 ||
+          mutation.stamp.actorUuid !== normalizedComment.authorUuid)
+      ) {
+        return false
+      }
+      if (event.operation === 'resolve' && mutation.affectedCommentIds.length !== 1) {
+        return false
+      }
+      const wrote = await this.writeNoteComments(
+        note,
+        expectedIdentity,
+        (_authoritative, currentComments, currentMutations, clocks) => {
+          if (
+            normalizedComment &&
+            verifyCommentAuthorship(this.application, noteUuid, normalizedComment).status !== 'verified'
+          ) {
+            return undefined
+          }
+          if (verifyCommentMutationAuthorship(this.application, noteUuid, mutation).status !== 'verified') {
+            return undefined
+          }
+          if (event.operation === 'remove') {
+            const target = currentComments.find((comment) => comment.id === event.commentId)
+            const targetVerification = target ? verifyCommentAuthorship(this.application, noteUuid, target) : undefined
+            const expectedAffectedIds = currentComments
+              .filter((comment) => comment.id === event.commentId || comment.parentId === event.commentId)
+              .map((comment) => comment.id)
+            if (
+              targetVerification?.status !== 'verified' ||
+              targetVerification.comment.authorUuid !== mutation.stamp.actorUuid ||
+              expectedAffectedIds.length !== mutation.affectedCommentIds.length ||
+              expectedAffectedIds.some((commentId) => !mutation.affectedCommentIds.includes(commentId))
+            ) {
+              return undefined
+            }
+          }
+          const actorClock = clocks.find((clock) => clock.actorUuid === mutation.stamp.actorUuid)
+          if (
+            actorClock?.replayFloor &&
+            compareCommentMutationStamps(mutation.stamp, actorClock.replayFloor.stamp) <= 0
+          ) {
+            return undefined
+          }
+          const sameStamp = currentMutations.find(
+            (record) =>
+              record.stamp.actorUuid === mutation.stamp.actorUuid &&
+              record.stamp.counter === mutation.stamp.counter &&
+              record.stamp.eventId === mutation.stamp.eventId,
+          )
+          if (sameStamp) {
+            return undefined
+          }
+          for (const affectedCommentId of mutation.affectedCommentIds) {
+            const current = currentMutations
+              .filter((record) => record.affectedCommentIds.includes(affectedCommentId))
+              .sort((left, right) => compareCommentMutationStamps(right.stamp, left.stamp))[0]
+            if (current && compareCommentMutationStamps(mutation.stamp, current.stamp) <= 0) {
+              return undefined
+            }
+          }
+          const affectedIds = new Set(mutation.affectedCommentIds)
+          const nextComments = normalizedComment
+            ? upsertCommentInList(currentComments, normalizedComment)
+            : event.operation === 'resolve'
+              ? setCommentResolvedInList(currentComments, event.commentId, event.resolved)
+              : currentComments.filter((comment) => !affectedIds.has(comment.id))
+          if (event.operation === 'resolve' && !currentComments.some((comment) => comment.id === event.commentId)) {
+            return undefined
+          }
+          const proof = clockProofForAuthenticatedMutation(mutation)
+          const nextHighWater =
+            actorClock && compareCommentMutationStamps(actorClock.highWater.stamp, mutation.stamp) >= 0
+              ? actorClock.highWater
+              : proof
+          const nextClocks = clocks.filter((clock) => clock.actorUuid !== mutation.stamp.actorUuid)
+          nextClocks.push({
+            actorUuid: mutation.stamp.actorUuid,
+            highWater: nextHighWater,
+            ...(actorClock?.replayFloor ? { replayFloor: actorClock.replayFloor } : {}),
+          })
+          return {
+            comments: nextComments,
+            mutations: [...currentMutations, mutation],
+            clocks: nextClocks,
+            result: true,
+          }
+        },
+      )
+      return wrote === true
+    })
   }
 
   /** Mark a reminder (by id) as notified so the checker won't re-fire it. */
