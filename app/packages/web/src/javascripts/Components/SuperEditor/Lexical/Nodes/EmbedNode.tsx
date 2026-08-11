@@ -98,10 +98,12 @@ function EmbedComponent({ data, nodeKey }: { data: EmbedData; nodeKey: NodeKey }
            an "Open in new tab" link, and point at the click-to-load website
            embed for arbitrary pages. */
         <div className="p-3 text-sm">
-          <p className="text-foreground">This URL is not a supported video embed (YouTube or Vimeo).</p>
+          <p className="text-foreground" data-srn-print-exclude="true">
+            This URL is not a supported video embed (YouTube or Vimeo).
+          </p>
           <p className="text-passive-1 mt-1 text-xs break-all">{rawUrl}</p>
           {safeRawHref ? (
-            <div className="mt-2 flex flex-wrap items-center gap-2">
+            <div className="mt-2 flex flex-wrap items-center gap-2" data-srn-print-exclude="true">
               <a
                 href={safeRawHref}
                 target="_blank"
@@ -112,12 +114,14 @@ function EmbedComponent({ data, nodeKey }: { data: EmbedData; nodeKey: NodeKey }
               </a>
             </div>
           ) : null}
-          <p className="text-passive-1 mt-2 text-xs">
+          <p className="text-passive-1 mt-2 text-xs" data-srn-print-exclude="true">
             To embed an arbitrary web page, use the “Embed website” block, which loads only after you confirm.
           </p>
         </div>
       ) : (
-        <div className="text-danger p-2 text-sm">Enter a YouTube or Vimeo URL to embed.</div>
+        <div className="text-danger p-2 text-sm" data-srn-print-exclude="true">
+          Enter a YouTube or Vimeo URL to embed.
+        </div>
       )}
     </div>
   )

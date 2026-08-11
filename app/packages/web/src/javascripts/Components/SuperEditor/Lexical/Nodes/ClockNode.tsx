@@ -144,7 +144,7 @@ function ClockComponent({ data, nodeKey }: { data: ClockData; nodeKey: NodeKey }
     <div className="border-border bg-default my-2 rounded border" data-clock-block="true">
       <div className="border-border text-passive-1 flex items-center justify-between gap-2 border-b px-2 py-1 text-xs">
         <span className="font-semibold">Clock</span>
-        <label className="flex items-center gap-1">
+        <label className="flex items-center gap-1" data-srn-print-exclude="true">
           <input
             type="checkbox"
             checked={data.worldClock}
@@ -184,7 +184,10 @@ function ClockComponent({ data, nodeKey }: { data: ClockData; nodeKey: NodeKey }
         )}
       </div>
 
-      <div className="border-border text-passive-1 flex flex-wrap items-center gap-3 border-t px-2 py-2 text-xs">
+      <div
+        className="border-border text-passive-1 flex flex-wrap items-center gap-3 border-t px-2 py-2 text-xs"
+        data-srn-print-exclude="true"
+      >
         <label className="flex items-center gap-1">
           <input
             type="checkbox"

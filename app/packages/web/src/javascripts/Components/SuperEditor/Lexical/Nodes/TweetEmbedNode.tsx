@@ -146,7 +146,9 @@ function TweetEmbedComponent({ data, nodeKey }: { data: TweetEmbedData; nodeKey:
             autoFocus
           />
           {draft.trim() && !sanitizeTweetUrl(draft) ? (
-            <div className="text-danger mt-1 text-xs">Enter a valid twitter.com or x.com status URL.</div>
+            <div className="text-danger mt-1 text-xs" data-srn-print-exclude="true">
+              Enter a valid twitter.com or x.com status URL.
+            </div>
           ) : null}
           <button
             type="button"
@@ -170,7 +172,9 @@ function TweetEmbedComponent({ data, nodeKey }: { data: TweetEmbedData; nodeKey:
         </button>
       </div>
       {!safeUrl ? (
-        <div className="text-danger p-2 text-sm">Enter a valid twitter.com or x.com status URL.</div>
+        <div className="text-danger p-2 text-sm" data-srn-print-exclude="true">
+          Enter a valid twitter.com or x.com status URL.
+        </div>
       ) : (
         <div className="p-2" ref={containerRef}>
           {/* widgets.js upgrades this blockquote in place. If the script fails
@@ -181,7 +185,7 @@ function TweetEmbedComponent({ data, nodeKey }: { data: TweetEmbedData; nodeKey:
             </a>
           </blockquote>
           {failed ? (
-            <p className="text-passive-1 mt-1 text-xs">
+            <p className="text-passive-1 mt-1 text-xs" data-srn-print-exclude="true">
               Could not load the embedded post.{' '}
               <a href={safeUrl} target="_blank" rel="noopener noreferrer" className="underline">
                 Open it on X

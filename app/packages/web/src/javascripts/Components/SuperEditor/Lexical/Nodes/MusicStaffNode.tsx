@@ -153,7 +153,11 @@ function MusicStaffComponent({ data, nodeKey }: { data: MusicStaffData; nodeKey:
 
       <div className="overflow-auto bg-white p-2">
         <div ref={outputRef} />
-        {error ? <div className="text-danger mt-1 text-xs">{error}</div> : null}
+        {error ? (
+          <div className="text-danger mt-1 text-xs" data-srn-print-exclude="true">
+            {error}
+          </div>
+        ) : null}
       </div>
     </div>
   )

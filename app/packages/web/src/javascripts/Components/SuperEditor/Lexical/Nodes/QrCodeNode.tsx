@@ -123,7 +123,7 @@ class QrRenderBoundary extends Component<{ resetKey: string; children: ReactNode
   render(): ReactNode {
     if (this.state.failed) {
       return (
-        <div className="text-danger text-sm">
+        <div className="text-danger text-sm" data-srn-print-exclude="true">
           The text is too long to fit in a QR code. Try shortening it or lowering the error correction level.
         </div>
       )
@@ -229,7 +229,7 @@ function QrCodeComponent({ data, nodeKey }: { data: QrCodeData; nodeKey: NodeKey
             onChange={(e) => setDraft(e.target.value)}
             onBlur={(e) => commitText(e.target.value)}
           />
-          <div className="text-passive-1 flex flex-wrap items-center gap-2 text-xs">
+          <div className="text-passive-1 flex flex-wrap items-center gap-2 text-xs" data-srn-print-exclude="true">
             <label className="flex items-center gap-1">
               Error correction
               <select
@@ -261,7 +261,13 @@ function QrCodeComponent({ data, nodeKey }: { data: QrCodeData; nodeKey: NodeKey
           {trimmed ? (
             <div ref={svgWrapRef} className="rounded bg-white p-2" style={{ width: data.size + 16, maxWidth: '100%' }}>
               <QrRenderBoundary resetKey={`${trimmed}|${data.errorCorrection}`}>
-                <Suspense fallback={<div className="text-passive-1 text-xs">Rendering…</div>}>
+                <Suspense
+                  fallback={
+                    <div className="text-passive-1 text-xs" data-srn-print-exclude="true">
+                      Rendering…
+                    </div>
+                  }
+                >
                   <QRCodeSVG
                     value={data.text}
                     level={data.errorCorrection}
@@ -276,7 +282,10 @@ function QrCodeComponent({ data, nodeKey }: { data: QrCodeData; nodeKey: NodeKey
               </QrRenderBoundary>
             </div>
           ) : (
-            <div className="border-border text-passive-1 flex h-32 w-32 items-center justify-center rounded border border-dashed text-center text-xs">
+            <div
+              className="border-border text-passive-1 flex h-32 w-32 items-center justify-center rounded border border-dashed text-center text-xs"
+              data-srn-print-exclude="true"
+            >
               Enter text to generate a QR code
             </div>
           )}

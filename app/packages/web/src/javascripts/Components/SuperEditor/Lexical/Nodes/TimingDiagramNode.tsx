@@ -180,7 +180,11 @@ function TimingDiagramComponent({ data, nodeKey }: { data: TimingDiagramData; no
 
       <div className="overflow-auto p-2">
         <div ref={outputRef} />
-        {error ? <div className="text-danger mt-1 text-xs">{error}</div> : null}
+        {error ? (
+          <div className="text-danger mt-1 text-xs" data-srn-print-exclude="true">
+            {error}
+          </div>
+        ) : null}
       </div>
     </div>
   )

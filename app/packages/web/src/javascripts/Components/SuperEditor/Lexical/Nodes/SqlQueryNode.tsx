@@ -221,18 +221,25 @@ function SqlQueryComponent({ data, nodeKey }: { data: SqlQueryData; nodeKey: Nod
           />
         </label>
 
-        <p className="text-passive-1 text-xs">
+        <p className="text-passive-1 text-xs" data-srn-print-exclude="true">
           Runs against a fresh in-memory SQLite database built only from the data above. It does not connect to any
           external or real database.
         </p>
 
         {error ? (
-          <div className="border-danger bg-contrast text-danger rounded border p-2 font-mono text-xs">{error}</div>
+          <div
+            className="border-danger bg-contrast text-danger rounded border p-2 font-mono text-xs"
+            data-srn-print-exclude="true"
+          >
+            {error}
+          </div>
         ) : null}
 
         {result && !error ? (
           result.empty ? (
-            <div className="text-passive-1 text-xs">Query executed successfully. No rows returned.</div>
+            <div className="text-passive-1 text-xs" data-srn-print-exclude="true">
+              Query executed successfully. No rows returned.
+            </div>
           ) : (
             <div className="overflow-auto">
               <table className="w-full border-collapse text-sm">

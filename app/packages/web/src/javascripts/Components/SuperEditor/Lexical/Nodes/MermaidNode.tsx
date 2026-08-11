@@ -168,7 +168,10 @@ function GraphicalBuilder({
   return (
     <div className="w-full p-2 text-sm" data-mermaid-graphical="true">
       {!parsedFromCode ? (
-        <div className="border-warning bg-contrast text-foreground mb-2 rounded border p-1.5 text-xs">
+        <div
+          className="border-warning bg-contrast text-foreground mb-2 rounded border p-1.5 text-xs"
+          data-srn-print-exclude="true"
+        >
           The current source isn’t a simple flowchart, so it can’t be loaded into the builder. Editing here will replace
           the source with a generated flowchart.
         </div>
@@ -201,7 +204,11 @@ function GraphicalBuilder({
             + Add node
           </button>
         </div>
-        {model.nodes.length === 0 ? <div className="text-passive-1 text-xs">No nodes yet.</div> : null}
+        {model.nodes.length === 0 ? (
+          <div className="text-passive-1 text-xs" data-srn-print-exclude="true">
+            No nodes yet.
+          </div>
+        ) : null}
         <div className="flex flex-col gap-1">
           {model.nodes.map((node, index) => (
             <div key={index} className="flex items-center gap-1">
@@ -246,7 +253,11 @@ function GraphicalBuilder({
             + Add edge
           </button>
         </div>
-        {model.edges.length === 0 ? <div className="text-passive-1 text-xs">No edges yet.</div> : null}
+        {model.edges.length === 0 ? (
+          <div className="text-passive-1 text-xs" data-srn-print-exclude="true">
+            No edges yet.
+          </div>
+        ) : null}
         <div className="flex flex-col gap-1">
           {model.edges.map((edge, index) => (
             <div key={index} className="flex items-center gap-1">
@@ -541,10 +552,14 @@ function MermaidComponent({
             {svg ? (
               <div dangerouslySetInnerHTML={{ __html: svg }} />
             ) : (
-              !error && <div className="text-passive-1 text-sm">Empty diagram</div>
+              !error && (
+                <div className="text-passive-1 text-sm" data-srn-print-exclude="true">
+                  Empty diagram
+                </div>
+              )
             )}
             {error ? (
-              <div className="text-danger mt-1 text-xs whitespace-pre-wrap" role="alert">
+              <div className="text-danger mt-1 text-xs whitespace-pre-wrap" data-srn-print-exclude="true" role="alert">
                 {error}
               </div>
             ) : null}

@@ -61,7 +61,11 @@ function TableOfContentsList({
   const headings = entries.filter(([, , tag]) => levelOf(tag) <= MAX_TOC_LEVEL)
 
   if (headings.length === 0) {
-    return <div className="text-passive-1 px-3 py-2 text-sm">No headings found</div>
+    return (
+      <div className="text-passive-1 px-3 py-2 text-sm" data-srn-print-exclude="true">
+        No headings found
+      </div>
+    )
   }
 
   // Smallest heading level present becomes the baseline (0 indent), so an index
@@ -76,6 +80,7 @@ function TableOfContentsList({
           <li key={key} style={{ paddingLeft: `${indent * 1}rem` }}>
             <button
               type="button"
+              data-srn-print-static-text="true"
               className="text-foreground hover:bg-contrast hover:text-info block w-full truncate rounded px-2 py-0.5 text-left text-sm outline-none"
               title={text || 'Untitled heading'}
               onMouseDown={(e) => e.preventDefault()}
