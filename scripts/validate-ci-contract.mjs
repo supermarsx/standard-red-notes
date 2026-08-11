@@ -664,6 +664,23 @@ export function validateCiContract(files) {
       "docker compose up -d --no-build --wait --wait-timeout 900",
       "bounded disposable stack startup",
     ],
+    [
+      "ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY",
+      "assistant pairing key",
+    ],
+    ["-e REQUIRE_GATEWAY=1", "required realtime gateway mode"],
+    [
+      "-e GATEWAY_HTTP=http://127.0.0.1:3000",
+      "realtime gateway health endpoint",
+    ],
+    [
+      "-e GATEWAY_WS=ws://127.0.0.1:3000/sockets",
+      "realtime gateway WebSocket endpoint",
+    ],
+    [
+      "packages/websocket-gateway/e2e/collab-yjs.e2e.mjs",
+      "encrypted two-editor convergence drill",
+    ],
     ['OPS_LOAD_NOTES: "25"', "bounded note count"],
     ['OPS_LOAD_CLIENTS: "2"', "bounded client count"],
     ['OPS_REDIS_WORKERS: "2"', "bounded Redis workers"],

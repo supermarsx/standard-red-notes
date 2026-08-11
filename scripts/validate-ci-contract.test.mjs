@@ -448,6 +448,16 @@ test("a missing backup and restore drill is rejected", () => {
   );
 });
 
+test("the required stack cannot skip encrypted two-editor convergence", () => {
+  const files = withFileChanged(".github/workflows/ci.yml", (content) =>
+    content.replace("-e REQUIRE_GATEWAY=1", "-e REQUIRE_GATEWAY=0"),
+  );
+  assert.match(
+    validateCiContract(files).join("\n"),
+    /container-smoke required realtime gateway mode/,
+  );
+});
+
 test("the disposable stack preserves server runtime logs on failure", () => {
   const files = withFileChanged(".github/workflows/ci.yml", (content) =>
     content.replace(
