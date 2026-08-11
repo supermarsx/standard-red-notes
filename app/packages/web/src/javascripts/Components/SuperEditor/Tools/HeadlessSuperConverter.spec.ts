@@ -8,8 +8,13 @@ jest.mock('../Lexical/Utils/PDFExport/PDFExport', () => ({
 
 import { HeadlessSuperConverter } from './HeadlessSuperConverter'
 import { $createListItemNode, $createListNode, ListItemNode, ListNode } from '@lexical/list'
-import { $createTextNode, $getRoot, createEditor } from 'lexical'
+import { $createParagraphNode, $createTextNode, $getRoot, createEditor } from 'lexical'
 import { $setChecklistDueAt } from '../Lexical/Nodes/ChecklistItemNode'
+import { createHeadlessEditor } from '@lexical/headless'
+import { SuperExportNodes } from '../Lexical/Nodes/AllNodes'
+import BlocksEditorTheme from '../Lexical/Theme/Theme'
+import { $createFileNode } from '../Plugins/EncryptedFilePlugin/Nodes/FileUtils'
+import type { FileItem } from '@standardnotes/snjs'
 
 function checklistDocument(): string {
   const editor = createEditor({ nodes: [ListNode, ListItemNode] })
@@ -18,6 +23,25 @@ function checklistDocument(): string {
       const item = $createListItemNode(false).append($createTextNode('Ship release'))
       $setChecklistDueAt(item, '2099-01-02T03:04:00.000Z')
       $getRoot().append($createListNode('check').append(item))
+    },
+    { discrete: true },
+  )
+  return JSON.stringify(editor.getEditorState().toJSON())
+}
+
+function embeddedDocument(secret: string, fileId: string): string {
+  const editor = createHeadlessEditor({
+    namespace: 'HeadlessSuperConverterConcurrencyFixture',
+    theme: BlocksEditorTheme,
+    editable: false,
+    onError: (error: Error) => {
+      throw error
+    },
+    nodes: SuperExportNodes,
+  })
+  editor.update(
+    () => {
+      $getRoot().append($createParagraphNode().append($createTextNode(secret)), $createFileNode(fileId))
     },
     { discrete: true },
   )
@@ -77,5 +101,54 @@ describe('HeadlessSuperConverter portable checklist exports', () => {
     const converter = new HeadlessSuperConverter()
 
     await expect(converter.convertSuperStringToOtherFormat(input, 'json')).resolves.toBe(input)
+  })
+})
+
+describe('HeadlessSuperConverter concurrent export isolation', () => {
+  it('keeps distinct secrets in their owning export while the first export awaits file I/O', async () => {
+    const converter = new HeadlessSuperConverter()
+    const alphaSecret = 'ALPHA_EXPORT_PRIVATE_13a2b'
+    const betaSecret = 'BETA_EXPORT_PRIVATE_97c4d'
+    const alphaFileId = 'alpha-file-id'
+    const betaFileId = 'beta-file-id'
+    let releaseAlpha!: () => void
+    let markAlphaStarted!: () => void
+    const alphaRelease = new Promise<void>((resolve) => {
+      releaseAlpha = resolve
+    })
+    const alphaStarted = new Promise<void>((resolve) => {
+      markAlphaStarted = resolve
+    })
+    const fileItem = (id: string) =>
+      ({ uuid: id, name: `${id}.txt`, title: `${id}.txt`, mimeType: 'text/plain' }) as unknown as FileItem
+
+    const alphaExport = converter.convertSuperStringToOtherFormat(embeddedDocument(alphaSecret, alphaFileId), 'html', {
+      embedBehavior: 'inline',
+      getFileItem: fileItem,
+      getFileBase64: async (id) => {
+        expect(id).toBe(alphaFileId)
+        markAlphaStarted()
+        await alphaRelease
+        return 'data:text/plain;base64,YWxwaGE='
+      },
+    })
+
+    await alphaStarted
+
+    const betaExport = await converter.convertSuperStringToOtherFormat(embeddedDocument(betaSecret, betaFileId), 'md', {
+      embedBehavior: 'inline',
+      getFileItem: fileItem,
+      getFileBase64: async (id) => {
+        expect(id).toBe(betaFileId)
+        return 'data:text/plain;base64,YmV0YQ=='
+      },
+    })
+    releaseAlpha()
+    const resolvedAlphaExport = await alphaExport
+
+    expect(resolvedAlphaExport).toContain(alphaSecret)
+    expect(resolvedAlphaExport).not.toContain(betaSecret)
+    expect(betaExport).toContain(betaSecret)
+    expect(betaExport).not.toContain(alphaSecret)
   })
 })

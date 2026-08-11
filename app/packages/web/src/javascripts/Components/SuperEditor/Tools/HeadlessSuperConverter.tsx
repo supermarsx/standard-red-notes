@@ -2,6 +2,7 @@ import { createHeadlessEditor } from '@lexical/headless'
 import { FileItem, PrefKey, PrefValue, SuperConverterServiceInterface } from '@standardnotes/snjs'
 import {
   $createParagraphNode,
+  $getNodeByKey,
   $getRoot,
   $insertNodes,
   LexicalEditor,
@@ -52,7 +53,6 @@ const blobToDataUrl = (blob: Blob): Promise<string> =>
 
 export class HeadlessSuperConverter implements SuperConverterServiceInterface {
   private importEditor: LexicalEditor
-  private exportEditor: LexicalEditor
 
   constructor() {
     this.importEditor = createHeadlessEditor({
@@ -62,7 +62,10 @@ export class HeadlessSuperConverter implements SuperConverterServiceInterface {
       onError: (error: Error) => console.error(error),
       nodes: BlockEditorNodes,
     })
-    this.exportEditor = createHeadlessEditor({
+  }
+
+  private createExportEditor(): LexicalEditor {
+    return createHeadlessEditor({
       namespace: 'BlocksEditor',
       theme: BlocksEditorTheme,
       editable: false,
@@ -85,7 +88,11 @@ export class HeadlessSuperConverter implements SuperConverterServiceInterface {
     superString: string,
     toFormat: 'txt' | 'md' | 'html' | 'json' | 'pdf',
     config?: SuperConversionConfig,
-  ): Promise<void> {
+  ): Promise<LexicalEditor> {
+    // HeadlessSuperConverter is application-global. Every export must own its
+    // editor for the full async lifetime so a second note cannot replace the
+    // first note's mutable Lexical state while file embedding is awaiting I/O.
+    const exportEditor = this.createExportEditor()
     const { embedBehavior, getFileItem, getFileBase64 } = config ?? { embedBehavior: 'reference' }
 
     if (embedBehavior === 'separate' && !getFileItem) {
@@ -96,11 +103,9 @@ export class HeadlessSuperConverter implements SuperConverterServiceInterface {
     }
 
     if (superString.length === 0) {
-      // The converter is a singleton. Explicitly clear prior content so an empty
-      // note produces a genuinely blank document rather than the last export.
-      this.exportEditor.update(() => $getRoot().clear(), { discrete: true })
+      exportEditor.update(() => $getRoot().clear(), { discrete: true })
     } else {
-      this.exportEditor.setEditorState(this.exportEditor.parseEditorState(superString))
+      exportEditor.setEditorState(exportEditor.parseEditorState(superString))
     }
 
     await new Promise<void>((resolve, reject) => {
@@ -115,26 +120,36 @@ export class HeadlessSuperConverter implements SuperConverterServiceInterface {
             if (!$isFileNode(fileNode)) {
               return
             }
-            const fileItem = getFileItem(fileNode.getId())
+            const fileNodeKey = fileNode.getKey()
+            const fileNodeId = fileNode.getId()
+            const fileItem = getFileItem(fileNodeId)
             if (!fileItem) {
               return
             }
             const canInlineFileType = toFormat === 'pdf' ? fileItem.mimeType.startsWith('image/') : true
             if (embedBehavior === 'inline' && getFileBase64 && canInlineFileType) {
-              const fileBase64 = await getFileBase64(fileNode.getId())
+              const fileBase64 = await getFileBase64(fileNodeId)
               if (!fileBase64) {
                 return
               }
-              this.exportEditor.update(
+              exportEditor.update(
                 () => {
+                  const target = $getNodeByKey(fileNodeKey)
+                  if (!target || !$isFileNode(target)) {
+                    return
+                  }
                   const inlineFileNode = $createInlineFileNode(fileBase64, fileItem.mimeType, fileItem.name)
-                  fileNode.replace(inlineFileNode)
+                  target.replace(inlineFileNode)
                 },
                 { discrete: true },
               )
             } else {
-              this.exportEditor.update(
+              exportEditor.update(
                 () => {
+                  const target = $getNodeByKey(fileNodeKey)
+                  if (!target || !$isFileNode(target)) {
+                    return
+                  }
                   filenameCounts[fileItem.name] =
                     filenameCounts[fileItem.name] == undefined ? 0 : filenameCounts[fileItem.name] + 1
 
@@ -144,7 +159,7 @@ export class HeadlessSuperConverter implements SuperConverterServiceInterface {
                     name = `${baseName}-${fileItem.uuid}.${ext}`
                   }
 
-                  fileNode.replace($createFileExportNode(name, fileItem.mimeType))
+                  target.replace($createFileExportNode(name, fileItem.mimeType))
                 },
                 { discrete: true },
               )
@@ -154,16 +169,18 @@ export class HeadlessSuperConverter implements SuperConverterServiceInterface {
           .then(() => resolve())
           .catch(reject)
       }
-      this.exportEditor.update(handleFileNodes, { discrete: true })
+      exportEditor.update(handleFileNodes, { discrete: true })
     })
+
+    return exportEditor
   }
 
   /** Generate a valid PDF Blob without an object-URL/fetch round trip. */
   async convertSuperStringToPDFBlob(superString: string, config?: SuperConversionConfig): Promise<Blob> {
-    await this.prepareExportEditor(superString, 'pdf', config)
+    const exportEditor = await this.prepareExportEditor(superString, 'pdf', config)
     const { $generatePDFFromNodes } = await import('../Lexical/Utils/PDFExport/PDFExport')
     return $generatePDFFromNodes(
-      this.exportEditor,
+      exportEditor,
       config?.pdf?.pageSize || 'A4',
       config?.pdf?.pageLayout,
       config?.now ?? Date.now(),
@@ -185,7 +202,7 @@ export class HeadlessSuperConverter implements SuperConverterServiceInterface {
       return blobToDataUrl(await this.convertSuperStringToPDFBlob(superString, config))
     }
 
-    await this.prepareExportEditor(superString, toFormat, config)
+    const exportEditor = await this.prepareExportEditor(superString, toFormat, config)
     const exportNow = config?.now ?? Date.now()
 
     let content: string | undefined
@@ -209,7 +226,7 @@ export class HeadlessSuperConverter implements SuperConverterServiceInterface {
             break
           }
           case 'html':
-            content = $generateHtmlFromNodes(this.exportEditor)
+            content = $generateHtmlFromNodes(exportEditor)
             resolve()
             break
           case 'json':
@@ -219,7 +236,7 @@ export class HeadlessSuperConverter implements SuperConverterServiceInterface {
             break
         }
       }
-      this.exportEditor.update(convertToFormat, { discrete: true })
+      exportEditor.update(convertToFormat, { discrete: true })
     })
 
     if (typeof content !== 'string') {
@@ -326,11 +343,12 @@ export class HeadlessSuperConverter implements SuperConverterServiceInterface {
       return []
     }
 
-    this.exportEditor.setEditorState(this.exportEditor.parseEditorState(superString))
+    const exportEditor = this.createExportEditor()
+    exportEditor.setEditorState(exportEditor.parseEditorState(superString))
 
     const ids: string[] = []
 
-    this.exportEditor.getEditorState().read(() => {
+    exportEditor.getEditorState().read(() => {
       for (const { node: fileNode } of $dfs()) {
         if (!$isFileNode(fileNode)) {
           continue
@@ -353,20 +371,21 @@ export class HeadlessSuperConverter implements SuperConverterServiceInterface {
    * editor state of that as a JSON, which can then be used to create a new note.
    */
   getStringifiedJSONFromSerializedNodes(serializedNodes: SerializedLexicalNode[]) {
-    this.exportEditor.update(
+    const exportEditor = this.createExportEditor()
+    exportEditor.update(
       () => {
         const root = $getRoot()
         root.clear()
         const selection = root.selectEnd()
         const generatedNodes = $generateNodesFromSerializedNodes(serializedNodes)
-        $insertGeneratedNodes(this.exportEditor, generatedNodes, selection)
+        $insertGeneratedNodes(exportEditor, generatedNodes, selection)
       },
       {
         discrete: true,
       },
     )
-    return this.exportEditor.read(() => {
-      return JSON.stringify(this.exportEditor.getEditorState().toJSON())
+    return exportEditor.read(() => {
+      return JSON.stringify(exportEditor.getEditorState().toJSON())
     })
   }
 }
