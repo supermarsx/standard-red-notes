@@ -766,6 +766,33 @@ export function validateDeploymentIdentityContract({
     }
   }
 
+  for (const [label, sourceValue] of [
+    ["app Dockerfile", appDockerfileSource],
+    ["server Dockerfile", serverDockerfileSource],
+  ]) {
+    const source = String(sourceValue);
+    const sourceLabel =
+      'LABEL org.opencontainers.image.source="https://github.com/supermarsx/standard-red-notes"';
+    if (source.split(sourceLabel).length - 1 !== 1) {
+      errors.push(
+        `${label}: must bind the published image to the canonical GitHub source exactly once`,
+      );
+    }
+  }
+
+  for (const [service, variable, localDefault] of [
+    ["app", "APP_IMAGE", "standard-red-notes/app:local"],
+    ["server", "SERVER_IMAGE", "standard-red-notes/server:local"],
+  ]) {
+    const fragment = `image: \${${variable}:-${localDefault}}`;
+    const count = String(multiComposeSource).split(fragment).length - 1;
+    if (count !== 1) {
+      errors.push(
+        `multi compose: ${service} image must use ${variable} with the ${localDefault} source-build default exactly once`,
+      );
+    }
+  }
+
   for (const [label, sourceValue, expectedCount] of [
     ["multi compose", multiComposeSource, 3],
     ["single compose", singleComposeSource, 2],

@@ -370,7 +370,7 @@ services:
       args:
         SRN_DEPLOY_REVISION: "${SRN_DEPLOY_REVISION:-}"
         SRN_DEPLOY_VERSION: "${SRN_DEPLOY_VERSION:-}"
-    image: standard-red-notes/app:local
+    image: ${APP_IMAGE:-standard-red-notes/app:local}
     restart: unless-stopped
     # Hardening: the image already runs as the unprivileged `nginx` user (uid 101)
     # and listens on 8080, so it needs no Linux capabilities. Drop them all and
@@ -452,7 +452,7 @@ services:
       args:
         SRN_DEPLOY_REVISION: "${SRN_DEPLOY_REVISION:-}"
         SRN_DEPLOY_VERSION: "${SRN_DEPLOY_VERSION:-}"
-    image: standard-red-notes/server:local
+    image: ${SERVER_IMAGE:-standard-red-notes/server:local}
     restart: unless-stopped
     # Hardening: the image runs supervisord + every node service as the
     # unprivileged `srn` user (uid 10001). Drop all Linux capabilities and block
