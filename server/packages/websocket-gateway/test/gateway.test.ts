@@ -71,7 +71,7 @@ describe('registry: add/remove + pushToUser exclusion', () => {
     expect(reg.get('u1')).toHaveLength(0)
   })
 
-  it('pushes to all of a user\'s sockets', () => {
+  it("pushes to all of a user's sockets", () => {
     const reg = new ConnectionRegistry()
     const a = fakeSocket()
     const b = fakeSocket()
@@ -157,11 +157,7 @@ describe('redis dispatch: handleRawMessage', () => {
     reg.add('u1', conn('s1', a.socket))
     reg.add('u1', conn('s2', b.socket))
 
-    const sent = handleRawMessage(
-      reg,
-      JSON.stringify({ userUuid: 'u1', message: 'm' }),
-      silentLogger,
-    )
+    const sent = handleRawMessage(reg, JSON.stringify({ userUuid: 'u1', message: 'm' }), silentLogger)
     expect(sent).toBe(2)
   })
 
