@@ -2,14 +2,15 @@ import { EditorFontSize, EditorLineHeight, EditorLineWidth } from '@standardnote
 import { NativeFeatureIdentifier } from '@standardnotes/features'
 
 /**
- * Standard Red Notes: the user-facing automatic light/dark color-scheme mode.
+ * Standard Red Notes: the user-facing base color-scheme mode.
+ * - `manual` preserves the non-layerable theme chosen from Quick Settings.
  * - `auto` follows the operating-system color scheme live (dark -> Standard Red,
  *   light -> Standard Blue), falling back to dark (Standard Red) when the OS
  *   preference can't be determined.
  * - `light` always forces the light theme (Standard Blue).
  * - `dark` always forces the dark/default theme (Standard Red).
  */
-export type ColorSchemeMode = 'auto' | 'light' | 'dark'
+export type ColorSchemeMode = 'manual' | 'auto' | 'light' | 'dark'
 
 /**
  * Standard Red Notes: persisted shape for the user-customizable Super editor
@@ -33,8 +34,9 @@ export enum LocalPrefKey {
   UseTranslucentUI = 'useTranslucentUI',
   AutoLightThemeIdentifier = 'autoLightThemeIdentifier',
   AutoDarkThemeIdentifier = 'autoDarkThemeIdentifier',
-  // Standard Red Notes: the auto/light/dark color-scheme selector. `auto` follows
-  // the OS color scheme; `light`/`dark` force Standard Blue / Standard Red.
+  // Standard Red Notes: the manual/auto/light/dark color-scheme selector.
+  // `manual` preserves the theme selected from Quick Settings, `auto` follows
+  // the OS color scheme, and `light`/`dark` force Standard Blue / Standard Red.
   ColorSchemeMode = 'colorSchemeMode',
 
   EditorMonospaceEnabled = 'monospaceFont',

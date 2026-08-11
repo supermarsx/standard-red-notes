@@ -6,6 +6,7 @@ import {
   applyCustomThemeFromState,
   applyCustomThemeOverride,
   loadCustomThemesState,
+  reapplyPersistedCustomTheme,
   removeCustomThemeOverride,
   saveCustomThemesState,
 } from './CustomThemeManager'
@@ -86,5 +87,13 @@ describe('Custom theme runtime injection', () => {
     document.head.appendChild(link)
     applyCustomThemeOverride(theme)
     expect(document.head.lastElementChild?.id).toBe(STYLE_ID)
+  })
+
+  it('reapplies the saved selection after an application reload', () => {
+    saveCustomThemesState({ themes: [theme], selectedId: theme.id })
+
+    reapplyPersistedCustomTheme()
+
+    expect(document.getElementById(STYLE_ID)?.textContent).toContain('#ff0000')
   })
 })

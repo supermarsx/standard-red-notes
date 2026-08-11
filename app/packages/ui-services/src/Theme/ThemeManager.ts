@@ -13,6 +13,7 @@ import {
   PreferenceServiceInterface,
   ComponentManagerInterface,
   LocalPrefKey,
+  ColorSchemeMode,
 } from '@standardnotes/services'
 import { NativeFeatureIdentifier, FindNativeTheme, ThemeFeatureDescription } from '@standardnotes/features'
 import { WebApplicationInterface } from '../WebApplication/WebApplicationInterface'
@@ -31,7 +32,7 @@ export class ThemeManager extends AbstractUIService {
   private lastUseDeviceThemeSettings: boolean | undefined
   private lastAutoLightTheme: string | undefined
   private lastAutoDarkTheme: string | undefined
-  private lastColorSchemeMode: string | undefined
+  private lastColorSchemeMode: ColorSchemeMode | undefined
 
   constructor(
     application: WebApplicationInterface,
@@ -90,7 +91,6 @@ export class ThemeManager extends AbstractUIService {
       }
       case ApplicationEvent.StorageReady: {
         await this.activateCachedThemes()
-        await this.applyColorSchemeMode()
         break
       }
       case ApplicationEvent.FeaturesAvailabilityChanged: {
@@ -117,11 +117,26 @@ export class ThemeManager extends AbstractUIService {
   }
 
   async handleMobileColorSchemeChangeEvent() {
-    const useDeviceThemeSettings = this.preferences.getLocalValue(LocalPrefKey.UseSystemColorScheme, false)
+    const colorSchemeMode = this.getColorSchemeMode()
+    if (colorSchemeMode === 'auto') {
+      const prefersDarkColorScheme = (await this.application.mobileDevice.getColorScheme()) === 'dark'
+      if (this.getColorSchemeMode() === 'auto') {
+        this.applyThemeByIdentifier(resolveColorSchemeTheme('auto', prefersDarkColorScheme))
+      }
+      return
+    }
+
+    const useDeviceThemeSettings =
+      colorSchemeMode === 'manual' && this.preferences.getLocalValue(LocalPrefKey.UseSystemColorScheme, false)
 
     if (useDeviceThemeSettings) {
       const prefersDarkColorScheme = (await this.application.mobileDevice.getColorScheme()) === 'dark'
-      this.setThemeAsPerColorScheme(prefersDarkColorScheme)
+      if (
+        this.getColorSchemeMode() === 'manual' &&
+        this.preferences.getLocalValue(LocalPrefKey.UseSystemColorScheme, false)
+      ) {
+        this.setThemeAsPerColorScheme(prefersDarkColorScheme)
+      }
     }
   }
 
@@ -178,7 +193,7 @@ export class ThemeManager extends AbstractUIService {
       LocalPrefKey.AutoDarkThemeIdentifier,
       NativeFeatureIdentifier.TYPES.DarkTheme,
     )
-    const colorSchemeMode = this.preferences.getLocalValue(LocalPrefKey.ColorSchemeMode, 'auto')
+    const colorSchemeMode = this.getColorSchemeMode()
 
     const hasColorSchemeModeChanged = colorSchemeMode !== this.lastColorSchemeMode
     if (hasColorSchemeModeChanged) {
@@ -197,7 +212,7 @@ export class ThemeManager extends AbstractUIService {
       this.lastAutoDarkTheme = autoDarkTheme
     }
 
-    if (hasPreferenceChanged && useSystemColorScheme) {
+    if (hasPreferenceChanged && useSystemColorScheme && colorSchemeMode === 'manual') {
       let prefersDarkColorScheme = window.matchMedia('(prefers-color-scheme: dark)').matches
 
       if (this.application.isNativeMobileWeb()) {
@@ -206,6 +221,62 @@ export class ThemeManager extends AbstractUIService {
 
       this.setThemeAsPerColorScheme(prefersDarkColorScheme)
     }
+  }
+
+  /**
+   * Returns the persisted color-scheme mode. Older installations can have an
+   * ActiveThemes selection (or the legacy system-theme switch) without the
+   * newer mode key. Materialize that state as `manual` before any automatic
+   * theme is applied so an upgrade cannot silently replace the saved choice.
+   */
+  private getColorSchemeMode(): ColorSchemeMode {
+    const storedMode = this.preferences.getLocalValue(LocalPrefKey.ColorSchemeMode, undefined)
+    if (storedMode) {
+      return storedMode
+    }
+
+    const hasSavedTheme = this.preferences.getLocalValue(LocalPrefKey.ActiveThemes, []).length > 0
+    const usesLegacySystemThemes = this.preferences.getLocalValue(LocalPrefKey.UseSystemColorScheme, false)
+    const inferredMode: ColorSchemeMode = hasSavedTheme || usesLegacySystemThemes ? 'manual' : 'auto'
+
+    this.preferences.setLocalValue(LocalPrefKey.ColorSchemeMode, inferredMode)
+    return inferredMode
+  }
+
+  /**
+   * Selects a theme as a direct user choice. Non-layerable themes own the base
+   * color scheme, so remember them as manual and disable the older OS-theme
+   * switch before changing ActiveThemes. Layerable themes remain overlays and
+   * do not disturb Auto/Light/Dark.
+   */
+  async selectTheme(theme: UIFeature<ThemeFeatureDescription>): Promise<void> {
+    if (!theme.layerable) {
+      this.setColorSchemeMode('manual')
+    }
+
+    await this.components.toggleTheme(theme)
+  }
+
+  /** Selects the Standard Red base theme, represented by no active base link. */
+  async selectDefaultTheme(): Promise<void> {
+    this.setColorSchemeMode('manual')
+
+    const activeTheme = this.components.getActiveThemes().find((theme) => !theme.layerable)
+    if (activeTheme) {
+      await this.components.toggleTheme(activeTheme)
+    }
+  }
+
+  /**
+   * Persists a base color-scheme mode and prevents the legacy system-theme
+   * switch from racing it. The local preference service writes synchronously,
+   * so subsequent theme events observe a coherent mode.
+   */
+  setColorSchemeMode(mode: ColorSchemeMode): void {
+    if (this.preferences.getLocalValue(LocalPrefKey.UseSystemColorScheme, false)) {
+      this.preferences.setLocalValue(LocalPrefKey.UseSystemColorScheme, false)
+    }
+    this.preferences.setLocalValue(LocalPrefKey.ColorSchemeMode, mode)
   }
 
   /**
@@ -241,9 +312,18 @@ export class ThemeManager extends AbstractUIService {
    * dark fallback when the OS preference is indeterminate).
    */
   async applyColorSchemeMode(): Promise<boolean> {
-    const mode = this.preferences.getLocalValue(LocalPrefKey.ColorSchemeMode, 'auto')
+    const mode = this.getColorSchemeMode()
+    this.lastColorSchemeMode = mode
+
+    if (mode === 'manual') {
+      return false
+    }
 
     const systemPrefersDark = mode === 'auto' ? await this.getSystemPrefersDark() : undefined
+    if (this.getColorSchemeMode() !== mode) {
+      return false
+    }
+
     const themeIdentifier = resolveColorSchemeTheme(mode, systemPrefersDark)
 
     return this.applyThemeByIdentifier(themeIdentifier)
@@ -254,7 +334,11 @@ export class ThemeManager extends AbstractUIService {
    * `Default` identifier means the Standard Red base look, applied by toggling
    * off any active non-layerable theme.
    */
-  private applyThemeByIdentifier(themeIdentifier: string): boolean {
+  private applyThemeByIdentifier(themeIdentifier: string | undefined): boolean {
+    if (!themeIdentifier) {
+      return false
+    }
+
     let didChangeTheme = false
 
     const usecase = new GetAllThemesUseCase(this.application.items)
@@ -308,13 +392,15 @@ export class ThemeManager extends AbstractUIService {
       }
     }
 
-    const shouldSetThemeAsPerColorScheme = this.preferences.getLocalValue(LocalPrefKey.UseSystemColorScheme, false)
-    if (shouldSetThemeAsPerColorScheme) {
+    const colorSchemeMode = this.getColorSchemeMode()
+    if (colorSchemeMode !== 'manual') {
+      hasChange = (await this.applyColorSchemeMode()) || hasChange
+    } else if (this.preferences.getLocalValue(LocalPrefKey.UseSystemColorScheme, false)) {
       let prefersDarkColorScheme = window.matchMedia('(prefers-color-scheme: dark)').matches
       if (this.application.isNativeMobileWeb()) {
         prefersDarkColorScheme = (await this.application.mobileDevice.getColorScheme()) === 'dark'
       }
-      hasChange = this.setThemeAsPerColorScheme(prefersDarkColorScheme)
+      hasChange = this.setThemeAsPerColorScheme(prefersDarkColorScheme) || hasChange
     }
 
     if (hasChange) {
@@ -324,7 +410,7 @@ export class ThemeManager extends AbstractUIService {
 
   private colorSchemeEventHandler(event: MediaQueryListEvent) {
     // Standard Red Notes: when the color-scheme mode is Auto, follow the OS live.
-    const colorSchemeMode = this.preferences.getLocalValue(LocalPrefKey.ColorSchemeMode, 'auto')
+    const colorSchemeMode = this.getColorSchemeMode()
     if (colorSchemeMode === 'auto') {
       this.applyThemeByIdentifier(resolveColorSchemeTheme('auto', event.matches))
       return
@@ -333,7 +419,7 @@ export class ThemeManager extends AbstractUIService {
     // Legacy "use system color scheme" path (with the two auto theme dropdowns).
     const shouldChangeTheme = this.preferences.getLocalValue(LocalPrefKey.UseSystemColorScheme, false)
 
-    if (shouldChangeTheme) {
+    if (colorSchemeMode === 'manual' && shouldChangeTheme) {
       this.setThemeAsPerColorScheme(event.matches)
     }
   }

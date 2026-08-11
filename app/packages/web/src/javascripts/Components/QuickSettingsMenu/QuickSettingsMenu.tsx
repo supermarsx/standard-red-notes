@@ -103,16 +103,9 @@ const QuickSettingsMenu: FunctionComponent<MenuProps> = ({ closeMenu }) => {
     [application],
   )
 
-  const deactivateAnyNonLayerableTheme = useCallback(() => {
-    const nonLayerableActiveTheme = application.componentManager.getActiveThemes().find((theme) => !theme.layerable)
-    if (nonLayerableActiveTheme) {
-      void application.componentManager.toggleTheme(nonLayerableActiveTheme)
-    }
-  }, [application])
-
   const toggleDefaultTheme = useCallback(() => {
-    deactivateAnyNonLayerableTheme()
-  }, [deactivateAnyNonLayerableTheme])
+    void application.themeManager.selectDefaultTheme()
+  }, [application])
 
   return (
     <Menu a11yLabel="Quick settings menu">

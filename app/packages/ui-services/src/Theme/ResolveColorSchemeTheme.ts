@@ -18,6 +18,7 @@ export const StandardBlueThemeIdentifier = NativeFeatureIdentifier.TYPES.Standar
  * Pure resolution of the active theme identifier for a given color-scheme mode.
  *
  * Mapping for this fork:
+ * - `manual` -> no automatic theme (preserve the explicitly selected theme)
  * - `light`  -> Standard Blue (light theme)
  * - `dark`   -> Standard Red (default/dark theme)
  * - `auto`   -> follows the OS: dark -> Standard Red, light -> Standard Blue.
@@ -26,7 +27,14 @@ export const StandardBlueThemeIdentifier = NativeFeatureIdentifier.TYPES.Standar
  * (or the native equivalent). When the OS preference is indeterminate (`undefined`),
  * Auto falls back to dark (Standard Red).
  */
-export function resolveColorSchemeTheme(mode: ColorSchemeMode, systemPrefersDark: boolean | undefined): string {
+export function resolveColorSchemeTheme(
+  mode: ColorSchemeMode,
+  systemPrefersDark: boolean | undefined,
+): string | undefined {
+  if (mode === 'manual') {
+    return undefined
+  }
+
   if (mode === 'light') {
     return StandardBlueThemeIdentifier
   }

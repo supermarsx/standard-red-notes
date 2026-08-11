@@ -820,7 +820,7 @@ export class AssistantTools implements ToolSession {
         `Theme not found: ${identifierOrName}. Available: ${allThemes.map((t) => t.displayName).join(', ')}`,
       )
     }
-    await this.application.componentManager.toggleTheme(match)
+    await this.application.themeManager.selectTheme(match)
     return { ok: true, theme: match.displayName }
   }
 

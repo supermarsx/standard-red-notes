@@ -32,7 +32,7 @@ const QuickSettingsButton = ({ application, isMobileNavigation = false }: Props)
 
     return mergeRegister(
       application.commands.addWithShortcut(TOGGLE_DARK_MODE_COMMAND, 'General', 'Toggle dark mode', () => {
-        void application.componentManager.toggleTheme(darkThemeFeature)
+        void application.themeManager.selectTheme(darkThemeFeature)
         return true
       }),
       application.commands.add('open-quick-settings-menu', 'Open quick settings menu', toggleMenu, 'themes'),
