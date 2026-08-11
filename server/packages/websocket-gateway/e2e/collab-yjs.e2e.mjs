@@ -176,12 +176,18 @@ class EncryptedPeer {
     this.seenCiphertexts = []
     this.socket = undefined
     this.joined = false
+    this.stateServingReady = false
     this.requestId = undefined
     this.reservation = undefined
     this.denied = false
+    this.awaitingStateRequestId = undefined
+    this.pendingResponseClaims = new Set()
+    this.awaitingAcceptances = new Set()
+    this.acceptedTransfers = new Set()
     this.pending = new Set()
+    this.pendingError = undefined
     this.doc.on('update', (update, origin) => {
-      if (origin === this || !this.joined || !this.socket) return
+      if (origin === this || !this.joined || !this.stateServingReady || !this.socket) return
       this.track(this.sendUpdate(update))
     })
     this.inboundTransfers = new Map()
@@ -191,12 +197,18 @@ class EncryptedPeer {
     const socket = await open(await mint(this.userUuid, sessionUuid))
     this.socket = socket
     this.joined = false
+    this.stateServingReady = false
     this.denied = false
+    this.awaitingStateRequestId = undefined
+    this.pendingResponseClaims.clear()
+    this.awaitingAcceptances.clear()
+    this.acceptedTransfers.clear()
     this.requestId = `e2e-${sessionUuid}-${crypto.randomUUID()}`
     this.reservation = undefined
     socket.on('close', () => {
       if (this.socket === socket) {
         this.joined = false
+        this.stateServingReady = false
         this.socket = undefined
       }
     })
@@ -212,11 +224,17 @@ class EncryptedPeer {
       }),
     )
     await waitFor(() => this.reservation || this.denied, `${this.userUuid} room reservation`)
+    const shouldBootstrap = this.reservation?.bootstrap
+    const challengeIsValid =
+      shouldBootstrap === true
+        ? typeof this.reservation?.bootstrapChallenge === 'string' && this.reservation.bootstrapChallenge.length > 0
+        : shouldBootstrap === false && this.reservation?.bootstrapChallenge === undefined
     if (
       this.denied ||
       this.reservation?.protocolVersion !== COLLABORATION_PROTOCOL_VERSION ||
       this.reservation?.maxTransferBytes !== MAX_YJS_TRANSFER_BYTES ||
-      typeof this.reservation?.bootstrapChallenge !== 'string'
+      typeof shouldBootstrap !== 'boolean' ||
+      !challengeIsValid
     ) {
       throw new Error(`${this.userUuid} received an invalid room reservation`)
     }
@@ -230,13 +248,34 @@ class EncryptedPeer {
         protocolVersion: COLLABORATION_PROTOCOL_VERSION,
       }),
     )
-    await waitFor(() => this.joined, `${this.userUuid} room join`)
-    await this.broadcastFullState()
+    await waitFor(() => this.joined || this.denied, `${this.userUuid} room join`)
+    if (!this.joined || this.denied) {
+      throw new Error(`${this.userUuid} room activation was denied`)
+    }
+    if (this.stateServingReady) {
+      return
+    }
+    const stateRequestId = `state-${crypto.randomUUID()}`
+    this.awaitingStateRequestId = stateRequestId
+    socket.send(
+      JSON.stringify({
+        t: 'yjs-retry',
+        room: this.room,
+        requestId: stateRequestId,
+        requesterClientId: this.doc.clientID,
+      }),
+    )
+    await waitFor(() => this.stateServingReady, `${this.userUuid} correlated state establishment`, 15_000)
   }
 
   async disconnect() {
     const socket = this.socket
     this.joined = false
+    this.stateServingReady = false
+    this.awaitingStateRequestId = undefined
+    this.pendingResponseClaims.clear()
+    this.awaitingAcceptances.clear()
+    this.acceptedTransfers.clear()
     this.socket = undefined
     if (!socket || socket.readyState === WebSocket.CLOSED) return
     const closed = new Promise((resolve) => socket.once('close', resolve))
@@ -266,6 +305,11 @@ class EncryptedPeer {
         clearTimeout(timeout)
       }
     }
+    if (this.pendingError) {
+      const error = this.pendingError
+      this.pendingError = undefined
+      throw error
+    }
   }
 
   async broadcastFullState() {
@@ -273,46 +317,83 @@ class EncryptedPeer {
     await this.sendUpdate(Y.encodeStateAsUpdate(this.doc))
   }
 
-  async sendUpdate(update) {
+  async sendUpdate(update, stateRequestId, awaitAcceptance = false) {
     if (update.byteLength > MAX_YJS_TRANSFER_BYTES) {
       throw new Error('test update exceeds bounded transfer protocol')
     }
-    if (update.byteLength <= YJS_CHUNK_PLAINTEXT_BYTES) {
-      const payload = await encrypt(this.key, update, frameAdditionalData(this.room, 'yjs'))
-      if (this.joined && this.socket?.readyState === WebSocket.OPEN) {
-        this.socket.send(JSON.stringify({ t: 'yjs', room: this.room, payload }))
-      }
-      return
+    const transferId =
+      awaitAcceptance || update.byteLength > YJS_CHUNK_PLAINTEXT_BYTES ? crypto.randomUUID() : undefined
+    if (awaitAcceptance && transferId) {
+      this.awaitingAcceptances.add(transferId)
     }
-    const transferId = crypto.randomUUID()
-    const count = Math.ceil(update.byteLength / YJS_CHUNK_PLAINTEXT_BYTES)
-    for (let index = 0; index < count; index++) {
-      const start = index * YJS_CHUNK_PLAINTEXT_BYTES
-      const metadata = {
-        room: this.room,
-        transferId,
-        index,
-        count,
-        totalBytes: update.byteLength,
-      }
-      const payload = await encrypt(
-        this.key,
-        update.subarray(start, start + YJS_CHUNK_PLAINTEXT_BYTES),
-        chunkAdditionalData(metadata),
-      )
+    if (update.byteLength <= YJS_CHUNK_PLAINTEXT_BYTES) {
+      const payload = await encrypt(this.key, update, frameAdditionalData(this.room, 'yjs', transferId, stateRequestId))
       if (this.joined && this.socket?.readyState === WebSocket.OPEN) {
         this.socket.send(
           JSON.stringify({
-            t: 'yjs-chunk',
+            t: 'yjs',
             room: this.room,
-            transferId,
-            index,
-            count,
-            totalBytes: update.byteLength,
             payload,
+            ...(transferId ? { transferId } : {}),
+            ...(stateRequestId ? { stateRequestId } : {}),
           }),
         )
       }
+    } else {
+      const count = Math.ceil(update.byteLength / YJS_CHUNK_PLAINTEXT_BYTES)
+      for (let index = 0; index < count; index++) {
+        const start = index * YJS_CHUNK_PLAINTEXT_BYTES
+        const metadata = {
+          room: this.room,
+          transferId,
+          index,
+          count,
+          totalBytes: update.byteLength,
+          ...(stateRequestId ? { stateRequestId } : {}),
+        }
+        const payload = await encrypt(
+          this.key,
+          update.subarray(start, start + YJS_CHUNK_PLAINTEXT_BYTES),
+          chunkAdditionalData(metadata),
+        )
+        if (this.joined && this.socket?.readyState === WebSocket.OPEN) {
+          this.socket.send(
+            JSON.stringify({
+              t: 'yjs-chunk',
+              room: this.room,
+              transferId,
+              index,
+              count,
+              totalBytes: update.byteLength,
+              payload,
+              ...(stateRequestId ? { stateRequestId } : {}),
+            }),
+          )
+        }
+      }
+    }
+    if (awaitAcceptance && transferId) {
+      try {
+        await waitFor(
+          () => this.acceptedTransfers.delete(transferId),
+          `${this.userUuid} accepted transfer ${transferId}`,
+          10_000,
+        )
+      } finally {
+        this.awaitingAcceptances.delete(transferId)
+        this.acceptedTransfers.delete(transferId)
+      }
+    }
+  }
+
+  async applyReceivedUpdate(update, stateRequestId) {
+    if (!this.joined) return
+    Y.applyUpdate(this.doc, update, this)
+    if (!stateRequestId || stateRequestId !== this.awaitingStateRequestId) return
+    this.awaitingStateRequestId = undefined
+    await this.sendUpdate(Y.encodeStateAsUpdate(this.doc), undefined, true)
+    if (this.joined) {
+      this.stateServingReady = true
     }
   }
 
@@ -333,11 +414,42 @@ class EncryptedPeer {
       frame.t === 'room-joined' &&
       frame.requestId === this.requestId &&
       frame.protocolVersion === COLLABORATION_PROTOCOL_VERSION &&
-      frame.maxTransferBytes === MAX_YJS_TRANSFER_BYTES
+      frame.maxTransferBytes === MAX_YJS_TRANSFER_BYTES &&
+      frame.bootstrap === this.reservation?.bootstrap
     ) {
       this.joined = true
+      this.stateServingReady = frame.bootstrap === true
     } else if (frame.t === 'room-sync') {
       this.track(this.broadcastFullState())
+    } else if (
+      frame.t === 'yjs-retry' &&
+      this.joined &&
+      this.stateServingReady &&
+      frame.requesterClientId !== this.doc.clientID &&
+      !this.pendingResponseClaims.has(frame.requestId)
+    ) {
+      this.pendingResponseClaims.add(frame.requestId)
+      this.socket?.send(
+        JSON.stringify({
+          t: 'yjs-response-claim',
+          room: this.room,
+          stateRequestId: frame.requestId,
+          leaseRequestId: this.requestId,
+        }),
+      )
+    } else if (
+      frame.t === 'yjs-response-granted' &&
+      frame.protocolVersion === COLLABORATION_PROTOCOL_VERSION &&
+      frame.leaseRequestId === this.requestId &&
+      this.pendingResponseClaims.delete(frame.stateRequestId)
+    ) {
+      this.track(this.sendUpdate(Y.encodeStateAsUpdate(this.doc), frame.stateRequestId, true))
+    } else if (
+      frame.t === 'yjs-accepted' &&
+      frame.protocolVersion === COLLABORATION_PROTOCOL_VERSION &&
+      this.awaitingAcceptances.has(frame.transferId)
+    ) {
+      this.acceptedTransfers.add(frame.transferId)
     } else if (frame.t === 'yjs' && this.joined) {
       this.seenCiphertexts.push(frame.payload)
       this.track(
@@ -345,9 +457,7 @@ class EncryptedPeer {
           this.key,
           frame.payload,
           frameAdditionalData(this.room, 'yjs', frame.transferId, frame.stateRequestId),
-        ).then((update) => {
-          if (this.joined) Y.applyUpdate(this.doc, update, this)
-        }),
+        ).then((update) => this.applyReceivedUpdate(update, frame.stateRequestId)),
       )
     } else if (frame.t === 'yjs-chunk' && this.joined) {
       this.seenCiphertexts.push(frame.payload)
@@ -358,12 +468,18 @@ class EncryptedPeer {
   async receiveChunk(frame) {
     let transfer = this.inboundTransfers.get(frame.transferId)
     if (!transfer) {
-      transfer = { count: frame.count, totalBytes: frame.totalBytes, chunks: new Map() }
+      transfer = {
+        count: frame.count,
+        totalBytes: frame.totalBytes,
+        stateRequestId: frame.stateRequestId,
+        chunks: new Map(),
+      }
       this.inboundTransfers.set(frame.transferId, transfer)
     }
     if (
       transfer.count !== frame.count ||
       transfer.totalBytes !== frame.totalBytes ||
+      transfer.stateRequestId !== frame.stateRequestId ||
       transfer.chunks.has(frame.index)
     ) {
       throw new Error('invalid chunk metadata in live e2e')
@@ -381,13 +497,15 @@ class EncryptedPeer {
       update.set(chunk, index * YJS_CHUNK_PLAINTEXT_BYTES)
     }
     this.inboundTransfers.delete(frame.transferId)
-    if (this.joined) {
-      Y.applyUpdate(this.doc, update, this)
-    }
+    await this.applyReceivedUpdate(update, transfer.stateRequestId)
   }
 
   track(promise) {
-    const settled = promise.finally(() => this.pending.delete(settled))
+    const settled = promise
+      .catch((error) => {
+        this.pendingError ??= error
+      })
+      .finally(() => this.pending.delete(settled))
     this.pending.add(settled)
   }
 }
