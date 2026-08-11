@@ -1,12 +1,1 @@
-[
-  {
-    "advisoryId": "1123940",
-    "package": "tar",
-    "domain": "app",
-    "vulnerableVersions": "<=7.5.18",
-    "versions": ["6.2.1"],
-    "dependents": ["node-gyp@npm:9.4.0"],
-    "rationale": "The observed tar 6.2.1 production path is exactly node-gyp 9.4.0 native build tooling; no fixed tar 6 release exists, and forcing tar 7 across this pinned consumer is not compatibility-safe.",
-    "expiry": "2026-11-01"
-  }
-]
+[]
