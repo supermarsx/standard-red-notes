@@ -26,6 +26,7 @@ const COLLABORATION_HKDF_SALT = 'Standard Red Notes encrypted collaboration room
 const COLLABORATION_PROTOCOL_VERSION = 2
 const YJS_CHUNK_PLAINTEXT_BYTES = 128 * 1024
 const MAX_YJS_TRANSFER_BYTES = 4 * 1024 * 1024
+const PEER_FLUSH_TIMEOUT_MS = 10_000
 
 let failures = 0
 const check = (name, condition) => {
@@ -244,8 +245,26 @@ class EncryptedPeer {
   }
 
   async flush() {
+    const deadline = Date.now() + PEER_FLUSH_TIMEOUT_MS
     while (this.pending.size > 0) {
-      await Promise.all([...this.pending])
+      const remaining = deadline - Date.now()
+      if (remaining <= 0) {
+        throw new Error(`${this.userUuid} pending encrypted work did not settle`)
+      }
+      let timeout
+      try {
+        await Promise.race([
+          Promise.all([...this.pending]),
+          new Promise((_, reject) => {
+            timeout = setTimeout(
+              () => reject(new Error(`${this.userUuid} pending encrypted work timed out`)),
+              remaining,
+            )
+          }),
+        ])
+      } finally {
+        clearTimeout(timeout)
+      }
     }
   }
 
@@ -397,62 +416,73 @@ async function main() {
   const keyScope = 'shared-vault:e2e-vault'
   const peerA = new EncryptedPeer(`yjs-a-${Date.now()}`, room, await deriveRoomKey(secret, keyScope, room))
   const peerB = new EncryptedPeer(`yjs-b-${Date.now()}`, room, await deriveRoomKey(secret, keyScope, room))
+  try {
+    console.log('phase: initial encrypted convergence')
+    await peerA.connect('session-a-1')
+    peerA.doc.getText('content').insert(0, 'Alice was here. ')
+    await settle(peerA)
+    await peerB.connect('session-b-1')
+    await settle(peerA, peerB)
+    check('late joiner converged to existing content', peerB.doc.getText('content').toString() === 'Alice was here. ')
 
-  await peerA.connect('session-a-1')
-  peerA.doc.getText('content').insert(0, 'Alice was here. ')
-  await settle(peerA)
-  await peerB.connect('session-b-1')
-  await settle(peerA, peerB)
-  check('late joiner converged to existing content', peerB.doc.getText('content').toString() === 'Alice was here. ')
+    console.log('phase: concurrent online edits')
+    peerA.doc.getText('content').insert(peerA.doc.getText('content').length, '[A2]')
+    peerB.doc.getText('content').insert(0, '[B1]')
+    await settle(peerA, peerB)
+    let textA = peerA.doc.getText('content').toString()
+    let textB = peerB.doc.getText('content').toString()
+    check('concurrent online edits converge', textA === textB)
+    check(
+      'online merge contains every edit',
+      textA.includes('Alice was here.') && textA.includes('[A2]') && textA.includes('[B1]'),
+    )
 
-  peerA.doc.getText('content').insert(peerA.doc.getText('content').length, '[A2]')
-  peerB.doc.getText('content').insert(0, '[B1]')
-  await settle(peerA, peerB)
-  let textA = peerA.doc.getText('content').toString()
-  let textB = peerB.doc.getText('content').toString()
-  check('concurrent online edits converge', textA === textB)
-  check(
-    'online merge contains every edit',
-    textA.includes('Alice was here.') && textA.includes('[A2]') && textA.includes('[B1]'),
-  )
+    console.log('phase: encrypted chunk transfer')
+    const largeBody = Array.from({ length: 700_000 }, (_, index) => String.fromCharCode(33 + (index % 80))).join('')
+    peerA.doc.getText('large-content').insert(0, largeBody)
+    await settle(peerA, peerB)
+    check(
+      'state larger than the legacy 512 KiB frame cap converges through encrypted chunks',
+      peerB.doc.getText('large-content').toString() === largeBody,
+    )
 
-  const largeBody = Array.from({ length: 700_000 }, (_, index) => String.fromCharCode(33 + (index % 80))).join('')
-  peerA.doc.getText('large-content').insert(0, largeBody)
-  await settle(peerA, peerB)
-  check(
-    'state larger than the legacy 512 KiB frame cap converges through encrypted chunks',
-    peerB.doc.getText('large-content').toString() === largeBody,
-  )
+    console.log('phase: offline edits and reconnect')
+    await Promise.all([peerA.disconnect(), peerB.disconnect()])
+    peerA.doc.getText('content').insert(peerA.doc.getText('content').length, '[A-offline]')
+    peerB.doc.getText('content').insert(0, '[B-offline]')
+    check(
+      'offline edits remain local before reconnect',
+      peerA.doc.getText('content').toString() !== peerB.doc.getText('content').toString(),
+    )
 
-  await Promise.all([peerA.disconnect(), peerB.disconnect()])
-  peerA.doc.getText('content').insert(peerA.doc.getText('content').length, '[A-offline]')
-  peerB.doc.getText('content').insert(0, '[B-offline]')
-  check(
-    'offline edits remain local before reconnect',
-    peerA.doc.getText('content').toString() !== peerB.doc.getText('content').toString(),
-  )
+    await Promise.all([peerA.connect('session-a-2'), peerB.connect('session-b-2')])
+    await settle(peerA, peerB)
+    textA = peerA.doc.getText('content').toString()
+    textB = peerB.doc.getText('content').toString()
+    check('reconnected editors converge', textA === textB)
+    check(
+      'reconnect merge preserves both offline edits',
+      textA.includes('[A-offline]') && textA.includes('[B-offline]'),
+    )
 
-  await Promise.all([peerA.connect('session-a-2'), peerB.connect('session-b-2')])
-  await settle(peerA, peerB)
-  textA = peerA.doc.getText('content').toString()
-  textB = peerB.doc.getText('content').toString()
-  check('reconnected editors converge', textA === textB)
-  check('reconnect merge preserves both offline edits', textA.includes('[A-offline]') && textA.includes('[B-offline]'))
+    const wirePayloads = [...peerA.seenCiphertexts, ...peerB.seenCiphertexts]
+    const plaintextLeaked = wirePayloads.some((payload) => {
+      try {
+        const decoded = Buffer.from(payload, 'base64').toString('utf8')
+        return decoded.includes('Alice was here') || decoded.includes('offline')
+      } catch {
+        return false
+      }
+    })
+    check('wire payloads are ciphertext, never note plaintext', wirePayloads.length > 0 && !plaintextLeaked)
 
-  const wirePayloads = [...peerA.seenCiphertexts, ...peerB.seenCiphertexts]
-  const plaintextLeaked = wirePayloads.some((payload) => {
-    try {
-      const decoded = Buffer.from(payload, 'base64').toString('utf8')
-      return decoded.includes('Alice was here') || decoded.includes('offline')
-    } catch {
-      return false
-    }
-  })
-  check('wire payloads are ciphertext, never note plaintext', wirePayloads.length > 0 && !plaintextLeaked)
-
-  await Promise.all([peerA.disconnect(), peerB.disconnect()])
-  console.log(failures === 0 ? '\nE2E PASSED' : `\nE2E FAILED (${failures})`)
-  if (failures > 0) process.exitCode = 1
+    console.log(failures === 0 ? '\nE2E PASSED' : `\nE2E FAILED (${failures})`)
+    if (failures > 0) process.exitCode = 1
+  } finally {
+    await Promise.allSettled([peerA.disconnect(), peerB.disconnect()])
+    peerA.doc.destroy()
+    peerB.doc.destroy()
+  }
 }
 
 main().catch((error) => {
