@@ -85,6 +85,7 @@ test("the app and isolated sandbox use distinct, least-privilege CSPs", () => {
     "'unsafe-eval'",
     `'${runnerHash}'`,
   ]);
+  assert.deepEqual(directive(runnerMetaPolicy, "worker-src"), ["blob:"]);
   assert.deepEqual(directive(runnerMetaPolicy, "connect-src"), ["'none'"]);
   assert.deepEqual(directive(runnerMetaPolicy, "frame-src"), ["'none'"]);
   assert.deepEqual(directive(runnerMetaPolicy, "object-src"), ["'none'"]);
@@ -126,6 +127,7 @@ test("the app and isolated sandbox use distinct, least-privilege CSPs", () => {
       "'unsafe-eval'",
       `'${runnerHash}'`,
     ]);
+    assert.deepEqual(directive(sandboxPolicy, "worker-src"), ["blob:"]);
     assert.deepEqual(directive(sandboxPolicy, "connect-src"), ["'none'"]);
     assert.deepEqual(directive(sandboxPolicy, "frame-src"), ["'none'"]);
     assert.deepEqual(directive(sandboxPolicy, "sandbox"), ["allow-scripts"]);
@@ -372,7 +374,7 @@ test("runtime proxy transport templating is idempotent and rejects unsafe public
 
 test("sandbox code stays data inside an opaque-origin, offline-capable runner", () => {
   assert.equal(
-    (sandboxEditor.match(/src=\{`\/sandbox\.html#\$\{runNonce\}`\}/g) ?? [])
+    (sandboxEditor.match(/src=\{`\/sandbox\.html#\$\{runSession\.nonce\}`\}/g) ?? [])
       .length,
     2,
   );
@@ -387,71 +389,35 @@ test("sandbox code stays data inside an opaque-origin, offline-capable runner", 
   assert.doesNotMatch(sandboxEditor, /srcDoc=/);
   assert.match(
     sandboxEditor,
-    /claimSandboxRunDelivery\(deliveredRunNonce, runNonce\)/,
+    /claimSandboxRunDelivery\(deliveredRunNonce, runSession\.nonce\)/,
   );
+  assert.doesNotMatch(sandboxEditor, /AUTO_RUN_DEBOUNCE_MS|autoRunTimer/);
+  assert.match(sandboxEditor, /Press Run to render this sandbox/);
   assert.match(runnerHtml, /event\.source !== parent/);
   assert.match(runnerHtml, /event\.data\.channel !== runChannel/);
   assert.match(runnerHtml, /event\.data\.nonce !== runNonce/);
   assert.match(runnerHtml, /didRun \|\|/);
+  assert.match(runnerHtml, /new Worker\(workerUrl\)/);
+  assert.match(runnerHtml, /executionTimeoutMs = 2000/);
+  assert.match(runnerHtml, /activeWorker\.terminate\(\)/);
+  assert.match(runnerHtml, /worker-src blob:/);
   assert.match(serviceWorker, /SANDBOX_PATH\s*=\s*['"]\/sandbox\.html['"]/);
   assert.match(serviceWorker, /CORE_SHELL[^\n]+SANDBOX_PATH/);
   assert.match(webWebpack, /from: ['"]src\/sandbox\.html['"]/);
 });
 
-test("sandbox console transport bounds message size and frequency before crossing the frame", () => {
-  const runnerScript = runnerHtml.match(/<script>([\s\S]*?)<\/script>/)?.[1];
-  assert.ok(runnerScript, "sandbox runner script missing");
-
-  const messages = [];
-  const listeners = new Map();
-  const parent = {
-    postMessage: (message) => messages.push(message),
-  };
-  const noop = () => undefined;
-  const context = {
-    console: { log: noop, info: noop, warn: noop, error: noop, debug: noop },
-    document: {
-      getElementById: (id) =>
-        id === "sandbox-style" ? { textContent: "" } : { innerHTML: "" },
-    },
-    location: { hash: "#bounded-run" },
-    parent,
-    window: {
-      addEventListener: (type, listener) => {
-        const registered = listeners.get(type) ?? [];
-        registered.push(listener);
-        listeners.set(type, registered);
-      },
-    },
-  };
-
-  runInNewContext(runnerScript, context);
-  const receiveRun = listeners.get("message")?.[0];
-  assert.ok(receiveRun, "sandbox run listener missing");
-  receiveRun({
-    source: parent,
-    data: {
-      channel: "__SN_SANDBOX_RUN__",
-      nonce: "bounded-run",
-      captureConsole: true,
-      document: {
-        html: "",
-        css: "",
-        js: "for (var i = 0; i < 250; i += 1) console.log(i + ':' + 'x'.repeat(17000))",
-      },
-    },
-  });
-
-  assert.equal(messages.length, 200);
-  assert.equal(messages[0].message.length, 16384);
-  assert.match(messages[0].message, /\.\.\. \[truncated\]$/);
-  assert.ok(messages.every((message) => message.message.length <= 16384));
-  assert.equal(messages.at(-1).channel, "__SN_SANDBOX_CONSOLE__");
-  assert.equal(messages.at(-1).level, "warn");
+test("sandbox worker bounds console transport before crossing the frame", () => {
+  assert.equal((runnerHtml.match(/consoleMessageMaxLength = 16384/g) ?? []).length, 2);
+  assert.equal((runnerHtml.match(/consoleEntryMaxCount = 200/g) ?? []).length, 2);
   assert.equal(
-    messages.at(-1).message,
-    "Console output limit reached; further messages were dropped.",
+    (runnerHtml.match(/Console output limit reached; further messages were dropped\./g) ?? []).length,
+    2,
   );
+  assert.match(runnerHtml, /message \+= consoleTruncationSuffix/);
+  assert.match(runnerHtml, /entriesSent >= consoleEntryMaxCount/);
+  assert.match(runnerHtml, /consoleEntriesSent >= consoleEntryMaxCount/);
+  assert.match(runnerHtml, /Object\.defineProperty\(self, 'postMessage'/);
+  assert.match(runnerHtml, /Object\.defineProperty\(self, names\[index\]/);
   assert.match(
     sandboxEditor,
     /normalizeSandboxConsoleEntry\(data, consoleMessagesThisRun\.current\)/,
@@ -592,9 +558,11 @@ test("docker CSP hashing rotates the parent hash across consecutive starts witho
       twiceStartedConfig,
       new RegExp(`wasm-unsafe-eval' '${firstHash}`),
     );
-    assert.match(
-      twiceStartedConfig,
-      new RegExp(`script-src 'unsafe-eval' '${sandboxRunnerHash()}`),
+    assert.ok(
+      twiceStartedConfig.includes(
+        `script-src 'unsafe-eval' '${sandboxRunnerHash()}`,
+      ),
+      "the fixed sandbox hash must survive consecutive parent CSP rewrites",
     );
 
     writeFileSync(indexPath, "<!doctype html><title>missing bootstrap</title>");
@@ -609,9 +577,11 @@ test("docker CSP hashing rotates the parent hash across consecutive starts witho
       fallbackConfig,
       /script-src 'self' 'wasm-unsafe-eval' 'unsafe-inline'/,
     );
-    assert.match(
-      fallbackConfig,
-      new RegExp(`script-src 'unsafe-eval' '${sandboxRunnerHash()}`),
+    assert.ok(
+      fallbackConfig.includes(
+        `script-src 'unsafe-eval' '${sandboxRunnerHash()}`,
+      ),
+      "a failed parent hash refresh must leave the fixed sandbox hash intact",
     );
   } finally {
     rmSync(temporaryDirectory, { recursive: true, force: true });

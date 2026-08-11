@@ -381,7 +381,7 @@ server {
   }
 
   location = /sandbox.html {
-    add_header Content-Security-Policy "default-src 'none'; script-src 'unsafe-eval' 'sha256-xvRgiwPvsuzmKsrLtNr6JgssmYZDeeQ3B3pfnR4yZa8='; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; frame-src 'none'; frame-ancestors 'self'; base-uri 'none'; form-action 'none'; object-src 'none'; sandbox allow-scripts" always;
+    add_header Content-Security-Policy "default-src 'none'; script-src 'unsafe-eval' 'sha256-lNmpADSkK6aNI3Zb1YLDMZfnTJywc53UKGRf0B3evz4='; worker-src blob:; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; frame-src 'none'; frame-ancestors 'self'; base-uri 'none'; form-action 'none'; object-src 'none'; sandbox allow-scripts" always;
     try_files /sandbox.html =404;
   }
 }
