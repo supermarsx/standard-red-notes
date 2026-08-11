@@ -81,6 +81,32 @@ uuid: ${note.uuid}
 ${content}
 `
 
+const PDF_SIGNATURE = '%PDF-'
+
+const readBlobAsArrayBuffer = (blob: Blob): Promise<ArrayBuffer> =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onerror = () => reject(reader.error ?? new Error('Could not read generated PDF'))
+    reader.onload = () => {
+      if (reader.result instanceof ArrayBuffer) {
+        resolve(reader.result)
+      } else {
+        reject(new Error('Could not read generated PDF'))
+      }
+    }
+    reader.readAsArrayBuffer(blob)
+  })
+
+/** Reject corrupt/HTML output before it is downloaded with a misleading .pdf suffix. */
+export const validatePDFBlob = async (blob: Blob): Promise<Blob> => {
+  const signatureBytes = new Uint8Array(await readBlobAsArrayBuffer(blob.slice(0, PDF_SIGNATURE.length)))
+  const signature = String.fromCharCode(...signatureBytes)
+  if (signature !== PDF_SIGNATURE) {
+    throw new Error('Generated PDF did not contain a valid PDF signature')
+  }
+  return blob.type === 'application/pdf' ? blob : blob.slice(0, blob.size, 'application/pdf')
+}
+
 export const getNoteBlob = async (
   application: WebApplication,
   note: SNNote,
@@ -143,9 +169,25 @@ export const getNoteBlob = async (
       break
   }
   if (note.noteType === NoteType.Super) {
+    if (format === 'pdf') {
+      const pdf = await headlessSuperConverter.convertSuperStringToPDFBlob(noteText, {
+        embedBehavior: superEmbedBehavior,
+        getFileItem,
+        getFileBase64,
+        pdf: {
+          pageSize: application.getPreference(
+            PrefKey.SuperNoteExportPDFPageSize,
+            PrefDefaults[PrefKey.SuperNoteExportPDFPageSize],
+          ),
+          pageLayout: pageLayoutOptions,
+        },
+      })
+      return validatePDFBlob(pdf)
+    }
+
     const content = await headlessSuperConverter.convertSuperStringToOtherFormat(
       noteText,
-      format as 'txt' | 'md' | 'html' | 'json' | 'pdf',
+      format as 'txt' | 'md' | 'html' | 'json',
       {
         embedBehavior: superEmbedBehavior,
         getFileItem,
@@ -165,15 +207,11 @@ export const getNoteBlob = async (
         PrefKey.SuperNoteExportUseMDFrontmatter,
         PrefDefaults[PrefKey.SuperNoteExportUseMDFrontmatter],
       )
-    // result is a data url string if format is pdf
     const result =
       format === 'html' ? superHTML(note, content) : useMDFrontmatter ? superMarkdown(note, content) : content
-    const blob =
-      format === 'pdf'
-        ? await fetch(result).then((res) => res.blob())
-        : new Blob([result], {
-            type,
-          })
+    const blob = new Blob([result], {
+      type,
+    })
     return blob
   }
   const blob = new Blob([noteText], {

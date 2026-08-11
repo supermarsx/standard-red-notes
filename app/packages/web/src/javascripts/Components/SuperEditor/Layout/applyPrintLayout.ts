@@ -5,8 +5,8 @@
  *
  *   - sets `@page { size: <size> <orientation>; margin: <margin> }`, overriding
  *     the static `@page { margin: 1.5cm }` baked into `_print.scss`;
- *   - applies `column-count` (+ a column gap) to `#editor-content` so the note
- *     content flows into the requested number of columns when printed;
+ *   - applies `column-count` (+ a column gap) to the isolated print body so the
+ *     note content flows into the requested number of columns when printed;
  *   - turns the page-break decorator node into a hard `break-after: page`.
  *
  * The injected style id is fixed so a previous (un-removed) style is always
@@ -22,18 +22,21 @@
  * DocxGenerator/OdtGenerator/PDFWorker); steer users there for real running
  * headers/footers and page numbers.
  */
-import { ElementIds } from '@/Constants/ElementIDs'
 import { loadNoteLayout, resolveMargin, resolvePageSize } from './layoutSettings'
 
 /** Stable id of the injected <style>, and the class the page-break node carries. */
 export const PRINT_LAYOUT_STYLE_ID = 'srn-print-layout-style'
 export const PAGE_BREAK_CLASS = 'srn-page-break'
+export const PRINT_BODY_ID = 'srn-print-body'
 
 function buildPrintLayoutCss(noteUuid: string | undefined): string {
   const layout = loadNoteLayout(noteUuid)
   const size = resolvePageSize(layout)
   const margin = resolveMargin(layout)
-  const editorContent = `#${ElementIds.EditorContent}`
+  // `printActiveNote` renders an isolated, sanitized snapshot. Target that
+  // snapshot rather than the live editor tree so layout settings cannot depend
+  // on app chrome remaining visible during printing.
+  const editorContent = `#${PRINT_BODY_ID}`
 
   // Only emit the column rule when the user actually wants multiple columns so
   // single-column notes keep the default flow exactly.

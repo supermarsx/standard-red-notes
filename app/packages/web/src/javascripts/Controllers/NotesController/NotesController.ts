@@ -1099,7 +1099,7 @@ export class NotesController
         return
       }
       const { blob, fileName } = result
-      void downloadOrShareBlobBasedOnPlatform({
+      await downloadOrShareBlobBasedOnPlatform({
         archiveService: this.application.archiveService,
         platform: this.application.platform,
         mobileDevice: this.application.mobileDevice,

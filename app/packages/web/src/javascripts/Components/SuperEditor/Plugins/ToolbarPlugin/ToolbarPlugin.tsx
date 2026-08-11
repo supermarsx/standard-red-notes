@@ -217,6 +217,7 @@ import InsertSectionsBar from './InsertSectionsBar'
 import TypographyStyleEditorModal from './TypographyStyleEditorModal'
 import { GalleryBlockDescriptor, applyTypographyBlockToSelection, orderGalleryBlocks } from './typographyGallery'
 import { resolveActiveTypographyProfile } from '@/Utils/typographyProfiles'
+import { printActiveNote } from '@/Components/NoteView/Print/PrintNote'
 
 const TOGGLE_LINK_AND_EDIT_COMMAND = createCommand<string | null>('TOGGLE_LINK_AND_EDIT_COMMAND')
 
@@ -510,6 +511,8 @@ const TOOLBAR_UTILITY_BUTTON_IDS = [
   ToolbarButtonId.Divider,
   ToolbarButtonId.Undo,
   ToolbarButtonId.Redo,
+  ToolbarButtonId.Divider,
+  ToolbarButtonId.Print,
 ] as const
 
 const TOOLBAR_UTILITY_GROUP_IDS: ReadonlySet<ToolbarGroupId> = new Set([
@@ -1958,6 +1961,9 @@ const ToolbarPlugin = () => {
         </StyledTooltip>
       </div>
     ) : null,
+    [ToolbarButtonId.Print]: canShowAllItems ? (
+      <ToolbarButton name="Print" iconName="print" onSelect={() => printActiveNote({ noteUuid: activeNoteUuid })} />
+    ) : null,
     [ToolbarButtonId.BlockStyle]: (
       <ToolbarButton
         name={t('formattingOptions')}
@@ -2577,6 +2583,11 @@ const ToolbarPlugin = () => {
       group.id === ToolbarGroupId.Insert ||
       group.buttons.some((button) => buttonRenderers[button.id] != null),
   )
+  const visibleUtilityButtonIds = new Set(
+    resolvedGroups
+      .filter((group) => TOOLBAR_UTILITY_GROUP_IDS.has(group.id))
+      .flatMap((group) => group.buttons.map((button) => button.id)),
+  )
 
   // Office-ribbon "super group" tabs: partition the resolved groups into top-level
   // tabs (Home / Insert / AI / Tools) and render only the active tab's groups, so
@@ -3074,9 +3085,21 @@ const ToolbarPlugin = () => {
               store={utilityToolbarStore}
               aria-label="Clipboard and history tools"
             >
-              {TOOLBAR_UTILITY_BUTTON_IDS.map((buttonId) => {
+              {TOOLBAR_UTILITY_BUTTON_IDS.map((buttonId, index) => {
                 if (buttonId === ToolbarButtonId.Divider) {
-                  return <ToolbarSeparator key="clipboard-history-divider" />
+                  const leftHasVisibleButton = TOOLBAR_UTILITY_BUTTON_IDS.slice(0, index).some(
+                    (id) => id !== ToolbarButtonId.Divider && visibleUtilityButtonIds.has(id),
+                  )
+                  const rightHasVisibleButton = TOOLBAR_UTILITY_BUTTON_IDS.slice(index + 1).some(
+                    (id) => id !== ToolbarButtonId.Divider && visibleUtilityButtonIds.has(id),
+                  )
+                  if (!leftHasVisibleButton || !rightHasVisibleButton) {
+                    return null
+                  }
+                  return <ToolbarSeparator key={`utility-divider-${index}`} />
+                }
+                if (!visibleUtilityButtonIds.has(buttonId)) {
+                  return null
                 }
                 return <Fragment key={buttonId}>{buttonRenderers[buttonId]}</Fragment>
               })}

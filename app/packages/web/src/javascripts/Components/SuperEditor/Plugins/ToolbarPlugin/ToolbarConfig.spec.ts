@@ -155,12 +155,23 @@ describe('Clipboard/history utility row (static source assertion)', () => {
   // filtered out of the tabbed Home groups so they do not render twice.
   const source = readFileSync(join(__dirname, 'ToolbarPlugin.tsx'), 'utf8')
 
-  it('renders Cut, Copy, Paste, divider, Undo, Redo in that utility-row order', () => {
+  it('renders Cut, Copy, Paste, divider, Undo, Redo, divider, Print in that utility-row order', () => {
     const utilityIds = source.match(/const TOOLBAR_UTILITY_BUTTON_IDS = \[([\s\S]*?)\] as const/)
     expect(utilityIds).toBeTruthy()
     expect(utilityIds![1]).toMatch(
-      /ToolbarButtonId\.Cut[\s\S]*ToolbarButtonId\.Copy[\s\S]*ToolbarButtonId\.Paste[\s\S]*ToolbarButtonId\.Divider[\s\S]*ToolbarButtonId\.Undo[\s\S]*ToolbarButtonId\.Redo/,
+      /ToolbarButtonId\.Cut[\s\S]*ToolbarButtonId\.Copy[\s\S]*ToolbarButtonId\.Paste[\s\S]*ToolbarButtonId\.Divider[\s\S]*ToolbarButtonId\.Undo[\s\S]*ToolbarButtonId\.Redo[\s\S]*ToolbarButtonId\.Divider[\s\S]*ToolbarButtonId\.Print/,
     )
+  })
+
+  it('keeps Print as a stable customizable History button and wires its renderer to the shared print path', () => {
+    const history = DEFAULT_TOOLBAR_GROUPS.find((group) => group.id === ToolbarGroupId.History)
+    expect(history?.buttons.map((button) => button.id)).toEqual([
+      ToolbarButtonId.Undo,
+      ToolbarButtonId.Redo,
+      ToolbarButtonId.Print,
+    ])
+    expect(source).toContain('[ToolbarButtonId.Print]:')
+    expect(source).toContain('printActiveNote({ noteUuid: activeNoteUuid })')
   })
 
   it('places the utility row before the ribbon tabs and gives it its own toolbar store', () => {
