@@ -295,14 +295,20 @@ const STRICT_BOOLEAN = ['true', 'false']
  * are refused by name lookup.
  */
 export const CLI_MANAGEABLE_FLAGS: AdminFlagSpec[] = [
-  { name: 'AI_ENABLED', description: 'AI assistant access for this user' },
+  { name: 'AI_ENABLED', description: 'AI assistant access for this user', allowedValues: STRICT_BOOLEAN },
   { name: 'AI_REQUEST_LIMIT', description: 'Per-user AI request limit' },
+  { name: 'COLLABORATION_ENABLED', description: 'Shared-vault collaboration access', allowedValues: STRICT_BOOLEAN },
+  { name: 'LIVE_SYNC_ENABLED', description: 'Realtime cross-device sync access', allowedValues: STRICT_BOOLEAN },
   {
     name: 'EMAIL_BACKUP_FREQUENCY',
     description: 'Scheduled email-backup cadence',
     allowedValues: ['disabled', 'daily', 'weekly', 'monthly'],
   },
-  { name: 'EMAIL_REMINDERS_ENABLED', description: 'Per-account email-reminder opt-in' },
+  {
+    name: 'EMAIL_REMINDERS_ENABLED',
+    description: 'Per-account email-reminder opt-in',
+    allowedValues: STRICT_BOOLEAN,
+  },
   { name: 'OCR_SERVER_ALLOWED', description: 'Server-side OCR opt-in (leaves E2EE)', allowedValues: STRICT_BOOLEAN },
   {
     name: 'NEXTCLOUD_BACKUP_ALLOWED',
@@ -342,7 +348,21 @@ export function validateFlagValue(
   spec: AdminFlagSpec,
   value: string | null,
 ): { ok: true } | { ok: false; error: string } {
-  if (value === null || spec.allowedValues === undefined || spec.allowedValues.includes(value)) {
+  if (value === null) {
+    return { ok: true }
+  }
+
+  if (spec.name === 'AI_REQUEST_LIMIT') {
+    if (/^[1-9]\d*$/.test(value) && Number.isSafeInteger(Number(value))) {
+      return { ok: true }
+    }
+    return {
+      ok: false,
+      error: `Invalid value '${value}' for ${spec.name}. Use a positive integer or clear the value.`,
+    }
+  }
+
+  if (spec.allowedValues === undefined || spec.allowedValues.includes(value)) {
     return { ok: true }
   }
 

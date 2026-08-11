@@ -14,7 +14,7 @@ import { SharedVaultUserRepositoryInterface } from '../../SharedVault/SharedVaul
 import { GetSubscriptionSetting } from '../GetSubscriptionSetting/GetSubscriptionSetting'
 import { GetRegularSubscriptionForUser } from '../GetRegularSubscriptionForUser/GetRegularSubscriptionForUser'
 import { GetActiveSessionsForUser } from '../GetActiveSessionsForUser'
-import { SettingRepositoryInterface } from '../../Setting/SettingRepositoryInterface'
+import { GetSetting } from '../GetSetting/GetSetting'
 
 export class CreateCrossServiceToken implements UseCaseInterface<string> {
   constructor(
@@ -30,7 +30,7 @@ export class CreateCrossServiceToken implements UseCaseInterface<string> {
     private getActiveSessions: GetActiveSessionsForUser,
     private applicationVersionThresholdForTokenVersion2: string | undefined,
     private applicationVersionThresholdForTokenVersion3: string | undefined,
-    private settingRepository: SettingRepositoryInterface,
+    private getSetting: GetSetting,
     // Standard Red Notes: RBAC group repository so tokens carry GROUP-CONFERRED
     // roles too (a user's effective roles are direct ∪ group roles). Optional so
     // existing tests that construct this use case with the original arity keep
@@ -45,11 +45,18 @@ export class CreateCrossServiceToken implements UseCaseInterface<string> {
    * token-mint time so the booleans ride along in the cross-service token.
    */
   private async readGatingFlag(userUuid: string, settingName: string): Promise<boolean> {
-    const setting = await this.settingRepository.findLastByNameAndUserUuid(settingName, userUuid)
-    if (setting === null) {
-      return true
+    try {
+      const setting = await this.readDecryptedSetting(userUuid, settingName)
+      if (!setting.found) {
+        return true
+      }
+      return setting.value !== 'false'
+    } catch {
+      // Authorization input that cannot be authenticated/decrypted is not an
+      // absent default. Fail closed so corrupted legacy AI ciphertext cannot
+      // spend an operator credential or restore collaboration/live-sync access.
+      return false
     }
-    return (setting.props.value as string | null) !== 'false'
   }
 
   /**
@@ -59,11 +66,12 @@ export class CreateCrossServiceToken implements UseCaseInterface<string> {
    * WORKFLOWS_ENABLED — the n8n workflows feature).
    */
   private async readOptInGatingFlag(userUuid: string, settingName: string): Promise<boolean> {
-    const setting = await this.settingRepository.findLastByNameAndUserUuid(settingName, userUuid)
-    if (setting === null) {
+    try {
+      const setting = await this.readDecryptedSetting(userUuid, settingName)
+      return setting.found && setting.value === 'true'
+    } catch {
       return false
     }
-    return (setting.props.value as string | null) === 'true'
   }
 
   /**
@@ -72,15 +80,36 @@ export class CreateCrossServiceToken implements UseCaseInterface<string> {
    * the api-gateway falls back to the global cap.
    */
   private async readNumericSetting(userUuid: string, settingName: string): Promise<number | undefined> {
-    const setting = await this.settingRepository.findLastByNameAndUserUuid(settingName, userUuid)
-    if (setting === null) {
+    let setting: { found: boolean; value: string | null }
+    try {
+      setting = await this.readDecryptedSetting(userUuid, settingName)
+    } catch {
       return undefined
     }
-    const parsed = parseInt(`${setting.props.value as string | null}`, 10)
-    if (Number.isNaN(parsed) || parsed <= 0) {
+    if (!setting.found || setting.value === null || !/^[1-9]\d*$/.test(setting.value)) {
+      return undefined
+    }
+    const parsed = Number(setting.value)
+    if (!Number.isSafeInteger(parsed)) {
       return undefined
     }
     return parsed
+  }
+
+  private async readDecryptedSetting(
+    userUuid: string,
+    settingName: string,
+  ): Promise<{ found: boolean; value: string | null }> {
+    const result = await this.getSetting.execute({
+      userUuid,
+      settingName,
+      allowSensitiveRetrieval: true,
+      decrypted: true,
+    })
+    if (result.isFailed()) {
+      return { found: false, value: null }
+    }
+    return { found: true, value: result.getValue().decryptedValue ?? null }
   }
 
   async execute(dto: CreateCrossServiceTokenDTO): Promise<Result<string>> {

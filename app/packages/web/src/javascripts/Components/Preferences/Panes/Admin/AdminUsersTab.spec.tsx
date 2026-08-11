@@ -48,6 +48,7 @@ const makeApplication = () => ({
     adminListUsers: jest.fn().mockResolvedValue({ data: { users: [], total: 0 } }),
     adminGetAvailableRoles: jest.fn().mockResolvedValue({ data: { roleNames: [] } }),
     adminGetUserFeatureFlags: jest.fn().mockResolvedValue({ data: { flags: {}, storage: null } }),
+    adminSetUserFeatureFlag: jest.fn().mockResolvedValue({ data: { success: true } }),
     adminGetUserBanStatus: jest.fn().mockResolvedValue({ data: { banned: false } }),
     adminGetUserSuspensionStatus: jest.fn().mockResolvedValue({ data: { suspended: false } }),
     adminGetUserEffectivePermissions: jest.fn().mockResolvedValue({
@@ -107,6 +108,17 @@ const setInputValue = async (input: HTMLInputElement, value: string) => {
   })
 }
 
+const aiAccessCheckbox = (): HTMLInputElement => {
+  const heading = Array.from(container.querySelectorAll('*')).find(
+    (element) => element.children.length === 0 && element.textContent === 'AI access',
+  )
+  const checkbox = heading?.parentElement?.parentElement?.querySelector<HTMLInputElement>('input[type="checkbox"]')
+  if (!checkbox) {
+    throw new Error('AI access switch was not rendered')
+  }
+  return checkbox
+}
+
 describe('AdminUsersTab — Suspend + Delete sections mount and the Delete gate works', () => {
   it('renders the Suspend section with a Suspend button', async () => {
     const application = makeApplication()
@@ -137,5 +149,48 @@ describe('AdminUsersTab — Suspend + Delete sections mount and the Delete gate 
     // Typing the EXACT email enables it.
     await setInputValue(confirmInput as HTMLInputElement, TARGET_EMAIL)
     expect(buttonWithText('Delete account')?.disabled).toBe(false)
+  })
+})
+
+describe('AdminUsersTab — durable AI access control', () => {
+  it('renders an unset AI gate as effectively enabled', async () => {
+    const application = makeApplication()
+    await renderTab(application)
+
+    expect(aiAccessCheckbox().checked).toBe(true)
+  })
+
+  it('locks the switch during persistence and confirms the canonical server readback', async () => {
+    let finishWrite: ((value: { data: { success: boolean } }) => void) | undefined
+    const pendingWrite = new Promise<{ data: { success: boolean } }>((resolve) => {
+      finishWrite = resolve
+    })
+    const application = makeApplication()
+    application.legacyApi.adminSetUserFeatureFlag.mockReturnValueOnce(pendingWrite)
+    application.legacyApi.adminGetUserFeatureFlags
+      .mockResolvedValueOnce({ data: { flags: {}, storage: null } })
+      .mockResolvedValueOnce({ data: { flags: { AI_ENABLED: 'false' }, storage: null } })
+    await renderTab(application)
+
+    await act(async () => {
+      aiAccessCheckbox().click()
+      await Promise.resolve()
+    })
+
+    expect(application.legacyApi.adminSetUserFeatureFlag).toHaveBeenCalledWith(TARGET_UUID, 'AI_ENABLED', 'false')
+    expect(aiAccessCheckbox().disabled).toBe(true)
+    aiAccessCheckbox().click()
+    expect(application.legacyApi.adminSetUserFeatureFlag).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      finishWrite?.({ data: { success: true } })
+      await pendingWrite
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(application.legacyApi.adminGetUserFeatureFlags).toHaveBeenCalledTimes(2)
+    expect(aiAccessCheckbox().checked).toBe(false)
+    expect(aiAccessCheckbox().disabled).toBe(false)
   })
 })

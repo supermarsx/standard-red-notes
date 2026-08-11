@@ -11,6 +11,13 @@ import { SettingsAssociationServiceInterface } from './SettingsAssociationServic
 @injectable()
 export class SettingsAssociationService implements SettingsAssociationServiceInterface {
   private readonly UNENCRYPTED_SETTINGS = [
+    // Standard Red Notes: administrator-managed feature gates are authorization
+    // inputs, not user secrets. Cross-service token minting must be able to read
+    // their canonical values without mistaking ciphertext for an enabled flag.
+    SettingName.NAMES.AiEnabled,
+    SettingName.NAMES.AiRequestLimit,
+    SettingName.NAMES.CollaborationEnabled,
+    SettingName.NAMES.LiveSyncEnabled,
     SettingName.NAMES.EmailBackupFrequency,
     SettingName.NAMES.EmailBackupLastSent,
     SettingName.NAMES.EmailBackupDeliveryState,
@@ -54,6 +61,10 @@ export class SettingsAssociationService implements SettingsAssociationServiceInt
   ]
 
   private readonly UNSENSITIVE_SETTINGS = [
+    SettingName.NAMES.AiEnabled,
+    SettingName.NAMES.AiRequestLimit,
+    SettingName.NAMES.CollaborationEnabled,
+    SettingName.NAMES.LiveSyncEnabled,
     SettingName.NAMES.DropboxBackupFrequency,
     SettingName.NAMES.GoogleDriveBackupFrequency,
     SettingName.NAMES.OneDriveBackupFrequency,
@@ -109,6 +120,13 @@ export class SettingsAssociationService implements SettingsAssociationServiceInt
   ]
 
   private readonly CLIENT_IMMUTABLE_SETTINGS = [
+    // These gates are controlled by an administrator. Letting the owning client
+    // write or delete them would let it restore access after an administrative
+    // disable (unset means enabled for AI/collaboration/live sync).
+    SettingName.NAMES.AiEnabled,
+    SettingName.NAMES.AiRequestLimit,
+    SettingName.NAMES.CollaborationEnabled,
+    SettingName.NAMES.LiveSyncEnabled,
     SettingName.NAMES.ListedAuthorSecrets,
     SettingName.NAMES.FileUploadBytesLimit,
     SettingName.NAMES.FileUploadBytesUsed,

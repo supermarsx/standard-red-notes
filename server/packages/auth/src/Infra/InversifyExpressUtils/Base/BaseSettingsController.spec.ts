@@ -94,6 +94,13 @@ describe('BaseSettingsController cross-service token cache invalidation', () => 
     } as unknown as Request
 
     await controller.deleteSetting(request, response())
+    expect(doDeleteSetting.execute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userUuid: user.uuid,
+        settingName: SettingName.NAMES.CaldavEnabled,
+        allowClientImmutable: false,
+      }),
+    )
     expect(setHeader).toHaveBeenCalledWith('x-invalidate-cache', user.uuid)
 
     setHeader.mockClear()

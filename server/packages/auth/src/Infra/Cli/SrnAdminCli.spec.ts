@@ -199,10 +199,14 @@ describe('SrnAdminCli helpers', () => {
       expect(validateFlagValue(spec, 'hourly').ok).toBe(false)
     })
 
-    it('should keep free-form flags free-form (mirrors the panel)', () => {
+    it('should require a canonical positive safe integer for the AI request limit', () => {
       const spec = findFlagSpec('AI_REQUEST_LIMIT') as NonNullable<ReturnType<typeof findFlagSpec>>
 
-      expect(validateFlagValue(spec, 'anything').ok).toBe(true)
+      expect(validateFlagValue(spec, '25').ok).toBe(true)
+      expect(validateFlagValue(spec, null).ok).toBe(true)
+      expect(validateFlagValue(spec, 'anything').ok).toBe(false)
+      expect(validateFlagValue(spec, '25junk').ok).toBe(false)
+      expect(validateFlagValue(spec, '0').ok).toBe(false)
     })
 
     it('should mirror every panel-managed setting', () => {
@@ -210,6 +214,8 @@ describe('SrnAdminCli helpers', () => {
       for (const expected of [
         'AI_ENABLED',
         'AI_REQUEST_LIMIT',
+        'COLLABORATION_ENABLED',
+        'LIVE_SYNC_ENABLED',
         'EMAIL_BACKUP_FREQUENCY',
         'EMAIL_REMINDERS_ENABLED',
         'OCR_SERVER_ALLOWED',

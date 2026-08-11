@@ -25,6 +25,7 @@ const Switch = ({
       <VisuallyHidden>
         <Checkbox
           checked={checked}
+          disabled={disabled}
           onChange={(event) => {
             onChange(event.target.checked)
           }}

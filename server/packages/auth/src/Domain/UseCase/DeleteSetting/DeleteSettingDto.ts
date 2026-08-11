@@ -7,4 +7,6 @@ export type DeleteSettingDto = {
   serverPassword?: string
   authTokenVersion?: number
   shouldVerifyUserServerPassword?: boolean
+  /** Trusted server/admin callers may explicitly bypass client mutability. */
+  allowClientImmutable?: boolean
 }

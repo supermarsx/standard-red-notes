@@ -98,6 +98,26 @@ describe('SetSettingValue', () => {
     expect(result.isFailed()).toBe(true)
   })
 
+  it.each([
+    SettingName.NAMES.AiEnabled,
+    SettingName.NAMES.AiRequestLimit,
+    SettingName.NAMES.CollaborationEnabled,
+    SettingName.NAMES.LiveSyncEnabled,
+  ])('refuses an owning client PUT for the administrator gate %s', async (settingName) => {
+    settingsAssociationService.isSettingMutableByClient = jest.fn().mockReturnValue(false)
+
+    const result = await createUseCase().execute({
+      userUuid: '00000000-0000-0000-0000-000000000000',
+      settingName,
+      value: 'true',
+      checkUserPermissions: true,
+    })
+
+    expect(result.isFailed()).toBe(true)
+    expect(settingRepository.insert).not.toHaveBeenCalled()
+    expect(settingRepository.update).not.toHaveBeenCalled()
+  })
+
   it('should return error if user does not have permission to update setting', async () => {
     settingsAssociationService.getPermissionAssociatedWithSetting = jest
       .fn()
@@ -140,6 +160,9 @@ describe('SetSettingValue', () => {
 
     expect(result.isFailed()).toBe(false)
     expect(settingRepository.update).toHaveBeenCalled()
+    expect(setting.props.value).toBe('value')
+    expect(setting.props.serverEncryptionVersion).toBe(EncryptionVersion.Unencrypted)
+    expect(setting.props.sensitive).toBe(false)
   })
 
   it('should create a setting with checking user permissions', async () => {
