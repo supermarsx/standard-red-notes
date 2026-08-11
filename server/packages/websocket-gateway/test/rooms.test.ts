@@ -37,7 +37,7 @@ function fakeLifecycle(): RoomRelayLifecycle {
     reserveEditorLease: vi.fn().mockResolvedValue({ shouldBootstrap: false }),
     activateEditorLease: vi.fn().mockResolvedValue({ shouldBootstrap: false }),
     releaseLease: vi.fn().mockResolvedValue(undefined),
-    claimYjsResponse: vi.fn().mockResolvedValue(false),
+    claimYjsResponse: vi.fn().mockResolvedValue(undefined),
     publish: vi.fn().mockResolvedValue(undefined),
   }
 }
@@ -1199,7 +1199,7 @@ describe('distributed Yjs response claims', () => {
     rooms.join('claim-room', editor, expiresAt, 'editor-lease', 'editor')
     rooms.join('claim-room', commenter, expiresAt, 'comment-lease', 'comment')
     const lifecycle = fakeLifecycle()
-    vi.mocked(lifecycle.claimYjsResponse).mockResolvedValue(true)
+    vi.mocked(lifecycle.claimYjsResponse).mockResolvedValue(expiresAt)
 
     await handleRelayFrame(
       rooms,
@@ -1359,6 +1359,199 @@ describe('distributed Yjs response claims', () => {
       aggregateLifecycle,
     )
     expect(aggregateLifecycle.claimYjsResponse).toHaveBeenCalledTimes(MAX_YJS_RESPONSE_CLAIM_FRAMES_PER_ROOM)
+  })
+
+  it('drops rolling old-client correlated responses without a grant while preserving uncorrelated Yjs', async () => {
+    const rooms = new RoomRegistry(() => 1_000)
+    const oldClient = fakeConn('old-client')
+    const peer = fakeConn('old-client-peer')
+    rooms.join('old-client-room', oldClient, 2_000, 'old-client-lease', 'editor')
+    rooms.join('old-client-room', peer, 2_000, 'peer-lease', 'editor')
+    const lifecycle = fakeLifecycle()
+    const correlated = {
+      t: 'yjs' as const,
+      room: 'old-client-room',
+      payload: 'cached-full-state',
+      stateRequestId: 'unclaimed-state',
+    }
+
+    await expect(handleRelayFrame(rooms, oldClient, correlated, undefined, undefined, lifecycle)).resolves.toBe(0)
+    expect(lifecycle.publish).not.toHaveBeenCalled()
+    expect(peer.sent).not.toContain(JSON.stringify(correlated))
+
+    const incremental = { t: 'yjs' as const, room: 'old-client-room', payload: 'incremental-update' }
+    await expect(handleRelayFrame(rooms, oldClient, incremental, undefined, undefined, lifecycle)).resolves.toBe(1)
+    expect(lifecycle.publish).toHaveBeenCalledWith(incremental)
+    expect(peer.sent).toContain(JSON.stringify(incremental))
+  })
+
+  it('binds a grant to one connection and consumes it on the first exact single-frame response', async () => {
+    const rooms = new RoomRegistry(() => 1_000)
+    const winner = fakeConn('grant-winner')
+    const other = fakeConn('grant-other')
+    const peer = fakeConn('grant-peer')
+    for (const [conn, leaseRequestId] of [
+      [winner, 'winner-lease'],
+      [other, 'other-lease'],
+      [peer, 'peer-lease'],
+    ] as const) {
+      rooms.join('grant-room', conn, 2_000, leaseRequestId, 'editor')
+    }
+    expect(rooms.recordYjsResponseGrant('grant-room', winner, 'state-one', 'winner-lease', 1_500)).toBe(true)
+    const lifecycle = fakeLifecycle()
+    const response = { t: 'yjs' as const, room: 'grant-room', payload: 'full-state', stateRequestId: 'state-one' }
+
+    await handleRelayFrame(rooms, other, response, undefined, undefined, lifecycle)
+    expect(lifecycle.publish).not.toHaveBeenCalled()
+    await expect(handleRelayFrame(rooms, winner, response, undefined, undefined, lifecycle)).resolves.toBe(2)
+    expect(lifecycle.publish).toHaveBeenCalledTimes(1)
+    await handleRelayFrame(rooms, winner, response, undefined, undefined, lifecycle)
+    expect(lifecycle.publish).toHaveBeenCalledTimes(1)
+    expect(peer.sent.filter((message) => message === JSON.stringify(response))).toHaveLength(1)
+  })
+
+  it('binds chunked responses to one transfer shape, rejects duplicates/mismatches, and consumes on completion', async () => {
+    const rooms = new RoomRegistry(() => 1_000)
+    const winner = fakeConn('chunk-grant-winner')
+    const other = fakeConn('chunk-grant-other')
+    const peer = fakeConn('chunk-grant-peer')
+    rooms.join('chunk-grant-room', winner, 2_000, 'winner-lease', 'editor')
+    rooms.join('chunk-grant-room', other, 2_000, 'other-lease', 'editor')
+    rooms.join('chunk-grant-room', peer, 2_000, 'peer-lease', 'editor')
+    expect(rooms.recordYjsResponseGrant('chunk-grant-room', winner, 'chunk-state', 'winner-lease', 1_500)).toBe(true)
+    const lifecycle = fakeLifecycle()
+    const first = {
+      t: 'yjs-chunk' as const,
+      room: 'chunk-grant-room',
+      transferId: 'transfer-one',
+      index: 0,
+      count: 2,
+      totalBytes: YJS_CHUNK_PLAINTEXT_BYTES + 1,
+      payload: 'chunk-zero',
+      stateRequestId: 'chunk-state',
+    }
+    const second = { ...first, index: 1, payload: 'chunk-one' }
+
+    await handleRelayFrame(rooms, other, first, undefined, undefined, lifecycle)
+    // Out-of-order index=count-1 is a valid unique chunk, but it must not
+    // acknowledge/consume the transfer before every index has arrived.
+    await expect(handleRelayFrame(rooms, winner, second, undefined, undefined, lifecycle)).resolves.toBe(2)
+    expect(winner.sent.some((message) => message.includes('"t":"yjs-accepted"'))).toBe(false)
+    await handleRelayFrame(rooms, winner, second, undefined, undefined, lifecycle)
+    await handleRelayFrame(
+      rooms,
+      winner,
+      { ...first, transferId: 'mismatched-transfer' },
+      undefined,
+      undefined,
+      lifecycle,
+    )
+    await expect(handleRelayFrame(rooms, winner, first, undefined, undefined, lifecycle)).resolves.toBe(2)
+    expect(winner.sent).toContain(
+      JSON.stringify({
+        t: 'yjs-accepted',
+        room: 'chunk-grant-room',
+        transferId: 'transfer-one',
+        protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+      }),
+    )
+    await handleRelayFrame(rooms, winner, first, undefined, undefined, lifecycle)
+
+    expect(lifecycle.publish).toHaveBeenCalledTimes(2)
+    expect(lifecycle.publish).toHaveBeenNthCalledWith(1, second)
+    expect(lifecycle.publish).toHaveBeenNthCalledWith(2, first)
+    expect(peer.sent.filter((message) => message.includes('"stateRequestId":"chunk-state"'))).toHaveLength(2)
+  })
+
+  it.each(['single-frame', 'final-chunk'] as const)(
+    'consumes a %s grant before uncertain publish failure and denies the room instead of permitting replay',
+    async (kind) => {
+      const rooms = new RoomRegistry(() => 1_000)
+      const winner = fakeConn(`publish-failure-${kind}`)
+      rooms.join('publish-failure-room', winner, 2_000, 'winner-lease', 'editor')
+      expect(rooms.recordYjsResponseGrant('publish-failure-room', winner, 'failure-state', 'winner-lease', 1_500)).toBe(
+        true,
+      )
+      const lifecycle = fakeLifecycle()
+      const single = {
+        t: 'yjs' as const,
+        room: 'publish-failure-room',
+        payload: 'single-state',
+        stateRequestId: 'failure-state',
+      }
+      const firstChunk = {
+        t: 'yjs-chunk' as const,
+        room: 'publish-failure-room',
+        transferId: 'failure-transfer',
+        index: 0,
+        count: 2,
+        totalBytes: YJS_CHUNK_PLAINTEXT_BYTES + 1,
+        payload: 'first-chunk',
+        stateRequestId: 'failure-state',
+      }
+      const finalChunk = { ...firstChunk, index: 1, payload: 'final-chunk' }
+      if (kind === 'final-chunk') {
+        vi.mocked(lifecycle.publish)
+          .mockResolvedValueOnce(undefined)
+          .mockRejectedValueOnce(new Error('uncertain publish'))
+        await handleRelayFrame(rooms, winner, firstChunk, undefined, undefined, lifecycle)
+      } else {
+        vi.mocked(lifecycle.publish).mockRejectedValueOnce(new Error('uncertain publish'))
+      }
+      const failingFrame = kind === 'final-chunk' ? finalChunk : single
+
+      await handleRelayFrame(rooms, winner, failingFrame, undefined, undefined, lifecycle)
+
+      expect(rooms.isMember('publish-failure-room', winner)).toBe(false)
+      expect(winner.sent).toContain(
+        JSON.stringify({ t: 'room-denied', room: 'publish-failure-room', requestId: 'winner-lease' }),
+      )
+      rooms.join('publish-failure-room', winner, 2_000, 'winner-lease', 'editor')
+      vi.mocked(lifecycle.publish).mockClear()
+      vi.mocked(lifecycle.publish).mockResolvedValue(undefined)
+      await handleRelayFrame(rooms, winner, failingFrame, undefined, undefined, lifecycle)
+      expect(lifecycle.publish).not.toHaveBeenCalled()
+    },
+  )
+
+  it('expires grants and cleans them on exact leave, lease expiry, connection close, and room denial', () => {
+    let now = 1_000
+    const rooms = new RoomRegistry(() => now)
+    const conn = fakeConn('grant-cleanup')
+    const frame = (stateRequestId: string) => ({
+      t: 'yjs' as const,
+      room: 'cleanup-room',
+      payload: 'full-state',
+      stateRequestId,
+    })
+    const join = (expiresAt = now + 1_000) => rooms.join('cleanup-room', conn, expiresAt, 'cleanup-lease', 'editor')
+
+    join()
+    expect(rooms.recordYjsResponseGrant('cleanup-room', conn, 'leave-state', 'cleanup-lease', now + 500)).toBe(true)
+    rooms.leave('cleanup-room', conn, 'cleanup-lease')
+    join()
+    expect(rooms.authorizeYjsResponseFrame('cleanup-room', conn, frame('leave-state'))).toBe('denied')
+
+    expect(rooms.recordYjsResponseGrant('cleanup-room', conn, 'close-state', 'cleanup-lease', now + 500)).toBe(true)
+    rooms.leaveAll(conn)
+    join()
+    expect(rooms.authorizeYjsResponseFrame('cleanup-room', conn, frame('close-state'))).toBe('denied')
+
+    expect(rooms.recordYjsResponseGrant('cleanup-room', conn, 'denied-state', 'cleanup-lease', now + 500)).toBe(true)
+    rooms.denyRoom('cleanup-room')
+    join()
+    expect(rooms.authorizeYjsResponseFrame('cleanup-room', conn, frame('denied-state'))).toBe('denied')
+
+    expect(rooms.recordYjsResponseGrant('cleanup-room', conn, 'grant-expired', 'cleanup-lease', now + 5)).toBe(true)
+    now += 5
+    rooms.evictExpired()
+    expect(rooms.authorizeYjsResponseFrame('cleanup-room', conn, frame('grant-expired'))).toBe('denied')
+
+    expect(rooms.recordYjsResponseGrant('cleanup-room', conn, 'lease-expired', 'cleanup-lease', now + 500)).toBe(true)
+    now += 996
+    rooms.members('cleanup-room')
+    join()
+    expect(rooms.authorizeYjsResponseFrame('cleanup-room', conn, frame('lease-expired'))).toBe('denied')
   })
 })
 
