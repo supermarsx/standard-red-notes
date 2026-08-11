@@ -694,6 +694,205 @@ export function validateReadinessAcceptanceContract({
   return errors;
 }
 
+export function validateDeploymentIdentityContract({
+  appDockerfileSource,
+  serverDockerfileSource,
+  singleDockerfileSource,
+  multiComposeSource,
+  singleComposeSource,
+  multiNginxSource,
+  singleNginxSource,
+  multiEntrypointSource,
+  singleEntrypointSource,
+  identityHelperSource,
+  serviceWorkerSource,
+  apiGatewayContainerSource,
+}) {
+  const errors = [];
+  for (const [label, sourceValue] of Object.entries({
+    "app Dockerfile": appDockerfileSource,
+    "server Dockerfile": serverDockerfileSource,
+    "single Dockerfile": singleDockerfileSource,
+  })) {
+    const source = String(sourceValue);
+    const markerDirectoryCopy = source.indexOf(
+      "COPY --from=deployment-identity --chown=0:0 --chmod=0555 /srn-deployment /usr/share/srn-deployment",
+    );
+    const markerFileCopy = source.indexOf(
+      "COPY --from=deployment-identity --chown=0:0 --chmod=0444 /srn-deployment/deployment.json /usr/share/srn-deployment/deployment.json",
+    );
+    const revisionLabel = source.indexOf(
+      'LABEL org.opencontainers.image.revision="${SRN_DEPLOY_REVISION}"',
+    );
+    const versionLabel = source.indexOf(
+      'LABEL org.opencontainers.image.version="${SRN_DEPLOY_VERSION}"',
+    );
+    for (const [fragment, description] of [
+      ['ARG SRN_DEPLOY_REVISION=""', "empty-compatible revision argument"],
+      ['ARG SRN_DEPLOY_VERSION=""', "empty-compatible version argument"],
+      ["FROM alpine:3.23 AS deployment-identity", "validated identity stage"],
+      [
+        "exactly 40 lowercase hexadecimal characters",
+        "strict revision validation",
+      ],
+      [
+        "1-128 character safe ASCII version token",
+        "bounded version validation",
+      ],
+      [
+        'printf \'{"revision":"%s","version":"%s"}\\n\'',
+        "exact JSON marker generation",
+      ],
+      [
+        "install -d -m 0555 /srn-deployment",
+        "root-owned traversable marker directory",
+      ],
+      [
+        "chmod 0444 /srn-deployment/deployment.json",
+        "read-only marker file",
+      ],
+    ]) {
+      if (!source.includes(fragment))
+        errors.push(`${label}: missing ${description}`);
+    }
+    if (markerDirectoryCopy < 0 || markerFileCopy < markerDirectoryCopy)
+      errors.push(
+        `${label}: must set the root-owned marker directory to 0555 before setting its file to 0444`,
+      );
+    if (revisionLabel < markerFileCopy || versionLabel < revisionLabel) {
+      errors.push(
+        `${label}: OCI revision and version labels must follow the validated marker copy`,
+      );
+    }
+  }
+
+  for (const [label, sourceValue, expectedCount] of [
+    ["multi compose", multiComposeSource, 3],
+    ["single compose", singleComposeSource, 2],
+  ]) {
+    const source = String(sourceValue);
+    for (const key of ["SRN_DEPLOY_REVISION", "SRN_DEPLOY_VERSION"]) {
+      const fragment = `${key}: "\${${key}:-}"`;
+      const count = source.split(fragment).length - 1;
+      if (count !== expectedCount) {
+        errors.push(
+          `${label}: must propagate quoted ${key} to every build/runtime consumer, found ${count}`,
+        );
+      }
+    }
+  }
+
+  for (const [label, sourceValue, alias] of [
+    [
+      "multi nginx",
+      multiNginxSource,
+      "/usr/share/srn-deployment/deployment.json",
+    ],
+    [
+      "single nginx",
+      singleNginxSource,
+      "/usr/share/srn-deployment/deployment.json",
+    ],
+  ]) {
+    const body = exactLocationBody(
+      sourceValue,
+      "/.well-known/srn-deployment.json",
+    );
+    if (!body) {
+      errors.push(`${label}: must define one exact deployment marker location`);
+      continue;
+    }
+    if (!body.includes(`alias ${alias};`))
+      errors.push(`${label}: deployment marker must alias ${alias}`);
+    if (!/add_header\s+Cache-Control\s+"no-store"\s+always\s*;/.test(body)) {
+      errors.push(`${label}: deployment marker must disable caches`);
+    }
+    if (/try_files|proxy_pass/.test(body)) {
+      errors.push(
+        `${label}: deployment marker must not fall through to SPA or proxy routing`,
+      );
+    }
+  }
+
+  const helper = String(identityHelperSource);
+  for (const key of [
+    "API_GATEWAY_SRN_DEPLOY_REVISION",
+    "API_GATEWAY_SRN_DEPLOY_VERSION",
+    "API_GATEWAY_SRN_DEPLOY_MARKER_PATH",
+    "SRN_DEPLOY_MARKER_PATH",
+  ]) {
+    if (!helper.includes(`unset ${key}`))
+      errors.push(`multi identity helper: must clear injected ${key}`);
+  }
+  for (const fragment of [
+    "*[!0-9a-f]*",
+    "*[!0-9A-Za-z._+-]*",
+    "API_GATEWAY_SRN_DEPLOY_REVISION",
+    "API_GATEWAY_SRN_DEPLOY_VERSION",
+  ]) {
+    if (!helper.includes(fragment))
+      errors.push(
+        `multi identity helper: missing validated projection ${fragment}`,
+      );
+  }
+  const entrypoint = String(multiEntrypointSource);
+  if (
+    entrypoint.indexOf(". /usr/local/bin/deployment-identity-env.sh") < 0 ||
+    entrypoint.indexOf(". /usr/local/bin/deployment-identity-env.sh") >
+      entrypoint.indexOf("printenv | grep API_GATEWAY_")
+  ) {
+    errors.push(
+      "multi entrypoint: identity injection cleanup must run before dotenv projection",
+    );
+  }
+  const singleEntrypoint = String(singleEntrypointSource);
+  for (const fragment of [
+    "unset SRN_DEPLOY_MARKER_PATH",
+    "put_deploy_revision",
+    "put_deploy_version",
+  ]) {
+    if (!singleEntrypoint.includes(fragment))
+      errors.push(`single entrypoint: missing ${fragment}`);
+  }
+
+  const containerSource = String(apiGatewayContainerSource);
+  if (containerSource.includes("env.get('SRN_DEPLOY_MARKER_PATH'")) {
+    errors.push(
+      "api-gateway identity: marker path must not be runtime configurable",
+    );
+  }
+  const relativeMarker =
+    "readDeploymentMarker(path.resolve(process.cwd(), '../../../.srn-deployment.json'))";
+  const relativeIndex = containerSource.indexOf(relativeMarker);
+  const defaultIndex = containerSource.indexOf(
+    "readDeploymentMarker(DEFAULT_DEPLOYMENT_MARKER_PATH)",
+  );
+  if (relativeIndex < 0 || defaultIndex < relativeIndex) {
+    errors.push(
+      "api-gateway identity: home-server sealed-release marker must precede Docker fallback",
+    );
+  }
+
+  const worker = String(serviceWorkerSource);
+  const bypass = worker.indexOf("url.pathname === DEPLOYMENT_MARKER_PATH");
+  if (
+    !worker.includes(
+      "const DEPLOYMENT_MARKER_PATH = '/.well-known/srn-deployment.json'",
+    ) ||
+    bypass < 0
+  ) {
+    errors.push(
+      "service worker: deployment marker must have an explicit bypass",
+    );
+  } else if (bypass > worker.indexOf("event.respondWith")) {
+    errors.push(
+      "service worker: deployment marker bypass must run before cache handling",
+    );
+  }
+
+  return errors;
+}
+
 export function validateSingleHomeServerBindContract({
   homeServerSource,
   singleEntrypointSource,
@@ -1296,6 +1495,10 @@ export function runDockerHardeningValidation(argv = process.argv.slice(2)) {
     path.join(repositoryRoot, "server", "Dockerfile"),
     "utf8",
   );
+  const appDockerfile = readFileSync(
+    path.join(repositoryRoot, "app", "Dockerfile"),
+    "utf8",
+  );
   const singleDockerfile = readFileSync(
     path.join(repositoryRoot, "Dockerfile.single"),
     "utf8",
@@ -1319,12 +1522,27 @@ export function runDockerHardeningValidation(argv = process.argv.slice(2)) {
     path.join(repositoryRoot, "server", "docker", "docker-entrypoint.sh"),
     "utf8",
   );
+  const identityHelper = readFileSync(
+    path.join(repositoryRoot, "server", "docker", "deployment-identity-env.sh"),
+    "utf8",
+  );
   const multiNginx = readFileSync(
     path.join(repositoryRoot, "app", "docker", "nginx.conf"),
     "utf8",
   );
   const singleNginx = readFileSync(
     path.join(repositoryRoot, "app", "docker", "single", "nginx.conf"),
+    "utf8",
+  );
+  const serviceWorker = readFileSync(
+    path.join(
+      repositoryRoot,
+      "app",
+      "packages",
+      "web",
+      "src",
+      "service-worker.js",
+    ),
     "utf8",
   );
   const serviceContainerSources = Object.fromEntries(
@@ -1512,6 +1730,20 @@ export function runDockerHardeningValidation(argv = process.argv.slice(2)) {
       singleDockerfileSource: singleDockerfile,
       multiComposeSource,
       singleComposeSource,
+    }),
+    ...validateDeploymentIdentityContract({
+      appDockerfileSource: appDockerfile,
+      serverDockerfileSource: serverDockerfile,
+      singleDockerfileSource: singleDockerfile,
+      multiComposeSource,
+      singleComposeSource,
+      multiNginxSource: multiNginx,
+      singleNginxSource: singleNginx,
+      multiEntrypointSource: multiEntrypoint,
+      singleEntrypointSource: singleEntrypoint,
+      identityHelperSource: identityHelper,
+      serviceWorkerSource: serviceWorker,
+      apiGatewayContainerSource: serviceContainerSources["api-gateway"],
     }),
     ...validateSingleHomeServerBindContract({
       homeServerSource,

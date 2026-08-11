@@ -376,6 +376,7 @@ export class HomeServer implements HomeServerInterface {
           const readiness = container.get<{
             check(): Promise<{
               status: 'ready' | 'unavailable'
+              deployment: { revision: string | null; version: string | null }
               checks: Record<string, unknown>
             }>
           }>(ApiGatewayTypes.ApiGateway_AggregateReadinessService)

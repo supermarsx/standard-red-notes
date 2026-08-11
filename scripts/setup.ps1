@@ -122,6 +122,57 @@ function Invoke-ComposeCommand {
   }
 }
 
+function Set-CleanDeploymentRevision {
+  if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+    throw 'Git is required to identify the source being deployed.'
+  }
+  $revision = (& git -C $RepoRoot rev-parse --verify 'HEAD^{commit}' 2>$null | Out-String).Trim()
+  if ($LASTEXITCODE -ne 0 -or $revision -cnotmatch '^[0-9a-f]{40}$') {
+    throw 'Repository HEAD did not resolve to a lowercase full Git commit.'
+  }
+  $dirty = (& git -C $RepoRoot status --porcelain=v1 --untracked-files=all 2>$null | Out-String).Trim()
+  if ($LASTEXITCODE -ne 0) { throw 'Could not inspect repository cleanliness.' }
+  if (-not [string]::IsNullOrEmpty($dirty)) {
+    throw 'Refusing to build a deployment identity from a dirty checkout. Commit or remove source changes first.'
+  }
+  $env:SRN_DEPLOY_REVISION = $revision
+  $env:SRN_DEPLOY_VERSION = "setup-$($revision.Substring(0, 12))"
+  Write-Ok "Deploying exact clean commit: $revision"
+  return $revision
+}
+
+$DeploymentIdentityProbeScript = @'
+const expected={revision:process.env.EXPECTED_REVISION,version:process.env.EXPECTED_VERSION||null};
+const normalize=(value)=>({revision:value?.revision,version:value?.version===""?null:value?.version});
+Promise.all([fetch("http://app:8080/healthcheck/readiness",{cache:"no-store"}),fetch("http://app:8080/.well-known/srn-deployment.json",{cache:"no-store"})])
+  .then(async ([readyResponse,markerResponse])=>{
+    if(!readyResponse.ok||!markerResponse.ok)throw new Error("identity endpoint unavailable");
+    const readiness=await readyResponse.json();const marker=normalize(await markerResponse.json());const server=normalize(readiness.deployment);
+    if(readiness.status!=="ready"||server.revision!==expected.revision||server.version!==expected.version||marker.revision!==expected.revision||marker.version!==expected.version)throw new Error("deployment identity mismatch");
+  }).catch((error)=>{console.error(error.message);process.exit(1)})
+'@
+
+function Assert-StartedDeploymentIdentity {
+  param([string]$Revision)
+  $version = [Environment]::GetEnvironmentVariable('SRN_DEPLOY_VERSION')
+  for ($attempt = 1; $attempt -le 120; $attempt++) {
+    Push-Location $RepoRoot
+    try {
+      Invoke-ComposeCommand -Arguments @(
+        'exec', '-T', '-e', "EXPECTED_REVISION=$Revision", '-e', "EXPECTED_VERSION=$version",
+        'server', 'node', '-e', $DeploymentIdentityProbeScript
+      )
+      $probeStatus = $LASTEXITCODE
+    } finally { Pop-Location }
+    if ($probeStatus -eq 0) {
+      Write-Ok 'App and server deployment identity verified.'
+      return
+    }
+    Start-Sleep -Seconds 2
+  }
+  throw 'The stack started but did not prove the expected app/server deployment identity.'
+}
+
 $AssistantPairingProbeScript = @'
 path="${ASSISTANT_SUBSCRIPTION_TOKEN_PATH:-/opt/server/packages/api-gateway/data/assistant-subscription.json}"
 case "$path" in
@@ -292,11 +343,13 @@ if (Test-Path $EnvFile) {
       } finally { Pop-Location }
     }
     if ($Up) {
+      try { $deploymentRevision = Set-CleanDeploymentRevision } catch { Write-Err $_.Exception.Message; exit 1 }
       Push-Location $RepoRoot
       try {
         Invoke-ComposeCommand -Arguments @('up', '-d', '--build')
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       } finally { Pop-Location }
+      try { Assert-StartedDeploymentIdentity -Revision $deploymentRevision } catch { Write-Err $_.Exception.Message; exit 1 }
       Write-Ok 'Stack started.'
     }
     exit 0
@@ -333,12 +386,14 @@ if (Test-Path $EnvFile) {
       Write-Ok 'Existing .env validated.'
       if ($Up) {
         Write-Info 'Building and starting the existing stack...'
+        try { $deploymentRevision = Set-CleanDeploymentRevision } catch { Write-Err $_.Exception.Message; exit 1 }
         if ($Compose -eq 'docker compose') { docker compose up -d --build }
         else { docker-compose up -d --build }
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        try { Assert-StartedDeploymentIdentity -Revision $deploymentRevision } catch { Write-Err $_.Exception.Message; exit 1 }
         Write-Ok 'Stack started.'
       } else {
-        Write-Info "Start it with: $Compose up -d --build"
+        Write-Info 'Start it with: .\scripts\setup.ps1 -Up'
       }
     } finally { Pop-Location }
     Write-Info 'Intentional rotation requires -ForceOverwrite. If an accidental overwrite already happened, run: npm run recover:database'
@@ -621,6 +676,7 @@ $AppUrl = $PublicUrl
 $startNow = $Up -or (Confirm-Yes "Start the stack now with '$Compose up -d'?")
 if ($startNow) {
   Write-Info 'Building and starting the stack (first run can take several minutes)...'
+  try { $deploymentRevision = Set-CleanDeploymentRevision } catch { Write-Err $_.Exception.Message; exit 1 }
   Push-Location $RepoRoot
   try {
     if ($Compose -eq 'docker compose') { docker compose up -d --build }
@@ -630,13 +686,14 @@ if ($startNow) {
     if ($backup) { Write-Err 'Startup failed after credential rotation. Recover the prior full environment with: npm run recover:database' }
     exit $LASTEXITCODE
   }
+  try { Assert-StartedDeploymentIdentity -Revision $deploymentRevision } catch { Write-Err $_.Exception.Message; exit 1 }
   Write-Ok "Stack started. Open: $AppUrl"
   Write-Info "Watch logs:  $Compose logs -f"
   Write-Info "Stop:        $Compose down"
 } else {
   Write-Info 'Next steps:'
   Write-Host "  1. cd `"$RepoRoot`""
-  Write-Host "  2. $Compose up -d --build"
+  Write-Host '  2. .\scripts\setup.ps1 -Up'
   Write-Host "  3. Open $AppUrl"
 }
 Write-Info "After registering an administrator: $Compose exec server srn-admin roles grant <user> ADMIN_USER"

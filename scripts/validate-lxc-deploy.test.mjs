@@ -32,6 +32,40 @@ function validate(files) {
   const liveControlIndex = installer.indexOf(
     'atomic_install_control "${RELEASE_FINAL}/.srn-launcher"',
   );
+  const versionValidationIndex = installer.indexOf(
+    "SRN_DEPLOY_VERSION must be 1-128 safe ASCII version characters.",
+  );
+  const firstMutationIndex = installer.indexOf('log "Installing OS packages"');
+  const markerIndex = installer.indexOf(
+    '> "${DEPLOY_ROOT}/.srn-deployment.json"',
+  );
+  const rollbackStart = installer.indexOf('if [ "${1:-}" = "--rollback" ]');
+  const rollbackEnd = installer.indexOf('elif [ -n "${1:-}" ]', rollbackStart);
+  const rollbackBlock = installer.slice(rollbackStart, rollbackEnd);
+  const rollbackSuccessIndex = rollbackBlock.indexOf(
+    'log "Rollback complete."',
+  );
+  const rollbackTargetIdentity =
+    'verify_live_deployment_identity "${ROLLBACK_RELEASE}" "${ROLLBACK_REVISION}" "${ROLLBACK_VERSION}"';
+  const rollbackRecoveryIdentity =
+    'verify_live_deployment_identity "${ACTIVE_RELEASE}" "${ACTIVE_REVISION}" "${ACTIVE_VERSION}"';
+  const oldReleaseIdentityRead =
+    'read_trusted_release_identity "${OLD_RELEASE}"';
+  const automaticRecoveryIdentity =
+    'verify_live_deployment_identity "${OLD_RELEASE}" "${OLD_RELEASE_REVISION}" "${OLD_RELEASE_VERSION}"';
+  const releaseSwap =
+    'release_swap_current_previous "${CURRENT_LINK}" "${PREVIOUS_LINK}" "${RELEASES_DIR}"';
+  const automaticRecoveryStart = installer.indexOf(
+    'warn "New release was unhealthy; restoring the previous release."',
+  );
+  const automaticRecoveryEnd = installer.indexOf(
+    '  else\n    [ -L "${CURRENT_LINK}" ]',
+    automaticRecoveryStart,
+  );
+  const automaticRecoveryBlock = installer.slice(
+    automaticRecoveryStart,
+    automaticRecoveryEnd,
+  );
 
   if (/curl[^\n]*\|\s*(?:sudo\s+)?bash/.test(installer)) {
     errors.push("remote bootstrap must never be piped into a shell");
@@ -42,7 +76,9 @@ function validate(files) {
   ) {
     errors.push("NodeSource signing key fingerprint must be pinned");
   }
-  if (!installer.includes("git -C \"${SOURCE_DIR}\" fetch --all --tags --prune")) {
+  if (
+    !installer.includes('git -C "${SOURCE_DIR}" fetch --all --tags --prune')
+  ) {
     errors.push("source fetch must be explicit and fail closed");
   }
   if (/git[^\n]*(?:fetch|pull)[^\n]*\|\|\s*true/.test(installer)) {
@@ -53,22 +89,56 @@ function validate(files) {
   }
   if (
     !installer.includes(
-      'Symbolic REPO_REF values require EXPECTED_COMMIT=<full-sha>',
+      "Symbolic REPO_REF values require EXPECTED_COMMIT=<full-sha>",
     ) ||
     !installer.includes("does not match full-SHA REPO_REF")
   ) {
     errors.push("every explicit source ref must pin the resolved commit SHA");
   }
-  if (!installer.includes("EXPECTED_COMMIT") || !installer.includes("cat-file -e")) {
+  if (
+    !installer.includes("EXPECTED_COMMIT") ||
+    !installer.includes("cat-file -e")
+  ) {
     errors.push("resolved refs must be verified as the expected commit object");
   }
-  if (!release.includes("git -C \"${source}\" archive") || stageIndex < 0) {
+  if (!release.includes('git -C "${source}" archive') || stageIndex < 0) {
     errors.push("builds must originate in an isolated release stage");
   }
   if (smokeIndex < stageIndex || activateIndex < smokeIndex) {
     errors.push("staging health must pass before the live switch");
   }
-  if (!release.includes('"http://127.0.0.1:${port}/healthcheck/readiness"')) {
+  if (
+    versionValidationIndex < 0 ||
+    versionValidationIndex > firstMutationIndex
+  ) {
+    errors.push("deployment version must be validated before host mutation");
+  }
+  if (
+    markerIndex < stageIndex ||
+    markerIndex > smokeIndex ||
+    !installer.includes('chmod 0444 "${DEPLOY_ROOT}/.srn-deployment.json"')
+  ) {
+    errors.push(
+      "sealed deployment marker must be generated before staged smoke",
+    );
+  }
+  const markerLocation = installer.match(
+    /location = \/\.well-known\/srn-deployment\.json \{([\s\S]*?)\n\s*\}/,
+  )?.[1];
+  if (
+    !markerLocation ||
+    !markerLocation.includes('add_header Cache-Control "no-store" always;') ||
+    !markerLocation.includes("alias ${CURRENT_LINK}/.srn-deployment.json;") ||
+    /try_files|proxy_pass/.test(markerLocation)
+  ) {
+    errors.push(
+      "nginx must expose the active release marker through one exact no-store alias",
+    );
+  }
+  if (
+    occurrences(release, '"http://127.0.0.1:${port}/healthcheck/readiness"') !==
+    2
+  ) {
     errors.push("staged acceptance must use aggregate readiness");
   }
   if (
@@ -81,8 +151,85 @@ function validate(files) {
   if (!release.includes('env -C "${release}/server/packages/home-server"')) {
     errors.push("staged backend smoke must load dotenv from home-server cwd");
   }
-  if (!installer.includes("PORT=3000\nBIND_ADDRESS=127.0.0.1\nDB_TYPE=sqlite")) {
-    errors.push("generated LXC home-server env must bind the backend to loopback");
+  if (
+    !release.includes('"${release}/scripts/verify-deployment-identity.mjs"') ||
+    !release.includes('--expected-revision "${DEPLOY_COMMIT}"')
+  ) {
+    errors.push("staged acceptance must require the exact deployment revision");
+  }
+  if (
+    !installer.includes("verify_live_deployment_identity") ||
+    !installer.includes(
+      'verify_live_deployment_identity "${RELEASE_FINAL}" "${DEPLOY_COMMIT}" "${SRN_DEPLOY_VERSION}"',
+    ) ||
+    !installer.includes('--app-url "http://127.0.0.1:${HTTP_PORT}"')
+  ) {
+    errors.push(
+      "live acceptance must require matching app and server deployment identity",
+    );
+  }
+  if (
+    !release.includes("release_read_deployment_identity()") ||
+    !release.includes('readSealedRegularFile(".srn-release", 128)') ||
+    !release.includes('readSealedRegularFile(".srn-deployment.json", 512)') ||
+    !release.includes("marker.revision !== sealMatch[1]") ||
+    !release.includes("releaseStat.uid !== 0") ||
+    !release.includes("(releaseStat.mode & 0o222) !== 0")
+  ) {
+    errors.push(
+      "rollback expectations must come from a root-owned sealed release identity",
+    );
+  }
+  if (
+    !rollbackBlock.includes(
+      'read_trusted_release_identity "${ACTIVE_RELEASE}"',
+    ) ||
+    !rollbackBlock.includes(
+      'read_trusted_release_identity "${ROLLBACK_RELEASE}"',
+    )
+  ) {
+    errors.push(
+      "rollback must derive both candidate and recovery expectations before switching",
+    );
+  }
+  const rollbackTargetIdentityIndex = rollbackBlock.indexOf(
+    rollbackTargetIdentity,
+  );
+  if (
+    rollbackTargetIdentityIndex < 0 ||
+    rollbackSuccessIndex < rollbackTargetIdentityIndex
+  ) {
+    errors.push(
+      "rollback success must prove public app and server identity against the sealed target",
+    );
+  }
+  const rollbackRecoveryIdentityIndex = rollbackBlock.indexOf(
+    rollbackRecoveryIdentity,
+  );
+  if (
+    rollbackRecoveryIdentityIndex < rollbackSuccessIndex ||
+    occurrences(rollbackBlock, releaseSwap) < 2
+  ) {
+    errors.push(
+      "failed rollback must restore and verify the formerly active sealed release",
+    );
+  }
+  if (
+    installer.indexOf(oldReleaseIdentityRead) < 0 ||
+    installer.indexOf(oldReleaseIdentityRead) > activateIndex ||
+    !automaticRecoveryBlock.includes(releaseSwap) ||
+    !automaticRecoveryBlock.includes(automaticRecoveryIdentity)
+  ) {
+    errors.push(
+      "automatic recovery must derive and verify the sealed previous release identity",
+    );
+  }
+  if (
+    !installer.includes("PORT=3000\nBIND_ADDRESS=127.0.0.1\nDB_TYPE=sqlite")
+  ) {
+    errors.push(
+      "generated LXC home-server env must bind the backend to loopback",
+    );
   }
   if (
     !installer.includes(
@@ -117,9 +264,15 @@ function validate(files) {
       '"${DEPLOY_ROOT}/deploy/lxc/standard-red-notes.service" > "${STAGED_SERVICE_UNIT}"',
     )
   ) {
-    errors.push("staged systemd unit must come from the selected release commit");
+    errors.push(
+      "staged systemd unit must come from the selected release commit",
+    );
   }
-  if (/systemctl\s+stop[^\n]*standard-red-notes\.service[^\n]*nginx/.test(installer)) {
+  if (
+    /systemctl\s+stop[^\n]*standard-red-notes\.service[^\n]*nginx/.test(
+      installer,
+    )
+  ) {
     errors.push("failed deployment must not leave host nginx stopped");
   }
   if (!release.includes('mv -Tf -- "${temporary}" "${link}"')) {
@@ -132,40 +285,59 @@ function validate(files) {
     !release.includes("release_restore_service_state") ||
     (installer.match(/release_restore_service_state/g) ?? []).length < 2
   ) {
-    errors.push("every failed live activation must restore prior service state");
+    errors.push(
+      "every failed live activation must restore prior service state",
+    );
   }
   if (!installer.includes("restore_live_controls()")) {
     errors.push("failed activation must restore prior live control files");
   }
-  if (!release.includes("chmod -R a-w") || /chown -R[^\n]*APP_DIR/.test(installer)) {
+  if (
+    !release.includes("chmod -R a-w") ||
+    /chown -R[^\n]*APP_DIR/.test(installer)
+  ) {
     errors.push("runtime release sources must be read only");
   }
-  if (!unit.includes("ProtectSystem=strict") || !unit.includes("ReadWritePaths=__DATA_DIR__")) {
-    errors.push("systemd must restrict writes to the persistent data directory");
+  if (
+    !unit.includes("ProtectSystem=strict") ||
+    !unit.includes("ReadWritePaths=__DATA_DIR__")
+  ) {
+    errors.push(
+      "systemd must restrict writes to the persistent data directory",
+    );
   }
   if (!readme.includes("--rollback") || !readme.includes("EXPECTED_COMMIT")) {
     errors.push("operators need documented pinning and rollback procedures");
   }
   if (
-    !installer.includes('PUBLIC_URL_CONFIG_FILE="${PUBLIC_URL_CONFIG_DIR}/public-url"') ||
+    !installer.includes(
+      'PUBLIC_URL_CONFIG_FILE="${PUBLIC_URL_CONFIG_DIR}/public-url"',
+    ) ||
     !installer.includes('validate_public_url_origin "${PUBLIC_URL}"') ||
     !installer.includes("PUBLIC_URL=${PUBLIC_URL}")
   ) {
-    errors.push("LXC upgrades must persist, validate, and propagate PUBLIC_URL");
+    errors.push(
+      "LXC upgrades must persist, validate, and propagate PUBLIC_URL",
+    );
   }
   if (
     installer.includes('. "${PUBLIC_URL_CONFIG_FILE}"') ||
     installer.includes('source "${PUBLIC_URL_CONFIG_FILE}"')
   ) {
-    errors.push("persisted PUBLIC_URL must remain inert data, never sourced as shell");
+    errors.push(
+      "persisted PUBLIC_URL must remain inert data, never sourced as shell",
+    );
   }
   if (
-    occurrences(installer, "proxy_set_header X-Forwarded-Proto \\$scheme;") !== 3 ||
+    occurrences(installer, "proxy_set_header X-Forwarded-Proto \\$scheme;") !==
+      3 ||
     installer.includes("ENFORCE_HTTPS_FROM_PROXY") ||
     installer.includes("srn_hsts_header") ||
     installer.includes("srn_redirect_to_https")
   ) {
-    errors.push("LXC must leave HTTPS redirect and HSTS enforcement to its outer proxy");
+    errors.push(
+      "LXC must leave HTTPS redirect and HSTS enforcement to its outer proxy",
+    );
   }
   return errors;
 }
@@ -180,134 +352,122 @@ test("LXC deployment satisfies the staged, atomic, fail-closed contract", () => 
 });
 
 test("LXC release links activate and roll back to the retained target", () => {
-  const result = spawnSync(
-    "bash",
-    ["-s"],
-    {
-      input: [
-        "set -euo pipefail",
-        "source deploy/lxc/release.sh",
-        'sandbox="${PWD}/.tmp-srn-lxc-test-$$"',
-        'case "${sandbox}" in "${PWD}"/.tmp-srn-lxc-test-*) ;; *) exit 97 ;; esac',
-        'mkdir "${sandbox}"',
-        'trap \'rm -rf -- "${sandbox}"\' EXIT',
-        'releases="${sandbox}/releases"',
-        'mkdir -p "${releases}/one" "${releases}/two"',
-        ': > "${releases}/one/.srn-release"',
-        ': > "${releases}/two/.srn-release"',
-        'release_atomic_link "${releases}/one" "${sandbox}/current"',
-        'release_activate "${releases}/two" "${sandbox}/current" "${sandbox}/previous" "${releases}"',
-        'test "$(readlink -f "${sandbox}/current")" = "$(readlink -f "${releases}/two")"',
-        'test "$(readlink -f "${sandbox}/previous")" = "$(readlink -f "${releases}/one")"',
-        'release_swap_current_previous "${sandbox}/current" "${sandbox}/previous" "${releases}"',
-        'test "$(readlink -f "${sandbox}/current")" = "$(readlink -f "${releases}/one")"',
-        'test "$(readlink -f "${sandbox}/previous")" = "$(readlink -f "${releases}/two")"',
-      ].join("\n"),
-      cwd: root,
-      encoding: "utf8",
-    },
-  );
+  const result = spawnSync("bash", ["-s"], {
+    input: [
+      "set -euo pipefail",
+      "source deploy/lxc/release.sh",
+      'sandbox="${PWD}/.tmp-srn-lxc-test-$$"',
+      'case "${sandbox}" in "${PWD}"/.tmp-srn-lxc-test-*) ;; *) exit 97 ;; esac',
+      'mkdir "${sandbox}"',
+      "trap 'rm -rf -- \"${sandbox}\"' EXIT",
+      'releases="${sandbox}/releases"',
+      'mkdir -p "${releases}/one" "${releases}/two"',
+      ': > "${releases}/one/.srn-release"',
+      ': > "${releases}/two/.srn-release"',
+      'release_atomic_link "${releases}/one" "${sandbox}/current"',
+      'release_activate "${releases}/two" "${sandbox}/current" "${sandbox}/previous" "${releases}"',
+      'test "$(readlink -f "${sandbox}/current")" = "$(readlink -f "${releases}/two")"',
+      'test "$(readlink -f "${sandbox}/previous")" = "$(readlink -f "${releases}/one")"',
+      'release_swap_current_previous "${sandbox}/current" "${sandbox}/previous" "${releases}"',
+      'test "$(readlink -f "${sandbox}/current")" = "$(readlink -f "${releases}/one")"',
+      'test "$(readlink -f "${sandbox}/previous")" = "$(readlink -f "${releases}/two")"',
+    ].join("\n"),
+    cwd: root,
+    encoding: "utf8",
+  });
   assert.equal(result.status, 0, result.stderr || result.stdout);
 });
 
 test("LXC rollback restores both links when the second rename fails", () => {
-  const result = spawnSync(
-    "bash",
-    ["-s"],
-    {
-      input: [
-        "set -euo pipefail",
-        "source deploy/lxc/release.sh",
-        'sandbox="${PWD}/.tmp-srn-lxc-failure-$$"',
-        'case "${sandbox}" in "${PWD}"/.tmp-srn-lxc-failure-*) ;; *) exit 97 ;; esac',
-        'mkdir "${sandbox}"',
-        'trap \'rm -rf -- "${sandbox}"\' EXIT',
-        'releases="${sandbox}/releases"',
-        'mkdir -p "${releases}/one" "${releases}/two"',
-        ': > "${releases}/one/.srn-release"',
-        ': > "${releases}/two/.srn-release"',
-        'release_atomic_link "${releases}/two" "${sandbox}/current"',
-        'release_atomic_link "${releases}/one" "${sandbox}/previous"',
-        "mv_calls=0",
-        'mv() { mv_calls=$((mv_calls + 1)); [ "${mv_calls}" -ne 2 ] || return 1; command mv "$@"; }',
-        'if release_swap_current_previous "${sandbox}/current" "${sandbox}/previous" "${releases}"; then exit 98; fi',
-        "unset -f mv",
-        'test "$(readlink -f "${sandbox}/current")" = "$(readlink -f "${releases}/two")"',
-        'test "$(readlink -f "${sandbox}/previous")" = "$(readlink -f "${releases}/one")"',
-      ].join("\n"),
-      cwd: root,
-      encoding: "utf8",
-    },
-  );
+  const result = spawnSync("bash", ["-s"], {
+    input: [
+      "set -euo pipefail",
+      "source deploy/lxc/release.sh",
+      'sandbox="${PWD}/.tmp-srn-lxc-failure-$$"',
+      'case "${sandbox}" in "${PWD}"/.tmp-srn-lxc-failure-*) ;; *) exit 97 ;; esac',
+      'mkdir "${sandbox}"',
+      "trap 'rm -rf -- \"${sandbox}\"' EXIT",
+      'releases="${sandbox}/releases"',
+      'mkdir -p "${releases}/one" "${releases}/two"',
+      ': > "${releases}/one/.srn-release"',
+      ': > "${releases}/two/.srn-release"',
+      'release_atomic_link "${releases}/two" "${sandbox}/current"',
+      'release_atomic_link "${releases}/one" "${sandbox}/previous"',
+      "mv_calls=0",
+      'mv() { mv_calls=$((mv_calls + 1)); [ "${mv_calls}" -ne 2 ] || return 1; command mv "$@"; }',
+      'if release_swap_current_previous "${sandbox}/current" "${sandbox}/previous" "${releases}"; then exit 98; fi',
+      "unset -f mv",
+      'test "$(readlink -f "${sandbox}/current")" = "$(readlink -f "${releases}/two")"',
+      'test "$(readlink -f "${sandbox}/previous")" = "$(readlink -f "${releases}/one")"',
+    ].join("\n"),
+    cwd: root,
+    encoding: "utf8",
+  });
   assert.equal(result.status, 0, result.stderr || result.stdout);
 });
 
 test("LXC recovery preserves disabled and inactive service state", () => {
-  const result = spawnSync(
-    "bash",
-    ["-s"],
-    {
-      input: [
-        "set -euo pipefail",
-        "source deploy/lxc/release.sh",
-        'sandbox="${PWD}/.tmp-srn-service-state-$$"',
-        'mkdir "${sandbox}"',
-        'trap \'rm -rf -- "${sandbox}"\' EXIT',
-        'calls="${sandbox}/calls"',
-        'systemctl() { printf "systemctl %s\\n" "$*" >> "${calls}"; }',
-        'nginx() { printf "nginx %s\\n" "$*" >> "${calls}"; }',
-        "release_restore_service_state true false false false",
-        '! grep -q "systemctl enable\|systemctl restart" "${calls}"',
-        'grep -qx "systemctl disable standard-red-notes.service" "${calls}"',
-        'grep -qx "systemctl stop standard-red-notes.service" "${calls}"',
-        'grep -qx "systemctl stop nginx" "${calls}"',
-        'grep -qx "nginx -t" "${calls}"',
-      ].join("\n"),
-      cwd: root,
-      encoding: "utf8",
-    },
-  );
+  const result = spawnSync("bash", ["-s"], {
+    input: [
+      "set -euo pipefail",
+      "source deploy/lxc/release.sh",
+      'sandbox="${PWD}/.tmp-srn-service-state-$$"',
+      'mkdir "${sandbox}"',
+      "trap 'rm -rf -- \"${sandbox}\"' EXIT",
+      'calls="${sandbox}/calls"',
+      'systemctl() { printf "systemctl %s\\n" "$*" >> "${calls}"; }',
+      'nginx() { printf "nginx %s\\n" "$*" >> "${calls}"; }',
+      "release_restore_service_state true false false false",
+      '! grep -q "systemctl enable\|systemctl restart" "${calls}"',
+      'grep -qx "systemctl disable standard-red-notes.service" "${calls}"',
+      'grep -qx "systemctl stop standard-red-notes.service" "${calls}"',
+      'grep -qx "systemctl stop nginx" "${calls}"',
+      'grep -qx "nginx -t" "${calls}"',
+    ].join("\n"),
+    cwd: root,
+    encoding: "utf8",
+  });
   assert.equal(result.status, 0, result.stderr || result.stdout);
 });
 
 test("LXC recovery stops a newly loaded service before forgetting an absent prior unit", () => {
-  const result = spawnSync(
-    "bash",
-    ["-s"],
-    {
-      input: [
-        "set -euo pipefail",
-        "source deploy/lxc/release.sh",
-        'sandbox="${PWD}/.tmp-srn-absent-unit-$$"',
-        'mkdir "${sandbox}"',
-        'trap \'rm -rf -- "${sandbox}"\' EXIT',
-        'calls="${sandbox}/calls"',
-        "service_active=true",
-        'systemctl() {',
-        '  printf "systemctl %s\\n" "$*" >> "${calls}"',
-        '  if [ "$1" = stop ] && [ "${2:-}" = standard-red-notes.service ]; then service_active=false; fi',
-        '  if [ "$1" = is-active ]; then [ "${service_active}" = true ]; return; fi',
-        "  return 0",
-        "}",
-        'nginx() { printf "nginx %s\\n" "$*" >> "${calls}"; }',
-        "release_restore_service_state false false false false",
-        '[ "${service_active}" = false ]',
-        'test "$(sed -n \'1p\' "${calls}")" = "systemctl stop standard-red-notes.service"',
-        'test "$(sed -n \'2p\' "${calls}")" = "systemctl disable standard-red-notes.service"',
-        'test "$(sed -n \'3p\' "${calls}")" = "systemctl daemon-reload"',
-        'test "$(sed -n \'4p\' "${calls}")" = "systemctl is-active --quiet standard-red-notes.service"',
-      ].join("\n"),
-      cwd: root,
-      encoding: "utf8",
-    },
-  );
+  const result = spawnSync("bash", ["-s"], {
+    input: [
+      "set -euo pipefail",
+      "source deploy/lxc/release.sh",
+      'sandbox="${PWD}/.tmp-srn-absent-unit-$$"',
+      'mkdir "${sandbox}"',
+      "trap 'rm -rf -- \"${sandbox}\"' EXIT",
+      'calls="${sandbox}/calls"',
+      "service_active=true",
+      "systemctl() {",
+      '  printf "systemctl %s\\n" "$*" >> "${calls}"',
+      '  if [ "$1" = stop ] && [ "${2:-}" = standard-red-notes.service ]; then service_active=false; fi',
+      '  if [ "$1" = is-active ]; then [ "${service_active}" = true ]; return; fi',
+      "  return 0",
+      "}",
+      'nginx() { printf "nginx %s\\n" "$*" >> "${calls}"; }',
+      "release_restore_service_state false false false false",
+      '[ "${service_active}" = false ]',
+      'test "$(sed -n \'1p\' "${calls}")" = "systemctl stop standard-red-notes.service"',
+      'test "$(sed -n \'2p\' "${calls}")" = "systemctl disable standard-red-notes.service"',
+      'test "$(sed -n \'3p\' "${calls}")" = "systemctl daemon-reload"',
+      'test "$(sed -n \'4p\' "${calls}")" = "systemctl is-active --quiet standard-red-notes.service"',
+    ].join("\n"),
+    cwd: root,
+    encoding: "utf8",
+  });
   assert.equal(result.status, 0, result.stderr || result.stdout);
 });
 
 test("LXC contract rejects moving refs and masked source failures", () => {
   assert.match(
     validate(
-      mutate("installer", 'REPO_REF="${REPO_REF:-}"', 'REPO_REF="${REPO_REF:-main}"'),
+      mutate(
+        "installer",
+        'REPO_REF="${REPO_REF:-}"',
+        'REPO_REF="${REPO_REF:-main}"',
+      ),
     ).join("\n"),
     /moving main branch/,
   );
@@ -315,8 +475,8 @@ test("LXC contract rejects moving refs and masked source failures", () => {
     validate(
       mutate(
         "installer",
-        "git -C \"${SOURCE_DIR}\" fetch --all --tags --prune",
-        "git -C \"${SOURCE_DIR}\" fetch --all --tags --prune || true",
+        'git -C "${SOURCE_DIR}" fetch --all --tags --prune',
+        'git -C "${SOURCE_DIR}" fetch --all --tags --prune || true',
       ),
     ).join("\n"),
     /source update failures/,
@@ -334,7 +494,7 @@ test("LXC contract rejects moving refs and masked source failures", () => {
 
 test("LXC contract rejects lost staging, health, atomic switch, and rollback", () => {
   for (const [file, text, error] of [
-    ["release", "git -C \"${source}\" archive", "isolated release stage"],
+    ["release", 'git -C "${source}" archive', "isolated release stage"],
     ["installer", "release_smoke_backend", "staging health"],
     ["release", 'mv -Tf -- "${temporary}" "${link}"', "atomic rename"],
     ["release", "release_swap_current_previous", "rollback path"],
@@ -364,6 +524,114 @@ test("LXC staged and live acceptance reject liveness-only probes", () => {
     ).join("\n"),
     /live acceptance must use aggregate readiness/,
   );
+});
+
+test("LXC deployment identity is sealed, uncached, and exact before activation", () => {
+  for (const [file, from, to, expected] of [
+    [
+      "installer",
+      'chmod 0444 "${DEPLOY_ROOT}/.srn-deployment.json"',
+      'chmod 0644 "${DEPLOY_ROOT}/.srn-deployment.json"',
+      /sealed deployment marker/,
+    ],
+    [
+      "installer",
+      'add_header Cache-Control "no-store" always;',
+      'add_header Cache-Control "max-age=3600" always;',
+      /exact no-store alias/,
+    ],
+    [
+      "installer",
+      "alias ${CURRENT_LINK}/.srn-deployment.json;",
+      "try_files $uri /index.html;",
+      /exact no-store alias/,
+    ],
+    [
+      "release",
+      '--expected-revision "${DEPLOY_COMMIT}"',
+      '--expected-revision "unknown"',
+      /staged acceptance must require the exact deployment revision/,
+    ],
+    [
+      "installer",
+      'verify_live_deployment_identity "${RELEASE_FINAL}" "${DEPLOY_COMMIT}" "${SRN_DEPLOY_VERSION}"',
+      "true",
+      /live acceptance must require matching app and server deployment identity/,
+    ],
+  ]) {
+    assert.match(validate(mutate(file, from, to)).join("\n"), expected);
+  }
+
+  const markerStart = baseline.installer.indexOf(
+    'printf \'{"revision":"%s","version":"%s"}\\n\'',
+  );
+  const markerLastLine = 'chmod 0444 "${DEPLOY_ROOT}/.srn-deployment.json"';
+  const markerEnd =
+    baseline.installer.indexOf(
+      "\n",
+      baseline.installer.indexOf(markerLastLine),
+    ) + 1;
+  const markerBlock = baseline.installer.slice(markerStart, markerEnd);
+  const movedMarker = {
+    ...baseline,
+    installer: `${baseline.installer.slice(0, markerStart)}${baseline.installer.slice(markerEnd)}\n${markerBlock}`,
+  };
+  assert.match(validate(movedMarker).join("\n"), /sealed deployment marker/);
+});
+
+test("LXC rollback and recovery fail closed on sealed identity mismatch", () => {
+  for (const [file, from, to, expected] of [
+    [
+      "release",
+      "marker.revision !== sealMatch[1]",
+      "false",
+      /root-owned sealed release identity/,
+    ],
+    [
+      "installer",
+      'read_trusted_release_identity "${ROLLBACK_RELEASE}"',
+      'read_trusted_release_identity "${ACTIVE_RELEASE}"',
+      /derive both candidate and recovery expectations/,
+    ],
+    [
+      "installer",
+      'verify_live_deployment_identity "${ROLLBACK_RELEASE}" "${ROLLBACK_REVISION}" "${ROLLBACK_VERSION}"',
+      "true",
+      /rollback success must prove public app and server identity/,
+    ],
+    [
+      "installer",
+      'verify_live_deployment_identity "${ACTIVE_RELEASE}" "${ACTIVE_REVISION}" "${ACTIVE_VERSION}"',
+      "true",
+      /failed rollback must restore and verify/,
+    ],
+    [
+      "installer",
+      'warn "Rollback target was unhealthy; restoring the release that was active."\n  release_swap_current_previous "${CURRENT_LINK}" "${PREVIOUS_LINK}" "${RELEASES_DIR}"',
+      'warn "Rollback target was unhealthy; restoring the release that was active."\n  true',
+      /failed rollback must restore and verify/,
+    ],
+    [
+      "installer",
+      'read_trusted_release_identity "${OLD_RELEASE}"',
+      "true",
+      /automatic recovery must derive and verify/,
+    ],
+    [
+      "installer",
+      'verify_live_deployment_identity "${OLD_RELEASE}" "${OLD_RELEASE_REVISION}" "${OLD_RELEASE_VERSION}"',
+      "true",
+      /automatic recovery must derive and verify/,
+    ],
+    [
+      "installer",
+      'warn "New release was unhealthy; restoring the previous release."\n  if [ -n "${OLD_RELEASE}" ]; then\n    release_swap_current_previous "${CURRENT_LINK}" "${PREVIOUS_LINK}" "${RELEASES_DIR}"',
+      'warn "New release was unhealthy; restoring the previous release."\n  if [ -n "${OLD_RELEASE}" ]; then\n    true',
+      /automatic recovery must derive and verify/,
+    ],
+  ]) {
+    assert.match(validate(mutate(file, from, to)).join("\n"), expected);
+  }
 });
 
 test("LXC contract persists public origin without trusting forwarded transport", () => {

@@ -153,7 +153,10 @@ test("trusted proxy transport is opt-in, exact-value only, and HSTS is HTTPS-onl
   const documentedSocketProxy = selfHostingGuide.match(
     /location \/sockets \{([\s\S]*?)\n    \}/,
   )?.[1];
-  assert.ok(documentedSocketProxy, "documented outer websocket location missing");
+  assert.ok(
+    documentedSocketProxy,
+    "documented outer websocket location missing",
+  );
   for (const header of [
     "Host              $host",
     "X-Real-IP         $remote_addr",
@@ -291,8 +294,11 @@ test("trusted proxy transport is opt-in, exact-value only, and HSTS is HTTPS-onl
   }
 
   assert.equal(
-    (lxcInstaller.match(/proxy_set_header X-Forwarded-For \\\$remote_addr;/g) ?? [])
-      .length,
+    (
+      lxcInstaller.match(
+        /proxy_set_header X-Forwarded-For \\\$remote_addr;/g,
+      ) ?? []
+    ).length,
     3,
     "LXC public nginx must overwrite X-Forwarded-For on every backend route",
   );
@@ -407,8 +413,11 @@ test("runtime proxy transport templating is idempotent and rejects unsafe public
 
 test("sandbox code stays data inside an opaque-origin, offline-capable runner", () => {
   assert.equal(
-    (sandboxEditor.match(/src=\{`\/sandbox\.html#\$\{runSession\.nonce\}`\}/g) ?? [])
-      .length,
+    (
+      sandboxEditor.match(
+        /src=\{`\/sandbox\.html#\$\{runSession\.nonce\}`\}/g,
+      ) ?? []
+    ).length,
     2,
   );
   assert.equal(
@@ -434,11 +443,11 @@ test("sandbox code stays data inside an opaque-origin, offline-capable runner", 
   assert.match(runnerHtml, /executionTimeoutMs = 2000/);
   assert.match(runnerHtml, /activeWorker\.terminate\(\)/);
   assert.match(runnerHtml, /runPayloadMaxBytes = 1048576/);
-  assert.match(runnerHtml, /if \(!isRunPayloadWithinLimit\(html, css, script\)\)/);
   assert.match(
-    sandboxDocument,
-    /SANDBOX_RUN_MAX_PAYLOAD_BYTES = 1024 \* 1024/,
+    runnerHtml,
+    /if \(!isRunPayloadWithinLimit\(html, css, script\)\)/,
   );
+  assert.match(sandboxDocument, /SANDBOX_RUN_MAX_PAYLOAD_BYTES = 1024 \* 1024/);
   assert.match(sandboxEditor, /isSandboxRunPayloadWithinLimit\(document\)/);
   assert.match(
     sandboxEditor,
@@ -453,10 +462,20 @@ test("sandbox code stays data inside an opaque-origin, offline-capable runner", 
 });
 
 test("sandbox worker bounds console transport before crossing the frame", () => {
-  assert.equal((runnerHtml.match(/consoleMessageMaxLength = 16384/g) ?? []).length, 2);
-  assert.equal((runnerHtml.match(/consoleEntryMaxCount = 200/g) ?? []).length, 2);
   assert.equal(
-    (runnerHtml.match(/Console output limit reached; further messages were dropped\./g) ?? []).length,
+    (runnerHtml.match(/consoleMessageMaxLength = 16384/g) ?? []).length,
+    2,
+  );
+  assert.equal(
+    (runnerHtml.match(/consoleEntryMaxCount = 200/g) ?? []).length,
+    2,
+  );
+  assert.equal(
+    (
+      runnerHtml.match(
+        /Console output limit reached; further messages were dropped\./g,
+      ) ?? []
+    ).length,
     2,
   );
   assert.match(runnerHtml, /message \+= consoleTruncationSuffix/);
@@ -532,6 +551,58 @@ test("an offline sandbox cache miss returns inert text instead of the app shell"
     [request],
     "the app-shell fallback must not be consulted",
   );
+});
+
+test("deployment marker requests bypass the service worker and every cache", () => {
+  const listeners = new Map();
+  let respondWithCalls = 0;
+  let fetchCalls = 0;
+  let cacheCalls = 0;
+  const context = {
+    URL,
+    Request,
+    Response,
+    Promise,
+    fetch: () => {
+      fetchCalls += 1;
+      throw new Error("service worker must not fetch the deployment marker");
+    },
+    caches: {
+      open: () => {
+        cacheCalls += 1;
+        throw new Error(
+          "service worker must not open a cache for the deployment marker",
+        );
+      },
+      match: () => {
+        cacheCalls += 1;
+        throw new Error(
+          "service worker must not read a cache for the deployment marker",
+        );
+      },
+    },
+    self: {
+      location: { origin: "https://notes.example.test" },
+      addEventListener: (type, listener) => listeners.set(type, listener),
+    },
+  };
+  runInNewContext(serviceWorker, context);
+
+  listeners.get("fetch")({
+    request: {
+      method: "GET",
+      url: "https://notes.example.test/.well-known/srn-deployment.json",
+      mode: "cors",
+      destination: "",
+    },
+    respondWith: () => {
+      respondWithCalls += 1;
+    },
+  });
+
+  assert.equal(respondWithCalls, 0);
+  assert.equal(fetchCalls, 0);
+  assert.equal(cacheCalls, 0);
 });
 
 test("runtime CSP hashing cannot overwrite the fixed sandbox hash", () => {

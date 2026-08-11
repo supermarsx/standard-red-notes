@@ -196,6 +196,27 @@ export function validateSetupOverwriteContract(shellSetup, powershellSetup) {
           "APP_BIND_ADDRESS=${APP_BIND_ADDRESS}",
           "fresh-install proxy-safe app bind selection",
         ],
+        [
+          "git -C \"$REPO_ROOT\" rev-parse --verify 'HEAD^{commit}'",
+          "exact deployment commit resolution",
+        ],
+        [
+          "status --porcelain=v1 --untracked-files=all",
+          "dirty checkout rejection",
+        ],
+        [
+          'export SRN_DEPLOY_REVISION="$revision"',
+          "ephemeral deployment revision export",
+        ],
+        [
+          'export SRN_DEPLOY_VERSION="setup-${revision:0:12}"',
+          "ephemeral deployment version export",
+        ],
+        [
+          "verify_started_deployment_identity",
+          "live app/server identity acceptance",
+        ],
+        ["./scripts/setup.sh --up", "identity-safe setup rerun instruction"],
       ],
     ],
     [
@@ -228,11 +249,71 @@ export function validateSetupOverwriteContract(shellSetup, powershellSetup) {
           "APP_BIND_ADDRESS=$AppBindAddress",
           "fresh-install proxy-safe app bind selection",
         ],
+        [
+          "rev-parse --verify 'HEAD^{commit}'",
+          "exact deployment commit resolution",
+        ],
+        [
+          "status --porcelain=v1 --untracked-files=all",
+          "dirty checkout rejection",
+        ],
+        [
+          "$env:SRN_DEPLOY_REVISION = $revision",
+          "ephemeral deployment revision export",
+        ],
+        [
+          '$env:SRN_DEPLOY_VERSION = "setup-$($revision.Substring(0, 12))"',
+          "ephemeral deployment version export",
+        ],
+        [
+          "Assert-StartedDeploymentIdentity",
+          "live app/server identity acceptance",
+        ],
+        [".\\scripts\\setup.ps1 -Up", "identity-safe setup rerun instruction"],
       ],
     ],
   ]) {
     for (const [fragment, description] of fragments) {
       requireFragment(errors, file, source, fragment, description);
+    }
+  }
+
+  for (const [file, source, resolvePattern, buildPattern, verifyPattern] of [
+    [
+      "scripts/setup.sh",
+      shellSetup,
+      /^\s+resolve_clean_deployment_revision\s*$/gm,
+      /\(\s*cd "\$REPO_ROOT" && \$COMPOSE up -d --build\s*\)/g,
+      /^\s+verify_started_deployment_identity\s*$/gm,
+    ],
+    [
+      "scripts/setup.ps1",
+      powershellSetup,
+      /^\s*try \{ \$deploymentRevision = Set-CleanDeploymentRevision \} catch/gm,
+      /^\s*(?:Invoke-ComposeCommand -Arguments @\('up', '-d', '--build'\)|if \(\$Compose -eq 'docker compose'\) \{ docker compose up -d --build \})/gm,
+      /^\s*try \{ Assert-StartedDeploymentIdentity -Revision \$deploymentRevision \} catch/gm,
+    ],
+  ]) {
+    const positions = (pattern) =>
+      [...source.matchAll(pattern)].map((match) => match.index);
+    const resolves = positions(resolvePattern);
+    const builds = positions(buildPattern);
+    const verifies = positions(verifyPattern);
+    if (resolves.length !== 3 || builds.length !== 3 || verifies.length !== 3) {
+      errors.push(
+        `${file}: every one of the three build/start paths must resolve and verify deployment identity`,
+      );
+      continue;
+    }
+    for (let index = 0; index < 3; index += 1) {
+      if (!(
+        resolves[index] < builds[index] && builds[index] < verifies[index]
+      )) {
+        errors.push(
+          `${file}: deployment identity must resolve before build and verify after start`,
+        );
+        break;
+      }
     }
   }
   return errors;
@@ -669,6 +750,26 @@ export function validateCiContract(files) {
     [approvedWorkflowAction("buildPush"), "BuildKit image builds"],
     ["push: false", "non-publishing image builds"],
     [
+      "SRN_DEPLOY_REVISION: ${{ github.sha }}",
+      "exact runtime deployment revision",
+    ],
+    [
+      "SRN_DEPLOY_VERSION: ci-${{ github.run_id }}.${{ github.run_attempt }}",
+      "bounded runtime deployment version",
+    ],
+    [
+      "node scripts/resolve-deployment-identity.mjs",
+      "clean checkout identity resolution",
+    ],
+    [
+      "SRN_DEPLOY_REVISION=${{ github.sha }}",
+      "exact image revision build argument",
+    ],
+    [
+      "SRN_DEPLOY_VERSION=ci-${{ github.run_id }}.${{ github.run_attempt }}",
+      "image version build argument",
+    ],
+    [
       "COMPOSE_PROJECT_NAME: srn-ci-${{ github.run_id }}-${{ github.run_attempt }}-smoke",
       "isolated project name",
     ],
@@ -680,10 +781,7 @@ export function validateCiContract(files) {
       "docker compose up -d --no-build --wait --wait-timeout 900",
       "bounded disposable stack startup",
     ],
-    [
-      "ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY",
-      "assistant pairing key",
-    ],
+    ["ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY", "assistant pairing key"],
     ["-e REQUIRE_GATEWAY=1", "required realtime gateway mode"],
     [
       "-e GATEWAY_HTTP=http://127.0.0.1:3000",
@@ -707,6 +805,20 @@ export function validateCiContract(files) {
     ["--min-expected 4 --max-skipped 0", "zero-skip report assertion"],
     ["yarn ops:backup-restore", "backup and restore drill"],
     ["yarn ci:docker-hardening", "live hardening validation"],
+    ["org.opencontainers.image.revision", "live OCI revision assertion"],
+    ["org.opencontainers.image.version", "live OCI version assertion"],
+    [
+      "/usr/share/srn-deployment/deployment.json",
+      "root-owned image marker assertion",
+    ],
+    [
+      "cmp artifacts-app-deployment.json artifacts-server-deployment.json",
+      "byte-equal app/server marker assertion",
+    ],
+    [
+      "node scripts/verify-deployment-identity.mjs",
+      "same-origin app/server deployment acceptance",
+    ],
     [
       "docker compose cp server:/var/lib/server/logs/. artifacts/server-logs",
       "server runtime log diagnostics",
@@ -721,6 +833,22 @@ export function validateCiContract(files) {
   requireJob(errors, workflow, "load-drill", [
     ["github.event_name == 'schedule'", "scheduled condition"],
     ["inputs.profile == 'load'", "manual load condition"],
+    [
+      "SRN_DEPLOY_REVISION: ${{ github.sha }}",
+      "exact runtime deployment revision",
+    ],
+    [
+      "node scripts/resolve-deployment-identity.mjs",
+      "clean checkout identity resolution",
+    ],
+    [
+      "SRN_DEPLOY_REVISION=${{ github.sha }}",
+      "exact image revision build argument",
+    ],
+    [
+      "SRN_DEPLOY_VERSION=ci-${{ github.run_id }}.${{ github.run_attempt }}",
+      "image version build argument",
+    ],
     ['OPS_LOAD_NOTES: "250"', "heavy note count"],
     ['OPS_LOAD_CLIENTS: "4"', "parallel client count"],
     ['OPS_REDIS_OPS_PER_WORKER: "500"', "Redis operation count"],
@@ -732,6 +860,22 @@ export function validateCiContract(files) {
     ["github.event_name == 'schedule'", "scheduled condition"],
     ["inputs.profile == 'exhaustive'", "manual exhaustive condition"],
     [
+      "SRN_DEPLOY_REVISION: ${{ github.sha }}",
+      "exact runtime deployment revision",
+    ],
+    [
+      "node scripts/resolve-deployment-identity.mjs",
+      "clean checkout identity resolution",
+    ],
+    [
+      "SRN_DEPLOY_REVISION=${{ github.sha }}",
+      "exact image revision build argument",
+    ],
+    [
+      "SRN_DEPLOY_VERSION=ci-${{ github.run_id }}.${{ github.run_attempt }}",
+      "image version build argument",
+    ],
+    [
       "playwright install --with-deps chromium firefox webkit",
       "three-browser install",
     ],
@@ -742,6 +886,24 @@ export function validateCiContract(files) {
     ["--require-explicit-skips", "explicit skip audit"],
     ["if-no-files-found: error", "required exhaustive artifact"],
   ]);
+
+  for (const jobName of ["container-smoke", "load-drill", "exhaustive-e2e"]) {
+    const block = jobBlock(workflow, jobName);
+    for (const [fragment, description] of [
+      ["SRN_DEPLOY_REVISION=${{ github.sha }}", "revision build argument"],
+      [
+        "SRN_DEPLOY_VERSION=ci-${{ github.run_id }}.${{ github.run_attempt }}",
+        "version build argument",
+      ],
+    ]) {
+      const count = block.split(fragment).length - 1;
+      if (count !== 2) {
+        errors.push(
+          `${file}: ${jobName} must pass the ${description} to both images, found ${count}`,
+        );
+      }
+    }
+  }
 
   requireJob(errors, workflow, "production-gate", [
     [

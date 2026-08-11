@@ -28,6 +28,7 @@
 #   HTTP_PORT    nginx listen port                                (default: 80)
 #   NODE_MAJOR   Node.js major version                            (default: 26)
 #   PUBLIC_URL   canonical browser-facing origin (persisted across upgrades)
+#   SRN_DEPLOY_VERSION  optional safe release version exposed by readiness
 # =============================================================================
 set -euo pipefail
 
@@ -41,6 +42,7 @@ HTTP_PORT="${HTTP_PORT:-80}"
 NODE_MAJOR="${NODE_MAJOR:-26}"
 PUBLIC_URL_WAS_SET="${PUBLIC_URL+x}"
 PUBLIC_URL="${PUBLIC_URL:-}"
+SRN_DEPLOY_VERSION="${SRN_DEPLOY_VERSION:-}"
 
 RELEASES_DIR="${APP_DIR}/.releases"
 CURRENT_LINK="${APP_DIR}/current"
@@ -57,6 +59,12 @@ UNIT_SRC_DIR="$(cd "$(dirname "$0")" && pwd)"
 log() { printf '\n\033[1;32m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33mWARN:\033[0m %s\n' "$*" >&2; }
 die() { printf '\033[1;31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
+
+# Validate operator-supplied release metadata before installing packages,
+# creating users, or mutating any live deployment state.
+if [[ -n "${SRN_DEPLOY_VERSION}" && ! "${SRN_DEPLOY_VERSION}" =~ ^[0-9A-Za-z][0-9A-Za-z._+-]{0,127}$ ]]; then
+  die "SRN_DEPLOY_VERSION must be 1-128 safe ASCII version characters."
+fi
 
 validate_public_url_origin() {
   PUBLIC_URL_CANDIDATE="${1:-}" "${NODE_BIN}" -e '
@@ -84,15 +92,51 @@ wait_live_health() {
   return 1
 }
 
+verify_live_deployment_identity() {
+  local expected_release="$1" expected_revision="$2" expected_version="$3" live_release
+  live_release="$(release_link_target "${CURRENT_LINK}" "${RELEASES_DIR}")" || return 1
+  [ "${live_release}" = "${expected_release}" ] || return 1
+  local identity_args=(
+    --app-url "http://127.0.0.1:${HTTP_PORT}"
+    --expected-revision "${expected_revision}"
+  )
+  if [ -n "${expected_version}" ]; then
+    identity_args+=(--expected-version "${expected_version}")
+  fi
+  "${NODE_BIN}" "${expected_release}/scripts/verify-deployment-identity.mjs" "${identity_args[@]}"
+}
+
+read_trusted_release_identity() {
+  local encoded
+  encoded="$(release_read_deployment_identity "$1" "${NODE_BIN}")" || return 1
+  case "${encoded}" in
+    *'|'*) ;;
+    *) return 1 ;;
+  esac
+  TRUSTED_RELEASE_REVISION="${encoded%%|*}"
+  TRUSTED_RELEASE_VERSION="${encoded#*|}"
+}
+
 if [ "${1:-}" = "--rollback" ]; then
   log "Switching current and previous releases"
+  NODE_BIN="$(command -v node)" || die "Rollback requires the installed Node.js runtime."
   ACTIVE_RELEASE="$(release_link_target "${CURRENT_LINK}" "${RELEASES_DIR}")" || \
     die "Current release is not a valid managed release."
+  ROLLBACK_RELEASE="$(release_link_target "${PREVIOUS_LINK}" "${RELEASES_DIR}")" || \
+    die "No valid previous release is available."
+  read_trusted_release_identity "${ACTIVE_RELEASE}" || \
+    die "The active release does not contain a trusted sealed deployment identity."
+  ACTIVE_REVISION="${TRUSTED_RELEASE_REVISION}"
+  ACTIVE_VERSION="${TRUSTED_RELEASE_VERSION}"
+  read_trusted_release_identity "${ROLLBACK_RELEASE}" || \
+    die "The rollback release does not contain a trusted sealed deployment identity."
+  ROLLBACK_REVISION="${TRUSTED_RELEASE_REVISION}"
+  ROLLBACK_VERSION="${TRUSTED_RELEASE_VERSION}"
   release_swap_current_previous "${CURRENT_LINK}" "${PREVIOUS_LINK}" "${RELEASES_DIR}" || \
     die "No valid previous release is available."
-  ROLLBACK_RELEASE="$(release_link_target "${CURRENT_LINK}" "${RELEASES_DIR}")"
   if install -o root -g root -m 0644 "${ROLLBACK_RELEASE}/.srn-nginx.conf" "${NGINX_SITE}" && \
-    nginx -t && systemctl restart standard-red-notes.service nginx && wait_live_health; then
+    nginx -t && systemctl restart standard-red-notes.service nginx && wait_live_health && \
+    verify_live_deployment_identity "${ROLLBACK_RELEASE}" "${ROLLBACK_REVISION}" "${ROLLBACK_VERSION}"; then
     log "Rollback complete."
     exit 0
   fi
@@ -101,8 +145,9 @@ if [ "${1:-}" = "--rollback" ]; then
     die "Rollback recovery could not restore the release links."
   install -o root -g root -m 0644 "${ACTIVE_RELEASE}/.srn-nginx.conf" "${NGINX_SITE}" || \
     die "Release links were restored, but the active nginx config could not be restored."
-  if ! nginx -t || ! systemctl restart standard-red-notes.service nginx || ! wait_live_health; then
-    die "Release links and config were restored, but live health did not recover."
+  if ! nginx -t || ! systemctl restart standard-red-notes.service nginx || ! wait_live_health || \
+    ! verify_live_deployment_identity "${ACTIVE_RELEASE}" "${ACTIVE_REVISION}" "${ACTIVE_VERSION}"; then
+    die "Release links and config were restored, but the active release identity did not recover."
   fi
   die "Rollback target was unhealthy; the previously active release was restored."
 elif [ -n "${1:-}" ]; then
@@ -226,6 +271,9 @@ release_create_stage "${SOURCE_DIR}" "${RELEASES_DIR}" "${DEPLOY_COMMIT}"
 trap 'release_cleanup_stage "${RELEASE_STAGE:-}" "${RELEASES_DIR}"' EXIT
 DEPLOY_ROOT="${RELEASE_STAGE}"
 HS_DIR="${DEPLOY_ROOT}/server/packages/home-server"
+printf '{"revision":"%s","version":"%s"}\n' \
+  "${DEPLOY_COMMIT}" "${SRN_DEPLOY_VERSION}" > "${DEPLOY_ROOT}/.srn-deployment.json"
+chmod 0444 "${DEPLOY_ROOT}/.srn-deployment.json"
 
 # -----------------------------------------------------------------------------
 log "Building the server workspace (home-server)"
@@ -266,6 +314,8 @@ log "Writing home-server .env"
 cat > "${HS_DIR}/.env" <<EOF
 NODE_ENV=production
 LOG_LEVEL=${LOG_LEVEL:-info}
+SRN_DEPLOY_REVISION=${DEPLOY_COMMIT}
+SRN_DEPLOY_VERSION=${SRN_DEPLOY_VERSION}
 E2E_TESTING=false
 PORT=3000
 BIND_ADDRESS=127.0.0.1
@@ -336,6 +386,13 @@ server {
   gzip on;
   gzip_types text/plain text/css application/javascript application/json image/svg+xml;
   location = /health { access_log off; add_header Content-Type text/plain; return 200 "ok\n"; }
+
+  location = /.well-known/srn-deployment.json {
+    access_log off;
+    default_type application/json;
+    add_header Cache-Control "no-store" always;
+    alias ${CURRENT_LINK}/.srn-deployment.json;
+  }
 
   location /sockets {
     proxy_pass http://127.0.0.1:3000;
@@ -445,6 +502,14 @@ release_seal "${RELEASE_STAGE}" "${RELEASE_FINAL}" "${APP_USER}"
 trap - EXIT
 
 OLD_RELEASE="$(release_link_target "${CURRENT_LINK}" "${RELEASES_DIR}" 2>/dev/null || true)"
+OLD_RELEASE_REVISION=""
+OLD_RELEASE_VERSION=""
+if [ -n "${OLD_RELEASE}" ]; then
+  read_trusted_release_identity "${OLD_RELEASE}" || \
+    die "The active release does not contain a trusted sealed deployment identity."
+  OLD_RELEASE_REVISION="${TRUSTED_RELEASE_REVISION}"
+  OLD_RELEASE_VERSION="${TRUSTED_RELEASE_VERSION}"
+fi
 atomic_install_control() {
   local source="$1" target="$2" mode="$3" temporary
   temporary="${target}.new.$$"
@@ -554,7 +619,8 @@ fi
 
 if nginx -t && systemctl daemon-reload && \
   systemctl enable --now standard-red-notes.service && systemctl restart nginx && \
-  wait_live_health; then
+  wait_live_health && \
+  verify_live_deployment_identity "${RELEASE_FINAL}" "${DEPLOY_COMMIT}" "${SRN_DEPLOY_VERSION}"; then
   log "Live health check passed."
 else
   warn "New release was unhealthy; restoring the previous release."
@@ -566,7 +632,10 @@ else
       "${SRN_SERVICE_WAS_ACTIVE}" "${NGINX_WAS_ACTIVE}" || \
       die "Previous release and controls were restored, but prior service state did not recover."
     if [ "${SRN_SERVICE_WAS_ACTIVE}" = true ] && [ "${NGINX_WAS_ACTIVE}" = true ]; then
-      wait_live_health || die "Previous release was restored, but its prior live health did not recover."
+      if ! wait_live_health || \
+        ! verify_live_deployment_identity "${OLD_RELEASE}" "${OLD_RELEASE_REVISION}" "${OLD_RELEASE_VERSION}"; then
+        die "Previous release was restored, but its trusted deployment identity did not recover."
+      fi
     fi
     die "Deployment failed its live health check; the previous release was restored."
   else

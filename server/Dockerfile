@@ -1,5 +1,28 @@
 # syntax=docker/dockerfile:1.25.0
 
+ARG SRN_DEPLOY_REVISION=""
+ARG SRN_DEPLOY_VERSION=""
+
+FROM alpine:3.23 AS deployment-identity
+
+ARG SRN_DEPLOY_REVISION
+ARG SRN_DEPLOY_VERSION
+RUN set -eu; \
+  revision="${SRN_DEPLOY_REVISION}"; \
+  version="${SRN_DEPLOY_VERSION}"; \
+  if [ -n "${revision}" ]; then \
+    [ "${#revision}" -eq 40 ] && case "${revision}" in *[!0-9a-f]*) false ;; *) true ;; esac \
+      || { echo 'SRN_DEPLOY_REVISION must be empty or exactly 40 lowercase hexadecimal characters.' >&2; exit 64; }; \
+  fi; \
+  if [ -n "${version}" ]; then \
+    [ "${#version}" -le 128 ] && case "${version}" in [0-9A-Za-z]*) true ;; *) false ;; esac \
+      && case "${version}" in *[!0-9A-Za-z._+-]*) false ;; *) true ;; esac \
+      || { echo 'SRN_DEPLOY_VERSION must be empty or a 1-128 character safe ASCII version token.' >&2; exit 64; }; \
+  fi; \
+  install -d -m 0555 /srn-deployment; \
+  printf '{"revision":"%s","version":"%s"}\n' "${revision}" "${version}" > /srn-deployment/deployment.json; \
+  chmod 0444 /srn-deployment/deployment.json
+
 # =============================================================================
 # BUILD STAGE — carries the C/C++ toolchain (g++/make/python3) needed to compile
 # native node addons during `yarn install` and to build the TS workspace. NONE
@@ -67,6 +90,13 @@ RUN CI=true yarn build
 # =============================================================================
 FROM node:26.5.0-alpine AS runtime
 
+ARG SRN_DEPLOY_REVISION
+ARG SRN_DEPLOY_VERSION
+COPY --from=deployment-identity --chown=0:0 --chmod=0555 /srn-deployment /usr/share/srn-deployment
+COPY --from=deployment-identity --chown=0:0 --chmod=0444 /srn-deployment/deployment.json /usr/share/srn-deployment/deployment.json
+LABEL org.opencontainers.image.revision="${SRN_DEPLOY_REVISION}"
+LABEL org.opencontainers.image.version="${SRN_DEPLOY_VERSION}"
+
 ENV NODE_ENV=production
 
 RUN apk add --update --no-cache \
@@ -85,6 +115,7 @@ WORKDIR /opt/server
 # Supervisor config + entrypoint (rarely change).
 COPY docker/supervisord.conf /etc/supervisord.conf
 COPY docker/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+COPY docker/deployment-identity-env.sh /usr/local/bin/deployment-identity-env.sh
 COPY docker/srn-admin.sh /usr/local/bin/srn-admin
 
 # The fully built workspace (sources, per-package dist, .yarn cache + unplugged
@@ -95,11 +126,11 @@ COPY --from=build /opt/server /opt/server
 # Normalize line endings (a CRLF checkout leaves `#!/bin/bash\r`), create the
 # writable runtime dirs, and create + own everything as the unprivileged `srn`
 # user. All service ports are >1024 so no CAP_NET_BIND_SERVICE is needed.
-RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh /usr/local/bin/srn-admin /etc/supervisord.conf \
+RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh /usr/local/bin/deployment-identity-env.sh /usr/local/bin/srn-admin /etc/supervisord.conf \
   && find /opt/server -path '*/supervisor/*.sh' -exec sed -i 's/\r$//' {} + \
   && find /opt/server/docker -name '*.sh' -exec sed -i 's/\r$//' {} + \
   && mkdir -p /var/lib/server/logs /opt/shared/uploads /opt/server/packages/api-gateway/data \
-  && chmod +x /usr/local/bin/docker-entrypoint.sh /usr/local/bin/srn-admin \
+  && chmod +x /usr/local/bin/docker-entrypoint.sh /usr/local/bin/deployment-identity-env.sh /usr/local/bin/srn-admin \
   && find /opt/server -path '*/supervisor/*.sh' -exec chmod +x {} + \
   && addgroup -g 10001 -S srn \
   && adduser -u 10001 -S srn -G srn \

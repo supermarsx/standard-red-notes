@@ -74,6 +74,7 @@ import { IpAccessListStore, IpAccessListRedis } from '../Controller/IpAccessList
 import { parseClientIpHeaderName } from '../Controller/ClientIp'
 import { RateLimitMetricsStore, RateLimitMetricsRedis } from '../Controller/RateLimitMetrics'
 import { AggregateReadinessService } from '../Service/Readiness/AggregateReadinessService'
+import { DEFAULT_DEPLOYMENT_MARKER_PATH, readDeploymentMarker } from '../Service/Readiness/DeploymentIdentity'
 import { ReadinessState } from '../Service/Readiness/ReadinessState'
 import { SubscriptionTokenStore } from '../Service/Assistant/subscription/SubscriptionTokenStore'
 import { SubscriptionCredentialProvider } from '../Service/Assistant/subscription/SubscriptionCredentialProvider'
@@ -715,6 +716,12 @@ export class ContainerConfigLoader {
         serviceProbeUrls,
         serviceControlService: container.get(TYPES.ApiGateway_ServiceControlService),
         inProcessChecks,
+        deploymentRevision: env.get('SRN_DEPLOY_REVISION', true),
+        deploymentVersion: env.get('SRN_DEPLOY_VERSION', true),
+        deploymentMarker:
+          (isConfiguredForHomeServer
+            ? readDeploymentMarker(path.resolve(process.cwd(), '../../../.srn-deployment.json'))
+            : undefined) ?? readDeploymentMarker(DEFAULT_DEPLOYMENT_MARKER_PATH),
       }),
     )
 

@@ -213,12 +213,19 @@ jobs:
     timeout-minutes: 70
     env:
       COMPOSE_PROJECT_NAME: srn-ci-${{ github.run_id }}-${{ github.run_attempt }}-smoke
+      SRN_DEPLOY_REVISION: ${{ github.sha }}
+      SRN_DEPLOY_VERSION: ci-${{ github.run_id }}.${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
+      - name: Resolve exact clean deployment identity
+        run: >-
+          node scripts/resolve-deployment-identity.mjs
+          --expect-revision "$SRN_DEPLOY_REVISION"
+          --version "$SRN_DEPLOY_VERSION"
       - name: Install Corepack
         run: npm install --global "corepack@${COREPACK_VERSION}" && corepack enable
       - name: Cache root Yarn and npm packages
@@ -255,6 +262,9 @@ jobs:
           load: true
           push: false
           tags: ${{ env.APP_IMAGE }}
+          build-args: |
+            SRN_DEPLOY_REVISION=${{ github.sha }}
+            SRN_DEPLOY_VERSION=ci-${{ github.run_id }}.${{ github.run_attempt }}
           cache-from: type=gha,scope=ci-app
           cache-to: type=gha,mode=max,scope=ci-app
       - name: Build hardened server image
@@ -265,6 +275,9 @@ jobs:
           load: true
           push: false
           tags: ${{ env.SERVER_IMAGE }}
+          build-args: |
+            SRN_DEPLOY_REVISION=${{ github.sha }}
+            SRN_DEPLOY_VERSION=ci-${{ github.run_id }}.${{ github.run_attempt }}
           cache-from: type=gha,scope=ci-server
           cache-to: type=gha,mode=max,scope=ci-server
       - name: Configure isolated stack
@@ -286,6 +299,24 @@ jobs:
           done
       - name: Start disposable stack
         run: docker compose up -d --no-build --wait --wait-timeout 900
+      - name: Verify exact app and server deployment identity
+        run: |
+          set -euo pipefail
+          for image in "$APP_IMAGE" "$SERVER_IMAGE"; do
+            test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image")" = "$SRN_DEPLOY_REVISION"
+            test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "$image")" = "$SRN_DEPLOY_VERSION"
+          done
+          for service in app server; do
+            test "$(docker compose exec -T "$service" stat -c '%u:%g %a' /usr/share/srn-deployment/deployment.json)" = "0:0 444"
+          done
+          docker compose exec -T app cat /usr/share/srn-deployment/deployment.json > artifacts-app-deployment.json
+          docker compose exec -T server cat /usr/share/srn-deployment/deployment.json > artifacts-server-deployment.json
+          cmp artifacts-app-deployment.json artifacts-server-deployment.json
+          node scripts/verify-deployment-identity.mjs \
+            --app-url "$APP_URL" \
+            --expected-revision "$SRN_DEPLOY_REVISION" \
+            --expected-version "$SRN_DEPLOY_VERSION"
+          rm -f artifacts-app-deployment.json artifacts-server-deployment.json
       - name: Verify encrypted two-editor realtime convergence
         run: |
           docker compose exec -T \
@@ -355,12 +386,19 @@ jobs:
     timeout-minutes: 75
     env:
       COMPOSE_PROJECT_NAME: srn-ci-${{ github.run_id }}-${{ github.run_attempt }}-load
+      SRN_DEPLOY_REVISION: ${{ github.sha }}
+      SRN_DEPLOY_VERSION: ci-${{ github.run_id }}.${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
+      - name: Resolve exact clean deployment identity
+        run: >-
+          node scripts/resolve-deployment-identity.mjs
+          --expect-revision "$SRN_DEPLOY_REVISION"
+          --version "$SRN_DEPLOY_VERSION"
       - name: Install Corepack
         run: npm install --global "corepack@${COREPACK_VERSION}" && corepack enable
       - name: Cache root Yarn and npm packages
@@ -386,6 +424,9 @@ jobs:
           load: true
           push: false
           tags: ${{ env.APP_IMAGE }}
+          build-args: |
+            SRN_DEPLOY_REVISION=${{ github.sha }}
+            SRN_DEPLOY_VERSION=ci-${{ github.run_id }}.${{ github.run_attempt }}
           cache-from: type=gha,scope=ci-app
       - name: Restore server image from build cache
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
@@ -395,6 +436,9 @@ jobs:
           load: true
           push: false
           tags: ${{ env.SERVER_IMAGE }}
+          build-args: |
+            SRN_DEPLOY_REVISION=${{ github.sha }}
+            SRN_DEPLOY_VERSION=ci-${{ github.run_id }}.${{ github.run_attempt }}
           cache-from: type=gha,scope=ci-server
       - name: Configure isolated stack
         run: |
@@ -458,12 +502,19 @@ jobs:
     timeout-minutes: 120
     env:
       COMPOSE_PROJECT_NAME: srn-ci-${{ github.run_id }}-${{ github.run_attempt }}-e2e
+      SRN_DEPLOY_REVISION: ${{ github.sha }}
+      SRN_DEPLOY_VERSION: ci-${{ github.run_id }}.${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
+      - name: Resolve exact clean deployment identity
+        run: >-
+          node scripts/resolve-deployment-identity.mjs
+          --expect-revision "$SRN_DEPLOY_REVISION"
+          --version "$SRN_DEPLOY_VERSION"
       - name: Install Corepack
         run: npm install --global "corepack@${COREPACK_VERSION}" && corepack enable
       - name: Cache root Yarn and npm packages
@@ -489,6 +540,9 @@ jobs:
           load: true
           push: false
           tags: ${{ env.APP_IMAGE }}
+          build-args: |
+            SRN_DEPLOY_REVISION=${{ github.sha }}
+            SRN_DEPLOY_VERSION=ci-${{ github.run_id }}.${{ github.run_attempt }}
           cache-from: type=gha,scope=ci-app
       - name: Restore server image from build cache
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
@@ -498,6 +552,9 @@ jobs:
           load: true
           push: false
           tags: ${{ env.SERVER_IMAGE }}
+          build-args: |
+            SRN_DEPLOY_REVISION=${{ github.sha }}
+            SRN_DEPLOY_VERSION=ci-${{ github.run_id }}.${{ github.run_attempt }}
           cache-from: type=gha,scope=ci-server
       - name: Configure isolated stack
         run: |

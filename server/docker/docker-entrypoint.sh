@@ -518,6 +518,11 @@ fi
 export API_GATEWAY_NODE_ENV=production
 export API_GATEWAY_VERSION=local
 
+# Optional public deployment identity. The sourced helper first removes direct
+# API_GATEWAY_* injection, then validates the unprefixed Compose expectation.
+# shellcheck disable=SC1091
+. /usr/local/bin/deployment-identity-env.sh
+
 export API_GATEWAY_SYNCING_SERVER_JS_URL=http://localhost:$SYNCING_SERVER_PORT
 export API_GATEWAY_SYNCING_SERVER_GRPC_URL=0.0.0.0:$SYNCING_SERVER_GRPC_PORT
 export API_GATEWAY_AUTH_SERVER_URL=http://localhost:$AUTH_SERVER_PORT

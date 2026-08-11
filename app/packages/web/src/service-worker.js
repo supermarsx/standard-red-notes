@@ -19,6 +19,7 @@
 const SW_VERSION = '__SW_VERSION__'
 const CACHE_NAME = 'srn-shell-' + SW_VERSION
 const SANDBOX_PATH = '/sandbox.html'
+const DEPLOYMENT_MARKER_PATH = '/.well-known/srn-deployment.json'
 
 // Minimal set of files that make up the bootable shell. Everything else
 // (components, editors, fonts, vendor libsodium, etc.) is cached on first use
@@ -102,6 +103,11 @@ self.addEventListener('fetch', (event) => {
     return
   }
   if (isApiRequest(url)) {
+    return
+  }
+  // Deployment acceptance must always observe the current nginx/image marker,
+  // never a stale-while-revalidate response retained from the prior release.
+  if (url.pathname === DEPLOYMENT_MARKER_PATH) {
     return
   }
 

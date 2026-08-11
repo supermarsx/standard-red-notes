@@ -49,6 +49,10 @@ x-server-env: &server-env
   # proxy". Pair with COOKIE_SECURE=true when TLS is terminated at the proxy.
   TRUST_PROXY: ${TRUST_PROXY:-loopback, linklocal, uniquelocal}
   LOG_LEVEL: ${LOG_LEVEL:-info}
+  # Optional public deployment identity surfaced by aggregate readiness. Values
+  # are sanitized by the gateway; empty local defaults preserve existing starts.
+  SRN_DEPLOY_REVISION: "${SRN_DEPLOY_REVISION:-}"
+  SRN_DEPLOY_VERSION: "${SRN_DEPLOY_VERSION:-}"
   # Shared persisted admin overlay read by every supervisord process. A custom
   # in-container path also needs a matching persistent volume mount.
   SERVER_SETTINGS_PATH: ${SERVER_SETTINGS_PATH:-/opt/server/packages/api-gateway/data/server-settings.json}
@@ -352,6 +356,9 @@ services:
     build:
       context: ./app
       dockerfile: Dockerfile
+      args:
+        SRN_DEPLOY_REVISION: "${SRN_DEPLOY_REVISION:-}"
+        SRN_DEPLOY_VERSION: "${SRN_DEPLOY_VERSION:-}"
     image: standard-red-notes/app:local
     restart: unless-stopped
     # Hardening: the image already runs as the unprivileged `nginx` user (uid 101)
@@ -431,6 +438,9 @@ services:
     build:
       context: ./server
       dockerfile: Dockerfile
+      args:
+        SRN_DEPLOY_REVISION: "${SRN_DEPLOY_REVISION:-}"
+        SRN_DEPLOY_VERSION: "${SRN_DEPLOY_VERSION:-}"
     image: standard-red-notes/server:local
     restart: unless-stopped
     # Hardening: the image runs supervisord + every node service as the

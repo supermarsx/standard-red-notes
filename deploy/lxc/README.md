@@ -19,9 +19,11 @@ container:
 4. Generates + persists per-instance secrets under the data dir.
 5. Writes the home-server `.env` (sqlite + in-memory cache) and installs a
    **systemd** unit (`standard-red-notes.service`) that runs it.
-6. Switches one `current` symlink only after the staged backend health check
-   passes. nginx and systemd both use that link; `previous` is retained for an
-   explicit rollback. Releases are root-owned/read-only at runtime.
+6. Writes a root-owned/read-only commit marker, requires staged readiness to
+   report that exact revision, and switches one `current` symlink only after the
+   check passes. nginx and systemd both use that link; `previous` is retained
+   for an explicit rollback. Live activation also requires the public app marker
+   and server readiness identity to match before the release is accepted.
 
 The home-server backend is pinned to `127.0.0.1:3000` in both the generated
 environment and launcher. nginx is the only network-facing listener.
@@ -90,6 +92,7 @@ HTTP_PORT=8080 DATA_DIR=/srv/notes-data ./install.sh
 ```sh
 # From the host or another machine on the network:
 curl -fsS http://<container-ip>/healthcheck/readiness # -> aggregate 200 only when ready
+curl -fsS http://<container-ip>/.well-known/srn-deployment.json # -> active sealed release
 # Browser:
 http://<container-ip>/
 ```

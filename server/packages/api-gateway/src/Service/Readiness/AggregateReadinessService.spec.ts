@@ -47,6 +47,7 @@ describe('AggregateReadinessService', () => {
     const report = await service.check()
 
     expect(report.status).toBe('ready')
+    expect(report.deployment).toEqual({ revision: null, version: null })
     expect(report.checks.services).toEqual({
       auth: true,
       'syncing-server': true,
@@ -141,6 +142,12 @@ describe('AggregateReadinessService', () => {
       inProcessChecks,
       fetchFn: okFetch,
       cacheTtlMs: 0,
+      deploymentRevision: '0123456789abcdef0123456789abcdef01234567',
+      deploymentVersion: 'v26.8.11-rc.1+linux.x64',
+      deploymentMarker: {
+        revision: '0123456789abcdef0123456789abcdef01234567',
+        version: 'v26.8.11-rc.1+linux.x64',
+      },
     })
 
     expect((await service.check()).status).toBe('unavailable')
@@ -149,6 +156,10 @@ describe('AggregateReadinessService', () => {
     const report = await service.check()
 
     expect(report.status).toBe('ready')
+    expect(report.deployment).toEqual({
+      revision: '0123456789abcdef0123456789abcdef01234567',
+      version: 'v26.8.11-rc.1+linux.x64',
+    })
     expect(report.checks.programs).toBeUndefined()
     expect(okFetch).not.toHaveBeenCalled()
     expect(controlSpy).not.toHaveBeenCalled()
@@ -172,6 +183,83 @@ describe('AggregateReadinessService', () => {
 
     expect(report.status).toBe('unavailable')
     expect(report.checks.services.files).toBe(false)
+  })
+
+  it.each([
+    ['uppercase revision', '0123456789ABCDEF0123456789abcdef01234567', '1.2.3'],
+    ['short revision', '0123456789abcdef', '1.2.3'],
+    ['version whitespace', '0123456789abcdef0123456789abcdef01234567', '1.2.3 release'],
+    ['version control characters', '0123456789abcdef0123456789abcdef01234567', '1.2.3\nother=value'],
+    ['overlong version', '0123456789abcdef0123456789abcdef01234567', `v${'1'.repeat(128)}`],
+  ])('nulls invalid deployment identity: %s', async (_case, revision, version) => {
+    const report = await new AggregateReadinessService({
+      homeServer: true,
+      state: readyState(),
+      inProcessChecks: {
+        auth: async () => undefined,
+        'syncing-server': async () => undefined,
+        files: async () => undefined,
+        revisions: async () => undefined,
+      },
+      deploymentRevision: revision,
+      deploymentVersion: version,
+      deploymentMarker: {
+        revision: '0123456789abcdef0123456789abcdef01234567',
+        version: version === '1.2.3' ? version : null,
+      },
+      cacheTtlMs: 0,
+    }).check()
+
+    expect(report.status).toBe('ready')
+    expect(report.deployment).toEqual({ revision: null, version: null })
+  })
+
+  it('accepts the maximum safe deployment version length in multi-process mode', async () => {
+    const version = `v${'1'.repeat(127)}`
+    const report = await new AggregateReadinessService({
+      homeServer: false,
+      state: readyState(),
+      serviceProbeUrls: serviceUrls,
+      serviceControlService: supervisor(),
+      fetchFn: okFetch,
+      deploymentRevision: 'fedcba9876543210fedcba9876543210fedcba98',
+      deploymentVersion: version,
+      deploymentMarker: {
+        revision: 'fedcba9876543210fedcba9876543210fedcba98',
+        version,
+      },
+      cacheTtlMs: 0,
+    }).check()
+
+    expect(report.status).toBe('ready')
+    expect(report.deployment).toEqual({
+      revision: 'fedcba9876543210fedcba9876543210fedcba98',
+      version,
+    })
+  })
+
+  it.each([
+    ['missing marker', undefined],
+    ['stale revision', { revision: 'fedcba9876543210fedcba9876543210fedcba98', version: 'v26.8.11' }],
+    ['stale version', { revision: '0123456789abcdef0123456789abcdef01234567', version: 'v26.8.10' }],
+  ])('does not report runtime deployment identity with a %s', async (_case, deploymentMarker) => {
+    const report = await new AggregateReadinessService({
+      homeServer: true,
+      state: readyState(),
+      inProcessChecks: {
+        auth: async () => undefined,
+        'syncing-server': async () => undefined,
+        files: async () => undefined,
+        revisions: async () => undefined,
+      },
+      deploymentRevision: '0123456789abcdef0123456789abcdef01234567',
+      deploymentVersion: 'v26.8.11',
+      deploymentMarker,
+      cacheTtlMs: 0,
+    }).check()
+
+    expect(report.status).toBe('ready')
+    expect(report.deployment).toEqual({ revision: null, version: null })
   })
 
   it('fails closed when a required in-process dependency check is missing', async () => {
