@@ -20,11 +20,15 @@
   // snapshot. The source app remains mounted so images/fonts stay available,
   // but no toolbar, portal, widget action or add-control can enter the output.
   // ---------------------------------------------------------------------------
-  body.srn-printing > *:not(#srn-print-root) {
+  // Default deny: `beforeprint` is not cancellable. Even if runtime state is
+  // unavailable or a provider throws, application chrome must never become the
+  // browser's fallback print tree. A missing snapshot therefore prints blank.
+  html body > *:not(#srn-print-root) {
     display: none !important;
+    visibility: hidden !important;
   }
 
-  body.srn-printing #srn-print-root {
+  html body > #srn-print-root {
     background: #fff !important;
     color: #000 !important;
     display: block !important;
@@ -35,6 +39,7 @@
     overflow: visible !important;
     padding: 0 !important;
     position: static !important;
+    visibility: visible !important;
     width: auto !important;
   }
 

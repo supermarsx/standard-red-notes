@@ -1129,6 +1129,7 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
                 <div className="title flex-grow overflow-auto">
                   <input
                     className="input text-lg"
+                    data-srn-note-uuid={this.note.uuid}
                     disabled={this.state.noteLocked || this.state.readonly}
                     id={ElementIds.NoteTitleEditor}
                     onChange={this.onTitleChange}

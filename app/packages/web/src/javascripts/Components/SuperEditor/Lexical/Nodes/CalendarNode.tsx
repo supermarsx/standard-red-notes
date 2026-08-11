@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { useCallback, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import {
   $getNodeByKey,
   DecoratorNode,
@@ -11,6 +11,11 @@ import {
   Spread,
 } from 'lexical'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
+import {
+  PrintableCalendarSnapshot,
+  registerPrintableCalendar,
+  unregisterPrintableCalendar,
+} from './PrintableCalendarRegistry'
 
 export type CalendarData = { events: Record<string, string[]> }
 
@@ -36,11 +41,49 @@ function dateKey(year: number, month: number, day: number): string {
   return `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`
 }
 
+/** Build a stable all-event projection; current month/selection never filters it. */
+export function getCalendarPrintSnapshot(data: CalendarData): PrintableCalendarSnapshot {
+  return {
+    events: Object.entries(data.events)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .flatMap(([date, events]) => events.map((text) => ({ date, text }))),
+  }
+}
+
+/** Include an event being typed but not yet blurred, without mutating CalendarData. */
+export function applyLiveCalendarEdit(
+  snapshot: PrintableCalendarSnapshot,
+  element: HTMLElement,
+): PrintableCalendarSnapshot {
+  const input = element.querySelector<HTMLInputElement>('[data-srn-calendar-event-input]')
+  const date = input?.getAttribute('data-srn-calendar-event-date')
+  const text = input?.value.trim()
+  if (date && text) {
+    snapshot.events.push({ date, text })
+    snapshot.events.sort((left, right) => left.date.localeCompare(right.date))
+  }
+  return snapshot
+}
+
 function CalendarComponent({ data, nodeKey }: { data: CalendarData; nodeKey: NodeKey }): React.JSX.Element {
   const [editor] = useLexicalComposerContext()
   const now = new Date()
   const [view, setView] = useState({ year: now.getFullYear(), month: now.getMonth() })
   const [selected, setSelected] = useState<string | null>(null)
+  const printDataRef = useRef(data)
+  printDataRef.current = data
+  const registeredPrintElement = useRef<HTMLElement | null>(null)
+  const setPrintElement = useCallback((element: HTMLDivElement | null) => {
+    if (registeredPrintElement.current) {
+      unregisterPrintableCalendar(registeredPrintElement.current)
+    }
+    registeredPrintElement.current = element
+    if (element) {
+      registerPrintableCalendar(element, () =>
+        applyLiveCalendarEdit(getCalendarPrintSnapshot(printDataRef.current), element),
+      )
+    }
+  }, [])
 
   const mutate = useCallback(
     (fn: (events: Record<string, string[]>) => void) => {
@@ -94,7 +137,7 @@ function CalendarComponent({ data, nodeKey }: { data: CalendarData; nodeKey: Nod
   }
 
   return (
-    <div className="border-border bg-default my-2 rounded border" data-calendar-block="true">
+    <div ref={setPrintElement} className="border-border bg-default my-2 rounded border" data-calendar-block="true">
       <div className="border-border flex items-center justify-between border-b px-2 py-1 text-sm">
         <button className="hover:bg-contrast rounded px-2 py-0.5" onClick={() => shiftMonth(-1)} type="button">
           ‹
@@ -156,6 +199,8 @@ function CalendarComponent({ data, nodeKey }: { data: CalendarData; nodeKey: Nod
           </ul>
           <input
             key={selected}
+            data-srn-calendar-event-date={selected}
+            data-srn-calendar-event-input="true"
             className="border-border bg-default text-foreground focus:border-info w-full rounded border px-2 py-1 text-sm outline-none"
             placeholder="Add an event, press Enter…"
             onKeyDown={(e) => {

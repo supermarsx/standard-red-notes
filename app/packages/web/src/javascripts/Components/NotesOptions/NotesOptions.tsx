@@ -47,7 +47,7 @@ import { BOOKMARK_SPOT_COMMAND } from '@/Bookmarks/bookmarkCommand'
 import { noteIsTemplate } from '@/Templates/templates'
 import { getSelectionAIAvailability } from '@/Assistant/selectionActions'
 import { downloadNoteImagesAsZip } from '@/Utils/NoteImagesUtils'
-import { printActiveNote } from '@/Components/NoteView/Print/PrintNote'
+import { getActiveNotePrintSupport, printActiveNote } from '@/Components/NoteView/Print/PrintNote'
 
 const iconSize = MenuItemIconSize
 const iconClassDanger = `text-danger mr-2 ${iconSize}`
@@ -91,6 +91,13 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
 
   const aiAvailability = useMemo(() => getSelectionAIAvailability(application), [application])
   const canEnableLocalOnly = notesController.canEnableLocalOnlyForNotes(notes)
+  const printSupport = getActiveNotePrintSupport({
+    noteUuid: notes.length === 1 ? notes[0]?.uuid : undefined,
+    fallbackTitle: notes.length === 1 ? notes[0]?.title : undefined,
+    fallbackBody: notes.length === 1 ? notes[0]?.text : undefined,
+    fallbackNoteType: notes.length === 1 ? notes[0]?.noteType : undefined,
+    fallbackEditorIdentifier: notes.length === 1 ? notes[0]?.editorIdentifier : undefined,
+  })
 
   useEffect(() => {
     const removeAltKeyObserver = application.keyboardService.addCommandHandler({
@@ -147,6 +154,9 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
     printActiveNote({
       noteUuid: notes[0]?.uuid,
       fallbackTitle: notes[0]?.title,
+      fallbackBody: notes[0]?.text,
+      fallbackNoteType: notes[0]?.noteType,
+      fallbackEditorIdentifier: notes[0]?.editorIdentifier,
     })
   }, [closeMenu, notes])
 
@@ -517,7 +527,11 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
           Export
         </MenuItem>
         {notes.length === 1 && (
-          <MenuItem onClick={printNote}>
+          <MenuItem
+            onClick={printNote}
+            disabled={!printSupport.supported}
+            title={printSupport.supported ? undefined : printSupport.reason}
+          >
             <Icon type="print" className={iconClass} />
             Print note
           </MenuItem>
