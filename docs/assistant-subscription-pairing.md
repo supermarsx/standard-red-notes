@@ -30,29 +30,12 @@ only to the server-side assistant provider.
 
 ## Configure the gateway
 
-Fresh installs created with `scripts/setup.sh` or `scripts/setup.ps1` generate
-and persist this key automatically. If you maintain `.env` manually, generate a
-32-byte key and provide it as exactly 64 hexadecimal characters:
-
-```powershell
-[Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32)).ToLower()
-```
-
-Set:
-
-```dotenv
-ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=<64-hex-character key>
-PUBLIC_URL=https://notes.example.com
-```
-
-The gateway validates any configured value during bootstrap. A malformed,
-non-empty value stops the gateway before pairing becomes available; an absent
-value remains a supported way to keep guided pairing disabled.
-
-**Adding the key to an older setup-generated environment.**
-
-Normal setup reruns preserve every existing secret. For an older generated
-environment that has no pairing key, rerun the matching setup script normally:
+Supported installs configure this automatically. Fresh runs and ordinary reruns
+of `scripts/setup.sh` or `scripts/setup.ps1` generate the internal encryption key
+once, persist it, and preserve it on every later run. The LXC installer does the
+same in its root-only secret store. No administrator setting or pasted key is
+required. For an older setup-generated environment, rerun the matching setup
+script normally:
 
 ```bash
 ./scripts/setup.sh
@@ -62,21 +45,36 @@ environment that has no pairing key, rerun the matching setup script normally:
 ./scripts/setup.ps1
 ```
 
-The explicit `--generate-assistant-subscription-key` /
-`-GenerateAssistantSubscriptionKey` forms perform the same operation when a
-non-interactive migration command is preferable. Before writing anything, the
-migration validates Compose and inspects the
-current server container or its mounted gateway data directory. It refuses to
-generate a key if an encrypted pairing file exists, if a stopped container or
-custom token path prevents a reliable inspection, or if the current `.env`
-already contains a malformed or ambiguous assignment. On success it makes a
-timestamped `.env.bak.*`, writes one 64-hex key atomically, and validates Compose
-again. If pairing data already exists, recover its original key; a new key cannot
+Before writing anything, setup validates Compose and inspects the current server
+container or its mounted gateway data directory. It refuses to generate a key if
+an encrypted pairing file exists, if a stopped container or custom token path
+prevents reliable inspection, or if the current `.env` contains a malformed or
+ambiguous assignment. On success it creates a timestamped `.env.bak.*`, writes
+one 64-hex key atomically, and validates Compose again. If pairing data already
+exists, setup fails closed: restore its original key because a new key cannot
 decrypt it.
 
 Run normal setup or the explicit migration separately before
 `--force-overwrite` / `-ForceOverwrite`. Full environment rotation preserves a
 valid existing pairing key rather than silently invalidating the durable store.
+
+<details>
+<summary>Advanced custom deployment or recovery</summary>
+
+Only deployments that intentionally bypass the supported setup scripts should
+set `ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY` directly. Supply exactly 32 random
+bytes encoded as 64 hexadecimal characters and keep the value in protected
+backups. Never generate a replacement while pairing ciphertext exists; restore
+the original instead. The explicit `--generate-assistant-subscription-key` /
+`-GenerateAssistantSubscriptionKey` setup options are available for controlled
+non-interactive migration.
+
+</details>
+
+The gateway validates any configured value during bootstrap. A malformed,
+non-empty value stops the gateway before pairing becomes available; an absent
+value is supported only for custom deployments that deliberately keep guided
+pairing disabled.
 
 The stock container paths are already wired to named persistent volumes:
 

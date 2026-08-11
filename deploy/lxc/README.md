@@ -138,18 +138,31 @@ rollback target does not become healthy.
 
 ## Back up
 
-Everything stateful lives under `DATA_DIR` (default
+Application state lives under `DATA_DIR` (default
 `/var/lib/standard-red-notes`): `database/home_server.sqlite`, `uploads/`, and
-`secrets.env`. Stop the service, copy the directory, restart:
+the encrypted `assistant-subscription.json` pairing store. Root-only installation
+secrets live separately at `/etc/standard-red-notes/private/secrets.env` so the
+service account can never alter content a future root installer reads. Stop the
+service and back up both locations:
 
 ```sh
 systemctl stop standard-red-notes
 tar czf notes-backup.tgz -C /var/lib standard-red-notes
+install -m 600 /etc/standard-red-notes/private/secrets.env notes-secrets.env
 systemctl start standard-red-notes
 ```
 
 > Keep `secrets.env` with the backup — without the same secrets, existing
-> sessions and encrypted MFA data won't validate against a restored DB.
+> sessions, encrypted MFA data, and assistant subscription pairings cannot be
+> recovered.
+
+The installer creates the assistant pairing-encryption key internally on first
+install and persists it in the root-only secrets file; administrators never need to invent or
+paste one. Upgrades validate and reuse that exact key. An older keyless install
+is migrated automatically only when the durable pairing store is empty, or when
+the previous release still contains the matching key. If ciphertext exists but
+the matching key cannot be recovered, installation stops with a restore
+instruction instead of generating a replacement that would orphan the pairing.
 
 ## HTTPS
 

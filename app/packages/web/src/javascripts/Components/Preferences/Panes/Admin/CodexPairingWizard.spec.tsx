@@ -148,4 +148,28 @@ describe('CodexPairingWizard security and per-id lifecycle', () => {
     expect(application.assistantSubscriptionStart).not.toHaveBeenCalled()
     expect(container.textContent).toContain('Use 1-128 letters')
   })
+
+  it('directs an operator to the supported installer when pairing storage is unavailable', async () => {
+    const application = {
+      assistantSubscriptionStatus: jest.fn().mockResolvedValue({
+        paired: false,
+        subscriptionId: 'default',
+        profileReferencesKnown: true,
+      }),
+      assistantSubscriptionStart: jest.fn().mockResolvedValue({ ok: false, status: 503 }),
+      serverJsonRequest: jest.fn(),
+      assistantSubscriptionUnpair: jest.fn(),
+    }
+
+    await act(async () => {
+      root.render(createElement(CodexPairingWizard, { application: application as never }))
+    })
+    await flush()
+    await act(async () => button('Generate authorization link')?.click())
+    await flush()
+
+    expect(container.textContent).toContain('rerun or update the supported installer')
+    expect(container.textContent).toContain('restore its original installation secrets')
+    expect(container.textContent).not.toContain('set ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY')
+  })
 })

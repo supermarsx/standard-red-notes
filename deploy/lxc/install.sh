@@ -292,20 +292,258 @@ log "Building the web app bundle"
 
 # -----------------------------------------------------------------------------
 log "Generating / loading persistent secrets"
-SECRETS_FILE="${DATA_DIR}/secrets.env"
-if [ ! -f "${SECRETS_FILE}" ]; then
-  umask 077
-  {
-    echo "AUTH_JWT_SECRET=$(openssl rand -hex 32)"
-    echo "JWT_SECRET=$(openssl rand -hex 32)"
-    echo "ENCRYPTION_SERVER_KEY=$(openssl rand -hex 32)"
-    echo "PSEUDO_KEY_PARAMS_KEY=$(openssl rand -hex 32)"
-    echo "VALET_TOKEN_SECRET=$(openssl rand -hex 32)"
-  } > "${SECRETS_FILE}"
+SECRETS_DIR="${PUBLIC_URL_CONFIG_DIR}/private"
+SECRETS_FILE="${SECRETS_DIR}/secrets.env"
+LEGACY_SECRETS_FILE="${DATA_DIR}/secrets.env"
+if [ -e "${SECRETS_DIR}" ] || [ -L "${SECRETS_DIR}" ]; then
+  [ -d "${SECRETS_DIR}" ] && [ ! -L "${SECRETS_DIR}" ] || \
+    die "Persistent secret path must be a real directory, not a symlink: ${SECRETS_DIR}"
+else
+  install -d -o root -g root -m 0700 "${SECRETS_DIR}"
+fi
+[ -d "${SECRETS_DIR}" ] && [ ! -L "${SECRETS_DIR}" ] && \
+  [ "$(stat -c '%u:%a' "${SECRETS_DIR}")" = "0:700" ] || \
+  die "Persistent secret directory must be root-owned mode 700: ${SECRETS_DIR}"
+ASSISTANT_SUBSCRIPTION_TOKEN_PATH="${DATA_DIR}/assistant-subscription.json"
+LEGACY_ASSISTANT_SUBSCRIPTION_TOKEN_PATH="${CURRENT_LINK}/server/packages/home-server/data/assistant-subscription.json"
+
+validate_pairing_file() {
+  local file="$1"
+  if [ -e "${file}" ]; then
+    [ -f "${file}" ] && [ ! -L "${file}" ] || \
+      die "Assistant pairing state must be a regular non-symlink file: ${file}"
+  fi
+}
+
+read_hex_secret() {
+  local file="$1" name="$2" required="$3" value
+  mapfile -t SECRET_ASSIGNMENTS < <(grep -E "^${name}=" "${file}" || true)
+  [ "${#SECRET_ASSIGNMENTS[@]}" -le 1 ] || die "${name} is assigned more than once in ${file}."
+  if [ "${#SECRET_ASSIGNMENTS[@]}" -eq 0 ]; then
+    [ "${required}" = false ] || die "${name} is missing from ${file}."
+    READ_SECRET_STATE=missing
+    READ_SECRET_VALUE=""
+    return
+  fi
+  value="${SECRET_ASSIGNMENTS[0]#*=}"
+  [[ "${value}" =~ ^[0-9a-fA-F]{64}$ ]] || \
+    die "${name} in ${file} must be exactly 64 hexadecimal characters."
+  READ_SECRET_STATE=valid
+  READ_SECRET_VALUE="${value}"
+}
+
+validate_secret_document() {
+  local file="$1" line assignment_count=0
+  while IFS= read -r line || [ -n "${line}" ]; do
+    [ -n "${line}" ] || \
+      die "${file} contains a blank line; installer secrets must use the exact generated schema."
+    [[ "${line}" =~ ^(AUTH_JWT_SECRET|JWT_SECRET|ENCRYPTION_SERVER_KEY|PSEUDO_KEY_PARAMS_KEY|VALET_TOKEN_SECRET|ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY)=[0-9a-fA-F]{64}$ ]] || \
+      die "${file} contains an unexpected or malformed entry; refusing to interpret it as installer secrets."
+    assignment_count=$((assignment_count + 1))
+  done < "${file}"
+  [ "${assignment_count}" = 5 ] || [ "${assignment_count}" = 6 ] || \
+    die "${file} must contain exactly the five base secrets and optional assistant pairing key."
+}
+
+persist_assistant_secret() {
+  local key="$1" temporary owner group
+  temporary="$(mktemp "${SECRETS_DIR}/secrets.env.new.XXXXXX")"
+  owner="$(stat -c '%u' "${SECRETS_FILE}")"
+  group="$(stat -c '%g' "${SECRETS_FILE}")"
+  if ! cp -- "${SECRETS_FILE}" "${temporary}" || \
+     ! printf 'ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=%s\n' "${key}" >> "${temporary}" || \
+     ! chown "${owner}:${group}" "${temporary}" || \
+     ! chmod 0600 "${temporary}" || \
+     ! mv -Tf -- "${temporary}" "${SECRETS_FILE}"; then
+    rm -f -- "${temporary}"
+    die "Could not atomically persist the internal assistant pairing key."
+  fi
+}
+
+verify_pairing_store() {
+  local file="$1" key="$2"
+  # Send the key over stdin, never argv. This authenticates the AES-GCM envelope
+  # before an upgrade accepts or migrates durable ciphertext.
+  printf '%s' "${key}" | "${NODE_BIN}" -e '
+    const crypto = require("crypto")
+    const fs = require("fs")
+    const file = process.argv[1]
+    const key = fs.readFileSync(0, "utf8").trim()
+    const envelope = JSON.parse(fs.readFileSync(file, "utf8"))
+    const hex = (value, bytes) => typeof value === "string" && new RegExp(`^[0-9a-fA-F]{${bytes * 2}}$`).test(value)
+    if (envelope?.v !== 1 || !hex(envelope.iv, 12) || !hex(envelope.tag, 16) || !hex(envelope.data, envelope.data.length / 2)) process.exit(2)
+    const decipher = crypto.createDecipheriv("aes-256-gcm", Buffer.from(key, "hex"), Buffer.from(envelope.iv, "hex"))
+    decipher.setAuthTag(Buffer.from(envelope.tag, "hex"))
+    JSON.parse(Buffer.concat([decipher.update(Buffer.from(envelope.data, "hex")), decipher.final()]).toString("utf8"))
+  ' "${file}" >/dev/null 2>&1 || \
+    die "Assistant pairing state at ${file} cannot be authenticated with the persisted key. Restore the matching secrets.env before upgrading."
+}
+
+validate_pairing_file "${ASSISTANT_SUBSCRIPTION_TOKEN_PATH}"
+validate_pairing_file "${LEGACY_ASSISTANT_SUBSCRIPTION_TOKEN_PATH}"
+
+CURRENT_HOME_ENV="${CURRENT_LINK}/server/packages/home-server/.env"
+if [ ! -e "${SECRETS_FILE}" ] && [ -e "${LEGACY_SECRETS_FILE}" ]; then
+  [ -f "${LEGACY_SECRETS_FILE}" ] && [ ! -L "${LEGACY_SECRETS_FILE}" ] || \
+    die "Legacy persistent secrets must be a regular non-symlink file: ${LEGACY_SECRETS_FILE}"
+  [ "$(stat -c '%a' "${LEGACY_SECRETS_FILE}")" = 600 ] || \
+    die "Legacy persistent secrets must have mode 600 before migration."
+  LEGACY_SECRETS_OWNER="$(stat -c '%u' "${LEGACY_SECRETS_FILE}")"
+  APP_UID="$(id -u "${APP_USER}")"
+  [ "${LEGACY_SECRETS_OWNER}" = 0 ] || [ "${LEGACY_SECRETS_OWNER}" = "${APP_UID}" ] || \
+    die "Legacy persistent secrets must be owned by root or ${APP_USER}."
+  validate_secret_document "${LEGACY_SECRETS_FILE}"
+  for REQUIRED_LEGACY_SECRET in AUTH_JWT_SECRET JWT_SECRET ENCRYPTION_SERVER_KEY PSEUDO_KEY_PARAMS_KEY VALET_TOKEN_SECRET; do
+    read_hex_secret "${LEGACY_SECRETS_FILE}" "${REQUIRED_LEGACY_SECRET}" true
+    printf -v "MIGRATION_${REQUIRED_LEGACY_SECRET}" '%s' "${READ_SECRET_VALUE}"
+  done
+  read_hex_secret "${LEGACY_SECRETS_FILE}" ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY false
+  MIGRATION_ASSISTANT_KEY_STATE="${READ_SECRET_STATE}"
+  MIGRATION_ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY="${READ_SECRET_VALUE}"
+
+  MIGRATION_TEMPORARY="$(mktemp "${SECRETS_DIR}/secrets.env.migrate.XXXXXX")"
+  if ! (
+    for REQUIRED_LEGACY_SECRET in AUTH_JWT_SECRET JWT_SECRET ENCRYPTION_SERVER_KEY PSEUDO_KEY_PARAMS_KEY VALET_TOKEN_SECRET; do
+      MIGRATION_VALUE_NAME="MIGRATION_${REQUIRED_LEGACY_SECRET}"
+      printf '%s=%s\n' "${REQUIRED_LEGACY_SECRET}" "${!MIGRATION_VALUE_NAME}" >> "${MIGRATION_TEMPORARY}" || exit 1
+    done
+    if [ "${MIGRATION_ASSISTANT_KEY_STATE}" = valid ]; then
+      printf 'ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=%s\n' \
+        "${MIGRATION_ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY}" >> "${MIGRATION_TEMPORARY}" || exit 1
+    fi
+    chown root:root "${MIGRATION_TEMPORARY}" && chmod 0600 "${MIGRATION_TEMPORARY}" && \
+      mv -Tf -- "${MIGRATION_TEMPORARY}" "${SECRETS_FILE}"
+  ); then
+    rm -f -- "${MIGRATION_TEMPORARY}"
+    die "Could not atomically migrate legacy secrets into root-owned storage."
+  fi
+  validate_secret_document "${SECRETS_FILE}"
+  for REQUIRED_LEGACY_SECRET in AUTH_JWT_SECRET JWT_SECRET ENCRYPTION_SERVER_KEY PSEUDO_KEY_PARAMS_KEY VALET_TOKEN_SECRET; do
+    read_hex_secret "${SECRETS_FILE}" "${REQUIRED_LEGACY_SECRET}" true
+    MIGRATION_VALUE_NAME="MIGRATION_${REQUIRED_LEGACY_SECRET}"
+    [ "${READ_SECRET_VALUE}" = "${!MIGRATION_VALUE_NAME}" ] || \
+      die "Root-owned ${REQUIRED_LEGACY_SECRET} failed post-migration verification."
+  done
+  read_hex_secret "${SECRETS_FILE}" ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY false
+  [ "${READ_SECRET_STATE}" = "${MIGRATION_ASSISTANT_KEY_STATE}" ] && \
+    [ "${READ_SECRET_VALUE}" = "${MIGRATION_ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY}" ] || \
+    die "The root-owned assistant pairing key failed post-migration verification."
+  log "Migrated persistent secrets into root-owned storage."
+fi
+
+CURRENT_ASSISTANT_SUBSCRIPTION_KEY=""
+if [ -e "${CURRENT_HOME_ENV}" ]; then
+  [ -f "${CURRENT_HOME_ENV}" ] && [ ! -L "${CURRENT_HOME_ENV}" ] || \
+    die "The active home-server environment must be a regular non-symlink file."
+  read_hex_secret "${CURRENT_HOME_ENV}" ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY false
+  [ "${READ_SECRET_STATE}" = missing ] || CURRENT_ASSISTANT_SUBSCRIPTION_KEY="${READ_SECRET_VALUE}"
+fi
+
+if [ ! -e "${SECRETS_FILE}" ]; then
+  if [ -s "${ASSISTANT_SUBSCRIPTION_TOKEN_PATH}" ] || [ -s "${LEGACY_ASSISTANT_SUBSCRIPTION_TOKEN_PATH}" ]; then
+    [ -n "${CURRENT_ASSISTANT_SUBSCRIPTION_KEY}" ] || \
+      die "Assistant pairing ciphertext exists but its encryption key is not recoverable. Restore the previous secrets before installing."
+  fi
+  ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY="${CURRENT_ASSISTANT_SUBSCRIPTION_KEY:-$(openssl rand -hex 32)}"
+  NEW_SECRETS_TEMPORARY="$(mktemp "${SECRETS_DIR}/secrets.env.create.XXXXXX")"
+  if ! (
+    umask 077
+    printf 'AUTH_JWT_SECRET=%s\n' "$(openssl rand -hex 32)" > "${NEW_SECRETS_TEMPORARY}" &&
+      printf 'JWT_SECRET=%s\n' "$(openssl rand -hex 32)" >> "${NEW_SECRETS_TEMPORARY}" &&
+      printf 'ENCRYPTION_SERVER_KEY=%s\n' "$(openssl rand -hex 32)" >> "${NEW_SECRETS_TEMPORARY}" &&
+      printf 'PSEUDO_KEY_PARAMS_KEY=%s\n' "$(openssl rand -hex 32)" >> "${NEW_SECRETS_TEMPORARY}" &&
+      printf 'VALET_TOKEN_SECRET=%s\n' "$(openssl rand -hex 32)" >> "${NEW_SECRETS_TEMPORARY}" &&
+      printf 'ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=%s\n' \
+        "${ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY}" >> "${NEW_SECRETS_TEMPORARY}" &&
+      chown root:root "${NEW_SECRETS_TEMPORARY}" && chmod 0600 "${NEW_SECRETS_TEMPORARY}" &&
+      mv -Tf -- "${NEW_SECRETS_TEMPORARY}" "${SECRETS_FILE}"
+  ); then
+    rm -f -- "${NEW_SECRETS_TEMPORARY}"
+    die "Could not atomically create root-owned persistent secrets."
+  fi
   log "Wrote new secrets to ${SECRETS_FILE}"
 fi
-# shellcheck disable=SC1090
-. "${SECRETS_FILE}"
+
+[ -f "${SECRETS_FILE}" ] && [ ! -L "${SECRETS_FILE}" ] || \
+  die "Persistent secrets must be a regular non-symlink file: ${SECRETS_FILE}"
+validate_secret_document "${SECRETS_FILE}"
+SECRETS_MODE="$(stat -c '%a' "${SECRETS_FILE}")"
+SECRETS_OWNER="$(stat -c '%u' "${SECRETS_FILE}")"
+[ "${SECRETS_MODE}" = 600 ] || die "${SECRETS_FILE} must have mode 600."
+[ "${SECRETS_OWNER}" = 0 ] || die "${SECRETS_FILE} must be owned by root."
+
+read_hex_secret "${SECRETS_FILE}" ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY false
+if [ "${READ_SECRET_STATE}" = missing ]; then
+  if [ -s "${ASSISTANT_SUBSCRIPTION_TOKEN_PATH}" ] || [ -s "${LEGACY_ASSISTANT_SUBSCRIPTION_TOKEN_PATH}" ]; then
+    [ -n "${CURRENT_ASSISTANT_SUBSCRIPTION_KEY}" ] || \
+      die "Assistant pairing ciphertext exists but its encryption key is not recoverable. Restore the previous secrets before installing."
+  fi
+  ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY="${CURRENT_ASSISTANT_SUBSCRIPTION_KEY:-$(openssl rand -hex 32)}"
+  persist_assistant_secret "${ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY}"
+  log "Added the internal assistant pairing key to persistent secrets."
+else
+  ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY="${READ_SECRET_VALUE}"
+fi
+
+if [ -n "${CURRENT_ASSISTANT_SUBSCRIPTION_KEY}" ] && \
+   [ "${CURRENT_ASSISTANT_SUBSCRIPTION_KEY}" != "${ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY}" ] && \
+   { [ -s "${ASSISTANT_SUBSCRIPTION_TOKEN_PATH}" ] || [ -s "${LEGACY_ASSISTANT_SUBSCRIPTION_TOKEN_PATH}" ]; }; then
+  die "The active release and persistent secrets contain different assistant pairing keys. Restore the matching secrets before upgrading."
+fi
+
+for EMPTY_PAIRING_FILE in "${ASSISTANT_SUBSCRIPTION_TOKEN_PATH}" "${LEGACY_ASSISTANT_SUBSCRIPTION_TOKEN_PATH}"; do
+  if [ -f "${EMPTY_PAIRING_FILE}" ] && [ ! -s "${EMPTY_PAIRING_FILE}" ]; then
+    rm -f -- "${EMPTY_PAIRING_FILE}"
+  fi
+done
+[ ! -s "${ASSISTANT_SUBSCRIPTION_TOKEN_PATH}" ] || \
+  verify_pairing_store "${ASSISTANT_SUBSCRIPTION_TOKEN_PATH}" "${ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY}"
+[ ! -s "${LEGACY_ASSISTANT_SUBSCRIPTION_TOKEN_PATH}" ] || \
+  verify_pairing_store "${LEGACY_ASSISTANT_SUBSCRIPTION_TOKEN_PATH}" "${ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY}"
+if [ -s "${LEGACY_ASSISTANT_SUBSCRIPTION_TOKEN_PATH}" ]; then
+  if [ -s "${ASSISTANT_SUBSCRIPTION_TOKEN_PATH}" ]; then
+    cmp -s -- "${LEGACY_ASSISTANT_SUBSCRIPTION_TOKEN_PATH}" "${ASSISTANT_SUBSCRIPTION_TOKEN_PATH}" || \
+      die "Both legacy and durable assistant pairing stores exist with different contents; reconcile them before upgrading."
+  else
+    install -o "${APP_USER}" -g "${APP_USER}" -m 0600 \
+      "${LEGACY_ASSISTANT_SUBSCRIPTION_TOKEN_PATH}" "${ASSISTANT_SUBSCRIPTION_TOKEN_PATH}"
+    log "Migrated assistant pairing state into ${ASSISTANT_SUBSCRIPTION_TOKEN_PATH}"
+  fi
+fi
+
+# Parse the fixed generated schema as inert data instead of sourcing a writable
+# file as shell code.
+for SECRET_NAME in AUTH_JWT_SECRET JWT_SECRET ENCRYPTION_SERVER_KEY PSEUDO_KEY_PARAMS_KEY VALET_TOKEN_SECRET ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY; do
+  read_hex_secret "${SECRETS_FILE}" "${SECRET_NAME}" true
+  printf -v "${SECRET_NAME}" '%s' "${READ_SECRET_VALUE}"
+done
+if [ -e "${LEGACY_SECRETS_FILE}" ]; then
+  [ -f "${LEGACY_SECRETS_FILE}" ] && [ ! -L "${LEGACY_SECRETS_FILE}" ] || \
+    die "Refusing to remove a non-regular legacy secrets path: ${LEGACY_SECRETS_FILE}"
+  [ "$(stat -c '%a' "${LEGACY_SECRETS_FILE}")" = 600 ] || \
+    die "Refusing to remove legacy secrets unless they still have mode 600."
+  LEGACY_SECRETS_OWNER="$(stat -c '%u' "${LEGACY_SECRETS_FILE}")"
+  APP_UID="$(id -u "${APP_USER}")"
+  [ "${LEGACY_SECRETS_OWNER}" = 0 ] || [ "${LEGACY_SECRETS_OWNER}" = "${APP_UID}" ] || \
+    die "Refusing to remove legacy secrets not owned by root or ${APP_USER}."
+  validate_secret_document "${LEGACY_SECRETS_FILE}"
+  for LEGACY_SECRET_NAME in AUTH_JWT_SECRET JWT_SECRET ENCRYPTION_SERVER_KEY PSEUDO_KEY_PARAMS_KEY VALET_TOKEN_SECRET; do
+    read_hex_secret "${SECRETS_FILE}" "${LEGACY_SECRET_NAME}" true
+    CANONICAL_LEGACY_SECRET_VALUE="${READ_SECRET_VALUE}"
+    read_hex_secret "${LEGACY_SECRETS_FILE}" "${LEGACY_SECRET_NAME}" true
+    [ "${READ_SECRET_VALUE}" = "${CANONICAL_LEGACY_SECRET_VALUE}" ] || \
+      die "Refusing to remove legacy ${LEGACY_SECRET_NAME}: it differs from root-owned storage."
+  done
+  read_hex_secret "${LEGACY_SECRETS_FILE}" ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY false
+  if [ "${READ_SECRET_STATE}" = valid ]; then
+    LEGACY_ASSISTANT_SUBSCRIPTION_KEY="${READ_SECRET_VALUE}"
+    read_hex_secret "${SECRETS_FILE}" ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY true
+    [ "${READ_SECRET_VALUE}" = "${LEGACY_ASSISTANT_SUBSCRIPTION_KEY}" ] || \
+      die "Refusing to remove the legacy assistant pairing key: it differs from root-owned storage."
+  fi
+  rm -f -- "${LEGACY_SECRETS_FILE}"
+  log "Removed the obsolete app-writable legacy secrets copy."
+fi
 
 # -----------------------------------------------------------------------------
 log "Writing home-server .env"
@@ -329,6 +567,8 @@ JWT_SECRET=${JWT_SECRET}
 ENCRYPTION_SERVER_KEY=${ENCRYPTION_SERVER_KEY}
 PSEUDO_KEY_PARAMS_KEY=${PSEUDO_KEY_PARAMS_KEY}
 VALET_TOKEN_SECRET=${VALET_TOKEN_SECRET}
+ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=${ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY}
+ASSISTANT_SUBSCRIPTION_TOKEN_PATH=${ASSISTANT_SUBSCRIPTION_TOKEN_PATH}
 FILES_SERVER_URL=${PUBLIC_FILES_SERVER_URL:-http://localhost:${HTTP_PORT}/files}
 SERVER_SETTINGS_PATH=${DATA_DIR}/server-settings.json
 CALDAV_DATA_PATH=${DATA_DIR}/caldav

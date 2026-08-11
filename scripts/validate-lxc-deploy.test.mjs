@@ -328,6 +328,87 @@ function validate(files) {
       "persisted PUBLIC_URL must remain inert data, never sourced as shell",
     );
   }
+  const secretStorageContract = [
+    'SECRETS_DIR="${PUBLIC_URL_CONFIG_DIR}/private"',
+    'SECRETS_FILE="${SECRETS_DIR}/secrets.env"',
+    'LEGACY_SECRETS_FILE="${DATA_DIR}/secrets.env"',
+    'if [ -e "${SECRETS_DIR}" ] || [ -L "${SECRETS_DIR}" ]; then',
+    'install -d -o root -g root -m 0700 "${SECRETS_DIR}"',
+    '[ "$(stat -c \'%u:%a\' "${SECRETS_DIR}")" = "0:700" ]',
+    'NEW_SECRETS_TEMPORARY="$(mktemp "${SECRETS_DIR}/secrets.env.create.XXXXXX")"',
+    'chown root:root "${NEW_SECRETS_TEMPORARY}" && chmod 0600 "${NEW_SECRETS_TEMPORARY}"',
+    'SECRETS_MODE="$(stat -c \'%a\' "${SECRETS_FILE}")"',
+    'SECRETS_OWNER="$(stat -c \'%u\' "${SECRETS_FILE}")"',
+  ];
+  if (secretStorageContract.some((fragment) => !installer.includes(fragment))) {
+    errors.push(
+      "LXC secrets must live in an atomic root-owned non-symlink 0700/0600 store",
+    );
+  }
+  const secretParserContract = [
+    'mapfile -t SECRET_ASSIGNMENTS < <(grep -E "^${name}=" "${file}" || true)',
+    '[ "${#SECRET_ASSIGNMENTS[@]}" -le 1 ]',
+    '[[ "${line}" =~ ^(AUTH_JWT_SECRET|JWT_SECRET|ENCRYPTION_SERVER_KEY|PSEUDO_KEY_PARAMS_KEY|VALET_TOKEN_SECRET|ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY)=[0-9a-fA-F]{64}$ ]]',
+    '[ "${assignment_count}" = 5 ] || [ "${assignment_count}" = 6 ]',
+    'validate_secret_document "${LEGACY_SECRETS_FILE}"',
+    'validate_secret_document "${SECRETS_FILE}"',
+  ];
+  if (secretParserContract.some((fragment) => !installer.includes(fragment))) {
+    errors.push(
+      "LXC secrets must use an exact inert allow-list parser with duplicate rejection",
+    );
+  }
+  const secretMigrationContract = [
+    'CURRENT_HOME_ENV="${CURRENT_LINK}/server/packages/home-server/.env"',
+    '[ "$(stat -c \'%a\' "${LEGACY_SECRETS_FILE}")" = 600 ]',
+    '[ "${LEGACY_SECRETS_OWNER}" = 0 ] || [ "${LEGACY_SECRETS_OWNER}" = "${APP_UID}" ]',
+    'MIGRATION_TEMPORARY="$(mktemp "${SECRETS_DIR}/secrets.env.migrate.XXXXXX")"',
+    'printf -v "MIGRATION_${REQUIRED_LEGACY_SECRET}" \'%s\' "${READ_SECRET_VALUE}"',
+    'mv -Tf -- "${MIGRATION_TEMPORARY}" "${SECRETS_FILE}"',
+    'die "Root-owned ${REQUIRED_LEGACY_SECRET} failed post-migration verification."',
+    'die "Refusing to remove legacy ${LEGACY_SECRET_NAME}: it differs from root-owned storage."',
+    'rm -f -- "${LEGACY_SECRETS_FILE}"',
+  ];
+  const legacyOwnerGuard =
+    '[ "${LEGACY_SECRETS_OWNER}" = 0 ] || [ "${LEGACY_SECRETS_OWNER}" = "${APP_UID}" ]';
+  if (
+    secretMigrationContract.some((fragment) => !installer.includes(fragment)) ||
+    occurrences(installer, legacyOwnerGuard) !== 2 ||
+    installer.includes(
+      'install -o root -g root -m 0600 "${LEGACY_SECRETS_FILE}" "${SECRETS_FILE}"',
+    )
+  ) {
+    errors.push(
+      "LXC legacy-secret migration must safely accept the old app-owned format, canonically rewrite it, and verify root-owned output",
+    );
+  }
+  const assistantPairingContract = [
+    'ASSISTANT_SUBSCRIPTION_TOKEN_PATH="${DATA_DIR}/assistant-subscription.json"',
+    'read_hex_secret "${SECRETS_FILE}" ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY false',
+    'persist_assistant_secret "${ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY}"',
+    'verify_pairing_store "${ASSISTANT_SUBSCRIPTION_TOKEN_PATH}" "${ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY}"',
+    "ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=${ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY}",
+    "ASSISTANT_SUBSCRIPTION_TOKEN_PATH=${ASSISTANT_SUBSCRIPTION_TOKEN_PATH}",
+  ];
+  if (assistantPairingContract.some((fragment) => !installer.includes(fragment))) {
+    errors.push(
+      "LXC must generate, validate, preserve, authenticate, and durably route the internal assistant pairing secret",
+    );
+  }
+  if (
+    installer.includes('. "${SECRETS_FILE}"') ||
+    installer.includes('source "${SECRETS_FILE}"') ||
+    installer.includes('. "${LEGACY_SECRETS_FILE}"') ||
+    installer.includes('source "${LEGACY_SECRETS_FILE}"')
+  ) {
+    errors.push("persistent LXC secrets must be parsed as inert data, never sourced as shell");
+  }
+  if (
+    !readme.includes("creates the assistant pairing-encryption key internally") ||
+    !readme.includes("instead of generating a replacement")
+  ) {
+    errors.push("LXC operators need automatic pairing-key and fail-closed recovery guidance");
+  }
   if (
     occurrences(installer, "proxy_set_header X-Forwarded-Proto \\$scheme;") !==
       3 ||
@@ -349,6 +430,84 @@ function mutate(file, from, to = "") {
 
 test("LXC deployment satisfies the staged, atomic, fail-closed contract", () => {
   assert.deepEqual(validate(baseline), []);
+});
+
+test("LXC secret contract rejects unsafe parsing, paths, permissions, and migration", () => {
+  for (const [fragment, expected] of [
+    [
+      'if [ -e "${SECRETS_DIR}" ] || [ -L "${SECRETS_DIR}" ]; then',
+      /non-symlink/,
+    ],
+    [
+      '[ "$(stat -c \'%u:%a\' "${SECRETS_DIR}")" = "0:700" ]',
+      /0700\/0600/,
+    ],
+    [
+      '[ "${#SECRET_ASSIGNMENTS[@]}" -le 1 ]',
+      /duplicate rejection/,
+    ],
+    [
+      '[[ "${line}" =~ ^(AUTH_JWT_SECRET|JWT_SECRET|ENCRYPTION_SERVER_KEY|PSEUDO_KEY_PARAMS_KEY|VALET_TOKEN_SECRET|ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY)=[0-9a-fA-F]{64}$ ]]',
+      /allow-list parser/,
+    ],
+    [
+      '[ "${LEGACY_SECRETS_OWNER}" = 0 ] || [ "${LEGACY_SECRETS_OWNER}" = "${APP_UID}" ]',
+      /old app-owned format/,
+    ],
+    [
+      'die "Root-owned ${REQUIRED_LEGACY_SECRET} failed post-migration verification."',
+      /verify root-owned output/,
+    ],
+  ]) {
+    assert.match(validate(mutate("installer", fragment)).join("\n"), expected);
+  }
+});
+
+test("LXC secret parser treats legacy content as inert exact data", () => {
+  const start = baseline.installer.indexOf("read_hex_secret() {");
+  const end = baseline.installer.indexOf("\npersist_assistant_secret()", start);
+  assert.ok(start >= 0 && end > start);
+  const definitions = baseline.installer.slice(start, end);
+  const key = "a".repeat(64);
+
+  const run = (lines, command) =>
+    spawnSync("bash", ["-s"], {
+      input: [
+        "set -euo pipefail",
+        'die() { printf "%s\\n" "$*" >&2; exit 90; }',
+        definitions,
+        'sandbox="$(mktemp -d)"',
+        'trap \'rm -rf -- "${sandbox}"\' EXIT',
+        ...lines.map((line) => `printf '%s\\n' '${line}' >> "\${sandbox}/secrets.env"`),
+        command,
+      ].join("\n"),
+      cwd: root,
+      encoding: "utf8",
+    });
+
+  const base = [
+    `AUTH_JWT_SECRET=${key}`,
+    `JWT_SECRET=${key}`,
+    `ENCRYPTION_SERVER_KEY=${key}`,
+    `PSEUDO_KEY_PARAMS_KEY=${key}`,
+    `VALET_TOKEN_SECRET=${key}`,
+  ];
+  assert.equal(
+    run(base, 'validate_secret_document "${sandbox}/secrets.env"').status,
+    0,
+  );
+
+  const malicious = run(
+    [...base, 'EVIL=$(touch "${sandbox}/executed")'],
+    'validate_secret_document "${sandbox}/secrets.env"',
+  );
+  assert.equal(malicious.status, 90, malicious.stderr);
+
+  const duplicate = run(
+    [...base, `AUTH_JWT_SECRET=${key}`],
+    'validate_secret_document "${sandbox}/secrets.env"; read_hex_secret "${sandbox}/secrets.env" AUTH_JWT_SECRET true',
+  );
+  assert.equal(duplicate.status, 90, duplicate.stderr);
 });
 
 test("LXC release links activate and roll back to the retained target", () => {

@@ -494,7 +494,8 @@ export class AssistantController extends BaseHttpController {
         subscriptionId,
         mode: config.openaiAuthMode ?? undefined,
         usingEnvFallback: subscriptionId === DEFAULT_SUBSCRIPTION_ID && usingEnvFallback,
-        reason: 'Subscription pairing is not configured on this server (ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY unset).',
+        reason:
+          'Pairing storage is unavailable on this deployment. Rerun or update the supported installer; restore the original installation secrets when pairing data already exists.',
       })
       return
     }
