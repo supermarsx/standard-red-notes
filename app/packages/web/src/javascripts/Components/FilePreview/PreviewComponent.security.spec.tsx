@@ -24,6 +24,10 @@ jest.mock('./TextPreview', () => ({
   __esModule: true,
   default: () => 'text-preview',
 }))
+jest.mock('./PdfPreview', () => ({
+  __esModule: true,
+  default: () => 'pdf-preview',
+}))
 jest.mock('../Button/Button', () => ({
   __esModule: true,
   default: ({ children, onClick }: { children: import('react').ReactNode; onClick: () => void }) => {
@@ -231,5 +235,33 @@ describe('PreviewComponent native preview security', () => {
     expect(container.textContent).toContain('text-preview')
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:secure-preview')
     expect(URL.createObjectURL).toHaveBeenCalledTimes(1)
+  })
+
+  it('gives an embedded PDF a definite bounded viewport', async () => {
+    const application = {
+      isNativeMobileWeb: jest.fn().mockReturnValue(false),
+    } as unknown as WebApplication
+    const file = {
+      uuid: 'embedded-pdf',
+      mimeType: 'application/pdf',
+      name: 'embedded.pdf',
+      remoteIdentifier: 'remote-pdf',
+    } as FileItem
+
+    await act(async () => {
+      root.render(
+        createElement(PreviewComponent, {
+          application,
+          file,
+          bytes: new Uint8Array([37, 80, 68, 70]),
+          isEmbeddedInSuper: true,
+        }),
+      )
+      await Promise.resolve()
+    })
+
+    const viewport = container.querySelector('[data-embedded-pdf-viewport="true"]')
+    expect(viewport?.className).toContain('h-[clamp(20rem,65vh,48rem)]')
+    expect(viewport?.textContent).toContain('pdf-preview')
   })
 })

@@ -2,7 +2,7 @@
  * @jest-environment jsdom
  *
  * Tests the "Embed website" block:
- *   - sanitizeWebEmbedUrl: only http(s) URLs pass; dangerous schemes
+ *   - sanitizeWebEmbedUrl: only HTTPS URLs pass; dangerous schemes
  *     (javascript:/data:/etc) and scheme-less input are rejected.
  *   - WebEmbedNode serialization: url + height round-trip through
  *     exportJSON -> importJSON -> exportJSON, with type/version stable and
@@ -43,8 +43,8 @@ describe('sanitizeWebEmbedUrl', () => {
     expect(sanitizeWebEmbedUrl('https://example.com/page')).toBe('https://example.com/page')
   })
 
-  it('accepts http URLs', () => {
-    expect(sanitizeWebEmbedUrl('http://example.com')).toBe('http://example.com/')
+  it('rejects plain http URLs', () => {
+    expect(sanitizeWebEmbedUrl('http://example.com')).toBe('')
   })
 
   it('trims surrounding whitespace', () => {

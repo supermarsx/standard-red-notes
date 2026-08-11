@@ -181,7 +181,7 @@ const PreviewComponent: FunctionComponent<Props> = ({
   }
 
   if (isPDF) {
-    return (
+    const viewer = (
       <ComponentErrorBoundary label="The PDF viewer">
         <Suspense
           fallback={
@@ -200,6 +200,17 @@ const PreviewComponent: FunctionComponent<Props> = ({
           />
         </Suspense>
       </ComponentErrorBoundary>
+    )
+
+    return isEmbeddedInSuper ? (
+      <div
+        className="h-[clamp(20rem,65vh,48rem)] w-full overflow-hidden"
+        data-embedded-pdf-viewport="true"
+      >
+        {viewer}
+      </div>
+    ) : (
+      viewer
     )
   }
 
