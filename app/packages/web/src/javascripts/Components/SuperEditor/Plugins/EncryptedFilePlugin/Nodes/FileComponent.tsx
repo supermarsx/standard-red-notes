@@ -1,5 +1,5 @@
 import { BlockWithAlignableContents } from '@lexical/react/LexicalBlockWithAlignableContents'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import {
   $getNodeByKey,
   CLICK_COMMAND,
@@ -10,12 +10,11 @@ import {
 } from 'lexical'
 import { useApplication } from '@/Components/ApplicationProvider'
 import FilePreview from '@/Components/FilePreview/FilePreview'
-import { FileItem } from '@standardnotes/snjs'
+import { ContentType, FileItem } from '@standardnotes/snjs'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
 import { useLexicalNodeSelection } from '@lexical/react/useLexicalNodeSelection'
 import { observer } from 'mobx-react-lite'
 import Spinner from '@/Components/Spinner/Spinner'
-import { FilesControllerEvent } from '@/Controllers/FilesController'
 import { ImageFloat } from '../../ImageTools/ImageToolsTypes'
 import Icon from '@/Components/Icon/Icon'
 import { getIconForFileType } from '@/Utils/Items/Icons/getIconForFileType'
@@ -71,42 +70,56 @@ function FileComponent({
 }: FileComponentProps) {
   const application = useApplication()
   const [editor] = useLexicalComposerContext()
-  const [file, setFile] = useState(() => application.items.findItem<FileItem>(fileUuid))
+  const getFileSnapshot = useCallback(
+    () => application.items.findItem<FileItem>(fileUuid),
+    [application.items, fileUuid],
+  )
+  const subscribeToFile = useCallback(
+    (onStoreChange: () => void) =>
+      application.items.streamItems<FileItem>(ContentType.TYPES.File, ({ changed, inserted, removed }) => {
+        if ([...changed, ...inserted, ...removed].some((candidate) => candidate.uuid === fileUuid)) {
+          onStoreChange()
+        }
+      }),
+    [application.items, fileUuid],
+  )
+  const file = useSyncExternalStore(subscribeToFile, getFileSnapshot, getFileSnapshot)
   const uploadProgress = application.filesController.uploadProgressMap.get(fileUuid)
 
   const [canLoad, setCanLoad] = useState(false)
 
   const blockWrapperRef = useRef<HTMLDivElement>(null)
-  const blockObserver = useMemo(
-    () =>
-      new IntersectionObserver(
-        (entries) => {
-          entries.forEach((entry) => {
-            if (entry.isIntersecting) {
-              setCanLoad(true)
-            }
-          })
-        },
-        {
-          threshold: 0.25,
-        },
-      ),
-    [],
-  )
+  const [observedWrapper, setObservedWrapper] = useState<HTMLDivElement | null>(null)
+  const setBlockWrapper = useCallback((element: HTMLDivElement | null) => {
+    blockWrapperRef.current = element
+    setObservedWrapper(element)
+  }, [])
 
   useEffect(() => {
-    const wrapper = blockWrapperRef.current
-
-    if (!wrapper) {
+    if (canLoad || !observedWrapper) {
       return
     }
 
-    blockObserver.observe(wrapper)
-
-    return () => {
-      blockObserver.unobserve(wrapper)
+    if (typeof IntersectionObserver === 'undefined') {
+      setCanLoad(true)
+      return
     }
-  }, [blockObserver])
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setCanLoad(true)
+        }
+      },
+      {
+        threshold: 0.25,
+        rootMargin: '400px 0px',
+      },
+    )
+    observer.observe(observedWrapper)
+
+    return () => observer.disconnect()
+  }, [canLoad, observedWrapper])
 
   const setImageZoomLevel = useCallback(
     (zoomLevel: number) => {
@@ -203,22 +216,11 @@ function FileComponent({
     )
   }, [editor, isSelected, nodeKey, setSelected])
 
-  useEffect(() => {
-    return application.filesController.addEventObserver((event, data) => {
-      if (event === FilesControllerEvent.FileUploadFinished && data[FilesControllerEvent.FileUploadFinished]) {
-        const { uploadedFile } = data[FilesControllerEvent.FileUploadFinished]
-        if (uploadedFile.uuid === fileUuid) {
-          setFile(uploadedFile)
-        }
-      }
-    })
-  }, [application.filesController, fileUuid])
-
   if (uploadProgress && (uploadProgress.progress < 100 || !file)) {
     const progress = uploadProgress.progress
     return (
       <BlockWithAlignableContents className={className} format={format} nodeKey={nodeKey}>
-        <div className="flex flex-col items-center justify-center gap-2 p-4 text-center" ref={blockWrapperRef}>
+        <div className="flex flex-col items-center justify-center gap-2 p-4 text-center" ref={setBlockWrapper}>
           <div className="flex items-center gap-2">
             <Spinner className="h-4 w-4" />
             Uploading file "{uploadProgress.file.name}"... ({progress}%)
@@ -255,7 +257,7 @@ function FileComponent({
   if (isCollapsed) {
     return (
       <BlockWithAlignableContents className={className} format={format} nodeKey={nodeKey}>
-        <div ref={blockWrapperRef}>
+        <div ref={setBlockWrapper}>
           <div className="border-border bg-default flex items-center gap-2 rounded border px-3 py-2">
             <button
               className="text-neutral hover:bg-contrast flex flex-shrink-0 items-center justify-center rounded p-1"
@@ -283,7 +285,7 @@ function FileComponent({
   return (
     <BlockWithAlignableContents className={className} format={format} nodeKey={nodeKey}>
       <div
-        ref={blockWrapperRef}
+        ref={setBlockWrapper}
         onDoubleClick={isImage ? openInLightbox : undefined}
         title={isImage ? 'Double-click to open zoomable preview' : undefined}
       >
