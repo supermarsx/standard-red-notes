@@ -337,7 +337,7 @@ trust the proxy's forwarded headers and the cookie must be marked Secure:
 | Variable                           | Set to                                                | Why                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | ---------------------------------- | ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `TRUST_PROXY`                      | usually leave at the default                          | Makes the server honor `X-Forwarded-Proto` / `X-Forwarded-For` so `req.secure` and the client IP are correct. The default (`loopback, linklocal, uniquelocal`) trusts a proxy on loopback or a private/Docker network - which is exactly the case when the proxy is another container or runs on the same host. Set it to `true`, a hop count, or a CSV of proxy IPs/subnets only if your proxy reaches the stack from a public IP. |
-| `ENFORCE_HTTPS_FROM_PROXY`         | `true`                                                | Explicitly allows the app front door to trust one exact `X-Forwarded-Proto: http` or `https` value from your outer proxy. `http` redirects to the canonical `PUBLIC_URL`; `https` is forwarded to the API and enables HSTS. Missing, mixed, comma-separated, or unknown values are not trusted. Startup fails if this is `true` and `PUBLIC_URL` is not one pathless HTTPS origin. Keep the app port private so clients cannot supply this trusted header directly. |
+| `ENFORCE_HTTPS_FROM_PROXY`         | `true`                                                | Enables the validated outer-proxy contract: the app front door trusts one exact `X-Forwarded-Proto: http` or `https` value and preserves the proxy's sanitized `X-Forwarded-For` chain. `http` redirects to `PUBLIC_URL`; `https` enables HSTS. Startup fails without a pathless HTTPS origin and loopback bind. Keep the app port private, and make the outer proxy overwrite both headers so clients cannot enter the trusted chain. |
 | `APP_BIND_ADDRESS`                 | `127.0.0.1`                                           | Keeps the published inner HTTP port reachable only by a reverse proxy on the same host. Trusted-proxy mode refuses to start with any other declared bind. If Traefik reaches `app:8080` over a private Docker network, remove the Compose `ports` entry and leave this safety declaration at `127.0.0.1`. Direct HTTP/LAN mode retains the compatible `0.0.0.0` default only while proxy trust is disabled. |
 | `COOKIE_SECURE`                    | `true`                                                | The auth cookie is then only sent over HTTPS. Without this the browser may drop it on an HTTPS origin and every request 401s.                                                                                                                                                                                                                                                                                                       |
 | `COOKIE_DOMAIN`                    | your domain (e.g. `notes.example.com`)                | Scopes the auth cookie to your host. Leave empty only for bare-host/IP setups.                                                                                                                                                                                                                                                                                                                                                      |
@@ -373,18 +373,22 @@ and follows the gateway's advertised files URL - so single-origin routing works
 out of the box. n8n is deliberately not part of this path router.
 
 `ENFORCE_HTTPS_FROM_PROXY=true` is defense in depth, not a TLS terminator. The
-outer proxy must overwrite (not append to) `X-Forwarded-Proto`, redirect its own
-public HTTP listener to HTTPS, and emit HSTS on HTTPS responses. Do not publish
-`APP_PORT` to untrusted networks; bind it to loopback or reach the `app` service
-only over the proxy's private Docker network. Existing installations must set
-both the flag and `APP_BIND_ADDRESS=127.0.0.1` after verifying those conditions;
-new setup-script installs do so when you answer that the configured domain is
-served over HTTPS.
+outer proxy is the public trust boundary: it must overwrite (not append to)
+both `X-Forwarded-Proto` and `X-Forwarded-For`, redirect its own public HTTP
+listener to HTTPS, and emit HSTS on HTTPS responses. The inner app nginx drops
+client-supplied `X-Forwarded-For` by default; it preserves a chain only in this
+validated trusted mode. Do not publish `APP_PORT` to untrusted networks; bind it
+to loopback or reach the `app` service only over the proxy's private Docker
+network. Existing installations must set both the flag and
+`APP_BIND_ADDRESS=127.0.0.1` after verifying those conditions; new setup-script
+installs do so when you answer that the configured domain is served over HTTPS.
 
 The LXC installer preserves its documented externally reachable HTTP topology
-and does not enable this inner forwarded-header gate. For LXC, restrict the
-container port to the proxy and enforce the 308 redirect plus HSTS at that outer
-proxy; see `deploy/lxc/README.md`.
+and does not enable this inner forwarded-header gate. Its nginx always replaces
+`X-Forwarded-For` with the immediate peer address, so a client cannot spoof
+`request.ip`; when an outer proxy is used, the gateway deliberately sees that
+proxy address. For LXC, restrict the container port to the proxy and enforce the
+308 redirect plus HSTS at that outer proxy; see `deploy/lxc/README.md`.
 
 ### Compose: dropping host ports
 
@@ -434,7 +438,7 @@ server {
     # Overwrite forwarded transport metadata; never pass a client-supplied value.
     proxy_set_header Host              $host;
     proxy_set_header X-Real-IP         $remote_addr;
-    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-For   $remote_addr;
     proxy_set_header X-Forwarded-Proto https;
     proxy_set_header X-Forwarded-Host  $host;
 
@@ -446,7 +450,7 @@ server {
         # any server-level proxy headers. Repeat the complete trusted set.
         proxy_set_header Host              $host;
         proxy_set_header X-Real-IP         $remote_addr;
-        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For   $remote_addr;
         proxy_set_header X-Forwarded-Proto https;
         proxy_set_header X-Forwarded-Host  $host;
         proxy_set_header Upgrade    $http_upgrade;
@@ -515,8 +519,10 @@ networks:
 
 Because the proxy and the stack share the `proxy` Docker network (a private
 subnet), the default `TRUST_PROXY` already trusts Traefik - no override needed.
-Use the same `.env` values as the nginx example. Confirm the `web` entrypoint is
-actually exposed on port 80 and `websecure` on 443 in Traefik's static config.
+Use the same `.env` values as the nginx example. Keep Traefik's forwarded-header
+trust in its safe default or limit `forwardedHeaders.trustedIPs` to known
+upstream proxies; never enable insecure forwarding. Confirm the `web` entrypoint
+is actually exposed on port 80 and `websecure` on 443 in Traefik's static config.
 
 ### Separate n8n hostname
 

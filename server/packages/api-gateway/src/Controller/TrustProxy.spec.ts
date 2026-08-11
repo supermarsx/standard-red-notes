@@ -1,4 +1,7 @@
-import { Application } from 'express'
+import * as http from 'http'
+import { AddressInfo } from 'net'
+
+import express, { Application, Request, Response } from 'express'
 import { configureTrustProxy, DEFAULT_TRUST_PROXY, parseTrustProxyValue } from './TrustProxy'
 
 describe('parseTrustProxyValue', () => {
@@ -75,5 +78,73 @@ describe('configureTrustProxy', () => {
 
     expect(value).toBe(false)
     expect(set).toHaveBeenCalledWith('trust proxy', false)
+  })
+})
+
+describe('nginx forwarding boundary with real Express trust-proxy resolution', () => {
+  let server: http.Server
+
+  const requestIp = (forwardedFor: string): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const address = server.address() as AddressInfo
+      const request = http.request(
+        {
+          host: '127.0.0.1',
+          port: address.port,
+          path: '/',
+          headers: { 'X-Forwarded-For': forwardedFor },
+        },
+        (response) => {
+          let body = ''
+          response.setEncoding('utf8')
+          response.on('data', (chunk) => (body += chunk))
+          response.on('end', () => resolve(body))
+        },
+      )
+      request.on('error', reject)
+      request.end()
+    })
+
+  beforeEach(async () => {
+    const app = express()
+    configureTrustProxy(app, undefined)
+    app.get('/', (request: Request, response: Response) => response.type('text/plain').send(request.ip))
+    server = app.listen(0, '127.0.0.1')
+    await new Promise<void>((resolve) => server.once('listening', resolve))
+  })
+
+  afterEach(async () => {
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) => {
+        if (error) {
+          reject(error)
+        } else {
+          resolve()
+        }
+      }),
+    )
+  })
+
+  it('resolves the socket peer after direct nginx overwrites an attacker-supplied chain', async () => {
+    const attackerClaim = '203.0.113.66'
+    const publicSocketPeer = '198.51.100.24'
+
+    // Direct/default nginx sends only $remote_addr. The attacker's inbound XFF
+    // is absent from the header that reaches this real Express application.
+    const resolved = await requestIp(publicSocketPeer)
+
+    expect(resolved).toBe(publicSocketPeer)
+    expect(resolved).not.toBe(attackerClaim)
+  })
+
+  it('resolves the real client through the exact sanitized trusted-proxy chain', async () => {
+    const realClient = '198.51.100.25'
+    const outerProxy = '10.20.30.40'
+
+    // In validated trusted mode, the public proxy overwrites inbound XFF and
+    // the app nginx appends that proxy's private address before forwarding.
+    const resolved = await requestIp(`${realClient}, ${outerProxy}`)
+
+    expect(resolved).toBe(realClient)
   })
 })

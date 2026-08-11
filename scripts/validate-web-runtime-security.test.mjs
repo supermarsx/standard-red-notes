@@ -157,7 +157,7 @@ test("trusted proxy transport is opt-in, exact-value only, and HSTS is HTTPS-onl
   for (const header of [
     "Host              $host",
     "X-Real-IP         $remote_addr",
-    "X-Forwarded-For   $proxy_add_x_forwarded_for",
+    "X-Forwarded-For   $remote_addr",
     "X-Forwarded-Proto https",
     "X-Forwarded-Host  $host",
     "Upgrade    $http_upgrade",
@@ -198,6 +198,25 @@ test("trusted proxy transport is opt-in, exact-value only, and HSTS is HTTPS-onl
       /map "\$srn_proxy_https_mode:\$http_x_forwarded_proto" \$srn_proxy_transport \{([\s\S]*?)\n\}/,
     )?.[1];
     assert.ok(transportMap, `${relativePath}: transport map missing`);
+    assert.match(
+      source,
+      /map \$srn_proxy_https_mode \$srn_forwarded_for \{[\s\S]*?default\s+\$remote_addr;[\s\S]*?enabled\s+\$proxy_add_x_forwarded_for;/,
+      `${relativePath}: direct mode must discard a client-supplied forwarding chain`,
+    );
+    assert.equal(
+      (
+        source.match(
+          /proxy_set_header X-Forwarded-For \$srn_forwarded_for;/g,
+        ) ?? []
+      ).length,
+      4,
+      `${relativePath}: every backend route must use the sanitized forwarding value`,
+    );
+    assert.doesNotMatch(
+      source,
+      /proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;/,
+      `${relativePath}: backend routes must not append raw client input directly`,
+    );
     const rules = [...transportMap.matchAll(/~\^([^$]+)\$\s+(\w+)\s*;/g)].map(
       ([, pattern, result]) => [new RegExp(`^${pattern}$`), result],
     );
@@ -270,6 +289,17 @@ test("trusted proxy transport is opt-in, exact-value only, and HSTS is HTTPS-onl
     );
     assert.doesNotMatch(source, /includeSubDomains|\bpreload\b/, relativePath);
   }
+
+  assert.equal(
+    (lxcInstaller.match(/proxy_set_header X-Forwarded-For \\\$remote_addr;/g) ?? [])
+      .length,
+    3,
+    "LXC public nginx must overwrite X-Forwarded-For on every backend route",
+  );
+  assert.doesNotMatch(
+    lxcInstaller,
+    /proxy_set_header X-Forwarded-For \\\$proxy_add_x_forwarded_for;/,
+  );
 });
 
 test("runtime proxy transport templating is idempotent and rejects unsafe public origins", () => {
