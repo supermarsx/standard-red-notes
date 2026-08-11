@@ -17,6 +17,7 @@ import type { Conn, SendableSocket } from './registry.js'
 //   { t: 'yjs', room, payload, transferId?, stateRequestId? } // base64 encrypted update
 //   { t: 'yjs-chunk',  room, ... }       // bounded chunk of a large encrypted update
 //   { t: 'yjs-retry', room, requestId, requesterClientId } // correlated full-state retry
+//   { t: 'yjs-response-claim', room, stateRequestId, leaseRequestId }
 //   { t: 'awareness',  room, payload }   // base64 yjs awareness update
 // `yjs`/`awareness` frames are re-broadcast verbatim to every OTHER member of
 // the room. On join, the gateway tells existing members to re-announce state so
@@ -57,6 +58,7 @@ export type RelayFrame =
       stateRequestId?: string
     }
   | { t: 'yjs-retry'; room: string; requestId: string; requesterClientId: number }
+  | { t: 'yjs-response-claim'; room: string; stateRequestId: string; leaseRequestId: string }
   | { t: 'awareness'; room: string; payload: string }
   | { t: 'comment'; room: string; payload: string }
 
@@ -67,6 +69,7 @@ const RELAY_TYPES = new Set([
   'yjs',
   'yjs-chunk',
   'yjs-retry',
+  'yjs-response-claim',
   'awareness',
   'comment',
 ])
@@ -105,6 +108,8 @@ export const MAX_ROOM_JOIN_FRAMES_PER_CONNECTION = 16
 export const MAX_ROOM_JOIN_FRAMES_PER_ROOM = 64
 export const MAX_YJS_RETRY_FRAMES_PER_CONNECTION = 3
 export const MAX_YJS_RETRY_FRAMES_PER_ROOM = 12
+export const MAX_YJS_RESPONSE_CLAIM_FRAMES_PER_CONNECTION = 8
+export const MAX_YJS_RESPONSE_CLAIM_FRAMES_PER_ROOM = 128
 const MAX_TRACKED_CONTROL_ROOMS = 2_048
 
 const CONTROL_FRAME_LIMITS = Object.freeze({
@@ -119,6 +124,10 @@ const CONTROL_FRAME_LIMITS = Object.freeze({
   'yjs-retry': {
     connection: MAX_YJS_RETRY_FRAMES_PER_CONNECTION,
     room: MAX_YJS_RETRY_FRAMES_PER_ROOM,
+  },
+  'yjs-response-claim': {
+    connection: MAX_YJS_RESPONSE_CLAIM_FRAMES_PER_CONNECTION,
+    room: MAX_YJS_RESPONSE_CLAIM_FRAMES_PER_ROOM,
   },
 })
 
@@ -164,6 +173,21 @@ export function parseRelayFrame(raw: string): RelayFrame | null {
       return null
     }
     return { t, room, requestId, requesterClientId }
+  }
+  if (t === 'yjs-response-claim') {
+    const stateRequestId = obj.stateRequestId
+    const leaseRequestId = obj.leaseRequestId
+    if (
+      typeof stateRequestId !== 'string' ||
+      stateRequestId.length === 0 ||
+      stateRequestId.length > MAX_REQUEST_ID ||
+      typeof leaseRequestId !== 'string' ||
+      leaseRequestId.length === 0 ||
+      leaseRequestId.length > MAX_REQUEST_ID
+    ) {
+      return null
+    }
+    return { t, room, stateRequestId, leaseRequestId }
   }
   if (t === 'room-reserve' || t === 'room-join') {
     const cap = obj.cap
@@ -314,7 +338,7 @@ export type ExpiredPendingEditorReservation<S extends SendableSocket = SendableS
   requestId: string
 }
 
-type ControlFrameKind = 'room-reserve' | 'room-join' | 'yjs-retry'
+type ControlFrameKind = 'room-reserve' | 'room-join' | 'yjs-retry' | 'yjs-response-claim'
 
 type ControlWindow = {
   startedAt: number
@@ -795,6 +819,7 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
       'room-reserve': { startedAt: now, count: 0 },
       'room-join': { startedAt: now, count: 0 },
       'yjs-retry': { startedAt: now, count: 0 },
+      'yjs-response-claim': { startedAt: now, count: 0 },
     }
   }
 
@@ -811,7 +836,8 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
       if (
         now - windows['room-reserve'].startedAt >= CONTROL_FRAME_WINDOW_MS &&
         now - windows['room-join'].startedAt >= CONTROL_FRAME_WINDOW_MS &&
-        now - windows['yjs-retry'].startedAt >= CONTROL_FRAME_WINDOW_MS
+        now - windows['yjs-retry'].startedAt >= CONTROL_FRAME_WINDOW_MS &&
+        now - windows['yjs-response-claim'].startedAt >= CONTROL_FRAME_WINDOW_MS
       ) {
         this.controlWindowsByRoom.delete(room)
       }
@@ -900,6 +926,7 @@ export interface RoomRelayLifecycle<S extends SendableSocket = SendableSocket> {
     bootstrapChallenge?: string,
   ): Promise<{ shouldBootstrap: boolean }>
   releaseLease(conn: Conn<S>, room: string, requestId: string | undefined): Promise<void>
+  claimYjsResponse(conn: Conn<S>, room: string, stateRequestId: string, leaseRequestId: string): Promise<boolean>
   publish(
     frame:
       | Extract<RelayFrame, { t: 'yjs' | 'yjs-chunk' | 'yjs-retry' | 'awareness' | 'comment' }>
@@ -1267,6 +1294,44 @@ export async function handleRelayFrame<S extends SendableSocket>(
         await lifecycle.releaseLease(conn, frame.room, frame.requestId).catch(ignoreLifecycleReleaseFailure)
       }
       return 0
+    case 'yjs-response-claim': {
+      const exactLease = rooms.requestLease(frame.room, conn, frame.leaseRequestId)
+      if (
+        exactLease?.role !== 'editor' ||
+        !lifecycle ||
+        !rooms.allowControlFrame('yjs-response-claim', frame.room, conn)
+      ) {
+        return 0
+      }
+      let granted = false
+      try {
+        granted = await lifecycle.claimYjsResponse(conn, frame.room, frame.stateRequestId, frame.leaseRequestId)
+      } catch {
+        return 0
+      }
+      if (
+        !granted ||
+        (isConnectionActive && !isConnectionActive()) ||
+        rooms.requestLease(frame.room, conn, frame.leaseRequestId)?.role !== 'editor'
+      ) {
+        return 0
+      }
+      try {
+        conn.socket.send(
+          JSON.stringify({
+            t: 'yjs-response-granted',
+            room: frame.room,
+            stateRequestId: frame.stateRequestId,
+            leaseRequestId: frame.leaseRequestId,
+            protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+          }),
+        )
+      } catch {
+        rooms.leave(frame.room, conn, frame.leaseRequestId)
+        await lifecycle.releaseLease(conn, frame.room, frame.leaseRequestId).catch(ignoreLifecycleReleaseFailure)
+      }
+      return 0
+    }
     case 'yjs':
     case 'yjs-chunk':
     case 'yjs-retry':
