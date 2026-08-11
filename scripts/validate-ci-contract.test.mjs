@@ -35,6 +35,12 @@ function withFileChanged(file, update) {
   return files;
 }
 
+function replaceRequired(source, current, replacement = "") {
+  const changed = source.replace(current, replacement);
+  assert.notEqual(changed, source, `test mutation must replace: ${current}`);
+  return changed;
+}
+
 function createSetupFixture({
   environment,
   probeExit = 0,
@@ -558,10 +564,12 @@ test("container CI cannot drop exact immutable deployment acceptance", () => {
 
 test("all setup start paths must resolve and verify immutable deployment identity", () => {
   const shell = baseline.get("scripts/setup.sh");
-  const powershell = baseline.get("scripts/setup.ps1");
+  const powershell = baseline
+    .get("scripts/setup.ps1")
+    .replace(/\r?\n/g, "\r\n");
   assert.match(
     validateSetupOverwriteContract(
-      shell.replace("      resolve_clean_deployment_revision\n", ""),
+      replaceRequired(shell, "      resolve_clean_deployment_revision"),
       powershell,
     ).join("\n"),
     /every one of the three build\/start paths must resolve and verify deployment identity/,
@@ -569,9 +577,9 @@ test("all setup start paths must resolve and verify immutable deployment identit
   assert.match(
     validateSetupOverwriteContract(
       shell,
-      powershell.replace(
-        "      try { Assert-StartedDeploymentIdentity -Revision $deploymentRevision } catch { Write-Err $_.Exception.Message; exit 1 }\n",
-        "",
+      replaceRequired(
+        powershell,
+        "      try { Assert-StartedDeploymentIdentity -Revision $deploymentRevision } catch { Write-Err $_.Exception.Message; exit 1 }",
       ),
     ).join("\n"),
     /every one of the three build\/start paths must resolve and verify deployment identity/,
