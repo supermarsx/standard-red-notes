@@ -1,4 +1,4 @@
-import { FunctionComponent, useCallback, useMemo, useReducer, useState } from 'react'
+import { FunctionComponent, useCallback, useMemo, useState } from 'react'
 import { Subtitle, Text, SmallText } from '@/Components/Preferences/PreferencesComponents/Content'
 import HorizontalSeparator from '@/Components/Shared/HorizontalSeparator'
 import Button from '@/Components/Button/Button'
@@ -6,13 +6,16 @@ import {
   CustomTheme,
   CustomThemeColors,
   CustomThemesAction,
-  CustomThemesState,
   DefaultCustomThemeColors,
   customThemesReducer,
   generateCustomThemeVariables,
   hasReadableContrast,
 } from './CustomTheme'
-import { applyCustomThemeFromState, loadCustomThemesState, saveCustomThemesState } from './CustomThemeManager'
+import { loadCustomThemesState, normalizeCustomThemesState } from './CustomThemeManager'
+import { useApplication } from '@/Components/ApplicationProvider'
+import { useLocalPreference } from '@/Hooks/usePreference'
+import { LocalPrefKey } from '@standardnotes/snjs'
+import { persistAndApplyCustomThemesState } from '../ThemeSelection'
 
 type ColorField = {
   key: keyof CustomThemeColors
@@ -26,17 +29,6 @@ const COLOR_FIELDS: ColorField[] = [
   { key: 'foreground', label: 'Text', hint: 'Primary text color' },
   { key: 'contrast', label: 'Contrast surface', hint: 'Panels and selected rows' },
 ]
-
-const dispatchWithPersist = (reducer: (state: CustomThemesState, action: CustomThemesAction) => CustomThemesState) => {
-  return (state: CustomThemesState, action: CustomThemesAction): CustomThemesState => {
-    const next = reducer(state, action)
-    if (next !== state) {
-      saveCustomThemesState(next)
-      applyCustomThemeFromState(next)
-    }
-    return next
-  }
-}
 
 type EditorMode = { kind: 'create' } | { kind: 'edit'; id: string } | null
 
@@ -148,8 +140,19 @@ const ThemeEditor: FunctionComponent<{
 }
 
 const CustomThemesSection: FunctionComponent = () => {
-  const persistingReducer = useMemo(() => dispatchWithPersist(customThemesReducer), [])
-  const [state, dispatch] = useReducer(persistingReducer, undefined, loadCustomThemesState)
+  const application = useApplication()
+  const [storedState] = useLocalPreference(LocalPrefKey.CustomThemes)
+  const state = useMemo(() => normalizeCustomThemesState(storedState), [storedState])
+  const dispatch = useCallback(
+    (action: CustomThemesAction) => {
+      const current = loadCustomThemesState(application.preferences)
+      const next = customThemesReducer(current, action)
+      if (next !== current) {
+        persistAndApplyCustomThemesState(application, next)
+      }
+    },
+    [application],
+  )
   const [editorMode, setEditorMode] = useState<EditorMode>(null)
 
   const editingTheme: CustomTheme | undefined =

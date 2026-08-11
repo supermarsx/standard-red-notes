@@ -1,115 +1,164 @@
 /*
- * Standard Red Notes — Custom Themes runtime + storage (web-only)
+ * Standard Red Notes — custom-theme persistence and runtime application.
  *
- * Persists user-created custom themes in localStorage and applies the selected
- * one live by injecting a single `<style id="sn-custom-theme">` element holding
- * a `:root { --sn-stylekit-*: ... }` override. This layers on top of whatever
- * base light/dark theme is active. Selecting a built-in theme (selectedId null)
- * removes the style element, cleanly restoring the base look.
- *
- * Stored as plain localStorage JSON so there is zero edit to the published
- * `@standardnotes/models` PrefKey enum (mirrors the email-backup / large-file /
- * local-pref web-only precedent).
+ * Custom themes live in LocalPrefKey.CustomThemes, which is encrypted and
+ * namespaced by the current application/workspace. The old origin-global
+ * localStorage value is read at most once for the current workspace and then
+ * removed so it cannot bleed into another account.
  */
 
+import { ApplicationEvent, LocalPrefKey, PreferenceServiceInterface } from '@standardnotes/snjs'
 import { CustomTheme, CustomThemesState, buildCustomThemeCss, normalizeCustomThemeList } from './CustomTheme'
 
-const STORAGE_KEY = 'sn-custom-themes'
-const STYLE_ELEMENT_ID = 'sn-custom-theme'
+export const LEGACY_CUSTOM_THEMES_STORAGE_KEY = 'sn-custom-themes'
+export const CUSTOM_THEME_STYLE_ELEMENT_ID = 'sn-custom-theme'
 
-type PersistedShape = {
-  themes: CustomTheme[]
-  selectedId: string | null
+const EmptyCustomThemesState: CustomThemesState = { themes: [], selectedId: null }
+
+type LegacyStorage = Pick<Storage, 'getItem' | 'removeItem'>
+
+function emptyState(): CustomThemesState {
+  return { themes: [], selectedId: null }
 }
 
-export function loadCustomThemesState(): CustomThemesState {
+export function normalizeCustomThemesState(input: unknown): CustomThemesState {
+  if (typeof input !== 'object' || input === null) {
+    return emptyState()
+  }
+
+  const candidate = input as Partial<CustomThemesState>
+  const themes = normalizeCustomThemeList(candidate.themes)
+  const selectedId =
+    typeof candidate.selectedId === 'string' && themes.some((theme) => theme.id === candidate.selectedId)
+      ? candidate.selectedId
+      : null
+
+  return { themes, selectedId }
+}
+
+export function loadCustomThemesState(preferences: PreferenceServiceInterface): CustomThemesState {
+  const stored = preferences.getLocalValue(LocalPrefKey.CustomThemes, EmptyCustomThemesState)
+  return normalizeCustomThemesState(stored)
+}
+
+export function saveCustomThemesState(
+  preferences: PreferenceServiceInterface,
+  state: CustomThemesState,
+): CustomThemesState {
+  const normalized = normalizeCustomThemesState(state)
+  preferences.setLocalValue(LocalPrefKey.CustomThemes, normalized)
+  return normalized
+}
+
+function browserLegacyStorage(): LegacyStorage | undefined {
   try {
-    const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(STORAGE_KEY) : null
-    if (!raw) {
-      return { themes: [], selectedId: null }
-    }
-    const parsed = JSON.parse(raw) as Partial<PersistedShape>
-    const themes = normalizeCustomThemeList(parsed.themes)
-    const selectedId =
-      typeof parsed.selectedId === 'string' && themes.some((theme) => theme.id === parsed.selectedId)
-        ? parsed.selectedId
-        : null
-    return { themes, selectedId }
-  } catch (error) {
-    console.error('[CustomThemes] Failed to load state', error)
-    return { themes: [], selectedId: null }
+    return typeof localStorage === 'undefined' ? undefined : localStorage
+  } catch {
+    return undefined
   }
 }
 
-export function saveCustomThemesState(state: CustomThemesState): void {
+function removeLegacyValue(storage: LegacyStorage | undefined): void {
   try {
-    if (typeof localStorage === 'undefined') {
-      return
-    }
-    const payload: PersistedShape = { themes: state.themes, selectedId: state.selectedId }
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(payload))
+    storage?.removeItem(LEGACY_CUSTOM_THEMES_STORAGE_KEY)
   } catch (error) {
-    console.error('[CustomThemes] Failed to save state', error)
+    console.error('[CustomThemes] Failed to remove legacy state', error)
   }
+}
+
+/**
+ * Transfers the legacy origin-global value once. Persisting an empty state also
+ * acts as the migration marker when there was no usable legacy value.
+ */
+export function migrateLegacyCustomThemes(
+  preferences: PreferenceServiceInterface,
+  legacyStorage: LegacyStorage | undefined = browserLegacyStorage(),
+): CustomThemesState {
+  const existing = preferences.getLocalValue(LocalPrefKey.CustomThemes, undefined)
+  if (existing !== undefined) {
+    removeLegacyValue(legacyStorage)
+    return normalizeCustomThemesState(existing)
+  }
+
+  let migrated = emptyState()
+  try {
+    const raw = legacyStorage?.getItem(LEGACY_CUSTOM_THEMES_STORAGE_KEY)
+    if (raw) {
+      migrated = normalizeCustomThemesState(JSON.parse(raw) as unknown)
+    }
+  } catch (error) {
+    console.error('[CustomThemes] Failed to migrate legacy state', error)
+  }
+
+  saveCustomThemesState(preferences, migrated)
+  removeLegacyValue(legacyStorage)
+  return migrated
 }
 
 function getOrCreateStyleElement(): HTMLStyleElement | null {
   if (typeof document === 'undefined') {
     return null
   }
-  let element = document.getElementById(STYLE_ELEMENT_ID) as HTMLStyleElement | null
+
+  let element = document.getElementById(CUSTOM_THEME_STYLE_ELEMENT_ID) as HTMLStyleElement | null
   if (!element) {
     element = document.createElement('style')
-    element.id = STYLE_ELEMENT_ID
+    element.id = CUSTOM_THEME_STYLE_ELEMENT_ID
     element.setAttribute('type', 'text/css')
     document.head.appendChild(element)
   }
   return element
 }
 
-/** Removes the injected custom-theme override, restoring the base theme. */
+/** Removes the current workspace's override before another base theme/account is shown. */
 export function removeCustomThemeOverride(): void {
   if (typeof document === 'undefined') {
     return
   }
-  const element = document.getElementById(STYLE_ELEMENT_ID)
-  element?.parentNode?.removeChild(element)
+  document.getElementById(CUSTOM_THEME_STYLE_ELEMENT_ID)?.remove()
 }
 
-/** Injects (or replaces) the `:root` override for a single custom theme. */
+/** Injects (or replaces) the single current-account custom theme override. */
 export function applyCustomThemeOverride(theme: CustomTheme): void {
   const element = getOrCreateStyleElement()
   if (!element) {
     return
   }
-  // Keep the style element last in <head> so it wins over base theme <link>s
-  // that may be (re)appended when the base light/dark theme switches.
+
+  // Re-append after any newly activated base theme link so this override wins.
   document.head.appendChild(element)
   element.textContent = buildCustomThemeCss(theme.colors)
 }
 
-/**
- * Applies whatever the current selection in `state` dictates: the selected
- * custom theme's override, or removes the override when none is selected.
- */
 export function applyCustomThemeFromState(state: CustomThemesState): void {
-  if (!state.selectedId) {
-    removeCustomThemeOverride()
-    return
-  }
-  const theme = state.themes.find((candidate) => candidate.id === state.selectedId)
+  const normalized = normalizeCustomThemesState(state)
+  const theme = normalized.themes.find((candidate) => candidate.id === normalized.selectedId)
   if (!theme) {
     removeCustomThemeOverride()
     return
   }
+
   applyCustomThemeOverride(theme)
 }
 
-/**
- * Re-applies the persisted selection from localStorage. Safe to call on app
- * load and after the base theme switches (auto light/dark), since it re-asserts
- * the override on top of the freshly applied base theme.
- */
-export function reapplyPersistedCustomTheme(): void {
-  applyCustomThemeFromState(loadCustomThemesState())
+export function applyCurrentAccountCustomTheme(preferences: PreferenceServiceInterface): void {
+  applyCustomThemeFromState(loadCustomThemesState(preferences))
+}
+
+export function initializeCurrentAccountCustomTheme(preferences: PreferenceServiceInterface): void {
+  applyCustomThemeFromState(migrateLegacyCustomThemes(preferences))
+}
+
+/** Pure lifecycle boundary used by ApplicationView and directly regression-tested. */
+export function handleCustomThemeApplicationEvent(
+  preferences: PreferenceServiceInterface,
+  event: ApplicationEvent,
+): void {
+  if (event === ApplicationEvent.SignedOut) {
+    removeCustomThemeOverride()
+  } else if (event === ApplicationEvent.Launched) {
+    initializeCurrentAccountCustomTheme(preferences)
+  } else if (event === ApplicationEvent.LocalPreferencesChanged) {
+    applyCurrentAccountCustomTheme(preferences)
+  }
 }

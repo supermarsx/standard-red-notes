@@ -7,30 +7,19 @@
  * override layered on top of the active base light/dark theme.
  *
  * Everything here is DOM-free and side-effect-free so it can be unit tested.
- * Storage is localStorage (see CustomThemeStorage), avoiding any edit to the
- * published `@standardnotes/models` PrefKey enum.
+ * Storage is the encrypted, application-namespaced local preference store (see
+ * CustomThemeManager). It is deliberately local/offline rather than synced.
  */
+
+import { CustomThemePreference, CustomThemesPreference } from '@standardnotes/snjs'
 
 export const CUSTOM_THEME_ID_PREFIX = 'custom-theme:'
 
 /** The user-chosen colors that define a custom theme. All are hex strings. */
-export type CustomThemeColors = {
-  /** Headline feature: the accent / info / highlight color. */
-  accent: string
-  /** App background color. */
-  background: string
-  /** Primary text / foreground color. */
-  foreground: string
-  /** Contrast surface (panels, hovered rows, secondary backgrounds). */
-  contrast: string
-}
+export type CustomThemeColors = CustomThemePreference['colors']
 
 /** A saved custom theme. `id` is stable; `name` is user-editable. */
-export type CustomTheme = {
-  id: string
-  name: string
-  colors: CustomThemeColors
-}
+export type CustomTheme = CustomThemePreference
 
 export const DefaultCustomThemeColors: CustomThemeColors = {
   accent: '#086dd6',
@@ -268,11 +257,7 @@ export function buildCustomThemeCss(colors: CustomThemeColors): string {
 // State shape + reducer for create / rename / edit / delete / select.
 // ---------------------------------------------------------------------------
 
-export type CustomThemesState = {
-  themes: CustomTheme[]
-  /** id of the selected custom theme, or null when a built-in theme is active. */
-  selectedId: string | null
-}
+export type CustomThemesState = CustomThemesPreference
 
 export type CustomThemesAction =
   | { type: 'add'; name: string; colors: CustomThemeColors; select?: boolean }

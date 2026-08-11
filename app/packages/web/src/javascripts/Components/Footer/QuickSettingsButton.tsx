@@ -10,6 +10,7 @@ import QuickSettingsMenu from '../QuickSettingsMenu/QuickSettingsMenu'
 import StyledTooltip from '../StyledTooltip/StyledTooltip'
 import RoundIconButton from '../Button/RoundIconButton'
 import mergeRegister from '../../Hooks/mergeRegister'
+import { selectBuiltInTheme } from '../Preferences/Panes/Appearance/ThemeSelection'
 
 type Props = {
   application: WebApplication
@@ -32,7 +33,7 @@ const QuickSettingsButton = ({ application, isMobileNavigation = false }: Props)
 
     return mergeRegister(
       application.commands.addWithShortcut(TOGGLE_DARK_MODE_COMMAND, 'General', 'Toggle dark mode', () => {
-        void application.themeManager.selectTheme(darkThemeFeature)
+        void selectBuiltInTheme(application, darkThemeFeature, { toggleActive: true })
         return true
       }),
       application.commands.add('open-quick-settings-menu', 'Open quick settings menu', toggleMenu, 'themes'),

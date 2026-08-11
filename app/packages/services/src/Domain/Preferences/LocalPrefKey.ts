@@ -26,6 +26,28 @@ export type SuperToolbarConfig = {
   hiddenButtonIds: string[]
 }
 
+/**
+ * A user-authored web theme stored with the application's encrypted local
+ * preferences. Themes intentionally remain device/workspace-local: selecting a
+ * color palette must work offline without turning appearance into synced note
+ * data or leaking one workspace's choice into another.
+ */
+export type CustomThemePreference = {
+  id: string
+  name: string
+  colors: {
+    accent: string
+    background: string
+    foreground: string
+    contrast: string
+  }
+}
+
+export type CustomThemesPreference = {
+  themes: CustomThemePreference[]
+  selectedId: string | null
+}
+
 export enum LocalPrefKey {
   ListPaneCollapsed = 'listPaneCollapsed',
   NavigationPaneCollapsed = 'navigationPaneCollapsed',
@@ -38,6 +60,7 @@ export enum LocalPrefKey {
   // `manual` preserves the theme selected from Quick Settings, `auto` follows
   // the OS color scheme, and `light`/`dark` force Standard Blue / Standard Red.
   ColorSchemeMode = 'colorSchemeMode',
+  CustomThemes = 'customThemes',
 
   EditorMonospaceEnabled = 'monospaceFont',
   EditorLineHeight = 'editorLineHeight',
@@ -62,6 +85,7 @@ export type LocalPrefValue = {
   [LocalPrefKey.AutoLightThemeIdentifier]: string
   [LocalPrefKey.AutoDarkThemeIdentifier]: string
   [LocalPrefKey.ColorSchemeMode]: ColorSchemeMode
+  [LocalPrefKey.CustomThemes]: CustomThemesPreference
 
   [LocalPrefKey.EditorMonospaceEnabled]: boolean
   [LocalPrefKey.EditorLineHeight]: EditorLineHeight
@@ -82,6 +106,7 @@ export const LocalPrefDefaults = {
   // Standard Red Notes: default to Auto so the app follows the OS color scheme
   // out of the box (dark -> Standard Red, light -> Standard Blue).
   [LocalPrefKey.ColorSchemeMode]: 'auto',
+  [LocalPrefKey.CustomThemes]: { themes: [], selectedId: null },
 
   [LocalPrefKey.EditorMonospaceEnabled]: false,
   [LocalPrefKey.EditorLineHeight]: EditorLineHeight.Normal,

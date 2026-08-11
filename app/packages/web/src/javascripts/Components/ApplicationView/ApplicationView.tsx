@@ -16,7 +16,10 @@ import {
 import { applyEditorFont } from '@/Utils/editorFont'
 import { achievements, METRICS } from '@/Achievements'
 import { startAppUsageTimeTracking } from '@/Services/AppUsageTime/AppUsageTimeTracker'
-import { reapplyPersistedCustomTheme } from '@/Components/Preferences/Panes/Appearance/CustomThemes/CustomThemeManager'
+import {
+  handleCustomThemeApplicationEvent,
+  removeCustomThemeOverride,
+} from '@/Components/Preferences/Panes/Appearance/CustomThemes/CustomThemeManager'
 import { alertDialog, isIOS, RouteType } from '@standardnotes/ui-services'
 import { WebApplication } from '@/Application/WebApplication'
 import Footer from '@/Components/Footer/Footer'
@@ -487,26 +490,49 @@ const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicatio
     }
   }, [application])
 
-  // Standard Red Notes: re-assert the selected custom-theme :root override on
-  // launch and whenever the base theme changes (auto light/dark switches fire
-  // LocalPreferencesChanged), so it stays layered on top of the base theme.
+  // Keep exactly one account-local custom override alive. Local preference
+  // changes are deferred until the base theme link has been appended; sign-out
+  // and workspace switches synchronously scrub the previous account's CSS.
   useEffect(() => {
+    let reapplyTimer: ReturnType<typeof setTimeout> | undefined
+    const scheduleReapply = () => {
+      if (reapplyTimer !== undefined) {
+        clearTimeout(reapplyTimer)
+      }
+      reapplyTimer = setTimeout(() => {
+        handleCustomThemeApplicationEvent(application.preferences, ApplicationEvent.LocalPreferencesChanged)
+        reapplyTimer = undefined
+      }, 50)
+    }
+
     if (application.isLaunched()) {
-      reapplyPersistedCustomTheme()
+      handleCustomThemeApplicationEvent(application.preferences, ApplicationEvent.Launched)
     }
 
     const removeLaunchObserver = application.addEventObserver(async () => {
-      reapplyPersistedCustomTheme()
+      handleCustomThemeApplicationEvent(application.preferences, ApplicationEvent.Launched)
     }, ApplicationEvent.Launched)
 
     const removeLocalObserver = application.addEventObserver(async () => {
-      // Defer so the base theme's stylesheet has been applied first.
-      setTimeout(() => reapplyPersistedCustomTheme(), 50)
+      scheduleReapply()
     }, ApplicationEvent.LocalPreferencesChanged)
 
+    const removeSignOutObserver = application.addEventObserver(async () => {
+      if (reapplyTimer !== undefined) {
+        clearTimeout(reapplyTimer)
+        reapplyTimer = undefined
+      }
+      handleCustomThemeApplicationEvent(application.preferences, ApplicationEvent.SignedOut)
+    }, ApplicationEvent.SignedOut)
+
     return () => {
+      if (reapplyTimer !== undefined) {
+        clearTimeout(reapplyTimer)
+      }
       removeLaunchObserver()
       removeLocalObserver()
+      removeSignOutObserver()
+      removeCustomThemeOverride()
     }
   }, [application])
 
