@@ -1,8 +1,10 @@
 import {
+  EMAIL_DELIVERY_LIMITS,
   emailDeliveryConfigurationError,
   isEmailDeliveryConfigured,
   isTrustedInsecureRelayHost,
   resolveEmailDeliveryConfig,
+  type ResolvedEmailDeliveryConfig,
   validateEmailRecipient,
 } from './EmailDeliveryConfig'
 
@@ -37,6 +39,42 @@ describe('EmailDeliveryConfig', () => {
     expect(validateEmailRecipient('victim@example.com\r\nBcc: other@example.com')).toBeUndefined()
   })
 
+  it('validates every operator-facing SMTP setting without exposing its value', () => {
+    const valid: ResolvedEmailDeliveryConfig = {
+      host: 'smtp.example.com',
+      port: 587,
+      from: 'notes@example.com',
+      tlsMode: 'starttls',
+    }
+
+    expect(emailDeliveryConfigurationError(valid)).toBeUndefined()
+    expect(isEmailDeliveryConfigured(valid)).toBe(true)
+    expect(emailDeliveryConfigurationError({ ...valid, port: 0 })).toContain('port')
+    expect(emailDeliveryConfigurationError({ ...valid, from: 'not-an-email' })).toContain('From identity')
+    expect(emailDeliveryConfigurationError({ ...valid, username: 'mailer\ninvalid', password: 'paired' })).toContain(
+      'username',
+    )
+    expect(emailDeliveryConfigurationError({ ...valid, username: 'mailer', password: 'secret\0invalid' })).toContain(
+      'password',
+    )
+    expect(
+      emailDeliveryConfigurationError({
+        ...valid,
+        tlsMode: 'invalid' as ResolvedEmailDeliveryConfig['tlsMode'],
+      }),
+    ).toContain('TLS mode')
+    expect(emailDeliveryConfigurationError({ ...valid, host: 'smtp.example.com', tlsMode: 'insecure' })).toContain(
+      'Insecure SMTP',
+    )
+  })
+
+  it('normalizes valid recipients and rejects non-string or malformed recipients', () => {
+    expect(validateEmailRecipient(undefined)).toBeUndefined()
+    expect(validateEmailRecipient(' notes@example.com ')).toBe('notes@example.com')
+    expect(validateEmailRecipient('missing-at-sign.example.com')).toBeUndefined()
+    expect(validateEmailRecipient(`notes@${'x'.repeat(EMAIL_DELIVERY_LIMITS.recipient)}.com`)).toBeUndefined()
+  })
+
   it('allows insecure SMTP only for literal loopback/private/link-local IPs and localhost names', () => {
     for (const host of [
       '127.0.0.1',
@@ -45,12 +83,25 @@ describe('EmailDeliveryConfig', () => {
       '192.168.1.2',
       '169.254.10.1',
       '::1',
+      '[::1]',
+      'fc00::1',
       'fd00::1',
+      'fe80::1',
+      'localhost',
       'smtp.localhost',
     ]) {
       expect(isTrustedInsecureRelayHost(host)).toBe(true)
     }
-    for (const host of ['mail-relay', 'smtp.example.com', '8.8.8.8', '2001:4860:4860::8888']) {
+    for (const host of [
+      'mail-relay',
+      'smtp.example.com',
+      '8.8.8.8',
+      '169.253.10.1',
+      '172.15.0.1',
+      '172.32.0.1',
+      '192.167.1.2',
+      '2001:4860:4860::8888',
+    ]) {
       expect(isTrustedInsecureRelayHost(host)).toBe(false)
     }
   })
