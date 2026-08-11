@@ -24,6 +24,22 @@ describe('OpenAI-compatible endpoint normalization', () => {
     )
   })
 
+  it('allows cleartext only for the two loopback hosts admitted by the browser CSP', () => {
+    expect(normalizeOpenAICompatibleBaseURL('http://127.0.0.1:1234')).toBe('http://127.0.0.1:1234/v1')
+    for (const endpoint of [
+      'http://[::1]:1234/v1',
+      'http://192.168.1.50:11434/v1',
+      'http://assistant.example.test/v1',
+    ]) {
+      expect(() => normalizeOpenAICompatibleBaseURL(endpoint)).toThrow(
+        'Plain HTTP assistant URLs are allowed only on http://localhost or http://127.0.0.1',
+      )
+    }
+    expect(normalizeOpenAICompatibleBaseURL('https://assistant.example.test/v1')).toBe(
+      'https://assistant.example.test/v1',
+    )
+  })
+
   it('rejects credentials and query strings in the URL', () => {
     expect(() => normalizeOpenAICompatibleBaseURL('https://user:secret@example.test/v1')).toThrow(
       'Put credentials in the API key field',

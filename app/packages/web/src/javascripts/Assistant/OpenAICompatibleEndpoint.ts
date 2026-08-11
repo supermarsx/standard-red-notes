@@ -3,8 +3,8 @@ export type OpenAICompatibleRoute = 'chat/completions' | 'models' | 'audio/speec
 const ENDPOINT_SUFFIXES = ['/chat/completions', '/audio/transcriptions', '/audio/speech', '/models'] as const
 
 const isLoopbackHost = (hostname: string): boolean => {
-  const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, '')
-  return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1'
+  const normalized = hostname.toLowerCase()
+  return normalized === 'localhost' || normalized === '127.0.0.1'
 }
 
 const currentPageOrigin = (): string | undefined => {
@@ -48,8 +48,10 @@ export function normalizeOpenAICompatibleBaseURL(raw: string): string {
   if (url.search || url.hash) {
     throw new Error('The assistant base URL cannot contain a query string or fragment.')
   }
-  if (url.protocol === 'http:' && !isLoopbackHost(url.hostname) && currentPageOrigin()?.startsWith('https://')) {
-    throw new Error('An HTTPS app cannot safely connect to a remote HTTP assistant. Use HTTPS or a local loopback URL.')
+  if (url.protocol === 'http:' && !isLoopbackHost(url.hostname)) {
+    throw new Error(
+      'Plain HTTP assistant URLs are allowed only on http://localhost or http://127.0.0.1. Use HTTPS for every other host.',
+    )
   }
 
   let path = url.pathname.replace(/\/+$/, '')
