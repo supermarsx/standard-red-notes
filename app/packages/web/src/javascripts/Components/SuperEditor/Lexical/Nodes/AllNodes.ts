@@ -45,6 +45,7 @@ import { ClockNode } from './ClockNode'
 import { BookmarkAnchorNode } from './BookmarkAnchorNode'
 import { TableOfContentsNode } from './TableOfContentsNode'
 import { PageBreakNode } from './PageBreakNode'
+import { ShipmentTrackingNode } from './ShipmentTrackingNode'
 
 const CommonNodes = [
   AutoLinkNode,
@@ -97,6 +98,7 @@ const CommonNodes = [
   BookmarkAnchorNode,
   TableOfContentsNode,
   PageBreakNode,
+  ShipmentTrackingNode,
 ]
 
 // Standard Red Notes: register the styled paragraph/heading/quote overrides so

@@ -45,6 +45,7 @@ import { StockChartBlock } from './StockChart'
 import { EmbedBlock } from './Embed'
 import { WebEmbedBlock } from './WebEmbed'
 import { TweetEmbedBlock } from './TweetEmbed'
+import { ShipmentTrackingBlock } from './ShipmentTracking'
 
 /**
  * Modal/command helpers some catalog entries need (they open a dialog rather
@@ -188,6 +189,7 @@ export const BLOCK_CATALOG: BlockCatalogEntry[] = [
   fromBlock(EmbedBlock, 'Embeds'),
   fromBlock(WebEmbedBlock, 'Embeds'),
   fromBlock(TweetEmbedBlock, 'Embeds'),
+  fromBlock(ShipmentTrackingBlock, 'Embeds'),
 
   // ----- Advanced --------------------------------------------------------
   fromBlock(MathBlock, 'Advanced'),
