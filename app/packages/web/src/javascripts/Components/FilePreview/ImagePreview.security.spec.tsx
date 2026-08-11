@@ -19,18 +19,14 @@ jest.mock('./ZoomableImage', () => ({
 describe('ImagePreview security cleanup', () => {
   it('detaches the image loader and source on unmount', () => {
     const originalImage = globalThis.Image
-    let image!: { src: string; onload: (() => void) | null; onerror: (() => void) | null }
-    class ControlledImage {
-      src = ''
-      onload: (() => void) | null = null
-      onerror: (() => void) | null = null
-      width = 1
-      height = 1
-
-      constructor() {
-        image = this
-      }
+    const image = {
+      src: '',
+      onload: null as (() => void) | null,
+      onerror: null as (() => void) | null,
+      width: 1,
+      height: 1,
     }
+    const ControlledImage = jest.fn(() => image)
     Object.defineProperty(globalThis, 'Image', { configurable: true, value: ControlledImage })
     const container = document.createElement('div')
     const root = createRoot(container)

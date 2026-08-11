@@ -50,9 +50,9 @@ describe('NoteView', () => {
       vaults,
       items: {
         isTemplateItem: jest.fn().mockReturnValue(false),
-        findItem: jest.fn((uuid: string) =>
-          noteViewController.item?.uuid === uuid ? noteViewController.item : undefined,
-        ),
+        findItem: jest.fn((uuid: string) => {
+          return noteViewController.item?.uuid === uuid ? noteViewController.item : undefined
+        }),
       },
     } as unknown as jest.Mocked<WebApplication>
 
