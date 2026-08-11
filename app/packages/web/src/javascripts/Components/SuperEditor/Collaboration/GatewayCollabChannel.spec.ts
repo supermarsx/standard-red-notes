@@ -33,4 +33,22 @@ describe('createGatewayCollabChannel shared room leases', () => {
     })
     expect(sendCollaborationFrame).toHaveBeenCalledTimes(4)
   })
+
+  it('exposes only the opaque capability to the relay provider', async () => {
+    const authorizeCollaborationRoom = jest.fn().mockResolvedValue({
+      capability: 'capability-1',
+      serverUpdatedAtTimestamp: 123,
+    })
+    const application = {
+      sockets: {
+        isWebSocketConnectionOpen: () => true,
+        sendCollaborationFrame: jest.fn(),
+        onCollaborationFrame: jest.fn(() => jest.fn()),
+        authorizeCollaborationRoom,
+      },
+    } as never
+
+    await expect(createGatewayCollabChannel(application).authorize('note-1')).resolves.toBe('capability-1')
+    expect(authorizeCollaborationRoom).toHaveBeenCalledWith('note-1')
+  })
 })

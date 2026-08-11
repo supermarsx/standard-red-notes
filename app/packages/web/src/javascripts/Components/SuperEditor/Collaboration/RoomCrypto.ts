@@ -37,8 +37,8 @@ function fromBase64(b64: string): Uint8Array {
 }
 
 export interface RoomCipher {
-  encrypt(plaintext: Uint8Array): Promise<string>
-  decrypt(payload: string): Promise<Uint8Array>
+  encrypt(plaintext: Uint8Array, additionalData?: Uint8Array): Promise<string>
+  decrypt(payload: string, additionalData?: Uint8Array): Promise<Uint8Array>
 }
 
 /**
@@ -67,11 +67,15 @@ export function createRoomCipher(key: CryptoKey): RoomCipher {
   }
 
   return {
-    async encrypt(plaintext) {
+    async encrypt(plaintext, additionalData) {
       const iv = (globalThis.crypto as Crypto).getRandomValues(new Uint8Array(IV_BYTES))
       const ct = new Uint8Array(
         await subtle().encrypt(
-          { name: 'AES-GCM', iv: iv as unknown as BufferSource },
+          {
+            name: 'AES-GCM',
+            iv: iv as unknown as BufferSource,
+            ...(additionalData ? { additionalData: additionalData as unknown as BufferSource } : {}),
+          },
           key,
           plaintext as unknown as BufferSource,
         ),
@@ -81,12 +85,16 @@ export function createRoomCipher(key: CryptoKey): RoomCipher {
       joined.set(ct, iv.length)
       return toBase64(joined)
     },
-    async decrypt(payload) {
+    async decrypt(payload, additionalData) {
       const joined = fromBase64(payload)
       const iv = joined.subarray(0, IV_BYTES)
       const ct = joined.subarray(IV_BYTES)
       const pt = await subtle().decrypt(
-        { name: 'AES-GCM', iv: iv as unknown as BufferSource },
+        {
+          name: 'AES-GCM',
+          iv: iv as unknown as BufferSource,
+          ...(additionalData ? { additionalData: additionalData as unknown as BufferSource } : {}),
+        },
         key,
         ct as unknown as BufferSource,
       )

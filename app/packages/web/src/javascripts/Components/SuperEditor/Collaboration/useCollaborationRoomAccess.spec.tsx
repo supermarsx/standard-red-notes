@@ -2,13 +2,17 @@
  * @jest-environment jsdom
  */
 import { webcrypto } from 'node:crypto'
-import { act, createElement } from 'react'
+import { act, createElement, startTransition, StrictMode, Suspense } from 'react'
 import { createRoot, Root } from 'react-dom/client'
-import { WebSocketsServiceEvent } from '@standardnotes/snjs'
+import { ApplicationEvent, WebSocketsServiceEvent } from '@standardnotes/snjs'
 import { prepareCollaborationAccess, resolveCollaborationKeySource } from './CollaborationKeyDerivation'
 import { createGatewayCollabChannel } from './GatewayCollabChannel'
 import type { CollabFrame } from './CollabChannel'
-import { beginEditorLeaseReservation, useCollaborationRoomAccess } from './useCollaborationRoomAccess'
+import {
+  beginEditorLeaseReservation,
+  prepareSynchronizedEditorAccess,
+  useCollaborationRoomAccess,
+} from './useCollaborationRoomAccess'
 
 jest.mock('./CollaborationKeyDerivation', () => ({
   prepareCollaborationAccess: jest.fn(),
@@ -22,6 +26,55 @@ jest.mock('./GatewayCollabChannel', () => ({
 const mockedResolve = jest.mocked(resolveCollaborationKeySource)
 const mockedPrepare = jest.mocked(prepareCollaborationAccess)
 const mockedCreateChannel = jest.mocked(createGatewayCollabChannel)
+const protocolVersion = 2 as const
+const maxTransferBytes = 4 * 1024 * 1024
+const sessionUser = { uuid: 'user-1', email: 'alice@example.test' }
+
+const createAutoLeaseChannel = (sent: CollabFrame[], bootstrap = true) => {
+  let inbound: ((frame: CollabFrame) => void) | undefined
+  return {
+    channel: {
+      isConnected: () => true,
+      authorize: jest.fn(),
+      send: (frame: CollabFrame) => {
+        sent.push(frame)
+        if (frame.t === 'room-reserve') {
+          inbound?.({
+            t: 'room-reserved',
+            room: frame.room,
+            requestId: frame.requestId,
+            bootstrap,
+            ...(bootstrap ? { bootstrapChallenge: `challenge:${frame.requestId}` } : {}),
+            protocolVersion,
+            maxTransferBytes,
+          })
+        } else if (frame.t === 'room-join') {
+          inbound?.({
+            t: 'room-joined',
+            room: frame.room,
+            requestId: frame.requestId,
+            bootstrap,
+            protocolVersion,
+            maxTransferBytes,
+          })
+        }
+      },
+      subscribe: (handler: (frame: CollabFrame) => void) => {
+        inbound = handler
+        return () => {
+          inbound = undefined
+        }
+      },
+    },
+    receive: (frame: CollabFrame) => inbound?.(frame),
+  }
+}
+
+const flushMicrotasks = async (count = 12): Promise<void> => {
+  for (let index = 0; index < count; index += 1) {
+    await Promise.resolve()
+  }
+}
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 Object.defineProperty(globalThis, 'crypto', {
@@ -43,18 +96,211 @@ describe('useCollaborationRoomAccess security transitions', () => {
     container = document.createElement('div')
     document.body.appendChild(container)
     root = createRoot(container)
-    mockedResolve.mockReturnValue({
+    mockedResolve.mockImplementation(
+      (_application, note) =>
+        ({
+          available: true,
+          noteUuid: note.uuid,
+          sourceId: 'root-same-uuid:version-1',
+          userUuid: 'user-1',
+          sessionUser,
+        }) as never,
+    )
+    mockedPrepare.mockImplementation(async (_application, note) => ({
       available: true,
-      sourceId: 'root-same-uuid:version-1',
-    } as never)
-    mockedPrepare.mockResolvedValue({
-      available: true,
+      noteUuid: note.uuid,
       sourceId: 'root-same-uuid:version-1',
       roomKey: {} as CryptoKey,
       capability: 'capability-1',
+      serverUpdatedAtTimestamp: 100,
       userUuid: 'user-1',
+      sessionUser,
       username: 'Alice',
+    }))
+  })
+
+  it('defers distributed reservation so StrictMode abandons its first setup before bootstrap election', async () => {
+    const sent: CollabFrame[] = []
+    mockedCreateChannel.mockImplementation(() => createAutoLeaseChannel(sent).channel)
+    const note = { uuid: 'note-1', text: 'canonical', dirty: false, serverUpdatedAtTimestamp: 100 } as never
+    const application = {
+      items: { streamItems: () => jest.fn(), findItem: () => note },
+      sync: { sync: jest.fn().mockResolvedValue(undefined) },
+      vaultLocks: { addEventObserver: () => jest.fn() },
+      sockets: { addEventObserver: () => jest.fn(), isWebSocketConnectionOpen: () => true },
+      addEventObserver: () => jest.fn(),
+    } as never
+    const View = () => {
+      latestAccess = useCollaborationRoomAccess(application, note, true)
+      return createElement('div', null, latestAccess.status)
+    }
+
+    await act(async () => {
+      root.render(createElement(StrictMode, null, createElement(View)))
+      await flushMicrotasks(40)
     })
+
+    expect(latestAccess?.status).toBe('ready')
+    expect(sent.filter((frame) => frame.t === 'room-reserve')).toHaveLength(1)
+    expect(sent.filter((frame) => frame.t === 'room-join')).toHaveLength(1)
+    expect(sent.filter((frame) => frame.t === 'room-leave')).toHaveLength(0)
+  })
+
+  it('keeps committed preparation and observer readiness isolated from an abandoned note render', async () => {
+    const committed = {
+      uuid: 'committed-note',
+      text: 'committed body',
+      dirty: false,
+      serverUpdatedAtTimestamp: 100,
+    }
+    const abandoned = {
+      uuid: 'abandoned-note',
+      text: 'uncommitted body',
+      dirty: false,
+      serverUpdatedAtTimestamp: 100,
+    }
+    mockedResolve.mockImplementation(
+      (_application, candidate) =>
+        ({
+          available: true,
+          noteUuid: candidate.uuid,
+          sourceId: `source:${candidate.uuid}`,
+          userUuid: 'user-1',
+          sessionUser,
+        }) as never,
+    )
+    let finishPreparation!: () => void
+    mockedPrepare.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishPreparation = () =>
+            resolve({
+              available: true,
+              noteUuid: committed.uuid,
+              sourceId: `source:${committed.uuid}`,
+              roomKey: {} as CryptoKey,
+              capability: 'committed-capability',
+              serverUpdatedAtTimestamp: 100,
+              userUuid: 'user-1',
+              sessionUser,
+              username: 'Alice',
+            })
+        }),
+    )
+    const application = {
+      items: { streamItems: () => jest.fn(), findItem: () => committed },
+      vaultLocks: { addEventObserver: () => jest.fn() },
+      sockets: {
+        addEventObserver: (observer: (event: WebSocketsServiceEvent) => Promise<void>) => {
+          socketObserver = observer
+          return jest.fn()
+        },
+        isWebSocketConnectionOpen: () => true,
+      },
+      addEventObserver: () => jest.fn(),
+    } as never
+    const never = new Promise<void>(() => undefined)
+    let abandonedRenderCount = 0
+    const View = ({ activeNote, suspend }: { activeNote: typeof committed; suspend: boolean }) => {
+      const access = useCollaborationRoomAccess(application, activeNote as never)
+      if (suspend) {
+        abandonedRenderCount += 1
+        throw never
+      }
+      latestAccess = access
+      return createElement('div', null, `${activeNote.uuid}:${access.status}`)
+    }
+    const tree = (activeNote: typeof committed, suspend = false) =>
+      createElement(
+        Suspense,
+        { fallback: createElement('div', null, 'fallback') },
+        createElement(View, { activeNote, suspend }),
+      )
+
+    await act(async () => {
+      root.render(tree(committed))
+      await flushMicrotasks()
+    })
+    expect(mockedPrepare).toHaveBeenCalledTimes(1)
+    expect(mockedPrepare.mock.calls[0][1]).toBe(committed)
+
+    await act(async () => {
+      startTransition(() => root.render(tree(abandoned, true)))
+      await flushMicrotasks()
+    })
+    expect(abandonedRenderCount).toBeGreaterThan(0)
+    expect(container.textContent).toBe('committed-note:preparing')
+
+    await act(async () => {
+      finishPreparation()
+      await flushMicrotasks()
+    })
+    expect(latestAccess?.status).toBe('ready')
+    expect(mockedPrepare).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      root.render(tree(committed))
+      await flushMicrotasks()
+      startTransition(() => root.render(tree(abandoned, true)))
+      await flushMicrotasks()
+    })
+    expect(abandonedRenderCount).toBeGreaterThan(1)
+    await act(async () => {
+      await socketObserver?.(WebSocketsServiceEvent.WebSocketDidOpen)
+      await flushMicrotasks()
+    })
+    expect(container.textContent).toBe('committed-note:ready')
+    expect(mockedPrepare).toHaveBeenCalledTimes(1)
+  })
+
+  it('releases the live lease and disables collaboration when protected access expires', async () => {
+    const sent: CollabFrame[] = []
+    let applicationObserver: ((event: ApplicationEvent) => Promise<void>) | undefined
+    mockedCreateChannel.mockImplementation(() => createAutoLeaseChannel(sent).channel)
+    const note = {
+      uuid: 'protected-note',
+      text: 'canonical',
+      dirty: false,
+      protected: true,
+      serverUpdatedAtTimestamp: 100,
+    } as never
+    const application = {
+      items: { streamItems: () => jest.fn(), findItem: () => note },
+      sync: { sync: jest.fn().mockResolvedValue(undefined) },
+      vaultLocks: { addEventObserver: () => jest.fn() },
+      sockets: { addEventObserver: () => jest.fn(), isWebSocketConnectionOpen: () => true },
+      addEventObserver: (observer: (event: ApplicationEvent) => Promise<void>) => {
+        applicationObserver = observer
+        return jest.fn()
+      },
+    } as never
+    const View = () => {
+      latestAccess = useCollaborationRoomAccess(application, note, true)
+      return createElement('div', null, latestAccess.status)
+    }
+
+    await act(async () => {
+      root.render(createElement(View))
+      await flushMicrotasks(30)
+    })
+    expect(latestAccess?.status).toBe('ready')
+
+    mockedResolve.mockReturnValue({
+      available: false,
+      reason: 'Unlock protected note access to use live collaboration.',
+    })
+    await act(async () => {
+      const expiration = applicationObserver?.(ApplicationEvent.UnprotectedSessionExpired)
+      expect(sent.filter((frame) => frame.t === 'room-leave')).toHaveLength(1)
+      await expiration
+      await flushMicrotasks(10)
+    })
+
+    expect(latestAccess).toEqual({
+      status: 'disabled',
+      reason: 'Unlock protected note access to use live collaboration.',
+    })
+    expect(sent.filter((frame) => frame.t === 'room-leave')).toHaveLength(1)
   })
 
   afterEach(() => {
@@ -94,14 +340,20 @@ describe('useCollaborationRoomAccess security transitions', () => {
 
     mockedResolve.mockReturnValue({
       available: true,
+      noteUuid: 'note-1',
       sourceId: 'root-same-uuid:version-2',
+      userUuid: 'user-1',
+      sessionUser,
     } as never)
     mockedPrepare.mockResolvedValue({
       available: true,
+      noteUuid: 'note-1',
       sourceId: 'root-same-uuid:version-2',
       roomKey: {} as CryptoKey,
       capability: 'capability-2',
+      serverUpdatedAtTimestamp: 100,
       userUuid: 'user-1',
+      sessionUser,
       username: 'Alice',
     })
     await act(async () => {
@@ -176,13 +428,14 @@ describe('useCollaborationRoomAccess security transitions', () => {
         }
       },
     })
+    const note = { uuid: 'note-1', dirty: false, serverUpdatedAtTimestamp: 100, text: 'persisted' } as never
     const application = {
-      items: { streamItems: () => jest.fn() },
+      items: { streamItems: () => jest.fn(), findItem: () => note },
+      sync: { sync: jest.fn().mockResolvedValue(undefined) },
       vaultLocks: { addEventObserver: () => jest.fn() },
       sockets: { addEventObserver: () => jest.fn() },
       addEventObserver: () => jest.fn(),
     } as never
-    const note = { uuid: 'note-1' } as never
     const View = () => {
       latestAccess = useCollaborationRoomAccess(application, note, true)
       return createElement('div', null, latestAccess.status)
@@ -193,32 +446,418 @@ describe('useCollaborationRoomAccess security transitions', () => {
       await Promise.resolve()
       await Promise.resolve()
     })
-    const join = sent.find((frame): frame is Extract<CollabFrame, { t: 'room-join' }> => frame.t === 'room-join')
-    expect(join).toMatchObject({
+    const reserve = sent.find(
+      (frame): frame is Extract<CollabFrame, { t: 'room-reserve' }> => frame.t === 'room-reserve',
+    )
+    expect(reserve).toMatchObject({
       room: 'note-1',
       cap: 'capability-1',
       role: 'editor',
       requestId: expect.any(String),
+      protocolVersion,
     })
 
     await act(async () => {
-      inbound?.({ t: 'room-joined', room: 'note-1', requestId: 'spoofed', bootstrap: true })
+      inbound?.({
+        t: 'room-reserved',
+        room: 'note-1',
+        requestId: 'spoofed',
+        bootstrap: true,
+        bootstrapChallenge: 'spoofed-challenge',
+        protocolVersion,
+        maxTransferBytes,
+      })
       await Promise.resolve()
     })
     expect(container.textContent).toBe('preparing')
 
     await act(async () => {
-      inbound?.({ t: 'room-joined', room: 'note-1', requestId: join!.requestId, bootstrap: true })
-      await Promise.resolve()
+      inbound?.({
+        t: 'room-reserved',
+        room: 'note-1',
+        requestId: reserve!.requestId,
+        bootstrap: true,
+        bootstrapChallenge: 'bootstrap-challenge',
+        protocolVersion,
+        maxTransferBytes,
+      })
+      await flushMicrotasks()
+    })
+    const join = sent.find((frame): frame is Extract<CollabFrame, { t: 'room-join' }> => frame.t === 'room-join')
+    expect(join).toMatchObject({ requestId: reserve!.requestId, protocolVersion })
+    await act(async () => {
+      inbound?.({
+        t: 'room-joined',
+        room: 'note-1',
+        requestId: join!.requestId,
+        bootstrap: true,
+        protocolVersion,
+        maxTransferBytes,
+      })
+      await flushMicrotasks()
     })
     expect(container.textContent).toBe('ready')
     expect(latestAccess).toMatchObject({
       status: 'ready',
       editorLease: {
-        requestId: join!.requestId,
+        requestId: reserve!.requestId,
         shouldBootstrap: true,
       },
     })
+    const editorLease = latestAccess?.status === 'ready' ? latestAccess.editorLease : undefined
+    expect(editorLease?.validateAttachment()).toBe(true)
+    expect(editorLease?.isAttached()).toBe(false)
+    editorLease?.setProviderCanonicalOwnership?.(true)
+    expect(editorLease?.isAttached()).toBe(true)
+    editorLease?.setProviderCanonicalOwnership?.(false)
+    expect(editorLease?.isAttached()).toBe(false)
+  })
+
+  it('syncs a stale first device before bootstrap so newer persisted text is the only seed', async () => {
+    const stale = {
+      uuid: 'note-stale',
+      text: 'older local text',
+      dirty: false,
+      serverUpdatedAtTimestamp: 100,
+    }
+    let live = stale
+    const newer = {
+      ...stale,
+      text: 'newer text already persisted by device B',
+      serverUpdatedAtTimestamp: 200,
+    }
+    mockedResolve.mockReturnValue({
+      available: true,
+      noteUuid: 'note-stale',
+      sourceId: 'stable-key-source',
+      userUuid: 'user-1',
+      sessionUser,
+    } as never)
+    mockedPrepare.mockResolvedValue({
+      available: true,
+      noteUuid: 'note-stale',
+      sourceId: 'stable-key-source',
+      roomKey: {} as CryptoKey,
+      capability: 'canonical-capability',
+      serverUpdatedAtTimestamp: 200,
+      userUuid: 'user-1',
+      sessionUser,
+      username: 'Alice',
+    })
+    const sync = jest.fn().mockImplementation(async () => {
+      // No room/bootstrap operation has happened; ordinary encrypted sync wins.
+      live = newer
+    })
+    const application = {
+      sync: { sync },
+      items: { findItem: () => live },
+    } as never
+
+    const result = await prepareSynchronizedEditorAccess(application, stale as never)
+
+    expect(sync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        awaitAll: true,
+        sourceDescription: expect.stringContaining('canonical encrypted note revision'),
+      }),
+    )
+    expect(result).toMatchObject({
+      available: true,
+      serverUpdatedAtTimestamp: 200,
+      initialEditorState: 'newer text already persisted by device B',
+    })
+    expect(live.text).toBe('newer text already persisted by device B')
+  })
+
+  it('fails closed before authorization or sync when the elected note body is still lite', async () => {
+    const sync = jest.fn()
+    const lite = {
+      uuid: 'lite-bootstrap-note',
+      text: '',
+      dirty: false,
+      serverUpdatedAtTimestamp: 100,
+      payload: { content: { __lazyLite: true } },
+    }
+
+    await expect(
+      prepareSynchronizedEditorAccess(
+        {
+          sync: { sync },
+          items: { findItem: jest.fn(() => lite) },
+        } as never,
+        lite as never,
+      ),
+    ).resolves.toEqual({
+      available: false,
+      reason: 'Live collaboration is waiting for the full encrypted note body to load.',
+    })
+    expect(mockedPrepare).not.toHaveBeenCalled()
+    expect(sync).not.toHaveBeenCalled()
+    expect(mockedCreateChannel).not.toHaveBeenCalled()
+  })
+
+  it('rejects a synchronized access result after a same-UUID session swaps during full sync', async () => {
+    const firstSession = sessionUser
+    const secondSession = { uuid: sessionUser.uuid, email: sessionUser.email }
+    let activeSession = firstSession
+    const note = { uuid: 'session-race-note', text: 'canonical', dirty: false, serverUpdatedAtTimestamp: 100 }
+    mockedResolve.mockImplementation(
+      () =>
+        ({
+          available: true,
+          noteUuid: 'session-race-note',
+          sourceId: 'same-root-and-note',
+          userUuid: 'user-1',
+          sessionUser: activeSession,
+        }) as never,
+    )
+    mockedPrepare.mockResolvedValue({
+      available: true,
+      noteUuid: 'session-race-note',
+      sourceId: 'same-root-and-note',
+      roomKey: {} as CryptoKey,
+      capability: 'first-session-capability',
+      serverUpdatedAtTimestamp: 100,
+      userUuid: 'user-1',
+      sessionUser: firstSession,
+      username: 'Alice',
+    })
+    let finishSync!: () => void
+    const sync = jest.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finishSync = resolve
+        }),
+    )
+
+    const preparation = prepareSynchronizedEditorAccess(
+      { sync: { sync }, items: { findItem: () => note } } as never,
+      note as never,
+    )
+    await flushMicrotasks(2)
+    expect(sync).toHaveBeenCalledTimes(1)
+    activeSession = secondSession
+    finishSync()
+
+    await expect(preparation).resolves.toMatchObject({
+      available: false,
+      reason: 'The note encryption key changed while collaboration was synchronizing.',
+    })
+  })
+
+  it('releases and re-elects when the durable revision advances after activation acknowledgement', async () => {
+    const sent: CollabFrame[] = []
+    mockedCreateChannel.mockImplementation(() => createAutoLeaseChannel(sent).channel)
+    const initial = { uuid: 'post-ack-race', text: 'revision 100', dirty: false, serverUpdatedAtTimestamp: 100 }
+    let live = initial
+    mockedResolve.mockReturnValue({
+      available: true,
+      noteUuid: 'post-ack-race',
+      sourceId: 'stable-post-ack-source',
+      userUuid: 'user-1',
+      sessionUser,
+    } as never)
+    mockedPrepare.mockImplementation(async () => {
+      const call = mockedPrepare.mock.calls.length
+      const revision = call >= 3 ? 200 : 100
+      return {
+        available: true,
+        noteUuid: 'post-ack-race',
+        sourceId: 'stable-post-ack-source',
+        roomKey: {} as CryptoKey,
+        capability: `capability-${call}`,
+        serverUpdatedAtTimestamp: revision,
+        userUuid: 'user-1',
+        sessionUser,
+        username: 'Alice',
+      }
+    })
+    const sync = jest.fn(async () => {
+      if (sync.mock.calls.length === 3) {
+        live = { ...initial, text: 'revision 200 from another device', serverUpdatedAtTimestamp: 200 }
+      }
+    })
+    const application = {
+      items: { streamItems: () => jest.fn(), findItem: () => live },
+      sync: { sync },
+      vaultLocks: { addEventObserver: () => jest.fn() },
+      sockets: { addEventObserver: () => jest.fn() },
+      addEventObserver: () => jest.fn(),
+    } as never
+    const View = () => {
+      latestAccess = useCollaborationRoomAccess(application, initial as never, true)
+      return createElement('div', null, latestAccess.status)
+    }
+
+    await act(async () => {
+      root.render(createElement(View))
+      await flushMicrotasks(30)
+    })
+
+    const reserves = sent.filter(
+      (frame): frame is Extract<CollabFrame, { t: 'room-reserve' }> => frame.t === 'room-reserve',
+    )
+    expect(reserves).toHaveLength(2)
+    expect(sent).toContainEqual({ t: 'room-leave', room: initial.uuid, requestId: reserves[0].requestId })
+    expect(latestAccess).toMatchObject({
+      status: 'ready',
+      initialEditorState: 'revision 200 from another device',
+      editorLease: { requestId: reserves[1].requestId },
+    })
+    expect(mockedPrepare.mock.calls[1][2]).toMatchObject({
+      leaseRequestId: reserves[0].requestId,
+      bootstrapChallenge: `challenge:${reserves[0].requestId}`,
+    })
+    expect(mockedPrepare.mock.calls[2][2]).toEqual(mockedPrepare.mock.calls[1][2])
+  })
+
+  it('reauthorizes after an awaited full-sync revision race before allowing bootstrap', async () => {
+    const initial = { uuid: 'note-race', text: 'initial', dirty: false, serverUpdatedAtTimestamp: 100 }
+    let live = initial
+    mockedResolve.mockReturnValue({
+      available: true,
+      noteUuid: 'note-race',
+      sourceId: 'stable-key-source',
+      userUuid: 'user-1',
+      sessionUser,
+    } as never)
+    mockedPrepare
+      .mockResolvedValueOnce({
+        available: true,
+        noteUuid: 'note-race',
+        sourceId: 'stable-key-source',
+        roomKey: {} as CryptoKey,
+        capability: 'capability-at-200',
+        serverUpdatedAtTimestamp: 200,
+        userUuid: 'user-1',
+        sessionUser,
+        username: 'Alice',
+      })
+      .mockResolvedValueOnce({
+        available: true,
+        noteUuid: 'note-race',
+        sourceId: 'stable-key-source',
+        roomKey: {} as CryptoKey,
+        capability: 'capability-at-201',
+        serverUpdatedAtTimestamp: 201,
+        userUuid: 'user-1',
+        sessionUser,
+        username: 'Alice',
+      })
+    const sync = jest.fn().mockImplementation(async () => {
+      live = { ...initial, text: 'latest concurrent body', serverUpdatedAtTimestamp: 201 }
+    })
+
+    const result = await prepareSynchronizedEditorAccess(
+      { sync: { sync }, items: { findItem: () => live } } as never,
+      initial as never,
+    )
+
+    expect(mockedPrepare).toHaveBeenCalledTimes(2)
+    expect(sync).toHaveBeenCalledTimes(2)
+    expect(result).toMatchObject({
+      available: true,
+      capability: 'capability-at-201',
+      initialEditorState: 'latest concurrent body',
+    })
+  })
+
+  it('does not restart preparation for the CompletedFullSync emitted by its own freshness sync', async () => {
+    const sent: CollabFrame[] = []
+    let applicationObserver: ((event: ApplicationEvent) => Promise<void>) | undefined
+    mockedCreateChannel.mockReturnValue(createAutoLeaseChannel(sent).channel)
+    const note = { uuid: 'note-self-sync', text: 'canonical', dirty: false, serverUpdatedAtTimestamp: 100 }
+    const sync = jest.fn(async () => {
+      await applicationObserver?.(ApplicationEvent.CompletedFullSync)
+    })
+    const application = {
+      items: { streamItems: () => jest.fn(), findItem: () => note },
+      sync: { sync },
+      vaultLocks: { addEventObserver: () => jest.fn() },
+      sockets: { addEventObserver: () => jest.fn() },
+      addEventObserver: (observer: (event: ApplicationEvent) => Promise<void>) => {
+        applicationObserver = observer
+        return jest.fn()
+      },
+    } as never
+    const View = () => {
+      latestAccess = useCollaborationRoomAccess(application, note as never, true)
+      return createElement('div', null, latestAccess.status)
+    }
+
+    await act(async () => {
+      root.render(createElement(View))
+      await flushMicrotasks()
+    })
+
+    expect(mockedPrepare).toHaveBeenCalledTimes(3)
+    expect(sync).toHaveBeenCalledTimes(3)
+    const joins = sent.filter((frame): frame is Extract<CollabFrame, { t: 'room-join' }> => frame.t === 'room-join')
+    expect(joins).toHaveLength(1)
+    expect(latestAccess?.status).toBe('ready')
+  })
+
+  it('retries a failed stale preparation on a later full sync without remounting a ready lease', async () => {
+    const sent: CollabFrame[] = []
+    let applicationObserver: ((event: ApplicationEvent) => Promise<void>) | undefined
+    mockedCreateChannel.mockReturnValue(createAutoLeaseChannel(sent).channel)
+    const stale = { uuid: 'note-later-sync', text: 'stale', dirty: false, serverUpdatedAtTimestamp: 100 }
+    let live = stale
+    mockedPrepare.mockResolvedValue({
+      available: true,
+      noteUuid: 'note-later-sync',
+      sourceId: 'root-same-uuid:version-1',
+      roomKey: {} as CryptoKey,
+      capability: 'capability-at-200',
+      serverUpdatedAtTimestamp: 200,
+      userUuid: 'user-1',
+      sessionUser,
+      username: 'Alice',
+    })
+    const sync = jest.fn().mockResolvedValue(undefined)
+    const application = {
+      items: { streamItems: () => jest.fn(), findItem: () => live },
+      sync: { sync },
+      vaultLocks: { addEventObserver: () => jest.fn() },
+      sockets: { addEventObserver: () => jest.fn() },
+      addEventObserver: (observer: (event: ApplicationEvent) => Promise<void>) => {
+        applicationObserver = observer
+        return jest.fn()
+      },
+    } as never
+    const View = () => {
+      latestAccess = useCollaborationRoomAccess(application, stale as never, true)
+      return createElement('div', null, latestAccess.status)
+    }
+
+    await act(async () => {
+      root.render(createElement(View))
+      await flushMicrotasks()
+    })
+    expect(latestAccess).toMatchObject({ status: 'disabled' })
+    expect(mockedPrepare).toHaveBeenCalledTimes(3)
+    expect(sync).toHaveBeenCalledTimes(3)
+
+    live = { ...stale, text: 'canonical after later sync', serverUpdatedAtTimestamp: 200 }
+    await act(async () => {
+      await applicationObserver?.(ApplicationEvent.CompletedFullSync)
+      await flushMicrotasks()
+    })
+    const join = sent.find((frame): frame is Extract<CollabFrame, { t: 'room-join' }> => frame.t === 'room-join')
+    expect(join).toBeDefined()
+    expect(mockedPrepare).toHaveBeenCalledTimes(6)
+    expect(sync).toHaveBeenCalledTimes(6)
+    expect(latestAccess).toMatchObject({ status: 'ready', initialEditorState: 'canonical after later sync' })
+
+    const sentAtReady = [...sent]
+    await act(async () => {
+      await applicationObserver?.(ApplicationEvent.CompletedFullSync)
+      await Promise.resolve()
+    })
+    expect(mockedPrepare).toHaveBeenCalledTimes(6)
+    expect(sync).toHaveBeenCalledTimes(6)
+    expect(sent).toEqual(sentAtReady)
+    expect(latestAccess?.status).toBe('ready')
   })
 
   it('ignores a pre-send callback and safely accepts a synchronous send acknowledgement', async () => {
@@ -230,22 +869,36 @@ describe('useCollaborationRoomAccess security transitions', () => {
       isConnected: () => true,
       authorize: jest.fn(),
       send: (frame) => {
-        if (frame.t === 'room-join') {
+        if (frame.t === 'room-reserve') {
+          inbound?.({
+            t: 'room-reserved',
+            room: frame.room,
+            requestId: frame.requestId,
+            bootstrap: true,
+            bootstrapChallenge: 'challenge-1',
+            protocolVersion,
+            maxTransferBytes,
+          })
+        } else if (frame.t === 'room-join') {
           inbound?.({
             t: 'room-joined',
             room: frame.room,
             requestId: frame.requestId,
             bootstrap: true,
+            protocolVersion,
+            maxTransferBytes,
           })
         }
       },
       subscribe: (handler) => {
         inbound = handler
         handler({
-          t: 'room-joined',
+          t: 'room-reserved',
           room: 'note-1',
           requestId,
           bootstrap: false,
+          protocolVersion,
+          maxTransferBytes,
         })
         return unsubscribe
       },
@@ -256,6 +909,15 @@ describe('useCollaborationRoomAccess security transitions', () => {
       await expect(reservation.promise).resolves.toEqual({
         requestId,
         shouldBootstrap: true,
+        bootstrapChallenge: 'challenge-1',
+        protocolVersion,
+        maxTransferBytes,
+      })
+      await expect(reservation.activate('activation-capability')).resolves.toMatchObject({
+        requestId,
+        shouldBootstrap: true,
+        protocolVersion,
+        maxTransferBytes,
       })
       expect(unsubscribe).toHaveBeenCalledTimes(1)
     } finally {
@@ -299,14 +961,16 @@ describe('useCollaborationRoomAccess security transitions', () => {
     })
 
     const reservation = beginEditorLeaseReservation({} as never, 'note-1', 'capability-1', 1)
-    const join = sent.find((frame): frame is Extract<CollabFrame, { t: 'room-join' }> => frame.t === 'room-join')
+    const reserve = sent.find(
+      (frame): frame is Extract<CollabFrame, { t: 'room-reserve' }> => frame.t === 'room-reserve',
+    )
     await expect(reservation.promise).resolves.toEqual({
-      reason: 'The encrypted collaboration room did not acknowledge the editor lease.',
+      reason: 'The encrypted collaboration room did not acknowledge the editor reservation.',
     })
     expect(sent).toContainEqual({
       t: 'room-leave',
       room: 'note-1',
-      requestId: join!.requestId,
+      requestId: reserve!.requestId,
     })
   })
 
@@ -319,13 +983,14 @@ describe('useCollaborationRoomAccess security transitions', () => {
         throw new Error('subscription setup failed')
       },
     })
+    const note = { uuid: 'note-1', dirty: false, serverUpdatedAtTimestamp: 100, text: 'persisted' } as never
     const application = {
-      items: { streamItems: () => jest.fn() },
+      items: { streamItems: () => jest.fn(), findItem: () => note },
+      sync: { sync: jest.fn().mockResolvedValue(undefined) },
       vaultLocks: { addEventObserver: () => jest.fn() },
       sockets: { addEventObserver: () => jest.fn() },
       addEventObserver: () => jest.fn(),
     } as never
-    const note = { uuid: 'note-1' } as never
     const View = () => {
       latestAccess = useCollaborationRoomAccess(application, note, true)
       return createElement('div', null, latestAccess.status)
@@ -346,40 +1011,52 @@ describe('useCollaborationRoomAccess security transitions', () => {
 
   it('invalidates synchronously on a same-vault note switch and releases the previous editor lease', async () => {
     const sent: CollabFrame[] = []
-    const inbound = new Set<(frame: CollabFrame) => void>()
-    mockedCreateChannel.mockReturnValue({
-      isConnected: () => true,
-      authorize: jest.fn(),
-      send: (frame) => sent.push(frame),
-      subscribe: (handler) => {
-        inbound.add(handler)
-        return () => inbound.delete(handler)
-      },
-    })
+    mockedCreateChannel.mockImplementation(() => createAutoLeaseChannel(sent).channel)
     mockedResolve.mockImplementation((_application, note) => {
       return {
         available: true,
+        noteUuid: note.uuid,
         sourceId: `same-vault:root-version:${note.uuid}`,
+        userUuid: 'user-1',
+        sessionUser,
       } as never
     })
     mockedPrepare.mockImplementation(async (_application, note) => {
       return {
         available: true,
+        noteUuid: note.uuid,
         sourceId: `same-vault:root-version:${note.uuid}`,
         roomKey: {} as CryptoKey,
         capability: `capability:${note.uuid}`,
+        serverUpdatedAtTimestamp: 100,
         userUuid: 'user-1',
+        sessionUser,
         username: 'Alice',
       }
     })
+    const noteOne = {
+      uuid: 'note-1',
+      dirty: false,
+      serverUpdatedAtTimestamp: 100,
+      text: 'note one',
+    } as never
+    const noteTwo = {
+      uuid: 'note-2',
+      dirty: false,
+      serverUpdatedAtTimestamp: 100,
+      text: 'note two',
+    } as never
+    const notes = new Map([
+      ['note-1', noteOne],
+      ['note-2', noteTwo],
+    ])
     const application = {
-      items: { streamItems: () => jest.fn() },
+      items: { streamItems: () => jest.fn(), findItem: (uuid: string) => notes.get(uuid) },
+      sync: { sync: jest.fn().mockResolvedValue(undefined) },
       vaultLocks: { addEventObserver: () => jest.fn() },
       sockets: { addEventObserver: () => jest.fn() },
       addEventObserver: () => jest.fn(),
     } as never
-    const noteOne = { uuid: 'note-1' } as never
-    const noteTwo = { uuid: 'note-2' } as never
     const renders: Array<{ noteUuid: string; status: string; capability?: string }> = []
     const View = ({ note }: { note: { uuid: string } }) => {
       latestAccess = useCollaborationRoomAccess(application, note as never, true)
@@ -393,31 +1070,18 @@ describe('useCollaborationRoomAccess security transitions', () => {
 
     await act(async () => {
       root.render(createElement(View, { note: noteOne }))
-      await Promise.resolve()
-      await Promise.resolve()
+      await flushMicrotasks()
     })
     const firstJoin = sent.find(
       (frame): frame is Extract<CollabFrame, { t: 'room-join' }> => frame.t === 'room-join' && frame.room === 'note-1',
     )
     expect(firstJoin).toBeDefined()
-    await act(async () => {
-      for (const handler of inbound) {
-        handler({
-          t: 'room-joined',
-          room: 'note-1',
-          requestId: firstJoin!.requestId,
-          bootstrap: true,
-        })
-      }
-      await Promise.resolve()
-    })
     expect(latestAccess).toMatchObject({ status: 'ready', capability: 'capability:note-1' })
 
     const firstSwitchedRender = renders.length
     await act(async () => {
       root.render(createElement(View, { note: noteTwo }))
-      await Promise.resolve()
-      await Promise.resolve()
+      await flushMicrotasks()
     })
 
     expect(renders[firstSwitchedRender]).toEqual({ noteUuid: 'note-2', status: 'preparing' })
@@ -426,7 +1090,7 @@ describe('useCollaborationRoomAccess security transitions', () => {
         .slice(firstSwitchedRender)
         .some((render) => render.noteUuid === 'note-2' && render.capability === 'capability:note-1'),
     ).toBe(false)
-    expect(latestAccess).toEqual({ status: 'preparing' })
+    expect(latestAccess).toMatchObject({ status: 'ready', capability: 'capability:note-2' })
     expect(sent).toContainEqual({
       t: 'room-leave',
       room: 'note-1',
@@ -436,64 +1100,56 @@ describe('useCollaborationRoomAccess security transitions', () => {
 
   it('keeps a ready lease when immutable note content is replaced without changing collaboration identity', async () => {
     const sent: CollabFrame[] = []
-    const inbound = new Set<(frame: CollabFrame) => void>()
-    mockedCreateChannel.mockReturnValue({
-      isConnected: () => true,
-      authorize: jest.fn(),
-      send: (frame) => sent.push(frame),
-      subscribe: (handler) => {
-        inbound.add(handler)
-        return () => inbound.delete(handler)
-      },
-    })
+    mockedCreateChannel.mockImplementation(() => createAutoLeaseChannel(sent).channel)
     mockedResolve.mockReturnValue({
       available: true,
+      noteUuid: 'note-1',
       sourceId: 'same-vault:note-1:root-version',
+      userUuid: 'user-1',
+      sessionUser,
     } as never)
     mockedPrepare.mockResolvedValue({
       available: true,
+      noteUuid: 'note-1',
       sourceId: 'same-vault:note-1:root-version',
       roomKey: {} as CryptoKey,
       capability: 'capability:note-1',
+      serverUpdatedAtTimestamp: 100,
       userUuid: 'user-1',
+      sessionUser,
       username: 'Alice',
     })
+    let liveNote = {
+      uuid: 'note-1',
+      text: 'before',
+      dirty: false,
+      serverUpdatedAtTimestamp: 100,
+    }
     const application = {
-      items: { streamItems: () => jest.fn() },
+      items: { streamItems: () => jest.fn(), findItem: () => liveNote },
+      sync: { sync: jest.fn().mockResolvedValue(undefined) },
       vaultLocks: { addEventObserver: () => jest.fn() },
       sockets: { addEventObserver: () => jest.fn() },
       addEventObserver: () => jest.fn(),
     } as never
     const View = ({ note }: { note: { uuid: string; text: string } }) => {
-      latestAccess = useCollaborationRoomAccess(application, note as never, true)
+      liveNote = { ...note, dirty: false, serverUpdatedAtTimestamp: 100 }
+      latestAccess = useCollaborationRoomAccess(application, liveNote as never, true)
       return createElement('div', null, latestAccess.status)
     }
 
     await act(async () => {
       root.render(createElement(View, { note: { uuid: 'note-1', text: 'before' } }))
-      await Promise.resolve()
-      await Promise.resolve()
+      await flushMicrotasks()
     })
     const join = sent.find((frame): frame is Extract<CollabFrame, { t: 'room-join' }> => frame.t === 'room-join')
     expect(join).toBeDefined()
-    await act(async () => {
-      for (const handler of inbound) {
-        handler({
-          t: 'room-joined',
-          room: 'note-1',
-          requestId: join!.requestId,
-          bootstrap: true,
-        })
-      }
-      await Promise.resolve()
-    })
     expect(latestAccess).toMatchObject({ status: 'ready', capability: 'capability:note-1' })
 
     const sentBeforeReplacement = [...sent]
     await act(async () => {
       root.render(createElement(View, { note: { uuid: 'note-1', text: 'after' } }))
-      await Promise.resolve()
-      await Promise.resolve()
+      await flushMicrotasks()
     })
 
     expect(latestAccess).toMatchObject({
@@ -502,50 +1158,203 @@ describe('useCollaborationRoomAccess security transitions', () => {
       editorLease: { requestId: join!.requestId },
     })
     expect(sent).toEqual(sentBeforeReplacement)
-    expect(mockedPrepare).toHaveBeenCalledTimes(1)
+    expect(mockedPrepare).toHaveBeenCalledTimes(3)
+  })
+
+  it('releases and re-prepares when the canonical note advances between the final barrier and provider attach', async () => {
+    const sent: CollabFrame[] = []
+    mockedCreateChannel.mockImplementation(() => createAutoLeaseChannel(sent).channel)
+    let liveNote = { uuid: 'note-1', text: 'revision 100', dirty: false, serverUpdatedAtTimestamp: 100 }
+    mockedPrepare.mockImplementation(async () => ({
+      available: true,
+      noteUuid: liveNote.uuid,
+      sourceId: 'root-same-uuid:version-1',
+      roomKey: {} as CryptoKey,
+      capability: `capability-${liveNote.serverUpdatedAtTimestamp}`,
+      serverUpdatedAtTimestamp: liveNote.serverUpdatedAtTimestamp,
+      userUuid: 'user-1',
+      sessionUser,
+      username: 'Alice',
+    }))
+    const application = {
+      items: { streamItems: () => jest.fn(), findItem: () => liveNote },
+      sync: { sync: jest.fn().mockResolvedValue(undefined) },
+      vaultLocks: { addEventObserver: () => jest.fn() },
+      sockets: { addEventObserver: () => jest.fn() },
+      addEventObserver: () => jest.fn(),
+    } as never
+    const View = () => {
+      latestAccess = useCollaborationRoomAccess(application, liveNote as never, true)
+      return createElement('div', null, latestAccess.status)
+    }
+
+    await act(async () => {
+      root.render(createElement(View))
+      await flushMicrotasks()
+    })
+    const firstLease = latestAccess?.status === 'ready' ? latestAccess.editorLease : undefined
+    expect(firstLease).toBeDefined()
+
+    liveNote = { uuid: 'note-1', text: 'revision 101', dirty: false, serverUpdatedAtTimestamp: 101 }
+    await act(async () => {
+      expect(firstLease?.validateAttachment()).toBe(false)
+      await flushMicrotasks()
+    })
+
+    expect(sent).toContainEqual({
+      t: 'room-leave',
+      room: 'note-1',
+      requestId: firstLease!.requestId,
+    })
+    expect(latestAccess).toMatchObject({
+      status: 'ready',
+      initialEditorState: 'revision 101',
+      capability: 'capability-101',
+    })
+    expect(latestAccess?.status === 'ready' ? latestAccess.editorLease?.requestId : undefined).not.toBe(
+      firstLease?.requestId,
+    )
+  })
+
+  it('re-elects bootstrap from the latest exact canonical body after provider recovery is exhausted', async () => {
+    const sent: CollabFrame[] = []
+    mockedCreateChannel.mockImplementation(() => createAutoLeaseChannel(sent).channel)
+    let liveNote = { uuid: 'note-1', text: 'revision 100 body', dirty: false, serverUpdatedAtTimestamp: 100 }
+    mockedPrepare.mockImplementation(async () => ({
+      available: true,
+      noteUuid: liveNote.uuid,
+      sourceId: 'root-same-uuid:version-1',
+      roomKey: {} as CryptoKey,
+      capability: `capability-${liveNote.serverUpdatedAtTimestamp}`,
+      serverUpdatedAtTimestamp: liveNote.serverUpdatedAtTimestamp,
+      userUuid: 'user-1',
+      sessionUser,
+      username: 'Alice',
+    }))
+    const application = {
+      items: { streamItems: () => jest.fn(), findItem: () => liveNote },
+      sync: { sync: jest.fn().mockResolvedValue(undefined) },
+      vaultLocks: { addEventObserver: () => jest.fn() },
+      sockets: { addEventObserver: () => jest.fn(), isWebSocketConnectionOpen: () => true },
+      addEventObserver: () => jest.fn(),
+    } as never
+    const View = () => {
+      latestAccess = useCollaborationRoomAccess(application, liveNote as never, true)
+      return createElement('div', null, latestAccess.status)
+    }
+
+    await act(async () => {
+      root.render(createElement(View))
+      await flushMicrotasks(30)
+    })
+    const firstLease = latestAccess?.status === 'ready' ? latestAccess.editorLease : undefined
+    expect(firstLease).toBeDefined()
+    expect(latestAccess).toMatchObject({ status: 'ready', initialEditorState: 'revision 100 body' })
+
+    liveNote = { uuid: 'note-1', text: 'revision 101 exact body', dirty: false, serverUpdatedAtTimestamp: 101 }
+    await act(async () => {
+      firstLease?.retryBootstrap()
+      await flushMicrotasks(30)
+    })
+
+    expect(sent).toContainEqual({ t: 'room-leave', room: 'note-1', requestId: firstLease!.requestId })
+    expect(latestAccess).toMatchObject({
+      status: 'ready',
+      initialEditorState: 'revision 101 exact body',
+      capability: 'capability-101',
+    })
+    expect(latestAccess?.status === 'ready' ? latestAccess.editorLease?.requestId : undefined).not.toBe(
+      firstLease?.requestId,
+    )
+  })
+
+  it('keeps one attached lease across sustained durable revisions while the key source stays valid', async () => {
+    const sent: CollabFrame[] = []
+    mockedCreateChannel.mockImplementation(() => createAutoLeaseChannel(sent).channel)
+    let liveNote = { uuid: 'note-1', text: 'revision 100', dirty: false, serverUpdatedAtTimestamp: 100 }
+    mockedPrepare.mockImplementation(async () => ({
+      available: true,
+      noteUuid: liveNote.uuid,
+      sourceId: 'root-same-uuid:version-1',
+      roomKey: {} as CryptoKey,
+      capability: `capability-${liveNote.serverUpdatedAtTimestamp}`,
+      serverUpdatedAtTimestamp: liveNote.serverUpdatedAtTimestamp,
+      userUuid: 'user-1',
+      sessionUser,
+      username: 'Alice',
+    }))
+    const application = {
+      items: { streamItems: () => jest.fn(), findItem: () => liveNote },
+      sync: { sync: jest.fn().mockResolvedValue(undefined) },
+      vaultLocks: { addEventObserver: () => jest.fn() },
+      sockets: { addEventObserver: () => jest.fn() },
+      addEventObserver: () => jest.fn(),
+    } as never
+    const View = () => {
+      latestAccess = useCollaborationRoomAccess(application, liveNote as never, true)
+      return createElement('div', null, latestAccess.status)
+    }
+
+    await act(async () => {
+      root.render(createElement(View))
+      await flushMicrotasks()
+    })
+    const firstLease = latestAccess?.status === 'ready' ? latestAccess.editorLease : undefined
+    expect(firstLease?.validateAttachment()).toBe(true)
+    const joinsAfterAttach = sent.filter((frame) => frame.t === 'room-join').length
+
+    liveNote = { uuid: 'note-1', text: 'revision 101', dirty: false, serverUpdatedAtTimestamp: 101 }
+    expect(firstLease?.validateAttachment()).toBe(true)
+    liveNote = { uuid: 'note-1', text: 'revision 102', dirty: false, serverUpdatedAtTimestamp: 102 }
+    expect(firstLease?.validateAttachment()).toBe(true)
+
+    expect(latestAccess?.status === 'ready' ? latestAccess.editorLease?.requestId : undefined).toBe(
+      firstLease?.requestId,
+    )
+    expect(sent.filter((frame) => frame.t === 'room-join')).toHaveLength(joinsAfterAttach)
+    expect(sent.filter((frame) => frame.t === 'room-leave')).toHaveLength(0)
   })
 
   it('invalidates synchronously and releases the old lease when the vault or root-key identity changes', async () => {
     const sent: CollabFrame[] = []
-    const inbound = new Set<(frame: CollabFrame) => void>()
     let activeSourceId = 'vault-1:note-1:root-version-1'
-    mockedCreateChannel.mockReturnValue({
-      isConnected: () => true,
-      authorize: jest.fn(),
-      send: (frame) => sent.push(frame),
-      subscribe: (handler) => {
-        inbound.add(handler)
-        return () => inbound.delete(handler)
-      },
-    })
+    mockedCreateChannel.mockImplementation(() => createAutoLeaseChannel(sent).channel)
     mockedResolve.mockImplementation(() => {
       return {
         available: true,
+        noteUuid: 'note-1',
         sourceId: activeSourceId,
+        userUuid: 'user-1',
+        sessionUser,
       } as never
     })
     mockedPrepare.mockImplementation(async () => {
       return {
         available: true,
+        noteUuid: 'note-1',
         sourceId: activeSourceId,
         roomKey: {} as CryptoKey,
         capability: `capability:${activeSourceId}`,
+        serverUpdatedAtTimestamp: 100,
         userUuid: 'user-1',
+        sessionUser,
         username: 'Alice',
       }
     })
+    const note = { uuid: 'note-1', dirty: false, serverUpdatedAtTimestamp: 100, text: 'persisted' } as never
     const application = {
       items: {
         streamItems: (_types: unknown, observer: () => void) => {
           itemObserver = observer
           return jest.fn()
         },
+        findItem: () => note,
       },
+      sync: { sync: jest.fn().mockResolvedValue(undefined) },
       vaultLocks: { addEventObserver: () => jest.fn() },
       sockets: { addEventObserver: () => jest.fn() },
       addEventObserver: () => jest.fn(),
     } as never
-    const note = { uuid: 'note-1' } as never
     const renders: Array<{ status: string; capability?: string }> = []
     const View = () => {
       latestAccess = useCollaborationRoomAccess(application, note, true)
@@ -558,22 +1367,10 @@ describe('useCollaborationRoomAccess security transitions', () => {
 
     await act(async () => {
       root.render(createElement(View))
-      await Promise.resolve()
-      await Promise.resolve()
+      await flushMicrotasks()
     })
     const firstJoin = sent.find((frame): frame is Extract<CollabFrame, { t: 'room-join' }> => frame.t === 'room-join')
     expect(firstJoin).toBeDefined()
-    await act(async () => {
-      for (const handler of inbound) {
-        handler({
-          t: 'room-joined',
-          room: 'note-1',
-          requestId: firstJoin!.requestId,
-          bootstrap: true,
-        })
-      }
-      await Promise.resolve()
-    })
     expect(latestAccess).toMatchObject({
       status: 'ready',
       capability: 'capability:vault-1:note-1:root-version-1',
@@ -583,8 +1380,7 @@ describe('useCollaborationRoomAccess security transitions', () => {
     activeSourceId = 'vault-2:note-1:root-version-2'
     await act(async () => {
       itemObserver?.()
-      await Promise.resolve()
-      await Promise.resolve()
+      await flushMicrotasks()
     })
 
     expect(renders[firstChangedIdentityRender]).toEqual({ status: 'preparing' })
@@ -609,8 +1405,10 @@ describe('useCollaborationRoomAccess security transitions', () => {
       subscribe: () => jest.fn(),
     })
     const reservation = beginEditorLeaseReservation({} as never, 'note-1', 'capability-1')
-    const join = sent.find((frame): frame is Extract<CollabFrame, { t: 'room-join' }> => frame.t === 'room-join')
-    expect(join).toBeDefined()
+    const reserve = sent.find(
+      (frame): frame is Extract<CollabFrame, { t: 'room-reserve' }> => frame.t === 'room-reserve',
+    )
+    expect(reserve).toBeDefined()
 
     reservation.cancel()
     await expect(reservation.promise).resolves.toEqual({
@@ -620,7 +1418,7 @@ describe('useCollaborationRoomAccess security transitions', () => {
     expect(sent).toContainEqual({
       t: 'room-leave',
       room: 'note-1',
-      requestId: join!.requestId,
+      requestId: reserve!.requestId,
     })
   })
 
@@ -634,15 +1432,17 @@ describe('useCollaborationRoomAccess security transitions', () => {
     })
     const reservation = beginEditorLeaseReservation({} as never, 'note-1', 'capability-1', 1)
     const result = await reservation.promise
-    const join = sent.find((frame): frame is Extract<CollabFrame, { t: 'room-join' }> => frame.t === 'room-join')
+    const reserve = sent.find(
+      (frame): frame is Extract<CollabFrame, { t: 'room-reserve' }> => frame.t === 'room-reserve',
+    )
 
     expect(result).toEqual({
-      reason: 'The encrypted collaboration room did not acknowledge the editor lease.',
+      reason: 'The encrypted collaboration room did not acknowledge the editor reservation.',
     })
     expect(sent).toContainEqual({
       t: 'room-leave',
       room: 'note-1',
-      requestId: join!.requestId,
+      requestId: reserve!.requestId,
     })
   })
 })

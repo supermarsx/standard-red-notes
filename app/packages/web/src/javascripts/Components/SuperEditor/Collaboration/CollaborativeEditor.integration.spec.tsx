@@ -13,6 +13,7 @@
  * with real encryption.
  */
 import { act, createElement, useEffect } from 'react'
+import { TextDecoder, TextEncoder } from 'node:util'
 import { createRoot, Root } from 'react-dom/client'
 import { LexicalComposer } from '@lexical/react/LexicalComposer'
 import { PlainTextPlugin } from '@lexical/react/LexicalPlainTextPlugin'
@@ -20,15 +21,17 @@ import { ContentEditable } from '@lexical/react/LexicalContentEditable'
 import { LexicalErrorBoundary } from '@lexical/react/LexicalErrorBoundary'
 import { CollaborationPlugin } from '@lexical/react/LexicalCollaborationPlugin'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
-import { LexicalCollaboration } from '@lexical/react/LexicalCollaborationContext'
 import { $getRoot, $createParagraphNode, $createTextNode, LexicalEditor } from 'lexical'
 import * as Y from 'yjs'
 import type { Doc } from 'yjs'
 import { EncryptedYjsProvider } from './EncryptedYjsProvider'
 import type { RoomCipher } from './RoomCrypto'
 import type { CollabChannel, CollabFrame } from './CollabChannel'
+import { EphemeralLexicalCollaboration } from './CollaborationPlugin'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+Object.defineProperty(globalThis, 'TextEncoder', { configurable: true, value: TextEncoder })
+Object.defineProperty(globalThis, 'TextDecoder', { configurable: true, value: TextDecoder })
 
 /** Fast identity-equivalent transport used only to isolate editor/provider behavior. */
 const createTestTransportCipher = (): RoomCipher => ({
@@ -121,24 +124,24 @@ function CollabEditor(props: {
     return provider
   }
   return createElement(
-    LexicalCollaboration,
-    null,
-    createElement(
-      LexicalComposer,
-      {
-        initialConfig: {
-          namespace: 'Test',
-          editorState: null,
-          onError: (e: Error) => {
-            throw e
-          },
+    LexicalComposer,
+    {
+      initialConfig: {
+        namespace: 'Test',
+        editorState: null,
+        onError: (e: Error) => {
+          throw e
         },
       },
-      createElement(PlainTextPlugin, {
-        contentEditable: createElement(ContentEditable, {}),
-        placeholder: null,
-        ErrorBoundary: LexicalErrorBoundary,
-      }),
+    },
+    createElement(PlainTextPlugin, {
+      contentEditable: createElement(ContentEditable, {}),
+      placeholder: null,
+      ErrorBoundary: LexicalErrorBoundary,
+    }),
+    createElement(
+      EphemeralLexicalCollaboration,
+      { lifetimeKey: `${room}:test-lease` },
       createElement(CollaborationPlugin, {
         id: room,
         providerFactory,
@@ -153,8 +156,8 @@ function CollabEditor(props: {
             }
           : undefined,
       }),
-      createElement(CapturePlugin, { onReady: (editor: LexicalEditor) => capture({ editor, provider }) }),
     ),
+    createElement(CapturePlugin, { onReady: (editor: LexicalEditor) => capture({ editor, provider }) }),
   )
 }
 
@@ -176,16 +179,18 @@ function textOf(editor: LexicalEditor): string {
 }
 
 function typeInto(editor: LexicalEditor, content: string): void {
-  editor.update(
-    () => {
-      const root = $getRoot()
-      root.clear()
-      const p = $createParagraphNode()
-      p.append($createTextNode(content))
-      root.append(p)
-    },
-    { discrete: true },
-  )
+  act(() => {
+    editor.update(
+      () => {
+        const root = $getRoot()
+        root.clear()
+        const p = $createParagraphNode()
+        p.append($createTextNode(content))
+        root.append(p)
+      },
+      { discrete: true },
+    )
+  })
 }
 
 describe('Collaborative editor (editor-level e2e)', () => {
@@ -305,6 +310,63 @@ describe('Collaborative editor (editor-level e2e)', () => {
     await act(async () => {
       rootA!.unmount()
       rootB!.unmount()
+    })
+  })
+
+  it('creates a fresh Y.Doc when the same note is closed and reopened', async () => {
+    const hub = new LoopbackHub()
+    const room = 'note-editor-reopen'
+    const firstContainer = document.createElement('div')
+    document.body.append(firstContainer)
+    let first: Captured | undefined
+    let firstRoot: Root
+
+    await act(async () => {
+      firstRoot = createRoot(firstContainer)
+      firstRoot.render(
+        createElement(CollabEditor, {
+          hub,
+          room,
+          bootstrap: true,
+          capture: (captured) => (first = captured),
+        }),
+      )
+    })
+    await flush(first!.provider)
+    typeInto(first!.editor, 'state from the closed editor')
+    await flush(first!.provider)
+    const closedDocument = first!.provider.doc
+
+    await act(async () => {
+      firstRoot!.unmount()
+      await Promise.resolve()
+    })
+
+    const reopenedContainer = document.createElement('div')
+    document.body.append(reopenedContainer)
+    let reopened: Captured | undefined
+    let reopenedRoot: Root
+    await act(async () => {
+      reopenedRoot = createRoot(reopenedContainer)
+      reopenedRoot.render(
+        createElement(CollabEditor, {
+          hub,
+          room,
+          bootstrap: true,
+          initialText: 'fresh canonical state',
+          capture: (captured) => (reopened = captured),
+        }),
+      )
+    })
+    await flush(reopened!.provider)
+
+    expect(reopened!.provider.doc).not.toBe(closedDocument)
+    expect(textOf(reopened!.editor)).toBe('fresh canonical state')
+    expect(textOf(reopened!.editor)).not.toContain('state from the closed editor')
+
+    await act(async () => {
+      reopenedRoot!.unmount()
+      await Promise.resolve()
     })
   })
 })

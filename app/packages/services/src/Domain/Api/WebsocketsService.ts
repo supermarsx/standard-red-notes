@@ -17,16 +17,61 @@ export type CollaborationFrame =
   // `cap` is the short-lived signed capability proving this user may join the
   // room; obtained via authorizeCollaborationRoom() and required by the gateway.
   | {
+      t: 'room-reserve'
+      room: string
+      cap: string
+      requestId: string
+      role: 'editor'
+      protocolVersion: 2
+    }
+  | {
       t: 'room-join'
       room: string
       cap?: string
       requestId?: string
       role?: 'editor' | 'comment'
+      protocolVersion?: 2
     }
   | { t: 'room-leave'; room: string; requestId?: string }
-  | { t: 'room-joined'; room: string; requestId?: string; bootstrap?: boolean }
+  | {
+      t: 'room-reserved'
+      room: string
+      requestId: string
+      bootstrap: boolean
+      bootstrapChallenge?: string
+      protocolVersion: 2
+      maxTransferBytes: number
+    }
+  | {
+      t: 'room-joined'
+      room: string
+      requestId?: string
+      bootstrap?: boolean
+      protocolVersion?: number
+      maxTransferBytes?: number
+    }
   | { t: 'room-sync'; room: string }
-  | { t: 'yjs'; room: string; payload: string }
+  | { t: 'yjs'; room: string; payload: string; transferId?: string; stateRequestId?: string }
+  | {
+      t: 'yjs-chunk'
+      room: string
+      transferId: string
+      index: number
+      count: number
+      totalBytes: number
+      payload: string
+      stateRequestId?: string
+    }
+  | { t: 'yjs-retry'; room: string; requestId: string; requesterClientId: number }
+  | { t: 'yjs-response-claim'; room: string; stateRequestId: string; leaseRequestId: string }
+  | {
+      t: 'yjs-response-granted'
+      room: string
+      stateRequestId: string
+      leaseRequestId: string
+      protocolVersion: 2
+    }
+  | { t: 'yjs-accepted'; room: string; transferId: string; protocolVersion: 2 }
   | { t: 'awareness'; room: string; payload: string }
   // Gateway -> client: the join was refused (no/invalid capability or no access).
   | { t: 'room-denied'; room: string; requestId?: string }
@@ -38,10 +83,17 @@ export type CollaborationFrame =
 
 const COLLABORATION_FRAME_TYPES = new Set([
   'room-join',
+  'room-reserve',
+  'room-reserved',
   'room-leave',
   'room-joined',
   'room-sync',
   'yjs',
+  'yjs-chunk',
+  'yjs-retry',
+  'yjs-response-claim',
+  'yjs-response-granted',
+  'yjs-accepted',
   'awareness',
   'comment',
   'room-denied',
@@ -60,6 +112,14 @@ export interface SyncItemsPushedData {
   items: unknown[]
   syncToken: string
   baseSyncToken: string
+}
+
+export type CollaborationRoomAuthorization = {
+  capability: string
+  serverUpdatedAtTimestamp: number
+  collaborationProtocolVersion: 2
+  leaseRequestId?: string
+  bootstrapChallenge?: string
 }
 
 export class WebSocketsService extends AbstractService<
@@ -164,14 +224,31 @@ export class WebSocketsService extends AbstractService<
         return Result.fail('Failed to create WebSocket connection token')
       }
 
-      this.webSocket = new WebSocket(`${this.webSocketUrl}?authToken=${webSocketConectionToken}`)
+      const webSocket = new WebSocket(`${this.webSocketUrl}?authToken=${webSocketConectionToken}`)
+      this.webSocket = webSocket
       // Adapt at the assignment seam: react-native's WebSocket event types declare `.data`
       // and `.code` as optional, which isn't assignable to our strict handler params. Coerce
       // here so the internal handlers keep their exact `{ data: string }` / `{ code: number }`
       // contracts and the file compiles under both DOM (web/services) and RN (mobile) libs.
-      this.webSocket.onmessage = (event) => this.onWebSocketMessage({ data: String(event.data ?? '') })
-      this.webSocket.onclose = (event) => this.onWebSocketClose({ code: event.code ?? 0 })
-      this.webSocket.onopen = this.onWebSocketOpen.bind(this)
+      // Every callback is bound to the exact socket instance that installed it.
+      // A closing socket from a prior session can otherwise fire after its
+      // replacement has opened and clear the replacement's heartbeat, publish a
+      // false disconnect, or inject old-session frames into current consumers.
+      webSocket.onmessage = (event) => {
+        if (this.webSocket === webSocket) {
+          this.onWebSocketMessage({ data: String(event.data ?? '') })
+        }
+      }
+      webSocket.onclose = (event) => {
+        if (this.webSocket === webSocket) {
+          this.onWebSocketClose({ code: event.code ?? 0 })
+        }
+      }
+      webSocket.onopen = () => {
+        if (this.webSocket === webSocket) {
+          this.onWebSocketOpen()
+        }
+      }
 
       // Deliberately DO NOT clear `connecting` here: the socket is still
       // CONNECTING. It is cleared only once onWebSocketOpen / onWebSocketClose
@@ -297,17 +374,45 @@ export class WebSocketsService extends AbstractService<
    * Standard Red Notes: obtain a short-lived signed capability authorizing this
    * user to join the realtime collaboration room for `noteUuid`. The gateway
    * requires it on `room-join` and rejects joins without a valid one. Returns the
-   * capability string, or undefined if the server denied access / the call failed
-   * (callers must NOT join without a capability).
+   * capability plus the canonical server revision, or undefined if either is
+   * missing/mismatched or the call fails (callers must NOT join without both).
    */
-  async authorizeCollaborationRoom(noteUuid: string): Promise<string | undefined> {
+  async authorizeCollaborationRoom(
+    noteUuid: string,
+    leaseRequestId?: string,
+    bootstrapChallenge?: string,
+  ): Promise<CollaborationRoomAuthorization | undefined> {
     try {
-      const response = await this.webSocketApiService.authorizeCollaboration(noteUuid)
+      const response = await this.webSocketApiService.authorizeCollaboration(
+        noteUuid,
+        leaseRequestId,
+        bootstrapChallenge,
+      )
       if (isErrorResponse(response)) {
         return undefined
       }
       const capability = response.data?.capability
-      return typeof capability === 'string' && capability.length > 0 ? capability : undefined
+      const room = response.data?.room
+      const serverUpdatedAtTimestamp = response.data?.serverUpdatedAtTimestamp
+      const collaborationProtocolVersion = response.data?.collaborationProtocolVersion
+      const responseLeaseRequestId = response.data?.leaseRequestId
+      const responseBootstrapChallenge = response.data?.bootstrapChallenge
+      return typeof capability === 'string' &&
+        capability.length > 0 &&
+        room === noteUuid &&
+        collaborationProtocolVersion === 2 &&
+        responseLeaseRequestId === leaseRequestId &&
+        responseBootstrapChallenge === bootstrapChallenge &&
+        Number.isSafeInteger(serverUpdatedAtTimestamp) &&
+        Number(serverUpdatedAtTimestamp) > 0
+        ? {
+            capability,
+            serverUpdatedAtTimestamp: Number(serverUpdatedAtTimestamp),
+            collaborationProtocolVersion,
+            ...(responseLeaseRequestId ? { leaseRequestId: responseLeaseRequestId } : {}),
+            ...(responseBootstrapChallenge ? { bootstrapChallenge: responseBootstrapChallenge } : {}),
+          }
+        : undefined
     } catch (error) {
       console.error('Failed to authorize collaboration room:', (error as Error).message)
       return undefined

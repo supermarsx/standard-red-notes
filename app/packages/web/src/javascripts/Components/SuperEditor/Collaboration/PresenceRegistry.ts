@@ -23,6 +23,11 @@ export type PresentPeer = {
   clientId: number
 }
 
+export const MAX_PRESENT_PEERS_PER_ROOM = 64
+const MAX_PRESENT_PEER_NAME_LENGTH = 128
+const MAX_PRESENT_PEER_COLOR_LENGTH = 64
+const MAX_PRESENT_PEER_USER_UUID_LENGTH = 128
+
 type RoomListener = (peers: PresentPeer[]) => void
 
 class PresenceRegistryImpl {
@@ -47,9 +52,35 @@ class PresenceRegistryImpl {
     } else {
       const map = new Map<number, PresentPeer>()
       for (const peer of peers) {
-        map.set(peer.clientId, peer)
+        if (
+          map.size >= MAX_PRESENT_PEERS_PER_ROOM ||
+          !Number.isSafeInteger(peer.clientId) ||
+          peer.clientId < 0 ||
+          typeof peer.name !== 'string' ||
+          peer.name.length > MAX_PRESENT_PEER_NAME_LENGTH ||
+          typeof peer.color !== 'string' ||
+          peer.color.length > MAX_PRESENT_PEER_COLOR_LENGTH ||
+          (peer.userUuid !== undefined &&
+            (typeof peer.userUuid !== 'string' || peer.userUuid.length > MAX_PRESENT_PEER_USER_UUID_LENGTH))
+        ) {
+          continue
+        }
+        // Keep the first normalized state for a duplicated client id so caller
+        // ordering cannot replace a previously accepted identity mid-snapshot.
+        if (!map.has(peer.clientId)) {
+          map.set(peer.clientId, {
+            clientId: peer.clientId,
+            name: peer.name,
+            color: peer.color,
+            ...(peer.userUuid ? { userUuid: peer.userUuid } : {}),
+          })
+        }
       }
-      this.rooms.set(room, map)
+      if (map.size > 0) {
+        this.rooms.set(room, map)
+      } else {
+        this.rooms.delete(room)
+      }
     }
     this.emit(room)
   }

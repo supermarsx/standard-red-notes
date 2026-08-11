@@ -1,5 +1,6 @@
-import { FunctionComponent, useEffect, useMemo, useRef } from 'react'
+import { FunctionComponent, ReactNode, useEffect, useMemo, useRef } from 'react'
 import { CollaborationPlugin } from '@lexical/react/LexicalCollaborationPlugin'
+import { LexicalCollaboration, useCollaborationContext } from '@lexical/react/LexicalCollaborationContext'
 import type { InitialEditorStateType } from '@lexical/react/LexicalComposer'
 import * as Y from 'yjs'
 import type { Doc } from 'yjs'
@@ -8,16 +9,15 @@ import { WebApplication } from '@/Application/WebApplication'
 import { EncryptedYjsProvider } from './EncryptedYjsProvider'
 import { createGatewayCollabChannel } from './GatewayCollabChannel'
 import { createRoomCipher } from './RoomCrypto'
-import { PresenceRegistry, PresentPeer } from './PresenceRegistry'
+import { MAX_PRESENT_PEERS_PER_ROOM, PresenceRegistry, PresentPeer } from './PresenceRegistry'
 import { getSuperCollaborationAvailability } from './CollaborationAvailability'
+import type { EditorCollaborationLease } from './useCollaborationRoomAccess'
 
 export type CollaborationConfig = {
   /** Room id — the note uuid. All collaborators on this note share it. */
   room: string
   /** A non-extractable room key derived exclusively from client-only vault key material. */
   roomKey: CryptoKey
-  /** Short-lived server capability bound to this exact account + note UUID. */
-  capability: string
   /** Display name + cursor color for presence. */
   username: string
   cursorColor: string
@@ -28,8 +28,8 @@ export type CollaborationConfig = {
   userUuid?: string
   /** First client to open the note seeds the doc from its current content. */
   shouldBootstrap: boolean
-  /** Stable request-bound editor lease reserved before Lexical bootstraps. */
-  leaseRequestId: string
+  /** Already-active request-bound lease; the provider attaches without replaying room-join. */
+  editorLease: EditorCollaborationLease
   /** Content used to seed the shared doc on first bootstrap (the note text). */
   initialEditorState?: InitialEditorStateType
 }
@@ -51,7 +51,49 @@ type AwarenessLike = {
 type Props = {
   application: WebApplication
   config: CollaborationConfig
+  onCanonicalReadyChange?(ready: boolean): void
 }
+
+const CollaborationDocumentLifetime: FunctionComponent<{ children: ReactNode }> = ({ children }) => {
+  const { yjsDocMap } = useCollaborationContext()
+  const pendingDestroyRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+
+  useEffect(() => {
+    if (pendingDestroyRef.current !== undefined) {
+      clearTimeout(pendingDestroyRef.current)
+      pendingDestroyRef.current = undefined
+    }
+    return () => {
+      // Lexical tears down its binding and provider in sibling passive effects.
+      // Dispose the documents only after those cleanups have completed. The
+      // next setup cancels this timeout during a React StrictMode effect replay.
+      pendingDestroyRef.current = setTimeout(() => {
+        pendingDestroyRef.current = undefined
+        const documents = [...yjsDocMap.values()]
+        yjsDocMap.clear()
+        for (const document of documents) {
+          document.destroy()
+        }
+      }, 0)
+    }
+  }, [yjsDocMap])
+
+  return <>{children}</>
+}
+
+/**
+ * Gives one mounted editor lifetime a private Y.Doc map. The key deliberately
+ * changes for a new room/key/lease preparation but remains stable across an
+ * ordinary transport reconnect so retained CRDT state can merge after rejoin.
+ */
+export const EphemeralLexicalCollaboration: FunctionComponent<{
+  lifetimeKey: string
+  children?: ReactNode
+}> = ({ lifetimeKey, children }) => (
+  <LexicalCollaboration key={lifetimeKey}>
+    <CollaborationDocumentLifetime>{children}</CollaborationDocumentLifetime>
+  </LexicalCollaboration>
+)
 
 /**
  * Mounted only after SuperCollaborationPlugin receives an exact-note capability,
@@ -59,13 +101,39 @@ type Props = {
  * client-only shared-vault material. Other states retain ordinary encrypted
  * persistence/sync without mounting a relay provider.
  */
-const AvailableSuperCollaborationPlugin: FunctionComponent<Props> = ({ application, config }) => {
+const AvailableSuperCollaborationPlugin: FunctionComponent<Props> = ({
+  application,
+  config,
+  onCanonicalReadyChange,
+}) => {
   const channel = useMemo(() => createGatewayCollabChannel(application), [application])
 
   // The CollaborationPlugin owns the provider lifecycle; we capture the live
   // instance here so a sibling effect can mirror its awareness into the
   // app-wide PresenceRegistry that the sidebar reads.
   const providerRef = useRef<EncryptedYjsProvider | null>(null)
+  const providerReadinessDisposerRef = useRef<(() => void) | null>(null)
+  const pendingProviderDestroyRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+
+  useEffect(() => {
+    if (pendingProviderDestroyRef.current !== undefined) {
+      clearTimeout(pendingProviderDestroyRef.current)
+      pendingProviderDestroyRef.current = undefined
+    }
+    return () => {
+      // Lexical's own cleanup calls reconnectable disconnect(). Defer the
+      // irreversible destroy until sibling cleanups complete. A StrictMode
+      // setup replay cancels this terminal path before the next macrotask.
+      pendingProviderDestroyRef.current = setTimeout(() => {
+        pendingProviderDestroyRef.current = undefined
+        providerReadinessDisposerRef.current?.()
+        providerReadinessDisposerRef.current = null
+        onCanonicalReadyChange?.(false)
+        providerRef.current?.destroy()
+        providerRef.current = null
+      }, 0)
+    }
+  }, [onCanonicalReadyChange])
 
   const providerFactory = useMemo(() => {
     return (id: string, yjsDocMap: Map<string, Doc>): Provider => {
@@ -82,13 +150,28 @@ const AvailableSuperCollaborationPlugin: FunctionComponent<Props> = ({ applicati
         config.room,
         channel,
         cipher,
-        config.capability,
-        config.leaseRequestId,
+        undefined,
+        config.editorLease.requestId,
+        {
+          activeLease: config.editorLease,
+          shouldBootstrap: config.shouldBootstrap,
+          validateAttachment: config.editorLease.validateAttachment,
+          reactivate: config.editorLease.reactivate,
+          onFatal: config.editorLease.fail,
+          onBootstrapRetry: config.editorLease.retryBootstrap,
+          ...(config.editorLease.setProviderCanonicalOwnership
+            ? { setCanonicalOwnership: config.editorLease.setProviderCanonicalOwnership }
+            : {}),
+        },
       )
+      providerReadinessDisposerRef.current?.()
+      providerReadinessDisposerRef.current = provider.onCanonicalReadyChange((ready) => {
+        onCanonicalReadyChange?.(ready)
+      })
       providerRef.current = provider
       return provider
     }
-  }, [channel, config.capability, config.leaseRequestId, config.room, config.roomKey])
+  }, [channel, config.editorLease, config.room, config.roomKey, config.shouldBootstrap, onCanonicalReadyChange])
 
   const awarenessData = useMemo(() => (config.userUuid ? { userUuid: config.userUuid } : undefined), [config.userUuid])
 
@@ -106,6 +189,9 @@ const AvailableSuperCollaborationPlugin: FunctionComponent<Props> = ({ applicati
     const publish = (): void => {
       const peers: PresentPeer[] = []
       awareness.getStates().forEach((state, clientId) => {
+        if (peers.length >= MAX_PRESENT_PEERS_PER_ROOM) {
+          return
+        }
         if (clientId === awareness.clientID) {
           return
         }
@@ -155,5 +241,10 @@ export const SuperCollaborationPlugin: FunctionComponent<Props> = (props) => {
     return null
   }
 
-  return <AvailableSuperCollaborationPlugin {...props} />
+  const lifetimeKey = `${props.config.room}:${props.config.editorLease.requestId}`
+  return (
+    <EphemeralLexicalCollaboration lifetimeKey={lifetimeKey}>
+      <AvailableSuperCollaborationPlugin {...props} />
+    </EphemeralLexicalCollaboration>
+  )
 }
