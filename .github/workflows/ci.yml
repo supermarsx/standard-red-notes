@@ -279,13 +279,21 @@ jobs:
             echo 'MYSQL_USER=std_notes_ci'
             echo 'LOG_LEVEL=warn'
           } >> "$GITHUB_ENV"
-          for name in MYSQL_PASSWORD MYSQL_ROOT_PASSWORD AUTH_JWT_SECRET AUTH_SERVER_ENCRYPTION_SERVER_KEY VALET_TOKEN_SECRET WEBSOCKET_GATEWAY_INTERNAL_SECRET WEB_SOCKET_CONNECTION_TOKEN_SECRET; do
+          for name in MYSQL_PASSWORD MYSQL_ROOT_PASSWORD AUTH_JWT_SECRET AUTH_SERVER_ENCRYPTION_SERVER_KEY VALET_TOKEN_SECRET WEBSOCKET_GATEWAY_INTERNAL_SECRET WEB_SOCKET_CONNECTION_TOKEN_SECRET ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY; do
             value="$(openssl rand -hex 32)"
             echo "::add-mask::${value}"
             echo "${name}=${value}" >> "$GITHUB_ENV"
           done
       - name: Start disposable stack
         run: docker compose up -d --no-build --wait --wait-timeout 900
+      - name: Verify encrypted two-editor realtime convergence
+        run: |
+          docker compose exec -T \
+            -e REQUIRE_GATEWAY=1 \
+            -e GATEWAY_HTTP=http://127.0.0.1:3000 \
+            -e GATEWAY_WS=ws://127.0.0.1:3000/sockets \
+            -e GATEWAY_HEALTH_PATH=/healthcheck/readiness \
+            server yarn node packages/websocket-gateway/e2e/collab-yjs.e2e.mjs
       - name: Run bounded browser and Redis smoke
         working-directory: e2e
         env:
@@ -400,7 +408,7 @@ jobs:
             echo 'MYSQL_USER=std_notes_ci'
             echo 'LOG_LEVEL=warn'
           } >> "$GITHUB_ENV"
-          for name in MYSQL_PASSWORD MYSQL_ROOT_PASSWORD AUTH_JWT_SECRET AUTH_SERVER_ENCRYPTION_SERVER_KEY VALET_TOKEN_SECRET WEBSOCKET_GATEWAY_INTERNAL_SECRET WEB_SOCKET_CONNECTION_TOKEN_SECRET; do
+          for name in MYSQL_PASSWORD MYSQL_ROOT_PASSWORD AUTH_JWT_SECRET AUTH_SERVER_ENCRYPTION_SERVER_KEY VALET_TOKEN_SECRET WEBSOCKET_GATEWAY_INTERNAL_SECRET WEB_SOCKET_CONNECTION_TOKEN_SECRET ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY; do
             value="$(openssl rand -hex 32)"
             echo "::add-mask::${value}"
             echo "${name}=${value}" >> "$GITHUB_ENV"
@@ -503,7 +511,7 @@ jobs:
             echo 'MYSQL_USER=std_notes_ci'
             echo 'LOG_LEVEL=warn'
           } >> "$GITHUB_ENV"
-          for name in MYSQL_PASSWORD MYSQL_ROOT_PASSWORD AUTH_JWT_SECRET AUTH_SERVER_ENCRYPTION_SERVER_KEY VALET_TOKEN_SECRET WEBSOCKET_GATEWAY_INTERNAL_SECRET WEB_SOCKET_CONNECTION_TOKEN_SECRET; do
+          for name in MYSQL_PASSWORD MYSQL_ROOT_PASSWORD AUTH_JWT_SECRET AUTH_SERVER_ENCRYPTION_SERVER_KEY VALET_TOKEN_SECRET WEBSOCKET_GATEWAY_INTERNAL_SECRET WEB_SOCKET_CONNECTION_TOKEN_SECRET ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY; do
             value="$(openssl rand -hex 32)"
             echo "::add-mask::${value}"
             echo "${name}=${value}" >> "$GITHUB_ENV"

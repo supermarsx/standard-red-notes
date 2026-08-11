@@ -24,7 +24,7 @@ the fan-in green.
 | `check`            | Immutable installs in the root, app, and server projects, followed by the coordinated type, lint, format, and test gate.                                                                                                                                                                                                            |  45 min |
 | `build`            | A second clean set of immutable installs followed by the coordinated MCP, OpenClaw, app, and server build.                                                                                                                                                                                                                          |  45 min |
 | `desktop-electron` | A production desktop build followed by the seven real Electron suites under Xvfb. The guarded runner requires the built entry point and cannot silently fall back to skipped headless tests.                                                                                                                                        |  45 min |
-| `container-smoke`  | Hadolint, BuildKit image builds, an isolated Compose stack, Chromium app-open checks, bounded parallel sync and Redis operations, MariaDB backup/restore, and image/container hardening assertions.                                                                                                                                 |  70 min |
+| `container-smoke`  | Hadolint, BuildKit image builds, an isolated Compose stack, required encrypted two-editor online/offline convergence, Chromium app-open checks, bounded parallel sync and Redis operations, MariaDB backup/restore, and image/container hardening assertions.                                                                                             |  70 min |
 | `production-gate`  | Fail-closed fan-in for all five implementation lanes above.                                                                                                                                                                                                                                                                         |   5 min |
 
 The required browser selection contains three app-open tests and one combined
@@ -32,6 +32,12 @@ sync/Redis test. The generated JSON report must contain at least four expected
 tests and exactly zero skipped, unexpected, or flaky tests. The stack uses a
 run-specific Compose project and generated credentials, then removes its
 containers and volumes even after a failure.
+
+Before browser smoke, the live server container must also pass the encrypted
+Yjs two-editor drill with gateway availability required. It covers late join,
+simultaneous online edits, edits made independently during a disconnect, and
+post-reconnect convergence; an unavailable gateway is a hard failure rather
+than an optional local skip.
 
 The dependency audit inventories Git-tracked npm, Yarn, and pnpm lockfiles
 before it contacts the package registries. An unconfigured lockfile, an audit
