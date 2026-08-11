@@ -3,7 +3,7 @@
  */
 import { useApplication } from '@/Components/ApplicationProvider'
 import { DecryptedItemInterface } from '@standardnotes/snjs'
-import { act, createElement } from 'react'
+import { act, createElement, useLayoutEffect } from 'react'
 import { Root, createRoot } from 'react-dom/client'
 import { useItemVaultInfo } from './useItemVaultInfo'
 
@@ -18,8 +18,19 @@ const mockUseApplication = useApplication as jest.Mock
 type HookResult = ReturnType<typeof useItemVaultInfo>
 let result: HookResult
 
-const Harness = ({ item }: { item: DecryptedItemInterface | undefined }) => {
-  result = useItemVaultInfo(item)
+const captureResult = (value: HookResult) => {
+  result = value
+}
+
+const Harness = ({
+  item,
+  onResult,
+}: {
+  item: DecryptedItemInterface | undefined
+  onResult: (value: HookResult) => void
+}) => {
+  const value = useItemVaultInfo(item)
+  useLayoutEffect(() => onResult(value), [onResult, value])
   return null
 }
 
@@ -64,11 +75,11 @@ describe('useItemVaultInfo', () => {
     application.sharedVaults.getItemLastEditedBy.mockReturnValue(lastEditedBy)
     application.sharedVaults.getItemSharedBy.mockReturnValue(sharedBy)
 
-    act(() => root.render(createElement(Harness, { item })))
+    act(() => root.render(createElement(Harness, { item, onResult: captureResult })))
     expect(result).toEqual({ vault, lastEditedByContact: lastEditedBy, sharedByContact: sharedBy })
     expect(application.items.streamItems).toHaveBeenCalledTimes(2)
 
-    act(() => root.render(createElement(Harness, { item: undefined })))
+    act(() => root.render(createElement(Harness, { item: undefined, onResult: captureResult })))
     expect(result).toEqual({ vault: undefined, lastEditedByContact: undefined, sharedByContact: undefined })
     expect(application.vaultDisplayService.getItemVault).toHaveBeenCalledTimes(1)
     expect(application.sharedVaults.getItemLastEditedBy).toHaveBeenCalledTimes(1)
@@ -77,12 +88,27 @@ describe('useItemVaultInfo', () => {
   })
 
   it('does not dereference or subscribe for an initially empty selection', () => {
-    act(() => root.render(createElement(Harness, { item: undefined })))
+    act(() => root.render(createElement(Harness, { item: undefined, onResult: captureResult })))
 
     expect(result).toEqual({ vault: undefined, lastEditedByContact: undefined, sharedByContact: undefined })
     expect(application.vaultDisplayService.getItemVault).not.toHaveBeenCalled()
     expect(application.sharedVaults.getItemLastEditedBy).not.toHaveBeenCalled()
     expect(application.sharedVaults.getItemSharedBy).not.toHaveBeenCalled()
     expect(application.items.streamItems).not.toHaveBeenCalled()
+  })
+
+  it('clears prior contact attribution when the next selected item has none', () => {
+    const first = { uuid: 'note-1' } as DecryptedItemInterface
+    const second = { uuid: 'note-2' } as DecryptedItemInterface
+    const priorContact = { uuid: 'contact-1' }
+    application.sharedVaults.getItemLastEditedBy.mockImplementation((item: DecryptedItemInterface) => {
+      return item.uuid === first.uuid ? priorContact : undefined
+    })
+
+    act(() => root.render(createElement(Harness, { item: first, onResult: captureResult })))
+    expect(result.lastEditedByContact).toBe(priorContact)
+
+    act(() => root.render(createElement(Harness, { item: second, onResult: captureResult })))
+    expect(result.lastEditedByContact).toBeUndefined()
   })
 })

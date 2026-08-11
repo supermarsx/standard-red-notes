@@ -31,7 +31,7 @@ export const useItemVaultInfo = (item: DecryptedItemInterface | undefined): Item
     }
 
     setVault(application.vaultDisplayService.getItemVault(item))
-    setLastEditedByContact((lastEditedBy) => application.sharedVaults.getItemLastEditedBy(item) || lastEditedBy)
+    setLastEditedByContact(application.sharedVaults.getItemLastEditedBy(item))
     setSharedByContact(application.sharedVaults.getItemSharedBy(item))
   }, [application.featuresController, application.sharedVaults, application.vaultDisplayService, item])
 

@@ -276,12 +276,15 @@ export class VaultService
 
     const latestItem = this.items.findItem(item.uuid)
 
-    if (this.items.isTemplateItem(item)) {
+    // A list/editor render may retain an item for one reaction after that item
+    // was removed from the manager. This is the same transient "no selection"
+    // state as an undefined input, not a service invariant worth crashing UI.
+    if (!latestItem) {
       return undefined
     }
 
-    if (!latestItem) {
-      throw new Error('Cannot find latest version of item to get vault for')
+    if (this.items.isTemplateItem(item)) {
+      return undefined
     }
 
     if (!latestItem.key_system_identifier) {
