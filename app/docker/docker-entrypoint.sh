@@ -85,12 +85,10 @@ fi
 # bytes precisely, and it SKIPS any `<script>` that appears inside an HTML
 # comment (index.html has comments that literally contain the text "<script>").
 #
-# Fail-safe: if anything goes wrong (missing files, empty/implausible hash),
-# fall back to 'unsafe-inline' for script-src so the inline bootstrap still runs
-# and the app boots (only the inline-script pin is lost; the rest of the CSP is
-# still enforced). We NEVER leave the placeholder in place (that would block the
-# script and white-screen) and NEVER exit non-zero (that would abort the stock
-# nginx entrypoint and stop the server from starting).
+# Fail closed: if anything goes wrong (missing files, empty/implausible hash),
+# refuse to start nginx. Serving without a matching pin would either white-screen
+# the app or require weakening script-src with 'unsafe-inline', which would also
+# authorize injected code. A configuration error must never lower that boundary.
 # ---------------------------------------------------------------------------
 CONF="${SRN_ENTRYPOINT_NGINX_CONF:-/etc/nginx/conf.d/default.conf}"
 
@@ -266,10 +264,9 @@ apply_csp_inline_hash() {
   printf '%s' "$_b64" | grep -Eq '^[A-Za-z0-9+/]{43}=$' || return 1
 
   # Replace only the app-shell source following its unique self/wasm prefix.
-  # This accepts the image placeholder, a hash written by an earlier container
-  # start, or the fail-open token. Container restarts can therefore re-template
-  # index.html and rotate the parent hash without ever touching the sandbox
-  # runner's distinct fixed hash.
+  # This accepts the image placeholder or a hash written by an earlier container
+  # start. Container restarts can therefore re-template index.html and rotate the
+  # parent hash without ever touching the sandbox runner's distinct fixed hash.
   [ "$(grep -F -c "script-src 'self' 'wasm-unsafe-eval' " "$CONF")" -eq 1 ] || return 1
   sed -i \
     "s|script-src 'self' 'wasm-unsafe-eval' '[^']*'|script-src 'self' 'wasm-unsafe-eval' 'sha256-${_b64}'|" \
@@ -280,16 +277,7 @@ apply_csp_inline_hash() {
   return 0
 }
 
-if apply_csp_inline_hash; then
-  :
-else
-  echo "[entrypoint] WARNING: failed to compute the CSP inline-script hash; falling back to 'unsafe-inline' for script-src so the app still boots (inline-script pinning disabled; rest of CSP still enforced)." >&2
-  # Loosen only the app-shell source, whether it still contains the placeholder
-  # or a hash from a prior start. Never replace the sandbox runner policy.
-  if ! sed -i \
-    "s|script-src 'self' 'wasm-unsafe-eval' '[^']*'|script-src 'self' 'wasm-unsafe-eval' 'unsafe-inline'|" \
-    "$CONF" 2>/dev/null || \
-    ! grep -Fq "script-src 'self' 'wasm-unsafe-eval' 'unsafe-inline'" "$CONF"; then
-    echo "[entrypoint] WARNING: could not rewrite ${CONF} for CSP fallback." >&2
-  fi
+if ! apply_csp_inline_hash; then
+  echo "[entrypoint] ERROR: failed to compute and install the CSP inline-script hash; refusing to start nginx with an unpinned app bootstrap." >&2
+  exit 1
 fi

@@ -39,9 +39,8 @@
       content="Standard Red Notes is a self-hosted-first encrypted note-taking app for private notes, documents, and files."
     />
 
-    <!-- CSP script-src hash (sha256 of the inline <script> body, base64): regenerate
-         if the block below changes and a CSP that pins it is enforced.
-         sha256-PjWNPpfp7Mntj53voHaSJi0riWL1HwoLgebWF4pVxFM= -->
+    <!-- The production entrypoint computes the SHA-256 of this bootstrap after
+         runtime templating and pins those exact served bytes in the response CSP. -->
     <script>
       // Standard Red Notes: default to SAME-ORIGIN so the browser never makes a
       // cross-origin request to the API. nginx (app/docker/nginx.conf) proxies
