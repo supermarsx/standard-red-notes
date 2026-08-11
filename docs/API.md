@@ -480,7 +480,7 @@ These routes are **not** part of the home-server `EndpointResolver` map.
 | GET    | `/v1/assistant/config`              | Public        | Returns which providers the server has configured (non-sensitive) and the defaults.                                                                              |
 | GET    | `/v1/assistant/models?provider=...` | Authenticated | Lists models the configured provider offers (queried with the server key).                                                                                       |
 | GET    | `/v1/assistant/usage`               | Authenticated | Returns `{ used, limit, resetsAt }` for the per-user daily request budget.                                                                                       |
-| POST   | `/v1/assistant/stream`              | Authenticated | Body: `provider`, `model`, `system`, `messages`, `tools`. Streams Server-Sent Events. Enforces per-user daily limits; `403` if AI disabled, `429` if over limit. |
+| POST   | `/v1/assistant/stream`              | Authenticated | Body: `system`, `messages`, `tools`. Streams Server-Sent Events. The server resolves USER > ROLE > default profile and ignores caller provider/model/profile hints. Enforces per-user daily limits; `403` if AI disabled, `429` if over limit. |
 
 ### Integrations (Standard Red Notes)
 

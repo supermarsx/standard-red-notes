@@ -1092,43 +1092,26 @@ export class AssistantController extends BaseHttpController {
   }
 
   /**
-   * Standard Red Notes: resolves the concrete provider for a /stream request,
-   * honoring MULTIPLE named profiles.
-   *
-   *  - When the client selects a profile (body.profileId or the x-assistant-profile
-   *    header), or sends NO explicit provider, the active profile (requested, else
-   *    the default) is resolved into a provider. A codex-subscription profile with
-   *    no inline token draws a fresh token from the paired subscription credential.
-   *  - Otherwise (the client sent an explicit `provider`) the pre-existing legacy
-   *    path is used unchanged, so every current client keeps working.
+   * Standard Red Notes: resolves the concrete provider for an authenticated
+   * /stream request. The server assignment is authoritative: USER > ROLE >
+   * server default. Caller provider/model/profile hints are deliberately ignored
+   * so knowing another profile id cannot bypass an entitlement or cost boundary.
    */
   private async resolveStreamProvider(
-    body: StreamRequestBody,
-    request: Request,
+    _body: StreamRequestBody,
+    _request: Request,
     response: Response,
   ): Promise<{ provider: Provider; isSubscription: boolean; subscriptionId?: string }> {
-    const headerProfileId =
-      typeof request.headers['x-assistant-profile'] === 'string'
-        ? (request.headers['x-assistant-profile'] as string).trim()
-        : undefined
-    const requestedProfileId = (body.profileId && body.profileId.trim()) || headerProfileId || undefined
-
-    if (this.serverSettingsResolver && (requestedProfileId || !body.provider)) {
+    if (this.serverSettingsResolver) {
       let profile
       try {
-        // Resolve the EFFECTIVE profile for this principal: an explicit client
-        // selection wins; otherwise the assignment map (USER > ROLE > default)
-        // decides. The referenced backend profile's credentials are merged in.
-        profile = await this.serverSettingsResolver.resolveActiveProfile(
-          requestedProfileId,
-          this.resolvePrincipal(response),
-        )
+        profile = await this.serverSettingsResolver.resolveActiveProfile(undefined, this.resolvePrincipal(response))
       } catch {
         throw new Error('The assistant profile configuration could not be resolved safely.')
       }
 
       if (profile) {
-        const resolution = resolveProfileProvider(profile, body.model)
+        const resolution = resolveProfileProvider(profile)
         if (
           profile.provider === 'codex-subscription' &&
           !safeSubscriptionBaseUrl(
@@ -1189,22 +1172,17 @@ export class AssistantController extends BaseHttpController {
         }
       }
 
-      if (requestedProfileId) {
-        throw new Error('The requested assistant profile is not configured or is disabled.')
-      }
     }
 
-    // Legacy path: honor the client's chosen provider + model. When durable
-    // pairing is configured, the DEFAULT paired credential is authoritative and
-    // any absent/repair/unreadable state fails closed before network I/O. The
-    // legacy env bearer remains usable only when pairing is unavailable at boot.
+    // Legacy server configuration remains supported when no profile is assigned,
+    // but it is still server-owned. Never consume provider/model request fields.
     const config = { ...(await this.effectiveProviderConfig()) }
     const availableProviders = configuredProviders(config)
     const configuredDefaultProvider = availableProviders.includes(this.defaultProvider)
       ? this.defaultProvider
       : (availableProviders[0] ?? '')
-    const providerId = body.provider || configuredDefaultProvider
-    const model = body.model || this.defaultModel
+    const providerId = configuredDefaultProvider
+    const model = this.defaultModel
     if (!providerId) {
       throw new Error(
         'No assistant provider or assigned/default profile is configured on this server. Ask an administrator to configure one under Admin → AI.',
