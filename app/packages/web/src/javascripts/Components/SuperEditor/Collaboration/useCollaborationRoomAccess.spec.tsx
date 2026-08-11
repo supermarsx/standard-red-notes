@@ -63,7 +63,7 @@ describe('useCollaborationRoomAccess security transitions', () => {
     jest.clearAllMocks()
   })
 
-  it('invalidates immediately on socket loss and re-prepares on same-UUID key rotation events', async () => {
+  it('re-prepares on key rotation but preserves a ready Y.Doc across socket loss', async () => {
     const application = {
       items: {
         streamItems: (_types: unknown, observer: () => void) => {
@@ -118,11 +118,48 @@ describe('useCollaborationRoomAccess security transitions', () => {
     await act(async () => {
       await socketObserver?.(WebSocketsServiceEvent.WebSocketDidClose)
     })
-    expect(container.textContent).toBe('disabled')
+    expect(container.textContent).toBe('ready')
+    expect(latestAccess).toMatchObject({ status: 'ready', capability: 'capability-2' })
+    expect(mockedPrepare).toHaveBeenCalledTimes(2)
+  })
+
+  it('opens in an offline-safe state and prepares automatically when the socket connects', async () => {
+    let connected = false
+    const application = {
+      items: { streamItems: () => jest.fn() },
+      vaultLocks: { addEventObserver: () => jest.fn() },
+      sockets: {
+        isWebSocketConnectionOpen: () => connected,
+        addEventObserver: (observer: (event: WebSocketsServiceEvent) => Promise<void>) => {
+          socketObserver = observer
+          return jest.fn()
+        },
+      },
+      addEventObserver: () => jest.fn(),
+    } as never
+    const View = () => {
+      latestAccess = useCollaborationRoomAccess(application, { uuid: 'note-1' } as never)
+      return createElement('div', null, latestAccess.status)
+    }
+
+    await act(async () => {
+      root.render(createElement(View))
+      await Promise.resolve()
+    })
     expect(latestAccess).toEqual({
       status: 'disabled',
-      reason: 'Live collaboration is unavailable while the gateway is offline.',
+      reason: 'Live collaboration is offline and will retry when the encrypted gateway reconnects.',
     })
+    expect(mockedPrepare).not.toHaveBeenCalled()
+
+    connected = true
+    await act(async () => {
+      await socketObserver?.(WebSocketsServiceEvent.WebSocketDidOpen)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(latestAccess).toMatchObject({ status: 'ready', capability: 'capability-1' })
+    expect(mockedPrepare).toHaveBeenCalledTimes(1)
   })
 
   it('reserves an explicit editor lease and trusts only its request-bound bootstrap election', async () => {

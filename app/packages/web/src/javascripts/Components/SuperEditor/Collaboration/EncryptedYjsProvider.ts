@@ -5,12 +5,13 @@ import { createCollaborationRequestId, type CollabChannel, type CollabFrame } fr
 import type { RoomCipher } from './RoomCrypto'
 
 type Listener = (...args: never[]) => void
+const MAX_JOIN_RETRIES = 5
 
 /**
  * A yjs provider that syncs a Y.Doc over the gateway relay through the supplied
  * RoomCipher. The product entry point supplies a non-extractable key derived
- * from client-only shared-vault key material and fails closed before mounting
- * this provider when that source is unavailable. Implements the @lexical/yjs
+ * from the matching client-only account/vault key material and fails closed
+ * before mounting this provider when that source is unavailable. Implements the @lexical/yjs
  * `Provider` interface so it can drive @lexical/react's CollaborationPlugin.
  *
  * Sync model (no central server, peer-to-peer over the relay):
@@ -26,11 +27,14 @@ export class EncryptedYjsProvider implements Provider {
   private readonly yAwareness: Awareness
   private readonly listeners: Record<string, Set<Listener>> = {}
   private unsubscribe: (() => void) | null = null
+  private unsubscribeStatus: (() => void) | null = null
   private connected = false
   private joined = false
   private readonly joinRequestId: string
   private initialCapabilityConsumed = false
   private joining = false
+  private joinRetryAttempts = 0
+  private joinRetryTimeout: ReturnType<typeof setTimeout> | undefined
   // In-flight encrypt/send/decrypt work. Entries REMOVE THEMSELVES on settle so
   // this never grows unbounded over a long editing session (awareness fires on
   // every cursor move); flush() still works for tests by awaiting the live set.
@@ -77,6 +81,7 @@ export class EncryptedYjsProvider implements Provider {
     this.doc.on('update', this.onLocalDocUpdate)
     this.yAwareness.on('update', this.onLocalAwarenessUpdate)
     this.unsubscribe = this.channel.subscribe(this.onFrame)
+    this.unsubscribeStatus = this.channel.subscribeStatus?.(this.onTransportStatus) ?? null
 
     // The gateway requires a signed exact-note capability. No yjs or awareness
     // payload is sent until it acknowledges this specific join request.
@@ -84,7 +89,7 @@ export class EncryptedYjsProvider implements Provider {
   }
 
   private async joinWithCapability(): Promise<void> {
-    if (this.joining) {
+    if (this.joining || !this.connected || !this.channel.isConnected()) {
       return
     }
     this.joining = true
@@ -102,9 +107,12 @@ export class EncryptedYjsProvider implements Provider {
         }
       }
       // A concurrent disconnect() may have run while we awaited; don't join if so.
-      if (!this.connected || !capability) {
+      if (!this.connected || !this.channel.isConnected() || !capability) {
         // Denied / unavailable: do not attempt to join. The gateway would reject a
         // capability-less join anyway; skipping avoids a pointless room-denied round trip.
+        if (this.connected && this.channel.isConnected()) {
+          this.scheduleJoinRetry()
+        }
         return
       }
       try {
@@ -118,6 +126,7 @@ export class EncryptedYjsProvider implements Provider {
       } catch {
         // A reconnect race may close the transport between capability minting
         // and send. Stay fail-closed; durable encrypted sync remains available.
+        this.scheduleJoinRetry()
       }
     } finally {
       this.joining = false
@@ -130,6 +139,7 @@ export class EncryptedYjsProvider implements Provider {
     }
     this.connected = false
     this.joined = false
+    this.clearJoinRetry()
     removeAwarenessStates(this.yAwareness, [this.doc.clientID], 'disconnect')
     this.doc.off('update', this.onLocalDocUpdate)
     this.yAwareness.off('update', this.onLocalAwarenessUpdate)
@@ -141,6 +151,12 @@ export class EncryptedYjsProvider implements Provider {
       // Local listener cleanup must not make editor teardown throw.
     }
     this.unsubscribe = null
+    try {
+      this.unsubscribeStatus?.()
+    } catch {
+      // Transport-observer cleanup must not make editor teardown throw.
+    }
+    this.unsubscribeStatus = null
     try {
       this.channel.send({ t: 'room-leave', room: this.room, requestId: this.joinRequestId })
     } catch {
@@ -180,6 +196,31 @@ export class EncryptedYjsProvider implements Provider {
     )
   }
 
+  private readonly onTransportStatus = (connected: boolean): void => {
+    if (!this.connected) {
+      return
+    }
+    if (connected) {
+      this.clearJoinRetry()
+      this.joinRetryAttempts = 0
+      void this.joinWithCapability()
+      return
+    }
+
+    this.clearJoinRetry()
+    if (this.joined) {
+      this.joined = false
+      this.emit('sync', false as never)
+    }
+    // A closed socket cannot carry live awareness. Remove remote cursors now so
+    // the UI never presents stale peers as online while the local Y.Doc remains
+    // mounted and continues accepting offline edits.
+    const remoteClientIds = [...this.yAwareness.getStates().keys()].filter((clientId) => clientId !== this.doc.clientID)
+    if (remoteClientIds.length > 0) {
+      removeAwarenessStates(this.yAwareness, remoteClientIds, 'transport-disconnect')
+    }
+  }
+
   private readonly onLocalAwarenessUpdate = (
     changes: { added: number[]; updated: number[]; removed: number[] },
     origin: unknown,
@@ -208,6 +249,17 @@ export class EncryptedYjsProvider implements Provider {
     }
   }
 
+  private async broadcastLocalAwareness(): Promise<void> {
+    if (!this.connected || !this.joined) {
+      return
+    }
+    const update = encodeAwarenessUpdate(this.yAwareness, [this.doc.clientID])
+    const payload = await this.cipher.encrypt(update)
+    if (this.connected && this.joined) {
+      this.channel.send({ t: 'awareness', room: this.room, payload })
+    }
+  }
+
   // --- inbound -----------------------------------------------------------
 
   private readonly onFrame = (frame: CollabFrame): void => {
@@ -220,7 +272,9 @@ export class EncryptedYjsProvider implements Provider {
           break
         }
         this.joined = true
-        this.track(this.broadcastFullState())
+        this.joinRetryAttempts = 0
+        this.clearJoinRetry()
+        this.track(Promise.all([this.broadcastFullState(), this.broadcastLocalAwareness()]).then(() => undefined))
         queueMicrotask(() => {
           if (this.connected && this.joined) {
             this.emit('sync', true as never)
@@ -239,7 +293,7 @@ export class EncryptedYjsProvider implements Provider {
         break
       case 'room-sync':
         if (this.joined) {
-          this.track(this.broadcastFullState())
+          this.track(Promise.all([this.broadcastFullState(), this.broadcastLocalAwareness()]).then(() => undefined))
         }
         break
       case 'yjs':
@@ -276,5 +330,30 @@ export class EncryptedYjsProvider implements Provider {
       .catch(() => console.error('[collab] encrypted frame processing failed'))
       .finally(() => this.pending.delete(settled))
     this.pending.add(settled)
+  }
+
+  private scheduleJoinRetry(): void {
+    if (
+      this.joinRetryTimeout !== undefined ||
+      !this.connected ||
+      !this.channel.isConnected() ||
+      this.joinRetryAttempts >= MAX_JOIN_RETRIES
+    ) {
+      return
+    }
+    const baseDelay = Math.min(30_000, 1_000 * 2 ** this.joinRetryAttempts)
+    const delay = baseDelay * (0.5 + Math.random() * 0.5)
+    this.joinRetryAttempts += 1
+    this.joinRetryTimeout = setTimeout(() => {
+      this.joinRetryTimeout = undefined
+      void this.joinWithCapability()
+    }, delay)
+  }
+
+  private clearJoinRetry(): void {
+    if (this.joinRetryTimeout !== undefined) {
+      clearTimeout(this.joinRetryTimeout)
+      this.joinRetryTimeout = undefined
+    }
   }
 }

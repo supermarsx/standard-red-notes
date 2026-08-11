@@ -64,8 +64,8 @@ export class VaultLockService
     return this.lockMap.get(vault.uuid) === true
   }
 
-  public getUnlockedSharedVaultRootKey(vault: VaultListingInterface): KeySystemRootKeyInterface | undefined {
-    if (!vault.isSharedVaultListing() || this.isVaultLocked(vault)) {
+  public getUnlockedVaultRootKey(vault: VaultListingInterface): KeySystemRootKeyInterface | undefined {
+    if (this.isVaultLocked(vault)) {
       return undefined
     }
 
@@ -75,6 +75,14 @@ export class VaultLockService
     }
 
     return rootKey
+  }
+
+  public getUnlockedSharedVaultRootKey(vault: VaultListingInterface): KeySystemRootKeyInterface | undefined {
+    if (!vault.isSharedVaultListing()) {
+      return undefined
+    }
+
+    return this.getUnlockedVaultRootKey(vault)
   }
 
   public isVaultLockable(vault: VaultListingInterface): boolean {

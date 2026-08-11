@@ -9,10 +9,14 @@ export interface VaultLockServiceInterface extends AbstractService<
   getLockedvaults(): VaultListingInterface[]
   isVaultLocked(vault: VaultListingInterface): boolean
   /**
-   * Returns the current client-held root key only for an unlocked shared vault.
+   * Returns the current client-held root key only for an unlocked vault.
    * This narrow boundary lets clients derive non-extractable, domain-separated
-   * subkeys without treating public vault identifiers as secrets.
+   * subkeys without treating public vault identifiers as secrets. It applies to
+   * both private and shared vaults; authorization remains a separate server-side
+   * decision.
    */
+  getUnlockedVaultRootKey(vault: VaultListingInterface): KeySystemRootKeyInterface | undefined
+  /** @deprecated Prefer getUnlockedVaultRootKey. */
   getUnlockedSharedVaultRootKey(vault: VaultListingInterface): KeySystemRootKeyInterface | undefined
   isVaultLockable(vault: VaultListingInterface): boolean
   lockNonPersistentVault(vault: VaultListingInterface): Promise<void>

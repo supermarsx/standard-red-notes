@@ -1,4 +1,5 @@
 import { WebApplication } from '@/Application/WebApplication'
+import { WebSocketsServiceEvent } from '@standardnotes/snjs'
 import type { CollabChannel, CollabFrame } from './CollabChannel'
 
 /**
@@ -14,6 +15,15 @@ export function createGatewayCollabChannel(application: WebApplication): CollabC
     send: (frame: CollabFrame) => application.sockets.sendCollaborationFrame(frame),
     subscribe: (handler: (frame: CollabFrame) => void) =>
       application.sockets.onCollaborationFrame(handler as (frame: CollabFrame) => void),
+    subscribeStatus: (handler) =>
+      application.sockets.addEventObserver((event) => {
+        if (event === WebSocketsServiceEvent.WebSocketDidOpen) {
+          handler(true)
+        } else if (event === WebSocketsServiceEvent.WebSocketDidClose) {
+          handler(false)
+        }
+        return Promise.resolve()
+      }),
     // Standard Red Notes: fetch the gateway-required room capability for this note.
     authorize: (room: string) => application.sockets.authorizeCollaborationRoom(room),
   }

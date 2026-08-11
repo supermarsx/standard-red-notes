@@ -10,6 +10,7 @@ import {
 import { ConnectionRegistry, type Conn } from './registry.js'
 import { RoomRegistry, parseRelayFrame, handleRelayFrame, type RoomJoinAuthorizer } from './rooms.js'
 import { startRedisBridge, type Logger } from './redisBridge.js'
+import { startCollaborationRedisBridge } from './collaborationRedisBridge.js'
 import { safeErrorLogMetadata } from './safeLog.js'
 import { startSqsConsumer } from './sqsConsumer.js'
 
@@ -362,6 +363,11 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
   // This is intentionally enforced by `ws`, before the application-level
   // `message` event and JSON parser can observe or retain an oversized frame.
   const wss = new WebSocketServer({ server: httpServer, maxPayload: MAX_WEBSOCKET_MESSAGE_BYTES })
+  const collaborationRedis = startCollaborationRedisBridge(rooms, {
+    host: config.redisHost,
+    port: config.redisPort,
+    logger,
+  })
 
   wss.on('connection', (socket: WebSocket, req: IncomingMessage) => {
     // Client connects to: ws://host:PORT/?authToken=<jwt>
@@ -418,8 +424,14 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
       // closed flag and refuses the join; this final sweep is a second invariant
       // after every frame already queued for this connection has settled.
       void relayQueue.then(
-        () => rooms.leaveAll(conn),
-        () => rooms.leaveAll(conn),
+        async () => {
+          rooms.leaveAll(conn)
+          await collaborationRedis.releaseAll(conn)
+        },
+        async () => {
+          rooms.leaveAll(conn)
+          await collaborationRedis.releaseAll(conn)
+        },
       )
       logger.info(`[ws] disconnect user=${identity.userUuid} conn=${conn.connectionId} total=${registry.size()}`)
     }
@@ -457,7 +469,9 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
         // the message handler / gateway; the authorizer itself already fails closed.
         relayQueue = relayQueue
           .then(() =>
-            connectionClosed ? 0 : handleRelayFrame(rooms, conn, frame, roomAuthorizer, () => !connectionClosed),
+            connectionClosed
+              ? 0
+              : handleRelayFrame(rooms, conn, frame, roomAuthorizer, () => !connectionClosed, collaborationRedis),
           )
           .then(() => undefined)
           .catch((err) => {
@@ -470,6 +484,7 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
   // Periodic ping sweep: terminate sockets that didn't respond since last sweep.
   const heartbeat = setInterval(() => {
     rooms.evictExpired()
+    void collaborationRedis.refreshLeases()
     for (const socket of wss.clients) {
       if (alive.get(socket) === false) {
         logger.warn('[ws] terminating dead socket')
@@ -516,6 +531,7 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
     } catch {
       redis.disconnect()
     }
+    await collaborationRedis.stop()
   }
 
   return { registry, rooms, handleMintToken, stop }

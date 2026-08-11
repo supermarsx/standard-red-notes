@@ -14,6 +14,15 @@ const redis = vi.hoisted(() => {
       return this
     }
     subscribe(): void {}
+    async eval(): Promise<number> {
+      return 1
+    }
+    async pexpire(): Promise<number> {
+      return 1
+    }
+    async publish(): Promise<number> {
+      return 0
+    }
     async quit(): Promise<void> {
       state.quitCalls += 1
       if (state.quitRejects) {
@@ -198,14 +207,14 @@ describe('attachWebSocketGateway configuration', () => {
     await listen()
     attached = attachWebSocketGateway({ httpServer, config: baseConfig(), logger: makeLogger() })
     await attached.stop()
-    expect(redis.state.quitCalls).toBe(1)
+    expect(redis.state.quitCalls).toBe(3)
     expect(redis.state.disconnectCalls).toBe(0)
 
     redis.state.quitRejects = true
     attached = attachWebSocketGateway({ httpServer, config: baseConfig(), logger: makeLogger() })
     await attached.stop()
-    expect(redis.state.quitCalls).toBe(2)
-    expect(redis.state.disconnectCalls).toBe(1)
+    expect(redis.state.quitCalls).toBe(6)
+    expect(redis.state.disconnectCalls).toBe(3)
     attached = undefined
   })
 })

@@ -76,11 +76,13 @@ Revocation controls future access; it cannot retract knowledge.
 
 ## Realtime collaboration
 
-Shared-vault members with current `write` or `admin` permission—including the
-note creator—can join the end-to-end encrypted live relay for co-editing,
-presence, and comments. The gateway sees room membership and message
-timing/size, but it relays only ciphertext and cannot read note updates or
-comments.
+Signed-in owners of ordinary notes and private-vault notes, plus shared-vault
+members with current `write` or `admin` permission—including the note creator—
+can join the end-to-end encrypted live relay for co-editing, presence, and
+comments. The browser derives a separate non-extractable room key for every
+note from the matching client-only account or vault root key. The gateway sees
+room membership and message timing/size, but it relays only ciphertext and
+cannot read note updates or comments.
 
 Members with `read` permission, read-only account sessions, and read-scoped MCP
 sessions cannot mint a live-room capability. They retain ordinary encrypted
@@ -99,6 +101,16 @@ WebSocket delivery is best-effort, not the durable record. Local edits and
 comments persist through ordinary encrypted item sync, so a gateway outage
 falls back to normal save/sync behavior and reconnecting editors can converge
 again.
+
+The full Redis-backed deployment also supports multiple API-gateway replicas.
+Encrypted room frames and room-sync requests cross replicas through Redis, and
+a short-lived atomic Redis lease elects exactly one initial editor bootstrapper.
+Lease keys are refreshed only while the socket is alive and expire after a
+bounded interval if a process disappears. Redis never receives note plaintext,
+room keys, or room capabilities. Keep Redis internal and healthy when scaling
+the gateway; during a Redis outage each replica remains fail-closed on room
+authorization and durable encrypted item sync still works, but realtime relay
+is guaranteed only between clients on the same replica until Redis recovers.
 
 If collaborators see stale content:
 
