@@ -369,6 +369,7 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
   private readonly controlWindowsByConn = new WeakMap<Conn<S>, ControlWindows>()
   private readonly controlWindowsByRoom = new Map<string, ControlWindows>()
   private readonly yjsResponseGrantsByRoom = new Map<string, Map<Conn<S>, Map<string, YjsResponseGrant>>>()
+  private readonly yjsResponseGrantRoomsByConn = new WeakMap<Conn<S>, Set<string>>()
 
   constructor(private readonly now: () => number = Date.now) {}
 
@@ -588,6 +589,12 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
       roomGrants.set(conn, connectionGrants)
     }
     connectionGrants.set(stateRequestId, { leaseRequestId, expiresAt })
+    let connectionRooms = this.yjsResponseGrantRoomsByConn.get(conn)
+    if (!connectionRooms) {
+      connectionRooms = new Set()
+      this.yjsResponseGrantRoomsByConn.set(conn, connectionRooms)
+    }
+    connectionRooms.add(room)
     return true
   }
 
@@ -787,7 +794,7 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
   /** Remove a connection from every room it joined (on socket close). */
   leaveAll(conn: Conn<S>): void {
     this.pruneExpiredYjsResponseGrantsForConnection(conn)
-    for (const room of [...this.yjsResponseGrantsByRoom.keys()]) {
+    for (const room of [...(this.yjsResponseGrantRoomsByConn.get(conn) ?? [])]) {
       this.removeYjsResponseGrants(room, conn)
     }
     for (const room of [...(this.pendingReservationsByConn.get(conn)?.keys() ?? [])]) {
@@ -808,7 +815,7 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
 
   /** Fail closed when the distributed relay can no longer guarantee convergence. */
   denyRoom(room: string): void {
-    this.yjsResponseGrantsByRoom.delete(room)
+    this.removeAllYjsResponseGrantsForRoom(room)
     const members = this.byRoom.get(room)
     if (members) {
       for (const [conn, membership] of members) {
@@ -954,9 +961,26 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
     connectionGrants.delete(stateRequestId)
     if (connectionGrants.size === 0) {
       roomGrants.delete(conn)
+      const connectionRooms = this.yjsResponseGrantRoomsByConn.get(conn)
+      connectionRooms?.delete(room)
+      if (connectionRooms?.size === 0) {
+        this.yjsResponseGrantRoomsByConn.delete(conn)
+      }
     }
     if (roomGrants.size === 0) {
       this.yjsResponseGrantsByRoom.delete(room)
+    }
+  }
+
+  private removeAllYjsResponseGrantsForRoom(room: string): void {
+    const roomGrants = this.yjsResponseGrantsByRoom.get(room)
+    if (!roomGrants) {
+      return
+    }
+    for (const [conn, connectionGrants] of [...roomGrants]) {
+      for (const stateRequestId of [...connectionGrants.keys()]) {
+        this.deleteYjsResponseGrant(room, conn, stateRequestId)
+      }
     }
   }
 
@@ -987,8 +1011,8 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
   }
 
   private pruneExpiredYjsResponseGrantsForConnection(conn: Conn<S>, now = this.now()): void {
-    for (const [room, roomGrants] of [...this.yjsResponseGrantsByRoom]) {
-      const connectionGrants = roomGrants.get(conn)
+    for (const room of [...(this.yjsResponseGrantRoomsByConn.get(conn) ?? [])]) {
+      const connectionGrants = this.yjsResponseGrantsByRoom.get(room)?.get(conn)
       if (!connectionGrants) {
         continue
       }
@@ -1002,8 +1026,8 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
 
   private yjsResponseGrantCountForConnection(conn: Conn<S>): number {
     let count = 0
-    for (const roomGrants of this.yjsResponseGrantsByRoom.values()) {
-      count += roomGrants.get(conn)?.size ?? 0
+    for (const room of this.yjsResponseGrantRoomsByConn.get(conn) ?? []) {
+      count += this.yjsResponseGrantsByRoom.get(room)?.get(conn)?.size ?? 0
     }
     return count
   }

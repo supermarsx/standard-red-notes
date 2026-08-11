@@ -5,6 +5,7 @@ import {
   parseRelayFrame,
   handleRelayFrame,
   MAX_CONNECTIONS_PER_ROOM,
+  MAX_ACTIVE_YJS_RESPONSE_GRANTS_PER_CONNECTION,
   MAX_PENDING_EDITOR_RESERVATIONS_PER_CONNECTION,
   MAX_PENDING_EDITOR_RESERVATIONS_PER_ROOM,
   MAX_REQUEST_LEASES_PER_CONNECTION,
@@ -1552,6 +1553,148 @@ describe('distributed Yjs response claims', () => {
     rooms.members('cleanup-room')
     join()
     expect(rooms.authorizeYjsResponseFrame('cleanup-room', conn, frame('lease-expired'))).toBe('denied')
+  })
+
+  it('never enumerates unrelated global grant rooms while recording or disconnecting one connection', () => {
+    const rooms = new RoomRegistry(() => 1_000)
+    const unrelated: Array<{ conn: ReturnType<typeof fakeConn>; room: string }> = []
+    for (let index = 0; index < 2_000; index += 1) {
+      const conn = fakeConn(`unrelated-grant-${index}`)
+      const room = `unrelated-grant-room-${index}`
+      rooms.join(room, conn, 10_000, 'lease', 'editor')
+      expect(rooms.recordYjsResponseGrant(room, conn, 'state', 'lease', 5_000)).toBe(true)
+      if (index === 0) {
+        unrelated.push({ conn, room })
+      }
+    }
+    const target = fakeConn('reverse-index-target')
+    rooms.join('reverse-index-target-room', target, 10_000, 'lease', 'editor')
+    expect(rooms.recordYjsResponseGrant('reverse-index-target-room', target, 'first', 'lease', 5_000)).toBe(true)
+
+    type GlobalGrantMap = Map<string, Map<Conn, Map<string, unknown>>>
+    const internals = rooms as unknown as { yjsResponseGrantsByRoom: GlobalGrantMap }
+    const originalGlobalMap = internals.yjsResponseGrantsByRoom
+    internals.yjsResponseGrantsByRoom = new Proxy(originalGlobalMap, {
+      get(targetMap, property) {
+        if (property === Symbol.iterator || property === 'entries' || property === 'keys' || property === 'values') {
+          return () => {
+            throw new Error('global grant map iteration is forbidden on a per-connection path')
+          }
+        }
+        const value = Reflect.get(targetMap, property, targetMap) as unknown
+        return typeof value === 'function' ? value.bind(targetMap) : value
+      },
+    })
+
+    expect(rooms.recordYjsResponseGrant('reverse-index-target-room', target, 'second', 'lease', 5_000)).toBe(true)
+    expect(() => rooms.leaveAll(target)).not.toThrow()
+    const firstUnrelated = unrelated[0]
+    expect(
+      rooms.authorizeYjsResponseFrame(firstUnrelated.room, firstUnrelated.conn, {
+        t: 'yjs',
+        room: firstUnrelated.room,
+        payload: 'unrelated-state',
+        stateRequestId: 'state',
+      }),
+    ).toBe('complete')
+  })
+
+  it('retains the reverse entry until the last grant and removes only grants bound to an exact leaving lease', () => {
+    const rooms = new RoomRegistry(() => 1_000)
+    const conn = fakeConn('reverse-index-leases')
+    const reverseIndex = (rooms as unknown as { yjsResponseGrantRoomsByConn: WeakMap<Conn, Set<string>> })
+      .yjsResponseGrantRoomsByConn
+    rooms.join('reverse-index-room', conn, 5_000, 'lease-a', 'editor')
+    rooms.join('reverse-index-room', conn, 5_000, 'lease-b', 'editor')
+    expect(rooms.recordYjsResponseGrant('reverse-index-room', conn, 'state-a', 'lease-a', 4_000)).toBe(true)
+    expect(rooms.recordYjsResponseGrant('reverse-index-room', conn, 'state-b', 'lease-b', 4_000)).toBe(true)
+    expect(reverseIndex.get(conn)).toEqual(new Set(['reverse-index-room']))
+
+    rooms.leave('reverse-index-room', conn, 'lease-a')
+    expect(reverseIndex.get(conn)).toEqual(new Set(['reverse-index-room']))
+    expect(
+      rooms.authorizeYjsResponseFrame('reverse-index-room', conn, {
+        t: 'yjs',
+        room: 'reverse-index-room',
+        payload: 'removed-a',
+        stateRequestId: 'state-a',
+      }),
+    ).toBe('denied')
+    expect(
+      rooms.authorizeYjsResponseFrame('reverse-index-room', conn, {
+        t: 'yjs',
+        room: 'reverse-index-room',
+        payload: 'preserved-b',
+        stateRequestId: 'state-b',
+      }),
+    ).toBe('complete')
+    expect(reverseIndex.get(conn)).toBeUndefined()
+
+    expect(rooms.recordYjsResponseGrant('reverse-index-room', conn, 'state-c', 'lease-b', 4_000)).toBe(true)
+    expect(rooms.recordYjsResponseGrant('reverse-index-room', conn, 'state-d', 'lease-b', 4_000)).toBe(true)
+    expect(
+      rooms.authorizeYjsResponseFrame('reverse-index-room', conn, {
+        t: 'yjs',
+        room: 'reverse-index-room',
+        payload: 'consume-c',
+        stateRequestId: 'state-c',
+      }),
+    ).toBe('complete')
+    expect(reverseIndex.get(conn)).toEqual(new Set(['reverse-index-room']))
+    rooms.leaveAll(conn)
+    expect(reverseIndex.get(conn)).toBeUndefined()
+    rooms.join('reverse-index-room', conn, 5_000, 'lease-b', 'editor')
+    expect(
+      rooms.authorizeYjsResponseFrame('reverse-index-room', conn, {
+        t: 'yjs',
+        room: 'reverse-index-room',
+        payload: 'must-be-cleaned-d',
+        stateRequestId: 'state-d',
+      }),
+    ).toBe('denied')
+  })
+
+  it('reclaims the per-connection grant ceiling after completion, expiry, room denial, and close', () => {
+    let now = 1_000
+    const rooms = new RoomRegistry(() => now)
+    const conn = fakeConn('grant-capacity-reclamation')
+    const room = 'grant-capacity-room'
+    const lease = 'capacity-lease'
+    const reverseIndex = (rooms as unknown as { yjsResponseGrantRoomsByConn: WeakMap<Conn, Set<string>> })
+      .yjsResponseGrantRoomsByConn
+    const join = () => rooms.join(room, conn, now + 10_000, lease, 'editor')
+    const fill = (prefix: string): void => {
+      for (let index = 0; index < MAX_ACTIVE_YJS_RESPONSE_GRANTS_PER_CONNECTION; index += 1) {
+        expect(
+          rooms.recordYjsResponseGrant(room, conn, `${prefix}-${index}`, lease, index === 1 ? now + 5 : now + 5_000),
+        ).toBe(true)
+      }
+    }
+
+    join()
+    fill('initial')
+    expect(rooms.recordYjsResponseGrant(room, conn, 'initial-overflow', lease, now + 5_000)).toBe(false)
+    expect(
+      rooms.authorizeYjsResponseFrame(room, conn, {
+        t: 'yjs',
+        room,
+        payload: 'completed',
+        stateRequestId: 'initial-0',
+      }),
+    ).toBe('complete')
+    expect(rooms.recordYjsResponseGrant(room, conn, 'after-completion', lease, now + 5_000)).toBe(true)
+
+    now += 5
+    expect(rooms.recordYjsResponseGrant(room, conn, 'after-expiry', lease, now + 5_000)).toBe(true)
+    rooms.denyRoom(room)
+    expect(reverseIndex.get(conn)).toBeUndefined()
+    join()
+    fill('after-deny')
+
+    rooms.leaveAll(conn)
+    expect(reverseIndex.get(conn)).toBeUndefined()
+    join()
+    fill('after-close')
   })
 })
 
