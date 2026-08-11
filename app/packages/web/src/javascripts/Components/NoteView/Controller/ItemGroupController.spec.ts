@@ -22,6 +22,7 @@ jest.mock('./NoteViewController', () => {
     item = { uuid: this.runtimeId }
     initialize = jest.fn().mockResolvedValue(undefined)
     deinit = jest.fn()
+    deinitImmediatelyForSecurity = jest.fn()
     syncOnlyIfLargeNote = jest.fn()
     flushAndAwaitPendingSave = jest.fn().mockResolvedValue(undefined)
   }
@@ -134,6 +135,26 @@ describe('ItemGroupController tabs/tiles', () => {
 
     expect(group.itemControllers).toHaveLength(1)
     expect(group.activeItemViewController).toBe(first)
+  })
+
+  it('security-sensitive close scrubs immediately without syncing retained plaintext', async () => {
+    const controller = (await addTab()) as unknown as {
+      deinit: jest.Mock
+      deinitImmediatelyForSecurity: jest.Mock
+      syncOnlyIfLargeNote: jest.Mock
+    }
+    const observer = jest.fn()
+    group.addActiveControllerChangeObserver(observer)
+    observer.mockClear()
+
+    group.closeItemController(controller as unknown as NoteViewController, { securitySensitive: true })
+
+    expect(controller.syncOnlyIfLargeNote).not.toHaveBeenCalled()
+    expect(controller.deinit).not.toHaveBeenCalled()
+    expect(controller.deinitImmediatelyForSecurity).toHaveBeenCalledTimes(1)
+    expect(group.itemControllers).not.toContain(controller)
+    expect(group.activeItemViewController).toBeUndefined()
+    expect(observer).toHaveBeenCalledWith(undefined)
   })
 
   describe('split/tile state', () => {

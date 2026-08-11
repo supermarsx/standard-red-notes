@@ -276,24 +276,24 @@ export class VaultService
 
     const latestItem = this.items.findItem(item.uuid)
 
-    // A list/editor render may retain an item for one reaction after that item
-    // was removed from the manager. This is the same transient "no selection"
-    // state as an undefined input, not a service invariant worth crashing UI.
-    if (!latestItem) {
-      return undefined
-    }
-
     if (this.items.isTemplateItem(item)) {
       return undefined
     }
 
-    if (!latestItem.key_system_identifier) {
+    // If the authoritative item has disappeared, preserve any vault association
+    // carried by the retained object. This keeps stale decrypted vault content
+    // distinguishable from an ordinary removed item without throwing through
+    // render/menu call sites. Authorization and controller lifecycle code fail
+    // closed when this identifier can no longer resolve to a vault listing.
+    const keySystemIdentifier = latestItem ? latestItem.key_system_identifier : item.key_system_identifier
+
+    if (!keySystemIdentifier) {
       return undefined
     }
 
-    const vault = this.getVault({ keySystemIdentifier: latestItem.key_system_identifier })
+    const vault = this.getVault({ keySystemIdentifier })
     if (vault.isFailed()) {
-      throw new Error('Cannot find vault for item')
+      return undefined
     }
 
     return vault.getValue()

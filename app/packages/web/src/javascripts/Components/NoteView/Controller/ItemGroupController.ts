@@ -151,12 +151,20 @@ export class ItemGroupController {
 
   public closeItemController(
     controller: NoteViewController | FileViewController,
-    { notify = true }: { notify: boolean } = { notify: true },
+    { notify = true, securitySensitive = false }: { notify?: boolean; securitySensitive?: boolean } = {},
   ): void {
     if (controller instanceof NoteViewController) {
-      controller.syncOnlyIfLargeNote()
+      if (securitySensitive) {
+        // Vault keys or authorization are already gone. Do not flush/sync a
+        // retained plaintext editor; synchronously scrub it before notifying UI.
+        controller.deinitImmediatelyForSecurity()
+      } else {
+        controller.syncOnlyIfLargeNote()
+        controller.deinit()
+      }
+    } else {
+      controller.deinit()
     }
-    controller.deinit()
 
     removeFromArray(this.itemControllers, controller)
 

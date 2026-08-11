@@ -62,6 +62,9 @@ import {
   NoteType,
   SyncServiceInterface,
   PayloadEmitSource,
+  VaultListingInterface,
+  VaultLockServiceEvent,
+  VaultLockServiceEventPayload,
 } from '@standardnotes/snjs'
 import { getFullNoteText } from '@/Utils/Items/rehydrateLazyDecryptedNote'
 import { action, computed, makeObservable, observable, reaction, runInAction } from 'mobx'
@@ -435,11 +438,13 @@ export class ItemListController
     eventBus.addEventHandler(this, CrossControllerEvent.TagChanged)
     eventBus.addEventHandler(this, CrossControllerEvent.ActiveEditorChanged)
     eventBus.addEventHandler(this, VaultDisplayServiceEvent.VaultDisplayOptionsChanged)
+    eventBus.addEventHandler(this, VaultLockServiceEvent.VaultLocked)
 
     this.disposers.push(
       itemManager.streamItems<SNNote>(
         [ContentType.TYPES.Note, ContentType.TYPES.File],
         ({ changed, inserted, removed, source }) => {
+          this.closeRemovedVaultItemControllers(removed)
           this.collectIndexUpdates(changed, inserted, removed)
 
           /**
@@ -464,6 +469,14 @@ export class ItemListController
           void this.reloadItems(ItemsReloadSource.ItemStream)
         },
       ),
+    )
+
+    this.disposers.push(
+      itemManager.streamItems<VaultListingInterface>(ContentType.TYPES.VaultListing, ({ removed }) => {
+        if (removed.length > 0) {
+          this.closeUnresolvableVaultItemControllers()
+        }
+      }),
     )
 
     this.disposers.push(
@@ -602,6 +615,12 @@ export class ItemListController
 
       case VaultDisplayServiceEvent.VaultDisplayOptionsChanged: {
         void this.reloadItems(ItemsReloadSource.DisplayOptionsChange)
+        break
+      }
+
+      case VaultLockServiceEvent.VaultLocked: {
+        const payload = event.payload as VaultLockServiceEventPayload[VaultLockServiceEvent.VaultLocked]
+        this.closeVaultItemControllers((item) => item.key_system_identifier === payload.vault.systemIdentifier)
         break
       }
 
@@ -2100,6 +2119,38 @@ export class ItemListController
   private closeItemController(controller: NoteViewController | FileViewController): void {
     log(LoggingDomain.Selection, 'Closing item controller', controller.runtimeId)
     this.itemControllerGroup.closeItemController(controller)
+  }
+
+  /**
+   * A removed decrypted vault item may still be retained by an open controller.
+   * Close it synchronously before list filtering or selection heuristics can keep
+   * it alive in a tag/search view.
+   */
+  private closeRemovedVaultItemControllers(removed: { uuid: UuidString }[]): void {
+    const removedUuids = new Set(removed.map((item) => item.uuid))
+    this.closeVaultItemControllers((item) => removedUuids.has(item.uuid))
+  }
+
+  private closeUnresolvableVaultItemControllers(): void {
+    this.closeVaultItemControllers((item) => {
+      try {
+        return this.vaultDisplayService.getItemVault(item) === undefined
+      } catch {
+        return true
+      }
+    })
+  }
+
+  private closeVaultItemControllers(predicate: (item: SNNote | FileItem) => boolean): void {
+    for (const controller of [...this.itemControllerGroup.itemControllers]) {
+      const item = controller.item
+      if (!item?.key_system_identifier || !predicate(item)) {
+        continue
+      }
+
+      log(LoggingDomain.Selection, 'Closing retained vault item controller', controller.runtimeId)
+      this.itemControllerGroup.closeItemController(controller, { securitySensitive: true })
+    }
   }
 
   handleTagChange = async (userTriggered: boolean) => {

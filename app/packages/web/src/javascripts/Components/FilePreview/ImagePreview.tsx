@@ -68,6 +68,12 @@ const ImagePreview: FunctionComponent<Props> = ({
       setImageWidth(image.width)
       setImageHeight(image.height)
     }
+
+    return () => {
+      image.onload = null
+      image.onerror = null
+      image.src = ''
+    }
   }, [objectUrl])
 
   // Effective embedded width: an explicit px width (from the Word-style resizer /

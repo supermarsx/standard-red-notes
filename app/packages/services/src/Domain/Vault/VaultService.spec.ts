@@ -33,7 +33,7 @@ import {
   VaultLockServiceInterface,
 } from '../..'
 import { AuthorizeVaultDeletion } from './UseCase/AuthorizeVaultDeletion'
-import { ContentType } from '@standardnotes/domain-core'
+import { ContentType, Result } from '@standardnotes/domain-core'
 import { ClientDisplayableError } from '@standardnotes/responses'
 
 let currentId = 0
@@ -163,12 +163,39 @@ describe('VaultService', () => {
       expect(items.findItem).not.toHaveBeenCalled()
     })
 
-    it('returns no vault when a defined item was removed before the lookup completes', () => {
+    it('returns no vault without throwing when an ordinary item was removed before lookup', () => {
       const removedItem = createNoteWithContent({ title: 'removed' })
       items.findItem = jest.fn().mockReturnValue(undefined)
+      items.isTemplateItem = jest.fn().mockReturnValue(false)
 
       expect(service.getItemVault(removedItem)).toBeUndefined()
       expect(items.findItem).toHaveBeenCalledWith(removedItem.uuid)
+    })
+
+    it('preserves a removed vault item association when its vault listing still resolves', () => {
+      const retainedVaultItem = {
+        uuid: 'removed-vault-note',
+        key_system_identifier: 'vault-key-system',
+      } as DecryptedItemInterface
+      const vault = { systemIdentifier: 'vault-key-system' } as VaultListingInterface
+      items.findItem = jest.fn().mockReturnValue(undefined)
+      items.isTemplateItem = jest.fn().mockReturnValue(false)
+      _getVault.execute = jest.fn().mockReturnValue(Result.ok(vault))
+
+      expect(service.getItemVault(retainedVaultItem)).toBe(vault)
+      expect(_getVault.execute).toHaveBeenCalledWith({ keySystemIdentifier: 'vault-key-system' })
+    })
+
+    it('returns no vault without throwing when a stale vault association no longer resolves', () => {
+      const retainedVaultItem = {
+        uuid: 'revoked-vault-note',
+        key_system_identifier: 'revoked-vault-key-system',
+      } as DecryptedItemInterface
+      items.findItem = jest.fn().mockReturnValue(undefined)
+      items.isTemplateItem = jest.fn().mockReturnValue(false)
+      _getVault.execute = jest.fn().mockReturnValue(Result.fail('Vault not found'))
+
+      expect(service.getItemVault(retainedVaultItem)).toBeUndefined()
     })
   })
 

@@ -1,5 +1,5 @@
 import { observer } from 'mobx-react-lite'
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import HistoryListContainer from './HistoryListContainer'
 import { RevisionHistoryModalContentProps } from './RevisionHistoryModalProps'
 import HistoryModalFooter from './HistoryModalFooter'
@@ -37,6 +37,10 @@ const HistoryModalDialogContent = ({ dismissModal, note }: RevisionHistoryModalC
   )
 
   const [selectedMobileTab, setSelectedMobileTab] = useState<HistoryModalMobileTab>('List')
+
+  useEffect(() => {
+    return () => noteHistoryController.deinit()
+  }, [noteHistoryController])
   const tabOptionRef = useRef<HTMLButtonElement>(null)
   const [showTabMenu, setShowTabMenu] = useState(false)
   const toggleTabMenu = () => setShowTabMenu((show) => !show)

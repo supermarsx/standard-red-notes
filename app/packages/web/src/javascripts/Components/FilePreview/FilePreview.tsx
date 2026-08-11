@@ -1,12 +1,7 @@
 import { WebApplication } from '@/Application/WebApplication'
 import { concatenateUint8Arrays } from '@/Utils'
-import {
-  ApplicationEvent,
-  FileDownloadProgress,
-  FileItem,
-  fileProgressToHumanReadableString,
-} from '@standardnotes/snjs'
-import { useEffect, useMemo, useState } from 'react'
+import { FileDownloadProgress, FileItem, fileProgressToHumanReadableString } from '@standardnotes/snjs'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import Spinner from '@/Components/Spinner/Spinner'
 import FilePreviewError from './FilePreviewError'
 import { isFileTypePreviewable } from './isFilePreviewable'
@@ -16,6 +11,7 @@ import { ProtectedIllustration } from '@standardnotes/icons'
 import { OptionalSuperEmbeddedImageProps } from './OptionalSuperEmbeddedImageProps'
 import { PdfDeepLinkTarget } from './PdfDeepLink'
 import { useTranslation } from 'react-i18next'
+import { useItemAuthorization } from '@/Hooks/useItemAuthorization'
 
 type Props = {
   application: WebApplication
@@ -23,6 +19,12 @@ type Props = {
   isEmbeddedInSuper?: boolean
   pdfTarget?: PdfDeepLinkTarget
 } & OptionalSuperEmbeddedImageProps
+
+type DownloadedPreview = {
+  fileUuid: string
+  remoteIdentifier: string
+  bytes: Uint8Array
+}
 
 const FilePreview = ({
   file,
@@ -42,7 +44,11 @@ const FilePreview = ({
   isImageSelected,
 }: Props) => {
   const { t } = useTranslation('files')
-  const [isAuthorized, setIsAuthorized] = useState(application.isAuthorizedToRenderItem(file))
+  const isAuthorized = useItemAuthorization(application, file)
+  const authorizationRef = useRef(isAuthorized)
+  authorizationRef.current = isAuthorized
+  const currentFileIdentityRef = useRef({ uuid: file.uuid, remoteIdentifier: file.remoteIdentifier })
+  currentFileIdentityRef.current = { uuid: file.uuid, remoteIdentifier: file.remoteIdentifier }
 
   const isFilePreviewable = useMemo(() => {
     return isFileTypePreviewable(file.mimeType)
@@ -50,30 +56,62 @@ const FilePreview = ({
 
   const [isDownloading, setIsDownloading] = useState(true)
   const [downloadProgress, setDownloadProgress] = useState<FileDownloadProgress | undefined>()
-  const [downloadedBytes, setDownloadedBytes] = useState<Uint8Array>()
+  const [downloadedPreview, setDownloadedPreview] = useState<DownloadedPreview>()
+  const downloadedBytes =
+    downloadedPreview?.fileUuid === file.uuid && downloadedPreview.remoteIdentifier === file.remoteIdentifier
+      ? downloadedPreview.bytes
+      : undefined
 
   useEffect(() => {
-    setIsAuthorized(application.isAuthorizedToRenderItem(file))
-  }, [file.protected, application, file])
+    return () => {
+      downloadedPreview?.bytes.fill(0)
+    }
+  }, [downloadedPreview])
 
-  useEffect(() => {
-    const disposer = application.addEventObserver(async (event) => {
-      if (event === ApplicationEvent.UnprotectedSessionBegan) {
-        setIsAuthorized(true)
-      } else if (event === ApplicationEvent.UnprotectedSessionExpired) {
-        setIsAuthorized(application.isAuthorizedToRenderItem(file))
+  useLayoutEffect(() => {
+    setDownloadedPreview((preview) => {
+      if (
+        preview &&
+        (!isAuthorized || preview.fileUuid !== file.uuid || preview.remoteIdentifier !== file.remoteIdentifier)
+      ) {
+        preview.bytes.fill(0)
+        return undefined
       }
+      return preview
     })
 
-    return disposer
-  }, [application, file])
+    if (!isAuthorized) {
+      setIsDownloading(false)
+      setDownloadProgress(undefined)
+    }
+  }, [file.remoteIdentifier, file.uuid, isAuthorized])
 
   useEffect(() => {
     if (!isFilePreviewable || !isAuthorized) {
       setIsDownloading(false)
       setDownloadProgress(undefined)
-      setDownloadedBytes(undefined)
       return
+    }
+
+    let cancelled = false
+    const fileUuid = file.uuid
+    const remoteIdentifier = file.remoteIdentifier
+    const abortController = new AbortController()
+    const chunks: Uint8Array[] = []
+    const wipeChunks = () => {
+      for (const chunk of chunks) {
+        chunk.fill(0)
+      }
+      chunks.length = 0
+    }
+    const isCurrentDownload = () => {
+      const currentIdentity = currentFileIdentityRef.current
+      return (
+        !cancelled &&
+        authorizationRef.current &&
+        currentIdentity.uuid === fileUuid &&
+        currentIdentity.remoteIdentifier === remoteIdentifier
+      )
     }
 
     const downloadFileForPreview = async () => {
@@ -84,28 +122,53 @@ const FilePreview = ({
       setIsDownloading(true)
 
       try {
-        const chunks: Uint8Array[] = []
         setDownloadProgress(undefined)
-        const error = await application.files.downloadFile(file, async (decryptedChunk, progress) => {
-          chunks.push(decryptedChunk)
-          if (progress) {
-            setDownloadProgress(progress)
-          }
-        })
+        const error = await application.files.downloadFile(
+          file,
+          async (decryptedChunk, progress) => {
+            if (!isCurrentDownload()) {
+              decryptedChunk.fill(0)
+              return
+            }
+            chunks.push(decryptedChunk)
+            if (progress) {
+              setDownloadProgress(progress)
+            }
+          },
+          { signal: abortController.signal },
+        )
 
-        if (!error) {
+        if (!error && isCurrentDownload() && application.isAuthorizedToRenderItem(file)) {
           const finalDecryptedBytes = concatenateUint8Arrays(chunks)
-          setDownloadedBytes(finalDecryptedBytes)
+          setDownloadedPreview((currentPreview) => {
+            if (!isCurrentDownload() || !application.isAuthorizedToRenderItem(file)) {
+              finalDecryptedBytes.fill(0)
+              return currentPreview
+            }
+            currentPreview?.bytes.fill(0)
+            return { fileUuid, remoteIdentifier, bytes: finalDecryptedBytes }
+          })
         }
       } catch (error) {
-        console.error(error)
+        if (isCurrentDownload()) {
+          console.error(error)
+        }
       } finally {
-        setIsDownloading(false)
+        wipeChunks()
+        if (isCurrentDownload()) {
+          setIsDownloading(false)
+        }
       }
     }
 
     void downloadFileForPreview()
-  }, [application.files, downloadedBytes, file, isFilePreviewable, isAuthorized])
+
+    return () => {
+      cancelled = true
+      abortController.abort()
+      wipeChunks()
+    }
+  }, [application, downloadedBytes, file, isFilePreviewable, isAuthorized])
 
   if (!isAuthorized) {
     const hasProtectionSources = application.hasProtectionSources()
@@ -171,7 +234,7 @@ const FilePreview = ({
       file={file}
       filesController={application.filesController}
       tryAgainCallback={() => {
-        setDownloadedBytes(undefined)
+        setDownloadedPreview(undefined)
       }}
       isFilePreviewable={isFilePreviewable}
     />

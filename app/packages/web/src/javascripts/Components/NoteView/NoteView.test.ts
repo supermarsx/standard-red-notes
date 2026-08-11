@@ -48,11 +48,18 @@ describe('NoteView', () => {
       notesController,
       noteViewController,
       vaults,
+      items: {
+        isTemplateItem: jest.fn().mockReturnValue(false),
+        findItem: jest.fn((uuid: string) =>
+          noteViewController.item?.uuid === uuid ? noteViewController.item : undefined,
+        ),
+      },
     } as unknown as jest.Mocked<WebApplication>
 
     application.hasProtectionSources = jest.fn().mockReturnValue(true)
     application.authorizeNoteAccess = jest.fn()
     application.addWebEventObserver = jest.fn()
+    application.isAuthorizedToRenderItem = WebApplication.prototype.isAuthorizedToRenderItem.bind(application)
   })
 
   afterEach(() => {
@@ -137,6 +144,85 @@ describe('NoteView', () => {
       await createNoteView().onAppEvent(ApplicationEvent.UnprotectedSessionExpired)
 
       expect(notesController.setShowProtectedWarning).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('stale vault authorization', () => {
+    it('renders only the protected overlay when a retained vault association no longer resolves', () => {
+      noteViewController.dealloced = false
+      noteViewController.item = {
+        uuid: 'revoked-vault-note',
+        text: 'must not render retained vault plaintext',
+        protected: false,
+        locked: false,
+        key_system_identifier: 'revoked-vault-key-system',
+        userModifiedDate: new Date(),
+        getAppDomainValue: jest.fn(),
+      } as unknown as jest.Mocked<SNNote>
+      Object.defineProperty(application, 'vaultLocks', {
+        configurable: true,
+        value: { isVaultLocked: jest.fn() } as unknown as WebApplication['vaultLocks'],
+      })
+      jest.mocked(application.items.findItem).mockReturnValue(undefined)
+      jest.mocked(vaults.getItemVault).mockReturnValue(undefined)
+
+      const rendered = createNoteView().render() as { props: { itemType: string } }
+
+      expect(rendered).not.toBeNull()
+      expect(rendered.props.itemType).toBe('note')
+      expect(vaults.getItemVault).toHaveBeenCalledWith(noteViewController.item)
+    })
+
+    it('continues authorizing an ordinary item when no vault association exists', () => {
+      const ordinaryNote = {
+        uuid: 'ordinary-note',
+        protected: false,
+        key_system_identifier: undefined,
+      } as SNNote
+      jest.mocked(application.items.findItem).mockReturnValue(ordinaryNote)
+
+      expect(application.isAuthorizedToRenderItem(ordinaryNote)).toBe(true)
+      expect(vaults.getItemVault).not.toHaveBeenCalled()
+    })
+
+    it('denies a removed ordinary item and authorizes it only after authoritative reinsertion', () => {
+      const ordinaryNote = {
+        uuid: 'removed-ordinary-note',
+        protected: false,
+      } as SNNote
+      jest.mocked(application.items.findItem).mockReturnValue(undefined)
+
+      expect(application.isAuthorizedToRenderItem(ordinaryNote)).toBe(false)
+
+      jest.mocked(application.items.findItem).mockReturnValue(ordinaryNote)
+      expect(application.isAuthorizedToRenderItem(ordinaryNote)).toBe(true)
+    })
+
+    it('uses authoritative protection and vault fields instead of a stale caller object', () => {
+      const staleNote = {
+        uuid: 'stale-note',
+        protected: false,
+        key_system_identifier: undefined,
+      } as SNNote
+      const latestProtectedNote = {
+        ...staleNote,
+        protected: true,
+      } as SNNote
+      jest.mocked(application.items.findItem).mockReturnValue(latestProtectedNote)
+      Object.defineProperty(application, 'protections', {
+        configurable: true,
+        value: { hasUnprotectedAccessSession: jest.fn().mockReturnValue(false) },
+      })
+
+      expect(application.isAuthorizedToRenderItem(staleNote)).toBe(false)
+
+      const latestOrphanedVaultNote = {
+        ...staleNote,
+        protected: false,
+        key_system_identifier: 'missing-vault-key-system',
+      } as SNNote
+      jest.mocked(application.items.findItem).mockReturnValue(latestOrphanedVaultNote)
+      expect(application.isAuthorizedToRenderItem(staleNote)).toBe(false)
     })
   })
 

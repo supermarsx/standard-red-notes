@@ -6,14 +6,20 @@ import { RevisionHistoryModalProps } from './RevisionHistoryModalProps'
 import { useAndroidBackHandler } from '@/NativeMobileWeb/useAndroidBackHandler'
 import { useModalAnimation } from '../Modal/useModalAnimation'
 import { useMediaQuery, MutuallyExclusiveMediaQueryBreakpoints } from '@/Hooks/useMediaQuery'
+import { useItemAuthorization } from '@/Hooks/useItemAuthorization'
 
 const RevisionHistoryModal: FunctionComponent<RevisionHistoryModalProps> = ({ application }) => {
   const addAndroidBackHandler = useAndroidBackHandler()
+  const note = application.historyModalController.note
+  const isAuthorized = useItemAuthorization(application, note)
 
-  const isOpen = Boolean(
-    application.historyModalController.note &&
-    application.isAuthorizedToRenderItem(application.historyModalController.note),
-  )
+  useEffect(() => {
+    if (note && !isAuthorized) {
+      application.historyModalController.dismissModal()
+    }
+  }, [application.historyModalController, isAuthorized, note])
+
+  const isOpen = Boolean(note && isAuthorized)
 
   useEffect(() => {
     let removeListener: (() => void) | undefined
@@ -41,11 +47,12 @@ const RevisionHistoryModal: FunctionComponent<RevisionHistoryModalProps> = ({ ap
 
   return (
     <HistoryModalDialog onDismiss={application.historyModalController.dismissModal} ref={setElement}>
-      {!!application.historyModalController.note && (
+      {isAuthorized && note && (
         <HistoryModalDialogContent
+          key={note.uuid}
           application={application}
           dismissModal={application.historyModalController.dismissModal}
-          note={application.historyModalController.note}
+          note={note}
         />
       )}
     </HistoryModalDialog>

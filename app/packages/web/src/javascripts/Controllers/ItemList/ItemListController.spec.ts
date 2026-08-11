@@ -1,4 +1,12 @@
-import { ContentType, Result, SNTag, SystemViewId } from '@standardnotes/snjs'
+import {
+  ContentType,
+  PayloadEmitSource,
+  Result,
+  SNNote,
+  SNTag,
+  SystemViewId,
+  VaultLockServiceEvent,
+} from '@standardnotes/snjs'
 import { InternalEventBus, ItemManagerInterface } from '@standardnotes/services'
 import { WebApplication } from '@/Application/WebApplication'
 import { NavigationController } from '../Navigation/NavigationController'
@@ -13,8 +21,10 @@ import { ThreadedSearchIndex } from '@/Utils/Items/Search/ThreadedSearchIndex'
 describe('item list controller', () => {
   let application: WebApplication
   let controller: ItemListController
+  let itemStreamObservers: { types: unknown; callback: (event: Record<string, unknown>) => void }[]
 
   beforeEach(() => {
+    itemStreamObservers = []
     application = {
       navigationController: {} as jest.Mocked<NavigationController>,
       searchOptionsController: {} as jest.Mocked<SearchOptionsController>,
@@ -23,10 +33,20 @@ describe('item list controller', () => {
         execute: jest.fn().mockReturnValue(Result.ok(false)),
       } as unknown as jest.Mocked<IsNativeMobileWeb>,
       items: {
-        streamItems: jest.fn(),
+        streamItems: jest.fn((types: unknown, callback: (event: Record<string, unknown>) => void) => {
+          itemStreamObservers.push({ types, callback })
+          return jest.fn()
+        }),
       } as unknown as jest.Mocked<ItemManagerInterface>,
       sync: {
         getFullContentPayload: jest.fn(),
+      },
+      itemControllerGroup: {
+        itemControllers: [],
+        closeItemController: jest.fn(),
+      },
+      vaultDisplayService: {
+        getItemVault: jest.fn(),
       },
     } as unknown as jest.Mocked<WebApplication>
 
@@ -54,6 +74,136 @@ describe('item list controller', () => {
       application.recents,
       eventBus,
     )
+  })
+
+  afterEach(() => {
+    controller?.deinit()
+  })
+
+  describe('vault plaintext lifecycle', () => {
+    const vaultKeySystem = 'vault-key-system'
+
+    const vaultStream = () => {
+      const observer = itemStreamObservers.find(({ types }) => types === ContentType.TYPES.VaultListing)
+      if (!observer) {
+        throw new Error('Vault stream observer was not registered')
+      }
+      return observer.callback
+    }
+
+    const noteStream = () => {
+      const observer = itemStreamObservers.find(
+        ({ types }) => Array.isArray(types) && types.includes(ContentType.TYPES.Note),
+      )
+      if (!observer) {
+        throw new Error('Note stream observer was not registered')
+      }
+      return observer.callback
+    }
+
+    const retainedVaultController = () => {
+      const item = {
+        uuid: 'retained-vault-note',
+        title: 'Private title',
+        text: 'retained vault plaintext',
+        content_type: ContentType.TYPES.Note,
+        key_system_identifier: vaultKeySystem,
+      } as SNNote
+      const viewController = { item, runtimeId: 'retained-controller' }
+      application.itemControllerGroup.itemControllers = [viewController] as never
+      return { item, viewController }
+    }
+
+    beforeEach(() => {
+      Object.defineProperty(application.navigationController, 'selected', {
+        configurable: true,
+        get: () => ({ uuid: 'ordinary-tag', content_type: ContentType.TYPES.Tag }) as SNTag,
+      })
+    })
+
+    it('closes a stale active vault note immediately when item removal arrives in a tag/search view', () => {
+      const { item, viewController } = retainedVaultController()
+      controller.noteFilterText = 'private search'
+      application.items.getDisplayableNotes = jest.fn().mockReturnValue([])
+      application.items.getDisplayableNotesAndFiles = jest.fn().mockReturnValue([])
+
+      // The removal payload need not retain vault metadata; the active stale
+      // controller is the authoritative signal that plaintext needs scrubbing.
+      noteStream()({
+        changed: [],
+        inserted: [],
+        removed: [{ uuid: item.uuid }],
+        source: PayloadEmitSource.LocalChanged,
+      })
+
+      expect(application.itemControllerGroup.closeItemController).toHaveBeenCalledWith(viewController, {
+        securitySensitive: true,
+      })
+    })
+
+    it('closes retained vault plaintext when the vault is locked before an item-removal event', async () => {
+      const { viewController } = retainedVaultController()
+
+      await controller.handleEvent({
+        type: VaultLockServiceEvent.VaultLocked,
+        payload: { vault: { systemIdentifier: vaultKeySystem } },
+      })
+
+      expect(application.itemControllerGroup.closeItemController).toHaveBeenCalledWith(viewController, {
+        securitySensitive: true,
+      })
+    })
+
+    it('closes retained vault plaintext when the vault listing is removed during access revocation', () => {
+      const { viewController } = retainedVaultController()
+      application.vaultDisplayService.getItemVault = jest.fn().mockImplementation(() => {
+        throw new Error('Cannot find vault for item')
+      })
+
+      vaultStream()({
+        changed: [],
+        inserted: [],
+        removed: [{ uuid: 'removed-vault-listing' }],
+      })
+
+      expect(application.itemControllerGroup.closeItemController).toHaveBeenCalledWith(viewController, {
+        securitySensitive: true,
+      })
+    })
+
+    it('does not security-close an unlocked vault note or a removed non-vault note', async () => {
+      retainedVaultController()
+      await controller.handleEvent({
+        type: VaultLockServiceEvent.VaultUnlocked,
+        payload: { vault: { systemIdentifier: vaultKeySystem } },
+      })
+      expect(application.itemControllerGroup.closeItemController).not.toHaveBeenCalled()
+
+      application.vaultDisplayService.getItemVault = jest.fn().mockReturnValue({ systemIdentifier: vaultKeySystem })
+      vaultStream()({
+        changed: [],
+        inserted: [],
+        removed: [{ uuid: 'unrelated-vault-listing' }],
+      })
+      expect(application.itemControllerGroup.closeItemController).not.toHaveBeenCalled()
+
+      const nonVaultController = {
+        item: {
+          uuid: 'ordinary-note',
+          text: 'ordinary plaintext',
+          content_type: ContentType.TYPES.Note,
+        },
+        runtimeId: 'ordinary-controller',
+      }
+      application.itemControllerGroup.itemControllers = [nonVaultController] as never
+      ;(
+        controller as unknown as {
+          closeRemovedVaultItemControllers: (removed: { uuid: string }[]) => void
+        }
+      ).closeRemovedVaultItemControllers([{ uuid: nonVaultController.item.uuid }])
+
+      expect(application.itemControllerGroup.closeItemController).not.toHaveBeenCalled()
+    })
   })
 
   describe('shouldSelectFirstItem', () => {

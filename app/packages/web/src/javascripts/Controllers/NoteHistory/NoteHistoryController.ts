@@ -36,6 +36,9 @@ import {
 import { ItemListController } from '../ItemList/ItemListController'
 
 export class NoteHistoryController {
+  private deallocated = false
+  private lifecycleGeneration = 0
+
   remoteHistory: RemoteHistory = []
   isFetchingRemoteHistory = false
   sessionHistory: SessionHistory = []
@@ -54,7 +57,7 @@ export class NoteHistoryController {
   currentTab = RevisionType.Remote
 
   constructor(
-    private note: SNNote,
+    private note: SNNote | undefined,
     private itemListController: ItemListController,
     private features: FeaturesClientInterface,
     private items: ItemManagerInterface,
@@ -100,12 +103,41 @@ export class NoteHistoryController {
 
       contentState: observable,
       setContentState: action,
+
+      deinit: action,
     })
 
     void this.fetchAllHistory()
   }
 
+  deinit = () => {
+    if (this.deallocated) {
+      return
+    }
+
+    this.deallocated = true
+    this.lifecycleGeneration += 1
+    this.remoteHistory = []
+    this.sessionHistory = []
+    this.legacyHistory = []
+    this.selectedRevision = undefined
+    this.selectedEntry = undefined
+    this.comparisonContent = undefined
+    this.isComparing = false
+    this.compareTarget = 'current'
+    this.contentState = RevisionContentState.Idle
+    this.isFetchingRemoteHistory = false
+    ;(this.note as unknown) = undefined
+  }
+
+  private isLifecycleCurrent(generation: number): boolean {
+    return !this.deallocated && generation === this.lifecycleGeneration
+  }
+
   setSelectedRevision = (revision: SelectedRevision) => {
+    if (this.deallocated) {
+      return
+    }
     this.selectedRevision = revision
     if (this.isComparing) {
       void this.refreshComparisonContent()
@@ -113,6 +145,9 @@ export class NoteHistoryController {
   }
 
   setSelectedEntry = (entry: SelectedEntry) => {
+    if (this.deallocated) {
+      return
+    }
     this.selectedEntry = entry
   }
 
@@ -123,10 +158,16 @@ export class NoteHistoryController {
   comparisonContent: NoteContent | undefined = undefined
 
   setComparisonContent = (content: NoteContent | undefined) => {
+    if (this.deallocated) {
+      return
+    }
     this.comparisonContent = content
   }
 
   setIsComparing = (value: boolean) => {
+    if (this.deallocated) {
+      return
+    }
     this.isComparing = value
     if (value) {
       void this.refreshComparisonContent()
@@ -136,6 +177,9 @@ export class NoteHistoryController {
   }
 
   setCompareTarget = (target: 'current' | 'previous') => {
+    if (this.deallocated) {
+      return
+    }
     this.compareTarget = target
     if (this.isComparing) {
       void this.refreshComparisonContent()
@@ -144,7 +188,10 @@ export class NoteHistoryController {
 
   /** The note's current (live) content, used for "compare with current". */
   get currentNoteContent(): NoteContent | undefined {
-    const liveNote = this.items.findItem<SNNote>(this.note.uuid) ?? this.note
+    if (this.deallocated || !this.note) {
+      return undefined
+    }
+    const liveNote = this.items.findItem<SNNote>(this.note.uuid)
     return liveNote?.content as NoteContent | undefined
   }
 
@@ -158,6 +205,9 @@ export class NoteHistoryController {
    * session/legacy → "No previous revision available").
    */
   refreshComparisonContent = async () => {
+    if (this.deallocated) {
+      return
+    }
     if (this.compareTarget === 'current') {
       this.setComparisonContent(this.currentNoteContent)
       return
@@ -188,6 +238,11 @@ export class NoteHistoryController {
    * the newest-first list) is fetched on demand.
    */
   private refreshRemotePreviousComparison = async () => {
+    const generation = this.lifecycleGeneration
+    const note = this.note
+    if (!note) {
+      return
+    }
     const selectedUuid = (this.selectedEntry as RevisionMetadata | undefined)?.uuid
     if (!selectedUuid) {
       return
@@ -209,9 +264,12 @@ export class NoteHistoryController {
 
     try {
       const previousRevisionOrError = await this._getRevision.execute({
-        itemUuid: this.note.uuid,
+        itemUuid: note.uuid,
         revisionUuid: previousEntry.uuid,
       })
+      if (!this.isLifecycleCurrent(generation)) {
+        return
+      }
       if (previousRevisionOrError.isFailed()) {
         throw new Error(previousRevisionOrError.getError())
       }
@@ -248,6 +306,11 @@ export class NoteHistoryController {
    * selected). The previous entry is index + 1 in the list.
    */
   private refreshLegacyPreviousComparison = async () => {
+    const generation = this.lifecycleGeneration
+    const note = this.note
+    if (!note) {
+      return
+    }
     const selectedUrl = (this.selectedEntry as Action | undefined)?.subactions?.[0]?.url
     if (!selectedUrl) {
       return
@@ -264,7 +327,10 @@ export class NoteHistoryController {
     }
 
     try {
-      const response = await this.actions.runAction(previousEntry.subactions[0], this.note)
+      const response = await this.actions.runAction(previousEntry.subactions[0], note)
+      if (!this.isLifecycleCurrent(generation)) {
+        return
+      }
       if (!response) {
         return
       }
@@ -277,11 +343,17 @@ export class NoteHistoryController {
   }
 
   clearSelection = () => {
+    if (this.deallocated) {
+      return
+    }
     this.setSelectedEntry(undefined)
     this.setSelectedRevision(undefined)
   }
 
   selectTab = (tab: RevisionType) => {
+    if (this.deallocated) {
+      return
+    }
     this.currentTab = tab
     this.clearSelection()
     this.setContentState(RevisionContentState.Idle)
@@ -289,15 +361,21 @@ export class NoteHistoryController {
   }
 
   setIsFetchingRemoteHistory = (value: boolean) => {
+    if (this.deallocated) {
+      return
+    }
     this.isFetchingRemoteHistory = value
   }
 
   setContentState = (contentState: RevisionContentState) => {
+    if (this.deallocated) {
+      return
+    }
     this.contentState = contentState
   }
 
   selectRemoteRevision = async (entry: RevisionMetadata) => {
-    if (!this.note) {
+    if (this.deallocated || !this.note) {
       return
     }
 
@@ -309,6 +387,7 @@ export class NoteHistoryController {
 
     this.setContentState(RevisionContentState.Loading)
     this.clearSelection()
+    const generation = this.lifecycleGeneration
 
     try {
       this.setSelectedEntry(entry)
@@ -316,6 +395,9 @@ export class NoteHistoryController {
         itemUuid: this.note.uuid,
         revisionUuid: entry.uuid,
       })
+      if (!this.isLifecycleCurrent(generation)) {
+        return
+      }
       if (remoteRevisionOrError.isFailed()) {
         throw new Error(remoteRevisionOrError.getError())
       }
@@ -330,8 +412,12 @@ export class NoteHistoryController {
   }
 
   selectLegacyRevision = async (entry: Action) => {
+    if (this.deallocated) {
+      return
+    }
     this.clearSelection()
     this.setContentState(RevisionContentState.Loading)
+    const generation = this.lifecycleGeneration
 
     if (!this.note) {
       return
@@ -345,6 +431,9 @@ export class NoteHistoryController {
       this.setSelectedEntry(entry)
 
       const response = await this.actions.runAction(entry.subactions[0], this.note)
+      if (!this.isLifecycleCurrent(generation)) {
+        return
+      }
 
       if (!response) {
         throw new Error('Could not fetch revision')
@@ -360,6 +449,9 @@ export class NoteHistoryController {
   }
 
   selectSessionRevision = (entry: NoteHistoryEntry) => {
+    if (this.deallocated) {
+      return
+    }
     this.clearSelection()
     this.setSelectedEntry(entry)
     this.setSelectedRevision(entry)
@@ -375,6 +467,9 @@ export class NoteHistoryController {
   }
 
   selectFirstRevision = () => {
+    if (this.deallocated) {
+      return
+    }
     switch (this.currentTab) {
       case RevisionType.Remote: {
         const firstEntry = this.flattenedRemoteHistory[0]
@@ -401,6 +496,9 @@ export class NoteHistoryController {
   }
 
   selectPrevOrNextRemoteRevision = (revisionEntry: RevisionMetadata) => {
+    if (this.deallocated) {
+      return
+    }
     const currentIndex = this.flattenedRemoteHistory.findIndex((entry) => entry?.uuid === revisionEntry.uuid)
 
     const previousEntry = this.flattenedRemoteHistory[currentIndex - 1]
@@ -414,16 +512,26 @@ export class NoteHistoryController {
   }
 
   setRemoteHistory = (remoteHistory: RemoteHistory) => {
+    if (this.deallocated) {
+      return
+    }
     this.remoteHistory = remoteHistory
   }
 
   fetchRemoteHistory = async () => {
+    if (this.deallocated) {
+      return
+    }
     this.setRemoteHistory([])
+    const generation = this.lifecycleGeneration
 
     if (this.note) {
       this.setIsFetchingRemoteHistory(true)
       try {
         const revisionsListOrError = await this._listRevisions.execute({ itemUuid: this.note.uuid })
+        if (!this.isLifecycleCurrent(generation)) {
+          return
+        }
         if (revisionsListOrError.isFailed()) {
           throw new Error(revisionsListOrError.getError())
         }
@@ -439,11 +547,18 @@ export class NoteHistoryController {
   }
 
   setLegacyHistory = (legacyHistory: LegacyHistory) => {
+    if (this.deallocated) {
+      return
+    }
     this.legacyHistory = legacyHistory
   }
 
   fetchLegacyHistory = async () => {
+    if (this.deallocated) {
+      return
+    }
     const actionExtensions = this.actions.getExtensions()
+    const generation = this.lifecycleGeneration
 
     actionExtensions.forEach(async (ext) => {
       if (!this.note) {
@@ -451,6 +566,9 @@ export class NoteHistoryController {
       }
 
       const actionExtension = await this.actions.loadExtensionInContextOfItem(ext, this.note)
+      if (!this.isLifecycleCurrent(generation)) {
+        return
+      }
 
       if (!actionExtension) {
         return
@@ -467,10 +585,16 @@ export class NoteHistoryController {
   }
 
   setSessionHistory = (sessionHistory: SessionHistory) => {
+    if (this.deallocated) {
+      return
+    }
     this.sessionHistory = sessionHistory
   }
 
   fetchAllHistory = async () => {
+    if (this.deallocated) {
+      return
+    }
     this.resetHistoryState()
 
     if (!this.note) {
@@ -480,19 +604,32 @@ export class NoteHistoryController {
     this.setSessionHistory(
       sortRevisionListIntoGroups<NoteHistoryEntry>(this.history.sessionHistoryForItem(this.note) as NoteHistoryEntry[]),
     )
+    const generation = this.lifecycleGeneration
     await this.fetchRemoteHistory()
+    if (!this.isLifecycleCurrent(generation)) {
+      return
+    }
     await this.fetchLegacyHistory()
+    if (!this.isLifecycleCurrent(generation)) {
+      return
+    }
 
     this.selectFirstRevision()
   }
 
   resetHistoryState = () => {
+    if (this.deallocated) {
+      return
+    }
     this.remoteHistory = []
     this.sessionHistory = []
     this.legacyHistory = []
   }
 
   restoreRevision = async (revision: NonNullable<SelectedRevision>) => {
+    if (this.deallocated) {
+      return
+    }
     const originalNote = this.items.findItem<SNNote>(revision.payload.uuid)
 
     if (originalNote?.locked) {
@@ -500,10 +637,15 @@ export class NoteHistoryController {
       return
     }
 
+    const generation = this.lifecycleGeneration
     const didConfirm = await confirmDialog({
       text: "Are you sure you want to replace the current note's contents with what you see in this preview?",
       confirmButtonStyle: 'danger',
     })
+
+    if (!this.isLifecycleCurrent(generation)) {
+      return
+    }
 
     if (!originalNote) {
       throw new Error('Original note not found.')
@@ -522,6 +664,10 @@ export class NoteHistoryController {
   }
 
   restoreRevisionAsCopy = async (revision: NonNullable<SelectedRevision>) => {
+    if (this.deallocated) {
+      return
+    }
+    const generation = this.lifecycleGeneration
     const originalNote = this.items.findSureItem<SNNote>(revision.payload.uuid)
 
     const duplicatedItem = await this.mutator.duplicateItem(originalNote, false, {
@@ -529,12 +675,20 @@ export class NoteHistoryController {
       title: revision.payload.content.title ? revision.payload.content.title + ' (copy)' : undefined,
     })
 
+    if (!this.isLifecycleCurrent(generation)) {
+      return
+    }
+
     void this.sync.sync()
 
     this.itemListController.selectItem(duplicatedItem.uuid).catch(console.error)
   }
 
   deleteRemoteRevision = async (revisionEntry: RevisionMetadata) => {
+    if (this.deallocated) {
+      return
+    }
+    const generation = this.lifecycleGeneration
     const shouldDelete = await this.alerts.confirm(
       'Are you sure you want to delete this revision?',
       'Delete revision?',
@@ -543,7 +697,7 @@ export class NoteHistoryController {
       'Cancel',
     )
 
-    if (!shouldDelete || !this.note) {
+    if (!shouldDelete || !this.isLifecycleCurrent(generation) || !this.note) {
       return
     }
 
