@@ -18,6 +18,10 @@ import { PaneController } from '@/Controllers/PaneController/PaneController'
 import ListItemVaultInfo from '../ListItemVaultInfo'
 import { useResponsiveAppPane } from '@/Components/Panes/ResponsivePaneProvider'
 import PaneCollapseButton from '@/Components/Panes/PaneCollapseButton'
+import useIsTabletOrMobileScreen from '@/Hooks/useIsTabletOrMobileScreen'
+
+export const shouldShowCollapsedNavigationExpander = (isNavigationPaneCollapsed: boolean, isTabletOrMobile: boolean) =>
+  isNavigationPaneCollapsed && !isTabletOrMobile
 
 type Props = {
   application: WebApplication
@@ -59,6 +63,7 @@ const ContentListHeader = ({
   const matchesMd = useMediaQuery(MediaQueryBreakpoints.md)
   const isTouchScreen = !useMediaQuery(MediaQueryBreakpoints.pointerFine)
   const isTablet = matchesMd && isTouchScreen
+  const { isTabletOrMobile } = useIsTabletOrMobileScreen()
 
   const { isNavigationPaneCollapsed, toggleNavigationPane, toggleListPane } = useResponsiveAppPane()
 
@@ -209,7 +214,7 @@ const ContentListHeader = ({
     return (
       <div className={'flex w-full justify-between md:flex'}>
         <NavigationMenuButton />
-        {isNavigationPaneCollapsed && (
+        {shouldShowCollapsedNavigationExpander(isNavigationPaneCollapsed, isTabletOrMobile) && (
           <PaneCollapseButton
             onClick={toggleNavigationPane}
             label={t('expandTopicsPanel')}
@@ -239,6 +244,7 @@ const ContentListHeader = ({
     OptionsMenu,
     AddButton,
     isNavigationPaneCollapsed,
+    isTabletOrMobile,
     toggleNavigationPane,
     toggleListPane,
     t,
