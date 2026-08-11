@@ -4,6 +4,7 @@ import {
   COLLABORATION_RELAY_CHANNEL,
   CollaborationRedisBridge,
   MAX_DISTRIBUTED_EDITOR_LEASES_PER_ROOM,
+  YJS_RESPONSE_CLAIM_TTL_MS,
 } from '../src/collaborationRedisBridge.js'
 import type { Conn, SendableSocket } from '../src/registry.js'
 import {
@@ -22,6 +23,7 @@ class FakeRedisNetwork {
   readonly sets = new Map<string, Set<string>>()
   readonly leases = new Map<string, number>()
   readonly leaseValues = new Map<string, string>()
+  readonly responseClaims = new Map<string, { value: string; expiresAt: number }>()
   readonly published: Array<{ channel: string; message: string }> = []
   readonly subscribers = new Set<MessageHandler>()
   readonly leaseTtls: number[] = []
@@ -42,6 +44,13 @@ class FakeRedisNetwork {
   failedEvalCalls = 0
   failPublish = false
   readonly forcedLeasePolicyResults = new Map<string, -1 | -2>()
+  reserveEvalGate: Promise<void> | undefined
+  reserveEvalCalls = 0
+  now = Date.now()
+
+  advance(milliseconds: number): void {
+    this.now += milliseconds
+  }
 
   emitError(error = new Error('redis unavailable')): void {
     for (const handler of this.subscriberErrorHandlers) {
@@ -150,10 +159,61 @@ class FakeRedisNetwork {
           this.failedEvalCalls += 1
           throw new Error('redis eval unavailable')
         }
+        if (script.includes('SRN_CLAIM_YJS_RESPONSE_V1')) {
+          const leaseKey = String(args[0])
+          const roomSetKey = String(args[1])
+          const claimKey = String(args[2])
+          const redisValue = String(args[3])
+          const claimValue = String(args[4])
+          const claimTtl = Number(args[5])
+          if (
+            this.leaseValues.get(leaseKey) !== redisValue ||
+            !this.leases.has(leaseKey) ||
+            !this.sets.get(roomSetKey)?.has(leaseKey)
+          ) {
+            return -1
+          }
+          const existingClaim = this.responseClaims.get(claimKey)
+          if (existingClaim && existingClaim.expiresAt > this.now) {
+            return 0
+          }
+          this.responseClaims.set(claimKey, { value: claimValue, expiresAt: this.now + claimTtl })
+          return 1
+        }
         const roomSetKey = String(args[0])
         const leaseKey = String(args[1])
         const members = this.sets.get(roomSetKey) ?? new Set<string>()
-        if (script.includes("redis.call('SMEMBERS'")) {
+        if (script.includes('SRN_REFRESH_OWNED_LEASE_V1')) {
+          const forcedPolicyResult = this.forcedLeasePolicyResults.get(leaseKey)
+          if (forcedPolicyResult !== undefined) {
+            this.forcedLeasePolicyResults.delete(leaseKey)
+            return forcedPolicyResult
+          }
+          const marker = String(args[4])
+          if (this.leaseValues.get(leaseKey) !== marker || !this.leases.has(leaseKey) || !members.has(leaseKey)) {
+            return -3
+          }
+          for (const member of [...members]) {
+            if (!this.leases.has(member)) {
+              members.delete(member)
+            }
+          }
+          if ([...members].some((member) => !this.leaseValues.get(member)?.startsWith(marker.slice(0, 3)))) {
+            return -1
+          }
+          if (members.size > Number(args[5])) {
+            return -2
+          }
+          const ttl = Number(args[2])
+          this.leaseTtls.push(ttl)
+          this.leases.set(leaseKey, ttl)
+          return 1
+        }
+        if (script.includes('SRN_RESERVE_LEASE_V1')) {
+          this.reserveEvalCalls += 1
+          if (this.reserveEvalGate) {
+            await this.reserveEvalGate
+          }
           const forcedPolicyResult = this.forcedLeasePolicyResults.get(leaseKey)
           if (forcedPolicyResult !== undefined) {
             this.forcedLeasePolicyResults.delete(leaseKey)
@@ -481,6 +541,214 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
     expect(roomSet?.size ?? 0).toBeLessThanOrEqual(MAX_DISTRIBUTED_EDITOR_LEASES_PER_ROOM)
   })
 
+  it('arbitrates sixty-four cross-replica full-state responders down to one global grant', async () => {
+    const redis = new FakeRedisNetwork()
+    const bridgeA = new CollaborationRedisBridge(
+      new RoomRegistry(),
+      redis.client() as never,
+      redis.client() as never,
+      logger,
+      'claim-replica-a',
+    )
+    const bridgeB = new CollaborationRedisBridge(
+      new RoomRegistry(),
+      redis.client() as never,
+      redis.client() as never,
+      logger,
+      'claim-replica-b',
+    )
+    const activationDeadline = Date.now() + PENDING_EDITOR_RESERVATION_ACTIVATION_TIMEOUT_MS
+    const activeExpiry = Date.now() + 60_000
+    const claimants: Array<{
+      bridge: CollaborationRedisBridge<SendableSocket>
+      conn: Conn<SendableSocket>
+      leaseRequestId: string
+    }> = []
+
+    for (let index = 0; index < MAX_DISTRIBUTED_EDITOR_LEASES_PER_ROOM; index += 1) {
+      const bridge = index % 2 === 0 ? bridgeA : bridgeB
+      const conn = connection(`claimant-${index}`)
+      const leaseRequestId = `claimant-lease-${index}`
+      const reservation = await bridge.reserveEditorLease(
+        conn,
+        'claim-room',
+        leaseRequestId,
+        activationDeadline,
+        COLLABORATION_PROTOCOL_VERSION,
+        1,
+      )
+      await bridge.activateEditorLease(
+        conn,
+        'claim-room',
+        leaseRequestId,
+        activeExpiry,
+        COLLABORATION_PROTOCOL_VERSION,
+        1,
+        reservation.bootstrapChallenge,
+      )
+      claimants.push({ bridge, conn, leaseRequestId })
+    }
+
+    const grants = await Promise.all(
+      claimants.map(({ bridge, conn, leaseRequestId }) =>
+        bridge.claimYjsResponse(conn, 'claim-room', 'state-request-shared', leaseRequestId),
+      ),
+    )
+
+    expect(grants.filter(Boolean)).toHaveLength(1)
+    expect(redis.responseClaims.size).toBe(1)
+  })
+
+  it('keeps one response id single-grant for its useful window, then permits TTL and new-id progress', async () => {
+    const redis = new FakeRedisNetwork()
+    const bridge = new CollaborationRedisBridge(
+      new RoomRegistry(),
+      redis.client() as never,
+      redis.client() as never,
+      logger,
+      'claim-progress-replica',
+    )
+    const activationDeadline = Date.now() + PENDING_EDITOR_RESERVATION_ACTIVATION_TIMEOUT_MS
+    const activeExpiry = Date.now() + 60_000
+    const first = connection('claim-progress-first')
+    const second = connection('claim-progress-second')
+    for (const [conn, leaseRequestId] of [
+      [first, 'claim-progress-first-lease'],
+      [second, 'claim-progress-second-lease'],
+    ] as const) {
+      const reservation = await bridge.reserveEditorLease(
+        conn,
+        'claim-progress-room',
+        leaseRequestId,
+        activationDeadline,
+        COLLABORATION_PROTOCOL_VERSION,
+        1,
+      )
+      await bridge.activateEditorLease(
+        conn,
+        'claim-progress-room',
+        leaseRequestId,
+        activeExpiry,
+        COLLABORATION_PROTOCOL_VERSION,
+        1,
+        reservation.bootstrapChallenge,
+      )
+    }
+
+    await expect(
+      bridge.claimYjsResponse(first, 'claim-progress-room', 'state-request-one', 'claim-progress-first-lease'),
+    ).resolves.toBe(true)
+    await expect(
+      bridge.claimYjsResponse(second, 'claim-progress-room', 'state-request-one', 'claim-progress-second-lease'),
+    ).resolves.toBe(false)
+    await expect(
+      bridge.claimYjsResponse(second, 'claim-progress-room', 'state-request-two', 'claim-progress-second-lease'),
+    ).resolves.toBe(true)
+
+    redis.advance(YJS_RESPONSE_CLAIM_TTL_MS + 1)
+    await expect(
+      bridge.claimYjsResponse(second, 'claim-progress-room', 'state-request-one', 'claim-progress-second-lease'),
+    ).resolves.toBe(true)
+  })
+
+  it('denies response claims for wrong, expired, ownership-lost, or Redis-unhealthy leases', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date('2026-08-11T12:00:00.000Z'))
+      const redis = new FakeRedisNetwork()
+      const rooms = new RoomRegistry<SendableSocket>()
+      const bridge = new CollaborationRedisBridge(
+        rooms,
+        redis.client() as never,
+        redis.client() as never,
+        logger,
+        'claim-denial-replica',
+      )
+      const member = connection('claim-denial')
+      const reservation = await bridge.reserveEditorLease(
+        member,
+        'claim-denial-room',
+        'claim-denial-lease',
+        Date.now() + PENDING_EDITOR_RESERVATION_ACTIVATION_TIMEOUT_MS,
+        COLLABORATION_PROTOCOL_VERSION,
+        1,
+      )
+      await bridge.activateEditorLease(
+        member,
+        'claim-denial-room',
+        'claim-denial-lease',
+        Date.now() + 60_000,
+        COLLABORATION_PROTOCOL_VERSION,
+        1,
+        reservation.bootstrapChallenge,
+      )
+
+      await expect(bridge.claimYjsResponse(member, 'claim-denial-room', 'wrong-id-state', 'wrong-lease')).resolves.toBe(
+        false,
+      )
+
+      const onlyLeaseKey = [...redis.leases.keys()][0]
+      redis.leases.delete(onlyLeaseKey)
+      redis.leaseValues.delete(onlyLeaseKey)
+      await expect(
+        bridge.claimYjsResponse(member, 'claim-denial-room', 'ownership-state', 'claim-denial-lease'),
+      ).resolves.toBe(false)
+      expect(rooms.isMember('claim-denial-room', member)).toBe(false)
+
+      const expiredRedis = new FakeRedisNetwork()
+      const expiredBridge = new CollaborationRedisBridge(
+        new RoomRegistry(),
+        expiredRedis.client() as never,
+        expiredRedis.client() as never,
+        logger,
+        'claim-expired-replica',
+      )
+      const expiredMember = connection('claim-expired')
+      const expiredReservation = await expiredBridge.reserveEditorLease(
+        expiredMember,
+        'claim-expired-room',
+        'claim-expired-lease',
+        Date.now() + PENDING_EDITOR_RESERVATION_ACTIVATION_TIMEOUT_MS,
+        COLLABORATION_PROTOCOL_VERSION,
+        1,
+      )
+      await expiredBridge.activateEditorLease(
+        expiredMember,
+        'claim-expired-room',
+        'claim-expired-lease',
+        Date.now() + 1_000,
+        COLLABORATION_PROTOCOL_VERSION,
+        1,
+        expiredReservation.bootstrapChallenge,
+      )
+      vi.setSystemTime(Date.now() + 1_001)
+      await expect(
+        expiredBridge.claimYjsResponse(expiredMember, 'claim-expired-room', 'expired-state', 'claim-expired-lease'),
+      ).resolves.toBe(false)
+
+      const unhealthyRedis = new FakeRedisNetwork()
+      const unhealthyBridge = new CollaborationRedisBridge(
+        new RoomRegistry(),
+        unhealthyRedis.client() as never,
+        unhealthyRedis.client() as never,
+        logger,
+        'claim-unhealthy-replica',
+      )
+      unhealthyRedis.emitCommandClose()
+      await expect(
+        unhealthyBridge.claimYjsResponse(
+          connection('claim-unhealthy'),
+          'claim-unhealthy-room',
+          'unhealthy-state',
+          'unhealthy-lease',
+        ),
+      ).rejects.toThrow('Redis collaboration relay is not healthy')
+      expect(unhealthyRedis.responseClaims.size).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it.each([
     ['distributed room capacity', -2],
     ['incompatible room protocol', -1],
@@ -605,6 +873,20 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
       ),
     ).resolves.toEqual({ shouldBootstrap: true })
     expect(redis.leaseTtls.at(-1)).toBeGreaterThan(reservationTtl)
+    const activeTtl = redis.leaseTtls.at(-1)
+    const ttlWritesAfterActivation = redis.leaseTtls.length
+    await expect(
+      bridge.reserveEditorLease(
+        conn,
+        'challenge-room',
+        'challenge-request',
+        activationDeadline,
+        COLLABORATION_PROTOCOL_VERSION,
+        100,
+      ),
+    ).resolves.toEqual(reservation)
+    expect(redis.leaseTtls).toHaveLength(ttlWritesAfterActivation)
+    expect(redis.leaseTtls.at(-1)).toBe(activeTtl)
     await expect(
       bridge.activateEditorLease(
         conn,
@@ -616,6 +898,165 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
         reservation.bootstrapChallenge,
       ),
     ).rejects.toThrow()
+  })
+
+  it('never resurrects an expired reservation when a late activation races a replacement bootstrap election', async () => {
+    const redis = new FakeRedisNetwork()
+    const roomsA = new RoomRegistry<SendableSocket>()
+    const roomsB = new RoomRegistry<SendableSocket>()
+    const bridgeA = new CollaborationRedisBridge(
+      roomsA,
+      redis.client() as never,
+      redis.client() as never,
+      logger,
+      'activation-race-a',
+    )
+    const bridgeB = new CollaborationRedisBridge(
+      roomsB,
+      redis.client() as never,
+      redis.client() as never,
+      logger,
+      'activation-race-b',
+    )
+    const a = connection('activation-race-a')
+    const b = connection('activation-race-b')
+    const activationDeadline = Date.now() + PENDING_EDITOR_RESERVATION_ACTIVATION_TIMEOUT_MS
+    const activeExpiry = Date.now() + 60_000
+    const reservationA = await bridgeA.reserveEditorLease(
+      a,
+      'activation-race-room',
+      'lease-a',
+      activationDeadline,
+      COLLABORATION_PROTOCOL_VERSION,
+      1,
+    )
+    expect(reservationA.shouldBootstrap).toBe(true)
+    roomsA.join('activation-race-room', a, activeExpiry, 'lease-a', 'editor', true)
+
+    // Redis expires A before its capability round-trip completes. Replica B
+    // prunes the stale room-set member and is now the sole bootstrapper.
+    const leaseAKey = [...redis.leases.keys()][0]
+    redis.leases.delete(leaseAKey)
+    redis.leaseValues.delete(leaseAKey)
+    const reservationB = await bridgeB.reserveEditorLease(
+      b,
+      'activation-race-room',
+      'lease-b',
+      activationDeadline,
+      COLLABORATION_PROTOCOL_VERSION,
+      1,
+    )
+    expect(reservationB.shouldBootstrap).toBe(true)
+
+    await expect(
+      bridgeA.activateEditorLease(
+        a,
+        'activation-race-room',
+        'lease-a',
+        activeExpiry,
+        COLLABORATION_PROTOCOL_VERSION,
+        1,
+        reservationA.bootstrapChallenge,
+      ),
+    ).rejects.toThrow('Collaboration lease ownership was lost')
+    expect(roomsA.isMember('activation-race-room', a)).toBe(false)
+    expect(a.send).toHaveBeenCalledWith(
+      JSON.stringify({ t: 'room-denied', room: 'activation-race-room', requestId: 'lease-a' }),
+    )
+    expect(redis.leases.size).toBe(1)
+    await expect(
+      bridgeB.activateEditorLease(
+        b,
+        'activation-race-room',
+        'lease-b',
+        activeExpiry,
+        COLLABORATION_PROTOCOL_VERSION,
+        1,
+        reservationB.bootstrapChallenge,
+      ),
+    ).resolves.toEqual({ shouldBootstrap: true })
+  })
+
+  it('fails an active room closed after Redis loses election state instead of repairing a stale bootstrap lease', async () => {
+    const redis = new FakeRedisNetwork()
+    const rooms = new RoomRegistry<SendableSocket>()
+    const bridge = new CollaborationRedisBridge(
+      rooms,
+      redis.client() as never,
+      redis.client() as never,
+      logger,
+      'refresh-restart-race',
+    )
+    const member = connection('refresh-restart-race')
+    const activationDeadline = Date.now() + PENDING_EDITOR_RESERVATION_ACTIVATION_TIMEOUT_MS
+    const activeExpiry = Date.now() + 60_000
+    const reservation = await bridge.reserveEditorLease(
+      member,
+      'refresh-restart-room',
+      'refresh-restart-lease',
+      activationDeadline,
+      COLLABORATION_PROTOCOL_VERSION,
+      1,
+    )
+    await bridge.activateEditorLease(
+      member,
+      'refresh-restart-room',
+      'refresh-restart-lease',
+      activeExpiry,
+      COLLABORATION_PROTOCOL_VERSION,
+      1,
+      reservation.bootstrapChallenge,
+    )
+    rooms.join('refresh-restart-room', member, activeExpiry, 'refresh-restart-lease', 'editor', true)
+
+    redis.leases.clear()
+    redis.leaseValues.clear()
+    redis.sets.clear()
+    await bridge.refreshLeases()
+
+    expect(rooms.isMember('refresh-restart-room', member)).toBe(false)
+    expect(redis.leases.size).toBe(0)
+    expect(redis.sets.size).toBe(0)
+  })
+
+  it('bounds a timed-out late reservation ghost to the short activation deadline', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date('2026-08-11T12:00:00.000Z'))
+      const redis = new FakeRedisNetwork()
+      let releaseLateEval!: () => void
+      redis.reserveEvalGate = new Promise<void>((resolve) => {
+        releaseLateEval = resolve
+      })
+      const bridge = new CollaborationRedisBridge(
+        new RoomRegistry(),
+        redis.client() as never,
+        redis.client() as never,
+        logger,
+        'late-reserve-replica',
+      )
+      const reservation = bridge.reserveEditorLease(
+        connection('late-reserve'),
+        'late-reserve-room',
+        'late-reserve-request',
+        Date.now() + PENDING_EDITOR_RESERVATION_ACTIVATION_TIMEOUT_MS,
+        COLLABORATION_PROTOCOL_VERSION,
+        1,
+      )
+      const timedOutReservation = expect(reservation).rejects.toThrow('Redis collaboration operation timed out')
+      expect(redis.reserveEvalCalls).toBe(1)
+
+      await vi.advanceTimersByTimeAsync(1_501)
+      await timedOutReservation
+      releaseLateEval()
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(redis.leases.size).toBe(1)
+      expect(redis.leaseTtls.at(-1)).toBeGreaterThan(0)
+      expect(redis.leaseTtls.at(-1)).toBeLessThanOrEqual(PENDING_EDITOR_RESERVATION_ACTIVATION_TIMEOUT_MS)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('rejects a room whose active distributed lease carries an incompatible protocol marker', async () => {
@@ -1176,6 +1617,7 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
       reserveEditorLease: vi.fn().mockResolvedValue({ shouldBootstrap: false }),
       activateEditorLease: vi.fn().mockResolvedValue({ shouldBootstrap: false }),
       releaseLease: vi.fn().mockResolvedValue(undefined),
+      claimYjsResponse: vi.fn().mockResolvedValue(false),
       publish: vi.fn().mockResolvedValue(undefined),
     }
     const authorize = () => ({

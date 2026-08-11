@@ -18,6 +18,8 @@ import {
   MAX_YJS_TRANSFER_BYTES,
   MAX_YJS_RETRY_FRAMES_PER_CONNECTION,
   MAX_YJS_RETRY_FRAMES_PER_ROOM,
+  MAX_YJS_RESPONSE_CLAIM_FRAMES_PER_CONNECTION,
+  MAX_YJS_RESPONSE_CLAIM_FRAMES_PER_ROOM,
   PENDING_EDITOR_RESERVATION_ACTIVATION_TIMEOUT_MS,
   YJS_CHUNK_PLAINTEXT_BYTES,
   COLLABORATION_PROTOCOL_VERSION,
@@ -35,6 +37,7 @@ function fakeLifecycle(): RoomRelayLifecycle {
     reserveEditorLease: vi.fn().mockResolvedValue({ shouldBootstrap: false }),
     activateEditorLease: vi.fn().mockResolvedValue({ shouldBootstrap: false }),
     releaseLease: vi.fn().mockResolvedValue(undefined),
+    claimYjsResponse: vi.fn().mockResolvedValue(false),
     publish: vi.fn().mockResolvedValue(undefined),
   }
 }
@@ -104,6 +107,21 @@ describe('parseRelayFrame', () => {
       stateRequestId: 'state-1',
     }
     expect(parseRelayFrame(JSON.stringify(chunk))).toEqual(chunk)
+    expect(
+      parseRelayFrame(
+        JSON.stringify({
+          t: 'yjs-response-claim',
+          room: 'n1',
+          stateRequestId: 'state-1',
+          leaseRequestId: 'lease-1',
+        }),
+      ),
+    ).toEqual({
+      t: 'yjs-response-claim',
+      room: 'n1',
+      stateRequestId: 'state-1',
+      leaseRequestId: 'lease-1',
+    })
   })
 
   it.each([
@@ -121,6 +139,26 @@ describe('parseRelayFrame', () => {
     ['reserve protocol', { t: 'room-reserve', room: 'n1', requestId: 'lease-1', role: 'editor', protocolVersion: 1 }],
     ['state correlation', { t: 'yjs', room: 'n1', payload: 'ciphertext', stateRequestId: '' }],
     ['transfer correlation', { t: 'yjs', room: 'n1', payload: 'ciphertext', transferId: 1 }],
+    ['missing response state request', { t: 'yjs-response-claim', room: 'n1', leaseRequestId: 'lease-1' }],
+    [
+      'oversized response state request',
+      {
+        t: 'yjs-response-claim',
+        room: 'n1',
+        stateRequestId: 'x'.repeat(129),
+        leaseRequestId: 'lease-1',
+      },
+    ],
+    ['missing response lease request', { t: 'yjs-response-claim', room: 'n1', stateRequestId: 'state-1' }],
+    [
+      'oversized response lease request',
+      {
+        t: 'yjs-response-claim',
+        room: 'n1',
+        stateRequestId: 'state-1',
+        leaseRequestId: 'x'.repeat(129),
+      },
+    ],
   ])('rejects malformed optional binding: %s', (_description, frame) => {
     expect(parseRelayFrame(JSON.stringify(frame))).toBeNull()
   })
@@ -1148,6 +1186,179 @@ describe('reservation and expensive control-frame limits', () => {
       }
     }
     expect(accepted).toBe(MAX_YJS_RETRY_FRAMES_PER_ROOM)
+  })
+})
+
+describe('distributed Yjs response claims', () => {
+  it('grants only an exact live editor lease and never grants comments, wrong ids, or lifecycle failure', async () => {
+    let now = 1_000
+    const rooms = new RoomRegistry(() => now)
+    const editor = fakeConn('claim-editor')
+    const commenter = fakeConn('claim-commenter')
+    const expiresAt = now + 1_000
+    rooms.join('claim-room', editor, expiresAt, 'editor-lease', 'editor')
+    rooms.join('claim-room', commenter, expiresAt, 'comment-lease', 'comment')
+    const lifecycle = fakeLifecycle()
+    vi.mocked(lifecycle.claimYjsResponse).mockResolvedValue(true)
+
+    await handleRelayFrame(
+      rooms,
+      editor,
+      {
+        t: 'yjs-response-claim',
+        room: 'claim-room',
+        stateRequestId: 'state-one',
+        leaseRequestId: 'editor-lease',
+      },
+      undefined,
+      undefined,
+      lifecycle,
+    )
+    expect(lifecycle.claimYjsResponse).toHaveBeenCalledWith(editor, 'claim-room', 'state-one', 'editor-lease')
+    expect(editor.sent).toContain(
+      JSON.stringify({
+        t: 'yjs-response-granted',
+        room: 'claim-room',
+        stateRequestId: 'state-one',
+        leaseRequestId: 'editor-lease',
+        protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+      }),
+    )
+
+    vi.mocked(lifecycle.claimYjsResponse).mockClear()
+    await handleRelayFrame(
+      rooms,
+      commenter,
+      {
+        t: 'yjs-response-claim',
+        room: 'claim-room',
+        stateRequestId: 'state-comment',
+        leaseRequestId: 'comment-lease',
+      },
+      undefined,
+      undefined,
+      lifecycle,
+    )
+    await handleRelayFrame(
+      rooms,
+      editor,
+      {
+        t: 'yjs-response-claim',
+        room: 'claim-room',
+        stateRequestId: 'state-wrong',
+        leaseRequestId: 'wrong-lease',
+      },
+      undefined,
+      undefined,
+      lifecycle,
+    )
+    expect(lifecycle.claimYjsResponse).not.toHaveBeenCalled()
+    expect(commenter.sent.some((message) => message.includes('yjs-response-granted'))).toBe(false)
+
+    vi.mocked(lifecycle.claimYjsResponse).mockRejectedValue(new Error('redis unavailable'))
+    await handleRelayFrame(
+      rooms,
+      editor,
+      {
+        t: 'yjs-response-claim',
+        room: 'claim-room',
+        stateRequestId: 'state-failed',
+        leaseRequestId: 'editor-lease',
+      },
+      undefined,
+      undefined,
+      lifecycle,
+    )
+    expect(editor.sent.some((message) => message.includes('state-failed'))).toBe(false)
+
+    now = expiresAt
+    vi.mocked(lifecycle.claimYjsResponse).mockClear()
+    await handleRelayFrame(
+      rooms,
+      editor,
+      {
+        t: 'yjs-response-claim',
+        room: 'claim-room',
+        stateRequestId: 'state-expired',
+        leaseRequestId: 'editor-lease',
+      },
+      undefined,
+      undefined,
+      lifecycle,
+    )
+    expect(lifecycle.claimYjsResponse).not.toHaveBeenCalled()
+    expect(editor.sent.some((message) => message.includes('state-expired'))).toBe(false)
+  })
+
+  it('requires a distributed lifecycle and bounds claim work per connection and room window', async () => {
+    const noLifecycleRooms = new RoomRegistry()
+    const noLifecycle = fakeConn('claim-no-lifecycle')
+    noLifecycleRooms.join('claim-no-lifecycle-room', noLifecycle, Infinity, 'lease', 'editor')
+    await handleRelayFrame(noLifecycleRooms, noLifecycle, {
+      t: 'yjs-response-claim',
+      room: 'claim-no-lifecycle-room',
+      stateRequestId: 'state',
+      leaseRequestId: 'lease',
+    })
+    expect(noLifecycle.sent.some((message) => message.includes('yjs-response-granted'))).toBe(false)
+
+    const perConnectionRooms = new RoomRegistry(() => 1_000)
+    const one = fakeConn('claim-bounded-one')
+    perConnectionRooms.join('claim-bounded-room', one, Infinity, 'lease', 'editor')
+    const perConnectionLifecycle = fakeLifecycle()
+    for (let index = 0; index <= MAX_YJS_RESPONSE_CLAIM_FRAMES_PER_CONNECTION; index += 1) {
+      await handleRelayFrame(
+        perConnectionRooms,
+        one,
+        {
+          t: 'yjs-response-claim',
+          room: 'claim-bounded-room',
+          stateRequestId: `state-${index}`,
+          leaseRequestId: 'lease',
+        },
+        undefined,
+        undefined,
+        perConnectionLifecycle,
+      )
+    }
+    expect(perConnectionLifecycle.claimYjsResponse).toHaveBeenCalledTimes(MAX_YJS_RESPONSE_CLAIM_FRAMES_PER_CONNECTION)
+
+    const aggregateRooms = new RoomRegistry(() => 1_000)
+    const aggregateLifecycle = fakeLifecycle()
+    const claimants = Array.from({ length: MAX_YJS_RESPONSE_CLAIM_FRAMES_PER_ROOM }, (_, index) => {
+      const conn = fakeConn(`aggregate-claim-${index}`)
+      aggregateRooms.join('aggregate-claim-room', conn, Infinity, `lease-${index}`, 'editor')
+      return conn
+    })
+    for (let index = 0; index < claimants.length; index += 1) {
+      await handleRelayFrame(
+        aggregateRooms,
+        claimants[index],
+        {
+          t: 'yjs-response-claim',
+          room: 'aggregate-claim-room',
+          stateRequestId: 'shared-state',
+          leaseRequestId: `lease-${index}`,
+        },
+        undefined,
+        undefined,
+        aggregateLifecycle,
+      )
+    }
+    await handleRelayFrame(
+      aggregateRooms,
+      claimants[0],
+      {
+        t: 'yjs-response-claim',
+        room: 'aggregate-claim-room',
+        stateRequestId: 'room-overflow',
+        leaseRequestId: 'lease-0',
+      },
+      undefined,
+      undefined,
+      aggregateLifecycle,
+    )
+    expect(aggregateLifecycle.claimYjsResponse).toHaveBeenCalledTimes(MAX_YJS_RESPONSE_CLAIM_FRAMES_PER_ROOM)
   })
 })
 

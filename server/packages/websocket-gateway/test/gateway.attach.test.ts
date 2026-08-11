@@ -6,7 +6,13 @@ import jwt from 'jsonwebtoken'
 import WebSocket from 'ws'
 
 const redis = vi.hoisted(() => {
-  const state = { quitCalls: 0, disconnectCalls: 0, quitRejects: false }
+  const state = {
+    quitCalls: 0,
+    disconnectCalls: 0,
+    quitRejects: false,
+    evalCalls: 0,
+    evalGate: undefined as Promise<void> | undefined,
+  }
 
   class FakeRedisClient {
     constructor(readonly options: Record<string, unknown>) {}
@@ -17,6 +23,10 @@ const redis = vi.hoisted(() => {
       callback(null, 1)
     }
     async eval(): Promise<number> {
+      state.evalCalls += 1
+      if (state.evalGate) {
+        await state.evalGate
+      }
       return 1
     }
     async pexpire(): Promise<number> {
@@ -46,6 +56,7 @@ import {
   defaultRoomJoinAuthorizer,
   MAX_WEBSOCKET_MESSAGE_BYTES,
   WebSocketIngressLimiter,
+  WebSocketRelayBacklog,
   type GatewayConfig,
 } from '../src/gateway.js'
 import { mintConnectionToken } from '../src/auth.js'
@@ -130,6 +141,8 @@ beforeEach(() => {
   redis.state.quitCalls = 0
   redis.state.disconnectCalls = 0
   redis.state.quitRejects = false
+  redis.state.evalCalls = 0
+  redis.state.evalGate = undefined
 })
 
 afterEach(async () => {
@@ -248,6 +261,30 @@ describe('WebSocketIngressLimiter', () => {
     expect(limiter.tryConsume(6)).toBe(true)
     expect(limiter.tryConsume(4)).toBe(true)
     expect(limiter.tryConsume(1)).toBe(false)
+  })
+})
+
+describe('WebSocketRelayBacklog', () => {
+  it('tracks retained frames and bytes exactly, rejects either ceiling, and clears safely on close', () => {
+    const backlog = new WebSocketRelayBacklog({ frameCapacity: 2, byteCapacity: 10 })
+
+    expect(backlog.tryEnqueue(6)).toBe(true)
+    expect(backlog.pending()).toEqual({ frames: 1, bytes: 6 })
+    expect(backlog.tryEnqueue(5)).toBe(false)
+    expect(backlog.pending()).toEqual({ frames: 1, bytes: 6 })
+    expect(backlog.tryEnqueue(4)).toBe(true)
+    expect(backlog.tryEnqueue(0)).toBe(false)
+    expect(backlog.pending()).toEqual({ frames: 2, bytes: 10 })
+
+    backlog.settle(6)
+    expect(backlog.pending()).toEqual({ frames: 1, bytes: 4 })
+    backlog.clear()
+    expect(backlog.pending()).toEqual({ frames: 0, bytes: 0 })
+    // A queued promise may settle after socket-close cleanup; accounting must
+    // remain at zero rather than underflowing.
+    backlog.settle(4)
+    expect(backlog.pending()).toEqual({ frames: 0, bytes: 0 })
+    expect(backlog.tryEnqueue(Number.NaN)).toBe(false)
   })
 })
 
@@ -699,6 +736,127 @@ describe('websocket connection lifecycle', () => {
     expect(await closed).toBe(1008)
     await vi.waitFor(() => expect(attached!.registry.size()).toBe(0))
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('[ws] ingress rate exceeded user=user-bytes'))
+  })
+
+  it('closes a socket before a slow relay lifecycle can retain an unbounded frame backlog', async () => {
+    let releaseEval!: () => void
+    redis.state.evalGate = new Promise<void>((resolve) => {
+      releaseEval = resolve
+    })
+    try {
+      await attachGateway({
+        relayBacklogLimits: { frameCapacity: 3, byteCapacity: 64 * 1024 },
+        ingressLimits: {
+          frameCapacity: 100,
+          frameRefillPerSecond: 100,
+          byteCapacity: 1024 * 1024,
+          byteRefillPerSecond: 1024 * 1024,
+        },
+        authorizeRoomJoin: (_userUuid, _room, capability) => ({
+          authorized: true,
+          expiresAt: Date.now() + 60_000,
+          serverUpdatedAtTimestamp: 1,
+          collaborationProtocolVersion: 2,
+          leaseRequestId: capability,
+        }),
+      })
+      const token = mintConnectionToken(
+        { userUuid: 'user-relay-frames', sessionUuid: 'session-relay-frames' },
+        CONNECTION_SECRET,
+        '60s',
+      )
+      const socket = connect(`?authToken=${token}`)
+      await opened(socket)
+      socket.send(
+        JSON.stringify({
+          t: 'room-reserve',
+          room: 'slow-frame-room',
+          cap: 'slow-frame-lease',
+          requestId: 'slow-frame-lease',
+          role: 'editor',
+          protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+        }),
+      )
+      await vi.waitFor(() => expect(redis.state.evalCalls).toBe(1))
+
+      const closed = closedWith(socket)
+      for (let index = 0; index < 4; index += 1) {
+        socket.send(JSON.stringify({ t: 'room-leave', room: 'slow-frame-room', requestId: `queued-${index}` }))
+      }
+      await vi.waitFor(() =>
+        expect(logger.warn).toHaveBeenCalledWith(
+          expect.stringContaining('[ws] relay backlog exceeded user=user-relay-frames'),
+        ),
+      )
+      redis.state.evalGate = undefined
+      releaseEval()
+
+      expect(await closed).toBe(1008)
+      await vi.waitFor(() => expect(attached!.registry.size()).toBe(0))
+      expect(attached!.rooms.roomCount()).toBe(0)
+    } finally {
+      redis.state.evalGate = undefined
+      releaseEval?.()
+    }
+  })
+
+  it('closes a socket when a slow relay lifecycle exceeds the retained-byte ceiling', async () => {
+    let releaseEval!: () => void
+    redis.state.evalGate = new Promise<void>((resolve) => {
+      releaseEval = resolve
+    })
+    const reserveFrame = JSON.stringify({
+      t: 'room-reserve',
+      room: 'slow-byte-room',
+      cap: 'slow-byte-lease',
+      requestId: 'slow-byte-lease',
+      role: 'editor',
+      protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+    })
+    try {
+      await attachGateway({
+        relayBacklogLimits: { frameCapacity: 100, byteCapacity: Buffer.byteLength(reserveFrame, 'utf8') + 8 },
+        ingressLimits: {
+          frameCapacity: 100,
+          frameRefillPerSecond: 100,
+          byteCapacity: 1024 * 1024,
+          byteRefillPerSecond: 1024 * 1024,
+        },
+        authorizeRoomJoin: (_userUuid, _room, capability) => ({
+          authorized: true,
+          expiresAt: Date.now() + 60_000,
+          serverUpdatedAtTimestamp: 1,
+          collaborationProtocolVersion: 2,
+          leaseRequestId: capability,
+        }),
+      })
+      const token = mintConnectionToken(
+        { userUuid: 'user-relay-bytes', sessionUuid: 'session-relay-bytes' },
+        CONNECTION_SECRET,
+        '60s',
+      )
+      const socket = connect(`?authToken=${token}`)
+      await opened(socket)
+      socket.send(reserveFrame)
+      await vi.waitFor(() => expect(redis.state.evalCalls).toBe(1))
+
+      const closed = closedWith(socket)
+      socket.send(JSON.stringify({ t: 'room-leave', room: 'slow-byte-room', requestId: 'queued-byte-frame' }))
+      await vi.waitFor(() =>
+        expect(logger.warn).toHaveBeenCalledWith(
+          expect.stringContaining('[ws] relay backlog exceeded user=user-relay-bytes'),
+        ),
+      )
+      redis.state.evalGate = undefined
+      releaseEval()
+
+      expect(await closed).toBe(1008)
+      await vi.waitFor(() => expect(attached!.registry.size()).toBe(0))
+      expect(attached!.rooms.roomCount()).toBe(0)
+    } finally {
+      redis.state.evalGate = undefined
+      releaseEval?.()
+    }
   })
 
   it('relays a yjs frame between two sockets that joined the same room', async () => {

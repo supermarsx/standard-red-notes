@@ -2,7 +2,13 @@ import { createHash, randomUUID } from 'node:crypto'
 import { Redis } from 'ioredis'
 
 import type { Conn, SendableSocket } from './registry.js'
-import { parseRelayFrame, type RelayFrame, type RoomRegistry, type RoomRelayLifecycle } from './rooms.js'
+import {
+  parseRelayFrame,
+  PENDING_EDITOR_RESERVATION_ACTIVATION_TIMEOUT_MS,
+  type RelayFrame,
+  type RoomRegistry,
+  type RoomRelayLifecycle,
+} from './rooms.js'
 import type { Logger } from './redisBridge.js'
 import { safeErrorLogMetadata } from './safeLog.js'
 
@@ -13,13 +19,20 @@ const MAX_RELAY_ENVELOPE_BYTES = 700 * 1024
 const LEASE_CLEANUP_RETRY_BASE_MS = 100
 const LEASE_CLEANUP_RETRY_MAX_MS = 5_000
 export const MAX_DISTRIBUTED_EDITOR_LEASES_PER_ROOM = 64
+// Longer than the client's full-state response/acceptance window. A retry uses
+// a new stateRequestId, so liveness does not require re-granting the same id
+// while a 4 MiB winner may still be encrypting and chunking its response.
+export const YJS_RESPONSE_CLAIM_TTL_MS = 15_000
 const INCOMPATIBLE_PROTOCOL_ERROR = 'Incompatible collaboration protocol is active in this room'
 const ROOM_LEASE_LIMIT_ERROR = 'Collaboration room editor lease limit exceeded'
+const LEASE_OWNERSHIP_LOST_ERROR = 'Collaboration lease ownership was lost'
 
 function isLeasePolicyError(error: unknown): error is Error {
   return (
     error instanceof Error &&
-    (error.message === INCOMPATIBLE_PROTOCOL_ERROR || error.message === ROOM_LEASE_LIMIT_ERROR)
+    (error.message === INCOMPATIBLE_PROTOCOL_ERROR ||
+      error.message === ROOM_LEASE_LIMIT_ERROR ||
+      error.message === LEASE_OWNERSHIP_LOST_ERROR)
   )
 }
 
@@ -60,6 +73,7 @@ type LocalLease<S extends SendableSocket> = {
   requestId: string
   roomSetKey: string
   leaseKey: string
+  redisValue: string
   expiresAt: number
   shouldBootstrap: boolean
   bootstrapChallenge?: string
@@ -69,6 +83,7 @@ type LocalLease<S extends SendableSocket> = {
 }
 
 const RESERVE_LEASE_SCRIPT = `
+-- SRN_RESERVE_LEASE_V1
 local members = redis.call('SMEMBERS', KEYS[1])
 local active = 0
 local alreadyReserved = false
@@ -96,10 +111,40 @@ if redis.call('SCARD', KEYS[1]) == 0 then redis.call('DEL', KEYS[1]) end
 return 1
 `
 
-// Refresh must use the same atomic prune/protocol/cap gate as first reserve.
-// A Redis eviction can remove one local lease while other replicas refill the
-// room; a blind SADD here would otherwise exceed the distributed hard cap.
-const REFRESH_LEASE_SCRIPT = RESERVE_LEASE_SCRIPT
+// Activation and heartbeat refreshes are strict compare-and-refresh operations.
+// They may extend only the exact lease value this process previously reserved;
+// neither a missing lease nor a missing room-set membership is recreated. That
+// is essential after expiry, eviction, or Redis restart: another replica may
+// already have elected a new bootstrapper while this process retained stale
+// local state.
+const REFRESH_OWNED_LEASE_SCRIPT = `
+-- SRN_REFRESH_OWNED_LEASE_V1
+local current = redis.call('GET', KEYS[2])
+if not current or current ~= ARGV[3] or redis.call('SISMEMBER', KEYS[1], KEYS[2]) == 0 then return -3 end
+local members = redis.call('SMEMBERS', KEYS[1])
+local active = 0
+for _, leaseKey in ipairs(members) do
+  if redis.call('EXISTS', leaseKey) == 0 then
+    redis.call('SREM', KEYS[1], leaseKey)
+  else
+    local value = redis.call('GET', leaseKey)
+    if string.sub(value or '', 1, 3) ~= string.sub(ARGV[3], 1, 3) then return -1 end
+    active = active + 1
+  end
+end
+if active > tonumber(ARGV[4]) then return -2 end
+if redis.call('PEXPIRE', KEYS[2], ARGV[1]) ~= 1 then return -3 end
+redis.call('PEXPIRE', KEYS[1], ARGV[2])
+return 1
+`
+
+const CLAIM_YJS_RESPONSE_SCRIPT = `
+-- SRN_CLAIM_YJS_RESPONSE_V1
+local current = redis.call('GET', KEYS[1])
+if not current or current ~= ARGV[1] or redis.call('SISMEMBER', KEYS[2], KEYS[1]) == 0 then return -1 end
+if redis.call('SET', KEYS[3], ARGV[2], 'NX', 'PX', ARGV[3]) then return 1 end
+return 0
+`
 
 function digest(value: string): string {
   return createHash('sha256').update(value, 'utf8').digest('hex')
@@ -264,16 +309,38 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
     if (!this.relayHealthy) {
       throw new Error('Redis collaboration relay is not healthy')
     }
+    const now = Date.now()
+    if (
+      !Number.isFinite(expiresAt) ||
+      expiresAt <= now ||
+      !Number.isSafeInteger(serverUpdatedAtTimestamp) ||
+      serverUpdatedAtTimestamp < 0
+    ) {
+      throw new Error('Collaboration reservation inputs are invalid or expired')
+    }
     if ([...this.pendingLeaseReleases.values()].some((lease) => lease.room === room)) {
       throw new Error('Redis collaboration lease cleanup is pending for this room')
     }
     const localId = this.localLeaseId(conn, room, requestId)
     const existing = this.leases.get(localId)
-    const ttl = this.leaseTtl(expiresAt)
     if (existing) {
-      existing.expiresAt = expiresAt
+      // An active logical lease may replay room-reserve during reconnect churn.
+      // Treat that exact replay as read-only: a provisional 15s deadline must
+      // never shorten or extend the already-authorized active lease.
+      if (existing.activated) {
+        return {
+          shouldBootstrap: existing.shouldBootstrap,
+          ...(existing.bootstrapChallenge ? { bootstrapChallenge: existing.bootstrapChallenge } : {}),
+        }
+      }
+      existing.expiresAt = Math.min(
+        existing.expiresAt,
+        expiresAt,
+        now + PENDING_EDITOR_RESERVATION_ACTIVATION_TIMEOUT_MS,
+      )
+      const replayTtl = Math.min(this.leaseTtl(existing.expiresAt), PENDING_EDITOR_RESERVATION_ACTIVATION_TIMEOUT_MS)
       try {
-        await this.refresh(existing, ttl)
+        await this.refresh(existing, replayTtl)
         return {
           shouldBootstrap: existing.shouldBootstrap,
           ...(existing.bootstrapChallenge ? { bootstrapChallenge: existing.bootstrapChallenge } : {}),
@@ -291,6 +358,12 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
 
     const roomSetKey = `srn:collaboration:room:${digest(room)}`
     const leaseKey = `srn:collaboration:lease:${digest(`${this.instanceId}\u0000${localId}`)}`
+    const redisValue = `v${protocolVersion}:${digest(conn.userUuid)}:${randomUUID()}`
+    const reservationExpiresAt = Math.min(expiresAt, now + PENDING_EDITOR_RESERVATION_ACTIVATION_TIMEOUT_MS)
+    // Defend the bridge contract independently of its caller: a timed-out Redis
+    // EVAL can complete after bounded() rejects, so an untracked reservation
+    // must never survive for the normal active-lease TTL.
+    const ttl = this.leaseTtl(reservationExpiresAt)
     try {
       const elected = await bounded(
         this.commands.eval(
@@ -300,7 +373,7 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
           leaseKey,
           ttl,
           Math.max(LEASE_TTL_MS * 4, ttl * 2),
-          `v${protocolVersion}:${digest(conn.userUuid)}`,
+          redisValue,
           MAX_DISTRIBUTED_EDITOR_LEASES_PER_ROOM,
         ),
       )
@@ -322,7 +395,8 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
         requestId,
         roomSetKey,
         leaseKey,
-        expiresAt,
+        redisValue,
+        expiresAt: reservationExpiresAt,
         shouldBootstrap,
         ...(bootstrapChallenge ? { bootstrapChallenge } : {}),
         protocolVersion,
@@ -354,11 +428,14 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
     if (!this.relayHealthy) {
       throw new Error('Redis collaboration relay is not healthy')
     }
+    const now = Date.now()
     const lease = this.leases.get(this.localLeaseId(conn, room, requestId))
     if (
       !lease ||
       lease.activated ||
-      lease.expiresAt <= Date.now() ||
+      lease.expiresAt <= now ||
+      !Number.isFinite(expiresAt) ||
+      expiresAt <= now ||
       lease.protocolVersion !== protocolVersion ||
       !Number.isSafeInteger(serverUpdatedAtTimestamp) ||
       serverUpdatedAtTimestamp < lease.reservedRevision
@@ -392,6 +469,59 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
     }
     this.leases.delete(localId)
     await this.releaseOrQueue(lease)
+  }
+
+  async claimYjsResponse(
+    conn: Conn<S>,
+    room: string,
+    stateRequestId: string,
+    leaseRequestId: string,
+  ): Promise<boolean> {
+    if (!this.relayHealthy) {
+      throw new Error('Redis collaboration relay is not healthy')
+    }
+    const localId = this.localLeaseId(conn, room, leaseRequestId)
+    const lease = this.leases.get(localId)
+    if (!lease || !lease.activated) {
+      return false
+    }
+    if (lease.expiresAt <= Date.now()) {
+      this.leases.delete(localId)
+      await this.releaseOrQueue(lease)
+      return false
+    }
+    const claimKey = `srn:collaboration:yjs-response-claim:${digest(room)}:${digest(stateRequestId)}`
+    try {
+      const result = Number(
+        await bounded(
+          this.commands.eval(
+            CLAIM_YJS_RESPONSE_SCRIPT,
+            3,
+            lease.leaseKey,
+            lease.roomSetKey,
+            claimKey,
+            lease.redisValue,
+            digest(lease.leaseKey),
+            YJS_RESPONSE_CLAIM_TTL_MS,
+          ),
+        ),
+      )
+      if (result === -1) {
+        await this.denyAndReleaseRoom(room)
+        return false
+      }
+      if (result !== 0 && result !== 1) {
+        throw new Error('Redis returned an invalid Yjs response claim result')
+      }
+      return result === 1
+    } catch (error) {
+      this.logger.warn(
+        '[collab-redis] Yjs response claim unavailable; denying collaboration',
+        safeErrorLogMetadata(error),
+      )
+      this.handleCommandUnavailable()
+      throw error
+    }
   }
 
   async releaseAll(conn: Conn<S>): Promise<void> {
@@ -662,19 +792,19 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
   }
 
   private async refresh(lease: LocalLease<S>, ttl: number): Promise<void> {
-    // Re-add both keys atomically. Besides extending normal leases, this repairs
-    // the global room set after a Redis restart/eviction while the socket and its
-    // already-authorized local lease are still alive.
+    // Never recreate a missing key/set entry here. A Redis restart or eviction
+    // loses the distributed election state, so preserving a stale local
+    // shouldBootstrap decision would permit multiple bootstrappers.
     const result = Number(
       await bounded(
         this.commands.eval(
-          REFRESH_LEASE_SCRIPT,
+          REFRESH_OWNED_LEASE_SCRIPT,
           2,
           lease.roomSetKey,
           lease.leaseKey,
           ttl,
           LEASE_TTL_MS * 4,
-          `v${lease.protocolVersion}:${digest(lease.conn.userUuid)}`,
+          lease.redisValue,
           MAX_DISTRIBUTED_EDITOR_LEASES_PER_ROOM,
         ),
       ),
@@ -685,7 +815,10 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
     if (result === -2) {
       throw new Error(ROOM_LEASE_LIMIT_ERROR)
     }
-    if (result !== 0 && result !== 1) {
+    if (result === -3) {
+      throw new Error(LEASE_OWNERSHIP_LOST_ERROR)
+    }
+    if (result !== 1) {
       throw new Error('Redis returned an invalid collaboration lease refresh result')
     }
   }

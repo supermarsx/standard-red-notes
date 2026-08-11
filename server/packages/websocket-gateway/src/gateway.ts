@@ -68,11 +68,69 @@ export const DEFAULT_WEBSOCKET_INGRESS_LIMITS: Readonly<WebSocketIngressLimits> 
   byteRefillPerSecond: 2 * 1024 * 1024,
 })
 
+export interface WebSocketRelayBacklogLimits {
+  /** Maximum parsed collaboration frames waiting for ordered async handling. */
+  frameCapacity: number
+  /** Maximum serialized bytes retained by those pending frames. */
+  byteCapacity: number
+}
+
+export const DEFAULT_WEBSOCKET_RELAY_BACKLOG_LIMITS: Readonly<WebSocketRelayBacklogLimits> = Object.freeze({
+  frameCapacity: 128,
+  // Covers one maximum 4 MiB Yjs transfer after base64/JSON overhead while
+  // still placing a hard per-socket ceiling on retained queued input.
+  byteCapacity: 8 * 1024 * 1024,
+})
+
 function assertValidIngressLimits(limits: WebSocketIngressLimits): void {
   for (const [name, value] of Object.entries(limits)) {
     if (!Number.isFinite(value) || value <= 0) {
       throw new Error(`Invalid WebSocket ingress limit ${name}: expected a finite positive number.`)
     }
+  }
+}
+
+function assertValidRelayBacklogLimits(limits: WebSocketRelayBacklogLimits): void {
+  for (const [name, value] of Object.entries(limits)) {
+    if (!Number.isSafeInteger(value) || value < 1) {
+      throw new Error(`Invalid WebSocket relay backlog limit ${name}: expected a positive safe integer.`)
+    }
+  }
+}
+
+/** Exact accounting for the ordered async relay chain retained by one socket. */
+export class WebSocketRelayBacklog {
+  private frames = 0
+  private bytes = 0
+
+  constructor(private readonly limits: WebSocketRelayBacklogLimits) {}
+
+  tryEnqueue(bytes: number): boolean {
+    if (
+      !Number.isSafeInteger(bytes) ||
+      bytes < 0 ||
+      this.frames >= this.limits.frameCapacity ||
+      this.bytes + bytes > this.limits.byteCapacity
+    ) {
+      return false
+    }
+    this.frames += 1
+    this.bytes += bytes
+    return true
+  }
+
+  settle(bytes: number): void {
+    this.frames = Math.max(0, this.frames - 1)
+    this.bytes = Math.max(0, this.bytes - bytes)
+  }
+
+  clear(): void {
+    this.frames = 0
+    this.bytes = 0
+  }
+
+  pending(): Readonly<{ frames: number; bytes: number }> {
+    return { frames: this.frames, bytes: this.bytes }
   }
 }
 
@@ -199,6 +257,8 @@ export interface AttachOptions {
    * tests. Omitted fields retain the conservative production defaults.
    */
   ingressLimits?: Partial<WebSocketIngressLimits>
+  /** Optional tighter ordered-relay backlog limits (primarily tests). */
+  relayBacklogLimits?: Partial<WebSocketRelayBacklogLimits>
   /**
    * Aggregate live-socket ceiling for one authenticated user. This prevents
    * bypassing per-connection ingress limits by opening unbounded tabs/sockets.
@@ -345,6 +405,11 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
     ...opts.ingressLimits,
   }
   assertValidIngressLimits(ingressLimits)
+  const relayBacklogLimits: WebSocketRelayBacklogLimits = {
+    ...DEFAULT_WEBSOCKET_RELAY_BACKLOG_LIMITS,
+    ...opts.relayBacklogLimits,
+  }
+  assertValidRelayBacklogLimits(relayBacklogLimits)
   const maxConnectionsPerUser =
     opts.maxConnectionsPerUser ?? config.maxConnectionsPerUser ?? DEFAULT_MAX_CONNECTIONS_PER_USER
   if (!Number.isSafeInteger(maxConnectionsPerUser) || maxConnectionsPerUser < 1) {
@@ -404,6 +469,7 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
     registry.add(identity.userUuid, conn)
     alive.set(socket, true)
     const ingressLimiter = new WebSocketIngressLimiter(ingressLimits)
+    const relayBacklog = new WebSocketRelayBacklog(relayBacklogLimits)
     logger.info(`[ws] connect user=${identity.userUuid} conn=${conn.connectionId} total=${registry.size()}`)
 
     let connectionClosed = false
@@ -418,6 +484,7 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
         return
       }
       connectionClosed = true
+      relayBacklog.clear()
       registry.remove(identity.userUuid, conn)
       rooms.leaveAll(conn)
       // A room authorizer may already be in flight. The handler observes the
@@ -450,7 +517,8 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
       if (connectionClosed) {
         return
       }
-      if (!ingressLimiter.tryConsume(rawDataByteLength(data))) {
+      const rawBytes = rawDataByteLength(data)
+      if (!ingressLimiter.tryConsume(rawBytes)) {
         logger.warn(`[ws] ingress rate exceeded user=${identity.userUuid} conn=${conn.connectionId}`)
         cleanup()
         socket.close(1008, 'message rate limit exceeded')
@@ -464,6 +532,16 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
       }
       const frame = parseRelayFrame(raw)
       if (frame) {
+        if (!relayBacklog.tryEnqueue(rawBytes)) {
+          logger.warn(`[ws] relay backlog exceeded user=${identity.userUuid} conn=${conn.connectionId}`)
+          cleanup()
+          try {
+            socket.close(1008, 'relay backlog exceeded')
+          } catch {
+            /* cleanup already removed all connection state */
+          }
+          return
+        }
         // handleRelayFrame is async (room-join may consult the membership
         // authorizer). Swallow rejections so a failing authorizer can never crash
         // the message handler / gateway; the authorizer itself already fails closed.
@@ -476,6 +554,9 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
           .then(() => undefined)
           .catch((err) => {
             logger.warn('[ws] relay frame handling failed', safeErrorLogMetadata(err))
+          })
+          .finally(() => {
+            relayBacklog.settle(rawBytes)
           })
       }
     })
