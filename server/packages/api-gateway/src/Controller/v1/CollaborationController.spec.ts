@@ -9,6 +9,7 @@ import { EndpointResolverInterface } from '../../Service/Resolver/EndpointResolv
 
 const SECRET = 'collab-secret'
 const TTL = 300
+const SERVER_REVISION = 1_723_456_789_000_000
 
 describe('CollaborationController', () => {
   let serviceProxy: jest.Mocked<ServiceProxyInterface>
@@ -40,7 +41,14 @@ describe('CollaborationController', () => {
     } as unknown as Response
   }
 
-  const requestWith = (noteUuid?: unknown): Request => ({ body: { noteUuid } }) as unknown as Request
+  const requestWith = (noteUuid?: unknown, body: Record<string, unknown> = {}): Request =>
+    ({
+      body: {
+        noteUuid,
+        collaborationProtocolVersion: 2,
+        ...body,
+      },
+    }) as unknown as Request
 
   // Make the proxy "syncing server" return a given authorization result by writing
   // it onto the capture-shim response the controller passes in.
@@ -52,7 +60,10 @@ describe('CollaborationController', () => {
 
   beforeEach(() => {
     serviceProxy = {} as jest.Mocked<ServiceProxyInterface>
-    serviceProxy.callSyncingServer = proxyReturning({ authorized: true })
+    serviceProxy.callSyncingServer = proxyReturning({
+      authorized: true,
+      serverUpdatedAtTimestamp: SERVER_REVISION,
+    })
 
     endpointResolver = {
       resolveEndpointOrMethodIdentifier: jest.fn().mockReturnValue('items/collaboration-authorization'),
@@ -63,20 +74,43 @@ describe('CollaborationController', () => {
 
   it('mints a valid capability (right user + room + purpose) when the syncing-server authorizes', async () => {
     const response = responseWith('user-1')
-    await makeController().authorize(requestWith('note-1'), response)
+    await makeController().authorize(
+      requestWith('note-1', {
+        leaseRequestId: 'lease-request-1',
+        bootstrapChallenge: 'bootstrap-challenge-1',
+      }),
+      response,
+    )
 
     expect(statusMock).toHaveBeenCalledWith(200)
-    const body = jsonMock.mock.calls[0][0] as { capability: string; room: string }
+    const body = jsonMock.mock.calls[0][0] as {
+      capability: string
+      room: string
+      serverUpdatedAtTimestamp: number
+      collaborationProtocolVersion: number
+      leaseRequestId: string
+      bootstrapChallenge: string
+    }
     expect(body.room).toBe('note-1')
+    expect(body.serverUpdatedAtTimestamp).toBe(SERVER_REVISION)
+    expect(body.collaborationProtocolVersion).toBe(2)
+    expect(body.leaseRequestId).toBe('lease-request-1')
+    expect(body.bootstrapChallenge).toBe('bootstrap-challenge-1')
 
     const decoded = verify(body.capability, SECRET) as Record<string, unknown>
     expect(decoded.purpose).toBe('collab-room')
     expect(decoded.userUuid).toBe('user-1')
     expect(decoded.room).toBe('note-1')
+    expect(decoded.collaborationProtocolVersion).toBe(2)
+    expect(decoded.serverUpdatedAtTimestamp).toBe(SERVER_REVISION)
+    expect(decoded.leaseRequestId).toBe('lease-request-1')
+    expect(decoded.bootstrapChallenge).toBe('bootstrap-challenge-1')
   })
 
   it('accepts the home-server wrapped { data: { authorized } } shape', async () => {
-    serviceProxy.callSyncingServer = proxyReturning({ data: { authorized: true } })
+    serviceProxy.callSyncingServer = proxyReturning({
+      data: { authorized: true, serverUpdatedAtTimestamp: SERVER_REVISION },
+    })
     const response = responseWith('user-1')
     await makeController().authorize(requestWith('note-1'), response)
     expect(statusMock).toHaveBeenCalledWith(200)
@@ -119,6 +153,16 @@ describe('CollaborationController', () => {
     await makeController().authorize(requestWith('note-1'), response)
     expect(statusMock).toHaveBeenCalledWith(403)
   })
+
+  it.each([undefined, 0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])(
+    'DENIES (403) when the authorized response has invalid canonical revision %p',
+    async (serverUpdatedAtTimestamp) => {
+      serviceProxy.callSyncingServer = proxyReturning({ authorized: true, serverUpdatedAtTimestamp })
+      const response = responseWith('user-1')
+      await makeController().authorize(requestWith('note-1'), response)
+      expect(statusMock).toHaveBeenCalledWith(403)
+    },
+  )
 
   it('DENIES (403) when the access-check call THROWS', async () => {
     serviceProxy.callSyncingServer = jest.fn().mockRejectedValue(new Error('collaboration-credential-sentinel'))
@@ -168,5 +212,20 @@ describe('CollaborationController', () => {
     statusMock.mockClear()
     await makeController().authorize(requestWith(123 as unknown), responseWith('user-1'))
     expect(statusMock).toHaveBeenCalledWith(403)
+  })
+
+  it.each([
+    ['missing protocol version', { collaborationProtocolVersion: undefined }],
+    ['legacy protocol version', { collaborationProtocolVersion: 1 }],
+    ['challenge without a lease request', { bootstrapChallenge: 'challenge-1' }],
+    ['empty lease request', { leaseRequestId: '' }],
+    ['empty bootstrap challenge', { leaseRequestId: 'lease-1', bootstrapChallenge: '' }],
+  ])('DENIES (403) for invalid v2 binding: %s', async (_description, body) => {
+    const response = responseWith('user-1')
+
+    await makeController().authorize(requestWith('note-1', body), response)
+
+    expect(statusMock).toHaveBeenCalledWith(403)
+    expect(serviceProxy.callSyncingServer).not.toHaveBeenCalled()
   })
 })

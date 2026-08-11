@@ -60,7 +60,9 @@ export class BaseItemsController extends BaseHttpController {
    * mint a collaboration-room capability. Reuses AuthorizeCollaborationAccess
    * (write-capable owner or shared-vault editor). FAILS CLOSED: any missing
    * dependency, invalid input, read-only session, use-case failure or thrown
-   * error resolves to `{ authorized: false }`.
+   * error resolves to `{ authorized: false }`. An allow includes the canonical
+   * encrypted item's server updated-at revision used by the bootstrap freshness
+   * barrier; denial never exposes it.
    */
   async authorizeCollaboration(request: Request, response: Response): Promise<results.JsonResult> {
     const locals = response.locals as ResponseLocals
@@ -85,7 +87,7 @@ export class BaseItemsController extends BaseHttpController {
         return this.json({ authorized: false }, HttpStatusCode.Success)
       }
 
-      return this.json({ authorized: result.getValue() === true }, HttpStatusCode.Success)
+      return this.json(result.getValue(), HttpStatusCode.Success)
     } catch (error) {
       this.logger.error('Collaboration authorization check failed.', {
         ...safeErrorLogMetadata(error),
