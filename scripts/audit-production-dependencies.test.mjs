@@ -13,6 +13,7 @@ import {
   validateAllowlist,
   validateAppSecurityGraph,
   validateLockfileInventory,
+  validateMobileRubySecurityGraph,
   validateSecurityManifestDeclarations,
   validateSheetJsDistribution,
   validateYarnSecurityGraph,
@@ -34,6 +35,14 @@ const appYarnConfig = fs.readFileSync(
   path.join(repositoryRoot, "app", ".yarnrc.yml"),
   "utf8",
 );
+const mobileGemfile = fs.readFileSync(
+  path.join(repositoryRoot, "app", "packages", "mobile", "Gemfile"),
+  "utf8",
+);
+const mobileGemLock = fs.readFileSync(
+  path.join(repositoryRoot, "app", "packages", "mobile", "Gemfile.lock"),
+  "utf8",
+);
 const webPackage = fs.readFileSync(
   path.join(repositoryRoot, "app", "packages", "web", "package.json"),
   "utf8",
@@ -44,6 +53,7 @@ const securityManifests = Object.fromEntries(
     "openclaw/package.json",
     "app/packages/utils/package.json",
     "app/packages/web/package.json",
+    "app/packages/filepicker/example/package.json",
     "server/package.json",
   ].map((file) => [
     file,
@@ -126,6 +136,12 @@ test("owned security manifests preserve supported direct dependency floors", () 
       /dependencies\.mermaid must remain \^11\.16\.1/,
     ],
     [
+      "app/packages/filepicker/example/package.json",
+      '"uuid@npm:^8.3.2": "11.1.1"',
+      '"uuid@npm:^8.3.2": "8.3.2"',
+      /resolutions\.uuid@npm:\^8\.3\.2 must remain 11\.1\.1/,
+    ],
+    [
       "server/package.json",
       '"dompurify": "npm:3.4.13"',
       '"dompurify": "npm:3.4.12"',
@@ -155,6 +171,40 @@ test("owned security manifests preserve supported direct dependency floors", () 
       "mcp/package.json": "{",
     }).join("\n"),
     /mcp\/package\.json: security manifest is invalid JSON/,
+  );
+});
+
+test("the mobile Ruby build graph preserves the patched concurrency floor", () => {
+  assert.deepEqual(
+    validateMobileRubySecurityGraph(mobileGemfile, mobileGemLock),
+    [],
+  );
+
+  assert.match(
+    validateMobileRubySecurityGraph(
+      mobileGemfile.replace(
+        "gem 'concurrent-ruby', '>= 1.3.7', '< 2'",
+        "gem 'concurrent-ruby', '< 1.3.4'",
+      ),
+      mobileGemLock,
+    ).join("\n"),
+    /Gemfile: concurrent-ruby must remain constrained to >= 1\.3\.7, < 2/,
+  );
+
+  assert.match(
+    validateMobileRubySecurityGraph(
+      mobileGemfile,
+      mobileGemLock
+        .replace(
+          /^    concurrent-ruby \(\d+\.\d+\.\d+\)$/mu,
+          "    concurrent-ruby (1.3.3)",
+        )
+        .replace(
+          "  concurrent-ruby (>= 1.3.7, < 2)",
+          "  concurrent-ruby (< 1.3.4)",
+        ),
+    ).join("\n"),
+    /concurrent-ruby 1\.3\.3 is outside the supported patched range/,
   );
 });
 
@@ -324,6 +374,9 @@ test("the app security graph preserves the patched dependency graph", () => {
       "4.0.7",
       "micromatch",
     ],
+    ['"nanoid@npm:5.1.16, nanoid@npm:^5.1.3":', "5.1.16", "5.1.15", "nanoid"],
+    ['"uuid@npm:11.1.1, uuid@npm:^11.1.1":', "11.1.1", "11.1.0", "uuid"],
+    ['"sqlite3@npm:6.0.1":', "6.0.1", "5.1.7", "sqlite3"],
   ]) {
     assert.match(
       validateAppSecurityGraph(
@@ -345,6 +398,46 @@ test("the app security graph preserves the patched dependency graph", () => {
       appLock,
     ).join("\n"),
     /security resolution nanoid@npm:3\.3\.3 must remain 3\.3\.18/,
+  );
+  assert.match(
+    validateAppSecurityGraph(
+      appPackage.replace(
+        '"nanoid@npm:4.0.2": "5.1.16"',
+        '"nanoid@npm:4.0.2": "4.0.2"',
+      ),
+      appLock,
+    ).join("\n"),
+    /security resolution nanoid@npm:4\.0\.2 must remain 5\.1\.16/,
+  );
+  assert.match(
+    validateAppSecurityGraph(
+      appPackage.replace(
+        '"uuid@npm:^9.0.0": "11.1.1"',
+        '"uuid@npm:^9.0.0": "9.0.0"',
+      ),
+      appLock,
+    ).join("\n"),
+    /security resolution uuid@npm:\^9\.0\.0 must remain 11\.1\.1/,
+  );
+  assert.match(
+    validateAppSecurityGraph(
+      appPackage.replace(
+        '"sqlite3@npm:^5.1.6": "6.0.1"',
+        '"sqlite3@npm:^5.1.6": "5.1.7"',
+      ),
+      appLock,
+    ).join("\n"),
+    /security resolution sqlite3@npm:\^5\.1\.6 must remain 6\.0\.1/,
+  );
+  assert.match(
+    validateAppSecurityGraph(
+      appPackage.replace(
+        '"node-gyp@npm:latest": "12.3.0"',
+        '"node-gyp@npm:latest": "9.4.0"',
+      ),
+      appLock,
+    ).join("\n"),
+    /security resolution node-gyp@npm:latest must remain 12\.3\.0/,
   );
   assert.match(
     validateAppSecurityGraph(
@@ -476,13 +569,7 @@ test("every Yarn domain keeps security-sensitive packages on patched floors", ()
       "11.16.0",
     ],
     ["app/yarn.lock", "qs", '"qs@npm:~6.15.1":', "6.15.2", "6.14.1"],
-    [
-      "app/yarn.lock",
-      "socks",
-      '"socks@npm:^2.6.2, socks@npm:^2.8.3":',
-      "2.8.9",
-      "2.7.1",
-    ],
+    ["app/yarn.lock", "socks", '"socks@npm:^2.8.3":', "2.8.9", "2.7.1"],
     [
       "app/packages/filepicker/example/yarn.lock",
       "terser",
@@ -501,6 +588,13 @@ test("every Yarn domain keeps security-sensitive packages on patched floors", ()
     ["yarn.lock", "undici", '"undici@npm:^8.4.1":', "8.10.0", "8.7.0"],
     [
       "app/packages/filepicker/example/yarn.lock",
+      "uuid",
+      '"uuid@npm:11.1.1":',
+      "11.1.1",
+      "8.3.2",
+    ],
+    [
+      "app/packages/filepicker/example/yarn.lock",
       "websocket-driver",
       '"websocket-driver@npm:>=0.5.1, websocket-driver@npm:^0.7.4":',
       "0.7.5",
@@ -509,7 +603,7 @@ test("every Yarn domain keeps security-sensitive packages on patched floors", ()
     [
       "app/yarn.lock",
       "tar",
-      '"tar@npm:^7.4.0, tar@npm:^7.4.3, tar@npm:^7.5.19, tar@npm:^7.5.4, tar@npm:^7.5.7":',
+      '"tar@npm:^7.4.0, tar@npm:^7.4.3, tar@npm:^7.5.10, tar@npm:^7.5.19, tar@npm:^7.5.4, tar@npm:^7.5.7":',
       "7.5.22",
       "7.5.20",
     ],

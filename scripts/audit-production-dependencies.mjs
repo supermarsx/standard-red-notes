@@ -139,6 +139,12 @@ const securityManifestDeclarations = Object.freeze([
     expected: "^11.16.1",
   }),
   Object.freeze({
+    file: "app/packages/filepicker/example/package.json",
+    section: "resolutions",
+    packageName: "uuid@npm:^8.3.2",
+    expected: "11.1.1",
+  }),
+  Object.freeze({
     file: "server/package.json",
     section: "resolutions",
     packageName: "dompurify",
@@ -526,6 +532,15 @@ const yarnSecurityPatchFloors = Object.freeze({
       8: Object.freeze([8, 9, 0]),
     }),
   }),
+  uuid: Object.freeze({
+    minimumMajor: 11,
+    floors: Object.freeze({
+      11: Object.freeze([11, 1, 1]),
+      12: Object.freeze([12, 0, 1]),
+      13: Object.freeze([13, 0, 1]),
+      14: Object.freeze([14, 0, 0]),
+    }),
+  }),
   "websocket-driver": Object.freeze({
     minimumMajor: 0,
     floors: Object.freeze({
@@ -533,7 +548,7 @@ const yarnSecurityPatchFloors = Object.freeze({
     }),
   }),
   tar: Object.freeze({
-    minimumMajor: 6,
+    minimumMajor: 7,
     floors: Object.freeze({
       7: Object.freeze([7, 5, 21]),
     }),
@@ -547,6 +562,51 @@ function compareVersions(left, right) {
     }
   }
   return 0;
+}
+
+export function validateMobileRubySecurityGraph(gemfile, lockfile) {
+  const errors = [];
+  const normalizedGemfile = gemfile.replaceAll("\r\n", "\n");
+  const normalizedLockfile = lockfile.replaceAll("\r\n", "\n");
+
+  if (
+    !/^gem ['"]concurrent-ruby['"], ['"]>= 1\.3\.7['"], ['"]< 2['"]$/mu.test(
+      normalizedGemfile,
+    )
+  ) {
+    errors.push(
+      "app/packages/mobile/Gemfile: concurrent-ruby must remain constrained to >= 1.3.7, < 2",
+    );
+  }
+
+  if (!/^  concurrent-ruby \(>= 1\.3\.7, < 2\)$/mu.test(normalizedLockfile)) {
+    errors.push(
+      "app/packages/mobile/Gemfile.lock: concurrent-ruby dependency floor must remain >= 1.3.7, < 2",
+    );
+  }
+
+  const lockedVersions = [
+    ...normalizedLockfile.matchAll(
+      /^    concurrent-ruby \((\d+)\.(\d+)\.(\d+)\)$/gmu,
+    ),
+  ];
+  if (lockedVersions.length !== 1) {
+    errors.push(
+      "app/packages/mobile/Gemfile.lock: expected exactly one locked concurrent-ruby version",
+    );
+  } else {
+    const lockedVersion = lockedVersions[0].slice(1, 4).map(Number);
+    if (
+      compareVersions(lockedVersion, [1, 3, 7]) < 0 ||
+      lockedVersion[0] >= 2
+    ) {
+      errors.push(
+        `app/packages/mobile/Gemfile.lock: concurrent-ruby ${lockedVersion.join(".")} is outside the supported patched range >= 1.3.7, < 2`,
+      );
+    }
+  }
+
+  return errors;
 }
 
 export function validateYarnSecurityGraph(lockfiles) {
@@ -597,12 +657,17 @@ export function validateAppSecurityGraph(packageJsonText, lockfile) {
     "jws@npm:^3.2.2": "3.2.3",
     "lodash-es@npm:4.17.21": "4.18.1",
     "nanoid@npm:3.3.3": "3.3.18",
+    "nanoid@npm:4.0.2": "5.1.16",
+    "node-gyp@npm:latest": "12.3.0",
     "path-to-regexp@npm:0.1.7": "0.1.13",
     "path-to-regexp@npm:~0.1.12": "0.1.13",
     protobufjs: "7.6.5",
     "sha.js": "2.4.12",
     "shell-quote": "1.10.0",
+    "sqlite3@npm:^5.1.6": "6.0.1",
     "typeorm@npm:^0.3.17": "0.3.31",
+    "uuid@npm:^8.3.2": "11.1.1",
+    "uuid@npm:^9.0.0": "11.1.1",
     "websocket-driver": "0.7.5",
   };
   for (const [name, version] of Object.entries(expectedResolutions)) {
@@ -623,11 +688,14 @@ export function validateAppSecurityGraph(packageJsonText, lockfile) {
     "form-data": ["4.0.6"],
     jws: ["3.2.3", "4.0.1"],
     micromatch: ["4.0.8"],
+    nanoid: ["3.3.18", "5.1.16", "6.0.1"],
     "path-to-regexp": ["0.1.13"],
     protobufjs: ["7.6.5"],
     "sha.js": ["2.4.12"],
     "shell-quote": ["1.10.0"],
+    sqlite3: ["6.0.1"],
     typeorm: ["0.3.31"],
+    uuid: ["11.1.1", "14.0.0", "14.0.1"],
     "websocket-driver": ["0.7.5"],
   })) {
     const versions = yarnVersions(lockfile, name).sort();
@@ -815,6 +883,16 @@ export function runProductionAudit(root = repositoryRoot, runner = spawnSync) {
       appLockfile,
       fs.readFileSync(path.join(root, "app", ".yarnrc.yml"), "utf8"),
     ),
+    ...validateMobileRubySecurityGraph(
+      fs.readFileSync(
+        path.join(root, "app", "packages", "mobile", "Gemfile"),
+        "utf8",
+      ),
+      fs.readFileSync(
+        path.join(root, "app", "packages", "mobile", "Gemfile.lock"),
+        "utf8",
+      ),
+    ),
   ];
   if (graphErrors.length > 0) {
     throw new Error(
@@ -856,9 +934,14 @@ export function runProductionAudit(root = repositoryRoot, runner = spawnSync) {
 if (process.argv[1] && path.resolve(process.argv[1]) === scriptPath) {
   try {
     const result = runProductionAudit();
+    const exceptionCount = result.advisories.length;
+    const exceptionSummary =
+      exceptionCount === 0
+        ? "no critical advisory exceptions are active"
+        : `${exceptionCount} critical advisory exception${exceptionCount === 1 ? " is" : "s are"} active and expire${exceptionCount === 1 ? "s" : ""} ${result.allowlist[0]?.expiry ?? "n/a"}`;
     console.log(
       `Production dependency audit passed across ${result.domains} committed lock domains; ` +
-        `${result.advisories.length} critical advisory exception is active and expires ${result.allowlist[0]?.expiry ?? "n/a"}.`,
+        `${exceptionSummary}.`,
     );
   } catch (error) {
     console.error(error instanceof Error ? error.message : error);
