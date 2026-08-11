@@ -85,6 +85,7 @@ const MAX_CAP = 4096
 const MAX_REQUEST_ID = 128
 export const MAX_YJS_CLIENT_ID = 0xffff_ffff
 export type RoomLeaseRole = 'editor' | 'comment'
+export type YjsResponseFrameDisposition = 'uncorrelated' | 'partial' | 'complete' | 'denied'
 
 // Reservations exist before normal room membership, so the membership cap below
 // cannot bound them. Keep this ledger deliberately smaller than the normal room
@@ -110,6 +111,8 @@ export const MAX_YJS_RETRY_FRAMES_PER_CONNECTION = 3
 export const MAX_YJS_RETRY_FRAMES_PER_ROOM = 12
 export const MAX_YJS_RESPONSE_CLAIM_FRAMES_PER_CONNECTION = 8
 export const MAX_YJS_RESPONSE_CLAIM_FRAMES_PER_ROOM = 128
+export const MAX_ACTIVE_YJS_RESPONSE_GRANTS_PER_CONNECTION = 16
+export const MAX_ACTIVE_YJS_RESPONSE_GRANTS_PER_ROOM = 128
 const MAX_TRACKED_CONTROL_ROOMS = 2_048
 
 const CONTROL_FRAME_LIMITS = Object.freeze({
@@ -332,6 +335,17 @@ type PendingEditorReservation = {
   expiresAt: number
 }
 
+type YjsResponseGrant = {
+  leaseRequestId: string
+  expiresAt: number
+  transfer?: {
+    transferId: string
+    count: number
+    totalBytes: number
+    receivedIndexes: Set<number>
+  }
+}
+
 export type ExpiredPendingEditorReservation<S extends SendableSocket = SendableSocket> = {
   conn: Conn<S>
   room: string
@@ -354,6 +368,7 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
   private readonly pendingReservationsByConn = new WeakMap<Conn<S>, Map<string, Set<string>>>()
   private readonly controlWindowsByConn = new WeakMap<Conn<S>, ControlWindows>()
   private readonly controlWindowsByRoom = new Map<string, ControlWindows>()
+  private readonly yjsResponseGrantsByRoom = new Map<string, Map<Conn<S>, Map<string, YjsResponseGrant>>>()
 
   constructor(private readonly now: () => number = Date.now) {}
 
@@ -530,6 +545,108 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
     return lease ? { role: lease.role, shouldBootstrap: lease.shouldBootstrap } : undefined
   }
 
+  /**
+   * Bind one distributed response-claim grant to the exact local socket and
+   * editor lease that won it. The absolute expiry is supplied by the Redis
+   * lifecycle so the local permission never outlives the global NX claim.
+   */
+  recordYjsResponseGrant(
+    room: string,
+    conn: Conn<S>,
+    stateRequestId: string,
+    leaseRequestId: string,
+    expiresAt: number,
+  ): boolean {
+    const now = this.now()
+    if (
+      !Number.isFinite(expiresAt) ||
+      expiresAt <= now ||
+      this.requestLease(room, conn, leaseRequestId)?.role !== 'editor'
+    ) {
+      return false
+    }
+    this.pruneExpiredYjsResponseGrantsForRoom(room, now)
+    this.pruneExpiredYjsResponseGrantsForConnection(conn, now)
+    const existing = this.yjsResponseGrantsByRoom.get(room)?.get(conn)?.get(stateRequestId)
+    if (existing) {
+      return false
+    }
+    if (
+      this.yjsResponseGrantCountForConnection(conn) >= MAX_ACTIVE_YJS_RESPONSE_GRANTS_PER_CONNECTION ||
+      this.yjsResponseGrantCountForRoom(room) >= MAX_ACTIVE_YJS_RESPONSE_GRANTS_PER_ROOM
+    ) {
+      return false
+    }
+    let roomGrants = this.yjsResponseGrantsByRoom.get(room)
+    if (!roomGrants) {
+      roomGrants = new Map()
+      this.yjsResponseGrantsByRoom.set(room, roomGrants)
+    }
+    let connectionGrants = roomGrants.get(conn)
+    if (!connectionGrants) {
+      connectionGrants = new Map()
+      roomGrants.set(conn, connectionGrants)
+    }
+    connectionGrants.set(stateRequestId, { leaseRequestId, expiresAt })
+    return true
+  }
+
+  /**
+   * Authorize one correlated full-state frame against its exact local grant.
+   * Uncorrelated Yjs bootstrap/incremental traffic intentionally bypasses this
+   * response-only gate. A single-frame response consumes immediately; chunks
+   * bind one transfer shape and consume only after every unique index arrives.
+   */
+  authorizeYjsResponseFrame(
+    room: string,
+    conn: Conn<S>,
+    frame: Extract<RelayFrame, { t: 'yjs' | 'yjs-chunk' }>,
+  ): YjsResponseFrameDisposition {
+    const stateRequestId = frame.stateRequestId
+    if (!stateRequestId) {
+      return 'uncorrelated'
+    }
+    const now = this.now()
+    const grant = this.yjsResponseGrantsByRoom.get(room)?.get(conn)?.get(stateRequestId)
+    if (!grant) {
+      return 'denied'
+    }
+    if (grant.expiresAt <= now || this.requestLease(room, conn, grant.leaseRequestId)?.role !== 'editor') {
+      this.deleteYjsResponseGrant(room, conn, stateRequestId)
+      return 'denied'
+    }
+    if (frame.t === 'yjs') {
+      if (grant.transfer) {
+        return 'denied'
+      }
+      this.deleteYjsResponseGrant(room, conn, stateRequestId)
+      return 'complete'
+    }
+    if (!grant.transfer) {
+      grant.transfer = {
+        transferId: frame.transferId,
+        count: frame.count,
+        totalBytes: frame.totalBytes,
+        receivedIndexes: new Set<number>(),
+      }
+    } else if (
+      grant.transfer.transferId !== frame.transferId ||
+      grant.transfer.count !== frame.count ||
+      grant.transfer.totalBytes !== frame.totalBytes
+    ) {
+      return 'denied'
+    }
+    if (grant.transfer.receivedIndexes.has(frame.index)) {
+      return 'denied'
+    }
+    grant.transfer.receivedIndexes.add(frame.index)
+    if (grant.transfer.receivedIndexes.size === grant.transfer.count) {
+      this.deleteYjsResponseGrant(room, conn, stateRequestId)
+      return 'complete'
+    }
+    return 'partial'
+  }
+
   /** Read-only admission check used before expensive capability authorization. */
   canAcceptJoin(room: string, conn: Conn<S>, requestId?: string): boolean {
     this.members(room)
@@ -634,6 +751,7 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
   leave(room: string, conn: Conn<S>, requestId?: string): void {
     const members = this.byRoom.get(room)
     const membership = members?.get(conn)
+    this.removeYjsResponseGrants(room, conn, requestId)
     if (!members || !membership) {
       return
     }
@@ -668,6 +786,10 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
 
   /** Remove a connection from every room it joined (on socket close). */
   leaveAll(conn: Conn<S>): void {
+    this.pruneExpiredYjsResponseGrantsForConnection(conn)
+    for (const room of [...this.yjsResponseGrantsByRoom.keys()]) {
+      this.removeYjsResponseGrants(room, conn)
+    }
     for (const room of [...(this.pendingReservationsByConn.get(conn)?.keys() ?? [])]) {
       this.releasePendingEditorReservation(room, conn)
     }
@@ -686,6 +808,7 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
 
   /** Fail closed when the distributed relay can no longer guarantee convergence. */
   denyRoom(room: string): void {
+    this.yjsResponseGrantsByRoom.delete(room)
     const members = this.byRoom.get(room)
     if (members) {
       for (const [conn, membership] of members) {
@@ -711,7 +834,11 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
   }
 
   denyAllRooms(): void {
-    const rooms = new Set([...this.byRoom.keys(), ...this.pendingReservationsByRoom.keys()])
+    const rooms = new Set([
+      ...this.byRoom.keys(),
+      ...this.pendingReservationsByRoom.keys(),
+      ...this.yjsResponseGrantsByRoom.keys(),
+    ])
     for (const room of rooms) {
       this.denyRoom(room)
     }
@@ -766,6 +893,9 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
     for (const room of [...this.byRoom.keys()]) {
       this.members(room)
     }
+    for (const room of [...this.yjsResponseGrantsByRoom.keys()]) {
+      this.pruneExpiredYjsResponseGrantsForRoom(room)
+    }
     return [...this.pendingReservationsByRoom.keys()].flatMap((room) =>
       this.takeExpiredPendingEditorReservationsInRoom(room),
     )
@@ -775,6 +905,7 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
     const now = this.now()
     for (const [requestId, lease] of [...membership.requestIds]) {
       if (lease.expiresAt <= now) {
+        this.removeYjsResponseGrants(room, conn, requestId)
         membership.requestIds.delete(requestId)
         this.sendDenied(conn, room, requestId)
       }
@@ -812,6 +943,77 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
       }
     }
     return expired
+  }
+
+  private deleteYjsResponseGrant(room: string, conn: Conn<S>, stateRequestId: string): void {
+    const roomGrants = this.yjsResponseGrantsByRoom.get(room)
+    const connectionGrants = roomGrants?.get(conn)
+    if (!roomGrants || !connectionGrants) {
+      return
+    }
+    connectionGrants.delete(stateRequestId)
+    if (connectionGrants.size === 0) {
+      roomGrants.delete(conn)
+    }
+    if (roomGrants.size === 0) {
+      this.yjsResponseGrantsByRoom.delete(room)
+    }
+  }
+
+  private removeYjsResponseGrants(room: string, conn: Conn<S>, leaseRequestId?: string): void {
+    const connectionGrants = this.yjsResponseGrantsByRoom.get(room)?.get(conn)
+    if (!connectionGrants) {
+      return
+    }
+    for (const [stateRequestId, grant] of [...connectionGrants]) {
+      if (leaseRequestId === undefined || grant.leaseRequestId === leaseRequestId) {
+        this.deleteYjsResponseGrant(room, conn, stateRequestId)
+      }
+    }
+  }
+
+  private pruneExpiredYjsResponseGrantsForRoom(room: string, now = this.now()): void {
+    const roomGrants = this.yjsResponseGrantsByRoom.get(room)
+    if (!roomGrants) {
+      return
+    }
+    for (const [conn, connectionGrants] of [...roomGrants]) {
+      for (const [stateRequestId, grant] of [...connectionGrants]) {
+        if (grant.expiresAt <= now) {
+          this.deleteYjsResponseGrant(room, conn, stateRequestId)
+        }
+      }
+    }
+  }
+
+  private pruneExpiredYjsResponseGrantsForConnection(conn: Conn<S>, now = this.now()): void {
+    for (const [room, roomGrants] of [...this.yjsResponseGrantsByRoom]) {
+      const connectionGrants = roomGrants.get(conn)
+      if (!connectionGrants) {
+        continue
+      }
+      for (const [stateRequestId, grant] of [...connectionGrants]) {
+        if (grant.expiresAt <= now) {
+          this.deleteYjsResponseGrant(room, conn, stateRequestId)
+        }
+      }
+    }
+  }
+
+  private yjsResponseGrantCountForConnection(conn: Conn<S>): number {
+    let count = 0
+    for (const roomGrants of this.yjsResponseGrantsByRoom.values()) {
+      count += roomGrants.get(conn)?.size ?? 0
+    }
+    return count
+  }
+
+  private yjsResponseGrantCountForRoom(room: string): number {
+    let count = 0
+    for (const connectionGrants of this.yjsResponseGrantsByRoom.get(room)?.values() ?? []) {
+      count += connectionGrants.size
+    }
+    return count
   }
 
   private newControlWindows(now: number): ControlWindows {
@@ -926,7 +1128,13 @@ export interface RoomRelayLifecycle<S extends SendableSocket = SendableSocket> {
     bootstrapChallenge?: string,
   ): Promise<{ shouldBootstrap: boolean }>
   releaseLease(conn: Conn<S>, room: string, requestId: string | undefined): Promise<void>
-  claimYjsResponse(conn: Conn<S>, room: string, stateRequestId: string, leaseRequestId: string): Promise<boolean>
+  /** Absolute local expiry when granted; undefined means this claimant lost. */
+  claimYjsResponse(
+    conn: Conn<S>,
+    room: string,
+    stateRequestId: string,
+    leaseRequestId: string,
+  ): Promise<number | undefined>
   publish(
     frame:
       | Extract<RelayFrame, { t: 'yjs' | 'yjs-chunk' | 'yjs-retry' | 'awareness' | 'comment' }>
@@ -1303,16 +1511,16 @@ export async function handleRelayFrame<S extends SendableSocket>(
       ) {
         return 0
       }
-      let granted = false
+      let grantExpiresAt: number | undefined
       try {
-        granted = await lifecycle.claimYjsResponse(conn, frame.room, frame.stateRequestId, frame.leaseRequestId)
+        grantExpiresAt = await lifecycle.claimYjsResponse(conn, frame.room, frame.stateRequestId, frame.leaseRequestId)
       } catch {
         return 0
       }
       if (
-        !granted ||
+        grantExpiresAt === undefined ||
         (isConnectionActive && !isConnectionActive()) ||
-        rooms.requestLease(frame.room, conn, frame.leaseRequestId)?.role !== 'editor'
+        !rooms.recordYjsResponseGrant(frame.room, conn, frame.stateRequestId, frame.leaseRequestId, grantExpiresAt)
       ) {
         return 0
       }
@@ -1350,6 +1558,13 @@ export async function handleRelayFrame<S extends SendableSocket>(
       if (frame.t === 'yjs-retry' && !rooms.allowControlFrame('yjs-retry', frame.room, conn)) {
         return 0
       }
+      const yjsResponseDisposition =
+        frame.t === 'yjs' || frame.t === 'yjs-chunk'
+          ? rooms.authorizeYjsResponseFrame(frame.room, conn, frame)
+          : undefined
+      if (yjsResponseDisposition === 'denied') {
+        return 0
+      }
       if (lifecycle) {
         try {
           await lifecycle.publish(frame)
@@ -1362,7 +1577,8 @@ export async function handleRelayFrame<S extends SendableSocket>(
       const acceptedTransferId =
         frame.t === 'yjs'
           ? frame.transferId
-          : frame.t === 'yjs-chunk' && frame.index === frame.count - 1
+          : frame.t === 'yjs-chunk' &&
+              (frame.stateRequestId ? yjsResponseDisposition === 'complete' : frame.index === frame.count - 1)
             ? frame.transferId
             : undefined
       if (acceptedTransferId) {

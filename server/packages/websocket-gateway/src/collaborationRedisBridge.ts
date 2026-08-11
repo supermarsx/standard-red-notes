@@ -476,21 +476,24 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
     room: string,
     stateRequestId: string,
     leaseRequestId: string,
-  ): Promise<boolean> {
+  ): Promise<number | undefined> {
     if (!this.relayHealthy) {
       throw new Error('Redis collaboration relay is not healthy')
     }
     const localId = this.localLeaseId(conn, room, leaseRequestId)
     const lease = this.leases.get(localId)
     if (!lease || !lease.activated) {
-      return false
+      return undefined
     }
     if (lease.expiresAt <= Date.now()) {
       this.leases.delete(localId)
       await this.releaseOrQueue(lease)
-      return false
+      return undefined
     }
     const claimKey = `srn:collaboration:yjs-response-claim:${digest(room)}:${digest(stateRequestId)}`
+    // Capture before Redis EVAL so the gateway-local permission is never valid
+    // beyond the distributed NX claim created during that operation.
+    const claimExpiresAt = Date.now() + YJS_RESPONSE_CLAIM_TTL_MS
     try {
       const result = Number(
         await bounded(
@@ -508,12 +511,12 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
       )
       if (result === -1) {
         await this.denyAndReleaseRoom(room)
-        return false
+        return undefined
       }
       if (result !== 0 && result !== 1) {
         throw new Error('Redis returned an invalid Yjs response claim result')
       }
-      return result === 1
+      return result === 1 ? claimExpiresAt : undefined
     } catch (error) {
       this.logger.warn(
         '[collab-redis] Yjs response claim unavailable; denying collaboration',

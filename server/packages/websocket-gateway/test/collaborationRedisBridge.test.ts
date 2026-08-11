@@ -637,18 +637,18 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
 
     await expect(
       bridge.claimYjsResponse(first, 'claim-progress-room', 'state-request-one', 'claim-progress-first-lease'),
-    ).resolves.toBe(true)
+    ).resolves.toEqual(expect.any(Number))
     await expect(
       bridge.claimYjsResponse(second, 'claim-progress-room', 'state-request-one', 'claim-progress-second-lease'),
-    ).resolves.toBe(false)
+    ).resolves.toBeUndefined()
     await expect(
       bridge.claimYjsResponse(second, 'claim-progress-room', 'state-request-two', 'claim-progress-second-lease'),
-    ).resolves.toBe(true)
+    ).resolves.toEqual(expect.any(Number))
 
     redis.advance(YJS_RESPONSE_CLAIM_TTL_MS + 1)
     await expect(
       bridge.claimYjsResponse(second, 'claim-progress-room', 'state-request-one', 'claim-progress-second-lease'),
-    ).resolves.toBe(true)
+    ).resolves.toEqual(expect.any(Number))
   })
 
   it('denies response claims for wrong, expired, ownership-lost, or Redis-unhealthy leases', async () => {
@@ -683,16 +683,16 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
         reservation.bootstrapChallenge,
       )
 
-      await expect(bridge.claimYjsResponse(member, 'claim-denial-room', 'wrong-id-state', 'wrong-lease')).resolves.toBe(
-        false,
-      )
+      await expect(
+        bridge.claimYjsResponse(member, 'claim-denial-room', 'wrong-id-state', 'wrong-lease'),
+      ).resolves.toBeUndefined()
 
       const onlyLeaseKey = [...redis.leases.keys()][0]
       redis.leases.delete(onlyLeaseKey)
       redis.leaseValues.delete(onlyLeaseKey)
       await expect(
         bridge.claimYjsResponse(member, 'claim-denial-room', 'ownership-state', 'claim-denial-lease'),
-      ).resolves.toBe(false)
+      ).resolves.toBeUndefined()
       expect(rooms.isMember('claim-denial-room', member)).toBe(false)
 
       const expiredRedis = new FakeRedisNetwork()
@@ -724,7 +724,7 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
       vi.setSystemTime(Date.now() + 1_001)
       await expect(
         expiredBridge.claimYjsResponse(expiredMember, 'claim-expired-room', 'expired-state', 'claim-expired-lease'),
-      ).resolves.toBe(false)
+      ).resolves.toBeUndefined()
 
       const unhealthyRedis = new FakeRedisNetwork()
       const unhealthyBridge = new CollaborationRedisBridge(
@@ -1617,7 +1617,7 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
       reserveEditorLease: vi.fn().mockResolvedValue({ shouldBootstrap: false }),
       activateEditorLease: vi.fn().mockResolvedValue({ shouldBootstrap: false }),
       releaseLease: vi.fn().mockResolvedValue(undefined),
-      claimYjsResponse: vi.fn().mockResolvedValue(false),
+      claimYjsResponse: vi.fn().mockResolvedValue(undefined),
       publish: vi.fn().mockResolvedValue(undefined),
     }
     const authorize = () => ({
