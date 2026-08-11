@@ -37,7 +37,7 @@ export interface VaultServiceInterface extends AbstractService<
   moveItemToVault(vault: VaultListingInterface, item: DecryptedItemInterface): Promise<Result<DecryptedItemInterface>>
   removeItemFromVault(item: DecryptedItemInterface): Promise<DecryptedItemInterface>
   isItemInVault(item: DecryptedItemInterface): boolean
-  getItemVault(item: DecryptedItemInterface): VaultListingInterface | undefined
+  getItemVault(item: DecryptedItemInterface | undefined): VaultListingInterface | undefined
 
   changeVaultMetadata(
     vault: VaultListingInterface,

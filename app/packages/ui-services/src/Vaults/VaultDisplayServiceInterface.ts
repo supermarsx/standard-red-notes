@@ -4,7 +4,7 @@ import { AbstractUIServiceInterface } from '../Abstract/AbstractUIServiceInterfa
 export interface VaultDisplayServiceInterface extends AbstractUIServiceInterface {
   exclusivelyShownVault?: VaultListingInterface
 
-  getItemVault(item: DecryptedItemInterface): VaultListingInterface | undefined
+  getItemVault(item: DecryptedItemInterface | undefined): VaultListingInterface | undefined
 
   getOptions(): VaultDisplayOptions
 
