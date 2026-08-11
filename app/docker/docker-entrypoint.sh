@@ -97,11 +97,12 @@ CONF="${SRN_ENTRYPOINT_NGINX_CONF:-/etc/nginx/conf.d/default.conf}"
 # ---------------------------------------------------------------------------
 # Trusted reverse-proxy HTTPS contract.
 #
-# Raw X-Forwarded-Proto is attacker-controlled whenever the app port is exposed
-# directly. It is therefore ignored by default. Operators may opt in with the
-# exact value ENFORCE_HTTPS_FROM_PROXY=true, but only alongside a canonical
-# HTTPS PUBLIC_URL origin. Invalid explicit secure-mode configuration aborts
-# startup rather than silently serving without the requested transport policy.
+# Raw X-Forwarded-* headers are attacker-controlled whenever the app port is
+# exposed directly. Direct mode therefore ignores Proto and overwrites For.
+# Operators may preserve a sanitized outer-proxy client chain with the exact
+# value ENFORCE_HTTPS_FROM_PROXY=true, but only alongside a loopback bind and a
+# canonical HTTPS PUBLIC_URL origin. Invalid explicit secure-mode configuration
+# aborts startup rather than silently serving without the requested policy.
 # ---------------------------------------------------------------------------
 validate_https_public_origin() {
   _transport_url="${1:-}"

@@ -818,8 +818,8 @@ export function validatePairingCallbackNginxContract(
     ["preserve HTTP/1.1", /\bproxy_http_version\s+1\.1\s*;/],
     ["forward Host", /\bproxy_set_header\s+Host\s+\$host\s*;/],
     [
-      "forward client chain",
-      /\bproxy_set_header\s+X-Forwarded-For\s+\$proxy_add_x_forwarded_for\s*;/,
+      "forward the sanitized client chain",
+      /\bproxy_set_header\s+X-Forwarded-For\s+\$srn_forwarded_for\s*;/,
     ],
     [
       "forward validated scheme",

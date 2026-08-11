@@ -38,12 +38,12 @@ x-server-env: &server-env
   COOKIE_SAME_SITE: ${COOKIE_SAME_SITE:-Lax}
   COOKIE_SECURE: ${COOKIE_SECURE:-false}
   COOKIE_PARTITIONED: ${COOKIE_PARTITIONED:-false}
-  # Reverse-proxy support. When the stack runs behind a TLS-terminating proxy
-  # (nginx/Traefik/Caddy), the server must trust the proxy's X-Forwarded-Proto /
-  # X-Forwarded-For headers so req.secure / req.ip reflect the real client.
-  # Default "loopback, linklocal, uniquelocal" trusts a proxy on loopback or a
-  # private/Docker network (the usual compose setup) but NOT arbitrary public
-  # clients, so direct access still works and forwarded headers can't be spoofed.
+  # Reverse-proxy support. The app nginx overwrites X-Forwarded-For in direct
+  # mode. Its validated ENFORCE_HTTPS_FROM_PROXY mode preserves only the chain
+  # supplied by an outer proxy that MUST overwrite untrusted forwarded headers.
+  # The server then trusts loopback/private Docker hops so req.secure / req.ip
+  # reflect that sanitized transport metadata. Do not expose the app port while
+  # trusted mode is enabled; its runtime gate requires a loopback bind.
   # Set to "true" to trust any number of hops, a number N to trust N hops, or a
   # CSV of proxy IPs/subnets. See docs/self-hosting.md "Running behind a reverse
   # proxy". Pair with COOKIE_SECURE=true when TLS is terminated at the proxy.

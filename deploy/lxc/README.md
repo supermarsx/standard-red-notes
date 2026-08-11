@@ -155,8 +155,10 @@ another container) pointing at `http://<container-ip>:<HTTP_PORT>`. The outer
 proxy must redirect its public HTTP listener to HTTPS, overwrite forwarded
 headers, and emit `Strict-Transport-Security: max-age=31536000` on HTTPS
 responses. The LXC nginx deliberately does not trust client-supplied
-`X-Forwarded-Proto`; restrict its HTTP port to the proxy with the host/LXC
-firewall.
+`X-Forwarded-Proto` and always replaces `X-Forwarded-For` with its immediate
+peer. This prevents spoofing in the default public-HTTP topology; behind an
+outer proxy, gateway IP-based limits therefore see that proxy address. Restrict
+the LXC HTTP port to the proxy with the host/LXC firewall.
 
 Pass the canonical public origin on install and every intentional change:
 
