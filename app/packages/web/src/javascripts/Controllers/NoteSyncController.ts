@@ -29,12 +29,19 @@ export type NoteSaveFunctionParams = {
   onLocalPropagationComplete?: () => void
 }
 
+type SaveOperation = {
+  completion: ReturnType<typeof Deferred<void>>
+  timeout?: ReturnType<typeof setTimeout>
+}
+
 export class NoteSyncController {
   savingLocallyPromise: ReturnType<typeof Deferred<void>> | null = null
 
-  private syncTimeout?: ReturnType<typeof setTimeout>
+  private queuedSaveOperation?: SaveOperation
+  private saveOperations = new Set<SaveOperation>()
   private largeNoteSyncTimeout?: ReturnType<typeof setTimeout>
   private statusChangeTimeout?: ReturnType<typeof setTimeout>
+  private deallocated = false
 
   status: NoteStatus | undefined = undefined
 
@@ -112,24 +119,47 @@ export class NoteSyncController {
   }
 
   deinit() {
-    if (this.syncTimeout) {
-      clearTimeout(this.syncTimeout)
-    }
+    this.deallocated = true
+    this.cancelQueuedSave()
     if (this.largeNoteSyncTimeout) {
       clearTimeout(this.largeNoteSyncTimeout)
     }
     if (this.statusChangeTimeout) {
       clearTimeout(this.statusChangeTimeout)
     }
-    if (this.savingLocallyPromise) {
-      this.savingLocallyPromise.reject()
+    for (const operation of [...this.saveOperations]) {
+      this.settleSaveOperation(operation)
     }
     this.savingLocallyPromise = null
     this.largeNoteSyncTimeout = undefined
-    this.syncTimeout = undefined
     this.status = undefined
     this.statusChangeTimeout = undefined
     ;(this.item as unknown) = undefined
+  }
+
+  private settleSaveOperation(operation: SaveOperation): void {
+    if (operation.timeout !== undefined) {
+      clearTimeout(operation.timeout)
+      operation.timeout = undefined
+    }
+
+    operation.completion.resolve()
+    this.saveOperations.delete(operation)
+
+    if (this.queuedSaveOperation === operation) {
+      this.queuedSaveOperation = undefined
+    }
+    if (this.saveOperations.size === 0 && this.savingLocallyPromise) {
+      this.savingLocallyPromise.resolve()
+      this.savingLocallyPromise = null
+    }
+  }
+
+  private cancelQueuedSave(): void {
+    const queued = this.queuedSaveOperation
+    if (queued) {
+      this.settleSaveOperation(queued)
+    }
   }
 
   private isLargeNote(text: string): boolean {
@@ -145,15 +175,26 @@ export class NoteSyncController {
      * access throws and the in-flight edit is silently lost. After deinit, `item` is
      * undefined — treat a post-deinit save as a safe NO-OP instead of throwing.
      */
-    if ((this.item as unknown) === undefined) {
-      params.onLocalPropagationComplete?.()
+    if (this.deallocated || (this.item as unknown) === undefined) {
       return
     }
 
-    this.savingLocallyPromise = Deferred<void>()
+    const supersededOperation = this.queuedSaveOperation
+    const operation: SaveOperation = { completion: Deferred<void>() }
+    if (!this.savingLocallyPromise) {
+      // This deferred represents the complete drain of all overlapping local
+      // operations. Ordinary controller teardown waits on it, so a newer save
+      // cannot make an older in-flight mutation invisible to the lifecycle.
+      this.savingLocallyPromise = Deferred<void>()
+    }
+    this.saveOperations.add(operation)
+    this.queuedSaveOperation = operation
 
-    if (this.syncTimeout) {
-      clearTimeout(this.syncTimeout)
+    // Register the replacement before settling the superseded debounce so the
+    // aggregate lifecycle drain can never transiently reach zero. Otherwise an
+    // already-waiting ordinary deinit can resume and cancel the newest edit.
+    if (supersededOperation) {
+      this.settleSaveOperation(supersededOperation)
     }
 
     const noDebounce = params.bypassDebouncer || this.sessions.isSignedOut()
@@ -163,30 +204,46 @@ export class NoteSyncController {
         ? EditorSaveTimeoutDebounce.NativeMobileWeb
         : EditorSaveTimeoutDebounce.Desktop
 
-    return new Promise((resolve) => {
-      const isLargeNote = this.isLargeNote(params.text ? params.text : this.item.text)
+    const isLargeNote = this.isLargeNote(params.text ?? this.item.text)
 
-      if (isLargeNote) {
-        this.showWaitingToSyncLargeNoteStatus()
-        this.queueLargeNoteSyncIfNeeded()
+    if (isLargeNote) {
+      this.showWaitingToSyncLargeNoteStatus()
+    }
+
+    operation.timeout = setTimeout(() => {
+      operation.timeout = undefined
+      if (this.queuedSaveOperation === operation) {
+        this.queuedSaveOperation = undefined
       }
 
-      this.syncTimeout = setTimeout(() => {
-        void this.undebouncedMutateAndSync({
-          ...params,
-          localOnly: isLargeNote,
-          onLocalPropagationComplete: () => {
-            if (this.savingLocallyPromise) {
-              this.savingLocallyPromise.resolve()
-            }
-            resolve()
-          },
-        })
-      }, syncDebounceMs)
-    })
+      if (this.deallocated) {
+        this.settleSaveOperation(operation)
+        return
+      }
+
+      void this.undebouncedMutateAndSync({
+        ...params,
+        localOnly: isLargeNote,
+        onLocalPropagationComplete: () => {
+          if (!this.deallocated) {
+            params.onLocalPropagationComplete?.()
+          }
+          this.settleSaveOperation(operation)
+        },
+      }).catch((error) => {
+        console.error(error)
+        this.settleSaveOperation(operation)
+      })
+    }, syncDebounceMs)
+
+    return operation.completion.promise
   }
 
   private queueLargeNoteSyncIfNeeded(): void {
+    if (this.deallocated) {
+      return
+    }
+
     const isAlreadyAQueuedLargeNoteSync = this.largeNoteSyncTimeout !== undefined
 
     if (!isAlreadyAQueuedLargeNoteSync) {
@@ -201,6 +258,10 @@ export class NoteSyncController {
   }
 
   private async performSyncOfLargeItem(): Promise<void> {
+    if (this.deallocated || (this.item as unknown) === undefined) {
+      return
+    }
+
     const item = this.items.findItem(this.item.uuid)
     if (!item || !item.dirty) {
       return
@@ -225,6 +286,13 @@ export class NoteSyncController {
     await this.mutator.changeItem(
       this.item,
       (mutator) => {
+        // A mutator implementation can defer invoking this callback. Once a
+        // security teardown crosses the boundary, never write the retained
+        // plaintext even if an already-started changeItem call resumes later.
+        if (this.deallocated) {
+          return
+        }
+
         const noteMutator = mutator as NoteMutator
         if (params.customMutate) {
           params.customMutate(noteMutator)
@@ -253,6 +321,10 @@ export class NoteSyncController {
       params.isUserModified ? MutationType.UpdateUserTimestamps : MutationType.NoUpdateUserTimestamps,
     )
 
+    if (this.deallocated) {
+      return
+    }
+
     void this.sync.sync({ mode: params.localOnly ? SyncMode.LocalOnly : undefined })
 
     this.queueLargeNoteSyncIfNeeded()
@@ -261,6 +333,10 @@ export class NoteSyncController {
   }
 
   public syncOnlyIfLargeNote(): void {
+    if (this.deallocated || (this.item as unknown) === undefined) {
+      return
+    }
+
     const isLargeNote = this.isLargeNote(this.item.text)
     if (isLargeNote) {
       void this.performSyncOfLargeItem()

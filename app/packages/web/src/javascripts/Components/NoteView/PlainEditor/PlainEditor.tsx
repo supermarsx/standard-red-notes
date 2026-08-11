@@ -63,6 +63,7 @@ export const PlainEditor = forwardRef<PlainEditorInterface, Props>(
     const note = useRef(controller.item)
 
     const [isPendingLocalPropagation, setIsPendingLocalPropagation] = useState(false)
+    const localPropagationGeneration = useRef(0)
 
     const tabObserverDisposer = useRef<Disposer | undefined>(undefined)
     const mutationObserver = useRef<MutationObserver | null>(null)
@@ -75,6 +76,7 @@ export const PlainEditor = forwardRef<PlainEditorInterface, Props>(
 
     useEffect(() => {
       return () => {
+        localPropagationGeneration.current += 1
         mutationObserver.current?.disconnect()
         tabObserverDisposer.current?.()
         tabObserverDisposer.current = undefined
@@ -114,11 +116,17 @@ export const PlainEditor = forwardRef<PlainEditorInterface, Props>(
 
     const commitText = useCallback(
       (text: string) => {
+        const generation = ++localPropagationGeneration.current
         setEditorText(text)
         setIsPendingLocalPropagation(true)
-        void controller.saveAndAwaitLocalPropagation({ text: text, isUserModified: true }).then(() => {
-          setIsPendingLocalPropagation(false)
-        })
+        const finishCurrentPropagation = () => {
+          if (localPropagationGeneration.current === generation) {
+            setIsPendingLocalPropagation(false)
+          }
+        }
+        void controller
+          .saveAndAwaitLocalPropagation({ text: text, isUserModified: true })
+          .then(finishCurrentPropagation, finishCurrentPropagation)
       },
       [controller],
     )
@@ -302,18 +310,7 @@ export const PlainEditor = forwardRef<PlainEditorInterface, Props>(
               editor.selectionStart = editor.selectionEnd = start + 4
             }
 
-            setEditorText(editor.value)
-
-            setIsPendingLocalPropagation(true)
-
-            void controller
-              .saveAndAwaitLocalPropagation({
-                text: editor.value,
-                isUserModified: true,
-              })
-              .then(() => {
-                setIsPendingLocalPropagation(false)
-              })
+            commitText(editor.value)
           },
         })
 
@@ -333,7 +330,7 @@ export const PlainEditor = forwardRef<PlainEditorInterface, Props>(
 
         mutationObserver.current = observer
       },
-      [application.keyboardService, controller],
+      [application.keyboardService, commitText],
     )
 
     if (textareaUnloading) {

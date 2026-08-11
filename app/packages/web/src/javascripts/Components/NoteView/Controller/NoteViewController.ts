@@ -117,19 +117,52 @@ export class NoteViewController implements ItemViewControllerInterface {
       return
     }
 
-    void this.syncController.savingLocallyPromise.promise.then(() => {
-      this.performDeinitSafely()
-    })
+    void this.syncController.savingLocallyPromise.promise.then(
+      () => {
+        this.performDeinitSafely()
+      },
+      () => {
+        // A cancelled/failed local-save wait must not strand this controller
+        // with its decrypted note retained indefinitely.
+        this.performDeinitSafely()
+      },
+    )
+  }
+
+  /**
+   * Fail-closed teardown for vault lock/removal/access-revocation boundaries.
+   * Unlike an ordinary note switch, this must not wait for or flush editor
+   * plaintext after the vault keys and authoritative item have disappeared.
+   */
+  deinitImmediatelyForSecurity(): void {
+    // Security teardown deliberately does not await the local-save drain. Keep
+    // an observer attached while NoteSyncController cancels and settles it, then
+    // synchronously clear the controller state.
+    void this.syncController.savingLocallyPromise?.promise.catch(() => undefined)
+    this.performDeinitSafely()
   }
 
   private performDeinitSafely(): void {
+    if (this.dealloced) {
+      return
+    }
+
     this.dealloced = true
+
+    this.syncController.deinit()
 
     for (const disposer of this.disposers) {
       disposer()
     }
     this.disposers.length = 0
     this.innerValueChangeObservers.length = 0
+    this.editorFlush = undefined
+    this.editorHasPending = undefined
+    this.inFlightSavePromise = null
+    this.defaultTag = undefined
+    this.defaultTagUuid = undefined
+    this.templateNoteOptions = undefined
+    ;(this.item as unknown) = undefined
   }
 
   async initialize(): Promise<void> {
