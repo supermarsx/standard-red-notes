@@ -43,8 +43,6 @@ export const sandboxModeForIdentifier = (identifier: string | undefined): Sandbo
   return identifier === JsSandboxEditorIdentifier ? 'js' : 'web'
 }
 
-const AUTO_RUN_DEBOUNCE_MS = 600
-
 type ConsoleEntry = {
   id: number
   level: SandboxConsoleLevel
@@ -93,12 +91,13 @@ export const SandboxEditor: FunctionComponent<Props> = ({
     initialParse.document.activePane ?? (mode === 'js' ? 'js' : 'html'),
   )
   const [consoleEntries, setConsoleEntries] = useState<ConsoleEntry[]>([])
-  /** The document snapshot currently rendered into the iframe. */
-  const [runDocument, setRunDocument] = useState<SandboxDocument>(initialParse.document)
-  /** Changed on each Run to bind and reset exactly one isolated runner frame. */
-  const [runNonce, setRunNonce] = useState(createSandboxRunNonce)
+  /**
+   * An explicit Run snapshots the document and creates exactly one isolated
+   * runner frame. Keeping this undefined initially is an availability and
+   * consent boundary: merely opening or editing a note never executes code.
+   */
+  const [runSession, setRunSession] = useState<{ document: SandboxDocument; nonce: string }>()
 
-  const autoRunTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const ignoreNextChange = useRef(false)
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const consoleEntryId = useRef(0)
@@ -162,14 +161,6 @@ export const SandboxEditor: FunctionComponent<Props> = ({
     return disposer
   }, [controller])
 
-  useEffect(() => {
-    return () => {
-      if (autoRunTimer.current) {
-        clearTimeout(autoRunTimer.current)
-      }
-    }
-  }, [])
-
   const clearConsole = useCallback(() => {
     consoleMessagesThisRun.current = 0
     setConsoleEntries([])
@@ -178,29 +169,8 @@ export const SandboxEditor: FunctionComponent<Props> = ({
   // Run the current document: snapshot it into the iframe and reset the console.
   const run = useCallback(() => {
     clearConsole()
-    setRunDocument(document)
-    setRunNonce(createSandboxRunNonce())
+    setRunSession({ document, nonce: createSandboxRunNonce() })
   }, [clearConsole, document])
-
-  // Web App Sandbox auto-runs (debounced) as the code changes; JS Sandbox is
-  // manual-run only so console output isn't spammed mid-typing.
-  useEffect(() => {
-    if (mode !== 'web') {
-      return
-    }
-    if (autoRunTimer.current) {
-      clearTimeout(autoRunTimer.current)
-    }
-    autoRunTimer.current = setTimeout(() => {
-      setRunDocument(document)
-      setRunNonce(createSandboxRunNonce())
-    }, AUTO_RUN_DEBOUNCE_MS)
-    return () => {
-      if (autoRunTimer.current) {
-        clearTimeout(autoRunTimer.current)
-      }
-    }
-  }, [mode, document])
 
   // Listen for console messages posted by the sandbox iframe. The source is
   // validated to be exactly our iframe's contentWindow so no other frame can
@@ -233,12 +203,15 @@ export const SandboxEditor: FunctionComponent<Props> = ({
   const sendRunPayload = useCallback(
     (event: SyntheticEvent<HTMLIFrameElement>) => {
       const frameWindow = event.currentTarget.contentWindow
-      if (!frameWindow || !claimSandboxRunDelivery(deliveredRunNonce, runNonce)) {
+      if (!frameWindow || !runSession || !claimSandboxRunDelivery(deliveredRunNonce, runSession.nonce)) {
         return
       }
-      frameWindow.postMessage(buildSandboxRunPayload(runDocument, { captureConsole, nonce: runNonce }), '*')
+      frameWindow.postMessage(
+        buildSandboxRunPayload(runSession.document, { captureConsole, nonce: runSession.nonce }),
+        '*',
+      )
     },
-    [runDocument, captureConsole, runNonce],
+    [runSession, captureConsole],
   )
 
   const setPaneValue = useCallback(
@@ -379,28 +352,34 @@ export const SandboxEditor: FunctionComponent<Props> = ({
                 Preview
               </div>
               <div className="min-h-0 flex-grow bg-white">
-                <iframe
-                  ref={iframeRef}
-                  key={runNonce}
-                  title="Web App Sandbox preview"
-                  className="h-full w-full border-0"
-                  sandbox="allow-scripts"
-                  src={`/sandbox.html#${runNonce}`}
-                  onLoad={sendRunPayload}
-                />
+                {runSession ? (
+                  <iframe
+                    ref={iframeRef}
+                    key={runSession.nonce}
+                    title="Web App Sandbox preview"
+                    className="h-full w-full border-0"
+                    sandbox="allow-scripts"
+                    src={`/sandbox.html#${runSession.nonce}`}
+                    onLoad={sendRunPayload}
+                  />
+                ) : (
+                  <div className="text-passive-2 bg-default flex h-full items-center justify-center p-4 text-center text-xs">
+                    Press Run to render this sandbox. Opening and editing it never executes code automatically.
+                  </div>
+                )}
               </div>
             </>
           )}
           {/* JS Sandbox still needs a (hidden) iframe to actually run the code and
               post console messages back. Web mode renders the visible iframe above. */}
-          {mode === 'js' && (
+          {mode === 'js' && runSession && (
             <iframe
               ref={iframeRef}
-              key={runNonce}
+              key={runSession.nonce}
               title="JS Sandbox runner"
               className="h-0 w-0"
               sandbox="allow-scripts"
-              src={`/sandbox.html#${runNonce}`}
+              src={`/sandbox.html#${runSession.nonce}`}
               onLoad={sendRunPayload}
               aria-hidden
             />

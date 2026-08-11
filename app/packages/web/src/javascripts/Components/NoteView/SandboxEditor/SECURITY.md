@@ -4,7 +4,9 @@ Sandbox note content is untrusted browser code. The editor sends only the note's
 HTML, CSS, JavaScript, and console-capture flag to `/sandbox.html`; it never sends
 application services, decrypted items, credentials, cookies, or storage values.
 
-The runner uses two independent browser boundaries:
+The runner never executes when a note is opened or edited. The user must press
+Run, which snapshots the current document into a fresh one-shot frame. The
+runner then uses three independent browser boundaries:
 
 - Both visible and hidden frames use `sandbox="allow-scripts"` without
   `allow-same-origin`, top-navigation, form, download, or popup capabilities.
@@ -16,10 +18,18 @@ The runner uses two independent browser boundaries:
   other static-file serving paths. Meta CSP cannot enforce `frame-ancestors` or
   `sandbox`; nginx owns those directives and the iframe attribute remains the
   primary opaque-origin boundary.
+- User JavaScript runs in a dedicated blob Worker rather than the iframe's main
+  thread. The frame terminates that Worker after completion or after a fixed
+  two-second deadline, so non-yielding code such as `while (true) {}` cannot
+  hang the note or application tab. The Worker disables its network and child
+  worker entry points in addition to inheriting `connect-src 'none'` from the
+  frame. HTML and CSS still render in the opaque preview frame; JavaScript is a
+  DOM-less Worker program and cannot read or mutate the preview document.
 
-`unsafe-eval` is intentionally present only in that exact-path CSP because the
-fixed bootstrap evaluates JavaScript received as message data. It is not present
-in the parent app policy. Each frame URL carries a fresh run nonce, accepts one
+`unsafe-eval` and `worker-src blob:` are intentionally present only in that
+exact-path CSP because the fixed bootstrap creates a local Worker and that
+Worker evaluates JavaScript received as message data. They are not present in
+the parent app policy. Each frame URL carries a fresh run nonce, accepts one
 matching payload from its parent, and the parent delivers that nonce only once.
 This matters because sandbox code may navigate its own frame: the resulting
 second `load` must never send decrypted note source to the new document. The
@@ -50,8 +60,9 @@ runner's CSP headers, so an offline frame uses the same restrictions.
 - Keep console message and retained-entry limits synchronized between the fixed
   runner and `SandboxDocument.ts`; both sides are intentional defenses.
 
-The isolation prevents sandbox code from reading application state, and console
-floods cannot grow parent React state without limit; it does not make arbitrary
-code harmless. Deliberate infinite loops or extreme allocation inside the frame
-can still consume browser CPU or memory, so users should run copied code only
-when they accept that local availability risk.
+The isolation prevents sandbox code from reading application state, console
+floods cannot grow parent React state without limit, and non-yielding execution
+is terminated at the deadline. It does not make arbitrary code harmless: a
+Worker can still allocate aggressively before the browser processes the
+termination request, so users should run copied code only when they accept that
+short-lived local availability risk.

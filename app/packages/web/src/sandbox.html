@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'none'; script-src 'unsafe-eval' 'sha256-xvRgiwPvsuzmKsrLtNr6JgssmYZDeeQ3B3pfnR4yZa8='; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'"
+      content="default-src 'none'; script-src 'unsafe-eval' 'sha256-lNmpADSkK6aNI3Zb1YLDMZfnTJywc53UKGRf0B3evz4='; worker-src blob:; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'"
     />
     <title>Standard Red Notes sandbox</title>
     <style id="sandbox-style"></style>
@@ -21,9 +21,13 @@
         var consoleEntryMaxCount = 200
         var consoleTruncationSuffix = '\n... [truncated]'
         var consoleLimitNotice = 'Console output limit reached; further messages were dropped.'
+        var executionTimeoutMs = 2000
+        var workerChannel = '__SN_SANDBOX_WORKER__'
         var consoleEntriesSent = 0
         var runNonce = location.hash.slice(1)
         var didRun = false
+        var activeWorker = null
+        var deadlineTimer = null
         var style = document.getElementById('sandbox-style')
         var root = document.getElementById('sandbox-root')
 
@@ -71,28 +75,234 @@
           } catch (error) {}
         }
 
-        function captureConsole() {
-          var methods = ['log', 'info', 'warn', 'error', 'debug']
-          for (var index = 0; index < methods.length; index += 1) {
-            ;(function (method) {
-              var original = console[method]
-              console[method] = function () {
-                send(method === 'debug' ? 'log' : method, arguments)
-                if (original) {
-                  try {
-                    original.apply(console, arguments)
-                  } catch (error) {}
-                }
-              }
-            })(methods[index])
+        function stopWorker() {
+          if (deadlineTimer !== null) {
+            clearTimeout(deadlineTimer)
+            deadlineTimer = null
           }
-          window.addEventListener('error', function (event) {
-            send('error', [event.message + (event.filename ? ' (' + event.lineno + ':' + event.colno + ')' : '')])
+          if (activeWorker !== null) {
+            activeWorker.terminate()
+            activeWorker = null
+          }
+        }
+
+        function sandboxWorkerBootstrap() {
+          'use strict'
+          var workerChannel = '__SN_SANDBOX_WORKER__'
+          var consoleMessageMaxLength = 16384
+          var consoleEntryMaxCount = 200
+          var consoleTruncationSuffix = '\n... [truncated]'
+          var consoleLimitNotice = 'Console output limit reached; further messages were dropped.'
+          var didRun = false
+          var nativePostMessage = self.postMessage.bind(self)
+          var resolvePromise = Promise.resolve.bind(Promise)
+
+          function serializeConsoleValue(value) {
+            if (typeof value === 'string') {
+              return value
+            }
+            try {
+              return JSON.stringify(value)
+            } catch (error) {
+              return String(value)
+            }
+          }
+
+          function boundedErrorMessage(error) {
+            var message = 'Sandbox execution failed.'
+            try {
+              message = error && typeof error.message === 'string' ? error.message : String(error)
+            } catch (ignored) {}
+            var contentLimit = consoleMessageMaxLength - consoleTruncationSuffix.length
+            return message.length > contentLimit
+              ? message.slice(0, contentLimit) + consoleTruncationSuffix
+              : message
+          }
+
+          function installConsoleCapture(nonce) {
+            var entriesSent = 0
+            var capturedConsole = {}
+            var methods = ['log', 'info', 'warn', 'error', 'debug']
+
+            function send(level, args) {
+              if (entriesSent >= consoleEntryMaxCount) {
+                return
+              }
+              if (entriesSent === consoleEntryMaxCount - 1) {
+                entriesSent += 1
+                nativePostMessage({
+                  channel: workerChannel,
+                  nonce: nonce,
+                  type: 'console',
+                  level: 'warn',
+                  message: consoleLimitNotice,
+                })
+                return
+              }
+
+              var message = ''
+              var contentLimit = consoleMessageMaxLength - consoleTruncationSuffix.length
+              var truncated = false
+              for (var index = 0; index < args.length; index += 1) {
+                var value = serializeConsoleValue(args[index])
+                var segment = (index === 0 ? '' : ' ') + value
+                var remaining = contentLimit - message.length
+                if (segment.length > remaining) {
+                  message += segment.slice(0, Math.max(0, remaining))
+                  truncated = true
+                  break
+                }
+                message += segment
+              }
+              if (truncated) {
+                message += consoleTruncationSuffix
+              }
+              entriesSent += 1
+              nativePostMessage({
+                channel: workerChannel,
+                nonce: nonce,
+                type: 'console',
+                level: level,
+                message: message,
+              })
+            }
+
+            for (var index = 0; index < methods.length; index += 1) {
+              ;(function (method) {
+                capturedConsole[method] = function () {
+                  send(method === 'debug' ? 'log' : method, arguments)
+                }
+              })(methods[index])
+            }
+            self.console = capturedConsole
+          }
+
+          function denyNetworkAndChildWorkers() {
+            var blocked = function () {
+              throw new Error('Network and child workers are unavailable in this sandbox.')
+            }
+            var names = [
+              'fetch',
+              'XMLHttpRequest',
+              'WebSocket',
+              'EventSource',
+              'Worker',
+              'SharedWorker',
+              'importScripts',
+            ]
+            for (var index = 0; index < names.length; index += 1) {
+              try {
+                Object.defineProperty(self, names[index], { value: blocked, configurable: false, writable: false })
+              } catch (error) {
+                try {
+                  self[names[index]] = blocked
+                } catch (ignored) {}
+              }
+            }
+            try {
+              Object.defineProperty(self, 'postMessage', { value: blocked, configurable: false, writable: false })
+            } catch (error) {}
+          }
+
+          self.addEventListener('message', function (event) {
+            var payload = event.data
+            if (
+              didRun ||
+              !payload ||
+              payload.channel !== workerChannel ||
+              typeof payload.nonce !== 'string' ||
+              typeof payload.script !== 'string'
+            ) {
+              return
+            }
+            didRun = true
+            var nonce = payload.nonce
+            if (payload.captureConsole === true) {
+              installConsoleCapture(nonce)
+            }
+            denyNetworkAndChildWorkers()
+
+            try {
+              var result = (0, eval)(payload.script + '\n//# sourceURL=standard-red-notes-sandbox.js')
+              resolvePromise(result).then(
+                function () {
+                  nativePostMessage({ channel: workerChannel, nonce: nonce, type: 'complete' })
+                },
+                function (error) {
+                  nativePostMessage({
+                    channel: workerChannel,
+                    nonce: nonce,
+                    type: 'console',
+                    level: 'error',
+                    message: boundedErrorMessage(error),
+                  })
+                  nativePostMessage({ channel: workerChannel, nonce: nonce, type: 'complete' })
+                },
+              )
+            } catch (error) {
+              nativePostMessage({
+                channel: workerChannel,
+                nonce: nonce,
+                type: 'console',
+                level: 'error',
+                message: boundedErrorMessage(error),
+              })
+              nativePostMessage({ channel: workerChannel, nonce: nonce, type: 'complete' })
+            }
           })
-          window.addEventListener('unhandledrejection', function (event) {
-            var reason = event.reason
-            send('error', ['Unhandled rejection: ' + (reason && reason.message ? reason.message : String(reason))])
-          })
+        }
+
+        function startWorker(script, captureConsole) {
+          var workerUrl = null
+          try {
+            var workerSource = ';(' + sandboxWorkerBootstrap.toString() + ')()'
+            workerUrl = URL.createObjectURL(new Blob([workerSource], { type: 'text/javascript' }))
+            var worker = new Worker(workerUrl)
+            activeWorker = worker
+            URL.revokeObjectURL(workerUrl)
+            workerUrl = null
+
+            worker.addEventListener('message', function (event) {
+              var data = event.data
+              if (!data || data.channel !== workerChannel || data.nonce !== runNonce || activeWorker !== worker) {
+                return
+              }
+              if (data.type === 'console' && typeof data.message === 'string') {
+                send(data.level, [data.message])
+              } else if (data.type === 'complete') {
+                stopWorker()
+              }
+            })
+            worker.addEventListener('error', function (event) {
+              if (activeWorker !== worker) {
+                return
+              }
+              if (event && typeof event.preventDefault === 'function') {
+                event.preventDefault()
+              }
+              send('error', [event && event.message ? event.message : 'Sandbox worker failed.'])
+              stopWorker()
+            })
+            deadlineTimer = setTimeout(function () {
+              if (activeWorker !== worker) {
+                return
+              }
+              send('error', ['Execution timed out after ' + executionTimeoutMs + ' ms.'])
+              stopWorker()
+            }, executionTimeoutMs)
+            worker.postMessage({
+              channel: workerChannel,
+              nonce: runNonce,
+              script: script,
+              captureConsole: captureConsole,
+            })
+          } catch (error) {
+            if (workerUrl !== null) {
+              URL.revokeObjectURL(workerUrl)
+            }
+            stopWorker()
+            send('error', [error && error.message ? error.message : String(error)])
+          }
         }
 
         window.addEventListener('message', function (event) {
@@ -111,18 +321,13 @@
           if (!sandboxDocument || typeof sandboxDocument !== 'object') {
             return
           }
-          if (payload.captureConsole === true) {
-            captureConsole()
-          }
           style.textContent = typeof sandboxDocument.css === 'string' ? sandboxDocument.css : ''
           root.innerHTML = typeof sandboxDocument.html === 'string' ? sandboxDocument.html : ''
           var script = typeof sandboxDocument.js === 'string' ? sandboxDocument.js : ''
-          try {
-            ;(0, eval)(script + '\n//# sourceURL=standard-red-notes-sandbox.js')
-          } catch (error) {
-            send('error', [error && error.message ? error.message : String(error)])
-          }
+          startWorker(script, payload.captureConsole === true)
         })
+
+        window.addEventListener('unload', stopWorker)
       })()
     </script>
   </body>
