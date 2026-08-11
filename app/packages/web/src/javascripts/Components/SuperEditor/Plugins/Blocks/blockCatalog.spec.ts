@@ -55,7 +55,9 @@ describe('buildInsertSections', () => {
   it('folds the Embeds and Advanced categories into "Others"', () => {
     // Embed is an Embeds-category block; Equation / Footnote / Table of Contents
     // are Advanced. All must surface under the single trailing Others section.
-    expect(namesIn('others')).toEqual(expect.arrayContaining(['Embed', 'Equation', 'Footnote', 'Table of Contents']))
+    expect(namesIn('others')).toEqual(
+      expect.arrayContaining(['Embed', 'Shipment Tracking', 'Equation', 'Footnote', 'Table of Contents']),
+    )
     // Nothing from Embeds/Advanced leaks into an earlier section.
     const nonOthers = sections.filter((section) => section.id !== 'others')
     for (const section of nonOthers) {
@@ -63,6 +65,13 @@ describe('buildInsertSections', () => {
         expect(entry.category === 'Embeds' || entry.category === 'Advanced').toBe(false)
       }
     }
+  })
+
+  it('surfaces Shipment Tracking through the shared catalog as an Embed', () => {
+    const shipmentTracking = BLOCK_CATALOG.find((entry) => entry.key === 'Shipment Tracking')
+    expect(shipmentTracking).toBeDefined()
+    expect(shipmentTracking?.category).toBe('Embeds')
+    expect(namesIn('others')).toContain('Shipment Tracking')
   })
 
   it('assigns every catalog entry to exactly one section (no drops, no duplicates)', () => {
