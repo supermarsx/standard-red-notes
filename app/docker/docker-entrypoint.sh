@@ -24,7 +24,9 @@ set -eu
 # "Extract text (OCR)" action and which tesseract language it defaults to.
 # ---------------------------------------------------------------------------
 
-INDEX_HTML="/usr/share/nginx/html/index.html"
+# The overrides are used by the contract test to exercise two consecutive
+# starts against the same files. Production containers leave them unset.
+INDEX_HTML="${SRN_ENTRYPOINT_INDEX_HTML:-/usr/share/nginx/html/index.html}"
 
 normalize_bool() {
   case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
@@ -90,7 +92,7 @@ fi
 # script and white-screen) and NEVER exit non-zero (that would abort the stock
 # nginx entrypoint and stop the server from starting).
 # ---------------------------------------------------------------------------
-CONF="/etc/nginx/conf.d/default.conf"
+CONF="${SRN_ENTRYPOINT_NGINX_CONF:-/etc/nginx/conf.d/default.conf}"
 
 # Emit the byte-exact body of the first inline <script> (no src attr), skipping
 # any <script> occurring inside an HTML comment. Exits non-zero if not found.
@@ -152,10 +154,16 @@ apply_csp_inline_hash() {
   _b64="$(printf '%s' "$_hex" | xxd -r -p | base64 | tr -d '\n')" || return 1
   printf '%s' "$_b64" | grep -Eq '^[A-Za-z0-9+/]{43}=$' || return 1
 
-  # Replace the placeholder OR a previously-substituted hash, so re-runs are
-  # idempotent. '|' delimiter is safe: base64 never contains '|'.
-  sed -i "s|'sha256-[A-Za-z0-9+/=_]*'|'sha256-${_b64}'|" "$CONF" || return 1
-  grep -q "sha256-${_b64}" "$CONF" || return 1
+  # Replace only the app-shell source following its unique self/wasm prefix.
+  # This accepts the image placeholder, a hash written by an earlier container
+  # start, or the fail-open token. Container restarts can therefore re-template
+  # index.html and rotate the parent hash without ever touching the sandbox
+  # runner's distinct fixed hash.
+  [ "$(grep -F -c "script-src 'self' 'wasm-unsafe-eval' " "$CONF")" -eq 1 ] || return 1
+  sed -i \
+    "s|script-src 'self' 'wasm-unsafe-eval' '[^']*'|script-src 'self' 'wasm-unsafe-eval' 'sha256-${_b64}'|" \
+    "$CONF" || return 1
+  grep -Fq "script-src 'self' 'wasm-unsafe-eval' 'sha256-${_b64}'" "$CONF" || return 1
 
   echo "[entrypoint] CSP inline-script hash: sha256-${_b64}"
   return 0
@@ -165,7 +173,12 @@ if apply_csp_inline_hash; then
   :
 else
   echo "[entrypoint] WARNING: failed to compute the CSP inline-script hash; falling back to 'unsafe-inline' for script-src so the app still boots (inline-script pinning disabled; rest of CSP still enforced)." >&2
-  # Drop the (placeholder or stale) hash to a safe, non-white-screening state.
-  sed -i "s|'sha256-[A-Za-z0-9+/=_]*'|'unsafe-inline'|" "$CONF" 2>/dev/null || \
+  # Loosen only the app-shell source, whether it still contains the placeholder
+  # or a hash from a prior start. Never replace the sandbox runner policy.
+  if ! sed -i \
+    "s|script-src 'self' 'wasm-unsafe-eval' '[^']*'|script-src 'self' 'wasm-unsafe-eval' 'unsafe-inline'|" \
+    "$CONF" 2>/dev/null || \
+    ! grep -Fq "script-src 'self' 'wasm-unsafe-eval' 'unsafe-inline'" "$CONF"; then
     echo "[entrypoint] WARNING: could not rewrite ${CONF} for CSP fallback." >&2
+  fi
 fi

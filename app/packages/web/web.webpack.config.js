@@ -27,6 +27,7 @@ module.exports = (env) => {
     { from: 'src/422.html' },
     { from: 'src/500.html' },
     { from: 'src/index.html' },
+    { from: 'src/sandbox.html' },
     { from: 'src/manifest.webmanifest' },
     {
       // App-shell service worker, served from the server root (scope `/`).
@@ -81,6 +82,10 @@ module.exports = (env) => {
     performance: { hints: false },
     output: {
       filename: process.env.BUILD_TARGET === 'clipper' ? './[name].bundle.js' : './app.js',
+      // Evaluate dependency import.meta.url references against the browser at
+      // runtime. Webpack's default folds them to file:/// paths on the build
+      // machine, leaking host paths and triggering Firefox local-file loads.
+      importMetaName: "({ url: typeof document === 'undefined' ? globalThis.location.href : document.baseURI })",
     },
     optimization:
       process.env.BUILD_TARGET === 'clipper'
@@ -118,6 +123,12 @@ module.exports = (env) => {
       new webpack.DefinePlugin({
         __WEB_VERSION__: JSON.stringify(require('./package.json').version),
       }),
+      // libsodium's dual Node/browser CJS file contains a guarded
+      // require('node:fs'). Normalize the scheme so resolve.fallback can replace
+      // it with the existing empty browser fs module.
+      new webpack.NormalModuleReplacementPlugin(/^node:fs$/, (resource) => {
+        resource.request = 'fs'
+      }),
       new MiniCssExtractPlugin({
         // Options similar to the same options in webpackOptions.output
         filename: './app.css',
@@ -149,12 +160,29 @@ module.exports = (env) => {
         '@': path.resolve(__dirname, 'src/javascripts'),
         '@Controllers': path.resolve(__dirname, 'src/javascripts/controllers'),
         '@Services': path.resolve(__dirname, 'src/javascripts/services'),
+        // Force the browser-safe CommonJS distributions. The ESM distributions
+        // materialize `import.meta.url` as a file:/// build-machine path, which
+        // leaks into app.js and makes Firefox attempt to load a local file URL.
+        'libsodium-wrappers-sumo$': path.resolve(
+          __dirname,
+          '../../node_modules/libsodium-wrappers-sumo/dist/modules-sumo/libsodium-wrappers.js',
+        ),
+        'libsodium-sumo$': path.resolve(
+          __dirname,
+          '../../node_modules/libsodium-sumo/dist/modules-sumo/libsodium-sumo.js',
+        ),
         // Excalidraw's prod bundle does `require('roughjs/bin/...')`; point all
         // roughjs subpath imports at the copy that actually ships the bin/ dir.
         roughjs: path.dirname(require.resolve('roughjs/package.json')),
       },
     },
     module: {
+      parser: {
+        javascript: {
+          importMeta: false,
+          url: 'relative',
+        },
+      },
       rules: [
         {
           test: /\.worker\.tsx?$/,

@@ -18,11 +18,24 @@
 
 const SW_VERSION = '__SW_VERSION__'
 const CACHE_NAME = 'srn-shell-' + SW_VERSION
+const SANDBOX_PATH = '/sandbox.html'
 
 // Minimal set of files that make up the bootable shell. Everything else
 // (components, editors, fonts, vendor libsodium, etc.) is cached on first use
 // by the runtime fetch handler below.
-const CORE_SHELL = ['/', '/index.html', '/app.js', '/app.css', '/manifest.webmanifest']
+const CORE_SHELL = ['/', '/index.html', SANDBOX_PATH, '/app.js', '/app.css', '/manifest.webmanifest']
+
+function unavailableSandboxResponse() {
+  return new Response('The isolated code sandbox is unavailable while offline. Reconnect and run it again.', {
+    status: 503,
+    headers: {
+      'Content-Type': 'text/plain; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'X-Content-Type-Options': 'nosniff',
+      'Content-Security-Policy': "default-src 'none'; sandbox",
+    },
+  })
+}
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -102,7 +115,19 @@ self.addEventListener('fetch', (event) => {
           caches.open(CACHE_NAME).then((cache) => cache.put(request, copy))
           return response
         })
-        .catch(() => caches.match(request).then((cached) => cached || caches.match('/index.html'))),
+        .catch(async () => {
+          const cached = await caches.match(request)
+          if (cached) {
+            return cached
+          }
+          // Never substitute the application shell for the executable runner.
+          // It has a different CSP and no sandbox message contract. Returning
+          // inert text keeps an offline cache miss explicit and fail-closed.
+          if (url.pathname === SANDBOX_PATH) {
+            return unavailableSandboxResponse()
+          }
+          return caches.match('/index.html')
+        }),
     )
     return
   }
