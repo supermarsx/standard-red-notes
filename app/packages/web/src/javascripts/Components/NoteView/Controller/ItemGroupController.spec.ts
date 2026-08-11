@@ -3,6 +3,7 @@ import {
   ComponentManagerInterface,
   ItemManagerInterface,
   MutatorClientInterface,
+  NoteType,
   PreferenceServiceInterface,
   SessionsClientInterface,
   SyncServiceInterface,
@@ -19,12 +20,17 @@ import { NoteViewController } from './NoteViewController'
 jest.mock('./NoteViewController', () => {
   class MockNoteViewController {
     runtimeId = `${Math.random()}`
-    item = { uuid: this.runtimeId }
+    item: { uuid: string }
     initialize = jest.fn().mockResolvedValue(undefined)
     deinit = jest.fn()
     deinitImmediatelyForSecurity = jest.fn()
     syncOnlyIfLargeNote = jest.fn()
     flushAndAwaitPendingSave = jest.fn().mockResolvedValue(undefined)
+    flushAndAwaitPendingSaveStrict = jest.fn().mockResolvedValue(undefined)
+
+    constructor(item?: { uuid: string }) {
+      this.item = item ?? { uuid: this.runtimeId }
+    }
   }
   return { NoteViewController: MockNoteViewController }
 })
@@ -38,11 +44,17 @@ describe('ItemGroupController tabs/tiles', () => {
   let group: ItemGroupController
 
   beforeEach(() => {
+    const items = {
+      findItem: jest.fn((uuid: string) => ({ uuid, noteType: NoteType.Super })),
+    } as unknown as ItemManagerInterface
+    const sessions = {
+      isSignedIn: jest.fn().mockReturnValue(false),
+    } as unknown as SessionsClientInterface
     group = new ItemGroupController(
-      {} as ItemManagerInterface,
+      items,
       {} as MutatorClientInterface,
       {} as SyncServiceInterface,
-      {} as SessionsClientInterface,
+      sessions,
       {} as PreferenceServiceInterface,
       {} as ComponentManagerInterface,
       {} as AlertService,
@@ -51,6 +63,7 @@ describe('ItemGroupController tabs/tiles', () => {
   })
 
   const addTab = () => group.createItemController({ templateOptions: {}, openInNewTile: true })
+  const superNote = (uuid: string) => ({ uuid, noteType: NoteType.Super }) as never
 
   it('adding a tab grows the controller set and makes the new one active', async () => {
     const first = await addTab()
@@ -155,6 +168,129 @@ describe('ItemGroupController tabs/tiles', () => {
     expect(group.itemControllers).not.toContain(controller)
     expect(group.activeItemViewController).toBeUndefined()
     expect(observer).toHaveBeenCalledWith(undefined)
+  })
+
+  it('keeps a detached Todo owner out of visible controllers and active selection', async () => {
+    const visible = await addTab()
+    const detached = await group.createDetachedNoteController(superNote('background-note'))
+
+    expect(group.itemControllers).toEqual([visible])
+    expect(group.activeItemViewController).toBe(visible)
+    expect(detached.item.uuid).toBe('background-note')
+
+    await group.flushAndCloseDetachedNoteController(detached)
+    expect(detached.flushAndAwaitPendingSaveStrict).toHaveBeenCalledTimes(1)
+    expect(detached.deinit).toHaveBeenCalledTimes(1)
+    expect(group.itemControllers).toEqual([visible])
+    expect(group.activeItemViewController).toBe(visible)
+  })
+
+  it('retains a detached owner when strict local/provider durability fails', async () => {
+    const detached = await group.createDetachedNoteController(superNote('background-note'))
+    ;(detached.flushAndAwaitPendingSaveStrict as jest.Mock).mockRejectedValueOnce(new Error('local persistence failed'))
+
+    await expect(group.flushAndCloseDetachedNoteController(detached)).rejects.toThrow('local persistence failed')
+    expect(detached.deinit).not.toHaveBeenCalled()
+    expect(detached.deinitImmediatelyForSecurity).not.toHaveBeenCalled()
+
+    group.closeDetachedNoteControllerImmediately(detached)
+    expect(detached.deinitImmediatelyForSecurity).toHaveBeenCalledTimes(1)
+  })
+
+  it('reserves a preparing visible Super editor before a detached owner can race it', async () => {
+    const note = superNote('same-note')
+    const visible = group.createItemController({ note, openInNewTile: true })
+
+    await expect(group.createDetachedNoteController(note)).rejects.toThrow('already open')
+    await expect(visible).resolves.toBeInstanceOf(NoteViewController)
+  })
+
+  it('strictly releases a detached owner before opening the same note visibly', async () => {
+    const note = superNote('same-note')
+    const closed = jest.fn()
+    const detached = await group.createDetachedNoteController(note, () => closed)
+    let finishFlush!: () => void
+    ;(detached.flushAndAwaitPendingSaveStrict as jest.Mock).mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finishFlush = resolve
+        }),
+    )
+
+    let visibleOpened = false
+    const visible = group.createItemController({ note, openInNewTile: true }).then((controller) => {
+      visibleOpened = true
+      return controller
+    })
+    await Promise.resolve()
+    expect(detached.flushAndAwaitPendingSaveStrict).toHaveBeenCalledTimes(1)
+    expect(visibleOpened).toBe(false)
+
+    finishFlush()
+    await expect(visible).resolves.toBeInstanceOf(NoteViewController)
+    expect(closed).toHaveBeenCalledTimes(1)
+    expect(detached.deinit).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the prior visible UI active when detached strict release fails', async () => {
+    const prior = await addTab()
+    const note = superNote('blocked-note')
+    const detached = await group.createDetachedNoteController(note)
+    ;(detached.flushAndAwaitPendingSaveStrict as jest.Mock).mockRejectedValueOnce(new Error('disk unavailable'))
+
+    await expect(group.createItemController({ note })).rejects.toThrow('source note was not opened')
+    expect(group.activeItemViewController).toBe(prior)
+    expect(group.itemControllers).toEqual([prior])
+    expect(detached.deinit).not.toHaveBeenCalled()
+  })
+
+  it('cancels a visible-note reservation during the awaited outgoing flush without switching UI', async () => {
+    const outgoing = (await addTab()) as unknown as {
+      flushAndAwaitPendingSave: jest.Mock
+      deinit: jest.Mock
+    }
+    let finishFlush!: () => void
+    outgoing.flushAndAwaitPendingSave.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finishFlush = resolve
+        }),
+    )
+    const observer = jest.fn()
+    group.addActiveControllerChangeObserver(observer)
+    observer.mockClear()
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    const opening = group.createItemController({ note: superNote('must-not-open') })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(outgoing.flushAndAwaitPendingSave).toHaveBeenCalledTimes(1)
+
+    group.cancelChecklistEditorReservationsForSecurity()
+    finishFlush()
+
+    await expect(opening).rejects.toThrow('authorization changed')
+    expect(outgoing.deinit).not.toHaveBeenCalled()
+    expect(group.itemControllers).toEqual([outgoing])
+    expect(group.activeItemViewController).toBe(outgoing)
+    expect(observer).not.toHaveBeenCalled()
+    consoleError.mockRestore()
+  })
+
+  it('runs each detached close callback exactly once across replacement lifetimes', async () => {
+    const note = superNote('same-note')
+    const firstClosed = jest.fn()
+    const first = await group.createDetachedNoteController(note, () => firstClosed)
+    group.closeDetachedNoteControllerImmediately(first)
+    group.closeDetachedNoteControllerImmediately(first)
+    expect(firstClosed).toHaveBeenCalledTimes(1)
+
+    const secondClosed = jest.fn()
+    const second = await group.createDetachedNoteController(note, () => secondClosed)
+    expect(firstClosed).toHaveBeenCalledTimes(1)
+    expect(secondClosed).not.toHaveBeenCalled()
+    group.closeDetachedNoteControllerImmediately(second)
+    expect(secondClosed).toHaveBeenCalledTimes(1)
   })
 
   describe('split/tile state', () => {

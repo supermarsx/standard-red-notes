@@ -6,8 +6,9 @@ import {
   todosForNote,
   totalTodoProgress,
 } from './allTodos'
+import { CHECKLIST_DUE_AT_STATE_KEY, CHECKLIST_TODO_ID_STATE_KEY } from '../SuperEditor/Lexical/Nodes/ChecklistItemNode'
 
-const superChecklistJson = (items: { text: string; checked: boolean }[]): string =>
+const superChecklistJson = (items: { text: string; checked: boolean; todoId?: string; dueAt?: string }[]): string =>
   JSON.stringify({
     root: {
       type: 'root',
@@ -15,11 +16,18 @@ const superChecklistJson = (items: { text: string; checked: boolean }[]): string
         {
           type: 'list',
           listType: 'check',
-          children: items.map((item) => ({
-            type: 'listitem',
-            checked: item.checked,
-            children: [{ type: 'text', text: item.text }],
-          })),
+          children: items.map((item) => {
+            const state = {
+              ...(item.todoId ? { [CHECKLIST_TODO_ID_STATE_KEY]: item.todoId } : {}),
+              ...(item.dueAt ? { [CHECKLIST_DUE_AT_STATE_KEY]: item.dueAt } : {}),
+            }
+            return {
+              type: 'listitem',
+              checked: item.checked,
+              ...(Object.keys(state).length > 0 ? { $: state } : {}),
+              children: [{ type: 'text', text: item.text }],
+            }
+          }),
         },
         // A normal bullet list must NOT be treated as a todo.
         {
@@ -64,6 +72,24 @@ describe('parseSuperChecklist', () => {
     expect(parseSuperChecklist('')).toEqual([])
     expect(parseSuperChecklist('plain text')).toEqual([])
   })
+
+  it('surfaces persisted stable identity and a canonical due instant', () => {
+    const items = parseSuperChecklist(
+      superChecklistJson([
+        {
+          text: 'Ship it',
+          checked: false,
+          todoId: 'todo-ship-it',
+          dueAt: '2026-08-12T12:30:00+01:00',
+        },
+      ]),
+    )
+    expect(items[0]).toMatchObject({
+      id: 'todo-ship-it',
+      todoId: 'todo-ship-it',
+      dueAt: '2026-08-12T11:30:00.000Z',
+    })
+  })
 })
 
 describe('parseAdvancedChecklist', () => {
@@ -93,6 +119,19 @@ describe('parseAdvancedChecklist', () => {
 
   it('returns empty for unrecognized shape', () => {
     expect(parseAdvancedChecklist(JSON.stringify({ foo: 'bar' }))).toEqual([])
+  })
+
+  it('bounds third-party task counts, labels and duplicate identifiers', () => {
+    const tasks = Array.from({ length: 10_005 }, (_, index) => ({
+      id: 'duplicate-id',
+      description: index === 0 ? 'x'.repeat(20_000) : `Task ${index}`,
+      completed: false,
+    }))
+    const items = parseAdvancedChecklist(JSON.stringify({ tasks }))
+
+    expect(items).toHaveLength(10_000)
+    expect(items[0].text).toHaveLength(16_384)
+    expect(new Set(items.map((item) => item.id)).size).toBe(items.length)
   })
 })
 

@@ -46,6 +46,8 @@ import {
   PDF_PAGE_PADDING,
   PDF_QUOTE_INNER_GAP,
 } from './PDFLayoutConstants'
+import { $getChecklistDueAt, $isChecklistItemNode } from '../../Nodes/ChecklistItemNode'
+import { checklistDueExportText } from '../../../Checklist/checklistDueDate'
 
 const PDF_SUPERSUBSCRIPT_FONT_SIZE = 9
 const PDF_HEADING_SUPERSUBSCRIPT_SCALE = 0.75
@@ -304,10 +306,11 @@ const getPDFVerticalSpacer = (height: number = PDF_BASE_FONT_SIZE * PDF_LINE_HEI
   style: { height },
 })
 
-const getPDFDataNodeFromLexicalNode = (
+export const getPDFDataNodeFromLexicalNode = (
   node: LexicalNode,
   fontFamilies: FontFamily[],
   useCustomFonts: boolean = false,
+  now: number = Date.now(),
 ): PDFDataNode => {
   const parent = node.getParent()
 
@@ -357,7 +360,7 @@ const getPDFDataNodeFromLexicalNode = (
             line.length === 0
               ? [getPDFVerticalSpacer(PDF_CODE_BLOCK_FONT_SIZE * PDF_LINE_HEIGHT_MULTIPLIER)]
               : line
-                  .map((child) => getPDFDataNodeFromLexicalNode(child, fontFamilies, useCustomFonts))
+                  .map((child) => getPDFDataNodeFromLexicalNode(child, fontFamilies, useCustomFonts, now))
                   .filter((child): child is PDFDataNode => child != null),
         }
       }),
@@ -387,7 +390,7 @@ const getPDFDataNodeFromLexicalNode = (
   const children =
     $isElementNode(node) || $isTableNode(node) || $isTableCellNode(node) || $isTableRowNode(node)
       ? node.getChildren().map((child) => {
-          return getPDFDataNodeFromLexicalNode(child, fontFamilies, useCustomFonts)
+          return getPDFDataNodeFromLexicalNode(child, fontFamilies, useCustomFonts, now)
         })
       : undefined
 
@@ -406,27 +409,57 @@ const getPDFDataNodeFromLexicalNode = (
 
     const listType = parent.getListType()
 
-    const isNestedList = node.getChildren().some((child) => $isListNode(child))
-
-    if (isNestedList) {
-      return {
-        type: 'View',
-        style: [
-          styles.column,
-          {
-            marginLeft: 10,
-          },
-        ],
-        children,
+    const sourceChildren = node.getChildren()
+    const labelChildren = (children ?? []).filter((_, index) => !$isListNode(sourceChildren[index]))
+    const nestedListChildren = (children ?? []).filter((_, index) => $isListNode(sourceChildren[index]))
+    const dueAt = $isChecklistItemNode(node) ? $getChecklistDueAt(node) : undefined
+    if (dueAt) {
+      const dueText = checklistDueExportText(dueAt, Boolean(node.getChecked()), now)
+      if (dueText) {
+        const dueNode: PDFDataNode = {
+          type: 'Text',
+          style: { color: '#72767e', fontSize: 9 },
+          children: ` - ${dueText}`,
+        }
+        labelChildren.push(dueNode)
       }
     }
 
-    return getListItemNode({
-      children,
+    // Lexical represents indentation with a structural listitem whose only
+    // children are nested lists. It is not a semantic row, so rendering the
+    // ordinary list-item shell here would add an empty marker/checkbox and a
+    // phantom line before the real nested task.
+    if (labelChildren.length === 0 && nestedListChildren.length > 0) {
+      return {
+        type: 'View',
+        style: [styles.column, { marginLeft: 20 }],
+        children: nestedListChildren,
+      }
+    }
+
+    const parentRow = getListItemNode({
+      children: labelChildren,
       listType,
       value: node.getValue(),
       checked: node.getChecked(),
     })
+
+    if (nestedListChildren.length > 0) {
+      return {
+        type: 'View',
+        style: styles.column,
+        children: [
+          parentRow,
+          {
+            type: 'View',
+            style: { marginLeft: 20 },
+            children: nestedListChildren,
+          },
+        ],
+      }
+    }
+
+    return parentRow
   }
 
   if ($isListNode(node)) {
@@ -553,8 +586,9 @@ const getPDFDataNodesFromLexicalNodes = (
   nodes: LexicalNode[],
   fontFamilies: FontFamily[],
   useCustomFonts: boolean,
+  now: number,
 ): PDFDataNode[] => {
-  return nodes.map((node) => getPDFDataNodeFromLexicalNode(node, fontFamilies, useCustomFonts))
+  return nodes.map((node) => getPDFDataNodeFromLexicalNode(node, fontFamilies, useCustomFonts, now))
 }
 
 /**
@@ -692,6 +726,8 @@ export function $generatePDFFromNodes(
   editor: LexicalEditor,
   pageSize: PrefValue[PrefKey.SuperNoteExportPDFPageSize],
   options?: PageLayoutOptions,
+  now: number = Date.now(),
+  renderPDF: PDFWorkerInterface['renderPDF'] = (...args) => PDFWorkerComlink.renderPDF(...args),
 ): Promise<Blob> {
   return new Promise<Blob>((resolve, reject) => {
     shouldUseCustomFonts()
@@ -701,13 +737,13 @@ export function $generatePDFFromNodes(
           const nodes = root.getChildren()
           const fontFamilies: FontFamily[] = []
           const contentWidth = getPDFContentWidth(pageSize)
-          const pdfDataNodes = getPDFDataNodesFromLexicalNodes(nodes, fontFamilies, useCustomFonts)
+          const pdfDataNodes = getPDFDataNodesFromLexicalNodes(nodes, fontFamilies, useCustomFonts, now)
           const imageSources = collectPDFImageSources(pdfDataNodes)
 
           void loadPDFImageDimensionsMap(imageSources)
             .then((imageDimensions) => {
               patchPDFImageStyles(pdfDataNodes, contentWidth, imageDimensions)
-              return PDFWorkerComlink.renderPDF(pdfDataNodes, pageSize, fontFamilies, useCustomFonts, options)
+              return renderPDF(pdfDataNodes, pageSize, fontFamilies, useCustomFonts, options)
             })
             .then((blob) => {
               resolve(blob)

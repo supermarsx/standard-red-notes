@@ -43,6 +43,8 @@ import { $isRemoteImageNode } from '../../../Plugins/RemoteImagePlugin/RemoteIma
 import { $createFileExportNode } from '../../Nodes/FileExportNode'
 import { $isFileNode } from '../../../Plugins/EncryptedFilePlugin/Nodes/FileUtils'
 import { parseFileName } from '@standardnotes/utils'
+import { $getChecklistDueAt, $isChecklistItemNode } from '../../Nodes/ChecklistItemNode'
+import { checklistDueExportText } from '../../../Checklist/checklistDueDate'
 
 /* ---------------------------------------------------------------- model types */
 
@@ -106,6 +108,8 @@ export interface DocModelConfig {
   embedBehavior?: PrefValue[PrefKey.SuperNoteExportEmbedBehavior]
   getFileItem?: (id: string) => FileItem | undefined
   getFileBase64?: (id: string) => Promise<string | undefined>
+  /** Stable clock snapshot shared by every due-date projection in this document. */
+  now?: number
 }
 
 /* ------------------------------------------------------------- css utilities */
@@ -431,7 +435,7 @@ const collectInlines = (element: ElementNode, depth = 0): Inline[] => {
 
 /* ----------------------------------------------------------------- list walk */
 
-const listNodeToModel = (listNode: ListNode, depth = 0): ListModel => {
+const listNodeToModel = (listNode: ListNode, now: number, depth = 0): ListModel => {
   const listType = listNode.getListType()
   const model: ListModel = {
     ordered: listType === 'number',
@@ -451,12 +455,19 @@ const listNodeToModel = (listNode: ListNode, depth = 0): ListModel => {
     let sublist: ListModel | undefined
     for (const grandChild of item.getChildren()) {
       if ($isListNode(grandChild)) {
-        sublist = listNodeToModel(grandChild, depth + 1)
+        sublist = listNodeToModel(grandChild, now, depth + 1)
       } else {
         inlines.push(...nodeToInlines(grandChild, depth))
       }
     }
     const checked = item.getChecked()
+    const dueAt = $isChecklistItemNode(item) ? $getChecklistDueAt(item) : undefined
+    if (dueAt) {
+      const dueText = checklistDueExportText(dueAt, Boolean(checked), now)
+      if (dueText) {
+        inlines.push({ kind: 'text', text: ` - ${dueText}`, italic: true })
+      }
+    }
     const itemModel: ListItemModel = { inlines }
     if (checked != null) {
       itemModel.checked = checked
@@ -480,7 +491,7 @@ const headingLevel = (tag: string): 1 | 2 | 3 | 4 | 5 | 6 => {
 }
 
 /** Turn a top-level (block) node into zero or more DocBlocks. Never drops content. */
-const nodeToBlocks = (node: LexicalNode, depth = 0): DocBlock[] => {
+const nodeToBlocks = (node: LexicalNode, now: number, depth = 0): DocBlock[] => {
   if ($isHeadingNode(node)) {
     return [
       {
@@ -496,7 +507,7 @@ const nodeToBlocks = (node: LexicalNode, depth = 0): DocBlock[] => {
     return [{ kind: 'quote', inlines: collectInlines(node, depth) }]
   }
   if ($isListNode(node)) {
-    return [{ kind: 'list', list: listNodeToModel(node, depth) }]
+    return [{ kind: 'list', list: listNodeToModel(node, now, depth) }]
   }
   if ($isCodeNode(node)) {
     return [
@@ -518,7 +529,7 @@ const nodeToBlocks = (node: LexicalNode, depth = 0): DocBlock[] => {
         if (!$isTableCellNode(cellNode)) {
           continue
         }
-        row.push(buildBlocksFromChildren((cellNode as ElementNode).getChildren(), depth + 1))
+        row.push(buildBlocksFromChildren((cellNode as ElementNode).getChildren(), now, depth + 1))
       }
       rows.push(row)
     }
@@ -576,7 +587,7 @@ const nodeToBlocks = (node: LexicalNode, depth = 0): DocBlock[] => {
   // Unknown CONTAINER node (callout / collapsible / etc.): recurse children so
   // their structured content survives.
   if ($isElementNode(node) && node.getChildrenSize() > 0) {
-    const nested = buildBlocksFromChildren(node.getChildren(), depth + 1)
+    const nested = buildBlocksFromChildren(node.getChildren(), now, depth + 1)
     if (nested.length > 0) {
       return nested
     }
@@ -587,13 +598,13 @@ const nodeToBlocks = (node: LexicalNode, depth = 0): DocBlock[] => {
   return [{ kind: 'paragraph', inlines: [{ kind: 'text', text }] }]
 }
 
-const buildBlocksFromChildren = (children: LexicalNode[], depth = 0): DocBlock[] => {
+const buildBlocksFromChildren = (children: LexicalNode[], now: number, depth = 0): DocBlock[] => {
   if (depth >= MAX_WALK_DEPTH) {
     return []
   }
   const blocks: DocBlock[] = []
   for (const child of children) {
-    blocks.push(...nodeToBlocks(child, depth))
+    blocks.push(...nodeToBlocks(child, now, depth))
   }
   return blocks
 }
@@ -686,6 +697,7 @@ export const superStringToDocModel = async (superString: string, config: DocMode
     return []
   }
   const editor = createExportEditor()
+  const exportNow = config.now ?? Date.now()
   // Prune pathological nesting BEFORE loading: setEditorState's commit walks the
   // whole tree's text content (Lexical-internal, unbounded), so a deep note would
   // overflow the stack here — before our depth-bounded walk runs. See
@@ -694,7 +706,7 @@ export const superStringToDocModel = async (superString: string, config: DocMode
   const serialized = pruneSerializedDepth(JSON.parse(superString))
   editor.setEditorState(editor.parseEditorState(serialized as Parameters<typeof editor.parseEditorState>[0]))
   await rewriteFileNodes(editor, config)
-  return editor.getEditorState().read(() => buildBlocksFromChildren($getRoot().getChildren()))
+  return editor.getEditorState().read(() => buildBlocksFromChildren($getRoot().getChildren(), exportNow))
 }
 
 /**

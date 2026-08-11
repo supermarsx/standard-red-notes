@@ -32,6 +32,7 @@ import { $createMermaidNode } from '../../Nodes/MermaidNode'
 import { superStringToDocModel, DocBlock, ListModel, buildPlainTextDocModel } from './DocModel'
 import { buildDocxBlob } from './DocxGenerator'
 import { buildOdtBlob } from './OdtGenerator'
+import { $setChecklistDueAt } from '../../Nodes/ChecklistItemNode'
 
 const PNG_1x1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
 const PNG_DATA_URI = `data:image/png;base64,${PNG_1x1}`
@@ -107,6 +108,7 @@ const buildFixtureSuperString = (): string => {
       c1.append($createTextNode('Done item'))
       const c2 = $createListItemNode()
       c2.setChecked(false)
+      $setChecklistDueAt(c2, '2099-08-12T12:00:00.000Z')
       c2.append($createTextNode('Todo item'))
       check.append(c1, c2)
       root.append(check)
@@ -234,9 +236,10 @@ const comprehensiveModel = (): DocBlock[] => [
 
 describe('superStringToDocModel (Lexical walk)', () => {
   let blocks: DocBlock[]
+  const exportNow = Date.parse('2099-08-12T11:00:00.000Z')
 
   beforeAll(async () => {
-    blocks = await superStringToDocModel(buildFixtureSuperString(), {})
+    blocks = await superStringToDocModel(buildFixtureSuperString(), { now: exportNow })
   })
 
   it('maps all five heading levels with their text', () => {
@@ -294,6 +297,12 @@ describe('superStringToDocModel (Lexical walk)', () => {
     expect(check?.kind).toBe('list')
     if (check?.kind === 'list') {
       expect(check.list.items[0].checked).toBe(true)
+      const dueInline = check.list.items[1].inlines.find(
+        (inline) => inline.kind === 'text' && inline.text.includes('Due'),
+      )
+      expect(dueInline).toBeDefined()
+      expect(dueInline?.kind === 'text' && dueInline.text).toContain('[2099-08-12T12:00:00.000Z]')
+      expect(dueInline?.kind === 'text' && dueInline.text).toContain('(1h left)')
     }
   })
 

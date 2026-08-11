@@ -118,6 +118,8 @@ export const getNoteBlob = async (
    * Defaults to `note.text` for the flag-off / already-full case.
    */
   noteText: string = note.text,
+  /** Stable clock snapshot shared by every due-date projection in this export. */
+  exportNow: number = Date.now(),
 ) => {
   const format = getNoteFormat(application, note)
 
@@ -145,7 +147,12 @@ export const getNoteBlob = async (
   if (format === 'docx' || format === 'odt') {
     const blocks =
       note.noteType === NoteType.Super
-        ? await superStringToDocModel(noteText, { embedBehavior: superEmbedBehavior, getFileItem, getFileBase64 })
+        ? await superStringToDocModel(noteText, {
+            embedBehavior: superEmbedBehavior,
+            getFileItem,
+            getFileBase64,
+            now: exportNow,
+          })
         : buildPlainTextDocModel(noteText)
     return format === 'docx' ? buildDocxBlob(blocks, pageLayoutOptions) : buildOdtBlob(blocks, pageLayoutOptions)
   }
@@ -181,6 +188,7 @@ export const getNoteBlob = async (
           ),
           pageLayout: pageLayoutOptions,
         },
+        now: exportNow,
       })
       return validatePDFBlob(pdf)
     }
@@ -199,6 +207,7 @@ export const getNoteBlob = async (
           ),
           pageLayout: pageLayoutOptions,
         },
+        now: exportNow,
       },
     )
     const useMDFrontmatter =
@@ -301,6 +310,11 @@ export const createNoteExport = async (
     return
   }
 
+  // One export operation owns one clock snapshot. A multi-note archive therefore
+  // cannot disagree about "time left" merely because an item crossed a minute or
+  // deadline boundary while later notes were still being converted.
+  const exportNow = Date.now()
+
   const superExportFormatPref = application.getPreference(
     PrefKey.SuperNoteExportFormat,
     PrefDefaults[PrefKey.SuperNoteExportFormat],
@@ -322,7 +336,7 @@ export const createNoteExport = async (
     const singleNoteText = await getFullNoteText(application.sync, singleNote)
 
     if (!noteRequiresFolder(singleNote, superExportFormatPref, superEmbedBehaviorPref, singleNoteText)) {
-      const blob = await getNoteBlob(application, singleNote, superEmbedBehaviorPref, singleNoteText)
+      const blob = await getNoteBlob(application, singleNote, superEmbedBehaviorPref, singleNoteText, exportNow)
       const fileName = getNoteFileName(application, singleNote)
       return {
         blob,
@@ -334,7 +348,7 @@ export const createNoteExport = async (
     const zipFS = new zip.fs.FS()
     const { root } = zipFS
 
-    const blob = await getNoteBlob(application, singleNote, superEmbedBehaviorPref, singleNoteText)
+    const blob = await getNoteBlob(application, singleNote, superEmbedBehaviorPref, singleNoteText, exportNow)
     const fileName = parseAndCreateZippableFileName(getNoteFileName(application, singleNote))
     root.addBlob(fileName, blob)
 
@@ -356,7 +370,7 @@ export const createNoteExport = async (
   for (const note of notes) {
     // LAZY-DECRYPT: re-hydrate each note's body before it is read (see above).
     const noteText = await getFullNoteText(application.sync, note)
-    const blob = await getNoteBlob(application, note, superEmbedBehaviorPref, noteText)
+    const blob = await getNoteBlob(application, note, superEmbedBehaviorPref, noteText, exportNow)
     const _name = parseAndCreateZippableFileName(getNoteFileName(application, note))
 
     filenameCounts[_name] = filenameCounts[_name] == undefined ? 0 : filenameCounts[_name] + 1

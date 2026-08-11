@@ -1,8 +1,16 @@
-import { $insertList, $isListItemNode, INSERT_CHECK_LIST_COMMAND, ListNode } from '@lexical/list'
+import {
+  $insertList,
+  $isListItemNode,
+  $isListNode,
+  INSERT_CHECK_LIST_COMMAND,
+  ListItemNode,
+  ListNode,
+} from '@lexical/list'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
 import { calculateZoomLevel, isHTMLElement, mergeRegister } from '@lexical/utils'
 import {
   $getNearestNodeFromDOMNode,
+  $getNodeByKey,
   $getSelection,
   $isRangeSelection,
   COMMAND_PRIORITY_LOW,
@@ -14,10 +22,368 @@ import { useApplication } from '../../ApplicationProvider'
 import { getPrimaryModifier } from '@standardnotes/ui-services'
 import { $reorderCheckListForItem } from './CheckListAutoMovePlugin/reorderCheckList'
 import { getChecklistAutoMoveEnabled } from './CheckListAutoMovePlugin/autoMoveSetting'
+import { SNNote } from '@standardnotes/snjs'
+import {
+  CHECKLIST_DUE_ACTION_ATTR,
+  CHECKLIST_DUE_INPUT_ATTR,
+  CHECKLIST_DUE_SHELL_ATTR,
+  removeChecklistDueShell,
+  syncChecklistDueShell,
+} from '../Checklist/ChecklistDueControls'
+import {
+  CHECKLIST_DUE_TICK_MS,
+  checklistDueAtFromLocalInput,
+  normalizeChecklistDueAt,
+} from '../Checklist/checklistDueDate'
+import { $applyChecklistEditorMutation, $getChecklistItems } from '../Checklist/ChecklistEditorMutations'
+import {
+  ChecklistEditorRole,
+  isChecklistMutationDurabilityReady,
+  notifyChecklistMutationBridgeReadiness,
+  persistChecklistMutationExactlyOnce,
+  registerChecklistMutationBridge,
+} from '../Checklist/ChecklistMutationBridge'
+import {
+  $ensureChecklistTodoId,
+  $getChecklistDueAt,
+  $getChecklistTodoId,
+  $isChecklistItemNode,
+  $normalizeChecklistItemMetadata,
+  $setChecklistDueAt,
+} from '../Lexical/Nodes/ChecklistItemNode'
+import {
+  matchesNoteEncryptionIdentity,
+  resolveNoteEncryptionIdentity,
+} from '../Collaboration/CollaborationKeyDerivation'
+import { canMutateSuperChecklistNote } from '../../TodoAggregate/todoAuthorization'
 
-export function CheckListPlugin(): null {
+type CheckListPluginProps = {
+  noteUuid?: string
+  ownerLeaseId?: string
+  flushChanges?: () => void
+  persistChanges?: () => Promise<void>
+  ownerRole?: ChecklistEditorRole
+  isOwnerActive?: () => boolean
+  onOwnerReady?: () => void
+}
+
+function signedInSession(application: ReturnType<typeof useApplication>): { signedIn: boolean; user?: object } {
+  try {
+    const signedIn = application.sessions.isSignedIn()
+    return { signedIn, user: signedIn ? application.sessions.getUser() : undefined }
+  } catch {
+    return { signedIn: false }
+  }
+}
+
+export function CheckListPlugin({
+  noteUuid,
+  ownerLeaseId,
+  flushChanges,
+  persistChanges,
+  ownerRole = 'interactive',
+  isOwnerActive,
+  onOwnerReady,
+}: CheckListPluginProps): null {
   const application = useApplication()
   const [editor] = useLexicalComposerContext()
+
+  useEffect(() => {
+    const normalizeIfEditable = () => {
+      if (!editor.isEditable()) {
+        return
+      }
+      let changed = false
+      editor.update(
+        () => {
+          changed = $normalizeChecklistItemMetadata() > 0
+        },
+        { discrete: true },
+      )
+      if (changed) {
+        flushChanges?.()
+      }
+    }
+
+    normalizeIfEditable()
+
+    return mergeRegister(
+      editor.registerNodeTransform(ListItemNode, (item) => {
+        if (editor.isEditable() && $isChecklistItemNode(item) && !$getChecklistTodoId(item)) {
+          $ensureChecklistTodoId(item)
+        }
+      }),
+      editor.registerNodeTransform(ListNode, (list) => {
+        if (!editor.isEditable() || list.getListType() !== 'check') {
+          return
+        }
+        for (const child of list.getChildren()) {
+          if ($isChecklistItemNode(child) && !$getChecklistTodoId(child)) {
+            $ensureChecklistTodoId(child)
+          }
+        }
+      }),
+      editor.registerEditableListener((editable) => {
+        notifyChecklistMutationBridgeReadiness(application)
+        if (editable) {
+          normalizeIfEditable()
+        }
+      }),
+    )
+  }, [application, editor, flushChanges])
+
+  useEffect(() => {
+    if (!noteUuid || !ownerLeaseId) {
+      return
+    }
+    const mountedNote = application.items.findItem<SNNote>(noteUuid)
+    const mountedSession = signedInSession(application)
+    let mountedIdentity: ReturnType<typeof resolveNoteEncryptionIdentity>
+    try {
+      mountedIdentity = mountedNote ? resolveNoteEncryptionIdentity(application, mountedNote) : undefined
+    } catch {
+      mountedIdentity = undefined
+    }
+
+    const isExactOwnerAuthorizedAndActive = () => {
+      try {
+        const currentNote = application.items.findItem<SNNote>(noteUuid)
+        const currentSession = signedInSession(application)
+        return (
+          (isOwnerActive?.() ?? true) &&
+          editor.isEditable() &&
+          typeof persistChanges === 'function' &&
+          canMutateSuperChecklistNote(application, currentNote) &&
+          currentSession.signedIn === mountedSession.signedIn &&
+          currentSession.user === mountedSession.user &&
+          (!mountedSession.signedIn || Boolean(mountedIdentity)) &&
+          (!mountedIdentity || matchesNoteEncryptionIdentity(application, mountedIdentity, currentNote))
+        )
+      } catch {
+        return false
+      }
+    }
+    const isExactOwnerReady = () => {
+      const ready =
+        isExactOwnerAuthorizedAndActive() && isChecklistMutationDurabilityReady(application, noteUuid, ownerLeaseId)
+      if (ready) {
+        onOwnerReady?.()
+      }
+      return ready
+    }
+
+    return registerChecklistMutationBridge(
+      application,
+      noteUuid,
+      ownerLeaseId,
+      async ({ target, patch }) => {
+        if (!isExactOwnerReady()) {
+          return { status: 'rejected', reason: 'This todo is unavailable or read-only.' }
+        }
+        if (typeof patch.dueAt === 'string' && !normalizeChecklistDueAt(patch.dueAt)) {
+          return { status: 'rejected', reason: 'Choose a valid due date and time.' }
+        }
+
+        let result: ReturnType<typeof $applyChecklistEditorMutation> = { matched: false, changed: false }
+        editor.update(
+          () => {
+            result = $applyChecklistEditorMutation(target, patch)
+          },
+          { discrete: true },
+        )
+        if (!result.matched) {
+          return { status: 'rejected', reason: 'This todo changed before the action could be applied.' }
+        }
+        try {
+          // A discrete update has synchronously notified OnChangePlugin by this
+          // point; force its exact post-mutation state through the serialize path.
+          flushChanges?.()
+          const stillAuthorizedAndActive = await persistChecklistMutationExactlyOnce(
+            persistChanges as () => Promise<void>,
+            isExactOwnerAuthorizedAndActive,
+          )
+          if (!stillAuthorizedAndActive) {
+            return {
+              status: 'rejected',
+              reason: 'The source note editor changed while the update was being saved.',
+              retryAcquire: true,
+            }
+          }
+        } catch {
+          return {
+            status: 'rejected',
+            reason: 'The checklist update could not be saved safely.',
+            retainOwner: true,
+          }
+        }
+        return { status: 'updated', todoId: result.todoId, changed: result.changed }
+      },
+      isExactOwnerReady,
+      { role: ownerRole, isActive: isOwnerActive },
+    )
+  }, [
+    application,
+    editor,
+    flushChanges,
+    isOwnerActive,
+    noteUuid,
+    onOwnerReady,
+    ownerLeaseId,
+    ownerRole,
+    persistChanges,
+  ])
+
+  useEffect(() => {
+    const refreshDueControls = (dirtyEntries?: Iterable<[string, boolean]>) => {
+      const liveElements = new Set<HTMLElement>()
+      editor.getEditorState().read(() => {
+        const items = new Set(dirtyEntries ? [] : $getChecklistItems())
+        if (dirtyEntries) {
+          for (const [key, intentionallyDirty] of dirtyEntries) {
+            if (!intentionallyDirty) {
+              continue
+            }
+            const node = $getNodeByKey(key)
+            if ($isChecklistItemNode(node)) {
+              items.add(node)
+            } else if ($isListNode(node)) {
+              if (node.getListType() === 'check') {
+                for (const child of node.getChildren()) {
+                  if ($isChecklistItemNode(child)) {
+                    items.add(child)
+                  }
+                }
+              } else {
+                editor
+                  .getElementByKey(key)
+                  ?.querySelectorAll<HTMLElement>(`:scope > li > [${CHECKLIST_DUE_SHELL_ATTR}]`)
+                  .forEach((shell) => shell.parentElement && removeChecklistDueShell(shell.parentElement))
+              }
+            }
+          }
+        }
+        for (const item of items) {
+          const element = editor.getElementByKey(item.getKey())
+          if (!element) {
+            continue
+          }
+          liveElements.add(element)
+          syncChecklistDueShell(element, $getChecklistDueAt(item), Boolean(item.getChecked()), editor.isEditable())
+        }
+      })
+      if (!dirtyEntries) {
+        const root = editor.getRootElement()
+        root?.querySelectorAll<HTMLElement>(`[${CHECKLIST_DUE_SHELL_ATTR}]`).forEach((shell) => {
+          const item = shell.parentElement
+          if (item && !liveElements.has(item)) {
+            removeChecklistDueShell(item)
+          }
+        })
+      }
+    }
+
+    const updateDueDate = (itemElement: HTMLElement, dueAt: string | undefined) => {
+      if (!editor.isEditable()) {
+        return
+      }
+      editor.update(
+        () => {
+          const node = $getNearestNodeFromDOMNode(itemElement)
+          if ($isChecklistItemNode(node)) {
+            $ensureChecklistTodoId(node)
+            $setChecklistDueAt(node, dueAt)
+          }
+        },
+        { discrete: true },
+      )
+      flushChanges?.()
+    }
+
+    const handleClick = (event: Event) => {
+      const target = event.target
+      if (!(target instanceof HTMLElement)) {
+        return
+      }
+      const action = target.closest<HTMLElement>(`[${CHECKLIST_DUE_ACTION_ATTR}]`)
+      if (!action) {
+        return
+      }
+      event.preventDefault()
+      event.stopPropagation()
+      const shell = action.closest<HTMLElement>(`[${CHECKLIST_DUE_SHELL_ATTR}]`)
+      const itemElement = shell?.parentElement
+      if (!shell || !itemElement) {
+        return
+      }
+      if (action.getAttribute(CHECKLIST_DUE_ACTION_ATTR) === 'clear') {
+        updateDueDate(itemElement, undefined)
+        return
+      }
+      const input = shell.querySelector<HTMLInputElement>(`[${CHECKLIST_DUE_INPUT_ATTR}]`)
+      if (input) {
+        input.hidden = false
+        input.focus()
+        try {
+          input.showPicker?.()
+        } catch {
+          // Browsers may reject showPicker even from a trusted click. The
+          // focused native input remains usable in that case.
+        }
+      }
+    }
+    const handleChange = (event: Event) => {
+      const input = event.target
+      if (!(input instanceof HTMLInputElement) || !input.hasAttribute(CHECKLIST_DUE_INPUT_ATTR)) {
+        return
+      }
+      event.stopPropagation()
+      const itemElement = input.closest<HTMLElement>('li')
+      if (!itemElement) {
+        return
+      }
+      const dueAt = input.value === '' ? undefined : checklistDueAtFromLocalInput(input.value)
+      if (input.value !== '' && !dueAt) {
+        input.setCustomValidity('Choose a valid due date and time.')
+        input.reportValidity()
+        return
+      }
+      input.setCustomValidity('')
+      input.hidden = true
+      updateDueDate(itemElement, dueAt)
+    }
+    const stopDuePointer = (event: Event) => {
+      const target = event.target
+      if (target instanceof HTMLElement && target.closest(`[${CHECKLIST_DUE_SHELL_ATTR}]`)) {
+        event.stopPropagation()
+      }
+    }
+
+    const rootDisposer = editor.registerRootListener((rootElement, previousElement) => {
+      if (rootElement) {
+        rootElement.addEventListener('click', handleClick)
+        rootElement.addEventListener('change', handleChange)
+        rootElement.addEventListener('pointerdown', stopDuePointer)
+        refreshDueControls()
+      }
+      if (previousElement) {
+        previousElement.removeEventListener('click', handleClick)
+        previousElement.removeEventListener('change', handleChange)
+        previousElement.removeEventListener('pointerdown', stopDuePointer)
+      }
+    })
+    const updateDisposer = editor.registerUpdateListener(({ dirtyElements }) =>
+      refreshDueControls(dirtyElements.entries()),
+    )
+    const editableDisposer = editor.registerEditableListener(() => refreshDueControls())
+    const tick = window.setInterval(refreshDueControls, CHECKLIST_DUE_TICK_MS)
+
+    return () => {
+      rootDisposer()
+      updateDisposer()
+      editableDisposer()
+      window.clearInterval(tick)
+    }
+  }, [editor, flushChanges])
 
   useEffect(() => {
     const primaryModifier = getPrimaryModifier(application.platform)
@@ -36,6 +402,10 @@ export function CheckListPlugin(): null {
           const target = event.target
 
           if (target === null || !isHTMLElement(target)) {
+            return
+          }
+
+          if (target.closest(`[${CHECKLIST_DUE_SHELL_ATTR}]`)) {
             return
           }
 
@@ -100,6 +470,10 @@ export function CheckListPlugin(): null {
                   return
                 }
 
+                if ($isChecklistItemNode(node)) {
+                  $ensureChecklistTodoId(node)
+                }
+
                 const isFocusWithinEditor = editor.getRootElement()?.contains(document.activeElement)
                 if (!isTouchEvent && !isFocusWithinEditor) {
                   // on desktop, we want to focus & select the list item so that if you then press the up or down arrow keys,
@@ -161,6 +535,7 @@ export function CheckListPlugin(): null {
           if (!$isListItemNode(node) || node.getParent<ListNode>()?.getListType() !== 'check') {
             return false
           }
+          $ensureChecklistTodoId(node)
           node.toggleChecked()
           if (getChecklistAutoMoveEnabled()) {
             $reorderCheckListForItem(node)

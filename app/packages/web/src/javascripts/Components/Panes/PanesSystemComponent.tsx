@@ -29,6 +29,7 @@ import HomeView from '../Home/HomeView'
 import RemindersView from '../RemindersAggregate/RemindersView'
 import CalendarAggregateView from '../CalendarAggregate/CalendarAggregateView'
 import TodoView from '../TodoAggregate/TodoView'
+import { TodoChecklistEditorOwnerHost } from '../TodoAggregate/TodoChecklistEditorOwner'
 import ResearchView from '../Research/ResearchView'
 import BookmarksView from '../Bookmarks/BookmarksView'
 import usePreference from '@/Hooks/usePreference'
@@ -369,6 +370,7 @@ const PanesSystemComponent = () => {
 
   return (
     <div id="app" className={`app ${computeClassesForContainer()}`} style={{ ...computeStylesForContainer() }}>
+      <TodoChecklistEditorOwnerHost application={application} />
       {renderPanesWithPendingExit.map((pane, index) => {
         const isPendingEntrance = panesPendingEntrance?.includes(pane)
 

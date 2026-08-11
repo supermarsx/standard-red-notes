@@ -141,6 +141,64 @@
   display: none;
 }
 
+/* Checklist deadlines remain in normal document flow. Fold and drag controls
+ * own their separate edge rails, so a long localized date can wrap without
+ * covering either control. */
+.checklist-due-shell {
+  display: inline-flex;
+  max-width: 100%;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+  margin-inline-start: 0.55rem;
+  vertical-align: baseline;
+  font-size: 0.75rem;
+  line-height: 1.25rem;
+  text-decoration: none;
+  opacity: 1;
+}
+.checklist-due-label {
+  color: var(--sn-stylekit-passive-color-1);
+  font-variant-numeric: tabular-nums;
+}
+.checklist-due-label--overdue {
+  color: var(--sn-stylekit-danger-color);
+}
+.checklist-due-label--due-soon {
+  color: var(--sn-stylekit-warning-color, var(--sn-stylekit-info-color));
+}
+.checklist-due-label--completed {
+  color: var(--sn-stylekit-success-color);
+}
+.checklist-due-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+.checklist-due-button,
+.checklist-due-input {
+  border: 1px solid var(--sn-stylekit-border-color);
+  border-radius: 0.25rem;
+  background: var(--sn-stylekit-contrast-background-color);
+  color: var(--sn-stylekit-foreground-color);
+  padding: 0.1rem 0.35rem;
+  font: inherit;
+  line-height: 1.15rem;
+}
+.checklist-due-button {
+  cursor: pointer;
+}
+.checklist-due-button:hover,
+.checklist-due-button:focus-visible {
+  border-color: var(--sn-stylekit-info-color);
+}
+.checklist-due-clear {
+  color: var(--sn-stylekit-danger-color);
+}
+.checklist-due-shell [hidden] {
+  display: none;
+}
+
 /**
  * Custom list-marker glyphs (Standard Red Notes). The toolbar's bullet/number
  * split-button dropdowns and the multilevel configurator stamp a
