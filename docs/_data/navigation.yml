@@ -587,6 +587,8 @@
           url: /administration.html#service-health-and-lifecycle
         - title: Runtime log level
           url: /administration.html#runtime-log-level
+        - title: Email delivery
+          url: /administration.html#email-delivery
         - title: Security and anti-abuse
           url: /administration.html#security-and-anti-abuse
         - title: Audit practice
