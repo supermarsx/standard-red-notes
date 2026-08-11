@@ -8,10 +8,10 @@ import { useApplication } from '../ApplicationProvider'
 import CountBubble from '../Preferences/PreferencesComponents/CountBubble'
 
 /** This button is displayed in the items list header */
-export const NavigationMenuButton = () => {
+export const NavigationMenuButton = ({ isVisible }: { isVisible: boolean }) => {
   const application = useApplication()
   const { setPaneLayout } = useResponsiveAppPane()
-  const { isTabletOrMobile, isMobile } = useIsTabletOrMobileScreen()
+  const { isMobile } = useIsTabletOrMobileScreen()
 
   const [bubbleCount, setBubbleCount] = useState<string | undefined>(() => {
     return application.status.totalPreferencesBubbleCount
@@ -28,7 +28,7 @@ export const NavigationMenuButton = () => {
   }, [application.status])
 
   return (
-    <div className={classNames(isTabletOrMobile ? 'flex' : 'hidden', 'relative h-10 w-10', 'mr-3')}>
+    <div className={classNames(isVisible ? 'flex' : 'hidden', 'relative h-10 w-10', 'mr-3')}>
       <RoundIconButton
         onClick={() => {
           setPaneLayout(PaneLayout.TagSelection)

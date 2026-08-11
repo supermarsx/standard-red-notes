@@ -20,8 +20,18 @@ import { useResponsiveAppPane } from '@/Components/Panes/ResponsivePaneProvider'
 import PaneCollapseButton from '@/Components/Panes/PaneCollapseButton'
 import useIsTabletOrMobileScreen from '@/Hooks/useIsTabletOrMobileScreen'
 
-export const shouldShowCollapsedNavigationExpander = (isNavigationPaneCollapsed: boolean, isTabletOrMobile: boolean) =>
-  isNavigationPaneCollapsed && !isTabletOrMobile
+export const getNavigationControlVisibility = (
+  isNavigationPaneCollapsed: boolean,
+  isTabletOrMobile: boolean,
+  usesTabletLayout: boolean,
+) => {
+  const showNavigationMenu = isTabletOrMobile || usesTabletLayout
+
+  return {
+    showNavigationMenu,
+    showCollapsedNavigationExpander: isNavigationPaneCollapsed && !showNavigationMenu,
+  }
+}
 
 type Props = {
   application: WebApplication
@@ -66,6 +76,11 @@ const ContentListHeader = ({
   const { isTabletOrMobile } = useIsTabletOrMobileScreen()
 
   const { isNavigationPaneCollapsed, toggleNavigationPane, toggleListPane } = useResponsiveAppPane()
+  const { showNavigationMenu, showCollapsedNavigationExpander } = getNavigationControlVisibility(
+    isNavigationPaneCollapsed,
+    isTabletOrMobile,
+    isTablet,
+  )
 
   const [syncSubtitle, setSyncSubtitle] = useState('')
   const [outOfSync, setOutOfSync] = useState(false)
@@ -213,8 +228,8 @@ const ContentListHeader = ({
   const PhoneAndDesktopLayout = useMemo(() => {
     return (
       <div className={'flex w-full justify-between md:flex'}>
-        <NavigationMenuButton />
-        {shouldShowCollapsedNavigationExpander(isNavigationPaneCollapsed, isTabletOrMobile) && (
+        <NavigationMenuButton isVisible={showNavigationMenu} />
+        {showCollapsedNavigationExpander && (
           <PaneCollapseButton
             onClick={toggleNavigationPane}
             label={t('expandTopicsPanel')}
@@ -243,8 +258,8 @@ const ContentListHeader = ({
     SearchBarButton,
     OptionsMenu,
     AddButton,
-    isNavigationPaneCollapsed,
-    isTabletOrMobile,
+    showNavigationMenu,
+    showCollapsedNavigationExpander,
     toggleNavigationPane,
     toggleListPane,
     t,
@@ -254,7 +269,7 @@ const ContentListHeader = ({
     return (
       <div className={'w-full flex-col'}>
         <div className="mb-2 flex justify-between">
-          <NavigationMenuButton />
+          <NavigationMenuButton isVisible={showNavigationMenu} />
           <div className="flex">
             {OptionsMenu}
             {AddButton}
@@ -263,7 +278,7 @@ const ContentListHeader = ({
         {FolderName}
       </div>
     )
-  }, [OptionsMenu, AddButton, FolderName])
+  }, [OptionsMenu, AddButton, FolderName, showNavigationMenu])
 
   return (
     <div className="section-title-bar-header items-start gap-1">

@@ -1,15 +1,35 @@
-import { shouldShowCollapsedNavigationExpander } from './ContentListHeader'
+import { getNavigationControlVisibility } from './ContentListHeader'
 
 describe('ContentListHeader navigation controls', () => {
-  it('does not duplicate the navigation menu with a topics expander on responsive layouts', () => {
-    expect(shouldShowCollapsedNavigationExpander(true, true)).toBe(false)
+  it.each([
+    ['fine-pointer tablet', true, false],
+    ['coarse-pointer tablet', true, true],
+    ['fine-pointer desktop', false, false],
+    ['coarse-pointer desktop', false, true],
+  ])('shows exactly one recovery control on a collapsed %s layout', (_layout, isTabletOrMobile, usesTabletLayout) => {
+    const visibility = getNavigationControlVisibility(true, isTabletOrMobile, usesTabletLayout)
+
+    expect(Number(visibility.showNavigationMenu) + Number(visibility.showCollapsedNavigationExpander)).toBe(1)
   })
 
-  it('keeps the desktop recovery control when the navigation pane is collapsed', () => {
-    expect(shouldShowCollapsedNavigationExpander(true, false)).toBe(true)
+  it('uses the topics expander as the collapsed fine-pointer desktop recovery control', () => {
+    expect(getNavigationControlVisibility(true, false, false)).toEqual({
+      showNavigationMenu: false,
+      showCollapsedNavigationExpander: true,
+    })
   })
 
-  it('does not show an expander for an already visible navigation pane', () => {
-    expect(shouldShowCollapsedNavigationExpander(false, false)).toBe(false)
+  it('uses the navigation menu for a wide coarse-pointer layout', () => {
+    expect(getNavigationControlVisibility(true, false, true)).toEqual({
+      showNavigationMenu: true,
+      showCollapsedNavigationExpander: false,
+    })
+  })
+
+  it('does not show a desktop expander for an already visible navigation pane', () => {
+    expect(getNavigationControlVisibility(false, false, false)).toEqual({
+      showNavigationMenu: false,
+      showCollapsedNavigationExpander: false,
+    })
   })
 })
