@@ -8,6 +8,8 @@ import {
   SANDBOX_CONSOLE_MAX_MESSAGE_LENGTH,
   SANDBOX_CONSOLE_TRUNCATION_SUFFIX,
   SANDBOX_RUN_CHANNEL,
+  SANDBOX_RUN_MAX_PAYLOAD_BYTES,
+  SANDBOX_RUN_PAYLOAD_LIMIT_MESSAGE,
 } from './SandboxDocument'
 
 const SANDBOX_NONCE = '0123456789abcdef0123456789abcdef'
@@ -27,6 +29,8 @@ const createRunnerHarness = () => {
   const windowListeners = new Map<string, Listener[]>()
   const blobSources = new Map<string, string>()
   const timers: Array<{ callback: () => void; cleared: boolean }> = []
+  const sandboxStyle = { textContent: '' }
+  const sandboxRoot = { innerHTML: '', textContent: '' }
 
   class FakeBlob {
     readonly source: string
@@ -82,7 +86,7 @@ const createRunnerHarness = () => {
     },
     console,
     document: {
-      getElementById: (id: string) => (id === 'sandbox-style' ? { textContent: '' } : { innerHTML: '' }),
+      getElementById: (id: string) => (id === 'sandbox-style' ? sandboxStyle : sandboxRoot),
     },
     location: { hash: `#${SANDBOX_NONCE}` },
     parent,
@@ -101,6 +105,8 @@ const createRunnerHarness = () => {
 
   return {
     parent,
+    sandboxRoot,
+    sandboxStyle,
     timers,
     workers: FakeWorker.instances,
     dispatchRun(data: unknown, source: unknown = parent) {
@@ -164,6 +170,31 @@ describe('fixed sandbox runner', () => {
       script: payload.document.js,
       captureConsole: true,
     })
+  })
+
+  it('rejects oversized UTF-8 content before assigning DOM or starting a worker', () => {
+    const harness = createRunnerHarness()
+    const payload = validRunPayload()
+    payload.document = {
+      html: '😀'.repeat(SANDBOX_RUN_MAX_PAYLOAD_BYTES / 4 + 1),
+      css: 'body { animation: spin 1ms infinite; }',
+      js: 'while (true) {}',
+    }
+
+    harness.dispatchRun(payload)
+
+    expect(harness.workers).toHaveLength(0)
+    expect(harness.sandboxStyle.textContent).toBe('')
+    expect(harness.sandboxRoot.innerHTML).toBe('')
+    expect(harness.sandboxRoot.textContent).toBe(SANDBOX_RUN_PAYLOAD_LIMIT_MESSAGE)
+    expect(harness.parent.postMessage).toHaveBeenCalledWith(
+      {
+        channel: SANDBOX_CONSOLE_CHANNEL,
+        level: 'error',
+        message: SANDBOX_RUN_PAYLOAD_LIMIT_MESSAGE,
+      },
+      '*',
+    )
   })
 
   it('terminates non-yielding execution at the fixed deadline', () => {

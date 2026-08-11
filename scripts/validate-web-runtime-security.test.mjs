@@ -21,6 +21,9 @@ const runnerHtml = read("app/packages/web/src/sandbox.html");
 const sandboxEditor = read(
   "app/packages/web/src/javascripts/Components/NoteView/SandboxEditor/SandboxEditor.tsx",
 );
+const sandboxDocument = read(
+  "app/packages/web/src/javascripts/Components/NoteView/SandboxEditor/SandboxDocument.ts",
+);
 const dockerEntrypoint = read("app/docker/docker-entrypoint.sh");
 const lxcInstaller = read("deploy/lxc/install.sh");
 const serviceWorker = read("app/packages/web/src/service-worker.js");
@@ -400,6 +403,19 @@ test("sandbox code stays data inside an opaque-origin, offline-capable runner", 
   assert.match(runnerHtml, /new Worker\(workerUrl\)/);
   assert.match(runnerHtml, /executionTimeoutMs = 2000/);
   assert.match(runnerHtml, /activeWorker\.terminate\(\)/);
+  assert.match(runnerHtml, /runPayloadMaxBytes = 1048576/);
+  assert.match(runnerHtml, /if \(!isRunPayloadWithinLimit\(html, css, script\)\)/);
+  assert.match(
+    sandboxDocument,
+    /SANDBOX_RUN_MAX_PAYLOAD_BYTES = 1024 \* 1024/,
+  );
+  assert.match(sandboxEditor, /isSandboxRunPayloadWithinLimit\(document\)/);
+  assert.match(
+    sandboxEditor,
+    /isSandboxRunPayloadWithinLimit\(runSession\.document\)/,
+  );
+  assert.match(sandboxEditor, /title="Stop and reset sandbox"/);
+  assert.match(sandboxEditor, /setRunSession\(undefined\)/);
   assert.match(runnerHtml, /worker-src blob:/);
   assert.match(serviceWorker, /SANDBOX_PATH\s*=\s*['"]\/sandbox\.html['"]/);
   assert.match(serviceWorker, /CORE_SHELL[^\n]+SANDBOX_PATH/);

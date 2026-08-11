@@ -6,7 +6,11 @@ application services, decrypted items, credentials, cookies, or storage values.
 
 The runner never executes when a note is opened or edited. The user must press
 Run, which snapshots the current document into a fresh one-shot frame. The
-runner then uses three independent browser boundaries:
+parent and runner independently reject snapshots whose HTML, CSS, and JavaScript
+exceed 1 MiB in aggregate UTF-8 bytes. This prevents a large synced note from
+forcing an unbounded structured clone or synchronous DOM/CSS parse. The note
+remains editable when a run is rejected. The runner then uses three independent
+browser boundaries:
 
 - Both visible and hidden frames use `sandbox="allow-scripts"` without
   `allow-same-origin`, top-navigation, form, download, or popup capabilities.
@@ -25,6 +29,9 @@ runner then uses three independent browser boundaries:
   worker entry points in addition to inheriting `connect-src 'none'` from the
   frame. HTML and CSS still render in the opaque preview frame; JavaScript is a
   DOM-less Worker program and cannot read or mutate the preview document.
+- Stop destroys the active runner frame instead of merely terminating its
+  Worker. This clears the rendered DOM and stylesheet as well, so persistent CSS
+  animation or media work cannot survive a reset.
 
 `unsafe-eval` and `worker-src blob:` are intentionally present only in that
 exact-path CSP because the fixed bootstrap creates a local Worker and that
@@ -59,10 +66,14 @@ runner's CSP headers, so an offline frame uses the same restrictions.
   replacing the sandbox runner's fixed hash.
 - Keep console message and retained-entry limits synchronized between the fixed
   runner and `SandboxDocument.ts`; both sides are intentional defenses.
+- Keep the 1 MiB aggregate UTF-8 run limit and its fixed error message
+  synchronized between the parent helpers and the fixed runner. Validate before
+  `postMessage` in the parent and again before DOM assignment in the runner.
 
 The isolation prevents sandbox code from reading application state, console
 floods cannot grow parent React state without limit, and non-yielding execution
 is terminated at the deadline. It does not make arbitrary code harmless: a
 Worker can still allocate aggressively before the browser processes the
 termination request, so users should run copied code only when they accept that
-short-lived local availability risk.
+short-lived local availability risk. A rendered preview may also consume local
+resources until the user presses Stop; Stop removes the complete frame.

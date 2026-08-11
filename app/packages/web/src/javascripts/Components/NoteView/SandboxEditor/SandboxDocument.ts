@@ -16,6 +16,16 @@
 
 export const SANDBOX_DOCUMENT_VERSION = 1
 
+/**
+ * Running a sandbox copies its three code panes across two isolated browser
+ * boundaries and parses HTML/CSS on the runner frame's main thread. Keep that
+ * snapshot small enough that validation cannot itself become an availability
+ * problem. This is a run-only limit; the note remains editable and recoverable.
+ */
+export const SANDBOX_RUN_MAX_PAYLOAD_BYTES = 1024 * 1024
+export const SANDBOX_RUN_PAYLOAD_LIMIT_MESSAGE =
+  'Sandbox is too large to run. HTML, CSS, and JavaScript must total 1 MiB or less.'
+
 export type SandboxPane = 'html' | 'css' | 'js'
 
 export type SandboxDocument = {
@@ -25,6 +35,40 @@ export type SandboxDocument = {
   js: string
   /** Which code pane the editor had focused last (UI convenience only). */
   activePane: SandboxPane
+}
+
+const utf8ByteLength = (value: string): number => {
+  let bytes = 0
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index)
+    if (codeUnit <= 0x7f) {
+      bytes += 1
+    } else if (codeUnit <= 0x7ff) {
+      bytes += 2
+    } else if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const nextCodeUnit = value.charCodeAt(index + 1)
+      if (nextCodeUnit >= 0xdc00 && nextCodeUnit <= 0xdfff) {
+        bytes += 4
+        index += 1
+      } else {
+        bytes += 3
+      }
+    } else {
+      bytes += 3
+    }
+  }
+  return bytes
+}
+
+export const isSandboxRunPayloadWithinLimit = (document: Pick<SandboxDocument, 'html' | 'css' | 'js'>): boolean => {
+  let totalBytes = 0
+  for (const value of [document.html, document.css, document.js]) {
+    totalBytes += utf8ByteLength(value ?? '')
+    if (totalBytes > SANDBOX_RUN_MAX_PAYLOAD_BYTES) {
+      return false
+    }
+  }
+  return true
 }
 
 export const createEmptySandboxDocument = (): SandboxDocument => ({

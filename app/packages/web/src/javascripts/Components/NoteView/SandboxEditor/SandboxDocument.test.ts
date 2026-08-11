@@ -5,6 +5,8 @@ import {
   SANDBOX_CONSOLE_MAX_ENTRIES,
   SANDBOX_CONSOLE_MAX_MESSAGE_LENGTH,
   SANDBOX_RUN_CHANNEL,
+  SANDBOX_RUN_MAX_PAYLOAD_BYTES,
+  SANDBOX_RUN_PAYLOAD_LIMIT_MESSAGE,
   SANDBOX_CONSOLE_TRUNCATION_SUFFIX,
   SandboxDocument,
   buildSandboxRunPayload,
@@ -13,6 +15,7 @@ import {
   createJsSandboxStarter,
   createWebSandboxStarter,
   createSandboxRunNonce,
+  isSandboxRunPayloadWithinLimit,
   normalizeSandboxConsoleEntry,
   parseSandboxDocument,
   serializeSandboxDocument,
@@ -145,6 +148,22 @@ describe('SandboxDocument', () => {
 
     it('handles missing panes without throwing', () => {
       expect(() => buildSandboxRunPayload({ html: '', css: '', js: '' }, { captureConsole: true, nonce })).not.toThrow()
+    })
+  })
+
+  describe('run payload availability limit', () => {
+    it('accepts exactly 1 MiB of aggregate UTF-8 content', () => {
+      expect(isSandboxRunPayloadWithinLimit({ html: 'a'.repeat(SANDBOX_RUN_MAX_PAYLOAD_BYTES), css: '', js: '' })).toBe(
+        true,
+      )
+    })
+
+    it('counts multibyte content and rejects one byte beyond the aggregate limit', () => {
+      const emojiBytes = 4
+      const exactEmojiCount = SANDBOX_RUN_MAX_PAYLOAD_BYTES / emojiBytes
+      expect(isSandboxRunPayloadWithinLimit({ html: '😀'.repeat(exactEmojiCount), css: '', js: '' })).toBe(true)
+      expect(isSandboxRunPayloadWithinLimit({ html: '😀'.repeat(exactEmojiCount), css: '', js: 'x' })).toBe(false)
+      expect(SANDBOX_RUN_PAYLOAD_LIMIT_MESSAGE.length).toBeLessThan(200)
     })
   })
 
