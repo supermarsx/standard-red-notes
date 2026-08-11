@@ -18,6 +18,7 @@ type ResponseHarness = {
   json: jest.Mock
   send: jest.Mock
   setHeader: jest.Mock
+  vary: jest.Mock
   write: jest.Mock
   end: jest.Mock
 }
@@ -33,6 +34,7 @@ function responseHarness(options?: { uuid?: string; admin?: boolean }): Response
   const json = jest.fn(() => response)
   const send = jest.fn(() => response)
   const setHeader = jest.fn(() => response)
+  const vary = jest.fn(() => response)
   const write = jest.fn(() => true)
   const end = jest.fn(() => response)
   Object.assign(response, {
@@ -40,12 +42,13 @@ function responseHarness(options?: { uuid?: string; admin?: boolean }): Response
     json,
     send,
     setHeader,
+    vary,
     write,
     end,
     flushHeaders: jest.fn(),
     type: jest.fn(() => response),
   })
-  return { response, status, json, send, setHeader, write, end }
+  return { response, status, json, send, setHeader, vary, write, end }
 }
 
 function request(values: Partial<Request>): Request {

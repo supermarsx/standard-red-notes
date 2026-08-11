@@ -1200,7 +1200,7 @@ export const DOC_CATEGORIES: DocCategory[] = [
           },
           {
             type: 'paragraph',
-            text: 'In Server proxy mode the Standard Red Notes server relays one model turn at a time using a server-held API key, so client devices never hold the key. An administrator enables providers on the server through environment configuration (anthropic, openai-compatible, or ollama). The app then probes the server: it loads the list of providers the server has configured, you pick one, and you fetch the list of models that provider offers — the server queries the provider’s model list with its own key.',
+            text: 'In Server proxy mode the Standard Red Notes server relays one model turn at a time using a server-held credential, so client devices never hold it. An administrator configures assistant profiles and assigns them by user or role. The app shows your authenticated effective profile, provider, and model as read-only information; local Direct-mode provider/model preferences never override that assignment.',
           },
           {
             type: 'paragraph',

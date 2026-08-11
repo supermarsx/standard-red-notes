@@ -95,6 +95,7 @@ import { PendingMfaApprovalsNotifier } from '@/Services/PendingMfaApprovals/Pend
 import { CommandService } from '../Components/CommandPalette/CommandService'
 import { CrossTabCoordinator } from './CrossTab/CrossTabCoordinator'
 import { WebDevice } from './Device/WebDevice'
+import { assistantHttpError } from '@/Assistant/AssistantHttpError'
 
 export type WebEventObserver = (event: WebAppEvent, data?: unknown) => void
 
@@ -1029,8 +1030,9 @@ export class WebApplication extends SNApplication implements WebApplicationInter
   /**
    * Performs an authenticated streaming POST to the server-side Assistant LLM
    * proxy and returns the raw Response so the caller can read the SSE body.
-   * The provider API key never reaches the browser; only the chosen provider id,
-   * model, system prompt, message history and tool descriptors are sent.
+   * The provider credential never reaches the browser. The official proxy
+   * client sends prompts/tools while the server resolves provider/model from the
+   * authenticated user's assigned/default profile.
    */
   public async assistantStreamRequest(path: string, body: unknown, signal?: AbortSignal): Promise<Response> {
     const host = this.getHost.execute().getValue()
@@ -1093,6 +1095,10 @@ export class WebApplication extends SNApplication implements WebApplicationInter
         ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
       },
     })
+
+    if (!response.ok) {
+      throw new Error(await assistantHttpError(response, 'proxy'))
+    }
 
     return (await response.json()) as T
   }

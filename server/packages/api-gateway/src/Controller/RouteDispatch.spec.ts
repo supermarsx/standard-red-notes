@@ -299,7 +299,6 @@ describe('versioned route controllers', () => {
       'UsersController.verifyEmailConfirmation (/email-confirmation/verify)',
       // Public, unauthenticated reads.
       'ActionsController.serverMetadata (/meta)',
-      'AssistantController.config (/config)',
       'AssistantController.transcriptionModelList (/transcription/models)',
       'PluginsController.component (/component/{*splat})',
       // Offline (subscription-token) activation flow, which has no session.
