@@ -252,7 +252,7 @@ test("Yarn NDJSON and npm JSON advisories are parsed into one contract", () => {
   assert.equal(npm[0].advisoryId, "1123940");
 });
 
-test("the gate fails closed on new critical advisories", () => {
+test("the gate fails closed on new high advisories", () => {
   const errors = validateAllowlist(
     [
       tarAdvisory,
@@ -260,13 +260,13 @@ test("the gate fails closed on new critical advisories", () => {
         domain: "server",
         advisoryId: "9999999",
         package: "new-risk",
-        severity: "critical",
+        severity: "high",
       },
     ],
     [tarException],
     "2026-08-10",
   );
-  assert.match(errors.join("\n"), /unallowlisted critical advisory 9999999/);
+  assert.match(errors.join("\n"), /unallowlisted high advisory 9999999/);
 });
 
 test("expired, duplicate, and unused exceptions fail closed", () => {
@@ -328,15 +328,17 @@ test("an exception is bound to the audited range, versions, and dependents", () 
   );
 });
 
-test("only critical production advisories reach the exception policy", () => {
+test("high and critical production advisories reach the exception policy", () => {
+  const highAdvisory = { ...tarAdvisory, severity: "high" };
   assert.deepEqual(
     enforceableAdvisories([
-      { ...tarAdvisory, severity: "high" },
-      tarAdvisory,
-      tarAdvisory,
+      { ...tarAdvisory, severity: "moderate" },
+      highAdvisory,
+      highAdvisory,
     ]),
-    [tarAdvisory],
+    [highAdvisory],
   );
+  assert.deepEqual(enforceableAdvisories([tarAdvisory]), [tarAdvisory]);
 });
 
 test("the app security graph preserves the patched dependency graph", () => {

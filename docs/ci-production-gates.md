@@ -24,7 +24,7 @@ the fan-in green.
 | `check`            | Immutable installs in the root, app, and server projects, followed by the coordinated type, lint, format, and test gate.                                                                                                                                                                                                            |  45 min |
 | `build`            | A second clean set of immutable installs followed by the coordinated MCP, OpenClaw, app, and server build.                                                                                                                                                                                                                          |  45 min |
 | `desktop-electron` | A production desktop build followed by the seven real Electron suites under Xvfb. The guarded runner requires the built entry point and cannot silently fall back to skipped headless tests.                                                                                                                                        |  45 min |
-| `container-smoke`  | Hadolint, BuildKit image builds, an isolated Compose stack, required encrypted two-editor online/offline convergence, Chromium app-open checks, bounded parallel sync and Redis operations, MariaDB backup/restore, and image/container hardening assertions.                                                                                             |  70 min |
+| `container-smoke`  | Hadolint, BuildKit image builds, an isolated Compose stack, required encrypted two-editor online/offline convergence, Chromium app-open checks, bounded parallel sync and Redis operations, MariaDB backup/restore, and image/container hardening assertions.                                                                       |  70 min |
 | `production-gate`  | Fail-closed fan-in for all five implementation lanes above.                                                                                                                                                                                                                                                                         |   5 min |
 
 The required browser selection contains three app-open tests and one combined
@@ -41,7 +41,7 @@ than an optional local skip.
 
 The dependency audit inventories Git-tracked npm, Yarn, and pnpm lockfiles
 before it contacts the package registries. An unconfigured lockfile, an audit
-transport or parse failure, or a new critical production advisory fails the
+transport or parse failure, or a new high or critical production advisory fails the
 lane. Compatibility exceptions live in
 `scripts/production-audit-allowlist.json`; every entry binds the registry
 advisory ID, package, lock domain, rationale, and expiry. Expired, duplicate,
