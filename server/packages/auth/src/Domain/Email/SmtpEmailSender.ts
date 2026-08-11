@@ -1,5 +1,12 @@
 import * as nodemailer from 'nodemailer'
 import { Logger } from 'winston'
+import {
+  EmailDeliveryConfig,
+  ResolvedEmailDeliveryConfig,
+  isEmailDeliveryConfigured,
+  resolveEmailDeliveryConfig,
+  validateEmailRecipient,
+} from '@standardnotes/domain-core'
 
 import { EmailSenderInterface, SendEmailOptions } from './EmailSenderInterface'
 
@@ -9,42 +16,36 @@ export interface SmtpEmailSenderConfig {
   user?: string
   pass?: string
   from?: string
+  tlsMode?: EmailDeliveryConfig['tlsMode']
 }
 
 export class SmtpEmailSender implements EmailSenderInterface {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private transporter: any | null = null
-
   constructor(
-    private config: SmtpEmailSenderConfig,
-    private logger: Logger,
+    private readonly config: SmtpEmailSenderConfig,
+    private readonly logger: Logger,
+    private readonly overlayResolver?: () => Promise<EmailDeliveryConfig | undefined>,
   ) {}
 
-  isConfigured(): boolean {
-    return (
-      typeof this.config.host === 'string' &&
-      this.config.host.trim().length > 0 &&
-      typeof this.config.from === 'string' &&
-      this.config.from.trim().length > 0 &&
-      (this.config.port === undefined ||
-        (Number.isSafeInteger(this.config.port) && this.config.port > 0 && this.config.port <= 65535))
-    )
+  async isConfigured(): Promise<boolean> {
+    return isEmailDeliveryConfigured(await this.resolveConfig())
   }
 
   async sendEmail(to: string, subject: string, body: string, options?: SendEmailOptions): Promise<boolean> {
-    if (!this.isConfigured()) {
+    const config = await this.resolveConfig()
+    const recipient = validateEmailRecipient(to)
+    if (!isEmailDeliveryConfigured(config) || !recipient || /[\r\n\0]/.test(subject) || subject.length > 998) {
       this.logger.debug('SMTP is not configured. Skipping email delivery.')
 
       return false
     }
 
     try {
-      const transporter = this.getTransporter()
+      const transporter = nodemailer.createTransport(this.transportOptions(config))
       const bodyContent = options?.html ? { html: body } : { text: body }
 
       const result = await transporter.sendMail({
-        from: this.config.from,
-        to,
+        from: config.from,
+        to: recipient,
         subject,
         ...bodyContent,
         attachments: options?.attachments?.map((attachment) => ({
@@ -73,22 +74,36 @@ export class SmtpEmailSender implements EmailSenderInterface {
     }
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private getTransporter(): any {
-    if (this.transporter === null) {
-      const auth =
-        this.config.user !== undefined && this.config.user !== ''
-          ? { user: this.config.user, pass: this.config.pass }
-          : undefined
+  private async resolveConfig(): Promise<ResolvedEmailDeliveryConfig> {
+    const persisted = await this.overlayResolver?.()
 
-      this.transporter = nodemailer.createTransport({
-        host: this.config.host,
-        port: this.config.port ?? 587,
-        secure: (this.config.port ?? 587) === 465,
-        auth,
-      })
-    }
+    return resolveEmailDeliveryConfig(persisted, {
+      host: this.config.host,
+      port: this.config.port,
+      username: this.config.user,
+      password: this.config.pass,
+      from: this.config.from,
+      tlsMode: this.config.tlsMode,
+    })
+  }
 
-    return this.transporter
+  private transportOptions(config: ResolvedEmailDeliveryConfig): nodemailer.TransportOptions {
+    const secure = config.tlsMode === 'implicit'
+    const allowInsecure = config.tlsMode === 'insecure'
+
+    return {
+      host: config.host,
+      port: config.port,
+      secure,
+      requireTLS: !secure && !allowInsecure,
+      ignoreTLS: !secure && allowInsecure,
+      auth: config.username && config.password ? { user: config.username, pass: config.password } : undefined,
+      connectionTimeout: 10_000,
+      greetingTimeout: 10_000,
+      socketTimeout: 30_000,
+      name: 'standard-red-notes',
+      disableFileAccess: true,
+      disableUrlAccess: true,
+    } as nodemailer.TransportOptions
   }
 }

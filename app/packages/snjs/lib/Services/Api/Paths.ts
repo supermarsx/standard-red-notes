@@ -91,6 +91,7 @@ const AdminPaths = {
   // Standard Red Notes: admin-editable server settings (AI providers, update
   // check URL, Nextcloud backups master switch). Secrets are write-only.
   serverSettings: '/v1/admin/server-settings',
+  emailDeliveryTest: '/v1/admin/email-delivery/test',
   // Standard Red Notes: anti-abuse live view (resolved rate-limit tiers + IP
   // allow/block lists + throttle telemetry) and the four IP-list mutations.
   antiAbuse: '/v1/admin/anti-abuse',

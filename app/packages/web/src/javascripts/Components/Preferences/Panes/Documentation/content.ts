@@ -1088,12 +1088,16 @@ export const DOC_CATEGORIES: DocCategory[] = [
       },
       {
         id: 'self-hosting/smtp',
-        title: 'Email / SMTP for magic link',
-        summary: 'Configure email so magic-link codes are delivered to inboxes.',
+        title: 'Email delivery / SMTP',
+        summary: 'Configure one protected SMTP connection for account mail, backups, and reminders.',
         blocks: [
           {
             type: 'paragraph',
-            text: 'The email magic-link second factor needs an email transport (SMTP) to deliver codes. Configure your server’s SMTP settings to send mail from an address you control.',
+            text: 'An administrator can configure the shared SMTP connection under Preferences → Admin → Server → Email delivery. Saved fields override environment values and apply on the next send; clearing a field restores its environment/default fallback. The password is write-only and is preserved by partial saves unless explicitly replaced or cleared.',
+          },
+          {
+            type: 'paragraph',
+            text: 'STARTTLS is required by default. Implicit TLS is available for providers that expect TLS from connection start (normally port 465). Insecure delivery is accepted only for an explicitly trusted loopback or private relay. Save first, then use the redacted Send test action.',
           },
           {
             type: 'callout',

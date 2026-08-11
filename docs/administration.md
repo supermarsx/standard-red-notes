@@ -43,7 +43,7 @@ unattended administration.
 | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Users**          | Paginated/filterable users; bulk ban/unban and admin role actions; per-user feature flags, AI limits, realtime, collaboration, OCR, workflows, backups, CalDAV, storage, suspension, MFA reset, quota repair, and deletion |
 | **Groups & roles** | Roles, permission catalog, editable role permissions, groups, group membership, and an effective-permissions simulator                                                                                                     |
-| **Server**         | Health and service lifecycle, feature master switches, proxy/IP behavior, registration and approval, account limits, OCR/workflows settings, and log level                                                                 |
+| **Server**         | Health and service lifecycle, feature master switches, proxy/IP behavior, registration and approval, account limits, email delivery, OCR/workflows settings, and log level                                                 |
 | **AI**             | Anthropic/OpenAI/Ollama settings, provider endpoints, API-key status, and request/token limits                                                                                                                             |
 | **Logs**           | Service logs and the administrative/security audit log                                                                                                                                                                     |
 | **Security**       | Security overview, rate-limit tiers, adaptive escalation, IP lists, locked accounts, and links to related user/server controls                                                                                             |
@@ -131,6 +131,30 @@ page load, or requires a gateway restart.
 The Workflows gates control discovery of a separately authenticated n8n link.
 They do not provision, disable, or sign a user out of n8n. Manage actual n8n
 access in n8n; see [Workflows with n8n](workflows.md).
+
+## Email delivery
+
+Use **Settings → Admin → Server → Email delivery** to configure the single SMTP
+connection used by auth/account messages, email backups, and published reminder
+delivery. Each saved field overrides its matching environment value; clearing a
+saved field resumes the environment/default fallback. The password is write-only:
+the API reports only whether an effective password is configured, and partial
+updates preserve it unless an administrator explicitly replaces or clears it.
+
+STARTTLS is the default and is required on non-implicit connections. Choose
+implicit TLS for providers that expect TLS from connection start (normally port
+465). The insecure option is an explicit exception accepted only for loopback,
+private/link-local IP, localhost, or `.localhost` relays; public and unresolved
+internal hostnames are
+rejected. Use **Send test** after saving. The test response is intentionally
+redacted, and audit records contain the action and outcome but not the recipient,
+settings, password, or provider error.
+
+The gateway and auth processes read the same persisted `emailDelivery` overlay
+from `SERVER_SETTINGS_PATH` on each send, so a valid change is live without a
+restart when both processes can read that shared file. The supplied Compose and
+single-container deployments provide that shared path. Custom split deployments
+must mount the same protected settings file into both processes.
 
 ## Service health and lifecycle
 

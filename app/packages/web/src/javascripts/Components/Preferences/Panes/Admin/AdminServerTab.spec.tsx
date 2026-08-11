@@ -4,7 +4,7 @@
  * AdminServerTab render guard (MEMORY: verify UI render paths). tsc/jest passing
  * is NOT proof a subtab actually mounts — a whole toolbar group vanished twice in
  * this repo behind a filter. This tab was refactored from one long scroll into a
- * 5-subtab bar (general / registration / health / integrations / logging), so we
+ * 6-subtab bar (general / registration / health / integrations / email / logging), so we
  * drive the REAL component in jsdom, click every subtab, and assert each subtab
  * label + a piece of its panel content mounts. Two extra tests round-trip the new
  * signup-cap fields and the log-level dropdown through adminSetServerSettings.
@@ -71,6 +71,15 @@ const SETTINGS = {
   updateCheck: { url: null },
   plugins: { repoUrl: '', sameOriginRendering: false },
   nextcloudBackups: { enabled: false },
+  emailDelivery: {
+    host: 'smtp.example.com',
+    port: 587,
+    username: 'smtp-user',
+    passwordConfigured: true,
+    from: 'notes@example.com',
+    tlsMode: 'starttls' as const,
+    configured: true,
+  },
   registration: {
     defaultRole: 'CORE_USER',
     domainMode: 'off',
@@ -132,6 +141,7 @@ const makeApplication = (
     adminGetServerSettings: jest.fn().mockResolvedValue({ data: { settings: SETTINGS, sources: {} } }),
     adminListServices: jest.fn().mockResolvedValue({ data: { available: false, programs: [], docker: {} } }),
     adminSetServerSettings: jest.fn().mockResolvedValue({ data: { settings: SETTINGS, sources: {} } }),
+    adminTestEmailDelivery: jest.fn().mockResolvedValue({ data: { ok: true } }),
     // t69 invite-link management + approval queue.
     adminListInviteLinks: jest.fn().mockResolvedValue({ data: { inviteLinks: options.inviteLinks ?? [] } }),
     adminCreateInviteLink: jest.fn().mockResolvedValue({
@@ -230,12 +240,19 @@ const setSelectValue = async (select: HTMLSelectElement, value: string) => {
   })
 }
 
-describe('AdminServerTab — 5 subtabs mount with content (vanish guard)', () => {
+describe('AdminServerTab — 6 subtabs mount with content (vanish guard)', () => {
   it('renders every subtab label', async () => {
     const application = makeApplication()
     await renderTab(application)
 
-    for (const label of ['General', 'Registration & signups', 'Health & services', 'Integrations', 'Logging']) {
+    for (const label of [
+      'General',
+      'Registration & signups',
+      'Health & services',
+      'Integrations',
+      'Email delivery',
+      'Logging',
+    ]) {
       expect(tabWithText(label)).toBeDefined()
     }
   })
@@ -261,6 +278,11 @@ describe('AdminServerTab — 5 subtabs mount with content (vanish guard)', () =>
     await clickSubtab('Integrations')
     expect(container.textContent).toContain('OCR (text extraction)')
     expect(container.textContent).toContain('Workflows')
+
+    await clickSubtab('Email delivery')
+    expect(container.textContent).toContain('Ready to send')
+    expect(container.textContent).toContain('Password: configured (write-only)')
+    expect(container.textContent).toContain('Send a test email')
 
     await clickSubtab('Logging')
     expect(container.textContent).toContain('Log level')

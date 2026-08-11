@@ -468,6 +468,16 @@ export type AdminServerSettings = {
   nextcloudBackups?: {
     enabled?: boolean
   }
+  emailDelivery?: {
+    host?: string
+    port?: number
+    username?: string | null
+    passwordConfigured?: boolean
+    from?: string
+    tlsMode?: 'implicit' | 'starttls' | 'insecure'
+    tlsModes?: Array<'implicit' | 'starttls' | 'insecure'>
+    configured?: boolean
+  }
   // Standard Red Notes: REGISTRATION policy (default role for new users + email
   // domain allow/block policy). Persisted gateway-side; enforced auth-side.
   registration?: {

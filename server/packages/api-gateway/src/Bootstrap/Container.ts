@@ -21,6 +21,7 @@ import { DirectCallServiceProxy } from '../Service/DirectCall/DirectCallServiceP
 import { createSafeLogFormat } from '../Service/Logging/SafeLog'
 import {
   MapperInterface,
+  EmailDeliveryConfig,
   PinnedHttpTransport,
   RuntimeLogLevelApplier,
   ServerSettingsLogLevelResolver,
@@ -263,6 +264,27 @@ export class ContainerConfigLoader {
     const serverSettingsPath =
       env.get('SERVER_SETTINGS_PATH', true) || path.resolve(process.cwd(), 'data', 'server-settings.json')
     const serverSettingsStore = new ServerSettingsStore(serverSettingsPath)
+    const smtpPortValue = env.get('SMTP_PORT', true)
+    const smtpSecureValue = env.get('SMTP_SECURE', true)
+    const smtpAllowInsecure = ['true', '1', 'yes', 'on'].includes(
+      (env.get('SMTP_ALLOW_INSECURE', true) || '').toLowerCase(),
+    )
+    const smtpEnvBaseline: EmailDeliveryConfig = {
+      host: env.get('SMTP_HOST', true) || undefined,
+      port: smtpPortValue ? +smtpPortValue : undefined,
+      username: env.get('SMTP_USER', true) || undefined,
+      // SMTP_PASS is the canonical top-level deployment variable. Keep the
+      // historical gateway-only SMTP_PASSWORD alias for compatibility.
+      password: env.get('SMTP_PASS', true) || env.get('SMTP_PASSWORD', true) || undefined,
+      from: env.get('SMTP_FROM', true) || undefined,
+      tlsMode: smtpAllowInsecure
+        ? 'insecure'
+        : smtpSecureValue
+          ? ['true', '1', 'yes', 'on'].includes(smtpSecureValue.toLowerCase())
+            ? 'implicit'
+            : 'starttls'
+          : undefined,
+    }
     const serverSettingsResolver = new ServerSettingsResolver(serverSettingsStore, {
       assistant: envAssistantProviderConfig,
       assistantDailyRequestLimit: env.get('ASSISTANT_DAILY_REQUEST_LIMIT', true)
@@ -278,6 +300,7 @@ export class ContainerConfigLoader {
       nextcloudBackupsEnabled: env.get('NEXTCLOUD_BACKUPS_ENABLED', true)
         ? env.get('NEXTCLOUD_BACKUPS_ENABLED', true) === 'true'
         : undefined,
+      emailDelivery: smtpEnvBaseline,
       // Standard Red Notes: PROOF-OF-WORK anti-bot env baseline. The gateway
       // persists + views these; the AUTH server reads the SAME overlay file and
       // enforces the gating. undefined when the env var is unset so the source
@@ -802,20 +825,11 @@ export class ContainerConfigLoader {
     )
     const reminderDeliveryDataPath =
       env.get('REMINDER_DELIVERY_DATA_PATH', true) || path.resolve(process.cwd(), 'data', 'reminder-delivery')
-    const smtpSecureValue = env.get('SMTP_SECURE', true)
     container.bind<boolean>(TYPES.ApiGateway_REMINDER_DELIVERY_ENABLED).toConstantValue(reminderDeliveryEnabled)
 
     const reminderRegistry = new ProviderRegistry([
       new TelegramProvider(env.get('TELEGRAM_BOT_TOKEN', true) || undefined),
-      new EmailProvider({
-        host: env.get('SMTP_HOST', true) || undefined,
-        port: env.get('SMTP_PORT', true) ? +env.get('SMTP_PORT', true) : undefined,
-        user: env.get('SMTP_USER', true) || undefined,
-        password: env.get('SMTP_PASSWORD', true) || undefined,
-        from: env.get('SMTP_FROM', true) || undefined,
-        secure: smtpSecureValue ? ['true', '1', 'yes', 'on'].includes(smtpSecureValue.toLowerCase()) : undefined,
-        allowInsecure: ['true', '1', 'yes', 'on'].includes((env.get('SMTP_ALLOW_INSECURE', true) || '').toLowerCase()),
-      }),
+      new EmailProvider(() => serverSettingsResolver.resolveEmailDeliveryConfig()),
       new WhatsAppProvider({
         meta: {
           token: env.get('WHATSAPP_TOKEN', true) || undefined,

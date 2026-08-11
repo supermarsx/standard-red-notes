@@ -640,6 +640,18 @@ ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=${ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY}
 # ASSISTANT_OPENAI_EXTRA_HEADERS=
 # ASSISTANT_DAILY_REQUEST_LIMIT=0
 #
+# # Outbound email. Configure here or later in Preferences -> Admin -> Server ->
+# # Email delivery. SMTP_SECURE=true selects implicit TLS (usually port 465);
+# # otherwise STARTTLS is required. Insecure mode is accepted only for an
+# # explicitly trusted loopback/private relay.
+# SMTP_HOST=
+# SMTP_PORT=587
+# SMTP_USER=
+# SMTP_PASS=
+# SMTP_FROM=
+# SMTP_SECURE=false
+# SMTP_ALLOW_INSECURE=false
+#
 # # MCP bridge (only used with: docker compose --profile mcp run --rm mcp)
 # STANDARD_RED_NOTES_EMAIL=
 # STANDARD_RED_NOTES_PASSWORD=

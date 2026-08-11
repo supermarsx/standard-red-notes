@@ -84,7 +84,7 @@ export class MagicLinkController {
     params: SetMagicLinkStatusRequestParams,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   ): Promise<HttpResponse<any>> {
-    if (params.enabled && !this.generateMagicLinkCode.isDeliveryConfigured()) {
+    if (params.enabled && !(await this.generateMagicLinkCode.isDeliveryConfigured())) {
       return {
         status: HttpStatusCode.BadRequest,
         data: {

@@ -60,7 +60,7 @@ The written guidance on this page mirrors the documentation bundled inside Stand
   - [Self-hosting overview](#self-hosting-overview)
   - [Architecture](#self-hosting-architecture)
   - [How authentication works (cookies)](#self-hosting-cookies-auth)
-  - [Email / SMTP for magic link](#self-hosting-smtp)
+  - [Email delivery / SMTP](#self-hosting-smtp)
   - [Updating your server](#self-hosting-updating)
 - [AI assistant](#assistant)
   - [What the assistant can do](#assistant-overview)
@@ -805,11 +805,13 @@ For browser sessions, the server authenticates requests using session cookies it
 Related: [self-hosting/architecture](#self-hosting-architecture), [troubleshooting/cant-sign-in](#troubleshooting-cant-sign-in), [troubleshooting/not-syncing](#troubleshooting-not-syncing)
 
 <a id="self-hosting-smtp"></a>
-### Email / SMTP for magic link
+### Email delivery / SMTP
 
-Configure email so magic-link codes are delivered to inboxes.
+Configure one protected SMTP connection for account mail, backups, and reminders.
 
-The email magic-link second factor needs an email transport (SMTP) to deliver codes. Configure your server’s SMTP settings to send mail from an address you control.
+An administrator can configure the shared SMTP connection under Preferences → Admin → Server → Email delivery. Saved fields override environment values and apply on the next send; clearing a field restores its environment/default fallback. The password is write-only and is preserved by partial saves unless explicitly replaced or cleared.
+
+STARTTLS is required by default. Implicit TLS is available for providers that expect TLS from connection start (normally port 465). Insecure delivery is accepted only for an explicitly trusted loopback or private relay. Save first, then use the redacted Send test action.
 
 {% include safety-alert.html
   level="caution"

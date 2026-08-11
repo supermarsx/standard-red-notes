@@ -1,6 +1,6 @@
 import * as net from 'net'
 
-import { EmailProvider, smtpTransportOptions } from './EmailProvider'
+import { EmailProvider, SmtpConfig, smtpTransportOptions } from './EmailProvider'
 
 const CRLF = '\r\n'
 
@@ -256,17 +256,41 @@ describe('EmailProvider', () => {
     )
   })
 
-  it('limits the plaintext override to loopback, private IP, and single-label internal relay hosts', () => {
+  it('limits the plaintext override to literal loopback/private IPs and localhost names', () => {
     expect(
       new EmailProvider({ host: 'smtp.example.com', from: 'me@example.com', allowInsecure: true }).isConfigured(),
     ).toBe(false)
     expect(new EmailProvider({ host: 'mail-relay', from: 'me@example.com', allowInsecure: true }).isConfigured()).toBe(
-      true,
+      false,
     )
     expect(
       new EmailProvider({ host: '192.168.20.5', from: 'me@example.com', allowInsecure: true }).isConfigured(),
     ).toBe(true)
     expect(new EmailProvider({ host: '::1', from: 'me@example.com', allowInsecure: true }).isConfigured()).toBe(true)
+    expect(
+      new EmailProvider({ host: 'smtp.localhost', from: 'me@example.com', allowInsecure: true }).isConfigured(),
+    ).toBe(true)
+  })
+
+  it('re-resolves the runtime overlay for every send', async () => {
+    const smtp = await start(defaultScript)
+    let config: SmtpConfig = { host: '', from: '', tlsMode: 'starttls' }
+    const resolveConfig = jest.fn(async () => config)
+    const provider = new EmailProvider(resolveConfig)
+
+    await expect(provider.send('user@example.com', 'first')).resolves.toEqual(
+      expect.objectContaining({ ok: false, notConfigured: true }),
+    )
+
+    config = {
+      host: '127.0.0.1',
+      port: smtp.port,
+      from: 'notes@example.com',
+      tlsMode: 'insecure' as const,
+    }
+    await expect(provider.send('user@example.com', 'second')).resolves.toEqual({ ok: true })
+    expect(resolveConfig).toHaveBeenCalledTimes(2)
+    expect(smtp.received).toContain('second')
   })
 
   it('rejects recipient and sender CRLF injection without opening a socket', async () => {

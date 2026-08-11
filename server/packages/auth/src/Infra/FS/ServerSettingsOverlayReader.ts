@@ -7,6 +7,7 @@ import {
   RegistrationConfigOverlay,
 } from '../../Domain/Registration/RegistrationConfig'
 import { SignupLimitsConfigOverlay } from '../../Domain/Registration/SignupLimitsConfig'
+import { EMAIL_DELIVERY_TLS_MODES, EmailDeliveryConfig } from '@standardnotes/domain-core'
 
 /**
  * Standard Red Notes: read-only view of the api-gateway's persisted runtime
@@ -37,6 +38,38 @@ export class ServerSettingsOverlayReader {
     const enabled = (overlay?.nextcloudBackups as { enabled?: unknown } | undefined)?.enabled
 
     return typeof enabled === 'boolean' ? enabled : undefined
+  }
+
+  /** Shared write-only SMTP overlay. Invalid fields are ignored and validation
+   * of the effective persisted-over-env configuration stays in the sender. */
+  async emailDelivery(): Promise<EmailDeliveryConfig | undefined> {
+    const overlay = await this.read()
+    const emailDelivery = overlay?.emailDelivery as Record<string, unknown> | undefined
+    if (!emailDelivery || typeof emailDelivery !== 'object') {
+      return undefined
+    }
+
+    const result: EmailDeliveryConfig = {}
+    if (typeof emailDelivery.host === 'string') {
+      result.host = emailDelivery.host
+    }
+    if (typeof emailDelivery.port === 'number') {
+      result.port = emailDelivery.port
+    }
+    if (typeof emailDelivery.username === 'string') {
+      result.username = emailDelivery.username
+    }
+    if (typeof emailDelivery.password === 'string') {
+      result.password = emailDelivery.password
+    }
+    if (typeof emailDelivery.from === 'string') {
+      result.from = emailDelivery.from
+    }
+    if ((EMAIL_DELIVERY_TLS_MODES as readonly unknown[]).includes(emailDelivery.tlsMode)) {
+      result.tlsMode = emailDelivery.tlsMode as EmailDeliveryConfig['tlsMode']
+    }
+
+    return Object.keys(result).length > 0 ? result : undefined
   }
 
   /**

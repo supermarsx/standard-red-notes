@@ -23,7 +23,7 @@ export class TriggerEmailBackupForAllUsers implements UseCaseInterface<void> {
      * configured (SMTP). Both default to off so a fresh install never emails.
      */
     private emailBackupsEnabled: boolean,
-    private emailDeliveryConfigured: boolean,
+    private emailDeliveryConfigured: boolean | (() => boolean | Promise<boolean>),
   ) {}
 
   async execute(dto: TriggerEmailBackupForAllUsersDTO): Promise<Result<void>> {
@@ -33,7 +33,11 @@ export class TriggerEmailBackupForAllUsers implements UseCaseInterface<void> {
       return Result.ok()
     }
 
-    if (!this.emailDeliveryConfigured) {
+    const emailDeliveryConfigured =
+      typeof this.emailDeliveryConfigured === 'function'
+        ? await this.emailDeliveryConfigured()
+        : this.emailDeliveryConfigured
+    if (!emailDeliveryConfigured) {
       this.logger.warn(
         'Scheduled email backups are enabled but email delivery (SMTP) is not configured. Skipping to avoid generating backups that cannot be delivered.',
       )
