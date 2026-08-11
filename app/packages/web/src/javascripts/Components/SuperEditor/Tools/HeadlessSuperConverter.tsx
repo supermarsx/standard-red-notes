@@ -22,6 +22,31 @@ import { $isFileNode } from '../Plugins/EncryptedFilePlugin/Nodes/FileUtils'
 import { $generateNodesFromSerializedNodes, $insertGeneratedNodes } from '@lexical/clipboard'
 import type { PageLayoutOptions } from '../Lexical/Utils/DocExport/PageLayoutOptions'
 
+type SuperConversionConfig = {
+  embedBehavior?: PrefValue[PrefKey.SuperNoteExportEmbedBehavior]
+  getFileItem?: (id: string) => FileItem | undefined
+  getFileBase64?: (id: string) => Promise<string | undefined>
+  pdf?: {
+    pageSize?: PrefValue[PrefKey.SuperNoteExportPDFPageSize]
+    /** Standard Red Notes: per-note page numbering / header / footer (from NoteLayout). */
+    pageLayout?: PageLayoutOptions
+  }
+}
+
+const blobToDataUrl = (blob: Blob): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onerror = () => reject(reader.error ?? new Error('Could not read generated PDF'))
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        resolve(reader.result)
+      } else {
+        reject(new Error('Could not read generated PDF'))
+      }
+    }
+    reader.readAsDataURL(blob)
+  })
+
 export class HeadlessSuperConverter implements SuperConverterServiceInterface {
   private importEditor: LexicalEditor
   private exportEditor: LexicalEditor
@@ -52,25 +77,12 @@ export class HeadlessSuperConverter implements SuperConverterServiceInterface {
     }
   }
 
-  async convertSuperStringToOtherFormat(
+  /** Load the latest note state and replace embedded file nodes for an export. */
+  private async prepareExportEditor(
     superString: string,
     toFormat: 'txt' | 'md' | 'html' | 'json' | 'pdf',
-    config?: {
-      embedBehavior?: PrefValue[PrefKey.SuperNoteExportEmbedBehavior]
-      getFileItem?: (id: string) => FileItem | undefined
-      getFileBase64?: (id: string) => Promise<string | undefined>
-      pdf?: {
-        pageSize?: PrefValue[PrefKey.SuperNoteExportPDFPageSize]
-        /** Standard Red Notes: per-note page numbering / header / footer (from NoteLayout). */
-        pageLayout?: PageLayoutOptions
-      }
-    },
-  ): Promise<string> {
-    let didThrow = false
-    if (superString.length === 0) {
-      return superString
-    }
-
+    config?: SuperConversionConfig,
+  ): Promise<void> {
     const { embedBehavior, getFileItem, getFileBase64 } = config ?? { embedBehavior: 'reference' }
 
     if (embedBehavior === 'separate' && !getFileItem) {
@@ -80,17 +92,17 @@ export class HeadlessSuperConverter implements SuperConverterServiceInterface {
       throw new Error('getFileItem and getFileBase64 must be provided when embedBehavior is "inline"')
     }
 
-    this.exportEditor.setEditorState(this.exportEditor.parseEditorState(superString))
-
-    let content: string | undefined
+    if (superString.length === 0) {
+      // The converter is a singleton. Explicitly clear prior content so an empty
+      // note produces a genuinely blank document rather than the last export.
+      this.exportEditor.update(() => $getRoot().clear(), { discrete: true })
+    } else {
+      this.exportEditor.setEditorState(this.exportEditor.parseEditorState(superString))
+    }
 
     await new Promise<void>((resolve, reject) => {
       const handleFileNodes = () => {
-        if (embedBehavior === 'reference') {
-          resolve()
-          return
-        }
-        if (!getFileItem) {
+        if (embedBehavior === 'reference' || !getFileItem) {
           resolve()
           return
         }
@@ -124,14 +136,12 @@ export class HeadlessSuperConverter implements SuperConverterServiceInterface {
                     filenameCounts[fileItem.name] == undefined ? 0 : filenameCounts[fileItem.name] + 1
 
                   let name = fileItem.name
-
                   if (filenameCounts[name] > 0) {
-                    const { name: _name, ext } = parseFileName(name)
-                    name = `${_name}-${fileItem.uuid}.${ext}`
+                    const { name: baseName, ext } = parseFileName(name)
+                    name = `${baseName}-${fileItem.uuid}.${ext}`
                   }
 
-                  const fileExportNode = $createFileExportNode(name, fileItem.mimeType)
-                  fileNode.replace(fileExportNode)
+                  fileNode.replace($createFileExportNode(name, fileItem.mimeType))
                 },
                 { discrete: true },
               )
@@ -139,16 +149,39 @@ export class HeadlessSuperConverter implements SuperConverterServiceInterface {
           }),
         )
           .then(() => resolve())
-          .catch((error) => {
-            didThrow = true
-            console.error(error)
-            reject(error)
-          })
+          .catch(reject)
       }
       this.exportEditor.update(handleFileNodes, { discrete: true })
     })
+  }
 
-    await new Promise<void>((resolve, reject) => {
+  /** Generate a valid PDF Blob without an object-URL/fetch round trip. */
+  async convertSuperStringToPDFBlob(superString: string, config?: SuperConversionConfig): Promise<Blob> {
+    await this.prepareExportEditor(superString, 'pdf', config)
+    const { $generatePDFFromNodes } = await import('../Lexical/Utils/PDFExport/PDFExport')
+    return $generatePDFFromNodes(this.exportEditor, config?.pdf?.pageSize || 'A4', config?.pdf?.pageLayout)
+  }
+
+  async convertSuperStringToOtherFormat(
+    superString: string,
+    toFormat: 'txt' | 'md' | 'html' | 'json' | 'pdf',
+    config?: SuperConversionConfig,
+  ): Promise<string> {
+    if (superString.length === 0 && toFormat !== 'pdf') {
+      return superString
+    }
+
+    // Keep the legacy string contract for interface consumers, but never create
+    // an object URL. The actual note-download path calls the Blob method below.
+    if (toFormat === 'pdf') {
+      return blobToDataUrl(await this.convertSuperStringToPDFBlob(superString, config))
+    }
+
+    await this.prepareExportEditor(superString, toFormat, config)
+
+    let content: string | undefined
+
+    await new Promise<void>((resolve) => {
       const convertToFormat = () => {
         switch (toFormat) {
           case 'txt': {
@@ -167,21 +200,6 @@ export class HeadlessSuperConverter implements SuperConverterServiceInterface {
             content = $generateHtmlFromNodes(this.exportEditor)
             resolve()
             break
-          case 'pdf': {
-            void import('../Lexical/Utils/PDFExport/PDFExport').then(({ $generatePDFFromNodes }): void => {
-              void $generatePDFFromNodes(this.exportEditor, config?.pdf?.pageSize || 'A4', config?.pdf?.pageLayout)
-                .then((pdf) => {
-                  content = pdf
-                  resolve()
-                })
-                .catch((error) => {
-                  didThrow = true
-                  console.error(error)
-                  reject(error)
-                })
-            })
-            break
-          }
           case 'json':
           default:
             content = superString
@@ -192,7 +210,7 @@ export class HeadlessSuperConverter implements SuperConverterServiceInterface {
       this.exportEditor.update(convertToFormat, { discrete: true })
     })
 
-    if (didThrow || typeof content !== 'string') {
+    if (typeof content !== 'string') {
       throw new Error('Could not export note')
     }
 

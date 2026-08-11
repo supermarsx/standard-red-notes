@@ -35,6 +35,7 @@ export enum ToolbarButtonId {
   // History
   Undo = 'undo',
   Redo = 'redo',
+  Print = 'print',
   // Selection (in-note find / replace / select)
   TableOfContents = 'tableOfContents',
   Search = 'search',
@@ -188,6 +189,7 @@ export const DEFAULT_TOOLBAR_GROUPS: ToolbarGroupDescriptor[] = [
     buttons: [
       { id: ToolbarButtonId.Undo, label: 'Undo', group: ToolbarGroupId.History },
       { id: ToolbarButtonId.Redo, label: 'Redo', group: ToolbarGroupId.History },
+      { id: ToolbarButtonId.Print, label: 'Print', group: ToolbarGroupId.History },
     ],
   },
   {

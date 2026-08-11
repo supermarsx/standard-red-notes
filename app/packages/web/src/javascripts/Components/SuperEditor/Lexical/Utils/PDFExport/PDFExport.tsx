@@ -687,15 +687,13 @@ const shouldUseCustomFonts = async () => {
   }
 }
 
-/**
- * @returns The PDF as an object url
- */
+/** Return the generated PDF bytes directly; callers own the Blob lifecycle. */
 export function $generatePDFFromNodes(
   editor: LexicalEditor,
   pageSize: PrefValue[PrefKey.SuperNoteExportPDFPageSize],
   options?: PageLayoutOptions,
-) {
-  return new Promise<string>((resolve, reject) => {
+): Promise<Blob> {
+  return new Promise<Blob>((resolve, reject) => {
     shouldUseCustomFonts()
       .then((useCustomFonts) => {
         editor.getEditorState().read(() => {
@@ -712,8 +710,7 @@ export function $generatePDFFromNodes(
               return PDFWorkerComlink.renderPDF(pdfDataNodes, pageSize, fontFamilies, useCustomFonts, options)
             })
             .then((blob) => {
-              const url = URL.createObjectURL(blob)
-              resolve(url)
+              resolve(blob)
             })
             .catch((error) => {
               reject(error)

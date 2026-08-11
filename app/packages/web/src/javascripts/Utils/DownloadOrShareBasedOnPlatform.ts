@@ -18,12 +18,12 @@ export const downloadOrShareBlobBasedOnPlatform = async (dto: {
   }
 
   if (dto.mobileDevice && dto.platform === Platform.Ios) {
-    void shareBlobOnMobile(dto.mobileDevice, dto.isNativeMobileWeb, dto.blob, dto.filename)
+    await shareBlobOnMobile(dto.mobileDevice, dto.isNativeMobileWeb, dto.blob, dto.filename)
     return
   }
 
   if (dto.mobileDevice && dto.platform === Platform.Android) {
-    void downloadBlobOnAndroid(dto.mobileDevice, dto.blob, dto.filename, dto.showToastOnAndroid ?? true)
+    await downloadBlobOnAndroid(dto.mobileDevice, dto.blob, dto.filename, dto.showToastOnAndroid ?? true)
     return
   }
 }

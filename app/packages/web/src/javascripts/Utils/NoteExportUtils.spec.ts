@@ -31,7 +31,7 @@ jest.mock(
 )
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const { createNoteExport, noteHasEmbeddedFiles, superHTML, superMarkdown } =
+const { createNoteExport, noteHasEmbeddedFiles, superHTML, superMarkdown, validatePDFBlob } =
   require('./NoteExportUtils') as typeof import('./NoteExportUtils')
 
 const makeLiteNote = (overrides: Partial<SNNote> = {}): SNNote => {
@@ -157,5 +157,30 @@ describe('noteHasEmbeddedFiles', () => {
     // Raw lite text is empty → false; but the re-hydrated body has an snfile node.
     expect(noteHasEmbeddedFiles(note)).toBe(false)
     expect(noteHasEmbeddedFiles(note, '[{"type":"snfile","id":"x"}]')).toBe(true)
+  })
+})
+
+describe('PDF output validation', () => {
+  const readText = (blob: Blob): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onerror = () => reject(reader.error)
+      reader.onload = () => resolve(String(reader.result))
+      reader.readAsText(blob)
+    })
+
+  it('accepts %PDF bytes and normalizes their MIME type', async () => {
+    const raw = new Blob(['%PDF-1.7\nbody'], { type: 'application/octet-stream' })
+
+    const pdf = await validatePDFBlob(raw)
+
+    expect(pdf.type).toBe('application/pdf')
+    expect(await readText(pdf.slice(0, 5))).toBe('%PDF-')
+  })
+
+  it('rejects an HTML/error response instead of downloading it as .pdf', async () => {
+    const html = new Blob(['<html><h1>405 Not Allowed</h1></html>'], { type: 'text/html' })
+
+    await expect(validatePDFBlob(html)).rejects.toThrow('valid PDF signature')
   })
 })

@@ -8,7 +8,82 @@
 // UI) and lay out just the current note's title + editor content full-width
 // with legible black-on-white typography, overriding any dark theme.
 
+// The explicit print action builds this sanitized snapshot just before invoking
+// window.print(). Keep it absent from the on-screen accessibility/render tree.
+#srn-print-root {
+  display: none;
+}
+
 @media print {
+  // ---------------------------------------------------------------------------
+  // Explicit print path: hand the compositor ONLY the detached title/body
+  // snapshot. The source app remains mounted so images/fonts stay available,
+  // but no toolbar, portal, widget action or add-control can enter the output.
+  // ---------------------------------------------------------------------------
+  body.srn-printing > *:not(#srn-print-root) {
+    display: none !important;
+  }
+
+  body.srn-printing #srn-print-root {
+    background: #fff !important;
+    color: #000 !important;
+    display: block !important;
+    font-family: Arial, Helvetica, sans-serif;
+    height: auto !important;
+    margin: 0 !important;
+    max-height: none !important;
+    overflow: visible !important;
+    padding: 0 !important;
+    position: static !important;
+    width: auto !important;
+  }
+
+  #srn-print-title {
+    border-bottom: 1px solid #ccc;
+    color: #000 !important;
+    font-size: 1.6rem;
+    font-weight: 600;
+    margin: 0 0 1rem;
+    padding: 0 0 0.5rem;
+  }
+
+  #srn-print-body {
+    background: #fff !important;
+    color: #000 !important;
+    display: block !important;
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    padding: 0 !important;
+    width: 100% !important;
+  }
+
+  #srn-print-body button,
+  #srn-print-body select,
+  #srn-print-body input,
+  #srn-print-body textarea,
+  #srn-print-body [role='button'],
+  #srn-print-body [role='menu'],
+  #srn-print-body [role='toolbar'],
+  #srn-print-body [data-srn-print-exclude] {
+    display: none !important;
+  }
+
+  #srn-print-body .srn-print-control-value,
+  #srn-print-body .srn-print-plain-text {
+    color: #000 !important;
+    font: inherit;
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  #srn-print-body .srn-print-checkbox {
+    display: inline-block;
+    font-family: Arial, Helvetica, sans-serif;
+    margin-right: 0.35em;
+  }
+
   // ---------------------------------------------------------------------------
   // Force a clean, legible light surface regardless of the active (possibly
   // dark) theme, and reset the page geometry so the note can flow full-width.
@@ -142,14 +217,23 @@
   // Reset rich-text foreground colors that the theme may have set so text is
   // readable on white paper.
   #editor-content p,
+  #srn-print-body p,
   #editor-content li,
+  #srn-print-body li,
   #editor-content span,
+  #srn-print-body span,
   #editor-content h1,
+  #srn-print-body h1,
   #editor-content h2,
+  #srn-print-body h2,
   #editor-content h3,
+  #srn-print-body h3,
   #editor-content h4,
+  #srn-print-body h4,
   #editor-content h5,
-  #editor-content h6 {
+  #srn-print-body h5,
+  #editor-content h6,
+  #srn-print-body h6 {
     color: #000 !important;
   }
 
@@ -158,24 +242,35 @@
   // with the content that follows them.
   // ---------------------------------------------------------------------------
   #editor-content img,
+  #srn-print-body img,
   #editor-content table,
+  #srn-print-body table,
   #editor-content pre,
+  #srn-print-body pre,
   #editor-content blockquote,
+  #srn-print-body blockquote,
   #editor-content figure,
+  #srn-print-body figure,
   #editor-content .ContentEditable__image,
-  #editor-content [data-lexical-decorator] {
+  #editor-content [data-lexical-decorator],
+  #srn-print-body .ContentEditable__image,
+  #srn-print-body [data-lexical-decorator] {
     break-inside: avoid !important;
     page-break-inside: avoid !important;
   }
 
-  #editor-content img {
+  #editor-content img,
+  #srn-print-body img {
     max-width: 100% !important;
     height: auto !important;
   }
 
   #editor-content h1,
+  #srn-print-body h1,
   #editor-content h2,
+  #srn-print-body h2,
   #editor-content h3,
+  #srn-print-body h3,
   #editor-content h4 {
     break-after: avoid !important;
     page-break-after: avoid !important;
@@ -197,7 +292,9 @@
 
   // Code blocks / preformatted text should wrap rather than overflow the page.
   #editor-content pre,
-  #editor-content code {
+  #srn-print-body pre,
+  #editor-content code,
+  #srn-print-body code {
     white-space: pre-wrap !important;
     word-wrap: break-word !important;
     background: #f4f4f4 !important;
@@ -206,14 +303,18 @@
 
   // Tables: simple legible borders for paper.
   #editor-content table,
+  #srn-print-body table,
   #editor-content th,
-  #editor-content td {
+  #srn-print-body th,
+  #editor-content td,
+  #srn-print-body td {
     border: 1px solid #999 !important;
     border-collapse: collapse !important;
   }
 
   // Optionally surface link URLs so printed links remain useful.
-  #editor-content a[href]:not([href^='#'])::after {
+  #editor-content a[href]:not([href^='#'])::after,
+  #srn-print-body a[href]:not([href^='#'])::after {
     content: ' (' attr(href) ')';
     font-size: 0.85em;
     color: #555 !important;
@@ -221,7 +322,8 @@
   }
 
   // Don't print the link decoration underline noise on internal anchors.
-  #editor-content a {
+  #editor-content a,
+  #srn-print-body a {
     color: #000 !important;
     text-decoration: underline !important;
   }
