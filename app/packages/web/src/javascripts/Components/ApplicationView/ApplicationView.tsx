@@ -11,6 +11,7 @@ import {
   LocalPrefKey,
   LocalPrefDefaults,
   ContentType,
+  SNNote,
 } from '@standardnotes/snjs'
 import { applyEditorFont } from '@/Utils/editorFont'
 import { achievements, METRICS } from '@/Achievements'
@@ -70,6 +71,7 @@ import FloatingNarrationPlayer from '../Narration/FloatingNarrationPlayer'
 import AppLockPasskeyScreen from './AppLockPasskeyScreen'
 import { isAppLockPasskeyRegistered } from '@/AppLockPasskey/appLockPasskeyService'
 import { addChallengeToList, removeChallengeFromList } from './challengeList'
+import { installNativeNotePrinting, PRINT_NOTE_UUID_ATTRIBUTE } from '../NoteView/Print/PrintNote'
 
 type Props = {
   application: WebApplication
@@ -228,6 +230,35 @@ const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicatio
     const stop = startAppUsageTimeTracking()
     return stop
   }, [])
+
+  // Browser-menu Print and Ctrl/Cmd+P must use the same title/body-only
+  // snapshot as the in-editor Print action. Install once at the application
+  // boundary; persisted fallbacks are projected by note type, and unknown
+  // structured/custom formats fail closed instead of printing serialization.
+  useEffect(
+    () =>
+      installNativeNotePrinting(
+        () => {
+          const title = document.querySelector<HTMLInputElement>(`[${PRINT_NOTE_UUID_ATTRIBUTE}]`)
+          const noteUuid =
+            title?.getAttribute(PRINT_NOTE_UUID_ATTRIBUTE) ??
+            application.itemListController.activeControllerItem?.uuid ??
+            undefined
+          const note = noteUuid ? application.items.findItem<SNNote>(noteUuid) : undefined
+          return {
+            noteUuid,
+            fallbackTitle: note?.title,
+            fallbackBody: note?.text,
+            fallbackNoteType: note?.noteType,
+            fallbackEditorIdentifier: note?.editorIdentifier,
+          }
+        },
+        (reason) => {
+          addToast({ type: ToastType.Error, message: reason })
+        },
+      ),
+    [application],
+  )
 
   useEffect(() => {
     const desktopService = application.desktopManager

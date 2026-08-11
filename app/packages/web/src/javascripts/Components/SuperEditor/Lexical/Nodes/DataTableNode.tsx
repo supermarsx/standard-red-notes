@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   $getNodeByKey,
   $getRoot,
@@ -32,6 +32,11 @@ import {
   linkOptionsFor,
   resolveLink,
 } from './dataTableRelations'
+import {
+  PrintableDataTableSnapshot,
+  registerPrintableDataTable,
+  unregisterPrintableDataTable,
+} from './PrintableDataTableRegistry'
 
 export type DataTableData = {
   /**
@@ -139,7 +144,53 @@ const TYPE_LABEL: Record<ColumnType, string> = {
   boolean: 'Boolean',
 }
 
-const PAGE_SIZES = [10, 25, 50, 100, 0] // 0 = All
+// Zero represents the unpaginated "All" option.
+const PAGE_SIZES = [10, 25, 50, 100, 0]
+
+/** Build the complete semantic print model without touching on-screen paging. */
+export function getDataTablePrintSnapshot(
+  data: DataTableData,
+  tableMap?: ReadonlyMap<string, IdentifiedTable>,
+): PrintableDataTableSnapshot {
+  const effectiveTypes = data.columns.map((_, columnIndex) => {
+    const setting = typeSettingAt(data, columnIndex)
+    return setting === 'auto' ? detectColumnType(data.rows.map((row) => row[columnIndex] ?? '')) : setting
+  })
+
+  return {
+    columns: [...data.columns],
+    rows: data.rows.map((row) =>
+      data.columns.map((_, columnIndex) => {
+        const raw = row[columnIndex] ?? ''
+        const link = linkConfigAt(data.links, columnIndex)
+        return link && tableMap
+          ? resolveLink(raw, link, tableMap).display
+          : formatCellValue(raw, effectiveTypes[columnIndex] ?? 'text')
+      }),
+    ),
+  }
+}
+
+/** Overlay the value of a cell currently being edited but not yet blurred/saved. */
+export function applyLiveDataTableEdits(
+  snapshot: PrintableDataTableSnapshot,
+  element: HTMLElement,
+): PrintableDataTableSnapshot {
+  element
+    .querySelectorAll<HTMLInputElement>('[data-srn-datatable-row-index][data-srn-datatable-column-index]')
+    .forEach((input) => {
+      const rowIndex = Number(input.dataset.srnDatatableRowIndex)
+      const columnIndex = Number(input.dataset.srnDatatableColumnIndex)
+      if (
+        Number.isInteger(rowIndex) &&
+        Number.isInteger(columnIndex) &&
+        snapshot.rows[rowIndex]?.[columnIndex] !== undefined
+      ) {
+        snapshot.rows[rowIndex][columnIndex] = input.value
+      }
+    })
+  return snapshot
+}
 
 /**
  * Cell renderer for a "link" (foreign-key) column. Resolves the stored key
@@ -157,6 +208,8 @@ function LinkCell({
   onCommit,
   onCancel,
   onScrollToTable,
+  rowIndex,
+  columnIndex,
 }: {
   raw: string
   config: LinkColumnConfig
@@ -166,6 +219,8 @@ function LinkCell({
   onCommit: (value: string) => void
   onCancel: () => void
   onScrollToTable: (targetId: string) => void
+  rowIndex: number
+  columnIndex: number
 }): React.JSX.Element {
   const target = tableMap.get(config.targetTableId)
   const resolution = resolveLink(raw, config, tableMap)
@@ -190,6 +245,8 @@ function LinkCell({
           </select>
         )}
         <input
+          data-srn-datatable-column-index={columnIndex}
+          data-srn-datatable-row-index={rowIndex}
           className="border-border bg-default text-foreground focus:border-info w-full rounded border px-1 py-0.5 outline-none"
           placeholder="or type a key…"
           defaultValue={raw}
@@ -282,6 +339,22 @@ function DataTableComponent({ data, nodeKey }: { data: DataTableData; nodeKey: N
   }, [editor, nodeKey])
 
   const tableMap = useMemo(() => buildTableMap(otherTables), [otherTables])
+  const printDataRef = useRef(data)
+  printDataRef.current = data
+  const printTableMapRef = useRef(tableMap)
+  printTableMapRef.current = tableMap
+  const registeredPrintElement = useRef<HTMLElement | null>(null)
+  const setPrintElement = useCallback((element: HTMLDivElement | null) => {
+    if (registeredPrintElement.current) {
+      unregisterPrintableDataTable(registeredPrintElement.current)
+    }
+    registeredPrintElement.current = element
+    if (element) {
+      registerPrintableDataTable(element, () =>
+        applyLiveDataTableEdits(getDataTablePrintSnapshot(printDataRef.current, printTableMapRef.current), element),
+      )
+    }
+  }, [])
   const tableLabel = useCallback(
     (id: string): string => {
       const t = tableMap.get(id)
@@ -481,7 +554,7 @@ function DataTableComponent({ data, nodeKey }: { data: DataTableData; nodeKey: N
   }
 
   return (
-    <div className="border-border bg-default my-2 rounded border" data-datatable-block="true">
+    <div ref={setPrintElement} className="border-border bg-default my-2 rounded border" data-datatable-block="true">
       <div className="border-border text-passive-1 flex flex-wrap items-center gap-1 border-b px-2 py-1 text-xs">
         <span className="mr-1 font-semibold">Data table</span>
         <input
@@ -713,10 +786,14 @@ function DataTableComponent({ data, nodeKey }: { data: DataTableData; nodeKey: N
                           }}
                           onCancel={() => setEditing(null)}
                           onScrollToTable={scrollToTable}
+                          rowIndex={idx}
+                          columnIndex={c}
                         />
                       ) : isEditing ? (
                         <input
                           autoFocus
+                          data-srn-datatable-column-index={c}
+                          data-srn-datatable-row-index={idx}
                           className="bg-contrast text-foreground w-full px-2 py-1 outline-none"
                           defaultValue={raw}
                           onBlur={(e) => {
