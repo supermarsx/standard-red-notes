@@ -162,6 +162,14 @@ describe('VaultService', () => {
       expect(service.getItemVault(undefined)).toBeUndefined()
       expect(items.findItem).not.toHaveBeenCalled()
     })
+
+    it('returns no vault when a defined item was removed before the lookup completes', () => {
+      const removedItem = createNoteWithContent({ title: 'removed' })
+      items.findItem = jest.fn().mockReturnValue(undefined)
+
+      expect(service.getItemVault(removedItem)).toBeUndefined()
+      expect(items.findItem).toHaveBeenCalledWith(removedItem.uuid)
+    })
   })
 
   describe('moveItemToVault', () => {
