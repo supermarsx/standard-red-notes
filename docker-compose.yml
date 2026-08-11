@@ -389,6 +389,12 @@ services:
       # (this deployment syncs to ITSELF — never api.standardnotes.com). Set to
       # front the API on a different host, e.g. SYNC_SERVER=https://sync.example.com.
       SYNC_SERVER: ${SYNC_SERVER:-}
+      # Raw forwarded headers are ignored unless this explicit proxy-trust gate
+      # is enabled with a canonical HTTPS PUBLIC_URL. New HTTPS setup-script
+      # installs set both; direct/local installs remain plain HTTP compatible.
+      ENFORCE_HTTPS_FROM_PROXY: ${ENFORCE_HTTPS_FROM_PROXY:-false}
+      PUBLIC_URL: ${PUBLIC_URL:-}
+      APP_BIND_ADDRESS: ${APP_BIND_ADDRESS:-0.0.0.0}
     depends_on:
       server:
         condition: service_healthy
@@ -396,7 +402,7 @@ services:
     # the proxy reach this container over the shared `proxy` network (see the
     # `networks` block at the bottom). To keep direct access, leave `ports` as-is.
     ports:
-      - "${APP_PORT:-3001}:8080"
+      - "${APP_BIND_ADDRESS:-0.0.0.0}:${APP_PORT:-3001}:8080"
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/health >/dev/null || exit 1"]
       interval: 30s

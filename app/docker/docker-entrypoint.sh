@@ -94,6 +94,116 @@ fi
 # ---------------------------------------------------------------------------
 CONF="${SRN_ENTRYPOINT_NGINX_CONF:-/etc/nginx/conf.d/default.conf}"
 
+# ---------------------------------------------------------------------------
+# Trusted reverse-proxy HTTPS contract.
+#
+# Raw X-Forwarded-Proto is attacker-controlled whenever the app port is exposed
+# directly. It is therefore ignored by default. Operators may opt in with the
+# exact value ENFORCE_HTTPS_FROM_PROXY=true, but only alongside a canonical
+# HTTPS PUBLIC_URL origin. Invalid explicit secure-mode configuration aborts
+# startup rather than silently serving without the requested transport policy.
+# ---------------------------------------------------------------------------
+validate_https_public_origin() {
+  _transport_url="${1:-}"
+  case "$_transport_url" in
+    https://*) ;;
+    *) return 1 ;;
+  esac
+
+  _transport_authority="${_transport_url#https://}"
+  [ -n "$_transport_authority" ] || return 1
+  # An origin contains only an authority here: no path, query, fragment,
+  # credentials, whitespace/control bytes, quotes, or header delimiters.
+  case "$_transport_authority" in
+    *[!A-Za-z0-9.:-]*|.*|*.|-*|*-|*..*) return 1 ;;
+  esac
+
+  _transport_host="$_transport_authority"
+  case "$_transport_authority" in
+    *:*)
+      _transport_host="${_transport_authority%%:*}"
+      _transport_port="${_transport_authority#*:}"
+      case "$_transport_port" in
+        ""|*[!0-9]*|*:*|0|0*) return 1 ;;
+      esac
+      [ "${#_transport_port}" -le 5 ] || return 1
+      [ "$_transport_port" -le 65535 ] 2>/dev/null || return 1
+      ;;
+  esac
+
+  [ -n "$_transport_host" ] || return 1
+  [ "${#_transport_host}" -le 253 ] || return 1
+  _transport_old_ifs="$IFS"
+  IFS=.
+  # shellcheck disable=SC2086 # Deliberately split the validated hostname labels.
+  set -- $_transport_host
+  IFS="$_transport_old_ifs"
+  for _transport_label in "$@"; do
+    [ -n "$_transport_label" ] || return 1
+    [ "${#_transport_label}" -le 63 ] || return 1
+    case "$_transport_label" in
+      *[!A-Za-z0-9-]*|-*|*-) return 1 ;;
+    esac
+  done
+  return 0
+}
+
+configure_proxy_transport() {
+  _transport_mode="disabled"
+  _transport_origin="https://invalid.invalid"
+  case "${ENFORCE_HTTPS_FROM_PROXY:-false}" in
+    false|"") ;;
+    true)
+      if [ "${APP_BIND_ADDRESS:-0.0.0.0}" != "127.0.0.1" ]; then
+        echo "[entrypoint] ERROR: ENFORCE_HTTPS_FROM_PROXY=true requires APP_BIND_ADDRESS=127.0.0.1; when removing the Compose ports mapping, retain that declaration as the trusted-mode safety gate." >&2
+        return 1
+      fi
+      if ! validate_https_public_origin "${PUBLIC_URL:-}"; then
+        echo "[entrypoint] ERROR: ENFORCE_HTTPS_FROM_PROXY=true requires PUBLIC_URL to be one canonical HTTPS origin (hostname/IPv4 plus optional port; no path, credentials, query, fragment, or control bytes)." >&2
+        return 1
+      fi
+      _transport_mode="enabled"
+      _transport_origin="$PUBLIC_URL"
+      ;;
+    *)
+      echo "[entrypoint] ERROR: ENFORCE_HTTPS_FROM_PROXY must be exactly true or false." >&2
+      return 1
+      ;;
+  esac
+
+  [ -f "$CONF" ] || return 1
+  _transport_tmp="$(mktemp "${CONF}.transport.XXXXXX" 2>/dev/null)" || return 1
+  if ! awk -v mode="$_transport_mode" -v origin="$_transport_origin" '
+    index($0, "$srn_proxy_https_mode {") {
+      print "map \"" mode "\" $srn_proxy_https_mode { default " mode "; }"
+      mode_count += 1
+      next
+    }
+    index($0, "$srn_https_public_origin {") {
+      print "map \"" origin "\" $srn_https_public_origin { default \"" origin "\"; }"
+      origin_count += 1
+      next
+    }
+    { print }
+    END { if (mode_count != 1 || origin_count != 1) exit 1 }
+  ' "$CONF" > "$_transport_tmp"; then
+    rm -f "$_transport_tmp"
+    return 1
+  fi
+  chmod 644 "$_transport_tmp" || { rm -f "$_transport_tmp"; return 1; }
+  mv -f "$_transport_tmp" "$CONF" || { rm -f "$_transport_tmp"; return 1; }
+  grep -Fq "map \"${_transport_mode}\" \$srn_proxy_https_mode { default ${_transport_mode}; }" "$CONF" || return 1
+  grep -Fq "map \"${_transport_origin}\" \$srn_https_public_origin { default \"${_transport_origin}\"; }" "$CONF" || return 1
+
+  echo "[entrypoint] trusted proxy HTTPS mode: ${_transport_mode}"
+  return 0
+}
+
+if ! configure_proxy_transport; then
+  echo "[entrypoint] ERROR: failed to configure the trusted reverse-proxy transport contract; refusing to start nginx." >&2
+  exit 1
+fi
+
 # Emit the byte-exact body of the first inline <script> (no src attr), skipping
 # any <script> occurring inside an HTML comment. Exits non-zero if not found.
 extract_inline_script() {
