@@ -23,6 +23,9 @@ const INTERNAL_SECRET = process.env.WEBSOCKET_GATEWAY_INTERNAL_SECRET ?? 'dev-ws
 const CONNECTION_TOKEN_SECRET =
   process.env.WEB_SOCKET_CONNECTION_TOKEN_SECRET ?? 'dev-ws-connection-token-secret-change-me'
 const COLLABORATION_HKDF_SALT = 'Standard Red Notes encrypted collaboration room key v1'
+const COLLABORATION_PROTOCOL_VERSION = 2
+const YJS_CHUNK_PLAINTEXT_BYTES = 128 * 1024
+const MAX_YJS_TRANSFER_BYTES = 4 * 1024 * 1024
 
 let failures = 0
 const check = (name, condition) => {
@@ -64,30 +67,70 @@ async function deriveRoomKey(secret, keyScope, noteUuid) {
   }
 }
 
-async function encrypt(key, plaintext) {
+const chunkAdditionalData = ({ room, transferId, index, count, totalBytes, stateRequestId }) =>
+  new TextEncoder().encode(
+    JSON.stringify([
+      'standard-red-notes:yjs-chunk:v2',
+      COLLABORATION_PROTOCOL_VERSION,
+      room,
+      transferId,
+      index,
+      count,
+      totalBytes,
+      stateRequestId ?? null,
+    ]),
+  )
+
+const frameAdditionalData = (room, frameType, transferId, stateRequestId) =>
+  new TextEncoder().encode(
+    JSON.stringify([
+      'standard-red-notes:collaboration-frame:v2',
+      COLLABORATION_PROTOCOL_VERSION,
+      room,
+      frameType,
+      transferId ?? null,
+      stateRequestId ?? null,
+    ]),
+  )
+
+async function encrypt(key, plaintext, additionalData) {
   const iv = crypto.getRandomValues(new Uint8Array(12))
-  const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, plaintext))
+  const ciphertext = new Uint8Array(
+    await crypto.subtle.encrypt({ name: 'AES-GCM', iv, ...(additionalData ? { additionalData } : {}) }, key, plaintext),
+  )
   const joined = new Uint8Array(iv.length + ciphertext.length)
   joined.set(iv, 0)
   joined.set(ciphertext, iv.length)
   return b64(joined)
 }
 
-async function decrypt(key, payload) {
+async function decrypt(key, payload, additionalData) {
   const joined = unb64(payload)
   const plaintext = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv: joined.subarray(0, 12) },
+    { name: 'AES-GCM', iv: joined.subarray(0, 12), ...(additionalData ? { additionalData } : {}) },
     key,
     joined.subarray(12),
   )
   return new Uint8Array(plaintext)
 }
 
-function roomCapability(userUuid, room) {
-  return jwt.sign({ purpose: 'collab-room', userUuid, room }, CONNECTION_TOKEN_SECRET, {
-    algorithm: 'HS256',
-    expiresIn: 300,
-  })
+function roomCapability(userUuid, room, leaseRequestId, bootstrapChallenge) {
+  return jwt.sign(
+    {
+      purpose: 'collab-room',
+      userUuid,
+      room,
+      collaborationProtocolVersion: COLLABORATION_PROTOCOL_VERSION,
+      serverUpdatedAtTimestamp: 1,
+      leaseRequestId,
+      ...(bootstrapChallenge ? { bootstrapChallenge } : {}),
+    },
+    CONNECTION_TOKEN_SECRET,
+    {
+      algorithm: 'HS256',
+      expiresIn: 300,
+    },
+  )
 }
 
 async function mint(userUuid, sessionUuid) {
@@ -132,23 +175,24 @@ class EncryptedPeer {
     this.seenCiphertexts = []
     this.socket = undefined
     this.joined = false
+    this.requestId = undefined
+    this.reservation = undefined
+    this.denied = false
     this.pending = new Set()
     this.doc.on('update', (update, origin) => {
       if (origin === this || !this.joined || !this.socket) return
-      this.track(
-        encrypt(this.key, update).then((payload) => {
-          if (this.joined && this.socket?.readyState === WebSocket.OPEN) {
-            this.socket.send(JSON.stringify({ t: 'yjs', room: this.room, payload }))
-          }
-        }),
-      )
+      this.track(this.sendUpdate(update))
     })
+    this.inboundTransfers = new Map()
   }
 
   async connect(sessionUuid) {
     const socket = await open(await mint(this.userUuid, sessionUuid))
     this.socket = socket
     this.joined = false
+    this.denied = false
+    this.requestId = `e2e-${sessionUuid}-${crypto.randomUUID()}`
+    this.reservation = undefined
     socket.on('close', () => {
       if (this.socket === socket) {
         this.joined = false
@@ -158,11 +202,31 @@ class EncryptedPeer {
     socket.on('message', (data) => this.onMessage(socket, data.toString()))
     socket.send(
       JSON.stringify({
+        t: 'room-reserve',
+        room: this.room,
+        cap: roomCapability(this.userUuid, this.room, this.requestId),
+        requestId: this.requestId,
+        role: 'editor',
+        protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+      }),
+    )
+    await waitFor(() => this.reservation || this.denied, `${this.userUuid} room reservation`)
+    if (
+      this.denied ||
+      this.reservation?.protocolVersion !== COLLABORATION_PROTOCOL_VERSION ||
+      this.reservation?.maxTransferBytes !== MAX_YJS_TRANSFER_BYTES ||
+      typeof this.reservation?.bootstrapChallenge !== 'string'
+    ) {
+      throw new Error(`${this.userUuid} received an invalid room reservation`)
+    }
+    socket.send(
+      JSON.stringify({
         t: 'room-join',
         room: this.room,
-        cap: roomCapability(this.userUuid, this.room),
-        requestId: `e2e-${sessionUuid}`,
+        cap: roomCapability(this.userUuid, this.room, this.requestId, this.reservation.bootstrapChallenge),
+        requestId: this.requestId,
         role: 'editor',
+        protocolVersion: COLLABORATION_PROTOCOL_VERSION,
       }),
     )
     await waitFor(() => this.joined, `${this.userUuid} room join`)
@@ -187,9 +251,49 @@ class EncryptedPeer {
 
   async broadcastFullState() {
     if (!this.joined || this.socket?.readyState !== WebSocket.OPEN) return
-    const payload = await encrypt(this.key, Y.encodeStateAsUpdate(this.doc))
-    if (this.joined && this.socket?.readyState === WebSocket.OPEN) {
-      this.socket.send(JSON.stringify({ t: 'yjs', room: this.room, payload }))
+    await this.sendUpdate(Y.encodeStateAsUpdate(this.doc))
+  }
+
+  async sendUpdate(update) {
+    if (update.byteLength > MAX_YJS_TRANSFER_BYTES) {
+      throw new Error('test update exceeds bounded transfer protocol')
+    }
+    if (update.byteLength <= YJS_CHUNK_PLAINTEXT_BYTES) {
+      const payload = await encrypt(this.key, update, frameAdditionalData(this.room, 'yjs'))
+      if (this.joined && this.socket?.readyState === WebSocket.OPEN) {
+        this.socket.send(JSON.stringify({ t: 'yjs', room: this.room, payload }))
+      }
+      return
+    }
+    const transferId = crypto.randomUUID()
+    const count = Math.ceil(update.byteLength / YJS_CHUNK_PLAINTEXT_BYTES)
+    for (let index = 0; index < count; index++) {
+      const start = index * YJS_CHUNK_PLAINTEXT_BYTES
+      const metadata = {
+        room: this.room,
+        transferId,
+        index,
+        count,
+        totalBytes: update.byteLength,
+      }
+      const payload = await encrypt(
+        this.key,
+        update.subarray(start, start + YJS_CHUNK_PLAINTEXT_BYTES),
+        chunkAdditionalData(metadata),
+      )
+      if (this.joined && this.socket?.readyState === WebSocket.OPEN) {
+        this.socket.send(
+          JSON.stringify({
+            t: 'yjs-chunk',
+            room: this.room,
+            transferId,
+            index,
+            count,
+            totalBytes: update.byteLength,
+            payload,
+          }),
+        )
+      }
     }
   }
 
@@ -202,17 +306,64 @@ class EncryptedPeer {
       return
     }
     if (frame.room !== this.room) return
-    if (frame.t === 'room-joined') {
+    if (frame.t === 'room-reserved' && frame.requestId === this.requestId) {
+      this.reservation = frame
+    } else if (frame.t === 'room-denied' && frame.requestId === this.requestId) {
+      this.denied = true
+    } else if (
+      frame.t === 'room-joined' &&
+      frame.requestId === this.requestId &&
+      frame.protocolVersion === COLLABORATION_PROTOCOL_VERSION &&
+      frame.maxTransferBytes === MAX_YJS_TRANSFER_BYTES
+    ) {
       this.joined = true
     } else if (frame.t === 'room-sync') {
       this.track(this.broadcastFullState())
     } else if (frame.t === 'yjs' && this.joined) {
       this.seenCiphertexts.push(frame.payload)
       this.track(
-        decrypt(this.key, frame.payload).then((update) => {
+        decrypt(
+          this.key,
+          frame.payload,
+          frameAdditionalData(this.room, 'yjs', frame.transferId, frame.stateRequestId),
+        ).then((update) => {
           if (this.joined) Y.applyUpdate(this.doc, update, this)
         }),
       )
+    } else if (frame.t === 'yjs-chunk' && this.joined) {
+      this.seenCiphertexts.push(frame.payload)
+      this.track(this.receiveChunk(frame))
+    }
+  }
+
+  async receiveChunk(frame) {
+    let transfer = this.inboundTransfers.get(frame.transferId)
+    if (!transfer) {
+      transfer = { count: frame.count, totalBytes: frame.totalBytes, chunks: new Map() }
+      this.inboundTransfers.set(frame.transferId, transfer)
+    }
+    if (
+      transfer.count !== frame.count ||
+      transfer.totalBytes !== frame.totalBytes ||
+      transfer.chunks.has(frame.index)
+    ) {
+      throw new Error('invalid chunk metadata in live e2e')
+    }
+    transfer.chunks.set(frame.index, await decrypt(this.key, frame.payload, chunkAdditionalData(frame)))
+    if (transfer.chunks.size !== transfer.count) {
+      return
+    }
+    const update = new Uint8Array(transfer.totalBytes)
+    for (let index = 0; index < transfer.count; index++) {
+      const chunk = transfer.chunks.get(index)
+      if (!chunk) {
+        throw new Error('missing chunk in live e2e')
+      }
+      update.set(chunk, index * YJS_CHUNK_PLAINTEXT_BYTES)
+    }
+    this.inboundTransfers.delete(frame.transferId)
+    if (this.joined) {
+      Y.applyUpdate(this.doc, update, this)
     }
   }
 
@@ -263,6 +414,14 @@ async function main() {
   check(
     'online merge contains every edit',
     textA.includes('Alice was here.') && textA.includes('[A2]') && textA.includes('[B1]'),
+  )
+
+  const largeBody = Array.from({ length: 700_000 }, (_, index) => String.fromCharCode(33 + (index % 80))).join('')
+  peerA.doc.getText('large-content').insert(0, largeBody)
+  await settle(peerA, peerB)
+  check(
+    'state larger than the legacy 512 KiB frame cap converges through encrypted chunks',
+    peerB.doc.getText('large-content').toString() === largeBody,
   )
 
   await Promise.all([peerA.disconnect(), peerB.disconnect()])

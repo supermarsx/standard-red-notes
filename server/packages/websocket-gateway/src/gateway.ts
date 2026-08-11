@@ -324,7 +324,7 @@ function mintFromBody(
 export function defaultRoomJoinAuthorizer(connectionTokenSecret: string): RoomJoinAuthorizer {
   return (userUuid: string, room: string, capability?: string) => {
     const verified = verifyRoomCapabilityWithExpiry(capability, connectionTokenSecret, userUuid, room)
-    return verified ? { authorized: true, expiresAt: verified.expiresAt } : { authorized: false }
+    return verified ? { authorized: true, ...verified } : { authorized: false }
   }
 }
 
@@ -483,7 +483,13 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
 
   // Periodic ping sweep: terminate sockets that didn't respond since last sweep.
   const heartbeat = setInterval(() => {
-    rooms.evictExpired()
+    for (const reservation of rooms.evictExpired()) {
+      void collaborationRedis
+        .releaseLease(reservation.conn, reservation.room, reservation.requestId)
+        .catch((error) =>
+          logger.warn('[ws] expired collaboration reservation cleanup failed', safeErrorLogMetadata(error)),
+        )
+    }
     void collaborationRedis.refreshLeases()
     for (const socket of wss.clients) {
       if (alive.get(socket) === false) {

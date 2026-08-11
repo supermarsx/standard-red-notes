@@ -103,6 +103,10 @@ export function mintConnectionToken(
  */
 export interface VerifiedRoomCapability {
   expiresAt: number
+  serverUpdatedAtTimestamp: number
+  collaborationProtocolVersion: 2
+  leaseRequestId?: string
+  bootstrapChallenge?: string
 }
 
 /**
@@ -147,7 +151,33 @@ export function verifyRoomCapabilityWithExpiry(
     if (typeof payload.exp !== 'number' || !Number.isSafeInteger(payload.exp) || payload.exp <= 0) {
       return undefined
     }
-    return { expiresAt: payload.exp * 1_000 }
+    if (
+      payload.collaborationProtocolVersion !== 2 ||
+      !Number.isSafeInteger(payload.serverUpdatedAtTimestamp) ||
+      Number(payload.serverUpdatedAtTimestamp) <= 0
+    ) {
+      return undefined
+    }
+    const leaseRequestId = payload.leaseRequestId
+    const bootstrapChallenge = payload.bootstrapChallenge
+    if (
+      (leaseRequestId !== undefined &&
+        (typeof leaseRequestId !== 'string' || leaseRequestId.length === 0 || leaseRequestId.length > 128)) ||
+      (bootstrapChallenge !== undefined &&
+        (typeof bootstrapChallenge !== 'string' ||
+          bootstrapChallenge.length === 0 ||
+          bootstrapChallenge.length > 128)) ||
+      (bootstrapChallenge !== undefined && leaseRequestId === undefined)
+    ) {
+      return undefined
+    }
+    return {
+      expiresAt: payload.exp * 1_000,
+      serverUpdatedAtTimestamp: Number(payload.serverUpdatedAtTimestamp),
+      collaborationProtocolVersion: 2,
+      ...(leaseRequestId ? { leaseRequestId } : {}),
+      ...(bootstrapChallenge ? { bootstrapChallenge } : {}),
+    }
   } catch {
     return undefined
   }
