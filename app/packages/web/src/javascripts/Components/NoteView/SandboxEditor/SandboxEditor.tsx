@@ -19,6 +19,7 @@ import {
   SandboxPane,
   SANDBOX_CONSOLE_CHANNEL,
   SANDBOX_CONSOLE_MAX_ENTRIES,
+  SANDBOX_RUN_PAYLOAD_LIMIT_MESSAGE,
   SandboxConsoleLevel,
   buildSandboxRunPayload,
   claimSandboxRunDelivery,
@@ -26,6 +27,7 @@ import {
   createJsSandboxStarter,
   createSandboxRunNonce,
   createWebSandboxStarter,
+  isSandboxRunPayloadWithinLimit,
   parseSandboxDocument,
   normalizeSandboxConsoleEntry,
   serializeSandboxDocument,
@@ -97,6 +99,7 @@ export const SandboxEditor: FunctionComponent<Props> = ({
    * consent boundary: merely opening or editing a note never executes code.
    */
   const [runSession, setRunSession] = useState<{ document: SandboxDocument; nonce: string }>()
+  const [runError, setRunError] = useState<string>()
 
   const ignoreNextChange = useRef(false)
   const iframeRef = useRef<HTMLIFrameElement>(null)
@@ -166,9 +169,21 @@ export const SandboxEditor: FunctionComponent<Props> = ({
     setConsoleEntries([])
   }, [])
 
+  const stop = useCallback(() => {
+    clearConsole()
+    setRunError(undefined)
+    setRunSession(undefined)
+  }, [clearConsole])
+
   // Run the current document: snapshot it into the iframe and reset the console.
   const run = useCallback(() => {
     clearConsole()
+    if (!isSandboxRunPayloadWithinLimit(document)) {
+      setRunSession(undefined)
+      setRunError(SANDBOX_RUN_PAYLOAD_LIMIT_MESSAGE)
+      return
+    }
+    setRunError(undefined)
     setRunSession({ document, nonce: createSandboxRunNonce() })
   }, [clearConsole, document])
 
@@ -204,6 +219,11 @@ export const SandboxEditor: FunctionComponent<Props> = ({
     (event: SyntheticEvent<HTMLIFrameElement>) => {
       const frameWindow = event.currentTarget.contentWindow
       if (!frameWindow || !runSession || !claimSandboxRunDelivery(deliveredRunNonce, runSession.nonce)) {
+        return
+      }
+      if (!isSandboxRunPayloadWithinLimit(runSession.document)) {
+        setRunSession(undefined)
+        setRunError(SANDBOX_RUN_PAYLOAD_LIMIT_MESSAGE)
         return
       }
       frameWindow.postMessage(
@@ -264,8 +284,23 @@ export const SandboxEditor: FunctionComponent<Props> = ({
             <Icon type="arrow-right" size="small" />
             Run
           </button>
+          {runSession && (
+            <button
+              className="border-border text-text rounded border px-3 py-1 text-sm font-semibold hover:opacity-90"
+              onClick={stop}
+              title="Stop and reset sandbox"
+            >
+              Stop
+            </button>
+          )}
         </div>
       </div>
+
+      {runError && (
+        <div className="border-danger bg-danger-faded text-danger border-b px-3 py-2 text-xs" role="alert">
+          {runError}
+        </div>
+      )}
 
       {recoveryNotice && (
         <div className="border-warning bg-warning-faded text-accessory-tint-3 flex items-center gap-2 border-b px-3 py-1.5 text-xs">
