@@ -3,10 +3,11 @@ import { SNNote } from '@standardnotes/snjs'
 import Icon from '@/Components/Icon/Icon'
 import { useNoteComments } from '@/Comments/useNoteComments'
 import { useMentionCandidates } from '@/Comments/useMentionCandidates'
-import { buildCommentThreads, NoteComment } from '@/Comments/comments'
+import { buildCommentThreads } from '@/Comments/comments'
 import { segmentCommentText } from '@/Comments/mentions'
 import { collaboratorColor, collaboratorInitials } from '@/Components/SuperEditor/Collaboration/collaboratorColor'
 import CommentComposer from './CommentComposer'
+import type { DisplayNoteComment } from '@/Comments/CommentAuthorship'
 
 type Props = {
   note: SNNote
@@ -44,14 +45,14 @@ const CommentBody: FunctionComponent<{ text: string }> = ({ text }) => {
 }
 
 const CommentRow: FunctionComponent<{
-  comment: NoteComment
+  comment: DisplayNoteComment
   isSelf: boolean
   isReply?: boolean
   onDelete: () => void
   onToggleResolved?: () => void
   onReply?: () => void
 }> = ({ comment, isSelf, isReply, onDelete, onToggleResolved, onReply }) => {
-  const color = collaboratorColor(comment.authorUuid)
+  const color = collaboratorColor(comment.verifiedAuthorUuid ?? 'legacy-comment')
   return (
     <div className={`flex gap-2 ${isReply ? 'ml-6' : ''} ${comment.resolved ? 'opacity-60' : ''}`}>
       <div
@@ -59,12 +60,17 @@ const CommentRow: FunctionComponent<{
         style={{ backgroundColor: color }}
         aria-hidden
       >
-        {collaboratorInitials(comment.authorName)}
+        {collaboratorInitials(comment.displayAuthorName)}
       </div>
       <div className="min-w-0 flex-grow">
         <div className="flex items-center gap-2">
-          <span className="text-text truncate text-xs font-semibold">{isSelf ? 'You' : comment.authorName}</span>
+          <span className="text-text truncate text-xs font-semibold">{isSelf ? 'You' : comment.displayAuthorName}</span>
           <span className="text-passive-2 text-xs">{formatTime(comment.createdAt)}</span>
+          {comment.authorshipStatus === 'legacy' && (
+            <span className="bg-contrast text-passive-1 rounded px-1 text-[0.6rem]" title="Author not verified">
+              legacy
+            </span>
+          )}
           {comment.anchor?.kind === 'super' && (
             <span className="bg-contrast text-passive-1 rounded px-1 text-[0.6rem]" title="Inline comment">
               inline
@@ -116,7 +122,7 @@ const CommentRow: FunctionComponent<{
  * "inline" badge + snippet today.
  */
 export const CommentsPanel: FunctionComponent<Props> = ({ note }) => {
-  const { comments, addComment, removeComment, setResolved, selfUuid } = useNoteComments(note)
+  const { comments, quarantinedCount, addComment, removeComment, setResolved, selfUuid } = useNoteComments(note)
   const candidates = useMentionCandidates(note)
   const [replyingTo, setReplyingTo] = useState<string | null>(null)
   const [showResolved, setShowResolved] = useState(false)
@@ -128,7 +134,7 @@ export const CommentsPanel: FunctionComponent<Props> = ({ note }) => {
   )
   const resolvedCount = useMemo(() => threads.filter((t) => t.comment.resolved).length, [threads])
 
-  const isSelf = (comment: NoteComment): boolean => comment.authorUuid === selfUuid
+  const isSelf = (comment: DisplayNoteComment): boolean => comment.verifiedAuthorUuid === selfUuid
 
   return (
     <div className="border-border bg-default rounded border p-2.5">
@@ -150,6 +156,11 @@ export const CommentsPanel: FunctionComponent<Props> = ({ note }) => {
       </div>
 
       <div className="mb-2.5 max-h-80 space-y-3 overflow-y-auto overscroll-contain">
+        {quarantinedCount > 0 && (
+          <div className="border-warning bg-warning-faded text-warning rounded border px-2 py-1.5 text-xs">
+            Some comments were hidden because their author proof or stored data could not be verified.
+          </div>
+        )}
         {visibleThreads.length === 0 ? (
           <div className="text-passive-2 py-2 text-center text-xs">No comments yet. Start the conversation.</div>
         ) : (
