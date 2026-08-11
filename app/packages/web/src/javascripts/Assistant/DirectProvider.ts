@@ -1,4 +1,6 @@
 import { assistantUsageService } from './AssistantUsageService'
+import { assistantHttpError, assistantNetworkError } from './AssistantHttpError'
+import { directEndpointConfigurationError, openAICompatibleEndpointURL } from './OpenAICompatibleEndpoint'
 import { samplingRequestFields, SamplingSettings } from './samplingSettings'
 import { ChatMessage, Provider, ProviderEvent, ProviderRequest, ProviderStopReason, ToolDescriptor } from './types'
 
@@ -46,7 +48,21 @@ export class DirectProvider implements Provider {
   constructor(private readonly options: DirectProviderOptions) {}
 
   async *send(req: ProviderRequest): AsyncIterable<ProviderEvent> {
-    const url = `${this.options.baseURL.replace(/\/$/, '')}/chat/completions`
+    const configurationError = directEndpointConfigurationError(this.options.baseURL)
+    if (configurationError) {
+      yield { kind: 'error', message: configurationError }
+      yield { kind: 'finish', stopReason: 'error' }
+      return
+    }
+
+    let url: string
+    try {
+      url = openAICompatibleEndpointURL(this.options.baseURL, 'chat/completions')
+    } catch (error) {
+      yield { kind: 'error', message: error instanceof Error ? error.message : String(error) }
+      yield { kind: 'finish', stopReason: 'error' }
+      return
+    }
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -84,21 +100,15 @@ export class DirectProvider implements Provider {
         signal: this.options.signal,
       })
     } catch (error) {
-      yield { kind: 'error', message: error instanceof Error ? error.message : String(error) }
+      yield { kind: 'error', message: assistantNetworkError(error, 'direct') }
       yield { kind: 'finish', stopReason: 'error' }
       return
     }
 
     if (!response.ok || !response.body) {
-      let detail = ''
-      try {
-        detail = await response.text()
-      } catch {
-        /* ignore */
-      }
       yield {
         kind: 'error',
-        message: `assistant endpoint: ${response.status} ${response.statusText}${detail ? ` — ${detail.slice(0, 500)}` : ''}`,
+        message: await assistantHttpError(response, 'direct'),
       }
       yield { kind: 'finish', stopReason: 'error' }
       return

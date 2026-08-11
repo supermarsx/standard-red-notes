@@ -1,4 +1,5 @@
 import { assistantUsageService } from './AssistantUsageService'
+import { assistantHttpError, assistantNetworkError } from './AssistantHttpError'
 import { samplingRequestFields, SamplingSettings } from './samplingSettings'
 import { Provider, ProviderEvent, ProviderRequest } from './types'
 
@@ -35,8 +36,8 @@ export class ProxyProvider implements Provider {
 
   async *send(req: ProviderRequest): AsyncIterable<ProviderEvent> {
     const body = {
-      provider: this.options.provider,
-      model: this.options.model,
+      ...(this.options.provider ? { provider: this.options.provider } : {}),
+      ...(this.options.model ? { model: this.options.model } : {}),
       system: req.system,
       messages: req.messages,
       tools: req.tools,
@@ -49,13 +50,13 @@ export class ProxyProvider implements Provider {
     try {
       response = await this.options.postStream(body, this.options.signal)
     } catch (error) {
-      yield { kind: 'error', message: error instanceof Error ? error.message : String(error) }
+      yield { kind: 'error', message: assistantNetworkError(error, 'proxy') }
       yield { kind: 'finish', stopReason: 'error' }
       return
     }
 
     if (!response.ok || !response.body) {
-      yield { kind: 'error', message: `assistant proxy: ${response.status} ${response.statusText}` }
+      yield { kind: 'error', message: await assistantHttpError(response, 'proxy') }
       yield { kind: 'finish', stopReason: 'error' }
       return
     }

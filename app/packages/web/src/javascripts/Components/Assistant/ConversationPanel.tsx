@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { observer } from 'mobx-react-lite'
-import { PrefKey } from '@standardnotes/snjs'
+import { ApplicationEvent, PrefKey } from '@standardnotes/snjs'
 import { confirmDialog } from '@standardnotes/ui-services'
 import { classNames } from '@standardnotes/utils'
 import { WebApplication } from '@/Application/WebApplication'
@@ -11,8 +11,6 @@ import { AppPaneId } from '../Panes/AppPaneMetadata'
 import { ChatMessage as AgentChatMessage, Provider } from '@/Assistant/types'
 import { run } from '@/Assistant/agent'
 import { achievements, METRICS } from '@/Achievements'
-import { ProxyProvider } from '@/Assistant/ProxyProvider'
-import { DirectProvider } from '@/Assistant/DirectProvider'
 import { AssistantTools, AssistantToolContext, TodoItem } from '@/Assistant/tools'
 import { ASSISTANT_SYSTEM_PROMPT, SUB_AGENT_SYSTEM_PROMPT } from '@/Assistant/prompts'
 import { composeSystemPromptWithPersona } from '@/Assistant/personaSettings'
@@ -21,6 +19,7 @@ import AssistantUsageMeter from './AssistantUsageMeter'
 import { AssistantUsageResponse, TokenWindowUsage } from '@/Assistant/usageMeter'
 import { AssistantContextScope } from '@/Assistant/assistantContext'
 import { AssistantContextSelection, buildContextForSelection } from '@/Assistant/assistantContextSource'
+import { buildAssistantProvider, getSelectionAIAvailability } from '@/Assistant/selectionActions'
 
 type ToolEntry = {
   id: string
@@ -137,7 +136,27 @@ function ConversationPanelImpl({ application, onFirstUserMessage, onUsageChange 
     [application, contextSelection],
   )
 
+  // Assistant preferences are synced items rather than MobX observables. Keep
+  // this mounted panel live when Preferences changes the endpoint/mode/model;
+  // otherwise it keeps displaying the old "not configured" state and can send
+  // one request with stale connection details.
+  const [, setPreferenceRevision] = useState(0)
+  useEffect(
+    () =>
+      application.addEventObserver(async (event) => {
+        if (
+          event === ApplicationEvent.PreferencesChanged ||
+          event === ApplicationEvent.SignedIn ||
+          event === ApplicationEvent.SignedOut
+        ) {
+          setPreferenceRevision((revision) => revision + 1)
+        }
+      }),
+    [application],
+  )
+
   const connectionMode = application.getPreference(PrefKey.AssistantConnectionMode, 'direct')
+  const assistantAvailability = getSelectionAIAvailability(application)
 
   const refreshUsage = useCallback(async () => {
     if (connectionMode !== 'proxy') {
@@ -178,13 +197,18 @@ function ConversationPanelImpl({ application, onFirstUserMessage, onUsageChange 
 
   const runPrompt = useCallback(
     async (promptText: string) => {
+      const availability = getSelectionAIAvailability(application)
+      if (!availability.available) {
+        setMessagesSynced((prev) => [
+          ...prev,
+          { kind: 'error', id: newId(), text: availability.reason || 'The assistant is not configured.' },
+        ])
+        return
+      }
+
       // Achievements: one user message sent to the AI assistant (web-local).
       achievements.increment(METRICS.aiAssistantMessages)
 
-      const provider = application.getPreference(PrefKey.AssistantProvider, '')
-      const baseURL = application.getPreference(PrefKey.AssistantBaseUrl, '')
-      const apiKey = application.getPreference(PrefKey.AssistantApiKey, '')
-      const model = application.getPreference(PrefKey.AssistantModel, '')
       const confirmBeforeWrite = application.getPreference(PrefKey.AssistantConfirmBeforeWrite, true)
 
       const assistantId = newId()
@@ -225,20 +249,7 @@ function ConversationPanelImpl({ application, onFirstUserMessage, onUsageChange 
       const controller = new AbortController()
       abortRef.current = controller
 
-      const agentProvider: Provider =
-        connectionMode === 'proxy'
-          ? new ProxyProvider({
-              provider,
-              model,
-              signal: controller.signal,
-              postStream: (body, signal) => application.assistantStreamRequest('/v1/assistant/stream', body, signal),
-            })
-          : new DirectProvider({
-              baseURL,
-              model,
-              apiKey,
-              signal: controller.signal,
-            })
+      const agentProvider: Provider = buildAssistantProvider(application, controller.signal)
 
       // Sub-agent runner backing the "delegate" tool: a focused nested run that
       // shares the provider and tools but cannot itself delegate (recursion guard).
@@ -347,7 +358,7 @@ function ConversationPanelImpl({ application, onFirstUserMessage, onUsageChange 
         }
       }
     },
-    [application, connectionMode, presentPane, refreshUsage, setMessagesSynced],
+    [application, presentPane, refreshUsage, setMessagesSynced],
   )
 
   runPromptRef.current = runPrompt
@@ -417,16 +428,7 @@ function ConversationPanelImpl({ application, onFirstUserMessage, onUsageChange 
     abortRef.current?.abort()
   }, [])
 
-  const isConfigured = useMemo(() => {
-    const connectionMode = application.getPreference(PrefKey.AssistantConnectionMode, 'direct')
-    if (connectionMode === 'proxy') {
-      return Boolean(application.getPreference(PrefKey.AssistantProvider, ''))
-    }
-    return (
-      Boolean(application.getPreference(PrefKey.AssistantBaseUrl, '')) &&
-      Boolean(application.getPreference(PrefKey.AssistantModel, ''))
-    )
-  }, [application])
+  const isConfigured = assistantAvailability.available
 
   // A short, human-readable summary of what the active scope would send, shared
   // by the inline warning and the data-exposure notice so the user always knows
@@ -509,8 +511,8 @@ function ConversationPanelImpl({ application, onFirstUserMessage, onUsageChange 
         )}
         {!isConfigured && (
           <div className="border-border bg-contrast text-neutral mb-4 rounded border p-3 text-sm">
-            The assistant is not configured yet. Open Preferences → Assistant to set the connection mode, endpoint (e.g.
-            LM Studio at http://localhost:1234/v1), and model.
+            {assistantAvailability.reason ||
+              'The assistant is not configured yet. Open Preferences → Assistant to choose a connection.'}
           </div>
         )}
         {messages.length === 0 && isConfigured && (
@@ -584,7 +586,7 @@ function ConversationPanelImpl({ application, onFirstUserMessage, onUsageChange 
               <Button label="Stop" onClick={handleStop} />
             </div>
           ) : (
-            <Button primary label="Send" onClick={handleSend} disabled={!input.trim()} />
+            <Button primary label="Send" onClick={handleSend} disabled={!input.trim() || !isConfigured} />
           )}
         </div>
       </div>
