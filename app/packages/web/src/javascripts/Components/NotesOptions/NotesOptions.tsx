@@ -1,7 +1,7 @@
 import Icon from '@/Components/Icon/Icon'
 import { observer } from 'mobx-react-lite'
-import { useState, useEffect, useMemo, useCallback } from 'react'
-import { NoteType, Platform } from '@standardnotes/snjs'
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
+import { NoteType, Platform, SNNote } from '@standardnotes/snjs'
 import {
   CHANGE_EDITOR_WIDTH_COMMAND,
   OPEN_NOTE_HISTORY_COMMAND,
@@ -47,7 +47,14 @@ import { BOOKMARK_SPOT_COMMAND } from '@/Bookmarks/bookmarkCommand'
 import { noteIsTemplate } from '@/Templates/templates'
 import { getSelectionAIAvailability } from '@/Assistant/selectionActions'
 import { downloadNoteImagesAsZip } from '@/Utils/NoteImagesUtils'
-import { getActiveNotePrintSupport, printActiveNote } from '@/Components/NoteView/Print/PrintNote'
+import {
+  createPersistedPrintOptions,
+  getActiveNotePrintSupport,
+  isPersistedPrintEditorSupported,
+  printActiveNote,
+  resolvePersistedPrintOptions,
+  type ResolvedPersistedPrintOptions,
+} from '@/Components/NoteView/Print/PrintNote'
 
 const iconSize = MenuItemIconSize
 const iconClassDanger = `text-danger mr-2 ${iconSize}`
@@ -68,7 +75,23 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
   const [publishGitHubOpen, setPublishGitHubOpen] = useState(false)
   const [organizeNoteOpen, setOrganizeNoteOpen] = useState(false)
   const [organizeAllOpen, setOrganizeAllOpen] = useState(false)
+  const [rehydratedPrintSource, setRehydratedPrintSource] = useState<{
+    token: object
+    source: ResolvedPersistedPrintOptions
+  }>()
   const { toggleAppPane } = useResponsiveAppPane()
+
+  const selectedPrintNote = notes.length === 1 ? notes[0] : undefined
+  const selectedPrintNoteUuidRef = useRef<string | undefined>(undefined)
+  selectedPrintNoteUuidRef.current = selectedPrintNote?.uuid
+  const currentPrintNote = selectedPrintNote ? application.items.findItem<SNNote>(selectedPrintNote.uuid) : undefined
+  const currentPrintEditor = currentPrintNote ? application.componentManager.editorForNote(currentPrintNote) : undefined
+  const currentPrintEditorSupportsPersisted = isPersistedPrintEditorSupported(currentPrintEditor)
+  const currentPrintEditorIdentifier = currentPrintEditor?.featureIdentifier
+  const printRequestToken = useMemo(
+    () => (selectedPrintNote && currentPrintNote ? {} : undefined),
+    [currentPrintNote, selectedPrintNote],
+  )
 
   const {
     trashed,
@@ -91,13 +114,63 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
 
   const aiAvailability = useMemo(() => getSelectionAIAvailability(application), [application])
   const canEnableLocalOnly = notesController.canEnableLocalOnlyForNotes(notes)
-  const printSupport = getActiveNotePrintSupport({
-    noteUuid: notes.length === 1 ? notes[0]?.uuid : undefined,
-    fallbackTitle: notes.length === 1 ? notes[0]?.title : undefined,
-    fallbackBody: notes.length === 1 ? notes[0]?.text : undefined,
-    fallbackNoteType: notes.length === 1 ? notes[0]?.noteType : undefined,
-    fallbackEditorIdentifier: notes.length === 1 ? notes[0]?.editorIdentifier : undefined,
-  })
+  const livePrintOptions = selectedPrintNote ? { noteUuid: selectedPrintNote.uuid } : undefined
+  const livePrintSupport = getActiveNotePrintSupport(livePrintOptions)
+  const immediatePersistedPrintOptions = currentPrintNote
+    ? createPersistedPrintOptions(currentPrintNote, currentPrintEditor)
+    : undefined
+  const validRehydratedPrintOptions =
+    printRequestToken &&
+    rehydratedPrintSource?.token === printRequestToken &&
+    rehydratedPrintSource.source.noteUuid === selectedPrintNote?.uuid &&
+    currentPrintNote?.payload === rehydratedPrintSource.source.guardPayload &&
+    currentPrintEditorSupportsPersisted &&
+    currentPrintEditorIdentifier === rehydratedPrintSource.source.guardEditorIdentifier
+      ? rehydratedPrintSource.source.options
+      : undefined
+  const availablePrintOptions = livePrintSupport.supported
+    ? livePrintOptions
+    : (immediatePersistedPrintOptions ?? validRehydratedPrintOptions)
+  const printSupport = availablePrintOptions ? getActiveNotePrintSupport(availablePrintOptions) : livePrintSupport
+
+  useEffect(() => {
+    if (
+      !selectedPrintNote ||
+      !printRequestToken ||
+      livePrintSupport.supported ||
+      immediatePersistedPrintOptions ||
+      !currentPrintEditorSupportsPersisted
+    ) {
+      return
+    }
+
+    let cancelled = false
+    void resolvePersistedPrintOptions({
+      noteUuid: selectedPrintNote.uuid,
+      getSelectedNoteUuid: () => selectedPrintNoteUuidRef.current,
+      findNote: (uuid) => application.items.findItem<SNNote>(uuid),
+      getFullContentPayload: (uuid) => application.sync.getFullContentPayload(uuid),
+      getEditorForNote: (note) => application.componentManager.editorForNote(note),
+    }).then((source) => {
+      if (!cancelled && source && selectedPrintNoteUuidRef.current === source.noteUuid) {
+        setRehydratedPrintSource({ token: printRequestToken, source })
+      }
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [
+    application.componentManager,
+    application.items,
+    application.sync,
+    currentPrintEditorIdentifier,
+    currentPrintEditorSupportsPersisted,
+    immediatePersistedPrintOptions,
+    livePrintSupport.supported,
+    printRequestToken,
+    selectedPrintNote,
+  ])
 
   useEffect(() => {
     const removeAltKeyObserver = application.keyboardService.addCommandHandler({
@@ -150,15 +223,42 @@ const NotesOptions = ({ notes, closeMenu }: NotesOptionsProps) => {
   // It captures the current unsaved title/body, removes controls from the cloned
   // DOM, applies the note's page layout and cleans up after the print dialog.
   const printNote = useCallback(() => {
+    const requestedNote = notes.length === 1 ? notes[0] : undefined
+    if (!requestedNote || selectedPrintNoteUuidRef.current !== requestedNote.uuid) {
+      return
+    }
+
+    const currentLivePrintOptions = { noteUuid: requestedNote.uuid }
+    if (getActiveNotePrintSupport(currentLivePrintOptions).supported) {
+      closeMenu()
+      printActiveNote(currentLivePrintOptions)
+      return
+    }
+
+    const liveNote = application.items.findItem<SNNote>(requestedNote.uuid)
+    if (!liveNote) {
+      return
+    }
+
+    const liveEditor = application.componentManager.editorForNote(liveNote)
+    const currentPersistedOptions = createPersistedPrintOptions(liveNote, liveEditor)
+    const guardedRehydratedOptions =
+      rehydratedPrintSource &&
+      rehydratedPrintSource.token === printRequestToken &&
+      rehydratedPrintSource.source.noteUuid === requestedNote.uuid &&
+      rehydratedPrintSource.source.guardPayload === liveNote.payload &&
+      isPersistedPrintEditorSupported(liveEditor) &&
+      rehydratedPrintSource.source.guardEditorIdentifier === liveEditor.featureIdentifier
+        ? rehydratedPrintSource.source.options
+        : undefined
+    const options = currentPersistedOptions ?? guardedRehydratedOptions
+    if (!options || !getActiveNotePrintSupport(options).supported) {
+      return
+    }
+
     closeMenu()
-    printActiveNote({
-      noteUuid: notes[0]?.uuid,
-      fallbackTitle: notes[0]?.title,
-      fallbackBody: notes[0]?.text,
-      fallbackNoteType: notes[0]?.noteType,
-      fallbackEditorIdentifier: notes[0]?.editorIdentifier,
-    })
-  }, [closeMenu, notes])
+    printActiveNote(options)
+  }, [application.componentManager, application.items, closeMenu, notes, printRequestToken, rehydratedPrintSource])
 
   const closeMenuAndToggleNotesList = useCallback(() => {
     const isMobileScreen = matchMedia(MutuallyExclusiveMediaQueryBreakpoints.sm).matches

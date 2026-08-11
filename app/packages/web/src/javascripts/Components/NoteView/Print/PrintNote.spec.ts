@@ -3,7 +3,18 @@
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import { ElementIds } from '@/Constants/ElementIDs'
-import { NoteType } from '@standardnotes/snjs'
+import {
+  ContentType,
+  createLitePayloadFromDecrypted,
+  DecryptedPayload,
+  DecryptedPayloadInterface,
+  FillItemContent,
+  NoteContent,
+  NoteType,
+  PayloadSource,
+  PayloadTimestampDefaults,
+  SNNote,
+} from '@standardnotes/snjs'
 import { SuperEditorContentId } from '@/Components/SuperEditor/Constants'
 import { PRINT_BODY_ID, PRINT_LAYOUT_STYLE_ID } from '@/Components/SuperEditor/Layout/applyPrintLayout'
 import { DEFAULT_NOTE_LAYOUT, saveNoteLayout } from '@/Components/SuperEditor/Layout/layoutSettings'
@@ -16,6 +27,7 @@ import {
   unregisterPrintableCalendar,
 } from '@/Components/SuperEditor/Lexical/Nodes/PrintableCalendarRegistry'
 import {
+  createPersistedPrintOptions,
   createPrintSnapshot,
   getActiveNotePrintSupport,
   installNativeNotePrinting,
@@ -24,9 +36,75 @@ import {
   PRINTING_BODY_CLASS,
   PRINT_ROOT_ID,
   PRINT_TITLE_ID,
+  PersistedPrintEditorProof,
   printActiveNote,
   removePrintSnapshot,
+  resolvePersistedPrintOptions,
 } from './PrintNote'
+
+const nativePlainEditor: PersistedPrintEditorProof = {
+  isNativeFeature: true,
+  isComponent: false,
+  noteType: NoteType.Plain,
+  featureIdentifier: 'com.standardnotes.plain-text',
+}
+
+const legacyCustomEditor: PersistedPrintEditorProof = {
+  isNativeFeature: false,
+  isComponent: true,
+  noteType: NoteType.Plain,
+  featureIdentifier: 'org.example.legacy-custom-editor',
+}
+
+const nativeSuperEditor: PersistedPrintEditorProof = {
+  isNativeFeature: true,
+  isComponent: false,
+  noteType: NoteType.Super,
+  featureIdentifier: 'com.standardnotes.super-editor',
+}
+
+let persistedPrintUuid = 0
+const createFullPrintNote = ({
+  uuid = `print-note-${persistedPrintUuid++}`,
+  title = 'Document title',
+  text = 'Complete document body',
+  noteType = NoteType.Plain,
+  editorIdentifier,
+  omitNoteType = false,
+}: {
+  uuid?: string
+  title?: string
+  text?: string
+  noteType?: NoteType
+  editorIdentifier?: string
+  omitNoteType?: boolean
+} = {}): SNNote =>
+  new SNNote(
+    new DecryptedPayload<NoteContent>(
+      {
+        uuid,
+        content_type: ContentType.TYPES.Note,
+        content: FillItemContent<NoteContent>({
+          title,
+          text,
+          ...(!omitNoteType && { noteType }),
+          editorIdentifier,
+        }),
+        ...PayloadTimestampDefaults(),
+      },
+      PayloadSource.Constructor,
+    ),
+  )
+
+const createLitePrintNote = (fullNote: SNNote): SNNote => new SNNote(createLitePayloadFromDecrypted(fullNote.payload))
+
+const createDeferredPayload = () => {
+  let resolve!: (payload: DecryptedPayloadInterface | undefined) => void
+  const promise = new Promise<DecryptedPayloadInterface | undefined>((resolvePromise) => {
+    resolve = resolvePromise
+  })
+  return { promise, resolve }
+}
 
 describe('isolated note printing', () => {
   beforeEach(() => {
@@ -38,6 +116,167 @@ describe('isolated note printing', () => {
   afterEach(() => {
     removePrintSnapshot()
     jest.restoreAllMocks()
+  })
+
+  it('rehydrates an unopened lazy plaintext note before exposing its title and body to print', async () => {
+    const fullNote = createFullPrintNote({ title: 'Cold note', text: 'Body loaded from encrypted storage' })
+    const liteNote = createLitePrintNote(fullNote)
+    expect(liteNote.text).toBe('')
+    expect(createPersistedPrintOptions(liteNote, nativePlainEditor)).toBeUndefined()
+
+    const source = await resolvePersistedPrintOptions({
+      noteUuid: liteNote.uuid,
+      getSelectedNoteUuid: () => liteNote.uuid,
+      findNote: () => liteNote,
+      getFullContentPayload: jest.fn().mockResolvedValue(fullNote.payload),
+      getEditorForNote: () => nativePlainEditor,
+    })
+
+    expect(source?.options.fallbackTitle).toBe('Cold note')
+    expect(source?.options.fallbackBody).toBe('Body loaded from encrypted storage')
+    const snapshot = source ? createPrintSnapshot(source.options) : undefined
+    expect(snapshot?.querySelector(`#${PRINT_TITLE_ID}`)?.textContent).toBe('Cold note')
+    expect(snapshot?.querySelector(`#${PRINT_BODY_ID}`)?.textContent).toBe('Body loaded from encrypted storage')
+  })
+
+  it('fails closed when lazy-note decryption fails', async () => {
+    const liteNote = createLitePrintNote(createFullPrintNote())
+
+    await expect(
+      resolvePersistedPrintOptions({
+        noteUuid: liteNote.uuid,
+        getSelectedNoteUuid: () => liteNote.uuid,
+        findNote: () => liteNote,
+        getFullContentPayload: jest.fn().mockRejectedValue(new Error('Unable to decrypt payload')),
+        getEditorForNote: () => nativePlainEditor,
+      }),
+    ).resolves.toBeUndefined()
+  })
+
+  it('fails closed when the note is deleted while its complete payload is loading', async () => {
+    const fullNote = createFullPrintNote()
+    const liteNote = createLitePrintNote(fullNote)
+    const deferred = createDeferredPayload()
+    let liveNote: SNNote | undefined = liteNote
+    const pending = resolvePersistedPrintOptions({
+      noteUuid: liteNote.uuid,
+      getSelectedNoteUuid: () => liteNote.uuid,
+      findNote: () => liveNote,
+      getFullContentPayload: () => deferred.promise,
+      getEditorForNote: () => nativePlainEditor,
+    })
+
+    liveNote = undefined
+    deferred.resolve(fullNote.payload)
+
+    await expect(pending).resolves.toBeUndefined()
+  })
+
+  it('prints a genuinely complete note whose body is intentionally empty', () => {
+    const emptyNote = createFullPrintNote({ title: 'Empty on purpose', text: '' })
+    const options = createPersistedPrintOptions(emptyNote, nativePlainEditor)
+
+    expect(options?.fallbackBody).toBe('')
+    expect(getActiveNotePrintSupport(options)).toEqual({ supported: true, source: 'fallback' })
+    const snapshot = options ? createPrintSnapshot(options) : undefined
+    expect(snapshot?.querySelector(`#${PRINT_TITLE_ID}`)?.textContent).toBe('Empty on purpose')
+    expect(snapshot?.querySelector(`#${PRINT_BODY_ID}`)?.textContent).toBe('')
+  })
+
+  it('fails closed for a legacy-associated custom editor even when type and identifier are absent', async () => {
+    const fullNote = createFullPrintNote({ omitNoteType: true })
+    const liteNote = createLitePrintNote(fullNote)
+    const getFullContentPayload = jest.fn().mockResolvedValue(fullNote.payload)
+
+    expect(fullNote.payload.content.noteType).toBeUndefined()
+    expect(fullNote.editorIdentifier).toBeUndefined()
+    expect(createPersistedPrintOptions(fullNote, legacyCustomEditor)).toBeUndefined()
+    await expect(
+      resolvePersistedPrintOptions({
+        noteUuid: liteNote.uuid,
+        getSelectedNoteUuid: () => liteNote.uuid,
+        findNote: () => liteNote,
+        getFullContentPayload,
+        getEditorForNote: () => legacyCustomEditor,
+      }),
+    ).resolves.toBeUndefined()
+    expect(getFullContentPayload).not.toHaveBeenCalled()
+  })
+
+  it('fails closed when a plaintext note type resolves to a custom component editor', () => {
+    const note = createFullPrintNote({
+      noteType: NoteType.Markdown,
+      editorIdentifier: 'org.example.custom-markdown-editor',
+    })
+    const customEditorWithNativeIdentifierCollision: PersistedPrintEditorProof = {
+      isNativeFeature: true,
+      isComponent: true,
+      noteType: NoteType.Markdown,
+      featureIdentifier: 'org.standardnotes.advanced-markdown-editor',
+    }
+
+    expect(createPersistedPrintOptions(note, customEditorWithNativeIdentifierCollision)).toBeUndefined()
+  })
+
+  it('fails closed when note selection changes during lazy-note loading', async () => {
+    const fullNote = createFullPrintNote()
+    const liteNote = createLitePrintNote(fullNote)
+    const deferred = createDeferredPayload()
+    let selectedNoteUuid: string | undefined = liteNote.uuid
+    const pending = resolvePersistedPrintOptions({
+      noteUuid: liteNote.uuid,
+      getSelectedNoteUuid: () => selectedNoteUuid,
+      findNote: () => liteNote,
+      getFullContentPayload: () => deferred.promise,
+      getEditorForNote: () => nativePlainEditor,
+    })
+
+    selectedNoteUuid = 'another-note'
+    deferred.resolve(fullNote.payload)
+
+    await expect(pending).resolves.toBeUndefined()
+  })
+
+  it('rejects a stale disk body when the live lite projection changes during loading', async () => {
+    const originalFullNote = createFullPrintNote({ text: 'Stale disk body' })
+    const originalLiteNote = createLitePrintNote(originalFullNote)
+    const replacementLiteNote = createLitePrintNote(
+      createFullPrintNote({ uuid: originalFullNote.uuid, title: 'New metadata', text: 'New body' }),
+    )
+    const deferred = createDeferredPayload()
+    let liveNote = originalLiteNote
+    const pending = resolvePersistedPrintOptions({
+      noteUuid: originalLiteNote.uuid,
+      getSelectedNoteUuid: () => originalLiteNote.uuid,
+      findNote: () => liveNote,
+      getFullContentPayload: () => deferred.promise,
+      getEditorForNote: () => nativePlainEditor,
+    })
+
+    liveNote = replacementLiteNote
+    deferred.resolve(originalFullNote.payload)
+
+    await expect(pending).resolves.toBeUndefined()
+  })
+
+  it('rejects a full payload whose resolved format disagrees with the live lite projection', async () => {
+    const livePlainNote = createFullPrintNote({ text: 'Expected plaintext' })
+    const liteNote = createLitePrintNote(livePlainNote)
+    const mismatchedSuperNote = createFullPrintNote({
+      uuid: livePlainNote.uuid,
+      noteType: NoteType.Super,
+      text: '{"root":{"type":"root","children":[]}}',
+    })
+
+    await expect(
+      resolvePersistedPrintOptions({
+        noteUuid: liteNote.uuid,
+        getSelectedNoteUuid: () => liteNote.uuid,
+        findNote: () => liteNote,
+        getFullContentPayload: async () => mismatchedSuperNote.payload,
+        getEditorForNote: (note) => (note.noteType === NoteType.Super ? nativeSuperEditor : nativePlainEditor),
+      }),
+    ).resolves.toBeUndefined()
   })
 
   it('keeps print CSS default-deny even before runtime can resolve a note', () => {
@@ -298,6 +537,7 @@ describe('isolated note printing', () => {
       fallbackTitle: 'Persisted selected title',
       fallbackBody: 'Persisted selected body',
       fallbackNoteType: NoteType.Plain,
+      fallbackSource: 'verified-native-plaintext' as const,
     }
 
     expect(getActiveNotePrintSupport(options)).toEqual({ supported: true, source: 'fallback' })
@@ -409,7 +649,7 @@ describe('isolated note printing', () => {
     expect(document.body.textContent).not.toContain('Persisted card')
   })
 
-  it('uses persisted text for a custom editor only when its note type is plaintext-backed', () => {
+  it('uses persisted text only after a bundled plaintext editor has been authoritatively verified', () => {
     document.body.innerHTML = `
       <main id="custom-editor-chrome">
         <input id="${ElementIds.NoteTitleEditor}" ${PRINT_NOTE_UUID_ATTRIBUTE}="custom-native" value="Live custom title" />
@@ -426,6 +666,7 @@ describe('isolated note printing', () => {
       fallbackBody,
       fallbackNoteType: NoteType.Markdown,
       fallbackEditorIdentifier: 'org.standardnotes.advanced-markdown',
+      fallbackSource: 'verified-native-plaintext' as const,
     }
     const dispose = installNativeNotePrinting(() => options)
 

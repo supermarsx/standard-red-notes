@@ -3,7 +3,14 @@ import { SuperEditorContentId } from '@/Components/SuperEditor/Constants'
 import { applyPrintLayout, PRINT_BODY_ID, removePrintLayout } from '@/Components/SuperEditor/Layout/applyPrintLayout'
 import { getPrintableDataTable } from '@/Components/SuperEditor/Lexical/Nodes/PrintableDataTableRegistry'
 import { getPrintableCalendar } from '@/Components/SuperEditor/Lexical/Nodes/PrintableCalendarRegistry'
-import { NoteType } from '@standardnotes/snjs'
+import {
+  ContentType,
+  DecryptedPayloadInterface,
+  isLitePayload,
+  NoteContent,
+  NoteType,
+  SNNote,
+} from '@standardnotes/snjs'
 
 export const PRINT_ROOT_ID = 'srn-print-root'
 export const PRINT_TITLE_ID = 'srn-print-title'
@@ -14,7 +21,7 @@ export const PRINT_EMPTY_ATTRIBUTE = 'data-srn-print-empty'
 const PRINT_FALLBACK_CLEANUP_MS = 60_000
 let activePrintCleanup: (() => void) | undefined
 
-type PrintNoteOptions = {
+export type PrintNoteOptions = {
   noteUuid?: string
   fallbackTitle?: string
   /** Complete decrypted note text used only after its persisted format is proven printable. */
@@ -22,6 +29,15 @@ type PrintNoteOptions = {
   fallbackNoteType?: NoteType
   /** Distinguishes legacy plain notes (no type or editor) from unknown custom formats. */
   fallbackEditorIdentifier?: string
+  /** Set only after the application's authoritative editor resolver proves a native plaintext format. */
+  fallbackSource?: 'verified-native-plaintext'
+}
+
+export type PersistedPrintEditorProof = {
+  readonly isNativeFeature: boolean
+  readonly isComponent: boolean
+  readonly noteType: NoteType
+  readonly featureIdentifier: string
 }
 
 type PrintBodySource =
@@ -42,6 +58,178 @@ const unsupportedPrintReason = 'This editor cannot provide a safe title-and-body
 
 const plaintextFallbackNoteTypes = new Set<NoteType>([NoteType.Plain, NoteType.Markdown, NoteType.Code])
 
+/** Persisted fallback is safe only when the actual resolved editor is a bundled plaintext format. */
+export function isPersistedPrintEditorSupported(
+  editor: PersistedPrintEditorProof | undefined,
+): editor is PersistedPrintEditorProof {
+  return Boolean(editor?.isNativeFeature && !editor.isComponent && plaintextFallbackNoteTypes.has(editor.noteType))
+}
+
+/**
+ * Produce an atomic title/body fallback only from a demonstrably complete note.
+ * A lite note deliberately exposes `text === ''` while its real body remains on
+ * disk, so accepting that projection would turn unopened notes into blank PDFs.
+ */
+export function createPersistedPrintOptions(
+  note: SNNote,
+  resolvedEditor: PersistedPrintEditorProof | undefined,
+): PrintNoteOptions | undefined {
+  return createPersistedPrintOptionsFromPayload(note.payload, note.uuid, resolvedEditor)
+}
+
+export type ResolvedPersistedPrintOptions = {
+  noteUuid: string
+  options: PrintNoteOptions
+  /** Live payload identity that must still match immediately before printing. */
+  guardPayload: DecryptedPayloadInterface
+  /** Resolved editor identity that must still match immediately before printing. */
+  guardEditorIdentifier: string
+}
+
+export type ResolvePersistedPrintOptionsDependencies = {
+  noteUuid: string
+  getSelectedNoteUuid: () => string | undefined
+  findNote: (uuid: string) => SNNote | undefined
+  getFullContentPayload: (uuid: string) => Promise<DecryptedPayloadInterface | undefined>
+  getEditorForNote: (note: SNNote) => PersistedPrintEditorProof | undefined
+}
+
+function createPersistedPrintOptionsFromPayload(
+  payload: DecryptedPayloadInterface,
+  expectedUuid: string,
+  resolvedEditor: PersistedPrintEditorProof | undefined,
+): PrintNoteOptions | undefined {
+  if (
+    !isPersistedPrintEditorSupported(resolvedEditor) ||
+    payload.uuid !== expectedUuid ||
+    payload.content_type !== ContentType.TYPES.Note ||
+    isLitePayload(payload) ||
+    typeof payload.content !== 'object' ||
+    payload.content === null
+  ) {
+    return undefined
+  }
+
+  const content = payload.content as unknown as Record<string, unknown>
+  const { title, text, noteType, editorIdentifier } = content
+  if (
+    typeof title !== 'string' ||
+    typeof text !== 'string' ||
+    (noteType !== undefined && typeof noteType !== 'string') ||
+    (editorIdentifier !== undefined && typeof editorIdentifier !== 'string')
+  ) {
+    return undefined
+  }
+
+  return {
+    noteUuid: expectedUuid,
+    fallbackTitle: title,
+    fallbackBody: text,
+    fallbackNoteType: noteType as NoteType | undefined,
+    fallbackEditorIdentifier: editorIdentifier as string | undefined,
+    fallbackSource: 'verified-native-plaintext',
+  }
+}
+
+/**
+ * Resolve an inactive note's complete persisted print source without mutating
+ * application state. Every check is repeated after the IndexedDB/decryption
+ * await so deletion, selection changes, and newer live payloads fail closed.
+ */
+export async function resolvePersistedPrintOptions({
+  noteUuid,
+  getSelectedNoteUuid,
+  findNote,
+  getFullContentPayload,
+  getEditorForNote,
+}: ResolvePersistedPrintOptionsDependencies): Promise<ResolvedPersistedPrintOptions | undefined> {
+  if (getSelectedNoteUuid() !== noteUuid) {
+    return undefined
+  }
+
+  const noteAtStart = findNote(noteUuid)
+  if (!noteAtStart || noteAtStart.uuid !== noteUuid) {
+    return undefined
+  }
+
+  const editorAtStart = getEditorForNote(noteAtStart)
+  if (isPersistedPrintEditorSupported(editorAtStart)) {
+    const completeOptions = createPersistedPrintOptions(noteAtStart, editorAtStart)
+    if (completeOptions) {
+      return {
+        noteUuid,
+        options: completeOptions,
+        guardPayload: noteAtStart.payload,
+        guardEditorIdentifier: editorAtStart.featureIdentifier,
+      }
+    }
+  }
+
+  if (!isLitePayload(noteAtStart.payload) || !isPersistedPrintEditorSupported(editorAtStart)) {
+    return undefined
+  }
+
+  const payloadAtStart = noteAtStart.payload
+  let fullPayload: DecryptedPayloadInterface | undefined
+  try {
+    fullPayload = await getFullContentPayload(noteUuid)
+  } catch {
+    return undefined
+  }
+
+  if (getSelectedNoteUuid() !== noteUuid) {
+    return undefined
+  }
+
+  const liveNote = findNote(noteUuid)
+  if (!liveNote || liveNote.uuid !== noteUuid) {
+    return undefined
+  }
+
+  const liveEditor = getEditorForNote(liveNote)
+  if (isPersistedPrintEditorSupported(liveEditor)) {
+    const currentCompleteOptions = createPersistedPrintOptions(liveNote, liveEditor)
+    if (currentCompleteOptions) {
+      return {
+        noteUuid,
+        options: currentCompleteOptions,
+        guardPayload: liveNote.payload,
+        guardEditorIdentifier: liveEditor.featureIdentifier,
+      }
+    }
+  }
+
+  if (
+    !isLitePayload(liveNote.payload) ||
+    liveNote.payload !== payloadAtStart ||
+    !fullPayload ||
+    !isPersistedPrintEditorSupported(liveEditor)
+  ) {
+    return undefined
+  }
+
+  let fullNote: SNNote
+  try {
+    fullNote = new SNNote(fullPayload as DecryptedPayloadInterface<NoteContent>)
+  } catch {
+    return undefined
+  }
+  const fullEditor = getEditorForNote(fullNote)
+  if (!isPersistedPrintEditorSupported(fullEditor) || fullEditor.featureIdentifier !== liveEditor.featureIdentifier) {
+    return undefined
+  }
+
+  const rehydratedOptions = createPersistedPrintOptionsFromPayload(fullPayload, noteUuid, fullEditor)
+  return rehydratedOptions
+    ? {
+        noteUuid,
+        options: rehydratedOptions,
+        guardPayload: liveNote.payload,
+        guardEditorIdentifier: liveEditor.featureIdentifier,
+      }
+    : undefined
+}
+
 /**
  * Return persisted text only for formats whose storage is the note body itself.
  * Super and custom formats fail closed: their complete semantic document model
@@ -49,21 +237,7 @@ const plaintextFallbackNoteTypes = new Set<NoteType>([NoteType.Plain, NoteType.M
  * be handed to the print compositor as if it were prose.
  */
 function projectPersistedPrintBody(options: PrintNoteOptions): string | undefined {
-  if (options.fallbackBody === undefined) {
-    return undefined
-  }
-
-  if (options.fallbackNoteType && plaintextFallbackNoteTypes.has(options.fallbackNoteType)) {
-    return options.fallbackBody
-  }
-
-  // Notes created before noteType existed are plain only when they also lack a
-  // custom editor identifier. Unknown/custom formats remain unsupported.
-  if (!options.fallbackNoteType && !options.fallbackEditorIdentifier) {
-    return options.fallbackBody
-  }
-
-  return undefined
+  return options.fallbackSource === 'verified-native-plaintext' ? options.fallbackBody : undefined
 }
 
 /** Copy live form state before the clone is sanitized into static print text. */
