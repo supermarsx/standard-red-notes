@@ -164,7 +164,7 @@ const CodexPairingWizard: FunctionComponent<{ application: WebApplication; onSta
       if (!ok || !data?.authorizeUrl || !isValidAssistantPairingState(data.state)) {
         throw new Error(
           httpStatus === 503
-            ? 'Subscription pairing is not configured on this server (set ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY).'
+            ? 'Pairing storage is unavailable on this deployment. Ask the server operator to rerun or update the supported installer; if pairing data already exists, restore its original installation secrets.'
             : 'The server did not return an authorization URL.',
         )
       }
