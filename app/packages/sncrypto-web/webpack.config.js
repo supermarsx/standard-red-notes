@@ -1,4 +1,5 @@
 const path = require('path')
+const webpack = require('webpack')
 module.exports = {
   entry: {
     'sncrypto-web.js': './src/index',
@@ -7,8 +8,19 @@ module.exports = {
   performance: { hints: false },
   resolve: {
     extensions: ['.ts', '.js'],
+    alias: {
+      'libsodium-wrappers-sumo$': path.resolve(
+        __dirname,
+        '../../node_modules/libsodium-wrappers-sumo/dist/modules-sumo/libsodium-wrappers.js',
+      ),
+      'libsodium-sumo$': path.resolve(
+        __dirname,
+        '../../node_modules/libsodium-sumo/dist/modules-sumo/libsodium-sumo.js',
+      ),
+    },
     fallback: {
       crypto: false,
+      fs: false,
       path: false,
     },
   },
@@ -37,7 +49,11 @@ module.exports = {
       },
     ],
   },
-  plugins: [],
+  plugins: [
+    new webpack.NormalModuleReplacementPlugin(/^node:fs$/, (resource) => {
+      resource.request = 'fs'
+    }),
+  ],
   stats: {
     colors: true,
   },

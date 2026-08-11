@@ -9,7 +9,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "yarn clean && yarn copy:components && webpack --config web.webpack.prod.js",
+    "build": "yarn clean && yarn copy:components && webpack --config web.webpack.prod.js && node scripts/AssertPortableBundle.mjs",
     "clean": "rm -fr dist",
     "format": "prettier --write src/javascripts",
     "lint": "eslint src/javascripts",

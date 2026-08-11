@@ -4,6 +4,7 @@ import { classNames } from '@standardnotes/utils'
 import {
   FunctionComponent,
   KeyboardEvent as ReactKeyboardEvent,
+  SyntheticEvent,
   useCallback,
   useEffect,
   useMemo,
@@ -17,11 +18,16 @@ import {
   SandboxDocument,
   SandboxPane,
   SANDBOX_CONSOLE_CHANNEL,
-  buildSandboxSrcdoc,
+  SANDBOX_CONSOLE_MAX_ENTRIES,
+  SandboxConsoleLevel,
+  buildSandboxRunPayload,
+  claimSandboxRunDelivery,
   createEmptySandboxDocument,
   createJsSandboxStarter,
+  createSandboxRunNonce,
   createWebSandboxStarter,
   parseSandboxDocument,
+  normalizeSandboxConsoleEntry,
   serializeSandboxDocument,
 } from './SandboxDocument'
 
@@ -39,11 +45,9 @@ export const sandboxModeForIdentifier = (identifier: string | undefined): Sandbo
 
 const AUTO_RUN_DEBOUNCE_MS = 600
 
-type ConsoleLevel = 'log' | 'info' | 'warn' | 'error'
-
 type ConsoleEntry = {
   id: number
-  level: ConsoleLevel
+  level: SandboxConsoleLevel
   message: string
 }
 
@@ -89,15 +93,17 @@ export const SandboxEditor: FunctionComponent<Props> = ({
     initialParse.document.activePane ?? (mode === 'js' ? 'js' : 'html'),
   )
   const [consoleEntries, setConsoleEntries] = useState<ConsoleEntry[]>([])
-  /** Bumped on each Run to force the iframe to rebuild (and reset) its srcdoc. */
-  const [runToken, setRunToken] = useState(0)
   /** The document snapshot currently rendered into the iframe. */
   const [runDocument, setRunDocument] = useState<SandboxDocument>(initialParse.document)
+  /** Changed on each Run to bind and reset exactly one isolated runner frame. */
+  const [runNonce, setRunNonce] = useState(createSandboxRunNonce)
 
   const autoRunTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const ignoreNextChange = useRef(false)
   const iframeRef = useRef<HTMLIFrameElement>(null)
-  const consoleCounter = useRef(0)
+  const consoleEntryId = useRef(0)
+  const consoleMessagesThisRun = useRef(0)
+  const deliveredRunNonce = useRef<string | undefined>(undefined)
 
   const isReadonly = note.current.locked || Boolean(readonly)
   const captureConsole = mode === 'js'
@@ -164,12 +170,17 @@ export const SandboxEditor: FunctionComponent<Props> = ({
     }
   }, [])
 
+  const clearConsole = useCallback(() => {
+    consoleMessagesThisRun.current = 0
+    setConsoleEntries([])
+  }, [])
+
   // Run the current document: snapshot it into the iframe and reset the console.
   const run = useCallback(() => {
-    setConsoleEntries([])
+    clearConsole()
     setRunDocument(document)
-    setRunToken((token) => token + 1)
-  }, [document])
+    setRunNonce(createSandboxRunNonce())
+  }, [clearConsole, document])
 
   // Web App Sandbox auto-runs (debounced) as the code changes; JS Sandbox is
   // manual-run only so console output isn't spammed mid-typing.
@@ -182,7 +193,7 @@ export const SandboxEditor: FunctionComponent<Props> = ({
     }
     autoRunTimer.current = setTimeout(() => {
       setRunDocument(document)
-      setRunToken((token) => token + 1)
+      setRunNonce(createSandboxRunNonce())
     }, AUTO_RUN_DEBOUNCE_MS)
     return () => {
       if (autoRunTimer.current) {
@@ -206,19 +217,28 @@ export const SandboxEditor: FunctionComponent<Props> = ({
       if (!data || data.channel !== SANDBOX_CONSOLE_CHANNEL) {
         return
       }
-      const level: ConsoleLevel =
-        data.level === 'warn' || data.level === 'error' || data.level === 'info' ? data.level : 'log'
-      const message = typeof data.message === 'string' ? data.message : String(data.message)
-      consoleCounter.current += 1
-      setConsoleEntries((prev) => [...prev, { id: consoleCounter.current, level, message }])
+      const entry = normalizeSandboxConsoleEntry(data, consoleMessagesThisRun.current)
+      if (!entry) {
+        return
+      }
+      consoleMessagesThisRun.current += 1
+      consoleEntryId.current += 1
+      const nextEntry = { id: consoleEntryId.current, ...entry }
+      setConsoleEntries((prev) => (prev.length < SANDBOX_CONSOLE_MAX_ENTRIES ? [...prev, nextEntry] : prev))
     }
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
   }, [captureConsole])
 
-  const srcdoc = useMemo(
-    () => buildSandboxSrcdoc(runDocument, { captureConsole }),
-    [runDocument, captureConsole, runToken],
+  const sendRunPayload = useCallback(
+    (event: SyntheticEvent<HTMLIFrameElement>) => {
+      const frameWindow = event.currentTarget.contentWindow
+      if (!frameWindow || !claimSandboxRunDelivery(deliveredRunNonce, runNonce)) {
+        return
+      }
+      frameWindow.postMessage(buildSandboxRunPayload(runDocument, { captureConsole, nonce: runNonce }), '*')
+    },
+    [runDocument, captureConsole, runNonce],
   )
 
   const setPaneValue = useCallback(
@@ -330,7 +350,7 @@ export const SandboxEditor: FunctionComponent<Props> = ({
               <div className="border-border bg-contrast text-passive-1 flex items-center justify-between border-b px-3 py-1 text-xs font-semibold">
                 <span>Console</span>
                 {consoleEntries.length > 0 && (
-                  <button className="text-info hover:underline" onClick={() => setConsoleEntries([])}>
+                  <button className="text-info hover:underline" onClick={clearConsole}>
                     Clear
                   </button>
                 )}
@@ -361,11 +381,12 @@ export const SandboxEditor: FunctionComponent<Props> = ({
               <div className="min-h-0 flex-grow bg-white">
                 <iframe
                   ref={iframeRef}
-                  key={runToken}
+                  key={runNonce}
                   title="Web App Sandbox preview"
                   className="h-full w-full border-0"
                   sandbox="allow-scripts"
-                  srcDoc={srcdoc}
+                  src={`/sandbox.html#${runNonce}`}
+                  onLoad={sendRunPayload}
                 />
               </div>
             </>
@@ -375,11 +396,12 @@ export const SandboxEditor: FunctionComponent<Props> = ({
           {mode === 'js' && (
             <iframe
               ref={iframeRef}
-              key={runToken}
+              key={runNonce}
               title="JS Sandbox runner"
               className="h-0 w-0"
               sandbox="allow-scripts"
-              srcDoc={srcdoc}
+              src={`/sandbox.html#${runNonce}`}
+              onLoad={sendRunPayload}
               aria-hidden
             />
           )}

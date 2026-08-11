@@ -325,8 +325,13 @@ server {
   }
 
   location / {
-    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'sha256-__CSP_INLINE_SCRIPT_HASH__'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob: data:; connect-src 'self' ws: wss:; frame-src 'self' blob:; frame-ancestors 'self'; base-uri 'self'; form-action 'self'; object-src 'none'" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'sha256-__CSP_INLINE_SCRIPT_HASH__'; script-src-attr 'self' 'unsafe-hashes' 'sha256-nIvOnptGOkcUoTPVOYWoDnWbMyGMgUTK8pMzXf87azw='; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' blob: data:; connect-src 'self' https: http://localhost:* http://127.0.0.1:* ws: wss:; frame-src 'self' blob:; frame-ancestors 'self'; base-uri 'self'; form-action 'self'; object-src 'none'" always;
     try_files \$uri \$uri/ /index.html;
+  }
+
+  location = /sandbox.html {
+    add_header Content-Security-Policy "default-src 'none'; script-src 'unsafe-eval' 'sha256-xvRgiwPvsuzmKsrLtNr6JgssmYZDeeQ3B3pfnR4yZa8='; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; frame-src 'none'; frame-ancestors 'self'; base-uri 'none'; form-action 'none'; object-src 'none'; sandbox allow-scripts" always;
+    try_files /sandbox.html =404;
   }
 }
 EOF
@@ -363,7 +368,7 @@ apply_csp_hash() {
   hex="$(printf '%s' "${body}" | sha256sum | awk '{print $1}')"
   printf '%s' "${hex}" | grep -Eq '^[0-9a-fA-F]{64}$' || return 1
   b64="$(printf '%s' "${hex}" | xxd -r -p | base64 | tr -d '\n')"
-  sed -i "s|'sha256-[A-Za-z0-9+/=_]*'|'sha256-${b64}'|" "${conf}"
+  sed -i "s|__CSP_INLINE_SCRIPT_HASH__|${b64}|g" "${conf}"
   log "CSP inline-script hash: sha256-${b64}"
 }
 apply_csp_hash || die "Could not derive the staged web CSP hash; live release was not switched."

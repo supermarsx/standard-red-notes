@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'unsafe-eval' 'sha256-xvRgiwPvsuzmKsrLtNr6JgssmYZDeeQ3B3pfnR4yZa8='; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; connect-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'"
+    />
+    <title>Standard Red Notes sandbox</title>
+    <style id="sandbox-style"></style>
+  </head>
+  <body>
+    <main id="sandbox-root"></main>
+    <script>
+      ;(function () {
+        'use strict'
+        var runChannel = '__SN_SANDBOX_RUN__'
+        var consoleChannel = '__SN_SANDBOX_CONSOLE__'
+        var consoleMessageMaxLength = 16384
+        var consoleEntryMaxCount = 200
+        var consoleTruncationSuffix = '\n... [truncated]'
+        var consoleLimitNotice = 'Console output limit reached; further messages were dropped.'
+        var consoleEntriesSent = 0
+        var runNonce = location.hash.slice(1)
+        var didRun = false
+        var style = document.getElementById('sandbox-style')
+        var root = document.getElementById('sandbox-root')
+
+        function serializeConsoleValue(value) {
+          if (typeof value === 'string') {
+            return value
+          }
+          try {
+            return JSON.stringify(value)
+          } catch (error) {
+            return String(value)
+          }
+        }
+
+        function send(level, args) {
+          try {
+            if (consoleEntriesSent >= consoleEntryMaxCount) {
+              return
+            }
+            if (consoleEntriesSent === consoleEntryMaxCount - 1) {
+              consoleEntriesSent += 1
+              parent.postMessage({ channel: consoleChannel, level: 'warn', message: consoleLimitNotice }, '*')
+              return
+            }
+
+            var message = ''
+            var contentLimit = consoleMessageMaxLength - consoleTruncationSuffix.length
+            var truncated = false
+            for (var index = 0; index < args.length; index += 1) {
+              var value = serializeConsoleValue(args[index])
+              var segment = (index === 0 ? '' : ' ') + value
+              var remaining = contentLimit - message.length
+              if (segment.length > remaining) {
+                message += segment.slice(0, Math.max(0, remaining))
+                truncated = true
+                break
+              }
+              message += segment
+            }
+            if (truncated) {
+              message += consoleTruncationSuffix
+            }
+            consoleEntriesSent += 1
+            parent.postMessage({ channel: consoleChannel, level: level, message: message }, '*')
+          } catch (error) {}
+        }
+
+        function captureConsole() {
+          var methods = ['log', 'info', 'warn', 'error', 'debug']
+          for (var index = 0; index < methods.length; index += 1) {
+            ;(function (method) {
+              var original = console[method]
+              console[method] = function () {
+                send(method === 'debug' ? 'log' : method, arguments)
+                if (original) {
+                  try {
+                    original.apply(console, arguments)
+                  } catch (error) {}
+                }
+              }
+            })(methods[index])
+          }
+          window.addEventListener('error', function (event) {
+            send('error', [event.message + (event.filename ? ' (' + event.lineno + ':' + event.colno + ')' : '')])
+          })
+          window.addEventListener('unhandledrejection', function (event) {
+            var reason = event.reason
+            send('error', ['Unhandled rejection: ' + (reason && reason.message ? reason.message : String(reason))])
+          })
+        }
+
+        window.addEventListener('message', function (event) {
+          if (
+            didRun ||
+            event.source !== parent ||
+            !event.data ||
+            event.data.channel !== runChannel ||
+            event.data.nonce !== runNonce
+          ) {
+            return
+          }
+          didRun = true
+          var payload = event.data
+          var sandboxDocument = payload.document
+          if (!sandboxDocument || typeof sandboxDocument !== 'object') {
+            return
+          }
+          if (payload.captureConsole === true) {
+            captureConsole()
+          }
+          style.textContent = typeof sandboxDocument.css === 'string' ? sandboxDocument.css : ''
+          root.innerHTML = typeof sandboxDocument.html === 'string' ? sandboxDocument.html : ''
+          var script = typeof sandboxDocument.js === 'string' ? sandboxDocument.js : ''
+          try {
+            ;(0, eval)(script + '\n//# sourceURL=standard-red-notes-sandbox.js')
+          } catch (error) {
+            send('error', [error && error.message ? error.message : String(error)])
+          }
+        })
+      })()
+    </script>
+  </body>
+</html>

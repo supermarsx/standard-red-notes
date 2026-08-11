@@ -117,78 +117,107 @@ export const serializeSandboxDocument = (document: SandboxDocument): string => {
   })
 }
 
-/**
- * Prelude injected into the sandbox iframe `srcdoc`. It wraps `console.*` and
- * `window.onerror` / unhandled rejections and forwards each message to the
- * parent via `postMessage`. Sent as the iframe's first script so it captures
- * output from the user's code that follows. The `__SN_SANDBOX_CONSOLE__` channel
- * marker lets the parent distinguish these messages from any other postMessage
- * traffic. postMessage works from a `sandbox="allow-scripts"` iframe (without
- * `allow-same-origin`) — the parent validates `event.source` is this iframe.
- */
 export const SANDBOX_CONSOLE_CHANNEL = '__SN_SANDBOX_CONSOLE__'
-
-const buildConsolePrelude = (): string => `<script>(function(){
-  var channel = ${JSON.stringify(SANDBOX_CONSOLE_CHANNEL)};
-  function send(level, args){
-    try {
-      var parts = [];
-      for (var i = 0; i < args.length; i++) {
-        var a = args[i];
-        if (typeof a === 'string') { parts.push(a); }
-        else {
-          try { parts.push(JSON.stringify(a)); }
-          catch (e) { parts.push(String(a)); }
-        }
-      }
-      parent.postMessage({ channel: channel, level: level, message: parts.join(' ') }, '*');
-    } catch (e) {}
-  }
-  var methods = ['log', 'info', 'warn', 'error', 'debug'];
-  for (var m = 0; m < methods.length; m++) {
-    (function(method){
-      var original = console[method];
-      console[method] = function(){
-        send(method === 'debug' ? 'log' : method, arguments);
-        if (original) { try { original.apply(console, arguments); } catch (e) {} }
-      };
-    })(methods[m]);
-  }
-  window.addEventListener('error', function(event){
-    send('error', [event.message + (event.filename ? ' (' + event.lineno + ':' + event.colno + ')' : '')]);
-  });
-  window.addEventListener('unhandledrejection', function(event){
-    var reason = event.reason;
-    send('error', ['Unhandled rejection: ' + (reason && reason.message ? reason.message : String(reason))]);
-  });
-})();</script>`
+export const SANDBOX_RUN_CHANNEL = '__SN_SANDBOX_RUN__'
 
 /**
- * Build the iframe `srcdoc` from the document. Composes
- * `<style>{css}</style>{html}<script>{js}</script>` inside a minimal HTML
- * shell. When `captureConsole` is true the console-capturing prelude is injected
- * as the first script so it wraps `console.*` before the user's JS runs. The
- * iframe is rendered with `sandbox="allow-scripts"` WITHOUT `allow-same-origin`,
- * so the contained code cannot reach the parent app, its cookies, or storage.
+ * Console output crosses an untrusted iframe boundary. Keep both dimensions
+ * bounded so noisy sandbox code cannot grow the parent application's React
+ * state without limit. The fixed runner applies the same limits before
+ * postMessage; this normalizer is the parent's defensive boundary.
  */
-export const buildSandboxSrcdoc = (
-  document: Pick<SandboxDocument, 'html' | 'css' | 'js'>,
-  options: { captureConsole: boolean },
-): string => {
-  const css = document.css ?? ''
-  const html = document.html ?? ''
-  const js = document.js ?? ''
-  const prelude = options.captureConsole ? buildConsolePrelude() : ''
-  return `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8" />
-<style>${css}</style>
-${prelude}
-</head>
-<body>
-${html}
-<script>${js}</script>
-</body>
-</html>`
+export const SANDBOX_CONSOLE_MAX_MESSAGE_LENGTH = 16_384
+export const SANDBOX_CONSOLE_MAX_ENTRIES = 200
+export const SANDBOX_CONSOLE_TRUNCATION_SUFFIX = '\n... [truncated]'
+export const SANDBOX_CONSOLE_LIMIT_NOTICE = 'Console output limit reached; further messages were dropped.'
+
+export type SandboxConsoleLevel = 'log' | 'info' | 'warn' | 'error'
+
+export type SandboxConsoleEntryContent = {
+  level: SandboxConsoleLevel
+  message: string
 }
+
+/**
+ * Validate and bound one console event before retaining it in parent state.
+ * The final slot is reserved for a deterministic notice, after which callers
+ * must ignore output until the console is explicitly cleared or run again.
+ */
+export const normalizeSandboxConsoleEntry = (
+  data: { level?: unknown; message?: unknown },
+  acceptedCount: number,
+): SandboxConsoleEntryContent | undefined => {
+  if (acceptedCount >= SANDBOX_CONSOLE_MAX_ENTRIES || typeof data.message !== 'string') {
+    return undefined
+  }
+
+  if (acceptedCount === SANDBOX_CONSOLE_MAX_ENTRIES - 1) {
+    return { level: 'warn', message: SANDBOX_CONSOLE_LIMIT_NOTICE }
+  }
+
+  const level: SandboxConsoleLevel =
+    data.level === 'warn' || data.level === 'error' || data.level === 'info' ? data.level : 'log'
+  const message =
+    data.message.length > SANDBOX_CONSOLE_MAX_MESSAGE_LENGTH
+      ? `${data.message.slice(
+          0,
+          SANDBOX_CONSOLE_MAX_MESSAGE_LENGTH - SANDBOX_CONSOLE_TRUNCATION_SUFFIX.length,
+        )}${SANDBOX_CONSOLE_TRUNCATION_SUFFIX}`
+      : data.message
+
+  return { level, message }
+}
+
+/**
+ * A fresh, per-frame token binds one payload to one `/sandbox.html` document.
+ * The iframe remains opaque-origin, so this is not an authentication secret;
+ * it prevents a later self-navigation from accepting a stale run message.
+ */
+export const createSandboxRunNonce = (): string => {
+  const bytes = new Uint8Array(16)
+  if (globalThis.crypto?.getRandomValues) {
+    globalThis.crypto.getRandomValues(bytes)
+  } else {
+    for (let index = 0; index < bytes.length; index += 1) {
+      bytes[index] = Math.floor(Math.random() * 256)
+    }
+  }
+  return Array.from(bytes, (value) => value.toString(16).padStart(2, '0')).join('')
+}
+
+/** Claim delivery once for a nonce. A navigated iframe fires `load` again. */
+export const claimSandboxRunDelivery = (state: { current: string | undefined }, nonce: string): boolean => {
+  if (state.current === nonce) {
+    return false
+  }
+  state.current = nonce
+  return true
+}
+
+export type SandboxRunPayload = {
+  channel: typeof SANDBOX_RUN_CHANNEL
+  nonce: string
+  document: Pick<SandboxDocument, 'html' | 'css' | 'js'>
+  captureConsole: boolean
+}
+
+/**
+ * Build the message sent to the fixed, hash-pinned `/sandbox.html` runner.
+ * User-controlled code is data in this message; it is never serialized into an
+ * inline script in the application document. The runner is also rendered with
+ * `sandbox="allow-scripts"` WITHOUT `allow-same-origin`, so its code cannot reach
+ * the parent app, its cookies, or storage.
+ */
+export const buildSandboxRunPayload = (
+  document: Pick<SandboxDocument, 'html' | 'css' | 'js'>,
+  options: { captureConsole: boolean; nonce: string },
+): SandboxRunPayload => ({
+  channel: SANDBOX_RUN_CHANNEL,
+  nonce: options.nonce,
+  document: {
+    html: document.html ?? '',
+    css: document.css ?? '',
+    js: document.js ?? '',
+  },
+  captureConsole: options.captureConsole,
+})

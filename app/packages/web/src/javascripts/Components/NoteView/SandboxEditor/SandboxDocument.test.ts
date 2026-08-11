@@ -1,11 +1,19 @@
 import {
   SANDBOX_DOCUMENT_VERSION,
   SANDBOX_CONSOLE_CHANNEL,
+  SANDBOX_CONSOLE_LIMIT_NOTICE,
+  SANDBOX_CONSOLE_MAX_ENTRIES,
+  SANDBOX_CONSOLE_MAX_MESSAGE_LENGTH,
+  SANDBOX_RUN_CHANNEL,
+  SANDBOX_CONSOLE_TRUNCATION_SUFFIX,
   SandboxDocument,
-  buildSandboxSrcdoc,
+  buildSandboxRunPayload,
+  claimSandboxRunDelivery,
   createEmptySandboxDocument,
   createJsSandboxStarter,
   createWebSandboxStarter,
+  createSandboxRunNonce,
+  normalizeSandboxConsoleEntry,
   parseSandboxDocument,
   serializeSandboxDocument,
 } from './SandboxDocument'
@@ -115,40 +123,75 @@ describe('SandboxDocument', () => {
     })
   })
 
-  describe('buildSandboxSrcdoc', () => {
+  describe('buildSandboxRunPayload', () => {
     const doc = { html: '<h1>Hi</h1>', css: 'h1{color:red}', js: "console.log('x')" }
+    const nonce = '0123456789abcdef0123456789abcdef'
 
-    it('composes html, css, and js into the srcdoc', () => {
-      const srcdoc = buildSandboxSrcdoc(doc, { captureConsole: false })
-      expect(srcdoc).toContain('<style>h1{color:red}</style>')
-      expect(srcdoc).toContain('<h1>Hi</h1>')
-      expect(srcdoc).toContain("<script>console.log('x')</script>")
-      expect(srcdoc).toContain('<!DOCTYPE html>')
+    it('passes user content as data to the fixed runner', () => {
+      const payload = buildSandboxRunPayload(doc, { captureConsole: false, nonce })
+      expect(payload).toEqual({
+        channel: SANDBOX_RUN_CHANNEL,
+        nonce,
+        document: doc,
+        captureConsole: false,
+      })
     })
 
-    it('omits the console prelude when capture is off', () => {
-      const srcdoc = buildSandboxSrcdoc(doc, { captureConsole: false })
-      expect(srcdoc).not.toContain(SANDBOX_CONSOLE_CHANNEL)
-    })
-
-    it('injects the console prelude when capture is on', () => {
-      const srcdoc = buildSandboxSrcdoc(doc, { captureConsole: true })
-      expect(srcdoc).toContain(SANDBOX_CONSOLE_CHANNEL)
-      // Prelude wraps console methods and posts to the parent.
-      expect(srcdoc).toContain('parent.postMessage')
-      expect(srcdoc).toContain("window.addEventListener('error'")
-    })
-
-    it('places the console prelude before the user script so it wraps console early', () => {
-      const srcdoc = buildSandboxSrcdoc(doc, { captureConsole: true })
-      const preludeIndex = srcdoc.indexOf('parent.postMessage')
-      const userScriptIndex = srcdoc.indexOf("console.log('x')")
-      expect(preludeIndex).toBeGreaterThanOrEqual(0)
-      expect(userScriptIndex).toBeGreaterThan(preludeIndex)
+    it('requests console capture without embedding the console transport in user code', () => {
+      const payload = buildSandboxRunPayload(doc, { captureConsole: true, nonce })
+      expect(payload.captureConsole).toBe(true)
+      expect(JSON.stringify(payload.document)).not.toContain(SANDBOX_CONSOLE_CHANNEL)
     })
 
     it('handles missing panes without throwing', () => {
-      expect(() => buildSandboxSrcdoc({ html: '', css: '', js: '' }, { captureConsole: true })).not.toThrow()
+      expect(() => buildSandboxRunPayload({ html: '', css: '', js: '' }, { captureConsole: true, nonce })).not.toThrow()
+    })
+  })
+
+  describe('one-shot frame delivery', () => {
+    it('uses a fresh hexadecimal nonce and refuses a second load for that nonce', () => {
+      const nonce = createSandboxRunNonce()
+      const delivery = { current: undefined as string | undefined }
+
+      expect(nonce).toMatch(/^[a-f0-9]{32}$/)
+      expect(claimSandboxRunDelivery(delivery, nonce)).toBe(true)
+      expect(claimSandboxRunDelivery(delivery, nonce)).toBe(false)
+      expect(claimSandboxRunDelivery(delivery, `${nonce}-next`)).toBe(true)
+    })
+  })
+
+  describe('console output limits', () => {
+    it('truncates an oversized string to the exact parent-state limit', () => {
+      const entry = normalizeSandboxConsoleEntry(
+        { level: 'error', message: 'x'.repeat(SANDBOX_CONSOLE_MAX_MESSAGE_LENGTH + 100) },
+        0,
+      )
+
+      expect(entry?.level).toBe('error')
+      expect(entry?.message).toHaveLength(SANDBOX_CONSOLE_MAX_MESSAGE_LENGTH)
+      expect(entry?.message.endsWith(SANDBOX_CONSOLE_TRUNCATION_SUFFIX)).toBe(true)
+    })
+
+    it('uses the final retained slot for one deterministic drop notice', () => {
+      expect(
+        normalizeSandboxConsoleEntry(
+          { level: 'log', message: 'last visible message' },
+          SANDBOX_CONSOLE_MAX_ENTRIES - 2,
+        ),
+      ).toEqual({ level: 'log', message: 'last visible message' })
+      expect(
+        normalizeSandboxConsoleEntry(
+          { level: 'error', message: 'first dropped message' },
+          SANDBOX_CONSOLE_MAX_ENTRIES - 1,
+        ),
+      ).toEqual({ level: 'warn', message: SANDBOX_CONSOLE_LIMIT_NOTICE })
+      expect(
+        normalizeSandboxConsoleEntry({ level: 'log', message: 'also dropped' }, SANDBOX_CONSOLE_MAX_ENTRIES),
+      ).toBeUndefined()
+    })
+
+    it('rejects non-string payloads instead of coercing untrusted data', () => {
+      expect(normalizeSandboxConsoleEntry({ level: 'log', message: { large: true } }, 0)).toBeUndefined()
     })
   })
 })
