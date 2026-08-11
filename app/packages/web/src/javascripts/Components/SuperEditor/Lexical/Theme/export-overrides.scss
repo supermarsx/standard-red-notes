@@ -4,5 +4,44 @@
   margin-bottom: 4px;
 }
 .Lexical__table {
+  inline-size: 100%;
+  min-inline-size: 0;
+  max-inline-size: 100%;
   margin: 10px 0;
+  table-layout: fixed;
+}
+
+.Lexical__tableScrollableWrapper {
+  inline-size: 100%;
+  max-inline-size: 100%;
+  overflow-x: auto;
+}
+
+.Lexical__tableCell,
+.Lexical__tableCellHeader {
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+@media print {
+  [data-super-widget-layout],
+  .Lexical__tableScrollableWrapper {
+    inline-size: 100% !important;
+    max-inline-size: 100% !important;
+  }
+
+  .Lexical__tableScrollableWrapper {
+    overflow: visible !important;
+  }
+
+  .Lexical__table {
+    min-inline-size: 0 !important;
+    table-layout: fixed !important;
+  }
+
+  .Lexical__tableCell,
+  .Lexical__tableCellHeader {
+    min-inline-size: 0 !important;
+  }
 }

@@ -29,6 +29,33 @@ export const MAX_TABLE_ROWS = 1000
 export const TABLE_GRID_PICKER_COLUMNS = 10
 export const TABLE_GRID_PICKER_ROWS = 8
 
+export const SUPER_WIDGET_LAYOUT_ATTRIBUTE = 'data-super-widget-layout'
+
+export function markTableWidgetLayout(element: HTMLElement | null): void {
+  element?.setAttribute(SUPER_WIDGET_LAYOUT_ATTRIBUTE, 'data')
+}
+
+/**
+ * Marks Lexical's horizontal-scroll table wrapper as a data widget. The
+ * mutation listener is node-scoped, so ordinary editor updates never walk the
+ * document, and its default initialization callback covers restored tables.
+ */
+export function TableWidgetLayoutPlugin(): null {
+  const [editor] = useLexicalComposerContext()
+
+  useEffect(() => {
+    return editor.registerMutationListener(TableNode, (mutations) => {
+      for (const [nodeKey, mutation] of mutations) {
+        if (mutation !== 'destroyed') {
+          markTableWidgetLayout(editor.getElementByKey(nodeKey))
+        }
+      }
+    })
+  }, [editor])
+
+  return null
+}
+
 /**
  * Parses a user-entered size and validates it against the given bounds.
  * Returns the parsed value plus a flag indicating whether it is valid.

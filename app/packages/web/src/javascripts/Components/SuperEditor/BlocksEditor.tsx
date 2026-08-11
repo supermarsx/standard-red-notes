@@ -23,7 +23,7 @@ import { createFlushableDebounce, handleEditorChange } from './Utils'
 import { SuperEditorContentId } from './Constants'
 import { classNames } from '@standardnotes/utils'
 import { MarkdownTransformers } from './MarkdownTransformers'
-import { RemoveBrokenTablesPlugin } from './Plugins/TablePlugin'
+import { RemoveBrokenTablesPlugin, TableWidgetLayoutPlugin } from './Plugins/TablePlugin'
 import TableActionMenuPlugin from './Plugins/TableCellActionMenuPlugin'
 import ToolbarPlugin from './Plugins/ToolbarPlugin/ToolbarPlugin'
 import ListStylePlugin from './Plugins/ListStylePlugin/ListStylePlugin'
@@ -350,7 +350,8 @@ export const BlocksEditor: FunctionComponent<BlocksEditorProps> = ({
       <ListPlugin />
       <ListStylePlugin />
       <MarkdownShortcutPlugin transformers={MarkdownTransformers} />
-      <TablePlugin hasCellMerge />
+      <TablePlugin hasCellMerge hasHorizontalScroll />
+      <TableWidgetLayoutPlugin />
       <OnChangePlugin onChange={handleChange} ignoreSelectionChange={true} />
       <CollaborationEditabilityPlugin
         editable={!readonly && collaborationCanonicalReady}

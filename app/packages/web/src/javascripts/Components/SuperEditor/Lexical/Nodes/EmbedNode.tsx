@@ -45,7 +45,11 @@ function EmbedComponent({ data, nodeKey }: { data: EmbedData; nodeKey: NodeKey }
   const safeRawHref = /^https?:\/\//i.test(rawUrl) ? rawUrl : null
 
   return (
-    <div className="border-border bg-default my-2 rounded border" data-embed-block="true">
+    <div
+      className="border-border bg-default my-2 rounded border"
+      data-embed-block="true"
+      data-super-widget-layout="media"
+    >
       <div className="border-border text-passive-1 flex items-center justify-between border-b px-2 py-1 text-xs">
         <span className="font-semibold">Embed</span>
         <button

@@ -164,7 +164,11 @@ function WebEmbedComponent({ data, nodeKey }: { data: WebEmbedData; nodeKey: Nod
 
   if (editing) {
     return (
-      <div className="border-border bg-default my-2 w-full max-w-full rounded border" data-web-embed-block="true">
+      <div
+        className="border-border bg-default my-2 w-full max-w-full rounded border"
+        data-web-embed-block="true"
+        data-super-widget-layout="media"
+      >
         <div className="border-border text-passive-1 flex items-center justify-between border-b px-2 py-1 text-xs">
           <span className="font-semibold">Embed website</span>
         </div>
@@ -207,7 +211,11 @@ function WebEmbedComponent({ data, nodeKey }: { data: WebEmbedData; nodeKey: Nod
   }
 
   return (
-    <div className="border-border bg-default my-2 w-full max-w-full rounded border" data-web-embed-block="true">
+    <div
+      className="border-border bg-default my-2 w-full max-w-full rounded border"
+      data-web-embed-block="true"
+      data-super-widget-layout="media"
+    >
       <div className="border-border text-passive-1 flex items-center justify-between border-b px-2 py-1 text-xs">
         <span className="flex min-w-0 items-center font-semibold">
           <Icon type="window" className="mr-1.5 flex-shrink-0" />

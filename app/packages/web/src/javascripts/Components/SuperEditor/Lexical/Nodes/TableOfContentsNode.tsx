@@ -98,7 +98,11 @@ function TableOfContentsList({
 function TableOfContentsComponent(): React.JSX.Element {
   const [editor] = useLexicalComposerContext()
   return (
-    <div className="border-border bg-default my-2 rounded border" data-table-of-contents-block="true">
+    <div
+      className="border-border bg-default my-2 rounded border"
+      data-table-of-contents-block="true"
+      data-super-widget-layout="compact"
+    >
       <div className="border-border text-passive-1 border-b px-3 py-1 text-xs font-semibold uppercase">
         Table of Contents
       </div>

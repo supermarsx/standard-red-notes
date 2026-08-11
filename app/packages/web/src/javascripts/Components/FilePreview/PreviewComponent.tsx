@@ -206,6 +206,7 @@ const PreviewComponent: FunctionComponent<Props> = ({
       <div
         className="h-[clamp(20rem,65vh,48rem)] w-full overflow-hidden"
         data-embedded-pdf-viewport="true"
+        data-super-widget-layout="media"
       >
         {viewer}
       </div>

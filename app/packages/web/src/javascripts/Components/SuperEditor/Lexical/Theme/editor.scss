@@ -130,14 +130,72 @@
     border: 1px solid var(--sn-stylekit-contrast-border-color);
   }
 }
+/*
+ * Super-note visual blocks opt into one of five explicit layout contracts.
+ * There is deliberately no blanket decorator selector: user-sized images,
+ * inline math/bookmarks, footnotes, dividers and page breaks retain their own
+ * dimensions. Attribute specificity also wins over legacy `w-full` utility
+ * classes on the tagged roots without requiring !important.
+ */
+.ContentEditable__root [data-super-widget-layout] {
+  box-sizing: border-box;
+  min-inline-size: 0;
+  max-inline-size: 100%;
+}
+
+.ContentEditable__root [data-super-widget-layout='compact'] {
+  inline-size: fit-content;
+  max-inline-size: min(100%, 42rem);
+}
+
+.ContentEditable__root [data-super-widget-layout='content'] {
+  inline-size: min(100%, 52rem);
+}
+
+.ContentEditable__root [data-super-widget-layout='data'] {
+  inline-size: fit-content;
+  max-inline-size: min(100%, 64rem);
+}
+
+.ContentEditable__root [data-super-widget-layout='canvas'] {
+  inline-size: min(100%, 72rem);
+}
+
+.ContentEditable__root [data-super-widget-layout='media'] {
+  inline-size: min(100%, 64rem);
+}
+
+.ContentEditable__root iframe[data-super-widget-layout='media'] {
+  display: block;
+  block-size: auto;
+  aspect-ratio: 16 / 9;
+}
+
+.ContentEditable__root video[data-super-widget-layout='media'] {
+  display: block;
+  block-size: auto;
+  max-block-size: min(70vh, 48rem);
+}
+
+/* Lexical's wrapper owns horizontal overflow locally. Action menus are portaled
+ * to the editor anchor, so they remain outside this scroll clipping boundary. */
+.Lexical__tableScrollableWrapper {
+  box-sizing: border-box;
+  inline-size: fit-content;
+  max-inline-size: min(100%, 64rem);
+  margin: 0.5rem 0;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+}
+
 .Lexical__table {
   border-collapse: collapse;
   border-spacing: 0;
-  max-width: 100%;
-  overflow-y: scroll;
-  table-layout: fixed;
-  width: calc(100% - 25px);
-  margin: 0.5rem 0;
+  inline-size: max-content;
+  min-inline-size: max-content;
+  max-inline-size: none;
+  table-layout: auto;
+  margin: 0;
   color: var(--sn-stylekit-contrast-foreground-color);
 }
 .Lexical__tableSelection *::selection {
@@ -292,6 +350,32 @@
   width: 20px;
   border-top: 1px solid var(--sn-stylekit-editor-foreground-color);
   animation: CursorBlink 1.1s steps(2, start) infinite;
+}
+
+@media print {
+  .ContentEditable__root [data-super-widget-layout],
+  .Lexical__tableScrollableWrapper {
+    inline-size: 100% !important;
+    max-inline-size: 100% !important;
+  }
+
+  .Lexical__tableScrollableWrapper {
+    overflow: visible !important;
+  }
+
+  .Lexical__table {
+    inline-size: 100% !important;
+    min-inline-size: 0 !important;
+    max-inline-size: 100% !important;
+    table-layout: fixed !important;
+  }
+
+  .Lexical__tableCell,
+  .Lexical__tableCellHeader {
+    min-inline-size: 0 !important;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
 }
 @keyframes CursorBlink {
   to {

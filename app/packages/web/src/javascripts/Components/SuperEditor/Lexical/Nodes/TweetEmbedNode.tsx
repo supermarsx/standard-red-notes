@@ -128,7 +128,11 @@ function TweetEmbedComponent({ data, nodeKey }: { data: TweetEmbedData; nodeKey:
 
   if (editing) {
     return (
-      <div className="border-border bg-default my-2 w-full max-w-full rounded border" data-tweet-embed-block="true">
+      <div
+        className="border-border bg-default my-2 w-full max-w-full rounded border"
+        data-tweet-embed-block="true"
+        data-super-widget-layout="compact"
+      >
         <div className="border-border text-passive-1 flex items-center justify-between border-b px-2 py-1 text-xs">
           <span className="font-semibold">Tweet / X post</span>
         </div>
@@ -164,7 +168,11 @@ function TweetEmbedComponent({ data, nodeKey }: { data: TweetEmbedData; nodeKey:
   }
 
   return (
-    <div className="border-border bg-default my-2 w-full max-w-full rounded border" data-tweet-embed-block="true">
+    <div
+      className="border-border bg-default my-2 w-full max-w-full rounded border"
+      data-tweet-embed-block="true"
+      data-super-widget-layout="compact"
+    >
       <div className="border-border text-passive-1 flex items-center justify-between border-b px-2 py-1 text-xs">
         <span className="font-semibold">Tweet / X post</span>
         <button type="button" className="hover:bg-contrast rounded px-2 py-0.5" onClick={() => setEditing(true)}>

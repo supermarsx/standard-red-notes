@@ -83,6 +83,7 @@ const BlocksEditorTheme: EditorThemeClasses = {
   tableResizeRuler: 'Lexical__tableCellResizeRuler',
   tableSelected: 'Lexical__tableSelected',
   tableSelection: 'Lexical__tableSelection',
+  tableScrollableWrapper: 'Lexical__tableScrollableWrapper',
   text: {
     bold: 'Lexical__textBold',
     code: 'Lexical__textCode',

@@ -81,6 +81,7 @@ export class TweetNode extends DecoratorBlockNode {
   override exportDOM(): DOMExportOutput {
     const element = document.createElement('div')
     element.setAttribute('data-lexical-tweet-id', this.__id)
+    element.setAttribute('data-super-widget-layout', 'compact')
     const text = document.createTextNode(this.getTextContent())
     element.append(text)
     return { element }
@@ -103,7 +104,7 @@ export class TweetNode extends DecoratorBlockNode {
     const link = this.getTextContent()
     return (
       <BlockWithAlignableContents className={className} format={this.__format} nodeKey={this.getKey()}>
-        <a href={link} target="_blank" rel="noreferrer noopener">
+        <a href={link} target="_blank" rel="noreferrer noopener" data-super-widget-layout="compact">
           {link}
         </a>
       </BlockWithAlignableContents>

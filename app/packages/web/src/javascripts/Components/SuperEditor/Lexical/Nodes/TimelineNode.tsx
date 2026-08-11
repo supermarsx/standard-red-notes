@@ -264,7 +264,11 @@ function TimelineComponent({ data, nodeKey }: { data: TimelineData; nodeKey: Nod
   const layouts = range ? computeBarLayouts(data.items, range.min, range.max) : new Map()
 
   return (
-    <div className="border-border bg-default my-2 rounded border" data-timeline-block="true">
+    <div
+      className="border-border bg-default my-2 rounded border"
+      data-timeline-block="true"
+      data-super-widget-layout="data"
+    >
       <div className="border-border text-passive-1 flex items-center justify-between gap-2 border-b px-2 py-1 text-xs">
         <input
           key={`timeline-title-${nodeKey}`}

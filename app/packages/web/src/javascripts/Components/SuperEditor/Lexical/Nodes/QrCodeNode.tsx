@@ -198,7 +198,11 @@ function QrCodeComponent({ data, nodeKey }: { data: QrCodeData; nodeKey: NodeKey
   }, [data.size])
 
   return (
-    <div className="border-border bg-default my-2 rounded border" data-qr-block="true">
+    <div
+      className="border-border bg-default my-2 rounded border"
+      data-qr-block="true"
+      data-super-widget-layout="content"
+    >
       <div className="border-border text-passive-1 flex items-center justify-between gap-2 border-b px-2 py-1 text-xs">
         <span className="font-semibold">QR Code</span>
         <div className="flex items-center gap-1">

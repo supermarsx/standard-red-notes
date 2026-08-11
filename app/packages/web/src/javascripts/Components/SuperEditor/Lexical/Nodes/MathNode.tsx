@@ -55,7 +55,11 @@ function MathComponent({ equation, nodeKey }: { equation: string; nodeKey: NodeK
   }, [draft, editor, nodeKey, render])
 
   return (
-    <div className="border-border bg-default my-2 rounded border" data-math-block="true">
+    <div
+      className="border-border bg-default my-2 rounded border"
+      data-math-block="true"
+      data-super-widget-layout="content"
+    >
       <div className="border-border text-passive-1 flex items-center justify-between border-b px-2 py-1 text-xs">
         <span className="font-semibold">Equation</span>
         <button

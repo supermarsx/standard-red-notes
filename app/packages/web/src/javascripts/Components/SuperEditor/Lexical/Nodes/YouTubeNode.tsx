@@ -35,6 +35,7 @@ function YouTubeComponent({ className, format, nodeKey, videoID }: YouTubeCompon
   return (
     <BlockWithAlignableContents className={className} format={format} nodeKey={nodeKey}>
       <iframe
+        data-super-widget-layout="media"
         width="560"
         height="315"
         src={`https://www.youtube.com/embed/${videoID}`}
@@ -93,6 +94,7 @@ export class YouTubeNode extends DecoratorBlockNode {
   exportDOM(): DOMExportOutput {
     const element = document.createElement('iframe')
     element.setAttribute('data-lexical-youtube', this.__id)
+    element.setAttribute('data-super-widget-layout', 'media')
     element.setAttribute('width', '560')
     element.setAttribute('height', '315')
     element.setAttribute('src', `https://www.youtube.com/embed/${this.__id}`)

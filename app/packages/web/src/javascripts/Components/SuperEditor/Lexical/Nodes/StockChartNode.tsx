@@ -162,7 +162,11 @@ function StockChartComponent({ data, nodeKey }: { data: StockChartData; nodeKey:
   const reloadKey = `${data.symbol}|${data.range}|${dark}`
 
   return (
-    <div className="border-border bg-default my-2 rounded border" data-stock-chart-block="true">
+    <div
+      className="border-border bg-default my-2 rounded border"
+      data-stock-chart-block="true"
+      data-super-widget-layout="media"
+    >
       <div className="border-border text-passive-1 flex flex-wrap items-center justify-between gap-2 border-b px-2 py-1 text-xs">
         <span className="font-semibold">Stock chart</span>
         <div className="flex flex-wrap items-center gap-1">
