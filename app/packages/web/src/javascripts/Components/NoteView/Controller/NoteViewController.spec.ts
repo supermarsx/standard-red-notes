@@ -202,6 +202,63 @@ describe('note view controller', () => {
     expect(flush).not.toHaveBeenCalled()
   })
 
+  it('strict Todo durability retains and retries the exact failed local state before provider flush', async () => {
+    const note = { uuid: 'note-uuid', text: '' } as jest.Mocked<SNNote>
+    application.items.findItem = jest.fn().mockReturnValue(note)
+    application.sessions.isSignedOut = jest.fn().mockReturnValue(false)
+    const localFailure = new Error('local persistence failed')
+    application.mutator.changeItem = jest
+      .fn()
+      .mockRejectedValueOnce(localFailure)
+      .mockRejectedValueOnce(localFailure)
+      .mockResolvedValueOnce(undefined)
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined)
+    const controller = new NoteViewController(
+      note,
+      application.items,
+      application.mutator,
+      application.sync,
+      application.sessions,
+      application.preferences,
+      application.componentManager,
+      application.alerts,
+      application.isNativeMobileWebUseCase,
+    )
+    await controller.initialize()
+
+    const providerFlush = jest.fn().mockResolvedValue(undefined)
+    controller.registerEditorDurabilityFlush(providerFlush)
+    let firstSerialize = true
+    controller.registerEditorFlush(
+      () => {
+        if (!firstSerialize) {
+          return
+        }
+        firstSerialize = false
+        void controller.saveAndAwaitLocalPropagation({
+          text: 'exact serialized checklist state',
+          isUserModified: true,
+          bypassDebouncer: true,
+        })
+      },
+      () => true,
+    )
+
+    await expect(controller.flushAndAwaitPendingSaveStrict()).rejects.toThrow('local persistence failed')
+    expect(providerFlush).not.toHaveBeenCalled()
+    expect(application.mutator.changeItem).toHaveBeenCalledTimes(1)
+
+    await expect(controller.flushAndAwaitPendingSaveStrict()).rejects.toThrow('local persistence failed')
+    expect(providerFlush).not.toHaveBeenCalled()
+    expect(application.mutator.changeItem).toHaveBeenCalledTimes(2)
+
+    await expect(controller.flushAndAwaitPendingSaveStrict()).resolves.toBeUndefined()
+    expect(application.mutator.changeItem).toHaveBeenCalledTimes(3)
+    expect(application.mutator.changeItem).toHaveBeenLastCalledWith(note, expect.any(Function), expect.anything())
+    expect(providerFlush).toHaveBeenCalledTimes(1)
+    consoleError.mockRestore()
+  })
+
   it('security teardown synchronously scrubs a retained vault note and editor callbacks', async () => {
     const disposeItemStream = jest.fn()
     application.items.streamItems = jest.fn().mockReturnValue(disposeItemStream)

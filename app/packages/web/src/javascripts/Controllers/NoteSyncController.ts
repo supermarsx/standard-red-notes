@@ -34,9 +34,29 @@ type SaveOperation = {
   timeout?: ReturnType<typeof setTimeout>
 }
 
+type StrictSaveDrain = {
+  promise: Promise<void>
+  resolve: () => void
+  reject: (reason?: unknown) => void
+}
+
+function createStrictSaveDrain(): StrictSaveDrain {
+  let resolve!: () => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<void>((done, fail) => {
+    resolve = done
+    reject = fail
+  })
+  return { promise, resolve, reject }
+}
+
 export class NoteSyncController {
   savingLocallyPromise: ReturnType<typeof Deferred<void>> | null = null
 
+  private strictSavingLocallyPromise: StrictSaveDrain | null = null
+  private lastStrictLocalPropagationPromise: Promise<void> = Promise.resolve()
+  private localSaveDrainFailed = false
+  private localSaveDrainError: unknown
   private queuedSaveOperation?: SaveOperation
   private saveOperations = new Set<SaveOperation>()
   private largeNoteSyncTimeout?: ReturnType<typeof setTimeout>
@@ -131,13 +151,21 @@ export class NoteSyncController {
       this.settleSaveOperation(operation)
     }
     this.savingLocallyPromise = null
+    this.strictSavingLocallyPromise = null
+    this.lastStrictLocalPropagationPromise = Promise.resolve()
+    this.localSaveDrainFailed = false
+    this.localSaveDrainError = undefined
     this.largeNoteSyncTimeout = undefined
     this.status = undefined
     this.statusChangeTimeout = undefined
     ;(this.item as unknown) = undefined
   }
 
-  private settleSaveOperation(operation: SaveOperation): void {
+  private settleSaveOperation(operation: SaveOperation, failure?: { error: unknown }): void {
+    if (failure && !this.localSaveDrainFailed) {
+      this.localSaveDrainFailed = true
+      this.localSaveDrainError = failure.error
+    }
     if (operation.timeout !== undefined) {
       clearTimeout(operation.timeout)
       operation.timeout = undefined
@@ -152,6 +180,17 @@ export class NoteSyncController {
     if (this.saveOperations.size === 0 && this.savingLocallyPromise) {
       this.savingLocallyPromise.resolve()
       this.savingLocallyPromise = null
+      const strictDrain = this.strictSavingLocallyPromise
+      this.strictSavingLocallyPromise = null
+      if (strictDrain) {
+        if (this.localSaveDrainFailed) {
+          strictDrain.reject(this.localSaveDrainError)
+        } else {
+          strictDrain.resolve()
+        }
+      }
+      this.localSaveDrainFailed = false
+      this.localSaveDrainError = undefined
     }
   }
 
@@ -186,6 +225,12 @@ export class NoteSyncController {
       // operations. Ordinary controller teardown waits on it, so a newer save
       // cannot make an older in-flight mutation invisible to the lifecycle.
       this.savingLocallyPromise = Deferred<void>()
+      this.strictSavingLocallyPromise = createStrictSaveDrain()
+      this.lastStrictLocalPropagationPromise = this.strictSavingLocallyPromise.promise
+      // The strict channel is consumed only by explicit durability boundaries.
+      // Attach a handler immediately so an ordinary editor save cannot create an
+      // unhandled rejection while preserving the original rejecting promise.
+      void this.lastStrictLocalPropagationPromise.catch(() => undefined)
     }
     this.saveOperations.add(operation)
     this.queuedSaveOperation = operation
@@ -232,11 +277,16 @@ export class NoteSyncController {
         },
       }).catch((error) => {
         console.error(error)
-        this.settleSaveOperation(operation)
+        this.settleSaveOperation(operation, { error })
       })
     }, syncDebounceMs)
 
     return operation.completion.promise
+  }
+
+  /** Rejects for the real outcome of the newest local-save drain. */
+  public awaitCurrentLocalPropagationStrict(): Promise<void> {
+    return this.strictSavingLocallyPromise?.promise ?? this.lastStrictLocalPropagationPromise
   }
 
   private queueLargeNoteSyncIfNeeded(): void {

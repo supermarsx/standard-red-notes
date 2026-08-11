@@ -60,6 +60,7 @@ export class NoteViewController implements ItemViewControllerInterface {
    */
   private editorFlush?: () => void
   private editorHasPending?: () => boolean
+  private editorDurabilityFlush?: () => Promise<void>
 
   /**
    * Standard Red Notes (last-edit-loss fix): the promise of the most recent
@@ -69,6 +70,9 @@ export class NoteViewController implements ItemViewControllerInterface {
    * savingLocallyPromise (which is not set until after the template insert resolves).
    */
   private inFlightSavePromise: Promise<void> | null = null
+  private saveAttemptRevision = 0
+  private latestSaveAttempt?: { revision: number; params: NoteSaveFunctionParams }
+  private strictLocalPersistenceFailure?: { revision: number; params: NoteSaveFunctionParams; error: unknown }
 
   // Standard Red Notes (achievements): per-note edit counter for the lifetime of
   // this controller. Each save bumps it; we feed the running count to the
@@ -158,7 +162,10 @@ export class NoteViewController implements ItemViewControllerInterface {
     this.innerValueChangeObservers.length = 0
     this.editorFlush = undefined
     this.editorHasPending = undefined
+    this.editorDurabilityFlush = undefined
     this.inFlightSavePromise = null
+    this.latestSaveAttempt = undefined
+    this.strictLocalPersistenceFailure = undefined
     this.defaultTag = undefined
     this.defaultTagUuid = undefined
     this.templateNoteOptions = undefined
@@ -343,6 +350,15 @@ export class NoteViewController implements ItemViewControllerInterface {
     }
   }
 
+  public registerEditorDurabilityFlush(flush: () => Promise<void>): () => void {
+    this.editorDurabilityFlush = flush
+    return () => {
+      if (this.editorDurabilityFlush === flush) {
+        this.editorDurabilityFlush = undefined
+      }
+    }
+  }
+
   /** True iff the active editor has a serialize mid-debounce (an edit not yet dirty). */
   public editorHasPendingChanges(): boolean {
     if (this.dealloced) {
@@ -390,7 +406,38 @@ export class NoteViewController implements ItemViewControllerInterface {
     // Standard Red Notes (last-edit-loss fix): track the in-flight save so a
     // lifecycle flush can await it (covers the async template-insert gap before the
     // syncController's savingLocallyPromise exists).
-    const promise = this.performSaveAndAwaitLocalPropagation(params)
+    const attempt = {
+      revision: ++this.saveAttemptRevision,
+      params: {
+        ...params,
+        previews: params.previews ? { ...params.previews } : undefined,
+      },
+    }
+    this.latestSaveAttempt = attempt
+    const promise = this.performSaveAndAwaitLocalPropagation(attempt.params)
+    this.inFlightSavePromise = promise
+    try {
+      await promise
+    } finally {
+      if (this.inFlightSavePromise === promise) {
+        this.inFlightSavePromise = null
+      }
+    }
+  }
+
+  private async retryStrictLocalPersistence(attempt: {
+    revision: number
+    params: NoteSaveFunctionParams
+  }): Promise<void> {
+    const retry = {
+      revision: ++this.saveAttemptRevision,
+      params: {
+        ...attempt.params,
+        previews: attempt.params.previews ? { ...attempt.params.previews } : undefined,
+      },
+    }
+    this.latestSaveAttempt = retry
+    const promise = this.syncController.saveAndAwaitLocalPropagation(retry.params)
     this.inFlightSavePromise = promise
     try {
       await promise
@@ -443,6 +490,43 @@ export class NoteViewController implements ItemViewControllerInterface {
         // The save chain rejects on deinit; nothing more to await.
       }
     }
+    await this.editorDurabilityFlush?.()
+  }
+
+  /**
+   * Todo management is a user-visible write acknowledgement, so unlike legacy
+   * note-switch teardown it must fail if local persistence fails. Only report
+   * the checklist action as successful after both the pending local save and
+   * the exact collaboration-provider flush have completed.
+   */
+  public async flushAndAwaitPendingSaveStrict(): Promise<void> {
+    if (this.dealloced) {
+      throw new Error('The note editor was closed before its update could be saved.')
+    }
+
+    this.flushEditorSerialize()
+    const pending = this.inFlightSavePromise
+    await pending
+    const priorFailure = this.strictLocalPersistenceFailure
+    const latestAttempt = this.latestSaveAttempt
+    if (priorFailure && (!latestAttempt || latestAttempt.revision <= priorFailure.revision) && !pending) {
+      await this.retryStrictLocalPersistence(priorFailure)
+    }
+    try {
+      await this.syncController.awaitCurrentLocalPropagationStrict()
+      this.strictLocalPersistenceFailure = undefined
+    } catch (error) {
+      const failedAttempt = this.latestSaveAttempt ?? priorFailure
+      if (failedAttempt) {
+        this.strictLocalPersistenceFailure = {
+          revision: failedAttempt.revision,
+          params: failedAttempt.params,
+          error,
+        }
+      }
+      throw error
+    }
+    await this.editorDurabilityFlush?.()
   }
 
   public get syncStatus(): NoteStatus | undefined {

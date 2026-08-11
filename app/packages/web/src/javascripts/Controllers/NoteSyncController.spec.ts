@@ -176,4 +176,17 @@ describe('NoteSyncController save cancellation', () => {
     expect(drained).toBe(true)
     expect(controller.savingLocallyPromise).toBeNull()
   })
+
+  it('preserves legacy save resolution while exposing the real rejected mutation to strict durability', async () => {
+    const failure = new Error('disk mutation failed')
+    mutator.changeItem.mockRejectedValueOnce(failure)
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    const save = controller.saveAndAwaitLocalPropagation({ text: 'must remain retryable', bypassDebouncer: true })
+    jest.runOnlyPendingTimers()
+
+    await expect(save).resolves.toBeUndefined()
+    await expect(controller.awaitCurrentLocalPropagationStrict()).rejects.toBe(failure)
+    consoleError.mockRestore()
+  })
 })
