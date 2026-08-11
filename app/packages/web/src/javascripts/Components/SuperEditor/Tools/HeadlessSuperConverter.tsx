@@ -21,6 +21,7 @@ import { $dfs } from '@lexical/utils'
 import { $isFileNode } from '../Plugins/EncryptedFilePlugin/Nodes/FileUtils'
 import { $generateNodesFromSerializedNodes, $insertGeneratedNodes } from '@lexical/clipboard'
 import type { PageLayoutOptions } from '../Lexical/Utils/DocExport/PageLayoutOptions'
+import { $projectChecklistDueDatesForPortableExport } from '../Checklist/ChecklistPortableExport'
 
 type SuperConversionConfig = {
   embedBehavior?: PrefValue[PrefKey.SuperNoteExportEmbedBehavior]
@@ -31,6 +32,8 @@ type SuperConversionConfig = {
     /** Standard Red Notes: per-note page numbering / header / footer (from NoteLayout). */
     pageLayout?: PageLayoutOptions
   }
+  /** One stable clock snapshot for every deadline projected by this export. */
+  now?: number
 }
 
 const blobToDataUrl = (blob: Blob): Promise<string> =>
@@ -159,7 +162,12 @@ export class HeadlessSuperConverter implements SuperConverterServiceInterface {
   async convertSuperStringToPDFBlob(superString: string, config?: SuperConversionConfig): Promise<Blob> {
     await this.prepareExportEditor(superString, 'pdf', config)
     const { $generatePDFFromNodes } = await import('../Lexical/Utils/PDFExport/PDFExport')
-    return $generatePDFFromNodes(this.exportEditor, config?.pdf?.pageSize || 'A4', config?.pdf?.pageLayout)
+    return $generatePDFFromNodes(
+      this.exportEditor,
+      config?.pdf?.pageSize || 'A4',
+      config?.pdf?.pageLayout,
+      config?.now ?? Date.now(),
+    )
   }
 
   async convertSuperStringToOtherFormat(
@@ -178,11 +186,15 @@ export class HeadlessSuperConverter implements SuperConverterServiceInterface {
     }
 
     await this.prepareExportEditor(superString, toFormat, config)
+    const exportNow = config?.now ?? Date.now()
 
     let content: string | undefined
 
     await new Promise<void>((resolve) => {
       const convertToFormat = () => {
+        if (toFormat === 'txt' || toFormat === 'md' || toFormat === 'html') {
+          $projectChecklistDueDatesForPortableExport(exportNow)
+        }
         switch (toFormat) {
           case 'txt': {
             // Plain text stripped of ALL formatting: just the document's text

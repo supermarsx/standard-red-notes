@@ -44,8 +44,11 @@ import { SuperCollaborationPlugin, CollaborationConfig } from './Collaboration/C
 import NavigationSidebar from './Plugins/NavigationSidebarPlugin/NavigationSidebarPlugin'
 import { WebApplication } from '@/Application/WebApplication'
 import { CollaborationEditabilityPlugin } from './Collaboration/CollaborationEditabilityPlugin'
+import { isInteractiveChecklistEditorOwner } from './Checklist/ChecklistOwnerMode'
 
 type BlocksEditorProps = {
+  /** Exact note lifetime owned by this composer; required for aggregate todo mutations. */
+  noteUuid?: string
   /**
    * Standard Red Notes (last-edit-loss fix): `bypassDebounce` is true ONLY when the
    * change originates from a lifecycle flush (note-switch/unmount/blur/logout/unload),
@@ -71,9 +74,15 @@ type BlocksEditorProps = {
    * before the controller/tab is torn down. Returns an unregister disposer.
    */
   registerDebounceControl?: (control: { flush: () => void; hasPending: () => boolean }) => () => void
+  checklistOwnerLeaseId?: string
+  persistChanges?: () => Promise<void>
+  backgroundOwner?: boolean
+  isChecklistOwnerActive?: () => boolean
+  onChecklistOwnerReady?: () => void
 }
 
 export const BlocksEditor: FunctionComponent<BlocksEditorProps> = ({
+  noteUuid,
   onChange,
   className,
   children,
@@ -86,7 +95,13 @@ export const BlocksEditor: FunctionComponent<BlocksEditorProps> = ({
   collaboration,
   application,
   registerDebounceControl,
+  checklistOwnerLeaseId,
+  persistChanges,
+  backgroundOwner = false,
+  isChecklistOwnerActive,
+  onChecklistOwnerReady,
 }) => {
+  const interactiveOwner = isInteractiveChecklistEditorOwner(backgroundOwner)
   const [didIgnoreFirstChange, setDidIgnoreFirstChange] = useState(false)
   const collaborationLifetimeKey = collaboration
     ? `${collaboration.room}:${collaboration.editorLease.requestId}`
@@ -233,6 +248,9 @@ export const BlocksEditor: FunctionComponent<BlocksEditorProps> = ({
    * dies — accepted; this is a large improvement over the prior silent no-op loss.
    */
   useEffect(() => {
+    if (!interactiveOwner) {
+      return
+    }
     const handleBeforeUnload = () => {
       flushWithBypass()
     }
@@ -240,7 +258,7 @@ export const BlocksEditor: FunctionComponent<BlocksEditorProps> = ({
     return () => {
       window.removeEventListener('beforeunload', handleBeforeUnload)
     }
-  }, [flushWithBypass])
+  }, [flushWithBypass, interactiveOwner])
 
   const [floatingAnchorElem, setFloatingAnchorElem] = useState<HTMLDivElement | null>(null)
 
@@ -251,6 +269,41 @@ export const BlocksEditor: FunctionComponent<BlocksEditorProps> = ({
   }
 
   const isMobile = useMediaQuery(MutuallyExclusiveMediaQueryBreakpoints.sm)
+
+  if (!interactiveOwner) {
+    return (
+      <>
+        <ListPlugin />
+        <OnChangePlugin onChange={handleChange} ignoreSelectionChange={true} />
+        <CollaborationEditabilityPlugin
+          editable={!readonly && collaborationCanonicalReady}
+          canonicalReady={collaborationCanonicalReady}
+          collaborationLifetimeKey={collaborationLifetimeKey}
+          onCanonicalState={persistCanonicalEditorState}
+        />
+        {collaboration && application ? (
+          <SuperCollaborationPlugin
+            application={application}
+            config={collaboration}
+            checklistOwnerLeaseId={checklistOwnerLeaseId}
+            onCanonicalReadyChange={handleCanonicalReadyChange}
+          />
+        ) : (
+          <SuperHistoryPlugin />
+        )}
+        <CheckListPlugin
+          noteUuid={noteUuid}
+          ownerLeaseId={checklistOwnerLeaseId}
+          flushChanges={flushWithBypass}
+          persistChanges={persistChanges}
+          ownerRole="detached"
+          isOwnerActive={isChecklistOwnerActive}
+          onOwnerReady={onChecklistOwnerReady}
+        />
+        {children}
+      </>
+    )
+  }
 
   return (
     <>
@@ -309,6 +362,7 @@ export const BlocksEditor: FunctionComponent<BlocksEditorProps> = ({
         <SuperCollaborationPlugin
           application={application}
           config={collaboration}
+          checklistOwnerLeaseId={checklistOwnerLeaseId}
           onCanonicalReadyChange={handleCanonicalReadyChange}
         />
       ) : (
@@ -316,7 +370,15 @@ export const BlocksEditor: FunctionComponent<BlocksEditorProps> = ({
       )}
       <HorizontalRulePlugin />
       <ClearEditorPlugin />
-      <CheckListPlugin />
+      <CheckListPlugin
+        noteUuid={noteUuid}
+        ownerLeaseId={checklistOwnerLeaseId}
+        flushChanges={flushWithBypass}
+        persistChanges={persistChanges}
+        ownerRole="interactive"
+        isOwnerActive={isChecklistOwnerActive}
+        onOwnerReady={onChecklistOwnerReady}
+      />
       <CodeHighlightPlugin />
       <LinkPlugin />
       <HashtagPlugin />

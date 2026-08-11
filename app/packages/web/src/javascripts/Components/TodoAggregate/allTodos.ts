@@ -1,4 +1,5 @@
 import { NoteType, SNNote } from '@standardnotes/snjs'
+import { parseSuperChecklistDocument } from './superChecklistDocument'
 
 /**
  * Standard Red Notes: cross-note Todo / checklist aggregate collector.
@@ -31,10 +32,16 @@ import { NoteType, SNNote } from '@standardnotes/snjs'
 
 /** A single todo item extracted from a note, with its checked state. */
 export type TodoItem = {
-  /** Stable-ish id for React keys (source id when available, else positional). */
+  /** Stable persisted ID when available; exact legacy locator until migration. */
   id: string
   text: string
   checked: boolean
+  /** Persisted identity used for mutation/selection; absent only on legacy rows. */
+  todoId?: string
+  /** Exact legacy tree locator used only for guarded one-time identity migration. */
+  locator?: string
+  /** Canonical UTC due instant for Super checklist items. */
+  dueAt?: string
 }
 
 /** All todos from one source note, plus progress, for grouped rendering. */
@@ -50,104 +57,9 @@ export type NoteTodos = {
 // Super checklist parsing (Lexical JSON tree walk)
 // ---------------------------------------------------------------------------
 
-type LexicalNode = {
-  type?: unknown
-  listType?: unknown
-  checked?: unknown
-  text?: unknown
-  children?: unknown
-}
-
-/** Concatenate descendant text nodes of a Lexical node into a plain label. */
-function collectText(node: LexicalNode): string {
-  const pieces: string[] = []
-  const visit = (current: unknown): void => {
-    if (!current || typeof current !== 'object') {
-      return
-    }
-    const record = current as LexicalNode
-    if (typeof record.text === 'string' && record.text.length > 0) {
-      pieces.push(record.text)
-    }
-    if (Array.isArray(record.children)) {
-      for (const child of record.children) {
-        visit(child)
-      }
-    }
-  }
-  // Only descend into children — the listitem's own `text` is not set.
-  if (Array.isArray(node.children)) {
-    for (const child of node.children) {
-      visit(child)
-    }
-  }
-  return pieces.join('').trim()
-}
-
 /** Parse Super check-list items from a note's serialized Lexical text. */
 export function parseSuperChecklist(noteText: string): TodoItem[] {
-  if (!noteText || noteText.length === 0) {
-    return []
-  }
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(noteText)
-  } catch {
-    return []
-  }
-
-  const items: TodoItem[] = []
-  let counter = 0
-
-  const visit = (node: unknown): void => {
-    if (!node || typeof node !== 'object') {
-      return
-    }
-    const record = node as LexicalNode
-    const isCheckList = record.type === 'list' && record.listType === 'check'
-    if (isCheckList && Array.isArray(record.children)) {
-      for (const child of record.children) {
-        if (child && typeof child === 'object' && (child as LexicalNode).type === 'listitem') {
-          const listItem = child as LexicalNode
-          const text = collectText(listItem)
-          // Skip empty list items (e.g. a trailing blank checklist row).
-          if (text.length === 0) {
-            // Still descend in case of nested checklists inside the empty item.
-            if (Array.isArray(listItem.children)) {
-              for (const grandChild of listItem.children) {
-                visit(grandChild)
-              }
-            }
-            continue
-          }
-          counter += 1
-          items.push({
-            id: `super-${counter}`,
-            text,
-            checked: listItem.checked === true,
-          })
-          // Descend for nested checklists within this item.
-          if (Array.isArray(listItem.children)) {
-            for (const grandChild of listItem.children) {
-              if (grandChild && typeof grandChild === 'object' && (grandChild as LexicalNode).type === 'list') {
-                visit(grandChild)
-              }
-            }
-          }
-        }
-      }
-      return
-    }
-    if (Array.isArray(record.children)) {
-      for (const child of record.children) {
-        visit(child)
-      }
-    }
-  }
-
-  const root = (parsed as { root?: unknown })?.root
-  visit(root ?? parsed)
-  return items
+  return parseSuperChecklistDocument(noteText)
 }
 
 // ---------------------------------------------------------------------------
@@ -160,17 +72,25 @@ type RawTask = {
   completed?: unknown
 }
 
+const MAX_ADVANCED_GROUPS = 10_000
+const MAX_ADVANCED_TODOS = 10_000
+const MAX_ADVANCED_LABEL_LENGTH = 16_384
+const MAX_ADVANCED_ID_LENGTH = 256
+
 function parseTask(raw: unknown, index: number): TodoItem | null {
   if (!raw || typeof raw !== 'object') {
     return null
   }
   const task = raw as RawTask
-  const text = typeof task.description === 'string' ? task.description.trim() : ''
+  const text = typeof task.description === 'string' ? task.description.slice(0, MAX_ADVANCED_LABEL_LENGTH).trim() : ''
   if (text.length === 0) {
     return null
   }
   return {
-    id: typeof task.id === 'string' && task.id.length > 0 ? `adv-${task.id}` : `adv-${index}`,
+    id:
+      typeof task.id === 'string' && task.id.length > 0
+        ? `adv-${task.id.slice(0, MAX_ADVANCED_ID_LENGTH)}-${index}`
+        : `adv-${index}`,
     text,
     checked: task.completed === true,
   }
@@ -196,16 +116,23 @@ export function parseAdvancedChecklist(noteText: string): TodoItem[] {
 
   const groups = (parsed as { groups?: unknown }).groups
   if (Array.isArray(groups)) {
-    for (const group of groups) {
+    for (let groupIndex = 0; groupIndex < groups.length && groupIndex < MAX_ADVANCED_GROUPS; groupIndex += 1) {
+      const group = groups[groupIndex]
       const tasks = group && typeof group === 'object' ? (group as { tasks?: unknown }).tasks : undefined
       if (Array.isArray(tasks)) {
         for (const task of tasks) {
+          if (index >= MAX_ADVANCED_TODOS) {
+            break
+          }
           const item = parseTask(task, index)
           index += 1
           if (item) {
             items.push(item)
           }
         }
+      }
+      if (index >= MAX_ADVANCED_TODOS) {
+        break
       }
     }
     return items
@@ -215,6 +142,9 @@ export function parseAdvancedChecklist(noteText: string): TodoItem[] {
   const flatTasks = (parsed as { tasks?: unknown }).tasks
   if (Array.isArray(flatTasks)) {
     for (const task of flatTasks) {
+      if (index >= MAX_ADVANCED_TODOS) {
+        break
+      }
       const item = parseTask(task, index)
       index += 1
       if (item) {

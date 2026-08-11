@@ -12,6 +12,10 @@ import { createRoomCipher } from './RoomCrypto'
 import { MAX_PRESENT_PEERS_PER_ROOM, PresenceRegistry, PresentPeer } from './PresenceRegistry'
 import { getSuperCollaborationAvailability } from './CollaborationAvailability'
 import type { EditorCollaborationLease } from './useCollaborationRoomAccess'
+import {
+  notifyChecklistMutationBridgeReadiness,
+  registerChecklistMutationDurabilityFlusher,
+} from '../Checklist/ChecklistMutationBridge'
 
 export type CollaborationConfig = {
   /** Room id — the note uuid. All collaborators on this note share it. */
@@ -51,6 +55,7 @@ type AwarenessLike = {
 type Props = {
   application: WebApplication
   config: CollaborationConfig
+  checklistOwnerLeaseId?: string
   onCanonicalReadyChange?(ready: boolean): void
 }
 
@@ -104,8 +109,10 @@ export const EphemeralLexicalCollaboration: FunctionComponent<{
 const AvailableSuperCollaborationPlugin: FunctionComponent<Props> = ({
   application,
   config,
+  checklistOwnerLeaseId,
   onCanonicalReadyChange,
 }) => {
+  const effectiveChecklistOwnerLeaseId = checklistOwnerLeaseId ?? config.editorLease.requestId
   const channel = useMemo(() => createGatewayCollabChannel(application), [application])
 
   // The CollaborationPlugin owns the provider lifecycle; we capture the live
@@ -113,6 +120,7 @@ const AvailableSuperCollaborationPlugin: FunctionComponent<Props> = ({
   // app-wide PresenceRegistry that the sidebar reads.
   const providerRef = useRef<EncryptedYjsProvider | null>(null)
   const providerReadinessDisposerRef = useRef<(() => void) | null>(null)
+  const providerDurabilityDisposerRef = useRef<(() => void) | null>(null)
   const pendingProviderDestroyRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   useEffect(() => {
@@ -128,6 +136,8 @@ const AvailableSuperCollaborationPlugin: FunctionComponent<Props> = ({
         pendingProviderDestroyRef.current = undefined
         providerReadinessDisposerRef.current?.()
         providerReadinessDisposerRef.current = null
+        providerDurabilityDisposerRef.current?.()
+        providerDurabilityDisposerRef.current = null
         onCanonicalReadyChange?.(false)
         providerRef.current?.destroy()
         providerRef.current = null
@@ -167,11 +177,37 @@ const AvailableSuperCollaborationPlugin: FunctionComponent<Props> = ({
       providerReadinessDisposerRef.current?.()
       providerReadinessDisposerRef.current = provider.onCanonicalReadyChange((ready) => {
         onCanonicalReadyChange?.(ready)
+        notifyChecklistMutationBridgeReadiness(application)
       })
+      providerDurabilityDisposerRef.current?.()
+      providerDurabilityDisposerRef.current = registerChecklistMutationDurabilityFlusher(
+        application,
+        config.room,
+        effectiveChecklistOwnerLeaseId,
+        async () => {
+          if (!provider.isCanonicalReady() || !provider.isRoomJoined()) {
+            throw new Error('The collaboration provider is not mutation-ready.')
+          }
+          await provider.flush()
+          if (!provider.isCanonicalReady() || !provider.isRoomJoined() || provider.getLastSyncFailure()) {
+            throw new Error('The collaboration provider could not flush this checklist update.')
+          }
+        },
+        () => provider.isCanonicalReady() && provider.isRoomJoined(),
+      )
       providerRef.current = provider
       return provider
     }
-  }, [channel, config.editorLease, config.room, config.roomKey, config.shouldBootstrap, onCanonicalReadyChange])
+  }, [
+    application,
+    channel,
+    config.editorLease,
+    config.room,
+    config.roomKey,
+    config.shouldBootstrap,
+    effectiveChecklistOwnerLeaseId,
+    onCanonicalReadyChange,
+  ])
 
   const awarenessData = useMemo(() => (config.userUuid ? { userUuid: config.userUuid } : undefined), [config.userUuid])
 

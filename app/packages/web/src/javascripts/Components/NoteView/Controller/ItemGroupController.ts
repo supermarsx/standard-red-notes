@@ -7,6 +7,7 @@ import {
   MutatorClientInterface,
   PreferenceServiceInterface,
   SNNote,
+  NoteType,
   SessionsClientInterface,
   SyncServiceInterface,
 } from '@standardnotes/snjs'
@@ -16,6 +17,28 @@ import { TemplateNoteViewControllerOptions } from './TemplateNoteViewControllerO
 import { IsNativeMobileWeb } from '@standardnotes/ui-services'
 
 type ItemControllerGroupChangeCallback = (activeController: NoteViewController | FileViewController | undefined) => void
+
+type ChecklistPrincipal = { signedIn: boolean; user?: object; keySystemIdentifier?: string }
+type VisibleChecklistReservation = {
+  token: object
+  noteUuid: string
+  principal: ChecklistPrincipal
+  generation: number
+  canceled: boolean
+  controller?: NoteViewController
+  ready: boolean
+}
+type DetachedChecklistPreparation = {
+  token: object
+  noteUuid: string
+  principal: ChecklistPrincipal
+  generation: number
+  canceled: boolean
+  promise: Promise<NoteViewController | undefined>
+  resolve: (controller: NoteViewController | undefined) => void
+}
+
+export class ChecklistEditorOwnershipError extends Error {}
 
 export type CreateItemControllerContext = {
   file?: FileItem
@@ -31,6 +54,11 @@ export type CreateItemControllerContext = {
 
 export class ItemGroupController {
   public itemControllers: (NoteViewController | FileViewController)[] = []
+  private readonly detachedNoteControllers = new Set<NoteViewController>()
+  private readonly detachedControllerClosedCallbacks = new Map<NoteViewController, () => void>()
+  private readonly visibleChecklistReservations = new Map<string, Set<VisibleChecklistReservation>>()
+  private readonly detachedChecklistPreparations = new Map<string, DetachedChecklistPreparation>()
+  private checklistSecurityGeneration = 0
   changeObservers: ItemControllerGroupChangeCallback[] = []
   eventObservers: (() => void)[] = []
 
@@ -53,6 +81,7 @@ export class ItemGroupController {
   ) {}
 
   public deinit(): void {
+    this.cancelChecklistEditorReservationsForSecurity()
     ;(this.items as unknown) = undefined
 
     this.eventObservers.forEach((removeObserver) => {
@@ -64,11 +93,38 @@ export class ItemGroupController {
     for (const controller of this.itemControllers) {
       this.closeItemController(controller, { notify: false })
     }
+    for (const controller of this.detachedNoteControllers) {
+      controller.deinitImmediatelyForSecurity()
+      this.notifyDetachedControllerClosed(controller)
+    }
+    this.detachedNoteControllers.clear()
 
     this.itemControllers.length = 0
   }
 
   async createItemController(context: CreateItemControllerContext): Promise<NoteViewController | FileViewController> {
+    const reservation =
+      context.note?.noteType === NoteType.Super ? this.reserveVisibleChecklistOwner(context.note) : undefined
+    try {
+      if (reservation) {
+        // Reserve before any asynchronous outgoing-controller flush so Todo
+        // acquisition cannot mount a second whole-body editor in the gap.
+        await this.releaseDetachedChecklistOwnerForVisibleOpen(reservation)
+        this.assertVisibleChecklistReservationCurrent(reservation)
+      }
+      return await this.createItemControllerAfterChecklistPreflight(context, reservation)
+    } catch (error) {
+      if (reservation) {
+        this.clearVisibleChecklistReservation(reservation)
+      }
+      throw error
+    }
+  }
+
+  private async createItemControllerAfterChecklistPreflight(
+    context: CreateItemControllerContext,
+    reservation?: VisibleChecklistReservation,
+  ): Promise<NoteViewController | FileViewController> {
     /**
      * Default (legacy) behavior replaces the active tile by closing it first, so that
      * selecting a note in the list reuses the single open editor. When `openInNewTile`
@@ -83,7 +139,13 @@ export class ItemGroupController {
        * outgoing editor's pending debounced serialize AND await local propagation
        * (also inserts a brand-new template note) BEFORE closing it.
        */
-      await this.flushAndCloseItemController(this.activeItemViewController)
+      await this.flushAndCloseItemController(
+        this.activeItemViewController,
+        reservation ? () => this.visibleChecklistReservationIsCurrent(reservation) : undefined,
+      )
+      if (reservation) {
+        this.assertVisibleChecklistReservationCurrent(reservation)
+      }
     }
 
     let controller!: NoteViewController | FileViewController
@@ -119,15 +181,282 @@ export class ItemGroupController {
       throw Error('Invalid input to createItemController')
     }
 
+    try {
+      await controller.initialize()
+      if (reservation) {
+        this.assertVisibleChecklistReservationCurrent(reservation)
+      }
+    } catch (error) {
+      removeFromArray(this.itemControllers, controller)
+      if (this.activeControllerRef === controller) {
+        this.activeControllerRef = this.itemControllers[this.itemControllers.length - 1]
+      }
+      if (controller instanceof NoteViewController) {
+        controller.deinitImmediatelyForSecurity()
+      } else {
+        controller.deinit()
+      }
+      throw error
+    }
+
+    if (reservation && controller instanceof NoteViewController) {
+      reservation.controller = controller
+    }
+
+    if (reservation) {
+      this.assertVisibleChecklistReservationCurrent(reservation)
+    }
     this.itemControllers.push(controller)
-
     this.activeControllerRef = controller
-
-    await controller.initialize()
 
     this.notifyObservers()
 
     return controller
+  }
+
+  /** Create an initialized editor owner without changing visible tabs/selection. */
+  async createDetachedNoteController(
+    note: SNNote,
+    onCreated?: (controller: NoteViewController) => (() => void) | undefined,
+  ): Promise<NoteViewController> {
+    const preparation = this.reserveDetachedChecklistOwner(note)
+    const controller = new NoteViewController(
+      note,
+      this.items,
+      this.mutator,
+      this.sync,
+      this.sessions,
+      this.preferences,
+      this.components,
+      this.alerts,
+      this._isNativeMobileWeb,
+    )
+    this.detachedNoteControllers.add(controller)
+    try {
+      await controller.initialize()
+      if (
+        preparation.canceled ||
+        preparation.generation !== this.checklistSecurityGeneration ||
+        this.detachedChecklistPreparations.get(note.uuid)?.token !== preparation.token ||
+        !this.checklistPrincipalIsCurrent(note.uuid, preparation.principal)
+      ) {
+        throw new ChecklistEditorOwnershipError('Checklist editor ownership changed while the source note was loading.')
+      }
+      const onClosed = onCreated?.(controller)
+      if (onClosed) {
+        this.detachedControllerClosedCallbacks.set(controller, onClosed)
+      }
+      this.detachedChecklistPreparations.delete(note.uuid)
+      preparation.resolve(controller)
+      return controller
+    } catch (error) {
+      if (this.detachedChecklistPreparations.get(note.uuid)?.token === preparation.token) {
+        this.detachedChecklistPreparations.delete(note.uuid)
+      }
+      preparation.resolve(undefined)
+      this.detachedNoteControllers.delete(controller)
+      controller.deinitImmediatelyForSecurity()
+      this.notifyDetachedControllerClosed(controller)
+      throw error
+    }
+  }
+
+  async flushAndCloseDetachedNoteController(controller: NoteViewController): Promise<void> {
+    if (!this.detachedNoteControllers.has(controller)) {
+      return
+    }
+    await controller.flushAndAwaitPendingSaveStrict()
+    this.detachedNoteControllers.delete(controller)
+    controller.deinit()
+    this.notifyDetachedControllerClosed(controller)
+  }
+
+  closeDetachedNoteControllerImmediately(controller: NoteViewController): void {
+    if (!this.detachedNoteControllers.delete(controller)) {
+      return
+    }
+    controller.deinitImmediatelyForSecurity()
+    this.notifyDetachedControllerClosed(controller)
+  }
+
+  public hasVisibleChecklistController(noteUuid: string): boolean {
+    return (
+      (this.visibleChecklistReservations.get(noteUuid)?.size ?? 0) > 0 ||
+      this.itemControllers.some(
+        (controller) => controller instanceof NoteViewController && controller.item?.uuid === noteUuid,
+      )
+    )
+  }
+
+  public markVisibleChecklistControllerReady(controller: NoteViewController): void {
+    for (const reservation of this.visibleChecklistReservations.get(controller.item.uuid) ?? []) {
+      if (reservation.controller === controller && this.visibleChecklistReservationIsCurrent(reservation)) {
+        reservation.ready = true
+      }
+    }
+  }
+
+  public cancelChecklistEditorReservationsForSecurity(noteUuid?: string): void {
+    this.checklistSecurityGeneration += 1
+    const visibleEntries = noteUuid
+      ? [[noteUuid, this.visibleChecklistReservations.get(noteUuid)] as const]
+      : [...this.visibleChecklistReservations.entries()]
+    for (const [, reservations] of visibleEntries) {
+      if (!reservations) {
+        continue
+      }
+      for (const reservation of reservations) {
+        reservation.canceled = true
+      }
+    }
+    if (noteUuid) {
+      this.visibleChecklistReservations.delete(noteUuid)
+    } else {
+      this.visibleChecklistReservations.clear()
+    }
+    const detachedEntries = noteUuid
+      ? [[noteUuid, this.detachedChecklistPreparations.get(noteUuid)] as const]
+      : [...this.detachedChecklistPreparations.entries()]
+    for (const [, preparation] of detachedEntries) {
+      if (!preparation) {
+        continue
+      }
+      preparation.canceled = true
+      preparation.resolve(undefined)
+    }
+    if (noteUuid) {
+      this.detachedChecklistPreparations.delete(noteUuid)
+    } else {
+      this.detachedChecklistPreparations.clear()
+    }
+  }
+
+  private captureChecklistPrincipal(note: SNNote): ChecklistPrincipal {
+    let signedIn = false
+    let user: object | undefined
+    try {
+      signedIn = this.sessions.isSignedIn()
+      user = signedIn ? this.sessions.getUser() : undefined
+    } catch {
+      signedIn = false
+    }
+    return { signedIn, user, keySystemIdentifier: note.key_system_identifier }
+  }
+
+  private checklistPrincipalIsCurrent(noteUuid: string, expected: ChecklistPrincipal): boolean {
+    const note = this.items.findItem<SNNote>(noteUuid)
+    if (!note || note.uuid !== noteUuid || note.key_system_identifier !== expected.keySystemIdentifier) {
+      return false
+    }
+    try {
+      const signedIn = this.sessions.isSignedIn()
+      return signedIn === expected.signedIn && (!signedIn || this.sessions.getUser() === expected.user)
+    } catch {
+      return false
+    }
+  }
+
+  private reserveVisibleChecklistOwner(note: SNNote): VisibleChecklistReservation {
+    const reservation: VisibleChecklistReservation = {
+      token: {},
+      noteUuid: note.uuid,
+      principal: this.captureChecklistPrincipal(note),
+      generation: this.checklistSecurityGeneration,
+      canceled: false,
+      ready: false,
+    }
+    let reservations = this.visibleChecklistReservations.get(note.uuid)
+    if (!reservations) {
+      reservations = new Set()
+      this.visibleChecklistReservations.set(note.uuid, reservations)
+    }
+    reservations.add(reservation)
+    return reservation
+  }
+
+  private visibleChecklistReservationIsCurrent(expected: VisibleChecklistReservation): boolean {
+    const reservations = this.visibleChecklistReservations.get(expected.noteUuid)
+    return (
+      !expected.canceled &&
+      expected.generation === this.checklistSecurityGeneration &&
+      Boolean(
+        [...((reservations as Set<VisibleChecklistReservation> | undefined) ?? [])].find(
+          (candidate) => candidate === expected && candidate.token === expected.token,
+        ),
+      ) &&
+      this.checklistPrincipalIsCurrent(expected.noteUuid, expected.principal)
+    )
+  }
+
+  private assertVisibleChecklistReservationCurrent(expected: VisibleChecklistReservation): void {
+    if (!this.visibleChecklistReservationIsCurrent(expected)) {
+      throw new ChecklistEditorOwnershipError('Source-note authorization changed while opening the editor.')
+    }
+  }
+
+  private clearVisibleChecklistReservation(expected: VisibleChecklistReservation): void {
+    expected.canceled = true
+    const reservations = this.visibleChecklistReservations.get(expected.noteUuid)
+    reservations?.delete(expected)
+    if (reservations?.size === 0) {
+      this.visibleChecklistReservations.delete(expected.noteUuid)
+    }
+  }
+
+  private reserveDetachedChecklistOwner(note: SNNote): DetachedChecklistPreparation {
+    if (note.noteType !== NoteType.Super || this.hasVisibleChecklistController(note.uuid)) {
+      throw new ChecklistEditorOwnershipError('The source note is already open in another editor.')
+    }
+    if (
+      this.detachedChecklistPreparations.has(note.uuid) ||
+      [...this.detachedNoteControllers].some((controller) => controller.item?.uuid === note.uuid)
+    ) {
+      throw new ChecklistEditorOwnershipError('A detached source-note editor is already being prepared.')
+    }
+    let resolve!: (controller: NoteViewController | undefined) => void
+    const promise = new Promise<NoteViewController | undefined>((done) => {
+      resolve = done
+    })
+    const preparation: DetachedChecklistPreparation = {
+      token: {},
+      noteUuid: note.uuid,
+      principal: this.captureChecklistPrincipal(note),
+      generation: this.checklistSecurityGeneration,
+      canceled: false,
+      promise,
+      resolve,
+    }
+    this.detachedChecklistPreparations.set(note.uuid, preparation)
+    return preparation
+  }
+
+  private async releaseDetachedChecklistOwnerForVisibleOpen(reservation: VisibleChecklistReservation): Promise<void> {
+    const preparing = this.detachedChecklistPreparations.get(reservation.noteUuid)
+    if (preparing) {
+      await preparing.promise
+    }
+    this.assertVisibleChecklistReservationCurrent(reservation)
+    const conflicts = [...this.detachedNoteControllers].filter(
+      (controller) => controller.item?.uuid === reservation.noteUuid,
+    )
+    for (const controller of conflicts) {
+      try {
+        // The detached owner remains registered/mounted until this strict local
+        // and provider flush succeeds; its exact close callback then clears it.
+        await this.flushAndCloseDetachedNoteController(controller)
+        this.assertVisibleChecklistReservationCurrent(reservation)
+      } catch {
+        throw new ChecklistEditorOwnershipError(
+          'The pending Todo update could not be saved, so the source note was not opened.',
+        )
+      }
+    }
+  }
+
+  private notifyDetachedControllerClosed(controller: NoteViewController): void {
+    const callback = this.detachedControllerClosedCallbacks.get(controller)
+    this.detachedControllerClosedCallbacks.delete(controller)
+    callback?.()
   }
 
   /**
@@ -138,12 +467,21 @@ export class ItemGroupController {
    * a template note the flush goes through saveAndAwaitLocalPropagation, which inserts
    * the template first. File controllers have no editor debounce, so this just closes.
    */
-  private async flushAndCloseItemController(controller: NoteViewController | FileViewController): Promise<void> {
+  private async flushAndCloseItemController(
+    controller: NoteViewController | FileViewController,
+    canContinue?: () => boolean,
+  ): Promise<void> {
     if (controller instanceof NoteViewController) {
       try {
         await controller.flushAndAwaitPendingSave()
+        if (canContinue && !canContinue()) {
+          throw new ChecklistEditorOwnershipError('Source-note authorization changed while opening the editor.')
+        }
       } catch (error) {
         console.error(error)
+        // A live collaboration durability flush failed. Keep the authoritative
+        // controller mounted; closing it would discard its only unsent Y.Doc.
+        throw error
       }
     }
     this.closeItemController(controller, { notify: false })
@@ -153,6 +491,7 @@ export class ItemGroupController {
     controller: NoteViewController | FileViewController,
     { notify = true, securitySensitive = false }: { notify?: boolean; securitySensitive?: boolean } = {},
   ): void {
+    const controllerNoteUuid = controller instanceof NoteViewController ? controller.item?.uuid : undefined
     if (controller instanceof NoteViewController) {
       if (securitySensitive) {
         // Vault keys or authorization are already gone. Do not flush/sync a
@@ -167,6 +506,13 @@ export class ItemGroupController {
     }
 
     removeFromArray(this.itemControllers, controller)
+    if (controller instanceof NoteViewController) {
+      for (const reservation of [...(this.visibleChecklistReservations.get(controllerNoteUuid ?? '') ?? [])]) {
+        if (reservation.controller === controller) {
+          this.clearVisibleChecklistReservation(reservation)
+        }
+      }
+    }
 
     if (this.activeControllerRef === controller) {
       this.activeControllerRef = this.itemControllers[this.itemControllers.length - 1]

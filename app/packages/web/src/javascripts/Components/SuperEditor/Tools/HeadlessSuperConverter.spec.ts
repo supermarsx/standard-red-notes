@@ -7,6 +7,22 @@ jest.mock('../Lexical/Utils/PDFExport/PDFExport', () => ({
 }))
 
 import { HeadlessSuperConverter } from './HeadlessSuperConverter'
+import { $createListItemNode, $createListNode, ListItemNode, ListNode } from '@lexical/list'
+import { $createTextNode, $getRoot, createEditor } from 'lexical'
+import { $setChecklistDueAt } from '../Lexical/Nodes/ChecklistItemNode'
+
+function checklistDocument(): string {
+  const editor = createEditor({ nodes: [ListNode, ListItemNode] })
+  editor.update(
+    () => {
+      const item = $createListItemNode(false).append($createTextNode('Ship release'))
+      $setChecklistDueAt(item, '2099-01-02T03:04:00.000Z')
+      $getRoot().append($createListNode('check').append(item))
+    },
+    { discrete: true },
+  )
+  return JSON.stringify(editor.getEditorState().toJSON())
+}
 
 describe('HeadlessSuperConverter PDF Blob path', () => {
   beforeEach(() => {
@@ -36,5 +52,30 @@ describe('HeadlessSuperConverter PDF Blob path', () => {
 
     expect(result).toMatch(/^data:application\/pdf;base64,/)
     expect(createObjectURL).not.toHaveBeenCalled()
+  })
+})
+
+describe('HeadlessSuperConverter portable checklist exports', () => {
+  afterEach(() => {
+    jest.useRealTimers()
+  })
+
+  it.each(['txt', 'md', 'html'] as const)('includes semantic checklist deadlines in %s output', async (format) => {
+    jest.useFakeTimers().setSystemTime(new Date('2098-01-01T00:00:00.000Z'))
+    const converter = new HeadlessSuperConverter()
+
+    const output = await converter.convertSuperStringToOtherFormat(checklistDocument(), format)
+
+    expect(output).toContain('Ship release')
+    expect(output).toContain('Due ')
+    expect(output).toContain('2099')
+    expect(output.match(/Due /g)).toHaveLength(1)
+  })
+
+  it('leaves the lossless JSON contract unchanged', async () => {
+    const input = checklistDocument()
+    const converter = new HeadlessSuperConverter()
+
+    await expect(converter.convertSuperStringToOtherFormat(input, 'json')).resolves.toBe(input)
   })
 })

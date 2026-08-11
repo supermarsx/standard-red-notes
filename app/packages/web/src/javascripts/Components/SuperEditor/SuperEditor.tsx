@@ -54,6 +54,9 @@ import { EditorEventSource } from '@/Types/EditorEventSource'
 import { ElementIds } from '@/Constants/ElementIDs'
 import { NoteFromSelectionPlugin } from './Plugins/NoteFromSelectionPlugin'
 import { useCollaborationRoomAccess } from './Collaboration/useCollaborationRoomAccess'
+import { flushChecklistMutationDurability } from './Checklist/ChecklistMutationBridge'
+import { createChecklistTodoId } from './Lexical/Nodes/ChecklistItemNode'
+import { isInteractiveChecklistEditorOwner } from './Checklist/ChecklistOwnerMode'
 import { collaboratorColor } from './Collaboration/collaboratorColor'
 import {
   matchesNoteEncryptionIdentity,
@@ -203,6 +206,10 @@ type Props = {
   onBlur?: (event: FocusEvent) => void
   customBackgroundColor?: string
   customTextColor?: string
+  /** Exact editor lifetime used by detached Todo management and provider flushes. */
+  checklistOwnerLeaseId?: string
+  /** Mount only persistence/collaboration; suppress visible and global editor behavior. */
+  backgroundOwner?: boolean
 }
 
 type RetrievedEditorSurfaceOwner = {
@@ -223,7 +230,21 @@ export const SuperEditor: FunctionComponent<Props> = ({
   onBlur,
   customBackgroundColor,
   customTextColor,
+  checklistOwnerLeaseId,
+  backgroundOwner = false,
 }) => {
+  const [generatedChecklistOwnerLeaseId] = useState(createChecklistTodoId)
+  const effectiveChecklistOwnerLeaseId = checklistOwnerLeaseId ?? generatedChecklistOwnerLeaseId
+  const interactiveOwner = isInteractiveChecklistEditorOwner(backgroundOwner)
+  const isChecklistOwnerActive = useCallback(
+    () => backgroundOwner || application.itemControllerGroup.activeItemViewController === controller,
+    [application.itemControllerGroup, backgroundOwner, controller],
+  )
+  const handleChecklistOwnerReady = useCallback(() => {
+    if (!backgroundOwner) {
+      application.itemControllerGroup.markVisibleChecklistControllerReady(controller)
+    }
+  }, [application.itemControllerGroup, backgroundOwner, controller])
   const [initialEditorSurface] = useState<RetrievedEditorSurface>(() => {
     const principal = currentSurfacePrincipal(application)
     const authoritativeNote = application.items.findItem<SNNote>(controller.item.uuid)
@@ -351,6 +372,16 @@ export const SuperEditor: FunctionComponent<Props> = ({
     note: lifetimeNote,
   })
 
+  useEffect(() => {
+    if (!authorizedEditorNote) {
+      return
+    }
+    const noteUuid = authorizedEditorNote.uuid
+    return controller.registerEditorDurabilityFlush(() =>
+      flushChecklistMutationDurability(application, noteUuid, effectiveChecklistOwnerLeaseId),
+    )
+  }, [application, authorizedEditorNote, controller, effectiveChecklistOwnerLeaseId])
+
   const reloadFeatureStatus = useCallback(() => {
     setFeatureStatus(
       application.features.getFeatureStatus(
@@ -415,6 +446,9 @@ export const SuperEditor: FunctionComponent<Props> = ({
       : undefined
 
   useEffect(() => {
+    if (!interactiveOwner) {
+      return
+    }
     return application.commands.addWithShortcut(
       SUPER_SHOW_MARKDOWN_PREVIEW,
       'Super notes',
@@ -422,9 +456,12 @@ export const SuperEditor: FunctionComponent<Props> = ({
       () => setShowMarkdownPreview((s) => !s),
       'markdown',
     )
-  }, [application.commands])
+  }, [application.commands, interactiveOwner])
 
   useEffect(() => {
+    if (!interactiveOwner) {
+      return
+    }
     const platform = application.platform
     const primaryModifier = getPrimaryModifier(application.platform)
 
@@ -458,13 +495,16 @@ export const SuperEditor: FunctionComponent<Props> = ({
         platform: platform,
       },
     ])
-  }, [application.platform, keyboardService])
+  }, [application.platform, interactiveOwner, keyboardService])
 
   const closeMarkdownPreview = useCallback(() => {
     setShowMarkdownPreview(false)
   }, [])
 
   useEffect(() => {
+    if (!interactiveOwner) {
+      return
+    }
     return application.actions.addPayloadRequestHandler((uuid) => {
       const candidate = note.current
       const lifetime = retrievedLifetimeRef.current
@@ -487,7 +527,7 @@ export const SuperEditor: FunctionComponent<Props> = ({
         }
       }
     })
-  }, [application])
+  }, [application, interactiveOwner])
 
   const handleChange = useCallback(
     async (value: string, preview: string, bypassDebounce?: boolean) => {
@@ -877,6 +917,9 @@ export const SuperEditor: FunctionComponent<Props> = ({
   const ref = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
+    if (!interactiveOwner) {
+      return
+    }
     const invalidURLClickFix = (event: MouseEvent) => {
       if ((event.target as HTMLElement).tagName !== 'A') {
         return
@@ -898,7 +941,7 @@ export const SuperEditor: FunctionComponent<Props> = ({
         element.removeEventListener('click', invalidURLClickFix)
       }
     }
-  }, [])
+  }, [interactiveOwner])
 
   const handleFocus = useCallback(
     (event: FocusEvent) => {
@@ -910,7 +953,7 @@ export const SuperEditor: FunctionComponent<Props> = ({
 
   return (
     <div
-      id={ElementIds.SuperEditor}
+      id={interactiveOwner ? ElementIds.SuperEditor : undefined}
       className="font-editor relative flex h-full w-full flex-col"
       style={
         {
@@ -949,6 +992,7 @@ export const SuperEditor: FunctionComponent<Props> = ({
                 collaborating={Boolean(collaboration)}
               >
                 <BlocksEditor
+                  noteUuid={authorizedEditorNote.uuid}
                   onChange={handleChange}
                   className="blocks-editor h-full resize-none"
                   previewLength={SuperNotePreviewCharLimit}
@@ -959,22 +1003,27 @@ export const SuperEditor: FunctionComponent<Props> = ({
                   application={application}
                   collaboration={collaboration}
                   registerDebounceControl={registerDebounceControl}
+                  checklistOwnerLeaseId={effectiveChecklistOwnerLeaseId}
+                  persistChanges={() => controller.flushAndAwaitPendingSaveStrict()}
+                  backgroundOwner={backgroundOwner}
+                  isChecklistOwnerActive={isChecklistOwnerActive}
+                  onChecklistOwnerReady={handleChecklistOwnerReady}
                 >
-                  <ItemSelectionPlugin currentNote={authorizedEditorNote} />
-                  <FilePlugin currentNote={authorizedEditorNote} />
-                  <ItemBubblePlugin />
-                  <GetMarkdownPlugin ref={getMarkdownPlugin} />
+                  {interactiveOwner && <ItemSelectionPlugin currentNote={authorizedEditorNote} />}
+                  {interactiveOwner && <FilePlugin currentNote={authorizedEditorNote} />}
+                  {interactiveOwner && <ItemBubblePlugin />}
+                  {interactiveOwner && <GetMarkdownPlugin ref={getMarkdownPlugin} />}
                   <ChangeContentCallbackPlugin providerCallback={registerChangeEditorFunction} />
-                  <NodeObserverPlugin onChange={handleEditorReferenceChanges} />
+                  {interactiveOwner && <NodeObserverPlugin onChange={handleEditorReferenceChanges} />}
                   {readonly === undefined && (
                     <ReadonlyPlugin
                       note={authorizedEditorNote}
                       forceReadonly={featureStatus !== FeatureStatus.Entitled}
                     />
                   )}
-                  <AutoFocusPlugin isEnabled={controller.isTemplateNote} />
-                  <BlockPickerMenuPlugin />
-                  <NoteFromSelectionPlugin currentNote={authorizedEditorNote} />
+                  {interactiveOwner && <AutoFocusPlugin isEnabled={controller.isTemplateNote} />}
+                  {interactiveOwner && <BlockPickerMenuPlugin />}
+                  {interactiveOwner && <NoteFromSelectionPlugin currentNote={authorizedEditorNote} />}
                 </BlocksEditor>
               </BlocksEditorComposer>
             )}
