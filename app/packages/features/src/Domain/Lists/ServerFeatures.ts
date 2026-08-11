@@ -77,7 +77,7 @@ export function serverFeatures(): ServerFeatureDescription[] {
       name: 'Shared Vaults',
       identifier: NativeFeatureIdentifier.TYPES.SharedVaults,
       permission_name: PermissionName.SharedVaults,
-      availableInRoles: [ADMIN_ROLE_NAME],
+      availableInRoles: [RoleName.NAMES.ProUser, RoleName.NAMES.VaultsUser, ADMIN_ROLE_NAME],
     },
   ]
 }
