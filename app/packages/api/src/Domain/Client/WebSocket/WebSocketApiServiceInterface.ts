@@ -3,5 +3,9 @@ import { WebSocketConnectionTokenResponseBody, CollaborationAuthorizationRespons
 
 export interface WebSocketApiServiceInterface {
   createConnectionToken(): Promise<HttpResponse<WebSocketConnectionTokenResponseBody>>
-  authorizeCollaboration(noteUuid: string): Promise<HttpResponse<CollaborationAuthorizationResponseBody>>
+  authorizeCollaboration(
+    noteUuid: string,
+    leaseRequestId?: string,
+    bootstrapChallenge?: string,
+  ): Promise<HttpResponse<CollaborationAuthorizationResponseBody>>
 }
