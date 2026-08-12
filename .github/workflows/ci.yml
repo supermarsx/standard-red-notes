@@ -746,9 +746,9 @@ jobs:
           test "$(docker image inspect --format '{{.Id}}' standard-red-notes/server:local)" = "$(cat server-image-id.txt)"
           for image in standard-red-notes/app:local standard-red-notes/server:local; do
             test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$image")" = 'linux/amd64'
-            test "$(docker image inspect --format '{{ index .Config.Labels \"org.opencontainers.image.revision\" }}' "$image")" = "$PUBLISH_REVISION"
-            test "$(docker image inspect --format '{{ index .Config.Labels \"org.opencontainers.image.version\" }}' "$image")" = "$PUBLISH_VERSION"
-            test "$(docker image inspect --format '{{ index .Config.Labels \"org.opencontainers.image.source\" }}' "$image")" = "https://github.com/$GITHUB_REPOSITORY"
+            test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image")" = "$PUBLISH_REVISION"
+            test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "$image")" = "$PUBLISH_VERSION"
+            test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.source" }}' "$image")" = "https://github.com/$GITHUB_REPOSITORY"
           done
 
       - name: Log in to GitHub Container Registry
@@ -781,9 +781,9 @@ jobs:
           test "$(docker image inspect --format '{{.Id}}' "$server_ref")" = "$(cat server-image-id.txt)"
           for image in "$app_ref" "$server_ref"; do
             test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$image")" = 'linux/amd64'
-            test "$(docker image inspect --format '{{ index .Config.Labels \"org.opencontainers.image.revision\" }}' "$image")" = "$PUBLISH_REVISION"
-            test "$(docker image inspect --format '{{ index .Config.Labels \"org.opencontainers.image.version\" }}' "$image")" = "$PUBLISH_VERSION"
-            test "$(docker image inspect --format '{{ index .Config.Labels \"org.opencontainers.image.source\" }}' "$image")" = "https://github.com/$GITHUB_REPOSITORY"
+            test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image")" = "$PUBLISH_REVISION"
+            test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "$image")" = "$PUBLISH_VERSION"
+            test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.source" }}' "$image")" = "https://github.com/$GITHUB_REPOSITORY"
           done
           app_digest_ref="$(docker image inspect --format '{{ index .RepoDigests 0 }}' "$app_ref")"
           server_digest_ref="$(docker image inspect --format '{{ index .RepoDigests 0 }}' "$server_ref")"

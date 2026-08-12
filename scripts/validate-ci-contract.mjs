@@ -1297,6 +1297,19 @@ export function validateCiContract(files) {
       `${file}: publish-containers must prove loaded and re-pulled image platforms, found ${publishedPlatformChecks} checks`,
     );
   }
+  for (const label of [
+    "org.opencontainers.image.revision",
+    "org.opencontainers.image.version",
+    "org.opencontainers.image.source",
+  ]) {
+    const template = `--format '{{ index .Config.Labels "${label}" }}'`;
+    const count = activePublisherBlock.split(template).length - 1;
+    if (count !== 2) {
+      errors.push(
+        `${file}: publish-containers must use a shell-safe Docker label template for ${label} before and after publication, found ${count}`,
+      );
+    }
+  }
   for (const forbidden of [
     "pull_request_target",
     "secrets.PAT",
