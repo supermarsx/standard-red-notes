@@ -1055,6 +1055,35 @@ test("container publication proves the built and re-pulled linux architecture", 
   );
 });
 
+test("container publication keeps Docker label templates shell-safe", () => {
+  for (const [label, mutation] of [
+    [
+      "org.opencontainers.image.revision",
+      '{{ index .Config.Labels \\"org.opencontainers.image.revision\\" }}',
+    ],
+    [
+      "org.opencontainers.image.version",
+      '{{ index .Config.Labels \\"org.opencontainers.image.version\\" }}',
+    ],
+    [
+      "org.opencontainers.image.source",
+      '{{ index .Config.Labels \\"org.opencontainers.image.source\\" }}',
+    ],
+  ]) {
+    const escapedQuotes = withCiJobChanged("publish-containers", (block) =>
+      replaceAllRequired(
+        block,
+        `{{ index .Config.Labels "${label}" }}`,
+        mutation,
+      ),
+    );
+    assert.match(
+      validateCiContract(escapedQuotes).join("\n"),
+      new RegExp(`shell-safe Docker label template for ${label.replaceAll(".", "\\.")}`),
+    );
+  }
+});
+
 test("an unbounded exhaustive job is rejected", () => {
   const files = withFileChanged(".github/workflows/ci.yml", (content) => {
     const marker = "  exhaustive-e2e:";
