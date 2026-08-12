@@ -539,6 +539,8 @@
               url: /self-hosting.html#manual-verification
         - title: Start, stop, and upgrade
           url: /self-hosting.html#start-stop-and-upgrade
+        - title: Verified GHCR image pair
+          url: /self-hosting.html#deploy-a-verified-ghcr-image-pair
         - title: Data locations
           url: /self-hosting.html#where-your-data-lives
         - title: Legacy MySQL migration
@@ -659,6 +661,8 @@
           url: /releases-and-upgrades.html#release-streams
         - title: Verify before installation
           url: /releases-and-upgrades.html#verify-before-installation
+        - title: Paired GHCR containers
+          url: /releases-and-upgrades.html#paired-ghcr-appserver-containers
         - title: Desktop and mobile
           url: /releases-and-upgrades.html#desktop-and-mobile
         - title: Self-hosted upgrade sequence
@@ -953,8 +957,8 @@
           url: /ci-production-gates.html
         - title: Required lanes
           url: /ci-production-gates.html#required-lanes
-        - title: Release gates inside publishers
-          url: /ci-production-gates.html#release-gates-inside-publishers
+        - title: Protected publication
+          url: /ci-production-gates.html#protected-publication-after-the-gate
         - title: Extended profiles
           url: /ci-production-gates.html#extended-profiles
         - title: Docker assertions

@@ -24,8 +24,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name }}-${{ (github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'supermarsx/standard-red-notes') && github.run_id || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'push' || github.ref != 'refs/heads/main' || github.repository != 'supermarsx/standard-red-notes' }}
 
 defaults:
   run:
@@ -211,6 +211,12 @@ jobs:
     name: disposable stack, Redis, restore, and hardening
     runs-on: ubuntu-latest
     timeout-minutes: 70
+    outputs:
+      publication_artifact_id: ${{ steps.publication_upload.outputs.artifact-id }}
+      publication_artifact_name: ${{ steps.publication_identity.outputs.artifact_name }}
+      publication_attempt: ${{ steps.publication_identity.outputs.attempt }}
+      publication_tag: ${{ steps.publication_identity.outputs.tag }}
+      publication_version: ${{ steps.publication_identity.outputs.version }}
     env:
       COMPOSE_PROJECT_NAME: srn-ci-${{ github.run_id }}-${{ github.run_attempt }}-smoke
       SRN_DEPLOY_REVISION: ${{ github.sha }}
@@ -260,6 +266,7 @@ jobs:
           context: app
           file: app/Dockerfile
           load: true
+          platforms: linux/amd64
           push: false
           tags: ${{ env.APP_IMAGE }}
           build-args: |
@@ -273,6 +280,7 @@ jobs:
           context: server
           file: server/Dockerfile
           load: true
+          platforms: linux/amd64
           push: false
           tags: ${{ env.SERVER_IMAGE }}
           build-args: |
@@ -348,6 +356,53 @@ jobs:
           --container "db=${COMPOSE_PROJECT_NAME}-db-1"
           --container "cache=${COMPOSE_PROJECT_NAME}-cache-1"
           --container "floci=${COMPOSE_PROJECT_NAME}-floci-1"
+      - name: Resolve retry-stable publication handoff identity
+        id: publication_identity
+        if: >-
+          github.event_name == 'push' &&
+          github.ref == 'refs/heads/main' &&
+          github.repository == 'supermarsx/standard-red-notes'
+        run: |
+          set -euo pipefail
+          case "$GITHUB_RUN_ATTEMPT" in ''|*[!0-9]*) exit 1 ;; esac
+          {
+            echo "attempt=${GITHUB_RUN_ATTEMPT}"
+            echo "artifact_name=container-publication-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            echo "tag=sha-${GITHUB_SHA}-run-${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"
+            echo "version=${SRN_DEPLOY_VERSION}"
+          } >> "$GITHUB_OUTPUT"
+      - name: Export the exact tested app and server images
+        if: >-
+          github.event_name == 'push' &&
+          github.ref == 'refs/heads/main' &&
+          github.repository == 'supermarsx/standard-red-notes'
+        run: |
+          set -euo pipefail
+          publish_dir=container-publication
+          mkdir -p "$publish_dir"
+          for image in "$APP_IMAGE" "$SERVER_IMAGE"; do
+            test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$image")" = 'linux/amd64'
+          done
+          docker save --output "$publish_dir/images.tar" "$APP_IMAGE" "$SERVER_IMAGE"
+          docker image inspect --format '{{.Id}}' "$APP_IMAGE" > "$publish_dir/app-image-id.txt"
+          docker image inspect --format '{{.Id}}' "$SERVER_IMAGE" > "$publish_dir/server-image-id.txt"
+          printf '%s\n' "$SRN_DEPLOY_REVISION" > "$publish_dir/revision.txt"
+          printf '%s\n' "$SRN_DEPLOY_VERSION" > "$publish_dir/version.txt"
+          printf '%s\n' 'linux/amd64' > "$publish_dir/platform.txt"
+          (cd "$publish_dir" && sha256sum images.tar > images.tar.sha256)
+      - name: Upload the exact tested container bundle
+        id: publication_upload
+        if: >-
+          github.event_name == 'push' &&
+          github.ref == 'refs/heads/main' &&
+          github.repository == 'supermarsx/standard-red-notes'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.publication_identity.outputs.artifact_name }}
+          path: container-publication/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
       - name: Collect stack diagnostics
         if: always()
         run: |
@@ -632,3 +687,160 @@ jobs:
             fi
           done
           echo 'All required production lanes passed.'
+
+  publish-containers:
+    name: publish exact tested containers to GHCR
+    needs: [container-smoke, production-gate]
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      github.repository == 'supermarsx/standard-red-notes' &&
+      needs.container-smoke.result == 'success' &&
+      needs.production-gate.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: release-production
+    permissions:
+      actions: read
+      artifact-metadata: write
+      attestations: write
+      contents: read
+      id-token: write
+      packages: write
+    env:
+      GHCR_APP_IMAGE: ghcr.io/supermarsx/standard-red-notes-app
+      GHCR_SERVER_IMAGE: ghcr.io/supermarsx/standard-red-notes-server
+      PUBLISH_ARTIFACT_ID: ${{ needs.container-smoke.outputs.publication_artifact_id }}
+      PUBLISH_ARTIFACT: ${{ needs.container-smoke.outputs.publication_artifact_name }}
+      PUBLISH_ATTEMPT: ${{ needs.container-smoke.outputs.publication_attempt }}
+      PUBLISH_REVISION: ${{ github.sha }}
+      PUBLISH_TAG: ${{ needs.container-smoke.outputs.publication_tag }}
+      PUBLISH_VERSION: ${{ needs.container-smoke.outputs.publication_version }}
+    steps:
+      - name: Validate retry-stable publication handoff identity
+        run: |
+          set -euo pipefail
+          case "$PUBLISH_ARTIFACT_ID" in ''|*[!0-9]*) exit 1 ;; esac
+          case "$PUBLISH_ATTEMPT" in ''|*[!0-9]*) exit 1 ;; esac
+          test "$PUBLISH_ARTIFACT" = "container-publication-${GITHUB_RUN_ID}-${PUBLISH_ATTEMPT}"
+          test "$PUBLISH_TAG" = "sha-${GITHUB_SHA}-run-${GITHUB_RUN_ID}.${PUBLISH_ATTEMPT}"
+          test "$PUBLISH_VERSION" = "ci-${GITHUB_RUN_ID}.${PUBLISH_ATTEMPT}"
+
+      - name: Download the exact tested container bundle
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ env.PUBLISH_ARTIFACT_ID }}
+          digest-mismatch: error
+          path: container-publication
+
+      - name: Verify and load the exact tested images
+        working-directory: container-publication
+        run: |
+          set -euo pipefail
+          test "$(cat revision.txt)" = "$PUBLISH_REVISION"
+          test "$(cat version.txt)" = "$PUBLISH_VERSION"
+          test "$(cat platform.txt)" = 'linux/amd64'
+          sha256sum --check images.tar.sha256
+          docker load --input images.tar
+          test "$(docker image inspect --format '{{.Id}}' standard-red-notes/app:local)" = "$(cat app-image-id.txt)"
+          test "$(docker image inspect --format '{{.Id}}' standard-red-notes/server:local)" = "$(cat server-image-id.txt)"
+          for image in standard-red-notes/app:local standard-red-notes/server:local; do
+            test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$image")" = 'linux/amd64'
+            test "$(docker image inspect --format '{{ index .Config.Labels \"org.opencontainers.image.revision\" }}' "$image")" = "$PUBLISH_REVISION"
+            test "$(docker image inspect --format '{{ index .Config.Labels \"org.opencontainers.image.version\" }}' "$image")" = "$PUBLISH_VERSION"
+            test "$(docker image inspect --format '{{ index .Config.Labels \"org.opencontainers.image.source\" }}' "$image")" = "https://github.com/$GITHUB_REPOSITORY"
+          done
+
+      - name: Log in to GitHub Container Registry
+        id: registry_login
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push the coordinated retry-stable image pair
+        run: |
+          set -euo pipefail
+          docker tag standard-red-notes/app:local "$GHCR_APP_IMAGE:$PUBLISH_TAG"
+          docker tag standard-red-notes/server:local "$GHCR_SERVER_IMAGE:$PUBLISH_TAG"
+          docker push "$GHCR_APP_IMAGE:$PUBLISH_TAG"
+          docker push "$GHCR_SERVER_IMAGE:$PUBLISH_TAG"
+
+      - name: Verify registry digests and image identity
+        id: verify_registry
+        working-directory: container-publication
+        run: |
+          set -euo pipefail
+          app_ref="$GHCR_APP_IMAGE:$PUBLISH_TAG"
+          server_ref="$GHCR_SERVER_IMAGE:$PUBLISH_TAG"
+          docker image rm "$app_ref" "$server_ref"
+          docker pull "$app_ref"
+          docker pull "$server_ref"
+          test "$(docker image inspect --format '{{.Id}}' "$app_ref")" = "$(cat app-image-id.txt)"
+          test "$(docker image inspect --format '{{.Id}}' "$server_ref")" = "$(cat server-image-id.txt)"
+          for image in "$app_ref" "$server_ref"; do
+            test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$image")" = 'linux/amd64'
+            test "$(docker image inspect --format '{{ index .Config.Labels \"org.opencontainers.image.revision\" }}' "$image")" = "$PUBLISH_REVISION"
+            test "$(docker image inspect --format '{{ index .Config.Labels \"org.opencontainers.image.version\" }}' "$image")" = "$PUBLISH_VERSION"
+            test "$(docker image inspect --format '{{ index .Config.Labels \"org.opencontainers.image.source\" }}' "$image")" = "https://github.com/$GITHUB_REPOSITORY"
+          done
+          app_digest_ref="$(docker image inspect --format '{{ index .RepoDigests 0 }}' "$app_ref")"
+          server_digest_ref="$(docker image inspect --format '{{ index .RepoDigests 0 }}' "$server_ref")"
+          case "$app_digest_ref" in "$GHCR_APP_IMAGE@sha256:"*) ;; *) exit 1 ;; esac
+          case "$server_digest_ref" in "$GHCR_SERVER_IMAGE@sha256:"*) ;; *) exit 1 ;; esac
+          {
+            echo "app-digest=${app_digest_ref#*@}"
+            echo "server-digest=${server_digest_ref#*@}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Attest app image provenance
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-name: ${{ env.GHCR_APP_IMAGE }}
+          subject-digest: ${{ steps.verify_registry.outputs.app-digest }}
+          push-to-registry: true
+
+      - name: Attest server image provenance
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-name: ${{ env.GHCR_SERVER_IMAGE }}
+          subject-digest: ${{ steps.verify_registry.outputs.server-digest }}
+          push-to-registry: true
+
+      - name: Verify published image attestations
+        env:
+          APP_DIGEST: ${{ steps.verify_registry.outputs.app-digest }}
+          GH_TOKEN: ${{ github.token }}
+          SERVER_DIGEST: ${{ steps.verify_registry.outputs.server-digest }}
+        run: |
+          set -euo pipefail
+          for subject in \
+            "oci://${GHCR_APP_IMAGE}@${APP_DIGEST}" \
+            "oci://${GHCR_SERVER_IMAGE}@${SERVER_DIGEST}"; do
+            gh attestation verify "$subject" \
+              --bundle-from-oci \
+              --deny-self-hosted-runners \
+              --repo "$GITHUB_REPOSITORY" \
+              --source-digest "$PUBLISH_REVISION" \
+              --source-ref refs/heads/main \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/ci.yml" >/dev/null
+          done
+
+      - name: Record digest-pinned deployment references
+        env:
+          APP_DIGEST: ${{ steps.verify_registry.outputs.app-digest }}
+          SERVER_DIGEST: ${{ steps.verify_registry.outputs.server-digest }}
+        run: |
+          {
+            echo '### Published container pair'
+            echo
+            echo "Coordinated tag: \`${PUBLISH_TAG}\` (linux/amd64)"
+            echo
+            echo "- \`${GHCR_APP_IMAGE}@${APP_DIGEST}\`"
+            echo "- \`${GHCR_SERVER_IMAGE}@${SERVER_DIGEST}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Log out of GitHub Container Registry
+        if: always() && steps.registry_login.outcome == 'success'
+        run: docker logout ghcr.io

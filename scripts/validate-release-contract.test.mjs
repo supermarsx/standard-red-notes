@@ -58,6 +58,14 @@ function withJobChanged(file, jobName, nextJobName, update) {
   });
 }
 
+function withTerminalJobChanged(file, jobName, update) {
+  return withFileChanged(file, (content) => {
+    const start = content.indexOf(`\n  ${jobName}:`);
+    assert.notEqual(start, -1, `${file} must contain ${jobName}`);
+    return `${content.slice(0, start)}${update(content.slice(start))}`;
+  });
+}
+
 test("the repository satisfies the release contract", () => {
   assert.deepEqual(validateReleaseContract(baseline), []);
 });
@@ -3380,15 +3388,16 @@ test("release validation also enforces the CI and Pages action allowlist", () =>
 
 test("normal CI release reporting cannot gain a publisher", () => {
   const file = ".github/workflows/ci.yml";
-  const files = withFileChanged(
-    file,
-    (content) =>
-      `${content}\n# accidental publisher\ngh release create bad-tag\n`,
+  const files = withFileChanged(file, (content) =>
+    content.replace(
+      "      - name: Install release policy dependencies",
+      "      - name: Accidental publisher\n        run: gh release create bad-tag\n      - name: Install release policy dependencies",
+    ),
   );
 
   assert.match(
     validateReleaseContract(files).join("\n"),
-    /normal CI impact reporting must not publish releases \(gh release create\)/,
+    /CI outside publish-containers must not publish releases \(gh release create\)/,
   );
 });
 
@@ -3403,7 +3412,84 @@ test("normal CI release reporting cannot gain publication permissions", () => {
 
   assert.match(
     validateReleaseContract(files).join("\n"),
-    /normal CI impact reporting must not publish releases \(contents: write\)/,
+    /CI outside publish-containers must not publish releases \(contents: write\)/,
+  );
+});
+
+test("container publication remains behind the protected main acceptance boundary", () => {
+  const file = ".github/workflows/ci.yml";
+  const files = withTerminalJobChanged(file, "publish-containers", (content) =>
+    content
+      .replace(
+        "needs: [container-smoke, production-gate]",
+        "needs: [container-smoke]",
+      )
+      .replace("github.ref == 'refs/heads/main'", "github.ref != ''")
+      .replace(
+        "github.repository == 'supermarsx/standard-red-notes'",
+        "github.repository != ''",
+      ),
+  );
+  const errors = validateReleaseContract(files).join("\n");
+
+  assert.match(
+    errors,
+    /missing container acceptance and production-gate fan-in/,
+  );
+  assert.match(errors, /missing main-only container publication/);
+  assert.match(errors, /missing first-party container publication/);
+});
+
+test("container publication preserves non-cancelling retry-stable producer identity", () => {
+  const file = ".github/workflows/ci.yml";
+  const cancellable = withFileChanged(file, (content) =>
+    content
+      .replace(
+        "group: ci-${{ github.event_name }}-${{ (github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'supermarsx/standard-red-notes') && github.run_id || github.event.pull_request.number || github.ref }}",
+        "group: ci-${{ github.event.pull_request.number || github.ref }}",
+      )
+      .replace(
+        "cancel-in-progress: ${{ github.event_name != 'push' || github.ref != 'refs/heads/main' || github.repository != 'supermarsx/standard-red-notes' }}",
+        "cancel-in-progress: true",
+      ),
+  );
+  const concurrencyErrors = validateReleaseContract(cancellable).join("\n");
+  assert.match(
+    concurrencyErrors,
+    /missing run-isolated protected-main CI concurrency/,
+  );
+  assert.match(
+    concurrencyErrors,
+    /missing non-cancelling protected-main container publication/,
+  );
+
+  const currentAttempt = withTerminalJobChanged(
+    file,
+    "publish-containers",
+    (content) =>
+      content.replace(
+        "PUBLISH_ATTEMPT: ${{ needs.container-smoke.outputs.publication_attempt }}",
+        "PUBLISH_ATTEMPT: ${{ github.run_attempt }}",
+      ),
+  );
+  assert.match(
+    validateReleaseContract(currentAttempt).join("\n"),
+    /must reuse producer identity across failed-job reruns/,
+  );
+});
+
+test("protected container publication cannot execute repository code", () => {
+  const file = ".github/workflows/ci.yml";
+  const files = withTerminalJobChanged(file, "publish-containers", (content) =>
+    content.replace(
+      "      - name: Download the exact tested container bundle",
+      `      - uses: ${approvedWorkflowAction("checkout")}\n      - name: Download the exact tested container bundle`,
+    ),
+  );
+
+  assert.match(
+    validateReleaseContract(files).join("\n"),
+    /protected container publisher must not check out repository code/,
   );
 });
 
