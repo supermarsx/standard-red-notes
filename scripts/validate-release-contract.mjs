@@ -439,6 +439,19 @@ function jobBlock(workflow, jobName) {
   return nextJob < 0 ? remainder : remainder.slice(0, nextJob);
 }
 
+function workflowWithoutJob(workflow, jobName) {
+  const marker = `\n  ${jobName}:`;
+  const start = workflow.indexOf(marker);
+  if (start < 0) {
+    return workflow;
+  }
+
+  const remainder = workflow.slice(start + marker.length);
+  const nextJob = remainder.search(/\r?\n  [A-Za-z0-9_-]+:\r?\n/);
+  const end = nextJob < 0 ? workflow.length : start + marker.length + nextJob;
+  return `${workflow.slice(0, start)}${workflow.slice(end)}`;
+}
+
 function workflowJobNames(workflow) {
   const marker = "\njobs:\n";
   const start = workflow.replaceAll("\r\n", "\n").indexOf(marker);
@@ -6905,6 +6918,78 @@ export function validateReleaseContract(files) {
       `${normalCiFile}: normal CI must install release-policy dependencies before impact reporting`,
     );
   }
+  for (const [fragment, description] of [
+    [
+      "group: ci-${{ github.event_name }}-${{ (github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'supermarsx/standard-red-notes') && github.run_id || github.event.pull_request.number || github.ref }}",
+      "run-isolated protected-main CI concurrency",
+    ],
+    [
+      "cancel-in-progress: ${{ github.event_name != 'push' || github.ref != 'refs/heads/main' || github.repository != 'supermarsx/standard-red-notes' }}",
+      "non-cancelling protected-main container publication",
+    ],
+  ]) {
+    requireFragment(errors, normalCiFile, normalCi, fragment, description);
+  }
+  const normalCiPublisher = jobBlock(normalCi, "publish-containers");
+  for (const [fragment, description] of [
+    [
+      "needs: [container-smoke, production-gate]",
+      "container acceptance and production-gate fan-in",
+    ],
+    ["github.event_name == 'push'", "push-only container publication"],
+    ["github.ref == 'refs/heads/main'", "main-only container publication"],
+    [
+      "github.repository == 'supermarsx/standard-red-notes'",
+      "first-party container publication",
+    ],
+    [
+      "needs.production-gate.result == 'success'",
+      "successful production gate publication boundary",
+    ],
+    ["environment: release-production", "protected container environment"],
+    ["packages: write", "job-scoped GHCR authority"],
+    [
+      "PUBLISH_ARTIFACT_ID: ${{ needs.container-smoke.outputs.publication_artifact_id }}",
+      "producer artifact identity",
+    ],
+    [
+      "PUBLISH_ATTEMPT: ${{ needs.container-smoke.outputs.publication_attempt }}",
+      "producer retry attempt identity",
+    ],
+    [
+      "PUBLISH_TAG: ${{ needs.container-smoke.outputs.publication_tag }}",
+      "retry-stable coordinated container identity",
+    ],
+    [
+      "artifact-ids: ${{ env.PUBLISH_ARTIFACT_ID }}",
+      "current-run producer artifact handoff",
+    ],
+    ["ghcr.io/supermarsx/standard-red-notes-app", "app GHCR target"],
+    ["ghcr.io/supermarsx/standard-red-notes-server", "server GHCR target"],
+  ]) {
+    requireFragment(
+      errors,
+      normalCiFile,
+      normalCiPublisher,
+      fragment,
+      description,
+    );
+  }
+  if (normalCiPublisher.includes("actions/checkout")) {
+    errors.push(
+      `${normalCiFile}: protected container publisher must not check out repository code`,
+    );
+  }
+  if (normalCiPublisher.includes("${{ github.run_attempt }}")) {
+    errors.push(
+      `${normalCiFile}: protected container publisher must reuse producer identity across failed-job reruns`,
+    );
+  }
+
+  const normalCiWithoutPublisher = workflowWithoutJob(
+    normalCi,
+    "publish-containers",
+  );
   for (const forbiddenPublisher of [
     "contents: write",
     "packages: write",
@@ -6914,12 +6999,13 @@ export function validateReleaseContract(files) {
     "npm publish",
     "yarn npm publish",
     "docker push",
+    "push: true",
     "fastlane android prod",
     "fastlane ios prod",
   ]) {
-    if (normalCi.includes(forbiddenPublisher)) {
+    if (normalCiWithoutPublisher.includes(forbiddenPublisher)) {
       errors.push(
-        `${normalCiFile}: normal CI impact reporting must not publish releases (${forbiddenPublisher})`,
+        `${normalCiFile}: CI outside publish-containers must not publish releases (${forbiddenPublisher})`,
       );
     }
   }

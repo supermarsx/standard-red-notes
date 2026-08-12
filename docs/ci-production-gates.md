@@ -7,10 +7,13 @@ description: Required, scheduled, and manually dispatched validation for product
 
 {% include mermaid.html %}
 
-The root [CI workflow](../.github/workflows/ci.yml) is the non-publishing
-production gate for the complete repository. It runs on every pull request and
-push to `main`, uses read-only repository permissions, and does not publish
-packages, images, tags, releases, or deployment artifacts.
+The root [CI workflow](../.github/workflows/ci.yml) is the production gate for
+the complete repository. Pull requests, schedules, manual dispatches, and
+non-main repositories never publish containers. Only a first-party push to
+`main` can hand the exact tested image pair to the isolated
+`publish-containers` job after every required lane succeeds. All build and test
+jobs keep read-only repository permissions; registry, identity-token, and
+attestation authority exists only on that protected publisher.
 
 The stable branch-protection check is `production-gate`. It fails unless every
 required lane succeeds; a failed, cancelled, or skipped dependency cannot turn
@@ -18,14 +21,15 @@ the fan-in green.
 
 ## Required Lanes
 
-| Lane               | Contract                                                                                                                                                                                                                                                                                                                               | Timeout |
-| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------: |
-| `contracts`        | Immutable root install; fail-closed production dependency audits for every committed lock domain; CI validator tests; release impact, fingerprint, comparator, packaging-invocation, target, and artifact contracts; generated docs/search freshness, link/navigation integrity, Mermaid rendering; actionlint over root workflows.    |  12 min |
-| `check`            | Immutable installs in the root, app, and server projects, followed by the coordinated type, lint, format, and test gate.                                                                                                                                                                                                               |  45 min |
-| `build`            | A second clean set of immutable installs followed by the coordinated MCP, OpenClaw, app, and server build.                                                                                                                                                                                                                             |  45 min |
-| `desktop-electron` | A production desktop build followed by the seven real Electron suites under Xvfb. The guarded runner requires the built entry point and cannot silently fall back to skipped headless tests.                                                                                                                                           |  45 min |
-| `container-smoke`  | Hadolint, exact clean-commit BuildKit image identity, immutable app/server marker and OCI-label equality, an isolated Compose stack, required encrypted two-editor online/offline convergence, Chromium app-open checks, bounded parallel sync and Redis operations, MariaDB backup/restore, and image/container hardening assertions. |  70 min |
-| `production-gate`  | Fail-closed fan-in for all five implementation lanes above.                                                                                                                                                                                                                                                                            |   5 min |
+| Lane                 | Contract                                                                                                                                                                                                                                                                                                                               | Timeout |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------: |
+| `contracts`          | Immutable root install; fail-closed production dependency audits for every committed lock domain; CI validator tests; release impact, fingerprint, comparator, packaging-invocation, target, and artifact contracts; generated docs/search freshness, link/navigation integrity, Mermaid rendering; actionlint over root workflows.    |  12 min |
+| `check`              | Immutable installs in the root, app, and server projects, followed by the coordinated type, lint, format, and test gate.                                                                                                                                                                                                               |  45 min |
+| `build`              | A second clean set of immutable installs followed by the coordinated MCP, OpenClaw, app, and server build.                                                                                                                                                                                                                             |  45 min |
+| `desktop-electron`   | A production desktop build followed by the seven real Electron suites under Xvfb. The guarded runner requires the built entry point and cannot silently fall back to skipped headless tests.                                                                                                                                           |  45 min |
+| `container-smoke`    | Hadolint, exact clean-commit BuildKit image identity, immutable app/server marker and OCI-label equality, an isolated Compose stack, required encrypted two-editor online/offline convergence, Chromium app-open checks, bounded parallel sync and Redis operations, MariaDB backup/restore, and image/container hardening assertions. |  70 min |
+| `production-gate`    | Fail-closed fan-in for all five implementation lanes above.                                                                                                                                                                                                                                                                            |   5 min |
+| `publish-containers` | On an accepted first-party `main` push only, verify and publish the exact app/server archive produced by `container-smoke`, re-pull both images, verify their identities and labels, attest both registry digests, and record digest-pinned deployment references.                                                                     |  45 min |
 
 The required browser selection contains three app-open tests and one combined
 sync/Redis test. The generated JSON report must contain at least four expected
@@ -58,16 +62,48 @@ permanent suppression list. The app graph contract additionally preserves the
 loopback-only embedded server patch, patched PDF.js, and both supported
 fast-xml-parser major lines.
 
-## Release gates inside publishers
+## Protected publication after the gate
 
-Normal CI never publishes. Each of the eight product publishers independently
-checks out complete history, validates the repository release contract before
-impact analysis, selects an ancestry-safe product baseline, builds only after a
-managed source/configuration change, and compares its product-specific release
-surface plus named packaging contract with the exact prior fingerprint assets.
-For mobile, that comparison is a deterministic pre-sign source/configuration
-and toolchain identity; signed APK, AAB, and IPA bytes are validated and
-checksummed separately before publication.
+The app and server are published together for `linux/amd64` as:
+
+- `ghcr.io/supermarsx/standard-red-notes-app`
+- `ghcr.io/supermarsx/standard-red-notes-server`
+
+Both receive the same unique, non-floating, retry-stable
+`sha-<40-character-commit>-run-<run-id>.<producer-attempt>` tag. A failed-job
+rerun consumes the successful producer job's original artifact ID and identity,
+so it safely repairs a partial push with the same tested bytes. Protected-main
+push runs cannot cancel one another, and other event classes use separate
+concurrency groups.
+
+The workflow creates no `latest` or `main` tag. The container lane saves the
+locally tested image IDs, deployment revision/version labels, platform, archive,
+and SHA-256 checksum. The protected publisher does not check out or execute
+repository code: it verifies and loads that same-run archive, uses the built-in
+`GITHUB_TOKEN` to push, re-pulls both coordinates, proves the remote image IDs
+and OCI labels still match, publishes GitHub build-provenance attestations, and
+verifies those attestations before reporting digest-pinned references. A
+package owner may make the GHCR packages public once if anonymous pulls are
+required; the workflow never relaxes package visibility itself.
+
+The pair becomes consumable only when `publish-containers` succeeds and the
+workflow summary contains both digest-qualified references. A failed partial
+tag is not a release. The exact-image handoff is retained for one day; during
+that window, use GitHub's rerun-failed-jobs operation. If it has expired, rerun
+the complete CI workflow so `container-smoke` produces a new coordinated
+attempt. This container-only recovery rule does not replace the stricter
+same-evidence retry rules for signed product publishers below.
+
+This coordinated container publication is continuous deployment input, not a
+ninth versioned product release: it creates neither a Git tag nor a GitHub
+Release. Each of the eight versioned product publishers independently checks
+out complete history, validates the repository release contract before impact
+analysis, selects an ancestry-safe product baseline, builds only after a managed
+source/configuration change, and compares its product-specific release surface
+plus named packaging contract with the exact prior fingerprint assets. For
+mobile, that comparison is a deterministic pre-sign source/configuration and
+toolchain identity; signed APK, AAB, and IPA bytes are validated and checksummed
+separately before publication.
 
 The release-policy JavaScript is parsed with the public, exact
 `@babel/parser` dependency declared in `scripts/package.json` and locked in
@@ -80,6 +116,10 @@ they can change how every semantic policy partition is interpreted.
 ```mermaid
 flowchart TD
   C[Normal CI contracts lane] --> R[Read-only repository release report]
+  D[Container smoke image pair] --> G[Production gate]
+  G --> H{First-party push to protected main?}
+  H -- No --> S
+  H -- Yes --> Q[Protected exact-image GHCR publication and attestation]
   E[Bounded publisher event] --> V[Validate complete release contract]
   V --> I{Owned source or configuration changed?}
   I -- No --> S[Skip]
@@ -195,7 +235,10 @@ The default production stack is validated at three levels:
    constrained by memory and PID limits.
 
 BuildKit's GitHub Actions cache is shared by the required and extended lanes.
-No image step has push enabled.
+The image build steps have `push: false`; they cannot write to a registry. On an
+accepted first-party `main` run, `container-smoke` exports the exact images only
+after their live acceptance checks pass. The later no-checkout publisher alone
+can push that verified archive to GHCR.
 
 ## Local Validation
 

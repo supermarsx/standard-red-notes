@@ -24,6 +24,11 @@ export const CI_CONTRACT_FILES = Object.freeze([
 ]);
 
 export const CI_PAGES_ACTIONS = Object.freeze({
+  attestBuildProvenance: Object.freeze({
+    action: "actions/attest-build-provenance",
+    sha: "0f67c3f4856b2e3261c31976d6725780e5e4c373",
+    version: "v4.1.1",
+  }),
   cache: Object.freeze({
     action: "actions/cache",
     sha: "55cc8345863c7cc4c66a329aec7e433d2d1c52a9",
@@ -53,6 +58,11 @@ export const CI_PAGES_ACTIONS = Object.freeze({
     action: "actions/jekyll-build-pages",
     sha: "44a6e6beabd48582f863aeeb6cb2151cc1716697",
     version: "v1.0.13",
+  }),
+  loginRegistry: Object.freeze({
+    action: "docker/login-action",
+    sha: "af1e73f918a031802d376d3c8bbc3fe56130a9b0",
+    version: "v4.4.0",
   }),
   setupBuildx: Object.freeze({
     action: "docker/setup-buildx-action",
@@ -306,9 +316,9 @@ export function validateSetupOverwriteContract(shellSetup, powershellSetup) {
       continue;
     }
     for (let index = 0; index < 3; index += 1) {
-      if (!(
-        resolves[index] < builds[index] && builds[index] < verifies[index]
-      )) {
+      if (
+        !(resolves[index] < builds[index] && builds[index] < verifies[index])
+      ) {
         errors.push(
           `${file}: deployment identity must resolve before build and verify after start`,
         );
@@ -367,6 +377,31 @@ function jobBlock(workflow, jobName) {
   return nextJob < 0 ? remainder : remainder.slice(0, nextJob);
 }
 
+function workflowWithoutJob(workflow, jobName) {
+  const marker = `\n  ${jobName}:`;
+  const start = workflow.indexOf(marker);
+  if (start < 0) {
+    return workflow;
+  }
+
+  const remainder = workflow.slice(start + marker.length);
+  const nextJob = remainder.search(/\r?\n  [A-Za-z0-9_-]+:\r?\n/);
+  const end = nextJob < 0 ? workflow.length : start + marker.length + nextJob;
+  return `${workflow.slice(0, start)}${workflow.slice(end)}`;
+}
+
+function namedStepBlock(job, stepName) {
+  const marker = `\n      - name: ${stepName}`;
+  const start = job.indexOf(marker);
+  if (start < 0) {
+    return "";
+  }
+
+  const remainder = job.slice(start + marker.length);
+  const nextStep = remainder.search(/\r?\n      - (?:name|uses|run):/);
+  return nextStep < 0 ? remainder : remainder.slice(0, nextStep);
+}
+
 function requireJob(errors, workflow, jobName, fragments) {
   const file = ".github/workflows/ci.yml";
   const block = jobBlock(workflow, jobName);
@@ -398,12 +433,18 @@ export function validateMcpReleaseDependencyContract(workflow) {
     requireFragment(errors, file, workflow, fragment, description);
   }
 
+  const nonPublishingWorkflow = workflowWithoutJob(
+    workflow,
+    "publish-containers",
+  );
   for (const [pattern, description] of [
     [/\bnpm\s+install\b[^\r\n]*--no-package-lock\b/, "unlocked npm install"],
     [/\byarn\s+install\b(?!\s+--immutable\b)/, "non-immutable Yarn install"],
   ]) {
-    if (pattern.test(workflow)) {
-      errors.push(`${file}: forbidden ${description}`);
+    if (pattern.test(nonPublishingWorkflow)) {
+      errors.push(
+        `${file}: forbidden ${description} outside publish-containers`,
+      );
     }
   }
   for (const line of workflow.split(/\r?\n/)) {
@@ -617,7 +658,14 @@ export function validateCiContract(files) {
     ["workflow_dispatch:", "manual trigger"],
     ["profile:", "manual validation profile"],
     ["\npermissions:\n  contents: read", "read-only contents permission"],
-    ["cancel-in-progress: true", "superseded-run cancellation"],
+    [
+      "group: ci-${{ github.event_name }}-${{ (github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'supermarsx/standard-red-notes') && github.run_id || github.event.pull_request.number || github.ref }}",
+      "run-isolated protected-main workflow concurrency",
+    ],
+    [
+      "cancel-in-progress: ${{ github.event_name != 'push' || github.ref != 'refs/heads/main' || github.repository != 'supermarsx/standard-red-notes' }}",
+      "non-cancelling protected-main publication",
+    ],
   ]) {
     requireFragment(errors, file, workflow, fragment, description);
   }
@@ -625,6 +673,17 @@ export function validateCiContract(files) {
   for (const [pattern, description] of [
     [/continue-on-error\s*:/, "continue-on-error"],
     [/\|\|\s*true/, "silent shell success fallback"],
+  ]) {
+    if (pattern.test(workflow)) {
+      errors.push(`${file}: forbidden ${description}`);
+    }
+  }
+
+  const workflowWithoutContainerPublisher = workflowWithoutJob(
+    workflow,
+    "publish-containers",
+  );
+  for (const [pattern, description] of [
     [/contents:\s*write/, "contents write permission"],
     [/packages:\s*write/, "packages write permission"],
     [/id-token:\s*write/, "id-token write permission"],
@@ -634,8 +693,10 @@ export function validateCiContract(files) {
     [/\bdocker\s+push\b/, "Docker push command"],
     [/push:\s*true/, "image push setting"],
   ]) {
-    if (pattern.test(workflow)) {
-      errors.push(`${file}: forbidden ${description}`);
+    if (pattern.test(workflowWithoutContainerPublisher)) {
+      errors.push(
+        `${file}: forbidden ${description} outside publish-containers`,
+      );
     }
   }
 
@@ -805,6 +866,49 @@ export function validateCiContract(files) {
     ["--min-expected 4 --max-skipped 0", "zero-skip report assertion"],
     ["yarn ops:backup-restore", "backup and restore drill"],
     ["yarn ci:docker-hardening", "live hardening validation"],
+    ["platforms: linux/amd64", "explicit image build platform"],
+    [
+      "publication_artifact_id: ${{ steps.publication_upload.outputs.artifact-id }}",
+      "immutable container artifact ID output",
+    ],
+    [
+      "publication_artifact_name: ${{ steps.publication_identity.outputs.artifact_name }}",
+      "retry-stable container artifact name output",
+    ],
+    [
+      "publication_attempt: ${{ steps.publication_identity.outputs.attempt }}",
+      "producer attempt output",
+    ],
+    [
+      "publication_tag: ${{ steps.publication_identity.outputs.tag }}",
+      "retry-stable container tag output",
+    ],
+    [
+      "publication_version: ${{ steps.publication_identity.outputs.version }}",
+      "retry-stable container version output",
+    ],
+    [
+      "Resolve retry-stable publication handoff identity",
+      "producer-owned publication identity",
+    ],
+    ["id: publication_upload", "container artifact upload identity"],
+    [
+      "Export the exact tested app and server images",
+      "post-hardening exact image export",
+    ],
+    ["docker save --output", "exact Docker archive export"],
+    ["sha256sum images.tar", "container archive checksum"],
+    [
+      "artifact_name=container-publication-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}",
+      "run-bound container handoff artifact",
+    ],
+    [
+      "tag=sha-${GITHUB_SHA}-run-${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}",
+      "producer-owned coordinated image tag",
+    ],
+    ["{{.Os}}/{{.Architecture}}", "tested image platform assertion"],
+    ["compression-level: 0", "non-recompressed Docker archive handoff"],
+    ["retention-days: 1", "bounded container handoff retention"],
     ["org.opencontainers.image.revision", "live OCI revision assertion"],
     ["org.opencontainers.image.version", "live OCI version assertion"],
     [
@@ -829,6 +933,97 @@ export function validateCiContract(files) {
     ],
     ["if-no-files-found: error", "required diagnostics artifact"],
   ]);
+
+  const containerSmokeBlock = jobBlock(workflow, "container-smoke");
+  const activeContainerSmokeBlock = containerSmokeBlock.replace(
+    /^\s*#.*$/gm,
+    "",
+  );
+  if (
+    activeContainerSmokeBlock.split("platforms: linux/amd64").length - 1 !==
+    2
+  ) {
+    errors.push(
+      `${file}: container-smoke must build exactly two linux/amd64 images`,
+    );
+  }
+  if (
+    activeContainerSmokeBlock.split("{{.Os}}/{{.Architecture}}").length - 1 !==
+    1
+  ) {
+    errors.push(
+      `${file}: container-smoke must prove the platform of both exported images exactly once`,
+    );
+  }
+  for (const [line, description] of [
+    [
+      "publication_artifact_id: ${{ steps.publication_upload.outputs.artifact-id }}",
+      "artifact ID output",
+    ],
+    [
+      "publication_artifact_name: ${{ steps.publication_identity.outputs.artifact_name }}",
+      "artifact name output",
+    ],
+    [
+      "publication_attempt: ${{ steps.publication_identity.outputs.attempt }}",
+      "producer attempt output",
+    ],
+    [
+      "publication_tag: ${{ steps.publication_identity.outputs.tag }}",
+      "producer tag output",
+    ],
+    [
+      "publication_version: ${{ steps.publication_identity.outputs.version }}",
+      "producer version output",
+    ],
+  ]) {
+    const count = activeContainerSmokeBlock
+      .split(/\r?\n/)
+      .filter((candidate) => candidate.trim() === line).length;
+    if (count !== 1) {
+      errors.push(
+        `${file}: container-smoke must contain exactly 1 active ${description}, found ${count}`,
+      );
+    }
+  }
+  for (const [fragment, expectedCount, description] of [
+    ["github.event_name == 'push'", 3, "main-push archive event guard"],
+    ["github.ref == 'refs/heads/main'", 3, "main branch archive guard"],
+    [
+      "github.repository == 'supermarsx/standard-red-notes'",
+      3,
+      "first-party archive guard",
+    ],
+  ]) {
+    const count = activeContainerSmokeBlock.split(fragment).length - 1;
+    if (count !== expectedCount) {
+      errors.push(
+        `${file}: container-smoke must apply the ${description} exactly ${expectedCount} times, found ${count}`,
+      );
+    }
+  }
+  const hardeningIndex = containerSmokeBlock.indexOf(
+    "Verify image and live-container hardening",
+  );
+  const identityIndex = containerSmokeBlock.indexOf(
+    "Resolve retry-stable publication handoff identity",
+  );
+  const exportIndex = containerSmokeBlock.indexOf(
+    "Export the exact tested app and server images",
+  );
+  const handoffIndex = containerSmokeBlock.indexOf(
+    "Upload the exact tested container bundle",
+  );
+  if (
+    hardeningIndex < 0 ||
+    identityIndex <= hardeningIndex ||
+    exportIndex <= identityIndex ||
+    handoffIndex <= exportIndex
+  ) {
+    errors.push(
+      `${file}: container-smoke must harden, bind producer identity, export, and upload the tested images in that order`,
+    );
+  }
 
   requireJob(errors, workflow, "load-drill", [
     ["github.event_name == 'schedule'", "scheduled condition"],
@@ -916,6 +1111,306 @@ export function validateCiContract(files) {
       "failed dependency assertion",
     ],
   ]);
+
+  requireJob(errors, workflow, "publish-containers", [
+    [
+      "needs: [container-smoke, production-gate]",
+      "tested-image and production-gate fan-in",
+    ],
+    ["github.event_name == 'push'", "push-only publication guard"],
+    ["github.ref == 'refs/heads/main'", "protected-main publication guard"],
+    [
+      "github.repository == 'supermarsx/standard-red-notes'",
+      "first-party repository publication guard",
+    ],
+    [
+      "needs.container-smoke.result == 'success'",
+      "successful container acceptance guard",
+    ],
+    [
+      "needs.production-gate.result == 'success'",
+      "successful production gate guard",
+    ],
+    ["environment: release-production", "protected publication environment"],
+    ["runs-on: ubuntu-latest", "GitHub-hosted publication runner"],
+    ["actions: read", "artifact read permission"],
+    ["artifact-metadata: write", "attestation metadata permission"],
+    ["attestations: write", "attestation write permission"],
+    ["contents: read", "read-only repository permission"],
+    ["id-token: write", "keyless provenance permission"],
+    ["packages: write", "GHCR publication permission"],
+    [
+      approvedWorkflowAction("downloadArtifact"),
+      "pinned image handoff download",
+    ],
+    [approvedWorkflowAction("loginRegistry"), "pinned GHCR login"],
+    [
+      approvedWorkflowAction("attestBuildProvenance"),
+      "pinned container provenance attestation",
+    ],
+    [
+      "PUBLISH_ARTIFACT_ID: ${{ needs.container-smoke.outputs.publication_artifact_id }}",
+      "producer artifact ID handoff",
+    ],
+    [
+      "PUBLISH_ARTIFACT: ${{ needs.container-smoke.outputs.publication_artifact_name }}",
+      "producer artifact name handoff",
+    ],
+    [
+      "PUBLISH_ATTEMPT: ${{ needs.container-smoke.outputs.publication_attempt }}",
+      "producer attempt handoff",
+    ],
+    [
+      "PUBLISH_TAG: ${{ needs.container-smoke.outputs.publication_tag }}",
+      "producer tag handoff",
+    ],
+    [
+      "PUBLISH_VERSION: ${{ needs.container-smoke.outputs.publication_version }}",
+      "producer version handoff",
+    ],
+    [
+      "Validate retry-stable publication handoff identity",
+      "pre-download retry identity validation",
+    ],
+    [
+      "case \"$PUBLISH_ARTIFACT_ID\" in ''|*[!0-9]*) exit 1 ;; esac",
+      "numeric nonempty artifact ID validation",
+    ],
+    [
+      'test "$PUBLISH_ARTIFACT" = "container-publication-${GITHUB_RUN_ID}-${PUBLISH_ATTEMPT}"',
+      "run-bound artifact name validation",
+    ],
+    [
+      'test "$PUBLISH_TAG" = "sha-${GITHUB_SHA}-run-${GITHUB_RUN_ID}.${PUBLISH_ATTEMPT}"',
+      "retry-stable tag validation",
+    ],
+    [
+      'test "$PUBLISH_VERSION" = "ci-${GITHUB_RUN_ID}.${PUBLISH_ATTEMPT}"',
+      "retry-stable version validation",
+    ],
+    [
+      "artifact-ids: ${{ env.PUBLISH_ARTIFACT_ID }}",
+      "immutable current-run artifact download",
+    ],
+    ["digest-mismatch: error", "fail-closed artifact transport digest"],
+    ["sha256sum --check images.tar.sha256", "archive checksum verification"],
+    ["docker load --input images.tar", "exact tested image load"],
+    ["app-image-id.txt", "app image identity verification"],
+    ["server-image-id.txt", "server image identity verification"],
+    ["org.opencontainers.image.revision", "OCI revision verification"],
+    ["org.opencontainers.image.version", "OCI version verification"],
+    ["org.opencontainers.image.source", "OCI source verification"],
+    [
+      "GHCR_APP_IMAGE: ghcr.io/supermarsx/standard-red-notes-app",
+      "fork-owned app image",
+    ],
+    [
+      "GHCR_SERVER_IMAGE: ghcr.io/supermarsx/standard-red-notes-server",
+      "fork-owned server image",
+    ],
+    ["{{.Os}}/{{.Architecture}}", "published image platform verification"],
+    ["password: ${{ secrets.GITHUB_TOKEN }}", "built-in registry credential"],
+    ['docker push "$GHCR_APP_IMAGE:$PUBLISH_TAG"', "app image push"],
+    ['docker push "$GHCR_SERVER_IMAGE:$PUBLISH_TAG"', "server image push"],
+    ["RepoDigests", "remote registry digest verification"],
+    ["push-to-registry: true", "registry provenance publication"],
+    ["gh attestation verify", "published provenance verification"],
+    ["--bundle-from-oci", "OCI registry attestation retrieval"],
+    ["--deny-self-hosted-runners", "GitHub-hosted attestation enforcement"],
+    ['--repo "$GITHUB_REPOSITORY"', "attestation repository identity"],
+    [
+      '--source-digest "$PUBLISH_REVISION"',
+      "attestation source digest identity",
+    ],
+    ["--source-ref refs/heads/main", "attestation source ref identity"],
+    [
+      '--signer-workflow "$GITHUB_REPOSITORY/.github/workflows/ci.yml"',
+      "attestation signer workflow identity",
+    ],
+    ["docker logout ghcr.io", "registry logout"],
+  ]);
+
+  const publisherBlock = jobBlock(workflow, "publish-containers");
+  const activePublisherBlock = publisherBlock.replace(/^\s*#.*$/gm, "");
+  if (activePublisherBlock.includes("actions/checkout")) {
+    errors.push(
+      `${file}: publish-containers must not check out or execute repository code with registry permissions`,
+    );
+  }
+  if (/^\s*runs-on:.*self-hosted.*$/m.test(activePublisherBlock)) {
+    errors.push(
+      `${file}: publish-containers must not use a self-hosted runner`,
+    );
+  }
+  const githubHostedRunnerCount = [
+    ...activePublisherBlock.matchAll(/^    runs-on:\s*ubuntu-latest\s*$/gm),
+  ].length;
+  if (githubHostedRunnerCount !== 1) {
+    errors.push(
+      `${file}: publish-containers must contain exactly 1 active GitHub-hosted runner declaration, found ${githubHostedRunnerCount}`,
+    );
+  }
+  if (activePublisherBlock.includes("${{ github.run_attempt }}")) {
+    errors.push(
+      `${file}: publish-containers must reuse producer identity instead of the current retry attempt`,
+    );
+  }
+  for (const forbiddenInput of [
+    "name",
+    "github-token",
+    "repository",
+    "run-id",
+    "pattern",
+  ]) {
+    if (
+      new RegExp(`^ {10}${forbiddenInput}:`, "m").test(activePublisherBlock)
+    ) {
+      errors.push(
+        `${file}: publish-containers download must remain bound to the producer artifact ID in the current run; forbidden input ${forbiddenInput}`,
+      );
+    }
+  }
+  for (const [fragment, expectedCount, description] of [
+    ["docker push ", 2, "coordinated image push"],
+    [approvedWorkflowAction("attestBuildProvenance"), 2, "image attestation"],
+    ["push-to-registry: true", 2, "registry attestation push"],
+  ]) {
+    const count = activePublisherBlock.split(fragment).length - 1;
+    if (count !== expectedCount) {
+      errors.push(
+        `${file}: publish-containers must contain exactly ${expectedCount} ${description} occurrence(s), found ${count}`,
+      );
+    }
+  }
+  const packageWriteCount = [
+    ...activePublisherBlock.matchAll(/^      packages:\s*write\s*$/gm),
+  ].length;
+  if (packageWriteCount !== 1) {
+    errors.push(
+      `${file}: publish-containers must contain exactly 1 active package write permission, found ${packageWriteCount}`,
+    );
+  }
+  const publishedPlatformChecks =
+    activePublisherBlock.split("{{.Os}}/{{.Architecture}}").length - 1;
+  if (publishedPlatformChecks !== 2) {
+    errors.push(
+      `${file}: publish-containers must prove loaded and re-pulled image platforms, found ${publishedPlatformChecks} checks`,
+    );
+  }
+  for (const forbidden of [
+    "pull_request_target",
+    "secrets.PAT",
+    "secrets.GHCR_TOKEN",
+    ":latest",
+    ":main",
+    "push: true",
+  ]) {
+    if (activePublisherBlock.includes(forbidden)) {
+      errors.push(
+        `${file}: publish-containers contains forbidden mutable or privileged fragment ${forbidden}`,
+      );
+    }
+  }
+  const publisherOrder = [
+    "Validate retry-stable publication handoff identity",
+    "Download the exact tested container bundle",
+    "Verify and load the exact tested images",
+    "Log in to GitHub Container Registry",
+    "Push the coordinated retry-stable image pair",
+    "Verify registry digests and image identity",
+    "Attest app image provenance",
+    "Attest server image provenance",
+    "Verify published image attestations",
+    "Record digest-pinned deployment references",
+  ].map((fragment) => publisherBlock.indexOf(fragment));
+  if (
+    publisherOrder.some((index) => index < 0) ||
+    publisherOrder.some(
+      (index, position) =>
+        position > 0 && index <= publisherOrder[position - 1],
+    )
+  ) {
+    errors.push(
+      `${file}: publish-containers must validate producer identity before download, verify before login, then push, re-pull, attest, verify, and record digests in order`,
+    );
+  }
+
+  for (const [stepName, expectedSubject, expectedDigest] of [
+    [
+      "Attest app image provenance",
+      "${{ env.GHCR_APP_IMAGE }}",
+      "${{ steps.verify_registry.outputs.app-digest }}",
+    ],
+    [
+      "Attest server image provenance",
+      "${{ env.GHCR_SERVER_IMAGE }}",
+      "${{ steps.verify_registry.outputs.server-digest }}",
+    ],
+  ]) {
+    const step = namedStepBlock(activePublisherBlock, stepName);
+    for (const [fragment, description] of [
+      [approvedWorkflowAction("attestBuildProvenance"), "pinned action"],
+      [`subject-name: ${expectedSubject}`, "exact image subject"],
+      [`subject-digest: ${expectedDigest}`, "exact registry digest"],
+      ["push-to-registry: true", "OCI registry publication"],
+    ]) {
+      requireFragment(
+        errors,
+        file,
+        step,
+        fragment,
+        `publish-containers ${stepName} ${description}`,
+      );
+    }
+  }
+
+  const downloadStep = namedStepBlock(
+    activePublisherBlock,
+    "Download the exact tested container bundle",
+  );
+  for (const [fragment, description] of [
+    [approvedWorkflowAction("downloadArtifact"), "pinned download action"],
+    [
+      "artifact-ids: ${{ env.PUBLISH_ARTIFACT_ID }}",
+      "producer artifact ID input",
+    ],
+    ["digest-mismatch: error", "fail-closed transport digest"],
+    ["path: container-publication", "isolated extraction path"],
+  ]) {
+    requireFragment(
+      errors,
+      file,
+      downloadStep,
+      fragment,
+      `publish-containers download ${description}`,
+    );
+  }
+
+  const verificationStep = namedStepBlock(
+    activePublisherBlock,
+    "Verify published image attestations",
+  );
+  for (const [fragment, description] of [
+    ["oci://${GHCR_APP_IMAGE}@${APP_DIGEST}", "app digest subject"],
+    ["oci://${GHCR_SERVER_IMAGE}@${SERVER_DIGEST}", "server digest subject"],
+    ["--bundle-from-oci", "OCI bundle source"],
+    ["--deny-self-hosted-runners", "hosted-runner identity"],
+    ['--repo "$GITHUB_REPOSITORY"', "repository identity"],
+    ['--source-digest "$PUBLISH_REVISION"', "source digest identity"],
+    ["--source-ref refs/heads/main", "protected source ref"],
+    [
+      '--signer-workflow "$GITHUB_REPOSITORY/.github/workflows/ci.yml"',
+      "signer workflow identity",
+    ],
+  ]) {
+    requireFragment(
+      errors,
+      file,
+      verificationStep,
+      fragment,
+      `publish-containers attestation verification ${description}`,
+    );
+  }
 
   const rootPackage = JSON.parse(files.get("package.json") ?? "{}");
   const expectedScripts = {
@@ -1020,7 +1515,18 @@ export function validateCiContract(files) {
     ["`required`", "required profile documentation"],
     ["`load`", "load profile documentation"],
     ["`exhaustive`", "exhaustive profile documentation"],
-    ["does not publish", "non-publishing guarantee"],
+    ["never publish containers", "non-main publication boundary"],
+    ["`publish-containers`", "protected container publisher"],
+    [
+      "ghcr.io/supermarsx/standard-red-notes-app",
+      "published app image coordinate",
+    ],
+    [
+      "ghcr.io/supermarsx/standard-red-notes-server",
+      "published server image coordinate",
+    ],
+    ["linux/amd64", "tested container architecture scope"],
+    ["no `latest` or `main` tag", "immutable container tag policy"],
     ["yarn ci:contracts", "local contract command"],
     ["yarn deps:security:production", "dependency audit command"],
     [
@@ -1057,14 +1563,14 @@ export function runCiContractValidation(
     throw new Error(`CI contract validation failed:\n- ${errors.join("\n- ")}`);
   }
 
-  return { requiredJobs: 6, extendedJobs: 2 };
+  return { requiredJobs: 6, extendedJobs: 2, protectedPublishers: 1 };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === scriptPath) {
   try {
     const result = runCiContractValidation();
     console.log(
-      `CI contract valid: ${result.requiredJobs} required jobs and ${result.extendedJobs} scheduled/manual jobs; publishing disabled.`,
+      `CI contract valid: ${result.requiredJobs} required jobs, ${result.extendedJobs} scheduled/manual jobs, and ${result.protectedPublishers} protected main-only publisher.`,
     );
   } catch (error) {
     console.error(error instanceof Error ? error.message : error);

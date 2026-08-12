@@ -262,7 +262,7 @@ function writeRepositoryWorkflowInventory(repo) {
   write(
     repo,
     ".github/workflows/ci.yml",
-    "name: ci\non:\n  push:\n    branches: [main]\n  pull_request:\n  schedule:\n    - cron: '0 0 * * *'\n  workflow_dispatch:\njobs:\n  check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo check\n",
+    "name: ci\non:\n  push:\n    branches: [main]\n  pull_request:\n  schedule:\n    - cron: '0 0 * * *'\n  workflow_dispatch:\njobs:\n  check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo check\n  container-smoke:\n    runs-on: ubuntu-latest\n    outputs:\n      publication_attempt: ${{ steps.identity.outputs.attempt }}\n      publication_tag: ${{ steps.identity.outputs.tag }}\n    steps:\n      - id: identity\n        run: echo identity\n  production-gate:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo production gate\n  publish-containers:\n    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'supermarsx/standard-red-notes'\n    needs: [container-smoke, production-gate]\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n      packages: write\n    env:\n      APP_IMAGE: ghcr.io/supermarsx/standard-red-notes-app\n      SERVER_IMAGE: ghcr.io/supermarsx/standard-red-notes-server\n      PUBLISH_ATTEMPT: ${{ needs.container-smoke.outputs.publication_attempt }}\n      PUBLISH_TAG: ${{ needs.container-smoke.outputs.publication_tag }}\n      IMAGE_PLATFORM: linux/amd64\n    steps:\n      - run: docker push \"$APP_IMAGE:$PUBLISH_TAG\" && docker push \"$SERVER_IMAGE:$PUBLISH_TAG\"\n",
   );
   write(
     repo,
@@ -1847,7 +1847,8 @@ test("repository mode inventories every workspace without inventing publishers",
       "canonical-support": 1,
       "quarantined-upstream-mutation": 19,
       "noncanonical-external-mutation": 3,
-      "root-nonmutating-support": 2,
+      "protected-main-container-publication": 1,
+      "root-nonmutating-support": 1,
       "embedded-nonmutating-support": 7,
     });
     assert.deepEqual(result.workflowOwnership.scopeCounts, {
@@ -1877,6 +1878,20 @@ test("repository mode inventories every workspace without inventing publishers",
     assert.deepEqual(rootDesktop.rootTriggers, ["push", "workflow_dispatch"]);
     assert.deepEqual(rootDesktop.targets, [
       "GitHub Releases: desktop installers",
+    ]);
+    const rootCi = workflowsByPath.get(".github/workflows/ci.yml");
+    assert.equal(rootCi.classification, "protected-main-container-publication");
+    assert.equal(rootCi.targetKind, "validation-and-container-distribution");
+    assert.deepEqual(rootCi.rootTriggers, [
+      "pull_request",
+      "push",
+      "schedule",
+      "workflow_dispatch",
+    ]);
+    assert.deepEqual(rootCi.targets, [
+      "repository checks and test artifacts",
+      "GHCR ghcr.io/supermarsx/standard-red-notes-app:sha-<40-char-commit>-run-<run-id>.<producer-attempt> (linux/amd64)",
+      "GHCR ghcr.io/supermarsx/standard-red-notes-server:sha-<40-char-commit>-run-<run-id>.<producer-attempt> (linux/amd64)",
     ]);
     const embeddedDesktop = workflowsByPath.get(
       "app/.github/workflows/desktop.release.prod.yml",
@@ -2122,6 +2137,31 @@ test("every activation class enforces its exact trigger contract", () => {
       (error) =>
         error instanceof ReleaseImpactError &&
         error.code === "workflow-activation-mismatch",
+    );
+  } finally {
+    context.cleanup();
+  }
+});
+
+test("protected-main CI publication requires the coordinated GHCR app and server targets", () => {
+  const context = repositoryFixture();
+  try {
+    const workflowPath = path.join(context.repo, ".github/workflows/ci.yml");
+    const original = readFileSync(workflowPath, "utf8");
+    const mutated = original.replace(
+      "ghcr.io/supermarsx/standard-red-notes-server",
+      "ghcr.io/supermarsx/standard-red-notes-unclassified",
+    );
+    assert.notEqual(mutated, original);
+    write(context.repo, ".github/workflows/ci.yml", mutated);
+    commit(context.repo, "break coordinated GHCR target");
+
+    assert.throws(
+      () => discoverWorkflowOwnership({ repo: context.repo }),
+      (error) =>
+        error instanceof ReleaseImpactError &&
+        error.code === "workflow-publication-contract-mismatch" &&
+        error.message.includes("server GHCR target"),
     );
   } finally {
     context.cleanup();

@@ -458,18 +458,25 @@ const ACTIVE_NONCANONICAL_EXTERNAL_WORKFLOWS = Object.freeze([
   },
 ]);
 
-const ROOT_NONMUTATING_SUPPORT_WORKFLOWS = Object.freeze([
+const ROOT_CONDITIONAL_PUBLICATION_WORKFLOWS = Object.freeze([
   {
     path: ".github/workflows/ci.yml",
     owner: "repository-ci",
-    classification: "root-nonmutating-support",
+    classification: "protected-main-container-publication",
     status: "root-active",
     activation: "push-pull-schedule-and-manual",
-    targetKind: "validation-support",
-    targets: ["repository checks and test artifacts"],
+    targetKind: "validation-and-container-distribution",
+    targets: [
+      "repository checks and test artifacts",
+      "GHCR ghcr.io/supermarsx/standard-red-notes-app:sha-<40-char-commit>-run-<run-id>.<producer-attempt> (linux/amd64)",
+      "GHCR ghcr.io/supermarsx/standard-red-notes-server:sha-<40-char-commit>-run-<run-id>.<producer-attempt> (linux/amd64)",
+    ],
     reason:
-      "The repository-root CI workflow validates code and uploads test evidence without publishing a product.",
+      "The repository-root CI workflow validates every supported event and uploads test evidence; only a protected first-party main push after the production gate publishes the coordinated GHCR app/server image pair keyed by source commit and workflow run.",
   },
+]);
+
+const ROOT_NONMUTATING_SUPPORT_WORKFLOWS = Object.freeze([
   {
     path: ".github/workflows/release-contract.yml",
     owner: "release-contract",
@@ -2469,6 +2476,42 @@ function assertWorkflowActivation(entry, content) {
   return triggers;
 }
 
+function assertProtectedMainContainerPublication(entry, content) {
+  if (entry.classification !== "protected-main-container-publication") {
+    return;
+  }
+
+  const requiredFragments = [
+    [
+      "first-party repository guard",
+      "github.repository == 'supermarsx/standard-red-notes'",
+    ],
+    ["push-event guard", "github.event_name == 'push'"],
+    ["protected-main guard", "github.ref == 'refs/heads/main'"],
+    ["job-scoped package publication permission", "packages: write"],
+    ["app GHCR target", "ghcr.io/supermarsx/standard-red-notes-app"],
+    ["server GHCR target", "ghcr.io/supermarsx/standard-red-notes-server"],
+    [
+      "producer retry-attempt handoff",
+      "PUBLISH_ATTEMPT: ${{ needs.container-smoke.outputs.publication_attempt }}",
+    ],
+    [
+      "coordinated retry-stable source and workflow-run tag",
+      "PUBLISH_TAG: ${{ needs.container-smoke.outputs.publication_tag }}",
+    ],
+    ["published container platform", "linux/amd64"],
+  ];
+  const missing = requiredFragments
+    .filter(([, fragment]) => !content.includes(fragment))
+    .map(([label]) => label);
+  if (missing.length > 0) {
+    throw new ReleaseImpactError(
+      "workflow-publication-contract-mismatch",
+      `Workflow '${entry.path}' is classified as '${entry.classification}' but is missing its ${missing.join(", ")}.`,
+    );
+  }
+}
+
 function validateDistributionWorkspaceSurfaces(workspaces, workflows) {
   const workflowsByPath = new Map(
     workflows.map((entry) => [entry.path, entry]),
@@ -2537,6 +2580,7 @@ export function discoverWorkflowOwnership({
     ...SUPPORTING_RELEASE_WORKFLOWS,
     ...QUARANTINED_UPSTREAM_WORKFLOWS,
     ...ACTIVE_NONCANONICAL_EXTERNAL_WORKFLOWS,
+    ...ROOT_CONDITIONAL_PUBLICATION_WORKFLOWS,
     ...ROOT_NONMUTATING_SUPPORT_WORKFLOWS,
     ...APP_EMBEDDED_NONMUTATING_SUPPORT_WORKFLOWS,
     ...SERVER_EMBEDDED_NONMUTATING_SUPPORT_WORKFLOWS,
@@ -2575,6 +2619,7 @@ export function discoverWorkflowOwnership({
       entry.path,
       assertWorkflowActivation(entry, content),
     );
+    assertProtectedMainContainerPublication(entry, content);
     if (entry.classification === "canonical-change-gated") {
       const definition = RELEASE_TARGETS[entry.owner];
       if (!definition?.configPaths.includes(entry.path)) {
@@ -2662,6 +2707,7 @@ export function discoverWorkflowOwnership({
       "canonical-support",
       "quarantined-upstream-mutation",
       "noncanonical-external-mutation",
+      "protected-main-container-publication",
       "root-nonmutating-support",
       "embedded-nonmutating-support",
     ].map((classification) => [

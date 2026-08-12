@@ -35,8 +35,26 @@ function withFileChanged(file, update) {
   return files;
 }
 
+function withCiJobChanged(jobName, update) {
+  return withFileChanged(".github/workflows/ci.yml", (content) => {
+    const marker = `\n  ${jobName}:`;
+    const start = content.indexOf(marker);
+    assert.notEqual(start, -1, `ci.yml must contain ${jobName}`);
+    const remainder = content.slice(start + marker.length);
+    const nextJob = remainder.search(/\r?\n  [A-Za-z0-9_-]+:\r?\n/);
+    const end = nextJob < 0 ? content.length : start + marker.length + nextJob;
+    return `${content.slice(0, start)}${update(content.slice(start, end))}${content.slice(end)}`;
+  });
+}
+
 function replaceRequired(source, current, replacement = "") {
   const changed = source.replace(current, replacement);
+  assert.notEqual(changed, source, `test mutation must replace: ${current}`);
+  return changed;
+}
+
+function replaceAllRequired(source, current, replacement = "") {
+  const changed = source.replaceAll(current, replacement);
   assert.notEqual(changed, source, `test mutation must replace: ${current}`);
   return changed;
 }
@@ -742,6 +760,298 @@ test("publishing permissions are rejected", () => {
   assert.match(
     validateCiContract(files).join("\n"),
     /forbidden contents write permission/,
+  );
+});
+
+test("container publication is bounded to the tested protected-main run", () => {
+  for (const [fragment, expected] of [
+    ["github.event_name == 'push'", /push-only publication guard/],
+    ["github.ref == 'refs/heads/main'", /protected-main publication guard/],
+    [
+      "github.repository == 'supermarsx/standard-red-notes'",
+      /first-party repository publication guard/,
+    ],
+    [
+      "needs.container-smoke.result == 'success'",
+      /successful container acceptance guard/,
+    ],
+    [
+      "needs.production-gate.result == 'success'",
+      /successful production gate guard/,
+    ],
+    ["environment: release-production", /protected publication environment/],
+  ]) {
+    const files = withCiJobChanged("publish-containers", (block) =>
+      replaceAllRequired(block, fragment),
+    );
+    assert.match(validateCiContract(files).join("\n"), expected);
+  }
+});
+
+test("registry authority cannot escape the isolated publisher", () => {
+  const elevatedWorkflow = withFileChanged(
+    ".github/workflows/ci.yml",
+    (content) =>
+      content.replace(
+        "permissions:\n  contents: read",
+        "permissions:\n  contents: read\n  packages: write",
+      ),
+  );
+  assert.match(
+    validateCiContract(elevatedWorkflow).join("\n"),
+    /forbidden packages write permission outside publish-containers/,
+  );
+
+  const checkoutPublisher = withCiJobChanged("publish-containers", (block) =>
+    block.replace(
+      "    steps:\n",
+      "    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n",
+    ),
+  );
+  assert.match(
+    validateCiContract(checkoutPublisher).join("\n"),
+    /must not check out or execute repository code/,
+  );
+});
+
+test("container publication cannot use mutable tags or skip paired verification", () => {
+  const mutableTag = withCiJobChanged("publish-containers", (block) =>
+    block.replace(
+      "PUBLISH_TAG: ${{ needs.container-smoke.outputs.publication_tag }}",
+      "PUBLISH_TAG: main",
+    ),
+  );
+  assert.match(
+    validateCiContract(mutableTag).join("\n"),
+    /producer tag handoff/,
+  );
+
+  for (const [fragment, expected] of [
+    [
+      'docker push "$GHCR_SERVER_IMAGE:$PUBLISH_TAG"',
+      /exactly 2 coordinated image push occurrence/,
+    ],
+    [
+      approvedWorkflowAction("attestBuildProvenance"),
+      /exactly 2 image attestation occurrence/,
+    ],
+    ["gh attestation verify", /published provenance verification/],
+    ["RepoDigests", /remote registry digest verification/],
+  ]) {
+    const files = withCiJobChanged("publish-containers", (block) =>
+      replaceAllRequired(block, fragment),
+    );
+    assert.match(validateCiContract(files).join("\n"), expected);
+  }
+});
+
+test("container publication verifies the handoff before registry login", () => {
+  const files = withCiJobChanged("publish-containers", (block) =>
+    block
+      .replace(
+        "Verify and load the exact tested images",
+        "__VERIFY_EXACT_IMAGES__",
+      )
+      .replace(
+        "Log in to GitHub Container Registry",
+        "Verify and load the exact tested images",
+      )
+      .replace(
+        "__VERIFY_EXACT_IMAGES__",
+        "Log in to GitHub Container Registry",
+      ),
+  );
+  assert.match(
+    validateCiContract(files).join("\n"),
+    /must validate producer identity before download, verify before login, then push, re-pull, attest, verify, and record digests in order/,
+  );
+});
+
+test("the tested image archive is exported only after hardening on first-party main", () => {
+  const missingGuard = withCiJobChanged("container-smoke", (block) =>
+    block.replace(
+      "github.repository == 'supermarsx/standard-red-notes'",
+      "github.repository != ''",
+    ),
+  );
+  assert.match(
+    validateCiContract(missingGuard).join("\n"),
+    /first-party archive guard exactly 3 times, found 2/,
+  );
+
+  const reordered = withCiJobChanged("container-smoke", (block) =>
+    block
+      .replace("Verify image and live-container hardening", "__HARDEN_IMAGES__")
+      .replace(
+        "Export the exact tested app and server images",
+        "Verify image and live-container hardening",
+      )
+      .replace(
+        "__HARDEN_IMAGES__",
+        "Export the exact tested app and server images",
+      ),
+  );
+  assert.match(
+    validateCiContract(reordered).join("\n"),
+    /must harden, bind producer identity, export, and upload the tested images in that order/,
+  );
+});
+
+test("protected-main container publication cannot be cancelled by another event class", () => {
+  const sharedEventGroup = withFileChanged(
+    ".github/workflows/ci.yml",
+    (content) =>
+      content.replace(
+        "group: ci-${{ github.event_name }}-${{ (github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'supermarsx/standard-red-notes') && github.run_id || github.event.pull_request.number || github.ref }}",
+        "group: ci-${{ github.event.pull_request.number || github.ref }}",
+      ),
+  );
+  assert.match(
+    validateCiContract(sharedEventGroup).join("\n"),
+    /run-isolated protected-main workflow concurrency/,
+  );
+
+  const cancellableMain = withFileChanged(
+    ".github/workflows/ci.yml",
+    (content) =>
+      content.replace(
+        "cancel-in-progress: ${{ github.event_name != 'push' || github.ref != 'refs/heads/main' || github.repository != 'supermarsx/standard-red-notes' }}",
+        "cancel-in-progress: true",
+      ),
+  );
+  assert.match(
+    validateCiContract(cancellableMain).join("\n"),
+    /non-cancelling protected-main publication/,
+  );
+});
+
+test("failed publisher reruns reuse the successful producer identity", () => {
+  const currentAttempt = withCiJobChanged("publish-containers", (block) =>
+    block.replace(
+      "PUBLISH_ATTEMPT: ${{ needs.container-smoke.outputs.publication_attempt }}",
+      "PUBLISH_ATTEMPT: ${{ github.run_attempt }}",
+    ),
+  );
+  assert.match(
+    validateCiContract(currentAttempt).join("\n"),
+    /must reuse producer identity instead of the current retry attempt/,
+  );
+
+  const emptyArtifactId = withCiJobChanged("publish-containers", (block) =>
+    block.replace(
+      "PUBLISH_ARTIFACT_ID: ${{ needs.container-smoke.outputs.publication_artifact_id }}",
+      'PUBLISH_ARTIFACT_ID: ""',
+    ),
+  );
+  assert.match(
+    validateCiContract(emptyArtifactId).join("\n"),
+    /producer artifact ID handoff/,
+  );
+});
+
+test("container handoff download stays on the producer artifact ID in the current run", () => {
+  const byName = withCiJobChanged("publish-containers", (block) =>
+    block.replace(
+      "          artifact-ids: ${{ env.PUBLISH_ARTIFACT_ID }}",
+      "          name: ${{ env.PUBLISH_ARTIFACT }}",
+    ),
+  );
+  const byNameErrors = validateCiContract(byName).join("\n");
+  assert.match(byNameErrors, /immutable current-run artifact download/);
+  assert.match(byNameErrors, /forbidden input name/);
+
+  const crossRun = withCiJobChanged("publish-containers", (block) =>
+    block.replace(
+      "          artifact-ids: ${{ env.PUBLISH_ARTIFACT_ID }}",
+      "          artifact-ids: ${{ env.PUBLISH_ARTIFACT_ID }}\n          github-token: ${{ github.token }}\n          repository: attacker/repository\n          run-id: 1",
+    ),
+  );
+  const crossRunErrors = validateCiContract(crossRun).join("\n");
+  assert.match(crossRunErrors, /forbidden input github-token/);
+  assert.match(crossRunErrors, /forbidden input repository/);
+  assert.match(crossRunErrors, /forbidden input run-id/);
+
+  const ignoredDigest = withCiJobChanged("publish-containers", (block) =>
+    block.replace(
+      "          digest-mismatch: error",
+      "          digest-mismatch: ignore",
+    ),
+  );
+  assert.match(
+    validateCiContract(ignoredDigest).join("\n"),
+    /fail-closed artifact transport digest/,
+  );
+});
+
+test("container publisher authority and attestation identity stay active and exact", () => {
+  const commentedPermission = withCiJobChanged("publish-containers", (block) =>
+    block.replace("      packages: write", "      # packages: write"),
+  );
+  assert.match(
+    validateCiContract(commentedPermission).join("\n"),
+    /exactly 1 active package write permission, found 0/,
+  );
+
+  const selfHosted = withCiJobChanged("publish-containers", (block) =>
+    block.replace("    runs-on: ubuntu-latest", "    runs-on: self-hosted"),
+  );
+  assert.match(
+    validateCiContract(selfHosted).join("\n"),
+    /must not use a self-hosted runner/,
+  );
+
+  const wrongSubject = withCiJobChanged("publish-containers", (block) =>
+    block.replace(
+      "          subject-name: ${{ env.GHCR_APP_IMAGE }}",
+      "          subject-name: ${{ env.GHCR_SERVER_IMAGE }}",
+    ),
+  );
+  assert.match(
+    validateCiContract(wrongSubject).join("\n"),
+    /Attest app image provenance exact image subject/,
+  );
+
+  for (const [fragment, expected] of [
+    ["              --bundle-from-oci \\", /OCI bundle source/],
+    ["              --deny-self-hosted-runners \\", /hosted-runner identity/],
+    [
+      '              --source-digest "$PUBLISH_REVISION" \\',
+      /source digest identity/,
+    ],
+    ["              --source-ref refs/heads/main \\", /protected source ref/],
+  ]) {
+    const files = withCiJobChanged("publish-containers", (block) =>
+      replaceRequired(block, fragment),
+    );
+    assert.match(validateCiContract(files).join("\n"), expected);
+  }
+});
+
+test("container publication proves the built and re-pulled linux architecture", () => {
+  const missingBuildPlatforms = withCiJobChanged("container-smoke", (block) =>
+    replaceAllRequired(block, "          platforms: linux/amd64\n"),
+  );
+  assert.match(
+    validateCiContract(missingBuildPlatforms).join("\n"),
+    /must build exactly two linux\/amd64 images/,
+  );
+
+  const missingRuntimePlatforms = withFileChanged(
+    ".github/workflows/ci.yml",
+    (content) =>
+      replaceAllRequired(
+        content,
+        `            test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$image")" = 'linux/amd64'\n`,
+      ),
+  );
+  const platformErrors = validateCiContract(missingRuntimePlatforms).join("\n");
+  assert.match(
+    platformErrors,
+    /must prove the platform of both exported images/,
+  );
+  assert.match(
+    platformErrors,
+    /must prove loaded and re-pulled image platforms/,
   );
 });
 
