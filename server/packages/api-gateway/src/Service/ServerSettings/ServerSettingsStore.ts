@@ -402,7 +402,10 @@ function isPersistedAiProfile(value: unknown): value is PersistedAiProfile {
     (value.model === undefined || isModel(value.model)) &&
     (value.models === undefined || isModels(value.models)) &&
     (value.temperature === undefined ||
-      (typeof value.temperature === 'number' && Number.isFinite(value.temperature) && value.temperature >= 0 && value.temperature <= 2)) &&
+      (typeof value.temperature === 'number' &&
+        Number.isFinite(value.temperature) &&
+        value.temperature >= 0 &&
+        value.temperature <= 2)) &&
     (value.topP === undefined ||
       (typeof value.topP === 'number' && Number.isFinite(value.topP) && value.topP >= 0 && value.topP <= 1)) &&
     (value.maxOutputTokens === undefined || isIntegerBetween(value.maxOutputTokens, 1, 200_000)) &&

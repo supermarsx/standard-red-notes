@@ -604,11 +604,7 @@ describe('advanced assistant and backend controls', () => {
       { provider: 'openai-compatible', maxRetries: 11 },
     ]) {
       expect(
-        'error' in
-          validateBackendProfilesPatch(
-            [{ id: 'backend', name: 'Backend', type: 'api-key', ...backend }],
-            [],
-          ),
+        'error' in validateBackendProfilesPatch([{ id: 'backend', name: 'Backend', type: 'api-key', ...backend }], []),
       ).toBe(true)
     }
   })

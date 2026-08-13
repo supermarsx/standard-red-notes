@@ -103,9 +103,7 @@ describe('OpenAIResponsesProvider', () => {
   })
 
   it('maps failed and unexpectedly truncated streams to non-success terminal events', async () => {
-    create.mockResolvedValueOnce(
-      events([{ type: 'response.failed', response: { error: { message: 'bad request' } } }]),
-    )
+    create.mockResolvedValueOnce(events([{ type: 'response.failed', response: { error: { message: 'bad request' } } }]))
     const provider = new OpenAIResponsesProvider('gpt-test', 'key')
     await expect(collect(provider.send(request))).resolves.toEqual([
       { kind: 'error', message: 'bad request' },
