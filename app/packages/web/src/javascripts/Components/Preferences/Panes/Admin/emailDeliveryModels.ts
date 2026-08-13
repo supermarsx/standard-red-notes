@@ -1,4 +1,5 @@
 export const EMAIL_RELAY_KINDS = ['smtp', 'sendgrid', 'mailgun', 'aws-ses'] as const
+export const EMAIL_RELAY_PROFILE_LIMIT = 20
 export type EmailRelayKind = (typeof EMAIL_RELAY_KINDS)[number]
 
 export const EMAIL_QUEUE_STATES = ['ready', 'leased', 'dead'] as const
@@ -51,6 +52,7 @@ export type RelayDraft = RelayBase & {
   host: string
   port: number
   username: string
+  storedUsername: string
   tlsMode: 'implicit' | 'starttls' | 'insecure'
   domain: string
   baseUrl: string
@@ -96,7 +98,7 @@ export type EmailTestResult = {
 export type EmailQueueItem = {
   id: string
   state: EmailQueueState
-  source: 'reminder' | 'account' | 'backup' | 'test' | 'other'
+  source: 'reminder' | 'published-reminder' | 'account' | 'backup' | 'test' | 'other'
   attempt: number
   maxAttempts: number
   createdAt: string
@@ -104,6 +106,8 @@ export type EmailQueueItem = {
   leaseExpiresAt?: string
   lastRelayId?: string
   lastFailureClass?: string
+  expiresAt?: string
+  retryMode?: 'bounded' | 'indefinite'
 }
 
 export type EmailQueueResponse = { items: EmailQueueItem[]; nextCursor?: string }
@@ -179,6 +183,7 @@ export function createRelayDraft(index = 0): RelayDraft {
     host: '',
     port: 587,
     username: '',
+    storedUsername: '',
     tlsMode: 'starttls',
     domain: '',
     baseUrl: '',
@@ -200,6 +205,7 @@ export function relayViewToDraft(relay: RelayView): RelayDraft {
     host: relay.kind === 'smtp' ? relay.host : '',
     port: relay.kind === 'smtp' ? relay.port : 587,
     username: relay.kind === 'smtp' ? (relay.username ?? '') : '',
+    storedUsername: relay.kind === 'smtp' ? (relay.username ?? '') : '',
     tlsMode: relay.kind === 'smtp' ? relay.tlsMode : 'starttls',
     domain: relay.kind === 'mailgun' ? relay.domain : '',
     baseUrl: relay.kind === 'mailgun' ? (relay.baseUrl ?? '') : '',
@@ -218,36 +224,57 @@ export function normalizeRelayPriorities(relays: RelayDraft[]): RelayDraft[] {
 }
 
 function credentialsArePresent(relay: RelayDraft): boolean {
-  if (relay.clearCredentials) {
-    return false
+  if (!relay.enabled) {
+    return true
   }
   switch (relay.kind) {
-    case 'smtp':
-      return relay.credentialsConfigured || relay.password.length > 0 || relay.username.trim().length === 0
+    case 'smtp': {
+      const hasUsername = relay.username.trim().length > 0
+      if (!hasUsername) {
+        return relay.password.length === 0 && (!relay.credentialsConfigured || relay.clearCredentials)
+      }
+      if (relay.password.length > 0) {
+        return true
+      }
+      return !relay.clearCredentials && relay.credentialsConfigured && relay.username.trim() === relay.storedUsername
+    }
     case 'sendgrid':
     case 'mailgun':
-      return relay.credentialsConfigured || relay.apiKey.length > 0
+      return !relay.clearCredentials && (relay.credentialsConfigured || relay.apiKey.length > 0)
     case 'aws-ses':
-      return relay.credentialsConfigured || (relay.accessKeyId.length > 0 && relay.secretAccessKey.length > 0)
+      if (relay.accessKeyId.length > 0 || relay.secretAccessKey.length > 0 || relay.sessionToken.length > 0) {
+        return relay.accessKeyId.length > 0 && relay.secretAccessKey.length > 0
+      }
+      return (
+        relay.clearCredentials ||
+        relay.credentialsConfigured ||
+        (relay.accessKeyId.length === 0 && relay.secretAccessKey.length === 0 && relay.sessionToken.length === 0)
+      )
   }
 }
 
 export function relayConformityChecks(relay: RelayDraft): RelayConformityCheck[] {
   const common: RelayConformityCheck[] = [
-    { id: 'name', label: 'Profile name is present', passing: relay.name.trim().length > 0 },
+    {
+      id: 'name',
+      label: 'Profile name is present and within 128 characters',
+      passing: relay.name.trim().length > 0 && relay.name.length <= 128,
+    },
     {
       id: 'from',
-      label: 'From identity is present and contains no line breaks',
-      passing: relay.from.trim().length > 0 && !/[\r\n]/.test(relay.from),
+      label: 'From identity is a plain mailbox or a display name with one mailbox',
+      passing: senderIdentityIsValid(relay.from),
     },
     {
       id: 'rate-limit',
-      label: 'Rate limit uses positive whole numbers',
+      label: 'Rate limit uses a non-negative maximum and a positive window',
       passing:
         Number.isSafeInteger(relay.rateLimit.max) &&
-        relay.rateLimit.max > 0 &&
+        relay.rateLimit.max >= 0 &&
+        relay.rateLimit.max <= 1_000_000 &&
         Number.isSafeInteger(relay.rateLimit.windowSeconds) &&
-        relay.rateLimit.windowSeconds > 0,
+        relay.rateLimit.windowSeconds > 0 &&
+        relay.rateLimit.windowSeconds <= 2_592_000,
     },
     { id: 'credentials', label: 'Required credentials are configured', passing: credentialsArePresent(relay) },
   ]
@@ -256,7 +283,15 @@ export function relayConformityChecks(relay: RelayDraft): RelayConformityCheck[]
     case 'smtp':
       return [
         ...common,
-        { id: 'host', label: 'SMTP host is present', passing: relay.host.trim().length > 0 },
+        {
+          id: 'host',
+          label: 'SMTP host is a bounded hostname or IP address',
+          passing:
+            relay.host.trim().length > 0 &&
+            relay.host.length <= 253 &&
+            !/[\s/\\@?#]/.test(relay.host) &&
+            !relay.host.includes('://'),
+        },
         {
           id: 'port',
           label: 'SMTP port is between 1 and 65535',
@@ -268,11 +303,70 @@ export function relayConformityChecks(relay: RelayDraft): RelayConformityCheck[]
     case 'mailgun':
       return [
         ...common,
-        { id: 'domain', label: 'Mailgun sending domain is present', passing: relay.domain.trim().length > 0 },
+        {
+          id: 'domain',
+          label: 'Mailgun sending domain is bounded and contains no URL path',
+          passing: dnsNameIsValid(relay.domain.trim()),
+        },
+        {
+          id: 'base-url',
+          label: 'Mailgun API origin is the official US or EU endpoint',
+          passing:
+            relay.baseUrl.trim().length === 0 ||
+            ['https://api.mailgun.net', 'https://api.eu.mailgun.net'].includes(relay.baseUrl.trim().replace(/\/$/, '')),
+        },
       ]
     case 'aws-ses':
-      return [...common, { id: 'region', label: 'AWS region is present', passing: relay.region.trim().length > 0 }]
+      return [
+        ...common,
+        {
+          id: 'region',
+          label: 'AWS region uses a supported region identifier',
+          passing: /^[a-z]{2}(?:-gov)?-[a-z]+-\d$/.test(relay.region.trim()),
+        },
+      ]
   }
+}
+
+function mailboxIsValid(value: string): boolean {
+  if (value.length < 3 || value.length > 320 || /[\s\r\n\0,;<>]/.test(value)) {
+    return false
+  }
+  const parts = value.split('@')
+  if (parts.length !== 2) {
+    return false
+  }
+  const [localPart, domain] = parts
+  return (
+    localPart.length >= 1 &&
+    localPart.length <= 64 &&
+    !localPart.startsWith('.') &&
+    !localPart.endsWith('.') &&
+    !localPart.includes('..') &&
+    /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+$/.test(localPart) &&
+    dnsNameIsValid(domain)
+  )
+}
+
+function senderIdentityIsValid(value: string): boolean {
+  if (value.length > 998 || /[\r\n\0]/.test(value)) {
+    return false
+  }
+  const trimmed = value.trim()
+  if (!trimmed.includes('<') && !trimmed.includes('>')) {
+    return mailboxIsValid(trimmed)
+  }
+  const match = trimmed.match(/^([^<>]+?)\s*<([^<>]+)>$/)
+  return Boolean(match?.[1].trim() && mailboxIsValid((match?.[2] ?? '').trim()))
+}
+
+function dnsNameIsValid(value: string): boolean {
+  return (
+    value.length > 0 &&
+    value.length <= 253 &&
+    !value.endsWith('.') &&
+    value.split('.').every((label) => /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/.test(label))
+  )
 }
 
 export function relayIsConformant(relay: RelayDraft): boolean {
@@ -431,6 +525,7 @@ export function decodeQueueResponse(value: unknown): EmailQueueResponse | undefi
       !stringValue(item.id) ||
       !isQueueState(item.state) ||
       (item.source !== 'reminder' &&
+        item.source !== 'published-reminder' &&
         item.source !== 'account' &&
         item.source !== 'backup' &&
         item.source !== 'test' &&
@@ -452,6 +547,8 @@ export function decodeQueueResponse(value: unknown): EmailQueueResponse | undefi
       ...(stringValue(item.leaseExpiresAt) ? { leaseExpiresAt: item.leaseExpiresAt as string } : {}),
       ...(stringValue(item.lastRelayId) ? { lastRelayId: item.lastRelayId as string } : {}),
       ...(stringValue(item.lastFailureClass) ? { lastFailureClass: item.lastFailureClass as string } : {}),
+      ...(stringValue(item.expiresAt) ? { expiresAt: item.expiresAt as string } : {}),
+      ...(item.retryMode === 'bounded' || item.retryMode === 'indefinite' ? { retryMode: item.retryMode } : {}),
     })
   }
   return {

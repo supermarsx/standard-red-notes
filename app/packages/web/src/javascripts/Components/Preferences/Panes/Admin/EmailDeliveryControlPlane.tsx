@@ -10,6 +10,7 @@ import {
   EMAIL_LOG_OUTCOMES,
   EMAIL_QUEUE_STATES,
   EMAIL_RELAY_KINDS,
+  EMAIL_RELAY_PROFILE_LIMIT,
   EmailLogOutcome,
   EmailLogsResponse,
   EmailQueueItem,
@@ -38,10 +39,13 @@ import {
 type Props = {
   application: WebApplication
   noteIfForbidden: (response: { status?: number }) => void
+  onAvailabilityChange?: (availability: EmailDeliveryControlPlaneAvailability) => void
 }
 
 type PanelState = 'idle' | 'loading' | 'ready' | 'unavailable' | 'error'
 type ControlTab = 'relays' | 'queue' | 'logs'
+
+export type EmailDeliveryControlPlaneAvailability = 'probing' | 'available' | 'unavailable'
 
 type QueuePage = { items: EmailQueueItem[]; nextCursor?: string }
 type QueuePages = Record<EmailQueueState, QueuePage>
@@ -266,9 +270,39 @@ const RelayEditor: FunctionComponent<{
   remove: () => void
   test: () => void
   testing: boolean
-}> = ({ relay, index, count, disabled, removeArmed, update, move, armRemove, remove, test, testing }) => {
+  testRequiresSave: boolean
+}> = ({
+  relay,
+  index,
+  count,
+  disabled,
+  removeArmed,
+  update,
+  move,
+  armRemove,
+  remove,
+  test,
+  testing,
+  testRequiresSave,
+}) => {
   const checks = relayConformityChecks(relay)
   const passed = checks.filter((check) => check.passing).length
+  const credentialsPassing = checks.find((check) => check.id === 'credentials')?.passing === true
+  const usesUnauthenticatedSmtp = relay.kind === 'smtp' && relay.username.trim().length === 0
+  const usesAwsDefaultChain =
+    relay.kind === 'aws-ses' &&
+    relay.accessKeyId.length === 0 &&
+    relay.secretAccessKey.length === 0 &&
+    relay.sessionToken.length === 0
+  const credentialStatus = relay.clearCredentials
+    ? 'Credentials will be cleared'
+    : usesUnauthenticatedSmtp
+      ? 'Authentication not required'
+      : usesAwsDefaultChain
+        ? 'AWS default credential chain'
+        : relay.credentialsConfigured
+          ? 'Credentials configured'
+          : 'Credentials required'
 
   return (
     <article className="border-border rounded border p-4" aria-labelledby={`relay-${relay.id}-heading`}>
@@ -283,12 +317,8 @@ const RelayEditor: FunctionComponent<{
             <StatusChip tone={relay.enabled ? 'success' : 'normal'}>
               {relay.enabled ? 'Enabled' : 'Disabled'}
             </StatusChip>
-            <StatusChip tone={relay.credentialsConfigured && !relay.clearCredentials ? 'success' : 'warning'}>
-              {relay.clearCredentials
-                ? 'Credentials will be cleared'
-                : relay.credentialsConfigured
-                  ? 'Credentials configured'
-                  : 'Credentials required'}
+            <StatusChip tone={credentialsPassing && !relay.clearCredentials ? 'success' : 'warning'}>
+              {credentialStatus}
             </StatusChip>
           </div>
           <Text className="mt-1 text-xs">{RELAY_PROVIDER_HELP[relay.kind]}</Text>
@@ -326,6 +356,7 @@ const RelayEditor: FunctionComponent<{
               update({
                 kind: event.target.value as EmailRelayKind,
                 credentialsConfigured: false,
+                storedUsername: '',
                 clearCredentials: false,
                 password: '',
                 apiKey: '',
@@ -398,6 +429,8 @@ const RelayEditor: FunctionComponent<{
           onClick={() =>
             update({
               clearCredentials: !relay.clearCredentials,
+              ...(relay.clearCredentials || relay.kind === 'aws-ses' ? {} : { enabled: false }),
+              ...(relay.kind === 'smtp' && !relay.clearCredentials ? { username: '' } : {}),
               password: '',
               apiKey: '',
               accessKeyId: '',
@@ -411,7 +444,8 @@ const RelayEditor: FunctionComponent<{
           label={testing ? 'Testing…' : 'Send redacted test'}
           small
           onClick={test}
-          disabled={disabled || testing || !relay.enabled || !relayIsConformant(relay)}
+          disabled={disabled || testing || testRequiresSave || !relay.enabled || !relayIsConformant(relay)}
+          disabledReason={testRequiresSave ? 'Save relay profile changes before sending a test.' : undefined}
         />
       </div>
 
@@ -431,7 +465,11 @@ const RelayEditor: FunctionComponent<{
   )
 }
 
-const EmailDeliveryControlPlane: FunctionComponent<Props> = ({ application, noteIfForbidden }) => {
+const EmailDeliveryControlPlane: FunctionComponent<Props> = ({
+  application,
+  noteIfForbidden,
+  onAvailabilityChange,
+}) => {
   const [activeTab, setActiveTab] = useState<ControlTab>('relays')
   const [relayState, setRelayState] = useState<PanelState>('loading')
   const [relayError, setRelayError] = useState<string | null>(null)
@@ -439,6 +477,7 @@ const EmailDeliveryControlPlane: FunctionComponent<Props> = ({ application, note
   const [configured, setConfigured] = useState(false)
   const [fallbackPolicy, setFallbackPolicy] = useState<RelayFallbackPolicy>({ mode: 'next-enabled' })
   const [saving, setSaving] = useState(false)
+  const [relaysDirty, setRelaysDirty] = useState(false)
   const [saveStatus, setSaveStatus] = useState<string | null>(null)
   const [removeArmed, setRemoveArmed] = useState<string | null>(null)
   const [testRecipient, setTestRecipient] = useState('')
@@ -475,7 +514,7 @@ const EmailDeliveryControlPlane: FunctionComponent<Props> = ({ application, note
         )
         if (!response.ok) {
           noteIfForbidden(response)
-          if (response.status === 404 || response.status === 501 || response.status === 503) {
+          if (response.status === 404 || response.status === 501) {
             setRelayState('unavailable')
           } else {
             setRelayError(controlPlaneError(response.status, 'Load relay profiles'))
@@ -496,6 +535,7 @@ const EmailDeliveryControlPlane: FunctionComponent<Props> = ({ application, note
         )
         setConfigured(decoded.configured)
         setFallbackPolicy(decoded.fallbackPolicy)
+        setRelaysDirty(false)
         setRelayState('ready')
       } catch {
         if (!signal?.aborted) {
@@ -515,6 +555,7 @@ const EmailDeliveryControlPlane: FunctionComponent<Props> = ({ application, note
 
   const updateRelay = (id: string, patch: Partial<RelayDraft>): void => {
     setRelays((current) => current.map((relay) => (relay.id === id ? { ...relay, ...patch } : relay)))
+    setRelaysDirty(true)
     setSaveStatus(null)
   }
 
@@ -526,6 +567,7 @@ const EmailDeliveryControlPlane: FunctionComponent<Props> = ({ application, note
     const reordered = [...relays]
     ;[reordered[index], reordered[destination]] = [reordered[destination], reordered[index]]
     setRelays(normalizeRelayPriorities(reordered))
+    setRelaysDirty(true)
     setSaveStatus(null)
   }
 
@@ -566,6 +608,7 @@ const EmailDeliveryControlPlane: FunctionComponent<Props> = ({ application, note
       setRelays(normalizeRelayPriorities(decoded.relays.sort((a, b) => a.priority - b.priority).map(relayViewToDraft)))
       setConfigured(decoded.configured)
       setFallbackPolicy(decoded.fallbackPolicy)
+      setRelaysDirty(false)
       setSaveStatus('Relay profiles saved. Write-only credential inputs were cleared from this page.')
     } catch {
       setSaveStatus('Relay profiles could not be saved. Check the server connection and try again.')
@@ -801,6 +844,15 @@ const EmailDeliveryControlPlane: FunctionComponent<Props> = ({ application, note
   )
 
   const unavailable = relayState === 'unavailable'
+  const availability: EmailDeliveryControlPlaneAvailability = unavailable
+    ? 'unavailable'
+    : relayState === 'ready' || relayState === 'error'
+      ? 'available'
+      : 'probing'
+
+  useEffect(() => {
+    onAvailabilityChange?.(availability)
+  }, [availability, onAvailabilityChange])
 
   return (
     <div className="border-border mt-7 border-t pt-5">
@@ -824,8 +876,8 @@ const EmailDeliveryControlPlane: FunctionComponent<Props> = ({ application, note
       {unavailable ? (
         <div className="border-border bg-passive-5 mt-4 rounded border p-3">
           <Text>
-            Advanced relay management is unavailable on this server. The compatible single-SMTP settings above remain
-            usable until the server exposes the relay control-plane endpoints.
+            Advanced relay management is unavailable on this server. The compatible single-SMTP editor is shown below
+            until the server exposes the relay control-plane endpoints.
           </Text>
           <Button className="mt-2" label="Retry advanced controls" small onClick={() => void loadRelays()} />
         </div>
@@ -874,7 +926,10 @@ const EmailDeliveryControlPlane: FunctionComponent<Props> = ({ application, note
                   id="email-relay-fallback"
                   className={selectClassName}
                   value={fallbackPolicy.mode}
-                  onChange={(event) => setFallbackPolicy({ mode: event.target.value as RelayFallbackPolicy['mode'] })}
+                  onChange={(event) => {
+                    setFallbackPolicy({ mode: event.target.value as RelayFallbackPolicy['mode'] })
+                    setRelaysDirty(true)
+                  }}
                   disabled={saving}
                 >
                   <option value="next-enabled">Try the next enabled relay</option>
@@ -883,8 +938,16 @@ const EmailDeliveryControlPlane: FunctionComponent<Props> = ({ application, note
               </div>
               <Button
                 label="Add relay profile"
-                onClick={() => setRelays((current) => [...current, createRelayDraft(current.length)])}
-                disabled={saving}
+                onClick={() => {
+                  setRelays((current) => [...current, createRelayDraft(current.length)])
+                  setRelaysDirty(true)
+                }}
+                disabled={saving || relays.length >= EMAIL_RELAY_PROFILE_LIMIT}
+                disabledReason={
+                  relays.length >= EMAIL_RELAY_PROFILE_LIMIT
+                    ? `At most ${EMAIL_RELAY_PROFILE_LIMIT} relay profiles can be configured.`
+                    : undefined
+                }
               />
             </div>
 
@@ -907,10 +970,12 @@ const EmailDeliveryControlPlane: FunctionComponent<Props> = ({ application, note
                   armRemove={() => setRemoveArmed(relay.id)}
                   remove={() => {
                     setRelays((current) => normalizeRelayPriorities(current.filter((entry) => entry.id !== relay.id)))
+                    setRelaysDirty(true)
                     setRemoveArmed(null)
                   }}
                   test={() => void testRelay(relay.id)}
                   testing={testingRelay === relay.id}
+                  testRequiresSave={relaysDirty}
                 />
               ))}
             </div>
@@ -933,6 +998,9 @@ const EmailDeliveryControlPlane: FunctionComponent<Props> = ({ application, note
               <Text className="mt-1 text-xs">
                 The address is sent only with the explicit test request and is never echoed into the result or logs.
               </Text>
+              {relaysDirty ? (
+                <Text className="text-warning mt-1 text-xs">Save relay profile changes before sending a test.</Text>
+              ) : null}
               {testError ? (
                 <div role="alert">
                   <Text className="text-danger mt-2">{testError}</Text>
@@ -987,6 +1055,14 @@ const EmailDeliveryControlPlane: FunctionComponent<Props> = ({ application, note
             ) : null}
             {queueState === 'ready' ? (
               <>
+                <div className="mb-3 flex justify-end">
+                  <Button
+                    label="Refresh queue"
+                    small
+                    onClick={() => void loadQueueOverview()}
+                    disabled={queueAction !== null}
+                  />
+                </div>
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-3" aria-label="Loaded queue summary">
                   {EMAIL_QUEUE_STATES.map((state) => (
                     <button
@@ -1053,7 +1129,9 @@ const EmailDeliveryControlPlane: FunctionComponent<Props> = ({ application, note
                       <dl className="mt-3 grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-xs">
                         <dt className="font-semibold">Attempt</dt>
                         <dd>
-                          {item.attempt} of {item.maxAttempts}
+                          {item.retryMode === 'indefinite'
+                            ? `${item.attempt} (indefinite transient retry)`
+                            : `${item.attempt} of ${item.maxAttempts}`}
                         </dd>
                         <dt className="font-semibold">Created</dt>
                         <dd>
@@ -1063,6 +1141,14 @@ const EmailDeliveryControlPlane: FunctionComponent<Props> = ({ application, note
                         <dd>
                           <SafeDate value={item.nextAttemptAt} />
                         </dd>
+                        {item.expiresAt ? (
+                          <>
+                            <dt className="font-semibold">Expires</dt>
+                            <dd>
+                              <SafeDate value={item.expiresAt} />
+                            </dd>
+                          </>
+                        ) : null}
                         {item.leaseExpiresAt ? (
                           <>
                             <dt className="font-semibold">Lease expires</dt>
@@ -1157,12 +1243,23 @@ const EmailDeliveryControlPlane: FunctionComponent<Props> = ({ application, note
             ) : null}
             {logsState === 'ready' || (logsState === 'loading' && logs.items.length > 0) ? (
               <>
-                <div className="mt-4 flex flex-wrap gap-2" aria-label="Loaded log summary">
-                  {logSummary.map(({ outcome, count }) => (
-                    <StatusChip key={outcome} tone={outcome === 'sent' ? 'success' : count > 0 ? 'warning' : 'normal'}>
-                      {outcome}: {count}
-                    </StatusChip>
-                  ))}
+                <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex flex-wrap gap-2" aria-label="Loaded log summary">
+                    {logSummary.map(({ outcome, count }) => (
+                      <StatusChip
+                        key={outcome}
+                        tone={outcome === 'sent' ? 'success' : count > 0 ? 'warning' : 'normal'}
+                      >
+                        {outcome}: {count}
+                      </StatusChip>
+                    ))}
+                  </div>
+                  <Button
+                    label="Refresh logs"
+                    small
+                    onClick={() => void loadLogs()}
+                    disabled={logsState === 'loading'}
+                  />
                 </div>
                 <div className="mt-4 grid gap-3">
                   {logs.items.length === 0 ? <Text>No redacted log entries match these filters.</Text> : null}

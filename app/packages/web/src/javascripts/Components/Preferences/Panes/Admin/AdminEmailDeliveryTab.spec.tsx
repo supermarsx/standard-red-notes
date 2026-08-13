@@ -62,17 +62,48 @@ let root: Root
 let container: HTMLDivElement
 let saveSettings: jest.Mock
 let adminTestEmailDelivery: jest.Mock
+let serverGetJsonRequest: jest.Mock
 
-const render = async () => {
+const render = async (relayStatus: number | 'pending' = 404) => {
   saveSettings = jest.fn().mockResolvedValue(true)
   adminTestEmailDelivery = jest.fn().mockResolvedValue({ data: { ok: true } })
+  serverGetJsonRequest =
+    relayStatus === 'pending'
+      ? jest.fn().mockReturnValue(new Promise(() => undefined))
+      : jest.fn().mockResolvedValue({
+          status: relayStatus,
+          ok: relayStatus === 200,
+          data:
+            relayStatus === 200
+              ? {
+                  relays: [
+                    {
+                      id: 'smtp-primary',
+                      name: 'Primary SMTP',
+                      kind: 'smtp',
+                      enabled: true,
+                      priority: 1,
+                      from: 'Notes <notes@example.com>',
+                      rateLimit: { max: 20, windowSeconds: 60 },
+                      host: 'smtp.example.com',
+                      port: 587,
+                      username: 'mailer',
+                      tlsMode: 'starttls',
+                      credentialsConfigured: true,
+                    },
+                  ],
+                  fallbackPolicy: { mode: 'next-enabled' },
+                  configured: true,
+                }
+              : {},
+        })
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
   await act(async () => {
     root.render(
       createElement(AdminEmailDeliveryTab, {
-        application: { legacyApi: { adminTestEmailDelivery } } as never,
+        application: { legacyApi: { adminTestEmailDelivery }, serverGetJsonRequest } as never,
         settings,
         sources: {
           'emailDelivery.host': 'env',
@@ -88,6 +119,12 @@ const render = async () => {
       } as never),
     )
   })
+}
+
+const remount = async (relayStatus: number | 'pending'): Promise<void> => {
+  act(() => root.unmount())
+  container.remove()
+  await render(relayStatus)
 }
 
 const setInput = async (id: string, value: string): Promise<void> => {
@@ -120,6 +157,7 @@ afterEach(() => {
 })
 
 it('shows configured write-only status and preserves the password on ordinary partial saves', async () => {
+  expect(container.textContent).toContain('Compatible single-SMTP configuration')
   const passwordInput = container.querySelector<HTMLInputElement>('#email-smtp-password')
   expect(passwordInput?.value).toBe('')
   expect(passwordInput?.placeholder).toBe('Leave blank to preserve')
@@ -171,4 +209,30 @@ it('shows the insecure-transport warning and never displays a raw provider error
   expect(adminTestEmailDelivery).toHaveBeenCalledWith('operator@example.com')
   expect(container.textContent).toContain('The test failed. Check the SMTP settings and the server logs.')
   expect(container.textContent).not.toContain('550 secret provider response')
+})
+
+it('shows only the advanced relay editor when the relay endpoint is available', async () => {
+  await remount(200)
+
+  expect(container.querySelector('#relay-smtp-primary-host')).not.toBeNull()
+  expect(container.querySelector('#email-smtp-host')).toBeNull()
+  expect(container.textContent).not.toContain('Compatible single-SMTP configuration')
+  expect(container.textContent).not.toContain('Save email delivery')
+})
+
+it('does not flash the legacy editor while the relay endpoint probe is pending', async () => {
+  await remount('pending')
+
+  expect(container.textContent).toContain('Relay routing and delivery activity')
+  expect(container.querySelector('#relay-smtp-primary-host')).toBeNull()
+  expect(container.querySelector('#email-smtp-host')).toBeNull()
+  expect(container.textContent).not.toContain('Compatible single-SMTP configuration')
+})
+
+it('keeps a transient advanced-service outage visible without revealing a conflicting legacy editor', async () => {
+  await remount(503)
+
+  expect(container.textContent).toContain('email delivery subsystem is unavailable')
+  expect(container.querySelector('#email-smtp-host')).toBeNull()
+  expect(container.textContent).not.toContain('Compatible single-SMTP configuration')
 })

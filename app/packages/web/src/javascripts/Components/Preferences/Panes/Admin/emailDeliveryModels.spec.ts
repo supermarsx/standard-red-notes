@@ -4,6 +4,7 @@ import {
   decodeQueueResponse,
   decodeRelaysResponse,
   normalizeRelayPriorities,
+  relayIsConformant,
   relayViewToDraft,
   serializeRelayDraft,
 } from './emailDeliveryModels'
@@ -74,6 +75,87 @@ describe('email delivery control-plane models', () => {
     ])
   })
 
+  it('accepts a zero maximum as the documented disabled rate-limit mode', () => {
+    const draft = relayViewToDraft({ ...smtpView, rateLimit: { max: 0, windowSeconds: 60 } })
+
+    expect(relayIsConformant(draft)).toBe(true)
+  })
+
+  it('accepts the AWS default credential chain and disabled credentialless API relays', () => {
+    const aws = {
+      ...relayViewToDraft(smtpView),
+      id: 'ses-primary',
+      kind: 'aws-ses' as const,
+      region: 'eu-west-1',
+      credentialsConfigured: false,
+      accessKeyId: '',
+      secretAccessKey: '',
+      sessionToken: '',
+    }
+    const disabledSendGrid = {
+      ...aws,
+      id: 'sendgrid-standby',
+      kind: 'sendgrid' as const,
+      enabled: false,
+      apiKey: '',
+    }
+
+    expect(relayIsConformant(aws)).toBe(true)
+    expect(relayIsConformant(disabledSendGrid)).toBe(true)
+  })
+
+  it('allows unauthenticated SMTP but requires an explicit clear when removing stored authentication', () => {
+    const unauthenticated = relayViewToDraft({
+      ...smtpView,
+      username: undefined,
+      credentialsConfigured: false,
+    })
+    const removingStoredAuthentication = { ...relayViewToDraft(smtpView), username: '' }
+
+    expect(relayIsConformant(unauthenticated)).toBe(true)
+    expect(relayIsConformant(removingStoredAuthentication)).toBe(false)
+    expect(relayIsConformant({ ...removingStoredAuthentication, clearCredentials: true })).toBe(true)
+  })
+
+  it('requires paired credential rotation in the conformity preview', () => {
+    const smtpUsernameOnly = { ...relayViewToDraft(smtpView), username: 'replacement-user' }
+    const ses = {
+      ...relayViewToDraft(smtpView),
+      kind: 'aws-ses' as const,
+      region: 'eu-west-1',
+      credentialsConfigured: true,
+      accessKeyId: 'replacement-access',
+    }
+
+    expect(relayIsConformant(smtpUsernameOnly)).toBe(false)
+    expect(relayIsConformant({ ...smtpUsernameOnly, password: 'replacement-secret' })).toBe(true)
+    expect(relayIsConformant(ses)).toBe(false)
+    expect(relayIsConformant({ ...ses, secretAccessKey: 'replacement-secret' })).toBe(true)
+  })
+
+  it('keeps sender and provider-domain conformity aligned with the server boundary', () => {
+    const smtp = relayViewToDraft(smtpView)
+    expect(relayIsConformant({ ...smtp, from: 'Notes <notes@example.com>' })).toBe(true)
+    expect(relayIsConformant({ ...smtp, from: 'notes@example.com' })).toBe(true)
+    expect(relayIsConformant({ ...smtp, from: '@' })).toBe(false)
+    expect(relayIsConformant({ ...smtp, from: 'foo,bar@example.com' })).toBe(false)
+    expect(relayIsConformant({ ...smtp, from: 'foo@example..com' })).toBe(false)
+    expect(relayIsConformant({ ...smtp, from: 'foo@-example.com' })).toBe(false)
+    expect(relayIsConformant({ ...smtp, from: '<notes@example.com>' })).toBe(false)
+    expect(relayIsConformant({ ...smtp, from: 'Notes <notes@example.com> trailing' })).toBe(false)
+
+    const mailgun = {
+      ...smtp,
+      kind: 'mailgun' as const,
+      domain: 'mg.example.com',
+      apiKey: 'secret',
+      credentialsConfigured: false,
+    }
+    expect(relayIsConformant(mailgun)).toBe(true)
+    expect(relayIsConformant({ ...mailgun, domain: '-invalid.example.com' })).toBe(false)
+    expect(relayIsConformant({ ...mailgun, domain: 'invalid..example.com' })).toBe(false)
+  })
+
   it('decodes queue and log metadata without retaining injected content fields', () => {
     const queue = decodeQueueResponse({
       items: [
@@ -115,6 +197,27 @@ describe('email delivery control-plane models', () => {
     expect(JSON.stringify(logs)).not.toContain('private body')
     expect(JSON.stringify(logs)).not.toContain('raw upstream detail')
     expect(logs?.items[0]).toMatchObject({ outcome: 'rejected', providerCode: 'AUTH', httpStatus: 401 })
+  })
+
+  it('accepts the distinct published-reminder queue attribution', () => {
+    expect(
+      decodeQueueResponse({
+        items: [
+          {
+            id: 'published-job',
+            state: 'ready',
+            source: 'published-reminder',
+            attempt: 0,
+            maxAttempts: 5,
+            createdAt: '2026-08-13T10:00:00.000Z',
+          },
+        ],
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        items: [expect.objectContaining({ id: 'published-job', source: 'published-reminder' })],
+      }),
+    )
   })
 
   it('maps HTTP failures to redacted operator guidance without consuming an upstream error body', () => {

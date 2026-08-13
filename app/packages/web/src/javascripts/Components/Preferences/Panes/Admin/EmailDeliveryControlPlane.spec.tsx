@@ -63,6 +63,7 @@ let container: HTMLDivElement
 let serverGetJsonRequest: jest.Mock
 let serverJsonRequest: jest.Mock
 let serverJsonRequestWithMethod: jest.Mock
+let onAvailabilityChange: jest.Mock
 
 const flush = async (): Promise<void> => {
   await act(async () => {
@@ -92,6 +93,7 @@ const render = async (relayStatus = 200): Promise<void> => {
   serverJsonRequestWithMethod = jest.fn().mockImplementation(async (_path: string, method: string) => {
     return method === 'PUT' ? { status: 200, ok: true, data: relayResponse } : { status: 204, ok: true, data: {} }
   })
+  onAvailabilityChange = jest.fn()
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
@@ -100,6 +102,7 @@ const render = async (relayStatus = 200): Promise<void> => {
       createElement(EmailDeliveryControlPlane, {
         application: { serverGetJsonRequest, serverJsonRequest, serverJsonRequestWithMethod } as never,
         noteIfForbidden: jest.fn(),
+        onAvailabilityChange,
       }),
     )
   })
@@ -115,6 +118,11 @@ const click = async (label: string): Promise<void> => {
   await flush()
 }
 
+const button = (label: string): HTMLButtonElement | undefined =>
+  Array.from(container.querySelectorAll('button')).find(
+    (entry): entry is HTMLButtonElement => entry.textContent?.trim() === label,
+  )
+
 afterEach(() => {
   act(() => root?.unmount())
   container?.remove()
@@ -128,6 +136,7 @@ it('renders only redacted relay fields and omits preserved credentials from an o
   expect(container.textContent).not.toContain('server-must-not-return-this')
   expect(container.textContent).not.toContain('private-recipient@example.com')
   expect(container.querySelector<HTMLInputElement>('#relay-smtp-primary-password')?.value).toBe('')
+  expect(onAvailabilityChange).toHaveBeenLastCalledWith('available')
 
   await click('Save relay profiles')
 
@@ -146,6 +155,27 @@ it('sends null for credentials only after an explicit clear action', async () =>
   await click('Save relay profiles')
 
   expect(serverJsonRequestWithMethod.mock.calls[0][2].relays[0]).toHaveProperty('password', null)
+})
+
+it('requires unsaved relay edits to be persisted before testing the stored profile', async () => {
+  await render()
+
+  expect(button('Send redacted test')?.disabled).toBe(false)
+  const fallback = container.querySelector<HTMLSelectElement>('#email-relay-fallback')
+  expect(fallback).not.toBeNull()
+  await act(async () => {
+    if (fallback) {
+      fallback.value = 'none'
+      fallback.dispatchEvent(new Event('change', { bubbles: true }))
+    }
+  })
+  await flush()
+
+  expect(container.textContent).toContain('Save relay profile changes before sending a test.')
+  expect(button('Send redacted test')?.getAttribute('aria-disabled')).toBe('true')
+
+  await click('Save relay profiles')
+  expect(button('Send redacted test')?.getAttribute('aria-disabled')).toBeNull()
 })
 
 it('shows queue and log metadata while dropping injected recipient, content, and raw response fields', async () => {
@@ -172,5 +202,6 @@ it('keeps legacy SMTP viable when advanced endpoints are not deployed yet', asyn
   await render(404)
 
   expect(container.textContent).toContain('Advanced relay management is unavailable on this server')
-  expect(container.textContent).toContain('single-SMTP settings above remain usable')
+  expect(container.textContent).toContain('single-SMTP editor is shown below')
+  expect(onAvailabilityChange).toHaveBeenLastCalledWith('unavailable')
 })
