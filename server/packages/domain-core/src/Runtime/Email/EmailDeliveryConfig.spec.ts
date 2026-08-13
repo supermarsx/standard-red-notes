@@ -6,6 +6,7 @@ import {
   resolveEmailDeliveryConfig,
   type ResolvedEmailDeliveryConfig,
   validateEmailRecipient,
+  validateEmailSenderIdentity,
 } from './EmailDeliveryConfig'
 
 describe('EmailDeliveryConfig', () => {
@@ -71,8 +72,25 @@ describe('EmailDeliveryConfig', () => {
   it('normalizes valid recipients and rejects non-string or malformed recipients', () => {
     expect(validateEmailRecipient(undefined)).toBeUndefined()
     expect(validateEmailRecipient(' notes@example.com ')).toBe('notes@example.com')
+    expect(validateEmailRecipient("o'hara+notes@example-mail.com")).toBe("o'hara+notes@example-mail.com")
     expect(validateEmailRecipient('missing-at-sign.example.com')).toBeUndefined()
+    expect(validateEmailRecipient('foo,bar@example.com')).toBeUndefined()
+    expect(validateEmailRecipient('foo;bar@example.com')).toBeUndefined()
+    expect(validateEmailRecipient('foo@example..com')).toBeUndefined()
+    expect(validateEmailRecipient('foo@-example.com')).toBeUndefined()
+    expect(validateEmailRecipient('.foo@example.com')).toBeUndefined()
     expect(validateEmailRecipient(`notes@${'x'.repeat(EMAIL_DELIVERY_LIMITS.recipient)}.com`)).toBeUndefined()
+  })
+
+  it('parses a conforming sender identity and rejects ambiguous display-name syntax', () => {
+    expect(validateEmailSenderIdentity('Standard Red Notes <notes@example.com>')).toEqual({
+      address: 'notes@example.com',
+      name: 'Standard Red Notes',
+    })
+    expect(validateEmailSenderIdentity('notes@example.com')).toEqual({ address: 'notes@example.com' })
+    expect(validateEmailSenderIdentity('@')).toBeUndefined()
+    expect(validateEmailSenderIdentity('<notes@example.com>')).toBeUndefined()
+    expect(validateEmailSenderIdentity('Notes <notes@example.com> trailing')).toBeUndefined()
   })
 
   it('allows insecure SMTP only for literal loopback/private/link-local IPs and localhost names', () => {

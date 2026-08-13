@@ -9,20 +9,23 @@ describe('SendApprovalNotification', () => {
   let logger: Logger
 
   const email = 'approved@example.com'
+  const userUuid = '11111111-1111-1111-1111-111111111111'
 
   const createUseCase = () => new SendApprovalNotification(emailSender, logger)
 
   beforeEach(() => {
-    emailSender = {} as jest.Mocked<EmailSenderInterface>
-    emailSender.isConfigured = jest.fn().mockReturnValue(true)
-    emailSender.sendEmail = jest.fn().mockResolvedValue(true)
+    emailSender = {
+      acceptanceMode: 'provider',
+      isConfigured: jest.fn().mockReturnValue(true),
+      sendEmail: jest.fn().mockResolvedValue(true),
+    }
 
     logger = {} as jest.Mocked<Logger>
     logger.error = jest.fn()
   })
 
   it('should fail if no email is given', async () => {
-    const result = await createUseCase().execute({ email: '' })
+    const result = await createUseCase().execute({ userUuid, email: '' })
 
     expect(result.isFailed()).toBe(true)
     expect(result.getError()).toEqual('Could not send approval notification: missing email.')
@@ -32,7 +35,7 @@ describe('SendApprovalNotification', () => {
   it('should skip cleanly when SMTP is not configured', async () => {
     emailSender.isConfigured = jest.fn().mockResolvedValue(false)
 
-    const result = await createUseCase().execute({ email })
+    const result = await createUseCase().execute({ userUuid, email })
 
     expect(result.isFailed()).toBe(false)
     expect(result.getValue()).toBe(false)
@@ -40,20 +43,24 @@ describe('SendApprovalNotification', () => {
   })
 
   it('should send the approval email without a sign-in link when no url is given', async () => {
-    const result = await createUseCase().execute({ email })
+    const result = await createUseCase().execute({ userUuid, email })
 
     expect(result.isFailed()).toBe(false)
     expect(result.getValue()).toBe(true)
 
     expect(emailSender.sendEmail).toHaveBeenCalledTimes(1)
-    const [to, subject, body] = (emailSender.sendEmail as jest.Mock).mock.calls[0]
+    const [to, subject, body, options] = (emailSender.sendEmail as jest.Mock).mock.calls[0]
     expect(to).toEqual(email)
     expect(subject).toEqual('Your account has been approved')
     expect(body).not.toContain('Sign in here')
+    expect(options).toEqual({
+      deliverySource: 'account',
+      deliveryId: expect.stringMatching(/^account-approval-[0-9a-f]{64}$/),
+    })
   })
 
   it('should append the trimmed sign-in link with trailing slashes stripped', async () => {
-    await createUseCase().execute({ email, signInUrl: '  https://notes.example.com//  ' })
+    await createUseCase().execute({ userUuid, email, signInUrl: '  https://notes.example.com//  ' })
 
     const body = (emailSender.sendEmail as jest.Mock).mock.calls[0][2] as string
     expect(body).toContain('Sign in here: https://notes.example.com')
@@ -61,7 +68,7 @@ describe('SendApprovalNotification', () => {
   })
 
   it('should treat a blank sign-in url as no link at all', async () => {
-    await createUseCase().execute({ email, signInUrl: '   ' })
+    await createUseCase().execute({ userUuid, email, signInUrl: '   ' })
 
     const body = (emailSender.sendEmail as jest.Mock).mock.calls[0][2] as string
     expect(body).not.toContain('Sign in here')
@@ -70,7 +77,7 @@ describe('SendApprovalNotification', () => {
   it('should report the sender saying it did not dispatch', async () => {
     emailSender.sendEmail = jest.fn().mockResolvedValue(false)
 
-    const result = await createUseCase().execute({ email })
+    const result = await createUseCase().execute({ userUuid, email })
 
     expect(result.isFailed()).toBe(false)
     expect(result.getValue()).toBe(false)
@@ -79,7 +86,7 @@ describe('SendApprovalNotification', () => {
   it('should fail without leaking the email address when the sender throws', async () => {
     emailSender.sendEmail = jest.fn().mockRejectedValue(new Error('smtp down'))
 
-    const result = await createUseCase().execute({ email })
+    const result = await createUseCase().execute({ userUuid, email })
 
     expect(result.isFailed()).toBe(true)
     expect(result.getError()).toEqual('Could not send approval notification.')

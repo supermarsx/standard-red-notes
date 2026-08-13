@@ -31,6 +31,8 @@ export interface PublishedReminder {
   message: string
   /** When the reminder is due, as an ISO-8601 UTC timestamp. */
   dueAtUtc: string
+  /** Opaque publication generation; prevents a later explicit re-publish from reusing a cancelled queue id. */
+  deliveryRevision?: string
   /**
    * Optional per-reminder channel override. When absent, the user's
    * DeliveryConfig channel is used.
@@ -74,9 +76,23 @@ export interface DeliveryConfig {
  */
 export interface DeliveryResult {
   ok: boolean
+  /** Accepted into a durable queue but not yet acknowledged by the provider. */
+  pending?: boolean
   /** True when the adapter had no credentials and therefore did nothing. */
   notConfigured?: boolean
   /** Human-readable reason on failure / no-op. */
+  reason?: string
+}
+
+export interface ReminderDeliveryContext {
+  /** Stable, opaque identifier used by durable providers to make retries idempotent. */
+  deliveryId: string
+}
+
+export interface ReminderDeliveryCancellationResult {
+  ok: boolean
+  inFlight?: boolean
+  providerAccepted?: boolean
   reason?: string
 }
 
@@ -87,7 +103,9 @@ export interface DeliveryResult {
  */
 export interface ReminderDeliveryProvider {
   readonly channel: DeliveryChannel
-  send(destination: string, message: string): Promise<DeliveryResult>
+  send(destination: string, message: string, context?: ReminderDeliveryContext): Promise<DeliveryResult>
+  /** Optional durable cancellation hook; synchronous providers need none. */
+  cancel?(context: ReminderDeliveryContext): Promise<ReminderDeliveryCancellationResult>
 }
 
 /**

@@ -30,7 +30,11 @@ describe('SendEmailConfirmation', () => {
       deleteAllForUser: jest.fn(),
       deleteExpiredOrConsumed: jest.fn().mockResolvedValue(0),
     }
-    emailSender = { isConfigured: jest.fn().mockReturnValue(true), sendEmail: jest.fn().mockResolvedValue(true) }
+    emailSender = {
+      acceptanceMode: 'provider',
+      isConfigured: jest.fn().mockReturnValue(true),
+      sendEmail: jest.fn().mockResolvedValue(true),
+    }
     logger = { debug: jest.fn(), warn: jest.fn(), error: jest.fn() } as unknown as jest.Mocked<Logger>
   })
 
@@ -49,6 +53,12 @@ describe('SendEmailConfirmation', () => {
     const rawToken = decodeURIComponent(body.match(/email_confirmation=([^\s&]+)/)![1])
     expect(hashEmailConfirmationToken(rawToken)).toBe(savedToken.props.hashedToken)
     expect(body).not.toContain(savedToken.props.hashedToken)
+    expect(emailSender.sendEmail.mock.calls[0][3]).toEqual({
+      deliverySource: 'account',
+      deliveryId: expect.stringMatching(/^email-confirmation-[0-9a-f]{64}$/),
+      expiresAt: savedToken.props.expiresAt.getTime(),
+      supersessionKey: expect.stringMatching(/^confirmation-user-[0-9a-f]{64}$/),
+    })
   })
 
   it('sets a ~24h expiry on the token', async () => {

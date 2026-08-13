@@ -2,6 +2,7 @@ import { Result, UseCaseInterface } from '@standardnotes/domain-core'
 import { Logger } from 'winston'
 
 import { EmailSenderInterface } from '../../Email/EmailSenderInterface'
+import { createEmailDeliveryId } from '../../Email/EmailDeliveryId'
 import { safeErrorLogMetadata } from '../../Logging/SafeLog'
 
 /**
@@ -23,8 +24,8 @@ export class SendApprovalNotification implements UseCaseInterface<boolean> {
     private logger: Logger,
   ) {}
 
-  async execute(dto: { email: string; signInUrl?: string }): Promise<Result<boolean>> {
-    if (!dto.email) {
+  async execute(dto: { userUuid: string; email: string; signInUrl?: string }): Promise<Result<boolean>> {
+    if (!dto.userUuid || !dto.email) {
       return Result.fail('Could not send approval notification: missing email.')
     }
 
@@ -38,7 +39,10 @@ export class SendApprovalNotification implements UseCaseInterface<boolean> {
       const body =
         'Good news — an administrator has approved your account. You can now sign in and start using it.' + link
 
-      const emailed = await this.emailSender.sendEmail(dto.email, SendApprovalNotification.DEFAULT_SUBJECT, body)
+      const emailed = await this.emailSender.sendEmail(dto.email, SendApprovalNotification.DEFAULT_SUBJECT, body, {
+        deliverySource: 'account',
+        deliveryId: createEmailDeliveryId('account-approval', dto.userUuid),
+      })
 
       return Result.ok(emailed)
     } catch (error) {

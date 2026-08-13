@@ -2,13 +2,19 @@ import { Result, UniqueEntityId, UseCaseInterface, Uuid } from '@standardnotes/d
 
 import { DeadManSwitch } from '../../DeadManSwitch/DeadManSwitch'
 import { DeadManSwitchRepositoryInterface } from '../../DeadManSwitch/DeadManSwitchRepositoryInterface'
+import { cancelDurableEmailDelivery } from '../../Email/DurableEmailCancellation'
+import { createDeadManSwitchEmailDeliveryId } from '../../Email/EmailDeliveryId'
+import { EmailSenderInterface } from '../../Email/EmailSenderInterface'
 
 import { CheckInDeadManSwitchDTO } from './CheckInDeadManSwitchDTO'
 
 const MS_PER_DAY = 86_400_000
 
 export class CheckInDeadManSwitch implements UseCaseInterface<number> {
-  constructor(private deadManSwitchRepository: DeadManSwitchRepositoryInterface) {}
+  constructor(
+    private deadManSwitchRepository: DeadManSwitchRepositoryInterface,
+    private emailSender: EmailSenderInterface,
+  ) {}
 
   async execute(dto: CheckInDeadManSwitchDTO): Promise<Result<number>> {
     const userUuidOrError = Uuid.create(dto.userUuid)
@@ -21,6 +27,18 @@ export class CheckInDeadManSwitch implements UseCaseInterface<number> {
     // Ownership check: never allow checking in on another user's switch.
     if (!deadManSwitch || deadManSwitch.props.userUuid !== userUuid.value) {
       return Result.fail('Dead man switch not found')
+    }
+
+    try {
+      const cancellation = await cancelDurableEmailDelivery(
+        this.emailSender,
+        createDeadManSwitchEmailDeliveryId(deadManSwitch.id.toString(), deadManSwitch.props.deadline),
+      )
+      if (cancellation === 'in-flight') {
+        return Result.fail('Could not check in: the current email delivery is already in flight.')
+      }
+    } catch {
+      return Result.fail('Could not check in: durable email delivery cancellation is unavailable.')
     }
 
     const now = Date.now()

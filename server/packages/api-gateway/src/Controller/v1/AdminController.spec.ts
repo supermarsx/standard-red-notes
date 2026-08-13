@@ -20,6 +20,7 @@ import {
 import { ServerSettingsStore } from '../../Service/ServerSettings/ServerSettingsStore'
 import { WorkflowsService } from '../../Service/Workflows/WorkflowsService'
 import { EmailProvider } from '../../Service/ReminderDelivery/Providers/EmailProvider'
+import { AdminEmailDeliveryService } from '../../Service/EmailDelivery/AdminEmailDeliveryService'
 
 const confirmationDefaults = {
   emailConfirmationEnabled: false,
@@ -76,6 +77,7 @@ describe('AdminController server-status', () => {
       serverSettingsResolver?: ServerSettingsResolver
       logger?: { info: jest.Mock }
       workflowsService?: WorkflowsService
+      adminEmailDeliveryService?: AdminEmailDeliveryService
     } = {},
   ) =>
     new AdminController(
@@ -106,6 +108,7 @@ describe('AdminController server-status', () => {
       undefined,
       undefined,
       options.workflowsService,
+      options.adminEmailDeliveryService,
     )
 
   const responseWith = (roles: Array<{ name: string }>): Response => {
@@ -511,7 +514,8 @@ describe('AdminController server-status', () => {
       await fs.rm(dir, { recursive: true, force: true })
     })
 
-    const settingsController = () => makeController({ serverSettingsResolver: resolver, logger, workflowsService })
+    const settingsController = (adminEmailDeliveryService?: AdminEmailDeliveryService) =>
+      makeController({ serverSettingsResolver: resolver, logger, workflowsService, adminEmailDeliveryService })
 
     it('rejects a non-admin requestor with 403 on both GET and PUT', async () => {
       await settingsController().getServerSettings({} as Request, responseWith([{ name: RoleName.NAMES.CoreUser }]))
@@ -640,6 +644,36 @@ describe('AdminController server-status', () => {
       expect(logger.info).toHaveBeenLastCalledWith(
         'admin email-delivery test completed',
         expect.objectContaining({ audit: 'admin.email-delivery.test', outcome: 'failed' }),
+      )
+    })
+
+    it('dispatches the stable test route through the selected advanced relay without leaking the recipient', async () => {
+      const advanced = {
+        testDelivery: jest.fn().mockResolvedValue({
+          accepted: true,
+          relayId: 'ses-primary',
+          relayKind: 'aws-ses',
+          outcome: 'sent',
+        }),
+      } as unknown as AdminEmailDeliveryService
+      const recipient = 'operator-secret@example.com'
+
+      await settingsController(advanced).testEmailDelivery(
+        { body: { recipient, relayId: 'ses-primary' } } as unknown as Request,
+        responseWith([{ name: RoleName.NAMES.AdminUser }]),
+      )
+
+      expect(advanced.testDelivery).toHaveBeenCalledWith({ recipient, relayId: 'ses-primary' })
+      expect(jsonMock).toHaveBeenCalledWith({
+        accepted: true,
+        relayId: 'ses-primary',
+        relayKind: 'aws-ses',
+        outcome: 'sent',
+      })
+      expect(JSON.stringify(logger.info.mock.calls)).not.toContain(recipient)
+      expect(logger.info).toHaveBeenLastCalledWith(
+        'admin email-delivery test completed',
+        expect.objectContaining({ audit: 'admin.email-delivery.test', outcome: 'sent' }),
       )
     })
 

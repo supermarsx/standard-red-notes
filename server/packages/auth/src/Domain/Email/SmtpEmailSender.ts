@@ -20,6 +20,8 @@ export interface SmtpEmailSenderConfig {
 }
 
 export class SmtpEmailSender implements EmailSenderInterface {
+  readonly acceptanceMode = 'provider' as const
+
   constructor(
     private readonly config: SmtpEmailSenderConfig,
     private readonly logger: Logger,

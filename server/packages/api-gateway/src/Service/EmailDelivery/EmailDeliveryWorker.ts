@@ -12,7 +12,8 @@ export interface EmailDeliveryWorkerOptions {
 
 export class EmailDeliveryWorker {
   private timer: NodeJS.Timeout | null = null
-  private running = false
+  private inFlight: Promise<void> | null = null
+  private stopping = false
   private readonly intervalMs: number
   private readonly batchSize: number
 
@@ -26,29 +27,51 @@ export class EmailDeliveryWorker {
   }
 
   start(): boolean {
-    if (this.timer) {
+    if (this.timer || this.stopping) {
       return false
     }
+    this.stopping = false
+    this.service.endDrain()
     this.timer = setInterval(() => void this.tick(), this.intervalMs)
     this.timer.unref?.()
     return true
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
+    this.stopping = true
+    this.service.beginDrain()
     if (this.timer) {
       clearInterval(this.timer)
       this.timer = null
     }
+    try {
+      await this.inFlight
+    } finally {
+      this.stopping = false
+    }
   }
 
-  async tick(): Promise<void> {
-    if (this.running) {
-      return
+  tick(): Promise<void> {
+    if (this.inFlight || this.stopping) {
+      return this.inFlight ?? Promise.resolve()
     }
-    this.running = true
+    const operation = this.runBatch()
+    const tracked = operation.finally(() => {
+      if (this.inFlight === tracked) {
+        this.inFlight = null
+      }
+    })
+    this.inFlight = tracked
+    return tracked
+  }
+
+  private async runBatch(): Promise<void> {
     const counts: Record<string, number> = {}
     try {
       for (let index = 0; index < this.batchSize; index++) {
+        if (this.stopping) {
+          break
+        }
         const result = await this.service.processOne()
         counts[result.status] = (counts[result.status] ?? 0) + 1
         if (result.status === 'idle') {
@@ -66,8 +89,6 @@ export class EmailDeliveryWorker {
       this.logger?.error('Email delivery worker batch failed.', {
         errorName: error instanceof Error ? error.name : 'UnknownError',
       })
-    } finally {
-      this.running = false
     }
   }
 }

@@ -42,7 +42,11 @@ describe('ApproveUser', () => {
     const saved = (userRepository.save as jest.Mock).mock.calls[0][0] as User
     expect(saved.approved).toBe(true)
     expect(saved.approvedAt).toEqual(new Date(1000))
-    expect(sendApprovalNotification.execute).toHaveBeenCalledWith({ email: 'p@example.com', signInUrl: 'https://app' })
+    expect(sendApprovalNotification.execute).toHaveBeenCalledWith({
+      userUuid: validUuid,
+      email: 'p@example.com',
+      signInUrl: 'https://app',
+    })
   })
 
   it('still succeeds if the approval email throws (best-effort)', async () => {

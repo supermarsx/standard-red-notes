@@ -11,27 +11,34 @@ import {
   BackupAttachmentTooLargeError,
   InvalidBackupAttachmentReferenceError,
 } from '../Email/BackupAttachmentStorageInterface'
-import { EmailAttachment, EmailSenderInterface } from '../Email/EmailSenderInterface'
+import {
+  EmailBackupDeliveryState,
+  PendingEmailBackupBatch,
+  emptyEmailBackupDeliveryState,
+  parseEmailBackupDeliveryState,
+  pendingBatchMatches,
+  recordCompletedEmailBackupBatch,
+  recordPendingEmailBackupBatch,
+  serializeEmailBackupDeliveryState,
+} from '../Email/EmailBackupDeliveryState'
+import { applyEmailBackupStatePatch } from '../Email/EmailBackupStatePatch'
+import { EmailBackupStateRepositoryInterface } from '../Email/EmailBackupStateRepositoryInterface'
+import { EmailAttachment, EmailDeliveryStatus, EmailSenderInterface } from '../Email/EmailSenderInterface'
+import { createEmailDeliveryId } from '../Email/EmailDeliveryId'
 import { GetSetting } from '../UseCase/GetSetting/GetSetting'
 import { SetSettingValue } from '../UseCase/SetSettingValue/SetSettingValue'
 
 type AttachmentReadResult =
   { status: 'ready'; content: Buffer } | { status: 'already-delivered' } | { status: 'rejected' }
 
-interface CompletedEmailBackupBatch {
-  batchId: string
-  deliveredAt: number
-}
-
-interface EmailBackupDeliveryState {
-  completed: CompletedEmailBackupBatch[]
+interface EmailDeliveryAcceptance {
+  accepted: boolean
+  terminal: boolean
 }
 
 export class EmailRequestedEventHandler implements DomainEventHandlerInterface {
   private static readonly DATA_BACKUP_MESSAGE_IDENTIFIER = 'DATA_BACKUP'
   private static readonly DATA_BACKUP_FAILED_MESSAGE_IDENTIFIER = 'DATA_BACKUP_FAILED'
-  private static readonly MAX_COMPLETED_BATCH_HISTORY = 32
-
   constructor(
     private emailSender: EmailSenderInterface,
     private backupAttachmentStorage: BackupAttachmentStorageInterface,
@@ -40,6 +47,7 @@ export class EmailRequestedEventHandler implements DomainEventHandlerInterface {
     private timer: TimerInterface,
     private emailBackupsEnabled: boolean,
     private logger: Logger,
+    private emailBackupStateRepository?: EmailBackupStateRepositoryInterface,
   ) {}
 
   async handle(event: EmailRequestedEvent): Promise<void> {
@@ -100,26 +108,30 @@ export class EmailRequestedEventHandler implements DomainEventHandlerInterface {
       return
     }
 
-    const delivered = await this.deliver(
+    if (isDataBackupFailure) {
+      await this.handleBackupFailureNotice(
+        event,
+        recipientOrError.getValue().value,
+        backupUserUuid as string,
+        messageIdentifier,
+      )
+
+      return
+    }
+
+    const delivery = await this.deliver(
       recipientOrError.getValue().value,
       event.payload.subject,
       event.payload.body,
       [],
       messageIdentifier,
+      this.deliveryIdForEvent(event, messageIdentifier),
     )
-    if (!delivered) {
+    if (!delivery.accepted) {
       throw new Error('Email delivery was not confirmed')
     }
 
-    if (isDataBackupFailure) {
-      await this.recordLastSent(
-        backupUserUuid as string,
-        this.timer.convertMicrosecondsToMilliseconds(this.timer.getTimestampInMicroseconds()),
-        messageIdentifier,
-      )
-    }
-
-    this.logDelivered(messageIdentifier)
+    this.logAccepted(messageIdentifier, delivery.terminal)
   }
 
   private async handleBackupBatch(
@@ -141,7 +153,7 @@ export class EmailRequestedEventHandler implements DomainEventHandlerInterface {
     if (completedBatch) {
       await this.recordLastSent(userUuid, completedBatch.deliveredAt, messageIdentifier)
       await this.cleanupDeliveredAttachments(attachmentReferences, messageIdentifier)
-      this.logDelivered(messageIdentifier)
+      this.logAccepted(messageIdentifier, true)
 
       return
     }
@@ -149,10 +161,42 @@ export class EmailRequestedEventHandler implements DomainEventHandlerInterface {
     const orderedReferences = [...attachmentReferences].sort(
       (left, right) => (left.batchIndex ?? 1) - (right.batchIndex ?? 1),
     )
+
+    if (this.emailSender.acceptanceMode === 'durable-queue') {
+      await this.handleDurableBackupBatch(
+        event,
+        recipient,
+        userUuid,
+        batchId,
+        orderedReferences,
+        state,
+        messageIdentifier,
+      )
+
+      return
+    }
+
+    if (state.pending.length > 0) {
+      this.logBackupDeliveryBlocked(messageIdentifier, batchId, 'durable-status-unavailable')
+      throw new Error('Email backup durable delivery requires operator attention')
+    }
+
+    await this.handleDirectBackupBatch(event, recipient, userUuid, batchId, orderedReferences, state, messageIdentifier)
+  }
+
+  private async handleDirectBackupBatch(
+    event: EmailRequestedEvent,
+    recipient: string,
+    userUuid: string,
+    batchId: string,
+    orderedReferences: BackupAttachmentReference[],
+    state: EmailBackupDeliveryState,
+    messageIdentifier: string,
+  ): Promise<void> {
     for (const reference of orderedReferences) {
       const readResult = await this.readAttachment(reference, messageIdentifier)
       if (readResult.status === 'rejected') {
-        await this.cleanupDeliveredAttachments(attachmentReferences, messageIdentifier, 'Rejected')
+        await this.cleanupDeliveredAttachments(orderedReferences, messageIdentifier, 'Rejected')
         return
       }
       if (readResult.status === 'already-delivered') {
@@ -164,14 +208,21 @@ export class EmailRequestedEventHandler implements DomainEventHandlerInterface {
         contentType: reference.attachmentContentType,
         content: readResult.content,
       }
-      const delivered = await this.deliver(
+      const delivery = await this.deliver(
         recipient,
         reference.emailSubject ?? event.payload.subject,
         event.payload.body,
         [attachment],
         messageIdentifier,
+        createEmailDeliveryId(
+          'backup',
+          batchId,
+          reference.batchIndex ?? 1,
+          reference.fileName,
+          reference.attachmentFileName,
+        ),
       )
-      if (!delivered) {
+      if (!delivery.accepted) {
         throw new Error('Email delivery was not confirmed')
       }
 
@@ -188,9 +239,214 @@ export class EmailRequestedEventHandler implements DomainEventHandlerInterface {
 
     const deliveredAt = this.timer.convertMicrosecondsToMilliseconds(this.timer.getTimestampInMicroseconds())
     await this.recordBatchCompleted(userUuid, batchId, deliveredAt, state, messageIdentifier)
-    await this.recordLastSent(userUuid, deliveredAt, messageIdentifier)
-    await this.cleanupDeliveredAttachments(attachmentReferences, messageIdentifier)
-    this.logDelivered(messageIdentifier)
+    await this.cleanupDeliveredAttachments(orderedReferences, messageIdentifier)
+    this.logAccepted(messageIdentifier, true)
+  }
+
+  private async handleDurableBackupBatch(
+    event: EmailRequestedEvent,
+    recipient: string,
+    userUuid: string,
+    batchId: string,
+    orderedReferences: BackupAttachmentReference[],
+    state: EmailBackupDeliveryState,
+    messageIdentifier: string,
+  ): Promise<void> {
+    const queuedAt = this.nowInMilliseconds()
+    const expectedBatch: PendingEmailBackupBatch = {
+      batchId,
+      outcome: 'backup',
+      queuedAt,
+      deliveries: orderedReferences.map((reference) => ({
+        deliveryId: this.deliveryIdForBackupPart(batchId, reference),
+        queueAccepted: false,
+        reference,
+      })),
+    }
+    const existingPending = state.pending.find((entry) => entry.batchId === batchId)
+    if (existingPending && !pendingBatchMatches(existingPending, expectedBatch)) {
+      this.logBackupDeliveryBlocked(messageIdentifier, batchId, 'state-mismatch')
+      throw new Error('Email backup delivery state does not match the requested batch')
+    }
+
+    let workingState = state
+    let workingBatch = existingPending ?? expectedBatch
+    if (!existingPending) {
+      const previousState = workingState
+      workingState = recordPendingEmailBackupBatch(state, expectedBatch)
+      await this.recordDeliveryState(userUuid, previousState, workingState, messageIdentifier)
+    }
+
+    let everyDeliveryProviderAccepted = true
+    for (let index = 0; index < workingBatch.deliveries.length; index++) {
+      const delivery = workingBatch.deliveries[index]
+      const status = await this.getDurableDeliveryStatus(delivery.deliveryId, messageIdentifier)
+      if (status === 'provider-accepted') {
+        if (!delivery.queueAccepted) {
+          const previousState = workingState
+          workingBatch = this.markQueueAccepted(workingBatch, index)
+          workingState = recordPendingEmailBackupBatch(workingState, workingBatch)
+          await this.recordDeliveryState(userUuid, previousState, workingState, messageIdentifier)
+        }
+        continue
+      }
+
+      everyDeliveryProviderAccepted = false
+      if (status === 'pending') {
+        if (!delivery.queueAccepted) {
+          const previousState = workingState
+          workingBatch = this.markQueueAccepted(workingBatch, index)
+          workingState = recordPendingEmailBackupBatch(workingState, workingBatch)
+          await this.recordDeliveryState(userUuid, previousState, workingState, messageIdentifier)
+        }
+        continue
+      }
+
+      if (status !== 'missing' || delivery.queueAccepted) {
+        this.logBackupDeliveryBlocked(messageIdentifier, batchId, status)
+        throw new Error('Email backup durable delivery requires operator attention')
+      }
+
+      const reference = delivery.reference as BackupAttachmentReference
+      const readResult = await this.readAttachment(reference, messageIdentifier)
+      if (readResult.status === 'rejected') {
+        await this.cleanupDeliveredAttachments(orderedReferences, messageIdentifier, 'Rejected')
+        return
+      }
+      if (readResult.status === 'already-delivered') {
+        this.logBackupDeliveryBlocked(messageIdentifier, batchId, 'source-already-receipted')
+        throw new Error('Email backup durable delivery requires operator attention')
+      }
+
+      const accepted = await this.deliver(
+        recipient,
+        reference.emailSubject ?? event.payload.subject,
+        event.payload.body,
+        [
+          {
+            filename: reference.attachmentFileName,
+            contentType: reference.attachmentContentType,
+            content: readResult.content,
+          },
+        ],
+        messageIdentifier,
+        delivery.deliveryId,
+      )
+      if (!accepted.accepted) {
+        throw new Error('Email delivery was not confirmed')
+      }
+
+      const previousState = workingState
+      workingBatch = this.markQueueAccepted(workingBatch, index)
+      workingState = recordPendingEmailBackupBatch(workingState, workingBatch)
+      await this.recordDeliveryState(userUuid, previousState, workingState, messageIdentifier)
+    }
+
+    if (everyDeliveryProviderAccepted) {
+      await this.finalizeDurableBackupBatch(userUuid, workingBatch, workingState, messageIdentifier)
+      this.logAccepted(messageIdentifier, true)
+
+      return
+    }
+
+    this.logAccepted(messageIdentifier, false)
+  }
+
+  private async handleBackupFailureNotice(
+    event: EmailRequestedEvent,
+    recipient: string,
+    userUuid: string,
+    messageIdentifier: string,
+  ): Promise<void> {
+    const deliveryId = this.deliveryIdForEvent(event, messageIdentifier)
+    if (this.emailSender.acceptanceMode === 'provider') {
+      const state = await this.readDeliveryState(userUuid)
+      if (state.pending.length > 0) {
+        this.logBackupDeliveryBlocked(messageIdentifier, `failure-${deliveryId}`, 'durable-status-unavailable')
+        throw new Error('Email backup durable delivery requires operator attention')
+      }
+
+      const delivery = await this.deliver(
+        recipient,
+        event.payload.subject,
+        event.payload.body,
+        [],
+        messageIdentifier,
+        deliveryId,
+      )
+      if (!delivery.accepted) {
+        throw new Error('Email delivery was not confirmed')
+      }
+
+      await this.recordLastSent(userUuid, this.nowInMilliseconds(), messageIdentifier)
+      this.logAccepted(messageIdentifier, true)
+
+      return
+    }
+
+    const batchId = `failure-${deliveryId}`
+    const state = await this.readDeliveryState(userUuid)
+    const completedBatch = state.completed.find((entry) => entry.batchId === batchId)
+    if (completedBatch) {
+      await this.recordLastSent(userUuid, completedBatch.deliveredAt, messageIdentifier)
+      this.logAccepted(messageIdentifier, true)
+
+      return
+    }
+
+    const expectedBatch: PendingEmailBackupBatch = {
+      batchId,
+      outcome: 'failure-notice',
+      queuedAt: this.nowInMilliseconds(),
+      deliveries: [{ deliveryId, queueAccepted: false }],
+    }
+    const existingPending = state.pending.find((entry) => entry.batchId === batchId)
+    if (existingPending && !pendingBatchMatches(existingPending, expectedBatch)) {
+      this.logBackupDeliveryBlocked(messageIdentifier, batchId, 'state-mismatch')
+      throw new Error('Email backup delivery state does not match the requested batch')
+    }
+
+    let workingState = state
+    let workingBatch = existingPending ?? expectedBatch
+    if (!existingPending) {
+      const previousState = workingState
+      workingState = recordPendingEmailBackupBatch(state, expectedBatch)
+      await this.recordDeliveryState(userUuid, previousState, workingState, messageIdentifier)
+    }
+
+    const status = await this.getDurableDeliveryStatus(deliveryId, messageIdentifier)
+    if (status === 'provider-accepted') {
+      await this.finalizeDurableBackupBatch(userUuid, workingBatch, workingState, messageIdentifier)
+      this.logAccepted(messageIdentifier, true)
+
+      return
+    }
+    if (status !== 'pending') {
+      if (status !== 'missing' || workingBatch.deliveries[0].queueAccepted) {
+        this.logBackupDeliveryBlocked(messageIdentifier, batchId, status)
+        throw new Error('Email backup durable delivery requires operator attention')
+      }
+
+      const delivery = await this.deliver(
+        recipient,
+        event.payload.subject,
+        event.payload.body,
+        [],
+        messageIdentifier,
+        deliveryId,
+      )
+      if (!delivery.accepted) {
+        throw new Error('Email delivery was not confirmed')
+      }
+    }
+
+    if (!workingBatch.deliveries[0].queueAccepted) {
+      const previousState = workingState
+      workingBatch = this.markQueueAccepted(workingBatch, 0)
+      workingState = recordPendingEmailBackupBatch(workingState, workingBatch)
+      await this.recordDeliveryState(userUuid, previousState, workingState, messageIdentifier)
+    }
+    this.logAccepted(messageIdentifier, false)
   }
 
   private hasValidMessage(event: EmailRequestedEvent): boolean {
@@ -327,55 +583,150 @@ export class EmailRequestedEventHandler implements DomainEventHandlerInterface {
     body: string,
     attachments: EmailAttachment[],
     messageIdentifier: string,
-  ): Promise<boolean> {
+    deliveryId: string,
+  ): Promise<EmailDeliveryAcceptance> {
     try {
-      return await this.emailSender.sendEmail(
+      const accepted = await this.emailSender.sendEmail(
         recipient,
         subject,
         body,
-        attachments.length > 0 ? { attachments, html: true } : { html: true },
+        attachments.length > 0
+          ? { attachments, html: true, deliverySource: 'backup', deliveryId }
+          : {
+              html: true,
+              deliveryId,
+              ...(messageIdentifier.startsWith('DATA_BACKUP') ? { deliverySource: 'backup' as const } : {}),
+            },
       )
+      return {
+        accepted,
+        terminal: accepted && this.emailSender.acceptanceMode === 'provider',
+      }
     } catch {
       this.logger.error('Email delivery provider failed', {
         codeTag: 'EmailRequestedEventHandler',
         messageIdentifier,
       })
 
-      return false
+      return { accepted: false, terminal: false }
+    }
+  }
+
+  private deliveryIdForEvent(event: EmailRequestedEvent, messageIdentifier: string): string {
+    const createdAt = event.createdAt instanceof Date ? event.createdAt.getTime() : String(event.createdAt)
+
+    return createEmailDeliveryId(
+      messageIdentifier.startsWith('DATA_BACKUP') ? 'backup-event' : 'domain-email',
+      createdAt,
+      event.meta.correlation.userIdentifierType,
+      event.meta.correlation.userIdentifier,
+      messageIdentifier,
+      event.payload.subject,
+      event.payload.body,
+    )
+  }
+
+  private deliveryIdForBackupPart(batchId: string, reference: BackupAttachmentReference): string {
+    return createEmailDeliveryId(
+      'backup',
+      batchId,
+      reference.batchIndex ?? 1,
+      reference.fileName,
+      reference.attachmentFileName,
+    )
+  }
+
+  private async getDurableDeliveryStatus(deliveryId: string, messageIdentifier: string): Promise<EmailDeliveryStatus> {
+    if (!this.emailSender.getDeliveryStatus) {
+      this.logger.error('Durable email delivery status is unavailable', {
+        codeTag: 'EmailRequestedEventHandler',
+        messageIdentifier,
+      })
+      throw new Error('Durable email delivery status is unavailable')
+    }
+
+    try {
+      return await this.emailSender.getDeliveryStatus(deliveryId)
+    } catch {
+      this.logger.error('Durable email delivery status could not be read', {
+        codeTag: 'EmailRequestedEventHandler',
+        messageIdentifier,
+      })
+      throw new Error('Durable email delivery status could not be read')
+    }
+  }
+
+  private async finalizeDurableBackupBatch(
+    userUuid: string,
+    batch: PendingEmailBackupBatch,
+    state: EmailBackupDeliveryState,
+    messageIdentifier: string,
+  ): Promise<void> {
+    const references = batch.deliveries.flatMap((delivery) => {
+      return delivery.reference ? [delivery.reference] : []
+    })
+    for (const reference of references) {
+      try {
+        await this.backupAttachmentStorage.markDelivered(reference)
+      } catch {
+        this.logger.error('Provider-accepted email backup attachment could not be receipted', {
+          codeTag: 'EmailRequestedEventHandler',
+          messageIdentifier,
+        })
+        throw new Error('Email backup delivery receipt could not be persisted')
+      }
+    }
+
+    const deliveredAt = this.nowInMilliseconds()
+    const completedState = recordCompletedEmailBackupBatch(state, batch.batchId, deliveredAt)
+
+    await this.recordDeliveryState(userUuid, state, completedState, messageIdentifier, deliveredAt)
+    await this.cleanupDeliveredAttachments(references, messageIdentifier)
+  }
+
+  private markQueueAccepted(batch: PendingEmailBackupBatch, deliveryIndex: number): PendingEmailBackupBatch {
+    return {
+      ...batch,
+      deliveries: batch.deliveries.map((delivery, index) => {
+        return index === deliveryIndex ? { ...delivery, queueAccepted: true } : delivery
+      }),
     }
   }
 
   private async readDeliveryState(userUuid: string): Promise<EmailBackupDeliveryState> {
+    if (this.emailBackupStateRepository) {
+      try {
+        const result = await this.emailBackupStateRepository.runExclusive(userUuid, (state) => ({ result: state }))
+        if (result.status === 'user-not-found') {
+          throw new Error('Email backup user no longer exists')
+        }
+
+        return result.value
+      } catch {
+        this.logger.error('Email backup delivery state could not be read', {
+          codeTag: 'EmailRequestedEventHandler',
+        })
+        throw new Error('Email backup delivery state could not be read')
+      }
+    }
+
     const result = await this.getSetting.execute({
       userUuid,
       settingName: SettingName.NAMES.EmailBackupDeliveryState,
-      allowSensitiveRetrieval: false,
+      allowSensitiveRetrieval: true,
       decrypted: true,
     })
     if (result.isFailed()) {
-      return { completed: [] }
+      return emptyEmailBackupDeliveryState()
     }
 
     try {
-      const parsed = JSON.parse(result.getValue().decryptedValue ?? '') as Partial<EmailBackupDeliveryState>
-      if (!Array.isArray(parsed.completed)) {
-        return { completed: [] }
-      }
-
-      return {
-        completed: parsed.completed
-          .filter(
-            (entry): entry is CompletedEmailBackupBatch =>
-              typeof entry?.batchId === 'string' &&
-              entry.batchId.length > 0 &&
-              entry.batchId.length <= 300 &&
-              Number.isSafeInteger(entry.deliveredAt) &&
-              entry.deliveredAt >= 0,
-          )
-          .slice(-EmailRequestedEventHandler.MAX_COMPLETED_BATCH_HISTORY),
-      }
+      return parseEmailBackupDeliveryState(result.getValue().decryptedValue ?? '')
     } catch {
-      return { completed: [] }
+      this.logger.error('Email backup delivery state is invalid', {
+        codeTag: 'EmailRequestedEventHandler',
+      })
+      throw new Error('Email backup delivery state is invalid')
     }
   }
 
@@ -386,16 +737,52 @@ export class EmailRequestedEventHandler implements DomainEventHandlerInterface {
     state: EmailBackupDeliveryState,
     messageIdentifier: string,
   ): Promise<void> {
-    const completed = [...state.completed.filter((entry) => entry.batchId !== batchId), { batchId, deliveredAt }].slice(
-      -EmailRequestedEventHandler.MAX_COMPLETED_BATCH_HISTORY,
+    await this.recordDeliveryState(
+      userUuid,
+      state,
+      recordCompletedEmailBackupBatch(state, batchId, deliveredAt),
+      messageIdentifier,
+      deliveredAt,
     )
+  }
+
+  private async recordDeliveryState(
+    userUuid: string,
+    previousState: EmailBackupDeliveryState,
+    nextState: EmailBackupDeliveryState,
+    messageIdentifier: string,
+    lastSentAt?: number,
+  ): Promise<void> {
+    if (this.emailBackupStateRepository) {
+      try {
+        const result = await this.emailBackupStateRepository.runExclusive(userUuid, (currentState) => ({
+          result: undefined,
+          deliveryState: applyEmailBackupStatePatch(currentState, previousState, nextState),
+          ...(lastSentAt !== undefined ? { lastSentAt } : {}),
+        }))
+        if (result.status === 'user-not-found') {
+          throw new Error('Email backup user no longer exists')
+        }
+        return
+      } catch {
+        this.logger.error('Email backup delivery state could not be recorded', {
+          codeTag: 'EmailRequestedEventHandler',
+          messageIdentifier,
+        })
+        throw new Error('Email backup bookkeeping could not be persisted')
+      }
+    }
+
     await this.setServerSetting(
       userUuid,
       SettingName.NAMES.EmailBackupDeliveryState,
-      JSON.stringify({ completed }),
+      serializeEmailBackupDeliveryState(nextState),
       'Email backup delivery state could not be recorded',
       messageIdentifier,
     )
+    if (lastSentAt !== undefined) {
+      await this.recordLastSent(userUuid, lastSentAt, messageIdentifier)
+    }
   }
 
   private async recordLastSent(userUuid: string, timestamp: number, messageIdentifier: string): Promise<void> {
@@ -482,6 +869,19 @@ export class EmailRequestedEventHandler implements DomainEventHandlerInterface {
     return userUuidOrError.isFailed() ? undefined : userUuidOrError.getValue().value
   }
 
+  private nowInMilliseconds(): number {
+    return this.timer.convertMicrosecondsToMilliseconds(this.timer.getTimestampInMicroseconds())
+  }
+
+  private logBackupDeliveryBlocked(messageIdentifier: string, batchId: string, status: string): void {
+    this.logger.error('Email backup durable delivery is blocked', {
+      codeTag: 'EmailRequestedEventHandler',
+      messageIdentifier,
+      batchId,
+      status,
+    })
+  }
+
   private logRejected(reason: string, messageIdentifier: string): void {
     this.logger.error(`Email request rejected because its ${reason}`, {
       codeTag: 'EmailRequestedEventHandler',
@@ -489,10 +889,13 @@ export class EmailRequestedEventHandler implements DomainEventHandlerInterface {
     })
   }
 
-  private logDelivered(messageIdentifier: string): void {
-    this.logger.info('Email request delivered', {
-      codeTag: 'EmailRequestedEventHandler',
-      messageIdentifier,
-    })
+  private logAccepted(messageIdentifier: string, terminal: boolean): void {
+    this.logger.info(
+      terminal ? 'Email request accepted by the provider' : 'Email request accepted by the durable queue',
+      {
+        codeTag: 'EmailRequestedEventHandler',
+        messageIdentifier,
+      },
+    )
   }
 }

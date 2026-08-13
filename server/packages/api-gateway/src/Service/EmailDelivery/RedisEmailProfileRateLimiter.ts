@@ -1,3 +1,5 @@
+import { createHash } from 'crypto'
+
 import { EmailProfileRateLimiter, ProfileRateLimitDecision, RelayRateLimit } from './Types'
 
 export interface EmailRateLimitRedis {
@@ -46,7 +48,7 @@ export class RedisEmailProfileRateLimiter implements EmailProfileRateLimiter {
     const result = await this.redis.eval(
       RESERVE_SCRIPT,
       1,
-      `${this.keyPrefix}:{${profileId}}`,
+      `${this.keyPrefix}:{${profileId}}:${policyIdentity(limit)}`,
       limit.max,
       limit.windowSeconds * 1_000,
     )
@@ -56,4 +58,8 @@ export class RedisEmailProfileRateLimiter implements EmailProfileRateLimiter {
 
     return { allowed: Number(result[0]) === 1, retryAfterMs: Math.max(0, Number(result[1]) || 0) }
   }
+}
+
+function policyIdentity(limit: RelayRateLimit): string {
+  return createHash('sha256').update(`${limit.max}:${limit.windowSeconds}`, 'utf8').digest('base64url').slice(0, 16)
 }

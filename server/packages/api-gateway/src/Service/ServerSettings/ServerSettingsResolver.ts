@@ -1,7 +1,7 @@
 import { AssistantProviderConfig } from '../Assistant/providers/factory'
 import {
   EMAIL_DELIVERY_TLS_MODES,
-  EmailDeliveryConfig,
+  EmailDeliveryConfig as LegacyEmailDeliveryConfig,
   EmailDeliveryTlsMode,
   ResolvedEmailDeliveryConfig,
   emailDeliveryConfigurationError,
@@ -32,6 +32,12 @@ import {
   ServerSettingsStore,
 } from './ServerSettingsStore'
 import { validateWorkflowsPublicUrl } from '../Workflows/WorkflowsPublicUrl'
+import {
+  EmailRelayConfigurationView,
+  EmailRelayWrite,
+  relayConfigurationView,
+} from '../EmailDelivery/RelayConfiguration'
+import { EmailDeliveryConfig as EmailRelayDeliveryConfig } from '../EmailDelivery/Types'
 
 /**
  * Standard Red Notes: the single read path for runtime-configurable server
@@ -158,7 +164,7 @@ export interface EnvSettingsBaseline {
    */
   logLevel?: string
   /** Shared SMTP baseline. Persisted emailDelivery fields override this per key. */
-  emailDelivery?: EmailDeliveryConfig
+  emailDelivery?: LegacyEmailDeliveryConfig
   /**
    * Standard Red Notes: OCR env baseline. serverEnabled/defaultLanguage/maxPages/
    * maxImageBytes drive the SERVER-side /v1/ocr endpoint (gateway-enforced,
@@ -617,6 +623,65 @@ export class ServerSettingsResolver {
       config.host === '' && config.from === '' && config.username === undefined && config.password === undefined
 
     return entirelyUnconfigured ? undefined : emailDeliveryConfigurationError(config)
+  }
+
+  /**
+   * Full internal relay configuration. Explicit encrypted profiles win; a
+   * valid legacy SMTP singleton is synthesized until the first profile write
+   * migrates it into the encrypted envelope.
+   */
+  async resolveEmailRelayConfiguration(): Promise<EmailRelayDeliveryConfig> {
+    const persisted = await this.store.readEmailRelayConfiguration()
+    if (persisted) {
+      return persisted
+    }
+    if (await this.store.isEmailRelayConfigurationManaged()) {
+      return { relays: [], fallbackPolicy: { mode: 'none' } }
+    }
+
+    const legacy = await this.resolveEmailDeliveryConfig()
+    if (!isEmailDeliveryConfigured(legacy)) {
+      return { relays: [], fallbackPolicy: { mode: 'next-enabled' } }
+    }
+
+    return {
+      relays: [
+        {
+          id: 'legacy-smtp',
+          name: 'SMTP',
+          kind: 'smtp',
+          enabled: true,
+          priority: 0,
+          from: legacy.from,
+          rateLimit: { max: 0, windowSeconds: 60 },
+          host: legacy.host,
+          port: legacy.port,
+          ...(legacy.username ? { username: legacy.username } : {}),
+          ...(legacy.password ? { password: legacy.password } : {}),
+          tlsMode: legacy.tlsMode,
+        },
+      ],
+      fallbackPolicy: { mode: 'none' },
+    }
+  }
+
+  /** Redacted admin projection; relay credentials never cross this boundary. */
+  async viewEmailRelayConfiguration(): Promise<EmailRelayConfigurationView> {
+    return relayConfigurationView(await this.resolveEmailRelayConfiguration())
+  }
+
+  /**
+   * Applies the exact control-plane write contract. Missing credential fields
+   * preserve values, explicit null clears, and legacy SMTP is migrated on the
+   * first successful write.
+   */
+  async applyEmailRelayConfiguration(input: {
+    relays: EmailRelayWrite[]
+    fallbackPolicy: EmailRelayDeliveryConfig['fallbackPolicy']
+  }): Promise<EmailRelayConfigurationView> {
+    const current = await this.resolveEmailRelayConfiguration()
+    const updated = await this.store.updateEmailRelayConfiguration(input, current)
+    return relayConfigurationView(updated)
   }
 
   /**

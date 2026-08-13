@@ -5,18 +5,24 @@ import {
   UserDisabledSessionUserAgentLoggingEvent,
 } from '@standardnotes/domain-events'
 import { EmailBackupFrequency, LogSessionUserAgentOption, MuteMarketingEmailsOption } from '@standardnotes/settings'
-import { SettingName, Result } from '@standardnotes/domain-core'
+import { SettingName, Result, UniqueEntityId } from '@standardnotes/domain-core'
 
 import { GenerateRecoveryCodes } from '../GenerateRecoveryCodes/GenerateRecoveryCodes'
 import { TriggerPostSettingUpdateActions } from './TriggerPostSettingUpdateActions'
 import { DomainEventFactoryInterface } from '../../Event/DomainEventFactoryInterface'
 import { TriggerEmailBackupForUser } from '../TriggerEmailBackupForUser/TriggerEmailBackupForUser'
+import { EmailReminder } from '../../EmailReminder/EmailReminder'
+import { EmailReminderRepositoryInterface } from '../../EmailReminder/EmailReminderRepositoryInterface'
+import { createEmailReminderDeliveryId } from '../../Email/EmailDeliveryId'
+import { EmailSenderInterface } from '../../Email/EmailSenderInterface'
 
 describe('TriggerPostSettingUpdateActions', () => {
   let domainEventPublisher: DomainEventPublisherInterface
   let domainEventFactory: DomainEventFactoryInterface
   let triggerEmailBackupForUser: TriggerEmailBackupForUser
   let generateRecoveryCodes: GenerateRecoveryCodes
+  let emailReminderRepository: EmailReminderRepositoryInterface
+  let emailReminderSender: EmailSenderInterface
 
   const createUseCase = () =>
     new TriggerPostSettingUpdateActions(
@@ -24,6 +30,8 @@ describe('TriggerPostSettingUpdateActions', () => {
       domainEventFactory,
       triggerEmailBackupForUser,
       generateRecoveryCodes,
+      emailReminderRepository,
+      emailReminderSender,
     )
 
   beforeEach(() => {
@@ -46,6 +54,15 @@ describe('TriggerPostSettingUpdateActions', () => {
     domainEventFactory.createMuteEmailsSettingChangedEvent = jest
       .fn()
       .mockReturnValue({} as jest.Mocked<MuteEmailsSettingChangedEvent>)
+
+    emailReminderRepository = {} as jest.Mocked<EmailReminderRepositoryInterface>
+    emailReminderRepository.findByUserUuid = jest.fn().mockResolvedValue([])
+
+    emailReminderSender = {
+      acceptanceMode: 'provider',
+      isConfigured: jest.fn().mockReturnValue(true),
+      sendEmail: jest.fn(),
+    }
   })
 
   it('should trigger session cleanup if user is disabling session user agent logging', async () => {
@@ -121,5 +138,81 @@ describe('TriggerPostSettingUpdateActions', () => {
     })
 
     expect(generateRecoveryCodes.execute).toHaveBeenCalled()
+  })
+
+  it('cancels every unsent durable reminder when the user opts out', async () => {
+    const first = EmailReminder.create(
+      {
+        userUuid: '00000000-0000-0000-0000-000000000000',
+        dueAt: Date.now(),
+        message: 'First',
+        sent: false,
+        createdAt: Date.now(),
+      },
+      new UniqueEntityId('reminder-1'),
+    ).getValue()
+    const second = EmailReminder.create(
+      {
+        userUuid: '00000000-0000-0000-0000-000000000000',
+        dueAt: Date.now(),
+        message: 'Second',
+        sent: false,
+        createdAt: Date.now(),
+      },
+      new UniqueEntityId('reminder-2'),
+    ).getValue()
+    emailReminderRepository.findByUserUuid = jest.fn().mockResolvedValue([first, second])
+    emailReminderSender = {
+      acceptanceMode: 'durable-queue',
+      isConfigured: jest.fn().mockReturnValue(true),
+      getDeliveryStatus: jest.fn(),
+      cancelDelivery: jest.fn().mockResolvedValue('cancelled'),
+      sendEmail: jest.fn(),
+    }
+
+    const result = await createUseCase().execute({
+      updatedSettingName: SettingName.NAMES.EmailRemindersEnabled,
+      userUuid: '00000000-0000-0000-0000-000000000000',
+      userEmail: 'test@test.te',
+      unencryptedValue: 'false',
+    })
+
+    expect(result.isFailed()).toBe(false)
+    expect(emailReminderSender.cancelDelivery).toHaveBeenCalledTimes(2)
+    expect(emailReminderSender.cancelDelivery).toHaveBeenNthCalledWith(1, createEmailReminderDeliveryId('reminder-1'))
+    expect(emailReminderSender.cancelDelivery).toHaveBeenNthCalledWith(2, createEmailReminderDeliveryId('reminder-2'))
+  })
+
+  it('reports an incomplete opt-out cancellation after attempting every reminder', async () => {
+    const reminders = ['reminder-1', 'reminder-2'].map((id) =>
+      EmailReminder.create(
+        {
+          userUuid: '00000000-0000-0000-0000-000000000000',
+          dueAt: Date.now(),
+          message: id,
+          sent: false,
+          createdAt: Date.now(),
+        },
+        new UniqueEntityId(id),
+      ).getValue(),
+    )
+    emailReminderRepository.findByUserUuid = jest.fn().mockResolvedValue(reminders)
+    emailReminderSender = {
+      acceptanceMode: 'durable-queue',
+      isConfigured: jest.fn().mockReturnValue(true),
+      getDeliveryStatus: jest.fn(),
+      cancelDelivery: jest.fn().mockResolvedValueOnce('in-flight').mockResolvedValueOnce('cancelled'),
+      sendEmail: jest.fn(),
+    }
+
+    const result = await createUseCase().execute({
+      updatedSettingName: SettingName.NAMES.EmailRemindersEnabled,
+      userUuid: '00000000-0000-0000-0000-000000000000',
+      userEmail: 'test@test.te',
+      unencryptedValue: 'false',
+    })
+
+    expect(result.isFailed()).toBe(true)
+    expect(emailReminderSender.cancelDelivery).toHaveBeenCalledTimes(2)
   })
 })

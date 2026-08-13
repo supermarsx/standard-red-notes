@@ -8,6 +8,11 @@ import { CheckInDeadManSwitch } from '../Domain/UseCase/CheckInDeadManSwitch/Che
 import { DeleteDeadManSwitch } from '../Domain/UseCase/DeleteDeadManSwitch/DeleteDeadManSwitch'
 import { DeadManSwitchHttpProjection } from '../Infra/Http/Projection/DeadManSwitchHttpProjection'
 
+// The server currently consumes the published responses package; keep these
+// typed fallbacks until its lockfile picks up the shared enum members.
+const HTTP_CONFLICT = 409 as HttpStatusCode
+const HTTP_SERVICE_UNAVAILABLE = 503 as HttpStatusCode
+
 export class DeadManSwitchesController {
   constructor(
     private createDeadManSwitch: CreateDeadManSwitch,
@@ -95,11 +100,12 @@ export class DeadManSwitchesController {
     })
 
     if (result.isFailed()) {
+      const message = result.getError()
       return {
-        status: HttpStatusCode.Unauthorized,
+        status: this.cancellationFailureStatus(message),
         data: {
           error: {
-            message: result.getError(),
+            message,
           },
         },
       }
@@ -120,11 +126,12 @@ export class DeadManSwitchesController {
     })
 
     if (result.isFailed()) {
+      const message = result.getError()
       return {
-        status: HttpStatusCode.Unauthorized,
+        status: this.cancellationFailureStatus(message),
         data: {
           error: {
-            message: result.getError(),
+            message,
           },
         },
       }
@@ -136,5 +143,16 @@ export class DeadManSwitchesController {
         message: result.getValue(),
       },
     }
+  }
+
+  private cancellationFailureStatus(message: string): HttpStatusCode {
+    if (message.includes('already in flight')) {
+      return HTTP_CONFLICT
+    }
+    if (message.includes('durable email delivery cancellation is unavailable')) {
+      return HTTP_SERVICE_UNAVAILABLE
+    }
+
+    return HttpStatusCode.Unauthorized
   }
 }

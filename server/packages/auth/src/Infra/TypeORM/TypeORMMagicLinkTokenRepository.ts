@@ -25,6 +25,7 @@ export class TypeORMMagicLinkTokenRepository implements MagicLinkTokenRepository
         userIdentifier,
       })
       .orderBy('magic_link_token.created_at', 'DESC')
+      .addOrderBy('magic_link_token.uuid', 'DESC')
       .getOne()
 
     if (persistence === null) {
@@ -32,5 +33,25 @@ export class TypeORMMagicLinkTokenRepository implements MagicLinkTokenRepository
     }
 
     return this.mapper.toDomain(persistence)
+  }
+
+  /**
+   * Resolve the token identified by the code the user actually received.
+   * MySQL stores the legacy created_at column with whole-second precision, so
+   * inferring identity from "latest" is ambiguous during rapid issuance. The
+   * UUID tie-break also makes an unlikely repeated-code collision deterministic.
+   */
+  async findByUserIdentifierAndCode(userIdentifier: string, code: string): Promise<MagicLinkToken | null> {
+    const persistence = await this.ormRepository
+      .createQueryBuilder('magic_link_token')
+      .where('magic_link_token.user_identifier = :userIdentifier', {
+        userIdentifier,
+      })
+      .andWhere('magic_link_token.code = :code', { code })
+      .orderBy('magic_link_token.created_at', 'DESC')
+      .addOrderBy('magic_link_token.uuid', 'DESC')
+      .getOne()
+
+    return persistence === null ? null : this.mapper.toDomain(persistence)
   }
 }

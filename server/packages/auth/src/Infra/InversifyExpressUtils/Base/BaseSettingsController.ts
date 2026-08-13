@@ -318,6 +318,17 @@ export class BaseSettingsController extends BaseHttpController {
     })
 
     if (result.success) {
+      if (settingName.toUpperCase() === SettingName.NAMES.EmailRemindersEnabled) {
+        const triggerResult = await this.triggerPostSettingUpdateActions.execute({
+          updatedSettingName: SettingName.NAMES.EmailRemindersEnabled,
+          userUuid: locals.user.uuid,
+          userEmail: locals.user.email,
+          unencryptedValue: null,
+        })
+        if (triggerResult.isFailed()) {
+          this.logger.error('Failed to trigger post-setting-update actions.')
+        }
+      }
       response.setHeader('x-invalidate-cache', locals.user.uuid)
       return this.json(result)
     }

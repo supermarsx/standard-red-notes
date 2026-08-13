@@ -1,8 +1,12 @@
-import { validateEmailRecipient } from '@standardnotes/domain-core'
+import {
+  isTrustedInsecureRelayHost,
+  validateEmailRecipient,
+  validateEmailSenderIdentity,
+} from '@standardnotes/domain-core'
 
 export const EMAIL_RELAY_KINDS = ['smtp', 'sendgrid', 'mailgun', 'aws-ses'] as const
 export type EmailRelayKind = (typeof EMAIL_RELAY_KINDS)[number]
-export type EmailDeliverySource = 'reminder' | 'account' | 'backup' | 'test' | 'other'
+export type EmailDeliverySource = 'reminder' | 'published-reminder' | 'account' | 'backup' | 'test' | 'other'
 export type EmailFallbackMode = 'next-enabled' | 'none'
 
 export interface EmailAttachment {
@@ -104,6 +108,9 @@ export interface QueuedEmail {
   lastRelayId?: string
   lastFailureClass?: string
   deadAt?: number
+  expiresAt?: number
+  retryMode?: 'bounded' | 'indefinite'
+  supersessionKey?: string
 }
 
 export interface ClaimedEmail {
@@ -111,6 +118,9 @@ export interface ClaimedEmail {
   token: string
   leaseExpiresAt: number
 }
+
+export type QueueSettlementResult = 'settled' | 'stale' | 'quarantined'
+export type QueueDiscardResult = 'discarded' | 'not-found' | 'leased'
 
 export interface QueueItemView {
   id: string
@@ -123,6 +133,8 @@ export interface QueueItemView {
   leaseExpiresAt?: number
   lastRelayId?: string
   lastFailureClass?: string
+  expiresAt?: number
+  retryMode?: 'bounded' | 'indefinite'
 }
 
 export type EmailAttemptOutcome = 'sent' | 'rejected' | 'transient-failure' | 'permanent-failure' | 'rate-limited'
@@ -151,12 +163,13 @@ export interface Page<T> {
 export interface EmailDeliveryQueue {
   enqueue(job: QueuedEmail): Promise<void>
   claim(): Promise<ClaimedEmail | null>
-  acknowledge(claim: ClaimedEmail): Promise<boolean>
-  retry(claim: ClaimedEmail, job: QueuedEmail): Promise<boolean>
-  deadLetter(claim: ClaimedEmail, job: QueuedEmail): Promise<boolean>
+  renewLease(claim: ClaimedEmail): Promise<boolean>
+  acknowledge(claim: ClaimedEmail): Promise<QueueSettlementResult>
+  retry(claim: ClaimedEmail, job: QueuedEmail): Promise<QueueSettlementResult>
+  deadLetter(claim: ClaimedEmail, job: QueuedEmail): Promise<QueueSettlementResult>
   list(state: QueueState, limit?: number, cursor?: string): Promise<Page<QueueItemView>>
   requeue(id: string): Promise<QueueItemView | null>
-  discard(id: string): Promise<boolean>
+  discard(id: string): Promise<QueueDiscardResult>
 }
 
 export interface EmailAttemptLogStore {
@@ -259,7 +272,7 @@ export function validateRelayProfile(profile: EmailRelayProfile): void {
   ) {
     throw new Error('Email relay rate limit is invalid.')
   }
-  if (!profile.from.includes('@') || profile.from.length > 998 || /[\r\n\0]/.test(profile.from)) {
+  if (!relaySenderAddress(profile.from)) {
     throw new Error('Email relay sender is invalid.')
   }
 
@@ -268,12 +281,12 @@ export function validateRelayProfile(profile: EmailRelayProfile): void {
     if (
       !profile.host ||
       profile.host.length > 253 ||
-      /[\r\n\0]/.test(profile.host) ||
+      /[\s\r\n\0/\\]/.test(profile.host) ||
       !Number.isSafeInteger(profile.port) ||
       profile.port < 1 ||
       profile.port > 65_535 ||
       !pairedCredentials ||
-      (profile.tlsMode === 'insecure' && !isPrivateSmtpHost(profile.host))
+      (profile.tlsMode === 'insecure' && !isTrustedInsecureRelayHost(profile.host))
     ) {
       throw new Error('SMTP relay configuration is invalid.')
     }
@@ -285,7 +298,7 @@ export function validateRelayProfile(profile: EmailRelayProfile): void {
     const baseUrl = profile.baseUrl ?? 'https://api.mailgun.net'
     if (
       (profile.enabled && !profile.apiKey) ||
-      !/^[a-zA-Z0-9.-]{1,253}$/.test(profile.domain) ||
+      !isDnsName(profile.domain) ||
       !['https://api.mailgun.net', 'https://api.eu.mailgun.net'].includes(baseUrl.replace(/\/$/, ''))
     ) {
       throw new Error('Mailgun relay configuration is invalid.')
@@ -297,6 +310,24 @@ export function validateRelayProfile(profile: EmailRelayProfile): void {
       throw new Error('AWS SES relay configuration is invalid.')
     }
   }
+}
+
+/** Parses the validated mailbox and optional display name used consistently by every provider. */
+export function relaySenderIdentity(value: unknown): { address: string; name?: string } | undefined {
+  return validateEmailSenderIdentity(value)
+}
+
+/** Returns only the mailbox portion for provider contracts that require it. */
+export function relaySenderAddress(value: unknown): string | undefined {
+  return relaySenderIdentity(value)?.address
+}
+
+function isDnsName(value: string): boolean {
+  if (value.length < 1 || value.length > 253 || value.endsWith('.')) {
+    return false
+  }
+
+  return value.split('.').every((label) => /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/.test(label))
 }
 
 export function orderedEnabledRelays(config: EmailDeliveryConfig): EmailRelayProfile[] {
@@ -325,7 +356,7 @@ export function toRelayView(profile: EmailRelayProfile): EmailRelayView {
     rateLimit: { ...profile.rateLimit },
     credentialsConfigured:
       profile.kind === 'smtp'
-        ? Boolean(profile.password) || !profile.username
+        ? Boolean(profile.username && profile.password)
         : profile.kind === 'aws-ses'
           ? Boolean(profile.accessKeyId && profile.secretAccessKey) ||
             (!profile.accessKeyId && !profile.secretAccessKey)
@@ -346,22 +377,4 @@ export function toRelayView(profile: EmailRelayProfile): EmailRelayView {
 
 export function sanitizedProviderCode(value: unknown): string | undefined {
   return typeof value === 'string' && SAFE_PROVIDER_CODE.test(value) ? value : undefined
-}
-
-function isPrivateSmtpHost(host: string): boolean {
-  const normalized = host.toLowerCase().replace(/^\[|\]$/g, '')
-  if (normalized === 'localhost' || normalized.endsWith('.localhost') || normalized === '::1') {
-    return true
-  }
-  const octets = normalized.split('.').map(Number)
-  if (octets.length !== 4 || octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)) {
-    return false
-  }
-
-  return (
-    octets[0] === 10 ||
-    octets[0] === 127 ||
-    (octets[0] === 192 && octets[1] === 168) ||
-    (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31)
-  )
 }

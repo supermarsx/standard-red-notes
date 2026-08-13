@@ -7,6 +7,11 @@ import { ListEmailReminders } from '../Domain/UseCase/ListEmailReminders/ListEma
 import { DeleteEmailReminder } from '../Domain/UseCase/DeleteEmailReminder/DeleteEmailReminder'
 import { EmailReminderHttpProjection } from '../Infra/Http/Projection/EmailReminderHttpProjection'
 
+// The server currently consumes the published responses package; keep these
+// typed fallbacks until its lockfile picks up the shared enum members.
+const HTTP_CONFLICT = 409 as HttpStatusCode
+const HTTP_SERVICE_UNAVAILABLE = 503 as HttpStatusCode
+
 export class EmailRemindersController {
   constructor(
     private createEmailReminder: CreateEmailReminder,
@@ -72,11 +77,12 @@ export class EmailRemindersController {
     })
 
     if (result.isFailed()) {
+      const message = result.getError()
       return {
-        status: HttpStatusCode.Unauthorized,
+        status: this.cancellationFailureStatus(message),
         data: {
           error: {
-            message: result.getError(),
+            message,
           },
         },
       }
@@ -88,5 +94,16 @@ export class EmailRemindersController {
         message: result.getValue(),
       },
     }
+  }
+
+  private cancellationFailureStatus(message: string): HttpStatusCode {
+    if (message.includes('already in flight')) {
+      return HTTP_CONFLICT
+    }
+    if (message.includes('durable email delivery cancellation is unavailable')) {
+      return HTTP_SERVICE_UNAVAILABLE
+    }
+
+    return HttpStatusCode.Unauthorized
   }
 }

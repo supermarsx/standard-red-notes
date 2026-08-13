@@ -34,6 +34,10 @@ import { WorkflowsService } from '../../Service/Workflows/WorkflowsService'
 import { EmailProvider } from '../../Service/ReminderDelivery/Providers/EmailProvider'
 import { RedisTokenUsageStore } from '../../Service/Assistant/RedisTokenUsageStore'
 import {
+  AdminEmailDeliveryService,
+  AdminEmailDeliveryServiceError,
+} from '../../Service/EmailDelivery/AdminEmailDeliveryService'
+import {
   buildWindowUsage,
   FIVE_HOUR_WINDOW_MS,
   TokenWindowUsage,
@@ -189,6 +193,12 @@ export class AdminController extends BaseHttpController {
     // Canonical Workflows URL policy. Optional only for legacy/unit-test
     // construction; a save fails closed when the production binding is absent.
     @inject(TYPES.ApiGateway_WorkflowsService) @optional() private workflowsService?: WorkflowsService,
+    // Redis-backed deployments dispatch the existing stable /test route through
+    // the advanced relay facade. Memory/home deployments leave this unbound and
+    // retain the compatible direct-SMTP behavior below.
+    @inject(TYPES.ApiGateway_AdminEmailDeliveryService)
+    @optional()
+    private adminEmailDeliveryService?: AdminEmailDeliveryService,
   ) {
     super()
   }
@@ -1270,11 +1280,76 @@ export class AdminController extends BaseHttpController {
     response.json(await this.serverSettingsResolver.view())
   }
 
-  /** Admin-only, redacted SMTP smoke test using the same live resolver as reminders. */
+  /** Admin-only, redacted smoke test using the active relay topology. */
   @httpPost('/email-delivery/test', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
   async testEmailDelivery(request: Request, response: Response): Promise<void> {
     if (!this.requestorIsAdmin(response)) {
       response.status(403).json({ error: { message: 'Admin role required.' } })
+
+      return
+    }
+    const body = request.body as { recipient?: unknown; relayId?: unknown } | undefined
+    const recipient = validateEmailRecipient(body?.recipient)
+    if (!recipient) {
+      response.status(400).json({ error: { message: 'A valid test recipient email address is required.' } })
+
+      return
+    }
+    const relayId = body?.relayId
+    if (relayId !== undefined && (typeof relayId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(relayId))) {
+      response.status(400).json({ error: { message: 'A valid relay id is required when selecting a profile.' } })
+
+      return
+    }
+
+    const adminUuid = ((response.locals as { user?: { uuid?: string } }).user ?? {}).uuid ?? null
+    if (this.adminEmailDeliveryService) {
+      try {
+        const result = await this.adminEmailDeliveryService.testDelivery({
+          recipient,
+          ...(typeof relayId === 'string' ? { relayId } : {}),
+        })
+        this.logger?.info('admin email-delivery test completed', {
+          audit: 'admin.email-delivery.test',
+          adminUuid,
+          outcome: result.outcome,
+        })
+        response.json({
+          accepted: result.accepted,
+          relayId: result.relayId,
+          relayKind: result.relayKind,
+          outcome: result.outcome,
+        })
+      } catch (error) {
+        const code = error instanceof AdminEmailDeliveryServiceError ? error.code : 'unavailable'
+        const status =
+          code === 'bad-request' ? 400 : code === 'rate-limited' ? 429 : code === 'provider-failure' ? 502 : 503
+        if (
+          status === 429 &&
+          error instanceof AdminEmailDeliveryServiceError &&
+          Number.isSafeInteger(error.retryAfterSeconds) &&
+          (error.retryAfterSeconds as number) > 0
+        ) {
+          response.setHeader('Retry-After', String(error.retryAfterSeconds))
+        }
+        this.logger?.info('admin email-delivery test completed', {
+          audit: 'admin.email-delivery.test',
+          adminUuid,
+          outcome: code,
+        })
+        response.status(status).json({
+          error: {
+            message:
+              status === 400
+                ? 'The email delivery test request was rejected.'
+                : status === 429
+                  ? 'The email delivery test is rate limited.'
+                  : status === 502
+                    ? 'The provider test failed. Check the redacted delivery log.'
+                    : 'The email delivery subsystem is unavailable.',
+          },
+        })
+      }
 
       return
     }
@@ -1284,14 +1359,6 @@ export class AdminController extends BaseHttpController {
       return
     }
 
-    const recipient = validateEmailRecipient((request.body as { recipient?: unknown } | undefined)?.recipient)
-    if (!recipient) {
-      response.status(400).json({ error: { message: 'A valid test recipient email address is required.' } })
-
-      return
-    }
-
-    const adminUuid = ((response.locals as { user?: { uuid?: string } }).user ?? {}).uuid ?? null
     let outcome = 'failed'
     try {
       const provider = new EmailProvider(() => this.serverSettingsResolver!.resolveEmailDeliveryConfig())

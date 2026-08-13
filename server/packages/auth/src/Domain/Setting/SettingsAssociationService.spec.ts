@@ -192,12 +192,12 @@ describe('SettingsAssociationService', () => {
   })
 
   describe('email backup delivery receipt state', () => {
-    it('is valid, unencrypted, unsensitive, and server-written only', () => {
+    it('is valid, encrypted, sensitive, and server-written only', () => {
       const settingName = SettingName.create(SettingName.NAMES.EmailBackupDeliveryState).getValue()
 
       expect(settingName.value).toEqual('EMAIL_BACKUP_DELIVERY_STATE')
-      expect(createService().getEncryptionVersionForSetting(settingName)).toEqual(EncryptionVersion.Unencrypted)
-      expect(createService().getSensitivityForSetting(settingName)).toBeFalsy()
+      expect(createService().getEncryptionVersionForSetting(settingName)).toEqual(EncryptionVersion.Default)
+      expect(createService().getSensitivityForSetting(settingName)).toBeTruthy()
       expect(createService().isSettingMutableByClient(settingName)).toBeFalsy()
     })
   })

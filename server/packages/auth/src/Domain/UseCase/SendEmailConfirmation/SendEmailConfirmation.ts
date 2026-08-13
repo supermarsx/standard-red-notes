@@ -9,6 +9,7 @@ import {
   hashEmailConfirmationToken,
 } from '../../EmailConfirmation/hashEmailConfirmationToken'
 import { EmailSenderInterface } from '../../Email/EmailSenderInterface'
+import { createEmailDeliveryId } from '../../Email/EmailDeliveryId'
 import { buildConfirmationUrl, renderConfirmationEmailBody } from '../../Registration/RegistrationConfig'
 
 import { SendEmailConfirmationDTO } from './SendEmailConfirmationDTO'
@@ -85,7 +86,12 @@ export class SendEmailConfirmation implements UseCaseInterface<boolean> {
       const body = renderConfirmationEmailBody(dto.registrationConfig.emailConfirmationBody, url)
       const subject = dto.registrationConfig.emailConfirmationSubject
 
-      const emailed = await this.emailSender.sendEmail(dto.email, subject, body)
+      const emailed = await this.emailSender.sendEmail(dto.email, subject, body, {
+        deliverySource: 'account',
+        deliveryId: createEmailDeliveryId('email-confirmation', token.id.toString()),
+        expiresAt: expiresAt.getTime(),
+        supersessionKey: createEmailDeliveryId('confirmation-user', dto.userUuid),
+      })
 
       return Result.ok(emailed)
     } catch (error) {

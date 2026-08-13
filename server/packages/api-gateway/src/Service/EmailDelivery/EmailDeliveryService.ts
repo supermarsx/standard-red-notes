@@ -30,10 +30,14 @@ export interface EmailDeliveryServiceOptions {
   clock?: () => number
   random?: () => number
   randomId?: () => string
+  leaseHeartbeatMs?: number
+  attemptLogTimeoutMs?: number
+  onAttemptLogFailure?: (reason: 'error' | 'timeout') => void
+  allowSource?: (source: EmailDeliverySource) => boolean
 }
 
 export interface ProcessEmailResult {
-  status: 'idle' | 'sent' | 'retry-scheduled' | 'dead-lettered' | 'stale'
+  status: 'idle' | 'sent' | 'retry-scheduled' | 'dead-lettered' | 'quarantined' | 'stale'
   jobId?: string
 }
 
@@ -44,9 +48,10 @@ export interface TestEmailResult {
   outcome: 'sent' | 'rejected' | 'rate-limited' | 'unconfigured' | 'failed'
 }
 
-const SOURCES: EmailDeliverySource[] = ['reminder', 'account', 'backup', 'test', 'other']
+const SOURCES: EmailDeliverySource[] = ['reminder', 'published-reminder', 'account', 'backup', 'test', 'other']
 
 export class EmailDeliveryService {
+  private draining = false
   private readonly maxAttempts: number
   private readonly retryBaseMs: number
   private readonly retryMaxMs: number
@@ -54,6 +59,10 @@ export class EmailDeliveryService {
   private readonly clock: () => number
   private readonly random: () => number
   private readonly randomId: () => string
+  private readonly leaseHeartbeatMs: number
+  private readonly attemptLogTimeoutMs: number
+  private readonly onAttemptLogFailure?: (reason: 'error' | 'timeout') => void
+  private readonly allowSource: (source: EmailDeliverySource) => boolean
 
   constructor(
     private readonly queue: EmailDeliveryQueue,
@@ -76,6 +85,10 @@ export class EmailDeliveryService {
     this.clock = options.clock ?? (() => Date.now())
     this.random = options.random ?? Math.random
     this.randomId = options.randomId ?? (() => randomUUID())
+    this.leaseHeartbeatMs = boundedInteger(options.leaseHeartbeatMs, 30_000, 10, 5 * 60 * 1_000)
+    this.attemptLogTimeoutMs = boundedInteger(options.attemptLogTimeoutMs, 1_000, 10, 30_000)
+    this.onAttemptLogFailure = options.onAttemptLogFailure
+    this.allowSource = options.allowSource ?? (() => true)
   }
 
   async enqueue(message: EmailMessage, source: EmailDeliverySource = 'other'): Promise<QueueItemView> {
@@ -97,10 +110,46 @@ export class EmailDeliveryService {
     return publicJob(job, 'ready')
   }
 
+  /**
+   * Prevent another provider attempt from starting while the process drains.
+   * An already-started provider call remains bounded by its transport timeout;
+   * the claim is then settled or returned to the ready queue before shutdown.
+   */
+  beginDrain(): void {
+    this.draining = true
+  }
+
+  /** Re-enable provider attempts after a deliberately stopped worker restarts. */
+  endDrain(): void {
+    this.draining = false
+  }
+
   async processOne(): Promise<ProcessEmailResult> {
     const claim = await this.queue.claim()
     if (!claim) {
       return { status: 'idle' }
+    }
+    const heartbeat = new QueueLeaseHeartbeat(this.queue, claim, this.leaseHeartbeatMs)
+    if (!(await heartbeat.start())) {
+      // A failed initial fence must not strand the claim for the full lease.
+      // Return it atomically; a stale/superseded owner will simply reject the
+      // settlement, while an infrastructure error remains retryable by expiry.
+      await this.queue.retry(claim, claim.job).catch(() => 'stale' as const)
+      return { status: 'stale', jobId: claim.job.id }
+    }
+    try {
+      return await this.processClaim(claim, heartbeat)
+    } finally {
+      await heartbeat.stop()
+    }
+  }
+
+  private async processClaim(claim: ClaimedEmail, heartbeat: QueueLeaseHeartbeat): Promise<ProcessEmailResult> {
+    if (!this.allowSource(claim.job.source)) {
+      return this.deadLetterDisabledSource(claim)
+    }
+    if (this.isExpired(claim.job)) {
+      return this.expireClaim(claim)
     }
     const attempt = claim.job.attempt + 1
     let config: EmailDeliveryConfig
@@ -128,6 +177,12 @@ export class EmailDeliveryService {
     let lastFailureClass = 'provider-rejected'
     let minimumRateDelay = Number.POSITIVE_INFINITY
     for (const profile of profiles) {
+      if (this.draining) {
+        return this.scheduleFailure(claim, attempt, 'shutdown-drain', true, lastRelayId)
+      }
+      if (!heartbeat.isOwned()) {
+        return { status: 'stale', jobId: claim.job.id }
+      }
       lastRelayId = profile.id
       let decision
       try {
@@ -136,6 +191,9 @@ export class EmailDeliveryService {
         retryable = true
         lastFailureClass = 'rate-limit-unavailable'
         continue
+      }
+      if (!heartbeat.isOwned()) {
+        return { status: 'stale', jobId: claim.job.id }
       }
       if (!decision.allowed) {
         retryable = true
@@ -153,6 +211,19 @@ export class EmailDeliveryService {
           createdAt: this.clock(),
         })
         continue
+      }
+
+      if (this.isExpired(claim.job)) {
+        return this.expireClaim(claim, attempt)
+      }
+      if (this.draining) {
+        return this.scheduleFailure(claim, attempt, 'shutdown-drain', true, lastRelayId)
+      }
+      // Recheck the token directly at the provider boundary. Besides lease
+      // ownership, Redis uses this fence to reject a security message that a
+      // newer message in the same supersession stream replaced.
+      if (!(await this.queue.renewLease(claim))) {
+        return { status: 'stale', jobId: claim.job.id }
       }
 
       const startedAt = this.clock()
@@ -182,10 +253,24 @@ export class EmailDeliveryService {
 
       if (result.outcome === 'sent') {
         const acknowledged = await this.queue.acknowledge(claim)
-        return { status: acknowledged ? 'sent' : 'stale', jobId: claim.job.id }
+        return {
+          status: acknowledged === 'settled' ? 'sent' : acknowledged === 'quarantined' ? 'quarantined' : 'stale',
+          jobId: claim.job.id,
+        }
+      }
+      if (result.outcome === 'permanent-failure') {
+        // A permanent provider/recipient decision can represent suppression,
+        // policy, or mailbox rejection. Trying another relay would bypass that
+        // decision and damage sender reputation; fallback is for transient
+        // transport/provider failures only.
+        lastFailureClass = result.failureClass
+        break
+      }
+      if (!heartbeat.isOwned()) {
+        return { status: 'stale', jobId: claim.job.id }
       }
       lastFailureClass = result.failureClass
-      retryable ||= result.outcome === 'transient-failure'
+      retryable = true
     }
 
     return this.scheduleFailure(
@@ -225,6 +310,9 @@ export class EmailDeliveryService {
     let last: EmailRelayProfile | undefined
     let finalOutcome: TestEmailResult['outcome'] = 'failed'
     for (const profile of profiles) {
+      if (this.draining) {
+        break
+      }
       last = profile
       let decision
       try {
@@ -302,7 +390,7 @@ export class EmailDeliveryService {
     return this.queue.requeue(id)
   }
 
-  discard(id: string): Promise<boolean> {
+  discard(id: string): ReturnType<EmailDeliveryQueue['discard']> {
     return this.queue.discard(id)
   }
 
@@ -322,28 +410,162 @@ export class EmailDeliveryService {
       ...(lastRelayId ? { lastRelayId } : {}),
       nextAttemptAt: now,
     }
-    if (retryable && attempt < updated.maxAttempts) {
+    if (updated.retryMode === 'indefinite' || (retryable && attempt < updated.maxAttempts)) {
       updated.nextAttemptAt = now + Math.max(this.retryDelay(attempt), minimumDelayMs ?? 0)
       const scheduled = await this.queue.retry(claim, updated)
-      return { status: scheduled ? 'retry-scheduled' : 'stale', jobId: updated.id }
+      return {
+        status: scheduled === 'settled' ? 'retry-scheduled' : scheduled === 'quarantined' ? 'quarantined' : 'stale',
+        jobId: updated.id,
+      }
     }
 
     updated.deadAt = now
     const dead = await this.queue.deadLetter(claim, updated)
-    return { status: dead ? 'dead-lettered' : 'stale', jobId: updated.id }
+    return {
+      status: dead === 'settled' ? 'dead-lettered' : dead === 'quarantined' ? 'quarantined' : 'stale',
+      jobId: updated.id,
+    }
   }
 
   private retryDelay(attempt: number): number {
-    const exponential = Math.min(this.retryMaxMs, this.retryBaseMs * 2 ** Math.max(0, attempt - 1))
+    const exponential = Math.min(this.retryMaxMs, this.retryBaseMs * 2 ** Math.min(30, Math.max(0, attempt - 1)))
     const centered = Math.max(0, Math.min(1, this.random())) * 2 - 1
     return Math.max(1_000, Math.round(exponential * (1 + centered * this.jitterRatio)))
   }
 
+  private isExpired(job: QueuedEmail): boolean {
+    return job.expiresAt !== undefined && job.expiresAt <= this.clock()
+  }
+
+  private async deadLetterDisabledSource(claim: ClaimedEmail): Promise<ProcessEmailResult> {
+    const now = this.clock()
+    const disabled = await this.queue.deadLetter(claim, {
+      ...claim.job,
+      nextAttemptAt: now,
+      lastFailureClass: 'source-disabled',
+      deadAt: now,
+    })
+    return {
+      status: disabled === 'settled' ? 'dead-lettered' : disabled === 'quarantined' ? 'quarantined' : 'stale',
+      jobId: claim.job.id,
+    }
+  }
+
+  private async expireClaim(claim: ClaimedEmail, attempt = claim.job.attempt): Promise<ProcessEmailResult> {
+    const now = this.clock()
+    const expired = await this.queue.deadLetter(claim, {
+      ...claim.job,
+      attempt,
+      nextAttemptAt: now,
+      lastFailureClass: 'expired',
+      deadAt: now,
+    })
+    return {
+      status: expired === 'settled' ? 'dead-lettered' : expired === 'quarantined' ? 'quarantined' : 'stale',
+      jobId: claim.job.id,
+    }
+  }
+
   private async record(entry: EmailAttemptLog): Promise<void> {
+    let settled = false
+    let reported = false
+    const report = (reason: 'error' | 'timeout') => {
+      if (reported) {
+        return
+      }
+      reported = true
+      try {
+        this.onAttemptLogFailure?.(reason)
+      } catch {
+        // Operator telemetry must remain isolated from queue settlement.
+      }
+    }
+    const write = this.attemptLogs.record(entry).then(
+      () => {
+        settled = true
+      },
+      () => {
+        settled = true
+        report('error')
+      },
+    )
+    let timer: NodeJS.Timeout | undefined
+    const deadline = new Promise<void>((resolve) => {
+      timer = setTimeout(() => {
+        if (!settled) {
+          report('timeout')
+        }
+        resolve()
+      }, this.attemptLogTimeoutMs)
+      timer.unref?.()
+    })
+
+    // A rejected or stalled telemetry write must never delay acknowledgement
+    // long enough for an accepted provider delivery to be leased and resent.
+    await Promise.race([write, deadline])
+    if (timer) {
+      clearTimeout(timer)
+    }
+  }
+}
+
+class QueueLeaseHeartbeat {
+  private timer: NodeJS.Timeout | undefined
+  private owned = true
+  private stopping = false
+  private renewal: Promise<void> = Promise.resolve()
+
+  constructor(
+    private readonly queue: EmailDeliveryQueue,
+    private readonly claim: ClaimedEmail,
+    private readonly intervalMs: number,
+  ) {}
+
+  async start(): Promise<boolean> {
+    this.owned = await this.renewOwned()
+    if (!this.owned) {
+      return false
+    }
+    this.timer = setInterval(() => {
+      this.renewal = this.renewal.then(async () => {
+        if (this.stopping || !this.owned) {
+          return
+        }
+        this.owned = await this.renewOwned()
+      })
+    }, this.intervalMs)
+    this.timer.unref?.()
+    return true
+  }
+
+  isOwned(): boolean {
+    return this.owned
+  }
+
+  async stop(): Promise<void> {
+    this.stopping = true
+    if (this.timer) {
+      clearInterval(this.timer)
+      this.timer = undefined
+    }
+    await this.renewal
+  }
+
+  private async renewOwned(): Promise<boolean> {
+    let timer: NodeJS.Timeout | undefined
+    const timeoutMs = Math.max(10, Math.min(5_000, this.intervalMs))
     try {
-      await this.attemptLogs.record(entry)
-    } catch {
-      // Attempt telemetry must never turn an accepted email into a duplicate.
+      return await Promise.race([
+        this.queue.renewLease(this.claim).catch(() => false),
+        new Promise<false>((resolve) => {
+          timer = setTimeout(() => resolve(false), timeoutMs)
+          timer.unref?.()
+        }),
+      ])
+    } finally {
+      if (timer) {
+        clearTimeout(timer)
+      }
     }
   }
 }
@@ -357,6 +579,8 @@ function publicJob(job: QueuedEmail, state: QueueState): QueueItemView {
     maxAttempts: job.maxAttempts,
     createdAt: job.createdAt,
     ...(state === 'ready' ? { nextAttemptAt: job.nextAttemptAt } : {}),
+    ...(job.expiresAt !== undefined ? { expiresAt: job.expiresAt } : {}),
+    ...(job.retryMode !== undefined ? { retryMode: job.retryMode } : {}),
   }
 }
 

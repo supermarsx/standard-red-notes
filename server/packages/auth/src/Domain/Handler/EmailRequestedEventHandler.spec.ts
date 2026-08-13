@@ -12,6 +12,8 @@ import {
   InvalidBackupAttachmentReferenceError,
 } from '../Email/BackupAttachmentStorageInterface'
 import { EmailSenderInterface } from '../Email/EmailSenderInterface'
+import { EmailBackupStateRepositoryInterface } from '../Email/EmailBackupStateRepositoryInterface'
+import { EmailBackupDeliveryState, emptyEmailBackupDeliveryState } from '../Email/EmailBackupDeliveryState'
 import { GetSetting } from '../UseCase/GetSetting/GetSetting'
 import { SetSettingValue } from '../UseCase/SetSettingValue/SetSettingValue'
 import { EmailRequestedEventHandler } from './EmailRequestedEventHandler'
@@ -57,7 +59,10 @@ describe('EmailRequestedEventHandler', () => {
       },
     }) as EmailRequestedEvent
 
-  const createHandler = (emailBackupsEnabled = true) =>
+  const createHandler = (
+    emailBackupsEnabled = true,
+    emailBackupStateRepository?: EmailBackupStateRepositoryInterface,
+  ) =>
     new EmailRequestedEventHandler(
       emailSender,
       backupAttachmentStorage,
@@ -66,12 +71,15 @@ describe('EmailRequestedEventHandler', () => {
       timer,
       emailBackupsEnabled,
       logger,
+      emailBackupStateRepository,
     )
 
   beforeEach(() => {
     emailSender = {
+      acceptanceMode: 'provider',
       isConfigured: jest.fn().mockReturnValue(true),
       sendEmail: jest.fn().mockResolvedValue(true),
+      getDeliveryStatus: jest.fn().mockResolvedValue('missing'),
     }
 
     backupAttachmentStorage = {
@@ -115,6 +123,8 @@ describe('EmailRequestedEventHandler', () => {
           },
         ],
         html: true,
+        deliverySource: 'backup',
+        deliveryId: expect.stringMatching(/^backup-[0-9a-f]{64}$/),
       },
     )
     expect(backupAttachmentStorage.markDelivered).toHaveBeenCalledWith(reference)
@@ -140,6 +150,156 @@ describe('EmailRequestedEventHandler', () => {
     expect(setSettingValue.execute.mock.invocationCallOrder[1]).toBeLessThan(
       backupAttachmentStorage.delete.mock.invocationCallOrder[0],
     )
+  })
+
+  it('persists a queue receipt but retains source artifacts and cadence after durable queue acceptance', async () => {
+    emailSender = { ...emailSender, acceptanceMode: 'durable-queue' }
+
+    await createHandler().handle(event())
+
+    expect(emailSender.sendEmail).toHaveBeenCalledTimes(1)
+    expect(backupAttachmentStorage.markDelivered).not.toHaveBeenCalled()
+    expect(backupAttachmentStorage.delete).not.toHaveBeenCalled()
+    expect(setSettingValue.execute).toHaveBeenCalledTimes(2)
+    const pendingState = JSON.parse((setSettingValue.execute.mock.calls[1][0] as { value: string }).value)
+    expect(pendingState).toEqual({
+      pending: [
+        {
+          batchId: backupBatchId,
+          outcome: 'backup',
+          queuedAt: 1_000,
+          deliveries: [
+            {
+              deliveryId: expect.stringMatching(/^backup-[0-9a-f]{64}$/),
+              queueAccepted: true,
+              reference,
+            },
+          ],
+        },
+      ],
+      completed: [],
+    })
+    expect(
+      setSettingValue.execute.mock.calls.some(
+        ([input]) => (input as { settingName: string }).settingName === 'EMAIL_BACKUP_LAST_SENT',
+      ),
+    ).toBe(false)
+    expect(logger.info).toHaveBeenCalledWith('Email request accepted by the durable queue', {
+      codeTag: 'EmailRequestedEventHandler',
+      messageIdentifier: 'DATA_BACKUP',
+    })
+    expect(JSON.stringify(logger.info.mock.calls)).not.toContain('delivered')
+  })
+
+  it('finalizes a queued backup exactly once after provider acceptance', async () => {
+    emailSender = { ...emailSender, acceptanceMode: 'durable-queue' }
+    await createHandler().handle(event())
+    const pendingValue = (setSettingValue.execute.mock.calls.at(-1)?.[0] as { value: string }).value
+
+    getSetting.execute.mockResolvedValue(Result.ok({ setting: {} as never, decryptedValue: pendingValue }))
+    emailSender.getDeliveryStatus?.mockResolvedValue('provider-accepted')
+    emailSender.sendEmail.mockClear()
+
+    await createHandler().handle(event())
+
+    expect(emailSender.sendEmail).not.toHaveBeenCalled()
+    expect(backupAttachmentStorage.markDelivered).toHaveBeenCalledWith(reference)
+    expect(backupAttachmentStorage.delete).toHaveBeenCalledWith(reference)
+    expect(setSettingValue.execute.mock.calls.slice(-2).map(([input]) => input)).toEqual([
+      {
+        settingName: 'EMAIL_BACKUP_DELIVERY_STATE',
+        value: JSON.stringify({ completed: [{ batchId: backupBatchId, deliveredAt: 1_000 }] }),
+        userUuid,
+        checkUserPermissions: false,
+      },
+      {
+        settingName: 'EMAIL_BACKUP_LAST_SENT',
+        value: '1000',
+        userUuid,
+        checkUserPermissions: false,
+      },
+    ])
+  })
+
+  it('uses the transaction-bound state repository for production durable lifecycle transitions', async () => {
+    emailSender = { ...emailSender, acceptanceMode: 'durable-queue' }
+    let state: EmailBackupDeliveryState = emptyEmailBackupDeliveryState()
+    let lastSentAt: number | undefined
+    const stateRepository: EmailBackupStateRepositoryInterface = {
+      runExclusive: jest.fn(async (_userUuid, transition) => {
+        const mutation = await transition(state)
+        if (mutation.deliveryState) {
+          state = mutation.deliveryState
+        }
+        if (mutation.lastSentAt !== undefined) {
+          lastSentAt = mutation.lastSentAt
+        }
+        return { status: 'available', value: mutation.result }
+      }),
+    }
+
+    await createHandler(true, stateRepository).handle(event())
+    expect(state.pending).toHaveLength(1)
+    expect(state.pending[0].deliveries[0].queueAccepted).toBe(true)
+    expect(lastSentAt).toBeUndefined()
+
+    emailSender.getDeliveryStatus?.mockResolvedValue('provider-accepted')
+    emailSender.sendEmail.mockClear()
+    await createHandler(true, stateRepository).handle(event())
+
+    expect(emailSender.sendEmail).not.toHaveBeenCalled()
+    expect(state.pending).toHaveLength(0)
+    expect(state.completed).toEqual([{ batchId: backupBatchId, deliveredAt: 1_000 }])
+    expect(lastSentAt).toBe(1_000)
+    expect(getSetting.execute).not.toHaveBeenCalled()
+    expect(setSettingValue.execute).not.toHaveBeenCalled()
+  })
+
+  it.each(['dead', 'quarantined', 'discarded', 'superseded', 'missing'] as const)(
+    'retains a queue-accepted backup and raises a redacted alert when delivery becomes %s',
+    async (status) => {
+      emailSender = { ...emailSender, acceptanceMode: 'durable-queue' }
+      await createHandler().handle(event())
+      const pendingValue = (setSettingValue.execute.mock.calls.at(-1)?.[0] as { value: string }).value
+      const writesBeforeRetry = setSettingValue.execute.mock.calls.length
+
+      getSetting.execute.mockResolvedValue(Result.ok({ setting: {} as never, decryptedValue: pendingValue }))
+      emailSender.getDeliveryStatus?.mockResolvedValue(status)
+      emailSender.sendEmail.mockClear()
+
+      await expect(createHandler().handle(event())).rejects.toThrow(
+        'Email backup durable delivery requires operator attention',
+      )
+
+      expect(emailSender.sendEmail).not.toHaveBeenCalled()
+      expect(setSettingValue.execute).toHaveBeenCalledTimes(writesBeforeRetry)
+      expect(backupAttachmentStorage.markDelivered).not.toHaveBeenCalled()
+      expect(backupAttachmentStorage.delete).not.toHaveBeenCalled()
+      expect(logger.error).toHaveBeenCalledWith('Email backup durable delivery is blocked', {
+        codeTag: 'EmailRequestedEventHandler',
+        messageIdentifier: 'DATA_BACKUP',
+        batchId: backupBatchId,
+        status,
+      })
+    },
+  )
+
+  it('never falls back to direct SMTP while a durable backup receipt is unresolved', async () => {
+    emailSender = { ...emailSender, acceptanceMode: 'durable-queue' }
+    await createHandler().handle(event())
+    const pendingValue = (setSettingValue.execute.mock.calls.at(-1)?.[0] as { value: string }).value
+
+    getSetting.execute.mockResolvedValue(Result.ok({ setting: {} as never, decryptedValue: pendingValue }))
+    emailSender = { ...emailSender, acceptanceMode: 'provider' }
+    emailSender.sendEmail.mockClear()
+
+    await expect(createHandler().handle(event())).rejects.toThrow(
+      'Email backup durable delivery requires operator attention',
+    )
+
+    expect(emailSender.sendEmail).not.toHaveBeenCalled()
+    expect(backupAttachmentStorage.markDelivered).not.toHaveBeenCalled()
+    expect(backupAttachmentStorage.delete).not.toHaveBeenCalled()
   })
 
   it('sorts a multi-part event and records completion only after every part is receipted', async () => {
@@ -411,7 +571,7 @@ describe('EmailRequestedEventHandler', () => {
       'person@example.com',
       'Your encrypted backup',
       '<p>Attached.</p>',
-      { html: true },
+      { html: true, deliveryId: expect.stringMatching(/^domain-email-[0-9a-f]{64}$/) },
     )
     expect(setSettingValue.execute).not.toHaveBeenCalled()
   })
@@ -431,7 +591,11 @@ describe('EmailRequestedEventHandler', () => {
       'person@example.com',
       'Backup could not be created',
       '<p>Reduce one large item.</p>',
-      { html: true },
+      {
+        html: true,
+        deliverySource: 'backup',
+        deliveryId: expect.stringMatching(/^backup-event-[0-9a-f]{64}$/),
+      },
     )
     expect(setSettingValue.execute).toHaveBeenCalledTimes(1)
     expect(setSettingValue.execute).toHaveBeenCalledWith({
@@ -445,6 +609,38 @@ describe('EmailRequestedEventHandler', () => {
     setSettingValue.execute.mockClear()
     await expect(createHandler().handle(failureEvent)).rejects.toThrow('Email delivery was not confirmed')
     expect(setSettingValue.execute).not.toHaveBeenCalled()
+  })
+
+  it('does not advance cadence for a queued failure notice until provider acceptance', async () => {
+    emailSender = { ...emailSender, acceptanceMode: 'durable-queue' }
+    const failureEvent = event({
+      messageIdentifier: 'DATA_BACKUP_FAILED',
+      backupBatchId: undefined,
+      attachments: undefined,
+      subject: 'Backup could not be created',
+      body: '<p>Reduce one large item.</p>',
+    })
+
+    await createHandler().handle(failureEvent)
+
+    expect(setSettingValue.execute).toHaveBeenCalledTimes(2)
+    expect(
+      setSettingValue.execute.mock.calls.some(
+        ([input]) => (input as { settingName: string }).settingName === 'EMAIL_BACKUP_LAST_SENT',
+      ),
+    ).toBe(false)
+    const pendingValue = (setSettingValue.execute.mock.calls.at(-1)?.[0] as { value: string }).value
+
+    getSetting.execute.mockResolvedValue(Result.ok({ setting: {} as never, decryptedValue: pendingValue }))
+    emailSender.getDeliveryStatus?.mockResolvedValue('provider-accepted')
+    emailSender.sendEmail.mockClear()
+    await createHandler().handle(failureEvent)
+
+    expect(emailSender.sendEmail).not.toHaveBeenCalled()
+    expect(setSettingValue.execute.mock.calls.slice(-2).map(([input]) => input)).toEqual([
+      expect.objectContaining({ settingName: 'EMAIL_BACKUP_DELIVERY_STATE' }),
+      expect.objectContaining({ settingName: 'EMAIL_BACKUP_LAST_SENT', value: '1000' }),
+    ])
   })
 
   it('cleans every queued artifact without sending when backup delivery is disabled', async () => {

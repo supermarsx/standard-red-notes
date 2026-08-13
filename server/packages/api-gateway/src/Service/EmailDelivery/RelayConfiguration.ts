@@ -71,11 +71,16 @@ export function mergeRelayConfiguration(
   const previous = new Map((existing?.relays ?? []).map((profile) => [profile.id, profile]))
   const relays = input.relays.map((write) => mergeRelay(write, previous.get(write.id)))
   const ids = new Set<string>()
+  const priorities = new Set<number>()
   for (const relay of relays) {
     if (ids.has(relay.id)) {
       throw new Error('Email relay ids must be unique.')
     }
     ids.add(relay.id)
+    if (priorities.has(relay.priority)) {
+      throw new Error('Email relay priorities must be unique.')
+    }
+    priorities.add(relay.priority)
     validateRelayProfile(relay)
   }
 
@@ -104,8 +109,12 @@ function mergeRelay(write: EmailRelayWrite, previous?: EmailRelayProfile): Email
   }
   if (write.kind === 'smtp') {
     const old = previous?.kind === 'smtp' ? previous : undefined
-    const username = normalizedOptional(write.username)
-    const password = mergeSecret(write.password, old?.password)
+    const clearingCredentials = write.password === null
+    const username = clearingCredentials ? undefined : normalizedOptional(write.username)
+    if (!clearingCredentials && old?.password && write.password === undefined && username !== old.username) {
+      throw new Error('Changing an SMTP username requires replacing its password in the same update.')
+    }
+    const password = clearingCredentials ? undefined : mergeSecret(write.password, old?.password)
     return {
       ...common,
       kind: 'smtp',
@@ -134,9 +143,25 @@ function mergeRelay(write: EmailRelayWrite, previous?: EmailRelayProfile): Email
     }
   }
   const old = previous?.kind === 'aws-ses' ? previous : undefined
-  const accessKeyId = mergeSecret(write.accessKeyId, old?.accessKeyId)
-  const secretAccessKey = mergeSecret(write.secretAccessKey, old?.secretAccessKey)
-  const sessionToken = mergeSecret(write.sessionToken, old?.sessionToken)
+  const patchesAccessKey = write.accessKeyId !== undefined
+  const patchesSecretKey = write.secretAccessKey !== undefined
+  if (patchesAccessKey !== patchesSecretKey) {
+    throw new Error('AWS SES access and secret keys must be replaced or cleared together.')
+  }
+  if (patchesAccessKey && (write.accessKeyId === null) !== (write.secretAccessKey === null)) {
+    throw new Error('AWS SES access and secret keys must be replaced or cleared together.')
+  }
+  const clearStaticCredentials = write.accessKeyId === null || write.secretAccessKey === null
+  const replacesStaticCredentials = typeof write.accessKeyId === 'string' && typeof write.secretAccessKey === 'string'
+  const accessKeyId = clearStaticCredentials ? undefined : mergeSecret(write.accessKeyId, old?.accessKeyId)
+  const secretAccessKey = clearStaticCredentials ? undefined : mergeSecret(write.secretAccessKey, old?.secretAccessKey)
+  // A session token belongs to one temporary access/secret pair. Replacing the
+  // pair must never silently retain the old token when the write-only field is
+  // omitted by the UI; omission deliberately returns the new pair to long-lived
+  // static credentials, while an explicit value installs the new token.
+  const sessionToken = clearStaticCredentials
+    ? undefined
+    : mergeSecret(write.sessionToken, replacesStaticCredentials ? undefined : old?.sessionToken)
   return {
     ...common,
     kind: 'aws-ses',
