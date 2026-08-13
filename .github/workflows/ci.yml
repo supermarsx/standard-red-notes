@@ -307,6 +307,10 @@ jobs:
           done
       - name: Start disposable stack
         run: docker compose up -d --no-build --wait --wait-timeout 900
+      - name: Verify durable encrypted email queue against Compose Redis
+        run: yarn test:email-redis:compose
+      - name: Verify end-to-end queued SMTP delivery
+        run: yarn test:email-delivery:compose
       - name: Verify exact app and server deployment identity
         run: |
           set -euo pipefail

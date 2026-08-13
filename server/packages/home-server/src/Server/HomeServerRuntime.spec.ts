@@ -32,6 +32,7 @@ describe('HomeServerRuntime', () => {
   let signalTarget: FakeSignalTarget
   let scheduler: { stop: jest.Mock }
   let bridge: { close: jest.Mock }
+  let emailDelivery: { start: jest.Mock; stop: jest.Mock }
   let logger: { info: jest.Mock; warn: jest.Mock; error: jest.Mock }
   let onSigterm: jest.Mock
   let ready: boolean
@@ -41,6 +42,7 @@ describe('HomeServerRuntime', () => {
     runtime.start({
       server: server as unknown as http.Server,
       bridge,
+      emailDelivery,
       logger,
       readinessState,
       startScheduler: () => scheduler,
@@ -51,6 +53,10 @@ describe('HomeServerRuntime', () => {
     signalTarget = new FakeSignalTarget()
     scheduler = { stop: jest.fn() }
     bridge = { close: jest.fn().mockResolvedValue(undefined) }
+    emailDelivery = {
+      start: jest.fn().mockResolvedValue(true),
+      stop: jest.fn().mockResolvedValue(undefined),
+    }
     logger = { info: jest.fn(), warn: jest.fn(), error: jest.fn() }
     onSigterm = jest.fn().mockResolvedValue(undefined)
     ready = false
@@ -76,6 +82,7 @@ describe('HomeServerRuntime', () => {
     expect(runtime.isRunning()).toBe(false)
     expect(ready).toBe(false)
     expect(readinessState.markReady).not.toHaveBeenCalled()
+    expect(emailDelivery.start).not.toHaveBeenCalled()
     expect(signalTarget.listeners.size).toBe(0)
 
     server.listening = true
@@ -83,9 +90,52 @@ describe('HomeServerRuntime', () => {
     await startPromise
 
     expect(runtime.isRunning()).toBe(true)
+    expect(emailDelivery.start).toHaveBeenCalledTimes(1)
     expect(ready).toBe(true)
     expect(readinessState.markReady).toHaveBeenCalledTimes(1)
     expect(signalTarget.listeners.size).toBe(1)
+    expect(logger.info).toHaveBeenCalledWith('Email delivery runtime started')
+  })
+
+  it('keeps global readiness closed until email delivery startup completes', async () => {
+    const runtime = new HomeServerRuntime(signalTarget)
+    const server = new FakeServer()
+    server.listening = true
+    let finishEmailStartup!: (started: boolean) => void
+    emailDelivery.start.mockImplementation(
+      () =>
+        new Promise<boolean>((resolve) => {
+          finishEmailStartup = resolve
+        }),
+    )
+
+    const startPromise = start(runtime, server)
+    await Promise.resolve()
+
+    expect(emailDelivery.start).toHaveBeenCalledTimes(1)
+    expect(readinessState.markReady).not.toHaveBeenCalled()
+    expect(scheduler.stop).not.toHaveBeenCalled()
+
+    finishEmailStartup(true)
+    await startPromise
+
+    expect(readinessState.markReady).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the server available when optional email delivery declines to start', async () => {
+    const runtime = new HomeServerRuntime(signalTarget)
+    const server = new FakeServer()
+    server.listening = true
+    server.close.mockImplementation((callback) => callback())
+    emailDelivery.start.mockResolvedValue(false)
+
+    await start(runtime, server)
+
+    expect(readinessState.markReady).toHaveBeenCalledTimes(1)
+    expect(logger.info).not.toHaveBeenCalledWith('Email delivery runtime started')
+
+    await runtime.stop()
+    expect(emailDelivery.stop).toHaveBeenCalledTimes(1)
   })
 
   it('rejects a second start while resources are active', async () => {
@@ -112,6 +162,23 @@ describe('HomeServerRuntime', () => {
     await expect(startPromise).rejects.toThrow('address in use')
     expect(bridge.close).toHaveBeenCalledTimes(1)
     expect(server.unref).toHaveBeenCalledTimes(1)
+    expect(runtime.isActive()).toBe(false)
+  })
+
+  it('drains email delivery and all adopted resources when email startup fails', async () => {
+    const runtime = new HomeServerRuntime(signalTarget)
+    const server = new FakeServer()
+    server.listening = true
+    server.close.mockImplementation((callback) => callback())
+    emailDelivery.start.mockRejectedValue(new Error('email startup failed'))
+
+    await expect(start(runtime, server)).rejects.toThrow('email startup failed')
+
+    expect(emailDelivery.stop).toHaveBeenCalledTimes(1)
+    expect(scheduler.stop).not.toHaveBeenCalled()
+    expect(server.close).toHaveBeenCalledTimes(1)
+    expect(bridge.close).toHaveBeenCalledTimes(1)
+    expect(readinessState.markReady).not.toHaveBeenCalled()
     expect(runtime.isActive()).toBe(false)
   })
 
@@ -144,6 +211,7 @@ describe('HomeServerRuntime', () => {
       runtime.start({
         server: server as unknown as http.Server,
         bridge,
+        emailDelivery,
         logger,
         readinessState,
         startScheduler: () => {
@@ -156,6 +224,8 @@ describe('HomeServerRuntime', () => {
     expect(server.close).toHaveBeenCalledTimes(1)
     expect(server.unref).toHaveBeenCalledTimes(1)
     expect(bridge.close).toHaveBeenCalledTimes(1)
+    expect(emailDelivery.start).toHaveBeenCalledTimes(1)
+    expect(emailDelivery.stop).toHaveBeenCalledTimes(1)
     expect(signalTarget.listeners.size).toBe(0)
     expect(runtime.isActive()).toBe(false)
     expect(ready).toBe(false)
@@ -185,6 +255,7 @@ describe('HomeServerRuntime', () => {
     expect(stopped).toBe(false)
     expect(server.close).toHaveBeenCalledTimes(1)
     expect(scheduler.stop).toHaveBeenCalledTimes(1)
+    expect(emailDelivery.stop).toHaveBeenCalledTimes(1)
     expect(bridge.close).toHaveBeenCalledTimes(1)
 
     finishClose()
@@ -202,6 +273,51 @@ describe('HomeServerRuntime', () => {
 
     expect(scheduler.stop).not.toHaveBeenCalled()
     expect(bridge.close).not.toHaveBeenCalled()
+    expect(emailDelivery.stop).not.toHaveBeenCalled()
+  })
+
+  it('drains email delivery before closing Redis-adjacent and HTTP resources', async () => {
+    const runtime = new HomeServerRuntime(signalTarget)
+    const server = new FakeServer()
+    server.listening = true
+    server.close.mockImplementation((callback) => callback())
+    let finishEmailStop!: () => void
+    emailDelivery.stop.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finishEmailStop = resolve
+        }),
+    )
+
+    await start(runtime, server)
+    const stopPromise = runtime.stop()
+    await Promise.resolve()
+
+    expect(scheduler.stop).toHaveBeenCalledTimes(1)
+    expect(emailDelivery.stop).toHaveBeenCalledTimes(1)
+    expect(server.close).not.toHaveBeenCalled()
+    expect(bridge.close).not.toHaveBeenCalled()
+
+    finishEmailStop()
+    await stopPromise
+
+    expect(server.close).toHaveBeenCalledTimes(1)
+    expect(bridge.close).toHaveBeenCalledTimes(1)
+  })
+
+  it('continues teardown after email delivery drain fails', async () => {
+    const runtime = new HomeServerRuntime(signalTarget)
+    const server = new FakeServer()
+    server.listening = true
+    server.close.mockImplementation((callback) => callback())
+    emailDelivery.stop.mockRejectedValue(new Error('email drain failed'))
+
+    await start(runtime, server)
+
+    await expect(runtime.stop()).rejects.toThrow('email drain failed')
+    expect(server.close).toHaveBeenCalledTimes(1)
+    expect(bridge.close).toHaveBeenCalledTimes(1)
+    expect(runtime.isActive()).toBe(false)
   })
 
   it('still closes the server and bridge when scheduler shutdown throws', async () => {

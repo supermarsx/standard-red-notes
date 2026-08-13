@@ -14,6 +14,11 @@ export interface HomeServerRuntimeBridge {
   close(): Promise<void>
 }
 
+export interface HomeServerRuntimeEmailDelivery {
+  start(): Promise<boolean>
+  stop(): Promise<void>
+}
+
 export interface HomeServerRuntimeReadinessState {
   markReady(): void
   markUnavailable(): void
@@ -27,6 +32,7 @@ export interface HomeServerSignalTarget {
 export interface HomeServerRuntimeStartOptions {
   server: http.Server
   bridge: HomeServerRuntimeBridge
+  emailDelivery?: HomeServerRuntimeEmailDelivery
   logger: HomeServerRuntimeLogger
   readinessState: HomeServerRuntimeReadinessState
   startScheduler: () => HomeServerRuntimeScheduler
@@ -43,6 +49,7 @@ export class HomeServerRuntime {
   private server: http.Server | undefined
   private scheduler: HomeServerRuntimeScheduler | undefined
   private bridge: HomeServerRuntimeBridge | undefined
+  private emailDelivery: HomeServerRuntimeEmailDelivery | undefined
   private logger: HomeServerRuntimeLogger | undefined
   private readinessState: HomeServerRuntimeReadinessState | undefined
   private signalHandler: (() => void) | undefined
@@ -75,9 +82,13 @@ export class HomeServerRuntime {
 
       this.server = options.server
       this.bridge = options.bridge
+      this.emailDelivery = options.emailDelivery
       this.logger = options.logger
       this.readinessState = options.readinessState
       resourcesAdopted = true
+      if (options.emailDelivery && (await options.emailDelivery.start())) {
+        options.logger.info('Email delivery runtime started')
+      }
       this.scheduler = options.startScheduler()
 
       this.signalHandler = () => {
@@ -104,7 +115,7 @@ export class HomeServerRuntime {
     if (this.stopPromise) {
       return this.stopPromise
     }
-    if (!this.server && !this.scheduler && !this.bridge) {
+    if (!this.server && !this.scheduler && !this.bridge && !this.emailDelivery) {
       return
     }
 
@@ -144,6 +155,7 @@ export class HomeServerRuntime {
     const server = this.server
     const scheduler = this.scheduler
     const bridge = this.bridge
+    const emailDelivery = this.emailDelivery
     const logger = this.logger
     const readinessState = this.readinessState
     const errors: Error[] = []
@@ -164,6 +176,7 @@ export class HomeServerRuntime {
     this.server = undefined
     this.scheduler = undefined
     this.bridge = undefined
+    this.emailDelivery = undefined
     this.logger = undefined
     this.readinessState = undefined
 
@@ -171,6 +184,17 @@ export class HomeServerRuntime {
       scheduler?.stop()
     } catch (error) {
       errors.push(error as Error)
+    }
+
+    // The scheduler can enqueue email, so stop it first. Then drain the durable
+    // consumer while its shared Redis connection is still available; only once
+    // that completes may Redis-adjacent resources such as the bridge close.
+    if (emailDelivery) {
+      try {
+        await emailDelivery.stop()
+      } catch (error) {
+        errors.push(error as Error)
+      }
     }
 
     const shutdowns: Promise<void>[] = []

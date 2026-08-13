@@ -78,6 +78,10 @@ import { registerCaldavRoutes } from '../src/Caldav/registerCaldavRoutes'
 import { startReminderDeliveryScheduler } from '../src/ReminderDelivery/startReminderDeliveryScheduler'
 import { requestBodyLogMetadata } from '../src/Logging/RequestBodyLogMetadata'
 import { attachWebSocketGateway } from '@standard-red-notes/websocket-gateway'
+import { RequiredCrossServiceTokenMiddleware } from '../src/Controller/RequiredCrossServiceTokenMiddleware'
+import { createAdminEmailDeliveryRouter } from '../src/Controller/v1/createAdminEmailDeliveryRouter'
+import { AdminEmailDeliveryService } from '../src/Service/EmailDelivery/AdminEmailDeliveryService'
+import { EmailDeliveryRuntime } from '../src/Service/EmailDelivery/EmailDeliveryRuntime'
 
 // Standard Red Notes: fail-fast global crash handlers. A genuinely unhandled
 // rejection or uncaught exception leaves the process in an unknown state, so we
@@ -304,6 +308,24 @@ void container
       )
       app.use(createSharedServerAccessKeyMiddleware(sharedServerAccessKeyConfig))
 
+      // The advanced email control plane is boot-mounted ahead of the
+      // inversify controller router and catch-all. It reuses the canonical
+      // session middleware; CACHE_TYPE=memory deliberately passes no facade so
+      // the child reports capability-unavailable while legacy SMTP remains.
+      const emailDeliveryAuth = container.get<RequiredCrossServiceTokenMiddleware>(
+        TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware,
+      )
+      const adminEmailDelivery = container.isBound(TYPES.ApiGateway_AdminEmailDeliveryService)
+        ? container.get<AdminEmailDeliveryService>(TYPES.ApiGateway_AdminEmailDeliveryService)
+        : undefined
+      app.use(
+        '/v1/admin/email-delivery',
+        createAdminEmailDeliveryRouter(adminEmailDelivery, {
+          authenticationMiddleware: emailDeliveryAuth.handler.bind(emailDeliveryAuth),
+          auditLogger: logger,
+        }),
+      )
+
       // Standard Red Notes: mount the CalDAV router and the realtime WS token-mint
       // route INSIDE setConfig — i.e. BEFORE server.build().
       // build() mounts the inversify controller router at '/'. The trailing unmatched
@@ -394,6 +416,22 @@ void container
     // proxy is intentionally NOT restored (dead since the Express-5 upgrade).
     app.use(createFallbackHandler({ welcomeHtml: API_GATEWAY_WELCOME_HTML }))
 
+    // Start the durable consumer before the HTTP listener can advertise a live
+    // API. Its short-lived Redis marker is published only when both the worker
+    // and an enabled relay are ready.
+    const emailDeliveryRuntime = container.isBound(TYPES.ApiGateway_EmailDeliveryRuntime)
+      ? container.get<EmailDeliveryRuntime>(TYPES.ApiGateway_EmailDeliveryRuntime)
+      : undefined
+    if (emailDeliveryRuntime) {
+      try {
+        if (await emailDeliveryRuntime.start()) {
+          logger.info('Email delivery runtime started')
+        }
+      } catch (error) {
+        logger.error('Failed to start email delivery runtime.', safeErrorLogMetadata(error))
+      }
+    }
+
     // Standard Red Notes: start the reminder-delivery scheduler. It gates itself on
     // the REMINDER_DELIVERY_ENABLED master switch (start() no-ops when off).
     try {
@@ -462,12 +500,21 @@ void container
       )
     }
 
+    let shuttingDown = false
     process.on('SIGTERM', () => {
+      if (shuttingDown) {
+        return
+      }
+      shuttingDown = true
       logger.info('SIGTERM signal received: closing HTTP server')
-      void Promise.resolve(stopWebSocketGateway?.()).finally(() => {
-        serverInstance.close(() => {
-          logger.info('HTTP server closed')
-        })
+      // Stop accepting new HTTP work immediately. Runtime.stop ends the worker
+      // heartbeat (the fleet-owned producer marker then expires) and drains the
+      // bounded in-flight provider request.
+      serverInstance.close(() => {
+        logger.info('HTTP server closed')
+      })
+      void Promise.allSettled([emailDeliveryRuntime?.stop(), stopWebSocketGateway?.()]).then(() => {
+        logger.info('Background delivery and realtime services stopped')
       })
     })
 

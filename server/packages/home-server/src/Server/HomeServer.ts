@@ -25,6 +25,8 @@ import {
   RateLimitConfig,
   RateLimitMetricsStore,
   RateLimitRedis,
+  RequiredCrossServiceTokenMiddleware,
+  createAdminEmailDeliveryRouter,
   TYPES as ApiGatewayTypes,
 } from '@standardnotes/api-gateway'
 import { Service as FilesService } from '@standardnotes/files-server'
@@ -45,7 +47,7 @@ import { Env } from '../Bootstrap/Env'
 import { HomeServerInterface } from './HomeServerInterface'
 import { HomeServerConfiguration } from './HomeServerConfiguration'
 import { WebSocketRedisBridge } from './WebSocketRedisBridge'
-import { HomeServerRuntime } from './HomeServerRuntime'
+import { HomeServerRuntime, HomeServerRuntimeEmailDelivery } from './HomeServerRuntime'
 
 export function buildHomeServerEnvironmentOverrides(
   dataDirectoryPath: string,
@@ -405,6 +407,23 @@ export class HomeServer implements HomeServerInterface {
           })
         }
 
+        const routingLogger = winston.loggers.get('home-server')
+
+        // The bundled CACHE_TYPE=memory topology has no durable Redis queue.
+        // Mount the authenticated advanced boundary anyway so it returns an
+        // explicit 501 capability response; POST /test falls through to the
+        // annotated legacy SMTP dispatcher and is not duplicated here.
+        const emailDeliveryAuth = container.get<RequiredCrossServiceTokenMiddleware>(
+          ApiGatewayTypes.ApiGateway_RequiredCrossServiceTokenMiddleware,
+        )
+        app.use(
+          '/v1/admin/email-delivery',
+          createAdminEmailDeliveryRouter(undefined, {
+            authenticationMiddleware: emailDeliveryAuth.handler.bind(emailDeliveryAuth),
+            auditLogger: routingLogger,
+          }),
+        )
+
         // Standard Red Notes: mount the read-only CalDAV router INSIDE setConfig
         // — i.e. BEFORE server.build(). build() mounts the inversify controller
         // router at '/'. The
@@ -415,7 +434,6 @@ export class HomeServer implements HomeServerInterface {
         // defensive placement. Registering here also keeps them after all the middleware
         // above (like the e2e route just above). CalDAV gates itself internally
         // (404 when CALDAV_ENABLED is off), so mounting it unconditionally is safe.
-        const routingLogger = winston.loggers.get('home-server')
         try {
           registerCaldavRoutes(app, container)
           routingLogger.info('CalDAV router mounted')
@@ -481,6 +499,9 @@ export class HomeServer implements HomeServerInterface {
       const readinessState = container.get<{ markReady(): void; markUnavailable(): void }>(
         ApiGatewayTypes.ApiGateway_ReadinessState,
       )
+      const emailDeliveryRuntime = container.isBound(ApiGatewayTypes.ApiGateway_EmailDeliveryRuntime)
+        ? container.get<HomeServerRuntimeEmailDelivery>(ApiGatewayTypes.ApiGateway_EmailDeliveryRuntime)
+        : undefined
 
       const keepAliveTimeout = env.get('HTTP_KEEP_ALIVE_TIMEOUT', true)
         ? +env.get('HTTP_KEEP_ALIVE_TIMEOUT', true)
@@ -491,6 +512,7 @@ export class HomeServer implements HomeServerInterface {
       await this.runtime.start({
         server: serverInstance,
         bridge: webSocketRedisBridge,
+        emailDelivery: emailDeliveryRuntime,
         logger,
         readinessState,
         startScheduler: () => {
