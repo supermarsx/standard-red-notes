@@ -250,6 +250,24 @@ const RAW_RUNTIME_STATE =
         "linkType": "HARD"\
       }]\
     ]],\
+    ["@aws-sdk/client-sesv2", [\
+      ["npm:3.1088.0", {\
+        "packageLocation": "./.yarn/cache/@aws-sdk-client-sesv2-npm-3.1088.0-faacc5d934-30fa122835.zip/node_modules/@aws-sdk/client-sesv2/",\
+        "packageDependencies": [\
+          ["@aws-sdk/client-sesv2", "npm:3.1088.0"],\
+          ["@aws-sdk/core", "npm:3.975.3"],\
+          ["@aws-sdk/credential-provider-node", "npm:3.972.69"],\
+          ["@aws-sdk/signature-v4-multi-region", "npm:3.996.41"],\
+          ["@aws-sdk/types", "npm:3.974.2"],\
+          ["@smithy/core", "npm:3.29.4"],\
+          ["@smithy/fetch-http-handler", "npm:5.6.6"],\
+          ["@smithy/node-http-handler", "npm:4.9.6"],\
+          ["@smithy/types", "npm:4.16.1"],\
+          ["tslib", "npm:2.8.1"]\
+        ],\
+        "linkType": "HARD"\
+      }]\
+    ]],\
     ["@aws-sdk/client-sns", [\
       ["npm:3.1088.0", {\
         "packageLocation": "./.yarn/cache/@aws-sdk-client-sns-npm-3.1088.0-138c4e4869-13e4aefdd6.zip/node_modules/@aws-sdk/client-sns/",\
@@ -6078,6 +6096,7 @@ const RAW_RUNTIME_STATE =
         "packageLocation": "./packages/api-gateway/",\
         "packageDependencies": [\
           ["@anthropic-ai/sdk", "virtual:04783e12400851b8a3d76e71495851cc94959db6e62f04cb0a31190080629440b182d8c8eb4d7f2b04e281912f2783a5fd4d2c3c6ab68d38b7097246c93f4c19#npm:0.111.0"],\
+          ["@aws-sdk/client-sesv2", "npm:3.1088.0"],\
           ["@aws-sdk/client-sns", "npm:3.1088.0"],\
           ["@grpc/grpc-js", "npm:1.14.4"],\
           ["@standard-red-notes/websocket-gateway", "workspace:packages/websocket-gateway"],\

@@ -144,6 +144,23 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@aws-sdk/client-sesv2@npm:3.1088.0":
+  version: 3.1088.0
+  resolution: "@aws-sdk/client-sesv2@npm:3.1088.0"
+  dependencies:
+    "@aws-sdk/core": "npm:^3.975.3"
+    "@aws-sdk/credential-provider-node": "npm:^3.972.69"
+    "@aws-sdk/signature-v4-multi-region": "npm:^3.996.41"
+    "@aws-sdk/types": "npm:^3.974.2"
+    "@smithy/core": "npm:^3.29.4"
+    "@smithy/fetch-http-handler": "npm:^5.6.6"
+    "@smithy/node-http-handler": "npm:^4.9.6"
+    "@smithy/types": "npm:^4.16.1"
+    tslib: "npm:^2.6.2"
+  checksum: 10/30fa122835e7dbcaebbb259a3cc64a6ee1865f18616eba9431af5965e548cdca61bf8a14460e368029e47f774e0ca9fc93003d6f521ffd5be61a6814d631e393
+  languageName: node
+  linkType: hard
+
 "@aws-sdk/client-sns@npm:^3.1088.0":
   version: 3.1088.0
   resolution: "@aws-sdk/client-sns@npm:3.1088.0"
@@ -4500,6 +4517,7 @@ __metadata:
   resolution: "@standardnotes/api-gateway@workspace:packages/api-gateway"
   dependencies:
     "@anthropic-ai/sdk": "npm:^0.111.0"
+    "@aws-sdk/client-sesv2": "npm:3.1088.0"
     "@aws-sdk/client-sns": "npm:^3.1088.0"
     "@grpc/grpc-js": "npm:1.14.4"
     "@standard-red-notes/websocket-gateway": "workspace:*"
