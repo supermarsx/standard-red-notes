@@ -458,7 +458,12 @@ export function validateProfilesPatch(
         }
 
         if (raw.temperature !== undefined && raw.temperature !== null) {
-          if (typeof raw.temperature !== 'number' || !Number.isFinite(raw.temperature) || raw.temperature < 0 || raw.temperature > 2) {
+          if (
+            typeof raw.temperature !== 'number' ||
+            !Number.isFinite(raw.temperature) ||
+            raw.temperature < 0 ||
+            raw.temperature > 2
+          ) {
             return { error: `Profile ${id} temperature must be a number from 0 to 2.` }
           }
           profile.temperature = raw.temperature
@@ -470,7 +475,11 @@ export function validateProfilesPatch(
           profile.topP = raw.topP
         }
         if (raw.maxOutputTokens !== undefined && raw.maxOutputTokens !== null) {
-          if (!Number.isSafeInteger(raw.maxOutputTokens) || (raw.maxOutputTokens as number) < 1 || (raw.maxOutputTokens as number) > 200_000) {
+          if (
+            !Number.isSafeInteger(raw.maxOutputTokens) ||
+            (raw.maxOutputTokens as number) < 1 ||
+            (raw.maxOutputTokens as number) > 200_000
+          ) {
             return { error: `Profile ${id} maxOutputTokens must be an integer from 1 to 200000.` }
           }
           profile.maxOutputTokens = raw.maxOutputTokens as number
@@ -928,7 +937,11 @@ export function validateBackendProfilesPatch(
       backend.wireProtocol = raw.wireProtocol
     }
     if (raw.timeoutMs !== undefined && raw.timeoutMs !== null) {
-      if (!Number.isSafeInteger(raw.timeoutMs) || (raw.timeoutMs as number) < 1_000 || (raw.timeoutMs as number) > 600_000) {
+      if (
+        !Number.isSafeInteger(raw.timeoutMs) ||
+        (raw.timeoutMs as number) < 1_000 ||
+        (raw.timeoutMs as number) > 600_000
+      ) {
         return { error: `Backend profile ${id} timeoutMs must be an integer from 1000 to 600000.` }
       }
       backend.timeoutMs = raw.timeoutMs as number

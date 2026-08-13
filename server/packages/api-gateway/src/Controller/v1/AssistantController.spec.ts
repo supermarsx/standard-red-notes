@@ -395,9 +395,7 @@ describe('AssistantController', () => {
 
     await controller.config({} as Request, configResponse)
 
-    expect(jsonMock).toHaveBeenCalledWith(
-      expect.objectContaining({ defaultProvider: 'ollama', defaultModel: '' }),
-    )
+    expect(jsonMock).toHaveBeenCalledWith(expect.objectContaining({ defaultProvider: 'ollama', defaultModel: '' }))
 
     const streamResponse = responseWith({})
     await controller.streamCompletion(streamRequest(), streamResponse)
