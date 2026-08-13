@@ -22,6 +22,7 @@ import { createSafeLogFormat } from '../Service/Logging/SafeLog'
 import {
   MapperInterface,
   EmailDeliveryConfig,
+  RedisEncryptedEmailQueueProducer,
   PinnedHttpTransport,
   RuntimeLogLevelApplier,
   ServerSettingsLogLevelResolver,
@@ -80,6 +81,21 @@ import { ReadinessState } from '../Service/Readiness/ReadinessState'
 import { SubscriptionTokenStore } from '../Service/Assistant/subscription/SubscriptionTokenStore'
 import { SubscriptionCredentialProvider } from '../Service/Assistant/subscription/SubscriptionCredentialProvider'
 import { buildDefaultOAuthConfig } from '../Service/Assistant/subscription/oauthConfig'
+import {
+  AdminEmailDeliveryService,
+  DefaultAdminEmailDeliveryService,
+  DefaultEmailRelayFactory,
+  EmailDeliveryRuntime,
+  EmailDeliveryRuntimeRedis,
+  EmailDeliveryService,
+  EmailDeliveryWorker,
+  QueuedReminderEmailProvider,
+  RedisEmailAttemptLog,
+  RedisEmailDeliveryQueue,
+  RedisEmailProfileRateLimiter,
+  resolveEmailDeliveryRuntimeOptions,
+  supportsAdvancedEmailDeliveryRedis,
+} from '../Service/EmailDelivery'
 import * as path from 'path'
 
 export class ContainerConfigLoader {
@@ -263,7 +279,16 @@ export class ContainerConfigLoader {
     // entrypoint points every deployed server/worker process at the same file).
     const serverSettingsPath =
       env.get('SERVER_SETTINGS_PATH', true) || path.resolve(process.cwd(), 'data', 'server-settings.json')
-    const serverSettingsStore = new ServerSettingsStore(serverSettingsPath)
+    // Purpose-specific HKDF contexts protect relay credentials and queued mail
+    // with the already-required stable server key; no additional setup secret
+    // is introduced. The narrowly named override supports split deployments,
+    // while the fallbacks keep bundled/home-server environments compatible.
+    const emailDeliveryEncryptionKey =
+      env.get('EMAIL_DELIVERY_ENCRYPTION_KEY', true) ||
+      env.get('ENCRYPTION_SERVER_KEY', true) ||
+      env.get('AUTH_SERVER_ENCRYPTION_SERVER_KEY', true) ||
+      undefined
+    const serverSettingsStore = new ServerSettingsStore(serverSettingsPath, emailDeliveryEncryptionKey)
     const smtpPortValue = env.get('SMTP_PORT', true)
     const smtpSecureValue = env.get('SMTP_SECURE', true)
     const smtpAllowInsecure = ['true', '1', 'yes', 'on'].includes(
@@ -481,6 +506,98 @@ export class ContainerConfigLoader {
     container
       .bind<ServerSettingsResolver>(TYPES.ApiGateway_ServerSettingsResolver)
       .toConstantValue(serverSettingsResolver)
+
+    const reminderDeliveryEnabled = ['true', '1', 'yes', 'on'].includes(
+      (env.get('REMINDER_DELIVERY_ENABLED', true) || '').toLowerCase(),
+    )
+    let advancedEmailDeliveryService: EmailDeliveryService | undefined
+    let advancedEmailDeliveryRuntime: EmailDeliveryRuntime | undefined
+    let advancedEmailDeliveryProducer: RedisEncryptedEmailQueueProducer | undefined
+    const configuredEmailRedis = container.isBound(TYPES.ApiGateway_Redis)
+      ? container.get(TYPES.ApiGateway_Redis)
+      : undefined
+    if (configuredEmailRedis && !supportsAdvancedEmailDeliveryRedis(configuredEmailRedis)) {
+      logger.warn('Advanced email delivery is unavailable with Redis Cluster; legacy SMTP remains active.', {
+        codeTag: 'EmailDeliveryBootstrap',
+        topology: 'cluster',
+      })
+    }
+    if (configuredEmailRedis && supportsAdvancedEmailDeliveryRedis(configuredEmailRedis)) {
+      if (!emailDeliveryEncryptionKey) {
+        throw new Error('Advanced email delivery requires a stable server encryption key.')
+      }
+      const runtimeOptions = resolveEmailDeliveryRuntimeOptions((name) => env.get(name, true) || undefined)
+      const emailRedis = configuredEmailRedis as unknown as ConstructorParameters<typeof RedisEmailDeliveryQueue>[0] &
+        ConstructorParameters<typeof RedisEmailProfileRateLimiter>[0] &
+        ConstructorParameters<typeof RedisEncryptedEmailQueueProducer>[0] &
+        EmailDeliveryRuntimeRedis
+      const queue = new RedisEmailDeliveryQueue(emailRedis, {
+        encryptionKey: emailDeliveryEncryptionKey,
+        leaseMs: runtimeOptions.queue.leaseMs,
+        retentionMs: runtimeOptions.queue.retentionMs,
+        maxAttempts: runtimeOptions.delivery.maxAttempts,
+        deadLetterRetentionMs: runtimeOptions.queue.deadLetterRetentionMs,
+        maxJobBytes: runtimeOptions.queue.maxJobBytes,
+        maxTotalBytes: runtimeOptions.queue.maxTotalBytes,
+      })
+      const attemptLogs = new RedisEmailAttemptLog(emailRedis, {
+        retentionMs: runtimeOptions.logs.retentionMs,
+        maximumEntries: runtimeOptions.logs.maximumEntries,
+      })
+      const rateLimiter = new RedisEmailProfileRateLimiter(emailRedis)
+      advancedEmailDeliveryProducer = new RedisEncryptedEmailQueueProducer(emailRedis, emailDeliveryEncryptionKey, {
+        retentionMs: runtimeOptions.queue.retentionMs,
+        maxAttempts: runtimeOptions.delivery.maxAttempts,
+        maxJobBytes: runtimeOptions.queue.maxJobBytes,
+        maxTotalBytes: runtimeOptions.queue.maxTotalBytes,
+      })
+      const relayFactory = new DefaultEmailRelayFactory()
+      advancedEmailDeliveryService = new EmailDeliveryService(
+        queue,
+        attemptLogs,
+        rateLimiter,
+        relayFactory,
+        () => serverSettingsResolver.resolveEmailRelayConfiguration(),
+        {
+          ...runtimeOptions.delivery,
+          allowSource: (source) => source !== 'published-reminder' || reminderDeliveryEnabled,
+          onAttemptLogFailure: (reason) =>
+            logger.warn('Email delivery attempt telemetry was not persisted.', {
+              codeTag: 'EmailDeliveryAttemptLog',
+              reason,
+            }),
+        },
+      )
+      const worker = new EmailDeliveryWorker(advancedEmailDeliveryService, logger, runtimeOptions.worker)
+      advancedEmailDeliveryRuntime = new EmailDeliveryRuntime(
+        emailRedis,
+        worker,
+        async () => (await serverSettingsResolver.viewEmailRelayConfiguration()).configured,
+        {
+          retentionMs: runtimeOptions.queue.retentionMs,
+          maxAttempts: runtimeOptions.delivery.maxAttempts,
+          maxJobBytes: runtimeOptions.queue.maxJobBytes,
+          maxTotalBytes: runtimeOptions.queue.maxTotalBytes,
+        },
+        emailDeliveryEncryptionKey,
+        logger,
+      )
+      const adminEmailDeliveryService = new DefaultAdminEmailDeliveryService(
+        serverSettingsResolver,
+        advancedEmailDeliveryService,
+      )
+
+      container
+        .bind<EmailDeliveryService>(TYPES.ApiGateway_EmailDeliveryService)
+        .toConstantValue(advancedEmailDeliveryService)
+      container
+        .bind<AdminEmailDeliveryService>(TYPES.ApiGateway_AdminEmailDeliveryService)
+        .toConstantValue(adminEmailDeliveryService)
+      container.bind<EmailDeliveryWorker>(TYPES.ApiGateway_EmailDeliveryWorker).toConstantValue(worker)
+      container
+        .bind<EmailDeliveryRuntime>(TYPES.ApiGateway_EmailDeliveryRuntime)
+        .toConstantValue(advancedEmailDeliveryRuntime)
+    }
 
     // Standalone gateway owns its logger. The bundled home-server injects a
     // named logger and updates the complete logger set through one outer poller.
@@ -820,16 +937,15 @@ export class ContainerConfigLoader {
     // REMINDER_DELIVERY_DATA_PATH (default ./data/reminder-delivery), keeping the
     // feature self-contained in the api-gateway, which has no database of its own.
     // Each provider adapter NO-OPs gracefully when its env credentials are absent.
-    const reminderDeliveryEnabled = ['true', '1', 'yes', 'on'].includes(
-      (env.get('REMINDER_DELIVERY_ENABLED', true) || '').toLowerCase(),
-    )
     const reminderDeliveryDataPath =
       env.get('REMINDER_DELIVERY_DATA_PATH', true) || path.resolve(process.cwd(), 'data', 'reminder-delivery')
     container.bind<boolean>(TYPES.ApiGateway_REMINDER_DELIVERY_ENABLED).toConstantValue(reminderDeliveryEnabled)
 
     const reminderRegistry = new ProviderRegistry([
       new TelegramProvider(env.get('TELEGRAM_BOT_TOKEN', true) || undefined),
-      new EmailProvider(() => serverSettingsResolver.resolveEmailDeliveryConfig()),
+      advancedEmailDeliveryProducer && advancedEmailDeliveryRuntime
+        ? new QueuedReminderEmailProvider(advancedEmailDeliveryProducer, advancedEmailDeliveryRuntime)
+        : new EmailProvider(() => serverSettingsResolver.resolveEmailDeliveryConfig()),
       new WhatsAppProvider({
         meta: {
           token: env.get('WHATSAPP_TOKEN', true) || undefined,

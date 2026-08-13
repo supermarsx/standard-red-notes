@@ -1,4 +1,5 @@
 export * from './AuthMiddleware'
+export * from './RequiredCrossServiceTokenMiddleware'
 export * from './CorsOriginResolver'
 export * from './FallbackController'
 export * from './HealthCheckController'
@@ -42,6 +43,7 @@ export * from './v1/TokensController'
 export * from './v1/UsersController'
 export * from './v1/WebSocketsController'
 export * from './v1/WorkflowsController'
+export { createAdminEmailDeliveryRouter } from './v1/createAdminEmailDeliveryRouter'
 // Standard Red Notes: these controllers were imported in bin/server.ts (standalone
 // gateway) but omitted from this barrel, so they registered on the standalone
 // gateway yet 404'd on the home-server bootstrap path (which imports the package

@@ -22,6 +22,13 @@ import {
 } from '../Assistant/profiles'
 import { isLegacyCompatibleSubscriptionId } from '../Assistant/subscription/pairingValidation'
 import { validateWorkflowsPublicUrl } from '../Workflows/WorkflowsPublicUrl'
+import {
+  EmailDeliveryCipher,
+  EncryptedEmailDeliveryEnvelope,
+  isEncryptedEmailDeliveryEnvelope,
+} from '../EmailDelivery/EmailDeliveryEncryption'
+import { EmailRelayWrite, mergeRelayConfiguration } from '../EmailDelivery/RelayConfiguration'
+import { EmailDeliveryConfig as EmailRelayDeliveryConfig, orderedEnabledRelays } from '../EmailDelivery/Types'
 
 /**
  * Standard Red Notes: runtime-configurable SERVER settings (admin pane).
@@ -222,6 +229,10 @@ export interface PersistedEmailDeliverySettings {
   password?: string
   from?: string
   tlsMode?: EmailDeliveryTlsMode
+  /** Full multi-relay configuration encrypted with the existing server key. */
+  relayConfigurationEncrypted?: EncryptedEmailDeliveryEnvelope
+  /** Distinguishes an explicitly disabled/migrated relay set from untouched legacy SMTP. */
+  relayConfigurationManaged?: boolean
 }
 
 /**
@@ -732,6 +743,8 @@ function isPersistedServerSettings(value: unknown): value is PersistedServerSett
           password: isSmtpPassword,
           from: (entry) => isBoundedHeaderValue(entry, EMAIL_DELIVERY_LIMITS.from),
           tlsMode: (entry) => (EMAIL_DELIVERY_TLS_MODES as readonly unknown[]).includes(entry),
+          relayConfigurationEncrypted: isEncryptedEmailDeliveryEnvelope,
+          relayConfigurationManaged: isBoolean,
         }),
       ocr: (candidate) =>
         matchesFields(candidate, {
@@ -868,16 +881,72 @@ export interface ServerSettingsPatch {
 
 export class ServerSettingsStore {
   private readonly store: SecureJsonFileStore<PersistedServerSettings>
+  private readonly emailDeliveryCipher: EmailDeliveryCipher
 
-  constructor(filePath: string) {
+  constructor(filePath: string, emailDeliveryEncryptionKey?: string) {
     this.store = new SecureJsonFileStore({
       filePath,
       validate: isPersistedServerSettings,
     })
+    this.emailDeliveryCipher = new EmailDeliveryCipher(emailDeliveryEncryptionKey)
   }
 
   async read(): Promise<PersistedServerSettings> {
     return (await this.store.read()) ?? {}
+  }
+
+  /**
+   * Reads and authenticates the full relay configuration. An absent encrypted
+   * configuration is a normal legacy state; a missing/wrong key or tampering
+   * fails closed and is never treated as an empty configuration.
+   */
+  async readEmailRelayConfiguration(): Promise<EmailRelayDeliveryConfig | undefined> {
+    const envelope = (await this.read()).emailDelivery?.relayConfigurationEncrypted
+    if (!envelope) {
+      return undefined
+    }
+
+    return this.decryptAndValidateRelayConfiguration(envelope)
+  }
+
+  async isEmailRelayConfigurationManaged(): Promise<boolean> {
+    return (await this.read()).emailDelivery?.relayConfigurationManaged === true
+  }
+
+  /**
+   * Atomically applies the write-only relay contract. Omitted secrets preserve
+   * the same id/kind credential and null clears it. The first successful write
+   * migrates any legacy SMTP seed and removes every plaintext legacy field.
+   */
+  async updateEmailRelayConfiguration(
+    input: { relays: EmailRelayWrite[]; fallbackPolicy: EmailRelayDeliveryConfig['fallbackPolicy'] },
+    legacySeed?: EmailRelayDeliveryConfig,
+  ): Promise<EmailRelayDeliveryConfig> {
+    let result: EmailRelayDeliveryConfig | undefined
+    await this.mutate((data) => {
+      const currentEnvelope = data.emailDelivery?.relayConfigurationEncrypted
+      const current = currentEnvelope ? this.decryptAndValidateRelayConfiguration(currentEnvelope) : legacySeed
+      result = mergeRelayConfiguration(input, current)
+      // Force full validation before changing durable state.
+      orderedEnabledRelays(result)
+      if (result.relays.length === 0) {
+        // Keep a non-secret tombstone so legacy SMTP from env cannot silently
+        // reappear after an admin explicitly disables every relay. Avoiding an
+        // encrypted empty envelope also preserves the documented key-rotation
+        // procedure: the old key is no longer needed once profiles are clear.
+        data.emailDelivery = { relayConfigurationManaged: true }
+        return
+      }
+      data.emailDelivery = {
+        relayConfigurationManaged: true,
+        relayConfigurationEncrypted: this.emailDeliveryCipher.encrypt(result),
+      }
+    })
+
+    if (!result) {
+      throw new Error('Email relay configuration update did not complete.')
+    }
+    return result
   }
 
   /**
@@ -987,6 +1056,11 @@ export class ServerSettingsStore {
         }
       }
       if (patch.emailDelivery) {
+        if (data.emailDelivery?.relayConfigurationEncrypted || data.emailDelivery?.relayConfigurationManaged) {
+          throw new Error(
+            'Legacy SMTP settings cannot be changed after migration; update the encrypted relay profiles instead.',
+          )
+        }
         data.emailDelivery = data.emailDelivery ?? {}
         this.applyKey(data.emailDelivery, 'host', patch.emailDelivery.host)
         this.applyKey(data.emailDelivery, 'port', patch.emailDelivery.port)
@@ -1050,6 +1124,20 @@ export class ServerSettingsStore {
       return
     }
     section[key] = value
+  }
+
+  private decryptAndValidateRelayConfiguration(envelope: EncryptedEmailDeliveryEnvelope): EmailRelayDeliveryConfig {
+    const config = this.emailDeliveryCipher.decrypt<EmailRelayDeliveryConfig>(envelope)
+    if (
+      !config ||
+      !Array.isArray(config.relays) ||
+      !config.fallbackPolicy ||
+      (config.fallbackPolicy.mode !== 'none' && config.fallbackPolicy.mode !== 'next-enabled')
+    ) {
+      throw new Error('Stored email relay configuration is invalid.')
+    }
+    orderedEnabledRelays(config)
+    return config
   }
 
   private async mutate(mutator: (data: PersistedServerSettings) => void): Promise<void> {

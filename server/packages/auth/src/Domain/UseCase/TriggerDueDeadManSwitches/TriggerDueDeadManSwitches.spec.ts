@@ -4,6 +4,7 @@ import { UniqueEntityId } from '@standardnotes/domain-core'
 import { DeadManSwitch } from '../../DeadManSwitch/DeadManSwitch'
 import { DeadManSwitchRepositoryInterface } from '../../DeadManSwitch/DeadManSwitchRepositoryInterface'
 import { EmailSenderInterface } from '../../Email/EmailSenderInterface'
+import { CheckInDeadManSwitch } from '../CheckInDeadManSwitch/CheckInDeadManSwitch'
 
 import { TriggerDueDeadManSwitches } from './TriggerDueDeadManSwitches'
 
@@ -34,6 +35,19 @@ describe('TriggerDueDeadManSwitches', () => {
       new UniqueEntityId(id),
     ).getValue()
 
+  const useDurableSender = (
+    status: 'pending' | 'provider-accepted' | 'dead' | 'quarantined' | 'discarded' | 'superseded' | 'missing',
+    accepted = true,
+  ) => {
+    emailSender = {
+      acceptanceMode: 'durable-queue',
+      isConfigured: jest.fn().mockReturnValue(true),
+      getDeliveryStatus: jest.fn().mockResolvedValue(status),
+      cancelDelivery: jest.fn().mockResolvedValue('cancelled'),
+      sendEmail: jest.fn().mockResolvedValue(accepted),
+    }
+  }
+
   beforeEach(() => {
     deadManSwitchRepository = {} as jest.Mocked<DeadManSwitchRepositoryInterface>
     deadManSwitchRepository.findDue = jest
@@ -44,9 +58,11 @@ describe('TriggerDueDeadManSwitches', () => {
       ])
     deadManSwitchRepository.save = jest.fn().mockResolvedValue(undefined)
 
-    emailSender = {} as jest.Mocked<EmailSenderInterface>
-    emailSender.isConfigured = jest.fn().mockReturnValue(true)
-    emailSender.sendEmail = jest.fn().mockResolvedValue(true)
+    emailSender = {
+      acceptanceMode: 'provider',
+      isConfigured: jest.fn().mockReturnValue(true),
+      sendEmail: jest.fn().mockResolvedValue(true),
+    }
 
     logger = {} as jest.Mocked<Logger>
     logger.error = jest.fn()
@@ -79,6 +95,11 @@ describe('TriggerDueDeadManSwitches', () => {
     // The body must include the share url.
     const firstBody = (emailSender.sendEmail as jest.Mock).mock.calls[0][2] as string
     expect(firstBody).toContain('https://notes.example.com/share/abc#key=secret')
+    expect((emailSender.sendEmail as jest.Mock).mock.calls[0][3]).toEqual({
+      deliverySource: 'account',
+      deliveryId: expect.stringMatching(/^dead-man-switch-[0-9a-f]{64}$/),
+      retryMode: 'indefinite',
+    })
   })
 
   it('should not mark a switch triggered when the email could not be sent', async () => {
@@ -94,6 +115,148 @@ describe('TriggerDueDeadManSwitches', () => {
 
     const failedSaved = (deadManSwitchRepository.save as jest.Mock).mock.calls[0][0] as DeadManSwitch
     expect(failedSaved.props.triggered).toBe(false)
+  })
+
+  it('does not mark a switch triggered on durable queue acceptance', async () => {
+    deadManSwitchRepository.findDue = jest.fn().mockResolvedValue([buildSwitch('11111111-1111-1111-1111-111111111111')])
+    useDurableSender('missing')
+
+    const result = await createUseCase().execute({})
+
+    expect(result.getValue()).toBe(0)
+    expect(emailSender.sendEmail).toHaveBeenCalledTimes(1)
+    expect(deadManSwitchRepository.save).not.toHaveBeenCalled()
+  })
+
+  it('does not enqueue a duplicate while durable switch delivery is pending', async () => {
+    deadManSwitchRepository.findDue = jest.fn().mockResolvedValue([buildSwitch('11111111-1111-1111-1111-111111111111')])
+    useDurableSender('pending')
+
+    const result = await createUseCase().execute({})
+
+    expect(result.getValue()).toBe(0)
+    expect(emailSender.sendEmail).not.toHaveBeenCalled()
+    expect(deadManSwitchRepository.save).not.toHaveBeenCalled()
+  })
+
+  it('marks provider-accepted durable delivery triggered exactly once without sending again', async () => {
+    let storedSwitch = buildSwitch('11111111-1111-1111-1111-111111111111')
+    deadManSwitchRepository.findDue = jest.fn().mockImplementation(async () => {
+      return storedSwitch.props.triggered ? [] : [storedSwitch]
+    })
+    deadManSwitchRepository.save = jest.fn().mockImplementation(async (deadManSwitch: DeadManSwitch) => {
+      storedSwitch = deadManSwitch
+    })
+    useDurableSender('provider-accepted')
+
+    const first = await createUseCase().execute({})
+    const second = await createUseCase().execute({})
+
+    expect(first.getValue()).toBe(1)
+    expect(second.getValue()).toBe(0)
+    expect(emailSender.sendEmail).not.toHaveBeenCalled()
+    expect(deadManSwitchRepository.save).toHaveBeenCalledTimes(1)
+    expect(storedSwitch.props.triggered).toBe(true)
+  })
+
+  it('uses a distinct delivery id after provider acceptance, check-in, and the next due occurrence', async () => {
+    const initialNow = 1_800_000_000_000
+    const clock = jest.spyOn(Date, 'now').mockReturnValue(initialNow)
+    try {
+      let storedSwitch = DeadManSwitch.create(
+        {
+          userUuid: '00000000-0000-0000-0000-000000000000',
+          recipientEmail: 'survivor@example.com',
+          shareUrl: 'https://notes.example.com/share/abc#key=secret',
+          message: 'hello',
+          intervalDays: 30,
+          deadline: initialNow - 1,
+          triggered: false,
+          lastCheckInAt: null,
+          createdAt: initialNow - 30 * 86_400_000,
+          sendAttempts: 0,
+          nextAttemptAt: null,
+          lastAttemptAt: null,
+          lastError: null,
+        },
+        new UniqueEntityId('11111111-1111-1111-1111-111111111111'),
+      ).getValue()
+      deadManSwitchRepository.findDue = jest.fn().mockImplementation(async () => {
+        return !storedSwitch.props.triggered && storedSwitch.props.deadline <= Date.now() ? [storedSwitch] : []
+      })
+      deadManSwitchRepository.findById = jest.fn().mockImplementation(async () => storedSwitch)
+      deadManSwitchRepository.save = jest.fn().mockImplementation(async (deadManSwitch: DeadManSwitch) => {
+        storedSwitch = deadManSwitch
+      })
+      useDurableSender('missing')
+      emailSender.getDeliveryStatus = jest
+        .fn()
+        .mockResolvedValueOnce('missing')
+        .mockResolvedValueOnce('provider-accepted')
+        .mockResolvedValueOnce('missing')
+      emailSender.cancelDelivery = jest.fn().mockResolvedValue('provider-accepted')
+
+      await createUseCase().execute({})
+      await createUseCase().execute({})
+      const firstDeliveryId = (emailSender.sendEmail as jest.Mock).mock.calls[0][3].deliveryId as string
+      expect(storedSwitch.props.triggered).toBe(true)
+
+      clock.mockReturnValue(initialNow + 1_000)
+      const checkIn = await new CheckInDeadManSwitch(deadManSwitchRepository, emailSender).execute({
+        userUuid: storedSwitch.props.userUuid,
+        switchId: storedSwitch.id.toString(),
+      })
+      expect(checkIn.isFailed()).toBe(false)
+      expect(emailSender.cancelDelivery).toHaveBeenCalledWith(firstDeliveryId)
+      expect(storedSwitch.props.triggered).toBe(false)
+
+      clock.mockReturnValue(storedSwitch.props.deadline + 1)
+      await createUseCase().execute({})
+      const nextDeliveryId = (emailSender.sendEmail as jest.Mock).mock.calls[1][3].deliveryId as string
+
+      expect(nextDeliveryId).not.toEqual(firstDeliveryId)
+      expect(emailSender.sendEmail).toHaveBeenCalledTimes(2)
+    } finally {
+      clock.mockRestore()
+    }
+  })
+
+  it.each(['dead', 'quarantined', 'discarded', 'superseded'] as const)(
+    'retains and alerts for a durable switch in terminal state %s',
+    async (status) => {
+      deadManSwitchRepository.findDue = jest
+        .fn()
+        .mockResolvedValue([buildSwitch('11111111-1111-1111-1111-111111111111')])
+      useDurableSender(status)
+
+      const result = await createUseCase().execute({})
+
+      expect(result.getValue()).toBe(0)
+      expect(emailSender.sendEmail).not.toHaveBeenCalled()
+      expect(deadManSwitchRepository.save).not.toHaveBeenCalled()
+      expect(logger.error).toHaveBeenCalledWith('Durable dead-man-switch email reached a terminal state.', {
+        deadManSwitchId: '11111111-1111-1111-1111-111111111111',
+        deliveryStatus: status,
+      })
+      expect(JSON.stringify((logger.error as jest.Mock).mock.calls)).not.toContain('survivor@example.com')
+      expect(JSON.stringify((logger.error as jest.Mock).mock.calls)).not.toContain('hello')
+    },
+  )
+
+  it('fails status lookup closed and persists only a redacted retry error', async () => {
+    deadManSwitchRepository.findDue = jest.fn().mockResolvedValue([buildSwitch('11111111-1111-1111-1111-111111111111')])
+    useDurableSender('missing')
+    emailSender.getDeliveryStatus = jest.fn().mockRejectedValue(new Error('redis leaked detail'))
+
+    const result = await createUseCase().execute({})
+
+    expect(result.getValue()).toBe(0)
+    expect(emailSender.sendEmail).not.toHaveBeenCalled()
+    expect(deadManSwitchRepository.save).toHaveBeenCalledTimes(1)
+    const saved = (deadManSwitchRepository.save as jest.Mock).mock.calls[0][0] as DeadManSwitch
+    expect(saved.props.triggered).toBe(false)
+    expect(saved.props.lastError).toBe('Durable email delivery status is unavailable.')
+    expect(JSON.stringify((logger.error as jest.Mock).mock.calls)).not.toContain('redis leaked detail')
   })
 
   it('should continue past an individual email failure', async () => {

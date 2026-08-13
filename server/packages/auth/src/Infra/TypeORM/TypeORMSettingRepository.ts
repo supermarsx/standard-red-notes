@@ -22,6 +22,10 @@ export class TypeORMSettingRepository implements SettingRepositoryInterface {
       .getCount()
   }
 
+  async countAllByName(name: SettingName): Promise<number> {
+    return this.ormRepository.createQueryBuilder().where('name = :name', { name: name.value }).getCount()
+  }
+
   // Standard Red Notes: count settings with the given name+value that are owned by
   // a user holding the given role. Joins settings -> user_roles -> roles so only
   // rows belonging to (e.g.) an ADMIN_USER are counted. Column names are used raw
@@ -62,6 +66,18 @@ export class TypeORMSettingRepository implements SettingRepositoryInterface {
       .getMany()
 
     return persistence.map((p) => this.mapper.toDomain(p))
+  }
+
+  async findAllByName(dto: { name: SettingName; offset: number; limit: number }): Promise<Setting[]> {
+    const persistence = await this.ormRepository
+      .createQueryBuilder()
+      .where('name = :name', { name: dto.name.value })
+      .orderBy('created_at', 'ASC')
+      .take(dto.limit)
+      .skip(dto.offset)
+      .getMany()
+
+    return persistence.map((entry) => this.mapper.toDomain(entry))
   }
 
   async insert(setting: Setting): Promise<void> {

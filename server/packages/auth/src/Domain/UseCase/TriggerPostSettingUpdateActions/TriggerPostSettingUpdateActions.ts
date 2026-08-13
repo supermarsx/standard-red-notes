@@ -1,8 +1,12 @@
 import { DomainEventPublisherInterface } from '@standardnotes/domain-events'
-import { EmailLevel, Result, SettingName, UseCaseInterface } from '@standardnotes/domain-core'
+import { EmailLevel, Result, SettingName, UseCaseInterface, Uuid } from '@standardnotes/domain-core'
 import { EmailBackupFrequency, LogSessionUserAgentOption } from '@standardnotes/settings'
 
 import { TriggerPostSettingUpdateActionsDTO } from './TriggerPostSettingUpdateActionsDTO'
+import { cancelDurableEmailDelivery } from '../../Email/DurableEmailCancellation'
+import { createEmailReminderDeliveryId } from '../../Email/EmailDeliveryId'
+import { EmailSenderInterface } from '../../Email/EmailSenderInterface'
+import { EmailReminderRepositoryInterface } from '../../EmailReminder/EmailReminderRepositoryInterface'
 import { DomainEventFactoryInterface } from '../../Event/DomainEventFactoryInterface'
 import { TriggerEmailBackupForUser } from '../TriggerEmailBackupForUser/TriggerEmailBackupForUser'
 import { GenerateRecoveryCodes } from '../GenerateRecoveryCodes/GenerateRecoveryCodes'
@@ -18,6 +22,8 @@ export class TriggerPostSettingUpdateActions implements UseCaseInterface<void> {
     private domainEventFactory: DomainEventFactoryInterface,
     private triggerEmailBackupForUser: TriggerEmailBackupForUser,
     private generateRecoveryCodes: GenerateRecoveryCodes,
+    private emailReminderRepository: EmailReminderRepositoryInterface,
+    private emailReminderSender: EmailSenderInterface,
   ) {}
 
   async execute(dto: TriggerPostSettingUpdateActionsDTO): Promise<Result<void>> {
@@ -41,6 +47,13 @@ export class TriggerPostSettingUpdateActions implements UseCaseInterface<void> {
       })
     }
 
+    if (this.isDisablingEmailRemindersSetting(dto.updatedSettingName, dto.unencryptedValue)) {
+      const cancellationResult = await this.cancelPendingEmailReminders(dto.userUuid)
+      if (cancellationResult.isFailed()) {
+        return cancellationResult
+      }
+    }
+
     return Result.ok()
   }
 
@@ -61,6 +74,49 @@ export class TriggerPostSettingUpdateActions implements UseCaseInterface<void> {
 
   private isDisablingSessionUserAgentLogging(settingName: string, newValue: string | null): boolean {
     return SettingName.NAMES.LogSessionUserAgent === settingName && LogSessionUserAgentOption.Disabled === newValue
+  }
+
+  private isDisablingEmailRemindersSetting(settingName: string, newValue: string | null): boolean {
+    return settingName === SettingName.NAMES.EmailRemindersEnabled && newValue !== 'true'
+  }
+
+  private async cancelPendingEmailReminders(userUuidValue: string): Promise<Result<void>> {
+    if (this.emailReminderSender.acceptanceMode !== 'durable-queue') {
+      return Result.ok()
+    }
+
+    const userUuidOrError = Uuid.create(userUuidValue)
+    if (userUuidOrError.isFailed()) {
+      return Result.fail('Could not cancel pending email reminders.')
+    }
+
+    try {
+      const reminders = await this.emailReminderRepository.findByUserUuid(userUuidOrError.getValue())
+      let cancellationIncomplete = false
+
+      for (const reminder of reminders) {
+        if (reminder.props.sent) {
+          continue
+        }
+        try {
+          const cancellation = await cancelDurableEmailDelivery(
+            this.emailReminderSender,
+            createEmailReminderDeliveryId(reminder.id.toString()),
+          )
+          if (cancellation === 'in-flight') {
+            cancellationIncomplete = true
+          }
+        } catch {
+          cancellationIncomplete = true
+        }
+      }
+
+      return cancellationIncomplete
+        ? Result.fail('Could not cancel every pending email reminder delivery.')
+        : Result.ok()
+    } catch {
+      return Result.fail('Could not cancel pending email reminders.')
+    }
   }
 
   private async triggerEmailSubscriptionChange(

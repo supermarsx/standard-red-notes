@@ -18,10 +18,23 @@ export class VerifyMagicLinkCode implements UseCaseInterface<boolean> {
     }
 
     try {
-      const token = await this.magicLinkTokenRepository.findLatestByUserIdentifier(dto.userIdentifier)
+      const token = await this.magicLinkTokenRepository.findByUserIdentifierAndCode(dto.userIdentifier, dto.code)
 
       if (token === null) {
-        return Result.fail('No magic link code was issued for this account.')
+        const latestToken = await this.magicLinkTokenRepository.findLatestByUserIdentifier(dto.userIdentifier)
+        if (latestToken === null) {
+          return Result.fail('No magic link code was issued for this account.')
+        }
+
+        if (latestToken.props.consumed) {
+          return Result.fail('This magic link code has already been used.')
+        }
+
+        if (latestToken.isExpired(new Date())) {
+          return Result.fail('This magic link code has expired.')
+        }
+
+        return Result.fail('The magic link code you entered is incorrect.')
       }
 
       if (token.props.consumed) {
@@ -30,10 +43,6 @@ export class VerifyMagicLinkCode implements UseCaseInterface<boolean> {
 
       if (token.isExpired(new Date())) {
         return Result.fail('This magic link code has expired.')
-      }
-
-      if (token.props.code !== dto.code) {
-        return Result.fail('The magic link code you entered is incorrect.')
       }
 
       token.props.consumed = true

@@ -112,6 +112,13 @@ export const TYPES = {
   // persisted→env→default read path consumers go through.
   ApiGateway_ServerSettingsStore: Symbol.for('ApiGateway_ServerSettingsStore'),
   ApiGateway_ServerSettingsResolver: Symbol.for('ApiGateway_ServerSettingsResolver'),
+  // Standard Red Notes: Redis-backed, encrypted multi-relay email runtime.
+  // These are deliberately absent in CACHE_TYPE=memory deployments, which
+  // retain legacy direct SMTP and report the advanced capability unavailable.
+  ApiGateway_EmailDeliveryService: Symbol.for('ApiGateway_EmailDeliveryService'),
+  ApiGateway_AdminEmailDeliveryService: Symbol.for('ApiGateway_AdminEmailDeliveryService'),
+  ApiGateway_EmailDeliveryWorker: Symbol.for('ApiGateway_EmailDeliveryWorker'),
+  ApiGateway_EmailDeliveryRuntime: Symbol.for('ApiGateway_EmailDeliveryRuntime'),
   // Standard Red Notes: admin-panel service lifecycle control. Shells out to
   // `supervisorctl` (allowlisted program names only) to restart/stop/start the
   // sibling server processes in the single-container image.

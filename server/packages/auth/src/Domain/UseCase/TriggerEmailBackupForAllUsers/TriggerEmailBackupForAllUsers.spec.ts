@@ -5,6 +5,7 @@ import { GetSetting } from '../GetSetting/GetSetting'
 import { TriggerEmailBackupForAllUsers } from './TriggerEmailBackupForAllUsers'
 import { EncryptionVersion } from '../../Encryption/EncryptionVersion'
 import { TimerInterface } from '@standardnotes/time'
+import { ReconcilePendingEmailBackupForUser } from '../ReconcilePendingEmailBackupForUser/ReconcilePendingEmailBackupForUser'
 
 import { Setting } from '../../Setting/Setting'
 import { Result, SettingName, Timestamps, Uuid } from '@standardnotes/domain-core'
@@ -17,6 +18,7 @@ describe('TriggerEmailBackupForAllUsers', () => {
   let logger: Logger
   let emailBackupsEnabled: boolean
   let emailDeliveryConfigured: boolean
+  let reconcilePendingEmailBackupForUser: jest.Mocked<ReconcilePendingEmailBackupForUser> | undefined
 
   const NOW_MICROS = 1_700_000_000_000_000
   const NOW_MS = 1_700_000_000_000
@@ -31,6 +33,7 @@ describe('TriggerEmailBackupForAllUsers', () => {
       logger,
       emailBackupsEnabled,
       emailDeliveryConfigured,
+      reconcilePendingEmailBackupForUser,
     )
 
   beforeEach(() => {
@@ -65,6 +68,7 @@ describe('TriggerEmailBackupForAllUsers', () => {
 
     emailBackupsEnabled = true
     emailDeliveryConfigured = true
+    reconcilePendingEmailBackupForUser = undefined
   })
 
   it('triggers an email backup for a due user and leaves last-sent to confirmed delivery', async () => {
@@ -84,6 +88,21 @@ describe('TriggerEmailBackupForAllUsers', () => {
     expect(triggerEmailBackupForUserUseCase.execute).not.toHaveBeenCalled()
   })
 
+  it('still reconciles persisted receipts after new backup generation is disabled', async () => {
+    emailBackupsEnabled = false
+    reconcilePendingEmailBackupForUser = {
+      execute: jest.fn().mockResolvedValue(Result.ok('completed')),
+    } as unknown as jest.Mocked<ReconcilePendingEmailBackupForUser>
+    settingRepository.countAllByName = jest.fn().mockResolvedValue(1)
+    const stateSettings = await settingRepository.findAllByNameAndValue({} as never)
+    settingRepository.findAllByName = jest.fn().mockResolvedValue(stateSettings)
+
+    await createUseCase().execute({ backupFrequency: 'daily' })
+
+    expect(reconcilePendingEmailBackupForUser.execute).toHaveBeenCalledWith({ userUuid: USER_UUID })
+    expect(triggerEmailBackupForUserUseCase.execute).not.toHaveBeenCalled()
+  })
+
   it('no-ops when email delivery (SMTP) is not configured', async () => {
     emailDeliveryConfigured = false
 
@@ -93,10 +112,25 @@ describe('TriggerEmailBackupForAllUsers', () => {
     expect(triggerEmailBackupForUserUseCase.execute).not.toHaveBeenCalled()
   })
 
+  it('still reconciles persisted receipts while new email delivery is not ready', async () => {
+    emailDeliveryConfigured = false
+    reconcilePendingEmailBackupForUser = {
+      execute: jest.fn().mockResolvedValue(Result.ok('pending')),
+    } as unknown as jest.Mocked<ReconcilePendingEmailBackupForUser>
+    settingRepository.countAllByName = jest.fn().mockResolvedValue(1)
+    const stateSettings = await settingRepository.findAllByNameAndValue({} as never)
+    settingRepository.findAllByName = jest.fn().mockResolvedValue(stateSettings)
+
+    await createUseCase().execute({ backupFrequency: 'daily' })
+
+    expect(reconcilePendingEmailBackupForUser.execute).toHaveBeenCalledWith({ userUuid: USER_UUID })
+    expect(triggerEmailBackupForUserUseCase.execute).not.toHaveBeenCalled()
+  })
+
   it('skips a user whose last backup was sent too recently to be due', async () => {
     const recentSetting = Setting.create({
       name: SettingName.NAMES.EmailBackupLastSent,
-      value: String(NOW_MS - 60 * 60 * 1000), // 1 hour ago
+      value: String(NOW_MS - 60 * 60 * 1000),
       serverEncryptionVersion: EncryptionVersion.Unencrypted,
       userUuid: Uuid.create('00000000-0000-0000-0000-000000000000').getValue(),
       sensitive: false,
@@ -145,5 +179,34 @@ describe('TriggerEmailBackupForAllUsers', () => {
 
     expect(result.isFailed()).toBeFalsy()
     expect(triggerEmailBackupForUserUseCase.execute).toHaveBeenCalledWith({ userUuid: USER_UUID })
+  })
+
+  it('reconciles pending delivery state even when the user is no longer in the frequency cohort', async () => {
+    reconcilePendingEmailBackupForUser = {
+      execute: jest.fn().mockResolvedValue(Result.ok('pending')),
+    } as unknown as jest.Mocked<ReconcilePendingEmailBackupForUser>
+    settingRepository.countAllByName = jest.fn().mockResolvedValue(1)
+    settingRepository.findAllByName = jest
+      .fn()
+      .mockResolvedValue(await settingRepository.findAllByNameAndValue({} as never))
+    settingRepository.countAllByNameAndValue = jest.fn().mockResolvedValue(0)
+
+    await createUseCase().execute({ backupFrequency: 'daily' })
+
+    expect(reconcilePendingEmailBackupForUser.execute).toHaveBeenCalledWith({ userUuid: USER_UUID })
+    expect(triggerEmailBackupForUserUseCase.execute).not.toHaveBeenCalled()
+  })
+
+  it('does not generate a fresh backup in the same pass after completing pending delivery reconciliation', async () => {
+    reconcilePendingEmailBackupForUser = {
+      execute: jest.fn().mockResolvedValue(Result.ok('completed')),
+    } as unknown as jest.Mocked<ReconcilePendingEmailBackupForUser>
+    settingRepository.countAllByName = jest.fn().mockResolvedValue(1)
+    const frequencySettings = await settingRepository.findAllByNameAndValue({} as never)
+    settingRepository.findAllByName = jest.fn().mockResolvedValue(frequencySettings)
+
+    await createUseCase().execute({ backupFrequency: 'daily' })
+
+    expect(triggerEmailBackupForUserUseCase.execute).not.toHaveBeenCalled()
   })
 })

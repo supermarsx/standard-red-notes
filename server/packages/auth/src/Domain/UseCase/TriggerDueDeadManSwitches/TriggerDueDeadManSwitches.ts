@@ -3,26 +3,33 @@ import { Logger } from 'winston'
 
 import { DeadManSwitch } from '../../DeadManSwitch/DeadManSwitch'
 import { DeadManSwitchRepositoryInterface } from '../../DeadManSwitch/DeadManSwitchRepositoryInterface'
-import { EmailSenderInterface } from '../../Email/EmailSenderInterface'
+import { EmailDeliveryStatus, EmailSenderInterface } from '../../Email/EmailSenderInterface'
+import { createDeadManSwitchEmailDeliveryId } from '../../Email/EmailDeliveryId'
 import { safeErrorLogMetadata } from '../../Logging/SafeLog'
 
 import { TriggerDueDeadManSwitchesDTO } from './TriggerDueDeadManSwitchesDTO'
 
 const EMAIL_SUBJECT = 'A Standard Red Notes message is waiting for you'
+const TERMINAL_DELIVERY_STATUSES: ReadonlySet<EmailDeliveryStatus> = new Set([
+  'dead',
+  'quarantined',
+  'discarded',
+  'superseded',
+])
 
 // Delay applied AFTER each failed send attempt before the switch is retried.
 // Indexed by (failed attempt number - 1). Once attempts exceed the list we keep
 // retrying at the final interval (~6 months) — we never give up silently.
 const RETRY_BACKOFF_MS = [
-  5 * 60_000, // 5 min   (after attempt 1)
-  30 * 60_000, // 30 min
-  2 * 60 * 60_000, // 2 h
-  6 * 60 * 60_000, // 6 h
-  24 * 60 * 60_000, // 24 h
-  4 * 24 * 60 * 60_000, // 4 days
-  8 * 24 * 60 * 60_000, // 8 days
-  30 * 24 * 60 * 60_000, // ~1 month
-  180 * 24 * 60 * 60_000, // ~6 months
+  5 * 60_000,
+  30 * 60_000,
+  2 * 60 * 60_000,
+  6 * 60 * 60_000,
+  24 * 60 * 60_000,
+  4 * 24 * 60 * 60_000,
+  8 * 24 * 60 * 60_000,
+  30 * 24 * 60 * 60_000,
+  180 * 24 * 60 * 60_000,
 ]
 
 const MAX_ERROR_LENGTH = 255
@@ -38,7 +45,7 @@ export class TriggerDueDeadManSwitches implements UseCaseInterface<number> {
     // If email delivery is not configured we cannot fulfil a switch. Skip the
     // whole scan WITHOUT marking anything triggered so it retries once SMTP is
     // configured.
-    if (!(await this.emailSender.isConfigured())) {
+    if (this.emailSender.acceptanceMode === 'provider' && !(await this.emailSender.isConfigured())) {
       this.logger.debug('SMTP is not configured. Skipping dead man switch scan.')
 
       return Result.ok(0)
@@ -51,10 +58,38 @@ export class TriggerDueDeadManSwitches implements UseCaseInterface<number> {
 
     for (const deadManSwitch of dueSwitches) {
       try {
+        const deliveryId = createDeadManSwitchEmailDeliveryId(deadManSwitch.id.toString(), deadManSwitch.props.deadline)
+        if (this.emailSender.acceptanceMode === 'durable-queue') {
+          const status = await this.durableDeliveryStatus(deliveryId)
+          if (status === 'provider-accepted') {
+            if (await this.markTriggered(deadManSwitch, now)) {
+              triggeredCount++
+            }
+            continue
+          }
+          if (status === 'pending') {
+            continue
+          }
+          if (TERMINAL_DELIVERY_STATUSES.has(status)) {
+            this.logger.error('Durable dead-man-switch email reached a terminal state.', {
+              deadManSwitchId: deadManSwitch.id.toString(),
+              deliveryStatus: status,
+            })
+            continue
+          }
+          if (status !== 'missing') {
+            throw new Error('Durable email delivery status is unavailable.')
+          }
+        }
+
         const body = this.composeBody(deadManSwitch)
 
-        const sent = await this.emailSender.sendEmail(deadManSwitch.props.recipientEmail, EMAIL_SUBJECT, body)
-        if (!sent) {
+        const accepted = await this.emailSender.sendEmail(deadManSwitch.props.recipientEmail, EMAIL_SUBJECT, body, {
+          deliverySource: 'account',
+          deliveryId,
+          retryMode: 'indefinite',
+        })
+        if (!accepted) {
           // Delivery failed (transient SMTP error). Record the failure and
           // schedule the next retry on the escalating backoff. Do not block the
           // rest of the batch.
@@ -63,26 +98,15 @@ export class TriggerDueDeadManSwitches implements UseCaseInterface<number> {
           continue
         }
 
-        const triggeredOrError = DeadManSwitch.create(
-          {
-            ...deadManSwitch.props,
-            triggered: true,
-            lastAttemptAt: now,
-            lastError: null,
-          },
-          new UniqueEntityId(deadManSwitch.id.toString()),
-        )
-        if (triggeredOrError.isFailed()) {
-          this.logger.error('Could not mark a dead-man switch as triggered.', {
-            deadManSwitchId: deadManSwitch.id.toString(),
-          })
-
+        if (this.emailSender.acceptanceMode === 'durable-queue') {
+          // Queue acceptance transfers retry ownership but is not proof that a
+          // provider accepted the message. Reconcile on a later scan.
           continue
         }
 
-        await this.deadManSwitchRepository.save(triggeredOrError.getValue())
-
-        triggeredCount++
+        if (await this.markTriggered(deadManSwitch, now)) {
+          triggeredCount++
+        }
       } catch (error) {
         // A single failure must never block the rest of the batch. Record it and
         // schedule a retry like any other delivery failure.
@@ -91,6 +115,40 @@ export class TriggerDueDeadManSwitches implements UseCaseInterface<number> {
     }
 
     return Result.ok(triggeredCount)
+  }
+
+  private async durableDeliveryStatus(deliveryId: string): Promise<EmailDeliveryStatus> {
+    try {
+      if (!this.emailSender.getDeliveryStatus) {
+        throw new Error('Missing durable status adapter.')
+      }
+      return await this.emailSender.getDeliveryStatus(deliveryId)
+    } catch {
+      throw new Error('Durable email delivery status is unavailable.')
+    }
+  }
+
+  private async markTriggered(deadManSwitch: DeadManSwitch, now: number): Promise<boolean> {
+    const triggeredOrError = DeadManSwitch.create(
+      {
+        ...deadManSwitch.props,
+        triggered: true,
+        lastAttemptAt: now,
+        lastError: null,
+      },
+      new UniqueEntityId(deadManSwitch.id.toString()),
+    )
+    if (triggeredOrError.isFailed()) {
+      this.logger.error('Could not mark a dead-man switch as triggered.', {
+        deadManSwitchId: deadManSwitch.id.toString(),
+      })
+
+      return false
+    }
+
+    await this.deadManSwitchRepository.save(triggeredOrError.getValue())
+
+    return true
   }
 
   // Persists a failed send: increments the attempt counter, stores the error and

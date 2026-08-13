@@ -17,9 +17,11 @@ describe('GenerateMagicLinkCode', () => {
     magicLinkTokenRepository = {
       save: jest.fn(),
       findLatestByUserIdentifier: jest.fn(),
+      findByUserIdentifierAndCode: jest.fn(),
     }
 
     emailSender = {
+      acceptanceMode: 'provider',
       isConfigured: jest.fn().mockReturnValue(true),
       sendEmail: jest.fn().mockResolvedValue(true),
     }
@@ -50,6 +52,12 @@ describe('GenerateMagicLinkCode', () => {
       'test@test.te',
       'Your sign-in verification code',
       expect.stringContaining(persistedToken.props.code),
+      {
+        deliverySource: 'account',
+        deliveryId: expect.stringMatching(/^magic-link-[0-9a-f]{64}$/),
+        expiresAt: persistedToken.props.expiresAt.getTime(),
+        supersessionKey: expect.stringMatching(/^magic-link-user-[0-9a-f]{64}$/),
+      },
     )
   })
 
@@ -75,6 +83,12 @@ describe('GenerateMagicLinkCode', () => {
       'test@test.te',
       'Your sign-in verification code',
       expect.stringMatching(/\d{6}/),
+      {
+        deliverySource: 'account',
+        deliveryId: expect.stringMatching(/^magic-link-[0-9a-f]{64}$/),
+        expiresAt: expect.any(Number),
+        supersessionKey: expect.stringMatching(/^magic-link-user-[0-9a-f]{64}$/),
+      },
     )
   })
 

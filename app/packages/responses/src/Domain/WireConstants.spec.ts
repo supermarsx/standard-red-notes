@@ -18,9 +18,11 @@ describe('wire constants', () => {
     expect(HttpStatusCode.BadRequest).toBe(400)
     expect(HttpStatusCode.Unauthorized).toBe(401)
     expect(HttpStatusCode.Forbidden).toBe(403)
+    expect(HttpStatusCode.Conflict).toBe(409)
     expect(HttpStatusCode.Gone).toBe(410)
     expect(HttpStatusCode.ExpiredAccessToken).toBe(498)
     expect(HttpStatusCode.InternalServerError).toBe(500)
+    expect(HttpStatusCode.ServiceUnavailable).toBe(503)
   })
 
   it('HttpVerb should map to the uppercase HTTP methods', () => {

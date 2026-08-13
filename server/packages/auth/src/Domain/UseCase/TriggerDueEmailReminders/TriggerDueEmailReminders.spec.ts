@@ -43,6 +43,19 @@ describe('TriggerDueEmailReminders', () => {
       new UniqueEntityId(id),
     ).getValue()
 
+  const useDurableSender = (
+    status: 'pending' | 'provider-accepted' | 'dead' | 'quarantined' | 'discarded' | 'superseded' | 'missing',
+    accepted = true,
+  ) => {
+    emailSender = {
+      acceptanceMode: 'durable-queue',
+      isConfigured: jest.fn().mockReturnValue(true),
+      getDeliveryStatus: jest.fn().mockResolvedValue(status),
+      cancelDelivery: jest.fn().mockResolvedValue('cancelled'),
+      sendEmail: jest.fn().mockResolvedValue(accepted),
+    }
+  }
+
   beforeEach(() => {
     emailRemindersEnabled = true
     noRecords = false
@@ -60,9 +73,11 @@ describe('TriggerDueEmailReminders', () => {
     getSetting = {} as jest.Mocked<GetSetting>
     getSetting.execute = jest.fn().mockResolvedValue(Result.ok({ decryptedValue: 'true' }))
 
-    emailSender = {} as jest.Mocked<EmailSenderInterface>
-    emailSender.isConfigured = jest.fn().mockReturnValue(true)
-    emailSender.sendEmail = jest.fn().mockResolvedValue(true)
+    emailSender = {
+      acceptanceMode: 'provider',
+      isConfigured: jest.fn().mockReturnValue(true),
+      sendEmail: jest.fn().mockResolvedValue(true),
+    }
 
     logger = {} as jest.Mocked<Logger>
     logger.error = jest.fn()
@@ -105,6 +120,10 @@ describe('TriggerDueEmailReminders', () => {
     // Sent to the account email.
     const to = (emailSender.sendEmail as jest.Mock).mock.calls[0][0] as string
     expect(to).toBe('user@example.com')
+    expect((emailSender.sendEmail as jest.Mock).mock.calls[0][3]).toEqual({
+      deliverySource: 'reminder',
+      deliveryId: expect.stringMatching(/^reminder-[0-9a-f]{64}$/),
+    })
 
     // Persisted with sent = true (records mode), not deleted.
     expect(emailReminderRepository.save).toHaveBeenCalledTimes(1)
@@ -119,6 +138,20 @@ describe('TriggerDueEmailReminders', () => {
     const result = await createUseCase().execute({})
 
     expect(result.getValue()).toBe(0)
+    expect(emailSender.sendEmail).not.toHaveBeenCalled()
+    expect(emailReminderRepository.save).not.toHaveBeenCalled()
+    expect(emailReminderRepository.remove).not.toHaveBeenCalled()
+  })
+
+  it('revokes a pending durable reminder before honoring a stale delivery receipt after opt-out', async () => {
+    useDurableSender('provider-accepted')
+    getSetting.execute = jest.fn().mockResolvedValue(Result.ok({ decryptedValue: 'false' }))
+
+    const result = await createUseCase().execute({})
+
+    expect(result.getValue()).toBe(0)
+    expect(emailSender.cancelDelivery).toHaveBeenCalledWith(expect.stringMatching(/^reminder-[0-9a-f]{64}$/))
+    expect(emailSender.getDeliveryStatus).not.toHaveBeenCalled()
     expect(emailSender.sendEmail).not.toHaveBeenCalled()
     expect(emailReminderRepository.save).not.toHaveBeenCalled()
     expect(emailReminderRepository.remove).not.toHaveBeenCalled()
@@ -174,6 +207,109 @@ describe('TriggerDueEmailReminders', () => {
       expect(line).not.toContain('user@example.com')
       expect(line).not.toContain('Call the dentist')
     }
+  })
+
+  it('keeps a no-records reminder after durable queue acceptance', async () => {
+    noRecords = true
+    useDurableSender('missing')
+
+    const result = await createUseCase().execute({})
+
+    expect(result.getValue()).toBe(0)
+    expect(emailSender.sendEmail).toHaveBeenCalledTimes(1)
+    expect(emailReminderRepository.remove).not.toHaveBeenCalled()
+    expect(emailReminderRepository.save).not.toHaveBeenCalled()
+  })
+
+  it('deletes a no-records reminder only after provider acceptance is observed', async () => {
+    noRecords = true
+    useDurableSender('provider-accepted')
+
+    const result = await createUseCase().execute({})
+
+    expect(result.getValue()).toBe(1)
+    expect(emailSender.sendEmail).not.toHaveBeenCalled()
+    expect(emailReminderRepository.remove).toHaveBeenCalledTimes(1)
+    expect(emailReminderRepository.save).not.toHaveBeenCalled()
+  })
+
+  it('keeps a records-mode reminder pending after durable queue acceptance', async () => {
+    useDurableSender('missing')
+
+    const result = await createUseCase().execute({})
+
+    expect(result.getValue()).toBe(0)
+    expect(emailSender.sendEmail).toHaveBeenCalledTimes(1)
+    expect(emailReminderRepository.save).not.toHaveBeenCalled()
+    expect(emailReminderRepository.remove).not.toHaveBeenCalled()
+  })
+
+  it('does not enqueue a duplicate while durable delivery is pending', async () => {
+    useDurableSender('pending')
+
+    const result = await createUseCase().execute({})
+
+    expect(result.getValue()).toBe(0)
+    expect(emailSender.sendEmail).not.toHaveBeenCalled()
+    expect(emailReminderRepository.save).not.toHaveBeenCalled()
+  })
+
+  it.each(['dead', 'quarantined', 'discarded', 'superseded'] as const)(
+    'retains and alerts for a durable reminder in terminal state %s',
+    async (status) => {
+      useDurableSender(status)
+
+      const result = await createUseCase().execute({})
+
+      expect(result.getValue()).toBe(0)
+      expect(emailSender.sendEmail).not.toHaveBeenCalled()
+      expect(emailReminderRepository.save).not.toHaveBeenCalled()
+      expect(emailReminderRepository.remove).not.toHaveBeenCalled()
+      expect(logger.error).toHaveBeenCalledWith('Durable email reminder delivery reached a terminal state.', {
+        reminderId: '11111111-1111-1111-1111-111111111111',
+        deliveryStatus: status,
+      })
+      expect(JSON.stringify((logger.error as jest.Mock).mock.calls)).not.toContain('user@example.com')
+      expect(JSON.stringify((logger.error as jest.Mock).mock.calls)).not.toContain('Call the dentist')
+    },
+  )
+
+  it('commits provider acceptance exactly once without another send', async () => {
+    let storedReminder = buildReminder('11111111-1111-1111-1111-111111111111')
+    emailReminderRepository.findDueUnsent = jest.fn().mockImplementation(async () => {
+      return storedReminder.props.sent ? [] : [storedReminder]
+    })
+    emailReminderRepository.save = jest.fn().mockImplementation(async (reminder: EmailReminder) => {
+      storedReminder = reminder
+    })
+    useDurableSender('provider-accepted')
+
+    const first = await createUseCase().execute({})
+    const second = await createUseCase().execute({})
+
+    expect(first.getValue()).toBe(1)
+    expect(second.getValue()).toBe(0)
+    expect(emailSender.sendEmail).not.toHaveBeenCalled()
+    expect(emailReminderRepository.save).toHaveBeenCalledTimes(1)
+    expect(storedReminder.props.sent).toBe(true)
+  })
+
+  it('retains the reminder and logs only redacted metadata when status lookup fails', async () => {
+    useDurableSender('missing')
+    emailSender.getDeliveryStatus = jest.fn().mockRejectedValue(new Error('redis leaked detail'))
+
+    const result = await createUseCase().execute({})
+
+    expect(result.getValue()).toBe(0)
+    expect(emailSender.sendEmail).not.toHaveBeenCalled()
+    expect(emailReminderRepository.save).not.toHaveBeenCalled()
+    expect(JSON.stringify((logger.error as jest.Mock).mock.calls)).not.toContain('redis leaked detail')
+    expect(logger.error).toHaveBeenCalledWith('Error processing an email reminder.', {
+      reminderId: '11111111-1111-1111-1111-111111111111',
+      errorType: 'Error',
+      errorCode: undefined,
+      status: undefined,
+    })
   })
 
   it('should leave a reminder unsent when delivery fails (retries next scan)', async () => {

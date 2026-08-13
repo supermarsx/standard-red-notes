@@ -43,7 +43,11 @@ export class ApproveUser implements UseCaseInterface<User> {
     // Best-effort approval email — a send failure never fails the approval.
     if (this.sendApprovalNotification !== undefined) {
       try {
-        await this.sendApprovalNotification.execute({ email: saved.email, signInUrl: this.signInUrl })
+        await this.sendApprovalNotification.execute({
+          userUuid: saved.uuid.toString(),
+          email: saved.email,
+          signInUrl: this.signInUrl,
+        })
       } catch (error) {
         this.logger?.error(`Could not send approval notification: ${(error as Error).message}`)
       }

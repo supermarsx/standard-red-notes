@@ -109,6 +109,23 @@ describe('BaseSettingsController cross-service token cache invalidation', () => 
     expect(setHeader).not.toHaveBeenCalled()
   })
 
+  it('revokes pending reminder deliveries when deleting the email-reminder opt-in setting', async () => {
+    await controller.deleteSetting(
+      {
+        params: { userUuid: user.uuid, settingName: SettingName.NAMES.EmailRemindersEnabled },
+        headers: {},
+      } as unknown as Request,
+      response(),
+    )
+
+    expect(triggerPostSettingUpdateActions.execute).toHaveBeenCalledWith({
+      updatedSettingName: SettingName.NAMES.EmailRemindersEnabled,
+      userUuid: user.uuid,
+      userEmail: user.email,
+      unencryptedValue: null,
+    })
+  })
+
   it('rejects case-insensitive reads of private Nextcloud lifecycle state before the use case runs', async () => {
     const result = await controller.getSetting(
       {

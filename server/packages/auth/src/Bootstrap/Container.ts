@@ -181,6 +181,7 @@ import {
   RuntimeLogLevelApplier,
   ServerSettingsLogLevelResolver,
   SharedVaultUser,
+  isRedisClusterTopology,
 } from '@standardnotes/domain-core'
 import { SessionTracePersistenceMapper } from '../Mapping/SessionTracePersistenceMapper'
 import { SessionTrace } from '../Domain/Session/SessionTrace'
@@ -230,9 +231,17 @@ import { SendApprovalNotification } from '../Domain/UseCase/SendApprovalNotifica
 import { VerifyEmailConfirmation } from '../Domain/UseCase/VerifyEmailConfirmation/VerifyEmailConfirmation'
 import { ResendEmailConfirmation } from '../Domain/UseCase/ResendEmailConfirmation/ResendEmailConfirmation'
 import { EmailSenderInterface } from '../Domain/Email/EmailSenderInterface'
+import {
+  createAuthEmailSender,
+  emailQueueProducerOptionsFromEnvironment,
+  maximumRawAttachmentBytesForQueue,
+  parseEmailAttachmentMaximumBytes,
+} from '../Domain/Email/QueuedEmailSender'
 import { SmtpEmailSender } from '../Domain/Email/SmtpEmailSender'
 import { BackupAttachmentStorageInterface } from '../Domain/Email/BackupAttachmentStorageInterface'
+import { EmailBackupStateRepositoryInterface } from '../Domain/Email/EmailBackupStateRepositoryInterface'
 import { FSOrS3BackupAttachmentStorage } from '../Infra/Backup/FSOrS3BackupAttachmentStorage'
+import { TypeORMEmailBackupStateRepository } from '../Infra/TypeORM/TypeORMEmailBackupStateRepository'
 import { GenerateMagicLinkCode } from '../Domain/UseCase/GenerateMagicLinkCode/GenerateMagicLinkCode'
 import { VerifyMagicLinkCode } from '../Domain/UseCase/VerifyMagicLinkCode/VerifyMagicLinkCode'
 import { MagicLinkController } from '../Controller/MagicLinkController'
@@ -474,6 +483,7 @@ import { UserInvitedToSharedVaultEventHandler } from '../Domain/Handler/UserInvi
 import { TriggerPostSettingUpdateActions } from '../Domain/UseCase/TriggerPostSettingUpdateActions/TriggerPostSettingUpdateActions'
 import { TriggerEmailBackupForUser } from '../Domain/UseCase/TriggerEmailBackupForUser/TriggerEmailBackupForUser'
 import { TriggerEmailBackupForAllUsers } from '../Domain/UseCase/TriggerEmailBackupForAllUsers/TriggerEmailBackupForAllUsers'
+import { ReconcilePendingEmailBackupForUser } from '../Domain/UseCase/ReconcilePendingEmailBackupForUser/ReconcilePendingEmailBackupForUser'
 import { TriggerNextcloudBackupForUser } from '../Domain/UseCase/TriggerNextcloudBackupForUser/TriggerNextcloudBackupForUser'
 import { TriggerNextcloudBackupForAllUsers } from '../Domain/UseCase/TriggerNextcloudBackupForAllUsers/TriggerNextcloudBackupForAllUsers'
 import { NextcloudBackupStateStore } from '../Domain/Setting/NextcloudBackupStateStore'
@@ -1268,11 +1278,10 @@ export class ContainerConfigLoader {
     )
     container.bind(TYPES.Auth_FILE_UPLOAD_PATH).toConstantValue(env.get('FILE_UPLOAD_PATH', true))
     container.bind(TYPES.Auth_S3_BACKUP_BUCKET_NAME).toConstantValue(env.get('S3_BACKUP_BUCKET_NAME', true))
-    container
-      .bind<number>(TYPES.Auth_EMAIL_ATTACHMENT_MAX_BYTE_SIZE)
-      .toConstantValue(
-        env.get('EMAIL_ATTACHMENT_MAX_BYTE_SIZE', true) ? +env.get('EMAIL_ATTACHMENT_MAX_BYTE_SIZE', true) : 10485760,
-      )
+    const emailAttachmentMaximumBytes = parseEmailAttachmentMaximumBytes(
+      env.get('EMAIL_ATTACHMENT_MAX_BYTE_SIZE', true),
+    )
+    container.bind<number>(TYPES.Auth_EMAIL_ATTACHMENT_MAX_BYTE_SIZE).toConstantValue(emailAttachmentMaximumBytes)
     // Standard Red Notes: operator switch for scheduled email backups. Default OFF.
     // The trigger job additionally requires SMTP to be configured before it will
     // generate/send anything (see TriggerEmailBackupForAllUsers).
@@ -1304,19 +1313,46 @@ export class ContainerConfigLoader {
       .toConstantValue(
         env.get('MAX_EMAIL_REMINDERS_PER_USER', true) ? +env.get('MAX_EMAIL_REMINDERS_PER_USER', true) : 100,
       )
+    const emailLogger = container.get<winston.Logger>(TYPES.Auth_Logger)
+    const stableEmailQueueSecret =
+      env.get('EMAIL_DELIVERY_ENCRYPTION_KEY', true) || container.get<string>(TYPES.Auth_ENCRYPTION_SERVER_KEY)
+    const emailQueueProducerOptions = emailQueueProducerOptionsFromEnvironment({
+      maxAttempts: env.get('EMAIL_QUEUE_MAX_ATTEMPTS', true) || undefined,
+      retentionMs: env.get('EMAIL_QUEUE_RETENTION_MS', true) || undefined,
+      maxJobBytes: env.get('EMAIL_QUEUE_MAX_JOB_BYTES', true) || undefined,
+      maxTotalBytes: env.get('EMAIL_QUEUE_MAX_TOTAL_BYTES', true) || undefined,
+    })
+    const emailQueueRedis = container.isBound(TYPES.Auth_Redis) ? container.get<Redis>(TYPES.Auth_Redis) : undefined
+    if (
+      emailQueueRedis &&
+      !isRedisClusterTopology(emailQueueRedis as unknown as { nodes?(role?: string): unknown[] }) &&
+      emailAttachmentMaximumBytes > maximumRawAttachmentBytesForQueue(emailQueueProducerOptions.maxJobBytes)
+    ) {
+      throw new Error(
+        'EMAIL_ATTACHMENT_MAX_BYTE_SIZE is too large for EMAIL_QUEUE_MAX_JOB_BYTES after queue encoding overhead.',
+      )
+    }
+    const legacyAccountSmtpSender = new SmtpEmailSender(
+      {
+        host: container.get(TYPES.Auth_SMTP_HOST),
+        port: container.get(TYPES.Auth_SMTP_PORT),
+        user: container.get(TYPES.Auth_SMTP_USER),
+        pass: container.get(TYPES.Auth_SMTP_PASS),
+        from: container.get(TYPES.Auth_SMTP_FROM),
+        tlsMode: smtpTlsMode,
+      },
+      emailLogger,
+      () => emailDeliveryOverlayReader.emailDelivery(),
+    )
     container.bind<EmailSenderInterface>(TYPES.Auth_EmailSender).toConstantValue(
-      new SmtpEmailSender(
-        {
-          host: container.get(TYPES.Auth_SMTP_HOST),
-          port: container.get(TYPES.Auth_SMTP_PORT),
-          user: container.get(TYPES.Auth_SMTP_USER),
-          pass: container.get(TYPES.Auth_SMTP_PASS),
-          from: container.get(TYPES.Auth_SMTP_FROM),
-          tlsMode: smtpTlsMode,
-        },
-        container.get<winston.Logger>(TYPES.Auth_Logger),
-        () => emailDeliveryOverlayReader.emailDelivery(),
-      ),
+      createAuthEmailSender({
+        redis: emailQueueRedis,
+        stableServerEncryptionSecret: stableEmailQueueSecret,
+        legacySmtpSender: legacyAccountSmtpSender,
+        logger: emailLogger,
+        defaultSource: 'account',
+        producerOptions: emailQueueProducerOptions,
+      }),
     )
     container
       .bind<BackupAttachmentStorageInterface>(TYPES.Auth_BackupAttachmentStorage)
@@ -1331,19 +1367,27 @@ export class ContainerConfigLoader {
     // Standard Red Notes: a dedicated sender for email reminders so operators can
     // use a distinct From address. Sender resolution: EMAIL_REMINDER_FROM if set,
     // otherwise fall back to the shared SMTP_FROM. Same SMTP transport/credentials.
+    const legacyReminderSmtpSender = new SmtpEmailSender(
+      {
+        host: container.get(TYPES.Auth_SMTP_HOST),
+        port: container.get(TYPES.Auth_SMTP_PORT),
+        user: container.get(TYPES.Auth_SMTP_USER),
+        pass: container.get(TYPES.Auth_SMTP_PASS),
+        from: env.get('EMAIL_REMINDER_FROM', true) || container.get(TYPES.Auth_SMTP_FROM),
+        tlsMode: smtpTlsMode,
+      },
+      emailLogger,
+      () => emailDeliveryOverlayReader.emailDelivery(),
+    )
     container.bind<EmailSenderInterface>(TYPES.Auth_EmailReminderSender).toConstantValue(
-      new SmtpEmailSender(
-        {
-          host: container.get(TYPES.Auth_SMTP_HOST),
-          port: container.get(TYPES.Auth_SMTP_PORT),
-          user: container.get(TYPES.Auth_SMTP_USER),
-          pass: container.get(TYPES.Auth_SMTP_PASS),
-          from: env.get('EMAIL_REMINDER_FROM', true) || container.get(TYPES.Auth_SMTP_FROM),
-          tlsMode: smtpTlsMode,
-        },
-        container.get<winston.Logger>(TYPES.Auth_Logger),
-        () => emailDeliveryOverlayReader.emailDelivery(),
-      ),
+      createAuthEmailSender({
+        redis: emailQueueRedis,
+        stableServerEncryptionSecret: stableEmailQueueSecret,
+        legacySmtpSender: legacyReminderSmtpSender,
+        logger: emailLogger,
+        defaultSource: 'reminder',
+        producerOptions: emailQueueProducerOptions,
+      }),
     )
     container
       .bind(TYPES.Auth_READONLY_USERS)
@@ -1592,6 +1636,16 @@ export class ContainerConfigLoader {
         new SettingCrypter(
           container.get<UserRepositoryInterface>(TYPES.Auth_UserRepository),
           container.get<CrypterInterface>(TYPES.Auth_Crypter),
+        ),
+      )
+    container
+      .bind<EmailBackupStateRepositoryInterface>(TYPES.Auth_EmailBackupStateRepository)
+      .toConstantValue(
+        new TypeORMEmailBackupStateRepository(
+          appDataSource.dataSource,
+          container.get<TimerInterface>(TYPES.Auth_Timer),
+          container.get<MapperInterface<Setting, TypeORMSetting>>(TYPES.Auth_SettingPersistenceMapper),
+          container.get<SettingCrypterInterface>(TYPES.Auth_SettingCrypter),
         ),
       )
     container
@@ -2065,10 +2119,20 @@ export class ContainerConfigLoader {
       .toConstantValue(new ListDeadManSwitches(container.get(TYPES.Auth_DeadManSwitchRepository)))
     container
       .bind<CheckInDeadManSwitch>(TYPES.Auth_CheckInDeadManSwitch)
-      .toConstantValue(new CheckInDeadManSwitch(container.get(TYPES.Auth_DeadManSwitchRepository)))
+      .toConstantValue(
+        new CheckInDeadManSwitch(
+          container.get(TYPES.Auth_DeadManSwitchRepository),
+          container.get<EmailSenderInterface>(TYPES.Auth_EmailSender),
+        ),
+      )
     container
       .bind<DeleteDeadManSwitch>(TYPES.Auth_DeleteDeadManSwitch)
-      .toConstantValue(new DeleteDeadManSwitch(container.get(TYPES.Auth_DeadManSwitchRepository)))
+      .toConstantValue(
+        new DeleteDeadManSwitch(
+          container.get(TYPES.Auth_DeadManSwitchRepository),
+          container.get<EmailSenderInterface>(TYPES.Auth_EmailSender),
+        ),
+      )
     container
       .bind<CreateEmailReminder>(TYPES.Auth_CreateEmailReminder)
       .toConstantValue(
@@ -2082,7 +2146,12 @@ export class ContainerConfigLoader {
       .toConstantValue(new ListEmailReminders(container.get(TYPES.Auth_EmailReminderRepository)))
     container
       .bind<DeleteEmailReminder>(TYPES.Auth_DeleteEmailReminder)
-      .toConstantValue(new DeleteEmailReminder(container.get(TYPES.Auth_EmailReminderRepository)))
+      .toConstantValue(
+        new DeleteEmailReminder(
+          container.get(TYPES.Auth_EmailReminderRepository),
+          container.get<EmailSenderInterface>(TYPES.Auth_EmailReminderSender),
+        ),
+      )
     container
       .bind<CreateTrustedDevice>(TYPES.Auth_CreateTrustedDevice)
       .toConstantValue(
@@ -2778,6 +2847,19 @@ export class ContainerConfigLoader {
           container.get<boolean>(TYPES.Auth_EMAIL_BACKUPS_ENABLED),
         ),
       )
+    container
+      .bind<ReconcilePendingEmailBackupForUser>(TYPES.Auth_ReconcilePendingEmailBackupForUser)
+      .toConstantValue(
+        new ReconcilePendingEmailBackupForUser(
+          container.get<EmailSenderInterface>(TYPES.Auth_EmailSender),
+          container.get<BackupAttachmentStorageInterface>(TYPES.Auth_BackupAttachmentStorage),
+          container.get<GetSetting>(TYPES.Auth_GetSetting),
+          container.get<SetSettingValue>(TYPES.Auth_SetSettingValue),
+          container.get<TimerInterface>(TYPES.Auth_Timer),
+          container.get<winston.Logger>(TYPES.Auth_Logger),
+          container.get<EmailBackupStateRepositoryInterface>(TYPES.Auth_EmailBackupStateRepository),
+        ),
+      )
     container.bind<TriggerEmailBackupForAllUsers>(TYPES.Auth_TriggerEmailBackupForAllUsers).toConstantValue(
       new TriggerEmailBackupForAllUsers(
         container.get<SettingRepositoryInterface>(TYPES.Auth_SettingRepository),
@@ -2789,6 +2871,7 @@ export class ContainerConfigLoader {
         // Email delivery is "configured" when the SMTP sender reports itself
         // configured (host + from present). Mirrors SmtpEmailSender.isConfigured().
         () => container.get<EmailSenderInterface>(TYPES.Auth_EmailSender).isConfigured(),
+        container.get<ReconcilePendingEmailBackupForUser>(TYPES.Auth_ReconcilePendingEmailBackupForUser),
       ),
     )
     container
@@ -2841,6 +2924,8 @@ export class ContainerConfigLoader {
           container.get<DomainEventFactoryInterface>(TYPES.Auth_DomainEventFactory),
           container.get<TriggerEmailBackupForUser>(TYPES.Auth_TriggerEmailBackupForUser),
           container.get<GenerateRecoveryCodes>(TYPES.Auth_GenerateRecoveryCodes),
+          container.get<EmailReminderRepositoryInterface>(TYPES.Auth_EmailReminderRepository),
+          container.get<EmailSenderInterface>(TYPES.Auth_EmailReminderSender),
         ),
       )
     container
@@ -3238,6 +3323,7 @@ export class ContainerConfigLoader {
           container.get<TimerInterface>(TYPES.Auth_Timer),
           container.get<boolean>(TYPES.Auth_EMAIL_BACKUPS_ENABLED),
           container.get<winston.Logger>(TYPES.Auth_Logger),
+          container.get<EmailBackupStateRepositoryInterface>(TYPES.Auth_EmailBackupStateRepository),
         ),
       )
     container

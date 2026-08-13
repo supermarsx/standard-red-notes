@@ -101,16 +101,46 @@ export function validateEmailRecipient(value: unknown): string | undefined {
     return undefined
   }
   const recipient = value.trim()
+  if (recipient.length < 3 || recipient.length > EMAIL_DELIVERY_LIMITS.recipient || /[\r\n\0\s,;<>]/.test(recipient)) {
+    return undefined
+  }
+
+  const parts = recipient.split('@')
+  if (parts.length !== 2) {
+    return undefined
+  }
+  const [localPart, domain] = parts
   if (
-    recipient.length < 3 ||
-    recipient.length > EMAIL_DELIVERY_LIMITS.recipient ||
-    /[\r\n\0\s]/.test(recipient) ||
-    !/^[^@]+@[^@]+$/.test(recipient)
+    localPart.length < 1 ||
+    localPart.length > 64 ||
+    localPart.startsWith('.') ||
+    localPart.endsWith('.') ||
+    localPart.includes('..') ||
+    !/^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+$/.test(localPart) ||
+    !isDnsName(domain)
   ) {
     return undefined
   }
 
   return recipient
+}
+
+export function validateEmailSenderIdentity(value: unknown): { address: string; name?: string } | undefined {
+  if (typeof value !== 'string' || !isSafeHeaderValue(value, EMAIL_DELIVERY_LIMITS.from)) {
+    return undefined
+  }
+  const trimmed = value.trim()
+  if (!trimmed.includes('<') && !trimmed.includes('>')) {
+    const address = validateEmailRecipient(trimmed)
+    return address ? { address } : undefined
+  }
+  const displayIdentity = trimmed.match(/^([^<>]+?)\s*<([^<>]+)>$/)
+  if (!displayIdentity || !displayIdentity[1].trim()) {
+    return undefined
+  }
+  const address = validateEmailRecipient(displayIdentity[2])
+
+  return address ? { address, name: displayIdentity[1].trim() } : undefined
 }
 
 export function isTrustedInsecureRelayHost(host: string): boolean {
@@ -143,11 +173,28 @@ export function isTrustedInsecureRelayHost(host: string): boolean {
 }
 
 function isSafeHost(value: string): boolean {
-  return isSafeHeaderValue(value, EMAIL_DELIVERY_LIMITS.host) && !/[\s/?#]/.test(value) && !value.includes('://')
+  if (!isSafeHeaderValue(value, EMAIL_DELIVERY_LIMITS.host) || /[\s/?#]/.test(value) || value.includes('://')) {
+    return false
+  }
+
+  const normalized = value.replace(/^\[|\]$/g, '')
+  return isIP(normalized) !== 0 || isDnsName(normalized)
+}
+
+function isDnsName(value: string): boolean {
+  if (value.length < 1 || value.length > 253 || value.endsWith('.')) {
+    return false
+  }
+
+  return value
+    .split('.')
+    .every(
+      (label) => label.length >= 1 && label.length <= 63 && /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/.test(label),
+    )
 }
 
 function isSafeFromIdentity(value: string): boolean {
-  return isSafeHeaderValue(value, EMAIL_DELIVERY_LIMITS.from) && value.includes('@')
+  return validateEmailSenderIdentity(value) !== undefined
 }
 
 function isSafeHeaderValue(value: string, maximumLength: number): boolean {

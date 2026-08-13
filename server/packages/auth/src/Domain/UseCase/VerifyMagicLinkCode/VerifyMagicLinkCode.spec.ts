@@ -25,6 +25,7 @@ describe('VerifyMagicLinkCode', () => {
     magicLinkTokenRepository = {
       save: jest.fn(),
       findLatestByUserIdentifier: jest.fn(),
+      findByUserIdentifierAndCode: jest.fn(),
     }
 
     logger = {
@@ -40,6 +41,7 @@ describe('VerifyMagicLinkCode', () => {
   })
 
   it('should fail if no token was issued', async () => {
+    magicLinkTokenRepository.findByUserIdentifierAndCode.mockResolvedValue(null)
     magicLinkTokenRepository.findLatestByUserIdentifier.mockResolvedValue(null)
 
     const result = await createUseCase().execute({ userIdentifier: 'test@test.te', code: '123456' })
@@ -49,7 +51,7 @@ describe('VerifyMagicLinkCode', () => {
   })
 
   it('should fail if the token is already consumed', async () => {
-    magicLinkTokenRepository.findLatestByUserIdentifier.mockResolvedValue(createToken({ consumed: true }))
+    magicLinkTokenRepository.findByUserIdentifierAndCode.mockResolvedValue(createToken({ consumed: true }))
 
     const result = await createUseCase().execute({ userIdentifier: 'test@test.te', code: '123456' })
 
@@ -58,7 +60,7 @@ describe('VerifyMagicLinkCode', () => {
   })
 
   it('should fail if the token is expired', async () => {
-    magicLinkTokenRepository.findLatestByUserIdentifier.mockResolvedValue(
+    magicLinkTokenRepository.findByUserIdentifierAndCode.mockResolvedValue(
       createToken({ expiresAt: new Date(Date.now() - 1000) }),
     )
 
@@ -69,6 +71,7 @@ describe('VerifyMagicLinkCode', () => {
   })
 
   it('should fail if the code does not match', async () => {
+    magicLinkTokenRepository.findByUserIdentifierAndCode.mockResolvedValue(null)
     magicLinkTokenRepository.findLatestByUserIdentifier.mockResolvedValue(createToken({ code: '999999' }))
 
     const result = await createUseCase().execute({ userIdentifier: 'test@test.te', code: '123456' })
@@ -79,7 +82,7 @@ describe('VerifyMagicLinkCode', () => {
 
   it('should succeed and mark the token consumed when the code is valid', async () => {
     const token = createToken({ code: '123456' })
-    magicLinkTokenRepository.findLatestByUserIdentifier.mockResolvedValue(token)
+    magicLinkTokenRepository.findByUserIdentifierAndCode.mockResolvedValue(token)
 
     const result = await createUseCase().execute({ userIdentifier: 'test@test.te', code: '123456' })
 
@@ -89,8 +92,44 @@ describe('VerifyMagicLinkCode', () => {
     expect(magicLinkTokenRepository.save).toHaveBeenCalledWith(token)
   })
 
+  it('selects the delivered code when same-second concurrent issuance makes latest-token order ambiguous', async () => {
+    const sameCreatedAt = new Date('2026-08-13T12:00:00.000Z')
+    const queueSurvivor = MagicLinkToken.create({
+      userIdentifier: 'test@test.te',
+      code: '111111',
+      consumed: false,
+      expiresAt: new Date('2026-08-13T12:15:00.000Z'),
+      createdAt: sameCreatedAt,
+    }).getValue()
+    const ambiguouslyLatest = MagicLinkToken.create({
+      userIdentifier: 'test@test.te',
+      code: '222222',
+      consumed: false,
+      expiresAt: new Date('2026-08-13T12:15:00.000Z'),
+      createdAt: sameCreatedAt,
+    }).getValue()
+    magicLinkTokenRepository.findByUserIdentifierAndCode.mockImplementation(async (_identifier, code) => {
+      return code === queueSurvivor.props.code ? queueSurvivor : null
+    })
+    magicLinkTokenRepository.findLatestByUserIdentifier.mockResolvedValue(ambiguouslyLatest)
+
+    jest.useFakeTimers().setSystemTime(new Date('2026-08-13T12:01:00.000Z'))
+    try {
+      const result = await createUseCase().execute({ userIdentifier: 'test@test.te', code: '111111' })
+
+      expect(result.getValue()).toBe(true)
+      expect(queueSurvivor.props.consumed).toBe(true)
+      expect(ambiguouslyLatest.props.consumed).toBe(false)
+      expect(magicLinkTokenRepository.findByUserIdentifierAndCode).toHaveBeenCalledWith('test@test.te', '111111')
+      expect(magicLinkTokenRepository.findLatestByUserIdentifier).not.toHaveBeenCalled()
+      expect(magicLinkTokenRepository.save).toHaveBeenCalledWith(queueSurvivor)
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
   it('should fail gracefully if the repository throws', async () => {
-    magicLinkTokenRepository.findLatestByUserIdentifier.mockRejectedValue(new Error('db down'))
+    magicLinkTokenRepository.findByUserIdentifierAndCode.mockRejectedValue(new Error('db down'))
 
     const result = await createUseCase().execute({ userIdentifier: 'test@test.te', code: '123456' })
 

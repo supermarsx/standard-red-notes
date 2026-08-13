@@ -3,7 +3,9 @@ import { Logger } from 'winston'
 
 import { EmailReminder } from '../../EmailReminder/EmailReminder'
 import { EmailReminderRepositoryInterface } from '../../EmailReminder/EmailReminderRepositoryInterface'
-import { EmailSenderInterface } from '../../Email/EmailSenderInterface'
+import { cancelDurableEmailDelivery } from '../../Email/DurableEmailCancellation'
+import { EmailDeliveryStatus, EmailSenderInterface } from '../../Email/EmailSenderInterface'
+import { createEmailReminderDeliveryId } from '../../Email/EmailDeliveryId'
 import { UserRepositoryInterface } from '../../User/UserRepositoryInterface'
 import { GetSetting } from '../GetSetting/GetSetting'
 
@@ -11,6 +13,12 @@ import { TriggerDueEmailRemindersDTO } from './TriggerDueEmailRemindersDTO'
 import { safeErrorLogMetadata } from '../../Logging/SafeLog'
 
 const EMAIL_SUBJECT_PREFIX = 'Reminder: '
+const TERMINAL_DELIVERY_STATUSES: ReadonlySet<EmailDeliveryStatus> = new Set([
+  'dead',
+  'quarantined',
+  'discarded',
+  'superseded',
+])
 
 /**
  * Scheduled job: emails due, unsent email reminders to the user's account email.
@@ -53,7 +61,7 @@ export class TriggerDueEmailReminders implements UseCaseInterface<number> {
       return Result.ok(0)
     }
 
-    if (!(await this.emailSender.isConfigured())) {
+    if (this.emailSender.acceptanceMode === 'provider' && !(await this.emailSender.isConfigured())) {
       this.logger.debug('SMTP is not configured. Skipping email reminder scan.')
 
       return Result.ok(0)
@@ -85,10 +93,37 @@ export class TriggerDueEmailReminders implements UseCaseInterface<number> {
   }
 
   private async processReminder(reminder: EmailReminder): Promise<boolean> {
+    const deliveryId = createEmailReminderDeliveryId(reminder.id.toString())
     if (!(await this.userOptedIn(reminder.props.userUuid))) {
-      // User has not opted in (or opted back out). Do not send. Leave the row so it
-      // sends later if they opt in before it is cleaned up / deleted by the client.
+      const cancellation = await cancelDurableEmailDelivery(this.emailSender, deliveryId)
+      if (cancellation === 'in-flight') {
+        throw new Error('Durable email reminder delivery is already in flight.')
+      }
+
+      // A cancellation fence prevents a queued occurrence from being accepted
+      // after the user has opted out. Do not honor a stale pending or accepted
+      // receipt as consent to finalize the reminder.
       return false
+    }
+
+    if (this.emailSender.acceptanceMode === 'durable-queue') {
+      const status = await this.durableDeliveryStatus(deliveryId)
+      if (status === 'provider-accepted') {
+        return this.finalizeReminder(reminder)
+      }
+      if (status === 'pending') {
+        return false
+      }
+      if (TERMINAL_DELIVERY_STATUSES.has(status)) {
+        this.logger.error('Durable email reminder delivery reached a terminal state.', {
+          reminderId: reminder.id.toString(),
+          deliveryStatus: status,
+        })
+        return false
+      }
+      if (status !== 'missing') {
+        throw new Error('Durable email delivery status is unavailable.')
+      }
     }
 
     const email = await this.resolveAccountEmail(reminder.props.userUuid)
@@ -105,14 +140,27 @@ export class TriggerDueEmailReminders implements UseCaseInterface<number> {
     const subject = EMAIL_SUBJECT_PREFIX + sanitizedSubjectMessage
     const body = this.composeBody(reminder)
 
-    const sent = await this.emailSender.sendEmail(email, subject, body)
-    if (!sent) {
+    const accepted = await this.emailSender.sendEmail(email, subject, body, {
+      deliverySource: 'reminder',
+      deliveryId,
+    })
+    if (!accepted) {
       // Transient delivery failure. Leave unsent for the next scan.
       this.logger.error(`Email sender reported the reminder ${reminder.id.toString()} was not sent.`)
 
       return false
     }
 
+    if (this.emailSender.acceptanceMode === 'durable-queue') {
+      // Redis owns retry/fallback now, but the source row remains pending until
+      // a later scan observes provider acceptance for this deterministic id.
+      return false
+    }
+
+    return this.finalizeReminder(reminder)
+  }
+
+  private async finalizeReminder(reminder: EmailReminder): Promise<boolean> {
     if (this.noRecords) {
       // No-records mode: remove the record entirely instead of keeping sent history,
       // and deliberately do NOT log the recipient or message.
@@ -139,6 +187,17 @@ export class TriggerDueEmailReminders implements UseCaseInterface<number> {
     await this.emailReminderRepository.save(sentOrError.getValue())
 
     return true
+  }
+
+  private async durableDeliveryStatus(deliveryId: string): Promise<EmailDeliveryStatus> {
+    try {
+      if (!this.emailSender.getDeliveryStatus) {
+        throw new Error('Missing durable status adapter.')
+      }
+      return await this.emailSender.getDeliveryStatus(deliveryId)
+    } catch {
+      throw new Error('Durable email delivery status is unavailable.')
+    }
   }
 
   private async userOptedIn(userUuid: string): Promise<boolean> {

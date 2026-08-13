@@ -6,6 +6,7 @@ import { Logger } from 'winston'
 import { MagicLinkToken } from '../../MagicLink/MagicLinkToken'
 import { MagicLinkTokenRepositoryInterface } from '../../MagicLink/MagicLinkTokenRepositoryInterface'
 import { EmailSenderInterface } from '../../Email/EmailSenderInterface'
+import { createEmailDeliveryId } from '../../Email/EmailDeliveryId'
 
 import { GenerateMagicLinkCodeDto } from './GenerateMagicLinkCodeDto'
 import { safeErrorLogMetadata } from '../../Logging/SafeLog'
@@ -55,6 +56,12 @@ export class GenerateMagicLinkCode implements UseCaseInterface<{ emailed: true }
         dto.userIdentifier,
         'Your sign-in verification code',
         `Your one-time verification code is: ${code}\n\nThis code expires in ${GenerateMagicLinkCode.EXPIRATION_MINUTES} minutes.`,
+        {
+          deliverySource: 'account',
+          deliveryId: createEmailDeliveryId('magic-link', magicLinkToken.id.toString()),
+          expiresAt: expiresAt.getTime(),
+          supersessionKey: createEmailDeliveryId('magic-link-user', dto.userIdentifier),
+        },
       )
       if (!emailed) {
         return Result.fail('Could not deliver the magic-link verification code. Please try again.')

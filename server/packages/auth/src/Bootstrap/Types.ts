@@ -324,6 +324,8 @@ const TYPES = {
   Auth_TriggerPostSettingUpdateActions: Symbol.for('Auth_TriggerPostSettingUpdateActions'),
   Auth_TriggerEmailBackupForUser: Symbol.for('Auth_TriggerEmailBackupForUser'),
   Auth_TriggerEmailBackupForAllUsers: Symbol.for('Auth_TriggerEmailBackupForAllUsers'),
+  Auth_ReconcilePendingEmailBackupForUser: Symbol.for('Auth_ReconcilePendingEmailBackupForUser'),
+  Auth_EmailBackupStateRepository: Symbol.for('Auth_EmailBackupStateRepository'),
   Auth_TriggerNextcloudBackupForUser: Symbol.for('Auth_TriggerNextcloudBackupForUser'),
   Auth_TriggerNextcloudBackupForAllUsers: Symbol.for('Auth_TriggerNextcloudBackupForAllUsers'),
   Auth_NextcloudBackupStateStore: Symbol.for('Auth_NextcloudBackupStateStore'),
