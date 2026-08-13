@@ -41,6 +41,7 @@ describe('AdminController auth-server pass-through routes', () => {
    * as gateway-local: the completeness test below fails if this list drifts.
    */
   const gatewayLocalHandlers = new Set([
+    'getUserUsage',
     'getServerStatus',
     'listControllableServices',
     'restartContainer',

@@ -63,7 +63,7 @@ describe('AdminController server-status', () => {
   let serviceProxy: ServiceProxyInterface
   let endpointResolver: EndpointResolverInterface
   let updateCheckService: UpdateCheckService
-  let redis: { ping: jest.Mock }
+  let redis: { ping: jest.Mock; zrangebyscore: jest.Mock }
   let jsonMock: jest.Mock
   let statusMock: jest.Mock
 
@@ -113,6 +113,7 @@ describe('AdminController server-status', () => {
     statusMock = jest.fn(() => ({ json: jsonMock }))
     return {
       locals: { user: { uuid: 'admin-1' }, roles },
+      setHeader: jest.fn(),
       status: statusMock,
       json: jsonMock,
     } as unknown as Response
@@ -126,7 +127,10 @@ describe('AdminController server-status', () => {
       getStatus: jest.fn().mockResolvedValue({ configured: true, currentVersion: '1.2.3' }),
     } as unknown as UpdateCheckService
 
-    redis = { ping: jest.fn().mockResolvedValue('PONG') }
+    redis = {
+      ping: jest.fn().mockResolvedValue('PONG'),
+      zrangebyscore: jest.fn().mockResolvedValue([]),
+    }
   })
 
   it('rejects a non-admin requestor with 403 — NOT 401, which clients treat as an invalid session', async () => {
@@ -214,6 +218,99 @@ describe('AdminController server-status', () => {
     expect(jsonMock).toHaveBeenCalledWith(
       expect.objectContaining({ health: expect.objectContaining({ gateway: { redis: false } }) }),
     )
+  })
+
+  describe('per-user assistant usage', () => {
+    const targetUuid = '123e4567-e89b-42d3-a456-426614174000'
+
+    it('returns the effective token limits, current rolling windows, and newest retained events', async () => {
+      const now = Date.parse('2026-08-13T12:00:00.000Z')
+      const oneHourAgo = now - 60 * 60 * 1000
+      const sixHoursAgo = now - 6 * 60 * 60 * 1000
+      const dateNow = jest.spyOn(Date, 'now').mockReturnValue(now)
+      redis.zrangebyscore.mockResolvedValue([`${sixHoursAgo}:200:older`, `${oneHourAgo}:100:newer`])
+      const serverSettingsResolver = {
+        resolveAssistantTokenLimits: jest.fn().mockResolvedValue({ fiveHour: 500, weekly: 1_000 }),
+      } as unknown as ServerSettingsResolver
+      const response = responseWith([{ name: RoleName.NAMES.AdminUser }])
+
+      try {
+        await makeController({ serverSettingsResolver }).getUserUsage(
+          { params: { userUuid: targetUuid } } as unknown as Request,
+          response,
+        )
+      } finally {
+        dateNow.mockRestore()
+      }
+
+      expect(redis.zrangebyscore).toHaveBeenCalledWith(
+        `ai-token-usage:${targetUuid}`,
+        now - 7 * 24 * 60 * 60 * 1000,
+        '+inf',
+      )
+      expect(jsonMock).toHaveBeenCalledWith({
+        userUuid: targetUuid,
+        source: 'srn-local-metering',
+        capturedAt: '2026-08-13T12:00:00.000Z',
+        meteringAvailable: true,
+        tokenMeasurement: 'provider-reported-or-estimated',
+        tokens: {
+          fiveHour: {
+            usedTokens: 100,
+            limitTokens: 500,
+            resetsAt: '2026-08-13T16:00:00.000Z',
+          },
+          weekly: {
+            usedTokens: 300,
+            limitTokens: 1_000,
+            resetsAt: '2026-08-20T06:00:00.000Z',
+          },
+        },
+        history: {
+          retentionDays: 7,
+          completeLifetimeHistory: false,
+          totalEvents: 2,
+          truncated: false,
+          events: [
+            { occurredAt: '2026-08-13T11:00:00.000Z', tokens: 100 },
+            { occurredAt: '2026-08-13T06:00:00.000Z', tokens: 200 },
+          ],
+        },
+      })
+    })
+
+    it('reports unavailable/null usage instead of pretending an unreadable meter is empty', async () => {
+      redis.zrangebyscore.mockRejectedValue(new Error('redis unavailable'))
+      const serverSettingsResolver = {
+        resolveAssistantTokenLimits: jest.fn().mockResolvedValue({ fiveHour: 50, weekly: 500 }),
+      } as unknown as ServerSettingsResolver
+      const response = responseWith([{ name: RoleName.NAMES.AdminUser }])
+
+      await makeController({ serverSettingsResolver }).getUserUsage(
+        { params: { userUuid: targetUuid } } as unknown as Request,
+        response,
+      )
+
+      expect(jsonMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          meteringAvailable: false,
+          tokens: {
+            fiveHour: { usedTokens: null, limitTokens: 50, resetsAt: null, unavailable: true },
+            weekly: { usedTokens: null, limitTokens: 500, resetsAt: null, unavailable: true },
+          },
+          history: expect.objectContaining({ totalEvents: null, events: [] }),
+        }),
+      )
+    })
+
+    it('rejects non-admins before reading another user meter', async () => {
+      const response = responseWith([{ name: RoleName.NAMES.CoreUser }])
+
+      await makeController().getUserUsage({ params: { userUuid: targetUuid } } as unknown as Request, response)
+
+      expect(statusMock).toHaveBeenCalledWith(403)
+      expect(redis.zrangebyscore).not.toHaveBeenCalled()
+    })
   })
 
   it('rejects a non-admin requestor for logs with 403 and never reads any logs', async () => {

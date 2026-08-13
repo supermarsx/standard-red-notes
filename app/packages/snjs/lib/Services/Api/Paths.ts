@@ -59,6 +59,7 @@ const AdminPaths = {
   // Standard Red Notes: read-only tail of the server logs (all services).
   adminLogs: '/v1/admin/logs',
   userFeatureFlags: (userUuid: string) => `/v1/admin/users/${userUuid}/feature-flags`,
+  userUsage: (userUuid: string) => `/v1/admin/users/${userUuid}/usage`,
   userBanStatus: (email: string) => `/v1/admin/users/${encodeURIComponent(email)}/ban-status`,
   setUserBanStatus: (userUuid: string) => `/v1/admin/users/${userUuid}/ban-status`,
   // Standard Red Notes: reversible administrative SUSPENSION (distinct from ban).

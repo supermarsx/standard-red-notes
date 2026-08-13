@@ -48,6 +48,26 @@ const makeApplication = () => ({
     adminListUsers: jest.fn().mockResolvedValue({ data: { users: [], total: 0 } }),
     adminGetAvailableRoles: jest.fn().mockResolvedValue({ data: { roleNames: [] } }),
     adminGetUserFeatureFlags: jest.fn().mockResolvedValue({ data: { flags: {}, storage: null } }),
+    adminGetUserUsage: jest.fn().mockResolvedValue({
+      data: {
+        userUuid: TARGET_UUID,
+        source: 'srn-local-metering',
+        capturedAt: '2026-08-13T12:00:00.000Z',
+        meteringAvailable: true,
+        tokenMeasurement: 'provider-reported-or-estimated',
+        tokens: {
+          fiveHour: { usedTokens: 0, limitTokens: 0, resetsAt: '2026-08-13T12:00:00.000Z' },
+          weekly: { usedTokens: 0, limitTokens: 0, resetsAt: '2026-08-13T12:00:00.000Z' },
+        },
+        history: {
+          retentionDays: 7,
+          completeLifetimeHistory: false,
+          totalEvents: 0,
+          truncated: false,
+          events: [],
+        },
+      },
+    }),
     adminSetUserFeatureFlag: jest.fn().mockResolvedValue({ data: { success: true } }),
     adminGetUserBanStatus: jest.fn().mockResolvedValue({ data: { banned: false } }),
     adminGetUserSuspensionStatus: jest.fn().mockResolvedValue({ data: { suspended: false } }),
@@ -88,7 +108,7 @@ const renderTab = async (application: ReturnType<typeof makeApplication>) => {
       }),
     )
   })
-  // Flush the load effect's Promise.all (flags/ban/suspension/permissions) so
+  // Flush the load effect's Promise.all (flags/usage/ban/suspension/permissions) so
   // flagsLoading clears and the detail sections render.
   await act(async () => {
     await Promise.resolve()
@@ -192,5 +212,47 @@ describe('AdminUsersTab — durable AI access control', () => {
     expect(application.legacyApi.adminGetUserFeatureFlags).toHaveBeenCalledTimes(2)
     expect(aiAccessCheckbox().checked).toBe(false)
     expect(aiAccessCheckbox().disabled).toBe(false)
+  })
+})
+
+describe('AdminUsersTab — authoritative per-user usage', () => {
+  it('renders rolling token limits, retained events, and persisted storage usage/quota', async () => {
+    const application = makeApplication()
+    application.legacyApi.adminGetUserUsage.mockResolvedValueOnce({
+      data: {
+        userUuid: TARGET_UUID,
+        source: 'srn-local-metering',
+        capturedAt: '2026-08-13T12:00:00.000Z',
+        meteringAvailable: true,
+        tokenMeasurement: 'provider-reported-or-estimated',
+        tokens: {
+          fiveHour: { usedTokens: 120, limitTokens: 500, resetsAt: '2026-08-13T16:00:00.000Z' },
+          weekly: { usedTokens: 420, limitTokens: 5_000, resetsAt: '2026-08-20T06:00:00.000Z' },
+        },
+        history: {
+          retentionDays: 7,
+          completeLifetimeHistory: false,
+          totalEvents: 1,
+          truncated: false,
+          events: [{ occurredAt: '2026-08-13T11:00:00.000Z', tokens: 42 }],
+        },
+      },
+    })
+    application.legacyApi.adminGetUserFeatureFlags.mockResolvedValueOnce({
+      data: {
+        flags: {},
+        storage: { hasSubscription: true, uploadBytesUsed: 2_048, uploadBytesLimit: 4_096 },
+      },
+    })
+
+    await renderTab(application)
+
+    expect(application.legacyApi.adminGetUserUsage).toHaveBeenCalledWith(TARGET_UUID)
+    expect(container.textContent).toContain('AI token usage')
+    expect(container.textContent).toContain('120 tokens of 500 tokens')
+    expect(container.textContent).toContain('42 tokens')
+    expect(container.textContent).toContain('Only rolling seven-day events are retained')
+    expect(container.textContent).toContain('2048 B')
+    expect(container.textContent).toContain('4096 B')
   })
 })

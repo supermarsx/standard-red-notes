@@ -84,6 +84,48 @@ const V0_API_VERSION = '20240226'
 
 type InvalidSessionObserver = (revoked: boolean) => void
 
+export type AdminUserStorageUsage = {
+  hasSubscription: boolean
+  uploadBytesLimit: number | null
+  uploadBytesUsed: number | null
+}
+
+export type AdminUserFeatureFlagsResponse = {
+  userUuid: string
+  flags: Record<string, string | null>
+  nextcloudAppPasswordConfigured: boolean
+  storage: AdminUserStorageUsage | null
+}
+
+export type AdminUserTokenUsageWindow = {
+  usedTokens: number | null
+  /** Effective per-user ceiling; 0 means unlimited. */
+  limitTokens: number
+  /** Next oldest-token roll-off, not a fixed-window full reset. */
+  resetsAt: string | null
+  unavailable?: boolean
+}
+
+/** Admin-only SRN-local rolling assistant usage. This is not provider billing. */
+export type AdminUserUsageResponse = {
+  userUuid: string
+  source: 'srn-local-metering'
+  capturedAt: string
+  meteringAvailable: boolean
+  tokenMeasurement: 'provider-reported-or-estimated'
+  tokens: {
+    fiveHour: AdminUserTokenUsageWindow
+    weekly: AdminUserTokenUsageWindow
+  }
+  history: {
+    retentionDays: 7
+    completeLifetimeHistory: false
+    totalEvents: number | null
+    truncated: boolean
+    events: Array<{ occurredAt: string; tokens: number }>
+  }
+}
+
 export class LegacyApiService
   extends AbstractService<ApiServiceEvent, ApiServiceEventData>
   implements
@@ -763,12 +805,21 @@ export class LegacyApiService
     })
   }
 
-  async adminGetUserFeatureFlags(userUuid: UuidString): Promise<HttpResponse> {
-    return this.tokenRefreshableRequest({
+  async adminGetUserFeatureFlags(userUuid: UuidString): Promise<HttpResponse<AdminUserFeatureFlagsResponse>> {
+    return this.tokenRefreshableRequest<AdminUserFeatureFlagsResponse>({
       verb: HttpVerb.Get,
       url: joinPaths(this.host, Paths.v1.userFeatureFlags(userUuid)),
       authentication: this.getSessionAccessToken(),
       fallbackErrorMessage: 'Failed to get user feature flags.',
+    })
+  }
+
+  async adminGetUserUsage(userUuid: UuidString): Promise<HttpResponse<AdminUserUsageResponse>> {
+    return this.tokenRefreshableRequest<AdminUserUsageResponse>({
+      verb: HttpVerb.Get,
+      url: joinPaths(this.host, Paths.v1.userUsage(userUuid)),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to get user usage.',
     })
   }
 

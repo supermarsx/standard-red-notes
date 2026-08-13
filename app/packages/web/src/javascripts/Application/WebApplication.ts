@@ -1144,6 +1144,45 @@ export class WebApplication extends SNApplication implements WebApplicationInter
   }
 
   /**
+   * Authenticated JSON mutation helper for the small set of server control-plane
+   * endpoints whose REST contract requires PUT or DELETE. Keeping the method
+   * allow-list here prevents a caller-controlled verb while preserving the same
+   * authentication and non-JSON-response handling as {@link serverJsonRequest}.
+   */
+  public async serverJsonRequestWithMethod<T>(
+    path: string,
+    method: 'PUT' | 'DELETE',
+    body?: unknown,
+    signal?: AbortSignal,
+  ): Promise<{ status: number; ok: boolean; data: T }> {
+    const host = this.getHost.execute().getValue()
+    const session = (this.sessions as unknown as { getSession?: () => unknown }).getSession?.()
+    const accessToken = extractAccessToken(session)
+    const url = `${host.replace(/\/$/, '')}${path}`
+    const hasBody = body !== undefined
+
+    const response = await fetch(url, {
+      method,
+      headers: {
+        ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
+        Accept: 'application/json',
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+      },
+      ...(hasBody ? { body: JSON.stringify(body) } : {}),
+      signal,
+    })
+
+    let data: T
+    try {
+      data = (await response.json()) as T
+    } catch {
+      data = {} as T
+    }
+
+    return { status: response.status, ok: response.ok, data }
+  }
+
+  /**
    * Authenticated JSON GET variant of {@link serverJsonRequest}. Unlike
    * {@link assistantConfigRequest} it returns the HTTP status alongside the
    * parsed body, so callers can distinguish "endpoint absent" (404 — e.g. a

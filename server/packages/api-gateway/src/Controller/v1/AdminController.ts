@@ -1,7 +1,7 @@
 import { Request, Response } from 'express'
 import { inject, optional } from 'inversify'
 import { BaseHttpController, controller, httpDelete, httpGet, httpPost, httpPut } from 'inversify-express-utils'
-import { EMAIL_DELIVERY_LIMITS, RoleName, validateEmailRecipient } from '@standardnotes/domain-core'
+import { EMAIL_DELIVERY_LIMITS, RoleName, Uuid, validateEmailRecipient } from '@standardnotes/domain-core'
 import { Role } from '@standardnotes/security'
 import { TYPES } from '../../Bootstrap/Types'
 import { ServiceProxyInterface } from '../../Service/Proxy/ServiceProxyInterface'
@@ -32,6 +32,45 @@ import { IpAccessListStore, IpAclList } from '../IpAccessList'
 import { RateLimitMetricsStore } from '../RateLimitMetrics'
 import { WorkflowsService } from '../../Service/Workflows/WorkflowsService'
 import { EmailProvider } from '../../Service/ReminderDelivery/Providers/EmailProvider'
+import { RedisTokenUsageStore } from '../../Service/Assistant/RedisTokenUsageStore'
+import {
+  buildWindowUsage,
+  FIVE_HOUR_WINDOW_MS,
+  TokenWindowUsage,
+  WEEKLY_WINDOW_MS,
+} from '../../Service/Assistant/tokenMetering'
+
+const ADMIN_USER_USAGE_HISTORY_LIMIT = 100
+
+type AdminUserUsageWindow = Omit<TokenWindowUsage, 'usedTokens' | 'resetsAt'> & {
+  usedTokens: number | null
+  resetsAt: string | null
+}
+
+/**
+ * Gateway-local, admin-only view of one user's assistant token meter. The event
+ * history is deliberately described as retained rolling data: Redis keeps at
+ * most seven days, and the stored token count may be provider-reported or the
+ * assistant's text-length estimate. It is never presented as provider billing.
+ */
+export type AdminUserUsageResponse = {
+  userUuid: string
+  source: 'srn-local-metering'
+  capturedAt: string
+  meteringAvailable: boolean
+  tokenMeasurement: 'provider-reported-or-estimated'
+  tokens: {
+    fiveHour: AdminUserUsageWindow
+    weekly: AdminUserUsageWindow
+  }
+  history: {
+    retentionDays: 7
+    completeLifetimeHistory: false
+    totalEvents: number | null
+    truncated: boolean
+    events: Array<{ occurredAt: string; tokens: number }>
+  }
+}
 
 /**
  * Standard Red Notes: one entry of the server-status `services` array — a
@@ -88,7 +127,12 @@ export class AdminController extends BaseHttpController {
     @inject(TYPES.ApiGateway_AUTH_SERVER_URL) @optional() private authServerUrl?: string,
     // Redis is only bound when a Redis cache is configured; its absence is
     // reported as "not configured" (null) rather than unhealthy.
-    @inject(TYPES.ApiGateway_Redis) @optional() private redis?: { ping(): Promise<string> },
+    @inject(TYPES.ApiGateway_Redis)
+    @optional()
+    private redis?: {
+      ping(): Promise<string>
+      zrangebyscore?(key: string, min: number | string, max: number | string): Promise<string[]>
+    },
     // Standard Red Notes: internal URLs of the other backend services, probed by
     // the extended server-status endpoint for their /healthcheck/readiness.
     // Optional so the controller constructs in tests and degrades to 'unknown'
@@ -187,6 +231,94 @@ export class AdminController extends BaseHttpController {
       ),
       request.body,
     )
+  }
+
+  /**
+   * Authoritative SRN-side assistant usage for one user. This is gateway-local
+   * because the assistant meter is written here, while file storage usage/quota
+   * remains authoritative in the existing auth feature-flags response consumed
+   * alongside this endpoint by the Users panel.
+   */
+  @httpGet('/users/:userUuid/usage', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async getUserUsage(request: Request, response: Response): Promise<void> {
+    if (!this.requestorIsAdmin(response)) {
+      response.status(403).json({ error: { message: 'Admin role required.' } })
+      return
+    }
+
+    const rawUserUuid = request.params.userUuid as string
+    const userUuidOrError = Uuid.create(rawUserUuid)
+    if (userUuidOrError.isFailed()) {
+      response.status(400).json({ error: { message: 'Invalid user uuid.' } })
+      return
+    }
+    const userUuid = userUuidOrError.getValue().value
+    const now = Date.now()
+    response.setHeader('Cache-Control', 'private, no-store')
+
+    let limits = { fiveHour: 0, weekly: 0 }
+    if (this.serverSettingsResolver) {
+      try {
+        limits = await this.serverSettingsResolver.resolveAssistantTokenLimits()
+      } catch {
+        // Meter reads remain useful when the settings overlay is temporarily
+        // unreadable; zero is the enforcement fallback and means unlimited.
+      }
+    }
+
+    const unavailableWindow = (limitTokens: number): AdminUserUsageWindow => ({
+      usedTokens: null,
+      limitTokens: limitTokens > 0 ? limitTokens : 0,
+      resetsAt: null,
+      unavailable: true,
+    })
+
+    let fiveHour = unavailableWindow(limits.fiveHour)
+    let weekly = unavailableWindow(limits.weekly)
+    let meteringAvailable = false
+    let totalEvents: number | null = null
+    let events: AdminUserUsageResponse['history']['events'] = []
+    let truncated = false
+
+    if (this.redis?.zrangebyscore) {
+      try {
+        const store = new RedisTokenUsageStore(this.redis as never)
+        const retainedEntries = await store.entriesWithinWeek(userUuid, now)
+        fiveHour = buildWindowUsage(retainedEntries, now, FIVE_HOUR_WINDOW_MS, limits.fiveHour)
+        weekly = buildWindowUsage(retainedEntries, now, WEEKLY_WINDOW_MS, limits.weekly)
+        meteringAvailable = true
+        totalEvents = retainedEntries.length
+        const recentEntries = [...retainedEntries]
+          .sort((left, right) => right.ts - left.ts)
+          .slice(0, ADMIN_USER_USAGE_HISTORY_LIMIT)
+        truncated = retainedEntries.length > recentEntries.length
+        events = recentEntries.map((entry) => ({
+          occurredAt: new Date(entry.ts).toISOString(),
+          tokens: entry.tokens,
+        }))
+      } catch {
+        // Keep explicit unavailable/null values. An empty array would otherwise
+        // falsely claim that the user has no usage rather than an unreadable meter.
+      }
+    }
+
+    const payload: AdminUserUsageResponse = {
+      userUuid,
+      source: 'srn-local-metering',
+      capturedAt: new Date(now).toISOString(),
+      meteringAvailable,
+      tokenMeasurement: 'provider-reported-or-estimated',
+      tokens: { fiveHour, weekly },
+      history: {
+        retentionDays: 7,
+        completeLifetimeHistory: false,
+        totalEvents,
+        truncated,
+        events,
+      },
+    }
+
+    response.json(payload)
   }
 
   @httpPut('/users/:userUuid/feature-flags', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)

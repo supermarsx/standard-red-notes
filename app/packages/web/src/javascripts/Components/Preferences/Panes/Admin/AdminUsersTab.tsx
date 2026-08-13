@@ -1,5 +1,12 @@
 import { FunctionComponent, useCallback, useEffect, useRef, useState } from 'react'
-import { HttpResponse, isErrorResponse } from '@standardnotes/snjs'
+import {
+  type AdminUserFeatureFlagsResponse,
+  type AdminUserStorageUsage,
+  type AdminUserTokenUsageWindow,
+  type AdminUserUsageResponse,
+  HttpResponse,
+  isErrorResponse,
+} from '@standardnotes/snjs'
 import {
   ADMIN_USERS_DEFAULT_PAGE_SIZE,
   AdminUserRow,
@@ -13,6 +20,13 @@ import {
   formatAdminUserSubscription,
 } from './adminHelpers'
 import { describeAdminUsersActiveFilters } from './adminUsersUi'
+import {
+  adminTokenUsageProgress,
+  describeAdminTokenRollOff,
+  describeAdminTokenWindow,
+  describeAdminUsageHistory,
+  formatAdminTokenCount,
+} from './adminUserUsage'
 import AdminPagination from './AdminPagination'
 import {
   BulkItemResult,
@@ -97,12 +111,6 @@ const BULK_FLAG_OPTIONS: { label: string; value: string }[] = [
 
 const pluralizeUsers = (count: number): string => (count === 1 ? 'user' : 'users')
 
-type StorageInfo = {
-  hasSubscription: boolean
-  uploadBytesLimit: number | null
-  uploadBytesUsed: number | null
-}
-
 type EffectivePermissions = {
   directRoleNames: string[]
   groupRoleNames: string[]
@@ -110,7 +118,7 @@ type EffectivePermissions = {
   effectivePermissionNames: string[]
 }
 
-const describeStorageLimit = (storage: StorageInfo | null): string => {
+const describeStorageLimit = (storage: AdminUserStorageUsage | null): string => {
   if (!storage || !storage.hasSubscription || storage.uploadBytesLimit === -1) {
     return 'Unlimited'
   }
@@ -121,6 +129,24 @@ const describeStorageLimit = (storage: StorageInfo | null): string => {
 }
 
 const formatLimitAmount = (amount: number): string => (Number.isInteger(amount) ? String(amount) : amount.toFixed(2))
+
+const TokenWindowSummary: FunctionComponent<{
+  label: string
+  window: AdminUserTokenUsageWindow
+}> = ({ label, window }) => {
+  const progress = adminTokenUsageProgress(window)
+
+  return (
+    <div className="border-border flex min-w-0 flex-col gap-1 rounded border p-3">
+      <Text className="text-xs font-semibold">{label}</Text>
+      <Text className="tabular-nums">{describeAdminTokenWindow(window)}</Text>
+      {progress !== null && (
+        <progress aria-label={`${label} token limit used`} className="h-2 w-full" max={100} value={progress} />
+      )}
+      <Text className="text-passive-1 text-xs">{describeAdminTokenRollOff(window)}</Text>
+    </div>
+  )
+}
 
 type Props = {
   application: WebApplication
@@ -155,7 +181,7 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
   const [nextcloudAppPasswordConfigured, setNextcloudAppPasswordConfigured] = useState(false)
   // Per-user SERVER storage limit (bytes; -1 = unlimited). Read from and written
   // to the user's subscription settings via the admin feature-flags endpoints.
-  const [storageInfo, setStorageInfo] = useState<StorageInfo | null>(null)
+  const [storageInfo, setStorageInfo] = useState<AdminUserStorageUsage | null>(null)
   const [storageLimitValue, setStorageLimitValue] = useState('')
   const [storageLimitUnit, setStorageLimitUnit] = useState<'MB' | 'GB' | 'unlimited'>('unlimited')
   const [savingStorageLimit, setSavingStorageLimit] = useState(false)
@@ -163,6 +189,9 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
   const [savingAiEnabled, setSavingAiEnabled] = useState(false)
   const aiSaveInFlight = useRef(false)
   const [savingLimit, setSavingLimit] = useState(false)
+  const [userUsage, setUserUsage] = useState<AdminUserUsageResponse | null>(null)
+  const [usageLoading, setUsageLoading] = useState(false)
+  const [usageError, setUsageError] = useState<string | null>(null)
 
   const [banned, setBanned] = useState(false)
   const [banningInProgress, setBanningInProgress] = useState(false)
@@ -208,15 +237,7 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
           addToast({ type: ToastType.Error, message: 'Failed to load user feature flags.' })
           return
         }
-        const data = (
-          response as {
-            data?: {
-              flags?: Record<string, string | null>
-              nextcloudAppPasswordConfigured?: boolean
-              storage?: StorageInfo | null
-            }
-          }
-        ).data
+        const data = (response as { data?: AdminUserFeatureFlagsResponse }).data
         const flags = data?.flags ?? {}
         setAiEnabled(flags[AI_ENABLED] !== 'false')
         setAiRequestLimit(flags[AI_REQUEST_LIMIT] ?? '')
@@ -250,6 +271,36 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
       }
     },
     [application],
+  )
+
+  const loadUserUsage = useCallback(
+    async (userUuid: string) => {
+      setUsageLoading(true)
+      setUsageError(null)
+      try {
+        const response = await application.legacyApi.adminGetUserUsage(userUuid)
+        if (isErrorResponse(response)) {
+          noteIfForbidden(response)
+          setUserUsage(null)
+          setUsageError('Usage data is not available on this server.')
+          return
+        }
+        const data = (response as { data?: AdminUserUsageResponse }).data
+        if (!data || data.userUuid !== userUuid) {
+          setUserUsage(null)
+          setUsageError('The server returned an invalid usage response.')
+          return
+        }
+        setUserUsage(data)
+      } catch (error) {
+        console.error(error)
+        setUserUsage(null)
+        setUsageError('Usage data could not be loaded.')
+      } finally {
+        setUsageLoading(false)
+      }
+    },
+    [application, noteIfForbidden],
   )
 
   const loadBanStatus = useCallback(
@@ -361,13 +412,16 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
     setDeleteEmailInput('')
     setPermissions(null)
     setPermissionsVisible(false)
+    setUserUsage(null)
+    setUsageError(null)
     void Promise.all([
       loadFlags(user.uuid),
+      loadUserUsage(user.uuid),
       loadBanStatus(user.email),
       loadSuspensionStatus(user.email),
       loadPermissions(user.uuid),
     ])
-  }, [user, loadFlags, loadBanStatus, loadSuspensionStatus, loadPermissions])
+  }, [user, loadFlags, loadUserUsage, loadBanStatus, loadSuspensionStatus, loadPermissions])
 
   const lookupUser = useCallback(async () => {
     if (!email.trim()) {
@@ -1605,8 +1659,11 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
               <HorizontalSeparator classes="my-3" />
 
               <div className="flex flex-col gap-2">
-                <Subtitle>AI request / token limit</Subtitle>
-                <Text>Maximum number of AI requests/tokens allowed for this user. Leave blank for no limit.</Text>
+                <Subtitle>Daily AI request limit</Subtitle>
+                <Text>
+                  Maximum assistant requests allowed for this user per UTC day. Leave blank to inherit the server-wide
+                  daily limit (unlimited when the server-wide limit is 0).
+                </Text>
                 <div className="mt-1 flex items-center gap-3">
                   <DecoratedInput
                     className={{ container: 'w-40' }}
@@ -1618,6 +1675,76 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
                   <Button label="Save limit" onClick={() => void saveRequestLimit()} disabled={savingLimit} />
                 </div>
               </div>
+
+              <HorizontalSeparator classes="my-3" />
+
+              <section aria-label="AI token usage" className="border-border flex flex-col gap-3 rounded border p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex min-w-0 flex-col">
+                    <Subtitle>AI token usage</Subtitle>
+                    <Text>
+                      SRN-side usage for the rolling 5-hour and 7-day limits. Counts can be provider-reported or
+                      estimated; they are not provider billing data.
+                    </Text>
+                  </div>
+                  <Button
+                    small
+                    label="Refresh usage"
+                    onClick={() => void loadUserUsage(user.uuid)}
+                    disabled={usageLoading}
+                  />
+                </div>
+
+                {usageLoading && !userUsage ? (
+                  <Spinner className="h-5 w-5" />
+                ) : usageError ? (
+                  <Text>{usageError}</Text>
+                ) : userUsage ? (
+                  <>
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                      <TokenWindowSummary label="Rolling 5 hours" window={userUsage.tokens.fiveHour} />
+                      <TokenWindowSummary label="Rolling 7 days" window={userUsage.tokens.weekly} />
+                    </div>
+
+                    <div className="flex flex-col gap-1">
+                      <Text className="text-xs font-semibold">Retained usage events</Text>
+                      <Text className="text-passive-1 text-xs">
+                        {describeAdminUsageHistory(userUsage.history)} Only rolling seven-day events are retained; this
+                        is not lifetime history. A rolling window does not reset all at once—its oldest events fall away
+                        individually.
+                      </Text>
+                    </div>
+
+                    {userUsage.history.events.length > 0 && (
+                      <div className="border-border max-h-52 overflow-auto rounded border">
+                        <table className="w-full text-left text-xs">
+                          <thead className="border-border border-b">
+                            <tr>
+                              <th className="px-3 py-2 font-semibold">Time</th>
+                              <th className="px-3 py-2 text-right font-semibold">Metered tokens</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {userUsage.history.events.map((event, index) => (
+                              <tr
+                                className="border-border border-b last:border-b-0"
+                                key={`${event.occurredAt}-${index}`}
+                              >
+                                <td className="px-3 py-2 whitespace-nowrap">
+                                  {new Date(event.occurredAt).toLocaleString()}
+                                </td>
+                                <td className="px-3 py-2 text-right whitespace-nowrap tabular-nums">
+                                  {formatAdminTokenCount(event.tokens)}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </>
+                ) : null}
+              </section>
 
               <HorizontalSeparator classes="my-3" />
 
