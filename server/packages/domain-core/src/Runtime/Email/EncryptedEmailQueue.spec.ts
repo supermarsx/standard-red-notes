@@ -18,6 +18,7 @@ import {
   emailQueueWorkerReadinessValue,
   emailQueueSupersessionIdentity,
   encryptEmailQueuePayload,
+  isRedisClusterTopology,
   RedisEncryptedEmailQueueProducer,
   RedisEncryptedEmailQueueProducerOptions,
   validateEmailQueueJob,
@@ -253,6 +254,21 @@ describe('email delivery queue keys and worker readiness', () => {
     expect(identity).not.toBe(emailQueueSupersessionIdentity('b'.repeat(64), callerKey))
   })
 
+  it.each(['', '../private', 'private key', 'a'.repeat(129)])(
+    'rejects unsafe supersession identity %p before deriving or persisting it',
+    (callerKey) => {
+      expect(() => emailQueueSupersessionIdentity(SECRET, callerKey)).toThrow('supersession key is invalid')
+    },
+  )
+
+  it('detects Redis Cluster clients by capability rather than calling the topology API', () => {
+    const nodes = jest.fn()
+
+    expect(isRedisClusterTopology({ nodes })).toBe(true)
+    expect(isRedisClusterTopology({})).toBe(false)
+    expect(nodes).not.toHaveBeenCalled()
+  })
+
   it.each([
     [emailQueueWorkerReadinessValue(SECRET), true],
     [EMAIL_QUEUE_WORKER_READINESS_VALUE, false],
@@ -311,6 +327,15 @@ describe('email queue AOF persistence confirmation', () => {
       'The email delivery queue AOF persistence timeout is invalid.',
     )
     expect(call).not.toHaveBeenCalled()
+  })
+
+  it('rejects Redis Cluster before invoking its ambiguous keyless persistence command', async () => {
+    const waitaof = jest.fn()
+
+    await expect(confirmEmailQueueAofPersistence({ waitaof, nodes: jest.fn().mockReturnValue([]) })).rejects.toThrow(
+      'cannot safely confirm AOF persistence in Redis Cluster mode',
+    )
+    expect(waitaof).not.toHaveBeenCalled()
   })
 })
 
@@ -458,6 +483,29 @@ describe('encrypted Redis email queue producer', () => {
     },
   )
 
+  it.each(['', '../job', 'job with spaces', 'a'.repeat(129)])(
+    'rejects unsafe cancellation delivery id %p before persistence or mutation',
+    async (deliveryId) => {
+      const redis = { eval: jest.fn(), waitaof: jest.fn() }
+      const producer = new RedisEncryptedEmailQueueProducer(redis, SECRET)
+
+      await expect(producer.cancelDelivery(deliveryId)).rejects.toThrow('job is invalid')
+      expect(redis.waitaof).not.toHaveBeenCalled()
+      expect(redis.eval).not.toHaveBeenCalled()
+    },
+  )
+
+  it('rejects cancellation in Redis Cluster before persistence or mutation', async () => {
+    const redis = { eval: jest.fn(), waitaof: jest.fn(), nodes: jest.fn().mockReturnValue([]) }
+    const producer = new RedisEncryptedEmailQueueProducer(redis, SECRET)
+
+    await expect(producer.cancelDelivery('job-1')).rejects.toThrow(
+      'cannot safely confirm AOF persistence in Redis Cluster mode',
+    )
+    expect(redis.waitaof).not.toHaveBeenCalled()
+    expect(redis.eval).not.toHaveBeenCalled()
+  })
+
   it('fails closed when Redis cannot reserve an exactly-accounted cancellation fence', async () => {
     const redis = { eval: jest.fn().mockResolvedValue(-2), waitaof: jest.fn().mockResolvedValue([1, 0]) }
     const producer = new RedisEncryptedEmailQueueProducer(redis, SECRET)
@@ -471,6 +519,14 @@ describe('encrypted Redis email queue producer', () => {
     const producer = new RedisEncryptedEmailQueueProducer(redis, SECRET)
 
     await expect(producer.cancelDelivery('job-1')).rejects.toThrow('invalid cancellation state')
+    expect(redis.waitaof).toHaveBeenCalledTimes(1)
+  })
+
+  it('fails closed when Redis returns an unknown cancellation result', async () => {
+    const redis = { eval: jest.fn().mockResolvedValue(0), waitaof: jest.fn().mockResolvedValue([1, 0]) }
+    const producer = new RedisEncryptedEmailQueueProducer(redis, SECRET)
+
+    await expect(producer.cancelDelivery('job-1')).rejects.toThrow('invalid cancellation result')
     expect(redis.waitaof).toHaveBeenCalledTimes(1)
   })
 
@@ -716,6 +772,7 @@ describe('encrypted Redis email queue producer', () => {
     [-1, 'The encrypted email delivery job exceeds the per-job storage limit.'],
     [-2, 'The email delivery queue has reached its encrypted storage budget.'],
     [-3, 'The email delivery id is already bound to a different message.'],
+    [-4, 'The email delivery id was cancelled or superseded and cannot be replayed.'],
     [3, 'The email delivery queue returned an invalid enqueue result.'],
     ['invalid', 'The email delivery queue returned an invalid enqueue result.'],
   ])('maps queue storage result %p to a non-sensitive error', async (result, expectedMessage) => {
@@ -830,6 +887,14 @@ describe('email delivery queue message validation', () => {
     expect(() => validateEmailQueueMessage(invalidMessage)).toThrow('The email body is too large.')
   })
 
+  it('enforces the aggregate UTF-8 byte budget across otherwise bounded text and HTML bodies', () => {
+    const multibyteBody = '€'.repeat(3_500_000)
+
+    expect(() => validateEmailQueueMessage(message({ text: multibyteBody, html: multibyteBody }))).toThrow(
+      'aggregate content limit',
+    )
+  })
+
   it('rejects a non-array or oversized attachment collection', () => {
     expect(() => validateEmailQueueMessage(asMessage({ ...message(), attachments: {} }))).toThrow(
       'Email attachments are invalid.',
@@ -897,6 +962,29 @@ describe('email delivery queue message validation', () => {
         }),
       ),
     ).toThrow('aggregate content limit')
+  })
+
+  it('rechecks aggregate size after decoding a mutable attachment input', () => {
+    const decodedContent = Buffer.alloc(6 * 1024 * 1024)
+    const largeBase64 = decodedContent.toString('base64')
+    let contentReads = 0
+    const attachment = {
+      filename: 'mutable.bin',
+      get contentBase64(): string {
+        contentReads += 1
+        return contentReads <= 4 ? '' : largeBase64
+      },
+    }
+
+    expect(() =>
+      validateEmailQueueMessage(
+        message({
+          text: '€'.repeat(5_000_000),
+          attachments: [attachment],
+        }),
+      ),
+    ).toThrow('aggregate content limit')
+    expect(contentReads).toBe(6)
   })
 
   it('normalizes the recipient and returns defensive attachment copies', () => {
