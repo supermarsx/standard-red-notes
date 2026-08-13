@@ -10,6 +10,7 @@ import { Subtitle, Text, Title } from '@/Components/Preferences/PreferencesCompo
 import PreferencesSegment from '@/Components/Preferences/PreferencesComponents/PreferencesSegment'
 import Spinner from '@/Components/Spinner/Spinner'
 import { AdminServerSettings, settingSource, settingSourceChipClass, settingSourceLabel } from './adminHelpers'
+import EmailDeliveryControlPlane from './EmailDeliveryControlPlane'
 
 type EmailDeliveryPatch = Parameters<WebApplication['legacyApi']['adminSetServerSettings']>[0]
 
@@ -318,6 +319,8 @@ const AdminEmailDeliveryTab: FunctionComponent<Props> = ({
           </div>
         </div>
       )}
+
+      <EmailDeliveryControlPlane application={application} noteIfForbidden={noteIfForbidden} />
     </PreferencesSegment>
   )
 }
