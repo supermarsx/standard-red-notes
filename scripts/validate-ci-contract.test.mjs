@@ -614,6 +614,26 @@ test("the required stack cannot skip encrypted two-editor convergence", () => {
   );
 });
 
+test("the required stack cannot skip durable email queue and delivery integration", () => {
+  for (const [command, replacement, expected] of [
+    [
+      "yarn test:email-redis:compose",
+      "echo disabled-email-redis-integration",
+      /container-smoke required durable email queue integration/,
+    ],
+    [
+      "yarn test:email-delivery:compose",
+      "echo disabled-email-delivery-integration",
+      /container-smoke required queued SMTP delivery integration/,
+    ],
+  ]) {
+    const files = withFileChanged(".github/workflows/ci.yml", (content) =>
+      content.replace(command, replacement),
+    );
+    assert.match(validateCiContract(files).join("\n"), expected);
+  }
+});
+
 test("the disposable stack preserves server runtime logs on failure", () => {
   const files = withFileChanged(".github/workflows/ci.yml", (content) =>
     content.replace(

@@ -1,5 +1,10 @@
 #!/bin/bash
 
+# Every generated per-service dotenv contains credentials. A restrictive umask
+# protects newly created files, while the explicit chmod calls below also repair
+# modes retained by files created by older images.
+umask 077
+
 # usage: file_env VAR [DEFAULT]
 #    ie: file_env 'XYZ_DB_PASSWORD' 'example'
 # (will allow for "$XYZ_DB_PASSWORD_FILE" to fill in the value of
@@ -196,6 +201,7 @@ fi
 # operator-managed secret while keeping the auth service's dotenv contract
 # unchanged. The value is written to api-gateway/.env below and never logged.
 export API_GATEWAY_EMAIL_DELIVERY_ENCRYPTION_KEY="$AUTH_SERVER_ENCRYPTION_SERVER_KEY"
+export AUTH_SERVER_EMAIL_DELIVERY_ENCRYPTION_KEY="$AUTH_SERVER_ENCRYPTION_SERVER_KEY"
 
 ########################
 # INSECURE-DEFAULT GUARD #
@@ -354,6 +360,7 @@ if [ -z "$AUTH_SERVER_U2F_REQUIRE_USER_VERIFICATION" ]; then
 fi
 
 printenv | grep AUTH_SERVER_ | sed 's/AUTH_SERVER_//g' > /opt/server/packages/auth/.env
+chmod 600 /opt/server/packages/auth/.env
 
 ##################
 # SYNCING SERVER #
@@ -417,6 +424,7 @@ file_env 'SYNCING_SERVER_S3_ACCESS_KEY_ID'
 file_env 'SYNCING_SERVER_S3_SECRET_ACCESS_KEY'
 
 printenv | grep SYNCING_SERVER_ | sed 's/SYNCING_SERVER_//g' > /opt/server/packages/syncing-server/.env
+chmod 600 /opt/server/packages/syncing-server/.env
 
 
 ################
@@ -477,6 +485,7 @@ if [ -z "$FILES_SERVER_SQS_ENDPOINT" ]; then
 fi
 
 printenv | grep FILES_SERVER_ | sed 's/FILES_SERVER_//g' > /opt/server/packages/files/.env
+chmod 600 /opt/server/packages/files/.env
 
 #############
 # REVISIONS #
@@ -525,6 +534,7 @@ if [ -z "$REVISIONS_SERVER_SQS_ENDPOINT" ]; then
 fi
 
 printenv | grep REVISIONS_SERVER_ | sed 's/REVISIONS_SERVER_//g' > /opt/server/packages/revisions/.env
+chmod 600 /opt/server/packages/revisions/.env
 
 ###############
 # API GATEWAY #
@@ -558,6 +568,7 @@ fi
 export API_GATEWAY_FILES_SERVER_URL=$PUBLIC_FILES_SERVER_URL
 
 printenv | grep API_GATEWAY_ | sed 's/API_GATEWAY_//g' > /opt/server/packages/api-gateway/.env
+chmod 600 /opt/server/packages/api-gateway/.env
 
 # Run supervisor
 

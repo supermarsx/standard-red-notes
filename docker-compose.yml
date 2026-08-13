@@ -133,6 +133,29 @@ x-server-env: &server-env
   API_GATEWAY_SMTP_FROM: ${SMTP_FROM:-}
   API_GATEWAY_SMTP_SECURE: ${SMTP_SECURE:-}
   API_GATEWAY_SMTP_ALLOW_INSECURE: ${SMTP_ALLOW_INSECURE:-false}
+  # Durable multi-relay delivery. Auth is the queue producer; the API gateway
+  # owns the worker, relay fallback/rate limits, redacted logs, and admin API.
+  # Shared queue bounds MUST remain identical in both process environments.
+  AUTH_SERVER_EMAIL_QUEUE_MAX_ATTEMPTS: ${EMAIL_QUEUE_MAX_ATTEMPTS:-5}
+  API_GATEWAY_EMAIL_QUEUE_MAX_ATTEMPTS: ${EMAIL_QUEUE_MAX_ATTEMPTS:-5}
+  # Both sides default to the existing server key; this explicit mapping keeps
+  # split-role images on the same purpose-derived queue identity without a new secret.
+  AUTH_SERVER_EMAIL_DELIVERY_ENCRYPTION_KEY: ${AUTH_SERVER_ENCRYPTION_SERVER_KEY}
+  API_GATEWAY_EMAIL_DELIVERY_ENCRYPTION_KEY: ${AUTH_SERVER_ENCRYPTION_SERVER_KEY}
+  AUTH_SERVER_EMAIL_QUEUE_RETENTION_MS: ${EMAIL_QUEUE_RETENTION_MS:-2592000000}
+  API_GATEWAY_EMAIL_QUEUE_RETENTION_MS: ${EMAIL_QUEUE_RETENTION_MS:-2592000000}
+  AUTH_SERVER_EMAIL_QUEUE_MAX_JOB_BYTES: ${EMAIL_QUEUE_MAX_JOB_BYTES:-26214400}
+  API_GATEWAY_EMAIL_QUEUE_MAX_JOB_BYTES: ${EMAIL_QUEUE_MAX_JOB_BYTES:-26214400}
+  AUTH_SERVER_EMAIL_QUEUE_MAX_TOTAL_BYTES: ${EMAIL_QUEUE_MAX_TOTAL_BYTES:-67108864}
+  API_GATEWAY_EMAIL_QUEUE_MAX_TOTAL_BYTES: ${EMAIL_QUEUE_MAX_TOTAL_BYTES:-67108864}
+  API_GATEWAY_EMAIL_QUEUE_LEASE_MS: ${EMAIL_QUEUE_LEASE_MS:-120000}
+  API_GATEWAY_EMAIL_QUEUE_DEAD_RETENTION_MS: ${EMAIL_QUEUE_DEAD_RETENTION_MS:-2592000000}
+  API_GATEWAY_EMAIL_DELIVERY_WORKER_INTERVAL_MS: ${EMAIL_DELIVERY_WORKER_INTERVAL_MS:-5000}
+  API_GATEWAY_EMAIL_DELIVERY_WORKER_BATCH_SIZE: ${EMAIL_DELIVERY_WORKER_BATCH_SIZE:-25}
+  API_GATEWAY_EMAIL_DELIVERY_RETRY_BASE_MS: ${EMAIL_DELIVERY_RETRY_BASE_MS:-30000}
+  API_GATEWAY_EMAIL_DELIVERY_RETRY_MAX_MS: ${EMAIL_DELIVERY_RETRY_MAX_MS:-21600000}
+  API_GATEWAY_EMAIL_DELIVERY_LOG_RETENTION_MS: ${EMAIL_DELIVERY_LOG_RETENTION_MS:-2592000000}
+  API_GATEWAY_EMAIL_DELIVERY_LOG_MAX_ENTRIES: ${EMAIL_DELIVERY_LOG_MAX_ENTRIES:-10000}
   AUTH_SERVER_EMAIL_BACKUPS_ENABLED: ${EMAIL_BACKUPS_ENABLED:-false}
   # Both services must agree on the attachment cap and local backup directory.
   AUTH_SERVER_EMAIL_ATTACHMENT_MAX_BYTE_SIZE: ${EMAIL_ATTACHMENT_MAX_BYTE_SIZE:-10485760}
@@ -469,6 +492,10 @@ services:
     init: true
     mem_limit: ${SERVER_MEM_LIMIT:-2g}
     pids_limit: 2048
+    # Provider calls are bounded to 30s; allow the gateway to stop heartbeating
+    # readiness, durably settle its current claim, and close HTTP without SIGKILL.
+    # Supervisord gives the gateway 60s, with 15s left for supervisor teardown.
+    stop_grace_period: 75s
     environment:
       <<: *server-env
     depends_on:
@@ -744,6 +771,8 @@ services:
         "redis-server",
         "--appendonly",
         "yes",
+        "--appendfsync",
+        "${CACHE_APPENDFSYNC:-everysec}",
         "--maxmemory",
         "${CACHE_MAXMEMORY:-192mb}",
         "--maxmemory-policy",

@@ -842,6 +842,14 @@ export function validateCiContract(files) {
       "docker compose up -d --no-build --wait --wait-timeout 900",
       "bounded disposable stack startup",
     ],
+    [
+      "yarn test:email-redis:compose",
+      "required durable email queue integration",
+    ],
+    [
+      "yarn test:email-delivery:compose",
+      "required queued SMTP delivery integration",
+    ],
     ["ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY", "assistant pairing key"],
     ["-e REQUIRE_GATEWAY=1", "required realtime gateway mode"],
     [
