@@ -13,6 +13,16 @@ import { NativeFeatureIdentifier } from '@standardnotes/features'
 export type ColorSchemeMode = 'manual' | 'auto' | 'light' | 'dark'
 
 /**
+ * Increment when persisted color-scheme semantics need a one-time migration.
+ * Version 1 changes the product default from OS-following Auto to dark-first.
+ * Releases before this marker used the same stored `auto` value for both the
+ * implicit default and an explicit Auto choice, so they cannot be distinguished.
+ * The migration deliberately resets that ambiguous state once; explicit choices
+ * made after version 1 are preserved.
+ */
+export const CurrentColorSchemeModeVersion = 1
+
+/**
  * Standard Red Notes: persisted shape for the user-customizable Super editor
  * toolbar. `groupOrder` is a list of stable group ids (any not listed fall back
  * to their default position); `hiddenButtonIds` lists buttons the user turned
@@ -60,6 +70,7 @@ export enum LocalPrefKey {
   // `manual` preserves the theme selected from Quick Settings, `auto` follows
   // the OS color scheme, and `light`/`dark` force Standard Blue / Standard Red.
   ColorSchemeMode = 'colorSchemeMode',
+  ColorSchemeModeVersion = 'colorSchemeModeVersion',
   CustomThemes = 'customThemes',
 
   EditorMonospaceEnabled = 'monospaceFont',
@@ -85,6 +96,7 @@ export type LocalPrefValue = {
   [LocalPrefKey.AutoLightThemeIdentifier]: string
   [LocalPrefKey.AutoDarkThemeIdentifier]: string
   [LocalPrefKey.ColorSchemeMode]: ColorSchemeMode
+  [LocalPrefKey.ColorSchemeModeVersion]: number
   [LocalPrefKey.CustomThemes]: CustomThemesPreference
 
   [LocalPrefKey.EditorMonospaceEnabled]: boolean
@@ -103,9 +115,9 @@ export const LocalPrefDefaults = {
   [LocalPrefKey.UseTranslucentUI]: true,
   [LocalPrefKey.AutoLightThemeIdentifier]: 'Default',
   [LocalPrefKey.AutoDarkThemeIdentifier]: NativeFeatureIdentifier.TYPES.DarkTheme,
-  // Standard Red Notes: default to Auto so the app follows the OS color scheme
-  // out of the box (dark -> Standard Red, light -> Standard Blue).
-  [LocalPrefKey.ColorSchemeMode]: 'auto',
+  // Standard Red Notes is dark-first. Auto and Light remain explicit choices.
+  [LocalPrefKey.ColorSchemeMode]: 'dark',
+  [LocalPrefKey.ColorSchemeModeVersion]: CurrentColorSchemeModeVersion,
   [LocalPrefKey.CustomThemes]: { themes: [], selectedId: null },
 
   [LocalPrefKey.EditorMonospaceEnabled]: false,

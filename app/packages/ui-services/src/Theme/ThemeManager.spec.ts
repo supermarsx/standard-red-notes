@@ -7,7 +7,9 @@ import { UIFeature } from '@standardnotes/models'
 import {
   ApplicationEvent,
   ComponentManagerInterface,
+  CurrentColorSchemeModeVersion,
   FeatureStatus,
+  LocalPrefDefaults,
   LocalPrefKey,
   PreferenceServiceInterface,
 } from '@standardnotes/services'
@@ -15,8 +17,11 @@ import { ThemeManager } from './ThemeManager'
 
 type PreferenceValues = Map<LocalPrefKey, unknown>
 type HarnessOptions = {
+  cachedThemeIdentifiers?: string[]
   isNativeMobileWeb?: boolean
   getMobileColorScheme?: () => Promise<'dark' | 'light'>
+  themeUrl?: string
+  unversionedColorSchemeState?: boolean
 }
 
 function nativeTheme(identifier: string): UIFeature<ThemeFeatureDescription> {
@@ -29,9 +34,20 @@ function nativeTheme(identifier: string): UIFeature<ThemeFeatureDescription> {
 
 function createHarness(initialPreferences: Partial<Record<LocalPrefKey, unknown>> = {}, options: HarnessOptions = {}) {
   const values: PreferenceValues = new Map(Object.entries(initialPreferences) as [LocalPrefKey, unknown][])
+  if (!options.unversionedColorSchemeState) {
+    values.set(LocalPrefKey.ColorSchemeModeVersion, CurrentColorSchemeModeVersion)
+  }
   const activeThemes: UIFeature<ThemeFeatureDescription>[] = []
   const colorSchemeListeners: ((event: MediaQueryListEvent) => void)[] = []
   let systemPrefersDark = false
+
+  const cachedThemes = options.cachedThemeIdentifiers?.map((identifier) => {
+    const feature = FindNativeTheme(identifier)
+    if (!feature) {
+      throw new Error(`Missing cached native theme fixture: ${identifier}`)
+    }
+    return feature
+  })
 
   const preferences = {
     getLocalValue: jest.fn((key: LocalPrefKey, defaultValue?: unknown) => values.get(key) ?? defaultValue),
@@ -47,7 +63,10 @@ function createHarness(initialPreferences: Partial<Record<LocalPrefKey, unknown>
 
   const components = {
     getActiveThemes: jest.fn(() => activeThemes.slice()),
-    getActiveThemesIdentifiers: jest.fn(() => ({ features: [], uuids: [] })),
+    getActiveThemesIdentifiers: jest.fn(() => ({
+      features: activeThemes.map((theme) => theme.uniqueIdentifier),
+      uuids: [],
+    })),
     isThemeActive: jest.fn((theme: UIFeature<ThemeFeatureDescription>) =>
       activeThemes.some((candidate) => candidate.featureIdentifier === theme.featureIdentifier),
     ),
@@ -76,7 +95,7 @@ function createHarness(initialPreferences: Partial<Record<LocalPrefKey, unknown>
         }
       }
     }),
-    urlForFeature: jest.fn(() => undefined),
+    urlForFeature: jest.fn(() => options.themeUrl),
   } as unknown as ComponentManagerInterface
 
   Object.defineProperty(window, 'matchMedia', {
@@ -102,12 +121,13 @@ function createHarness(initialPreferences: Partial<Record<LocalPrefKey, unknown>
     },
     mobileDevice: {
       getColorScheme: jest.fn(options.getMobileColorScheme ?? (async () => (systemPrefersDark ? 'dark' : 'light'))),
+      handleThemeSchemeChange: jest.fn(),
     },
     desktopManager: undefined,
     isNativeMobileWeb: jest.fn(() => options.isNativeMobileWeb ?? false),
     isStarted: jest.fn(() => false),
     addEventObserver: jest.fn(() => jest.fn()),
-    getValue: jest.fn(() => undefined),
+    getValue: jest.fn(() => cachedThemes),
     setValue: jest.fn(async () => undefined),
     removeValue: jest.fn(async () => undefined),
   }
@@ -136,6 +156,10 @@ describe('ThemeManager persistence and color-scheme ownership', () => {
   afterEach(() => {
     jest.clearAllTimers()
     jest.useRealTimers()
+    document.head.querySelectorAll('link[rel="stylesheet"]').forEach((element) => element.remove())
+    document.head.querySelector('meta[name="theme-color"]')?.remove()
+    document.documentElement.style.removeProperty('--sn-stylekit-background-color')
+    document.body.classList.remove('translucent-ui')
   })
 
   it('does not apply an automatic theme at StorageReady before local preferences are decrypted', async () => {
@@ -147,11 +171,121 @@ describe('ThemeManager persistence and color-scheme ownership', () => {
     expect(preferences.setLocalValue).not.toHaveBeenCalled()
   })
 
+  it('uses Standard Red as the dark-first default on a fresh launch', async () => {
+    const { manager, components, preferences, values } = createHarness({}, { unversionedColorSchemeState: true })
+
+    await manager.onAppEvent(ApplicationEvent.Launched)
+
+    expect(LocalPrefDefaults[LocalPrefKey.ColorSchemeMode]).toBe('dark')
+    expect(values.get(LocalPrefKey.ColorSchemeMode)).toBe('dark')
+    expect(values.get(LocalPrefKey.ColorSchemeModeVersion)).toBe(CurrentColorSchemeModeVersion)
+    expect(preferences.setLocalValue).toHaveBeenCalledWith(LocalPrefKey.ColorSchemeMode, 'dark')
+    expect(components.toggleTheme).not.toHaveBeenCalled()
+  })
+
+  it('resets the ambiguous previous unversioned Auto state to dark once', async () => {
+    const { manager, components, values } = createHarness(
+      { [LocalPrefKey.ColorSchemeMode]: 'auto' },
+      { unversionedColorSchemeState: true },
+    )
+
+    await manager.onAppEvent(ApplicationEvent.Launched)
+
+    expect(values.get(LocalPrefKey.ColorSchemeMode)).toBe('dark')
+    expect(values.get(LocalPrefKey.ColorSchemeModeVersion)).toBe(CurrentColorSchemeModeVersion)
+    expect(components.toggleTheme).not.toHaveBeenCalled()
+
+    manager.setColorSchemeMode('auto')
+    await manager.applyColorSchemeMode()
+
+    expect(values.get(LocalPrefKey.ColorSchemeMode)).toBe('auto')
+    expect(components.toggleTheme).toHaveBeenCalled()
+  })
+
+  it('removes an Auto-activated cached light theme while migrating an existing installation', async () => {
+    const blueTheme = nativeTheme(NativeFeatureIdentifier.TYPES.StandardNotesBlueTheme)
+    const { manager, activeThemes } = createHarness(
+      {
+        [LocalPrefKey.ActiveThemes]: [blueTheme.uniqueIdentifier.value],
+        [LocalPrefKey.ColorSchemeMode]: 'auto',
+      },
+      {
+        cachedThemeIdentifiers: [NativeFeatureIdentifier.TYPES.StandardNotesBlueTheme],
+        themeUrl: '/cached-standard-blue.css',
+        unversionedColorSchemeState: true,
+      },
+    )
+    activeThemes.push(blueTheme)
+
+    await manager.onAppEvent(ApplicationEvent.StorageReady)
+    expect(document.getElementById(blueTheme.uniqueIdentifier.value)).toBeInstanceOf(HTMLLinkElement)
+
+    await manager.onAppEvent(ApplicationEvent.Launched)
+
+    expect(activeThemes).toHaveLength(0)
+    expect(document.getElementById(blueTheme.uniqueIdentifier.value)).toBeNull()
+  })
+
+  it('normalizes a malformed persisted mode to dark', async () => {
+    const { manager, components, preferences, values } = createHarness({
+      [LocalPrefKey.ColorSchemeMode]: 'unexpected-mode',
+    })
+
+    await manager.onAppEvent(ApplicationEvent.Launched)
+
+    expect(values.get(LocalPrefKey.ColorSchemeMode)).toBe('dark')
+    expect(preferences.setLocalValue).toHaveBeenCalledWith(LocalPrefKey.ColorSchemeMode, 'dark')
+    expect(components.toggleTheme).not.toHaveBeenCalled()
+  })
+
+  it('removes a stale cached light-theme stylesheet once preferences are available', async () => {
+    const blueTheme = nativeTheme(NativeFeatureIdentifier.TYPES.StandardNotesBlueTheme)
+    const { manager } = createHarness(
+      { [LocalPrefKey.ColorSchemeMode]: 'manual' },
+      {
+        cachedThemeIdentifiers: [NativeFeatureIdentifier.TYPES.StandardNotesBlueTheme],
+        themeUrl: '/cached-standard-blue.css',
+      },
+    )
+
+    await manager.onAppEvent(ApplicationEvent.StorageReady)
+    expect(document.getElementById(blueTheme.uniqueIdentifier.value)).toBeInstanceOf(HTMLLinkElement)
+
+    await manager.onAppEvent(ApplicationEvent.Launched)
+
+    expect(document.getElementById(blueTheme.uniqueIdentifier.value)).toBeNull()
+  })
+
+  it('restores dark browser and native metadata after removing the final cached theme', async () => {
+    const themeColor = document.createElement('meta')
+    themeColor.name = 'theme-color'
+    themeColor.content = '#ffffff'
+    document.head.appendChild(themeColor)
+
+    const { manager, application } = createHarness(
+      { [LocalPrefKey.ColorSchemeMode]: 'manual' },
+      {
+        cachedThemeIdentifiers: [NativeFeatureIdentifier.TYPES.StandardNotesBlueTheme],
+        isNativeMobileWeb: true,
+        themeUrl: '/cached-standard-blue.css',
+      },
+    )
+
+    await manager.onAppEvent(ApplicationEvent.StorageReady)
+    await manager.onAppEvent(ApplicationEvent.Launched)
+
+    expect(themeColor.content).toBe('#120e11')
+    expect(application.mobileDevice.handleThemeSchemeChange).toHaveBeenCalledWith(true, '#120e11')
+  })
+
   it('migrates a pre-mode saved theme to manual and preserves it on launch', async () => {
     const savedTheme = nativeTheme(NativeFeatureIdentifier.TYPES.DarkTheme)
-    const { manager, components, preferences, activeThemes, values } = createHarness({
-      [LocalPrefKey.ActiveThemes]: [savedTheme.uniqueIdentifier.value],
-    })
+    const { manager, components, preferences, activeThemes, values } = createHarness(
+      {
+        [LocalPrefKey.ActiveThemes]: [savedTheme.uniqueIdentifier.value],
+      },
+      { unversionedColorSchemeState: true },
+    )
     activeThemes.push(savedTheme)
 
     await manager.onAppEvent(ApplicationEvent.Launched)
@@ -186,7 +320,7 @@ describe('ThemeManager persistence and color-scheme ownership', () => {
     expect(values.get(LocalPrefKey.ColorSchemeMode)).toBe('manual')
     expect(values.get(LocalPrefKey.UseSystemColorScheme)).toBe(false)
     expect(preferences.setLocalValue).toHaveBeenNthCalledWith(1, LocalPrefKey.UseSystemColorScheme, false)
-    expect(preferences.setLocalValue).toHaveBeenNthCalledWith(2, LocalPrefKey.ColorSchemeMode, 'manual')
+    expect(preferences.setLocalValue).toHaveBeenCalledWith(LocalPrefKey.ColorSchemeMode, 'manual')
     expect(components.toggleTheme).toHaveBeenCalledWith(selectedTheme)
   })
 
@@ -201,7 +335,7 @@ describe('ThemeManager persistence and color-scheme ownership', () => {
     expect(values.get(LocalPrefKey.ColorSchemeMode)).toBe('manual')
     expect(values.get(LocalPrefKey.UseSystemColorScheme)).toBe(false)
     expect(preferences.setLocalValue).toHaveBeenNthCalledWith(1, LocalPrefKey.UseSystemColorScheme, false)
-    expect(preferences.setLocalValue).toHaveBeenNthCalledWith(2, LocalPrefKey.ColorSchemeMode, 'manual')
+    expect(preferences.setLocalValue).toHaveBeenCalledWith(LocalPrefKey.ColorSchemeMode, 'manual')
     expect(components.toggleTheme).not.toHaveBeenCalled()
   })
 
