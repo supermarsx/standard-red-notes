@@ -61,6 +61,15 @@ export interface PublishedRemindersStoreOptions {
   retryMaxMs?: number
 }
 
+export interface PublishReminderOptions {
+  /** Keep the receipt/claim when a representation-only edit has the same effective delivery. */
+  preserveDeliveryState?: boolean
+  /** A durable provider fence permits invalidating an otherwise live claim. */
+  allowClaimInvalidation?: boolean
+}
+
+export type PublishedReminderRemovalResult = 'removed' | 'not-found' | 'in-flight'
+
 const MAX_USERS = 10_000
 const MAX_REMINDERS_PER_USER = 10_000
 const MAX_REMINDER_ID_LENGTH = 512
@@ -72,9 +81,8 @@ const MAX_CLAIM_BATCH_SIZE = 500
 const MAX_CLAIM_LEASE_MS = 24 * 60 * 60 * 1_000
 const MAX_RETRY_DELAY_MS = 7 * 24 * 60 * 60 * 1_000
 const DEFAULT_CLAIM_BATCH_SIZE = 100
-// The bundled HTTP providers time out within 60 seconds. SMTP's independently
-// bounded connection, greeting, and socket phases total at most six minutes, so
-// a ten-minute lease makes renewal unnecessary for the current transports.
+// Every bundled provider is fenced at 30 seconds. The larger lease also covers
+// durable-queue status checks, local store contention, and orderly shutdown.
 const DEFAULT_CLAIM_LEASE_MS = 10 * 60 * 1_000
 const DEFAULT_RETRY_BASE_MS = 60 * 1_000
 const DEFAULT_RETRY_MAX_MS = 6 * 60 * 60 * 1_000
@@ -109,6 +117,7 @@ function isPublishedReminder(value: unknown, id: string): value is StoredPublish
       'id',
       'message',
       'dueAtUtc',
+      'deliveryRevision',
       'channel',
       'destination',
       'sent',
@@ -127,6 +136,8 @@ function isPublishedReminder(value: unknown, id: string): value is StoredPublish
     isBoundedString(value.dueAtUtc, 1, 64) &&
     ISO_UTC_DATE_TIME_PATTERN.test(value.dueAtUtc) &&
     !Number.isNaN(Date.parse(value.dueAtUtc)) &&
+    (value.deliveryRevision === undefined ||
+      (typeof value.deliveryRevision === 'string' && UUID_PATTERN.test(value.deliveryRevision))) &&
     (value.channel === undefined || isDeliveryChannel(value.channel)) &&
     (value.destination === undefined || isBoundedString(value.destination, 0, MAX_DESTINATION_LENGTH)) &&
     typeof value.sent === 'boolean' &&
@@ -393,6 +404,7 @@ export class PublishedRemindersStore {
     userUuid: string,
     reminder: Pick<PublishedReminder, 'id' | 'message' | 'dueAtUtc'> &
       Partial<Pick<PublishedReminder, 'channel' | 'destination'>>,
+    options: PublishReminderOptions = {},
   ): Promise<PublishedReminder> {
     if (!isSafeRecordKey(userUuid) || !isSafeRecordKey(reminder.id, MAX_REMINDER_ID_LENGTH)) {
       throw new Error('A valid user identifier and reminder id are required to publish a reminder.')
@@ -409,8 +421,18 @@ export class PublishedRemindersStore {
           existing.dueAtUtc !== reminder.dueAtUtc ||
           existing.channel !== reminder.channel ||
           existing.destination !== reminder.destination)
+      if (
+        existing &&
+        payloadChanged &&
+        !options.preserveDeliveryState &&
+        !options.allowClaimInvalidation &&
+        existing.deliveryClaim &&
+        existing.deliveryClaim.leaseExpiresAt > now
+      ) {
+        throw new Error('The reminder is already in flight and cannot be changed safely.')
+      }
       const retainedState =
-        existing && !payloadChanged
+        existing && (!payloadChanged || options.preserveDeliveryState)
           ? {
               sent: existing.sent,
               ...(existing.sentAt === undefined ? {} : { sentAt: existing.sentAt }),
@@ -421,8 +443,12 @@ export class PublishedRemindersStore {
               ...(existing.deliveryClaim === undefined ? {} : { deliveryClaim: existing.deliveryClaim }),
             }
           : { sent: false }
+      const preservePublicationGeneration = existing !== undefined && (!payloadChanged || options.preserveDeliveryState)
       stored = {
         ...reminder,
+        ...(preservePublicationGeneration && existing.deliveryRevision
+          ? { deliveryRevision: existing.deliveryRevision }
+          : { deliveryRevision: randomUUID() }),
         ...retainedState,
         createdAt: existing?.createdAt ?? now,
         updatedAt: now,
@@ -452,6 +478,122 @@ export class PublishedRemindersStore {
       }
     })
     return removed
+  }
+
+  /**
+   * Atomically removes a reminder only when no uncancelled provider call can
+   * own it. `allowActiveClaim` is reserved for a durable provider whose queue
+   * cancellation fence was persisted before this transaction.
+   */
+  async unpublishSafely(
+    userUuid: string,
+    id: string,
+    allowActiveClaim = false,
+  ): Promise<PublishedReminderRemovalResult> {
+    if (!isSafeRecordKey(userUuid) || !isSafeRecordKey(id, MAX_REMINDER_ID_LENGTH)) {
+      return 'not-found'
+    }
+    const now = this.clock()
+    this.assertEpochMilliseconds(now, 'unpublish time')
+    let result: PublishedReminderRemovalResult = 'not-found'
+    await this.mutate((data) => {
+      const reminder = data[userUuid]?.[id]
+      if (!reminder) {
+        return
+      }
+      if (!allowActiveClaim && reminder.deliveryClaim && reminder.deliveryClaim.leaseExpiresAt > now) {
+        result = 'in-flight'
+        return
+      }
+      delete data[userUuid][id]
+      if (Object.keys(data[userUuid]).length === 0) {
+        delete data[userUuid]
+      }
+      result = 'removed'
+    })
+    return result
+  }
+
+  /** Atomically removes a bounded set after every non-fenced live claim is checked. */
+  async unpublishManySafely(
+    userUuid: string,
+    ids: string[],
+    allowActiveClaimIds: string[] = [],
+  ): Promise<PublishedReminderRemovalResult> {
+    if (
+      !isSafeRecordKey(userUuid) ||
+      ids.some((id) => !isSafeRecordKey(id, MAX_REMINDER_ID_LENGTH)) ||
+      allowActiveClaimIds.some((id) => !isSafeRecordKey(id, MAX_REMINDER_ID_LENGTH))
+    ) {
+      return 'not-found'
+    }
+    const uniqueIds = [...new Set(ids)]
+    if (uniqueIds.length === 0) {
+      return 'not-found'
+    }
+    const allowed = new Set(allowActiveClaimIds)
+    const now = this.clock()
+    this.assertEpochMilliseconds(now, 'bulk unpublish time')
+    let result: PublishedReminderRemovalResult = 'not-found'
+    await this.mutate((data) => {
+      const reminders = data[userUuid]
+      if (!reminders) {
+        return
+      }
+      const existing = uniqueIds.filter((id) => reminders[id] !== undefined)
+      if (existing.length === 0) {
+        return
+      }
+      if (
+        existing.some((id) => {
+          const claim = reminders[id].deliveryClaim
+          return claim !== undefined && claim.leaseExpiresAt > now && !allowed.has(id)
+        })
+      ) {
+        result = 'in-flight'
+        return
+      }
+      for (const id of existing) {
+        delete reminders[id]
+      }
+      if (Object.keys(reminders).length === 0) {
+        delete data[userUuid]
+      }
+      result = 'removed'
+    })
+    return result
+  }
+
+  /** Erases all opted-in plaintext, including already delivered history. */
+  async clearForUserSafely(
+    userUuid: string,
+    allowActiveClaimIds: string[] = [],
+  ): Promise<PublishedReminderRemovalResult> {
+    if (!isSafeRecordKey(userUuid) || allowActiveClaimIds.some((id) => !isSafeRecordKey(id, MAX_REMINDER_ID_LENGTH))) {
+      return 'not-found'
+    }
+    const allowed = new Set(allowActiveClaimIds)
+    const now = this.clock()
+    this.assertEpochMilliseconds(now, 'opt-out time')
+    let result: PublishedReminderRemovalResult = 'not-found'
+    await this.mutate((data) => {
+      const reminders = data[userUuid]
+      if (!reminders) {
+        return
+      }
+      if (
+        Object.values(reminders).some((reminder) => {
+          const claim = reminder.deliveryClaim
+          return claim !== undefined && claim.leaseExpiresAt > now && !allowed.has(reminder.id)
+        })
+      ) {
+        result = 'in-flight'
+        return
+      }
+      delete data[userUuid]
+      result = 'removed'
+    })
+    return result
   }
 
   private async read(): Promise<StoreShape> {

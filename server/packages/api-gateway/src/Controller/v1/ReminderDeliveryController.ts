@@ -21,6 +21,8 @@ import { DeliveryChannel, isDeliveryChannel } from '../../Service/ReminderDelive
  *      THIS user. Read from the request's resolved settings on
  *      response.locals.settings (same channel the AI/OCR/CalDAV gates use); when
  *      absent it fails CLOSED.
+ *   The authenticated `/opt-out` revocation route deliberately bypasses both
+ *   gates so delivery can still be cancelled after either gate turns off.
  *
  * All routes require a valid session (RequiredCrossServiceTokenMiddleware), so
  * `response.locals.user.uuid` identifies the owner.
@@ -61,6 +63,21 @@ export class ReminderDeliveryController extends BaseHttpController {
     response.json({ config })
   }
 
+  /**
+   * Revoke server-side reminder delivery for this account. This route is
+   * intentionally not feature/setting gated: the client must be able to cancel
+   * queued work before it persists the synced opt-in setting as false.
+   */
+  @httpPost('/opt-out', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  async optOut(_request: Request, response: Response): Promise<void> {
+    try {
+      const result = await this.reminderDeliveryService.optOut(this.userUuid(response))
+      response.status(200).json({ optedOut: true, alreadyDispatched: result?.alreadyDispatched ?? false })
+    } catch (error) {
+      this.respondToSafeMutationFailure(response, error, 'Reminder delivery opt-out')
+    }
+  }
+
   @httpPut('/delivery-config', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
   async setDeliveryConfig(request: Request, response: Response): Promise<void> {
     if (!this.gate(response)) {
@@ -83,7 +100,11 @@ export class ReminderDeliveryController extends BaseHttpController {
       })
       response.json({ config })
     } catch (error) {
-      response.status(400).json({ error: { message: (error as Error).message } })
+      if (this.isInFlightFailure(error) || this.isCancellationFailure(error)) {
+        this.respondToSafeMutationFailure(response, error, 'Reminder delivery settings')
+      } else {
+        response.status(400).json({ error: { message: (error as Error).message } })
+      }
     }
   }
 
@@ -129,14 +150,18 @@ export class ReminderDeliveryController extends BaseHttpController {
     const destination =
       typeof body.destination === 'string' && body.destination.trim().length > 0 ? body.destination.trim() : undefined
 
-    const stored = await this.reminderDeliveryService.publish(userUuid, {
-      id,
-      message,
-      dueAtUtc,
-      ...(channel ? { channel } : {}),
-      ...(destination ? { destination } : {}),
-    })
-    response.status(201).json({ reminder: stored })
+    try {
+      const stored = await this.reminderDeliveryService.publish(userUuid, {
+        id,
+        message,
+        dueAtUtc,
+        ...(channel ? { channel } : {}),
+        ...(destination ? { destination } : {}),
+      })
+      response.status(201).json({ reminder: stored })
+    } catch (error) {
+      this.respondToSafeMutationFailure(response, error, 'Published reminder update')
+    }
   }
 
   /**
@@ -151,7 +176,13 @@ export class ReminderDeliveryController extends BaseHttpController {
     }
     const userUuid = this.userUuid(response)
     const id = request.params.id as string
-    const removed = await this.reminderDeliveryService.unpublish(userUuid, id)
+    let removed: boolean
+    try {
+      removed = await this.reminderDeliveryService.unpublish(userUuid, id)
+    } catch (error) {
+      this.respondToSafeMutationFailure(response, error, 'Published reminder removal')
+      return
+    }
     if (!removed) {
       response.status(404).json({ error: { message: 'Published reminder not found.' } })
       return
@@ -189,5 +220,29 @@ export class ReminderDeliveryController extends BaseHttpController {
     }
     const raw = settings[SettingName.NAMES.ReminderDeliveryEnabled]
     return raw !== undefined && raw !== null && `${raw}`.toLowerCase() === 'true'
+  }
+
+  private respondToSafeMutationFailure(response: Response, error: unknown, action: string): void {
+    const conflict = this.isConflictFailure(error)
+    response.status(conflict ? 409 : 503).json({
+      error: {
+        tag: conflict ? 'reminder-delivery-in-flight' : 'reminder-delivery-unavailable',
+        message: conflict
+          ? `${action} cannot cancel a provider request that is in flight or already accepted.`
+          : `${action} could not be persisted safely. Try again later.`,
+      },
+    })
+  }
+
+  private isInFlightFailure(error: unknown): boolean {
+    return error instanceof Error && /in[ -]flight/i.test(error.message)
+  }
+
+  private isConflictFailure(error: unknown): boolean {
+    return this.isInFlightFailure(error) || (error instanceof Error && /already accepted/i.test(error.message))
+  }
+
+  private isCancellationFailure(error: unknown): boolean {
+    return error instanceof Error && /cancel|durable|queue|persist.*safe/i.test(error.message)
   }
 }

@@ -8,6 +8,7 @@ import {
   maybePublishReminderForDelivery,
   maybeUnpublishReminderForDelivery,
   resetReminderDeliveryStateCacheForTests,
+  setReminderDeliveryOptIn,
   validateDestination,
 } from './reminderDelivery'
 
@@ -86,6 +87,118 @@ describe('reminderDelivery pure helpers', () => {
       expect(destinationHint('telegram')).toMatch(/chat id/i)
       expect(destinationHint('email')).toMatch(/email address/i)
     })
+  })
+})
+
+describe('reminder delivery account opt-in', () => {
+  const success = { status: 200, data: { optedOut: true } }
+  const failure = { status: 500, data: { error: { message: 'failed' } } }
+
+  const makeApplication = (options?: {
+    optOut?: jest.Mock
+    updateSetting?: jest.Mock
+    getDeliveryConfig?: jest.Mock
+    publish?: jest.Mock
+  }): WebApplication =>
+    ({
+      hasAccount: () => true,
+      legacyApi: {
+        optOutReminderDelivery: options?.optOut ?? jest.fn().mockResolvedValue(success),
+        getReminderDeliveryDeliveryConfig:
+          options?.getDeliveryConfig ??
+          jest.fn().mockResolvedValue({
+            status: 200,
+            data: { config: { channel: 'email', destination: 'user@example.test', enabled: false } },
+          }),
+        publishReminderDelivery: options?.publish ?? jest.fn(),
+      },
+      settings: {
+        updateSetting: options?.updateSetting ?? jest.fn().mockResolvedValue(undefined),
+      },
+    }) as unknown as WebApplication
+
+  beforeEach(() => {
+    resetReminderDeliveryStateCacheForTests()
+    jest.spyOn(console, 'error').mockImplementation(() => undefined)
+  })
+
+  afterEach(() => {
+    jest.restoreAllMocks()
+  })
+
+  it('revokes server delivery before persisting the disabled setting', async () => {
+    const order: string[] = []
+    const optOut = jest.fn().mockImplementation(async () => {
+      order.push('server')
+      return success
+    })
+    const updateSetting = jest.fn().mockImplementation(async () => {
+      order.push('setting')
+    })
+    const application = makeApplication({ optOut, updateSetting })
+
+    await expect(setReminderDeliveryOptIn(application, false)).resolves.toBe(true)
+
+    expect(order).toEqual(['server', 'setting'])
+    expect(updateSetting).toHaveBeenCalledWith(
+      expect.objectContaining({ value: 'REMINDER_DELIVERY_ENABLED' }),
+      'false',
+      false,
+    )
+  })
+
+  it('does not persist false when authoritative opt-out returns an error', async () => {
+    const updateSetting = jest.fn()
+    const application = makeApplication({
+      optOut: jest.fn().mockResolvedValue(failure),
+      updateSetting,
+    })
+
+    await expect(setReminderDeliveryOptIn(application, false)).resolves.toBe(false)
+
+    expect(updateSetting).not.toHaveBeenCalled()
+  })
+
+  it('does not call opt-out while enabling delivery', async () => {
+    const optOut = jest.fn()
+    const updateSetting = jest.fn().mockResolvedValue(undefined)
+    const application = makeApplication({ optOut, updateSetting })
+
+    await expect(setReminderDeliveryOptIn(application, true)).resolves.toBe(true)
+
+    expect(optOut).not.toHaveBeenCalled()
+    expect(updateSetting).toHaveBeenCalledWith(
+      expect.objectContaining({ value: 'REMINDER_DELIVERY_ENABLED' }),
+      'true',
+      false,
+    )
+  })
+
+  it('invalidates cached publication state as soon as server opt-out succeeds', async () => {
+    const getDeliveryConfig = jest
+      .fn()
+      .mockResolvedValueOnce({
+        status: 200,
+        data: { config: { channel: 'email', destination: 'user@example.test', enabled: true } },
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        data: { config: { channel: 'email', destination: 'user@example.test', enabled: false } },
+      })
+    const publish = jest.fn().mockResolvedValue({ status: 200, data: { reminder: {} } })
+    const application = makeApplication({
+      getDeliveryConfig,
+      publish,
+      updateSetting: jest.fn().mockRejectedValue(new Error('sync failed')),
+    })
+    const reminder = { id: 'r1', dueAt: '2026-07-02T12:00:00.000Z', message: 'Call Bob' }
+
+    await expect(maybePublishReminderForDelivery(application, reminder)).resolves.toBe(true)
+    await expect(setReminderDeliveryOptIn(application, false)).resolves.toBe(false)
+    await expect(maybePublishReminderForDelivery(application, reminder)).resolves.toBe(false)
+
+    expect(getDeliveryConfig).toHaveBeenCalledTimes(2)
+    expect(publish).toHaveBeenCalledTimes(1)
   })
 })
 

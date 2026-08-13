@@ -106,6 +106,9 @@ const ReminderDelivery = ({ application }: Props) => {
       }
     } else {
       setDeliveryEnabled(false)
+      setDestination('')
+      setDestinationTouched(false)
+      setPublished([])
     }
   }, [application, optIn])
 
@@ -153,24 +156,35 @@ const ReminderDelivery = ({ application }: Props) => {
           text sent to the server in plaintext (it leaves end-to-end encryption) so it can be delivered. While delivery
           is enabled below, every reminder you set or update is published to the server for delivery; turn delivery off
           to stop sharing new reminders. Your notes themselves always stay encrypted. Delivery also requires your server
-          operator to have enabled and configured this feature.
+          operator to have enabled and configured this feature. Turning account access off cancels pending deliveries
+          when they have not already reached a provider, then erases the server&apos;s published reminder history and
+          saved destination.
         </Text>
 
         {isLoading ? (
           <Spinner className="mt-2 h-4 w-4" />
-        ) : !serverEnabled ? (
+        ) : !serverEnabled && !optIn ? (
           <Text className="mt-2">Reminder delivery is not enabled on this server.</Text>
         ) : (
           <>
+            {!serverEnabled && (
+              <Text className="mb-3">
+                The operator has disabled new reminder delivery. You can still revoke your existing opt-in and erase its
+                server-readable data below.
+              </Text>
+            )}
             <div className="flex items-center justify-between">
               <div className="flex flex-col">
                 <Subtitle>Allow reminder delivery</Subtitle>
-                <Text>Turn this off to stop the server from delivering any of your reminders.</Text>
+                <Text>
+                  Turn this off to cancel pending work and erase published reminder text, history, and the saved
+                  destination from the server. A delivery already in flight must finish before opt-out can complete.
+                </Text>
               </div>
               <Switch onChange={() => void handleToggleOptIn()} checked={optIn} />
             </div>
 
-            {optIn && (
+            {serverEnabled && optIn && (
               <div className="mt-4 flex flex-col gap-3">
                 <div className="flex flex-col">
                   <Subtitle>Delivery channel</Subtitle>

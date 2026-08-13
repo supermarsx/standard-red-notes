@@ -57,6 +57,9 @@ describe('PublishedRemindersStore', () => {
       expect.objectContaining({
         id: 'r1',
         message: 'hi',
+        deliveryRevision: expect.stringMatching(
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+        ),
         sent: false,
         createdAt: NOW,
         updatedAt: NOW,
@@ -224,6 +227,17 @@ describe('PublishedRemindersStore', () => {
     expect(same).toEqual(expect.objectContaining({ sent: true, sentAt: NOW, attemptCount: 1 }))
   })
 
+  it('rotates a publication revision across delivery edits and after explicit removal', async () => {
+    const store = makeStore()
+    const first = await store.publish('u1', { id: 'r1', message: 'first', dueAtUtc: DUE })
+    const edited = await store.publish('u1', { id: 'r1', message: 'edited', dueAtUtc: DUE })
+    expect(edited.deliveryRevision).not.toBe(first.deliveryRevision)
+
+    await store.unpublish('u1', 'r1')
+    const republished = await store.publish('u1', { id: 'r1', message: 'edited', dueAtUtc: DUE })
+    expect(republished.deliveryRevision).not.toBe(edited.deliveryRevision)
+  })
+
   it.each([
     ['message', { message: 'edited text' }],
     ['dueAtUtc', { dueAtUtc: '2026-06-26T11:00:00.000Z' }],
@@ -250,7 +264,7 @@ describe('PublishedRemindersStore', () => {
     expect(rearmed).not.toHaveProperty('nextAttemptAt')
   })
 
-  it('invalidates an active claim when the payload is edited so the stale worker cannot complete it', async () => {
+  it('rejects an active-claim edit unless a durable cancellation fence permits invalidation', async () => {
     const store = makeStore()
     await store.publish('u1', {
       id: 'r1',
@@ -261,23 +275,25 @@ describe('PublishedRemindersStore', () => {
     })
     const [stale] = await store.claimDue(OWNER_A, NOW)
 
-    const edited = await store.publish('u1', {
+    const replacement = {
       id: 'r1',
       message: 'edited',
       dueAtUtc: DUE,
-      channel: 'telegram',
+      channel: 'telegram' as const,
       destination: 'chat-2',
-    })
+    }
+    await expect(store.publish('u1', replacement)).rejects.toThrow('already in flight')
+    const edited = await store.publish('u1', replacement, { allowClaimInvalidation: true })
     expect(edited.sent).toBe(false)
     expect(edited).not.toHaveProperty('attemptCount')
     expect(await store.markClaimSucceeded('u1', 'r1', stale.claim, NOW)).toBe(false)
     expect(await store.scheduleClaimRetry('u1', 'r1', stale.claim, 'stale', NOW)).toBe(false)
 
-    const [replacement] = await store.claimDue(OWNER_B, NOW)
-    expect(replacement.reminder).toEqual(
+    const [replacementClaim] = await store.claimDue(OWNER_B, NOW)
+    expect(replacementClaim.reminder).toEqual(
       expect.objectContaining({ message: 'edited', destination: 'chat-2', attemptCount: 1 }),
     )
-    expect(await store.markClaimSucceeded('u1', 'r1', replacement.claim, NOW)).toBe(true)
+    expect(await store.markClaimSucceeded('u1', 'r1', replacementClaim.claim, NOW)).toBe(true)
   })
 
   it('unpublish removes the reminder and reports whether anything was removed', async () => {
@@ -288,6 +304,19 @@ describe('PublishedRemindersStore', () => {
     expect(await store.unpublish('u1', 'r1')).toBe(true)
     expect(await store.listForUser('u1')).toEqual([])
     expect(await store.unpublish('u1', 'r1')).toBe(false)
+  })
+
+  it('atomically refuses unsafe removals while allowing a durably fenced claim', async () => {
+    const store = makeStore()
+    await publish(store)
+    await store.publish('u1', { id: 'r2', message: 'second', dueAtUtc: DUE })
+    await store.claimDue(OWNER_A, NOW, 2)
+
+    expect(await store.unpublishSafely('u1', 'r1')).toBe('in-flight')
+    expect(await store.unpublishManySafely('u1', ['r1', 'r2'], ['r1'])).toBe('in-flight')
+    expect(await store.clearForUserSafely('u1', ['r1'])).toBe('in-flight')
+    expect(await store.clearForUserSafely('u1', ['r1', 'r2'])).toBe('removed')
+    expect(await store.listForUser('u1')).toEqual([])
   })
 
   it('rejects malformed claim identities before they can mutate persisted state', async () => {

@@ -2027,6 +2027,8 @@ export class LegacyApiService
    * on this server and allowed for this user (fail-closed); the delivery-config
    * get/put manage the user's channel/destination/enabled record; list/publish
    * cover the PLAINTEXT reminders the user explicitly opted into server delivery.
+   * The opt-out request remains callable after the feature gates turn off so it
+   * can cancel queued work before the client persists its synced setting false.
    * Mirrors the emailReminder methods above.
    */
   async getReminderDeliveryConfig(): Promise<HttpResponse> {
@@ -2058,6 +2060,16 @@ export class LegacyApiService
       authentication: this.getSessionAccessToken(),
       fallbackErrorMessage: 'Failed to save reminder delivery settings.',
       params: body,
+    })
+  }
+
+  /** Cancel all pending server-side reminder delivery before disabling opt-in. */
+  async optOutReminderDelivery(): Promise<HttpResponse> {
+    return this.tokenRefreshableRequest({
+      verb: HttpVerb.Post,
+      url: joinPaths(this.host, Paths.v1.reminderDeliveryOptOut),
+      authentication: this.getSessionAccessToken(),
+      fallbackErrorMessage: 'Failed to opt out of reminder delivery.',
     })
   }
 
