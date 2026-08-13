@@ -336,7 +336,7 @@ shared-vault variants under `/v1/shared-vault/files/*`.
 | POST   | `/v1/authenticators/verify-registration`             | `auth.authenticators.verifyRegistrationResponse`    | Complete WebAuthn registration.                                                                                           |
 | POST   | `/v1/authenticators/generate-authentication-options` | `auth.authenticators.generateAuthenticationOptions` | Begin WebAuthn authentication.                                                                                            |
 | DELETE | `/v1/authenticators/:authenticatorId`                | `auth.authenticators.delete`                        | Remove an authenticator.                                                                                                  |
-| POST   | `/v1/mfa/magic-link/request`                         | `auth.magicLink.request`                            | Request delivery of an email magic-link code. Fails when SMTP is unavailable; the code is never returned in the response. |
+| POST   | `/v1/mfa/magic-link/request`                         | `auth.magicLink.request`                            | Request delivery of an email magic-link code. Fails when email delivery is unavailable; the code is never returned in the response. |
 | POST   | `/v1/mfa/magic-link/status`                          | `auth.magicLink.setStatus`                          | Enable/disable magic-link 2FA. Enabling requires configured email delivery.                                               |
 | GET    | `/v1/mfa/magic-link/status`                          | `auth.magicLink.getStatus`                          | Read magic-link 2FA status.                                                                                               |
 
@@ -467,6 +467,25 @@ plaintext because the user opted that reminder into email delivery. Source:
 | GET    | `/v1/email-reminders/`            | `auth.emailReminders.list`   | List email reminders.                                 |
 | DELETE | `/v1/email-reminders/:reminderId` | `auth.emailReminders.delete` | Delete an email reminder.                             |
 
+### Published reminder delivery (Standard Red Notes)
+
+Authenticated users may explicitly publish individual reminders for server-side
+delivery. The published message, due time, channel, and destination are plaintext
+by design; ordinary note content remains end-to-end encrypted. All management
+routes except opt-out require both the server master switch and the user's synced
+opt-in setting. Source:
+[`ReminderDeliveryController.ts`](../server/packages/api-gateway/src/Controller/v1/ReminderDeliveryController.ts).
+
+| Method | Path                                 | Auth          | Notes                                                                                                                                                                                                 |
+| ------ | ------------------------------------ | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GET    | `/v1/reminder-delivery/config`       | Authenticated | Report the server master switch, user opt-in, and effective availability.                                                                                                                             |
+| POST   | `/v1/reminder-delivery/opt-out`      | Authenticated | Ungated authoritative revocation. Cancels durable queued work, removes published plaintext and destination data, and deletes delivery configuration. Returns `alreadyDispatched: true` if a provider had already accepted an occurrence. |
+| GET    | `/v1/reminder-delivery/delivery-config` | Authenticated | Read the user's channel and destination configuration. Requires both gates.                                                                                                                           |
+| PUT    | `/v1/reminder-delivery/delivery-config` | Authenticated | Replace the user's channel and destination configuration. Refuses unsafe changes while a provider request is in flight or already accepted.                                                           |
+| GET    | `/v1/reminder-delivery/`             | Authenticated | List the user's explicitly published reminders. Requires both gates.                                                                                                                                  |
+| POST   | `/v1/reminder-delivery/`             | Authenticated | Publish or update one reminder. A delivery-affecting change durably cancels the old occurrence before replacement.                                                                                    |
+| DELETE | `/v1/reminder-delivery/:id`          | Authenticated | Cancel and remove one published reminder. Returns a conflict if the occurrence can no longer be recalled safely.                                                                                      |
+
 ### AI assistant proxy (Standard Red Notes)
 
 A stateless LLM streaming proxy. Notes are E2E-encrypted, so the agent loop and
@@ -507,6 +526,33 @@ Source:
 | PUT    | `/v1/admin/users/:userUuid/ban-status`    | `admin.setUserBanStatus`    | Set ban status.                            |
 | GET    | `/v1/admin/registration`                  | `admin.getRegistrationFlag` | Read whether open registration is enabled. |
 | PUT    | `/v1/admin/registration`                  | `admin.setRegistrationFlag` | Toggle open registration.                  |
+
+**Email delivery administration.**
+
+These admin-only endpoints manage the advanced email-delivery subsystem. The
+full Redis-backed topology supports prioritized SMTP, SendGrid, Mailgun, and AWS
+SES profiles, per-profile rate limits, optional fallback, an encrypted durable
+queue, and redacted attempt logs. `POST /test` is owned by `AdminController`; the
+other routes are owned by the isolated
+[`AdminEmailDeliveryController.ts`](../server/packages/api-gateway/src/Controller/v1/AdminEmailDeliveryController.ts)
+boundary.
+
+| Method | Path                                             | Request / query                                                                                                   | Notes                                                                                                                                         |
+| ------ | ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| GET    | `/v1/admin/email-delivery/relays`                | No query                                                                                                          | Returns `{ relays, fallbackPolicy, configured }`; credentials are represented only by `credentialsConfigured`.                                |
+| PUT    | `/v1/admin/email-delivery/relays`                | `{ relays, fallbackPolicy: { mode: "next-enabled" \| "none" } }`                                                | Replaces the ordered profile configuration. Omitted write-only credentials are preserved; explicit `null` clears them.                         |
+| POST   | `/v1/admin/email-delivery/test`                  | `{ recipient, relayId? }`                                                                                         | Sends a redacted test through a selected relay or normal priority/fallback order. Returns only `accepted`, relay identity/kind, and outcome.    |
+| GET    | `/v1/admin/email-delivery/queue`                 | `state=ready\|leased\|dead`, optional `limit` and `cursor`                                                        | Returns queue state, source, attempt counts, times, and safe failure classification; never recipient or message content.                       |
+| GET    | `/v1/admin/email-delivery/logs`                  | Optional `limit`, `cursor`, `relayId`, and `outcome=sent\|rejected\|transient-failure\|permanent-failure\|rate-limited` | Returns bounded delivery-attempt metadata; never recipient, message content, credentials, or a raw provider response.                          |
+| POST   | `/v1/admin/email-delivery/queue/:id/retry`       | Empty body                                                                                                        | Requeues an eligible job and returns its redacted queue record with `202`; a leased or otherwise ineligible record returns `409`.              |
+| DELETE | `/v1/admin/email-delivery/queue/:id`             | Empty body                                                                                                        | Discards an eligible job with `204`; a currently leased record returns `409`.                                                                 |
+
+The single/home in-memory topology has no advanced relay, queue, or log service:
+those routes return `501`, while the shared `/test` route retains its compatible
+direct SMTP behavior. `503` means the advanced service exists in the current
+topology but is temporarily unavailable. Provider failures are sanitized and
+directed to the redacted log; administrative audit events contain operation
+metadata only.
 
 ### Server metadata
 

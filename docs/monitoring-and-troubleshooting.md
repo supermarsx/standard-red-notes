@@ -173,11 +173,63 @@ the signed-in bridge unhealthy. Check the local data directory, server URL,
 token revocation, and `lastSyncError`, then restart only after preserving the
 error.
 
+**Email is queued, late, or not delivered.**
+
+- First identify the topology. The full Redis-backed deployment has relay,
+  queue, and log controls. The single/home in-memory deployment uses direct SMTP
+  compatibility, and Redis Cluster deliberately does the same because a
+  node-local AOF acknowledgement cannot be proven.
+- In **Settings → Admin → Server → Email delivery**, confirm at least one
+  valid profile is enabled, save, wait up to five seconds for readiness to
+  refresh, and run **Send test**. `501` means the advanced capability is not
+  present in this topology; `503` means it is present but temporarily
+  unavailable.
+- Use **Refresh queue** to inspect `ready`, `leased`, and `dead` records. Retry a
+  dead or otherwise eligible record only after correcting the relay problem. A
+  leased record is in flight and cannot be retried or discarded.
+- If reminder delivery was disabled, published-reminder jobs are settled before
+  the relay boundary. The account opt-out endpoint remains available while gates
+  are off and erases stored publication history/destination after cancellation.
+  An in-flight refusal is intentional: retry opt-out after the bounded provider
+  call finishes rather than claiming that a provider request was revoked.
+- Use **Refresh logs** to filter attempt metadata by relay and outcome. Compare
+  `rate-limited`, `transient-failure`, and `permanent-failure` results with relay
+  order, fallback policy, and each profile's `max` per `window` setting. Logs and
+  queue views intentionally omit recipients, subjects, bodies, attachments,
+  credentials, and raw provider responses.
+- Check the gateway's redacted `EmailDeliveryReadiness`,
+  `EmailDeliveryRedisCapacity`, worker-batch, and queue-producer diagnostics.
+  Do not enable payload logging during a test. A missing readiness marker means
+  the worker is stopped, no valid enabled relay exists, Redis capacity is below
+  its safety floor, or the configuration could not be decrypted.
+- Verify Redis AOF is enabled and that the instance supports local `WAITAOF`.
+  The supplied Compose deployment defaults to `appendfsync everysec`; each new
+  job is nevertheless reported as accepted only after its explicit local
+  `WAITAOF` acknowledgement. The default encrypted-byte caps are 25 MiB per job
+  and 64 MiB total; Redis also needs at least 64 MiB of additional headroom.
+- After a server-key rotation, old relay settings and queue payloads cannot be
+  decrypted. Restore the matching protected settings, Redis state, and key as one
+  recovery set. The admin UI intentionally refuses to overwrite an envelope it
+  cannot authenticate; re-entering credentials is therefore not a safe recovery
+  shortcut. For an intentional rotation, drain and verify the queue first, retain
+  the old recovery set, export the operator-known relay values, save an empty
+  profile list while the old key can still authenticate it, verify the envelope
+  is absent, the non-secret `relayConfigurationManaged` marker is `true`, and
+  readiness expires; then rotate the key and recreate/test the relays. An
+  explicitly empty managed configuration does not resurrect legacy environment
+  SMTP.
+
+Delivery is at least once. If a provider accepted a message but its response was
+lost, retry can produce a duplicate even though deterministic job identifiers
+prevent duplicate queue insertion. Treat an ambiguous timeout as an unknown
+provider outcome, not proof that nothing was sent.
+
 ### Backups are missing
 
 - Confirm the server master switch and per-user settings.
 - Check scheduler/worker logs.
-- Validate SMTP or WebDAV connectivity without exposing credentials.
+- Validate the selected email relay or WebDAV connectivity without exposing
+  credentials.
 - Check the destination’s retention and quota.
 - Run a restore drill rather than relying on a successful upload message.
 

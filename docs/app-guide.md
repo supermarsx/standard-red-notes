@@ -60,7 +60,7 @@ The written guidance on this page mirrors the documentation bundled inside Stand
   - [Self-hosting overview](#self-hosting-overview)
   - [Architecture](#self-hosting-architecture)
   - [How authentication works (cookies)](#self-hosting-cookies-auth)
-  - [Email delivery / SMTP](#self-hosting-smtp)
+  - [Email delivery](#self-hosting-smtp)
   - [Updating your server](#self-hosting-updating)
 - [AI assistant](#assistant)
   - [What the assistant can do](#assistant-overview)
@@ -307,7 +307,7 @@ Use a one-time emailed code as your second factor.
 
 As an alternative to an authenticator app, Standard Red Notes supports an email magic-link second factor. At sign-in, a one-time code is delivered to your email address; entering it completes authentication.
 
-- Your server must have working email (SMTP) delivery before magic-link 2FA can be enabled.
+- Your server must have a working email relay before magic-link 2FA can be enabled.
 - The code is sent only by email and is never returned to or shown by the unauthenticated sign-in screen.
 - If delivery fails, sign-in stops instead of falling back to an exposed on-screen code.
 
@@ -805,18 +805,20 @@ For browser sessions, the server authenticates requests using session cookies it
 Related: [self-hosting/architecture](#self-hosting-architecture), [troubleshooting/cant-sign-in](#troubleshooting-cant-sign-in), [troubleshooting/not-syncing](#troubleshooting-not-syncing)
 
 <a id="self-hosting-smtp"></a>
-### Email delivery / SMTP
+### Email delivery
 
-Configure one protected SMTP connection for account mail, backups, and reminders.
+Configure protected relay profiles for account mail, backups, and reminders.
 
-An administrator can configure the shared SMTP connection under Preferences → Admin → Server → Email delivery. Saved fields override environment values and apply on the next send; clearing a field restores its environment/default fallback. The password is write-only and is preserved by partial saves unless explicitly replaced or cleared.
+On the full Redis-backed deployment, an administrator can create and prioritize SMTP, SendGrid, Mailgun, and AWS SES profiles under Preferences → Admin → Server → Email delivery. Choose whether a failed attempt can fall through to the next enabled profile, and set a separate limit such as 100 messages per 60 seconds for each relay. Configuration changes apply live.
 
-STARTTLS is required by default. Implicit TLS is available for providers that expect TLS from connection start (normally port 465). Insecure delivery is accepted only for an explicitly trusted loopback or private relay. Save first, then use the redacted Send test action.
+Secrets are write-only and encrypted with a key derived from the server’s existing encryption key. Save first, then use Send test. Refresh queue shows only delivery state and redacted operational metadata; it can retry or discard eligible jobs. Refresh logs shows redacted attempt outcomes and timings. Neither view displays recipients or message content.
+
+The queue retries transient failures and can move exhausted jobs to dead. A successful queue acceptance is durable and idempotent, but provider delivery is at least once: an ambiguous provider timeout can result in a duplicate message. The single/home in-memory deployment retains one direct SMTP connection instead of the advanced relay and queue controls. Redis Cluster also uses that compatible SMTP path.
 
 {% include safety-alert.html
   level="caution"
   title="Magic-link requires working SMTP"
-  body="Without working SMTP, magic-link cannot be enabled or used. Verification codes are deliberately never exposed in an unauthenticated API response or on the sign-in screen."
+  body="Without a working relay, magic-link cannot be enabled or used. Verification codes are deliberately never exposed in an unauthenticated API response or on the sign-in screen."
 %}
 
 Related: [security/magic-link](#security-magic-link), [self-hosting/overview](#self-hosting-overview)
