@@ -6,7 +6,13 @@ import {
   BackupAttachmentReference,
   BackupAttachmentStorageInterface,
 } from '../../Email/BackupAttachmentStorageInterface'
-import { PendingEmailBackupBatch, serializeEmailBackupDeliveryState } from '../../Email/EmailBackupDeliveryState'
+import {
+  EmailBackupDeliveryState,
+  PendingEmailBackupBatch,
+  emptyEmailBackupDeliveryState,
+  serializeEmailBackupDeliveryState,
+} from '../../Email/EmailBackupDeliveryState'
+import { EmailBackupStateRepositoryInterface } from '../../Email/EmailBackupStateRepositoryInterface'
 import { EmailDeliveryStatus, EmailSenderInterface } from '../../Email/EmailSenderInterface'
 import { GetSetting } from '../GetSetting/GetSetting'
 import { SetSettingValue } from '../SetSettingValue/SetSettingValue'
@@ -41,8 +47,8 @@ describe('ReconcilePendingEmailBackupForUser', () => {
   let timer: jest.Mocked<TimerInterface>
   let logger: jest.Mocked<Logger>
 
-  const createUseCase = () =>
-    new ReconcilePendingEmailBackupForUser(emailSender, storage, getSetting, setSettingValue, timer, logger)
+  const createUseCase = (repository?: EmailBackupStateRepositoryInterface) =>
+    new ReconcilePendingEmailBackupForUser(emailSender, storage, getSetting, setSettingValue, timer, logger, repository)
 
   const setState = (pending: PendingEmailBackupBatch[]) => {
     getSetting.execute.mockResolvedValue(
@@ -78,6 +84,43 @@ describe('ReconcilePendingEmailBackupForUser', () => {
     logger = {
       error: jest.fn(),
     } as unknown as jest.Mocked<Logger>
+  })
+
+  it('reports none when no durable delivery state exists', async () => {
+    const result = await createUseCase().execute({ userUuid })
+
+    expect(result.isFailed()).toBe(false)
+    expect(result.getValue()).toBe('none')
+    expect(emailSender.getDeliveryStatus).not.toHaveBeenCalled()
+  })
+
+  it('blocks pending receipts when the sender cannot provide durable status', async () => {
+    setState([pendingBatch()])
+    emailSender = { ...emailSender, acceptanceMode: 'provider', getDeliveryStatus: undefined }
+
+    const result = await createUseCase().execute({ userUuid })
+
+    expect(result.getValue()).toBe('blocked')
+    expect(logger.error).toHaveBeenCalledWith(
+      'Pending email backup cannot be reconciled without durable delivery status',
+      {
+        codeTag: 'ReconcilePendingEmailBackupForUser',
+        userId: userUuid,
+      },
+    )
+  })
+
+  it('fails closed when persisted delivery state is malformed', async () => {
+    getSetting.execute.mockResolvedValue(Result.ok({ setting: {} as never, decryptedValue: 'not-json' }))
+
+    const result = await createUseCase().execute({ userUuid })
+
+    expect(result.isFailed()).toBe(true)
+    expect(result.getError()).toBe('Email backup delivery state could not be read')
+    expect(logger.error).toHaveBeenCalledWith('Email backup delivery state is invalid or unavailable', {
+      codeTag: 'ReconcilePendingEmailBackupForUser',
+      userId: userUuid,
+    })
   })
 
   it('retains the batch and source files while any part is still pending', async () => {
@@ -119,6 +162,130 @@ describe('ReconcilePendingEmailBackupForUser', () => {
     })
     expect(storage.delete).toHaveBeenCalledTimes(2)
   })
+
+  it('retains accepted source files when recording an attachment receipt fails', async () => {
+    setState([pendingBatch()])
+    emailSender.getDeliveryStatus.mockResolvedValue('provider-accepted')
+    storage.markDelivered.mockRejectedValue(new Error('storage unavailable'))
+
+    const result = await createUseCase().execute({ userUuid })
+
+    expect(result.isFailed()).toBe(true)
+    expect(storage.delete).not.toHaveBeenCalled()
+    expect(setSettingValue.execute).not.toHaveBeenCalled()
+    expect(logger.error).toHaveBeenCalledWith('Provider-accepted email backup attachment could not be receipted', {
+      codeTag: 'ReconcilePendingEmailBackupForUser',
+      userId: userUuid,
+    })
+  })
+
+  it.each([1, 2])('retains accepted source files when legacy bookkeeping write %s fails', async (failedWrite) => {
+    setState([pendingBatch()])
+    emailSender.getDeliveryStatus.mockResolvedValue('provider-accepted')
+    if (failedWrite === 1) {
+      setSettingValue.execute.mockResolvedValueOnce(Result.fail('database unavailable'))
+    } else {
+      setSettingValue.execute
+        .mockResolvedValueOnce(Result.ok({} as never))
+        .mockRejectedValueOnce(new Error('database unavailable'))
+    }
+
+    const result = await createUseCase().execute({ userUuid })
+
+    expect(result.isFailed()).toBe(true)
+    expect(storage.delete).not.toHaveBeenCalled()
+    expect(logger.error).toHaveBeenCalledWith(
+      'Email backup reconciliation bookkeeping could not be persisted',
+      expect.objectContaining({
+        codeTag: 'ReconcilePendingEmailBackupForUser',
+        userId: userUuid,
+      }),
+    )
+  })
+
+  it('completes bookkeeping while treating delivered-source deletion as best effort', async () => {
+    setState([pendingBatch()])
+    emailSender.getDeliveryStatus.mockResolvedValue('provider-accepted')
+    storage.delete.mockRejectedValue(new Error('storage unavailable'))
+
+    const result = await createUseCase().execute({ userUuid })
+
+    expect(result.getValue()).toBe('completed')
+    expect(logger.error).toHaveBeenCalledWith('Delivered email backup attachment could not be deleted', {
+      codeTag: 'ReconcilePendingEmailBackupForUser',
+      userId: userUuid,
+    })
+  })
+
+  it('reads and finalizes accepted batches inside the transaction-bound state repository', async () => {
+    let state: EmailBackupDeliveryState = { pending: [pendingBatch()], completed: [] }
+    let lastSentAt: number | undefined
+    const repository: EmailBackupStateRepositoryInterface = {
+      runExclusive: jest.fn(async (_uuid, transition) => {
+        const mutation = await transition(state)
+        state = mutation.deliveryState ?? state
+        lastSentAt = mutation.lastSentAt ?? lastSentAt
+        return { status: 'available', value: mutation.result }
+      }),
+    }
+    emailSender.getDeliveryStatus.mockResolvedValue('provider-accepted')
+
+    const result = await createUseCase(repository).execute({ userUuid })
+
+    expect(result.getValue()).toBe('completed')
+    expect(state).toEqual({ pending: [], completed: [{ batchId: 'batch-1', deliveredAt: 1_000 }] })
+    expect(lastSentAt).toBe(1_000)
+    expect(repository.runExclusive).toHaveBeenCalledTimes(2)
+    expect(getSetting.execute).not.toHaveBeenCalled()
+    expect(setSettingValue.execute).not.toHaveBeenCalled()
+  })
+
+  it('fails closed when the repository user disappears before state can be read', async () => {
+    const repository: EmailBackupStateRepositoryInterface = {
+      runExclusive: jest.fn(async (_uuid, transition) => {
+        await transition(emptyEmailBackupDeliveryState())
+        return { status: 'user-not-found' }
+      }),
+    }
+
+    const result = await createUseCase(repository).execute({ userUuid })
+
+    expect(result.isFailed()).toBe(true)
+    expect(emailSender.getDeliveryStatus).not.toHaveBeenCalled()
+  })
+
+  it.each(['user-not-found', 'write-error'] as const)(
+    'retains receipts when repository finalization ends with %s',
+    async (outcome) => {
+      const state: EmailBackupDeliveryState = { pending: [pendingBatch()], completed: [] }
+      let calls = 0
+      const repository: EmailBackupStateRepositoryInterface = {
+        runExclusive: jest.fn(async (_uuid, transition) => {
+          calls += 1
+          const mutation = await transition(state)
+          if (calls === 1) {
+            return { status: 'available', value: mutation.result }
+          }
+          if (outcome === 'write-error') {
+            throw new Error('database unavailable')
+          }
+          return { status: 'user-not-found' }
+        }),
+      }
+      emailSender.getDeliveryStatus.mockResolvedValue('provider-accepted')
+
+      const result = await createUseCase(repository).execute({ userUuid })
+
+      expect(result.isFailed()).toBe(true)
+      expect(storage.delete).not.toHaveBeenCalled()
+      if (outcome === 'write-error') {
+        expect(logger.error).toHaveBeenCalledWith('Email backup reconciliation bookkeeping could not be persisted', {
+          codeTag: 'ReconcilePendingEmailBackupForUser',
+          userId: userUuid,
+        })
+      }
+    },
+  )
 
   it.each<EmailDeliveryStatus>(['dead', 'quarantined', 'discarded', 'superseded', 'missing'])(
     'fails closed and alerts on %s after queue acceptance',
