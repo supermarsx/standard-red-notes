@@ -93,6 +93,24 @@ describe('EmailDeliveryConfig', () => {
     expect(validateEmailSenderIdentity('Notes <notes@example.com> trailing')).toBeUndefined()
   })
 
+  it('rejects non-string, header-injected, and oversized sender identities at the public boundary', () => {
+    expect(validateEmailSenderIdentity(undefined)).toBeUndefined()
+    expect(validateEmailSenderIdentity('Notes\r\nBcc: other@example.com <notes@example.com>')).toBeUndefined()
+    expect(validateEmailSenderIdentity('x'.repeat(EMAIL_DELIVERY_LIMITS.from + 1))).toBeUndefined()
+  })
+
+  it('rejects terminal-dot DNS names for recipients and SMTP hosts', () => {
+    expect(validateEmailRecipient('notes@example.com.')).toBeUndefined()
+    expect(
+      emailDeliveryConfigurationError({
+        host: 'smtp.example.com.',
+        port: 587,
+        from: 'notes@example.com',
+        tlsMode: 'starttls',
+      }),
+    ).toContain('SMTP host')
+  })
+
   it('allows insecure SMTP only for literal loopback/private/link-local IPs and localhost names', () => {
     for (const host of [
       '127.0.0.1',
