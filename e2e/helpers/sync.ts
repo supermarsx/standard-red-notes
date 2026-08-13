@@ -44,7 +44,11 @@ type InPageApp = {
   sync: { sync: (opts?: unknown) => Promise<unknown> }
   items: {
     getItems: (ct: string) => Array<{ uuid: string; title?: string; text?: string }>
-    getDirtyItems: () => unknown[]
+    getDirtyItems: () => Array<{
+      uuid?: unknown
+      content_type?: unknown
+      title?: unknown
+    }>
     findItem: (uuid: string) => { uuid: string; title?: string; text?: string } | undefined
   }
   mutator: {
@@ -135,13 +139,119 @@ export type SyncSeedResult = {
   dirtyAfterPush: number
   noteCount: number
   batches: number
+  /** Number of bounded sync passes needed to establish a clean global dirty set. */
+  syncPasses?: number
+  /** False only when the bounded drain exhausted its retry budget. */
+  drainQuiescent?: boolean
+  /** Safe, bounded metadata for dirty items left after an exhausted drain. */
+  residualDirtyItems?: DirtyItemDiagnostic[]
+  drainExhaustionReason?: 'deadline' | 'max-passes'
+}
+
+export type DirtyItemDiagnostic = {
+  uuid: string
+  contentType: string
+  title?: string
+}
+
+type DirtyItemSnapshot = {
+  count: number
+  items: DirtyItemDiagnostic[]
+}
+
+export type SyncDrainResult = {
+  quiescent: boolean
+  syncPasses: number
+  dirtyCount: number
+  residualDirtyItems: DirtyItemDiagnostic[]
+  exhaustionReason?: 'deadline' | 'max-passes'
+}
+
+type SyncDrainDependencies = {
+  sync: (pass: number) => Promise<void>
+  inspectDirtyItems: () => Promise<DirtyItemSnapshot>
+  wait?: (milliseconds: number) => Promise<void>
+  now?: () => number
+}
+
+type SyncDrainOptions = {
+  maxPasses?: number
+  retryWindowMs?: number
+  settleIntervalMs?: number
+}
+
+const DEFAULT_SYNC_DRAIN_MAX_PASSES = 5
+const DEFAULT_SYNC_DRAIN_RETRY_WINDOW_MS = 15_000
+const DEFAULT_SYNC_DRAIN_SETTLE_INTERVAL_MS = 200
+const MAX_DIRTY_ITEM_DIAGNOSTICS = 10
+const MAX_DIAGNOSTIC_TITLE_LENGTH = 120
+
+/**
+ * Await a full sync, then require the global dirty set to remain empty after a
+ * short settle interval. A note can be created by the UI just after registration,
+ * so one sync completion is not itself proof that the page is quiescent.
+ *
+ * The first (potentially large) upload is governed by the Playwright test timeout.
+ * The retry window starts only after that upload completes, and both it and the
+ * pass count prevent a genuinely non-converging client from looping forever.
+ */
+export async function drainSyncUntilQuiescent(
+  dependencies: SyncDrainDependencies,
+  options: SyncDrainOptions = {},
+): Promise<SyncDrainResult> {
+  const maxPasses = positiveInteger(options.maxPasses, DEFAULT_SYNC_DRAIN_MAX_PASSES)
+  const retryWindowMs = positiveInteger(options.retryWindowMs, DEFAULT_SYNC_DRAIN_RETRY_WINDOW_MS)
+  const settleIntervalMs = positiveInteger(options.settleIntervalMs, DEFAULT_SYNC_DRAIN_SETTLE_INTERVAL_MS)
+  const wait = dependencies.wait ?? ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)))
+  const now = dependencies.now ?? (() => performance.now())
+
+  let syncPasses = 0
+  let retryDeadline = Number.POSITIVE_INFINITY
+  let snapshot: DirtyItemSnapshot = { count: 0, items: [] }
+
+  while (syncPasses < maxPasses) {
+    syncPasses += 1
+    await dependencies.sync(syncPasses)
+
+    if (!Number.isFinite(retryDeadline)) {
+      retryDeadline = now() + retryWindowMs
+    }
+
+    await wait(settleIntervalMs)
+    snapshot = await dependencies.inspectDirtyItems()
+    if (snapshot.count === 0) {
+      return {
+        quiescent: true,
+        syncPasses,
+        dirtyCount: 0,
+        residualDirtyItems: [],
+      }
+    }
+
+    if (now() >= retryDeadline) {
+      return {
+        quiescent: false,
+        syncPasses,
+        dirtyCount: snapshot.count,
+        residualDirtyItems: snapshot.items,
+        exhaustionReason: 'deadline',
+      }
+    }
+  }
+
+  return {
+    quiescent: false,
+    syncPasses,
+    dirtyCount: snapshot.count,
+    residualDirtyItems: snapshot.items,
+    exhaustionReason: 'max-passes',
+  }
 }
 
 /**
- * Seed `count` notes (all dirty), then PUSH them to the server with a single
- * `sync.sync()`. Notes are built in-page in batches to bound memory. Returns the
- * push wall-clock and the residual dirty count (which MUST be 0 if the server
- * accepted every item).
+ * Seed `count` notes (all dirty), then PUSH them to the server and establish a
+ * globally quiescent dirty set. Notes are built in-page in batches to bound
+ * memory. Returns the push wall-clock and bounded residual diagnostics.
  */
 export async function seedAndPush(
   page: Page,
@@ -149,10 +259,12 @@ export async function seedAndPush(
   sizeBytes = 256,
   batchSize = 1000,
 ): Promise<SyncSeedResult> {
-  return page.evaluate(
+  const seed = await page.evaluate(
     async ({ count, sizeBytes, batchSize }) => {
       const app = (
-        window as unknown as { mainApplicationGroup?: { primaryApplication?: InPageApp } }
+        window as unknown as {
+          mainApplicationGroup?: { primaryApplication?: InPageApp }
+        }
       ).mainApplicationGroup?.primaryApplication
       if (!app) throw new Error('app not available')
 
@@ -174,22 +286,89 @@ export async function seedAndPush(
       }
       const seedMs = performance.now() - seedStart
 
-      const pushStart = performance.now()
-      await app.sync.sync({ sourceDescription: 'stress-sync-push' })
-      const pushMs = performance.now() - pushStart
-
       return {
         requested: count,
         created,
         seedMs,
-        pushMs,
-        dirtyAfterPush: app.items.getDirtyItems().length,
-        noteCount: app.items.getItems('Note').length,
         batches,
       }
     },
     { count, sizeBytes, batchSize },
   )
+
+  const pushStart = performance.now()
+  const drain = await drainSyncUntilQuiescent({
+    sync: async (pass) => {
+      await page.evaluate(async (sourceDescription) => {
+        const app = (
+          window as unknown as {
+            mainApplicationGroup?: { primaryApplication?: InPageApp }
+          }
+        ).mainApplicationGroup?.primaryApplication
+        if (!app) throw new Error('app not available')
+        await app.sync.sync({ sourceDescription, awaitAll: true })
+      }, `stress-sync-push-${pass}`)
+    },
+    inspectDirtyItems: async () =>
+      page.evaluate(
+        ({ maxItems, maxTitleLength }) => {
+          const app = (
+            window as unknown as {
+              mainApplicationGroup?: { primaryApplication?: InPageApp }
+            }
+          ).mainApplicationGroup?.primaryApplication
+          if (!app) throw new Error('app not available')
+
+          const dirtyItems = app.items.getDirtyItems()
+          return {
+            count: dirtyItems.length,
+            items: dirtyItems.slice(0, maxItems).map((item) => {
+              const rawTitle = typeof item.title === 'string' ? item.title : undefined
+              const title = rawTitle
+                ?.replace(/[\u0000-\u001f\u007f]/g, ' ')
+                .trim()
+                .slice(0, maxTitleLength)
+
+              return {
+                uuid: typeof item.uuid === 'string' ? item.uuid : '(unknown)',
+                contentType: typeof item.content_type === 'string' ? item.content_type : '(unknown)',
+                ...(title ? { title } : {}),
+              }
+            }),
+          }
+        },
+        {
+          maxItems: MAX_DIRTY_ITEM_DIAGNOSTICS,
+          maxTitleLength: MAX_DIAGNOSTIC_TITLE_LENGTH,
+        },
+      ),
+  })
+  const pushMs = performance.now() - pushStart
+  const noteCount = await page.evaluate(() => {
+    const app = (
+      window as unknown as {
+        mainApplicationGroup?: { primaryApplication?: InPageApp }
+      }
+    ).mainApplicationGroup?.primaryApplication
+    if (!app) throw new Error('app not available')
+    return app.items.getItems('Note').length
+  })
+
+  return {
+    ...seed,
+    pushMs,
+    dirtyAfterPush: drain.dirtyCount,
+    noteCount,
+    syncPasses: drain.syncPasses,
+    drainQuiescent: drain.quiescent,
+    residualDirtyItems: drain.residualDirtyItems,
+    ...(drain.exhaustionReason ? { drainExhaustionReason: drain.exhaustionReason } : {}),
+  }
+}
+
+function positiveInteger(value: number | undefined, fallback: number): number {
+  const normalized = Math.floor(Number(value))
+  return Number.isFinite(normalized) && normalized > 0 ? normalized : fallback
 }
 
 /** Force a network sync and return its wall-clock + resulting in-memory note count + dirty residue. */
