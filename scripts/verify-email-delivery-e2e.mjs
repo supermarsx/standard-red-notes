@@ -319,7 +319,10 @@ async function runWorker(redisUrl) {
         retryBaseMs: 1_000,
         retryMaxMs: 5_000,
         jitterRatio: 0,
-        leaseHeartbeatMs: 1_000,
+        // Match the production lease policy. Redis AOF fsync can legitimately
+        // cross a one-second boundary under load; a one-second initial fence
+        // timeout turns that durability latency into a false stale claim.
+        leaseHeartbeatMs: 10_000,
       },
     );
     const admin = new DefaultAdminEmailDeliveryService(
