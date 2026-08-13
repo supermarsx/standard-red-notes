@@ -745,6 +745,23 @@ test("requires one runtime settings path and environment baseline across every d
   ]);
 });
 
+test("derives the gateway email encryption input from the existing server key", () => {
+  const entrypoint = readFileSync(
+    resolve("server/docker/docker-entrypoint.sh"),
+    "utf8",
+  );
+
+  assert.match(
+    entrypoint,
+    /export API_GATEWAY_EMAIL_DELIVERY_ENCRYPTION_KEY="\$AUTH_SERVER_ENCRYPTION_SERVER_KEY"/,
+  );
+  assert.ok(
+    entrypoint.indexOf("API_GATEWAY_EMAIL_DELIVERY_ENCRYPTION_KEY") <
+      entrypoint.indexOf("printenv | grep API_GATEWAY_"),
+    "the derived key must be present before the api-gateway dotenv file is written",
+  );
+});
+
 test("locks runtime log-level boot wiring to the actual supervisor topologies", () => {
   assert.deepEqual(
     validateRuntimeLogLevelBootContract(validRuntimeLogLevelBoot),

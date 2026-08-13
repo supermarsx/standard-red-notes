@@ -190,6 +190,13 @@ if [ -z "$AUTH_SERVER_ENCRYPTION_SERVER_KEY" ]; then
   exit 1
 fi
 
+# Outbound-email relay credentials and queued message bodies use independent
+# HKDF contexts derived from the already-required server encryption key. Give
+# the gateway only the narrowly named input it needs; this avoids another
+# operator-managed secret while keeping the auth service's dotenv contract
+# unchanged. The value is written to api-gateway/.env below and never logged.
+export API_GATEWAY_EMAIL_DELIVERY_ENCRYPTION_KEY="$AUTH_SERVER_ENCRYPTION_SERVER_KEY"
+
 ########################
 # INSECURE-DEFAULT GUARD #
 ########################
