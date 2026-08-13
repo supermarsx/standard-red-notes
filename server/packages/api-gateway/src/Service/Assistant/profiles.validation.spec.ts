@@ -513,3 +513,103 @@ describe('validateAssignmentsPatch', () => {
     expect(result.assignments).toEqual({ users: {}, roles: {} })
   })
 })
+
+describe('advanced assistant and backend controls', () => {
+  it('accepts bounded generation controls and rejects every out-of-range value', () => {
+    const valid = validateProfilesPatch(
+      [
+        {
+          id: 'advanced',
+          name: 'Advanced',
+          provider: 'openai-compatible',
+          model: 'gpt-test',
+          enabled: true,
+          temperature: 0.25,
+          topP: 0.9,
+          maxOutputTokens: 8_192,
+        },
+      ],
+      undefined,
+      [],
+    )
+    expect('error' in valid ? valid.error : valid.profiles?.[0]).toMatchObject({
+      temperature: 0.25,
+      topP: 0.9,
+      maxOutputTokens: 8_192,
+    })
+
+    for (const override of [
+      { temperature: -0.01 },
+      { temperature: 2.01 },
+      { topP: -0.01 },
+      { topP: 1.01 },
+      { maxOutputTokens: 0 },
+      { maxOutputTokens: 1.5 },
+      { maxOutputTokens: 200_001 },
+    ]) {
+      expect(
+        'error' in
+          validateProfilesPatch(
+            [{ id: 'advanced', name: 'Advanced', provider: 'openai-compatible', enabled: true, ...override }],
+            undefined,
+            [],
+          ),
+      ).toBe(true)
+    }
+  })
+
+  it('validates backend wire, timeout, and retry controls and forces subscriptions to Responses', () => {
+    const openAi = validateBackendProfilesPatch(
+      [
+        {
+          id: 'openai',
+          name: 'OpenAI',
+          type: 'api-key',
+          provider: 'openai-compatible',
+          wireProtocol: 'responses',
+          timeoutMs: 90_000,
+          maxRetries: 3,
+        },
+      ],
+      [],
+    )
+    expect('error' in openAi ? openAi.error : openAi.backendProfiles?.[0]).toMatchObject({
+      wireProtocol: 'responses',
+      timeoutMs: 90_000,
+      maxRetries: 3,
+    })
+
+    const subscription = validateBackendProfilesPatch(
+      [
+        {
+          id: 'subscription',
+          name: 'Subscription',
+          type: 'subscription',
+          subscriptionId: 'default',
+          wireProtocol: 'chat-completions',
+        },
+      ],
+      [],
+    )
+    expect('error' in subscription ? subscription.error : subscription.backendProfiles?.[0].wireProtocol).toBe(
+      'responses',
+    )
+
+    for (const backend of [
+      { provider: 'anthropic', wireProtocol: 'responses' },
+      { provider: 'openai-compatible', wireProtocol: 'other' },
+      { provider: 'openai-compatible', timeoutMs: 999 },
+      { provider: 'openai-compatible', timeoutMs: 600_001 },
+      { provider: 'openai-compatible', maxRetries: -1 },
+      { provider: 'openai-compatible', maxRetries: 11 },
+    ]) {
+      expect(
+        'error' in
+          validateBackendProfilesPatch(
+            [{ id: 'backend', name: 'Backend', type: 'api-key', ...backend }],
+            [],
+          ),
+      ).toBe(true)
+    }
+  })
+})

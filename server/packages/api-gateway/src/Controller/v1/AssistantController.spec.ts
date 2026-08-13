@@ -33,6 +33,7 @@ describe('AssistantController', () => {
     zadd: jest.Mock
     zrangebyscore: jest.Mock
     zremrangebyscore: jest.Mock
+    eval: jest.Mock
   }
 
   const makeController = (globalLimit = 0, tokenLimits?: { fiveHour?: number; weekly?: number }) =>
@@ -89,6 +90,7 @@ describe('AssistantController', () => {
   const streamRequest = (): Request => ({ body: { messages: [] }, headers: {}, on: jest.fn() }) as unknown as Request
 
   beforeEach(() => {
+    jest.clearAllMocks()
     redis = {
       incr: jest.fn().mockResolvedValue(1),
       expire: jest.fn().mockResolvedValue(1),
@@ -98,6 +100,20 @@ describe('AssistantController', () => {
       // Default: no prior token usage recorded.
       zrangebyscore: jest.fn().mockResolvedValue([]),
       zremrangebyscore: jest.fn().mockResolvedValue(0),
+      eval: jest.fn(async (script: string, _keyCount: number, key: string, limit?: number, ttl?: number) => {
+        if (script.includes("redis.call('INCR'")) {
+          const count = await redis.incr(key)
+          if (count === 1) {
+            await redis.expire(key, ttl)
+          }
+          if (count > (limit ?? 0)) {
+            const used = await redis.decr(key)
+            return [0, used]
+          }
+          return [1, count]
+        }
+        return redis.decr(key)
+      }),
     }
   })
 
@@ -364,16 +380,9 @@ describe('AssistantController', () => {
     })
   })
 
-  it('uses the first configured legacy provider for both config and provider-less streams when the injected default is unavailable', async () => {
+  it('never applies another provider default model to the first configured legacy fallback', async () => {
     const providerConfig = { ollamaUrl: 'http://127.0.0.1:11434' }
-    const provider = {
-      id: 'ollama',
-      async *send() {
-        yield { kind: 'finish' as const, stopReason: 'end_turn' as const }
-      },
-    }
     ;(configuredProviders as jest.Mock).mockReturnValue(['ollama'])
-    ;(resolveProvider as jest.Mock).mockReturnValueOnce(provider)
     const controller = new AssistantController(
       providerConfig,
       'unavailable-default',
@@ -387,13 +396,14 @@ describe('AssistantController', () => {
     await controller.config({} as Request, configResponse)
 
     expect(jsonMock).toHaveBeenCalledWith(
-      expect.objectContaining({ defaultProvider: 'ollama', defaultModel: 'fallback-model' }),
+      expect.objectContaining({ defaultProvider: 'ollama', defaultModel: '' }),
     )
 
     const streamResponse = responseWith({})
     await controller.streamCompletion(streamRequest(), streamResponse)
 
-    expect(resolveProvider).toHaveBeenCalledWith('ollama', 'fallback-model', providerConfig)
+    expect(resolveProvider).not.toHaveBeenCalled()
+    expect(streamResponse.write).toHaveBeenCalledWith(expect.stringContaining('has no model'))
     expect(streamResponse.end).toHaveBeenCalled()
   })
 

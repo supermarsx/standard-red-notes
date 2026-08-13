@@ -11,6 +11,8 @@ export class OpenAIProvider implements Provider {
     apiKey: string,
     baseURL?: string,
     defaultHeaders?: Record<string, string>,
+    timeoutMs?: number,
+    maxRetries?: number,
   ) {
     // defaultHeaders carries the Codex/ChatGPT subscription extras (account id,
     // OpenAI-Beta, any custom headers). Empty in the default API-key path.
@@ -18,6 +20,8 @@ export class OpenAIProvider implements Provider {
       apiKey,
       baseURL,
       defaultHeaders: defaultHeaders && Object.keys(defaultHeaders).length > 0 ? defaultHeaders : undefined,
+      timeout: timeoutMs,
+      maxRetries,
     })
   }
 
@@ -51,6 +55,8 @@ export class OpenAIProvider implements Provider {
       model: this.model,
       messages,
       max_tokens: req.maxOutputTokens ?? 4096,
+      temperature: req.temperature,
+      top_p: req.topP,
       stop: req.stop,
       tools: req.tools.map((t) => ({
         type: 'function' as const,

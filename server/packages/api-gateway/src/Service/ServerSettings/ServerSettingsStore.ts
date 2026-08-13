@@ -388,6 +388,9 @@ function isPersistedAiProfile(value: unknown): value is PersistedAiProfile {
       'baseUrl',
       'model',
       'models',
+      'temperature',
+      'topP',
+      'maxOutputTokens',
       'enabled',
       'apiKey',
       'backendProfileId',
@@ -398,6 +401,11 @@ function isPersistedAiProfile(value: unknown): value is PersistedAiProfile {
     (value.baseUrl === undefined || isHttpUrl(value.baseUrl)) &&
     (value.model === undefined || isModel(value.model)) &&
     (value.models === undefined || isModels(value.models)) &&
+    (value.temperature === undefined ||
+      (typeof value.temperature === 'number' && Number.isFinite(value.temperature) && value.temperature >= 0 && value.temperature <= 2)) &&
+    (value.topP === undefined ||
+      (typeof value.topP === 'number' && Number.isFinite(value.topP) && value.topP >= 0 && value.topP <= 1)) &&
+    (value.maxOutputTokens === undefined || isIntegerBetween(value.maxOutputTokens, 1, 200_000)) &&
     typeof value.enabled === 'boolean' &&
     (value.apiKey === undefined || isSecret(value.apiKey)) &&
     (value.backendProfileId === undefined || isProfileId(value.backendProfileId))
@@ -413,13 +421,31 @@ function isPersistedAiProfiles(value: unknown): value is PersistedAiProfile[] {
 
 function isPersistedBackendProfile(value: unknown): value is PersistedBackendProfile {
   if (
-    !hasOnlyKeys(value, ['id', 'name', 'type', 'provider', 'baseUrl', 'model', 'models', 'apiKey', 'subscriptionId']) ||
+    !hasOnlyKeys(value, [
+      'id',
+      'name',
+      'type',
+      'provider',
+      'baseUrl',
+      'model',
+      'models',
+      'apiKey',
+      'subscriptionId',
+      'wireProtocol',
+      'timeoutMs',
+      'maxRetries',
+    ]) ||
     !isProfileId(value.id) ||
     !isBoundedString(value.name, 1, ASSISTANT_PROFILE_LIMITS.nameLength) ||
     (value.type !== 'api-key' && value.type !== 'subscription') ||
     (value.baseUrl !== undefined && !isHttpUrl(value.baseUrl)) ||
     (value.model !== undefined && !isModel(value.model)) ||
-    (value.models !== undefined && !isModels(value.models))
+    (value.models !== undefined && !isModels(value.models)) ||
+    (value.wireProtocol !== undefined &&
+      value.wireProtocol !== 'chat-completions' &&
+      value.wireProtocol !== 'responses') ||
+    (value.timeoutMs !== undefined && !isIntegerBetween(value.timeoutMs, 1_000, 600_000)) ||
+    (value.maxRetries !== undefined && !isIntegerBetween(value.maxRetries, 0, 10))
   ) {
     return false
   }
@@ -427,6 +453,7 @@ function isPersistedBackendProfile(value: unknown): value is PersistedBackendPro
   if (value.type === 'api-key') {
     return (
       (BACKEND_API_KEY_PROVIDERS as readonly unknown[]).includes(value.provider) &&
+      (value.wireProtocol === undefined || value.provider === 'openai-compatible') &&
       (value.apiKey === undefined || isSecret(value.apiKey)) &&
       value.subscriptionId === undefined
     )
@@ -440,7 +467,10 @@ function isPersistedBackendProfile(value: unknown): value is PersistedBackendPro
    * resolution independently fails closed on a legacy-invalid value.
    */
   return (
-    value.provider === undefined && value.apiKey === undefined && isLegacyCompatibleSubscriptionId(value.subscriptionId)
+    value.provider === undefined &&
+    value.apiKey === undefined &&
+    (value.wireProtocol === undefined || value.wireProtocol === 'responses') &&
+    isLegacyCompatibleSubscriptionId(value.subscriptionId)
   )
 }
 

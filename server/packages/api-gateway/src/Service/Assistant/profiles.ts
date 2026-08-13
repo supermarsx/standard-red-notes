@@ -57,6 +57,14 @@ export interface PersistedAiProfile {
   model?: string
   /** Optional cached list of available models (best-effort, populated by the UI). */
   models?: string[]
+  /** Optional server-owned generation overrides. */
+  temperature?: number
+  topP?: number
+  maxOutputTokens?: number
+  /** Resolved backend transport controls; persisted only on legacy embedded profiles when explicitly supplied. */
+  wireProtocol?: 'chat-completions' | 'responses'
+  timeoutMs?: number
+  maxRetries?: number
   /** Whether this profile is selectable. Disabled profiles never resolve. */
   enabled: boolean
   /** Secret credential (API key or subscription token). NEVER returned by any endpoint. */
@@ -92,9 +100,13 @@ export interface MaskedAiProfile {
   baseUrl: string | null
   model: string | null
   models?: string[]
+  temperature: number | null
+  topP: number | null
+  maxOutputTokens: number | null
   enabled: boolean
   keyConfigured: boolean
   legacyInlineCredentialIgnored: boolean
+  backendProfileId: string | null
 }
 
 /** A fully-resolved profile ready to be built into a concrete provider. */
@@ -117,9 +129,13 @@ export function maskProfile(profile: PersistedAiProfile): MaskedAiProfile {
     baseUrl: profile.baseUrl ?? null,
     model: profile.model ?? null,
     ...(profile.models && profile.models.length > 0 ? { models: profile.models } : {}),
+    temperature: profile.temperature ?? null,
+    topP: profile.topP ?? null,
+    maxOutputTokens: profile.maxOutputTokens ?? null,
     enabled: profile.enabled,
     keyConfigured: profile.provider !== 'codex-subscription' && Boolean(profile.apiKey),
     legacyInlineCredentialIgnored,
+    backendProfileId: profile.backendProfileId ?? null,
   }
 }
 
@@ -142,13 +158,21 @@ export function resolveProfileProvider(profile: PersistedAiProfile, requestedMod
       return {
         providerId: 'anthropic',
         model,
-        config: { anthropicApiKey: profile.apiKey },
+        config: {
+          anthropicApiKey: profile.apiKey,
+          requestTimeoutMs: profile.timeoutMs,
+          maxRetries: profile.maxRetries,
+        },
       }
     case 'ollama':
       return {
         providerId: 'ollama',
         model,
-        config: { ollamaUrl: profile.baseUrl },
+        config: {
+          ollamaUrl: profile.baseUrl,
+          requestTimeoutMs: profile.timeoutMs,
+          maxRetries: profile.maxRetries,
+        },
       }
     case 'codex-subscription':
       return {
@@ -159,6 +183,9 @@ export function resolveProfileProvider(profile: PersistedAiProfile, requestedMod
           openaiSubscriptionToken: undefined,
           openaiSubscriptionBaseURL: profile.baseUrl,
           openaiModel: profile.model,
+          openaiWireProtocol: 'responses',
+          requestTimeoutMs: profile.timeoutMs,
+          maxRetries: profile.maxRetries,
         },
       }
     case 'openai-compatible':
@@ -171,6 +198,9 @@ export function resolveProfileProvider(profile: PersistedAiProfile, requestedMod
           openaiApiKey: profile.apiKey,
           openaiBaseURL: profile.baseUrl,
           openaiModel: profile.model,
+          openaiWireProtocol: profile.wireProtocol,
+          requestTimeoutMs: profile.timeoutMs,
+          maxRetries: profile.maxRetries,
         },
       }
   }
@@ -334,6 +364,9 @@ export function validateProfilesPatch(
             'baseUrl',
             'model',
             'models',
+            'temperature',
+            'topP',
+            'maxOutputTokens',
             'enabled',
             'apiKey',
             'backendProfileId',
@@ -422,6 +455,25 @@ export function validateProfilesPatch(
           if (models.length > 0) {
             profile.models = models
           }
+        }
+
+        if (raw.temperature !== undefined && raw.temperature !== null) {
+          if (typeof raw.temperature !== 'number' || !Number.isFinite(raw.temperature) || raw.temperature < 0 || raw.temperature > 2) {
+            return { error: `Profile ${id} temperature must be a number from 0 to 2.` }
+          }
+          profile.temperature = raw.temperature
+        }
+        if (raw.topP !== undefined && raw.topP !== null) {
+          if (typeof raw.topP !== 'number' || !Number.isFinite(raw.topP) || raw.topP < 0 || raw.topP > 1) {
+            return { error: `Profile ${id} topP must be a number from 0 to 1.` }
+          }
+          profile.topP = raw.topP
+        }
+        if (raw.maxOutputTokens !== undefined && raw.maxOutputTokens !== null) {
+          if (!Number.isSafeInteger(raw.maxOutputTokens) || (raw.maxOutputTokens as number) < 1 || (raw.maxOutputTokens as number) > 200_000) {
+            return { error: `Profile ${id} maxOutputTokens must be an integer from 1 to 200000.` }
+          }
+          profile.maxOutputTokens = raw.maxOutputTokens as number
         }
 
         // Standard Red Notes: optional reference to a named backend profile. A
@@ -530,6 +582,10 @@ export interface PersistedBackendProfile {
   model?: string
   /** Optional cached list of available models. */
   models?: string[]
+  /** OpenAI transport contract; subscription backends always resolve to Responses. */
+  wireProtocol?: 'chat-completions' | 'responses'
+  timeoutMs?: number
+  maxRetries?: number
   /** api-key backends: the secret credential. NEVER returned by any endpoint. */
   apiKey?: string
   /** subscription backends: the id of the paired subscription credential. */
@@ -545,6 +601,9 @@ export interface MaskedBackendProfile {
   baseUrl: string | null
   model: string | null
   models?: string[]
+  wireProtocol: 'chat-completions' | 'responses' | null
+  timeoutMs: number | null
+  maxRetries: number | null
   subscriptionId: string | null
   keyConfigured: boolean
 }
@@ -559,6 +618,9 @@ export function maskBackendProfile(backend: PersistedBackendProfile): MaskedBack
     baseUrl: backend.baseUrl ?? null,
     model: backend.model ?? null,
     ...(backend.models && backend.models.length > 0 ? { models: backend.models } : {}),
+    wireProtocol: backend.type === 'subscription' ? 'responses' : (backend.wireProtocol ?? null),
+    timeoutMs: backend.timeoutMs ?? null,
+    maxRetries: backend.maxRetries ?? null,
     subscriptionId: backend.subscriptionId ?? null,
     keyConfigured: Boolean(backend.apiKey),
   }
@@ -583,6 +645,7 @@ export function backendProfileFromAssistantProfile(profile: PersistedAiProfile):
       type: 'subscription',
       baseUrl: profile.baseUrl,
       model: profile.model,
+      wireProtocol: 'responses',
       subscriptionId: profile.subscriptionId ?? DEFAULT_SUBSCRIPTION_ID,
     }
   }
@@ -661,6 +724,9 @@ export function resolveEffectiveAssistantProfile(
       model: profile.model ?? backend.model,
       apiKey: undefined,
       subscriptionId,
+      wireProtocol: 'responses',
+      timeoutMs: backend.timeoutMs,
+      maxRetries: backend.maxRetries,
     }
   }
   return {
@@ -670,6 +736,9 @@ export function resolveEffectiveAssistantProfile(
     model: profile.model ?? backend.model,
     models: backend.models ?? profile.models,
     apiKey: backend.apiKey,
+    wireProtocol: backend.wireProtocol,
+    timeoutMs: backend.timeoutMs,
+    maxRetries: backend.maxRetries,
   }
 }
 
@@ -769,7 +838,20 @@ export function validateBackendProfilesPatch(
     }
     const raw = entry as Record<string, unknown>
     if (
-      !hasOnlyKeys(raw, ['id', 'name', 'type', 'provider', 'baseUrl', 'model', 'models', 'apiKey', 'subscriptionId'])
+      !hasOnlyKeys(raw, [
+        'id',
+        'name',
+        'type',
+        'provider',
+        'baseUrl',
+        'model',
+        'models',
+        'apiKey',
+        'subscriptionId',
+        'wireProtocol',
+        'timeoutMs',
+        'maxRetries',
+      ])
     ) {
       return { error: 'Each ai.backendProfiles entry contains an unknown field.' }
     }
@@ -839,6 +921,24 @@ export function validateBackendProfilesPatch(
         backend.models = models
       }
     }
+    if (raw.wireProtocol !== undefined && raw.wireProtocol !== null) {
+      if (raw.wireProtocol !== 'chat-completions' && raw.wireProtocol !== 'responses') {
+        return { error: `Backend profile ${id} wireProtocol must be 'chat-completions' or 'responses'.` }
+      }
+      backend.wireProtocol = raw.wireProtocol
+    }
+    if (raw.timeoutMs !== undefined && raw.timeoutMs !== null) {
+      if (!Number.isSafeInteger(raw.timeoutMs) || (raw.timeoutMs as number) < 1_000 || (raw.timeoutMs as number) > 600_000) {
+        return { error: `Backend profile ${id} timeoutMs must be an integer from 1000 to 600000.` }
+      }
+      backend.timeoutMs = raw.timeoutMs as number
+    }
+    if (raw.maxRetries !== undefined && raw.maxRetries !== null) {
+      if (!Number.isSafeInteger(raw.maxRetries) || (raw.maxRetries as number) < 0 || (raw.maxRetries as number) > 10) {
+        return { error: `Backend profile ${id} maxRetries must be an integer from 0 to 10.` }
+      }
+      backend.maxRetries = raw.maxRetries as number
+    }
 
     if (type === 'api-key') {
       const provider = raw.provider
@@ -848,6 +948,10 @@ export function validateBackendProfilesPatch(
         }
       }
       backend.provider = provider as BackendApiKeyProvider
+
+      if (backend.wireProtocol && backend.provider !== 'openai-compatible') {
+        return { error: `Backend profile ${id} wireProtocol is only valid for openai-compatible providers.` }
+      }
 
       if (raw.apiKey === undefined) {
         const prior = existingById.get(id)
@@ -876,6 +980,7 @@ export function validateBackendProfilesPatch(
         return { error: `Backend profile ${id} has an invalid subscriptionId.` }
       }
       backend.subscriptionId = subscriptionId
+      backend.wireProtocol = 'responses'
     }
 
     backends.push(backend)

@@ -1,6 +1,7 @@
 import { Provider } from './types'
 import { AnthropicProvider } from './anthropic'
 import { OpenAIProvider } from './openai'
+import { OpenAIResponsesProvider } from './openaiResponses'
 import { OllamaProvider } from './ollama'
 import { DEFAULT_OPENAI_BASE_URL, openAiCompatibleConfigured, resolveOpenAiUpstream } from './openaiAuth'
 
@@ -28,6 +29,11 @@ export interface AssistantProviderConfig {
   openaiBaseURL?: string
   /** Optional default model for the OpenAI-compatible endpoint. */
   openaiModel?: string
+  /** Wire contract for API-key OpenAI-compatible backends. Subscription is always Responses. */
+  openaiWireProtocol?: 'chat-completions' | 'responses'
+  /** Bounded upstream request timeout and retry controls. */
+  requestTimeoutMs?: number
+  maxRetries?: number
   /** Base URL for the native Ollama (/api/chat) provider. */
   ollamaUrl?: string
 
@@ -142,25 +148,31 @@ export function resolveProvider(provider: string, model: string, config: Assista
       if (!config.anthropicApiKey) {
         throw new Error('Anthropic provider is not configured on this server')
       }
-      return new AnthropicProvider(model, config.anthropicApiKey)
+      return new AnthropicProvider(model, config.anthropicApiKey, undefined, config.requestTimeoutMs, config.maxRetries)
     case 'openai':
     case 'openai-compatible': {
       if (!openAiCompatibleConfigured(config)) {
         throw new Error('OpenAI-compatible provider is not configured on this server')
       }
       const upstream = resolveOpenAiUpstream(config)
-      return new OpenAIProvider(
+      const ProviderClass =
+        upstream.mode === 'subscription' || config.openaiWireProtocol === 'responses'
+          ? OpenAIResponsesProvider
+          : OpenAIProvider
+      return new ProviderClass(
         model || config.openaiModel || '',
         upstream.apiKey,
         upstream.baseURL,
         upstream.defaultHeaders,
+        config.requestTimeoutMs,
+        config.maxRetries,
       )
     }
     case 'ollama':
       if (!config.ollamaUrl) {
         throw new Error('Ollama provider is not configured on this server')
       }
-      return new OllamaProvider(model, config.ollamaUrl)
+      return new OllamaProvider(model, config.ollamaUrl, config.requestTimeoutMs, config.maxRetries)
     default:
       throw new Error(`Unknown assistant provider: ${provider}`)
   }

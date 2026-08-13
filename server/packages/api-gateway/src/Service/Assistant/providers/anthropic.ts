@@ -10,8 +10,10 @@ export class AnthropicProvider implements Provider {
     private readonly model: string,
     apiKey: string,
     baseURL?: string,
+    timeoutMs?: number,
+    maxRetries?: number,
   ) {
-    this.client = new Anthropic({ apiKey, baseURL })
+    this.client = new Anthropic({ apiKey, baseURL, timeout: timeoutMs, maxRetries })
   }
 
   async *send(req: ProviderRequest): AsyncIterable<ProviderEvent> {
@@ -47,6 +49,8 @@ export class AnthropicProvider implements Provider {
       model: this.model,
       system: req.system,
       max_tokens: req.maxOutputTokens ?? 4096,
+      temperature: req.temperature,
+      top_p: req.topP,
       messages,
       tools: req.tools.map((t) => ({
         name: t.name,
