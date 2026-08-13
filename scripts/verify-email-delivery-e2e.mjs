@@ -124,7 +124,7 @@ async function runAgainstCompose() {
       [
         "compose",
         "exec",
-        "--no-tty",
+        "-T",
         "--workdir",
         COMPOSE_SERVER_WORKDIR,
         "server",
@@ -146,7 +146,7 @@ async function runAgainstCompose() {
   } finally {
     const cleanup = run(
       "docker",
-      ["compose", "exec", "--no-tty", "server", "rm", "-f", containerScript],
+      ["compose", "exec", "-T", "server", "rm", "-f", containerScript],
       { allowFailure: true },
     );
     if (cleanup.status !== 0) {
