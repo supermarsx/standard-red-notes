@@ -17,6 +17,9 @@ const baseRow = (overrides: Partial<ProfileRow> = {}): ProfileRow => ({
   baseUrl: '',
   model: 'claude-3-5-sonnet-latest',
   models: [],
+  temperature: '',
+  topP: '',
+  maxOutputTokens: '',
   enabled: true,
   keyConfigured: false,
   legacyInlineCredentialIgnored: false,
@@ -35,6 +38,9 @@ describe('aiProfiles helpers', () => {
         provider: 'openai-compatible',
         baseUrl: 'https://openrouter.ai/api/v1',
         model: 'gpt-4o',
+        temperature: 0.25,
+        topP: 0.9,
+        maxOutputTokens: 8192,
         enabled: true,
         keyConfigured: true,
         legacyInlineCredentialIgnored: false,
@@ -44,6 +50,9 @@ describe('aiProfiles helpers', () => {
         id: 'p2',
         baseUrl: 'https://openrouter.ai/api/v1',
         keyConfigured: true,
+        temperature: '0.25',
+        topP: '0.9',
+        maxOutputTokens: '8192',
         newKey: '',
         clearKey: false,
       })
@@ -72,6 +81,33 @@ describe('aiProfiles helpers', () => {
     })
     it('accepts a valid row', () => {
       expect(validateProfileRow(baseRow()).ok).toBe(true)
+    })
+    it.each([
+      [{ temperature: '-0.1' }, 'temperature'],
+      [{ temperature: '2.1' }, 'temperature'],
+      [{ topP: '-0.1' }, 'top-p'],
+      [{ topP: '1.1' }, 'top-p'],
+      [{ maxOutputTokens: '0' }, 'maximum output tokens'],
+      [{ maxOutputTokens: '1.5' }, 'maximum output tokens'],
+      [{ maxOutputTokens: '200001' }, 'maximum output tokens'],
+    ] as Array<[Partial<ProfileRow>, string]>)('rejects invalid advanced value %p', (overrides, message) => {
+      const result = validateProfileRow(baseRow(overrides))
+      expect(result.ok).toBe(false)
+      if (!result.ok) {
+        expect(result.error).toContain(message)
+      }
+    })
+    it('requires an effective model but accepts the selected backend default', () => {
+      const row = baseRow({ model: '', backendProfileId: 'backend-1' })
+      expect(validateProfileRow(row, [{ id: 'backend-1', model: '' }]).ok).toBe(false)
+      expect(validateProfileRow(row, [{ id: 'backend-1', model: 'server-model' }])).toEqual({ ok: true })
+    })
+    it('reports a stale backend reference instead of silently using embedded fields', () => {
+      const result = validateProfileRow(baseRow({ backendProfileId: 'missing' }), [])
+      expect(result.ok).toBe(false)
+      if (!result.ok) {
+        expect(result.error).toContain('available backend')
+      }
     })
   })
 
@@ -117,6 +153,16 @@ describe('aiProfiles helpers', () => {
     it('drops a base URL for providers that do not support one', () => {
       const payload = rowToPayload(baseRow({ provider: 'anthropic', baseUrl: '' }))
       expect(payload.baseUrl).toBeUndefined()
+    })
+    it('serializes profile generation controls with the server field names', () => {
+      const payload = rowToPayload(baseRow({ temperature: '0.35', topP: '0.8', maxOutputTokens: '16384' }))
+      expect(payload).toMatchObject({ temperature: 0.35, topP: 0.8, maxOutputTokens: 16384 })
+    })
+    it('omits blank generation controls so the server keeps authority over defaults', () => {
+      const payload = rowToPayload(baseRow())
+      expect(payload).not.toHaveProperty('temperature')
+      expect(payload).not.toHaveProperty('topP')
+      expect(payload).not.toHaveProperty('maxOutputTokens')
     })
   })
 

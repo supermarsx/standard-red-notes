@@ -12,6 +12,7 @@ import {
   BackendProfilePayload,
   BackendProfileRow,
   backendProviderSupportsBaseUrl,
+  backendUsesOpenAiWireProtocol,
   buildBackendProfilesUpdate,
   emptyBackendRow,
   maskedBackendToRow,
@@ -207,6 +208,16 @@ const BackendProfilesSection: FunctionComponent<Props> = ({ backendProfiles, bus
                     disabled={busy}
                   />
                 </div>
+                <div>
+                  <label className="text-sm font-semibold">Default model</label>
+                  <DecoratedInput
+                    className={{ container: 'mt-1' }}
+                    placeholder="Model id (required unless the assistant overrides it)"
+                    value={row.model}
+                    onChange={(value) => mutateRow(row.id, { model: value })}
+                    disabled={busy}
+                  />
+                </div>
                 <div className="md:col-span-2">
                   <Text className="text-passive-1 text-xs">
                     Uses the paired subscription credential whose id matches above. Pair it with the wizard below (the
@@ -216,6 +227,66 @@ const BackendProfilesSection: FunctionComponent<Props> = ({ backendProfiles, bus
               </>
             )}
           </div>
+
+          <details className="border-border bg-contrast mt-3 rounded border px-3 py-2">
+            <summary className="cursor-pointer text-sm font-semibold select-none">Advanced transport controls</summary>
+            <Text className="text-passive-1 mt-2 text-xs">
+              Backend-level connection behavior shared by every assistant profile that references this backend.
+              Generation controls remain on each assistant profile.
+            </Text>
+            <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
+              {backendUsesOpenAiWireProtocol(row) && (
+                <div>
+                  <label className="text-sm font-semibold">OpenAI wire protocol</label>
+                  <select
+                    className="border-border bg-default text-foreground mt-1 w-full rounded border px-2 py-1.5 text-sm"
+                    value={row.wireProtocol}
+                    onChange={(event) =>
+                      mutateRow(row.id, { wireProtocol: event.target.value as BackendProfileRow['wireProtocol'] })
+                    }
+                    disabled={busy}
+                  >
+                    <option value="chat-completions">Chat Completions</option>
+                    <option value="responses">Responses</option>
+                  </select>
+                  <Text className="text-passive-1 mt-1 text-xs">
+                    Subscription backends normally use Responses; most local OpenAI-compatible servers use Chat
+                    Completions.
+                  </Text>
+                </div>
+              )}
+              <div>
+                <label className="text-sm font-semibold">Request timeout (ms)</label>
+                <input
+                  className="border-border bg-default text-foreground mt-1 w-full rounded border px-2 py-1.5 text-sm"
+                  type="number"
+                  min="1000"
+                  max="600000"
+                  step="1000"
+                  placeholder="60000 (server default)"
+                  value={row.timeoutMs}
+                  onChange={(event) => mutateRow(row.id, { timeoutMs: event.target.value })}
+                  disabled={busy}
+                />
+                <Text className="text-passive-1 mt-1 text-xs">1–600 seconds for one upstream attempt.</Text>
+              </div>
+              <div>
+                <label className="text-sm font-semibold">Maximum retries</label>
+                <input
+                  className="border-border bg-default text-foreground mt-1 w-full rounded border px-2 py-1.5 text-sm"
+                  type="number"
+                  min="0"
+                  max="10"
+                  step="1"
+                  placeholder="2 (server default)"
+                  value={row.maxRetries}
+                  onChange={(event) => mutateRow(row.id, { maxRetries: event.target.value })}
+                  disabled={busy}
+                />
+                <Text className="text-passive-1 mt-1 text-xs">0 disables retries; maximum 10.</Text>
+              </div>
+            </div>
+          </details>
         </div>
       ))}
 
