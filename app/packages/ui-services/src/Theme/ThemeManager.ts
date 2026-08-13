@@ -14,6 +14,7 @@ import {
   ComponentManagerInterface,
   LocalPrefKey,
   ColorSchemeMode,
+  CurrentColorSchemeModeVersion,
 } from '@standardnotes/services'
 import { NativeFeatureIdentifier, FindNativeTheme, ThemeFeatureDescription } from '@standardnotes/features'
 import { WebApplicationInterface } from '../WebApplication/WebApplicationInterface'
@@ -26,6 +27,11 @@ import { resolveColorSchemeTheme } from './ResolveColorSchemeTheme'
 
 const CachedThemesKey = 'cachedThemes'
 const DefaultThemeIdentifier = 'Default'
+const DefaultThemeBackgroundColor = '#120e11'
+
+function isColorSchemeMode(value: unknown): value is ColorSchemeMode {
+  return value === 'manual' || value === 'auto' || value === 'light' || value === 'dark'
+}
 
 export class ThemeManager extends AbstractUIService {
   private themesActiveInTheUI: ActiveThemeList
@@ -106,7 +112,15 @@ export class ThemeManager extends AbstractUIService {
             mq.addListener(this.colorSchemeEventHandler)
           }
         }
+        // Cached theme links load before encrypted local preferences. Reconcile
+        // them now so a stale light stylesheet cannot survive a dark/manual
+        // selection merely because no preference change event was emitted.
+        this.handleThemeStateChange()
         await this.applyColorSchemeMode()
+        // Applying Dark can synchronously clear an ActiveThemes entry that kept
+        // a cached light link alive during the first pass. Reconcile once more
+        // so launch resolves only after the DOM reflects the migrated choice.
+        this.handleThemeStateChange()
         break
       }
       case ApplicationEvent.LocalPreferencesChanged: {
@@ -224,23 +238,42 @@ export class ThemeManager extends AbstractUIService {
   }
 
   /**
-   * Returns the persisted color-scheme mode. Older installations can have an
-   * ActiveThemes selection (or the legacy system-theme switch) without the
-   * newer mode key. Materialize that state as `manual` before any automatic
-   * theme is applied so an upgrade cannot silently replace the saved choice.
+   * Returns a validated, migrated color-scheme mode. Older installations can
+   * have an ActiveThemes selection without the newer mode key, while releases
+   * before the dark-first default persisted Auto for otherwise untouched users.
+   * That old value has no provenance to distinguish implicit from explicit Auto,
+   * so version 1 deliberately resets it once. Choices made after the migration
+   * retain their version marker, and malformed local state fails closed to Red.
    */
   private getColorSchemeMode(): ColorSchemeMode {
     const storedMode = this.preferences.getLocalValue(LocalPrefKey.ColorSchemeMode, undefined)
-    if (storedMode) {
+    const storedVersion = this.preferences.getLocalValue(LocalPrefKey.ColorSchemeModeVersion, undefined)
+
+    if (typeof storedVersion !== 'number' || storedVersion < CurrentColorSchemeModeVersion) {
+      const hasSavedTheme = this.preferences.getLocalValue(LocalPrefKey.ActiveThemes, []).length > 0
+      const usesLegacySystemThemes = this.preferences.getLocalValue(LocalPrefKey.UseSystemColorScheme, false)
+      const migratedMode: ColorSchemeMode =
+        storedMode === undefined
+          ? hasSavedTheme || usesLegacySystemThemes
+            ? 'manual'
+            : 'dark'
+          : isColorSchemeMode(storedMode) && storedMode !== 'auto'
+            ? storedMode
+            : 'dark'
+
+      this.preferences.setLocalValue(LocalPrefKey.ColorSchemeModeVersion, CurrentColorSchemeModeVersion)
+      if (storedMode !== migratedMode) {
+        this.preferences.setLocalValue(LocalPrefKey.ColorSchemeMode, migratedMode)
+      }
+      return migratedMode
+    }
+
+    if (isColorSchemeMode(storedMode)) {
       return storedMode
     }
 
-    const hasSavedTheme = this.preferences.getLocalValue(LocalPrefKey.ActiveThemes, []).length > 0
-    const usesLegacySystemThemes = this.preferences.getLocalValue(LocalPrefKey.UseSystemColorScheme, false)
-    const inferredMode: ColorSchemeMode = hasSavedTheme || usesLegacySystemThemes ? 'manual' : 'auto'
-
-    this.preferences.setLocalValue(LocalPrefKey.ColorSchemeMode, inferredMode)
-    return inferredMode
+    this.preferences.setLocalValue(LocalPrefKey.ColorSchemeMode, 'dark')
+    return 'dark'
   }
 
   /**
@@ -275,6 +308,10 @@ export class ThemeManager extends AbstractUIService {
   setColorSchemeMode(mode: ColorSchemeMode): void {
     if (this.preferences.getLocalValue(LocalPrefKey.UseSystemColorScheme, false)) {
       this.preferences.setLocalValue(LocalPrefKey.UseSystemColorScheme, false)
+    }
+    const storedVersion = this.preferences.getLocalValue(LocalPrefKey.ColorSchemeModeVersion, undefined)
+    if (typeof storedVersion !== 'number' || storedVersion < CurrentColorSchemeModeVersion) {
+      this.preferences.setLocalValue(LocalPrefKey.ColorSchemeModeVersion, CurrentColorSchemeModeVersion)
     }
     this.preferences.setLocalValue(LocalPrefKey.ColorSchemeMode, mode)
   }
@@ -536,9 +573,16 @@ export class ThemeManager extends AbstractUIService {
 
     this.themesActiveInTheUI.remove(id)
 
+    // Removing a theme exposes the underlying palette. Keep browser chrome and
+    // native shells in sync with that palette instead of retaining light-theme
+    // metadata after the stylesheet is gone.
+    this.syncThemeColorMetadata()
+
     if (this.themesActiveInTheUI.isEmpty()) {
       if (this.application.isNativeMobileWeb()) {
-        this.application.mobileDevice.handleThemeSchemeChange(false, '#ffffff')
+        const backgroundColorString = this.getBackgroundColor()
+        const backgroundColor = new Color(backgroundColorString)
+        this.application.mobileDevice.handleThemeSchemeChange(backgroundColor.isDark(), backgroundColorString)
       }
       this.toggleTranslucentUIColors()
     }
@@ -546,7 +590,7 @@ export class ThemeManager extends AbstractUIService {
 
   private getBackgroundColor() {
     const bgColor = getComputedStyle(document.documentElement).getPropertyValue('--sn-stylekit-background-color').trim()
-    return bgColor.length ? bgColor : '#ffffff'
+    return bgColor.length ? bgColor : DefaultThemeBackgroundColor
   }
 
   private shouldUseTranslucentUI() {
