@@ -808,6 +808,8 @@
           url: /API.html#dead-mans-switches-standard-red-notes
         - title: Email reminders
           url: /API.html#email-reminders-standard-red-notes
+        - title: Published reminder delivery
+          url: /API.html#published-reminder-delivery-standard-red-notes
         - title: AI assistant proxy
           url: /API.html#ai-assistant-proxy-standard-red-notes
         - title: Integrations
