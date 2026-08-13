@@ -20,6 +20,10 @@ export type MaskedAiProfile = {
   baseUrl?: string | null
   model?: string | null
   models?: string[]
+  /** Optional profile-level generation overrides. */
+  temperature?: number | null
+  topP?: number | null
+  maxOutputTokens?: number | null
   enabled: boolean
   keyConfigured: boolean
   /** A legacy plaintext subscription credential is present but ignored. */
@@ -36,6 +40,9 @@ export type AiProfilePayload = {
   baseUrl?: string | null
   model?: string | null
   models?: string[]
+  temperature?: number
+  topP?: number
+  maxOutputTokens?: number
   enabled: boolean
   /** string = set new key; null = clear; omitted = preserve existing. */
   apiKey?: string | null
@@ -51,6 +58,12 @@ export type ProfileRow = {
   baseUrl: string
   model: string
   models: string[]
+  /** Blank means inherit the server/provider default. */
+  temperature: string
+  /** Blank means inherit the server/provider default. */
+  topP: string
+  /** Blank means inherit the server/provider default. */
+  maxOutputTokens: string
   enabled: boolean
   keyConfigured: boolean
   /** Non-secret server warning; cleared after the migrated profile set is saved. */
@@ -125,6 +138,38 @@ export const providerOption = (kind: AiProfileProviderKind): ProviderOption =>
 
 export const providerLabel = (kind: AiProfileProviderKind): string => providerOption(kind).label
 
+export type ProfileBackendView = {
+  id: string
+  model?: string | null
+}
+
+const optionalNumberInput = (value: number | null | undefined): string => {
+  return value === null || value === undefined ? '' : `${value}`
+}
+
+const parsedOptionalNumber = (value: string): number | undefined => {
+  const trimmed = value.trim()
+  return trimmed === '' ? undefined : Number(trimmed)
+}
+
+const validateOptionalNumber = (
+  value: string,
+  label: string,
+  minimum: number,
+  maximum: number,
+  integer = false,
+): string | undefined => {
+  const parsed = parsedOptionalNumber(value)
+  if (parsed === undefined) {
+    return undefined
+  }
+  if (!Number.isFinite(parsed) || parsed < minimum || parsed > maximum || (integer && !Number.isInteger(parsed))) {
+    const kind = integer ? 'whole number' : 'number'
+    return `${label} must be a ${kind} from ${minimum} to ${maximum}.`
+  }
+  return undefined
+}
+
 /** Cryptographically-random, URL-safe profile id (stable across edits). */
 export const generateProfileId = (): string => {
   const cryptoObj = (globalThis as { crypto?: Crypto }).crypto
@@ -142,6 +187,9 @@ export const maskedProfileToRow = (profile: MaskedAiProfile): ProfileRow => ({
   baseUrl: profile.baseUrl ?? '',
   model: profile.model ?? '',
   models: profile.models ?? [],
+  temperature: optionalNumberInput(profile.temperature),
+  topP: optionalNumberInput(profile.topP),
+  maxOutputTokens: optionalNumberInput(profile.maxOutputTokens),
   enabled: profile.enabled,
   keyConfigured: profile.keyConfigured,
   legacyInlineCredentialIgnored: Boolean(profile.legacyInlineCredentialIgnored),
@@ -158,6 +206,9 @@ export const emptyProfileRow = (): ProfileRow => ({
   baseUrl: '',
   model: '',
   models: [],
+  temperature: '',
+  topP: '',
+  maxOutputTokens: '',
   enabled: true,
   keyConfigured: false,
   legacyInlineCredentialIgnored: false,
@@ -171,30 +222,68 @@ export type ProfileValidation = { ok: true } | { ok: false; error: string }
 const isHttpUrl = (value: string): boolean => /^https?:\/\/.+/i.test(value.trim())
 
 /** Validates a single row before it is included in a save. */
-export const validateProfileRow = (row: ProfileRow): ProfileValidation => {
+export const validateProfileRow = (row: ProfileRow, backendProfiles: ProfileBackendView[] = []): ProfileValidation => {
   if (row.name.trim() === '') {
     return { ok: false, error: 'Each profile needs a name.' }
   }
   const option = providerOption(row.provider)
-  if (row.baseUrl.trim() !== '' && !isHttpUrl(row.baseUrl)) {
+  const usesBackend = row.backendProfileId.trim() !== ''
+  const selectedBackend = usesBackend
+    ? backendProfiles.find((backend) => backend.id === row.backendProfileId.trim())
+    : undefined
+  if (usesBackend && !selectedBackend) {
+    return { ok: false, error: `${row.name || 'Profile'}: select an available backend profile.` }
+  }
+  if (!usesBackend && row.baseUrl.trim() !== '' && !isHttpUrl(row.baseUrl)) {
     return { ok: false, error: `${row.name || 'Profile'}: base URL must be a full http(s):// URL.` }
   }
-  if (!option.supportsBaseUrl && row.baseUrl.trim() !== '') {
+  if (!usesBackend && !option.supportsBaseUrl && row.baseUrl.trim() !== '') {
     return { ok: false, error: `${row.name}: ${option.label} does not use a base URL.` }
   }
-  if (row.provider === 'codex-subscription' && row.newKey.trim() !== '') {
+  if (!usesBackend && row.provider === 'codex-subscription' && row.newKey.trim() !== '') {
     return {
       ok: false,
       error: `${row.name || 'Profile'}: pair the subscription below instead of storing a token in the profile.`,
     }
   }
+  const effectiveModel = row.model.trim() || selectedBackend?.model?.trim() || ''
+  if (row.enabled && effectiveModel === '') {
+    return {
+      ok: false,
+      error:
+        `${row.name || 'Profile'}: set a model on this assistant profile` +
+        (usesBackend ? ' or set a default model on its selected backend.' : '.'),
+    }
+  }
+  const temperatureError = validateOptionalNumber(row.temperature, `${row.name || 'Profile'} temperature`, 0, 2)
+  if (temperatureError) {
+    return { ok: false, error: temperatureError }
+  }
+  const topPError = validateOptionalNumber(row.topP, `${row.name || 'Profile'} top-p`, 0, 1)
+  if (topPError) {
+    return { ok: false, error: topPError }
+  }
+  const maxOutputTokensError = validateOptionalNumber(
+    row.maxOutputTokens,
+    `${row.name || 'Profile'} maximum output tokens`,
+    1,
+    200_000,
+    true,
+  )
+  if (maxOutputTokensError) {
+    return { ok: false, error: maxOutputTokensError }
+  }
   return { ok: true }
 }
 
 /** Validates the whole set (rows valid, unique names help but not required, default exists). */
-export const validateProfileRows = (rows: ProfileRow[], defaultProfileId: string | null): ProfileValidation => {
+export const validateProfileRows = (
+  rows: ProfileRow[],
+  defaultProfileId: string | null,
+  backendProfiles: ProfileBackendView[] = [],
+): ProfileValidation => {
   for (const row of rows) {
-    const result = validateProfileRow(row)
+    const result = validateProfileRow(row, backendProfiles)
     if (!result.ok) {
       return result
     }
@@ -226,6 +315,18 @@ export const rowToPayload = (row: ProfileRow): AiProfilePayload => {
   }
   if (row.models.length > 0) {
     payload.models = row.models
+  }
+  const temperature = parsedOptionalNumber(row.temperature)
+  if (temperature !== undefined) {
+    payload.temperature = temperature
+  }
+  const topP = parsedOptionalNumber(row.topP)
+  if (topP !== undefined) {
+    payload.topP = topP
+  }
+  const maxOutputTokens = parsedOptionalNumber(row.maxOutputTokens)
+  if (maxOutputTokens !== undefined) {
+    payload.maxOutputTokens = maxOutputTokens
   }
   // Standard Red Notes: backend reference. A non-empty id links the profile; ''
   // is sent so the server clears any prior link (falls back to embedded fields).

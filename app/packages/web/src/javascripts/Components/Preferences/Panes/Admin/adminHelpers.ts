@@ -420,10 +420,14 @@ export type AdminAiProfileView = {
   baseUrl?: string | null
   model?: string | null
   models?: string[]
+  temperature?: number | null
+  topP?: number | null
+  maxOutputTokens?: number | null
   enabled: boolean
   keyConfigured: boolean
   /** Legacy plaintext subscription credential exists but is ignored server-side. */
   legacyInlineCredentialIgnored?: boolean
+  backendProfileId?: string | null
 }
 
 /** A masked backend (provider/connection) profile from the server view. */
@@ -436,6 +440,9 @@ export type AdminBackendProfileView = {
   model?: string | null
   models?: string[]
   subscriptionId?: string | null
+  wireProtocol?: 'chat-completions' | 'responses' | null
+  timeoutMs?: number | null
+  maxRetries?: number | null
   keyConfigured: boolean
 }
 

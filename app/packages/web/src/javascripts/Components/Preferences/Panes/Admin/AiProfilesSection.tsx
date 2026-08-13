@@ -120,7 +120,7 @@ const AiProfilesSection: FunctionComponent<Props> = ({
   )
 
   const handleSave = useCallback(async () => {
-    const validation = validateProfileRows(rows, defaultId)
+    const validation = validateProfileRows(rows, defaultId, backendProfiles)
     if (!validation.ok) {
       addToast({ type: ToastType.Error, message: validation.error })
       return
@@ -129,7 +129,7 @@ const AiProfilesSection: FunctionComponent<Props> = ({
     // The parent's save() reports success/failure toasts; we only surface local
     // validation errors here to avoid double toasts.
     await onSave(update)
-  }, [rows, defaultId, onSave])
+  }, [rows, defaultId, backendProfiles, onSave])
 
   const datalistId = 'ai-profile-models'
 
@@ -148,9 +148,9 @@ const AiProfilesSection: FunctionComponent<Props> = ({
         </div>
       </div>
       <Text className="mt-1">
-        Define multiple named provider configurations (provider, base URL, model, credential). One is the{' '}
-        <strong>default</strong>; clients may also select a profile by id. API keys are write-only. Changes here save as
-        a set — click <strong>Save profiles</strong> to persist.
+        Define assistant behavior and choose either an embedded provider connection or a reusable backend profile. One
+        assistant profile is the <strong>default</strong>. API keys are write-only. Changes here save as a set — click{' '}
+        <strong>Save profiles</strong> to persist.
       </Text>
 
       {rows.length === 0 && (
@@ -162,6 +162,9 @@ const AiProfilesSection: FunctionComponent<Props> = ({
       {rows.map((row) => {
         const option = providerOption(row.provider)
         const isSaved = savedIds.has(row.id)
+        const selectedBackend = backendProfiles.find((backend) => backend.id === row.backendProfileId)
+        const hasEffectiveModel = row.model.trim() !== '' || Boolean(selectedBackend?.model?.trim())
+        const usesBackend = row.backendProfileId !== ''
         return (
           <div key={row.id} className="border-border mt-3 rounded border p-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -225,7 +228,7 @@ const AiProfilesSection: FunctionComponent<Props> = ({
                       ...(provider === 'codex-subscription' ? { newKey: '', clearKey: false } : {}),
                     })
                   }}
-                  disabled={busy}
+                  disabled={busy || usesBackend}
                 >
                   {PROFILE_PROVIDER_OPTIONS.map((opt) => (
                     <option key={opt.value} value={opt.value}>
@@ -252,7 +255,8 @@ const AiProfilesSection: FunctionComponent<Props> = ({
                 </select>
                 {row.backendProfileId !== '' && (
                   <Text className="text-passive-1 mt-1 text-xs">
-                    Credentials/connection come from the selected backend profile; the fields below are ignored.
+                    Provider, connection, and credentials come from the selected backend. The model below may override
+                    its default; generation controls remain specific to this assistant profile.
                   </Text>
                 )}
               </div>
@@ -265,7 +269,7 @@ const AiProfilesSection: FunctionComponent<Props> = ({
                     placeholder={option.baseUrlPlaceholder ?? 'https://…'}
                     value={row.baseUrl}
                     onChange={(value) => mutateRow(row.id, { baseUrl: value })}
-                    disabled={busy}
+                    disabled={busy || usesBackend}
                   />
                 </div>
               )}
@@ -275,7 +279,7 @@ const AiProfilesSection: FunctionComponent<Props> = ({
                 <div className="mt-1 flex items-center gap-2">
                   <input
                     className="border-border bg-default text-text focus-visible:ring-info flex-1 rounded border px-2 py-1.5 text-sm focus:outline-none focus-visible:ring-2"
-                    placeholder="Model id"
+                    placeholder={selectedBackend?.model ? `Backend default: ${selectedBackend.model}` : 'Model id'}
                     value={row.model}
                     onChange={(event) => mutateRow(row.id, { model: event.target.value })}
                     list={datalistId + '-' + row.id}
@@ -299,6 +303,12 @@ const AiProfilesSection: FunctionComponent<Props> = ({
                 {option.supportsModelDiscovery && !isSaved && (
                   <Text className="text-passive-1 mt-1 text-xs">Save the profile to enable model discovery.</Text>
                 )}
+                {!hasEffectiveModel && row.enabled && (
+                  <Text className="text-danger mt-1 text-xs">
+                    Set a model here
+                    {usesBackend ? ' or set a default model on the selected backend.' : '.'}
+                  </Text>
+                )}
               </div>
 
               {row.provider === 'codex-subscription' ? (
@@ -319,20 +329,77 @@ const AiProfilesSection: FunctionComponent<Props> = ({
                       placeholder={row.keyConfigured ? 'Set a new key (leave blank to keep)' : 'Set key (write-only)'}
                       value={row.newKey}
                       onChange={(value) => mutateRow(row.id, { newKey: value, clearKey: false })}
-                      disabled={busy}
+                      disabled={busy || usesBackend}
                     />
                     {row.keyConfigured && (
                       <Button
                         label={row.clearKey ? 'Will clear' : 'Clear key'}
                         colorStyle={row.clearKey ? 'danger' : 'default'}
                         onClick={() => mutateRow(row.id, { clearKey: !row.clearKey, newKey: '' })}
-                        disabled={busy}
+                        disabled={busy || usesBackend}
                       />
                     )}
                   </div>
                 </div>
               )}
             </div>
+
+            <details className="border-border bg-contrast mt-3 rounded border px-3 py-2">
+              <summary className="cursor-pointer text-sm font-semibold select-none">
+                Advanced generation controls
+              </summary>
+              <Text className="text-passive-1 mt-2 text-xs">
+                Optional profile-level overrides. Leave a field blank to use the server or provider default. Transport
+                protocol, timeout, and retries belong to the backend profile.
+              </Text>
+              <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
+                <div>
+                  <label className="text-sm font-semibold">Temperature</label>
+                  <input
+                    className="border-border bg-default text-foreground mt-1 w-full rounded border px-2 py-1.5 text-sm"
+                    type="number"
+                    min="0"
+                    max="2"
+                    step="0.05"
+                    placeholder="0.7 (server default)"
+                    value={row.temperature}
+                    onChange={(event) => mutateRow(row.id, { temperature: event.target.value })}
+                    disabled={busy}
+                  />
+                  <Text className="text-passive-1 mt-1 text-xs">0–2; higher values are more varied.</Text>
+                </div>
+                <div>
+                  <label className="text-sm font-semibold">Top-p</label>
+                  <input
+                    className="border-border bg-default text-foreground mt-1 w-full rounded border px-2 py-1.5 text-sm"
+                    type="number"
+                    min="0"
+                    max="1"
+                    step="0.05"
+                    placeholder="1 (server default)"
+                    value={row.topP}
+                    onChange={(event) => mutateRow(row.id, { topP: event.target.value })}
+                    disabled={busy}
+                  />
+                  <Text className="text-passive-1 mt-1 text-xs">0–1 nucleus-sampling probability.</Text>
+                </div>
+                <div>
+                  <label className="text-sm font-semibold">Maximum output tokens</label>
+                  <input
+                    className="border-border bg-default text-foreground mt-1 w-full rounded border px-2 py-1.5 text-sm"
+                    type="number"
+                    min="1"
+                    max="200000"
+                    step="1"
+                    placeholder="4096 (server default)"
+                    value={row.maxOutputTokens}
+                    onChange={(event) => mutateRow(row.id, { maxOutputTokens: event.target.value })}
+                    disabled={busy}
+                  />
+                  <Text className="text-passive-1 mt-1 text-xs">Positive whole number, up to 200,000.</Text>
+                </div>
+              </div>
+            </details>
 
             {row.legacyInlineCredentialIgnored && (
               <div className="border-danger bg-danger-faded mt-3 rounded border border-solid p-3">
