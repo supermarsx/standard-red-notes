@@ -50,6 +50,12 @@ import {
   WEEKLY_WINDOW_MS,
   windowLabel,
 } from '../../Service/Assistant/tokenMetering'
+import {
+  AssistantRequestOutcome,
+  AssistantRequestQuotaReservation,
+  assistantRequestUsageKey,
+  RedisAssistantRequestQuota,
+} from '../../Service/Assistant/AssistantRequestQuota'
 
 interface StreamRequestBody {
   provider?: string
@@ -60,12 +66,6 @@ interface StreamRequestBody {
   messages?: ChatMessage[]
   tools?: ToolDescriptor[]
 }
-
-// Redis usage counters expire shortly after the calendar day they track so
-// stale keys self-clean while a slightly-late midnight request still finds the
-// correct day's counter. 26h covers any timezone skew between the gateway clock
-// and the YYYY-MM-DD bucket boundary.
-const USAGE_TTL_SECONDS = 26 * 60 * 60
 
 interface ResolvedUserLimits {
   // Whether AI is enabled for this user. `undefined` means "not resolvable from
@@ -321,7 +321,7 @@ export class AssistantController extends BaseHttpController {
             id: profile.id,
             name: profile.name,
             provider: profile.provider,
-            model: resolution.model || this.defaultModel,
+            model: resolution.model,
           }
         }
       } catch {
@@ -331,11 +331,18 @@ export class AssistantController extends BaseHttpController {
     }
 
     const legacyDefaultProvider = providers.includes(this.defaultProvider) ? this.defaultProvider : (providers[0] ?? '')
+    const legacyDefaultModel =
+      legacyDefaultProvider === 'openai' || legacyDefaultProvider === 'openai-compatible'
+        ? (await this.effectiveProviderConfig()).openaiModel ||
+          (this.defaultProvider === legacyDefaultProvider ? this.defaultModel : '')
+        : this.defaultProvider === legacyDefaultProvider
+          ? this.defaultModel
+          : ''
 
     response.json({
       providers,
       defaultProvider: effectiveProviderId ?? legacyDefaultProvider,
-      defaultModel: effectiveProfile?.model ?? this.defaultModel,
+      defaultModel: effectiveProfile?.model ?? legacyDefaultModel,
       profileConfigured: effectiveProfile !== undefined,
       effectiveProfile: effectiveProfile ?? null,
     })
@@ -900,19 +907,13 @@ export class AssistantController extends BaseHttpController {
     const limit = this.effectiveLimit(limits, await this.effectiveGlobalDailyLimit())
     const dayKey = this.currentDayKey()
 
-    // 2) Meter per user per day. We INCR up front (so concurrent requests can't
-    // race past the ceiling) and, if the resulting count exceeds the limit, roll
-    // the counter back and reject with 429. The counter therefore only ever ends
-    // up reflecting requests that were allowed to start a proxy stream.
+    // 2) Reserve a daily slot atomically so concurrent streams cannot race past
+    // the limit. A slot becomes charged only after a successful provider finish;
+    // every failure/abort/timeout releases it.
+    let quotaReservation: AssistantRequestQuotaReservation | undefined
     if (this.redis && limit > 0) {
-      const key = this.usageKey(userUuid, dayKey)
-      const count = await this.redis.incr(key)
-      if (count === 1) {
-        await this.redis.expire(key, USAGE_TTL_SECONDS)
-      }
-
-      if (count > limit) {
-        await this.redis.decr(key)
+      const decision = await new RedisAssistantRequestQuota(this.redis).reserve(userUuid, dayKey, limit)
+      if (!decision.allowed) {
         response.status(429).json({
           error: {
             tag: 'ai-rate-limited',
@@ -923,6 +924,7 @@ export class AssistantController extends BaseHttpController {
         })
         return
       }
+      quotaReservation = decision.reservation
     }
 
     // 3) Meter per user per rolling TOKEN window (5h + weekly). We CHECK BEFORE
@@ -949,7 +951,7 @@ export class AssistantController extends BaseHttpController {
         if (exceeded) {
           // Refund the daily request meter we incremented above — this request
           // is rejected before any upstream proxying happens.
-          await this.refundUsage(userUuid, dayKey, limit)
+          await quotaReservation?.release()
           response.status(429).json({
             error: {
               tag: 'ai-token-limit-reached',
@@ -970,14 +972,16 @@ export class AssistantController extends BaseHttpController {
     let provider: Provider
     let isSubscription = false
     let subscriptionId: string | undefined
+    let generation: { temperature?: number; topP?: number; maxOutputTokens?: number } = {}
     try {
       const resolved = await this.resolveStreamProvider(body, request, response)
       provider = resolved.provider
       isSubscription = resolved.isSubscription
       subscriptionId = resolved.subscriptionId
+      generation = resolved.generation
     } catch (error) {
       // The proxy never started, so refund the metered request.
-      await this.refundUsage(userUuid, dayKey, limit)
+      await quotaReservation?.release()
 
       response.setHeader('Content-Type', 'text/event-stream')
       response.setHeader('Cache-Control', 'no-cache, no-transform')
@@ -1015,18 +1019,24 @@ export class AssistantController extends BaseHttpController {
     let reportedTokens = 0
     let sawUsageEvent = false
     let completionChars = 0
+    const outcome = new AssistantRequestOutcome()
 
     try {
       const stream = provider.send({
         system: body.system ?? '',
         messages: body.messages ?? [],
         tools: body.tools ?? [],
+        temperature: generation.temperature,
+        topP: generation.topP,
+        maxOutputTokens: generation.maxOutputTokens,
       })
 
       for await (const event of stream) {
         if (clientClosed) {
+          outcome.markFailed()
           break
         }
+        outcome.observe(event)
         if (event.kind === 'usage') {
           const total =
             event.totalTokens && event.totalTokens > 0
@@ -1042,15 +1052,20 @@ export class AssistantController extends BaseHttpController {
         writeEvent(event)
       }
     } catch (error) {
+      outcome.markFailed()
       writeEvent({ kind: 'error', message: (error as Error).message })
       writeEvent({ kind: 'finish', stopReason: 'error' })
     } finally {
       response.end()
-      // Record the request's token spend AFTER it completes (best-effort, never
-      // affects the response). Real usage when the provider reported it, else an
-      // estimate. Subscription-backed calls also feed the admin aggregate meter.
-      const spentTokens = sawUsageEvent ? reportedTokens : this.estimateRequestTokens(body, completionChars)
-      await this.recordTokenUsage(userUuid, spentTokens, isSubscription, subscriptionId)
+      if (outcome.shouldConsumeAllowance) {
+        quotaReservation?.commit()
+        // Record only successful calls. Provider errors, aborts and truncated
+        // streams consume neither the request allowance nor rolling token limits.
+        const spentTokens = sawUsageEvent ? reportedTokens : this.estimateRequestTokens(body, completionChars)
+        await this.recordTokenUsage(userUuid, spentTokens, isSubscription, subscriptionId)
+      } else {
+        await quotaReservation?.release()
+      }
     }
   }
 
@@ -1102,7 +1117,12 @@ export class AssistantController extends BaseHttpController {
     _body: StreamRequestBody,
     _request: Request,
     response: Response,
-  ): Promise<{ provider: Provider; isSubscription: boolean; subscriptionId?: string }> {
+  ): Promise<{
+    provider: Provider
+    isSubscription: boolean
+    subscriptionId?: string
+    generation: { temperature?: number; topP?: number; maxOutputTokens?: number }
+  }> {
     if (this.serverSettingsResolver) {
       let profile
       try {
@@ -1166,10 +1186,21 @@ export class AssistantController extends BaseHttpController {
             resolution.config.openaiExtraHeaders = legacyConfig.openaiExtraHeaders
           }
         }
+        const effectiveModel = resolution.model.trim()
+        if (!effectiveModel) {
+          throw new Error(
+            `Assistant profile "${profile.name}" has no model. Set a model on the assistant profile or its backend under Admin → AI.`,
+          )
+        }
         return {
-          provider: resolveProvider(resolution.providerId, resolution.model || this.defaultModel, resolution.config),
+          provider: resolveProvider(resolution.providerId, effectiveModel, resolution.config),
           isSubscription: profile.provider === 'codex-subscription',
           subscriptionId: profile.provider === 'codex-subscription' ? profile.subscriptionId : undefined,
+          generation: {
+            temperature: profile.temperature,
+            topP: profile.topP,
+            maxOutputTokens: profile.maxOutputTokens,
+          },
         }
       }
     }
@@ -1182,10 +1213,20 @@ export class AssistantController extends BaseHttpController {
       ? this.defaultProvider
       : (availableProviders[0] ?? '')
     const providerId = configuredDefaultProvider
-    const model = this.defaultModel
+    const model =
+      providerId === 'openai' || providerId === 'openai-compatible'
+        ? config.openaiModel?.trim() || (this.defaultProvider === providerId ? this.defaultModel.trim() : '')
+        : this.defaultProvider === providerId
+          ? this.defaultModel.trim()
+          : ''
     if (!providerId) {
       throw new Error(
         'No assistant provider or assigned/default profile is configured on this server. Ask an administrator to configure one under Admin → AI.',
+      )
+    }
+    if (!model) {
+      throw new Error(
+        'The selected assistant provider has no model. Configure a model under Admin → AI before sending requests.',
       )
     }
     const openAiProvider = providerId === 'openai' || providerId === 'openai-compatible'
@@ -1225,11 +1266,12 @@ export class AssistantController extends BaseHttpController {
       // provider is configured in subscription (Codex/ChatGPT) auth mode.
       isSubscription,
       subscriptionId: isSubscription ? DEFAULT_SUBSCRIPTION_ID : undefined,
+      generation: {},
     }
   }
 
   private usageKey(userUuid: string, dayKey: string): string {
-    return `ai-usage:${userUuid}:${dayKey}`
+    return assistantRequestUsageKey(userUuid, dayKey)
   }
 
   private currentDayKey(): string {
@@ -1257,12 +1299,6 @@ export class AssistantController extends BaseHttpController {
     // above). Any value <= 0 is intentionally treated as unlimited — do not
     // "fix" this to a default cap.
     return globalDailyLimit > 0 ? globalDailyLimit : 0
-  }
-
-  private async refundUsage(userUuid: string, dayKey: string, limit: number): Promise<void> {
-    if (this.redis && limit > 0) {
-      await this.redis.decr(this.usageKey(userUuid, dayKey))
-    }
   }
 
   /**

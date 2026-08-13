@@ -31,6 +31,9 @@ export interface ProviderRequest {
   messages: ChatMessage[]
   tools: ToolDescriptor[]
   maxOutputTokens?: number
+  /** Optional server-owned sampling controls. Omitted means provider default. */
+  temperature?: number
+  topP?: number
   stop?: string[]
 }
 

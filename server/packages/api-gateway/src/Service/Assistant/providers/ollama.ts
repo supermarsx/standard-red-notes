@@ -26,6 +26,8 @@ export class OllamaProvider implements Provider {
   constructor(
     private readonly model: string,
     private readonly baseURL: string = 'http://127.0.0.1:11434',
+    private readonly timeoutMs?: number,
+    private readonly maxRetries: number = 0,
   ) {}
 
   async *send(req: ProviderRequest): AsyncIterable<ProviderEvent> {
@@ -40,20 +42,47 @@ export class OllamaProvider implements Provider {
       })),
     ]
 
-    const res = await fetch(`${this.baseURL}/api/chat`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        model: this.model,
-        messages,
-        stream: true,
-        tools: req.tools.map((t) => ({
-          type: 'function',
-          function: { name: t.name, description: t.description, parameters: t.inputSchema },
-        })),
-      }),
-    })
+    let res: Response | undefined
+    const attempts = Math.max(1, this.maxRetries + 1)
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      try {
+        res = await fetch(`${this.baseURL}/api/chat`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          signal: this.timeoutMs ? AbortSignal.timeout(this.timeoutMs) : undefined,
+          body: JSON.stringify({
+            model: this.model,
+            messages,
+            stream: true,
+            options: {
+              ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
+              ...(req.topP !== undefined ? { top_p: req.topP } : {}),
+              ...(req.maxOutputTokens !== undefined ? { num_predict: req.maxOutputTokens } : {}),
+            },
+            tools: req.tools.map((t) => ({
+              type: 'function',
+              function: { name: t.name, description: t.description, parameters: t.inputSchema },
+            })),
+          }),
+        })
+      } catch {
+        if (attempt + 1 === attempts) {
+          yield { kind: 'error', message: 'Ollama could not be reached before the configured timeout.' }
+          yield { kind: 'finish', stopReason: 'error' }
+          return
+        }
+        continue
+      }
+      if (res.ok || (res.status < 500 && res.status !== 429) || attempt + 1 === attempts) {
+        break
+      }
+    }
 
+    if (!res) {
+      yield { kind: 'error', message: 'Ollama did not return a response.' }
+      yield { kind: 'finish', stopReason: 'error' }
+      return
+    }
     if (!res.ok || !res.body) {
       yield { kind: 'error', message: `ollama: ${res.status} ${res.statusText}` }
       yield { kind: 'finish', stopReason: 'error' }
