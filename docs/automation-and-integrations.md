@@ -146,8 +146,14 @@ outside the encrypted note store so the server can send them.
 {% include safety-alert.html
   level="trust"
   title="Published reminders are plaintext"
-  body="Publishing opts this reminder out of the encrypted note boundary. The server and the selected Email, Telegram, or WhatsApp provider can read its message, schedule, and destination. Unpublish reminders you no longer want retained or delivered."
+  body="Publishing opts this reminder out of the encrypted note boundary. The server and the selected Email, Telegram, or WhatsApp provider can read its message, schedule, and destination. Account opt-out cancels pending work when it is not already in flight, then erases both pending and delivered publication history plus the saved destination."
 %}
+
+The authenticated opt-out path deliberately remains available after either the
+operator or account gate is disabled. If a synchronous provider call is already
+in flight, opt-out fails closed and leaves the plaintext record in place so the
+user can retry after the bounded provider deadline; it never reports a send as
+cancelled after the provider boundary was crossed.
 
 Each scheduler scan atomically claims a bounded batch in the published-reminders
 store. A claim records a cryptographically random claim ID, a random worker

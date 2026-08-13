@@ -100,7 +100,7 @@ endpoints remain reachable like they are to any external client:
 | `app`    | built from `./app`          | The web client (nginx serving the built web app). Published on `APP_PORT` (default 3001).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `server` | built from `./server`       | The all-in-one Standard Notes server: api-gateway, auth, syncing-server, files, and revisions run together under supervisord (`MODE=self-hosted`). The realtime websocket gateway runs IN-PROCESS inside the api-gateway on the SAME port (no separate process). Internal-only — publishes NO host ports; the `app` front door proxies the API + websocket (container port 3000) and files (container port 3104) same-origin.                                                                                                                                                                           |
 | `db`     | `mariadb:12.3.2`            | Primary datastore for accounts, notes, sync, and revisions.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `cache`  | `redis:8.8.0-alpine`        | Cache, sessions, and pub/sub used for realtime delivery. Persists with append-only file.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `cache`  | `redis:8.8.0-alpine`        | Cache, sessions, realtime pub/sub, and the encrypted email-delivery queue. Persists with AOF; email enqueue additionally requires a local `WAITAOF` acknowledgement.                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `floci`  | `floci/floci:1.5.33-compat` | Local AWS SNS/SQS emulator ([floci.io](https://floci.io), MIT). The server publishes domain events to SNS topics; the in-container websocket-gateway and server workers consume SQS queues. Bootstrapped on every start (see below). Replaces LocalStack: no auth token required (LocalStack 2026.3.0+ demands one even for SNS/SQS, which is why we last pinned `localstack:4.4.0`), and it is far lighter (single native binary vs a Python runtime). It is LocalStack wire-compatible; the current LocalStack escape hatch and required auth-token migration are documented in `docker-compose.yml`. |
 | `mcp`    | built from `./mcp`          | Optional authenticated MCP bridge. It is the only service on both `standard-red-notes` and `workflows-mcp`: the first reaches the API and the second accepts n8n calls at `mcp:3010`. Only runs with the `mcp` profile.                                                                                                                                                                                                                                                                                                                                                                                 |
 | `n8n`    | `n8nio/n8n:2.32.6`          | Optional operator-managed automation service under the `workflows` profile. It joins only `workflows-mcp`, has independent authentication and a loopback-only development port; production uses a separate TLS hostname and proxy network.                                                                                                                                                                                                                                                                                                                                                              |
@@ -166,7 +166,7 @@ to boot otherwise).
 | Variable                                | Purpose                                                                                                                                                                                                                   | How it's generated                                                 |
 | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
 | `AUTH_JWT_SECRET`                       | Signs/verifies cross-service JWTs across the server and the websocket-gateway.                                                                                                                                            | `openssl rand -hex 32` / .NET RNG                                  |
-| `AUTH_SERVER_ENCRYPTION_SERVER_KEY`     | Server-side encryption key for sensitive auth data (e.g. MFA secrets). Must be exactly 32 bytes of hex.                                                                                                                   | `openssl rand -hex 32` / .NET RNG                                  |
+| `AUTH_SERVER_ENCRYPTION_SERVER_KEY`     | Server-side encryption key for sensitive auth data (for example MFA secrets). Purpose-specific keys derived from it also protect email relay credentials and queued message payloads. Must be exactly 32 bytes of hex. | `openssl rand -hex 32` / .NET RNG                                  |
 | `VALET_TOKEN_SECRET`                    | Signs the short-lived valet tokens that authorize file uploads/downloads.                                                                                                                                                 | `openssl rand -hex 32` / .NET RNG                                  |
 | `AUTH_SERVER_PSEUDO_KEY_PARAMS_KEY`     | Seed for pseudo key-params returned on login for unknown accounts (prevents user enumeration). The container auto-generates one if unset, but it would then change on every restart - so it is pinned in `.env`.          | `openssl rand -hex 32` / .NET RNG                                  |
 | `WEBSOCKET_GATEWAY_INTERNAL_SECRET`     | Shared secret authenticating the server -> websocket-gateway internal calls. Must match on both.                                                                                                                          | `openssl rand -hex 32` / .NET RNG                                  |
@@ -207,6 +207,64 @@ fully-included), revision retention (`REVISIONS_RETENTION_DAYS`,
 request caps), and the optional MCP bridge (`STANDARD_RED_NOTES_*`). See
 `.env.example` for the full list and [Operations hardening](operations-hardening.md)
 for the database, Redis, operation-limit, and image-pinning model.
+
+**Email delivery topology and reliability.**
+
+The full multi-service Compose topology uses Redis for a bounded encrypted email
+queue and supports up to 20 prioritized SMTP, SendGrid, Mailgun, and AWS SES
+relay profiles. The queue worker performs retry, fallback, per-relay rate limiting,
+dead-letter handling, and redacted attempt logging. The single/home in-memory
+topology retains direct SMTP compatibility and returns `501` from the advanced
+relay, queue, and log endpoints; its compatible test action remains available.
+Redis Cluster deliberately uses the same SMTP fallback because its node-local AOF
+durability cannot be established with `WAITAOF`.
+
+The supplied Redis service uses AOF with `CACHE_APPENDFSYNC=everysec`. A producer
+reports a new job as accepted only after Redis confirms a local AOF fsync through
+`WAITAOF`; a retry with the same deterministic delivery identifier is
+idempotent. This protects queue acceptance, not exactly-once provider delivery.
+An accepted provider request followed by a lost response can still be delivered
+again.
+
+Queued published reminders are distinguishable from the auth service's own email
+reminders. On restart with `REMINDER_DELIVERY_ENABLED=false`, the worker settles
+only published-reminder jobs before the provider boundary; account and auth
+email-reminder delivery remain governed by their own switches.
+
+Mutable queue limits do not select a new Redis namespace. Existing jobs retain
+their enqueue-time retry and expiry values and remain visible after a limit
+change. Producer readiness is still bound to the exact current policy, so a
+rolling deployment safely pauses new acceptance until auth and gateway agree.
+
+| Variable                             | Default      | Purpose                                                        |
+| ------------------------------------ | ------------ | -------------------------------------------------------------- |
+| `CACHE_APPENDFSYNC`                  | `everysec`   | Redis background AOF policy; keep AOF enabled.                 |
+| `EMAIL_QUEUE_MAX_JOB_BYTES`          | `26214400`   | Maximum encrypted payload size for one job (25 MiB).           |
+| `EMAIL_QUEUE_MAX_TOTAL_BYTES`        | `67108864`   | Total encrypted email-queue budget (64 MiB).                   |
+| `EMAIL_QUEUE_MAX_ATTEMPTS`           | `5`          | Maximum delivery attempts before dead-lettering.               |
+| `EMAIL_QUEUE_RETENTION_MS`           | `2592000000` | Ready/leased queue retention (30 days).                        |
+| `EMAIL_QUEUE_DEAD_RETENTION_MS`      | `2592000000` | Dead-letter retention (30 days).                               |
+| `EMAIL_QUEUE_LEASE_MS`               | `120000`     | Worker lease, renewed by a heartbeat during provider work.     |
+| `EMAIL_DELIVERY_WORKER_INTERVAL_MS`  | `5000`       | Queue polling interval.                                        |
+| `EMAIL_DELIVERY_WORKER_BATCH_SIZE`   | `25`         | Maximum jobs processed per worker tick.                        |
+| `EMAIL_DELIVERY_RETRY_BASE_MS`       | `30000`      | Initial retry delay.                                           |
+| `EMAIL_DELIVERY_RETRY_MAX_MS`        | `21600000`   | Maximum retry delay (6 hours).                                 |
+| `EMAIL_DELIVERY_LOG_RETENTION_MS`    | `2592000000` | Redacted attempt-log retention (30 days).                      |
+| `EMAIL_DELIVERY_LOG_MAX_ENTRIES`     | `10000`      | Maximum retained attempt-log records.                          |
+
+`EMAIL_ATTACHMENT_MAX_BYTE_SIZE` is validated against
+`EMAIL_QUEUE_MAX_JOB_BYTES` on the durable topology. Queue storage includes two
+base64 expansions plus JSON/envelope overhead, so the raw attachment limit must
+be materially smaller than the encrypted job limit; an unsafe configured pair
+fails startup instead of producing deterministic backup-delivery failures.
+
+The worker refuses readiness when Redis reports `maxmemory` at or below the
+configured email-queue budget plus 64 MiB of safety headroom. Managed Redis may
+deny `CONFIG GET`; in that case the worker continues with the strict queue byte
+budget and emits a redacted warning. Do not rotate
+`AUTH_SERVER_ENCRYPTION_SERVER_KEY` while relay settings or queued jobs must
+remain readable: drain the queue and verify protected backups first. See
+[Administration](administration.md#email-delivery) for relay and queue operation.
 
 ### Server-wide shared access key (optional obfuscation gate)
 
@@ -665,7 +723,7 @@ docker compose pull app server
 test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$APP_IMAGE")" = linux/amd64
 test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$SERVER_IMAGE")" = linux/amd64
 
-# Back up MariaDB, uploads, server-data, and the protected environment first.
+# Back up MariaDB, uploads, redis-data, server-data, and the protected environment first.
 docker compose up -d --no-build --pull never --wait --wait-timeout 900
 docker compose ps
 ```
@@ -734,9 +792,9 @@ and container rebuilds:
 | -------------- | -------------------------------------------------------------- | ------------------------------------------------------ |
 | `mysql-data`   | Legacy MySQL 8.4 database from older Compose releases.         | Migration source only; never mount it into MariaDB.    |
 | `mariadb-data` | The MariaDB database - **all accounts, notes, and revisions**. | The one to back up.                                    |
-| `redis-data`   | Redis append-only persistence (cache/sessions/pub-sub).        | Safe to lose; rebuilt at runtime.                      |
+| `redis-data`   | Redis AOF for cache/sessions/pub-sub and encrypted queued mail. | Back up to preserve pending/dead email jobs and logs.  |
 | `uploads`      | Uploaded file attachments stored by the files service.         | Back this up alongside the DB if you use file uploads. |
-| `server-data`  | Gateway admin settings and encrypted subscription pairings.    | Back up with its encryption key stored separately.     |
+| `server-data`  | Gateway admin settings, encrypted relay profiles, and subscription pairings. | Back up with the matching encryption keys.             |
 | `server-logs`  | Server process logs.                                           | Disposable.                                            |
 | `mcp-data`     | MCP bridge local state (only with the `mcp` profile).          | Disposable.                                            |
 | `n8n-data`     | n8n database/config/credentials (only with `workflows`).       | Back up with the matching `N8N_ENCRYPTION_KEY`.        |
@@ -817,8 +875,20 @@ a restore drill pass. Do not run `docker compose down -v` during migration.
 ## Backup and restore
 
 The critical data is the MariaDB volume, `uploads` if you store attachments,
-and `server-data` when you use persisted administrator settings or encrypted
-ChatGPT/Codex pairing.
+`redis-data` while queued/dead email or its redacted delivery history matters,
+and `server-data` when you use persisted administrator settings, encrypted relay
+profiles, or encrypted ChatGPT/Codex pairing. Snapshot `redis-data` and
+`server-data` with the matching `AUTH_SERVER_ENCRYPTION_SERVER_KEY`; restoring
+encrypted queue/settings state with a different key makes it unreadable.
+
+For a consistent infrastructure snapshot, stop application writers first,
+allow the server's graceful stop to finish, then stop Redis before copying or
+snapshotting its volume. The supplied server shutdown budget is 75 seconds:
+provider calls stop at 30 seconds, supervisord gives the gateway 60 seconds to
+durably settle its current claim, and Compose retains 15 seconds for supervisor
+teardown. Run `docker compose stop -t 75 app server` and wait for it to finish,
+then run `docker compose stop cache`. Do not use `docker compose down -v`; it
+deletes the named volumes.
 
 **Back up the database** (logical dump, while the stack is running):
 

@@ -134,27 +134,105 @@ access in n8n; see [Workflows with n8n](workflows.md).
 
 ## Email delivery
 
-Use **Settings → Admin → Server → Email delivery** to configure the single SMTP
-connection used by auth/account messages, email backups, and published reminder
-delivery. Each saved field overrides its matching environment value; clearing a
-saved field resumes the environment/default fallback. The password is write-only:
-the API reports only whether an effective password is configured, and partial
-updates preserve it unless an administrator explicitly replaces or clears it.
+Use **Settings → Admin → Server → Email delivery** to manage outgoing
+account messages, email backups, and published reminders. The Redis-backed,
+multi-service deployment supports up to 20 prioritized relay profiles:
 
-STARTTLS is the default and is required on non-implicit connections. Choose
-implicit TLS for providers that expect TLS from connection start (normally port
-465). The insecure option is an explicit exception accepted only for loopback,
-private/link-local IP, localhost, or `.localhost` relays; public and unresolved
-internal hostnames are
-rejected. Use **Send test** after saving. The test response is intentionally
-redacted, and audit records contain the action and outcome but not the recipient,
-settings, password, or provider error.
+- SMTP with STARTTLS, implicit TLS, or a deliberately trusted private insecure
+  relay;
+- SendGrid;
+- Mailgun's US or EU API; and
+- AWS SES, using explicit credentials or the runtime's default AWS credential
+  chain.
 
-The gateway and auth processes read the same persisted `emailDelivery` overlay
-from `SERVER_SETTINGS_PATH` on each send, so a valid change is live without a
-restart when both processes can read that shared file. The supplied Compose and
-single-container deployments provide that shared path. Custom split deployments
-must mount the same protected settings file into both processes.
+Lower priority numbers are tried first. **Fallback to next enabled relay** moves
+a transient transport or provider failure through the remaining profiles;
+permanent recipient, policy, suppression, and mailbox rejections always stop.
+**No fallback** stops after the selected profile. Each profile also has an
+independent `max` messages per `window` rate limit (`max = 0` disables that
+profile's limit). Changes are live:
+the worker re-evaluates the saved configuration and its readiness marker at most
+five seconds later. An enabled relay must be valid before the queue accepts new
+mail.
+
+Credentials are write-only. Partial saves preserve an existing credential unless
+the administrator explicitly replaces or clears it. Relay settings and queued
+message payloads are encrypted at rest with purpose-specific keys derived from the
+existing `AUTH_SERVER_ENCRYPTION_SERVER_KEY`; email delivery needs no additional
+encryption secret. Do not rotate that server key while jobs remain in the queue.
+Use this exact order for an intentional rotation:
+
+1. Stop new mail-producing work, drain the `ready`, `leased`, and `dead` queue
+   states, and verify the protected database, `redis-data`, `server-data`, uploads,
+   and environment backups as one recovery set.
+2. Export the operator-known relay values. Credentials remain write-only and
+   therefore must come from the operator's secret manager, not the admin API.
+3. While the **old** key is still active, save an empty relay list. Verify that
+   `relayConfigurationEncrypted` is absent and `relayConfigurationManaged` is
+   `true` in the protected server settings file, then wait for the worker
+   readiness marker to expire. The non-secret managed marker prevents legacy
+   environment SMTP from silently reappearing after this explicit disable.
+4. Rotate the key, recreate the containers without deleting volumes, restore the
+   relay profiles from the secret manager, and send a test message.
+5. Keep the old key and matching settings/Redis backup until queue processing and
+   test delivery both pass with the new key.
+
+Clearing every profile is an explicit disabled state and does not expose legacy
+environment SMTP. The UI cannot overwrite an envelope that the current key
+cannot authenticate; simply re-entering credentials after an uncoordinated
+rotation is not a recovery procedure.
+
+Use **Send test** after saving. **Refresh queue** lists `ready`, `leased`, and
+`dead` jobs; eligible jobs can be retried or discarded. **Refresh logs** lists
+bounded attempt metadata and can filter by relay and outcome. The queue and log
+views never expose a recipient, subject, body, attachment, credential, or raw
+provider response. Administrative audit records likewise contain only the action,
+administrator, and outcome. Discarding a currently leased job is refused so that
+an in-flight delivery cannot be raced from the UI.
+
+The default worker runs every 5 seconds in batches of 25, makes at most 5 delivery
+attempts for bounded jobs, backs off from 30 seconds to 6 hours, and holds a
+2-minute lease that it renews while provider work is in progress. Bounded ready
+and dead jobs and delivery logs are retained for 30 days; logs are additionally
+capped at 10,000 entries. Dead-man-switch mail deliberately retries indefinitely
+and remains queued until it is delivered or an administrator discards it. The
+encrypted queue accepts at most 25 MiB per job and 64 MiB total by default. These
+bounds and retention periods are operator-configurable through the documented
+`EMAIL_QUEUE_*` and `EMAIL_DELIVERY_*` environment values.
+
+Published-reminder jobs carry their own queue source. Turning the operator
+`REMINDER_DELIVERY_ENABLED` switch off causes those jobs to be terminally settled
+before any relay or rate-limit call, while the separate auth email-reminder
+feature remains unaffected. Account opt-out persists a cancellation tombstone
+for every pending published-reminder job and erases delivered and pending
+plaintext history plus the stored destination. It refuses an actively leased
+send; if a provider has already accepted an occurrence, cleanup still completes
+but the API reports `alreadyDispatched: true` because accepted mail cannot be
+recalled. Editing, unpublishing, or changing delivery configuration instead
+returns a conflict in that state so a replacement cannot create a duplicate.
+
+Changing a queue safety limit preserves the existing encrypted Redis namespace:
+jobs keep their enqueue-time retry/expiry policy and remain visible. During a
+rolling change, producers refuse new jobs until the worker readiness marker
+matches the exact new policy; update auth and gateway together, then confirm
+readiness. Reducing byte limits can temporarily reject new work until existing
+jobs bring usage below the new bound.
+
+Redis uses AOF `everysec`, and every newly accepted job additionally requires a
+successful local `WAITAOF` persistence acknowledgement. Deterministic delivery
+identifiers make a producer retry idempotent while that job exists. Provider
+delivery is still **at least once**: if a provider accepted a message but its
+response was lost or timed out, a later attempt can produce a duplicate. Choose
+provider-side suppression where available and make security-sensitive email
+content safe to receive more than once.
+
+The single/home in-memory topology retains the compatible direct SMTP settings
+and test action, but does not expose the advanced relay, queue, or log surfaces;
+those endpoints return `501`. Redis Cluster also deliberately falls back to
+legacy direct SMTP because a node-local AOF acknowledgement cannot be proven
+safely. On the supported Redis-backed topology, `501` means the capability is not
+wired in that topology; `503` means the advanced service is present but
+temporarily unavailable.
 
 ## Service health and lifecycle
 
