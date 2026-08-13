@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test'
 import { dbQueryJson, sqlString } from '../helpers/database'
 import { redisParallelLoad } from '../helpers/redis'
 import {
+  drainSyncUntilQuiescent,
   freshAccount,
   openFreshContext,
   registerAccount,
@@ -16,6 +17,96 @@ const LOAD_NOTES = positiveInt(process.env.OPS_LOAD_NOTES, 120)
 const PARALLEL_CLIENTS = positiveInt(process.env.OPS_LOAD_CLIENTS, 3)
 const REDIS_WORKERS = positiveInt(process.env.OPS_REDIS_WORKERS, 4)
 const REDIS_OPS_PER_WORKER = positiveInt(process.env.OPS_REDIS_OPS_PER_WORKER, 250)
+
+test.describe('bounded sync drain helper', () => {
+  test('retries a late global dirty item and converges after the next pass', async () => {
+    let syncPasses = 0
+    const waits: number[] = []
+    const snapshots = [
+      {
+        count: 1,
+        items: [{ uuid: 'late-default-note', contentType: 'Note', title: 'Untitled' }],
+      },
+      { count: 0, items: [] },
+    ]
+
+    const result = await drainSyncUntilQuiescent(
+      {
+        sync: async () => {
+          syncPasses += 1
+        },
+        inspectDirtyItems: async () => snapshots.shift() ?? { count: 0, items: [] },
+        wait: async (milliseconds) => {
+          waits.push(milliseconds)
+        },
+        now: () => 0,
+      },
+      { maxPasses: 3, retryWindowMs: 1_000, settleIntervalMs: 25 },
+    )
+
+    expect(result).toEqual({
+      quiescent: true,
+      syncPasses: 2,
+      dirtyCount: 0,
+      residualDirtyItems: [],
+    })
+    expect(syncPasses).toBe(2)
+    expect(waits).toEqual([25, 25])
+  })
+
+  test('stops at the retry deadline with bounded safe diagnostics', async () => {
+    let now = 0
+    const residual = {
+      count: 1,
+      items: [{ uuid: 'still-dirty', contentType: 'Note', title: 'Untitled' }],
+    }
+
+    const result = await drainSyncUntilQuiescent(
+      {
+        sync: async () => undefined,
+        inspectDirtyItems: async () => residual,
+        wait: async (milliseconds) => {
+          now += milliseconds
+        },
+        now: () => now,
+      },
+      { maxPasses: 5, retryWindowMs: 20, settleIntervalMs: 25 },
+    )
+
+    expect(result).toEqual({
+      quiescent: false,
+      syncPasses: 1,
+      dirtyCount: 1,
+      residualDirtyItems: residual.items,
+      exhaustionReason: 'deadline',
+    })
+  })
+
+  test('stops after the configured maximum sync passes', async () => {
+    const residual = {
+      count: 1,
+      items: [{ uuid: 'still-dirty', contentType: 'Note', title: 'Untitled' }],
+    }
+
+    const result = await drainSyncUntilQuiescent(
+      {
+        sync: async () => undefined,
+        inspectDirtyItems: async () => residual,
+        wait: async () => undefined,
+        now: () => 0,
+      },
+      { maxPasses: 2, retryWindowMs: 1_000, settleIntervalMs: 25 },
+    )
+
+    expect(result).toEqual({
+      quiescent: false,
+      syncPasses: 2,
+      dirtyCount: 1,
+      residualDirtyItems: residual.items,
+      exhaustionReason: 'max-passes',
+    })
+  })
+})
 
 test.describe.configure({ mode: 'serial', timeout: 6 * 60_000 })
 
@@ -46,6 +137,10 @@ test.describe('ops load and Redis throughput', () => {
 
       const push = await seedAndPush(page, LOAD_NOTES, 512, Math.min(50, LOAD_NOTES))
       expect(push.created, 'all requested notes created before push').toBe(LOAD_NOTES)
+      expect(
+        push.drainQuiescent,
+        `server push should reach a quiescent dirty set; residual=${JSON.stringify(push.residualDirtyItems ?? [])}`,
+      ).toBe(true)
       expect(push.dirtyAfterPush, 'server push should drain dirty items').toBe(0)
       pushMs = Math.round(push.pushMs)
 
