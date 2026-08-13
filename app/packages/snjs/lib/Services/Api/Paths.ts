@@ -218,9 +218,12 @@ const EmailReminderPaths = {
 // channel/destination/enabled record. The collection route lists/publishes the
 // PLAINTEXT reminders the user explicitly opted into server delivery (mirrors the
 // email-reminders + CalDAV published-data model — never any other E2E data).
+// `/opt-out` stays reachable after either feature gate turns off so revocation
+// can authoritatively cancel queued work before the synced setting is cleared.
 const ReminderDeliveryPaths = {
   reminderDeliveryConfig: '/v1/reminder-delivery/config',
   reminderDeliveryDeliveryConfig: '/v1/reminder-delivery/delivery-config',
+  reminderDeliveryOptOut: '/v1/reminder-delivery/opt-out',
   reminderDeliveryReminders: '/v1/reminder-delivery',
   reminderDeliveryReminder: (id: string) => `/v1/reminder-delivery/${encodeURIComponent(id)}`,
 }

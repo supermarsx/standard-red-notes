@@ -54,6 +54,8 @@ export type PublishedReminder = {
   id: string
   message: string
   dueAtUtc: string
+  /** Opaque server publication generation; never note content. */
+  deliveryRevision?: string
   channel?: DeliveryChannel
   destination?: string
   sent: boolean
@@ -170,6 +172,15 @@ export async function getReminderDeliveryOptIn(application: WebApplication): Pro
 /** Set the account-level opt-in. Returns true on success. */
 export async function setReminderDeliveryOptIn(application: WebApplication, enabled: boolean): Promise<boolean> {
   try {
+    if (!enabled) {
+      const response = await application.legacyApi.optOutReminderDelivery()
+      if (isErrorResponse(response)) {
+        return false
+      }
+      // Server delivery is already revoked even if the synced setting write
+      // below fails. Force the next reminder operation to re-read that state.
+      deliveryStateCache = null
+    }
     await application.settings.updateSetting(reminderDeliveryEnabledSettingName, enabled ? 'true' : 'false', false)
     // The opt-in gates the delivery-config routes server-side; drop the cached
     // gate decision so the next reminder save re-evaluates against the server.

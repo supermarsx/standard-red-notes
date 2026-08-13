@@ -33,6 +33,7 @@ describe('ReminderDeliveryController', () => {
       listReminders: jest.fn(),
       getConfig: jest.fn(),
       setConfig: jest.fn(),
+      optOut: jest.fn().mockResolvedValue({ alreadyDispatched: false }),
     } as unknown as jest.Mocked<ReminderDeliveryService>
   })
 
@@ -89,6 +90,48 @@ describe('ReminderDeliveryController', () => {
     })
   })
 
+  describe('optOut', () => {
+    it('revokes delivery even after both normal feature gates are off', async () => {
+      service.isEnabled.mockReturnValue(false)
+
+      await makeController().optOut({} as Request, responseWith(undefined))
+
+      expect(service.optOut).toHaveBeenCalledWith('user-1')
+      expect(statusMock).toHaveBeenCalledWith(200)
+      expect(jsonMock).toHaveBeenCalledWith({ optedOut: true, alreadyDispatched: false })
+    })
+
+    it('exposes an irreversible provider-accepted dispatch while completing opt-out', async () => {
+      service.optOut.mockResolvedValue({ alreadyDispatched: true })
+
+      await makeController().optOut({} as Request, responseWith(undefined))
+
+      expect(statusMock).toHaveBeenCalledWith(200)
+      expect(jsonMock).toHaveBeenCalledWith({ optedOut: true, alreadyDispatched: true })
+    })
+
+    it('reports an in-flight conflict without claiming opt-out succeeded', async () => {
+      service.optOut.mockRejectedValue(new Error('A reminder is already in flight.'))
+
+      await makeController().optOut({} as Request, responseWith(undefined))
+
+      expect(statusMock).toHaveBeenCalledWith(409)
+      expect(jsonMock).toHaveBeenCalledWith(
+        expect.objectContaining({ error: expect.objectContaining({ tag: 'reminder-delivery-in-flight' }) }),
+      )
+      expect(jsonMock).not.toHaveBeenCalledWith({ optedOut: true })
+    })
+
+    it('redacts infrastructure failures and reports temporary unavailability', async () => {
+      service.optOut.mockRejectedValue(new Error('EACCES F:\\private\\published-reminders.json'))
+
+      await makeController().optOut({} as Request, responseWith(undefined))
+
+      expect(statusMock).toHaveBeenCalledWith(503)
+      expect(JSON.stringify(jsonMock.mock.calls)).not.toContain('private')
+    })
+  })
+
   describe('publish', () => {
     it('rejects an invalid dueAtUtc with 400', async () => {
       await makeController().publish({ body: { id: 'r1', dueAtUtc: 'nope' } } as Request, responseWith(allowed))
@@ -115,6 +158,22 @@ describe('ReminderDeliveryController', () => {
       )
       expect(statusMock).toHaveBeenCalledWith(201)
     })
+
+    it('maps an already provider-accepted edit to 409', async () => {
+      service.publish.mockRejectedValue(
+        new Error('The reminder email was already accepted by its provider and cannot be cancelled.'),
+      )
+
+      await makeController().publish(
+        { body: { id: 'r1', message: 'Edited', dueAtUtc: '2026-06-25T12:00:00.000Z' } } as Request,
+        responseWith(allowed),
+      )
+
+      expect(statusMock).toHaveBeenCalledWith(409)
+      expect(jsonMock).toHaveBeenCalledWith(
+        expect.objectContaining({ error: expect.objectContaining({ tag: 'reminder-delivery-in-flight' }) }),
+      )
+    })
   })
 
   describe('unpublish', () => {
@@ -130,6 +189,24 @@ describe('ReminderDeliveryController', () => {
       service.unpublish.mockResolvedValue(false)
       await makeController().unpublish({ params: { id: 'nope' } } as unknown as Request, responseWith(allowed))
       expect(statusMock).toHaveBeenCalledWith(404)
+    })
+
+    it('returns 409 when a provider request already owns the reminder', async () => {
+      service.unpublish.mockRejectedValue(new Error('The reminder is already in flight.'))
+      await makeController().unpublish({ params: { id: 'r1' } } as unknown as Request, responseWith(allowed))
+      expect(statusMock).toHaveBeenCalledWith(409)
+      expect(jsonMock).not.toHaveBeenCalledWith({ removed: true })
+    })
+
+    it('returns 409 when the provider already accepted the reminder', async () => {
+      service.unpublish.mockRejectedValue(
+        new Error('The reminder email was already accepted by its provider and cannot be cancelled.'),
+      )
+
+      await makeController().unpublish({ params: { id: 'r1' } } as unknown as Request, responseWith(allowed))
+
+      expect(statusMock).toHaveBeenCalledWith(409)
+      expect(jsonMock).not.toHaveBeenCalledWith({ removed: true })
     })
 
     it('refuses with 403 when the user is not allowed', async () => {
@@ -163,6 +240,22 @@ describe('ReminderDeliveryController', () => {
         destination: 'chat-1',
         enabled: true,
       })
+    })
+
+    it('maps an already provider-accepted config mutation to 409', async () => {
+      service.setConfig.mockRejectedValue(
+        new Error('The reminder email was already accepted by its provider and cannot be cancelled.'),
+      )
+
+      await makeController().setDeliveryConfig(
+        { body: { channel: 'email', destination: 'new@example.com', enabled: true } } as Request,
+        responseWith(allowed),
+      )
+
+      expect(statusMock).toHaveBeenCalledWith(409)
+      expect(jsonMock).toHaveBeenCalledWith(
+        expect.objectContaining({ error: expect.objectContaining({ tag: 'reminder-delivery-in-flight' }) }),
+      )
     })
   })
 })

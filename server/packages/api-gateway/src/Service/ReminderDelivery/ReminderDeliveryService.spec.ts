@@ -212,6 +212,39 @@ describe('ReminderDeliveryService.deliverDueReminders', () => {
     expect(send).toHaveBeenCalledWith('override-chat', expect.any(String))
   })
 
+  it('gives email providers a deterministic opaque delivery identity', async () => {
+    const due = claimedReminder()
+    claimed(due)
+    configStore.getForUser.mockResolvedValue(config({ channel: 'email', destination: 'person@example.com' }))
+
+    await makeService(true, 'email').deliverDueReminders(new Date(NOW))
+
+    expect(send).toHaveBeenCalledWith(
+      'person@example.com',
+      expect.stringContaining('Take meds'),
+      expect.objectContaining({ deliveryId: expect.stringMatching(/^published-reminder-[a-f0-9]{64}$/) }),
+    )
+  })
+
+  it('keeps a durably queued reminder unsent until the provider receipt is accepted', async () => {
+    const due = claimedReminder()
+    claimed(due)
+    configStore.getForUser.mockResolvedValue(config({ channel: 'email', destination: 'person@example.com' }))
+    send.mockResolvedValue({ ok: false, pending: true, reason: 'awaiting provider acceptance' })
+
+    const summary = await makeService(true, 'email').deliverDueReminders(new Date(NOW))
+
+    expect(remindersStore.markClaimSucceeded).not.toHaveBeenCalled()
+    expect(remindersStore.scheduleClaimRetry).toHaveBeenCalledWith(
+      'u1',
+      'r1',
+      due.claim,
+      'awaiting provider acceptance',
+      NOW,
+    )
+    expect(summary).toEqual({ scanned: 1, due: 1, sent: 0, failed: 0, skipped: 1 })
+  })
+
   it('schedules a retry when no adapter is registered for the effective channel', async () => {
     const due = claimedReminder()
     claimed(due)
@@ -296,5 +329,199 @@ describe('ReminderDeliveryService multi-instance delivery', () => {
     expect(send).toHaveBeenCalledTimes(1)
     expect(summaries.reduce((sum, summary) => sum + summary.sent, 0)).toBe(1)
     expect((await firstStore.getForUser('u1', 'r1'))?.sent).toBe(true)
+  })
+})
+
+describe('ReminderDeliveryService durable email cancellation', () => {
+  let dir: string
+  let store: PublishedRemindersStore
+  let configStore: DeliveryConfigStore
+  let cancel: jest.Mock
+  let service: ReminderDeliveryService
+
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'srn-reminder-cancel-'))
+    store = new PublishedRemindersStore(path.join(dir, 'published-reminders.json'), { clock: () => NOW })
+    configStore = new DeliveryConfigStore(path.join(dir, 'delivery-config.json'))
+    await configStore.setForUser('u1', { channel: 'email', destination: 'old@example.com', enabled: true })
+    cancel = jest.fn().mockResolvedValue({ ok: true })
+    service = new ReminderDeliveryService(
+      true,
+      store,
+      configStore,
+      new ProviderRegistry([{ channel: 'email', send: jest.fn(), cancel }]),
+      { ownerId: OWNER_A, clock: () => NOW },
+    )
+    await service.publish('u1', {
+      id: 'r1',
+      message: 'Original private reminder',
+      dueAtUtc: '2026-06-25T11:00:00.000Z',
+    })
+  })
+
+  afterEach(async () => {
+    await fs.rm(dir, { recursive: true, force: true })
+  })
+
+  it('persists queue cancellation before unpublishing a pending email', async () => {
+    await expect(service.unpublish('u1', 'r1')).resolves.toBe(true)
+
+    expect(cancel).toHaveBeenCalledWith({ deliveryId: expect.stringMatching(/^published-reminder-[a-f0-9]{64}$/) })
+    await expect(store.getForUser('u1', 'r1')).resolves.toBeNull()
+  })
+
+  it('cancels the old occurrence before publishing an edited reminder', async () => {
+    await service.publish('u1', {
+      id: 'r1',
+      message: 'Edited private reminder',
+      dueAtUtc: '2026-06-25T11:00:00.000Z',
+    })
+
+    expect(cancel).toHaveBeenCalledTimes(1)
+    await expect(store.getForUser('u1', 'r1')).resolves.toMatchObject({ message: 'Edited private reminder' })
+  })
+
+  it('cancels pending occurrences before disabling email delivery', async () => {
+    await service.setConfig('u1', { channel: 'email', destination: 'old@example.com', enabled: false })
+    expect(cancel).toHaveBeenCalledTimes(1)
+    await expect(store.getForUser('u1', 'r1')).resolves.toBeNull()
+  })
+
+  it('cancels pending occurrences before changing the inherited email destination', async () => {
+    await service.setConfig('u1', { channel: 'email', destination: 'new@example.com', enabled: true })
+    expect(cancel).toHaveBeenCalledTimes(1)
+    await expect(store.getForUser('u1', 'r1')).resolves.toBeNull()
+  })
+
+  it('does not cancel an explicit override whose effective delivery is unchanged', async () => {
+    await store.unpublish('u1', 'r1')
+    await service.publish('u1', {
+      id: 'explicit',
+      message: 'Explicit destination',
+      dueAtUtc: '2026-06-25T11:00:00.000Z',
+      channel: 'email',
+      destination: 'fixed@example.com',
+    })
+
+    await service.setConfig('u1', { channel: 'email', destination: 'new@example.com', enabled: true })
+
+    expect(cancel).not.toHaveBeenCalled()
+    await expect(store.getForUser('u1', 'explicit')).resolves.toMatchObject({ destination: 'fixed@example.com' })
+  })
+
+  it('does not self-cancel a representation-only inherited-to-explicit edit', async () => {
+    const before = await store.getForUser('u1', 'r1')
+    await service.publish('u1', {
+      id: 'r1',
+      message: 'Original private reminder',
+      dueAtUtc: '2026-06-25T11:00:00.000Z',
+      channel: 'email',
+      destination: 'old@example.com',
+    })
+
+    expect(cancel).not.toHaveBeenCalled()
+    expect((await store.getForUser('u1', 'r1'))?.deliveryRevision).toBe(before?.deliveryRevision)
+  })
+
+  it('uses a new durable identity after disable and explicit re-publication', async () => {
+    const firstRevision = (await store.getForUser('u1', 'r1'))?.deliveryRevision
+    await service.setConfig('u1', { channel: 'email', destination: 'old@example.com', enabled: false })
+    await configStore.setForUser('u1', { channel: 'email', destination: 'old@example.com', enabled: true })
+    const republished = await service.publish('u1', {
+      id: 'r1',
+      message: 'Original private reminder',
+      dueAtUtc: '2026-06-25T11:00:00.000Z',
+    })
+
+    expect(republished.deliveryRevision).not.toBe(firstRevision)
+  })
+
+  it('fails closed without deleting or replacing state when cancellation is in flight', async () => {
+    cancel.mockResolvedValue({ ok: false, inFlight: true, reason: 'already in flight' })
+
+    await expect(service.unpublish('u1', 'r1')).rejects.toThrow('already in flight')
+    await expect(store.getForUser('u1', 'r1')).resolves.toMatchObject({ message: 'Original private reminder' })
+  })
+
+  it('conflicts and preserves the original reminder when an edited occurrence was provider accepted', async () => {
+    const before = await store.getForUser('u1', 'r1')
+    cancel.mockResolvedValue({ ok: true, providerAccepted: true })
+
+    await expect(
+      service.publish('u1', {
+        id: 'r1',
+        message: 'Edited private reminder',
+        dueAtUtc: '2026-06-25T11:00:00.000Z',
+      }),
+    ).rejects.toThrow('already accepted')
+
+    await expect(store.getForUser('u1', 'r1')).resolves.toEqual(before)
+  })
+
+  it('conflicts and preserves the reminder when unpublish finds provider acceptance', async () => {
+    const before = await store.getForUser('u1', 'r1')
+    cancel.mockResolvedValue({ ok: true, providerAccepted: true })
+
+    await expect(service.unpublish('u1', 'r1')).rejects.toThrow('already accepted')
+
+    await expect(store.getForUser('u1', 'r1')).resolves.toEqual(before)
+  })
+
+  it('conflicts and preserves reminder and config state when a config mutation finds provider acceptance', async () => {
+    const reminderBefore = await store.getForUser('u1', 'r1')
+    const configBefore = await configStore.getForUser('u1')
+    cancel.mockResolvedValue({ ok: true, providerAccepted: true })
+
+    await expect(
+      service.setConfig('u1', { channel: 'email', destination: 'new@example.com', enabled: true }),
+    ).rejects.toThrow('already accepted')
+
+    await expect(store.getForUser('u1', 'r1')).resolves.toEqual(reminderBefore)
+    await expect(configStore.getForUser('u1')).resolves.toEqual(configBefore)
+  })
+
+  it('authoritatively opts out after provider acceptance and reports the irreversible dispatch', async () => {
+    cancel.mockResolvedValue({ ok: true, providerAccepted: true })
+
+    await expect(service.optOut('u1')).resolves.toEqual({ alreadyDispatched: true })
+
+    await expect(store.listForUser('u1')).resolves.toEqual([])
+    await expect(configStore.getForUser('u1')).resolves.toBeNull()
+  })
+
+  it('erases pending and delivered plaintext plus the destination on account opt-out', async () => {
+    const [claim] = await store.claimDue(OWNER_A, NOW)
+    await store.markClaimSucceeded('u1', 'r1', claim.claim, NOW)
+    await service.publish('u1', {
+      id: 'pending',
+      message: 'Pending private reminder',
+      dueAtUtc: '2026-06-25T11:00:00.000Z',
+    })
+
+    await service.optOut('u1')
+
+    expect(cancel).toHaveBeenCalledTimes(1)
+    await expect(store.listForUser('u1')).resolves.toEqual([])
+    await expect(configStore.getForUser('u1')).resolves.toBeNull()
+  })
+
+  it('allows idle direct-SMTP reminders to be removed but refuses an active claim', async () => {
+    const direct = new ReminderDeliveryService(
+      true,
+      store,
+      configStore,
+      new ProviderRegistry([{ channel: 'email', send: jest.fn() }]),
+      { ownerId: OWNER_A, clock: () => NOW },
+    )
+    await expect(direct.unpublish('u1', 'r1')).resolves.toBe(true)
+
+    await direct.publish('u1', {
+      id: 'claimed',
+      message: 'Direct SMTP reminder',
+      dueAtUtc: '2026-06-25T11:00:00.000Z',
+    })
+    await store.claimDue(OWNER_A, NOW)
+    await expect(direct.unpublish('u1', 'claimed')).rejects.toThrow('already in flight')
+    await expect(store.getForUser('u1', 'claimed')).resolves.not.toBeNull()
   })
 })

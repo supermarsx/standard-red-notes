@@ -1,4 +1,4 @@
-import { randomUUID } from 'crypto'
+import { createHash, randomUUID } from 'crypto'
 
 import { DeliveryConfigStore } from './DeliveryConfigStore'
 import { ProviderRegistry } from './Providers/ProviderRegistry'
@@ -29,12 +29,68 @@ export interface DeliverySummary {
   skipped: number
 }
 
+export interface ReminderDeliveryOptOutResult {
+  /** A provider had already accepted at least one occurrence before revocation. */
+  alreadyDispatched: boolean
+}
+
+type EmailCancellationOutcome = 'not-durable' | 'cancelled' | 'provider-accepted'
+
 export interface ReminderDeliveryServiceOptions {
   ownerId?: string
   clock?: () => number
 }
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+function createPublishedReminderDeliveryId(
+  userUuid: string,
+  reminder: Pick<PublishedReminder, 'id' | 'dueAtUtc' | 'deliveryRevision'>,
+  destination: string,
+  message: string,
+): string {
+  const digest = createHash('sha256')
+  for (const value of [
+    userUuid,
+    reminder.id,
+    reminder.deliveryRevision ?? 'legacy',
+    reminder.dueAtUtc,
+    destination,
+    message,
+  ]) {
+    digest.update(`${Buffer.byteLength(value, 'utf8')}:`, 'utf8')
+    digest.update(value, 'utf8')
+  }
+  return `published-reminder-${digest.digest('hex')}`
+}
+
+type ReminderDeliveryIdentityInput = Pick<PublishedReminder, 'id' | 'message' | 'dueAtUtc' | 'deliveryRevision'> &
+  Partial<Pick<PublishedReminder, 'channel' | 'destination'>>
+
+function effectiveEmailDeliveryId(
+  userUuid: string,
+  reminder: ReminderDeliveryIdentityInput,
+  config: DeliveryConfig | null,
+): string | undefined {
+  const channel = reminder.channel ?? config?.channel
+  const destination = reminder.destination ?? config?.destination
+  if (channel !== 'email' || !destination) {
+    return undefined
+  }
+  return createPublishedReminderDeliveryId(userUuid, reminder, destination, formatReminderMessage(reminder))
+}
+
+function effectiveDeliveryIdentity(
+  reminder: ReminderDeliveryIdentityInput,
+  config: DeliveryConfig | null,
+): string | undefined {
+  const channel = reminder.channel ?? config?.channel
+  const destination = reminder.destination ?? config?.destination
+  if (!channel || !destination) {
+    return undefined
+  }
+  return `${channel}\0${destination}\0${formatReminderMessage(reminder)}`
+}
 
 function isDeliveryResult(value: unknown): value is DeliveryResult {
   try {
@@ -45,11 +101,16 @@ function isDeliveryResult(value: unknown): value is DeliveryResult {
       'ok' in value &&
       typeof value.ok === 'boolean' &&
       (!('notConfigured' in value) || value.notConfigured === undefined || typeof value.notConfigured === 'boolean') &&
+      (!('pending' in value) || value.pending === undefined || typeof value.pending === 'boolean') &&
       (!('reason' in value) || value.reason === undefined || typeof value.reason === 'string')
     )
   } catch {
     return false
   }
+}
+
+function deliveryConfigChanged(previous: DeliveryConfig, replacement: DeliveryConfig): boolean {
+  return previous.channel !== replacement.channel || previous.destination !== replacement.destination
 }
 
 export class ReminderDeliveryService {
@@ -81,6 +142,25 @@ export class ReminderDeliveryService {
     reminder: Pick<PublishedReminder, 'id' | 'message' | 'dueAtUtc'> &
       Partial<Pick<PublishedReminder, 'channel' | 'destination'>>,
   ): Promise<PublishedReminder> {
+    const existing = await this.remindersStore.getForUser(userUuid, reminder.id)
+    if (existing && !existing.sent) {
+      const config = await this.configStore.getForUser(userUuid)
+      const oldDeliveryId = effectiveEmailDeliveryId(userUuid, existing, config)
+      const replacement = { ...reminder, deliveryRevision: existing.deliveryRevision }
+      const newDeliveryId = effectiveEmailDeliveryId(userUuid, replacement, config)
+      const sameEffectiveDelivery =
+        effectiveDeliveryIdentity(existing, config) === effectiveDeliveryIdentity(replacement, config)
+      let durableCancellationPersisted = false
+      if (oldDeliveryId && oldDeliveryId !== newDeliveryId) {
+        const cancellation = await this.cancelQueuedEmail(oldDeliveryId)
+        this.assertNotProviderAccepted(cancellation)
+        durableCancellationPersisted = cancellation === 'cancelled'
+      }
+      return this.remindersStore.publish(userUuid, reminder, {
+        preserveDeliveryState: sameEffectiveDelivery,
+        allowClaimInvalidation: durableCancellationPersisted,
+      })
+    }
     return this.remindersStore.publish(userUuid, reminder)
   }
 
@@ -90,7 +170,25 @@ export class ReminderDeliveryService {
 
   /** Remove a published reminder so it will never be delivered. */
   async unpublish(userUuid: string, id: string): Promise<boolean> {
-    return this.remindersStore.unpublish(userUuid, id)
+    const existing = await this.remindersStore.getForUser(userUuid, id)
+    if (!existing) {
+      return false
+    }
+    let durableCancellationPersisted = false
+    if (!existing.sent) {
+      const config = await this.configStore.getForUser(userUuid)
+      const deliveryId = effectiveEmailDeliveryId(userUuid, existing, config)
+      if (deliveryId) {
+        const cancellation = await this.cancelQueuedEmail(deliveryId)
+        this.assertNotProviderAccepted(cancellation)
+        durableCancellationPersisted = cancellation === 'cancelled'
+      }
+    }
+    const removed = await this.remindersStore.unpublishSafely(userUuid, id, durableCancellationPersisted)
+    if (removed === 'in-flight') {
+      throw new Error('The reminder is already in flight and cannot be unpublished safely.')
+    }
+    return removed === 'removed'
   }
 
   // ---- delivery config API (used by the controller) ----
@@ -100,7 +198,63 @@ export class ReminderDeliveryService {
   }
 
   async setConfig(userUuid: string, config: DeliveryConfig): Promise<DeliveryConfig> {
+    const previous = await this.configStore.getForUser(userUuid)
+    if (previous?.enabled && (!config.enabled || deliveryConfigChanged(previous, config))) {
+      const affected: PublishedReminder[] = []
+      const durableCancellationIds: string[] = []
+      for (const reminder of (await this.remindersStore.listForUser(userUuid)).filter((item) => !item.sent)) {
+        const oldIdentity = effectiveDeliveryIdentity(reminder, previous)
+        const newIdentity = config.enabled ? effectiveDeliveryIdentity(reminder, config) : undefined
+        if (config.enabled && oldIdentity === newIdentity) {
+          continue
+        }
+        affected.push(reminder)
+        const oldDeliveryId = effectiveEmailDeliveryId(userUuid, reminder, previous)
+        if (oldDeliveryId) {
+          const cancellation = await this.cancelQueuedEmail(oldDeliveryId)
+          this.assertNotProviderAccepted(cancellation)
+          if (cancellation === 'cancelled') {
+            durableCancellationIds.push(reminder.id)
+          }
+        }
+      }
+      const removed = await this.remindersStore.unpublishManySafely(
+        userUuid,
+        affected.map((reminder) => reminder.id),
+        durableCancellationIds,
+      )
+      if (removed === 'in-flight') {
+        throw new Error('A reminder is already in flight, so delivery configuration cannot change safely.')
+      }
+    }
     return this.configStore.setForUser(userUuid, config)
+  }
+
+  /** Authoritative account opt-out; deliberately remains callable after the synced gate turns off. */
+  async optOut(userUuid: string): Promise<ReminderDeliveryOptOutResult> {
+    const config = await this.configStore.getForUser(userUuid)
+    const durableCancellationIds: string[] = []
+    let alreadyDispatched = false
+    for (const reminder of await this.remindersStore.listForUser(userUuid)) {
+      if (!reminder.sent) {
+        const deliveryId = effectiveEmailDeliveryId(userUuid, reminder, config)
+        if (deliveryId) {
+          const cancellation = await this.cancelQueuedEmail(deliveryId)
+          if (cancellation === 'provider-accepted') {
+            alreadyDispatched = true
+          }
+          if (cancellation !== 'not-durable') {
+            durableCancellationIds.push(reminder.id)
+          }
+        }
+      }
+    }
+    const removed = await this.remindersStore.clearForUserSafely(userUuid, durableCancellationIds)
+    if (removed === 'in-flight') {
+      throw new Error('A reminder is already in flight, so account delivery cannot be disabled safely yet.')
+    }
+    await this.configStore.deleteForUser(userUuid)
+    return { alreadyDispatched }
   }
 
   // ---- the scan (used by the scheduler) ----
@@ -192,7 +346,12 @@ export class ReminderDeliveryService {
       const message = formatReminderMessage(reminder)
       let result
       try {
-        result = await provider.send(destination, message)
+        result =
+          channel === 'email'
+            ? await provider.send(destination, message, {
+                deliveryId: createPublishedReminderDeliveryId(userUuid, reminder, destination, message),
+              })
+            : await provider.send(destination, message)
       } catch (error) {
         await this.recordRetry(dueReminder, error, fixedNow, summary, 'failed')
         continue
@@ -227,12 +386,33 @@ export class ReminderDeliveryService {
           result.reason ?? 'The reminder delivery provider reported a failure.',
           fixedNow,
           summary,
-          'failed',
+          result.pending ? 'skipped' : 'failed',
         )
       }
     }
 
     return summary
+  }
+
+  private async cancelQueuedEmail(deliveryId: string): Promise<EmailCancellationOutcome> {
+    const provider = this.registry.get('email')
+    if (!provider?.cancel) {
+      // Direct SMTP has no stored job to revoke. The published-store removal
+      // below is atomic with its live-claim check, so future sends are stopped
+      // and an already-started send is reported as in flight.
+      return 'not-durable'
+    }
+    const result = await provider.cancel({ deliveryId })
+    if (!result.ok) {
+      throw new Error(result.reason ?? 'The pending reminder email could not be cancelled safely.')
+    }
+    return result.providerAccepted ? 'provider-accepted' : 'cancelled'
+  }
+
+  private assertNotProviderAccepted(outcome: EmailCancellationOutcome): void {
+    if (outcome === 'provider-accepted') {
+      throw new Error('The reminder email was already accepted by its provider and cannot be cancelled.')
+    }
   }
 
   private async recordRetry(

@@ -89,6 +89,21 @@ export class DeliveryConfigStore {
     return normalized
   }
 
+  /** Remove the plaintext destination after an authoritative account opt-out. */
+  async deleteForUser(userUuid: string): Promise<boolean> {
+    if (!isSafeRecordKey(userUuid)) {
+      return false
+    }
+    let removed = false
+    await this.mutate((data) => {
+      if (data[userUuid]) {
+        delete data[userUuid]
+        removed = true
+      }
+    })
+    return removed
+  }
+
   private async read(): Promise<StoreShape> {
     return (await this.store.read()) ?? {}
   }
