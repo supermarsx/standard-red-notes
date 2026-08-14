@@ -26,8 +26,9 @@ import { Color } from './Color'
 import { resolveColorSchemeTheme } from './ResolveColorSchemeTheme'
 
 const CachedThemesKey = 'cachedThemes'
-const DefaultThemeIdentifier = 'Default'
-const DefaultThemeBackgroundColor = '#120e11'
+const LegacyDefaultThemeIdentifier = 'Default'
+const DefaultThemeIdentifier = NativeFeatureIdentifier.TYPES.StandardRedTheme
+const DefaultThemeBackgroundColor = '#16090f'
 
 function isColorSchemeMode(value: unknown): value is ColorSchemeMode {
   return value === 'manual' || value === 'auto' || value === 'light' || value === 'dark'
@@ -263,7 +264,7 @@ export class ThemeManager extends AbstractUIService {
 
       this.preferences.setLocalValue(LocalPrefKey.ColorSchemeModeVersion, CurrentColorSchemeModeVersion)
       if (storedMode !== migratedMode) {
-        this.preferences.setLocalValue(LocalPrefKey.ColorSchemeMode, migratedMode)
+        this.preferences.setLocalValue(LocalPrefKey.ColorSchemeMode, migratedMode, { source: 'implicit' })
       }
       return migratedMode
     }
@@ -272,7 +273,7 @@ export class ThemeManager extends AbstractUIService {
       return storedMode
     }
 
-    this.preferences.setLocalValue(LocalPrefKey.ColorSchemeMode, 'dark')
+    this.preferences.setLocalValue(LocalPrefKey.ColorSchemeMode, 'dark', { source: 'implicit' })
     return 'dark'
   }
 
@@ -290,13 +291,28 @@ export class ThemeManager extends AbstractUIService {
     await this.components.toggleTheme(theme)
   }
 
-  /** Selects the Standard Red base theme, represented by no active base link. */
+  /** Selects the complete first-class Standard Red base theme. */
   async selectDefaultTheme(): Promise<void> {
     this.setColorSchemeMode('manual')
 
-    const activeTheme = this.components.getActiveThemes().find((theme) => !theme.layerable)
-    if (activeTheme) {
-      await this.components.toggleTheme(activeTheme)
+    const usecase = new GetAllThemesUseCase(this.application.items)
+    const { native } = usecase.execute({ excludeLayerable: false })
+    const standardRed = native.find(
+      (theme) => theme.featureIdentifier === NativeFeatureIdentifier.TYPES.StandardRedTheme,
+    )
+
+    if (!standardRed) {
+      const activeTheme = this.components.getActiveThemes().find((theme) => !theme.layerable)
+      if (activeTheme) {
+        await this.components.toggleTheme(activeTheme)
+      }
+      return
+    }
+
+    if (!this.components.isThemeActive(standardRed)) {
+      await this.components.toggleTheme(standardRed, true)
+    } else {
+      this.components.toggleOtherNonLayerableThemes(standardRed)
     }
   }
 
@@ -367,9 +383,9 @@ export class ThemeManager extends AbstractUIService {
   }
 
   /**
-   * Applies the non-layerable theme with the given identifier. The special
-   * `Default` identifier means the Standard Red base look, applied by toggling
-   * off any active non-layerable theme.
+   * Applies the non-layerable theme with the given identifier. Older clients
+   * persisted `Default` for the implicit base; normalize it to the complete,
+   * first-class Standard Red asset during activation.
    */
   private applyThemeByIdentifier(themeIdentifier: string | undefined): boolean {
     if (!themeIdentifier) {
@@ -384,15 +400,9 @@ export class ThemeManager extends AbstractUIService {
 
     const activeTheme = themes.find((theme) => this.components.isThemeActive(theme) && !theme.layerable)
 
-    if (themeIdentifier === DefaultThemeIdentifier) {
-      if (activeTheme) {
-        void this.components.toggleTheme(activeTheme)
-        didChangeTheme = true
-      }
-      return didChangeTheme
-    }
-
-    const theme = themes.find((candidate) => candidate.featureIdentifier === themeIdentifier)
+    const resolvedIdentifier =
+      themeIdentifier === LegacyDefaultThemeIdentifier ? DefaultThemeIdentifier : themeIdentifier
+    const theme = themes.find((candidate) => candidate.featureIdentifier === resolvedIdentifier)
     if (theme) {
       if (!this.components.isThemeActive(theme)) {
         this.components.toggleTheme(theme, true).catch(console.error)
@@ -488,18 +498,18 @@ export class ThemeManager extends AbstractUIService {
       }
     }
 
-    if (themeIdentifier === DefaultThemeIdentifier) {
-      toggleActiveTheme()
-    } else {
-      const theme = themes.find((theme) => theme.featureIdentifier === themeIdentifier)
-      if (theme) {
-        if (!this.components.isThemeActive(theme)) {
-          this.components.toggleTheme(theme, true).catch(console.error)
-        } else {
-          this.components.toggleOtherNonLayerableThemes(theme)
-        }
-        didChangeTheme = true
+    const resolvedIdentifier =
+      themeIdentifier === LegacyDefaultThemeIdentifier ? DefaultThemeIdentifier : themeIdentifier
+    const theme = themes.find((candidate) => candidate.featureIdentifier === resolvedIdentifier)
+    if (theme) {
+      if (!this.components.isThemeActive(theme)) {
+        this.components.toggleTheme(theme, true).catch(console.error)
+      } else {
+        this.components.toggleOtherNonLayerableThemes(theme)
       }
+      didChangeTheme = true
+    } else {
+      toggleActiveTheme()
     }
 
     return didChangeTheme

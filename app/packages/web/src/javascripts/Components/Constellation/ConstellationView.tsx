@@ -152,12 +152,12 @@ function readColors(element: HTMLElement): Colors {
   const style = getComputedStyle(element)
   const v = (name: string, fallback: string) => style.getPropertyValue(name).trim() || fallback
   return {
-    node: v('--sn-stylekit-info-color', '#b3242e'),
-    nodeDim: v('--sn-stylekit-neutral-color', '#9b8b90'),
-    edge: v('--sn-stylekit-border-color', '#403036'),
-    edgeHi: v('--sn-stylekit-info-color', '#b3242e'),
-    label: v('--sn-stylekit-foreground-color', '#ece8e9'),
-    bg: v('--sn-stylekit-background-color', '#120e11'),
+    node: v('--sn-stylekit-info-color', '#e85f6d'),
+    nodeDim: v('--sn-stylekit-neutral-color', '#b2939b'),
+    edge: v('--sn-stylekit-border-color', '#94636f'),
+    edgeHi: v('--sn-stylekit-info-color', '#e85f6d'),
+    label: v('--sn-stylekit-foreground-color', '#eadde0'),
+    bg: v('--sn-stylekit-background-color', '#16090f'),
   }
 }
 

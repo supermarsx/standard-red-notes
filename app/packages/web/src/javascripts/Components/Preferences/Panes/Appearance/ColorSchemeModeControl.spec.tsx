@@ -5,12 +5,15 @@
 import { act, createElement } from 'react'
 import { createRoot, Root } from 'react-dom/client'
 
-const mockSetColorSchemeMode = jest.fn()
+const mockApplication = {}
+const mockSelectColorSchemeMode = jest.fn()
 
 jest.mock('@/Components/ApplicationProvider', () => ({
-  useApplication: () => ({
-    themeManager: { setColorSchemeMode: mockSetColorSchemeMode },
-  }),
+  useApplication: () => mockApplication,
+}))
+
+jest.mock('./ThemeSelection', () => ({
+  selectColorSchemeMode: mockSelectColorSchemeMode,
 }))
 
 jest.mock('@/Hooks/usePreference', () => ({
@@ -64,7 +67,7 @@ describe('ColorSchemeModeControl', () => {
     container.remove()
   })
 
-  it('surfaces the persisted Manual mode and routes mode changes through ThemeManager', () => {
+  it('surfaces the persisted Manual mode and routes mode changes through the durable selection boundary', () => {
     act(() => root.render(createElement(ColorSchemeModeControl)))
 
     const buttons = Array.from(container.querySelectorAll('button'))
@@ -72,6 +75,6 @@ describe('ColorSchemeModeControl', () => {
     expect(buttons[0].dataset.selected).toBe('true')
 
     act(() => buttons[1].click())
-    expect(mockSetColorSchemeMode).toHaveBeenCalledWith('auto')
+    expect(mockSelectColorSchemeMode).toHaveBeenCalledWith(mockApplication, 'auto')
   })
 })

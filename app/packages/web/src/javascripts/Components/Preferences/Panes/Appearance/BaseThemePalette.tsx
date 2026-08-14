@@ -5,6 +5,7 @@ import {
   ThemeFeatureDescription,
   UIFeature,
 } from '@standardnotes/snjs'
+import { NativeFeatureIdentifier } from '@standardnotes/features'
 import { GetAllThemesUseCase } from '@standardnotes/ui-services'
 import { classNames } from '@standardnotes/utils'
 import { FunctionComponent, useCallback, useEffect, useState } from 'react'
@@ -26,12 +27,20 @@ const BaseThemePalette: FunctionComponent<Props> = ({ application, loadThemes })
 
   const reloadThemes = useCallback(() => {
     if (loadThemes) {
-      setThemes([...loadThemes()].sort(sortThemes))
+      setThemes(
+        [...loadThemes()]
+          .filter((theme) => theme.featureIdentifier !== NativeFeatureIdentifier.TYPES.StandardRedTheme)
+          .sort(sortThemes),
+      )
       return
     }
     const usecase = new GetAllThemesUseCase(application.items)
     const { native, thirdParty } = usecase.execute({ excludeLayerable: true })
-    setThemes([...thirdParty, ...native].sort(sortThemes))
+    setThemes(
+      [...thirdParty, ...native]
+        .filter((theme) => theme.featureIdentifier !== NativeFeatureIdentifier.TYPES.StandardRedTheme)
+        .sort(sortThemes),
+    )
   }, [application, loadThemes])
 
   useEffect(() => {
@@ -51,7 +60,9 @@ const BaseThemePalette: FunctionComponent<Props> = ({ application, loadThemes })
 
   const customThemeActive = hasSelectedCustomTheme(application)
   const activeBaseTheme = application.componentManager.getActiveThemes().find((theme) => !theme.layerable)
-  const standardRedActive = !customThemeActive && !activeBaseTheme
+  const standardRedActive =
+    !customThemeActive &&
+    (!activeBaseTheme || activeBaseTheme.featureIdentifier === NativeFeatureIdentifier.TYPES.StandardRedTheme)
 
   const activateTheme = useCallback(
     (theme: UIFeature<ThemeFeatureDescription>) => {
@@ -77,7 +88,7 @@ const BaseThemePalette: FunctionComponent<Props> = ({ application, loadThemes })
   return (
     <section className="mt-4" aria-label="Base theme settings">
       <Subtitle>Base theme</Subtitle>
-      <Text>Choose the theme used on this device and workspace. Your choice is available offline.</Text>
+      <Text>Choose your account's base theme. It syncs across devices and remains available offline.</Text>
       <div
         className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3"
         role="radiogroup"
@@ -87,7 +98,7 @@ const BaseThemePalette: FunctionComponent<Props> = ({ application, loadThemes })
           type="button"
           role="radio"
           aria-checked={standardRedActive}
-          data-theme-id="Default"
+          data-theme-id={NativeFeatureIdentifier.TYPES.StandardRedTheme}
           className={paletteButtonClasses(standardRedActive)}
           onClick={() => void selectBuiltInTheme(application)}
         >

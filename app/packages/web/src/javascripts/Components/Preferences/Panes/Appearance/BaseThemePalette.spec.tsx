@@ -11,6 +11,7 @@ import {
   ThemeFeatureDescription,
   UIFeature,
 } from '@standardnotes/snjs'
+import { NativeFeatureIdentifier } from '@standardnotes/features'
 import { WebApplication } from '@/Application/WebApplication'
 import { CustomThemesState } from './CustomThemes/CustomTheme'
 
@@ -65,7 +66,7 @@ function createApplication(
     activeId = theme.uniqueIdentifier.value
   })
   const selectDefaultTheme = jest.fn(async () => {
-    activeId = undefined
+    activeId = NativeFeatureIdentifier.TYPES.StandardRedTheme
   })
 
   const application = {
@@ -122,7 +123,11 @@ describe('BaseThemePalette', () => {
   let themes: FakeTheme[]
 
   beforeEach(() => {
-    themes = [fakeTheme('native-blue', 'Blue', '#086dd6'), fakeTheme('third-party-ocean', 'Ocean', '#123456')]
+    themes = [
+      fakeTheme(NativeFeatureIdentifier.TYPES.StandardRedTheme, 'Standard Red', STANDARD_RED_SWATCH),
+      fakeTheme('native-blue', 'Blue', '#086dd6'),
+      fakeTheme('third-party-ocean', 'Ocean', '#123456'),
+    ]
     container = document.createElement('div')
     document.body.appendChild(container)
     root = createRoot(container)
@@ -150,12 +155,18 @@ describe('BaseThemePalette', () => {
     )
     expect(container.querySelector('[role="radiogroup"]')?.getAttribute('aria-label')).toBe('Base theme')
     expect(container.querySelector('[data-theme-id="native-blue"]')?.getAttribute('aria-checked')).toBe('true')
-    expect(container.querySelector('[data-theme-id="Default"]')?.getAttribute('aria-checked')).toBe('false')
+    expect(
+      container
+        .querySelector(`[data-theme-id="${NativeFeatureIdentifier.TYPES.StandardRedTheme}"]`)
+        ?.getAttribute('aria-checked'),
+    ).toBe('false')
 
-    const defaultSwatch = container.querySelector<HTMLElement>('[data-theme-id="Default"] [aria-hidden="true"]')
+    const defaultSwatch = container.querySelector<HTMLElement>(
+      `[data-theme-id="${NativeFeatureIdentifier.TYPES.StandardRedTheme}"] [aria-hidden="true"]`,
+    )
     const oceanSwatch = container.querySelector<HTMLElement>('[data-theme-id="third-party-ocean"] [aria-hidden="true"]')
-    expect(defaultSwatch?.style.backgroundColor).toBe('rgb(179, 36, 46)')
-    expect(STANDARD_RED_SWATCH).toBe('#b3242e')
+    expect(defaultSwatch?.style.backgroundColor).toBe('rgb(232, 95, 109)')
+    expect(STANDARD_RED_SWATCH).toBe('#e85f6d')
     expect(oceanSwatch?.style.backgroundColor).toBe('rgb(18, 52, 86)')
   })
 
@@ -166,9 +177,13 @@ describe('BaseThemePalette', () => {
     )
 
     await act(async () => container.querySelector<HTMLButtonElement>('[data-theme-id="third-party-ocean"]')?.click())
-    expect(harness.selectTheme).toHaveBeenCalledWith(themes[1])
+    expect(harness.selectTheme).toHaveBeenCalledWith(themes[2])
 
-    await act(async () => container.querySelector<HTMLButtonElement>('[data-theme-id="Default"]')?.click())
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(`[data-theme-id="${NativeFeatureIdentifier.TYPES.StandardRedTheme}"]`)
+        ?.click(),
+    )
     expect(harness.selectDefaultTheme).toHaveBeenCalledTimes(1)
   })
 

@@ -1,102 +1,102 @@
 /*
- * Standard Red Notes — component editor theme bridge.
+ * Standard Red Notes - component editor theme bridge.
  *
  * Legacy component editors run inside sandboxed iframes. The host app delivers
- * the ACTIVE theme's CSS by appending a <link> to this document's <head> at
- * runtime (ComponentManager -> ActivateThemes -> the relay injects the link).
+ * the active theme's CSS by appending a link to the frame at runtime. Standard
+ * Red is also seeded here so a frame is dark and readable during first paint,
+ * offline startup, and any interval before that link is attached.
  *
- * Problem this file solves:
- *   The fork's default DARK look ("Standard Red") is the app's *base* stylekit,
- *   which is NOT a toggled theme. When it is active, the host posts NO theme
- *   <link> to the iframe, so editors fall back to their own bundled :root
- *   defaults — which are LIGHT (black text on white/transparent). On the dark
- *   app background this makes text invisible / illegible (the checklist bug).
- *
- * Fix:
- *   This stylesheet seeds the Standard Red dark stylekit variables as the iframe
- *   BASE. It must be loaded AFTER the editor's own stylesheet(s) so its :root
- *   variables win over the editors' hardcoded light defaults, but BEFORE any
- *   theme <link> the host appends at runtime (those are appended to the end of
- *   <head>, so a real Light/Standard-Blue theme still overrides this base).
- *
- *   Net effect:
- *     - Dark / Standard Red active (no theme link posted)  -> these dark vars apply.
- *     - Light / Standard Blue active (theme link posted)    -> link overrides, light applies.
- *     - Any other explicit theme                            -> that theme overrides.
+ * Keep the declarations below in parity with the first-class Standard Red
+ * asset. A subsequently appended light or third-party theme still wins by
+ * normal cascade order.
  */
-
 :root {
-  --sn-stylekit-neutral-color: #9b8b90;
-  --sn-stylekit-neutral-contrast-color: #ffffff;
+  --foreground-color: #eadde0;
+  --background-color: #16090f;
+  --highlight-color: #e85f6d;
+  --border-color: #94636f;
 
-  --sn-stylekit-info-color: #b3242e;
-  --sn-stylekit-info-color-darkened: #931d26;
-  --sn-stylekit-info-contrast-color: #ffffff;
-  --sn-stylekit-info-backdrop-color: #b3242e1f;
+  --sn-component-foreground-color: var(--foreground-color);
+  --sn-component-background-color: transparent;
+  --sn-component-foreground-highlight-color: var(--highlight-color);
+  --sn-component-outer-border-color: transparent;
+  --sn-component-inner-border-color: var(--border-color);
 
-  --sn-stylekit-success-color: #2fa37e;
-  --sn-stylekit-success-contrast-color: #ffffff;
+  --sn-stylekit-neutral-color: #b2939b;
+  --sn-stylekit-neutral-contrast-color: #16090f;
 
-  --sn-stylekit-warning-color: #e0a526;
-  --sn-stylekit-warning-contrast-color: #120e11;
+  --sn-stylekit-info-color: #e85f6d;
+  --sn-stylekit-info-color-darkened: #d85260;
+  --sn-stylekit-info-contrast-color: #16090f;
+  --sn-stylekit-info-backdrop-color: #e85f6d24;
 
-  --sn-stylekit-danger-color: #ee5a55;
-  --sn-stylekit-danger-contrast-color: #ffffff;
-  --sn-stylekit-danger-light-color: #341a1d;
+  --sn-stylekit-success-color: #50c49c;
+  --sn-stylekit-success-contrast-color: #102019;
 
-  --sn-stylekit-shadow-color: #000000;
-  --sn-stylekit-background-color: #120e11;
-  --sn-stylekit-border-color: #403036;
-  --sn-stylekit-foreground-color: #ece8e9;
+  --sn-stylekit-warning-color: #f0b84c;
+  --sn-stylekit-warning-contrast-color: #1d1305;
 
-  --sn-stylekit-contrast-background-color: #1d1519;
-  --sn-stylekit-contrast-foreground-color: #f0ecec;
-  --sn-stylekit-contrast-border-color: #43323a;
+  --sn-stylekit-danger-color: #f4767d;
+  --sn-stylekit-danger-contrast-color: #220b0e;
+  --sn-stylekit-danger-light-color: #3a151d;
 
-  --sn-stylekit-secondary-background-color: #181216;
-  --sn-stylekit-secondary-foreground-color: #ece8e9;
-  --sn-stylekit-secondary-border-color: #43323a;
+  --sn-stylekit-shadow-color: #090306;
+  --sn-stylekit-background-color: #16090f;
+  --sn-stylekit-border-color: #94636f;
+  --sn-stylekit-foreground-color: #eadde0;
 
-  --sn-stylekit-secondary-contrast-background-color: #251c21;
-  --sn-stylekit-secondary-contrast-foreground-color: #f0ecec;
-  --sn-stylekit-secondary-contrast-border-color: #5f4a52;
+  --sn-stylekit-contrast-background-color: #241019;
+  --sn-stylekit-contrast-foreground-color: #eadde0;
+  --sn-stylekit-contrast-border-color: #7b4a56;
 
-  --sn-stylekit-editor-background-color: var(--sn-stylekit-background-color);
-  --sn-stylekit-editor-foreground-color: var(--sn-stylekit-foreground-color);
+  --sn-stylekit-secondary-background-color: #200c14;
+  --sn-stylekit-secondary-foreground-color: #dac7cc;
+  --sn-stylekit-secondary-border-color: #70404c;
 
-  --sn-stylekit-paragraph-text-color: #d8d2d3;
+  --sn-stylekit-secondary-contrast-background-color: #321520;
+  --sn-stylekit-secondary-contrast-foreground-color: #f0e3e6;
+  --sn-stylekit-secondary-contrast-border-color: #94636f;
 
-  --sn-stylekit-input-placeholder-color: #82767b;
-  --sn-stylekit-input-border-color: #43323a;
+  --sn-stylekit-editor-background-color: #190b11;
+  --sn-stylekit-editor-foreground-color: #eadde0;
 
-  --sn-stylekit-scrollbar-thumb-color: #46363c;
-  --sn-stylekit-scrollbar-track-border-color: #221a1e;
+  --sn-stylekit-paragraph-text-color: #dac7cc;
+
+  --sn-stylekit-input-placeholder-color: #b2939b;
+  --sn-stylekit-input-border-color: #94636f;
+
+  --sn-stylekit-scrollbar-thumb-color: #875662;
+  --sn-stylekit-scrollbar-track-border-color: #2b121b;
 
   --sn-stylekit-theme-type: dark;
   --sn-stylekit-theme-name: sn-standard-red;
 
-  --sn-stylekit-passive-color-0: #e6e1e2;
-  --sn-stylekit-passive-color-1: #9b8b90;
-  --sn-stylekit-passive-color-2: #6a545b;
-  --sn-stylekit-passive-color-3: #403036;
-  --sn-stylekit-passive-color-4: #211a1e;
-  --sn-stylekit-passive-color-4-opacity-variant: #6a545b3d;
-  --sn-stylekit-passive-color-5: #181216;
-  --sn-stylekit-passive-color-6: #241c21;
-  --sn-stylekit-passive-color-super-light: #100c0e;
+  --sn-stylekit-passive-color-0: #c8afb5;
+  --sn-stylekit-passive-color-1: #b2939b;
+  --sn-stylekit-passive-color-2: #a5818a;
+  --sn-stylekit-passive-color-3: #6d3c48;
+  --sn-stylekit-passive-color-4: #3a1b26;
+  --sn-stylekit-passive-color-4-opacity-variant: #b05a6c3d;
+  --sn-stylekit-passive-color-5: #241019;
+  --sn-stylekit-passive-color-6: #2d141e;
+  --sn-stylekit-passive-color-super-light: #10060a;
 
-  --sn-stylekit-accessory-tint-color-1: #e0524d;
-  --sn-stylekit-accessory-tint-color-2: #ea6595;
-  --sn-stylekit-accessory-tint-color-3: #ebad00;
-  --sn-stylekit-accessory-tint-color-4: #9a7be0;
-  --sn-stylekit-accessory-tint-color-5: #28b58e;
-  --sn-stylekit-accessory-tint-color-6: #f28c52;
+  --sn-stylekit-accessory-tint-color-1: #e85f6d;
+  --sn-stylekit-accessory-tint-color-2: #e97fa8;
+  --sn-stylekit-accessory-tint-color-3: #e5ad46;
+  --sn-stylekit-accessory-tint-color-4: #aa88e8;
+  --sn-stylekit-accessory-tint-color-5: #50c49c;
+  --sn-stylekit-accessory-tint-color-6: #ef8a5c;
+
+  --sn-desktop-titlebar-bg-color: var(--sn-stylekit-secondary-background-color);
+  --sn-desktop-titlebar-border-color: var(--sn-stylekit-secondary-border-color);
+  --sn-desktop-titlebar-ui-color: var(--sn-stylekit-secondary-foreground-color);
+  --sn-desktop-titlebar-ui-hover-color: var(--sn-stylekit-info-color);
 }
 
 /*
- * Readability safety net: any editor that paints text/background directly from
- * the stylekit foreground/background variables now becomes legible in the dark
- * base. We intentionally avoid forcing colors on elements that set their own.
+ * Readability safety net for older editors that paint no explicit body color.
+ * Editors that intentionally set their own colors remain untouched.
  */
 html,
 body {

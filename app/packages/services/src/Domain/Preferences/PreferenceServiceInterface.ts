@@ -7,6 +7,15 @@ export enum PreferencesServiceEvent {
   PreferencesChanged = 'PreferencesChanged',
 }
 
+export type LocalPreferenceWriteOptions = {
+  /**
+   * Implicit writes repair/default the device cache and must not outrank an
+   * already-synced user choice. Calls without an option are explicit user or
+   * application changes and retain the existing behavior.
+   */
+  source?: 'user' | 'implicit'
+}
+
 export interface PreferenceServiceInterface extends AbstractService<PreferencesServiceEvent> {
   getValue<K extends PrefKey>(key: K, defaultValue: PrefValue[K]): PrefValue[K]
   getValue<K extends PrefKey>(key: K, defaultValue?: PrefValue[K]): PrefValue[K] | undefined
@@ -22,5 +31,5 @@ export interface PreferenceServiceInterface extends AbstractService<PreferencesS
   setValue<K extends PrefKey>(key: K, value: PrefValue[K]): Promise<void>
   /** Set value without triggering sync or event notifications */
   setValueDetached<K extends PrefKey>(key: K, value: PrefValue[K]): Promise<void>
-  setLocalValue<K extends LocalPrefKey>(key: K, value: LocalPrefValue[K]): void
+  setLocalValue<K extends LocalPrefKey>(key: K, value: LocalPrefValue[K], options?: LocalPreferenceWriteOptions): void
 }

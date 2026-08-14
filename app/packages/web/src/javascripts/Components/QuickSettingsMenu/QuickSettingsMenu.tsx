@@ -3,10 +3,10 @@ import {
   ComponentInterface,
   UIFeature,
   ContentType,
-  NativeFeatureIdentifier,
   PreferencesServiceEvent,
   ThemeFeatureDescription,
 } from '@standardnotes/snjs'
+import { NativeFeatureIdentifier } from '@standardnotes/features'
 import { observer } from 'mobx-react-lite'
 import { FunctionComponent, useCallback, useEffect, useRef, useState } from 'react'
 import Icon from '@/Components/Icon/Icon'
@@ -31,6 +31,23 @@ type MenuProps = {
   closeMenu: () => void
 }
 
+export function isStandardRedTheme(theme: UIFeature<ThemeFeatureDescription>): boolean {
+  return theme.featureIdentifier === NativeFeatureIdentifier.TYPES.StandardRedTheme
+}
+
+export function excludeFirstClassStandardRed(
+  themes: UIFeature<ThemeFeatureDescription>[],
+): UIFeature<ThemeFeatureDescription>[] {
+  return themes.filter((theme) => !isStandardRedTheme(theme))
+}
+
+export function isStandardRedSelectionActive(
+  customThemeActive: boolean,
+  activeBaseTheme?: UIFeature<ThemeFeatureDescription>,
+): boolean {
+  return !customThemeActive && (!activeBaseTheme || isStandardRedTheme(activeBaseTheme))
+}
+
 const QuickSettingsMenu: FunctionComponent<MenuProps> = ({ closeMenu }) => {
   const application = useApplication()
 
@@ -39,10 +56,10 @@ const QuickSettingsMenu: FunctionComponent<MenuProps> = ({ closeMenu }) => {
   const [editorStackComponents, setEditorStackComponents] = useState<ComponentInterface[]>([])
 
   const activeThemes = application.componentManager.getActiveThemes()
-  const hasNonLayerableActiveTheme = activeThemes.find((theme) => !theme.layerable)
+  const activeBaseTheme = activeThemes.find((theme) => !theme.layerable)
   const customThemesState = loadCustomThemesState(application.preferences)
   const customThemeActive = customThemesState.selectedId !== null
-  const defaultThemeOn = !customThemeActive && !hasNonLayerableActiveTheme
+  const defaultThemeOn = isStandardRedSelectionActive(customThemeActive, activeBaseTheme)
 
   const prefsButtonRef = useRef<HTMLButtonElement>(null)
   const defaultThemeButtonRef = useRef<HTMLButtonElement>(null)
@@ -50,7 +67,7 @@ const QuickSettingsMenu: FunctionComponent<MenuProps> = ({ closeMenu }) => {
   const reloadThemes = useCallback(() => {
     const usecase = new GetAllThemesUseCase(application.items)
     const { thirdParty, native } = usecase.execute({ excludeLayerable: false })
-    setThemes([...thirdParty, ...native].sort(sortThemes))
+    setThemes(excludeFirstClassStandardRed([...thirdParty, ...native]).sort(sortThemes))
   }, [application])
 
   const reloadEditorStackComponents = useCallback(() => {
