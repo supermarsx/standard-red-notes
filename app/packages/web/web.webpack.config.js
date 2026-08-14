@@ -302,6 +302,14 @@ module.exports = (env) => {
               options: {
                 api: 'modern',
                 sassOptions: {
+                  // In compressed mode Dart Sass represents the UTF-8 charset
+                  // marker as a BOM. Because MiniCssExtractPlugin concatenates
+                  // the Sass chunk after the Tailwind chunk, that BOM lands in
+                  // the middle of app.css and becomes part of the following
+                  // :root selector. The browser then cannot apply the built-in
+                  // Standard Red variables. app.css is served as UTF-8, so no
+                  // in-band charset marker is needed.
+                  charset: false,
                   quietDeps: true,
                   silenceDeprecations: ['import', 'legacy-js-api'],
                 },

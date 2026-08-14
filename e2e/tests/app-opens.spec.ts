@@ -68,5 +68,97 @@ test.describe('Standard Red Notes web app', () => {
     expect(styled.sheetCount, 'no stylesheets loaded').toBeGreaterThan(0)
     expect(styled.hasAppCss, 'app.css stylesheet not loaded').toBe(true)
     expect(styled.rootHeight, 'app root has no laid-out height (unstyled/blank)').toBeGreaterThan(0)
+
+    // The default theme is represented by CSS custom properties. A production
+    // Sass chunk once placed a UTF-8 BOM immediately before its :root selector,
+    // which made every token undefined while the stylesheet and layout still
+    // appeared loaded. Assert the rendered theme contract, not just the link.
+    await expect
+      .poll(
+        () =>
+          page.evaluate(() =>
+            getComputedStyle(document.documentElement).getPropertyValue('--sn-stylekit-theme-name').trim(),
+          ),
+        {
+          timeout: 30_000,
+          message: 'Standard Red theme tokens never became active',
+        },
+      )
+      .toBe('sn-standard-red')
+
+    const theme = await page.evaluate(() => {
+      const parseColor = (value: string): [number, number, number] | undefined => {
+        const hex = value.trim().match(/^#([\da-f]{6})$/i)?.[1]
+        if (hex) {
+          return [
+            Number.parseInt(hex.slice(0, 2), 16),
+            Number.parseInt(hex.slice(2, 4), 16),
+            Number.parseInt(hex.slice(4, 6), 16),
+          ]
+        }
+
+        const rgb = value.match(/^rgba?\(\s*([\d.]+)[, ]+\s*([\d.]+)[, ]+\s*([\d.]+)/i)
+        return rgb ? [Number(rgb[1]), Number(rgb[2]), Number(rgb[3])] : undefined
+      }
+      const luminance = (color: [number, number, number]): number => {
+        const channels = color.map((channel) => {
+          const normalized = channel / 255
+          return normalized <= 0.04045 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4
+        })
+        return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]
+      }
+      const contrast = (first: [number, number, number], second: [number, number, number]): number => {
+        const lighter = Math.max(luminance(first), luminance(second))
+        const darker = Math.min(luminance(first), luminance(second))
+        return (lighter + 0.05) / (darker + 0.05)
+      }
+
+      const rootStyle = getComputedStyle(document.documentElement)
+      const bodyStyle = getComputedStyle(document.body)
+      const shell = document.querySelector<HTMLElement>('.main-ui-view')
+      const shellStyle = shell ? getComputedStyle(shell) : undefined
+      const backgroundToken = rootStyle.getPropertyValue('--sn-stylekit-background-color').trim()
+      const foregroundToken = rootStyle.getPropertyValue('--sn-stylekit-foreground-color').trim()
+      const accentToken = rootStyle.getPropertyValue('--sn-stylekit-info-color').trim()
+      const background = parseColor(backgroundToken)
+      const foreground = parseColor(foregroundToken)
+      const accent = parseColor(accentToken)
+      const renderedBackground = parseColor(bodyStyle.backgroundColor)
+      const renderedShellBackground = shellStyle ? parseColor(shellStyle.backgroundColor) : undefined
+      const renderedShellForeground = shellStyle ? parseColor(shellStyle.color) : undefined
+
+      return {
+        themeType: rootStyle.getPropertyValue('--sn-stylekit-theme-type').trim(),
+        backgroundToken,
+        foregroundToken,
+        accentToken,
+        renderedBodyBackground: bodyStyle.backgroundColor,
+        renderedShellBackground: shellStyle?.backgroundColor,
+        renderedShellForeground: shellStyle?.color,
+        backgroundLuminance: background ? luminance(background) : undefined,
+        renderedBackgroundLuminance: renderedBackground ? luminance(renderedBackground) : undefined,
+        renderedShellBackgroundLuminance: renderedShellBackground ? luminance(renderedShellBackground) : undefined,
+        renderedShellForegroundContrast:
+          renderedShellBackground && renderedShellForeground
+            ? contrast(renderedShellBackground, renderedShellForeground)
+            : undefined,
+        foregroundContrast: background && foreground ? contrast(background, foreground) : undefined,
+        accentContrast: background && accent ? contrast(background, accent) : undefined,
+      }
+    })
+
+    expect(theme.themeType).toBe('dark')
+    expect(theme.backgroundToken).toMatch(/^#[\da-f]{6}$/i)
+    expect(theme.foregroundToken).toMatch(/^#[\da-f]{6}$/i)
+    expect(theme.accentToken).toMatch(/^#[\da-f]{6}$/i)
+    expect(theme.renderedBodyBackground).not.toBe('rgba(0, 0, 0, 0)')
+    expect(theme.renderedShellBackground).not.toBe('rgba(0, 0, 0, 0)')
+    expect(theme.renderedShellForeground).toBeDefined()
+    expect(theme.backgroundLuminance).toBeLessThan(0.08)
+    expect(theme.renderedBackgroundLuminance).toBeLessThan(0.08)
+    expect(theme.renderedShellBackgroundLuminance).toBeLessThan(0.08)
+    expect(theme.renderedShellForegroundContrast).toBeGreaterThanOrEqual(7)
+    expect(theme.foregroundContrast).toBeGreaterThanOrEqual(7)
+    expect(theme.accentContrast).toBeGreaterThanOrEqual(4.5)
   })
 })

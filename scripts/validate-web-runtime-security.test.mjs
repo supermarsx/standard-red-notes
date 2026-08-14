@@ -843,6 +843,7 @@ test("production webpack resolves libsodium and invokes the portable-output asse
   assert.match(webWebpack, /importMeta:\s*false/);
   assert.match(webWebpack, /url:\s*['"]relative['"]/);
   assert.match(webWebpack, /importMetaName:[\s\S]*globalThis\.location\.href/);
+  assert.match(webWebpack, /sassOptions:\s*\{[\s\S]*?charset:\s*false/);
   assert.match(webPackage.scripts.build, /AssertPortableBundle\.mjs/);
   assert.match(portableBundleAssertion, /allowedFileUrls/);
   assert.match(portableBundleAssertion, /encodedSchemePattern/);
@@ -852,7 +853,7 @@ test("production webpack resolves libsodium and invokes the portable-output asse
   );
 });
 
-test("portable-output assertion permits only the inert SheetJS literal and mjs import.meta", () => {
+test("portable-output assertion validates script portability and Standard Red CSS", () => {
   const temporaryDirectory = mkdtempSync(
     path.join(root, ".tmp-portable-bundle-"),
   );
@@ -861,6 +862,14 @@ test("portable-output assertion permits only the inert SheetJS literal and mjs i
     "app/packages/web/scripts/AssertPortableBundle.mjs",
   );
   const classicPath = path.join(temporaryDirectory, "classic.js");
+  const stylesheetPath = path.join(temporaryDirectory, "app.css");
+  const standardRedStylesheet = `:root {
+    --sn-stylekit-theme-name: sn-standard-red;
+    --sn-stylekit-theme-type: dark;
+    --sn-stylekit-background-color: #16090f;
+    --sn-stylekit-foreground-color: #eadde0;
+    --sn-stylekit-info-color: #e85f6d;
+  }`;
   const run = () =>
     spawnSync(process.execPath, [assertionPath, temporaryDirectory], {
       cwd: root,
@@ -869,6 +878,7 @@ test("portable-output assertion permits only the inert SheetJS literal and mjs i
 
   try {
     writeFileSync(classicPath, 'const fallback = "file:///C:/SheetJS/";');
+    writeFileSync(stylesheetPath, standardRedStylesheet);
     writeFileSync(
       path.join(temporaryDirectory, "worker.mjs"),
       "export const workerUrl = import.meta.url;",
@@ -896,6 +906,74 @@ test("portable-output assertion permits only the inert SheetJS literal and mjs i
     const encodedFileUrl = run();
     assert.notEqual(encodedFileUrl.status, 0);
     assert.match(encodedFileUrl.stderr, /percent-encoded file URL/);
+
+    writeFileSync(classicPath, 'const fallback = "file:///C:/SheetJS/";');
+    writeFileSync(stylesheetPath, `body {}\uFEFF${standardRedStylesheet}`);
+    const midStylesheetBom = run();
+    assert.notEqual(midStylesheetBom.status, 0);
+    assert.match(
+      midStylesheetBom.stderr,
+      /app\.css: UTF-8 BOM in the middle of the stylesheet at byte 7/,
+    );
+
+    writeFileSync(
+      stylesheetPath,
+      standardRedStylesheet.replace(
+        "--sn-stylekit-background-color: #16090f;",
+        "",
+      ),
+    );
+    const missingRootToken = run();
+    assert.notEqual(missingRootToken.status, 0);
+    assert.match(
+      missingRootToken.stderr,
+      /Standard Red root token --sn-stylekit-background-color must be #16090f, found missing/,
+    );
+
+    writeFileSync(
+      stylesheetPath,
+      `:root {
+        /*
+        --sn-stylekit-theme-name: sn-standard-red;
+        --sn-stylekit-theme-type: dark;
+        --sn-stylekit-background-color: #16090f;
+        --sn-stylekit-foreground-color: #eadde0;
+        --sn-stylekit-info-color: #e85f6d;
+        */
+      }`,
+    );
+    const commentedRootTokens = run();
+    assert.notEqual(commentedRootTokens.status, 0);
+    assert.match(
+      commentedRootTokens.stderr,
+      /app\.css: missing a valid Standard Red :root rule/,
+    );
+
+    writeFileSync(
+      stylesheetPath,
+      standardRedStylesheet.replace(
+        "--sn-stylekit-background-color: #16090f;",
+        "--sn-stylekit-background-color: #ffffff;",
+      ),
+    );
+    const lightRootPalette = run();
+    assert.notEqual(lightRootPalette.status, 0);
+    assert.match(
+      lightRootPalette.stderr,
+      /Standard Red root token --sn-stylekit-background-color must be #16090f, found #ffffff/,
+    );
+
+    writeFileSync(
+      stylesheetPath,
+      `${standardRedStylesheet}
+      :root { --sn-stylekit-background-color: #ffffff; }`,
+    );
+    const overriddenRootPalette = run();
+    assert.notEqual(overriddenRootPalette.status, 0);
+    assert.match(
+      overriddenRootPalette.stderr,
+      /effective root token --sn-stylekit-background-color must remain #16090f, found #ffffff/,
+    );
   } finally {
     rmSync(temporaryDirectory, { recursive: true, force: true });
   }
