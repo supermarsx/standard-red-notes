@@ -5,6 +5,22 @@ import { FillThemeComponentDefaults } from './Utilities/FillThemeComponentDefaul
 import { RoleName } from '@standardnotes/domain-core'
 
 export function themes(): ThemeFeatureDescription[] {
+  const allRoles = [RoleName.NAMES.CoreUser, RoleName.NAMES.PlusUser, RoleName.NAMES.ProUser]
+
+  const standardRed: ThemeFeatureDescription = FillThemeComponentDefaults({
+    availableInRoles: allRoles,
+    name: 'Standard Red',
+    identifier: NativeFeatureIdentifier.TYPES.StandardRedTheme,
+    permission_name: PermissionName.StandardRedTheme,
+    isDark: true,
+    dock_icon: {
+      type: 'circle',
+      background_color: '#e85f6d',
+      foreground_color: '#16090f',
+      border_color: '#e85f6d',
+    },
+  })
+
   const midnight: ThemeFeatureDescription = FillThemeComponentDefaults({
     name: 'Midnight',
     identifier: NativeFeatureIdentifier.TYPES.MidnightTheme,
@@ -110,8 +126,6 @@ export function themes(): ThemeFeatureDescription[] {
     },
   })
 
-  const allRoles = [RoleName.NAMES.CoreUser, RoleName.NAMES.PlusUser, RoleName.NAMES.ProUser]
-
   const dracula: ThemeFeatureDescription = FillThemeComponentDefaults({
     availableInRoles: allRoles,
     name: 'Dracula',
@@ -189,6 +203,7 @@ export function themes(): ThemeFeatureDescription[] {
   })
 
   return [
+    standardRed,
     standardNotesBlue,
     midnight,
     futura,

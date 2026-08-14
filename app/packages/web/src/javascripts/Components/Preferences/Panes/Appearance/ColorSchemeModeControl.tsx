@@ -4,6 +4,7 @@ import RadioButtonGroup from '@/Components/RadioButtonGroup/RadioButtonGroup'
 import { Subtitle, Text } from '@/Components/Preferences/PreferencesComponents/Content'
 import { useLocalPreference } from '@/Hooks/usePreference'
 import { useApplication } from '@/Components/ApplicationProvider'
+import { selectColorSchemeMode } from './ThemeSelection'
 
 const COLOR_SCHEME_MODE_ITEMS: { label: string; value: ColorSchemeMode }[] = [
   { label: 'Manual', value: 'manual' },
@@ -27,7 +28,7 @@ const ColorSchemeModeControl: FunctionComponent = () => {
         <RadioButtonGroup
           items={COLOR_SCHEME_MODE_ITEMS}
           value={colorSchemeMode}
-          onChange={(value) => application.themeManager.setColorSchemeMode(value)}
+          onChange={(value) => selectColorSchemeMode(application, value)}
         />
       </div>
     </div>

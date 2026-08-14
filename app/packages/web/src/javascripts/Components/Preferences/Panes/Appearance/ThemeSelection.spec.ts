@@ -3,6 +3,7 @@
  */
 
 import {
+  ColorSchemeMode,
   FindNativeTheme,
   LocalPrefKey,
   NativeFeatureIdentifier,
@@ -19,7 +20,7 @@ import {
   removeCustomThemeOverride,
   saveCustomThemesState,
 } from './CustomThemes/CustomThemeManager'
-import { selectBuiltInTheme, selectCustomTheme } from './ThemeSelection'
+import { selectBuiltInTheme, selectColorSchemeMode, selectCustomTheme } from './ThemeSelection'
 
 const customTheme: CustomTheme = {
   id: 'custom-theme:selection-test',
@@ -82,6 +83,32 @@ it('clears a custom selection before selecting Standard Red', async () => {
 
   expect(loadCustomThemesState(harness.preferences).selectedId).toBeNull()
   expect(harness.themeManager.selectDefaultTheme).toHaveBeenCalledTimes(1)
+})
+
+it.each<ColorSchemeMode>(['auto', 'light', 'dark'])(
+  'clears and persists a custom selection before selecting %s color-scheme mode',
+  (mode) => {
+    const harness = createHarness({ themes: [customTheme], selectedId: customTheme.id })
+    applyCurrentAccountCustomTheme(harness.preferences)
+    expect(document.getElementById(CUSTOM_THEME_STYLE_ELEMENT_ID)).not.toBeNull()
+
+    selectColorSchemeMode(harness.application, mode)
+
+    expect(loadCustomThemesState(harness.preferences).selectedId).toBeNull()
+    expect(document.getElementById(CUSTOM_THEME_STYLE_ELEMENT_ID)).toBeNull()
+    expect(harness.themeManager.setColorSchemeMode).toHaveBeenCalledWith(mode)
+  },
+)
+
+it('keeps a custom selection when explicitly choosing Manual mode', () => {
+  const harness = createHarness({ themes: [customTheme], selectedId: customTheme.id })
+  applyCurrentAccountCustomTheme(harness.preferences)
+
+  selectColorSchemeMode(harness.application, 'manual')
+
+  expect(loadCustomThemesState(harness.preferences).selectedId).toBe(customTheme.id)
+  expect(document.getElementById(CUSTOM_THEME_STYLE_ELEMENT_ID)).not.toBeNull()
+  expect(harness.themeManager.setColorSchemeMode).toHaveBeenCalledWith('manual')
 })
 
 it('reveals an already-active built-in without toggling it off', async () => {

@@ -32,8 +32,8 @@ describe('resolveColorSchemeTheme', () => {
     expect(resolveColorSchemeTheme('auto', undefined)).toBe(StandardRedThemeIdentifier)
   })
 
-  it('Standard Red is the default base look identifier', () => {
-    expect(StandardRedThemeIdentifier).toBe('Default')
+  it('Standard Red is a first-class native theme identifier', () => {
+    expect(StandardRedThemeIdentifier).toBe('org.standardnotes.theme-standard-red')
   })
 
   it('Standard Blue is the standard-notes-blue native theme identifier', () => {

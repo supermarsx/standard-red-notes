@@ -1,8 +1,12 @@
+/*
+ * Standard Red - complete first-class dark theme.
+ *
+ * Keep the core token declarations in parity with @standardnotes/styles'
+ * _colors.scss. The base protects first paint; this asset makes the theme
+ * explicit, portable to component frames, and safely re-applicable after a
+ * light or third-party theme has been active.
+ */
 :root {
-  // Standard Red is the dark, burgundy-first product palette. Keep this base
-  // complete even though Standard Red also ships as a first-class theme asset:
-  // the base protects first paint and any surface that renders before the
-  // selected theme stylesheet is attached.
   --foreground-color: #eadde0;
   --background-color: #16090f;
   --highlight-color: #e85f6d;
@@ -17,8 +21,6 @@
   --sn-stylekit-neutral-color: #b2939b;
   --sn-stylekit-neutral-contrast-color: #16090f;
 
-  // Bright enough to remain a WCAG AA normal-text link on every surface in
-  // this palette, while the dark contrast token keeps filled controls legible.
   --sn-stylekit-info-color: #e85f6d;
   --sn-stylekit-info-color-darkened: #d85260;
   --sn-stylekit-info-contrast-color: #16090f;
@@ -39,9 +41,6 @@
   --sn-stylekit-border-color: #94636f;
   --sn-stylekit-foreground-color: #eadde0;
 
-  // Each layer adds burgundy chroma and luminance instead of collapsing into
-  // one black plane. Navigation, selected rows, dialogs, and raised controls
-  // therefore retain a visible hierarchy without ceasing to be dark.
   --sn-stylekit-contrast-background-color: #241019;
   --sn-stylekit-contrast-foreground-color: #eadde0;
   --sn-stylekit-contrast-border-color: #7b4a56;

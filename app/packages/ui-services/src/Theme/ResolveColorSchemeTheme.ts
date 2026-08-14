@@ -1,13 +1,8 @@
 import { NativeFeatureIdentifier } from '@standardnotes/features'
 import { ColorSchemeMode } from '@standardnotes/services'
 
-/**
- * Standard Red Notes: identifier representing the fork's default/dark base look,
- * "Standard Red". It is applied by deactivating any active non-layerable theme
- * (the base styles are the Standard Red look), hence the special `Default` value
- * already used by the auto-theme machinery.
- */
-export const StandardRedThemeIdentifier = 'Default'
+/** Standard Red Notes' complete, first-class dark base theme. */
+export const StandardRedThemeIdentifier = NativeFeatureIdentifier.TYPES.StandardRedTheme
 
 /**
  * Standard Red Notes: identifier for the light theme, "Standard Notes Blue".

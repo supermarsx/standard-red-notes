@@ -1,4 +1,4 @@
-import { ThemeFeatureDescription, UIFeature } from '@standardnotes/snjs'
+import { ColorSchemeMode, ThemeFeatureDescription, UIFeature } from '@standardnotes/snjs'
 import { WebApplication } from '@/Application/WebApplication'
 import {
   applyCustomThemeFromState,
@@ -9,7 +9,7 @@ import {
 } from './CustomThemes/CustomThemeManager'
 import { CustomThemesState } from './CustomThemes/CustomTheme'
 
-export const STANDARD_RED_SWATCH = '#b3242e'
+export const STANDARD_RED_SWATCH = '#e85f6d'
 
 export function hasSelectedCustomTheme(application: WebApplication): boolean {
   return loadCustomThemesState(application.preferences).selectedId !== null
@@ -38,6 +38,26 @@ export function selectCustomTheme(application: WebApplication, selectedId: strin
   return true
 }
 
+function clearCustomThemeSelection(application: WebApplication): void {
+  const current = migrateLegacyCustomThemes(application.preferences)
+  if (current.selectedId !== null) {
+    saveCustomThemesState(application.preferences, { ...current, selectedId: null })
+  }
+  removeCustomThemeOverride()
+}
+
+/**
+ * Changes automatic/base color-scheme ownership without leaving a custom CSS
+ * override above the selected built-in theme. Manual mode deliberately keeps
+ * the current custom choice because custom themes themselves use Manual mode.
+ */
+export function selectColorSchemeMode(application: WebApplication, mode: ColorSchemeMode): void {
+  if (mode !== 'manual') {
+    clearCustomThemeSelection(application)
+  }
+  application.themeManager.setColorSchemeMode(mode)
+}
+
 /**
  * The one web-side boundary for built-in selection. It clears and persists the
  * current custom choice before ThemeManager changes ActiveThemes, preventing a
@@ -48,11 +68,7 @@ export async function selectBuiltInTheme(
   theme?: UIFeature<ThemeFeatureDescription>,
   options: { toggleActive?: boolean } = {},
 ): Promise<void> {
-  const current = migrateLegacyCustomThemes(application.preferences)
-  if (current.selectedId !== null) {
-    saveCustomThemesState(application.preferences, { ...current, selectedId: null })
-  }
-  removeCustomThemeOverride()
+  clearCustomThemeSelection(application)
 
   if (theme) {
     if (!options.toggleActive && !theme.layerable && application.componentManager.isThemeActive(theme)) {
