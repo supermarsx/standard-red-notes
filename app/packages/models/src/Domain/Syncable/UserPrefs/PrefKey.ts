@@ -9,6 +9,90 @@ import { SuperToolbarIconSize } from './SuperToolbarIconSize'
 import { AllComponentPreferences } from './ComponentPreferences'
 import { BlockTypeKey, TypographyProfile } from './TypographyProfile'
 
+/**
+ * Versioned, encrypted account preference for the base appearance selection.
+ * Device-local appearance keys remain the launch/offline cache; this aggregate
+ * is the sync authority once UserPrefs has loaded.
+ */
+export const CurrentUserAppearancePreferenceVersion = 1
+
+export type UserAppearanceColorSchemeMode = 'manual' | 'auto' | 'light' | 'dark'
+
+export type UserAppearancePreference = {
+  version: typeof CurrentUserAppearancePreferenceVersion
+  colorSchemeMode: UserAppearanceColorSchemeMode
+  activeThemes: string[]
+}
+
+const MaximumUserAppearanceThemeCount = 32
+const MaximumUserAppearanceThemeIdentifierLength = 256
+
+export function isFutureUserAppearancePreference(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) {
+    return false
+  }
+
+  const version = (value as { version?: unknown }).version
+  return (
+    typeof version === 'number' && Number.isSafeInteger(version) && version > CurrentUserAppearancePreferenceVersion
+  )
+}
+
+/**
+ * Normalize the current schema into a bounded, safe value. Future schemas are
+ * deliberately left untouched so an older client can never downgrade them.
+ * A malformed v1 value is repaired to the dark-first defaults instead of
+ * permanently wedging appearance reconciliation.
+ */
+export function normalizeUserAppearancePreference(value: unknown): UserAppearancePreference | undefined {
+  if (typeof value !== 'object' || value === null) {
+    return undefined
+  }
+
+  const candidate = value as Partial<UserAppearancePreference>
+  if (candidate.version !== CurrentUserAppearancePreferenceVersion) {
+    return undefined
+  }
+
+  const colorSchemeMode = candidate.colorSchemeMode
+  const isColorSchemeMode =
+    colorSchemeMode === 'manual' ||
+    colorSchemeMode === 'auto' ||
+    colorSchemeMode === 'light' ||
+    colorSchemeMode === 'dark'
+
+  const activeThemes: string[] = []
+  if (Array.isArray(candidate.activeThemes)) {
+    const seen = new Set<string>()
+    for (const rawIdentifier of candidate.activeThemes) {
+      if (typeof rawIdentifier !== 'string') {
+        continue
+      }
+
+      const identifier = rawIdentifier.trim()
+      if (
+        identifier.length === 0 ||
+        identifier.length > MaximumUserAppearanceThemeIdentifierLength ||
+        seen.has(identifier)
+      ) {
+        continue
+      }
+
+      seen.add(identifier)
+      activeThemes.push(identifier)
+      if (activeThemes.length === MaximumUserAppearanceThemeCount) {
+        break
+      }
+    }
+  }
+
+  return {
+    version: CurrentUserAppearancePreferenceVersion,
+    colorSchemeMode: isColorSchemeMode ? colorSchemeMode : 'dark',
+    activeThemes,
+  }
+}
+
 export enum PrefKey {
   TagsPanelWidth = 'tagsPanelWidth',
   NotesPanelWidth = 'notesPanelWidth',
@@ -42,6 +126,7 @@ export enum PrefKey {
   EditorFontFamily = 'editorFontFamily',
   AuthenticatorNames = 'authenticatorNames',
   PaneGesturesEnabled = 'paneGesturesEnabled',
+  UserAppearance = 'userAppearance',
   ComponentPreferences = 'componentPreferences',
   ActiveComponents = 'activeComponents',
   AlwaysShowSuperToolbar = 'alwaysShowSuperToolbar',
@@ -233,6 +318,7 @@ export type PrefValue = {
   [PrefKey.SuperNoteExportPDFPageSize]: 'A3' | 'A4' | 'LETTER' | 'LEGAL' | 'TABLOID'
   [PrefKey.AuthenticatorNames]: string
   [PrefKey.PaneGesturesEnabled]: boolean
+  [PrefKey.UserAppearance]: UserAppearancePreference
   [PrefKey.ComponentPreferences]: AllComponentPreferences
   [PrefKey.ActiveComponents]: string[]
   [PrefKey.AlwaysShowSuperToolbar]: boolean

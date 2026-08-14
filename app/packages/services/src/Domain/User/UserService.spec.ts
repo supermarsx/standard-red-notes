@@ -20,6 +20,7 @@ import { UserService } from './UserService'
 import { CredentialRotationPhase } from '../RootKeyManager/CredentialRotationJournal'
 import { ApplicationEvent } from '../Event/ApplicationEvent'
 import { ApplicationStage } from '../Application/ApplicationStage'
+import { InternalEventPublishStrategy } from '../Internal/InternalEventPublishStrategy'
 
 describe('UserService', () => {
   let sessionManager: SessionsClientInterface
@@ -870,6 +871,69 @@ describe('UserService', () => {
       ).rejects.toBe(writeFailure)
 
       expect(storageService.deletePayloads).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('sign-out lifecycle barrier', () => {
+    beforeEach(() => {
+      sessionManager.signOut = jest.fn().mockResolvedValue(undefined)
+      encryptionService.deleteWorkspaceSpecificKeyStateFromDevice = jest.fn().mockResolvedValue(undefined)
+      storageService.clearAllData = jest.fn().mockResolvedValue(undefined)
+      itemManager.getDirtyItems = jest.fn().mockReturnValue([])
+      internalEventBus.publish = jest.fn()
+      internalEventBus.publishSync = jest.fn().mockResolvedValue(undefined)
+    })
+
+    it('drains at entry and commits the write fence before clearing storage', async () => {
+      await createService().signOut(true)
+
+      expect(internalEventBus.publishSync).toHaveBeenNthCalledWith(
+        1,
+        { type: ApplicationEvent.PreparingForSignOut, payload: { phase: 'begin' } },
+        InternalEventPublishStrategy.SEQUENCE,
+      )
+      expect(internalEventBus.publishSync).toHaveBeenNthCalledWith(
+        2,
+        { type: ApplicationEvent.PreparingForSignOut, payload: { phase: 'commit' } },
+        InternalEventPublishStrategy.SEQUENCE,
+      )
+
+      const commitOrder = jest.mocked(internalEventBus.publishSync).mock.invocationCallOrder[1]
+      const sessionOrder = jest.mocked(sessionManager.signOut).mock.invocationCallOrder[0]
+      const clearOrder = jest.mocked(storageService.clearAllData).mock.invocationCallOrder[0]
+      expect(commitOrder).toBeLessThan(sessionOrder)
+      expect(sessionOrder).toBeLessThan(clearOrder)
+    })
+
+    it('fails closed before destructive work and reopens the fence when commit preparation fails', async () => {
+      const failure = new Error('appearance drain failed')
+      internalEventBus.publishSync = jest.fn(async (event) => {
+        if ((event.payload as { phase?: string } | undefined)?.phase === 'commit') {
+          throw failure
+        }
+      })
+
+      await expect(createService().signOut(true)).rejects.toBe(failure)
+
+      expect(sessionManager.signOut).not.toHaveBeenCalled()
+      expect(storageService.clearAllData).not.toHaveBeenCalled()
+      expect(internalEventBus.publishSync).toHaveBeenLastCalledWith(
+        { type: ApplicationEvent.PreparingForSignOut, payload: { phase: 'cancel' } },
+        InternalEventPublishStrategy.SEQUENCE,
+      )
+    })
+
+    it('reopens appearance writes when the user cancels an unsynced sign-out', async () => {
+      itemManager.getDirtyItems = jest.fn().mockReturnValue([{ uuid: 'dirty-item' }])
+      alertService.confirm = jest.fn().mockResolvedValue(false)
+
+      await createService().signOut(false)
+
+      expect(storageService.clearAllData).not.toHaveBeenCalled()
+      expect(internalEventBus.publishSync).toHaveBeenLastCalledWith(
+        { type: ApplicationEvent.PreparingForSignOut, payload: { phase: 'cancel' } },
+        InternalEventPublishStrategy.SEQUENCE,
+      )
     })
   })
 })

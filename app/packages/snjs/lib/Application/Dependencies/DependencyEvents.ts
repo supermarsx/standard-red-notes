@@ -25,6 +25,7 @@ export function RegisterApplicationServicesEvents(container: Dependencies, event
   events.addEventHandler(container.get(TYPES.NotificationService), SyncEvent.ReceivedNotifications)
   events.addEventHandler(container.get(TYPES.NotificationService), WebSocketsServiceEvent.NotificationAddedForUser)
   events.addEventHandler(container.get(TYPES.PreferencesService), ApplicationEvent.ApplicationStageChanged)
+  events.addEventHandler(container.get(TYPES.PreferencesService), ApplicationEvent.PreparingForSignOut)
   events.addEventHandler(container.get(TYPES.ProtectionService), ApplicationEvent.ApplicationStageChanged)
   events.addEventHandler(container.get(TYPES.ProtectionService), ApplicationEvent.Started)
   events.addEventHandler(container.get(TYPES.SelfContactManager), ApplicationEvent.ApplicationStageChanged)

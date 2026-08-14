@@ -4,7 +4,7 @@ import { EditorFontSize } from './EditorFontSize'
 import { SuperToolbarIconSize } from './SuperToolbarIconSize'
 import { EditorLineHeight } from './EditorLineHeight'
 import { EditorLineWidth } from './EditorLineWidth'
-import { PrefKey, PrefValue } from './PrefKey'
+import { CurrentUserAppearancePreferenceVersion, PrefKey, PrefValue } from './PrefKey'
 import { NewNoteTitleFormat } from './NewNoteTitleFormat'
 import { DEFAULT_TYPOGRAPHY_PROFILE, DEFAULT_TYPOGRAPHY_PROFILE_ID } from './TypographyProfile'
 
@@ -40,6 +40,11 @@ export const PrefDefaults = {
   [PrefKey.CustomNoteTitleFormat]: 'YYYY-MM-DD [at] hh:mm A',
   [PrefKey.UpdateSavingStatusIndicator]: true,
   [PrefKey.PaneGesturesEnabled]: true,
+  [PrefKey.UserAppearance]: {
+    version: CurrentUserAppearancePreferenceVersion,
+    colorSchemeMode: 'dark',
+    activeThemes: [],
+  },
   [PrefKey.MomentsDefaultTagUuid]: undefined,
   [PrefKey.ClipperDefaultTagUuid]: undefined,
   [PrefKey.DefaultEditorIdentifier]: NativeFeatureIdentifier.TYPES.PlainEditor,

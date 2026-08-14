@@ -39,7 +39,8 @@ import { CredentialsChangeFunctionResponse } from './CredentialsChangeFunctionRe
 import { EncryptionProviderInterface } from '../Encryption/EncryptionProviderInterface'
 import { ReencryptTypeAItems } from '../Encryption/UseCase/TypeA/ReencryptTypeAItems'
 import { DecryptErroredPayloads } from '../Encryption/UseCase/DecryptErroredPayloads'
-import { ApplicationEvent } from '../Event/ApplicationEvent'
+import { ApplicationEvent, PreparingForSignOutEventPayload } from '../Event/ApplicationEvent'
+import { InternalEventPublishStrategy } from '../Internal/InternalEventPublishStrategy'
 import { ApplicationStageChangedEventPayload } from '../Event/ApplicationStageChangedEventPayload'
 import { ApplicationStage } from '../Application/ApplicationStage'
 import {
@@ -486,11 +487,25 @@ export class UserService
   }
 
   public async signOut(force = false, source = DeinitSource.SignOut): Promise<void> {
+    await this.publishPreparingForSignOut('begin')
+
     const performSignOut = async () => {
-      await this.sessions.signOut()
-      await this.encryption.deleteWorkspaceSpecificKeyStateFromDevice()
-      await this.storage.clearAllData()
-      await this.notifyEvent(AccountEvent.SignedOut, { payload: { source } })
+      let storageClearStarted = false
+
+      try {
+        await this.publishPreparingForSignOut('commit')
+        await this.sessions.signOut()
+        await this.encryption.deleteWorkspaceSpecificKeyStateFromDevice()
+        storageClearStarted = true
+        await this.storage.clearAllData()
+        await this.notifyEvent(AccountEvent.SignedOut, { payload: { source } })
+      } catch (error) {
+        /** Reopen writes only while the existing local store is still intact. */
+        if (!storageClearStarted) {
+          await this.publishPreparingForSignOut('cancel')
+        }
+        throw error
+      }
     }
 
     if (force) {
@@ -509,10 +524,22 @@ export class UserService
       )
       if (didConfirm) {
         await performSignOut()
+      } else {
+        await this.publishPreparingForSignOut('cancel')
       }
     } else {
       await performSignOut()
     }
+  }
+
+  private async publishPreparingForSignOut(phase: PreparingForSignOutEventPayload['phase']): Promise<void> {
+    await this.internalEventBus.publishSync(
+      {
+        type: ApplicationEvent.PreparingForSignOut,
+        payload: { phase } satisfies PreparingForSignOutEventPayload,
+      },
+      InternalEventPublishStrategy.SEQUENCE,
+    )
   }
 
   async updateAccountWithFirstTimeKeyPair(): Promise<{
