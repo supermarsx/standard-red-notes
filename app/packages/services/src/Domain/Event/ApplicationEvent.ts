@@ -1,6 +1,8 @@
 export enum ApplicationEvent {
   SignedIn = 'Application:SignedIn',
   SignedOut = 'Application:SignedOut',
+  /** Synchronous, fail-closed lifecycle barrier before sign-out clears storage. */
+  PreparingForSignOut = 'Application:PreparingForSignOut',
   /** When a full, potentially multi-page sync completes */
   CompletedFullSync = 'Application:CompletedFullSync',
   FailedSync = 'Application:FailedSync',
@@ -58,4 +60,12 @@ export enum ApplicationEvent {
   CompletedInitialSync = 'Application:CompletedInitialSync',
   DidPurchaseSubscription = 'Application:DidPurchaseSubscription',
   SyncTooManyRequests = 'Application:SyncTooManyRequests',
+}
+
+export type PreparingForSignOutEventPayload = {
+  /**
+   * `begin` drains work before confirmation, `commit` fences new work and drains
+   * again immediately before destructive clearing, and `cancel` reopens writes.
+   */
+  phase: 'begin' | 'commit' | 'cancel'
 }
