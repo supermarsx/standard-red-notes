@@ -3,6 +3,27 @@ import OpenAI from 'openai'
 import { Provider, ProviderRequest, ProviderEvent } from './types'
 import { openAIStreamErrorMessage, openAIToolNamesForRequest } from './OpenAIToolNameMap'
 
+function mergeStreamedIdentity(current: string, next: string): string {
+  if (!current || next.startsWith(current)) {
+    return next
+  }
+  return current.endsWith(next) ? current : current + next
+}
+
+function parseFunctionArguments(value: string): Record<string, unknown> | undefined {
+  if (!value.trim()) {
+    return undefined
+  }
+  try {
+    const parsed: unknown = JSON.parse(value)
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : undefined
+  } catch {
+    return undefined
+  }
+}
+
 export class OpenAIProvider implements Provider {
   readonly id = 'openai'
   private readonly client: OpenAI
@@ -61,19 +82,22 @@ export class OpenAIProvider implements Provider {
         parameters: tool.inputSchema as Record<string, unknown>,
       },
     }))
-    const stream = await this.client.chat.completions.create({
-      model: this.model,
-      messages,
-      ...(req.maxOutputTokens !== undefined ? { max_tokens: req.maxOutputTokens } : {}),
-      temperature: req.temperature,
-      top_p: req.topP,
-      stop: req.stop,
-      ...(tools.length > 0 ? { tools } : {}),
-      stream: true,
-      // Emit a final usage-only chunk so the proxy can forward token consumption
-      // to the browser footer. Upstreams that don't support it ignore the option.
-      stream_options: { include_usage: true },
-    })
+    const stream = await this.client.chat.completions.create(
+      {
+        model: this.model,
+        messages,
+        ...(req.maxOutputTokens !== undefined ? { max_tokens: req.maxOutputTokens } : {}),
+        temperature: req.temperature,
+        top_p: req.topP,
+        stop: req.stop,
+        ...(tools.length > 0 ? { tools } : {}),
+        stream: true,
+        // Emit a final usage-only chunk so the proxy can forward token consumption
+        // to the browser footer. Upstreams that don't support it ignore the option.
+        stream_options: { include_usage: true },
+      },
+      { signal: req.signal },
+    )
 
     const pendingTools = new Map<number, { id: string; name: string; argBuf: string }>()
     let usage: ProviderEvent | undefined
@@ -81,6 +105,7 @@ export class OpenAIProvider implements Provider {
     // is honoured, the trailing usage-only chunk (which arrives AFTER finish_reason)
     // is emitted before the final 'finish'. The browser ends its read on 'finish'.
     let finish: ProviderEvent | undefined
+    let completedToolCalls: Array<Extract<ProviderEvent, { kind: 'tool-call' }>> = []
 
     for await (const chunk of stream) {
       const streamError = openAIStreamErrorMessage(chunk)
@@ -121,20 +146,49 @@ export class OpenAIProvider implements Provider {
           pending = { id: tc.id ?? `call_${idx}`, name: tc.function?.name ?? '', argBuf: '' }
           pendingTools.set(idx, pending)
         }
+        if (tc.id) {
+          pending.id = tc.id
+        }
+        if (tc.function?.name) {
+          pending.name = mergeStreamedIdentity(pending.name, tc.function.name)
+        }
         if (tc.function?.arguments) {
           pending.argBuf += tc.function.arguments
         }
       }
 
       if (choice.finish_reason && !finish) {
-        for (const [, p] of pendingTools) {
-          let args: unknown = {}
-          try {
-            args = p.argBuf ? JSON.parse(p.argBuf) : {}
-          } catch {
-            args = {}
+        if (pendingTools.size > 0 && choice.finish_reason !== 'tool_calls') {
+          yield {
+            kind: 'error',
+            message: 'The configured assistant provider returned an incomplete function call. No tools were run.',
           }
-          yield { kind: 'tool-call', id: p.id, name: toolNames.toInternalName(p.name), args }
+          yield { kind: 'finish', stopReason: 'error' }
+          return
+        }
+        if (choice.finish_reason === 'tool_calls' && pendingTools.size === 0) {
+          yield { kind: 'error', message: 'The configured assistant provider did not return its function call.' }
+          yield { kind: 'finish', stopReason: 'error' }
+          return
+        }
+
+        completedToolCalls = []
+        for (const [, pending] of pendingTools) {
+          const args = parseFunctionArguments(pending.argBuf)
+          if (!pending.name || !args) {
+            yield {
+              kind: 'error',
+              message: 'The configured assistant provider returned malformed function-call arguments.',
+            }
+            yield { kind: 'finish', stopReason: 'error' }
+            return
+          }
+          completedToolCalls.push({
+            kind: 'tool-call',
+            id: pending.id,
+            name: toolNames.toInternalName(pending.name),
+            args,
+          })
         }
         finish = {
           kind: 'finish',
@@ -149,9 +203,20 @@ export class OpenAIProvider implements Provider {
       }
     }
 
+    if (!finish) {
+      yield {
+        kind: 'error',
+        message: 'The configured assistant provider ended before reporting a completion reason.',
+      }
+      yield { kind: 'finish', stopReason: 'error' }
+      return
+    }
+    for (const toolCall of completedToolCalls) {
+      yield toolCall
+    }
     if (usage) {
       yield usage
     }
-    yield finish ?? { kind: 'finish', stopReason: 'end_turn' }
+    yield finish
   }
 }

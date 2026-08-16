@@ -4,6 +4,13 @@
 
 export type ChatRole = 'system' | 'user' | 'assistant' | 'tool'
 
+export interface ProviderReplayState {
+  protocol: 'openai-responses'
+  version: 1
+  /** Base64url UTF-8 JSON. Transport-opaque, but not encryption. */
+  encodedOutput: string
+}
+
 export interface ChatMessage {
   role: ChatRole
   content: string
@@ -12,6 +19,8 @@ export interface ChatMessage {
   /** For assistant messages, any tool calls the model wants to make. */
   toolCalls?: AssistantToolCall[]
   name?: string
+  /** Opaque provider continuation data retained only inside the current agent run. */
+  providerReplay?: ProviderReplayState
 }
 
 export interface AssistantToolCall {
@@ -30,6 +39,8 @@ export interface ProviderRequest {
   system: string
   messages: ChatMessage[]
   tools: ToolDescriptor[]
+  /** Request-scoped cancellation propagated from the proxy client connection. */
+  signal?: AbortSignal
   maxOutputTokens?: number
   /** Optional server-owned sampling controls. Omitted means provider default. */
   temperature?: number
@@ -42,7 +53,7 @@ export type ProviderStopReason = 'end_turn' | 'max_tokens' | 'tool_use' | 'stop'
 export type ProviderEvent =
   | { kind: 'text-delta'; delta: string }
   | { kind: 'tool-call'; id: string; name: string; args: unknown }
-  | { kind: 'finish'; stopReason: ProviderStopReason }
+  | { kind: 'finish'; stopReason: ProviderStopReason; providerReplay?: ProviderReplayState }
   | { kind: 'error'; message: string }
   // Token usage reported by the upstream LLM, forwarded to the browser so the
   // client can surface consumption. Best-effort: emitted only when the upstream

@@ -229,4 +229,212 @@ describe('DirectProvider endpoint behavior', () => {
     expect(cancel).toHaveBeenCalledTimes(1)
     record.mockRestore()
   })
+
+  it('fails a truncated stream without recording the request or reported usage', async () => {
+    const frame = `data: ${JSON.stringify({
+      choices: [{ delta: { content: 'partial' }, finish_reason: null }],
+      usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 },
+    })}\n\ndata: [DONE]\n\n`
+    const read = jest
+      .fn()
+      .mockResolvedValueOnce({ done: false, value: new NodeTextEncoder().encode(frame) })
+      .mockResolvedValueOnce({ done: true, value: undefined })
+    ;(globalThis.fetch as jest.Mock).mockResolvedValue(
+      response({ ok: true, status: 200, body: { getReader: () => ({ read }) } }),
+    )
+    const record = jest.spyOn(assistantUsageService, 'record')
+
+    const result = await collect(
+      new DirectProvider({ baseURL: 'https://openrouter.ai/api/v1', model: 'openrouter/model' }),
+    )
+
+    expect(result).toEqual([
+      { kind: 'text-delta', delta: 'partial' },
+      {
+        kind: 'error',
+        message: 'The configured assistant provider ended before reporting a completion reason.',
+      },
+      { kind: 'finish', stopReason: 'error' },
+    ])
+    expect(record).not.toHaveBeenCalled()
+    record.mockRestore()
+  })
+
+  it('fails malformed stream data even when a later frame claims success', async () => {
+    const frame =
+      'data: {not-json}\n\n' +
+      `data: ${JSON.stringify({ choices: [{ delta: { content: 'must not appear' }, finish_reason: 'stop' }] })}\n\n`
+    const read = jest.fn().mockResolvedValue({ done: false, value: new NodeTextEncoder().encode(frame) })
+    const cancel = jest.fn().mockResolvedValue(undefined)
+    ;(globalThis.fetch as jest.Mock).mockResolvedValue(
+      response({ ok: true, status: 200, body: { getReader: () => ({ read, cancel }) } }),
+    )
+    const record = jest.spyOn(assistantUsageService, 'record')
+
+    const result = await collect(
+      new DirectProvider({ baseURL: 'https://openrouter.ai/api/v1', model: 'openrouter/model' }),
+    )
+
+    expect(result).toEqual([
+      { kind: 'error', message: 'The configured assistant provider returned malformed stream data.' },
+      { kind: 'finish', stopReason: 'error' },
+    ])
+    expect(cancel).toHaveBeenCalledTimes(1)
+    expect(record).not.toHaveBeenCalled()
+    record.mockRestore()
+  })
+
+  it('yields a complete CRLF frame before attempting the next read', async () => {
+    const frame = `data: ${JSON.stringify({ choices: [{ delta: { content: 'live' }, finish_reason: null }] })}\r\n\r\n`
+    const read = jest
+      .fn()
+      .mockResolvedValueOnce({ done: false, value: new NodeTextEncoder().encode(frame) })
+      .mockRejectedValueOnce(new Error('second read must not precede the first delta'))
+    const cancel = jest.fn().mockResolvedValue(undefined)
+    ;(globalThis.fetch as jest.Mock).mockResolvedValue(
+      response({ ok: true, status: 200, body: { getReader: () => ({ read, cancel }) } }),
+    )
+    const iterator = new DirectProvider({
+      baseURL: 'https://openrouter.ai/api/v1',
+      model: 'openrouter/model',
+    })
+      .send(request)
+      [Symbol.asyncIterator]()
+
+    await expect(iterator.next()).resolves.toEqual({ done: false, value: { kind: 'text-delta', delta: 'live' } })
+    expect(read).toHaveBeenCalledTimes(1)
+    await iterator.return?.()
+  })
+
+  it('joins multiline SSE data and late tool identity fragments', async () => {
+    const wireName = createOpenAIToolNameMap(['notes.list']).toWireName('notes.list')
+    const splitAt = Math.max(1, Math.floor(wireName.length / 2))
+    const frames = [
+      {
+        choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '{"limit":' } }] }, finish_reason: null }],
+      },
+      {
+        choices: [
+          {
+            delta: {
+              tool_calls: [
+                { index: 0, id: 'call-late', function: { name: wireName.slice(0, splitAt), arguments: '2' } },
+              ],
+            },
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        choices: [
+          {
+            delta: {
+              tool_calls: [{ index: 0, function: { name: wireName, arguments: '}' } }],
+            },
+            finish_reason: 'tool_calls',
+          },
+        ],
+      },
+    ]
+    const first = JSON.stringify(frames[0])
+    const firstSplit = first.indexOf('[') + 1
+    const multilineFirst = `data: ${first.slice(0, firstSplit)}\r\ndata: ${first.slice(firstSplit)}\r\n\r\n`
+    const stream = `${multilineFirst}${frames
+      .slice(1)
+      .map((frame) => `data: ${JSON.stringify(frame)}\r\n\r\n`)
+      .join('')}data: [DONE]\r\n\r\n`
+    const splitCr = stream.indexOf('\r') + 1
+    const chunks = [stream.slice(0, splitCr), stream.slice(splitCr)]
+    let chunkIndex = 0
+    const read = jest.fn(async () =>
+      chunkIndex < chunks.length
+        ? { done: false, value: new NodeTextEncoder().encode(chunks[chunkIndex++]) }
+        : { done: true, value: undefined },
+    )
+    ;(globalThis.fetch as jest.Mock).mockResolvedValue(
+      response({ ok: true, status: 200, body: { getReader: () => ({ read }) } }),
+    )
+
+    const result = await collect(
+      new DirectProvider({ baseURL: 'https://openrouter.ai/api/v1', model: 'openrouter/model' }),
+      { ...request, tools: [{ name: 'notes.list', description: 'List notes', inputSchema: { type: 'object' } }] },
+    )
+
+    expect(result).toContainEqual({ kind: 'tool-call', id: 'call-late', name: 'notes.list', args: { limit: 2 } })
+    expect(result.at(-1)).toEqual({ kind: 'finish', stopReason: 'tool_use' })
+  })
+
+  it('treats malformed function arguments as a terminal error without emitting a tool call', async () => {
+    const wireName = createOpenAIToolNameMap(['notes.list']).toWireName('notes.list')
+    const frame = `data: ${JSON.stringify({
+      choices: [
+        {
+          delta: {
+            tool_calls: [{ index: 0, id: 'call-malformed', function: { name: wireName, arguments: '{"limit":' } }],
+          },
+          finish_reason: 'tool_calls',
+        },
+      ],
+    })}\n\ndata: [DONE]\n\n`
+    const read = jest
+      .fn()
+      .mockResolvedValueOnce({ done: false, value: new NodeTextEncoder().encode(frame) })
+      .mockResolvedValueOnce({ done: true, value: undefined })
+    ;(globalThis.fetch as jest.Mock).mockResolvedValue(
+      response({ ok: true, status: 200, body: { getReader: () => ({ read }) } }),
+    )
+    const record = jest.spyOn(assistantUsageService, 'record')
+
+    const result = await collect(
+      new DirectProvider({ baseURL: 'https://openrouter.ai/api/v1', model: 'openrouter/model' }),
+      { ...request, tools: [{ name: 'notes.list', description: 'List notes', inputSchema: { type: 'object' } }] },
+    )
+
+    expect(result).toEqual([
+      {
+        kind: 'error',
+        message: 'The configured assistant provider returned malformed function-call arguments.',
+      },
+      { kind: 'finish', stopReason: 'error' },
+    ])
+    expect(record).not.toHaveBeenCalled()
+    record.mockRestore()
+  })
+
+  it('fails a length-truncated function call without emitting it', async () => {
+    const wireName = createOpenAIToolNameMap(['notes.list']).toWireName('notes.list')
+    const frame = `data: ${JSON.stringify({
+      choices: [
+        {
+          delta: {
+            tool_calls: [{ index: 0, id: 'call-partial', function: { name: wireName, arguments: '{"limit":2}' } }],
+          },
+          finish_reason: 'length',
+        },
+      ],
+    })}\n\ndata: [DONE]\n\n`
+    const read = jest
+      .fn()
+      .mockResolvedValueOnce({ done: false, value: new NodeTextEncoder().encode(frame) })
+      .mockResolvedValueOnce({ done: true, value: undefined })
+    ;(globalThis.fetch as jest.Mock).mockResolvedValue(
+      response({ ok: true, status: 200, body: { getReader: () => ({ read }) } }),
+    )
+    const record = jest.spyOn(assistantUsageService, 'record')
+
+    const result = await collect(
+      new DirectProvider({ baseURL: 'https://openrouter.ai/api/v1', model: 'openrouter/model' }),
+      { ...request, tools: [{ name: 'notes.list', description: 'List notes', inputSchema: { type: 'object' } }] },
+    )
+
+    expect(result).toEqual([
+      {
+        kind: 'error',
+        message: 'The configured assistant provider returned an incomplete function call. No tools were run.',
+      },
+      { kind: 'finish', stopReason: 'error' },
+    ])
+    expect(record).not.toHaveBeenCalled()
+    record.mockRestore()
+  })
 })

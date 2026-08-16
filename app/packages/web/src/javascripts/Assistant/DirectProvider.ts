@@ -36,6 +36,33 @@ type OpenAIToolCallAccumulator = {
   arguments: string
 }
 
+function normalizeSseBuffer(buffer: string, streamEnded = false): string {
+  const hasIncompleteCrLf = !streamEnded && buffer.endsWith('\r')
+  const complete = hasIncompleteCrLf ? buffer.slice(0, -1) : buffer
+  return complete.replace(/\r\n/g, '\n').replace(/\r/g, '\n') + (hasIncompleteCrLf ? '\r' : '')
+}
+
+function mergeStreamedIdentity(current: string, next: string): string {
+  if (!current || next.startsWith(current)) {
+    return next
+  }
+  return current.endsWith(next) ? current : current + next
+}
+
+function parseFunctionArguments(value: string): Record<string, unknown> | undefined {
+  if (!value.trim()) {
+    return undefined
+  }
+  try {
+    const parsed: unknown = JSON.parse(value)
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : undefined
+  } catch {
+    return undefined
+  }
+}
+
 /**
  * A Provider that talks DIRECTLY from the browser to any OpenAI-compatible
  * Chat Completions endpoint (LM Studio, Ollama, OpenRouter, OpenAI, or a custom
@@ -169,9 +196,12 @@ export class DirectProvider implements Provider {
         return
       }
       if (chunk.done) {
+        buffer += decoder.decode()
+        buffer = normalizeSseBuffer(buffer, true)
         break
       }
       buffer += decoder.decode(chunk.value, { stream: true })
+      buffer = normalizeSseBuffer(buffer)
       yield* flushFrames()
       if (streamError) {
         await cancelReader()
@@ -202,28 +232,65 @@ export class DirectProvider implements Provider {
       }
     }
 
+    if (!finishReason) {
+      yield {
+        kind: 'error',
+        message: 'The configured assistant provider ended before reporting a completion reason.',
+      }
+      yield { kind: 'finish', stopReason: 'error' }
+      return
+    }
+
     // Emit any tool calls that were assembled across the stream.
     const indexes = [...toolCallsByIndex.keys()].sort((a, b) => a - b)
-    let hasToolCalls = false
+    if (indexes.length > 0 && finishReason !== 'tool_calls') {
+      yield {
+        kind: 'error',
+        message: 'The configured assistant provider returned an incomplete function call. No tools were run.',
+      }
+      yield { kind: 'finish', stopReason: 'error' }
+      return
+    }
+    if (finishReason === 'tool_calls' && indexes.length === 0) {
+      yield { kind: 'error', message: 'The configured assistant provider did not return its function call.' }
+      yield { kind: 'finish', stopReason: 'error' }
+      return
+    }
+
+    const completedToolCalls: Array<Extract<ProviderEvent, { kind: 'tool-call' }>> = []
     for (const index of indexes) {
       if (emittedToolIndexes.has(index)) {
         continue
       }
       const acc = toolCallsByIndex.get(index)
       if (!acc || !acc.name) {
-        continue
-      }
-      hasToolCalls = true
-      emittedToolIndexes.add(index)
-      let args: unknown = {}
-      if (acc.arguments && acc.arguments.trim()) {
-        try {
-          args = JSON.parse(acc.arguments)
-        } catch {
-          args = acc.arguments
+        yield {
+          kind: 'error',
+          message: 'The configured assistant provider returned malformed function-call arguments.',
         }
+        yield { kind: 'finish', stopReason: 'error' }
+        return
       }
-      yield { kind: 'tool-call', id: acc.id || `call_${index}`, name: toolNames.toInternalName(acc.name), args }
+      const args = parseFunctionArguments(acc.arguments)
+      if (!args) {
+        yield {
+          kind: 'error',
+          message: 'The configured assistant provider returned malformed function-call arguments.',
+        }
+        yield { kind: 'finish', stopReason: 'error' }
+        return
+      }
+      emittedToolIndexes.add(index)
+      completedToolCalls.push({
+        kind: 'tool-call',
+        id: acc.id || `call_${index}`,
+        name: toolNames.toInternalName(acc.name),
+        args,
+      })
+    }
+
+    for (const toolCall of completedToolCalls) {
+      yield toolCall
     }
 
     if (usage) {
@@ -240,7 +307,7 @@ export class DirectProvider implements Provider {
       assistantUsageService.record({})
     }
 
-    yield { kind: 'finish', stopReason: this.mapStopReason(finishReason, hasToolCalls) }
+    yield { kind: 'finish', stopReason: this.mapStopReason(finishReason, completedToolCalls.length > 0) }
   }
 
   private *parseFrame(
@@ -250,90 +317,94 @@ export class DirectProvider implements Provider {
     setUsage: (usage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number }) => void,
     setStreamError: (message: string) => void,
   ): Generator<ProviderEvent> {
+    const dataLines: string[] = []
     for (const rawLine of frame.split('\n')) {
-      const line = rawLine.trim()
-      if (!line.startsWith('data:')) {
-        continue
+      const line = rawLine.trimEnd()
+      if (line.startsWith('data:')) {
+        dataLines.push(line.slice(line.startsWith('data: ') ? 6 : 5))
       }
-      const data = line.slice(line.startsWith('data: ') ? 6 : 5).trim()
-      if (data === '' || data === '[DONE]') {
-        continue
-      }
+    }
+    const data = dataLines.join('\n').trim()
+    if (data === '' || data === '[DONE]') {
+      return
+    }
 
-      let parsed: {
-        choices?: Array<{
-          delta?: {
-            content?: string | null
-            tool_calls?: Array<{
-              index?: number
-              id?: string
-              function?: { name?: string; arguments?: string }
-            }>
-          }
-          finish_reason?: string | null
-        }>
-        usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | null
-        error?: { message?: string } | string
-      }
-      try {
-        parsed = JSON.parse(data)
-      } catch {
-        continue
-      }
+    let parsed: {
+      choices?: Array<{
+        delta?: {
+          content?: string | null
+          tool_calls?: Array<{
+            index?: number
+            id?: string
+            function?: { name?: string; arguments?: string }
+          }>
+        }
+        finish_reason?: string | null
+      }>
+      usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | null
+      error?: { message?: string } | string
+    }
+    try {
+      parsed = JSON.parse(data)
+    } catch {
+      const message = cleanOpenAIStreamErrorMessage('The configured assistant provider returned malformed stream data.')
+      setStreamError(message)
+      yield { kind: 'error', message }
+      return
+    }
 
-      if (parsed.error !== undefined && parsed.error !== null) {
-        const message = cleanOpenAIStreamErrorMessage(
-          typeof parsed.error === 'string' ? parsed.error : parsed.error.message,
-          'Unknown error from endpoint',
-        )
+    if (parsed.error !== undefined && parsed.error !== null) {
+      const message = cleanOpenAIStreamErrorMessage(
+        typeof parsed.error === 'string' ? parsed.error : parsed.error.message,
+        'Unknown error from endpoint',
+      )
+      setStreamError(message)
+      yield { kind: 'error', message }
+      return
+    }
+
+    // With stream_options.include_usage the endpoint sends a final chunk that
+    // carries `usage` and an empty `choices` array. Capture it before bailing on
+    // the missing choice below.
+    if (parsed.usage) {
+      setUsage(parsed.usage)
+    }
+
+    const choice = parsed.choices?.[0]
+    if (!choice) {
+      return
+    }
+
+    const delta = choice.delta
+    if (delta?.content) {
+      yield { kind: 'text-delta', delta: delta.content }
+    }
+
+    if (delta?.tool_calls) {
+      for (const tc of delta.tool_calls) {
+        const index = tc.index ?? 0
+        const existing = toolCallsByIndex.get(index) ?? { id: '', name: '', arguments: '' }
+        if (tc.id) {
+          existing.id = tc.id
+        }
+        if (tc.function?.name) {
+          existing.name = mergeStreamedIdentity(existing.name, tc.function.name)
+        }
+        if (tc.function?.arguments) {
+          existing.arguments += tc.function.arguments
+        }
+        toolCallsByIndex.set(index, existing)
+      }
+    }
+
+    if (choice.finish_reason) {
+      if (choice.finish_reason === 'error') {
+        const message = cleanOpenAIStreamErrorMessage('The configured assistant provider ended with an error.')
         setStreamError(message)
         yield { kind: 'error', message }
         return
       }
-
-      // With stream_options.include_usage the endpoint sends a final chunk that
-      // carries `usage` and an empty `choices` array. Capture it before bailing on
-      // the missing choice below.
-      if (parsed.usage) {
-        setUsage(parsed.usage)
-      }
-
-      const choice = parsed.choices?.[0]
-      if (!choice) {
-        continue
-      }
-
-      const delta = choice.delta
-      if (delta?.content) {
-        yield { kind: 'text-delta', delta: delta.content }
-      }
-
-      if (delta?.tool_calls) {
-        for (const tc of delta.tool_calls) {
-          const index = tc.index ?? 0
-          const existing = toolCallsByIndex.get(index) ?? { id: '', name: '', arguments: '' }
-          if (tc.id) {
-            existing.id = tc.id
-          }
-          if (tc.function?.name) {
-            existing.name = tc.function.name
-          }
-          if (tc.function?.arguments) {
-            existing.arguments += tc.function.arguments
-          }
-          toolCallsByIndex.set(index, existing)
-        }
-      }
-
-      if (choice.finish_reason) {
-        if (choice.finish_reason === 'error') {
-          const message = cleanOpenAIStreamErrorMessage('The configured assistant provider ended with an error.')
-          setStreamError(message)
-          yield { kind: 'error', message }
-          return
-        }
-        setFinishReason(choice.finish_reason)
-      }
+      setFinishReason(choice.finish_reason)
     }
   }
 

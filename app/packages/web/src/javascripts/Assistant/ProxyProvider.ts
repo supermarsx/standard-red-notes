@@ -3,6 +3,14 @@ import { assistantHttpError, assistantNetworkError } from './AssistantHttpError'
 import { samplingRequestFields, SamplingSettings } from './samplingSettings'
 import { Provider, ProviderEvent, ProviderRequest } from './types'
 
+const MALFORMED_PROXY_FRAME = Symbol('malformed-proxy-frame')
+
+function normalizeSseBuffer(buffer: string, streamEnded = false): string {
+  const hasIncompleteCrLf = !streamEnded && buffer.endsWith('\r')
+  const complete = hasIncompleteCrLf ? buffer.slice(0, -1) : buffer
+  return complete.replace(/\r\n/g, '\n').replace(/\r/g, '\n') + (hasIncompleteCrLf ? '\r' : '')
+}
+
 export interface ProxyProviderOptions {
   /** Provider id understood by the server proxy (anthropic | openai | ollama). */
   provider: string
@@ -64,55 +72,103 @@ export class ProxyProvider implements Provider {
     const reader = response.body.getReader()
     const decoder = new TextDecoder()
     let buffer = ''
-    let reportedUsage = false
+    let usage: Extract<ProviderEvent, { kind: 'usage' }> | undefined
+    let finished = false
+    let failed = false
 
-    const handle = (event: ProviderEvent): ProviderEvent => {
+    const observe = (event: ProviderEvent): void => {
       if (event.kind === 'usage') {
-        reportedUsage = true
-        assistantUsageService.record({
-          promptTokens: event.promptTokens,
-          completionTokens: event.completionTokens,
-          totalTokens: event.totalTokens,
-        })
+        usage = event
+      } else if (event.kind === 'error') {
+        failed = true
+      } else if (event.kind === 'finish') {
+        finished = true
+        failed = failed || event.stopReason === 'error'
       }
-      return event
     }
 
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (done) {
-        break
-      }
-      buffer += decoder.decode(value, { stream: true })
-
-      // SSE frames are separated by a blank line.
-      let separatorIndex = buffer.indexOf('\n\n')
-      while (separatorIndex !== -1) {
-        const frame = buffer.slice(0, separatorIndex)
-        buffer = buffer.slice(separatorIndex + 2)
-
-        const event = this.parseFrame(frame)
-        if (event) {
-          yield handle(event)
+    try {
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) {
+          buffer += decoder.decode()
+          buffer = normalizeSseBuffer(buffer, true)
+          break
         }
+        buffer += decoder.decode(value, { stream: true })
+        buffer = normalizeSseBuffer(buffer)
 
-        separatorIndex = buffer.indexOf('\n\n')
+        // SSE frames are separated by a blank line.
+        let separatorIndex = buffer.indexOf('\n\n')
+        while (separatorIndex !== -1) {
+          const frame = buffer.slice(0, separatorIndex)
+          buffer = buffer.slice(separatorIndex + 2)
+
+          const event = this.parseFrame(frame)
+          if (event === MALFORMED_PROXY_FRAME) {
+            failed = true
+            try {
+              await reader.cancel()
+            } catch {
+              // The malformed stream is already terminal; cancellation is best effort.
+            }
+            yield { kind: 'error', message: 'The assistant proxy returned malformed stream data.' }
+            yield { kind: 'finish', stopReason: 'error' }
+            return
+          }
+          if (event) {
+            observe(event)
+            yield event
+          }
+
+          separatorIndex = buffer.indexOf('\n\n')
+        }
       }
+    } catch (error) {
+      yield { kind: 'error', message: assistantNetworkError(error, 'proxy') }
+      yield { kind: 'finish', stopReason: 'error' }
+      return
     }
 
     const trailing = this.parseFrame(buffer)
+    if (trailing === MALFORMED_PROXY_FRAME) {
+      yield { kind: 'error', message: 'The assistant proxy returned malformed stream data.' }
+      yield { kind: 'finish', stopReason: 'error' }
+      return
+    }
     if (trailing) {
-      yield handle(trailing)
+      observe(trailing)
+      yield trailing
     }
 
-    // Count the request even when the proxy/provider reported no token usage so
-    // the session request tally stays consistent with the server's request cap.
-    if (!reportedUsage) {
-      assistantUsageService.record({})
+    if (!finished) {
+      if (!failed) {
+        failed = true
+        yield {
+          kind: 'error',
+          message: 'The assistant proxy ended before reporting a completion reason.',
+        }
+      }
+      yield { kind: 'finish', stopReason: 'error' }
+    }
+
+    // Commit local counters only after a non-error terminal event. The server's
+    // quota has the same success boundary, so failed/truncated requests remain
+    // absent from both displays even if an upstream sent an early usage frame.
+    if (!failed && finished) {
+      assistantUsageService.record(
+        usage
+          ? {
+              promptTokens: usage.promptTokens,
+              completionTokens: usage.completionTokens,
+              totalTokens: usage.totalTokens,
+            }
+          : {},
+      )
     }
   }
 
-  private parseFrame(frame: string): ProviderEvent | undefined {
+  private parseFrame(frame: string): ProviderEvent | typeof MALFORMED_PROXY_FRAME | undefined {
     const dataLines: string[] = []
     for (const rawLine of frame.split('\n')) {
       const line = rawLine.trimEnd()
@@ -128,7 +184,7 @@ export class ProxyProvider implements Provider {
     try {
       return JSON.parse(dataLines.join('\n')) as ProviderEvent
     } catch {
-      return undefined
+      return MALFORMED_PROXY_FRAME
     }
   }
 }

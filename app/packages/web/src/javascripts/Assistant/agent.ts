@@ -1,5 +1,13 @@
 import { getMaxRunTimeMs, getMaxSteps } from './samplingSettings'
-import { AssistantToolCall, ChatMessage, Provider, ProviderStopReason, ToolDescriptor, ToolSession } from './types'
+import {
+  AssistantToolCall,
+  ChatMessage,
+  Provider,
+  ProviderReplayState,
+  ProviderStopReason,
+  ToolDescriptor,
+  ToolSession,
+} from './types'
 
 /**
  * Live control channel for an in-flight run. Lets the UI steer the agent
@@ -47,7 +55,7 @@ export interface AgentOptions {
 export interface AgentResult {
   finalText: string
   steps: number
-  stopReason: 'end_turn' | 'max_steps' | 'time_limit' | 'error' | 'aborted'
+  stopReason: 'end_turn' | 'max_tokens' | 'max_steps' | 'time_limit' | 'error' | 'aborted'
 }
 
 export async function run(messages: ChatMessage[], opts: AgentOptions): Promise<AgentResult> {
@@ -122,7 +130,8 @@ export async function run(messages: ChatMessage[], opts: AgentOptions): Promise<
 
     let assistantText = ''
     const toolCalls: AssistantToolCall[] = []
-    let stopReason: ProviderStopReason = 'end_turn'
+    let stopReason: ProviderStopReason | undefined
+    let providerReplay: ProviderReplayState | undefined
 
     const stream = provider.send({ system: systemPrompt, messages: history, tools })
 
@@ -137,8 +146,17 @@ export async function run(messages: ChatMessage[], opts: AgentOptions): Promise<
         toolCalls.push({ id: ev.id, name: ev.name, args: ev.args })
       } else if (ev.kind === 'finish') {
         stopReason = ev.stopReason
+        providerReplay = ev.providerReplay
       } else if (ev.kind === 'error') {
         return { finalText: ev.message, steps: step, stopReason: 'error' }
+      }
+    }
+
+    if (!stopReason) {
+      return {
+        finalText: 'The assistant provider ended before reporting a completion reason.',
+        steps: step,
+        stopReason: 'error',
       }
     }
 
@@ -147,11 +165,45 @@ export async function run(messages: ChatMessage[], opts: AgentOptions): Promise<
     }
 
     if (toolCalls.length === 0) {
+      if (stopReason === 'tool_use') {
+        return {
+          finalText:
+            'The assistant provider completed a tool-use turn without returning a tool call. No tools were run.',
+          steps: step,
+          stopReason: 'error',
+        }
+      }
+      if (stopReason === 'error') {
+        return {
+          finalText: assistantText || 'The assistant provider ended with an error.',
+          steps: step,
+          stopReason: 'error',
+        }
+      }
+
       finalText = assistantText
-      return { finalText, steps: step, stopReason: 'end_turn' }
+      return { finalText, steps: step, stopReason: stopReason === 'max_tokens' ? 'max_tokens' : 'end_turn' }
     }
 
-    history.push({ role: 'assistant', content: assistantText, toolCalls })
+    // A tool call is actionable only when the provider completed the turn with
+    // its explicit tool-use terminal reason. Some streaming providers can emit a
+    // complete-looking function-call item before later declaring the response
+    // incomplete (for example, because the output-token limit was reached). Never
+    // let that partial turn mutate the user's notes or preferences.
+    if (stopReason !== 'tool_use') {
+      return {
+        finalText: 'The assistant provider returned tool calls without completing a tool-use turn. No tools were run.',
+        steps: step,
+        stopReason: 'error',
+      }
+    }
+
+    history.push({
+      role: 'assistant',
+      content: assistantText,
+      toolCalls,
+      ...(providerReplay ? { providerReplay } : {}),
+    })
 
     for (const tc of toolCalls) {
       opts.onToolCall?.(tc)
@@ -165,10 +217,6 @@ export async function run(messages: ChatMessage[], opts: AgentOptions): Promise<
         history.push({ role: 'tool', content: message, toolCallId: tc.id, name: tc.name })
         opts.onToolResult?.(tc.id, message, true)
       }
-    }
-
-    if (stopReason !== 'tool_use') {
-      break
     }
 
     // After a round of tool calls, check the wall clock before looping again so a

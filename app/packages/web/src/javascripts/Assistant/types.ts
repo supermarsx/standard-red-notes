@@ -5,12 +5,21 @@
 
 export type ChatRole = 'system' | 'user' | 'assistant' | 'tool'
 
+export interface ProviderReplayState {
+  protocol: 'openai-responses'
+  version: 1
+  /** Base64url UTF-8 JSON. Transport-opaque, but not encryption. */
+  encodedOutput: string
+}
+
 export interface ChatMessage {
   role: ChatRole
   content: string
   toolCallId?: string
   toolCalls?: AssistantToolCall[]
   name?: string
+  /** Opaque provider continuation data retained only inside the current agent run. */
+  providerReplay?: ProviderReplayState
 }
 
 export interface AssistantToolCall {
@@ -38,7 +47,7 @@ export type ProviderStopReason = 'end_turn' | 'max_tokens' | 'tool_use' | 'stop'
 export type ProviderEvent =
   | { kind: 'text-delta'; delta: string }
   | { kind: 'tool-call'; id: string; name: string; args: unknown }
-  | { kind: 'finish'; stopReason: ProviderStopReason }
+  | { kind: 'finish'; stopReason: ProviderStopReason; providerReplay?: ProviderReplayState }
   | { kind: 'error'; message: string }
   // Token usage reported by the endpoint when a completion finishes. Best-effort:
   // emitted only when the provider's response carries a `usage` object (OpenAI
