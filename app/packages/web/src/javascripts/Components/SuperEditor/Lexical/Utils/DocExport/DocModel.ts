@@ -43,8 +43,9 @@ import { $isRemoteImageNode } from '../../../Plugins/RemoteImagePlugin/RemoteIma
 import { $createFileExportNode } from '../../Nodes/FileExportNode'
 import { $isFileNode } from '../../../Plugins/EncryptedFilePlugin/Nodes/FileUtils'
 import { parseFileName } from '@standardnotes/utils'
-import { $getChecklistDueAt, $isChecklistItemNode } from '../../Nodes/ChecklistItemNode'
+import { $getChecklistDueAt, $getChecklistRecurrence, $isChecklistItemNode } from '../../Nodes/ChecklistItemNode'
 import { checklistDueExportText } from '../../../Checklist/checklistDueDate'
+import { checklistRecurrenceSummary } from '../../../Checklist/checklistRecurrence'
 
 /* ---------------------------------------------------------------- model types */
 
@@ -465,7 +466,12 @@ const listNodeToModel = (listNode: ListNode, now: number, depth = 0): ListModel 
     if (dueAt) {
       const dueText = checklistDueExportText(dueAt, Boolean(checked), now)
       if (dueText) {
-        inlines.push({ kind: 'text', text: ` - ${dueText}`, italic: true })
+        const recurrenceText = checklistRecurrenceSummary($getChecklistRecurrence(item), true)
+        inlines.push({
+          kind: 'text',
+          text: ` - ${dueText}${recurrenceText ? ` · ${recurrenceText}` : ''}`,
+          italic: true,
+        })
       }
     }
     const itemModel: ListItemModel = { inlines }

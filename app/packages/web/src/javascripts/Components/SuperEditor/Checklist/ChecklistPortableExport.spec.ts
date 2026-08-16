@@ -1,7 +1,8 @@
 import { $createListItemNode, $createListNode, ListItemNode, ListNode } from '@lexical/list'
 import { $createTextNode, $getRoot, createEditor } from 'lexical'
-import { $setChecklistDueAt } from '../Lexical/Nodes/ChecklistItemNode'
+import { $setChecklistDueAt, $setChecklistRecurrence } from '../Lexical/Nodes/ChecklistItemNode'
 import { $projectChecklistDueDatesForPortableExport } from './ChecklistPortableExport'
+import { createChecklistRecurrence } from './checklistRecurrence'
 
 describe('portable checklist deadline projection', () => {
   it('places parent and child deadlines next to their own labels', () => {
@@ -13,6 +14,7 @@ describe('portable checklist deadline projection', () => {
         const parent = $createListItemNode(false).append($createTextNode('Parent task'))
         const child = $createListItemNode(false).append($createTextNode('Child task'))
         $setChecklistDueAt(parent, '2099-01-02T03:04:00.000Z')
+        $setChecklistRecurrence(parent, createChecklistRecurrence('monthly', '2099-01-02T03:04:00.000Z', 'UTC'))
         $setChecklistDueAt(child, '2100-02-03T04:05:00.000Z')
         parent.append($createListNode('check').append(child))
         $getRoot().append($createListNode('check').append(parent))
@@ -30,5 +32,7 @@ describe('portable checklist deadline projection', () => {
     expect(text.indexOf('Child task')).toBeLessThan(text.indexOf('2100'))
     expect(text).toContain('[2099-01-02T03:04:00.000Z]')
     expect(text).toContain('[2100-02-03T04:05:00.000Z]')
+    expect(text).toContain('Repeats monthly')
+    expect(text).toContain('UTC wall time')
   })
 })

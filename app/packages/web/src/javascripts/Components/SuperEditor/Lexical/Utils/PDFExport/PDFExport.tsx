@@ -46,8 +46,9 @@ import {
   PDF_PAGE_PADDING,
   PDF_QUOTE_INNER_GAP,
 } from './PDFLayoutConstants'
-import { $getChecklistDueAt, $isChecklistItemNode } from '../../Nodes/ChecklistItemNode'
+import { $getChecklistDueAt, $getChecklistRecurrence, $isChecklistItemNode } from '../../Nodes/ChecklistItemNode'
 import { checklistDueExportText } from '../../../Checklist/checklistDueDate'
+import { checklistRecurrenceSummary } from '../../../Checklist/checklistRecurrence'
 
 const PDF_SUPERSUBSCRIPT_FONT_SIZE = 9
 const PDF_HEADING_SUPERSUBSCRIPT_SCALE = 0.75
@@ -416,10 +417,11 @@ export const getPDFDataNodeFromLexicalNode = (
     if (dueAt) {
       const dueText = checklistDueExportText(dueAt, Boolean(node.getChecked()), now)
       if (dueText) {
+        const recurrenceText = checklistRecurrenceSummary($getChecklistRecurrence(node), true)
         const dueNode: PDFDataNode = {
           type: 'Text',
           style: { color: '#72767e', fontSize: 9 },
-          children: ` - ${dueText}`,
+          children: ` - ${dueText}${recurrenceText ? ` · ${recurrenceText}` : ''}`,
         }
         labelChildren.push(dueNode)
       }

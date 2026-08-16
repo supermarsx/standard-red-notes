@@ -25,8 +25,10 @@ Object.defineProperty(globalThis, 'window', { configurable: true, value: globalT
 const { $createListItemNode, $createListNode, ListItemNode, ListNode } =
   require('@lexical/list') as typeof import('@lexical/list')
 const { $createTextNode, $getRoot, createEditor } = require('lexical') as typeof import('lexical')
-const { $setChecklistDueAt } =
+const { $setChecklistDueAt, $setChecklistRecurrence } =
   require('../../Nodes/ChecklistItemNode') as typeof import('../../Nodes/ChecklistItemNode')
+const { createChecklistRecurrence } =
+  require('../../../Checklist/checklistRecurrence') as typeof import('../../../Checklist/checklistRecurrence')
 const { $generatePDFFromNodes, getPDFDataNodeFromLexicalNode } = require('./PDFExport') as typeof import('./PDFExport')
 
 const EXPORT_NOW = Date.parse('2099-08-12T11:00:00.000Z')
@@ -56,6 +58,7 @@ const createNestedChecklistEditor = (): LexicalEditor => {
       const parent = $createListItemNode(false).append($createTextNode('Parent task'))
       const child = $createListItemNode(false).append($createTextNode('Child task'))
       $setChecklistDueAt(parent, DUE_AT)
+      $setChecklistRecurrence(parent, createChecklistRecurrence('weekly', DUE_AT, 'UTC'))
       parent.append($createListNode('check').append(child))
       $getRoot().append($createListNode('check').append(parent))
     },
@@ -230,6 +233,8 @@ describe('checklist due date PDF projection', () => {
     expect(projectedText(parentLabel)).toContain('Due ')
     expect(projectedText(parentLabel)).toContain(`[${DUE_AT}]`)
     expect(projectedText(parentLabel)).toContain('(1h left)')
+    expect(projectedText(parentLabel)).toContain('Repeats weekly')
+    expect(projectedText(parentLabel)).toContain('UTC wall time')
     expect(projectedText(parentLabel)).not.toContain('Child task')
 
     expect(nestedWrapper?.type).toBe('View')
@@ -275,6 +280,8 @@ describe('checklist due date PDF projection', () => {
     expect(allText).toContain('Due ')
     expect(allText).toContain(`[${DUE_AT}]`)
     expect(allText).toContain('(1h left)')
+    expect(allText).toContain('Repeats weekly')
+    expect(allText).toContain('UTC wall time')
     expect(allText).toContain('Child task')
 
     const parent = items.find(({ str }) => str.includes('Parent task'))

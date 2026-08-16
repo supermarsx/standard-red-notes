@@ -1,7 +1,8 @@
 import { $isListNode } from '@lexical/list'
 import { $createTextNode, $getRoot, $isElementNode, LexicalNode } from 'lexical'
-import { $getChecklistDueAt, $isChecklistItemNode } from '../Lexical/Nodes/ChecklistItemNode'
+import { $getChecklistDueAt, $getChecklistRecurrence, $isChecklistItemNode } from '../Lexical/Nodes/ChecklistItemNode'
 import { checklistDueExportText } from './checklistDueDate'
+import { checklistRecurrenceSummary } from './checklistRecurrence'
 
 /**
  * Add a static deadline label to the disposable headless tree used by portable
@@ -25,7 +26,8 @@ export function $projectChecklistDueDatesForPortableExport(now = Date.now()): nu
       const dueAt = $getChecklistDueAt(node)
       const dueText = dueAt ? checklistDueExportText(dueAt, Boolean(node.getChecked()), now) : undefined
       if (dueText) {
-        const projection = $createTextNode(` - ${dueText}`)
+        const recurrenceText = checklistRecurrenceSummary($getChecklistRecurrence(node), true)
+        const projection = $createTextNode(` - ${dueText}${recurrenceText ? ` · ${recurrenceText}` : ''}`)
         const nestedList = node.getChildren().find($isListNode)
         if (nestedList) {
           nestedList.insertBefore(projection)
