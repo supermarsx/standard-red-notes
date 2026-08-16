@@ -15,10 +15,15 @@ import { NoteViewController } from './NoteViewController'
 import { FileViewController } from './FileViewController'
 import { TemplateNoteViewControllerOptions } from './TemplateNoteViewControllerOptions'
 import { IsNativeMobileWeb } from '@standardnotes/ui-services'
+import {
+  captureChecklistSessionPrincipal,
+  ChecklistSessionPrincipal,
+  checklistSessionPrincipalMatches,
+} from '../../SuperEditor/Checklist/checklistSessionPrincipal'
 
 type ItemControllerGroupChangeCallback = (activeController: NoteViewController | FileViewController | undefined) => void
 
-type ChecklistPrincipal = { signedIn: boolean; user?: object; keySystemIdentifier?: string }
+type ChecklistPrincipal = ChecklistSessionPrincipal & { keySystemIdentifier?: string }
 type VisibleChecklistReservation = {
   token: object
   noteUuid: string
@@ -332,15 +337,10 @@ export class ItemGroupController {
   }
 
   private captureChecklistPrincipal(note: SNNote): ChecklistPrincipal {
-    let signedIn = false
-    let user: object | undefined
-    try {
-      signedIn = this.sessions.isSignedIn()
-      user = signedIn ? this.sessions.getUser() : undefined
-    } catch {
-      signedIn = false
+    return {
+      ...captureChecklistSessionPrincipal(this.sessions),
+      keySystemIdentifier: note.key_system_identifier,
     }
-    return { signedIn, user, keySystemIdentifier: note.key_system_identifier }
   }
 
   private checklistPrincipalIsCurrent(noteUuid: string, expected: ChecklistPrincipal): boolean {
@@ -348,12 +348,8 @@ export class ItemGroupController {
     if (!note || note.uuid !== noteUuid || note.key_system_identifier !== expected.keySystemIdentifier) {
       return false
     }
-    try {
-      const signedIn = this.sessions.isSignedIn()
-      return signedIn === expected.signedIn && (!signedIn || this.sessions.getUser() === expected.user)
-    } catch {
-      return false
-    }
+    const current = captureChecklistSessionPrincipal(this.sessions)
+    return checklistSessionPrincipalMatches(expected, current)
   }
 
   private reserveVisibleChecklistOwner(note: SNNote): VisibleChecklistReservation {

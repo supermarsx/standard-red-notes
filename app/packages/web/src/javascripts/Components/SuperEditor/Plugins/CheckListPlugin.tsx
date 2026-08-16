@@ -22,7 +22,7 @@ import { useApplication } from '../../ApplicationProvider'
 import { getPrimaryModifier } from '@standardnotes/ui-services'
 import { $reorderCheckListForItem } from './CheckListAutoMovePlugin/reorderCheckList'
 import { getChecklistAutoMoveEnabled } from './CheckListAutoMovePlugin/autoMoveSetting'
-import { SNNote } from '@standardnotes/snjs'
+import { ApplicationEvent, SNNote } from '@standardnotes/snjs'
 import {
   CHECKLIST_DUE_ACTION_ATTR,
   CHECKLIST_DUE_INPUT_ATTR,
@@ -66,11 +66,13 @@ import {
   $isChecklistItemNode,
   $normalizeChecklistItemMetadata,
 } from '../Lexical/Nodes/ChecklistItemNode'
-import {
-  matchesNoteEncryptionIdentity,
-  resolveNoteEncryptionIdentity,
-} from '../Collaboration/CollaborationKeyDerivation'
+import { resolveNoteEncryptionIdentity } from '../Collaboration/CollaborationKeyDerivation'
 import { canMutateSuperChecklistNote } from '../../TodoAggregate/todoAuthorization'
+import {
+  captureChecklistSessionPrincipal,
+  checklistEncryptionIdentityMatches,
+  checklistSessionPrincipalMatches,
+} from '../Checklist/checklistSessionPrincipal'
 
 type CheckListPluginProps = {
   noteUuid?: string
@@ -80,15 +82,6 @@ type CheckListPluginProps = {
   ownerRole?: ChecklistEditorRole
   isOwnerActive?: () => boolean
   onOwnerReady?: () => void
-}
-
-function signedInSession(application: ReturnType<typeof useApplication>): { signedIn: boolean; user?: object } {
-  try {
-    const signedIn = application.sessions.isSignedIn()
-    return { signedIn, user: signedIn ? application.sessions.getUser() : undefined }
-  } catch {
-    return { signedIn: false }
-  }
 }
 
 export function CheckListPlugin({
@@ -212,27 +205,38 @@ export function CheckListPlugin({
       return
     }
     const mountedNote = application.items.findItem<SNNote>(noteUuid)
-    const mountedSession = signedInSession(application)
+    const mountedSession = captureChecklistSessionPrincipal(application.sessions)
     let mountedIdentity: ReturnType<typeof resolveNoteEncryptionIdentity>
     try {
       mountedIdentity = mountedNote ? resolveNoteEncryptionIdentity(application, mountedNote) : undefined
     } catch {
       mountedIdentity = undefined
     }
+    let authorizationBoundaryChanged = false
+    const removeAuthorizationBoundaryObserver = application.addEventObserver(async (event) => {
+      if (
+        event === ApplicationEvent.SignedIn ||
+        event === ApplicationEvent.SignedOut ||
+        event === ApplicationEvent.KeyStatusChanged
+      ) {
+        authorizationBoundaryChanged = true
+      }
+    })
 
     const isExactOwnerAuthorizedAndActive = () => {
       try {
         const currentNote = application.items.findItem<SNNote>(noteUuid)
-        const currentSession = signedInSession(application)
+        const currentSession = captureChecklistSessionPrincipal(application.sessions)
+        const currentIdentity = currentNote ? resolveNoteEncryptionIdentity(application, currentNote) : undefined
         return (
+          !authorizationBoundaryChanged &&
           (isOwnerActive?.() ?? true) &&
           editor.isEditable() &&
           typeof persistChanges === 'function' &&
           canMutateSuperChecklistNote(application, currentNote) &&
-          currentSession.signedIn === mountedSession.signedIn &&
-          currentSession.user === mountedSession.user &&
+          checklistSessionPrincipalMatches(mountedSession, currentSession) &&
           (!mountedSession.signedIn || Boolean(mountedIdentity)) &&
-          (!mountedIdentity || matchesNoteEncryptionIdentity(application, mountedIdentity, currentNote))
+          (!mountedIdentity || checklistEncryptionIdentityMatches(mountedIdentity, currentIdentity))
         )
       } catch {
         return false
@@ -247,7 +251,7 @@ export function CheckListPlugin({
       return ready
     }
 
-    return registerChecklistMutationBridge(
+    const removeMutationBridge = registerChecklistMutationBridge(
       application,
       noteUuid,
       ownerLeaseId,
@@ -299,6 +303,10 @@ export function CheckListPlugin({
       isExactOwnerReady,
       { role: ownerRole, isActive: isOwnerActive },
     )
+    return () => {
+      removeMutationBridge()
+      removeAuthorizationBoundaryObserver()
+    }
   }, [
     application,
     editor,

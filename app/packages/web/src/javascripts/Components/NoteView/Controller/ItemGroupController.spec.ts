@@ -42,14 +42,17 @@ jest.mock('./FileViewController', () => {
 
 describe('ItemGroupController tabs/tiles', () => {
   let group: ItemGroupController
+  let items: jest.Mocked<ItemManagerInterface>
+  let sessions: jest.Mocked<SessionsClientInterface>
 
   beforeEach(() => {
-    const items = {
+    items = {
       findItem: jest.fn((uuid: string) => ({ uuid, noteType: NoteType.Super })),
-    } as unknown as ItemManagerInterface
-    const sessions = {
+    } as unknown as jest.Mocked<ItemManagerInterface>
+    sessions = {
       isSignedIn: jest.fn().mockReturnValue(false),
-    } as unknown as SessionsClientInterface
+      getUser: jest.fn(),
+    } as unknown as jest.Mocked<SessionsClientInterface>
     group = new ItemGroupController(
       items,
       {} as MutatorClientInterface,
@@ -183,6 +186,38 @@ describe('ItemGroupController tabs/tiles', () => {
     expect(detached.deinit).toHaveBeenCalledTimes(1)
     expect(group.itemControllers).toEqual([visible])
     expect(group.activeItemViewController).toBe(visible)
+  })
+
+  it('keeps source-note authorization across a same-account User object replacement', async () => {
+    let currentUser = { uuid: 'same-account' }
+    sessions.isSignedIn.mockReturnValue(true)
+    sessions.getUser.mockImplementation(() => currentUser as never)
+
+    const opening = group.createDetachedNoteController(superNote('background-note'))
+    currentUser = { uuid: 'same-account' }
+
+    await expect(opening).resolves.toBeInstanceOf(NoteViewController)
+  })
+
+  it('rejects source-note ownership when the account UUID actually changes', async () => {
+    let currentUser = { uuid: 'first-account' }
+    sessions.isSignedIn.mockReturnValue(true)
+    sessions.getUser.mockImplementation(() => currentUser as never)
+
+    const opening = group.createDetachedNoteController(superNote('background-note'))
+    currentUser = { uuid: 'different-account' }
+
+    await expect(opening).rejects.toThrow('ownership changed')
+  })
+
+  it('rejects source-note ownership when the session signs out while loading', async () => {
+    sessions.isSignedIn.mockReturnValue(true)
+    sessions.getUser.mockReturnValue({ uuid: 'signed-in-account' } as never)
+
+    const opening = group.createDetachedNoteController(superNote('background-note'))
+    sessions.isSignedIn.mockReturnValue(false)
+
+    await expect(opening).rejects.toThrow('ownership changed')
   })
 
   it('retains a detached owner when strict local/provider durability fails', async () => {
