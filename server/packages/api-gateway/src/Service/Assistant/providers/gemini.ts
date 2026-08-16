@@ -97,6 +97,7 @@ export class GeminiProvider implements Provider {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
+      signal: req.signal,
     })
 
     if (!res.ok || !res.body) {

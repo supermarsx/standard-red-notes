@@ -45,19 +45,22 @@ export class AnthropicProvider implements Provider {
       return { role: m.role as 'user' | 'assistant', content: m.content }
     })
 
-    const stream = this.client.messages.stream({
-      model: this.model,
-      system: req.system,
-      max_tokens: req.maxOutputTokens ?? 4096,
-      temperature: req.temperature,
-      top_p: req.topP,
-      messages,
-      tools: req.tools.map((t) => ({
-        name: t.name,
-        description: t.description,
-        input_schema: t.inputSchema as Anthropic.Messages.Tool['input_schema'],
-      })),
-    })
+    const stream = this.client.messages.stream(
+      {
+        model: this.model,
+        system: req.system,
+        max_tokens: req.maxOutputTokens ?? 4096,
+        temperature: req.temperature,
+        top_p: req.topP,
+        messages,
+        tools: req.tools.map((t) => ({
+          name: t.name,
+          description: t.description,
+          input_schema: t.inputSchema as Anthropic.Messages.Tool['input_schema'],
+        })),
+      },
+      { signal: req.signal },
+    )
 
     const pendingToolCalls = new Map<number, AssistantToolCall & { argBuf: string }>()
 

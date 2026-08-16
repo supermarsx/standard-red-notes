@@ -36,8 +36,12 @@ function responseHarness(options?: { uuid?: string; admin?: boolean }): Response
   const setHeader = jest.fn(() => response)
   const vary = jest.fn(() => response)
   const write = jest.fn(() => true)
-  const end = jest.fn(() => response)
+  const end = jest.fn(() => {
+    Object.assign(response, { writableEnded: true })
+    return response
+  })
   Object.assign(response, {
+    writableEnded: false,
     status,
     json,
     send,
@@ -45,6 +49,7 @@ function responseHarness(options?: { uuid?: string; admin?: boolean }): Response
     vary,
     write,
     end,
+    on: jest.fn(() => response),
     flushHeaders: jest.fn(),
     type: jest.fn(() => response),
   })

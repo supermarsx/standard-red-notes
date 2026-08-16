@@ -46,10 +46,13 @@ export class OllamaProvider implements Provider {
     const attempts = Math.max(1, this.maxRetries + 1)
     for (let attempt = 0; attempt < attempts; attempt++) {
       try {
+        const timeoutSignal = this.timeoutMs ? AbortSignal.timeout(this.timeoutMs) : undefined
+        const signal =
+          req.signal && timeoutSignal ? AbortSignal.any([req.signal, timeoutSignal]) : (req.signal ?? timeoutSignal)
         res = await fetch(`${this.baseURL}/api/chat`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          signal: this.timeoutMs ? AbortSignal.timeout(this.timeoutMs) : undefined,
+          signal,
           body: JSON.stringify({
             model: this.model,
             messages,
@@ -66,6 +69,9 @@ export class OllamaProvider implements Provider {
           }),
         })
       } catch {
+        if (req.signal?.aborted) {
+          return
+        }
         if (attempt + 1 === attempts) {
           yield { kind: 'error', message: 'Ollama could not be reached before the configured timeout.' }
           yield { kind: 'finish', stopReason: 'error' }

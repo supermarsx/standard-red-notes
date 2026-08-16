@@ -1,5 +1,6 @@
 import 'reflect-metadata'
 
+import { EventEmitter } from 'node:events'
 import { Request, Response } from 'express'
 import { RoleName, SettingName } from '@standardnotes/domain-core'
 
@@ -82,7 +83,11 @@ describe('AssistantController', () => {
       vary,
       flushHeaders: jest.fn(),
       write: jest.fn(),
-      end: jest.fn(),
+      writableEnded: false,
+      on: jest.fn(),
+      end: jest.fn(() => {
+        ;(response as unknown as { writableEnded: boolean }).writableEnded = true
+      }),
     } as unknown as Response
     return response
   }
@@ -211,6 +216,183 @@ describe('AssistantController', () => {
       await makeController(0, { fiveHour: 1000 }).streamCompletion(streamRequest(), response)
 
       expect(statusMock).not.toHaveBeenCalledWith(429)
+    })
+  })
+
+  describe('stream lifecycle', () => {
+    const requestWithEvents = (events: EventEmitter): Request =>
+      ({
+        body: { messages: [] },
+        headers: {},
+        aborted: false,
+        on: events.on.bind(events),
+      }) as unknown as Request
+
+    const responseWithEvents = (events: EventEmitter): Response => {
+      const response = responseWith({})
+      ;(response as unknown as { on: EventEmitter['on'] }).on = events.on.bind(events)
+      return response
+    }
+
+    const richFallbackRequest = (): Request =>
+      ({
+        body: {
+          messages: [
+            {
+              role: 'assistant',
+              content: '',
+              toolCalls: [{ id: 'call-1', name: 'inspect_note', args: { query: 'A'.repeat(400) } }],
+              providerReplay: {
+                protocol: 'openai-responses',
+                version: 1,
+                encodedOutput: 'R'.repeat(800),
+              },
+            },
+          ],
+          tools: [
+            {
+              name: 'inspect_note',
+              description: 'D'.repeat(400),
+              inputSchema: { type: 'object', properties: { query: { type: 'string', description: 'S'.repeat(400) } } },
+            },
+          ],
+        },
+        headers: {},
+        aborted: false,
+        on: jest.fn(),
+      }) as unknown as Request
+
+    it('keeps streaming after the normally completed request body emits close', async () => {
+      const requestEvents = new EventEmitter()
+      const responseEvents = new EventEmitter()
+      ;(resolveProvider as jest.Mock).mockReturnValueOnce({
+        id: 'openai',
+        async *send() {
+          requestEvents.emit('close')
+          yield { kind: 'text-delta' as const, delta: 'live' }
+          yield { kind: 'finish' as const, stopReason: 'end_turn' as const }
+        },
+      })
+      const response = responseWithEvents(responseEvents)
+
+      await makeController().streamCompletion(requestWithEvents(requestEvents), response)
+
+      expect(response.write).toHaveBeenCalledWith(expect.stringContaining('"delta":"live"'))
+      expect(response.write).toHaveBeenCalledWith(expect.stringContaining('"stopReason":"end_turn"'))
+      expect(response.end).toHaveBeenCalledTimes(1)
+    })
+
+    it.each(['aborted request', 'premature response close'])('stops an actual %s', async (event) => {
+      const requestEvents = new EventEmitter()
+      const responseEvents = new EventEmitter()
+      ;(resolveProvider as jest.Mock).mockReturnValueOnce({
+        id: 'openai',
+        async *send() {
+          if (event === 'aborted request') {
+            requestEvents.emit('aborted')
+          } else {
+            responseEvents.emit('close')
+          }
+          yield { kind: 'text-delta' as const, delta: 'must-not-stream' }
+          yield { kind: 'finish' as const, stopReason: 'end_turn' as const }
+        },
+      })
+      const response = responseWithEvents(responseEvents)
+
+      await makeController().streamCompletion(requestWithEvents(requestEvents), response)
+
+      expect(response.write).not.toHaveBeenCalledWith(expect.stringContaining('must-not-stream'))
+      expect(response.end).toHaveBeenCalledTimes(1)
+    })
+
+    it('actively cancels a blocked provider on disconnect without writing or charging usage', async () => {
+      const requestEvents = new EventEmitter()
+      const responseEvents = new EventEmitter()
+      let signal: AbortSignal | undefined
+      let resolveNext: ((result: IteratorResult<never>) => void) | undefined
+      let markStarted: (() => void) | undefined
+      const started = new Promise<void>((resolve) => {
+        markStarted = resolve
+      })
+      const iterator = {
+        next: jest.fn(
+          () =>
+            new Promise<IteratorResult<never>>((resolve) => {
+              resolveNext = resolve
+              markStarted?.()
+              signal?.addEventListener('abort', () => resolve({ done: true, value: undefined as never }), {
+                once: true,
+              })
+            }),
+        ),
+        return: jest.fn(async () => {
+          resolveNext?.({ done: true, value: undefined as never })
+          return { done: true as const, value: undefined as never }
+        }),
+      }
+      ;(resolveProvider as jest.Mock).mockReturnValueOnce({
+        id: 'openai',
+        send(request: { signal?: AbortSignal }) {
+          signal = request.signal
+          return { [Symbol.asyncIterator]: () => iterator }
+        },
+      })
+      const response = responseWithEvents(responseEvents)
+      const completion = makeController(1).streamCompletion(requestWithEvents(requestEvents), response)
+      await started
+
+      responseEvents.emit('close')
+      await completion
+
+      expect(signal?.aborted).toBe(true)
+      expect(iterator.return).toHaveBeenCalledTimes(1)
+      expect(response.write).not.toHaveBeenCalled()
+      expect(redis.decr).toHaveBeenCalledTimes(1)
+      expect(redis.zadd).not.toHaveBeenCalled()
+    })
+
+    it('includes replay state, tool calls, and tool schemas in fallback token accounting', async () => {
+      ;(resolveProvider as jest.Mock).mockReturnValueOnce({
+        id: 'openai',
+        async *send() {
+          yield { kind: 'finish' as const, stopReason: 'end_turn' as const }
+        },
+      })
+
+      await makeController().streamCompletion(richFallbackRequest(), responseWith({}))
+
+      expect(redis.zadd).toHaveBeenCalledTimes(1)
+      const member = redis.zadd.mock.calls[0][2] as string
+      expect(Number(member.split(':')[1])).toBeGreaterThan(400)
+    })
+
+    it('retries a transient reservation release and does not charge a failed request', async () => {
+      let dailyCount = 0
+      redis.incr.mockImplementation(async () => {
+        dailyCount += 1
+        return dailyCount
+      })
+      redis.decr
+        .mockImplementationOnce(async () => {
+          throw new Error('redis temporarily unavailable')
+        })
+        .mockImplementation(async () => {
+          dailyCount = Math.max(0, dailyCount - 1)
+          return dailyCount
+        })
+      ;(resolveProvider as jest.Mock).mockReturnValueOnce({
+        id: 'openai',
+        async *send() {
+          yield { kind: 'error' as const, message: 'upstream failed' }
+          yield { kind: 'finish' as const, stopReason: 'error' as const }
+        },
+      })
+
+      await makeController(1).streamCompletion(richFallbackRequest(), responseWith({}))
+
+      expect(redis.decr).toHaveBeenCalledTimes(2)
+      expect(dailyCount).toBe(0)
+      expect(redis.zadd).not.toHaveBeenCalled()
     })
   })
 

@@ -75,6 +75,8 @@ interface ResolvedUserLimits {
   perUserLimit?: number
 }
 
+const ASSISTANT_QUOTA_RELEASE_MAX_ATTEMPTS = 2
+
 /**
  * Stateless LLM streaming proxy. Standard Notes notes are end-to-end encrypted,
  * so the agent loop and ALL tools run in the browser. This controller only holds
@@ -951,7 +953,7 @@ export class AssistantController extends BaseHttpController {
         if (exceeded) {
           // Refund the daily request meter we incremented above — this request
           // is rejected before any upstream proxying happens.
-          await quotaReservation?.release()
+          await this.releaseQuotaReservation(quotaReservation)
           response.status(429).json({
             error: {
               tag: 'ai-token-limit-reached',
@@ -981,7 +983,7 @@ export class AssistantController extends BaseHttpController {
       generation = resolved.generation
     } catch (error) {
       // The proxy never started, so refund the metered request.
-      await quotaReservation?.release()
+      await this.releaseQuotaReservation(quotaReservation)
 
       response.setHeader('Content-Type', 'text/event-stream')
       response.setHeader('Cache-Control', 'no-cache, no-transform')
@@ -1007,10 +1009,38 @@ export class AssistantController extends BaseHttpController {
       response.write(`data: ${JSON.stringify(event)}\n\n`)
     }
 
-    let clientClosed = false
-    request.on('close', () => {
+    const outcome = new AssistantRequestOutcome()
+    const upstreamAbortController = new AbortController()
+    let providerIterator: AsyncIterator<ProviderEvent> | undefined
+    let iteratorCancellationRequested = false
+    let clientClosed = request.aborted === true
+    const cancelProvider = (): void => {
       clientClosed = true
+      outcome.markFailed()
+      upstreamAbortController.abort()
+      if (!iteratorCancellationRequested && providerIterator?.return) {
+        iteratorCancellationRequested = true
+        void Promise.resolve(providerIterator.return()).catch(() => {
+          // The request-scoped AbortSignal is authoritative; iterator cleanup is
+          // best effort for custom providers that expose an explicit return().
+        })
+      }
+    }
+
+    // IncomingMessage `close` means the request body has finished on modern
+    // Node; it is not evidence that the browser abandoned the SSE response.
+    // Only an aborted request or a response socket that closes before end() is
+    // a real disconnect. Treating normal request close as abort made every
+    // sufficiently asynchronous provider stream end empty.
+    request.on('aborted', cancelProvider)
+    response.on('close', () => {
+      if (!response.writableEnded) {
+        cancelProvider()
+      }
     })
+    if (clientClosed) {
+      cancelProvider()
+    }
 
     // Token accounting for this request: prefer the provider's REAL usage tokens
     // (OpenAI include_usage / Gemini / Cohere emit a `usage` event); otherwise
@@ -1019,7 +1049,6 @@ export class AssistantController extends BaseHttpController {
     let reportedTokens = 0
     let sawUsageEvent = false
     let completionChars = 0
-    const outcome = new AssistantRequestOutcome()
 
     try {
       const stream = provider.send({
@@ -1029,9 +1058,14 @@ export class AssistantController extends BaseHttpController {
         temperature: generation.temperature,
         topP: generation.topP,
         maxOutputTokens: generation.maxOutputTokens,
+        signal: upstreamAbortController.signal,
       })
+      providerIterator = stream[Symbol.asyncIterator]()
+      const cancellableStream: AsyncIterable<ProviderEvent> = {
+        [Symbol.asyncIterator]: () => providerIterator as AsyncIterator<ProviderEvent>,
+      }
 
-      for await (const event of stream) {
+      for await (const event of cancellableStream) {
         if (clientClosed) {
           outcome.markFailed()
           break
@@ -1053,9 +1087,12 @@ export class AssistantController extends BaseHttpController {
       }
     } catch (error) {
       outcome.markFailed()
-      writeEvent({ kind: 'error', message: (error as Error).message })
-      writeEvent({ kind: 'finish', stopReason: 'error' })
+      if (!clientClosed) {
+        writeEvent({ kind: 'error', message: (error as Error).message })
+        writeEvent({ kind: 'finish', stopReason: 'error' })
+      }
     } finally {
+      providerIterator = undefined
       response.end()
       if (outcome.shouldConsumeAllowance) {
         quotaReservation?.commit()
@@ -1064,15 +1101,50 @@ export class AssistantController extends BaseHttpController {
         const spentTokens = sawUsageEvent ? reportedTokens : this.estimateRequestTokens(body, completionChars)
         await this.recordTokenUsage(userUuid, spentTokens, isSubscription, subscriptionId)
       } else {
-        await quotaReservation?.release()
+        await this.releaseQuotaReservation(quotaReservation)
       }
     }
   }
 
-  /** Estimate a request's total tokens from prompt text + streamed completion length. */
+  /**
+   * Release a failed request reservation, retrying once when Redis has a
+   * transient failure. The reservation remains retryable until its decrement
+   * succeeds, so a recovered Redis connection does not charge a failed call.
+   */
+  private async releaseQuotaReservation(reservation?: AssistantRequestQuotaReservation): Promise<void> {
+    if (!reservation) {
+      return
+    }
+
+    let lastError: unknown
+    for (let attempt = 0; attempt < ASSISTANT_QUOTA_RELEASE_MAX_ATTEMPTS; attempt += 1) {
+      try {
+        await reservation.release()
+        return
+      } catch (error) {
+        lastError = error
+      }
+    }
+
+    throw lastError
+  }
+
+  /** Estimate a successful request's total tokens from its full provider input and streamed completion length. */
   private estimateRequestTokens(body: StreamRequestBody, completionChars: number): number {
-    const promptText = [body.system ?? '', ...(body.messages ?? []).map((message) => message.content ?? '')].join('\n')
-    return estimateTokensFromText(promptText) + estimateTokensFromChars(completionChars)
+    const providerInput = {
+      system: body.system ?? '',
+      messages: (body.messages ?? []).map((message) => ({
+        role: message.role,
+        content: message.content ?? '',
+        ...(message.toolCallId ? { toolCallId: message.toolCallId } : {}),
+        ...(message.name ? { name: message.name } : {}),
+        ...(message.toolCalls ? { toolCalls: message.toolCalls } : {}),
+        ...(message.providerReplay ? { providerReplay: message.providerReplay } : {}),
+      })),
+      tools: body.tools ?? [],
+    }
+
+    return estimateTokensFromText(JSON.stringify(providerInput)) + estimateTokensFromChars(completionChars)
   }
 
   /**

@@ -108,6 +108,15 @@ describe('CohereProvider.send', () => {
     expect(events.at(-1)).toEqual({ kind: 'finish', stopReason: 'error' })
   })
 
+  it('forwards request-scoped cancellation to fetch', async () => {
+    const controller = new AbortController()
+    fetchMock.mockResolvedValue(streamResponse([], { ok: false, status: 499, statusText: 'Closed' }))
+
+    await collect(new CohereProvider('command-r', ENV).send({ ...baseRequest, signal: controller.signal }))
+
+    expect(fetchMock).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ signal: controller.signal }))
+  })
+
   it('never leaks the api key in any emitted event', async () => {
     fetchMock.mockResolvedValue(
       streamResponse([

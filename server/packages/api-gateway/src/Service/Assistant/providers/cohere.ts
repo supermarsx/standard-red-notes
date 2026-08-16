@@ -89,6 +89,7 @@ export class CohereProvider implements Provider {
         Authorization: `Bearer ${this.apiKey}`,
       },
       body: JSON.stringify(body),
+      signal: req.signal,
     })
 
     if (!res.ok || !res.body) {
