@@ -3,9 +3,9 @@ import { AppPaneId } from '@/Components/Panes/AppPaneMetadata'
 
 /**
  * Standard Red Notes: a view tab is a full-column "pane" view (Home, Dashboard,
- * Reminders, Todos, Research) surfaced as a TAB in the editor tab bar instead of
- * taking over the whole window as a column. The `id` is the pane id string so a
- * given pane can only have a single tab open at once.
+ * Reminders, Calendar, Todos, Research) surfaced as a TAB in the editor tab bar
+ * instead of taking over the whole window as a column. The `id` is the pane id
+ * string so a given pane can only have a single tab open at once.
  */
 export type ViewTab =
   | {
@@ -42,6 +42,7 @@ export const TABBABLE_PANES: { paneId: AppPaneId; title: string; icon: VectorIco
   { paneId: AppPaneId.Home, title: 'Home', icon: 'window' },
   { paneId: AppPaneId.Dashboard, title: 'Dashboard', icon: 'dashboard' },
   { paneId: AppPaneId.Reminders, title: 'Reminders', icon: 'clock' },
+  { paneId: AppPaneId.Calendar, title: 'Calendar', icon: 'history' },
   { paneId: AppPaneId.Todos, title: 'Todos', icon: 'list-check' },
   { paneId: AppPaneId.Research, title: 'Research', icon: 'toc' },
   { paneId: AppPaneId.Bookmarks, title: 'Bookmarks', icon: 'pin' },

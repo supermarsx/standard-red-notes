@@ -48,26 +48,6 @@ function openPreferencesPane(pane: PreferencePaneId): (application: WebApplicati
 }
 
 /**
- * Present one of the aggregate/dashboard VIEWS as the main content column,
- * mirroring the sidebar buttons (see AggregateViewSectionButtons /
- * DashboardSectionButton): if the view is already open it's a no-op; otherwise
- * any open Editor pane is popped first so panes don't accumulate, then the view
- * is presented.
- */
-function presentAppPane(pane: AppPaneId): (application: WebApplication) => void {
-  return (application) => {
-    const paneController = application.paneController
-    if (paneController.panes.includes(pane)) {
-      return
-    }
-    if (paneController.panes.includes(AppPaneId.Editor)) {
-      paneController.removePane(AppPaneId.Editor)
-    }
-    paneController.presentPane(pane)
-  }
-}
-
-/**
  * Standard Red Notes: opens a full-column "pane" view as a TAB in the editor tab
  * bar instead of taking over the window as a column.
  */
@@ -170,7 +150,7 @@ export const GLOBAL_COMMANDS: GlobalCommand[] = [
     title: 'Open Calendar',
     keywords: ['view', 'dates', 'schedule', 'agenda'],
     icon: 'history',
-    run: presentAppPane(AppPaneId.Calendar),
+    run: openAppPaneTab(AppPaneId.Calendar),
   },
   {
     id: 'global-open-todos',

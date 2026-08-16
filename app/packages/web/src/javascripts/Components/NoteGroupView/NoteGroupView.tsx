@@ -16,19 +16,9 @@ import { getTileGridStyle, TileLayout } from './TileLayout'
 import { decisionForConflictTab } from './conflictTabDecision'
 import { MediaQueryBreakpoints } from '@/Hooks/useMediaQuery'
 import { ViewTab } from '@/Controllers/PaneController/ViewTab'
-import HomeView from '../Home/HomeView'
-import DashboardView from '../Dashboard/DashboardView'
-import RemindersView from '../RemindersAggregate/RemindersView'
-import TodoView from '../TodoAggregate/TodoView'
-import ResearchView from '../Research/ResearchView'
-import BookmarksView from '../Bookmarks/BookmarksView'
-import TemplatesView from '../Templates/TemplatesView'
-import ConstellationView from '../Constellation/ConstellationView'
-import NotificationsView from '../Notifications/NotificationsView'
-import FilesView from '../FilesView/FilesView'
-import WorkflowsView from '../Workflows/WorkflowsView'
 import NoteConflictResolutionView from '../NoteView/NoteConflictResolutionModal/NoteConflictResolutionView'
 import EmptyTabView from './EmptyTabView'
+import { PANE_VIEW_TAB_ROUTES } from './PaneViewTabRoutes'
 import { loadNewTabBehavior } from '@/Tabs/newTabSettings'
 import { loadTabCustomNames, saveTabCustomNames, setTabCustomName, TabCustomNames } from '@/Tabs/tabCustomNames'
 
@@ -400,8 +390,8 @@ class NoteGroupView extends AbstractComponent<Props, State> {
 
   /**
    * Standard Red Notes: renders the active full-column "pane" view (Home,
-   * Dashboard, Reminders, Todos, Research, Bookmarks) inside the editor content
-   * slot, in place of the note/file content, when its tab is active.
+   * Dashboard, Reminders, Calendar, Todos, Research, Bookmarks) inside the editor
+   * content slot, in place of the note/file content, when its tab is active.
    */
   private renderActiveViewTab(tab: ViewTab) {
     const viewClassName = 'flex-grow min-h-0'
@@ -427,32 +417,8 @@ class NoteGroupView extends AbstractComponent<Props, State> {
       )
     }
 
-    switch (tab.paneId) {
-      case AppPaneId.Home:
-        return <HomeView application={this.application} className={viewClassName} id={tab.id} />
-      case AppPaneId.Dashboard:
-        return <DashboardView application={this.application} className={viewClassName} id={tab.id} />
-      case AppPaneId.Reminders:
-        return <RemindersView application={this.application} className={viewClassName} id={tab.id} />
-      case AppPaneId.Todos:
-        return <TodoView application={this.application} className={viewClassName} id={tab.id} />
-      case AppPaneId.Research:
-        return <ResearchView application={this.application} className={viewClassName} id={tab.id} />
-      case AppPaneId.Bookmarks:
-        return <BookmarksView application={this.application} className={viewClassName} id={tab.id} />
-      case AppPaneId.Templates:
-        return <TemplatesView application={this.application} className={viewClassName} id={tab.id} />
-      case AppPaneId.Constellation:
-        return <ConstellationView application={this.application} className={viewClassName} id={tab.id} />
-      case AppPaneId.Notifications:
-        return <NotificationsView application={this.application} className={viewClassName} id={tab.id} />
-      case AppPaneId.Files:
-        return <FilesView application={this.application} className={viewClassName} id={tab.id} />
-      case AppPaneId.Workflows:
-        return <WorkflowsView application={this.application} className={viewClassName} id={tab.id} />
-      default:
-        return null
-    }
+    const PaneView = PANE_VIEW_TAB_ROUTES[tab.paneId]
+    return PaneView ? <PaneView application={this.application} className={viewClassName} id={tab.id} /> : null
   }
 
   override render() {

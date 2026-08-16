@@ -4,7 +4,6 @@ import { ApplicationEvent, ContentType, SNNote } from '@standardnotes/snjs'
 import { classNames } from '@standardnotes/utils'
 import { WebApplication } from '@/Application/WebApplication'
 import Icon from '@/Components/Icon/Icon'
-import { useResponsiveAppPane } from '../Panes/ResponsivePaneProvider'
 import { AppPaneId } from '../Panes/AppPaneMetadata'
 import { buildMonthGrid, todayIso } from '../NoteView/CalendarEditor/CalendarDocument'
 import { AggregatedCalendarEvent, collectAllCalendarEvents, indexCalendarEventsByDate } from './allCalendarEvents'
@@ -37,8 +36,6 @@ const MONTH_LABELS = [
 ]
 
 const CalendarAggregateView = forwardRef<HTMLDivElement, Props>(({ application, className, id, children }, ref) => {
-  const { removePane } = useResponsiveAppPane()
-
   const [events, setEvents] = useState<AggregatedCalendarEvent[]>(() =>
     collectAllCalendarEvents(application.items.getItems<SNNote>(ContentType.TYPES.Note)),
   )
@@ -118,6 +115,7 @@ const CalendarAggregateView = forwardRef<HTMLDivElement, Props>(({ application, 
       }
       application.itemListController.keepActiveItemOpenForSystemView(note.uuid)
       void application.itemListController.selectItemUsingInstance(note, true)
+      application.paneController.setActiveViewTab(undefined)
       application.paneController.presentPane(AppPaneId.Editor)
     },
     [application],
@@ -179,7 +177,7 @@ const CalendarAggregateView = forwardRef<HTMLDivElement, Props>(({ application, 
           </button>
           <button
             className="hover:bg-default ml-1 rounded p-1"
-            onClick={() => removePane(AppPaneId.Calendar)}
+            onClick={() => application.paneController.closeViewTab(AppPaneId.Calendar)}
             aria-label="Close calendar"
             title="Close"
           >
