@@ -6,7 +6,7 @@ import ComponentErrorBoundary from '@/Components/ComponentErrorBoundary/Componen
 import { addToast, ToastType } from '@standardnotes/toast'
 import { ApplicationEvent, classNames, PrefKey } from '@standardnotes/snjs'
 import { observer } from 'mobx-react-lite'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { usePrevious } from '../ContentListView/Calendar/usePrevious'
 import ContentListView from '../ContentListView/ContentListView'
 import PanelResizer, { PanelResizeType, PanelSide, ResizeFinishCallback } from '../PanelResizer/PanelResizer'
@@ -33,13 +33,20 @@ import { TodoChecklistEditorOwnerHost } from '../TodoAggregate/TodoChecklistEdit
 import ResearchView from '../Research/ResearchView'
 import BookmarksView from '../Bookmarks/BookmarksView'
 import usePreference from '@/Hooks/usePreference'
+import {
+  ASSISTANT_PANEL_DEFAULT_WIDTH,
+  ASSISTANT_PANEL_MIN_WIDTH,
+  clampAssistantPanelWidth,
+  dockAssistantPaneToRight,
+  maximumAssistantPanelWidth,
+} from '@/Controllers/PaneController/assistantPaneLayout'
 
 const NAVIGATION_PANEL_MIN_WIDTH = 48
 const ITEMS_PANEL_MIN_WIDTH = 200
 const NAVIGATION_PANEL_DEFAULT_WIDTH = 220
 const ITEMS_PANEL_DEFAULT_WIDTH = 400
-const ASSISTANT_PANEL_MIN_WIDTH = 300
-const ASSISTANT_PANEL_DEFAULT_WIDTH = 400
+const ASSISTANT_RESIZE_KEYBOARD_STEP = 24
+const ASSISTANT_RESIZE_KEYBOARD_LARGE_STEP = 64
 
 const PanesSystemComponent = () => {
   const application = useApplication()
@@ -63,56 +70,130 @@ const PanesSystemComponent = () => {
   )
   const [listRef, setListRef] = useState<HTMLDivElement | null>(null)
 
+  const occupiedAssistantSidePaneWidth =
+    (paneController.panes.includes(AppPaneId.Navigation) ? navigationPanelWidth : 0) +
+    (paneController.panes.includes(AppPaneId.Items) ? itemsPanelWidth : 0)
+
   const [assistantPanelWidth, setAssistantPanelWidth] = useState<number>(
-    application.getPreference(PrefKey.AssistantPanelWidth, ASSISTANT_PANEL_DEFAULT_WIDTH),
+    clampAssistantPanelWidth(
+      application.getPreference(PrefKey.AssistantPanelWidth, ASSISTANT_PANEL_DEFAULT_WIDTH),
+      window.innerWidth,
+      occupiedAssistantSidePaneWidth,
+    ),
+  )
+  const assistantResizeCleanupRef = useRef<(() => void) | null>(null)
+
+  const persistAssistantPanelWidth = useCallback(
+    (width: number) => {
+      void application.setPreference(PrefKey.AssistantPanelWidth, width).catch((error) => {
+        console.error(error)
+        addToast({
+          type: ToastType.Error,
+          message: 'Could not save the assistant panel size.',
+        })
+      })
+    },
+    [application],
   )
 
   const startAssistantResize = useCallback(
-    (event: React.MouseEvent<HTMLDivElement>) => {
+    (event: React.PointerEvent<HTMLDivElement>) => {
       event.preventDefault()
+      assistantResizeCleanupRef.current?.()
       const startX = event.clientX
       const startWidth = assistantPanelWidth
       let latest = startWidth
+      let cleaned = false
 
-      const onMove = (moveEvent: MouseEvent) => {
+      const cleanup = (persist: boolean) => {
+        if (cleaned) {
+          return
+        }
+        cleaned = true
+        document.removeEventListener('pointermove', onMove)
+        document.removeEventListener('pointerup', onUp)
+        document.removeEventListener('pointercancel', onCancel)
+        window.removeEventListener('blur', onCancel)
+        document.body.classList.remove('select-none', 'cursor-col-resize')
+        assistantResizeCleanupRef.current = null
+        if (persist) {
+          persistAssistantPanelWidth(latest)
+        }
+      }
+
+      const onMove = (moveEvent: PointerEvent) => {
         try {
           // The assistant is the rightmost pane, so dragging its left edge LEFT
           // (clientX decreases) should widen it.
           const delta = startX - moveEvent.clientX
-          const maxWidth = Math.min(900, window.innerWidth - 400)
-          latest = Math.max(
-            ASSISTANT_PANEL_MIN_WIDTH,
-            Math.min(startWidth + delta, Math.max(ASSISTANT_PANEL_MIN_WIDTH, maxWidth)),
-          )
+          latest = clampAssistantPanelWidth(startWidth + delta, window.innerWidth, occupiedAssistantSidePaneWidth)
           setAssistantPanelWidth(latest)
         } catch (error) {
-          // If the move handler throws, the mouseup that removes these listeners
-          // and body classes might never fire — leaking a live drag. Run the same
-          // cleanup (onUp) so the app can't get wedged, then swallow (this is a
-          // mousemove handler; rethrowing has nowhere useful to go).
           console.error('Assistant panel resize failed', error)
-          onUp()
+          cleanup(false)
         }
       }
 
       const onUp = () => {
-        document.removeEventListener('mousemove', onMove)
-        document.removeEventListener('mouseup', onUp)
-        document.body.classList.remove('select-none', 'cursor-col-resize')
-        void application.setPreference(PrefKey.AssistantPanelWidth, latest).catch((error) => {
-          console.error(error)
-          addToast({
-            type: ToastType.Error,
-            message: 'Could not save the assistant panel size.',
-          })
-        })
+        cleanup(true)
       }
 
+      const onCancel = () => cleanup(true)
+
       document.body.classList.add('select-none', 'cursor-col-resize')
-      document.addEventListener('mousemove', onMove)
-      document.addEventListener('mouseup', onUp)
+      document.addEventListener('pointermove', onMove)
+      document.addEventListener('pointerup', onUp)
+      document.addEventListener('pointercancel', onCancel)
+      window.addEventListener('blur', onCancel)
+      assistantResizeCleanupRef.current = () => cleanup(false)
     },
-    [application, assistantPanelWidth],
+    [assistantPanelWidth, occupiedAssistantSidePaneWidth, persistAssistantPanelWidth],
+  )
+
+  useEffect(
+    () => () => {
+      assistantResizeCleanupRef.current?.()
+    },
+    [],
+  )
+
+  useEffect(() => {
+    const clampToViewport = () => {
+      setAssistantPanelWidth((current) =>
+        clampAssistantPanelWidth(current, window.innerWidth, occupiedAssistantSidePaneWidth),
+      )
+    }
+    clampToViewport()
+    window.addEventListener('resize', clampToViewport)
+    return () => window.removeEventListener('resize', clampToViewport)
+  }, [occupiedAssistantSidePaneWidth])
+
+  const onAssistantResizeKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLDivElement>) => {
+      const maximumWidth = maximumAssistantPanelWidth(window.innerWidth, occupiedAssistantSidePaneWidth)
+      const step = event.shiftKey ? ASSISTANT_RESIZE_KEYBOARD_LARGE_STEP : ASSISTANT_RESIZE_KEYBOARD_STEP
+      let nextWidth: number | undefined
+
+      if (event.key === 'ArrowLeft') {
+        nextWidth = assistantPanelWidth + step
+      } else if (event.key === 'ArrowRight') {
+        nextWidth = assistantPanelWidth - step
+      } else if (event.key === 'Home') {
+        nextWidth = ASSISTANT_PANEL_MIN_WIDTH
+      } else if (event.key === 'End') {
+        nextWidth = maximumWidth
+      }
+
+      if (nextWidth === undefined) {
+        return
+      }
+
+      event.preventDefault()
+      const clampedWidth = clampAssistantPanelWidth(nextWidth, window.innerWidth, occupiedAssistantSidePaneWidth)
+      setAssistantPanelWidth(clampedWidth)
+      persistAssistantPanelWidth(clampedWidth)
+    },
+    [assistantPanelWidth, occupiedAssistantSidePaneWidth, persistAssistantPanelWidth],
   )
 
   const showPanelResizers = !isTabletOrMobile
@@ -124,9 +205,9 @@ const PanesSystemComponent = () => {
       return list
     }
     const others = list.filter((pane) => pane !== AppPaneId.Constellation)
-    return constellationPosition === 'left'
-      ? [AppPaneId.Constellation, ...others]
-      : [...others, AppPaneId.Constellation]
+    const ordered =
+      constellationPosition === 'left' ? [AppPaneId.Constellation, ...others] : [...others, AppPaneId.Constellation]
+    return dockAssistantPaneToRight(ordered, list.includes(AppPaneId.Assistant))
   }
 
   const [_editorRef, setEditorRef] = useState<HTMLDivElement | null>(null)
@@ -476,8 +557,13 @@ const PanesSystemComponent = () => {
                     role="separator"
                     aria-orientation="vertical"
                     aria-label="Resize assistant panel"
-                    onMouseDown={startAssistantResize}
-                    className="z-panel-resizer absolute top-0 left-0 hidden h-full w-[5px] cursor-col-resize bg-[color:var(--panel-resizer-background-color)] opacity-0 transition-opacity hover:opacity-100 md:block"
+                    aria-valuemin={ASSISTANT_PANEL_MIN_WIDTH}
+                    aria-valuemax={maximumAssistantPanelWidth(window.innerWidth, occupiedAssistantSidePaneWidth)}
+                    aria-valuenow={assistantPanelWidth}
+                    tabIndex={0}
+                    onPointerDown={startAssistantResize}
+                    onKeyDown={onAssistantResizeKeyDown}
+                    className="z-panel-resizer absolute top-0 left-0 hidden h-full w-[7px] touch-none cursor-col-resize bg-[color:var(--panel-resizer-background-color)] opacity-60 transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none md:block"
                   />
                 )}
               </AssistantView>

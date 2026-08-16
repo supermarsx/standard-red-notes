@@ -30,6 +30,11 @@ import { PaneLayout } from './PaneLayout'
 import { IsTabletOrMobileScreen } from '@/Application/UseCase/IsTabletOrMobileScreen'
 import { CommandService } from '../../Components/CommandPalette/CommandService'
 import { TABBABLE_PANES, ViewTab } from './ViewTab'
+import {
+  dockAssistantPaneToRight,
+  insertPaneBeforeDockedAssistant,
+  presentPaneBeforeDockedAssistant,
+} from './assistantPaneLayout'
 
 const MinimumNavPanelWidth = PrefDefaults[PrefKey.TagsPanelWidth]
 const MinimumNotesPanelWidth = PrefDefaults[PrefKey.NotesPanelWidth]
@@ -216,7 +221,15 @@ export class PaneController extends AbstractViewController implements InternalEv
   }
 
   setIsInMobileView = (isInMobileView: boolean) => {
+    const wasInMobileView = this.isInMobileView
     this.isInMobileView = isInMobileView
+
+    // Mobile uses a navigation stack and may legitimately place another pane
+    // after Assistant. As soon as the same controller returns to desktop,
+    // restore the desktop dock invariant instead of waiting for a later action.
+    if (wasInMobileView && !isInMobileView && this.panes.includes(AppPaneId.Assistant)) {
+      this.panes = dockAssistantPaneToRight(this.panes, true)
+    }
   }
 
   setPaneLayout = (layout: PaneLayout) => {
@@ -242,11 +255,16 @@ export class PaneController extends AbstractViewController implements InternalEv
   replacePanes = (panes: AppPaneId[]) => {
     log(LoggingDomain.Panes, 'Replacing panes', panes)
 
-    this.panes = panes
+    this.panes = this.isInMobileView ? panes : dockAssistantPaneToRight(panes, this.panes.includes(AppPaneId.Assistant))
   }
 
   presentPane = (pane: AppPaneId) => {
     log(LoggingDomain.Panes, 'Presenting pane', pane)
+
+    if (!this.isInMobileView && this.panes.includes(AppPaneId.Assistant)) {
+      this.panes = presentPaneBeforeDockedAssistant(this.panes, pane)
+      return
+    }
 
     if (pane === this.currentPane) {
       return
@@ -265,6 +283,11 @@ export class PaneController extends AbstractViewController implements InternalEv
   insertPaneAtIndex = (pane: AppPaneId, index: number) => {
     log(LoggingDomain.Panes, 'Inserting pane', pane, 'at index', index)
 
+    if (!this.isInMobileView && this.panes.includes(AppPaneId.Assistant)) {
+      this.panes = insertPaneBeforeDockedAssistant(this.panes, pane, index)
+      return
+    }
+
     this.panes.splice(index, 0, pane)
   }
 
@@ -277,11 +300,25 @@ export class PaneController extends AbstractViewController implements InternalEv
   removePane = (pane: AppPaneId) => {
     log(LoggingDomain.Panes, 'Removing pane', pane)
 
+    if (pane === AppPaneId.Assistant) {
+      this.panes = this.panes.filter((candidate) => candidate !== AppPaneId.Assistant)
+      return
+    }
+
     removeFromArray(this.panes, pane)
   }
 
   popToPane = (pane: AppPaneId) => {
     log(LoggingDomain.Panes, 'Popping to pane', pane)
+
+    if (!this.isInMobileView && this.panes.includes(AppPaneId.Assistant) && pane !== AppPaneId.Assistant) {
+      const nonAssistantPanes = this.panes.filter((candidate) => candidate !== AppPaneId.Assistant)
+      const paneIndex = nonAssistantPanes.lastIndexOf(pane)
+      if (paneIndex >= 0) {
+        this.panes = [...nonAssistantPanes.slice(0, paneIndex + 1), AppPaneId.Assistant]
+        return
+      }
+    }
 
     let index = this.panes.length - 1
     while (index >= 0) {
