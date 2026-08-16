@@ -6,9 +6,16 @@ import {
   todosForNote,
   totalTodoProgress,
 } from './allTodos'
-import { CHECKLIST_DUE_AT_STATE_KEY, CHECKLIST_TODO_ID_STATE_KEY } from '../SuperEditor/Lexical/Nodes/ChecklistItemNode'
+import {
+  CHECKLIST_DUE_AT_STATE_KEY,
+  CHECKLIST_RECURRENCE_STATE_KEY,
+  CHECKLIST_TODO_ID_STATE_KEY,
+} from '../SuperEditor/Lexical/Nodes/ChecklistItemNode'
+import { createChecklistRecurrence, type ChecklistRecurrence } from '../SuperEditor/Checklist/checklistRecurrence'
 
-const superChecklistJson = (items: { text: string; checked: boolean; todoId?: string; dueAt?: string }[]): string =>
+const superChecklistJson = (
+  items: { text: string; checked: boolean; todoId?: string; dueAt?: string; recurrence?: ChecklistRecurrence }[],
+): string =>
   JSON.stringify({
     root: {
       type: 'root',
@@ -20,6 +27,7 @@ const superChecklistJson = (items: { text: string; checked: boolean; todoId?: st
             const state = {
               ...(item.todoId ? { [CHECKLIST_TODO_ID_STATE_KEY]: item.todoId } : {}),
               ...(item.dueAt ? { [CHECKLIST_DUE_AT_STATE_KEY]: item.dueAt } : {}),
+              ...(item.recurrence ? { [CHECKLIST_RECURRENCE_STATE_KEY]: item.recurrence } : {}),
             }
             return {
               type: 'listitem',
@@ -81,6 +89,7 @@ describe('parseSuperChecklist', () => {
           checked: false,
           todoId: 'todo-ship-it',
           dueAt: '2026-08-12T12:30:00+01:00',
+          recurrence: createChecklistRecurrence('weekly', '2026-08-12T11:30:00.000Z', 'Europe/London'),
         },
       ]),
     )
@@ -88,6 +97,7 @@ describe('parseSuperChecklist', () => {
       id: 'todo-ship-it',
       todoId: 'todo-ship-it',
       dueAt: '2026-08-12T11:30:00.000Z',
+      recurrence: expect.objectContaining({ frequency: 'weekly' }),
     })
   })
 })

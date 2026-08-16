@@ -1,5 +1,6 @@
 import { NoteType, SNNote } from '@standardnotes/snjs'
 import { parseSuperChecklistDocument } from './superChecklistDocument'
+import type { ChecklistRecurrence } from '../SuperEditor/Checklist/checklistRecurrence'
 
 /**
  * Standard Red Notes: cross-note Todo / checklist aggregate collector.
@@ -42,6 +43,8 @@ export type TodoItem = {
   locator?: string
   /** Canonical UTC due instant for Super checklist items. */
   dueAt?: string
+  /** Canonical recurrence rule and wall-time anchor for Super checklist items. */
+  recurrence?: ChecklistRecurrence
 }
 
 /** All todos from one source note, plus progress, for grouped rendering. */

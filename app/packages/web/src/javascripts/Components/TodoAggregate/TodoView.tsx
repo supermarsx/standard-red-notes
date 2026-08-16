@@ -7,13 +7,23 @@ import Icon from '@/Components/Icon/Icon'
 import { AppPaneId } from '../Panes/AppPaneMetadata'
 import { NoteTodos, TodoItem, totalTodoProgress } from './allTodos'
 import { applyTodoPatch, TodoActionResult } from './todoActions'
-import type { SuperChecklistTodoPatch, SuperChecklistTodoTarget } from './superChecklistDocument'
+import { type SuperChecklistTodoPatch, type SuperChecklistTodoTarget } from './superChecklistDocument'
 import { pruneTodoSelection, selectableTodoKey, todoSelectionKey } from './todoSelection'
 import {
   CHECKLIST_DUE_TICK_MS,
-  checklistDueAtFromLocalInput,
+  checklistDueAtToLocalInput,
   formatChecklistDue,
+  resolveChecklistDueAtLocalInput,
 } from '../SuperEditor/Checklist/checklistDueDate'
+import {
+  CHECKLIST_RECURRENCE_MAX_INTERVAL,
+  checklistRecurrenceChoice,
+  checklistRecurrenceSummary,
+  createChecklistRecurrence,
+  type ChecklistRecurrence,
+  type ChecklistRecurrenceChoice,
+  type ChecklistRecurrenceUnit,
+} from '../SuperEditor/Checklist/checklistRecurrence'
 import { canDisplayTodoNote, canMutateSuperChecklistNote, collectAuthorizedTodoGroups } from './todoAuthorization'
 import { createChecklistTodoId } from '../SuperEditor/Lexical/Nodes/ChecklistItemNode'
 import {
@@ -30,7 +40,6 @@ import {
   waitForTodoChecklistEditorOwnerRelease,
 } from './TodoChecklistEditorOwner'
 import type { NoteViewController } from '../NoteView/Controller/NoteViewController'
-import { clearTodoDueDraft, setTodoDueDraft, todoDueInputValue, TodoDueDrafts } from './todoDueDrafts'
 
 type Props = {
   application: WebApplication
@@ -87,6 +96,265 @@ const ProgressBar = ({ completed, total }: { completed: number; total: number })
   )
 }
 
+type TodoScheduleEditorProps = {
+  item: TodoItem
+  target: SuperChecklistTodoTarget
+  busy: boolean
+  onOpen: () => Promise<SuperChecklistTodoTarget | undefined>
+  onSave: (patch: SuperChecklistTodoPatch, expected: SuperChecklistTodoTarget) => Promise<boolean>
+}
+
+function TodoScheduleEditor({ item, target, busy, onOpen, onSave }: TodoScheduleEditorProps) {
+  const persistedChoice = item.recurrence ? checklistRecurrenceChoice(item.recurrence) : undefined
+  const [open, setOpen] = useState(false)
+  const [dueDraft, setDueDraft] = useState(item.dueAt ? checklistDueAtToLocalInput(item.dueAt) : '')
+  const [preset, setPreset] = useState(
+    typeof persistedChoice === 'string' ? persistedChoice : (persistedChoice?.frequency ?? 'none'),
+  )
+  const [interval, setInterval] = useState(typeof persistedChoice === 'object' ? String(persistedChoice.interval) : '1')
+  const [unit, setUnit] = useState<ChecklistRecurrenceUnit>(
+    typeof persistedChoice === 'object' ? persistedChoice.unit : 'day',
+  )
+  const [error, setError] = useState<string>()
+  const [opening, setOpening] = useState(false)
+  const openTarget = useRef<SuperChecklistTodoTarget | undefined>(undefined)
+  const triggerRef = useRef<HTMLButtonElement | null>(null)
+  const dueInputRef = useRef<HTMLInputElement | null>(null)
+
+  const resetDraft = useCallback(
+    (schedule: Pick<TodoItem, 'dueAt' | 'recurrence'> = item) => {
+      const choice = schedule.recurrence ? checklistRecurrenceChoice(schedule.recurrence) : undefined
+      setDueDraft(schedule.dueAt ? checklistDueAtToLocalInput(schedule.dueAt) : '')
+      setPreset(typeof choice === 'string' ? choice : (choice?.frequency ?? 'none'))
+      setInterval(typeof choice === 'object' ? String(choice.interval) : '1')
+      setUnit(typeof choice === 'object' ? choice.unit : 'day')
+      setError(undefined)
+    },
+    [item],
+  )
+
+  useEffect(() => {
+    if (!open) {
+      resetDraft()
+      return
+    }
+    if (target.todoId && openTarget.current?.todoId && target.todoId !== openTarget.current.todoId) {
+      openTarget.current = undefined
+      setOpen(false)
+      setError('This todo moved while its schedule was open. Reopen it to continue.')
+      triggerRef.current?.focus()
+    }
+  }, [open, resetDraft, target.todoId])
+
+  useEffect(() => {
+    if (open) {
+      dueInputRef.current?.focus()
+    }
+  }, [open])
+
+  const recurrenceChoice = (): ChecklistRecurrenceChoice | undefined => {
+    if (preset === 'none') {
+      return undefined
+    }
+    if (preset !== 'custom') {
+      return preset as Exclude<ChecklistRecurrence['frequency'], 'custom'>
+    }
+    const parsedInterval = Number(interval)
+    return Number.isInteger(parsedInterval) &&
+      parsedInterval >= 1 &&
+      parsedInterval <= CHECKLIST_RECURRENCE_MAX_INTERVAL
+      ? { frequency: 'custom', interval: parsedInterval, unit }
+      : undefined
+  }
+
+  const save = async () => {
+    const expected = openTarget.current
+    if (!expected) {
+      setError('Close and reopen the schedule editor before saving.')
+      return
+    }
+    const dueAt = resolveChecklistDueAtLocalInput(dueDraft, expected.dueAt)
+    if (!dueAt) {
+      setError('Choose a valid due date and time.')
+      return
+    }
+    const choice = recurrenceChoice()
+    if (preset !== 'none' && !choice) {
+      setError(`Enter an interval from 1 to ${CHECKLIST_RECURRENCE_MAX_INTERVAL}.`)
+      return
+    }
+    const recurrence = choice
+      ? createChecklistRecurrence(choice, dueAt, expected.recurrence?.anchor.timeZone)
+      : undefined
+    if (choice && !recurrence) {
+      setError('This recurrence could not be created in the current time zone.')
+      return
+    }
+    setError(undefined)
+    if (await onSave({ dueAt, recurrence: recurrence ?? null }, expected)) {
+      openTarget.current = undefined
+      setOpen(false)
+      triggerRef.current?.focus()
+    } else {
+      setError('The schedule was not saved. Review the error above, then cancel and reopen before retrying.')
+    }
+  }
+
+  const clear = async () => {
+    setError(undefined)
+    const expected = openTarget.current
+    if (!expected) {
+      setError('Close and reopen the schedule editor before clearing.')
+      return
+    }
+    if (await onSave({ dueAt: null, recurrence: null }, expected)) {
+      openTarget.current = undefined
+      setOpen(false)
+      triggerRef.current?.focus()
+    } else {
+      setError('The schedule was not cleared. Review the error above, then cancel and reopen before retrying.')
+    }
+  }
+
+  const beginEditing = async () => {
+    if (open) {
+      openTarget.current = undefined
+      setOpen(false)
+      return
+    }
+    setOpening(true)
+    setError(undefined)
+    try {
+      const durableTarget = await onOpen()
+      if (!durableTarget?.todoId) {
+        return
+      }
+      openTarget.current = durableTarget
+      resetDraft(durableTarget)
+      setOpen(true)
+    } finally {
+      setOpening(false)
+    }
+  }
+
+  return (
+    <div className="mt-1">
+      <button
+        ref={triggerRef}
+        type="button"
+        className="border-border hover:bg-contrast rounded border px-1.5 py-0.5 text-xs disabled:opacity-50"
+        disabled={busy || opening}
+        aria-busy={opening}
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        onClick={() => void beginEditing()}
+      >
+        {opening ? 'Preparing schedule…' : item.dueAt ? 'Edit schedule' : 'Add schedule'}
+      </button>
+      {open && (
+        <div
+          className="border-border bg-contrast mt-1 flex max-w-xl flex-wrap items-end gap-2 rounded border p-2"
+          role="dialog"
+          aria-modal="false"
+          aria-label={`Schedule for ${item.text}`}
+        >
+          <label className="text-passive-1 flex flex-col gap-0.5 text-xs">
+            Due
+            <input
+              ref={dueInputRef}
+              type="datetime-local"
+              className="border-border bg-default text-text max-w-full rounded border px-1.5 py-0.5 text-xs"
+              value={dueDraft}
+              disabled={busy}
+              onChange={(event) => setDueDraft(event.currentTarget.value)}
+            />
+          </label>
+          <label className="text-passive-1 flex flex-col gap-0.5 text-xs">
+            Repeat
+            <select
+              className="border-border bg-default text-text rounded border px-1.5 py-0.5 text-xs"
+              value={preset}
+              disabled={busy}
+              onChange={(event) => setPreset(event.currentTarget.value)}
+            >
+              <option value="none">Never</option>
+              <option value="daily">Daily</option>
+              <option value="weekdays">Weekdays</option>
+              <option value="weekly">Weekly</option>
+              <option value="monthly">Monthly</option>
+              <option value="yearly">Yearly</option>
+              <option value="custom">Custom interval</option>
+            </select>
+          </label>
+          {preset === 'custom' && (
+            <label className="text-passive-1 flex flex-col gap-0.5 text-xs">
+              Every
+              <span className="flex gap-1">
+                <input
+                  type="number"
+                  min={1}
+                  max={CHECKLIST_RECURRENCE_MAX_INTERVAL}
+                  className="border-border bg-default text-text w-16 rounded border px-1.5 py-0.5 text-xs"
+                  value={interval}
+                  disabled={busy}
+                  onChange={(event) => setInterval(event.currentTarget.value)}
+                />
+                <select
+                  className="border-border bg-default text-text rounded border px-1.5 py-0.5 text-xs"
+                  value={unit}
+                  disabled={busy}
+                  onChange={(event) => setUnit(event.currentTarget.value as ChecklistRecurrenceUnit)}
+                >
+                  <option value="day">days</option>
+                  <option value="week">weeks</option>
+                  <option value="month">months</option>
+                  <option value="year">years</option>
+                </select>
+              </span>
+            </label>
+          )}
+          <button
+            type="button"
+            className="bg-info text-info-contrast rounded px-2 py-1 text-xs"
+            disabled={busy}
+            onClick={() => void save()}
+          >
+            Save
+          </button>
+          <button
+            type="button"
+            className="border-border rounded border px-2 py-1 text-xs"
+            disabled={busy}
+            onClick={() => {
+              resetDraft()
+              openTarget.current = undefined
+              setOpen(false)
+              triggerRef.current?.focus()
+            }}
+          >
+            Cancel
+          </button>
+          {item.dueAt && (
+            <button
+              type="button"
+              className="text-danger px-1 py-1 text-xs hover:underline"
+              disabled={busy}
+              onClick={() => void clear()}
+            >
+              Clear schedule
+            </button>
+          )}
+          {error && (
+            <span className="text-danger basis-full text-xs" role="alert">
+              {error}
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function todoTarget(item: TodoItem): SuperChecklistTodoTarget | undefined {
   if (!item.locator) {
     return undefined
@@ -96,6 +364,8 @@ function todoTarget(item: TodoItem): SuperChecklistTodoTarget | undefined {
     locator: item.locator,
     text: item.text,
     checked: item.checked,
+    dueAt: item.dueAt,
+    recurrence: item.recurrence,
   }
 }
 
@@ -117,7 +387,6 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
   const [busyKeys, setBusyKeys] = useState<Set<string>>(() => new Set())
   const [bulkBusy, setBulkBusy] = useState(false)
   const [actionError, setActionError] = useState<string>()
-  const [dueDrafts, setDueDrafts] = useState<TodoDueDrafts>(() => new Map())
   const [now, setNow] = useState(Date.now)
   const lifetimeRef = useRef<TodoViewLifetime>({ application, generation: 0, dataReady: true })
   const actionQueue = useRef<Promise<void>>(Promise.resolve())
@@ -473,7 +742,6 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
       setBusyKeys(new Set())
       setBulkBusy(false)
       setActionError(undefined)
-      setDueDrafts(new Map())
     }
 
     const removeItemObserver = application.items.streamItems([ContentType.TYPES.Note], scheduleRecompute)
@@ -645,10 +913,54 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
     })
   }, [application, clearOwnedControllerState, enqueueNoteAction])
 
-  const applyOne = useCallback(
-    async (group: NoteTodos, item: TodoItem, patch: SuperChecklistTodoPatch) => {
+  const prepareSchedule = useCallback(
+    async (group: NoteTodos, item: TodoItem): Promise<SuperChecklistTodoTarget | undefined> => {
       const lifetimeToken = captureLifetime(lifetimeRef.current)
       const target = todoTarget(item)
+      if (!target || !canManageGroup(application, group)) {
+        setActionError('Open the source note to manage this todo.')
+        return undefined
+      }
+      if (target.todoId) {
+        return target
+      }
+
+      const busyKey = `${group.note.uuid}:${item.id}`
+      setBusyKeys((current) => new Set(current).add(busyKey))
+      setActionError(undefined)
+      try {
+        const result = await enqueueNoteAction(() => runThroughOwner(group.note.uuid, target, {}, lifetimeToken))
+        if (!lifetimeIsCurrent(lifetimeRef.current, lifetimeToken)) {
+          return undefined
+        }
+        if (!result.ok || !result.todoId) {
+          setActionError(result.ok ? 'The todo identity could not be saved.' : result.reason)
+          return undefined
+        }
+        recompute()
+        return { ...target, todoId: result.todoId }
+      } finally {
+        if (lifetimeIsCurrent(lifetimeRef.current, lifetimeToken)) {
+          setBusyKeys((current) => {
+            const next = new Set(current)
+            next.delete(busyKey)
+            return next
+          })
+        }
+      }
+    },
+    [application, enqueueNoteAction, recompute, runThroughOwner],
+  )
+
+  const applyOne = useCallback(
+    async (
+      group: NoteTodos,
+      item: TodoItem,
+      patch: SuperChecklistTodoPatch,
+      expectedTarget?: SuperChecklistTodoTarget,
+    ) => {
+      const lifetimeToken = captureLifetime(lifetimeRef.current)
+      const target = expectedTarget ?? todoTarget(item)
       if (!target || !canManageGroup(application, group)) {
         setActionError('Open the source note to manage this todo.')
         return false
@@ -656,7 +968,6 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
       const busyKey = selectableTodoKey(group, item) ?? `${group.note.uuid}:${item.id}`
       setBusyKeys((current) => new Set(current).add(busyKey))
       setActionError(undefined)
-      setDueDrafts(new Map())
       try {
         const result = await enqueueNoteAction(() => runThroughOwner(group.note.uuid, target, patch, lifetimeToken))
         if (!lifetimeIsCurrent(lifetimeRef.current, lifetimeToken)) {
@@ -819,9 +1130,9 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
             type="button"
             className="border-border hover:bg-default rounded border px-2 py-1 text-xs"
             disabled={bulkBusy}
-            onClick={() => void applyBulk({ dueAt: null })}
+            onClick={() => void applyBulk({ dueAt: null, recurrence: null })}
           >
-            Clear dates
+            Clear schedules
           </button>
           <button
             type="button"
@@ -876,8 +1187,10 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
                       const busyKey = selectionKey ?? `${group.note.uuid}:${item.id}`
                       const busy = bulkBusy || busyKeys.has(busyKey)
                       const due = item.dueAt ? formatChecklistDue(item.dueAt, item.checked, now) : undefined
+                      const recurrence = item.recurrence ? checklistRecurrenceSummary(item.recurrence, true) : undefined
+                      const scheduleTarget = manageable ? todoTarget(item) : undefined
                       return (
-                        <li key={item.id} className="flex items-start gap-2 py-2">
+                        <li key={item.locator ?? item.id} className="flex items-start gap-2 py-2">
                           {manageable ? (
                             <input
                               type="checkbox"
@@ -932,46 +1245,17 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
                                 title={due.accessibleLabel}
                               >
                                 Due {due.dateLabel} · {due.relativeLabel}
+                                {recurrence ? ` · ${recurrence}` : ''}
                               </div>
                             )}
-                            {manageable && (
-                              <div className="mt-1 flex flex-wrap items-center gap-1">
-                                <input
-                                  type="datetime-local"
-                                  className="border-border bg-contrast text-text max-w-full rounded border px-1.5 py-0.5 text-xs"
-                                  value={todoDueInputValue(dueDrafts, busyKey, item.dueAt)}
-                                  disabled={busy}
-                                  aria-busy={dueDrafts.has(busyKey)}
-                                  aria-label={`Due date and time for ${item.text}`}
-                                  onChange={(event) => {
-                                    const value = event.currentTarget.value
-                                    const dueAt = value ? checklistDueAtFromLocalInput(value) : undefined
-                                    if (value && !dueAt) {
-                                      setActionError('Choose a valid due date and time.')
-                                      return
-                                    }
-                                    setDueDrafts((current) => setTodoDueDraft(current, busyKey, value))
-                                    void applyOne(group, item, { dueAt: dueAt ?? null }).finally(() => {
-                                      setDueDrafts((current) => clearTodoDueDraft(current, busyKey))
-                                    })
-                                  }}
-                                />
-                                {dueDrafts.has(busyKey) && (
-                                  <span className="text-passive-1 text-xs" role="status">
-                                    Saving date…
-                                  </span>
-                                )}
-                                {item.dueAt && (
-                                  <button
-                                    type="button"
-                                    className="text-danger px-1 text-xs hover:underline disabled:opacity-50"
-                                    disabled={busy}
-                                    onClick={() => void applyOne(group, item, { dueAt: null })}
-                                  >
-                                    Clear date
-                                  </button>
-                                )}
-                              </div>
+                            {manageable && scheduleTarget && (
+                              <TodoScheduleEditor
+                                item={item}
+                                target={scheduleTarget}
+                                busy={busy}
+                                onOpen={() => prepareSchedule(group, item)}
+                                onSave={(patch, expectedTarget) => applyOne(group, item, patch, expectedTarget)}
+                              />
                             )}
                             {!manageable && group.source === 'advanced-checklist' && (
                               <span className="text-passive-1 mt-1 block text-xs">

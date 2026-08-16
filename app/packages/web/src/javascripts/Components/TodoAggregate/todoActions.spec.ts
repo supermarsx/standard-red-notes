@@ -22,6 +22,28 @@ describe('Todo aggregate mutation routing', () => {
     dispose()
   })
 
+  it('persists a durable identity before an empty legacy-row preparation action completes', async () => {
+    const application = {} as never
+    const legacyTarget = { locator: '0.0', text: 'Legacy', checked: false }
+    const handler = jest.fn(({ patch }: { patch: { ensureTodoId?: string } }) => ({
+      status: 'updated' as const,
+      todoId: patch.ensureTodoId,
+      changed: true,
+    }))
+    const dispose = registerChecklistMutationBridge(application, 'note-legacy', 'owner-legacy', handler)
+
+    await expect(applyTodoPatch(application, 'note-legacy', 'owner-legacy', legacyTarget, {})).resolves.toEqual({
+      ok: true,
+      todoId: expect.stringMatching(/^todo-/),
+      changed: true,
+    })
+    expect(handler).toHaveBeenCalledWith({
+      target: legacyTarget,
+      patch: { ensureTodoId: expect.stringMatching(/^todo-/) },
+    })
+    dispose()
+  })
+
   it('never rewrites inactive note JSON outside its Lexical/Yjs owner', async () => {
     const application = {
       mutator: { changeItem: jest.fn() },
