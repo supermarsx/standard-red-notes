@@ -5,18 +5,47 @@ import {
   $isChecklistItemNode,
   $getChecklistItemText,
   $getChecklistDueAt,
+  $getChecklistRecurrence,
   $getChecklistTodoId,
   $normalizeChecklistItemMetadata,
-  $setChecklistDueAt,
+  $setChecklistSchedule,
   $setChecklistTodoId,
   normalizeChecklistTodoId,
 } from '../Lexical/Nodes/ChecklistItemNode'
 import { normalizeChecklistDueAt } from './checklistDueDate'
+import {
+  advanceChecklistDueAt,
+  checklistRecurrenceChoice,
+  checklistRecurrencesEqual,
+  createChecklistRecurrence,
+  normalizeChecklistRecurrence,
+} from './checklistRecurrence'
 
 export type ChecklistEditorMutationResult = {
   matched: boolean
   changed: boolean
   todoId?: string
+}
+
+export type ChecklistScheduleSnapshot = {
+  dueAt?: string
+  recurrence?: ReturnType<typeof normalizeChecklistRecurrence>
+}
+
+export const CHECKLIST_COMPLETION_THROTTLE_MS = 750
+
+/** Suppress one physical double-click/key-repeat from consuming two occurrences. */
+export function canAttemptRecurringChecklistCompletion(
+  previousAttemptAt: number | undefined,
+  attemptedAt: number,
+  throttleMs = CHECKLIST_COMPLETION_THROTTLE_MS,
+  repeatedKeyboardEvent = false,
+): boolean {
+  return (
+    !repeatedKeyboardEvent &&
+    Number.isFinite(attemptedAt) &&
+    (!Number.isFinite(previousAttemptAt) || attemptedAt - (previousAttemptAt as number) >= throttleMs)
+  )
 }
 
 function $nodeLocator(node: LexicalNode): string {
@@ -27,6 +56,45 @@ function $nodeLocator(node: LexicalNode): string {
     current = current.getParent()
   }
   return path.reverse().join('.')
+}
+
+export function $getChecklistScheduleSnapshot(item: ListItemNode): ChecklistScheduleSnapshot {
+  return {
+    dueAt: $getChecklistDueAt(item),
+    recurrence: $getChecklistRecurrence(item),
+  }
+}
+
+/** Compare-and-set used by an open inline schedule draft against live Yjs state. */
+export function $setChecklistItemScheduleIfCurrent(
+  item: ListItemNode,
+  expected: ChecklistScheduleSnapshot,
+  dueAt: string | undefined,
+  recurrence: unknown,
+): ChecklistEditorMutationResult {
+  const normalizedDueAt = dueAt === undefined ? undefined : normalizeChecklistDueAt(dueAt)
+  const normalizedRecurrence = normalizeChecklistRecurrence(recurrence)
+  if ((dueAt !== undefined && !normalizedDueAt) || (recurrence !== undefined && !normalizedRecurrence)) {
+    return { matched: false, changed: false }
+  }
+  if (normalizedRecurrence && !normalizedDueAt) {
+    return { matched: false, changed: false }
+  }
+  if (
+    normalizeChecklistDueAt(expected.dueAt) !== $getChecklistDueAt(item) ||
+    !checklistRecurrencesEqual(normalizeChecklistRecurrence(expected.recurrence), $getChecklistRecurrence(item))
+  ) {
+    return { matched: false, changed: false }
+  }
+
+  const changed =
+    $getChecklistDueAt(item) !== normalizedDueAt ||
+    !checklistRecurrencesEqual($getChecklistRecurrence(item), normalizedRecurrence) ||
+    Boolean(normalizedRecurrence && item.getChecked())
+  if (changed) {
+    $setChecklistSchedule(item, normalizedDueAt, normalizedRecurrence)
+  }
+  return { matched: true, changed, todoId: $getChecklistTodoId(item) }
 }
 
 export function $getChecklistItems(): ListItemNode[] {
@@ -50,10 +118,53 @@ export function $getChecklistItems(): ListItemNode[] {
   return items
 }
 
+/**
+ * Apply a checkbox state without cloning recurring rows. Completing a recurring
+ * item advances the same row to its next due occurrence and leaves it open;
+ * reopening an ordinary/terminal item never rewinds its schedule.
+ */
+export function $setChecklistItemChecked(item: ListItemNode, checked: boolean, now = Date.now()): boolean {
+  const wasChecked = Boolean(item.getChecked())
+  if (!checked) {
+    if (wasChecked) {
+      item.setChecked(false)
+      return true
+    }
+    return false
+  }
+
+  const dueAt = $getChecklistDueAt(item)
+  const recurrence = $getChecklistRecurrence(item)
+  if (dueAt && recurrence) {
+    const nextDueAt = advanceChecklistDueAt(dueAt, recurrence, now)
+    if (nextDueAt) {
+      $setChecklistSchedule(item, nextDueAt, recurrence)
+      if (wasChecked) {
+        item.setChecked(false)
+      }
+      return true
+    }
+    // A schedule at the supported calendar ceiling has no next occurrence.
+    // Complete it normally and remove the exhausted recurrence contract.
+    $setChecklistSchedule(item, dueAt, undefined)
+  }
+
+  if (!wasChecked) {
+    item.setChecked(true)
+    return true
+  }
+  return recurrence !== undefined && dueAt !== undefined
+}
+
+export function $toggleChecklistItemChecked(item: ListItemNode, now = Date.now()): boolean {
+  return $setChecklistItemChecked(item, !item.getChecked(), now)
+}
+
 /** Apply a mutation inside the active Lexical/Yjs owner, failing closed on ambiguity. */
 export function $applyChecklistEditorMutation(
   target: SuperChecklistTodoTarget,
   patch: SuperChecklistTodoPatch,
+  now = Date.now(),
 ): ChecklistEditorMutationResult {
   const ensuredTodoId = patch.ensureTodoId === undefined ? undefined : normalizeChecklistTodoId(patch.ensureTodoId)
   if (patch.ensureTodoId !== undefined && !ensuredTodoId) {
@@ -61,6 +172,13 @@ export function $applyChecklistEditorMutation(
   }
   const normalizedDueAt = typeof patch.dueAt === 'string' ? normalizeChecklistDueAt(patch.dueAt) : undefined
   if (typeof patch.dueAt === 'string' && !normalizedDueAt) {
+    return { matched: false, changed: false }
+  }
+  const normalizedRecurrence =
+    patch.recurrence && typeof patch.recurrence === 'object'
+      ? normalizeChecklistRecurrence(patch.recurrence)
+      : undefined
+  if (patch.recurrence !== undefined && patch.recurrence !== null && !normalizedRecurrence) {
     return { matched: false, changed: false }
   }
 
@@ -71,13 +189,58 @@ export function $applyChecklistEditorMutation(
         (item) =>
           $nodeLocator(item) === target.locator &&
           $getChecklistItemText(item) === target.text &&
-          Boolean(item.getChecked()) === target.checked,
+          Boolean(item.getChecked()) === target.checked &&
+          $getChecklistDueAt(item) === normalizeChecklistDueAt(target.dueAt) &&
+          checklistRecurrencesEqual($getChecklistRecurrence(item), normalizeChecklistRecurrence(target.recurrence)),
       )
   if (matches.length !== 1) {
     return { matched: false, changed: false }
   }
 
   const item = matches[0]
+  const liveDueAt = $getChecklistDueAt(item)
+  const liveRecurrence = $getChecklistRecurrence(item)
+  const effectiveDueAt = patch.dueAt === undefined ? liveDueAt : patch.dueAt === null ? undefined : normalizedDueAt
+  let implicitlyReanchoredRecurrence: typeof liveRecurrence
+  if (
+    patch.dueAt !== undefined &&
+    patch.dueAt !== null &&
+    normalizedDueAt &&
+    patch.recurrence === undefined &&
+    liveRecurrence &&
+    normalizedDueAt !== liveDueAt
+  ) {
+    const choice = checklistRecurrenceChoice(liveRecurrence)
+    implicitlyReanchoredRecurrence = choice
+      ? createChecklistRecurrence(choice, normalizedDueAt, liveRecurrence.anchor.timeZone)
+      : undefined
+    if (!implicitlyReanchoredRecurrence) {
+      return { matched: false, changed: false }
+    }
+  }
+  const effectiveRecurrence =
+    patch.dueAt === null && patch.recurrence === undefined
+      ? undefined
+      : patch.recurrence === undefined
+        ? (implicitlyReanchoredRecurrence ?? liveRecurrence)
+        : patch.recurrence === null
+          ? undefined
+          : normalizedRecurrence
+  if (effectiveRecurrence && !effectiveDueAt) {
+    return { matched: false, changed: false }
+  }
+  const scheduleChangedSinceTarget =
+    normalizeChecklistDueAt(target.dueAt) !== liveDueAt ||
+    !checklistRecurrencesEqual(normalizeChecklistRecurrence(target.recurrence), liveRecurrence)
+  if (
+    scheduleChangedSinceTarget &&
+    (patch.dueAt !== undefined || patch.recurrence !== undefined || (patch.checked === true && effectiveRecurrence))
+  ) {
+    // The due instant and rule identify one recurring occurrence. A stale
+    // completion must not advance a fresh occurrence, and a schedule editor
+    // must not overwrite a newer local/remote schedule.
+    return { matched: false, changed: false }
+  }
   const liveTodoId = $getChecklistTodoId(item)
   if (liveTodoId && items.some((candidate) => candidate !== item && $getChecklistTodoId(candidate) === liveTodoId)) {
     // A normalized identity must itself be unique before a stale legacy row can
@@ -104,17 +267,18 @@ export function $applyChecklistEditorMutation(
   }
   changed = $normalizeChecklistItemMetadata() > 0 || changed
 
-  if (patch.checked !== undefined && Boolean(item.getChecked()) !== patch.checked) {
-    item.setChecked(patch.checked)
+  if (
+    (patch.dueAt !== undefined || patch.recurrence !== undefined || implicitlyReanchoredRecurrence) &&
+    (liveDueAt !== effectiveDueAt ||
+      !checklistRecurrencesEqual(liveRecurrence, effectiveRecurrence) ||
+      Boolean(effectiveRecurrence && item.getChecked()))
+  ) {
+    $setChecklistSchedule(item, effectiveDueAt, effectiveRecurrence)
     changed = true
   }
 
-  if (patch.dueAt !== undefined) {
-    const dueAt = patch.dueAt === null ? undefined : normalizedDueAt
-    if ($getChecklistDueAt(item) !== dueAt) {
-      $setChecklistDueAt(item, dueAt)
-      changed = true
-    }
+  if (patch.checked !== undefined) {
+    changed = $setChecklistItemChecked(item, patch.checked, now) || changed
   }
 
   return { matched: true, changed, todoId: $getChecklistTodoId(item) }

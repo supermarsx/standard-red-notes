@@ -3,6 +3,9 @@ const HOUR_MS = 60 * MINUTE_MS
 const DAY_MS = 24 * HOUR_MS
 
 export const CHECKLIST_DUE_TICK_MS = MINUTE_MS
+export const CHECKLIST_DUE_FORMATTER_CACHE_SIZE = 16
+
+const dueFormatterCache = new Map<string, Intl.DateTimeFormat>()
 
 export type ChecklistDueState = 'completed' | 'overdue' | 'due-soon' | 'upcoming'
 
@@ -61,7 +64,11 @@ export function normalizeChecklistDueAt(value: unknown): string | undefined {
   return date.toISOString()
 }
 
-/** Convert a browser `datetime-local` value into a canonical UTC instant. */
+/**
+ * Convert a browser `datetime-local` value into a canonical UTC instant.
+ * Repeated autumn wall times use ECMAScript's earlier-fold disambiguation;
+ * skipped spring wall times fail the round-trip check below.
+ */
 export function checklistDueAtFromLocalInput(value: string): string | undefined {
   const match = LOCAL_DATE_TIME.exec(value)
   if (!match) {
@@ -104,6 +111,19 @@ export function checklistDueAtToLocalInput(value: string): string {
   return `${date.getFullYear()}-${part(date.getMonth() + 1)}-${part(date.getDate())}T${part(date.getHours())}:${part(date.getMinutes())}`
 }
 
+/** Preserve the exact instant (including fold offset and sub-minute precision) when an editor draft is unchanged. */
+export function resolveChecklistDueAtLocalInput(
+  value: string,
+  expectedValue?: string,
+  expectedLocalValue?: string,
+): string | undefined {
+  const expected = normalizeChecklistDueAt(expectedValue)
+  if (expected && (expectedLocalValue ?? checklistDueAtToLocalInput(expected)) === value) {
+    return expected
+  }
+  return checklistDueAtFromLocalInput(value)
+}
+
 function compactDuration(milliseconds: number): string {
   const absolute = Math.max(0, milliseconds)
   const totalMinutes = Math.ceil(absolute / MINUTE_MS)
@@ -124,6 +144,28 @@ function compactDuration(milliseconds: number): string {
   return `${minutes}m`
 }
 
+function checklistDueFormatter(locale?: string): Intl.DateTimeFormat {
+  const key = locale ?? ''
+  const cached = dueFormatterCache.get(key)
+  if (cached) {
+    dueFormatterCache.delete(key)
+    dueFormatterCache.set(key, cached)
+    return cached
+  }
+  const formatter = new Intl.DateTimeFormat(locale, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  })
+  if (dueFormatterCache.size >= CHECKLIST_DUE_FORMATTER_CACHE_SIZE) {
+    const oldest = dueFormatterCache.keys().next()
+    if (!oldest.done) {
+      dueFormatterCache.delete(oldest.value)
+    }
+  }
+  dueFormatterCache.set(key, formatter)
+  return formatter
+}
+
 export function formatChecklistDue(
   value: string,
   checked: boolean,
@@ -137,10 +179,7 @@ export function formatChecklistDue(
 
   const dueTimestamp = Date.parse(dueAt)
   const delta = dueTimestamp - now
-  const dateLabel = new Intl.DateTimeFormat(locale, {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  }).format(new Date(dueTimestamp))
+  const dateLabel = checklistDueFormatter(locale).format(new Date(dueTimestamp))
 
   let state: ChecklistDueState
   let relativeLabel: string

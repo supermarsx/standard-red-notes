@@ -1,4 +1,5 @@
 import {
+  CHECKLIST_DUE_FORMATTER_CACHE_SIZE,
   checklistDueAtFromLocalInput,
   checklistDueAtToLocalInput,
   checklistDueExportText,
@@ -53,6 +54,46 @@ describe('checklist due dates', () => {
     expect(formatChecklistDue('2026-08-11T11:00:00.000Z', false, now, 'en-GB')?.relativeLabel).toBe('Overdue by 1h')
     expect(formatChecklistDue('2026-08-10T11:00:00.000Z', true, now, 'en-GB')?.state).toBe('completed')
     expect(formatChecklistDue('2026-08-10T11:00:00.000Z', true, now, 'en-GB')?.relativeLabel).toBe('Completed')
+  })
+
+  it('reuses row formatters and bounds explicit-locale formatter memory', () => {
+    const constructor = jest.spyOn(Intl, 'DateTimeFormat')
+    try {
+      const beforeDefaultRows = constructor.mock.calls.length
+      for (let index = 0; index < 100; index += 1) {
+        expect(formatChecklistDue('2026-08-13T14:00:00.000Z', false, now)).toBeDefined()
+      }
+      expect(constructor.mock.calls.length - beforeDefaultRows).toBe(1)
+
+      const locales = [
+        'en-US',
+        'fr-FR',
+        'de-DE',
+        'es-ES',
+        'pt-PT',
+        'it-IT',
+        'nl-NL',
+        'sv-SE',
+        'da-DK',
+        'fi-FI',
+        'pl-PL',
+        'cs-CZ',
+        'ja-JP',
+        'ko-KR',
+        'zh-CN',
+        'ar-EG',
+        'he-IL',
+      ]
+      expect(locales.length).toBeGreaterThan(CHECKLIST_DUE_FORMATTER_CACHE_SIZE)
+      for (const locale of locales) {
+        expect(formatChecklistDue('2026-08-13T14:00:00.000Z', false, now, locale)).toBeDefined()
+      }
+      const afterFill = constructor.mock.calls.length
+      expect(formatChecklistDue('2026-08-13T14:00:00.000Z', false, now, 'en-US')).toBeDefined()
+      expect(constructor.mock.calls.length - afterFill).toBe(1)
+    } finally {
+      constructor.mockRestore()
+    }
   })
 
   it('includes the canonical UTC instant in portable text alongside the localized label', () => {

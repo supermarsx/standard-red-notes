@@ -27,15 +27,29 @@ import {
   CHECKLIST_DUE_ACTION_ATTR,
   CHECKLIST_DUE_INPUT_ATTR,
   CHECKLIST_DUE_SHELL_ATTR,
+  CHECKLIST_RECURRENCE_PRESET_ATTR,
+  readChecklistScheduleControl,
   removeChecklistDueShell,
+  setChecklistSchedulePanelOpen,
+  setChecklistScheduleStatus,
   syncChecklistDueShell,
+  syncChecklistRecurrenceCustomVisibility,
 } from '../Checklist/ChecklistDueControls'
+import { CHECKLIST_DUE_TICK_MS, normalizeChecklistDueAt } from '../Checklist/checklistDueDate'
 import {
-  CHECKLIST_DUE_TICK_MS,
-  checklistDueAtFromLocalInput,
-  normalizeChecklistDueAt,
-} from '../Checklist/checklistDueDate'
-import { $applyChecklistEditorMutation, $getChecklistItems } from '../Checklist/ChecklistEditorMutations'
+  createChecklistRecurrence,
+  normalizeChecklistRecurrence,
+  type ChecklistRecurrence,
+} from '../Checklist/checklistRecurrence'
+import {
+  $applyChecklistEditorMutation,
+  $getChecklistScheduleSnapshot,
+  $getChecklistItems,
+  $setChecklistItemScheduleIfCurrent,
+  $toggleChecklistItemChecked,
+  canAttemptRecurringChecklistCompletion,
+  type ChecklistScheduleSnapshot,
+} from '../Checklist/ChecklistEditorMutations'
 import {
   ChecklistEditorRole,
   isChecklistMutationDurabilityReady,
@@ -44,12 +58,13 @@ import {
   registerChecklistMutationBridge,
 } from '../Checklist/ChecklistMutationBridge'
 import {
+  $activateChecklistRecurringSchedule,
   $ensureChecklistTodoId,
   $getChecklistDueAt,
+  $getChecklistRecurrence,
   $getChecklistTodoId,
   $isChecklistItemNode,
   $normalizeChecklistItemMetadata,
-  $setChecklistDueAt,
 } from '../Lexical/Nodes/ChecklistItemNode'
 import {
   matchesNoteEncryptionIdentity,
@@ -89,6 +104,10 @@ export function CheckListPlugin({
   const [editor] = useLexicalComposerContext()
 
   useEffect(() => {
+    let disposed = false
+    let recurringActivationQueued = false
+    const pendingRecurringActivationKeys = new Set<string>()
+
     const normalizeIfEditable = () => {
       if (!editor.isEditable()) {
         return
@@ -105,12 +124,65 @@ export function CheckListPlugin({
       }
     }
 
+    const flushPendingRecurringActivations = () => {
+      recurringActivationQueued = false
+      if (disposed || !editor.isEditable() || pendingRecurringActivationKeys.size === 0) {
+        pendingRecurringActivationKeys.clear()
+        return
+      }
+      const keys = [...pendingRecurringActivationKeys]
+      pendingRecurringActivationKeys.clear()
+      let changed = false
+      editor.update(
+        () => {
+          for (const key of keys) {
+            const item = $getNodeByKey<ListItemNode>(key)
+            if ($isChecklistItemNode(item)) {
+              changed = $activateChecklistRecurringSchedule(item) || changed
+            }
+          }
+        },
+        { discrete: true },
+      )
+      if (changed) {
+        flushChanges?.()
+      }
+    }
+
+    const queueDirtyRecurringActivations = (
+      editorState: Parameters<Parameters<typeof editor.registerUpdateListener>[0]>[0]['editorState'],
+      dirtyElements: Parameters<Parameters<typeof editor.registerUpdateListener>[0]>[0]['dirtyElements'],
+    ) => {
+      editorState.read(() => {
+        for (const key of dirtyElements.keys()) {
+          const item = $getNodeByKey<ListItemNode>(key)
+          if ($isChecklistItemNode(item) && item.getChecked() && $getChecklistRecurrence(item)) {
+            pendingRecurringActivationKeys.add(key)
+          }
+        }
+      })
+      if (pendingRecurringActivationKeys.size > 0 && !recurringActivationQueued) {
+        recurringActivationQueued = true
+        queueMicrotask(flushPendingRecurringActivations)
+      }
+    }
+
     normalizeIfEditable()
 
     return mergeRegister(
+      () => {
+        disposed = true
+        pendingRecurringActivationKeys.clear()
+      },
+      editor.registerUpdateListener(({ editorState, dirtyElements }) =>
+        queueDirtyRecurringActivations(editorState, dirtyElements),
+      ),
       editor.registerNodeTransform(ListItemNode, (item) => {
-        if (editor.isEditable() && $isChecklistItemNode(item) && !$getChecklistTodoId(item)) {
-          $ensureChecklistTodoId(item)
+        if (editor.isEditable() && $isChecklistItemNode(item)) {
+          if (!$getChecklistTodoId(item)) {
+            $ensureChecklistTodoId(item)
+          }
+          $activateChecklistRecurringSchedule(item)
         }
       }),
       editor.registerNodeTransform(ListNode, (list) => {
@@ -120,6 +192,9 @@ export function CheckListPlugin({
         for (const child of list.getChildren()) {
           if ($isChecklistItemNode(child) && !$getChecklistTodoId(child)) {
             $ensureChecklistTodoId(child)
+          }
+          if ($isChecklistItemNode(child)) {
+            $activateChecklistRecurringSchedule(child)
           }
         }
       }),
@@ -183,6 +258,9 @@ export function CheckListPlugin({
         if (typeof patch.dueAt === 'string' && !normalizeChecklistDueAt(patch.dueAt)) {
           return { status: 'rejected', reason: 'Choose a valid due date and time.' }
         }
+        if (patch.recurrence && !normalizeChecklistRecurrence(patch.recurrence)) {
+          return { status: 'rejected', reason: 'Choose a valid recurrence.' }
+        }
 
         let result: ReturnType<typeof $applyChecklistEditorMutation> = { matched: false, changed: false }
         editor.update(
@@ -234,6 +312,8 @@ export function CheckListPlugin({
   ])
 
   useEffect(() => {
+    const openScheduleSnapshots = new WeakMap<HTMLElement, ChecklistScheduleSnapshot>()
+
     const refreshDueControls = (dirtyEntries?: Iterable<[string, boolean]>) => {
       const liveElements = new Set<HTMLElement>()
       editor.getEditorState().read(() => {
@@ -268,7 +348,13 @@ export function CheckListPlugin({
             continue
           }
           liveElements.add(element)
-          syncChecklistDueShell(element, $getChecklistDueAt(item), Boolean(item.getChecked()), editor.isEditable())
+          syncChecklistDueShell(
+            element,
+            $getChecklistDueAt(item),
+            Boolean(item.getChecked()),
+            editor.isEditable(),
+            $getChecklistRecurrence(item),
+          )
         }
       })
       if (!dirtyEntries) {
@@ -282,22 +368,58 @@ export function CheckListPlugin({
       }
     }
 
-    const updateDueDate = (itemElement: HTMLElement, dueAt: string | undefined) => {
+    const readScheduleSnapshot = (itemElement: HTMLElement): ChecklistScheduleSnapshot | undefined =>
+      editor.getEditorState().read(() => {
+        const node = $getNearestNodeFromDOMNode(itemElement)
+        return $isChecklistItemNode(node) ? $getChecklistScheduleSnapshot(node) : undefined
+      })
+
+    const updateSchedule = (
+      itemElement: HTMLElement,
+      expected: ChecklistScheduleSnapshot,
+      dueAt: string | undefined,
+      recurrence?: ChecklistRecurrence,
+    ): boolean => {
       if (!editor.isEditable()) {
-        return
+        return false
       }
+      let matched = false
+      let changed = false
       editor.update(
         () => {
           const node = $getNearestNodeFromDOMNode(itemElement)
           if ($isChecklistItemNode(node)) {
-            $ensureChecklistTodoId(node)
-            $setChecklistDueAt(node, dueAt)
+            const result = $setChecklistItemScheduleIfCurrent(node, expected, dueAt, recurrence)
+            matched = result.matched
+            changed = result.changed
+            if (matched && !$getChecklistTodoId(node)) {
+              $ensureChecklistTodoId(node)
+              changed = true
+            }
           }
         },
         { discrete: true },
       )
-      flushChanges?.()
+      if (matched && changed) {
+        flushChanges?.()
+      }
+      return matched
     }
+
+    const refreshAfterScheduleConflict = (shell: HTMLElement, itemElement: HTMLElement) => {
+      setChecklistSchedulePanelOpen(shell, false)
+      refreshDueControls()
+      const latest = readScheduleSnapshot(itemElement)
+      if (latest) {
+        openScheduleSnapshots.set(shell, latest)
+      }
+      setChecklistSchedulePanelOpen(shell, true)
+      setChecklistScheduleStatus(shell, 'Schedule changed elsewhere. Review the latest values and try again.')
+      shell.querySelector<HTMLInputElement>(`[${CHECKLIST_DUE_INPUT_ATTR}]`)?.focus()
+    }
+
+    const focusScheduleTrigger = (shell: HTMLElement) =>
+      shell.querySelector<HTMLButtonElement>(`[${CHECKLIST_DUE_ACTION_ATTR}="edit-schedule"]`)?.focus()
 
     const handleClick = (event: Event) => {
       const target = event.target
@@ -315,41 +437,75 @@ export function CheckListPlugin({
       if (!shell || !itemElement) {
         return
       }
-      if (action.getAttribute(CHECKLIST_DUE_ACTION_ATTR) === 'clear') {
-        updateDueDate(itemElement, undefined)
-        return
-      }
-      const input = shell.querySelector<HTMLInputElement>(`[${CHECKLIST_DUE_INPUT_ATTR}]`)
-      if (input) {
-        input.hidden = false
-        input.focus()
-        try {
-          input.showPicker?.()
-        } catch {
-          // Browsers may reject showPicker even from a trusted click. The
-          // focused native input remains usable in that case.
+      const actionName = action.getAttribute(CHECKLIST_DUE_ACTION_ATTR)
+      if (actionName === 'edit-schedule') {
+        if (action.getAttribute('aria-expanded') === 'true') {
+          return
         }
+        const snapshot = readScheduleSnapshot(itemElement)
+        if (!snapshot) {
+          return
+        }
+        openScheduleSnapshots.set(shell, snapshot)
+        setChecklistScheduleStatus(shell)
+        setChecklistSchedulePanelOpen(shell, true)
+        shell.querySelector<HTMLInputElement>(`[${CHECKLIST_DUE_INPUT_ATTR}]`)?.focus()
+      } else if (actionName === 'cancel-schedule') {
+        openScheduleSnapshots.delete(shell)
+        setChecklistSchedulePanelOpen(shell, false)
+        setChecklistScheduleStatus(shell)
+        refreshDueControls()
+        focusScheduleTrigger(shell)
+      } else if (actionName === 'clear-schedule') {
+        const expected = openScheduleSnapshots.get(shell)
+        if (!expected || !updateSchedule(itemElement, expected, undefined)) {
+          refreshAfterScheduleConflict(shell, itemElement)
+          return
+        }
+        openScheduleSnapshots.delete(shell)
+        setChecklistSchedulePanelOpen(shell, false)
+        setChecklistScheduleStatus(shell)
+        refreshDueControls()
+        focusScheduleTrigger(shell)
+      } else if (actionName === 'save-schedule') {
+        const expected = openScheduleSnapshots.get(shell)
+        if (!expected) {
+          refreshAfterScheduleConflict(shell, itemElement)
+          return
+        }
+        const schedule = readChecklistScheduleControl(shell, expected.dueAt)
+        if (!schedule.ok) {
+          setChecklistScheduleStatus(shell, schedule.reason)
+          return
+        }
+        const recurrence = schedule.recurrenceChoice
+          ? createChecklistRecurrence(schedule.recurrenceChoice, schedule.dueAt, expected.recurrence?.anchor.timeZone)
+          : undefined
+        if (schedule.recurrenceChoice && !recurrence) {
+          setChecklistScheduleStatus(shell, 'This recurrence could not be created in the current time zone.')
+          return
+        }
+        if (!updateSchedule(itemElement, expected, schedule.dueAt, recurrence)) {
+          refreshAfterScheduleConflict(shell, itemElement)
+          return
+        }
+        openScheduleSnapshots.delete(shell)
+        setChecklistSchedulePanelOpen(shell, false)
+        setChecklistScheduleStatus(shell)
+        refreshDueControls()
+        focusScheduleTrigger(shell)
       }
     }
     const handleChange = (event: Event) => {
-      const input = event.target
-      if (!(input instanceof HTMLInputElement) || !input.hasAttribute(CHECKLIST_DUE_INPUT_ATTR)) {
+      const target = event.target
+      if (!(target instanceof HTMLElement) || !target.hasAttribute(CHECKLIST_RECURRENCE_PRESET_ATTR)) {
         return
       }
       event.stopPropagation()
-      const itemElement = input.closest<HTMLElement>('li')
-      if (!itemElement) {
-        return
+      const shell = target.closest<HTMLElement>(`[${CHECKLIST_DUE_SHELL_ATTR}]`)
+      if (shell) {
+        syncChecklistRecurrenceCustomVisibility(shell)
       }
-      const dueAt = input.value === '' ? undefined : checklistDueAtFromLocalInput(input.value)
-      if (input.value !== '' && !dueAt) {
-        input.setCustomValidity('Choose a valid due date and time.')
-        input.reportValidity()
-        return
-      }
-      input.setCustomValidity('')
-      input.hidden = true
-      updateDueDate(itemElement, dueAt)
     }
     const stopDuePointer = (event: Event) => {
       const target = event.target
@@ -387,6 +543,30 @@ export function CheckListPlugin({
 
   useEffect(() => {
     const primaryModifier = getPrimaryModifier(application.platform)
+    const recentRecurringCompletions = new Map<string, number>()
+
+    const $toggleWithRapidCompletionGuard = (node: ListItemNode, repeatedKeyboardEvent = false): boolean => {
+      const attemptedAt = Date.now()
+      const todoId = $ensureChecklistTodoId(node)
+      const dueAt = $getChecklistDueAt(node)
+      const recurrence = $getChecklistRecurrence(node)
+      const isRecurringCompletion = !node.getChecked() && Boolean(dueAt && recurrence)
+      if (
+        !canAttemptRecurringChecklistCompletion(
+          recentRecurringCompletions.get(todoId),
+          attemptedAt,
+          undefined,
+          repeatedKeyboardEvent,
+        )
+      ) {
+        return false
+      }
+      const changed = $toggleChecklistItemChecked(node, attemptedAt)
+      if (isRecurringCompletion && changed) {
+        recentRecurringCompletions.set(todoId, attemptedAt)
+      }
+      return changed
+    }
 
     return mergeRegister(
       editor.registerCommand(
@@ -483,14 +663,14 @@ export function CheckListPlugin({
                   node.selectStart()
                 }
 
-                node.toggleChecked()
+                const changed = $toggleWithRapidCompletionGuard(node)
 
                 // Issue 3928: optionally relocate the just-toggled item so
                 // completed tasks sink to the bottom and active ones bubble up.
                 // Opt-in (default off) so existing behavior is unchanged. Done
                 // here (on the toggle) rather than on every change so we never
                 // fight the caret while the user types.
-                if (getChecklistAutoMoveEnabled()) {
+                if (changed && getChecklistAutoMoveEnabled()) {
                   $reorderCheckListForItem(node)
                 }
               },
@@ -521,7 +701,7 @@ export function CheckListPlugin({
       }),
       editor.registerCommand(
         KEY_ENTER_COMMAND,
-        () => {
+        (event) => {
           if (!application.keyboardService.activeModifiers.has(primaryModifier)) {
             return false
           }
@@ -536,8 +716,8 @@ export function CheckListPlugin({
             return false
           }
           $ensureChecklistTodoId(node)
-          node.toggleChecked()
-          if (getChecklistAutoMoveEnabled()) {
+          const changed = $toggleWithRapidCompletionGuard(node, event?.repeat === true)
+          if (changed && getChecklistAutoMoveEnabled()) {
             $reorderCheckListForItem(node)
           }
           return true

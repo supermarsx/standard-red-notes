@@ -22,12 +22,41 @@ import { LexicalErrorBoundary } from '@lexical/react/LexicalErrorBoundary'
 import { CollaborationPlugin } from '@lexical/react/LexicalCollaborationPlugin'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
 import { $getRoot, $createParagraphNode, $createTextNode, LexicalEditor } from 'lexical'
+import {
+  $createListItemNode,
+  $createListNode,
+  $isListItemNode,
+  $isListNode,
+  ListItemNode,
+  ListNode,
+} from '@lexical/list'
 import * as Y from 'yjs'
 import type { Doc } from 'yjs'
 import { EncryptedYjsProvider } from './EncryptedYjsProvider'
 import type { RoomCipher } from './RoomCrypto'
 import type { CollabChannel, CollabFrame } from './CollabChannel'
 import { EphemeralLexicalCollaboration } from './CollaborationPlugin'
+import {
+  $getChecklistSchedule,
+  $setChecklistSchedule,
+  $setChecklistTodoId,
+  CHECKLIST_SCHEDULE_VERSION,
+  type ChecklistSchedule,
+} from '../Lexical/Nodes/ChecklistItemNode'
+import { $setChecklistItemChecked } from '../Checklist/ChecklistEditorMutations'
+import { createChecklistRecurrence } from '../Checklist/checklistRecurrence'
+import { CheckListPlugin } from '../Plugins/CheckListPlugin'
+
+jest.mock('../../ApplicationProvider', () => {
+  const application = {
+    platform: 'web',
+    keyboardService: {
+      activeModifiers: new Set(),
+      registerExternalKeyboardShortcutHelpItem: () => () => undefined,
+    },
+  }
+  return { useApplication: () => application }
+})
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 Object.defineProperty(globalThis, 'TextEncoder', { configurable: true, value: TextEncoder })
@@ -45,6 +74,19 @@ class LoopbackHub {
   private readonly handlers = new Map<symbol, (f: CollabFrame) => void>()
   private readonly rooms = new Map<string, Set<symbol>>()
   private readonly electedEditorRooms = new Set<string>()
+  private paused = false
+  private readonly queuedFrames: Array<{ member: symbol; frame: CollabFrame }> = []
+
+  pause(): void {
+    this.paused = true
+  }
+
+  resume(): void {
+    this.paused = false
+    for (const { member, frame } of this.queuedFrames.splice(0)) {
+      this.handlers.get(member)?.(frame)
+    }
+  }
 
   reserveEditorBootstrap(room: string): boolean {
     if (this.electedEditorRooms.has(room)) {
@@ -89,7 +131,11 @@ class LoopbackHub {
     }
     for (const m of members) {
       if (m !== from) {
-        this.handlers.get(m)?.(frame)
+        if (this.paused) {
+          this.queuedFrames.push({ member: m, frame })
+        } else {
+          this.handlers.get(m)?.(frame)
+        }
       }
     }
   }
@@ -110,9 +156,10 @@ function CollabEditor(props: {
   room: string
   bootstrap: boolean
   initialText?: string
+  checklistPlugin?: boolean
   capture: (c: Captured) => void
 }) {
-  const { hub, room, bootstrap, initialText, capture } = props
+  const { hub, room, bootstrap, initialText, checklistPlugin, capture } = props
   let provider: EncryptedYjsProvider
   const providerFactory = (id: string, docMap: Map<string, Doc>) => {
     let doc = docMap.get(id)
@@ -129,6 +176,7 @@ function CollabEditor(props: {
       initialConfig: {
         namespace: 'Test',
         editorState: null,
+        nodes: [ListNode, ListItemNode],
         onError: (e: Error) => {
           throw e
         },
@@ -157,6 +205,7 @@ function CollabEditor(props: {
           : undefined,
       }),
     ),
+    checklistPlugin ? createElement(CheckListPlugin, {}) : null,
     createElement(CapturePlugin, { onReady: (editor: LexicalEditor) => capture({ editor, provider }) }),
   )
 }
@@ -191,6 +240,19 @@ function typeInto(editor: LexicalEditor, content: string): void {
       { discrete: true },
     )
   })
+}
+
+function checklistState(editor: LexicalEditor): { checked: boolean; schedule?: ChecklistSchedule } {
+  let result: { checked: boolean; schedule?: ChecklistSchedule } = { checked: false }
+  editor.getEditorState().read(() => {
+    const list = $getRoot().getFirstChild()
+    const item = $isListNode(list) ? list.getFirstChild() : undefined
+    if (!$isListItemNode(item)) {
+      throw new Error('Expected a checklist item')
+    }
+    result = { checked: Boolean(item.getChecked()), schedule: $getChecklistSchedule(item) }
+  })
+  return result
 }
 
 describe('Collaborative editor (editor-level e2e)', () => {
@@ -306,6 +368,192 @@ describe('Collaborative editor (editor-level e2e)', () => {
 
     expect(textOf(capA!.editor)).toBe('persisted note body')
     expect(textOf(capB!.editor)).toBe('persisted note body')
+
+    await act(async () => {
+      rootA!.unmount()
+      rootB!.unmount()
+    })
+  })
+
+  it('converges concurrent real-editor schedule edit and recurrence completion without a torn pair', async () => {
+    const hub = new LoopbackHub()
+    const room = 'note-editor-atomic-checklist-schedule'
+    const containerA = document.createElement('div')
+    const containerB = document.createElement('div')
+    document.body.append(containerA, containerB)
+    let capA: Captured | undefined
+    let capB: Captured | undefined
+    let rootA: Root
+    let rootB: Root
+
+    await act(async () => {
+      rootA = createRoot(containerA)
+      rootA.render(createElement(CollabEditor, { hub, room, bootstrap: true, capture: (c) => (capA = c) }))
+    })
+    await act(async () => {
+      rootB = createRoot(containerB)
+      rootB.render(createElement(CollabEditor, { hub, room, bootstrap: false, capture: (c) => (capB = c) }))
+    })
+    await flush(capA!.provider, capB!.provider)
+
+    const initialDueAt = '2026-08-16T09:00:00.000Z'
+    const initialRecurrence = createChecklistRecurrence('daily', initialDueAt, 'UTC')!
+    act(() => {
+      capA!.editor.update(
+        () => {
+          const item = $createListItemNode(false).append($createTextNode('Atomic schedule'))
+          $setChecklistTodoId(item, 'todo-atomic-collaboration')
+          $setChecklistSchedule(item, initialDueAt, initialRecurrence)
+          $getRoot().clear().append($createListNode('check').append(item))
+        },
+        { discrete: true },
+      )
+    })
+    await flush(capA!.provider, capB!.provider)
+    expect(checklistState(capB!.editor).schedule).toMatchObject({
+      dueAt: initialDueAt,
+      recurrence: { frequency: 'daily' },
+    })
+
+    const editedDueAt = '2026-09-30T09:00:00.000Z'
+    const editedRecurrence = createChecklistRecurrence('monthly', editedDueAt, 'UTC')!
+    const authoredEdit = {
+      version: CHECKLIST_SCHEDULE_VERSION,
+      dueAt: editedDueAt,
+      recurrence: editedRecurrence,
+    }
+    const authoredCompletion = {
+      version: CHECKLIST_SCHEDULE_VERSION,
+      dueAt: '2026-08-17T09:00:00.000Z',
+      recurrence: initialRecurrence,
+    }
+    hub.pause()
+    act(() => {
+      capA!.editor.update(
+        () => {
+          const list = $getRoot().getFirstChild()
+          const item = $isListNode(list) ? list.getFirstChild() : undefined
+          if (!$isListItemNode(item)) {
+            throw new Error('Expected editor A checklist item')
+          }
+          $setChecklistSchedule(item, editedDueAt, editedRecurrence)
+        },
+        { discrete: true },
+      )
+      capB!.editor.update(
+        () => {
+          const list = $getRoot().getFirstChild()
+          const item = $isListNode(list) ? list.getFirstChild() : undefined
+          if (!$isListItemNode(item)) {
+            throw new Error('Expected editor B checklist item')
+          }
+          $setChecklistItemChecked(item, true, Date.parse('2026-08-16T10:00:00.000Z'))
+        },
+        { discrete: true },
+      )
+    })
+    await flush(capA!.provider, capB!.provider)
+    hub.resume()
+    await flush(capA!.provider, capB!.provider)
+
+    const stateA = checklistState(capA!.editor)
+    const stateB = checklistState(capB!.editor)
+    expect(stateA).toEqual(stateB)
+    expect([authoredEdit, authoredCompletion]).toContainEqual(stateA.schedule)
+    expect(stateA.checked).toBe(false)
+
+    await act(async () => {
+      rootA!.unmount()
+      rootB!.unmount()
+    })
+  })
+
+  it('repairs concurrent recurrence-add and ordinary completion through the production checklist transform', async () => {
+    const hub = new LoopbackHub()
+    const room = 'note-editor-recurring-activation'
+    const containerA = document.createElement('div')
+    const containerB = document.createElement('div')
+    document.body.append(containerA, containerB)
+    let capA: Captured | undefined
+    let capB: Captured | undefined
+    let rootA: Root
+    let rootB: Root
+
+    await act(async () => {
+      rootA = createRoot(containerA)
+      rootA.render(
+        createElement(CollabEditor, {
+          hub,
+          room,
+          bootstrap: true,
+          checklistPlugin: true,
+          capture: (captured) => (capA = captured),
+        }),
+      )
+    })
+    await act(async () => {
+      rootB = createRoot(containerB)
+      rootB.render(
+        createElement(CollabEditor, {
+          hub,
+          room,
+          bootstrap: false,
+          checklistPlugin: true,
+          capture: (captured) => (capB = captured),
+        }),
+      )
+    })
+    await flush(capA!.provider, capB!.provider)
+
+    const dueAt = '2026-08-16T09:00:00.000Z'
+    act(() => {
+      capA!.editor.update(
+        () => {
+          const item = $createListItemNode(false).append($createTextNode('Activate remotely'))
+          $setChecklistTodoId(item, 'todo-remote-activation')
+          $setChecklistSchedule(item, dueAt)
+          $getRoot().clear().append($createListNode('check').append(item))
+        },
+        { discrete: true },
+      )
+    })
+    await flush(capA!.provider, capB!.provider)
+
+    const recurrence = createChecklistRecurrence('weekly', dueAt, 'UTC')!
+    hub.pause()
+    act(() => {
+      capA!.editor.update(
+        () => {
+          const list = $getRoot().getFirstChild()
+          const item = $isListNode(list) ? list.getFirstChild() : undefined
+          if (!$isListItemNode(item)) {
+            throw new Error('Expected editor A checklist item')
+          }
+          $setChecklistSchedule(item, dueAt, recurrence)
+        },
+        { discrete: true },
+      )
+      capB!.editor.update(
+        () => {
+          const list = $getRoot().getFirstChild()
+          const item = $isListNode(list) ? list.getFirstChild() : undefined
+          if (!$isListItemNode(item)) {
+            throw new Error('Expected editor B checklist item')
+          }
+          $setChecklistItemChecked(item, true)
+        },
+        { discrete: true },
+      )
+    })
+    await flush(capA!.provider, capB!.provider)
+    hub.resume()
+    await flush(capA!.provider, capB!.provider)
+
+    const stateA = checklistState(capA!.editor)
+    const stateB = checklistState(capB!.editor)
+    expect(stateA).toEqual(stateB)
+    expect(stateA.schedule).toMatchObject({ dueAt, recurrence: { frequency: 'weekly' } })
+    expect(stateA.checked).toBe(false)
 
     await act(async () => {
       rootA!.unmount()

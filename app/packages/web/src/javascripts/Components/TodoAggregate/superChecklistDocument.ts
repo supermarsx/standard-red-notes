@@ -1,8 +1,14 @@
 import { normalizeChecklistDueAt } from '../SuperEditor/Checklist/checklistDueDate'
+import { normalizeChecklistRecurrence, type ChecklistRecurrence } from '../SuperEditor/Checklist/checklistRecurrence'
 import {
   CHECKLIST_DUE_AT_STATE_KEY,
+  CHECKLIST_RECURRENCE_STATE_KEY,
+  CHECKLIST_SCHEDULE_STATE_KEY,
   CHECKLIST_TODO_ID_STATE_KEY,
+  CHECKLIST_SCHEDULE_VERSION,
+  normalizeChecklistSchedule,
   normalizeChecklistTodoId,
+  type ChecklistSchedule,
 } from '../SuperEditor/Lexical/Nodes/ChecklistItemNode'
 
 const MAX_TREE_DEPTH = 128
@@ -17,13 +23,18 @@ export type SuperChecklistTodo = {
   text: string
   checked: boolean
   dueAt?: string
+  recurrence?: ChecklistRecurrence
 }
 
-export type SuperChecklistTodoTarget = Pick<SuperChecklistTodo, 'todoId' | 'locator' | 'text' | 'checked'>
+export type SuperChecklistTodoTarget = Pick<
+  SuperChecklistTodo,
+  'todoId' | 'locator' | 'text' | 'checked' | 'dueAt' | 'recurrence'
+>
 
 export type SuperChecklistTodoPatch = {
   checked?: boolean
   dueAt?: string | null
+  recurrence?: ChecklistRecurrence | null
   ensureTodoId?: string
 }
 
@@ -34,6 +45,7 @@ type SerializedNode = {
   text?: unknown
   todoId?: unknown
   dueAt?: unknown
+  recurrence?: unknown
   $?: unknown
   children?: unknown
 }
@@ -51,8 +63,23 @@ function todoIdForNode(node: SerializedNode): string | undefined {
   return normalizeChecklistTodoId(nodeState(node)?.[CHECKLIST_TODO_ID_STATE_KEY] ?? node.todoId)
 }
 
-function dueAtForNode(node: SerializedNode): string | undefined {
-  return normalizeChecklistDueAt(nodeState(node)?.[CHECKLIST_DUE_AT_STATE_KEY] ?? node.dueAt)
+function scheduleForNode(node: SerializedNode): ChecklistSchedule | undefined {
+  const state = nodeState(node)
+  if (state && Object.prototype.hasOwnProperty.call(state, CHECKLIST_SCHEDULE_STATE_KEY)) {
+    // A present atomic envelope is authoritative. Unknown/malformed versions
+    // fail closed instead of resurrecting stale split-key values.
+    return normalizeChecklistSchedule(state[CHECKLIST_SCHEDULE_STATE_KEY])
+  }
+  const dueAt = normalizeChecklistDueAt(state?.[CHECKLIST_DUE_AT_STATE_KEY] ?? node.dueAt)
+  if (!dueAt) {
+    return undefined
+  }
+  const recurrence = normalizeChecklistRecurrence(state?.[CHECKLIST_RECURRENCE_STATE_KEY] ?? node.recurrence)
+  return {
+    version: CHECKLIST_SCHEDULE_VERSION,
+    dueAt,
+    ...(recurrence ? { recurrence } : {}),
+  }
 }
 
 function collectText(node: SerializedNode, budget: TraversalBudget): string {
@@ -139,13 +166,15 @@ function collectCandidates(parsed: unknown): TodoCandidate[] {
         const itemPath = [...current.path, index]
         const todoId = todoIdForNode(item)
         const locator = itemPath.join('.')
+        const schedule = scheduleForNode(item)
         candidates.push({
           id: todoId ?? `legacy-${locator}`,
           todoId,
           locator,
           text,
           checked: item.checked === true,
-          dueAt: dueAtForNode(item),
+          dueAt: schedule?.dueAt,
+          recurrence: schedule?.recurrence,
         })
 
         // A task can own nested checklists. Traverse only nested list children,

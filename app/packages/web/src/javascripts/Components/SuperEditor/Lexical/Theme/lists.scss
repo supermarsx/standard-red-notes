@@ -172,11 +172,16 @@
 }
 .checklist-due-controls {
   display: inline-flex;
+  max-width: 100%;
+  min-width: 0;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.25rem;
 }
 .checklist-due-button,
-.checklist-due-input {
+.checklist-due-input,
+.checklist-recurrence-select,
+.checklist-recurrence-interval {
   border: 1px solid var(--sn-stylekit-border-color);
   border-radius: 0.25rem;
   background: var(--sn-stylekit-contrast-background-color);
@@ -184,6 +189,38 @@
   padding: 0.1rem 0.35rem;
   font: inherit;
   line-height: 1.15rem;
+}
+.checklist-schedule-panel,
+.checklist-recurrence-custom,
+.checklist-schedule-field {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+}
+.checklist-schedule-panel {
+  flex-basis: 100%;
+  max-width: 100%;
+  min-width: 0;
+  border: 1px solid var(--sn-stylekit-border-color);
+  border-radius: 0.4rem;
+  background: var(--sn-stylekit-secondary-background-color);
+  padding: 0.25rem;
+}
+.checklist-recurrence-select,
+.checklist-recurrence-interval {
+  min-height: 1.65rem;
+}
+.checklist-recurrence-interval {
+  width: 4rem;
+}
+.checklist-due-input,
+.checklist-schedule-field {
+  max-width: 100%;
+  min-width: 0;
+}
+.checklist-recurrence-status {
+  color: var(--sn-stylekit-warning-color, var(--sn-stylekit-info-color));
 }
 .checklist-due-button {
   cursor: pointer;
@@ -196,6 +233,11 @@
   color: var(--sn-stylekit-danger-color);
 }
 .checklist-due-shell [hidden] {
+  display: none;
+}
+.checklist-schedule-panel[hidden],
+.checklist-recurrence-custom[hidden],
+.checklist-recurrence-status[hidden] {
   display: none;
 }
 
