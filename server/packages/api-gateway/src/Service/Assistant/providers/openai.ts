@@ -1,6 +1,7 @@
 import OpenAI from 'openai'
 
 import { Provider, ProviderRequest, ProviderEvent } from './types'
+import { openAIStreamErrorMessage, openAIToolNamesForRequest } from './OpenAIToolNameMap'
 
 export class OpenAIProvider implements Provider {
   readonly id = 'openai'
@@ -26,6 +27,7 @@ export class OpenAIProvider implements Provider {
   }
 
   async *send(req: ProviderRequest): AsyncIterable<ProviderEvent> {
+    const toolNames = openAIToolNamesForRequest(req.tools, req.messages)
     const messages: OpenAI.ChatCompletionMessageParam[] = [
       { role: 'system', content: req.system },
       ...req.messages.map((m): OpenAI.ChatCompletionMessageParam => {
@@ -43,7 +45,7 @@ export class OpenAIProvider implements Provider {
             tool_calls: m.toolCalls.map((tc) => ({
               id: tc.id,
               type: 'function' as const,
-              function: { name: tc.name, arguments: JSON.stringify(tc.args) },
+              function: { name: toolNames.toWireName(tc.name), arguments: JSON.stringify(tc.args) },
             })),
           }
         }
@@ -51,21 +53,22 @@ export class OpenAIProvider implements Provider {
       }),
     ]
 
+    const tools = req.tools.map((tool) => ({
+      type: 'function' as const,
+      function: {
+        name: toolNames.toWireName(tool.name),
+        description: tool.description,
+        parameters: tool.inputSchema as Record<string, unknown>,
+      },
+    }))
     const stream = await this.client.chat.completions.create({
       model: this.model,
       messages,
-      max_tokens: req.maxOutputTokens ?? 4096,
+      ...(req.maxOutputTokens !== undefined ? { max_tokens: req.maxOutputTokens } : {}),
       temperature: req.temperature,
       top_p: req.topP,
       stop: req.stop,
-      tools: req.tools.map((t) => ({
-        type: 'function' as const,
-        function: {
-          name: t.name,
-          description: t.description,
-          parameters: t.inputSchema as Record<string, unknown>,
-        },
-      })),
+      ...(tools.length > 0 ? { tools } : {}),
       stream: true,
       // Emit a final usage-only chunk so the proxy can forward token consumption
       // to the browser footer. Upstreams that don't support it ignore the option.
@@ -80,6 +83,12 @@ export class OpenAIProvider implements Provider {
     let finish: ProviderEvent | undefined
 
     for await (const chunk of stream) {
+      const streamError = openAIStreamErrorMessage(chunk)
+      if (streamError) {
+        yield { kind: 'error', message: streamError }
+        yield { kind: 'finish', stopReason: 'error' }
+        return
+      }
       // The include_usage final chunk carries `usage` and an empty `choices`.
       if (chunk.usage && !usage) {
         usage = {
@@ -93,6 +102,11 @@ export class OpenAIProvider implements Provider {
       const choice = chunk.choices[0]
       if (!choice) {
         continue
+      }
+      if ((choice.finish_reason as string | null) === 'error') {
+        yield { kind: 'error', message: 'The configured assistant provider ended with an error.' }
+        yield { kind: 'finish', stopReason: 'error' }
+        return
       }
       const delta = choice.delta
 
@@ -120,7 +134,7 @@ export class OpenAIProvider implements Provider {
           } catch {
             args = {}
           }
-          yield { kind: 'tool-call', id: p.id, name: p.name, args }
+          yield { kind: 'tool-call', id: p.id, name: toolNames.toInternalName(p.name), args }
         }
         finish = {
           kind: 'finish',

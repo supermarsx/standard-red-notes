@@ -1,6 +1,7 @@
 import OpenAI from 'openai'
 
 import { ChatMessage, Provider, ProviderEvent, ProviderRequest } from './types'
+import { openAIStreamErrorMessage, openAIToolNamesForRequest } from './OpenAIToolNameMap'
 
 /**
  * OpenAI Responses transport used by ChatGPT/Codex subscription backends and
@@ -30,28 +31,33 @@ export class OpenAIResponsesProvider implements Provider {
   }
 
   async *send(req: ProviderRequest): AsyncIterable<ProviderEvent> {
+    const toolNames = openAIToolNamesForRequest(req.tools, req.messages)
+    const tools = req.tools.map((tool) => ({
+      type: 'function' as const,
+      name: toolNames.toWireName(tool.name),
+      description: tool.description,
+      parameters: tool.inputSchema as Record<string, unknown>,
+      strict: false,
+    }))
     const stream = await this.client.responses.create({
       model: this.model,
       instructions: req.system,
-      input: this.toResponseInput(req.messages),
-      max_output_tokens: req.maxOutputTokens ?? 4096,
+      input: this.toResponseInput(req.messages, toolNames.toWireName),
+      ...(req.maxOutputTokens !== undefined ? { max_output_tokens: req.maxOutputTokens } : {}),
       temperature: req.temperature,
       top_p: req.topP,
-      tools: req.tools.map((tool) => ({
-        type: 'function' as const,
-        name: tool.name,
-        description: tool.description,
-        parameters: tool.inputSchema as Record<string, unknown>,
-        strict: false,
-      })),
-      tool_choice: 'auto',
-      parallel_tool_calls: true,
+      ...(tools.length > 0 ? { tools, tool_choice: 'auto' as const, parallel_tool_calls: true } : {}),
       store: false,
       stream: true,
     })
 
-    let finished = false
     for await (const event of stream) {
+      const streamError = openAIStreamErrorMessage(event)
+      if (streamError) {
+        yield { kind: 'error', message: streamError }
+        yield { kind: 'finish', stopReason: 'error' }
+        return
+      }
       switch (event.type) {
         case 'response.output_text.delta':
           yield { kind: 'text-delta', delta: event.delta }
@@ -63,7 +69,7 @@ export class OpenAIResponsesProvider implements Provider {
           } catch {
             args = {}
           }
-          yield { kind: 'tool-call', id: event.item_id, name: event.name, args }
+          yield { kind: 'tool-call', id: event.item_id, name: toolNames.toInternalName(event.name), args }
           break
         }
         case 'response.completed': {
@@ -77,8 +83,7 @@ export class OpenAIResponsesProvider implements Provider {
             }
           }
           yield { kind: 'finish', stopReason: 'end_turn' }
-          finished = true
-          break
+          return
         }
         case 'response.incomplete': {
           const usage = event.response.usage
@@ -91,8 +96,7 @@ export class OpenAIResponsesProvider implements Provider {
             }
           }
           yield { kind: 'finish', stopReason: 'max_tokens' }
-          finished = true
-          break
+          return
         }
         case 'response.failed':
           yield {
@@ -100,23 +104,22 @@ export class OpenAIResponsesProvider implements Provider {
             message: event.response.error?.message || 'The configured assistant provider rejected the request.',
           }
           yield { kind: 'finish', stopReason: 'error' }
-          finished = true
-          break
+          return
         case 'error':
           yield { kind: 'error', message: event.message || 'The configured assistant provider failed.' }
           yield { kind: 'finish', stopReason: 'error' }
-          finished = true
-          break
+          return
       }
     }
 
-    if (!finished) {
-      yield { kind: 'error', message: 'The configured assistant provider ended without completing the response.' }
-      yield { kind: 'finish', stopReason: 'error' }
-    }
+    yield { kind: 'error', message: 'The configured assistant provider ended without completing the response.' }
+    yield { kind: 'finish', stopReason: 'error' }
   }
 
-  private toResponseInput(messages: ChatMessage[]): OpenAI.Responses.ResponseInput {
+  private toResponseInput(
+    messages: ChatMessage[],
+    toWireName: (internalName: string) => string,
+  ): OpenAI.Responses.ResponseInput {
     const input: OpenAI.Responses.ResponseInput = []
     for (const message of messages) {
       if (message.role === 'tool') {
@@ -136,7 +139,7 @@ export class OpenAIResponsesProvider implements Provider {
           input.push({
             type: 'function_call',
             call_id: toolCall.id,
-            name: toolCall.name,
+            name: toWireName(toolCall.name),
             arguments: JSON.stringify(toolCall.args),
           })
         }

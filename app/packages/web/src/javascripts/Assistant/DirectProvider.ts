@@ -1,6 +1,7 @@
 import { assistantUsageService } from './AssistantUsageService'
 import { assistantHttpError, assistantNetworkError } from './AssistantHttpError'
 import { directEndpointConfigurationError, openAICompatibleEndpointURL } from './OpenAICompatibleEndpoint'
+import { cleanOpenAIStreamErrorMessage, openAIToolNamesForRequest } from './OpenAIToolNameMap'
 import { samplingRequestFields, SamplingSettings } from './samplingSettings'
 import { ChatMessage, Provider, ProviderEvent, ProviderRequest, ProviderStopReason, ToolDescriptor } from './types'
 
@@ -72,6 +73,7 @@ export class DirectProvider implements Provider {
       headers['Authorization'] = `Bearer ${this.options.apiKey.trim()}`
     }
 
+    const toolNames = openAIToolNamesForRequest(req.tools, req.messages)
     const body: Record<string, unknown> = {
       model: this.options.model,
       stream: true,
@@ -82,10 +84,10 @@ export class DirectProvider implements Provider {
       // User-configurable sampling (temperature / top_p / optional max_tokens).
       // Defaults to the saved sampling settings when the caller passes none.
       ...samplingRequestFields(this.options.sampling),
-      messages: this.toOpenAIMessages(req.system, req.messages),
+      messages: this.toOpenAIMessages(req.system, req.messages, toolNames.toWireName),
     }
 
-    const tools = this.toOpenAITools(req.tools)
+    const tools = this.toOpenAITools(req.tools, toolNames.toWireName)
     if (tools.length > 0) {
       body.tools = tools
       body.tool_choice = 'auto'
@@ -115,6 +117,13 @@ export class DirectProvider implements Provider {
     }
 
     const reader = response.body.getReader()
+    const cancelReader = async () => {
+      try {
+        await reader.cancel()
+      } catch {
+        // The stream is already terminal; cancellation is best-effort cleanup.
+      }
+    }
     const decoder = new TextDecoder()
     let buffer = ''
 
@@ -123,6 +132,7 @@ export class DirectProvider implements Provider {
     const emittedToolIndexes = new Set<number>()
     let finishReason: string | undefined
     let usage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | undefined
+    let streamError: string | undefined
 
     const flushFrames = function* (this: DirectProvider): Generator<ProviderEvent> {
       let separatorIndex = buffer.indexOf('\n\n')
@@ -138,7 +148,13 @@ export class DirectProvider implements Provider {
           (reported) => {
             usage = reported
           },
+          (message) => {
+            streamError = message
+          },
         )
+        if (streamError) {
+          return
+        }
         separatorIndex = buffer.indexOf('\n\n')
       }
     }.bind(this)
@@ -157,6 +173,11 @@ export class DirectProvider implements Provider {
       }
       buffer += decoder.decode(chunk.value, { stream: true })
       yield* flushFrames()
+      if (streamError) {
+        await cancelReader()
+        yield { kind: 'finish', stopReason: 'error' }
+        return
+      }
     }
 
     // Parse any trailing frame without a separator.
@@ -170,7 +191,15 @@ export class DirectProvider implements Provider {
         (reported) => {
           usage = reported
         },
+        (message) => {
+          streamError = message
+        },
       )
+      if (streamError) {
+        await cancelReader()
+        yield { kind: 'finish', stopReason: 'error' }
+        return
+      }
     }
 
     // Emit any tool calls that were assembled across the stream.
@@ -194,7 +223,7 @@ export class DirectProvider implements Provider {
           args = acc.arguments
         }
       }
-      yield { kind: 'tool-call', id: acc.id || `call_${index}`, name: acc.name, args }
+      yield { kind: 'tool-call', id: acc.id || `call_${index}`, name: toolNames.toInternalName(acc.name), args }
     }
 
     if (usage) {
@@ -219,6 +248,7 @@ export class DirectProvider implements Provider {
     toolCallsByIndex: Map<number, OpenAIToolCallAccumulator>,
     setFinishReason: (reason: string) => void,
     setUsage: (usage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number }) => void,
+    setStreamError: (message: string) => void,
   ): Generator<ProviderEvent> {
     for (const rawLine of frame.split('\n')) {
       const line = rawLine.trim()
@@ -243,7 +273,7 @@ export class DirectProvider implements Provider {
           finish_reason?: string | null
         }>
         usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | null
-        error?: { message?: string }
+        error?: { message?: string } | string
       }
       try {
         parsed = JSON.parse(data)
@@ -251,9 +281,14 @@ export class DirectProvider implements Provider {
         continue
       }
 
-      if (parsed.error) {
-        yield { kind: 'error', message: parsed.error.message || 'Unknown error from endpoint' }
-        continue
+      if (parsed.error !== undefined && parsed.error !== null) {
+        const message = cleanOpenAIStreamErrorMessage(
+          typeof parsed.error === 'string' ? parsed.error : parsed.error.message,
+          'Unknown error from endpoint',
+        )
+        setStreamError(message)
+        yield { kind: 'error', message }
+        return
       }
 
       // With stream_options.include_usage the endpoint sends a final chunk that
@@ -291,12 +326,22 @@ export class DirectProvider implements Provider {
       }
 
       if (choice.finish_reason) {
+        if (choice.finish_reason === 'error') {
+          const message = cleanOpenAIStreamErrorMessage('The configured assistant provider ended with an error.')
+          setStreamError(message)
+          yield { kind: 'error', message }
+          return
+        }
         setFinishReason(choice.finish_reason)
       }
     }
   }
 
-  private toOpenAIMessages(system: string, messages: ChatMessage[]): unknown[] {
+  private toOpenAIMessages(
+    system: string,
+    messages: ChatMessage[],
+    toWireName: (internalName: string) => string,
+  ): unknown[] {
     const result: unknown[] = []
     if (system) {
       result.push({ role: 'system', content: system })
@@ -311,7 +356,7 @@ export class DirectProvider implements Provider {
             id: tc.id,
             type: 'function',
             function: {
-              name: tc.name,
+              name: toWireName(tc.name),
               arguments: typeof tc.args === 'string' ? tc.args : JSON.stringify(tc.args ?? {}),
             },
           })),
@@ -334,11 +379,11 @@ export class DirectProvider implements Provider {
     return result
   }
 
-  private toOpenAITools(tools: ToolDescriptor[]): unknown[] {
+  private toOpenAITools(tools: ToolDescriptor[], toWireName: (internalName: string) => string): unknown[] {
     return tools.map((tool) => ({
       type: 'function',
       function: {
-        name: tool.name,
+        name: toWireName(tool.name),
         description: tool.description,
         parameters: tool.inputSchema ?? { type: 'object', properties: {} },
       },
