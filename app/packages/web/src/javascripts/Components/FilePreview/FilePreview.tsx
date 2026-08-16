@@ -1,7 +1,7 @@
 import { WebApplication } from '@/Application/WebApplication'
 import { concatenateUint8Arrays } from '@/Utils'
-import { FileDownloadProgress, FileItem, fileProgressToHumanReadableString } from '@standardnotes/snjs'
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { ContentType, FileDownloadProgress, FileItem, fileProgressToHumanReadableString } from '@standardnotes/snjs'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import Spinner from '@/Components/Spinner/Spinner'
 import FilePreviewError from './FilePreviewError'
 import { isFileTypePreviewable } from './isFilePreviewable'
@@ -26,6 +26,31 @@ type DownloadedPreview = {
   bytes: Uint8Array
 }
 
+/**
+ * File links and modal navigation can retain an older immutable FileItem after
+ * sync replaces it. Authorization already resolves through ItemManager, so use
+ * that same authoritative object for prompting and transport as well. An item
+ * absent from ItemManager intentionally stays undefined (and therefore denied).
+ */
+function useAuthoritativeFile(application: WebApplication, fileUuid: string): FileItem | undefined {
+  const getSnapshot = useCallback(() => application.items.findItem<FileItem>(fileUuid), [application.items, fileUuid])
+  const subscribe = useCallback(
+    (onStoreChange: () => void) =>
+      application.items.streamItems<FileItem>(ContentType.TYPES.File, ({ changed, inserted, removed }) => {
+        if (
+          changed.some((candidate) => candidate.uuid === fileUuid) ||
+          inserted.some((candidate) => candidate.uuid === fileUuid) ||
+          removed.some((candidate) => candidate.uuid === fileUuid)
+        ) {
+          onStoreChange()
+        }
+      }),
+    [application.items, fileUuid],
+  )
+
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
+}
+
 const FilePreview = ({
   file,
   application,
@@ -44,21 +69,31 @@ const FilePreview = ({
   isImageSelected,
 }: Props) => {
   const { t } = useTranslation('files')
-  const isAuthorized = useItemAuthorization(application, file)
+  const authoritativeFile = useAuthoritativeFile(application, file.uuid)
+  const isAuthorized = useItemAuthorization(application, authoritativeFile)
   const authorizationRef = useRef(isAuthorized)
   authorizationRef.current = isAuthorized
-  const currentFileIdentityRef = useRef({ uuid: file.uuid, remoteIdentifier: file.remoteIdentifier })
-  currentFileIdentityRef.current = { uuid: file.uuid, remoteIdentifier: file.remoteIdentifier }
+  const currentFileIdentityRef = useRef({
+    uuid: authoritativeFile?.uuid,
+    remoteIdentifier: authoritativeFile?.remoteIdentifier,
+  })
+  currentFileIdentityRef.current = {
+    uuid: authoritativeFile?.uuid,
+    remoteIdentifier: authoritativeFile?.remoteIdentifier,
+  }
 
   const isFilePreviewable = useMemo(() => {
-    return isFileTypePreviewable(file.mimeType)
-  }, [file.mimeType])
+    return authoritativeFile ? isFileTypePreviewable(authoritativeFile.mimeType) : false
+  }, [authoritativeFile])
 
   const [isDownloading, setIsDownloading] = useState(true)
   const [downloadProgress, setDownloadProgress] = useState<FileDownloadProgress | undefined>()
   const [downloadedPreview, setDownloadedPreview] = useState<DownloadedPreview>()
+  const [retryGeneration, setRetryGeneration] = useState(0)
   const downloadedBytes =
-    downloadedPreview?.fileUuid === file.uuid && downloadedPreview.remoteIdentifier === file.remoteIdentifier
+    authoritativeFile &&
+    downloadedPreview?.fileUuid === authoritativeFile.uuid &&
+    downloadedPreview.remoteIdentifier === authoritativeFile.remoteIdentifier
       ? downloadedPreview.bytes
       : undefined
 
@@ -72,7 +107,10 @@ const FilePreview = ({
     setDownloadedPreview((preview) => {
       if (
         preview &&
-        (!isAuthorized || preview.fileUuid !== file.uuid || preview.remoteIdentifier !== file.remoteIdentifier)
+        (!isAuthorized ||
+          !authoritativeFile ||
+          preview.fileUuid !== authoritativeFile.uuid ||
+          preview.remoteIdentifier !== authoritativeFile.remoteIdentifier)
       ) {
         preview.bytes.fill(0)
         return undefined
@@ -84,18 +122,19 @@ const FilePreview = ({
       setIsDownloading(false)
       setDownloadProgress(undefined)
     }
-  }, [file.remoteIdentifier, file.uuid, isAuthorized])
+  }, [authoritativeFile, isAuthorized])
 
   useEffect(() => {
-    if (!isFilePreviewable || !isAuthorized) {
+    if (!authoritativeFile || !isFilePreviewable || !isAuthorized) {
       setIsDownloading(false)
       setDownloadProgress(undefined)
       return
     }
 
     let cancelled = false
-    const fileUuid = file.uuid
-    const remoteIdentifier = file.remoteIdentifier
+    const fileForDownload = authoritativeFile
+    const fileUuid = fileForDownload.uuid
+    const remoteIdentifier = fileForDownload.remoteIdentifier
     const abortController = new AbortController()
     const chunks: Uint8Array[] = []
     const wipeChunks = () => {
@@ -124,7 +163,7 @@ const FilePreview = ({
       try {
         setDownloadProgress(undefined)
         const error = await application.files.downloadFile(
-          file,
+          fileForDownload,
           async (decryptedChunk, progress) => {
             if (!isCurrentDownload()) {
               decryptedChunk.fill(0)
@@ -138,10 +177,10 @@ const FilePreview = ({
           { signal: abortController.signal },
         )
 
-        if (!error && isCurrentDownload() && application.isAuthorizedToRenderItem(file)) {
+        if (!error && isCurrentDownload() && application.isAuthorizedToRenderItem(fileForDownload)) {
           const finalDecryptedBytes = concatenateUint8Arrays(chunks)
           setDownloadedPreview((currentPreview) => {
-            if (!isCurrentDownload() || !application.isAuthorizedToRenderItem(file)) {
+            if (!isCurrentDownload() || !application.isAuthorizedToRenderItem(fileForDownload)) {
               finalDecryptedBytes.fill(0)
               return currentPreview
             }
@@ -168,7 +207,19 @@ const FilePreview = ({
       abortController.abort()
       wipeChunks()
     }
-  }, [application, downloadedBytes, file, isFilePreviewable, isAuthorized])
+  }, [application, authoritativeFile, downloadedBytes, isFilePreviewable, isAuthorized, retryGeneration])
+
+  const authorizeCurrentFile = useCallback(async () => {
+    const currentFile = application.items.findItem<FileItem>(file.uuid)
+    if (!currentFile) {
+      return
+    }
+
+    const granted = await application.protections.authorizeItemAccess(currentFile)
+    if (granted && application.isAuthorizedToRenderItem(currentFile)) {
+      setRetryGeneration((generation) => generation + 1)
+    }
+  }, [application, file.uuid])
 
   if (!isAuthorized) {
     const hasProtectionSources = application.hasProtectionSources()
@@ -186,7 +237,7 @@ const FilePreview = ({
               {t('openAccountMenu')}
             </Button>
           )}
-          <Button primary onClick={() => application.protections.authorizeItemAccess(file)}>
+          <Button primary onClick={authorizeCurrentFile}>
             {hasProtectionSources ? t('authenticate') : t('viewFile')}
           </Button>
         </div>
@@ -204,16 +255,18 @@ const FilePreview = ({
       </div>
       {downloadProgress ? (
         <span className="mt-3">
-          {fileProgressToHumanReadableString(downloadProgress, file.name, { showPercent: false })}
+          {fileProgressToHumanReadableString(downloadProgress, authoritativeFile?.name ?? file.name, {
+            showPercent: false,
+          })}
         </span>
       ) : (
         <span className="mt-3">{t('loading')}</span>
       )}
     </div>
-  ) : downloadedBytes ? (
+  ) : downloadedBytes && authoritativeFile ? (
     <PreviewComponent
       application={application}
-      file={file}
+      file={authoritativeFile}
       bytes={downloadedBytes}
       isEmbeddedInSuper={isEmbeddedInSuper}
       pdfTarget={pdfTarget}
@@ -231,10 +284,10 @@ const FilePreview = ({
     />
   ) : (
     <FilePreviewError
-      file={file}
+      file={authoritativeFile!}
       filesController={application.filesController}
       tryAgainCallback={() => {
-        setDownloadedPreview(undefined)
+        setRetryGeneration((generation) => generation + 1)
       }}
       isFilePreviewable={isFilePreviewable}
     />

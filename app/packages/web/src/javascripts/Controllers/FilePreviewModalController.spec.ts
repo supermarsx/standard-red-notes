@@ -75,6 +75,33 @@ describe('FilePreviewModalController secure lifecycle', () => {
     expect(controller.otherFiles).toEqual([])
   })
 
+  it('refreshes every retained navigation entry before it can be selected again', () => {
+    const current = file('current')
+    const image = {
+      ...file('image'),
+      remoteIdentifier: 'old-image-remote',
+      mimeType: 'image/png',
+      protected: false,
+    } as FileItem
+    const pdf = {
+      ...file('pdf'),
+      remoteIdentifier: 'old-pdf-remote',
+      mimeType: 'application/pdf',
+      protected: false,
+    } as FileItem
+    controller.activate(current, [current, image, pdf])
+
+    const changedImage = { ...image, remoteIdentifier: 'new-image-remote', protected: true } as FileItem
+    const changedPdf = { ...pdf, remoteIdentifier: 'new-pdf-remote', protected: true } as FileItem
+    fileStream({ changed: [changedImage, changedPdf], removed: [] })
+
+    expect(controller.otherFiles).toEqual([current, changedImage, changedPdf])
+    controller.setCurrentFile(controller.otherFiles[1])
+    expect(controller.currentFile).toEqual(changedImage)
+    controller.setCurrentFile(controller.otherFiles[2])
+    expect(controller.currentFile).toEqual(changedPdf)
+  })
+
   it('scrubs every retained reference on dismiss and matching vault lock', () => {
     const vaultFile = file('vault-file', 'locked-vault-key')
     controller.activate(vaultFile, [vaultFile], { page: 3 })

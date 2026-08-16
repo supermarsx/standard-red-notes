@@ -8,15 +8,22 @@ import { createRoot, Root } from 'react-dom/client'
 import FilePreview from './FilePreview'
 
 let mockPreviewBytes: Uint8Array | undefined
+let mockPreviewFile: FileItem | undefined
 
 jest.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }))
 jest.mock('./PreviewComponent', () => ({
   __esModule: true,
-  default: ({ bytes }: { bytes: Uint8Array }) => {
+  default: ({ bytes, file }: { bytes: Uint8Array; file: FileItem }) => {
+    const React = jest.requireActual<typeof import('react')>('react')
     mockPreviewBytes = bytes
-    return `decrypted-preview:${[...bytes].join(',')}`
+    mockPreviewFile = file
+    return React.createElement(
+      'div',
+      { 'data-preview-mime': file.mimeType },
+      `decrypted-preview:${[...bytes].join(',')}`,
+    )
   },
 }))
 jest.mock('@/Components/Spinner/Spinner', () => ({
@@ -25,7 +32,10 @@ jest.mock('@/Components/Spinner/Spinner', () => ({
 }))
 jest.mock('./FilePreviewError', () => ({
   __esModule: true,
-  default: () => 'preview-error',
+  default: ({ tryAgainCallback }: { tryAgainCallback: () => void }) => {
+    const React = jest.requireActual<typeof import('react')>('react')
+    return React.createElement('button', { onClick: tryAgainCallback }, 'preview-error')
+  },
 }))
 jest.mock('@standardnotes/icons', () => ({
   ProtectedIllustration: () => 'protected',
@@ -42,6 +52,7 @@ describe('FilePreview vault authorization', () => {
     document.body.appendChild(container)
     root = createRoot(container)
     mockPreviewBytes = undefined
+    mockPreviewFile = undefined
   })
 
   afterEach(() => {
@@ -53,6 +64,16 @@ describe('FilePreview vault authorization', () => {
   it('discards late decrypted chunks after lock and requires a fresh authorized download', async () => {
     let authorized = true
     let vaultLockObserver!: (event: VaultLockServiceEvent) => void
+    const file = {
+      uuid: 'vault-file',
+      remoteIdentifier: 'vault-file-remote',
+      content_type: ContentType.TYPES.File,
+      key_system_identifier: 'vault-key-system',
+      mimeType: 'text/plain',
+      name: 'secret.txt',
+      protected: false,
+    } as FileItem
+    const currentFile = file
     const downloads: {
       emit: (chunk: Uint8Array, progress?: undefined) => Promise<void>
       resolve: (error: undefined) => void
@@ -75,22 +96,13 @@ describe('FilePreview vault authorization', () => {
         }),
       },
       items: {
+        findItem: jest.fn(() => currentFile),
         streamItems: jest.fn(() => jest.fn()),
       },
       files: { downloadFile },
       hasProtectionSources: jest.fn().mockReturnValue(true),
       protections: { authorizeItemAccess: jest.fn() },
     } as unknown as WebApplication
-    const file = {
-      uuid: 'vault-file',
-      remoteIdentifier: 'vault-file-remote',
-      content_type: ContentType.TYPES.File,
-      key_system_identifier: 'vault-key-system',
-      mimeType: 'text/plain',
-      name: 'secret.txt',
-      protected: false,
-    } as FileItem
-
     await act(async () => {
       root.render(createElement(FilePreview, { application, file }))
       await Promise.resolve()
@@ -143,6 +155,7 @@ describe('FilePreview vault authorization', () => {
   })
 
   it('never renders file A bytes when the same mounted component switches to file B', async () => {
+    let currentFile: FileItem | undefined
     const downloads: {
       emit: (chunk: Uint8Array, progress?: undefined) => Promise<void>
       resolve: (error: undefined) => void
@@ -155,7 +168,10 @@ describe('FilePreview vault authorization', () => {
       isAuthorizedToRenderItem: jest.fn(() => true),
       addEventObserver: jest.fn(() => jest.fn()),
       vaultLocks: { addEventObserver: jest.fn(() => jest.fn()) },
-      items: { streamItems: jest.fn(() => jest.fn()) },
+      items: {
+        findItem: jest.fn(() => currentFile),
+        streamItems: jest.fn(() => jest.fn()),
+      },
       files: { downloadFile },
       hasProtectionSources: jest.fn().mockReturnValue(true),
       protections: { authorizeItemAccess: jest.fn() },
@@ -173,6 +189,7 @@ describe('FilePreview vault authorization', () => {
       remoteIdentifier: 'remote-b',
       name: 'b.txt',
     } as FileItem
+    currentFile = firstFile
 
     await act(async () => {
       root.render(createElement(FilePreview, { application, file: firstFile }))
@@ -188,6 +205,7 @@ describe('FilePreview vault authorization', () => {
     const firstRenderedBytes = mockPreviewBytes
 
     await act(async () => {
+      currentFile = secondFile
       root.render(createElement(FilePreview, { application, file: secondFile }))
       await Promise.resolve()
     })
@@ -202,5 +220,228 @@ describe('FilePreview vault authorization', () => {
       await Promise.resolve()
     })
     expect(container.textContent).toContain('decrypted-preview:4,5,6')
+  })
+
+  it('restarts from a live same-UUID replacement and fails closed when the authoritative item is removed', async () => {
+    const originalFile = {
+      uuid: 'live-file',
+      remoteIdentifier: 'remote-original',
+      content_type: ContentType.TYPES.File,
+      mimeType: 'image/png',
+      name: 'original.png',
+    } as FileItem
+    const replacementFile = {
+      ...originalFile,
+      remoteIdentifier: 'remote-replacement',
+      name: 'replacement.png',
+    } as FileItem
+    let currentFile: FileItem | undefined = originalFile
+    const fileObservers: ((event: {
+      changed: FileItem[]
+      inserted: FileItem[]
+      removed: { uuid: string }[]
+    }) => void)[] = []
+    const downloads: {
+      emit: (chunk: Uint8Array) => Promise<void>
+      resolve: (error: undefined) => void
+    }[] = []
+    const downloadFile = jest.fn(
+      (_file: FileItem, emit: (chunk: Uint8Array) => Promise<void>) =>
+        new Promise<undefined>((resolve) => downloads.push({ emit, resolve })),
+    )
+    const application = {
+      isAuthorizedToRenderItem: jest.fn(() => true),
+      addEventObserver: jest.fn(() => jest.fn()),
+      vaultLocks: { addEventObserver: jest.fn(() => jest.fn()) },
+      items: {
+        findItem: jest.fn(() => currentFile),
+        streamItems: jest.fn(
+          (
+            contentType: string | string[],
+            observer: (event: { changed: FileItem[]; inserted: FileItem[]; removed: { uuid: string }[] }) => void,
+          ) => {
+            if (contentType === ContentType.TYPES.File) {
+              fileObservers.push(observer)
+            }
+            return jest.fn()
+          },
+        ),
+      },
+      files: { downloadFile },
+      hasProtectionSources: jest.fn().mockReturnValue(true),
+      protections: { authorizeItemAccess: jest.fn() },
+    } as unknown as WebApplication
+
+    await act(async () => {
+      root.render(createElement(FilePreview, { application, file: originalFile }))
+      await Promise.resolve()
+    })
+    await act(async () => {
+      await downloads[0].emit(new Uint8Array([1, 2, 3]))
+      downloads[0].resolve(undefined)
+      await Promise.resolve()
+    })
+    const originalBytes = mockPreviewBytes
+    expect(mockPreviewFile).toBe(originalFile)
+
+    currentFile = replacementFile
+    await act(async () => {
+      fileObservers.forEach((observer) => observer({ changed: [replacementFile], inserted: [], removed: [] }))
+      await Promise.resolve()
+    })
+
+    expect(originalBytes && [...originalBytes]).toEqual([0, 0, 0])
+    expect(downloadFile).toHaveBeenCalledTimes(2)
+    expect(downloadFile).toHaveBeenLastCalledWith(replacementFile, expect.any(Function), expect.any(Object))
+
+    await act(async () => {
+      await downloads[1].emit(new Uint8Array([4, 5, 6]))
+      downloads[1].resolve(undefined)
+      await Promise.resolve()
+    })
+    const replacementBytes = mockPreviewBytes
+    expect(mockPreviewFile).toBe(replacementFile)
+
+    currentFile = undefined
+    await act(async () => {
+      fileObservers.forEach((observer) => observer({ changed: [], inserted: [], removed: [replacementFile] }))
+      await Promise.resolve()
+    })
+
+    expect(replacementBytes && [...replacementBytes]).toEqual([0, 0, 0])
+    expect(container.textContent).toContain('fileProtected')
+    expect(container.textContent).not.toContain('decrypted-preview')
+  })
+
+  it.each([
+    ['image', 'image/png'],
+    ['PDF', 'application/pdf'],
+  ])(
+    'authorizes and downloads the authoritative %s item instead of a stale linked snapshot',
+    async (_kind, mimeType) => {
+      let authorized = false
+      const staleFile = {
+        uuid: `stale-${mimeType}`,
+        remoteIdentifier: 'old-remote',
+        content_type: ContentType.TYPES.File,
+        mimeType,
+        name: `stale.${mimeType === 'application/pdf' ? 'pdf' : 'png'}`,
+        protected: false,
+      } as FileItem
+      const authoritativeFile = {
+        ...staleFile,
+        remoteIdentifier: 'current-remote',
+        protected: true,
+      } as FileItem
+      let emitChunk!: (chunk: Uint8Array) => Promise<void>
+      let finishDownload!: (error: undefined) => void
+      const downloadFile = jest.fn(
+        (_file: FileItem, emit: (chunk: Uint8Array) => Promise<void>) =>
+          new Promise<undefined>((resolve) => {
+            emitChunk = emit
+            finishDownload = resolve
+          }),
+      )
+      const authorizeItemAccess = jest.fn(async (item: FileItem) => {
+        expect(item).toBe(authoritativeFile)
+        authorized = true
+        return true
+      })
+      const application = {
+        isAuthorizedToRenderItem: jest.fn(() => authorized),
+        addEventObserver: jest.fn(() => jest.fn()),
+        vaultLocks: { addEventObserver: jest.fn(() => jest.fn()) },
+        items: {
+          findItem: jest.fn(() => authoritativeFile),
+          streamItems: jest.fn(() => jest.fn()),
+        },
+        files: { downloadFile },
+        filesController: {},
+        hasProtectionSources: jest.fn(() => true),
+        protections: { authorizeItemAccess },
+      } as unknown as WebApplication
+
+      await act(async () => {
+        root.render(createElement(FilePreview, { application, file: staleFile }))
+        await Promise.resolve()
+      })
+      expect(container.textContent).toContain('fileProtected')
+
+      await act(async () => {
+        container.querySelector('button')?.click()
+        await Promise.resolve()
+      })
+
+      expect(authorizeItemAccess).toHaveBeenCalledWith(authoritativeFile)
+      expect(downloadFile).toHaveBeenCalledWith(authoritativeFile, expect.any(Function), expect.any(Object))
+
+      await act(async () => {
+        await emitChunk(new Uint8Array([1, 2, 3]))
+        finishDownload(undefined)
+        await Promise.resolve()
+      })
+
+      expect(container.querySelector(`[data-preview-mime="${mimeType}"]`)).not.toBeNull()
+      expect(mockPreviewFile).toBe(authoritativeFile)
+    },
+  )
+
+  it.each([
+    ['image', 'image/png'],
+    ['PDF', 'application/pdf'],
+  ])('retries a failed %s download even while preview state is already empty', async (_kind, mimeType) => {
+    const file = {
+      uuid: `retry-${mimeType}`,
+      remoteIdentifier: 'retry-remote',
+      content_type: ContentType.TYPES.File,
+      mimeType,
+      name: `retry.${mimeType === 'application/pdf' ? 'pdf' : 'png'}`,
+    } as FileItem
+    let emitChunk!: (chunk: Uint8Array) => Promise<void>
+    let finishDownload!: (error: undefined) => void
+    const downloadFile = jest
+      .fn()
+      .mockResolvedValueOnce({ message: 'temporary failure' })
+      .mockImplementationOnce(
+        (_file: FileItem, emit: (chunk: Uint8Array) => Promise<void>) =>
+          new Promise<undefined>((resolve) => {
+            emitChunk = emit
+            finishDownload = resolve
+          }),
+      )
+    const application = {
+      isAuthorizedToRenderItem: jest.fn(() => true),
+      addEventObserver: jest.fn(() => jest.fn()),
+      vaultLocks: { addEventObserver: jest.fn(() => jest.fn()) },
+      items: {
+        findItem: jest.fn(() => file),
+        streamItems: jest.fn(() => jest.fn()),
+      },
+      files: { downloadFile },
+      filesController: {},
+      hasProtectionSources: jest.fn(() => true),
+      protections: { authorizeItemAccess: jest.fn() },
+    } as unknown as WebApplication
+
+    await act(async () => {
+      root.render(createElement(FilePreview, { application, file }))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(container.textContent).toContain('preview-error')
+
+    await act(async () => {
+      container.querySelector('button')?.click()
+      await Promise.resolve()
+    })
+    expect(downloadFile).toHaveBeenCalledTimes(2)
+
+    await act(async () => {
+      await emitChunk(new Uint8Array([4, 5, 6]))
+      finishDownload(undefined)
+      await Promise.resolve()
+    })
+
+    expect(container.querySelector(`[data-preview-mime="${mimeType}"]`)).not.toBeNull()
   })
 })

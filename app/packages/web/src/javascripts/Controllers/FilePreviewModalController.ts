@@ -38,10 +38,13 @@ export class FilePreviewModalController {
           return
         }
         const currentFile = this.currentFile
+        const changedByUuid = new Map(changed.map((file) => [file.uuid, file as FileItem]))
         const changedCurrentFile = changed.find((file) => file.uuid === currentFile.uuid) as FileItem | undefined
         if (changedCurrentFile) {
           this.setCurrentFile(changedCurrentFile)
         }
+
+        this.otherFiles = this.otherFiles.map((file) => changedByUuid.get(file.uuid) ?? file)
 
         const removedUuids = new Set(removed.map((file) => file.uuid))
         const currentFileWasRemoved = removedUuids.has(currentFile.uuid)
