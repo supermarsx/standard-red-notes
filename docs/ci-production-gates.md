@@ -15,9 +15,11 @@ non-main repositories never publish containers. Only a first-party push to
 jobs keep read-only repository permissions; registry, identity-token, and
 attestation authority exists only on that protected publisher.
 
-The stable branch-protection check is `production-gate`. It fails unless every
-required lane succeeds; a failed, cancelled, or skipped dependency cannot turn
-the fan-in green.
+The `main` branch currently has no GitHub branch-protection rule or required
+status check. The `production-gate` fan-in remains visible on every CI run and
+still protects container publication. It fails unless every required lane
+succeeds; a failed, cancelled, or skipped dependency cannot turn the fan-in
+green.
 
 ## Required Lanes
 
