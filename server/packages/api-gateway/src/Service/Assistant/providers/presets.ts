@@ -14,6 +14,8 @@
 //
 // keep in sync with web providerCatalog.ts
 
+import { toolCapableModelEntries } from './modelDiscovery'
+
 /** Environment map this module reads (defaults to process.env, overridable in tests). */
 type Env = Record<string, string | undefined>
 
@@ -277,8 +279,10 @@ export async function listPresetModels(id: string, env: Env = process.env): Prom
       return []
     }
 
-    const json = (await res.json()) as { data?: Array<{ id?: string; name?: string }> }
-    return (json.data ?? []).map((entry) => entry.id ?? entry.name).filter((value): value is string => Boolean(value))
+    const json = (await res.json()) as { data?: unknown }
+    return toolCapableModelEntries(json.data)
+      .map((entry) => entry.id ?? entry.name)
+      .filter((value): value is string => typeof value === 'string' && value.length > 0)
   } catch {
     return []
   }

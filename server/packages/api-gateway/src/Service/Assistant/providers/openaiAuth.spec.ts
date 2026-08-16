@@ -3,6 +3,7 @@ import {
   DEFAULT_CODEX_SUBSCRIPTION_BASE_URL,
   DEFAULT_OPENAI_BASE_URL,
   openAiCompatibleConfigured,
+  normalizeOpenAiUpstreamBaseUrl,
   parseExtraHeaders,
   resolveOpenAiUpstream,
   safeSubscriptionBaseUrl,
@@ -28,6 +29,26 @@ describe('resolveOpenAiUpstream', () => {
       // Placeholder key so the SDK does not reject local servers.
       expect(upstream.apiKey).toBe('not-required')
     })
+
+    it.each([
+      ['https://openrouter.ai/api/v1/chat/completions', 'https://openrouter.ai/api/v1'],
+      ['https://api.openai.com/v1/responses/', 'https://api.openai.com/v1'],
+      ['https://api.openai.com/v1/models', 'https://api.openai.com/v1'],
+      ['https://responses.example.test/responses', 'https://responses.example.test'],
+      ['https://chat.example.test/chat/completions', 'https://chat.example.test'],
+      ['https://api.openai.com', 'https://api.openai.com/v1'],
+    ])('canonicalizes a pasted endpoint %s', (raw, expected) => {
+      expect(normalizeOpenAiUpstreamBaseUrl(raw)).toBe(expected)
+      expect(resolveOpenAiUpstream({ openaiBaseURL: raw }).baseURL).toBe(expected)
+    })
+
+    it.each(['https://example.test/v1?tenant=one', 'https://example.test/v1#fragment'])(
+      'rejects an API-key base URL whose query or fragment would corrupt SDK route joining: %s',
+      (raw) => {
+        expect(() => normalizeOpenAiUpstreamBaseUrl(raw)).toThrow('cannot contain a query string or fragment')
+        expect(() => resolveOpenAiUpstream({ openaiBaseURL: raw })).toThrow('cannot contain a query string or fragment')
+      },
+    )
 
     it('treats an explicit api-key mode the same as the default', () => {
       const config: AssistantProviderConfig = { openaiAuthMode: 'api-key', openaiApiKey: 'sk-x' }
@@ -73,6 +94,26 @@ describe('resolveOpenAiUpstream', () => {
         openaiSubscriptionBaseURL: 'https://example.test/codex',
       }
       expect(resolveOpenAiUpstream(config).baseURL).toBe('https://example.test/codex')
+    })
+
+    it('does not impose the API-key /v1 convention on a bare subscription origin', () => {
+      expect(
+        resolveOpenAiUpstream({
+          openaiAuthMode: 'subscription',
+          openaiSubscriptionToken: 't',
+          openaiSubscriptionBaseURL: 'https://example.test',
+        }).baseURL,
+      ).toBe('https://example.test')
+    })
+
+    it('strips a pasted Responses route from a safe subscription base URL', () => {
+      expect(
+        resolveOpenAiUpstream({
+          openaiAuthMode: 'subscription',
+          openaiSubscriptionToken: 't',
+          openaiSubscriptionBaseURL: 'https://example.test/codex/responses',
+        }).baseURL,
+      ).toBe('https://example.test/codex')
     })
 
     it('adds account-id and OpenAI-Beta headers when configured', () => {
@@ -204,6 +245,38 @@ describe('openAiCompatibleConfigured', () => {
       false,
     )
     expect(openAiCompatibleConfigured({ openaiAuthMode: 'subscription' })).toBe(false)
+  })
+})
+
+describe('OpenAI-compatible model discovery', () => {
+  const realFetch = global.fetch
+
+  afterEach(() => {
+    global.fetch = realFetch
+  })
+
+  it('does not advertise models whose valid supported_parameters explicitly omit tools', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: [
+          { id: 'tool-model', supported_parameters: ['temperature', 'tools'] },
+          { id: 'no-tool-model', supported_parameters: ['temperature'] },
+          { id: 'empty-capabilities', supported_parameters: [] },
+          { id: 'metadata-absent' },
+          { id: 'metadata-null', supported_parameters: null },
+          { id: 'metadata-malformed', supported_parameters: ['temperature', 7] },
+          { id: 42, supported_parameters: ['tools'] },
+        ],
+      }),
+    }) as unknown as typeof fetch
+
+    await expect(
+      listProviderModels('openai', {
+        openaiApiKey: 'openrouter-key',
+        openaiBaseURL: 'https://openrouter.ai/api/v1',
+      }),
+    ).resolves.toEqual(['tool-model', 'metadata-absent', 'metadata-null', 'metadata-malformed'])
   })
 })
 

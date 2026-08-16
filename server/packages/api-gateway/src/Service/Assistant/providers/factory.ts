@@ -4,6 +4,7 @@ import { OpenAIProvider } from './openai'
 import { OpenAIResponsesProvider } from './openaiResponses'
 import { OllamaProvider } from './ollama'
 import { DEFAULT_OPENAI_BASE_URL, openAiCompatibleConfigured, resolveOpenAiUpstream } from './openaiAuth'
+import { toolCapableModelEntries } from './modelDiscovery'
 
 export { DEFAULT_OPENAI_BASE_URL }
 
@@ -116,8 +117,10 @@ export async function listProviderModels(provider: string, config: AssistantProv
         if (!res.ok) {
           return []
         }
-        const json = (await res.json()) as { data?: Array<{ id?: string }> }
-        return (json.data ?? []).map((entry) => entry.id).filter((id): id is string => Boolean(id))
+        const json = (await res.json()) as { data?: unknown }
+        return toolCapableModelEntries(json.data)
+          .map((entry) => entry.id)
+          .filter((id): id is string => typeof id === 'string' && id.length > 0)
       }
       case 'ollama': {
         if (!config.ollamaUrl) {

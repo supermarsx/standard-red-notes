@@ -61,7 +61,7 @@ export function normalizeOpenAICompatibleBaseURL(raw: string): string {
     path = path.slice(0, -pastedEndpoint.length).replace(/\/+$/, '')
   }
   if (!path) {
-    path = '/v1'
+    path = pastedEndpoint ? '/' : '/v1'
   }
 
   url.pathname = path
@@ -74,6 +74,39 @@ export function normalizeOpenAICompatibleBaseURL(raw: string): string {
  */
 export function openAICompatibleEndpointURL(rawBaseURL: string, route: OpenAICompatibleRoute): string {
   return `${normalizeOpenAICompatibleBaseURL(rawBaseURL)}/${route}`
+}
+
+/**
+ * Extract model ids that are safe to advertise to the tool-using assistant.
+ * OpenRouter declares support with `supported_parameters`; generic compatible
+ * servers omit it. Keep absent or malformed metadata backward compatible and
+ * exclude only a valid string array that explicitly omits `tools`.
+ */
+export function discoverableOpenAICompatibleModelIds(payload: unknown): string[] {
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
+    return []
+  }
+  const data = (payload as Record<string, unknown>).data
+  if (!Array.isArray(data)) {
+    return []
+  }
+
+  const ids: string[] = []
+  for (const value of data) {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      continue
+    }
+    const entry = value as Record<string, unknown>
+    const parameters = entry.supported_parameters
+    const explicitlyUnsupported =
+      Array.isArray(parameters) &&
+      parameters.every((parameter): parameter is string => typeof parameter === 'string') &&
+      !parameters.includes('tools')
+    if (!explicitlyUnsupported && typeof entry.id === 'string' && entry.id.length > 0) {
+      ids.push(entry.id)
+    }
+  }
+  return ids
 }
 
 /**

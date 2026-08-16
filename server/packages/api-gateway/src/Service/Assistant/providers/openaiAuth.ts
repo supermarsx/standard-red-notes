@@ -35,6 +35,7 @@ export const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1'
  * The real value must be confirmed against a live subscription.
  */
 export const DEFAULT_CODEX_SUBSCRIPTION_BASE_URL = 'https://chatgpt.com/backend-api/codex'
+const OPENAI_ENDPOINT_SUFFIXES = ['/chat/completions', '/responses', '/models'] as const
 
 export type OpenAiAuthMode = 'api-key' | 'subscription'
 const MAX_SUBSCRIPTION_BEARER_LENGTH = 256 * 1024
@@ -57,6 +58,36 @@ export interface ResolvedOpenAiUpstream {
   /** Extra headers merged onto every upstream request (account id / beta / custom). */
   defaultHeaders: Record<string, string>
   mode: OpenAiAuthMode
+}
+
+/**
+ * Accept a configured API root or a pasted full OpenAI endpoint, but always
+ * hand the SDK one canonical base. Otherwise the SDK appends its route to the
+ * pasted route and produces paths such as `/chat/completions/chat/completions`.
+ */
+function canonicalOpenAiUpstreamBaseUrl(raw: string, bareOriginPath: '/' | '/v1'): string {
+  const url = new URL(raw)
+  if (raw.includes('?') || raw.includes('#')) {
+    throw new Error('The OpenAI-compatible base URL cannot contain a query string or fragment.')
+  }
+  let path = url.pathname.replace(/\/+$/, '')
+  const lowerPath = path.toLowerCase()
+  const endpointSuffix = OPENAI_ENDPOINT_SUFFIXES.find((suffix) => lowerPath.endsWith(suffix))
+  if (endpointSuffix) {
+    path = path.slice(0, -endpointSuffix.length).replace(/\/+$/, '')
+  }
+  if (!path) {
+    // A bare origin conventionally means /v1. A full endpoint mounted directly
+    // at the origin must instead canonicalize back to that origin; adding /v1
+    // would silently route /responses to the wrong API.
+    path = endpointSuffix ? '/' : bareOriginPath
+  }
+  url.pathname = path
+  return url.toString().replace(/\/$/, '')
+}
+
+export function normalizeOpenAiUpstreamBaseUrl(raw: string): string {
+  return canonicalOpenAiUpstreamBaseUrl(raw, '/v1')
 }
 
 function normalizeMode(raw: string | undefined): OpenAiAuthMode {
@@ -130,7 +161,10 @@ export function safeSubscriptionBaseUrl(raw: string): string | null {
   if (!safeProtocol || url.username || url.password || raw.includes('?') || raw.includes('#')) {
     return null
   }
-  return url.toString().replace(/\/$/, '')
+  // Subscription/Codex backends do not conventionally imply `/v1` when an
+  // operator configures a bare origin, but pasted full endpoints still need
+  // their route suffix removed to avoid double-appending `/responses`.
+  return canonicalOpenAiUpstreamBaseUrl(url.toString(), '/')
 }
 
 function isHeaderName(value: string): boolean {
@@ -225,7 +259,7 @@ export function resolveOpenAiUpstream(config: AssistantProviderConfig): Resolved
   }
 
   // api-key mode (default, unchanged).
-  const baseURL = config.openaiBaseURL || DEFAULT_OPENAI_BASE_URL
+  const baseURL = normalizeOpenAiUpstreamBaseUrl(config.openaiBaseURL || DEFAULT_OPENAI_BASE_URL)
   // Local servers (LM Studio / Ollama) accept any non-empty key; send a
   // placeholder when none is configured so the SDK does not reject it.
   const apiKey = config.openaiApiKey || 'not-required'

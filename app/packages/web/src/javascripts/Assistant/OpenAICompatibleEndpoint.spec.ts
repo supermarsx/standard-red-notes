@@ -1,4 +1,5 @@
 import {
+  discoverableOpenAICompatibleModelIds,
   directEndpointConfigurationError,
   normalizeOpenAICompatibleBaseURL,
   openAICompatibleEndpointURL,
@@ -15,6 +16,9 @@ describe('OpenAI-compatible endpoint normalization', () => {
   it('does not duplicate a full Chat Completions route pasted as the base URL', () => {
     expect(openAICompatibleEndpointURL('http://localhost:1234/v1/chat/completions/', 'chat/completions')).toBe(
       'http://localhost:1234/v1/chat/completions',
+    )
+    expect(openAICompatibleEndpointURL('https://root-api.example.test/chat/completions', 'chat/completions')).toBe(
+      'https://root-api.example.test/chat/completions',
     )
   })
 
@@ -53,4 +57,29 @@ describe('OpenAI-compatible endpoint normalization', () => {
     expect(directEndpointConfigurationError(`${window.location.origin}/v1`)).toContain('Standard Red Notes web address')
     expect(directEndpointConfigurationError(`${window.location.origin}/llm/v1`)).toBeUndefined()
   })
+})
+
+describe('OpenAI-compatible direct model discovery', () => {
+  it('does not advertise explicit non-tool models while retaining absent or malformed metadata', () => {
+    expect(
+      discoverableOpenAICompatibleModelIds({
+        data: [
+          { id: 'tool-model', supported_parameters: ['temperature', 'tools'] },
+          { id: 'no-tool-model', supported_parameters: ['temperature'] },
+          { id: 'empty-capabilities', supported_parameters: [] },
+          { id: 'metadata-absent' },
+          { id: 'metadata-null', supported_parameters: null },
+          { id: 'metadata-malformed', supported_parameters: ['tools', 7] },
+          { id: 42, supported_parameters: ['tools'] },
+        ],
+      }),
+    ).toEqual(['tool-model', 'metadata-absent', 'metadata-null', 'metadata-malformed'])
+  })
+
+  it.each([null, [], {}, { data: null }, { data: 'not-an-array' }])(
+    'fails closed on malformed payload %p',
+    (payload) => {
+      expect(discoverableOpenAICompatibleModelIds(payload)).toEqual([])
+    },
+  )
 })

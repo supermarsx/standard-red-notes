@@ -61,7 +61,11 @@ import {
   TOP_P_MIN,
 } from '@/Assistant/samplingSettings'
 import { assistantHttpError, assistantNetworkError } from '@/Assistant/AssistantHttpError'
-import { normalizeOpenAICompatibleBaseURL, openAICompatibleEndpointURL } from '@/Assistant/OpenAICompatibleEndpoint'
+import {
+  discoverableOpenAICompatibleModelIds,
+  normalizeOpenAICompatibleBaseURL,
+  openAICompatibleEndpointURL,
+} from '@/Assistant/OpenAICompatibleEndpoint'
 import { ServerManagedAssistantConfiguration } from './ServerManagedAssistantConfiguration'
 import { useServerManagedAssistantConfig } from './useServerManagedAssistantConfig'
 
@@ -593,8 +597,7 @@ const Assistant = ({ application }: { application: WebApplication }) => {
       if (!response.ok) {
         throw new Error(await assistantHttpError(response, 'direct'))
       }
-      const json = (await response.json()) as { data?: Array<{ id?: string }> }
-      const ids = (json.data ?? []).map((entry) => entry.id).filter((id): id is string => Boolean(id))
+      const ids = discoverableOpenAICompatibleModelIds(await response.json())
       setAvailableModels(ids)
       if (ids.length === 0) {
         setModelsError('The endpoint returned no models.')

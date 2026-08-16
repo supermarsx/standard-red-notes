@@ -172,6 +172,25 @@ describe('listPresetModels', () => {
     expect((init.headers as Record<string, string>)['Authorization']).toBe('Bearer gk')
   })
 
+  it('filters only explicit non-tool OpenRouter entries and preserves unknown metadata compatibility', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: [
+          { id: 'tool-model', supported_parameters: ['tools', 'temperature'] },
+          { id: 'no-tool-model', supported_parameters: ['temperature'] },
+          { id: 'empty-capabilities', supported_parameters: [] },
+          { id: 'metadata-absent' },
+          { id: 'metadata-malformed', supported_parameters: 'tools' },
+        ],
+      }),
+    }) as unknown as typeof fetch
+
+    await expect(
+      listPresetModels('openrouter', { ASSISTANT_PRESET_OPENROUTER_API_KEY: 'openrouter-key' }),
+    ).resolves.toEqual(['tool-model', 'metadata-absent', 'metadata-malformed'])
+  })
+
   it('parses azure deployments via the api-key header + api-version path', async () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
