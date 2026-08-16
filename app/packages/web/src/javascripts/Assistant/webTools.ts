@@ -59,8 +59,69 @@ interface RawFetchData {
   message?: unknown
 }
 
+const MAX_RESULT_TITLE_CHARS = 500
+const MAX_RESULT_URL_CHARS = 2_048
+const MAX_RESULT_SNIPPET_CHARS = 4_000
+const MAX_SEARCH_QUERY_CHARS = 1_000
+const DEFAULT_SEARCH_RESULT_LIMIT = 10
+const MAX_SEARCH_RESULT_LIMIT = 20
+
 function asString(value: unknown): string {
   return typeof value === 'string' ? value : ''
+}
+
+function containsControlCharacter(value: string): boolean {
+  for (const character of value) {
+    const code = character.charCodeAt(0)
+    if (code < 0x20 || code === 0x7f) {
+      return true
+    }
+  }
+  return false
+}
+
+/** Keep an upstream error useful to the model without letting untrusted text flood its context. */
+function asSafeErrorMessage(value: unknown): string {
+  const message =
+    typeof value === 'string'
+      ? value
+      : value && typeof value === 'object' && typeof (value as { message?: unknown }).message === 'string'
+        ? (value as { message: string }).message
+        : ''
+  return collapseUntrustedText(message, 500)
+}
+
+function normalizeResultUrl(value: unknown): string | undefined {
+  const raw = asString(value).trim()
+  if (!raw || raw.length > MAX_RESULT_URL_CHARS) {
+    return undefined
+  }
+  if (containsControlCharacter(raw)) {
+    return undefined
+  }
+
+  try {
+    const url = new URL(raw)
+    if ((url.protocol !== 'http:' && url.protocol !== 'https:') || url.username || url.password) {
+      return undefined
+    }
+    return raw
+  } catch {
+    return undefined
+  }
+}
+
+function normalizeResultText(value: unknown, maxLength: number): string {
+  return collapseUntrustedText(asString(value), maxLength)
+}
+
+function collapseUntrustedText(value: string, maxLength: number): string {
+  let sanitized = ''
+  for (const character of value) {
+    const code = character.charCodeAt(0)
+    sanitized += code < 0x20 || code === 0x7f ? ' ' : character
+  }
+  return sanitized.replace(/\s+/g, ' ').trim().slice(0, maxLength)
 }
 
 /**
@@ -69,7 +130,7 @@ function asString(value: unknown): string {
  * user rather than retrying forever.
  */
 function describeHttpError(status: number, data: { error?: unknown; message?: unknown }): string {
-  const serverMessage = asString(data.error) || asString(data.message)
+  const serverMessage = asSafeErrorMessage(data.error) || asSafeErrorMessage(data.message)
   if (serverMessage) {
     return serverMessage
   }
@@ -95,11 +156,18 @@ export async function webSearch(
   if (!trimmed) {
     return { error: 'A non-empty "query" string is required.' }
   }
+  if (trimmed.length > MAX_SEARCH_QUERY_CHARS) {
+    return { error: `The search query must be ${MAX_SEARCH_QUERY_CHARS.toLocaleString()} characters or fewer.` }
+  }
+  const limit =
+    typeof options.limit === 'number' && Number.isFinite(options.limit) && options.limit > 0
+      ? Math.max(1, Math.min(MAX_SEARCH_RESULT_LIMIT, Math.floor(options.limit)))
+      : DEFAULT_SEARCH_RESULT_LIMIT
 
   try {
     const { ok, status, data } = await application.serverJsonRequest<RawSearchData>(
       WEB_SEARCH_ROUTE,
-      { query: trimmed, ...(typeof options.limit === 'number' ? { limit: options.limit } : {}) },
+      { query: trimmed, limit },
       options.signal,
     )
 
@@ -107,15 +175,37 @@ export async function webSearch(
       return { error: describeHttpError(status, data) }
     }
 
-    const rawResults = Array.isArray(data.results) ? data.results : []
-    const results: WebSearchResult[] = rawResults.map((entry) => {
-      const item = (entry ?? {}) as Record<string, unknown>
-      return {
-        title: asString(item.title),
-        url: asString(item.url),
-        snippet: asString(item.snippet),
+    const serverError = asSafeErrorMessage(data.error) || asSafeErrorMessage(data.message)
+    if (serverError) {
+      return { error: `Web search is unavailable: ${serverError}` }
+    }
+    if (!Array.isArray(data.results)) {
+      return { error: 'Web search returned an invalid response. Please try again later.' }
+    }
+
+    const results: WebSearchResult[] = []
+    for (const entry of data.results) {
+      if (!entry || typeof entry !== 'object') {
+        continue
       }
-    })
+      const item = entry as Record<string, unknown>
+      const url = normalizeResultUrl(item.url)
+      if (!url) {
+        continue
+      }
+      results.push({
+        title: normalizeResultText(item.title, MAX_RESULT_TITLE_CHARS),
+        url,
+        snippet: normalizeResultText(item.snippet, MAX_RESULT_SNIPPET_CHARS),
+      })
+      if (results.length >= limit) {
+        break
+      }
+    }
+
+    if (data.results.length > 0 && results.length === 0) {
+      return { error: 'Web search returned no usable result URLs. Please refine the query or try again later.' }
+    }
 
     return { results }
   } catch (error) {
@@ -136,8 +226,14 @@ export async function webFetch(
   if (!trimmed) {
     return { error: 'A non-empty "url" string is required.' }
   }
-  if (!/^https?:\/\//i.test(trimmed)) {
+  let parsedUrl: URL
+  try {
+    parsedUrl = new URL(trimmed)
+  } catch {
     return { error: 'The "url" must be an absolute http(s) URL.' }
+  }
+  if ((parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') || parsedUrl.username || parsedUrl.password) {
+    return { error: 'The "url" must be an absolute http(s) URL without credentials.' }
   }
 
   try {
@@ -149,6 +245,11 @@ export async function webFetch(
 
     if (!ok) {
       return { error: describeHttpError(status, data) }
+    }
+
+    const serverError = asSafeErrorMessage(data.error) || asSafeErrorMessage(data.message)
+    if (serverError) {
+      return { error: `Web fetch is unavailable: ${serverError}` }
     }
 
     return {

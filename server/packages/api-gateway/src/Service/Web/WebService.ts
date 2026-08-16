@@ -96,6 +96,8 @@ export class WebValidationError extends Error {
 const DEFAULT_MAX_CONTENT_CHARS = 100_000
 const DEFAULT_MAX_FETCH_BYTES = 5 * 1024 * 1024
 const DEFAULT_MAX_SEARCH_BYTES = 2 * 1024 * 1024
+const MAX_SEARCH_QUERY_CHARS = 1_000
+const MAX_SEARCH_RESULTS = 20
 const DEFAULT_FETCH_TIMEOUT_MS = 15_000
 const DEFAULT_SEARCH_TIMEOUT_MS = 12_000
 const USER_AGENT = 'standard-red-notes-web-proxy'
@@ -264,6 +266,9 @@ export class WebService {
     if (trimmed.length === 0) {
       return { results: [], error: 'empty query' }
     }
+    if (trimmed.length > MAX_SEARCH_QUERY_CHARS) {
+      return { results: [], error: 'search query too long' }
+    }
 
     const provider = (this.config.searchProvider || '').toLowerCase()
     const apiUrl = this.config.searchApiUrl || ''
@@ -309,16 +314,15 @@ export class WebService {
       return { results: [], error: `search upstream error (status ${response.status})` }
     }
     const parsed = safeParseJson(await this.readBoundedSearchBody(response, controller))
-    const rawResults = (parsed?.results as unknown[]) || []
-    const results = rawResults
-      .map((r) => r as Record<string, unknown>)
-      .map((r) => ({
-        title: asString(r.title),
-        url: asString(r.url),
-        snippet: asString(r.content ?? r.snippet),
-      }))
-      .filter((r) => r.url.length > 0)
-    return { results }
+    const rawResults = arrayAt(parsed, 'results')
+    if (!rawResults) {
+      return { results: [], error: 'search upstream returned an invalid response' }
+    }
+    return mapSearchResultResponse(rawResults, (result) => ({
+      title: result.title,
+      url: result.url,
+      snippet: result.content ?? result.snippet,
+    }))
   }
 
   // Brave Search API: GET {apiUrl}?q=... with X-Subscription-Token header ->
@@ -335,17 +339,15 @@ export class WebService {
       return { results: [], error: `search upstream error (status ${response.status})` }
     }
     const parsed = safeParseJson(await this.readBoundedSearchBody(response, controller))
-    const web = (parsed?.web as Record<string, unknown>) || {}
-    const rawResults = (web.results as unknown[]) || []
-    const results = rawResults
-      .map((r) => r as Record<string, unknown>)
-      .map((r) => ({
-        title: asString(r.title),
-        url: asString(r.url),
-        snippet: asString(r.description ?? r.snippet),
-      }))
-      .filter((r) => r.url.length > 0)
-    return { results }
+    const rawResults = arrayAt(parsed, 'web', 'results')
+    if (!rawResults) {
+      return { results: [], error: 'search upstream returned an invalid response' }
+    }
+    return mapSearchResultResponse(rawResults, (result) => ({
+      title: result.title,
+      url: result.url,
+      snippet: result.description ?? result.snippet,
+    }))
   }
 
   // Serper.dev (Google SERP API): POST {apiUrl} { q } with X-API-KEY header ->
@@ -370,16 +372,15 @@ export class WebService {
       return { results: [], error: `search upstream error (status ${response.status})` }
     }
     const parsed = safeParseJson(await this.readBoundedSearchBody(response, controller))
-    const rawResults = (parsed?.organic as unknown[]) || []
-    const results = rawResults
-      .map((r) => r as Record<string, unknown>)
-      .map((r) => ({
-        title: asString(r.title),
-        url: asString(r.link ?? r.url),
-        snippet: asString(r.snippet),
-      }))
-      .filter((r) => r.url.length > 0)
-    return { results }
+    const rawResults = arrayAt(parsed, 'organic')
+    if (!rawResults) {
+      return { results: [], error: 'search upstream returned an invalid response' }
+    }
+    return mapSearchResultResponse(rawResults, (result) => ({
+      title: result.title,
+      url: result.link ?? result.url,
+      snippet: result.snippet,
+    }))
   }
 
   /**
@@ -660,6 +661,89 @@ function appendQuery(baseUrl: string, params: Record<string, string>): string {
 
 function asString(value: unknown): string {
   return typeof value === 'string' ? value : ''
+}
+
+function containsControlCharacter(value: string): boolean {
+  for (const character of value) {
+    const code = character.charCodeAt(0)
+    if (code < 0x20 || code === 0x7f) {
+      return true
+    }
+  }
+  return false
+}
+
+function arrayAt(value: Record<string, unknown> | null, ...path: string[]): unknown[] | undefined {
+  let current: unknown = value
+  for (const key of path) {
+    if (!current || typeof current !== 'object' || Array.isArray(current)) {
+      return undefined
+    }
+    current = (current as Record<string, unknown>)[key]
+  }
+  return Array.isArray(current) ? current : undefined
+}
+
+/**
+ * Search results are untrusted upstream data that will be shown to a model and
+ * eventually offered to a user. Accept only absolute, credential-free HTTP(S)
+ * links, and bound text fields before they leave the server.
+ */
+function mapSearchResultResponse(
+  rawResults: unknown[],
+  map: (result: Record<string, unknown>) => { title: unknown; url: unknown; snippet: unknown },
+): WebSearchResult {
+  const results: WebSearchResultItem[] = []
+  for (const value of rawResults) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      continue
+    }
+    const item = map(value as Record<string, unknown>)
+    const url = normalizeSearchResultUrl(item.url)
+    if (!url) {
+      continue
+    }
+    results.push({
+      title: normalizeSearchResultText(item.title, 500),
+      url,
+      snippet: normalizeSearchResultText(item.snippet, 4_000),
+    })
+    if (results.length >= MAX_SEARCH_RESULTS) {
+      break
+    }
+  }
+  if (rawResults.length > 0 && results.length === 0) {
+    return { results: [], error: 'search upstream returned no usable results' }
+  }
+  return { results }
+}
+
+function normalizeSearchResultUrl(value: unknown): string | undefined {
+  const raw = asString(value).trim()
+  if (!raw || raw.length > 2_048) {
+    return undefined
+  }
+  if (containsControlCharacter(raw)) {
+    return undefined
+  }
+  try {
+    const url = new URL(raw)
+    if ((url.protocol !== 'http:' && url.protocol !== 'https:') || url.username || url.password) {
+      return undefined
+    }
+    return raw
+  } catch {
+    return undefined
+  }
+}
+
+function normalizeSearchResultText(value: unknown, maxLength: number): string {
+  let sanitized = ''
+  for (const character of asString(value)) {
+    const code = character.charCodeAt(0)
+    sanitized += code < 0x20 || code === 0x7f ? ' ' : character
+  }
+  return sanitized.replace(/\s+/g, ' ').trim().slice(0, maxLength)
 }
 
 function safeParseJson(body: string): Record<string, unknown> | null {

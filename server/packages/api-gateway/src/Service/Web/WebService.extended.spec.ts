@@ -112,6 +112,14 @@ describe('WebService.search', () => {
     expect(calls).toHaveLength(0)
   })
 
+  it('reports an oversized query rather than calling the upstream', async () => {
+    const { fn, calls } = recordingFetch('{}')
+    const service = makeService({ searchProvider: 'searxng', searchApiUrl: 'https://s.test/search' }, fn)
+
+    await expect(service.search('q'.repeat(1_001))).resolves.toEqual({ results: [], error: 'search query too long' })
+    expect(calls).toHaveLength(0)
+  })
+
   it('reports a non-string query as empty', async () => {
     const { fn } = recordingFetch('{}')
     const service = makeService({ searchProvider: 'searxng', searchApiUrl: 'https://s.test/search' }, fn)
@@ -201,16 +209,72 @@ describe('WebService.search', () => {
       })
     })
 
-    it('returns an empty result set when the upstream body is not JSON', async () => {
+    it('reports an invalid upstream payload instead of silently claiming there are no results', async () => {
       const { fn } = recordingFetch('<html>not json</html>')
+
+      await expect(makeService(config, fn).search('cats')).resolves.toEqual({
+        results: [],
+        error: 'search upstream returned an invalid response',
+      })
+    })
+
+    it('reports an invalid upstream shape instead of silently claiming there are no results', async () => {
+      const { fn } = recordingFetch(JSON.stringify({ something: 'else' }))
+
+      await expect(makeService(config, fn).search('cats')).resolves.toEqual({
+        results: [],
+        error: 'search upstream returned an invalid response',
+      })
+    })
+
+    it('returns a genuine empty result array without an error', async () => {
+      const { fn } = recordingFetch(JSON.stringify({ results: [] }))
 
       await expect(makeService(config, fn).search('cats')).resolves.toEqual({ results: [] })
     })
 
-    it('returns an empty result set when the JSON has no results array', async () => {
-      const { fn } = recordingFetch(JSON.stringify({ something: 'else' }))
+    it('drops unsafe or malformed result links before they reach the assistant', async () => {
+      const { fn } = recordingFetch(
+        JSON.stringify({
+          results: [
+            { title: 'script', url: 'javascript:alert(1)' },
+            { title: 'credentials', url: 'https://token@example.test/' },
+            { title: 'control', url: 'https://example.test/\nignored' },
+            { title: 'safe\u0000 title', url: 'https://example.test/path', content: 'a\n\t snippet' },
+          ],
+        }),
+      )
 
-      await expect(makeService(config, fn).search('cats')).resolves.toEqual({ results: [] })
+      await expect(makeService(config, fn).search('cats')).resolves.toEqual({
+        results: [{ title: 'safe title', url: 'https://example.test/path', snippet: 'a snippet' }],
+      })
+    })
+
+    it('reports non-empty upstream results as unusable when every link is rejected', async () => {
+      const { fn } = recordingFetch(
+        JSON.stringify({ results: [{ url: 'javascript:alert(1)' }, { url: 'https://token@example.test/' }] }),
+      )
+
+      await expect(makeService(config, fn).search('cats')).resolves.toEqual({
+        results: [],
+        error: 'search upstream returned no usable results',
+      })
+    })
+
+    it('bounds the number of results returned to the assistant', async () => {
+      const { fn } = recordingFetch(
+        JSON.stringify({
+          results: Array.from({ length: 30 }, (_, index) => ({
+            title: `Result ${index}`,
+            url: `https://example.test/${index}`,
+          })),
+        }),
+      )
+
+      const result = await makeService(config, fn).search('cats')
+
+      expect(result.results).toHaveLength(20)
+      expect(result.results[19].url).toBe('https://example.test/19')
     })
   })
 
@@ -238,10 +302,13 @@ describe('WebService.search', () => {
       expect(withoutKey.calls[0].init.headers['X-Subscription-Token']).toBeUndefined()
     })
 
-    it('returns an empty result set when the response has no web block', async () => {
+    it('reports an invalid upstream response when the web result block is missing', async () => {
       const { fn } = recordingFetch(JSON.stringify({ query: 'cats' }))
 
-      await expect(makeService(config, fn).search('cats')).resolves.toEqual({ results: [] })
+      await expect(makeService(config, fn).search('cats')).resolves.toEqual({
+        results: [],
+        error: 'search upstream returned an invalid response',
+      })
     })
 
     it('reports the upstream status rather than throwing', async () => {
