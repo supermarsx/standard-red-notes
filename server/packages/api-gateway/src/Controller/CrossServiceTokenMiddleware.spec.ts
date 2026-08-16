@@ -365,7 +365,37 @@ describe('AuthMiddleware (via its Required/Optional subclasses)', () => {
       expect(await limitFor(25)).toBe(25)
       expect(await limitFor(0)).toBeUndefined()
       expect(await limitFor(-1)).toBeUndefined()
+      expect(await limitFor(1.5)).toBeUndefined()
+      expect(await limitFor(Number.MAX_SAFE_INTEGER + 1)).toBeUndefined()
       expect(await limitFor('25')).toBeUndefined()
+    })
+
+    it('projects independent positive per-user token window overrides', async () => {
+      mockedVerify.mockReturnValue({
+        user: { uuid: '1-2-3' },
+        roles: [{ uuid: 'r-1', name: RoleName.NAMES.CoreUser }],
+        ai_five_hour_token_limit: 2500,
+        ai_weekly_token_limit: 12500,
+      })
+
+      await required().handler(makeRequest(), response, next)
+
+      expect((locals.settings as Record<string, unknown>)['AI_FIVE_HOUR_TOKEN_LIMIT']).toBe(2500)
+      expect((locals.settings as Record<string, unknown>)['AI_WEEKLY_TOKEN_LIMIT']).toBe(12500)
+    })
+
+    it('rejects fractional and unsafe per-user token window claims', async () => {
+      mockedVerify.mockReturnValue({
+        user: { uuid: '1-2-3' },
+        roles: [{ uuid: 'r-1', name: RoleName.NAMES.CoreUser }],
+        ai_five_hour_token_limit: 2.5,
+        ai_weekly_token_limit: Number.MAX_SAFE_INTEGER + 1,
+      })
+
+      await required().handler(makeRequest(), response, next)
+
+      expect((locals.settings as Record<string, unknown>)['AI_FIVE_HOUR_TOKEN_LIMIT']).toBeUndefined()
+      expect((locals.settings as Record<string, unknown>)['AI_WEEKLY_TOKEN_LIMIT']).toBeUndefined()
     })
   })
 
@@ -409,7 +439,6 @@ describe('AuthMiddleware (via its Required/Optional subclasses)', () => {
         data: { error: 'bad gateway' },
         headers: { 'content-type': 'application/problem+json' },
       } as never
-
       ;(serviceProxy.validateSession as jest.Mock).mockRejectedValue(error)
 
       await required().handler(makeRequest(), response, next)
@@ -435,7 +464,6 @@ describe('AuthMiddleware (via its Required/Optional subclasses)', () => {
     it('falls back to 500 when the axios error code is not numeric', async () => {
       const error = new AxiosError('Request failed', 'ECONNREFUSED')
       error.response = { data: { error: 'down' }, headers: {} } as never
-
       ;(serviceProxy.validateSession as jest.Mock).mockRejectedValue(error)
 
       await required().handler(makeRequest(), response, next)

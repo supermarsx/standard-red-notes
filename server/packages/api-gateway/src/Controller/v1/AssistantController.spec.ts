@@ -198,6 +198,20 @@ describe('AssistantController', () => {
       )
     })
 
+    it('enforces a per-user 5-hour token override independently of the global window', async () => {
+      redis.zrangebyscore.mockResolvedValue([`${now}:600:abc`])
+      const response = responseWith({ [SettingName.NAMES.AiFiveHourTokenLimit]: 500 })
+
+      await makeController(0, { fiveHour: 10_000, weekly: 20_000 }).streamCompletion(streamRequest(), response)
+
+      expect(statusMock).toHaveBeenCalledWith(429)
+      expect(jsonMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error: expect.objectContaining({ tag: 'ai-token-limit-reached', window: 'fiveHour', limitTokens: 500 }),
+        }),
+      )
+    })
+
     it('treats a 0 token limit as UNLIMITED (no token 429 even with heavy usage)', async () => {
       redis.zrangebyscore.mockResolvedValue([`${now}:9999999:abc`])
       const response = responseWith({})
@@ -410,6 +424,28 @@ describe('AssistantController', () => {
           tokens: expect.objectContaining({
             fiveHour: expect.objectContaining({ usedTokens: 120, limitTokens: 1000 }),
             weekly: expect.objectContaining({ usedTokens: 120, limitTokens: 5000 }),
+          }),
+        }),
+      )
+    })
+
+    it('reports user-specific token windows while retaining the independent daily request limit', async () => {
+      redis.get.mockResolvedValue('3')
+      redis.zrangebyscore.mockResolvedValue([`${Date.now()}:120:abc`])
+      const response = responseWith({
+        [SettingName.NAMES.AiRequestLimit]: 7,
+        [SettingName.NAMES.AiFiveHourTokenLimit]: 300,
+        [SettingName.NAMES.AiWeeklyTokenLimit]: 900,
+      })
+
+      await makeController(100, { fiveHour: 1_000, weekly: 5_000 }).usage({ query: {} } as unknown as Request, response)
+
+      expect(jsonMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          daily: expect.objectContaining({ limitRequests: 7 }),
+          tokens: expect.objectContaining({
+            fiveHour: expect.objectContaining({ limitTokens: 300 }),
+            weekly: expect.objectContaining({ limitTokens: 900 }),
           }),
         }),
       )

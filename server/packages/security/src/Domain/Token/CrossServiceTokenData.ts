@@ -58,6 +58,12 @@ export type CrossServiceTokenData = {
   ai_enabled?: boolean
   ai_request_limit?: number
   /**
+   * Optional per-user token-window overrides. Absent means inherit the
+   * server-wide rolling 5-hour / weekly token limit independently.
+   */
+  ai_five_hour_token_limit?: number
+  ai_weekly_token_limit?: number
+  /**
    * Standard Red Notes: per-user WORKFLOWS (n8n automation) gate, read from the
    * auth settings store at token-mint time (SettingName.WorkflowsEnabled).
    *

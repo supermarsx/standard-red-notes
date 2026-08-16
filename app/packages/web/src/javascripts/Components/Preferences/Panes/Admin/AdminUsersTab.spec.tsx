@@ -213,6 +213,98 @@ describe('AdminUsersTab — durable AI access control', () => {
     expect(aiAccessCheckbox().checked).toBe(false)
     expect(aiAccessCheckbox().disabled).toBe(false)
   })
+
+  it('loads and saves independent per-user token window overrides, with zero clearing to inherit', async () => {
+    const application = makeApplication()
+    application.legacyApi.adminGetUserFeatureFlags.mockResolvedValueOnce({
+      data: {
+        flags: { AI_FIVE_HOUR_TOKEN_LIMIT: '2500', AI_WEEKLY_TOKEN_LIMIT: '12500' },
+        storage: null,
+      },
+    })
+    await renderTab(application)
+
+    expect(container.textContent).toContain('Per-user AI token limits')
+    expect(container.textContent).toContain('When both request and token limits are configured, both must allow')
+    const inputs = Array.from(container.querySelectorAll<HTMLInputElement>('input[placeholder="Inherit"]'))
+    expect(inputs).toHaveLength(2)
+    expect(inputs[0].value).toBe('2500')
+    expect(inputs[1].value).toBe('12500')
+    expect(container.textContent).toContain('0 tokens of 2,500 tokens')
+
+    await setInputValue(inputs[0], '0')
+    // Editing a draft must not misrepresent it as the effective enforced limit.
+    expect(container.textContent).toContain('0 tokens of 2,500 tokens')
+    const saveButtons = Array.from(container.querySelectorAll('button')).filter(
+      (button) => button.textContent === 'Save',
+    )
+    expect(saveButtons).toHaveLength(2)
+    await act(async () => {
+      saveButtons[0].click()
+      await Promise.resolve()
+    })
+
+    expect(application.legacyApi.adminSetUserFeatureFlag).toHaveBeenCalledWith(
+      TARGET_UUID,
+      'AI_FIVE_HOUR_TOKEN_LIMIT',
+      null,
+    )
+    expect(container.textContent).toContain('0 tokens · unlimited')
+  })
+
+  it('ignores a stale quota response after the admin switches users', async () => {
+    const application = makeApplication()
+    let resolveFirst!: (value: { data: { flags: Record<string, string>; storage: null } }) => void
+    let resolveSecond!: (value: { data: { flags: Record<string, string>; storage: null } }) => void
+    const first = new Promise<{ data: { flags: Record<string, string>; storage: null } }>((resolve) => {
+      resolveFirst = resolve
+    })
+    const second = new Promise<{ data: { flags: Record<string, string>; storage: null } }>((resolve) => {
+      resolveSecond = resolve
+    })
+    application.legacyApi.adminGetUserFeatureFlags.mockReturnValueOnce(first).mockReturnValueOnce(second)
+
+    const renderUser = async (uuid: string, userEmail: string) => {
+      await act(async () => {
+        root.render(
+          createElement(AdminUsersTab, {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            application: application as any,
+            noteIfForbidden: jest.fn(),
+            email: userEmail,
+            setEmail: jest.fn(),
+            user: { uuid, email: userEmail },
+            setUser: jest.fn(),
+          }),
+        )
+        await Promise.resolve()
+      })
+    }
+
+    await renderUser('first-user-uuid', 'first@example.com')
+    await renderUser('second-user-uuid', 'second@example.com')
+    await act(async () => {
+      resolveSecond({
+        data: {
+          flags: { AI_FIVE_HOUR_TOKEN_LIMIT: '300', AI_WEEKLY_TOKEN_LIMIT: '900' },
+          storage: null,
+        },
+      })
+      await Promise.resolve()
+    })
+    await act(async () => {
+      resolveFirst({
+        data: {
+          flags: { AI_FIVE_HOUR_TOKEN_LIMIT: '2500', AI_WEEKLY_TOKEN_LIMIT: '12500' },
+          storage: null,
+        },
+      })
+      await Promise.resolve()
+    })
+
+    const inputs = Array.from(container.querySelectorAll<HTMLInputElement>('input[placeholder="Inherit"]'))
+    expect(inputs.map((input) => input.value)).toEqual(['300', '900'])
+  })
 })
 
 describe('AdminUsersTab — authoritative per-user usage', () => {
@@ -240,7 +332,7 @@ describe('AdminUsersTab — authoritative per-user usage', () => {
     })
     application.legacyApi.adminGetUserFeatureFlags.mockResolvedValueOnce({
       data: {
-        flags: {},
+        flags: { AI_FIVE_HOUR_TOKEN_LIMIT: '300', AI_WEEKLY_TOKEN_LIMIT: '900' },
         storage: { hasSubscription: true, uploadBytesUsed: 2_048, uploadBytesLimit: 4_096 },
       },
     })
@@ -249,7 +341,8 @@ describe('AdminUsersTab — authoritative per-user usage', () => {
 
     expect(application.legacyApi.adminGetUserUsage).toHaveBeenCalledWith(TARGET_UUID)
     expect(container.textContent).toContain('AI token usage')
-    expect(container.textContent).toContain('120 tokens of 500 tokens')
+    expect(container.textContent).toContain('120 tokens of 300 tokens')
+    expect(container.textContent).toContain('420 tokens of 900 tokens')
     expect(container.textContent).toContain('42 tokens')
     expect(container.textContent).toContain('Only rolling seven-day events are retained')
     expect(container.textContent).toContain('2048 B')

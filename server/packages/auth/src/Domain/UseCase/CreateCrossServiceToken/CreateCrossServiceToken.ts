@@ -163,6 +163,15 @@ export class CreateCrossServiceToken implements UseCaseInterface<string> {
       ai_request_limit: await this.readNumericSetting(user.uuid, SettingName.NAMES.AiRequestLimit),
     }
 
+    const aiFiveHourTokenLimit = await this.readNumericSetting(user.uuid, SettingName.NAMES.AiFiveHourTokenLimit)
+    if (aiFiveHourTokenLimit !== undefined) {
+      authTokenData.ai_five_hour_token_limit = aiFiveHourTokenLimit
+    }
+    const aiWeeklyTokenLimit = await this.readNumericSetting(user.uuid, SettingName.NAMES.AiWeeklyTokenLimit)
+    if (aiWeeklyTokenLimit !== undefined) {
+      authTokenData.ai_weekly_token_limit = aiWeeklyTokenLimit
+    }
+
     // Standard Red Notes: WORKFLOWS is OPT-IN (default-off) — the field is
     // emitted ONLY when the admin-managed WorkflowsEnabled setting is literally
     // 'true'. Absent means disabled, so pre-existing tokens (and the spec'd

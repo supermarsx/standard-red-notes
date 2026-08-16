@@ -25,6 +25,10 @@ export class SettingName extends ValueObject<SettingNameProps> {
     // Standard Red Notes: admin-managed per-user feature flags.
     AiEnabled: 'AI_ENABLED',
     AiRequestLimit: 'AI_REQUEST_LIMIT',
+    // Optional per-user token ceilings. Absent/0 inherits the server-wide
+    // rolling-window limit; a positive value overrides only that window.
+    AiFiveHourTokenLimit: 'AI_FIVE_HOUR_TOKEN_LIMIT',
+    AiWeeklyTokenLimit: 'AI_WEEKLY_TOKEN_LIMIT',
     // Standard Red Notes: admin-managed instance flag for whether new signups
     // are allowed. Persisted as a setting so the admin panel state survives;
     // Register consults it at runtime after applying the environment override.

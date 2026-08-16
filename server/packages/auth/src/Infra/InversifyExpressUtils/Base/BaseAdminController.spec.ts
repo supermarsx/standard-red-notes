@@ -239,28 +239,34 @@ describe('BaseAdminController OCR server-allowed flag (admin-manageable)', () =>
     expect(setSettingValue.execute).not.toHaveBeenCalled()
   })
 
-  it.each(['0', '-1', '25junk', '9007199254740992'])('rejects the non-canonical AI request limit %s', async (value) => {
-    const result = await createController().setUserFeatureFlag(
-      flagRequest(SettingName.NAMES.AiRequestLimit, value),
-      adminResponse,
-    )
+  const aiLimitSettings = [
+    SettingName.NAMES.AiRequestLimit,
+    SettingName.NAMES.AiFiveHourTokenLimit,
+    SettingName.NAMES.AiWeeklyTokenLimit,
+  ]
 
-    expect(result.statusCode).toEqual(400)
-    expect(setSettingValue.execute).not.toHaveBeenCalled()
-  })
+  it.each(aiLimitSettings.flatMap((name) => ['0', '-1', '25junk', '9007199254740992'].map((value) => [name, value])))(
+    'rejects the non-canonical AI limit %s=%s',
+    async (name, value) => {
+      const result = await createController().setUserFeatureFlag(flagRequest(name, value), adminResponse)
 
-  it('accepts a positive AI request limit and a cleared limit', async () => {
-    await createController().setUserFeatureFlag(flagRequest(SettingName.NAMES.AiRequestLimit, '25'), adminResponse)
-    await createController().setUserFeatureFlag(flagRequest(SettingName.NAMES.AiRequestLimit, null), adminResponse)
+      expect(result.statusCode).toEqual(400)
+      expect(setSettingValue.execute).not.toHaveBeenCalled()
+    },
+  )
+
+  it.each(aiLimitSettings)('accepts a positive %s and a cleared limit', async (name) => {
+    await createController().setUserFeatureFlag(flagRequest(name, '25'), adminResponse)
+    await createController().setUserFeatureFlag(flagRequest(name, null), adminResponse)
 
     expect(setSettingValue.execute).toHaveBeenNthCalledWith(1, {
-      settingName: SettingName.NAMES.AiRequestLimit,
+      settingName: name,
       value: '25',
       userUuid: '1-2-3',
       checkUserPermissions: false,
     })
     expect(setSettingValue.execute).toHaveBeenNthCalledWith(2, {
-      settingName: SettingName.NAMES.AiRequestLimit,
+      settingName: name,
       value: null,
       userUuid: '1-2-3',
       checkUserPermissions: false,

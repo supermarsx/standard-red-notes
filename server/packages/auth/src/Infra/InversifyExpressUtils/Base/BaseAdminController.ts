@@ -69,6 +69,8 @@ import { RejectUser } from '../../../Domain/UseCase/RejectUser/RejectUser'
 const ADMIN_MANAGEABLE_SETTINGS: string[] = [
   SettingName.NAMES.AiEnabled,
   SettingName.NAMES.AiRequestLimit,
+  SettingName.NAMES.AiFiveHourTokenLimit,
+  SettingName.NAMES.AiWeeklyTokenLimit,
   SettingName.NAMES.CollaborationEnabled,
   SettingName.NAMES.LiveSyncEnabled,
   // Standard Red Notes: admin override of a user's scheduled email-backup cadence.
@@ -118,6 +120,11 @@ const STRICT_BOOLEAN_ADMIN_SETTINGS = new Set<string>([
   SettingName.NAMES.OcrServerAllowed,
   SettingName.NAMES.NextcloudBackupAllowed,
   SettingName.NAMES.WorkflowsEnabled,
+])
+const AI_LIMIT_ADMIN_SETTINGS = new Set<string>([
+  SettingName.NAMES.AiRequestLimit,
+  SettingName.NAMES.AiFiveHourTokenLimit,
+  SettingName.NAMES.AiWeeklyTokenLimit,
 ])
 
 export class BaseAdminController extends BaseHttpController {
@@ -562,12 +569,12 @@ export class BaseAdminController extends BaseHttpController {
     }
 
     if (
-      name === SettingName.NAMES.AiRequestLimit &&
+      AI_LIMIT_ADMIN_SETTINGS.has(name) &&
       value != null &&
       (typeof value !== 'string' || !/^[1-9]\d*$/.test(value) || !Number.isSafeInteger(Number(value)))
     ) {
       return this.json(
-        { error: { message: `Invalid AI request limit '${value}'. Use a positive integer or clear the value.` } },
+        { error: { message: `Invalid AI limit '${value}'. Use a positive integer or clear the value.` } },
         400,
       )
     }

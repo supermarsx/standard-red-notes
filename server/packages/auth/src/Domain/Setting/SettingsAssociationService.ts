@@ -16,6 +16,8 @@ export class SettingsAssociationService implements SettingsAssociationServiceInt
     // their canonical values without mistaking ciphertext for an enabled flag.
     SettingName.NAMES.AiEnabled,
     SettingName.NAMES.AiRequestLimit,
+    SettingName.NAMES.AiFiveHourTokenLimit,
+    SettingName.NAMES.AiWeeklyTokenLimit,
     SettingName.NAMES.CollaborationEnabled,
     SettingName.NAMES.LiveSyncEnabled,
     SettingName.NAMES.EmailBackupFrequency,
@@ -62,6 +64,8 @@ export class SettingsAssociationService implements SettingsAssociationServiceInt
   private readonly UNSENSITIVE_SETTINGS = [
     SettingName.NAMES.AiEnabled,
     SettingName.NAMES.AiRequestLimit,
+    SettingName.NAMES.AiFiveHourTokenLimit,
+    SettingName.NAMES.AiWeeklyTokenLimit,
     SettingName.NAMES.CollaborationEnabled,
     SettingName.NAMES.LiveSyncEnabled,
     SettingName.NAMES.DropboxBackupFrequency,
@@ -123,6 +127,8 @@ export class SettingsAssociationService implements SettingsAssociationServiceInt
     // disable (unset means enabled for AI/collaboration/live sync).
     SettingName.NAMES.AiEnabled,
     SettingName.NAMES.AiRequestLimit,
+    SettingName.NAMES.AiFiveHourTokenLimit,
+    SettingName.NAMES.AiWeeklyTokenLimit,
     SettingName.NAMES.CollaborationEnabled,
     SettingName.NAMES.LiveSyncEnabled,
     SettingName.NAMES.ListedAuthorSecrets,

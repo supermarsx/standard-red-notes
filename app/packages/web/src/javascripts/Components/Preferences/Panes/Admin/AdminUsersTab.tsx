@@ -63,6 +63,8 @@ export type LookedUpUser = {
 // expects (must match the server's SettingName.NAMES values exactly).
 const AI_ENABLED = 'AI_ENABLED'
 const AI_REQUEST_LIMIT = 'AI_REQUEST_LIMIT'
+const AI_FIVE_HOUR_TOKEN_LIMIT = 'AI_FIVE_HOUR_TOKEN_LIMIT'
+const AI_WEEKLY_TOKEN_LIMIT = 'AI_WEEKLY_TOKEN_LIMIT'
 const COLLABORATION_ENABLED = 'COLLABORATION_ENABLED'
 const LIVE_SYNC_ENABLED = 'LIVE_SYNC_ENABLED'
 // OPT-IN server-side PDF OCR. Defaults OFF (privacy: enabling lets this user send
@@ -130,6 +132,20 @@ const describeStorageLimit = (storage: AdminUserStorageUsage | null): string => 
 
 const formatLimitAmount = (amount: number): string => (Number.isInteger(amount) ? String(amount) : amount.toFixed(2))
 
+const positiveLimitOrUndefined = (value: string): number | undefined => {
+  const trimmed = value.trim()
+  if (!/^\d+$/.test(trimmed)) {
+    return undefined
+  }
+  const parsed = Number(trimmed)
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined
+}
+
+const withPerUserTokenLimit = (window: AdminUserTokenUsageWindow, override: string): AdminUserTokenUsageWindow => {
+  const limit = positiveLimitOrUndefined(override)
+  return limit === undefined ? window : { ...window, limitTokens: limit }
+}
+
 const TokenWindowSummary: FunctionComponent<{
   label: string
   window: AdminUserTokenUsageWindow
@@ -166,6 +182,10 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
   // disables AI. Keep the initial/rendered state consistent with enforcement.
   const [aiEnabled, setAiEnabled] = useState(true)
   const [aiRequestLimit, setAiRequestLimit] = useState('')
+  const [aiFiveHourTokenLimit, setAiFiveHourTokenLimit] = useState('')
+  const [aiWeeklyTokenLimit, setAiWeeklyTokenLimit] = useState('')
+  const [savedAiFiveHourTokenLimit, setSavedAiFiveHourTokenLimit] = useState('')
+  const [savedAiWeeklyTokenLimit, setSavedAiWeeklyTokenLimit] = useState('')
   // Collaboration and live sync default to ENABLED; they are gated off only when
   // the per-user setting is explicitly 'false'.
   const [collaborationEnabled, setCollaborationEnabled] = useState(true)
@@ -186,9 +206,11 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
   const [storageLimitUnit, setStorageLimitUnit] = useState<'MB' | 'GB' | 'unlimited'>('unlimited')
   const [savingStorageLimit, setSavingStorageLimit] = useState(false)
   const [flagsLoading, setFlagsLoading] = useState(false)
+  const flagsLoadGeneration = useRef(0)
   const [savingAiEnabled, setSavingAiEnabled] = useState(false)
   const aiSaveInFlight = useRef(false)
   const [savingLimit, setSavingLimit] = useState(false)
+  const [savingTokenLimit, setSavingTokenLimit] = useState<'five-hour' | 'weekly' | null>(null)
   const [userUsage, setUserUsage] = useState<AdminUserUsageResponse | null>(null)
   const [usageLoading, setUsageLoading] = useState(false)
   const [usageError, setUsageError] = useState<string | null>(null)
@@ -230,9 +252,13 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
 
   const loadFlags = useCallback(
     async (userUuid: string) => {
+      const generation = ++flagsLoadGeneration.current
       setFlagsLoading(true)
       try {
         const response = await application.legacyApi.adminGetUserFeatureFlags(userUuid)
+        if (generation !== flagsLoadGeneration.current) {
+          return
+        }
         if (isErrorResponse(response)) {
           addToast({ type: ToastType.Error, message: 'Failed to load user feature flags.' })
           return
@@ -241,6 +267,12 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
         const flags = data?.flags ?? {}
         setAiEnabled(flags[AI_ENABLED] !== 'false')
         setAiRequestLimit(flags[AI_REQUEST_LIMIT] ?? '')
+        const fiveHourTokenLimit = flags[AI_FIVE_HOUR_TOKEN_LIMIT] ?? ''
+        const weeklyTokenLimit = flags[AI_WEEKLY_TOKEN_LIMIT] ?? ''
+        setAiFiveHourTokenLimit(fiveHourTokenLimit)
+        setAiWeeklyTokenLimit(weeklyTokenLimit)
+        setSavedAiFiveHourTokenLimit(fiveHourTokenLimit)
+        setSavedAiWeeklyTokenLimit(weeklyTokenLimit)
         setCollaborationEnabled(flags[COLLABORATION_ENABLED] !== 'false')
         setLiveSyncEnabled(flags[LIVE_SYNC_ENABLED] !== 'false')
         setOcrServerAllowed(flags[OCR_SERVER_ALLOWED] === 'true')
@@ -265,9 +297,13 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
           setStorageLimitValue(formatLimitAmount(currentLimit / BYTES_IN_ONE_MEGABYTE))
         }
       } catch (error) {
-        console.error(error)
+        if (generation === flagsLoadGeneration.current) {
+          console.error(error)
+        }
       } finally {
-        setFlagsLoading(false)
+        if (generation === flagsLoadGeneration.current) {
+          setFlagsLoading(false)
+        }
       }
     },
     [application],
@@ -399,8 +435,16 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
   // the shell.
   useEffect(() => {
     if (!user) {
+      flagsLoadGeneration.current += 1
       return
     }
+    // Never render or save a previous user's quota while this user's flags are
+    // still loading (or if that load fails). The generation guard in loadFlags
+    // also prevents an older lookup response from winning a rapid user switch.
+    setAiFiveHourTokenLimit('')
+    setAiWeeklyTokenLimit('')
+    setSavedAiFiveHourTokenLimit('')
+    setSavedAiWeeklyTokenLimit('')
     setBanned(false)
     setCurrentBan(null)
     setBanReasonInput('')
@@ -831,12 +875,17 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
     if (!user) {
       return
     }
+    const rawValue = aiRequestLimit.trim()
+    if (rawValue !== '' && (!/^\d+$/.test(rawValue) || !Number.isSafeInteger(Number(rawValue)))) {
+      addToast({ type: ToastType.Error, message: 'Enter a whole-number request limit, or 0 to inherit.' })
+      return
+    }
     setSavingLimit(true)
     try {
       const response = await application.legacyApi.adminSetUserFeatureFlag(
         user.uuid,
         AI_REQUEST_LIMIT,
-        aiRequestLimit.trim() === '' ? null : aiRequestLimit.trim(),
+        rawValue === '' || rawValue === '0' ? null : rawValue,
       )
       if (isErrorResponse(response)) {
         addToast({ type: ToastType.Error, message: 'Failed to update AI request limit.' })
@@ -850,6 +899,49 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
       setSavingLimit(false)
     }
   }, [application, user, aiRequestLimit])
+
+  const saveTokenLimit = useCallback(
+    async (
+      settingName: typeof AI_FIVE_HOUR_TOKEN_LIMIT | typeof AI_WEEKLY_TOKEN_LIMIT,
+      rawInput: string,
+      window: 'five-hour' | 'weekly',
+      label: string,
+    ) => {
+      if (!user) {
+        return
+      }
+      const rawValue = rawInput.trim()
+      if (rawValue !== '' && (!/^\d+$/.test(rawValue) || !Number.isSafeInteger(Number(rawValue)))) {
+        addToast({ type: ToastType.Error, message: `Enter a whole-number ${label} token limit, or 0 to inherit.` })
+        return
+      }
+      setSavingTokenLimit(window)
+      try {
+        const response = await application.legacyApi.adminSetUserFeatureFlag(
+          user.uuid,
+          settingName,
+          rawValue === '' || rawValue === '0' ? null : rawValue,
+        )
+        if (isErrorResponse(response)) {
+          addToast({ type: ToastType.Error, message: `Failed to update the ${label} token limit.` })
+          return
+        }
+        const savedValue = rawValue === '' || rawValue === '0' ? '' : rawValue
+        if (window === 'five-hour') {
+          setSavedAiFiveHourTokenLimit(savedValue)
+        } else {
+          setSavedAiWeeklyTokenLimit(savedValue)
+        }
+        addToast({ type: ToastType.Success, message: `${label} token limit saved.` })
+      } catch (error) {
+        console.error(error)
+        addToast({ type: ToastType.Error, message: `Failed to update the ${label} token limit.` })
+      } finally {
+        setSavingTokenLimit(null)
+      }
+    },
+    [application, user],
+  )
 
   const saveStorageLimit = useCallback(async () => {
     if (!user) {
@@ -1661,8 +1753,8 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
               <div className="flex flex-col gap-2">
                 <Subtitle>Daily AI request limit</Subtitle>
                 <Text>
-                  Maximum assistant requests allowed for this user per UTC day. Leave blank to inherit the server-wide
-                  daily limit (unlimited when the server-wide limit is 0).
+                  Maximum assistant requests allowed for this user per UTC day. Leave blank or set 0 to inherit the
+                  server-wide daily limit (unlimited when the server-wide limit is 0).
                 </Text>
                 <div className="mt-1 flex items-center gap-3">
                   <DecoratedInput
@@ -1678,13 +1770,65 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
 
               <HorizontalSeparator classes="my-3" />
 
+              <div className="flex flex-col gap-3">
+                <Subtitle>Per-user AI token limits</Subtitle>
+                <Text>
+                  Optional rolling token ceilings for this user. Each window is independent: leave blank or set 0 to
+                  inherit the matching server-wide limit. When both request and token limits are configured, both must
+                  allow the request. Failed or cancelled requests do not consume either allowance.
+                </Text>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  <div className="flex flex-col gap-2">
+                    <Text className="text-xs font-semibold">Rolling 5 hours</Text>
+                    <div className="flex items-center gap-3">
+                      <DecoratedInput
+                        className={{ container: 'w-40' }}
+                        placeholder="Inherit"
+                        value={aiFiveHourTokenLimit}
+                        onChange={setAiFiveHourTokenLimit}
+                        type="number"
+                      />
+                      <Button
+                        label={savingTokenLimit === 'five-hour' ? 'Saving…' : 'Save'}
+                        onClick={() =>
+                          void saveTokenLimit(AI_FIVE_HOUR_TOKEN_LIMIT, aiFiveHourTokenLimit, 'five-hour', '5-hour')
+                        }
+                        disabled={savingTokenLimit !== null}
+                      />
+                    </div>
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <Text className="text-xs font-semibold">Rolling 7 days</Text>
+                    <div className="flex items-center gap-3">
+                      <DecoratedInput
+                        className={{ container: 'w-40' }}
+                        placeholder="Inherit"
+                        value={aiWeeklyTokenLimit}
+                        onChange={setAiWeeklyTokenLimit}
+                        type="number"
+                      />
+                      <Button
+                        label={savingTokenLimit === 'weekly' ? 'Saving…' : 'Save'}
+                        onClick={() =>
+                          void saveTokenLimit(AI_WEEKLY_TOKEN_LIMIT, aiWeeklyTokenLimit, 'weekly', 'weekly')
+                        }
+                        disabled={savingTokenLimit !== null}
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <HorizontalSeparator classes="my-3" />
+
               <section aria-label="AI token usage" className="border-border flex flex-col gap-3 rounded border p-3">
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex min-w-0 flex-col">
                     <Subtitle>AI token usage</Subtitle>
                     <Text>
                       SRN-side usage for the rolling 5-hour and 7-day limits. Counts can be provider-reported or
-                      estimated; they are not provider billing data.
+                      estimated; they are not provider billing data. Positive per-user overrides above are reflected in
+                      these effective limits.
                     </Text>
                   </div>
                   <Button
@@ -1702,8 +1846,14 @@ const AdminUsersTab: FunctionComponent<Props> = ({ application, noteIfForbidden,
                 ) : userUsage ? (
                   <>
                     <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                      <TokenWindowSummary label="Rolling 5 hours" window={userUsage.tokens.fiveHour} />
-                      <TokenWindowSummary label="Rolling 7 days" window={userUsage.tokens.weekly} />
+                      <TokenWindowSummary
+                        label="Rolling 5 hours"
+                        window={withPerUserTokenLimit(userUsage.tokens.fiveHour, savedAiFiveHourTokenLimit)}
+                      />
+                      <TokenWindowSummary
+                        label="Rolling 7 days"
+                        window={withPerUserTokenLimit(userUsage.tokens.weekly, savedAiWeeklyTokenLimit)}
+                      />
                     </div>
 
                     <div className="flex flex-col gap-1">

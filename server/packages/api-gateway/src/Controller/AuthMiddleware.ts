@@ -12,6 +12,9 @@ import { resolveClientIpFromRequest } from './ClientIp'
 import { RoleName, SettingName } from '@standardnotes/domain-core'
 import { PublicServiceFailure, publicHttpErrorStatus, safeHttpErrorLogMetadata } from '../Service/Logging/SafeLog'
 
+const isPositiveSafeInteger = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+
 export abstract class AuthMiddleware extends BaseMiddleware {
   constructor(
     private serviceProxy: ServiceProxyInterface,
@@ -187,8 +190,14 @@ export abstract class AuthMiddleware extends BaseMiddleware {
       settings[SettingName.NAMES.AiEnabled] = 'true'
     }
 
-    if (typeof decodedToken.ai_request_limit === 'number' && decodedToken.ai_request_limit > 0) {
+    if (isPositiveSafeInteger(decodedToken.ai_request_limit)) {
       settings[SettingName.NAMES.AiRequestLimit] = decodedToken.ai_request_limit
+    }
+    if (isPositiveSafeInteger(decodedToken.ai_five_hour_token_limit)) {
+      settings[SettingName.NAMES.AiFiveHourTokenLimit] = decodedToken.ai_five_hour_token_limit
+    }
+    if (isPositiveSafeInteger(decodedToken.ai_weekly_token_limit)) {
+      settings[SettingName.NAMES.AiWeeklyTokenLimit] = decodedToken.ai_weekly_token_limit
     }
 
     // WORKFLOWS_ENABLED is OPT-IN (default-off): auth emits `workflows_enabled`

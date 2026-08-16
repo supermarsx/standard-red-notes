@@ -190,12 +190,14 @@ describe('CreateCrossServiceToken', () => {
     )
   })
 
-  it('projects configured feature gates, request limits, and MCP tag scope into the token', async () => {
+  it('projects configured feature gates, independent request/token limits, and MCP tag scope into the token', async () => {
     const settingValues: Record<string, string> = {
       [SettingName.NAMES.CollaborationEnabled]: 'false',
       [SettingName.NAMES.LiveSyncEnabled]: 'false',
       [SettingName.NAMES.AiEnabled]: 'false',
       [SettingName.NAMES.AiRequestLimit]: '25',
+      [SettingName.NAMES.AiFiveHourTokenLimit]: '2500',
+      [SettingName.NAMES.AiWeeklyTokenLimit]: '12500',
       [SettingName.NAMES.WorkflowsEnabled]: 'true',
     }
     settingRepository.findLastByNameAndUserUuid = jest.fn().mockImplementation((settingName: string) => {
@@ -214,6 +216,8 @@ describe('CreateCrossServiceToken', () => {
         live_sync_enabled: false,
         ai_enabled: false,
         ai_request_limit: 25,
+        ai_five_hour_token_limit: 2500,
+        ai_weekly_token_limit: 12500,
         workflows_enabled: true,
         mcp_scope: { access: 'read', tagUuids: ['tag-b', 'tag-a'] },
       }),
@@ -273,6 +277,23 @@ describe('CreateCrossServiceToken', () => {
       expect(payload.mcp_scope).toBeUndefined()
     },
   )
+
+  it('omits invalid or zero per-user token limit overrides so the gateway inherits its global windows', async () => {
+    const settingValues: Record<string, string> = {
+      [SettingName.NAMES.AiFiveHourTokenLimit]: '0',
+      [SettingName.NAMES.AiWeeklyTokenLimit]: 'not-a-number',
+    }
+    settingRepository.findLastByNameAndUserUuid = jest.fn().mockImplementation((settingName: string) => {
+      const value = settingValues[settingName]
+      return Promise.resolve(value === undefined ? null : { props: { value } })
+    })
+
+    await createUseCase().execute({ user, session })
+
+    const payload = (tokenEncoder.encodeExpirableToken as jest.Mock).mock.calls[0][0] as CrossServiceTokenData
+    expect(payload.ai_five_hour_token_limit).toBeUndefined()
+    expect(payload.ai_weekly_token_limit).toBeUndefined()
+  })
 
   it('does not derive the admin role from a normalized ADMIN_EMAILS match', async () => {
     const previousAdminEmails = process.env.ADMIN_EMAILS

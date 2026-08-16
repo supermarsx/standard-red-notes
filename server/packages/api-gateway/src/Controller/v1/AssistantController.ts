@@ -73,6 +73,10 @@ interface ResolvedUserLimits {
   aiEnabled?: boolean
   // Per-user daily request limit (>0) if resolvable, else undefined.
   perUserLimit?: number
+  // Optional per-user rolling token overrides. Each window is independently
+  // resolved; absent/0 inherits the matching server-wide token ceiling.
+  perUserFiveHourTokenLimit?: number
+  perUserWeeklyTokenLimit?: number
 }
 
 const ASSISTANT_QUOTA_RELEASE_MAX_ATTEMPTS = 2
@@ -126,16 +130,26 @@ export class AssistantController extends BaseHttpController {
    * Effective per-user rolling-window token limits: persisted admin values win
    * (via the resolver), else the env fallback, else 0 (unlimited). Never throws.
    */
-  private async effectiveTokenLimits(): Promise<{ fiveHour: number; weekly: number }> {
+  private async effectiveTokenLimits(limits: ResolvedUserLimits = {}): Promise<{ fiveHour: number; weekly: number }> {
+    let global = { fiveHour: this.fiveHourTokenLimitEnv || 0, weekly: this.weeklyTokenLimitEnv || 0 }
     if (this.serverSettingsResolver) {
       try {
-        return await this.serverSettingsResolver.resolveAssistantTokenLimits()
+        global = await this.serverSettingsResolver.resolveAssistantTokenLimits()
       } catch {
         // Fall through to the env fallback.
       }
     }
 
-    return { fiveHour: this.fiveHourTokenLimitEnv || 0, weekly: this.weeklyTokenLimitEnv || 0 }
+    return {
+      fiveHour:
+        limits.perUserFiveHourTokenLimit !== undefined && limits.perUserFiveHourTokenLimit > 0
+          ? limits.perUserFiveHourTokenLimit
+          : global.fiveHour,
+      weekly:
+        limits.perUserWeeklyTokenLimit !== undefined && limits.perUserWeeklyTokenLimit > 0
+          ? limits.perUserWeeklyTokenLimit
+          : global.weekly,
+    }
   }
 
   /** The Redis-backed token counter, or undefined when Redis is not configured. */
@@ -432,7 +446,7 @@ export class AssistantController extends BaseHttpController {
     // New per-user rolling-window TOKEN meters (5h + weekly). Fail-open on Redis
     // error: report the windows as `unavailable` (0 used) so the client never
     // blocks on a metering read.
-    const tokenLimits = await this.effectiveTokenLimits()
+    const tokenLimits = await this.effectiveTokenLimits(limits)
     const now = Date.now()
     const store = this.tokenStore()
     let fiveHour = unavailableWindowUsage(now, FIVE_HOUR_WINDOW_MS, tokenLimits.fiveHour)
@@ -935,7 +949,7 @@ export class AssistantController extends BaseHttpController {
     // cannot know this request's token spend up front, so "would exceed" is
     // enforced as "is already at the cap". Fail-open: any Redis error here lets
     // the request through rather than blocking on a metering read.
-    const tokenLimits = await this.effectiveTokenLimits()
+    const tokenLimits = await this.effectiveTokenLimits(limits)
     const tokenStore = this.tokenStore()
     if (tokenStore && (tokenLimits.fiveHour > 0 || tokenLimits.weekly > 0)) {
       try {
@@ -1409,6 +1423,22 @@ export class AssistantController extends BaseHttpController {
       const parsed = parseInt(`${limitRaw}`, 10)
       if (!Number.isNaN(parsed)) {
         result.perUserLimit = parsed
+      }
+    }
+
+    const fiveHourTokenLimitRaw = settings[SettingName.NAMES.AiFiveHourTokenLimit]
+    if (fiveHourTokenLimitRaw !== undefined && fiveHourTokenLimitRaw !== null) {
+      const parsed = parseInt(`${fiveHourTokenLimitRaw}`, 10)
+      if (!Number.isNaN(parsed) && parsed > 0) {
+        result.perUserFiveHourTokenLimit = parsed
+      }
+    }
+
+    const weeklyTokenLimitRaw = settings[SettingName.NAMES.AiWeeklyTokenLimit]
+    if (weeklyTokenLimitRaw !== undefined && weeklyTokenLimitRaw !== null) {
+      const parsed = parseInt(`${weeklyTokenLimitRaw}`, 10)
+      if (!Number.isNaN(parsed) && parsed > 0) {
+        result.perUserWeeklyTokenLimit = parsed
       }
     }
 

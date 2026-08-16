@@ -80,6 +80,8 @@ describe('SettingsAssociationService', () => {
     const gateSettings = [
       SettingName.NAMES.AiEnabled,
       SettingName.NAMES.AiRequestLimit,
+      SettingName.NAMES.AiFiveHourTokenLimit,
+      SettingName.NAMES.AiWeeklyTokenLimit,
       SettingName.NAMES.CollaborationEnabled,
       SettingName.NAMES.LiveSyncEnabled,
     ]
