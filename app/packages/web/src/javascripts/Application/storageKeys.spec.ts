@@ -3,7 +3,13 @@ import { DiaryLastPromptedKey, DiarySettingsKey } from '@/Diary/diaryService'
 import { TimeZoneSettingKey } from '@/Timezone/timezoneService'
 import { AppLockPasskeyStorageKey } from '@/AppLockPasskey/appLockPasskey'
 import { LANGUAGE_STORAGE_KEY } from '@/Internationalization/i18n'
-import { CHAT_TABS_KEY } from '@/Assistant/chatTabs'
+import { ASSISTANT_CHAT_TABS_LEGACY_KEY_PREFIX, ASSISTANT_CHAT_TABS_STORAGE_KEY_PREFIX } from '@/Assistant/chatTabs'
+import {
+  ASSISTANT_CHAT_HISTORY_DELETION_KEY_PREFIX,
+  ASSISTANT_CHAT_HISTORY_LEGACY_KEY_PREFIX,
+  ASSISTANT_CHAT_HISTORY_STORAGE_KEY_PREFIX,
+} from '@/Assistant/assistantChatHistory'
+import { ASSISTANT_CONTEXT_SCOPE_KEY, ASSISTANT_DATA_EXPOSURE_NOTICE_KEY } from '@/Assistant/assistantLocalSettings'
 import { LEGACY_CUSTOM_THEMES_STORAGE_KEY } from '@/Components/Preferences/Panes/Appearance/CustomThemes/CustomThemeManager'
 
 /**
@@ -36,6 +42,8 @@ const APP_KV_KEYS = {
   Avatar: 'ProfileAvatar',
   Timezone: 'PreferredTimeZone',
   AppLockPasskey: 'AppLockPasskey',
+  AssistantChatTabs: 'AssistantChatTabs:v1',
+  AssistantChatHistory: 'AssistantChatHistory:v1',
 } as const
 
 /**
@@ -60,7 +68,9 @@ const LOCAL_STORAGE_KEYS = {
   GithubPublishSettings: 'standardnotes.github.publish.settings.v1',
   GithubPublishToken: 'standardnotes.github.publish.token.v1',
   AssistantUsage: 'sn-assistant-usage',
-  ChatTabs: 'assistant-chat-tabs',
+  LegacyAssistantChatTabs: 'assistant-chat-tabs:v1',
+  LegacyAssistantChatHistory: 'assistant-chat-history:v1',
+  AssistantChatHistoryDeletion: 'assistant-chat-history-deleted:v1',
   AssistantContextScope: 'assistant-context-scope',
   AssistantDataExposureDismissed: 'assistant-data-exposure-notice-dismissed',
   TrustedDeviceToken: 'sn_trusted_device_token',
@@ -109,12 +119,18 @@ describe('storage key registry — exported constants match the registry', () =>
     expect(AvatarStorageKey).toBe(APP_KV_KEYS.Avatar)
     expect(TimeZoneSettingKey).toBe(APP_KV_KEYS.Timezone)
     expect(AppLockPasskeyStorageKey).toBe(APP_KV_KEYS.AppLockPasskey)
+    expect(ASSISTANT_CHAT_TABS_STORAGE_KEY_PREFIX).toBe(APP_KV_KEYS.AssistantChatTabs)
+    expect(ASSISTANT_CHAT_HISTORY_STORAGE_KEY_PREFIX).toBe(APP_KV_KEYS.AssistantChatHistory)
   })
 
   it('localStorage key constants equal their registry values', () => {
     expect(DiaryLastPromptedKey).toBe(LOCAL_STORAGE_KEYS.DiaryLastPrompted)
     expect(LANGUAGE_STORAGE_KEY).toBe(LOCAL_STORAGE_KEYS.Language)
-    expect(CHAT_TABS_KEY).toBe(LOCAL_STORAGE_KEYS.ChatTabs)
+    expect(ASSISTANT_CHAT_TABS_LEGACY_KEY_PREFIX).toBe(LOCAL_STORAGE_KEYS.LegacyAssistantChatTabs)
+    expect(ASSISTANT_CHAT_HISTORY_LEGACY_KEY_PREFIX).toBe(LOCAL_STORAGE_KEYS.LegacyAssistantChatHistory)
+    expect(ASSISTANT_CHAT_HISTORY_DELETION_KEY_PREFIX).toBe(LOCAL_STORAGE_KEYS.AssistantChatHistoryDeletion)
+    expect(ASSISTANT_CONTEXT_SCOPE_KEY).toBe(LOCAL_STORAGE_KEYS.AssistantContextScope)
+    expect(ASSISTANT_DATA_EXPOSURE_NOTICE_KEY).toBe(LOCAL_STORAGE_KEYS.AssistantDataExposureDismissed)
     expect(LEGACY_CUSTOM_THEMES_STORAGE_KEY).toBe(LOCAL_STORAGE_KEYS.LegacyCustomThemes)
   })
 

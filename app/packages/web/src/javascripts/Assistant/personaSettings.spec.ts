@@ -3,6 +3,7 @@ import {
   createPersonaProfile,
   DEFAULT_PERSONA_PROFILES_STATE,
   getActiveProfile,
+  getAssistantAccountScope,
   getPersona,
   loadPersonaProfiles,
   normalizePersonaProfilesState,
@@ -16,6 +17,9 @@ beforeEach(() => {
   localStorage.clear()
 })
 
+const SCOPE_A = 'account:account-a'
+const SCOPE_B = 'account:account-b'
+
 const baseProfile = (over: Partial<PersonaProfile> = {}): PersonaProfile => ({
   id: 'p1',
   name: 'Coding',
@@ -25,6 +29,8 @@ const baseProfile = (over: Partial<PersonaProfile> = {}): PersonaProfile => ({
   temperature: 0.3,
   topP: 0.9,
   maxTokens: 1000,
+  useServerTemperature: true,
+  useServerTopP: true,
   ...over,
 })
 
@@ -75,15 +81,29 @@ describe('persona profiles normalization', () => {
 
 describe('persona profiles load/save + active selection', () => {
   it('round-trips through localStorage', () => {
-    savePersonaProfiles({ activeId: 'p2', profiles: [baseProfile(), baseProfile({ id: 'p2', name: 'Creative' })] })
-    const loaded = loadPersonaProfiles()
+    savePersonaProfiles(SCOPE_A, {
+      activeId: 'p2',
+      profiles: [baseProfile(), baseProfile({ id: 'p2', name: 'Creative' })],
+    })
+    const loaded = loadPersonaProfiles(SCOPE_A)
     expect(loaded.activeId).toBe('p2')
     expect(loaded.profiles).toHaveLength(2)
-    expect(getActiveProfile()!.id).toBe('p2')
+    expect(getActiveProfile(SCOPE_A)!.id).toBe('p2')
   })
 
   it('getActiveProfile is undefined when no profiles exist', () => {
-    expect(getActiveProfile()).toBeUndefined()
+    expect(getActiveProfile(SCOPE_A)).toBeUndefined()
+  })
+
+  it('does not load another account profile or unattributable unscoped storage', () => {
+    savePersonaProfiles(SCOPE_A, { activeId: 'p1', profiles: [baseProfile()] })
+    localStorage.setItem(
+      'standardnotes.assistantPersonaProfiles.settings.v1',
+      JSON.stringify({ activeId: 'legacy', profiles: [baseProfile({ id: 'legacy' })] }),
+    )
+
+    expect(loadPersonaProfiles(SCOPE_B)).toEqual(DEFAULT_PERSONA_PROFILES_STATE)
+    expect(getActiveProfile(SCOPE_B)).toBeUndefined()
   })
 
   it('createPersonaProfile produces a unique id not already used', () => {
@@ -95,21 +115,55 @@ describe('persona profiles load/save + active selection', () => {
 })
 
 describe('getPersona honors the active profile', () => {
-  it('uses the legacy single persona when no profiles exist', () => {
-    savePersonaSettings({ persona: 'legacy persona' })
-    expect(getPersona()).toBe('legacy persona')
+  it('uses the single persona when no profiles exist', () => {
+    savePersonaSettings(SCOPE_A, { persona: 'single persona' })
+    expect(getPersona(SCOPE_A)).toBe('single persona')
   })
 
-  it('prefers the active profile persona over the legacy persona', () => {
-    savePersonaSettings({ persona: 'legacy persona' })
-    savePersonaProfiles({ activeId: 'p1', profiles: [baseProfile({ persona: 'profile persona' })] })
-    expect(getPersona()).toBe('profile persona')
+  it('prefers the active profile persona over the single persona', () => {
+    savePersonaSettings(SCOPE_A, { persona: 'single persona' })
+    savePersonaProfiles(SCOPE_A, { activeId: 'p1', profiles: [baseProfile({ persona: 'profile persona' })] })
+    expect(getPersona(SCOPE_A)).toBe('profile persona')
   })
 
   it('feeds the active profile persona into composeSystemPromptWithPersona', () => {
-    savePersonaProfiles({ activeId: 'p1', profiles: [baseProfile({ persona: 'profile persona' })] })
-    const composed = composeSystemPromptWithPersona('BASE')
+    savePersonaProfiles(SCOPE_A, { activeId: 'p1', profiles: [baseProfile({ persona: 'profile persona' })] })
+    const composed = composeSystemPromptWithPersona('BASE', getPersona(SCOPE_A))
     expect(composed).toContain('BASE')
     expect(composed).toContain('profile persona')
+  })
+
+  it('does not apply account A persona to account B', () => {
+    savePersonaSettings(SCOPE_A, { persona: 'account A secret style' })
+    expect(getPersona(SCOPE_B)).toBe('')
+  })
+})
+
+describe('assistant account scope', () => {
+  it('uses the signed-in user UUID instead of the application identifier', () => {
+    expect(
+      getAssistantAccountScope({
+        identifier: 'workspace',
+        sessions: { isSignedIn: () => true, getUser: () => ({ uuid: 'user-a' }) },
+      } as never),
+    ).toBe('account:user-a')
+  })
+
+  it('uses the application identifier for an anonymous workspace', () => {
+    expect(
+      getAssistantAccountScope({
+        identifier: 'anonymous-workspace',
+        sessions: { isSignedIn: () => false, getUser: () => undefined },
+      } as never),
+    ).toBe('application:anonymous-workspace')
+  })
+
+  it('fails closed when a signed-in user UUID is unavailable', () => {
+    expect(
+      getAssistantAccountScope({
+        identifier: 'workspace',
+        sessions: { isSignedIn: () => true, getUser: () => undefined },
+      } as never),
+    ).toBeUndefined()
   })
 })

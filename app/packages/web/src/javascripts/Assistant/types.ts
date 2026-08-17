@@ -38,7 +38,11 @@ export interface ProviderRequest {
   system: string
   messages: ChatMessage[]
   tools: ToolDescriptor[]
+  /** Per-run cancellation boundary; overrides a provider constructor signal. */
+  signal?: AbortSignal
   maxOutputTokens?: number
+  /** Narrow server-recognized purpose; never a caller-selected backend profile. */
+  purpose?: 'safety-review'
   stop?: string[]
 }
 
@@ -71,5 +75,8 @@ export interface ToolDefinition {
 /** Mirrors openclaw's McpSession surface used by the agent loop. */
 export interface ToolSession {
   tools(): ToolDefinition[]
-  call(name: string, args: unknown): Promise<unknown>
+  /** The opaque call id is for local audit/UI correlation only. */
+  call(name: string, args: unknown, callId?: string): Promise<unknown>
 }
+
+export type ToolExecutionOutcome = 'succeeded' | 'failed' | 'denied' | 'interrupted'

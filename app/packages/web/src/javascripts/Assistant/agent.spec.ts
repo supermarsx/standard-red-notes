@@ -35,10 +35,51 @@ class RecordingSession implements ToolSession {
 }
 
 describe('run() steering', () => {
-  it('injects a queued steer message as a user turn before the next step', async () => {
-    // Step 0 makes a tool call (loop continues); step 1 should see the steer.
+  it('consumes steering that arrives during a terminal stream exactly once', async () => {
     const provider = new ScriptedProvider([
       () => [
+        { kind: 'text-delta', delta: 'first answer' },
+        { kind: 'finish', stopReason: 'end_turn' },
+      ],
+      () => [
+        { kind: 'text-delta', delta: 'revised answer' },
+        { kind: 'finish', stopReason: 'end_turn' },
+      ],
+    ])
+    let supplied = false
+    const injected: string[] = []
+    const control: AgentControl = {
+      drainSteers: () => {
+        if (provider.step === 1 && !supplied) {
+          supplied = true
+          return ['focus on the current note']
+        }
+        return []
+      },
+    }
+
+    const result = await run([{ role: 'user', content: 'summarize' }], {
+      provider,
+      session: new RecordingSession(),
+      systemPrompt: 'sys',
+      control,
+      onSteer: (text) => injected.push(text),
+    })
+
+    expect(result).toEqual({ finalText: 'revised answer', steps: 2, stopReason: 'end_turn' })
+    expect(injected).toEqual(['focus on the current note'])
+    expect(provider.seenMessages[1]).toEqual([
+      { role: 'user', content: 'summarize' },
+      { role: 'assistant', content: 'first answer' },
+      { role: 'user', content: 'focus on the current note' },
+    ])
+    expect(control.drainSteers()).toEqual([])
+  })
+
+  it('supersedes a pending tool turn when a steer arrives before execution', async () => {
+    const provider = new ScriptedProvider([
+      () => [
+        { kind: 'text-delta', delta: 'I will update the note.' },
         { kind: 'tool-call', id: 't1', name: 'echo', args: {} },
         { kind: 'finish', stopReason: 'tool_use' },
       ],
@@ -58,9 +99,10 @@ describe('run() steering', () => {
     }
 
     const injected: string[] = []
+    const session = new RecordingSession()
     const result = await run([{ role: 'user', content: 'write a note' }], {
       provider,
-      session: new RecordingSession(),
+      session,
       systemPrompt: 'sys',
       control,
       onSteer: (text) => injected.push(text),
@@ -68,9 +110,51 @@ describe('run() steering', () => {
 
     expect(result.stopReason).toBe('end_turn')
     expect(injected).toEqual(['use British spelling'])
+    expect(session.calls).toEqual([])
     // The second model call must have received the steer as a user message.
     const secondCall = provider.seenMessages[1]
+    expect(secondCall).toContainEqual({ role: 'assistant', content: 'I will update the note.' })
     expect(secondCall.some((m) => m.role === 'user' && m.content === 'use British spelling')).toBe(true)
+    expect(secondCall.some((m) => m.role === 'assistant' && m.toolCalls?.length)).toBe(false)
+  })
+
+  it('skips remaining calls when a steer arrives during an earlier tool', async () => {
+    const provider = new ScriptedProvider([
+      () => [
+        { kind: 'tool-call', id: 't1', name: 'first', args: {} },
+        { kind: 'tool-call', id: 't2', name: 'stale-second', args: {} },
+        { kind: 'finish', stopReason: 'tool_use' },
+      ],
+      () => [
+        { kind: 'text-delta', delta: 'corrected' },
+        { kind: 'finish', stopReason: 'end_turn' },
+      ],
+    ])
+    let drains = 0
+    const control: AgentControl = {
+      drainSteers: () => (++drains === 3 ? ['do not run the second action'] : []),
+    }
+    const session = new RecordingSession()
+    const outcomes: Array<{ id: string; outcome: string }> = []
+
+    const result = await run([{ role: 'user', content: 'do two things' }], {
+      provider,
+      session,
+      systemPrompt: 'sys',
+      control,
+      onToolResult: (id, _result, outcome) => outcomes.push({ id, outcome }),
+    })
+
+    expect(result.finalText).toBe('corrected')
+    expect(session.calls.map((call) => call.name)).toEqual(['first'])
+    expect(outcomes).toContainEqual({ id: 't2', outcome: 'denied' })
+    expect(provider.seenMessages[1]).toContainEqual({
+      role: 'user',
+      content: 'do not run the second action',
+    })
+    expect(provider.seenMessages[1]).toContainEqual(
+      expect.objectContaining({ role: 'tool', toolCallId: 't2', name: 'stale-second' }),
+    )
   })
 
   it('ignores empty/whitespace steers', async () => {
@@ -136,6 +220,33 @@ describe('run() steering', () => {
     expect(JSON.stringify({ assistantText, toolResults })).not.toContain(providerReplay.encodedOutput)
   })
 
+  it('reports a declined tool as denied rather than completed', async () => {
+    const provider = new ScriptedProvider([
+      () => [
+        { kind: 'tool-call', id: 'denied-call', name: 'echo', args: {} },
+        { kind: 'finish', stopReason: 'tool_use' },
+      ],
+      () => [{ kind: 'finish', stopReason: 'end_turn' }],
+    ])
+    const outcomes: string[] = []
+    const session: ToolSession = {
+      tools: () => [{ name: 'echo', description: 'echo', mutating: true, inputSchema: { type: 'object' } }],
+      call: async (_name, _args, callId) => {
+        expect(callId).toBe('denied-call')
+        return { ok: false, cancelled: true }
+      },
+    }
+
+    await run([{ role: 'user', content: 'try it' }], {
+      provider,
+      session,
+      systemPrompt: 'sys',
+      onToolResult: (_id, _result, outcome) => outcomes.push(outcome),
+    })
+
+    expect(outcomes).toEqual(['denied'])
+  })
+
   it('never executes tool calls from a turn the provider did not complete as tool use', async () => {
     const provider = new ScriptedProvider([
       () => [
@@ -176,6 +287,133 @@ describe('run() interrupt', () => {
       signal: controller.signal,
     })
     expect(result.stopReason).toBe('aborted')
+  })
+
+  it('does not start a later tool when Stop arrives during an awaited tool', async () => {
+    let finishFirstTool: ((value: unknown) => void) | undefined
+    let markToolStarted: (() => void) | undefined
+    const firstTool = new Promise<unknown>((resolve) => {
+      finishFirstTool = resolve
+    })
+    const toolStarted = new Promise<void>((resolve) => {
+      markToolStarted = resolve
+    })
+    const session: ToolSession & { calls: string[] } = {
+      calls: [],
+      tools: () => [{ name: 'echo', description: 'echo', mutating: false, inputSchema: { type: 'object' } }],
+      call(name) {
+        this.calls.push(name)
+        markToolStarted?.()
+        return this.calls.length === 1 ? firstTool : Promise.resolve({ ok: true })
+      },
+    }
+    const provider = new ScriptedProvider([
+      () => [
+        { kind: 'tool-call', id: 'first', name: 'echo', args: { order: 1 } },
+        { kind: 'tool-call', id: 'second', name: 'echo', args: { order: 2 } },
+        { kind: 'finish', stopReason: 'tool_use' },
+      ],
+    ])
+    const controller = new AbortController()
+    const outcomes: Array<{ id: string; outcome: string; result: string }> = []
+
+    const resultPromise = run([{ role: 'user', content: 'run both' }], {
+      provider,
+      session,
+      systemPrompt: 'sys',
+      signal: controller.signal,
+      onToolResult: (id, result, outcome) => outcomes.push({ id, result, outcome }),
+    })
+    await toolStarted
+    expect(session.calls).toEqual(['echo'])
+
+    controller.abort()
+    finishFirstTool?.({ ok: true })
+
+    await expect(resultPromise).resolves.toEqual({ finalText: '', steps: 1, stopReason: 'aborted' })
+    expect(session.calls).toEqual(['echo'])
+    expect(outcomes).toEqual([{ id: 'first', result: '{"ok":true}', outcome: 'succeeded' }])
+  })
+
+  it('enforces the wall-clock deadline while a provider stream is stalled', async () => {
+    jest.useFakeTimers()
+    try {
+      let transportSignal: AbortSignal | undefined
+      const provider: Provider = {
+        id: 'never-finishes',
+        send: (providerRequest) => {
+          transportSignal = providerRequest.signal
+          return {
+            [Symbol.asyncIterator]: () => ({
+              next: () => new Promise<IteratorResult<ProviderEvent>>(() => undefined),
+              return: async () => ({ done: true, value: undefined }),
+            }),
+          }
+        },
+      }
+
+      const resultPromise = run([{ role: 'user', content: 'wait forever' }], {
+        provider,
+        session: new RecordingSession(),
+        systemPrompt: 'sys',
+        maxRunTimeMs: 50,
+      })
+      await jest.advanceTimersByTimeAsync(50)
+
+      expect(transportSignal?.aborted).toBe(true)
+      await expect(resultPromise).resolves.toEqual({
+        finalText: 'The assistant stopped after reaching the run-time limit.',
+        steps: 1,
+        stopReason: 'time_limit',
+      })
+    } finally {
+      jest.useRealTimers()
+    }
+  })
+
+  it('blocks the next provider/tool boundary when a background timer is delayed past deadline', async () => {
+    jest.useFakeTimers()
+    jest.setSystemTime(1_000)
+    try {
+      const provider = new ScriptedProvider([
+        () => [
+          { kind: 'tool-call', id: 'first', name: 'echo', args: {} },
+          { kind: 'finish', stopReason: 'tool_use' },
+        ],
+        () => [
+          { kind: 'text-delta', delta: 'must not run' },
+          { kind: 'finish', stopReason: 'end_turn' },
+        ],
+      ])
+      const session: ToolSession & { calls: string[] } = {
+        calls: [],
+        tools: () => [{ name: 'echo', description: 'echo', mutating: false, inputSchema: { type: 'object' } }],
+        async call(name) {
+          this.calls.push(name)
+          // Simulate resuming in a background tab after the deadline while the
+          // scheduled timeout callback itself remains throttled and unrun.
+          jest.setSystemTime(1_200)
+          return { ok: true }
+        },
+      }
+
+      const result = await run([{ role: 'user', content: 'use the tool' }], {
+        provider,
+        session,
+        systemPrompt: 'sys',
+        maxRunTimeMs: 100,
+      })
+
+      expect(result).toEqual({
+        finalText: 'The assistant stopped after reaching the run-time limit.',
+        steps: 1,
+        stopReason: 'time_limit',
+      })
+      expect(session.calls).toEqual(['echo'])
+      expect(provider.step).toBe(1)
+    } finally {
+      jest.useRealTimers()
+    }
   })
 })
 

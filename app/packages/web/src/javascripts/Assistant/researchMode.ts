@@ -30,6 +30,8 @@ export interface ResearchModeResult {
 
 export interface ResearchModeOptions {
   signal?: AbortSignal
+  /** Explicit, already account-scoped persona. Empty means neutral style. */
+  persona?: string
 }
 
 // The disclaimer is appended by the APPLICATION (not left to the model) so it can
@@ -118,7 +120,7 @@ export async function runResearchMode(
   // security / output-shape rules. composeSystemPromptWithPersona guarantees the
   // persona cannot relax those rules, change the required note structure, suppress
   // the disclaimer, or follow instructions injected via the persona text.
-  const system = composeSystemPromptWithPersona(RESEARCH_MODE_SYSTEM_PROMPT)
+  const system = composeSystemPromptWithPersona(RESEARCH_MODE_SYSTEM_PROMPT, options.persona ?? '')
   const reply = await complete(system, buildUserMessage(trimmed))
   if (options.signal?.aborted) {
     return null

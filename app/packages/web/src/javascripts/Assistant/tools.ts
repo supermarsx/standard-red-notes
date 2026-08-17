@@ -11,6 +11,7 @@ import {
   isNote,
   isTag,
   FeatureStatus,
+  CollectionSort,
 } from '@standardnotes/snjs'
 import { NativeFeatureIdentifier, NoteType } from '@standardnotes/features'
 import { WebApplication } from '@/Application/WebApplication'
@@ -28,10 +29,12 @@ import {
   getNoteReminders,
   generateReminderId,
   describeRecurrence,
+  NoteRemindersKey,
 } from '@/Reminders/reminders'
 import { createEmailReminder, deleteEmailReminder } from '@/Reminders/emailReminders'
 import { webSearch, webFetch } from './webTools'
 import { achievements, ACHIEVEMENTS } from '@/Achievements'
+import { AssistantToolConfirmation } from './assistantPresentation'
 
 export type TodoStatus = 'pending' | 'in_progress' | 'completed'
 
@@ -60,6 +63,26 @@ const ALLOWED_PREFERENCE_KEYS: PrefKey[] = [
   PrefKey.AlwaysShowSuperToolbar,
 ]
 
+const BOOLEAN_PREFERENCE_KEYS = new Set<PrefKey>([
+  PrefKey.SortNotesReverse,
+  PrefKey.NotesShowArchived,
+  PrefKey.NotesShowTrashed,
+  PrefKey.NotesHidePinned,
+  PrefKey.NotesHideNotePreview,
+  PrefKey.NotesHideDate,
+  PrefKey.NotesHideTags,
+  PrefKey.NotesHideEditorIcon,
+  PrefKey.EditorSpellcheck,
+  PrefKey.AlwaysShowSuperToolbar,
+])
+
+const ALLOWED_NOTE_SORT_VALUES = new Set<string>([
+  CollectionSort.CreatedAt,
+  CollectionSort.UpdatedAt,
+  CollectionSort.Title,
+  CollectionSort.Custom,
+])
+
 const PANE_NAVIGATION_TARGETS: Record<string, AppPaneId> = {
   navigation: AppPaneId.Navigation,
   tags: AppPaneId.Navigation,
@@ -76,10 +99,31 @@ const RECURRENCE_FREQUENCIES: RecurrenceFrequency[] = ['none', 'daily', 'weekly'
 const RECURRENCE_UNITS: RecurrenceUnit[] = ['day', 'week', 'month', 'year']
 
 export interface AssistantToolContext {
+  /** Combined user-cancel/deadline signal for this exact agent run. */
+  signal?: AbortSignal
+  /** Fails closed when sign-in identity changes during an async tool call. */
+  isSessionCurrent?: () => boolean
+  /**
+   * Exact note UUIDs selected by the user for this request. When present, note
+   * discovery, reads, mutations, reminders, tag assignment, and navigation all
+   * fail closed to this set. An empty set means no existing note may be targeted;
+   * model-provided text can never widen it.
+   */
+  selectedNoteUuids?: ReadonlySet<string>
   /** Whether mutating tools require user confirmation before executing. */
   confirmBeforeWrite: boolean
   /** Resolves to true if the user approves a mutating action. */
-  requestConfirmation: (description: string) => Promise<boolean>
+  requestConfirmation: (request: AssistantToolConfirmation, signal?: AbortSignal) => Promise<boolean>
+  /** Optional policy hook; when present it decides whether this call needs an approval. */
+  shouldRequestConfirmation?: (request: AssistantToolConfirmation, mutating: boolean) => boolean
+  /** Records a bounded display-only authorization decision against a live tool card. */
+  onAuthorization?: (
+    callId: string | undefined,
+    authorization: {
+      decision: 'allow' | 'deny'
+      source: 'policy' | 'safety-review' | 'user-once' | 'user-chat'
+    },
+  ) => void
   /** Presents the given pane (used for app.navigate / app.openNote). */
   presentPane: (paneId: AppPaneId) => void
   /**
@@ -140,6 +184,13 @@ export class AssistantTools implements ToolSession {
   ) {}
 
   private todos: TodoItem[] = []
+  /** Notes created successfully by this exact run become safe follow-up targets. */
+  private readonly createdNoteUuids = new Set<string>()
+
+  /** Agent runtime hook: install its combined user/deadline signal. */
+  setAbortSignal(signal: AbortSignal): void {
+    this.context.signal = signal
+  }
 
   /**
    * Lazily-created headless Super converter. We construct one directly (the same
@@ -171,7 +222,8 @@ export class AssistantTools implements ToolSession {
     return TOOL_DEFINITIONS
   }
 
-  async call(name: string, rawArgs: unknown): Promise<unknown> {
+  async call(name: string, rawArgs: unknown, callId?: string): Promise<unknown> {
+    this.throwIfAborted()
     const args = (rawArgs ?? {}) as Record<string, unknown>
     // Resolve against the live tool list so a withheld tool (e.g. delegate inside
     // a sub-agent) is rejected as unknown rather than silently executing.
@@ -180,13 +232,39 @@ export class AssistantTools implements ToolSession {
       throw new Error(`Unknown tool: ${name}`)
     }
 
-    if (definition.mutating && this.context.confirmBeforeWrite) {
-      const approved = await this.context.requestConfirmation(`Run "${name}" with ${JSON.stringify(args)}?`)
+    const confirmationRequest = this.buildConfirmationRequest(name, args, callId)
+    // Web tools disclose a query/URL outside the encrypted client. They always
+    // receive an inline decision, independently of the user's write policy or
+    // any remembered approval for local-only actions.
+    const isExternalDisclosure = name === 'web.search' || name === 'web.fetch'
+    const needsConfirmation =
+      isExternalDisclosure ||
+      (this.context.shouldRequestConfirmation
+        ? this.context.shouldRequestConfirmation(confirmationRequest, definition.mutating)
+        : definition.mutating && this.context.confirmBeforeWrite)
+    if (needsConfirmation) {
+      this.throwIfAborted()
+      const approved = this.context.signal
+        ? await this.context.requestConfirmation(confirmationRequest, this.context.signal)
+        : await this.context.requestConfirmation(confirmationRequest)
+      this.throwIfAborted()
       if (!approved) {
         return { ok: false, cancelled: true, message: 'User declined the action.' }
       }
+    } else {
+      this.context.onAuthorization?.(callId, { decision: 'allow', source: 'policy' })
     }
 
+    this.throwIfAborted()
+    const result = await this.dispatch(name, args)
+    if (definition.mutating) {
+      return this.markCompletedAfterCancellation(result)
+    }
+    this.throwIfAborted()
+    return result
+  }
+
+  private dispatch(name: string, args: Record<string, unknown>): unknown | Promise<unknown> {
     switch (name) {
       case 'notes.list':
         return this.notesList(args)
@@ -249,6 +327,144 @@ export class AssistantTools implements ToolSession {
     }
   }
 
+  private throwIfAborted(): void {
+    if (this.context.isSessionCurrent && !this.context.isSessionCurrent()) {
+      const error = new Error('Assistant operation expired when the signed-in account changed.')
+      error.name = 'AbortError'
+      throw error
+    }
+    const signal = this.context.signal
+    if (!signal?.aborted) {
+      return
+    }
+    if (signal.reason instanceof Error) {
+      throw signal.reason
+    }
+    const error = new Error('Assistant operation was aborted.')
+    error.name = 'AbortError'
+    throw error
+  }
+
+  private throwIfSessionChanged(): void {
+    if (!this.context.isSessionCurrent || this.context.isSessionCurrent()) {
+      return
+    }
+    const error = new Error('Assistant operation expired when the signed-in account changed.')
+    error.name = 'AbortError'
+    throw error
+  }
+
+  private isBoundaryExpired(): boolean {
+    return (
+      this.context.signal?.aborted === true ||
+      (this.context.isSessionCurrent !== undefined && !this.context.isSessionCurrent())
+    )
+  }
+
+  private markCompletedAfterCancellation(result: unknown): unknown {
+    if (!this.isBoundaryExpired()) {
+      return result
+    }
+    if (typeof result === 'object' && result !== null && !Array.isArray(result)) {
+      return { ...(result as Record<string, unknown>), completedAfterCancellation: true }
+    }
+    return { ok: true, result, completedAfterCancellation: true }
+  }
+
+  /** Bind reminder delivery to the API client that was current when the tool began. */
+  private emailApplicationSnapshot(): WebApplication {
+    return { legacyApi: this.application.legacyApi } as unknown as WebApplication
+  }
+
+  /** Admit only the exact note identity returned for this session's own template. */
+  private recordCreatedNote(template: { uuid: string }, note: SNNote): void {
+    this.throwIfSessionChanged()
+    if (!isNote(note) || note.uuid !== template.uuid) {
+      throw new Error('The created note identity did not match the application-issued template.')
+    }
+    this.createdNoteUuids.add(note.uuid)
+  }
+
+  private validatePreferenceValue(key: PrefKey, value: unknown): void {
+    if (BOOLEAN_PREFERENCE_KEYS.has(key)) {
+      if (typeof value !== 'boolean') {
+        throw new Error(`Preference "${key}" requires a boolean value`)
+      }
+      return
+    }
+    if (key === PrefKey.SortNotesBy) {
+      if (typeof value !== 'string' || !ALLOWED_NOTE_SORT_VALUES.has(value)) {
+        throw new Error(`Preference "${key}" must be one of: ${Array.from(ALLOWED_NOTE_SORT_VALUES).join(', ')}`)
+      }
+      return
+    }
+    throw new Error(`Preference "${key}" has no assistant value validator`)
+  }
+
+  /** Add bounded application-resolved identities to every target-bearing prompt. */
+  private buildConfirmationRequest(
+    name: string,
+    args: Record<string, unknown>,
+    callId?: string,
+  ): AssistantToolConfirmation {
+    const presentationArgs = { ...args }
+    delete presentationArgs.targetTitle
+    delete presentationArgs.targetShortId
+    delete presentationArgs.targetTagTitle
+    delete presentationArgs.targetTagShortId
+
+    const note = this.findTrustedTargetNote(args)
+    if (note) {
+      presentationArgs.targetTitle = note.title.trim().slice(0, 120) || 'Untitled note'
+      presentationArgs.targetShortId = note.uuid.slice(0, 8)
+    }
+
+    const tag = this.findTrustedTargetTag(args)
+    if (tag) {
+      presentationArgs.targetTagTitle = tag.title.trim().slice(0, 120) || 'Untitled tag'
+      presentationArgs.targetTagShortId = tag.uuid.slice(0, 8)
+    }
+    return { name, args: presentationArgs, ...(callId ? { callId } : {}) }
+  }
+
+  private findTrustedTargetNote(args: Record<string, unknown>): SNNote | undefined {
+    const uuid =
+      typeof args.uuid === 'string' ? args.uuid : typeof args.noteUuid === 'string' ? args.noteUuid : undefined
+    if (uuid) {
+      const byUuid = this.application.items.findItem<SNNote>(uuid)
+      return byUuid && isNote(byUuid) && this.isReadableNote(byUuid) ? byUuid : undefined
+    }
+    return undefined
+  }
+
+  private findTrustedTargetTag(args: Record<string, unknown>): SNTag | undefined {
+    if (typeof args.tagUuid !== 'string') {
+      return undefined
+    }
+    const tag = this.application.items.findItem<SNTag>(args.tagUuid)
+    return tag && isTag(tag) ? tag : undefined
+  }
+
+  private isReadableNote(note: SNNote): boolean {
+    return this.context.selectedNoteUuids
+      ? this.context.selectedNoteUuids.has(note.uuid) || this.createdNoteUuids.has(note.uuid)
+      : true
+  }
+
+  private requireReadableNote(uuid: unknown): SNNote {
+    if (typeof uuid !== 'string') {
+      throw new Error('A note "uuid" string is required')
+    }
+    if (
+      this.context.selectedNoteUuids &&
+      !this.context.selectedNoteUuids.has(uuid) &&
+      !this.createdNoteUuids.has(uuid)
+    ) {
+      throw new Error('That note is outside the context selected for this assistant request.')
+    }
+    return this.requireNote(uuid)
+  }
+
   private allNotes(): SNNote[] {
     return this.application.items.getItems<SNNote>(ContentType.TYPES.Note)
   }
@@ -284,6 +500,7 @@ export class AssistantTools implements ToolSession {
     const includeTrashed = args.includeTrashed === true
     const includeArchived = args.includeArchived === true
     const notes = this.allNotes()
+      .filter((note) => this.isReadableNote(note))
       .filter((n) => (includeTrashed || !n.trashed) && (includeArchived || !n.archived))
       .slice(0, limit)
     return { count: notes.length, notes: notes.map(noteSummary) }
@@ -296,6 +513,7 @@ export class AssistantTools implements ToolSession {
       throw new Error('A search "query" string is required')
     }
     const matches = this.allNotes()
+      .filter((note) => this.isReadableNote(note))
       .filter((note) => doesItemMatchSearchQuery(note as DecryptedItemInterface<ItemContent>, query, this.application))
       .slice(0, limit)
     return { count: matches.length, notes: matches.map(noteSummary) }
@@ -309,6 +527,7 @@ export class AssistantTools implements ToolSession {
     const limit = typeof args.limit === 'number' ? args.limit : 5
     const perNote = args.perNote !== false
     const docs = this.allNotes()
+      .filter((note) => this.isReadableNote(note))
       .filter((note) => !note.trashed)
       .map((note) => ({ uuid: note.uuid, title: note.title, text: note.text }))
     const results = retrieve(docs, query, { limit, perNote })
@@ -334,7 +553,7 @@ export class AssistantTools implements ToolSession {
   }
 
   private notesRead(args: Record<string, unknown>) {
-    const note = this.requireNote(args.uuid)
+    const note = this.requireReadableNote(args.uuid)
     return {
       ...noteSummary(note),
       text: note.text,
@@ -370,6 +589,7 @@ export class AssistantTools implements ToolSession {
       editorIdentifier,
     })
     const note = await this.application.mutator.insertItem<SNNote>(template)
+    this.recordCreatedNote(template, note)
     return { ok: true, note: noteSummary(note), editorIdentifier: editorIdentifier ?? null }
   }
 
@@ -378,7 +598,7 @@ export class AssistantTools implements ToolSession {
       return this.notesUpdateSuper(args)
     }
 
-    const note = this.requireNote(args.uuid)
+    const note = this.requireReadableNote(args.uuid)
     const updated = await this.application.mutator.changeItem<NoteMutator, SNNote>(note, (mutator) => {
       if (typeof args.title === 'string') {
         mutator.title = args.title
@@ -409,6 +629,7 @@ export class AssistantTools implements ToolSession {
         references: [],
       })
       const plain = await this.application.mutator.insertItem<SNNote>(template)
+      this.recordCreatedNote(template, plain)
       return {
         ok: true,
         note: noteSummary(plain),
@@ -434,6 +655,7 @@ export class AssistantTools implements ToolSession {
       editorIdentifier: NativeFeatureIdentifier.TYPES.SuperEditor,
     })
     const note = await this.application.mutator.insertItem<SNNote>(template)
+    this.recordCreatedNote(template, note)
     return { ok: true, note: noteSummary(note), super: true }
   }
 
@@ -444,7 +666,7 @@ export class AssistantTools implements ToolSession {
    * yet a Super note it is converted into one.
    */
   private async notesUpdateSuper(args: Record<string, unknown>) {
-    const note = this.requireNote(args.uuid)
+    const note = this.requireReadableNote(args.uuid)
     const markdown = typeof args.markdown === 'string' ? args.markdown : typeof args.text === 'string' ? args.text : ''
 
     if (!this.canUseSuper()) {
@@ -476,7 +698,7 @@ export class AssistantTools implements ToolSession {
    * notes.updateSuper. For a non-Super note this just returns its raw text.
    */
   private async notesReadSuper(args: Record<string, unknown>) {
-    const note = this.requireNote(args.uuid)
+    const note = this.requireReadableNote(args.uuid)
     if (note.noteType !== NoteType.Super) {
       return { ...noteSummary(note), super: false, markdown: note.text }
     }
@@ -491,7 +713,7 @@ export class AssistantTools implements ToolSession {
   }
 
   private async notesDelete(args: Record<string, unknown>) {
-    const note = this.requireNote(args.uuid)
+    const note = this.requireReadableNote(args.uuid)
     await this.application.mutator.deleteItem(note)
     return { ok: true, deleted: note.uuid }
   }
@@ -503,13 +725,15 @@ export class AssistantTools implements ToolSession {
    */
   private resolveNote(args: Record<string, unknown>): SNNote {
     if (typeof args.uuid === 'string' && args.uuid) {
-      return this.requireNote(args.uuid)
+      return this.requireReadableNote(args.uuid)
     }
     const title = typeof args.title === 'string' ? args.title.trim() : ''
     if (!title) {
       throw new Error('A note "uuid" or "title" is required')
     }
-    const matches = this.allNotes().filter((n) => !n.trashed && n.title.trim().toLowerCase() === title.toLowerCase())
+    const matches = this.allNotes().filter(
+      (note) => this.isReadableNote(note) && !note.trashed && note.title.trim().toLowerCase() === title.toLowerCase(),
+    )
     if (matches.length === 0) {
       throw new Error(`No note found with title: ${title}`)
     }
@@ -562,6 +786,8 @@ export class AssistantTools implements ToolSession {
    */
   private async remindersSet(args: Record<string, unknown>) {
     const note = this.resolveNote(args)
+    const notesController = this.application.notesController
+    const emailApplication = this.emailApplicationSnapshot()
 
     const datetime = typeof args.datetime === 'string' ? args.datetime : ''
     if (!datetime) {
@@ -585,20 +811,63 @@ export class AssistantTools implements ToolSession {
 
     const wantsEmail = args.email === true
     let emailWarning: string | undefined
+    let createdEmailReminderId: string | undefined
     if (wantsEmail) {
       if (!this.application.hasAccount()) {
         emailWarning = 'Email delivery was requested but skipped: an account is required to receive emails.'
       } else {
-        const emailId = await createEmailReminder(this.application, dueIso, message || 'Reminder')
+        const emailId = await createEmailReminder(emailApplication, dueIso, message || 'Reminder')
         if (emailId) {
           reminder.emailReminderId = emailId
+          createdEmailReminderId = emailId
         } else {
           emailWarning = 'The reminder was saved, but it could not be registered for email delivery.'
         }
       }
     }
 
-    await this.application.notesController.upsertNoteReminder(note, reminder)
+    if (this.context.isSessionCurrent && !this.context.isSessionCurrent()) {
+      if (createdEmailReminderId) {
+        const removed = await deleteEmailReminder(emailApplication, createdEmailReminderId)
+        if (!removed) {
+          throw new Error('The account changed and the newly created email reminder could not be rolled back safely.')
+        }
+      }
+      this.throwIfSessionChanged()
+    }
+
+    try {
+      // Once the external email record exists, finish linking it locally even
+      // if cancellation arrives between these two non-transactional systems.
+      // The caller enforces the abort boundary after dispatch settles.
+      await notesController.upsertNoteReminder(note, reminder)
+    } catch (error) {
+      if (createdEmailReminderId) {
+        const removed = await deleteEmailReminder(emailApplication, createdEmailReminderId)
+        if (!removed) {
+          this.throwIfSessionChanged()
+          try {
+            // If the external delete failed, preserve the exact server id in the
+            // synced note so it remains visible and retryable instead of orphaned.
+            await notesController.upsertNoteReminder(note, reminder)
+          } catch (compensationError) {
+            throw new Error(
+              `Could not save the reminder, cancel its email delivery, or restore its local provenance: ${
+                compensationError instanceof Error ? compensationError.message : String(compensationError)
+              }`,
+              { cause: error },
+            )
+          }
+          return {
+            ok: true,
+            noteUuid: note.uuid,
+            reminder: this.reminderSummary(reminder),
+            warning: 'The initial local save failed, but the email reminder was preserved and relinked for retry.',
+          }
+        }
+      }
+      throw error
+    }
 
     return {
       ok: true,
@@ -617,7 +886,7 @@ export class AssistantTools implements ToolSession {
       return { noteUuid: note.uuid, count: reminders.length, reminders: reminders.map((r) => this.reminderSummary(r)) }
     }
     const all = this.allNotes()
-      .filter((n) => !n.trashed)
+      .filter((note) => this.isReadableNote(note) && !note.trashed)
       .flatMap((note) =>
         getNoteReminders(note).map((reminder) => ({
           noteUuid: note.uuid,
@@ -629,28 +898,55 @@ export class AssistantTools implements ToolSession {
     return { count: all.length, reminders: all }
   }
 
-  /** Clear all reminders from a note (best-effort cancels any email records). */
+  /** Clear all reminders while keeping every external id reflected locally. */
   private async remindersClear(args: Record<string, unknown>) {
     const note = this.resolveNote(args)
     const existing = getNoteReminders(note)
+    const notesController = this.application.notesController
+    const mutator = this.application.mutator
+    const emailApplication = this.emailApplicationSnapshot()
+
+    // Clear locally before touching the external service. If this write fails,
+    // every server id remains referenced and no compensation is necessary.
+    await notesController.clearNoteReminders(note)
+
+    const failedExternalDeletes: Reminder[] = []
     for (const reminder of existing) {
       if (reminder.emailReminderId) {
-        await deleteEmailReminder(this.application, reminder.emailReminderId)
+        const removed = await deleteEmailReminder(emailApplication, reminder.emailReminderId)
+        if (!removed) {
+          failedExternalDeletes.push(reminder)
+        }
       }
     }
-    await this.application.notesController.clearNoteReminders(note)
+
+    if (failedExternalDeletes.length > 0) {
+      try {
+        await mutator.changeItem<NoteMutator, SNNote>(note, (noteMutator) => {
+          noteMutator.setAppDataItem(NoteRemindersKey, failedExternalDeletes)
+        })
+      } catch (error) {
+        throw new Error('Could not restore reminders whose external email records were not deleted.', { cause: error })
+      }
+      throw new Error(
+        `Could not delete ${failedExternalDeletes.length} email reminder${
+          failedExternalDeletes.length === 1 ? '' : 's'
+        }; the corresponding local reminder state was restored.`,
+      )
+    }
+
     return { ok: true, noteUuid: note.uuid, cleared: existing.length }
   }
 
   private async webSearch(args: Record<string, unknown>) {
     const query = typeof args.query === 'string' ? args.query : ''
     const limit = typeof args.limit === 'number' ? args.limit : undefined
-    return webSearch(this.application, query, { limit })
+    return webSearch(this.application, query, { limit, signal: this.context.signal })
   }
 
   private async webFetch(args: Record<string, unknown>) {
     const url = typeof args.url === 'string' ? args.url : ''
-    return webFetch(this.application, url)
+    return webFetch(this.application, url, { signal: this.context.signal })
   }
 
   /**
@@ -757,7 +1053,16 @@ export class AssistantTools implements ToolSession {
   }
 
   private tagsList() {
-    const tags = this.allTags()
+    const selectedNoteUuids = this.context.selectedNoteUuids
+    const tags = selectedNoteUuids
+      ? Array.from(
+          this.allNotes()
+            .filter((note) => selectedNoteUuids.has(note.uuid))
+            .flatMap((note) => this.application.items.getSortedTagsForItem(note))
+            .reduce((byUuid, tag) => byUuid.set(tag.uuid, tag), new Map<string, SNTag>())
+            .values(),
+        )
+      : this.allTags()
     return { count: tags.length, tags: tags.map((tag) => tagSummary(this.application, tag)) }
   }
 
@@ -771,14 +1076,14 @@ export class AssistantTools implements ToolSession {
   }
 
   private async tagsAssign(args: Record<string, unknown>) {
-    const note = this.requireNote(args.noteUuid)
+    const note = this.requireReadableNote(args.noteUuid)
     const tag = this.requireTag(args.tagUuid)
     await this.application.mutator.addTagToNote(note, tag, false)
     return { ok: true, noteUuid: note.uuid, tagUuid: tag.uuid }
   }
 
   private async tagsUnassign(args: Record<string, unknown>) {
-    const note = this.requireNote(args.noteUuid)
+    const note = this.requireReadableNote(args.noteUuid)
     const tag = this.requireTag(args.tagUuid)
     await this.application.mutator.changeItem<TagMutator, SNTag>(tag, (mutator) => {
       mutator.removeItemAsRelationship(note)
@@ -787,7 +1092,7 @@ export class AssistantTools implements ToolSession {
   }
 
   private async appOpenNote(args: Record<string, unknown>) {
-    const note = this.requireNote(args.uuid)
+    const note = this.requireReadableNote(args.uuid)
     await this.application.itemListController.openNote(note.uuid)
     this.context.presentPane(AppPaneId.Editor)
     return { ok: true, opened: note.uuid }
@@ -798,6 +1103,7 @@ export class AssistantTools implements ToolSession {
     if (!ALLOWED_PREFERENCE_KEYS.includes(key)) {
       throw new Error(`Preference "${String(key)}" is not allowed to be set by the assistant`)
     }
+    this.validatePreferenceValue(key, args.value)
     await this.application.setPreference(key, args.value as never)
     return { ok: true, key, value: args.value }
   }
@@ -825,7 +1131,7 @@ export class AssistantTools implements ToolSession {
   }
 
   private async appNoteAction(args: Record<string, unknown>) {
-    const note = this.requireNote(args.uuid)
+    const note = this.requireReadableNote(args.uuid)
     const action = args.action as NoteAction
     if (!NOTE_ACTIONS.includes(action)) {
       throw new Error(`Unknown note action: ${String(action)}. Allowed: ${NOTE_ACTIONS.join(', ')}`)
@@ -1032,7 +1338,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   },
   {
     name: 'tags.list',
-    description: 'List all tags with their uuid and full hierarchical title.',
+    description: 'List visible tags with their uuid and full hierarchical title.',
     mutating: false,
     inputSchema: { type: 'object', properties: {} },
   },

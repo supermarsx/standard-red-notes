@@ -104,6 +104,85 @@ export interface ResolvedContextNotes {
   cappedNoteCount: number
 }
 
+type RawContextSelection = { notes: SNNote[]; collectionLabel?: string }
+
+/**
+ * Resolve the note the editor most recently owned without treating DOM focus as
+ * note ownership. The assistant pane can have keyboard focus while the list's
+ * sole selected note still identifies the note the user was working on. When
+ * neither source is explicit we fail closed rather than authorizing stale
+ * recently-opened history as the "current" note.
+ */
+function currentNote(application: WebApplication): SNNote | undefined {
+  const active = application.itemListController.activeControllerItem
+  if (active) {
+    // An explicit active file/tag/other item owns the user's current context.
+    // Never fall through to a stale note selection and disclose it instead.
+    return isNote(active) && !active.trashed ? active : undefined
+  }
+
+  const selected = application.itemListController.firstSelectedItem
+  if (application.itemListController.selectedItemsCount === 1 && selected && isNote(selected) && !selected.trashed) {
+    return selected
+  }
+
+  return undefined
+}
+
+/** Resolve the user's explicit scope before prompt-size caps are applied. */
+function resolveRawContextSelection(
+  application: WebApplication,
+  selection: AssistantContextSelection,
+): RawContextSelection {
+  if (selection.scope === 'current-note') {
+    const active = currentNote(application)
+    return active ? { notes: [active] } : { notes: [] }
+  }
+  if (selection.scope === 'open-notes') {
+    return { notes: openNotes(application) }
+  }
+  if (selection.scope === 'all-notes') {
+    return { notes: allNotes(application) }
+  }
+  if (selection.scope === 'topic') {
+    const query = (selection.topicQuery ?? '').trim()
+    return query ? { notes: notesMatchingTopic(application, query), collectionLabel: query } : { notes: [] }
+  }
+
+  const collection = selection.collection
+  if (!collection) {
+    return { notes: [] }
+  }
+  if (collection.type === 'tag') {
+    const tag = application.items.findItem<SNTag>(collection.uuid)
+    return tag
+      ? { notes: notesForTag(application, tag), collectionLabel: application.items.getTagLongTitle(tag) }
+      : { notes: [] }
+  }
+  if (collection.type === 'folder') {
+    const folder = application.items.findItem<SNFolder>(collection.uuid)
+    return folder && isFolderItem(folder)
+      ? { notes: notesForFolder(application, folder), collectionLabel: folder.title }
+      : { notes: [] }
+  }
+  const selected = collection.uuids
+    .map((uuid) => application.items.findItem<SNNote>(uuid))
+    .filter((note): note is SNNote => Boolean(note) && isNote(note as SNNote) && !note?.trashed)
+  return {
+    notes: selected,
+    collectionLabel: `${selected.length} selected note${selected.length === 1 ? '' : 's'}`,
+  }
+}
+
+/**
+ * Every note UUID the user explicitly put in scope. Unlike prompt assembly this
+ * is not capped: the model may use read/search tools across the chosen scope,
+ * but note content can never widen that scope itself.
+ */
+export function resolveContextNoteUuids(application: WebApplication, selection: AssistantContextSelection): string[] {
+  return [...new Set(resolveRawContextSelection(application, selection).notes.map((note) => note.uuid))]
+}
+
 /** Map raw notes to context records, capping at MAX_CONTEXT_NOTES and reporting the overflow. */
 function resolveFrom(application: WebApplication, raw: SNNote[], collectionLabel?: string): ResolvedContextNotes {
   const capped = capNotes(raw)
@@ -122,59 +201,8 @@ export function resolveContextNotes(
   application: WebApplication,
   selection: AssistantContextSelection,
 ): ResolvedContextNotes {
-  const empty: ResolvedContextNotes = { notes: [], cappedNoteCount: 0 }
-
-  if (selection.scope === 'current-note') {
-    const active = application.itemListController.activeControllerItem
-    if (active && isNote(active)) {
-      return { notes: [toContextNote(application, active)], cappedNoteCount: 0 }
-    }
-    return empty
-  }
-
-  if (selection.scope === 'open-notes') {
-    return resolveFrom(application, openNotes(application))
-  }
-
-  if (selection.scope === 'all-notes') {
-    return resolveFrom(application, allNotes(application))
-  }
-
-  if (selection.scope === 'topic') {
-    const query = (selection.topicQuery ?? '').trim()
-    if (!query) {
-      return empty
-    }
-    return resolveFrom(application, notesMatchingTopic(application, query), `${query}`)
-  }
-
-  // Collection.
-  const collection = selection.collection
-  if (!collection) {
-    return empty
-  }
-
-  if (collection.type === 'tag') {
-    const tag = application.items.findItem<SNTag>(collection.uuid)
-    if (!tag) {
-      return empty
-    }
-    return resolveFrom(application, notesForTag(application, tag), application.items.getTagLongTitle(tag))
-  }
-
-  if (collection.type === 'folder') {
-    const folder = application.items.findItem<SNFolder>(collection.uuid)
-    if (!folder || !isFolderItem(folder)) {
-      return empty
-    }
-    return resolveFrom(application, notesForFolder(application, folder), folder.title)
-  }
-
-  // Explicit multi-selection of notes.
-  const selected = collection.uuids
-    .map((uuid) => application.items.findItem<SNNote>(uuid))
-    .filter((note): note is SNNote => Boolean(note) && isNote(note as SNNote))
-  return resolveFrom(application, selected, `${selected.length} selected note${selected.length === 1 ? '' : 's'}`)
+  const resolved = resolveRawContextSelection(application, selection)
+  return resolveFrom(application, resolved.notes, resolved.collectionLabel)
 }
 
 /** Resolve a selection and assemble its bounded context in one step. */

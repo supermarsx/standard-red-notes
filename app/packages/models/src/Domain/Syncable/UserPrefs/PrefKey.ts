@@ -137,6 +137,12 @@ export enum PrefKey {
   AssistantProvider = 'assistantProvider',
   AssistantModel = 'assistantModel',
   AssistantConfirmBeforeWrite = 'assistantConfirmBeforeWrite',
+  /**
+   * Controls which assistant tool calls may run without an inline approval.
+   * `allow-read` preserves the historical default: reads run immediately while
+   * every write waits for the user.
+   */
+  AssistantToolPermissionMode = 'assistantToolPermissionMode',
   AssistantConnectionMode = 'assistantConnectionMode',
   AssistantBaseUrl = 'assistantBaseUrl',
   AssistantApiKey = 'assistantApiKey',
@@ -326,6 +332,7 @@ export type PrefValue = {
   [PrefKey.AssistantProvider]: string
   [PrefKey.AssistantModel]: string
   [PrefKey.AssistantConfirmBeforeWrite]: boolean
+  [PrefKey.AssistantToolPermissionMode]: 'ask' | 'allow-read' | 'allow-safe' | 'allow-all'
   [PrefKey.AssistantConnectionMode]: 'direct' | 'proxy'
   [PrefKey.AssistantBaseUrl]: string
   [PrefKey.AssistantApiKey]: string

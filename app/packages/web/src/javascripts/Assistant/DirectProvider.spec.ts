@@ -70,6 +70,55 @@ describe('DirectProvider endpoint behavior', () => {
     )
   })
 
+  it('prefers the per-run request signal so a deadline aborts the upstream fetch', async () => {
+    const constructorController = new AbortController()
+    const runController = new AbortController()
+    const read = jest.fn().mockResolvedValue({ done: true, value: undefined })
+    const fetchMock = globalThis.fetch as jest.Mock
+    fetchMock.mockResolvedValue(response({ ok: true, status: 200, body: { getReader: () => ({ read }) } }))
+
+    await collect(
+      new DirectProvider({
+        baseURL: 'https://models.example.test/v1',
+        model: 'model-a',
+        signal: constructorController.signal,
+      }),
+      { ...request, signal: runController.signal },
+    )
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://models.example.test/v1/chat/completions',
+      expect.objectContaining({ signal: runController.signal }),
+    )
+  })
+
+  it('honors a narrower per-request output cap for safety reviews', async () => {
+    const read = jest.fn().mockResolvedValue({ done: true, value: undefined })
+    const fetchMock = globalThis.fetch as jest.Mock
+    fetchMock.mockResolvedValue(response({ ok: true, status: 200, body: { getReader: () => ({ read }) } }))
+
+    await collect(
+      new DirectProvider({
+        baseURL: 'https://models.example.test/v1',
+        model: 'model-a',
+        sampling: {
+          temperature: 0.7,
+          topP: 1,
+          maxTokens: 200,
+          maxSteps: 16,
+          maxRunTime: 10,
+          maxRunTimeUnit: 'minutes',
+          useServerTemperature: true,
+          useServerTopP: true,
+        },
+      }),
+      { ...request, maxOutputTokens: 8 },
+    )
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body) as { max_tokens?: number }
+    expect(body.max_tokens).toBe(8)
+  })
+
   it('uses the saved Direct-mode auth configuration through the shared runtime factory', async () => {
     const prefs: Partial<Record<PrefKey, unknown>> = {
       [PrefKey.AssistantConnectionMode]: 'direct',

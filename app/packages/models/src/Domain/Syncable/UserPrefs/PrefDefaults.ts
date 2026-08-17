@@ -66,6 +66,7 @@ export const PrefDefaults = {
   [PrefKey.AssistantProvider]: '',
   [PrefKey.AssistantModel]: '',
   [PrefKey.AssistantConfirmBeforeWrite]: true,
+  [PrefKey.AssistantToolPermissionMode]: 'allow-read',
   [PrefKey.AssistantConnectionMode]: 'direct',
   [PrefKey.AssistantBaseUrl]: 'http://localhost:1234/v1',
   [PrefKey.AssistantApiKey]: '',

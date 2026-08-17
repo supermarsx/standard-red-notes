@@ -46,6 +46,14 @@ describe('runResearchMode', () => {
     expect(user).toContain('TOPIC>>>')
   })
 
+  it('uses only the persona explicitly supplied by its caller', async () => {
+    const complete = jest.fn().mockResolvedValue('# Title\n\n## Overview\nbody')
+    await runResearchMode('photosynthesis', complete, { persona: 'A precise account-scoped voice.' })
+
+    const [system] = complete.mock.calls[0]
+    expect(system).toContain('A precise account-scoped voice.')
+  })
+
   it('always appends the no-web verification disclaimer to the note body', async () => {
     const complete = jest.fn().mockResolvedValue('# Title\n\n## Overview\nbody')
     const result = await runResearchMode('topic', complete)

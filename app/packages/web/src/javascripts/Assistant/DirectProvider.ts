@@ -113,6 +113,11 @@ export class DirectProvider implements Provider {
       ...samplingRequestFields(this.options.sampling),
       messages: this.toOpenAIMessages(req.system, req.messages, toolNames.toWireName),
     }
+    if (Number.isSafeInteger(req.maxOutputTokens) && (req.maxOutputTokens ?? 0) > 0) {
+      const requestedCap = req.maxOutputTokens as number
+      const configuredCap = typeof body.max_tokens === 'number' ? body.max_tokens : undefined
+      body.max_tokens = configuredCap === undefined ? requestedCap : Math.min(configuredCap, requestedCap)
+    }
 
     const tools = this.toOpenAITools(req.tools, toolNames.toWireName)
     if (tools.length > 0) {
@@ -126,7 +131,7 @@ export class DirectProvider implements Provider {
         method: 'POST',
         headers,
         body: JSON.stringify(body),
-        signal: this.options.signal,
+        signal: req.signal ?? this.options.signal,
       })
     } catch (error) {
       yield { kind: 'error', message: assistantNetworkError(error, 'direct') }

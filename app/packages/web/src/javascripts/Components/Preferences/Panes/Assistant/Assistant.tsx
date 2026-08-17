@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { observer } from 'mobx-react-lite'
-import { isErrorResponse, PrefKey, VectorIconNameOrEmoji } from '@standardnotes/snjs'
+import { ApplicationEvent, isErrorResponse, PrefKey, VectorIconNameOrEmoji } from '@standardnotes/snjs'
 import { AssistantSubscriptionStatus, WebApplication } from '@/Application/WebApplication'
 import PreferencesPane from '../../PreferencesComponents/PreferencesPane'
 import PreferencesGroup from '../../PreferencesComponents/PreferencesGroup'
@@ -28,8 +28,7 @@ import SttModelSettings from '@/Components/AudioRecorder/SttModelSettings'
 import { loadDictationSettings, saveDictationSettings, DictationSettings } from '@/Assistant/dictationSettings'
 import { getSttAvailability, getSpeechRecognitionCtor } from '@/Assistant/transcription'
 import { loadContextualSearchSettings, saveContextualSearchSettings } from '@/Assistant/contextualSearchSettings'
-import { loadDeepResearchSettings, saveDeepResearchSettings } from '@/Assistant/deepResearchSettings'
-import { loadResearchModeSettings, saveResearchModeSettings } from '@/Assistant/researchModeSettings'
+import { AssistantToolPermissionMode, legacyConfirmBeforeWriteForMode } from '@/Assistant/assistantActionReview'
 import {
   DEFAULT_ASSISTANT_SUBSCRIPTION_ID,
   isValidAssistantPairingState,
@@ -38,6 +37,7 @@ import {
 import { confirmDialog } from '@standardnotes/ui-services'
 import {
   createPersonaProfile,
+  getAssistantAccountScope,
   loadPersonaProfiles,
   loadPersonaSettings,
   PersonaProfile,
@@ -362,8 +362,38 @@ const ASSISTANT_TABS: { id: string; title: string; icon: VectorIconNameOrEmoji }
   { id: 'actions', title: 'Actions', icon: 'tasks' },
 ]
 
+const ASSISTANT_PERMISSION_OPTIONS: Array<{
+  value: AssistantToolPermissionMode
+  label: string
+  description: string
+}> = [
+  {
+    value: 'ask',
+    label: 'Ask before every action',
+    description: 'Every read, search, navigation, and change waits for an inline decision in the chat.',
+  },
+  {
+    value: 'allow-read',
+    label: 'Allow read actions',
+    description: 'Reading and searching may run automatically. Creating, editing, or deleting still asks first.',
+  },
+  {
+    value: 'allow-safe',
+    label: 'Allow safe read and write actions',
+    description: 'Reads and low-risk reversible changes may run automatically. Sensitive or destructive actions ask.',
+  },
+  {
+    value: 'allow-all',
+    label: 'Allow all with safety review',
+    description:
+      'Eligible actions receive a bounded AI safety preflight. Anything destructive, uncertain, or flagged still asks.',
+  },
+]
+
 const Assistant = ({ application }: { application: WebApplication }) => {
   const tabState = useTabState({ defaultTab: 'connection' })
+  const [assistantAccountScope, setAssistantAccountScope] = useState(() => getAssistantAccountScope(application))
+  const assistantAccountScopeRef = useRef(assistantAccountScope)
 
   const [connectionMode, setConnectionMode] = useState<ConnectionMode>(() =>
     application.getPreference(PrefKey.AssistantConnectionMode, 'direct'),
@@ -379,8 +409,22 @@ const Assistant = ({ application }: { application: WebApplication }) => {
   )
   const [extraHeaders, setExtraHeaders] = useState(() => application.getPreference(PrefKey.AssistantExtraHeaders, ''))
   const [model, setModel] = useState(() => application.getPreference(PrefKey.AssistantModel, ''))
-  const [confirmBeforeWrite, setConfirmBeforeWrite] = useState(() =>
-    application.getPreference(PrefKey.AssistantConfirmBeforeWrite, true),
+  const [toolPermissionMode, setToolPermissionMode] = useState<AssistantToolPermissionMode>(() =>
+    application.getPreference(PrefKey.AssistantToolPermissionMode, 'allow-read'),
+  )
+
+  useEffect(
+    () =>
+      application.addEventObserver(async (event) => {
+        if (
+          event === ApplicationEvent.PreferencesChanged ||
+          event === ApplicationEvent.SignedIn ||
+          event === ApplicationEvent.SignedOut
+        ) {
+          setToolPermissionMode(application.getPreference(PrefKey.AssistantToolPermissionMode, 'allow-read'))
+        }
+      }),
+    [application],
   )
   const [aiSearch, setAiSearch] = useState(() => application.getPreference(PrefKey.AiPoweredSearchEnabled, false))
 
@@ -388,15 +432,6 @@ const Assistant = ({ application }: { application: WebApplication }) => {
   // (localStorage), DEFAULT OFF. Distinct from the local-only "AI-powered search"
   // toggle above, which never sends anything off-device.
   const [contextualSearch, setContextualSearch] = useState(() => loadContextualSearchSettings().enabled)
-
-  // AI DEEP RESEARCH over the user's own notes (bounded multi-step loop). Web-local
-  // (localStorage), DEFAULT OFF. Substantially more data exposure than a single
-  // query, so it is gated and clearly warned.
-  const [deepResearch, setDeepResearch] = useState(() => loadDeepResearchSettings().enabled)
-
-  // AI RESEARCH MODE: write a structured research note on a topic from the model's
-  // own knowledge (no web access). Web-local (localStorage), DEFAULT OFF.
-  const [researchMode, setResearchMode] = useState(() => loadResearchModeSettings().enabled)
 
   const [searchIndexEnabled, setSearchIndexEnabled] = useState(() =>
     application.getPreference(PrefKey.SearchIndexEnabled, true),
@@ -494,10 +529,18 @@ const Assistant = ({ application }: { application: WebApplication }) => {
     [application],
   )
 
-  const handleConfirmToggle = useCallback(
-    (value: boolean) => {
-      setConfirmBeforeWrite(value)
-      void application.setPreference(PrefKey.AssistantConfirmBeforeWrite, value)
+  const handleToolPermissionModeChange = useCallback(
+    (value: AssistantToolPermissionMode) => {
+      setToolPermissionMode(value)
+      // Keep the legacy boolean aligned for older clients. New clients use the
+      // richer permission mode, but an older client must never silently become
+      // less restrictive than the user's selection.
+      void Promise.all([
+        application.setPreference(PrefKey.AssistantToolPermissionMode, value),
+        // Legacy clients cannot perform the Allow-all safety preflight, so keep
+        // their ask-before-write fallback enabled for every richer mode.
+        application.setPreference(PrefKey.AssistantConfirmBeforeWrite, legacyConfirmBeforeWriteForMode(value)),
+      ])
     },
     [application],
   )
@@ -513,16 +556,6 @@ const Assistant = ({ application }: { application: WebApplication }) => {
   const handleContextualSearchToggle = useCallback((value: boolean) => {
     setContextualSearch(value)
     saveContextualSearchSettings({ enabled: value })
-  }, [])
-
-  const handleDeepResearchToggle = useCallback((value: boolean) => {
-    setDeepResearch(value)
-    saveDeepResearchSettings({ enabled: value })
-  }, [])
-
-  const handleResearchModeToggle = useCallback((value: boolean) => {
-    setResearchMode(value)
-    saveResearchModeSettings({ enabled: value })
   }, [])
 
   // Whether a provider is configured at all (reuses the assistant's own check).
@@ -631,20 +664,20 @@ const Assistant = ({ application }: { application: WebApplication }) => {
   // Assistant PERSONA ("soul"): free-text tone/personality guidance layered onto the
   // assistant's system prompt as STYLE ONLY (never overrides safety/anti-injection
   // rules). Web-local (localStorage), DEFAULT empty (neutral default voice).
-  const [persona, setPersona] = useState(() => loadPersonaSettings().persona)
+  const [persona, setPersona] = useState(() => loadPersonaSettings(assistantAccountScope).persona)
   const updatePersona = useCallback((value: string) => {
     const next = value.slice(0, PERSONA_MAX_LENGTH)
     setPersona(next)
-    savePersonaSettings({ persona: next })
+    savePersonaSettings(assistantAccountScopeRef.current, { persona: next })
   }, [])
 
   // Persona PROFILES: named bundles of (persona + model + baseURL + sampling) with
   // one active. When a profile is active it overrides the global persona/model/
   // sampling for assistant runs. Device-local (localStorage).
-  const [personaProfiles, setPersonaProfiles] = useState(() => loadPersonaProfiles())
+  const [personaProfiles, setPersonaProfiles] = useState(() => loadPersonaProfiles(assistantAccountScope))
   const persistPersonaProfiles = useCallback((next: ReturnType<typeof loadPersonaProfiles>) => {
     setPersonaProfiles(next)
-    savePersonaProfiles(next)
+    savePersonaProfiles(assistantAccountScopeRef.current, next)
   }, [])
   const updatePersonaProfile = useCallback((id: string, patch: Partial<PersonaProfile>) => {
     setPersonaProfiles((prev) => {
@@ -652,7 +685,7 @@ const Assistant = ({ application }: { application: WebApplication }) => {
         ...prev,
         profiles: prev.profiles.map((profile) => (profile.id === id ? { ...profile, ...patch } : profile)),
       }
-      savePersonaProfiles(next)
+      savePersonaProfiles(assistantAccountScopeRef.current, next)
       return next
     })
   }, [])
@@ -660,7 +693,7 @@ const Assistant = ({ application }: { application: WebApplication }) => {
     setPersonaProfiles((prev) => {
       const created = createPersonaProfile(prev.profiles)
       const next = { activeId: created.id, profiles: [...prev.profiles, created] }
-      savePersonaProfiles(next)
+      savePersonaProfiles(assistantAccountScopeRef.current, next)
       return next
     })
   }, [])
@@ -669,7 +702,7 @@ const Assistant = ({ application }: { application: WebApplication }) => {
       const profiles = prev.profiles.filter((profile) => profile.id !== id)
       const activeId = prev.activeId === id ? (profiles[0]?.id ?? '') : prev.activeId
       const next = { activeId, profiles }
-      savePersonaProfiles(next)
+      savePersonaProfiles(assistantAccountScopeRef.current, next)
       return next
     })
   }, [])
@@ -684,14 +717,32 @@ const Assistant = ({ application }: { application: WebApplication }) => {
   // Model SAMPLING params + agent-loop step cap (device-local; localStorage).
   // temperature/top_p/max_tokens flow into every model request body; maxSteps is
   // the default agent-loop step cap read by agent.ts.
-  const [sampling, setSampling] = useState<SamplingSettings>(() => loadSamplingSettings())
+  const [sampling, setSampling] = useState<SamplingSettings>(() => loadSamplingSettings(assistantAccountScope))
   const updateSampling = useCallback((patch: Partial<SamplingSettings>) => {
     setSampling((prev) => {
       const next = { ...prev, ...patch }
-      saveSamplingSettings(next)
+      saveSamplingSettings(assistantAccountScopeRef.current, next)
       return next
     })
   }, [])
+
+  useEffect(() => {
+    const reloadScopedSettings = () => {
+      const nextScope = getAssistantAccountScope(application)
+      assistantAccountScopeRef.current = nextScope
+      setAssistantAccountScope(nextScope)
+      setPersona(loadPersonaSettings(nextScope).persona)
+      setPersonaProfiles(loadPersonaProfiles(nextScope))
+      setSampling(loadSamplingSettings(nextScope))
+    }
+
+    reloadScopedSettings()
+    return application.addEventObserver(async (event) => {
+      if (event === ApplicationEvent.SignedIn || event === ApplicationEvent.SignedOut) {
+        reloadScopedSettings()
+      }
+    })
+  }, [application])
 
   const [selectionActions, setSelectionActions] = useState(() => getSelectionActions(application))
   const persistSelectionActions = useCallback(
@@ -943,15 +994,26 @@ const Assistant = ({ application }: { application: WebApplication }) => {
       <TabPanel state={tabState} id="behavior">
         <PreferencesGroup>
           <PreferencesSegment>
-            <div className="flex items-center justify-between">
-              <div className="mr-4 flex flex-col">
-                <Subtitle>Ask before write actions</Subtitle>
-                <Text>
-                  Require confirmation before the assistant creates, edits, deletes, or otherwise modifies your data.
-                </Text>
-              </div>
-              <Switch checked={confirmBeforeWrite} onChange={handleConfirmToggle} />
-            </div>
+            <Subtitle>Assistant action permissions</Subtitle>
+            <Text>
+              Choose which tool actions may run automatically. Decisions that still need you appear inside the chat;
+              hiding the assistant leaves them safely paused until you reopen it, approve or deny, or stop the run.
+            </Text>
+            <select
+              className="border-border bg-default mt-3 w-full rounded border px-2 py-1.5 text-sm"
+              value={toolPermissionMode}
+              onChange={(event) => handleToolPermissionModeChange(event.target.value as AssistantToolPermissionMode)}
+              aria-label="Assistant action permission mode"
+            >
+              {ASSISTANT_PERMISSION_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+            <Text className="mt-2">
+              {ASSISTANT_PERMISSION_OPTIONS.find((option) => option.value === toolPermissionMode)?.description}
+            </Text>
           </PreferencesSegment>
         </PreferencesGroup>
 
@@ -1014,90 +1076,33 @@ const Assistant = ({ application }: { application: WebApplication }) => {
 
         <PreferencesGroup>
           <PreferencesSegment>
-            <div className="flex items-center justify-between">
-              <div className="mr-4 flex flex-col">
-                <Subtitle>AI deep research (multi-step, over your notes)</Subtitle>
-                <Text>
-                  Adds a “Deep research” action to the assistant. Given a question, it runs a bounded multi-step loop
-                  over your OWN notes: it searches for relevant notes, reads a bounded set, optionally pulls in a few
-                  more over a small capped number of rounds, then writes a structured report with citations to the
-                  source notes you can open. Off by default. Runs only when you start a research run.
+            <Subtitle>Research tools</Subtitle>
+            <Text>
+              Deep Research and Research Mode are always available from their toggle buttons in the assistant header.
+              Nothing runs until you explicitly open a mode and start it.
+            </Text>
+            <div className="border-warning bg-warning-faded mt-4 rounded border border-solid p-3">
+              <Subtitle className="text-warning">Research can send more content to your AI provider</Subtitle>
+              <Text className="mt-1">
+                Deep Research searches your own notes, reads a bounded set, and sends excerpts across several capped
+                model calls before producing a cited report. Research Mode writes a structured note from the model and
+                may be outdated or wrong; verify its claims and sources. Prefer a trusted local provider for sensitive
+                material.
+              </Text>
+              {!providerAvailability.available && (
+                <Text className="text-warning mt-1">
+                  {providerAvailability.reason || 'Configure an AI provider above to use these tools.'}
                 </Text>
-              </div>
-              <Switch checked={deepResearch} onChange={handleDeepResearchToggle} />
+              )}
             </div>
-
-            {deepResearch && (
-              <div className="border-warning bg-warning-faded mt-4 rounded border border-solid p-3">
-                <Subtitle className="text-warning">
-                  Deep research sends several notes to your AI provider over multiple steps
-                </Subtitle>
-                <Text className="mt-1">
-                  Unlike a single query, deep research reads the content of multiple notes and sends those excerpts to
-                  the AI provider across several model calls (capped at a few rounds and a small number of notes, with
-                  truncated snippets). That is substantially more data exposure than a one-shot question. With cloud
-                  providers this exposes that content to a third party — strongly prefer a local model (e.g. LM Studio /
-                  Ollama in Direct mode) to keep it on your device.
-                </Text>
-                <Text className="text-passive-1 mt-1">
-                  Honest scope: this researches your OWN notes only — there is no web-search tool here, so it cannot
-                  pull in outside sources. It is a bounded agentic loop (capped rounds, notes, and snippet length), not
-                  unlimited research.
-                </Text>
-                {!providerAvailability.available && (
-                  <Text className="text-warning mt-1">
-                    {providerAvailability.reason || 'Configure an AI provider above to use this.'} Until then the action
-                    appears disabled.
-                  </Text>
-                )}
-              </div>
-            )}
           </PreferencesSegment>
         </PreferencesGroup>
 
-        <PreferencesGroup>
-          <PreferencesSegment>
-            <div className="flex items-center justify-between">
-              <div className="mr-4 flex flex-col">
-                <Subtitle>AI research mode (write a structured note on a topic)</Subtitle>
-                <Text>
-                  Adds a “Research mode” panel to the assistant. Given a topic or question, it writes a structured note
-                  (title, sections, and a Sources list) and saves it as a new note you can open. Off by default. Runs
-                  only when you start a research run.
-                </Text>
-              </div>
-              <Switch checked={researchMode} onChange={handleResearchModeToggle} />
-            </div>
-
-            {researchMode && (
-              <div className="border-warning bg-warning-faded mt-4 rounded border border-solid p-3">
-                <Subtitle className="text-warning">
-                  Research mode has no web access — its output must be verified
-                </Subtitle>
-                <Text className="mt-1">
-                  There is no web-search tool in this client, so research mode writes the note from the AI model’s own
-                  training data, not from live sources. The result can be outdated, incomplete, or wrong, and any
-                  sources it lists are the model’s recollections that must be independently verified. The model is
-                  instructed to flag uncertainty and never fabricate URLs or citations, and every generated note carries
-                  a clear “unverified — verify this” warning. It is also hardened against prompt-injection in the topic
-                  text.
-                </Text>
-                <Text className="text-passive-1 mt-1">
-                  Your topic is sent to the configured AI provider. With cloud providers this exposes it to a third
-                  party — prefer a local model (e.g. LM Studio / Ollama in Direct mode) to keep it on your device.
-                </Text>
-                {!providerAvailability.available && (
-                  <Text className="text-warning mt-1">
-                    {providerAvailability.reason || 'Configure an AI provider above to use this.'} Until then the action
-                    appears disabled.
-                  </Text>
-                )}
-              </div>
-            )}
-          </PreferencesSegment>
-        </PreferencesGroup>
-
-        <AgentRuntimeSettings application={application} />
+        <AgentRuntimeSettings
+          key={assistantAccountScope ?? 'unavailable'}
+          accountScope={assistantAccountScope}
+          serverProxy={connectionMode === 'proxy'}
+        />
       </TabPanel>
 
       <TabPanel state={tabState} id="search">
@@ -1235,16 +1240,17 @@ const Assistant = ({ application }: { application: WebApplication }) => {
           <PreferencesSegment>
             <Title>Output length</Title>
             <Text>
-              Cap how many tokens the model generates per turn. Applies to every assistant request (chat, selection
-              actions, research) in both Direct and Server proxy modes. Stored on this device only.
+              In Direct mode, optionally cap how many tokens the model generates per turn. Server proxy mode uses the
+              administrator-assigned backend profile instead. The Direct-mode setting is stored on this device only.
             </Text>
 
             <HorizontalSeparator classes="my-4" />
 
             <Subtitle>Max output tokens</Subtitle>
             <Text>
-              Cap on tokens generated per turn (request <code>max_tokens</code>). Leave 0 to let the endpoint use its
-              own default. Up to {MAX_TOKENS_MAX}.
+              {connectionMode === 'proxy'
+                ? 'Managed by the server profile; client overrides are disabled.'
+                : `Cap on tokens generated per turn (request max_tokens). Leave 0 to use the provider default. Up to ${MAX_TOKENS_MAX}.`}
             </Text>
             <input
               className="border-border bg-default mt-2 w-32 rounded border px-2 py-1.5 text-sm"
@@ -1252,6 +1258,7 @@ const Assistant = ({ application }: { application: WebApplication }) => {
               min={0}
               max={MAX_TOKENS_MAX}
               value={sampling.maxTokens}
+              disabled={connectionMode === 'proxy'}
               onChange={(event) => updateSampling({ maxTokens: clampMaxTokens(Number(event.target.value)) })}
             />
           </PreferencesSegment>
@@ -1301,10 +1308,10 @@ const Assistant = ({ application }: { application: WebApplication }) => {
 
             <Subtitle>Profiles</Subtitle>
             <Text>
-              Optional named profiles bundle a persona with Direct-mode model/base URL overrides and sampling params.
-              Persona and sampling apply to assistant runs in either connection mode; model and base URL apply only in
-              Direct mode because Server proxy provider/model selection is administrator-managed. Leave a profile field
-              empty to inherit the global setting. With no profiles, the single persona above is used.
+              Optional named profiles bundle a persona with Direct-mode model, base URL, and sampling overrides. The
+              persona applies in either connection mode; Server proxy provider and generation settings remain
+              administrator-managed. Leave a profile field empty to inherit the global Direct setting. With no profiles,
+              the single persona above is used.
             </Text>
 
             <div className="mt-2 flex items-center gap-2">
@@ -1373,13 +1380,23 @@ const Assistant = ({ application }: { application: WebApplication }) => {
 
                 <div className="mt-3 flex flex-wrap gap-4">
                   <div className="flex flex-col">
-                    <Text>Temperature: {activeProfile.temperature.toFixed(2)}</Text>
+                    <div className="flex items-center justify-between gap-2">
+                      <Text>
+                        Temperature:{' '}
+                        {activeProfile.useServerTemperature ? 'provider default' : activeProfile.temperature.toFixed(2)}
+                      </Text>
+                      <Switch
+                        checked={activeProfile.useServerTemperature}
+                        onChange={(value) => updatePersonaProfile(activeProfile.id, { useServerTemperature: value })}
+                      />
+                    </div>
                     <input
                       type="range"
                       min={TEMPERATURE_MIN}
                       max={TEMPERATURE_MAX}
                       step={0.05}
                       value={activeProfile.temperature}
+                      disabled={activeProfile.useServerTemperature}
                       onChange={(event) =>
                         updatePersonaProfile(activeProfile.id, {
                           temperature: clampTemperature(Number(event.target.value)),
@@ -1388,13 +1405,22 @@ const Assistant = ({ application }: { application: WebApplication }) => {
                     />
                   </div>
                   <div className="flex flex-col">
-                    <Text>Top-p: {activeProfile.topP.toFixed(2)}</Text>
+                    <div className="flex items-center justify-between gap-2">
+                      <Text>
+                        Top-p: {activeProfile.useServerTopP ? 'provider default' : activeProfile.topP.toFixed(2)}
+                      </Text>
+                      <Switch
+                        checked={activeProfile.useServerTopP}
+                        onChange={(value) => updatePersonaProfile(activeProfile.id, { useServerTopP: value })}
+                      />
+                    </div>
                     <input
                       type="range"
                       min={TOP_P_MIN}
                       max={TOP_P_MAX}
                       step={0.05}
                       value={activeProfile.topP}
+                      disabled={activeProfile.useServerTopP}
                       onChange={(event) =>
                         updatePersonaProfile(activeProfile.id, { topP: clampTopP(Number(event.target.value)) })
                       }

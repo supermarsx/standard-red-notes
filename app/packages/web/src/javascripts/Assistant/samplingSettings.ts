@@ -6,13 +6,16 @@
 // change) — same pattern as narrationSettings / dictationSettings /
 // contextualSearchSettings / personaSettings.
 //
-// These shape every model call: the sampling fields are threaded into the
-// request body of both the Direct and Server-proxy providers, and maxSteps is
-// the default step cap the agent loop runs to. Each field is clamped to a sane
-// range on save AND on load so a hand-edited localStorage value can never push
-// an out-of-range / non-finite value into a request body.
+// These shape Direct-mode model calls; authenticated Server-proxy generation
+// settings stay backend-owned. maxSteps/maxRunTime bound the local agent loop in
+// either mode. Each field is clamped on save and load so a hand-edited value can
+// never push an out-of-range/non-finite value into a Direct request body.
 
-const STORAGE_KEY = 'standardnotes.assistantSampling.settings.v1'
+const STORAGE_KEY = 'standardnotes.assistantSampling.settings.v2'
+
+function scopedStorageKey(scope: string | undefined): string | undefined {
+  return scope ? `${STORAGE_KEY}.${encodeURIComponent(scope)}` : undefined
+}
 
 /** Unit a run-time limit is expressed in. Stored alongside the numeric value. */
 export type RunTimeUnit = 'minutes' | 'hours'
@@ -37,13 +40,15 @@ export interface SamplingSettings {
   /**
    * Default agent-loop step cap (model turns before a forced summary).
    * 0 means UNLIMITED (no cap — not recommended). Otherwise clamped to
-   * [1, MAX_STEPS_MAX]. Default 500.
+   * [1, MAX_STEPS_MAX]. The production default is deliberately modest: 16
+   * turns is enough for a useful plan/tool/result loop without allowing a
+   * forgotten run to consume hundreds of requests.
    */
   maxSteps: number
   /**
    * Wall-clock run-time limit value, paired with {@link maxRunTimeUnit}. The
    * effective limit is clamped to [1 minute, 200 hours] regardless of unit.
-   * Default 200 hours.
+   * The production default is 10 minutes; users may deliberately raise it.
    */
   maxRunTime: number
   /** Unit the {@link maxRunTime} value is expressed in. */
@@ -64,11 +69,14 @@ export const DEFAULT_SAMPLING_SETTINGS: SamplingSettings = {
   temperature: 0.7,
   topP: 1,
   maxTokens: 0,
-  maxSteps: 500,
-  maxRunTime: 200,
-  maxRunTimeUnit: 'hours',
-  useServerTemperature: false,
-  useServerTopP: false,
+  maxSteps: 16,
+  maxRunTime: 10,
+  maxRunTimeUnit: 'minutes',
+  // Provider/server profiles are authoritative until the user deliberately
+  // opts into a client override. This also avoids sending sampling fields that
+  // some OpenAI-compatible models reject.
+  useServerTemperature: true,
+  useServerTopP: true,
 }
 
 export const TEMPERATURE_MIN = 0
@@ -83,7 +91,8 @@ export const MAX_STEPS_MAX = 100000
 
 /** Run-time limit bounds, expressed in MINUTES (the canonical internal unit). */
 export const MAX_RUN_TIME_MIN_MINUTES = 1
-export const MAX_RUN_TIME_MAX_MINUTES = 200 * 60 // 200 hours
+/** 200 hours. */
+export const MAX_RUN_TIME_MAX_MINUTES = 200 * 60
 
 function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
   const n = typeof value === 'number' ? value : Number(value)
@@ -126,9 +135,12 @@ export function clampMaxSteps(value: unknown): number {
 export function clampMaxRunTime(value: unknown, unit: RunTimeUnit): number {
   const n = typeof value === 'number' ? value : Number(value)
   if (!Number.isFinite(n) || n <= 0) {
-    return unit === 'hours'
-      ? DEFAULT_SAMPLING_SETTINGS.maxRunTime
-      : Math.min(MAX_RUN_TIME_MAX_MINUTES, Math.max(MAX_RUN_TIME_MIN_MINUTES, DEFAULT_SAMPLING_SETTINGS.maxRunTime))
+    const defaultMinutes =
+      DEFAULT_SAMPLING_SETTINGS.maxRunTimeUnit === 'hours'
+        ? DEFAULT_SAMPLING_SETTINGS.maxRunTime * 60
+        : DEFAULT_SAMPLING_SETTINGS.maxRunTime
+    const boundedDefaultMinutes = Math.min(MAX_RUN_TIME_MAX_MINUTES, Math.max(MAX_RUN_TIME_MIN_MINUTES, defaultMinutes))
+    return unit === 'hours' ? boundedDefaultMinutes / 60 : boundedDefaultMinutes
   }
   const minutes = unit === 'hours' ? n * 60 : n
   const clampedMinutes = Math.min(MAX_RUN_TIME_MAX_MINUTES, Math.max(MAX_RUN_TIME_MIN_MINUTES, minutes))
@@ -136,11 +148,11 @@ export function clampMaxRunTime(value: unknown, unit: RunTimeUnit): number {
 }
 
 export function clampRunTimeUnit(value: unknown): RunTimeUnit {
-  return value === 'minutes' ? 'minutes' : 'hours'
+  return value === 'hours' ? 'hours' : DEFAULT_SAMPLING_SETTINGS.maxRunTimeUnit
 }
 
 /** The configured run-time limit expressed in MILLISECONDS (clamped). */
-export function getMaxRunTimeMs(settings: SamplingSettings = loadSamplingSettings()): number {
+export function getMaxRunTimeMs(settings: SamplingSettings = DEFAULT_SAMPLING_SETTINGS): number {
   const minutes = settings.maxRunTimeUnit === 'hours' ? settings.maxRunTime * 60 : settings.maxRunTime
   const clampedMinutes = Math.min(MAX_RUN_TIME_MAX_MINUTES, Math.max(MAX_RUN_TIME_MIN_MINUTES, minutes))
   return clampedMinutes * 60 * 1000
@@ -168,21 +180,28 @@ export function normalizeSamplingSettings(parsed: Partial<SamplingSettings> | nu
   }
 }
 
-export function loadSamplingSettings(): SamplingSettings {
+export function loadSamplingSettings(scope: string | undefined): SamplingSettings {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) {
+    const key = scopedStorageKey(scope)
+    if (!key) {
       return { ...DEFAULT_SAMPLING_SETTINGS }
     }
-    return normalizeSamplingSettings(JSON.parse(raw) as Partial<SamplingSettings>)
+    const raw = localStorage.getItem(key)
+    return raw
+      ? normalizeSamplingSettings(JSON.parse(raw) as Partial<SamplingSettings>)
+      : { ...DEFAULT_SAMPLING_SETTINGS }
   } catch {
     return { ...DEFAULT_SAMPLING_SETTINGS }
   }
 }
 
-export function saveSamplingSettings(settings: SamplingSettings): void {
+export function saveSamplingSettings(scope: string | undefined, settings: SamplingSettings): void {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(normalizeSamplingSettings(settings)))
+    const key = scopedStorageKey(scope)
+    if (!key) {
+      return
+    }
+    localStorage.setItem(key, JSON.stringify(normalizeSamplingSettings(settings)))
   } catch {
     /* storage may be unavailable (private mode); calls fall back to defaults */
   }
@@ -195,9 +214,9 @@ export function saveSamplingSettings(settings: SamplingSettings): void {
  *  - `top_p` is dropped when `useServerTopP` is on (slider bypassed).
  *  - `max_tokens` is dropped when maxTokens is 0 (unset).
  * This is the single place that maps our settings to wire field names, reused by
- * both providers, so the omission applies to Direct and Server-proxy alike.
+ * Direct provider. Server-proxy requests omit all client sampling fields.
  */
-export function samplingRequestFields(settings: SamplingSettings = loadSamplingSettings()): {
+export function samplingRequestFields(settings: SamplingSettings = DEFAULT_SAMPLING_SETTINGS): {
   temperature?: number
   top_p?: number
   max_tokens?: number
@@ -216,6 +235,6 @@ export function samplingRequestFields(settings: SamplingSettings = loadSamplingS
 }
 
 /** Convenience: the configured default agent-loop step cap (clamped). */
-export function getMaxSteps(): number {
-  return loadSamplingSettings().maxSteps
+export function getMaxSteps(scope: string | undefined): number {
+  return loadSamplingSettings(scope).maxSteps
 }

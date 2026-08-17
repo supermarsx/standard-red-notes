@@ -48,6 +48,14 @@ export interface BuiltAssistantContext {
   scope: AssistantContextScope
   /** Number of notes actually represented (after the budget cut). */
   noteCount: number
+  /**
+   * Titles of the notes actually included in the prompt, in prompt order. This
+   * lets the UI make the currently shared note auditable without parsing the
+   * prompt text back out of a markdown heading.
+   */
+  noteTitles: string[]
+  /** Stable ids of exactly the notes represented in the prompt. */
+  noteUuids: string[]
   /** Number of notes that were dropped entirely because the budget ran out. */
   omittedNoteCount: number
   /** Total characters of the assembled `text` block. */
@@ -100,8 +108,10 @@ export function buildAssistantContext(
 
   const cleaned = notes
     .map((note) => ({
-      uuid: note.uuid,
-      title: (note.title ?? '').trim(),
+      uuid: (note.uuid ?? '').trim().slice(0, 128),
+      // Titles are untrusted note content. Keep them on one bounded line so a
+      // title cannot forge another context header or consume the whole budget.
+      title: (note.title ?? '').replace(/\s+/g, ' ').trim().slice(0, 300),
       text: normalizeText(note.text ?? ''),
     }))
     // A note with neither a meaningful title nor body adds nothing. Filter on the
@@ -111,7 +121,16 @@ export function buildAssistantContext(
     .map((note) => ({ ...note, title: note.title || 'Untitled note' }))
 
   if (cleaned.length === 0) {
-    return { text: '', scope, noteCount: 0, omittedNoteCount: 0, characters: 0, truncated: false }
+    return {
+      text: '',
+      scope,
+      noteCount: 0,
+      noteTitles: [],
+      noteUuids: [],
+      omittedNoteCount: 0,
+      characters: 0,
+      truncated: false,
+    }
   }
 
   // Per-note share of the budget. For a single note (current-note) this is the
@@ -120,6 +139,8 @@ export function buildAssistantContext(
   const perNoteBudget = Math.max(MIN_PER_NOTE_CHARS, Math.floor(budget / cleaned.length))
 
   const blocks: string[] = []
+  const noteTitles: string[] = []
+  const noteUuids: string[] = []
   let used = 0
   let noteCount = 0
   let truncated = false
@@ -129,7 +150,9 @@ export function buildAssistantContext(
       break
     }
     const remaining = budget - used
-    const header = `## ${note.title}`
+    // Supplying the stable id lets the agent act on the exact note already in
+    // context instead of guessing by title or searching for a duplicate.
+    const header = `## ${note.title}\nNote UUID: ${note.uuid || '(unavailable)'}`
     // Reserve room for the header + a blank separating line; body gets the rest of
     // this note's share, but never more than what is left of the overall budget.
     const headerCost = header.length + 1
@@ -148,6 +171,10 @@ export function buildAssistantContext(
     }
 
     blocks.push(block)
+    noteTitles.push(note.title)
+    if (note.uuid) {
+      noteUuids.push(note.uuid)
+    }
     used += block.length + 2 // +2 for the join separator between blocks
     noteCount += 1
   }
@@ -169,6 +196,8 @@ export function buildAssistantContext(
     text,
     scope,
     noteCount,
+    noteTitles,
+    noteUuids,
     omittedNoteCount,
     characters: text.length,
     truncated,

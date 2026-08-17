@@ -17,7 +17,11 @@ import {
   saveSamplingSettings,
 } from './samplingSettings'
 
-const STORAGE_KEY = 'standardnotes.assistantSampling.settings.v1'
+const STORAGE_KEY = 'standardnotes.assistantSampling.settings.v2'
+const LEGACY_STORAGE_KEY = 'standardnotes.assistantSampling.settings.v1'
+const SCOPE_A = 'account:account-a'
+const SCOPE_B = 'account:account-b'
+const SCOPED_STORAGE_KEY_A = `${STORAGE_KEY}.${encodeURIComponent(SCOPE_A)}`
 
 /** Build a full SamplingSettings from a partial, filling the rest with defaults. */
 const settings = (overrides: Partial<SamplingSettings>): SamplingSettings => ({
@@ -30,6 +34,12 @@ beforeEach(() => {
 })
 
 describe('sampling settings clamping', () => {
+  it('ships with bounded production agent defaults', () => {
+    expect(DEFAULT_SAMPLING_SETTINGS.maxSteps).toBeGreaterThan(0)
+    expect(DEFAULT_SAMPLING_SETTINGS.maxSteps).toBeLessThanOrEqual(20)
+    expect(getMaxRunTimeMs(DEFAULT_SAMPLING_SETTINGS)).toBeLessThanOrEqual(15 * 60 * 1000)
+  })
+
   it('clamps temperature into [0, 2]', () => {
     expect(clampTemperature(-1)).toBe(0)
     expect(clampTemperature(0.5)).toBe(0.5)
@@ -75,9 +85,8 @@ describe('sampling settings clamping', () => {
   it('clamps run time within [1 minute, 200 hours] regardless of unit', () => {
     expect(clampMaxRunTime(5, 'hours')).toBe(5)
     expect(clampMaxRunTime(99999, 'hours')).toBe(200)
-    expect(clampMaxRunTime(0, 'minutes')).toBe(
-      Math.min(MAX_RUN_TIME_MAX_MINUTES, Math.max(1, DEFAULT_SAMPLING_SETTINGS.maxRunTime)),
-    )
+    expect(clampMaxRunTime(0, 'minutes')).toBe(DEFAULT_SAMPLING_SETTINGS.maxRunTime)
+    expect(clampMaxRunTime(0, 'hours')).toBe(DEFAULT_SAMPLING_SETTINGS.maxRunTime / 60)
     expect(clampMaxRunTime(99999, 'minutes')).toBe(MAX_RUN_TIME_MAX_MINUTES)
     expect(clampMaxRunTime(30, 'minutes')).toBe(30)
   })
@@ -124,30 +133,69 @@ describe('normalizeSamplingSettings', () => {
 
 describe('load/save round-trip', () => {
   it('returns defaults when nothing is stored', () => {
-    expect(loadSamplingSettings()).toEqual(DEFAULT_SAMPLING_SETTINGS)
-    expect(getMaxSteps()).toBe(DEFAULT_SAMPLING_SETTINGS.maxSteps)
+    expect(loadSamplingSettings(SCOPE_A)).toEqual(DEFAULT_SAMPLING_SETTINGS)
+    expect(getMaxSteps(SCOPE_A)).toBe(DEFAULT_SAMPLING_SETTINGS.maxSteps)
   })
 
   it('round-trips valid settings', () => {
     const value = settings({ temperature: 1.1, topP: 0.9, maxTokens: 500, maxSteps: 12 })
-    saveSamplingSettings(value)
-    expect(loadSamplingSettings()).toEqual(value)
-    expect(getMaxSteps()).toBe(12)
+    saveSamplingSettings(SCOPE_A, value)
+    expect(loadSamplingSettings(SCOPE_A)).toEqual(value)
+    expect(getMaxSteps(SCOPE_A)).toBe(12)
+  })
+
+  it('does not apply unattributable legacy or v2 unscoped settings', () => {
+    localStorage.setItem(
+      LEGACY_STORAGE_KEY,
+      JSON.stringify({
+        temperature: 1.3,
+        topP: 0.4,
+        maxTokens: 512,
+        maxSteps: 100000,
+        maxRunTime: 200,
+        maxRunTimeUnit: 'hours',
+        useServerTemperature: false,
+        useServerTopP: false,
+      }),
+    )
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(settings({ maxTokens: 999, useServerTemperature: false })))
+
+    expect(loadSamplingSettings(SCOPE_A)).toEqual(DEFAULT_SAMPLING_SETTINGS)
+    expect(localStorage.getItem(LEGACY_STORAGE_KEY)).not.toBeNull()
+    expect(localStorage.getItem(STORAGE_KEY)).not.toBeNull()
+  })
+
+  it('keeps account sampling settings isolated and defaults a new account to provider settings', () => {
+    saveSamplingSettings(
+      SCOPE_A,
+      settings({ temperature: 1.8, maxTokens: 512, useServerTemperature: false, useServerTopP: false }),
+    )
+
+    expect(loadSamplingSettings(SCOPE_B)).toEqual(DEFAULT_SAMPLING_SETTINGS)
+    expect(samplingRequestFields(loadSamplingSettings(SCOPE_B))).toEqual({})
   })
 
   it('clamps out-of-range values on save', () => {
-    saveSamplingSettings(settings({ temperature: 100, topP: 100, maxTokens: -1, maxSteps: MAX_STEPS_MAX + 100 }))
-    expect(loadSamplingSettings()).toEqual(settings({ temperature: 2, topP: 1, maxTokens: 0, maxSteps: MAX_STEPS_MAX }))
+    saveSamplingSettings(
+      SCOPE_A,
+      settings({ temperature: 100, topP: 100, maxTokens: -1, maxSteps: MAX_STEPS_MAX + 100 }),
+    )
+    expect(loadSamplingSettings(SCOPE_A)).toEqual(
+      settings({ temperature: 2, topP: 1, maxTokens: 0, maxSteps: MAX_STEPS_MAX }),
+    )
   })
 
   it('returns (and re-clamps) on malformed storage', () => {
-    localStorage.setItem(STORAGE_KEY, '{ not json')
-    expect(loadSamplingSettings()).toEqual(DEFAULT_SAMPLING_SETTINGS)
+    localStorage.setItem(SCOPED_STORAGE_KEY_A, '{ not json')
+    expect(loadSamplingSettings(SCOPE_A)).toEqual(DEFAULT_SAMPLING_SETTINGS)
   })
 
   it('re-clamps a hand-edited out-of-range stored value on load', () => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ temperature: 50, topP: -3, maxTokens: 9e9, maxSteps: -1 }))
-    expect(loadSamplingSettings()).toEqual(
+    localStorage.setItem(
+      SCOPED_STORAGE_KEY_A,
+      JSON.stringify({ temperature: 50, topP: -3, maxTokens: 9e9, maxSteps: -1 }),
+    )
+    expect(loadSamplingSettings(SCOPE_A)).toEqual(
       settings({
         temperature: 2,
         topP: 0,
@@ -159,31 +207,52 @@ describe('load/save round-trip', () => {
 })
 
 describe('samplingRequestFields', () => {
+  it('uses provider/server sampling defaults for a fresh configuration', () => {
+    expect(samplingRequestFields(DEFAULT_SAMPLING_SETTINGS)).toEqual({})
+  })
+
   it('maps to wire field names and omits max_tokens when unset', () => {
-    expect(samplingRequestFields(settings({ temperature: 0.5, topP: 0.8, maxTokens: 0 }))).toEqual({
-      temperature: 0.5,
-      top_p: 0.8,
-    })
+    expect(
+      samplingRequestFields(
+        settings({
+          temperature: 0.5,
+          topP: 0.8,
+          maxTokens: 0,
+          useServerTemperature: false,
+          useServerTopP: false,
+        }),
+      ),
+    ).toEqual({ temperature: 0.5, top_p: 0.8 })
   })
 
   it('includes max_tokens when set', () => {
-    expect(samplingRequestFields(settings({ temperature: 0.5, topP: 0.8, maxTokens: 256 }))).toEqual({
-      temperature: 0.5,
-      top_p: 0.8,
-      max_tokens: 256,
-    })
+    expect(
+      samplingRequestFields(
+        settings({
+          temperature: 0.5,
+          topP: 0.8,
+          maxTokens: 256,
+          useServerTemperature: false,
+          useServerTopP: false,
+        }),
+      ),
+    ).toEqual({ temperature: 0.5, top_p: 0.8, max_tokens: 256 })
   })
 
   it('omits temperature when useServerTemperature is on', () => {
-    expect(samplingRequestFields(settings({ temperature: 0.5, topP: 0.8, useServerTemperature: true }))).toEqual({
-      top_p: 0.8,
-    })
+    expect(
+      samplingRequestFields(
+        settings({ temperature: 0.5, topP: 0.8, useServerTemperature: true, useServerTopP: false }),
+      ),
+    ).toEqual({ top_p: 0.8 })
   })
 
   it('omits top_p when useServerTopP is on', () => {
-    expect(samplingRequestFields(settings({ temperature: 0.5, topP: 0.8, useServerTopP: true }))).toEqual({
-      temperature: 0.5,
-    })
+    expect(
+      samplingRequestFields(
+        settings({ temperature: 0.5, topP: 0.8, useServerTemperature: false, useServerTopP: true }),
+      ),
+    ).toEqual({ temperature: 0.5 })
   })
 
   it('omits both when both server-default flags are on', () => {
@@ -192,8 +261,22 @@ describe('samplingRequestFields', () => {
     )
   })
 
-  it('reads from saved settings when no argument is given', () => {
-    saveSamplingSettings(settings({ temperature: 1.5, topP: 0.5, maxTokens: 42, maxSteps: 4 }))
-    expect(samplingRequestFields()).toEqual({ temperature: 1.5, top_p: 0.5, max_tokens: 42 })
+  it('maps explicitly loaded scoped settings', () => {
+    saveSamplingSettings(
+      SCOPE_A,
+      settings({
+        temperature: 1.5,
+        topP: 0.5,
+        maxTokens: 42,
+        maxSteps: 4,
+        useServerTemperature: false,
+        useServerTopP: false,
+      }),
+    )
+    expect(samplingRequestFields(loadSamplingSettings(SCOPE_A))).toEqual({
+      temperature: 1.5,
+      top_p: 0.5,
+      max_tokens: 42,
+    })
   })
 })

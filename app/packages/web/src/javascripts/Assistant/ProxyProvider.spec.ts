@@ -21,6 +21,32 @@ const collect = async (provider: Provider, providerRequest: ProviderRequest = re
 }
 
 describe('ProxyProvider automatic profile routing', () => {
+  it('prefers the per-run request signal so a deadline aborts the upstream proxy request', async () => {
+    ;(globalThis as { TextDecoder?: unknown }).TextDecoder = NodeTextDecoder
+    const constructorController = new AbortController()
+    const runController = new AbortController()
+    const postStream = jest.fn(async () => {
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => 'text/event-stream' },
+        body: { getReader: () => ({ read: async () => ({ done: true, value: undefined }) }) },
+      } as unknown as Response
+    })
+
+    await collect(
+      new ProxyProvider({
+        provider: '',
+        model: '',
+        postStream,
+        signal: constructorController.signal,
+      }),
+      { ...request, signal: runController.signal },
+    )
+
+    expect(postStream).toHaveBeenCalledWith(expect.any(Object), runController.signal)
+  })
+
   it('omits empty provider/model so the server can resolve the assigned/default profile', async () => {
     ;(globalThis as { TextDecoder?: unknown }).TextDecoder = NodeTextDecoder
     let submitted: unknown
@@ -46,7 +72,34 @@ describe('ProxyProvider automatic profile routing', () => {
     expect(submitted).not.toHaveProperty('provider')
     expect(submitted).not.toHaveProperty('model')
     expect(submitted).not.toHaveProperty('profileId')
+    expect(submitted).not.toHaveProperty('temperature')
+    expect(submitted).not.toHaveProperty('top_p')
+    expect(submitted).not.toHaveProperty('max_tokens')
     expect(events).toContainEqual({ kind: 'finish', stopReason: 'end_turn' })
+  })
+
+  it('marks a safety review without sending a client-controlled generation cap', async () => {
+    ;(globalThis as { TextDecoder?: unknown }).TextDecoder = NodeTextDecoder
+    let submitted: Record<string, unknown> | undefined
+    const postStream = jest.fn(async (body: unknown) => {
+      submitted = body as Record<string, unknown>
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => 'text/event-stream' },
+        body: { getReader: () => ({ read: async () => ({ done: true, value: undefined }) }) },
+      } as unknown as Response
+    })
+
+    await collect(new ProxyProvider({ provider: '', model: '', postStream }), {
+      ...request,
+      purpose: 'safety-review',
+      maxOutputTokens: 8,
+    })
+
+    expect(submitted).toMatchObject({ purpose: 'safety-review' })
+    expect(submitted).not.toHaveProperty('maxOutputTokens')
+    expect(submitted).not.toHaveProperty('max_tokens')
   })
 
   it('does not send stale Direct-mode provider/model preferences in proxy mode', async () => {

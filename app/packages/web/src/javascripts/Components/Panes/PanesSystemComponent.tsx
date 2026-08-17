@@ -22,7 +22,7 @@ import { isPanesChangeLeafDismiss, isPanesChangePush } from '@/Controllers/PaneC
 import { log, LoggingDomain } from '@/Logging'
 import { useMediaQuery } from '@/Hooks/useMediaQuery'
 import EditorPane from '../NoteGroupView/EditorPane'
-import AssistantView from '../Assistant/AssistantView'
+import PersistentAssistantPane from './PersistentAssistantPane'
 import ConstellationView from '../Constellation/ConstellationView'
 import DashboardView from '../Dashboard/DashboardView'
 import HomeView from '../Home/HomeView'
@@ -446,13 +446,21 @@ const PanesSystemComponent = () => {
   }
 
   const renderPanesWithPendingExit = orderPanesForConstellation([...renderPanes, ...panesPendingExit])
+  const assistantPaneVisible = renderPanesWithPendingExit.includes(AppPaneId.Assistant)
+  // Keep one keyed Assistant host in the child list after it has first opened.
+  // When a desktop dismissal or mobile layout replacement omits Assistant, the
+  // retained host moves to the end and hides instead of unmounting active work.
+  // PersistentAssistantPane itself avoids creating AssistantView before first use.
+  const renderPanesWithRetainedAssistant = assistantPaneVisible
+    ? renderPanesWithPendingExit
+    : [...renderPanesWithPendingExit, AppPaneId.Assistant]
 
   log(LoggingDomain.Panes, 'Rendering panes', renderPanesWithPendingExit)
 
   return (
     <div id="app" className={`app ${computeClassesForContainer()}`} style={{ ...computeStylesForContainer() }}>
       <TodoChecklistEditorOwnerHost application={application} />
-      {renderPanesWithPendingExit.map((pane, index) => {
+      {renderPanesWithRetainedAssistant.map((pane, index) => {
         const isPendingEntrance = panesPendingEntrance?.includes(pane)
 
         const constellationBottomPlacement =
@@ -551,7 +559,7 @@ const PanesSystemComponent = () => {
         } else if (pane === AppPaneId.Assistant) {
           return (
             <ErrorBoundary key="assistant-pane">
-              <AssistantView id={ElementIds.AssistantColumn} className={className} application={application}>
+              <PersistentAssistantPane visible={assistantPaneVisible} className={className} application={application}>
                 {showPanelResizers && (
                   <div
                     role="separator"
@@ -563,10 +571,10 @@ const PanesSystemComponent = () => {
                     tabIndex={0}
                     onPointerDown={startAssistantResize}
                     onKeyDown={onAssistantResizeKeyDown}
-                    className="z-panel-resizer absolute top-0 left-0 hidden h-full w-[7px] touch-none cursor-col-resize bg-[color:var(--panel-resizer-background-color)] opacity-60 transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none md:block"
+                    className="z-panel-resizer absolute top-0 left-0 hidden h-full w-[7px] cursor-col-resize touch-none bg-[color:var(--panel-resizer-background-color)] opacity-60 transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none md:block"
                   />
                 )}
-              </AssistantView>
+              </PersistentAssistantPane>
             </ErrorBoundary>
           )
         } else if (pane === AppPaneId.Constellation) {

@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { observer } from 'mobx-react-lite'
 import { classNames } from '@standardnotes/utils'
 import { WebApplication } from '@/Application/WebApplication'
@@ -6,8 +6,14 @@ import Icon from '@/Components/Icon/Icon'
 import Button from '@/Components/Button/Button'
 import { useResponsiveAppPane } from '../Panes/ResponsivePaneProvider'
 import { AppPaneId } from '../Panes/AppPaneMetadata'
+import { ApplicationEvent } from '@standardnotes/snjs'
 import { DeepResearchProgress, DeepResearchReport, DEFAULT_DEEP_RESEARCH_LIMITS } from '@/Assistant/deepResearch'
 import { getDeepResearchAvailability, runDeepResearchForApplication } from '@/Assistant/deepResearchRunner'
+import {
+  AssistantSessionPrincipal,
+  assistantSessionPrincipalMatches,
+  captureAssistantSessionPrincipal,
+} from '@/Assistant/assistantSessionPrincipal'
 
 type Props = {
   application: WebApplication
@@ -37,12 +43,55 @@ function DeepResearchPanelImpl({ application, onClose }: Props) {
   const [report, setReport] = useState<DeepResearchReport | null>(null)
   const [error, setError] = useState<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
+  const runPrincipalRef = useRef<AssistantSessionPrincipal | null>(null)
+  const mountedRef = useRef(true)
+  const [, setPreferenceRevision] = useState(0)
 
-  const availability = useMemo(() => getDeepResearchAvailability(application), [application])
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      abortRef.current?.abort()
+      abortRef.current = null
+      runPrincipalRef.current = null
+    }
+  }, [])
+
+  useEffect(() => {
+    return application.addEventObserver(async (event) => {
+      if (!mountedRef.current) {
+        return
+      }
+      if (
+        event === ApplicationEvent.PreferencesChanged ||
+        event === ApplicationEvent.SignedIn ||
+        event === ApplicationEvent.SignedOut ||
+        event === ApplicationEvent.KeyStatusChanged
+      ) {
+        if (
+          event === ApplicationEvent.SignedIn ||
+          event === ApplicationEvent.SignedOut ||
+          event === ApplicationEvent.KeyStatusChanged
+        ) {
+          const runPrincipal = runPrincipalRef.current
+          if (
+            event === ApplicationEvent.KeyStatusChanged ||
+            (runPrincipal &&
+              !assistantSessionPrincipalMatches(runPrincipal, captureAssistantSessionPrincipal(application.sessions)))
+          ) {
+            abortRef.current?.abort()
+          }
+        }
+        setPreferenceRevision((revision) => revision + 1)
+      }
+    })
+  }, [application])
+
+  const availability = getDeepResearchAvailability(application)
 
   const run = useCallback(async () => {
     const trimmed = question.trim()
-    if (!trimmed || isRunning) {
+    if (!trimmed || isRunning || abortRef.current) {
       return
     }
     setError(null)
@@ -50,22 +99,37 @@ function DeepResearchPanelImpl({ application, onClose }: Props) {
     setIsRunning(true)
     const controller = new AbortController()
     abortRef.current = controller
+    runPrincipalRef.current = captureAssistantSessionPrincipal(application.sessions)
     try {
       const result = await runDeepResearchForApplication(application, trimmed, {
         signal: controller.signal,
-        onProgress: (phase) => setProgress(phase),
+        onProgress: (phase) => {
+          if (mountedRef.current && !controller.signal.aborted) {
+            setProgress(phase)
+          }
+        },
       })
+      if (!mountedRef.current || controller.signal.aborted) {
+        return
+      }
       if (result === null) {
         setError(getDeepResearchAvailability(application).reason || 'Deep research is unavailable.')
       } else {
         setReport(result)
       }
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught))
+      if (mountedRef.current && !controller.signal.aborted) {
+        setError(caught instanceof Error ? caught.message : String(caught))
+      }
     } finally {
-      setIsRunning(false)
-      setProgress(null)
-      abortRef.current = null
+      if (mountedRef.current) {
+        setIsRunning(false)
+        setProgress(null)
+        if (abortRef.current === controller) {
+          abortRef.current = null
+          runPrincipalRef.current = null
+        }
+      }
     }
   }, [application, question, isRunning])
 

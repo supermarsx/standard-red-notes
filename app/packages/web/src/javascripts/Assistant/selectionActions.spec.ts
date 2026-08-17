@@ -1,16 +1,23 @@
 import { PrefKey } from '@standardnotes/snjs'
 import { WebApplication } from '@/Application/WebApplication'
 import {
+  buildAssistantProvider,
   buildTranslateInstruction,
   createCustomSelectionAction,
   CUSTOM_ACTION_ID_PREFIX,
   DEFAULT_SELECTION_ACTIONS,
   getSelectionActions,
   getSelectionAIAvailability,
+  MAX_CUSTOM_SELECTION_ACTIONS,
+  MAX_SELECTION_ACTION_PROMPT_CHARS,
+  resolveActiveProfileOverrides,
   SelectionAction,
   SelectionActionId,
   serializeSelectionActions,
 } from './selectionActions'
+import { DirectProvider, DirectProviderOptions } from './DirectProvider'
+import { getPersona, savePersonaProfiles, savePersonaSettings } from './personaSettings'
+import { DEFAULT_SAMPLING_SETTINGS, samplingRequestFields, saveSamplingSettings } from './samplingSettings'
 
 type Prefs = Partial<Record<string, unknown>>
 
@@ -19,15 +26,41 @@ type Prefs = Partial<Record<string, unknown>>
  * functions under test depend on: getPreference(key, default) and hasAccount().
  * We deliberately do NOT instantiate the real WebApplication.
  */
-function fakeApplication(prefs: Prefs = {}, hasAccount = false): WebApplication {
+function fakeApplication(
+  prefs: Prefs = {},
+  hasAccount = false,
+  userUuid = hasAccount ? 'account-default' : undefined,
+  identifier = 'anonymous-workspace',
+): WebApplication {
   return {
+    identifier,
     getPreference: (key: string, defaultValue?: unknown) =>
       Object.prototype.hasOwnProperty.call(prefs, key) ? prefs[key] : defaultValue,
     hasAccount: () => hasAccount,
+    sessions: {
+      isSignedIn: () => hasAccount,
+      getUser: () => (userUuid ? { uuid: userUuid } : undefined),
+    },
   } as unknown as WebApplication
 }
 
+beforeEach(() => {
+  localStorage.clear()
+})
+
 describe('getSelectionActions', () => {
+  it('ships the requested ribbon groups in stable action order', () => {
+    const inGroup = (group: SelectionAction['group']) =>
+      DEFAULT_SELECTION_ACTIONS.filter((action) => action.group === group)
+    expect(inGroup('text-review').map((action) => action.id)).toEqual(['refine', 'expand', 'summarize'])
+    expect(inGroup('transforms').map((action) => action.id)).toEqual(['translate', 'organize'])
+    expect(inGroup('assistant').map((action) => action.id)).toEqual(['ask', 'explain'])
+    expect(inGroup('assistant').every((action) => action.behavior === 'chat')).toBe(true)
+    expect([...inGroup('text-review'), ...inGroup('transforms')].every((action) => action.behavior === 'replace')).toBe(
+      true,
+    )
+  })
+
   it('returns the built-in defaults when there is no override preference', () => {
     const actions = getSelectionActions(fakeApplication())
     expect(actions).toEqual(DEFAULT_SELECTION_ACTIONS)
@@ -75,6 +108,26 @@ describe('getSelectionActions', () => {
   it('falls back to defaults when the override preference is malformed JSON', () => {
     const actions = getSelectionActions(fakeApplication({ [PrefKey.AssistantSelectionActions]: '{ not valid json ]' }))
     expect(actions).toEqual(DEFAULT_SELECTION_ACTIONS)
+  })
+
+  it('rejects malformed synced override types instead of sending a non-string chat directive', () => {
+    const actions = getSelectionActions(
+      fakeApplication({
+        [PrefKey.AssistantSelectionActions]: JSON.stringify({
+          overrides: {
+            explain: { prompt: null, enabled: 'yes' },
+            refine: { prompt: { injected: true }, enabled: 1 },
+          },
+        }),
+      }),
+    )
+
+    expect(actions.find((action) => action.id === 'explain')).toEqual(
+      DEFAULT_SELECTION_ACTIONS.find((action) => action.id === 'explain'),
+    )
+    expect(actions.find((action) => action.id === 'refine')).toEqual(
+      DEFAULT_SELECTION_ACTIONS.find((action) => action.id === 'refine'),
+    )
   })
 
   it('keeps non-static action fields (label, icon, freeform) from defaults after merge', () => {
@@ -143,6 +196,38 @@ describe('custom selection actions', () => {
     expect(custom.icon).toBe('dashboard')
     expect(custom.enabled).toBe(true)
     expect(custom.needsLanguage).toBe(false)
+    expect(custom.group).toBe('transforms')
+    expect(custom.behavior).toBe('replace')
+  })
+
+  it('bounds and validates untrusted custom action metadata', () => {
+    const valid = Array.from({ length: MAX_CUSTOM_SELECTION_ACTIONS + 10 }, (_, index) => ({
+      id: `${CUSTOM_ACTION_ID_PREFIX}action-${index}`,
+      label: `Action ${index}`,
+      prompt: 'Safe prompt',
+    }))
+    const pref = {
+      custom: [
+        { id: `${CUSTOM_ACTION_ID_PREFIX}null-prompt`, label: 'Bad', prompt: null },
+        { id: `${CUSTOM_ACTION_ID_PREFIX}bad/icon`, label: 'Bad', prompt: 'x', icon: '../script' },
+        ...valid,
+      ],
+    }
+    const actions = getSelectionActions(fakeApplication({ [PrefKey.AssistantSelectionActions]: JSON.stringify(pref) }))
+    const customs = actions.filter((action) => action.custom)
+
+    expect(customs.length).toBeLessThanOrEqual(MAX_CUSTOM_SELECTION_ACTIONS)
+    expect(customs.some((action) => action.id.includes('null-prompt'))).toBe(false)
+    expect(customs.some((action) => action.id.includes('bad/icon'))).toBe(false)
+
+    const oversizedOverride = JSON.stringify({
+      overrides: { explain: { prompt: 'x'.repeat(MAX_SELECTION_ACTION_PROMPT_CHARS + 1) } },
+    })
+    expect(
+      getSelectionActions(fakeApplication({ [PrefKey.AssistantSelectionActions]: oversizedOverride })).find(
+        (action) => action.id === 'explain',
+      )?.prompt,
+    ).toBe(DEFAULT_SELECTION_ACTIONS.find((action) => action.id === 'explain')?.prompt)
   })
 
   it('createCustomSelectionAction makes a prefixed, unique, enabled action', () => {
@@ -177,6 +262,8 @@ describe('custom selection actions', () => {
     const reloadedCustom = reloaded.find((a) => a.id === custom.id)!
     expect(reloadedCustom.label).toBe('My action')
     expect(reloadedCustom.needsLanguage).toBe(true)
+    expect(reloadedCustom.group).toBe('transforms')
+    expect(reloadedCustom.behavior).toBe('replace')
   })
 })
 
@@ -284,5 +371,109 @@ describe('getSelectionAIAvailability', () => {
       )
       expect(getSelectionAIAvailability(app)).toEqual({ available: true })
     })
+  })
+})
+
+describe('account-scoped active profile resolution', () => {
+  it('never lets account A profile endpoint, model, sampling, or persona affect account B', () => {
+    savePersonaProfiles('account:account-a', {
+      activeId: 'profile-a',
+      profiles: [
+        {
+          id: 'profile-a',
+          name: 'Account A',
+          persona: 'Account A private persona.',
+          model: 'model-a-profile',
+          baseURL: 'https://account-a.invalid/v1',
+          temperature: 1.9,
+          topP: 0.2,
+          maxTokens: 999,
+          useServerTemperature: false,
+          useServerTopP: false,
+        },
+      ],
+    })
+    saveSamplingSettings('account:account-a', {
+      ...DEFAULT_SAMPLING_SETTINGS,
+      temperature: 1.5,
+      useServerTemperature: false,
+    })
+    savePersonaSettings('account:account-b', { persona: 'Account B scoped persona.' })
+
+    const applicationA = fakeApplication(
+      {
+        [PrefKey.AssistantConnectionMode]: 'direct',
+        [PrefKey.AssistantBaseUrl]: 'https://account-a-global.invalid/v1',
+        [PrefKey.AssistantModel]: 'model-a-global',
+      },
+      true,
+      'account-a',
+    )
+    expect(resolveActiveProfileOverrides(applicationA)).toMatchObject({
+      baseURL: 'https://account-a.invalid/v1',
+      model: 'model-a-profile',
+      sampling: {
+        temperature: 1.9,
+        topP: 0.2,
+        maxTokens: 999,
+        useServerTemperature: false,
+        useServerTopP: false,
+      },
+    })
+
+    const applicationB = fakeApplication(
+      {
+        [PrefKey.AssistantConnectionMode]: 'direct',
+        [PrefKey.AssistantBaseUrl]: 'https://account-b.example/v1',
+        [PrefKey.AssistantModel]: 'model-b-synced',
+      },
+      true,
+      'account-b',
+    )
+
+    expect(resolveActiveProfileOverrides(applicationB)).toEqual({
+      baseURL: 'https://account-b.example/v1',
+      model: 'model-b-synced',
+      sampling: DEFAULT_SAMPLING_SETTINGS,
+    })
+    expect(getPersona('account:account-b')).toBe('Account B scoped persona.')
+
+    const provider = buildAssistantProvider(applicationB)
+    expect(provider).toBeInstanceOf(DirectProvider)
+    expect((provider as unknown as { options: DirectProviderOptions }).options).toMatchObject({
+      baseURL: 'https://account-b.example/v1',
+      model: 'model-b-synced',
+      sampling: DEFAULT_SAMPLING_SETTINGS,
+    })
+  })
+
+  it('keeps a fresh persona profile on provider-owned temperature and top-p defaults', () => {
+    savePersonaProfiles('account:account-a', {
+      activeId: 'persona-only',
+      profiles: [
+        {
+          id: 'persona-only',
+          name: 'Persona only',
+          persona: 'Be concise.',
+          model: '',
+          baseURL: '',
+          temperature: 0.7,
+          topP: 1,
+          maxTokens: 0,
+          useServerTemperature: true,
+          useServerTopP: true,
+        },
+      ],
+    })
+    const application = fakeApplication(
+      {
+        [PrefKey.AssistantBaseUrl]: 'https://account-a.example/v1',
+        [PrefKey.AssistantModel]: 'model-a',
+      },
+      true,
+      'account-a',
+    )
+
+    expect(samplingRequestFields(resolveActiveProfileOverrides(application).sampling)).toEqual({})
   })
 })

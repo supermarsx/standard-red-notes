@@ -1,7 +1,7 @@
 // Application-wired entry point for AI deep research.
 //
-// Ties together: (1) the web-local enabled toggle (default OFF), (2) the existing
-// assistant provider availability check + one-shot completion primitive (the SAME
+// Ties together: (1) the existing assistant provider availability check +
+// one-shot completion primitive (the SAME
 // provider the rest of the assistant uses — no new provider, no new agent
 // framework), (3) the user's own decrypted notes as the corpus (same items access
 // as the assistant context source), and (4) the pure bounded loop in
@@ -9,16 +9,15 @@
 //
 // Honest scope: this researches the user's OWN NOTES only — there is no web-search
 // tool in this client. It is a bounded agentic loop (capped rounds / notes /
-// snippet length), not unlimited research. Degrades gracefully: if the toggle is
-// off or no provider is configured, getDeepResearchAvailability reports why and
-// the action stays disabled.
+// snippet length), not unlimited research. The mode is always present in the
+// assistant and degrades gracefully when no provider is configured.
 
 import { ContentType, SNNote, isNote } from '@standardnotes/snjs'
 import { WebApplication } from '@/Application/WebApplication'
 import { extractPlaintextFromNoteText } from '@/Utils/NoteStats'
 import { getSelectionAIAvailability, runOneShotCompletion } from './selectionActions'
-import { isDeepResearchEnabled } from './deepResearchSettings'
 import { DeepResearchOptions, DeepResearchReport, ResearchNote, runDeepResearch } from './deepResearch'
+import { assistantSessionPrincipalMatches, captureAssistantSessionPrincipal } from './assistantSessionPrincipal'
 
 export interface DeepResearchAvailability {
   /** Whether a deep-research run can start right now. */
@@ -28,14 +27,10 @@ export interface DeepResearchAvailability {
 }
 
 /**
- * Whether deep research can run: the web-local toggle is on AND a provider is
- * configured (reuses the assistant's own availability check). Used to gate /
- * disable the "Deep research" action.
+ * Whether deep research can run with the currently configured assistant
+ * provider. The action itself is always present.
  */
 export function getDeepResearchAvailability(application: WebApplication): DeepResearchAvailability {
-  if (!isDeepResearchEnabled()) {
-    return { available: false, reason: 'Enable Deep research in Preferences → Assistant.' }
-  }
   const ai = getSelectionAIAvailability(application)
   if (!ai.available) {
     return { available: false, reason: ai.reason }
@@ -57,8 +52,8 @@ function buildCorpus(application: WebApplication): ResearchNote[] {
 
 /**
  * Run a bounded deep-research pass over the user's notes for the given question,
- * using the configured assistant provider. Returns null when the feature is off
- * or no provider is configured (the default-off / unconfigured path is a no-op).
+ * using the configured assistant provider. Returns null when the provider is not
+ * configured or when the initiating account is no longer active.
  */
 export async function runDeepResearchForApplication(
   application: WebApplication,
@@ -69,13 +64,34 @@ export async function runDeepResearchForApplication(
     return null
   }
 
-  const complete = (system: string, user: string) =>
-    runOneShotCompletion(application, system, user, { signal: options.signal })
+  const principal = captureAssistantSessionPrincipal(application.sessions)
+  if (!principal.valid) {
+    return null
+  }
+
+  const principalIsCurrent = () =>
+    !options.signal?.aborted &&
+    assistantSessionPrincipalMatches(principal, captureAssistantSessionPrincipal(application.sessions))
+
+  const complete = async (system: string, user: string) => {
+    if (!principalIsCurrent()) {
+      throw new Error('Deep research stopped because the active account changed.')
+    }
+    const response = await runOneShotCompletion(application, system, user, { signal: options.signal })
+    if (!principalIsCurrent()) {
+      throw new Error('Deep research stopped because the active account changed.')
+    }
+    return response
+  }
 
   const corpus = buildCorpus(application)
-  return runDeepResearch(question, corpus, complete, {
+  const report = await runDeepResearch(question, corpus, complete, {
     limits: options.limits,
     onProgress: options.onProgress,
     signal: options.signal,
   })
+  if (!principalIsCurrent()) {
+    return null
+  }
+  return report
 }

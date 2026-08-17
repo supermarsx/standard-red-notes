@@ -13,7 +13,35 @@
 // or smuggle in injected instructions. See composeSystemPromptWithPersona below —
 // that function is the single chokepoint every injection point must go through.
 
+import type { WebApplication } from '@/Application/WebApplication'
+import { clampMaxTokens, clampTemperature, clampTopP, DEFAULT_SAMPLING_SETTINGS } from './samplingSettings'
+
 const STORAGE_KEY = 'standardnotes.assistantPersona.settings.v1'
+const PROFILES_STORAGE_KEY = 'standardnotes.assistantPersonaProfiles.settings.v1'
+
+/**
+ * Stable, privacy-preserving namespace for device-local assistant settings.
+ * Signed-in accounts use their user UUID. Anonymous workspaces use the
+ * application's own identifier so two local workspaces never share settings.
+ */
+export function getAssistantAccountScope(
+  application: Pick<WebApplication, 'identifier' | 'sessions'>,
+): string | undefined {
+  try {
+    if (application.sessions.isSignedIn()) {
+      const userUuid = application.sessions.getUser()?.uuid?.trim()
+      return userUuid ? `account:${userUuid}` : undefined
+    }
+    const identifier = application.identifier?.trim()
+    return identifier ? `application:${identifier}` : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function scopedStorageKey(baseKey: string, scope: string | undefined): string | undefined {
+  return scope ? `${baseKey}.${encodeURIComponent(scope)}` : undefined
+}
 
 /** Hard cap so a runaway persona can't dominate / blow the token budget. */
 export const PERSONA_MAX_LENGTH = 600
@@ -63,9 +91,13 @@ function clampPersona(value: string): string {
   return value.trim().slice(0, PERSONA_MAX_LENGTH)
 }
 
-export function loadPersonaSettings(): PersonaSettings {
+export function loadPersonaSettings(scope: string | undefined): PersonaSettings {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
+    const key = scopedStorageKey(STORAGE_KEY, scope)
+    if (!key) {
+      return { ...DEFAULT_PERSONA_SETTINGS }
+    }
+    const raw = localStorage.getItem(key)
     if (!raw) {
       return { ...DEFAULT_PERSONA_SETTINGS }
     }
@@ -78,9 +110,13 @@ export function loadPersonaSettings(): PersonaSettings {
   }
 }
 
-export function savePersonaSettings(settings: PersonaSettings): void {
+export function savePersonaSettings(scope: string | undefined, settings: PersonaSettings): void {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ persona: clampPersona(settings.persona) }))
+    const key = scopedStorageKey(STORAGE_KEY, scope)
+    if (!key) {
+      return
+    }
+    localStorage.setItem(key, JSON.stringify({ persona: clampPersona(settings.persona) }))
   } catch {
     /* storage may be unavailable (private mode); persona stays default */
   }
@@ -97,10 +133,6 @@ export function savePersonaSettings(settings: PersonaSettings): void {
 // never clobbered. Like the sampling settings, every numeric field is clamped on
 // load and save so a hand-edited value can't reach a request body out of range.
 // ---------------------------------------------------------------------------
-
-import { clampMaxTokens, clampTemperature, clampTopP, DEFAULT_SAMPLING_SETTINGS } from './samplingSettings'
-
-const PROFILES_STORAGE_KEY = 'standardnotes.assistantPersonaProfiles.settings.v1'
 
 /** Max length for a profile name (UI label). */
 export const PROFILE_NAME_MAX_LENGTH = 60
@@ -120,6 +152,9 @@ export interface PersonaProfile {
   temperature: number
   topP: number
   maxTokens: number
+  /** Omit temperature/top_p unless this profile explicitly enables an override. */
+  useServerTemperature: boolean
+  useServerTopP: boolean
 }
 
 export interface PersonaProfilesState {
@@ -153,6 +188,11 @@ function normalizeProfile(raw: Partial<PersonaProfile> | null | undefined): Pers
     temperature: clampTemperature(raw.temperature ?? DEFAULT_SAMPLING_SETTINGS.temperature),
     topP: clampTopP(raw.topP ?? DEFAULT_SAMPLING_SETTINGS.topP),
     maxTokens: clampMaxTokens(raw.maxTokens ?? DEFAULT_SAMPLING_SETTINGS.maxTokens),
+    useServerTemperature:
+      typeof raw.useServerTemperature === 'boolean'
+        ? raw.useServerTemperature
+        : DEFAULT_SAMPLING_SETTINGS.useServerTemperature,
+    useServerTopP: typeof raw.useServerTopP === 'boolean' ? raw.useServerTopP : DEFAULT_SAMPLING_SETTINGS.useServerTopP,
   }
 }
 
@@ -180,9 +220,13 @@ export function normalizePersonaProfilesState(
   return { activeId, profiles }
 }
 
-export function loadPersonaProfiles(): PersonaProfilesState {
+export function loadPersonaProfiles(scope: string | undefined): PersonaProfilesState {
   try {
-    const raw = localStorage.getItem(PROFILES_STORAGE_KEY)
+    const key = scopedStorageKey(PROFILES_STORAGE_KEY, scope)
+    if (!key) {
+      return { ...DEFAULT_PERSONA_PROFILES_STATE }
+    }
+    const raw = localStorage.getItem(key)
     if (!raw) {
       return { ...DEFAULT_PERSONA_PROFILES_STATE }
     }
@@ -192,17 +236,21 @@ export function loadPersonaProfiles(): PersonaProfilesState {
   }
 }
 
-export function savePersonaProfiles(state: PersonaProfilesState): void {
+export function savePersonaProfiles(scope: string | undefined, state: PersonaProfilesState): void {
   try {
-    localStorage.setItem(PROFILES_STORAGE_KEY, JSON.stringify(normalizePersonaProfilesState(state)))
+    const key = scopedStorageKey(PROFILES_STORAGE_KEY, scope)
+    if (!key) {
+      return
+    }
+    localStorage.setItem(key, JSON.stringify(normalizePersonaProfilesState(state)))
   } catch {
     /* storage may be unavailable (private mode); profiles fall back to default */
   }
 }
 
 /** The active profile, or undefined when none are defined. */
-export function getActiveProfile(): PersonaProfile | undefined {
-  const { activeId, profiles } = loadPersonaProfiles()
+export function getActiveProfile(scope: string | undefined): PersonaProfile | undefined {
+  const { activeId, profiles } = loadPersonaProfiles(scope)
   return profiles.find((p) => p.id === activeId)
 }
 
@@ -224,6 +272,8 @@ export function createPersonaProfile(existing: PersonaProfile[]): PersonaProfile
     temperature: DEFAULT_SAMPLING_SETTINGS.temperature,
     topP: DEFAULT_SAMPLING_SETTINGS.topP,
     maxTokens: DEFAULT_SAMPLING_SETTINGS.maxTokens,
+    useServerTemperature: DEFAULT_SAMPLING_SETTINGS.useServerTemperature,
+    useServerTopP: DEFAULT_SAMPLING_SETTINGS.useServerTopP,
   }
 }
 
@@ -231,12 +281,12 @@ export function createPersonaProfile(existing: PersonaProfile[]): PersonaProfile
  * The effective persona text: the active profile's persona when profiles exist,
  * otherwise the legacy single-persona setting. Trimmed and capped either way.
  */
-export function getPersona(): string {
-  const active = getActiveProfile()
+export function getPersona(scope: string | undefined): string {
+  const active = getActiveProfile(scope)
   if (active) {
     return clampPersona(active.persona)
   }
-  return clampPersona(loadPersonaSettings().persona)
+  return clampPersona(loadPersonaSettings(scope).persona)
 }
 
 /**
@@ -250,7 +300,7 @@ export function getPersona(): string {
  * sub-agent, selection actions, research mode) routes through here so the layering
  * and guardrails are identical everywhere.
  */
-export function composeSystemPromptWithPersona(basePrompt: string, persona = getPersona()): string {
+export function composeSystemPromptWithPersona(basePrompt: string, persona: string): string {
   const trimmed = clampPersona(persona)
   if (!trimmed) {
     return basePrompt

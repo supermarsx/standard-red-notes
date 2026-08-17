@@ -1,6 +1,5 @@
 import { assistantUsageService } from './AssistantUsageService'
 import { assistantHttpError, assistantNetworkError } from './AssistantHttpError'
-import { samplingRequestFields, SamplingSettings } from './samplingSettings'
 import { Provider, ProviderEvent, ProviderRequest } from './types'
 
 const MALFORMED_PROXY_FRAME = Symbol('malformed-proxy-frame')
@@ -21,12 +20,6 @@ export interface ProxyProviderOptions {
    * application's host + session token.
    */
   postStream: (body: unknown, signal?: AbortSignal) => Promise<Response>
-  /**
-   * Sampling parameters forwarded to the server proxy. When omitted the provider
-   * reads the user's saved {@link loadSamplingSettings} values. The server may
-   * apply or ignore these; sending them is harmless to older servers.
-   */
-  sampling?: SamplingSettings
   signal?: AbortSignal
 }
 
@@ -49,14 +42,17 @@ export class ProxyProvider implements Provider {
       system: req.system,
       messages: req.messages,
       tools: req.tools,
-      // User-configurable sampling (temperature / top_p / optional max_tokens);
-      // the server proxy applies these to the upstream provider call.
-      ...samplingRequestFields(this.options.sampling),
+      ...(req.purpose === 'safety-review' ? { purpose: req.purpose } : {}),
+      // Provider, model, and generation settings are intentionally absent. The
+      // authenticated backend profile is authoritative in proxy mode; stale
+      // device-local Direct-mode settings must never influence its cost/safety
+      // boundary. A safety-review purpose can only make the server's own output
+      // cap narrower; the client never supplies the cap itself.
     }
 
     let response: Response
     try {
-      response = await this.options.postStream(body, this.options.signal)
+      response = await this.options.postStream(body, req.signal ?? this.options.signal)
     } catch (error) {
       yield { kind: 'error', message: assistantNetworkError(error, 'proxy') }
       yield { kind: 'finish', stopReason: 'error' }

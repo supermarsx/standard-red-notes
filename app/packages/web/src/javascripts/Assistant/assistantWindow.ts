@@ -9,16 +9,20 @@ const ASSISTANT_ROUTE = '/?route=assistant'
 let assistantWindow: Window | null = null
 
 /** Open the assistant in a separate window, or refocus it if already open. */
-export function openOrFocusAssistantWindow(): void {
+export function openOrFocusAssistantWindow(): boolean {
   if (assistantWindow && !assistantWindow.closed) {
     assistantWindow.focus()
-    return
+    return true
   }
   // Named (not `_blank`) so repeated calls reuse the same window. We intentionally
   // keep the opener relationship (no `noopener`) so we retain the reference to
   // focus it later — safe because it's our own same-origin route.
   assistantWindow = window.open(ASSISTANT_ROUTE, ASSISTANT_WINDOW_NAME)
-  assistantWindow?.focus()
+  if (!assistantWindow) {
+    return false
+  }
+  assistantWindow.focus()
+  return true
 }
 
 /**

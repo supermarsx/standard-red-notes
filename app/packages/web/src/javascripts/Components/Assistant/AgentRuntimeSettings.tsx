@@ -1,5 +1,4 @@
-import { useCallback, useState } from 'react'
-import { WebApplication } from '@/Application/WebApplication'
+import { useCallback, useEffect, useState } from 'react'
 import PreferencesGroup from '../Preferences/PreferencesComponents/PreferencesGroup'
 import PreferencesSegment from '../Preferences/PreferencesComponents/PreferencesSegment'
 import { Title, Subtitle, Text } from '../Preferences/PreferencesComponents/Content'
@@ -33,29 +32,46 @@ import {
  *  - Temperature + Top-p sliders, each with a "Use server default" Switch that
  *    greys/disables the slider and makes the client OMIT that parameter.
  *
- * Takes `application` so it can sit alongside the other assistant settings panes
- * (it does not currently read from it, but keeps a consistent signature and
- * leaves room for application-scoped behavior).
+ * In Server proxy mode generation is controlled by the authenticated backend
+ * profile, so the two client sampling overrides are visible but locked.
  */
-const AgentRuntimeSettings = ({ application: _application }: { application: WebApplication }) => {
-  const [sampling, setSampling] = useState<SamplingSettings>(() => loadSamplingSettings())
+const AgentRuntimeSettings = ({
+  accountScope,
+  serverProxy,
+}: {
+  accountScope: string | undefined
+  serverProxy: boolean
+}) => {
+  const [sampling, setSampling] = useState<SamplingSettings>(() => loadSamplingSettings(accountScope))
 
-  const updateSampling = useCallback((patch: Partial<SamplingSettings>) => {
-    setSampling((prev) => {
-      const next = { ...prev, ...patch }
-      saveSamplingSettings(next)
-      return next
-    })
-  }, [])
+  useEffect(() => {
+    setSampling(loadSamplingSettings(accountScope))
+  }, [accountScope])
 
-  const handleUnitChange = useCallback((unit: RunTimeUnit) => {
-    setSampling((prev) => {
-      // Re-clamp the existing value under the new unit so it stays in [1min, 200h].
-      const next = { ...prev, maxRunTimeUnit: unit, maxRunTime: clampMaxRunTime(prev.maxRunTime, unit) }
-      saveSamplingSettings(next)
-      return next
-    })
-  }, [])
+  const updateSampling = useCallback(
+    (patch: Partial<SamplingSettings>) => {
+      setSampling(() => {
+        const next = { ...loadSamplingSettings(accountScope), ...patch }
+        saveSamplingSettings(accountScope, next)
+        return next
+      })
+    },
+    [accountScope],
+  )
+
+  const handleUnitChange = useCallback(
+    (unit: RunTimeUnit) => {
+      setSampling(() => {
+        const current = loadSamplingSettings(accountScope)
+        const minutes = current.maxRunTimeUnit === 'hours' ? current.maxRunTime * 60 : current.maxRunTime
+        const converted = unit === 'hours' ? minutes / 60 : minutes
+        const next = { ...current, maxRunTimeUnit: unit, maxRunTime: clampMaxRunTime(converted, unit) }
+        saveSamplingSettings(accountScope, next)
+        return next
+      })
+    },
+    [accountScope],
+  )
 
   const stepsUnlimited = sampling.maxSteps <= 0
 
@@ -72,8 +88,8 @@ const AgentRuntimeSettings = ({ application: _application }: { application: WebA
 
         <Subtitle>Max agent steps</Subtitle>
         <Text>
-          How many model turns the agent loop may take before it stops and summarizes. Default 500. Up to{' '}
-          {MAX_STEPS_MAX}. <strong>0 = unlimited (not recommended)</strong>.
+          How many model turns the agent loop may take before it stops and summarizes. Default 16. Up to {MAX_STEPS_MAX}
+          . <strong>0 = unlimited (not recommended)</strong>.
         </Text>
         <input
           className="border-border bg-default mt-2 w-28 rounded border px-2 py-1.5 text-sm"
@@ -93,8 +109,8 @@ const AgentRuntimeSettings = ({ application: _application }: { application: WebA
 
         <Subtitle>Max run time</Subtitle>
         <Text>
-          Wall-clock limit for a single agent run. When exceeded the run stops gracefully and summarizes what it has.
-          Default 200 hours (also the maximum).
+          Wall-clock limit for a single agent run. When exceeded, the request and any cancellable tool work stop.
+          Default 10 minutes; maximum 200 hours.
         </Text>
         <div className="mt-2 flex items-center gap-2">
           <input
@@ -123,18 +139,24 @@ const AgentRuntimeSettings = ({ application: _application }: { application: WebA
         <div className="flex items-center justify-between">
           <div className="mr-4 flex flex-col">
             <Subtitle>
-              Temperature: {sampling.useServerTemperature ? 'server default' : sampling.temperature.toFixed(2)}
+              Temperature:{' '}
+              {serverProxy
+                ? 'backend profile'
+                : sampling.useServerTemperature
+                  ? 'provider default'
+                  : sampling.temperature.toFixed(2)}
             </Subtitle>
             <Text>
               Higher values make output more random/creative; lower values make it more focused. Range {TEMPERATURE_MIN}
-              –{TEMPERATURE_MAX}. Turn on “Use server default” to omit this parameter entirely so the provider/server
-              picks its own.
+              –{TEMPERATURE_MAX}. In Direct mode, “Use provider default” omits this parameter. Server proxy always uses
+              the administrator-assigned backend profile.
             </Text>
           </div>
           <div className="flex shrink-0 flex-col items-end gap-1">
-            <Text className="text-passive-1">Use server default</Text>
+            <Text className="text-passive-1">Use provider default</Text>
             <Switch
               checked={sampling.useServerTemperature}
+              disabled={serverProxy}
               onChange={(value) => updateSampling({ useServerTemperature: value })}
             />
           </div>
@@ -145,7 +167,7 @@ const AgentRuntimeSettings = ({ application: _application }: { application: WebA
           min={TEMPERATURE_MIN}
           max={TEMPERATURE_MAX}
           step={0.05}
-          disabled={sampling.useServerTemperature}
+          disabled={serverProxy || sampling.useServerTemperature}
           value={sampling.temperature}
           onChange={(event) => updateSampling({ temperature: clampTemperature(Number(event.target.value)) })}
         />
@@ -155,17 +177,22 @@ const AgentRuntimeSettings = ({ application: _application }: { application: WebA
         <div className="flex items-center justify-between">
           <div className="mr-4 flex flex-col">
             <Subtitle>
-              Top-p (nucleus sampling): {sampling.useServerTopP ? 'server default' : sampling.topP.toFixed(2)}
+              Top-p (nucleus sampling):{' '}
+              {serverProxy ? 'backend profile' : sampling.useServerTopP ? 'provider default' : sampling.topP.toFixed(2)}
             </Subtitle>
             <Text>
               Limits sampling to the most probable tokens whose cumulative probability reaches this value. Range{' '}
-              {TOP_P_MIN}–{TOP_P_MAX}. Turn on “Use server default” to omit this parameter entirely so the
-              provider/server picks its own.
+              {TOP_P_MIN}–{TOP_P_MAX}. In Direct mode, “Use provider default” omits this parameter. Server proxy always
+              uses the administrator-assigned backend profile.
             </Text>
           </div>
           <div className="flex shrink-0 flex-col items-end gap-1">
-            <Text className="text-passive-1">Use server default</Text>
-            <Switch checked={sampling.useServerTopP} onChange={(value) => updateSampling({ useServerTopP: value })} />
+            <Text className="text-passive-1">Use provider default</Text>
+            <Switch
+              checked={sampling.useServerTopP}
+              disabled={serverProxy}
+              onChange={(value) => updateSampling({ useServerTopP: value })}
+            />
           </div>
         </div>
         <input
@@ -174,7 +201,7 @@ const AgentRuntimeSettings = ({ application: _application }: { application: WebA
           min={TOP_P_MIN}
           max={TOP_P_MAX}
           step={0.05}
-          disabled={sampling.useServerTopP}
+          disabled={serverProxy || sampling.useServerTopP}
           value={sampling.topP}
           onChange={(event) => updateSampling({ topP: clampTopP(Number(event.target.value)) })}
         />
