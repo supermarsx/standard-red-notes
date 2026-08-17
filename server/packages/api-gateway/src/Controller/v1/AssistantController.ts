@@ -35,6 +35,7 @@ import { DEFAULT_SUBSCRIPTION_ID } from '../../Service/Assistant/subscription/Su
 import { ServerSettingsResolver } from '../../Service/ServerSettings/ServerSettingsResolver'
 import { isBoundedString, isSafeRecordKey } from '../../Infra/SecureJsonFileStore'
 import {
+  AssistantTokenQuotaReservation,
   RedisTokenUsageStore,
   SUBSCRIPTION_USAGE_SUBJECT,
   subscriptionUsageSubject,
@@ -44,8 +45,6 @@ import {
   estimateTokensFromChars,
   estimateTokensFromText,
   FIVE_HOUR_WINDOW_MS,
-  isOverTokenLimit,
-  TokenWindowId,
   unavailableWindowUsage,
   WEEKLY_WINDOW_MS,
   windowLabel,
@@ -53,7 +52,6 @@ import {
 import {
   AssistantRequestOutcome,
   AssistantRequestQuotaReservation,
-  assistantRequestUsageKey,
   RedisAssistantRequestQuota,
 } from '../../Service/Assistant/AssistantRequestQuota'
 
@@ -65,6 +63,8 @@ interface StreamRequestBody {
   system?: string
   messages?: ChatMessage[]
   tools?: ToolDescriptor[]
+  /** A narrow server-owned execution class; never selects a profile or model. */
+  purpose?: unknown
 }
 
 interface ResolvedUserLimits {
@@ -79,7 +79,9 @@ interface ResolvedUserLimits {
   perUserWeeklyTokenLimit?: number
 }
 
-const ASSISTANT_QUOTA_RELEASE_MAX_ATTEMPTS = 2
+const ASSISTANT_QUOTA_SETTLEMENT_MAX_ATTEMPTS = 2
+const ASSISTANT_SAFETY_REVIEW_MAX_OUTPUT_TOKENS = 8
+const ASSISTANT_DEFAULT_MAX_OUTPUT_TOKENS = 4_096
 
 /**
  * Stateless LLM streaming proxy. Standard Notes notes are end-to-end encrypted,
@@ -436,8 +438,7 @@ export class AssistantController extends BaseHttpController {
     let used = 0
     if (this.redis) {
       try {
-        const raw = await this.redis.get(this.usageKey(userUuid, dayKey))
-        used = raw ? parseInt(raw, 10) : 0
+        used = await new RedisAssistantRequestQuota(this.redis).committedUsage(userUuid, dayKey)
       } catch {
         // Fail-open: report 0 rather than error out the whole usage payload.
       }
@@ -927,6 +928,15 @@ export class AssistantController extends BaseHttpController {
     // the limit. A slot becomes charged only after a successful provider finish;
     // every failure/abort/timeout releases it.
     let quotaReservation: AssistantRequestQuotaReservation | undefined
+    if (limit > 0 && !this.redis) {
+      response.status(503).json({
+        error: {
+          tag: 'ai-request-quota-unavailable',
+          message: 'AI request limits are enabled, but their durable quota store is unavailable.',
+        },
+      })
+      return
+    }
     if (this.redis && limit > 0) {
       const decision = await new RedisAssistantRequestQuota(this.redis).reserve(userUuid, dayKey, limit)
       if (!decision.allowed) {
@@ -943,46 +953,21 @@ export class AssistantController extends BaseHttpController {
       quotaReservation = decision.reservation
     }
 
-    // 3) Meter per user per rolling TOKEN window (5h + weekly). We CHECK BEFORE
-    // starting — a request already in flight is never hard-broken mid-stream —
-    // and reject when the user is already at/over either configured window. We
-    // cannot know this request's token spend up front, so "would exceed" is
-    // enforced as "is already at the cap". Fail-open: any Redis error here lets
-    // the request through rather than blocking on a metering read.
+    // 3) A configured token ceiling is a hard cap. Redis is therefore required
+    // and failures fail closed; otherwise concurrent requests could all pass an
+    // advisory pre-check and overshoot together.
     const tokenLimits = await this.effectiveTokenLimits(limits)
     const tokenStore = this.tokenStore()
-    if (tokenStore && (tokenLimits.fiveHour > 0 || tokenLimits.weekly > 0)) {
-      try {
-        const now = Date.now()
-        const entries = await tokenStore.entriesWithinWeek(userUuid, now)
-        const fiveHour = buildWindowUsage(entries, now, FIVE_HOUR_WINDOW_MS, tokenLimits.fiveHour)
-        const weekly = buildWindowUsage(entries, now, WEEKLY_WINDOW_MS, tokenLimits.weekly)
-        const exceeded: { id: TokenWindowId; usedTokens: number; limitTokens: number; resetsAt: string } | undefined =
-          isOverTokenLimit(fiveHour.usedTokens, tokenLimits.fiveHour)
-            ? { id: 'fiveHour', ...fiveHour }
-            : isOverTokenLimit(weekly.usedTokens, tokenLimits.weekly)
-              ? { id: 'weekly', ...weekly }
-              : undefined
-
-        if (exceeded) {
-          // Refund the daily request meter we incremented above — this request
-          // is rejected before any upstream proxying happens.
-          await this.releaseQuotaReservation(quotaReservation)
-          response.status(429).json({
-            error: {
-              tag: 'ai-token-limit-reached',
-              message: `Your ${windowLabel(exceeded.id)} AI token limit (${exceeded.limitTokens.toLocaleString()} tokens) has been reached. It resets at ${exceeded.resetsAt}.`,
-              window: exceeded.id,
-              usedTokens: exceeded.usedTokens,
-              limitTokens: exceeded.limitTokens,
-              resetsAt: exceeded.resetsAt,
-            },
-          })
-          return
-        }
-      } catch {
-        // Fail-open: never block a request because the token meter is unreadable.
-      }
+    const tokenQuotaEnabled = tokenLimits.fiveHour > 0 || tokenLimits.weekly > 0
+    if (tokenQuotaEnabled && !tokenStore) {
+      await this.releaseQuotaReservation(quotaReservation)
+      response.status(503).json({
+        error: {
+          tag: 'ai-token-quota-unavailable',
+          message: 'AI token limits are enabled, but their durable quota store is unavailable.',
+        },
+      })
+      return
     }
 
     let provider: Provider
@@ -995,6 +980,15 @@ export class AssistantController extends BaseHttpController {
       isSubscription = resolved.isSubscription
       subscriptionId = resolved.subscriptionId
       generation = resolved.generation
+      if (body.purpose === 'safety-review') {
+        generation = {
+          ...generation,
+          maxOutputTokens: Math.min(
+            generation.maxOutputTokens ?? ASSISTANT_SAFETY_REVIEW_MAX_OUTPUT_TOKENS,
+            ASSISTANT_SAFETY_REVIEW_MAX_OUTPUT_TOKENS,
+          ),
+        }
+      }
     } catch (error) {
       // The proxy never started, so refund the metered request.
       await this.releaseQuotaReservation(quotaReservation)
@@ -1013,6 +1007,47 @@ export class AssistantController extends BaseHttpController {
       return
     }
 
+    // Reserve a conservative prompt upper bound plus the server-owned maximum
+    // output before contacting the provider. Redis counts committed rolling
+    // usage and every live pending reservation in one atomic decision.
+    let tokenQuotaReservation: AssistantTokenQuotaReservation | undefined
+    if (tokenQuotaEnabled && tokenStore) {
+      const maxOutputTokens = generation.maxOutputTokens ?? ASSISTANT_DEFAULT_MAX_OUTPUT_TOKENS
+      generation = {
+        ...generation,
+        maxOutputTokens,
+      }
+      try {
+        const promptTokens = this.promptTokenUpperBound(body)
+        const decision = await tokenStore.reserve(userUuid, promptTokens, maxOutputTokens, tokenLimits)
+        if (!decision.allowed) {
+          await this.releaseQuotaReservation(quotaReservation)
+          response.status(429).json({
+            error: {
+              tag: 'ai-token-limit-reached',
+              message: `This request would exceed your ${windowLabel(decision.window)} AI token limit (${decision.limitTokens.toLocaleString()} tokens). It resets at ${decision.resetsAt}.`,
+              window: decision.window,
+              usedTokens: decision.usedTokens,
+              limitTokens: decision.limitTokens,
+              resetsAt: decision.resetsAt,
+            },
+          })
+          return
+        }
+        tokenQuotaReservation = decision.reservation
+        generation = { ...generation, maxOutputTokens: decision.maxOutputTokens }
+      } catch {
+        await this.releaseQuotaReservation(quotaReservation)
+        response.status(503).json({
+          error: {
+            tag: 'ai-token-quota-unavailable',
+            message: 'AI token limits could not be reserved safely. Please try again.',
+          },
+        })
+        return
+      }
+    }
+
     response.setHeader('Content-Type', 'text/event-stream')
     response.setHeader('Cache-Control', 'no-cache, no-transform')
     response.setHeader('Connection', 'keep-alive')
@@ -1028,8 +1063,18 @@ export class AssistantController extends BaseHttpController {
     let providerIterator: AsyncIterator<ProviderEvent> | undefined
     let iteratorCancellationRequested = false
     let clientClosed = request.aborted === true
-    const cancelProvider = (): void => {
-      clientClosed = true
+    let quotaLeaseLost = false
+    let streamCancelled = false
+    const cancelProvider = (reason: 'client' | 'quota'): void => {
+      if (streamCancelled) {
+        return
+      }
+      streamCancelled = true
+      if (reason === 'client') {
+        clientClosed = true
+      } else {
+        quotaLeaseLost = true
+      }
       outcome.markFailed()
       upstreamAbortController.abort()
       if (!iteratorCancellationRequested && providerIterator?.return) {
@@ -1046,14 +1091,17 @@ export class AssistantController extends BaseHttpController {
     // Only an aborted request or a response socket that closes before end() is
     // a real disconnect. Treating normal request close as abort made every
     // sufficiently asynchronous provider stream end empty.
-    request.on('aborted', cancelProvider)
+    request.on('aborted', () => cancelProvider('client'))
     response.on('close', () => {
       if (!response.writableEnded) {
-        cancelProvider()
+        cancelProvider('client')
       }
     })
     if (clientClosed) {
-      cancelProvider()
+      cancelProvider('client')
+    } else {
+      quotaReservation?.startHeartbeat(() => cancelProvider('quota'))
+      tokenQuotaReservation?.startHeartbeat(() => cancelProvider('quota'))
     }
 
     // Token accounting for this request: prefer the provider's REAL usage tokens
@@ -1080,7 +1128,7 @@ export class AssistantController extends BaseHttpController {
       }
 
       for await (const event of cancellableStream) {
-        if (clientClosed) {
+        if (streamCancelled) {
           outcome.markFailed()
           break
         }
@@ -1101,21 +1149,38 @@ export class AssistantController extends BaseHttpController {
       }
     } catch (error) {
       outcome.markFailed()
-      if (!clientClosed) {
+      if (!clientClosed && !quotaLeaseLost) {
         writeEvent({ kind: 'error', message: (error as Error).message })
         writeEvent({ kind: 'finish', stopReason: 'error' })
       }
     } finally {
       providerIterator = undefined
+      await Promise.all([quotaReservation?.stopHeartbeat(), tokenQuotaReservation?.stopHeartbeat()])
+      if (quotaLeaseLost && !clientClosed) {
+        writeEvent({ kind: 'error', message: 'AI request quota could not be renewed. Please try again.' })
+        writeEvent({ kind: 'finish', stopReason: 'error' })
+      }
       response.end()
       if (outcome.shouldConsumeAllowance) {
-        quotaReservation?.commit()
         // Record only successful calls. Provider errors, aborts and truncated
         // streams consume neither the request allowance nor rolling token limits.
         const spentTokens = sawUsageEvent ? reportedTokens : this.estimateRequestTokens(body, completionChars)
-        await this.recordTokenUsage(userUuid, spentTokens, isSubscription, subscriptionId)
+        await Promise.all([
+          this.commitQuotaReservation(quotaReservation),
+          this.commitTokenQuotaReservation(tokenQuotaReservation, spentTokens),
+        ])
+        await this.recordTokenUsage(
+          userUuid,
+          spentTokens,
+          isSubscription,
+          subscriptionId,
+          tokenQuotaReservation === undefined,
+        )
       } else {
-        await this.releaseQuotaReservation(quotaReservation)
+        await Promise.all([
+          this.releaseQuotaReservation(quotaReservation),
+          this.releaseTokenQuotaReservation(tokenQuotaReservation),
+        ])
       }
     }
   }
@@ -1125,22 +1190,77 @@ export class AssistantController extends BaseHttpController {
    * transient failure. The reservation remains retryable until its decrement
    * succeeds, so a recovered Redis connection does not charge a failed call.
    */
-  private async releaseQuotaReservation(reservation?: AssistantRequestQuotaReservation): Promise<void> {
+  private async releaseQuotaReservation(reservation?: AssistantRequestQuotaReservation): Promise<boolean> {
     if (!reservation) {
-      return
+      return true
     }
 
     let lastError: unknown
-    for (let attempt = 0; attempt < ASSISTANT_QUOTA_RELEASE_MAX_ATTEMPTS; attempt += 1) {
+    for (let attempt = 0; attempt < ASSISTANT_QUOTA_SETTLEMENT_MAX_ATTEMPTS; attempt += 1) {
       try {
         await reservation.release()
-        return
+        return true
       } catch (error) {
         lastError = error
       }
     }
 
-    throw lastError
+    // A pending lease is not committed usage and expires automatically. Do not
+    // replace the intended provider/429 response when Redis is unavailable.
+    return lastError === undefined
+  }
+
+  /** Commit a successful request idempotently so a lost Redis reply cannot double-charge it. */
+  private async commitQuotaReservation(reservation?: AssistantRequestQuotaReservation): Promise<boolean> {
+    if (!reservation) {
+      return true
+    }
+
+    let lastError: unknown
+    for (let attempt = 0; attempt < ASSISTANT_QUOTA_SETTLEMENT_MAX_ATTEMPTS; attempt += 1) {
+      try {
+        await reservation.commit()
+        return true
+      } catch (error) {
+        lastError = error
+      }
+    }
+
+    return lastError === undefined
+  }
+
+  private async releaseTokenQuotaReservation(reservation?: AssistantTokenQuotaReservation): Promise<boolean> {
+    if (!reservation) {
+      return true
+    }
+    for (let attempt = 0; attempt < ASSISTANT_QUOTA_SETTLEMENT_MAX_ATTEMPTS; attempt += 1) {
+      try {
+        await reservation.release()
+        return true
+      } catch {
+        // Retry the idempotent transition once; the pending lease is self-healing.
+      }
+    }
+    return false
+  }
+
+  private async commitTokenQuotaReservation(
+    reservation: AssistantTokenQuotaReservation | undefined,
+    tokens: number,
+  ): Promise<boolean> {
+    if (!reservation) {
+      return true
+    }
+    for (let attempt = 0; attempt < ASSISTANT_QUOTA_SETTLEMENT_MAX_ATTEMPTS; attempt += 1) {
+      try {
+        await reservation.commit(tokens)
+        return true
+      } catch {
+        // Retry lost replies idempotently. A sustained outage leaves only a
+        // bounded pending lease, never a fabricated committed charge.
+      }
+    }
+    return false
   }
 
   /** Estimate a successful request's total tokens from its full provider input and streamed completion length. */
@@ -1161,6 +1281,22 @@ export class AssistantController extends BaseHttpController {
     return estimateTokensFromText(JSON.stringify(providerInput)) + estimateTokensFromChars(completionChars)
   }
 
+  /** Conservative provider-input upper bound used for hard quota admission. */
+  private promptTokenUpperBound(body: StreamRequestBody): number {
+    const providerInput = {
+      system: body.system ?? '',
+      messages: body.messages ?? [],
+      tools: body.tools ?? [],
+    }
+    const promptBytes = Buffer.byteLength(JSON.stringify(providerInput), 'utf8')
+    const framingAllowance = 64 + (body.messages?.length ?? 0) * 16 + (body.tools?.length ?? 0) * 32
+    const bound = promptBytes + framingAllowance
+    if (!Number.isSafeInteger(bound) || bound <= 0) {
+      throw new Error('Assistant request is too large to reserve a safe token bound.')
+    }
+    return bound
+  }
+
   /**
    * Persist a completed request's token spend to the rolling-window meter for the
    * user and, when the call was subscription-backed, to the shared subscription
@@ -1171,6 +1307,7 @@ export class AssistantController extends BaseHttpController {
     tokens: number,
     isSubscription: boolean,
     subscriptionId?: string,
+    recordUserUsage = true,
   ): Promise<void> {
     const store = this.tokenStore()
     if (!store || tokens <= 0) {
@@ -1178,7 +1315,9 @@ export class AssistantController extends BaseHttpController {
     }
     const now = Date.now()
     try {
-      await store.record(userUuid, tokens, now)
+      if (recordUserUsage) {
+        await store.record(userUuid, tokens, now)
+      }
       if (isSubscription) {
         // The cross-subscription aggregate (existing) …
         await store.record(SUBSCRIPTION_USAGE_SUBJECT, tokens, now)
@@ -1354,10 +1493,6 @@ export class AssistantController extends BaseHttpController {
       subscriptionId: isSubscription ? DEFAULT_SUBSCRIPTION_ID : undefined,
       generation: {},
     }
-  }
-
-  private usageKey(userUuid: string, dayKey: string): string {
-    return assistantRequestUsageKey(userUuid, dayKey)
   }
 
   private currentDayKey(): string {

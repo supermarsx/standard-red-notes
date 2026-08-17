@@ -31,6 +31,7 @@ describe('AssistantController', () => {
     expire: jest.Mock
     decr: jest.Mock
     get: jest.Mock
+    hget: jest.Mock
     zadd: jest.Mock
     zrangebyscore: jest.Mock
     zremrangebyscore: jest.Mock
@@ -101,23 +102,69 @@ describe('AssistantController', () => {
       expire: jest.fn().mockResolvedValue(1),
       decr: jest.fn().mockResolvedValue(0),
       get: jest.fn().mockResolvedValue(null),
+      hget: jest.fn().mockResolvedValue(null),
       zadd: jest.fn().mockResolvedValue(1),
       // Default: no prior token usage recorded.
       zrangebyscore: jest.fn().mockResolvedValue([]),
       zremrangebyscore: jest.fn().mockResolvedValue(0),
-      eval: jest.fn(async (script: string, _keyCount: number, key: string, limit?: number, ttl?: number) => {
-        if (script.includes("redis.call('INCR'")) {
-          const count = await redis.incr(key)
-          if (count === 1) {
-            await redis.expire(key, ttl)
+      eval: jest.fn(async (script: string, keyCount: number, ...raw: Array<string | number>) => {
+        const keys = raw.slice(0, keyCount).map(String)
+        const args = raw.slice(keyCount).map(Number)
+
+        if (script.includes('__legacy_migrated')) {
+          return 1
+        }
+        if (script.includes('local capacity = prompt + requested_output')) {
+          const [fiveLimit, weeklyLimit, , prompt, requestedOutput] = args
+          const legacyEntries = await redis.zrangebyscore('', 0, '+inf')
+          const legacyTokens = legacyEntries.reduce((total: number, entry: string) => {
+            return total + Number(entry.split(':')[1] ?? 0)
+          }, 0)
+          const legacyFive = legacyTokens
+          const legacyWeek = legacyTokens
+          let capacity = prompt + requestedOutput
+          if (fiveLimit > 0) {
+            capacity = Math.min(capacity, fiveLimit - legacyFive)
           }
-          if (count > (limit ?? 0)) {
-            const used = await redis.decr(key)
+          if (weeklyLimit > 0) {
+            capacity = Math.min(capacity, weeklyLimit - legacyWeek)
+          }
+          if (capacity <= prompt) {
+            const window = fiveLimit > 0 ? 1 : 2
+            return [0, window, legacyFive, legacyWeek, Date.now() + 60_000, 0, 0]
+          }
+          const granted = Math.min(requestedOutput, capacity - prompt)
+          return [1, 0, legacyFive + prompt + granted, legacyWeek + prompt + granted, 0, granted, prompt + granted]
+        }
+
+        if (script.includes('actual > reserved')) {
+          return [1, 0]
+        }
+        if (script.includes("redis.call('HINCRBY', KEYS[1], tostring(bucket), ARGV[1])")) {
+          const tokens = args[0]
+          await redis.zadd(keys[0], Date.now(), `${Date.now()}:${tokens}:test`)
+          return Date.now()
+        }
+        if (script.includes('local result = {}')) {
+          return redis.zrangebyscore('', 0, '+inf')
+        }
+
+        if (script.includes("redis.call('ZRANGEBYSCORE'")) {
+          const limit = args[0]
+          const count = await redis.incr(keys[0])
+          if (count > limit) {
+            const used = await redis.decr(keys[0])
             return [0, used]
           }
           return [1, count]
         }
-        return redis.decr(key)
+        if (script.includes("redis.call('INCR'")) {
+          return [1, 1]
+        }
+        if (script.includes("redis.call('ZREM'")) {
+          return redis.decr(keys[0])
+        }
+        return 1
       }),
     }
   })
@@ -173,10 +220,31 @@ describe('AssistantController', () => {
         expect.objectContaining({ error: expect.objectContaining({ tag: 'ai-rate-limited', limit: 5 }) }),
       )
     })
+
+    it('fails closed when a configured daily request cap has no durable store', async () => {
+      const response = responseWith({})
+      const controller = new AssistantController({} as AssistantProviderConfig, 'openai', 'gpt-test', 5, [], undefined)
+
+      await controller.streamCompletion(streamRequest(), response)
+
+      expect(statusMock).toHaveBeenCalledWith(503)
+      expect(jsonMock).toHaveBeenCalledWith(
+        expect.objectContaining({ error: expect.objectContaining({ tag: 'ai-request-quota-unavailable' }) }),
+      )
+    })
   })
 
   describe('rolling-window token metering', () => {
     const now = Date.now()
+
+    beforeEach(() => {
+      ;(resolveProvider as jest.Mock).mockReturnValueOnce({
+        id: 'openai',
+        async *send() {
+          yield { kind: 'finish' as const, stopReason: 'end_turn' as const }
+        },
+      })
+    })
 
     it('rejects (429) naming the window + reset when the 5h token cap is already reached', async () => {
       // 5000 tokens already spent inside the week; the 5h limit is 1000.
@@ -223,13 +291,16 @@ describe('AssistantController', () => {
       expect(statusMock).not.toHaveBeenCalledWith(429)
     })
 
-    it('FAILS OPEN when the token meter read errors (request not blocked)', async () => {
+    it('fails closed when an enabled hard token quota cannot be read', async () => {
       redis.zrangebyscore.mockRejectedValue(new Error('redis down'))
       const response = responseWith({})
 
       await makeController(0, { fiveHour: 1000 }).streamCompletion(streamRequest(), response)
 
-      expect(statusMock).not.toHaveBeenCalledWith(429)
+      expect(statusMock).toHaveBeenCalledWith(503)
+      expect(jsonMock).toHaveBeenCalledWith(
+        expect.objectContaining({ error: expect.objectContaining({ tag: 'ai-token-quota-unavailable' }) }),
+      )
     })
   })
 
@@ -412,7 +483,7 @@ describe('AssistantController', () => {
 
   describe('usage endpoint', () => {
     it('reports the daily request meter plus both token windows', async () => {
-      redis.get.mockResolvedValue('3')
+      redis.get.mockImplementation(async (key: string) => (key.includes('{') ? null : '3'))
       redis.zrangebyscore.mockResolvedValue([`${Date.now()}:120:abc`])
       const response = responseWith({})
 
@@ -430,7 +501,7 @@ describe('AssistantController', () => {
     })
 
     it('reports user-specific token windows while retaining the independent daily request limit', async () => {
-      redis.get.mockResolvedValue('3')
+      redis.get.mockImplementation(async (key: string) => (key.includes('{') ? null : '3'))
       redis.zrangebyscore.mockResolvedValue([`${Date.now()}:120:abc`])
       const response = responseWith({
         [SettingName.NAMES.AiRequestLimit]: 7,
@@ -461,6 +532,7 @@ describe('AssistantController', () => {
       model: 'local-model',
       enabled: true,
       apiKey: 'server-only-secret',
+      maxOutputTokens: 512,
     }
 
     let resolver: {
@@ -581,6 +653,29 @@ describe('AssistantController', () => {
         expect.objectContaining({ openaiBaseURL: 'http://127.0.0.1:1234/v1' }),
       )
       expect(response.end).toHaveBeenCalled()
+    })
+
+    it('applies a server-owned narrow output cap to safety reviews', async () => {
+      let providerRequest: { maxOutputTokens?: number } | undefined
+      const assignedProvider = {
+        id: 'openai-compatible',
+        async *send(request: { maxOutputTokens?: number }) {
+          providerRequest = request
+          yield { kind: 'finish' as const, stopReason: 'end_turn' as const }
+        },
+      }
+      ;(resolveProvider as jest.Mock).mockReturnValueOnce(assignedProvider)
+
+      await controller().streamCompletion(
+        {
+          body: { messages: [], purpose: 'safety-review', maxOutputTokens: 1 },
+          headers: {},
+          on: jest.fn(),
+        } as unknown as Request,
+        responseWith({}),
+      )
+
+      expect(providerRequest?.maxOutputTokens).toBe(8)
     })
   })
 

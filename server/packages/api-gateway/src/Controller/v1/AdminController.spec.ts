@@ -64,7 +64,7 @@ describe('AdminController server-status', () => {
   let serviceProxy: ServiceProxyInterface
   let endpointResolver: EndpointResolverInterface
   let updateCheckService: UpdateCheckService
-  let redis: { ping: jest.Mock; zrangebyscore: jest.Mock }
+  let redis: { ping: jest.Mock; hget: jest.Mock; eval: jest.Mock; zrangebyscore: jest.Mock }
   let jsonMock: jest.Mock
   let statusMock: jest.Mock
 
@@ -132,6 +132,8 @@ describe('AdminController server-status', () => {
 
     redis = {
       ping: jest.fn().mockResolvedValue('PONG'),
+      hget: jest.fn().mockResolvedValue('1'),
+      eval: jest.fn().mockResolvedValue([]),
       zrangebyscore: jest.fn().mockResolvedValue([]),
     }
   })
@@ -231,7 +233,7 @@ describe('AdminController server-status', () => {
       const oneHourAgo = now - 60 * 60 * 1000
       const sixHoursAgo = now - 6 * 60 * 60 * 1000
       const dateNow = jest.spyOn(Date, 'now').mockReturnValue(now)
-      redis.zrangebyscore.mockResolvedValue([`${sixHoursAgo}:200:older`, `${oneHourAgo}:100:newer`])
+      redis.eval.mockResolvedValue([`${sixHoursAgo}:200:bucket`, `${oneHourAgo}:100:bucket`])
       const serverSettingsResolver = {
         resolveAssistantTokenLimits: jest.fn().mockResolvedValue({ fiveHour: 500, weekly: 1_000 }),
       } as unknown as ServerSettingsResolver
@@ -246,11 +248,9 @@ describe('AdminController server-status', () => {
         dateNow.mockRestore()
       }
 
-      expect(redis.zrangebyscore).toHaveBeenCalledWith(
-        `ai-token-usage:${targetUuid}`,
-        now - 7 * 24 * 60 * 60 * 1000,
-        '+inf',
-      )
+      expect(redis.hget).toHaveBeenCalledWith(`ai-token-quota:{${targetUuid}}:buckets`, '__legacy_migrated')
+      expect(redis.eval).toHaveBeenCalledWith(expect.any(String), 1, `ai-token-quota:{${targetUuid}}:buckets`)
+      expect(redis.zrangebyscore).not.toHaveBeenCalled()
       expect(jsonMock).toHaveBeenCalledWith({
         userUuid: targetUuid,
         source: 'srn-local-metering',
@@ -283,7 +283,7 @@ describe('AdminController server-status', () => {
     })
 
     it('reports unavailable/null usage instead of pretending an unreadable meter is empty', async () => {
-      redis.zrangebyscore.mockRejectedValue(new Error('redis unavailable'))
+      redis.eval.mockRejectedValue(new Error('redis unavailable'))
       const serverSettingsResolver = {
         resolveAssistantTokenLimits: jest.fn().mockResolvedValue({ fiveHour: 50, weekly: 500 }),
       } as unknown as ServerSettingsResolver
@@ -312,6 +312,8 @@ describe('AdminController server-status', () => {
       await makeController().getUserUsage({ params: { userUuid: targetUuid } } as unknown as Request, response)
 
       expect(statusMock).toHaveBeenCalledWith(403)
+      expect(redis.hget).not.toHaveBeenCalled()
+      expect(redis.eval).not.toHaveBeenCalled()
       expect(redis.zrangebyscore).not.toHaveBeenCalled()
     })
   })
