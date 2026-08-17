@@ -61,6 +61,10 @@ export type CustomThemesPreference = {
 export enum LocalPrefKey {
   ListPaneCollapsed = 'listPaneCollapsed',
   NavigationPaneCollapsed = 'navigationPaneCollapsed',
+  // Standard Red Notes: remembers whether the docked assistant should be
+  // restored after a full application reload. This remains encrypted and
+  // device/workspace-local with the rest of LocalPreferences.
+  AssistantPaneOpen = 'assistantPaneOpen',
   ActiveThemes = 'activeThemes',
   UseSystemColorScheme = 'useSystemColorScheme',
   UseTranslucentUI = 'useTranslucentUI',
@@ -90,6 +94,7 @@ export enum LocalPrefKey {
 export type LocalPrefValue = {
   [LocalPrefKey.ListPaneCollapsed]: boolean
   [LocalPrefKey.NavigationPaneCollapsed]: boolean
+  [LocalPrefKey.AssistantPaneOpen]: boolean
   [LocalPrefKey.ActiveThemes]: string[]
   [LocalPrefKey.UseSystemColorScheme]: boolean
   [LocalPrefKey.UseTranslucentUI]: boolean
@@ -110,6 +115,7 @@ export type LocalPrefValue = {
 export const LocalPrefDefaults = {
   [LocalPrefKey.ListPaneCollapsed]: false,
   [LocalPrefKey.NavigationPaneCollapsed]: false,
+  [LocalPrefKey.AssistantPaneOpen]: false,
   [LocalPrefKey.ActiveThemes]: [],
   [LocalPrefKey.UseSystemColorScheme]: false,
   [LocalPrefKey.UseTranslucentUI]: true,

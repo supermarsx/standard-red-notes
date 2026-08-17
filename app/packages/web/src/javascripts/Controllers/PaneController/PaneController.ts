@@ -76,6 +76,23 @@ export class PaneController extends AbstractViewController implements InternalEv
     LocalPrefDefaults[LocalPrefKey.NavigationPaneCollapsed],
   )
 
+  private isAssistantPanePersistedOpen(): boolean {
+    return (
+      this.preferences.getLocalValue(
+        LocalPrefKey.AssistantPaneOpen,
+        LocalPrefDefaults[LocalPrefKey.AssistantPaneOpen],
+      ) === true
+    )
+  }
+
+  private persistAssistantPaneOpen(open: boolean): void {
+    if (this.isAssistantPanePersistedOpen() === open) {
+      return
+    }
+
+    this.preferences.setLocalValue(LocalPrefKey.AssistantPaneOpen, open)
+  }
+
   constructor(
     private preferences: PreferenceServiceInterface,
     keyboardService: KeyboardService,
@@ -168,6 +185,7 @@ export class PaneController extends AbstractViewController implements InternalEv
 
       if (!this.hasPaneInitializationLogicRun) {
         const screen = this._isTabletOrMobileScreen.execute().getValue()
+        const restoreAssistant = this.isAssistantPanePersistedOpen()
         if (screen.isTabletOrMobile) {
           this.panes = [AppPaneId.Navigation, AppPaneId.Items]
         } else {
@@ -180,6 +198,12 @@ export class PaneController extends AbstractViewController implements InternalEv
           } else {
             this.panes = [AppPaneId.Items, AppPaneId.Editor]
           }
+        }
+
+        if (restoreAssistant) {
+          this.panes = screen.isTabletOrMobile
+            ? [...this.panes.filter((pane) => pane !== AppPaneId.Assistant), AppPaneId.Assistant]
+            : dockAssistantPaneToRight(this.panes, true)
         }
         this.hasPaneInitializationLogicRun = true
       }
@@ -261,6 +285,10 @@ export class PaneController extends AbstractViewController implements InternalEv
   presentPane = (pane: AppPaneId) => {
     log(LoggingDomain.Panes, 'Presenting pane', pane)
 
+    if (pane === AppPaneId.Assistant) {
+      this.persistAssistantPaneOpen(true)
+    }
+
     if (!this.isInMobileView && this.panes.includes(AppPaneId.Assistant)) {
       this.panes = presentPaneBeforeDockedAssistant(this.panes, pane)
       return
@@ -294,7 +322,12 @@ export class PaneController extends AbstractViewController implements InternalEv
   dismissLastPane = (): AppPaneId | undefined => {
     log(LoggingDomain.Panes, 'Dismissing last pane')
 
-    return this.panes.pop()
+    const dismissedPane = this.panes.pop()
+    if (dismissedPane === AppPaneId.Assistant) {
+      this.persistAssistantPaneOpen(false)
+    }
+
+    return dismissedPane
   }
 
   removePane = (pane: AppPaneId) => {
@@ -302,6 +335,7 @@ export class PaneController extends AbstractViewController implements InternalEv
 
     if (pane === AppPaneId.Assistant) {
       this.panes = this.panes.filter((candidate) => candidate !== AppPaneId.Assistant)
+      this.persistAssistantPaneOpen(false)
       return
     }
 
