@@ -407,6 +407,7 @@ export class WebDependencies extends DependencyContainer {
         application.mobileDevice,
         this.get<IsNativeMobileWeb>(Web_TYPES.IsNativeMobileWeb),
         application.recents,
+        (file) => application.isAuthorizedToRenderItem(file),
         application.events,
       )
     })

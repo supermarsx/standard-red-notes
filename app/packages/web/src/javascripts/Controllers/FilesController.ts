@@ -46,6 +46,7 @@ import { RecentActionsState } from '../Application/Recents'
 import { stripImageMetadata } from '@/Utils/StripImageMetadata'
 import { getStripImageMetadataEnabled } from '@/Utils/StripImageMetadataSetting'
 import { achievements, METRICS } from '@/Achievements'
+import { formatFileDownloadError } from '@/Utils/FileErrorMessage'
 
 const UnprotectedFileActions = [FileItemActionType.ToggleFileProtection]
 const NonMutatingFileActions = [FileItemActionType.DownloadFile, FileItemActionType.PreviewFile]
@@ -111,6 +112,7 @@ export class FilesController extends AbstractViewController<FilesControllerEvent
     private mobileDevice: MobileDeviceInterface | undefined,
     private _isNativeMobileWeb: IsNativeMobileWeb,
     private recents: RecentActionsState,
+    private isAuthorizedToRenderItem: (file: FileItem) => boolean,
     eventBus: InternalEventBusInterface,
   ) {
     super(eventBus)
@@ -275,7 +277,10 @@ export class FilesController extends AbstractViewController<FilesControllerEvent
   ): Promise<{
     didHandleAction: boolean
   }> => {
-    const file = action.payload.file
+    let file = this.items.findItem<FileItem>(action.payload.file.uuid)
+    if (!file || !isFile(file)) {
+      return { didHandleAction: false }
+    }
     let isAuthorizedForAction = true
 
     const requiresAuthorization = file.protected && !UnprotectedFileActions.includes(action.type)
@@ -288,6 +293,17 @@ export class FilesController extends AbstractViewController<FilesControllerEvent
       return {
         didHandleAction: false,
       }
+    }
+
+    // The prompt can overlap sync, deletion, protection, or a same-UUID remote
+    // replacement. Never continue with the stale snapshot supplied by the menu.
+    file = this.items.findItem<FileItem>(file.uuid)
+    if (!file || !isFile(file)) {
+      return { didHandleAction: false }
+    }
+
+    if (NonMutatingFileActions.includes(action.type) && !this.isAuthorizedToRenderItem(file)) {
+      return { didHandleAction: false }
     }
 
     switch (action.type) {
@@ -345,8 +361,28 @@ export class FilesController extends AbstractViewController<FilesControllerEvent
   }
 
   getFileBlob = async (file: FileItem): Promise<Blob | undefined> => {
+    let authoritativeFile = this.items.findItem<FileItem>(file.uuid)
+    if (!authoritativeFile || !isFile(authoritativeFile)) {
+      return undefined
+    }
+
+    if (authoritativeFile.protected) {
+      const authorized = await this.authorizeProtectedActionForFile(
+        authoritativeFile,
+        ChallengeReason.AccessProtectedFile,
+      )
+      if (!authorized) {
+        return undefined
+      }
+    }
+
+    authoritativeFile = this.items.findItem<FileItem>(file.uuid)
+    if (!authoritativeFile || !isFile(authoritativeFile) || !this.isAuthorizedToRenderItem(authoritativeFile)) {
+      return undefined
+    }
+
     const chunks: Uint8Array[] = []
-    const error = await this.files.downloadFile(file, async (decryptedChunk) => {
+    const error = await this.files.downloadFile(authoritativeFile, async (decryptedChunk) => {
       chunks.push(decryptedChunk)
     })
     if (error) {
@@ -354,7 +390,7 @@ export class FilesController extends AbstractViewController<FilesControllerEvent
     }
     const finalDecryptedBytes = concatenateUint8Arrays(chunks)
     return new Blob([finalDecryptedBytes], {
-      type: file.mimeType,
+      type: authoritativeFile.mimeType,
     })
   }
 
@@ -466,16 +502,14 @@ export class FilesController extends AbstractViewController<FilesControllerEvent
         })
       }
     } catch (error) {
-      if (error instanceof DOMException && error.name === 'AbortError') {
-        return
+      if (!(error instanceof DOMException && error.name === 'AbortError')) {
+        console.error(error)
+
+        addToast({
+          type: ToastType.Error,
+          message: formatFileDownloadError(error),
+        })
       }
-
-      console.error(error)
-
-      addToast({
-        type: ToastType.Error,
-        message: 'There was an error while downloading the file',
-      })
     }
 
     if (downloadingToastId) {
