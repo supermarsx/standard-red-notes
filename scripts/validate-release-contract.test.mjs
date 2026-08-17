@@ -2620,6 +2620,248 @@ test("a best-effort desktop build leg is rejected", () => {
   );
 });
 
+test("superseded empty desktop draft cleanup remains fail-closed", () => {
+  const ownershipAwareSnapshot = `snapshot_filter='{id,tag_name,name,target_commitish,draft,prerelease,published_at_present:has("published_at"),published_at,immutable,author:{login:.author.login,type:.author.type,id:.author.id},body:(.body // ""),asset_ids:([.assets[]?.id] | sort)}'`;
+  const snapshotSchemaError =
+    /missing pinned stale desktop snapshot schema|must define exactly one pinned ownership-aware snapshot schema/;
+  for (const [before, after, expected] of [
+    [
+      'if [ "${#stale_reservations[@]}" -gt 1 ]; then',
+      'if [ "${#stale_reservations[@]}" -gt 99 ]; then',
+      /missing ambiguous stale desktop draft rejection/,
+    ],
+    [
+      'elif [ "${#stale_reservations[@]}" -eq 1 ]; then',
+      'elif [ "${#stale_reservations[@]}" -eq 0 ]; then',
+      /missing single stale desktop draft reconciliation/,
+    ],
+    [
+      'stale_marker="<!-- srn-release-reservation tool=srn-desktop commit=${stale_sha} intent=automatic -->"',
+      'stale_marker="<!-- srn-release-reservation tool=srn-desktop commit=${stale_sha} intent=forced-${GITHUB_RUN_ID} -->"',
+      /missing recognized automatic stale desktop marker/,
+    ],
+    [
+      '$release.tag_name | test("^srn-desktop-v[0-9]{2}\\\\.[1-9][0-9]*$")',
+      '$release.tag_name | test("^srn-desktop-v")',
+      /missing stale desktop tag format validation/,
+    ],
+    [
+      '$release.name == ("srn-desktop " + ($release.tag_name | sub("^srn-desktop-v"; "")))',
+      '$release.name | startswith("srn-desktop")',
+      /missing stale desktop title binding/,
+    ],
+    [
+      '$release.target_commitish | test("^[0-9a-f]{40}$")',
+      "$release.target_commitish | length > 0",
+      /missing stale desktop source commit validation/,
+    ],
+    [
+      "$release.draft == true",
+      "$release.draft == false",
+      /missing stale desktop draft-state guard/,
+    ],
+    [
+      "$release.prerelease == false",
+      "$release.prerelease == true",
+      /missing stale desktop prerelease guard/,
+    ],
+    [
+      '$release.author.login == "github-actions[bot]"',
+      '$release.author.login == "release-operator"',
+      /missing canonical stale desktop author login guard/,
+    ],
+    [
+      '$release.author.type == "Bot"',
+      '$release.author.type == "User"',
+      /missing canonical stale desktop author type guard/,
+    ],
+    [
+      "$release.author.id == 41898282",
+      "$release.author.id > 0",
+      /missing canonical stale desktop author identity guard/,
+    ],
+    [
+      '$release | has("published_at")',
+      '$release | has("created_at")',
+      /missing stale desktop publication-field presence guard/,
+    ],
+    [
+      "$release.published_at == null",
+      "$release.published_at != null",
+      /missing unpublished stale desktop guard/,
+    ],
+    [
+      "$release.immutable == false",
+      "$release.immutable != true",
+      /missing mutable stale desktop guard/,
+    ],
+    [
+      "($release.assets | length) == 0",
+      "($release.assets | length) >= 0",
+      /missing empty stale desktop draft guard/,
+    ],
+    [
+      '($release.body // "") | startswith($expected_marker)',
+      '($release.body // "") | contains($expected_marker)',
+      /missing exact stale desktop marker guard/,
+    ],
+    [
+      'scan("<!-- srn-release-reservation tool=srn-desktop ")',
+      'scan("<!-- any-release-reservation ")',
+      /missing single stale desktop marker guard/,
+    ],
+    [
+      `jq --arg tag "$stale_tag" '[.[] | select(.tag_name == $tag)] | length'`,
+      `jq --arg tag "$stale_tag" '[.[] | select(.tag_name != $tag)] | length'`,
+      /stale desktop tag uniqueness must be proven/,
+    ],
+    [
+      ownershipAwareSnapshot,
+      ownershipAwareSnapshot.replace(
+        'published_at_present:has("published_at"),',
+        "",
+      ),
+      snapshotSchemaError,
+    ],
+    [
+      ownershipAwareSnapshot,
+      ownershipAwareSnapshot.replace(
+        "login:.author.login",
+        "login:.author.name",
+      ),
+      snapshotSchemaError,
+    ],
+    [
+      ownershipAwareSnapshot,
+      ownershipAwareSnapshot.replace("type:.author.type", "type:.author.login"),
+      snapshotSchemaError,
+    ],
+    [
+      ownershipAwareSnapshot,
+      ownershipAwareSnapshot.replace("id:.author.id", "id:.author.node_id"),
+      snapshotSchemaError,
+    ],
+    [
+      ownershipAwareSnapshot,
+      ownershipAwareSnapshot.replace(",published_at,immutable", ",immutable"),
+      snapshotSchemaError,
+    ],
+    [
+      ownershipAwareSnapshot,
+      ownershipAwareSnapshot.replace(",immutable,author", ",author"),
+      snapshotSchemaError,
+    ],
+    [
+      'live="$(gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}")"',
+      'live="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${stale_tag}")"',
+      /missing immutable-ID stale desktop refetch|must perform exactly two immutable-ID release reads/,
+    ],
+    [
+      'test "$live_snapshot" = "$expected_snapshot"',
+      'test "$live_snapshot" != "$expected_snapshot"',
+      /missing immutable-ID stale desktop mutation guard/,
+    ],
+    [
+      'test "$refreshed_snapshot" = "$expected_snapshot"',
+      'test "$refreshed_snapshot" != "$expected_snapshot"',
+      /missing complete stale desktop inventory mutation guard/,
+    ],
+    [
+      'git show-ref --verify --quiet "refs/tags/${stale_tag}"',
+      'git show-ref --verify --quiet "refs/tags/${stale_tag}-ignored"',
+      /missing stale desktop Git tag guard/,
+    ],
+    [
+      'final_live="$(gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}")"',
+      'final_live="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${stale_tag}")"',
+      /missing final immutable-ID stale desktop refetch|must perform exactly two immutable-ID release reads/,
+    ],
+    [
+      'final_snapshot="$(jq -c "$snapshot_filter" <<< "$final_live")"',
+      'final_snapshot="$(jq -c "." <<< "$final_live")"',
+      /missing final stale desktop snapshot projection|stale desktop final deletion sequence must remain/,
+    ],
+    [
+      'test "$final_snapshot" = "$expected_snapshot"',
+      'test "$final_snapshot" != "$expected_snapshot"',
+      /missing final pre-delete stale desktop mutation guard/,
+    ],
+    [
+      'gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/${release_id}"',
+      'gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/tags/${stale_tag}"',
+      /missing exact superseded desktop draft deletion|must perform exactly one immutable-ID release deletion/,
+    ],
+    [
+      "mapfile -t stale_after_reconciliation",
+      "mapfile -t ignored_stale_after_reconciliation",
+      /missing post-cleanup stale desktop reservation assertion/,
+    ],
+    [
+      'test "${#stale_after_reconciliation[@]}" -eq 0',
+      'test "${#stale_after_reconciliation[@]}" -ge 0',
+      /missing post-cleanup stale desktop reservation emptiness guard/,
+    ],
+    [
+      `test "$(jq --argjson id "$release_id" '[.[] | select(.id == $id)] | length' "$releases_file")" -eq 0`,
+      `test "$(jq --argjson id "$release_id" '[.[] | select(.id == $id)] | length' "$releases_file")" -ge 0`,
+      /missing superseded desktop draft deletion verification/,
+    ],
+  ]) {
+    const files = withFileChanged(desktopWorkflowFile, (content) =>
+      before ===
+      `jq --arg tag "$stale_tag" '[.[] | select(.tag_name == $tag)] | length'`
+        ? content.replaceAll(before, after)
+        : content.replace(before, after),
+    );
+    assert.match(validateReleaseContract(files).join("\n"), expected);
+  }
+
+  const deleteInvocation =
+    '            gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/${release_id}"\n';
+  const movedBeforeGuards = withFileChanged(desktopWorkflowFile, (content) =>
+    content
+      .replace(deleteInvocation, "")
+      .replace(
+        '            if ! jq -e --arg expected_marker "$stale_marker" \'',
+        `${deleteInvocation}            if ! jq -e --arg expected_marker "$stale_marker" '`,
+      ),
+  );
+  assert.match(
+    validateReleaseContract(movedBeforeGuards).join("\n"),
+    /stale desktop deletion must follow every ambiguity, identity, emptiness, refetch, mutation, and tag guard/,
+  );
+
+  const finalGetInvocation =
+    '            final_live="$(gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}")"\n';
+  const movedFinalGetBeforeTagCheck = withFileChanged(
+    desktopWorkflowFile,
+    (content) =>
+      content
+        .replace(finalGetInvocation, "")
+        .replace(
+          "            git fetch --force --tags origin\n",
+          `${finalGetInvocation}            git fetch --force --tags origin\n`,
+        ),
+  );
+  assert.match(
+    validateReleaseContract(movedFinalGetBeforeTagCheck).join("\n"),
+    /stale desktop final deletion sequence must remain tag check -> immutable-ID GET -> snapshot -> equality -> DELETE/,
+  );
+
+  const currentReservationDeleted = withFileChanged(
+    desktopWorkflowFile,
+    (content) =>
+      content.replaceAll(
+        'select(((.target_commitish == $sha) and (.tag_name | startswith($tool_prefix)) and ((.body // "") | contains($marker))) | not)',
+        'select((.body // "") | contains($marker_prefix))',
+      ),
+  );
+  assert.match(
+    validateReleaseContract(currentReservationDeleted).join("\n"),
+    /stale desktop reconciliation must preserve the exact current SHA and intent before and after cleanup/,
+  );
+});
+
 test("dropping the build matrix from the desktop release fan-in is rejected", () => {
   const files = withFileChanged(desktopWorkflowFile, (content) =>
     content.replace(

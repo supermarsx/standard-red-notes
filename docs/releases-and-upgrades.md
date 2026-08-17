@@ -373,6 +373,22 @@ revision for the version, recovery stops: the available Snapcraft metadata does
 not prove remote byte equality, so version/channel identity alone is not
 accepted as idempotency evidence.
 
+The root publisher deliberately retains an empty automatic draft when a build
+fails after identity allocation, so rerunning failed jobs for the same source
+continues to use the original release ID. Before a different source or release
+intent allocates its identity, the publisher may delete at most one superseded
+reservation. It first proves from the complete release inventory and a second
+immutable-ID read that the tag, title, source commit, and single automatic
+marker agree; the release must still be authored by the canonical GitHub
+Actions bot and be a tagless, unpublished, mutable, non-prerelease draft with no
+assets. It refreshes the inventory, checks the Git tag, and refetches the exact
+release ID immediately before deletion. A forced, populated, published,
+immutable, duplicate, malformed, tagged, or concurrently changed reservation
+detected by those checks is refused and requires manual reconciliation. GitHub
+does not provide a conditional release DELETE, so those checks minimize but
+cannot absolutely exclude a mutation in the final GET-to-DELETE interval;
+release-write authority must remain tightly restricted.
+
 Both routes authorize the exact protected `origin/main` head before building;
 release identity and remote mutation jobs use the protected
 `release-production` environment, and all handoff artifacts are retained for 30

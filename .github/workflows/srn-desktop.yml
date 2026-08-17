@@ -185,9 +185,126 @@ jobs:
           yy="$(date -u +%y)"
           prefix="${TOOL}-v${yy}."
           marker="<!-- srn-release-reservation tool=${TOOL} commit=${GITHUB_SHA} intent=${intent} -->"
+          marker_prefix="<!-- srn-release-reservation tool=${TOOL} "
           releases_file="$(mktemp)"
-          gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --paginate --slurp |
-            jq 'flatten' > "$releases_file"
+          load_releases() {
+            gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --paginate --slurp |
+              jq 'flatten' > "$releases_file"
+          }
+          load_releases
+
+          mapfile -t stale_reservations < <(
+            jq -c --arg marker "$marker" --arg marker_prefix "$marker_prefix" --arg sha "$GITHUB_SHA" --arg tool_prefix "${TOOL}-v" '
+              .[]
+              | select(.draft == true)
+              | select((.body // "") | contains($marker_prefix))
+              | select(((.target_commitish == $sha) and (.tag_name | startswith($tool_prefix)) and ((.body // "") | contains($marker))) | not)
+            ' "$releases_file"
+          )
+          if [ "${#stale_reservations[@]}" -gt 1 ]; then
+            echo "Refusing to reconcile multiple stale ${TOOL} draft reservations:" >&2
+            for stale in "${stale_reservations[@]}"; do
+              jq -r '"  \(.id)\t\(.tag_name)\t\(.target_commitish)"' <<< "$stale" >&2
+            done
+            exit 1
+          elif [ "${#stale_reservations[@]}" -eq 1 ]; then
+            stale="${stale_reservations[0]}"
+            release_id="$(jq -r '.id' <<< "$stale")"
+            stale_tag="$(jq -r '.tag_name' <<< "$stale")"
+            stale_sha="$(jq -r '.target_commitish' <<< "$stale")"
+            stale_marker="<!-- srn-release-reservation tool=srn-desktop commit=${stale_sha} intent=automatic -->"
+
+            # A previous failed automatic run may leave its early reservation
+            # behind. Preserve it for exact same-SHA retries, but allow a later
+            # source/intent to supersede it only when the complete inventory
+            # proves there is one recognized, bot-authored, unpublished,
+            # mutable, asset-free draft.
+            if ! jq -e --arg expected_marker "$stale_marker" '
+              . as $release
+              | (($release.id | type) == "number")
+                and (($release.tag_name | type) == "string")
+                and ($release.tag_name | test("^srn-desktop-v[0-9]{2}\\.[1-9][0-9]*$"))
+                and ($release.name == ("srn-desktop " + ($release.tag_name | sub("^srn-desktop-v"; ""))))
+                and (($release.target_commitish | type) == "string")
+                and ($release.target_commitish | test("^[0-9a-f]{40}$"))
+                and ($release.draft == true)
+                and ($release.prerelease == false)
+                and (($release.author | type) == "object")
+                and ($release.author.login == "github-actions[bot]")
+                and ($release.author.type == "Bot")
+                and ($release.author.id == 41898282)
+                and ($release | has("published_at"))
+                and ($release.published_at == null)
+                and ($release.immutable == false)
+                and (($release.assets | type) == "array")
+                and (($release.assets | length) == 0)
+                and (($release.body // "") | startswith($expected_marker))
+                and (([($release.body // "") | scan("<!-- srn-release-reservation tool=srn-desktop ")] | length) == 1)
+            ' <<< "$stale" >/dev/null; then
+              echo "Refusing to delete an unrecognized or non-empty stale ${TOOL} reservation: ${release_id}" >&2
+              exit 1
+            fi
+            test "$(jq --arg tag "$stale_tag" '[.[] | select(.tag_name == $tag)] | length' "$releases_file")" -eq 1 || {
+              echo "Refusing to delete an ambiguous ${TOOL} reservation tag: ${stale_tag}" >&2
+              exit 1
+            }
+
+            snapshot_filter='{id,tag_name,name,target_commitish,draft,prerelease,published_at_present:has("published_at"),published_at,immutable,author:{login:.author.login,type:.author.type,id:.author.id},body:(.body // ""),asset_ids:([.assets[]?.id] | sort)}'
+            expected_snapshot="$(jq -c "$snapshot_filter" <<< "$stale")"
+            live="$(gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}")"
+            live_snapshot="$(jq -c "$snapshot_filter" <<< "$live")"
+            test "$live_snapshot" = "$expected_snapshot" || {
+              echo "Refusing to delete ${stale_tag}: immutable-ID refetch changed" >&2
+              exit 1
+            }
+
+            # Refresh the complete inventory after the immutable-ID read. This
+            # makes a concurrent duplicate or mutation fail before any delete.
+            load_releases
+            test "$(jq --arg tag "$stale_tag" '[.[] | select(.tag_name == $tag)] | length' "$releases_file")" -eq 1 || {
+              echo "Refusing to delete ${stale_tag}: release inventory changed" >&2
+              exit 1
+            }
+            refreshed="$(jq -c --argjson id "$release_id" '.[] | select(.id == $id)' "$releases_file")"
+            test -n "$refreshed"
+            refreshed_snapshot="$(jq -c "$snapshot_filter" <<< "$refreshed")"
+            test "$refreshed_snapshot" = "$expected_snapshot" || {
+              echo "Refusing to delete ${stale_tag}: release mutated during prevalidation" >&2
+              exit 1
+            }
+
+            git fetch --force --tags origin
+            if git show-ref --verify --quiet "refs/tags/${stale_tag}"; then
+              echo "Refusing to delete a stale draft whose tag exists: ${stale_tag}" >&2
+              exit 1
+            fi
+
+            # Close the mutation window between the refreshed inventory/tag
+            # checks and deletion by proving the same immutable release ID one
+            # final time immediately before the destructive request.
+            final_live="$(gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}")"
+            final_snapshot="$(jq -c "$snapshot_filter" <<< "$final_live")"
+            test "$final_snapshot" = "$expected_snapshot" || {
+              echo "Refusing to delete ${stale_tag}: release mutated after tag verification" >&2
+              exit 1
+            }
+            gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/${release_id}"
+
+            load_releases
+            test "$(jq --argjson id "$release_id" '[.[] | select(.id == $id)] | length' "$releases_file")" -eq 0
+            echo "Removed superseded empty automatic draft ${stale_tag}; the exact current source may now reserve that version." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          mapfile -t stale_after_reconciliation < <(
+            jq -r --arg marker "$marker" --arg marker_prefix "$marker_prefix" --arg sha "$GITHUB_SHA" --arg tool_prefix "${TOOL}-v" '
+              .[]
+              | select(.draft == true)
+              | select((.body // "") | contains($marker_prefix))
+              | select(((.target_commitish == $sha) and (.tag_name | startswith($tool_prefix)) and ((.body // "") | contains($marker))) | not)
+              | .id
+            ' "$releases_file"
+          )
+          test "${#stale_after_reconciliation[@]}" -eq 0
 
           mapfile -t reservations < <(
             jq -r --arg marker "$marker" --arg sha "$GITHUB_SHA" --arg tool_prefix "${TOOL}-v" '
@@ -198,21 +315,6 @@ jobs:
               | .id
             ' "$releases_file"
           )
-          marker_prefix="<!-- srn-release-reservation tool=${TOOL} "
-          mapfile -t stale_reservations < <(
-            jq -r --arg marker "$marker" --arg marker_prefix "$marker_prefix" --arg sha "$GITHUB_SHA" --arg tool_prefix "${TOOL}-v" '
-              .[]
-              | select(.draft == true)
-              | select((.body // "") | contains($marker_prefix))
-              | select(((.target_commitish == $sha) and (.tag_name | startswith($tool_prefix)) and ((.body // "") | contains($marker))) | not)
-              | "\(.id)\t\(.tag_name)\t\(.target_commitish)"
-            ' "$releases_file"
-          )
-          if [ "${#stale_reservations[@]}" -gt 0 ]; then
-            echo "Refusing to allocate past stale ${TOOL} draft reservations:" >&2
-            printf '  %s\n' "${stale_reservations[@]}" >&2
-            exit 1
-          fi
           if [ "${#reservations[@]}" -gt 1 ]; then
             echo "Multiple desktop reservations match ${GITHUB_SHA} and ${intent}" >&2
             exit 1

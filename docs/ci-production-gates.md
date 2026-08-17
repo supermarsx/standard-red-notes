@@ -177,7 +177,18 @@ name/SHA-256/size-manifest marker before any remote asset deletion or upload.
 The root desktop publisher applies the same exact-main authorization, protected
 environment, and 30-day handoff policy. Desktop fan-in verifies each updater
 entry's exact basename, size, and Base64 SHA-512 plus real package format and
-architecture across NSIS, AppImage, ZIP/DMG, and DEB artifacts. The embedded
+architecture across NSIS, AppImage, ZIP/DMG, and DEB artifacts. If packaging
+fails after reserving an automatic draft, that exact draft remains available to
+a same-source failed-job retry. A later source or intent may supersede at most
+one such reservation only after complete-inventory and immutable-ID reads agree
+that it is the uniquely named, bot-authored, tagless, unpublished, mutable,
+asset-free automatic desktop draft. Any forced, populated, published, immutable,
+duplicate, malformed, tagged, or concurrently mutated reservation detected by
+those checks remains untouched and blocks allocation for manual reconciliation.
+GitHub exposes no conditional release DELETE, so the final tag and immutable-ID
+checks narrow but cannot eliminate a mutation in the last check-to-delete
+interval; release-write authority must remain tightly restricted.
+The embedded
 Snap-capable recovery path must pass an exact-main protected gate before calling
 its reusable workflow. OpenClaw rolling sources likewise require exact main;
 explicit tags must resolve to the checked-out commit on protected-main ancestry,

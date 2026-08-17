@@ -3727,6 +3727,111 @@ export function validateReleaseContract(files) {
       "complete desktop release inventory",
     ],
     ["mapfile -t stale_reservations", "stale desktop draft enumeration"],
+    [
+      'if [ "${#stale_reservations[@]}" -gt 1 ]; then',
+      "ambiguous stale desktop draft rejection",
+    ],
+    [
+      'elif [ "${#stale_reservations[@]}" -eq 1 ]; then',
+      "single stale desktop draft reconciliation",
+    ],
+    [
+      'stale_marker="<!-- srn-release-reservation tool=srn-desktop commit=${stale_sha} intent=automatic -->"',
+      "recognized automatic stale desktop marker",
+    ],
+    [
+      '$release.tag_name | test("^srn-desktop-v[0-9]{2}\\\\.[1-9][0-9]*$")',
+      "stale desktop tag format validation",
+    ],
+    [
+      '$release.name == ("srn-desktop " + ($release.tag_name | sub("^srn-desktop-v"; "")))',
+      "stale desktop title binding",
+    ],
+    [
+      '$release.target_commitish | test("^[0-9a-f]{40}$")',
+      "stale desktop source commit validation",
+    ],
+    ["$release.draft == true", "stale desktop draft-state guard"],
+    ["$release.prerelease == false", "stale desktop prerelease guard"],
+    [
+      '$release.author.login == "github-actions[bot]"',
+      "canonical stale desktop author login guard",
+    ],
+    [
+      '$release.author.type == "Bot"',
+      "canonical stale desktop author type guard",
+    ],
+    [
+      "$release.author.id == 41898282",
+      "canonical stale desktop author identity guard",
+    ],
+    [
+      '$release | has("published_at")',
+      "stale desktop publication-field presence guard",
+    ],
+    ["$release.published_at == null", "unpublished stale desktop guard"],
+    ["$release.immutable == false", "mutable stale desktop guard"],
+    ["($release.assets | length) == 0", "empty stale desktop draft guard"],
+    [
+      '($release.body // "") | startswith($expected_marker)',
+      "exact stale desktop marker guard",
+    ],
+    [
+      'scan("<!-- srn-release-reservation tool=srn-desktop ")',
+      "single stale desktop marker guard",
+    ],
+    [
+      "[.[] | select(.tag_name == $tag)] | length",
+      "unique stale desktop release tag guard",
+    ],
+    [
+      `snapshot_filter='{id,tag_name,name,target_commitish,draft,prerelease,published_at_present:has("published_at"),published_at,immutable,author:{login:.author.login,type:.author.type,id:.author.id},body:(.body // ""),asset_ids:([.assets[]?.id] | sort)}'`,
+      "pinned stale desktop snapshot schema",
+    ],
+    [
+      'live="$(gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}")"',
+      "immutable-ID stale desktop refetch",
+    ],
+    [
+      'test "$live_snapshot" = "$expected_snapshot"',
+      "immutable-ID stale desktop mutation guard",
+    ],
+    [
+      'test "$refreshed_snapshot" = "$expected_snapshot"',
+      "complete stale desktop inventory mutation guard",
+    ],
+    [
+      'git show-ref --verify --quiet "refs/tags/${stale_tag}"',
+      "stale desktop Git tag guard",
+    ],
+    [
+      'final_live="$(gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}")"',
+      "final immutable-ID stale desktop refetch",
+    ],
+    [
+      'final_snapshot="$(jq -c "$snapshot_filter" <<< "$final_live")"',
+      "final stale desktop snapshot projection",
+    ],
+    [
+      'test "$final_snapshot" = "$expected_snapshot"',
+      "final pre-delete stale desktop mutation guard",
+    ],
+    [
+      'gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/${release_id}"',
+      "exact superseded desktop draft deletion",
+    ],
+    [
+      "mapfile -t stale_after_reconciliation",
+      "post-cleanup stale desktop reservation assertion",
+    ],
+    [
+      'test "${#stale_after_reconciliation[@]}" -eq 0',
+      "post-cleanup stale desktop reservation emptiness guard",
+    ],
+    [
+      `test "$(jq --argjson id "$release_id" '[.[] | select(.id == $id)] | length' "$releases_file")" -eq 0`,
+      "superseded desktop draft deletion verification",
+    ],
     ['git tag --list "${prefix}*"', "complete desktop tag inventory"],
     [
       ".[] | select(.tag_name | startswith($prefix))",
@@ -3762,6 +3867,100 @@ export function validateReleaseContract(files) {
   if (rootDesktopIdentity.includes('tag="v${version}"')) {
     errors.push(
       `${rootDesktopFile}: desktop must not publish an unnamespaced v* tag`,
+    );
+  }
+  const desktopStaleCleanupGuards = [
+    'if [ "${#stale_reservations[@]}" -gt 1 ]; then',
+    "$release.draft == true",
+    '$release.author.login == "github-actions[bot]"',
+    '$release.author.type == "Bot"',
+    "$release.author.id == 41898282",
+    '$release | has("published_at")',
+    "$release.published_at == null",
+    "$release.immutable == false",
+    "($release.assets | length) == 0",
+    'test "$live_snapshot" = "$expected_snapshot"',
+    'test "$refreshed_snapshot" = "$expected_snapshot"',
+    'git show-ref --verify --quiet "refs/tags/${stale_tag}"',
+    'final_live="$(gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}")"',
+    'test "$final_snapshot" = "$expected_snapshot"',
+  ];
+  const desktopStaleDelete =
+    'gh api --method DELETE "repos/${GITHUB_REPOSITORY}/releases/${release_id}"';
+  const desktopStaleDeleteIndex =
+    rootDesktopIdentity.indexOf(desktopStaleDelete);
+  if (
+    desktopStaleDeleteIndex < 0 ||
+    desktopStaleCleanupGuards.some(
+      (guard) => rootDesktopIdentity.indexOf(guard) > desktopStaleDeleteIndex,
+    )
+  ) {
+    errors.push(
+      `${rootDesktopFile}: stale desktop deletion must follow every ambiguity, identity, emptiness, refetch, mutation, and tag guard`,
+    );
+  }
+  if (countOccurrences(rootDesktopIdentity, desktopStaleDelete) !== 1) {
+    errors.push(
+      `${rootDesktopFile}: stale desktop cleanup must perform exactly one immutable-ID release deletion`,
+    );
+  }
+  const desktopStaleSnapshotFilter = `snapshot_filter='{id,tag_name,name,target_commitish,draft,prerelease,published_at_present:has("published_at"),published_at,immutable,author:{login:.author.login,type:.author.type,id:.author.id},body:(.body // ""),asset_ids:([.assets[]?.id] | sort)}'`;
+  if (
+    countOccurrences(rootDesktopIdentity, desktopStaleSnapshotFilter) !== 1 ||
+    countOccurrences(rootDesktopIdentity, "snapshot_filter=") !== 1
+  ) {
+    errors.push(
+      `${rootDesktopFile}: stale desktop cleanup must define exactly one pinned ownership-aware snapshot schema`,
+    );
+  }
+  const desktopStaleFinalSequence = [
+    'git show-ref --verify --quiet "refs/tags/${stale_tag}"',
+    'final_live="$(gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}")"',
+    'final_snapshot="$(jq -c "$snapshot_filter" <<< "$final_live")"',
+    'test "$final_snapshot" = "$expected_snapshot"',
+    desktopStaleDelete,
+  ].map((fragment) => rootDesktopIdentity.indexOf(fragment));
+  if (
+    desktopStaleFinalSequence.some((index) => index < 0) ||
+    desktopStaleFinalSequence.some(
+      (index, position) =>
+        position > 0 && index <= desktopStaleFinalSequence[position - 1],
+    )
+  ) {
+    errors.push(
+      `${rootDesktopFile}: stale desktop final deletion sequence must remain tag check -> immutable-ID GET -> snapshot -> equality -> DELETE`,
+    );
+  }
+  const desktopStaleImmutableIdRead =
+    'gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}"';
+  if (
+    countOccurrences(rootDesktopIdentity, desktopStaleImmutableIdRead) !== 2
+  ) {
+    errors.push(
+      `${rootDesktopFile}: stale desktop cleanup must perform exactly two immutable-ID release reads before deletion`,
+    );
+  }
+  if (countOccurrences(rootDesktopIdentity, "load_releases") !== 4) {
+    errors.push(
+      `${rootDesktopFile}: stale desktop cleanup must use complete release inventories before classification, after immutable-ID refetch, and after deletion`,
+    );
+  }
+  const desktopStaleTagUniqueness = `jq --arg tag "$stale_tag" '[.[] | select(.tag_name == $tag)] | length'`;
+  if (countOccurrences(rootDesktopIdentity, desktopStaleTagUniqueness) !== 2) {
+    errors.push(
+      `${rootDesktopFile}: stale desktop tag uniqueness must be proven before and after immutable-ID refetch`,
+    );
+  }
+  const desktopCurrentReservationExclusion =
+    'select(((.target_commitish == $sha) and (.tag_name | startswith($tool_prefix)) and ((.body // "") | contains($marker))) | not)';
+  if (
+    countOccurrences(
+      rootDesktopIdentity,
+      desktopCurrentReservationExclusion,
+    ) !== 2
+  ) {
+    errors.push(
+      `${rootDesktopFile}: stale desktop reconciliation must preserve the exact current SHA and intent before and after cleanup`,
     );
   }
 
