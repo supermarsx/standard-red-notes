@@ -8,7 +8,7 @@ import ComponentErrorBoundary from '@/Components/ComponentErrorBoundary/Componen
 import Button from '../Button/Button'
 import ImagePreview from './ImagePreview'
 import { OptionalSuperEmbeddedImageProps } from './OptionalSuperEmbeddedImageProps'
-import { PreviewableTextFileTypes, RequiresNativeFilePreview } from './isFilePreviewable'
+import { resolvePreviewKind } from './isFilePreviewable'
 import TextPreview from './TextPreview'
 import { parseFileName, sanitizeFileName } from '@standardnotes/utils'
 import VideoPreview from './VideoPreview'
@@ -50,14 +50,11 @@ const PreviewComponent: FunctionComponent<Props> = ({
   const currentInputRef = useRef({ file, bytes })
   currentInputRef.current = { file, bytes }
   const isNativeMobileWeb = application.isNativeMobileWeb()
-  const requiresNativePreview = RequiresNativeFilePreview.includes(file.mimeType)
+  const previewKind = resolvePreviewKind(file)
+  const requiresNativePreview = previewKind === 'pdf'
   const usesNativePreview = isNativeMobileWeb && requiresNativePreview
-  const isImage = file.mimeType.startsWith('image/')
-  const isVideo = file.mimeType.startsWith('video/')
-  const isAudio = file.mimeType.startsWith('audio/')
-  const isText = PreviewableTextFileTypes.includes(file.mimeType)
-  const isPDF = file.mimeType === 'application/pdf'
-  const requiresObjectUrl = !usesNativePreview && (isImage || isVideo || isAudio || (!isText && !isPDF))
+  const requiresObjectUrl =
+    !usesNativePreview && (previewKind === 'image' || previewKind === 'video' || previewKind === 'audio')
   const objectUrlInput = useMemo(
     () => ({ byteLength: bytes.byteLength, mimeType: file.mimeType }),
     [bytes, file.mimeType],
@@ -141,7 +138,7 @@ const PreviewComponent: FunctionComponent<Props> = ({
     )
   }
 
-  if (isImage) {
+  if (previewKind === 'image') {
     return (
       <ImagePreview
         objectUrl={objectUrl!}
@@ -161,7 +158,7 @@ const PreviewComponent: FunctionComponent<Props> = ({
     )
   }
 
-  if (isVideo) {
+  if (previewKind === 'video') {
     return (
       <VideoPreview
         file={file}
@@ -172,15 +169,15 @@ const PreviewComponent: FunctionComponent<Props> = ({
     )
   }
 
-  if (isAudio) {
+  if (previewKind === 'audio') {
     return <AudioPreview file={file} filesController={application.filesController} objectUrl={objectUrl!} />
   }
 
-  if (isText) {
-    return <TextPreview bytes={bytes} />
+  if (previewKind === 'text') {
+    return <TextPreview bytes={bytes} fileName={file.name} mimeType={file.mimeType} />
   }
 
-  if (isPDF) {
+  if (previewKind === 'pdf') {
     const viewer = (
       <ComponentErrorBoundary label="The PDF viewer">
         <Suspense
@@ -215,7 +212,11 @@ const PreviewComponent: FunctionComponent<Props> = ({
     )
   }
 
-  return <object className="h-full w-full" data={objectUrl!} />
+  return (
+    <div className="flex h-full w-full flex-grow items-center justify-center p-6" role="alert">
+      <span className="text-passive-0 text-sm">{t('fileCannotBePreviewed')}</span>
+    </div>
+  )
 }
 
 export default PreviewComponent

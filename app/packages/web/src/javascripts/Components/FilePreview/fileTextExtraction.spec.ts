@@ -1,5 +1,5 @@
 import { TextDecoder as NodeTextDecoder, TextEncoder as NodeTextEncoder } from 'util'
-import { extractFileTextForTags, isExtractableTextMime } from './fileTextExtraction'
+import { extractFileTextForTags, isExtractableTextMime, isSensitiveTextProfileName } from './fileTextExtraction'
 
 // The default (node) jest env may not expose Web text codecs; polyfill from util.
 const codecGlobal = globalThis as unknown as { TextEncoder?: unknown; TextDecoder?: unknown }
@@ -67,6 +67,13 @@ describe('isExtractableTextMime', () => {
   })
 })
 
+describe('sensitive text profiles', () => {
+  it('recognizes OpenVPN profiles case-insensitively', () => {
+    expect(isSensitiveTextProfileName('private.OVPN')).toBe(true)
+    expect(isSensitiveTextProfileName('notes.txt')).toBe(false)
+  })
+})
+
 describe('extractFileTextForTags', () => {
   it('decodes downloaded bytes for a text-like file', async () => {
     const { app, downloadFile } = makeApp(async (push) => {
@@ -78,6 +85,16 @@ describe('extractFileTextForTags', () => {
     expect(downloadFile).toHaveBeenCalledTimes(1)
     expect(result.text).toBe('hello world')
     expect(result.onlyMetadataAvailable).toBe(false)
+  })
+
+  it('never downloads or sends OpenVPN profile contents to AI extraction', async () => {
+    const { app, downloadFile } = makeApp()
+    const file = { ...makeFile('text/plain'), name: 'work.OVPN' }
+
+    const result = await extractFileTextForTags(app as never, file as never)
+
+    expect(downloadFile).not.toHaveBeenCalled()
+    expect(result).toEqual({ text: '', onlyMetadataAvailable: true })
   })
 
   it('bounds retained/decoded bytes and clamps output for a huge streamed text file', async () => {

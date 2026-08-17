@@ -10,9 +10,10 @@ type Props = {
   filesController: FilesController
   isFilePreviewable: boolean
   tryAgainCallback: () => void
+  errorMessage?: string
 }
 
-const FilePreviewError = ({ file, filesController, isFilePreviewable, tryAgainCallback }: Props) => {
+const FilePreviewError = ({ file, filesController, isFilePreviewable, tryAgainCallback, errorMessage }: Props) => {
   const { t } = useTranslation('files')
   return (
     <div className="flex flex-grow flex-col items-center justify-center">
@@ -20,7 +21,9 @@ const FilePreviewError = ({ file, filesController, isFilePreviewable, tryAgainCa
       <div className="mb-2 text-base font-bold">{t('fileCannotBePreviewed')}</div>
       {isFilePreviewable ? (
         <>
-          <div className="text-passive-0 mb-4 max-w-[35ch] text-center text-sm">{t('errorLoadingFile')}</div>
+          <div className="text-passive-0 mb-4 max-w-[45ch] text-center text-sm">
+            {errorMessage || t('errorLoadingFile')}
+          </div>
           <div className="flex items-center">
             <Button
               primary
@@ -49,7 +52,9 @@ const FilePreviewError = ({ file, filesController, isFilePreviewable, tryAgainCa
         </>
       ) : (
         <>
-          <div className="text-passive-0 mb-4 max-w-[35ch] text-center text-sm">{t('downloadToView')}</div>
+          <div className="text-passive-0 mb-4 max-w-[45ch] text-center text-sm">
+            {errorMessage || t('downloadToView')}
+          </div>
           <Button
             primary
             onClick={() => {

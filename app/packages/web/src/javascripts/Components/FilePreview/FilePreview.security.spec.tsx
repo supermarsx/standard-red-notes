@@ -6,13 +6,15 @@ import { ContentType, FileItem, VaultLockServiceEvent } from '@standardnotes/snj
 import { act, createElement } from 'react'
 import { createRoot, Root } from 'react-dom/client'
 import FilePreview from './FilePreview'
+import { MAX_TEXT_PREVIEW_BYTES } from './textPreviewContent'
 
 let mockPreviewBytes: Uint8Array | undefined
 let mockPreviewFile: FileItem | undefined
 
-jest.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
-}))
+jest.mock('react-i18next', () => {
+  const t = (key: string) => key
+  return { useTranslation: () => ({ t }) }
+})
 jest.mock('./PreviewComponent', () => ({
   __esModule: true,
   default: ({ bytes, file }: { bytes: Uint8Array; file: FileItem }) => {
@@ -32,9 +34,14 @@ jest.mock('@/Components/Spinner/Spinner', () => ({
 }))
 jest.mock('./FilePreviewError', () => ({
   __esModule: true,
-  default: ({ tryAgainCallback }: { tryAgainCallback: () => void }) => {
+  default: ({ tryAgainCallback, errorMessage }: { tryAgainCallback: () => void; errorMessage?: string }) => {
     const React = jest.requireActual<typeof import('react')>('react')
-    return React.createElement('button', { onClick: tryAgainCallback }, 'preview-error')
+    return React.createElement(
+      'div',
+      null,
+      React.createElement('span', null, errorMessage ?? 'preview-error'),
+      React.createElement('button', { onClick: tryAgainCallback }, 'retry-preview'),
+    )
   },
 }))
 jest.mock('@standardnotes/icons', () => ({
@@ -71,6 +78,7 @@ describe('FilePreview vault authorization', () => {
       key_system_identifier: 'vault-key-system',
       mimeType: 'text/plain',
       name: 'secret.txt',
+      decryptedSize: 6,
       protected: false,
     } as FileItem
     const currentFile = file
@@ -182,6 +190,7 @@ describe('FilePreview vault authorization', () => {
       content_type: ContentType.TYPES.File,
       mimeType: 'text/plain',
       name: 'a.txt',
+      decryptedSize: 3,
     } as FileItem
     const secondFile = {
       ...firstFile,
@@ -229,6 +238,7 @@ describe('FilePreview vault authorization', () => {
       content_type: ContentType.TYPES.File,
       mimeType: 'image/png',
       name: 'original.png',
+      decryptedSize: 3,
     } as FileItem
     const replacementFile = {
       ...originalFile,
@@ -326,6 +336,7 @@ describe('FilePreview vault authorization', () => {
         content_type: ContentType.TYPES.File,
         mimeType,
         name: `stale.${mimeType === 'application/pdf' ? 'pdf' : 'png'}`,
+        decryptedSize: 3,
         protected: false,
       } as FileItem
       const authoritativeFile = {
@@ -396,12 +407,13 @@ describe('FilePreview vault authorization', () => {
       content_type: ContentType.TYPES.File,
       mimeType,
       name: `retry.${mimeType === 'application/pdf' ? 'pdf' : 'png'}`,
+      decryptedSize: 3,
     } as FileItem
     let emitChunk!: (chunk: Uint8Array) => Promise<void>
     let finishDownload!: (error: undefined) => void
     const downloadFile = jest
       .fn()
-      .mockResolvedValueOnce({ message: 'temporary failure' })
+      .mockResolvedValueOnce({ text: 'File metadata was not found.' })
       .mockImplementationOnce(
         (_file: FileItem, emit: (chunk: Uint8Array) => Promise<void>) =>
           new Promise<undefined>((resolve) => {
@@ -428,7 +440,7 @@ describe('FilePreview vault authorization', () => {
       await Promise.resolve()
       await Promise.resolve()
     })
-    expect(container.textContent).toContain('preview-error')
+    expect(container.textContent).toContain('File metadata was not found.')
 
     await act(async () => {
       container.querySelector('button')?.click()
@@ -443,5 +455,89 @@ describe('FilePreview vault authorization', () => {
     })
 
     expect(container.querySelector(`[data-preview-mime="${mimeType}"]`)).not.toBeNull()
+  })
+
+  it('rejects a declared text size above the preview limit without starting a download', async () => {
+    const file = {
+      uuid: 'declared-too-large',
+      remoteIdentifier: 'declared-too-large-remote',
+      content_type: ContentType.TYPES.File,
+      mimeType: 'text/plain',
+      name: 'large.txt',
+      decryptedSize: MAX_TEXT_PREVIEW_BYTES + 1,
+    } as FileItem
+    const downloadFile = jest.fn()
+    const application = {
+      isAuthorizedToRenderItem: jest.fn(() => true),
+      addEventObserver: jest.fn(() => jest.fn()),
+      vaultLocks: { addEventObserver: jest.fn(() => jest.fn()) },
+      items: {
+        findItem: jest.fn(() => file),
+        streamItems: jest.fn(() => jest.fn()),
+      },
+      files: { downloadFile },
+      filesController: {},
+      hasProtectionSources: jest.fn(() => true),
+      protections: { authorizeItemAccess: jest.fn() },
+    } as unknown as WebApplication
+
+    await act(async () => {
+      root.render(createElement(FilePreview, { application, file }))
+      await Promise.resolve()
+    })
+
+    expect(downloadFile).not.toHaveBeenCalled()
+    expect(container.textContent).toContain('filePreviewTooLarge')
+    expect(container.textContent).not.toContain('decrypted-preview')
+  })
+
+  it('aborts and wipes streamed plaintext when received bytes exceed the preview limit', async () => {
+    const file = {
+      uuid: 'streamed-too-large',
+      remoteIdentifier: 'streamed-too-large-remote',
+      content_type: ContentType.TYPES.File,
+      mimeType: 'text/plain',
+      name: 'underreported.txt',
+      decryptedSize: 1,
+    } as FileItem
+    const retainedChunk = new Uint8Array(MAX_TEXT_PREVIEW_BYTES)
+    retainedChunk.fill(7)
+    const overflowChunk = new Uint8Array([9])
+    let downloadSignal: AbortSignal | undefined
+    const downloadFile = jest.fn(
+      async (_file: FileItem, emit: (chunk: Uint8Array) => Promise<void>, options: { signal: AbortSignal }) => {
+        downloadSignal = options.signal
+        await emit(retainedChunk)
+        await emit(overflowChunk)
+        return undefined
+      },
+    )
+    const application = {
+      isAuthorizedToRenderItem: jest.fn(() => true),
+      addEventObserver: jest.fn(() => jest.fn()),
+      vaultLocks: { addEventObserver: jest.fn(() => jest.fn()) },
+      items: {
+        findItem: jest.fn(() => file),
+        streamItems: jest.fn(() => jest.fn()),
+      },
+      files: { downloadFile },
+      filesController: {},
+      hasProtectionSources: jest.fn(() => true),
+      protections: { authorizeItemAccess: jest.fn() },
+    } as unknown as WebApplication
+
+    await act(async () => {
+      root.render(createElement(FilePreview, { application, file }))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(downloadFile).toHaveBeenCalledTimes(1)
+    expect(downloadSignal?.aborted).toBe(true)
+    expect(retainedChunk[0]).toBe(0)
+    expect(retainedChunk.at(-1)).toBe(0)
+    expect(overflowChunk[0]).toBe(0)
+    expect(container.textContent).toContain('filePreviewTooLarge')
+    expect(container.textContent).not.toContain('decrypted-preview')
   })
 })

@@ -4,7 +4,7 @@ import { ContentType, FileDownloadProgress, FileItem, fileProgressToHumanReadabl
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import Spinner from '@/Components/Spinner/Spinner'
 import FilePreviewError from './FilePreviewError'
-import { isFileTypePreviewable } from './isFilePreviewable'
+import { isFilePreviewable, resolvePreviewKind } from './isFilePreviewable'
 import PreviewComponent from './PreviewComponent'
 import Button from '../Button/Button'
 import { ProtectedIllustration } from '@standardnotes/icons'
@@ -12,6 +12,10 @@ import { OptionalSuperEmbeddedImageProps } from './OptionalSuperEmbeddedImagePro
 import { PdfDeepLinkTarget } from './PdfDeepLink'
 import { useTranslation } from 'react-i18next'
 import { useItemAuthorization } from '@/Hooks/useItemAuthorization'
+import { MAX_TEXT_PREVIEW_BYTES } from './textPreviewContent'
+import { sanitizeFileErrorDetail } from '@/Utils/FileErrorMessage'
+
+const MAX_MEDIA_PREVIEW_BYTES = 100 * 1024 * 1024
 
 type Props = {
   application: WebApplication
@@ -82,14 +86,26 @@ const FilePreview = ({
     remoteIdentifier: authoritativeFile?.remoteIdentifier,
   }
 
-  const isFilePreviewable = useMemo(() => {
-    return authoritativeFile ? isFileTypePreviewable(authoritativeFile.mimeType) : false
+  const previewByteLimit = useMemo(() => {
+    return authoritativeFile && resolvePreviewKind(authoritativeFile) === 'text'
+      ? MAX_TEXT_PREVIEW_BYTES
+      : MAX_MEDIA_PREVIEW_BYTES
   }, [authoritativeFile])
+  const canPreviewFile = useMemo(() => {
+    return (
+      authoritativeFile !== undefined &&
+      isFilePreviewable(authoritativeFile) &&
+      Number.isSafeInteger(authoritativeFile.decryptedSize) &&
+      authoritativeFile.decryptedSize >= 0 &&
+      authoritativeFile.decryptedSize <= previewByteLimit
+    )
+  }, [authoritativeFile, previewByteLimit])
 
   const [isDownloading, setIsDownloading] = useState(true)
   const [downloadProgress, setDownloadProgress] = useState<FileDownloadProgress | undefined>()
   const [downloadedPreview, setDownloadedPreview] = useState<DownloadedPreview>()
   const [retryGeneration, setRetryGeneration] = useState(0)
+  const [downloadError, setDownloadError] = useState<string>()
   const downloadedBytes =
     authoritativeFile &&
     downloadedPreview?.fileUuid === authoritativeFile.uuid &&
@@ -104,6 +120,7 @@ const FilePreview = ({
   }, [downloadedPreview])
 
   useLayoutEffect(() => {
+    setDownloadError(undefined)
     setDownloadedPreview((preview) => {
       if (
         preview &&
@@ -125,7 +142,7 @@ const FilePreview = ({
   }, [authoritativeFile, isAuthorized])
 
   useEffect(() => {
-    if (!authoritativeFile || !isFilePreviewable || !isAuthorized) {
+    if (!authoritativeFile || !canPreviewFile || !isAuthorized) {
       setIsDownloading(false)
       setDownloadProgress(undefined)
       return
@@ -137,6 +154,8 @@ const FilePreview = ({
     const remoteIdentifier = fileForDownload.remoteIdentifier
     const abortController = new AbortController()
     const chunks: Uint8Array[] = []
+    let receivedBytes = 0
+    let exceededPreviewLimit = false
     const wipeChunks = () => {
       for (const chunk of chunks) {
         chunk.fill(0)
@@ -159,6 +178,7 @@ const FilePreview = ({
       }
 
       setIsDownloading(true)
+      setDownloadError(undefined)
 
       try {
         setDownloadProgress(undefined)
@@ -169,6 +189,13 @@ const FilePreview = ({
               decryptedChunk.fill(0)
               return
             }
+            receivedBytes += decryptedChunk.byteLength
+            if (!Number.isSafeInteger(receivedBytes) || receivedBytes > previewByteLimit) {
+              exceededPreviewLimit = true
+              decryptedChunk.fill(0)
+              abortController.abort()
+              return
+            }
             chunks.push(decryptedChunk)
             if (progress) {
               setDownloadProgress(progress)
@@ -177,7 +204,11 @@ const FilePreview = ({
           { signal: abortController.signal },
         )
 
-        if (!error && isCurrentDownload() && application.isAuthorizedToRenderItem(fileForDownload)) {
+        if (exceededPreviewLimit && isCurrentDownload()) {
+          setDownloadError(t('filePreviewTooLarge'))
+        } else if (error && isCurrentDownload()) {
+          setDownloadError(sanitizeFileErrorDetail(error) ?? t('errorLoadingFile'))
+        } else if (!error && isCurrentDownload() && application.isAuthorizedToRenderItem(fileForDownload)) {
           const finalDecryptedBytes = concatenateUint8Arrays(chunks)
           setDownloadedPreview((currentPreview) => {
             if (!isCurrentDownload() || !application.isAuthorizedToRenderItem(fileForDownload)) {
@@ -191,6 +222,7 @@ const FilePreview = ({
       } catch (error) {
         if (isCurrentDownload()) {
           console.error(error)
+          setDownloadError(sanitizeFileErrorDetail(error) ?? t('errorLoadingFile'))
         }
       } finally {
         wipeChunks()
@@ -207,7 +239,16 @@ const FilePreview = ({
       abortController.abort()
       wipeChunks()
     }
-  }, [application, authoritativeFile, downloadedBytes, isFilePreviewable, isAuthorized, retryGeneration])
+  }, [
+    application,
+    authoritativeFile,
+    canPreviewFile,
+    downloadedBytes,
+    isAuthorized,
+    previewByteLimit,
+    retryGeneration,
+    t,
+  ])
 
   const authorizeCurrentFile = useCallback(async () => {
     const currentFile = application.items.findItem<FileItem>(file.uuid)
@@ -289,7 +330,13 @@ const FilePreview = ({
       tryAgainCallback={() => {
         setRetryGeneration((generation) => generation + 1)
       }}
-      isFilePreviewable={isFilePreviewable}
+      isFilePreviewable={canPreviewFile}
+      errorMessage={
+        downloadError ??
+        (authoritativeFile && isFilePreviewable(authoritativeFile) && !canPreviewFile
+          ? t('filePreviewTooLarge')
+          : undefined)
+      }
     />
   )
 }

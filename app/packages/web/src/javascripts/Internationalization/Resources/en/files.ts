@@ -98,6 +98,20 @@ const files = {
   externalAppOnly: 'This file can only be previewed in an external app',
   openFilePreview: 'Open file preview',
   loadingPdfViewer: 'Loading PDF viewer...',
+  filePreviewTooLarge: 'This file is too large to preview safely. Download it to open it locally.',
+
+  // TextPreview
+  textPreviewUnavailable: 'Text preview unavailable',
+  textPreviewTooLarge: 'This text file is too large to preview safely. Download it to open it in a local editor.',
+  textPreviewInvalidText: 'This file is binary or is not valid UTF-8 text. Download it to open it safely.',
+  textPreviewUntitled: 'Untitled file',
+  textPreviewControls: 'Text preview controls',
+  textPreviewSyntax: 'Syntax',
+  textPreviewWrap: 'Wrap lines',
+  textPreviewHighlightingLimited: 'Syntax highlighting is disabled for large or line-heavy files.',
+  textPreviewBidiControlsNeutralized:
+    'Bidirectional control characters are shown as visible markers to prevent misleading text display.',
+  textPreviewReadOnly: 'Read-only preview of {{fileName}}',
 
   // ZoomableImage
   zoomOut: 'Zoom out',

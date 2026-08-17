@@ -51,6 +51,11 @@ export function isExtractableTextMime(mime: string): boolean {
   return false
 }
 
+/** VPN profiles can embed private keys and credentials; never offer them to AI. */
+export function isSensitiveTextProfileName(name: string): boolean {
+  return name.trim().toLowerCase().endsWith('.ovpn')
+}
+
 export interface FileTagTextResult {
   /** Extracted text, clamped to the tag-input budget. '' when none is available. */
   text: string
@@ -74,6 +79,10 @@ export async function extractFileTextForTags(
 ): Promise<FileTagTextResult> {
   const budget = options.budget ?? DEFAULT_TAG_INPUT_BUDGET
   const mime = file.mimeType ?? ''
+
+  if (isSensitiveTextProfileName(file.name ?? '')) {
+    return { text: '', onlyMetadataAvailable: true }
+  }
 
   if (isExtractableTextMime(mime)) {
     // Bound how many bytes we RETAIN and decode. Only `budget` characters are ever

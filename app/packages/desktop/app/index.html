@@ -31,7 +31,8 @@
       img-src: tightened from `*` to 'self' data: blob: https:.
 
       script-src is intentionally 'self' 'wasm-unsafe-eval' (no unsafe-inline /
-      unsafe-eval). default-src/worker-src unchanged.
+      unsafe-eval). object-src is disabled because file previews use dedicated
+      inert renderers and must never execute attachment content as a plugin.
     -->
     <meta
       http-equiv="Content-Security-Policy"
@@ -43,6 +44,7 @@
         style-src 'self' 'unsafe-hashes' http://localhost:* http://127.0.0.1:45653 'sha256-jpJOxTrdc58x4woq2mVygDDIvjIAGNkLZ2yfx4ppdXo=' 'sha256-tbWZ4NP1341cpcrZVDn7B3o9bt/muXgduILAnC0Zbaw=';
         frame-src 'self' https: blob:;
         img-src 'self' data: blob: https:;
+        object-src 'none';
       "
     />
 
