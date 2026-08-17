@@ -10,4 +10,6 @@ export type DownloadFileParams = {
   onBytesReceived: (bytes: Uint8Array) => Promise<void>
   /** Stops bounded follow-up range requests after the active request settles. */
   shouldAbort?: () => boolean
+  /** Cancels the active range request as soon as the caller aborts. */
+  abortSignal?: AbortSignal
 }

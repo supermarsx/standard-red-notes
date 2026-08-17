@@ -82,6 +82,80 @@ import { AnyFeatureDescription } from '@standardnotes/features'
 /** Legacy api version field to be specified in params when calling v0 APIs. */
 const V0_API_VERSION = '20240226'
 
+/** Matches the front proxy's one-hour file transfer allowance. */
+export const FILE_TRANSFER_REQUEST_TIMEOUT_MS = 60 * 60 * 1_000
+
+const LoopbackHostnames = new Set(['localhost', '127.0.0.1', '[::1]'])
+
+function hasUnsafeUrlCharacter(value: string): boolean {
+  for (let index = 0; index < value.length; index++) {
+    const code = value.charCodeAt(index)
+    if (value[index] === '\\' || code <= 0x1f || code === 0x7f) {
+      return true
+    }
+  }
+
+  return false
+}
+
+/**
+ * Resolves the server-advertised files route against the configured API host,
+ * never against window.location (which is file:// in the desktop renderer).
+ * Absolute HTTPS file hosts remain supported for split deployments. A remote
+ * API advertising the Compose localhost default is repaired to its own origin,
+ * where the supported /files reverse-proxy route lives.
+ */
+export function resolveFilesServerUrl(advertisedUrl: unknown, apiHost: unknown): string | undefined {
+  if (typeof advertisedUrl !== 'string' || typeof apiHost !== 'string') {
+    return undefined
+  }
+
+  const candidate = advertisedUrl.trim()
+  if (!candidate || hasUnsafeUrlCharacter(candidate)) {
+    return undefined
+  }
+
+  let apiUrl: URL | undefined
+  try {
+    apiUrl = new URL(apiHost)
+    if (!['http:', 'https:'].includes(apiUrl.protocol)) {
+      apiUrl = undefined
+    }
+  } catch {
+    apiUrl = undefined
+  }
+
+  let filesUrl: URL
+  try {
+    filesUrl = new URL(candidate)
+  } catch {
+    if (!apiUrl) {
+      return undefined
+    }
+    filesUrl = new URL(candidate, `${apiUrl.origin}/`)
+  }
+
+  if (
+    !['http:', 'https:'].includes(filesUrl.protocol) ||
+    filesUrl.username ||
+    filesUrl.password ||
+    filesUrl.search ||
+    filesUrl.hash
+  ) {
+    return undefined
+  }
+
+  if (apiUrl && !LoopbackHostnames.has(apiUrl.hostname) && LoopbackHostnames.has(filesUrl.hostname)) {
+    filesUrl = new URL(`${filesUrl.pathname}${filesUrl.search}`, `${apiUrl.origin}/`)
+  }
+
+  if (apiUrl?.protocol === 'https:' && filesUrl.protocol !== 'https:') {
+    return undefined
+  }
+
+  return filesUrl.toString().replace(/\/$/, '')
+}
+
 type InvalidSessionObserver = (revoked: boolean) => void
 
 export type AdminUserStorageUsage = {
@@ -184,11 +258,18 @@ export class LegacyApiService
 
   public loadHost(): string {
     const storedValue = this.storageService.getValue<string | undefined>(StorageKey.ServerHost)
-    this.host = storedValue || this.host
+    const nextHost = storedValue || this.host
+    if (nextHost !== this.host) {
+      this.filesHost = undefined
+    }
+    this.host = nextHost
     return this.host
   }
 
   public async setHost(host: string): Promise<void> {
+    if (host !== this.host) {
+      this.filesHost = undefined
+    }
     this.host = host
     this.storageService.setValue(StorageKey.ServerHost, host)
   }
@@ -199,7 +280,7 @@ export class LegacyApiService
 
   public getFilesHost(): string {
     if (!this.filesHost) {
-      throw Error('Attempting to access undefined filesHost')
+      throw Error('The file server URL is missing or unsafe. Check PUBLIC_FILES_SERVER_URL on the server.')
     }
     return this.filesHost
   }
@@ -256,8 +337,16 @@ export class LegacyApiService
       })
     }
 
-    if (meta.server?.filesServerUrl) {
-      this.filesHost = meta.server?.filesServerUrl
+    if (meta.server && Object.prototype.hasOwnProperty.call(meta.server, 'filesServerUrl')) {
+      this.filesHost = resolveFilesServerUrl(meta.server.filesServerUrl, this.host)
+    }
+  }
+
+  private isExternalFilesHost(): boolean {
+    try {
+      return new URL(this.getFilesHost()).origin !== new URL(this.host).origin
+    } catch {
+      return true
     }
   }
 
@@ -674,6 +763,7 @@ export class LegacyApiService
 
   private async tokenRefreshableRequest<T>(
     params: HttpRequest & { fallbackErrorMessage: string },
+    preprocessSessionErrors = true,
   ): Promise<HttpResponse<T>> {
     const preprocessingError = this.preprocessingError()
     if (preprocessingError) {
@@ -683,7 +773,9 @@ export class LegacyApiService
     const response = await this.httpService.runHttp<T>(params)
 
     if (isErrorResponse(response)) {
-      this.preprocessAuthenticatedErrorResponse(response)
+      if (preprocessSessionErrors) {
+        this.preprocessAuthenticatedErrorResponse(response)
+      }
       return this.errorResponseWithFallbackMessage(response, params.fallbackErrorMessage)
     }
 
@@ -2338,12 +2430,16 @@ export class LegacyApiService
       ownershipType === 'user' ? Paths.v1.startUploadSession : Paths.v1.startSharedVaultUploadSession,
     )
 
-    return this.tokenRefreshableRequest({
-      verb: HttpVerb.Post,
-      url,
-      customHeaders: [{ key: 'x-valet-token', value: valetToken }],
-      fallbackErrorMessage: Strings.Network.Files.FailedStartUploadSession,
-    })
+    return this.tokenRefreshableRequest(
+      {
+        verb: HttpVerb.Post,
+        url,
+        external: this.isExternalFilesHost(),
+        customHeaders: [{ key: 'x-valet-token', value: valetToken }],
+        fallbackErrorMessage: Strings.Network.Files.FailedStartUploadSession,
+      },
+      false,
+    )
   }
 
   public async deleteFile(
@@ -2355,12 +2451,16 @@ export class LegacyApiService
       ownershipType === 'user' ? Paths.v1.deleteFile : Paths.v1.deleteSharedVaultFile,
     )
 
-    return this.tokenRefreshableRequest({
-      verb: HttpVerb.Delete,
-      url,
-      customHeaders: [{ key: 'x-valet-token', value: valetToken }],
-      fallbackErrorMessage: Strings.Network.Files.FailedDeleteFile,
-    })
+    return this.tokenRefreshableRequest(
+      {
+        verb: HttpVerb.Delete,
+        url,
+        external: this.isExternalFilesHost(),
+        customHeaders: [{ key: 'x-valet-token', value: valetToken }],
+        fallbackErrorMessage: Strings.Network.Files.FailedDeleteFile,
+      },
+      false,
+    )
   }
 
   public async uploadFileBytes(
@@ -2377,17 +2477,22 @@ export class LegacyApiService
       ownershipType === 'user' ? Paths.v1.uploadFileChunk : Paths.v1.uploadSharedVaultFileChunk,
     )
 
-    const response = await this.tokenRefreshableRequest<UploadFileChunkResponse>({
-      verb: HttpVerb.Post,
-      url,
-      rawBytes: encryptedBytes,
-      customHeaders: [
-        { key: 'x-valet-token', value: valetToken },
-        { key: 'x-chunk-id', value: chunkId.toString() },
-        { key: 'Content-Type', value: 'application/octet-stream' },
-      ],
-      fallbackErrorMessage: Strings.Network.Files.FailedUploadFileChunk,
-    })
+    const response = await this.tokenRefreshableRequest<UploadFileChunkResponse>(
+      {
+        verb: HttpVerb.Post,
+        url,
+        rawBytes: encryptedBytes,
+        customHeaders: [
+          { key: 'x-valet-token', value: valetToken },
+          { key: 'x-chunk-id', value: chunkId.toString() },
+          { key: 'Content-Type', value: 'application/octet-stream' },
+        ],
+        fallbackErrorMessage: Strings.Network.Files.FailedUploadFileChunk,
+        timeoutMs: FILE_TRANSFER_REQUEST_TIMEOUT_MS,
+        external: this.isExternalFilesHost(),
+      },
+      false,
+    )
 
     if (isErrorResponse(response)) {
       return false
@@ -2405,12 +2510,16 @@ export class LegacyApiService
       ownershipType === 'user' ? Paths.v1.closeUploadSession : Paths.v1.closeSharedVaultUploadSession,
     )
 
-    const response = await this.tokenRefreshableRequest<CloseUploadSessionResponse>({
-      verb: HttpVerb.Post,
-      url,
-      customHeaders: [{ key: 'x-valet-token', value: valetToken }],
-      fallbackErrorMessage: Strings.Network.Files.FailedCloseUploadSession,
-    })
+    const response = await this.tokenRefreshableRequest<CloseUploadSessionResponse>(
+      {
+        verb: HttpVerb.Post,
+        url,
+        external: this.isExternalFilesHost(),
+        customHeaders: [{ key: 'x-valet-token', value: valetToken }],
+        fallbackErrorMessage: Strings.Network.Files.FailedCloseUploadSession,
+      },
+      false,
+    )
 
     if (isErrorResponse(response)) {
       return ClientDisplayableError.FromNetworkError(response)
@@ -2422,12 +2531,16 @@ export class LegacyApiService
   public async moveFile(valetToken: string): Promise<boolean> {
     const url = joinPaths(this.getFilesHost(), Paths.v1.moveFile)
 
-    const response = await this.tokenRefreshableRequest<MoveFileResponse>({
-      verb: HttpVerb.Post,
-      url,
-      customHeaders: [{ key: 'x-valet-token', value: valetToken }],
-      fallbackErrorMessage: Strings.Network.Files.FailedCloseUploadSession,
-    })
+    const response = await this.tokenRefreshableRequest<MoveFileResponse>(
+      {
+        verb: HttpVerb.Post,
+        url,
+        external: this.isExternalFilesHost(),
+        customHeaders: [{ key: 'x-valet-token', value: valetToken }],
+        fallbackErrorMessage: Strings.Network.Files.FailedCloseUploadSession,
+      },
+      false,
+    )
 
     if (isErrorResponse(response)) {
       return false
@@ -2454,6 +2567,7 @@ export class LegacyApiService
     contentRangeStart,
     onBytesReceived,
     shouldAbort,
+    abortSignal,
   }: DownloadFileParams): Promise<ClientDisplayableError | undefined> {
     if (file.encryptedChunkSizes.length === 0) {
       return new ClientDisplayableError('File download metadata does not contain an authenticated encrypted chunk.')
@@ -2481,7 +2595,16 @@ export class LegacyApiService
       return new ClientDisplayableError('File download requested a range that does not match its encrypted metadata.')
     }
 
-    const url = this.getFilesDownloadUrl(ownershipType)
+    let url: string
+    try {
+      url = this.getFilesDownloadUrl(ownershipType)
+    } catch (error) {
+      return new ClientDisplayableError(
+        error instanceof Error
+          ? error.message
+          : 'The file server URL is missing or unsafe. Check PUBLIC_FILES_SERVER_URL on the server.',
+      )
+    }
 
     let expectedRangeStart = contentRangeStart
     for (let currentChunkIndex = chunkIndex; currentChunkIndex < file.encryptedChunkSizes.length; currentChunkIndex++) {
@@ -2503,12 +2626,18 @@ export class LegacyApiService
           { key: 'range', value: `bytes=${expectedRangeStart}-${expectedRangeEnd}` },
         ],
         responseType: 'arraybuffer',
+        timeoutMs: FILE_TRANSFER_REQUEST_TIMEOUT_MS,
+        abortSignal,
+        external: this.isExternalFilesHost(),
       }
 
-      const response = await this.tokenRefreshableRequest<DownloadFileChunkResponse>({
-        ...request,
-        fallbackErrorMessage: Strings.Network.Files.FailedDownloadFileChunk,
-      })
+      const response = await this.tokenRefreshableRequest<DownloadFileChunkResponse>(
+        {
+          ...request,
+          fallbackErrorMessage: Strings.Network.Files.FailedDownloadFileChunk,
+        },
+        false,
+      )
 
       if (isErrorResponse(response)) {
         return ClientDisplayableError.FromNetworkError(response)

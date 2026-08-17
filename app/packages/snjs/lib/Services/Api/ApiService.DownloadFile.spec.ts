@@ -1,4 +1,4 @@
-import { LegacyApiService } from './ApiService'
+import { FILE_TRANSFER_REQUEST_TIMEOUT_MS, LegacyApiService } from './ApiService'
 
 describe('LegacyApiService.downloadFile integrity contract', () => {
   let consoleError: jest.SpyInstance
@@ -64,6 +64,8 @@ describe('LegacyApiService.downloadFile integrity contract', () => {
     expect(runHttp.mock.calls[0][0]).toEqual(
       expect.objectContaining({
         responseType: 'arraybuffer',
+        timeoutMs: FILE_TRANSFER_REQUEST_TIMEOUT_MS,
+        external: true,
         customHeaders: expect.arrayContaining([
           { key: 'x-chunk-size', value: '2' },
           { key: 'range', value: 'bytes=0-1' },
@@ -76,6 +78,68 @@ describe('LegacyApiService.downloadFile integrity contract', () => {
           { key: 'x-chunk-size', value: '3' },
           { key: 'range', value: 'bytes=2-4' },
         ]),
+      }),
+    )
+  })
+
+  it('forwards caller cancellation to every active range request', async () => {
+    const { service, runHttp } = createService()
+    const controller = new AbortController()
+    runHttp.mockResolvedValue(partialResponse('bytes 0-1/5', 2))
+
+    await service.downloadFile({
+      ...baseParams,
+      abortSignal: controller.signal,
+      onBytesReceived: jest.fn(),
+    })
+
+    expect(runHttp).toHaveBeenCalledWith(
+      expect.objectContaining({
+        abortSignal: controller.signal,
+      }),
+    )
+  })
+
+  it('preserves a server-provided 400 reason for the caller', async () => {
+    const { service, runHttp } = createService()
+    runHttp.mockResolvedValue({
+      status: 400,
+      data: { error: { message: 'Encrypted file metadata was not found.' } },
+      headers: new Map(),
+    })
+
+    const result = await service.downloadFile({
+      ...baseParams,
+      onBytesReceived: jest.fn(),
+    })
+
+    expect(result?.text).toBe('Encrypted file metadata was not found.')
+  })
+
+  it('returns an actionable error instead of throwing when the file host is missing', async () => {
+    const { service, runHttp } = createService()
+    ;(service as unknown as { filesHost?: string }).filesHost = undefined
+
+    const result = await service.downloadFile({
+      ...baseParams,
+      onBytesReceived: jest.fn(),
+    })
+
+    expect(result?.text).toContain('PUBLIC_FILES_SERVER_URL')
+    expect(runHttp).not.toHaveBeenCalled()
+  })
+
+  it('uses the bounded transfer timeout for encrypted upload chunks', async () => {
+    const { service, runHttp } = createService()
+    runHttp.mockResolvedValue({ status: 200, data: { success: true }, headers: new Map() })
+
+    await expect(service.uploadFileBytes('valet-token', 'user', 1, new Uint8Array([1, 2]))).resolves.toBe(true)
+
+    expect(runHttp).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeoutMs: FILE_TRANSFER_REQUEST_TIMEOUT_MS,
+        rawBytes: new Uint8Array([1, 2]),
+        external: true,
       }),
     )
   })

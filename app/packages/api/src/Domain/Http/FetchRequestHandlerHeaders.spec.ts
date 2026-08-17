@@ -63,6 +63,13 @@ describe('FetchRequestHandler headers and response handling', () => {
       expect(request.headers.get('X-Shared-Server-Key')).toBeNull()
       expect(request.headers.get('X-SNJS-Version')).toBeNull()
       expect(request.headers.get('Content-Type')).toBeNull()
+      expect(request.credentials).toBe('omit')
+    })
+
+    it('should include credentials only for first-party requests', () => {
+      const request = createRequest({ url: 'https://host/v1/items', verb: HttpVerb.Get })
+
+      expect(request.credentials).toBe('include')
     })
   })
 

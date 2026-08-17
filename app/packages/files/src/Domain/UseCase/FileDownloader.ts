@@ -4,7 +4,7 @@ import { Deferred } from '@standardnotes/utils'
 import { FileContent } from '@standardnotes/models'
 import { FilesApiInterface } from '../Api/FilesApiInterface'
 
-export type AbortSignal = 'aborted'
+export type AbortResult = 'aborted'
 export type AbortFunction = (error?: ClientDisplayableError) => void
 type OnEncryptedBytes = (
   encryptedBytes: Uint8Array,
@@ -12,12 +12,13 @@ type OnEncryptedBytes = (
   abort: AbortFunction,
 ) => Promise<void>
 
-export type FileDownloaderResult = ClientDisplayableError | AbortSignal | undefined
+export type FileDownloaderResult = ClientDisplayableError | AbortResult | undefined
 
 type DownloadRunState = {
   aborted: boolean
-  abortDeferred: ReturnType<typeof Deferred<AbortSignal | ClientDisplayableError>>
-  terminalResult?: AbortSignal | ClientDisplayableError
+  abortDeferred: ReturnType<typeof Deferred<AbortResult | ClientDisplayableError>>
+  terminalResult?: AbortResult | ClientDisplayableError
+  requestAbortController: AbortController
   chunksDownloaded: number
   totalBytesDownloaded: number
 }
@@ -62,7 +63,8 @@ export class FileDownloader {
 
     const state: DownloadRunState = {
       aborted: false,
-      abortDeferred: Deferred<AbortSignal | ClientDisplayableError>(),
+      abortDeferred: Deferred<AbortResult | ClientDisplayableError>(),
+      requestAbortController: new AbortController(),
       chunksDownloaded: 0,
       totalBytesDownloaded: 0,
     }
@@ -120,6 +122,7 @@ export class FileDownloader {
       onBytesReceived: onRemoteBytesReceived,
       ownershipType: this.file.shared_vault_uuid ? 'shared-vault' : 'user',
       shouldAbort: () => state.aborted,
+      abortSignal: state.requestAbortController.signal,
     })
 
     const result = await Promise.race([state.abortDeferred.promise, downloadPromise])
@@ -155,6 +158,7 @@ export class FileDownloader {
       return
     }
     state.aborted = true
+    state.requestAbortController.abort()
     state.terminalResult = error ?? 'aborted'
     state.abortDeferred.resolve(state.terminalResult)
   }

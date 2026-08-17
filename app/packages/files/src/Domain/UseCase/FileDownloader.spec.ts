@@ -140,6 +140,8 @@ describe('file downloader', () => {
 
     expect(chunksSeen).toEqual(1)
     expect(result).toEqual('aborted')
+    const request = (apiService.downloadFile as jest.Mock).mock.calls[0][0] as DownloadFileParams
+    expect(request.abortSignal?.aborted).toBe(true)
   })
 
   it('passes back bytes as they are received', async () => {

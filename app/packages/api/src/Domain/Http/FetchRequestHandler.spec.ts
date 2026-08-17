@@ -1,6 +1,6 @@
 import { Environment } from '@standardnotes/models'
 import { HttpStatusCode, HttpVerb } from '@standardnotes/responses'
-import { FetchRequestHandler, FETCH_REQUEST_TIMEOUT_MS } from './FetchRequestHandler'
+import { FetchRequestHandler, FETCH_REQUEST_TIMEOUT_MS, MAX_ERROR_RESPONSE_BYTES } from './FetchRequestHandler'
 import { HttpErrorResponseBody, HttpRequest } from '@standardnotes/responses'
 
 import { ErrorMessage } from '../Error'
@@ -108,6 +108,54 @@ describe('FetchRequestHandler', () => {
     expect(response.data).toBeInstanceOf(ArrayBuffer)
   })
 
+  it('decodes a text error response even when binary data was requested', async () => {
+    const fetchResponse = new Response('File metadata was not found.', {
+      status: 400,
+      headers: {
+        'Content-Type': 'text/plain',
+      },
+    })
+
+    const response = await requestHandler['handleFetchResponse'](fetchResponse, 'arraybuffer')
+
+    expect(response.status).toBe(400)
+    expect((response.data as HttpErrorResponseBody).error).toEqual({
+      message: 'File metadata was not found.',
+    })
+  })
+
+  it('does not surface an HTML proxy error body', async () => {
+    const fetchResponse = new Response('<html><body>proxy internals</body></html>', {
+      status: 502,
+      headers: {
+        'Content-Type': 'text/html',
+      },
+    })
+
+    const response = await requestHandler['handleFetchResponse'](fetchResponse, 'arraybuffer')
+
+    expect((response.data as HttpErrorResponseBody).error?.message).toBe('Request failed with HTTP 502.')
+  })
+
+  it('cancels and does not retain an oversized streamed error body', async () => {
+    const cancel = jest.fn()
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(MAX_ERROR_RESPONSE_BYTES + 1))
+      },
+      cancel,
+    })
+    const fetchResponse = new Response(stream, {
+      status: 400,
+      headers: { 'Content-Type': 'text/plain' },
+    })
+
+    const response = await requestHandler['handleFetchResponse'](fetchResponse, 'arraybuffer')
+
+    expect(cancel).toHaveBeenCalledTimes(1)
+    expect((response.data as HttpErrorResponseBody).error?.message).toBe('Request failed with HTTP 400.')
+  })
+
   it('should have ratelimit error when forbidden', async () => {
     const fetchResponse = new Response('body', {
       status: 403,
@@ -187,6 +235,58 @@ describe('FetchRequestHandler', () => {
       expect(clearSpy).toHaveBeenCalled()
       clearSpy.mockRestore()
     })
+
+    it('uses a valid per-request timeout override', async () => {
+      jest.useFakeTimers()
+
+      global.fetch = jest.fn((_request: Request, init?: RequestInit) => {
+        return new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(new Error('aborted')))
+        })
+      }) as unknown as typeof global.fetch
+
+      const responsePromise = requestHandler.handleRequest({
+        url: 'http://localhost:3000/files',
+        verb: HttpVerb.Get,
+        timeoutMs: FETCH_REQUEST_TIMEOUT_MS * 2,
+      })
+
+      jest.advanceTimersByTime(FETCH_REQUEST_TIMEOUT_MS + 1)
+      await Promise.resolve()
+      expect(global.fetch).toHaveBeenCalledTimes(1)
+
+      jest.advanceTimersByTime(FETCH_REQUEST_TIMEOUT_MS)
+      const response = await responsePromise
+      expect((response.data as HttpErrorResponseBody & { timedOut?: boolean }).timedOut).toBe(true)
+    })
+
+    it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
+      'falls back to the default timeout for invalid override %s',
+      async (timeoutMs) => {
+        expect(requestHandler['resolveTimeoutMs'](timeoutMs)).toBe(FETCH_REQUEST_TIMEOUT_MS)
+      },
+    )
+
+    it('forwards caller cancellation to the underlying fetch without reporting a timeout', async () => {
+      const controller = new AbortController()
+      global.fetch = jest.fn((_request: Request, init?: RequestInit) => {
+        return new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(new Error('aborted')))
+        })
+      }) as unknown as typeof global.fetch
+
+      const responsePromise = requestHandler.handleRequest({
+        url: 'http://localhost:3000/files',
+        verb: HttpVerb.Get,
+        abortSignal: controller.signal,
+      })
+      controller.abort()
+
+      const response = await responsePromise
+      const data = response.data as HttpErrorResponseBody & { networkFailure?: boolean; timedOut?: boolean }
+      expect(data.networkFailure).toBe(true)
+      expect(data.timedOut).toBe(false)
+    })
   })
 
   describe('should return ErrorResponse when status is not >=200 and <500', () => {
@@ -202,9 +302,7 @@ describe('FetchRequestHandler', () => {
 
       expect(response.status).toBe(599)
       expect(response.headers).toEqual(new Map<string, string | null>([['content-type', 'text/plain']]))
-      expect((response.data as HttpErrorResponseBody).error).toEqual({
-        message: 'Unknown error',
-      })
+      expect((response.data as HttpErrorResponseBody).error).toEqual({ message: 'Request failed with HTTP 599.' })
     })
   })
 })
