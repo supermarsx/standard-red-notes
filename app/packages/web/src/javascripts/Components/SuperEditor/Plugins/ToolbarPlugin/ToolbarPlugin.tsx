@@ -563,7 +563,7 @@ const ListMarkerSwatch = ({ preset, onClick }: { preset: ListStylePreset; onClic
 // Pseudo-tab id for the element-specific (contextual) ribbon tab.
 const CONTEXTUAL_TAB_ID = 'contextual'
 
-const ToolbarPlugin = () => {
+const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
   const { t } = useTranslation('editor')
   const application = useApplication()
   const isMobile = useMediaQuery(MutuallyExclusiveMediaQueryBreakpoints.sm)
@@ -693,7 +693,7 @@ const ToolbarPlugin = () => {
   // by note uuid; it drives print/export. Each dropdown gets its own popover.
   // The note currently being EDITED (the active editor tab/pane), not the list
   // selection — firstSelectedNote can differ from the open note (e.g. with tabs).
-  const activeNoteUuid = application.itemListController.activeControllerItem?.uuid
+  const activeNoteUuid = noteUuid
   const [noteLayout, setNoteLayout] = useState<NoteLayout>(() => loadNoteLayout(activeNoteUuid))
   useEffect(() => {
     setNoteLayout(loadNoteLayout(activeNoteUuid))
@@ -2478,7 +2478,9 @@ const ToolbarPlugin = () => {
         disabled={!hasNonCollapsedSelection}
       />
     ),
-    [ToolbarButtonId.AI]: <SelectionTools editor={activeEditor} hasSelection={hasNonCollapsedSelection} />,
+    [ToolbarButtonId.AI]: (
+      <SelectionTools editor={activeEditor} hasSelection={hasNonCollapsedSelection} noteUuid={activeNoteUuid} />
+    ),
     // Standard Red Notes — per-note page Layout controls. These set the active
     // note's persisted layout used when printing / exporting (see applyPrintLayout).
     [ToolbarButtonId.PageSize]: (
@@ -3018,7 +3020,7 @@ const ToolbarPlugin = () => {
       <ToolbarSeparator />
 
       {/* AI actions + language picker (SelectionTools) — preserved as-is. */}
-      <SelectionTools editor={activeEditor} hasSelection={hasNonCollapsedSelection} />
+      <SelectionTools editor={activeEditor} hasSelection={hasNonCollapsedSelection} noteUuid={activeNoteUuid} />
 
       {/* Overflow "More" menu for the less-common quick-format actions, keeping
           the visible bar compact. */}

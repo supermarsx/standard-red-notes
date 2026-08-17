@@ -1,5 +1,6 @@
-import { FunctionComponent, useCallback, useMemo, useRef, useState } from 'react'
-import { $createRangeSelection, $getSelection, $isRangeSelection, $setSelection, LexicalEditor } from 'lexical'
+import { FunctionComponent, useCallback, useEffect, useRef, useState } from 'react'
+import { LexicalEditor } from 'lexical'
+import { ApplicationEvent } from '@standardnotes/snjs'
 import { classNames } from '@standardnotes/utils'
 import { addToast, ToastType } from '@standardnotes/toast'
 import Icon from '@/Components/Icon/Icon'
@@ -11,39 +12,16 @@ import {
   getSelectionAIAvailability,
   runSelectionAction,
   SelectionAction,
+  SelectionActionGroup,
 } from '@/Assistant/selectionActions'
 import { filterLanguages } from '@/Assistant/languages'
-
-type PointSnapshot = { key: string; offset: number; type: 'text' | 'element' }
-type SelectionSnapshot = { text: string; anchor: PointSnapshot; focus: PointSnapshot }
+import { publishAssistantDirective } from '@/Assistant/assistantDirectives'
+import { useResponsiveAppPane } from '@/Components/Panes/ResponsivePaneProvider'
+import { AppPaneId } from '@/Components/Panes/AppPaneMetadata'
+import { captureSelectionSnapshot, restoreAndReplaceSelection } from './SelectionReplacement'
 
 const BTN =
-  'flex select-none items-center justify-center rounded-md p-2.5 text-text transition-colors duration-75 hover:bg-passive-4 active:bg-passive-3 disabled:opacity-40 md:p-2'
-
-function captureSelection(editor: LexicalEditor): SelectionSnapshot | null {
-  let snapshot: SelectionSnapshot | null = null
-  editor.getEditorState().read(() => {
-    const selection = $getSelection()
-    if ($isRangeSelection(selection) && !selection.isCollapsed()) {
-      snapshot = {
-        text: selection.getTextContent(),
-        anchor: { key: selection.anchor.key, offset: selection.anchor.offset, type: selection.anchor.type },
-        focus: { key: selection.focus.key, offset: selection.focus.offset, type: selection.focus.type },
-      }
-    }
-  })
-  return snapshot
-}
-
-function restoreAndReplace(editor: LexicalEditor, snapshot: SelectionSnapshot, replacement: string) {
-  editor.update(() => {
-    const selection = $createRangeSelection()
-    selection.anchor.set(snapshot.anchor.key, snapshot.anchor.offset, snapshot.anchor.type)
-    selection.focus.set(snapshot.focus.key, snapshot.focus.offset, snapshot.focus.type)
-    $setSelection(selection)
-    selection.insertText(replacement)
-  })
-}
+  'flex select-none items-center gap-1.5 rounded-md px-2 py-1.5 text-text transition-colors duration-75 hover:bg-passive-4 active:bg-passive-3 disabled:opacity-40'
 
 type RunExtra = { customInstruction?: string; language?: string }
 
@@ -82,6 +60,7 @@ const ActionButton: FunctionComponent<{
       onClick={() => (opensPopover ? setOpen((value) => !value) : void run(action))}
     >
       <Icon type={action.icon} size="custom" className="text-info h-5 w-5 md:h-4 md:w-4" />
+      <span className="text-xs font-medium whitespace-nowrap">{action.label}</span>
     </button>
   )
 
@@ -179,20 +158,40 @@ const ActionButton: FunctionComponent<{
   )
 }
 
-const SelectionTools: FunctionComponent<{ editor: LexicalEditor; hasSelection: boolean }> = ({
+const ACTION_GROUPS: { id: SelectionActionGroup; label: string; icon: string }[] = [
+  { id: 'text-review', label: 'Text review', icon: 'pencil-filled' },
+  { id: 'transforms', label: 'Transforms', icon: 'arrows-sort-down' },
+  { id: 'assistant', label: 'Assistant', icon: 'dashboard' },
+]
+
+const SelectionTools: FunctionComponent<{ editor: LexicalEditor; hasSelection: boolean; noteUuid?: string }> = ({
   editor,
   hasSelection,
+  noteUuid,
 }) => {
   const application = useApplication()
+  const { presentPane } = useResponsiveAppPane()
   const [busy, setBusy] = useState<string | null>(null)
+  const [activeGroup, setActiveGroup] = useState<SelectionActionGroup>('text-review')
 
-  const actions = useMemo(() => getSelectionActions(application).filter((action) => action.enabled), [application])
+  const [, refreshActions] = useState(0)
+  useEffect(
+    () =>
+      application.addEventObserver(async (event) => {
+        if (event === ApplicationEvent.PreferencesChanged) {
+          refreshActions((revision) => revision + 1)
+        }
+      }, ApplicationEvent.PreferencesChanged),
+    [application],
+  )
+  const actions = getSelectionActions(application).filter((action) => action.enabled)
+  const visibleActions = actions.filter((action) => action.group === activeGroup)
   // Computed each render (cheap) so the greyed-out state tracks sign-in changes.
   const availability = getSelectionAIAvailability(application)
 
   const run = useCallback(
     async (action: SelectionAction, extra?: RunExtra) => {
-      const snap = captureSelection(editor)
+      const snap = captureSelectionSnapshot(editor)
       if (!snap?.text) {
         return
       }
@@ -216,11 +215,63 @@ const SelectionTools: FunctionComponent<{ editor: LexicalEditor; hasSelection: b
       } else {
         instruction = action.prompt
       }
+
+      if (action.behavior === 'chat') {
+        const accountScope = application.sessions.getUser()?.uuid ?? `anonymous:${application.identifier}`
+        presentPane(AppPaneId.Assistant)
+        const published = publishAssistantDirective({
+          accountScope,
+          noteUuid,
+          instruction,
+          selectedText: snap.text,
+        })
+        if (!published) {
+          addToast({ type: ToastType.Error, message: 'The selected text could not be sent to the Assistant.' })
+        }
+        return
+      }
+
+      if (snap.unsupportedStructuredSelection) {
+        addToast({
+          type: ToastType.Error,
+          message: 'Select complete checklist rows before using a replacement action so task details stay attached.',
+        })
+        return
+      }
+
+      if (action.id === 'organize' && (snap.checklistRows?.length ?? 0) > 1) {
+        addToast({
+          type: ToastType.Error,
+          message:
+            'Organize cannot safely reorder multiple checklist tasks without detaching their dates and recurrence. Send the selection to Assistant instead.',
+        })
+        return
+      }
+
+      const checklistInstruction = snap.checklistRows?.length
+        ? `${instruction}\n\nReturn exactly ${snap.checklistRows.length} lines in the original row order: one plain-text line per checklist item, with no bullets or checkbox markers.`
+        : instruction
       setBusy(action.label)
       try {
-        const result = await runSelectionAction(application, instruction, snap.text)
+        const result = await runSelectionAction(application, checklistInstruction, snap.text)
         if (result) {
-          restoreAndReplace(editor, snap, result)
+          const replacement = restoreAndReplaceSelection(editor, snap, result)
+          if (replacement === 'stale-selection') {
+            addToast({
+              type: ToastType.Regular,
+              message: 'The selection changed while AI was working. Nothing was replaced.',
+            })
+          } else if (replacement === 'checklist-shape-mismatch') {
+            addToast({
+              type: ToastType.Error,
+              message: 'AI returned a different number of checklist rows. Nothing was replaced.',
+            })
+          } else if (replacement === 'unsupported-structured-selection') {
+            addToast({
+              type: ToastType.Error,
+              message: 'Select complete checklist rows before using AI so task details stay attached safely.',
+            })
+          }
         }
       } catch (e) {
         addToast({ type: ToastType.Error, message: e instanceof Error ? e.message : String(e) })
@@ -228,23 +279,44 @@ const SelectionTools: FunctionComponent<{ editor: LexicalEditor; hasSelection: b
         setBusy(null)
       }
     },
-    [application, editor],
+    [application, editor, noteUuid, presentPane],
   )
 
   const disabledBase = !hasSelection || !availability.available
 
   return (
-    <div className="flex items-center gap-0.5">
-      {actions.map((action) => (
-        <ActionButton
-          key={action.id}
-          action={action}
-          disabledBase={disabledBase}
-          unavailableReason={!availability.available ? availability.reason : undefined}
-          busy={busy}
-          run={run}
-        />
-      ))}
+    <div className="flex min-w-0 items-stretch gap-1.5" aria-label="AI selection tools">
+      <div className="border-border flex flex-col gap-0.5 border-r pr-1.5" role="tablist" aria-label="AI action groups">
+        {ACTION_GROUPS.map((group) => (
+          <button
+            key={group.id}
+            type="button"
+            role="tab"
+            aria-selected={activeGroup === group.id}
+            className={classNames(
+              'flex items-center gap-1.5 rounded px-2 py-1 text-left text-xs whitespace-nowrap',
+              activeGroup === group.id ? 'bg-info-faded text-info font-semibold' : 'text-passive-0 hover:bg-passive-4',
+            )}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => setActiveGroup(group.id)}
+          >
+            <Icon type={group.icon} size="small" />
+            {group.label}
+          </button>
+        ))}
+      </div>
+      <div className="flex flex-col justify-center gap-0.5" role="tabpanel" aria-label={`${activeGroup} actions`}>
+        {visibleActions.map((action) => (
+          <ActionButton
+            key={action.id}
+            action={action}
+            disabledBase={disabledBase}
+            unavailableReason={!availability.available ? availability.reason : undefined}
+            busy={busy}
+            run={run}
+          />
+        ))}
+      </div>
     </div>
   )
 }

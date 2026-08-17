@@ -307,7 +307,7 @@ export const BlocksEditor: FunctionComponent<BlocksEditorProps> = ({
 
   return (
     <>
-      {!isMobile && <ToolbarPlugin />}
+      {!isMobile && <ToolbarPlugin noteUuid={noteUuid} />}
       {/*
         Standard Red Notes: dock the on-screen navigation sidebar (Word-style
         outline of headings + bookmarks) to the LEFT of the editor content. The
@@ -346,7 +346,7 @@ export const BlocksEditor: FunctionComponent<BlocksEditorProps> = ({
           />
         </div>
       </div>
-      {isMobile && <ToolbarPlugin />}
+      {isMobile && <ToolbarPlugin noteUuid={noteUuid} />}
       <ListPlugin />
       <ListStylePlugin />
       <MarkdownShortcutPlugin transformers={MarkdownTransformers} />
