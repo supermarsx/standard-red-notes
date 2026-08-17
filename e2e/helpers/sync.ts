@@ -167,6 +167,16 @@ export type SyncDrainResult = {
   exhaustionReason?: 'deadline' | 'max-passes'
 }
 
+export type QuiescentSyncResult = {
+  syncMs: number
+  noteCount: number
+  dirty: number
+  syncPasses: number
+  quiescent: boolean
+  residualDirtyItems: DirtyItemDiagnostic[]
+  drainExhaustionReason?: 'deadline' | 'max-passes'
+}
+
 type SyncDrainDependencies = {
   sync: (pass: number) => Promise<void>
   inspectDirtyItems: () => Promise<DirtyItemSnapshot>
@@ -220,11 +230,15 @@ export async function drainSyncUntilQuiescent(
     await wait(settleIntervalMs)
     snapshot = await dependencies.inspectDirtyItems()
     if (snapshot.count === 0) {
-      return {
-        quiescent: true,
-        syncPasses,
-        dirtyCount: 0,
-        residualDirtyItems: [],
+      await wait(settleIntervalMs)
+      snapshot = await dependencies.inspectDirtyItems()
+      if (snapshot.count === 0) {
+        return {
+          quiescent: true,
+          syncPasses,
+          dirtyCount: 0,
+          residualDirtyItems: [],
+        }
       }
     }
 
@@ -245,6 +259,92 @@ export async function drainSyncUntilQuiescent(
     dirtyCount: snapshot.count,
     residualDirtyItems: snapshot.items,
     exhaustionReason: 'max-passes',
+  }
+}
+
+async function inspectPageDirtyItems(page: Page): Promise<DirtyItemSnapshot> {
+  return page.evaluate(
+    ({ maxItems, maxTitleLength }) => {
+      const app = (
+        window as unknown as {
+          mainApplicationGroup?: { primaryApplication?: InPageApp }
+        }
+      ).mainApplicationGroup?.primaryApplication
+      if (!app) throw new Error('app not available')
+
+      const dirtyItems = app.items.getDirtyItems()
+      return {
+        count: dirtyItems.length,
+        items: dirtyItems.slice(0, maxItems).map((item) => {
+          const rawTitle = typeof item.title === 'string' ? item.title : undefined
+          const title = rawTitle
+            ?.replace(/[\u0000-\u001f\u007f]/g, ' ')
+            .trim()
+            .slice(0, maxTitleLength)
+
+          return {
+            uuid: typeof item.uuid === 'string' ? item.uuid : '(unknown)',
+            contentType: typeof item.content_type === 'string' ? item.content_type : '(unknown)',
+            ...(title ? { title } : {}),
+          }
+        }),
+      }
+    },
+    {
+      maxItems: MAX_DIRTY_ITEM_DIAGNOSTICS,
+      maxTitleLength: MAX_DIAGNOSTIC_TITLE_LENGTH,
+    },
+  )
+}
+
+async function pageNoteCount(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    const app = (
+      window as unknown as {
+        mainApplicationGroup?: { primaryApplication?: InPageApp }
+      }
+    ).mainApplicationGroup?.primaryApplication
+    if (!app) throw new Error('app not available')
+    return app.items.getItems('Note').length
+  })
+}
+
+/**
+ * Run bounded full sync passes until the page's dirty set stays empty across a
+ * settle interval. This is intentionally separate from syncNow(): resilience
+ * tests need a one-shot primitive whose failed request is never retried.
+ */
+export async function syncUntilQuiescent(
+  page: Page,
+  sourceDescription = 'stress-sync-drain',
+): Promise<QuiescentSyncResult> {
+  const syncStart = performance.now()
+  const drain = await drainSyncUntilQuiescent({
+    sync: async (pass) => {
+      await page.evaluate(
+        async ({ sourceDescription, pass }) => {
+          const app = (
+            window as unknown as {
+              mainApplicationGroup?: { primaryApplication?: InPageApp }
+            }
+          ).mainApplicationGroup?.primaryApplication
+          if (!app) throw new Error('app not available')
+          await app.sync.sync({ sourceDescription: `${sourceDescription}-${pass}`, awaitAll: true })
+        },
+        { sourceDescription, pass },
+      )
+    },
+    inspectDirtyItems: () => inspectPageDirtyItems(page),
+  })
+
+  return {
+    syncMs: performance.now() - syncStart,
+    noteCount: await pageNoteCount(page),
+    dirty: drain.dirtyCount,
+    syncPasses: drain.syncPasses,
+    quiescent: drain.quiescent,
+    residualDirtyItems: drain.residualDirtyItems,
+    ...(drain.exhaustionReason ? { drainExhaustionReason: drain.exhaustionReason } : {}),
   }
 }
 
@@ -296,73 +396,17 @@ export async function seedAndPush(
     { count, sizeBytes, batchSize },
   )
 
-  const pushStart = performance.now()
-  const drain = await drainSyncUntilQuiescent({
-    sync: async (pass) => {
-      await page.evaluate(async (sourceDescription) => {
-        const app = (
-          window as unknown as {
-            mainApplicationGroup?: { primaryApplication?: InPageApp }
-          }
-        ).mainApplicationGroup?.primaryApplication
-        if (!app) throw new Error('app not available')
-        await app.sync.sync({ sourceDescription, awaitAll: true })
-      }, `stress-sync-push-${pass}`)
-    },
-    inspectDirtyItems: async () =>
-      page.evaluate(
-        ({ maxItems, maxTitleLength }) => {
-          const app = (
-            window as unknown as {
-              mainApplicationGroup?: { primaryApplication?: InPageApp }
-            }
-          ).mainApplicationGroup?.primaryApplication
-          if (!app) throw new Error('app not available')
-
-          const dirtyItems = app.items.getDirtyItems()
-          return {
-            count: dirtyItems.length,
-            items: dirtyItems.slice(0, maxItems).map((item) => {
-              const rawTitle = typeof item.title === 'string' ? item.title : undefined
-              const title = rawTitle
-                ?.replace(/[\u0000-\u001f\u007f]/g, ' ')
-                .trim()
-                .slice(0, maxTitleLength)
-
-              return {
-                uuid: typeof item.uuid === 'string' ? item.uuid : '(unknown)',
-                contentType: typeof item.content_type === 'string' ? item.content_type : '(unknown)',
-                ...(title ? { title } : {}),
-              }
-            }),
-          }
-        },
-        {
-          maxItems: MAX_DIRTY_ITEM_DIAGNOSTICS,
-          maxTitleLength: MAX_DIAGNOSTIC_TITLE_LENGTH,
-        },
-      ),
-  })
-  const pushMs = performance.now() - pushStart
-  const noteCount = await page.evaluate(() => {
-    const app = (
-      window as unknown as {
-        mainApplicationGroup?: { primaryApplication?: InPageApp }
-      }
-    ).mainApplicationGroup?.primaryApplication
-    if (!app) throw new Error('app not available')
-    return app.items.getItems('Note').length
-  })
+  const push = await syncUntilQuiescent(page, 'stress-sync-push')
 
   return {
     ...seed,
-    pushMs,
-    dirtyAfterPush: drain.dirtyCount,
-    noteCount,
-    syncPasses: drain.syncPasses,
-    drainQuiescent: drain.quiescent,
-    residualDirtyItems: drain.residualDirtyItems,
-    ...(drain.exhaustionReason ? { drainExhaustionReason: drain.exhaustionReason } : {}),
+    pushMs: push.syncMs,
+    dirtyAfterPush: push.dirty,
+    noteCount: push.noteCount,
+    syncPasses: push.syncPasses,
+    drainQuiescent: push.quiescent,
+    residualDirtyItems: push.residualDirtyItems,
+    ...(push.drainExhaustionReason ? { drainExhaustionReason: push.drainExhaustionReason } : {}),
   }
 }
 

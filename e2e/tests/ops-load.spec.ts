@@ -8,7 +8,7 @@ import {
   registerAccount,
   seedAndPush,
   signIn,
-  syncNow,
+  syncUntilQuiescent,
   verifyNoteIntegrity,
   waitForApplicationReady,
 } from '../helpers/sync'
@@ -51,7 +51,61 @@ test.describe('bounded sync drain helper', () => {
       residualDirtyItems: [],
     })
     expect(syncPasses).toBe(2)
-    expect(waits).toEqual([25, 25])
+    expect(waits).toEqual([25, 25, 25])
+  })
+
+  test('does not accept a transient clean snapshot before a late dirty item', async () => {
+    let syncPasses = 0
+    const waits: number[] = []
+    const late = {
+      count: 1,
+      items: [{ uuid: 'late-default-note', contentType: 'Note', title: 'Untitled' }],
+    }
+    const snapshots = [{ count: 0, items: [] }, late, { count: 0, items: [] }, { count: 0, items: [] }]
+
+    const result = await drainSyncUntilQuiescent(
+      {
+        sync: async () => {
+          syncPasses += 1
+        },
+        inspectDirtyItems: async () => snapshots.shift() ?? { count: 0, items: [] },
+        wait: async (milliseconds) => {
+          waits.push(milliseconds)
+        },
+        now: () => 0,
+      },
+      { maxPasses: 3, retryWindowMs: 1_000, settleIntervalMs: 25 },
+    )
+
+    expect(result).toEqual({
+      quiescent: true,
+      syncPasses: 2,
+      dirtyCount: 0,
+      residualDirtyItems: [],
+    })
+    expect(syncPasses).toBe(2)
+    expect(waits).toEqual([25, 25, 25, 25])
+  })
+
+  test('propagates a sync failure without inspecting or retrying it', async () => {
+    let syncPasses = 0
+    let inspections = 0
+
+    await expect(
+      drainSyncUntilQuiescent({
+        sync: async () => {
+          syncPasses += 1
+          throw new Error('network unavailable')
+        },
+        inspectDirtyItems: async () => {
+          inspections += 1
+          return { count: 0, items: [] }
+        },
+      }),
+    ).rejects.toThrow('network unavailable')
+
+    expect(syncPasses).toBe(1)
+    expect(inspections).toBe(0)
   })
 
   test('stops at the retry deadline with bounded safe diagnostics', async () => {
@@ -150,11 +204,17 @@ test.describe('ops load and Redis throughput', () => {
       try {
         await Promise.all(clients.map((client) => signIn(client.page, account)))
         const pulls = await Promise.all(
-          clients.map((client, index) => syncNow(client.page, `ops-load-parallel-pull-${index + 1}`)),
+          clients.map((client, index) =>
+            syncUntilQuiescent(client.page, `ops-load-parallel-pull-${index + 1}`),
+          ),
         )
         const integrities = await Promise.all(clients.map((client) => verifyNoteIntegrity(client.page, LOAD_NOTES, 17)))
 
         for (const [index, pull] of pulls.entries()) {
+          expect(
+            pull.quiescent,
+            `client ${index + 1} should reach a quiescent dirty set; residual=${JSON.stringify(pull.residualDirtyItems)}`,
+          ).toBe(true)
           expect(pull.dirty, `client ${index + 1} should stay drained after pull`).toBe(0)
           expect(pull.noteCount, `client ${index + 1} should pull the full corpus`).toBeGreaterThanOrEqual(LOAD_NOTES)
         }
