@@ -1363,7 +1363,11 @@ describe('SyncService cold-load STREAMING (large-vault OOM fix)', () => {
     ...PayloadTimestampDefaults(),
   })
 
-  const createService = (device: Record<string, unknown>, options: Record<string, unknown> = {}): SyncService => {
+  const createService = (
+    device: Record<string, unknown>,
+    options: Record<string, unknown> = {},
+    storageContextCurrent = true,
+  ): SyncService => {
     const logger = {
       debug: jest.fn(),
       info: jest.fn(),
@@ -1375,7 +1379,10 @@ describe('SyncService cold-load STREAMING (large-vault OOM fix)', () => {
     const encryptionService = { decryptSplit: jest.fn().mockResolvedValue([]) }
     const payloadManager = { emitPayloads: jest.fn().mockResolvedValue(undefined) }
     const opStatus = { setDatabaseLoadStatus: jest.fn() }
-    const storageService = { getValue: jest.fn().mockReturnValue([]) }
+    const storageService = {
+      getValue: jest.fn().mockReturnValue([]),
+      isStorageContextCurrent: jest.fn().mockResolvedValue(storageContextCurrent),
+    }
 
     const service = new SyncService(
       {} as never, // itemManager
@@ -1397,6 +1404,20 @@ describe('SyncService cold-load STREAMING (large-vault OOM fix)', () => {
     ;(service as unknown as { opStatus: unknown }).opStatus = opStatus
     return service
   }
+
+  it('refuses to read database chunks when the storage context is stale or incomplete', async () => {
+    const device = {
+      getDatabaseLoadChunks: jest.fn(),
+      getDatabaseEntries: jest.fn(),
+    }
+    const service = createService(device, {}, false)
+
+    await expect(service.loadDatabasePayloads()).rejects.toThrow('stale or incomplete storage context')
+
+    expect(device.getDatabaseLoadChunks).not.toHaveBeenCalled()
+    expect(device.getDatabaseEntries).not.toHaveBeenCalled()
+    expect(service.isDatabaseLoaded()).toBe(false)
+  })
 
   it('STREAMS: never reads the whole DB at once; fetches each chunk by keys on demand', async () => {
     // Five regular entries spread across keyed chunks (batchSize 2 -> 3 chunks),
@@ -2445,7 +2466,10 @@ describe('SyncService cold-load COMPLETENESS (no silent partial loads)', () => {
     const encryptionService = { decryptSplit: jest.fn().mockResolvedValue([]) }
     const payloadManager = { emitPayloads: jest.fn().mockResolvedValue(undefined) }
     const opStatus = { setDatabaseLoadStatus: jest.fn() }
-    const storageService = { getValue: jest.fn().mockReturnValue([]) }
+    const storageService = {
+      getValue: jest.fn().mockReturnValue([]),
+      isStorageContextCurrent: jest.fn().mockResolvedValue(true),
+    }
 
     const service = new SyncService(
       {} as never, // itemManager

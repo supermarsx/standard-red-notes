@@ -18,7 +18,6 @@ import { LegacyApiService } from '../Api/ApiService'
 import { HistoryManager } from '../History/HistoryManager'
 import { SNLog } from '@Lib/Log'
 import { SessionManager } from '../Session/SessionManager'
-import { DiskStorageService } from '../Storage/DiskStorageService'
 import { SyncPromise } from './Types'
 import { ServerSyncResponse } from '@Lib/Services/Sync/Account/Response'
 import { ServerSyncResponseResolver } from '@Lib/Services/Sync/Account/ResponseResolver'
@@ -97,6 +96,7 @@ import {
   WebSocketsService,
   SyncBackoffServiceInterface,
   SyncItemsPushedData,
+  StorageServiceInterface,
 } from '@standardnotes/services'
 import { OfflineSyncResponse } from './Offline/Response'
 import {
@@ -231,7 +231,7 @@ export class SyncService
     private itemManager: ItemManager,
     private sessionManager: SessionManager,
     private encryptionService: EncryptionService,
-    private storageService: DiskStorageService,
+    private storageService: StorageServiceInterface,
     private payloadManager: PayloadManager,
     private apiService: LegacyApiService,
     private historyService: HistoryManager,
@@ -568,6 +568,10 @@ export class SyncService
 
     if (this.databaseLoaded) {
       throw 'Attempting to initialize already initialized local database.'
+    }
+
+    if (!(await this.storageService.isStorageContextCurrent())) {
+      throw Error('Refusing to load database payloads from a stale or incomplete storage context.')
     }
 
     const chunks = await this.device.getDatabaseLoadChunks(

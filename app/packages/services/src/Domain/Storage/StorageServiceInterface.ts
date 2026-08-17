@@ -8,6 +8,12 @@ import { StoragePersistencePolicies, StorageValueModes } from './StorageTypes'
 
 export interface StorageServiceInterface {
   initializeFromDisk(): Promise<void>
+  /**
+   * Revalidates that this service still observes the current, fully committed
+   * storage generation. A false result means payload storage must not be read
+   * or written until the application reloads its storage context.
+   */
+  isStorageContextCurrent(): Promise<boolean>
   isStorageWrapped(): boolean
   decryptStorage(): Promise<void>
   getAllRawPayloads(): Promise<FullyFormedTransferPayload[]>

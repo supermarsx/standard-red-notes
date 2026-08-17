@@ -46,6 +46,69 @@ import {
 } from '@standardnotes/models'
 import { ContentType } from '@standardnotes/domain-core'
 
+const STORAGE_OBJECT_GENERATION_KEY = 'storage_object_generation' as const
+const STORAGE_OBJECT_GENERATION_RAW_KEY = 'storage_object_generation'
+const STALE_STORAGE_CONTEXT_ERROR =
+  'Storage context was cleared by another application instance; reload before writing.'
+
+type StorageValuesObjectWithMetadata = StorageValuesObject & {
+  [STORAGE_OBJECT_GENERATION_KEY]?: number
+}
+
+type PendingKeyValueMutation = {
+  key: string
+  mode: StorageValueModes
+  value: unknown
+  deleted: boolean
+  version: number
+  observedGeneration: number
+  clearVersion?: number
+}
+
+type PendingKeyValueMutationSnapshot = {
+  clearVersion?: number
+  mutations: PendingKeyValueMutation[]
+}
+
+type FreshStorageValues = {
+  values: StorageValuesObject
+  generationMarkerPersisted: boolean
+}
+
+const STORAGE_OBJECT_MUTATION_LOCK_PREFIX = 'standard-red-notes-storage-object-mutation:'
+const STORAGE_OBJECT_PROCESS_QUEUE_KEY = Symbol.for('standard-red-notes.storage-object-mutation-queues')
+const processGlobal = globalThis as unknown as Record<symbol, unknown>
+const storageObjectMutationQueues =
+  (processGlobal[STORAGE_OBJECT_PROCESS_QUEUE_KEY] as Map<string, Promise<void>> | undefined) ??
+  new Map<string, Promise<void>>()
+processGlobal[STORAGE_OBJECT_PROCESS_QUEUE_KEY] = storageObjectMutationQueues
+
+/**
+ * Web Locks coordinate separate same-origin browsing contexts. The process
+ * queue coordinates service instances sharing one loaded JavaScript
+ * module/realm and is the process-local fallback for non-browser runtimes
+ * without Web Locks. A lease-based localStorage fallback is intentionally
+ * avoided because a suspended context can outlive its lease and permit
+ * overlapping writes.
+ */
+function enqueueProcessStorageObjectMutation<T>(key: string, operation: () => Promise<T>): Promise<T> {
+  const previous = storageObjectMutationQueues.get(key) ?? Promise.resolve()
+  const run = previous.then(operation, operation)
+  const tail = run.then(
+    () => undefined,
+    () => undefined,
+  )
+
+  storageObjectMutationQueues.set(key, tail)
+  void tail.then(() => {
+    if (storageObjectMutationQueues.get(key) === tail) {
+      storageObjectMutationQueues.delete(key)
+    }
+  })
+
+  return run
+}
+
 /**
  * The storage service is responsible for persistence of both simple key-values, and payload
  * storage. It does so by relying on deviceInterface to save and retrieve raw values and payloads.
@@ -67,7 +130,10 @@ export class DiskStorageService
   private currentPersistPromise?: Promise<unknown>
   private keyValueWriteQueue: Promise<unknown> = Promise.resolve()
   private keyValueMutationVersions = new Map<string, number>()
+  private pendingKeyValueMutations = new Map<string, PendingKeyValueMutation>()
+  private pendingClearVersion?: number
   private keyValueMutationSequence = 0
+  private observedStorageObjectGeneration = 0
 
   private values!: StorageValuesObject
 
@@ -117,10 +183,20 @@ export class DiskStorageService
     this.persistencePolicy = persistencePolicy
 
     if (this.persistencePolicy === StoragePersistencePolicies.Ephemeral) {
-      await this.device.clearNamespacedKeychainValue(this.identifier)
-      await this.device.removeAllDatabaseEntries(this.identifier)
-      await this.device.removeRawStorageValuesForIdentifier(this.identifier)
-      await this.clearAllPayloads()
+      await this.withStorageObjectMutationLock(async () => {
+        const generation = this.nextClearingStorageObjectGeneration(await this.readDurableStorageObjectGeneration())
+        await this.persistStorageGenerationTombstone(generation)
+        try {
+          await this.device.clearNamespacedKeychainValue(this.identifier)
+          await this.device.removeAllDatabaseEntries(this.identifier)
+          await this.device.removeRawStorageValuesForIdentifier(this.identifier)
+          await this.persistStorageGenerationTombstone(generation)
+          await this.persistStorageGenerationTombstone(this.nextStableStorageObjectGeneration(generation), false)
+        } catch (error) {
+          await this.persistStorageGenerationTombstone(generation)
+          throw error
+        }
+      })
     }
   }
 
@@ -129,10 +205,42 @@ export class DiskStorageService
   }
 
   public async initializeFromDisk(): Promise<void> {
-    const value = await this.device.getRawStorageValue(this.getPersistenceKey())
-    const values = value ? JSON.parse(value as string) : undefined
+    const [value, rawGeneration] = await Promise.all([
+      this.device.getRawStorageValue(this.getPersistenceKey()),
+      this.device.getRawStorageValue(this.getGenerationPersistenceKey()),
+    ])
+    const values = value ? (JSON.parse(value as string) as StorageValuesObjectWithMetadata) : undefined
+    const authoritativeGeneration = this.authoritativeStorageObjectGeneration(rawGeneration, values)
+    const valuesAreCurrent =
+      this.isStableStorageObjectGeneration(authoritativeGeneration) &&
+      (rawGeneration === undefined || this.storageObjectGeneration(values) === authoritativeGeneration)
+    const initialValues = valuesAreCurrent ? (values ?? this.defaultValuesObject()) : this.defaultValuesObject()
+    this.setStorageObjectGeneration(initialValues, authoritativeGeneration)
 
-    await this.setInitialValues(values)
+    this.pendingKeyValueMutations.clear()
+    this.pendingClearVersion = undefined
+    this.observedStorageObjectGeneration = valuesAreCurrent ? authoritativeGeneration : -1
+    await this.setInitialValues(initialValues)
+  }
+
+  public async isStorageContextCurrent(): Promise<boolean> {
+    const observedGeneration = this.observedStorageObjectGeneration
+    if (!this.values || observedGeneration < 0 || !this.isStableStorageObjectGeneration(observedGeneration)) {
+      return false
+    }
+
+    try {
+      return await this.withStorageObjectMutationLock(async () => {
+        const durableState = await this.readDurableStorageObjectState()
+        return (
+          durableState.objectMatchesGeneration &&
+          durableState.generation === observedGeneration &&
+          this.isStableStorageObjectGeneration(durableState.generation)
+        )
+      })
+    } catch {
+      return false
+    }
   }
 
   private async setInitialValues(values?: StorageValuesObject) {
@@ -241,19 +349,331 @@ export class DiskStorageService
 
     this.needsPersist = false
 
-    const values = await this.executeCriticalFunction(async () => {
-      const generatedValues = await this.generatePersistableValues()
+    await this.executeCriticalFunction(() =>
+      this.withStorageObjectMutationLock(async () => {
+        const fresh = await this.readFreshValuesFromDisk()
+        if (!this.isStableStorageObjectGeneration(this.storageObjectGeneration(fresh.values))) {
+          throw Error(STALE_STORAGE_CONTEXT_ERROR)
+        }
+        const snapshot = this.snapshotPendingKeyValueMutations()
+        if (!this.snapshotHasApplicableMutations(fresh.values, snapshot)) {
+          this.finishPersistingKeyValueMutations(snapshot, fresh.values, fresh.values)
+          if (snapshot.mutations.length > 0) {
+            throw Error(STALE_STORAGE_CONTEXT_ERROR)
+          }
+          return
+        }
+        const mergedValues = this.applyPendingKeyValueMutations(fresh.values, snapshot)
+        const generatedValues = await this.generatePersistableValues(mergedValues)
 
-      const persistencePolicySuddenlyChanged = this.persistencePolicy === StoragePersistencePolicies.Ephemeral
-      if (!persistencePolicySuddenlyChanged) {
-        await this.device?.setRawStorageValue(this.getPersistenceKey(), JSON.stringify(generatedValues))
+        const persistencePolicySuddenlyChanged = this.persistencePolicy === StoragePersistencePolicies.Ephemeral
+        if (persistencePolicySuddenlyChanged) {
+          return
+        }
+
+        const generatedGeneration = this.storageObjectGeneration(generatedValues)
+        if (snapshot.clearVersion !== undefined || (generatedGeneration > 0 && !fresh.generationMarkerPersisted)) {
+          await this.device.setRawStorageValue(this.getGenerationPersistenceKey(), String(generatedGeneration))
+        }
+        await this.device.setRawStorageValue(this.getPersistenceKey(), JSON.stringify(generatedValues))
+        this.finishPersistingKeyValueMutations(snapshot, mergedValues, generatedValues)
+      }),
+    )
+  }
+
+  private withStorageObjectMutationLock<T>(operation: () => Promise<T>): Promise<T> {
+    const persistenceKey = this.getPersistenceKey()
+
+    return enqueueProcessStorageObjectMutation(persistenceKey, async () => {
+      const lockManager = typeof navigator !== 'undefined' ? navigator.locks : undefined
+      if (lockManager && typeof lockManager.request === 'function') {
+        return lockManager.request(
+          `${STORAGE_OBJECT_MUTATION_LOCK_PREFIX}${persistenceKey}`,
+          { mode: 'exclusive' },
+          operation,
+        )
       }
 
-      return generatedValues
+      return operation()
     })
+  }
 
-    /** Save the persisted value so we have access to it in memory (for unit tests afawk) */
-    this.values[ValueModesKeys.Wrapped] = values[ValueModesKeys.Wrapped]
+  /**
+   * Reads and decrypts the latest physical storage object while the shared
+   * mutation lock is held. Never use this instance's cache as the merge base:
+   * another tab may have committed a newer object since initialization.
+   */
+  private async readFreshValuesFromDisk(): Promise<FreshStorageValues> {
+    const [rawValue, rawGeneration] = await Promise.all([
+      this.device.getRawStorageValue(this.getPersistenceKey()),
+      this.device.getRawStorageValue(this.getGenerationPersistenceKey()),
+    ])
+    const parsedValues = rawValue ? (JSON.parse(rawValue) as Partial<StorageValuesObjectWithMetadata>) : undefined
+    const authoritativeGeneration = this.authoritativeStorageObjectGeneration(rawGeneration, parsedValues)
+    const valuesAreCurrent =
+      this.isStableStorageObjectGeneration(authoritativeGeneration) &&
+      (rawGeneration === undefined || this.storageObjectGeneration(parsedValues) === authoritativeGeneration)
+    const persistedValues = valuesAreCurrent ? parsedValues : undefined
+    const wrappedValue = persistedValues?.[ValueModesKeys.Wrapped]
+    let wrappedContent: ValuesObjectRecord = {}
+
+    if (wrappedValue && isEncryptedLocalStoragePayload(wrappedValue)) {
+      const decryptedPayload = await this.decryptWrappedValue(wrappedValue)
+      if (isErrorDecryptingParameters(decryptedPayload)) {
+        throw SNLog.error(Error('Unable to decrypt the latest storage object before persisting.'))
+      }
+      wrappedContent = Copy(decryptedPayload.content) as ValuesObjectRecord
+    } else if (wrappedValue?.content) {
+      wrappedContent = Copy(wrappedValue.content) as ValuesObjectRecord
+    }
+
+    const values = this.defaultValuesObject(
+      wrappedValue,
+      {
+        ...wrappedContent,
+        ...(Copy(persistedValues?.[ValueModesKeys.Unwrapped] ?? {}) as ValuesObjectRecord),
+      },
+      Copy(persistedValues?.[ValueModesKeys.Nonwrapped] ?? {}),
+    )
+    this.setStorageObjectGeneration(values, authoritativeGeneration)
+    return { values, generationMarkerPersisted: rawGeneration !== undefined }
+  }
+
+  private authoritativeStorageObjectGeneration(
+    rawGeneration: string | undefined,
+    values?: Partial<StorageValuesObjectWithMetadata>,
+  ): number {
+    if (rawGeneration === undefined) {
+      return this.storageObjectGeneration(values)
+    }
+
+    const generation = Number(rawGeneration)
+    if (!Number.isSafeInteger(generation) || generation < 0) {
+      throw Error('Invalid durable storage object generation; refusing to load or overwrite local storage.')
+    }
+
+    return generation
+  }
+
+  private storageObjectGeneration(values?: Partial<StorageValuesObjectWithMetadata>): number {
+    const generation = values?.[STORAGE_OBJECT_GENERATION_KEY]
+    return Number.isSafeInteger(generation) && (generation as number) >= 0 ? (generation as number) : 0
+  }
+
+  private setStorageObjectGeneration(values: StorageValuesObject, generation: number): void {
+    ;(values as StorageValuesObjectWithMetadata)[STORAGE_OBJECT_GENERATION_KEY] = generation
+  }
+
+  private nextStorageObjectGeneration(currentGeneration: number): number {
+    if (currentGeneration >= Number.MAX_SAFE_INTEGER) {
+      throw Error('Storage object clear generation is exhausted; refusing to clear without a durable epoch advance.')
+    }
+
+    return currentGeneration + 1
+  }
+
+  private isStableStorageObjectGeneration(generation: number): boolean {
+    return generation % 2 === 0
+  }
+
+  private nextClearingStorageObjectGeneration(currentGeneration: number): number {
+    const stableGeneration = this.isStableStorageObjectGeneration(currentGeneration)
+      ? currentGeneration
+      : this.nextStorageObjectGeneration(currentGeneration)
+    return this.nextStorageObjectGeneration(stableGeneration)
+  }
+
+  private nextStableStorageObjectGeneration(currentGeneration: number): number {
+    const clearingGeneration = this.isStableStorageObjectGeneration(currentGeneration)
+      ? this.nextStorageObjectGeneration(currentGeneration)
+      : currentGeneration
+    return this.nextStorageObjectGeneration(clearingGeneration)
+  }
+
+  private async readDurableStorageObjectState(): Promise<{
+    generation: number
+    objectMatchesGeneration: boolean
+  }> {
+    const [rawGeneration, rawValue] = await Promise.all([
+      this.device.getRawStorageValue(this.getGenerationPersistenceKey()),
+      this.device.getRawStorageValue(this.getPersistenceKey()),
+    ])
+    const values = rawValue ? (JSON.parse(rawValue) as Partial<StorageValuesObjectWithMetadata>) : undefined
+    const generation = this.authoritativeStorageObjectGeneration(rawGeneration, values)
+
+    return {
+      generation,
+      objectMatchesGeneration: rawGeneration === undefined || this.storageObjectGeneration(values) === generation,
+    }
+  }
+
+  private async readDurableStorageObjectGeneration(): Promise<number> {
+    return (await this.readDurableStorageObjectState()).generation
+  }
+
+  private async runPayloadMutationForGeneration<T>(
+    observedGeneration: number,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    return this.withStorageObjectMutationLock(async () => {
+      await this.assertCurrentStableStorageGeneration(observedGeneration)
+
+      return operation()
+    })
+  }
+
+  private async runPayloadReadForGeneration<T>(observedGeneration: number, operation: () => Promise<T>): Promise<T> {
+    return this.withStorageObjectMutationLock(async () => {
+      await this.assertCurrentStableStorageGeneration(observedGeneration)
+      const result = await operation()
+      await this.assertCurrentStableStorageGeneration(observedGeneration)
+      return result
+    })
+  }
+
+  private async assertCurrentStableStorageGeneration(observedGeneration: number): Promise<void> {
+    const durableState = await this.readDurableStorageObjectState()
+    if (
+      !durableState.objectMatchesGeneration ||
+      durableState.generation !== observedGeneration ||
+      !this.isStableStorageObjectGeneration(durableState.generation)
+    ) {
+      throw Error(STALE_STORAGE_CONTEXT_ERROR)
+    }
+  }
+
+  private storageGenerationTombstone(generation: number): StorageValuesObject {
+    const tombstone = this.defaultValuesObject()
+    this.setStorageObjectGeneration(tombstone, generation)
+    return tombstone
+  }
+
+  private async persistStorageGenerationTombstone(generation: number, markerFirst = true): Promise<void> {
+    const tombstone = this.storageGenerationTombstone(generation)
+    const persistMarker = () => this.device.setRawStorageValue(this.getGenerationPersistenceKey(), String(generation))
+    const persistTombstone = () => this.device.setRawStorageValue(this.getPersistenceKey(), JSON.stringify(tombstone))
+    if (markerFirst) {
+      await persistMarker()
+      await persistTombstone()
+    } else {
+      await persistTombstone()
+      await persistMarker()
+    }
+    this.pendingKeyValueMutations.clear()
+    this.pendingClearVersion = undefined
+    this.observedStorageObjectGeneration = generation
+    this.values = tombstone
+    this.needsPersist = false
+  }
+
+  private snapshotPendingKeyValueMutations(): PendingKeyValueMutationSnapshot {
+    return {
+      clearVersion: this.pendingClearVersion,
+      mutations: [...this.pendingKeyValueMutations.values()].map((mutation) => ({
+        ...mutation,
+        value: mutation.deleted ? undefined : Copy(mutation.value),
+      })),
+    }
+  }
+
+  private applyPendingKeyValueMutations(
+    freshValues: StorageValuesObject,
+    snapshot: PendingKeyValueMutationSnapshot,
+  ): StorageValuesObject {
+    const freshGeneration = this.storageObjectGeneration(freshValues)
+    const isClear = snapshot.clearVersion !== undefined
+    const mergedValues = isClear
+      ? this.defaultValuesObject()
+      : this.defaultValuesObject(
+          freshValues[ValueModesKeys.Wrapped],
+          Copy(freshValues[ValueModesKeys.Unwrapped]),
+          Copy(freshValues[ValueModesKeys.Nonwrapped]),
+        )
+    const mergedGeneration = isClear ? this.nextStableStorageObjectGeneration(freshGeneration) : freshGeneration
+    this.setStorageObjectGeneration(mergedValues, mergedGeneration)
+
+    for (const mutation of snapshot.mutations) {
+      if (!this.mutationAppliesToGeneration(mutation, freshGeneration, snapshot.clearVersion)) {
+        continue
+      }
+
+      const domain = mergedValues[this.domainKeyForMode(mutation.mode)]
+      if (mutation.deleted) {
+        delete domain[mutation.key]
+      } else {
+        domain[mutation.key] = Copy(mutation.value)
+      }
+    }
+
+    return mergedValues
+  }
+
+  private mutationAppliesToGeneration(
+    mutation: PendingKeyValueMutation,
+    freshGeneration: number,
+    clearVersion?: number,
+  ): boolean {
+    return clearVersion !== undefined
+      ? mutation.clearVersion === clearVersion
+      : mutation.observedGeneration === freshGeneration
+  }
+
+  private snapshotHasApplicableMutations(
+    freshValues: StorageValuesObject,
+    snapshot: PendingKeyValueMutationSnapshot,
+  ): boolean {
+    if (snapshot.clearVersion !== undefined) {
+      return true
+    }
+
+    const freshGeneration = this.storageObjectGeneration(freshValues)
+    return snapshot.mutations.some((mutation) =>
+      this.mutationAppliesToGeneration(mutation, freshGeneration, snapshot.clearVersion),
+    )
+  }
+
+  /**
+   * A setValue call can arrive while encryption or the device write is in
+   * flight. Clear only mutations whose exact versions were committed, then
+   * rebuild the cache from the committed object plus any newer pending edits.
+   */
+  private finishPersistingKeyValueMutations(
+    snapshot: PendingKeyValueMutationSnapshot,
+    mergedValues: StorageValuesObject,
+    generatedValues: StorageValuesObject,
+  ): void {
+    const committedGeneration = this.storageObjectGeneration(mergedValues)
+
+    if (snapshot.clearVersion !== undefined && this.pendingClearVersion === snapshot.clearVersion) {
+      for (const mutation of this.pendingKeyValueMutations.values()) {
+        if (mutation.clearVersion === snapshot.clearVersion) {
+          mutation.observedGeneration = committedGeneration
+          mutation.clearVersion = undefined
+        }
+      }
+      this.pendingClearVersion = undefined
+    }
+
+    for (const mutation of snapshot.mutations) {
+      const currentMutation = this.pendingKeyValueMutations.get(
+        this.keyValueMutationVersionKey(mutation.key, mutation.mode),
+      )
+      if (currentMutation?.version === mutation.version) {
+        this.pendingKeyValueMutations.delete(this.keyValueMutationVersionKey(mutation.key, mutation.mode))
+      }
+    }
+
+    const committedValues = this.defaultValuesObject(
+      generatedValues[ValueModesKeys.Wrapped],
+      Copy(mergedValues[ValueModesKeys.Unwrapped]),
+      Copy(mergedValues[ValueModesKeys.Nonwrapped]),
+    )
+    this.setStorageObjectGeneration(committedValues, committedGeneration)
+    this.observedStorageObjectGeneration = committedGeneration
+    const pendingSnapshot = this.snapshotPendingKeyValueMutations()
+    this.values = this.applyPendingKeyValueMutations(committedValues, pendingSnapshot)
+    this.values[ValueModesKeys.Wrapped] = generatedValues[ValueModesKeys.Wrapped]
+    this.needsPersist = pendingSnapshot.clearVersion !== undefined || pendingSnapshot.mutations.length > 0
   }
 
   public async awaitPersist(): Promise<void> {
@@ -281,8 +701,8 @@ export class DiskStorageService
    * Generates a payload that can be persisted to disk,
    * either as a plain object, or an encrypted item.
    */
-  private async generatePersistableValues() {
-    const rawContent = <Partial<StorageValuesObject>>Copy(this.values)
+  private async generatePersistableValues(values = this.values) {
+    const rawContent = <Partial<StorageValuesObject>>Copy(values)
 
     const valuesToWrap = rawContent[ValueModesKeys.Unwrapped]
     rawContent[ValueModesKeys.Unwrapped] = undefined
@@ -322,7 +742,7 @@ export class DiskStorageService
      * failure. Callers needing a guaranteed durable write use setValueAndAwaitPersist.
      */
     this.persistValuesToDisk().catch((error) => {
-      this.needsPersist = true
+      this.needsPersist = !(error instanceof Error && error.message === STALE_STORAGE_CONTEXT_ERROR)
       SNLog.error(error as Error)
     })
   }
@@ -335,6 +755,8 @@ export class DiskStorageService
     values: Readonly<Record<string, unknown>>,
     mode = StorageValueModes.Default,
   ): Promise<void> {
+    const observedGenerationAtInvocation = this.observedStorageObjectGeneration
+    const clearVersionAtInvocation = this.pendingClearVersion
     await this.enqueueKeyValueWrite(async () => {
       if (!this.values) {
         throw Error('Attempting to atomically set storage values before loading local storage.')
@@ -343,11 +765,27 @@ export class DiskStorageService
       const domainKey = this.domainKeyForMode(mode)
       const domain = this.values[domainKey]
       const previousNeedsPersist = this.needsPersist
-      const previousValues = new Map<string, { existed: boolean; value: unknown; appliedMutationVersion: number }>()
+      const mutationObservedGeneration =
+        clearVersionAtInvocation !== undefined ? this.observedStorageObjectGeneration : observedGenerationAtInvocation
+      const mutationClearVersion =
+        clearVersionAtInvocation !== undefined && this.pendingClearVersion === clearVersionAtInvocation
+          ? clearVersionAtInvocation
+          : undefined
+      const previousValues = new Map<
+        string,
+        {
+          existed: boolean
+          value: unknown
+          appliedMutationVersion: number
+          previousPendingMutation?: PendingKeyValueMutation
+        }
+      >()
 
       for (const [key, value] of Object.entries(values)) {
         const existed = Object.prototype.hasOwnProperty.call(domain, key)
         const previousValue = domain[key]
+        const mutationKey = this.keyValueMutationVersionKey(key, mode)
+        const previousPendingMutation = this.pendingKeyValueMutations.get(mutationKey)
 
         if (value === undefined) {
           delete domain[key]
@@ -358,12 +796,22 @@ export class DiskStorageService
         previousValues.set(key, {
           existed,
           value: previousValue,
-          appliedMutationVersion: this.recordKeyValueMutation(key, mode),
+          appliedMutationVersion: this.recordKeyValueMutation(
+            key,
+            value,
+            mode,
+            mutationObservedGeneration,
+            mutationClearVersion,
+          ),
+          previousPendingMutation,
         })
       }
 
       try {
         await this.persistCurrentValuesToDisk()
+        if (mutationClearVersion === undefined && mutationObservedGeneration !== this.observedStorageObjectGeneration) {
+          throw Error(STALE_STORAGE_CONTEXT_ERROR)
+        }
       } catch (error) {
         for (const [key, previous] of previousValues) {
           if (this.getKeyValueMutationVersion(key, mode) !== previous.appliedMutationVersion) {
@@ -375,7 +823,15 @@ export class DiskStorageService
           } else {
             delete domain[key]
           }
-          this.recordKeyValueMutation(key, mode)
+
+          const mutationKey = this.keyValueMutationVersionKey(key, mode)
+          if (previous.previousPendingMutation) {
+            this.pendingKeyValueMutations.set(mutationKey, previous.previousPendingMutation)
+            this.keyValueMutationVersions.set(mutationKey, previous.previousPendingMutation.version)
+          } else {
+            this.pendingKeyValueMutations.delete(mutationKey)
+            this.keyValueMutationVersions.delete(mutationKey)
+          }
         }
         this.needsPersist = previousNeedsPersist
         throw error
@@ -390,8 +846,12 @@ export class DiskStorageService
 
     const domainKey = this.domainKeyForMode(mode)
     const domainStorage = this.values[domainKey]
-    domainStorage[key] = value
-    this.recordKeyValueMutation(key, mode)
+    if (value === undefined) {
+      delete domainStorage[key]
+    } else {
+      domainStorage[key] = value
+    }
+    this.recordKeyValueMutation(key, value, mode)
   }
 
   private keyValueMutationVersionKey(key: string, mode: StorageValueModes): string {
@@ -402,10 +862,25 @@ export class DiskStorageService
     return this.keyValueMutationVersions.get(this.keyValueMutationVersionKey(key, mode)) ?? 0
   }
 
-  private recordKeyValueMutation(key: string, mode: StorageValueModes): number {
+  private recordKeyValueMutation(
+    key: string,
+    value: unknown,
+    mode: StorageValueModes,
+    observedGeneration = this.observedStorageObjectGeneration,
+    clearVersion = this.pendingClearVersion,
+  ): number {
     const mutationKey = this.keyValueMutationVersionKey(key, mode)
     const version = ++this.keyValueMutationSequence
     this.keyValueMutationVersions.set(mutationKey, version)
+    this.pendingKeyValueMutations.set(mutationKey, {
+      key,
+      mode,
+      value,
+      deleted: value === undefined,
+      version,
+      observedGeneration,
+      clearVersion,
+    })
     return version
   }
 
@@ -436,11 +911,7 @@ export class DiskStorageService
       throw Error(`Attempting to remove storage key ${key} before loading local storage.`)
     }
 
-    const domain = this.values[this.domainKeyForMode(mode)]
-
-    if (Object.prototype.hasOwnProperty.call(domain, key)) {
-      await this.setValuesAtomicallyAndAwaitPersist({ [key]: undefined }, mode)
-    }
+    await this.setValuesAtomicallyAndAwaitPersist({ [key]: undefined }, mode)
   }
 
   /**
@@ -448,6 +919,10 @@ export class DiskStorageService
    */
   private getPersistenceKey() {
     return namespacedKey(this.identifier, RawStorageKey.StorageObject)
+  }
+
+  private getGenerationPersistenceKey() {
+    return namespacedKey(this.identifier, STORAGE_OBJECT_GENERATION_RAW_KEY)
   }
 
   private defaultValuesObject(
@@ -487,15 +962,20 @@ export class DiskStorageService
     await this.enqueueKeyValueWrite(async () => {
       const previousValues = this.values
       const previousNeedsPersist = this.needsPersist
+      const previousPendingMutations = new Map(this.pendingKeyValueMutations)
+      const previousPendingClearVersion = this.pendingClearVersion
       await this.setInitialValues()
       const appliedMutationSequence = ++this.keyValueMutationSequence
+      this.pendingKeyValueMutations.clear()
+      this.pendingClearVersion = appliedMutationSequence
 
       try {
         await this.persistCurrentValuesToDisk()
       } catch (error) {
         if (this.keyValueMutationSequence === appliedMutationSequence) {
           this.values = previousValues
-          this.keyValueMutationSequence++
+          this.pendingKeyValueMutations = previousPendingMutations
+          this.pendingClearVersion = previousPendingClearVersion
         }
         this.needsPersist = previousNeedsPersist
         throw error
@@ -531,11 +1011,17 @@ export class DiskStorageService
   }
 
   public async getAllRawPayloads(): Promise<FullyFormedTransferPayload[]> {
-    return this.device.getAllDatabaseEntries(this.identifier)
+    const observedGeneration = this.observedStorageObjectGeneration
+    return this.runPayloadReadForGeneration(observedGeneration, () =>
+      this.device.getAllDatabaseEntries(this.identifier),
+    )
   }
 
   public async getRawPayloads(uuids: string[]): Promise<FullyFormedTransferPayload[]> {
-    return this.device.getDatabaseEntries(this.identifier, uuids)
+    const observedGeneration = this.observedStorageObjectGeneration
+    return this.runPayloadReadForGeneration(observedGeneration, () =>
+      this.device.getDatabaseEntries(this.identifier, uuids),
+    )
   }
 
   public async savePayload(payload: FullyFormedPayloadInterface): Promise<void> {
@@ -543,6 +1029,8 @@ export class DiskStorageService
   }
 
   public async savePayloads(payloads: FullyFormedPayloadInterface[]): Promise<void> {
+    const observedGeneration = this.observedStorageObjectGeneration
+
     if (this.persistencePolicy === StoragePersistencePolicies.Ephemeral) {
       return
     }
@@ -590,12 +1078,14 @@ export class DiskStorageService
     const exportedDeleted = deleted.map(CreateDeletedLocalStorageContextPayload)
 
     return this.enqueueStorageWrite(() =>
-      this.executeCriticalFunction(async () => {
-        return this.device?.saveDatabaseEntries(
-          [...exportedEncrypted, ...exportedDecrypted, ...exportedDeleted],
-          this.identifier,
-        )
-      }),
+      this.executeCriticalFunction(() =>
+        this.runPayloadMutationForGeneration(observedGeneration, () =>
+          this.device.saveDatabaseEntries(
+            [...exportedEncrypted, ...exportedDecrypted, ...exportedDeleted],
+            this.identifier,
+          ),
+        ),
+      ),
     )
   }
 
@@ -604,53 +1094,55 @@ export class DiskStorageService
   }
 
   public async deletePayloadsWithUuids(uuids: string[]): Promise<void> {
+    const observedGeneration = this.observedStorageObjectGeneration
     await this.enqueueStorageWrite(() =>
-      this.executeCriticalFunction(async () => {
-        await Promise.all(uuids.map((uuid) => this.device.removeDatabaseEntry(uuid, this.identifier)))
-      }),
+      this.executeCriticalFunction(() =>
+        this.runPayloadMutationForGeneration(observedGeneration, async () => {
+          await Promise.all(uuids.map((uuid) => this.device.removeDatabaseEntry(uuid, this.identifier)))
+        }),
+      ),
     )
   }
 
   public async deletePayloadWithUuid(uuid: string) {
+    const observedGeneration = this.observedStorageObjectGeneration
     return this.enqueueStorageWrite(() =>
-      this.executeCriticalFunction(async () => {
-        await this.device.removeDatabaseEntry(uuid, this.identifier)
-      }),
+      this.executeCriticalFunction(() =>
+        this.runPayloadMutationForGeneration(observedGeneration, async () => {
+          await this.device.removeDatabaseEntry(uuid, this.identifier)
+        }),
+      ),
     )
   }
 
   public async clearAllPayloads() {
+    const observedGeneration = this.observedStorageObjectGeneration
     return this.enqueueStorageWrite(() =>
-      this.executeCriticalFunction(async () => {
-        return this.device.removeAllDatabaseEntries(this.identifier)
-      }),
+      this.executeCriticalFunction(() =>
+        this.runPayloadMutationForGeneration(observedGeneration, () =>
+          this.device.removeAllDatabaseEntries(this.identifier),
+        ),
+      ),
     )
   }
 
   public clearAllData(): Promise<void> {
     return this.enqueueStorageWrite(() =>
-      this.executeCriticalFunction(async () => {
-        await this.clearValues()
-        await this.clearAllPayloadsWithoutQueue()
+      this.executeCriticalFunction(() =>
+        this.withStorageObjectMutationLock(async () => {
+          const priorGeneration = await this.readDurableStorageObjectGeneration()
+          // The first epoch fences pre-clear writers. The second is committed
+          // only after payload deletion, fencing contexts initialized mid-clear.
+          const clearingGeneration = this.nextClearingStorageObjectGeneration(priorGeneration)
+          await this.persistStorageGenerationTombstone(clearingGeneration)
 
-        await this.device.removeRawStorageValue(namespacedKey(this.identifier, RawStorageKey.SnjsVersion))
+          await this.device.removeAllDatabaseEntries(this.identifier)
+          await this.device.removeRawStorageValue(namespacedKey(this.identifier, RawStorageKey.SnjsVersion))
 
-        await this.device.removeRawStorageValue(this.getPersistenceKey())
-      }),
+          const finalGeneration = this.nextStableStorageObjectGeneration(clearingGeneration)
+          await this.persistStorageGenerationTombstone(finalGeneration, false)
+        }),
+      ),
     )
-  }
-
-  /**
-   * The unqueued body of clearAllPayloads, for use by callers that are already
-   * running inside the storage write queue (e.g. clearAllData). Calling the
-   * public clearAllPayloads from within a queued op would enqueue a NEW write
-   * that waits for the current op's tail to settle — but the current op cannot
-   * settle until that nested write finishes, which is a deadlock. This method
-   * performs the device call directly without touching the queue.
-   */
-  private async clearAllPayloadsWithoutQueue(): Promise<void> {
-    await this.executeCriticalFunction(async () => {
-      return this.device.removeAllDatabaseEntries(this.identifier)
-    })
   }
 }

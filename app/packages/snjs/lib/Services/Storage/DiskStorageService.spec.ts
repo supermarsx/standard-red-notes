@@ -1,5 +1,10 @@
 import { DiskStorageService } from './DiskStorageService'
-import { InternalEventBus, DeviceInterface, InternalEventBusInterface } from '@standardnotes/services'
+import {
+  InternalEventBus,
+  DeviceInterface,
+  InternalEventBusInterface,
+  StoragePersistencePolicies,
+} from '@standardnotes/services'
 import { UuidGenerator } from '@standardnotes/utils'
 import { SNLog } from '../../Log'
 
@@ -81,6 +86,7 @@ describe('diskStorageService', () => {
       device.saveDatabaseEntries = jest.fn().mockImplementation(() => gatedDeviceCall('save'))
       device.removeDatabaseEntry = jest.fn().mockImplementation(() => gatedDeviceCall('delete'))
       device.removeAllDatabaseEntries = jest.fn().mockImplementation(() => gatedDeviceCall('clear'))
+      device.getRawStorageValue = jest.fn().mockResolvedValue(undefined)
       device.setRawStorageValue = jest.fn().mockResolvedValue(undefined)
       device.removeRawStorageValue = jest.fn().mockResolvedValue(undefined)
     })
@@ -164,6 +170,7 @@ describe('diskStorageService', () => {
       } as never)
       storageService['values'] = DiskStorageService.DefaultValuesObject()
       storageService['storagePersistable'] = true
+      device.getRawStorageValue = jest.fn().mockResolvedValue(undefined)
       device.setRawStorageValue = jest.fn().mockResolvedValue(undefined)
       device.removeRawStorageValue = jest.fn().mockResolvedValue(undefined)
       SNLog.onError = jest.fn()
@@ -208,6 +215,7 @@ describe('diskStorageService', () => {
       } as never)
       storageService['values'] = DiskStorageService.DefaultValuesObject()
       storageService['storagePersistable'] = true
+      device.getRawStorageValue = jest.fn().mockResolvedValue(undefined)
       device.setRawStorageValue = jest.fn().mockResolvedValue(undefined)
     })
 
@@ -345,9 +353,13 @@ describe('diskStorageService', () => {
 
     it('a rejected forward write remains on the old checkpoint after a process boundary', async () => {
       let rawStorageValue: string | undefined
-      device.getRawStorageValue = jest.fn().mockImplementation(async () => rawStorageValue)
-      device.setRawStorageValue = jest.fn().mockImplementation(async (_key: string, value: string) => {
-        rawStorageValue = value
+      device.getRawStorageValue = jest.fn().mockImplementation(async (key: string) => {
+        return key === storageService['getPersistenceKey']() ? rawStorageValue : undefined
+      })
+      device.setRawStorageValue = jest.fn().mockImplementation(async (key: string, value: string) => {
+        if (key === storageService['getPersistenceKey']()) {
+          rawStorageValue = value
+        }
       })
 
       const oldCheckpoint = { version: 1, revision: 8, syncToken: 'durable-old-token' }
@@ -388,6 +400,506 @@ describe('diskStorageService', () => {
       await restartedAfterCommit.initializeFromDisk()
 
       expect(restartedAfterCommit.getValue('syncPositionCheckpoint')).toEqual(newCheckpoint)
+    })
+  })
+
+  describe('cross-instance storage-object mutation', () => {
+    type Deferred = { promise: Promise<void>; resolve: () => void }
+
+    const createDeferred = (): Deferred => {
+      let resolve!: () => void
+      const promise = new Promise<void>((res) => {
+        resolve = res
+      })
+      return { promise, resolve }
+    }
+
+    const flush = () => new Promise((resolve) => setImmediate(resolve))
+
+    let rawStorageValue: string | undefined
+    let rawGenerationValue: string | undefined
+    let sharedDevice: DeviceInterface
+    const originalLockManager = navigator.locks
+
+    const createService = async (encryptionProvider?: object) => {
+      const service = new DiskStorageService(sharedDevice, 'shared-test', internalEventBus)
+      service.provideEncryptionProvider(
+        (encryptionProvider ?? {
+          hasRootKeyEncryptionSource: jest.fn().mockReturnValue(false),
+          encryptSplit: jest.fn().mockResolvedValue([]),
+        }) as never,
+      )
+      await service.initializeFromDisk()
+      service['storagePersistable'] = true
+      return service
+    }
+
+    const persistedUnwrappedValues = () => {
+      const persisted = JSON.parse(rawStorageValue as string) as {
+        wrapped: { content?: Record<string, unknown> }
+      }
+      return persisted.wrapped.content ?? {}
+    }
+
+    const persistRawValue = (key: string, value: string) => {
+      if (key.endsWith('-storage_object_generation')) {
+        rawGenerationValue = value
+      } else if (key.endsWith('-storage')) {
+        rawStorageValue = value
+      }
+    }
+
+    beforeEach(() => {
+      Object.defineProperty(navigator, 'locks', {
+        configurable: true,
+        value: undefined,
+      })
+      UuidGenerator.SetGenerator(() => 'cross-instance-storage-test-uuid')
+      rawStorageValue = undefined
+      rawGenerationValue = undefined
+      sharedDevice = {
+        getRawStorageValue: jest.fn().mockImplementation(async (key: string) => {
+          if (key.endsWith('-storage_object_generation')) {
+            return rawGenerationValue
+          }
+          return key.endsWith('-storage') ? rawStorageValue : undefined
+        }),
+        setRawStorageValue: jest.fn().mockImplementation(async (key: string, value: string) => {
+          persistRawValue(key, value)
+        }),
+        removeRawStorageValue: jest.fn().mockResolvedValue(undefined),
+        removeRawStorageValuesForIdentifier: jest.fn().mockImplementation(async () => {
+          rawStorageValue = undefined
+          rawGenerationValue = undefined
+        }),
+        clearNamespacedKeychainValue: jest.fn().mockResolvedValue(undefined),
+        getAllDatabaseEntries: jest.fn().mockResolvedValue([]),
+        getDatabaseEntries: jest.fn().mockResolvedValue([]),
+        removeAllDatabaseEntries: jest.fn().mockResolvedValue(undefined),
+        saveDatabaseEntries: jest.fn().mockResolvedValue(undefined),
+      } as never
+    })
+
+    afterEach(() => {
+      Object.defineProperty(navigator, 'locks', {
+        configurable: true,
+        value: originalLockManager,
+      })
+    })
+
+    it('fresh-merges independent keys from two stale instances while the first physical write is delayed', async () => {
+      const firstService = await createService()
+      const secondService = await createService()
+      const firstWriteGate = createDeferred()
+
+      ;(sharedDevice.setRawStorageValue as jest.Mock).mockImplementationOnce(async (key: string, value: string) => {
+        await firstWriteGate.promise
+        persistRawValue(key, value)
+      })
+
+      const firstWrite = firstService.setValueAndAwaitPersist('first-context', 'alpha')
+      await flush()
+      const secondWrite = secondService.setValueAndAwaitPersist('second-context', 'beta')
+      await flush()
+
+      expect(sharedDevice.setRawStorageValue).toHaveBeenCalledTimes(1)
+      firstWriteGate.resolve()
+      await Promise.all([firstWrite, secondWrite])
+
+      expect(sharedDevice.setRawStorageValue).toHaveBeenCalledTimes(2)
+      expect(persistedUnwrappedValues()).toEqual(
+        expect.objectContaining({
+          'first-context': 'alpha',
+          'second-context': 'beta',
+        }),
+      )
+    })
+
+    it('decrypts the fresh wrapped domain before merging a pending mutation', async () => {
+      rawStorageValue = JSON.stringify({
+        wrapped: {
+          uuid: 'encrypted-storage-object',
+          content_type: 'SN|EncryptedStorage',
+          content: '004:ciphertext',
+          enc_item_key: 'encrypted-item-key',
+          items_key_id: undefined,
+          errorDecrypting: false,
+          waitingForKey: false,
+          deleted: false,
+        },
+        unwrapped: {},
+        nonwrapped: {},
+      })
+      const decryptSplitSingle = jest.fn().mockResolvedValue({
+        content: { encryptedExisting: 'preserved' },
+        errorDecrypting: false,
+      })
+      const service = await createService({
+        hasRootKeyEncryptionSource: jest.fn().mockReturnValue(false),
+        decryptSplitSingle,
+      })
+
+      await service.setValueAndAwaitPersist('new-key', 'new-value')
+
+      expect(decryptSplitSingle).toHaveBeenCalledTimes(1)
+      expect(persistedUnwrappedValues()).toEqual(
+        expect.objectContaining({
+          encryptedExisting: 'preserved',
+          'new-key': 'new-value',
+        }),
+      )
+    })
+
+    it('does not resurrect a physically deleted key when a stale instance later writes another key', async () => {
+      const seeder = await createService()
+      await seeder.setValuesAtomicallyAndAwaitPersist({
+        doomed: 'remove-me',
+        retained: 'keep-me',
+      })
+
+      const deletingService = await createService()
+      const staleWritingService = await createService()
+      const deleteWriteGate = createDeferred()
+
+      ;(sharedDevice.setRawStorageValue as jest.Mock).mockImplementationOnce(async (key: string, value: string) => {
+        await deleteWriteGate.promise
+        persistRawValue(key, value)
+      })
+
+      const deleteWrite = deletingService.removeValue('doomed')
+      await flush()
+      const staleWrite = staleWritingService.setValueAndAwaitPersist('independent', 'new-value')
+      await flush()
+
+      expect(sharedDevice.setRawStorageValue).toHaveBeenCalledTimes(2)
+      deleteWriteGate.resolve()
+      await Promise.all([deleteWrite, staleWrite])
+
+      const persisted = persistedUnwrappedValues()
+      expect(Object.prototype.hasOwnProperty.call(persisted, 'doomed')).toBe(false)
+      expect(persisted).toEqual(
+        expect.objectContaining({
+          retained: 'keep-me',
+          independent: 'new-value',
+        }),
+      )
+    })
+
+    it('keeps mutations made as part of the same clear and ordinary post-clear mutations', async () => {
+      const seeder = await createService()
+      await seeder.setValuesAtomicallyAndAwaitPersist({
+        obsoleteA: 'old-a',
+        obsoleteB: 'old-b',
+      })
+
+      const clearingService = await createService()
+      const clearWriteGate = createDeferred()
+
+      ;(sharedDevice.setRawStorageValue as jest.Mock).mockImplementationOnce(async (key: string, value: string) => {
+        await clearWriteGate.promise
+        persistRawValue(key, value)
+      })
+
+      const clearWrite = clearingService.clearValues()
+      await flush()
+      clearingService.setValue('same-clear', 'survives')
+      await flush()
+
+      clearWriteGate.resolve()
+      await clearWrite
+      await clearingService.awaitPersist()
+      await clearingService.setValueAndAwaitPersist('post-clear', 'also-survives')
+
+      const persisted = persistedUnwrappedValues()
+      expect(Object.prototype.hasOwnProperty.call(persisted, 'obsoleteA')).toBe(false)
+      expect(Object.prototype.hasOwnProperty.call(persisted, 'obsoleteB')).toBe(false)
+      expect(persisted['same-clear']).toBe('survives')
+      expect(persisted['post-clear']).toBe('also-survives')
+    })
+
+    it('does not resurrect a pending pre-clear mutation after another instance clears all data', async () => {
+      const suspendedService = await createService()
+      const clearingService = await createService()
+
+      suspendedService['storagePersistable'] = false
+      suspendedService.setValue('pre-clear-private-value', 'must-not-return')
+      await suspendedService.awaitPersist()
+
+      await clearingService.clearAllData()
+
+      const clearedObject = JSON.parse(rawStorageValue as string) as Record<string, unknown>
+      expect(rawGenerationValue).toBe('2')
+      expect(clearedObject.storage_object_generation).toBe(2)
+      expect(clearedObject.wrapped).toEqual({})
+      expect(sharedDevice.removeRawStorageValue).not.toHaveBeenCalledWith(clearingService['getPersistenceKey']())
+
+      suspendedService['storagePersistable'] = true
+      await expect(suspendedService['persistValuesToDisk']()).rejects.toThrow('Storage context was cleared')
+
+      expect(persistedUnwrappedValues()['pre-clear-private-value']).toBeUndefined()
+
+      await suspendedService.setValueAndAwaitPersist('ordinary-post-clear-value', 'survives')
+      expect(persistedUnwrappedValues()['ordinary-post-clear-value']).toBe('survives')
+    })
+
+    it('rejects an atomic KV mutation invoked before clear even when its local queue runs afterward', async () => {
+      const suspendedService = await createService()
+      const clearingService = await createService()
+      const keyValueQueueGate = createDeferred()
+
+      suspendedService['keyValueWriteQueue'] = keyValueQueueGate.promise
+      const staleAtomicWrite = suspendedService.setValueAndAwaitPersist('queued-pre-clear-value', 'must-not-return')
+      await flush()
+
+      await clearingService.clearAllData()
+      keyValueQueueGate.resolve()
+
+      await expect(staleAtomicWrite).rejects.toThrow('Storage context was cleared')
+      expect(persistedUnwrappedValues()['queued-pre-clear-value']).toBeUndefined()
+    })
+
+    it('ignores a legacy full-object overwrite that cannot carry the durable clear generation', async () => {
+      const clearingService = await createService()
+      await clearingService.clearAllData()
+
+      rawStorageValue = JSON.stringify({
+        wrapped: { content: { legacyPrivateValue: 'must-not-return' } },
+        unwrapped: {},
+        nonwrapped: {},
+      })
+
+      const restartedService = await createService()
+      expect(restartedService.getValue('legacyPrivateValue')).toBeUndefined()
+
+      await expect(restartedService.setValueAndAwaitPersist('new-generation-value', 'safe')).rejects.toThrow(
+        'Storage context was cleared',
+      )
+      await restartedService.setValueAndAwaitPersist('new-generation-value', 'safe')
+      expect(persistedUnwrappedValues()['legacyPrivateValue']).toBeUndefined()
+      expect(persistedUnwrappedValues()['new-generation-value']).toBe('safe')
+    })
+
+    it('rejects rather than silently acknowledging a stale payload save after clearAllData', async () => {
+      const suspendedService = await createService()
+      const clearingService = await createService()
+      const payloadQueueGate = createDeferred()
+
+      suspendedService['storageWriteQueue'] = payloadQueueGate.promise
+      const stalePayloadSave = suspendedService.savePayloads([])
+      await flush()
+
+      await clearingService.clearAllData()
+      payloadQueueGate.resolve()
+
+      await expect(stalePayloadSave).rejects.toThrow('Storage context was cleared')
+      expect(sharedDevice.saveDatabaseEntries).not.toHaveBeenCalled()
+    })
+
+    it('rejects a current-looking payload save that starts while clearAllData is deleting payloads', async () => {
+      const clearingService = await createService()
+      const payloadClearStarted = createDeferred()
+      const payloadClearGate = createDeferred()
+
+      ;(sharedDevice.removeAllDatabaseEntries as jest.Mock).mockImplementationOnce(async () => {
+        payloadClearStarted.resolve()
+        await payloadClearGate.promise
+      })
+
+      const clearPromise = clearingService.clearAllData()
+      await payloadClearStarted.promise
+
+      expect(rawGenerationValue).toBe('1')
+      const duringClearService = await createService()
+      const payloadSave = duringClearService.savePayloads([])
+      const rejectedSave = expect(payloadSave).rejects.toThrow('Storage context was cleared')
+      const keyValueSave = clearingService.setValueAndAwaitPersist('during-clear-kv', 'must-not-survive')
+      const rejectedKeyValueSave = expect(keyValueSave).rejects.toThrow('Storage context was cleared')
+      await flush()
+      expect(sharedDevice.saveDatabaseEntries).not.toHaveBeenCalled()
+
+      payloadClearGate.resolve()
+      await clearPromise
+      await rejectedSave
+      await rejectedKeyValueSave
+
+      expect(rawGenerationValue).toBe('2')
+      expect(sharedDevice.saveDatabaseEntries).not.toHaveBeenCalled()
+      expect(persistedUnwrappedValues()['during-clear-kv']).toBeUndefined()
+    })
+
+    it('leaves an interrupted clear odd and rejects KV recovery shortcuts and payload reads', async () => {
+      const clearingService = await createService()
+      ;(sharedDevice.removeAllDatabaseEntries as jest.Mock).mockRejectedValueOnce(new Error('payload clear failed'))
+
+      await expect(clearingService.clearAllData()).rejects.toThrow('payload clear failed')
+      expect(rawGenerationValue).toBe('1')
+
+      const restartedService = await createService()
+      expect(restartedService['observedStorageObjectGeneration']).toBe(-1)
+
+      await expect(restartedService.clearValues()).rejects.toThrow('Storage context was cleared')
+      await expect(restartedService.clearValues()).rejects.toThrow('Storage context was cleared')
+      await expect(restartedService.setValueAndAwaitPersist('unsafe-recovery', true)).rejects.toThrow(
+        'Storage context was cleared',
+      )
+      await expect(restartedService.setValueAndAwaitPersist('unsafe-recovery', true)).rejects.toThrow(
+        'Storage context was cleared',
+      )
+      await expect(restartedService.getAllRawPayloads()).rejects.toThrow('Storage context was cleared')
+      await expect(restartedService.getRawPayloads(['payload-id'])).rejects.toThrow('Storage context was cleared')
+
+      expect(rawGenerationValue).toBe('1')
+      expect((JSON.parse(rawStorageValue as string) as Record<string, unknown>).storage_object_generation).toBe(1)
+      expect(sharedDevice.getAllDatabaseEntries).not.toHaveBeenCalled()
+      expect(sharedDevice.getDatabaseEntries).not.toHaveBeenCalled()
+    })
+
+    it('initializes fail-closed while ephemeral cleanup is in progress', async () => {
+      const ephemeralService = await createService()
+      await ephemeralService.setValueAndAwaitPersist('private-before-ephemeral', 'must-not-load')
+      const cleanupStarted = createDeferred()
+      const cleanupGate = createDeferred()
+
+      ;(sharedDevice.clearNamespacedKeychainValue as jest.Mock).mockImplementationOnce(async () => {
+        cleanupStarted.resolve()
+        await cleanupGate.promise
+      })
+
+      const ephemeralPromise = ephemeralService.setPersistencePolicy(StoragePersistencePolicies.Ephemeral)
+      await cleanupStarted.promise
+      expect(rawGenerationValue).toBe('1')
+
+      const midCleanupService = await createService()
+      expect(midCleanupService.getValue('private-before-ephemeral')).toBeUndefined()
+      expect(midCleanupService['observedStorageObjectGeneration']).toBe(-1)
+      const payloadRead = expect(midCleanupService.getAllRawPayloads()).rejects.toThrow('Storage context was cleared')
+
+      cleanupGate.resolve()
+      await ephemeralPromise
+      await payloadRead
+      expect(rawGenerationValue).toBe('2')
+      expect(sharedDevice.getAllDatabaseEntries).not.toHaveBeenCalled()
+    })
+
+    it.each([
+      ['keychain deletion', 'clearNamespacedKeychainValue'],
+      ['payload database deletion', 'removeAllDatabaseEntries'],
+      ['raw storage deletion', 'removeRawStorageValuesForIdentifier'],
+    ])('retains an odd ephemeral fence when %s fails', async (_label, method) => {
+      const ephemeralService = await createService()
+      const destructiveMethod = (sharedDevice as unknown as Record<string, jest.Mock>)[method]
+      destructiveMethod.mockRejectedValueOnce(new Error(`${method} failed`))
+
+      await expect(ephemeralService.setPersistencePolicy(StoragePersistencePolicies.Ephemeral)).rejects.toThrow(
+        `${method} failed`,
+      )
+
+      expect(rawGenerationValue).toBe('1')
+      expect((JSON.parse(rawStorageValue as string) as Record<string, unknown>).storage_object_generation).toBe(1)
+      const restartedService = await createService()
+      expect(restartedService['observedStorageObjectGeneration']).toBe(-1)
+      await expect(restartedService.getAllRawPayloads()).rejects.toThrow('Storage context was cleared')
+    })
+
+    it('validates the payload generation again after a database read', async () => {
+      const service = await createService()
+      ;(sharedDevice.getAllDatabaseEntries as jest.Mock).mockImplementationOnce(async () => {
+        rawGenerationValue = '2'
+        rawStorageValue = JSON.stringify({
+          wrapped: {},
+          unwrapped: {},
+          nonwrapped: {},
+          storage_object_generation: 2,
+        })
+        return []
+      })
+
+      await expect(service.getAllRawPayloads()).rejects.toThrow('Storage context was cleared')
+      expect(sharedDevice.getAllDatabaseEntries).toHaveBeenCalledTimes(1)
+    })
+
+    it('allows payload reads when the generation is stable and current', async () => {
+      const service = await createService()
+
+      await expect(service.isStorageContextCurrent()).resolves.toBe(true)
+      await expect(service.getAllRawPayloads()).resolves.toEqual([])
+      await expect(service.getRawPayloads(['payload-id'])).resolves.toEqual([])
+
+      expect(sharedDevice.getAllDatabaseEntries).toHaveBeenCalledTimes(1)
+      expect(sharedDevice.getDatabaseEntries).toHaveBeenCalledWith('shared-test', ['payload-id'])
+    })
+
+    it('reports an odd, stale, or incomplete storage generation as non-current', async () => {
+      const service = await createService()
+
+      rawGenerationValue = '1'
+      await expect(service.isStorageContextCurrent()).resolves.toBe(false)
+
+      rawGenerationValue = '2'
+      rawStorageValue = JSON.stringify({
+        wrapped: {},
+        unwrapped: {},
+        nonwrapped: {},
+        storage_object_generation: 0,
+      })
+      await expect(service.isStorageContextCurrent()).resolves.toBe(false)
+
+      rawStorageValue = JSON.stringify({
+        wrapped: {},
+        unwrapped: {},
+        nonwrapped: {},
+        storage_object_generation: 2,
+      })
+      await expect(service.isStorageContextCurrent()).resolves.toBe(false)
+    })
+
+    it('retains an empty generation fence when switching to ephemeral persistence', async () => {
+      const suspendedService = await createService()
+      const ephemeralService = await createService()
+
+      suspendedService['storagePersistable'] = false
+      suspendedService.setValue('pre-ephemeral-private-value', 'must-not-return')
+      await suspendedService.awaitPersist()
+
+      await ephemeralService.setPersistencePolicy(StoragePersistencePolicies.Ephemeral)
+
+      expect(rawGenerationValue).toBe('2')
+      expect(JSON.parse(rawStorageValue as string)).toEqual(expect.objectContaining({ storage_object_generation: 2 }))
+
+      suspendedService['storagePersistable'] = true
+      await expect(suspendedService['persistValuesToDisk']()).rejects.toThrow('Storage context was cleared')
+      expect(persistedUnwrappedValues()['pre-ephemeral-private-value']).toBeUndefined()
+    })
+
+    it('keeps a newer local mutation in memory when it arrives during an older physical write', async () => {
+      const service = await createService()
+      const firstWriteGate = createDeferred()
+      const secondWriteGate = createDeferred()
+
+      ;(sharedDevice.setRawStorageValue as jest.Mock)
+        .mockImplementationOnce(async (key: string, value: string) => {
+          await firstWriteGate.promise
+          persistRawValue(key, value)
+        })
+        .mockImplementationOnce(async (key: string, value: string) => {
+          await secondWriteGate.promise
+          persistRawValue(key, value)
+        })
+
+      const firstWrite = service.setValueAndAwaitPersist('checkpoint', 'first')
+      await flush()
+      service.setValue('checkpoint', 'newer')
+
+      firstWriteGate.resolve()
+      await firstWrite
+      await flush()
+
+      expect(service.getValue('checkpoint')).toBe('newer')
+      expect(sharedDevice.setRawStorageValue).toHaveBeenCalledTimes(2)
+
+      secondWriteGate.resolve()
+      await service.awaitPersist()
+      expect(persistedUnwrappedValues().checkpoint).toBe('newer')
     })
   })
 })
