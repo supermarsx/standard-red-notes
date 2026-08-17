@@ -21,6 +21,7 @@ describe('ValetTokenAuthMiddleware', () => {
   const createMiddleware = () => new ValetTokenAuthMiddleware(tokenDecoder, valetTokenRepository, logger)
 
   beforeEach(() => {
+    jest.clearAllMocks()
     valetTokenRepository = {} as jest.Mocked<ValetTokenRepositoryInterface>
     valetTokenRepository.isUsed = jest.fn().mockResolvedValue(false)
 
@@ -191,6 +192,24 @@ describe('ValetTokenAuthMiddleware', () => {
 
     expect(response.status).toHaveBeenCalledWith(401)
     expect(next).not.toHaveBeenCalled()
+  })
+
+  it('returns 401 when a GET request has no parsed body', async () => {
+    request = { headers: {}, query: {}, body: undefined } as unknown as Request
+
+    await createMiddleware().handler(request, response, next)
+
+    expect(response.status).toHaveBeenCalledWith(401)
+    expect(next).not.toHaveBeenCalled()
+  })
+
+  it('never writes a reused valet token to logs', async () => {
+    request.headers['x-valet-token'] = 'secret-valet-token'
+    valetTokenRepository.isUsed = jest.fn().mockResolvedValue(true)
+
+    await createMiddleware().handler(request, response, next)
+
+    expect(JSON.stringify(logger.debug.mock.calls)).not.toContain('secret-valet-token')
   })
 
   it('should not authorize if valet token has an invalid remote resource identifier', async () => {

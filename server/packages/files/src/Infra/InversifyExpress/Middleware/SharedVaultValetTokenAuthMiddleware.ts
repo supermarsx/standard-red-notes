@@ -8,6 +8,7 @@ import { Logger } from 'winston'
 import TYPES from '../../../Bootstrap/Types'
 import { SharedVaultValetTokenResponseLocals } from './SharedVaultValetTokenResponseLocals'
 import { ValetTokenRepositoryInterface } from '../../../Domain/ValetToken/ValetTokenRepositoryInterface'
+import { readValetToken } from './ReadValetToken'
 
 @injectable()
 export class SharedVaultValetTokenAuthMiddleware extends BaseMiddleware {
@@ -21,7 +22,7 @@ export class SharedVaultValetTokenAuthMiddleware extends BaseMiddleware {
 
   async handler(request: Request, response: Response, next: NextFunction): Promise<void> {
     try {
-      const valetToken = request.headers['x-valet-token'] || request.body.valetToken || request.query.valetToken
+      const valetToken = readValetToken(request)
       if (!valetToken) {
         this.logger.debug('SharedVaultValetTokenAuthMiddleware missing valet token.')
 
@@ -37,7 +38,6 @@ export class SharedVaultValetTokenAuthMiddleware extends BaseMiddleware {
 
       if (await this.valetTokenRepository.isUsed(valetToken)) {
         this.logger.debug('Already used valet token.', {
-          valetToken,
           codeTag: 'SharedVaultValetTokenAuthMiddleware',
         })
 

@@ -90,17 +90,26 @@ describe('SharedVaultValetTokenAuthMiddleware', () => {
     expect(next).toHaveBeenCalled()
   })
 
-  it('accepts the valet token from the query string', async () => {
+  it('rejects a valet token from the query string', async () => {
     request = { headers: {}, query: { valetToken: 'query-token' }, body: {} } as unknown as Request
 
     await createMiddleware().handler(request, response, next)
 
-    expect(tokenDecoder.decodeToken).toHaveBeenCalledWith('query-token')
-    expect(next).toHaveBeenCalled()
+    expect(tokenDecoder.decodeToken).not.toHaveBeenCalled()
+    expectRejectedAsInvalid()
   })
 
   it('rejects a request that presents no valet token at all', async () => {
     request = { headers: {}, query: {}, body: {} } as unknown as Request
+
+    await createMiddleware().handler(request, response, next)
+
+    expect(tokenDecoder.decodeToken).not.toHaveBeenCalled()
+    expectRejectedAsInvalid()
+  })
+
+  it('rejects a GET request with no parsed body instead of throwing', async () => {
+    request = { headers: {}, query: {}, body: undefined } as unknown as Request
 
     await createMiddleware().handler(request, response, next)
 
@@ -116,6 +125,7 @@ describe('SharedVaultValetTokenAuthMiddleware', () => {
     expect(valetTokenRepository.isUsed).toHaveBeenCalledWith('valet-token')
     expect(tokenDecoder.decodeToken).not.toHaveBeenCalled()
     expectRejectedAsInvalid()
+    expect(JSON.stringify(logger.debug.mock.calls)).not.toContain('valet-token')
   })
 
   it('rejects a valet token that does not decode', async () => {
