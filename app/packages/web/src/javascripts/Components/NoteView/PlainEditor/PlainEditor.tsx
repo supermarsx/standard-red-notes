@@ -15,6 +15,7 @@ import {
   PrefDefaults,
   LocalPrefKey,
   sanitizeHtmlString,
+  PayloadEmitSource,
 } from '@standardnotes/snjs'
 import { markdownToHtml } from '@/Utils/markdownToHtml'
 import { isIOS, TAB_COMMAND } from '@standardnotes/ui-services'
@@ -90,9 +91,11 @@ export const PlainEditor = forwardRef<PlainEditorInterface, Props>(
           throw Error('Editor received changes for non-current note')
         }
 
-        if (!isPendingLocalPropagation) {
+        const isAssistantReplacement = source === PayloadEmitSource.AssistantChanged
+        if (isAssistantReplacement || !isPendingLocalPropagation) {
           if (
             isPayloadSourceRetrieved(source) ||
+            isAssistantReplacement ||
             editorText == undefined ||
             updatedNote.editorIdentifier !== note.current.editorIdentifier ||
             updatedNote.noteType !== note.current.noteType

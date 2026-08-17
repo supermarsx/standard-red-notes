@@ -1,7 +1,12 @@
 import { WebApplication } from '@/Application/WebApplication'
 import { ContentType } from '@standardnotes/snjs'
 import { AssistantToolConfirmation, describeAssistantToolConfirmation } from './assistantPresentation'
+import { shouldConfirmAssistantTool } from './assistantActionReview'
 import { AssistantTools, AssistantToolContext } from './tools'
+
+jest.mock('@/Components/SuperEditor/Tools/HeadlessSuperConverter', () => ({
+  HeadlessSuperConverter: class {},
+}))
 
 function makeContext(runSubAgent?: AssistantToolContext['runSubAgent']): AssistantToolContext {
   return {
@@ -36,6 +41,14 @@ describe('AssistantTools delegate', () => {
     )
     expect(sub.tools().some((t) => t.name === 'delegate')).toBe(false)
     await expect(sub.call('delegate', { task: 'x' })).rejects.toThrow('Unknown tool')
+  })
+
+  it('keeps nested research sessions read-only so every mutation stays visible in the parent chat', () => {
+    const tools = new AssistantTools(fakeApp, { ...makeContext(), allowMutatingTools: false })
+
+    expect(tools.tools().some((tool) => tool.mutating)).toBe(false)
+    expect(tools.tools().map((tool) => tool.name)).toContain('notes.read')
+    expect(tools.tools().map((tool) => tool.name)).not.toContain('notes.update')
   })
 
   it('routes a delegate call to the sub-agent runner and returns its summary', async () => {
@@ -130,7 +143,7 @@ describe('AssistantTools runtime safety', () => {
     expect(runSubAgent).not.toHaveBeenCalled()
   })
 
-  it('always asks inline before an external web disclosure and forwards the run signal', async () => {
+  it('keeps the legacy fallback prompt before an external web disclosure and forwards the run signal', async () => {
     const controller = new AbortController()
     const requestConfirmation = jest.fn(async () => true)
     const serverJsonRequest = jest.fn(async () => ({ ok: true, status: 200, data: { results: [] } }))
@@ -139,7 +152,6 @@ describe('AssistantTools runtime safety', () => {
       ...makeContext(),
       signal: controller.signal,
       requestConfirmation,
-      shouldRequestConfirmation: () => false,
     })
 
     await expect(tools.call('web.search', { query: 'public weather' })).resolves.toEqual({ results: [] })
@@ -152,6 +164,28 @@ describe('AssistantTools runtime safety', () => {
       { query: 'public weather', limit: 10 },
       controller.signal,
     )
+  })
+
+  it('uses the explicit bypass policy for external tools without skipping dispatch validation', async () => {
+    const requestConfirmation = jest.fn(async () => false)
+    const onAuthorization = jest.fn()
+    const serverJsonRequest = jest.fn(async () => ({ ok: true, status: 200, data: { results: [] } }))
+    const tools = new AssistantTools({ serverJsonRequest } as unknown as WebApplication, {
+      ...makeContext(),
+      requestConfirmation,
+      shouldRequestConfirmation: (request, mutating) => shouldConfirmAssistantTool('bypass', request, mutating),
+      onAuthorization,
+    })
+
+    await expect(tools.call('web.search', { query: 'public weather' }, 'web-call')).resolves.toEqual({ results: [] })
+    expect(requestConfirmation).not.toHaveBeenCalled()
+    expect(onAuthorization).toHaveBeenCalledWith('web-call', { decision: 'allow', source: 'policy' })
+    expect(serverJsonRequest).toHaveBeenCalledWith('/v1/web/search', { query: 'public weather', limit: 10 }, undefined)
+
+    await expect(tools.call('web.fetch', { url: 'file:///private' })).resolves.toEqual({
+      error: 'The "url" must be an absolute http(s) URL without credentials.',
+    })
+    expect(serverJsonRequest).toHaveBeenCalledTimes(1)
   })
 
   it('rechecks cancellation after an inline decision before dispatching', async () => {
@@ -347,7 +381,7 @@ describe('AssistantTools selected note scope', () => {
     const tag = { uuid: 'tag-created', title: 'Created', content_type: ContentType.TYPES.Tag }
     const createdNotes: Array<Record<string, unknown>> = []
     const openNote = jest.fn(async () => undefined)
-    const addTagToNote = jest.fn(async () => undefined)
+    const addTagToNote = jest.fn(async () => [tag])
     const scopedApplication = {
       features: { getFeatureStatus: jest.fn() },
       items: {
@@ -401,6 +435,307 @@ describe('AssistantTools selected note scope', () => {
     await expect(tools.call('notes.update', { uuid: 'model-invented', text: 'Nope' })).rejects.toThrow(
       'outside the context',
     )
+  })
+})
+
+describe('AssistantTools bypass confirmation boundaries', () => {
+  const note = {
+    uuid: 'selected-note',
+    content_type: ContentType.TYPES.Note,
+    title: 'Selected note',
+    text: 'Original',
+    preview_plain: 'Original',
+    trashed: false,
+    archived: false,
+  }
+  const bypassPolicy: NonNullable<AssistantToolContext['shouldRequestConfirmation']> = (request, mutating) =>
+    shouldConfirmAssistantTool('bypass', request, mutating)
+
+  function mutationApplication(options: {
+    sessionReadOnly?: boolean
+    vaultReadOnly?: boolean
+    render?: boolean
+    locked?: boolean
+    lite?: boolean
+  }) {
+    const changeItem = jest.fn()
+    const vault = { isSharedVaultListing: () => true }
+    const candidate = {
+      ...note,
+      locked: options.locked === true,
+      ...(options.lite ? { payload: { content: { __lazyLite: true } } } : {}),
+    }
+    const application = {
+      sessions: { isCurrentSessionReadOnly: () => options.sessionReadOnly === true },
+      items: {
+        findItem: (uuid: string) => (uuid === note.uuid ? candidate : undefined),
+        getItems: () => [candidate],
+      },
+      isAuthorizedToRenderItem: () => options.render !== false,
+      vaults: { getItemVault: () => (options.vaultReadOnly === undefined ? undefined : vault) },
+      vaultUsers: { isCurrentUserReadonlyVaultMember: () => options.vaultReadOnly === true },
+      mutator: { changeItem },
+    } as unknown as WebApplication
+    return { application, changeItem }
+  }
+
+  it('does not let bypass cross a read-only session or shared-vault write boundary', async () => {
+    const requestConfirmation = jest.fn(async () => true)
+    for (const options of [{ sessionReadOnly: true }, { vaultReadOnly: true }]) {
+      const { application, changeItem } = mutationApplication(options)
+      const tools = new AssistantTools(application, {
+        ...makeContext(),
+        selectedNoteUuids: new Set([note.uuid]),
+        requestConfirmation,
+        shouldRequestConfirmation: bypassPolicy,
+      })
+
+      await expect(tools.call('notes.update', { uuid: note.uuid, text: 'Changed' })).rejects.toThrow(/read-only/)
+      expect(changeItem).not.toHaveBeenCalled()
+    }
+    expect(requestConfirmation).not.toHaveBeenCalled()
+  })
+
+  it('enforces a shared-vault write boundary after a reminder target is resolved by title', async () => {
+    const requestConfirmation = jest.fn(async () => true)
+    const { application } = mutationApplication({ vaultReadOnly: true })
+    const upsertNoteReminder = jest.fn()
+    Object.assign(application, {
+      notesController: { upsertNoteReminder },
+      hasAccount: () => false,
+    })
+    const tools = new AssistantTools(application, {
+      ...makeContext(),
+      selectedNoteUuids: new Set([note.uuid]),
+      requestConfirmation,
+      shouldRequestConfirmation: bypassPolicy,
+    })
+
+    await expect(tools.call('reminders.set', { title: note.title, datetime: '2027-01-01T00:00:00Z' })).rejects.toThrow(
+      /read-only/,
+    )
+    expect(requestConfirmation).not.toHaveBeenCalled()
+    expect(upsertNoteReminder).not.toHaveBeenCalled()
+  })
+
+  it('does not let bypass read or overwrite locked and incomplete notes', async () => {
+    for (const options of [{ locked: true }, { lite: true }]) {
+      const { application, changeItem } = mutationApplication(options)
+      const tools = new AssistantTools(application, {
+        ...makeContext(),
+        selectedNoteUuids: new Set([note.uuid]),
+        shouldRequestConfirmation: bypassPolicy,
+      })
+
+      await expect(tools.call('notes.read', { uuid: note.uuid })).rejects.toThrow(/not authorized/)
+      await expect(tools.call('notes.update', { uuid: note.uuid, text: 'Changed' })).rejects.toThrow(
+        /not authorized|locked|incomplete/,
+      )
+      expect(changeItem).not.toHaveBeenCalled()
+    }
+  })
+
+  it('rechecks vault authorization after an approval delay', async () => {
+    let vaultReadOnly = false
+    const { application, changeItem } = mutationApplication({})
+    Object.assign(application, {
+      vaults: { getItemVault: () => ({ isSharedVaultListing: () => true }) },
+      vaultUsers: { isCurrentUserReadonlyVaultMember: () => vaultReadOnly },
+    })
+    const requestConfirmation = jest.fn(async () => {
+      vaultReadOnly = true
+      return true
+    })
+    const tools = new AssistantTools(application, {
+      ...makeContext(),
+      selectedNoteUuids: new Set([note.uuid]),
+      requestConfirmation,
+      shouldRequestConfirmation: () => true,
+    })
+
+    await expect(tools.call('notes.update', { uuid: note.uuid, text: 'Changed' })).rejects.toThrow(/read-only/)
+    expect(requestConfirmation).toHaveBeenCalledTimes(1)
+    expect(changeItem).not.toHaveBeenCalled()
+  })
+
+  it('does not let bypass cross render authorization, selected context, or account lifetime', async () => {
+    const unauthorized = mutationApplication({ render: false })
+    const unauthorizedTools = new AssistantTools(unauthorized.application, {
+      ...makeContext(),
+      selectedNoteUuids: new Set([note.uuid]),
+      shouldRequestConfirmation: bypassPolicy,
+    })
+    await expect(unauthorizedTools.call('notes.update', { uuid: note.uuid, text: 'Changed' })).rejects.toThrow(
+      'not authorized',
+    )
+    expect(unauthorized.changeItem).not.toHaveBeenCalled()
+
+    const outside = mutationApplication({})
+    const outsideTools = new AssistantTools(outside.application, {
+      ...makeContext(),
+      selectedNoteUuids: new Set(),
+      shouldRequestConfirmation: bypassPolicy,
+    })
+    await expect(outsideTools.call('notes.update', { uuid: note.uuid, text: 'Changed' })).rejects.toThrow(
+      'outside the context',
+    )
+    expect(outside.changeItem).not.toHaveBeenCalled()
+
+    const expired = mutationApplication({})
+    const expiredTools = new AssistantTools(expired.application, {
+      ...makeContext(),
+      isSessionCurrent: () => false,
+      selectedNoteUuids: new Set([note.uuid]),
+      shouldRequestConfirmation: bypassPolicy,
+    })
+    await expect(expiredTools.call('notes.update', { uuid: note.uuid, text: 'Changed' })).rejects.toMatchObject({
+      name: 'AbortError',
+    })
+    expect(expired.changeItem).not.toHaveBeenCalled()
+  })
+
+  it('does not disclose or mutate protected tags, even in bypass mode', async () => {
+    for (const protection of ['locked', 'lite', 'render', 'vault'] as const) {
+      const tag = {
+        uuid: `tag-${protection}`,
+        content_type: ContentType.TYPES.Tag,
+        title: 'Protected tag',
+        key_system_identifier: 'vault-key',
+        locked: protection === 'locked',
+        ...(protection === 'lite' ? { payload: { content: { __lazyLite: true } } } : {}),
+      }
+      const scopedNote = { ...note, key_system_identifier: 'vault-key' }
+      const addTagToNote = jest.fn()
+      const changeItem = jest.fn()
+      const requestConfirmation = jest.fn(async () => true)
+      const vault = { isSharedVaultListing: () => true }
+      const application = {
+        sessions: { isCurrentSessionReadOnly: () => false },
+        isAuthorizedToRenderItem: (item: { uuid: string }) => protection !== 'render' || item.uuid !== tag.uuid,
+        items: {
+          findItem: (uuid: string) => (uuid === scopedNote.uuid ? scopedNote : uuid === tag.uuid ? tag : undefined),
+          getItems: (contentType: string) => (contentType === ContentType.TYPES.Note ? [scopedNote] : [tag]),
+          getSortedTagsForItem: () => [tag],
+          getTagLongTitle: () => 'Protected hierarchy / Protected tag',
+        },
+        vaults: {
+          getItemVault: (item: { uuid: string }) =>
+            protection === 'vault' && item.uuid === tag.uuid ? vault : undefined,
+        },
+        vaultUsers: { isCurrentUserReadonlyVaultMember: () => protection === 'vault' },
+        mutator: { addTagToNote, changeItem },
+      } as unknown as WebApplication
+      const tools = new AssistantTools(application, {
+        ...makeContext(),
+        selectedNoteUuids: new Set([scopedNote.uuid]),
+        requestConfirmation,
+        shouldRequestConfirmation: bypassPolicy,
+      })
+
+      const expectedTags = protection === 'vault' ? [{ uuid: tag.uuid, title: tag.title, longTitle: tag.title }] : []
+      await expect(tools.call('notes.read', { uuid: scopedNote.uuid })).resolves.toMatchObject({
+        tags: expectedTags,
+      })
+      await expect(tools.call('tags.list', {})).resolves.toEqual({ count: expectedTags.length, tags: expectedTags })
+      await expect(tools.call('tags.assign', { noteUuid: scopedNote.uuid, tagUuid: tag.uuid })).rejects.toThrow(
+        /not authorized|locked|incomplete|read-only/,
+      )
+      await expect(tools.call('tags.unassign', { noteUuid: scopedNote.uuid, tagUuid: tag.uuid })).rejects.toThrow(
+        /not authorized|locked|incomplete|read-only/,
+      )
+      expect(requestConfirmation).not.toHaveBeenCalled()
+      expect(addTagToNote).not.toHaveBeenCalled()
+      expect(changeItem).not.toHaveBeenCalled()
+    }
+  })
+
+  it('does not disclose a protected parent through a readable child tag title', async () => {
+    const parent = {
+      uuid: 'protected-parent',
+      content_type: ContentType.TYPES.Tag,
+      title: 'Secret parent',
+    }
+    const child = {
+      uuid: 'readable-child',
+      content_type: ContentType.TYPES.Tag,
+      title: 'Visible child',
+      parentId: parent.uuid,
+    }
+    const application = {
+      isAuthorizedToRenderItem: (item: { uuid: string }) => item.uuid !== parent.uuid,
+      items: {
+        getItems: () => [child],
+        getTagParent: (tag: { uuid: string }) => (tag.uuid === child.uuid ? parent : undefined),
+      },
+    } as unknown as WebApplication
+    const tools = new AssistantTools(application, makeContext())
+
+    await expect(tools.call('tags.list', {})).resolves.toEqual({
+      count: 1,
+      tags: [{ uuid: child.uuid, title: child.title, longTitle: child.title }],
+    })
+  })
+
+  it('does not report an existing protected tag as newly created', async () => {
+    for (const protection of ['locked', 'render', 'vault'] as const) {
+      const tag = {
+        uuid: `existing-${protection}`,
+        content_type: ContentType.TYPES.Tag,
+        title: 'Existing protected tag',
+        locked: protection === 'locked',
+      }
+      const findOrCreateTag = jest.fn()
+      const vault = { isSharedVaultListing: () => true }
+      const application = {
+        sessions: { isCurrentSessionReadOnly: () => false },
+        isAuthorizedToRenderItem: (item: { uuid: string }) => protection !== 'render' || item.uuid !== tag.uuid,
+        items: { getItems: () => [tag] },
+        vaults: { getItemVault: () => (protection === 'vault' ? vault : undefined) },
+        vaultUsers: { isCurrentUserReadonlyVaultMember: () => protection === 'vault' },
+        mutator: { findOrCreateTag },
+      } as unknown as WebApplication
+      const tools = new AssistantTools(application, {
+        ...makeContext(),
+        shouldRequestConfirmation: bypassPolicy,
+      })
+
+      await expect(tools.call('tags.create', { title: tag.title })).rejects.toThrow(
+        /locked|incomplete|not authorized|read-only/,
+      )
+      expect(findOrCreateTag).not.toHaveBeenCalled()
+    }
+  })
+
+  it('reports cross-vault tag assignment as a failure before mutation', async () => {
+    const tag = {
+      uuid: 'other-vault-tag',
+      content_type: ContentType.TYPES.Tag,
+      title: 'Other vault',
+      key_system_identifier: 'other-vault-key',
+    }
+    const scopedNote = { ...note, key_system_identifier: 'note-vault-key' }
+    const addTagToNote = jest.fn()
+    const application = {
+      sessions: { isCurrentSessionReadOnly: () => false },
+      isAuthorizedToRenderItem: () => true,
+      items: {
+        findItem: (uuid: string) => (uuid === scopedNote.uuid ? scopedNote : uuid === tag.uuid ? tag : undefined),
+        getItems: () => [scopedNote],
+      },
+      vaults: { getItemVault: () => undefined },
+      vaultUsers: { isCurrentUserReadonlyVaultMember: () => false },
+      mutator: { addTagToNote },
+    } as unknown as WebApplication
+    const tools = new AssistantTools(application, {
+      ...makeContext(),
+      selectedNoteUuids: new Set([scopedNote.uuid]),
+      shouldRequestConfirmation: bypassPolicy,
+    })
+
+    await expect(tools.call('tags.assign', { noteUuid: scopedNote.uuid, tagUuid: tag.uuid })).rejects.toThrow(
+      /different vaults/,
+    )
+    expect(addTagToNote).not.toHaveBeenCalled()
   })
 })
 

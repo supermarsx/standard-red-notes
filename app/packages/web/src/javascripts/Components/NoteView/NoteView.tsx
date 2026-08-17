@@ -336,7 +336,7 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
 
     let title = this.state.editorTitle
 
-    if (isPayloadSourceRetrieved(source)) {
+    if (isPayloadSourceRetrieved(source) || source === PayloadEmitSource.AssistantChanged) {
       title = note.title
     }
 

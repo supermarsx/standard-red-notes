@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { observer } from 'mobx-react-lite'
-import { ApplicationEvent, ContentType, PrefKey } from '@standardnotes/snjs'
+import { ApplicationEvent, ContentType, PrefKey, SNNote, isNote } from '@standardnotes/snjs'
 import { classNames } from '@standardnotes/utils'
 import { WebApplication } from '@/Application/WebApplication'
 import Icon from '@/Components/Icon/Icon'
@@ -57,9 +57,18 @@ import {
   assistantSessionPrincipalMatches,
   captureAssistantSessionPrincipal,
 } from '@/Assistant/assistantSessionPrincipal'
+import {
+  applyAssistantNoteChange,
+  AssistantNoteChange,
+  AssistantNoteChangeDirection,
+  captureAssistantNoteSnapshot,
+  flushAssistantNoteEditors,
+} from '@/Assistant/assistantNoteChanges'
 
-type ToolEntry = {
+export type ToolEntry = {
   id: string
+  /** Provider ids can repeat between responses; never use this as a UI identity. */
+  providerCallId?: string
   name: string
   args: unknown
   /** Static client-generated label restored from the redacted audit record. */
@@ -69,6 +78,10 @@ type ToolEntry = {
     decision: 'allow' | 'deny'
     source: 'policy' | 'safety-review' | 'user-once' | 'user-chat'
   }
+  noteChange?: AssistantNoteChange
+  noteChangePosition?: 'before' | 'after'
+  noteChangePending?: boolean
+  noteChangeError?: string
 }
 
 type UIMessage =
@@ -82,6 +95,40 @@ type ConversationPrompt = {
 }
 
 const KNOWN_ASSISTANT_TOOL_NAMES = new Set([...TOOL_DEFINITIONS.map((tool) => tool.name), 'delegate'])
+const MAX_LIVE_ASSISTANT_NOTE_CHANGES = 6
+
+const retainNewestAssistantNoteChanges = (messages: UIMessage[]): UIMessage[] => {
+  let retained = 0
+  return messages
+    .slice()
+    .reverse()
+    .map((message) => {
+      if (message.kind !== 'assistant') {
+        return message
+      }
+      const tools = message.tools
+        .slice()
+        .reverse()
+        .map((tool) => {
+          if (!tool.noteChange) {
+            return tool
+          }
+          retained++
+          return retained <= MAX_LIVE_ASSISTANT_NOTE_CHANGES
+            ? tool
+            : {
+                ...tool,
+                noteChange: undefined,
+                noteChangePosition: undefined,
+                noteChangePending: undefined,
+                noteChangeError: undefined,
+              }
+        })
+        .reverse()
+      return { ...message, tools }
+    })
+    .reverse()
+}
 
 const describeContextPreview = (preview: {
   scope: AssistantContextSelection['scope']
@@ -157,14 +204,32 @@ function ConversationPanelImpl({
           kind: 'assistant',
           id: message.id,
           text: message.text,
-          tools: (message.activities ?? []).map((activity) => ({
-            id: activity.id,
-            name: activity.name,
-            args: {},
-            persistedLabel: activity.label,
-            authorization: activity.authorization,
-            outcome: activity.outcome,
-          })),
+          tools: (message.activities ?? []).map((activity) => {
+            const persistedChange = activity.noteChange
+            return {
+              id: activity.id,
+              name: activity.name,
+              args: {},
+              persistedLabel: activity.label,
+              authorization: activity.authorization,
+              outcome: activity.outcome,
+              ...(persistedChange
+                ? {
+                    noteChange: {
+                      noteUuid: persistedChange.noteUuid,
+                      noteTitle: persistedChange.noteTitle,
+                      before: persistedChange.before,
+                      after: persistedChange.after,
+                      patch: persistedChange.patch,
+                      addedLines: persistedChange.addedLines,
+                      removedLines: persistedChange.removedLines,
+                      truncated: persistedChange.truncated,
+                    } as AssistantNoteChange,
+                    noteChangePosition: persistedChange.position,
+                  }
+                : {}),
+            }
+          }),
         }
       }
       if (message.kind === 'user') {
@@ -222,6 +287,7 @@ function ConversationPanelImpl({
       }),
     ]),
   )
+  const activeToolActivityIdsRef = useRef(new Map<string, string>())
   const preflightProviderRef = useRef<Provider | null>(null)
   const runIntentRef = useRef('')
   const toolPermissionModeRef = useRef<AssistantToolPermissionMode>(
@@ -261,18 +327,86 @@ function ConversationPanelImpl({
       if (!callId) {
         return
       }
+      const activityId = activeToolActivityIdsRef.current.get(callId) ?? callId
       setMessagesSynced((current) =>
         current.map((message) => {
-          return message.kind === 'assistant' && message.tools.some((tool) => tool.id === callId)
+          return message.kind === 'assistant' && message.tools.some((tool) => tool.id === activityId)
             ? {
                 ...message,
-                tools: message.tools.map((tool) => (tool.id === callId ? { ...tool, authorization } : tool)),
+                tools: message.tools.map((tool) => (tool.id === activityId ? { ...tool, authorization } : tool)),
               }
             : message
         }),
       )
     },
     [setMessagesSynced],
+  )
+
+  const applyNoteChangeHistory = useCallback(
+    async (toolId: string, direction: AssistantNoteChangeDirection) => {
+      const currentScope = application.sessions.getUser()?.uuid ?? `anonymous:${application.identifier}`
+      if (currentScope !== accountScope) {
+        return
+      }
+      const tool = messagesRef.current
+        .flatMap((message) => (message.kind === 'assistant' ? message.tools : []))
+        .find((entry) => entry.id === toolId)
+      if (!tool?.noteChange || tool.noteChangePending) {
+        return
+      }
+      setMessagesSynced((current) =>
+        current.map((message) => {
+          if (message.kind !== 'assistant') {
+            return message
+          }
+          return {
+            ...message,
+            tools: message.tools.map((entry) => {
+              return entry.id === toolId ? { ...entry, noteChangePending: true, noteChangeError: undefined } : entry
+            }),
+          }
+        }),
+      )
+      try {
+        const result = await applyAssistantNoteChange(application, tool.noteChange, direction)
+        setMessagesSynced((current) =>
+          current.map((message) => {
+            if (message.kind !== 'assistant') {
+              return message
+            }
+            return {
+              ...message,
+              tools: message.tools.map((entry) => {
+                return entry.id === toolId
+                  ? { ...entry, noteChangePending: false, noteChangePosition: result.position }
+                  : entry
+              }),
+            }
+          }),
+        )
+      } catch (error) {
+        setMessagesSynced((current) =>
+          current.map((message) => {
+            if (message.kind !== 'assistant') {
+              return message
+            }
+            return {
+              ...message,
+              tools: message.tools.map((entry) => {
+                return entry.id === toolId
+                  ? {
+                      ...entry,
+                      noteChangePending: false,
+                      noteChangeError: error instanceof Error ? error.message : String(error),
+                    }
+                  : entry
+              }),
+            }
+          }),
+        )
+      }
+    },
+    [accountScope, application, setMessagesSynced],
   )
 
   const writeChatHistory = useCallback(async () => {
@@ -294,6 +428,14 @@ function ConversationPanelImpl({
             label: tool.persistedLabel ?? describeAssistantTool(tool.name, {}).label,
             ...(tool.authorization ? { authorization: tool.authorization } : {}),
             outcome: tool.outcome ?? 'interrupted',
+            ...(tool.noteChange
+              ? {
+                  noteChange: {
+                    ...tool.noteChange,
+                    position: tool.noteChangePosition ?? 'after',
+                  },
+                }
+              : {}),
           })),
         }
       }
@@ -423,6 +565,13 @@ function ConversationPanelImpl({
       // removes a stale approval card.
       const runSignal = toolSignal ?? abortRef.current?.signal
       const permissionMode = toolPermissionModeRef.current
+      if (permissionMode === 'bypass') {
+        if (!mountedRef.current || runSignal?.aborted) {
+          return Promise.resolve(false)
+        }
+        recordToolAuthorization(request.callId, { decision: 'allow', source: 'policy' })
+        return Promise.resolve(true)
+      }
       const remembered = sessionToolDecisionsRef.current.get(request.name)
       if (remembered === false) {
         recordToolAuthorization(request.callId, { decision: 'deny', source: 'user-chat' })
@@ -478,6 +627,10 @@ function ConversationPanelImpl({
             return false
           }
           if (toolPermissionModeRef.current !== 'allow-all') {
+            if (toolPermissionModeRef.current === 'bypass') {
+              recordToolAuthorization(request.callId, { decision: 'allow', source: 'policy' })
+              return true
+            }
             return ask('Permission mode changed while the safety check was running.')
           }
           if (review.decision === 'allow') {
@@ -693,6 +846,31 @@ function ConversationPanelImpl({
         ])
         return
       }
+      try {
+        for (const noteUuid of resolvedNoteUuids) {
+          await flushAssistantNoteEditors(application, noteUuid)
+        }
+      } catch {
+        setMessagesSynced((prev) => [
+          ...prev,
+          {
+            kind: 'error',
+            id: newId(),
+            text: 'The assistant could not safely flush the selected note context. Save the note and try again.',
+          },
+        ])
+        return
+      }
+      if (!isSessionCurrent()) {
+        return
+      }
+      const expectedNoteSnapshots = new Map<string, ReturnType<typeof captureAssistantNoteSnapshot>>()
+      for (const noteUuid of resolvedNoteUuids) {
+        const selected = application.items.findItem<SNNote>(noteUuid)
+        if (selected && isNote(selected) && application.isAuthorizedToRenderItem(selected)) {
+          expectedNoteSnapshots.set(noteUuid, captureAssistantNoteSnapshot(selected))
+        }
+      }
       // Editor directives authorize disclosure of the visible selection only.
       // The source UUID validates that attachment but does not grant a model
       // permission to read or mutate the rest of the note through tools.
@@ -795,7 +973,13 @@ function ConversationPanelImpl({
       const runSubAgent = async (task: string, contextText?: string): Promise<string> => {
         // Sub-agents share the tools but report neither todos nor delegation to the
         // UI (the top-level run owns the visible plan).
-        const subContext: AssistantToolContext = { ...toolContext, onTodosChanged: undefined }
+        const subContext: AssistantToolContext = {
+          ...toolContext,
+          allowMutatingTools: false,
+          onAuthorization: undefined,
+          onTodosChanged: undefined,
+          onNoteChange: undefined,
+        }
         const subTools = new AssistantTools(application, subContext, false)
         const subPrompt = contextText ? `${task}\n\nContext:\n${contextText}` : task
         const sub = await run([{ role: 'user', content: subPrompt }], {
@@ -810,6 +994,7 @@ function ConversationPanelImpl({
 
       const toolContext: AssistantToolContext = {
         selectedNoteUuids,
+        expectedNoteSnapshots,
         isSessionCurrent,
         confirmBeforeWrite,
         requestConfirmation,
@@ -818,9 +1003,41 @@ function ConversationPanelImpl({
         presentPane: (paneId: AppPaneId) => presentPane(paneId),
         runSubAgent,
         onTodosChanged: (next) => setTodos(next),
+        onNoteChange: (callId, change) => {
+          if (!callId || !isSessionCurrent()) {
+            return
+          }
+          const activityId = activeToolActivityIdsRef.current.get(callId)
+          if (!activityId) {
+            return
+          }
+          setMessagesSynced((current) =>
+            retainNewestAssistantNoteChanges(
+              current.map((message) => {
+                if (message.kind !== 'assistant' || message.id !== activeAssistantId) {
+                  return message
+                }
+                return {
+                  ...message,
+                  tools: message.tools.map((entry) => {
+                    return entry.id === activityId
+                      ? {
+                          ...entry,
+                          noteChange: change,
+                          noteChangePosition: 'after',
+                          noteChangeError: undefined,
+                        }
+                      : entry
+                  }),
+                }
+              }),
+            ),
+          )
+        },
       }
 
       const tools = new AssistantTools(application, toolContext)
+      activeToolActivityIdsRef.current.clear()
 
       // Assemble the user-chosen context (current note / all notes / collection)
       // and append it to the system prompt so the model can answer about the
@@ -881,14 +1098,19 @@ function ConversationPanelImpl({
             }
             waitingForSteeredResponse = false
             textDeltas.flush()
-            updateAssistant((message) => message.tools.push({ id: call.id, name: call.name, args: call.args }))
+            const activityId = newId()
+            activeToolActivityIdsRef.current.set(call.id, activityId)
+            updateAssistant((message) =>
+              message.tools.push({ id: activityId, providerCallId: call.id, name: call.name, args: call.args }),
+            )
           },
           onToolResult: (callId, _toolResult, outcome) => {
             if (!isSessionCurrent()) {
               return
             }
             updateAssistant((message) => {
-              const entry = message.tools.find((tool) => tool.id === callId)
+              const activityId = activeToolActivityIdsRef.current.get(callId)
+              const entry = activityId ? message.tools.find((tool) => tool.id === activityId) : undefined
               if (entry) {
                 entry.outcome = outcome
               }
@@ -941,6 +1163,7 @@ function ConversationPanelImpl({
           abortRef.current = null
           preflightProviderRef.current = null
           runIntentRef.current = ''
+          activeToolActivityIdsRef.current.clear()
           if (isSessionCurrent()) {
             void refreshUsage()
           }
@@ -1105,6 +1328,7 @@ function ConversationPanelImpl({
           <option value="allow-read">Allow reads; ask before changes</option>
           <option value="allow-safe">Allow safe changes</option>
           <option value="allow-all">Allow all with a safety check</option>
+          <option value="bypass">Bypass confirmations</option>
         </select>
       </label>
       {todos.length > 0 && (
@@ -1177,7 +1401,7 @@ function ConversationPanelImpl({
         )}
         <div className="flex flex-col gap-4">
           {messages.map((message) => (
-            <MessageBubble key={message.id} message={message} />
+            <MessageBubble key={message.id} message={message} onApplyNoteChange={applyNoteChangeHistory} />
           ))}
           {pendingConfirmation && (
             <InlineAssistantConfirmation
@@ -1263,7 +1487,13 @@ function ConversationPanelImpl({
   )
 }
 
-const MessageBubble = ({ message }: { message: UIMessage }) => {
+const MessageBubble = ({
+  message,
+  onApplyNoteChange,
+}: {
+  message: UIMessage
+  onApplyNoteChange: (toolId: string, direction: AssistantNoteChangeDirection) => void
+}) => {
   if (message.kind === 'user') {
     const directive = parseAssistantDirectivePrompt(message.text)
     return (
@@ -1298,7 +1528,7 @@ const MessageBubble = ({ message }: { message: UIMessage }) => {
       {message.tools.length > 0 && (
         <div className="mb-1 flex flex-col gap-1">
           {message.tools.map((tool) => (
-            <ToolActivity key={tool.id} tool={tool} />
+            <ToolActivity key={tool.id} tool={tool} onApplyNoteChange={onApplyNoteChange} />
           ))}
         </div>
       )}
@@ -1312,7 +1542,13 @@ const MessageBubble = ({ message }: { message: UIMessage }) => {
   )
 }
 
-const ToolActivity = ({ tool }: { tool: ToolEntry }) => {
+export const ToolActivity = ({
+  tool,
+  onApplyNoteChange,
+}: {
+  tool: ToolEntry
+  onApplyNoteChange: (toolId: string, direction: AssistantNoteChangeDirection) => void
+}) => {
   const presentation = tool.persistedLabel
     ? { label: tool.persistedLabel }
     : describeAssistantTool(tool.name, tool.args)
@@ -1354,6 +1590,63 @@ const ToolActivity = ({ tool }: { tool: ToolEntry }) => {
       >
         {[authorization, state].filter(Boolean).join(' · ')}
       </div>
+      {tool.noteChange && tool.outcome === 'succeeded' && (
+        <div className="border-border mt-2 border-t pt-2">
+          <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+            <span className="font-semibold">
+              Changes · <span className="text-success">+{tool.noteChange.addedLines}</span>{' '}
+              <span className="text-danger">−{tool.noteChange.removedLines}</span>
+            </span>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                className="border-border hover:bg-default rounded border px-2 py-1 font-medium disabled:cursor-not-allowed disabled:opacity-40"
+                disabled={tool.noteChangePending || tool.noteChangePosition === 'before'}
+                onClick={() => onApplyNoteChange(tool.id, 'undo')}
+              >
+                Undo
+              </button>
+              <button
+                type="button"
+                className="border-border hover:bg-default rounded border px-2 py-1 font-medium disabled:cursor-not-allowed disabled:opacity-40"
+                disabled={tool.noteChangePending || tool.noteChangePosition !== 'before'}
+                onClick={() => onApplyNoteChange(tool.id, 'redo')}
+              >
+                Redo
+              </button>
+            </div>
+          </div>
+          <details open>
+            <summary className="text-passive-0 cursor-pointer select-none">Git-style diff</summary>
+            <pre
+              className="border-border bg-default mt-1 max-h-72 overflow-auto rounded border p-2 font-mono text-[11px] leading-4"
+              aria-label={`Changes made to ${tool.noteChange.noteTitle}`}
+            >
+              {tool.noteChange.patch.split('\n').map((line, index) => (
+                <span
+                  key={`${index}-${line.slice(0, 16)}`}
+                  className={classNames(
+                    'block min-w-max whitespace-pre',
+                    line.startsWith('+') && !line.startsWith('+++') && 'bg-success/10 text-success',
+                    line.startsWith('-') && !line.startsWith('---') && 'bg-danger/10 text-danger',
+                    line.startsWith('@@') && 'text-info',
+                    (line.startsWith('diff --git') || line.startsWith('---') || line.startsWith('+++')) &&
+                      'text-passive-0 font-semibold',
+                  )}
+                >
+                  {line || ' '}
+                </span>
+              ))}
+            </pre>
+          </details>
+          {tool.noteChangePending && <div className="text-passive-1 mt-1">Applying…</div>}
+          {tool.noteChangeError && (
+            <div className="text-danger mt-1" role="alert">
+              {tool.noteChangeError}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }

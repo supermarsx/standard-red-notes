@@ -29,6 +29,9 @@ export enum PayloadEmitSource {
   RemoteRetrieved,
   RemoteSaved,
   DesktopComponentSync,
+
+  /** A local note mutation initiated by the first-party AI assistant. */
+  AssistantChanged,
 }
 
 /**

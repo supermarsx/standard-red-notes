@@ -7,11 +7,14 @@ import { Provider } from './types'
 
 export type AssistantToolRisk = 'safe' | 'sensitive' | 'external' | 'irreversible'
 export type AssistantActionReview = { decision: 'allow' | 'ask'; reason: string }
-export type AssistantToolPermissionMode = 'ask' | 'allow-read' | 'allow-safe' | 'allow-all'
+export type AssistantToolPermissionMode = 'ask' | 'allow-read' | 'allow-safe' | 'allow-all' | 'bypass'
 export type AssistantActionReviewOptions = { signal?: AbortSignal; userIntent?: string }
 
-/** Older clients have no safety-review mode, so every richer mode maps to ask. */
-export const legacyConfirmBeforeWriteForMode = (_mode: AssistantToolPermissionMode): true => true
+/**
+ * Keep the legacy boolean conservative for reviewed modes. Bypass is the sole
+ * explicit opt-out and maps to the older client's no-confirmation behavior.
+ */
+export const legacyConfirmBeforeWriteForMode = (mode: AssistantToolPermissionMode): boolean => mode !== 'bypass'
 
 /** Deterministic, fail-closed classification. A model review can only escalate this. */
 export function classifyAssistantToolRisk(request: AssistantToolConfirmation): AssistantToolRisk {
@@ -50,6 +53,9 @@ export function shouldConfirmAssistantTool(
   request: AssistantToolConfirmation,
   mutating: boolean,
 ): boolean {
+  if (mode === 'bypass') {
+    return false
+  }
   if (mode === 'ask') {
     return true
   }

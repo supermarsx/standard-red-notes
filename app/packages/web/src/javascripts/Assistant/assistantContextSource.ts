@@ -3,9 +3,8 @@
 // touch `application.items`; the assembly itself (assistantContext.ts) stays a
 // pure, testable function with no app dependency.
 
-import { ContentType, SNNote, SNTag, SNFolder, isNote, isFolderItem } from '@standardnotes/snjs'
+import { ContentType, SNNote, SNTag, SNFolder, isNote, isTag, isFolderItem, isLitePayload } from '@standardnotes/snjs'
 import { WebApplication } from '@/Application/WebApplication'
-import { NoteViewController } from '@/Components/NoteView/Controller/NoteViewController'
 import { extractPlaintextFromNoteText } from '@/Utils/NoteStats'
 import { doesItemMatchSearchQuery } from '@/Utils/Items/Search/doesItemMatchSearchQuery'
 import { AssistantContextScope, ContextNote, BuiltAssistantContext, buildAssistantContext } from './assistantContext'
@@ -39,6 +38,52 @@ export const MAX_CONTEXT_NOTES = 30
 /** Take at most MAX_CONTEXT_NOTES notes, preserving order. */
 const capNotes = <T>(notes: T[]): T[] => (notes.length > MAX_CONTEXT_NOTES ? notes.slice(0, MAX_CONTEXT_NOTES) : notes)
 
+/** Prompt context is a read boundary: never disclose locked, partial, or render-denied notes. */
+function isReadableContextNote(application: WebApplication, note: SNNote): boolean {
+  if (note.trashed || note.locked || isLitePayload(note.payload)) {
+    return false
+  }
+  const authorize = application.isAuthorizedToRenderItem
+  if (typeof authorize !== 'function') {
+    return false
+  }
+  try {
+    return authorize.call(application, note)
+  } catch {
+    return false
+  }
+}
+
+function isReadableContextCollection(application: WebApplication, item: SNTag | SNFolder): boolean {
+  if (item.locked || isLitePayload(item.payload)) {
+    return false
+  }
+  try {
+    return application.isAuthorizedToRenderItem(item)
+  } catch {
+    return false
+  }
+}
+
+function readableTagLabel(application: WebApplication, tag: SNTag): string {
+  const parents: SNTag[] = []
+  const seen = new Set([tag.uuid])
+  let current = tag
+  for (let depth = 0; depth < 100; depth++) {
+    const parent = application.items.getTagParent?.(current)
+    if (!parent) {
+      return [...parents, tag].map((entry) => entry.title).join('/')
+    }
+    if (seen.has(parent.uuid) || !isReadableContextCollection(application, parent)) {
+      return tag.title
+    }
+    seen.add(parent.uuid)
+    parents.unshift(parent)
+    current = parent
+  }
+  return tag.title
+}
+
 /** Convert a note to the plain-text record context assembly expects. */
 function toContextNote(application: WebApplication, note: SNNote): ContextNote {
   return {
@@ -49,7 +94,7 @@ function toContextNote(application: WebApplication, note: SNNote): ContextNote {
 }
 
 const allNotes = (application: WebApplication): SNNote[] =>
-  application.items.getItems<SNNote>(ContentType.TYPES.Note).filter((note) => !note.trashed)
+  application.items.getItems<SNNote>(ContentType.TYPES.Note).filter((note) => isReadableContextNote(application, note))
 
 /**
  * Notes currently open in editor tabs, in tab order. Each open tab is backed by an
@@ -61,11 +106,11 @@ function openNotes(application: WebApplication): SNNote[] {
   const seen = new Set<string>()
   const notes: SNNote[] = []
   for (const controller of application.itemControllerGroup.itemControllers) {
-    if (!(controller instanceof NoteViewController) || controller.isTemplateNote) {
+    if ('isTemplateNote' in controller && controller.isTemplateNote === true) {
       continue
     }
     const note = controller.item
-    if (!note || note.trashed || seen.has(note.uuid)) {
+    if (!note || !isNote(note) || !isReadableContextNote(application, note) || seen.has(note.uuid)) {
       continue
     }
     seen.add(note.uuid)
@@ -88,12 +133,14 @@ function notesForTag(application: WebApplication, tag: SNTag): SNNote[] {
   return application.items
     .itemsReferencingItem(tag)
     .filter(isNote)
-    .filter((note) => !note.trashed)
+    .filter((note) => isReadableContextNote(application, note))
 }
 
 /** Notes a folder references (folders point at notes). */
 function notesForFolder(application: WebApplication, folder: SNFolder): SNNote[] {
-  return application.items.referencesForItem<SNNote>(folder, ContentType.TYPES.Note).filter((note) => !note.trashed)
+  return application.items
+    .referencesForItem<SNNote>(folder, ContentType.TYPES.Note)
+    .filter((note) => isReadableContextNote(application, note))
 }
 
 /** The notes resolved for a selection, plus how many were dropped by the count cap. */
@@ -118,11 +165,16 @@ function currentNote(application: WebApplication): SNNote | undefined {
   if (active) {
     // An explicit active file/tag/other item owns the user's current context.
     // Never fall through to a stale note selection and disclose it instead.
-    return isNote(active) && !active.trashed ? active : undefined
+    return isNote(active) && isReadableContextNote(application, active) ? active : undefined
   }
 
   const selected = application.itemListController.firstSelectedItem
-  if (application.itemListController.selectedItemsCount === 1 && selected && isNote(selected) && !selected.trashed) {
+  if (
+    application.itemListController.selectedItemsCount === 1 &&
+    selected &&
+    isNote(selected) &&
+    isReadableContextNote(application, selected)
+  ) {
     return selected
   }
 
@@ -155,19 +207,22 @@ function resolveRawContextSelection(
   }
   if (collection.type === 'tag') {
     const tag = application.items.findItem<SNTag>(collection.uuid)
-    return tag
-      ? { notes: notesForTag(application, tag), collectionLabel: application.items.getTagLongTitle(tag) }
+    return tag && isTag(tag) && isReadableContextCollection(application, tag)
+      ? { notes: notesForTag(application, tag), collectionLabel: readableTagLabel(application, tag) }
       : { notes: [] }
   }
   if (collection.type === 'folder') {
     const folder = application.items.findItem<SNFolder>(collection.uuid)
-    return folder && isFolderItem(folder)
+    return folder && isFolderItem(folder) && isReadableContextCollection(application, folder)
       ? { notes: notesForFolder(application, folder), collectionLabel: folder.title }
       : { notes: [] }
   }
   const selected = collection.uuids
     .map((uuid) => application.items.findItem<SNNote>(uuid))
-    .filter((note): note is SNNote => Boolean(note) && isNote(note as SNNote) && !note?.trashed)
+    .filter(
+      (note): note is SNNote =>
+        Boolean(note) && isNote(note as SNNote) && isReadableContextNote(application, note as SNNote),
+    )
   return {
     notes: selected,
     collectionLabel: `${selected.length} selected note${selected.length === 1 ? '' : 's'}`,

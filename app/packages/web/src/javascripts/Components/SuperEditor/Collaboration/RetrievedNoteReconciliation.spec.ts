@@ -541,6 +541,23 @@ describe('retrieved durable note reconciliation', () => {
     expect(ignoreNextChangeRef.current).toBe(replacementLifetimeToken)
   })
 
+  it('marks an assistant replacement as a distinct Lexical undo boundary', () => {
+    const changeEditor = jest.fn((_text: string, onUpdate?: () => void) => onUpdate?.())
+
+    expect(
+      applyRetrievedEditorContent({
+        text: 'assistant replacement',
+        changeEditor,
+        ignoreNextChangeRef: { current: undefined },
+        isLifetimeCurrent: () => true,
+        flushEditorSerialize: jest.fn(),
+        history: 'push',
+      }),
+    ).toBe(true)
+
+    expect(changeEditor).toHaveBeenCalledWith('assistant replacement', expect.any(Function), { history: 'push' })
+  })
+
   it('adopts a newer HTTP body while realtime is disconnected and the retained editor is clean', () => {
     const changeEditor = jest.fn((_text: string, onUpdate?: () => void) => onUpdate?.())
     const preserve = jest.fn()

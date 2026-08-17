@@ -90,7 +90,7 @@ describe('assistant chat history', () => {
     expect(readAssistantChatHistory(storage, 'account', 'two')).toEqual([{ kind: 'error', id: '2', text: 'Keep this' }])
   })
 
-  it('reads v1 application history and emits v2 on the next persistence', async () => {
+  it('reads v1 application history and emits v3 on the next persistence', async () => {
     const { storage, values } = createStorage()
     const key = keyFor('account', 'existing')
     values.set(key, {
@@ -109,10 +109,10 @@ describe('assistant chat history', () => {
     expect(messages).toEqual([{ kind: 'assistant', id: 'old', text: 'Still readable' }])
 
     await persistAssistantChatHistory(storage, 'account', 'existing', messages)
-    expect(values.get(key)).toEqual({ version: 2, messages })
+    expect(values.get(key)).toEqual({ version: 3, messages })
   })
 
-  it('migrates a valid v1 plaintext transcript into v2 application storage', () => {
+  it('migrates a valid v1 plaintext transcript into v3 application storage', () => {
     const { storage, values } = createStorage()
     const legacyKey = `${ASSISTANT_CHAT_HISTORY_LEGACY_KEY_PREFIX}:account:legacy`
     localStorage.setItem(
@@ -123,23 +123,82 @@ describe('assistant chat history', () => {
     expect(readAssistantChatHistory(storage, 'account', 'legacy')).toEqual([{ kind: 'user', id: '1', text: 'Move me' }])
     expect(localStorage.getItem(legacyKey)).toBeNull()
     expect(values.get(keyFor('account', 'legacy'))).toEqual({
-      version: 2,
+      version: 3,
       messages: [{ kind: 'user', id: '1', text: 'Move me' }],
     })
   })
 
-  it('round trips only the v2 display and audit activity schema', async () => {
+  it('reads v2 audit history without accepting v3-only note changes', () => {
     const { storage, values } = createStorage()
+    values.set(keyFor('account', 'v2'), {
+      version: 2,
+      messages: [
+        {
+          kind: 'assistant',
+          id: 'message-1',
+          text: 'Done',
+          activities: [
+            {
+              id: 'call-1',
+              name: 'notes.update',
+              label: 'Updated note',
+              outcome: 'succeeded',
+              noteChange: { noteUuid: 'must-not-be-read-from-v2' },
+            },
+          ],
+        },
+      ],
+    })
+
+    expect(readAssistantChatHistory(storage, 'account', 'v2')).toEqual([
+      {
+        kind: 'assistant',
+        id: 'message-1',
+        text: 'Done',
+        activities: [{ id: 'call-1', name: 'notes.update', label: 'Updated note', outcome: 'succeeded' }],
+      },
+    ])
+  })
+
+  it('round trips only the v3 display, audit, and bounded first-party note-change schema', async () => {
+    const { storage, values } = createStorage()
+    const before = {
+      title: 'Original',
+      text: 'Before',
+      previewPlain: 'Before',
+      noteType: 'plain-text',
+      futureSnapshotField: 'snapshot-secret',
+    }
+    const after = {
+      title: 'Updated',
+      text: 'After',
+      previewPlain: 'After',
+      previewHtml: '<p>After</p>',
+      noteType: 'plain-text',
+      editorIdentifier: 'org.standardnotes.plain-editor',
+    }
     const unsafeActivity = {
       id: 'call-1',
-      name: 'notes.read',
-      label: 'Read the selected note',
+      name: 'notes.update',
+      label: 'Update the selected note',
       authorization: { decision: 'allow', source: 'user-once', token: 'authorization-secret' },
       outcome: 'succeeded',
       arguments: { notePassword: 'argument-secret' },
       result: 'result-secret',
       secret: 'top-secret',
       futureField: 'future-secret',
+      noteChange: {
+        noteUuid: 'note-uuid',
+        noteTitle: 'Updated',
+        before,
+        after,
+        patch: 'diff --git a/note.md b/note.md\n--- a/note.md\n+++ b/note.md\n@@ -1,1 +1,1 @@\n-Before\n+After',
+        addedLines: 1,
+        removedLines: 1,
+        truncated: false,
+        position: 'after',
+        futureChangeField: 'change-secret',
+      },
     }
     const messages = [
       {
@@ -151,7 +210,7 @@ describe('assistant chat history', () => {
       },
     ] as unknown as PersistedAssistantMessage[]
 
-    await persistAssistantChatHistory(storage, 'account', 'v2', messages)
+    await persistAssistantChatHistory(storage, 'account', 'v3', messages)
 
     const expected = [
       {
@@ -161,19 +220,229 @@ describe('assistant chat history', () => {
         activities: [
           {
             id: 'call-1',
-            name: 'notes.read',
-            label: 'Read the selected note',
+            name: 'notes.update',
+            label: 'Update the selected note',
             authorization: { decision: 'allow', source: 'user-once' },
             outcome: 'succeeded',
+            noteChange: {
+              noteUuid: 'note-uuid',
+              noteTitle: 'Updated',
+              before: {
+                title: 'Original',
+                text: 'Before',
+                previewPlain: 'Before',
+                noteType: 'plain-text',
+              },
+              after,
+              patch: 'diff --git a/note.md b/note.md\n--- a/note.md\n+++ b/note.md\n@@ -1,1 +1,1 @@\n-Before\n+After',
+              addedLines: 1,
+              removedLines: 1,
+              truncated: false,
+              position: 'after',
+            },
           },
         ],
       },
     ]
-    expect(values.get(keyFor('account', 'v2'))).toEqual({ version: 2, messages: expected })
-    expect(readAssistantChatHistory(storage, 'account', 'v2')).toEqual(expected)
-    expect(JSON.stringify(values.get(keyFor('account', 'v2')))).not.toMatch(
-      /argument-secret|result-secret|authorization-secret|top-secret|future-secret|also-not-persisted/,
+    expect(values.get(keyFor('account', 'v3'))).toEqual({ version: 3, messages: expected })
+    expect(readAssistantChatHistory(storage, 'account', 'v3')).toEqual(expected)
+    expect(JSON.stringify(values.get(keyFor('account', 'v3')))).not.toMatch(
+      /argument-secret|result-secret|authorization-secret|top-secret|future-secret|snapshot-secret|change-secret|also-not-persisted/,
     )
+  })
+
+  it('omits malformed, oversized, non-first-party, and non-successful note changes without dropping audit activity', async () => {
+    const { storage } = createStorage()
+    const validShape = {
+      noteUuid: 'note-uuid',
+      noteTitle: 'Updated',
+      before: { title: 'Before', text: 'Before', previewPlain: 'Before', noteType: 'plain-text' },
+      after: { title: 'After', text: 'After', previewPlain: 'After', noteType: 'plain-text' },
+      patch: 'diff --git a/note.md b/note.md\n-Before\n+After',
+      addedLines: 1,
+      removedLines: 1,
+      truncated: false,
+      position: 'after',
+    }
+    const activities = [
+      {
+        id: 'malformed',
+        name: 'notes.update',
+        label: 'Malformed',
+        outcome: 'succeeded',
+        noteChange: { ...validShape, position: 'sideways' },
+      },
+      {
+        id: 'oversized',
+        name: 'notes.update',
+        label: 'Oversized',
+        outcome: 'succeeded',
+        noteChange: {
+          ...validShape,
+          before: { ...validShape.before, text: '€'.repeat(20_000) },
+          after: { ...validShape.after, text: '€'.repeat(20_000) },
+        },
+      },
+      { id: 'not-first-party', name: 'notes.read', label: 'Read', outcome: 'succeeded', noteChange: validShape },
+      { id: 'failed', name: 'notes.update', label: 'Failed', outcome: 'failed', noteChange: validShape },
+    ]
+
+    await persistAssistantChatHistory(storage, 'account', 'invalid-changes', [
+      { kind: 'assistant', id: 'message', text: '', activities } as unknown as PersistedAssistantMessage,
+    ])
+
+    const [restored] = readAssistantChatHistory(storage, 'account', 'invalid-changes')
+    expect(restored.activities).toEqual(activities.map(({ noteChange: _noteChange, ...activity }) => activity))
+  })
+
+  it('retains only the newest bounded set of durable note changes', async () => {
+    const { storage } = createStorage()
+    const activities = Array.from({ length: 8 }, (_, index) => ({
+      id: `change-${index}`,
+      name: 'notes.update',
+      label: `Change ${index}`,
+      outcome: 'succeeded' as const,
+      noteChange: {
+        noteUuid: `note-${index}`,
+        noteTitle: `Note ${index}`,
+        before: { title: 'Before', text: 'before', previewPlain: 'before', noteType: 'plain-text' },
+        after: { title: 'After', text: 'after', previewPlain: 'after', noteType: 'plain-text' },
+        patch: `diff --git a/note.md b/note.md\n-before ${index}\n+after ${index}`,
+        addedLines: 1,
+        removedLines: 1,
+        truncated: false,
+        position: 'after' as const,
+      },
+    }))
+
+    await persistAssistantChatHistory(storage, 'account', 'change-count-cap', [
+      { kind: 'assistant', id: 'message', text: '', activities } as unknown as PersistedAssistantMessage,
+    ])
+
+    const retained = readAssistantChatHistory(storage, 'account', 'change-count-cap')[0].activities ?? []
+    expect(retained).toHaveLength(8)
+    expect(retained.flatMap((activity) => (activity.noteChange ? [activity.noteChange.noteUuid] : []))).toEqual([
+      'note-2',
+      'note-3',
+      'note-4',
+      'note-5',
+      'note-6',
+      'note-7',
+    ])
+  })
+
+  it('keeps an admitted undo record when later read activities exceed audit caps', async () => {
+    const { storage } = createStorage()
+    const changeActivity = {
+      id: 'change-first',
+      name: 'notes.update',
+      label: 'Update note',
+      outcome: 'succeeded' as const,
+      noteChange: {
+        noteUuid: 'durable-note',
+        noteTitle: 'Durable note',
+        before: { title: 'Before', text: 'before', previewPlain: 'before', noteType: 'plain-text' },
+        after: { title: 'After', text: 'after', previewPlain: 'after', noteType: 'plain-text' },
+        patch: 'diff --git a/note.md b/note.md\n-before\n+after',
+        addedLines: 1,
+        removedLines: 1,
+        truncated: false,
+        position: 'after' as const,
+      },
+    }
+    const laterReads = Array.from({ length: 9 }, (_, index) => ({
+      id: `read-${index}`,
+      name: 'notes.read',
+      label: `Read ${index}`,
+      outcome: 'succeeded' as const,
+    }))
+
+    await persistAssistantChatHistory(storage, 'account', 'change-before-reads', [
+      {
+        kind: 'assistant',
+        id: 'message',
+        text: '',
+        activities: [changeActivity, ...laterReads],
+      },
+    ])
+
+    const restored = readAssistantChatHistory(storage, 'account', 'change-before-reads')[0].activities ?? []
+    expect(restored.find((activity) => activity.id === changeActivity.id)?.noteChange?.noteUuid).toBe('durable-note')
+    expect(restored.filter((activity) => activity.name === 'notes.read')).toHaveLength(8)
+  })
+
+  it('keeps an admitted undo record when later messages exceed transcript caps', async () => {
+    const { storage } = createStorage()
+    const changeMessage: PersistedAssistantMessage = {
+      kind: 'assistant',
+      id: 'old-change-message',
+      text: 'Original change',
+      activities: [
+        {
+          id: 'old-change',
+          name: 'notes.update',
+          label: 'Update note',
+          outcome: 'succeeded',
+          noteChange: {
+            noteUuid: 'old-durable-note',
+            noteTitle: 'Old durable note',
+            before: { title: 'Before', text: 'before', previewPlain: 'before', noteType: 'plain-text' },
+            after: { title: 'After', text: 'after', previewPlain: 'after', noteType: 'plain-text' },
+            patch: 'diff --git a/note.md b/note.md\n-before\n+after',
+            addedLines: 1,
+            removedLines: 1,
+            truncated: false,
+            position: 'after',
+          },
+        },
+      ],
+    }
+    const laterMessages: PersistedAssistantMessage[] = Array.from({ length: 100 }, (_, index) => ({
+      kind: 'assistant',
+      id: `later-${index}`,
+      text: 'x'.repeat(8_000),
+    }))
+
+    await persistAssistantChatHistory(storage, 'account', 'change-before-messages', [changeMessage, ...laterMessages])
+
+    const restored = readAssistantChatHistory(storage, 'account', 'change-before-messages')
+    const carrier = restored.find((message) => message.id === changeMessage.id)
+    expect(restored.length).toBeLessThanOrEqual(80)
+    expect(carrier?.activities?.[0].noteChange?.noteUuid).toBe('old-durable-note')
+  })
+
+  it('enforces a separate transcript byte budget for otherwise valid note changes', async () => {
+    const { storage } = createStorage()
+    const activities = Array.from({ length: 6 }, (_, index) => ({
+      id: `large-change-${index}`,
+      name: 'notes.update',
+      label: `Large change ${index}`,
+      outcome: 'succeeded' as const,
+      noteChange: {
+        noteUuid: `large-note-${index}`,
+        noteTitle: `Large note ${index}`,
+        before: { title: 'Before', text: 'a'.repeat(35_000), previewPlain: '', noteType: 'plain-text' },
+        after: { title: 'After', text: 'b'.repeat(35_000), previewPlain: '', noteType: 'plain-text' },
+        patch: `diff --git a/note.md b/note.md\n-large ${index}\n+large ${index}`,
+        addedLines: 1,
+        removedLines: 1,
+        truncated: true,
+        position: 'after' as const,
+      },
+    }))
+
+    await persistAssistantChatHistory(storage, 'account', 'change-byte-cap', [
+      { kind: 'assistant', id: 'message', text: '', activities } as unknown as PersistedAssistantMessage,
+    ])
+
+    const retained = readAssistantChatHistory(storage, 'account', 'change-byte-cap')[0].activities ?? []
+    expect(retained.flatMap((activity) => (activity.noteChange ? [activity.noteChange.noteUuid] : []))).toEqual([
+      'large-note-1',
+      'large-note-2',
+      'large-note-3',
+      'large-note-4',
+      'large-note-5',
+    ])
   })
 
   it('fails closed on malformed activities and terminalizes absent or pending outcomes', async () => {
@@ -243,6 +512,19 @@ describe('assistant chat history', () => {
       16 * 1_024,
     )
     expect(retainedActivities.at(-1)?.id).toBe(`79-9-${'i'.repeat(100)}`)
+  })
+
+  it('rejects oversized or control-bearing message identifiers instead of retaining hidden data', async () => {
+    const { storage } = createStorage()
+    await persistAssistantChatHistory(storage, 'account', 'bounded-message-ids', [
+      { kind: 'user', id: 'i'.repeat(129), text: 'Oversized id' },
+      { kind: 'assistant', id: 'unsafe\u0000id', text: 'Control id' },
+      { kind: 'assistant', id: 'safe-id', text: 'Safe message' },
+    ])
+
+    expect(readAssistantChatHistory(storage, 'account', 'bounded-message-ids')).toEqual([
+      { kind: 'assistant', id: 'safe-id', text: 'Safe message' },
+    ])
   })
 
   it('keeps deletion durable when an older writer finishes after removal', async () => {
@@ -341,6 +623,6 @@ describe('assistant chat history', () => {
       throw new Error('disk removal rejected')
     }
     expect(await deleteAssistantChatHistory(storage, 'account', 'strict')).toBe(false)
-    expect(values.get(keyFor('account', 'strict'))).toEqual({ version: 2, messages: [], deleted: true })
+    expect(values.get(keyFor('account', 'strict'))).toEqual({ version: 3, messages: [], deleted: true })
   })
 })

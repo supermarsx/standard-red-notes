@@ -1,7 +1,9 @@
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
+import { HISTORY_PUSH_TAG } from 'lexical'
 import React, { useEffect } from 'react'
 
-export type ChangeEditorFunction = (jsonContent: string, onUpdate?: () => void) => void
+export type ChangeEditorOptions = { history?: 'push' }
+export type ChangeEditorFunction = (jsonContent: string, onUpdate?: () => void, options?: ChangeEditorOptions) => void
 type ChangeEditorFunctionProvider = (changeEditorFunction: ChangeEditorFunction) => () => void
 
 export function registerLatestChangeEditorFunction(
@@ -24,13 +26,17 @@ export function ChangeContentCallbackPlugin({
   const [editor] = useLexicalComposerContext()
 
   useEffect(() => {
-    const changeContents: ChangeEditorFunction = (jsonContent: string, onUpdate?: () => void) => {
+    const changeContents: ChangeEditorFunction = (
+      jsonContent: string,
+      onUpdate?: () => void,
+      options?: ChangeEditorOptions,
+    ) => {
       editor.update(
         () => {
           const editorState = editor.parseEditorState(jsonContent)
           editor.setEditorState(editorState)
         },
-        { discrete: true, onUpdate },
+        { discrete: true, onUpdate, ...(options?.history === 'push' ? { tag: HISTORY_PUSH_TAG } : {}) },
       )
     }
 

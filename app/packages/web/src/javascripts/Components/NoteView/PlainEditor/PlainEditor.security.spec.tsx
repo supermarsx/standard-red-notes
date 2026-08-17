@@ -133,4 +133,15 @@ describe('PlainEditor local propagation lifecycle', () => {
     expect(consoleError).not.toHaveBeenCalled()
     consoleError.mockRestore()
   })
+
+  it('renders an assistant-originated body change without treating it as the editor own echo', () => {
+    renderEditor()
+
+    act(() => {
+      noteObserver({ ...note, text: 'assistant replacement' } as SNNote, PayloadEmitSource.AssistantChanged)
+    })
+
+    expect((container.querySelector('textarea') as HTMLTextAreaElement).value).toBe('assistant replacement')
+    expect(controller.saveAndAwaitLocalPropagation).not.toHaveBeenCalled()
+  })
 })

@@ -16,10 +16,12 @@ const provider = (output: string): Provider => ({
 })
 
 describe('assistant action review', () => {
-  it('keeps the legacy boolean in ask mode for every richer permission policy', () => {
+  it('keeps legacy clients fail-closed except for the explicit bypass mode', () => {
     expect(
-      ['ask', 'allow-read', 'allow-safe', 'allow-all'].map((mode) => legacyConfirmBeforeWriteForMode(mode as never)),
-    ).toEqual([true, true, true, true])
+      ['ask', 'allow-read', 'allow-safe', 'allow-all', 'bypass'].map((mode) =>
+        legacyConfirmBeforeWriteForMode(mode as never),
+      ),
+    ).toEqual([true, true, true, true, false])
   })
   it('keeps destructive and external actions outside automatic approval', async () => {
     const deleted = { name: 'notes.delete', args: { uuid: 'note' } }
@@ -94,6 +96,24 @@ describe('assistant action review', () => {
     expect(shouldConfirmAssistantTool('allow-read', request, false)).toBe(true)
     expect(shouldConfirmAssistantTool('allow-safe', request, false)).toBe(true)
     expect(shouldConfirmAssistantTool('allow-all', request, false)).toBe(true)
+  })
+
+  it('bypasses every assistant confirmation category without changing risk classification', () => {
+    const requests = [
+      { request: { name: 'notes.read', args: { uuid: 'note' } }, mutating: false },
+      { request: { name: 'notes.update', args: { uuid: 'note', text: 'changed' } }, mutating: true },
+      { request: { name: 'web.search', args: { query: 'public weather' } }, mutating: false },
+      { request: { name: 'notes.delete', args: { uuid: 'note' } }, mutating: true },
+    ]
+
+    expect(requests.map(({ request, mutating }) => shouldConfirmAssistantTool('bypass', request, mutating))).toEqual([
+      false,
+      false,
+      false,
+      false,
+    ])
+    expect(classifyAssistantToolRisk(requests[2].request)).toBe('external')
+    expect(classifyAssistantToolRisk(requests[3].request)).toBe('irreversible')
   })
 
   it('keeps ask mode authoritative over cached or safe classifications', () => {

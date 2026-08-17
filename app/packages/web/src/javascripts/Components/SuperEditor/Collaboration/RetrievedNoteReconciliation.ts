@@ -411,6 +411,8 @@ export function applyRetrievedEditorContent(input: {
   ignoreNextChangeRef: { current: RetrievedEditorUpdateToken | undefined }
   isLifetimeCurrent(): boolean
   flushEditorSerialize(): void
+  /** Assistant replacements must remain a distinct undo step. */
+  history?: 'push'
 }): boolean {
   let current = false
   try {
@@ -425,7 +427,7 @@ export function applyRetrievedEditorContent(input: {
   const token: RetrievedEditorUpdateToken = {}
   input.ignoreNextChangeRef.current = token
   try {
-    input.changeEditor(input.text, () => {
+    const onUpdate = () => {
       if (input.ignoreNextChangeRef.current !== token) {
         return
       }
@@ -446,7 +448,12 @@ export function applyRetrievedEditorContent(input: {
           input.ignoreNextChangeRef.current = undefined
         }
       }
-    })
+    }
+    if (input.history === 'push') {
+      input.changeEditor(input.text, onUpdate, { history: 'push' })
+    } else {
+      input.changeEditor(input.text, onUpdate)
+    }
     return true
   } catch {
     if (input.ignoreNextChangeRef.current === token) {

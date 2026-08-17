@@ -227,6 +227,24 @@ describe('NoteView', () => {
   })
 
   describe('editors', () => {
+    it('accepts an assistant-originated title as authoritative for the open tab', () => {
+      noteViewController.item = {
+        uuid: 'note-1',
+        title: 'Before',
+        locked: false,
+        getAppDomainValue: jest.fn(),
+      } as unknown as jest.Mocked<SNNote>
+      const view = createNoteView()
+      view.setState = jest.fn()
+
+      view.onNoteInnerChange(
+        { ...noteViewController.item, title: 'After' } as jest.Mocked<SNNote>,
+        PayloadEmitSource.AssistantChanged,
+      )
+
+      expect(view.setState).toHaveBeenCalledWith({ editorTitle: 'After' })
+    })
+
     it('should reload editor if noteType changes', async () => {
       noteViewController.item = {
         noteType: NoteType.Code,

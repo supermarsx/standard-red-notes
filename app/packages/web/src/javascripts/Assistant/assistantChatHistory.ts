@@ -18,13 +18,42 @@ export type PersistedAssistantToolAuthorization = {
   source: PersistedAssistantToolAuthorizationSource
 }
 
-/** Display/audit data only. Tool arguments, results, and secret material must never be added here. */
+export type PersistedAssistantNoteSnapshot = {
+  title: string
+  text: string
+  previewPlain: string
+  previewHtml?: string
+  noteType: string
+  editorIdentifier?: string
+}
+
+/**
+ * A first-party, compare-and-swap undo record for a successful note mutation.
+ * This is deliberately distinct from arbitrary tool arguments and results.
+ */
+export type PersistedAssistantNoteChange = {
+  noteUuid: string
+  noteTitle: string
+  before: PersistedAssistantNoteSnapshot
+  after: PersistedAssistantNoteSnapshot
+  patch: string
+  addedLines: number
+  removedLines: number
+  truncated: boolean
+  position: 'before' | 'after'
+}
+
+/**
+ * Display/audit data plus an explicitly sanitized first-party note-change record.
+ * Arbitrary tool arguments, results, and secret material must never be added here.
+ */
 export type PersistedAssistantToolActivity = {
   id: string
   name: string
   label: string
   authorization?: PersistedAssistantToolAuthorization
   outcome: PersistedAssistantToolActivityOutcome
+  noteChange?: PersistedAssistantNoteChange
 }
 
 export type PersistedAssistantMessage = {
@@ -108,9 +137,11 @@ export function createAssistantChatHistoryCheckpoint(
   }
 }
 
-const CURRENT_VERSION = 2
+const CURRENT_VERSION = 3
+const AUDIT_VERSION = 2
 const LEGACY_VERSION = 1
 const MAX_MESSAGES = 80
+const MAX_MESSAGE_ID_CHARS = 128
 const MAX_MESSAGE_CHARS = 8_000
 const MAX_TOTAL_CHARS = 80_000
 const MAX_ACTIVITIES_PER_MESSAGE = 8
@@ -120,14 +151,41 @@ const MAX_ACTIVITY_ID_CHARS = 128
 const MAX_ACTIVITY_NAME_CHARS = 64
 const MAX_ACTIVITY_LABEL_CHARS = 120
 const MAX_DENIED_TOOL_NAMES = 64
+const MAX_NOTE_CHANGES_PER_TRANSCRIPT = 6
+const MAX_NOTE_CHANGE_BYTES = 96 * 1_024
+const MAX_NOTE_CHANGE_TRANSCRIPT_BYTES = 384 * 1_024
+const MAX_NOTE_UUID_CHARS = 128
+const MAX_NOTE_TITLE_CHARS = 512
+const MAX_NOTE_TEXT_CHARS = 48_000
+const MAX_NOTE_PREVIEW_PLAIN_CHARS = 8_000
+const MAX_NOTE_PREVIEW_HTML_CHARS = 16_000
+const MAX_NOTE_EDITOR_IDENTIFIER_CHARS = 256
+const MAX_NOTE_CHANGE_PATCH_CHARS = 12_000
+const MAX_NOTE_CHANGE_LINE_STAT = 1_000_000
+const MAX_STORED_TRANSCRIPT_BYTES = 768 * 1_024
+const MAX_UNTRUSTED_INPUT_MESSAGES = MAX_MESSAGES * 2
+const MAX_UNTRUSTED_INPUT_ACTIVITIES = MAX_ACTIVITIES_PER_MESSAGE + MAX_NOTE_CHANGES_PER_TRANSCRIPT * 2
 
-type StoredHistoryV2 = {
+const NOTE_CHANGE_TOOL_NAMES = new Set(['notes.update', 'notes.updateSuper'])
+const NOTE_TYPES = new Set([
+  'authentication',
+  'code',
+  'markdown',
+  'rich-text',
+  'spreadsheet',
+  'task',
+  'plain-text',
+  'super',
+  'unknown',
+])
+
+type StoredHistoryV3 = {
   version: typeof CURRENT_VERSION
   messages: PersistedAssistantMessage[]
   deniedToolNames?: string[]
   deleted?: false
 }
-type DeletedHistoryV2 = { version: typeof CURRENT_VERSION; messages: []; deleted: true }
+type DeletedHistoryV3 = { version: typeof CURRENT_VERSION; messages: []; deleted: true }
 
 const encodedIdentity = (accountScope: string, tabId: string) =>
   `${encodeURIComponent(accountScope)}:${encodeURIComponent(tabId)}`
@@ -168,7 +226,127 @@ const approximateUtf8Bytes = (value: string) =>
     return bytes + (codePoint <= 0xffff ? 3 : 4)
   }, 0)
 
-const sanitizeActivity = (value: unknown): PersistedAssistantToolActivity | undefined => {
+const hasUnsafeTextControlCharacters = (value: string) =>
+  Array.from(value).some((character) => {
+    const codePoint = character.codePointAt(0)!
+    return (
+      (codePoint <= 0x1f && codePoint !== 0x09 && codePoint !== 0x0a && codePoint !== 0x0d) ||
+      (codePoint >= 0x7f && codePoint <= 0x9f)
+    )
+  })
+
+const sanitizeBoundedString = (
+  value: unknown,
+  maximumCharacters: number,
+  options: { allowEmpty?: boolean; allowTextControls?: boolean } = {},
+): string | undefined => {
+  if (
+    typeof value !== 'string' ||
+    (!options.allowEmpty && value.length === 0) ||
+    value.length > maximumCharacters ||
+    (options.allowTextControls ? hasUnsafeTextControlCharacters(value) : hasControlCharacters(value))
+  ) {
+    return undefined
+  }
+  return value
+}
+
+const sanitizeNoteSnapshot = (value: unknown): PersistedAssistantNoteSnapshot | undefined => {
+  if (typeof value !== 'object' || value === null) {
+    return undefined
+  }
+  const snapshot = value as Record<string, unknown>
+  const title = sanitizeBoundedString(snapshot.title, MAX_NOTE_TITLE_CHARS, { allowEmpty: true })
+  const text = sanitizeBoundedString(snapshot.text, MAX_NOTE_TEXT_CHARS, {
+    allowEmpty: true,
+    allowTextControls: true,
+  })
+  const previewPlain = sanitizeBoundedString(snapshot.previewPlain, MAX_NOTE_PREVIEW_PLAIN_CHARS, {
+    allowEmpty: true,
+    allowTextControls: true,
+  })
+  if (
+    title === undefined ||
+    text === undefined ||
+    previewPlain === undefined ||
+    typeof snapshot.noteType !== 'string' ||
+    !NOTE_TYPES.has(snapshot.noteType)
+  ) {
+    return undefined
+  }
+
+  let previewHtml: string | undefined
+  if (snapshot.previewHtml !== undefined) {
+    previewHtml = sanitizeBoundedString(snapshot.previewHtml, MAX_NOTE_PREVIEW_HTML_CHARS, {
+      allowEmpty: true,
+      allowTextControls: true,
+    })
+    if (previewHtml === undefined) {
+      return undefined
+    }
+  }
+
+  let editorIdentifier: string | undefined
+  if (snapshot.editorIdentifier !== undefined) {
+    editorIdentifier = sanitizeBoundedString(snapshot.editorIdentifier, MAX_NOTE_EDITOR_IDENTIFIER_CHARS)
+    if (editorIdentifier === undefined) {
+      return undefined
+    }
+  }
+
+  return {
+    title,
+    text,
+    previewPlain,
+    ...(previewHtml !== undefined ? { previewHtml } : {}),
+    noteType: snapshot.noteType,
+    ...(editorIdentifier !== undefined ? { editorIdentifier } : {}),
+  }
+}
+
+const isBoundedLineStat = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 && value <= MAX_NOTE_CHANGE_LINE_STAT
+
+export const sanitizeAssistantNoteChange = (value: unknown): PersistedAssistantNoteChange | undefined => {
+  if (typeof value !== 'object' || value === null) {
+    return undefined
+  }
+  const change = value as Record<string, unknown>
+  const noteUuid = sanitizeBoundedString(change.noteUuid, MAX_NOTE_UUID_CHARS)
+  const noteTitle = sanitizeBoundedString(change.noteTitle, MAX_NOTE_TITLE_CHARS)
+  const before = sanitizeNoteSnapshot(change.before)
+  const after = sanitizeNoteSnapshot(change.after)
+  const patch = sanitizeBoundedString(change.patch, MAX_NOTE_CHANGE_PATCH_CHARS, { allowTextControls: true })
+  if (
+    noteUuid === undefined ||
+    noteTitle === undefined ||
+    before === undefined ||
+    after === undefined ||
+    patch === undefined ||
+    !patch.startsWith('diff --git a/') ||
+    !isBoundedLineStat(change.addedLines) ||
+    !isBoundedLineStat(change.removedLines) ||
+    typeof change.truncated !== 'boolean' ||
+    (change.position !== 'before' && change.position !== 'after')
+  ) {
+    return undefined
+  }
+
+  const sanitized: PersistedAssistantNoteChange = {
+    noteUuid,
+    noteTitle,
+    before,
+    after,
+    patch,
+    addedLines: change.addedLines,
+    removedLines: change.removedLines,
+    truncated: change.truncated,
+    position: change.position,
+  }
+  return approximateUtf8Bytes(JSON.stringify(sanitized)) <= MAX_NOTE_CHANGE_BYTES ? sanitized : undefined
+}
+
+const sanitizeActivity = (value: unknown, includeNoteChanges: boolean): PersistedAssistantToolActivity | undefined => {
   if (typeof value !== 'object' || value === null) {
     return undefined
   }
@@ -207,56 +385,118 @@ const sanitizeActivity = (value: unknown): PersistedAssistantToolActivity | unde
     return undefined
   }
 
+  const noteChange =
+    includeNoteChanges && outcome === 'succeeded' && NOTE_CHANGE_TOOL_NAMES.has(activity.name)
+      ? sanitizeAssistantNoteChange(activity.noteChange)
+      : undefined
+
   return {
     id: activity.id,
     name: activity.name,
     label: activity.label,
     ...(authorization ? { authorization } : {}),
     outcome,
+    ...(noteChange ? { noteChange } : {}),
   }
 }
 
-const sanitizeMessage = (value: unknown, includeActivities: boolean): PersistedAssistantMessage | undefined => {
+const sanitizeMessage = (
+  value: unknown,
+  includeActivities: boolean,
+  includeNoteChanges: boolean,
+  boundUntrustedInput: boolean,
+): PersistedAssistantMessage | undefined => {
   if (typeof value !== 'object' || value === null) {
     return undefined
   }
 
   const message = value as Record<string, unknown>
+  const id = sanitizeBoundedString(message.id, MAX_MESSAGE_ID_CHARS)
   if (
     (message.kind !== 'user' && message.kind !== 'assistant' && message.kind !== 'error') ||
-    typeof message.id !== 'string' ||
+    id === undefined ||
     typeof message.text !== 'string' ||
     (typeof message.steered !== 'undefined' && typeof message.steered !== 'boolean')
   ) {
     return undefined
   }
 
-  const activities =
-    includeActivities && Array.isArray(message.activities)
-      ? message.activities
-          .map(sanitizeActivity)
-          .filter((activity) => activity !== undefined)
-          .slice(-MAX_ACTIVITIES_PER_MESSAGE)
-      : []
+  const rawActivities = Array.isArray(message.activities)
+    ? boundUntrustedInput
+      ? message.activities.slice(-MAX_UNTRUSTED_INPUT_ACTIVITIES)
+      : message.activities
+    : []
+  const activities = includeActivities
+    ? rawActivities
+        .map((activity) => sanitizeActivity(activity, includeNoteChanges))
+        .filter((activity) => activity !== undefined)
+    : []
 
   return {
     kind: message.kind,
-    id: message.id,
+    id,
     text: message.text.slice(0, MAX_MESSAGE_CHARS),
     ...(typeof message.steered === 'boolean' ? { steered: message.steered } : {}),
     ...(activities.length > 0 ? { activities } : {}),
   }
 }
 
-const cap = (messages: unknown[], includeActivities: boolean): PersistedAssistantMessage[] => {
-  const bounded = messages
-    .map((message) => sanitizeMessage(message, includeActivities))
+const cap = (
+  messages: unknown[],
+  includeActivities: boolean,
+  includeNoteChanges: boolean,
+  boundUntrustedInput = false,
+): PersistedAssistantMessage[] => {
+  const input = boundUntrustedInput ? messages.slice(-MAX_UNTRUSTED_INPUT_MESSAGES) : messages
+  const sanitized = input
+    .map((message) => sanitizeMessage(message, includeActivities, includeNoteChanges, boundUntrustedInput))
     .filter((message) => message !== undefined)
-    .slice(-MAX_MESSAGES)
+
+  // Select the newest durable change records before applying display/audit
+  // caps. A later burst of read-only tools or chat text must not evict an
+  // already-admitted undo record.
+  const retainedNoteChanges = new Set<PersistedAssistantToolActivity>()
+  const changeCarrierMessages = new Set<PersistedAssistantMessage>()
+  let noteChangeCount = 0
+  let noteChangeBytes = 0
+  for (let messageIndex = sanitized.length - 1; messageIndex >= 0; messageIndex--) {
+    const activities = sanitized[messageIndex].activities ?? []
+    for (let activityIndex = activities.length - 1; activityIndex >= 0; activityIndex--) {
+      const activity = activities[activityIndex]
+      if (!activity.noteChange || noteChangeCount >= MAX_NOTE_CHANGES_PER_TRANSCRIPT) {
+        continue
+      }
+      const bytes = approximateUtf8Bytes(JSON.stringify(activity.noteChange))
+      if (noteChangeBytes + bytes > MAX_NOTE_CHANGE_TRANSCRIPT_BYTES) {
+        continue
+      }
+      retainedNoteChanges.add(activity)
+      changeCarrierMessages.add(sanitized[messageIndex])
+      noteChangeCount++
+      noteChangeBytes += bytes
+    }
+  }
+
+  const retainedMessages = new Set<PersistedAssistantMessage>(changeCarrierMessages)
+  let ordinaryMessageSlots = Math.max(0, MAX_MESSAGES - retainedMessages.size)
+  for (let index = sanitized.length - 1; index >= 0 && ordinaryMessageSlots > 0; index--) {
+    const message = sanitized[index]
+    if (retainedMessages.has(message)) {
+      continue
+    }
+    retainedMessages.add(message)
+    ordinaryMessageSlots--
+  }
+  const bounded = sanitized.filter((message) => retainedMessages.has(message))
 
   let totalText = bounded.reduce((sum, message) => sum + message.text.length, 0)
   while (bounded.length > 0 && totalText > MAX_TOTAL_CHARS) {
-    totalText -= bounded.shift()!.text.length
+    const removableIndex = bounded.findIndex((message) => !changeCarrierMessages.has(message))
+    if (removableIndex < 0) {
+      break
+    }
+    totalText -= bounded[removableIndex].text.length
+    bounded.splice(removableIndex, 1)
   }
 
   let activityCount = 0
@@ -268,13 +508,24 @@ const cap = (messages: unknown[], includeActivities: boolean): PersistedAssistan
     }
 
     const retained: PersistedAssistantToolActivity[] = []
+    let messageAuditCount = 0
     for (let activityIndex = activities.length - 1; activityIndex >= 0; activityIndex--) {
       const activity = activities[activityIndex]
-      const activityBytes = approximateUtf8Bytes(JSON.stringify(activity))
-      if (activityCount >= MAX_ACTIVITIES_PER_TRANSCRIPT || auditBytes + activityBytes > MAX_AUDIT_BYTES) {
+      if (retainedNoteChanges.has(activity)) {
+        retained.unshift(activity)
         continue
       }
-      retained.unshift(activity)
+      const { noteChange: _noteChange, ...auditActivity } = activity
+      const activityBytes = approximateUtf8Bytes(JSON.stringify(auditActivity))
+      if (
+        messageAuditCount >= MAX_ACTIVITIES_PER_MESSAGE ||
+        activityCount >= MAX_ACTIVITIES_PER_TRANSCRIPT ||
+        auditBytes + activityBytes > MAX_AUDIT_BYTES
+      ) {
+        continue
+      }
+      retained.unshift(auditActivity)
+      messageAuditCount++
       activityCount++
       auditBytes += activityBytes
     }
@@ -285,7 +536,22 @@ const cap = (messages: unknown[], includeActivities: boolean): PersistedAssistan
     }
   }
 
-  return bounded
+  if (approximateUtf8Bytes(JSON.stringify(bounded)) <= MAX_STORED_TRANSCRIPT_BYTES) {
+    return bounded
+  }
+
+  // This can only be reached by unusually dense multibyte metadata. Preserve
+  // admitted undo records and fail closed on convenience transcript/audit data.
+  const durableOnly = bounded
+    .filter((message) => changeCarrierMessages.has(message))
+    .map((message): PersistedAssistantMessage => ({
+      kind: message.kind,
+      id: message.id,
+      text: '',
+      ...(message.steered !== undefined ? { steered: message.steered } : {}),
+      activities: (message.activities ?? []).filter((activity) => retainedNoteChanges.has(activity)),
+    }))
+  return approximateUtf8Bytes(JSON.stringify(durableOnly)) <= MAX_STORED_TRANSCRIPT_BYTES ? durableOnly : []
 }
 
 const sanitizeDeniedToolNames = (value: unknown): string[] | undefined => {
@@ -327,14 +593,14 @@ const parseStoredHistory = (value: unknown): ParsedHistory | undefined => {
     return undefined
   }
   if (record.version === LEGACY_VERSION) {
-    return { messages: cap(record.messages, false), deniedToolNames: [] }
+    return { messages: cap(record.messages, false, false, true), deniedToolNames: [] }
   }
-  if (record.version === CURRENT_VERSION) {
+  if (record.version === AUDIT_VERSION || record.version === CURRENT_VERSION) {
     const deniedToolNames = sanitizeDeniedToolNames(record.deniedToolNames)
     if (!deniedToolNames) {
       return undefined
     }
-    return { messages: cap(record.messages, true), deniedToolNames }
+    return { messages: cap(record.messages, true, record.version === CURRENT_VERSION, true), deniedToolNames }
   }
   return undefined
 }
@@ -395,7 +661,7 @@ export function readAssistantChatHistoryResult(
     storage.setValue(assistantChatHistoryStorageKey(accountScope, tabId), {
       version: CURRENT_VERSION,
       messages: parsed.messages,
-    } satisfies StoredHistoryV2)
+    } satisfies StoredHistoryV3)
     localStorage.removeItem(legacyKey)
     return { status: 'found', ...parsed }
   } catch {
@@ -429,9 +695,9 @@ export async function persistAssistantChatHistory(
       }
       storage.setValue(assistantChatHistoryStorageKey(accountScope, tabId), {
         version: CURRENT_VERSION,
-        messages: cap(messages, true),
+        messages: cap(messages, true, true),
         ...(sanitizedDeniedToolNames.length > 0 ? { deniedToolNames: sanitizedDeniedToolNames } : {}),
-      } satisfies StoredHistoryV2)
+      } satisfies StoredHistoryV3)
     }
   } catch {
     // History is a convenience; unavailable/quota-limited storage must not
@@ -459,9 +725,9 @@ export async function persistAssistantChatHistoryStrict(
   const key = assistantChatHistoryStorageKey(accountScope, tabId)
   const value = {
     version: CURRENT_VERSION,
-    messages: cap(messages, true),
+    messages: cap(messages, true, true),
     ...(sanitizedDeniedToolNames.length > 0 ? { deniedToolNames: sanitizedDeniedToolNames } : {}),
-  } satisfies StoredHistoryV2
+  } satisfies StoredHistoryV3
   await storage.setValueAndAwaitPersist(key, value)
   // A deletion may have won while this writer was awaiting durable
   // persistence. Remove the stale bytes as well as leaving the tombstone in
@@ -489,7 +755,7 @@ export async function deleteAssistantChatHistory(
 
   try {
     // Overwrite decrypted in-memory content before the asynchronous removal.
-    const deleted = { version: CURRENT_VERSION, messages: [], deleted: true } satisfies DeletedHistoryV2
+    const deleted = { version: CURRENT_VERSION, messages: [], deleted: true } satisfies DeletedHistoryV3
     if (storage.setValueAndAwaitPersist) {
       await storage.setValueAndAwaitPersist(key, deleted)
     } else {

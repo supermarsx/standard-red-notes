@@ -388,6 +388,12 @@ const ASSISTANT_PERMISSION_OPTIONS: Array<{
     description:
       'Eligible actions receive a bounded AI safety preflight. Anything destructive, uncertain, or flagged still asks.',
   },
+  {
+    value: 'bypass',
+    label: 'Bypass confirmations',
+    description:
+      'Runs assistant tools without approval prompts or an AI safety preflight. Account, selected-note context, read-only vault, and tool validation rules still apply.',
+  },
 ]
 
 const Assistant = ({ application }: { application: WebApplication }) => {

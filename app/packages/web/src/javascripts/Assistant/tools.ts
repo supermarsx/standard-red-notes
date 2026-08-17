@@ -12,6 +12,9 @@ import {
   isTag,
   FeatureStatus,
   CollectionSort,
+  MutationType,
+  PayloadEmitSource,
+  isLitePayload,
 } from '@standardnotes/snjs'
 import { NativeFeatureIdentifier, NoteType } from '@standardnotes/features'
 import { WebApplication } from '@/Application/WebApplication'
@@ -35,6 +38,19 @@ import { createEmailReminder, deleteEmailReminder } from '@/Reminders/emailRemin
 import { webSearch, webFetch } from './webTools'
 import { achievements, ACHIEVEMENTS } from '@/Achievements'
 import { AssistantToolConfirmation } from './assistantPresentation'
+import {
+  AssistantNoteChange,
+  AssistantNoteSnapshot,
+  MAX_REVERSIBLE_ASSISTANT_NOTE_CHARS,
+  assistantNoteSnapshotMatches,
+  buildAssistantNoteChange,
+  captureAssistantNoteSnapshot,
+  createAssistantNoteSnapshot,
+  flushAssistantNoteEditors,
+} from './assistantNoteChanges'
+import { extractPlaintextFromNoteText } from '@/Utils/NoteStats'
+import { assertSuperNoteMarkdownRewriteSafe } from './superNoteMarkdownRewriteGuard'
+import { sanitizeAssistantNoteChange } from './assistantChatHistory'
 
 export type TodoStatus = 'pending' | 'in_progress' | 'completed'
 
@@ -98,6 +114,19 @@ type NoteAction = (typeof NOTE_ACTIONS)[number]
 const RECURRENCE_FREQUENCIES: RecurrenceFrequency[] = ['none', 'daily', 'weekly', 'monthly', 'yearly', 'custom']
 const RECURRENCE_UNITS: RecurrenceUnit[] = ['day', 'week', 'month', 'year']
 
+/** Web-native structured editors require schema-aware tools, never raw body replacement. */
+const STRUCTURED_NOTE_EDITOR_IDENTIFIERS = new Set([
+  'org.standardnotes.canvas',
+  'org.standardnotes.base',
+  'org.standardnotes.js-sandbox',
+  'org.standardnotes.web-sandbox',
+  'org.standardnotes.calendar',
+  'org.standardnotes.kanban-board',
+  'org.standardnotes.timeline',
+  'org.standardnotes.flashcards',
+  'org.standardnotes.map',
+])
+
 export interface AssistantToolContext {
   /** Combined user-cancel/deadline signal for this exact agent run. */
   signal?: AbortSignal
@@ -110,6 +139,10 @@ export interface AssistantToolContext {
    * model-provided text can never widen it.
    */
   selectedNoteUuids?: ReadonlySet<string>
+  /** Content snapshots attached to the exact context sent for this run. */
+  expectedNoteSnapshots?: Map<string, AssistantNoteSnapshot>
+  /** Nested research agents are read-only; the visible parent owns all writes. */
+  allowMutatingTools?: boolean
   /** Whether mutating tools require user confirmation before executing. */
   confirmBeforeWrite: boolean
   /** Resolves to true if the user approves a mutating action. */
@@ -133,6 +166,8 @@ export interface AssistantToolContext {
   runSubAgent?: (task: string, contextText?: string) => Promise<string>
   /** Called when the agent rewrites its todo list, so the UI can render it. */
   onTodosChanged?: (todos: TodoItem[]) => void
+  /** Publishes a successful note edit to its bounded, local chat activity card. */
+  onNoteChange?: (callId: string | undefined, change: AssistantNoteChange) => void
 }
 
 const DELEGATE_TOOL: ToolDefinition = {
@@ -164,14 +199,6 @@ function noteSummary(note: SNNote) {
     trashed: note.trashed,
     protected: note.protected,
     updated_at: note.userModifiedDate?.toISOString?.() ?? undefined,
-  }
-}
-
-function tagSummary(application: WebApplication, tag: SNTag) {
-  return {
-    uuid: tag.uuid,
-    title: tag.title,
-    longTitle: application.items.getTagLongTitle(tag),
   }
 }
 
@@ -216,10 +243,9 @@ export class AssistantTools implements ToolSession {
   }
 
   tools(): ToolDefinition[] {
-    if (this.enableDelegate && this.context.runSubAgent) {
-      return [...TOOL_DEFINITIONS, DELEGATE_TOOL]
-    }
-    return TOOL_DEFINITIONS
+    const available =
+      this.enableDelegate && this.context.runSubAgent ? [...TOOL_DEFINITIONS, DELEGATE_TOOL] : TOOL_DEFINITIONS
+    return this.context.allowMutatingTools === false ? available.filter((tool) => !tool.mutating) : available
   }
 
   async call(name: string, rawArgs: unknown, callId?: string): Promise<unknown> {
@@ -232,16 +258,20 @@ export class AssistantTools implements ToolSession {
       throw new Error(`Unknown tool: ${name}`)
     }
 
+    if (definition.mutating) {
+      this.assertMutationAuthorized(args)
+    }
+
     const confirmationRequest = this.buildConfirmationRequest(name, args, callId)
-    // Web tools disclose a query/URL outside the encrypted client. They always
-    // receive an inline decision, independently of the user's write policy or
-    // any remembered approval for local-only actions.
+    // Without a richer policy hook, preserve the legacy behavior: web tools
+    // always ask because they disclose a query/URL outside the encrypted client.
+    // When supplied, the hook is authoritative so the explicit bypass mode can
+    // skip confirmation UI; dispatch-time authorization and validation below
+    // remain unchanged.
     const isExternalDisclosure = name === 'web.search' || name === 'web.fetch'
-    const needsConfirmation =
-      isExternalDisclosure ||
-      (this.context.shouldRequestConfirmation
-        ? this.context.shouldRequestConfirmation(confirmationRequest, definition.mutating)
-        : definition.mutating && this.context.confirmBeforeWrite)
+    const needsConfirmation = this.context.shouldRequestConfirmation
+      ? this.context.shouldRequestConfirmation(confirmationRequest, definition.mutating)
+      : isExternalDisclosure || (definition.mutating && this.context.confirmBeforeWrite)
     if (needsConfirmation) {
       this.throwIfAborted()
       const approved = this.context.signal
@@ -256,7 +286,13 @@ export class AssistantTools implements ToolSession {
     }
 
     this.throwIfAborted()
-    const result = await this.dispatch(name, args)
+    if (definition.mutating) {
+      // Approval can stay open while session/vault permissions change. Re-check
+      // every hard write boundary immediately before dispatch; confirmation
+      // policy (including bypass) is never an authorization decision.
+      this.assertMutationAuthorized(args)
+    }
+    const result = await this.dispatch(name, args, callId)
     if (definition.mutating) {
       return this.markCompletedAfterCancellation(result)
     }
@@ -264,7 +300,7 @@ export class AssistantTools implements ToolSession {
     return result
   }
 
-  private dispatch(name: string, args: Record<string, unknown>): unknown | Promise<unknown> {
+  private dispatch(name: string, args: Record<string, unknown>, callId?: string): unknown | Promise<unknown> {
     switch (name) {
       case 'notes.list':
         return this.notesList(args)
@@ -277,11 +313,11 @@ export class AssistantTools implements ToolSession {
       case 'notes.create':
         return this.notesCreate(args)
       case 'notes.update':
-        return this.notesUpdate(args)
+        return this.notesUpdate(args, callId)
       case 'notes.createSuper':
         return this.notesCreateSuper(args)
       case 'notes.updateSuper':
-        return this.notesUpdateSuper(args)
+        return this.notesUpdateSuper(args, callId)
       case 'notes.readSuper':
         return this.notesReadSuper(args)
       case 'notes.delete':
@@ -345,6 +381,60 @@ export class AssistantTools implements ToolSession {
     throw error
   }
 
+  /**
+   * Confirmation policy is never an authorization policy. Enforce account and
+   * shared-vault write restrictions before any approval (or bypass) decision.
+   */
+  private assertMutationAuthorized(args: Record<string, unknown>): void {
+    if (this.application.sessions?.isCurrentSessionReadOnly?.()) {
+      throw new Error('The current session is read-only, so the assistant cannot make changes.')
+    }
+
+    const note = this.findTrustedTargetNote(args)
+    if (!note) {
+      const tag = this.findTrustedTargetTag(args)
+      if (tag) {
+        this.assertTagMutationAuthorized(tag)
+      }
+      return
+    }
+    this.assertNoteMutationAuthorized(note)
+    const tag = this.findTrustedTargetTag(args)
+    if (tag) {
+      this.assertTagMutationAuthorized(tag)
+    }
+  }
+
+  private assertNoteMutationAuthorized(note: SNNote): void {
+    if (this.application.sessions?.isCurrentSessionReadOnly?.()) {
+      throw new Error('The current session is read-only, so the assistant cannot make changes.')
+    }
+    if (note.locked || isLitePayload(note.payload) || !this.isReadableNote(note)) {
+      throw new Error('This note is locked, incomplete, or no longer authorized for assistant changes.')
+    }
+    const expected = this.context.expectedNoteSnapshots?.get(note.uuid)
+    if (expected && !assistantNoteSnapshotMatches(note, expected)) {
+      throw new Error('This note changed after its content was sent to the assistant. Review it and try again.')
+    }
+    const vault = this.application.vaults?.getItemVault?.(note)
+    if (vault?.isSharedVaultListing() && this.application.vaultUsers?.isCurrentUserReadonlyVaultMember?.(vault)) {
+      throw new Error('You have read-only access to this shared vault, so the assistant cannot change this note.')
+    }
+  }
+
+  private assertTagMutationAuthorized(tag: SNTag): void {
+    if (this.application.sessions?.isCurrentSessionReadOnly?.()) {
+      throw new Error('The current session is read-only, so the assistant cannot make changes.')
+    }
+    if (!this.isReadableTag(tag)) {
+      throw new Error('This tag is locked, incomplete, or no longer authorized for assistant changes.')
+    }
+    const vault = this.application.vaults?.getItemVault?.(tag)
+    if (vault?.isSharedVaultListing() && this.application.vaultUsers?.isCurrentUserReadonlyVaultMember?.(vault)) {
+      throw new Error('You have read-only access to this shared vault, so the assistant cannot change this tag.')
+    }
+  }
+
   private throwIfSessionChanged(): void {
     if (!this.context.isSessionCurrent || this.context.isSessionCurrent()) {
       return
@@ -352,6 +442,15 @@ export class AssistantTools implements ToolSession {
     const error = new Error('Assistant operation expired when the signed-in account changed.')
     error.name = 'AbortError'
     throw error
+  }
+
+  private syncInBackground(): void {
+    try {
+      const pending = this.application.sync?.sync?.()
+      void pending?.catch((error) => console.error('Assistant note sync failed', error))
+    } catch (error) {
+      console.error('Assistant note sync failed', error)
+    }
   }
 
   private isBoundaryExpired(): boolean {
@@ -383,6 +482,7 @@ export class AssistantTools implements ToolSession {
       throw new Error('The created note identity did not match the application-issued template.')
     }
     this.createdNoteUuids.add(note.uuid)
+    this.recordExpectedNoteSnapshot(note)
   }
 
   private validatePreferenceValue(key: PrefKey, value: unknown): void {
@@ -442,13 +542,66 @@ export class AssistantTools implements ToolSession {
       return undefined
     }
     const tag = this.application.items.findItem<SNTag>(args.tagUuid)
-    return tag && isTag(tag) ? tag : undefined
+    return tag && isTag(tag) && this.isReadableTag(tag) ? tag : undefined
   }
 
   private isReadableNote(note: SNNote): boolean {
-    return this.context.selectedNoteUuids
+    const inSelectedScope = this.context.selectedNoteUuids
       ? this.context.selectedNoteUuids.has(note.uuid) || this.createdNoteUuids.has(note.uuid)
       : true
+    if (!inSelectedScope) {
+      return false
+    }
+    if (note.locked || isLitePayload(note.payload)) {
+      return false
+    }
+
+    // Production WebApplication always provides this authorization check. The
+    // feature test harnesses intentionally use small structural stubs, so the
+    // absent-method fallback applies only to those non-application objects.
+    const authorize = this.application.isAuthorizedToRenderItem
+    if (typeof authorize !== 'function') {
+      return true
+    }
+    try {
+      return authorize.call(this.application, note)
+    } catch {
+      return false
+    }
+  }
+
+  private isReadableTag(tag: SNTag): boolean {
+    if (tag.locked || isLitePayload(tag.payload)) {
+      return false
+    }
+    const authorize = this.application.isAuthorizedToRenderItem
+    if (typeof authorize !== 'function') {
+      return true
+    }
+    try {
+      return authorize.call(this.application, tag)
+    } catch {
+      return false
+    }
+  }
+
+  private tagSummary(tag: SNTag) {
+    const parents: SNTag[] = []
+    const seen = new Set([tag.uuid])
+    let current = tag
+    for (let depth = 0; depth < 100; depth++) {
+      const parent = this.application.items.getTagParent?.(current)
+      if (!parent) {
+        return { uuid: tag.uuid, title: tag.title, longTitle: [...parents, tag].map((entry) => entry.title).join('/') }
+      }
+      if (seen.has(parent.uuid) || !this.isReadableTag(parent)) {
+        return { uuid: tag.uuid, title: tag.title, longTitle: tag.title }
+      }
+      seen.add(parent.uuid)
+      parents.unshift(parent)
+      current = parent
+    }
+    return { uuid: tag.uuid, title: tag.title, longTitle: tag.title }
   }
 
   private requireReadableNote(uuid: unknown): SNNote {
@@ -462,7 +615,11 @@ export class AssistantTools implements ToolSession {
     ) {
       throw new Error('That note is outside the context selected for this assistant request.')
     }
-    return this.requireNote(uuid)
+    const note = this.requireNote(uuid)
+    if (!this.isReadableNote(note)) {
+      throw new Error('The assistant is not authorized to access that note.')
+    }
+    return note
   }
 
   private allNotes(): SNNote[] {
@@ -491,6 +648,14 @@ export class AssistantTools implements ToolSession {
     const tag = this.application.items.findItem<SNTag>(uuid)
     if (!tag || !isTag(tag)) {
       throw new Error(`Tag not found: ${uuid}`)
+    }
+    return tag
+  }
+
+  private requireReadableTag(uuid: unknown): SNTag {
+    const tag = this.requireTag(uuid)
+    if (!this.isReadableTag(tag)) {
+      throw new Error('The assistant is not authorized to access that tag.')
     }
     return tag
   }
@@ -557,7 +722,80 @@ export class AssistantTools implements ToolSession {
     return {
       ...noteSummary(note),
       text: note.text,
-      tags: this.application.items.getSortedTagsForItem(note).map((tag) => tagSummary(this.application, tag)),
+      tags: this.application.items
+        .getSortedTagsForItem(note)
+        .filter((tag) => this.isReadableTag(tag))
+        .map((tag) => this.tagSummary(tag)),
+    }
+  }
+
+  /** Flush an open editor before taking the before-snapshot for an assistant edit. */
+  private async latestReadableNote(uuid: unknown): Promise<SNNote> {
+    const note = this.requireReadableNote(uuid)
+    await flushAssistantNoteEditors(this.application, note.uuid)
+    const latest = this.requireReadableNote(uuid)
+    this.assertNoteMutationAuthorized(latest)
+    if (latest.text.length > MAX_REVERSIBLE_ASSISTANT_NOTE_CHARS) {
+      throw new Error('This note is too large for a safely reversible assistant edit.')
+    }
+    return latest
+  }
+
+  private async requireUnchangedWritableNote(uuid: string, expected: AssistantNoteSnapshot): Promise<SNNote> {
+    await flushAssistantNoteEditors(this.application, uuid)
+    const latest = this.requireReadableNote(uuid)
+    this.assertNoteMutationAuthorized(latest)
+    if (!assistantNoteSnapshotMatches(latest, expected)) {
+      throw new Error('This note changed while the assistant was preparing its edit. Review it and try again.')
+    }
+    return latest
+  }
+
+  private assertDurableAssistantNoteChange(
+    change: AssistantNoteChange | undefined,
+    after: AssistantNoteSnapshot,
+  ): void {
+    if (!change) {
+      return
+    }
+    if (
+      after.text.length > MAX_REVERSIBLE_ASSISTANT_NOTE_CHARS ||
+      !sanitizeAssistantNoteChange({ ...change, position: 'after' })
+    ) {
+      throw new Error('This edit is too large or complex to retain a safe encrypted undo record.')
+    }
+  }
+
+  private recordExpectedNoteSnapshot(note: SNNote): void {
+    this.context.expectedNoteSnapshots?.set(note.uuid, captureAssistantNoteSnapshot(note))
+  }
+
+  private notePreview(text: string): string {
+    const limit = 160
+    return text.length > limit ? `${text.slice(0, limit)}...` : text
+  }
+
+  private publishNoteChange(callId: string | undefined, change: AssistantNoteChange | undefined): void {
+    if (!change) {
+      return
+    }
+    this.throwIfSessionChanged()
+    try {
+      this.context.onNoteChange?.(callId, change)
+    } catch {
+      // A rendering callback must never turn an already-committed note write
+      // into a reported tool failure or prevent its sync request.
+    }
+  }
+
+  private async superNoteMarkdown(note: SNNote): Promise<string> {
+    if (note.noteType !== NoteType.Super) {
+      return note.text
+    }
+    try {
+      return await this.superConverter.convertSuperStringToOtherFormat(note.text, 'md')
+    } catch {
+      return extractPlaintextFromNoteText(note.text, note.noteType)
     }
   }
 
@@ -593,20 +831,52 @@ export class AssistantTools implements ToolSession {
     return { ok: true, note: noteSummary(note), editorIdentifier: editorIdentifier ?? null }
   }
 
-  private async notesUpdate(args: Record<string, unknown>) {
-    if (args.format === 'super') {
-      return this.notesUpdateSuper(args)
+  private async notesUpdate(args: Record<string, unknown>, callId?: string) {
+    const note = await this.latestReadableNote(args.uuid)
+    const hasBody = typeof args.text === 'string' || typeof args.markdown === 'string'
+    if (typeof args.title !== 'string' && !hasBody && args.format !== 'super') {
+      throw new Error('Provide a title or body change for notes.update.')
+    }
+    if (args.format === 'super' || (note.noteType === NoteType.Super && hasBody)) {
+      return this.notesUpdateSuper(args, callId, note)
+    }
+    if (hasBody && note.editorIdentifier && STRUCTURED_NOTE_EDITOR_IDENTIFIERS.has(note.editorIdentifier)) {
+      throw new Error(
+        'This note uses a structured editor. Its body can only be changed by a schema-aware tool; a title-only update is safe.',
+      )
     }
 
-    const note = this.requireReadableNote(args.uuid)
-    const updated = await this.application.mutator.changeItem<NoteMutator, SNNote>(note, (mutator) => {
-      if (typeof args.title === 'string') {
-        mutator.title = args.title
-      }
-      if (typeof args.text === 'string') {
-        mutator.text = args.text
-      }
+    const before = captureAssistantNoteSnapshot(note)
+    const after = createAssistantNoteSnapshot({
+      ...before,
+      title: typeof args.title === 'string' ? args.title : before.title,
+      text: typeof args.text === 'string' ? args.text : before.text,
+      previewPlain: typeof args.text === 'string' ? this.notePreview(args.text) : before.previewPlain,
+      previewHtml: typeof args.text === 'string' ? undefined : before.previewHtml,
     })
+    const change = buildAssistantNoteChange({ noteUuid: note.uuid, before, after })
+    this.assertDurableAssistantNoteChange(change, after)
+    if (!change) {
+      return { ok: true, note: noteSummary(note), unchanged: true }
+    }
+    const updated = await this.application.mutator.changeItem<NoteMutator, SNNote>(
+      note,
+      (mutator) => {
+        if (typeof args.title === 'string') {
+          mutator.title = args.title
+        }
+        if (typeof args.text === 'string') {
+          mutator.text = args.text
+          mutator.preview_plain = this.notePreview(args.text)
+          mutator.preview_html = undefined
+        }
+      },
+      MutationType.UpdateUserTimestamps,
+      PayloadEmitSource.AssistantChanged,
+    )
+    this.recordExpectedNoteSnapshot(updated)
+    this.syncInBackground()
+    this.publishNoteChange(callId, change)
     return { ok: true, note: noteSummary(updated) }
   }
 
@@ -665,31 +935,86 @@ export class AssistantTools implements ToolSession {
    * back here; we convert it to Super JSON and store it. If the target note is not
    * yet a Super note it is converted into one.
    */
-  private async notesUpdateSuper(args: Record<string, unknown>) {
-    const note = this.requireReadableNote(args.uuid)
-    const markdown = typeof args.markdown === 'string' ? args.markdown : typeof args.text === 'string' ? args.text : ''
+  private async notesUpdateSuper(args: Record<string, unknown>, callId?: string, resolvedNote?: SNNote) {
+    const note = resolvedNote ?? (await this.latestReadableNote(args.uuid))
+    const hasBodyInput = typeof args.markdown === 'string' || typeof args.text === 'string'
+    const replacesBody = hasBodyInput || note.noteType !== NoteType.Super
+    if (
+      replacesBody &&
+      note.noteType !== NoteType.Super &&
+      note.editorIdentifier &&
+      STRUCTURED_NOTE_EDITOR_IDENTIFIERS.has(note.editorIdentifier)
+    ) {
+      throw new Error(
+        'This note uses a structured editor. Its body can only be changed by a schema-aware tool; a title-only update is safe.',
+      )
+    }
+    if (hasBodyInput && note.noteType === NoteType.Super) {
+      assertSuperNoteMarkdownRewriteSafe(note.text)
+    }
+    const beforeMarkdown = await this.superNoteMarkdown(note)
+    const markdown =
+      typeof args.markdown === 'string' ? args.markdown : typeof args.text === 'string' ? args.text : beforeMarkdown
 
     if (!this.canUseSuper()) {
       throw new Error('The Super editor is not available, so this note cannot be saved as Super.')
     }
 
-    let superText: string
-    try {
-      superText = this.superConverter.convertOtherFormatToSuperString(markdown, 'md')
-    } catch (error) {
-      throw new Error(
-        `Could not convert markdown to a Super note: ${error instanceof Error ? error.message : String(error)}`,
-      )
+    let superText = note.text
+    if (replacesBody) {
+      try {
+        superText = this.superConverter.convertOtherFormatToSuperString(markdown, 'md')
+      } catch (error) {
+        throw new Error(
+          `Could not convert markdown to a Super note: ${error instanceof Error ? error.message : String(error)}`,
+        )
+      }
     }
 
-    const updated = await this.application.mutator.changeItem<NoteMutator, SNNote>(note, (mutator) => {
-      if (typeof args.title === 'string') {
-        mutator.title = args.title
-      }
-      mutator.text = superText
-      mutator.noteType = NoteType.Super
-      mutator.editorIdentifier = NativeFeatureIdentifier.TYPES.SuperEditor
+    const before = captureAssistantNoteSnapshot(note)
+    const after = createAssistantNoteSnapshot({
+      ...before,
+      title: typeof args.title === 'string' ? args.title : before.title,
+      text: replacesBody ? superText : before.text,
+      previewPlain: replacesBody
+        ? this.notePreview(extractPlaintextFromNoteText(superText, NoteType.Super))
+        : before.previewPlain,
+      previewHtml: replacesBody ? undefined : before.previewHtml,
+      noteType: replacesBody ? NoteType.Super : before.noteType,
+      editorIdentifier: replacesBody ? NativeFeatureIdentifier.TYPES.SuperEditor : before.editorIdentifier,
     })
+    const change = buildAssistantNoteChange({
+      noteUuid: note.uuid,
+      before,
+      after,
+      beforeDisplayText: beforeMarkdown,
+      afterDisplayText: replacesBody ? markdown : beforeMarkdown,
+    })
+    this.assertDurableAssistantNoteChange(change, after)
+    if (!change) {
+      return { ok: true, note: noteSummary(note), super: note.noteType === NoteType.Super, unchanged: true }
+    }
+    const current = await this.requireUnchangedWritableNote(note.uuid, before)
+    const updated = await this.application.mutator.changeItem<NoteMutator, SNNote>(
+      current,
+      (mutator) => {
+        if (typeof args.title === 'string') {
+          mutator.title = args.title
+        }
+        if (replacesBody) {
+          mutator.text = superText
+          mutator.preview_plain = this.notePreview(extractPlaintextFromNoteText(superText, NoteType.Super))
+          mutator.preview_html = undefined
+          mutator.noteType = NoteType.Super
+          mutator.editorIdentifier = NativeFeatureIdentifier.TYPES.SuperEditor
+        }
+      },
+      MutationType.UpdateUserTimestamps,
+      PayloadEmitSource.AssistantChanged,
+    )
+    this.recordExpectedNoteSnapshot(updated)
+    this.syncInBackground()
+    this.publishNoteChange(callId, change)
     return { ok: true, note: noteSummary(updated), super: true }
   }
 
@@ -714,6 +1039,7 @@ export class AssistantTools implements ToolSession {
 
   private async notesDelete(args: Record<string, unknown>) {
     const note = this.requireReadableNote(args.uuid)
+    this.assertNoteMutationAuthorized(note)
     await this.application.mutator.deleteItem(note)
     return { ok: true, deleted: note.uuid }
   }
@@ -786,6 +1112,7 @@ export class AssistantTools implements ToolSession {
    */
   private async remindersSet(args: Record<string, unknown>) {
     const note = this.resolveNote(args)
+    this.assertNoteMutationAuthorized(note)
     const notesController = this.application.notesController
     const emailApplication = this.emailApplicationSnapshot()
 
@@ -840,6 +1167,7 @@ export class AssistantTools implements ToolSession {
       // Once the external email record exists, finish linking it locally even
       // if cancellation arrives between these two non-transactional systems.
       // The caller enforces the abort boundary after dispatch settles.
+      this.assertNoteMutationAuthorized(note)
       await notesController.upsertNoteReminder(note, reminder)
     } catch (error) {
       if (createdEmailReminderId) {
@@ -849,6 +1177,8 @@ export class AssistantTools implements ToolSession {
           try {
             // If the external delete failed, preserve the exact server id in the
             // synced note so it remains visible and retryable instead of orphaned.
+            // Never cross a newly-applied lock or read-only boundary to do so.
+            this.assertNoteMutationAuthorized(note)
             await notesController.upsertNoteReminder(note, reminder)
           } catch (compensationError) {
             throw new Error(
@@ -901,6 +1231,7 @@ export class AssistantTools implements ToolSession {
   /** Clear all reminders while keeping every external id reflected locally. */
   private async remindersClear(args: Record<string, unknown>) {
     const note = this.resolveNote(args)
+    this.assertNoteMutationAuthorized(note)
     const existing = getNoteReminders(note)
     const notesController = this.application.notesController
     const mutator = this.application.mutator
@@ -922,6 +1253,7 @@ export class AssistantTools implements ToolSession {
 
     if (failedExternalDeletes.length > 0) {
       try {
+        this.assertNoteMutationAuthorized(note)
         await mutator.changeItem<NoteMutator, SNNote>(note, (noteMutator) => {
           noteMutator.setAppDataItem(NoteRemindersKey, failedExternalDeletes)
         })
@@ -1057,13 +1389,14 @@ export class AssistantTools implements ToolSession {
     const tags = selectedNoteUuids
       ? Array.from(
           this.allNotes()
-            .filter((note) => selectedNoteUuids.has(note.uuid))
+            .filter((note) => selectedNoteUuids.has(note.uuid) && this.isReadableNote(note))
             .flatMap((note) => this.application.items.getSortedTagsForItem(note))
             .reduce((byUuid, tag) => byUuid.set(tag.uuid, tag), new Map<string, SNTag>())
             .values(),
         )
       : this.allTags()
-    return { count: tags.length, tags: tags.map((tag) => tagSummary(this.application, tag)) }
+    const readableTags = tags.filter((tag) => this.isReadableTag(tag))
+    return { count: readableTags.length, tags: readableTags.map((tag) => this.tagSummary(tag)) }
   }
 
   private async tagsCreate(args: Record<string, unknown>) {
@@ -1071,20 +1404,42 @@ export class AssistantTools implements ToolSession {
     if (!title) {
       throw new Error('A tag "title" string is required')
     }
+    const normalizedTitle = title.toLowerCase()
+    const existing = this.allTags().find(
+      (tag) => tag.parentId === undefined && tag.title?.toLowerCase() === normalizedTitle,
+    )
+    if (existing) {
+      this.assertTagMutationAuthorized(existing)
+      return { ok: true, tag: this.tagSummary(existing), existing: true }
+    }
     const tag = await this.application.mutator.findOrCreateTag(title)
-    return { ok: true, tag: tagSummary(this.application, tag) }
+    this.assertTagMutationAuthorized(tag)
+    return { ok: true, tag: this.tagSummary(tag) }
   }
 
   private async tagsAssign(args: Record<string, unknown>) {
     const note = this.requireReadableNote(args.noteUuid)
-    const tag = this.requireTag(args.tagUuid)
-    await this.application.mutator.addTagToNote(note, tag, false)
+    this.assertNoteMutationAuthorized(note)
+    const tag = this.requireReadableTag(args.tagUuid)
+    this.assertTagMutationAuthorized(tag)
+    if (note.key_system_identifier !== tag.key_system_identifier) {
+      throw new Error('The note and tag belong to different vaults and cannot be linked.')
+    }
+    const updatedTags = await this.application.mutator.addTagToNote(note, tag, false)
+    if (!updatedTags) {
+      throw new Error('The note and tag could not be linked.')
+    }
     return { ok: true, noteUuid: note.uuid, tagUuid: tag.uuid }
   }
 
   private async tagsUnassign(args: Record<string, unknown>) {
     const note = this.requireReadableNote(args.noteUuid)
-    const tag = this.requireTag(args.tagUuid)
+    this.assertNoteMutationAuthorized(note)
+    const tag = this.requireReadableTag(args.tagUuid)
+    this.assertTagMutationAuthorized(tag)
+    if (note.key_system_identifier !== tag.key_system_identifier) {
+      throw new Error('The note and tag belong to different vaults and cannot be unlinked.')
+    }
     await this.application.mutator.changeItem<TagMutator, SNTag>(tag, (mutator) => {
       mutator.removeItemAsRelationship(note)
     })
@@ -1132,6 +1487,7 @@ export class AssistantTools implements ToolSession {
 
   private async appNoteAction(args: Record<string, unknown>) {
     const note = this.requireReadableNote(args.uuid)
+    this.assertNoteMutationAuthorized(note)
     const action = args.action as NoteAction
     if (!NOTE_ACTIONS.includes(action)) {
       throw new Error(`Unknown note action: ${String(action)}. Allowed: ${NOTE_ACTIONS.join(', ')}`)

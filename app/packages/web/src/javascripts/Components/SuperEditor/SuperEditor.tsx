@@ -12,6 +12,7 @@ import {
   NoteContent,
   NoteMutator,
   SNNote,
+  PayloadEmitSource,
 } from '@standardnotes/snjs'
 import {
   CSSProperties,
@@ -64,6 +65,7 @@ import {
 } from './Collaboration/CollaborationKeyDerivation'
 import {
   authorizedRetrievedEditorSurfaceNote,
+  applyRetrievedEditorContent,
   bindRetrievedReconciliationLifetime,
   buildRetrievedEditorFallbackContent,
   commitRetrievedEditorSurfaceForLifetime,
@@ -635,6 +637,28 @@ export const SuperEditor: FunctionComponent<Props> = ({
       }
       if (updatedNote.uuid !== note.current.uuid) {
         throw Error('Editor received changes for non-current note')
+      }
+
+      if (source === PayloadEmitSource.AssistantChanged && updatedNote.text !== note.current.text) {
+        const applied = changeEditorFunction.current
+          ? applyRetrievedEditorContent({
+              text: updatedNote.text,
+              changeEditor: changeEditorFunction.current,
+              ignoreNextChangeRef: ignoreNextChange,
+              isLifetimeCurrent: () =>
+                surfaceOwner.current === expectedSurfaceOwner && retrievedLifetimeRef.current === retrievedLifetime,
+              flushEditorSerialize: () => controller.flushEditorSerialize(),
+              history: 'push',
+            })
+          : false
+        if (applied) {
+          retrievedDurableState.text = updatedNote.text
+          latestEditorText.current = updatedNote.text
+          latestEditorPreview.current = {
+            previewPlain: updatedNote.preview_plain,
+            previewHtml: updatedNote.preview_html || undefined,
+          }
+        }
       }
 
       if (isPayloadSourceRetrieved(source)) {
