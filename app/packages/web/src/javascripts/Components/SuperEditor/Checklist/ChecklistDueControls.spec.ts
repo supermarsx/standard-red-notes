@@ -1,3 +1,4 @@
+import { createEditor, isDOMCapturingSelection } from 'lexical'
 import {
   createChecklistDueShell,
   readChecklistScheduleControl,
@@ -56,6 +57,36 @@ describe('checklist due controls', () => {
       ok: true,
       recurrenceChoice: { frequency: 'custom', interval: 3, unit: 'week' },
     })
+  })
+
+  it('keeps the focused schedule form outside Lexical selection ownership', () => {
+    const editor = createEditor({
+      namespace: 'checklist-schedule-selection',
+      onError: (error) => {
+        throw error
+      },
+    })
+    const root = document.createElement('div')
+    root.contentEditable = 'true'
+    document.body.appendChild(root)
+    editor.setRootElement(root)
+
+    const item = document.createElement('li')
+    root.appendChild(item)
+    const shell = syncChecklistDueShell(item, undefined, false, true)
+    const input = shell.querySelector('[data-checklist-due-input]') as HTMLInputElement
+
+    setChecklistSchedulePanelOpen(shell, true)
+    input.focus()
+
+    const inputRetainedFocus = document.activeElement === input
+    const formOwnsItsSelection = isDOMCapturingSelection(input, editor)
+
+    editor.setRootElement(null)
+    root.remove()
+
+    expect(inputRetainedFocus).toBe(true)
+    expect(formOwnsItsSelection).toBe(true)
   })
 
   it('preserves the exact fold offset, seconds, and milliseconds when Save is a no-op', () => {

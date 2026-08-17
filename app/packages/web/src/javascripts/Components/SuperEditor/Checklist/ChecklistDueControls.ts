@@ -43,7 +43,7 @@ export function createChecklistDueShell(): HTMLSpanElement {
   shell.setAttribute(CHECKLIST_DUE_SHELL_ATTR, 'true')
   shell.setAttribute('contenteditable', 'false')
   shell.className = 'checklist-due-shell'
-  setDOMUnmanaged(shell)
+  setDOMUnmanaged(shell, { captureSelection: true })
 
   const label = document.createElement('span')
   label.setAttribute('data-checklist-due-label', 'true')
