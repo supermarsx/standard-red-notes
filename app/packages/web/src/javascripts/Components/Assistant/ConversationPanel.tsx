@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { observer } from 'mobx-react-lite'
 import { ApplicationEvent, ContentType, PrefKey, SNNote, isNote } from '@standardnotes/snjs'
 import { classNames } from '@standardnotes/utils'
+import { addToast, ToastType } from '@standardnotes/toast'
+import { confirmDialog } from '@standardnotes/ui-services'
 import { WebApplication } from '@/Application/WebApplication'
 import Icon from '@/Components/Icon/Icon'
 import Button from '@/Components/Button/Button'
@@ -64,6 +66,7 @@ import {
   captureAssistantNoteSnapshot,
   flushAssistantNoteEditors,
 } from '@/Assistant/assistantNoteChanges'
+import AssistantMessageActions from './AssistantMessageActions'
 
 export type ToolEntry = {
   id: string
@@ -304,6 +307,8 @@ function ConversationPanelImpl({
   persistenceAllowedRef.current = effectivePersistenceAllowed
   const runPersistenceRef = useRef(runPersistence)
   runPersistenceRef.current = runPersistence
+  const conversationIdentityRef = useRef({ accountScope, tabId })
+  conversationIdentityRef.current = { accountScope, tabId }
   const consumedDirectiveIdsRef = useRef(new Set<string>())
   const sessionEpochRef = useRef(0)
   const observedPrincipalRef = useRef(captureAssistantSessionPrincipal(application.sessions))
@@ -442,7 +447,7 @@ function ConversationPanelImpl({
       return message
     })
     try {
-      await persist(() =>
+      const persisted = await persist(() =>
         persistAssistantChatHistoryStrict(
           application.storage,
           history.accountScope,
@@ -453,6 +458,9 @@ function ConversationPanelImpl({
             .map(([name]) => name),
         ),
       )
+      if (!persisted) {
+        throw new Error('Assistant chat persistence ownership was lost before the write completed.')
+      }
     } catch (error) {
       markHistoryPersistenceFailed()
       throw error
@@ -463,11 +471,13 @@ function ConversationPanelImpl({
     historyCheckpointRef.current = createAssistantChatHistoryCheckpoint(() => historyWriterRef.current())
   }
 
-  const flushChatHistory = useCallback(async () => {
+  const flushChatHistory = useCallback(async (): Promise<boolean> => {
     try {
       await historyCheckpointRef.current!.flush()
+      return true
     } catch {
       markHistoryPersistenceFailed()
+      return false
     }
   }, [markHistoryPersistenceFailed])
 
@@ -475,8 +485,70 @@ function ConversationPanelImpl({
     if (!effectivePersistenceAllowed || !registerPersistenceFinalizer) {
       return
     }
-    return registerPersistenceFinalizer(flushChatHistory)
+    return registerPersistenceFinalizer(async () => {
+      await flushChatHistory()
+    })
   }, [effectivePersistenceAllowed, flushChatHistory, registerPersistenceFinalizer])
+
+  const removeMessage = useCallback(
+    async (messageId: string) => {
+      const message = messagesRef.current.find((candidate) => candidate.id === messageId)
+      if (!message || (message.kind === 'assistant' && message.streaming)) {
+        return
+      }
+      const removalIdentity = conversationIdentityRef.current
+      const removalSessionEpoch = sessionEpochRef.current
+      const removalPrincipal = captureAssistantSessionPrincipal(application.sessions)
+
+      if (message.kind === 'assistant' && message.tools.length > 0) {
+        const includesNoteChanges = message.tools.some((tool) => tool.noteChange)
+        let confirmed = false
+        try {
+          confirmed = await confirmDialog({
+            title: 'Remove assistant message?',
+            text: includesNoteChanges
+              ? 'This message contains tool activity and note-change undo/redo history. Removing it hides that audit trail and its note-change controls from this chat.'
+              : 'This message contains tool activity. Removing it hides that activity audit trail from this chat.',
+            confirmButtonText: 'Remove',
+            confirmButtonStyle: 'danger',
+          })
+        } catch {
+          addToast({ type: ToastType.Error, message: 'Could not open the removal confirmation.' })
+          return
+        }
+        if (!confirmed) {
+          return
+        }
+      }
+
+      const currentIdentity = conversationIdentityRef.current
+      const currentMessage = messagesRef.current.find((candidate) => candidate.id === messageId)
+      if (
+        !mountedRef.current ||
+        currentIdentity.accountScope !== removalIdentity.accountScope ||
+        currentIdentity.tabId !== removalIdentity.tabId ||
+        sessionEpochRef.current !== removalSessionEpoch ||
+        !assistantSessionPrincipalMatches(removalPrincipal, captureAssistantSessionPrincipal(application.sessions)) ||
+        currentMessage !== message ||
+        (currentMessage.kind === 'assistant' && currentMessage.streaming)
+      ) {
+        return
+      }
+
+      const expectedDurableWrite = Boolean(
+        persistenceAllowedRef.current && persistableHistoryRef.current && runPersistenceRef.current,
+      )
+      setMessagesSynced((current) => current.filter((candidate) => candidate.id !== messageId))
+      const persisted = await flushChatHistory()
+      if (expectedDurableWrite && !persisted) {
+        addToast({
+          type: ToastType.Error,
+          message: 'Message was removed from this session, but saved chat history could not be updated.',
+        })
+      }
+    },
+    [application, flushChatHistory, setMessagesSynced],
+  )
 
   useEffect(() => {
     persistableHistoryRef.current = effectivePersistenceAllowed ? { accountScope, tabId } : null
@@ -1401,7 +1473,12 @@ function ConversationPanelImpl({
         )}
         <div className="flex flex-col gap-4">
           {messages.map((message) => (
-            <MessageBubble key={message.id} message={message} onApplyNoteChange={applyNoteChangeHistory} />
+            <MessageBubble
+              key={message.id}
+              message={message}
+              onApplyNoteChange={applyNoteChangeHistory}
+              onRemoveMessage={removeMessage}
+            />
           ))}
           {pendingConfirmation && (
             <InlineAssistantConfirmation
@@ -1487,58 +1564,80 @@ function ConversationPanelImpl({
   )
 }
 
-const MessageBubble = ({
+export const MessageBubble = ({
   message,
   onApplyNoteChange,
+  onRemoveMessage,
 }: {
   message: UIMessage
   onApplyNoteChange: (toolId: string, direction: AssistantNoteChangeDirection) => void
+  onRemoveMessage: (messageId: string) => void | Promise<void>
 }) => {
   if (message.kind === 'user') {
     const directive = parseAssistantDirectivePrompt(message.text)
     return (
-      <div className="bg-info text-info-contrast max-w-[85%] self-end rounded-lg px-3 py-2 text-sm">
-        {message.steered && <div className="mb-0.5 text-xs font-semibold opacity-80">↳ Steer</div>}
-        {directive ? (
-          <div className="flex flex-col gap-2">
-            <div className="font-medium whitespace-pre-wrap">{directive.instruction}</div>
-            <div className="border-info-contrast/30 bg-info-contrast/10 max-h-48 overflow-y-auto rounded border px-2 py-1.5 text-xs whitespace-pre-wrap">
-              <div className="mb-1 font-semibold opacity-80">Selected text</div>
-              {directive.selectedText}
-              {directive.selectionTruncated && <div className="mt-1 italic opacity-80">Selection truncated.</div>}
-            </div>
+      <AssistantMessageActions message={message} onRemoveMessage={onRemoveMessage}>
+        {(messageTextRef) => (
+          <div className="bg-info text-info-contrast min-w-0 rounded-lg px-3 py-2 text-sm">
+            {message.steered && <div className="mb-0.5 text-xs font-semibold opacity-80">↳ Steer</div>}
+            {directive ? (
+              <div ref={messageTextRef} className="flex flex-col gap-2">
+                <div className="font-medium whitespace-pre-wrap">{directive.instruction}</div>
+                <div className="border-info-contrast/30 bg-info-contrast/10 max-h-48 overflow-y-auto rounded border px-2 py-1.5 text-xs whitespace-pre-wrap">
+                  <div className="mb-1 font-semibold opacity-80">Selected text</div>
+                  {directive.selectedText}
+                  {directive.selectionTruncated && <div className="mt-1 italic opacity-80">Selection truncated.</div>}
+                </div>
+              </div>
+            ) : (
+              <div ref={messageTextRef} className="whitespace-pre-wrap">
+                {message.text}
+              </div>
+            )}
           </div>
-        ) : (
-          message.text
         )}
-      </div>
+      </AssistantMessageActions>
     )
   }
 
   if (message.kind === 'error') {
     return (
-      <div className="border-danger bg-default text-danger max-w-[85%] rounded-lg border px-3 py-2 text-sm">
-        {message.text}
-      </div>
+      <AssistantMessageActions message={message} onRemoveMessage={onRemoveMessage}>
+        {(messageTextRef) => (
+          <div
+            ref={messageTextRef}
+            className="border-danger bg-default text-danger rounded-lg border px-3 py-2 text-sm"
+          >
+            {message.text}
+          </div>
+        )}
+      </AssistantMessageActions>
     )
   }
 
   return (
-    <div className="max-w-[85%] self-start">
-      {message.tools.length > 0 && (
-        <div className="mb-1 flex flex-col gap-1">
-          {message.tools.map((tool) => (
-            <ToolActivity key={tool.id} tool={tool} onApplyNoteChange={onApplyNoteChange} />
-          ))}
+    <AssistantMessageActions message={message} onRemoveMessage={onRemoveMessage}>
+      {(messageTextRef) => (
+        <div className="min-w-0">
+          {message.tools.length > 0 && (
+            <div className="mb-1 flex flex-col gap-1">
+              {message.tools.map((tool) => (
+                <ToolActivity key={tool.id} tool={tool} onApplyNoteChange={onApplyNoteChange} />
+              ))}
+            </div>
+          )}
+          {(message.text || message.streaming) && (
+            <div
+              ref={messageTextRef}
+              className="bg-contrast text-text rounded-lg px-3 py-2 text-sm whitespace-pre-wrap"
+            >
+              {message.text}
+              {message.streaming && <span className="ml-0.5 animate-pulse">▍</span>}
+            </div>
+          )}
         </div>
       )}
-      {(message.text || message.streaming) && (
-        <div className="bg-contrast text-text rounded-lg px-3 py-2 text-sm whitespace-pre-wrap">
-          {message.text}
-          {message.streaming && <span className="ml-0.5 animate-pulse">▍</span>}
-        </div>
-      )}
-    </div>
+    </AssistantMessageActions>
   )
 }
 
