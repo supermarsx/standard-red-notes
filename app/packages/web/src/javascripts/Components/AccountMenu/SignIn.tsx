@@ -10,7 +10,13 @@ import Icon from '@/Components/Icon/Icon'
 import IconButton from '@/Components/Button/IconButton'
 import AdvancedOptions from './AdvancedOptions'
 import HorizontalSeparator from '../Shared/HorizontalSeparator'
-import { getErrorFromErrorResponse, isErrorResponse, getCaptchaHeader } from '@standardnotes/snjs'
+import {
+  getErrorFromErrorResponse,
+  isErrorResponse,
+  getCaptchaHeader,
+  type RecoverAccountResult,
+  type Result,
+} from '@standardnotes/snjs'
 import { useApplication } from '../ApplicationProvider'
 import { useCaptcha } from '@/Hooks/useCaptcha'
 import MergeLocalDataCheckbox from './MergeLocalDataCheckbox'
@@ -178,7 +184,7 @@ const SignInPane: FunctionComponent<Props> = ({ setMenuPane }) => {
         hvmToken,
         mergeLocal: shouldMergeLocal,
       })
-      .then((result) => {
+      .then((result: Result<void>) => {
         if (result.isFailed()) {
           const error = result.getError()
           try {
@@ -194,10 +200,10 @@ const SignInPane: FunctionComponent<Props> = ({ setMenuPane }) => {
         }
         application.accountMenuController.closeAccountMenu()
       })
-      .catch((err) => {
-        console.error(err)
+      .catch((error: unknown) => {
+        console.error(error)
         achievements.increment(METRICS.failedLoginsTotal)
-        setError(err.message ?? err.toString())
+        setError(error instanceof Error ? error.message : String(error))
         setPassword('')
         setHVMToken('')
         passwordInputRef?.current?.blur()
@@ -225,7 +231,7 @@ const SignInPane: FunctionComponent<Props> = ({ setMenuPane }) => {
         newPasswordConfirmation,
         mergeLocal: shouldMergeLocal,
       })
-      .then((result) => {
+      .then((result: Result<RecoverAccountResult>) => {
         if (result.isFailed()) {
           setError(result.getError())
           return
