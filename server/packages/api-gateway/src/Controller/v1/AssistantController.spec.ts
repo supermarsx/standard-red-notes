@@ -36,6 +36,7 @@ describe('AssistantController', () => {
     zrangebyscore: jest.Mock
     zremrangebyscore: jest.Mock
     eval: jest.Mock
+    set: jest.Mock
   }
 
   const makeController = (globalLimit = 0, tokenLimits?: { fiveHour?: number; weekly?: number }) =>
@@ -166,6 +167,7 @@ describe('AssistantController', () => {
         }
         return 1
       }),
+      set: jest.fn().mockResolvedValue('OK'),
     }
   })
 
@@ -737,5 +739,52 @@ describe('AssistantController', () => {
     await controller.streamCompletion(request, responseWith({}))
 
     expect(resolveProvider).toHaveBeenLastCalledWith('ollama', 'server-model', providerConfig)
+  })
+
+  it('reserves one durable assistant attempt before provider contact and rejects its duplicate', async () => {
+    const send = jest.fn(() =>
+      (async function* () {
+        yield { kind: 'finish' as const, stopReason: 'end_turn' as const }
+      })(),
+    )
+    ;(configuredProviders as jest.Mock).mockReturnValue(['openai'])
+    ;(resolveProvider as jest.Mock).mockReturnValue({ id: 'openai', send })
+    redis.set.mockResolvedValueOnce('OK').mockResolvedValueOnce(null)
+    const controller = makeController()
+    const request = () =>
+      ({ body: { messages: [] }, headers: { 'idempotency-key': 'attempt-one' }, on: jest.fn() }) as unknown as Request
+
+    await controller.streamCompletion(request(), responseWith({}))
+    const duplicateResponse = responseWith({})
+    await controller.streamCompletion(request(), duplicateResponse)
+
+    expect(send).toHaveBeenCalledTimes(1)
+    expect(redis.set).toHaveBeenCalledTimes(2)
+    expect(redis.set.mock.calls[0][0]).toMatch(/^assistant:attempt:v1:[a-f0-9]{64}$/u)
+    expect(statusMock).toHaveBeenCalledWith(409)
+    expect(jsonMock).toHaveBeenCalledWith(
+      expect.objectContaining({ error: expect.objectContaining({ tag: 'assistant-attempt-already-used' }) }),
+    )
+  })
+
+  it('fails closed before provider contact when an idempotent attempt has no shared store', async () => {
+    const send = jest.fn()
+    ;(configuredProviders as jest.Mock).mockReturnValue(['openai'])
+    ;(resolveProvider as jest.Mock).mockReturnValue({ id: 'openai', send })
+    const controller = new AssistantController({} as AssistantProviderConfig, 'openai', 'gpt-test', 0, [], undefined)
+    const response = responseWith({})
+    const request = {
+      body: { messages: [] },
+      headers: { 'idempotency-key': 'attempt-without-store' },
+      on: jest.fn(),
+    } as unknown as Request
+
+    await controller.streamCompletion(request, response)
+
+    expect(send).not.toHaveBeenCalled()
+    expect(statusMock).toHaveBeenCalledWith(503)
+    expect(jsonMock).toHaveBeenCalledWith(
+      expect.objectContaining({ error: expect.objectContaining({ tag: 'assistant-attempt-store-unavailable' }) }),
+    )
   })
 })

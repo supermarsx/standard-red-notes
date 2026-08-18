@@ -127,6 +127,39 @@ describe('webSocketsService', () => {
       ).resolves.toBeUndefined()
       expect(webSocketApiService.authorizeCollaboration).toHaveBeenCalledWith('note-1', 'lease-1', 'challenge-1')
     })
+
+    it('coalesces and caches valid socket authorizations without issuing an HTTP request', async () => {
+      webSocketApiService.authorizeCollaboration = jest.fn()
+      const socketAuthorize = jest.fn().mockResolvedValue({
+        capability: 'socket-capability',
+        room: 'note-1',
+        expiresIn: 300,
+        serverUpdatedAtTimestamp: 123,
+        collaborationProtocolVersion: 2,
+      })
+      const service = createService()
+      service.setCollaborationAuthorizationTransport(socketAuthorize)
+
+      const [first, second] = await Promise.all([
+        service.authorizeCollaborationRoom('note-1'),
+        service.authorizeCollaborationRoom('note-1'),
+      ])
+      const cached = await service.authorizeCollaborationRoom('note-1')
+
+      expect(first).toEqual(second)
+      expect(cached).toEqual(first)
+      expect(socketAuthorize).toHaveBeenCalledTimes(1)
+      expect(webSocketApiService.authorizeCollaboration).not.toHaveBeenCalled()
+    })
+
+    it('treats an explicit socket denial as final and does not retry it over HTTP', async () => {
+      webSocketApiService.authorizeCollaboration = jest.fn()
+      const service = createService()
+      service.setCollaborationAuthorizationTransport(jest.fn().mockResolvedValue(null))
+
+      await expect(service.authorizeCollaborationRoom('note-1')).resolves.toBeUndefined()
+      expect(webSocketApiService.authorizeCollaboration).not.toHaveBeenCalled()
+    })
   })
 
   describe('SYNC_ITEMS_PUSHED message (Phase 1A)', () => {

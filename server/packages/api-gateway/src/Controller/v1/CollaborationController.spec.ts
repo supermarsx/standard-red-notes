@@ -33,6 +33,7 @@ describe('CollaborationController', () => {
     return {
       locals: {
         readOnlyAccess: false,
+        collaborationEnabled: true,
         ...(userUuid ? { user: { uuid: userUuid } } : {}),
         ...additionalLocals,
       },

@@ -81,6 +81,7 @@ import { startReminderDeliveryScheduler } from '../src/ReminderDelivery/startRem
 import { requestBodyLogMetadata } from '../src/Logging/RequestBodyLogMetadata'
 import {
   createRedisSqsEventDedupStore,
+  createLoggerSyncCommandMetrics,
   createRedisSyncState,
   type RedisSqsEventDedupClient,
   type SyncGatewayOptions,
@@ -91,6 +92,8 @@ import { createAdminEmailDeliveryRouter } from '../src/Controller/v1/createAdmin
 import { AdminEmailDeliveryService } from '../src/Service/EmailDelivery/AdminEmailDeliveryService'
 import { EmailDeliveryRuntime } from '../src/Service/EmailDelivery/EmailDeliveryRuntime'
 import { DurableSyncCommandPort, SyncWebSocketCommandAdapter } from '../src/Service/Sync/SyncWebSocketCommandAdapter'
+import { CollaborationAuthorizationService } from '../src/Service/Sync/CollaborationAuthorizationService'
+import { LoopbackSyncApiRpcAdapter } from '../src/Service/Sync/LoopbackSyncApiRpcAdapter'
 import {
   parseOptionalPositiveInteger,
   parseWebSocketSyncEnabled,
@@ -517,7 +520,6 @@ void container
         let sync: SyncGatewayOptions | undefined
         if (
           webSocketSyncEnabled &&
-          syncAllowedOrigins.length > 0 &&
           container.isBound(TYPES.ApiGateway_Redis) &&
           container.isBound(TYPES.ApiGateway_GRPCSyncingServerServiceProxy)
         ) {
@@ -525,6 +527,12 @@ void container
             container.get(TYPES.ApiGateway_ServiceProxy),
             container.get(TYPES.ApiGateway_GRPCSyncingServerServiceProxy) as DurableSyncCommandPort,
             env.get('AUTH_JWT_SECRET', true) || '',
+            new CollaborationAuthorizationService(
+              container.get(TYPES.ApiGateway_ServiceProxy),
+              container.get(TYPES.ApiGateway_EndpointResolver),
+              container.get(TYPES.ApiGateway_WEB_SOCKET_CONNECTION_TOKEN_SECRET),
+              container.get(TYPES.ApiGateway_COLLABORATION_CAPABILITY_TTL),
+            ),
           )
           const redisState = createRedisSyncState(
             container.get(TYPES.ApiGateway_Redis) as SyncRedisClient,
@@ -533,15 +541,20 @@ void container
           sync = {
             isEnabled: () => webSocketSyncEnabled,
             allowedOrigins: syncAllowedOrigins,
+            allowSameOrigin: syncAllowedOrigins.length === 0,
             authorization: syncAdapter,
             backend: syncAdapter,
+            collaborationAuthorization: syncAdapter,
+            apiRpc: new LoopbackSyncApiRpcAdapter({
+              origin: `http://127.0.0.1:${env.get('PORT', true) || '3000'}`,
+              operations: ['API_RPC', 'STREAM_ASSISTANT'],
+            }),
+            metrics: createLoggerSyncCommandMetrics(gatewayLogger),
             ...redisState,
             requireSharedState: true,
           }
         } else if (webSocketSyncEnabled) {
-          logger.warn(
-            'WebSocket sync capability is unavailable: exact origin, durable backend, and shared Redis state are required.',
-          )
+          logger.warn('WebSocket sync capability is unavailable: durable backend and shared Redis state are required.')
         }
 
         const gateway = webSocketRuntime.attach({

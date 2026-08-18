@@ -26,7 +26,9 @@ import { startSqsConsumer, type SqsEventDedupStore } from './sqsConsumer.js'
 import {
   SyncCommandHandler,
   type SyncCommandBackendAdapter,
+  type SyncCollaborationAuthorizationAdapter,
   type SyncCommandMetrics,
+  type SyncApiRpcAdapter,
   type SyncLiveAuthorizationAdapter,
 } from './syncCommandHandler.js'
 import { MAX_SYNC_FRAME_BYTES, SYNC_PROTOCOL_VERSION, isSyncDeviceId } from './syncProtocol.js'
@@ -118,8 +120,19 @@ export interface SyncGatewayOptions {
   isEnabled: () => boolean
   /** Exact browser origins allowed to establish `/sockets/sync`. */
   allowedOrigins: readonly string[]
+  /**
+   * Admit the browser origin when its host (and, when available, forwarded
+   * scheme) matches the WebSocket upgrade target. This is the secure
+   * self-hosted default when PUBLIC_URL is not known at process start; explicit
+   * origins above remain the only way to admit a different web/desktop origin.
+   */
+  allowSameOrigin?: boolean
   authorization: SyncLiveAuthorizationAdapter
   backend: SyncCommandBackendAdapter
+  /** Optional authenticated control-plane operation negotiated on socket AUTH. */
+  collaborationAuthorization?: SyncCollaborationAuthorizationAdapter
+  /** Optional same-origin authenticated API RPC adapter. */
+  apiRpc?: SyncApiRpcAdapter
   tickets?: SyncAuthTicketStore
   leases?: SyncCommandLeaseRegistry
   socketBudget?: SyncSocketBudget
@@ -132,6 +145,19 @@ export interface SyncGatewayOptions {
   backendTimeoutMs?: number
   leaseRenewIntervalMs?: number
   socketBudgetRenewIntervalMs?: number
+}
+
+/**
+ * Production-safe sync telemetry adapter. Keeping the payload as one compact
+ * JSON value preserves its fields through the minimal variadic logger bridge
+ * used by both api-gateway and home-server.
+ */
+export function createLoggerSyncCommandMetrics(logger: Pick<Logger, 'info'>): SyncCommandMetrics {
+  return {
+    increment(event, code) {
+      logger.info('[ws-sync-metric]', JSON.stringify(code === undefined ? { event } : { event, code }))
+    },
+  }
 }
 
 export interface SyncGatewayAccess {
@@ -523,6 +549,54 @@ function normalizeAllowedOrigins(origins: readonly string[]): ReadonlySet<string
   return normalized
 }
 
+/**
+ * Browser WebSockets always carry an Origin header while Host identifies the
+ * actual upgrade target and cannot be set by page script. Reverse proxies in
+ * the supported deployments preserve Host and overwrite X-Forwarded-Proto.
+ * Comparing those values gives an exact same-site fallback without accepting a
+ * wildcard origin or trusting a caller-provided query credential.
+ */
+function isSameOriginUpgrade(request: IncomingMessage, origin: string): boolean {
+  let parsed: URL
+  try {
+    parsed = new URL(origin)
+  } catch {
+    return false
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return false
+  }
+
+  const rawHost = request.headers.host
+  if (typeof rawHost !== 'string' || rawHost.length === 0) {
+    return false
+  }
+  const forwarded = request.headers['x-forwarded-proto']
+  const forwardedValue = Array.isArray(forwarded) ? forwarded[0] : forwarded
+  let effectiveProtocol: 'http:' | 'https:'
+  if (forwardedValue !== undefined) {
+    const forwardedProtocols = forwardedValue.split(',').map((value) => value.trim().toLowerCase())
+    if (forwardedProtocols.length !== 1 || (forwardedProtocols[0] !== 'http' && forwardedProtocols[0] !== 'https')) {
+      return false
+    }
+    effectiveProtocol = `${forwardedProtocols[0]}:`
+  } else {
+    effectiveProtocol = (request.socket as { encrypted?: boolean }).encrypted === true ? 'https:' : 'http:'
+  }
+
+  let target: URL
+  try {
+    target = new URL(`${effectiveProtocol}//${rawHost}`)
+  } catch {
+    return false
+  }
+
+  // URL.origin canonicalizes host case and default ports. Comparing the full
+  // effective origins therefore admits https://host against Host host:443,
+  // while rejecting the same hostname on another port or forwarded scheme.
+  return parsed.origin === target.origin
+}
+
 async function settleWithin(operation: Promise<unknown>, timeoutMs: number): Promise<boolean> {
   let timer: NodeJS.Timeout | undefined
   try {
@@ -598,6 +672,7 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
 
   const syncOptions = opts.sync
   const syncAllowedOrigins = normalizeAllowedOrigins(syncOptions?.allowedOrigins ?? [])
+  const syncAllowsSameOrigin = syncOptions?.allowSameOrigin === true
   const syncTickets = syncOptions?.tickets ?? new InMemorySyncAuthTicketStore()
   const syncLeases = syncOptions?.leases ?? new InMemorySyncCommandLeaseRegistry()
   const syncSocketBudget =
@@ -622,7 +697,7 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
       syncOptions &&
       !stopping &&
       syncOptions.isEnabled() &&
-      syncAllowedOrigins.size > 0 &&
+      (syncAllowedOrigins.size > 0 || syncAllowsSameOrigin) &&
       syncTickets.ready() &&
       syncLeases.ready() &&
       syncSocketBudget.ready() &&
@@ -728,7 +803,10 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
     const url = new URL(req.url ?? '/', 'http://localhost')
     if (url.pathname === SYNC_SOCKET_PATH) {
       const origin = req.headers.origin
-      if (url.search.length > 0 || typeof origin !== 'string' || !syncAllowedOrigins.has(origin) || !syncAvailable()) {
+      const originAllowed =
+        typeof origin === 'string' &&
+        (syncAllowedOrigins.has(origin) || (syncAllowsSameOrigin && isSameOriginUpgrade(req, origin)))
+      if (url.search.length > 0 || !originAllowed || !syncAvailable()) {
         logger.warn('[ws-sync] connection rejected')
         socket.close(syncAvailable() ? 1008 : 1013, 'sync unavailable')
         return
@@ -744,6 +822,8 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
         socketBudget: syncSocketBudget,
         authorization: syncOptions!.authorization,
         backend: syncOptions!.backend,
+        collaborationAuthorization: syncOptions!.collaborationAuthorization,
+        apiRpc: syncOptions!.apiRpc,
         isEnabled: syncOptions!.isEnabled,
         metrics: syncOptions!.metrics,
         authDeadlineMs: syncOptions!.authDeadlineMs,
@@ -1032,6 +1112,11 @@ export type {
   SyncBackendCommit,
   SyncBackendStatus,
   SyncCommandBackendAdapter,
+  SyncApiRpcAdapter,
+  SyncApiRpcRequest,
+  SyncApiRpcResponse,
+  SyncCollaborationAuthorizationAdapter,
+  SyncCollaborationAuthorizationResult,
   SyncLiveAuthorizationAdapter,
 } from './syncCommandHandler.js'
 export type { SyncTicketIdentity } from './auth.js'

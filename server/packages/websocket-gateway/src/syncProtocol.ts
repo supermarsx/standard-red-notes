@@ -12,12 +12,32 @@ export const MAX_SYNC_QUEUED_BYTES = MAX_SYNC_FRAME_BYTES
 /** Unsigned 32-bit sequence space leaves no unsafe-integer increment edge. */
 export const MAX_SYNC_SEQUENCE = 0xffff_ffff
 export const MAX_SYNC_RESUME_SEQUENCE = MAX_SYNC_SEQUENCE - 1
+export const MAX_RPC_PATH_BYTES = 2_048
+export const MAX_RPC_DEADLINE_MS = 120_000
+export const MIN_RPC_DEADLINE_MS = 1_000
+export const DEFAULT_RPC_DEADLINE_MS = 30_000
+export const MAX_RPC_CREDIT_BYTES = 4 * 1024 * 1024
+export const DEFAULT_RPC_CREDIT_BYTES = 256 * 1024
 
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/u
 
-export type SyncClientFrameType = 'AUTH' | 'COMMAND' | 'STATUS' | 'PING'
-export type SyncServerFrameType = 'AUTHENTICATED' | 'ACCEPTED' | 'COMMITTED' | 'STATUS' | 'ERROR' | 'PONG'
+export type SyncClientFrameType =
+  'AUTH' | 'COMMAND' | 'STATUS' | 'PING' | 'COLLABORATION_AUTHORIZE' | 'RPC_REQUEST' | 'RPC_CANCEL' | 'RPC_CREDIT'
+export type SyncServerFrameType =
+  | 'AUTHENTICATED'
+  | 'ACCEPTED'
+  | 'COMMITTED'
+  | 'STATUS'
+  | 'ERROR'
+  | 'PONG'
+  | 'COLLABORATION_AUTHORIZED'
+  | 'RPC_ACCEPTED'
+  | 'RPC_RESPONSE'
+  | 'RPC_CHUNK'
+  | 'RPC_END'
+
+export type SyncNegotiatedOperation = 'SYNC_ITEMS' | 'AUTHORIZE_COLLABORATION' | 'API_RPC' | 'STREAM_ASSISTANT'
 
 export type JsonObject = Record<string, unknown>
 
@@ -43,11 +63,55 @@ export interface SyncCommandPayload extends JsonObject {
   body: JsonObject
 }
 
+export interface SyncCollaborationAuthorizationPayload extends JsonObject {
+  noteUuid: string
+  collaborationProtocolVersion: 2
+  leaseRequestId?: string
+  bootstrapChallenge?: string
+}
+
+export type SyncRpcMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
+
+export interface SyncRpcRequestPayload extends JsonObject {
+  method: SyncRpcMethod
+  /** Same-origin relative URL only. Absolute/protocol-relative URLs are invalid. */
+  path: string
+  body?: unknown
+  headers?: JsonObject
+  deadlineMs: number
+  initialCreditBytes: number
+  stream: boolean
+  idempotencyKey?: string
+}
+
+export interface SyncRpcControlPayload extends JsonObject {
+  targetRequestId: string
+}
+
+export interface SyncRpcCreditPayload extends SyncRpcControlPayload {
+  creditBytes: number
+}
+
 export type SyncAuthFrame = SyncFrameBase<'AUTH', SyncAuthPayload>
 export type SyncCommandFrame = SyncFrameBase<'COMMAND', SyncCommandPayload> & { digest: string }
 export type SyncStatusRequestFrame = SyncFrameBase<'STATUS', JsonObject> & { digest: string }
 export type SyncPingFrame = SyncFrameBase<'PING', JsonObject>
-export type SyncClientFrame = SyncAuthFrame | SyncCommandFrame | SyncStatusRequestFrame | SyncPingFrame
+export type SyncCollaborationAuthorizationFrame = SyncFrameBase<
+  'COLLABORATION_AUTHORIZE',
+  SyncCollaborationAuthorizationPayload
+>
+export type SyncRpcRequestFrame = SyncFrameBase<'RPC_REQUEST', SyncRpcRequestPayload>
+export type SyncRpcCancelFrame = SyncFrameBase<'RPC_CANCEL', SyncRpcControlPayload>
+export type SyncRpcCreditFrame = SyncFrameBase<'RPC_CREDIT', SyncRpcCreditPayload>
+export type SyncClientFrame =
+  | SyncAuthFrame
+  | SyncCommandFrame
+  | SyncStatusRequestFrame
+  | SyncPingFrame
+  | SyncCollaborationAuthorizationFrame
+  | SyncRpcRequestFrame
+  | SyncRpcCancelFrame
+  | SyncRpcCreditFrame
 
 export type SyncServerFrame = SyncFrameBase<SyncServerFrameType, JsonObject> & { digest?: string }
 
@@ -82,6 +146,47 @@ function hasExactKeys(value: JsonObject, expected: readonly string[]): boolean {
 
 function isIdentifier(value: unknown): value is string {
   return typeof value === 'string' && IDENTIFIER_PATTERN.test(value)
+}
+
+function isRpcPath(value: unknown): value is string {
+  if (
+    typeof value !== 'string' ||
+    !value.startsWith('/v1/') ||
+    value.startsWith('//') ||
+    value.includes('\\') ||
+    value.includes('#') ||
+    Buffer.byteLength(value, 'utf8') > MAX_RPC_PATH_BYTES
+  ) {
+    return false
+  }
+  try {
+    const parsed = new URL(value, 'http://rpc.invalid')
+    return parsed.origin === 'http://rpc.invalid' && `${parsed.pathname}${parsed.search}` === value
+  } catch {
+    return false
+  }
+}
+
+const RPC_HEADER_NAMES = new Set([
+  'accept',
+  'content-type',
+  'if-match',
+  'if-none-match',
+  'x-shared-vault-owner-context',
+])
+
+function isRpcHeaders(value: unknown): value is JsonObject {
+  if (!isJsonObject(value) || Object.keys(value).length > RPC_HEADER_NAMES.size) {
+    return false
+  }
+  return Object.entries(value).every(
+    ([name, headerValue]) =>
+      RPC_HEADER_NAMES.has(name.toLowerCase()) &&
+      name === name.toLowerCase() &&
+      typeof headerValue === 'string' &&
+      headerValue.length <= 1_024 &&
+      !/[\r\n]/u.test(headerValue),
+  )
 }
 
 export function isSyncDeviceId(value: unknown): value is string {
@@ -266,6 +371,79 @@ export function parseSyncClientFrame(raw: string, rawBytes = Buffer.byteLength(r
       throw new SyncProtocolError('INVALID_ENVELOPE', 'Invalid PING frame fields.')
     }
     return parsed as unknown as SyncPingFrame
+  }
+
+  if (type === 'COLLABORATION_AUTHORIZE') {
+    const payload = parsed.payload as JsonObject
+    const leaseRequestId = payload.leaseRequestId
+    const bootstrapChallenge = payload.bootstrapChallenge
+    if (
+      !hasExactKeys(parsed, commonKeys) ||
+      !hasExactKeys(payload, [
+        'noteUuid',
+        'collaborationProtocolVersion',
+        ...(Object.hasOwn(payload, 'leaseRequestId') ? ['leaseRequestId'] : []),
+        ...(Object.hasOwn(payload, 'bootstrapChallenge') ? ['bootstrapChallenge'] : []),
+      ]) ||
+      typeof payload.noteUuid !== 'string' ||
+      payload.noteUuid.length === 0 ||
+      payload.noteUuid.length > 200 ||
+      payload.collaborationProtocolVersion !== 2 ||
+      (leaseRequestId !== undefined &&
+        (typeof leaseRequestId !== 'string' || leaseRequestId.length === 0 || leaseRequestId.length > 128)) ||
+      (bootstrapChallenge !== undefined &&
+        (typeof bootstrapChallenge !== 'string' ||
+          bootstrapChallenge.length === 0 ||
+          bootstrapChallenge.length > 128)) ||
+      (bootstrapChallenge !== undefined && leaseRequestId === undefined)
+    ) {
+      throw new SyncProtocolError('INVALID_ENVELOPE', 'Invalid collaboration authorization frame.')
+    }
+    return parsed as unknown as SyncCollaborationAuthorizationFrame
+  }
+
+  if (type === 'RPC_REQUEST') {
+    const payload = parsed.payload as JsonObject
+    const optionalKeys = [
+      ...(Object.hasOwn(payload, 'body') ? ['body'] : []),
+      ...(Object.hasOwn(payload, 'headers') ? ['headers'] : []),
+      ...(Object.hasOwn(payload, 'idempotencyKey') ? ['idempotencyKey'] : []),
+    ]
+    if (
+      !hasExactKeys(parsed, commonKeys) ||
+      !hasExactKeys(payload, ['method', 'path', 'deadlineMs', 'initialCreditBytes', 'stream', ...optionalKeys]) ||
+      !['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(String(payload.method)) ||
+      !isRpcPath(payload.path) ||
+      !Number.isSafeInteger(payload.deadlineMs) ||
+      Number(payload.deadlineMs) < MIN_RPC_DEADLINE_MS ||
+      Number(payload.deadlineMs) > MAX_RPC_DEADLINE_MS ||
+      !Number.isSafeInteger(payload.initialCreditBytes) ||
+      Number(payload.initialCreditBytes) <= 0 ||
+      Number(payload.initialCreditBytes) > MAX_RPC_CREDIT_BYTES ||
+      typeof payload.stream !== 'boolean' ||
+      (payload.headers !== undefined && !isRpcHeaders(payload.headers)) ||
+      (payload.idempotencyKey !== undefined && !isIdentifier(payload.idempotencyKey)) ||
+      (payload.method === 'GET' && Object.hasOwn(payload, 'body'))
+    ) {
+      throw new SyncProtocolError('INVALID_ENVELOPE', 'Invalid RPC request frame.')
+    }
+    return parsed as unknown as SyncRpcRequestFrame
+  }
+
+  if (type === 'RPC_CANCEL' || type === 'RPC_CREDIT') {
+    const payload = parsed.payload as JsonObject
+    if (
+      !hasExactKeys(parsed, commonKeys) ||
+      !hasExactKeys(payload, type === 'RPC_CANCEL' ? ['targetRequestId'] : ['targetRequestId', 'creditBytes']) ||
+      !isIdentifier(payload.targetRequestId) ||
+      (type === 'RPC_CREDIT' &&
+        (!Number.isSafeInteger(payload.creditBytes) ||
+          Number(payload.creditBytes) <= 0 ||
+          Number(payload.creditBytes) > MAX_RPC_CREDIT_BYTES))
+    ) {
+      throw new SyncProtocolError('INVALID_ENVELOPE', `Invalid ${type} frame.`)
+    }
+    return parsed as unknown as SyncRpcCancelFrame | SyncRpcCreditFrame
   }
 
   throw new SyncProtocolError('INVALID_ENVELOPE', 'Unsupported sync frame type.')

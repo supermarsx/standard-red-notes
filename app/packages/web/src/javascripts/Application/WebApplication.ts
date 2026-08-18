@@ -467,6 +467,11 @@ export class WebApplication extends SNApplication implements WebApplicationInter
     })
     this._webSocketSyncTransport = transport
     this.sync.setAccountSyncTransport(transport)
+    this.disposers.push(
+      this.sockets.setCollaborationAuthorizationTransport((noteUuid, leaseRequestId, bootstrapChallenge) =>
+        transport.authorizeCollaborationRoom(noteUuid, leaseRequestId, bootstrapChallenge),
+      ),
+    )
     this.disposers.push(this.sockets.onSyncTransportSessionRevoked(() => transport.notifySessionRevoked()))
   }
 

@@ -186,6 +186,7 @@ describe('SyncTransportWorkerRuntime', () => {
     requestBody = body(),
     ticket = 't'.repeat(40),
     sessionScope = SESSION_A,
+    operations: string[] = ['SYNC_ITEMS', 'AUTHORIZE_COLLABORATION'],
   ) => {
     await harness.runtime.handle({
       type: 'EXECUTE',
@@ -211,6 +212,7 @@ describe('SyncTransportWorkerRuntime', () => {
       serverFrame('AUTHENTICATED', auth.commandId, {
         capability: 'ws-sync',
         protocolVersion: 1,
+        operations,
         nextClientSequence: 1,
       }),
     )
@@ -316,6 +318,86 @@ describe('SyncTransportWorkerRuntime', () => {
     )
   })
 
+  it('multiplexes credit-controlled RPC and never auto-replays after request bytes are sent', async () => {
+    const harness = setup()
+    const request = {
+      method: 'GET' as const,
+      path: '/v1/workflows/status',
+      headers: { accept: 'application/json' },
+      deadlineMs: 30_000,
+      initialCreditBytes: 8,
+      stream: true,
+    }
+    await harness.runtime.handle({
+      type: 'OPEN_RPC',
+      clientRequestId: 'rpc-client',
+      sessionScope: SESSION_A,
+      request,
+    })
+    expect(harness.messages.at(-1)).toEqual({ type: 'NEED_TICKET', clientRequestId: 'rpc-client', reconnect: false })
+    await harness.runtime.handle({
+      type: 'CONNECT',
+      clientRequestId: 'rpc-client',
+      sessionScope: SESSION_A,
+      authorization: {
+        endpoint: 'wss://sync.example.test/sockets/sync',
+        ticket: 't'.repeat(40),
+        expiresAt: Date.now() + 30_000,
+        deviceId: 'device-1',
+      },
+    })
+    const socket = harness.sockets[0]
+    socket.open()
+    const auth = JSON.parse(socket.sent[0]) as { commandId: string }
+    socket.receive(
+      serverFrame('AUTHENTICATED', auth.commandId, {
+        capability: 'ws-sync',
+        protocolVersion: 1,
+        operations: ['SYNC_ITEMS', 'API_RPC'],
+        nextClientSequence: 1,
+      }),
+    )
+    await flush()
+    const rpc = JSON.parse(socket.sent.find((entry) => JSON.parse(entry).type === 'RPC_REQUEST') as string) as {
+      requestId: string
+      commandId: string
+      payload: Record<string, unknown>
+    }
+    expect(rpc.payload).toMatchObject(request)
+
+    socket.receive(serverFrame('RPC_ACCEPTED', rpc.commandId, { accepted: true }))
+    socket.receive(
+      serverFrame('RPC_RESPONSE', rpc.commandId, {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+        stream: true,
+      }),
+    )
+    socket.receive(
+      serverFrame('RPC_CHUNK', rpc.commandId, {
+        index: 0,
+        bytes: Buffer.from('12345678').toString('base64'),
+        byteLength: 8,
+      }),
+    )
+    await harness.runtime.handle({ type: 'RPC_CREDIT', clientRequestId: 'rpc-client', creditBytes: 8 })
+    expect(socket.sent.map((entry) => JSON.parse(entry).type)).toContain('RPC_CREDIT')
+    socket.close(1006)
+    await flush()
+
+    expect(harness.messages).toContainEqual({ type: 'RPC_ACCEPTED', clientRequestId: 'rpc-client' })
+    expect(harness.messages).toContainEqual(
+      expect.objectContaining({
+        type: 'RPC_ERROR',
+        clientRequestId: 'rpc-client',
+        code: 'SOCKET_CLOSED',
+        safeToFallback: false,
+      }),
+    )
+    jest.advanceTimersByTime(10_000)
+    expect(harness.sockets).toHaveLength(1)
+  })
+
   it('keeps the current normalized WS body, id, and digest unchanged through uncertain HTTP replay', async () => {
     const requestBody = {
       api: '20240226',
@@ -390,6 +472,7 @@ describe('SyncTransportWorkerRuntime', () => {
       serverFrame('AUTHENTICATED', auth.commandId, {
         capability: 'ws-sync',
         protocolVersion: 1,
+        operations: ['SYNC_ITEMS', 'AUTHORIZE_COLLABORATION'],
         nextClientSequence: 2,
       }),
     )
@@ -444,6 +527,7 @@ describe('SyncTransportWorkerRuntime', () => {
       serverFrame('AUTHENTICATED', auth.commandId, {
         capability: 'ws-sync',
         protocolVersion: 1,
+        operations: ['SYNC_ITEMS', 'AUTHORIZE_COLLABORATION'],
         nextClientSequence: 2,
       }),
     )

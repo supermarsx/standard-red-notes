@@ -510,4 +510,44 @@ describe('WebSocketSyncTransport', () => {
     })
     await expect(secondExecution).resolves.toEqual({ response: response('b') })
   })
+
+  it('routes an authenticated read RPC through the worker and resolves its terminal response', async () => {
+    const transport = createTransport()
+    const result = transport.openAuthenticatedRpcStream({
+      method: 'GET',
+      path: '/v1/workflows/status',
+      headers: { accept: 'application/json' },
+    })
+    await flush()
+    const open = worker.posts.find((message) => message.type === 'OPEN_RPC') as Extract<
+      MainToSyncWorkerMessage,
+      { type: 'OPEN_RPC' }
+    >
+
+    expect(open.request).toEqual({
+      method: 'GET',
+      path: '/v1/workflows/status',
+      headers: { accept: 'application/json' },
+      deadlineMs: 30_000,
+      initialCreditBytes: 256 * 1024,
+      stream: false,
+    })
+    worker.emit({ type: 'RPC_ACCEPTED', clientRequestId: open.clientRequestId })
+    worker.emit({
+      type: 'RPC_RESPONSE',
+      clientRequestId: open.clientRequestId,
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+      body: { enabled: true },
+      stream: false,
+    })
+    worker.emit({ type: 'RPC_END', clientRequestId: open.clientRequestId })
+
+    await expect(result).resolves.toEqual({
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+      body: { enabled: true },
+      transport: 'websocket',
+    })
+  })
 })

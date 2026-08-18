@@ -10,12 +10,15 @@ import type {
   SyncBackendCommit,
   SyncBackendStatus,
   SyncCommandBackendAdapter,
+  SyncCollaborationAuthorizationAdapter,
+  SyncCollaborationAuthorizationResult,
   SyncLiveAuthorizationAdapter,
   SyncTicketIdentity,
 } from '@standard-red-notes/websocket-gateway'
 
 import { ResponseLocals } from '../../Controller/ResponseLocals'
 import { ServiceProxyInterface } from '../Proxy/ServiceProxyInterface'
+import { CollaborationAuthorizationService } from './CollaborationAuthorizationService'
 
 export interface DurableSyncCommandPort {
   durableCommandAuthenticationReady(): boolean
@@ -59,11 +62,14 @@ function abortable<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
  * delegates durable execution/idempotency to Lane 1's gRPC adapter. It never
  * implements a second executor or repository.
  */
-export class SyncWebSocketCommandAdapter implements SyncLiveAuthorizationAdapter, SyncCommandBackendAdapter {
+export class SyncWebSocketCommandAdapter
+  implements SyncLiveAuthorizationAdapter, SyncCommandBackendAdapter, SyncCollaborationAuthorizationAdapter
+{
   constructor(
     private readonly serviceProxy: ServiceProxyInterface,
     private readonly durableSync: DurableSyncCommandPort,
     private readonly authJwtSecret: string,
+    private readonly collaborationAuthorization?: CollaborationAuthorizationService,
   ) {}
 
   ready(): boolean {
@@ -140,6 +146,27 @@ export class SyncWebSocketCommandAdapter implements SyncLiveAuthorizationAdapter
       return { status: 'ACCEPTED', digest }
     }
     return { status: 'COMMITTED', digest, payload: result.data.result }
+  }
+
+  collaborationAuthorizationReady(): boolean {
+    return this.ready() && this.collaborationAuthorization?.ready() === true
+  }
+
+  async authorizeCollaboration(
+    input: Parameters<SyncCollaborationAuthorizationAdapter['authorizeCollaboration']>[0],
+    signal: AbortSignal,
+  ): Promise<SyncCollaborationAuthorizationResult> {
+    if (!this.collaborationAuthorizationReady() || !this.collaborationAuthorization) {
+      return { authorized: false }
+    }
+    let validated: ValidatedSession
+    try {
+      validated = await this.validate(input.identity, signal)
+    } catch {
+      return { authorized: false }
+    }
+    const { request } = this.httpContext(validated.locals, {})
+    return this.collaborationAuthorization.authorize(request, validated.locals, input.request, signal)
   }
 
   private async validate(identity: SyncTicketIdentity, signal: AbortSignal): Promise<ValidatedSession> {

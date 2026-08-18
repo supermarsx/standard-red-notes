@@ -9,7 +9,10 @@ import {
 } from '../src/registry.js'
 import {
   SyncCommandHandler,
+  type SyncApiRpcAdapter,
+  type SyncCollaborationAuthorizationAdapter,
   type SyncCommandBackendAdapter,
+  type SyncCommandMetrics,
   type SyncLiveAuthorizationAdapter,
   type SyncSocket,
 } from '../src/syncCommandHandler.js'
@@ -82,6 +85,25 @@ function commandFrame(
   }
 }
 
+function collaborationAuthorizationFrame(sequence: number): JsonObject {
+  const payload = {
+    noteUuid: 'note-1',
+    collaborationProtocolVersion: 2,
+    leaseRequestId: 'lease-1',
+    bootstrapChallenge: 'challenge-1',
+  }
+  return {
+    version: 1,
+    channel: 'sync',
+    type: 'COLLABORATION_AUTHORIZE',
+    requestId: 'collaboration-request',
+    commandId: 'collaboration-command',
+    sequence,
+    payloadLength: syncPayloadLength(payload),
+    payload,
+  }
+}
+
 function statusFrame(commandId: string, sequence: number, digest: string): JsonObject {
   return {
     version: 1,
@@ -109,6 +131,69 @@ function pingFrame(sequence: number): JsonObject {
   }
 }
 
+function rpcFrame(
+  sequence: number,
+  overrides: Partial<{
+    requestId: string
+    method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
+    path: string
+    body: unknown
+    stream: boolean
+    initialCreditBytes: number
+    deadlineMs: number
+    idempotencyKey: string
+  }> = {},
+): JsonObject {
+  const payload = {
+    method: overrides.method ?? 'GET',
+    path: overrides.path ?? '/v1/users/me',
+    deadlineMs: overrides.deadlineMs ?? 30_000,
+    initialCreditBytes: overrides.initialCreditBytes ?? 256 * 1024,
+    stream: overrides.stream ?? false,
+    ...(Object.hasOwn(overrides, 'body') ? { body: overrides.body } : {}),
+    ...(overrides.idempotencyKey ? { idempotencyKey: overrides.idempotencyKey } : {}),
+  }
+  const requestId = overrides.requestId ?? `rpc-request-${sequence}`
+  return {
+    version: 1,
+    channel: 'sync',
+    type: 'RPC_REQUEST',
+    requestId,
+    commandId: requestId,
+    sequence,
+    payloadLength: syncPayloadLength(payload),
+    payload,
+  }
+}
+
+function rpcCreditFrame(sequence: number, targetRequestId: string, creditBytes: number): JsonObject {
+  const payload = { targetRequestId, creditBytes }
+  return {
+    version: 1,
+    channel: 'sync',
+    type: 'RPC_CREDIT',
+    requestId: `rpc-credit-${sequence}`,
+    commandId: `rpc-credit-${sequence}`,
+    sequence,
+    payloadLength: syncPayloadLength(payload),
+    payload,
+  }
+}
+
+function rpcCancelFrame(sequence: number, targetRequestId: string): JsonObject {
+  const payload = { targetRequestId }
+  return {
+    version: 1,
+    channel: 'sync',
+    type: 'RPC_CANCEL',
+    requestId: `rpc-cancel-${sequence}`,
+    commandId: `rpc-cancel-${sequence}`,
+    sequence,
+    payloadLength: syncPayloadLength(payload),
+    payload,
+  }
+}
+
 function enqueue(handler: SyncCommandHandler, frame: JsonObject): void {
   const raw = rawFrame(frame)
   handler.enqueue(raw, Buffer.byteLength(raw))
@@ -132,6 +217,9 @@ async function authenticatedHandler(
     socket?: FakeSocket
     authorization?: SyncLiveAuthorizationAdapter
     backend?: SyncCommandBackendAdapter
+    collaborationAuthorization?: SyncCollaborationAuthorizationAdapter
+    apiRpc?: SyncApiRpcAdapter
+    metrics?: SyncCommandMetrics
     deviceId?: string
     resumeSequence?: number
     backendTimeoutMs?: number
@@ -160,6 +248,9 @@ async function authenticatedHandler(
     socketBudget: options.socketBudget ?? new InMemorySyncSocketBudget(),
     authorization: options.authorization ?? allowAuthorization(),
     backend: options.backend ?? committingBackend(),
+    collaborationAuthorization: options.collaborationAuthorization,
+    apiRpc: options.apiRpc,
+    metrics: options.metrics,
     isEnabled: options.isEnabled ?? (() => true),
     backendTimeoutMs: options.backendTimeoutMs,
     maxBufferedBytes: options.maxBufferedBytes,
@@ -300,7 +391,12 @@ describe('SyncCommandHandler', () => {
     enqueue(handler, command)
 
     await vi.waitFor(() => expect(socket.frames.map((frame) => frame.type)).toContain('COMMITTED'))
-    expect(socket.frames[0].payload).toEqual({ capability: 'ws-sync', protocolVersion: 1, nextClientSequence: 1 })
+    expect(socket.frames[0].payload).toEqual({
+      capability: 'ws-sync',
+      protocolVersion: 1,
+      operations: ['SYNC_ITEMS'],
+      nextClientSequence: 1,
+    })
     expect(socket.frames[1]).toMatchObject({
       type: 'ACCEPTED',
       digest: command.digest,
@@ -312,6 +408,656 @@ describe('SyncCommandHandler', () => {
       payload: { status: 'COMMITTED', result: { saved: true } },
     })
     handler.disconnect()
+  })
+
+  it('negotiates collaboration authorization and returns an exact bound grant on the authenticated socket', async () => {
+    const collaborationAuthorization: SyncCollaborationAuthorizationAdapter = {
+      collaborationAuthorizationReady: () => true,
+      authorizeCollaboration: vi.fn(async () => ({
+        authorized: true,
+        capability: 'collaboration-capability',
+        room: 'note-1',
+        expiresIn: 300,
+        serverUpdatedAtTimestamp: 123,
+        collaborationProtocolVersion: 2,
+        leaseRequestId: 'lease-1',
+        bootstrapChallenge: 'challenge-1',
+      })),
+    }
+    const { handler, socket } = await authenticatedHandler({ collaborationAuthorization })
+    expect(socket.frames[0].payload).toMatchObject({
+      operations: ['SYNC_ITEMS', 'AUTHORIZE_COLLABORATION'],
+    })
+
+    enqueue(handler, collaborationAuthorizationFrame(1))
+
+    await vi.waitFor(() => expect(socket.frames.at(-1)?.type).toBe('COLLABORATION_AUTHORIZED'))
+    expect(socket.frames.at(-1)?.payload).toEqual({
+      capability: 'collaboration-capability',
+      room: 'note-1',
+      expiresIn: 300,
+      serverUpdatedAtTimestamp: 123,
+      collaborationProtocolVersion: 2,
+      leaseRequestId: 'lease-1',
+      bootstrapChallenge: 'challenge-1',
+    })
+    expect(collaborationAuthorization.authorizeCollaboration).toHaveBeenCalledTimes(1)
+    handler.disconnect()
+  })
+
+  it('returns a successful collaboration grant without optional lease bindings when none were requested', async () => {
+    const collaborationAuthorization: SyncCollaborationAuthorizationAdapter = {
+      collaborationAuthorizationReady: () => true,
+      authorizeCollaboration: vi.fn(async () => ({
+        authorized: true,
+        capability: 'collaboration-capability',
+        room: 'note-1',
+        expiresIn: 300,
+        serverUpdatedAtTimestamp: 123,
+        collaborationProtocolVersion: 2,
+      })),
+    }
+    const { handler, socket } = await authenticatedHandler({ collaborationAuthorization })
+    const frame = collaborationAuthorizationFrame(1)
+    const payload = frame.payload as JsonObject
+    delete payload.leaseRequestId
+    delete payload.bootstrapChallenge
+    frame.payloadLength = syncPayloadLength(payload)
+
+    enqueue(handler, frame)
+
+    await vi.waitFor(() => expect(socket.frames.at(-1)?.type).toBe('COLLABORATION_AUTHORIZED'))
+    expect(socket.frames.at(-1)?.payload).toEqual({
+      capability: 'collaboration-capability',
+      room: 'note-1',
+      expiresIn: 300,
+      serverUpdatedAtTimestamp: 123,
+      collaborationProtocolVersion: 2,
+    })
+    handler.disconnect()
+  })
+
+  it('fails collaboration authorization closed when unavailable, denied, malformed, or errored', async () => {
+    const malformedResults = [
+      { capability: 1, room: 'note-1', expiresIn: 300, serverUpdatedAtTimestamp: 123, collaborationProtocolVersion: 2 },
+      {
+        capability: '',
+        room: 'note-1',
+        expiresIn: 300,
+        serverUpdatedAtTimestamp: 123,
+        collaborationProtocolVersion: 2,
+      },
+      {
+        capability: 'capability',
+        room: 'note-1',
+        expiresIn: 1.5,
+        serverUpdatedAtTimestamp: 123,
+        collaborationProtocolVersion: 2,
+      },
+      {
+        capability: 'capability',
+        room: 'note-1',
+        expiresIn: 0,
+        serverUpdatedAtTimestamp: 123,
+        collaborationProtocolVersion: 2,
+      },
+      {
+        capability: 'capability',
+        room: 'note-1',
+        expiresIn: 300,
+        serverUpdatedAtTimestamp: 1.5,
+        collaborationProtocolVersion: 2,
+      },
+      {
+        capability: 'capability',
+        room: 'note-1',
+        expiresIn: 300,
+        serverUpdatedAtTimestamp: 0,
+        collaborationProtocolVersion: 2,
+      },
+      {
+        capability: 'capability',
+        room: 'note-1',
+        expiresIn: 300,
+        serverUpdatedAtTimestamp: 123,
+        collaborationProtocolVersion: 1,
+      },
+      {
+        capability: 'capability',
+        room: 'note-1',
+        expiresIn: 300,
+        serverUpdatedAtTimestamp: 123,
+        collaborationProtocolVersion: 2,
+        leaseRequestId: 'wrong-lease',
+      },
+      {
+        capability: 'capability',
+        room: 'note-1',
+        expiresIn: 300,
+        serverUpdatedAtTimestamp: 123,
+        collaborationProtocolVersion: 2,
+        leaseRequestId: 'lease-1',
+        bootstrapChallenge: 'wrong-challenge',
+      },
+    ]
+    const cases: Array<{
+      adapter?: SyncCollaborationAuthorizationAdapter
+      expectedCode: string
+      expectedMetric?: string
+    }> = [
+      { expectedCode: 'OPERATION_UNAVAILABLE' },
+      {
+        adapter: {
+          collaborationAuthorizationReady: () => false,
+          authorizeCollaboration: vi.fn(),
+        },
+        expectedCode: 'OPERATION_UNAVAILABLE',
+      },
+      {
+        adapter: {
+          collaborationAuthorizationReady: () => true,
+          authorizeCollaboration: vi.fn(async () => ({ authorized: false })),
+        },
+        expectedCode: 'NOT_AUTHORIZED',
+      },
+      {
+        adapter: {
+          collaborationAuthorizationReady: () => true,
+          authorizeCollaboration: vi.fn(async () => ({
+            authorized: true,
+            capability: 'capability',
+            room: 'wrong-note',
+            expiresIn: 300,
+            serverUpdatedAtTimestamp: 123,
+            collaborationProtocolVersion: 2,
+          })),
+        },
+        expectedCode: 'BACKEND_ERROR',
+      },
+      ...malformedResults.map((result) => ({
+        adapter: {
+          collaborationAuthorizationReady: () => true,
+          authorizeCollaboration: vi.fn(async () => ({ authorized: true, ...result }) as never),
+        },
+        expectedCode: 'BACKEND_ERROR',
+      })),
+      {
+        adapter: {
+          collaborationAuthorizationReady: () => true,
+          authorizeCollaboration: vi.fn(async () => Promise.reject(new Error('authorization unavailable'))),
+        },
+        expectedCode: 'BACKEND_ERROR',
+        expectedMetric: 'error',
+      },
+    ]
+
+    for (const { adapter, expectedCode, expectedMetric } of cases) {
+      const metrics: SyncCommandMetrics = { increment: vi.fn() }
+      const active = await authenticatedHandler({ collaborationAuthorization: adapter, metrics })
+      enqueue(active.handler, collaborationAuthorizationFrame(1))
+      await vi.waitFor(() =>
+        expect(active.socket.frames.at(-1)?.payload).toEqual({
+          code: expectedCode,
+          retryable: expectedCode === 'OPERATION_UNAVAILABLE' || expectedCode === 'BACKEND_ERROR',
+        }),
+      )
+      if (expectedMetric) {
+        expect(metrics.increment).toHaveBeenCalledWith('collaboration_authorization', expectedMetric)
+      }
+      active.handler.disconnect()
+    }
+  })
+
+  it('times out collaboration authorization and records the timeout metric', async () => {
+    const metrics: SyncCommandMetrics = { increment: vi.fn() }
+    const collaborationAuthorization: SyncCollaborationAuthorizationAdapter = {
+      collaborationAuthorizationReady: () => true,
+      authorizeCollaboration: vi.fn(() => new Promise(() => undefined)),
+    }
+    const active = await authenticatedHandler({
+      collaborationAuthorization,
+      backendTimeoutMs: 5,
+      metrics,
+    })
+
+    enqueue(active.handler, collaborationAuthorizationFrame(1))
+
+    await vi.waitFor(() =>
+      expect(active.socket.frames.at(-1)?.payload).toEqual({ code: 'BACKEND_TIMEOUT', retryable: true }),
+    )
+    expect(metrics.increment).toHaveBeenCalledWith('collaboration_authorization', 'timeout')
+    await active.handler.stop()
+  })
+
+  it('negotiates authenticated API RPC and streams only when client credit is available', async () => {
+    const apiRpc: SyncApiRpcAdapter = {
+      idempotencyScope: 'shared-durable',
+      ready: () => true,
+      operations: () => ['API_RPC'],
+      execute: vi.fn(async () => ({
+        status: 200,
+        headers: { 'content-type': 'application/octet-stream', 'set-cookie': 'must-not-cross-the-socket=1' },
+        stream: (async function* () {
+          yield Buffer.from('12345678')
+        })(),
+      })),
+    }
+    const { handler, socket } = await authenticatedHandler({ apiRpc })
+    expect(socket.frames[0].payload).toMatchObject({ operations: ['SYNC_ITEMS', 'API_RPC'] })
+
+    enqueue(
+      handler,
+      rpcFrame(1, {
+        requestId: 'rpc-stream',
+        path: '/v1/users/me',
+        stream: true,
+        initialCreditBytes: 4,
+      }),
+    )
+    await vi.waitFor(() => expect(socket.frames.map((frame) => frame.type)).toContain('RPC_RESPONSE'))
+    expect(socket.frames.map((frame) => frame.type)).not.toContain('RPC_CHUNK')
+
+    enqueue(handler, rpcCreditFrame(2, 'rpc-stream', 8))
+    await vi.waitFor(() => expect(socket.frames.at(-1)?.type).toBe('RPC_END'))
+    const response = socket.frames.find((frame) => frame.type === 'RPC_RESPONSE')
+    expect(response?.payload).toEqual({
+      status: 200,
+      headers: { 'content-type': 'application/octet-stream' },
+      stream: true,
+    })
+    expect(socket.frames.find((frame) => frame.type === 'RPC_CHUNK')?.payload).toEqual({
+      index: 0,
+      bytes: Buffer.from('12345678').toString('base64'),
+      byteLength: 8,
+    })
+    handler.disconnect()
+  })
+
+  it('aborts and fully cleans a credit-blocked RPC stream when the handler disconnects', async () => {
+    let streamFinalized = false
+    const apiRpc: SyncApiRpcAdapter = {
+      idempotencyScope: 'shared-durable',
+      ready: () => true,
+      operations: () => ['API_RPC'],
+      execute: vi.fn(async () => ({
+        status: 200,
+        stream: (async function* () {
+          try {
+            yield Buffer.from('blocked-on-credit')
+          } finally {
+            streamFinalized = true
+          }
+        })(),
+      })),
+    }
+    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout')
+    const { handler, socket } = await authenticatedHandler({ apiRpc })
+    const internals = handler as unknown as {
+      activeRpcs: Map<
+        string,
+        {
+          controller: AbortController
+          waiters: Set<() => void>
+          deadlineTimer?: ReturnType<typeof setTimeout>
+        }
+      >
+    }
+    try {
+      enqueue(
+        handler,
+        rpcFrame(1, {
+          requestId: 'rpc-credit-blocked',
+          path: '/v1/users/me',
+          stream: true,
+          initialCreditBytes: 1,
+        }),
+      )
+      await vi.waitFor(() => expect(socket.frames.map((frame) => frame.type)).toContain('RPC_RESPONSE'))
+      await vi.waitFor(() => expect(internals.activeRpcs.get('rpc-credit-blocked')?.waiters.size).toBe(1))
+      const active = internals.activeRpcs.get('rpc-credit-blocked') as NonNullable<
+        ReturnType<typeof internals.activeRpcs.get>
+      >
+      const framesBeforeDisconnect = socket.frames.length
+
+      handler.disconnect()
+      await handler.stop()
+
+      expect(active.controller.signal.aborted).toBe(true)
+      expect(active.waiters.size).toBe(0)
+      expect(internals.activeRpcs.size).toBe(0)
+      expect(streamFinalized).toBe(true)
+      expect(clearTimeoutSpy).toHaveBeenCalledWith(active.deadlineTimer)
+      expect(socket.frames).toHaveLength(framesBeforeDisconnect)
+      expect(socket.frames.some((frame) => frame.type === 'RPC_CHUNK' || frame.type === 'RPC_END')).toBe(false)
+    } finally {
+      clearTimeoutSpy.mockRestore()
+    }
+  })
+
+  it('keeps item sync on durable COMMAND and gates assistant streaming behind its negotiated operation', async () => {
+    const apiRpc: SyncApiRpcAdapter = {
+      idempotencyScope: 'shared-durable',
+      ready: () => true,
+      operations: () => ['API_RPC'],
+      execute: vi.fn(async () => ({ status: 200, body: { ok: true } })),
+    }
+    const { handler, socket } = await authenticatedHandler({ apiRpc })
+
+    enqueue(
+      handler,
+      rpcFrame(1, {
+        requestId: 'rpc-items',
+        method: 'POST',
+        path: '/v1/items',
+        body: { items: [] },
+        idempotencyKey: 'item-write-attempt',
+      }),
+    )
+    await vi.waitFor(() =>
+      expect(socket.frames.at(-1)?.payload).toEqual({ code: 'OPERATION_UNAVAILABLE', retryable: true }),
+    )
+    enqueue(
+      handler,
+      rpcFrame(2, {
+        requestId: 'rpc-assistant',
+        method: 'POST',
+        path: '/v1/assistant/stream',
+        body: { prompt: 'hi' },
+        stream: true,
+        idempotencyKey: 'assistant-attempt',
+      }),
+    )
+    await vi.waitFor(() =>
+      expect(socket.frames.at(-1)?.payload).toEqual({ code: 'OPERATION_UNAVAILABLE', retryable: true }),
+    )
+    expect(apiRpc.execute).not.toHaveBeenCalled()
+    handler.disconnect()
+  })
+
+  it('rejects arbitrary mutating RPC routes even when they carry an idempotency key', async () => {
+    const apiRpc: SyncApiRpcAdapter = {
+      idempotencyScope: 'shared-durable',
+      ready: () => true,
+      operations: () => ['API_RPC', 'STREAM_ASSISTANT'],
+      execute: vi.fn(async () => ({ status: 200, body: { shouldNotRun: true } })),
+    }
+    const { handler, socket } = await authenticatedHandler({ apiRpc })
+
+    enqueue(
+      handler,
+      rpcFrame(1, {
+        method: 'POST',
+        path: '/v1/workflows/status',
+        body: { enabled: true },
+        idempotencyKey: 'arbitrary-mutation-attempt',
+      }),
+    )
+
+    await vi.waitFor(() =>
+      expect(socket.frames.at(-1)?.payload).toEqual({ code: 'OPERATION_UNAVAILABLE', retryable: true }),
+    )
+    expect(apiRpc.execute).not.toHaveBeenCalled()
+    handler.disconnect()
+  })
+
+  it('fails closed for unavailable adapters, file reads, unsupported verbs, and unkeyed reviewed writes', async () => {
+    const unavailableAdapters: Array<SyncApiRpcAdapter | undefined> = [
+      undefined,
+      {
+        idempotencyScope: 'shared-durable',
+        ready: () => false,
+        operations: () => ['API_RPC'],
+        execute: vi.fn(),
+      },
+      {
+        idempotencyScope: 'shared-durable',
+        ready: () => true,
+        operations: () => ['STREAM_ASSISTANT'],
+        execute: vi.fn(),
+      },
+    ]
+    for (const apiRpc of unavailableAdapters) {
+      const unavailable = await authenticatedHandler({ apiRpc })
+      enqueue(unavailable.handler, rpcFrame(1))
+      await vi.waitFor(() =>
+        expect(unavailable.socket.frames.at(-1)?.payload).toEqual({
+          code: 'OPERATION_UNAVAILABLE',
+          retryable: true,
+        }),
+      )
+      unavailable.handler.disconnect()
+    }
+
+    const apiRpc: SyncApiRpcAdapter = {
+      idempotencyScope: 'shared-durable',
+      ready: () => true,
+      operations: () => ['API_RPC', 'STREAM_ASSISTANT'],
+      execute: vi.fn(async () => ({ status: 200, body: { shouldNotRun: true } })),
+    }
+    const active = await authenticatedHandler({ apiRpc })
+    const rejected = [
+      rpcFrame(1, { path: '/v1/files' }),
+      rpcFrame(2, { method: 'PUT', path: '/v1/assistant/stream', idempotencyKey: 'put-attempt' }),
+      rpcFrame(3, { method: 'POST', path: '/v1/assistant/stream' }),
+    ]
+    const expectedErrors = [
+      { code: 'OPERATION_UNAVAILABLE', retryable: true },
+      { code: 'OPERATION_UNAVAILABLE', retryable: true },
+      { code: 'IDEMPOTENCY_KEY_REQUIRED', retryable: false },
+    ]
+    for (const [index, frame] of rejected.entries()) {
+      enqueue(active.handler, frame)
+      await vi.waitFor(() => expect(active.socket.frames.at(-1)?.payload).toEqual(expectedErrors[index]))
+    }
+    expect(apiRpc.execute).not.toHaveBeenCalled()
+    active.handler.disconnect()
+  })
+
+  it('bounds concurrent RPCs and handles duplicate ids plus known and unknown flow-control targets', async () => {
+    const releases: Array<() => void> = []
+    const apiRpc: SyncApiRpcAdapter = {
+      idempotencyScope: 'shared-durable',
+      ready: () => true,
+      operations: () => ['API_RPC'],
+      execute: vi.fn(
+        (_input, signal) =>
+          new Promise((resolve, reject) => {
+            releases.push(() => resolve({ status: 200, body: { ok: true } }))
+            signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+          }),
+      ),
+    }
+    const { handler, socket } = await authenticatedHandler({ apiRpc })
+    enqueue(handler, rpcFrame(1, { requestId: 'rpc-active-1' }))
+    await vi.waitFor(() => expect(apiRpc.execute).toHaveBeenCalledTimes(1))
+    enqueue(handler, rpcFrame(2, { requestId: 'rpc-active-1' }))
+    await vi.waitFor(() =>
+      expect(socket.frames.at(-1)?.payload).toEqual({ code: 'DUPLICATE_REQUEST', retryable: false }),
+    )
+    for (let index = 2; index <= 8; index += 1) {
+      enqueue(handler, rpcFrame(index + 1, { requestId: `rpc-active-${index}` }))
+    }
+    await vi.waitFor(() => expect(apiRpc.execute).toHaveBeenCalledTimes(8))
+    enqueue(handler, rpcFrame(10, { requestId: 'rpc-over-limit' }))
+    await vi.waitFor(() => expect(socket.frames.at(-1)?.payload).toEqual({ code: 'BUSY', retryable: true }))
+
+    enqueue(handler, rpcCreditFrame(11, 'rpc-missing', 1))
+    await vi.waitFor(() => expect(socket.frames.at(-1)?.payload).toEqual({ code: 'UNKNOWN_REQUEST', retryable: false }))
+    enqueue(handler, rpcCancelFrame(12, 'rpc-missing'))
+    await vi.waitFor(() => expect(socket.frames.at(-1)?.payload).toEqual({ code: 'UNKNOWN_REQUEST', retryable: false }))
+    enqueue(handler, rpcCancelFrame(13, 'rpc-active-1'))
+    await vi.waitFor(() => expect(socket.frames.at(-1)?.payload).toEqual({ code: 'CANCELLED', retryable: false }))
+    for (const release of releases) {
+      release()
+    }
+    await vi.waitFor(() => expect(socket.frames.filter((frame) => frame.type === 'RPC_END')).toHaveLength(7))
+    handler.disconnect()
+  })
+
+  it('keeps socket-local idempotency conflict detection while allowing the two reviewed POST routes', async () => {
+    const apiRpc: SyncApiRpcAdapter = {
+      idempotencyScope: 'shared-durable',
+      ready: () => true,
+      operations: () => ['API_RPC', 'STREAM_ASSISTANT'],
+      execute: vi.fn(async () => ({ status: 200, body: { ok: true } })),
+    }
+    const { handler, socket } = await authenticatedHandler({ apiRpc })
+    const assistant = {
+      method: 'POST' as const,
+      path: '/v1/assistant/stream',
+      body: { prompt: 'same' },
+      idempotencyKey: 'assistant-once',
+    }
+    enqueue(handler, rpcFrame(1, { requestId: 'assistant-first', ...assistant }))
+    await vi.waitFor(() => expect(socket.frames.at(-1)?.type).toBe('RPC_END'))
+    enqueue(handler, rpcFrame(2, { requestId: 'assistant-duplicate', ...assistant }))
+    await vi.waitFor(() =>
+      expect(socket.frames.at(-1)?.payload).toEqual({ code: 'DUPLICATE_REQUEST', retryable: false }),
+    )
+    enqueue(handler, rpcFrame(3, { requestId: 'assistant-conflict', ...assistant, body: { prompt: 'different' } }))
+    await vi.waitFor(() =>
+      expect(socket.frames.at(-1)?.payload).toEqual({ code: 'IDEMPOTENCY_KEY_CONFLICT', retryable: false }),
+    )
+    enqueue(
+      handler,
+      rpcFrame(4, {
+        requestId: 'collaboration-reviewed',
+        method: 'POST',
+        path: '/v1/collaboration/authorize',
+        body: { noteUuid: 'note-1' },
+        idempotencyKey: 'collaboration-once',
+      }),
+    )
+    await vi.waitFor(() => expect(socket.frames.at(-1)?.type).toBe('RPC_END'))
+    expect(apiRpc.execute).toHaveBeenCalledTimes(2)
+    handler.disconnect()
+  })
+
+  it('rejects malformed adapter output and streams reviewed body forms without unsafe headers', async () => {
+    const apiRpc: SyncApiRpcAdapter = {
+      idempotencyScope: 'shared-durable',
+      ready: () => true,
+      operations: () => ['API_RPC'],
+      execute: vi.fn(async (input) => {
+        if (input.path === '/v1/rpc/invalid-status') {
+          return { status: 99 }
+        }
+        if (input.path === '/v1/rpc/invalid-stream') {
+          return { status: 200, stream: {} as AsyncIterable<Uint8Array> }
+        }
+        if (input.path === '/v1/rpc/invalid-chunk') {
+          return {
+            status: 200,
+            stream: (async function* () {
+              yield 'not-bytes' as unknown as Uint8Array
+            })(),
+          }
+        }
+        const body =
+          input.path === '/v1/rpc/bytes'
+            ? new Uint8Array([1, 2])
+            : input.path === '/v1/rpc/string'
+              ? 'hello'
+              : undefined
+        return {
+          status: 200,
+          headers: {
+            'x-request-id': 'safe',
+            'Content-Type': 'uppercase-is-not-forwarded',
+            etag: 7 as unknown as string,
+            'retry-after': 'bad\nvalue',
+          },
+          body,
+        }
+      }),
+    }
+    const { handler, socket } = await authenticatedHandler({ apiRpc })
+    const paths = [
+      '/v1/rpc/invalid-status',
+      '/v1/rpc/invalid-stream',
+      '/v1/rpc/invalid-chunk',
+      '/v1/rpc/empty',
+      '/v1/rpc/bytes',
+      '/v1/rpc/string',
+    ]
+    for (const [index, path] of paths.entries()) {
+      enqueue(handler, rpcFrame(index + 1, { requestId: `rpc-shape-${index}`, path, stream: index >= 2 }))
+      if (index < 3) {
+        await vi.waitFor(() =>
+          expect(socket.frames.at(-1)?.payload).toEqual({ code: 'BACKEND_ERROR', retryable: true }),
+        )
+      } else {
+        await vi.waitFor(() =>
+          expect(
+            socket.frames.some((frame) => frame.type === 'RPC_END' && frame.requestId === `rpc-shape-${index}`),
+          ).toBe(true),
+        )
+      }
+    }
+    const safeHeaders = socket.frames.find(
+      (frame) => frame.type === 'RPC_RESPONSE' && frame.requestId === 'rpc-shape-5',
+    )?.payload.headers
+    expect(safeHeaders).toEqual({ 'x-request-id': 'safe' })
+    handler.disconnect()
+  })
+
+  it.each([
+    ['unsupported method', (payload: JsonObject) => (payload.method = 'OPTIONS')],
+    ['absolute path', (payload: JsonObject) => (payload.path = 'https://example.test/v1/users/me')],
+    ['short deadline', (payload: JsonObject) => (payload.deadlineMs = 999)],
+    ['long deadline', (payload: JsonObject) => (payload.deadlineMs = 120_001)],
+    ['fractional credit', (payload: JsonObject) => (payload.initialCreditBytes = 1.5)],
+    ['zero credit', (payload: JsonObject) => (payload.initialCreditBytes = 0)],
+    ['oversized credit', (payload: JsonObject) => (payload.initialCreditBytes = 4 * 1024 * 1024 + 1)],
+    ['invalid stream flag', (payload: JsonObject) => (payload.stream = 'yes')],
+    ['invalid headers', (payload: JsonObject) => (payload.headers = { Authorization: 'secret' })],
+    ['invalid idempotency key', (payload: JsonObject) => (payload.idempotencyKey = 'bad key')],
+    ['GET body', (payload: JsonObject) => (payload.body = { forbidden: true })],
+  ])('rejects RPC protocol envelopes with %s', async (_name, mutate) => {
+    const active = await authenticatedHandler()
+    const frame = rpcFrame(1)
+    const payload = frame.payload as JsonObject
+    mutate(payload)
+    frame.payloadLength = syncPayloadLength(payload)
+    enqueue(active.handler, frame)
+    await vi.waitFor(() => expect(active.socket.closes.at(-1)?.code).toBe(1008))
+    expect(active.socket.frames.at(-1)?.payload).toEqual({ code: 'INVALID_ENVELOPE', retryable: false })
+  })
+
+  it('delegates reconnect idempotency to a fleet-shared durable adapter before provider contact', async () => {
+    const attempts = new Map<string, Promise<{ status: number; body: unknown }>>()
+    const provider = vi.fn(async () => ({ status: 200, body: { response: 'created-once' } }))
+    const apiRpc: SyncApiRpcAdapter = {
+      idempotencyScope: 'shared-durable',
+      ready: () => true,
+      operations: () => ['API_RPC', 'STREAM_ASSISTANT'],
+      execute: vi.fn(async (input) => {
+        const key = input.idempotencyKey as string
+        let attempt = attempts.get(key)
+        if (!attempt) {
+          attempt = provider()
+          attempts.set(key, attempt)
+        }
+        return attempt
+      }),
+    }
+    const first = await authenticatedHandler({ apiRpc })
+    const second = await authenticatedHandler({ apiRpc })
+    const request = {
+      method: 'POST' as const,
+      path: '/v1/assistant/stream',
+      body: { prompt: 'one attempt' },
+      idempotencyKey: 'shared-assistant-attempt',
+    }
+
+    enqueue(first.handler, rpcFrame(1, { requestId: 'rpc-first-socket', ...request }))
+    enqueue(second.handler, rpcFrame(1, { requestId: 'rpc-second-socket', ...request }))
+    await vi.waitFor(() => expect(first.socket.frames.at(-1)?.type).toBe('RPC_END'))
+    await vi.waitFor(() => expect(second.socket.frames.at(-1)?.type).toBe('RPC_END'))
+    expect(apiRpc.execute).toHaveBeenCalledTimes(2)
+    expect(provider).toHaveBeenCalledTimes(1)
+    first.handler.disconnect()
+    second.handler.disconnect()
   })
 
   it('consumes a ticket atomically and rejects replay on another replica', async () => {

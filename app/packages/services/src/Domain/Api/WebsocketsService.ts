@@ -122,6 +122,19 @@ export type CollaborationRoomAuthorization = {
   bootstrapChallenge?: string
 }
 
+export type CollaborationRoomAuthorizationTransport = (
+  noteUuid: string,
+  leaseRequestId?: string,
+  bootstrapChallenge?: string,
+) => Promise<
+  | (CollaborationRoomAuthorization & {
+      room: string
+      expiresIn: number
+    })
+  | null
+  | undefined
+>
+
 export class WebSocketsService extends AbstractService<
   WebSocketsServiceEvent,
   DomainEventInterface | SyncItemsPushedData | undefined
@@ -168,6 +181,12 @@ export class WebSocketsService extends AbstractService<
   private webSocketHeartbeatInterval?: ReturnType<typeof setInterval>
   private collaborationFrameHandlers = new Set<(frame: CollaborationFrame) => void>()
   private syncSessionRevocationHandlers = new Set<() => void | Promise<void>>()
+  private collaborationAuthorizationTransport?: CollaborationRoomAuthorizationTransport
+  private collaborationAuthorizationRequests = new Map<string, Promise<CollaborationRoomAuthorization | undefined>>()
+  private collaborationAuthorizationCache = new Map<
+    string,
+    { authorization: CollaborationRoomAuthorization; expiresAt: number }
+  >()
 
   constructor(
     private storageService: StorageServiceInterface,
@@ -198,7 +217,21 @@ export class WebSocketsService extends AbstractService<
     return () => this.syncSessionRevocationHandlers.delete(handler)
   }
 
+  /** Prefer the authenticated worker socket for room capability minting. */
+  public setCollaborationAuthorizationTransport(
+    transport: CollaborationRoomAuthorizationTransport | undefined,
+  ): () => void {
+    this.collaborationAuthorizationTransport = transport
+    return () => {
+      if (this.collaborationAuthorizationTransport === transport) {
+        this.collaborationAuthorizationTransport = undefined
+      }
+    }
+  }
+
   public async revokeSyncTransportSession(): Promise<void> {
+    this.collaborationAuthorizationCache.clear()
+    this.collaborationAuthorizationRequests.clear()
     const results = await Promise.allSettled([...this.syncSessionRevocationHandlers].map((handler) => handler()))
     const failure = results.find((result): result is PromiseRejectedResult => result.status === 'rejected')
     if (failure) {
@@ -406,41 +439,60 @@ export class WebSocketsService extends AbstractService<
     leaseRequestId?: string,
     bootstrapChallenge?: string,
   ): Promise<CollaborationRoomAuthorization | undefined> {
-    try {
-      const response = await this.webSocketApiService.authorizeCollaboration(
-        noteUuid,
-        leaseRequestId,
-        bootstrapChallenge,
-      )
-      if (isErrorResponse(response)) {
+    const key = JSON.stringify([noteUuid, leaseRequestId ?? null, bootstrapChallenge ?? null])
+    const cached = this.collaborationAuthorizationCache.get(key)
+    if (cached && cached.expiresAt > Date.now() + 5_000) {
+      return cached.authorization
+    }
+    this.collaborationAuthorizationCache.delete(key)
+    const inFlight = this.collaborationAuthorizationRequests.get(key)
+    if (inFlight) {
+      return inFlight
+    }
+
+    const request = this.requestCollaborationAuthorization(noteUuid, leaseRequestId, bootstrapChallenge)
+      .then((result) => {
+        if (!result) {
+          return undefined
+        }
+        this.collaborationAuthorizationCache.set(key, {
+          authorization: result.authorization,
+          expiresAt: Date.now() + result.expiresIn * 1_000,
+        })
+        return result.authorization
+      })
+      .catch((error) => {
+        console.error('Failed to authorize collaboration room:', (error as Error).message)
         return undefined
-      }
-      const capability = response.data?.capability
-      const room = response.data?.room
-      const serverUpdatedAtTimestamp = response.data?.serverUpdatedAtTimestamp
-      const collaborationProtocolVersion = response.data?.collaborationProtocolVersion
-      const responseLeaseRequestId = response.data?.leaseRequestId
-      const responseBootstrapChallenge = response.data?.bootstrapChallenge
-      return typeof capability === 'string' &&
-        capability.length > 0 &&
-        room === noteUuid &&
-        collaborationProtocolVersion === 2 &&
-        responseLeaseRequestId === leaseRequestId &&
-        responseBootstrapChallenge === bootstrapChallenge &&
-        Number.isSafeInteger(serverUpdatedAtTimestamp) &&
-        Number(serverUpdatedAtTimestamp) > 0
-        ? {
-            capability,
-            serverUpdatedAtTimestamp: Number(serverUpdatedAtTimestamp),
-            collaborationProtocolVersion,
-            ...(responseLeaseRequestId ? { leaseRequestId: responseLeaseRequestId } : {}),
-            ...(responseBootstrapChallenge ? { bootstrapChallenge: responseBootstrapChallenge } : {}),
-          }
-        : undefined
-    } catch (error) {
-      console.error('Failed to authorize collaboration room:', (error as Error).message)
+      })
+      .finally(() => this.collaborationAuthorizationRequests.delete(key))
+    this.collaborationAuthorizationRequests.set(key, request)
+    return request
+  }
+
+  private async requestCollaborationAuthorization(
+    noteUuid: string,
+    leaseRequestId?: string,
+    bootstrapChallenge?: string,
+  ): Promise<{ authorization: CollaborationRoomAuthorization; expiresIn: number } | undefined> {
+    const socketResult = await this.collaborationAuthorizationTransport?.(noteUuid, leaseRequestId, bootstrapChallenge)
+    if (socketResult === null) {
       return undefined
     }
+    const socketAuthorization = normalizeCollaborationAuthorization(
+      socketResult,
+      noteUuid,
+      leaseRequestId,
+      bootstrapChallenge,
+    )
+    if (socketAuthorization) {
+      return socketAuthorization
+    }
+
+    const response = await this.webSocketApiService.authorizeCollaboration(noteUuid, leaseRequestId, bootstrapChallenge)
+    return isErrorResponse(response)
+      ? undefined
+      : normalizeCollaborationAuthorization(response.data, noteUuid, leaseRequestId, bootstrapChallenge)
   }
 
   /** Subscribe to inbound collaboration frames. Returns an unsubscribe fn. */
@@ -566,5 +618,51 @@ export class WebSocketsService extends AbstractService<
     ;(this.webSocketApiService as unknown) = undefined
     this.closeWebSocketConnection()
     this.syncSessionRevocationHandlers.clear()
+    this.collaborationAuthorizationCache.clear()
+    this.collaborationAuthorizationRequests.clear()
+    this.collaborationAuthorizationTransport = undefined
+  }
+}
+
+function normalizeCollaborationAuthorization(
+  value: unknown,
+  noteUuid: string,
+  leaseRequestId?: string,
+  bootstrapChallenge?: string,
+): { authorization: CollaborationRoomAuthorization; expiresIn: number } | undefined {
+  const candidate = value as
+    | {
+        capability?: unknown
+        room?: unknown
+        expiresIn?: unknown
+        serverUpdatedAtTimestamp?: unknown
+        collaborationProtocolVersion?: unknown
+        leaseRequestId?: unknown
+        bootstrapChallenge?: unknown
+      }
+    | undefined
+  if (
+    typeof candidate?.capability !== 'string' ||
+    candidate.capability.length === 0 ||
+    candidate.room !== noteUuid ||
+    candidate.collaborationProtocolVersion !== 2 ||
+    candidate.leaseRequestId !== leaseRequestId ||
+    candidate.bootstrapChallenge !== bootstrapChallenge ||
+    !Number.isSafeInteger(candidate.serverUpdatedAtTimestamp) ||
+    Number(candidate.serverUpdatedAtTimestamp) <= 0 ||
+    !Number.isSafeInteger(candidate.expiresIn) ||
+    Number(candidate.expiresIn) <= 0
+  ) {
+    return undefined
+  }
+  return {
+    authorization: {
+      capability: candidate.capability,
+      serverUpdatedAtTimestamp: Number(candidate.serverUpdatedAtTimestamp),
+      collaborationProtocolVersion: 2,
+      ...(leaseRequestId ? { leaseRequestId } : {}),
+      ...(bootstrapChallenge ? { bootstrapChallenge } : {}),
+    },
+    expiresIn: Number(candidate.expiresIn),
   }
 }

@@ -4,12 +4,16 @@ import type {
   AccountSyncTransportRequest,
 } from '@standardnotes/services'
 import {
+  CollaborationAuthorizationTransportRequest,
+  CollaborationAuthorizationTransportResult,
+  DEFAULT_RPC_CREDIT_BYTES,
   digestSyncBody,
   frameByteLength,
   isSyncServerFrame,
   MainToSyncWorkerMessage,
   MAX_SYNC_BUFFERED_BYTES,
   MAX_SYNC_FRAME_BYTES,
+  MAX_RPC_CREDIT_BYTES,
   normalizeSyncRequestForWire,
   payloadByteLength,
   SYNC_CHANNEL,
@@ -17,9 +21,11 @@ import {
   SyncClientFrame,
   SyncFallbackReason,
   SyncServerFrame,
+  SyncNegotiatedOperation,
   SyncTicket,
   SyncTransportState,
   SyncWorkerToMainMessage,
+  WorkerAuthenticatedRpcRequest,
   utf8Bytes,
 } from './syncTransportProtocol'
 import { IndexedDbSyncOutbox, SyncOutboxRecord, SyncOutboxStore } from './SyncTransportOutbox'
@@ -57,12 +63,37 @@ export type SyncWorkerRuntimeDependencies = {
   subtle?: SubtleCrypto
 }
 
-type ActiveRequest = {
+type ActiveRequest =
+  | {
+      clientRequestId: string
+      sessionScope: string
+      mode: 'execute' | 'recover'
+      body: AccountSyncTransportRequest
+      context?: AccountSyncTransportContext
+    }
+  | {
+      clientRequestId: string
+      sessionScope: string
+      mode: 'collaboration'
+      request: CollaborationAuthorizationTransportRequest
+      commandId: string
+    }
+  | {
+      clientRequestId: string
+      sessionScope: string
+      mode: 'rpc-bootstrap'
+    }
+
+type ActiveRpcRequest = {
   clientRequestId: string
   sessionScope: string
-  mode: 'execute' | 'recover'
-  body: AccountSyncTransportRequest
-  context?: AccountSyncTransportContext
+  request: WorkerAuthenticatedRpcRequest
+  commandId: string
+  sent: boolean
+  accepted: boolean
+  responseStarted: boolean
+  expectedChunkIndex: number
+  deadlineTimer?: ReturnType<typeof setTimeout>
 }
 
 function defaultUuid(): string {
@@ -110,6 +141,8 @@ export class SyncTransportWorkerRuntime {
   private accepted = false
   private resultDelivered = false
   private reconnectAttempts = 0
+  private negotiatedOperations = new Set<SyncNegotiatedOperation>()
+  private readonly rpcRequests = new Map<string, ActiveRpcRequest>()
   private shuttingDown = false
   private ackTimeout?: ReturnType<typeof setTimeout>
   private reconnectTimeout?: ReturnType<typeof setTimeout>
@@ -144,6 +177,18 @@ export class SyncTransportWorkerRuntime {
         break
       case 'RECOVER':
         await this.recover(message.clientRequestId, message.sessionScope)
+        break
+      case 'AUTHORIZE_COLLABORATION':
+        await this.authorizeCollaboration(message.clientRequestId, message.sessionScope, message.request)
+        break
+      case 'OPEN_RPC':
+        await this.openRpc(message.clientRequestId, message.sessionScope, message.request)
+        break
+      case 'CANCEL_RPC':
+        await this.cancelRpc(message.clientRequestId)
+        break
+      case 'RPC_CREDIT':
+        await this.creditRpc(message.clientRequestId, message.creditBytes)
         break
       case 'CONNECT':
         await this.connect(message.clientRequestId, message.sessionScope, message.authorization)
@@ -202,7 +247,7 @@ export class SyncTransportWorkerRuntime {
         },
       })
       if (this.socket?.readyState === 1 && this.state === 'READY' && this.transportScope) {
-        await this.prepareActiveCommand()
+        await this.prepareActiveRequest()
         return
       }
       this.transition('HALF_OPEN')
@@ -244,12 +289,138 @@ export class SyncTransportWorkerRuntime {
     this.resultDelivered = false
 
     if (this.socket?.readyState === 1 && this.state === 'READY' && this.transportScope) {
-      await this.prepareActiveCommand()
+      await this.prepareActiveRequest()
       return
     }
 
     this.transition('HALF_OPEN')
     this.dependencies.postMessage({ type: 'NEED_TICKET', clientRequestId, reconnect: false })
+  }
+
+  private async authorizeCollaboration(
+    clientRequestId: string,
+    sessionScope: string,
+    request: CollaborationAuthorizationTransportRequest,
+  ): Promise<void> {
+    if (this.shuttingDown || !validSessionScope(sessionScope)) {
+      this.dependencies.postMessage({ type: 'COLLABORATION_FALLBACK', clientRequestId, reason: 'worker-error' })
+      return
+    }
+    if (this.active) {
+      this.dependencies.postMessage({ type: 'COLLABORATION_FALLBACK', clientRequestId, reason: 'reconnect-gap' })
+      return
+    }
+    this.active = { clientRequestId, sessionScope, mode: 'collaboration', request, commandId: this.uuid() }
+    this.sessionScope = sessionScope
+    if (this.socket?.readyState === 1 && this.state === 'READY' && this.transportScope) {
+      await this.prepareActiveRequest()
+      return
+    }
+    this.transition('HALF_OPEN')
+    this.dependencies.postMessage({ type: 'NEED_TICKET', clientRequestId, reconnect: false })
+  }
+
+  private async openRpc(
+    clientRequestId: string,
+    sessionScope: string,
+    request: WorkerAuthenticatedRpcRequest,
+  ): Promise<void> {
+    if (
+      this.shuttingDown ||
+      !validSessionScope(sessionScope) ||
+      !isValidWorkerRpcRequest(request) ||
+      this.rpcRequests.has(clientRequestId)
+    ) {
+      this.dependencies.postMessage({
+        type: 'RPC_ERROR',
+        clientRequestId,
+        code: 'INVALID_REQUEST',
+        retryable: false,
+        safeToFallback: true,
+      })
+      return
+    }
+    const rpc: ActiveRpcRequest = {
+      clientRequestId,
+      sessionScope,
+      request,
+      commandId: this.uuid(),
+      sent: false,
+      accepted: false,
+      responseStarted: false,
+      expectedChunkIndex: 0,
+    }
+    rpc.deadlineTimer = this.scheduleTimeout(() => {
+      void this.cancelRpc(clientRequestId, 'DEADLINE_EXCEEDED')
+    }, request.deadlineMs)
+    this.rpcRequests.set(clientRequestId, rpc)
+
+    if (this.socket?.readyState === 1 && this.state === 'READY' && this.transportScope) {
+      await this.sendRpc(rpc)
+      return
+    }
+    if (!this.active) {
+      this.active = { clientRequestId, sessionScope, mode: 'rpc-bootstrap' }
+      this.sessionScope = sessionScope
+      this.transition('HALF_OPEN')
+      this.dependencies.postMessage({ type: 'NEED_TICKET', clientRequestId, reconnect: false })
+    }
+  }
+
+  private async cancelRpc(clientRequestId: string, code = 'CANCELLED'): Promise<void> {
+    const rpc = this.rpcRequests.get(clientRequestId)
+    if (!rpc) {
+      return
+    }
+    if (rpc.sent && this.socket?.readyState === 1 && this.state === 'READY') {
+      const payload = { targetRequestId: rpc.commandId }
+      const frame: SyncClientFrame = {
+        version: SYNC_PROTOCOL_VERSION,
+        channel: SYNC_CHANNEL,
+        type: 'RPC_CANCEL',
+        requestId: this.uuid(),
+        commandId: this.uuid(),
+        sequence: this.sequence++,
+        payloadLength: payloadByteLength(payload),
+        payload,
+      }
+      try {
+        await this.sendWithBackpressure(JSON.stringify(frame))
+      } catch {
+        // The terminal local cancellation below is authoritative for the caller.
+      }
+    }
+    this.failRpc(rpc, code, code === 'DEADLINE_EXCEEDED', !rpc.sent)
+  }
+
+  private async creditRpc(clientRequestId: string, creditBytes: number): Promise<void> {
+    const rpc = this.rpcRequests.get(clientRequestId)
+    if (
+      !rpc?.sent ||
+      !Number.isSafeInteger(creditBytes) ||
+      creditBytes <= 0 ||
+      creditBytes > MAX_RPC_CREDIT_BYTES ||
+      this.socket?.readyState !== 1 ||
+      this.state !== 'READY'
+    ) {
+      return
+    }
+    const payload = { targetRequestId: rpc.commandId, creditBytes }
+    const frame: SyncClientFrame = {
+      version: SYNC_PROTOCOL_VERSION,
+      channel: SYNC_CHANNEL,
+      type: 'RPC_CREDIT',
+      requestId: this.uuid(),
+      commandId: this.uuid(),
+      sequence: this.sequence++,
+      payloadLength: payloadByteLength(payload),
+      payload,
+    }
+    try {
+      await this.sendWithBackpressure(JSON.stringify(frame))
+    } catch {
+      this.failRpc(rpc, 'SOCKET_CLOSED', true, false)
+    }
   }
 
   private async connect(clientRequestId: string, sessionScope: string, authorization: SyncTicket): Promise<void> {
@@ -328,7 +499,8 @@ export class SyncTransportWorkerRuntime {
       channel: SYNC_CHANNEL,
       type: 'AUTH',
       requestId: this.uuid(),
-      commandId: this.outboxRecord?.commandId ?? this.uuid(),
+      commandId:
+        this.outboxRecord?.commandId ?? (this.active.mode === 'collaboration' ? this.active.commandId : this.uuid()),
       sequence: 0,
       payloadLength: payloadByteLength(payload),
       payload,
@@ -365,28 +537,85 @@ export class SyncTransportWorkerRuntime {
         return
       }
       const nextSequence = frame.payload.nextClientSequence
+      const operations = frame.payload.operations
       if (
         frame.payload.capability !== 'ws-sync' ||
         frame.payload.protocolVersion !== 1 ||
         !Number.isSafeInteger(nextSequence) ||
-        Number(nextSequence) < 1
+        Number(nextSequence) < 1 ||
+        !Array.isArray(operations) ||
+        !operations.includes('SYNC_ITEMS') ||
+        operations.some(
+          (operation) =>
+            operation !== 'SYNC_ITEMS' &&
+            operation !== 'AUTHORIZE_COLLABORATION' &&
+            operation !== 'API_RPC' &&
+            operation !== 'STREAM_ASSISTANT',
+        )
       ) {
         await this.fallback('auth-failed')
         return
       }
       this.clearAckDeadline()
       this.sequence = Number(nextSequence)
+      this.negotiatedOperations = new Set(operations as SyncNegotiatedOperation[])
       this.transition('READY')
+      this.dependencies.postMessage({
+        type: 'NEGOTIATED',
+        sessionScope: this.active?.sessionScope ?? this.sessionScope!,
+        protocolVersion: SYNC_PROTOCOL_VERSION,
+        endpoint: this.authorization?.endpoint ?? '',
+        operations: [...this.negotiatedOperations],
+      })
       this.beginHeartbeat()
-      await this.prepareActiveCommand()
+      await this.sendReadyRpcRequests()
+      await this.prepareActiveRequest()
       return
     }
 
     if (frame.type === 'PONG') {
       return
     }
+    const rpc = this.rpcByCommandId(frame.commandId)
+    if (rpc) {
+      this.handleRpcServerFrame(rpc, frame)
+      return
+    }
     if (frame.type === 'ERROR' && this.state === 'AUTHENTICATING') {
       await this.fallback('auth-failed', this.outboxRecord)
+      return
+    }
+    if (this.active?.mode === 'collaboration') {
+      if (frame.commandId !== this.active.commandId) {
+        return
+      }
+      if (frame.type === 'COLLABORATION_AUTHORIZED') {
+        this.clearAckDeadline()
+        const result = parseCollaborationAuthorizationResult(frame.payload, this.active.request)
+        if (!result) {
+          await this.fallbackCollaboration('proxy-failed', false)
+          return
+        }
+        const clientRequestId = this.active.clientRequestId
+        this.active = undefined
+        this.reconnectAttempts = 0
+        this.dependencies.postMessage({ type: 'COLLABORATION_RESULT', clientRequestId, result })
+        return
+      }
+      if (frame.type === 'ERROR') {
+        this.clearAckDeadline()
+        if (frame.payload.code === 'NOT_AUTHORIZED') {
+          const clientRequestId = this.active.clientRequestId
+          this.active = undefined
+          this.reconnectAttempts = 0
+          this.dependencies.postMessage({ type: 'COLLABORATION_DENIED', clientRequestId })
+        } else {
+          await this.fallbackCollaboration(
+            frame.payload.code === 'OPERATION_UNAVAILABLE' ? 'operation-unavailable' : 'server-kill',
+            frame.payload.code === 'OPERATION_UNAVAILABLE',
+          )
+        }
+      }
       return
     }
     if (!this.outboxRecord || frame.commandId !== this.outboxRecord.commandId) {
@@ -417,11 +646,152 @@ export class SyncTransportWorkerRuntime {
         }
         break
       case 'ERROR':
-        await this.fallback(
-          frame.payload.code === 'RESULT_TOO_LARGE' && frame.payload.retryable === true
-            ? 'result-too-large'
-            : 'server-kill',
-          this.outboxRecord,
+        if (frame.payload.code === 'RESULT_TOO_LARGE' && frame.payload.retryable === true) {
+          await this.fallback('result-too-large', this.outboxRecord)
+        } else {
+          await this.fallback('server-kill', this.outboxRecord)
+        }
+        break
+      default:
+        break
+    }
+  }
+
+  private async prepareActiveRequest(): Promise<void> {
+    if (this.active?.mode === 'rpc-bootstrap') {
+      this.active = undefined
+      await this.sendReadyRpcRequests()
+      return
+    }
+    if (this.active?.mode === 'collaboration') {
+      await this.sendCollaborationAuthorization()
+      return
+    }
+    await this.prepareActiveCommand()
+  }
+
+  private async sendReadyRpcRequests(): Promise<void> {
+    if (this.state !== 'READY' || this.socket?.readyState !== 1) {
+      return
+    }
+    for (const rpc of this.rpcRequests.values()) {
+      if (!rpc.sent && rpc.sessionScope === this.sessionScope) {
+        await this.sendRpc(rpc)
+      }
+    }
+  }
+
+  private async sendRpc(rpc: ActiveRpcRequest): Promise<void> {
+    if (rpc.sent || !this.negotiatedOperations.has('API_RPC')) {
+      if (!this.negotiatedOperations.has('API_RPC')) {
+        this.failRpc(rpc, 'OPERATION_UNAVAILABLE', true, true)
+      }
+      return
+    }
+    const payload = {
+      method: rpc.request.method,
+      path: rpc.request.path,
+      deadlineMs: rpc.request.deadlineMs,
+      initialCreditBytes: rpc.request.initialCreditBytes ?? DEFAULT_RPC_CREDIT_BYTES,
+      stream: rpc.request.stream,
+      ...(rpc.request.headers ? { headers: rpc.request.headers } : {}),
+      ...(Object.hasOwn(rpc.request, 'body') ? { body: rpc.request.body } : {}),
+      ...(rpc.request.idempotencyKey ? { idempotencyKey: rpc.request.idempotencyKey } : {}),
+    }
+    const frame: SyncClientFrame = {
+      version: SYNC_PROTOCOL_VERSION,
+      channel: SYNC_CHANNEL,
+      type: 'RPC_REQUEST',
+      requestId: rpc.commandId,
+      commandId: rpc.commandId,
+      sequence: this.sequence++,
+      payloadLength: payloadByteLength(payload),
+      payload,
+    }
+    if (frameByteLength(frame) > MAX_SYNC_FRAME_BYTES) {
+      this.failRpc(rpc, 'FRAME_TOO_LARGE', false, true)
+      return
+    }
+    try {
+      await this.sendWithBackpressure(JSON.stringify(frame))
+      rpc.sent = true
+    } catch {
+      this.failRpc(rpc, 'SOCKET_CLOSED', true, false)
+    }
+  }
+
+  private handleRpcServerFrame(rpc: ActiveRpcRequest, frame: SyncServerFrame): void {
+    switch (frame.type) {
+      case 'RPC_ACCEPTED':
+        if (!rpc.accepted) {
+          rpc.accepted = true
+          this.dependencies.postMessage({ type: 'RPC_ACCEPTED', clientRequestId: rpc.clientRequestId })
+        }
+        break
+      case 'RPC_RESPONSE': {
+        if (
+          !rpc.accepted ||
+          rpc.responseStarted ||
+          !Number.isSafeInteger(frame.payload.status) ||
+          Number(frame.payload.status) < 100 ||
+          Number(frame.payload.status) > 599 ||
+          typeof frame.payload.stream !== 'boolean' ||
+          !isStringRecord(frame.payload.headers)
+        ) {
+          this.failRpc(rpc, 'INVALID_RESPONSE', false, false)
+          return
+        }
+        rpc.responseStarted = true
+        this.dependencies.postMessage({
+          type: 'RPC_RESPONSE',
+          clientRequestId: rpc.clientRequestId,
+          status: Number(frame.payload.status),
+          headers: frame.payload.headers,
+          stream: frame.payload.stream,
+          ...(Object.hasOwn(frame.payload, 'body') ? { body: frame.payload.body } : {}),
+        })
+        break
+      }
+      case 'RPC_CHUNK': {
+        const bytes = frame.payload.bytes
+        const byteLength = frame.payload.byteLength
+        const index = frame.payload.index
+        if (
+          !rpc.responseStarted ||
+          typeof bytes !== 'string' ||
+          !Number.isSafeInteger(byteLength) ||
+          Number(byteLength) < 0 ||
+          Number(byteLength) > 64 * 1024 ||
+          !Number.isSafeInteger(index) ||
+          Number(index) !== rpc.expectedChunkIndex ||
+          decodedBase64Length(bytes) !== Number(byteLength)
+        ) {
+          this.failRpc(rpc, 'INVALID_RESPONSE', false, false)
+          return
+        }
+        rpc.expectedChunkIndex += 1
+        this.dependencies.postMessage({
+          type: 'RPC_CHUNK',
+          clientRequestId: rpc.clientRequestId,
+          bytes,
+          byteLength: Number(byteLength),
+        })
+        break
+      }
+      case 'RPC_END':
+        if (!rpc.responseStarted) {
+          this.failRpc(rpc, 'INVALID_RESPONSE', false, false)
+          return
+        }
+        this.dependencies.postMessage({ type: 'RPC_END', clientRequestId: rpc.clientRequestId })
+        this.finishRpc(rpc)
+        break
+      case 'ERROR':
+        this.failRpc(
+          rpc,
+          typeof frame.payload.code === 'string' ? frame.payload.code : 'RPC_ERROR',
+          frame.payload.retryable === true,
+          false,
         )
         break
       default:
@@ -429,9 +799,80 @@ export class SyncTransportWorkerRuntime {
     }
   }
 
+  private rpcByCommandId(commandId: string): ActiveRpcRequest | undefined {
+    for (const rpc of this.rpcRequests.values()) {
+      if (rpc.commandId === commandId) {
+        return rpc
+      }
+    }
+    return undefined
+  }
+
+  private failRpc(rpc: ActiveRpcRequest, code: string, retryable: boolean, safeToFallback: boolean): void {
+    this.dependencies.postMessage({
+      type: 'RPC_ERROR',
+      clientRequestId: rpc.clientRequestId,
+      code,
+      retryable,
+      safeToFallback,
+    })
+    this.finishRpc(rpc)
+  }
+
+  private finishRpc(rpc: ActiveRpcRequest): void {
+    if (rpc.deadlineTimer) {
+      this.cancelTimeout(rpc.deadlineTimer)
+    }
+    this.rpcRequests.delete(rpc.clientRequestId)
+  }
+
+  private async sendCollaborationAuthorization(): Promise<void> {
+    const active = this.active
+    if (
+      !active ||
+      active.mode !== 'collaboration' ||
+      !this.transportScope ||
+      !this.sessionScope ||
+      this.state !== 'READY'
+    ) {
+      return
+    }
+    if (!this.negotiatedOperations.has('AUTHORIZE_COLLABORATION')) {
+      await this.fallbackCollaboration('operation-unavailable', true)
+      return
+    }
+    const payload = active.request as unknown as Record<string, unknown>
+    const frame: SyncClientFrame = {
+      version: SYNC_PROTOCOL_VERSION,
+      channel: SYNC_CHANNEL,
+      type: 'COLLABORATION_AUTHORIZE',
+      requestId: this.uuid(),
+      commandId: active.commandId,
+      sequence: this.sequence++,
+      payloadLength: payloadByteLength(payload),
+      payload,
+    }
+    if (frameByteLength(frame) > MAX_SYNC_FRAME_BYTES) {
+      await this.fallbackCollaboration('frame-too-large', true)
+      return
+    }
+    try {
+      await this.sendWithBackpressure(JSON.stringify(frame))
+      this.startAckDeadline(COMMAND_ACK_TIMEOUT_MS)
+    } catch {
+      await this.fallbackCollaboration('proxy-failed', false)
+    }
+  }
+
   private async prepareActiveCommand(): Promise<void> {
     const active = this.active
-    if (!active || !this.transportScope || !this.sessionScope || this.state !== 'READY') {
+    if (
+      !active ||
+      (active.mode !== 'execute' && active.mode !== 'recover') ||
+      !this.transportScope ||
+      !this.sessionScope ||
+      this.state !== 'READY'
+    ) {
       return
     }
     try {
@@ -594,10 +1035,27 @@ export class SyncTransportWorkerRuntime {
     this.socket = undefined
     this.clearAckDeadline()
     this.clearHeartbeat()
+    for (const rpc of [...this.rpcRequests.values()]) {
+      if (rpc.sent) {
+        // Never replay a request after bytes crossed the socket. The server's
+        // durable idempotency key remains available for an explicit caller retry.
+        this.failRpc(rpc, 'SOCKET_CLOSED', true, false)
+      }
+    }
     if (this.shuttingDown) {
       return
     }
     this.transition('DEGRADED', code >= 4000 ? 'server-kill' : undefined)
+    if (!this.active) {
+      const unsent = this.rpcRequests.values().next().value as ActiveRpcRequest | undefined
+      if (unsent) {
+        this.active = {
+          clientRequestId: unsent.clientRequestId,
+          sessionScope: unsent.sessionScope,
+          mode: 'rpc-bootstrap',
+        }
+      }
+    }
     if (!this.active) {
       return
     }
@@ -697,6 +1155,20 @@ export class SyncTransportWorkerRuntime {
     if (!active) {
       return
     }
+    if (active.mode === 'rpc-bootstrap') {
+      const rpc = this.rpcRequests.get(active.clientRequestId)
+      if (rpc) {
+        this.failRpc(rpc, reason.toUpperCase().replaceAll('-', '_'), true, !rpc.sent)
+      }
+      this.active = undefined
+      this.transition('HTTP_FALLBACK', reason)
+      await this.closeSocketAndReleaseOwner()
+      return
+    }
+    if (active.mode === 'collaboration') {
+      await this.fallbackCollaboration(reason, false)
+      return
+    }
     this.transition('HTTP_FALLBACK', reason)
     const storedBody = record?.sessionScope === active.sessionScope ? parseStoredBody(record) : undefined
     this.dependencies.postMessage({
@@ -722,6 +1194,23 @@ export class SyncTransportWorkerRuntime {
     await this.closeSocketAndReleaseOwner()
   }
 
+  private async fallbackCollaboration(reason: SyncFallbackReason, preserveHealthySocket: boolean): Promise<void> {
+    const active = this.active
+    if (!active || active.mode !== 'collaboration') {
+      return
+    }
+    const clientRequestId = active.clientRequestId
+    this.clearAckDeadline()
+    this.active = undefined
+    this.dependencies.postMessage({ type: 'COLLABORATION_FALLBACK', clientRequestId, reason })
+    if (!preserveHealthySocket) {
+      this.transition('HTTP_FALLBACK', reason)
+      await this.closeSocketAndReleaseOwner()
+    } else {
+      this.transition('READY')
+    }
+  }
+
   private postFallback(clientRequestId: string, body: AccountSyncTransportRequest, reason: SyncFallbackReason): void {
     this.dependencies.postMessage({ type: 'HTTP_FALLBACK', clientRequestId, reason, body })
   }
@@ -744,6 +1233,11 @@ export class SyncTransportWorkerRuntime {
     }
     const socket = this.socket
     this.socket = undefined
+    for (const rpc of [...this.rpcRequests.values()]) {
+      if (rpc.sent) {
+        this.failRpc(rpc, 'SOCKET_CLOSED', true, false)
+      }
+    }
     if (socket && socket.readyState < 2) {
       socket.close(1000, 'transport-fallback')
     }
@@ -756,6 +1250,7 @@ export class SyncTransportWorkerRuntime {
     }
     this.transportScope = undefined
     this.authorization = undefined
+    this.negotiatedOperations.clear()
   }
 
   private async revokeSession(requestId: string, sessionScope: string): Promise<void> {
@@ -770,6 +1265,9 @@ export class SyncTransportWorkerRuntime {
       quarantined = false
     }
     await this.closeSocketAndReleaseOwner()
+    for (const rpc of [...this.rpcRequests.values()]) {
+      this.failRpc(rpc, 'SESSION_REVOKED', false, false)
+    }
     this.authorization = undefined
     this.active = undefined
     this.outboxRecord = undefined
@@ -785,6 +1283,9 @@ export class SyncTransportWorkerRuntime {
   private async shutdown(): Promise<void> {
     this.shuttingDown = true
     await this.closeSocketAndReleaseOwner()
+    for (const rpc of [...this.rpcRequests.values()]) {
+      this.failRpc(rpc, 'SHUTDOWN', false, false)
+    }
     this.authorization = undefined
     this.active = undefined
     this.outboxRecord = undefined
@@ -801,4 +1302,85 @@ function validOperationId(operationId: unknown): operationId is string {
 
 function validOperationIndex(operationIndex: unknown): operationIndex is number {
   return Number.isSafeInteger(operationIndex) && Number(operationIndex) >= 0
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isStringRecord(value: unknown): value is Record<string, string> {
+  return isPlainRecord(value) && Object.values(value).every((entry) => typeof entry === 'string')
+}
+
+function isValidWorkerRpcRequest(request: WorkerAuthenticatedRpcRequest): boolean {
+  if (
+    !request ||
+    !['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method) ||
+    typeof request.path !== 'string' ||
+    !request.path.startsWith('/v1/') ||
+    request.path.startsWith('//') ||
+    request.path.includes('\\') ||
+    request.path.includes('#') ||
+    utf8Bytes(request.path).byteLength > 2_048 ||
+    !Number.isSafeInteger(request.deadlineMs) ||
+    request.deadlineMs < 1_000 ||
+    request.deadlineMs > 120_000 ||
+    !Number.isSafeInteger(request.initialCreditBytes) ||
+    request.initialCreditBytes <= 0 ||
+    request.initialCreditBytes > MAX_RPC_CREDIT_BYTES ||
+    typeof request.stream !== 'boolean' ||
+    (request.headers !== undefined && !isStringRecord(request.headers)) ||
+    (request.method === 'GET' && Object.hasOwn(request, 'body')) ||
+    (request.method !== 'GET' &&
+      (typeof request.idempotencyKey !== 'string' ||
+        !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(request.idempotencyKey)))
+  ) {
+    return false
+  }
+  try {
+    const parsed = new URL(request.path, 'http://rpc.invalid')
+    return parsed.origin === 'http://rpc.invalid' && `${parsed.pathname}${parsed.search}` === request.path
+  } catch {
+    return false
+  }
+}
+
+function decodedBase64Length(value: string): number {
+  if (value.length === 0) {
+    return 0
+  }
+  if (value.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/u.test(value)) {
+    return -1
+  }
+  const padding = value.endsWith('==') ? 2 : value.endsWith('=') ? 1 : 0
+  return (value.length / 4) * 3 - padding
+}
+
+function parseCollaborationAuthorizationResult(
+  payload: Record<string, unknown>,
+  request: CollaborationAuthorizationTransportRequest,
+): CollaborationAuthorizationTransportResult | undefined {
+  if (
+    typeof payload.capability !== 'string' ||
+    payload.capability.length === 0 ||
+    payload.room !== request.noteUuid ||
+    !Number.isSafeInteger(payload.expiresIn) ||
+    Number(payload.expiresIn) <= 0 ||
+    !Number.isSafeInteger(payload.serverUpdatedAtTimestamp) ||
+    Number(payload.serverUpdatedAtTimestamp) <= 0 ||
+    payload.collaborationProtocolVersion !== 2 ||
+    payload.leaseRequestId !== request.leaseRequestId ||
+    payload.bootstrapChallenge !== request.bootstrapChallenge
+  ) {
+    return undefined
+  }
+  return {
+    capability: payload.capability,
+    room: request.noteUuid,
+    expiresIn: Number(payload.expiresIn),
+    serverUpdatedAtTimestamp: Number(payload.serverUpdatedAtTimestamp),
+    collaborationProtocolVersion: 2,
+    ...(request.leaseRequestId ? { leaseRequestId: request.leaseRequestId } : {}),
+    ...(request.bootstrapChallenge ? { bootstrapChallenge: request.bootstrapChallenge } : {}),
+  }
 }

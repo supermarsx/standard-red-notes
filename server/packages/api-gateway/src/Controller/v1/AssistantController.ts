@@ -1,4 +1,5 @@
 import { Request, Response } from 'express'
+import { createHash } from 'node:crypto'
 import { inject, optional } from 'inversify'
 import { BaseHttpController, controller, httpGet, httpPost } from 'inversify-express-utils'
 import * as IORedis from 'ioredis'
@@ -82,6 +83,8 @@ interface ResolvedUserLimits {
 const ASSISTANT_QUOTA_SETTLEMENT_MAX_ATTEMPTS = 2
 const ASSISTANT_SAFETY_REVIEW_MAX_OUTPUT_TOKENS = 8
 const ASSISTANT_DEFAULT_MAX_OUTPUT_TOKENS = 4_096
+const ASSISTANT_ATTEMPT_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000
+const ASSISTANT_ATTEMPT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u
 
 /**
  * Stateless LLM streaming proxy. Standard Notes notes are end-to-end encrypted,
@@ -1048,6 +1051,32 @@ export class AssistantController extends BaseHttpController {
       }
     }
 
+    // Reserve the browser/worker attempt across every API replica immediately
+    // before provider contact. HTTP compatibility fallback carries the same
+    // Idempotency-Key, while websocket reconnects never auto-replay after send.
+    const attempt = await this.reserveAssistantAttempt(request, userUuid)
+    if (attempt !== 'not-requested' && attempt !== 'reserved') {
+      await Promise.all([
+        this.releaseQuotaReservation(quotaReservation),
+        this.releaseTokenQuotaReservation(tokenQuotaReservation),
+      ])
+      if (attempt === 'invalid') {
+        response.status(400).json({ error: { tag: 'invalid-idempotency-key', message: 'Invalid assistant attempt.' } })
+      } else if (attempt === 'duplicate') {
+        response.status(409).json({
+          error: { tag: 'assistant-attempt-already-used', message: 'This assistant attempt was already processed.' },
+        })
+      } else {
+        response.status(503).json({
+          error: {
+            tag: 'assistant-attempt-store-unavailable',
+            message: 'Assistant request deduplication is temporarily unavailable.',
+          },
+        })
+      }
+      return
+    }
+
     response.setHeader('Content-Type', 'text/event-stream')
     response.setHeader('Cache-Control', 'no-cache, no-transform')
     response.setHeader('Connection', 'keep-alive')
@@ -1182,6 +1211,35 @@ export class AssistantController extends BaseHttpController {
           this.releaseTokenQuotaReservation(tokenQuotaReservation),
         ])
       }
+    }
+  }
+
+  private async reserveAssistantAttempt(
+    request: Request,
+    userUuid: string,
+  ): Promise<'not-requested' | 'reserved' | 'duplicate' | 'invalid' | 'unavailable'> {
+    const raw = request.headers['idempotency-key']
+    if (raw === undefined) {
+      return 'not-requested'
+    }
+    if (typeof raw !== 'string' || !ASSISTANT_ATTEMPT_ID_PATTERN.test(raw)) {
+      return 'invalid'
+    }
+    if (!this.redis) {
+      return 'unavailable'
+    }
+    const keyDigest = createHash('sha256').update(`${userUuid}\u0000${raw}`, 'utf8').digest('hex')
+    try {
+      const reserved = await this.redis.set(
+        `assistant:attempt:v1:${keyDigest}`,
+        'reserved',
+        'PX',
+        ASSISTANT_ATTEMPT_RETENTION_MS,
+        'NX',
+      )
+      return reserved === 'OK' ? 'reserved' : 'duplicate'
+    } catch {
+      return 'unavailable'
     }
   }
 

@@ -27,6 +27,8 @@ import {
   RateLimitRedis,
   RequiredCrossServiceTokenMiddleware,
   createAdminEmailDeliveryRouter,
+  CollaborationAuthorizationService,
+  LoopbackSyncApiRpcAdapter,
   DirectCallSyncCommandPort,
   parseOptionalPositiveInteger,
   parseWebSocketSyncEnabled,
@@ -36,6 +38,7 @@ import {
   TYPES as ApiGatewayTypes,
 } from '@standardnotes/api-gateway'
 import {
+  createLoggerSyncCommandMetrics,
   createRedisSyncState,
   type SyncGatewayOptions,
   type SyncRedisClient,
@@ -549,6 +552,11 @@ export class HomeServer implements HomeServerInterface {
 
       serverInstance.keepAliveTimeout = keepAliveTimeout
 
+      const gatewayLogger = {
+        info: (...args: unknown[]) => logger.info(args.map(String).join(' ')),
+        warn: (...args: unknown[]) => logger.warn(args.map(String).join(' ')),
+        error: (...args: unknown[]) => logger.error(args.map(String).join(' ')),
+      }
       const webSocketRuntime = new SyncWebSocketRuntime()
       let syncStateRedis: Redis | undefined
       let realtime: { stop(): Promise<void> } | undefined
@@ -557,7 +565,7 @@ export class HomeServer implements HomeServerInterface {
       if (connectionTokenSecret && redisHost) {
         try {
           let sync: SyncGatewayOptions | undefined
-          if (webSocketSyncEnabled && syncAllowedOrigins.length > 0) {
+          if (webSocketSyncEnabled) {
             syncStateRedis = new Redis({
               host: redisHost,
               port: env.get('REDIS_PORT', true) ? +env.get('REDIS_PORT', true) : 6379,
@@ -569,26 +577,33 @@ export class HomeServer implements HomeServerInterface {
               container.get(ApiGatewayTypes.ApiGateway_ServiceProxy),
               new DirectCallSyncCommandPort(serviceContainer),
               env.get('AUTH_JWT_SECRET', true) || '',
+              new CollaborationAuthorizationService(
+                container.get(ApiGatewayTypes.ApiGateway_ServiceProxy),
+                container.get(ApiGatewayTypes.ApiGateway_EndpointResolver),
+                container.get(ApiGatewayTypes.ApiGateway_WEB_SOCKET_CONNECTION_TOKEN_SECRET),
+                container.get(ApiGatewayTypes.ApiGateway_COLLABORATION_CAPABILITY_TTL),
+              ),
             )
             sync = {
               isEnabled: () => webSocketSyncEnabled,
               allowedOrigins: syncAllowedOrigins,
+              allowSameOrigin: syncAllowedOrigins.length === 0,
               authorization: syncAdapter,
               backend: syncAdapter,
+              collaborationAuthorization: syncAdapter,
+              apiRpc: new LoopbackSyncApiRpcAdapter({
+                origin: `http://127.0.0.1:${port}`,
+                operations: ['API_RPC', 'STREAM_ASSISTANT'],
+              }),
+              metrics: createLoggerSyncCommandMetrics(gatewayLogger),
               ...createRedisSyncState(syncStateRedis as unknown as SyncRedisClient, syncRedisOptions),
               requireSharedState: true,
             }
-          } else if (webSocketSyncEnabled) {
-            logger.warn('WebSocket sync capability is unavailable because no exact browser origin is configured.')
           }
 
           webSocketRuntime.attach({
             httpServer: serverInstance,
-            logger: {
-              info: (...args: unknown[]) => logger.info(args.map(String).join(' ')),
-              warn: (...args: unknown[]) => logger.warn(args.map(String).join(' ')),
-              error: (...args: unknown[]) => logger.error(args.map(String).join(' ')),
-            },
+            logger: gatewayLogger,
             config: {
               connectionTokenSecret,
               connectionTokenTtl: env.get('WEB_SOCKET_CONNECTION_TOKEN_TTL', true) || '60s',

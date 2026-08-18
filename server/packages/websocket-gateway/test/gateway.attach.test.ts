@@ -53,6 +53,7 @@ vi.mock('ioredis', () => ({ Redis: redis.FakeRedisClient }))
 
 import {
   attachWebSocketGateway,
+  createLoggerSyncCommandMetrics,
   defaultRoomJoinAuthorizer,
   MAX_WEBSOCKET_MESSAGE_BYTES,
   WebSocketIngressLimiter,
@@ -1109,7 +1110,7 @@ describe('authenticated /sockets/sync command plane', () => {
     return { status: capture.status(), body: capture.body() }
   }
 
-  it('advertises no capability unless every adapter, origin and kill switch is ready', async () => {
+  it('advertises no capability unless every adapter and kill switch is ready', async () => {
     await listen()
     attached = attachWebSocketGateway({ httpServer, config: baseConfig(), logger: makeLogger() })
     expect(attached.sync.capabilities()).toEqual({ capabilities: [] })
@@ -1124,6 +1125,49 @@ describe('authenticated /sockets/sync command plane', () => {
 
     const disabledTicket = await invokeSyncTicket(fakeRequest({}))
     expect(disabledTicket).toEqual({ status: 503, body: { error: { code: 'SYNC_DISABLED' } } })
+  })
+
+  it('advertises and admits exact same-origin sync when no explicit origin list is configured', async () => {
+    port = await listen()
+    attached = attachWebSocketGateway({
+      httpServer,
+      config: baseConfig(),
+      logger: makeLogger(),
+      sync: { ...syncOptions(), allowedOrigins: [], allowSameOrigin: true },
+    })
+    expect(attached.sync.capabilities()).toEqual({
+      capabilities: [{ id: 'ws-sync', version: 1, endpoint: '/sockets/sync' }],
+    })
+
+    const sameOrigin = new WebSocket(`ws://127.0.0.1:${port}/sockets/sync`, {
+      origin: `http://127.0.0.1:${port}`,
+    })
+    await opened(sameOrigin)
+    sameOrigin.close()
+
+    const normalizedDefaultPort = new WebSocket(`ws://127.0.0.1:${port}/sockets/sync`, {
+      origin: 'https://app.example.test',
+      headers: { host: 'app.example.test:443', 'x-forwarded-proto': 'https' },
+    })
+    await opened(normalizedDefaultPort)
+    normalizedDefaultPort.close()
+
+    const crossPort = new WebSocket(`ws://127.0.0.1:${port}/sockets/sync`, {
+      origin: 'https://app.example.test:444',
+      headers: { host: 'app.example.test:443', 'x-forwarded-proto': 'https' },
+    })
+    expect(await closedWith(crossPort)).toBe(1008)
+
+    const forwardedSchemeMismatch = new WebSocket(`ws://127.0.0.1:${port}/sockets/sync`, {
+      origin: 'http://app.example.test',
+      headers: { host: 'app.example.test:443', 'x-forwarded-proto': 'https' },
+    })
+    expect(await closedWith(forwardedSchemeMismatch)).toBe(1008)
+
+    const crossOrigin = new WebSocket(`ws://127.0.0.1:${port}/sockets/sync`, {
+      origin: 'https://evil.example.test',
+    })
+    expect(await closedWith(crossOrigin)).toBe(1008)
   })
 
   it('can require all production sync state to be fleet-shared', async () => {
@@ -1294,8 +1338,15 @@ describe('authenticated /sockets/sync command plane', () => {
     desktop.close()
   })
 
-  it('closes a sync frame above 512KiB before JSON parsing', async () => {
-    await attachSync()
+  it('registers logger-backed production metrics and closes a sync frame above 512KiB before JSON parsing', async () => {
+    port = await listen()
+    const logger = makeLogger()
+    attached = attachWebSocketGateway({
+      httpServer,
+      config: baseConfig(),
+      logger,
+      sync: { ...syncOptions(), metrics: createLoggerSyncCommandMetrics(logger) },
+    })
     const socket = new WebSocket(`ws://127.0.0.1:${port}/sockets/sync`, {
       origin: 'https://app.example.test',
     })
@@ -1303,5 +1354,9 @@ describe('authenticated /sockets/sync command plane', () => {
     const closed = closedWith(socket)
     socket.send('x'.repeat(512 * 1024 + 1))
     expect(await closed).toBe(1009)
+    expect(logger.info).toHaveBeenCalledWith(
+      '[ws-sync-metric]',
+      JSON.stringify({ event: 'protocol', code: 'FRAME_TOO_LARGE' }),
+    )
   })
 })

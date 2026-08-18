@@ -8,6 +8,13 @@ export const SYNC_PROTOCOL_VERSION = 1 as const
 export const SYNC_CHANNEL = 'sync' as const
 export const MAX_SYNC_FRAME_BYTES = 512 * 1024
 export const MAX_SYNC_BUFFERED_BYTES = 256 * 1024
+export const DEFAULT_RPC_DEADLINE_MS = 30_000
+export const MIN_RPC_DEADLINE_MS = 1_000
+export const MAX_RPC_DEADLINE_MS = 120_000
+export const DEFAULT_RPC_CREDIT_BYTES = 256 * 1024
+export const MAX_RPC_CREDIT_BYTES = 4 * 1024 * 1024
+
+export type SyncNegotiatedOperation = 'SYNC_ITEMS' | 'AUTHORIZE_COLLABORATION' | 'API_RPC' | 'STREAM_ASSISTANT'
 
 export type SyncTransportState =
   'HTTP_ONLY' | 'CONNECTING' | 'AUTHENTICATING' | 'READY' | 'DEGRADED' | 'HTTP_FALLBACK' | 'HALF_OPEN'
@@ -17,10 +24,50 @@ export type SyncCommandPayload = {
   body: AccountSyncTransportRequest
 }
 
+export type CollaborationAuthorizationTransportRequest = {
+  noteUuid: string
+  collaborationProtocolVersion: 2
+  leaseRequestId?: string
+  bootstrapChallenge?: string
+}
+
+export type CollaborationAuthorizationTransportResult = {
+  capability: string
+  room: string
+  expiresIn: number
+  serverUpdatedAtTimestamp: number
+  collaborationProtocolVersion: 2
+  leaseRequestId?: string
+  bootstrapChallenge?: string
+}
+
+export type AuthenticatedRpcMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
+
+export type AuthenticatedRpcRequest = {
+  method: AuthenticatedRpcMethod
+  /** Same-origin relative `/v1/` path; absolute targets are rejected. */
+  path: string
+  headers?: Record<string, string>
+  body?: unknown
+  idempotencyKey?: string
+  deadlineMs?: number
+  initialCreditBytes?: number
+  stream?: boolean
+}
+
+export type WorkerAuthenticatedRpcRequest = Omit<
+  AuthenticatedRpcRequest,
+  'deadlineMs' | 'initialCreditBytes' | 'stream'
+> & {
+  deadlineMs: number
+  initialCreditBytes: number
+  stream: boolean
+}
+
 export type SyncClientFrame = {
   version: typeof SYNC_PROTOCOL_VERSION
   channel: typeof SYNC_CHANNEL
-  type: 'AUTH' | 'COMMAND' | 'STATUS' | 'PING'
+  type: 'AUTH' | 'COMMAND' | 'STATUS' | 'PING' | 'COLLABORATION_AUTHORIZE' | 'RPC_REQUEST' | 'RPC_CANCEL' | 'RPC_CREDIT'
   requestId: string
   commandId: string
   sequence: number
@@ -32,7 +79,18 @@ export type SyncClientFrame = {
 export type SyncServerFrame = {
   version: typeof SYNC_PROTOCOL_VERSION
   channel: typeof SYNC_CHANNEL
-  type: 'AUTHENTICATED' | 'ACCEPTED' | 'COMMITTED' | 'STATUS' | 'ERROR' | 'PONG'
+  type:
+    | 'AUTHENTICATED'
+    | 'ACCEPTED'
+    | 'COMMITTED'
+    | 'STATUS'
+    | 'ERROR'
+    | 'PONG'
+    | 'COLLABORATION_AUTHORIZED'
+    | 'RPC_ACCEPTED'
+    | 'RPC_RESPONSE'
+    | 'RPC_CHUNK'
+    | 'RPC_END'
   requestId: string
   commandId: string
   sequence: number
@@ -57,6 +115,20 @@ export type MainToSyncWorkerMessage =
       context?: AccountSyncTransportContext
     }
   | { type: 'RECOVER'; clientRequestId: string; sessionScope: string }
+  | {
+      type: 'AUTHORIZE_COLLABORATION'
+      clientRequestId: string
+      sessionScope: string
+      request: CollaborationAuthorizationTransportRequest
+    }
+  | {
+      type: 'OPEN_RPC'
+      clientRequestId: string
+      sessionScope: string
+      request: WorkerAuthenticatedRpcRequest
+    }
+  | { type: 'CANCEL_RPC'; clientRequestId: string }
+  | { type: 'RPC_CREDIT'; clientRequestId: string; creditBytes: number }
   | { type: 'CONNECT'; clientRequestId: string; sessionScope: string; authorization: SyncTicket }
   | { type: 'TICKET_UNAVAILABLE'; clientRequestId: string; reason: SyncFallbackReason }
   | { type: 'CHECKPOINT_DURABLE'; requestId: string; sessionScope: string; commandId: string }
@@ -80,6 +152,7 @@ export type SyncFallbackReason =
   | 'outbox-unavailable'
   | 'multi-tab-not-owner'
   | 'worker-error'
+  | 'operation-unavailable'
 
 export type SyncWorkerToMainMessage =
   | { type: 'NEED_TICKET'; clientRequestId: string; reconnect: boolean }
@@ -99,6 +172,39 @@ export type SyncWorkerToMainMessage =
   | { type: 'RESULT'; clientRequestId: string; commandId: string; result: unknown }
   | { type: 'RECOVERY_EMPTY'; clientRequestId: string }
   | { type: 'RECOVERY_REQUIRED'; clientRequestId: string }
+  | {
+      type: 'COLLABORATION_RESULT'
+      clientRequestId: string
+      result?: CollaborationAuthorizationTransportResult
+    }
+  | { type: 'COLLABORATION_DENIED'; clientRequestId: string }
+  | { type: 'COLLABORATION_FALLBACK'; clientRequestId: string; reason: SyncFallbackReason }
+  | { type: 'RPC_ACCEPTED'; clientRequestId: string }
+  | {
+      type: 'RPC_RESPONSE'
+      clientRequestId: string
+      status: number
+      headers: Record<string, string>
+      body?: unknown
+      stream: boolean
+    }
+  | { type: 'RPC_CHUNK'; clientRequestId: string; bytes: string; byteLength: number }
+  | { type: 'RPC_END'; clientRequestId: string }
+  | {
+      type: 'RPC_ERROR'
+      clientRequestId: string
+      code: string
+      retryable: boolean
+      /** HTTP fallback is allowed only before a request is written to the socket. */
+      safeToFallback: boolean
+    }
+  | {
+      type: 'NEGOTIATED'
+      sessionScope: string
+      protocolVersion: typeof SYNC_PROTOCOL_VERSION
+      endpoint: string
+      operations: SyncNegotiatedOperation[]
+    }
   | { type: 'STATE'; state: SyncTransportState; reason?: SyncFallbackReason }
   | { type: 'CHECKPOINT_CLEARED'; requestId: string; sessionScope: string; commandId: string }
   | { type: 'CHECKPOINT_FAILED'; requestId: string; sessionScope: string; commandId: string }

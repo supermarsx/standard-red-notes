@@ -10,12 +10,22 @@ import type {
 import type { HttpResponse, RawSyncResponse } from '@standardnotes/snjs'
 import * as SyncTransportWorkerModule from './syncTransport.worker'
 import {
+  CollaborationAuthorizationTransportRequest,
+  CollaborationAuthorizationTransportResult,
+  AuthenticatedRpcRequest as AuthenticatedRpcRequestInput,
+  DEFAULT_RPC_CREDIT_BYTES,
+  DEFAULT_RPC_DEADLINE_MS,
   MainToSyncWorkerMessage,
+  MAX_RPC_CREDIT_BYTES,
+  MAX_RPC_DEADLINE_MS,
+  MIN_RPC_DEADLINE_MS,
   normalizeSyncRequestForWire,
   SyncFallbackReason,
   SyncTransportState,
+  SyncNegotiatedOperation,
   SyncWorkerToMainMessage,
   utf8Bytes,
+  WorkerAuthenticatedRpcRequest,
 } from './syncTransportProtocol'
 
 type SyncWorkerLike = {
@@ -113,6 +123,54 @@ type Barrier = {
   timeout: ReturnType<typeof setTimeout>
 }
 
+type PendingCollaborationAuthorization = {
+  sessionScope: string
+  resolve: (result: CollaborationAuthorizationTransportResult | null | undefined) => void
+  reject: (error: unknown) => void
+}
+
+export type AuthenticatedRpcResponse = {
+  status: number
+  headers: Record<string, string>
+  body?: unknown
+  stream?: ReadableStream<Uint8Array>
+  transport: 'websocket'
+}
+
+export type AuthenticatedRpcStreamRequest = AuthenticatedRpcRequestInput & {
+  signal?: AbortSignal
+}
+
+export class AuthenticatedRpcError extends Error {
+  override readonly name = 'AuthenticatedRpcError'
+
+  constructor(
+    readonly code: string,
+    readonly retryable: boolean,
+    /** True only when no RPC request bytes crossed the authenticated socket. */
+    readonly safeToFallback: boolean,
+  ) {
+    super(`Authenticated websocket RPC failed: ${code}`)
+  }
+}
+
+type PendingRpc = {
+  sessionScope: string
+  accepted: boolean
+  responseResolved: boolean
+  resolve: (response: AuthenticatedRpcResponse) => void
+  reject: (error: unknown) => void
+  response?: AuthenticatedRpcResponse
+  streamController?: ReadableStreamDefaultController<Uint8Array>
+  creditToReturn: number
+  abortCleanup?: () => void
+}
+
+type RpcWorkerMessage = Extract<
+  SyncWorkerToMainMessage,
+  { type: 'RPC_ACCEPTED' | 'RPC_RESPONSE' | 'RPC_CHUNK' | 'RPC_END' | 'RPC_ERROR' }
+>
+
 function defaultHttpOnly(): boolean {
   const injected = (globalThis as { _sync_transport?: unknown })._sync_transport
   if (injected === 'http-only') {
@@ -141,6 +199,8 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
   private worker?: SyncWorkerLike
   private workerSessionScope?: string
   private readonly pending = new Map<string, PendingExecution>()
+  private readonly pendingCollaboration = new Map<string, PendingCollaborationAuthorization>()
+  private readonly pendingRpcs = new Map<string, PendingRpc>()
   private readonly checkpointBarriers = new Map<string, Barrier>()
   private readonly revocationBarriers = new Map<string, Barrier>()
   private readonly revokedSessionScopes = new Set<string>()
@@ -149,11 +209,30 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
   private requestCounter = 0
   private deinitialized = false
   private executionTail: Promise<void> = Promise.resolve()
+  private negotiated?: {
+    sessionScope: string
+    protocolVersion: 1
+    endpoint: string
+    operations: ReadonlySet<SyncNegotiatedOperation>
+  }
+  private fallbackReason?: SyncFallbackReason
 
   constructor(private readonly options: WebSocketSyncTransportOptions) {}
 
   get transportState(): SyncTransportState {
     return this.state
+  }
+
+  get transportStatus(): {
+    state: SyncTransportState
+    fallbackReason?: SyncFallbackReason
+    operations: readonly SyncNegotiatedOperation[]
+  } {
+    return {
+      state: this.state,
+      ...(this.fallbackReason ? { fallbackReason: this.fallbackReason } : {}),
+      operations: this.negotiated ? [...this.negotiated.operations] : [],
+    }
   }
 
   recoverPending(
@@ -168,6 +247,63 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     context?: AccountSyncTransportContext,
   ): Promise<AccountSyncTransportResult<TransportResponse>> {
     return this.enqueue(() => this.executeOrdered(request, httpFallback, context))
+  }
+
+  authorizeCollaborationRoom(
+    noteUuid: string,
+    leaseRequestId?: string,
+    bootstrapChallenge?: string,
+  ): Promise<CollaborationAuthorizationTransportResult | null | undefined> {
+    return this.enqueue(() =>
+      this.authorizeCollaborationRoomOrdered({
+        noteUuid,
+        collaborationProtocolVersion: 2,
+        ...(leaseRequestId ? { leaseRequestId } : {}),
+        ...(bootstrapChallenge ? { bootstrapChallenge } : {}),
+      }),
+    )
+  }
+
+  /**
+   * Opens a multiplexed authenticated RPC on the worker-owned sync socket.
+   * Callers may use HTTP only when a rejected AuthenticatedRpcError explicitly
+   * has `safeToFallback === true`; requests are never replayed after being sent.
+   */
+  async openAuthenticatedRpcStream(request: AuthenticatedRpcStreamRequest): Promise<AuthenticatedRpcResponse> {
+    const normalized = normalizeAuthenticatedRpcRequest(request)
+    if (this.deinitialized || !this.environmentSupported()) {
+      throw new AuthenticatedRpcError('SOCKET_UNAVAILABLE', true, true)
+    }
+    const sessionScope = await this.currentSessionScope()
+    if (!sessionScope || this.revokedSessionScopes.has(sessionScope)) {
+      throw new AuthenticatedRpcError('SESSION_UNAVAILABLE', false, true)
+    }
+    const worker = await this.workerForSession(sessionScope)
+    if (!worker) {
+      throw new AuthenticatedRpcError('WORKER_UNAVAILABLE', true, true)
+    }
+    const clientRequestId = this.nextRequestId('rpc')
+    return new Promise<AuthenticatedRpcResponse>((resolve, reject) => {
+      const pending: PendingRpc = {
+        sessionScope,
+        accepted: false,
+        responseResolved: false,
+        resolve,
+        reject,
+        creditToReturn: 0,
+      }
+      if (request.signal?.aborted) {
+        reject(new AuthenticatedRpcError('CANCELLED', false, true))
+        return
+      }
+      if (request.signal) {
+        const abort = () => worker.postMessage({ type: 'CANCEL_RPC', clientRequestId })
+        request.signal.addEventListener('abort', abort, { once: true })
+        pending.abortCleanup = () => request.signal?.removeEventListener('abort', abort)
+      }
+      this.pendingRpcs.set(clientRequestId, pending)
+      worker.postMessage({ type: 'OPEN_RPC', clientRequestId, sessionScope, request: normalized })
+    })
   }
 
   async notifySessionRevoked(): Promise<void> {
@@ -190,6 +326,18 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
         this.pending.delete(requestId)
       }
     }
+    for (const [requestId, pending] of this.pendingCollaboration) {
+      if (pending.sessionScope === sessionScope) {
+        pending.reject(error)
+        this.pendingCollaboration.delete(requestId)
+      }
+    }
+    for (const [requestId, pending] of this.pendingRpcs) {
+      if (pending.sessionScope === sessionScope) {
+        this.rejectRpc(requestId, pending, new AuthenticatedRpcError('SESSION_REVOKED', false, false))
+      }
+    }
+    this.negotiated = undefined
 
     if (!this.environmentSupported()) {
       this.terminateWorker()
@@ -231,6 +379,14 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
       pending.reject(error)
     }
     this.pending.clear()
+    for (const pending of this.pendingCollaboration.values()) {
+      pending.reject(error)
+    }
+    this.pendingCollaboration.clear()
+    for (const [requestId, pending] of this.pendingRpcs) {
+      this.rejectRpc(requestId, pending, new AuthenticatedRpcError('SHUTDOWN', false, false))
+    }
+    this.negotiated = undefined
     this.rejectAllBarriers(error)
     this.state = 'HTTP_ONLY'
   }
@@ -322,6 +478,27 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     })
   }
 
+  private async authorizeCollaborationRoomOrdered(
+    request: CollaborationAuthorizationTransportRequest,
+  ): Promise<CollaborationAuthorizationTransportResult | null | undefined> {
+    if (this.deinitialized || !this.environmentSupported()) {
+      return undefined
+    }
+    const sessionScope = await this.currentSessionScope()
+    if (!sessionScope || this.revokedSessionScopes.has(sessionScope)) {
+      return undefined
+    }
+    const worker = await this.workerForSession(sessionScope)
+    if (!worker) {
+      return undefined
+    }
+    const clientRequestId = this.nextRequestId('collaboration')
+    return new Promise<CollaborationAuthorizationTransportResult | null | undefined>((resolve, reject) => {
+      this.pendingCollaboration.set(clientRequestId, { sessionScope, resolve, reject })
+      worker.postMessage({ type: 'AUTHORIZE_COLLABORATION', clientRequestId, sessionScope, request })
+    })
+  }
+
   private environmentSupported(): boolean {
     const environment = this.options.environment ?? {
       hasWorker: typeof Worker !== 'undefined',
@@ -386,12 +563,27 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     const worker = this.worker
     this.worker = undefined
     this.workerSessionScope = undefined
+    this.negotiated = undefined
     worker?.terminate()
   }
 
   private async onWorkerMessage(message: SyncWorkerToMainMessage): Promise<void> {
     if (message.type === 'STATE') {
       this.state = message.state
+      this.fallbackReason = message.reason
+      if (message.state === 'DEGRADED' || message.state === 'HTTP_ONLY') {
+        this.negotiated = undefined
+      }
+      return
+    }
+    if (message.type === 'NEGOTIATED') {
+      this.negotiated = {
+        sessionScope: message.sessionScope,
+        protocolVersion: message.protocolVersion,
+        endpoint: message.endpoint,
+        operations: new Set(message.operations),
+      }
+      this.fallbackReason = undefined
       return
     }
     if (message.type === 'CHECKPOINT_CLEARED' || message.type === 'CHECKPOINT_FAILED') {
@@ -421,14 +613,53 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
       return
     }
     const pending = 'clientRequestId' in message ? this.pending.get(message.clientRequestId) : undefined
+    const collaborationPending =
+      'clientRequestId' in message ? this.pendingCollaboration.get(message.clientRequestId) : undefined
+    const rpcPending = 'clientRequestId' in message ? this.pendingRpcs.get(message.clientRequestId) : undefined
+
+    if (message.type === 'NEED_TICKET') {
+      const sessionScope = pending?.sessionScope ?? collaborationPending?.sessionScope ?? rpcPending?.sessionScope
+      if (sessionScope) {
+        await this.supplyTicket(message.clientRequestId, sessionScope)
+      }
+      return
+    }
+    if (
+      message.type === 'RPC_ACCEPTED' ||
+      message.type === 'RPC_RESPONSE' ||
+      message.type === 'RPC_CHUNK' ||
+      message.type === 'RPC_END' ||
+      message.type === 'RPC_ERROR'
+    ) {
+      if (rpcPending) {
+        this.handleRpcWorkerMessage(message, rpcPending)
+      }
+      return
+    }
+    if (
+      message.type === 'COLLABORATION_RESULT' ||
+      message.type === 'COLLABORATION_DENIED' ||
+      message.type === 'COLLABORATION_FALLBACK'
+    ) {
+      if (!collaborationPending) {
+        return
+      }
+      this.pendingCollaboration.delete(message.clientRequestId)
+      if (message.type === 'COLLABORATION_FALLBACK') {
+        this.fallbackReason = message.reason
+        collaborationPending.resolve(undefined)
+      } else if (message.type === 'COLLABORATION_DENIED') {
+        collaborationPending.resolve(null)
+      } else {
+        collaborationPending.resolve(message.result)
+      }
+      return
+    }
     if (!pending) {
       return
     }
 
     switch (message.type) {
-      case 'NEED_TICKET':
-        await this.supplyTicket(message.clientRequestId, pending.sessionScope)
-        break
       case 'COMMAND_PERSISTED':
         pending.persisted = { body: message.body, command: message.command }
         break
@@ -474,9 +705,109 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     }
   }
 
+  private handleRpcWorkerMessage(message: RpcWorkerMessage, pending: PendingRpc): void {
+    switch (message.type) {
+      case 'RPC_ACCEPTED':
+        pending.accepted = true
+        return
+      case 'RPC_RESPONSE': {
+        const response: AuthenticatedRpcResponse = {
+          status: message.status,
+          headers: message.headers,
+          transport: 'websocket',
+          ...(!message.stream && Object.hasOwn(message, 'body') ? { body: message.body } : {}),
+        }
+        if (message.stream) {
+          const clientRequestId = message.clientRequestId
+          response.stream = new ReadableStream<Uint8Array>(
+            {
+              start: (controller) => {
+                pending.streamController = controller
+              },
+              pull: () => {
+                const creditBytes = pending.creditToReturn
+                if (creditBytes > 0) {
+                  pending.creditToReturn = 0
+                  this.worker?.postMessage({ type: 'RPC_CREDIT', clientRequestId, creditBytes })
+                }
+              },
+              cancel: () => {
+                this.worker?.postMessage({ type: 'CANCEL_RPC', clientRequestId })
+              },
+            },
+            { highWaterMark: 1, size: () => 1 },
+          )
+          pending.responseResolved = true
+          pending.resolve(response)
+        } else {
+          pending.response = response
+        }
+        return
+      }
+      case 'RPC_CHUNK':
+        if (!pending.streamController) {
+          this.rejectRpc(message.clientRequestId, pending, new AuthenticatedRpcError('INVALID_RESPONSE', false, false))
+          this.worker?.postMessage({ type: 'CANCEL_RPC', clientRequestId: message.clientRequestId })
+          return
+        }
+        try {
+          pending.streamController.enqueue(decodeRpcBase64(message.bytes, message.byteLength))
+          pending.creditToReturn = Math.min(MAX_RPC_CREDIT_BYTES, pending.creditToReturn + message.byteLength)
+        } catch {
+          this.rejectRpc(message.clientRequestId, pending, new AuthenticatedRpcError('INVALID_RESPONSE', false, false))
+          this.worker?.postMessage({ type: 'CANCEL_RPC', clientRequestId: message.clientRequestId })
+        }
+        return
+      case 'RPC_END':
+        if (pending.streamController) {
+          pending.streamController.close()
+        } else if (pending.response) {
+          pending.responseResolved = true
+          pending.resolve(pending.response)
+        } else {
+          this.rejectRpc(message.clientRequestId, pending, new AuthenticatedRpcError('INVALID_RESPONSE', false, false))
+          return
+        }
+        this.cleanupRpc(message.clientRequestId, pending)
+        return
+      case 'RPC_ERROR': {
+        const error = new AuthenticatedRpcError(message.code, message.retryable, message.safeToFallback)
+        this.rejectRpc(message.clientRequestId, pending, error)
+        return
+      }
+    }
+  }
+
+  private rejectRpc(clientRequestId: string, pending: PendingRpc, error: AuthenticatedRpcError): void {
+    if (pending.streamController) {
+      try {
+        pending.streamController.error(error)
+      } catch {
+        // The stream may already be cancelled or closed.
+      }
+    }
+    if (!pending.responseResolved) {
+      pending.reject(error)
+    }
+    this.cleanupRpc(clientRequestId, pending)
+  }
+
+  private cleanupRpc(clientRequestId: string, pending: PendingRpc): void {
+    if (this.pendingRpcs.get(clientRequestId) === pending) {
+      this.pendingRpcs.delete(clientRequestId)
+    }
+    pending.abortCleanup?.()
+  }
+
   private async supplyTicket(clientRequestId: string, sessionScope: string): Promise<void> {
     const worker = this.worker
-    if (!worker || !this.pending.has(clientRequestId) || this.workerSessionScope !== sessionScope) {
+    if (
+      !worker ||
+      (!this.pending.has(clientRequestId) &&
+        !this.pendingCollaboration.has(clientRequestId) &&
+        !this.pendingRpcs.has(clientRequestId)) ||
+      this.workerSessionScope !== sessionScope
+    ) {
       return
     }
     const unavailable = (reason: SyncFallbackReason) => {
@@ -516,8 +847,15 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
       const currentScope = await this.currentSessionScope()
       if (currentScope !== sessionScope || this.revokedSessionScopes.has(sessionScope)) {
         const pending = this.pending.get(clientRequestId)
+        const collaborationPending = this.pendingCollaboration.get(clientRequestId)
+        const rpcPending = this.pendingRpcs.get(clientRequestId)
         this.pending.delete(clientRequestId)
+        this.pendingCollaboration.delete(clientRequestId)
         pending?.reject(new Error('Authenticated session changed while acquiring a sync ticket.'))
+        collaborationPending?.reject(new Error('Authenticated session changed while authorizing collaboration.'))
+        if (rpcPending) {
+          this.rejectRpc(clientRequestId, rpcPending, new AuthenticatedRpcError('SESSION_CHANGED', false, true))
+        }
         await this.quarantineWorkerScope(sessionScope)
         return
       }
@@ -547,7 +885,6 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
       })
     } catch {
       unavailable('ticket-unavailable')
-    }
   }
 
   private async resolveHttpFallback(
@@ -597,6 +934,15 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
   private async onWorkerError(): Promise<void> {
     this.terminateWorker()
     this.state = 'DEGRADED'
+    this.fallbackReason = 'worker-error'
+    this.negotiated = undefined
+    for (const pending of this.pendingCollaboration.values()) {
+      pending.resolve(undefined)
+    }
+    this.pendingCollaboration.clear()
+    for (const [requestId, pending] of this.pendingRpcs) {
+      this.rejectRpc(requestId, pending, new AuthenticatedRpcError('WORKER_ERROR', true, false))
+    }
     const entries = [...this.pending.entries()]
     this.pending.clear()
     for (const [, pending] of entries) {
@@ -632,4 +978,105 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
   private nextRequestId(prefix: string): string {
     return `${prefix}-${Date.now().toString(36)}-${++this.requestCounter}`
   }
+}
+
+const RPC_REQUEST_HEADER_NAMES = new Set([
+  'accept',
+  'content-type',
+  'if-match',
+  'if-none-match',
+  'x-shared-vault-owner-context',
+])
+
+function normalizeAuthenticatedRpcRequest(request: AuthenticatedRpcStreamRequest): WorkerAuthenticatedRpcRequest {
+  if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method)) {
+    throw new AuthenticatedRpcError('INVALID_METHOD', false, true)
+  }
+  if (
+    typeof request.path !== 'string' ||
+    !request.path.startsWith('/v1/') ||
+    request.path.startsWith('//') ||
+    request.path.includes('\\') ||
+    request.path.includes('#') ||
+    utf8Bytes(request.path).byteLength > 2_048
+  ) {
+    throw new AuthenticatedRpcError('INVALID_PATH', false, true)
+  }
+  try {
+    const parsed = new URL(request.path, 'http://rpc.invalid')
+    if (parsed.origin !== 'http://rpc.invalid' || `${parsed.pathname}${parsed.search}` !== request.path) {
+      throw new Error('non-canonical path')
+    }
+  } catch {
+    throw new AuthenticatedRpcError('INVALID_PATH', false, true)
+  }
+  if (request.method === 'GET' && Object.hasOwn(request, 'body')) {
+    throw new AuthenticatedRpcError('GET_BODY_FORBIDDEN', false, true)
+  }
+  if (
+    request.method !== 'GET' &&
+    (typeof request.idempotencyKey !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(request.idempotencyKey))
+  ) {
+    throw new AuthenticatedRpcError('IDEMPOTENCY_KEY_REQUIRED', false, true)
+  }
+  const deadlineMs = request.deadlineMs ?? DEFAULT_RPC_DEADLINE_MS
+  const initialCreditBytes = request.initialCreditBytes ?? DEFAULT_RPC_CREDIT_BYTES
+  if (
+    !Number.isSafeInteger(deadlineMs) ||
+    deadlineMs < MIN_RPC_DEADLINE_MS ||
+    deadlineMs > MAX_RPC_DEADLINE_MS ||
+    !Number.isSafeInteger(initialCreditBytes) ||
+    initialCreditBytes <= 0 ||
+    initialCreditBytes > MAX_RPC_CREDIT_BYTES
+  ) {
+    throw new AuthenticatedRpcError('INVALID_LIMITS', false, true)
+  }
+  const headers: Record<string, string> = {}
+  for (const [rawName, value] of Object.entries(request.headers ?? {})) {
+    const name = rawName.toLowerCase()
+    if (
+      rawName !== name ||
+      !RPC_REQUEST_HEADER_NAMES.has(name) ||
+      typeof value !== 'string' ||
+      value.length > 1_024 ||
+      /[\r\n]/u.test(value)
+    ) {
+      throw new AuthenticatedRpcError('INVALID_HEADERS', false, true)
+    }
+    headers[name] = value
+  }
+
+  let body: unknown
+  if (Object.hasOwn(request, 'body') && request.body !== undefined) {
+    try {
+      body = JSON.parse(JSON.stringify(request.body))
+    } catch {
+      throw new AuthenticatedRpcError('INVALID_BODY', false, true)
+    }
+  }
+  return {
+    method: request.method,
+    path: request.path,
+    deadlineMs,
+    initialCreditBytes,
+    stream: request.stream ?? false,
+    ...(Object.keys(headers).length > 0 ? { headers } : {}),
+    ...(body !== undefined ? { body } : {}),
+    ...(request.idempotencyKey ? { idempotencyKey: request.idempotencyKey } : {}),
+  }
+}
+
+function decodeRpcBase64(value: string, expectedLength: number): Uint8Array {
+  if (value.length % 4 !== 0 || (value.length > 0 && !/^[A-Za-z0-9+/]+={0,2}$/u.test(value))) {
+    throw new Error('Invalid RPC base64 chunk.')
+  }
+  const decoded = globalThis.atob(value)
+  if (decoded.length !== expectedLength) {
+    throw new Error('RPC chunk length mismatch.')
+  }
+  const bytes = new Uint8Array(decoded.length)
+  for (let index = 0; index < decoded.length; index++) {
+    bytes[index] = decoded.charCodeAt(index)
+  }
+  return bytes
 }
