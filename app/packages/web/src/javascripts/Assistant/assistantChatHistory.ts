@@ -166,7 +166,7 @@ const MAX_STORED_TRANSCRIPT_BYTES = 768 * 1_024
 const MAX_UNTRUSTED_INPUT_MESSAGES = MAX_MESSAGES * 2
 const MAX_UNTRUSTED_INPUT_ACTIVITIES = MAX_ACTIVITIES_PER_MESSAGE + MAX_NOTE_CHANGES_PER_TRANSCRIPT * 2
 
-const NOTE_CHANGE_TOOL_NAMES = new Set(['notes.update', 'notes.updateSuper'])
+const NOTE_CHANGE_TOOL_NAMES = new Set(['notes.update', 'notes.updateSuper', 'notes.patchBlocks'])
 const NOTE_TYPES = new Set([
   'authentication',
   'code',

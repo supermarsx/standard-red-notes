@@ -45,6 +45,7 @@ import NavigationSidebar from './Plugins/NavigationSidebarPlugin/NavigationSideb
 import { WebApplication } from '@/Application/WebApplication'
 import { CollaborationEditabilityPlugin } from './Collaboration/CollaborationEditabilityPlugin'
 import { isInteractiveChecklistEditorOwner } from './Checklist/ChecklistOwnerMode'
+import { AssistantStructuralBridgePlugin } from './Plugins/AssistantStructuralBridgePlugin'
 
 type BlocksEditorProps = {
   /** Exact note lifetime owned by this composer; required for aggregate todo mutations. */
@@ -307,6 +308,7 @@ export const BlocksEditor: FunctionComponent<BlocksEditorProps> = ({
 
   return (
     <>
+      {noteUuid && <AssistantStructuralBridgePlugin noteUuid={noteUuid} />}
       {!isMobile && <ToolbarPlugin noteUuid={noteUuid} />}
       {/*
         Standard Red Notes: dock the on-screen navigation sidebar (Word-style

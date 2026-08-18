@@ -33,6 +33,7 @@ export function classifyAssistantToolRisk(request: AssistantToolConfirmation): A
       'notes.update',
       'notes.createSuper',
       'notes.updateSuper',
+      'notes.patchBlocks',
       'tags.create',
       'tags.assign',
       'tags.unassign',

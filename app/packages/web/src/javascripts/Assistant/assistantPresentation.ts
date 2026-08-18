@@ -124,6 +124,8 @@ export function describeAssistantTool(name: string, rawArgs: unknown): Assistant
     case 'notes.update':
     case 'notes.updateSuper':
       return { label: 'Updating a note', detail: title ? `Updating ${title}` : 'Applying the requested note changes' }
+    case 'notes.patchBlocks':
+      return { label: 'Patching note blocks', detail: 'Applying a bounded structural edit to the selected note.' }
     case 'notes.delete':
       return { label: 'Deleting a note', detail: 'This permanently removes the selected note.' }
     case 'tags.create':
@@ -155,6 +157,7 @@ export function describeAssistantTool(name: string, rawArgs: unknown): Assistant
       }
     case 'notes.read':
     case 'notes.readSuper':
+    case 'notes.readBlocks':
       return { label: 'Reading a note', detail: 'Reviewing the selected note.' }
     case 'notes.list':
       return { label: 'Reviewing your notes' }

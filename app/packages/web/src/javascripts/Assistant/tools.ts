@@ -51,6 +51,14 @@ import {
 import { extractPlaintextFromNoteText } from '@/Utils/NoteStats'
 import { assertSuperNoteMarkdownRewriteSafe } from './superNoteMarkdownRewriteGuard'
 import { sanitizeAssistantNoteChange } from './assistantChatHistory'
+import {
+  applyAssistantSuperPatch,
+  assistantSuperRevision,
+  AssistantBlockLocator,
+  AssistantStructuralPatchOperation,
+  readAssistantSuperStructure,
+} from './assistantSuperNotePatch'
+import { AssistantLiveSuperReadOptions, getAssistantSuperNoteLiveBridge } from './assistantSuperNoteLiveBridge'
 
 export type TodoStatus = 'pending' | 'in_progress' | 'completed'
 
@@ -202,6 +210,41 @@ function noteSummary(note: SNNote) {
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isAssistantBlockLocator(value: unknown): value is AssistantBlockLocator {
+  if (!isRecord(value)) {
+    return false
+  }
+  if (typeof value.nodeKey === 'string') {
+    return value.nodeKey.length > 0 && value.nodeKey.length <= 200
+  }
+  if (typeof value.nodeUuid === 'string') {
+    return value.nodeUuid.length > 0 && value.nodeUuid.length <= 200
+  }
+  if (typeof value.todoId === 'string') {
+    return value.todoId.length > 0 && value.todoId.length <= 96
+  }
+  if (Array.isArray(value.path)) {
+    return (
+      value.path.length > 0 &&
+      value.path.length <= 100 &&
+      value.path.every((segment) => Number.isSafeInteger(segment) && Number(segment) >= 0)
+    )
+  }
+  if (isRecord(value.heading) && typeof value.heading.text === 'string') {
+    return (
+      value.heading.text.trim().length > 0 &&
+      value.heading.text.length <= 1_024 &&
+      (value.heading.occurrence === undefined ||
+        (Number.isSafeInteger(value.heading.occurrence) && Number(value.heading.occurrence) >= 1))
+    )
+  }
+  return false
+}
+
 export class AssistantTools implements ToolSession {
   constructor(
     private readonly application: WebApplication,
@@ -259,7 +302,7 @@ export class AssistantTools implements ToolSession {
     }
 
     if (definition.mutating) {
-      this.assertMutationAuthorized(args)
+      this.assertMutationAuthorized(args, name === 'notes.patchBlocks')
     }
 
     const confirmationRequest = this.buildConfirmationRequest(name, args, callId)
@@ -290,7 +333,7 @@ export class AssistantTools implements ToolSession {
       // Approval can stay open while session/vault permissions change. Re-check
       // every hard write boundary immediately before dispatch; confirmation
       // policy (including bypass) is never an authorization decision.
-      this.assertMutationAuthorized(args)
+      this.assertMutationAuthorized(args, name === 'notes.patchBlocks')
     }
     const result = await this.dispatch(name, args, callId)
     if (definition.mutating) {
@@ -320,6 +363,10 @@ export class AssistantTools implements ToolSession {
         return this.notesUpdateSuper(args, callId)
       case 'notes.readSuper':
         return this.notesReadSuper(args)
+      case 'notes.readBlocks':
+        return this.notesReadBlocks(args)
+      case 'notes.patchBlocks':
+        return this.notesPatchBlocks(args, callId)
       case 'notes.delete':
         return this.notesDelete(args)
       case 'reminders.set':
@@ -385,7 +432,7 @@ export class AssistantTools implements ToolSession {
    * Confirmation policy is never an authorization policy. Enforce account and
    * shared-vault write restrictions before any approval (or bypass) decision.
    */
-  private assertMutationAuthorized(args: Record<string, unknown>): void {
+  private assertMutationAuthorized(args: Record<string, unknown>, useToolRevision = false): void {
     if (this.application.sessions?.isCurrentSessionReadOnly?.()) {
       throw new Error('The current session is read-only, so the assistant cannot make changes.')
     }
@@ -398,21 +445,21 @@ export class AssistantTools implements ToolSession {
       }
       return
     }
-    this.assertNoteMutationAuthorized(note)
+    this.assertNoteMutationAuthorized(note, !useToolRevision)
     const tag = this.findTrustedTargetTag(args)
     if (tag) {
       this.assertTagMutationAuthorized(tag)
     }
   }
 
-  private assertNoteMutationAuthorized(note: SNNote): void {
+  private assertNoteMutationAuthorized(note: SNNote, enforceExpectedSnapshot = true): void {
     if (this.application.sessions?.isCurrentSessionReadOnly?.()) {
       throw new Error('The current session is read-only, so the assistant cannot make changes.')
     }
     if (note.locked || isLitePayload(note.payload) || !this.isReadableNote(note)) {
       throw new Error('This note is locked, incomplete, or no longer authorized for assistant changes.')
     }
-    const expected = this.context.expectedNoteSnapshots?.get(note.uuid)
+    const expected = enforceExpectedSnapshot ? this.context.expectedNoteSnapshots?.get(note.uuid) : undefined
     if (expected && !assistantNoteSnapshotMatches(note, expected)) {
       throw new Error('This note changed after its content was sent to the assistant. Review it and try again.')
     }
@@ -951,6 +998,12 @@ export class AssistantTools implements ToolSession {
     }
     if (hasBodyInput && note.noteType === NoteType.Super) {
       assertSuperNoteMarkdownRewriteSafe(note.text)
+      if (args.fullReplacement !== true) {
+        throw new Error(
+          'A Super note body is structural data. Use notes.readBlocks + notes.patchBlocks for a targeted edit. ' +
+            'Only an explicit full-document replacement may use notes.updateSuper with fullReplacement:true.',
+        )
+      }
     }
     const beforeMarkdown = await this.superNoteMarkdown(note)
     const markdown =
@@ -1034,6 +1087,136 @@ export class AssistantTools implements ToolSession {
       throw new Error(
         `Could not read the Super note as markdown: ${error instanceof Error ? error.message : String(error)}`,
       )
+    }
+  }
+
+  /**
+   * Return a bounded structural projection of a Super note. Outline reads never
+   * include body blocks; section reads expose only the selected section and exact
+   * stable locators, so an agent need not round-trip the entire Lexical document.
+   */
+  private async notesReadBlocks(args: Record<string, unknown>) {
+    const initial = this.requireReadableNote(args.uuid)
+    await flushAssistantNoteEditors(this.application, initial.uuid)
+    this.throwIfAborted()
+    const note = this.requireReadableNote(args.uuid)
+    if (note.noteType !== NoteType.Super) {
+      throw new Error('notes.readBlocks requires a Super note.')
+    }
+    const view: AssistantLiveSuperReadOptions['view'] =
+      args.view === 'section' || args.view === 'blocks' ? args.view : 'outline'
+    const section = isAssistantBlockLocator(args.section) ? args.section : undefined
+    const readOptions = {
+      view,
+      ...(section ? { section } : {}),
+      ...(typeof args.limit === 'number' ? { limit: args.limit } : {}),
+      updatedAt: note.userModifiedDate?.toISOString?.(),
+    }
+    const liveBridge = getAssistantSuperNoteLiveBridge(note.uuid)
+    const structure = liveBridge
+      ? await liveBridge.read(readOptions)
+      : await readAssistantSuperStructure(note.text, readOptions)
+    this.throwIfAborted()
+    this.recordExpectedNoteSnapshot(note)
+    return { note: noteSummary(note), ...structure }
+  }
+
+  /**
+   * Apply a structural Super-note patch against the exact revision returned by
+   * notes.readBlocks. The pure patcher works on a detached tree; the item mutator
+   * receives one final serialized body, yielding one undo/audit/sync boundary.
+   */
+  private async notesPatchBlocks(args: Record<string, unknown>, callId?: string) {
+    const initial = this.requireReadableNote(args.uuid)
+    await flushAssistantNoteEditors(this.application, initial.uuid)
+    const note = this.requireReadableNote(args.uuid)
+    this.assertNoteMutationAuthorized(note, false)
+    if (note.text.length > MAX_REVERSIBLE_ASSISTANT_NOTE_CHARS) {
+      throw new Error('This note is too large for a safely reversible assistant edit.')
+    }
+    if (note.noteType !== NoteType.Super) {
+      throw new Error('notes.patchBlocks requires a Super note.')
+    }
+    const rawBase = isRecord(args.base) ? args.base : undefined
+    if (!rawBase || typeof rawBase.contentHash !== 'string') {
+      throw new Error('notes.patchBlocks requires the base revision returned by notes.readBlocks.')
+    }
+    const base = {
+      contentHash: rawBase.contentHash,
+      ...(typeof rawBase.updatedAt === 'string' ? { updatedAt: rawBase.updatedAt } : {}),
+    }
+    if (!Array.isArray(args.operations)) {
+      throw new Error('notes.patchBlocks requires an operations array.')
+    }
+    const operations = args.operations as AssistantStructuralPatchOperation[]
+    const before = captureAssistantNoteSnapshot(note)
+    const request = { base, operations }
+    const liveBridge = getAssistantSuperNoteLiveBridge(note.uuid)
+    const patchOptions = { updatedAt: note.userModifiedDate?.toISOString?.() }
+    const patch = liveBridge
+      ? await liveBridge.preparePatch(request, patchOptions)
+      : await applyAssistantSuperPatch(note.text, request, patchOptions)
+    if (!patch.ok) {
+      return patch
+    }
+    const after = createAssistantNoteSnapshot({
+      ...before,
+      text: patch.text,
+      previewPlain: this.notePreview(extractPlaintextFromNoteText(patch.text, NoteType.Super)),
+      previewHtml: undefined,
+    })
+    const change = buildAssistantNoteChange({
+      noteUuid: note.uuid,
+      before,
+      after,
+      beforeDisplayText: extractPlaintextFromNoteText(before.text, NoteType.Super),
+      afterDisplayText: extractPlaintextFromNoteText(after.text, NoteType.Super),
+    })
+    this.assertDurableAssistantNoteChange(change, after)
+    if (!change) {
+      return {
+        ok: true,
+        status: 'applied',
+        unchanged: true,
+        note: noteSummary(note),
+        revision: await assistantSuperRevision(note.text, note.userModifiedDate?.toISOString?.()),
+        appliedOperations: patch.appliedOperations,
+      }
+    }
+
+    // Flush and re-read once more immediately before the single item mutation.
+    // If anything moved since the base projection, return a rebase response and
+    // never partially apply the detached patch.
+    await flushAssistantNoteEditors(this.application, note.uuid)
+    const current = this.requireReadableNote(note.uuid)
+    this.assertNoteMutationAuthorized(current, false)
+    if (!assistantNoteSnapshotMatches(current, before)) {
+      const currentBridge = getAssistantSuperNoteLiveBridge(current.uuid)
+      const currentOptions = { updatedAt: current.userModifiedDate?.toISOString?.() }
+      return currentBridge
+        ? currentBridge.preparePatch(request, currentOptions)
+        : applyAssistantSuperPatch(current.text, request, currentOptions)
+    }
+    this.throwIfAborted()
+    const updated = await this.application.mutator.changeItem<NoteMutator, SNNote>(
+      current,
+      (mutator) => {
+        mutator.text = patch.text
+        mutator.preview_plain = this.notePreview(extractPlaintextFromNoteText(patch.text, NoteType.Super))
+        mutator.preview_html = undefined
+      },
+      MutationType.UpdateUserTimestamps,
+      PayloadEmitSource.AssistantChanged,
+    )
+    this.recordExpectedNoteSnapshot(updated)
+    this.syncInBackground()
+    this.publishNoteChange(callId, change)
+    return {
+      ok: true,
+      status: 'applied',
+      note: noteSummary(updated),
+      revision: await assistantSuperRevision(updated.text, updated.userModifiedDate?.toISOString?.()),
+      appliedOperations: patch.appliedOperations,
     }
   }
 
@@ -1549,6 +1732,93 @@ export class AssistantTools implements ToolSession {
   }
 }
 
+const ASSISTANT_BLOCK_LOCATOR_SCHEMA = {
+  type: 'object',
+  description:
+    'One exact locator returned by notes.readBlocks: nodeKey, nodeUuid, todoId, path, or a semantic heading. If a heading text repeats, include its 1-based occurrence.',
+  properties: {
+    nodeKey: { type: 'string' },
+    nodeUuid: { type: 'string' },
+    todoId: { type: 'string' },
+    path: { type: 'array', items: { type: 'integer', minimum: 0 }, maxItems: 100 },
+    heading: {
+      type: 'object',
+      properties: { text: { type: 'string' }, occurrence: { type: 'integer', minimum: 1 } },
+      required: ['text'],
+    },
+  },
+} as const
+
+const ASSISTANT_INSERT_BLOCK_SCHEMA = {
+  type: 'object',
+  description:
+    'Insert native Lexical structure. Use markdown-fragment for canonical Markdown parsing, rich-fragment for explicit inline styles/marks, or paragraph/heading/checklist-item/list-item for intentionally plain text.',
+  properties: {
+    kind: {
+      type: 'string',
+      enum: ['paragraph', 'heading', 'checklist-item', 'list-item', 'rich-fragment', 'markdown-fragment'],
+    },
+    text: {
+      type: 'string',
+      description:
+        'Literal text for paragraph/heading/checklist-item/list-item. Markdown-looking characters remain literal.',
+    },
+    level: { type: 'integer', minimum: 1, maximum: 6 },
+    checked: { type: 'boolean' },
+    marks: { type: 'integer', minimum: 0 },
+    markdown: {
+      type: 'string',
+      description:
+        'Canonical Markdown fragment parsed into native heading, quote, code, link, formatted text, nested list, and checklist nodes.',
+    },
+    blocks: {
+      type: 'array',
+      minItems: 1,
+      maxItems: 100,
+      description:
+        'Structured rich blocks. Types: paragraph, heading, quote, code, list. Text runs use {text, marks:[bold|italic|underline|strikethrough|code], style?, link?}; lists use listType bullet|number|check and items with content runs, checked?, and optional nested children list.',
+      items: {
+        type: 'object',
+        properties: {
+          type: { type: 'string', enum: ['paragraph', 'heading', 'quote', 'code', 'list'] },
+          level: { type: 'integer', minimum: 1, maximum: 6 },
+          text: { type: 'string' },
+          language: { type: 'string' },
+          listType: { type: 'string', enum: ['bullet', 'number', 'check'] },
+          start: { type: 'integer', minimum: 1 },
+          content: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                text: { type: 'string' },
+                marks: {
+                  type: 'array',
+                  items: {
+                    type: 'string',
+                    enum: ['bold', 'italic', 'underline', 'strikethrough', 'code'],
+                  },
+                },
+                style: { type: 'string' },
+                link: { type: 'string' },
+              },
+              required: ['text'],
+            },
+          },
+          items: {
+            type: 'array',
+            description:
+              'List items: {content:[rich runs], checked?, children?:{listType,start?,items:[...]}}. Use markdown-fragment for deeply nested lists.',
+            items: { type: 'object' },
+          },
+        },
+        required: ['type'],
+      },
+    },
+  },
+  required: ['kind'],
+} as const
+
 export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'notes.list',
@@ -1628,7 +1898,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'notes.update',
     description:
-      'Update the title and/or text of an existing note by uuid. Pass format:"super" with `markdown` to (re)write the note as a rich Super note (prefer notes.updateSuper, which round-trips existing content to markdown first).',
+      'Update the title and/or body of a plain note by uuid. For a targeted Super/Lexical edit, use notes.readBlocks + notes.patchBlocks so formatting, embeds, checklist ids, schedules, and unknown nodes survive. A full Super replacement is an exceptional explicit operation.',
     mutating: true,
     inputSchema: {
       type: 'object',
@@ -1638,6 +1908,11 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         text: { type: 'string' },
         format: { type: 'string', enum: ['plain', 'super'] },
         markdown: { type: 'string', description: 'Markdown body when format is "super".' },
+        fullReplacement: {
+          type: 'boolean',
+          description:
+            'Required true for an intentional whole-document Super replacement. Never use for a local block/checklist edit.',
+        },
       },
       required: ['uuid'],
     },
@@ -1659,7 +1934,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'notes.updateSuper',
     description:
-      'Rewrite a note as a rich Super note from MARKDOWN. To edit an existing Super note, first call notes.readSuper to get its markdown, edit that, then pass the full edited markdown back here.',
+      'Explicitly replace an entire note as rich Super content from MARKDOWN. This can change document-only state and therefore requires fullReplacement:true. For normal edits use notes.readBlocks + notes.patchBlocks, which preserve untouched formatting, embeds, checklist ids/schedules, and unknown nodes.',
     mutating: true,
     inputSchema: {
       type: 'object',
@@ -1667,19 +1942,100 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
         uuid: { type: 'string' },
         title: { type: 'string' },
         markdown: { type: 'string', description: 'The full new note body as markdown (supports ```mermaid).' },
+        fullReplacement: {
+          type: 'boolean',
+          description: 'Must be true to acknowledge an intentional full-document replacement.',
+        },
       },
-      required: ['uuid', 'markdown'],
+      required: ['uuid', 'markdown', 'fullReplacement'],
     },
   },
   {
     name: 'notes.readSuper',
     description:
-      'Read a Super note as MARKDOWN (round-tripped from its Lexical JSON) so you can edit it and pass the result to notes.updateSuper. For a non-Super note it returns the raw text.',
+      'Read a Super note as MARKDOWN for export or an explicitly requested full-document replacement. For ordinary edits prefer bounded notes.readBlocks so you do not load/rewrite the whole document.',
     mutating: false,
     inputSchema: {
       type: 'object',
       properties: { uuid: { type: 'string' } },
       required: ['uuid'],
+    },
+  },
+  {
+    name: 'notes.readBlocks',
+    description:
+      'Read a bounded structural projection of a Super/Lexical note. Start with view:"outline"; then read only the target section. Returns a contentHash revision, live Lexical node locators, native block/list/check metadata, inline marks/styles/links, and the supported patch schema without loading the whole body.',
+    mutating: false,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        uuid: { type: 'string' },
+        view: { type: 'string', enum: ['outline', 'section', 'blocks'] },
+        section: ASSISTANT_BLOCK_LOCATOR_SCHEMA,
+        limit: { type: 'integer', minimum: 1, maximum: 100 },
+      },
+      required: ['uuid', 'view'],
+    },
+  },
+  {
+    name: 'notes.patchBlocks',
+    description:
+      'Atomically patch exact Super/Lexical blocks against the base revision from notes.readBlocks. For formatted content insert block.kind:"markdown-fragment" (canonical Markdown -> native Lexical heading/list/check/quote/code/link/marks) or block.kind:"rich-fragment" (explicit runs including underline). paragraph/heading/list-item/checklist-item text is deliberately literal. Also supports exact formatted-leaf replacement, checklist toggle, move/delete, and bounded attrs. Refuses stale/ambiguous locators and never recreates a note.',
+    mutating: true,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        uuid: { type: 'string' },
+        base: {
+          type: 'object',
+          properties: { contentHash: { type: 'string' }, updatedAt: { type: 'string' } },
+          required: ['contentHash'],
+        },
+        operations: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 32,
+          items: {
+            type: 'object',
+            description:
+              'Operation object. type is insert, replace-text, toggle-checklist, move, delete, or update-attrs. All targets use an exact locator returned by notes.readBlocks.',
+            properties: {
+              type: {
+                type: 'string',
+                enum: ['insert', 'replace-text', 'toggle-checklist', 'move', 'delete', 'update-attrs'],
+              },
+              target: ASSISTANT_BLOCK_LOCATOR_SCHEMA,
+              position: { type: 'string', enum: ['before', 'after', 'inside-section'] },
+              block: ASSISTANT_INSERT_BLOCK_SCHEMA,
+              expectedText: { type: 'string' },
+              text: { type: 'string' },
+              marks: { type: 'integer', minimum: 0 },
+              checked: { type: 'boolean' },
+              destination: {
+                type: 'object',
+                properties: {
+                  position: { type: 'string', enum: ['before', 'after', 'inside-section'] },
+                  target: ASSISTANT_BLOCK_LOCATOR_SCHEMA,
+                },
+                required: ['position', 'target'],
+              },
+              attrs: {
+                type: 'object',
+                properties: {
+                  format: { type: 'string' },
+                  style: { type: 'string' },
+                  indent: { type: 'integer', minimum: 0, maximum: 20 },
+                  direction: { type: 'string', enum: ['ltr', 'rtl'] },
+                  tag: { type: 'string', enum: ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'] },
+                  checked: { type: 'boolean' },
+                },
+              },
+            },
+            required: ['type', 'target'],
+          },
+        },
+      },
+      required: ['uuid', 'base', 'operations'],
     },
   },
   {
