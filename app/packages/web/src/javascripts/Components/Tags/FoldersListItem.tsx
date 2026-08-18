@@ -56,6 +56,8 @@ export const FoldersListItem: FunctionComponent<Props> = observer(
     const inputRef = useRef<HTMLInputElement>(null)
     const subfolderInputRef = useRef<HTMLInputElement>(null)
     const menuButtonRef = useRef<HTMLAnchorElement>(null)
+    const templateSubmitStartedRef = useRef(false)
+    const subfolderSubmitStartedRef = useRef(false)
 
     const isContextMenuOpenForFolder =
       navigationController.contextMenuFolder === folder &&
@@ -132,6 +134,10 @@ export const FoldersListItem: FunctionComponent<Props> = observer(
 
     const onBlur = useCallback(() => {
       if (isTemplate) {
+        if (templateSubmitStartedRef.current) {
+          return
+        }
+        templateSubmitStartedRef.current = true
         navigationController.createFolder(title).catch(console.error)
       } else {
         navigationController.renameFolder(folder, title).catch(console.error)
@@ -161,6 +167,10 @@ export const FoldersListItem: FunctionComponent<Props> = observer(
     }, [])
 
     const onSubfolderInputBlur = useCallback(() => {
+      if (subfolderSubmitStartedRef.current) {
+        return
+      }
+      subfolderSubmitStartedRef.current = true
       navigationController.createFolder(subfolderTitle, folder).catch(console.error)
       setSubfolderTitle('')
     }, [subfolderTitle, folder, navigationController])
@@ -174,6 +184,7 @@ export const FoldersListItem: FunctionComponent<Props> = observer(
 
     useEffect(() => {
       if (isAddingSubfolder) {
+        subfolderSubmitStartedRef.current = false
         subfolderInputRef.current?.focus()
       }
     }, [isAddingSubfolder])

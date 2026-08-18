@@ -40,6 +40,7 @@ import {
   FolderContent,
   FileItem,
   PrefDefaults,
+  VaultListingInterface,
 } from '@standardnotes/snjs'
 import { action, computed, makeObservable, observable, reaction, runInAction } from 'mobx'
 import { FeaturesController } from '../FeaturesController'
@@ -55,6 +56,28 @@ import { TagsCountsState } from './TagsCountsState'
 import { PaneController } from '../PaneController/PaneController'
 import { RecentActionsState } from '../../Application/Recents'
 import { CommandService } from '../../Components/CommandPalette/CommandService'
+import { UuidGenerator } from '@standardnotes/utils'
+import {
+  FolderCreationCoordinator,
+  FolderCreationFinalizationError,
+  FolderMigrationCoordinator,
+  MAX_FOLDER_PATH_DEPTH,
+  folderCreationIdentity,
+  folderCreationScope,
+  normalizeFolderName,
+} from './FolderCreationCoordinator'
+
+const folderCreationCoordinators = new WeakMap<ItemManagerInterface, FolderCreationCoordinator<SNFolder>>()
+const folderMigrationCoordinator = new FolderMigrationCoordinator<ItemManagerInterface>()
+
+function folderCreationCoordinatorFor(items: ItemManagerInterface): FolderCreationCoordinator<SNFolder> {
+  let coordinator = folderCreationCoordinators.get(items)
+  if (!coordinator) {
+    coordinator = new FolderCreationCoordinator<SNFolder>()
+    folderCreationCoordinators.set(items, coordinator)
+  }
+  return coordinator
+}
 
 export class NavigationController
   extends AbstractViewController
@@ -91,6 +114,9 @@ export class NavigationController
   customTagsOrder_: string[] = []
 
   private readonly tagsCountsState: TagsCountsState
+  private readonly folderCreationCoordinator: FolderCreationCoordinator<SNFolder>
+  private readonly ownedFolderCreationScopes = new Set<string>()
+  private folderCreationGeneration = 0
 
   constructor(
     private featuresController: FeaturesController,
@@ -105,13 +131,19 @@ export class NavigationController
     private _changeAndSaveItem: ChangeAndSaveItem,
     private recents: RecentActionsState,
     eventBus: InternalEventBusInterface,
+    private readonly getFolderCreationAccountUuid: () => string | undefined = () => undefined,
   ) {
     super(eventBus)
 
     eventBus.addEventHandler(this, VaultDisplayServiceEvent.VaultDisplayOptionsChanged)
     eventBus.addEventHandler(this, ApplicationEvent.PreferencesChanged)
+    eventBus.addEventHandler(this, ApplicationEvent.SignedIn)
+    eventBus.addEventHandler(this, ApplicationEvent.PreparingForSignOut)
+    eventBus.addEventHandler(this, ApplicationEvent.SignedOut)
+    eventBus.addEventHandler(this, ApplicationEvent.KeyStatusChanged)
 
     this.tagsCountsState = new TagsCountsState(items)
+    this.folderCreationCoordinator = folderCreationCoordinatorFor(items)
     this.smartViews = items.getSmartViews()
     this.folders = items.getItems<SNFolder>(FolderContentType)
 
@@ -307,6 +339,7 @@ export class NavigationController
 
   async handleEvent(event: InternalEventInterface): Promise<void> {
     if (event.type === VaultDisplayServiceEvent.VaultDisplayOptionsChanged) {
+      this.releaseOwnedFolderCreationScopes()
       this.reloadTags()
       if (this.selectedUuid) {
         this.findAndSetTag(this.selectedUuid)
@@ -317,6 +350,13 @@ export class NavigationController
       // Standard Red Notes: refresh cached custom folder/tag orderings so the
       // navigation lists re-render after a drag-reorder (or remote pref sync).
       this.reloadCustomOrders()
+    } else if (
+      event.type === ApplicationEvent.SignedIn ||
+      event.type === ApplicationEvent.PreparingForSignOut ||
+      event.type === ApplicationEvent.SignedOut ||
+      event.type === ApplicationEvent.KeyStatusChanged
+    ) {
+      this.releaseOwnedFolderCreationScopes()
     }
   }
 
@@ -358,6 +398,7 @@ export class NavigationController
   }
 
   override deinit() {
+    this.releaseOwnedFolderCreationScopes()
     super.deinit()
     ;(this.featuresController as unknown) = undefined
     ;(this.tags as unknown) = undefined
@@ -785,33 +826,34 @@ export class NavigationController
 
   /** Create a new SNFolder, optionally nested under `parent`, then select it. */
   public async createFolder(title: string, parent?: SNFolder): Promise<void> {
-    if (title.length === 0) {
+    const normalized = normalizeFolderName(title)
+    if (!normalized) {
       this.setAddingSubfolderTo(undefined)
       this.setEditingFolder(undefined)
       return
     }
 
-    const template = this.items.createTemplateItem<FolderContent, SNFolder>(FolderContentType, {
-      title,
-    } as unknown as FolderContent)
+    const generation = this.folderCreationGeneration
+    try {
+      const created = await this.createFolderExactlyOnce(normalized.display, parent)
+      if (this.dealloced || generation !== this.folderCreationGeneration) {
+        return
+      }
 
-    const created = await this.mutator.insertItem<SNFolder>(template)
-
-    if (parent) {
-      await this.mutator.changeItem<FolderMutator>(created, (m) => m.makeChildOf(parent))
+      const inserted = this.items.findItem<SNFolder>(created.uuid) || created
+      runInAction(() => {
+        void this.setSelectedFolder(inserted, { userTriggered: true })
+      })
+    } finally {
+      // Clear the inline editor on every terminal path. Leaving the template
+      // mounted after an error lets focus/remount feedback submit it again.
+      if (generation === this.folderCreationGeneration) {
+        runInAction(() => {
+          this.setAddingSubfolderTo(undefined)
+          this.setEditingFolder(undefined)
+        })
+      }
     }
-
-    await this.sync.sync()
-
-    this.reloadFolders()
-
-    const inserted = this.folders.find((folder) => folder.uuid === created.uuid) || created
-
-    runInAction(() => {
-      this.setAddingSubfolderTo(undefined)
-      this.setEditingFolder(undefined)
-      void this.setSelectedFolder(inserted, { userTriggered: true })
-    })
   }
 
   /**
@@ -819,33 +861,158 @@ export class NavigationController
    * selecting it. Used by bulk/folder uploads which create many folders quickly
    * and should not hijack the user's current selection or close the inline editor.
    */
-  public async createFolderReturning(title: string, parent?: SNFolder): Promise<SNFolder | undefined> {
-    const trimmed = title.trim()
-    if (trimmed.length === 0) {
+  public async createFolderReturning(
+    title: string,
+    parent?: SNFolder,
+    vaultOverride?: VaultListingInterface,
+  ): Promise<SNFolder | undefined> {
+    const normalized = normalizeFolderName(title)
+    if (!normalized) {
       return undefined
     }
-
-    const template = this.items.createTemplateItem<FolderContent, SNFolder>(FolderContentType, {
-      title: trimmed,
-    } as unknown as FolderContent)
-
-    const created = await this.mutator.insertItem<SNFolder>(template)
-
-    if (parent) {
-      await this.mutator.changeItem<FolderMutator>(created, (m) => m.makeChildOf(parent))
+    const generation = this.folderCreationGeneration
+    const created = await this.createFolderExactlyOnce(normalized.display, parent, vaultOverride)
+    if (this.dealloced || generation !== this.folderCreationGeneration) {
+      return undefined
     }
-
-    await this.sync.sync()
-    this.reloadFolders()
-
-    return this.folders.find((folder) => folder.uuid === created.uuid) || (created as SNFolder)
+    return this.items.findItem<SNFolder>(created.uuid) || created
   }
 
-  /** Find an existing child folder (or root folder when `parent` is undefined) by exact title. */
-  public findFolderByTitle(title: string, parent?: SNFolder): SNFolder | undefined {
-    return this.folders.find(
-      (folder) => folder.title === title && (parent ? folder.parentId === parent.uuid : !folder.parentId),
-    )
+  /** Find an existing sibling folder by its normalized title and exact parent. */
+  public findFolderByTitle(
+    title: string,
+    parent?: SNFolder,
+    vaultOverride?: VaultListingInterface,
+  ): SNFolder | undefined {
+    const normalized = normalizeFolderName(title)
+    if (!normalized) {
+      return undefined
+    }
+    const requestedVaultUuid = this.getFolderCreationVault(parent, vaultOverride)?.uuid
+    return this.items.getItems<SNFolder>(FolderContentType).find((folder) => {
+      const candidate = normalizeFolderName(folder.title)
+      let candidateVaultUuid: string | undefined
+      try {
+        candidateVaultUuid = this.vaultDisplayService.getItemVault(folder)?.uuid
+      } catch {
+        candidateVaultUuid = undefined
+      }
+      return (
+        candidate?.identity === normalized.identity &&
+        candidateVaultUuid === requestedVaultUuid &&
+        (parent ? folder.parentId === parent.uuid : !folder.parentId)
+      )
+    })
+  }
+
+  private async createFolderExactlyOnce(
+    title: string,
+    parent?: SNFolder,
+    vaultOverride?: VaultListingInterface,
+  ): Promise<SNFolder> {
+    const vault = this.getFolderCreationVault(parent, vaultOverride)
+    const scope = this.getFolderCreationScope(vault)
+    const identity = folderCreationIdentity(this.getFolderPath(parent), title)
+    this.ownedFolderCreationScopes.add(scope)
+    const operationId = UuidGenerator.GenerateUuid()
+
+    return this.folderCreationCoordinator.createOnce({
+      scope,
+      identity,
+      operationId,
+      findExisting: () => this.findFolderByTitle(title, parent, vault),
+      isCurrent: (folder) => this.items.findItem<SNFolder>(folder.uuid) !== undefined,
+      create: async () => {
+        return this.mutator.createItem<SNFolder, FolderContent>(
+          FolderContentType,
+          {
+            title,
+          } as unknown as FolderContent,
+          true,
+          vault,
+        )
+      },
+      finalize: async (created, stableOperationId) => {
+        try {
+          if (parent && created.parentId !== parent.uuid) {
+            const currentParent = this.items.findItem<SNFolder>(parent.uuid) || parent
+            await this.mutator.changeItem<FolderMutator>(created, (mutator) => mutator.makeChildOf(currentParent))
+          }
+        } catch (error) {
+          throw new FolderCreationFinalizationError('definitive', 'Folder parent assignment failed.', error)
+        }
+        try {
+          await this.sync.sync({ sourceDescription: 'folder:create', operationId: stableOperationId })
+        } catch (error) {
+          throw new FolderCreationFinalizationError('ambiguous', 'Folder sync outcome is unknown.', error)
+        }
+        this.reloadFolders()
+      },
+      resolveAmbiguous: (created) => {
+        const current = this.items.findItem<SNFolder>(created.uuid)
+        return Boolean(current && !current.dirty)
+      },
+    })
+  }
+
+  private getFolderCreationScope(vault?: VaultListingInterface): string {
+    let accountUuid: string | undefined
+    try {
+      accountUuid = this.getFolderCreationAccountUuid()
+    } catch {
+      accountUuid = undefined
+    }
+
+    return folderCreationScope(accountUuid, vault?.uuid)
+  }
+
+  private getFolderCreationVault(
+    parent?: SNFolder,
+    vaultOverride?: VaultListingInterface,
+  ): VaultListingInterface | undefined {
+    if (vaultOverride) {
+      return vaultOverride
+    }
+    try {
+      const parentVault = parent ? this.vaultDisplayService.getItemVault(parent) : undefined
+      if (parentVault) {
+        return parentVault
+      }
+    } catch {
+      // A concurrently removed parent has no resolvable vault; use the current
+      // display scope below and let the hierarchy generation guard settle it.
+    }
+    return this.vaultDisplayService.exclusivelyShownVault
+  }
+
+  private getFolderPath(parent?: SNFolder): string[] {
+    if (!parent) {
+      return []
+    }
+
+    const path: string[] = []
+    const seen = new Set<string>()
+    let current: SNFolder | undefined = parent
+    while (current) {
+      if (seen.has(current.uuid)) {
+        throw new Error('Folder creation stopped because the parent hierarchy contains a cycle.')
+      }
+      if (path.length >= MAX_FOLDER_PATH_DEPTH) {
+        throw new Error(`Folder paths cannot exceed ${MAX_FOLDER_PATH_DEPTH} levels.`)
+      }
+      seen.add(current.uuid)
+      path.unshift(current.title)
+      current = current.parentId ? this.items.findItem<SNFolder>(current.parentId) : undefined
+    }
+    return path
+  }
+
+  private releaseOwnedFolderCreationScopes(): void {
+    this.folderCreationGeneration += 1
+    for (const scope of this.ownedFolderCreationScopes) {
+      this.folderCreationCoordinator.releaseScope(scope)
+    }
+    this.ownedFolderCreationScopes.clear()
   }
 
   /**
@@ -855,8 +1022,15 @@ export class NavigationController
    * empty path. Used to recreate a dropped/selected directory tree.
    */
   public async ensureFolderPath(segments: string[]): Promise<SNFolder | undefined> {
+    if (segments.length > MAX_FOLDER_PATH_DEPTH) {
+      throw new Error(`Folder paths cannot exceed ${MAX_FOLDER_PATH_DEPTH} levels.`)
+    }
+    const generation = this.folderCreationGeneration
     let parent: SNFolder | undefined
     for (const segment of segments) {
+      if (this.dealloced || generation !== this.folderCreationGeneration) {
+        return undefined
+      }
       const title = segment.trim()
       if (title.length === 0) {
         continue
@@ -1004,7 +1178,21 @@ export class NavigationController
       return
     }
     this.folderMigrationStarted = true
+    // NavigationController can be recreated while the shared ItemManager and an
+    // earlier migration are still alive. Guard the shared observer source too;
+    // a per-controller boolean alone cannot stop that second owner from reacting
+    // to the first owner's inserted folders.
+    try {
+      await folderMigrationCoordinator.run(this.items, () => this.performFolderMigrationIfNeeded())
+    } finally {
+      // A failed migration must be retryable by a replacement controller that
+      // shares this ItemManager. The synchronous guard above still blocks every
+      // observer callback emitted while this pass is active.
+      this.folderMigrationStarted = false
+    }
+  }
 
+  private async performFolderMigrationIfNeeded(): Promise<void> {
     const MIGRATION_FLAG = 'srn_folders_migrated_v1'
     try {
       if (typeof localStorage === 'undefined' || localStorage.getItem(MIGRATION_FLAG)) {
@@ -1018,28 +1206,7 @@ export class NavigationController
       .getItems<SNTag>(ContentType.TYPES.Tag)
       .filter((tag) => (tag as unknown as { isFolder?: boolean }).isFolder === true)
 
-    // Idempotency: never create a folder for a legacy tag that already has a
-    // corresponding folder. The localStorage flag is per-browser, so it is wiped
-    // by "clear site data" and is absent on other devices; without this check a
-    // re-run would re-create every folder, duplicating them. Matching on title
-    // is the stable key available across the tag->folder boundary (folders carry
-    // no back-reference to their source tag).
-    const existingFolderTitles = new Set(this.items.getItems<SNFolder>(FolderContentType).map((folder) => folder.title))
-    const legacyFolderTags = allLegacyFolderTags.filter((tag) => !existingFolderTitles.has(tag.title))
-
-    if (legacyFolderTags.length === 0) {
-      // Either nothing to migrate, or every legacy tag already has a folder.
-      // Delete any now-redundant legacy folder-tags so the migration converges.
-      if (allLegacyFolderTags.length > 0) {
-        try {
-          for (const tag of allLegacyFolderTags) {
-            await this.mutator.deleteItem(tag)
-          }
-          await this.sync.sync()
-        } catch (error) {
-          console.warn('Folder migration cleanup of already-migrated tags failed.', error)
-        }
-      }
+    if (allLegacyFolderTags.length === 0) {
       try {
         localStorage.setItem(MIGRATION_FLAG, '1')
       } catch {
@@ -1048,55 +1215,78 @@ export class NavigationController
       return
     }
 
-    // Map old folder-tag uuid -> newly created SNFolder, so we can rebuild parentage.
+    const legacyTagsByUuid = new Map(allLegacyFolderTags.map((tag) => [tag.uuid, tag]))
     const tagUuidToNewFolder = new Map<string, SNFolder>()
-    let migratedAny = false
+    const visiting = new Set<string>()
 
-    try {
-      for (const tag of legacyFolderTags) {
-        const template = this.items.createTemplateItem<FolderContent, SNFolder>(FolderContentType, {
-          title: tag.title,
-          iconString: tag.iconString,
-          expanded: tag.expanded,
-          color: tag.color,
-        } as unknown as FolderContent)
-        const created = await this.mutator.insertItem<SNFolder>(template)
-        tagUuidToNewFolder.set(tag.uuid, created)
+    const migrateTag = async (tag: SNTag): Promise<SNFolder> => {
+      const migrated = tagUuidToNewFolder.get(tag.uuid)
+      if (migrated) {
+        return migrated
+      }
+      if (visiting.has(tag.uuid)) {
+        throw new Error('Folder migration stopped because the legacy hierarchy contains a cycle.')
+      }
+      visiting.add(tag.uuid)
 
-        const referencedNoteUuids = tag.noteReferences.map((ref) => ref.uuid)
-        if (referencedNoteUuids.length > 0) {
-          await this.mutator.changeItem<FolderMutator>(created, (mutator) => {
-            for (const noteUuid of referencedNoteUuids) {
-              const note = this.items.findItem<SNNote>(noteUuid)
-              if (note) {
-                mutator.addNote(note)
-              }
+      try {
+        const parentTag = this.items.getTagParent(tag)
+        const legacyParent = parentTag ? legacyTagsByUuid.get(parentTag.uuid) : undefined
+        const parentFolder = legacyParent ? await migrateTag(legacyParent) : undefined
+        let vault: VaultListingInterface | undefined
+        try {
+          vault = this.vaultDisplayService.getItemVault(tag)
+        } catch {
+          vault = undefined
+        }
+
+        // This is the same account+vault+normalized-parent-path coordinator used
+        // by the inline UI. A user create racing migration therefore shares one
+        // insert promise/UUID instead of producing a second folder.
+        const folder = await this.createFolderReturning(tag.title, parentFolder, vault)
+        if (!folder) {
+          throw new Error('Folder migration was interrupted by an account or vault scope change.')
+        }
+        tagUuidToNewFolder.set(tag.uuid, folder)
+
+        const existingNoteUuids = new Set(folder.noteReferences.map((reference) => reference.uuid))
+        const referencedNotes = tag.noteReferences
+          .filter((reference) => !existingNoteUuids.has(reference.uuid))
+          .map((reference) => this.items.findItem<SNNote>(reference.uuid))
+          .filter((note): note is SNNote => note !== undefined)
+        const shouldMergeMetadata =
+          referencedNotes.length > 0 ||
+          (!folder.iconString && Boolean(tag.iconString)) ||
+          (!folder.color && Boolean(tag.color)) ||
+          (!folder.expanded && tag.expanded)
+        if (shouldMergeMetadata) {
+          await this.mutator.changeItem<FolderMutator>(folder, (mutator) => {
+            for (const note of referencedNotes) {
+              mutator.addNote(note)
+            }
+            if (!folder.iconString && tag.iconString) {
+              mutator.iconString = tag.iconString as string
+            }
+            if (!folder.color && tag.color) {
+              mutator.color = tag.color
+            }
+            if (!folder.expanded && tag.expanded) {
+              mutator.expanded = true
             }
           })
         }
-        migratedAny = true
+        return folder
+      } finally {
+        visiting.delete(tag.uuid)
+      }
+    }
+
+    try {
+      for (const tag of allLegacyFolderTags) {
+        await migrateTag(tag)
       }
 
-      // Rebuild parent relationships among the migrated folders.
-      for (const tag of legacyFolderTags) {
-        const parentTag = this.items.getTagParent(tag)
-        if (!parentTag) {
-          continue
-        }
-        const newChild = tagUuidToNewFolder.get(tag.uuid)
-        const newParent = tagUuidToNewFolder.get(parentTag.uuid)
-        if (newChild && newParent) {
-          await this.mutator.changeItem<FolderMutator>(newChild, (mutator) => {
-            mutator.makeChildOf(newParent)
-          })
-        }
-      }
-
-      // Only delete the old folder-tags once every one in this pass was
-      // successfully recreated. Delete ALL legacy folder-tags (including any that
-      // were skipped because a folder already existed for them) so the migration
-      // converges in a single run and leaves no folder-tags behind to re-trigger.
-      const allMigrated = legacyFolderTags.every((tag) => tagUuidToNewFolder.has(tag.uuid))
+      const allMigrated = allLegacyFolderTags.every((tag) => tagUuidToNewFolder.has(tag.uuid))
       if (allMigrated) {
         for (const tag of allLegacyFolderTags) {
           await this.mutator.deleteItem(tag)
@@ -1105,7 +1295,10 @@ export class NavigationController
         console.warn('Folder migration: not all folder-tags were recreated; leaving originals intact.')
       }
 
-      await this.sync.sync()
+      await this.sync.sync({
+        sourceDescription: 'folder:migration',
+        operationId: UuidGenerator.GenerateUuid(),
+      })
       this.reloadFolders()
     } catch (error) {
       console.error('Folder migration failed; leaving legacy folder-tags intact.', error)
@@ -1113,7 +1306,7 @@ export class NavigationController
       return
     }
 
-    if (migratedAny || legacyFolderTags.length === 0) {
+    if (tagUuidToNewFolder.size === allLegacyFolderTags.length) {
       try {
         localStorage.setItem(MIGRATION_FLAG, '1')
       } catch {

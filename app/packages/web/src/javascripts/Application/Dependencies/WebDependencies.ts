@@ -276,6 +276,7 @@ export class WebDependencies extends DependencyContainer {
         application.changeAndSaveItem,
         application.recents,
         application.events,
+        () => application.sessions.getUser()?.uuid,
       )
     })
 
