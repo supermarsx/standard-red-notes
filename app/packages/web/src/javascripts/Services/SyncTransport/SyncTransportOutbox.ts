@@ -6,6 +6,8 @@ export type SyncOutboxRecord = {
   commandId: string
   digest: string
   sequence: number
+  /** Stable originating user action; not secret and scoped by sessionScope. */
+  operationId?: string
   /** Exact UTF-8 command frame sent to the gateway. */
   bytes: string
   createdAt: number

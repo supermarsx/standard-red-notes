@@ -66,6 +66,8 @@ export type AccountSyncOperationOptions = {
   onPaginationMetric?: (metric: AccountSyncPaginationMetric) => void
   /** Optional websocket-preferred transport; it must retain an HTTP fallback. */
   transport?: AccountSyncTransportInterface<HttpResponse<RawSyncResponse>>
+  /** Stable opaque identifier for the explicit user action that spawned this sync. */
+  operationId?: string
 }
 
 /**
@@ -169,9 +171,15 @@ export class AccountSyncOperation {
       ...(this.options.sharedVaultUuids ? { shared_vault_uuids: this.options.sharedVaultUuids } : {}),
     }
     const transportResult = this.options.transport
-      ? await this.options.transport.execute(transportRequest, (request, command) =>
-          this.syncOverHttp(request, command),
-        )
+      ? this.options.operationId
+        ? await this.options.transport.execute(
+            transportRequest,
+            (request, command) => this.syncOverHttp(request, command),
+            { operationId: this.options.operationId, operationIndex: this.pageCount },
+          )
+        : await this.options.transport.execute(transportRequest, (request, command) =>
+            this.syncOverHttp(request, command),
+          )
       : { response: await this.syncOverHttp(transportRequest) }
     const rawResponse = transportResult.response
     const requestLatencyMs = Math.max(0, this.now() - requestStartedAt)

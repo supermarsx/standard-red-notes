@@ -182,6 +182,30 @@ describe('WebSocketSyncTransport', () => {
     await checkpoint
   })
 
+  it('forwards a stable action context to the worker unchanged', async () => {
+    const transport = createTransport()
+    const fallback = jest.fn().mockResolvedValue(response('http'))
+    const execution = transport.execute(request('folder'), fallback, {
+      operationId: 'folder-action-1',
+      operationIndex: 2,
+    })
+    await flush()
+    const execute = worker.posts.find((message) => message.type === 'EXECUTE') as Extract<
+      MainToSyncWorkerMessage,
+      { type: 'EXECUTE' }
+    >
+
+    expect(execute.context).toEqual({ operationId: 'folder-action-1', operationIndex: 2 })
+
+    worker.emit({
+      type: 'HTTP_FALLBACK',
+      clientRequestId: execute.clientRequestId,
+      reason: 'worker-error',
+      body: request('folder'),
+    })
+    await expect(execution).resolves.toEqual({ response: response('http') })
+  })
+
   it('replays an uncertain accepted command over HTTP with the exact same metadata', async () => {
     const transport = createTransport()
     const fallback = jest.fn().mockResolvedValue(response('replayed'))

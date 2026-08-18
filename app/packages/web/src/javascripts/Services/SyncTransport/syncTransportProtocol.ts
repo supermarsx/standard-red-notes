@@ -1,4 +1,8 @@
-import type { AccountSyncCommandMetadata, AccountSyncTransportRequest } from '@standardnotes/services'
+import type {
+  AccountSyncCommandMetadata,
+  AccountSyncTransportContext,
+  AccountSyncTransportRequest,
+} from '@standardnotes/services'
 
 export const SYNC_PROTOCOL_VERSION = 1 as const
 export const SYNC_CHANNEL = 'sync' as const
@@ -50,6 +54,7 @@ export type MainToSyncWorkerMessage =
       clientRequestId: string
       body: AccountSyncTransportRequest
       sessionScope: string
+      context?: AccountSyncTransportContext
     }
   | { type: 'RECOVER'; clientRequestId: string; sessionScope: string }
   | { type: 'CONNECT'; clientRequestId: string; sessionScope: string; authorization: SyncTicket }

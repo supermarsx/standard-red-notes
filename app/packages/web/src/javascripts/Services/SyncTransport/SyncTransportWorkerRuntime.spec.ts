@@ -267,6 +267,55 @@ describe('SyncTransportWorkerRuntime', () => {
     await harness.runtime.handle({ type: 'SHUTDOWN' })
   })
 
+  it('maps a stable UI operation id to the durable sync command id and metadata', async () => {
+    const harness = setup()
+    await harness.runtime.handle({
+      type: 'EXECUTE',
+      clientRequestId: 'operation-client',
+      body: body('folder'),
+      sessionScope: SESSION_A,
+      context: { operationId: '11111111-1111-4111-8111-111111111111', operationIndex: 0 },
+    })
+    await harness.runtime.handle({
+      type: 'CONNECT',
+      clientRequestId: 'operation-client',
+      sessionScope: SESSION_A,
+      authorization: {
+        endpoint: 'wss://sync.example.test/sockets/sync',
+        ticket: 't'.repeat(40),
+        expiresAt: Date.now() + 30_000,
+        deviceId: 'device-1',
+      },
+    })
+    const socket = harness.sockets[0]
+    socket.open()
+    const auth = JSON.parse(socket.sent[0]) as { commandId: string }
+    socket.receive(
+      serverFrame('AUTHENTICATED', auth.commandId, {
+        capability: 'ws-sync',
+        protocolVersion: 1,
+        operations: ['SYNC_ITEMS'],
+        nextClientSequence: 1,
+      }),
+    )
+    // Persisting the command includes an async digest and outbox write before
+    // the worker may put the COMMAND frame on the socket.
+    await flush()
+    await flush()
+
+    const command = JSON.parse(socket.sent.find((entry) => JSON.parse(entry).type === 'COMMAND') as string) as {
+      commandId: string
+    }
+    expect(command.commandId).toBe('11111111-1111-4111-8111-111111111111')
+    expect(harness.outbox.records.get(command.commandId)?.operationId).toBe(command.commandId)
+    expect(harness.messages).toContainEqual(
+      expect.objectContaining({
+        type: 'COMMAND_PERSISTED',
+        command: expect.objectContaining({ id: command.commandId, operationId: command.commandId }),
+      }),
+    )
+  })
+
   it('keeps the current normalized WS body, id, and digest unchanged through uncertain HTTP replay', async () => {
     const requestBody = {
       api: '20240226',

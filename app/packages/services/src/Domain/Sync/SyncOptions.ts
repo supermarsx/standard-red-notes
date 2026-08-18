@@ -12,6 +12,8 @@ export type SyncOptions = {
   /** Internally used to keep track of how sync requests were spawned. */
   source: SyncSource
   sourceDescription?: string
+  /** Stable opaque identifier for one explicit user mutation/action. */
+  operationId?: string
   /** Whether to await any sync requests that may be queued from this call. */
   awaitAll?: boolean
   /**

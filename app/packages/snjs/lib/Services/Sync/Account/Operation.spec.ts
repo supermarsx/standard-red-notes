@@ -166,6 +166,27 @@ describe('AccountSyncOperation transport durability seam', () => {
     expect(apiService.sync).not.toHaveBeenCalled()
   })
 
+  it('forwards one stable action id with a deterministic index for every transport page', async () => {
+    const transport = {
+      execute: jest
+        .fn()
+        .mockResolvedValueOnce({ response: rawResponse('next-page') })
+        .mockResolvedValueOnce({ response: rawResponse() }),
+    }
+    const operation = new AccountSyncOperation(
+      [],
+      jest.fn(async () => undefined) as never,
+      { apiVersion: '20240226' } as never,
+      { transport, operationId: 'folder-action-1' },
+    )
+
+    await operation.run()
+
+    expect(transport.execute).toHaveBeenCalledTimes(2)
+    expect(transport.execute.mock.calls[0][2]).toEqual({ operationId: 'folder-action-1', operationIndex: 0 })
+    expect(transport.execute.mock.calls[1][2]).toEqual({ operationId: 'folder-action-1', operationIndex: 1 })
+  })
+
   it('retains the transport outbox when local response persistence fails', async () => {
     const markCheckpointDurable = jest.fn()
     const transport = {

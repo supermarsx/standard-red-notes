@@ -1,6 +1,7 @@
 import type {
   AccountSyncCommandMetadata,
   AccountSyncHttpFallback,
+  AccountSyncTransportContext,
   AccountSyncTransportInterface,
   AccountSyncTransportRecoveryResult,
   AccountSyncTransportRequest,
@@ -164,8 +165,9 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
   execute(
     request: AccountSyncTransportRequest,
     httpFallback: AccountSyncHttpFallback<TransportResponse>,
+    context?: AccountSyncTransportContext,
   ): Promise<AccountSyncTransportResult<TransportResponse>> {
-    return this.enqueue(() => this.executeOrdered(request, httpFallback))
+    return this.enqueue(() => this.executeOrdered(request, httpFallback, context))
   }
 
   async notifySessionRevoked(): Promise<void> {
@@ -278,6 +280,7 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
   private async executeOrdered(
     request: AccountSyncTransportRequest,
     httpFallback: AccountSyncHttpFallback<TransportResponse>,
+    context?: AccountSyncTransportContext,
   ): Promise<AccountSyncTransportResult<TransportResponse>> {
     const normalizedRequest = normalizeSyncRequestForWire(request)
     if (this.deinitialized) {
@@ -315,7 +318,7 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
         resolve: resolve as (result: PendingResult) => void,
         reject,
       })
-      worker.postMessage({ type: 'EXECUTE', clientRequestId, body: normalizedRequest, sessionScope })
+      worker.postMessage({ type: 'EXECUTE', clientRequestId, body: normalizedRequest, sessionScope, context })
     })
   }
 

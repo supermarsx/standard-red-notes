@@ -1898,6 +1898,7 @@ export class SyncService
         paginationToken,
         sharedVaultUuids: options.sharedVaultUuids,
         transport: this.accountSyncTransport,
+        operationId: options.operationId,
       },
     )
 

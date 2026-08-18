@@ -1,4 +1,8 @@
-import type { AccountSyncCommandMetadata, AccountSyncTransportRequest } from '@standardnotes/services'
+import type {
+  AccountSyncCommandMetadata,
+  AccountSyncTransportContext,
+  AccountSyncTransportRequest,
+} from '@standardnotes/services'
 import {
   digestSyncBody,
   frameByteLength,
@@ -58,6 +62,7 @@ type ActiveRequest = {
   sessionScope: string
   mode: 'execute' | 'recover'
   body: AccountSyncTransportRequest
+  context?: AccountSyncTransportContext
 }
 
 function defaultUuid(): string {
@@ -135,7 +140,7 @@ export class SyncTransportWorkerRuntime {
   async handle(message: MainToSyncWorkerMessage): Promise<void> {
     switch (message.type) {
       case 'EXECUTE':
-        await this.execute(message.clientRequestId, message.body, message.sessionScope)
+        await this.execute(message.clientRequestId, message.body, message.sessionScope, message.context)
         break
       case 'RECOVER':
         await this.recover(message.clientRequestId, message.sessionScope)
@@ -189,7 +194,12 @@ export class SyncTransportWorkerRuntime {
         type: 'COMMAND_PERSISTED',
         clientRequestId,
         body: recoveredBody,
-        command: { id: record.commandId, digest: record.digest, sequence: record.sequence },
+        command: {
+          id: record.commandId,
+          digest: record.digest,
+          sequence: record.sequence,
+          ...(record.operationId ? { operationId: record.operationId } : {}),
+        },
       })
       if (this.socket?.readyState === 1 && this.state === 'READY' && this.transportScope) {
         await this.prepareActiveCommand()
@@ -206,6 +216,7 @@ export class SyncTransportWorkerRuntime {
     clientRequestId: string,
     body: AccountSyncTransportRequest,
     sessionScope: string,
+    context?: AccountSyncTransportContext,
   ): Promise<void> {
     if (this.shuttingDown || !validSessionScope(sessionScope)) {
       this.postFallback(clientRequestId, body, 'worker-error')
@@ -227,7 +238,7 @@ export class SyncTransportWorkerRuntime {
       this.dependencies.postMessage({ type: 'RECOVERY_REQUIRED', clientRequestId })
       return
     }
-    this.active = { clientRequestId, sessionScope, mode: 'execute', body: normalizedBody }
+    this.active = { clientRequestId, sessionScope, mode: 'execute', body: normalizedBody, context }
     this.sessionScope = sessionScope
     this.accepted = false
     this.resultDelivered = false
@@ -455,12 +466,19 @@ export class SyncTransportWorkerRuntime {
 
       const digest = await digestSyncBody(active.body, this.subtle)
       const payload = { command: 'SYNC_ITEMS' as const, body: active.body }
+      const operationId = validOperationId(active.context?.operationId) ? active.context.operationId : undefined
+      const operationIndex = validOperationIndex(active.context?.operationIndex) ? active.context.operationIndex : 0
+      const stableCommandId = operationId
+        ? operationIndex === 0
+          ? operationId
+          : `${operationId}:${operationIndex}`
+        : undefined
       const frame: SyncClientFrame = {
         version: SYNC_PROTOCOL_VERSION,
         channel: SYNC_CHANNEL,
         type: 'COMMAND',
         requestId: this.uuid(),
-        commandId: this.uuid(),
+        commandId: stableCommandId ?? this.uuid(),
         sequence: this.sequence++,
         payloadLength: payloadByteLength(payload),
         payload,
@@ -478,6 +496,7 @@ export class SyncTransportWorkerRuntime {
         sequence: frame.sequence,
         bytes: JSON.stringify(frame),
         createdAt: this.now(),
+        ...(operationId ? { operationId } : {}),
       }
       await this.outbox.put(record)
       this.outboxRecord = record
@@ -485,7 +504,12 @@ export class SyncTransportWorkerRuntime {
         type: 'COMMAND_PERSISTED',
         clientRequestId: active.clientRequestId,
         body: active.body,
-        command: { id: record.commandId, digest: record.digest, sequence: record.sequence },
+        command: {
+          id: record.commandId,
+          digest: record.digest,
+          sequence: record.sequence,
+          ...(record.operationId ? { operationId: record.operationId } : {}),
+        },
       })
       await this.sendWithBackpressure(record.bytes)
       this.startAckDeadline(COMMAND_ACK_TIMEOUT_MS)
@@ -686,6 +710,7 @@ export class SyncTransportWorkerRuntime {
               id: record.commandId,
               digest: record.digest,
               sequence: record.sequence,
+              ...(record.operationId ? { operationId: record.operationId } : {}),
             } satisfies AccountSyncCommandMetadata,
           }
         : {}),
@@ -766,4 +791,14 @@ export class SyncTransportWorkerRuntime {
     this.outbox.close()
     this.transition('HTTP_ONLY')
   }
+}
+
+function validOperationId(operationId: unknown): operationId is string {
+  return (
+    typeof operationId === 'string' && operationId.length <= 100 && /^[A-Za-z0-9][A-Za-z0-9._:-]*$/u.test(operationId)
+  )
+}
+
+function validOperationIndex(operationIndex: unknown): operationIndex is number {
+  return Number.isSafeInteger(operationIndex) && Number(operationIndex) >= 0
 }

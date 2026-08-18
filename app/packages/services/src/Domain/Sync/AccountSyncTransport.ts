@@ -17,6 +17,15 @@ export type AccountSyncCommandMetadata = {
   id: string
   digest: string
   sequence: number
+  /** Stable originating UI action, when the sync was explicitly action-scoped. */
+  operationId?: string
+}
+
+export type AccountSyncTransportContext = {
+  /** Opaque stable ID shared by retries of one user action. */
+  operationId?: string
+  /** Zero-based request index when one action requires paginated sync commands. */
+  operationIndex?: number
 }
 
 export type AccountSyncHttpFallback<TResponse> = (
@@ -57,6 +66,7 @@ export interface AccountSyncTransportInterface<TResponse> {
   execute(
     request: AccountSyncTransportRequest,
     httpFallback: AccountSyncHttpFallback<TResponse>,
+    context?: AccountSyncTransportContext,
   ): Promise<AccountSyncTransportResult<TResponse>>
   /** Quarantine this session's outbox and resolve only after worker acknowledgement. */
   notifySessionRevoked?(): Promise<void>
