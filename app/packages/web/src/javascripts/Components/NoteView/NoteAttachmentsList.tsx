@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useId, useMemo, useState } from 'react'
 import { FileItem, SNNote } from '@standardnotes/snjs'
 import { formatSizeToReadableString } from '@standardnotes/filepicker'
 import { FilesController } from '@/Controllers/FilesController'
@@ -14,13 +14,15 @@ type Props = {
 }
 
 /**
- * A list of the file attachments linked to a note, rendered at the end of the
- * note content. Clicking a row previews the file; the download button saves it.
- * Renders nothing when the note has no attachments.
+ * A compact, fully collapsible attachment rail rendered after the note content.
+ * It stays closed by default so notes with many files do not crowd or destabilize
+ * the editor. Expanding it reveals a semantic table; no file bytes are fetched
+ * until the user explicitly previews or downloads a row.
  */
 const NoteAttachmentsList = ({ note, filesController }: Props) => {
   const { filesLinkedToItem, filesLinkingToItem } = useItemLinks(note)
-  const [isCollapsed, setIsCollapsed] = useState(false)
+  const [isCollapsed, setIsCollapsed] = useState(true)
+  const tableId = useId()
 
   // Union both link directions and de-duplicate by uuid so a file that is both
   // referenced-by and referencing the note only appears once.
@@ -51,49 +53,91 @@ const NoteAttachmentsList = ({ note, filesController }: Props) => {
     })
 
   return (
-    <section className="border-border mt-4 border-t pt-3" aria-label="Attachments">
+    <aside
+      className="border-border bg-default mt-4 overflow-hidden rounded-md border"
+      aria-label="Attachments"
+      data-collapsed={isCollapsed}
+    >
       <button
         type="button"
-        className="text-passive-1 hover:bg-contrast flex w-full items-center gap-2 rounded px-1 py-1 text-left text-sm"
+        className="text-passive-1 hover:bg-contrast flex w-full items-center gap-2 px-3 py-2 text-left text-sm"
         onClick={() => setIsCollapsed((value) => !value)}
         aria-expanded={!isCollapsed}
+        aria-controls={tableId}
       >
         <Icon type="attachment-file" className="text-neutral" size="medium" />
         <span className="text-text font-semibold">Attachments</span>
         <span className="bg-passive-3 text-foreground rounded-full px-1.5 text-xs font-semibold">{files.length}</span>
-        <Icon type={isCollapsed ? 'chevron-right' : 'chevron-down'} className="text-passive-1 ml-auto" size="medium" />
+        <span className="text-passive-1 ml-auto hidden text-xs sm:inline">
+          {isCollapsed ? 'Show files' : 'Hide files'}
+        </span>
+        <Icon type={isCollapsed ? 'chevron-right' : 'chevron-down'} className="text-passive-1" size="medium" />
       </button>
 
       {!isCollapsed && (
-        <ul className="mt-1 flex flex-col">
-          {files.map((file) => (
-            <li key={file.uuid} className="group hover:bg-contrast flex items-center rounded">
-              <button
-                type="button"
-                className="flex min-w-0 flex-grow items-center gap-2.5 px-2 py-2 text-left"
-                onClick={() => previewFile(file)}
-                title={`Preview ${file.title}`}
-              >
-                {getFileIconComponent(getIconForFileType(file.mimeType), 'w-5 h-5 flex-shrink-0 text-info')}
-                <span className="text-text min-w-0 flex-grow truncate text-sm">{file.title}</span>
-                <span className="text-passive-1 flex-shrink-0 text-xs">
-                  {formatSizeToReadableString(file.decryptedSize)}
-                </span>
-              </button>
-              <button
-                type="button"
-                className="text-passive-1 hover:text-info flex-shrink-0 rounded p-2"
-                onClick={() => downloadFile(file)}
-                title={`Download ${file.title}`}
-                aria-label={`Download ${file.title}`}
-              >
-                <Icon type="arrow-down" size="medium" />
-              </button>
-            </li>
-          ))}
-        </ul>
+        <div id={tableId} className="border-border max-h-64 overflow-auto border-t">
+          <table className="w-full table-fixed border-collapse text-left text-xs">
+            <thead className="bg-contrast text-passive-1 sticky top-0 z-[1]">
+              <tr>
+                <th scope="col" className="w-full px-3 py-1.5 font-medium">
+                  File
+                </th>
+                <th scope="col" className="hidden w-28 px-2 py-1.5 font-medium sm:table-cell">
+                  Type
+                </th>
+                <th scope="col" className="w-20 px-2 py-1.5 text-right font-medium">
+                  Size
+                </th>
+                <th scope="col" className="w-10 px-1 py-1.5">
+                  <span className="sr-only">Actions</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {files.map((file) => (
+                <tr key={file.uuid} className="border-border hover:bg-contrast border-t first:border-t-0">
+                  <td className="min-w-0 p-0">
+                    <button
+                      type="button"
+                      className="flex w-full min-w-0 items-center gap-2 px-3 py-2 text-left"
+                      onClick={() => previewFile(file)}
+                      title={`Preview ${file.title}`}
+                    >
+                      {getFileIconComponent(getIconForFileType(file.mimeType), 'w-4 h-4 flex-shrink-0 text-info')}
+                      <span className="min-w-0 flex-grow">
+                        <span className="text-text block truncate font-medium">{file.title}</span>
+                        {file.description && (
+                          <span className="text-passive-1 block truncate" title={file.description}>
+                            {file.description}
+                          </span>
+                        )}
+                      </span>
+                    </button>
+                  </td>
+                  <td className="text-passive-1 hidden truncate px-2 py-2 sm:table-cell" title={file.mimeType}>
+                    {file.mimeType || 'Unknown'}
+                  </td>
+                  <td className="text-passive-1 px-2 py-2 text-right whitespace-nowrap">
+                    {formatSizeToReadableString(file.decryptedSize)}
+                  </td>
+                  <td className="px-1 py-1 text-right">
+                    <button
+                      type="button"
+                      className="text-passive-1 hover:bg-default hover:text-info rounded p-1.5"
+                      onClick={() => downloadFile(file)}
+                      title={`Download ${file.title}`}
+                      aria-label={`Download ${file.title}`}
+                    >
+                      <Icon type="arrow-down" size="medium" />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
-    </section>
+    </aside>
   )
 }
 

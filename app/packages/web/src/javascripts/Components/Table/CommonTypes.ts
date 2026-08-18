@@ -18,6 +18,8 @@ type TableCell = {
 
 export type TableRow<Data> = {
   id: string
+  /** Zero-based position in the full logical data set. */
+  rowIndex: number
   cells: TableCell[]
   isSelected: boolean
   rowData: Data
@@ -39,6 +41,12 @@ export type Table<Data> = {
   headers: TableHeader[]
   rows: TableRow<Data>[]
   rowCount: number
+  /** Materializes the next bounded page of rows, if any remain. */
+  loadMoreRows: () => void
+  /** Materializes a bounded page containing a zero-based logical row. */
+  materializeRow: (rowIndex: number) => void
+  /** True while rowCount exceeds the currently materialized rows. */
+  hasMoreRows: boolean
   colCount: number
   selectRow: (id: string) => void
   multiSelectRow: (id: string) => void

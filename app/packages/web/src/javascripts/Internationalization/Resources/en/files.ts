@@ -10,6 +10,14 @@ const files = {
   fileReadonly: 'This file is readonly',
   fileInformationPanel: 'File information panel',
   details: 'Details',
+  fileDescription: 'Description',
+  fileDescriptionPlaceholder: 'Add context, a summary, or notes about this file',
+  fileDescriptionEmpty: 'No description',
+  fileDescriptionHint: 'Saved with the encrypted file metadata. Press Ctrl/Command+Enter or leave the field to save.',
+  fileDescriptionSaving: 'Saving…',
+  fileDescriptionSaved: 'Saved',
+  fileDescriptionSaveFailed: 'Could not save',
+  fileDescriptionCharacterCount: '{{count}} / {{max}}',
 
   // MultipleSelectedFiles
   selectedFilesCount: '{{count}} selected files',

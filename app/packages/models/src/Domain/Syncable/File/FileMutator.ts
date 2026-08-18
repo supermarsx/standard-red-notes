@@ -1,6 +1,6 @@
 import { ContentType } from '@standardnotes/domain-core'
 import { SNNote } from '../Note/Note'
-import { FileContent, FileItem } from './File'
+import { FileContent, FileItem, normalizeFileDescription } from './File'
 import { FileToNoteReference } from '../../Abstract/Reference/FileToNoteReference'
 import { ContentReferenceType } from '../../Abstract/Reference/ContenteReferenceType'
 import { DecryptedItemMutator } from '../../Abstract/Item/Mutator/DecryptedItemMutator'
@@ -9,6 +9,10 @@ import { FileToFileReference } from '../../Abstract/Reference/FileToFileReferenc
 export class FileMutator extends DecryptedItemMutator<FileContent> {
   set name(newName: string) {
     this.mutableContent.name = newName
+  }
+
+  set description(newDescription: string | undefined) {
+    this.mutableContent.description = normalizeFileDescription(newDescription)
   }
 
   set encryptionHeader(encryptionHeader: string) {

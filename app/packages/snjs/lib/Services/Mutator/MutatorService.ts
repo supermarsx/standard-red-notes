@@ -633,6 +633,12 @@ export class MutatorService extends AbstractService implements MutatorClientInte
     })
   }
 
+  public setFileDescription(file: FileItem, description: string | undefined): Promise<FileItem> {
+    return this.changeItem<FileMutator, FileItem>(file, (mutator) => {
+      mutator.description = description
+    })
+  }
+
   public async mergeItem(item: DecryptedItemInterface, source: PayloadEmitSource): Promise<DecryptedItemInterface> {
     return this.emitItemFromPayload(item.payloadRepresentation(), source)
   }

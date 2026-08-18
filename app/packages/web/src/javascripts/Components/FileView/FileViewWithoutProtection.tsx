@@ -16,6 +16,7 @@ import Icon from '../Icon/Icon'
 import { VaultUserServiceEvent } from '@standardnotes/snjs'
 import { useTranslation } from 'react-i18next'
 import SuggestTagsForFileModal from './SuggestTagsForFileModal'
+import FileDescriptionEditor from './FileDescriptionEditor'
 
 const SyncTimeoutNoDebounceMs = 100
 const SyncTimeoutDebounceMs = 350
@@ -24,21 +25,18 @@ const FileViewWithoutProtection = ({ application, file }: FileViewProps) => {
   const { t } = useTranslation('files')
   const { vault } = useItemVaultInfo(file)
 
-  const [isReadonly, setIsReadonly] = useState(false)
-  useEffect(() => {
-    if (!vault) {
-      return
-    }
-
-    setIsReadonly(application.vaultUsers.isCurrentUserReadonlyVaultMember(vault))
-  }, [application.vaultUsers, vault])
+  const [, rerenderForVaultAuthorizationChange] = useState(0)
+  // Derive authorization during render so a readonly vault never gets one
+  // initially-editable paint. The observer below only invalidates this derived
+  // value when the vault-membership cache changes.
+  const isReadonly = vault ? application.vaultUsers.isCurrentUserReadonlyVaultMember(vault) : false
   useEffect(() => {
     return application.vaultUsers.addEventObserver((event, data) => {
       if (event === VaultUserServiceEvent.InvalidatedUserCacheForVault) {
         if ((data as string) !== vault?.sharing?.sharedVaultUuid) {
           return
         }
-        setIsReadonly(vault ? application.vaultUsers.isCurrentUserReadonlyVaultMember(vault) : false)
+        rerenderForVaultAuthorizationChange((version) => version + 1)
       }
     })
   }, [application.vaultUsers, vault])
@@ -157,6 +155,7 @@ const FileViewWithoutProtection = ({ application, file }: FileViewProps) => {
               readonly={isReadonly}
             />
           </div>
+          <FileDescriptionEditor application={application} file={file} readonly={isReadonly} />
         </div>
       </div>
       <div className="flex min-h-0 flex-grow flex-col">

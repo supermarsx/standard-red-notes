@@ -1,9 +1,55 @@
 import { classNames } from '@standardnotes/snjs'
 import { KeyboardKey } from '@standardnotes/ui-services'
-import { useCallback, useState, useRef } from 'react'
+import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 import { useApplication } from '../ApplicationProvider'
 import Icon from '../Icon/Icon'
 import { Table as TableType, TableRow as TableRowType } from './CommonTypes'
+
+const InteractiveEventTargetSelector = [
+  'a[href]',
+  'area[href]',
+  'button',
+  'input',
+  'select',
+  'textarea',
+  'label',
+  'summary',
+  'audio[controls]',
+  'video[controls]',
+  'iframe',
+  'object',
+  'embed',
+  '[contenteditable]:not([contenteditable="false"])',
+  '[tabindex]:not([tabindex="-1"])',
+  '[role="button"]',
+  '[role="link"]',
+  '[role="menuitem"]',
+  '[role="menuitemcheckbox"]',
+  '[role="menuitemradio"]',
+  '[role="checkbox"]',
+  '[role="radio"]',
+  '[role="switch"]',
+  '[role="combobox"]',
+  '[role="textbox"]',
+  '[role="searchbox"]',
+  '[role="option"]',
+  '[role="slider"]',
+  '[role="spinbutton"]',
+  '[role="scrollbar"]',
+  '[role="tab"]',
+  '[role="treeitem"]',
+  '[role="listbox"]',
+  '[role="menu"]',
+  '[role="menubar"]',
+  '[role="radiogroup"]',
+  '[role="tablist"]',
+  '[role="tree"]',
+  '[role="treegrid"]',
+  '[data-table-interactive]',
+].join(',')
+
+export const isInteractiveTableEventTarget = (target: EventTarget | null): boolean =>
+  target instanceof Element && target.closest(InteractiveEventTargetSelector) !== null
 
 function TableRow<Data>({
   row,
@@ -39,8 +85,16 @@ function TableRow<Data>({
       onMouseLeave={() => {
         setIsHovered(false)
       }}
-      onClick={(event) => handleRowClick(event, row.id)}
-      onDoubleClick={() => handleActivateRow(row.id)}
+      onClick={(event) => {
+        if (!isInteractiveTableEventTarget(event.target)) {
+          handleRowClick(event, row.id)
+        }
+      }}
+      onDoubleClick={(event) => {
+        if (!isInteractiveTableEventTarget(event.target)) {
+          handleActivateRow(row.id)
+        }
+      }}
       onContextMenu={handleRowContextMenu(row.id)}
       onFocus={() => {
         setIsFocused(true)
@@ -91,53 +145,25 @@ function TableRow<Data>({
   )
 }
 
-const MinTableRowHeight = 50
-const MinRowsToDisplay = 20
 const PageScrollThreshold = 200
-
-/**
- * Page size derived from the viewport height. This must NOT be computed at
- * module scope: this module is part of the eagerly-evaluated entry bundle
- * (ContentListView statically imports ContentTableView), so a top-level
- * `document.documentElement.clientHeight` read executes at bundle-eval time —
- * before the app even mounts and before the window `load` event — forcing a
- * synchronous layout flush while stylesheets/fonts may still be loading
- * (Firefox's "Layout was forced before the page was fully loaded" warning).
- *
- * Instead we compute it lazily on first use. Before the page has fully loaded
- * we return the minimum-rows fallback WITHOUT touching layout (and without
- * caching, so the first post-load call still measures the real viewport);
- * once loaded, the measured value is cached, preserving the previous
- * computed-once module-constant semantics.
- */
-let cachedPageSize: number | undefined
-const getPageSize = (): number => {
-  if (cachedPageSize !== undefined) {
-    return cachedPageSize
-  }
-  if (document.readyState !== 'complete') {
-    return MinRowsToDisplay
-  }
-  cachedPageSize = Math.ceil(document.documentElement.clientHeight / MinTableRowHeight) || MinRowsToDisplay
-  return cachedPageSize
-}
 
 function Table<Data>({ table }: { table: TableType<Data> }) {
   const application = useApplication()
+  const gridRef = useRef<HTMLDivElement>(null)
+  const [pendingFocus, setPendingFocus] = useState<{ rowIndex: number; colIndex: number } | null>(null)
 
-  const [rowsToDisplay, setRowsToDisplay] = useState<number>(getPageSize)
-  const paginate = useCallback(() => {
-    setRowsToDisplay((cellsToDisplay) => cellsToDisplay + getPageSize())
-  }, [])
   const onScroll = useCallback(
     (event: React.UIEvent<HTMLDivElement, UIEvent>) => {
+      if (!table.hasMoreRows) {
+        return
+      }
       const offset = PageScrollThreshold
-      const element = event.target as HTMLElement
+      const element = event.currentTarget
       if (element.scrollTop + element.offsetHeight >= element.scrollHeight - offset) {
-        paginate()
+        table.loadMoreRows()
       }
     },
-    [paginate],
+    [table],
   )
 
   const {
@@ -160,6 +186,42 @@ function Table<Data>({ table }: { table: TableType<Data> }) {
 
   const focusedRowIndex = useRef<number>(0)
   const focusedCellIndex = useRef<number>(0)
+
+  const focusCell = useCallback((rowIndex: number, colIndex: number): boolean => {
+    const row = gridRef.current?.querySelector(`[role="row"][aria-rowindex="${rowIndex}"]`)
+    const cell = row?.querySelector<HTMLElement>(`[aria-colindex="${colIndex}"]`)
+    if (!cell) {
+      return false
+    }
+    cell.focus()
+    return true
+  }, [])
+
+  const focusLogicalCell = useCallback(
+    (requestedRowIndex: number, colIndex: number) => {
+      const rowIndex = Math.min(Math.max(requestedRowIndex, 1), rowCount + 1)
+      if (focusCell(rowIndex, colIndex)) {
+        setPendingFocus(null)
+        return
+      }
+      if (rowIndex <= 1 || rowIndex > rowCount + 1) {
+        return
+      }
+
+      setPendingFocus({ rowIndex, colIndex })
+      table.materializeRow(rowIndex - 2)
+    },
+    [focusCell, rowCount, table],
+  )
+
+  useLayoutEffect(() => {
+    if (!pendingFocus) {
+      return
+    }
+    if (pendingFocus.rowIndex > rowCount + 1 || focusCell(pendingFocus.rowIndex, pendingFocus.colIndex)) {
+      setPendingFocus(null)
+    }
+  }, [focusCell, pendingFocus, rowCount, rows])
 
   const onFocus: React.FocusEventHandler = useCallback((event) => {
     const target = event.target as HTMLElement
@@ -189,32 +251,20 @@ function Table<Data>({ table }: { table: TableType<Data> }) {
         (row) => row.getAttribute('aria-rowindex') === focusedRowIndex.current.toString(),
       )
       const allFocusableCells = Array.from(currentRow ? currentRow.querySelectorAll<HTMLElement>('[tabindex]') : [])
-      const allRenderedColumnsLength = headers.length
-
-      const focusCell = (rowIndex: number, colIndex: number) => {
-        const row = gridElement.querySelector(`[role="row"][aria-rowindex="${rowIndex}"]`)
-        if (!row) {
-          return
-        }
-        const cell = row.querySelector<HTMLElement>(`[aria-colindex="${colIndex}"]`)
-        if (cell) {
-          cell.focus()
-        }
-      }
 
       switch (event.key) {
         case KeyboardKey.Up:
           event.preventDefault()
           if (focusedRowIndex.current > 1) {
             const previousRow = focusedRowIndex.current - 1
-            focusCell(previousRow, focusedCellIndex.current)
+            focusLogicalCell(previousRow, focusedCellIndex.current)
           }
           break
         case KeyboardKey.Down:
           event.preventDefault()
           if (focusedRowIndex.current <= rowCount) {
             const nextRow = focusedRowIndex.current + 1
-            focusCell(nextRow, focusedCellIndex.current)
+            focusLogicalCell(nextRow, focusedCellIndex.current)
           }
           break
         case KeyboardKey.Left: {
@@ -256,7 +306,7 @@ function Table<Data>({ table }: { table: TableType<Data> }) {
         case KeyboardKey.Home:
           event.preventDefault()
           if (event.ctrlKey) {
-            focusCell(1, 1)
+            focusLogicalCell(1, 1)
           } else {
             if (!allFocusableCells) {
               return
@@ -267,14 +317,15 @@ function Table<Data>({ table }: { table: TableType<Data> }) {
             }
             const firstCellIndex = parseInt(firstFocusableCell.getAttribute('aria-colindex') || '0')
             if (firstCellIndex > 0) {
-              focusCell(focusedRowIndex.current, firstCellIndex)
+              focusLogicalCell(focusedRowIndex.current, firstCellIndex)
             }
           }
           break
         case KeyboardKey.End: {
           event.preventDefault()
           if (event.ctrlKey) {
-            focusCell(allRenderedRows.length, allRenderedColumnsLength || colCount)
+            const lastVisibleColumnIndex = headers.filter((header) => !header.hidden).at(-1)?.colIndex
+            focusLogicalCell(rowCount > 0 ? rowCount + 1 : 1, (lastVisibleColumnIndex ?? Math.max(colCount - 1, 0)) + 1)
             return
           }
           if (!allFocusableCells) {
@@ -286,7 +337,7 @@ function Table<Data>({ table }: { table: TableType<Data> }) {
           }
           const lastCellIndex = parseInt(lastFocusableCell.getAttribute('aria-colindex') || '0')
           if (lastCellIndex > 0) {
-            focusCell(focusedRowIndex.current, lastCellIndex)
+            focusLogicalCell(focusedRowIndex.current, lastCellIndex)
           }
           break
         }
@@ -294,20 +345,16 @@ function Table<Data>({ table }: { table: TableType<Data> }) {
           event.preventDefault()
           const previousRow = focusedRowIndex.current - 5
           if (previousRow > 0) {
-            focusCell(previousRow, focusedCellIndex.current)
+            focusLogicalCell(previousRow, focusedCellIndex.current)
           } else {
-            focusCell(1, focusedCellIndex.current)
+            focusLogicalCell(1, focusedCellIndex.current)
           }
           break
         }
         case KeyboardKey.PageDown: {
           event.preventDefault()
-          const nextRow = focusedRowIndex.current + 5
-          if (nextRow <= allRenderedRows.length) {
-            focusCell(nextRow, focusedCellIndex.current)
-          } else {
-            focusCell(allRenderedRows.length, focusedCellIndex.current)
-          }
+          const nextRow = Math.min(focusedRowIndex.current + 5, rowCount + 1)
+          focusLogicalCell(nextRow, focusedCellIndex.current)
           break
         }
         case KeyboardKey.Enter: {
@@ -316,6 +363,9 @@ function Table<Data>({ table }: { table: TableType<Data> }) {
           if (closestColumnHeader && closestColumnHeader.getAttribute('data-can-sort')) {
             event.preventDefault()
             closestColumnHeader.click()
+            return
+          }
+          if (isInteractiveTableEventTarget(target)) {
             return
           }
           const currentRowId = currentRow?.id
@@ -351,8 +401,9 @@ function Table<Data>({ table }: { table: TableType<Data> }) {
       application.keyboardService.isMac,
       canSelectMultipleRows,
       colCount,
+      focusLogicalCell,
       handleActivateRow,
-      headers.length,
+      headers,
       multiSelectRow,
       rangeSelectUpToRow,
       rowCount,
@@ -395,6 +446,7 @@ function Table<Data>({ table }: { table: TableType<Data> }) {
       <div
         className="relative grid w-full overflow-x-hidden px-3"
         role="grid"
+        ref={gridRef}
         aria-colcount={colCount}
         aria-rowcount={rowCount}
         aria-multiselectable={canSelectMultipleRows}
@@ -441,11 +493,11 @@ function Table<Data>({ table }: { table: TableType<Data> }) {
             })}
         </div>
         <div className="contents whitespace-nowrap">
-          {rows.slice(0, rowsToDisplay).map((row, index) => (
+          {rows.map((row) => (
             <TableRow
               row={row}
               key={row.id}
-              index={index}
+              index={row.rowIndex}
               canSelectRows={canSelectRows}
               handleRowClick={handleRowClick}
               handleRowContextMenu={handleRowContextMenu}

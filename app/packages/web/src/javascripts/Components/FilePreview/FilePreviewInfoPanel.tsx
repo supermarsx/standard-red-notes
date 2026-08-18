@@ -1,5 +1,5 @@
 import { formatSizeToReadableString } from '@standardnotes/filepicker'
-import { FileItem } from '@standardnotes/snjs'
+import type { FileItem } from '@standardnotes/snjs'
 import { FunctionComponent } from 'react'
 import Icon from '@/Components/Icon/Icon'
 import { useTranslation } from 'react-i18next'
@@ -31,6 +31,14 @@ const FilePreviewInfoPanel: FunctionComponent<Props> = ({ file }) => {
       <div className="mb-3">
         <span className="font-semibold">{t('lastModified')}</span> {file.userModifiedDate.toLocaleString()}
       </div>
+      {file.description && (
+        <div className="mb-3">
+          <div className="font-semibold">{t('fileDescription')}</div>
+          <p className="mt-1 whitespace-pre-wrap break-words" dir="auto">
+            {file.description}
+          </p>
+        </div>
+      )}
       <div>
         <span className="font-semibold">{t('fileId')}</span> {file.uuid}
       </div>

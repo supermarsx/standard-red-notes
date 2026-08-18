@@ -37,14 +37,14 @@
       }
 
       .note-view-linking-container,
-      #toggle-linking-container {
+      .note-view-linking-toggle {
         display: none;
       }
 
       #editor-title-bar:hover,
       #editor-title-bar:has(:focus) {
         .note-view-linking-container,
-        #toggle-linking-container {
+        .note-view-linking-toggle {
           display: flex;
         }
 

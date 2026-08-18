@@ -1,6 +1,6 @@
 import { FunctionComponent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { observer } from 'mobx-react-lite'
-import { ContentType, FileItem } from '@standardnotes/snjs'
+import { ContentType, FileItem, SortableItem } from '@standardnotes/snjs'
 import { classNames } from '@standardnotes/utils'
 import { formatSizeToReadableString } from '@standardnotes/filepicker'
 import { FileItemActionType } from '@/Components/AttachedFilesPopover/PopoverFileItemAction'
@@ -9,12 +9,18 @@ import Icon from '@/Components/Icon/Icon'
 import { getFileIconComponent } from '@/Components/FilePreview/getFileIconComponent'
 import { getIconForFileType } from '@/Utils/Items/Icons/getIconForFileType'
 import { FeatureName } from '@/Controllers/FeatureName'
-import { ItemLinksCell } from '@/Components/ContentTableView/ContentTableView'
+import { ContextMenuCell, ItemLinksCell } from '@/Components/ContentTableView/ContentTableView'
 import Menu from '@/Components/Menu/Menu'
 import FileMenuOptions from '@/Components/FileContextMenu/FileMenuOptions'
 import Popover from '@/Components/Popover/Popover'
 import { useFileDragNDrop } from '@/Components/FileDragNDropProvider'
 import { FilesSortBy, sortFiles } from '@/Utils/Items/sortFiles'
+import Table from '@/Components/Table/Table'
+import { TableColumn } from '@/Components/Table/CommonTypes'
+import { useTable } from '@/Components/Table/useTable'
+import { formatDateForContextMenu } from '@/Utils/DateUtils'
+import { MutuallyExclusiveMediaQueryBreakpoints, useMediaQuery } from '@/Hooks/useMediaQuery'
+import { filesSortByForTableSortBy, getFileTypeLabel, tableSortByForFilesSortBy } from './FilesViewTableUtils'
 
 type Props = {
   application: WebApplication
@@ -22,103 +28,39 @@ type Props = {
   id?: string
 }
 
-/** A single file card with selection, preview-on-click, links + a context menu. */
-const FileCard: FunctionComponent<{
+const FileNameCell: FunctionComponent<{
   file: FileItem
-  isSelected: boolean
-  selectionActive: boolean
-  onToggleSelect: (file: FileItem, additive: boolean) => void
   onPreview: (file: FileItem) => void
-}> = ({ file, isSelected, selectionActive, onToggleSelect, onPreview }) => {
-  const [menuVisible, setMenuVisible] = useState(false)
-  const menuAnchorRef = useRef<HTMLButtonElement>(null)
-
+}> = ({ file, onPreview }) => {
   return (
-    <div
-      className={classNames(
-        'group relative flex flex-col items-center gap-2 rounded-lg border border-solid p-3 text-center transition-colors',
-        isSelected ? 'border-info bg-info-backdrop' : 'border-border bg-contrast hover:border-info hover:bg-default',
-      )}
-    >
+    <div className="flex min-w-0 items-center gap-3 whitespace-normal">
+      {getFileIconComponent(getIconForFileType(file.mimeType), 'w-6 h-6 flex-shrink-0')}
       <button
         type="button"
-        title={file.name}
-        className="flex w-full flex-col items-center gap-2"
+        title={`Preview ${file.name}`}
+        aria-label={`Preview ${file.name}`}
+        className="focus:border-info min-w-0 overflow-hidden rounded text-left focus:border focus:outline-none"
         onClick={(event) => {
-          if (selectionActive || event.metaKey || event.ctrlKey) {
-            onToggleSelect(file, event.metaKey || event.ctrlKey)
-          } else {
-            onPreview(file)
-          }
+          event.preventDefault()
+          event.stopPropagation()
+          onPreview(file)
         }}
       >
-        {getFileIconComponent(getIconForFileType(file.mimeType), 'w-8 h-8 flex-shrink-0')}
-        <span className="text-text line-clamp-2 w-full text-xs font-semibold break-words">{file.name}</span>
-        <span className="text-passive-1 text-[0.625rem]">{formatSizeToReadableString(file.decryptedSize)}</span>
+        <span className="text-text block overflow-hidden text-sm font-semibold text-ellipsis whitespace-nowrap">
+          {file.name}
+        </span>
       </button>
-
-      <div className="flex items-center gap-1">
-        <ItemLinksCell item={file} />
-        <button
-          ref={menuAnchorRef}
-          className="border-border bg-default rounded-full border p-1"
-          title="File options"
-          onClick={(event) => {
-            event.preventDefault()
-            event.stopPropagation()
-            setMenuVisible((visible) => !visible)
-          }}
-        >
-          <Icon type="more" />
-        </button>
-        <Popover
-          title="File options"
-          open={menuVisible}
-          anchorElement={menuAnchorRef}
-          togglePopover={() => setMenuVisible(false)}
-          side="bottom"
-          align="center"
-          className="py-2"
-        >
-          <Menu a11yLabel="File context menu">
-            <FileMenuOptions
-              closeMenu={() => setMenuVisible(false)}
-              shouldShowRenameOption={true}
-              shouldShowAttachOption={false}
-              selectedFiles={[file]}
-            />
-          </Menu>
-        </Popover>
-      </div>
-
-      {selectionActive && (
-        <button
-          type="button"
-          className="border-border bg-default absolute top-2 left-2 rounded border p-0.5"
-          title={isSelected ? 'Deselect' : 'Select'}
-          onClick={(event) => {
-            event.preventDefault()
-            event.stopPropagation()
-            onToggleSelect(file, true)
-          }}
-        >
-          <Icon
-            type={isSelected ? 'check-circle-filled' : 'check-circle'}
-            className={isSelected ? 'text-info' : 'text-passive-1'}
-          />
-        </button>
-      )}
     </div>
   )
 }
 
 /**
- * Standard Red Notes: a full-column "Files" gallery surfaced as an editor tab. It
+ * Standard Red Notes: a full-column Files table surfaced as an editor tab. It
  * lists ALL displayable files (independent of the sidebar selection), so it is
  * enhanced in place rather than reusing the navigation-scoped ContentTableView.
- * Cards are fully actionable: sortable (name / size / date), multi-selectable with
- * bulk actions, per-file context menu (reusing FileMenuOptions), linked-items
- * (reusing ItemLinksCell) and upload via button or drag-and-drop (filesController).
+ * The shared table provides bounded incremental row rendering, keyboard navigation,
+ * sortable headers and multi-selection while this view keeps its controller-backed
+ * sort/selection state, file-specific actions, upload and drag-and-drop behavior.
  */
 const FilesView: FunctionComponent<Props> = observer(({ application, className, id }) => {
   const { itemListController } = application
@@ -149,6 +91,10 @@ const FilesView: FunctionComponent<Props> = observer(({ application, className, 
   const selectedFiles = useMemo(() => sorted.filter((file) => selectedUuids.has(file.uuid)), [sorted, selectedUuids])
   const selectionActive = selectedUuids.size > 0
 
+  const isSmallBreakpoint = useMediaQuery(MutuallyExclusiveMediaQueryBreakpoints.sm)
+  const isMediumBreakpoint = useMediaQuery(MutuallyExclusiveMediaQueryBreakpoints.md)
+  const isLargeBreakpoint = useMediaQuery(MutuallyExclusiveMediaQueryBreakpoints.lg)
+
   const openFile = useCallback(
     (file: FileItem) => {
       void application.filesController.handleFileAction({
@@ -157,13 +103,6 @@ const FilesView: FunctionComponent<Props> = observer(({ application, className, 
       })
     },
     [application, sorted],
-  )
-
-  const toggleSelect = useCallback(
-    (file: FileItem, additive: boolean) => {
-      itemListController.toggleFilesViewSelection(file.uuid, additive)
-    },
-    [itemListController],
   )
 
   const selectAll = useCallback(() => {
@@ -199,6 +138,114 @@ const FilesView: FunctionComponent<Props> = observer(({ application, className, 
   }, [addDragTarget, removeDragTarget])
 
   const toggleSortDirection = () => itemListController.toggleFilesViewSortDirection()
+
+  const selectedRowIds = useMemo(() => Array.from(selectedUuids), [selectedUuids])
+  const onRowSelectionChange = useCallback(
+    (rowIds: string[]) => {
+      const current = itemListController.filesViewSelectedUuids
+      if (current.size === rowIds.length && rowIds.every((uuid) => current.has(uuid))) {
+        return
+      }
+      itemListController.selectAllFilesViewFiles(rowIds)
+    },
+    [itemListController],
+  )
+
+  const onTableSortChange = useCallback(
+    (tableSortBy: keyof SortableItem, reversed: boolean) => {
+      const nextSortBy = filesSortByForTableSortBy(tableSortBy)
+      if (!nextSortBy) {
+        return
+      }
+
+      itemListController.setFilesViewSortBy(nextSortBy)
+      const nextDirection = reversed ? 'dsc' : 'asc'
+      if (sortDirection !== nextDirection) {
+        itemListController.toggleFilesViewSortDirection()
+      }
+    },
+    [itemListController, sortDirection],
+  )
+
+  const columnDefs: TableColumn<FileItem>[] = useMemo(
+    () => [
+      {
+        name: 'Name',
+        sortBy: 'title',
+        cell: (file) => <FileNameCell file={file} onPreview={openFile} />,
+      },
+      {
+        name: 'Description',
+        cell: (file) => (
+          <span
+            className={classNames(
+              'line-clamp-2 text-sm whitespace-normal',
+              file.description ? 'text-text' : 'text-passive-2 italic',
+            )}
+            title={file.description || 'No description'}
+          >
+            {file.description || 'No description'}
+          </span>
+        ),
+        hidden: isSmallBreakpoint || isMediumBreakpoint,
+      },
+      {
+        name: 'Type',
+        cell: (file) => {
+          const typeLabel = getFileTypeLabel(file)
+          return (
+            <span className="text-passive-1 overflow-hidden text-xs text-ellipsis" title={typeLabel}>
+              {typeLabel}
+            </span>
+          )
+        },
+        hidden: isSmallBreakpoint,
+      },
+      {
+        name: 'Size',
+        sortBy: 'decryptedSize',
+        cell: (file) => <span className="text-sm tabular-nums">{formatSizeToReadableString(file.decryptedSize)}</span>,
+      },
+      {
+        name: 'Uploaded',
+        sortBy: 'created_at',
+        cell: (file) => <span className="text-sm tabular-nums">{formatDateForContextMenu(file.created_at)}</span>,
+        hidden: isSmallBreakpoint,
+      },
+      {
+        name: 'Modified',
+        cell: (file) => <span className="text-sm tabular-nums">{formatDateForContextMenu(file.userModifiedDate)}</span>,
+        hidden: isSmallBreakpoint || isMediumBreakpoint || isLargeBreakpoint,
+      },
+    ],
+    [isLargeBreakpoint, isMediumBreakpoint, isSmallBreakpoint, openFile],
+  )
+
+  const getRowId = useCallback((file: FileItem) => file.uuid, [])
+  const renderRowActions = useCallback(
+    (file: FileItem) => (
+      <div className="flex items-center gap-2">
+        <ItemLinksCell item={file} />
+        <ContextMenuCell items={[file]} />
+      </div>
+    ),
+    [],
+  )
+
+  const table = useTable({
+    data: sorted,
+    columns: columnDefs,
+    sortBy: tableSortByForFilesSortBy(sortBy),
+    sortReversed: sortDirection === 'dsc',
+    onSortChange: onTableSortChange,
+    getRowId,
+    enableRowSelection: true,
+    enableMultipleRowSelection: true,
+    selectedRowIds,
+    onRowSelectionChange,
+    onRowActivate: openFile,
+    rowActions: renderRowActions,
+  })
 
   return (
     <div ref={containerRef} id={id} className={classNames('bg-default flex flex-col overflow-hidden', className)}>
@@ -276,9 +323,9 @@ const FilesView: FunctionComponent<Props> = observer(({ application, className, 
         </div>
       )}
 
-      <div className="min-h-0 flex-grow overflow-y-auto p-4">
+      <div className="min-h-0 flex-grow overflow-hidden">
         {sorted.length === 0 ? (
-          <div className="text-passive-1 flex flex-col items-center justify-center py-16 text-center">
+          <div className="text-passive-1 flex h-full flex-col items-center justify-center p-4 text-center">
             <Icon type="attachment-file" size="large" className="text-passive-2" />
             <div className="mt-2 text-sm">No files yet — upload a file or attach one to a note.</div>
             <button
@@ -290,17 +337,8 @@ const FilesView: FunctionComponent<Props> = observer(({ application, className, 
             </button>
           </div>
         ) : (
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
-            {sorted.map((file) => (
-              <FileCard
-                key={file.uuid}
-                file={file}
-                isSelected={selectedUuids.has(file.uuid)}
-                selectionActive={selectionActive}
-                onToggleSelect={toggleSelect}
-                onPreview={openFile}
-              />
-            ))}
+          <div className="h-full min-h-0 [&>div]:h-full">
+            <Table table={table} />
           </div>
         )}
       </div>

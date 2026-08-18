@@ -157,6 +157,7 @@ export interface MutatorClientInterface {
 
   disassociateFileWithNote(file: FileItem, note: SNNote): Promise<FileItem>
   renameFile(file: FileItem, name: string): Promise<FileItem>
+  setFileDescription(file: FileItem, description: string | undefined): Promise<FileItem>
 
   unlinkItems(
     itemA: DecryptedItemInterface<ItemContent>,

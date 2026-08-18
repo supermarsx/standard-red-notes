@@ -79,6 +79,22 @@ describe('mutator service', () => {
     return mutatorService.insertItem<FileItem>(file)
   }
 
+  describe('file metadata', () => {
+    it('persists a normalized optional file description through the item mutator', async () => {
+      const file = await insertFile('document.txt')
+
+      const updatedFile = await mutatorService.setFileDescription(file, '  Summary\r\nwith\u0000 details  ')
+
+      expect(updatedFile.description).toBe('Summary\nwith details')
+      expect(updatedFile.content.description).toBe('Summary\nwith details')
+
+      const clearedFile = await mutatorService.setFileDescription(updatedFile, ' \n ')
+
+      expect(clearedFile.description).toBeUndefined()
+      expect(clearedFile.content.description).toBeUndefined()
+    })
+  })
+
   describe('file deletion blob cleanup', () => {
     it('deleting a file item routes through FileService.deleteFile to clean its blob', async () => {
       mutatorService.setFileService(fileService)
