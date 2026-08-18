@@ -27,8 +27,19 @@ import {
   RateLimitRedis,
   RequiredCrossServiceTokenMiddleware,
   createAdminEmailDeliveryRouter,
+  DirectCallSyncCommandPort,
+  parseOptionalPositiveInteger,
+  parseWebSocketSyncEnabled,
+  resolveWebSocketSyncAllowedOrigins,
+  SyncWebSocketCommandAdapter,
+  SyncWebSocketRuntime,
   TYPES as ApiGatewayTypes,
 } from '@standardnotes/api-gateway'
+import {
+  createRedisSyncState,
+  type SyncGatewayOptions,
+  type SyncRedisClient,
+} from '@standard-red-notes/websocket-gateway'
 import { Service as FilesService } from '@standardnotes/files-server'
 import { DirectCallDomainEventPublisher } from '@standardnotes/domain-events-infra'
 import { Service as AuthService, AuthServiceInterface } from '@standardnotes/auth-server'
@@ -42,6 +53,7 @@ import cookieParser from 'cookie-parser'
 import { text, json, Request, Response, NextFunction, raw } from 'express'
 import * as http from 'http'
 import * as winston from 'winston'
+import Redis from 'ioredis'
 import { PassThrough } from 'stream'
 import { Env } from '../Bootstrap/Env'
 import { HomeServerInterface } from './HomeServerInterface'
@@ -129,6 +141,34 @@ export class HomeServer implements HomeServerInterface {
 
       const env: Env = new Env(environmentOverrides)
       env.load()
+      const webSocketSyncEnabled = parseWebSocketSyncEnabled(env.get('WEBSOCKET_SYNC_ENABLED', true) || undefined)
+      const syncAllowedOrigins = resolveWebSocketSyncAllowedOrigins(
+        env.get('WEBSOCKET_SYNC_ALLOWED_ORIGINS', true) || undefined,
+        env.get('PUBLIC_URL', true) || undefined,
+      )
+      const syncRedisOptions = {
+        keyPrefix: env.get('WEBSOCKET_SYNC_REDIS_KEY_PREFIX', true) || undefined,
+        operationTimeoutMs: parseOptionalPositiveInteger(
+          'WEBSOCKET_SYNC_REDIS_OPERATION_TIMEOUT_MS',
+          env.get('WEBSOCKET_SYNC_REDIS_OPERATION_TIMEOUT_MS', true) || undefined,
+          30_000,
+        ),
+        commandLeaseTtlMs: parseOptionalPositiveInteger(
+          'WEBSOCKET_SYNC_COMMAND_LEASE_TTL_MS',
+          env.get('WEBSOCKET_SYNC_COMMAND_LEASE_TTL_MS', true) || undefined,
+          300_000,
+        ),
+        socketLeaseTtlMs: parseOptionalPositiveInteger(
+          'WEBSOCKET_SYNC_SOCKET_LEASE_TTL_MS',
+          env.get('WEBSOCKET_SYNC_SOCKET_LEASE_TTL_MS', true) || undefined,
+          300_000,
+        ),
+        maxSocketsPerUser: parseOptionalPositiveInteger(
+          'WEBSOCKET_SYNC_MAX_SOCKETS_PER_USER',
+          env.get('WEBSOCKET_SYNC_MAX_SOCKETS_PER_USER', true) || undefined,
+          1_024,
+        ),
+      }
 
       const requestPayloadLimit = env.get('HTTP_REQUEST_PAYLOAD_LIMIT_MEGABYTES', true)
         ? `${+env.get('HTTP_REQUEST_PAYLOAD_LIMIT_MEGABYTES', true)}mb`
@@ -494,7 +534,7 @@ export class HomeServer implements HomeServerInterface {
       // why this is a post-build handler and not a repaired controller.
       app.use(createFallbackHandler({ welcomeHtml: HOME_SERVER_WELCOME_HTML }))
 
-      const serverInstance = listenHomeServer(app, port, bindAddress)
+      const serverInstance = http.createServer(app)
 
       const readinessState = container.get<{ markReady(): void; markUnavailable(): void }>(
         ApiGatewayTypes.ApiGateway_ReadinessState,
@@ -509,10 +549,103 @@ export class HomeServer implements HomeServerInterface {
 
       serverInstance.keepAliveTimeout = keepAliveTimeout
 
+      const webSocketRuntime = new SyncWebSocketRuntime()
+      let syncStateRedis: Redis | undefined
+      let realtime: { stop(): Promise<void> } | undefined
+      const redisHost = env.get('REDIS_HOST', true) || undefined
+      const connectionTokenSecret = env.get('WEB_SOCKET_CONNECTION_TOKEN_SECRET', true) || undefined
+      if (connectionTokenSecret && redisHost) {
+        try {
+          let sync: SyncGatewayOptions | undefined
+          if (webSocketSyncEnabled && syncAllowedOrigins.length > 0) {
+            syncStateRedis = new Redis({
+              host: redisHost,
+              port: env.get('REDIS_PORT', true) ? +env.get('REDIS_PORT', true) : 6379,
+              lazyConnect: false,
+              maxRetriesPerRequest: 1,
+            })
+            syncStateRedis.on('error', () => logger.warn('WebSocket sync shared-state Redis connection error.'))
+            const syncAdapter = new SyncWebSocketCommandAdapter(
+              container.get(ApiGatewayTypes.ApiGateway_ServiceProxy),
+              new DirectCallSyncCommandPort(serviceContainer),
+              env.get('AUTH_JWT_SECRET', true) || '',
+            )
+            sync = {
+              isEnabled: () => webSocketSyncEnabled,
+              allowedOrigins: syncAllowedOrigins,
+              authorization: syncAdapter,
+              backend: syncAdapter,
+              ...createRedisSyncState(syncStateRedis as unknown as SyncRedisClient, syncRedisOptions),
+              requireSharedState: true,
+            }
+          } else if (webSocketSyncEnabled) {
+            logger.warn('WebSocket sync capability is unavailable because no exact browser origin is configured.')
+          }
+
+          webSocketRuntime.attach({
+            httpServer: serverInstance,
+            logger: {
+              info: (...args: unknown[]) => logger.info(args.map(String).join(' ')),
+              warn: (...args: unknown[]) => logger.warn(args.map(String).join(' ')),
+              error: (...args: unknown[]) => logger.error(args.map(String).join(' ')),
+            },
+            config: {
+              connectionTokenSecret,
+              connectionTokenTtl: env.get('WEB_SOCKET_CONNECTION_TOKEN_TTL', true) || '60s',
+              internalSecret: env.get('WEBSOCKET_GATEWAY_INTERNAL_SECRET', true) || '',
+              authJwtSecret: env.get('AUTH_JWT_SECRET', true) || '',
+              redisHost,
+              redisPort: env.get('REDIS_PORT', true) ? +env.get('REDIS_PORT', true) : 6379,
+              maxConnectionsPerUser: parseOptionalPositiveInteger(
+                'WEBSOCKET_MAX_CONNECTIONS_PER_USER',
+                env.get('WEBSOCKET_MAX_CONNECTIONS_PER_USER', true) || undefined,
+                1_024,
+              ),
+            },
+            sync,
+          })
+          realtime = {
+            stop: async (): Promise<void> => {
+              try {
+                await webSocketRuntime.stop()
+              } finally {
+                const redis = syncStateRedis
+                syncStateRedis = undefined
+                if (redis) {
+                  try {
+                    await redis.quit()
+                  } catch {
+                    redis.disconnect()
+                  }
+                }
+              }
+            },
+          }
+          logger.info('Realtime WebSocket gateway attached to the HomeServer HTTP server')
+        } catch (error) {
+          await webSocketRuntime.stop().catch(() => undefined)
+          syncStateRedis?.disconnect()
+          throw error
+        }
+      } else if (webSocketSyncEnabled) {
+        logger.warn(
+          'WebSocket sync capability is unavailable: connection-token secret and shared Redis state are required.',
+        )
+      }
+
+      try {
+        listenHomeServer(serverInstance, port, bindAddress)
+      } catch (error) {
+        await realtime?.stop().catch(() => undefined)
+        await webSocketRedisBridge.close().catch(() => undefined)
+        throw error
+      }
+
       await this.runtime.start({
         server: serverInstance,
         bridge: webSocketRedisBridge,
         emailDelivery: emailDeliveryRuntime,
+        realtime,
         logger,
         readinessState,
         startScheduler: () => {

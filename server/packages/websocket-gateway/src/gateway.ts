@@ -3,16 +3,33 @@ import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import { WebSocketServer, type RawData, type WebSocket } from 'ws'
 import {
   decodeCrossServiceToken,
+  InMemorySyncAuthTicketStore,
   mintConnectionToken,
   verifyConnectionToken,
   verifyRoomCapabilityWithExpiry,
+  type SyncAuthTicketStore,
+  type SyncTicketIdentity,
 } from './auth.js'
-import { ConnectionRegistry, type Conn } from './registry.js'
+import {
+  ConnectionRegistry,
+  InMemorySyncCommandLeaseRegistry,
+  InMemorySyncSocketBudget,
+  type Conn,
+  type SyncCommandLeaseRegistry,
+  type SyncSocketBudget,
+} from './registry.js'
 import { RoomRegistry, parseRelayFrame, handleRelayFrame, type RoomJoinAuthorizer } from './rooms.js'
 import { startRedisBridge, type Logger } from './redisBridge.js'
 import { startCollaborationRedisBridge } from './collaborationRedisBridge.js'
 import { safeErrorLogMetadata } from './safeLog.js'
-import { startSqsConsumer } from './sqsConsumer.js'
+import { startSqsConsumer, type SqsEventDedupStore } from './sqsConsumer.js'
+import {
+  SyncCommandHandler,
+  type SyncCommandBackendAdapter,
+  type SyncCommandMetrics,
+  type SyncLiveAuthorizationAdapter,
+} from './syncCommandHandler.js'
+import { MAX_SYNC_FRAME_BYTES, SYNC_PROTOCOL_VERSION, isSyncDeviceId } from './syncProtocol.js'
 
 // ---------------------------------------------------------------------------
 // Shared gateway logic.
@@ -67,6 +84,60 @@ export const DEFAULT_WEBSOCKET_INGRESS_LIMITS: Readonly<WebSocketIngressLimits> 
   byteCapacity: 8 * 1024 * 1024,
   byteRefillPerSecond: 2 * 1024 * 1024,
 })
+
+export const DEFAULT_SYNC_WEBSOCKET_INGRESS_LIMITS: Readonly<WebSocketIngressLimits> = Object.freeze({
+  frameCapacity: 32,
+  frameRefillPerSecond: 16,
+  byteCapacity: 2 * 1024 * 1024,
+  byteRefillPerSecond: 512 * 1024,
+})
+
+export const SYNC_SOCKET_PATH = '/sockets/sync'
+export const SYNC_CAPABILITY_ID = 'ws-sync' as const
+
+export interface SyncCapability {
+  id: typeof SYNC_CAPABILITY_ID
+  version: typeof SYNC_PROTOCOL_VERSION
+  endpoint: typeof SYNC_SOCKET_PATH
+}
+
+export interface SyncCapabilityResponse {
+  capabilities: SyncCapability[]
+}
+
+export interface SyncTicketResponse {
+  ticket: string
+  expiresAt: number
+  endpoint: typeof SYNC_SOCKET_PATH
+  capability: typeof SYNC_CAPABILITY_ID
+  version: typeof SYNC_PROTOCOL_VERSION
+}
+
+export interface SyncGatewayOptions {
+  /** Dynamic kill switch, checked during negotiation and before every frame. */
+  isEnabled: () => boolean
+  /** Exact browser origins allowed to establish `/sockets/sync`. */
+  allowedOrigins: readonly string[]
+  authorization: SyncLiveAuthorizationAdapter
+  backend: SyncCommandBackendAdapter
+  tickets?: SyncAuthTicketStore
+  leases?: SyncCommandLeaseRegistry
+  socketBudget?: SyncSocketBudget
+  /** Require fleet-shared ticket/lease/socket state; production wiring should set true. */
+  requireSharedState?: boolean
+  maxSocketsPerUser?: number
+  metrics?: SyncCommandMetrics
+  ingressLimits?: Partial<WebSocketIngressLimits>
+  authDeadlineMs?: number
+  backendTimeoutMs?: number
+  leaseRenewIntervalMs?: number
+  socketBudgetRenewIntervalMs?: number
+}
+
+export interface SyncGatewayAccess {
+  capabilities(): SyncCapabilityResponse
+  issueTicket(identity: SyncTicketIdentity): Promise<SyncTicketResponse>
+}
 
 export interface WebSocketRelayBacklogLimits {
   /** Maximum parsed collaboration frames waiting for ordered async handling. */
@@ -225,12 +296,15 @@ export interface GatewayConfig {
  */
 export interface RouteRegistrar {
   post(path: string, handler: (...args: any[]) => void): unknown
+  get?(path: string, handler: (...args: any[]) => void): unknown
 }
 
 export interface AttachOptions {
   httpServer: HttpServer
   config: GatewayConfig
   logger: Logger
+  /** Shared completion store for durable SQS websocket event IDs. */
+  sqsEventDedupStore?: SqsEventDedupStore
   /**
    * When provided (attached mode), the token-mint endpoint is registered here
    * as `POST /sockets/tokens`. When omitted (standalone mode), the caller wires
@@ -264,6 +338,8 @@ export interface AttachOptions {
    * bypassing per-connection ingress limits by opening unbounded tabs/sockets.
    */
   maxConnectionsPerUser?: number
+  /** Separate authenticated command plane. Omitted means capability off. */
+  sync?: SyncGatewayOptions
 }
 
 export interface AttachedGateway {
@@ -271,6 +347,9 @@ export interface AttachedGateway {
   rooms: RoomRegistry<WebSocket>
   /** POST /sockets/tokens handler, exposed for callers that own their own http server. */
   handleMintToken(req: IncomingMessage, res: ServerResponse): void
+  handleSyncTicket(req: IncomingMessage, res: ServerResponse): void
+  handleSyncCapabilities(_req: IncomingMessage, res: ServerResponse): void
+  sync: SyncGatewayAccess
   /** Tear down the ws server, heartbeat, redis bridge and SQS consumer. */
   stop(): Promise<void>
 }
@@ -363,6 +442,107 @@ function mintFromBody(
   res.end(JSON.stringify({ token }))
 }
 
+function writeJson(res: ServerResponse, status: number, body: unknown): void {
+  res.writeHead(status, { 'content-type': 'application/json' })
+  res.end(JSON.stringify(body))
+}
+
+function readBoundedJsonBody(
+  req: IncomingMessage,
+  maximumBytes = 16_384,
+): Promise<Record<string, unknown> | undefined> {
+  const parsedBody = (req as { body?: unknown }).body
+  if (parsedBody && typeof parsedBody === 'object' && !Array.isArray(parsedBody)) {
+    return Promise.resolve(parsedBody as Record<string, unknown>)
+  }
+  return new Promise((resolve) => {
+    let bytes = 0
+    let body = ''
+    let settled = false
+    req.on('data', (chunk: Buffer | string) => {
+      if (settled) {
+        return
+      }
+      bytes += Buffer.byteLength(chunk)
+      if (bytes > maximumBytes) {
+        settled = true
+        resolve(undefined)
+        return
+      }
+      body += chunk.toString()
+    })
+    req.on('end', () => {
+      if (settled) {
+        return
+      }
+      settled = true
+      try {
+        const parsed = body ? (JSON.parse(body) as unknown) : {}
+        resolve(
+          parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+            ? (parsed as Record<string, unknown>)
+            : undefined,
+        )
+      } catch {
+        resolve(undefined)
+      }
+    })
+    req.on('error', () => {
+      if (!settled) {
+        settled = true
+        resolve(undefined)
+      }
+    })
+  })
+}
+
+function normalizeAllowedOrigins(origins: readonly string[]): ReadonlySet<string> {
+  const normalized = new Set<string>()
+  for (const origin of origins) {
+    if (origin === '*' || origin === 'null') {
+      continue
+    }
+    try {
+      const parsed = new URL(origin)
+      const permittedScheme =
+        parsed.protocol === 'https:' || parsed.protocol === 'http:' || parsed.protocol === 'tauri:'
+      const hasOriginOnly =
+        parsed.username === '' &&
+        parsed.password === '' &&
+        (parsed.pathname === '' || parsed.pathname === '/') &&
+        parsed.search === '' &&
+        parsed.hash === '' &&
+        (parsed.protocol === 'tauri:' ? `${parsed.protocol}//${parsed.host}` === origin : parsed.origin === origin)
+      if (permittedScheme && hasOriginOnly) {
+        normalized.add(origin)
+      }
+    } catch {
+      // Invalid and wildcard origins are not admitted.
+    }
+  }
+  return normalized
+}
+
+async function settleWithin(operation: Promise<unknown>, timeoutMs: number): Promise<boolean> {
+  let timer: NodeJS.Timeout | undefined
+  try {
+    return await Promise.race([
+      operation.then(
+        () => true,
+        () => false,
+      ),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), timeoutMs)
+        timer.unref()
+      }),
+    ])
+  } finally {
+    if (timer) {
+      clearTimeout(timer)
+    }
+  }
+}
+
 /**
  * Attach a WebSocket gateway to an existing http server.
  *
@@ -416,18 +596,128 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
     throw new Error('Invalid WebSocket per-user connection limit: expected a positive safe integer.')
   }
 
+  const syncOptions = opts.sync
+  const syncAllowedOrigins = normalizeAllowedOrigins(syncOptions?.allowedOrigins ?? [])
+  const syncTickets = syncOptions?.tickets ?? new InMemorySyncAuthTicketStore()
+  const syncLeases = syncOptions?.leases ?? new InMemorySyncCommandLeaseRegistry()
+  const syncSocketBudget =
+    syncOptions?.socketBudget ?? new InMemorySyncSocketBudget(syncOptions?.maxSocketsPerUser ?? 4)
+  if (
+    syncOptions?.requireSharedState &&
+    (syncTickets.distribution !== 'shared' ||
+      syncLeases.distribution !== 'shared' ||
+      syncSocketBudget.distribution !== 'shared')
+  ) {
+    throw new Error('WebSocket sync requires fleet-shared ticket, command-lease, and socket-budget stores.')
+  }
+  const syncIngressLimits: WebSocketIngressLimits = {
+    ...DEFAULT_SYNC_WEBSOCKET_INGRESS_LIMITS,
+    ...syncOptions?.ingressLimits,
+  }
+  assertValidIngressLimits(syncIngressLimits)
+  let stopping = false
+  const ticketOperations = new Set<Promise<unknown>>()
+  const syncAvailable = (): boolean =>
+    Boolean(
+      syncOptions &&
+      !stopping &&
+      syncOptions.isEnabled() &&
+      syncAllowedOrigins.size > 0 &&
+      syncTickets.ready() &&
+      syncLeases.ready() &&
+      syncSocketBudget.ready() &&
+      syncOptions.authorization.ready() &&
+      syncOptions.backend.ready(),
+    )
+  const sync: SyncGatewayAccess = {
+    capabilities: () => ({
+      capabilities: syncAvailable()
+        ? [{ id: SYNC_CAPABILITY_ID, version: SYNC_PROTOCOL_VERSION, endpoint: SYNC_SOCKET_PATH }]
+        : [],
+    }),
+    issueTicket: async (identity) => {
+      if (!syncAvailable()) {
+        throw new Error('WebSocket sync is unavailable.')
+      }
+      const operation = syncTickets.issue(identity)
+      ticketOperations.add(operation)
+      try {
+        const issued = await operation
+        if (stopping) {
+          throw new Error('WebSocket sync is stopping.')
+        }
+        return {
+          ticket: issued.ticket,
+          expiresAt: issued.expiresAt,
+          endpoint: SYNC_SOCKET_PATH,
+          capability: SYNC_CAPABILITY_ID,
+          version: SYNC_PROTOCOL_VERSION,
+        }
+      } finally {
+        ticketOperations.delete(operation)
+      }
+    },
+  }
+
   const registry = new ConnectionRegistry<WebSocket>()
   const rooms = new RoomRegistry<WebSocket>()
   const alive = new WeakMap<WebSocket, boolean>()
+  const syncHandlers = new Set<SyncCommandHandler>()
 
   const handleMintToken = buildMintTokenHandler(config, logger)
+  const handleSyncCapabilities = (_req: IncomingMessage, res: ServerResponse): void => {
+    writeJson(res, 200, sync.capabilities())
+  }
+  const handleSyncTicket = (req: IncomingMessage, res: ServerResponse): void => {
+    void (async () => {
+      if (!syncAvailable()) {
+        writeJson(res, 503, { error: { code: 'SYNC_DISABLED' } })
+        return
+      }
+      const body = await readBoundedJsonBody(req)
+      if (!body || !isSyncDeviceId(body.deviceId)) {
+        writeJson(res, 400, { error: { code: 'INVALID_DEVICE' } })
+        return
+      }
+
+      let identity: Omit<SyncTicketIdentity, 'deviceId'> | undefined
+      const xAuthToken = req.headers['x-auth-token']
+      if (typeof xAuthToken === 'string' && xAuthToken.length > 0 && config.authJwtSecret) {
+        identity = decodeCrossServiceToken(xAuthToken, config.authJwtSecret)
+      } else if (config.internalSecret && secretsMatch(req.headers['x-internal-secret'], config.internalSecret)) {
+        if (
+          typeof body.userUuid === 'string' &&
+          body.userUuid.length > 0 &&
+          typeof body.sessionUuid === 'string' &&
+          body.sessionUuid.length > 0
+        ) {
+          identity = { userUuid: body.userUuid, sessionUuid: body.sessionUuid }
+        }
+      }
+      if (!identity) {
+        writeJson(res, 401, { error: { code: 'AUTH_REJECTED' } })
+        return
+      }
+      try {
+        writeJson(res, 200, await sync.issueTicket({ ...identity, deviceId: body.deviceId }))
+      } catch {
+        writeJson(res, 503, { error: { code: 'SYNC_DISABLED' } })
+      }
+    })()
+  }
   if (app) {
     app.post('/sockets/tokens', handleMintToken)
+    app.post('/sockets/sync/tickets', handleSyncTicket)
+    app.get?.('/sockets/sync/capabilities', handleSyncCapabilities)
   }
 
   // This is intentionally enforced by `ws`, before the application-level
   // `message` event and JSON parser can observe or retain an oversized frame.
-  const wss = new WebSocketServer({ server: httpServer, maxPayload: MAX_WEBSOCKET_MESSAGE_BYTES })
+  const wss = new WebSocketServer({
+    server: httpServer,
+    maxPayload: MAX_WEBSOCKET_MESSAGE_BYTES,
+    perMessageDeflate: false,
+  })
   const collaborationRedis = startCollaborationRedisBridge(rooms, {
     host: config.redisHost,
     port: config.redisPort,
@@ -435,8 +725,68 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
   })
 
   wss.on('connection', (socket: WebSocket, req: IncomingMessage) => {
-    // Client connects to: ws://host:PORT/?authToken=<jwt>
     const url = new URL(req.url ?? '/', 'http://localhost')
+    if (url.pathname === SYNC_SOCKET_PATH) {
+      const origin = req.headers.origin
+      if (url.search.length > 0 || typeof origin !== 'string' || !syncAllowedOrigins.has(origin) || !syncAvailable()) {
+        logger.warn('[ws-sync] connection rejected')
+        socket.close(syncAvailable() ? 1008 : 1013, 'sync unavailable')
+        return
+      }
+
+      alive.set(socket, true)
+      const ingressLimiter = new WebSocketIngressLimiter(syncIngressLimits)
+      const handler = new SyncCommandHandler({
+        socket,
+        ownerId: randomUUID(),
+        tickets: syncTickets,
+        leases: syncLeases,
+        socketBudget: syncSocketBudget,
+        authorization: syncOptions!.authorization,
+        backend: syncOptions!.backend,
+        isEnabled: syncOptions!.isEnabled,
+        metrics: syncOptions!.metrics,
+        authDeadlineMs: syncOptions!.authDeadlineMs,
+        backendTimeoutMs: syncOptions!.backendTimeoutMs,
+        leaseRenewIntervalMs: syncOptions!.leaseRenewIntervalMs,
+        socketBudgetRenewIntervalMs: syncOptions!.socketBudgetRenewIntervalMs,
+      })
+      syncHandlers.add(handler)
+
+      const stopHandler = (): void => {
+        handler.disconnect()
+        void handler.stop().finally(() => syncHandlers.delete(handler))
+      }
+
+      socket.on('pong', () => {
+        alive.set(socket, true)
+      })
+      socket.on('message', (data) => {
+        const rawBytes = rawDataByteLength(data)
+        if (rawBytes > MAX_SYNC_FRAME_BYTES) {
+          syncOptions!.metrics?.increment('protocol', 'FRAME_TOO_LARGE')
+          stopHandler()
+          socket.close(1009, 'sync frame too large')
+          return
+        }
+        if (!ingressLimiter.tryConsume(rawBytes)) {
+          syncOptions!.metrics?.increment('rate_limit', 'ingress')
+          stopHandler()
+          socket.close(1008, 'sync rate limit exceeded')
+          return
+        }
+        alive.set(socket, true)
+        handler.enqueue(data.toString(), rawBytes)
+      })
+      socket.on('close', stopHandler)
+      socket.on('error', (error) => {
+        logger.warn('[ws-sync] socket error', safeErrorLogMetadata(error))
+        stopHandler()
+      })
+      return
+    }
+
+    // Legacy client connects to: ws://host:PORT/?authToken=<jwt>
     const token = url.searchParams.get('authToken')
 
     if (!token) {
@@ -546,11 +896,11 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
         // authorizer). Swallow rejections so a failing authorizer can never crash
         // the message handler / gateway; the authorizer itself already fails closed.
         relayQueue = relayQueue
-          .then(() =>
-            connectionClosed
+          .then(() => {
+            return connectionClosed
               ? 0
-              : handleRelayFrame(rooms, conn, frame, roomAuthorizer, () => !connectionClosed, collaborationRedis),
-          )
+              : handleRelayFrame(rooms, conn, frame, roomAuthorizer, () => !connectionClosed, collaborationRedis)
+          })
           .then(() => undefined)
           .catch((err) => {
             logger.warn('[ws] relay frame handling failed', safeErrorLogMetadata(err))
@@ -603,23 +953,102 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
       accessKeyId: config.sqs.accessKeyId,
       secretAccessKey: config.sqs.secretAccessKey,
       logger,
+      dedupStore: opts.sqsEventDedupStore,
     })
   }
 
-  const stop = async (): Promise<void> => {
-    clearInterval(heartbeat)
-    for (const socket of wss.clients) {
-      socket.close(1001, 'server shutting down')
+  let stopPromise: Promise<void> | undefined
+  const stop = (): Promise<void> => {
+    if (stopPromise) {
+      return stopPromise
     }
-    wss.close()
-    stopSqs?.()
-    try {
-      await redis.quit()
-    } catch {
-      redis.disconnect()
-    }
-    await collaborationRedis.stop()
+    stopPromise = (async () => {
+      stopping = true
+      clearInterval(heartbeat)
+      stopSqs?.()
+
+      const websocketClosed = new Promise<void>((resolve) => {
+        let settled = false
+        const finish = (): void => {
+          if (settled) {
+            return
+          }
+          settled = true
+          clearTimeout(forceTerminate)
+          clearTimeout(giveUp)
+          resolve()
+        }
+        const forceTerminate = setTimeout(() => {
+          for (const socket of wss.clients) {
+            socket.terminate()
+          }
+        }, 250)
+        const giveUp = setTimeout(() => {
+          for (const socket of wss.clients) {
+            socket.terminate()
+          }
+          finish()
+        }, 2_000)
+        forceTerminate.unref()
+        giveUp.unref()
+        try {
+          wss.close(finish)
+        } catch {
+          finish()
+        }
+        for (const socket of wss.clients) {
+          try {
+            socket.close(1001, 'server shutting down')
+          } catch {
+            socket.terminate()
+          }
+        }
+      })
+
+      await settleWithin(
+        Promise.allSettled([...ticketOperations, ...[...syncHandlers].map((handler) => handler.stop())]),
+        2_000,
+      )
+      await settleWithin(Promise.resolve(syncTickets.clear?.()), 1_000)
+      await websocketClosed
+
+      if (!(await settleWithin(redis.quit(), 1_500))) {
+        redis.disconnect()
+      }
+      await settleWithin(collaborationRedis.stop(), 4_000)
+    })()
+    return stopPromise
   }
 
-  return { registry, rooms, handleMintToken, stop }
+  return { registry, rooms, handleMintToken, handleSyncTicket, handleSyncCapabilities, sync, stop }
 }
+
+export * from './syncProtocol.js'
+export type {
+  SyncAuthorizationCode,
+  SyncAuthorizationDecision,
+  SyncAuthorizationInput,
+  SyncBackendCommandInput,
+  SyncBackendCommit,
+  SyncBackendStatus,
+  SyncCommandBackendAdapter,
+  SyncLiveAuthorizationAdapter,
+} from './syncCommandHandler.js'
+export type { SyncTicketIdentity } from './auth.js'
+export {
+  RedisSyncAuthTicketStore,
+  RedisSyncCommandLeaseRegistry,
+  RedisSyncSocketBudget,
+  createRedisSyncState,
+} from './syncRedisState.js'
+export type { RedisSyncState, RedisSyncStateOptions, SyncRedisClient } from './syncRedisState.js'
+export type { SyncAuthTicketStore } from './auth.js'
+export type { SyncCommandLeaseRegistry, SyncSocketBudget } from './registry.js'
+export { createRedisSqsEventDedupStore, createInMemorySqsEventDedupStore } from './sqsConsumer.js'
+export type {
+  InMemorySqsEventDedupOptions,
+  RedisSqsEventDedupClient,
+  RedisSqsEventDedupOptions,
+  SqsEventDedupDecision,
+  SqsEventDedupStore,
+} from './sqsConsumer.js'

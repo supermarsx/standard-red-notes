@@ -5,6 +5,7 @@ import { NotificationHttpRepresentation } from '../../../Mapping/Http/Notificati
 import { SavedItemHttpRepresentation } from '../../../Mapping/Http/SavedItemHttpRepresentation'
 import { SharedVaultHttpRepresentation } from '../../../Mapping/Http/SharedVaultHttpRepresentation'
 import { SharedVaultInviteHttpRepresentation } from '../../../Mapping/Http/SharedVaultInviteHttpRepresentation'
+import { SyncCommandResponseMetadata } from '../../SyncCommand/SyncCommandTypes'
 
 export type SyncResponse20200115 = {
   retrieved_items: ItemHttpRepresentation[]
@@ -16,4 +17,5 @@ export type SyncResponse20200115 = {
   shared_vaults: SharedVaultHttpRepresentation[]
   shared_vault_invites: SharedVaultInviteHttpRepresentation[]
   notifications: NotificationHttpRepresentation[]
+  command?: SyncCommandResponseMetadata
 }

@@ -1,3 +1,5 @@
+import { constantTimeDigestMatches } from './syncProtocol.js'
+
 /**
  * Minimal contract a live socket must satisfy so the registry stays
  * testable without a real `ws` WebSocket. The real `ws.WebSocket` is
@@ -51,7 +53,9 @@ export class ConnectionRegistry<S extends SendableSocket = SendableSocket> {
   /** Remove a connection (on close/error). Cleans up empty user buckets. */
   remove(userUuid: string, conn: Conn<S>): void {
     const set = this.byUser.get(userUuid)
-    if (!set) return
+    if (!set) {
+      return
+    }
     set.delete(conn)
     if (set.size === 0) {
       this.byUser.delete(userUuid)
@@ -67,7 +71,9 @@ export class ConnectionRegistry<S extends SendableSocket = SendableSocket> {
   /** Total live socket count across all users (for logging/metrics). */
   size(): number {
     let total = 0
-    for (const set of this.byUser.values()) total += set.size
+    for (const set of this.byUser.values()) {
+      total += set.size
+    }
     return total
   }
 
@@ -134,5 +140,209 @@ export function parseDispatchMessage(raw: string): DispatchMessage {
     userUuid: obj.userUuid,
     message: obj.message,
     originatingSessionUuid: typeof obj.originatingSessionUuid === 'string' ? obj.originatingSessionUuid : undefined,
+  }
+}
+
+export type SyncCommandLeaseResult = { acquired: true } | { acquired: false; reason: 'BUSY' | 'COMMAND_ID_CONFLICT' }
+
+export interface SyncCommandLeaseRegistry {
+  readonly distribution: 'process' | 'shared'
+  ready(): boolean
+  acquire(
+    input: {
+      userUuid: string
+      deviceId: string
+      commandId: string
+      digest: string
+      ownerId: string
+    },
+    signal?: AbortSignal,
+  ): Promise<SyncCommandLeaseResult>
+  renew(
+    input: {
+      userUuid: string
+      deviceId: string
+      commandId: string
+      digest: string
+      ownerId: string
+    },
+    signal?: AbortSignal,
+  ): Promise<boolean>
+  release(
+    input: {
+      userUuid: string
+      deviceId: string
+      commandId: string
+      digest: string
+      ownerId: string
+    },
+    signal?: AbortSignal,
+  ): Promise<void>
+}
+
+interface SyncCommandLease {
+  commandId: string
+  digest: string
+  ownerId: string
+  expiresAt: number
+}
+
+/**
+ * Enforces one active sync command for a user/device pair. A fleet may inject a
+ * shared implementation; this in-memory registry is intentionally independent
+ * from the future syncing-server/protobuf adapter.
+ */
+export class InMemorySyncCommandLeaseRegistry implements SyncCommandLeaseRegistry {
+  readonly distribution = 'process' as const
+  private readonly leases = new Map<string, SyncCommandLease>()
+
+  constructor(
+    private readonly now: () => number = Date.now,
+    private readonly ttlMs = 30_000,
+  ) {}
+
+  ready(): boolean {
+    return true
+  }
+
+  async acquire(input: {
+    userUuid: string
+    deviceId: string
+    commandId: string
+    digest: string
+    ownerId: string
+  }): Promise<SyncCommandLeaseResult> {
+    const key = `${input.userUuid}\u0000${input.deviceId}`
+    let existing = this.leases.get(key)
+    if (existing && existing.expiresAt <= this.now()) {
+      this.leases.delete(key)
+      existing = undefined
+    }
+    if (existing) {
+      if (existing.commandId === input.commandId && !constantTimeDigestMatches(input.digest, existing.digest)) {
+        return { acquired: false, reason: 'COMMAND_ID_CONFLICT' }
+      }
+      return { acquired: false, reason: 'BUSY' }
+    }
+    this.leases.set(key, {
+      commandId: input.commandId,
+      digest: input.digest,
+      ownerId: input.ownerId,
+      expiresAt: this.now() + this.ttlMs,
+    })
+    return { acquired: true }
+  }
+
+  async renew(input: {
+    userUuid: string
+    deviceId: string
+    commandId: string
+    digest: string
+    ownerId: string
+  }): Promise<boolean> {
+    const key = `${input.userUuid}\u0000${input.deviceId}`
+    const existing = this.leases.get(key)
+    if (
+      !existing ||
+      existing.expiresAt <= this.now() ||
+      existing.commandId !== input.commandId ||
+      existing.ownerId !== input.ownerId ||
+      !constantTimeDigestMatches(input.digest, existing.digest)
+    ) {
+      if (existing?.expiresAt !== undefined && existing.expiresAt <= this.now()) {
+        this.leases.delete(key)
+      }
+      return false
+    }
+    existing.expiresAt = this.now() + this.ttlMs
+    return true
+  }
+
+  async release(input: {
+    userUuid: string
+    deviceId: string
+    commandId: string
+    digest: string
+    ownerId: string
+  }): Promise<void> {
+    const key = `${input.userUuid}\u0000${input.deviceId}`
+    const existing = this.leases.get(key)
+    if (
+      existing?.commandId === input.commandId &&
+      existing.ownerId === input.ownerId &&
+      constantTimeDigestMatches(input.digest, existing.digest)
+    ) {
+      this.leases.delete(key)
+    }
+  }
+}
+
+export interface SyncSocketBudget {
+  readonly distribution: 'process' | 'shared'
+  ready(): boolean
+  acquire(input: { userUuid: string; ownerId: string }, signal?: AbortSignal): Promise<boolean>
+  renew(input: { userUuid: string; ownerId: string }, signal?: AbortSignal): Promise<boolean>
+  release(input: { userUuid: string; ownerId: string }, signal?: AbortSignal): Promise<void>
+}
+
+/** Per-user authenticated sync-socket budget for deterministic tests and development. */
+export class InMemorySyncSocketBudget implements SyncSocketBudget {
+  readonly distribution = 'process' as const
+  private readonly byUser = new Map<string, Map<string, number>>()
+
+  constructor(
+    private readonly maximumPerUser = 4,
+    private readonly now: () => number = Date.now,
+    private readonly ttlMs = 75_000,
+  ) {
+    if (!Number.isSafeInteger(maximumPerUser) || maximumPerUser < 1) {
+      throw new Error('Invalid sync per-user socket limit.')
+    }
+  }
+
+  ready(): boolean {
+    return true
+  }
+
+  async acquire(input: { userUuid: string; ownerId: string }): Promise<boolean> {
+    const owners = this.liveOwners(input.userUuid)
+    if (!owners.has(input.ownerId) && owners.size >= this.maximumPerUser) {
+      return false
+    }
+    owners.set(input.ownerId, this.now() + this.ttlMs)
+    this.byUser.set(input.userUuid, owners)
+    return true
+  }
+
+  async renew(input: { userUuid: string; ownerId: string }): Promise<boolean> {
+    const owners = this.liveOwners(input.userUuid)
+    if (!owners.has(input.ownerId)) {
+      return false
+    }
+    owners.set(input.ownerId, this.now() + this.ttlMs)
+    this.byUser.set(input.userUuid, owners)
+    return true
+  }
+
+  async release(input: { userUuid: string; ownerId: string }): Promise<void> {
+    const owners = this.byUser.get(input.userUuid)
+    owners?.delete(input.ownerId)
+    if (owners?.size === 0) {
+      this.byUser.delete(input.userUuid)
+    }
+  }
+
+  private liveOwners(userUuid: string): Map<string, number> {
+    const owners = this.byUser.get(userUuid) ?? new Map<string, number>()
+    const now = this.now()
+    for (const [ownerId, expiresAt] of owners) {
+      if (expiresAt <= now) {
+        owners.delete(ownerId)
+      }
+    }
+    if (owners.size === 0) {
+      this.byUser.delete(userUuid)
+    }
+    return owners
   }
 }

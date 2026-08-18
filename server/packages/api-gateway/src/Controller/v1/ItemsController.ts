@@ -34,6 +34,20 @@ export class ItemsController extends BaseHttpController {
     )
   }
 
+  @httpGet('/sync-command/:commandId')
+  async getSyncCommandStatus(request: Request, response: Response): Promise<void> {
+    await this.serviceProxy.callSyncingServer(
+      request,
+      response,
+      this.endpointResolver.resolveEndpointOrMethodIdentifier(
+        'GET',
+        'items/sync-command/:commandId',
+        request.params.commandId as string,
+      ),
+      request.body,
+    )
+  }
+
   @httpGet('/:uuid')
   async getItem(request: Request, response: Response): Promise<void> {
     await this.serviceProxy.callSyncingServer(

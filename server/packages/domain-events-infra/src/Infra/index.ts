@@ -1,3 +1,5 @@
+export * from './DomainEventDeduplicator'
+
 export * from './DirectCall/DirectCallDomainEventPublisher'
 export * from './DirectCall/DirectCallEventMessageHandler'
 

@@ -10,13 +10,17 @@ import { SyncOptions } from './SyncOptions'
 import { AbstractService } from '../Service/AbstractService'
 import { SyncEvent } from '../Event/SyncEvent'
 import { SyncOpStatus } from './SyncOpStatus'
-import { HttpRequest } from '@standardnotes/responses'
+import { HttpRequest, HttpResponse, RawSyncResponse } from '@standardnotes/responses'
+import { AccountSyncTransportInterface } from './AccountSyncTransport'
 
 export interface SyncServiceInterface extends AbstractService<SyncEvent> {
   sync(options?: Partial<SyncOptions>): Promise<unknown>
   getRawSyncRequestForExternalUse(
     items: (DecryptedItemInterface | DeletedItemInterface)[],
   ): Promise<HttpRequest | undefined>
+
+  /** Installs the web-only worker transport; undefined restores plain HTTP. */
+  setAccountSyncTransport(transport: AccountSyncTransportInterface<HttpResponse<RawSyncResponse>> | undefined): void
 
   isDatabaseLoaded(): boolean
 

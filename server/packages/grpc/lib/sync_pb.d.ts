@@ -6,7 +6,7 @@
 
 import * as jspb from "google-protobuf";
 
-export class ItemHashRepresentation extends jspb.Message { 
+export class ItemHashRepresentation extends jspb.Message {
     getUuid(): string;
     setUuid(value: string): ItemHashRepresentation;
     getUserUuid(): string;
@@ -107,7 +107,7 @@ export namespace ItemHashRepresentation {
     }
 }
 
-export class ItemConflictRepresentation extends jspb.Message { 
+export class ItemConflictRepresentation extends jspb.Message {
 
     hasServerItem(): boolean;
     clearServerItem(): void;
@@ -139,7 +139,7 @@ export namespace ItemConflictRepresentation {
     }
 }
 
-export class ItemRepresentation extends jspb.Message { 
+export class ItemRepresentation extends jspb.Message {
     getUuid(): string;
     setUuid(value: string): ItemRepresentation;
 
@@ -237,7 +237,7 @@ export namespace ItemRepresentation {
     }
 }
 
-export class SavedItemRepresentation extends jspb.Message { 
+export class SavedItemRepresentation extends jspb.Message {
     getUuid(): string;
     setUuid(value: string): SavedItemRepresentation;
 
@@ -311,7 +311,7 @@ export namespace SavedItemRepresentation {
     }
 }
 
-export class MessageRepresentation extends jspb.Message { 
+export class MessageRepresentation extends jspb.Message {
     getUuid(): string;
     setUuid(value: string): MessageRepresentation;
     getRecipientUuid(): string;
@@ -352,7 +352,7 @@ export namespace MessageRepresentation {
     }
 }
 
-export class SharedVaultRepresentation extends jspb.Message { 
+export class SharedVaultRepresentation extends jspb.Message {
     getUuid(): string;
     setUuid(value: string): SharedVaultRepresentation;
     getUserUuid(): string;
@@ -384,7 +384,7 @@ export namespace SharedVaultRepresentation {
     }
 }
 
-export class SharedVaultInviteRepresentation extends jspb.Message { 
+export class SharedVaultInviteRepresentation extends jspb.Message {
     getUuid(): string;
     setUuid(value: string): SharedVaultInviteRepresentation;
     getSharedVaultUuid(): string;
@@ -425,7 +425,7 @@ export namespace SharedVaultInviteRepresentation {
     }
 }
 
-export class NotificationRepresentation extends jspb.Message { 
+export class NotificationRepresentation extends jspb.Message {
     getUuid(): string;
     setUuid(value: string): NotificationRepresentation;
     getUserUuid(): string;
@@ -460,7 +460,7 @@ export namespace NotificationRepresentation {
     }
 }
 
-export class ItemHash extends jspb.Message { 
+export class ItemHash extends jspb.Message {
     getUuid(): string;
     setUuid(value: string): ItemHash;
 
@@ -558,7 +558,123 @@ export namespace ItemHash {
     }
 }
 
-export class SyncResponse extends jspb.Message { 
+export class SyncCommandMetadata extends jspb.Message {
+    getId(): string;
+    setId(value: string): SyncCommandMetadata;
+    getDigest(): string;
+    setDigest(value: string): SyncCommandMetadata;
+
+    serializeBinary(): Uint8Array;
+    toObject(includeInstance?: boolean): SyncCommandMetadata.AsObject;
+    static toObject(includeInstance: boolean, msg: SyncCommandMetadata): SyncCommandMetadata.AsObject;
+    static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+    static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+    static serializeBinaryToWriter(message: SyncCommandMetadata, writer: jspb.BinaryWriter): void;
+    static deserializeBinary(bytes: Uint8Array): SyncCommandMetadata;
+    static deserializeBinaryFromReader(message: SyncCommandMetadata, reader: jspb.BinaryReader): SyncCommandMetadata;
+}
+
+export namespace SyncCommandMetadata {
+    export type AsObject = {
+        id: string,
+        digest: string,
+    }
+}
+
+export class SyncCommandResponseMetadata extends jspb.Message {
+    getId(): string;
+    setId(value: string): SyncCommandResponseMetadata;
+    getDigest(): string;
+    setDigest(value: string): SyncCommandResponseMetadata;
+    getStatus(): string;
+    setStatus(value: string): SyncCommandResponseMetadata;
+
+    hasReplayed(): boolean;
+    clearReplayed(): void;
+    getReplayed(): boolean | undefined;
+    setReplayed(value: boolean): SyncCommandResponseMetadata;
+
+    serializeBinary(): Uint8Array;
+    toObject(includeInstance?: boolean): SyncCommandResponseMetadata.AsObject;
+    static toObject(includeInstance: boolean, msg: SyncCommandResponseMetadata): SyncCommandResponseMetadata.AsObject;
+    static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+    static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+    static serializeBinaryToWriter(message: SyncCommandResponseMetadata, writer: jspb.BinaryWriter): void;
+    static deserializeBinary(bytes: Uint8Array): SyncCommandResponseMetadata;
+    static deserializeBinaryFromReader(message: SyncCommandResponseMetadata, reader: jspb.BinaryReader): SyncCommandResponseMetadata;
+}
+
+export namespace SyncCommandResponseMetadata {
+    export type AsObject = {
+        id: string,
+        digest: string,
+        status: string,
+        replayed?: boolean,
+    }
+}
+
+export class SyncCommandStatusRequest extends jspb.Message {
+    getId(): string;
+    setId(value: string): SyncCommandStatusRequest;
+
+    hasDigest(): boolean;
+    clearDigest(): void;
+    getDigest(): string | undefined;
+    setDigest(value: string): SyncCommandStatusRequest;
+
+    serializeBinary(): Uint8Array;
+    toObject(includeInstance?: boolean): SyncCommandStatusRequest.AsObject;
+    static toObject(includeInstance: boolean, msg: SyncCommandStatusRequest): SyncCommandStatusRequest.AsObject;
+    static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+    static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+    static serializeBinaryToWriter(message: SyncCommandStatusRequest, writer: jspb.BinaryWriter): void;
+    static deserializeBinary(bytes: Uint8Array): SyncCommandStatusRequest;
+    static deserializeBinaryFromReader(message: SyncCommandStatusRequest, reader: jspb.BinaryReader): SyncCommandStatusRequest;
+}
+
+export namespace SyncCommandStatusRequest {
+    export type AsObject = {
+        id: string,
+        digest?: string,
+    }
+}
+
+export class SyncCommandStatusResponse extends jspb.Message {
+    getId(): string;
+    setId(value: string): SyncCommandStatusResponse;
+    getStatus(): string;
+    setStatus(value: string): SyncCommandStatusResponse;
+
+    hasDigest(): boolean;
+    clearDigest(): void;
+    getDigest(): string | undefined;
+    setDigest(value: string): SyncCommandStatusResponse;
+
+    hasResultJson(): boolean;
+    clearResultJson(): void;
+    getResultJson(): string | undefined;
+    setResultJson(value: string): SyncCommandStatusResponse;
+
+    serializeBinary(): Uint8Array;
+    toObject(includeInstance?: boolean): SyncCommandStatusResponse.AsObject;
+    static toObject(includeInstance: boolean, msg: SyncCommandStatusResponse): SyncCommandStatusResponse.AsObject;
+    static extensions: {[key: number]: jspb.ExtensionFieldInfo<jspb.Message>};
+    static extensionsBinary: {[key: number]: jspb.ExtensionFieldBinaryInfo<jspb.Message>};
+    static serializeBinaryToWriter(message: SyncCommandStatusResponse, writer: jspb.BinaryWriter): void;
+    static deserializeBinary(bytes: Uint8Array): SyncCommandStatusResponse;
+    static deserializeBinaryFromReader(message: SyncCommandStatusResponse, reader: jspb.BinaryReader): SyncCommandStatusResponse;
+}
+
+export namespace SyncCommandStatusResponse {
+    export type AsObject = {
+        id: string,
+        status: string,
+        digest?: string,
+        resultJson?: string,
+    }
+}
+
+export class SyncResponse extends jspb.Message {
     clearRetrievedItemsList(): void;
     getRetrievedItemsList(): Array<ItemRepresentation>;
     setRetrievedItemsList(value: Array<ItemRepresentation>): SyncResponse;
@@ -595,6 +711,11 @@ export class SyncResponse extends jspb.Message {
     setNotificationsList(value: Array<NotificationRepresentation>): SyncResponse;
     addNotifications(value?: NotificationRepresentation, index?: number): NotificationRepresentation;
 
+    hasCommand(): boolean;
+    clearCommand(): void;
+    getCommand(): SyncCommandResponseMetadata | undefined;
+    setCommand(value?: SyncCommandResponseMetadata): SyncResponse;
+
     serializeBinary(): Uint8Array;
     toObject(includeInstance?: boolean): SyncResponse.AsObject;
     static toObject(includeInstance: boolean, msg: SyncResponse): SyncResponse.AsObject;
@@ -616,10 +737,11 @@ export namespace SyncResponse {
         sharedVaultsList: Array<SharedVaultRepresentation.AsObject>,
         sharedVaultInvitesList: Array<SharedVaultInviteRepresentation.AsObject>,
         notificationsList: Array<NotificationRepresentation.AsObject>,
+        command?: SyncCommandResponseMetadata.AsObject,
     }
 }
 
-export class SyncRequest extends jspb.Message { 
+export class SyncRequest extends jspb.Message {
     clearItemsList(): void;
     getItemsList(): Array<ItemHash>;
     setItemsList(value: Array<ItemHash>): SyncRequest;
@@ -659,6 +781,11 @@ export class SyncRequest extends jspb.Message {
     getApiVersion(): string | undefined;
     setApiVersion(value: string): SyncRequest;
 
+    hasCommand(): boolean;
+    clearCommand(): void;
+    getCommand(): SyncCommandMetadata | undefined;
+    setCommand(value?: SyncCommandMetadata): SyncRequest;
+
     serializeBinary(): Uint8Array;
     toObject(includeInstance?: boolean): SyncRequest.AsObject;
     static toObject(includeInstance: boolean, msg: SyncRequest): SyncRequest.AsObject;
@@ -679,5 +806,6 @@ export namespace SyncRequest {
         limit?: number,
         contentType?: string,
         apiVersion?: string,
+        command?: SyncCommandMetadata.AsObject,
     }
 }

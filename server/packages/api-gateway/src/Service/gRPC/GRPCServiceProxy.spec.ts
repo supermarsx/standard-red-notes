@@ -262,6 +262,8 @@ describe('GRPCServiceProxy', () => {
         meta: { auth: { userUuid: 'u-1', roles: undefined }, server: { filesServerUrl: 'http://files' } },
         data: { retrieved_items: [] },
       })
+      expect(setHeader).not.toHaveBeenCalledWith('X-Sync-Command-Status', expect.anything())
+      expect(setHeader).not.toHaveBeenCalledWith('X-Sync-Command-Replayed', expect.anything())
     })
 
     it('falls back to HTTP for items/sync on an older api version', async () => {
@@ -269,6 +271,27 @@ describe('GRPCServiceProxy', () => {
 
       expect(syncingServerProxy.sync).not.toHaveBeenCalled()
       expect(sentConfig().url).toBe('http://syncing/items/sync')
+    })
+
+    it('preserves the current 20240226 HTTP route and forwards durable command headers unchanged', async () => {
+      const digest = 'a'.repeat(64)
+      await buildProxy().callSyncingServer(
+        buildRequest({
+          headers: {
+            'x-sync-command-id': 'command-1',
+            'x-sync-command-digest': digest,
+          },
+        }),
+        buildResponse(),
+        'items/sync',
+        { api: '20240226', items: [] },
+      )
+
+      expect(syncingServerProxy.sync).not.toHaveBeenCalled()
+      expect(sentConfig().url).toBe('http://syncing/items/sync')
+      expect(sentConfig().headers['x-sync-command-id']).toBe('command-1')
+      expect(sentConfig().headers['x-sync-command-digest']).toBe(digest)
+      expect(sentConfig().data).toEqual({ api: '20240226', items: [] })
     })
 
     it('falls back to HTTP for a non-sync endpoint even on the latest api version', async () => {
@@ -292,6 +315,43 @@ describe('GRPCServiceProxy', () => {
       await buildProxy().callSyncingServer(buildRequest(), buildResponse(), 'items/sync', { api: '20200115' })
 
       expect(status).toHaveBeenCalledWith(207)
+    })
+
+    it('emits committed/replayed headers without changing the existing response envelope', async () => {
+      ;(syncingServerProxy.sync as jest.Mock).mockResolvedValue({
+        status: 200,
+        replayed: true,
+        data: {
+          retrieved_items: [],
+          command: { id: 'command-1', digest: 'a'.repeat(64), status: 'committed' },
+        },
+      })
+
+      await buildProxy().callSyncingServer(buildRequest(), buildResponse({ user: { uuid: 'u-1' } }), 'items/sync', {
+        api: '20200115',
+      })
+
+      expect(setHeader).toHaveBeenCalledWith('X-Sync-Command-Status', 'committed')
+      expect(setHeader).toHaveBeenCalledWith('X-Sync-Command-Replayed', 'true')
+      expect(send).toHaveBeenCalledWith({
+        meta: { auth: { userUuid: 'u-1', roles: undefined }, server: { filesServerUrl: 'http://files' } },
+        data: {
+          retrieved_items: [],
+          command: { id: 'command-1', digest: 'a'.repeat(64), status: 'committed' },
+        },
+      })
+    })
+
+    it('emits Retry-After for a pending command response', async () => {
+      ;(syncingServerProxy.sync as jest.Mock).mockResolvedValue({
+        status: 409,
+        data: { error: { code: 'sync_command_pending', message: 'pending', retryable: true } },
+      })
+
+      await buildProxy().callSyncingServer(buildRequest(), buildResponse(), 'items/sync', { api: '20200115' })
+
+      expect(setHeader).toHaveBeenCalledWith('Retry-After', '1')
+      expect(status).toHaveBeenCalledWith(409)
     })
   })
 

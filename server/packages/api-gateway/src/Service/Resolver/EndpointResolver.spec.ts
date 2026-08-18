@@ -53,6 +53,20 @@ describe('EndpointResolver', () => {
       expect(resolver.resolveEndpointOrMethodIdentifier('POST', 'items/sync')).toEqual('sync.items.sync')
     })
 
+    it('maps the sync command status route to its dedicated handler before item lookup', () => {
+      const resolver = createResolver(true)
+
+      expect(resolver.resolveEndpointOrMethodIdentifier('GET', 'items/sync-command/:commandId')).toEqual(
+        'sync.items.sync_command_status',
+      )
+      expect(resolver.resolveEndpointOrMethodIdentifier('GET', 'items/:uuid')).toEqual('sync.items.get_item')
+    })
+
+    it('maps legacy websocket token minting to the in-process provider', () => {
+      const resolver = createResolver(true)
+      expect(resolver.resolveEndpointOrMethodIdentifier('POST', 'sockets/tokens')).toBe('websockets.tokens.create')
+    })
+
     // Standard Red Notes: admin suspend/unsuspend + hard-delete routes.
     it('maps the admin suspension status/set and delete identifiers', () => {
       const resolver = createResolver(true)

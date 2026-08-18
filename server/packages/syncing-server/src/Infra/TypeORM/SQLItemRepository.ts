@@ -313,6 +313,14 @@ export class SQLItemRepository implements ItemRepositoryInterface {
 
     if (query.sortBy !== undefined && query.sortOrder !== undefined) {
       queryBuilder.orderBy(`item.${query.sortBy}`, query.sortOrder)
+
+      // A timestamp is not unique. Without the UUID tie breaker, a page ending
+      // inside a group of equal timestamps can return the same rows forever.
+      // Keep every timestamp-ordered query deterministic so descriptor and item
+      // fetches agree on the exact page boundary.
+      if (query.sortBy === 'updated_at_timestamp') {
+        queryBuilder.addOrderBy('item.uuid', query.sortOrder)
+      }
     }
 
     if (query.includeSharedVaultUuids !== undefined && query.includeSharedVaultUuids.length > 0) {
@@ -347,10 +355,22 @@ export class SQLItemRepository implements ItemRepositoryInterface {
         queryBuilder.andWhere('item.content_type = :contentType', { contentType: query.contentType })
       }
     }
-    if (query.lastSyncTime && query.syncTimeComparison) {
-      queryBuilder.andWhere(`item.updated_at_timestamp ${query.syncTimeComparison} :lastSyncTime`, {
-        lastSyncTime: query.lastSyncTime,
-      })
+    if (query.lastSyncTime !== undefined && query.syncTimeComparison) {
+      if (query.lastSyncUuid !== undefined) {
+        const keysetComparison = query.sortOrder === 'DESC' ? '<' : '>'
+        queryBuilder.andWhere(
+          `(item.updated_at_timestamp ${keysetComparison} :lastSyncTime OR ` +
+            `(item.updated_at_timestamp = :lastSyncTime AND item.uuid ${keysetComparison} :lastSyncUuid))`,
+          {
+            lastSyncTime: query.lastSyncTime,
+            lastSyncUuid: query.lastSyncUuid,
+          },
+        )
+      } else {
+        queryBuilder.andWhere(`item.updated_at_timestamp ${query.syncTimeComparison} :lastSyncTime`, {
+          lastSyncTime: query.lastSyncTime,
+        })
+      }
     }
     if (query.createdBetween !== undefined) {
       queryBuilder.andWhere('item.created_at >= :createdAfter AND item.created_at <= :createdBefore', {

@@ -11,7 +11,8 @@ import { ItemRepositoryInterface } from '../../../Item/ItemRepositoryInterface'
 
 export class GetItems implements UseCaseInterface<GetItemsResult> {
   private readonly DEFAULT_ITEMS_LIMIT = 150
-  private readonly SYNC_TOKEN_VERSION = 2
+  /** Sync tokens remain v2; cursor v3 adds the UUID keyset tie breaker. */
+  private readonly CURSOR_TOKEN_VERSION = 3
 
   constructor(
     private itemRepository: ItemRepositoryInterface,
@@ -29,11 +30,11 @@ export class GetItems implements UseCaseInterface<GetItemsResult> {
   ) {}
 
   async execute(dto: GetItemsDTO): Promise<Result<GetItemsResult>> {
-    const lastSyncTimeOrError = this.getLastSyncTime(dto)
-    if (lastSyncTimeOrError.isFailed()) {
-      return Result.fail(lastSyncTimeOrError.getError())
+    const syncPositionOrError = this.getSyncPosition(dto)
+    if (syncPositionOrError.isFailed()) {
+      return Result.fail(syncPositionOrError.getError())
     }
-    const lastSyncTime = lastSyncTimeOrError.getValue()
+    const { lastSyncTime, lastSyncUuid, isLegacyCursor } = syncPositionOrError.getValue()
 
     const userUuidOrError = Uuid.create(dto.userUuid)
     if (userUuidOrError.isFailed()) {
@@ -52,7 +53,10 @@ export class GetItems implements UseCaseInterface<GetItemsResult> {
       ? Math.min(this.contentSizeTransferLimit, this.shadowBannedContentSizeTransferLimit)
       : this.contentSizeTransferLimit
 
-    const syncTimeComparison = dto.cursorToken ? '>=' : '>'
+    // Legacy cursors contain only a timestamp, so retain the inclusive boundary
+    // for one compatibility page. Every response cursor emitted below is v3 and
+    // can advance exactly by (timestamp, uuid).
+    const syncTimeComparison = isLegacyCursor ? '>=' : '>'
     const limit = dto.limit === undefined || dto.limit < 1 ? this.DEFAULT_ITEMS_LIMIT : dto.limit
     const upperBoundLimit = limit < effectiveMaxItemsSyncLimit ? limit : effectiveMaxItemsSyncLimit
 
@@ -66,6 +70,7 @@ export class GetItems implements UseCaseInterface<GetItemsResult> {
     const itemQuery: ItemQuery = {
       userUuid: userUuid.value,
       lastSyncTime: lastSyncTime ?? undefined,
+      lastSyncUuid,
       syncTimeComparison,
       contentType: dto.contentType,
       deleted: lastSyncTime ? undefined : false,
@@ -100,8 +105,11 @@ export class GetItems implements UseCaseInterface<GetItemsResult> {
     // throws `undefined.props`, failing the entire sync. When empty, return
     // without a bogus cursor; the client re-syncs from its existing token.
     if ((transferLimitBreachedBeforeEndOfItems || thereAreStillMoreItemsToFetch) && items.length > 0) {
-      const lastSyncTime = items[items.length - 1].props.timestamps.updatedAt / Time.MicrosecondsInASecond
-      cursorToken = Buffer.from(`${this.SYNC_TOKEN_VERSION}:${lastSyncTime}`, 'utf-8').toString('base64')
+      const lastItem = items[items.length - 1]
+      cursorToken = Buffer.from(
+        `${this.CURSOR_TOKEN_VERSION}:${lastItem.props.timestamps.updatedAt}:${lastItem.id.toString()}`,
+        'utf-8',
+      ).toString('base64')
     }
 
     return Result.ok({
@@ -117,14 +125,20 @@ export class GetItems implements UseCaseInterface<GetItemsResult> {
     return totalItemsCount > upperBoundLimit
   }
 
-  private getLastSyncTime(dto: GetItemsDTO): Result<number | null> {
+  private getSyncPosition(dto: GetItemsDTO): Result<{
+    lastSyncTime: number | null
+    lastSyncUuid?: string
+    isLegacyCursor: boolean
+  }> {
     let token = dto.syncToken
+    let isCursor = false
     if (dto.cursorToken !== undefined && dto.cursorToken !== null) {
       token = dto.cursorToken
+      isCursor = true
     }
 
     if (!token) {
-      return Result.ok(null)
+      return Result.ok({ lastSyncTime: null, isLegacyCursor: false })
     }
 
     const decodedToken = Buffer.from(token, 'base64').toString('utf-8')
@@ -133,10 +147,34 @@ export class GetItems implements UseCaseInterface<GetItemsResult> {
     const version = tokenParts.shift()
 
     switch (version) {
-      case '1':
-        return Result.ok(this.timer.convertStringDateToMicroseconds(tokenParts.join(':')))
-      case '2':
-        return Result.ok(+tokenParts[0] * Time.MicrosecondsInASecond)
+      case '1': {
+        const timestamp = this.timer.convertStringDateToMicroseconds(tokenParts.join(':'))
+        return Number.isSafeInteger(timestamp) && timestamp >= 0
+          ? Result.ok({ lastSyncTime: timestamp, isLegacyCursor: isCursor })
+          : Result.fail('Sync token contains an invalid timestamp')
+      }
+      case '2': {
+        const timestampInSeconds = Number(tokenParts[0])
+        const timestamp = Math.round(timestampInSeconds * Time.MicrosecondsInASecond)
+        return Number.isFinite(timestampInSeconds) && Number.isSafeInteger(timestamp) && timestamp >= 0
+          ? Result.ok({ lastSyncTime: timestamp, isLegacyCursor: isCursor })
+          : Result.fail('Sync token contains an invalid timestamp')
+      }
+      case '3': {
+        if (tokenParts.length !== 2) {
+          return Result.fail('Sync cursor is malformed')
+        }
+        const timestamp = Number(tokenParts[0])
+        const uuidOrError = Uuid.create(tokenParts[1])
+        if (!Number.isSafeInteger(timestamp) || timestamp < 0 || uuidOrError.isFailed()) {
+          return Result.fail('Sync cursor is malformed')
+        }
+        return Result.ok({
+          lastSyncTime: timestamp,
+          lastSyncUuid: uuidOrError.getValue().value,
+          isLegacyCursor: false,
+        })
+      }
       default:
         return Result.fail('Sync token is missing version part')
     }

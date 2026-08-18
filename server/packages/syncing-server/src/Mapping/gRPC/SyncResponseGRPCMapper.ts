@@ -9,6 +9,7 @@ import {
   SharedVaultInviteRepresentation,
   SharedVaultRepresentation,
   SyncResponse,
+  SyncCommandResponseMetadata,
 } from '@standardnotes/grpc'
 
 import { ItemHttpRepresentation } from '../Http/ItemHttpRepresentation'
@@ -56,6 +57,14 @@ export class SyncResponseGRPCMapper implements MapperInterface<SyncResponse20200
 
     const notifications = domain.notifications.map((notification) => this.createNotification(notification))
     syncResponse.setNotificationsList(notifications)
+
+    if (domain.command) {
+      const command = new SyncCommandResponseMetadata()
+      command.setId(domain.command.id)
+      command.setDigest(domain.command.digest)
+      command.setStatus(domain.command.status)
+      syncResponse.setCommand(command)
+    }
 
     return syncResponse
   }

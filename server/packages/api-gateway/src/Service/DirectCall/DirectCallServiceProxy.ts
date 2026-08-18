@@ -3,6 +3,7 @@ import { ServiceContainerInterface, ServiceIdentifier } from '@standardnotes/dom
 
 import { ServiceProxyInterface } from '../Proxy/ServiceProxyInterface'
 import { ResponseLocals } from '../../Controller/ResponseLocals'
+import { webSocketGatewayAccessService } from '../Sync/SyncWebSocketRuntime'
 
 export class DirectCallServiceProxy implements ServiceProxyInterface {
   constructor(
@@ -147,7 +148,6 @@ export class DirectCallServiceProxy implements ServiceProxyInterface {
   }
 
   async callWebSocketServer(_request: Request, response: Response, methodIdentifier: string): Promise<void> {
-    const webSocketServerUrl = process.env.WEB_SOCKET_SERVER_URL
     const locals = response.locals as ResponseLocals
 
     // Only the connection-token endpoint is relevant to the self-hosted gateway;
@@ -155,7 +155,7 @@ export class DirectCallServiceProxy implements ServiceProxyInterface {
     // gateway's ws server manages connection lifecycle directly.
     const isTokenRequest = methodIdentifier.toLowerCase().includes('token')
 
-    if (!webSocketServerUrl || !isTokenRequest || !locals.user?.uuid || !locals.session?.uuid) {
+    if (!isTokenRequest || !locals.user?.uuid || !locals.session?.uuid || !locals.authToken) {
       response.status(400).send({
         error: {
           message: 'Websockets server is not available.',
@@ -164,24 +164,33 @@ export class DirectCallServiceProxy implements ServiceProxyInterface {
       return
     }
 
-    try {
-      const upstream = await fetch(`${webSocketServerUrl.replace(/\/$/, '')}/sockets/tokens`, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          'x-internal-secret': process.env.WEBSOCKET_GATEWAY_INTERNAL_SECRET ?? '',
-        },
-        body: JSON.stringify({ userUuid: locals.user.uuid, sessionUuid: locals.session.uuid }),
-      })
-      const data = (await upstream.json()) as Record<string, unknown>
-      response.status(upstream.status).send(data)
-    } catch (_error) {
-      response.status(502).send({
-        error: {
-          message: 'Could not reach the websockets gateway.',
-        },
-      })
+    let statusCode = 500
+    let data: Record<string, unknown> = { error: { message: 'Could not reach the websockets gateway.' } }
+    const tokenResponse: { writeHead(status: number): unknown; end(body?: string): void } = {
+      writeHead: (status: number): unknown => {
+        statusCode = status
+        return tokenResponse
+      },
+      end: (body?: string): void => {
+        try {
+          data = body ? (JSON.parse(body) as Record<string, unknown>) : {}
+        } catch {
+          statusCode = 502
+        }
+      },
     }
+    const handled = webSocketGatewayAccessService.mintConnectionToken(
+      {
+        headers: { 'x-auth-token': locals.authToken },
+        body: { userUuid: locals.user.uuid, sessionUuid: locals.session.uuid },
+      } as unknown as Request,
+      tokenResponse as never,
+    )
+    if (!handled) {
+      response.status(503).send({ error: { message: 'Websockets server is not available.' } })
+      return
+    }
+    this.sendDecoratedResponse(response, { statusCode, json: data })
   }
 
   private sendDecoratedResponse(

@@ -1,4 +1,4 @@
-import { ConflictParams, ConflictType, HttpRequest } from '@standardnotes/responses'
+import { ConflictParams, ConflictType, HttpRequest, HttpResponse, RawSyncResponse } from '@standardnotes/responses'
 import { AccountSyncOperation } from '@Lib/Services/Sync/Account/Operation'
 import {
   LoggerInterface,
@@ -97,6 +97,7 @@ import {
   SyncBackoffServiceInterface,
   SyncItemsPushedData,
   StorageServiceInterface,
+  AccountSyncTransportInterface,
 } from '@standardnotes/services'
 import { OfflineSyncResponse } from './Offline/Response'
 import {
@@ -226,6 +227,8 @@ export class SyncService
   private lastFocusSyncAt = 0
   /** Bound window listeners, retained so they can be removed on deinit. */
   private removeWindowListeners?: () => void
+  /** Web installs a dedicated-worker transport; all other clients stay HTTP-only. */
+  private accountSyncTransport?: AccountSyncTransportInterface<HttpResponse<RawSyncResponse>>
 
   constructor(
     private itemManager: ItemManager,
@@ -435,6 +438,8 @@ export class SyncService
       this.removeWindowListeners()
       this.removeWindowListeners = undefined
     }
+    this.accountSyncTransport?.deinit?.()
+    this.accountSyncTransport = undefined
     ;(this.autoSyncInterval as unknown) = undefined
     ;(this.sessionManager as unknown) = undefined
     ;(this.itemManager as unknown) = undefined
@@ -461,6 +466,15 @@ export class SyncService
 
   public unlockSyncing(): void {
     this.clientLocked = false
+  }
+
+  public setAccountSyncTransport(
+    transport: AccountSyncTransportInterface<HttpResponse<RawSyncResponse>> | undefined,
+  ): void {
+    if (this.accountSyncTransport !== transport) {
+      this.accountSyncTransport?.deinit?.()
+      this.accountSyncTransport = transport
+    }
   }
 
   public isOutOfSync(): boolean {
@@ -1883,6 +1897,7 @@ export class SyncService
         syncToken,
         paginationToken,
         sharedVaultUuids: options.sharedVaultUuids,
+        transport: this.accountSyncTransport,
       },
     )
 
@@ -1979,6 +1994,37 @@ export class SyncService
         return
       }
 
+      online = this.sessionManager.online()
+
+      /**
+       * A response from an uncertain command belongs to the payload snapshot
+       * that created that command. Apply and checkpoint it before even reading
+       * the current dirty set; only then may this sync build a fresh request
+       * from the post-recovery tokens and collection state.
+       */
+      if (online && options.mode !== SyncMode.LocalOnly && this.accountSyncTransport?.recoverPending) {
+        try {
+          const recoveryOperation = await this.createServerSyncOperation([], options, options.mode)
+          const recovery = await recoveryOperation.recoverPending()
+          if (recovery.hasError) {
+            this.applyOnlineSyncResult(true, true)
+            this.settlePendingSyncRequestsAfterFailure(inTimeResolveQueue)
+            return
+          }
+        } catch (error) {
+          if (!this.dealloced) {
+            this.logger.error('Sync transport recovery failed before collecting uploads', safeErrorLogMetadata(error))
+            this.handleThrownSyncFailure(error, true)
+            this.settlePendingSyncRequestsAfterFailure(inTimeResolveQueue)
+          }
+          return
+        }
+      }
+
+      if (this.dealloced) {
+        return
+      }
+
       /**
        * Preparing includes the durability-critical pre-sync save. It must be inside
        * this owner's finally block so an encryption/IndexedDB failure cannot wedge the
@@ -2007,8 +2053,6 @@ export class SyncService
        * entered for an actual online sync. Without a session this is a local-only persist
        * and must not surface as server "syncing".
        */
-      online = this.sessionManager.online()
-
       const latestItems = await this.prepareForSyncExecution(
         isReadOnlySession ? [] : items,
         inTimeResolveQueue,
@@ -2895,25 +2939,9 @@ export class SyncService
       case WebSocketsServiceEvent.SyncItemsPushed:
         await this.handleItemsPushedOverWebSocket(event.payload as SyncItemsPushedData)
         break
-      case WebSocketsServiceEvent.WebSocketDidOpen:
-        await this.handleWebSocketReconnect()
-        break
       default:
         break
     }
-  }
-
-  /**
-   * Standard Red Notes (Phase 1A): on a websocket (re)connect, ALWAYS run a full
-   * HTTP sync to backfill anything missed while the socket was down. HTTP sync is
-   * the source of truth; the realtime push is only an optimization on top of it.
-   */
-  private async handleWebSocketReconnect(): Promise<void> {
-    this.logger.debug('WebSocket (re)connected; performing full HTTP sync to backfill')
-    this.syncDetached(
-      { source: SyncSource.External, sourceDescription: 'WebSocket reconnect backfill' },
-      'websocket reconnect backfill',
-    )
   }
 
   /**

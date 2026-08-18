@@ -59,6 +59,17 @@ describe('SQSEventMessageHandler', () => {
     expect(dispatched.meta.origin).toEqual('auth')
   })
 
+  it('suppresses a completed redelivery with the same durable event id', async () => {
+    const durableEvent = { ...domainEvent, eventId: 'event-1' }
+    const message = snsEnvelope(durableEvent)
+    const messageHandler = createHandler()
+
+    await messageHandler.handleMessage(message)
+    await messageHandler.handleMessage(message)
+
+    expect(handler.handle).toHaveBeenCalledTimes(1)
+  })
+
   it('also accepts a gzip-compressed envelope', async () => {
     const body = JSON.stringify({
       Message: zlib.gzipSync(Buffer.from(JSON.stringify(domainEvent))).toString('base64'),

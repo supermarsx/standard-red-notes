@@ -67,15 +67,21 @@ vi.mock('@aws-sdk/client-sqs', () => ({
   DeleteMessageCommand: sqs.DeleteMessageCommand,
 }))
 
-import { startSqsConsumer } from '../src/sqsConsumer.js'
+import {
+  createInMemorySqsEventDedupStore,
+  decodeSqsBodyToDispatch,
+  startSqsConsumer,
+  type SqsEventDedupStore,
+} from '../src/sqsConsumer.js'
 import { ConnectionRegistry, type SendableSocket } from '../src/registry.js'
 
 function snsEnvelope(event: unknown): string {
   return JSON.stringify({ Message: zlib.gzipSync(Buffer.from(JSON.stringify(event))).toString('base64') })
 }
 
-function wsEvent(userUuid: string, message: string, originatingSessionUuid?: string): unknown {
+function wsEvent(userUuid: string, message: string, originatingSessionUuid?: string, eventId?: string): unknown {
   return {
+    eventId,
     type: 'WEB_SOCKET_MESSAGE_REQUESTED',
     payload: { userUuid, message, originatingSessionUuid },
   }
@@ -114,6 +120,15 @@ afterEach(() => {
 })
 
 describe('startSqsConsumer', () => {
+  it('preserves the durable event id through envelope decoding', () => {
+    expect(decodeSqsBodyToDispatch(snsEnvelope(wsEvent('user-1', 'payload', undefined, 'event-1')))).toEqual({
+      eventId: 'event-1',
+      userUuid: 'user-1',
+      message: 'payload',
+      originatingSessionUuid: undefined,
+    })
+  })
+
   it('defaults the region and credentials and omits the endpoint when none is given', async () => {
     const drained = whenDrained()
     const stop = startSqsConsumer(makeRegistry().registry, { queueUrl: 'https://sqs/q', logger: makeLogger() })
@@ -184,6 +199,92 @@ describe('startSqsConsumer', () => {
       kind: 'delete',
       input: { QueueUrl: 'https://sqs/q', ReceiptHandle: 'rh-1' },
     })
+    stop()
+  })
+
+  it('dispatches a durable event once and deletes its completed duplicate', async () => {
+    const { registry, send } = makeRegistry()
+    const logger = makeLogger()
+    const body = snsEnvelope(wsEvent('user-1', 'payload-a', undefined, 'event-1'))
+    sqs.state.receiveQueue = [
+      {
+        Messages: [
+          { Body: body, ReceiptHandle: 'rh-first' },
+          { Body: body, ReceiptHandle: 'rh-duplicate' },
+        ],
+      },
+    ]
+    const drained = whenDrained()
+    const stop = startSqsConsumer(registry, {
+      queueUrl: 'https://sqs/q',
+      logger,
+      dedupStore: createInMemorySqsEventDedupStore(),
+    })
+    await drained
+
+    expect(send).toHaveBeenCalledTimes(1)
+    expect(sqs.state.sent.filter((command) => command.kind === 'delete')).toHaveLength(2)
+    expect(logger.info).toHaveBeenCalledWith('[push:sqs] skipped completed websocket duplicate', {
+      userId: 'user-1',
+    })
+    stop()
+  })
+
+  it('fails closed and does not delete a durable event when no shared dedup store is configured', async () => {
+    const { registry, send } = makeRegistry()
+    const logger = makeLogger()
+    sqs.state.receiveQueue = [
+      {
+        Messages: [
+          {
+            Body: snsEnvelope(wsEvent('user-1', 'payload-a', undefined, 'event-1')),
+            ReceiptHandle: 'rh-no-store',
+          },
+        ],
+      },
+    ]
+    const drained = whenDrained()
+    const stop = startSqsConsumer(registry, { queueUrl: 'https://sqs/q', logger })
+    await drained
+
+    expect(send).not.toHaveBeenCalled()
+    expect(sqs.state.sent.filter((command) => command.kind === 'delete')).toHaveLength(0)
+    expect(logger.error).toHaveBeenCalledWith(
+      '[sqs] websocket message processing failed',
+      expect.objectContaining({ errorType: 'Error' }),
+    )
+    stop()
+  })
+
+  it('does not delete after dispatch when durable completion is indeterminate', async () => {
+    const { registry, send } = makeRegistry()
+    const logger = makeLogger()
+    const indeterminateStore: SqsEventDedupStore = {
+      executeOnce: vi.fn(async (_eventIdentity, operation) => {
+        await operation()
+        throw new Error('completion unavailable')
+      }),
+    }
+    sqs.state.receiveQueue = [
+      {
+        Messages: [
+          {
+            Body: snsEnvelope(wsEvent('user-1', 'payload-a', undefined, 'event-1')),
+            ReceiptHandle: 'rh-indeterminate',
+          },
+        ],
+      },
+    ]
+    const drained = whenDrained()
+    const stop = startSqsConsumer(registry, {
+      queueUrl: 'https://sqs/q',
+      logger,
+      dedupStore: indeterminateStore,
+    })
+    await drained
+
+    expect(send).toHaveBeenCalledTimes(1)
+    expect(sqs.state.sent.filter((command) => command.kind === 'delete')).toHaveLength(0)
     stop()
   })
 

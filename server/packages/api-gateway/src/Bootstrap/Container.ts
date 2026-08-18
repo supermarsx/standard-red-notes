@@ -1108,6 +1108,7 @@ export class ContainerConfigLoader {
               isConfiguredForHomeServerOrSelfHosting
                 ? undefined
                 : container.get<DomainEventPublisherInterface>(TYPES.ApiGateway_DomainEventPublisher),
+              env.get('SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET', true) || '',
             ),
           )
         container

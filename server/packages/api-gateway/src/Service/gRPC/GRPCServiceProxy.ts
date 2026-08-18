@@ -189,6 +189,22 @@ export class GRPCServiceProxy implements ServiceProxyInterface {
 
     const result = await this.gRPCSyncingServerServiceProxy.sync(request, response, payload)
 
+    const command =
+      result.data && typeof result.data === 'object' && 'command' in result.data
+        ? (result.data.command as { status?: string } | undefined)
+        : undefined
+    if (command?.status) {
+      response.setHeader('X-Sync-Command-Status', command.status)
+      response.setHeader('X-Sync-Command-Replayed', result.replayed === true ? 'true' : 'false')
+    }
+    const syncError =
+      result.data && typeof result.data === 'object' && 'error' in result.data
+        ? (result.data.error as { code?: string } | undefined)
+        : undefined
+    if (syncError?.code === 'sync_command_pending') {
+      response.setHeader('Retry-After', '1')
+    }
+
     response.status(result.status).send({
       meta: {
         auth: {
@@ -479,6 +495,9 @@ export class GRPCServiceProxy implements ServiceProxyInterface {
       'set-cookie',
       'access-control-expose-headers',
       'x-captcha-required',
+      'x-sync-command-status',
+      'x-sync-command-replayed',
+      'retry-after',
     ]
 
     returnedHeadersFromUnderlyingService.map((headerName) => {

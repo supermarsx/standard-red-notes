@@ -6,11 +6,13 @@ import {
   DomainEventInterface,
   DomainEventMessageHandlerInterface,
 } from '@standardnotes/domain-events'
+import { DomainEventDeduplicator } from '../DomainEventDeduplicator'
 
 export class DirectCallEventMessageHandler implements DomainEventMessageHandlerInterface {
   constructor(
     private handlers: Map<string, DomainEventHandlerInterface>,
     private logger: Logger,
+    private deduplicator = new DomainEventDeduplicator(),
   ) {}
 
   async handleMessage(messageOrEvent: string | DomainEventInterface): Promise<void> {
@@ -27,7 +29,7 @@ export class DirectCallEventMessageHandler implements DomainEventMessageHandlerI
 
     this.logger.debug(`Received event: ${messageOrEvent.type}`)
 
-    await handler.handle(messageOrEvent)
+    await this.deduplicator.handle(messageOrEvent, () => handler.handle(messageOrEvent))
   }
 
   async handleError(error: Error): Promise<void> {

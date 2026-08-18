@@ -5,6 +5,7 @@ import { ApiServiceEventData } from './ApiServiceEventData'
 import { SNFeatureRepo, ServerSyncPushContextualPayload } from '@standardnotes/models'
 import { ClientDisplayableError, HttpRequest, HttpResponse } from '@standardnotes/responses'
 import { AnyFeatureDescription } from '@standardnotes/features'
+import { AccountSyncCommandMetadata } from '../Sync/AccountSyncTransport'
 
 export interface LegacyApiServiceInterface
   extends AbstractService<ApiServiceEvent, ApiServiceEventData>, FilesApiInterface {
@@ -37,6 +38,7 @@ export interface LegacyApiServiceInterface
     paginationToken: string | undefined,
     limit: number,
     sharedVaultUuids?: string[],
+    command?: AccountSyncCommandMetadata,
   ): HttpRequest
 
   getNewSubscriptionToken(): Promise<string | undefined>

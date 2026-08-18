@@ -96,6 +96,12 @@ import { CommandService } from '../Components/CommandPalette/CommandService'
 import { CrossTabCoordinator } from './CrossTab/CrossTabCoordinator'
 import { WebDevice } from './Device/WebDevice'
 import { assistantHttpError } from '@/Assistant/AssistantHttpError'
+import {
+  deriveOpaqueSyncSessionScope,
+  SyncCapability,
+  SyncTicketResponse,
+  WebSocketSyncTransport,
+} from '@/Services/SyncTransport/WebSocketSyncTransport'
 
 export type WebEventObserver = (event: WebAppEvent, data?: unknown) => void
 
@@ -142,6 +148,8 @@ export class WebApplication extends SNApplication implements WebApplicationInter
   // session manager so a `proof-of-work-required` challenge during register /
   // sign-in is solved off the UI thread (Web Worker). Torn down in deinit.
   private _proofOfWorkSolver?: WebProofOfWorkSolver
+  /** Dedicated worker owning the websocket account-sync transport. */
+  private _webSocketSyncTransport?: WebSocketSyncTransport
 
   // Standard Red Notes: per-workspace cross-tab coordinator for SAVE INVALIDATION. Emits
   // the uuids this tab saves to the shared IndexedDB and, on a peer's save broadcast,
@@ -220,6 +228,8 @@ export class WebApplication extends SNApplication implements WebApplicationInter
     // (opt-in; disabled by default), since the challenge is never issued.
     this._proofOfWorkSolver = new WebProofOfWorkSolver()
     this.sessions.setProofOfWorkSolver(this._proofOfWorkSolver)
+
+    this.installWebSocketSyncTransport()
 
     void this.mobileWebReceiver
     void this.autolockService
@@ -427,6 +437,66 @@ export class WebApplication extends SNApplication implements WebApplicationInter
     this.disposers.push(subscribeManualSyncMode(apply))
   }
 
+  /**
+   * Install websocket-preferred account sync for capable browsers. Capability
+   * and one-use ticket requests stay on the authenticated main-thread client;
+   * no long-lived session token is ever posted to the worker.
+   */
+  private installWebSocketSyncTransport(): void {
+    const deviceId = getOrCreateSyncDeviceId(this.identifier)
+    const transport = new WebSocketSyncTransport({
+      deviceId,
+      getConfiguredWebSocketUrl: () => this.sockets.getConfiguredWebSocketUrl(),
+      getAuthenticatedSessionScope: () => this.getOpaqueAuthenticatedSyncSessionScope(),
+      controlPlane: {
+        getCapabilities: async () => {
+          const response = await this.serverGetJsonRequest<{ capabilities?: SyncCapability[] }>(
+            '/v1/sockets/sync/capabilities',
+          )
+          return response.ok && Array.isArray(response.data.capabilities)
+            ? { capabilities: response.data.capabilities }
+            : undefined
+        },
+        createTicket: async (requestedDeviceId) => {
+          const response = await this.serverJsonRequest<SyncTicketResponse>('/v1/sockets/sync/ticket', {
+            deviceId: requestedDeviceId,
+          })
+          return response.ok ? response.data : undefined
+        },
+      },
+    })
+    this._webSocketSyncTransport = transport
+    this.sync.setAccountSyncTransport(transport)
+    this.disposers.push(this.sockets.onSyncTransportSessionRevoked(() => transport.notifySessionRevoked()))
+  }
+
+  /**
+   * Scope durable worker state to one authenticated session epoch. Modern
+   * session tokens keep their UUID in the second colon-delimited segment while
+   * rotating the secret segment, so access-token refresh preserves this scope.
+   * The returned digest never exposes the user, session UUID, host, or token.
+   */
+  private async getOpaqueAuthenticatedSyncSessionScope(): Promise<string | undefined> {
+    const user = this.sessions.getUser()
+    const session = (this.sessions as unknown as { getSession?: () => unknown }).getSession?.()
+    const accessToken = extractAccessToken(session)
+    if (!user?.uuid || !accessToken || !globalThis.crypto?.subtle) {
+      return undefined
+    }
+    let host: string
+    try {
+      host = new URL(this.getHost.execute().getValue()).origin
+    } catch {
+      host = this.getHost.execute().getValue()
+    }
+    return deriveOpaqueSyncSessionScope({
+      applicationIdentifier: this.identifier,
+      host,
+      userUuid: user.uuid,
+      accessToken,
+    })
+  }
+
   override deinit(mode: DeinitMode, source: DeinitSource): void {
     if (!this.isNativeMobileWeb()) {
       this.webOrDesktopDevice.removeApplication(this)
@@ -467,6 +537,9 @@ export class WebApplication extends SNApplication implements WebApplicationInter
     // Standard Red Notes: terminate the proof-of-work solver worker.
     this._proofOfWorkSolver?.destroy()
     this._proofOfWorkSolver = undefined
+
+    this._webSocketSyncTransport?.deinit()
+    this._webSocketSyncTransport = undefined
 
     // Standard Red Notes: close the per-workspace save coordination channel. (The keychain
     // coordinator is closed by WebDevice.deinit via removeApplication above.)
@@ -1364,4 +1437,31 @@ function extractAccessToken(session: unknown): string | undefined {
     return (accessToken as { value: string }).value
   }
   return undefined
+}
+
+const SYNC_DEVICE_ID_STORAGE_KEY = 'standardnotes.sync-device-id.v1'
+const SYNC_DEVICE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u
+
+function getOrCreateSyncDeviceId(applicationIdentifier: string): string {
+  try {
+    const stored = globalThis.localStorage?.getItem(SYNC_DEVICE_ID_STORAGE_KEY)
+    if (stored && SYNC_DEVICE_ID_PATTERN.test(stored)) {
+      return stored
+    }
+  } catch {
+    // A deterministic per-workspace fallback below still coordinates tabs.
+  }
+
+  let hash = 0x811c9dc5
+  for (let index = 0; index < applicationIdentifier.length; index++) {
+    hash ^= applicationIdentifier.charCodeAt(index)
+    hash = Math.imul(hash, 0x01000193)
+  }
+  const deviceId = `web-${(hash >>> 0).toString(16).padStart(8, '0')}`
+  try {
+    globalThis.localStorage?.setItem(SYNC_DEVICE_ID_STORAGE_KEY, deviceId)
+  } catch {
+    // Private/locked storage: the deterministic id remains stable across tabs.
+  }
+  return deviceId
 }

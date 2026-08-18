@@ -1,0 +1,769 @@
+import type { AccountSyncCommandMetadata, AccountSyncTransportRequest } from '@standardnotes/services'
+import {
+  digestSyncBody,
+  frameByteLength,
+  isSyncServerFrame,
+  MainToSyncWorkerMessage,
+  MAX_SYNC_BUFFERED_BYTES,
+  MAX_SYNC_FRAME_BYTES,
+  normalizeSyncRequestForWire,
+  payloadByteLength,
+  SYNC_CHANNEL,
+  SYNC_PROTOCOL_VERSION,
+  SyncClientFrame,
+  SyncFallbackReason,
+  SyncServerFrame,
+  SyncTicket,
+  SyncTransportState,
+  SyncWorkerToMainMessage,
+  utf8Bytes,
+} from './syncTransportProtocol'
+import { IndexedDbSyncOutbox, SyncOutboxRecord, SyncOutboxStore } from './SyncTransportOutbox'
+
+const AUTH_ACK_TIMEOUT_MS = 5_000
+const COMMAND_ACK_TIMEOUT_MS = 15_000
+const HEARTBEAT_INTERVAL_MS = 30_000
+const OWNER_LEASE_TTL_MS = 15_000
+const OWNER_RENEW_INTERVAL_MS = 5_000
+const MAX_RECONNECT_ATTEMPTS = 2
+const OPAQUE_SESSION_SCOPE_PATTERN = /^sync-session-v1:[a-f0-9]{64}$/u
+
+export interface SyncSocketLike {
+  readonly readyState: number
+  readonly bufferedAmount: number
+  onopen: (() => void) | null
+  onmessage: ((event: { data: unknown }) => void) | null
+  onerror: (() => void) | null
+  onclose: ((event: { code?: number }) => void) | null
+  send(data: string): void
+  close(code?: number, reason?: string): void
+}
+
+export type SyncWorkerRuntimeDependencies = {
+  outbox?: SyncOutboxStore
+  socketFactory?: (endpoint: string) => SyncSocketLike
+  postMessage: (message: SyncWorkerToMainMessage) => void
+  now?: () => number
+  random?: () => number
+  uuid?: () => string
+  setTimeout?: typeof globalThis.setTimeout
+  clearTimeout?: typeof globalThis.clearTimeout
+  setInterval?: typeof globalThis.setInterval
+  clearInterval?: typeof globalThis.clearInterval
+  subtle?: SubtleCrypto
+}
+
+type ActiveRequest = {
+  clientRequestId: string
+  sessionScope: string
+  mode: 'execute' | 'recover'
+  body: AccountSyncTransportRequest
+}
+
+function defaultUuid(): string {
+  return crypto.randomUUID()
+}
+
+function parseStoredBody(record: SyncOutboxRecord): AccountSyncTransportRequest | undefined {
+  try {
+    const frame = JSON.parse(record.bytes) as SyncClientFrame
+    const payload = frame.payload as { command?: unknown; body?: AccountSyncTransportRequest }
+    return payload.command === 'SYNC_ITEMS' && payload.body && typeof payload.body === 'object'
+      ? payload.body
+      : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function validSessionScope(sessionScope: string): boolean {
+  return OPAQUE_SESSION_SCOPE_PATTERN.test(sessionScope)
+}
+
+/** Dedicated-worker state machine. It never receives an access/refresh token. */
+export class SyncTransportWorkerRuntime {
+  private readonly outbox: SyncOutboxStore
+  private readonly socketFactory: (endpoint: string) => SyncSocketLike
+  private readonly now: () => number
+  private readonly random: () => number
+  private readonly uuid: () => string
+  private readonly scheduleTimeout: typeof globalThis.setTimeout
+  private readonly cancelTimeout: typeof globalThis.clearTimeout
+  private readonly scheduleInterval: typeof globalThis.setInterval
+  private readonly cancelInterval: typeof globalThis.clearInterval
+  private readonly subtle: SubtleCrypto
+  private readonly ownerId: string
+
+  private state: SyncTransportState = 'HTTP_ONLY'
+  private socket?: SyncSocketLike
+  private active?: ActiveRequest
+  private authorization?: SyncTicket
+  private sessionScope?: string
+  private transportScope?: string
+  private outboxRecord?: SyncOutboxRecord
+  private sequence = 1
+  private accepted = false
+  private resultDelivered = false
+  private reconnectAttempts = 0
+  private shuttingDown = false
+  private ackTimeout?: ReturnType<typeof setTimeout>
+  private reconnectTimeout?: ReturnType<typeof setTimeout>
+  private heartbeatInterval?: ReturnType<typeof setInterval>
+  private ownerRenewInterval?: ReturnType<typeof setInterval>
+
+  constructor(private readonly dependencies: SyncWorkerRuntimeDependencies) {
+    this.outbox = dependencies.outbox ?? new IndexedDbSyncOutbox()
+    this.socketFactory =
+      dependencies.socketFactory ??
+      ((endpoint) => {
+        if (typeof WebSocket === 'undefined') {
+          throw new Error('WebSocket is unavailable')
+        }
+        return new WebSocket(endpoint) as unknown as SyncSocketLike
+      })
+    this.now = dependencies.now ?? Date.now
+    this.random = dependencies.random ?? Math.random
+    this.uuid = dependencies.uuid ?? defaultUuid
+    this.scheduleTimeout = dependencies.setTimeout ?? globalThis.setTimeout.bind(globalThis)
+    this.cancelTimeout = dependencies.clearTimeout ?? globalThis.clearTimeout.bind(globalThis)
+    this.scheduleInterval = dependencies.setInterval ?? globalThis.setInterval.bind(globalThis)
+    this.cancelInterval = dependencies.clearInterval ?? globalThis.clearInterval.bind(globalThis)
+    this.subtle = dependencies.subtle ?? crypto.subtle
+    this.ownerId = this.uuid()
+  }
+
+  async handle(message: MainToSyncWorkerMessage): Promise<void> {
+    switch (message.type) {
+      case 'EXECUTE':
+        await this.execute(message.clientRequestId, message.body, message.sessionScope)
+        break
+      case 'RECOVER':
+        await this.recover(message.clientRequestId, message.sessionScope)
+        break
+      case 'CONNECT':
+        await this.connect(message.clientRequestId, message.sessionScope, message.authorization)
+        break
+      case 'TICKET_UNAVAILABLE':
+        if (this.active?.clientRequestId === message.clientRequestId) {
+          await this.fallback(message.reason)
+        }
+        break
+      case 'CHECKPOINT_DURABLE':
+        await this.checkpointDurable(message.requestId, message.sessionScope, message.commandId)
+        break
+      case 'SESSION_REVOKED':
+        await this.revokeSession(message.requestId, message.sessionScope)
+        break
+      case 'SHUTDOWN':
+        await this.shutdown()
+        break
+    }
+  }
+
+  private async recover(clientRequestId: string, sessionScope: string): Promise<void> {
+    if (this.shuttingDown || !validSessionScope(sessionScope)) {
+      this.dependencies.postMessage({ type: 'RECOVERY_EMPTY', clientRequestId })
+      return
+    }
+    if (this.active) {
+      this.dependencies.postMessage({ type: 'RECOVERY_REQUIRED', clientRequestId })
+      return
+    }
+    try {
+      const record = await this.outbox.oldest(sessionScope)
+      if (!record || record.sessionScope !== sessionScope || record.revoked === true) {
+        this.dependencies.postMessage({ type: 'RECOVERY_EMPTY', clientRequestId })
+        return
+      }
+      const recoveredBody = parseStoredBody(record)
+      if (!recoveredBody) {
+        this.dependencies.postMessage({ type: 'RECOVERY_REQUIRED', clientRequestId })
+        return
+      }
+      this.active = { clientRequestId, sessionScope, mode: 'recover', body: recoveredBody }
+      this.sessionScope = sessionScope
+      this.outboxRecord = record
+      this.accepted = false
+      this.resultDelivered = false
+      this.dependencies.postMessage({
+        type: 'COMMAND_PERSISTED',
+        clientRequestId,
+        body: recoveredBody,
+        command: { id: record.commandId, digest: record.digest, sequence: record.sequence },
+      })
+      if (this.socket?.readyState === 1 && this.state === 'READY' && this.transportScope) {
+        await this.prepareActiveCommand()
+        return
+      }
+      this.transition('HALF_OPEN')
+      this.dependencies.postMessage({ type: 'NEED_TICKET', clientRequestId, reconnect: false })
+    } catch {
+      this.dependencies.postMessage({ type: 'RECOVERY_REQUIRED', clientRequestId })
+    }
+  }
+
+  private async execute(
+    clientRequestId: string,
+    body: AccountSyncTransportRequest,
+    sessionScope: string,
+  ): Promise<void> {
+    if (this.shuttingDown || !validSessionScope(sessionScope)) {
+      this.postFallback(clientRequestId, body, 'worker-error')
+      return
+    }
+    if (this.active) {
+      this.postFallback(clientRequestId, body, 'reconnect-gap')
+      return
+    }
+    let normalizedBody: AccountSyncTransportRequest
+    try {
+      normalizedBody = normalizeSyncRequestForWire(body)
+      const stale = await this.outbox.oldest(sessionScope)
+      if (stale) {
+        this.dependencies.postMessage({ type: 'RECOVERY_REQUIRED', clientRequestId })
+        return
+      }
+    } catch {
+      this.dependencies.postMessage({ type: 'RECOVERY_REQUIRED', clientRequestId })
+      return
+    }
+    this.active = { clientRequestId, sessionScope, mode: 'execute', body: normalizedBody }
+    this.sessionScope = sessionScope
+    this.accepted = false
+    this.resultDelivered = false
+
+    if (this.socket?.readyState === 1 && this.state === 'READY' && this.transportScope) {
+      await this.prepareActiveCommand()
+      return
+    }
+
+    this.transition('HALF_OPEN')
+    this.dependencies.postMessage({ type: 'NEED_TICKET', clientRequestId, reconnect: false })
+  }
+
+  private async connect(clientRequestId: string, sessionScope: string, authorization: SyncTicket): Promise<void> {
+    if (
+      !this.active ||
+      this.active.clientRequestId !== clientRequestId ||
+      this.active.sessionScope !== sessionScope ||
+      !validSessionScope(sessionScope)
+    ) {
+      return
+    }
+    if (authorization.expiresAt <= this.now() + 1_000) {
+      await this.fallback('ticket-expired')
+      return
+    }
+    let endpoint: URL
+    try {
+      endpoint = new URL(authorization.endpoint)
+    } catch {
+      await this.fallback('proxy-failed')
+      return
+    }
+    if (endpoint.protocol !== 'wss:' && endpoint.protocol !== 'ws:') {
+      await this.fallback('proxy-failed')
+      return
+    }
+
+    this.authorization = authorization
+    this.sessionScope = sessionScope
+    this.transportScope = `${sessionScope}|${endpoint.origin}${endpoint.pathname}|${authorization.deviceId}`
+    try {
+      const owner = await this.outbox.acquireOwner(
+        this.transportScope,
+        sessionScope,
+        this.ownerId,
+        this.now(),
+        OWNER_LEASE_TTL_MS,
+      )
+      if (!owner) {
+        await this.fallback('multi-tab-not-owner')
+        return
+      }
+      this.beginOwnerRenewal()
+    } catch {
+      await this.fallback('outbox-unavailable')
+      return
+    }
+
+    this.transition(this.reconnectAttempts > 0 ? 'HALF_OPEN' : 'CONNECTING')
+    let socket: SyncSocketLike
+    try {
+      socket = this.socketFactory(endpoint.toString())
+    } catch {
+      await this.fallback('unsupported-browser')
+      return
+    }
+    this.socket = socket
+    socket.onopen = () => this.onOpen(socket)
+    socket.onmessage = (event) => void this.onMessage(socket, event.data)
+    socket.onerror = () => undefined
+    socket.onclose = (event) => void this.onClose(socket, event.code ?? 0)
+  }
+
+  private onOpen(socket: SyncSocketLike): void {
+    if (this.socket !== socket || !this.authorization || !this.active) {
+      return
+    }
+    this.transition('AUTHENTICATING')
+    const payload: Record<string, unknown> = {
+      ticket: this.authorization.ticket,
+      deviceId: this.authorization.deviceId,
+      ...(this.sequence > 1 ? { resumeSequence: this.sequence } : {}),
+    }
+    const authFrame: SyncClientFrame = {
+      version: SYNC_PROTOCOL_VERSION,
+      channel: SYNC_CHANNEL,
+      type: 'AUTH',
+      requestId: this.uuid(),
+      commandId: this.outboxRecord?.commandId ?? this.uuid(),
+      sequence: 0,
+      payloadLength: payloadByteLength(payload),
+      payload,
+    }
+    socket.send(JSON.stringify(authFrame))
+    this.startAckDeadline(AUTH_ACK_TIMEOUT_MS)
+  }
+
+  private async onMessage(socket: SyncSocketLike, raw: unknown): Promise<void> {
+    if (this.socket !== socket || typeof raw !== 'string') {
+      return
+    }
+    if (utf8Bytes(raw).byteLength > MAX_SYNC_FRAME_BYTES) {
+      await this.fallback('frame-too-large')
+      return
+    }
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(raw)
+    } catch {
+      await this.fallback('proxy-failed')
+      return
+    }
+    if (!isSyncServerFrame(parsed)) {
+      await this.fallback('proxy-failed')
+      return
+    }
+    await this.handleServerFrame(parsed)
+  }
+
+  private async handleServerFrame(frame: SyncServerFrame): Promise<void> {
+    if (frame.type === 'AUTHENTICATED') {
+      if (this.state !== 'AUTHENTICATING') {
+        return
+      }
+      const nextSequence = frame.payload.nextClientSequence
+      if (
+        frame.payload.capability !== 'ws-sync' ||
+        frame.payload.protocolVersion !== 1 ||
+        !Number.isSafeInteger(nextSequence) ||
+        Number(nextSequence) < 1
+      ) {
+        await this.fallback('auth-failed')
+        return
+      }
+      this.clearAckDeadline()
+      this.sequence = Number(nextSequence)
+      this.transition('READY')
+      this.beginHeartbeat()
+      await this.prepareActiveCommand()
+      return
+    }
+
+    if (frame.type === 'PONG') {
+      return
+    }
+    if (frame.type === 'ERROR' && this.state === 'AUTHENTICATING') {
+      await this.fallback('auth-failed', this.outboxRecord)
+      return
+    }
+    if (!this.outboxRecord || frame.commandId !== this.outboxRecord.commandId) {
+      return
+    }
+    if (frame.digest && frame.digest !== this.outboxRecord.digest) {
+      await this.fallback('proxy-failed')
+      return
+    }
+
+    switch (frame.type) {
+      case 'ACCEPTED':
+        if (!this.accepted) {
+          this.accepted = true
+          this.startAckDeadline(COMMAND_ACK_TIMEOUT_MS)
+        }
+        break
+      case 'COMMITTED':
+        this.clearAckDeadline()
+        this.deliverResult(frame.payload.result)
+        break
+      case 'STATUS':
+        this.clearAckDeadline()
+        if (frame.payload.status === 'COMMITTED') {
+          this.deliverResult(frame.payload.result)
+        } else {
+          await this.fallback('reconnect-gap', this.outboxRecord)
+        }
+        break
+      case 'ERROR':
+        await this.fallback(
+          frame.payload.code === 'RESULT_TOO_LARGE' && frame.payload.retryable === true
+            ? 'result-too-large'
+            : 'server-kill',
+          this.outboxRecord,
+        )
+        break
+      default:
+        break
+    }
+  }
+
+  private async prepareActiveCommand(): Promise<void> {
+    const active = this.active
+    if (!active || !this.transportScope || !this.sessionScope || this.state !== 'READY') {
+      return
+    }
+    try {
+      if (active.mode === 'recover') {
+        const record = this.outboxRecord
+        if (!record || record.sessionScope !== active.sessionScope || record.revoked === true) {
+          this.dependencies.postMessage({ type: 'RECOVERY_REQUIRED', clientRequestId: active.clientRequestId })
+          await this.closeSocketAndReleaseOwner()
+          this.active = undefined
+          return
+        }
+        await this.sendStatus(record)
+        return
+      }
+
+      if (
+        this.outboxRecord &&
+        this.outboxRecord.sessionScope === active.sessionScope &&
+        this.outboxRecord.revoked !== true
+      ) {
+        await this.sendStatus(this.outboxRecord)
+        return
+      }
+
+      const stale = await this.outbox.oldest(active.sessionScope)
+      if (stale) {
+        this.dependencies.postMessage({ type: 'RECOVERY_REQUIRED', clientRequestId: active.clientRequestId })
+        this.active = undefined
+        await this.closeSocketAndReleaseOwner()
+        return
+      }
+
+      const digest = await digestSyncBody(active.body, this.subtle)
+      const payload = { command: 'SYNC_ITEMS' as const, body: active.body }
+      const frame: SyncClientFrame = {
+        version: SYNC_PROTOCOL_VERSION,
+        channel: SYNC_CHANNEL,
+        type: 'COMMAND',
+        requestId: this.uuid(),
+        commandId: this.uuid(),
+        sequence: this.sequence++,
+        payloadLength: payloadByteLength(payload),
+        payload,
+        digest,
+      }
+      if (frameByteLength(frame) > MAX_SYNC_FRAME_BYTES) {
+        await this.fallback('frame-too-large')
+        return
+      }
+      const record: SyncOutboxRecord = {
+        sessionScope: active.sessionScope,
+        transportScope: this.transportScope,
+        commandId: frame.commandId,
+        digest,
+        sequence: frame.sequence,
+        bytes: JSON.stringify(frame),
+        createdAt: this.now(),
+      }
+      await this.outbox.put(record)
+      this.outboxRecord = record
+      this.dependencies.postMessage({
+        type: 'COMMAND_PERSISTED',
+        clientRequestId: active.clientRequestId,
+        body: active.body,
+        command: { id: record.commandId, digest: record.digest, sequence: record.sequence },
+      })
+      await this.sendWithBackpressure(record.bytes)
+      this.startAckDeadline(COMMAND_ACK_TIMEOUT_MS)
+    } catch {
+      await this.fallback('outbox-unavailable', this.outboxRecord)
+    }
+  }
+
+  private async sendStatus(record: SyncOutboxRecord): Promise<void> {
+    const payload = {}
+    const frame: SyncClientFrame = {
+      version: SYNC_PROTOCOL_VERSION,
+      channel: SYNC_CHANNEL,
+      type: 'STATUS',
+      requestId: this.uuid(),
+      commandId: record.commandId,
+      sequence: this.sequence++,
+      payloadLength: payloadByteLength(payload),
+      payload,
+      digest: record.digest,
+    }
+    await this.sendWithBackpressure(JSON.stringify(frame))
+    this.startAckDeadline(COMMAND_ACK_TIMEOUT_MS)
+  }
+
+  private async sendWithBackpressure(bytes: string): Promise<void> {
+    const socket = this.socket
+    if (!socket || socket.readyState !== 1) {
+      throw new Error('Socket is not ready')
+    }
+    const deadline = this.now() + COMMAND_ACK_TIMEOUT_MS
+    while (socket.bufferedAmount > MAX_SYNC_BUFFERED_BYTES) {
+      if (this.now() >= deadline) {
+        await this.fallback('backpressure', this.outboxRecord)
+        return
+      }
+      await new Promise<void>((resolve) => this.scheduleTimeout(resolve, 10))
+      if (this.socket !== socket) {
+        return
+      }
+    }
+    socket.send(bytes)
+  }
+
+  private deliverResult(result: unknown): void {
+    if (!this.active || !this.outboxRecord || this.resultDelivered) {
+      return
+    }
+    this.resultDelivered = true
+    this.dependencies.postMessage({
+      type: 'RESULT',
+      clientRequestId: this.active.clientRequestId,
+      commandId: this.outboxRecord.commandId,
+      result,
+    })
+  }
+
+  private async checkpointDurable(requestId: string, sessionScope: string, commandId: string): Promise<void> {
+    try {
+      await this.outbox.delete(sessionScope, commandId)
+      if (
+        this.outboxRecord?.commandId === commandId &&
+        this.outboxRecord.sessionScope === sessionScope &&
+        this.active?.sessionScope === sessionScope
+      ) {
+        this.outboxRecord = undefined
+        this.active = undefined
+        this.accepted = false
+        this.resultDelivered = false
+        this.reconnectAttempts = 0
+      }
+      this.dependencies.postMessage({ type: 'CHECKPOINT_CLEARED', requestId, sessionScope, commandId })
+    } catch {
+      this.dependencies.postMessage({ type: 'CHECKPOINT_FAILED', requestId, sessionScope, commandId })
+    }
+  }
+
+  private async onClose(socket: SyncSocketLike, code: number): Promise<void> {
+    if (this.socket !== socket) {
+      return
+    }
+    this.socket = undefined
+    this.clearAckDeadline()
+    this.clearHeartbeat()
+    if (this.shuttingDown) {
+      return
+    }
+    this.transition('DEGRADED', code >= 4000 ? 'server-kill' : undefined)
+    if (!this.active) {
+      return
+    }
+    if (this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+      await this.fallback(this.outboxRecord ? 'reconnect-gap' : 'proxy-failed', this.outboxRecord)
+      return
+    }
+    const delay = this.random() * Math.min(5_000, 250 * 2 ** this.reconnectAttempts)
+    this.reconnectAttempts += 1
+    this.reconnectTimeout = this.scheduleTimeout(() => {
+      this.reconnectTimeout = undefined
+      if (this.active) {
+        this.transition('HALF_OPEN')
+        this.dependencies.postMessage({
+          type: 'NEED_TICKET',
+          clientRequestId: this.active.clientRequestId,
+          reconnect: true,
+        })
+      }
+    }, delay)
+  }
+
+  private startAckDeadline(timeoutMs: number): void {
+    this.clearAckDeadline()
+    this.ackTimeout = this.scheduleTimeout(() => {
+      this.ackTimeout = undefined
+      const socket = this.socket
+      if (socket) {
+        socket.close(4000, 'ack-timeout')
+      } else {
+        void this.fallback('ack-timeout', this.outboxRecord)
+      }
+    }, timeoutMs)
+  }
+
+  private clearAckDeadline(): void {
+    if (this.ackTimeout) {
+      this.cancelTimeout(this.ackTimeout)
+      this.ackTimeout = undefined
+    }
+  }
+
+  private beginHeartbeat(): void {
+    this.clearHeartbeat()
+    this.heartbeatInterval = this.scheduleInterval(() => {
+      if (!this.socket || this.socket.readyState !== 1 || this.state !== 'READY') {
+        return
+      }
+      const payload = {}
+      const frame: SyncClientFrame = {
+        version: SYNC_PROTOCOL_VERSION,
+        channel: SYNC_CHANNEL,
+        type: 'PING',
+        requestId: this.uuid(),
+        commandId: this.outboxRecord?.commandId ?? this.uuid(),
+        sequence: this.sequence++,
+        payloadLength: payloadByteLength(payload),
+        payload,
+      }
+      if (frameByteLength(frame) <= MAX_SYNC_FRAME_BYTES && this.socket.bufferedAmount <= MAX_SYNC_BUFFERED_BYTES) {
+        this.socket.send(JSON.stringify(frame))
+      }
+    }, HEARTBEAT_INTERVAL_MS)
+  }
+
+  private clearHeartbeat(): void {
+    if (this.heartbeatInterval) {
+      this.cancelInterval(this.heartbeatInterval)
+      this.heartbeatInterval = undefined
+    }
+  }
+
+  private beginOwnerRenewal(): void {
+    if (this.ownerRenewInterval) {
+      this.cancelInterval(this.ownerRenewInterval)
+    }
+    this.ownerRenewInterval = this.scheduleInterval(() => {
+      if (!this.transportScope || !this.sessionScope) {
+        return
+      }
+      void this.outbox
+        .renewOwner(this.transportScope, this.sessionScope, this.ownerId, this.now(), OWNER_LEASE_TTL_MS)
+        .then((owned) => {
+          if (!owned) {
+            void this.fallback('multi-tab-not-owner', this.outboxRecord)
+          }
+        })
+        .catch(() => this.fallback('outbox-unavailable', this.outboxRecord))
+    }, OWNER_RENEW_INTERVAL_MS)
+  }
+
+  private async fallback(
+    reason: SyncFallbackReason,
+    record: SyncOutboxRecord | undefined = this.outboxRecord,
+  ): Promise<void> {
+    const active = this.active
+    if (!active) {
+      return
+    }
+    this.transition('HTTP_FALLBACK', reason)
+    const storedBody = record?.sessionScope === active.sessionScope ? parseStoredBody(record) : undefined
+    this.dependencies.postMessage({
+      type: 'HTTP_FALLBACK',
+      clientRequestId: active.clientRequestId,
+      reason,
+      body: storedBody ?? active.body,
+      ...(record?.sessionScope === active.sessionScope
+        ? {
+            command: {
+              id: record.commandId,
+              digest: record.digest,
+              sequence: record.sequence,
+            } satisfies AccountSyncCommandMetadata,
+          }
+        : {}),
+    })
+    this.active = undefined
+    this.outboxRecord = undefined
+    this.resultDelivered = false
+    this.accepted = false
+    await this.closeSocketAndReleaseOwner()
+  }
+
+  private postFallback(clientRequestId: string, body: AccountSyncTransportRequest, reason: SyncFallbackReason): void {
+    this.dependencies.postMessage({ type: 'HTTP_FALLBACK', clientRequestId, reason, body })
+  }
+
+  private transition(state: SyncTransportState, reason?: SyncFallbackReason): void {
+    this.state = state
+    this.dependencies.postMessage({ type: 'STATE', state, ...(reason ? { reason } : {}) })
+  }
+
+  private async closeSocketAndReleaseOwner(): Promise<void> {
+    this.clearAckDeadline()
+    this.clearHeartbeat()
+    if (this.reconnectTimeout) {
+      this.cancelTimeout(this.reconnectTimeout)
+      this.reconnectTimeout = undefined
+    }
+    if (this.ownerRenewInterval) {
+      this.cancelInterval(this.ownerRenewInterval)
+      this.ownerRenewInterval = undefined
+    }
+    const socket = this.socket
+    this.socket = undefined
+    if (socket && socket.readyState < 2) {
+      socket.close(1000, 'transport-fallback')
+    }
+    if (this.transportScope && this.sessionScope) {
+      try {
+        await this.outbox.releaseOwner(this.transportScope, this.sessionScope, this.ownerId)
+      } catch {
+        // Lease expiry provides the bounded recovery path if explicit release fails.
+      }
+    }
+    this.transportScope = undefined
+    this.authorization = undefined
+  }
+
+  private async revokeSession(requestId: string, sessionScope: string): Promise<void> {
+    this.shuttingDown = true
+    let quarantined = false
+    try {
+      if (validSessionScope(sessionScope)) {
+        await this.outbox.quarantineSessionScope(sessionScope)
+        quarantined = true
+      }
+    } catch {
+      quarantined = false
+    }
+    await this.closeSocketAndReleaseOwner()
+    this.authorization = undefined
+    this.active = undefined
+    this.outboxRecord = undefined
+    this.outbox.close()
+    this.transition('HTTP_ONLY')
+    this.dependencies.postMessage(
+      quarantined
+        ? { type: 'SESSION_REVOKED_ACK', requestId, sessionScope }
+        : { type: 'SESSION_REVOKED_FAILED', requestId, sessionScope },
+    )
+  }
+
+  private async shutdown(): Promise<void> {
+    this.shuttingDown = true
+    await this.closeSocketAndReleaseOwner()
+    this.authorization = undefined
+    this.active = undefined
+    this.outboxRecord = undefined
+    this.outbox.close()
+    this.transition('HTTP_ONLY')
+  }
+}

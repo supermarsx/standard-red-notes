@@ -1,5 +1,5 @@
 import { MapperInterface, Validator } from '@standardnotes/domain-core'
-import { ItemHash, SyncRequest } from '@standardnotes/grpc'
+import { ItemHash, SyncCommandMetadata, SyncRequest } from '@standardnotes/grpc'
 
 export class SyncRequestGRPCMapper implements MapperInterface<Record<string, unknown>, SyncRequest> {
   toDomain(_projection: SyncRequest): Record<string, unknown> {
@@ -41,6 +41,18 @@ export class SyncRequestGRPCMapper implements MapperInterface<Record<string, unk
 
     if ('api' in domain) {
       syncRequest.setApiVersion(domain.api as string)
+    }
+
+    if ('command' in domain && domain.command && typeof domain.command === 'object') {
+      const input = domain.command as Record<string, unknown>
+      const command = new SyncCommandMetadata()
+      if (typeof input.id === 'string') {
+        command.setId(input.id)
+      }
+      if (typeof input.digest === 'string') {
+        command.setDigest(input.digest)
+      }
+      syncRequest.setCommand(command)
     }
 
     return syncRequest

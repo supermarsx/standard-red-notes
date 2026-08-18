@@ -7,11 +7,13 @@ import {
   DomainEventHandlerInterface,
   DomainEventInterface,
 } from '@standardnotes/domain-events'
+import { DomainEventDeduplicator } from '../DomainEventDeduplicator'
 
 export class RedisEventMessageHandler implements DomainEventMessageHandlerInterface {
   constructor(
     private handlers: Map<string, DomainEventHandlerInterface>,
     private logger: Logger,
+    private deduplicator = new DomainEventDeduplicator(),
   ) {}
 
   async handleMessage(message: string): Promise<void> {
@@ -27,7 +29,7 @@ export class RedisEventMessageHandler implements DomainEventMessageHandlerInterf
         return
       }
 
-      await handler.handle(domainEvent)
+      await this.deduplicator.handle(domainEvent, () => handler.handle(domainEvent))
     } catch (error) {
       await this.handleError(error as Error)
     }

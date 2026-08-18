@@ -33,6 +33,7 @@ describe('HomeServerRuntime', () => {
   let scheduler: { stop: jest.Mock }
   let bridge: { close: jest.Mock }
   let emailDelivery: { start: jest.Mock; stop: jest.Mock }
+  let realtime: { stop: jest.Mock }
   let logger: { info: jest.Mock; warn: jest.Mock; error: jest.Mock }
   let onSigterm: jest.Mock
   let ready: boolean
@@ -43,6 +44,7 @@ describe('HomeServerRuntime', () => {
       server: server as unknown as http.Server,
       bridge,
       emailDelivery,
+      realtime,
       logger,
       readinessState,
       startScheduler: () => scheduler,
@@ -57,6 +59,7 @@ describe('HomeServerRuntime', () => {
       start: jest.fn().mockResolvedValue(true),
       stop: jest.fn().mockResolvedValue(undefined),
     }
+    realtime = { stop: jest.fn().mockResolvedValue(undefined) }
     logger = { info: jest.fn(), warn: jest.fn(), error: jest.fn() }
     onSigterm = jest.fn().mockResolvedValue(undefined)
     ready = false
@@ -250,6 +253,8 @@ describe('HomeServerRuntime', () => {
     })
 
     await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
     expect(ready).toBe(false)
     expect(readinessState.markUnavailable).toHaveBeenCalled()
     expect(stopped).toBe(false)
@@ -299,6 +304,35 @@ describe('HomeServerRuntime', () => {
     expect(bridge.close).not.toHaveBeenCalled()
 
     finishEmailStop()
+    await stopPromise
+
+    expect(server.close).toHaveBeenCalledTimes(1)
+    expect(bridge.close).toHaveBeenCalledTimes(1)
+  })
+
+  it('drains realtime before closing the attached HTTP server and Redis bridge', async () => {
+    const runtime = new HomeServerRuntime(signalTarget)
+    const server = new FakeServer()
+    server.listening = true
+    server.close.mockImplementation((callback) => callback())
+    let finishRealtimeStop!: () => void
+    realtime.stop.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finishRealtimeStop = resolve
+        }),
+    )
+
+    await start(runtime, server)
+    const stopPromise = runtime.stop()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(realtime.stop).toHaveBeenCalledTimes(1)
+    expect(server.close).not.toHaveBeenCalled()
+    expect(bridge.close).not.toHaveBeenCalled()
+
+    finishRealtimeStop()
     await stopPromise
 
     expect(server.close).toHaveBeenCalledTimes(1)

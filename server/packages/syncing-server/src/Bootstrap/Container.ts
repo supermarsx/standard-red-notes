@@ -179,6 +179,21 @@ import { CheckForTrafficAbuse } from '../Domain/UseCase/Syncing/CheckForTrafficA
 import { FixContentSizes } from '../Domain/UseCase/Syncing/FixContentSizes/FixContentSizes'
 import { ContentSizesFixRequestedEventHandler } from '../Domain/Handler/ContentSizesFixRequestedEventHandler'
 import { CheckForContentLimit } from '../Domain/UseCase/Syncing/CheckForContentLimit/CheckForContentLimit'
+import { TypeORMSyncCommand } from '../Infra/TypeORM/TypeORMSyncCommand'
+import { TypeORMSyncCommandOutbox } from '../Infra/TypeORM/TypeORMSyncCommandOutbox'
+import { SyncCommandTransactionContext } from '../Infra/TypeORM/SyncCommandTransactionContext'
+import { TypeORMSyncCommandRepository } from '../Infra/TypeORM/TypeORMSyncCommandRepository'
+import { TypeORMSyncCommandOutboxRepository } from '../Infra/TypeORM/TypeORMSyncCommandOutboxRepository'
+import { SyncCommandRepositoryInterface } from '../Domain/SyncCommand/SyncCommandRepositoryInterface'
+import { SyncCommandOutboxRepositoryInterface } from '../Domain/SyncCommand/SyncCommandOutboxRepositoryInterface'
+import { TransactionAwareItemRepository } from '../Infra/TypeORM/TransactionAwareItemRepository'
+import { TransactionAwareDomainEventPublisher } from '../Infra/TypeORM/TransactionAwareDomainEventPublisher'
+import { transactionAwareORMRepository } from '../Infra/TypeORM/TransactionAwareORMRepository'
+import { TransactionAwareMetricsStore } from '../Infra/Metrics/TransactionAwareMetricsStore'
+import { SyncCommandOutboxDispatcher } from '../Domain/SyncCommand/SyncCommandOutboxDispatcher'
+import { ExecuteSyncCommand } from '../Domain/SyncCommand/ExecuteSyncCommand'
+import { GetSyncCommandStatus } from '../Domain/SyncCommand/GetSyncCommandStatus'
+import { CleanupSyncCommands } from '../Domain/SyncCommand/CleanupSyncCommands'
 
 export class ContainerConfigLoader {
   private readonly DEFAULT_FREE_USER_CONTENT_LIMIT_BYTES = 100_000_000
@@ -246,6 +261,9 @@ export class ContainerConfigLoader {
     logger.debug('Database initialized')
 
     container.bind<TimerInterface>(TYPES.Sync_Timer).toConstantValue(new Timer())
+    container
+      .bind<SyncCommandTransactionContext>(TYPES.Sync_SyncCommandTransactionContext)
+      .toConstantValue(new SyncCommandTransactionContext())
 
     const isConfiguredForHomeServer = env.get('MODE', true) === 'home-server'
     const isConfiguredForSelfHosting = env.get('MODE', true) === 'self-hosted'
@@ -287,10 +305,29 @@ export class ContainerConfigLoader {
       .toConstantValue(isConfiguredForHomeServerOrSelfHosting)
 
     container.bind<Env>(TYPES.Sync_Env).toConstantValue(env)
+    container
+      .bind<number>(TYPES.Sync_COMMAND_TTL_MILLISECONDS)
+      .toConstantValue(
+        (env.get('SYNC_COMMAND_TTL_SECONDS', true) ? +env.get('SYNC_COMMAND_TTL_SECONDS', true) : 86_400) * 1_000,
+      )
+    container
+      .bind<number>(TYPES.Sync_COMMAND_OUTBOX_RETENTION_MILLISECONDS)
+      .toConstantValue(
+        (env.get('SYNC_COMMAND_OUTBOX_RETENTION_SECONDS', true)
+          ? +env.get('SYNC_COMMAND_OUTBOX_RETENTION_SECONDS', true)
+          : 604_800) * 1_000,
+      )
+    container
+      .bind<number>(TYPES.Sync_COMMAND_MAINTENANCE_INTERVAL_MILLISECONDS)
+      .toConstantValue(
+        (env.get('SYNC_COMMAND_MAINTENANCE_INTERVAL_SECONDS', true)
+          ? +env.get('SYNC_COMMAND_MAINTENANCE_INTERVAL_SECONDS', true)
+          : 5) * 1_000,
+      )
 
     if (isConfiguredForHomeServer) {
       container
-        .bind<DomainEventPublisherInterface>(TYPES.Sync_DomainEventPublisher)
+        .bind<DomainEventPublisherInterface>(TYPES.Sync_RawDomainEventPublisher)
         .toConstantValue(directCallDomainEventPublisher)
     } else {
       container.bind(TYPES.Sync_SNS_TOPIC_ARN).toConstantValue(env.get('SNS_TOPIC_ARN'))
@@ -321,7 +358,7 @@ export class ContainerConfigLoader {
       })
 
       container
-        .bind<DomainEventPublisherInterface>(TYPES.Sync_DomainEventPublisher)
+        .bind<DomainEventPublisherInterface>(TYPES.Sync_RawDomainEventPublisher)
         .toDynamicValue((context: ResolutionContext) => {
           return new SNSDomainEventPublisher(context.get(TYPES.Sync_SNS), context.get(TYPES.Sync_SNS_TOPIC_ARN))
         })
@@ -460,10 +497,16 @@ export class ContainerConfigLoader {
     container
       .bind<Repository<TypeORMMessage>>(TYPES.Sync_ORMMessageRepository)
       .toConstantValue(appDataSource.getRepository(TypeORMMessage))
+    container
+      .bind<Repository<TypeORMSyncCommand>>(TYPES.Sync_ORMSyncCommandRepository)
+      .toConstantValue(appDataSource.getRepository(TypeORMSyncCommand))
+    container
+      .bind<Repository<TypeORMSyncCommandOutbox>>(TYPES.Sync_ORMSyncCommandOutboxRepository)
+      .toConstantValue(appDataSource.getRepository(TypeORMSyncCommandOutbox))
 
     // Repositories
     container
-      .bind<ItemRepositoryInterface>(TYPES.Sync_SQLItemRepository)
+      .bind<ItemRepositoryInterface>(TYPES.Sync_BaseSQLItemRepository)
       .toConstantValue(
         new SQLItemRepository(
           container.get<Repository<SQLItem>>(TYPES.Sync_ORMItemRepository),
@@ -472,10 +515,40 @@ export class ContainerConfigLoader {
         ),
       )
     container
+      .bind<ItemRepositoryInterface>(TYPES.Sync_SQLItemRepository)
+      .toConstantValue(
+        new TransactionAwareItemRepository(
+          container.get<ItemRepositoryInterface>(TYPES.Sync_BaseSQLItemRepository),
+          container.get<SyncCommandTransactionContext>(TYPES.Sync_SyncCommandTransactionContext),
+          container.get<MapperInterface<Item, SQLItem>>(TYPES.Sync_SQLItemPersistenceMapper),
+          container.get<Logger>(TYPES.Sync_Logger),
+        ),
+      )
+    container
+      .bind<SyncCommandRepositoryInterface>(TYPES.Sync_SyncCommandRepository)
+      .toConstantValue(
+        new TypeORMSyncCommandRepository(
+          container.get<Repository<TypeORMSyncCommand>>(TYPES.Sync_ORMSyncCommandRepository),
+          container.get<SyncCommandTransactionContext>(TYPES.Sync_SyncCommandTransactionContext),
+        ),
+      )
+    container
+      .bind<SyncCommandOutboxRepositoryInterface>(TYPES.Sync_SyncCommandOutboxRepository)
+      .toConstantValue(
+        new TypeORMSyncCommandOutboxRepository(
+          container.get<Repository<TypeORMSyncCommandOutbox>>(TYPES.Sync_ORMSyncCommandOutboxRepository),
+          container.get<SyncCommandTransactionContext>(TYPES.Sync_SyncCommandTransactionContext),
+        ),
+      )
+    container
       .bind<SharedVaultRepositoryInterface>(TYPES.Sync_SharedVaultRepository)
       .toConstantValue(
         new TypeORMSharedVaultRepository(
-          container.get(TYPES.Sync_ORMSharedVaultRepository),
+          transactionAwareORMRepository(
+            container.get(TYPES.Sync_ORMSharedVaultRepository),
+            TypeORMSharedVault,
+            container.get(TYPES.Sync_SyncCommandTransactionContext),
+          ),
           container.get(TYPES.Sync_SharedVaultPersistenceMapper),
         ),
       )
@@ -483,7 +556,11 @@ export class ContainerConfigLoader {
       .bind<SharedVaultUserRepositoryInterface>(TYPES.Sync_SharedVaultUserRepository)
       .toConstantValue(
         new TypeORMSharedVaultUserRepository(
-          container.get(TYPES.Sync_ORMSharedVaultUserRepository),
+          transactionAwareORMRepository(
+            container.get(TYPES.Sync_ORMSharedVaultUserRepository),
+            TypeORMSharedVaultUser,
+            container.get(TYPES.Sync_SyncCommandTransactionContext),
+          ),
           container.get(TYPES.Sync_SharedVaultUserPersistenceMapper),
         ),
       )
@@ -491,7 +568,11 @@ export class ContainerConfigLoader {
       .bind<SharedVaultInviteRepositoryInterface>(TYPES.Sync_SharedVaultInviteRepository)
       .toConstantValue(
         new TypeORMSharedVaultInviteRepository(
-          container.get(TYPES.Sync_ORMSharedVaultInviteRepository),
+          transactionAwareORMRepository(
+            container.get(TYPES.Sync_ORMSharedVaultInviteRepository),
+            TypeORMSharedVaultInvite,
+            container.get(TYPES.Sync_SyncCommandTransactionContext),
+          ),
           container.get(TYPES.Sync_SharedVaultInvitePersistenceMapper),
         ),
       )
@@ -499,7 +580,11 @@ export class ContainerConfigLoader {
       .bind<NotificationRepositoryInterface>(TYPES.Sync_NotificationRepository)
       .toConstantValue(
         new TypeORMNotificationRepository(
-          container.get(TYPES.Sync_ORMNotificationRepository),
+          transactionAwareORMRepository(
+            container.get(TYPES.Sync_ORMNotificationRepository),
+            TypeORMNotification,
+            container.get(TYPES.Sync_SyncCommandTransactionContext),
+          ),
           container.get(TYPES.Sync_NotificationPersistenceMapper),
         ),
       )
@@ -507,10 +592,68 @@ export class ContainerConfigLoader {
       .bind<MessageRepositoryInterface>(TYPES.Sync_MessageRepository)
       .toConstantValue(
         new TypeORMMessageRepository(
-          container.get(TYPES.Sync_ORMMessageRepository),
+          transactionAwareORMRepository(
+            container.get(TYPES.Sync_ORMMessageRepository),
+            TypeORMMessage,
+            container.get(TYPES.Sync_SyncCommandTransactionContext),
+          ),
           container.get(TYPES.Sync_MessagePersistenceMapper),
         ),
       )
+
+    container
+      .bind<DomainEventPublisherInterface>(TYPES.Sync_DomainEventPublisher)
+      .toConstantValue(
+        new TransactionAwareDomainEventPublisher(
+          container.get<DomainEventPublisherInterface>(TYPES.Sync_RawDomainEventPublisher),
+          container.get<SyncCommandOutboxRepositoryInterface>(TYPES.Sync_SyncCommandOutboxRepository),
+          container.get<SyncCommandTransactionContext>(TYPES.Sync_SyncCommandTransactionContext),
+        ),
+      )
+    container
+      .bind<SyncCommandOutboxDispatcher>(TYPES.Sync_SyncCommandOutboxDispatcher)
+      .toConstantValue(
+        new SyncCommandOutboxDispatcher(
+          container.get<SyncCommandOutboxRepositoryInterface>(TYPES.Sync_SyncCommandOutboxRepository),
+          container.get<DomainEventPublisherInterface>(TYPES.Sync_RawDomainEventPublisher),
+          container.get<Logger>(TYPES.Sync_Logger),
+        ),
+      )
+    container
+      .bind<ExecuteSyncCommand>(TYPES.Sync_ExecuteSyncCommand)
+      .toConstantValue(
+        new ExecuteSyncCommand(
+          appDataSource.dataSource,
+          container.get<SyncCommandTransactionContext>(TYPES.Sync_SyncCommandTransactionContext),
+          container.get<SyncCommandRepositoryInterface>(TYPES.Sync_SyncCommandRepository),
+          container.get<SyncCommandOutboxDispatcher>(TYPES.Sync_SyncCommandOutboxDispatcher),
+          container.get<number>(TYPES.Sync_COMMAND_TTL_MILLISECONDS),
+        ),
+      )
+    container
+      .bind<GetSyncCommandStatus>(TYPES.Sync_GetSyncCommandStatus)
+      .toConstantValue(
+        new GetSyncCommandStatus(container.get<SyncCommandRepositoryInterface>(TYPES.Sync_SyncCommandRepository)),
+      )
+    container
+      .bind<CleanupSyncCommands>(TYPES.Sync_CleanupSyncCommands)
+      .toConstantValue(
+        new CleanupSyncCommands(
+          container.get<SyncCommandRepositoryInterface>(TYPES.Sync_SyncCommandRepository),
+          container.get<SyncCommandOutboxRepositoryInterface>(TYPES.Sync_SyncCommandOutboxRepository),
+          container.get<number>(TYPES.Sync_COMMAND_OUTBOX_RETENTION_MILLISECONDS),
+          container.get<Logger>(TYPES.Sync_Logger),
+        ),
+      )
+
+    // The standalone service starts these in bin/server so it can stop them on
+    // SIGTERM. Embedded home-server mode has no syncing-server process entry
+    // point, so start its unref'ed maintenance loops here.
+    if (isConfiguredForHomeServer) {
+      const maintenanceInterval = container.get<number>(TYPES.Sync_COMMAND_MAINTENANCE_INTERVAL_MILLISECONDS)
+      container.get<SyncCommandOutboxDispatcher>(TYPES.Sync_SyncCommandOutboxDispatcher).start(maintenanceInterval)
+      container.get<CleanupSyncCommands>(TYPES.Sync_CleanupSyncCommands).start(maintenanceInterval)
+    }
 
     container
       .bind<DomainEventFactoryInterface>(TYPES.Sync_DomainEventFactory)
@@ -679,19 +822,22 @@ export class ContainerConfigLoader {
             ),
       )
 
-    if (isConfiguredForInMemoryCache) {
-      container.bind<MetricsStoreInterface>(TYPES.Sync_MetricsStore).toConstantValue(new DummyMetricStore())
-    } else {
-      container
-        .bind<MetricsStoreInterface>(TYPES.Sync_MetricsStore)
-        .toConstantValue(
-          new RedisMetricStore(
-            container.get<Redis>(TYPES.Sync_Redis),
-            container.get<TimerInterface>(TYPES.Sync_Timer),
-            container.get<Logger>(TYPES.Sync_Logger),
-          ),
+    const baseMetricsStore: MetricsStoreInterface = isConfiguredForInMemoryCache
+      ? new DummyMetricStore()
+      : new RedisMetricStore(
+          container.get<Redis>(TYPES.Sync_Redis),
+          container.get<TimerInterface>(TYPES.Sync_Timer),
+          container.get<Logger>(TYPES.Sync_Logger),
         )
-    }
+    container
+      .bind<MetricsStoreInterface>(TYPES.Sync_MetricsStore)
+      .toConstantValue(
+        new TransactionAwareMetricsStore(
+          baseMetricsStore,
+          container.get<SyncCommandTransactionContext>(TYPES.Sync_SyncCommandTransactionContext),
+          container.get<Logger>(TYPES.Sync_Logger),
+        ),
+      )
 
     // use cases
     container
@@ -1322,6 +1468,8 @@ export class ContainerConfigLoader {
             container.get<number>(TYPES.Sync_UPLOAD_BANDWIDTH_ABUSE_TIMEFRAME_LENGTH_IN_MINUTES),
             container.get<ControllerContainerInterface>(TYPES.Sync_ControllerContainer),
             container.get<AuthorizeCollaborationAccess>(TYPES.Sync_AuthorizeCollaborationAccess),
+            container.get<ExecuteSyncCommand>(TYPES.Sync_ExecuteSyncCommand),
+            container.get<GetSyncCommandStatus>(TYPES.Sync_GetSyncCommandStatus),
           ),
         )
       container

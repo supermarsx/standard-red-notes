@@ -6,6 +6,8 @@ import { TypeORMSharedVaultUser } from '../Infra/TypeORM/TypeORMSharedVaultUser'
 import { TypeORMSharedVaultInvite } from '../Infra/TypeORM/TypeORMSharedVaultInvite'
 import { TypeORMMessage } from '../Infra/TypeORM/TypeORMMessage'
 import { SQLItem } from '../Infra/TypeORM/SQLItem'
+import { TypeORMSyncCommand } from '../Infra/TypeORM/TypeORMSyncCommand'
+import { TypeORMSyncCommandOutbox } from '../Infra/TypeORM/TypeORMSyncCommandOutbox'
 
 export class AppDataSource {
   private _dataSource: DataSource | undefined
@@ -49,6 +51,8 @@ export class AppDataSource {
         TypeORMSharedVaultUser,
         TypeORMSharedVaultInvite,
         TypeORMMessage,
+        TypeORMSyncCommand,
+        TypeORMSyncCommandOutbox,
       ],
       // SRN_MIGRATIONS_DIR override for the standalone server binary (see auth DataSource).
       migrations: [

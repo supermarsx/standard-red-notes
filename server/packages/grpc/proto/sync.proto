@@ -118,6 +118,30 @@ message ItemHash {
   optional uint64 updated_at_timestamp = 14;
 }
 
+message SyncCommandMetadata {
+  string id = 1;
+  string digest = 2;
+}
+
+message SyncCommandResponseMetadata {
+  string id = 1;
+  string digest = 2;
+  string status = 3;
+  optional bool replayed = 4;
+}
+
+message SyncCommandStatusRequest {
+  string id = 1;
+  optional string digest = 2;
+}
+
+message SyncCommandStatusResponse {
+  string id = 1;
+  string status = 2;
+  optional string digest = 3;
+  optional string result_json = 4;
+}
+
 message SyncResponse {
   repeated ItemRepresentation retrieved_items = 1;
   repeated SavedItemRepresentation saved_items = 2;
@@ -128,6 +152,7 @@ message SyncResponse {
   repeated SharedVaultRepresentation shared_vaults = 7;
   repeated SharedVaultInviteRepresentation shared_vault_invites = 8;
   repeated NotificationRepresentation notifications = 9;
+  optional SyncCommandResponseMetadata command = 10;
 }
 
 message SyncRequest {
@@ -139,8 +164,10 @@ message SyncRequest {
   optional uint32 limit = 6;
   optional string content_type = 7;
   optional string api_version = 8;
+  optional SyncCommandMetadata command = 9;
 }
 
 service Syncing {
   rpc syncItems(SyncRequest) returns (SyncResponse) {}
+  rpc getSyncCommandStatus(SyncCommandStatusRequest) returns (SyncCommandStatusResponse) {}
 }

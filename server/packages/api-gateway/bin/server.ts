@@ -41,6 +41,7 @@ import '../src/Controller/v1/IntegrationsController'
 import '../src/Controller/v1/WorkflowsController'
 import '../src/Controller/v1/UpdatesController'
 import '../src/Controller/v1/PluginsController'
+import '../src/Controller/v1/SyncWebSocketController'
 
 import '../src/Controller/v2/PaymentsControllerV2'
 import '../src/Controller/v2/ActionsControllerV2'
@@ -50,6 +51,7 @@ import helmet from 'helmet'
 import cors from 'cors'
 import cookieParser from 'cookie-parser'
 import { text, json, Request, Response, NextFunction } from 'express'
+import * as http from 'http'
 import * as winston from 'winston'
 
 import { InversifyExpressServer, sanitizeRequestUrlForLogging } from 'inversify-express-utils'
@@ -77,11 +79,24 @@ import { ServerSettingsResolver } from '../src/Service/ServerSettings/ServerSett
 import { registerCaldavRoutes } from '../src/Caldav/registerCaldavRoutes'
 import { startReminderDeliveryScheduler } from '../src/ReminderDelivery/startReminderDeliveryScheduler'
 import { requestBodyLogMetadata } from '../src/Logging/RequestBodyLogMetadata'
-import { attachWebSocketGateway } from '@standard-red-notes/websocket-gateway'
+import {
+  createRedisSqsEventDedupStore,
+  createRedisSyncState,
+  type RedisSqsEventDedupClient,
+  type SyncGatewayOptions,
+  type SyncRedisClient,
+} from '@standard-red-notes/websocket-gateway'
 import { RequiredCrossServiceTokenMiddleware } from '../src/Controller/RequiredCrossServiceTokenMiddleware'
 import { createAdminEmailDeliveryRouter } from '../src/Controller/v1/createAdminEmailDeliveryRouter'
 import { AdminEmailDeliveryService } from '../src/Service/EmailDelivery/AdminEmailDeliveryService'
 import { EmailDeliveryRuntime } from '../src/Service/EmailDelivery/EmailDeliveryRuntime'
+import { DurableSyncCommandPort, SyncWebSocketCommandAdapter } from '../src/Service/Sync/SyncWebSocketCommandAdapter'
+import {
+  parseOptionalPositiveInteger,
+  parseWebSocketSyncEnabled,
+  resolveWebSocketSyncAllowedOrigins,
+} from '../src/Service/Sync/SyncWebSocketConfiguration'
+import { SyncWebSocketRuntime } from '../src/Service/Sync/SyncWebSocketRuntime'
 
 // Standard Red Notes: fail-fast global crash handlers. A genuinely unhandled
 // rejection or uncaught exception leaves the process in an unknown state, so we
@@ -106,6 +121,34 @@ void container
   .then(async (container) => {
     const env: Env = new Env()
     env.load()
+    const webSocketSyncEnabled = parseWebSocketSyncEnabled(env.get('WEBSOCKET_SYNC_ENABLED', true) || undefined)
+    const syncAllowedOrigins = resolveWebSocketSyncAllowedOrigins(
+      env.get('WEBSOCKET_SYNC_ALLOWED_ORIGINS', true) || undefined,
+      env.get('PUBLIC_URL', true) || undefined,
+    )
+    const syncRedisOptions = {
+      keyPrefix: env.get('WEBSOCKET_SYNC_REDIS_KEY_PREFIX', true) || undefined,
+      operationTimeoutMs: parseOptionalPositiveInteger(
+        'WEBSOCKET_SYNC_REDIS_OPERATION_TIMEOUT_MS',
+        env.get('WEBSOCKET_SYNC_REDIS_OPERATION_TIMEOUT_MS', true) || undefined,
+        30_000,
+      ),
+      commandLeaseTtlMs: parseOptionalPositiveInteger(
+        'WEBSOCKET_SYNC_COMMAND_LEASE_TTL_MS',
+        env.get('WEBSOCKET_SYNC_COMMAND_LEASE_TTL_MS', true) || undefined,
+        300_000,
+      ),
+      socketLeaseTtlMs: parseOptionalPositiveInteger(
+        'WEBSOCKET_SYNC_SOCKET_LEASE_TTL_MS',
+        env.get('WEBSOCKET_SYNC_SOCKET_LEASE_TTL_MS', true) || undefined,
+        300_000,
+      ),
+      maxSocketsPerUser: parseOptionalPositiveInteger(
+        'WEBSOCKET_SYNC_MAX_SOCKETS_PER_USER',
+        env.get('WEBSOCKET_SYNC_MAX_SOCKETS_PER_USER', true) || undefined,
+        1_024,
+      ),
+    }
 
     const requestPayloadLimit = env.get('HTTP_REQUEST_PAYLOAD_LIMIT_MEGABYTES', true)
       ? `${+env.get('HTTP_REQUEST_PAYLOAD_LIMIT_MEGABYTES', true)}mb`
@@ -116,10 +159,10 @@ void container
 
     // Standard Red Notes: the realtime WS token-mint route is registered on the app
     // INSIDE setConfig (before build(), so the catch-all cannot shadow it), but its
-    // handler only exists once the gateway is attached to the http server — which
-    // requires the http.Server returned by app.listen(). Bridge the two with this
-    // late-bound handler: setConfig registers a route that dispatches to it, and the
-    // gateway attach (post-listen) assigns gateway.handleMintToken into it.
+    // handler only exists once the gateway is attached to the owned http.Server.
+    // Bridge the two with this late-bound handler: setConfig registers a route that
+    // dispatches to it, and the pre-listen gateway attach assigns
+    // gateway.handleMintToken into it.
     let mintConnectionTokenHandler: ((request: Request, response: Response) => void) | undefined
 
     const server = new InversifyExpressServer(container)
@@ -343,8 +386,8 @@ void container
         logger.error('Failed to mount CalDAV router.', safeErrorLogMetadata(error))
       }
       // The realtime WS token-mint endpoint must also precede the catch-all, but its
-      // real handler is only available once the gateway is attached to the http server
-      // (post-listen, below). Register the route now and dispatch to the late-bound
+      // real handler is only available once the gateway is attached to the owned
+      // http.Server (before listen, below). Register the route now and dispatch to the late-bound
       // handler; reply 503 until it is wired / when token minting is disabled (no
       // WEB_SOCKET_CONNECTION_TOKEN_SECRET), instead of silently falling through to the
       // catch-all as before.
@@ -399,7 +442,7 @@ void container
 
     // `server.build()` returns the underlying Express application; keep a handle
     // so the realtime WebSocket gateway can register its token route on it, then
-    // `.listen()` to get the Node http.Server the ws upgrade attaches to.
+    // create the Node http.Server the ws upgrade attaches to.
     // Standard Red Notes: build() mounts the inversify controller router at '/'. The
     // CalDAV router and the WS token-mint route are registered INSIDE setConfig
     // above (before this call), ahead of the controller router — see the note there.
@@ -442,7 +485,11 @@ void container
       logger.error('Failed to start reminder delivery scheduler.', safeErrorLogMetadata(error))
     }
 
-    const serverInstance = app.listen(env.get('PORT'))
+    const readinessState = container.get<{ markReady(): void; markUnavailable(): void }>(
+      TYPES.ApiGateway_ReadinessState,
+    )
+    readinessState.markUnavailable()
+    const serverInstance = http.createServer(app)
 
     const keepAliveTimeout = env.get('HTTP_KEEP_ALIVE_TIMEOUT', true) ? +env.get('HTTP_KEEP_ALIVE_TIMEOUT', true) : 5000
 
@@ -463,10 +510,41 @@ void container
       error: (...args: unknown[]) => logger.error(args.map(String).join(' ')),
     }
 
+    const webSocketRuntime = new SyncWebSocketRuntime()
     let stopWebSocketGateway: (() => Promise<void>) | undefined
     if (env.get('WEB_SOCKET_CONNECTION_TOKEN_SECRET', true)) {
       try {
-        const gateway = attachWebSocketGateway({
+        let sync: SyncGatewayOptions | undefined
+        if (
+          webSocketSyncEnabled &&
+          syncAllowedOrigins.length > 0 &&
+          container.isBound(TYPES.ApiGateway_Redis) &&
+          container.isBound(TYPES.ApiGateway_GRPCSyncingServerServiceProxy)
+        ) {
+          const syncAdapter = new SyncWebSocketCommandAdapter(
+            container.get(TYPES.ApiGateway_ServiceProxy),
+            container.get(TYPES.ApiGateway_GRPCSyncingServerServiceProxy) as DurableSyncCommandPort,
+            env.get('AUTH_JWT_SECRET', true) || '',
+          )
+          const redisState = createRedisSyncState(
+            container.get(TYPES.ApiGateway_Redis) as SyncRedisClient,
+            syncRedisOptions,
+          )
+          sync = {
+            isEnabled: () => webSocketSyncEnabled,
+            allowedOrigins: syncAllowedOrigins,
+            authorization: syncAdapter,
+            backend: syncAdapter,
+            ...redisState,
+            requireSharedState: true,
+          }
+        } else if (webSocketSyncEnabled) {
+          logger.warn(
+            'WebSocket sync capability is unavailable: exact origin, durable backend, and shared Redis state are required.',
+          )
+        }
+
+        const gateway = webSocketRuntime.attach({
           httpServer: serverInstance,
           logger: gatewayLogger,
           config: {
@@ -487,12 +565,20 @@ void container
               secretAccessKey: env.get('SQS_SECRET_ACCESS_KEY', true) || undefined,
             },
           },
+          sync,
+          sqsEventDedupStore: container.isBound(TYPES.ApiGateway_Redis)
+            ? createRedisSqsEventDedupStore(container.get(TYPES.ApiGateway_Redis) as RedisSqsEventDedupClient)
+            : undefined,
         })
-        stopWebSocketGateway = gateway.stop
+        stopWebSocketGateway = async (): Promise<void> => {
+          mintConnectionTokenHandler = undefined
+          await webSocketRuntime.stop()
+        }
         mintConnectionTokenHandler = gateway.handleMintToken
         logger.info('Realtime WebSocket gateway attached in-process on the api-gateway http server')
       } catch (error) {
         logger.error('Failed to attach the realtime WebSocket gateway.', safeErrorLogMetadata(error))
+        throw error
       }
     } else {
       logger.info(
@@ -500,25 +586,26 @@ void container
       )
     }
 
+    serverInstance.listen(env.get('PORT'), () => {
+      readinessState.markReady()
+      logger.info(`Server started on port ${env.get('PORT')}`)
+    })
+
     let shuttingDown = false
     process.on('SIGTERM', () => {
       if (shuttingDown) {
         return
       }
       shuttingDown = true
-      logger.info('SIGTERM signal received: closing HTTP server')
-      // Stop accepting new HTTP work immediately. Runtime.stop ends the worker
-      // heartbeat (the fleet-owned producer marker then expires) and drains the
-      // bounded in-flight provider request.
-      serverInstance.close(() => {
-        logger.info('HTTP server closed')
-      })
+      readinessState.markUnavailable()
+      logger.info('SIGTERM signal received: draining realtime services before closing HTTP')
       void Promise.allSettled([emailDeliveryRuntime?.stop(), stopWebSocketGateway?.()]).then(() => {
         logger.info('Background delivery and realtime services stopped')
+        serverInstance.close(() => {
+          logger.info('HTTP server closed')
+        })
       })
     })
-
-    logger.info(`Server started on port ${process.env.PORT}`)
   })
   .catch((error: unknown) => {
     logFatal('startup', error)

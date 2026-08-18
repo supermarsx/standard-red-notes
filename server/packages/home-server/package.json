@@ -29,6 +29,7 @@
     "start": "yarn node dist/bin/server.js"
   },
   "dependencies": {
+    "@standard-red-notes/websocket-gateway": "workspace:*",
     "@standardnotes/api-gateway": "workspace:^",
     "@standardnotes/auth-server": "workspace:^",
     "@standardnotes/domain-core": "workspace:^",

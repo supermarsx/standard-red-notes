@@ -1,4 +1,6 @@
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import jwt from 'jsonwebtoken'
+import { isSyncDeviceId } from './syncProtocol.js'
 
 /**
  * Payload carried by a connection token. The gateway only cares about
@@ -190,4 +192,118 @@ export function verifyRoomCapability(
   expectedRoom: string,
 ): boolean {
   return verifyRoomCapabilityWithExpiry(capability, secret, expectedUserUuid, expectedRoom) !== undefined
+}
+
+export const DEFAULT_SYNC_TICKET_TTL_MS = 30_000
+
+export interface SyncTicketIdentity {
+  userUuid: string
+  sessionUuid: string
+  deviceId: string
+  /** Server-side only bearer credential used for live per-command revalidation. */
+  authorization?: string
+}
+
+export interface IssuedSyncTicket {
+  ticket: string
+  expiresAt: number
+}
+
+export interface SyncAuthTicketStore {
+  /** Shared stores are safe across gateway replicas; process stores are test/dev only. */
+  readonly distribution: 'process' | 'shared'
+  issue(identity: SyncTicketIdentity, ttlMs?: number): Promise<IssuedSyncTicket>
+  consume(ticket: string, signal?: AbortSignal): Promise<SyncTicketIdentity | undefined>
+  ready(): boolean
+  clear?(): void | Promise<void>
+}
+
+interface StoredSyncTicket {
+  digest: Buffer
+  identity: SyncTicketIdentity
+  expiresAt: number
+}
+
+function ticketDigest(ticket: string): Buffer {
+  return createHash('sha256').update(ticket, 'utf8').digest()
+}
+
+export function isValidSyncTicketIdentity(identity: SyncTicketIdentity): boolean {
+  return (
+    typeof identity.userUuid === 'string' &&
+    identity.userUuid.length > 0 &&
+    identity.userUuid.length <= 128 &&
+    typeof identity.sessionUuid === 'string' &&
+    identity.sessionUuid.length > 0 &&
+    identity.sessionUuid.length <= 128 &&
+    isSyncDeviceId(identity.deviceId) &&
+    (identity.authorization === undefined ||
+      (typeof identity.authorization === 'string' &&
+        identity.authorization.length > 0 &&
+        identity.authorization.length <= 16_384))
+  )
+}
+
+/**
+ * One-use opaque ticket store. Deployments with multiple gateway replicas can
+ * inject a shared implementation; tests deliberately share one instance across
+ * replicas to exercise atomic consume semantics. No identity data is encoded in
+ * the browser-visible ticket.
+ */
+export class InMemorySyncAuthTicketStore implements SyncAuthTicketStore {
+  readonly distribution = 'process' as const
+  private readonly tickets = new Map<string, StoredSyncTicket>()
+
+  constructor(private readonly now: () => number = Date.now) {}
+
+  ready(): boolean {
+    return true
+  }
+
+  async issue(identity: SyncTicketIdentity, ttlMs = DEFAULT_SYNC_TICKET_TTL_MS): Promise<IssuedSyncTicket> {
+    if (!isValidSyncTicketIdentity(identity)) {
+      throw new Error('Invalid sync ticket identity.')
+    }
+    if (!Number.isSafeInteger(ttlMs) || ttlMs < 1_000 || ttlMs > 120_000) {
+      throw new Error('Invalid sync ticket TTL.')
+    }
+    this.sweepExpired()
+    const ticket = randomBytes(32).toString('base64url')
+    const digest = ticketDigest(ticket)
+    const expiresAt = this.now() + ttlMs
+    this.tickets.set(digest.toString('hex'), { digest, identity: { ...identity }, expiresAt })
+    return { ticket, expiresAt }
+  }
+
+  async consume(ticket: string): Promise<SyncTicketIdentity | undefined> {
+    if (typeof ticket !== 'string' || ticket.length < 32 || ticket.length > 256) {
+      return undefined
+    }
+    const providedDigest = ticketDigest(ticket)
+    const key = providedDigest.toString('hex')
+    const stored = this.tickets.get(key)
+    if (!stored) {
+      return undefined
+    }
+    // Delete before checking expiry/returning identity: even an expired or
+    // concurrently replayed ticket can never be revived or consumed twice.
+    this.tickets.delete(key)
+    if (!timingSafeEqual(providedDigest, stored.digest) || stored.expiresAt <= this.now()) {
+      return undefined
+    }
+    return { ...stored.identity }
+  }
+
+  clear(): void {
+    this.tickets.clear()
+  }
+
+  private sweepExpired(): void {
+    const now = this.now()
+    for (const [key, ticket] of this.tickets) {
+      if (ticket.expiresAt <= now) {
+        this.tickets.delete(key)
+      }
+    }
+  }
 }

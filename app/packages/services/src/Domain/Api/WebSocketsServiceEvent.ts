@@ -9,8 +9,8 @@ export enum WebSocketsServiceEvent {
   // directly (no HTTP pull) when its current token matches the push's base token,
   // and otherwise discards the push and falls back to a normal HTTP sync.
   SyncItemsPushed = 'SyncItemsPushed',
-  // Emitted when the websocket (re)connects. The sync service performs a full
-  // HTTP sync on this event to backfill anything missed while disconnected.
+  // Emitted when the legacy push/collaboration websocket (re)connects. Sync
+  // resume is owned by the dedicated worker and does not blindly HTTP-backfill.
   WebSocketDidOpen = 'WebSocketDidOpen',
   // Emitted on every close so encrypted realtime consumers can synchronously
   // tear down room keys/providers and fall back to ordinary note persistence.

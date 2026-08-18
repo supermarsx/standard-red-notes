@@ -16,4 +16,9 @@ export type SyncResponseHttpRepresentation = {
   shared_vaults: SharedVaultHttpRepresentation[]
   shared_vault_invites: SharedVaultInviteHttpRepresentation[]
   notifications: NotificationHttpRepresentation[]
+  command?: {
+    id: string
+    digest: string
+    status: string
+  }
 }

@@ -150,6 +150,7 @@ export class EndpointResolver implements EndpointResolverInterface {
     // Syncing Server
     ['[POST]:items/sync', 'sync.items.sync'],
     ['[POST]:items/check-integrity', 'sync.items.check_integrity'],
+    ['[GET]:items/sync-command/:commandId', 'sync.items.sync_command_status'],
     ['[GET]:items/:uuid', 'sync.items.get_item'],
     ['[POST]:items/collaboration-authorization', 'sync.items.authorize_collaboration'],
     // Revisions Controller V2
@@ -162,6 +163,9 @@ export class EndpointResolver implements EndpointResolverInterface {
     ['[POST]:messages/', 'sync.messages.send'],
     ['[DELETE]:messages/inbound', 'sync.messages.delete-all'],
     ['[DELETE]:messages/:messageUuid', 'sync.messages.delete'],
+    // Bundled HomeServer handles legacy connection-token minting in-process;
+    // no loopback websocket HTTP listener is assumed.
+    ['[POST]:sockets/tokens', 'websockets.tokens.create'],
     // Shared Vaults Controller
     ['[GET]:shared-vaults/', 'sync.shared-vaults.get-vaults'],
     ['[POST]:shared-vaults/', 'sync.shared-vaults.create-vault'],

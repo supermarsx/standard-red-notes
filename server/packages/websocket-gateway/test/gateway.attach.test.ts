@@ -59,7 +59,7 @@ import {
   WebSocketRelayBacklog,
   type GatewayConfig,
 } from '../src/gateway.js'
-import { mintConnectionToken } from '../src/auth.js'
+import { InMemorySyncAuthTicketStore, mintConnectionToken } from '../src/auth.js'
 import { COLLABORATION_PROTOCOL_VERSION } from '../src/rooms.js'
 
 const CONNECTION_SECRET = 'connection-secret'
@@ -1055,5 +1055,253 @@ describe('websocket connection lifecycle', () => {
     await attached!.stop()
     attached = undefined
     expect(await closed).toBe(1001)
+  })
+})
+
+describe('authenticated /sockets/sync command plane', () => {
+  let port: number
+
+  const syncOptions = () => ({
+    isEnabled: () => true,
+    allowedOrigins: ['https://app.example.test', 'tauri://localhost'],
+    authorization: {
+      ready: () => true,
+      authorize: vi.fn(async () => ({ authorized: true as const })),
+    },
+    backend: {
+      ready: () => true,
+      execute: vi.fn(async (input: { digest: string }) => ({ digest: input.digest, payload: { ok: true } })),
+      status: vi.fn(async (input: { digest: string }) => ({ status: 'UNKNOWN' as const, digest: input.digest })),
+    },
+  })
+
+  async function attachSync(): Promise<void> {
+    port = await listen()
+    attached = attachWebSocketGateway({
+      httpServer,
+      config: baseConfig(),
+      logger: makeLogger(),
+      sync: syncOptions(),
+    })
+  }
+
+  function closedWith(socket: WebSocket): Promise<number> {
+    return new Promise((resolve) => socket.once('close', (code) => resolve(code)))
+  }
+
+  function opened(socket: WebSocket): Promise<void> {
+    return new Promise((resolve, reject) => {
+      socket.once('open', resolve)
+      socket.once('error', reject)
+    })
+  }
+
+  function nextJson(socket: WebSocket): Promise<Record<string, unknown>> {
+    return new Promise((resolve) =>
+      socket.once('message', (data) => resolve(JSON.parse(data.toString()) as Record<string, unknown>)),
+    )
+  }
+
+  async function invokeSyncTicket(req: IncomingMessage): Promise<{ status: number; body: unknown }> {
+    const capture = fakeResponse()
+    attached!.handleSyncTicket(req, capture.res)
+    await vi.waitFor(() => expect(capture.status()).toBeGreaterThan(0))
+    return { status: capture.status(), body: capture.body() }
+  }
+
+  it('advertises no capability unless every adapter, origin and kill switch is ready', async () => {
+    await listen()
+    attached = attachWebSocketGateway({ httpServer, config: baseConfig(), logger: makeLogger() })
+    expect(attached.sync.capabilities()).toEqual({ capabilities: [] })
+    await expect(
+      attached.sync.issueTicket({ userUuid: 'user-1', sessionUuid: 'session-1', deviceId: 'device-1' }),
+    ).rejects.toThrow(/unavailable/i)
+
+    const capabilityResponse = fakeResponse()
+    attached.handleSyncCapabilities(fakeRequest({}), capabilityResponse.res)
+    expect(capabilityResponse.status()).toBe(200)
+    expect(capabilityResponse.body()).toEqual({ capabilities: [] })
+
+    const disabledTicket = await invokeSyncTicket(fakeRequest({}))
+    expect(disabledTicket).toEqual({ status: 503, body: { error: { code: 'SYNC_DISABLED' } } })
+  })
+
+  it('can require all production sync state to be fleet-shared', async () => {
+    await listen()
+    expect(() =>
+      attachWebSocketGateway({
+        httpServer,
+        config: baseConfig(),
+        logger: makeLogger(),
+        sync: { ...syncOptions(), requireSharedState: true },
+      }),
+    ).toThrow(/fleet-shared/i)
+  })
+
+  it('clears unconsumed process-local authentication tickets during awaited stop', async () => {
+    port = await listen()
+    const tickets = new InMemorySyncAuthTicketStore()
+    const clear = vi.spyOn(tickets, 'clear')
+    attached = attachWebSocketGateway({
+      httpServer,
+      config: baseConfig(),
+      logger: makeLogger(),
+      sync: { ...syncOptions(), tickets },
+    })
+    const issued = await attached.sync.issueTicket({
+      userUuid: 'shutdown-user',
+      sessionUuid: 'shutdown-session',
+      deviceId: 'shutdown-device',
+    })
+
+    await attached.stop()
+    expect(clear).toHaveBeenCalledTimes(1)
+    await expect(tickets.consume(issued.ticket)).resolves.toBeUndefined()
+    await expect(attached.stop()).resolves.toBeUndefined()
+    attached = undefined
+  })
+
+  it('issues HTTPS tickets through forwarded or internal authentication and rejects invalid input', async () => {
+    await attachSync()
+    const crossServiceToken = jwt.sign({ user: { uuid: 'user-1' }, session: { uuid: 'session-1' } }, AUTH_SECRET, {
+      algorithm: 'HS256',
+    })
+    const forwardedRequest = Object.assign(fakeRequest({ 'x-auth-token': crossServiceToken }), {
+      body: { deviceId: 'device-1' },
+    })
+    const forwarded = await invokeSyncTicket(forwardedRequest)
+    expect(forwarded).toMatchObject({
+      status: 200,
+      body: { endpoint: '/sockets/sync', capability: 'ws-sync', version: 1 },
+    })
+    expect((forwarded.body as { ticket: string }).ticket).not.toContain('user-1')
+
+    const internalRequest = Object.assign(fakeRequest({ 'x-internal-secret': INTERNAL_SECRET }), {
+      body: { deviceId: 'device-2', userUuid: 'user-2', sessionUuid: 'session-2' },
+    })
+    expect(await invokeSyncTicket(internalRequest)).toMatchObject({ status: 200 })
+
+    const badDevice = Object.assign(fakeRequest({ 'x-auth-token': crossServiceToken }), {
+      body: { deviceId: '../bad' },
+    })
+    expect(await invokeSyncTicket(badDevice)).toEqual({
+      status: 400,
+      body: { error: { code: 'INVALID_DEVICE' } },
+    })
+
+    const forged = Object.assign(fakeRequest({ 'x-auth-token': 'not-a-jwt' }), {
+      body: { deviceId: 'device-1' },
+    })
+    expect(await invokeSyncTicket(forged)).toEqual({
+      status: 401,
+      body: { error: { code: 'AUTH_REJECTED' } },
+    })
+
+    const incompleteInternal = Object.assign(fakeRequest({ 'x-internal-secret': INTERNAL_SECRET }), {
+      body: { deviceId: 'device-1', userUuid: 'user-1' },
+    })
+    expect(await invokeSyncTicket(incompleteInternal)).toEqual({
+      status: 401,
+      body: { error: { code: 'AUTH_REJECTED' } },
+    })
+  })
+
+  it('bounds and validates streamed ticket bodies before authentication', async () => {
+    await attachSync()
+    const malformed = await mintWithStreamedBody(attached!.handleSyncTicket, {}, '{')
+    expect(malformed).toEqual({ status: 400, body: { error: { code: 'INVALID_DEVICE' } } })
+
+    const nonObject = await mintWithStreamedBody(attached!.handleSyncTicket, {}, '[]')
+    expect(nonObject).toEqual({ status: 400, body: { error: { code: 'INVALID_DEVICE' } } })
+
+    const oversized = await mintWithStreamedBody(attached!.handleSyncTicket, {}, 'x'.repeat(16_385))
+    expect(oversized).toEqual({ status: 400, body: { error: { code: 'INVALID_DEVICE' } } })
+  })
+
+  it('fails ticket minting closed if the ready shared store rejects issuance', async () => {
+    port = await listen()
+    attached = attachWebSocketGateway({
+      httpServer,
+      config: baseConfig(),
+      logger: makeLogger(),
+      sync: {
+        ...syncOptions(),
+        tickets: {
+          distribution: 'shared',
+          ready: () => true,
+          issue: vi.fn(async () => Promise.reject(new Error('shared store unavailable'))),
+          consume: vi.fn(async () => undefined),
+        },
+      },
+    })
+    const crossServiceToken = jwt.sign({ user: { uuid: 'user-1' }, session: { uuid: 'session-1' } }, AUTH_SECRET, {
+      algorithm: 'HS256',
+    })
+    const request = Object.assign(fakeRequest({ 'x-auth-token': crossServiceToken }), {
+      body: { deviceId: 'device-1' },
+    })
+
+    expect(await invokeSyncTicket(request)).toEqual({
+      status: 503,
+      body: { error: { code: 'SYNC_DISABLED' } },
+    })
+  })
+
+  it('rejects query credentials without consuming the opaque ticket', async () => {
+    await attachSync()
+    const issued = await attached!.sync.issueTicket({
+      userUuid: 'user-1',
+      sessionUuid: 'session-1',
+      deviceId: 'device-1',
+    })
+    const rejected = new WebSocket(`ws://127.0.0.1:${port}/sockets/sync?ticket=${issued.ticket}`, {
+      origin: 'https://app.example.test',
+    })
+    expect(await closedWith(rejected)).toBe(1008)
+
+    const clean = new WebSocket(`ws://127.0.0.1:${port}/sockets/sync`, {
+      origin: 'https://app.example.test',
+    })
+    await opened(clean)
+    const payload = { ticket: issued.ticket, deviceId: 'device-1' }
+    const response = nextJson(clean)
+    clean.send(
+      JSON.stringify({
+        version: 1,
+        channel: 'sync',
+        type: 'AUTH',
+        requestId: 'auth-request',
+        commandId: 'auth-command',
+        sequence: 0,
+        payloadLength: Buffer.byteLength(JSON.stringify(payload)),
+        payload,
+      }),
+    )
+    expect(await response).toMatchObject({ type: 'AUTHENTICATED' })
+    expect(clean.extensions).toBe('')
+    clean.close()
+  })
+
+  it('rejects absent, wildcard-like, and unlisted origins while admitting configured desktop origins', async () => {
+    await attachSync()
+    const absent = new WebSocket(`ws://127.0.0.1:${port}/sockets/sync`)
+    expect(await closedWith(absent)).toBe(1008)
+    const unlisted = new WebSocket(`ws://127.0.0.1:${port}/sockets/sync`, { origin: 'https://evil.example' })
+    expect(await closedWith(unlisted)).toBe(1008)
+
+    const desktop = new WebSocket(`ws://127.0.0.1:${port}/sockets/sync`, { origin: 'tauri://localhost' })
+    await opened(desktop)
+    desktop.close()
+  })
+
+  it('closes a sync frame above 512KiB before JSON parsing', async () => {
+    await attachSync()
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/sockets/sync`, {
+      origin: 'https://app.example.test',
+    })
+    await opened(socket)
+    const closed = closedWith(socket)
+    socket.send('x'.repeat(512 * 1024 + 1))
+    expect(await closed).toBe(1009)
   })
 })

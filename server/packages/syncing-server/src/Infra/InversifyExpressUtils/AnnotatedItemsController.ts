@@ -14,6 +14,8 @@ import { MapperInterface } from '@standardnotes/domain-core'
 import { ItemHttpRepresentation } from '../../Mapping/Http/ItemHttpRepresentation'
 import { CheckForTrafficAbuse } from '../../Domain/UseCase/Syncing/CheckForTrafficAbuse/CheckForTrafficAbuse'
 import { Logger } from 'winston'
+import { ExecuteSyncCommand } from '../../Domain/SyncCommand/ExecuteSyncCommand'
+import { GetSyncCommandStatus } from '../../Domain/SyncCommand/GetSyncCommandStatus'
 
 @controller('/items', TYPES.Sync_AuthMiddleware)
 export class AnnotatedItemsController extends BaseItemsController {
@@ -38,6 +40,8 @@ export class AnnotatedItemsController extends BaseItemsController {
     override payloadSizeAbuseTimeframeLengthInMinutes: number,
     @inject(TYPES.Sync_AuthorizeCollaborationAccess)
     override authorizeCollaborationAccess: AuthorizeCollaborationAccess,
+    @inject(TYPES.Sync_ExecuteSyncCommand) override executeSyncCommand: ExecuteSyncCommand,
+    @inject(TYPES.Sync_GetSyncCommandStatus) override getSyncCommandStatusUseCase: GetSyncCommandStatus,
   ) {
     super(
       checkForTrafficAbuse,
@@ -56,6 +60,8 @@ export class AnnotatedItemsController extends BaseItemsController {
       payloadSizeAbuseTimeframeLengthInMinutes,
       undefined,
       authorizeCollaborationAccess,
+      executeSyncCommand,
+      getSyncCommandStatusUseCase,
     )
   }
 
@@ -67,6 +73,11 @@ export class AnnotatedItemsController extends BaseItemsController {
   @httpPost('/check-integrity')
   override async checkItemsIntegrity(request: Request, response: Response): Promise<results.JsonResult> {
     return super.checkItemsIntegrity(request, response)
+  }
+
+  @httpGet('/sync-command/:commandId')
+  override async getSyncCommandStatus(request: Request, response: Response): Promise<results.JsonResult> {
+    return super.getSyncCommandStatus(request, response)
   }
 
   @httpGet('/:uuid')

@@ -25,6 +25,7 @@ import {
   API_MESSAGE_LOGIN_IN_PROGRESS,
   API_MESSAGE_TOKEN_REFRESH_IN_PROGRESS,
   ApiServiceEventData,
+  AccountSyncCommandMetadata,
 } from '@standardnotes/services'
 import { DownloadFileParams, FileOwnershipType, FilesApiInterface } from '@standardnotes/files'
 import { ServerSyncPushContextualPayload, SNFeatureRepo } from '@standardnotes/models'
@@ -601,12 +602,13 @@ export class LegacyApiService
     paginationToken: string | undefined,
     limit: number,
     sharedVaultUuids?: string[],
+    command?: AccountSyncCommandMetadata,
   ): Promise<HttpResponse<RawSyncResponse>> {
     const preprocessingError = this.preprocessingError()
     if (preprocessingError) {
       return preprocessingError
     }
-    const request = this.getSyncHttpRequest(payloads, lastSyncToken, paginationToken, limit, sharedVaultUuids)
+    const request = this.getSyncHttpRequest(payloads, lastSyncToken, paginationToken, limit, sharedVaultUuids, command)
     const response = await this.httpService.runHttp<RawSyncResponse>(request)
 
     if (isErrorResponse(response)) {
@@ -625,6 +627,7 @@ export class LegacyApiService
     paginationToken: string | undefined,
     limit: number,
     sharedVaultUuids?: string[] | undefined,
+    command?: AccountSyncCommandMetadata,
   ): HttpRequest {
     const path = Paths.v1.sync
     const params = this.params({
@@ -639,6 +642,14 @@ export class LegacyApiService
       params,
       verb: HttpVerb.Post,
       authentication: this.getSessionAccessToken(),
+      ...(command
+        ? {
+            customHeaders: [
+              { key: 'x-sync-command-id', value: command.id },
+              { key: 'x-sync-command-digest', value: command.digest },
+            ],
+          }
+        : {}),
     }
   }
 

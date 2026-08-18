@@ -2,8 +2,10 @@ import 'reflect-metadata'
 
 import { Request, Response } from 'express'
 import { ServiceContainerInterface, ServiceIdentifier } from '@standardnotes/domain-core'
+import type { AttachedGateway } from '@standard-red-notes/websocket-gateway'
 
 import { DirectCallServiceProxy } from './DirectCallServiceProxy'
+import { webSocketGatewayAccessService } from '../Sync/SyncWebSocketRuntime'
 
 describe('DirectCallServiceProxy', () => {
   let serviceContainer: ServiceContainerInterface
@@ -177,48 +179,34 @@ describe('DirectCallServiceProxy', () => {
   })
 
   describe('callWebSocketServer', () => {
-    const originalEnv = { ...process.env }
-    const authenticated = { user: { uuid: 'u-1' }, session: { uuid: 's-1' } }
+    const authenticated = { user: { uuid: 'u-1' }, session: { uuid: 's-1' }, authToken: 'signed-auth' }
+    let handleMintToken: jest.Mock
 
     beforeEach(() => {
-      process.env.WEB_SOCKET_SERVER_URL = 'http://ws/'
-      process.env.WEBSOCKET_GATEWAY_INTERNAL_SECRET = 'shhh'
-      global.fetch = jest.fn().mockResolvedValue({ status: 200, json: async () => ({ token: 'ws-token' }) }) as never
+      handleMintToken = jest.fn((request, response) => {
+        expect(request.headers['x-auth-token']).toBe('signed-auth')
+        response.writeHead(200)
+        response.end(JSON.stringify({ token: 'ws-token' }))
+      })
+      webSocketGatewayAccessService.setProvider({ handleMintToken } as unknown as AttachedGateway)
     })
 
     afterEach(() => {
-      process.env = { ...originalEnv }
-      jest.restoreAllMocks()
+      webSocketGatewayAccessService.clearProvider()
     })
 
-    it('mints a connection token against the websocket gateway with the internal secret', async () => {
+    it('mints a connection token against the attached in-process gateway', async () => {
       await buildProxy().callWebSocketServer(buildRequest(), buildResponse(authenticated), 'sockets.tokens.create')
 
-      expect(global.fetch).toHaveBeenCalledWith(
-        'http://ws/sockets/tokens',
-        expect.objectContaining({
-          method: 'POST',
-          headers: { 'content-type': 'application/json', 'x-internal-secret': 'shhh' },
-          body: JSON.stringify({ userUuid: 'u-1', sessionUuid: 's-1' }),
-        }),
-      )
+      expect(handleMintToken).toHaveBeenCalledTimes(1)
       expect(status).toHaveBeenCalledWith(200)
-      expect(send).toHaveBeenCalledWith({ token: 'ws-token' })
-    })
-
-    it('sends an empty internal secret rather than the literal "undefined" when unset', async () => {
-      delete process.env.WEBSOCKET_GATEWAY_INTERNAL_SECRET
-
-      await buildProxy().callWebSocketServer(buildRequest(), buildResponse(authenticated), 'sockets.tokens.create')
-
-      const headers = (global.fetch as jest.Mock).mock.calls[0][1].headers as Record<string, string>
-      expect(headers['x-internal-secret']).toBe('')
+      expect(send).toHaveBeenCalledWith(expect.objectContaining({ data: { token: 'ws-token' } }))
     })
 
     it('refuses to mint a token for an unauthenticated caller', async () => {
       await buildProxy().callWebSocketServer(buildRequest(), buildResponse({}), 'sockets.tokens.create')
 
-      expect(global.fetch).not.toHaveBeenCalled()
+      expect(handleMintToken).not.toHaveBeenCalled()
       expect(status).toHaveBeenCalledWith(400)
       expect(send).toHaveBeenCalledWith({ error: { message: 'Websockets server is not available.' } })
     })
@@ -230,42 +218,37 @@ describe('DirectCallServiceProxy', () => {
         'sockets.tokens.create',
       )
 
-      expect(global.fetch).not.toHaveBeenCalled()
+      expect(handleMintToken).not.toHaveBeenCalled()
       expect(status).toHaveBeenCalledWith(400)
     })
 
     it('rejects any method identifier that is not a token request', async () => {
       await buildProxy().callWebSocketServer(buildRequest(), buildResponse(authenticated), 'sockets.connect')
 
-      expect(global.fetch).not.toHaveBeenCalled()
+      expect(handleMintToken).not.toHaveBeenCalled()
       expect(status).toHaveBeenCalledWith(400)
     })
 
-    it('rejects the call when no websocket server URL is configured', async () => {
-      delete process.env.WEB_SOCKET_SERVER_URL
+    it('returns retryable unavailability when no in-process gateway is attached', async () => {
+      webSocketGatewayAccessService.clearProvider()
 
       await buildProxy().callWebSocketServer(buildRequest(), buildResponse(authenticated), 'sockets.tokens.create')
 
-      expect(global.fetch).not.toHaveBeenCalled()
-      expect(status).toHaveBeenCalledWith(400)
-    })
-
-    it('responds 502 when the websocket gateway is unreachable', async () => {
-      ;(global.fetch as jest.Mock).mockRejectedValue(new Error('ECONNREFUSED'))
-
-      await buildProxy().callWebSocketServer(buildRequest(), buildResponse(authenticated), 'sockets.tokens.create')
-
-      expect(status).toHaveBeenCalledWith(502)
-      expect(send).toHaveBeenCalledWith({ error: { message: 'Could not reach the websockets gateway.' } })
+      expect(handleMintToken).not.toHaveBeenCalled()
+      expect(status).toHaveBeenCalledWith(503)
+      expect(send).toHaveBeenCalledWith({ error: { message: 'Websockets server is not available.' } })
     })
 
     it('propagates a failure status from the websocket gateway', async () => {
-      ;(global.fetch as jest.Mock).mockResolvedValue({ status: 403, json: async () => ({ error: 'forbidden' }) })
+      handleMintToken.mockImplementationOnce((_request, response) => {
+        response.writeHead(403)
+        response.end(JSON.stringify({ error: 'forbidden' }))
+      })
 
       await buildProxy().callWebSocketServer(buildRequest(), buildResponse(authenticated), 'sockets.tokens.create')
 
       expect(status).toHaveBeenCalledWith(403)
-      expect(send).toHaveBeenCalledWith({ error: 'forbidden' })
+      expect(send).toHaveBeenCalledWith(expect.objectContaining({ data: { error: 'forbidden' } }))
     })
   })
 })

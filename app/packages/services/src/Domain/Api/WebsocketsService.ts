@@ -167,6 +167,7 @@ export class WebSocketsService extends AbstractService<
   private webSocket?: WebSocket
   private webSocketHeartbeatInterval?: ReturnType<typeof setInterval>
   private collaborationFrameHandlers = new Set<(frame: CollaborationFrame) => void>()
+  private syncSessionRevocationHandlers = new Set<() => void | Promise<void>>()
 
   constructor(
     private storageService: StorageServiceInterface,
@@ -180,6 +181,29 @@ export class WebSocketsService extends AbstractService<
   public setWebSocketUrl(url: string | undefined): void {
     this.webSocketUrl = url
     this.storageService.setValue(StorageKey.WebSocketUrl, url)
+  }
+
+  /** Current operator-configured gateway URL; never substitutes a first-party host. */
+  public getConfiguredWebSocketUrl(): string | undefined {
+    return this.webSocketUrl
+  }
+
+  public hasConfiguredWebSocketUrl(): boolean {
+    return typeof this.webSocketUrl === 'string' && this.webSocketUrl.length > 0
+  }
+
+  /** Register the dedicated sync worker for explicit session teardown. */
+  public onSyncTransportSessionRevoked(handler: () => void | Promise<void>): () => void {
+    this.syncSessionRevocationHandlers.add(handler)
+    return () => this.syncSessionRevocationHandlers.delete(handler)
+  }
+
+  public async revokeSyncTransportSession(): Promise<void> {
+    const results = await Promise.allSettled([...this.syncSessionRevocationHandlers].map((handler) => handler()))
+    const failure = results.find((result): result is PromiseRejectedResult => result.status === 'rejected')
+    if (failure) {
+      throw failure.reason
+    }
   }
 
   public loadWebSocketUrl(): void {
@@ -280,9 +304,9 @@ export class WebSocketsService extends AbstractService<
 
     this.beginWebSocketHeartbeat()
 
-    // On every (re)connect, tell the rest of the app the socket is live so the
-    // sync service can run a full HTTP sync and backfill anything missed while
-    // disconnected. HTTP remains the source of truth for catch-up.
+    // Notify realtime consumers. The account-sync worker owns its own resume /
+    // STATUS flow; this legacy push/collaboration reconnect no longer forces an
+    // unconditional full HTTP backfill.
     void this.notifyEvent(WebSocketsServiceEvent.WebSocketDidOpen)
   }
 
@@ -541,5 +565,6 @@ export class WebSocketsService extends AbstractService<
     ;(this.storageService as unknown) = undefined
     ;(this.webSocketApiService as unknown) = undefined
     this.closeWebSocketConnection()
+    this.syncSessionRevocationHandlers.clear()
   }
 }

@@ -24,6 +24,10 @@ export interface HomeServerRuntimeReadinessState {
   markUnavailable(): void
 }
 
+export interface HomeServerRuntimeRealtime {
+  stop(): Promise<void>
+}
+
 export interface HomeServerSignalTarget {
   on(event: 'SIGTERM', listener: () => void): unknown
   removeListener(event: 'SIGTERM', listener: () => void): unknown
@@ -33,6 +37,7 @@ export interface HomeServerRuntimeStartOptions {
   server: http.Server
   bridge: HomeServerRuntimeBridge
   emailDelivery?: HomeServerRuntimeEmailDelivery
+  realtime?: HomeServerRuntimeRealtime
   logger: HomeServerRuntimeLogger
   readinessState: HomeServerRuntimeReadinessState
   startScheduler: () => HomeServerRuntimeScheduler
@@ -50,6 +55,7 @@ export class HomeServerRuntime {
   private scheduler: HomeServerRuntimeScheduler | undefined
   private bridge: HomeServerRuntimeBridge | undefined
   private emailDelivery: HomeServerRuntimeEmailDelivery | undefined
+  private realtime: HomeServerRuntimeRealtime | undefined
   private logger: HomeServerRuntimeLogger | undefined
   private readinessState: HomeServerRuntimeReadinessState | undefined
   private signalHandler: (() => void) | undefined
@@ -83,6 +89,7 @@ export class HomeServerRuntime {
       this.server = options.server
       this.bridge = options.bridge
       this.emailDelivery = options.emailDelivery
+      this.realtime = options.realtime
       this.logger = options.logger
       this.readinessState = options.readinessState
       resourcesAdopted = true
@@ -102,6 +109,7 @@ export class HomeServerRuntime {
       if (resourcesAdopted) {
         await this.stopResources().catch(() => undefined)
       } else {
+        await options.realtime?.stop().catch(() => undefined)
         await options.bridge.close().catch(() => undefined)
         options.server.unref()
       }
@@ -115,7 +123,7 @@ export class HomeServerRuntime {
     if (this.stopPromise) {
       return this.stopPromise
     }
-    if (!this.server && !this.scheduler && !this.bridge && !this.emailDelivery) {
+    if (!this.server && !this.scheduler && !this.bridge && !this.emailDelivery && !this.realtime) {
       return
     }
 
@@ -156,6 +164,7 @@ export class HomeServerRuntime {
     const scheduler = this.scheduler
     const bridge = this.bridge
     const emailDelivery = this.emailDelivery
+    const realtime = this.realtime
     const logger = this.logger
     const readinessState = this.readinessState
     const errors: Error[] = []
@@ -177,6 +186,7 @@ export class HomeServerRuntime {
     this.scheduler = undefined
     this.bridge = undefined
     this.emailDelivery = undefined
+    this.realtime = undefined
     this.logger = undefined
     this.readinessState = undefined
 
@@ -192,6 +202,17 @@ export class HomeServerRuntime {
     if (emailDelivery) {
       try {
         await emailDelivery.stop()
+      } catch (error) {
+        errors.push(error as Error)
+      }
+    }
+
+    // Withdraw the sync capability/ticket provider and drain the WebSocket
+    // server before closing the HTTP listener it is attached to. The realtime
+    // owner also closes its dedicated shared-state Redis client afterwards.
+    if (realtime) {
+      try {
+        await realtime.stop()
       } catch (error) {
         errors.push(error as Error)
       }

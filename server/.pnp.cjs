@@ -6379,6 +6379,7 @@ const RAW_RUNTIME_STATE =
       ["workspace:packages/home-server", {\
         "packageLocation": "./packages/home-server/",\
         "packageDependencies": [\
+          ["@standard-red-notes/websocket-gateway", "workspace:packages/websocket-gateway"],\
           ["@standardnotes/api-gateway", "workspace:packages/api-gateway"],\
           ["@standardnotes/auth-server", "workspace:packages/auth"],\
           ["@standardnotes/domain-core", "workspace:packages/domain-core"],\

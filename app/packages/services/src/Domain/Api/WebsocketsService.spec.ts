@@ -42,6 +42,26 @@ describe('webSocketsService', () => {
       createService().setWebSocketUrl(webSocketUrl)
       expect(storageService.setValue).toHaveBeenCalledWith(StorageKey.WebSocketUrl, webSocketUrl)
     })
+
+    it('exposes only the configured URL and awaits the dedicated transport session-revocation barrier', async () => {
+      const service = createService()
+      const revoke = jest.fn().mockResolvedValue(undefined)
+      const unregister = service.onSyncTransportSessionRevoked(revoke)
+      service.setWebSocketUrl('wss://self-hosted.example.test')
+
+      expect(service.hasConfiguredWebSocketUrl()).toBe(true)
+      expect(service.getConfiguredWebSocketUrl()).toBe('wss://self-hosted.example.test')
+
+      service.closeWebSocketConnection()
+      expect(revoke).not.toHaveBeenCalled()
+
+      await service.revokeSyncTransportSession()
+      expect(revoke).toHaveBeenCalledTimes(1)
+
+      unregister()
+      await service.revokeSyncTransportSession()
+      expect(revoke).toHaveBeenCalledTimes(1)
+    })
   })
 
   describe('authorizeCollaborationRoom()', () => {

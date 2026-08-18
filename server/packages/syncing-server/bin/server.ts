@@ -26,6 +26,10 @@ import { SyncItems } from '../src/Domain/UseCase/Syncing/SyncItems/SyncItems'
 import { SyncResponseFactoryResolverInterface } from '../src/Domain/Item/SyncResponse/SyncResponseFactoryResolverInterface'
 import { SyncResponse20200115 } from '../src/Domain/Item/SyncResponse/SyncResponse20200115'
 import { CheckForTrafficAbuse } from '../src/Domain/UseCase/Syncing/CheckForTrafficAbuse/CheckForTrafficAbuse'
+import { ExecuteSyncCommand } from '../src/Domain/SyncCommand/ExecuteSyncCommand'
+import { GetSyncCommandStatus } from '../src/Domain/SyncCommand/GetSyncCommandStatus'
+import { SyncCommandOutboxDispatcher } from '../src/Domain/SyncCommand/SyncCommandOutboxDispatcher'
+import { CleanupSyncCommands } from '../src/Domain/SyncCommand/CleanupSyncCommands'
 
 // Standard Red Notes: fail-fast global crash handlers. Transient DB/Redis blips
 // self-heal via the ioredis retryStrategy / TypeORM pool; but a genuinely
@@ -155,11 +159,21 @@ void container
       container.get<number>(TYPES.Sync_FREE_USERS_UPLOAD_BANDWIDTH_ABUSE_THRESHOLD),
       container.get<number>(TYPES.Sync_UPLOAD_BANDWIDTH_ABUSE_TIMEFRAME_LENGTH_IN_MINUTES),
       container.get<winston.Logger>(TYPES.Sync_Logger),
+      container.get<ExecuteSyncCommand>(TYPES.Sync_ExecuteSyncCommand),
+      container.get<GetSyncCommandStatus>(TYPES.Sync_GetSyncCommandStatus),
+      env.get('SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET', true) || '',
     )
 
     grpcServer.addService(SyncingService, {
       syncItems: syncingServer.syncItems.bind(syncingServer),
+      getSyncCommandStatus: syncingServer.getSyncCommandStatus.bind(syncingServer),
     })
+
+    const outboxDispatcher = container.get<SyncCommandOutboxDispatcher>(TYPES.Sync_SyncCommandOutboxDispatcher)
+    const commandCleanup = container.get<CleanupSyncCommands>(TYPES.Sync_CleanupSyncCommands)
+    const commandMaintenanceInterval = container.get<number>(TYPES.Sync_COMMAND_MAINTENANCE_INTERVAL_MILLISECONDS)
+    outboxDispatcher.start(commandMaintenanceInterval)
+    commandCleanup.start(commandMaintenanceInterval)
     grpcServer.bindAsync(`0.0.0.0:${gRPCPort}`, grpc.ServerCredentials.createInsecure(), (error, port) => {
       if (error) {
         logger.error('Failed to bind gRPC server.', safeErrorLogMetadata(error))
@@ -175,6 +189,8 @@ void container
     })
 
     process.on('SIGTERM', () => {
+      outboxDispatcher.stop()
+      commandCleanup.stop()
       logger.info('SIGTERM signal received: closing HTTP server')
       serverInstance.close(() => {
         logger.info('HTTP server closed')

@@ -626,14 +626,13 @@ describe('SyncService websocket push apply (Phase 1A)', () => {
     })
   })
 
-  it('performs a full HTTP sync on websocket (re)connect to backfill', async () => {
+  it('does not perform an unconditional HTTP backfill when the legacy websocket reconnects', async () => {
     const service = createService('base-token')
     const syncSpy = jest.spyOn(service, 'sync').mockResolvedValue(undefined)
 
     await service.handleEvent({ type: WebSocketsServiceEvent.WebSocketDidOpen } as never)
 
-    expect(syncSpy).toHaveBeenCalledTimes(1)
-    expect(syncSpy).toHaveBeenCalledWith(expect.objectContaining({ sourceDescription: 'WebSocket reconnect backfill' }))
+    expect(syncSpy).not.toHaveBeenCalled()
   })
 })
 
@@ -1146,6 +1145,41 @@ describe('SyncService sync lock ownership', () => {
 
     owner.releaseLock()
     expect((service as unknown as { syncLock: symbol | false }).syncLock).toBe(false)
+  })
+
+  it('recovers and applies stale transport A before collecting the current upload snapshot B', async () => {
+    const service = createService()
+    const ordering: string[] = []
+    const stopAfterCollection = new Error('stop after collection seam')
+    service.setAccountSyncTransport({
+      recoverPending: jest.fn(),
+      execute: jest.fn(),
+    } as never)
+    ;(service as unknown as { createServerSyncOperation: jest.Mock }).createServerSyncOperation = jest
+      .fn()
+      .mockResolvedValue({
+        recoverPending: jest.fn(async () => {
+          ordering.push('apply-recovered-a')
+          return { recoveredCount: 1, hasError: false }
+        }),
+      })
+    ;(service as unknown as { prepareForSync: jest.Mock }).prepareForSync = jest.fn(async () => {
+      ordering.push('collect-current-b')
+      throw stopAfterCollection
+    })
+
+    await expect(
+      (
+        service as unknown as {
+          performSync: (options: { source: SyncSource }) => Promise<unknown>
+        }
+      ).performSync({ source: SyncSource.External }),
+    ).rejects.toBe(stopAfterCollection)
+
+    expect(ordering).toEqual(['apply-recovered-a', 'collect-current-b'])
+    expect(
+      (service as unknown as { createServerSyncOperation: jest.Mock }).createServerSyncOperation,
+    ).toHaveBeenCalledWith([], expect.objectContaining({ source: SyncSource.External }), undefined)
   })
 
   it('releases its lock when prepareForSync rejects', async () => {

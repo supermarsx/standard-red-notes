@@ -3,9 +3,10 @@ import { ItemRepositoryInterface } from '../../../Item/ItemRepositoryInterface'
 import { ItemTransferCalculatorInterface } from '../../../Item/ItemTransferCalculatorInterface'
 import { GetItems } from './GetItems'
 import { Item } from '../../../Item/Item'
-import { ContentType, Dates, Timestamps, Uuid } from '@standardnotes/domain-core'
+import { ContentType, Dates, Timestamps, UniqueEntityId, Uuid } from '@standardnotes/domain-core'
 import { SharedVaultUserRepositoryInterface } from '../../../SharedVault/User/SharedVaultUserRepositoryInterface'
 import { ItemContentSizeDescriptor } from '../../../Item/ItemContentSizeDescriptor'
+import { ItemQuery } from '../../../Item/ItemQuery'
 
 describe('GetItems', () => {
   let itemRepository: ItemRepositoryInterface
@@ -15,6 +16,10 @@ describe('GetItems', () => {
   const maxItemsSyncLimit = 100
   let item: Item
   let sharedVaultUserRepository: SharedVaultUserRepositoryInterface
+  const itemUuid = '11111111-1111-1111-1111-111111111111'
+
+  const cursorToken = (timestamp: number, uuid: string) =>
+    Buffer.from(`3:${timestamp}:${uuid}`, 'utf-8').toString('base64')
 
   const createUseCase = () =>
     new GetItems(
@@ -27,31 +32,34 @@ describe('GetItems', () => {
     )
 
   beforeEach(() => {
-    item = Item.create({
-      duplicateOf: null,
-      itemsKeyId: 'items-key-id',
-      content: 'content',
-      contentType: ContentType.create(ContentType.TYPES.Note).getValue(),
-      encItemKey: 'enc-item-key',
-      authHash: 'auth-hash',
-      userUuid: Uuid.create('00000000-0000-0000-0000-000000000000').getValue(),
-      deleted: false,
-      updatedWithSession: null,
-      dates: Dates.create(new Date(123), new Date(123)).getValue(),
-      timestamps: Timestamps.create(123, 123).getValue(),
-    }).getValue()
+    item = Item.create(
+      {
+        duplicateOf: null,
+        itemsKeyId: 'items-key-id',
+        content: 'content',
+        contentType: ContentType.create(ContentType.TYPES.Note).getValue(),
+        encItemKey: 'enc-item-key',
+        authHash: 'auth-hash',
+        userUuid: Uuid.create('00000000-0000-0000-0000-000000000000').getValue(),
+        deleted: false,
+        updatedWithSession: null,
+        dates: Dates.create(new Date(123), new Date(123)).getValue(),
+        timestamps: Timestamps.create(123, 123).getValue(),
+      },
+      new UniqueEntityId(itemUuid),
+    ).getValue()
 
     itemRepository = {} as jest.Mocked<ItemRepositoryInterface>
     itemRepository.findAll = jest.fn().mockResolvedValue([item])
     itemRepository.countAll = jest.fn().mockResolvedValue(1)
     itemRepository.findContentSizeForComputingTransferLimit = jest
       .fn()
-      .mockResolvedValue([ItemContentSizeDescriptor.create('00000000-0000-0000-0000-000000000000', 20).getValue()])
+      .mockResolvedValue([ItemContentSizeDescriptor.create(itemUuid, 20).getValue()])
 
     itemTransferCalculator = {} as jest.Mocked<ItemTransferCalculatorInterface>
     itemTransferCalculator.computeItemUuidsToFetch = jest
       .fn()
-      .mockResolvedValue({ uuids: ['item-uuid'], transferLimitBreachedBeforeEndOfItems: false })
+      .mockResolvedValue({ uuids: [itemUuid], transferLimitBreachedBeforeEndOfItems: false })
 
     timer = {} as jest.Mocked<TimerInterface>
     timer.getTimestampInMicroseconds = jest.fn().mockReturnValue(123)
@@ -94,7 +102,7 @@ describe('GetItems', () => {
     expect(result.isFailed()).toBeFalsy()
     expect(result.getValue()).toEqual({
       items: [item],
-      cursorToken: 'MjowLjAwMDEyMw==',
+      cursorToken: cursorToken(123, itemUuid),
       lastSyncTime: null,
     })
   })
@@ -132,7 +140,7 @@ describe('GetItems', () => {
 
     const result = await useCase.execute({
       userUuid: '00000000-0000-0000-0000-000000000000',
-      cursorToken: 'MjowLjAwMDEyMw==',
+      cursorToken: Buffer.from('2:0.000123', 'utf-8').toString('base64'),
       contentType: undefined,
       limit: undefined,
     })
@@ -141,8 +149,148 @@ describe('GetItems', () => {
     expect(result.getValue()).toEqual({
       items: [item],
       cursorToken: undefined,
-      lastSyncTime: 123.00000000000001,
+      lastSyncTime: 123,
     })
+    const itemQuery = (itemRepository.findContentSizeForComputingTransferLimit as jest.Mock).mock.calls[0][0]
+    expect(itemQuery.syncTimeComparison).toBe('>=')
+    expect(itemQuery.lastSyncUuid).toBeUndefined()
+  })
+
+  it('decodes a v3 composite cursor into an exclusive timestamp and UUID keyset', async () => {
+    const result = await createUseCase().execute({
+      userUuid: '00000000-0000-0000-0000-000000000000',
+      cursorToken: cursorToken(123, itemUuid),
+      contentType: undefined,
+      limit: undefined,
+    })
+
+    expect(result.isFailed()).toBeFalsy()
+    const itemQuery = (itemRepository.findContentSizeForComputingTransferLimit as jest.Mock).mock.calls[0][0]
+    expect(itemQuery).toEqual(
+      expect.objectContaining({
+        lastSyncTime: 123,
+        lastSyncUuid: itemUuid,
+        syncTimeComparison: '>',
+        sortBy: 'updated_at_timestamp',
+        sortOrder: 'ASC',
+      }),
+    )
+  })
+
+  it('rejects a malformed v3 cursor', async () => {
+    const malformed = Buffer.from('3:123:not-a-uuid', 'utf-8').toString('base64')
+
+    const result = await createUseCase().execute({
+      userUuid: '00000000-0000-0000-0000-000000000000',
+      cursorToken: malformed,
+      contentType: undefined,
+      limit: undefined,
+    })
+
+    expect(result.isFailed()).toBeTruthy()
+    expect(result.getError()).toBe('Sync cursor is malformed')
+    expect(itemRepository.findContentSizeForComputingTransferLimit).not.toHaveBeenCalled()
+  })
+
+  it('terminates and returns every item once when more than 150 items share one timestamp', async () => {
+    const timestamp = 9_876_543
+    const items = Array.from({ length: 301 }, (_, index) => {
+      const uuid = `00000000-0000-0000-0000-${index.toString(16).padStart(12, '0')}`
+      return Item.create(
+        {
+          duplicateOf: null,
+          itemsKeyId: 'items-key-id',
+          content: 'content',
+          contentType: ContentType.create(ContentType.TYPES.Note).getValue(),
+          encItemKey: 'enc-item-key',
+          authHash: 'auth-hash',
+          userUuid: Uuid.create('00000000-0000-0000-0000-000000000000').getValue(),
+          deleted: false,
+          updatedWithSession: null,
+          dates: Dates.create(new Date(123), new Date(123)).getValue(),
+          timestamps: Timestamps.create(123, timestamp).getValue(),
+        },
+        new UniqueEntityId(uuid),
+      ).getValue()
+    })
+
+    const matchingItems = (query: ItemQuery, applyLimit: boolean): Item[] => {
+      const filtered = items.filter((candidate) => {
+        if (query.lastSyncTime === undefined) {
+          return true
+        }
+        const updatedAt = candidate.props.timestamps.updatedAt
+        if (query.lastSyncUuid !== undefined) {
+          return (
+            updatedAt > query.lastSyncTime ||
+            (updatedAt === query.lastSyncTime && candidate.id.toString() > query.lastSyncUuid)
+          )
+        }
+        return query.syncTimeComparison === '>=' ? updatedAt >= query.lastSyncTime : updatedAt > query.lastSyncTime
+      })
+      filtered.sort(
+        (left, right) =>
+          left.props.timestamps.updatedAt - right.props.timestamps.updatedAt ||
+          left.id.toString().localeCompare(right.id.toString()),
+      )
+      return applyLimit && query.limit !== undefined ? filtered.slice(0, query.limit) : filtered
+    }
+
+    const boundaryRepository = {
+      findContentSizeForComputingTransferLimit: jest.fn(async (query: ItemQuery) =>
+        matchingItems(query, true).map((candidate) =>
+          ItemContentSizeDescriptor.create(candidate.id.toString(), 1).getValue(),
+        ),
+      ),
+      findAll: jest.fn(async (query: ItemQuery) => {
+        const requested = new Set(query.uuids ?? [])
+        return items
+          .filter((candidate) => requested.has(candidate.id.toString()))
+          .sort(
+            (left, right) =>
+              left.props.timestamps.updatedAt - right.props.timestamps.updatedAt ||
+              left.id.toString().localeCompare(right.id.toString()),
+          )
+      }),
+      countAll: jest.fn(async (query: ItemQuery) => matchingItems(query, false).length),
+    } as unknown as ItemRepositoryInterface
+    const noByteLimitCalculator = {
+      computeItemUuidsToFetch: jest.fn(async (descriptors: ItemContentSizeDescriptor[]) => ({
+        uuids: descriptors.map((descriptor) => descriptor.props.uuid.value),
+        transferLimitBreachedBeforeEndOfItems: false,
+      })),
+    } as unknown as ItemTransferCalculatorInterface
+    const useCase = new GetItems(
+      boundaryRepository,
+      sharedVaultUserRepository,
+      Number.MAX_SAFE_INTEGER,
+      noByteLimitCalculator,
+      timer,
+      150,
+    )
+
+    const received: string[] = []
+    let nextCursor: string | undefined
+    let pageCount = 0
+    do {
+      const result = await useCase.execute({
+        userUuid: '00000000-0000-0000-0000-000000000000',
+        cursorToken: nextCursor,
+        contentType: undefined,
+        limit: 150,
+      })
+      expect(result.isFailed()).toBeFalsy()
+      const page = result.getValue()
+      received.push(...page.items.map((candidate) => candidate.id.toString()))
+      nextCursor = page.cursorToken
+      pageCount += 1
+      expect(pageCount).toBeLessThanOrEqual(3)
+    } while (nextCursor)
+
+    expect(pageCount).toBe(3)
+    expect(received).toHaveLength(301)
+    expect(new Set(received).size).toBe(301)
+    expect(received).toEqual(items.map((candidate) => candidate.id.toString()))
   })
 
   it('should return items based on a sync token containing string date', async () => {
@@ -210,8 +358,10 @@ describe('GetItems', () => {
       itemTransferCalculator,
       timer,
       maxItemsSyncLimit,
-      2, // shadowBannedMaxItemsSyncLimit
-      30, // shadowBannedContentSizeTransferLimit
+      // shadowBannedMaxItemsSyncLimit
+      2,
+      // shadowBannedContentSizeTransferLimit
+      30,
     )
 
     const result = await useCase.execute({

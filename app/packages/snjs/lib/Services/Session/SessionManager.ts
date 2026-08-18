@@ -251,7 +251,9 @@ export class SessionManager
 
     this.apiService.setSession(session, persist)
 
-    if (this.isSignedIntoFirstPartyServer()) {
+    // Custom/self-hosted servers are eligible when they explicitly configure a
+    // gateway URL. Never infer or hard-code a first-party websocket host.
+    if (this.webSocketsService.hasConfiguredWebSocketUrl()) {
       void this.webSocketsService.startWebSocketConnection()
     }
   }
@@ -319,12 +321,23 @@ export class SessionManager
   }
 
   public async signOut() {
-    this.memoizeUser(undefined)
-
     const session = this.apiService.getSession()
-    if (session && session instanceof Session) {
-      await this.apiService.signOut()
+    let syncTransportRevocationError: unknown
+    try {
+      await this.webSocketsService.revokeSyncTransportSession()
+    } catch (error) {
+      syncTransportRevocationError = error
+    }
+    try {
+      if (session && session instanceof Session) {
+        await this.apiService.signOut()
+      }
+    } finally {
+      this.memoizeUser(undefined)
       this.webSocketsService.closeWebSocketConnection()
+    }
+    if (syncTransportRevocationError) {
+      throw syncTransportRevocationError
     }
   }
 

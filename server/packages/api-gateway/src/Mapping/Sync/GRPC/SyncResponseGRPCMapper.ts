@@ -39,6 +39,13 @@ export class SyncResponseGRPCMapper implements MapperInterface<SyncResponse, Syn
         .getSharedVaultInvitesList()
         .map((sharedVaultInvite) => this.createSharedVaultInvite(sharedVaultInvite)),
       notifications: domain.getNotificationsList().map((notification) => this.createNotification(notification)),
+      command: domain.hasCommand()
+        ? {
+            id: domain.getCommand()?.getId() as string,
+            digest: domain.getCommand()?.getDigest() as string,
+            status: domain.getCommand()?.getStatus() as string,
+          }
+        : undefined,
     }
   }
 

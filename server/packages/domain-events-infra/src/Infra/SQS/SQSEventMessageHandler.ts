@@ -7,11 +7,13 @@ import {
   DomainEventInterface,
   DomainEventMessageHandlerInterface,
 } from '@standardnotes/domain-events'
+import { DomainEventDeduplicator } from '../DomainEventDeduplicator'
 
 export class SQSEventMessageHandler implements DomainEventMessageHandlerInterface {
   constructor(
     private handlers: Map<string, DomainEventHandlerInterface>,
     private logger: Logger,
+    private deduplicator = new DomainEventDeduplicator(),
   ) {}
 
   async handleMessage(message: string): Promise<void> {
@@ -32,7 +34,7 @@ export class SQSEventMessageHandler implements DomainEventMessageHandlerInterfac
 
     this.logger.debug(`Received event: ${domainEvent.type}`)
 
-    await handler.handle(domainEvent)
+    await this.deduplicator.handle(domainEvent, () => handler.handle(domainEvent))
   }
 
   async handleError(error: Error): Promise<void> {

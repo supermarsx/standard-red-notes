@@ -71,6 +71,16 @@ const httpServer = createServer((req, res) => {
     return
   }
 
+  if (req.method === 'GET' && url.pathname === '/sockets/sync/capabilities') {
+    gateway.handleSyncCapabilities(req, res)
+    return
+  }
+
+  if (req.method === 'POST' && url.pathname === '/sockets/sync/tickets') {
+    gateway.handleSyncTicket(req, res)
+    return
+  }
+
   res.writeHead(404, { 'content-type': 'text/plain' })
   res.end('not found')
 })

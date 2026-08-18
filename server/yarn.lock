@@ -4797,6 +4797,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@standardnotes/home-server@workspace:packages/home-server"
   dependencies:
+    "@standard-red-notes/websocket-gateway": "workspace:*"
     "@standardnotes/api-gateway": "workspace:^"
     "@standardnotes/auth-server": "workspace:^"
     "@standardnotes/domain-core": "workspace:^"

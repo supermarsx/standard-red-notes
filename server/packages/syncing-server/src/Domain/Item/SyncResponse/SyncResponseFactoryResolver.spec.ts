@@ -35,6 +35,12 @@ describe('SyncResponseFactoryResolver', () => {
     )
   })
 
+  it('should resolve the modern factory for the current API Version 20240226', () => {
+    expect(createResolver().resolveSyncResponseFactoryVersion(ApiVersion.v20240226)).toEqual(
+      syncResponseFactory20200115,
+    )
+  })
+
   it('should resolve factory for undefined API Version', () => {
     expect(createResolver().resolveSyncResponseFactoryVersion()).toEqual(syncResponseFactory20161215)
   })
