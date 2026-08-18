@@ -1,4 +1,4 @@
-import { WebApplication } from '@/Application/WebApplication'
+import type { WebApplication } from '@/Application/WebApplication'
 import { formatDateForContextMenu } from '@/Utils/DateUtils'
 import { getIconForFileType } from '@/Utils/Items/Icons/getIconForFileType'
 import { formatSizeToReadableString } from '@standardnotes/filepicker'
@@ -23,8 +23,6 @@ import Popover from '../Popover/Popover'
 import Table from '../Table/Table'
 import { TableColumn } from '../Table/CommonTypes'
 import { useTable } from '../Table/useTable'
-import Menu from '../Menu/Menu'
-import FileMenuOptions from '../FileContextMenu/FileMenuOptions'
 import Icon from '../Icon/Icon'
 import LinkedItemBubble from '../LinkedItems/LinkedItemBubble'
 import LinkedItemsPanel from '../LinkedItems/LinkedItemsPanel'
@@ -35,8 +33,17 @@ import NotesOptions from '../NotesOptions/NotesOptions'
 import { useItemLinks } from '@/Hooks/useItemLinks'
 import { ItemLink } from '@/Utils/Items/Search/ItemLink'
 import ListItemVaultInfo from '../ContentListView/ListItemVaultInfo'
+import ItemOptionsMenu, { type ReadonlyFileActions } from './ItemOptionsMenu'
 
-export const ContextMenuCell = ({ items }: { items: DecryptedItemInterface[] }) => {
+export const ContextMenuCell = ({
+  items,
+  isFileAttachedToNote,
+  readonlyFileActions,
+}: {
+  items: DecryptedItemInterface[]
+  isFileAttachedToNote?: boolean
+  readonlyFileActions?: ReadonlyFileActions
+}) => {
   const [contextMenuVisible, setContextMenuVisible] = useState(false)
   const anchorElementRef = useRef<HTMLButtonElement>(null)
 
@@ -52,11 +59,17 @@ export const ContextMenuCell = ({ items }: { items: DecryptedItemInterface[] }) 
     return null
   }
 
+  const closeMenu = () => {
+    setContextMenuVisible(false)
+    anchorElementRef.current?.focus()
+  }
+
   return (
     <>
       <button
         className="border-border bg-default rounded-full border p-1"
         ref={anchorElementRef}
+        aria-label={allItemsAreFiles ? 'File options' : 'Note options'}
         onClick={(event) => {
           event.preventDefault()
           event.stopPropagation()
@@ -65,38 +78,14 @@ export const ContextMenuCell = ({ items }: { items: DecryptedItemInterface[] }) 
       >
         <Icon type="more" />
       </button>
-      <Popover
-        title="File options"
+      <ItemOptionsMenu
+        items={items}
         open={contextMenuVisible}
         anchorElement={anchorElementRef}
-        togglePopover={() => {
-          setContextMenuVisible(false)
-        }}
-        side="bottom"
-        align="start"
-        className="py-2"
-      >
-        <Menu a11yLabel="File context menu">
-          {allItemsAreFiles && (
-            <FileMenuOptions
-              closeMenu={() => {
-                setContextMenuVisible(false)
-              }}
-              shouldShowRenameOption={true}
-              shouldShowAttachOption={false}
-              selectedFiles={items as FileItem[]}
-            />
-          )}
-          {allItemsAreNotes && (
-            <NotesOptions
-              notes={items as SNNote[]}
-              closeMenu={() => {
-                setContextMenuVisible(false)
-              }}
-            />
-          )}
-        </Menu>
-      </Popover>
+        closeMenu={closeMenu}
+        isFileAttachedToNote={isFileAttachedToNote}
+        readonlyFileActions={readonlyFileActions}
+      />
     </>
   )
 }
@@ -270,6 +259,7 @@ const ContentTableView = ({ application, items }: Props) => {
 
   const [contextMenuItem, setContextMenuItem] = useState<DecryptedItemInterface | undefined>(undefined)
   const [contextMenuPosition, setContextMenuPosition] = useState<{ x: number; y: number } | undefined>(undefined)
+  const [contextMenuTrigger, setContextMenuTrigger] = useState<HTMLElement | undefined>(undefined)
 
   const isSmallBreakpoint = useMediaQuery(MutuallyExclusiveMediaQueryBreakpoints.sm)
   const isMediumBreakpoint = useMediaQuery(MutuallyExclusiveMediaQueryBreakpoints.md)
@@ -329,9 +319,10 @@ const ContentTableView = ({ application, items }: Props) => {
         })
       }
     },
-    onRowContextMenu(x, y, file) {
+    onRowContextMenu(x, y, file, trigger) {
       setContextMenuPosition({ x, y })
       setContextMenuItem(file)
+      setContextMenuTrigger(trigger)
     },
     rowActions: (item) => {
       const vault = application.vaults.getItemVault(item)
@@ -351,40 +342,20 @@ const ContentTableView = ({ application, items }: Props) => {
   const closeContextMenu = () => {
     setContextMenuPosition(undefined)
     setContextMenuItem(undefined)
+    contextMenuTrigger?.focus()
+    setContextMenuTrigger(undefined)
   }
 
   return (
     <>
       <Table table={table} />
       {contextMenuPosition && contextMenuItem && (
-        <Popover
-          title="Options"
+        <ItemOptionsMenu
+          items={[contextMenuItem]}
           open={true}
           anchorPoint={contextMenuPosition}
-          togglePopover={() => {
-            setContextMenuPosition(undefined)
-            setContextMenuItem(undefined)
-          }}
-          side="bottom"
-          align="start"
-          className="py-2"
-        >
-          {contextMenuItem instanceof FileItem && (
-            <Menu a11yLabel="File context menu">
-              <FileMenuOptions
-                closeMenu={closeContextMenu}
-                shouldShowRenameOption={true}
-                shouldShowAttachOption={false}
-                selectedFiles={[contextMenuItem]}
-              />
-            </Menu>
-          )}
-          {contextMenuItem instanceof SNNote && (
-            <Menu className="select-none" a11yLabel="Note context menu">
-              <NotesOptions notes={[contextMenuItem]} closeMenu={closeContextMenu} />
-            </Menu>
-          )}
-        </Popover>
+          closeMenu={closeContextMenu}
+        />
       )}
     </>
   )

@@ -4,16 +4,25 @@ import { isIOS } from '@standardnotes/ui-services'
 
 export const useContextMenuEvent = (
   elementRef: RefObject<HTMLElement | null>,
-  listener: (x: number, y: number) => void,
+  listener: (x: number, y: number, trigger?: HTMLElement) => void,
 ) => {
-  const { attachEvents, cleanupEvents } = useLongPressEvent(elementRef, listener, true)
+  const { attachEvents, cleanupEvents } = useLongPressEvent(
+    elementRef,
+    (x, y) => listener(x, y, elementRef.current ?? undefined),
+    true,
+  )
 
   const handleContextMenuEvent = useCallback(
     (event: MouseEvent) => {
       event.preventDefault()
-      listener(event.clientX, event.clientY)
+      event.stopPropagation()
+      listener(
+        event.clientX,
+        event.clientY,
+        event.target instanceof HTMLElement ? event.target : (elementRef.current ?? undefined),
+      )
     },
-    [listener],
+    [elementRef, listener],
   )
 
   useEffect(() => {

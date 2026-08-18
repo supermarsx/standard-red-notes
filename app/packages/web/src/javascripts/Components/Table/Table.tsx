@@ -3,6 +3,7 @@ import { KeyboardKey } from '@standardnotes/ui-services'
 import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 import { useApplication } from '../ApplicationProvider'
 import Icon from '../Icon/Icon'
+import { useContextMenuEvent } from '@/Hooks/useContextMenuEvent'
 import { Table as TableType, TableRow as TableRowType } from './CommonTypes'
 
 const InteractiveEventTargetSelector = [
@@ -68,13 +69,29 @@ function TableRow<Data>({
 }) {
   const [isHovered, setIsHovered] = useState(false)
   const [isFocused, setIsFocused] = useState(false)
+  const rowRef = useRef<HTMLDivElement>(null)
   const isHoveredOrFocused = isHovered || isFocused
+
+  const openContextMenu = useCallback(
+    (x: number, y: number, eventTarget?: HTMLElement) => {
+      const trigger =
+        eventTarget?.closest<HTMLElement>('[role="gridcell"]') ??
+        rowRef.current?.querySelector<HTMLElement>('[role="gridcell"]')
+      if (trigger) {
+        handleRowContextMenu(row.id, x, y, trigger)
+      }
+    },
+    [handleRowContextMenu, row.id],
+  )
+
+  useContextMenuEvent(rowRef, openContextMenu)
 
   const visibleCells = row.cells.filter((cell) => !cell.hidden)
 
   return (
     <div
       role="row"
+      ref={rowRef}
       id={row.id}
       aria-rowindex={rowIndex + 2}
       {...(canSelectRows ? { 'aria-selected': row.isSelected } : {})}
@@ -95,7 +112,6 @@ function TableRow<Data>({
           handleActivateRow(row.id)
         }
       }}
-      onContextMenu={handleRowContextMenu(row.id)}
       onFocus={() => {
         setIsFocused(true)
       }}
@@ -395,6 +411,23 @@ function Table<Data>({ table }: { table: TableType<Data> }) {
           }
           break
         }
+        case 'ContextMenu':
+        case 'F10': {
+          if (event.key === 'F10' && !event.shiftKey) {
+            return
+          }
+          const target = event.target as HTMLElement
+          const currentRowId = currentRow?.id
+          const trigger = target.closest<HTMLElement>('[role="gridcell"]')
+          if (!currentRowId || !trigger || isInteractiveTableEventTarget(target)) {
+            return
+          }
+          event.preventDefault()
+          event.stopPropagation()
+          const bounds = trigger.getBoundingClientRect()
+          handleRowContextMenu(currentRowId, bounds.left, bounds.bottom, trigger)
+          break
+        }
       }
     },
     [
@@ -403,6 +436,7 @@ function Table<Data>({ table }: { table: TableType<Data> }) {
       colCount,
       focusLogicalCell,
       handleActivateRow,
+      handleRowContextMenu,
       headers,
       multiSelectRow,
       rangeSelectUpToRow,

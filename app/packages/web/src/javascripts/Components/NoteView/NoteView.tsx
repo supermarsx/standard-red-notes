@@ -1172,6 +1172,13 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
                 </Button>
               )}
               <div className="note-view-options-buttons flex items-center gap-3">
+                {renderHeaderOptions && (
+                  <NoteAttachmentsList
+                    note={this.note}
+                    filesController={this.application.filesController}
+                    readonly={!!this.state.readonly}
+                  />
+                )}
                 {!this.state.readonly && renderHeaderOptions && (
                   <>
                     <LinkedItemsButton
@@ -1360,8 +1367,6 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
               </ComponentErrorBoundary>
             </div>
           )}
-
-          <NoteAttachmentsList note={this.note} filesController={this.application.filesController} />
         </EditorContentWithSafeAreaPadding>
 
         <div id="editor-pane-component-stack">

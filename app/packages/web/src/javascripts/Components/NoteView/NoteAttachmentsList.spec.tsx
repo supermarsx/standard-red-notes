@@ -1,7 +1,7 @@
 /** @jest-environment jsdom */
 
 import { FileItem, SNNote } from '@standardnotes/snjs'
-import { act, createElement } from 'react'
+import { act, ButtonHTMLAttributes, createElement, ForwardedRef, forwardRef, Fragment, ReactNode } from 'react'
 import { createRoot, Root } from 'react-dom/client'
 import { FileItemActionType } from '../AttachedFilesPopover/PopoverFileItemAction'
 import NoteAttachmentsList from './NoteAttachmentsList'
@@ -10,6 +10,15 @@ let mockLinks: {
   filesLinkedToItem: { item: FileItem }[]
   filesLinkingToItem: { item: FileItem }[]
 }
+let mockEllipsisItems: FileItem[] = []
+let mockEllipsisIsAttached = false
+let mockRowMenuItems: FileItem[] = []
+type ReadonlyFileActions = {
+  previewFile: (file: FileItem) => void
+  downloadFile: (file: FileItem) => void
+}
+let mockEllipsisReadonlyActions: ReadonlyFileActions | undefined
+let mockRowMenuReadonlyActions: ReadonlyFileActions | undefined
 
 jest.mock('@/Hooks/useItemLinks', () => ({
   useItemLinks: () => mockLinks,
@@ -23,6 +32,90 @@ jest.mock('../Icon/Icon', () => ({
 }))
 jest.mock('@standardnotes/filepicker', () => ({
   formatSizeToReadableString: (size: number) => `${size} bytes`,
+}))
+jest.mock('../Button/RoundIconButton', () => ({
+  __esModule: true,
+  default: forwardRef(
+    (
+      {
+        label,
+        icon: _icon,
+        iconClassName: _iconClassName,
+        ...props
+      }: ButtonHTMLAttributes<HTMLButtonElement> & { label: string; icon: string; iconClassName?: string },
+      ref: ForwardedRef<HTMLButtonElement>,
+    ) => createElement('button', { ...props, ref, 'aria-label': label }, label),
+  ),
+}))
+jest.mock('../Popover/Popover', () => ({
+  __esModule: true,
+  default: ({ open, children }: { open: boolean; children: ReactNode }) => (open ? children : null),
+}))
+jest.mock('../ContentTableView/ContentTableView', () => ({
+  ContextMenuCell: ({
+    items,
+    isFileAttachedToNote,
+    readonlyFileActions,
+  }: {
+    items: FileItem[]
+    isFileAttachedToNote?: boolean
+    readonlyFileActions?: ReadonlyFileActions
+  }) => {
+    mockEllipsisItems = items
+    mockEllipsisIsAttached = !!isFileAttachedToNote
+    mockEllipsisReadonlyActions = readonlyFileActions
+    return createElement('button', { type: 'button', 'aria-label': `File options for ${items[0].name}` })
+  },
+}))
+jest.mock('../ContentTableView/ItemOptionsMenu', () => ({
+  __esModule: true,
+  default: ({
+    open,
+    items,
+    closeMenu,
+    readonlyFileActions,
+  }: {
+    open: boolean
+    items: FileItem[]
+    closeMenu: () => void
+    readonlyFileActions?: ReadonlyFileActions
+  }) => {
+    mockRowMenuItems = items
+    mockRowMenuReadonlyActions = readonlyFileActions
+    return open
+      ? createElement(
+          'div',
+          { 'data-row-context-menu': items[0].uuid },
+          readonlyFileActions
+            ? createElement(
+                Fragment,
+                null,
+                createElement(
+                  'button',
+                  {
+                    onClick: () => {
+                      readonlyFileActions.previewFile(items[0])
+                      closeMenu()
+                    },
+                  },
+                  'Preview',
+                ),
+                createElement(
+                  'button',
+                  {
+                    onClick: () => {
+                      readonlyFileActions.downloadFile(items[0])
+                      closeMenu()
+                    },
+                  },
+                  'Download',
+                ),
+              )
+            : createElement(Fragment, null, 'Detach Rename Delete'),
+          createElement('button', { onClick: closeMenu }, 'Close row menu'),
+        )
+      : null
+  },
 }))
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -49,6 +142,11 @@ describe('NoteAttachmentsList', () => {
     document.body.appendChild(container)
     root = createRoot(container)
     handleFileAction = jest.fn()
+    mockEllipsisItems = []
+    mockEllipsisIsAttached = false
+    mockRowMenuItems = []
+    mockEllipsisReadonlyActions = undefined
+    mockRowMenuReadonlyActions = undefined
     const file = makeFile('file-1', 'notes.txt')
     mockLinks = {
       filesLinkedToItem: [{ item: file }],
@@ -62,35 +160,38 @@ describe('NoteAttachmentsList', () => {
     jest.clearAllMocks()
   })
 
-  const render = () => {
+  const render = (readonly = false) => {
     act(() => {
       root.render(
         createElement(NoteAttachmentsList, {
           note: {} as SNNote,
           filesController: { handleFileAction } as never,
+          readonly,
         }),
       )
     })
   }
 
-  it('stays fully collapsed by default and expands to one deduplicated table row', () => {
+  it('stays closed by default and opens one deduplicated toolbar table without starting I/O', () => {
     render()
 
-    const toggle = container.querySelector<HTMLButtonElement>('button[aria-expanded="false"]')
+    const toggle = container.querySelector<HTMLButtonElement>('button[aria-pressed="false"]')
     expect(toggle).not.toBeNull()
     expect(container.querySelector('table')).toBeNull()
 
     act(() => toggle!.click())
 
-    expect(toggle!.getAttribute('aria-expanded')).toBe('true')
+    expect(toggle!.getAttribute('aria-pressed')).toBe('true')
     expect(container.querySelector('table')).not.toBeNull()
     expect(container.querySelectorAll('tbody tr')).toHaveLength(1)
     expect(container.textContent).toContain('notes.txt')
     expect(container.textContent).toContain('Reference notes')
     expect(handleFileAction).not.toHaveBeenCalled()
+    expect(mockEllipsisItems).toEqual([mockLinks.filesLinkedToItem[0].item])
+    expect(mockEllipsisIsAttached).toBe(true)
 
     act(() => toggle!.click())
-    expect(toggle!.getAttribute('aria-expanded')).toBe('false')
+    expect(toggle!.getAttribute('aria-pressed')).toBe('false')
     expect(container.querySelector('table')).toBeNull()
   })
 
@@ -128,7 +229,7 @@ describe('NoteAttachmentsList', () => {
 
   it('only starts preview or download after an explicit row action', () => {
     render()
-    act(() => container.querySelector<HTMLButtonElement>('button[aria-expanded="false"]')!.click())
+    act(() => container.querySelector<HTMLButtonElement>('button[aria-pressed="false"]')!.click())
 
     act(() => container.querySelector<HTMLButtonElement>('button[title="Preview notes.txt"]')!.click())
     expect(handleFileAction).toHaveBeenLastCalledWith({
@@ -141,6 +242,87 @@ describe('NoteAttachmentsList', () => {
       type: FileItemActionType.DownloadFile,
       payload: { file: mockLinks.filesLinkedToItem[0].item },
     })
+  })
+
+  it.each([
+    ['right-click', () => new MouseEvent('contextmenu', { bubbles: true, cancelable: true })],
+    ['Shift+F10', () => new KeyboardEvent('keydown', { key: 'F10', shiftKey: true, bubbles: true })],
+    ['ContextMenu key', () => new KeyboardEvent('keydown', { key: 'ContextMenu', bubbles: true })],
+  ])('opens the same row action model from %s without previewing', (_label, makeEvent) => {
+    render()
+    act(() => container.querySelector<HTMLButtonElement>('button[aria-pressed="false"]')!.click())
+    const row = container.querySelector('tbody tr') as HTMLTableRowElement
+
+    act(() => row.dispatchEvent(makeEvent()))
+
+    expect(container.querySelector('[data-row-context-menu="file-1"]')).not.toBeNull()
+    expect(mockRowMenuItems).toEqual(mockEllipsisItems)
+    expect(handleFileAction).not.toHaveBeenCalled()
+  })
+
+  it('returns focus to the row when its context menu closes', () => {
+    render()
+    act(() => container.querySelector<HTMLButtonElement>('button[aria-pressed="false"]')!.click())
+    const row = container.querySelector('tbody tr') as HTMLTableRowElement
+    act(() => row.focus())
+    act(() => row.dispatchEvent(new KeyboardEvent('keydown', { key: 'ContextMenu', bubbles: true })))
+
+    act(() => container.querySelector<HTMLButtonElement>('[data-row-context-menu] button')!.click())
+
+    expect(document.activeElement).toBe(row)
+    expect(container.querySelector('[data-row-context-menu]')).toBeNull()
+  })
+
+  it('uses only preview/download action callbacks for readonly attachments', () => {
+    render(true)
+    act(() => container.querySelector<HTMLButtonElement>('button[aria-pressed="false"]')!.click())
+
+    expect(mockEllipsisIsAttached).toBe(false)
+    expect(mockEllipsisReadonlyActions).toBeDefined()
+
+    const row = container.querySelector('tbody tr') as HTMLTableRowElement
+    act(() => row.dispatchEvent(new KeyboardEvent('keydown', { key: 'ContextMenu', bubbles: true })))
+
+    expect(mockRowMenuReadonlyActions).toBeDefined()
+    expect(container.textContent).toContain('Preview')
+    expect(container.textContent).toContain('Download')
+    expect(container.textContent).not.toContain('Detach')
+    expect(container.textContent).not.toContain('Rename')
+    expect(container.textContent).not.toContain('Delete')
+
+    act(() =>
+      Array.from(container.querySelectorAll<HTMLButtonElement>('[data-row-context-menu] button'))
+        .find((button) => button.textContent === 'Preview')!
+        .click(),
+    )
+    act(() => row.dispatchEvent(new KeyboardEvent('keydown', { key: 'ContextMenu', bubbles: true })))
+    act(() =>
+      Array.from(container.querySelectorAll<HTMLButtonElement>('[data-row-context-menu] button'))
+        .find((button) => button.textContent === 'Download')!
+        .click(),
+    )
+
+    expect(handleFileAction.mock.calls.map(([action]) => action.type)).toEqual([
+      FileItemActionType.PreviewFile,
+      FileItemActionType.DownloadFile,
+    ])
+  })
+
+  it('clears an open row menu on header close and does not resurrect it after reopening', () => {
+    render()
+    const toolbarButton = container.querySelector<HTMLButtonElement>('button[aria-pressed="false"]')!
+    act(() => toolbarButton.click())
+    const row = container.querySelector('tbody tr') as HTMLTableRowElement
+    act(() => row.dispatchEvent(new KeyboardEvent('keydown', { key: 'ContextMenu', bubbles: true })))
+    expect(container.querySelector('[data-row-context-menu]')).not.toBeNull()
+
+    act(() => container.querySelector<HTMLButtonElement>('button[aria-label="Close attachments"]')!.click())
+    expect(container.querySelector('table')).toBeNull()
+    expect(document.activeElement).toBe(toolbarButton)
+
+    act(() => toolbarButton.click())
+    expect(container.querySelector('table')).not.toBeNull()
+    expect(container.querySelector('[data-row-context-menu]')).toBeNull()
   })
 
   it('renders nothing when there are no attachments', () => {

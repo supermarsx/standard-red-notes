@@ -15,6 +15,7 @@ const activateRow = jest.fn()
 const loadMoreRows = jest.fn()
 const materializeRow = jest.fn()
 const selectRow = jest.fn()
+const openRowContextMenu = jest.fn()
 
 const createTable = (hasMoreRows = false): TableContract<Row> => ({
   id: 'table-test',
@@ -76,7 +77,7 @@ const createTable = (hasMoreRows = false): TableContract<Row> => ({
   multiSelectRow: jest.fn(),
   rangeSelectUpToRow: jest.fn(),
   handleActivateRow: activateRow,
-  handleRowContextMenu: () => jest.fn(),
+  handleRowContextMenu: openRowContextMenu,
   canSelectRows: true,
   canSelectMultipleRows: true,
   selectedRows: [],
@@ -92,6 +93,7 @@ beforeEach(() => {
   loadMoreRows.mockClear()
   materializeRow.mockClear()
   selectRow.mockClear()
+  openRowContextMenu.mockClear()
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
@@ -171,6 +173,33 @@ describe('Table row activation isolation', () => {
 
     expect(selectRow).toHaveBeenCalledTimes(1)
     expect(selectRow).toHaveBeenCalledWith('row-1')
+  })
+
+  it('opens the row menu from right-click without selecting or activating the row', () => {
+    const gridCell = renderTable()
+
+    act(() =>
+      gridCell.dispatchEvent(
+        new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 7, clientY: 9 }),
+      ),
+    )
+
+    expect(openRowContextMenu).toHaveBeenCalledWith('row-1', 7, 9, gridCell)
+    expect(selectRow).not.toHaveBeenCalled()
+    expect(activateRow).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['Shift+F10', { key: 'F10', shiftKey: true }],
+    ['ContextMenu', { key: 'ContextMenu' }],
+  ])('opens the focused row menu from %s without activating it', (_label, init) => {
+    const gridCell = renderTable()
+    act(() => gridCell.focus())
+
+    act(() => gridCell.dispatchEvent(new KeyboardEvent('keydown', { ...init, bubbles: true, cancelable: true })))
+
+    expect(openRowContextMenu).toHaveBeenCalledWith('row-1', expect.any(Number), expect.any(Number), gridCell)
+    expect(activateRow).not.toHaveBeenCalled()
   })
 })
 

@@ -3,8 +3,13 @@ import { act, createElement } from 'react'
 import { createRoot, Root } from 'react-dom/client'
 import { UuidGenerator } from '@standardnotes/snjs'
 import FilesView from './FilesView'
+import { Table as TableContract } from '@/Components/Table/CommonTypes'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+
+let mockRenderedTable: TableContract<unknown> | undefined
+let mockEllipsisItems: unknown[] = []
+let mockRowMenuProps: { items: unknown[]; closeMenu: () => void; anchorPoint: { x: number; y: number } } | undefined
 
 jest.mock('mobx-react-lite', () => ({ observer: (component: unknown) => component }))
 jest.mock('@standardnotes/filepicker', () => ({ formatSizeToReadableString: (size: number) => `${size} bytes` }))
@@ -12,7 +17,10 @@ jest.mock('@/Components/Icon/Icon', () => () => null)
 jest.mock('@/Components/FilePreview/getFileIconComponent', () => ({ getFileIconComponent: () => null }))
 jest.mock('@/Utils/Items/Icons/getIconForFileType', () => ({ getIconForFileType: () => 'file' }))
 jest.mock('@/Components/ContentTableView/ContentTableView', () => ({
-  ContextMenuCell: () => <button type="button">Options</button>,
+  ContextMenuCell: ({ items }: { items: unknown[] }) => {
+    mockEllipsisItems = items
+    return <button type="button">Options</button>
+  },
   ItemLinksCell: () => <button type="button">Links</button>,
 }))
 jest.mock('@/Components/Menu/Menu', () => ({
@@ -20,6 +28,13 @@ jest.mock('@/Components/Menu/Menu', () => ({
   default: ({ children }: { children: unknown }) => children,
 }))
 jest.mock('@/Components/FileContextMenu/FileMenuOptions', () => () => null)
+jest.mock('@/Components/ContentTableView/ItemOptionsMenu', () => ({
+  __esModule: true,
+  default: (props: { items: unknown[]; closeMenu: () => void; anchorPoint: { x: number; y: number } }) => {
+    mockRowMenuProps = props
+    return <div data-testid="row-options" />
+  },
+}))
 jest.mock('@/Components/Popover/Popover', () => ({ __esModule: true, default: () => null }))
 jest.mock('@/Components/FileDragNDropProvider', () => ({
   useFileDragNDrop: () => ({ addDragTarget: jest.fn(), removeDragTarget: jest.fn() }),
@@ -38,30 +53,34 @@ jest.mock('@/Hooks/useMediaQuery', () => ({
 
 jest.mock('@/Components/Table/Table', () => ({
   __esModule: true,
-  default: ({ table }: { table: import('@/Components/Table/CommonTypes').Table<unknown> }) => (
-    <div data-testid="rendered-table">
-      <div>
-        {table.headers
-          .filter((header) => !header.hidden)
-          .map((header) => (
-            <span data-column={header.name} key={header.name}>
-              {header.name}
-            </span>
-          ))}
-      </div>
-      {table.rows.map((row) => (
-        <div data-row={row.id} key={row.id}>
-          {row.cells
-            .filter((cell) => !cell.hidden)
-            .map((cell) => (
-              <div data-cell={table.headers[cell.colIndex]?.name} key={cell.colIndex}>
-                {cell.render}
-              </div>
+  default: ({ table }: { table: TableContract<unknown> }) => {
+    mockRenderedTable = table
+    return (
+      <div data-testid="rendered-table">
+        <div>
+          {table.headers
+            .filter((header) => !header.hidden)
+            .map((header) => (
+              <span data-column={header.name} key={header.name}>
+                {header.name}
+              </span>
             ))}
         </div>
-      ))}
-    </div>
-  ),
+        {table.rows.map((row) => (
+          <div data-row={row.id} key={row.id}>
+            {row.cells
+              .filter((cell) => !cell.hidden)
+              .map((cell) => (
+                <div data-cell={table.headers[cell.colIndex]?.name} key={cell.colIndex}>
+                  {cell.render}
+                </div>
+              ))}
+            {row.rowActions}
+          </div>
+        ))}
+      </div>
+    )
+  },
 }))
 
 const createFile = (description?: string) =>
@@ -105,6 +124,9 @@ let root: Root
 beforeEach(() => {
   UuidGenerator.SetGenerator(() => 'files-view-table-test')
   activeBreakpoint = 'xl'
+  mockRenderedTable = undefined
+  mockEllipsisItems = []
+  mockRowMenuProps = undefined
   container = document.createElement('div')
   document.body.appendChild(container)
   root = createRoot(container)
@@ -155,5 +177,22 @@ describe('FilesView responsive columns', () => {
       column.getAttribute('data-column'),
     )
     expect(columns).toEqual(expectedColumns)
+  })
+})
+
+describe('FilesView row context actions', () => {
+  it('targets the right-clicked file with the same action item and restores trigger focus on close', () => {
+    render('Description')
+    const trigger = document.createElement('button')
+    document.body.appendChild(trigger)
+    trigger.focus()
+
+    act(() => mockRenderedTable!.handleRowContextMenu('file-1', 12, 24, trigger))
+
+    expect(mockRowMenuProps?.items).toEqual(mockEllipsisItems)
+    expect(mockRowMenuProps?.anchorPoint).toEqual({ x: 12, y: 24 })
+    act(() => mockRowMenuProps!.closeMenu())
+    expect(document.activeElement).toBe(trigger)
+    trigger.remove()
   })
 })

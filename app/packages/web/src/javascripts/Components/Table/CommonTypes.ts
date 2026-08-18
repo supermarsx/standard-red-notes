@@ -1,5 +1,5 @@
 import { SortableItem } from '@standardnotes/snjs'
-import { MouseEventHandler, ReactNode } from 'react'
+import { ReactNode } from 'react'
 
 export type TableSortBy = keyof SortableItem
 
@@ -52,7 +52,7 @@ export type Table<Data> = {
   multiSelectRow: (id: string) => void
   rangeSelectUpToRow: (id: string) => void
   handleActivateRow: (id: string) => void
-  handleRowContextMenu: (id: string) => MouseEventHandler<HTMLTableRowElement>
+  handleRowContextMenu: (id: string, x: number, y: number, trigger: HTMLElement) => void
   canSelectRows: boolean
   canSelectMultipleRows: boolean
   selectedRows: string[]

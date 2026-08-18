@@ -1,5 +1,5 @@
 import { UuidGenerator } from '@standardnotes/snjs'
-import { MouseEventHandler, ReactNode, SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { ReactNode, SetStateAction, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Table, TableColumn, TableHeader, TableRow, TableSortBy } from './CommonTypes'
 
 type TableSortOptions =
@@ -35,7 +35,7 @@ type TableSelectionOptions =
 type TableRowOptions<Data> = {
   getRowId?: (data: Data) => string
   onRowActivate?: (data: Data) => void
-  onRowContextMenu?: (x: number, y: number, data: Data) => void
+  onRowContextMenu?: (x: number, y: number, data: Data, trigger: HTMLElement) => void
   rowActions?: (data: Data) => ReactNode
 }
 
@@ -249,19 +249,15 @@ export function useTable<Data>({
   )
 
   const handleRowContextMenu = useCallback(
-    (id: string) => {
-      const handler: MouseEventHandler<HTMLTableRowElement> = (event) => {
-        if (!onRowContextMenu) {
-          return
-        }
-        event.preventDefault()
-        const rowData = rowDataById.get(id)
-        if (rowData) {
-          updateSelectedRows([id])
-          onRowContextMenu(event.clientX, event.clientY, rowData)
-        }
+    (id: string, x: number, y: number, trigger: HTMLElement) => {
+      if (!onRowContextMenu) {
+        return
       }
-      return handler
+      const rowData = rowDataById.get(id)
+      if (rowData) {
+        updateSelectedRows([id])
+        onRowContextMenu(x, y, rowData, trigger)
+      }
     },
     [onRowContextMenu, rowDataById, updateSelectedRows],
   )

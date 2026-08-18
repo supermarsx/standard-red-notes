@@ -4,7 +4,7 @@ import { ContentType, FileItem, SortableItem } from '@standardnotes/snjs'
 import { classNames } from '@standardnotes/utils'
 import { formatSizeToReadableString } from '@standardnotes/filepicker'
 import { FileItemActionType } from '@/Components/AttachedFilesPopover/PopoverFileItemAction'
-import { WebApplication } from '@/Application/WebApplication'
+import type { WebApplication } from '@/Application/WebApplication'
 import Icon from '@/Components/Icon/Icon'
 import { getFileIconComponent } from '@/Components/FilePreview/getFileIconComponent'
 import { getIconForFileType } from '@/Utils/Items/Icons/getIconForFileType'
@@ -21,6 +21,7 @@ import { useTable } from '@/Components/Table/useTable'
 import { formatDateForContextMenu } from '@/Utils/DateUtils'
 import { MutuallyExclusiveMediaQueryBreakpoints, useMediaQuery } from '@/Hooks/useMediaQuery'
 import { filesSortByForTableSortBy, getFileTypeLabel, tableSortByForFilesSortBy } from './FilesViewTableUtils'
+import ItemOptionsMenu from '@/Components/ContentTableView/ItemOptionsMenu'
 
 type Props = {
   application: WebApplication
@@ -66,6 +67,11 @@ const FilesView: FunctionComponent<Props> = observer(({ application, className, 
   const { itemListController } = application
   const [files, setFiles] = useState<FileItem[]>(() => application.items.getDisplayableFiles())
   const [bulkMenuVisible, setBulkMenuVisible] = useState(false)
+  const [rowMenu, setRowMenu] = useState<{
+    file: FileItem
+    position: { x: number; y: number }
+    trigger: HTMLElement
+  }>()
   const bulkMenuAnchorRef = useRef<HTMLButtonElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const { addDragTarget, removeDragTarget } = useFileDragNDrop()
@@ -232,6 +238,11 @@ const FilesView: FunctionComponent<Props> = observer(({ application, className, 
     [],
   )
 
+  const closeRowMenu = useCallback(() => {
+    rowMenu?.trigger.focus()
+    setRowMenu(undefined)
+  }, [rowMenu])
+
   const table = useTable({
     data: sorted,
     columns: columnDefs,
@@ -244,6 +255,9 @@ const FilesView: FunctionComponent<Props> = observer(({ application, className, 
     selectedRowIds,
     onRowSelectionChange,
     onRowActivate: openFile,
+    onRowContextMenu: (x, y, file, trigger) => {
+      setRowMenu({ file, position: { x, y }, trigger })
+    },
     rowActions: renderRowActions,
   })
 
@@ -342,6 +356,9 @@ const FilesView: FunctionComponent<Props> = observer(({ application, className, 
           </div>
         )}
       </div>
+      {rowMenu && (
+        <ItemOptionsMenu items={[rowMenu.file]} open={true} anchorPoint={rowMenu.position} closeMenu={closeRowMenu} />
+      )}
     </div>
   )
 })
