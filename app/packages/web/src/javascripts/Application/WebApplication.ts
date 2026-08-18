@@ -97,6 +97,7 @@ import { CrossTabCoordinator } from './CrossTab/CrossTabCoordinator'
 import { WebDevice } from './Device/WebDevice'
 import { assistantHttpError } from '@/Assistant/AssistantHttpError'
 import {
+  AuthenticatedRpcError,
   deriveOpaqueSyncSessionScope,
   SyncCapability,
   SyncTicketResponse,
@@ -1113,6 +1114,39 @@ export class WebApplication extends SNApplication implements WebApplicationInter
    * authenticated user's assigned/default profile.
    */
   public async assistantStreamRequest(path: string, body: unknown, signal?: AbortSignal): Promise<Response> {
+    const idempotencyKey = createAssistantAttemptId()
+    const transport = this._webSocketSyncTransport
+    if (transport) {
+      try {
+        const response = await transport.openAuthenticatedRpcStream({
+          method: 'POST',
+          path,
+          headers: {
+            accept: 'text/event-stream',
+            'content-type': 'application/json',
+          },
+          body,
+          idempotencyKey,
+          deadlineMs: 120_000,
+          initialCreditBytes: 128 * 1024,
+          stream: true,
+          signal,
+        })
+        return new Response(assistantRpcResponseBody(response.stream, response.body), {
+          status: response.status,
+          headers: response.headers,
+        })
+      } catch (error) {
+        // HTTP is a compatibility path only when the worker facade proves no
+        // request bytes crossed the authenticated socket. Ambiguous/post-send
+        // failures retain their idempotency identity and surface to the caller;
+        // replaying them here could double bill or run tools twice.
+        if (!(error instanceof AuthenticatedRpcError) || !error.safeToFallback) {
+          throw error
+        }
+      }
+    }
+
     const host = this.getHost.execute().getValue()
     const session = (this.sessions as unknown as { getSession?: () => unknown }).getSession?.()
     const accessToken = extractAccessToken(session)
@@ -1124,6 +1158,7 @@ export class WebApplication extends SNApplication implements WebApplicationInter
       headers: {
         'Content-Type': 'application/json',
         Accept: 'text/event-stream',
+        'Idempotency-Key': idempotencyKey,
         ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
       },
       body: JSON.stringify(body),
@@ -1442,6 +1477,28 @@ function extractAccessToken(session: unknown): string | undefined {
     return (accessToken as { value: string }).value
   }
   return undefined
+}
+
+let assistantAttemptCounter = 0
+
+function createAssistantAttemptId(): string {
+  if (typeof globalThis.crypto?.randomUUID === 'function') {
+    return `assistant-${globalThis.crypto.randomUUID()}`
+  }
+  const bytes = new Uint8Array(16)
+  globalThis.crypto?.getRandomValues?.(bytes)
+  assistantAttemptCounter += 1
+  return `assistant-${[...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('')}-${assistantAttemptCounter}`
+}
+
+function assistantRpcResponseBody(stream: ReadableStream<Uint8Array> | undefined, body: unknown): BodyInit | null {
+  if (stream) {
+    return stream
+  }
+  if (body === undefined || body === null) {
+    return null
+  }
+  return typeof body === 'string' ? body : JSON.stringify(body)
 }
 
 const SYNC_DEVICE_ID_STORAGE_KEY = 'standardnotes.sync-device-id.v1'
