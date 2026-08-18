@@ -558,10 +558,10 @@ describe('FilePreview vault authorization', () => {
         decryptedSize: 3,
       } as FileItem
       const retainedChunk = new Uint8Array([1, 2])
-      let signal: AbortSignal | undefined
+      const signals: AbortSignal[] = []
       const downloadFile = jest.fn(
         async (_file: FileItem, emit: (chunk: Uint8Array) => Promise<void>, options: { signal: AbortSignal }) => {
-          signal = options.signal
+          signals.push(options.signal)
           await emit(retainedChunk)
           return await new Promise<undefined>(() => undefined)
         },
@@ -589,9 +589,20 @@ describe('FilePreview vault authorization', () => {
       await act(async () => {
         jest.advanceTimersByTime(PREVIEW_DOWNLOAD_IDLE_TIMEOUT_MS)
         await Promise.resolve()
+        await Promise.resolve()
       })
 
-      expect(signal?.aborted).toBe(true)
+      expect(downloadFile).toHaveBeenCalledTimes(2)
+      expect(signals[0]?.aborted).toBe(true)
+      expect(container.textContent).toContain('loading')
+
+      await act(async () => {
+        jest.advanceTimersByTime(PREVIEW_DOWNLOAD_IDLE_TIMEOUT_MS)
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+
+      expect(signals[1]?.aborted).toBe(true)
       expect([...retainedChunk]).toEqual([0, 0])
       expect(container.textContent).toContain('errorLoadingFile')
       expect(container.textContent).toContain('retry-preview')
@@ -599,5 +610,117 @@ describe('FilePreview vault authorization', () => {
     } finally {
       jest.useRealTimers()
     }
+  })
+
+  it('opens a freshly uploaded PDF from complete provisional metadata before the file list publishes it', async () => {
+    const file = {
+      uuid: 'fresh-pdf',
+      remoteIdentifier: 'fresh-pdf-remote',
+      content_type: ContentType.TYPES.File,
+      mimeType: 'application/pdf',
+      name: 'fresh.pdf',
+      decryptedSize: 4,
+      encryptedChunkSizes: [20],
+      dirty: true,
+    } as FileItem
+    const downloadFile = jest.fn(async (_file: FileItem, emit: (chunk: Uint8Array) => Promise<void>) => {
+      await emit(new Uint8Array([37, 80, 68, 70]))
+      return undefined
+    })
+    const application = {
+      isAuthorizedToRenderItem: jest.fn(() => true),
+      addEventObserver: jest.fn(() => jest.fn()),
+      vaultLocks: { addEventObserver: jest.fn(() => jest.fn()) },
+      items: {
+        findItem: jest.fn(() => undefined),
+        streamItems: jest.fn(() => jest.fn()),
+      },
+      files: { downloadFile },
+      filesController: {},
+      hasProtectionSources: jest.fn(() => true),
+      protections: { authorizeItemAccess: jest.fn() },
+    } as unknown as WebApplication
+
+    await act(async () => {
+      root.render(createElement(FilePreview, { application, file }))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(downloadFile).toHaveBeenCalledTimes(1)
+    expect(downloadFile).toHaveBeenCalledWith(file, expect.any(Function), expect.any(Object))
+    expect(container.querySelector('[data-preview-mime="application/pdf"]')).not.toBeNull()
+  })
+
+  it('gets one fresh-token retry for NS_BINDING_ABORTED and never duplicates a successful download', async () => {
+    const file = {
+      uuid: 'binding-aborted-pdf',
+      remoteIdentifier: 'binding-aborted-pdf-remote',
+      content_type: ContentType.TYPES.File,
+      mimeType: 'application/pdf',
+      name: 'binding-aborted.pdf',
+      decryptedSize: 3,
+    } as FileItem
+    const downloadFile = jest
+      .fn()
+      .mockRejectedValueOnce(new DOMException('NS_BINDING_ABORTED', 'AbortError'))
+      .mockImplementationOnce(async (_file: FileItem, emit: (chunk: Uint8Array) => Promise<void>) => {
+        await emit(new Uint8Array([1, 2, 3]))
+        return undefined
+      })
+    const application = {
+      isAuthorizedToRenderItem: jest.fn(() => true),
+      addEventObserver: jest.fn(() => jest.fn()),
+      vaultLocks: { addEventObserver: jest.fn(() => jest.fn()) },
+      items: { findItem: jest.fn(() => file), streamItems: jest.fn(() => jest.fn()) },
+      files: { downloadFile },
+      filesController: {},
+      hasProtectionSources: jest.fn(() => true),
+      protections: { authorizeItemAccess: jest.fn() },
+    } as unknown as WebApplication
+
+    await act(async () => {
+      root.render(createElement(FilePreview, { application, file }))
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(downloadFile).toHaveBeenCalledTimes(2)
+    expect(container.querySelector('[data-preview-mime="application/pdf"]')).not.toBeNull()
+    expect(container.textContent).not.toContain('loading')
+  })
+
+  it('stops after one automatic abort retry and exposes the manual retry action', async () => {
+    const file = {
+      uuid: 'bounded-abort-pdf',
+      remoteIdentifier: 'bounded-abort-pdf-remote',
+      content_type: ContentType.TYPES.File,
+      mimeType: 'application/pdf',
+      name: 'bounded-abort.pdf',
+      decryptedSize: 3,
+    } as FileItem
+    const downloadFile = jest.fn().mockRejectedValue(new DOMException('NS_BINDING_ABORTED', 'AbortError'))
+    const application = {
+      isAuthorizedToRenderItem: jest.fn(() => true),
+      addEventObserver: jest.fn(() => jest.fn()),
+      vaultLocks: { addEventObserver: jest.fn(() => jest.fn()) },
+      items: { findItem: jest.fn(() => file), streamItems: jest.fn(() => jest.fn()) },
+      files: { downloadFile },
+      filesController: {},
+      hasProtectionSources: jest.fn(() => true),
+      protections: { authorizeItemAccess: jest.fn() },
+    } as unknown as WebApplication
+
+    await act(async () => {
+      root.render(createElement(FilePreview, { application, file }))
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(downloadFile).toHaveBeenCalledTimes(2)
+    expect(container.textContent).toContain('retry-preview')
+    expect(container.textContent).not.toContain('loading')
   })
 })

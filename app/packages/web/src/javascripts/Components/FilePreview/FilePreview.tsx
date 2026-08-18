@@ -1,4 +1,4 @@
-import { WebApplication } from '@/Application/WebApplication'
+import type { WebApplication } from '@/Application/WebApplication'
 import { concatenateUint8Arrays } from '@/Utils'
 import { ContentType, FileDownloadProgress, FileItem, fileProgressToHumanReadableString } from '@standardnotes/snjs'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
@@ -17,6 +17,7 @@ import { sanitizeFileErrorDetail } from '@/Utils/FileErrorMessage'
 
 const MAX_MEDIA_PREVIEW_BYTES = 100 * 1024 * 1024
 export const PREVIEW_DOWNLOAD_IDLE_TIMEOUT_MS = 45_000
+const MAX_PREVIEW_DOWNLOAD_ATTEMPTS = 2
 
 type Props = {
   application: WebApplication
@@ -37,23 +38,62 @@ type DownloadedPreview = {
  * that same authoritative object for prompting and transport as well. An item
  * absent from ItemManager intentionally stays undefined (and therefore denied).
  */
-function useAuthoritativeFile(application: WebApplication, fileUuid: string): FileItem | undefined {
-  const getSnapshot = useCallback(() => application.items.findItem<FileItem>(fileUuid), [application.items, fileUuid])
+function useAuthoritativeFile(application: WebApplication, file: FileItem): FileItem | undefined {
+  const hasObservedManagedItem = useRef(false)
+  const mayUseFreshUploadMetadata =
+    file.dirty === true && file.remoteIdentifier.length > 0 && file.encryptedChunkSizes.length > 0
+  const getSnapshot = useCallback(() => {
+    const managedFile = application.items.findItem<FileItem>(file.uuid)
+    if (managedFile) {
+      hasObservedManagedItem.current = true
+      return managedFile
+    }
+
+    // finishUpload returns a complete dirty FileItem. A toolbar click can beat
+    // the subsequent list/store publication, so allow that exact provisional
+    // object until ItemManager has observed it. Once observed, removal fails
+    // closed and can never fall back to the stale prop.
+    return !hasObservedManagedItem.current && mayUseFreshUploadMetadata ? file : undefined
+  }, [application.items, file, mayUseFreshUploadMetadata])
   const subscribe = useCallback(
     (onStoreChange: () => void) =>
       application.items.streamItems<FileItem>(ContentType.TYPES.File, ({ changed, inserted, removed }) => {
         if (
-          changed.some((candidate) => candidate.uuid === fileUuid) ||
-          inserted.some((candidate) => candidate.uuid === fileUuid) ||
-          removed.some((candidate) => candidate.uuid === fileUuid)
+          changed.some((candidate) => candidate.uuid === file.uuid) ||
+          inserted.some((candidate) => candidate.uuid === file.uuid) ||
+          removed.some((candidate) => candidate.uuid === file.uuid)
         ) {
           onStoreChange()
         }
       }),
-    [application.items, fileUuid],
+    [application.items, file.uuid],
   )
 
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
+}
+
+function isAbortLikeError(error: unknown): boolean {
+  return (
+    (error instanceof Error && error.name === 'AbortError') ||
+    sanitizeFileErrorDetail(error)?.toLowerCase().includes('ns_binding_aborted') === true
+  )
+}
+
+function isRetriablePreviewDownloadFailure(error: unknown): boolean {
+  if (isAbortLikeError(error)) {
+    return true
+  }
+  const detail = sanitizeFileErrorDetail(error)?.toLowerCase()
+  return (
+    detail !== undefined &&
+    [
+      'network request failed',
+      'failed to fetch',
+      'load failed',
+      'request timed out',
+      'failed to download file chunk',
+    ].some((message) => detail.includes(message))
+  )
 }
 
 const FilePreview = ({
@@ -74,7 +114,7 @@ const FilePreview = ({
   isImageSelected,
 }: Props) => {
   const { t } = useTranslation('files')
-  const authoritativeFile = useAuthoritativeFile(application, file.uuid)
+  const authoritativeFile = useAuthoritativeFile(application, file)
   const isAuthorized = useItemAuthorization(application, authoritativeFile)
   const authorizationRef = useRef(isAuthorized)
   authorizationRef.current = isAuthorized
@@ -150,16 +190,14 @@ const FilePreview = ({
     }
 
     let cancelled = false
+    let activeAttempt = -1
+    let activeAbortController: AbortController | undefined
+    let activeClearIdleTimeout: (() => void) | undefined
+    let activeChunks: Uint8Array[] = []
     const fileForDownload = authoritativeFile
     const fileUuid = fileForDownload.uuid
     const remoteIdentifier = fileForDownload.remoteIdentifier
-    const abortController = new AbortController()
-    const chunks: Uint8Array[] = []
-    let receivedBytes = 0
-    let exceededPreviewLimit = false
-    let timedOut = false
-    let idleTimeout: ReturnType<typeof setTimeout> | undefined
-    const wipeChunks = () => {
+    const wipeChunks = (chunks: Uint8Array[]) => {
       for (const chunk of chunks) {
         chunk.fill(0)
       }
@@ -169,31 +207,10 @@ const FilePreview = ({
       const currentIdentity = currentFileIdentityRef.current
       return (
         !cancelled &&
-        !timedOut &&
         authorizationRef.current &&
         currentIdentity.uuid === fileUuid &&
         currentIdentity.remoteIdentifier === remoteIdentifier
       )
-    }
-    const clearIdleTimeout = () => {
-      if (idleTimeout !== undefined) {
-        clearTimeout(idleTimeout)
-        idleTimeout = undefined
-      }
-    }
-    const armIdleTimeout = () => {
-      clearIdleTimeout()
-      idleTimeout = setTimeout(() => {
-        if (!isCurrentDownload()) {
-          return
-        }
-        timedOut = true
-        abortController.abort()
-        wipeChunks()
-        setDownloadProgress(undefined)
-        setDownloadError(t('errorLoadingFile'))
-        setIsDownloading(false)
-      }, PREVIEW_DOWNLOAD_IDLE_TIMEOUT_MS)
     }
 
     const downloadFileForPreview = async () => {
@@ -206,57 +223,122 @@ const FilePreview = ({
 
       try {
         setDownloadProgress(undefined)
-        armIdleTimeout()
-        const error = await application.files.downloadFile(
-          fileForDownload,
-          async (decryptedChunk, progress) => {
-            if (!isCurrentDownload()) {
-              decryptedChunk.fill(0)
-              return
-            }
-            armIdleTimeout()
-            receivedBytes += decryptedChunk.byteLength
-            if (!Number.isSafeInteger(receivedBytes) || receivedBytes > previewByteLimit) {
-              exceededPreviewLimit = true
-              decryptedChunk.fill(0)
-              abortController.abort()
-              return
-            }
-            chunks.push(decryptedChunk)
-            if (progress) {
-              setDownloadProgress(progress)
-            }
-          },
-          { signal: abortController.signal },
-        )
+        for (let attempt = 0; attempt < MAX_PREVIEW_DOWNLOAD_ATTEMPTS; attempt++) {
+          if (!isCurrentDownload()) {
+            return
+          }
 
-        if (exceededPreviewLimit && isCurrentDownload()) {
-          setDownloadError(t('filePreviewTooLarge'))
-        } else if (error && isCurrentDownload()) {
-          setDownloadError(sanitizeFileErrorDetail(error) ?? t('errorLoadingFile'))
-        } else if (!error && isCurrentDownload() && application.isAuthorizedToRenderItem(fileForDownload)) {
-          const finalDecryptedBytes = concatenateUint8Arrays(chunks)
-          setDownloadedPreview((currentPreview) => {
-            if (!isCurrentDownload() || !application.isAuthorizedToRenderItem(fileForDownload)) {
-              finalDecryptedBytes.fill(0)
-              return currentPreview
-            }
-            currentPreview?.bytes.fill(0)
-            return { fileUuid, remoteIdentifier, bytes: finalDecryptedBytes }
+          activeAttempt = attempt
+          const abortController = new AbortController()
+          activeAbortController = abortController
+          const chunks: Uint8Array[] = []
+          activeChunks = chunks
+          let receivedBytes = 0
+          let exceededPreviewLimit = false
+          let idleTimeout: ReturnType<typeof setTimeout> | undefined
+          let settleTimeout!: () => void
+          const timeoutPromise = new Promise<{ kind: 'timeout' }>((resolve) => {
+            settleTimeout = () => resolve({ kind: 'timeout' })
           })
-        }
-      } catch (error) {
-        if (isCurrentDownload()) {
+          const clearIdleTimeout = () => {
+            if (idleTimeout !== undefined) {
+              clearTimeout(idleTimeout)
+              idleTimeout = undefined
+            }
+          }
+          activeClearIdleTimeout = clearIdleTimeout
+          const armIdleTimeout = () => {
+            clearIdleTimeout()
+            idleTimeout = setTimeout(() => {
+              abortController.abort()
+              settleTimeout()
+            }, PREVIEW_DOWNLOAD_IDLE_TIMEOUT_MS)
+          }
+          const isCurrentAttempt = () => isCurrentDownload() && activeAttempt === attempt
+
+          armIdleTimeout()
+          const downloadPromise = application.files
+            .downloadFile(
+              fileForDownload,
+              async (decryptedChunk, progress) => {
+                if (!isCurrentAttempt()) {
+                  decryptedChunk.fill(0)
+                  return
+                }
+                armIdleTimeout()
+                receivedBytes += decryptedChunk.byteLength
+                if (!Number.isSafeInteger(receivedBytes) || receivedBytes > previewByteLimit) {
+                  exceededPreviewLimit = true
+                  decryptedChunk.fill(0)
+                  abortController.abort()
+                  return
+                }
+                chunks.push(decryptedChunk)
+                if (progress) {
+                  setDownloadProgress(progress)
+                }
+              },
+              { signal: abortController.signal },
+            )
+            .then(
+              (error) => ({ kind: 'complete' as const, error }),
+              (error: unknown) => ({ kind: 'thrown' as const, error }),
+            )
+
+          const outcome = await Promise.race([downloadPromise, timeoutPromise])
+          clearIdleTimeout()
+          activeClearIdleTimeout = undefined
+
+          if (!isCurrentAttempt()) {
+            wipeChunks(chunks)
+            return
+          }
           if (exceededPreviewLimit) {
+            wipeChunks(chunks)
             setDownloadError(t('filePreviewTooLarge'))
-          } else {
-            console.error(error)
-            setDownloadError(sanitizeFileErrorDetail(error) ?? t('errorLoadingFile'))
+            return
+          }
+
+          const failure =
+            outcome.kind === 'complete' ? outcome.error : outcome.kind === 'thrown' ? outcome.error : undefined
+          const endedWithoutBytes =
+            !failure && outcome.kind !== 'timeout' && receivedBytes === 0 && fileForDownload.decryptedSize > 0
+          const shouldRetry =
+            attempt + 1 < MAX_PREVIEW_DOWNLOAD_ATTEMPTS &&
+            (outcome.kind === 'timeout' || endedWithoutBytes || isRetriablePreviewDownloadFailure(failure))
+
+          if (failure || outcome.kind === 'timeout' || endedWithoutBytes) {
+            wipeChunks(chunks)
+            setDownloadProgress(undefined)
+            if (shouldRetry) {
+              continue
+            }
+            if (outcome.kind === 'thrown' && !isAbortLikeError(failure)) {
+              console.error(failure)
+            }
+            setDownloadError(sanitizeFileErrorDetail(failure) ?? t('errorLoadingFile'))
+            return
+          }
+
+          if (application.isAuthorizedToRenderItem(fileForDownload)) {
+            const finalDecryptedBytes = concatenateUint8Arrays(chunks)
+            setDownloadedPreview((currentPreview) => {
+              if (!isCurrentAttempt() || !application.isAuthorizedToRenderItem(fileForDownload)) {
+                finalDecryptedBytes.fill(0)
+                return currentPreview
+              }
+              currentPreview?.bytes.fill(0)
+              return { fileUuid, remoteIdentifier, bytes: finalDecryptedBytes }
+            })
+            wipeChunks(chunks)
+            return
           }
         }
       } finally {
-        clearIdleTimeout()
-        wipeChunks()
+        activeAbortController = undefined
+        activeClearIdleTimeout?.()
+        activeClearIdleTimeout = undefined
+        wipeChunks(activeChunks)
         if (isCurrentDownload()) {
           setIsDownloading(false)
         }
@@ -267,9 +349,9 @@ const FilePreview = ({
 
     return () => {
       cancelled = true
-      clearIdleTimeout()
-      abortController.abort()
-      wipeChunks()
+      activeClearIdleTimeout?.()
+      activeAbortController?.abort()
+      wipeChunks(activeChunks)
     }
   }, [
     application,
