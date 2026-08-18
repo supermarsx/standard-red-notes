@@ -216,11 +216,14 @@ describe('SyncTransportWorkerRuntime', () => {
         nextClientSequence: 1,
       }),
     )
+    // Persisting the command includes an async digest and outbox write before
+    // the worker may put the COMMAND frame on the socket.
+    await flush()
     await flush()
     return socket
   }
 
-  it('persists exact command bytes before send, delivers one committed result, and clears only after checkpoint', async () => {
+  it('persists before send, clears only after checkpoint, and reuses one socket without another ticket', async () => {
     const harness = setup()
     const socket = await authorize(harness)
     const commandBytes = socket.sent.find((entry) => JSON.parse(entry).type === 'COMMAND') as string
@@ -266,6 +269,18 @@ describe('SyncTransportWorkerRuntime', () => {
       commandId: command.commandId,
     })
     expect(harness.outbox.records.has(command.commandId)).toBe(false)
+
+    const ticketRequestCount = harness.messages.filter((message) => message.type === 'NEED_TICKET').length
+    await harness.runtime.handle({
+      type: 'EXECUTE',
+      clientRequestId: 'client-2',
+      body: body('second'),
+      sessionScope: SESSION_A,
+    })
+    await flush()
+    expect(harness.sockets).toHaveLength(1)
+    expect(harness.messages.filter((message) => message.type === 'NEED_TICKET')).toHaveLength(ticketRequestCount)
+    expect(socket.sent.filter((entry) => JSON.parse(entry).type === 'COMMAND')).toHaveLength(2)
     await harness.runtime.handle({ type: 'SHUTDOWN' })
   })
 

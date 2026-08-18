@@ -647,7 +647,7 @@ export class SyncTransportWorkerRuntime {
         break
       case 'ERROR':
         if (frame.payload.code === 'RESULT_TOO_LARGE' && frame.payload.retryable === true) {
-          await this.fallback('result-too-large', this.outboxRecord)
+          await this.fallback('result-too-large', this.outboxRecord, true)
         } else {
           await this.fallback('server-kill', this.outboxRecord)
         }
@@ -926,7 +926,7 @@ export class SyncTransportWorkerRuntime {
         digest,
       }
       if (frameByteLength(frame) > MAX_SYNC_FRAME_BYTES) {
-        await this.fallback('frame-too-large')
+        await this.fallback('frame-too-large', undefined, true)
         return
       }
       const record: SyncOutboxRecord = {
@@ -1150,6 +1150,7 @@ export class SyncTransportWorkerRuntime {
   private async fallback(
     reason: SyncFallbackReason,
     record: SyncOutboxRecord | undefined = this.outboxRecord,
+    preserveHealthySocket = false,
   ): Promise<void> {
     const active = this.active
     if (!active) {
@@ -1162,11 +1163,13 @@ export class SyncTransportWorkerRuntime {
       }
       this.active = undefined
       this.transition('HTTP_FALLBACK', reason)
-      await this.closeSocketAndReleaseOwner()
+      if (!preserveHealthySocket) {
+        await this.closeSocketAndReleaseOwner()
+      }
       return
     }
     if (active.mode === 'collaboration') {
-      await this.fallbackCollaboration(reason, false)
+      await this.fallbackCollaboration(reason, preserveHealthySocket)
       return
     }
     this.transition('HTTP_FALLBACK', reason)
@@ -1191,7 +1194,11 @@ export class SyncTransportWorkerRuntime {
     this.outboxRecord = undefined
     this.resultDelivered = false
     this.accepted = false
-    await this.closeSocketAndReleaseOwner()
+    if (!preserveHealthySocket) {
+      await this.closeSocketAndReleaseOwner()
+    } else {
+      this.transition('READY')
+    }
   }
 
   private async fallbackCollaboration(reason: SyncFallbackReason, preserveHealthySocket: boolean): Promise<void> {

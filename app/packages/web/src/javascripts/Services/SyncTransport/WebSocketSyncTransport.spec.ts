@@ -206,6 +206,65 @@ describe('WebSocketSyncTransport', () => {
     await expect(execution).resolves.toEqual({ response: response('http') })
   })
 
+  it('reuses one healthy negotiated worker socket without repeating ticket or capability requests', async () => {
+    const transport = createTransport()
+    const fallback = jest.fn().mockResolvedValue(response('http'))
+
+    const first = transport.execute(request('first'), fallback)
+    await flush()
+    let executePosts = worker.posts.filter((message) => message.type === 'EXECUTE') as Extract<
+      MainToSyncWorkerMessage,
+      { type: 'EXECUTE' }
+    >[]
+    worker.emit({ type: 'NEED_TICKET', clientRequestId: executePosts[0].clientRequestId, reconnect: false })
+    await flush()
+    worker.emit({
+      type: 'NEGOTIATED',
+      sessionScope: SESSION_A,
+      protocolVersion: 1,
+      endpoint: 'wss://sync.example.test/sockets/sync',
+      operations: ['SYNC_ITEMS', 'AUTHORIZE_COLLABORATION'],
+    })
+    worker.emit({
+      type: 'COMMAND_PERSISTED',
+      clientRequestId: executePosts[0].clientRequestId,
+      body: request('first'),
+      command: { id: 'command-first', digest: 'a'.repeat(64), sequence: 1 },
+    })
+    worker.emit({
+      type: 'RESULT',
+      clientRequestId: executePosts[0].clientRequestId,
+      commandId: 'command-first',
+      result: { retrieved_items: [], saved_items: [], sync_token: 'ws-first' },
+    })
+    await first
+
+    const second = transport.execute(request('second'), fallback)
+    await flush()
+    executePosts = worker.posts.filter((message) => message.type === 'EXECUTE') as Extract<
+      MainToSyncWorkerMessage,
+      { type: 'EXECUTE' }
+    >[]
+    expect(executePosts).toHaveLength(2)
+    worker.emit({
+      type: 'COMMAND_PERSISTED',
+      clientRequestId: executePosts[1].clientRequestId,
+      body: request('second'),
+      command: { id: 'command-second', digest: 'b'.repeat(64), sequence: 2 },
+    })
+    worker.emit({
+      type: 'RESULT',
+      clientRequestId: executePosts[1].clientRequestId,
+      commandId: 'command-second',
+      result: { retrieved_items: [], saved_items: [], sync_token: 'ws-second' },
+    })
+    await second
+
+    expect(controlPlane.createTicket).toHaveBeenCalledTimes(1)
+    expect(controlPlane.getCapabilities).not.toHaveBeenCalled()
+    expect(fallback).not.toHaveBeenCalled()
+  })
+
   it('replays an uncertain accepted command over HTTP with the exact same metadata', async () => {
     const transport = createTransport()
     const fallback = jest.fn().mockResolvedValue(response('replayed'))
@@ -244,6 +303,62 @@ describe('WebSocketSyncTransport', () => {
       commandId: command.id,
     })
     await checkpoint
+  })
+
+  it('claims an uncertain command once when timeout and close emit duplicate HTTP fallback signals', async () => {
+    const transport = createTransport()
+    let resolveFallback: ((value: HttpResponse<RawSyncResponse>) => void) | undefined
+    const fallback = jest.fn(
+      () =>
+        new Promise<HttpResponse<RawSyncResponse>>((resolve) => {
+          resolveFallback = resolve
+        }),
+    )
+    const originalBody = request('folder-create')
+    const execution = transport.execute(originalBody, fallback)
+    await flush()
+    const execute = worker.posts.find((message) => message.type === 'EXECUTE') as Extract<
+      MainToSyncWorkerMessage,
+      { type: 'EXECUTE' }
+    >
+    const command = { id: 'command-folder-create', digest: 'c'.repeat(64), sequence: 11 }
+    worker.emit({ type: 'COMMAND_PERSISTED', clientRequestId: execute.clientRequestId, body: originalBody, command })
+
+    const duplicateFallback = {
+      type: 'HTTP_FALLBACK' as const,
+      clientRequestId: execute.clientRequestId,
+      reason: 'reconnect-gap' as const,
+      body: originalBody,
+      command,
+    }
+    worker.emit(duplicateFallback)
+    worker.emit(duplicateFallback)
+    await flush()
+
+    expect(fallback).toHaveBeenCalledTimes(1)
+    expect(fallback).toHaveBeenCalledWith(originalBody, command)
+    resolveFallback?.(response('replayed-once'))
+    await expect(execution).resolves.toEqual(expect.objectContaining({ response: response('replayed-once') }))
+
+    const result = await execution
+    const firstCheckpoint = result.markCheckpointDurable?.() as Promise<void>
+    const secondCheckpoint = result.markCheckpointDurable?.() as Promise<void>
+    await flush()
+    const checkpointMessages = worker.posts.filter(
+      (message): message is Extract<MainToSyncWorkerMessage, { type: 'CHECKPOINT_DURABLE' }> =>
+        message.type === 'CHECKPOINT_DURABLE' && message.commandId === command.id,
+    )
+    expect(checkpointMessages).toHaveLength(1)
+    for (const checkpoint of checkpointMessages) {
+      worker.emit({
+        type: 'CHECKPOINT_CLEARED',
+        requestId: checkpoint.requestId,
+        sessionScope: SESSION_A,
+        commandId: command.id,
+      })
+    }
+    await Promise.all([firstCheckpoint, secondCheckpoint])
+    expect(fallback).toHaveBeenCalledTimes(1)
   })
 
   it('returns recovered A under the recovery contract and only then executes fresh B', async () => {
@@ -416,7 +531,8 @@ describe('WebSocketSyncTransport', () => {
   })
 
   it('falls back when capability negotiation is absent and never exposes a session token to the worker', async () => {
-    controlPlane.getCapabilities.mockResolvedValue({ capabilities: [] })
+    controlPlane.createTicket.mockResolvedValue(undefined)
+    ;(controlPlane.getCapabilities as jest.Mock).mockResolvedValue({ capabilities: [] })
     const transport = createTransport()
     const fallback = jest.fn().mockResolvedValue(response('http'))
     const execution = transport.execute(request(), fallback)
@@ -427,6 +543,7 @@ describe('WebSocketSyncTransport', () => {
     >
     worker.emit({ type: 'NEED_TICKET', clientRequestId: execute.clientRequestId, reconnect: false })
     await flush()
+    await new Promise((resolve) => setTimeout(resolve, 0))
     expect(worker.posts).toContainEqual({
       type: 'TICKET_UNAVAILABLE',
       clientRequestId: execute.clientRequestId,
@@ -440,6 +557,64 @@ describe('WebSocketSyncTransport', () => {
       body: request(),
     })
     await expect(execution).resolves.toEqual({ response: response('http') })
+
+    const retry = transport.execute(request('retry'), fallback)
+    await flush()
+    const retryExecute = worker.posts.filter((message) => message.type === 'EXECUTE').at(-1) as Extract<
+      MainToSyncWorkerMessage,
+      { type: 'EXECUTE' }
+    >
+    worker.emit({ type: 'NEED_TICKET', clientRequestId: retryExecute.clientRequestId, reconnect: false })
+    await flush()
+    expect(worker.posts).toContainEqual({
+      type: 'TICKET_UNAVAILABLE',
+      clientRequestId: retryExecute.clientRequestId,
+      reason: 'capability-unavailable',
+    })
+    worker.emit({
+      type: 'HTTP_FALLBACK',
+      clientRequestId: retryExecute.clientRequestId,
+      reason: 'capability-unavailable',
+      body: request('retry'),
+    })
+    await expect(retry).resolves.toEqual({ response: response('http') })
+    expect(controlPlane.createTicket).toHaveBeenCalledTimes(1)
+    expect(controlPlane.getCapabilities).toHaveBeenCalledTimes(1)
+    expect(fallback).toHaveBeenCalledTimes(2)
+  })
+
+  it('backs off ticket and capability probes when capability exists but ticket issuance is unavailable', async () => {
+    controlPlane.createTicket.mockResolvedValue(undefined)
+    const transport = createTransport()
+    const fallback = jest.fn().mockResolvedValue(response('http'))
+
+    for (const suffix of ['first', 'second']) {
+      const execution = transport.execute(request(suffix), fallback)
+      await flush()
+      const execute = worker.posts.filter((message) => message.type === 'EXECUTE').at(-1) as Extract<
+        MainToSyncWorkerMessage,
+        { type: 'EXECUTE' }
+      >
+      worker.emit({ type: 'NEED_TICKET', clientRequestId: execute.clientRequestId, reconnect: false })
+      await flush()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(worker.posts).toContainEqual({
+        type: 'TICKET_UNAVAILABLE',
+        clientRequestId: execute.clientRequestId,
+        reason: suffix === 'first' ? 'ticket-unavailable' : 'capability-unavailable',
+      })
+      worker.emit({
+        type: 'HTTP_FALLBACK',
+        clientRequestId: execute.clientRequestId,
+        reason: 'capability-unavailable',
+        body: request(suffix),
+      })
+      await execution
+    }
+
+    expect(controlPlane.createTicket).toHaveBeenCalledTimes(1)
+    expect(controlPlane.getCapabilities).toHaveBeenCalledTimes(1)
+    expect(fallback).toHaveBeenCalledTimes(2)
   })
 
   it('closes and rejects an active execution when the session is revoked', async () => {

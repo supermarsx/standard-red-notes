@@ -84,7 +84,8 @@ export type SyncTicketResponse = {
 }
 
 export interface SyncTransportControlPlane {
-  getCapabilities(): Promise<{ capabilities: SyncCapability[] } | undefined>
+  /** Compatibility probe used only after ticket issuance says the operation is unavailable. */
+  getCapabilities?(): Promise<{ capabilities: SyncCapability[] } | undefined>
   createTicket(deviceId: string): Promise<SyncTicketResponse | undefined>
 }
 
@@ -171,6 +172,8 @@ type RpcWorkerMessage = Extract<
   { type: 'RPC_ACCEPTED' | 'RPC_RESPONSE' | 'RPC_CHUNK' | 'RPC_END' | 'RPC_ERROR' }
 >
 
+const CAPABILITY_REPROBE_MS = 60_000
+
 function defaultHttpOnly(): boolean {
   const injected = (globalThis as { _sync_transport?: unknown })._sync_transport
   if (injected === 'http-only') {
@@ -215,6 +218,8 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     endpoint: string
     operations: ReadonlySet<SyncNegotiatedOperation>
   }
+  private capabilityProbe?: Promise<boolean>
+  private capabilityUnavailableUntil = 0
   private fallbackReason?: SyncFallbackReason
 
   constructor(private readonly options: WebSocketSyncTransportOptions) {}
@@ -583,6 +588,7 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
         endpoint: message.endpoint,
         operations: new Set(message.operations),
       }
+      this.capabilityUnavailableUntil = 0
       this.fallbackReason = undefined
       return
     }
@@ -695,7 +701,7 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
         this.pending.delete(message.clientRequestId)
         const result: AccountSyncTransportResult<TransportResponse> = {
           response,
-          markCheckpointDurable: () => this.markCheckpointDurable(pending.sessionScope, message.commandId),
+          markCheckpointDurable: this.createDurableCheckpoint(pending.sessionScope, message.commandId),
         }
         pending.resolve(pending.mode === 'recover' ? { ...result, request: persisted.body } : result)
         break
@@ -834,15 +840,12 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
       return
     }
 
+    if (!this.negotiated && Date.now() < this.capabilityUnavailableUntil) {
+      unavailable('capability-unavailable')
+      return
+    }
+
     try {
-      const capabilityResponse = await this.options.controlPlane.getCapabilities()
-      const capability = capabilityResponse?.capabilities.find(
-        (candidate) => candidate.id === 'ws-sync' && candidate.version === 1,
-      )
-      if (!capability) {
-        unavailable('capability-unavailable')
-        return
-      }
       const ticket = await this.options.controlPlane.createTicket(this.options.deviceId)
       const currentScope = await this.currentSessionScope()
       if (currentScope !== sessionScope || this.revokedSessionScopes.has(sessionScope)) {
@@ -867,10 +870,16 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
         ticket.ticket.length < 32 ||
         !Number.isSafeInteger(ticket.expiresAt)
       ) {
-        unavailable('ticket-unavailable')
+        const capabilityAvailable = await this.probeCapabilityOnce()
+        // A positive capability response does not make a failing ticket issuer
+        // healthy. Cache both negative capabilities and ticket-plane failures so
+        // each background sync does not repeat ticket + capability requests.
+        this.capabilityUnavailableUntil = Date.now() + CAPABILITY_REPROBE_MS
+        unavailable(capabilityAvailable ? 'ticket-unavailable' : 'capability-unavailable')
         return
       }
-      const relativeEndpoint = ticket.endpoint || capability.endpoint
+      this.capabilityUnavailableUntil = 0
+      const relativeEndpoint = ticket.endpoint
       const endpoint = new URL(relativeEndpoint, configuredEndpoint).toString()
       worker.postMessage({
         type: 'CONNECT',
@@ -884,7 +893,33 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
         },
       })
     } catch {
-      unavailable('ticket-unavailable')
+      const capabilityAvailable = await this.probeCapabilityOnce()
+      this.capabilityUnavailableUntil = Date.now() + CAPABILITY_REPROBE_MS
+      unavailable(capabilityAvailable ? 'ticket-unavailable' : 'capability-unavailable')
+    }
+  }
+
+  private probeCapabilityOnce(): Promise<boolean> {
+    if (!this.options.controlPlane.getCapabilities) {
+      return Promise.resolve(false)
+    }
+    if (this.capabilityProbe) {
+      return this.capabilityProbe
+    }
+    const probe = this.options.controlPlane
+      .getCapabilities()
+      .then(
+        (response) =>
+          response?.capabilities.some((candidate) => candidate.id === 'ws-sync' && candidate.version === 1) === true,
+      )
+      .catch(() => false)
+      .finally(() => {
+        if (this.capabilityProbe === probe) {
+          this.capabilityProbe = undefined
+        }
+      })
+    this.capabilityProbe = probe
+    return probe
   }
 
   private async resolveHttpFallback(
@@ -893,20 +928,30 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     body: AccountSyncTransportRequest,
     command?: AccountSyncCommandMetadata,
   ): Promise<void> {
+    /**
+     * Claim the terminal transition before crossing the async HTTP boundary.
+     * Worker close/error/timeout paths can converge on the same durable command;
+     * without this compare-and-delete, two queued HTTP_FALLBACK messages (or a
+     * worker error racing one) could issue the same POST concurrently. The server
+     * command journal makes that mutation idempotent, but the client must still
+     * guarantee one fallback request and one acknowledgement per execution.
+     */
+    if (this.pending.get(clientRequestId) !== pending) {
+      return
+    }
+    this.pending.delete(clientRequestId)
     try {
       const response = await pending.httpFallback(body, command)
-      this.pending.delete(clientRequestId)
       const result: AccountSyncTransportResult<TransportResponse> = {
         response,
         ...(command
           ? {
-              markCheckpointDurable: () => this.markCheckpointDurable(pending.sessionScope, command.id),
+              markCheckpointDurable: this.createDurableCheckpoint(pending.sessionScope, command.id),
             }
           : {}),
       }
       pending.resolve(pending.mode === 'recover' ? { ...result, request: body } : result)
     } catch (error) {
-      this.pending.delete(clientRequestId)
       pending.reject(error)
     }
   }
@@ -929,6 +974,14 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
         })
         .catch(reject)
     })
+  }
+
+  private createDurableCheckpoint(sessionScope: string, commandId: string): () => Promise<void> {
+    let checkpoint: Promise<void> | undefined
+    return () => {
+      checkpoint ??= this.markCheckpointDurable(sessionScope, commandId)
+      return checkpoint
+    }
   }
 
   private async onWorkerError(): Promise<void> {
@@ -955,7 +1008,7 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
         const response = await pending.httpFallback(persisted.body, persisted.command)
         const result: AccountSyncTransportResult<TransportResponse> = {
           response,
-          markCheckpointDurable: () => this.markCheckpointDurable(pending.sessionScope, persisted.command.id),
+          markCheckpointDurable: this.createDurableCheckpoint(pending.sessionScope, persisted.command.id),
         }
         pending.resolve(pending.mode === 'recover' ? { ...result, request: persisted.body } : result)
       } catch (error) {
