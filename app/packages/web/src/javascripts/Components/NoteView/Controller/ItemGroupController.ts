@@ -44,6 +44,7 @@ type DetachedChecklistPreparation = {
 }
 
 export class ChecklistEditorOwnershipError extends Error {}
+export class ChecklistEditorOpeningCanceledError extends ChecklistEditorOwnershipError {}
 
 export type CreateItemControllerContext = {
   file?: FileItem
@@ -302,7 +303,13 @@ export class ItemGroupController {
   }
 
   public cancelChecklistEditorReservationsForSecurity(noteUuid?: string): void {
-    this.checklistSecurityGeneration += 1
+    // A note-scoped revocation must not invalidate editors for every other note.
+    // The note's reservations/preparations are canceled explicitly below; reserve
+    // the shared generation bump for account, vault-key, and lifecycle boundaries
+    // that intentionally invalidate all checklist editor work.
+    if (!noteUuid) {
+      this.checklistSecurityGeneration += 1
+    }
     const visibleEntries = noteUuid
       ? [[noteUuid, this.visibleChecklistReservations.get(noteUuid)] as const]
       : [...this.visibleChecklistReservations.entries()]
@@ -386,7 +393,7 @@ export class ItemGroupController {
 
   private assertVisibleChecklistReservationCurrent(expected: VisibleChecklistReservation): void {
     if (!this.visibleChecklistReservationIsCurrent(expected)) {
-      throw new ChecklistEditorOwnershipError('Source-note authorization changed while opening the editor.')
+      throw new ChecklistEditorOpeningCanceledError('Source-note authorization changed while opening the editor.')
     }
   }
 
@@ -441,7 +448,10 @@ export class ItemGroupController {
         // and provider flush succeeds; its exact close callback then clears it.
         await this.flushAndCloseDetachedNoteController(controller)
         this.assertVisibleChecklistReservationCurrent(reservation)
-      } catch {
+      } catch (error) {
+        if (error instanceof ChecklistEditorOpeningCanceledError) {
+          throw error
+        }
         throw new ChecklistEditorOwnershipError(
           'The pending Todo update could not be saved, so the source note was not opened.',
         )
@@ -471,10 +481,12 @@ export class ItemGroupController {
       try {
         await controller.flushAndAwaitPendingSave()
         if (canContinue && !canContinue()) {
-          throw new ChecklistEditorOwnershipError('Source-note authorization changed while opening the editor.')
+          throw new ChecklistEditorOpeningCanceledError('Source-note authorization changed while opening the editor.')
         }
       } catch (error) {
-        console.error(error)
+        if (!(error instanceof ChecklistEditorOpeningCanceledError)) {
+          console.error(error)
+        }
         // A live collaboration durability flush failed. Keep the authoritative
         // controller mounted; closing it would discard its only unsent Y.Doc.
         throw error

@@ -9,7 +9,7 @@ import {
   SyncServiceInterface,
 } from '@standardnotes/snjs'
 import { IsNativeMobileWeb } from '@standardnotes/ui-services'
-import { ItemGroupController } from './ItemGroupController'
+import { ChecklistEditorOpeningCanceledError, ItemGroupController } from './ItemGroupController'
 import { NoteViewController } from './NoteViewController'
 
 /**
@@ -240,6 +240,43 @@ describe('ItemGroupController tabs/tiles', () => {
     await expect(visible).resolves.toBeInstanceOf(NoteViewController)
   })
 
+  it('keeps an in-flight visible Super editor authorized across an unrelated note revocation', async () => {
+    const opening = group.createItemController({ note: superNote('opening-note'), openInNewTile: true })
+
+    group.cancelChecklistEditorReservationsForSecurity('unrelated-note')
+
+    const controller = await opening
+    expect(controller).toBeInstanceOf(NoteViewController)
+    expect(group.itemControllers).toEqual([controller])
+    expect(group.activeItemViewController).toBe(controller)
+  })
+
+  it('still rejects an in-flight visible Super editor when that exact note is revoked', async () => {
+    const opening = group.createItemController({ note: superNote('revoked-note'), openInNewTile: true })
+
+    group.cancelChecklistEditorReservationsForSecurity('revoked-note')
+
+    await expect(opening).rejects.toBeInstanceOf(ChecklistEditorOpeningCanceledError)
+    expect(group.itemControllers).toEqual([])
+    expect(group.activeItemViewController).toBeUndefined()
+  })
+
+  it('keeps an in-flight detached owner authorized across an unrelated note revocation', async () => {
+    const opening = group.createDetachedNoteController(superNote('opening-note'))
+
+    group.cancelChecklistEditorReservationsForSecurity('unrelated-note')
+
+    await expect(opening).resolves.toBeInstanceOf(NoteViewController)
+  })
+
+  it('still rejects an in-flight detached owner when that exact note is revoked', async () => {
+    const opening = group.createDetachedNoteController(superNote('revoked-note'))
+
+    group.cancelChecklistEditorReservationsForSecurity('revoked-note')
+
+    await expect(opening).rejects.toThrow('ownership changed')
+  })
+
   it('strictly releases a detached owner before opening the same note visibly', async () => {
     const note = superNote('same-note')
     const closed = jest.fn()
@@ -279,6 +316,28 @@ describe('ItemGroupController tabs/tiles', () => {
     expect(detached.deinit).not.toHaveBeenCalled()
   })
 
+  it('preserves typed security cancellation while awaiting a detached-owner release', async () => {
+    const note = superNote('revoked-note')
+    const detached = await group.createDetachedNoteController(note)
+    let finishFlush!: () => void
+    ;(detached.flushAndAwaitPendingSaveStrict as jest.Mock).mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finishFlush = resolve
+        }),
+    )
+
+    const opening = group.createItemController({ note, openInNewTile: true })
+    await Promise.resolve()
+    expect(detached.flushAndAwaitPendingSaveStrict).toHaveBeenCalledTimes(1)
+
+    group.cancelChecklistEditorReservationsForSecurity('revoked-note')
+    finishFlush()
+
+    await expect(opening).rejects.toBeInstanceOf(ChecklistEditorOpeningCanceledError)
+    expect(group.itemControllers).toEqual([])
+  })
+
   it('cancels a visible-note reservation during the awaited outgoing flush without switching UI', async () => {
     const outgoing = (await addTab()) as unknown as {
       flushAndAwaitPendingSave: jest.Mock
@@ -309,6 +368,24 @@ describe('ItemGroupController tabs/tiles', () => {
     expect(group.itemControllers).toEqual([outgoing])
     expect(group.activeItemViewController).toBe(outgoing)
     expect(observer).not.toHaveBeenCalled()
+    expect(consoleError).not.toHaveBeenCalled()
+    consoleError.mockRestore()
+  })
+
+  it('still logs and propagates a real outgoing-editor durability failure', async () => {
+    const outgoing = (await addTab()) as unknown as {
+      flushAndAwaitPendingSave: jest.Mock
+      deinit: jest.Mock
+    }
+    const failure = new Error('local persistence failed')
+    outgoing.flushAndAwaitPendingSave.mockRejectedValueOnce(failure)
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    await expect(group.createItemController({ templateOptions: {} })).rejects.toBe(failure)
+    expect(consoleError).toHaveBeenCalledWith(failure)
+    expect(outgoing.deinit).not.toHaveBeenCalled()
+    expect(group.itemControllers).toEqual([outgoing])
+    expect(group.activeItemViewController).toBe(outgoing)
     consoleError.mockRestore()
   })
 

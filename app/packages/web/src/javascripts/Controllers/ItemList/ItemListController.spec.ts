@@ -1,5 +1,6 @@
 import {
   ContentType,
+  NoteType,
   PayloadEmitSource,
   Result,
   SNNote,
@@ -17,6 +18,10 @@ import { ItemsReloadSource } from './ItemsReloadSource'
 import { IsNativeMobileWeb } from '@standardnotes/ui-services'
 import { runInAction } from 'mobx'
 import { ThreadedSearchIndex } from '@/Utils/Items/Search/ThreadedSearchIndex'
+import {
+  ChecklistEditorOpeningCanceledError,
+  ChecklistEditorOwnershipError,
+} from '@/Components/NoteView/Controller/ItemGroupController'
 
 describe('item list controller', () => {
   let application: WebApplication
@@ -78,6 +83,53 @@ describe('item list controller', () => {
 
   afterEach(() => {
     controller?.deinit()
+  })
+
+  describe('stale checklist editor opens', () => {
+    const note = {
+      uuid: 'checklist-note',
+      content_type: ContentType.TYPES.Note,
+      noteType: NoteType.Super,
+    } as SNNote
+
+    beforeEach(() => {
+      application.items.findItem = jest.fn().mockReturnValue(note)
+      application.itemControllerGroup.createItemController = jest.fn()
+      application.itemControllerGroup.itemControllers = []
+    })
+
+    it.each([
+      ['the primary editor', () => controller.openNote(note.uuid)],
+      ['a new tile', () => controller.openNoteInNewTile(note.uuid)],
+    ])('settles a security-canceled open for %s without publishing an active-editor change', async (_label, open) => {
+      application.itemControllerGroup.createItemController = jest
+        .fn()
+        .mockRejectedValue(new ChecklistEditorOpeningCanceledError('authorization changed'))
+      const publish = jest
+        .spyOn(
+          controller as unknown as { publishCrossControllerEventSync: (event: unknown) => Promise<void> },
+          'publishCrossControllerEventSync',
+        )
+        .mockResolvedValue(undefined)
+      const handOff = jest
+        .spyOn(
+          controller as unknown as { handOffEditorColumnToOpenedNote: () => void },
+          'handOffEditorColumnToOpenedNote',
+        )
+        .mockImplementation(() => undefined)
+
+      await expect(open()).resolves.toBeUndefined()
+      expect(handOff).not.toHaveBeenCalled()
+      expect(publish).not.toHaveBeenCalled()
+    })
+
+    it('continues to propagate non-cancellation checklist ownership failures', async () => {
+      application.itemControllerGroup.createItemController = jest
+        .fn()
+        .mockRejectedValue(new ChecklistEditorOwnershipError('detached owner durability failed'))
+
+      await expect(controller.openNote(note.uuid)).rejects.toThrow('detached owner durability failed')
+    })
   })
 
   describe('vault plaintext lifecycle', () => {

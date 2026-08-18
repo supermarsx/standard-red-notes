@@ -146,14 +146,17 @@ export function CheckListPlugin({
       editorState: Parameters<Parameters<typeof editor.registerUpdateListener>[0]>[0]['editorState'],
       dirtyElements: Parameters<Parameters<typeof editor.registerUpdateListener>[0]>[0]['dirtyElements'],
     ) => {
-      editorState.read(() => {
-        for (const key of dirtyElements.keys()) {
-          const item = $getNodeByKey<ListItemNode>(key)
-          if ($isChecklistItemNode(item) && item.getChecked() && $getChecklistRecurrence(item)) {
-            pendingRecurringActivationKeys.add(key)
+      editorState.read(
+        () => {
+          for (const key of dirtyElements.keys()) {
+            const item = $getNodeByKey<ListItemNode>(key)
+            if ($isChecklistItemNode(item) && item.getChecked() && $getChecklistRecurrence(item)) {
+              pendingRecurringActivationKeys.add(key)
+            }
           }
-        }
-      })
+        },
+        { editor },
+      )
       if (pendingRecurringActivationKeys.size > 0 && !recurringActivationQueued) {
         recurringActivationQueued = true
         queueMicrotask(flushPendingRecurringActivations)
@@ -324,7 +327,7 @@ export function CheckListPlugin({
 
     const refreshDueControls = (dirtyEntries?: Iterable<[string, boolean]>) => {
       const liveElements = new Set<HTMLElement>()
-      editor.getEditorState().read(() => {
+      editor.read(() => {
         const items = new Set(dirtyEntries ? [] : $getChecklistItems())
         if (dirtyEntries) {
           for (const [key, intentionallyDirty] of dirtyEntries) {
@@ -377,7 +380,7 @@ export function CheckListPlugin({
     }
 
     const readScheduleSnapshot = (itemElement: HTMLElement): ChecklistScheduleSnapshot | undefined =>
-      editor.getEditorState().read(() => {
+      editor.read(() => {
         const node = $getNearestNodeFromDOMNode(itemElement)
         return $isChecklistItemNode(node) ? $getChecklistScheduleSnapshot(node) : undefined
       })
@@ -523,16 +526,16 @@ export function CheckListPlugin({
     }
 
     const rootDisposer = editor.registerRootListener((rootElement, previousElement) => {
+      if (previousElement) {
+        previousElement.removeEventListener('click', handleClick)
+        previousElement.removeEventListener('change', handleChange)
+        previousElement.removeEventListener('pointerdown', stopDuePointer)
+      }
       if (rootElement) {
         rootElement.addEventListener('click', handleClick)
         rootElement.addEventListener('change', handleChange)
         rootElement.addEventListener('pointerdown', stopDuePointer)
         refreshDueControls()
-      }
-      if (previousElement) {
-        previousElement.removeEventListener('click', handleClick)
-        previousElement.removeEventListener('change', handleChange)
-        previousElement.removeEventListener('pointerdown', stopDuePointer)
       }
     })
     const updateDisposer = editor.registerUpdateListener(({ dirtyElements }) =>
@@ -697,14 +700,14 @@ export function CheckListPlugin({
           })
         }
 
-        if (rootElement !== null) {
-          rootElement.addEventListener('click', handleClick)
-          rootElement.addEventListener('pointerdown', handlePointerDown)
-        }
-
         if (prevElement !== null) {
           prevElement.removeEventListener('click', handleClick)
           prevElement.removeEventListener('pointerdown', handlePointerDown)
+        }
+
+        if (rootElement !== null) {
+          rootElement.addEventListener('click', handleClick)
+          rootElement.addEventListener('pointerdown', handlePointerDown)
         }
       }),
       editor.registerCommand(

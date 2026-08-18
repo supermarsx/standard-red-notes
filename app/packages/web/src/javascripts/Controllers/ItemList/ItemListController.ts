@@ -89,7 +89,10 @@ import {
   VaultDisplayServiceInterface,
 } from '@standardnotes/ui-services'
 import { getDayjsFormattedString } from '@/Utils/GetDayjsFormattedString'
-import { ItemGroupController } from '@/Components/NoteView/Controller/ItemGroupController'
+import {
+  ChecklistEditorOpeningCanceledError,
+  ItemGroupController,
+} from '@/Components/NoteView/Controller/ItemGroupController'
 import { Persistable } from '../Abstract/Persistable'
 import { PaneController } from '../PaneController/PaneController'
 import { requestCloseAllOpenModalsAndPopovers } from '@/Utils/CloseOpenModalsAndPopovers'
@@ -698,7 +701,18 @@ export class ItemListController
       return
     }
 
-    await this.itemControllerGroup.createItemController({ note })
+    try {
+      await this.itemControllerGroup.createItemController({ note })
+    } catch (error) {
+      // Reload/selection work may already be obsolete when an account, vault,
+      // or exact-note security boundary cancels its in-flight editor open. The
+      // cancellation is fail-closed and expected; do not turn it into an
+      // unhandled reload rejection or publish a change that never happened.
+      if (error instanceof ChecklistEditorOpeningCanceledError) {
+        return
+      }
+      throw error
+    }
 
     this.handOffEditorColumnToOpenedNote()
 
@@ -749,7 +763,14 @@ export class ItemListController
       return
     }
 
-    await this.itemControllerGroup.createItemController({ note, openInNewTile: true })
+    try {
+      await this.itemControllerGroup.createItemController({ note, openInNewTile: true })
+    } catch (error) {
+      if (error instanceof ChecklistEditorOpeningCanceledError) {
+        return
+      }
+      throw error
+    }
 
     await this.publishCrossControllerEventSync(CrossControllerEvent.ActiveEditorChanged)
   }
