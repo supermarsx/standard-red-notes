@@ -10,8 +10,9 @@ set -eu
 #    and MFA/encryption. Any secret supplied via the environment wins on first
 #    boot and is persisted.
 # 3. Write the home-server .env the single-process backend reads (dotenv), with
-#    sqlite + in-memory cache + in-process events forced on — no external DB,
-#    Redis or SNS/SQS. This mirrors the CI-proven home-server env
+#    sqlite + in-memory cache + in-process events forced on — no external DB or
+#    SNS/SQS. Redis remains optional and enables worker WebSocket sync. This
+#    mirrors the CI-proven home-server env
 #    (server/.github/workflows/e2e-home-server.yml).
 # 4. Run the app's CSP self-heal / runtime-config templating (reused VERBATIM
 #    from app/docker/docker-entrypoint.sh) against the served index.html + nginx
@@ -36,6 +37,8 @@ if [ ! -f "${SECRETS_FILE}" ]; then
   : "${ENCRYPTION_SERVER_KEY:=$(openssl rand -hex 32)}"
   : "${PSEUDO_KEY_PARAMS_KEY:=$(openssl rand -hex 32)}"
   : "${VALET_TOKEN_SECRET:=$(openssl rand -hex 32)}"
+  : "${WEB_SOCKET_CONNECTION_TOKEN_SECRET:=$(openssl rand -hex 32)}"
+  : "${WEBSOCKET_GATEWAY_INTERNAL_SECRET:=$(openssl rand -hex 32)}"
   umask 077
   cat > "${SECRETS_FILE}" <<EOF
 AUTH_JWT_SECRET=${AUTH_JWT_SECRET}
@@ -43,11 +46,24 @@ JWT_SECRET=${JWT_SECRET}
 ENCRYPTION_SERVER_KEY=${ENCRYPTION_SERVER_KEY}
 PSEUDO_KEY_PARAMS_KEY=${PSEUDO_KEY_PARAMS_KEY}
 VALET_TOKEN_SECRET=${VALET_TOKEN_SECRET}
+WEB_SOCKET_CONNECTION_TOKEN_SECRET=${WEB_SOCKET_CONNECTION_TOKEN_SECRET}
+WEBSOCKET_GATEWAY_INTERNAL_SECRET=${WEBSOCKET_GATEWAY_INTERNAL_SECRET}
 EOF
   echo "[entrypoint] generated per-instance secrets at ${SECRETS_FILE}"
 fi
 # shellcheck disable=SC1090
 . "${SECRETS_FILE}"
+
+# Existing installations predate these in-process gateway secrets. Append each
+# key once without rotating any established secret.
+if ! grep -q '^WEB_SOCKET_CONNECTION_TOKEN_SECRET=' "${SECRETS_FILE}"; then
+  : "${WEB_SOCKET_CONNECTION_TOKEN_SECRET:=$(openssl rand -hex 32)}"
+  printf 'WEB_SOCKET_CONNECTION_TOKEN_SECRET=%s\n' "${WEB_SOCKET_CONNECTION_TOKEN_SECRET}" >> "${SECRETS_FILE}"
+fi
+if ! grep -q '^WEBSOCKET_GATEWAY_INTERNAL_SECRET=' "${SECRETS_FILE}"; then
+  : "${WEBSOCKET_GATEWAY_INTERNAL_SECRET:=$(openssl rand -hex 32)}"
+  printf 'WEBSOCKET_GATEWAY_INTERNAL_SECRET=%s\n' "${WEBSOCKET_GATEWAY_INTERNAL_SECRET}" >> "${SECRETS_FILE}"
+fi
 
 # --- 3. Write the home-server .env -----------------------------------------
 # Helper: append KEY=VALUE only when VALUE is non-empty, so operators can leave
@@ -84,7 +100,8 @@ put APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_2 "${APPLICATION_VERSION_THR
 put APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_3 "${APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_3:-0.0.0}"
 
 # Minimal dependency footprint: embedded sqlite + in-memory cache + in-process
-# events. (HomeServer.ts also forces these, but we set them explicitly so the
+# events, with optional Redis only for WebSocket sync. (HomeServer.ts also
+# forces these, but we set them explicitly so the
 # generated .env is self-documenting.)
 put DB_TYPE sqlite
 put CACHE_TYPE memory
@@ -94,6 +111,8 @@ put FILE_UPLOAD_PATH "${DATA_DIR}/uploads"
 # CACHE_TYPE=memory (the in-memory cache adapter is used; no Redis is contacted).
 # Matches the home-server CI env (e2e-home-server.yml).
 put REDIS_URL "${REDIS_URL:-redis://localhost:6379}"
+put_opt REDIS_HOST "${REDIS_HOST:-}"
+put REDIS_PORT "${REDIS_PORT:-6379}"
 
 # Secrets (loaded above).
 put AUTH_JWT_SECRET "${AUTH_JWT_SECRET}"
@@ -101,6 +120,8 @@ put JWT_SECRET "${JWT_SECRET}"
 put ENCRYPTION_SERVER_KEY "${ENCRYPTION_SERVER_KEY}"
 put PSEUDO_KEY_PARAMS_KEY "${PSEUDO_KEY_PARAMS_KEY}"
 put VALET_TOKEN_SECRET "${VALET_TOKEN_SECRET}"
+put WEB_SOCKET_CONNECTION_TOKEN_SECRET "${WEB_SOCKET_CONNECTION_TOKEN_SECRET}"
+put WEBSOCKET_GATEWAY_INTERNAL_SECRET "${WEBSOCKET_GATEWAY_INTERNAL_SECRET}"
 
 # Public URL the browser uses to reach the files service, served same-origin
 # through nginx at /files. Defaults to this container's published origin.
@@ -160,6 +181,13 @@ put_opt OCR_SERVER_DEFAULT_LANGUAGE "${OCR_SERVER_DEFAULT_LANGUAGE:-}"
 put_opt UPDATE_CHECK_URL "${UPDATE_CHECK_URL:-}"
 put_opt UPDATE_CHECK_CURRENT_VERSION "${UPDATE_CHECK_CURRENT_VERSION:-}"
 put_opt PUBLIC_URL "${PUBLIC_URL:-}"
+put WEBSOCKET_SYNC_ENABLED "${WEBSOCKET_SYNC_ENABLED:-true}"
+put_opt WEBSOCKET_SYNC_ALLOWED_ORIGINS "${WEBSOCKET_SYNC_ALLOWED_ORIGINS:-}"
+put WEBSOCKET_SYNC_MAX_SOCKETS_PER_USER "${WEBSOCKET_SYNC_MAX_SOCKETS_PER_USER:-4}"
+put WEBSOCKET_SYNC_REDIS_KEY_PREFIX "${WEBSOCKET_SYNC_REDIS_KEY_PREFIX:-srn:ws-sync:v1}"
+put WEBSOCKET_SYNC_REDIS_OPERATION_TIMEOUT_MS "${WEBSOCKET_SYNC_REDIS_OPERATION_TIMEOUT_MS:-1500}"
+put WEBSOCKET_SYNC_COMMAND_LEASE_TTL_MS "${WEBSOCKET_SYNC_COMMAND_LEASE_TTL_MS:-30000}"
+put WEBSOCKET_SYNC_SOCKET_LEASE_TTL_MS "${WEBSOCKET_SYNC_SOCKET_LEASE_TTL_MS:-75000}"
 put_opt WORKFLOWS_ENABLED "${WORKFLOWS_ENABLED:-}"
 put_opt WORKFLOWS_PUBLIC_URL "${WORKFLOWS_PUBLIC_URL:-}"
 

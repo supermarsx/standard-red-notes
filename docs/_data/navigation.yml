@@ -527,6 +527,8 @@
               url: /self-hosting.html#required-environment
             - title: External host
               url: /self-hosting.html#standard-red-notes-external-host
+            - title: Worker WebSocket sync
+              url: /self-hosting.html#worker-websocket-sync-and-http-fallback
             - title: Drop Compose host ports
               url: /self-hosting.html#compose-dropping-host-ports
             - title: nginx example
@@ -611,6 +613,8 @@
           url: /operations-hardening.html#operation-limits
         - title: Redis limits
           url: /operations-hardening.html#redis-limits
+        - title: WebSocket sync safety
+          url: /operations-hardening.html#websocket-sync-safety
         - title: Container hardening
           url: /operations-hardening.html#docker-image-and-runtime-hardening
         - title: Image pinning

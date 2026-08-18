@@ -166,7 +166,7 @@ to boot otherwise).
 | Variable                                | Purpose                                                                                                                                                                                                                   | How it's generated                                                 |
 | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
 | `AUTH_JWT_SECRET`                       | Signs/verifies cross-service JWTs across the server and the websocket-gateway.                                                                                                                                            | `openssl rand -hex 32` / .NET RNG                                  |
-| `AUTH_SERVER_ENCRYPTION_SERVER_KEY`     | Server-side encryption key for sensitive auth data (for example MFA secrets). Purpose-specific keys derived from it also protect email relay credentials and queued message payloads. Must be exactly 32 bytes of hex. | `openssl rand -hex 32` / .NET RNG                                  |
+| `AUTH_SERVER_ENCRYPTION_SERVER_KEY`     | Server-side encryption key for sensitive auth data (for example MFA secrets). Purpose-specific keys derived from it also protect email relay credentials and queued message payloads. Must be exactly 32 bytes of hex.    | `openssl rand -hex 32` / .NET RNG                                  |
 | `VALET_TOKEN_SECRET`                    | Signs the short-lived valet tokens that authorize file uploads/downloads.                                                                                                                                                 | `openssl rand -hex 32` / .NET RNG                                  |
 | `AUTH_SERVER_PSEUDO_KEY_PARAMS_KEY`     | Seed for pseudo key-params returned on login for unknown accounts (prevents user enumeration). The container auto-generates one if unset, but it would then change on every restart - so it is pinned in `.env`.          | `openssl rand -hex 32` / .NET RNG                                  |
 | `WEBSOCKET_GATEWAY_INTERNAL_SECRET`     | Shared secret authenticating the server -> websocket-gateway internal calls. Must match on both.                                                                                                                          | `openssl rand -hex 32` / .NET RNG                                  |
@@ -236,21 +236,21 @@ their enqueue-time retry and expiry values and remain visible after a limit
 change. Producer readiness is still bound to the exact current policy, so a
 rolling deployment safely pauses new acceptance until auth and gateway agree.
 
-| Variable                             | Default      | Purpose                                                        |
-| ------------------------------------ | ------------ | -------------------------------------------------------------- |
-| `CACHE_APPENDFSYNC`                  | `everysec`   | Redis background AOF policy; keep AOF enabled.                 |
-| `EMAIL_QUEUE_MAX_JOB_BYTES`          | `26214400`   | Maximum encrypted payload size for one job (25 MiB).           |
-| `EMAIL_QUEUE_MAX_TOTAL_BYTES`        | `67108864`   | Total encrypted email-queue budget (64 MiB).                   |
-| `EMAIL_QUEUE_MAX_ATTEMPTS`           | `5`          | Maximum delivery attempts before dead-lettering.               |
-| `EMAIL_QUEUE_RETENTION_MS`           | `2592000000` | Ready/leased queue retention (30 days).                        |
-| `EMAIL_QUEUE_DEAD_RETENTION_MS`      | `2592000000` | Dead-letter retention (30 days).                               |
-| `EMAIL_QUEUE_LEASE_MS`               | `120000`     | Worker lease, renewed by a heartbeat during provider work.     |
-| `EMAIL_DELIVERY_WORKER_INTERVAL_MS`  | `5000`       | Queue polling interval.                                        |
-| `EMAIL_DELIVERY_WORKER_BATCH_SIZE`   | `25`         | Maximum jobs processed per worker tick.                        |
-| `EMAIL_DELIVERY_RETRY_BASE_MS`       | `30000`      | Initial retry delay.                                           |
-| `EMAIL_DELIVERY_RETRY_MAX_MS`        | `21600000`   | Maximum retry delay (6 hours).                                 |
-| `EMAIL_DELIVERY_LOG_RETENTION_MS`    | `2592000000` | Redacted attempt-log retention (30 days).                      |
-| `EMAIL_DELIVERY_LOG_MAX_ENTRIES`     | `10000`      | Maximum retained attempt-log records.                          |
+| Variable                            | Default      | Purpose                                                    |
+| ----------------------------------- | ------------ | ---------------------------------------------------------- |
+| `CACHE_APPENDFSYNC`                 | `everysec`   | Redis background AOF policy; keep AOF enabled.             |
+| `EMAIL_QUEUE_MAX_JOB_BYTES`         | `26214400`   | Maximum encrypted payload size for one job (25 MiB).       |
+| `EMAIL_QUEUE_MAX_TOTAL_BYTES`       | `67108864`   | Total encrypted email-queue budget (64 MiB).               |
+| `EMAIL_QUEUE_MAX_ATTEMPTS`          | `5`          | Maximum delivery attempts before dead-lettering.           |
+| `EMAIL_QUEUE_RETENTION_MS`          | `2592000000` | Ready/leased queue retention (30 days).                    |
+| `EMAIL_QUEUE_DEAD_RETENTION_MS`     | `2592000000` | Dead-letter retention (30 days).                           |
+| `EMAIL_QUEUE_LEASE_MS`              | `120000`     | Worker lease, renewed by a heartbeat during provider work. |
+| `EMAIL_DELIVERY_WORKER_INTERVAL_MS` | `5000`       | Queue polling interval.                                    |
+| `EMAIL_DELIVERY_WORKER_BATCH_SIZE`  | `25`         | Maximum jobs processed per worker tick.                    |
+| `EMAIL_DELIVERY_RETRY_BASE_MS`      | `30000`      | Initial retry delay.                                       |
+| `EMAIL_DELIVERY_RETRY_MAX_MS`       | `21600000`   | Maximum retry delay (6 hours).                             |
+| `EMAIL_DELIVERY_LOG_RETENTION_MS`   | `2592000000` | Redacted attempt-log retention (30 days).                  |
+| `EMAIL_DELIVERY_LOG_MAX_ENTRIES`    | `10000`      | Maximum retained attempt-log records.                      |
 
 `EMAIL_ATTACHMENT_MAX_BYTE_SIZE` is validated against
 `EMAIL_QUEUE_MAX_JOB_BYTES` on the durable topology. Queue storage includes two
@@ -422,14 +422,64 @@ Route the whole hostname to the app front door (`app` container, host port
   door strips the `/files` prefix). Point `PUBLIC_FILES_SERVER_URL` at the
   public app origin + `/files`, e.g. `https://notes.example.com/files`.
 - `/sockets` -> the **websocket gateway** (in-process inside the api-gateway on
-  port 3000). The `/sockets` path needs the WebSocket Upgrade headers - the
+  port 3000). The `/sockets` paths need the WebSocket Upgrade headers - the
   front door already sends them, but YOUR proxy must pass `Upgrade`/`Connection`
-  through too. The browser opens `wss://<host>/sockets`. (`WEB_SOCKET_SERVER_URL`
+  through too. Legacy realtime opens `wss://<host>/sockets`; the primary item
+  sync transport opens `wss://<host>/sockets/sync`. (`WEB_SOCKET_SERVER_URL`
   is container-internal - the api-gateway minting tokens against itself - and
   should stay at its default.)
   The web client does not hard-code an API origin - it defaults to its own origin
   and follows the gateway's advertised files URL - so single-origin routing works
   out of the box. n8n is deliberately not part of this path router.
+
+### Worker WebSocket sync and HTTP fallback
+
+Durable item sync prefers a dedicated client Worker connected to
+`/sockets/sync`. The client first reads
+`GET /v1/sockets/sync/capabilities`, then uses its normal authenticated session
+to request a one-use ticket from `POST /v1/sockets/sync/ticket`. Neither the
+bearer credential nor ticket is placed in the URL: the WebSocket URL must have
+no query string, and the ticket is sent in the first protocol `AUTH` frame.
+Normal HTTP sync remains the same-command fallback for unavailable sockets,
+disconnects, and the operator kill switch.
+
+The transport defaults on. Set exact `WEBSOCKET_SYNC_ENABLED=false` to disable
+it; any other non-empty value is a startup error. An empty
+`WEBSOCKET_SYNC_ALLOWED_ORIGINS` derives one exact HTTP(S) origin from
+`PUBLIC_URL`. Explicit entries are comma-separated exact origins; wildcard,
+`null`, `file:`, credential-bearing, path, query, and fragment values are
+rejected. Redis backs one-use tickets, command leases, and the fleet-wide
+per-user socket budget, so every production replica observes the same state.
+If the exact origin, durable sync backend, connection secret, or Redis state is
+missing, capability negotiation stays closed and the client uses HTTP.
+
+Relevant tuning variables are `WEBSOCKET_SYNC_MAX_SOCKETS_PER_USER` (default
+`4`), `WEBSOCKET_SYNC_REDIS_KEY_PREFIX` (default `srn:ws-sync:v1`),
+`WEBSOCKET_SYNC_REDIS_OPERATION_TIMEOUT_MS` (default `1500`),
+`WEBSOCKET_SYNC_COMMAND_LEASE_TTL_MS` (default `30000`), and
+`WEBSOCKET_SYNC_SOCKET_LEASE_TTL_MS` (default `75000`). The single-container
+and LXC topologies do not bundle Redis; provide `REDIS_HOST`/`REDIS_PORT` to
+enable socket sync there, or leave them unset for HTTP fallback. Their connector
+supports only host and port, without Redis authentication or TLS, so external
+Redis is supported only on the same private trusted network. Never publish it
+or route it across a trust boundary.
+
+In the multi-process topology, setup also generates
+`SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET`. This purpose-specific key signs the
+API-gateway's durable gRPC command/status metadata and is verified by the
+syncing-server; never reuse `AUTH_JWT_SECRET`. Missing it keeps the worker
+WebSocket capability closed while HTTP sync remains available. The bundled
+HomeServer uses a direct in-process durable adapter and intentionally does not
+invent or validate gRPC credentials.
+
+When upgrading an older multi-container installation, run the normal setup
+script once (`./scripts/setup.sh --yes` or `./scripts/setup.ps1 -Yes`) before
+recreating the server. If this purpose-specific key is absent, setup generates
+exactly one 32-byte value and adds it through one atomic `.env` rewrite with a
+timestamped backup; it preserves every existing value, comment, and permission.
+A valid existing key is never rotated, while a duplicate or malformed value
+stops migration without modifying `.env`. Recreate the bundled server only
+after that migration so its API-gateway and syncing-server receive the same key.
 
 `ENFORCE_HTTPS_FROM_PROXY=true` is defense in depth, not a TLS terminator. The
 outer proxy is the public trust boundary: it must overwrite (not append to)
@@ -642,12 +692,19 @@ environment values, URL rejection rules, MCP connection, and revocation.
   ```
 
 - **Websocket upgrade through the proxy.** Confirm the proxy upgrades the
-  connection (HTTP 101):
+  sync connection (HTTP 101). This transport-only probe deliberately omits the
+  first `AUTH` frame, so the server closes it after the handshake:
 
   ```bash
-  curl -sik -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
-    -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGVzdA==' \
-    https://notes.example.com/sockets/
+  curl -fsS https://notes.example.com/v1/sockets/sync/capabilities
+  # expect capabilities[0]: id=ws-sync, version=1, endpoint=/sockets/sync
+
+  curl -sik --http1.1 --max-time 2 \
+    -H 'Origin: https://notes.example.com' \
+    -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+    -H 'Sec-WebSocket-Version: 13' \
+    -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
+    https://notes.example.com/sockets/sync
   # expect: HTTP/1.1 101 Switching Protocols
   ```
 
@@ -788,16 +845,16 @@ pre-upgrade snapshot.
 Data is stored in Docker **named volumes**, so it survives `docker compose down`
 and container rebuilds:
 
-| Volume         | Holds                                                          | Notes                                                  |
-| -------------- | -------------------------------------------------------------- | ------------------------------------------------------ |
-| `mysql-data`   | Legacy MySQL 8.4 database from older Compose releases.         | Migration source only; never mount it into MariaDB.    |
-| `mariadb-data` | The MariaDB database - **all accounts, notes, and revisions**. | The one to back up.                                    |
-| `redis-data`   | Redis AOF for cache/sessions/pub-sub and encrypted queued mail. | Back up to preserve pending/dead email jobs and logs.  |
-| `uploads`      | Uploaded file attachments stored by the files service.         | Back this up alongside the DB if you use file uploads. |
+| Volume         | Holds                                                                        | Notes                                                  |
+| -------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------ |
+| `mysql-data`   | Legacy MySQL 8.4 database from older Compose releases.                       | Migration source only; never mount it into MariaDB.    |
+| `mariadb-data` | The MariaDB database - **all accounts, notes, and revisions**.               | The one to back up.                                    |
+| `redis-data`   | Redis AOF for cache/sessions/pub-sub and encrypted queued mail.              | Back up to preserve pending/dead email jobs and logs.  |
+| `uploads`      | Uploaded file attachments stored by the files service.                       | Back this up alongside the DB if you use file uploads. |
 | `server-data`  | Gateway admin settings, encrypted relay profiles, and subscription pairings. | Back up with the matching encryption keys.             |
-| `server-logs`  | Server process logs.                                           | Disposable.                                            |
-| `mcp-data`     | MCP bridge local state (only with the `mcp` profile).          | Disposable.                                            |
-| `n8n-data`     | n8n database/config/credentials (only with `workflows`).       | Back up with the matching `N8N_ENCRYPTION_KEY`.        |
+| `server-logs`  | Server process logs.                                                         | Disposable.                                            |
+| `mcp-data`     | MCP bridge local state (only with the `mcp` profile).                        | Disposable.                                            |
+| `n8n-data`     | n8n database/config/credentials (only with `workflows`).                     | Back up with the matching `N8N_ENCRYPTION_KEY`.        |
 
 List them with `docker volume ls | grep standard-red-notes`.
 
@@ -950,6 +1007,17 @@ Confirm the queues exist (the `-compat` image ships `awslocal`):
 ```bash
 docker compose exec floci awslocal sqs list-queues
 ```
+
+For item-sync sockets, also inspect the capability response:
+
+```bash
+curl -fsS https://notes.example.com/v1/sockets/sync/capabilities
+```
+
+An empty `capabilities` array means the server intentionally failed closed.
+Verify `PUBLIC_URL` (or the exact allowed-origin list), the two WebSocket
+secrets, the durable syncing service, and Redis reachability. HTTP sync should
+continue while you repair the socket plane.
 
 If you previously ran the LocalStack-based stack, a leftover
 `standard-red-notes_localstack-data` volume can be deleted — floci doesn't use

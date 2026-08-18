@@ -38,7 +38,10 @@ import {
   validateSingleHomeServerBindContract,
   validateSingleEntrypointAssistantPropagation,
   validateSingleEntrypointAuthStepUpPropagation,
+  validateSyncGrpcAuthComposeContract,
   validateSingleContainerSQLiteMigrationContract,
+  validateWebSocketProxyNginxContract,
+  validateWebSocketSyncComposeContract,
 } from "./validate-docker-hardening.mjs";
 
 function deploymentIdentityFixture() {
@@ -268,7 +271,8 @@ test("pins the single-container backend to loopback without changing the standal
   const valid = {
     homeServerSource: `
       const bindAddress = env.get('BIND_ADDRESS', true) || undefined
-      const serverInstance = listenHomeServer(app, port, bindAddress)
+      const serverInstance = http.createServer(app)
+      listenHomeServer(serverInstance, port, bindAddress)
     `,
     singleEntrypointSource: "put BIND_ADDRESS 127.0.0.1",
   };
@@ -1035,6 +1039,88 @@ test("requires operator-overridable secure defaults in raw Compose and the singl
   );
 });
 
+test("requires a distinct fail-closed durable gRPC HMAC secret in multi Compose", () => {
+  const key = "SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET";
+  const config = { services: { server: { environment: { [key]: "" } } } };
+  const source = `${key}: \${${key}:-}`;
+
+  assert.deepEqual(
+    validateSyncGrpcAuthComposeContract(config, source, {
+      serviceName: "server",
+      label: "multi compose",
+    }),
+    [],
+  );
+  assert.match(
+    validateSyncGrpcAuthComposeContract(
+      { services: { server: { environment: {} } } },
+      source,
+      { serviceName: "server", label: "multi compose" },
+    ).join("\n"),
+    /must propagate SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET/,
+  );
+  assert.match(
+    validateSyncGrpcAuthComposeContract(
+      config,
+      `${key}: \${AUTH_JWT_SECRET:-}`,
+      { serviceName: "server", label: "multi compose" },
+    ).join("\n"),
+    /distinct operator secret/,
+  );
+});
+
+test("requires the complete WebSocket sync and file-download safety matrix in both Compose topologies", () => {
+  const environment = {
+    WEBSOCKET_SYNC_ENABLED: "true",
+    WEBSOCKET_SYNC_ALLOWED_ORIGINS: "",
+    WEBSOCKET_SYNC_MAX_SOCKETS_PER_USER: "4",
+    WEBSOCKET_SYNC_REDIS_KEY_PREFIX: "srn:ws-sync:v1",
+    WEBSOCKET_SYNC_REDIS_OPERATION_TIMEOUT_MS: "1500",
+    WEBSOCKET_SYNC_COMMAND_LEASE_TTL_MS: "30000",
+    WEBSOCKET_SYNC_SOCKET_LEASE_TTL_MS: "75000",
+    FILE_DOWNLOAD_DEADLINE_MS: "30000",
+  };
+  const source = Object.entries(environment)
+    .map(([key, value]) => `${key}: \${${key}:-${value}}`)
+    .join("\n");
+
+  for (const serviceName of ["server", "app"]) {
+    const label = serviceName === "server" ? "multi compose" : "single compose";
+    const config = {
+      services: { [serviceName]: { environment: { ...environment } } },
+    };
+    assert.deepEqual(
+      validateWebSocketSyncComposeContract(config, source, {
+        serviceName,
+        label,
+      }),
+      [],
+    );
+
+    const missing = structuredClone(config);
+    delete missing.services[serviceName].environment
+      .WEBSOCKET_SYNC_SOCKET_LEASE_TTL_MS;
+    assert.match(
+      validateWebSocketSyncComposeContract(missing, source, {
+        serviceName,
+        label,
+      }).join("\n"),
+      /must propagate WEBSOCKET_SYNC_SOCKET_LEASE_TTL_MS/,
+    );
+    assert.match(
+      validateWebSocketSyncComposeContract(
+        config,
+        source.replace(
+          "FILE_DOWNLOAD_DEADLINE_MS: ${FILE_DOWNLOAD_DEADLINE_MS:-30000}",
+          "FILE_DOWNLOAD_DEADLINE_MS: ${FILE_DOWNLOAD_DEADLINE_MS:-0}",
+        ),
+        { serviceName, label },
+      ).join("\n"),
+      /FILE_DOWNLOAD_DEADLINE_MS must remain operator-overridable/,
+    );
+  }
+});
+
 test("rejects missing assistant propagation, an ephemeral token path, or the wrong data volume", () => {
   const config = pairingComposeFixture();
   delete config.services.server.environment.ASSISTANT_DEFAULT_MODEL;
@@ -1162,6 +1248,50 @@ test("requires an exact OAuth callback proxy location with access logging disabl
       },
     ),
     ["single nginx: callback location must disable access logging"],
+  );
+});
+
+test("requires /sockets to preserve WebSocket upgrades and long-lived proxy timeouts", () => {
+  const block = `
+    map $http_upgrade $connection_upgrade { default upgrade; '' close; }
+    server {
+      location /sockets {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Host $host;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+      }
+    }
+  `;
+  assert.deepEqual(
+    validateWebSocketProxyNginxContract(block, {
+      label: "single nginx",
+      proxyPass: "http://127.0.0.1:3000",
+    }),
+    [],
+  );
+  assert.match(
+    validateWebSocketProxyNginxContract(
+      block.replace("proxy_set_header Upgrade $http_upgrade;", ""),
+      {
+        label: "single nginx",
+        proxyPass: "http://127.0.0.1:3000",
+      },
+    ).join("\n"),
+    /must forward Upgrade/,
+  );
+  assert.match(
+    validateWebSocketProxyNginxContract(
+      block.replace("proxy_send_timeout 86400s;", "proxy_send_timeout 60s;"),
+      {
+        label: "single nginx",
+        proxyPass: "http://127.0.0.1:3000",
+      },
+    ).join("\n"),
+    /must retain long-lived writes/,
   );
 });
 

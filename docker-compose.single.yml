@@ -74,6 +74,17 @@ services:
       # before enabling workflows or subscription pairing. The setup scripts
       # generate a correct local or production value.
       PUBLIC_URL: ${PUBLIC_URL:-}
+      # The HomeServer socket command plane is default-on but fails closed unless
+      # an exact public origin and external shared Redis state are configured.
+      WEBSOCKET_SYNC_ENABLED: ${WEBSOCKET_SYNC_ENABLED:-true}
+      WEBSOCKET_SYNC_ALLOWED_ORIGINS: ${WEBSOCKET_SYNC_ALLOWED_ORIGINS:-}
+      WEBSOCKET_SYNC_MAX_SOCKETS_PER_USER: ${WEBSOCKET_SYNC_MAX_SOCKETS_PER_USER:-4}
+      WEBSOCKET_SYNC_REDIS_KEY_PREFIX: ${WEBSOCKET_SYNC_REDIS_KEY_PREFIX:-srn:ws-sync:v1}
+      WEBSOCKET_SYNC_REDIS_OPERATION_TIMEOUT_MS: ${WEBSOCKET_SYNC_REDIS_OPERATION_TIMEOUT_MS:-1500}
+      WEBSOCKET_SYNC_COMMAND_LEASE_TTL_MS: ${WEBSOCKET_SYNC_COMMAND_LEASE_TTL_MS:-30000}
+      WEBSOCKET_SYNC_SOCKET_LEASE_TTL_MS: ${WEBSOCKET_SYNC_SOCKET_LEASE_TTL_MS:-75000}
+      REDIS_HOST: ${REDIS_HOST:-}
+      REDIS_PORT: ${REDIS_PORT:-6379}
       # Optional discovery link to an independently deployed/authenticated n8n.
       # The single container never proxies n8n.
       WORKFLOWS_ENABLED: ${WORKFLOWS_ENABLED:-false}
@@ -126,6 +137,7 @@ services:
       REGISTRATION_APPROVAL_REQUIRED: ${REGISTRATION_APPROVAL_REQUIRED:-false}
       HTTP_REQUEST_PAYLOAD_LIMIT_MEGABYTES: ${HTTP_REQUEST_PAYLOAD_LIMIT_MEGABYTES:-50}
       MAX_CHUNK_BYTES: ${MAX_CHUNK_BYTES:-100000000}
+      FILE_DOWNLOAD_DEADLINE_MS: ${FILE_DOWNLOAD_DEADLINE_MS:-30000}
       MAX_ATTACHMENT_BYTE_SIZE: ${MAX_ATTACHMENT_BYTE_SIZE:-5368709120}
 
       # --- Optional outbound email and encrypted backup delivery --------------

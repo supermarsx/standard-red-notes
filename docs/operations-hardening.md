@@ -20,15 +20,15 @@ only on the Compose network.
 
 The MariaDB service now starts with explicit safety defaults:
 
-| Control | Default | Why it exists |
-| --- | ---: | --- |
-| `DB_MAX_CONNECTIONS` | `150` | Keeps a runaway client pool from exhausting the server. |
-| `DB_CONNECTION_LIMIT` | `20` per Node process | Bounds each TypeORM pool. Keep the DB max above the sum of active pools. |
-| `DB_MAX_QUERY_EXECUTION_TIME` | `45000` ms | Logs slow queries for diagnosis. |
-| `DB_INNODB_BUFFER_POOL_SIZE` | `512M` | Gives InnoDB a bounded cache within the default `DB_MEM_LIMIT=1g`. |
-| `DB_MAX_ALLOWED_PACKET` | `128M` | Allows large encrypted payloads without leaving the packet size unbounded. |
-| `DB_INNODB_FLUSH_LOG_AT_TRX_COMMIT` | `1` | Favors crash durability by flushing transaction logs at commit. |
-| `local_infile` | disabled | Removes an unnecessary file-loading surface. |
+| Control                             |               Default | Why it exists                                                              |
+| ----------------------------------- | --------------------: | -------------------------------------------------------------------------- |
+| `DB_MAX_CONNECTIONS`                |                 `150` | Keeps a runaway client pool from exhausting the server.                    |
+| `DB_CONNECTION_LIMIT`               | `20` per Node process | Bounds each TypeORM pool. Keep the DB max above the sum of active pools.   |
+| `DB_MAX_QUERY_EXECUTION_TIME`       |            `45000` ms | Logs slow queries for diagnosis.                                           |
+| `DB_INNODB_BUFFER_POOL_SIZE`        |                `512M` | Gives InnoDB a bounded cache within the default `DB_MEM_LIMIT=1g`.         |
+| `DB_MAX_ALLOWED_PACKET`             |                `128M` | Allows large encrypted payloads without leaving the packet size unbounded. |
+| `DB_INNODB_FLUSH_LOG_AT_TRX_COMMIT` |                   `1` | Favors crash durability by flushing transaction logs at commit.            |
+| `local_infile`                      |              disabled | Removes an unnecessary file-loading surface.                               |
 
 The `db` healthcheck runs a real `SELECT 1` against the configured application
 database instead of only checking that the MariaDB process is alive.
@@ -122,18 +122,19 @@ database image upgrades, memory reductions, or major version moves.
 The stack has several independent limits. They are intentionally layered because
 each protects a different failure mode.
 
-| Surface | Default | Control |
-| --- | ---: | --- |
-| Gateway JSON/body payload | `50 MB` | `HTTP_REQUEST_PAYLOAD_LIMIT_MEGABYTES` |
-| File upload chunk | `100,000,000` bytes | `MAX_CHUNK_BYTES` |
-| Absolute attachment size | `5 GiB` | `MAX_ATTACHMENT_BYTE_SIZE` |
-| Login/recovery attempts | `10/min/IP` | `RATE_LIMIT_LOGIN_MAX`, `RATE_LIMIT_WINDOW_SECONDS` |
-| Registration and magic-link-sensitive calls | `5/min/IP` | `RATE_LIMIT_REGISTRATION_MAX` |
-| Authenticated expensive endpoints | off | `RATE_LIMIT_USER_MAX`, `RATE_LIMIT_USER_WINDOW_SECONDS` |
-| AI daily request cap | off | `ASSISTANT_DAILY_REQUEST_LIMIT` |
-| AI token windows | off | `ASSISTANT_5H_TOKEN_LIMIT`, `ASSISTANT_WEEKLY_TOKEN_LIMIT` |
-| Server-side OCR | off | `OCR_SERVER_ENABLED`, `OCR_SERVER_MAX_PAGES`, `OCR_SERVER_MAX_IMAGE_BYTES` |
-| Revision retention | unlimited | `REVISIONS_RETENTION_DAYS`, `REVISIONS_MAX_COUNT_PER_ITEM` |
+| Surface                                     |             Default | Control                                                                    |
+| ------------------------------------------- | ------------------: | -------------------------------------------------------------------------- |
+| Gateway JSON/body payload                   |             `50 MB` | `HTTP_REQUEST_PAYLOAD_LIMIT_MEGABYTES`                                     |
+| File upload chunk                           | `100,000,000` bytes | `MAX_CHUNK_BYTES`                                                          |
+| File download request deadline              |        `30 seconds` | `FILE_DOWNLOAD_DEADLINE_MS`                                                |
+| Absolute attachment size                    |             `5 GiB` | `MAX_ATTACHMENT_BYTE_SIZE`                                                 |
+| Login/recovery attempts                     |         `10/min/IP` | `RATE_LIMIT_LOGIN_MAX`, `RATE_LIMIT_WINDOW_SECONDS`                        |
+| Registration and magic-link-sensitive calls |          `5/min/IP` | `RATE_LIMIT_REGISTRATION_MAX`                                              |
+| Authenticated expensive endpoints           |                 off | `RATE_LIMIT_USER_MAX`, `RATE_LIMIT_USER_WINDOW_SECONDS`                    |
+| AI daily request cap                        |                 off | `ASSISTANT_DAILY_REQUEST_LIMIT`                                            |
+| AI token windows                            |                 off | `ASSISTANT_5H_TOKEN_LIMIT`, `ASSISTANT_WEEKLY_TOKEN_LIMIT`                 |
+| Server-side OCR                             |                 off | `OCR_SERVER_ENABLED`, `OCR_SERVER_MAX_PAGES`, `OCR_SERVER_MAX_IMAGE_BYTES` |
+| Revision retention                          |           unlimited | `REVISIONS_RETENTION_DAYS`, `REVISIONS_MAX_COUNT_PER_ITEM`                 |
 
 Unauthenticated rate limits are Redis-backed and fail open if Redis is down, so a
 cache outage cannot lock legitimate users out of their notes. The tradeoff is
@@ -181,6 +182,58 @@ write errors instead of being OOM-killed. `noeviction` avoids silently discardin
 keys that may represent rate-limit or transient operation state. If you operate
 a high-churn instance and accept eviction semantics, choose a policy explicitly.
 
+## WebSocket Sync Safety
+
+Worker WebSocket sync is the preferred transport, with the durable HTTP command
+path as fallback. It is advertised only when the exact browser origin, durable
+sync backend, and fleet-shared Redis ticket/lease/socket stores are all ready.
+This keeps a partial rollout from accepting work that another replica cannot
+resume safely.
+
+| Variable                                    |                   Default | Operational effect                                                                                                                                                                                      |
+| ------------------------------------------- | ------------------------: | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `WEBSOCKET_SYNC_ENABLED`                    |                    `true` | Exact `false` is the emergency kill switch. Any other non-empty boolean spelling fails startup.                                                                                                         |
+| `WEBSOCKET_SYNC_ALLOWED_ORIGINS`            | derived from `PUBLIC_URL` | Comma-separated exact origins; wildcard, `null`, `file:`, URL paths, credentials, queries, and fragments are rejected.                                                                                  |
+| `WEBSOCKET_SYNC_MAX_SOCKETS_PER_USER`       |                       `4` | Fleet-wide live worker-socket budget for one user.                                                                                                                                                      |
+| `WEBSOCKET_SYNC_REDIS_KEY_PREFIX`           |          `srn:ws-sync:v1` | Namespace for tickets, command leases, and socket leases. Use a distinct value when multiple installations share Redis.                                                                                 |
+| `WEBSOCKET_SYNC_REDIS_OPERATION_TIMEOUT_MS` |                    `1500` | Fails capability/commands closed when Redis does not answer promptly.                                                                                                                                   |
+| `WEBSOCKET_SYNC_COMMAND_LEASE_TTL_MS`       |                   `30000` | Bounds ownership of one durable command across reconnects/replicas.                                                                                                                                     |
+| `WEBSOCKET_SYNC_SOCKET_LEASE_TTL_MS`        |                   `75000` | Bounds stale fleet-wide socket reservations after a dead process.                                                                                                                                       |
+| `SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET`  |        generated by setup | Separate HMAC key for standalone API-gateway to syncing-server durable command/status metadata. Missing closes socket capability; never reuse `AUTH_JWT_SECRET`. HomeServer direct calls do not use it. |
+
+Single-container and LXC deployments accept only `REDIS_HOST`/`REDIS_PORT` for
+this socket plane; that connector has no Redis authentication or TLS support.
+Use it only on the same private trusted network. Otherwise leave Redis unset and
+retain HTTP fallback.
+
+On a multi-container upgrade from a keyless release, a normal setup rerun adds
+only this missing key using one atomic, permission-preserving `.env` migration
+and timestamped backup. It refuses malformed or duplicate assignments and does
+not rotate an existing valid key.
+
+The browser first checks the unauthenticated capability document, then mints a
+one-use ticket over its authenticated HTTP session. The upgrade URL contains no
+credential or ticket; the ticket arrives in the first `AUTH` frame. A transport
+probe therefore needs only an exact allowed `Origin` and a valid WebSocket key:
+
+```bash
+curl -fsS "$PUBLIC_URL/v1/sockets/sync/capabilities"
+# enabled: {"capabilities":[{"id":"ws-sync","version":1,"endpoint":"/sockets/sync"}]}
+
+curl -sik --http1.1 --max-time 2 \
+  -H "Origin: $PUBLIC_URL" \
+  -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+  -H 'Sec-WebSocket-Version: 13' \
+  -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
+  "$PUBLIC_URL/sockets/sync"
+# expect 101; the unauthenticated probe then closes because it sends no AUTH frame
+```
+
+During shutdown the public capability provider is cleared before the gateway is
+drained, and the HTTP listener closes only after that drain. Monitor Redis
+latency/errors and empty capability responses together; HTTP sync should remain
+available while the socket plane is intentionally closed.
+
 ## Docker Image And Runtime Hardening
 
 The stack is designed so the app front door is the only publicly reachable
@@ -191,16 +244,16 @@ mapping and use a dedicated TLS proxy hostname.
 
 Runtime hardening currently includes:
 
-| Service | Hardening |
-| --- | --- |
-| `app` | Unprivileged nginx image, `no-new-privileges`, all capabilities dropped, memory/PID limits, tmpfs scratch paths. |
-| `server` | Unprivileged `srn` user, no compiler toolchain in runtime stage, `no-new-privileges`, all capabilities dropped, memory/PID limits, internal-only ports. |
-| `db` | Internal-only MariaDB, least capabilities for official entrypoint ownership drop, memory/PID/no-file limits, graceful stop period. |
-| `cache` | Internal-only Redis, least capabilities for user drop, memory/PID/no-file limits, explicit Redis maxmemory. |
-| `floci` | Internal-only SNS/SQS emulator, `no-new-privileges`, all capabilities dropped, memory/PID limits. |
-| `n8n` | Optional profile, unprivileged image, all capabilities dropped, persistent credential volume, loopback-only development port; independent TLS/auth in production. |
-| `docker-socket-proxy` | Optional profile, raw socket mounted only here, all Docker API surfaces denied except restart endpoints. |
-| single-container profile | Unprivileged `srn` user, capability drop, `no-new-privileges`, memory/PID limits, tmpfs `/tmp`, one published port. |
+| Service                  | Hardening                                                                                                                                                         |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app`                    | Unprivileged nginx image, `no-new-privileges`, all capabilities dropped, memory/PID limits, tmpfs scratch paths.                                                  |
+| `server`                 | Unprivileged `srn` user, no compiler toolchain in runtime stage, `no-new-privileges`, all capabilities dropped, memory/PID limits, internal-only ports.           |
+| `db`                     | Internal-only MariaDB, least capabilities for official entrypoint ownership drop, memory/PID/no-file limits, graceful stop period.                                |
+| `cache`                  | Internal-only Redis, least capabilities for user drop, memory/PID/no-file limits, explicit Redis maxmemory.                                                       |
+| `floci`                  | Internal-only SNS/SQS emulator, `no-new-privileges`, all capabilities dropped, memory/PID limits.                                                                 |
+| `n8n`                    | Optional profile, unprivileged image, all capabilities dropped, persistent credential volume, loopback-only development port; independent TLS/auth in production. |
+| `docker-socket-proxy`    | Optional profile, raw socket mounted only here, all Docker API surfaces denied except restart endpoints.                                                          |
+| single-container profile | Unprivileged `srn` user, capability drop, `no-new-privileges`, memory/PID limits, tmpfs `/tmp`, one published port.                                               |
 
 `read_only` is not globally enabled because several containers intentionally
 rewrite runtime config, write supervisor logs, write sqlite/uploads, or maintain

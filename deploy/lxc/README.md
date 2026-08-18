@@ -5,7 +5,9 @@ container** (Proxmox or `lxd`/`incus`) — no Docker required. Uses the same
 single-process backend as the all-in-one container image: the **home-server**
 (auth + syncing + files + revisions + api-gateway in one Node process) with
 **embedded sqlite + in-memory cache + in-process events**, fronted by **nginx**
-serving the web app. Zero external services (no MySQL, no Redis).
+serving the web app. The baseline needs no MySQL or Redis. An external Redis
+instance is optional and enables the primary WebSocket sync transport; without
+it, clients keep using the normal HTTP sync path.
 
 ## What the installer does
 
@@ -27,6 +29,44 @@ container:
 
 The home-server backend is pinned to `127.0.0.1:3000` in both the generated
 environment and launcher. nginx is the only network-facing listener.
+
+### Optional WebSocket sync
+
+WebSocket sync is default-on at the application level, but it deliberately
+fails closed unless the HomeServer has a connection-token secret, an exact
+browser origin, and shared Redis state. The installer creates and preserves the
+two WebSocket secrets automatically. To activate the socket transport, provide
+Redis and the canonical public URL when installing or upgrading:
+
+```sh
+PUBLIC_URL=https://notes.example.com \
+REDIS_HOST=10.0.0.20 REDIS_PORT=6379 \
+./install.sh
+```
+
+When `WEBSOCKET_SYNC_ALLOWED_ORIGINS` is empty, the server derives the one exact
+HTTP(S) origin from `PUBLIC_URL`. Set a comma-separated list only when clients
+really use multiple exact origins. Wildcards, `null`, `file:` URLs, URL paths,
+credentials, queries, and fragments are rejected at startup. The only disable
+value is exact `WEBSOCKET_SYNC_ENABLED=false`; misspellings also fail startup
+instead of silently changing transport policy.
+
+If Redis is absent or unreachable, the WebSocket capability stays unavailable
+and clients fall back to HTTP. The installer does not install or expose Redis.
+This integration supports only a host and port, without Redis authentication or
+TLS, so the Redis endpoint must stay on the same private trusted network as the
+LXC. Do not publish it or route it across a trust boundary; leave Redis unset
+and use HTTP fallback when that isolation is unavailable.
+
+File downloads have one request-wide 30-second deadline by default, covering
+metadata lookup, stream acquisition, and the response body. Set a positive
+whole-millisecond `FILE_DOWNLOAD_DEADLINE_MS` during install or upgrade to tune
+it; the installer rejects zero, negative, fractional, or unsafe integer values.
+
+LXC runs the syncing service in the same HomeServer process, so its durable
+adapter calls the journal directly. It intentionally does not generate or use
+the multi-process `SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET`; no fake gRPC
+credential crosses that in-process boundary.
 
 The staged boot uses an isolated fresh SQLite database. It verifies startup and
 schema creation without reading or changing the production database.
@@ -93,6 +133,7 @@ HTTP_PORT=8080 DATA_DIR=/srv/notes-data ./install.sh
 # From the host or another machine on the network:
 curl -fsS http://<container-ip>/healthcheck/readiness # -> aggregate 200 only when ready
 curl -fsS http://<container-ip>/.well-known/srn-deployment.json # -> active sealed release
+curl -fsS http://<container-ip>/v1/sockets/sync/capabilities # -> enabled only with Redis + exact origin
 # Browser:
 http://<container-ip>/
 ```
@@ -155,6 +196,10 @@ systemctl start standard-red-notes
 > Keep `secrets.env` with the backup — without the same secrets, existing
 > sessions, encrypted MFA data, and assistant subscription pairings cannot be
 > recovered.
+
+The same root-only file also preserves the WebSocket connection-token and
+internal gateway secrets. Upgrading an older five/six-key installation adds
+those keys atomically without rotating any existing secret.
 
 The installer creates the assistant pairing-encryption key internally on first
 install and persists it in the root-only secrets file; administrators never need to invent or

@@ -21,6 +21,9 @@ x-server-env: &server-env
   REDIS_HOST: cache
   REDIS_PORT: 6379
   AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-dev-auth-jwt-secret-change-me}
+  # Purpose-specific HMAC shared by api-gateway and syncing-server for durable
+  # gRPC command/status calls. Empty keeps WebSocket sync capability closed.
+  SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET: ${SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET:-}
   # Must be a 64-char hex string (32 bytes); auth's CrypterNode validates this. Override in prod.
   AUTH_SERVER_ENCRYPTION_SERVER_KEY: ${AUTH_SERVER_ENCRYPTION_SERVER_KEY:-deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef}
   VALET_TOKEN_SECRET: ${VALET_TOKEN_SECRET:-dev-valet-token-secret-change-me}
@@ -68,6 +71,7 @@ x-server-env: &server-env
   # the files service even for otherwise unlimited accounts.
   HTTP_REQUEST_PAYLOAD_LIMIT_MEGABYTES: ${HTTP_REQUEST_PAYLOAD_LIMIT_MEGABYTES:-50}
   MAX_CHUNK_BYTES: ${MAX_CHUNK_BYTES:-100000000}
+  FILE_DOWNLOAD_DEADLINE_MS: ${FILE_DOWNLOAD_DEADLINE_MS:-30000}
   MAX_ATTACHMENT_BYTE_SIZE: ${MAX_ATTACHMENT_BYTE_SIZE:-5368709120}
   # Revision history retention. Both default to 0 = unlimited (no pruning),
   # preserving the upstream behavior. When set, the revisions service prunes a
@@ -107,6 +111,15 @@ x-server-env: &server-env
   # api-gateway rejects values outside the safe whole-second range 30..900.
   COLLABORATION_CAPABILITY_TTL_SECONDS: ${COLLABORATION_CAPABILITY_TTL_SECONDS:-300}
   WEBSOCKET_MAX_CONNECTIONS_PER_USER: ${WEBSOCKET_MAX_CONNECTIONS_PER_USER:-16}
+  # Worker WebSocket is the default durable item-sync transport. Redis-backed
+  # one-use tickets and leases make failover safe across api-gateway replicas.
+  WEBSOCKET_SYNC_ENABLED: ${WEBSOCKET_SYNC_ENABLED:-true}
+  WEBSOCKET_SYNC_ALLOWED_ORIGINS: ${WEBSOCKET_SYNC_ALLOWED_ORIGINS:-}
+  WEBSOCKET_SYNC_MAX_SOCKETS_PER_USER: ${WEBSOCKET_SYNC_MAX_SOCKETS_PER_USER:-4}
+  WEBSOCKET_SYNC_REDIS_KEY_PREFIX: ${WEBSOCKET_SYNC_REDIS_KEY_PREFIX:-srn:ws-sync:v1}
+  WEBSOCKET_SYNC_REDIS_OPERATION_TIMEOUT_MS: ${WEBSOCKET_SYNC_REDIS_OPERATION_TIMEOUT_MS:-1500}
+  WEBSOCKET_SYNC_COMMAND_LEASE_TTL_MS: ${WEBSOCKET_SYNC_COMMAND_LEASE_TTL_MS:-30000}
+  WEBSOCKET_SYNC_SOCKET_LEASE_TTL_MS: ${WEBSOCKET_SYNC_SOCKET_LEASE_TTL_MS:-75000}
   # SNS/SQS event source for realtime push: the gateway consumes the syncing
   # server's WEB_SOCKET_MESSAGE_REQUESTED events from this queue. The `floci`
   # service below emulates SNS/SQS; credentials are dummies (floci has no auth).

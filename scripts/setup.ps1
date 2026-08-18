@@ -113,6 +113,34 @@ function Get-AssistantSubscriptionKeyState {
   return [pscustomobject]@{ State = 'valid'; Value = $value }
 }
 
+function Get-SyncingServerInternalGrpcAuthSecretState {
+  param([string]$Path)
+
+  $assignments = @(Get-Content -LiteralPath $Path | Where-Object {
+    $_ -match '^\s*SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET\s*='
+  })
+  if ($assignments.Count -gt 1) {
+    throw 'SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET is assigned more than once in .env. Refusing ambiguous configuration.'
+  }
+  if ($assignments.Count -eq 0) {
+    return [pscustomobject]@{ State = 'missing'; Value = '' }
+  }
+
+  $value = ($assignments[0] -replace '^[^=]*=', '').Trim()
+  if ([string]::IsNullOrEmpty($value)) {
+    return [pscustomobject]@{ State = 'missing'; Value = '' }
+  }
+  if (($value.StartsWith('"') -and $value.EndsWith('"')) -or
+      ($value.StartsWith("'") -and $value.EndsWith("'"))) {
+    $value = $value.Substring(1, $value.Length - 2)
+  }
+  if ($value -notmatch '^[0-9a-fA-F]{64}$') {
+    throw 'SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET must be exactly 64 hexadecimal characters (32 bytes).'
+  }
+
+  return [pscustomobject]@{ State = 'valid'; Value = $value }
+}
+
 function Invoke-ComposeCommand {
   param([string[]]$Arguments)
   if ($Compose -eq 'docker compose') {
@@ -238,41 +266,70 @@ function Assert-NoExistingAssistantPairingData {
   }
 }
 
-function Add-AssistantSubscriptionKey {
-  param([string]$Path, [string]$Key)
+function Add-MissingEnvironmentSecrets {
+  param(
+    [string]$Path,
+    [string]$AssistantKey,
+    [string]$DurableGrpcAuthSecret
+  )
+
+  $addAssistant = -not [string]::IsNullOrEmpty($AssistantKey)
+  $addGrpcAuth = -not [string]::IsNullOrEmpty($DurableGrpcAuthSecret)
+  if (-not $addAssistant -and -not $addGrpcAuth) {
+    return
+  }
 
   $backup = "$Path.bak.$(Get-Date -Format 'yyyyMMddHHmmss')"
-  $temporary = "$Path.assistant-key.tmp.$PID"
+  $temporary = "$Path.secret-migration.tmp.$PID"
   if ((Test-Path -LiteralPath $backup) -or (Test-Path -LiteralPath $temporary)) {
     throw 'Refusing to overwrite an existing environment backup or migration temporary file.'
   }
-  Copy-Item -LiteralPath $Path -Destination $backup
 
-  $replaced = $false
+  $assistantReplaced = $false
+  $grpcAuthReplaced = $false
   $updated = foreach ($line in Get-Content -LiteralPath $Path) {
-    if ($line -match '^\s*ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY\s*=') {
-      $replaced = $true
-      "ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=$Key"
+    if ($addAssistant -and $line -match '^\s*ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY\s*=') {
+      $assistantReplaced = $true
+      "ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=$AssistantKey"
+    } elseif ($addGrpcAuth -and $line -match '^\s*SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET\s*=') {
+      $grpcAuthReplaced = $true
+      "SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET=$DurableGrpcAuthSecret"
     } else {
       $line
     }
   }
-  if (-not $replaced) {
+  if ($addAssistant -and -not $assistantReplaced) {
     $updated = @($updated) + @(
       '',
       '# Guided ChatGPT/Codex pairing credential encryption (32 random bytes).',
-      "ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=$Key"
+      "ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=$AssistantKey"
+    )
+  }
+  if ($addGrpcAuth -and -not $grpcAuthReplaced) {
+    $updated = @($updated) + @(
+      '',
+      '# Dedicated durable API-gateway -> syncing-server gRPC authentication (32 random bytes).',
+      "SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET=$DurableGrpcAuthSecret"
     )
   }
   try {
+    $attributes = [System.IO.File]::GetAttributes($Path)
     [System.IO.File]::WriteAllText($temporary, (($updated -join "`n") + "`n"), (New-Object System.Text.UTF8Encoding($false)))
-    Move-Item -LiteralPath $temporary -Destination $Path -Force
+    [System.IO.File]::SetAttributes($temporary, $attributes)
+    # ReplaceFile preserves the destination file's ACL while atomically moving
+    # its previous contents to the requested backup path.
+    [System.IO.File]::Replace($temporary, $Path, $backup)
   } finally {
     if (Test-Path -LiteralPath $temporary) {
       Remove-Item -LiteralPath $temporary -Force
     }
   }
-  Write-Ok 'Added a persistent assistant subscription encryption key.'
+  if ($addAssistant) {
+    Write-Ok 'Added a persistent assistant subscription encryption key.'
+  }
+  if ($addGrpcAuth) {
+    Write-Ok 'Added a dedicated durable gRPC authentication key.'
+  }
   Write-Ok "Backed up the previous .env to: $backup"
 }
 
@@ -310,6 +367,7 @@ if (Test-Path $EnvFile) {
   Write-Warn "An .env file already exists at: $EnvFile"
   try {
     $assistantKey = Get-AssistantSubscriptionKeyState -Path $EnvFile
+    $syncingGrpcAuthSecret = Get-SyncingServerInternalGrpcAuthSecretState -Path $EnvFile
   } catch {
     Write-Err $_.Exception.Message
     exit 1
@@ -319,19 +377,36 @@ if (Test-Path $EnvFile) {
       Write-Err 'Use -GenerateAssistantSubscriptionKey separately before -ForceOverwrite.'
       exit 2
     }
+    $migrationNeeded = $false
     if ($assistantKey.State -eq 'valid') {
       Write-Ok 'ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY is already configured; leaving .env unchanged.'
     } else {
+      $migrationNeeded = $true
+    }
+    if ($syncingGrpcAuthSecret.State -eq 'missing') {
+      $migrationNeeded = $true
+    }
+    if ($migrationNeeded) {
       Push-Location $RepoRoot
       try {
         Invoke-ComposeCommand -Arguments @('config', '--quiet')
         if ($LASTEXITCODE -ne 0) { Write-Err 'Existing .env validation failed.'; exit 1 }
       } finally { Pop-Location }
       try {
-        Assert-NoExistingAssistantPairingData
-        $AssistantSubscriptionEncryptionKey = New-Hex32
-        Add-AssistantSubscriptionKey -Path $EnvFile -Key $AssistantSubscriptionEncryptionKey
+        $assistantKeyToAdd = ''
+        $grpcAuthSecretToAdd = ''
+        if ($assistantKey.State -eq 'missing') {
+          Assert-NoExistingAssistantPairingData
+          $AssistantSubscriptionEncryptionKey = New-Hex32
+          $assistantKeyToAdd = $AssistantSubscriptionEncryptionKey
+        }
+        if ($syncingGrpcAuthSecret.State -eq 'missing') {
+          $SyncingServerInternalGrpcAuthSecret = New-Hex32
+          $grpcAuthSecretToAdd = $SyncingServerInternalGrpcAuthSecret
+        }
+        Add-MissingEnvironmentSecrets -Path $EnvFile -AssistantKey $assistantKeyToAdd -DurableGrpcAuthSecret $grpcAuthSecretToAdd
         $assistantKey = Get-AssistantSubscriptionKeyState -Path $EnvFile
+        $syncingGrpcAuthSecret = Get-SyncingServerInternalGrpcAuthSecretState -Path $EnvFile
       } catch {
         Write-Err $_.Exception.Message
         exit 1
@@ -355,18 +430,29 @@ if (Test-Path $EnvFile) {
     exit 0
   }
   if (-not $ForceOverwrite) {
-    if ($assistantKey.State -eq 'missing') {
-      Write-Info 'ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY is missing; checking the persistent pairing store before generating it.'
+    if ($assistantKey.State -eq 'missing' -or $syncingGrpcAuthSecret.State -eq 'missing') {
+      Write-Info 'Required per-install secrets are missing; preparing one atomic, non-rotating .env migration.'
       Push-Location $RepoRoot
       try {
         Invoke-ComposeCommand -Arguments @('config', '--quiet')
         if ($LASTEXITCODE -ne 0) { Write-Err 'Existing .env validation failed.'; exit 1 }
       } finally { Pop-Location }
       try {
-        Assert-NoExistingAssistantPairingData
-        $AssistantSubscriptionEncryptionKey = New-Hex32
-        Add-AssistantSubscriptionKey -Path $EnvFile -Key $AssistantSubscriptionEncryptionKey
+        $assistantKeyToAdd = ''
+        $grpcAuthSecretToAdd = ''
+        if ($assistantKey.State -eq 'missing') {
+          Write-Info 'ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY is missing; checking the persistent pairing store before generating it.'
+          Assert-NoExistingAssistantPairingData
+          $AssistantSubscriptionEncryptionKey = New-Hex32
+          $assistantKeyToAdd = $AssistantSubscriptionEncryptionKey
+        }
+        if ($syncingGrpcAuthSecret.State -eq 'missing') {
+          $SyncingServerInternalGrpcAuthSecret = New-Hex32
+          $grpcAuthSecretToAdd = $SyncingServerInternalGrpcAuthSecret
+        }
+        Add-MissingEnvironmentSecrets -Path $EnvFile -AssistantKey $assistantKeyToAdd -DurableGrpcAuthSecret $grpcAuthSecretToAdd
         $assistantKey = Get-AssistantSubscriptionKeyState -Path $EnvFile
+        $syncingGrpcAuthSecret = Get-SyncingServerInternalGrpcAuthSecretState -Path $EnvFile
       } catch {
         Write-Err $_.Exception.Message
         exit 1
@@ -404,6 +490,9 @@ if (Test-Path $EnvFile) {
     exit 1
   }
   $AssistantSubscriptionEncryptionKey = $assistantKey.Value
+  # Keep the purpose-specific command key stable across an intentional full
+  # rewrite. A missing value is generated below; a valid value is not rotated.
+  $SyncingServerInternalGrpcAuthSecret = $syncingGrpcAuthSecret.Value
   $backup = "$EnvFile.bak.$(Get-Date -Format 'yyyyMMddHHmmss')"
   if (Test-Path -LiteralPath $backup) {
     Write-Err "Refusing to overwrite existing environment backup: $backup"
@@ -490,6 +579,10 @@ $AuthJwtSecret                  = New-Hex32
 $AuthServerEncryptionServerKey  = New-Hex32
 $ValetTokenSecret               = New-Hex32
 $AuthServerPseudoKeyParamsKey   = New-Hex32
+if (-not (Get-Variable -Name SyncingServerInternalGrpcAuthSecret -ErrorAction SilentlyContinue) -or
+    [string]::IsNullOrEmpty($SyncingServerInternalGrpcAuthSecret)) {
+  $SyncingServerInternalGrpcAuthSecret = New-Hex32
+}
 $WebsocketGatewayInternalSecret = New-Hex32
 $WebSocketConnectionTokenSecret = New-Hex32
 $MysqlPassword                  = New-Hex32
@@ -538,6 +631,9 @@ VALET_TOKEN_SECRET=$ValetTokenSecret
 # changes on every restart; pin it here so login key-params stay stable.
 AUTH_SERVER_PSEUDO_KEY_PARAMS_KEY=$AuthServerPseudoKeyParamsKey
 
+# Dedicated HMAC key for durable API-gateway -> syncing-server gRPC commands.
+SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET=$SyncingServerInternalGrpcAuthSecret
+
 # ----- Security step-up client compatibility ---------------------------------
 APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_2=0.0.0
 APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_3=0.0.0
@@ -546,6 +642,16 @@ APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_3=0.0.0
 # Shared secrets between the server and the websocket-gateway. Must match.
 WEBSOCKET_GATEWAY_INTERNAL_SECRET=$WebsocketGatewayInternalSecret
 WEB_SOCKET_CONNECTION_TOKEN_SECRET=$WebSocketConnectionTokenSecret
+
+# Worker WebSocket is the primary durable sync transport. Empty allowed origins
+# derive the exact browser origin from PUBLIC_URL below; HTTP remains fallback.
+WEBSOCKET_SYNC_ENABLED=true
+WEBSOCKET_SYNC_ALLOWED_ORIGINS=
+WEBSOCKET_SYNC_MAX_SOCKETS_PER_USER=4
+WEBSOCKET_SYNC_REDIS_KEY_PREFIX=srn:ws-sync:v1
+WEBSOCKET_SYNC_REDIS_OPERATION_TIMEOUT_MS=1500
+WEBSOCKET_SYNC_COMMAND_LEASE_TTL_MS=30000
+WEBSOCKET_SYNC_SOCKET_LEASE_TTL_MS=75000
 
 # ----- Domain / cookies / origins --------------------------------------------
 # Empty COOKIE_DOMAIN => host-only cookie (works on localhost / any bare host/IP).

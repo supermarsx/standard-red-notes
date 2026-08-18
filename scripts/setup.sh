@@ -198,6 +198,45 @@ read_assistant_subscription_key() {
   ASSISTANT_KEY_STATE="valid"
 }
 
+# Read and validate the dedicated durable-command gRPC key without sourcing
+# .env. Globals set: SYNCING_GRPC_AUTH_SECRET_STATE (missing|valid),
+# SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET.
+read_syncing_server_internal_grpc_auth_secret() {
+  local line_count=0 line raw first_character last_character
+  SYNCING_GRPC_AUTH_SECRET_STATE="missing"
+  SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET=""
+
+  while IFS= read -r line; do
+    line_count=$((line_count + 1))
+    raw="${line#*=}"
+    SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET="$(printf '%s' "$raw" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+  done < <(grep -E '^[[:space:]]*SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET[[:space:]]*=' "$ENV_FILE" || true)
+
+  if [ "$line_count" -gt 1 ]; then
+    err "SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET is assigned more than once in .env. Refusing ambiguous configuration."
+    exit 1
+  fi
+  if [ "$line_count" -eq 0 ] || [ -z "$SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET" ]; then
+    SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET=""
+    return
+  fi
+
+  first_character="${SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET:0:1}"
+  last_character="${SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET: -1}"
+  if [ "$first_character" = '"' ] || [ "$first_character" = "'" ] || [ "$last_character" = '"' ] || [ "$last_character" = "'" ]; then
+    if [ "$first_character" != "$last_character" ]; then
+      err "SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET has unbalanced or mismatched quotes."
+      exit 1
+    fi
+    SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET="${SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET:1:${#SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET}-2}"
+  fi
+  if ! [[ "$SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET" =~ ^[0-9a-fA-F]{64}$ ]]; then
+    err "SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET must be exactly 64 hexadecimal characters (32 bytes)."
+    exit 1
+  fi
+  SYNCING_GRPC_AUTH_SECRET_STATE="valid"
+}
+
 assistant_pairing_probe_script='path="${ASSISTANT_SUBSCRIPTION_TOKEN_PATH:-/opt/server/packages/api-gateway/data/assistant-subscription.json}"
 case "$path" in
   /opt/server/packages/api-gateway/data/*) ;;
@@ -256,35 +295,56 @@ assert_no_existing_assistant_pairing_data() {
   exit 1
 }
 
-persist_assistant_subscription_key() {
-  local backup temporary line replaced=0
+persist_missing_environment_secrets() {
+  local backup temporary line assistant_replaced=0 grpc_replaced=0
+  local add_assistant=0 add_grpc=0
+  if [ "$ASSISTANT_KEY_STATE" = "missing" ] && [ -n "$ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY" ]; then
+    add_assistant=1
+  fi
+  if [ "$SYNCING_GRPC_AUTH_SECRET_STATE" = "missing" ] && [ -n "$SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET" ]; then
+    add_grpc=1
+  fi
+  if [ "$add_assistant" -eq 0 ] && [ "$add_grpc" -eq 0 ]; then
+    return
+  fi
+
   backup="${ENV_FILE}.bak.$(date +%Y%m%d%H%M%S)"
-  temporary="${ENV_FILE}.assistant-key.tmp.$$"
+  temporary="${ENV_FILE}.secret-migration.tmp.$$"
   if [ -e "$backup" ] || [ -e "$temporary" ]; then
     err "Refusing to overwrite an existing environment backup or migration temporary file."
     exit 1
   fi
-  cp "$ENV_FILE" "$backup"
-  chmod 600 "$backup"
+  cp -p "$ENV_FILE" "$backup"
   ASSISTANT_MIGRATION_TEMPORARY="$temporary"
-  umask 077
+  cp -p "$ENV_FILE" "$temporary"
   : > "$temporary"
   while IFS= read -r line || [ -n "$line" ]; do
-    if [[ "$line" =~ ^[[:space:]]*ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY[[:space:]]*= ]]; then
+    if [ "$add_assistant" -eq 1 ] && [[ "$line" =~ ^[[:space:]]*ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY[[:space:]]*= ]]; then
       printf 'ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=%s\n' "$ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY" >> "$temporary"
-      replaced=1
+      assistant_replaced=1
+    elif [ "$add_grpc" -eq 1 ] && [[ "$line" =~ ^[[:space:]]*SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET[[:space:]]*= ]]; then
+      printf 'SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET=%s\n' "$SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET" >> "$temporary"
+      grpc_replaced=1
     else
       printf '%s\n' "$line" >> "$temporary"
     fi
   done < "$ENV_FILE"
-  if [ "$replaced" -eq 0 ]; then
+  if [ "$add_assistant" -eq 1 ] && [ "$assistant_replaced" -eq 0 ]; then
     printf '\n# Guided ChatGPT/Codex pairing credential encryption (32 random bytes).\n' >> "$temporary"
     printf 'ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=%s\n' "$ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY" >> "$temporary"
   fi
+  if [ "$add_grpc" -eq 1 ] && [ "$grpc_replaced" -eq 0 ]; then
+    printf '\n# Dedicated durable API-gateway -> syncing-server gRPC authentication (32 random bytes).\n' >> "$temporary"
+    printf 'SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET=%s\n' "$SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET" >> "$temporary"
+  fi
   mv "$temporary" "$ENV_FILE"
   ASSISTANT_MIGRATION_TEMPORARY=""
-  chmod 600 "$ENV_FILE"
-  ok "Added a persistent assistant subscription encryption key."
+  if [ "$add_assistant" -eq 1 ]; then
+    ok "Added a persistent assistant subscription encryption key."
+  fi
+  if [ "$add_grpc" -eq 1 ]; then
+    ok "Added a dedicated durable gRPC authentication key."
+  fi
   ok "Backed up the previous .env to: ${backup}"
 }
 
@@ -315,19 +375,33 @@ BACKUP=""
 if [ -f "$ENV_FILE" ]; then
   warn "An .env file already exists at: ${ENV_FILE}"
   read_assistant_subscription_key
+  read_syncing_server_internal_grpc_auth_secret
   if [ "$GENERATE_ASSISTANT_SUBSCRIPTION_KEY" -eq 1 ]; then
     if [ "$FORCE_OVERWRITE" -eq 1 ]; then
       err "Use --generate-assistant-subscription-key separately before --force-overwrite."
       exit 2
     fi
+    migration_needed=0
     if [ "$ASSISTANT_KEY_STATE" = "valid" ]; then
       ok "ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY is already configured; leaving .env unchanged."
     else
+      migration_needed=1
+    fi
+    if [ "$SYNCING_GRPC_AUTH_SECRET_STATE" = "missing" ]; then
+      migration_needed=1
+    fi
+    if [ "$migration_needed" -eq 1 ]; then
       ( cd "$REPO_ROOT" && $COMPOSE config --quiet )
-      assert_no_existing_assistant_pairing_data
-      ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY="$(gen_hex32)"
-      persist_assistant_subscription_key
+      if [ "$ASSISTANT_KEY_STATE" = "missing" ]; then
+        assert_no_existing_assistant_pairing_data
+        ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY="$(gen_hex32)"
+      fi
+      if [ "$SYNCING_GRPC_AUTH_SECRET_STATE" = "missing" ]; then
+        SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET="$(gen_hex32)"
+      fi
+      persist_missing_environment_secrets
       read_assistant_subscription_key
+      read_syncing_server_internal_grpc_auth_secret
       ( cd "$REPO_ROOT" && $COMPOSE config --quiet )
     fi
     if [ "$RUN_UP" -eq 1 ]; then
@@ -339,13 +413,20 @@ if [ -f "$ENV_FILE" ]; then
     exit 0
   fi
   if [ "$FORCE_OVERWRITE" -ne 1 ]; then
-    if [ "$ASSISTANT_KEY_STATE" = "missing" ]; then
-      info "ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY is missing; checking the persistent pairing store before generating it."
+    if [ "$ASSISTANT_KEY_STATE" = "missing" ] || [ "$SYNCING_GRPC_AUTH_SECRET_STATE" = "missing" ]; then
+      info "Required per-install secrets are missing; preparing one atomic, non-rotating .env migration."
       ( cd "$REPO_ROOT" && $COMPOSE config --quiet )
-      assert_no_existing_assistant_pairing_data
-      ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY="$(gen_hex32)"
-      persist_assistant_subscription_key
+      if [ "$ASSISTANT_KEY_STATE" = "missing" ]; then
+        info "ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY is missing; checking the persistent pairing store before generating it."
+        assert_no_existing_assistant_pairing_data
+        ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY="$(gen_hex32)"
+      fi
+      if [ "$SYNCING_GRPC_AUTH_SECRET_STATE" = "missing" ]; then
+        SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET="$(gen_hex32)"
+      fi
+      persist_missing_environment_secrets
       read_assistant_subscription_key
+      read_syncing_server_internal_grpc_auth_secret
       ( cd "$REPO_ROOT" && $COMPOSE config --quiet )
     fi
     info "Reusing the existing configuration; normal setup reruns never rotate existing secrets."
@@ -367,6 +448,9 @@ if [ -f "$ENV_FILE" ]; then
     err "The existing .env has no assistant subscription encryption key. Run normal setup once to add it safely before a full overwrite."
     exit 1
   fi
+  # Preserve the purpose-specific durable-command key across an intentional
+  # full rewrite. A missing value is generated below; an existing one is never
+  # silently rotated.
   BACKUP="${ENV_FILE}.bak.$(date +%Y%m%d%H%M%S)"
   if [ -e "$BACKUP" ]; then
     err "Refusing to overwrite existing environment backup: ${BACKUP}"
@@ -477,6 +561,9 @@ AUTH_JWT_SECRET="$(gen_hex32)"
 AUTH_SERVER_ENCRYPTION_SERVER_KEY="$(gen_hex32)"
 VALET_TOKEN_SECRET="$(gen_hex32)"
 AUTH_SERVER_PSEUDO_KEY_PARAMS_KEY="$(gen_hex32)"
+if [ -z "${SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET:-}" ]; then
+  SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET="$(gen_hex32)"
+fi
 WEBSOCKET_GATEWAY_INTERNAL_SECRET="$(gen_hex32)"
 WEB_SOCKET_CONNECTION_TOKEN_SECRET="$(gen_hex32)"
 MYSQL_PASSWORD="$(gen_hex32)"
@@ -525,6 +612,9 @@ VALET_TOKEN_SECRET=${VALET_TOKEN_SECRET}
 # changes on every restart; pin it here so login key-params stay stable.
 AUTH_SERVER_PSEUDO_KEY_PARAMS_KEY=${AUTH_SERVER_PSEUDO_KEY_PARAMS_KEY}
 
+# Dedicated HMAC key for durable API-gateway -> syncing-server gRPC commands.
+SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET=${SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET}
+
 # ----- Security step-up client compatibility ---------------------------------
 APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_2=0.0.0
 APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_3=0.0.0
@@ -533,6 +623,16 @@ APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_3=0.0.0
 # Shared secrets between the server and the websocket-gateway. Must match.
 WEBSOCKET_GATEWAY_INTERNAL_SECRET=${WEBSOCKET_GATEWAY_INTERNAL_SECRET}
 WEB_SOCKET_CONNECTION_TOKEN_SECRET=${WEB_SOCKET_CONNECTION_TOKEN_SECRET}
+
+# Worker WebSocket is the primary durable sync transport. Empty allowed origins
+# derive the exact browser origin from PUBLIC_URL below; HTTP remains fallback.
+WEBSOCKET_SYNC_ENABLED=true
+WEBSOCKET_SYNC_ALLOWED_ORIGINS=
+WEBSOCKET_SYNC_MAX_SOCKETS_PER_USER=4
+WEBSOCKET_SYNC_REDIS_KEY_PREFIX=srn:ws-sync:v1
+WEBSOCKET_SYNC_REDIS_OPERATION_TIMEOUT_MS=1500
+WEBSOCKET_SYNC_COMMAND_LEASE_TTL_MS=30000
+WEBSOCKET_SYNC_SOCKET_LEASE_TTL_MS=75000
 
 # ----- Domain / cookies / origins --------------------------------------------
 # Empty COOKIE_DOMAIN => host-only cookie (works on localhost / any bare host/IP).

@@ -309,6 +309,13 @@ shared-vault variants under `/v1/shared-vault/files/*`.
 | POST   | `/v1/sockets/tokens`      | `sockets/tokens`                    | Create a WebSocket **connection token**. Requires cross-service token. Used to authenticate the realtime gateway connection. |
 | POST   | `/v1/sockets/connections` | `sockets/connections/:connectionId` | Register a connection (requires `connectionid` header).                                                                      |
 | DELETE | `/v1/sockets/connections` | `sockets/connections/:connectionId` | Deregister a connection.                                                                                                     |
+| GET    | `/v1/sockets/sync/capabilities` | local controller | Advertise protocol-v1 worker sync only when exact origin, durable backend, and shared Redis state are ready; otherwise returns an empty capability list. |
+| POST   | `/v1/sockets/sync/ticket` | local controller | Mint a short-lived, one-use sync ticket for the authenticated session and validated `deviceId`; returns `503 SYNC_DISABLED` when unavailable. |
+
+The worker upgrades the exact `/sockets/sync` path with an allowed `Origin` and
+no query string. It sends the one-use ticket in the first protocol `AUTH` frame;
+credentials and tickets are never put in this URL. HTTP item sync is the
+fallback when this capability is absent or the socket disconnects.
 
 ### Subscriptions and offline tokens
 

@@ -348,7 +348,7 @@ function validate(files) {
   const secretParserContract = [
     'mapfile -t SECRET_ASSIGNMENTS < <(grep -E "^${name}=" "${file}" || true)',
     '[ "${#SECRET_ASSIGNMENTS[@]}" -le 1 ]',
-    '[[ "${line}" =~ ^(AUTH_JWT_SECRET|JWT_SECRET|ENCRYPTION_SERVER_KEY|PSEUDO_KEY_PARAMS_KEY|VALET_TOKEN_SECRET|ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY)=[0-9a-fA-F]{64}$ ]]',
+    '[[ "${line}" =~ ^(AUTH_JWT_SECRET|JWT_SECRET|ENCRYPTION_SERVER_KEY|PSEUDO_KEY_PARAMS_KEY|VALET_TOKEN_SECRET|WEB_SOCKET_CONNECTION_TOKEN_SECRET|WEBSOCKET_GATEWAY_INTERNAL_SECRET|ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY)=[0-9a-fA-F]{64}$ ]]',
     '[ "${assignment_count}" = 5 ] || [ "${assignment_count}" = 6 ]',
     'validate_secret_document "${LEGACY_SECRETS_FILE}"',
     'validate_secret_document "${SECRETS_FILE}"',
@@ -364,9 +364,16 @@ function validate(files) {
     '[ "${LEGACY_SECRETS_OWNER}" = 0 ] || [ "${LEGACY_SECRETS_OWNER}" = "${APP_UID}" ]',
     'MIGRATION_TEMPORARY="$(mktemp "${SECRETS_DIR}/secrets.env.migrate.XXXXXX")"',
     'printf -v "MIGRATION_${REQUIRED_LEGACY_SECRET}" \'%s\' "${READ_SECRET_VALUE}"',
+    'MIGRATION_WEB_SOCKET_CONNECTION_TOKEN_SECRET_STATE="${READ_SECRET_STATE}"',
+    'MIGRATION_WEBSOCKET_GATEWAY_INTERNAL_SECRET_STATE="${READ_SECRET_STATE}"',
+    'append_migrated_optional_secret "${MIGRATION_TEMPORARY}" WEB_SOCKET_CONNECTION_TOKEN_SECRET',
+    'append_migrated_optional_secret "${MIGRATION_TEMPORARY}" WEBSOCKET_GATEWAY_INTERNAL_SECRET',
     'mv -Tf -- "${MIGRATION_TEMPORARY}" "${SECRETS_FILE}"',
     'die "Root-owned ${REQUIRED_LEGACY_SECRET} failed post-migration verification."',
+    'verify_migrated_optional_secret "${SECRETS_FILE}" WEB_SOCKET_CONNECTION_TOKEN_SECRET',
+    'verify_migrated_optional_secret "${SECRETS_FILE}" WEBSOCKET_GATEWAY_INTERNAL_SECRET',
     'die "Refusing to remove legacy ${LEGACY_SECRET_NAME}: it differs from root-owned storage."',
+    "for OPTIONAL_LEGACY_SECRET_NAME in WEB_SOCKET_CONNECTION_TOKEN_SECRET WEBSOCKET_GATEWAY_INTERNAL_SECRET ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY; do",
     'rm -f -- "${LEGACY_SECRETS_FILE}"',
   ];
   const legacyOwnerGuard =
@@ -390,9 +397,72 @@ function validate(files) {
     "ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=${ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY}",
     "ASSISTANT_SUBSCRIPTION_TOKEN_PATH=${ASSISTANT_SUBSCRIPTION_TOKEN_PATH}",
   ];
-  if (assistantPairingContract.some((fragment) => !installer.includes(fragment))) {
+  if (
+    assistantPairingContract.some((fragment) => !installer.includes(fragment))
+  ) {
     errors.push(
       "LXC must generate, validate, preserve, authenticate, and durably route the internal assistant pairing secret",
+    );
+  }
+  const webSocketSyncContract = [
+    '\npersist_missing_websocket_secrets\nvalidate_secret_document "${SECRETS_FILE}"',
+    'read_hex_secret "${SECRETS_FILE}" WEB_SOCKET_CONNECTION_TOKEN_SECRET true',
+    'read_hex_secret "${SECRETS_FILE}" WEBSOCKET_GATEWAY_INTERNAL_SECRET true',
+    "WEB_SOCKET_CONNECTION_TOKEN_SECRET=${WEB_SOCKET_CONNECTION_TOKEN_SECRET}",
+    "WEBSOCKET_GATEWAY_INTERNAL_SECRET=${WEBSOCKET_GATEWAY_INTERNAL_SECRET}",
+    "REDIS_HOST=${REDIS_HOST}",
+    "REDIS_PORT=${REDIS_PORT}",
+    "WEBSOCKET_SYNC_ENABLED=${WEBSOCKET_SYNC_ENABLED}",
+    "WEBSOCKET_SYNC_ALLOWED_ORIGINS=${WEBSOCKET_SYNC_ALLOWED_ORIGINS}",
+    "WEBSOCKET_SYNC_MAX_SOCKETS_PER_USER=${WEBSOCKET_SYNC_MAX_SOCKETS_PER_USER}",
+    "WEBSOCKET_SYNC_REDIS_KEY_PREFIX=${WEBSOCKET_SYNC_REDIS_KEY_PREFIX}",
+    "WEBSOCKET_SYNC_REDIS_OPERATION_TIMEOUT_MS=${WEBSOCKET_SYNC_REDIS_OPERATION_TIMEOUT_MS}",
+    "WEBSOCKET_SYNC_COMMAND_LEASE_TTL_MS=${WEBSOCKET_SYNC_COMMAND_LEASE_TTL_MS}",
+    "WEBSOCKET_SYNC_SOCKET_LEASE_TTL_MS=${WEBSOCKET_SYNC_SOCKET_LEASE_TTL_MS}",
+  ];
+  if (webSocketSyncContract.some((fragment) => !installer.includes(fragment))) {
+    errors.push(
+      "LXC must preserve WebSocket secrets and propagate fail-closed sync configuration",
+    );
+  }
+  const fileDownloadDeadlineContract = [
+    'FILE_DOWNLOAD_DEADLINE_MS="${FILE_DOWNLOAD_DEADLINE_MS:-30000}"',
+    'validate_positive_safe_integer FILE_DOWNLOAD_DEADLINE_MS "${FILE_DOWNLOAD_DEADLINE_MS}"',
+    "FILE_DOWNLOAD_DEADLINE_MS=${FILE_DOWNLOAD_DEADLINE_MS}",
+  ];
+  if (
+    fileDownloadDeadlineContract.some(
+      (fragment) => !installer.includes(fragment),
+    )
+  ) {
+    errors.push(
+      "LXC must validate and propagate the operator-overridable file-download deadline",
+    );
+  }
+  const socketLocation = installer.match(
+    /location \/sockets \{([\s\S]*?)\n  \}/,
+  )?.[1];
+  const webSocketProxyContract = [
+    "proxy_pass http://127.0.0.1:3000;",
+    "proxy_http_version 1.1;",
+    "proxy_set_header Upgrade \\$http_upgrade;",
+    "proxy_set_header Connection \\$connection_upgrade;",
+    "proxy_set_header Host \\$host;",
+    "proxy_read_timeout 86400s;",
+    "proxy_send_timeout 86400s;",
+  ];
+  if (
+    occurrences(installer, "location /sockets {") !== 1 ||
+    !installer.includes(
+      "map \\$http_upgrade \\$connection_upgrade { default upgrade; '' close; }",
+    ) ||
+    !socketLocation ||
+    webSocketProxyContract.some(
+      (fragment) => !socketLocation.includes(fragment),
+    )
+  ) {
+    errors.push(
+      "LXC nginx must preserve WebSocket upgrades and long-lived /sockets proxy timeouts",
     );
   }
   if (
@@ -401,13 +471,33 @@ function validate(files) {
     installer.includes('. "${LEGACY_SECRETS_FILE}"') ||
     installer.includes('source "${LEGACY_SECRETS_FILE}"')
   ) {
-    errors.push("persistent LXC secrets must be parsed as inert data, never sourced as shell");
+    errors.push(
+      "persistent LXC secrets must be parsed as inert data, never sourced as shell",
+    );
   }
   if (
-    !readme.includes("creates the assistant pairing-encryption key internally") ||
+    !readme.includes(
+      "creates the assistant pairing-encryption key internally",
+    ) ||
     !readme.includes("instead of generating a replacement")
   ) {
-    errors.push("LXC operators need automatic pairing-key and fail-closed recovery guidance");
+    errors.push(
+      "LXC operators need automatic pairing-key and fail-closed recovery guidance",
+    );
+  }
+  const normalizedReadme = readme.replace(/\s+/g, " ");
+  if (
+    !normalizedReadme.includes(
+      "without Redis authentication or TLS, so the Redis endpoint must stay on the same private trusted network",
+    ) ||
+    !normalizedReadme.includes("FILE_DOWNLOAD_DEADLINE_MS") ||
+    !normalizedReadme.includes(
+      "rejects zero, negative, fractional, or unsafe integer values",
+    )
+  ) {
+    errors.push(
+      "LXC operators need the external-Redis trust boundary and file-download deadline documented",
+    );
   }
   if (
     occurrences(installer, "proxy_set_header X-Forwarded-Proto \\$scheme;") !==
@@ -438,16 +528,10 @@ test("LXC secret contract rejects unsafe parsing, paths, permissions, and migrat
       'if [ -e "${SECRETS_DIR}" ] || [ -L "${SECRETS_DIR}" ]; then',
       /non-symlink/,
     ],
+    ['[ "$(stat -c \'%u:%a\' "${SECRETS_DIR}")" = "0:700" ]', /0700\/0600/],
+    ['[ "${#SECRET_ASSIGNMENTS[@]}" -le 1 ]', /duplicate rejection/],
     [
-      '[ "$(stat -c \'%u:%a\' "${SECRETS_DIR}")" = "0:700" ]',
-      /0700\/0600/,
-    ],
-    [
-      '[ "${#SECRET_ASSIGNMENTS[@]}" -le 1 ]',
-      /duplicate rejection/,
-    ],
-    [
-      '[[ "${line}" =~ ^(AUTH_JWT_SECRET|JWT_SECRET|ENCRYPTION_SERVER_KEY|PSEUDO_KEY_PARAMS_KEY|VALET_TOKEN_SECRET|ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY)=[0-9a-fA-F]{64}$ ]]',
+      '[[ "${line}" =~ ^(AUTH_JWT_SECRET|JWT_SECRET|ENCRYPTION_SERVER_KEY|PSEUDO_KEY_PARAMS_KEY|VALET_TOKEN_SECRET|WEB_SOCKET_CONNECTION_TOKEN_SECRET|WEBSOCKET_GATEWAY_INTERNAL_SECRET|ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY)=[0-9a-fA-F]{64}$ ]]',
       /allow-list parser/,
     ],
     [
@@ -457,6 +541,18 @@ test("LXC secret contract rejects unsafe parsing, paths, permissions, and migrat
     [
       'die "Root-owned ${REQUIRED_LEGACY_SECRET} failed post-migration verification."',
       /verify root-owned output/,
+    ],
+    [
+      'append_migrated_optional_secret "${MIGRATION_TEMPORARY}" WEB_SOCKET_CONNECTION_TOKEN_SECRET',
+      /canonically rewrite/,
+    ],
+    [
+      'verify_migrated_optional_secret "${SECRETS_FILE}" WEBSOCKET_GATEWAY_INTERNAL_SECRET',
+      /verify root-owned output/,
+    ],
+    [
+      "for OPTIONAL_LEGACY_SECRET_NAME in WEB_SOCKET_CONNECTION_TOKEN_SECRET WEBSOCKET_GATEWAY_INTERNAL_SECRET ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY; do",
+      /canonically rewrite/,
     ],
   ]) {
     assert.match(validate(mutate("installer", fragment)).join("\n"), expected);
@@ -477,8 +573,10 @@ test("LXC secret parser treats legacy content as inert exact data", () => {
         'die() { printf "%s\\n" "$*" >&2; exit 90; }',
         definitions,
         'sandbox="$(mktemp -d)"',
-        'trap \'rm -rf -- "${sandbox}"\' EXIT',
-        ...lines.map((line) => `printf '%s\\n' '${line}' >> "\${sandbox}/secrets.env"`),
+        "trap 'rm -rf -- \"${sandbox}\"' EXIT",
+        ...lines.map(
+          (line) => `printf '%s\\n' '${line}' >> "\${sandbox}/secrets.env"`,
+        ),
         command,
       ].join("\n"),
       cwd: root,
@@ -497,6 +595,19 @@ test("LXC secret parser treats legacy content as inert exact data", () => {
     0,
   );
 
+  assert.equal(
+    run(
+      [
+        ...base,
+        `WEB_SOCKET_CONNECTION_TOKEN_SECRET=${key}`,
+        `WEBSOCKET_GATEWAY_INTERNAL_SECRET=${key}`,
+        `ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=${key}`,
+      ],
+      'validate_secret_document "${sandbox}/secrets.env"',
+    ).status,
+    0,
+  );
+
   const malicious = run(
     [...base, 'EVIL=$(touch "${sandbox}/executed")'],
     'validate_secret_document "${sandbox}/secrets.env"',
@@ -508,6 +619,126 @@ test("LXC secret parser treats legacy content as inert exact data", () => {
     'validate_secret_document "${sandbox}/secrets.env"; read_hex_secret "${sandbox}/secrets.env" AUTH_JWT_SECRET true',
   );
   assert.equal(duplicate.status, 90, duplicate.stderr);
+
+  const connectionKey = "b".repeat(64);
+  const internalKey = "c".repeat(64);
+  const preserved = run(
+    [],
+    [
+      ': > "${sandbox}/migrated.env"',
+      'append_migrated_optional_secret "${sandbox}/migrated.env" WEB_SOCKET_CONNECTION_TOKEN_SECRET valid ' +
+        connectionKey,
+      'append_migrated_optional_secret "${sandbox}/migrated.env" WEBSOCKET_GATEWAY_INTERNAL_SECRET valid ' +
+        internalKey,
+      'verify_migrated_optional_secret "${sandbox}/migrated.env" WEB_SOCKET_CONNECTION_TOKEN_SECRET valid ' +
+        connectionKey,
+      'verify_migrated_optional_secret "${sandbox}/migrated.env" WEBSOCKET_GATEWAY_INTERNAL_SECRET valid ' +
+        internalKey,
+      `grep -Fxq "WEB_SOCKET_CONNECTION_TOKEN_SECRET=${connectionKey}" "\${sandbox}/migrated.env"`,
+      `grep -Fxq "WEBSOCKET_GATEWAY_INTERNAL_SECRET=${internalKey}" "\${sandbox}/migrated.env"`,
+    ].join("\n"),
+  );
+  assert.equal(preserved.status, 0, preserved.stderr);
+
+  const mismatched = run(
+    [],
+    [
+      ': > "${sandbox}/migrated.env"',
+      'append_migrated_optional_secret "${sandbox}/migrated.env" WEB_SOCKET_CONNECTION_TOKEN_SECRET valid ' +
+        connectionKey,
+      'verify_migrated_optional_secret "${sandbox}/migrated.env" WEB_SOCKET_CONNECTION_TOKEN_SECRET valid ' +
+        "d".repeat(64),
+    ].join("\n"),
+  );
+  assert.equal(mismatched.status, 90, mismatched.stderr);
+});
+
+test("LXC file-download deadline accepts only positive safe integers", () => {
+  const start = baseline.installer.indexOf(
+    "validate_positive_safe_integer() {",
+  );
+  const end = baseline.installer.indexOf(
+    "\nvalidate_positive_safe_integer FILE_DOWNLOAD_DEADLINE_MS",
+    start,
+  );
+  assert.ok(start >= 0 && end > start);
+  const definition = baseline.installer.slice(start, end);
+  const run = (value) =>
+    spawnSync("bash", ["-s"], {
+      input: [
+        "set -euo pipefail",
+        'die() { printf "%s\\n" "$*" >&2; exit 90; }',
+        definition,
+        `validate_positive_safe_integer FILE_DOWNLOAD_DEADLINE_MS '${value}'`,
+      ].join("\n"),
+      cwd: root,
+      encoding: "utf8",
+    });
+
+  for (const value of ["30000", "9007199254740991"]) {
+    const result = run(value);
+    assert.equal(result.status, 0, result.stderr);
+  }
+  for (const value of ["", "0", "01", "-1", "1.5", "9007199254740992"]) {
+    const result = run(value);
+    assert.equal(result.status, 90, `${value}: ${result.stderr}`);
+  }
+});
+
+test("LXC requires the full WebSocket, download deadline, and proxy matrix", () => {
+  for (const fragment of [
+    '\npersist_missing_websocket_secrets\nvalidate_secret_document "${SECRETS_FILE}"',
+    "REDIS_HOST=${REDIS_HOST}",
+    "REDIS_PORT=${REDIS_PORT}",
+    "WEBSOCKET_SYNC_ENABLED=${WEBSOCKET_SYNC_ENABLED}",
+    "WEBSOCKET_SYNC_ALLOWED_ORIGINS=${WEBSOCKET_SYNC_ALLOWED_ORIGINS}",
+    "WEBSOCKET_SYNC_MAX_SOCKETS_PER_USER=${WEBSOCKET_SYNC_MAX_SOCKETS_PER_USER}",
+    "WEBSOCKET_SYNC_REDIS_KEY_PREFIX=${WEBSOCKET_SYNC_REDIS_KEY_PREFIX}",
+    "WEBSOCKET_SYNC_REDIS_OPERATION_TIMEOUT_MS=${WEBSOCKET_SYNC_REDIS_OPERATION_TIMEOUT_MS}",
+    "WEBSOCKET_SYNC_COMMAND_LEASE_TTL_MS=${WEBSOCKET_SYNC_COMMAND_LEASE_TTL_MS}",
+    "WEBSOCKET_SYNC_SOCKET_LEASE_TTL_MS=${WEBSOCKET_SYNC_SOCKET_LEASE_TTL_MS}",
+  ]) {
+    assert.match(
+      validate(mutate("installer", fragment)).join("\n"),
+      /propagate fail-closed sync configuration/,
+    );
+  }
+
+  for (const fragment of [
+    'FILE_DOWNLOAD_DEADLINE_MS="${FILE_DOWNLOAD_DEADLINE_MS:-30000}"',
+    'validate_positive_safe_integer FILE_DOWNLOAD_DEADLINE_MS "${FILE_DOWNLOAD_DEADLINE_MS}"',
+    "FILE_DOWNLOAD_DEADLINE_MS=${FILE_DOWNLOAD_DEADLINE_MS}",
+  ]) {
+    assert.match(
+      validate(mutate("installer", fragment)).join("\n"),
+      /validate and propagate the operator-overridable file-download deadline/,
+    );
+  }
+
+  for (const fragment of [
+    "map \\$http_upgrade \\$connection_upgrade { default upgrade; '' close; }",
+    "location /sockets {",
+    "proxy_set_header Upgrade \\$http_upgrade;",
+    "proxy_set_header Connection \\$connection_upgrade;",
+    "proxy_read_timeout 86400s;",
+    "proxy_send_timeout 86400s;",
+  ]) {
+    assert.match(
+      validate(mutate("installer", fragment)).join("\n"),
+      /preserve WebSocket upgrades and long-lived \/sockets proxy timeouts/,
+    );
+  }
+
+  for (const fragment of [
+    "same private trusted network",
+    "FILE_DOWNLOAD_DEADLINE_MS",
+    "rejects zero, negative, fractional, or unsafe integer values",
+  ]) {
+    assert.match(
+      validate(mutate("readme", fragment)).join("\n"),
+      /external-Redis trust boundary and file-download deadline documented/,
+    );
+  }
 });
 
 test("LXC release links activate and roll back to the retained target", () => {

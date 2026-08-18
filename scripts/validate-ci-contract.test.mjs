@@ -9,6 +9,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -28,6 +29,28 @@ const repositoryRoot = path.resolve(
   "..",
 );
 const baseline = loadCiContractFiles(repositoryRoot);
+const defaultSetupShell = process.platform === "win32" ? "powershell" : "bash";
+const powershellCommand =
+  process.platform === "win32" ? "powershell.exe" : "pwsh";
+const validGrpcAuthSecret = "d".repeat(64);
+
+function setupShellAvailable(shellKind) {
+  const result = spawnSync(
+    shellKind === "powershell" ? powershellCommand : "bash",
+    shellKind === "powershell"
+      ? ["-NoProfile", "-Command", "exit 0"]
+      : ["--version"],
+    { encoding: "utf8" },
+  );
+  return !result.error && result.status === 0;
+}
+
+function yesArguments(shellKind, additional = []) {
+  if (process.platform === "win32" && shellKind === "bash") {
+    return additional;
+  }
+  return [shellKind === "powershell" ? "-Yes" : "--yes", ...additional];
+}
 
 function withFileChanged(file, update) {
   const files = new Map(baseline);
@@ -63,6 +86,7 @@ function createSetupFixture({
   environment,
   probeExit = 0,
   initializeGit = true,
+  shellKind = defaultSetupShell,
 } = {}) {
   const temporary = mkdtempSync(path.join(tmpdir(), "srn-setup-safety-"));
   const fixtureRoot = path.join(temporary, "repo");
@@ -78,31 +102,42 @@ function createSetupFixture({
 
   let command;
   let setup;
-  if (process.platform === "win32") {
+  let commandPrefix;
+  if (shellKind === "powershell") {
     setup = path.join(fixtureScripts, "setup.ps1");
     copyFileSync(path.join(repositoryRoot, "scripts", "setup.ps1"), setup);
-    writeFileSync(
-      path.join(fixtureBin, "docker.cmd"),
-      [
-        "@echo off",
-        'if "%1"=="compose" if "%2"=="run" exit /b %FAKE_ASSISTANT_PROBE_EXIT%',
-        'if "%1"=="compose" if "%2"=="up" echo %SRN_DEPLOY_REVISION%^|%SRN_DEPLOY_VERSION%>"%FAKE_DEPLOY_CAPTURE%"',
-        "exit /b 0",
-        "",
-      ].join("\r\n"),
-    );
-    command = "powershell.exe";
+    command = powershellCommand;
+    commandPrefix = ["-NoProfile", "-File", setup];
   } else {
     setup = path.join(fixtureScripts, "setup.sh");
-    const docker = path.join(fixtureBin, "docker");
     copyFileSync(path.join(repositoryRoot, "scripts", "setup.sh"), setup);
-    writeFileSync(
-      docker,
-      '#!/bin/sh\nif [ "$1" = "compose" ] && [ "$2" = "run" ]; then exit "${FAKE_ASSISTANT_PROBE_EXIT}"; fi\nif [ "$1" = "compose" ] && [ "$2" = "up" ]; then printf "%s|%s\\n" "$SRN_DEPLOY_REVISION" "$SRN_DEPLOY_VERSION" > "$FAKE_DEPLOY_CAPTURE"; fi\nexit 0\n',
-    );
-    chmodSync(docker, 0o755);
     command = "bash";
+    commandPrefix =
+      process.platform === "win32"
+        ? [
+            "-c",
+            'PATH="$PWD/../bin:$PATH"; export PATH; exec bash scripts/setup.sh --yes',
+            "setup-fixture",
+          ]
+        : [setup];
   }
+
+  const docker = path.join(fixtureBin, "docker");
+  writeFileSync(
+    docker,
+    '#!/bin/sh\nif [ "$1" = "compose" ] && [ "$2" = "run" ]; then exit "${FAKE_ASSISTANT_PROBE_EXIT}"; fi\nif [ "$1" = "compose" ] && [ "$2" = "up" ]; then printf "%s|%s\\n" "$SRN_DEPLOY_REVISION" "$SRN_DEPLOY_VERSION" > "$FAKE_DEPLOY_CAPTURE"; fi\nexit 0\n',
+  );
+  chmodSync(docker, 0o755);
+  writeFileSync(
+    path.join(fixtureBin, "docker.cmd"),
+    [
+      "@echo off",
+      'if "%1"=="compose" if "%2"=="run" exit /b %FAKE_ASSISTANT_PROBE_EXIT%',
+      'if "%1"=="compose" if "%2"=="up" echo %SRN_DEPLOY_REVISION%^|%SRN_DEPLOY_VERSION%>"%FAKE_DEPLOY_CAPTURE%"',
+      "exit /b 0",
+      "",
+    ].join("\r\n"),
+  );
 
   if (initializeGit) {
     writeFileSync(path.join(fixtureRoot, ".gitignore"), ".env*\n");
@@ -120,22 +155,16 @@ function createSetupFixture({
   }
 
   const run = (scriptArguments) =>
-    spawnSync(
-      command,
-      process.platform === "win32"
-        ? ["-NoProfile", "-File", setup, ...scriptArguments]
-        : [setup, ...scriptArguments],
-      {
-        cwd: fixtureRoot,
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          FAKE_ASSISTANT_PROBE_EXIT: String(probeExit),
-          FAKE_DEPLOY_CAPTURE: deploymentCapture,
-          PATH: `${fixtureBin}${path.delimiter}${process.env.PATH ?? ""}`,
-        },
+    spawnSync(command, [...commandPrefix, ...scriptArguments], {
+      cwd: fixtureRoot,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        FAKE_ASSISTANT_PROBE_EXIT: String(probeExit),
+        FAKE_DEPLOY_CAPTURE: deploymentCapture,
+        PATH: `${fixtureBin}${path.delimiter}${process.env.PATH ?? ""}`,
       },
-    );
+    });
 
   return { deploymentCapture, environmentFile, fixtureRoot, run, temporary };
 }
@@ -170,7 +199,7 @@ test("normal setup reruns reuse rather than replace production credentials", () 
 });
 
 test("normal setup rerun validates and leaves an existing environment byte-for-byte intact", () => {
-  const sentinel = `EXISTING_PRODUCTION_CONFIGURATION=true\nASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=${"a".repeat(64)}\n`;
+  const sentinel = `EXISTING_PRODUCTION_CONFIGURATION=true\nASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=${"a".repeat(64)}\nSYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET=${validGrpcAuthSecret}\n`;
   const fixture = createSetupFixture({ environment: sentinel });
 
   try {
@@ -196,7 +225,7 @@ test("normal setup rerun validates and leaves an existing environment byte-for-b
 });
 
 test("setup stamps a clean checkout with its exact commit before Compose build", () => {
-  const sentinel = `EXISTING_PRODUCTION_CONFIGURATION=true\nASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=${"a".repeat(64)}\n`;
+  const sentinel = `EXISTING_PRODUCTION_CONFIGURATION=true\nASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=${"a".repeat(64)}\nSYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET=${validGrpcAuthSecret}\n`;
   const fixture = createSetupFixture({
     environment: sentinel,
     initializeGit: true,
@@ -221,7 +250,7 @@ test("setup stamps a clean checkout with its exact commit before Compose build",
 });
 
 test("setup refuses a dirty checkout before Compose build without changing the environment", () => {
-  const sentinel = `EXISTING_PRODUCTION_CONFIGURATION=true\nASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=${"b".repeat(64)}\n`;
+  const sentinel = `EXISTING_PRODUCTION_CONFIGURATION=true\nASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=${"b".repeat(64)}\nSYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET=${validGrpcAuthSecret}\n`;
   const fixture = createSetupFixture({
     environment: sentinel,
     initializeGit: true,
@@ -256,6 +285,15 @@ test("fresh setup generates exactly one persistent 32-byte assistant pairing key
         /^ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=([0-9a-f]{64})$/gm,
       ) ?? [];
     assert.equal(assignments.length, 1);
+    const durableGrpcSecret = environment.match(
+      /^SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET=([0-9a-f]{64})$/m,
+    );
+    const authJwtSecret = environment.match(
+      /^AUTH_JWT_SECRET=([0-9a-f]{64})$/m,
+    );
+    assert.ok(durableGrpcSecret);
+    assert.ok(authJwtSecret);
+    assert.notEqual(durableGrpcSecret[1], authJwtSecret[1]);
     assert.match(environment, /^ENFORCE_HTTPS_FROM_PROXY=false$/m);
     assert.match(environment, /^APP_BIND_ADDRESS=0\.0\.0\.0$/m);
   } finally {
@@ -302,7 +340,7 @@ test("setup rejects duplicate assistant pairing key assignments as ambiguous", (
 test("intentional full overwrite preserves the existing assistant pairing key", () => {
   const key = "c".repeat(64);
   const fixture = createSetupFixture({
-    environment: `EXISTING_PRODUCTION_CONFIGURATION=true\nASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=${key}\n`,
+    environment: `EXISTING_PRODUCTION_CONFIGURATION=true\nASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=${key}\nSYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET=${validGrpcAuthSecret}\n`,
   });
   try {
     const result = fixture.run(
@@ -314,6 +352,13 @@ test("intentional full overwrite preserves the existing assistant pairing key", 
     assert.match(
       readFileSync(fixture.environmentFile, "utf8"),
       new RegExp(`^ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=${key}$`, "m"),
+    );
+    assert.match(
+      readFileSync(fixture.environmentFile, "utf8"),
+      new RegExp(
+        `^SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET=${validGrpcAuthSecret}$`,
+        "m",
+      ),
     );
   } finally {
     rmSync(fixture.temporary, { recursive: true, force: true });
@@ -333,6 +378,10 @@ test("ordinary setup rerun safely adds one missing key, backs up the keyless env
       migrated,
       /^ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=[0-9a-f]{64}$/m,
     );
+    assert.match(
+      migrated,
+      /^SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET=[0-9a-f]{64}$/m,
+    );
     const backups = readdirSync(fixture.fixtureRoot).filter((entry) =>
       entry.startsWith(".env.bak."),
     );
@@ -351,6 +400,93 @@ test("ordinary setup rerun safely adds one missing key, backs up the keyless env
     rmSync(fixture.temporary, { recursive: true, force: true });
   }
 });
+
+for (const shellKind of ["bash", "powershell"]) {
+  test(
+    `${shellKind} setup atomically adds one missing durable gRPC key and preserves it on rerun`,
+    { skip: !setupShellAvailable(shellKind) },
+    () => {
+      const sentinel = [
+        "# preserve this operator comment exactly",
+        "EXISTING_PRODUCTION_CONFIGURATION=true",
+        `ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=${"a".repeat(64)}`,
+        "",
+      ].join("\n");
+      const fixture = createSetupFixture({ environment: sentinel, shellKind });
+      const originalMode = statSync(fixture.environmentFile).mode & 0o777;
+
+      try {
+        const migration = fixture.run(yesArguments(shellKind));
+        assert.equal(migration.status, 0, migration.stderr || migration.stdout);
+        const migrated = readFileSync(fixture.environmentFile, "utf8");
+        const assignments =
+          migrated.match(
+            /^SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET=([0-9a-f]{64})$/gm,
+          ) ?? [];
+        assert.equal(assignments.length, 1);
+        assert.match(migrated, /^# preserve this operator comment exactly$/m);
+        assert.match(
+          migrated,
+          new RegExp(
+            `^ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=${"a".repeat(64)}$`,
+            "m",
+          ),
+        );
+        assert.equal(
+          statSync(fixture.environmentFile).mode & 0o777,
+          originalMode,
+        );
+
+        const backups = readdirSync(fixture.fixtureRoot).filter((entry) =>
+          entry.startsWith(".env.bak."),
+        );
+        assert.equal(backups.length, 1);
+        assert.equal(
+          readFileSync(path.join(fixture.fixtureRoot, backups[0]), "utf8"),
+          sentinel,
+        );
+
+        const rerun = fixture.run(yesArguments(shellKind));
+        assert.equal(rerun.status, 0, rerun.stderr || rerun.stdout);
+        assert.equal(readFileSync(fixture.environmentFile, "utf8"), migrated);
+        assert.equal(
+          readdirSync(fixture.fixtureRoot).filter((entry) =>
+            entry.startsWith(".env.bak."),
+          ).length,
+          1,
+        );
+      } finally {
+        rmSync(fixture.temporary, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test(
+    `${shellKind} setup rejects an invalid existing durable gRPC key without a partial write`,
+    { skip: !setupShellAvailable(shellKind) },
+    () => {
+      const sentinel = `ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=${"a".repeat(64)}\nSYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET=too-short\n`;
+      const fixture = createSetupFixture({ environment: sentinel, shellKind });
+      try {
+        const result = fixture.run(yesArguments(shellKind));
+        assert.notEqual(result.status, 0);
+        assert.match(
+          `${result.stdout}\n${result.stderr}`,
+          /SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET must be exactly 64 hexadecimal characters/i,
+        );
+        assert.equal(readFileSync(fixture.environmentFile, "utf8"), sentinel);
+        assert.deepEqual(
+          readdirSync(fixture.fixtureRoot).filter((entry) =>
+            entry.startsWith(".env.bak."),
+          ),
+          [],
+        );
+      } finally {
+        rmSync(fixture.temporary, { recursive: true, force: true });
+      }
+    },
+  );
+}
 
 test("ordinary setup rerun refuses to generate over possible encrypted pairing data", () => {
   const sentinel = "EXISTING_PRODUCTION_CONFIGURATION=true\n";
@@ -1099,7 +1235,9 @@ test("container publication keeps Docker label templates shell-safe", () => {
     );
     assert.match(
       validateCiContract(escapedQuotes).join("\n"),
-      new RegExp(`shell-safe Docker label template for ${label.replaceAll(".", "\\.")}`),
+      new RegExp(
+        `shell-safe Docker label template for ${label.replaceAll(".", "\\.")}`,
+      ),
     );
   }
 });

@@ -6,7 +6,8 @@
 # Provisions the ALL-IN-ONE deployment inside a fresh Debian 12+ / Ubuntu 22.04+
 # LXC *system* container (or any VM/host): installs Node + Yarn + nginx, builds
 # the server + web app, configures the single-process home-server (embedded
-# sqlite + in-memory cache + in-process events — NO MySQL/Redis), installs a
+# sqlite + in-memory cache + in-process events — no MySQL; Redis is optional
+# for worker WebSocket sync), installs a
 # systemd service for it, and points nginx at the built SPA + the API.
 #
 # Idempotent: upgrades build and health-check a release before atomically moving
@@ -29,6 +30,11 @@
 #   NODE_MAJOR   Node.js major version                            (default: 26)
 #   PUBLIC_URL   canonical browser-facing origin (persisted across upgrades)
 #   SRN_DEPLOY_VERSION  optional safe release version exposed by readiness
+#   REDIS_HOST   optional Redis host; required to enable WebSocket sync
+#   REDIS_PORT   optional Redis port                         (default: 6379)
+#   WEBSOCKET_SYNC_ENABLED  exact false disables WebSocket sync (default: true)
+#   WEBSOCKET_SYNC_ALLOWED_ORIGINS  optional comma-separated exact origins
+#   FILE_DOWNLOAD_DEADLINE_MS  positive whole-request deadline (default: 30000)
 # =============================================================================
 set -euo pipefail
 
@@ -43,6 +49,16 @@ NODE_MAJOR="${NODE_MAJOR:-26}"
 PUBLIC_URL_WAS_SET="${PUBLIC_URL+x}"
 PUBLIC_URL="${PUBLIC_URL:-}"
 SRN_DEPLOY_VERSION="${SRN_DEPLOY_VERSION:-}"
+REDIS_HOST="${REDIS_HOST:-}"
+REDIS_PORT="${REDIS_PORT:-6379}"
+WEBSOCKET_SYNC_ENABLED="${WEBSOCKET_SYNC_ENABLED:-true}"
+WEBSOCKET_SYNC_ALLOWED_ORIGINS="${WEBSOCKET_SYNC_ALLOWED_ORIGINS:-}"
+WEBSOCKET_SYNC_MAX_SOCKETS_PER_USER="${WEBSOCKET_SYNC_MAX_SOCKETS_PER_USER:-4}"
+WEBSOCKET_SYNC_REDIS_KEY_PREFIX="${WEBSOCKET_SYNC_REDIS_KEY_PREFIX:-srn:ws-sync:v1}"
+WEBSOCKET_SYNC_REDIS_OPERATION_TIMEOUT_MS="${WEBSOCKET_SYNC_REDIS_OPERATION_TIMEOUT_MS:-1500}"
+WEBSOCKET_SYNC_COMMAND_LEASE_TTL_MS="${WEBSOCKET_SYNC_COMMAND_LEASE_TTL_MS:-30000}"
+WEBSOCKET_SYNC_SOCKET_LEASE_TTL_MS="${WEBSOCKET_SYNC_SOCKET_LEASE_TTL_MS:-75000}"
+FILE_DOWNLOAD_DEADLINE_MS="${FILE_DOWNLOAD_DEADLINE_MS:-30000}"
 
 RELEASES_DIR="${APP_DIR}/.releases"
 CURRENT_LINK="${APP_DIR}/current"
@@ -59,6 +75,17 @@ UNIT_SRC_DIR="$(cd "$(dirname "$0")" && pwd)"
 log() { printf '\n\033[1;32m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33mWARN:\033[0m %s\n' "$*" >&2; }
 die() { printf '\033[1;31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
+
+validate_positive_safe_integer() {
+  local name="$1" value="$2" maximum="9007199254740991"
+  if [[ ! "${value}" =~ ^[1-9][0-9]*$ ]] || \
+     [ "${#value}" -gt "${#maximum}" ] || \
+     { [ "${#value}" -eq "${#maximum}" ] && [[ "${value}" > "${maximum}" ]]; }; then
+    die "${name} must be a positive safe integer."
+  fi
+}
+
+validate_positive_safe_integer FILE_DOWNLOAD_DEADLINE_MS "${FILE_DOWNLOAD_DEADLINE_MS}"
 
 # Validate operator-supplied release metadata before installing packages,
 # creating users, or mutating any live deployment state.
@@ -337,12 +364,57 @@ validate_secret_document() {
   while IFS= read -r line || [ -n "${line}" ]; do
     [ -n "${line}" ] || \
       die "${file} contains a blank line; installer secrets must use the exact generated schema."
-    [[ "${line}" =~ ^(AUTH_JWT_SECRET|JWT_SECRET|ENCRYPTION_SERVER_KEY|PSEUDO_KEY_PARAMS_KEY|VALET_TOKEN_SECRET|ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY)=[0-9a-fA-F]{64}$ ]] || \
+    [[ "${line}" =~ ^(AUTH_JWT_SECRET|JWT_SECRET|ENCRYPTION_SERVER_KEY|PSEUDO_KEY_PARAMS_KEY|VALET_TOKEN_SECRET|WEB_SOCKET_CONNECTION_TOKEN_SECRET|WEBSOCKET_GATEWAY_INTERNAL_SECRET|ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY)=[0-9a-fA-F]{64}$ ]] || \
       die "${file} contains an unexpected or malformed entry; refusing to interpret it as installer secrets."
     assignment_count=$((assignment_count + 1))
   done < "${file}"
   [ "${assignment_count}" = 5 ] || [ "${assignment_count}" = 6 ] || \
-    die "${file} must contain exactly the five base secrets and optional assistant pairing key."
+    [ "${assignment_count}" = 7 ] || [ "${assignment_count}" = 8 ] || \
+    die "${file} must contain the five legacy base secrets, optional WebSocket secrets, and optional assistant pairing key."
+}
+
+append_migrated_optional_secret() {
+  local file="$1" name="$2" state="$3" value="$4"
+  [ "${state}" = missing ] && return 0
+  [ "${state}" = valid ] || die "Unexpected migration state for ${name}."
+  printf '%s=%s\n' "${name}" "${value}" >> "${file}"
+}
+
+verify_migrated_optional_secret() {
+  local file="$1" name="$2" expected_state="$3" expected_value="$4"
+  read_hex_secret "${file}" "${name}" false
+  [ "${READ_SECRET_STATE}" = "${expected_state}" ] && \
+    [ "${READ_SECRET_VALUE}" = "${expected_value}" ] || \
+    die "Root-owned ${name} failed post-migration verification."
+}
+
+persist_missing_websocket_secrets() {
+  local connection_secret internal_secret temporary owner group
+  read_hex_secret "${SECRETS_FILE}" WEB_SOCKET_CONNECTION_TOKEN_SECRET false
+  connection_secret="${READ_SECRET_VALUE:-$(openssl rand -hex 32)}"
+  read_hex_secret "${SECRETS_FILE}" WEBSOCKET_GATEWAY_INTERNAL_SECRET false
+  internal_secret="${READ_SECRET_VALUE:-$(openssl rand -hex 32)}"
+
+  read_hex_secret "${SECRETS_FILE}" WEB_SOCKET_CONNECTION_TOKEN_SECRET false
+  [ "${READ_SECRET_STATE}" = missing ] || {
+    read_hex_secret "${SECRETS_FILE}" WEBSOCKET_GATEWAY_INTERNAL_SECRET false
+    [ "${READ_SECRET_STATE}" = missing ] || return 0
+  }
+
+  temporary="$(mktemp "${SECRETS_DIR}/secrets.env.websocket.XXXXXX")"
+  owner="$(stat -c '%u' "${SECRETS_FILE}")"
+  group="$(stat -c '%g' "${SECRETS_FILE}")"
+  if ! cp -- "${SECRETS_FILE}" "${temporary}" || \
+     { grep -q '^WEB_SOCKET_CONNECTION_TOKEN_SECRET=' "${temporary}" || \
+       printf 'WEB_SOCKET_CONNECTION_TOKEN_SECRET=%s\n' "${connection_secret}" >> "${temporary}"; } || \
+     { grep -q '^WEBSOCKET_GATEWAY_INTERNAL_SECRET=' "${temporary}" || \
+       printf 'WEBSOCKET_GATEWAY_INTERNAL_SECRET=%s\n' "${internal_secret}" >> "${temporary}"; } || \
+     ! chown "${owner}:${group}" "${temporary}" || \
+     ! chmod 0600 "${temporary}" || \
+     ! mv -Tf -- "${temporary}" "${SECRETS_FILE}"; then
+    rm -f -- "${temporary}"
+    die "Could not atomically persist the WebSocket gateway secrets."
+  fi
 }
 
 persist_assistant_secret() {
@@ -397,6 +469,12 @@ if [ ! -e "${SECRETS_FILE}" ] && [ -e "${LEGACY_SECRETS_FILE}" ]; then
     read_hex_secret "${LEGACY_SECRETS_FILE}" "${REQUIRED_LEGACY_SECRET}" true
     printf -v "MIGRATION_${REQUIRED_LEGACY_SECRET}" '%s' "${READ_SECRET_VALUE}"
   done
+  read_hex_secret "${LEGACY_SECRETS_FILE}" WEB_SOCKET_CONNECTION_TOKEN_SECRET false
+  MIGRATION_WEB_SOCKET_CONNECTION_TOKEN_SECRET_STATE="${READ_SECRET_STATE}"
+  MIGRATION_WEB_SOCKET_CONNECTION_TOKEN_SECRET="${READ_SECRET_VALUE}"
+  read_hex_secret "${LEGACY_SECRETS_FILE}" WEBSOCKET_GATEWAY_INTERNAL_SECRET false
+  MIGRATION_WEBSOCKET_GATEWAY_INTERNAL_SECRET_STATE="${READ_SECRET_STATE}"
+  MIGRATION_WEBSOCKET_GATEWAY_INTERNAL_SECRET="${READ_SECRET_VALUE}"
   read_hex_secret "${LEGACY_SECRETS_FILE}" ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY false
   MIGRATION_ASSISTANT_KEY_STATE="${READ_SECRET_STATE}"
   MIGRATION_ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY="${READ_SECRET_VALUE}"
@@ -407,10 +485,14 @@ if [ ! -e "${SECRETS_FILE}" ] && [ -e "${LEGACY_SECRETS_FILE}" ]; then
       MIGRATION_VALUE_NAME="MIGRATION_${REQUIRED_LEGACY_SECRET}"
       printf '%s=%s\n' "${REQUIRED_LEGACY_SECRET}" "${!MIGRATION_VALUE_NAME}" >> "${MIGRATION_TEMPORARY}" || exit 1
     done
-    if [ "${MIGRATION_ASSISTANT_KEY_STATE}" = valid ]; then
-      printf 'ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=%s\n' \
-        "${MIGRATION_ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY}" >> "${MIGRATION_TEMPORARY}" || exit 1
-    fi
+    append_migrated_optional_secret "${MIGRATION_TEMPORARY}" WEB_SOCKET_CONNECTION_TOKEN_SECRET \
+      "${MIGRATION_WEB_SOCKET_CONNECTION_TOKEN_SECRET_STATE}" \
+      "${MIGRATION_WEB_SOCKET_CONNECTION_TOKEN_SECRET}" || exit 1
+    append_migrated_optional_secret "${MIGRATION_TEMPORARY}" WEBSOCKET_GATEWAY_INTERNAL_SECRET \
+      "${MIGRATION_WEBSOCKET_GATEWAY_INTERNAL_SECRET_STATE}" \
+      "${MIGRATION_WEBSOCKET_GATEWAY_INTERNAL_SECRET}" || exit 1
+    append_migrated_optional_secret "${MIGRATION_TEMPORARY}" ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY \
+      "${MIGRATION_ASSISTANT_KEY_STATE}" "${MIGRATION_ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY}" || exit 1
     chown root:root "${MIGRATION_TEMPORARY}" && chmod 0600 "${MIGRATION_TEMPORARY}" && \
       mv -Tf -- "${MIGRATION_TEMPORARY}" "${SECRETS_FILE}"
   ); then
@@ -424,10 +506,14 @@ if [ ! -e "${SECRETS_FILE}" ] && [ -e "${LEGACY_SECRETS_FILE}" ]; then
     [ "${READ_SECRET_VALUE}" = "${!MIGRATION_VALUE_NAME}" ] || \
       die "Root-owned ${REQUIRED_LEGACY_SECRET} failed post-migration verification."
   done
-  read_hex_secret "${SECRETS_FILE}" ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY false
-  [ "${READ_SECRET_STATE}" = "${MIGRATION_ASSISTANT_KEY_STATE}" ] && \
-    [ "${READ_SECRET_VALUE}" = "${MIGRATION_ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY}" ] || \
-    die "The root-owned assistant pairing key failed post-migration verification."
+  verify_migrated_optional_secret "${SECRETS_FILE}" WEB_SOCKET_CONNECTION_TOKEN_SECRET \
+    "${MIGRATION_WEB_SOCKET_CONNECTION_TOKEN_SECRET_STATE}" \
+    "${MIGRATION_WEB_SOCKET_CONNECTION_TOKEN_SECRET}"
+  verify_migrated_optional_secret "${SECRETS_FILE}" WEBSOCKET_GATEWAY_INTERNAL_SECRET \
+    "${MIGRATION_WEBSOCKET_GATEWAY_INTERNAL_SECRET_STATE}" \
+    "${MIGRATION_WEBSOCKET_GATEWAY_INTERNAL_SECRET}"
+  verify_migrated_optional_secret "${SECRETS_FILE}" ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY \
+    "${MIGRATION_ASSISTANT_KEY_STATE}" "${MIGRATION_ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY}"
   log "Migrated persistent secrets into root-owned storage."
 fi
 
@@ -453,6 +539,8 @@ if [ ! -e "${SECRETS_FILE}" ]; then
       printf 'ENCRYPTION_SERVER_KEY=%s\n' "$(openssl rand -hex 32)" >> "${NEW_SECRETS_TEMPORARY}" &&
       printf 'PSEUDO_KEY_PARAMS_KEY=%s\n' "$(openssl rand -hex 32)" >> "${NEW_SECRETS_TEMPORARY}" &&
       printf 'VALET_TOKEN_SECRET=%s\n' "$(openssl rand -hex 32)" >> "${NEW_SECRETS_TEMPORARY}" &&
+      printf 'WEB_SOCKET_CONNECTION_TOKEN_SECRET=%s\n' "$(openssl rand -hex 32)" >> "${NEW_SECRETS_TEMPORARY}" &&
+      printf 'WEBSOCKET_GATEWAY_INTERNAL_SECRET=%s\n' "$(openssl rand -hex 32)" >> "${NEW_SECRETS_TEMPORARY}" &&
       printf 'ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=%s\n' \
         "${ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY}" >> "${NEW_SECRETS_TEMPORARY}" &&
       chown root:root "${NEW_SECRETS_TEMPORARY}" && chmod 0600 "${NEW_SECRETS_TEMPORARY}" &&
@@ -471,6 +559,11 @@ SECRETS_MODE="$(stat -c '%a' "${SECRETS_FILE}")"
 SECRETS_OWNER="$(stat -c '%u' "${SECRETS_FILE}")"
 [ "${SECRETS_MODE}" = 600 ] || die "${SECRETS_FILE} must have mode 600."
 [ "${SECRETS_OWNER}" = 0 ] || die "${SECRETS_FILE} must be owned by root."
+
+persist_missing_websocket_secrets
+validate_secret_document "${SECRETS_FILE}"
+read_hex_secret "${SECRETS_FILE}" WEB_SOCKET_CONNECTION_TOKEN_SECRET true
+read_hex_secret "${SECRETS_FILE}" WEBSOCKET_GATEWAY_INTERNAL_SECRET true
 
 read_hex_secret "${SECRETS_FILE}" ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY false
 if [ "${READ_SECRET_STATE}" = missing ]; then
@@ -513,7 +606,7 @@ fi
 
 # Parse the fixed generated schema as inert data instead of sourcing a writable
 # file as shell code.
-for SECRET_NAME in AUTH_JWT_SECRET JWT_SECRET ENCRYPTION_SERVER_KEY PSEUDO_KEY_PARAMS_KEY VALET_TOKEN_SECRET ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY; do
+for SECRET_NAME in AUTH_JWT_SECRET JWT_SECRET ENCRYPTION_SERVER_KEY PSEUDO_KEY_PARAMS_KEY VALET_TOKEN_SECRET WEB_SOCKET_CONNECTION_TOKEN_SECRET WEBSOCKET_GATEWAY_INTERNAL_SECRET ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY; do
   read_hex_secret "${SECRETS_FILE}" "${SECRET_NAME}" true
   printf -v "${SECRET_NAME}" '%s' "${READ_SECRET_VALUE}"
 done
@@ -534,13 +627,15 @@ if [ -e "${LEGACY_SECRETS_FILE}" ]; then
     [ "${READ_SECRET_VALUE}" = "${CANONICAL_LEGACY_SECRET_VALUE}" ] || \
       die "Refusing to remove legacy ${LEGACY_SECRET_NAME}: it differs from root-owned storage."
   done
-  read_hex_secret "${LEGACY_SECRETS_FILE}" ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY false
-  if [ "${READ_SECRET_STATE}" = valid ]; then
-    LEGACY_ASSISTANT_SUBSCRIPTION_KEY="${READ_SECRET_VALUE}"
-    read_hex_secret "${SECRETS_FILE}" ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY true
-    [ "${READ_SECRET_VALUE}" = "${LEGACY_ASSISTANT_SUBSCRIPTION_KEY}" ] || \
-      die "Refusing to remove the legacy assistant pairing key: it differs from root-owned storage."
-  fi
+  for OPTIONAL_LEGACY_SECRET_NAME in WEB_SOCKET_CONNECTION_TOKEN_SECRET WEBSOCKET_GATEWAY_INTERNAL_SECRET ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY; do
+    read_hex_secret "${LEGACY_SECRETS_FILE}" "${OPTIONAL_LEGACY_SECRET_NAME}" false
+    if [ "${READ_SECRET_STATE}" = valid ]; then
+      LEGACY_OPTIONAL_SECRET_VALUE="${READ_SECRET_VALUE}"
+      read_hex_secret "${SECRETS_FILE}" "${OPTIONAL_LEGACY_SECRET_NAME}" true
+      [ "${READ_SECRET_VALUE}" = "${LEGACY_OPTIONAL_SECRET_VALUE}" ] || \
+        die "Refusing to remove legacy ${OPTIONAL_LEGACY_SECRET_NAME}: it differs from root-owned storage."
+    fi
+  done
   rm -f -- "${LEGACY_SECRETS_FILE}"
   log "Removed the obsolete app-writable legacy secrets copy."
 fi
@@ -548,7 +643,8 @@ fi
 # -----------------------------------------------------------------------------
 log "Writing home-server .env"
 # dotenv (bin/server.ts) reads this from the home-server package dir (the service
-# WorkingDirectory). sqlite + in-memory cache => zero external services.
+# WorkingDirectory). sqlite + in-memory cache run without external services;
+# REDIS_HOST is optional and only enables the worker WebSocket sync plane.
 cat > "${HS_DIR}/.env" <<EOF
 NODE_ENV=production
 LOG_LEVEL=${LOG_LEVEL:-info}
@@ -561,12 +657,15 @@ DB_TYPE=sqlite
 CACHE_TYPE=memory
 DB_SQLITE_DATABASE_PATH=${DATA_DIR}/database/home_server.sqlite
 FILE_UPLOAD_PATH=${DATA_DIR}/uploads
+FILE_DOWNLOAD_DEADLINE_MS=${FILE_DOWNLOAD_DEADLINE_MS}
 REDIS_URL=${REDIS_URL:-redis://localhost:6379}
 AUTH_JWT_SECRET=${AUTH_JWT_SECRET}
 JWT_SECRET=${JWT_SECRET}
 ENCRYPTION_SERVER_KEY=${ENCRYPTION_SERVER_KEY}
 PSEUDO_KEY_PARAMS_KEY=${PSEUDO_KEY_PARAMS_KEY}
 VALET_TOKEN_SECRET=${VALET_TOKEN_SECRET}
+WEB_SOCKET_CONNECTION_TOKEN_SECRET=${WEB_SOCKET_CONNECTION_TOKEN_SECRET}
+WEBSOCKET_GATEWAY_INTERNAL_SECRET=${WEBSOCKET_GATEWAY_INTERNAL_SECRET}
 ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=${ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY}
 ASSISTANT_SUBSCRIPTION_TOKEN_PATH=${ASSISTANT_SUBSCRIPTION_TOKEN_PATH}
 FILES_SERVER_URL=${PUBLIC_FILES_SERVER_URL:-http://localhost:${HTTP_PORT}/files}
@@ -578,6 +677,15 @@ COOKIE_SAME_SITE=${COOKIE_SAME_SITE:-Lax}
 COOKIE_SECURE=${COOKIE_SECURE:-false}
 TRUST_PROXY=${TRUST_PROXY:-loopback, linklocal, uniquelocal}
 PUBLIC_URL=${PUBLIC_URL}
+REDIS_HOST=${REDIS_HOST}
+REDIS_PORT=${REDIS_PORT}
+WEBSOCKET_SYNC_ENABLED=${WEBSOCKET_SYNC_ENABLED}
+WEBSOCKET_SYNC_ALLOWED_ORIGINS=${WEBSOCKET_SYNC_ALLOWED_ORIGINS}
+WEBSOCKET_SYNC_MAX_SOCKETS_PER_USER=${WEBSOCKET_SYNC_MAX_SOCKETS_PER_USER}
+WEBSOCKET_SYNC_REDIS_KEY_PREFIX=${WEBSOCKET_SYNC_REDIS_KEY_PREFIX}
+WEBSOCKET_SYNC_REDIS_OPERATION_TIMEOUT_MS=${WEBSOCKET_SYNC_REDIS_OPERATION_TIMEOUT_MS}
+WEBSOCKET_SYNC_COMMAND_LEASE_TTL_MS=${WEBSOCKET_SYNC_COMMAND_LEASE_TTL_MS}
+WEBSOCKET_SYNC_SOCKET_LEASE_TTL_MS=${WEBSOCKET_SYNC_SOCKET_LEASE_TTL_MS}
 STANDARD_RED_FEATURES_MODE=${STANDARD_RED_FEATURES_MODE:-included}
 STANDARD_RED_ENTITLEMENT_MODE=${STANDARD_RED_ENTITLEMENT_MODE:-included}
 STANDARD_RED_FULL_FEATURE_DURATION_DAYS=${STANDARD_RED_FULL_FEATURE_DURATION_DAYS:-36500}

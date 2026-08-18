@@ -199,6 +199,18 @@ export function validateSetupOverwriteContract(shellSetup, powershellSetup) {
           "fresh-install assistant pairing key persistence",
         ],
         [
+          "SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET=${SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET}",
+          "fresh-install dedicated durable gRPC HMAC key",
+        ],
+        [
+          "read_syncing_server_internal_grpc_auth_secret",
+          "existing-install durable gRPC key validation",
+        ],
+        [
+          "persist_missing_environment_secrets",
+          "atomic existing-install secret migration",
+        ],
+        [
           "ENFORCE_HTTPS_FROM_PROXY=${USE_HTTPS}",
           "fresh-install trusted proxy transport selection",
         ],
@@ -251,6 +263,19 @@ export function validateSetupOverwriteContract(shellSetup, powershellSetup) {
           "ASSISTANT_SUBSCRIPTION_ENCRYPTION_KEY=$AssistantSubscriptionEncryptionKey",
           "fresh-install assistant pairing key persistence",
         ],
+        [
+          "SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET=$SyncingServerInternalGrpcAuthSecret",
+          "fresh-install dedicated durable gRPC HMAC key",
+        ],
+        [
+          "Get-SyncingServerInternalGrpcAuthSecretState",
+          "existing-install durable gRPC key validation",
+        ],
+        [
+          "Add-MissingEnvironmentSecrets",
+          "atomic existing-install secret migration",
+        ],
+        ["[System.IO.File]::Replace", "atomic Windows environment replacement"],
         [
           "ENFORCE_HTTPS_FROM_PROXY=$UseHttps",
           "fresh-install trusted proxy transport selection",
@@ -316,9 +341,9 @@ export function validateSetupOverwriteContract(shellSetup, powershellSetup) {
       continue;
     }
     for (let index = 0; index < 3; index += 1) {
-      if (
-        !(resolves[index] < builds[index] && builds[index] < verifies[index])
-      ) {
+      if (!(
+        resolves[index] < builds[index] && builds[index] < verifies[index]
+      )) {
         errors.push(
           `${file}: deployment identity must resolve before build and verify after start`,
         );

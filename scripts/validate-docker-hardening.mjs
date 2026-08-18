@@ -49,6 +49,18 @@ const AUTH_STEP_UP_THRESHOLD_ENV_KEYS = Object.freeze([
   "APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_2",
   "APPLICATION_VERSION_THRESHOLD_FOR_TOKEN_VERSION_3",
 ]);
+const SYNC_GRPC_AUTH_ENV_KEY = "SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET";
+const WEBSOCKET_SYNC_ENV_DEFAULTS = Object.freeze({
+  WEBSOCKET_SYNC_ENABLED: "true",
+  WEBSOCKET_SYNC_ALLOWED_ORIGINS: "",
+  WEBSOCKET_SYNC_MAX_SOCKETS_PER_USER: "4",
+  WEBSOCKET_SYNC_REDIS_KEY_PREFIX: "srn:ws-sync:v1",
+  WEBSOCKET_SYNC_REDIS_OPERATION_TIMEOUT_MS: "1500",
+  WEBSOCKET_SYNC_COMMAND_LEASE_TTL_MS: "30000",
+  WEBSOCKET_SYNC_SOCKET_LEASE_TTL_MS: "75000",
+});
+const FILE_DOWNLOAD_DEADLINE_ENV_KEY = "FILE_DOWNLOAD_DEADLINE_MS";
+const FILE_DOWNLOAD_DEADLINE_DEFAULT = "30000";
 const RUNTIME_LOG_PACKAGE_PREFIXES = Object.freeze([
   "API_GATEWAY",
   "AUTH_SERVER",
@@ -339,6 +351,84 @@ export function validateAuthStepUpComposeSource(composeSource, { label }) {
           `${label}: ${key} must expose an operator override defaulting to 0.0.0`,
         ];
   });
+}
+
+export function validateSyncGrpcAuthComposeContract(
+  config,
+  composeSource,
+  { serviceName, label },
+) {
+  const service = config?.services?.[serviceName];
+  if (!service) {
+    return [`${label}: missing ${serviceName} service`];
+  }
+
+  const errors = [];
+  const environment = environmentMap(service.environment);
+  if (
+    !Object.prototype.hasOwnProperty.call(environment, SYNC_GRPC_AUTH_ENV_KEY)
+  ) {
+    errors.push(
+      `${label} ${serviceName}: must propagate ${SYNC_GRPC_AUTH_ENV_KEY}`,
+    );
+  }
+  const expected = `${SYNC_GRPC_AUTH_ENV_KEY}: \${${SYNC_GRPC_AUTH_ENV_KEY}:-}`;
+  if (!String(composeSource).includes(expected)) {
+    errors.push(
+      `${label}: ${SYNC_GRPC_AUTH_ENV_KEY} must be a distinct operator secret with an empty fail-closed default`,
+    );
+  }
+  return errors;
+}
+
+export function validateWebSocketSyncComposeContract(
+  config,
+  composeSource,
+  { serviceName, label },
+) {
+  const service = config?.services?.[serviceName];
+  if (!service) {
+    return [`${label}: missing ${serviceName} service`];
+  }
+
+  const errors = [];
+  const environment = environmentMap(service.environment);
+  const source = String(composeSource);
+  for (const [key, defaultValue] of Object.entries(
+    WEBSOCKET_SYNC_ENV_DEFAULTS,
+  )) {
+    if (!Object.prototype.hasOwnProperty.call(environment, key)) {
+      errors.push(`${label} ${serviceName}: must propagate ${key}`);
+    }
+    const expected = `${key}: \${${key}:-${defaultValue}}`;
+    if (!source.includes(expected)) {
+      errors.push(
+        `${label}: ${key} must remain operator-overridable with its safe default`,
+      );
+    }
+  }
+
+  if (
+    !Object.prototype.hasOwnProperty.call(
+      environment,
+      FILE_DOWNLOAD_DEADLINE_ENV_KEY,
+    )
+  ) {
+    errors.push(
+      `${label} ${serviceName}: must propagate ${FILE_DOWNLOAD_DEADLINE_ENV_KEY}`,
+    );
+  }
+  if (
+    !source.includes(
+      `${FILE_DOWNLOAD_DEADLINE_ENV_KEY}: \${${FILE_DOWNLOAD_DEADLINE_ENV_KEY}:-${FILE_DOWNLOAD_DEADLINE_DEFAULT}}`,
+    )
+  ) {
+    errors.push(
+      `${label}: ${FILE_DOWNLOAD_DEADLINE_ENV_KEY} must remain operator-overridable with a ${FILE_DOWNLOAD_DEADLINE_DEFAULT} ms default`,
+    );
+  }
+
+  return errors;
 }
 
 export function validateSingleEntrypointAuthStepUpPropagation(
@@ -747,10 +837,7 @@ export function validateDeploymentIdentityContract({
         "install -d -m 0555 /srn-deployment",
         "root-owned traversable marker directory",
       ],
-      [
-        "chmod 0444 /srn-deployment/deployment.json",
-        "read-only marker file",
-      ],
+      ["chmod 0444 /srn-deployment/deployment.json", "read-only marker file"],
     ]) {
       if (!source.includes(fragment))
         errors.push(`${label}: missing ${description}`);
@@ -928,7 +1015,8 @@ export function validateSingleHomeServerBindContract({
   const homeServer = String(homeServerSource);
   if (
     !homeServer.includes("env.get('BIND_ADDRESS', true)") ||
-    !homeServer.includes("listenHomeServer(app, port, bindAddress)")
+    !homeServer.includes("const serverInstance = http.createServer(app)") ||
+    !homeServer.includes("listenHomeServer(serverInstance, port, bindAddress)")
   ) {
     errors.push(
       "home-server: BIND_ADDRESS must select listen(host) while preserving the default listener",
@@ -1021,6 +1109,63 @@ function exactLocationBody(nginxConfig, route) {
     ),
   ];
   return matches.length === 1 ? matches[0][1] : undefined;
+}
+
+function prefixLocationBody(nginxConfig, route) {
+  const escaped = route.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const matches = [
+    ...String(nginxConfig).matchAll(
+      new RegExp(`location\\s+${escaped}\\s*\\{([\\s\\S]*?)\\n\\s*\\}`, "g"),
+    ),
+  ];
+  return matches.length === 1 ? matches[0][1] : undefined;
+}
+
+export function validateWebSocketProxyNginxContract(
+  nginxConfig,
+  { label, proxyPass },
+) {
+  const source = String(nginxConfig);
+  const body = prefixLocationBody(source, "/sockets");
+  if (!body) {
+    return [`${label}: must define one /sockets prefix location`];
+  }
+
+  const errors = [];
+  const required = [
+    [
+      "map Upgrade into a safe Connection header",
+      /map\s+\$http_upgrade\s+\$connection_upgrade\s*\{/,
+      source,
+    ],
+    [
+      `proxy to ${proxyPass}`,
+      new RegExp(
+        `\\bproxy_pass\\s+${proxyPass.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:\\$request_uri)?\\s*;`,
+      ),
+      body,
+    ],
+    ["preserve HTTP/1.1", /\bproxy_http_version\s+1\.1\s*;/, body],
+    [
+      "forward Upgrade",
+      /\bproxy_set_header\s+Upgrade\s+\$http_upgrade\s*;/,
+      body,
+    ],
+    [
+      "forward the mapped Connection header",
+      /\bproxy_set_header\s+Connection\s+\$connection_upgrade\s*;/,
+      body,
+    ],
+    ["forward Host", /\bproxy_set_header\s+Host\s+\$host\s*;/, body],
+    ["retain long-lived reads", /\bproxy_read_timeout\s+86400s\s*;/, body],
+    ["retain long-lived writes", /\bproxy_send_timeout\s+86400s\s*;/, body],
+  ];
+  for (const [description, pattern, target] of required) {
+    if (!pattern.test(target)) {
+      errors.push(`${label}: /sockets location must ${description}`);
+    }
+  }
+  return errors;
 }
 
 export function validatePairingCallbackNginxContract(
@@ -1733,6 +1878,18 @@ export function runDockerHardeningValidation(argv = process.argv.slice(2)) {
     ...validateAuthStepUpComposeSource(singleComposeSource, {
       label: "single compose",
     }),
+    ...validateSyncGrpcAuthComposeContract(multiConfig, multiComposeSource, {
+      serviceName: "server",
+      label: "multi compose",
+    }),
+    ...validateWebSocketSyncComposeContract(multiConfig, multiComposeSource, {
+      serviceName: "server",
+      label: "multi compose",
+    }),
+    ...validateWebSocketSyncComposeContract(singleConfig, singleComposeSource, {
+      serviceName: "app",
+      label: "single compose",
+    }),
     ...validateSingleEntrypointAuthStepUpPropagation(singleEntrypoint),
     ...validateFilesStorageDeploymentContract({
       multiConfig,
@@ -1813,6 +1970,14 @@ export function runDockerHardeningValidation(argv = process.argv.slice(2)) {
       proxyPass: "http://$srn_api",
     }),
     ...validatePairingCallbackNginxContract(singleNginx, {
+      label: "single nginx",
+      proxyPass: "http://127.0.0.1:3000",
+    }),
+    ...validateWebSocketProxyNginxContract(multiNginx, {
+      label: "multi nginx",
+      proxyPass: "http://$srn_ws",
+    }),
+    ...validateWebSocketProxyNginxContract(singleNginx, {
       label: "single nginx",
       proxyPass: "http://127.0.0.1:3000",
     }),

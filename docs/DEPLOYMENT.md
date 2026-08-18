@@ -23,6 +23,14 @@ websocket bridge) is disabled without Redis, so clients fall back to normal
 periodic sync. Everything else — accounts, notes, files, revisions, admin panel,
 AI proxy, OCR, CalDAV — works the same.
 
+Providing a private `REDIS_HOST`/`REDIS_PORT` enables worker WebSocket sync for
+Modes B and C without changing their SQLite/in-memory data path. This connector
+supports only host and port, without Redis authentication or TLS, so it is
+supported only when Redis stays on the same private trusted network. Their
+durable sync adapter remains in-process. Only Mode A's separate API gateway and
+syncing server use the setup-generated `SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET`
+to authenticate durable gRPC command/status metadata.
+
 {% include mermaid.html %}
 
 {% include safety-alert.html
