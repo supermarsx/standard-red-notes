@@ -122,7 +122,7 @@ const ClippedNoteView = ({
             setTitle(event.target.value)
           }}
         />
-        <LinkedItemBubblesContainer linkingController={linkingController} item={note} hideToggle />
+        <LinkedItemBubblesContainer linkingController={linkingController} item={note} />
       </div>
       <div className="p-3">
         <BlocksEditorComposer initialValue={note.text}>

@@ -9,7 +9,6 @@ import {
   isUIFeatureAnIframeFeature,
 } from '@standardnotes/snjs'
 import { CSSProperties, useCallback, useEffect, useMemo, useRef } from 'react'
-import { MutuallyExclusiveMediaQueryBreakpoints, useMediaQuery } from '@/Hooks/useMediaQuery'
 import { useApplication } from '../ApplicationProvider'
 import IframeFeatureView from '../ComponentView/IframeFeatureView'
 import { ErrorBoundary } from '@/Utils/ErrorBoundary'
@@ -38,8 +37,6 @@ export const ReadonlyNoteContent = ({
 }) => {
   const application = useApplication()
   const linkingController = useLinkingController()
-
-  const isMobileScreen = useMediaQuery(MutuallyExclusiveMediaQueryBreakpoints.sm)
 
   const componentViewer = useMemo(() => {
     const editorForCurrentNote = application.componentManager.editorForNote(note)
@@ -146,8 +143,7 @@ export const ReadonlyNoteContent = ({
           item={note}
           linkingController={linkingController}
           readonly
-          className={{ base: 'mt-2 px-4', withToggle: '!mt-1 !pt-0' }}
-          isCollapsedByDefault={isMobileScreen}
+          className={{ base: 'mt-2 px-4' }}
         />
       )}
       {componentViewer ? (

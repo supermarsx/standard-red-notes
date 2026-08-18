@@ -2,7 +2,7 @@ import { observer } from 'mobx-react-lite'
 import ItemLinkAutocompleteInput from './ItemLinkAutocompleteInput'
 import { LinkingController } from '@/Controllers/LinkingController'
 import LinkedItemBubble from './LinkedItemBubble'
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useResponsiveAppPane } from '../Panes/ResponsivePaneProvider'
 import { ElementIds } from '@/Constants/ElementIDs'
 import { classNames } from '@standardnotes/utils'
@@ -12,39 +12,22 @@ import { LinkableItem } from '@/Utils/Items/Search/LinkableItem'
 import { ItemLink } from '@/Utils/Items/Search/ItemLink'
 import { FOCUS_TAGS_INPUT_COMMAND, keyboardStringForShortcut } from '@standardnotes/ui-services'
 import { useItemLinks } from '@/Hooks/useItemLinks'
-import RoundIconButton from '../Button/RoundIconButton'
 import VaultNameBadge from '../Vaults/VaultNameBadge'
 import LastEditedByBadge from '../Vaults/LastEditedByBadge'
 import { useItemVaultInfo } from '@/Hooks/useItemVaultInfo'
 import mergeRegister from '../../Hooks/mergeRegister'
 import { useApplication } from '../ApplicationProvider'
-import { shouldShowLinkedItemsToggle } from './linkedItemsToggle'
 
 type Props = {
   linkingController: LinkingController
   item: DecryptedItemInterface
-  hideToggle?: boolean
   readonly?: boolean
   className?: {
     base?: string
-    withToggle?: string
   }
-  isCollapsedByDefault?: boolean
 }
 
-type CollapseReason = 'item-count' | 'wrapped-layout'
-
-const ItemsToShowWhenCollapsed = 5
-const LayoutMeasurementTolerance = 4
-
-const LinkedItemBubblesContainer = ({
-  item,
-  linkingController,
-  hideToggle = false,
-  readonly = false,
-  className = {},
-  isCollapsedByDefault = true,
-}: Props) => {
+const LinkedItemBubblesContainer = ({ item, linkingController, readonly = false, className = {} }: Props) => {
   const { toggleAppPane } = useResponsiveAppPane()
 
   const application = useApplication()
@@ -156,92 +139,9 @@ const LinkedItemBubblesContainer = ({
     [notesLinkingToItem, filesLinkingToItem],
   )
 
-  const itemsToDisplay = outgoingLinks.concat(backlinks)
-  const [collapseReason, setCollapseReason] = useState<CollapseReason | undefined>(
-    itemsToDisplay.length > ItemsToShowWhenCollapsed && isCollapsedByDefault ? 'item-count' : undefined,
-  )
-  const isCollapsed = collapseReason !== undefined
-
-  // A count-driven collapse stops being useful as soon as every link fits inside
-  // the collapsed item budget. Expand before hiding the toggle so the container
-  // cannot become trapped in its horizontal, non-wrapping layout.
-  useEffect(() => {
-    if (collapseReason === 'item-count' && itemsToDisplay.length <= ItemsToShowWhenCollapsed) {
-      setCollapseReason(undefined)
-    }
-  }, [collapseReason, itemsToDisplay.length])
-
-  // When collapsed, share the limited budget across both groups, prioritizing outgoing links.
-  const visibleOutgoingLinks = isCollapsed ? outgoingLinks.slice(0, ItemsToShowWhenCollapsed) : outgoingLinks
-  const remainingCollapsedBudget = Math.max(ItemsToShowWhenCollapsed - visibleOutgoingLinks.length, 0)
-  const visibleBacklinks = isCollapsed ? backlinks.slice(0, remainingCollapsedBudget) : backlinks
-  const nonVisibleItems =
-    outgoingLinks.length - visibleOutgoingLinks.length + (backlinks.length - visibleBacklinks.length)
-
-  const [layoutCanCollapseMeaningfully, setLayoutCanCollapseMeaningfully] = useState(false)
-  const [linkContainer, setLinkContainer] = useState<HTMLDivElement | null>(null)
-  const linkContainerId = useId()
-  const toggleId = `${linkContainerId}-toggle`
-  useEffect(() => {
-    const container = linkContainer
-    if (!container) {
-      return
-    }
-
-    const measureLayout = () => {
-      const firstChild = container.firstElementChild
-      if (!firstChild) {
-        setLayoutCanCollapseMeaningfully(false)
-        if (collapseReason === 'wrapped-layout') {
-          setCollapseReason(undefined)
-        }
-        return
-      }
-
-      if (isCollapsed) {
-        const collapsedRowOverflows = container.scrollWidth > container.clientWidth + LayoutMeasurementTolerance
-        setLayoutCanCollapseMeaningfully(collapsedRowOverflows)
-
-        // A layout-driven collapse is only meaningful while its single row
-        // overflows. If a resize makes everything fit, restore the expanded
-        // wrapping layout and remove the now-no-op control.
-        if (collapseReason === 'wrapped-layout' && !collapsedRowOverflows) {
-          setCollapseReason(undefined)
-        }
-        return
-      }
-
-      const expandedContainerWraps = container.clientHeight > firstChild.clientHeight + LayoutMeasurementTolerance
-      setLayoutCanCollapseMeaningfully(expandedContainerWraps)
-    }
-
-    measureLayout()
-
-    if (typeof ResizeObserver === 'undefined') {
-      window.addEventListener('resize', measureLayout)
-      return () => {
-        window.removeEventListener('resize', measureLayout)
-      }
-    }
-
-    const resizeObserver = new ResizeObserver(measureLayout)
-
-    resizeObserver.observe(container)
-
-    return () => {
-      resizeObserver.disconnect()
-    }
-  }, [collapseReason, isCollapsed, itemsToDisplay.length, linkContainer])
-
-  const canToggleContainer = shouldShowLinkedItemsToggle(
-    itemsToDisplay.length,
-    layoutCanCollapseMeaningfully,
-    hideToggle,
-  )
-
   const { vault, lastEditedByContact } = useItemVaultInfo(item)
 
-  if (readonly && itemsToDisplay.length === 0 && !vault) {
+  if (readonly && outgoingLinks.length === 0 && backlinks.length === 0 && !vault) {
     return null
   }
 
@@ -263,23 +163,12 @@ const LinkedItemBubblesContainer = ({
   const groupLabelClassName = 'mr-0.5 flex-shrink-0 select-none text-xs font-semibold uppercase text-passive-1'
 
   return (
-    <div
-      className={classNames(
-        'flex w-full flex-wrap justify-between md:flex-nowrap',
-        itemsToDisplay.length > 0 && canToggleContainer ? 'pt-2 ' + className.withToggle : undefined,
-        isCollapsed ? 'gap-4' : 'gap-1',
-        className.base,
-      )}
-    >
+    <div className={classNames('flex w-full flex-wrap gap-1', className.base)}>
       <div
         className={classNames(
-          'note-view-linking-container flex max-w-full min-w-0 items-center gap-2 bg-transparent md:min-w-80',
+          'note-view-linking-container flex max-w-full min-w-0 flex-wrap items-center gap-2 bg-transparent md:min-w-80',
           allItemsLinkedToItem.length || notesLinkingToItem.length ? 'mt-1' : 'mt-0.5',
-          isCollapsed ? 'overflow-x-auto' : 'flex-wrap',
-          canToggleContainer && 'mr-2',
         )}
-        id={linkContainerId}
-        ref={setLinkContainer}
       >
         {!!vault && <VaultNameBadge vault={vault} />}
         {!!lastEditedByContact && <LastEditedByBadge contact={lastEditedByContact} />}
@@ -299,7 +188,7 @@ const LinkedItemBubblesContainer = ({
           </button>
         )}
 
-        {(visibleOutgoingLinks.length > 0 || !readonly) && (
+        {(outgoingLinks.length > 0 || !readonly) && (
           <span className="flex flex-shrink-0 items-center gap-1" title="Items this note links to">
             <Icon type="link" className="text-passive-1 flex-shrink-0" size="small" />
             <span className={groupLabelClassName}>
@@ -307,7 +196,7 @@ const LinkedItemBubblesContainer = ({
             </span>
           </span>
         )}
-        {visibleOutgoingLinks.map(renderBubble)}
+        {outgoingLinks.map(renderBubble)}
         {!readonly && (
           <ItemLinkAutocompleteInput
             ref={linkInputRef}
@@ -329,28 +218,8 @@ const LinkedItemBubblesContainer = ({
             <span className={groupLabelClassName}>Linked By ({backlinks.length})</span>
           </span>
         )}
-        {visibleBacklinks.map(renderBubble)}
-
-        {isCollapsed && nonVisibleItems > 0 && <span className="flex-shrink-0">and {nonVisibleItems} more...</span>}
+        {backlinks.map(renderBubble)}
       </div>
-      {itemsToDisplay.length > 0 && canToggleContainer && (
-        <RoundIconButton
-          id={toggleId}
-          className="note-view-linking-toggle"
-          label={isCollapsed ? 'Expand linked items' : 'Collapse linked items'}
-          aria-controls={linkContainerId}
-          aria-expanded={!isCollapsed}
-          onClick={() => {
-            setCollapseReason((reason) => {
-              if (reason) {
-                return undefined
-              }
-              return itemsToDisplay.length > ItemsToShowWhenCollapsed ? 'item-count' : 'wrapped-layout'
-            })
-          }}
-          icon={isCollapsed ? 'chevron-down' : 'chevron-up'}
-        />
-      )}
     </div>
   )
 }

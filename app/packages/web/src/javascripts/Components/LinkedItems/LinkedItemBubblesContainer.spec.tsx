@@ -63,52 +63,10 @@ jest.mock('../Icon/Icon', () => {
     default: ({ type }: { type: string }) => React.createElement('span', { 'data-icon': type }),
   }
 })
-jest.mock('../Button/RoundIconButton', () => {
-  const React = jest.requireActual<typeof import('react')>('react')
-  return {
-    __esModule: true,
-    default: ({ label, icon: _icon, ...props }: { label: string; icon: string } & React.ComponentProps<'button'>) =>
-      React.createElement('button', { ...props, 'aria-label': label }),
-  }
-})
 jest.mock('../Vaults/VaultNameBadge', () => ({ __esModule: true, default: () => null }))
 jest.mock('../Vaults/LastEditedByBadge', () => ({ __esModule: true, default: () => null }))
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
-
-class MockResizeObserver {
-  static instances: MockResizeObserver[] = []
-  element?: Element
-  disconnected = false
-
-  constructor(private readonly callback: ResizeObserverCallback) {
-    MockResizeObserver.instances.push(this)
-  }
-
-  observe(element: Element): void {
-    this.element = element
-  }
-
-  unobserve(): void {}
-
-  disconnect(): void {
-    this.disconnected = true
-  }
-
-  trigger(): void {
-    this.callback([], this as unknown as ResizeObserver)
-  }
-
-  static latestFor(element: Element): MockResizeObserver {
-    const observer = [...MockResizeObserver.instances]
-      .reverse()
-      .find((candidate) => candidate.element === element && !candidate.disconnected)
-    if (!observer) {
-      throw new Error('No active ResizeObserver found for linked-items container')
-    }
-    return observer
-  }
-}
 
 const links = (count: number): MockLinks => ({
   notesLinkedToItem: Array.from({ length: count }, (_, index) => ({
@@ -124,43 +82,23 @@ const links = (count: number): MockLinks => ({
 const linkedContainer = (container: HTMLElement): HTMLDivElement =>
   container.querySelector<HTMLDivElement>('.note-view-linking-container')!
 
-const setLayoutMetrics = (container: HTMLElement) => {
-  const metrics = { clientHeight: 20, clientWidth: 200, scrollWidth: 200, firstChildHeight: 20 }
-  Object.defineProperties(container, {
-    clientHeight: { configurable: true, get: () => metrics.clientHeight },
-    clientWidth: { configurable: true, get: () => metrics.clientWidth },
-    scrollWidth: { configurable: true, get: () => metrics.scrollWidth },
-  })
-  Object.defineProperty(container.firstElementChild!, 'clientHeight', {
-    configurable: true,
-    get: () => metrics.firstChildHeight,
-  })
-  return metrics
-}
-
-describe('LinkedItemBubblesContainer collapse control', () => {
+describe('LinkedItemBubblesContainer', () => {
   let container: HTMLElement
   let root: Root
-  let originalResizeObserver: typeof ResizeObserver | undefined
 
-  const component = (key = 'linked-items') =>
+  const component = (readonly = true) =>
     createElement(LinkedItemBubblesContainer, {
-      key,
-      item: { uuid: `source-${key}`, content_type: 'Note' } as never,
+      item: { uuid: 'source-note', content_type: 'Note' } as never,
       linkingController: { unlinkItems: jest.fn(), activateItem: jest.fn() } as never,
-      readonly: true,
+      readonly,
     })
 
-  const render = () => {
-    act(() => root.render(component()))
+  const render = (readonly = true) => {
+    act(() => root.render(component(readonly)))
   }
 
   beforeEach(() => {
     mockLinks = links(0)
-    MockResizeObserver.instances = []
-    originalResizeObserver = globalThis.ResizeObserver
-    ;(globalThis as { ResizeObserver?: typeof ResizeObserver }).ResizeObserver =
-      MockResizeObserver as unknown as typeof ResizeObserver
     container = document.createElement('div')
     document.body.appendChild(container)
     root = createRoot(container)
@@ -169,79 +107,35 @@ describe('LinkedItemBubblesContainer collapse control', () => {
   afterEach(() => {
     act(() => root.unmount())
     container.remove()
-    ;(globalThis as { ResizeObserver?: typeof ResizeObserver }).ResizeObserver = originalResizeObserver
     jest.clearAllMocks()
   })
 
-  it('assigns unique toggle and controlled-container ids to simultaneous instances', () => {
-    mockLinks = links(6)
-    act(() => root.render(createElement('div', null, component('first'), component('second'))))
-
-    const toggles = Array.from(container.querySelectorAll<HTMLButtonElement>('.note-view-linking-toggle'))
-    expect(toggles).toHaveLength(2)
-    expect(new Set(toggles.map((toggle) => toggle.id)).size).toBe(2)
-
-    const controlledIds = toggles.map((toggle) => toggle.getAttribute('aria-controls'))
-    expect(new Set(controlledIds).size).toBe(2)
-    toggles.forEach((toggle, index) => {
-      expect(toggle.getAttribute('aria-expanded')).toBe('false')
-      expect(controlledIds[index]).not.toBeNull()
-      expect(container.contains(document.getElementById(controlledIds[index]!))).toBe(true)
-    })
-  })
-
-  it('expands and removes a count-only toggle when the link count falls to the collapsed budget', () => {
-    mockLinks = links(6)
-    render()
-    expect(linkedContainer(container).classList.contains('overflow-x-auto')).toBe(true)
-    expect(container.querySelector('.note-view-linking-toggle')).not.toBeNull()
-
-    mockLinks = links(5)
+  it('always shows every linked item without a collapsed control or hidden overflow row', () => {
+    mockLinks = links(8)
     render()
 
     expect(linkedContainer(container).classList.contains('flex-wrap')).toBe(true)
     expect(linkedContainer(container).classList.contains('overflow-x-auto')).toBe(false)
     expect(container.querySelector('.note-view-linking-toggle')).toBeNull()
+    expect(container.querySelectorAll('[data-link-id]')).toHaveLength(8)
+    expect(container.textContent).not.toContain('more...')
   })
 
-  it('keeps a wrapped-layout toggle reversible, then removes it when a resize makes collapsing a no-op', () => {
-    mockLinks = links(3)
+  it('keeps outgoing links and backlinks reachable in their labeled groups', () => {
+    mockLinks = links(2)
+    mockLinks.notesLinkingToItem = [{ id: 'backlink-1', item: { uuid: 'backlink-note', content_type: 'Note' } }]
     render()
-    const linkContainer = linkedContainer(container)
-    const metrics = setLayoutMetrics(linkContainer)
 
-    metrics.clientHeight = 48
-    act(() => MockResizeObserver.latestFor(linkContainer).trigger())
+    expect(container.textContent).toContain('Links (2)')
+    expect(container.textContent).toContain('Linked By (1)')
+    expect(container.querySelectorAll('[data-link-id]')).toHaveLength(3)
+  })
 
-    let toggle = container.querySelector<HTMLButtonElement>('.note-view-linking-toggle')!
-    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+  it('keeps the functional inline link input reachable for editable notes', () => {
+    mockLinks = links(0)
+    render(false)
 
-    metrics.clientWidth = 100
-    metrics.scrollWidth = 180
-    act(() => toggle.click())
-    toggle = container.querySelector<HTMLButtonElement>('.note-view-linking-toggle')!
-    expect(toggle.getAttribute('aria-expanded')).toBe('false')
-    expect(linkContainer.classList.contains('overflow-x-auto')).toBe(true)
-
-    metrics.clientWidth = 220
-    metrics.scrollWidth = 180
-    metrics.clientHeight = 20
-    act(() => MockResizeObserver.latestFor(linkContainer).trigger())
-
-    expect(linkContainer.classList.contains('flex-wrap')).toBe(true)
+    expect(container.querySelector('[data-link-input]')).not.toBeNull()
     expect(container.querySelector('.note-view-linking-toggle')).toBeNull()
-  })
-
-  it('falls back to a window resize listener when ResizeObserver is unavailable', () => {
-    ;(globalThis as { ResizeObserver?: typeof ResizeObserver }).ResizeObserver = undefined
-    mockLinks = links(3)
-    render()
-    const linkContainer = linkedContainer(container)
-    const metrics = setLayoutMetrics(linkContainer)
-    metrics.clientHeight = 48
-
-    act(() => window.dispatchEvent(new Event('resize')))
-
-    expect(container.querySelector('.note-view-linking-toggle')).not.toBeNull()
   })
 })
