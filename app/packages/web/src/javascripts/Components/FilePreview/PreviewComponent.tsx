@@ -8,7 +8,7 @@ import ComponentErrorBoundary from '@/Components/ComponentErrorBoundary/Componen
 import Button from '../Button/Button'
 import ImagePreview from './ImagePreview'
 import { OptionalSuperEmbeddedImageProps } from './OptionalSuperEmbeddedImageProps'
-import { resolvePreviewKind } from './isFilePreviewable'
+import { hasSupportedImageSignature, resolvePreviewKind } from './isFilePreviewable'
 import TextPreview from './TextPreview'
 import { parseFileName, sanitizeFileName } from '@standardnotes/utils'
 import VideoPreview from './VideoPreview'
@@ -50,7 +50,9 @@ const PreviewComponent: FunctionComponent<Props> = ({
   const currentInputRef = useRef({ file, bytes })
   currentInputRef.current = { file, bytes }
   const isNativeMobileWeb = application.isNativeMobileWeb()
-  const previewKind = resolvePreviewKind(file)
+  const resolvedPreviewKind = resolvePreviewKind(file)
+  const previewKind =
+    resolvedPreviewKind === 'image' && !hasSupportedImageSignature(file, bytes) ? 'unsupported' : resolvedPreviewKind
   const requiresNativePreview = previewKind === 'pdf'
   const usesNativePreview = isNativeMobileWeb && requiresNativePreview
   const requiresObjectUrl =

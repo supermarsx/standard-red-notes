@@ -100,11 +100,11 @@ describe('LegacyApiService.downloadFile integrity contract', () => {
     )
   })
 
-  it('preserves a server-provided 400 reason for the caller', async () => {
+  it('preserves a server-provided missing-file reason for the caller', async () => {
     const { service, runHttp } = createService()
     runHttp.mockResolvedValue({
-      status: 400,
-      data: { error: { message: 'Encrypted file metadata was not found.' } },
+      status: 404,
+      data: { error: { message: 'Encrypted file data was not found on this server.' } },
       headers: new Map(),
     })
 
@@ -113,7 +113,7 @@ describe('LegacyApiService.downloadFile integrity contract', () => {
       onBytesReceived: jest.fn(),
     })
 
-    expect(result?.text).toBe('Encrypted file metadata was not found.')
+    expect(result?.text).toBe('Encrypted file data was not found on this server.')
   })
 
   it('returns an actionable error instead of throwing when the file host is missing', async () => {

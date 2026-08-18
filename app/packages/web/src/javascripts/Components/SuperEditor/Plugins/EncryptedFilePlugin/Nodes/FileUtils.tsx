@@ -1,15 +1,6 @@
-import type { DOMConversionOutput, LexicalNode } from 'lexical'
+import type { LexicalNode } from 'lexical'
 
 import { FileNode } from './FileNode'
-
-export function convertToFileElement(domNode: HTMLDivElement): DOMConversionOutput | null {
-  const fileUuid = domNode.getAttribute('data-lexical-file-uuid')
-  if (fileUuid) {
-    const node = $createFileNode(fileUuid)
-    return { node }
-  }
-  return null
-}
 
 export function $createFileNode(fileUuid: string): FileNode {
   return new FileNode(fileUuid)

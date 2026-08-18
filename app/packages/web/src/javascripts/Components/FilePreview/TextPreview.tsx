@@ -1,14 +1,10 @@
 import { ElementIds } from '@/Constants/ElementIDs'
-import { useMemo, useState } from 'react'
+import Spinner from '@/Components/Spinner/Spinner'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { resolveTextPreviewLanguage, TextPreviewLanguage } from './isFilePreviewable'
-import {
-  canUseSyntaxHighlighting,
-  decodeTextPreview,
-  HighlightTokenKind,
-  neutralizeBidiControls,
-  tokenizeText,
-} from './textPreviewContent'
+import { HighlightTokenKind, neutralizeBidiControls, PreparedTextPreview } from './textPreviewContent'
+import { prepareTextPreviewOffThread } from './prepareTextPreviewOffThread'
 
 type Props = {
   bytes: Uint8Array
@@ -52,17 +48,55 @@ const TextPreview = ({ bytes, fileName, mimeType }: Props) => {
   const { t } = useTranslation('files')
   const [wrapLines, setWrapLines] = useState(true)
   const [highlightSyntax, setHighlightSyntax] = useState(true)
-  const decoded = useMemo(() => decodeTextPreview(bytes), [bytes])
   const safeFileName = useMemo(() => neutralizeBidiControls(fileName), [fileName])
   const displayFileName = safeFileName.text || t('textPreviewUntitled')
   const language = useMemo(() => resolveTextPreviewLanguage({ name: fileName, mimeType }), [fileName, mimeType])
-  const highlightingAvailable =
-    decoded.status === 'ready' && canUseSyntaxHighlighting(bytes.byteLength, decoded.text, language)
+  const input = useMemo(() => ({ bytes, language }), [bytes, language])
+  const generationRef = useRef(0)
+  const [preparation, setPreparation] = useState<{
+    input: object
+    status: 'loading' | 'ready' | 'error'
+    result?: PreparedTextPreview
+  }>()
+  const currentPreparation = preparation?.input === input ? preparation : undefined
+
+  useEffect(() => {
+    const generation = ++generationRef.current
+    const controller = new AbortController()
+    setPreparation({ input, status: 'loading' })
+
+    void prepareTextPreviewOffThread(bytes, language, controller.signal)
+      .then((result) => {
+        if (!controller.signal.aborted && generationRef.current === generation) {
+          setPreparation({ input, status: 'ready', result })
+        }
+      })
+      .catch((error: unknown) => {
+        if (
+          !controller.signal.aborted &&
+          generationRef.current === generation &&
+          (!(error instanceof Error) || error.name !== 'AbortError')
+        ) {
+          setPreparation({ input, status: 'error' })
+        }
+      })
+
+    return () => controller.abort()
+  }, [bytes, input, language])
+
+  if (!currentPreparation || currentPreparation.status === 'loading') {
+    return (
+      <div className="flex h-full w-full flex-grow items-center justify-center gap-2 p-6" role="status">
+        <Spinner className="h-5 w-5" />
+        <span className="text-passive-0 text-sm">{t('loading')}</span>
+      </div>
+    )
+  }
+
+  const decoded = currentPreparation.result?.decoded ?? { status: 'binary-or-invalid-utf8' as const }
+  const highlightedLines = currentPreparation.result?.highlightedLines ?? []
+  const highlightingAvailable = decoded.status === 'ready' && highlightedLines.length > 0
   const showHighlighted = decoded.status === 'ready' && highlightSyntax && highlightingAvailable
-  const highlightedLines = useMemo(
-    () => (showHighlighted && decoded.status === 'ready' ? tokenizeText(decoded.text, language) : []),
-    [decoded, language, showHighlighted],
-  )
 
   if (decoded.status !== 'ready') {
     return (

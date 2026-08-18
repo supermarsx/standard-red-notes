@@ -61,6 +61,7 @@ function buildContainer(): Container {
   container.bind(TYPES.Files_RemoveFile).toConstantValue(noop)
   container.bind(TYPES.Files_MoveFile).toConstantValue(noop)
   container.bind(TYPES.Files_MAX_CHUNK_BYTES).toConstantValue(1024)
+  container.bind(TYPES.Files_FILE_DOWNLOAD_DEADLINE_MS).toConstantValue(30_000)
   container.bind(TYPES.Files_Logger).toConstantValue({ error: () => undefined } as never)
   container.bind(TYPES.Files_ValetTokenAuthMiddleware).toConstantValue(stubAuthMiddleware)
   container.bind(TYPES.Files_SharedVaultValetTokenAuthMiddleware).toConstantValue(stubAuthMiddleware)

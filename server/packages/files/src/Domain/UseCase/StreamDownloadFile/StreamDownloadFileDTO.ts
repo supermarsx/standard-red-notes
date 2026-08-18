@@ -5,4 +5,5 @@ export type StreamDownloadFileDTO = {
   endRange: number
   endRangeOfFile: number
   valetToken: string
+  abortSignal?: AbortSignal
 }

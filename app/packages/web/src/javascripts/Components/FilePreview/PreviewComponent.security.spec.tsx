@@ -42,6 +42,7 @@ describe('PreviewComponent native preview security', () => {
   let container: HTMLElement
   let root: Root
   let isRootMounted: boolean
+  const validPngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
 
   beforeEach(() => {
     container = document.createElement('div')
@@ -175,7 +176,7 @@ describe('PreviewComponent native preview security', () => {
           createElement(PreviewComponent, {
             application,
             file,
-            bytes: new Uint8Array([1, 2, 3]),
+            bytes: validPngBytes,
             isEmbeddedInSuper: false,
           }),
         ),
@@ -212,7 +213,7 @@ describe('PreviewComponent native preview security', () => {
         createElement(PreviewComponent, {
           application,
           file: image,
-          bytes: new Uint8Array([1, 2, 3]),
+          bytes: validPngBytes,
           isEmbeddedInSuper: false,
         }),
       )
@@ -235,6 +236,32 @@ describe('PreviewComponent native preview security', () => {
     expect(container.textContent).toContain('text-preview')
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:secure-preview')
     expect(URL.createObjectURL).toHaveBeenCalledTimes(1)
+  })
+
+  it('never creates an image renderer for PDF bytes mislabeled as an image', async () => {
+    const application = {
+      isNativeMobileWeb: jest.fn().mockReturnValue(false),
+    } as unknown as WebApplication
+    const file = {
+      uuid: 'mislabeled-image',
+      mimeType: 'image/png',
+      name: 'mislabeled.png',
+    } as FileItem
+
+    await act(async () => {
+      root.render(
+        createElement(PreviewComponent, {
+          application,
+          file,
+          bytes: new Uint8Array([0x25, 0x50, 0x44, 0x46]),
+          isEmbeddedInSuper: true,
+        }),
+      )
+      await Promise.resolve()
+    })
+
+    expect(URL.createObjectURL).not.toHaveBeenCalled()
+    expect(container.textContent).toContain('fileCannotBePreviewed')
   })
 
   it('gives an embedded PDF a definite bounded viewport', async () => {

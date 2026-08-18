@@ -144,6 +144,28 @@ describe('file downloader', () => {
     expect(request.abortSignal?.aborted).toBe(true)
   })
 
+  it('settles as aborted when the canceled API request rejects after the abort race is won', async () => {
+    let rejectDownload!: (error: Error) => void
+    apiService.downloadFile = jest.fn(
+      () =>
+        new Promise<undefined>((_resolve, reject) => {
+          rejectDownload = reject
+        }),
+    )
+    downloader = new FileDownloader(file, apiService, 'valet-token')
+
+    const run = downloader.run(jest.fn())
+    await Promise.resolve()
+    downloader.abort()
+
+    await expect(run).resolves.toBe('aborted')
+    const abortError = new Error('The operation was aborted')
+    abortError.name = 'AbortError'
+    rejectDownload(abortError)
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
   it('passes back bytes as they are received', async () => {
     let receivedBytes = new Uint8Array()
     downloader = new FileDownloader(file, apiService, 'valet-token')

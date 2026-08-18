@@ -267,11 +267,48 @@ describe('FetchRequestHandler', () => {
       },
     )
 
-    it('forwards caller cancellation to the underlying fetch without reporting a timeout', async () => {
+    it('reports a timeout that fires while the response body is being consumed', async () => {
+      jest.useFakeTimers()
+      const errorLog = jest.fn()
+      const handler = new FetchRequestHandler(snjsVersion, appVersion, environment, {
+        error: errorLog,
+      } as unknown as LoggerInterface)
+
+      global.fetch = jest.fn((_request: Request, init?: RequestInit) => {
+        return Promise.resolve({
+          status: HttpStatusCode.Success,
+          headers: new Headers({ 'Content-Type': 'application/octet-stream' }),
+          arrayBuffer: () =>
+            new Promise<ArrayBuffer>((_resolve, reject) => {
+              init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true })
+            }),
+        } as Response)
+      }) as unknown as typeof global.fetch
+
+      const responsePromise = handler.handleRequest({
+        url: 'http://localhost:3000/files',
+        verb: HttpVerb.Get,
+        responseType: 'arraybuffer',
+        timeoutMs: 100,
+      })
+      await Promise.resolve()
+      jest.advanceTimersByTime(101)
+
+      const response = await responsePromise
+      expect(response.status).toBe(HttpStatusCode.InternalServerError)
+      expect(response.data).toMatchObject({
+        networkFailure: true,
+        timedOut: true,
+        error: { message: 'Request timed out' },
+      })
+      expect(errorLog).not.toHaveBeenCalled()
+    })
+
+    it('preserves caller cancellation as a rejected abort instead of a network failure response', async () => {
       const controller = new AbortController()
       global.fetch = jest.fn((_request: Request, init?: RequestInit) => {
         return new Promise((_resolve, reject) => {
-          init?.signal?.addEventListener('abort', () => reject(new Error('aborted')))
+          init?.signal?.addEventListener('abort', () => reject(init.signal?.reason))
         })
       }) as unknown as typeof global.fetch
 
@@ -282,10 +319,44 @@ describe('FetchRequestHandler', () => {
       })
       controller.abort()
 
-      const response = await responsePromise
-      const data = response.data as HttpErrorResponseBody & { networkFailure?: boolean; timedOut?: boolean }
-      expect(data.networkFailure).toBe(true)
-      expect(data.timedOut).toBe(false)
+      await expect(responsePromise).rejects.toMatchObject({ name: 'AbortError' })
+    })
+
+    it('preserves caller cancellation while the response body is being consumed', async () => {
+      const controller = new AbortController()
+      let bodyReadStarted!: () => void
+      const bodyReadIsStarted = new Promise<void>((resolve) => {
+        bodyReadStarted = resolve
+      })
+      const errorLog = jest.fn()
+      const handler = new FetchRequestHandler(snjsVersion, appVersion, environment, {
+        error: errorLog,
+      } as unknown as LoggerInterface)
+
+      global.fetch = jest.fn((_request: Request, init?: RequestInit) => {
+        return Promise.resolve({
+          status: HttpStatusCode.Success,
+          headers: new Headers({ 'Content-Type': 'application/octet-stream' }),
+          arrayBuffer: () => {
+            bodyReadStarted()
+            return new Promise<ArrayBuffer>((_resolve, reject) => {
+              init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true })
+            })
+          },
+        } as Response)
+      }) as unknown as typeof global.fetch
+
+      const responsePromise = handler.handleRequest({
+        url: 'http://localhost:3000/files',
+        verb: HttpVerb.Get,
+        responseType: 'arraybuffer',
+        abortSignal: controller.signal,
+      })
+      await bodyReadIsStarted
+      controller.abort()
+
+      await expect(responsePromise).rejects.toMatchObject({ name: 'AbortError' })
+      expect(errorLog).not.toHaveBeenCalled()
     })
   })
 

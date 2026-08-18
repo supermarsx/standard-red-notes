@@ -12,24 +12,31 @@ export class S3FileDownloader implements FileDownloaderInterface {
     @inject(TYPES.Files_S3_BUCKET_NAME) private s3BuckeName: string,
   ) {}
 
-  async createDownloadStream(filePath: string, startRange: number, endRange: number): Promise<Readable> {
+  async createDownloadStream(
+    filePath: string,
+    startRange: number,
+    endRange: number,
+    abortSignal?: AbortSignal,
+  ): Promise<Readable> {
     const commandResult = await this.s3Client.send(
       new GetObjectCommand({
         Bucket: this.s3BuckeName,
         Key: filePath,
         Range: `bytes=${startRange}-${endRange}`,
       }),
+      { abortSignal },
     )
 
     return commandResult.Body as Readable
   }
 
-  async getFileSize(filePath: string): Promise<number> {
+  async getFileSize(filePath: string, abortSignal?: AbortSignal): Promise<number> {
     const head = await this.s3Client.send(
       new HeadObjectCommand({
         Bucket: this.s3BuckeName,
         Key: filePath,
       }),
+      { abortSignal },
     )
 
     return head.ContentLength as number

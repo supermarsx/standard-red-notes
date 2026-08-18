@@ -61,6 +61,7 @@ import { RedisValetTokenRepository } from '../Infra/Redis/RedisValetTokenReposit
 import { StorageReadinessInterface } from '../Domain/Services/StorageReadinessInterface'
 import { FSStorageReadiness } from '../Infra/FS/FSStorageReadiness'
 import { S3StorageReadiness } from '../Infra/S3/S3StorageReadiness'
+import { DEFAULT_FILE_DOWNLOAD_DEADLINE_MS } from '../Infra/InversifyExpress/FileDownloadRequestLifecycle'
 
 export class ContainerConfigLoader {
   constructor(private mode: 'server' | 'worker' = 'server') {}
@@ -87,6 +88,14 @@ export class ContainerConfigLoader {
     container
       .bind(TYPES.Files_MAX_CHUNK_BYTES)
       .toConstantValue(env.get('MAX_CHUNK_BYTES', true) ? +env.get('MAX_CHUNK_BYTES', true) : 100000000)
+    const configuredFileDownloadDeadlineMs = Number(env.get('FILE_DOWNLOAD_DEADLINE_MS', true))
+    container
+      .bind(TYPES.Files_FILE_DOWNLOAD_DEADLINE_MS)
+      .toConstantValue(
+        Number.isSafeInteger(configuredFileDownloadDeadlineMs) && configuredFileDownloadDeadlineMs > 0
+          ? configuredFileDownloadDeadlineMs
+          : DEFAULT_FILE_DOWNLOAD_DEADLINE_MS,
+      )
     // Standard Red Notes: operator-configurable absolute cap on a single uploaded file's
     // size (bytes). Default ~5GB (5368709120) -- generous/non-breaking. Applies even to
     // unlimited accounts. Set to 0 (or any value <= 0) to disable the cap.

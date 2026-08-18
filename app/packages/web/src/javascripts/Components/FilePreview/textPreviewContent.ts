@@ -1,4 +1,4 @@
-import { TextPreviewLanguage } from './isFilePreviewable'
+import type { TextPreviewLanguage } from './isFilePreviewable'
 
 /** Keep decoding and DOM construction bounded even if an untrusted file slips past an outer size check. */
 export const MAX_TEXT_PREVIEW_BYTES = 2 * 1024 * 1024
@@ -16,6 +16,11 @@ export type HighlightTokenKind =
 export type HighlightToken = {
   kind: HighlightTokenKind
   text: string
+}
+
+export type PreparedTextPreview = {
+  decoded: TextPreviewDecodeResult
+  highlightedLines?: HighlightToken[][]
 }
 
 const CommonKeywords = new Set(
@@ -393,4 +398,21 @@ export function tokenizeTextLine(line: string, language: TextPreviewLanguage): H
 
 export function tokenizeText(text: string, language: TextPreviewLanguage): HighlightToken[][] {
   return text.split(/\r\n|\r|\n/).map((line) => tokenizeTextLine(line, language))
+}
+
+/**
+ * CPU work shared by the text-preview worker and its bounded no-Worker fallback.
+ * Keeping the decoder and tokenizer behind one pure function makes both paths
+ * apply exactly the same UTF-8, binary, bidi, byte, and line-count rules.
+ */
+export function prepareTextPreview(bytes: Uint8Array, language: TextPreviewLanguage): PreparedTextPreview {
+  const decoded = decodeTextPreview(bytes)
+  if (decoded.status !== 'ready' || !canUseSyntaxHighlighting(bytes.byteLength, decoded.text, language)) {
+    return { decoded }
+  }
+
+  return {
+    decoded,
+    highlightedLines: tokenizeText(decoded.text, language),
+  }
 }

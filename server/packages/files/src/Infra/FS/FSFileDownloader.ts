@@ -24,11 +24,20 @@ export class FSFileDownloader implements FileDownloaderInterface {
     return filesList
   }
 
-  async getFileSize(filePath: string): Promise<number> {
+  async getFileSize(filePath: string, _abortSignal?: AbortSignal): Promise<number> {
+    // fs.stat has no AbortSignal overload. The use-case race still bounds the
+    // request; unlike S3, the in-flight filesystem stat itself cannot be canceled.
     return (await promises.stat(`${this.fileUploadPath}/${filePath}`)).size
   }
 
-  async createDownloadStream(filePath: string, startRange: number, endRange: number): Promise<Readable> {
-    return Promise.resolve(createReadStream(`${this.fileUploadPath}/${filePath}`, { start: startRange, end: endRange }))
+  async createDownloadStream(
+    filePath: string,
+    startRange: number,
+    endRange: number,
+    abortSignal?: AbortSignal,
+  ): Promise<Readable> {
+    return Promise.resolve(
+      createReadStream(`${this.fileUploadPath}/${filePath}`, { start: startRange, end: endRange, signal: abortSignal }),
+    )
   }
 }

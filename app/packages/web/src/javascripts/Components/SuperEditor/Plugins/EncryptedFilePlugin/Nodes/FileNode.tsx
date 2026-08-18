@@ -1,15 +1,7 @@
 import React from 'react'
-import {
-  DOMConversionMap,
-  DOMExportOutput,
-  EditorConfig,
-  ElementFormatType,
-  LexicalEditor,
-  LexicalUpdateJSON,
-  NodeKey,
-} from 'lexical'
+import { DOMExportOutput, EditorConfig, ElementFormatType, LexicalEditor, LexicalUpdateJSON, NodeKey } from 'lexical'
 import { DecoratorBlockNode } from '@lexical/react/LexicalDecoratorBlockNode'
-import { $createFileNode, convertToFileElement } from './FileUtils'
+import { $createFileNode } from './FileUtils'
 import FileComponent from './FileComponent'
 import { SerializedFileNode } from './SerializedFileNode'
 import { ItemNodeInterface } from '../../ItemNodeInterface'
@@ -22,8 +14,8 @@ export class FileNode extends DecoratorBlockNode implements ItemNodeInterface {
   __width: number | undefined
   __caption: string | undefined
   __float: ImageFloat
-  // Fold/collapse state. undefined = no explicit choice; the component derives a
-  // per-type default (PDFs collapsed, others expanded). An explicit stored value wins.
+  // Fold/collapse state. undefined = no explicit choice; the component expands
+  // only safely classified images and keeps every generic attachment compact.
   __collapsed: boolean | undefined
 
   static getType(): string {
@@ -88,23 +80,16 @@ export class FileNode extends DecoratorBlockNode implements ItemNodeInterface {
     }
   }
 
-  static importDOM(): DOMConversionMap<HTMLDivElement> | null {
-    return {
-      div: (domNode: HTMLDivElement) => {
-        if (!domNode.hasAttribute('data-lexical-file-uuid')) {
-          return null
-        }
-        return {
-          conversion: convertToFileElement,
-          priority: 2,
-        }
-      },
-    }
+  static importDOM(): null {
+    // Generic HTML is an untrusted interchange format. Persisted editor state
+    // and same-editor clipboard operations use Lexical JSON, so accepting a
+    // forgeable data attribute here would only let pasted HTML manufacture a
+    // live reference to an encrypted file.
+    return null
   }
 
   exportDOM(): DOMExportOutput {
     const element = document.createElement('span')
-    element.setAttribute('data-lexical-file-uuid', this.__id)
     const text = document.createTextNode(this.getTextContent())
     element.append(text)
     return { element }

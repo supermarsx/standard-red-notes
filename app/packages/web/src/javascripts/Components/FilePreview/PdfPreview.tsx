@@ -53,7 +53,7 @@ const SEARCH_DEBOUNCE_MS = 250
  * near the viewport. Pages that are far away render a sized placeholder so the
  * scroll height is correct without paying the render cost (lazy rendering).
  */
-const PdfPage: FunctionComponent<{
+export const PdfPage: FunctionComponent<{
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   pdfjs: any
   page: PDFPageProxy
@@ -69,13 +69,21 @@ const PdfPage: FunctionComponent<{
   const textLayerRef = useRef<HTMLDivElement>(null)
   const [isVisible, setIsVisible] = useState(false)
   const [isRendered, setIsRendered] = useState(false)
+  const loadNow = useCallback(() => setIsVisible(true), [])
 
   const baseViewport = useMemo(() => page.getViewport({ scale }), [page, scale])
 
   // Observe visibility so we only render pages near the viewport.
   useEffect(() => {
+    if (isVisible) {
+      return
+    }
     const wrapper = wrapperRef.current
     if (!wrapper) {
+      return
+    }
+    if (typeof IntersectionObserver === 'undefined') {
+      loadNow()
       return
     }
     const scrollParent = wrapper.closest('[data-pdf-scroll-container]')
@@ -83,7 +91,7 @@ const PdfPage: FunctionComponent<{
       (entries) => {
         for (const entry of entries) {
           if (entry.isIntersecting) {
-            setIsVisible(true)
+            loadNow()
           }
         }
       },
@@ -91,7 +99,7 @@ const PdfPage: FunctionComponent<{
     )
     observer.observe(wrapper)
     return () => observer.disconnect()
-  }, [])
+  }, [isVisible, loadNow])
 
   useEffect(() => {
     registerContainer(pageNumber, wrapperRef.current)
@@ -221,7 +229,17 @@ const PdfPage: FunctionComponent<{
       <div ref={textLayerRef} className="textLayer pdf-text-layer absolute top-0 left-0 overflow-hidden opacity-100" />
       {!isRendered && (
         <div className="text-passive-1 absolute inset-0 flex items-center justify-center">
-          <Spinner className="h-5 w-5" />
+          {isVisible ? (
+            <Spinner className="h-5 w-5" />
+          ) : (
+            <button
+              className="border-border bg-default text-text hover:bg-contrast rounded border px-2.5 py-1.5 text-sm"
+              onClick={loadNow}
+              type="button"
+            >
+              Load PDF page {pageNumber}
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -383,7 +401,7 @@ const PdfPreview: FunctionComponent<Props> = ({ application, bytes, fileUuid, fi
   // Track which page is currently centered for the page-number indicator.
   useEffect(() => {
     const container = scrollContainerRef.current
-    if (!container || pages.length === 0) {
+    if (!container || pages.length === 0 || typeof IntersectionObserver === 'undefined') {
       return
     }
     const observer = new IntersectionObserver(

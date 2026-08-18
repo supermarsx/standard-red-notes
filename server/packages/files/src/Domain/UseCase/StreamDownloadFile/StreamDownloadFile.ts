@@ -6,6 +6,8 @@ import { UseCaseInterface } from '../UseCaseInterface'
 import { StreamDownloadFileDTO } from './StreamDownloadFileDTO'
 import { StreamDownloadFileResponse } from './StreamDownloadFileResponse'
 import { ValetTokenRepositoryInterface } from '../../ValetToken/ValetTokenRepositoryInterface'
+import { executeAbortable } from '../AbortableOperation'
+import { Readable } from 'stream'
 
 @injectable()
 export class StreamDownloadFile implements UseCaseInterface {
@@ -16,15 +18,24 @@ export class StreamDownloadFile implements UseCaseInterface {
   ) {}
 
   async execute(dto: StreamDownloadFileDTO): Promise<StreamDownloadFileResponse> {
+    let readStream: Readable | undefined
     try {
-      const readStream = await this.fileDownloader.createDownloadStream(
-        `${dto.ownerUuid}/${dto.resourceRemoteIdentifier}`,
-        dto.startRange,
-        dto.endRange,
+      readStream = await executeAbortable(
+        () =>
+          this.fileDownloader.createDownloadStream(
+            `${dto.ownerUuid}/${dto.resourceRemoteIdentifier}`,
+            dto.startRange,
+            dto.endRange,
+            dto.abortSignal,
+          ),
+        dto.abortSignal,
       )
 
       if (dto.endRange === dto.endRangeOfFile) {
-        await this.valetTokenRepository.markAsUsed(dto.valetToken)
+        await executeAbortable(() => this.valetTokenRepository.markAsUsed(dto.valetToken), dto.abortSignal)
+      }
+      if (dto.abortSignal?.aborted) {
+        throw new Error('File download aborted after stream acquisition')
       }
 
       return {
@@ -32,9 +43,12 @@ export class StreamDownloadFile implements UseCaseInterface {
         readStream,
       }
     } catch (_error) {
-      this.logger.error(
-        `Could not create a download stream for resource: ${dto.ownerUuid}/${dto.resourceRemoteIdentifier}`,
-      )
+      readStream?.destroy()
+      if (!dto.abortSignal?.aborted) {
+        this.logger.error(
+          `Could not create a download stream for resource: ${dto.ownerUuid}/${dto.resourceRemoteIdentifier}`,
+        )
+      }
 
       return {
         success: false,

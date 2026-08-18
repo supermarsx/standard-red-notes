@@ -33,6 +33,30 @@ export const PreviewableTextFileTypes = [
 
 export const RequiresNativeFilePreview = ['application/pdf']
 
+const SupportedImageFileTypes = new Set([
+  'image/apng',
+  'image/avif',
+  'image/bmp',
+  'image/gif',
+  'image/jpeg',
+  'image/png',
+  'image/vnd.microsoft.icon',
+  'image/webp',
+  'image/x-icon',
+])
+
+const ImageExtensionsByMimeType: Record<string, Set<string>> = {
+  'image/apng': new Set(['.apng', '.png']),
+  'image/avif': new Set(['.avif']),
+  'image/bmp': new Set(['.bmp']),
+  'image/gif': new Set(['.gif']),
+  'image/jpeg': new Set(['.jfif', '.jpe', '.jpeg', '.jpg']),
+  'image/png': new Set(['.png']),
+  'image/vnd.microsoft.icon': new Set(['.cur', '.ico']),
+  'image/webp': new Set(['.webp']),
+  'image/x-icon': new Set(['.cur', '.ico']),
+}
+
 const OpaqueFileTypes = new Set([
   '',
   'application/octet-stream',
@@ -167,6 +191,7 @@ const ExtensionLanguages: Record<string, TextPreviewLanguage> = {
   '.sh': 'shell',
   '.sql': 'sql',
   '.svelte': 'markup',
+  '.svg': 'markup',
   '.swift': 'code',
   '.tab': 'plain',
   '.tex': 'code',
@@ -210,6 +235,17 @@ function normalizedBaseName(name: string | null | undefined): string {
   return (name ?? '').trim().replaceAll('\\', '/').split('/').pop()?.toLowerCase() ?? ''
 }
 
+function extensionFromFileName(name: string | null | undefined): string | undefined {
+  const baseName = normalizedBaseName(name)
+  const extensionStart = baseName.lastIndexOf('.')
+  return extensionStart > 0 ? baseName.slice(extensionStart) : undefined
+}
+
+function hasCompatibleImageFileName(name: string | null | undefined, mimeType: string): boolean {
+  const extension = extensionFromFileName(name)
+  return extension === undefined || ImageExtensionsByMimeType[mimeType]?.has(extension) === true
+}
+
 function languageFromFileName(name: string | null | undefined): TextPreviewLanguage | undefined {
   const baseName = normalizedBaseName(name)
   if (!baseName) {
@@ -237,6 +273,7 @@ function languageFromMimeType(mimeType: string): TextPreviewLanguage | undefined
   if (
     mimeType === 'application/xml' ||
     mimeType === 'application/xhtml+xml' ||
+    mimeType === 'image/svg+xml' ||
     (mimeType.startsWith('application/') && mimeType.endsWith('+xml')) ||
     mimeType === 'text/html' ||
     mimeType === 'text/xml'
@@ -293,7 +330,12 @@ export function resolvePreviewKind(file: FilePreviewMetadata): FilePreviewKind {
   if (mimeType === 'application/pdf') {
     return 'pdf'
   }
-  if (mimeType.startsWith('image/')) {
+  // SVG is markup, not an inert bitmap. Show its escaped source in the
+  // read-only text viewer rather than handing active markup to a renderer.
+  if (mimeType === 'image/svg+xml') {
+    return 'text'
+  }
+  if (SupportedImageFileTypes.has(mimeType) && hasCompatibleImageFileName(file.name, mimeType)) {
     return 'image'
   }
   if (mimeType.startsWith('video/')) {
@@ -305,7 +347,11 @@ export function resolvePreviewKind(file: FilePreviewMetadata): FilePreviewKind {
   if (languageFromMimeType(mimeType)) {
     return 'text'
   }
-  if (OpaqueFileTypes.has(mimeType) && languageFromFileName(file.name)) {
+  // Opaque payloads get a bounded UTF-8 probe in the safe text viewer. The
+  // decoder rejects NUL/control-heavy, malformed, and oversized content before
+  // anything reaches the DOM, so extensionless logs/configs remain readable
+  // without creating a generic executable/embed fallback for arbitrary MIME.
+  if (OpaqueFileTypes.has(mimeType)) {
     return 'text'
   }
 
@@ -323,8 +369,88 @@ export function resolveTextPreviewLanguage(file: FilePreviewMetadata): TextPrevi
 export const isFilePreviewable = (file: FilePreviewMetadata): boolean => resolvePreviewKind(file) !== 'unsupported'
 
 /**
+ * Source URLs are never used to *infer* image status. A data URL is only used as
+ * contradiction evidence: its declared payload MIME must match the trusted file
+ * metadata before an inline node can take the image-body path.
+ */
+export function hasCompatibleInlineImageSource(file: FilePreviewMetadata, source: string): boolean {
+  if (resolvePreviewKind(file) !== 'image') {
+    return false
+  }
+  const normalizedSource = source.trimStart()
+  if (!normalizedSource.toLowerCase().startsWith('data:')) {
+    return true
+  }
+
+  const separator = normalizedSource.indexOf(',')
+  if (separator === -1) {
+    return false
+  }
+  const metadata = normalizedSource.slice(5, separator)
+  const sourceMimeType = metadata.split(';', 1)[0]
+  if (normalizeMimeType(sourceMimeType) !== normalizeMimeType(file.mimeType) || !/;base64(?:;|$)/i.test(metadata)) {
+    return false
+  }
+
+  try {
+    // Decode only a bounded prefix: enough for every supported signature, never
+    // the potentially multi-megabyte data URL held by a legacy editor node.
+    const encodedPrefix = normalizedSource.slice(separator + 1, separator + 65).replace(/\s/g, '')
+    const binaryPrefix = atob(encodedPrefix)
+    const bytes = Uint8Array.from(binaryPrefix, (character) => character.charCodeAt(0))
+    return hasSupportedImageSignature(file, bytes)
+  } catch {
+    return false
+  }
+}
+
+/** Byte signatures prevent a mislabeled PDF/text/binary payload reaching <img>. */
+export function hasSupportedImageSignature(file: FilePreviewMetadata, bytes: Uint8Array): boolean {
+  const mimeType = normalizeMimeType(file.mimeType)
+  if (resolvePreviewKind(file) !== 'image') {
+    return false
+  }
+
+  const ascii = (start: number, length: number) =>
+    String.fromCharCode(...bytes.subarray(start, Math.min(bytes.byteLength, start + length)))
+  switch (mimeType) {
+    case 'image/png':
+    case 'image/apng':
+      return (
+        bytes.byteLength >= 8 &&
+        bytes[0] === 0x89 &&
+        ascii(1, 3) === 'PNG' &&
+        bytes[4] === 0x0d &&
+        bytes[5] === 0x0a &&
+        bytes[6] === 0x1a &&
+        bytes[7] === 0x0a
+      )
+    case 'image/jpeg':
+      return bytes.byteLength >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff
+    case 'image/gif':
+      return ascii(0, 6) === 'GIF87a' || ascii(0, 6) === 'GIF89a'
+    case 'image/webp':
+      return bytes.byteLength >= 12 && ascii(0, 4) === 'RIFF' && ascii(8, 4) === 'WEBP'
+    case 'image/bmp':
+      return bytes.byteLength >= 2 && ascii(0, 2) === 'BM'
+    case 'image/x-icon':
+    case 'image/vnd.microsoft.icon':
+      return (
+        bytes.byteLength >= 4 &&
+        bytes[0] === 0 &&
+        bytes[1] === 0 &&
+        (bytes[2] === 1 || bytes[2] === 2) &&
+        bytes[3] === 0
+      )
+    case 'image/avif':
+      return bytes.byteLength >= 12 && ascii(4, 4) === 'ftyp' && ['avif', 'avis'].includes(ascii(8, 4))
+    default:
+      return false
+  }
+}
+
+/**
  * MIME-only compatibility helper. New call sites should pass the complete file
- * to `isFilePreviewable` so safe filename fallback (for example `.ovpn` files
- * reported as application/octet-stream) can be applied.
+ * to `isFilePreviewable` so filenames can select the most useful text language.
  */
 export const isFileTypePreviewable = (fileType: string): boolean => isFilePreviewable({ mimeType: fileType })

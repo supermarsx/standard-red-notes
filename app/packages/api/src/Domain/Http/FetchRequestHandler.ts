@@ -117,13 +117,25 @@ export class FetchRequestHandler implements RequestHandlerInterface {
   ): Promise<HttpResponse<T>> {
     const abortController = new AbortController()
     let didTimeout = false
-    const abortFromCaller = () => abortController.abort()
+    let abortedByCaller = false
+    const abortFromCaller = () => {
+      if (abortController.signal.aborted) {
+        return
+      }
+
+      abortedByCaller = true
+      abortController.abort(callerSignal?.reason)
+    }
     if (callerSignal?.aborted) {
       abortFromCaller()
     } else {
       callerSignal?.addEventListener('abort', abortFromCaller, { once: true })
     }
     const timeoutId = setTimeout(() => {
+      if (abortController.signal.aborted) {
+        return
+      }
+
       didTimeout = true
       abortController.abort()
     }, timeoutMs)
@@ -134,10 +146,22 @@ export class FetchRequestHandler implements RequestHandlerInterface {
         signal: abortController.signal,
       })
 
-      const response = await this.handleFetchResponse<T>(fetchResponse, responseType)
+      const response = await this.handleFetchResponse<T>(fetchResponse, responseType, abortController.signal)
 
       return response
-    } catch {
+    } catch (error) {
+      // A caller cancellation is control flow, not a server or connectivity
+      // failure. Propagating the AbortSignal reason also prevents downstream
+      // file-download code from constructing/logging a ClientDisplayableError
+      // after its own abort race has already completed normally.
+      if (abortedByCaller) {
+        if (callerSignal?.reason !== undefined) {
+          throw callerSignal.reason
+        }
+
+        throw error
+      }
+
       return {
         status: HttpStatusCode.InternalServerError,
         headers: new Map<string, string | null>(),
@@ -163,6 +187,7 @@ export class FetchRequestHandler implements RequestHandlerInterface {
   private async handleFetchResponse<T>(
     fetchResponse: Response,
     responseType?: XMLHttpRequestResponseType,
+    requestSignal?: AbortSignal,
   ): Promise<HttpResponse<T>> {
     const httpStatus = fetchResponse.status
     const response: HttpResponse<T> = {
@@ -202,6 +227,10 @@ export class FetchRequestHandler implements RequestHandlerInterface {
         }
       }
     } catch (error) {
+      if (requestSignal?.aborted) {
+        throw error
+      }
+
       this.logger.error('Could not parse HTTP response body', safeErrorLogMetadata(error))
     }
 

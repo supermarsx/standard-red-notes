@@ -16,6 +16,7 @@ import { MAX_TEXT_PREVIEW_BYTES } from './textPreviewContent'
 import { sanitizeFileErrorDetail } from '@/Utils/FileErrorMessage'
 
 const MAX_MEDIA_PREVIEW_BYTES = 100 * 1024 * 1024
+export const PREVIEW_DOWNLOAD_IDLE_TIMEOUT_MS = 45_000
 
 type Props = {
   application: WebApplication
@@ -156,6 +157,8 @@ const FilePreview = ({
     const chunks: Uint8Array[] = []
     let receivedBytes = 0
     let exceededPreviewLimit = false
+    let timedOut = false
+    let idleTimeout: ReturnType<typeof setTimeout> | undefined
     const wipeChunks = () => {
       for (const chunk of chunks) {
         chunk.fill(0)
@@ -166,10 +169,31 @@ const FilePreview = ({
       const currentIdentity = currentFileIdentityRef.current
       return (
         !cancelled &&
+        !timedOut &&
         authorizationRef.current &&
         currentIdentity.uuid === fileUuid &&
         currentIdentity.remoteIdentifier === remoteIdentifier
       )
+    }
+    const clearIdleTimeout = () => {
+      if (idleTimeout !== undefined) {
+        clearTimeout(idleTimeout)
+        idleTimeout = undefined
+      }
+    }
+    const armIdleTimeout = () => {
+      clearIdleTimeout()
+      idleTimeout = setTimeout(() => {
+        if (!isCurrentDownload()) {
+          return
+        }
+        timedOut = true
+        abortController.abort()
+        wipeChunks()
+        setDownloadProgress(undefined)
+        setDownloadError(t('errorLoadingFile'))
+        setIsDownloading(false)
+      }, PREVIEW_DOWNLOAD_IDLE_TIMEOUT_MS)
     }
 
     const downloadFileForPreview = async () => {
@@ -182,6 +206,7 @@ const FilePreview = ({
 
       try {
         setDownloadProgress(undefined)
+        armIdleTimeout()
         const error = await application.files.downloadFile(
           fileForDownload,
           async (decryptedChunk, progress) => {
@@ -189,6 +214,7 @@ const FilePreview = ({
               decryptedChunk.fill(0)
               return
             }
+            armIdleTimeout()
             receivedBytes += decryptedChunk.byteLength
             if (!Number.isSafeInteger(receivedBytes) || receivedBytes > previewByteLimit) {
               exceededPreviewLimit = true
@@ -221,10 +247,15 @@ const FilePreview = ({
         }
       } catch (error) {
         if (isCurrentDownload()) {
-          console.error(error)
-          setDownloadError(sanitizeFileErrorDetail(error) ?? t('errorLoadingFile'))
+          if (exceededPreviewLimit) {
+            setDownloadError(t('filePreviewTooLarge'))
+          } else {
+            console.error(error)
+            setDownloadError(sanitizeFileErrorDetail(error) ?? t('errorLoadingFile'))
+          }
         }
       } finally {
+        clearIdleTimeout()
         wipeChunks()
         if (isCurrentDownload()) {
           setIsDownloading(false)
@@ -236,6 +267,7 @@ const FilePreview = ({
 
     return () => {
       cancelled = true
+      clearIdleTimeout()
       abortController.abort()
       wipeChunks()
     }

@@ -15,8 +15,8 @@ export type SerializedFileNode = Spread<
     /**
      * Fold/collapse state of the embedded file. When collapsed the preview is
      * replaced by a compact clickable row (icon + filename). Undefined = no
-     * explicit choice yet; the component derives a sensible per-type default
-     * (PDFs collapsed, images/others expanded) for backward compatibility.
+     * explicit choice yet; the component expands only safely classified images
+     * and keeps every other attachment compact until the user opens it.
      */
     collapsed?: boolean
   },

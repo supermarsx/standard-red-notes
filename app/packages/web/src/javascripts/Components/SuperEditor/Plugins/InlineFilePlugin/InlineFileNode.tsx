@@ -1,7 +1,6 @@
 import { DecoratorBlockNode, SerializedDecoratorBlockNode } from '@lexical/react/LexicalDecoratorBlockNode'
 import React from 'react'
 import {
-  DOMConversionMap,
   DOMExportOutput,
   EditorConfig,
   ElementFormatType,
@@ -13,6 +12,7 @@ import {
 } from 'lexical'
 import InlineFileComponent from './InlineFileComponent'
 import { ImageFloat } from '../ImageTools/ImageToolsTypes'
+import { hasCompatibleInlineImageSource, resolvePreviewKind } from '@/Components/FilePreview/isFilePreviewable'
 
 type SerializedInlineFileNode = Spread<
   {
@@ -117,80 +117,26 @@ export class InlineFileNode extends DecoratorBlockNode {
     return self
   }
 
-  static importDOM(): DOMConversionMap<HTMLDivElement> | null {
-    return {
-      object: (domNode: HTMLDivElement) => {
-        if (domNode.tagName !== 'OBJECT') {
-          return null
-        }
-        return {
-          conversion: () => {
-            if (!(domNode instanceof HTMLObjectElement)) {
-              return null
-            }
-            const mimeType = domNode.type || 'application/octet-stream'
-            const fileName = domNode.getAttribute('data-file-name') || undefined
-            const src = domNode.data
-            return {
-              node: $createInlineFileNode(src, mimeType, fileName),
-            }
-          },
-          priority: 2,
-        }
-      },
-      img: (domNode: HTMLDivElement) => {
-        if (domNode.tagName !== 'IMG') {
-          return null
-        }
-        return {
-          conversion: () => {
-            if (!(domNode instanceof HTMLImageElement)) {
-              return null
-            }
-            const mimeType = domNode.getAttribute('data-mime-type') || 'image/png'
-            const fileName = domNode.getAttribute('data-file-name') || domNode.alt
-            return {
-              node: $createInlineFileNode(domNode.currentSrc || domNode.src, mimeType, fileName),
-            }
-          },
-          priority: 2,
-        }
-      },
-      source: (domNode: HTMLDivElement) => {
-        if (domNode.tagName !== 'SOURCE') {
-          return null
-        }
-        const parent = domNode.parentElement
-        const isParentVideoOrAudio = !!parent && (parent.tagName === 'VIDEO' || parent.tagName === 'AUDIO')
-        if (!isParentVideoOrAudio) {
-          return null
-        }
-        return {
-          conversion: () => {
-            if (!(domNode instanceof HTMLSourceElement)) {
-              return null
-            }
-            const mimeType = domNode.type || (parent.tagName === 'VIDEO' ? 'video/mp4' : 'audio/mp3')
-            const src = domNode.src
-            const fileName = domNode.getAttribute('data-file-name') || undefined
-            return {
-              node: $createInlineFileNode(src, mimeType, fileName),
-            }
-          },
-          priority: 2,
-        }
-      },
-    }
+  static importDOM(): null {
+    // HTML attributes are forgeable and may contain active or remote sources.
+    // Lexical JSON remains the trusted persistence/internal-clipboard channel.
+    return null
   }
 
   exportDOM(): DOMExportOutput {
-    if (this.__mimeType.startsWith('image/')) {
+    const resolvedKind = resolvePreviewKind({ mimeType: this.__mimeType, name: this.__fileName })
+    const previewKind =
+      resolvedKind === 'image' &&
+      !isSafeInlineImage({ mimeType: this.__mimeType, fileName: this.__fileName, src: this.__src })
+        ? 'unsupported'
+        : resolvedKind
+    if (previewKind === 'image') {
       const img = document.createElement('img')
       img.setAttribute('src', this.__src)
       img.setAttribute('data-mime-type', this.__mimeType)
       img.setAttribute('data-file-name', this.__fileName || '')
       return { element: img }
-    } else if (this.__mimeType.startsWith('audio')) {
+    } else if (previewKind === 'audio') {
       const audio = document.createElement('audio')
       audio.setAttribute('controls', '')
       audio.setAttribute('data-file-name', this.__fileName || '')
@@ -199,7 +145,7 @@ export class InlineFileNode extends DecoratorBlockNode {
       source.setAttribute('type', this.__mimeType)
       audio.appendChild(source)
       return { element: audio }
-    } else if (this.__mimeType.startsWith('video')) {
+    } else if (previewKind === 'video') {
       const video = document.createElement('video')
       video.setAttribute('controls', '')
       video.setAttribute('data-file-name', this.__fileName || '')
@@ -209,15 +155,21 @@ export class InlineFileNode extends DecoratorBlockNode {
       video.appendChild(source)
       return { element: video }
     }
-    const object = document.createElement('object')
-    object.setAttribute('data', this.__src)
-    object.setAttribute('type', this.__mimeType)
-    object.setAttribute('data-file-name', this.__fileName || '')
-    return { element: object }
+    // Generic files are exported as inert metadata. <object> would hand HTML,
+    // SVG, or another active payload to the browser and could also be mistaken
+    // for an image when the DOM is imported again.
+    const file = document.createElement('span')
+    file.setAttribute('data-lexical-inline-file', 'true')
+    file.setAttribute('data-file-source', this.__src)
+    file.setAttribute('data-mime-type', this.__mimeType)
+    file.setAttribute('data-file-name', this.__fileName || '')
+    file.textContent = `[File: ${this.__fileName || 'attachment'}]`
+    return { element: file }
   }
 
   getTextContent(): string {
-    return `${this.__mimeType.startsWith('image/') ? '!' : ''}[${this.__fileName}](${this.__src})`
+    const isImage = isSafeInlineImage({ mimeType: this.__mimeType, fileName: this.__fileName, src: this.__src })
+    return `${isImage ? '!' : ''}[${this.__fileName}](${this.__src})`
   }
 
   decorate(_editor: LexicalEditor, config: EditorConfig): React.JSX.Element {
@@ -253,5 +205,12 @@ export function $isInlineFileNode(node: InlineFileNode | LexicalNode | null | un
 }
 
 export function $createInlineFileNode(src: string, mimeType: string, fileName: string | undefined): InlineFileNode {
-  return new InlineFileNode(src, mimeType, fileName)
+  return new InlineFileNode(src, mimeType || 'application/octet-stream', fileName)
+}
+
+export function isSafeInlineImage(file: { mimeType: string; fileName: string | undefined; src?: string }): boolean {
+  const metadata = { mimeType: file.mimeType, name: file.fileName }
+  return file.src === undefined
+    ? resolvePreviewKind(metadata) === 'image'
+    : hasCompatibleInlineImageSource(metadata, file.src)
 }

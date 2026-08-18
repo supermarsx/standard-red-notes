@@ -11,9 +11,22 @@ import { UploadFileChunk } from '../../Domain/UseCase/UploadFileChunk/UploadFile
 import { StreamDownloadFile } from '../../Domain/UseCase/StreamDownloadFile/StreamDownloadFile'
 import { CreateUploadSession } from '../../Domain/UseCase/CreateUploadSession/CreateUploadSession'
 import { FinishUploadSession } from '../../Domain/UseCase/FinishUploadSession/FinishUploadSession'
-import { GetFileMetadata } from '../../Domain/UseCase/GetFileMetadata/GetFileMetadata'
+import {
+  FILE_DATA_NOT_FOUND_MESSAGE,
+  FILE_STORAGE_UNAVAILABLE_MESSAGE,
+  GetFileMetadata,
+} from '../../Domain/UseCase/GetFileMetadata/GetFileMetadata'
 import { RemoveFile } from '../../Domain/UseCase/RemoveFile/RemoveFile'
 import { ValetTokenResponseLocals } from './Middleware/ValetTokenResponseLocals'
+import { executeAbortable, FileDownloadAbortedError } from '../../Domain/UseCase/AbortableOperation'
+import {
+  FILE_DOWNLOAD_RETRY_AFTER_SECONDS,
+  FILE_DOWNLOAD_TIMEOUT_CODE,
+  FILE_DOWNLOAD_TIMEOUT_MESSAGE,
+  FILE_STORAGE_UNAVAILABLE_CODE,
+  FileDownloadRequestLifecycle,
+  pipeFileDownload,
+} from './FileDownloadRequestLifecycle'
 
 @controller('/v1/files', TYPES.Files_ValetTokenAuthMiddleware)
 export class AnnotatedFilesController extends BaseHttpController {
@@ -25,6 +38,7 @@ export class AnnotatedFilesController extends BaseHttpController {
     @inject(TYPES.Files_GetFileMetadata) private getFileMetadata: GetFileMetadata,
     @inject(TYPES.Files_RemoveFile) private removeFile: RemoveFile,
     @inject(TYPES.Files_MAX_CHUNK_BYTES) private maxChunkBytes: number,
+    @inject(TYPES.Files_FILE_DOWNLOAD_DEADLINE_MS) private fileDownloadDeadlineMs: number,
     @inject(TYPES.Files_Logger) private logger: Logger,
   ) {
     super()
@@ -134,18 +148,15 @@ export class AnnotatedFilesController extends BaseHttpController {
   }
 
   @httpGet('/')
-  async download(
-    request: Request,
-    response: Response,
-  ): Promise<results.BadRequestErrorMessageResult | (() => Writable)> {
+  async download(request: Request, response: Response): Promise<results.JsonResult | (() => Writable)> {
     const locals = response.locals as ValetTokenResponseLocals
     if (locals.permittedOperation !== ValetTokenOperation.Read) {
-      return this.badRequest('Not permitted for this operation')
+      return this.fileDownloadError('Not permitted for this operation', 400)
     }
 
     const range = request.headers['range']
     if (!range) {
-      return this.badRequest('File download requires range header to be set.')
+      return this.fileDownloadError('File download requires range header to be set.', 400)
     }
 
     let chunkSize = +(request.headers['x-chunk-size'] as string)
@@ -153,77 +164,128 @@ export class AnnotatedFilesController extends BaseHttpController {
       chunkSize = this.maxChunkBytes
     }
 
-    const fileMetadataOrError = await this.getFileMetadata.execute({
-      ownerUuid: locals.userUuid,
-      resourceRemoteIdentifier: locals.permittedResources[0].remoteIdentifier,
-    })
+    const lifecycle = new FileDownloadRequestLifecycle(request, response, this.fileDownloadDeadlineMs)
+    try {
+      const fileMetadataOrError = await executeAbortable(
+        () =>
+          this.getFileMetadata.execute({
+            ownerUuid: locals.userUuid,
+            resourceRemoteIdentifier: locals.permittedResources[0].remoteIdentifier,
+            abortSignal: lifecycle.signal,
+          }),
+        lifecycle.signal,
+      )
+      this.throwIfDownloadAborted(lifecycle)
 
-    if (fileMetadataOrError.isFailed()) {
-      return this.badRequest(fileMetadataOrError.getError())
-    }
-    const fileSize = fileMetadataOrError.getValue()
-    const endRangeOfFile = fileSize - 1
+      if (fileMetadataOrError.isFailed()) {
+        const message = fileMetadataOrError.getError()
+        const isMissing = message === FILE_DATA_NOT_FOUND_MESSAGE
+        lifecycle.dispose()
+        return this.fileDownloadError(
+          isMissing ? message : FILE_STORAGE_UNAVAILABLE_MESSAGE,
+          isMissing ? 404 : 503,
+          response,
+        )
+      }
+      const fileSize = fileMetadataOrError.getValue()
+      const endRangeOfFile = fileSize - 1
 
-    // Parse "bytes=start-end" properly. The previous Number(range.replace(/\D/g, ''))
-    // stripped ALL non-digits, so bytes=100-200 collapsed to 100200 and any bound
-    // check was skipped. Validate 0 <= start <= end < fileSize and respond 416 on
-    // an unsatisfiable range BEFORE any 206 header is written.
-    const parsedRange = parseByteRange(range, fileSize, chunkSize)
-    if (parsedRange === null) {
-      response.writeHead(416, {
-        'Content-Range': `bytes */${fileSize}`,
+      // Parse "bytes=start-end" properly. The previous Number(range.replace(/\D/g, ''))
+      // stripped ALL non-digits, so bytes=100-200 collapsed to 100200 and any bound
+      // check was skipped. Validate 0 <= start <= end < fileSize and respond 416 on
+      // an unsatisfiable range BEFORE any 206 header is written.
+      const parsedRange = parseByteRange(range, fileSize, chunkSize)
+      if (parsedRange === null) {
+        lifecycle.dispose()
+        response.writeHead(416, {
+          'Content-Range': `bytes */${fileSize}`,
+          'Accept-Ranges': 'bytes',
+          'Content-Type': 'application/octet-stream',
+        })
+
+        return () => response.end() as unknown as Writable
+      }
+      const { startRange, endRange } = parsedRange
+
+      // Open and validate the storage stream before committing success headers.
+      const result = await executeAbortable(
+        () =>
+          this.streamDownloadFile.execute({
+            ownerUuid: locals.userUuid,
+            resourceRemoteIdentifier: locals.permittedResources[0].remoteIdentifier,
+            startRange,
+            endRange,
+            endRangeOfFile,
+            valetToken: locals.valetToken,
+            abortSignal: lifecycle.signal,
+          }),
+        lifecycle.signal,
+      )
+      this.throwIfDownloadAborted(lifecycle, result.success ? result.readStream : undefined)
+
+      if (!result.success) {
+        lifecycle.dispose()
+        return this.fileDownloadError(FILE_STORAGE_UNAVAILABLE_MESSAGE, 503, response)
+      }
+
+      response.writeHead(206, {
+        'Content-Range': `bytes ${startRange}-${endRange}/${fileSize}`,
         'Accept-Ranges': 'bytes',
+        'Content-Length': endRange - startRange + 1,
         'Content-Type': 'application/octet-stream',
       })
 
-      return () => response.end() as unknown as Writable
+      return () => pipeFileDownload(result.readStream, response, lifecycle, this.logger)
+    } catch (error) {
+      if (lifecycle.clientDisconnected) {
+        return this.closedDownloadResponse(response)
+      }
+      if (response.headersSent) {
+        lifecycle.dispose()
+        response.destroy(error instanceof Error ? error : undefined)
+        return this.closedDownloadResponse(response)
+      }
+
+      const timedOut = lifecycle.timedOut || error instanceof FileDownloadAbortedError
+      lifecycle.dispose()
+      if (timedOut) {
+        this.logger.warn('File download deadline exceeded before success headers were written.', {
+          code: FILE_DOWNLOAD_TIMEOUT_CODE,
+          deadlineMs: this.fileDownloadDeadlineMs,
+          stage: 'metadata-or-stream-acquisition',
+        })
+        return this.fileDownloadError(FILE_DOWNLOAD_TIMEOUT_MESSAGE, 503, response, FILE_DOWNLOAD_TIMEOUT_CODE)
+      }
+
+      this.logger.error('File download preparation failed.', safeErrorLogMetadata(error))
+      return this.fileDownloadError(FILE_STORAGE_UNAVAILABLE_MESSAGE, 503, response)
     }
-    const { startRange, endRange } = parsedRange
+  }
 
-    // Open/validate the storage read stream BEFORE writing the 206 headers.
-    // Previously writeHead(206) was sent first, so a subsequent this.badRequest
-    // threw ERR_HTTP_HEADERS_SENT (headers already flushed).
-    const result = await this.streamDownloadFile.execute({
-      ownerUuid: locals.userUuid,
-      resourceRemoteIdentifier: locals.permittedResources[0].remoteIdentifier,
-      startRange,
-      endRange,
-      endRangeOfFile,
-      valetToken: locals.valetToken,
-    })
-
-    if (!result.success) {
-      return this.badRequest(result.message)
-    }
-
-    // Content-Range total is the FULL file size, not the last byte index.
-    const headers = {
-      'Content-Range': `bytes ${startRange}-${endRange}/${fileSize}`,
-      'Accept-Ranges': 'bytes',
-      'Content-Length': endRange - startRange + 1,
-      'Content-Type': 'application/octet-stream',
-    }
-
-    response.writeHead(206, headers)
-
-    const readStream = result.readStream
-
-    return () => {
-      // A mid-transfer S3/FS read error emits 'error' on the source; without a
-      // listener that is an unhandled exception that crashes the process. Log it
-      // and tear both streams down. Also destroy the read stream if the client
-      // disconnects, so we do not leak storage sockets.
-      readStream.on('error', (error: Error) => {
-        this.logger.error('Error while streaming file download.', safeErrorLogMetadata(error))
+  private throwIfDownloadAborted(lifecycle: FileDownloadRequestLifecycle, readStream?: NodeJS.ReadableStream): void {
+    if (lifecycle.signal.aborted) {
+      if (readStream && 'destroy' in readStream && typeof readStream.destroy === 'function') {
         readStream.destroy()
-        response.destroy(error)
-      })
-      response.on('close', () => {
-        readStream.destroy()
-      })
-
-      return readStream.pipe(response)
+      }
+      throw new FileDownloadAbortedError()
     }
+  }
+
+  private closedDownloadResponse(response: Response): () => Writable {
+    return () => response as unknown as Writable
+  }
+
+  private fileDownloadError(
+    message: string,
+    statusCode: number,
+    response?: Response,
+    code = FILE_STORAGE_UNAVAILABLE_CODE,
+  ): results.JsonResult {
+    if (statusCode === 503) {
+      response?.setHeader('Retry-After', FILE_DOWNLOAD_RETRY_AFTER_SECONDS.toString())
+      return this.json({ error: { message, code, retryable: true } }, statusCode)
+    }
+    return this.json({ error: { message } }, statusCode)
   }
 }
 

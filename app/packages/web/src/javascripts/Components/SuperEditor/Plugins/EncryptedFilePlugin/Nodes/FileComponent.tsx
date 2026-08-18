@@ -1,5 +1,5 @@
 import { BlockWithAlignableContents } from '@lexical/react/LexicalBlockWithAlignableContents'
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react'
 import {
   $getNodeByKey,
   CLICK_COMMAND,
@@ -19,6 +19,8 @@ import { ImageFloat } from '../../ImageTools/ImageToolsTypes'
 import Icon from '@/Components/Icon/Icon'
 import { getIconForFileType } from '@/Utils/Items/Icons/getIconForFileType'
 import { formatSizeToReadableString } from '@standardnotes/filepicker'
+import { useNearViewport } from '@/Components/FilePreview/useNearViewport'
+import { resolvePreviewKind } from '@/Components/FilePreview/isFilePreviewable'
 
 export type FileComponentProps = Readonly<{
   className: Readonly<{
@@ -42,13 +44,12 @@ export type FileComponentProps = Readonly<{
 }>
 
 /**
- * Per-type default fold state for embedded files that have no explicit stored
- * `collapsed` value (existing notes / freshly inserted files). PDFs collapse by
- * default so notes stay short; images (which have zoom/resize tools) and other
- * types default to expanded. An explicit stored value always wins.
+ * Files only get image-body treatment when the safe preview classifier confirms
+ * an inert image MIME. Every other attachment starts as a compact row and must
+ * be explicitly expanded before any bytes are downloaded/decrypted.
  */
-function defaultCollapsedForMimeType(mimeType: string): boolean {
-  return mimeType === 'application/pdf'
+function defaultCollapsedForFile(file: FileItem): boolean {
+  return resolvePreviewKind(file) !== 'image'
 }
 
 function FileComponent({
@@ -86,40 +87,15 @@ function FileComponent({
   const file = useSyncExternalStore(subscribeToFile, getFileSnapshot, getFileSnapshot)
   const uploadProgress = application.filesController.uploadProgressMap.get(fileUuid)
 
-  const [canLoad, setCanLoad] = useState(false)
-
   const blockWrapperRef = useRef<HTMLDivElement>(null)
-  const [observedWrapper, setObservedWrapper] = useState<HTMLDivElement | null>(null)
-  const setBlockWrapper = useCallback((element: HTMLDivElement | null) => {
-    blockWrapperRef.current = element
-    setObservedWrapper(element)
-  }, [])
-
-  useEffect(() => {
-    if (canLoad || !observedWrapper) {
-      return
-    }
-
-    if (typeof IntersectionObserver === 'undefined') {
-      setCanLoad(true)
-      return
-    }
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((entry) => entry.isIntersecting)) {
-          setCanLoad(true)
-        }
-      },
-      {
-        threshold: 0.25,
-        rootMargin: '400px 0px',
-      },
-    )
-    observer.observe(observedWrapper)
-
-    return () => observer.disconnect()
-  }, [canLoad, observedWrapper])
+  const { isNearViewport: canLoad, loadNow, setViewportTarget } = useNearViewport()
+  const setBlockWrapper = useCallback(
+    (element: HTMLDivElement | null) => {
+      blockWrapperRef.current = element
+      setViewportTarget(element)
+    },
+    [setViewportTarget],
+  )
 
   const setImageZoomLevel = useCallback(
     (zoomLevel: number) => {
@@ -248,9 +224,9 @@ function FileComponent({
     )
   }
 
-  const isImage = file.mimeType.startsWith('image/')
+  const isImage = resolvePreviewKind(file) === 'image'
   // Explicit stored value wins; otherwise fall back to the per-type default.
-  const isCollapsed = collapsed ?? defaultCollapsedForMimeType(file.mimeType)
+  const isCollapsed = collapsed ?? defaultCollapsedForFile(file)
   const fileIcon = getIconForFileType(file.mimeType)
   const readableSize = file.decryptedSize ? formatSizeToReadableString(file.decryptedSize) : undefined
 
@@ -301,7 +277,7 @@ function FileComponent({
           <Icon type={fileIcon} className="text-neutral flex-shrink-0" size="medium" />
           <span className="text-passive-0 min-w-0 truncate text-sm">{file.name}</span>
         </div>
-        {canLoad && (
+        {canLoad ? (
           <FilePreview
             isEmbeddedInSuper={true}
             file={file}
@@ -318,6 +294,21 @@ function FileComponent({
             setFloat={changeFloat}
             isImageSelected={isSelected}
           />
+        ) : (
+          <div
+            className="border-border text-passive-1 flex min-h-24 flex-col items-center justify-center gap-2 rounded border p-4 text-sm"
+            data-file-preview-deferred="true"
+            role="status"
+          >
+            <span>Preview loads when this attachment is near the viewport.</span>
+            <button
+              className="border-border bg-default text-text hover:bg-contrast rounded border px-2.5 py-1.5 text-sm"
+              onClick={loadNow}
+              type="button"
+            >
+              Load preview
+            </button>
+          </div>
         )}
       </div>
     </BlockWithAlignableContents>

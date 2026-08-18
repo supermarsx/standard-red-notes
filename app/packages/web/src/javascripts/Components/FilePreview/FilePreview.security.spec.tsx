@@ -5,7 +5,7 @@ import { WebApplication } from '@/Application/WebApplication'
 import { ContentType, FileItem, VaultLockServiceEvent } from '@standardnotes/snjs'
 import { act, createElement } from 'react'
 import { createRoot, Root } from 'react-dom/client'
-import FilePreview from './FilePreview'
+import FilePreview, { PREVIEW_DOWNLOAD_IDLE_TIMEOUT_MS } from './FilePreview'
 import { MAX_TEXT_PREVIEW_BYTES } from './textPreviewContent'
 
 let mockPreviewBytes: Uint8Array | undefined
@@ -509,6 +509,11 @@ describe('FilePreview vault authorization', () => {
         downloadSignal = options.signal
         await emit(retainedChunk)
         await emit(overflowChunk)
+        if (options.signal.aborted) {
+          const error = new Error('Preview download was aborted')
+          error.name = 'AbortError'
+          throw error
+        }
         return undefined
       },
     )
@@ -539,5 +544,60 @@ describe('FilePreview vault authorization', () => {
     expect(overflowChunk[0]).toBe(0)
     expect(container.textContent).toContain('filePreviewTooLarge')
     expect(container.textContent).not.toContain('decrypted-preview')
+  })
+
+  it('terminates a stalled download, wipes buffered plaintext, and exposes retry instead of spinning forever', async () => {
+    jest.useFakeTimers()
+    try {
+      const file = {
+        uuid: 'stalled-preview',
+        remoteIdentifier: 'stalled-preview-remote',
+        content_type: ContentType.TYPES.File,
+        mimeType: 'text/plain',
+        name: 'stalled.txt',
+        decryptedSize: 3,
+      } as FileItem
+      const retainedChunk = new Uint8Array([1, 2])
+      let signal: AbortSignal | undefined
+      const downloadFile = jest.fn(
+        async (_file: FileItem, emit: (chunk: Uint8Array) => Promise<void>, options: { signal: AbortSignal }) => {
+          signal = options.signal
+          await emit(retainedChunk)
+          return await new Promise<undefined>(() => undefined)
+        },
+      )
+      const application = {
+        isAuthorizedToRenderItem: jest.fn(() => true),
+        addEventObserver: jest.fn(() => jest.fn()),
+        vaultLocks: { addEventObserver: jest.fn(() => jest.fn()) },
+        items: {
+          findItem: jest.fn(() => file),
+          streamItems: jest.fn(() => jest.fn()),
+        },
+        files: { downloadFile },
+        filesController: {},
+        hasProtectionSources: jest.fn(() => true),
+        protections: { authorizeItemAccess: jest.fn() },
+      } as unknown as WebApplication
+
+      await act(async () => {
+        root.render(createElement(FilePreview, { application, file }))
+        await Promise.resolve()
+      })
+      expect(container.textContent).toContain('loading')
+
+      await act(async () => {
+        jest.advanceTimersByTime(PREVIEW_DOWNLOAD_IDLE_TIMEOUT_MS)
+        await Promise.resolve()
+      })
+
+      expect(signal?.aborted).toBe(true)
+      expect([...retainedChunk]).toEqual([0, 0])
+      expect(container.textContent).toContain('errorLoadingFile')
+      expect(container.textContent).toContain('retry-preview')
+      expect(container.textContent).not.toContain('loading')
+    } finally {
+      jest.useRealTimers()
+    }
   })
 })

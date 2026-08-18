@@ -27,6 +27,7 @@ describe('AnnotatedFilesController', () => {
   let response: Response
   let readStream: Readable
   const maxChunkBytes = 100_000
+  const fileDownloadDeadlineMs = 30_000
   let logger: Logger
 
   const createController = () =>
@@ -38,16 +39,25 @@ describe('AnnotatedFilesController', () => {
       getFileMetadata,
       removeFile,
       maxChunkBytes,
+      fileDownloadDeadlineMs,
       logger,
     )
+
+  const expectJsonError = (result: unknown, statusCode: number, message: string) => {
+    expect(result).toBeInstanceOf(results.JsonResult)
+    expect(result).toEqual(expect.objectContaining({ statusCode }))
+    expect((result as results.JsonResult).json).toEqual({ error: expect.objectContaining({ message }) })
+  }
 
   beforeEach(() => {
     logger = {} as jest.Mocked<Logger>
     logger.error = jest.fn()
+    logger.warn = jest.fn()
 
     readStream = {} as jest.Mocked<Readable>
     readStream.pipe = jest.fn().mockReturnValue(new Writable())
-    readStream.on = jest.fn().mockReturnThis()
+    readStream.once = jest.fn().mockReturnThis()
+    readStream.removeListener = jest.fn().mockReturnThis()
     readStream.destroy = jest.fn().mockReturnThis()
 
     streamDownloadFile = {} as jest.Mocked<StreamDownloadFile>
@@ -72,6 +82,8 @@ describe('AnnotatedFilesController', () => {
       body: {},
       headers: {},
     } as jest.Mocked<Request>
+    request.once = jest.fn().mockReturnThis()
+    request.removeListener = jest.fn().mockReturnThis()
     response = {
       locals: {},
     } as jest.Mocked<Response>
@@ -83,7 +95,9 @@ describe('AnnotatedFilesController', () => {
       },
     ]
     response.writeHead = jest.fn()
-    response.on = jest.fn().mockReturnThis()
+    response.once = jest.fn().mockReturnThis()
+    response.removeListener = jest.fn().mockReturnThis()
+    response.setHeader = jest.fn().mockReturnThis()
     response.destroy = jest.fn().mockReturnThis()
     response.end = jest.fn().mockReturnValue(new Writable())
   })
@@ -112,7 +126,7 @@ describe('AnnotatedFilesController', () => {
 
     const result = await createController().download(request, response)
 
-    expect(result).toBeInstanceOf(BadRequestErrorMessageResult)
+    expectJsonError(result, 400, 'Not permitted for this operation')
   })
 
   it('attaches an error handler that destroys the response without throwing on a mid-transfer stream error', async () => {
@@ -123,10 +137,10 @@ describe('AnnotatedFilesController', () => {
 
     // Invoking the returned pipe function must register the 'error' listener.
     expect(() => result()).not.toThrow()
-    expect(readStream.on).toHaveBeenCalledWith('error', expect.any(Function))
+    expect(readStream.once).toHaveBeenCalledWith('error', expect.any(Function))
 
     // Simulate the storage stream erroring mid-transfer.
-    const onCalls = (readStream.on as jest.Mock).mock.calls
+    const onCalls = (readStream.once as jest.Mock).mock.calls
     const errorHandler = onCalls.find((call) => call[0] === 'error')[1]
     expect(() => errorHandler(new Error('S3 stream blew up'))).not.toThrow()
 
@@ -142,7 +156,7 @@ describe('AnnotatedFilesController', () => {
     const result = (await createController().download(request, response)) as () => Writable
     result()
 
-    const closeCall = (response.on as jest.Mock).mock.calls.find((call) => call[0] === 'close')
+    const closeCall = (response.once as jest.Mock).mock.calls.find((call) => call[0] === 'close')
     expect(closeCall).toBeDefined()
     closeCall[1]()
     expect(readStream.destroy).toHaveBeenCalled()
@@ -263,19 +277,25 @@ describe('AnnotatedFilesController', () => {
 
     const httpResponse = await createController().download(request, response)
 
-    expect(httpResponse).toBeInstanceOf(results.BadRequestErrorMessageResult)
+    expectJsonError(httpResponse, 400, 'File download requires range header to be set.')
   })
 
-  it('should not return a writable stream if getting file metadata fails', async () => {
+  it.each([
+    ['Encrypted file data was not found on this server.', 404],
+    ['Encrypted file storage is temporarily unavailable.', 503],
+  ])('maps a metadata failure to its public download contract', async (message, statusCode) => {
     response.locals.permittedOperation = ValetTokenOperation.Read
 
     request.headers['range'] = 'bytes=0-'
 
-    getFileMetadata.execute = jest.fn().mockReturnValue(Result.fail('error'))
+    getFileMetadata.execute = jest.fn().mockReturnValue(Result.fail(message))
 
     const httpResponse = await createController().download(request, response)
 
-    expect(httpResponse).toBeInstanceOf(results.BadRequestErrorMessageResult)
+    expectJsonError(httpResponse, statusCode, message)
+    if (statusCode === 503) {
+      expect(response.setHeader).toHaveBeenCalledWith('Retry-After', '1')
+    }
   })
 
   it('should not return a writable stream if creating download stream fails', async () => {
@@ -287,7 +307,53 @@ describe('AnnotatedFilesController', () => {
 
     const httpResponse = await createController().download(request, response)
 
-    expect(httpResponse).toBeInstanceOf(results.BadRequestErrorMessageResult)
+    expectJsonError(httpResponse, 503, 'Encrypted file storage is temporarily unavailable.')
+    expect(response.setHeader).toHaveBeenCalledWith('Retry-After', '1')
+  })
+
+  it('closes without success headers when the client disconnects at the stream-acquisition handoff', async () => {
+    response.locals.permittedOperation = ValetTokenOperation.Read
+    request.headers['range'] = 'bytes=0-'
+    streamDownloadFile.execute = jest.fn().mockImplementation(({ abortSignal }) => {
+      const originalRemoveEventListener = abortSignal.removeEventListener.bind(abortSignal)
+      jest.spyOn(abortSignal, 'removeEventListener').mockImplementation((type, listener, options) => {
+        originalRemoveEventListener(type, listener, options)
+        const disconnect = (request.once as jest.Mock).mock.calls.find(([event]) => event === 'aborted')[1] as () => void
+        disconnect()
+      })
+      return { success: true, readStream }
+    })
+
+    const closedResponse = (await createController().download(request, response)) as () => Writable
+
+    expect(response.writeHead).not.toHaveBeenCalled()
+    expect(readStream.destroy).toHaveBeenCalled()
+    expect(closedResponse()).toBe(response)
+  })
+
+  it('destroys an already-headed response when download preparation rejects', async () => {
+    response.locals.permittedOperation = ValetTokenOperation.Read
+    request.headers['range'] = 'bytes=0-'
+    const failure = new Error('metadata failed after headers')
+    Object.assign(response, { headersSent: true })
+    getFileMetadata.execute = jest.fn().mockRejectedValue(failure)
+
+    const closedResponse = (await createController().download(request, response)) as () => Writable
+
+    expect(response.destroy).toHaveBeenCalledWith(failure)
+    expect(closedResponse()).toBe(response)
+  })
+
+  it('returns a retryable storage error for an unexpected preparation rejection', async () => {
+    response.locals.permittedOperation = ValetTokenOperation.Read
+    request.headers['range'] = 'bytes=0-'
+    getFileMetadata.execute = jest.fn().mockRejectedValue('metadata backend failed')
+
+    const httpResponse = await createController().download(request, response)
+
+    expectJsonError(httpResponse, 503, 'Encrypted file storage is temporarily unavailable.')
+    expect(response.setHeader).toHaveBeenCalledWith('Retry-After', '1')
+    expect(logger.error).toHaveBeenCalledWith('File download preparation failed.', expect.any(Object))
   })
 
   it('should create an upload session', async () => {

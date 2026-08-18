@@ -10,6 +10,7 @@ describe('S3FileDownloader', () => {
   const createDownloader = () => new S3FileDownloader(s3Client, 'bucket')
 
   const lastCommand = () => (s3Client.send as jest.Mock).mock.calls[0][0]
+  const lastOptions = () => (s3Client.send as jest.Mock).mock.calls[0][1]
 
   beforeEach(() => {
     s3Client = {} as jest.Mocked<S3Client>
@@ -19,12 +20,14 @@ describe('S3FileDownloader', () => {
   describe('createDownloadStream', () => {
     it('requests exactly the byte range asked for and returns the response body', async () => {
       const body = new Readable()
+      const abortController = new AbortController()
       s3Client.send = jest.fn().mockResolvedValue({ Body: body })
 
-      const stream = await createDownloader().createDownloadStream('user/file', 10, 20)
+      const stream = await createDownloader().createDownloadStream('user/file', 10, 20, abortController.signal)
 
       expect(lastCommand()).toBeInstanceOf(GetObjectCommand)
       expect(lastCommand().input).toEqual({ Bucket: 'bucket', Key: 'user/file', Range: 'bytes=10-20' })
+      expect(lastOptions()).toEqual({ abortSignal: abortController.signal })
       expect(stream).toBe(body)
     })
   })
@@ -32,10 +35,12 @@ describe('S3FileDownloader', () => {
   describe('getFileSize', () => {
     it('returns the content length reported by a HEAD of the object', async () => {
       s3Client.send = jest.fn().mockResolvedValue({ ContentLength: 4096 })
+      const abortController = new AbortController()
 
-      expect(await createDownloader().getFileSize('user/file')).toEqual(4096)
+      expect(await createDownloader().getFileSize('user/file', abortController.signal)).toEqual(4096)
       expect(lastCommand()).toBeInstanceOf(HeadObjectCommand)
       expect(lastCommand().input).toEqual({ Bucket: 'bucket', Key: 'user/file' })
+      expect(lastOptions()).toEqual({ abortSignal: abortController.signal })
     })
   })
 
