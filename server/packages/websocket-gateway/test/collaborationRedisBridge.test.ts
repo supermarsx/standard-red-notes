@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto'
+
 import { describe, expect, it, vi } from 'vitest'
 
 import {
@@ -9,20 +11,51 @@ import {
 import type { Conn, SendableSocket } from '../src/registry.js'
 import {
   COLLABORATION_PROTOCOL_VERSION,
+  CollaborationRoomEpochMismatchError,
   handleRelayFrame,
   MAX_YJS_TRANSFER_BYTES,
   PENDING_EDITOR_RESERVATION_ACTIVATION_TIMEOUT_MS,
   RoomRegistry,
+  type RoomJoinAuthorizer,
   type RoomRelayLifecycle,
 } from '../src/rooms.js'
 
 type MessageHandler = (channel: string, message: string) => void
 type SubscriptionCallback = (error: Error | null | undefined, count?: unknown) => void
 
+const TEST_ROOM_EPOCH = 'room_epoch_0000000000000001'
+const TEST_SECURITY_EPOCH = 'security_epoch_0000000000000001'
+
+// CollaborationRedisBridge defaults its instanceId to randomUUID(), so the parameter
+// carries node crypto's UUID template-literal type. Tests want readable replica
+// labels, so derive a stable v4-shaped UUID from each label: distinct labels stay
+// distinct replicas, the same label always yields the same id (assertions can call
+// this too), and the ids look exactly like the ones production emits.
+function replicaId(label: string): `${string}-${string}-${string}-${string}-${string}` {
+  const hex = createHash('sha256').update(label).digest('hex')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(12, 15)}-8${hex.slice(15, 18)}-${hex.slice(18, 30)}`
+}
+
+async function reserveAfterRequiredEpochRotation<T>(attempt: (roomEpoch: string) => Promise<T>): Promise<T> {
+  let currentRoomEpoch: string
+  try {
+    await attempt(TEST_ROOM_EPOCH)
+    throw new Error('Expected the final empty-room release to rotate its epoch')
+  } catch (error) {
+    if (!(error instanceof CollaborationRoomEpochMismatchError)) {
+      throw error
+    }
+    expect(error.currentRoomEpoch).not.toBe(TEST_ROOM_EPOCH)
+    currentRoomEpoch = error.currentRoomEpoch
+  }
+  return attempt(currentRoomEpoch)
+}
+
 class FakeRedisNetwork {
   readonly sets = new Map<string, Set<string>>()
   readonly leases = new Map<string, number>()
   readonly leaseValues = new Map<string, string>()
+  readonly roomStates = new Map<string, string>()
   readonly responseClaims = new Map<string, { value: string; expiresAt: number }>()
   readonly published: Array<{ channel: string; message: string }> = []
   readonly subscribers = new Set<MessageHandler>()
@@ -182,15 +215,21 @@ class FakeRedisNetwork {
         }
         const roomSetKey = String(args[0])
         const leaseKey = String(args[1])
+        const roomStateKey = String(args[2])
         const members = this.sets.get(roomSetKey) ?? new Set<string>()
-        if (script.includes('SRN_REFRESH_OWNED_LEASE_V1')) {
+        if (script.includes('SRN_REFRESH_OWNED_LEASE_V3')) {
           const forcedPolicyResult = this.forcedLeasePolicyResults.get(leaseKey)
           if (forcedPolicyResult !== undefined) {
             this.forcedLeasePolicyResults.delete(leaseKey)
             return forcedPolicyResult
           }
-          const marker = String(args[4])
+          const marker = String(args[5])
           if (this.leaseValues.get(leaseKey) !== marker || !this.leases.has(leaseKey) || !members.has(leaseKey)) {
+            return -3
+          }
+          const roomState = this.roomStates.get(roomStateKey)
+          const roomStatePrefix = String(args[7])
+          if (!roomState?.startsWith(`${roomStatePrefix}:`)) {
             return -3
           }
           for (const member of [...members]) {
@@ -201,15 +240,15 @@ class FakeRedisNetwork {
           if ([...members].some((member) => !this.leaseValues.get(member)?.startsWith(marker.slice(0, 3)))) {
             return -1
           }
-          if (members.size > Number(args[5])) {
+          if (members.size > Number(args[6])) {
             return -2
           }
-          const ttl = Number(args[2])
+          const ttl = Number(args[3])
           this.leaseTtls.push(ttl)
           this.leases.set(leaseKey, ttl)
           return 1
         }
-        if (script.includes('SRN_RESERVE_LEASE_V1')) {
+        if (script.includes('SRN_RESERVE_LEASE_V3')) {
           this.reserveEvalCalls += 1
           if (this.reserveEvalGate) {
             await this.reserveEvalGate
@@ -224,16 +263,60 @@ class FakeRedisNetwork {
               members.delete(member)
             }
           }
-          const marker = String(args[4])
+          const marker = String(args[5])
           if ([...members].some((member) => !this.leaseValues.get(member)?.startsWith(marker.slice(0, 3)))) {
             return -1
           }
-          const active = members.size
-          const roomLeaseLimit = Number(args[5])
+          let active = members.size
+          const requestedEpoch = String(args[7])
+          const securityEpoch = String(args[8])
+          const rotatedEpoch = String(args[9])
+          const authorizationIssuedAt = Number(args[11])
+          const requestedState = `${requestedEpoch}:${securityEpoch}:${authorizationIssuedAt}`
+          const currentState = this.roomStates.get(roomStateKey)
+          if (!currentState) {
+            if (active > 0) {
+              for (const member of members) {
+                this.leases.delete(member)
+                this.leaseValues.delete(member)
+              }
+              members.clear()
+              this.sets.delete(roomSetKey)
+              this.roomStates.set(roomStateKey, `${rotatedEpoch}:${securityEpoch}:${authorizationIssuedAt}`)
+              return `revoked:${rotatedEpoch}`
+            }
+            this.roomStates.set(roomStateKey, requestedState)
+          } else {
+            const separator = currentState.indexOf(':')
+            const securitySeparator = currentState.indexOf(':', separator + 1)
+            const currentEpoch = separator >= 0 ? currentState.slice(0, separator) : ''
+            const currentSecurityEpoch =
+              securitySeparator >= 0 ? currentState.slice(separator + 1, securitySeparator) : ''
+            const currentAuthorizationIssuedAt =
+              securitySeparator >= 0 ? Number(currentState.slice(securitySeparator + 1)) : 0
+            if (currentSecurityEpoch !== securityEpoch) {
+              if (authorizationIssuedAt <= currentAuthorizationIssuedAt) {
+                return `epoch:${currentEpoch}`
+              }
+              for (const member of members) {
+                this.leases.delete(member)
+                this.leaseValues.delete(member)
+              }
+              members.clear()
+              this.sets.delete(roomSetKey)
+              this.roomStates.set(roomStateKey, `${rotatedEpoch}:${securityEpoch}:${authorizationIssuedAt}`)
+              return `revoked:${rotatedEpoch}`
+            }
+            if (currentEpoch !== requestedEpoch) {
+              return `epoch:${currentEpoch}`
+            }
+          }
+          active = members.size
+          const roomLeaseLimit = Number(args[6])
           if (script.includes('active >= tonumber(ARGV[4])') && active >= roomLeaseLimit && !members.has(leaseKey)) {
             return -2
           }
-          const ttl = Number(args[2])
+          const ttl = Number(args[3])
           this.leaseTtls.push(ttl)
           this.leases.set(leaseKey, ttl)
           this.leaseValues.set(leaseKey, marker)
@@ -241,21 +324,17 @@ class FakeRedisNetwork {
           this.sets.set(roomSetKey, members)
           return active === 0 ? 1 : 0
         }
-        if (script.includes("redis.call('SET', KEYS[2]")) {
-          const ttl = Number(args[2])
-          const marker = String(args[4])
-          this.leaseTtls.push(ttl)
-          this.leases.set(leaseKey, ttl)
-          this.leaseValues.set(leaseKey, marker)
-          members.add(leaseKey)
-          this.sets.set(roomSetKey, members)
-          return 1
+        if (!script.includes('SRN_RELEASE_LEASE_V3')) {
+          throw new Error('Unknown fake Redis collaboration script')
         }
         this.leases.delete(leaseKey)
         this.leaseValues.delete(leaseKey)
         members.delete(leaseKey)
         if (members.size === 0) {
           this.sets.delete(roomSetKey)
+          if (this.roomStates.get(roomStateKey)?.startsWith(`${String(args[4])}:`)) {
+            this.roomStates.set(roomStateKey, String(args[3]))
+          }
         }
         return 1
       },
@@ -301,6 +380,100 @@ function connection(id: string): Conn<SendableSocket> & { send: ReturnType<typeo
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
 
 describe('CollaborationRedisBridge multi-replica relay', () => {
+  it('emits bounded server-identity presence for two sessions and exactly one clean/abrupt terminal event each', async () => {
+    const redis = new FakeRedisNetwork()
+    const roomsA = new RoomRegistry<SendableSocket>()
+    const roomsB = new RoomRegistry<SendableSocket>()
+    const bridgeA = new CollaborationRedisBridge(
+      roomsA,
+      redis.client() as never,
+      redis.client() as never,
+      logger,
+      replicaId('presence-a'),
+    )
+    const bridgeB = new CollaborationRedisBridge(
+      roomsB,
+      redis.client() as never,
+      redis.client() as never,
+      logger,
+      replicaId('presence-b'),
+    )
+    const room = 'presence-room'
+    const expiresAt = Date.now() + 60_000
+    const first = connection('presence-first')
+    const second = connection('presence-second')
+    second.userUuid = first.userUuid
+    roomsA.join(room, first, expiresAt, 'presence-first', 'editor', false, TEST_ROOM_EPOCH, TEST_SECURITY_EPOCH)
+    roomsB.join(room, second, expiresAt, 'presence-second', 'editor', false, TEST_ROOM_EPOCH, TEST_SECURITY_EPOCH)
+
+    const firstReservation = await bridgeA.reserveEditorLease(
+      first,
+      room,
+      'presence-first',
+      expiresAt,
+      COLLABORATION_PROTOCOL_VERSION,
+      1,
+      TEST_ROOM_EPOCH,
+      TEST_SECURITY_EPOCH,
+      1_000,
+    )
+    await bridgeA.activateEditorLease(
+      first,
+      room,
+      'presence-first',
+      expiresAt,
+      COLLABORATION_PROTOCOL_VERSION,
+      1,
+      firstReservation.bootstrapChallenge,
+      TEST_ROOM_EPOCH,
+      TEST_SECURITY_EPOCH,
+      1_000,
+    )
+    const secondReservation = await bridgeB.reserveEditorLease(
+      second,
+      room,
+      'presence-second',
+      expiresAt,
+      COLLABORATION_PROTOCOL_VERSION,
+      1,
+      TEST_ROOM_EPOCH,
+      TEST_SECURITY_EPOCH,
+      1_001,
+    )
+    await bridgeB.activateEditorLease(
+      second,
+      room,
+      'presence-second',
+      expiresAt,
+      COLLABORATION_PROTOCOL_VERSION,
+      1,
+      secondReservation.bootstrapChallenge,
+      TEST_ROOM_EPOCH,
+      TEST_SECURITY_EPOCH,
+      1_001,
+    )
+
+    await bridgeA.heartbeatPresence(first, room, 'presence-first', TEST_ROOM_EPOCH, 11)
+    await bridgeA.heartbeatPresence(first, room, 'presence-first', TEST_ROOM_EPOCH, 11)
+    await bridgeB.heartbeatPresence(second, room, 'presence-second', TEST_ROOM_EPOCH, 22)
+    await bridgeA.releaseLease(first, room, 'presence-first', 'clean-leave')
+    await bridgeA.releaseAll(first)
+    await bridgeB.releaseAll(second)
+
+    const frames = redis.published.map(({ message }) => JSON.parse(message).frame as Record<string, unknown>)
+    expect(frames.map(({ action }) => action)).toEqual(['joined', 'joined', 'left', 'left'])
+    expect(frames.filter(({ action }) => action === 'left').map(({ reason }) => reason)).toEqual([
+      'clean-leave',
+      'disconnect',
+    ])
+    expect(new Set(frames.map(({ presenceId }) => presenceId)).size).toBe(2)
+    expect(frames.filter(({ action }) => action === 'joined').map(({ userUuid }) => userUuid)).toEqual([
+      first.userUuid,
+      first.userUuid,
+    ])
+    expect(JSON.stringify(frames)).not.toMatch(/label|displayName|title|plaintext/i)
+  })
+
   it('relays an already-encrypted frame to another replica without echoing it locally', async () => {
     const redis = new FakeRedisNetwork()
     const roomsA = new RoomRegistry<SendableSocket>()
@@ -309,8 +482,14 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
     const localB = connection('b')
     roomsA.join('note-1', localA)
     roomsB.join('note-1', localB)
-    const bridgeA = new CollaborationRedisBridge(roomsA, redis.client() as never, redis.client() as never, logger, 'a')
-    new CollaborationRedisBridge(roomsB, redis.client() as never, redis.client() as never, logger, 'b')
+    const bridgeA = new CollaborationRedisBridge(
+      roomsA,
+      redis.client() as never,
+      redis.client() as never,
+      logger,
+      replicaId('a'),
+    )
+    new CollaborationRedisBridge(roomsB, redis.client() as never, redis.client() as never, logger, replicaId('b'))
 
     await bridgeA.publish({ t: 'yjs', room: 'note-1', payload: 'base64-aes-gcm-ciphertext' })
 
@@ -322,9 +501,272 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
     expect(redis.published[0].channel).toBe(COLLABORATION_RELAY_CHANNEL)
     expect(JSON.parse(redis.published[0].message)).toEqual({
       v: 1,
-      origin: 'a',
+      origin: replicaId('a'),
       frame: { t: 'yjs', room: 'note-1', payload: 'base64-aes-gcm-ciphertext' },
     })
+  })
+
+  it('drops malformed remote envelopes while accepting every bounded relay-only frame family', () => {
+    const redis = new FakeRedisNetwork()
+    const rooms = new RoomRegistry<SendableSocket>()
+    const local = connection('remote-parser')
+    rooms.join('remote-room', local)
+    new CollaborationRedisBridge(
+      rooms,
+      redis.client() as never,
+      redis.client() as never,
+      logger,
+      replicaId('local-instance'),
+    )
+    const deliver = (raw: string): void => {
+      for (const subscriber of redis.subscribers) {
+        subscriber(COLLABORATION_RELAY_CHANNEL, raw)
+      }
+    }
+    const envelope = (frame: unknown): string => JSON.stringify({ v: 1, origin: 'remote-instance', frame })
+    const presence = {
+      t: 'room-presence',
+      room: 'remote-room',
+      roomEpoch: TEST_ROOM_EPOCH,
+      protocolVersion: 3,
+      presenceId: 'remote-presence',
+      userUuid: 'remote-user',
+      clientId: 1,
+    }
+
+    for (const raw of [
+      'x'.repeat(700 * 1024 + 1),
+      'null',
+      envelope(undefined),
+      envelope({ ...presence, room: '', action: 'left', reason: 'revoked' }),
+      envelope({ ...presence, action: 'unknown' }),
+      envelope({ t: 'room-sync', room: '' }),
+      envelope({ t: 'unknown', room: 'remote-room' }),
+    ]) {
+      deliver(raw)
+    }
+    expect(local.send).not.toHaveBeenCalled()
+
+    const accepted = [
+      { ...presence, action: 'left', reason: 'heartbeat-timeout' },
+      { ...presence, presenceId: 'remote-presence-2', action: 'left', reason: 'revoked' },
+      { t: 'room-sync', room: 'remote-room' },
+      { t: 'awareness', room: 'remote-room', payload: 'opaque-awareness' },
+      { t: 'comment', room: 'remote-room', payload: 'opaque-comment' },
+    ]
+    for (const frame of accepted) {
+      deliver(envelope(frame))
+    }
+
+    expect(local.send.mock.calls.map(([frame]) => JSON.parse(frame as string))).toEqual(accepted)
+  })
+
+  it('supports callback and Promise subscription clients and contains non-Error subscription failures', async () => {
+    const commandClient = () => ({
+      status: undefined,
+      on: vi.fn(),
+      eval: vi.fn().mockResolvedValue(1),
+      publish: vi.fn().mockResolvedValue(1),
+      quit: vi.fn().mockResolvedValue(undefined),
+      disconnect: vi.fn(),
+    })
+    const rooms = new RoomRegistry<SendableSocket>()
+    const successfulSubscriber = {
+      status: undefined,
+      on: vi.fn(),
+      subscribe: vi.fn((_channel: string, callback: SubscriptionCallback) => {
+        callback(null, 1)
+        return Promise.resolve(1)
+      }),
+      quit: vi.fn().mockResolvedValue(undefined),
+      disconnect: vi.fn(),
+    }
+    const successful = new CollaborationRedisBridge(
+      rooms,
+      commandClient() as never,
+      successfulSubscriber as never,
+      logger,
+      replicaId('promise-success'),
+    )
+    await Promise.resolve()
+    expect(successfulSubscriber.subscribe).toHaveBeenCalledTimes(1)
+
+    const rejectionLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
+    const rejected = new CollaborationRedisBridge(
+      rooms,
+      commandClient() as never,
+      {
+        ...successfulSubscriber,
+        subscribe: vi.fn(() => Promise.reject('non-error rejection')),
+      } as never,
+      rejectionLogger,
+      replicaId('promise-rejection'),
+    )
+    await vi.waitFor(() => expect(rejectionLogger.error).toHaveBeenCalled())
+
+    const throwLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
+    const threw = new CollaborationRedisBridge(
+      rooms,
+      commandClient() as never,
+      {
+        ...successfulSubscriber,
+        subscribe: vi.fn(() => {
+          throw 'non-error throw'
+        }),
+      } as never,
+      throwLogger,
+      replicaId('throw-rejection'),
+    )
+    expect(throwLogger.error).toHaveBeenCalled()
+
+    await Promise.all([successful.stop(), rejected.stop(), threw.stop()])
+  })
+
+  it('fails closed across lease, presence, transport, and malformed Redis-result guards', async () => {
+    const redis = new FakeRedisNetwork()
+    const rooms = new RoomRegistry<SendableSocket>()
+    const first = connection('guard-first')
+    const second = connection('guard-second')
+    const room = 'guard-room'
+    rooms.join(room, first)
+    rooms.join(room, second)
+    const bridge = new CollaborationRedisBridge(
+      rooms,
+      redis.client() as never,
+      redis.client() as never,
+      logger,
+      replicaId('guard-instance'),
+    )
+    const expiresAt = Date.now() + 60_000
+
+    await expect(
+      bridge.reserveEditorLease(
+        first,
+        room,
+        'expired',
+        Date.now() - 1,
+        3,
+        1,
+        TEST_ROOM_EPOCH,
+        TEST_SECURITY_EPOCH,
+        1_000,
+      ),
+    ).rejects.toThrow(/invalid or expired/i)
+    await expect(bridge.releaseLease(first, room, 'missing')).resolves.toBeUndefined()
+    await expect(bridge.heartbeatPresence(first, room, 'missing', TEST_ROOM_EPOCH, 1)).rejects.toBeInstanceOf(
+      CollaborationRoomEpochMismatchError,
+    )
+
+    const firstReservation = await bridge.reserveEditorLease(
+      first,
+      room,
+      'first',
+      expiresAt,
+      3,
+      1,
+      TEST_ROOM_EPOCH,
+      TEST_SECURITY_EPOCH,
+      1_000,
+    )
+    await expect(
+      bridge.reserveEditorLease(first, room, 'first', expiresAt, 3, 1, TEST_ROOM_EPOCH, TEST_SECURITY_EPOCH, 1_000),
+    ).resolves.toMatchObject({ bootstrapChallenge: firstReservation.bootstrapChallenge })
+    const secondReservation = await bridge.reserveEditorLease(
+      second,
+      room,
+      'second',
+      expiresAt,
+      3,
+      1,
+      TEST_ROOM_EPOCH,
+      TEST_SECURITY_EPOCH,
+      1_001,
+    )
+    expect(secondReservation).toEqual({ shouldBootstrap: false })
+    await expect(
+      bridge.reserveEditorLease(second, room, 'second', expiresAt, 3, 1, TEST_ROOM_EPOCH, TEST_SECURITY_EPOCH, 1_001),
+    ).resolves.toEqual({ shouldBootstrap: false })
+    await bridge.activateEditorLease(
+      second,
+      room,
+      'second',
+      expiresAt,
+      3,
+      1,
+      undefined,
+      TEST_ROOM_EPOCH,
+      TEST_SECURITY_EPOCH,
+      1_001,
+    )
+    await expect(
+      bridge.reserveEditorLease(second, room, 'second', expiresAt, 3, 1, TEST_ROOM_EPOCH, TEST_SECURITY_EPOCH, 1_001),
+    ).resolves.toEqual({ shouldBootstrap: false })
+    await bridge.heartbeatPresence(second, room, 'second', TEST_ROOM_EPOCH, 7)
+    await expect(bridge.heartbeatPresence(second, room, 'second', TEST_ROOM_EPOCH, 8)).rejects.toThrow(
+      /identity changed/i,
+    )
+    await bridge.stop()
+
+    await expect(
+      bridge.reserveEditorLease(first, room, 'stopped', expiresAt, 3, 1, TEST_ROOM_EPOCH, TEST_SECURITY_EPOCH, 1_000),
+    ).rejects.toThrow(/not healthy/i)
+    await expect(
+      bridge.activateEditorLease(
+        first,
+        room,
+        'stopped',
+        expiresAt,
+        3,
+        1,
+        undefined,
+        TEST_ROOM_EPOCH,
+        TEST_SECURITY_EPOCH,
+        1_000,
+      ),
+    ).rejects.toThrow(/not healthy/i)
+    await expect(bridge.heartbeatPresence(first, room, 'stopped', TEST_ROOM_EPOCH, 1)).rejects.toThrow(/not healthy/i)
+    await expect(bridge.claimYjsResponse(first, room, 'state', 'stopped')).rejects.toThrow(/not healthy/i)
+    await expect(bridge.publish({ t: 'comment', room, payload: 'ciphertext' })).rejects.toThrow(/not healthy/i)
+
+    const malformedRedis = new FakeRedisNetwork()
+    const malformedCommands = malformedRedis.client()
+    malformedCommands.eval = vi.fn().mockResolvedValue(2)
+    const malformedBridge = new CollaborationRedisBridge(
+      new RoomRegistry<SendableSocket>(),
+      malformedCommands as never,
+      malformedRedis.client() as never,
+      logger,
+      replicaId('malformed-result'),
+    )
+    await expect(
+      malformedBridge.reserveEditorLease(
+        first,
+        'malformed-room',
+        'malformed',
+        expiresAt,
+        3,
+        1,
+        TEST_ROOM_EPOCH,
+        TEST_SECURITY_EPOCH,
+        1_000,
+      ),
+    ).rejects.toThrow(/invalid collaboration lease result/i)
+
+    const emptyRelay = new FakeRedisNetwork()
+    const emptyCommands = emptyRelay.client()
+    emptyCommands.publish = vi.fn().mockResolvedValue(0)
+    const emptyBridge = new CollaborationRedisBridge(
+      new RoomRegistry<SendableSocket>(),
+      emptyCommands as never,
+      emptyRelay.client() as never,
+      logger,
+      replicaId('empty-relay'),
+    )
+    await expect(emptyBridge.publish({ t: 'awareness', room: 'empty-room', payload: 'ciphertext' })).rejects.toThrow(
+      /no subscribers/i,
+    )
+
+    await Promise.all([malformedBridge.stop(), emptyBridge.stop()])
   })
 
   it('keeps chunk ciphertext opaque while relaying a bounded transfer across replicas', async () => {
@@ -340,9 +782,15 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
       redis.client() as never,
       redis.client() as never,
       logger,
-      'chunk-replica-a',
+      replicaId('chunk-replica-a'),
     )
-    new CollaborationRedisBridge(roomsB, redis.client() as never, redis.client() as never, logger, 'chunk-replica-b')
+    new CollaborationRedisBridge(
+      roomsB,
+      redis.client() as never,
+      redis.client() as never,
+      logger,
+      replicaId('chunk-replica-b'),
+    )
     const chunk = {
       t: 'yjs-chunk' as const,
       room: 'large-note',
@@ -373,9 +821,15 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
       redis.client() as never,
       redis.client() as never,
       logger,
-      'retry-replica-a',
+      replicaId('retry-replica-a'),
     )
-    new CollaborationRedisBridge(roomsB, redis.client() as never, redis.client() as never, logger, 'retry-replica-b')
+    new CollaborationRedisBridge(
+      roomsB,
+      redis.client() as never,
+      redis.client() as never,
+      logger,
+      replicaId('retry-replica-b'),
+    )
     const retry = {
       t: 'yjs-retry' as const,
       room: 'retry-note',
@@ -410,22 +864,40 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
       redis.client() as never,
       redis.client() as never,
       logger,
-      'a',
+      replicaId('a'),
     )
     const bridgeB = new CollaborationRedisBridge(
       new RoomRegistry(),
       redis.client() as never,
       redis.client() as never,
       logger,
-      'b',
+      replicaId('b'),
     )
     const a = connection('a')
     const b = connection('b')
     const expiresAt = Date.now() + 5 * 60_000
 
     const [electionA, electionB] = await Promise.all([
-      bridgeA.reserveEditorLease(a, 'same-room', 'lease-a', expiresAt, COLLABORATION_PROTOCOL_VERSION, 100),
-      bridgeB.reserveEditorLease(b, 'same-room', 'lease-b', expiresAt, COLLABORATION_PROTOCOL_VERSION, 100),
+      bridgeA.reserveEditorLease(
+        a,
+        'same-room',
+        'lease-a',
+        expiresAt,
+        COLLABORATION_PROTOCOL_VERSION,
+        100,
+        TEST_ROOM_EPOCH,
+        TEST_SECURITY_EPOCH,
+      ),
+      bridgeB.reserveEditorLease(
+        b,
+        'same-room',
+        'lease-b',
+        expiresAt,
+        COLLABORATION_PROTOCOL_VERSION,
+        100,
+        TEST_ROOM_EPOCH,
+        TEST_SECURITY_EPOCH,
+      ),
     ])
 
     expect([electionA.shouldBootstrap, electionB.shouldBootstrap].sort()).toEqual([false, true])
@@ -435,7 +907,16 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
     // Reusing the exact logical lease (reservation -> mounted provider) keeps
     // the election result rather than spuriously becoming a second bootstrapper.
     await expect(
-      bridgeA.reserveEditorLease(a, 'same-room', 'lease-a', expiresAt, COLLABORATION_PROTOCOL_VERSION, 100),
+      bridgeA.reserveEditorLease(
+        a,
+        'same-room',
+        'lease-a',
+        expiresAt,
+        COLLABORATION_PROTOCOL_VERSION,
+        100,
+        TEST_ROOM_EPOCH,
+        TEST_SECURITY_EPOCH,
+      ),
     ).resolves.toEqual(electionA)
 
     await bridgeA.releaseAll(a)
@@ -445,6 +926,102 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
     expect(redis.sets.size).toBe(0)
   })
 
+  it('evicts an active older security generation and refuses a stale unseen generation rollback', async () => {
+    const redis = new FakeRedisNetwork()
+    const roomsA = new RoomRegistry<SendableSocket>()
+    const roomsB = new RoomRegistry<SendableSocket>()
+    const roomsC = new RoomRegistry<SendableSocket>()
+    const bridgeA = new CollaborationRedisBridge(
+      roomsA,
+      redis.client() as never,
+      redis.client() as never,
+      logger,
+      replicaId('security-a'),
+    )
+    const bridgeB = new CollaborationRedisBridge(
+      roomsB,
+      redis.client() as never,
+      redis.client() as never,
+      logger,
+      replicaId('security-b'),
+    )
+    const bridgeC = new CollaborationRedisBridge(
+      roomsC,
+      redis.client() as never,
+      redis.client() as never,
+      logger,
+      replicaId('security-c'),
+    )
+    const room = 'security-rotation-room'
+    const oldSecurityEpoch = 'security_epoch_0000000000000001'
+    const skippedSecurityEpoch = 'security_epoch_0000000000000002'
+    const newestSecurityEpoch = 'security_epoch_0000000000000003'
+    const oldMember = connection('security-old')
+    const expiresAt = Date.now() + 60_000
+    roomsA.join(room, oldMember, expiresAt, 'old-lease')
+    await bridgeA.reserveEditorLease(
+      oldMember,
+      room,
+      'old-lease',
+      expiresAt,
+      COLLABORATION_PROTOCOL_VERSION,
+      1,
+      TEST_ROOM_EPOCH,
+      oldSecurityEpoch,
+      1_000,
+    )
+
+    await expect(
+      bridgeB.reserveEditorLease(
+        connection('security-new'),
+        room,
+        'new-lease',
+        expiresAt,
+        COLLABORATION_PROTOCOL_VERSION,
+        1,
+        TEST_ROOM_EPOCH,
+        newestSecurityEpoch,
+        3_000,
+      ),
+    ).rejects.toThrow('Collaboration room epoch mismatch')
+    expect(redis.leases.size).toBe(0)
+    await bridgeA.refreshLeases()
+    expect(roomsA.isMember(room, oldMember)).toBe(false)
+
+    const currentState = [...redis.roomStates.values()][0]!
+    const currentRoomEpoch = currentState.split(':')[0]
+    expect(currentState).toBe(`${currentRoomEpoch}:${newestSecurityEpoch}:3000`)
+    await expect(
+      bridgeB.reserveEditorLease(
+        connection('security-new-retry'),
+        room,
+        'new-lease-retry',
+        expiresAt,
+        COLLABORATION_PROTOCOL_VERSION,
+        1,
+        currentRoomEpoch,
+        newestSecurityEpoch,
+        3_001,
+      ),
+    ).resolves.toMatchObject({ shouldBootstrap: true })
+
+    await expect(
+      bridgeC.reserveEditorLease(
+        connection('security-stale'),
+        room,
+        'stale-lease',
+        expiresAt,
+        COLLABORATION_PROTOCOL_VERSION,
+        1,
+        currentRoomEpoch,
+        skippedSecurityEpoch,
+        2_000,
+      ),
+    ).rejects.toMatchObject({ currentRoomEpoch })
+    expect([...redis.roomStates.values()][0]).toBe(`${currentRoomEpoch}:${newestSecurityEpoch}:3000`)
+    expect(redis.leases.size).toBe(1)
+  })
+
   it('atomically caps one room across replicas, preserves idempotent refresh, and admits work after stale pruning', async () => {
     const redis = new FakeRedisNetwork()
     const bridgeA = new CollaborationRedisBridge(
@@ -452,14 +1029,14 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
       redis.client() as never,
       redis.client() as never,
       logger,
-      'cap-a',
+      replicaId('cap-a'),
     )
     const bridgeB = new CollaborationRedisBridge(
       new RoomRegistry(),
       redis.client() as never,
       redis.client() as never,
       logger,
-      'cap-b',
+      replicaId('cap-b'),
     )
     const bridges = [bridgeA, bridgeB]
     const connections: Array<Conn<SendableSocket>> = []
@@ -476,6 +1053,8 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
           expiresAt,
           COLLABORATION_PROTOCOL_VERSION,
           1,
+          TEST_ROOM_EPOCH,
+          TEST_SECURITY_EPOCH,
         ),
       ).resolves.toMatchObject({ shouldBootstrap: index === 0 })
     }
@@ -489,6 +1068,8 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
         expiresAt,
         COLLABORATION_PROTOCOL_VERSION,
         1,
+        TEST_ROOM_EPOCH,
+        TEST_SECURITY_EPOCH,
       ),
     ).resolves.toMatchObject({ shouldBootstrap: true })
 
@@ -501,6 +1082,8 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
         expiresAt,
         COLLABORATION_PROTOCOL_VERSION,
         1,
+        TEST_ROOM_EPOCH,
+        TEST_SECURITY_EPOCH,
       ),
     ).rejects.toThrow('Collaboration room editor lease limit exceeded')
 
@@ -513,6 +1096,8 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
         expiresAt,
         COLLABORATION_PROTOCOL_VERSION,
         1,
+        TEST_ROOM_EPOCH,
+        TEST_SECURITY_EPOCH,
       ),
     ).resolves.toMatchObject({ shouldBootstrap: true })
 
@@ -531,6 +1116,8 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
         expiresAt,
         COLLABORATION_PROTOCOL_VERSION,
         1,
+        TEST_ROOM_EPOCH,
+        TEST_SECURITY_EPOCH,
       ),
     ).resolves.toMatchObject({ shouldBootstrap: false })
     expect(roomSet?.size).toBe(MAX_DISTRIBUTED_EDITOR_LEASES_PER_ROOM)
@@ -548,14 +1135,14 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
       redis.client() as never,
       redis.client() as never,
       logger,
-      'claim-replica-a',
+      replicaId('claim-replica-a'),
     )
     const bridgeB = new CollaborationRedisBridge(
       new RoomRegistry(),
       redis.client() as never,
       redis.client() as never,
       logger,
-      'claim-replica-b',
+      replicaId('claim-replica-b'),
     )
     const activationDeadline = Date.now() + PENDING_EDITOR_RESERVATION_ACTIVATION_TIMEOUT_MS
     const activeExpiry = Date.now() + 60_000
@@ -576,6 +1163,8 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
         activationDeadline,
         COLLABORATION_PROTOCOL_VERSION,
         1,
+        TEST_ROOM_EPOCH,
+        TEST_SECURITY_EPOCH,
       )
       await bridge.activateEditorLease(
         conn,
@@ -585,6 +1174,8 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
         COLLABORATION_PROTOCOL_VERSION,
         1,
         reservation.bootstrapChallenge,
+        TEST_ROOM_EPOCH,
+        TEST_SECURITY_EPOCH,
       )
       claimants.push({ bridge, conn, leaseRequestId })
     }
@@ -606,7 +1197,7 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
       redis.client() as never,
       redis.client() as never,
       logger,
-      'claim-progress-replica',
+      replicaId('claim-progress-replica'),
     )
     const activationDeadline = Date.now() + PENDING_EDITOR_RESERVATION_ACTIVATION_TIMEOUT_MS
     const activeExpiry = Date.now() + 60_000
@@ -623,6 +1214,8 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
         activationDeadline,
         COLLABORATION_PROTOCOL_VERSION,
         1,
+        TEST_ROOM_EPOCH,
+        TEST_SECURITY_EPOCH,
       )
       await bridge.activateEditorLease(
         conn,
@@ -632,6 +1225,8 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
         COLLABORATION_PROTOCOL_VERSION,
         1,
         reservation.bootstrapChallenge,
+        TEST_ROOM_EPOCH,
+        TEST_SECURITY_EPOCH,
       )
     }
 
@@ -662,7 +1257,7 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
         redis.client() as never,
         redis.client() as never,
         logger,
-        'claim-denial-replica',
+        replicaId('claim-denial-replica'),
       )
       const member = connection('claim-denial')
       const reservation = await bridge.reserveEditorLease(
@@ -672,6 +1267,8 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
         Date.now() + PENDING_EDITOR_RESERVATION_ACTIVATION_TIMEOUT_MS,
         COLLABORATION_PROTOCOL_VERSION,
         1,
+        TEST_ROOM_EPOCH,
+        TEST_SECURITY_EPOCH,
       )
       await bridge.activateEditorLease(
         member,
@@ -681,6 +1278,8 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
         COLLABORATION_PROTOCOL_VERSION,
         1,
         reservation.bootstrapChallenge,
+        TEST_ROOM_EPOCH,
+        TEST_SECURITY_EPOCH,
       )
 
       await expect(
@@ -701,7 +1300,7 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
         expiredRedis.client() as never,
         expiredRedis.client() as never,
         logger,
-        'claim-expired-replica',
+        replicaId('claim-expired-replica'),
       )
       const expiredMember = connection('claim-expired')
       const expiredReservation = await expiredBridge.reserveEditorLease(
@@ -711,6 +1310,8 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
         Date.now() + PENDING_EDITOR_RESERVATION_ACTIVATION_TIMEOUT_MS,
         COLLABORATION_PROTOCOL_VERSION,
         1,
+        TEST_ROOM_EPOCH,
+        TEST_SECURITY_EPOCH,
       )
       await expiredBridge.activateEditorLease(
         expiredMember,
@@ -720,6 +1321,8 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
         COLLABORATION_PROTOCOL_VERSION,
         1,
         expiredReservation.bootstrapChallenge,
+        TEST_ROOM_EPOCH,
+        TEST_SECURITY_EPOCH,
       )
       vi.setSystemTime(Date.now() + 1_001)
       await expect(
@@ -732,7 +1335,7 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
         unhealthyRedis.client() as never,
         unhealthyRedis.client() as never,
         logger,
-        'claim-unhealthy-replica',
+        replicaId('claim-unhealthy-replica'),
       )
       unhealthyRedis.emitCommandClose()
       await expect(
@@ -765,7 +1368,7 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
       redis.client() as never,
       redis.client() as never,
       logger,
-      `policy-replica-${policyResult}`,
+      replicaId(`policy-replica-${policyResult}`),
     )
     await bridge.reserveEditorLease(
       affected,
@@ -774,6 +1377,8 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
       expiresAt,
       COLLABORATION_PROTOCOL_VERSION,
       1,
+      TEST_ROOM_EPOCH,
+      TEST_SECURITY_EPOCH,
     )
     await bridge.reserveEditorLease(
       unrelated,
@@ -782,6 +1387,8 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
       expiresAt,
       COLLABORATION_PROTOCOL_VERSION,
       1,
+      TEST_ROOM_EPOCH,
+      TEST_SECURITY_EPOCH,
     )
     const affectedLeaseKey = [...redis.leaseValues.keys()][0]
     expect(affectedLeaseKey).toBeDefined()
@@ -809,6 +1416,8 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
         expiresAt,
         COLLABORATION_PROTOCOL_VERSION,
         1,
+        TEST_ROOM_EPOCH,
+        TEST_SECURITY_EPOCH,
       ),
     ).resolves.toMatchObject({ shouldBootstrap: true })
   })
@@ -820,7 +1429,7 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
       redis.client() as never,
       redis.client() as never,
       logger,
-      'challenge-replica',
+      replicaId('challenge-replica'),
     )
     const conn = connection('challenge')
     const activationDeadline = Date.now() + PENDING_EDITOR_RESERVATION_ACTIVATION_TIMEOUT_MS
@@ -832,6 +1441,8 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
       activationDeadline,
       COLLABORATION_PROTOCOL_VERSION,
       100,
+      TEST_ROOM_EPOCH,
+      TEST_SECURITY_EPOCH,
     )
     expect(reservation).toMatchObject({ shouldBootstrap: true, bootstrapChallenge: expect.any(String) })
     const reservationTtl = redis.leaseTtls.at(-1) ?? 0
@@ -846,6 +1457,8 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
         COLLABORATION_PROTOCOL_VERSION,
         99,
         reservation.bootstrapChallenge,
+        TEST_ROOM_EPOCH,
+        TEST_SECURITY_EPOCH,
       ),
     ).rejects.toThrow()
     expect(redis.leaseTtls).toHaveLength(ttlWritesBeforeActivation)
@@ -858,6 +1471,8 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
         COLLABORATION_PROTOCOL_VERSION,
         101,
         'wrong-challenge',
+        TEST_ROOM_EPOCH,
+        TEST_SECURITY_EPOCH,
       ),
     ).rejects.toThrow()
     expect(redis.leaseTtls).toHaveLength(ttlWritesBeforeActivation)
@@ -870,6 +1485,8 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
         COLLABORATION_PROTOCOL_VERSION,
         101,
         reservation.bootstrapChallenge,
+        TEST_ROOM_EPOCH,
+        TEST_SECURITY_EPOCH,
       ),
     ).resolves.toEqual({ shouldBootstrap: true })
     expect(redis.leaseTtls.at(-1)).toBeGreaterThan(reservationTtl)
@@ -883,6 +1500,8 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
         activationDeadline,
         COLLABORATION_PROTOCOL_VERSION,
         100,
+        TEST_ROOM_EPOCH,
+        TEST_SECURITY_EPOCH,
       ),
     ).resolves.toEqual(reservation)
     expect(redis.leaseTtls).toHaveLength(ttlWritesAfterActivation)
@@ -896,6 +1515,8 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
         COLLABORATION_PROTOCOL_VERSION,
         101,
         reservation.bootstrapChallenge,
+        TEST_ROOM_EPOCH,
+        TEST_SECURITY_EPOCH,
       ),
     ).rejects.toThrow()
   })
@@ -909,14 +1530,14 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
       redis.client() as never,
       redis.client() as never,
       logger,
-      'activation-race-a',
+      replicaId('activation-race-a'),
     )
     const bridgeB = new CollaborationRedisBridge(
       roomsB,
       redis.client() as never,
       redis.client() as never,
       logger,
-      'activation-race-b',
+      replicaId('activation-race-b'),
     )
     const a = connection('activation-race-a')
     const b = connection('activation-race-b')
@@ -929,6 +1550,8 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
       activationDeadline,
       COLLABORATION_PROTOCOL_VERSION,
       1,
+      TEST_ROOM_EPOCH,
+      TEST_SECURITY_EPOCH,
     )
     expect(reservationA.shouldBootstrap).toBe(true)
     roomsA.join('activation-race-room', a, activeExpiry, 'lease-a', 'editor', true)
@@ -945,6 +1568,8 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
       activationDeadline,
       COLLABORATION_PROTOCOL_VERSION,
       1,
+      TEST_ROOM_EPOCH,
+      TEST_SECURITY_EPOCH,
     )
     expect(reservationB.shouldBootstrap).toBe(true)
 
@@ -957,6 +1582,8 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
         COLLABORATION_PROTOCOL_VERSION,
         1,
         reservationA.bootstrapChallenge,
+        TEST_ROOM_EPOCH,
+        TEST_SECURITY_EPOCH,
       ),
     ).rejects.toThrow('Collaboration lease ownership was lost')
     expect(roomsA.isMember('activation-race-room', a)).toBe(false)
@@ -973,6 +1600,8 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
         COLLABORATION_PROTOCOL_VERSION,
         1,
         reservationB.bootstrapChallenge,
+        TEST_ROOM_EPOCH,
+        TEST_SECURITY_EPOCH,
       ),
     ).resolves.toEqual({ shouldBootstrap: true })
   })
@@ -985,7 +1614,7 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
       redis.client() as never,
       redis.client() as never,
       logger,
-      'refresh-restart-race',
+      replicaId('refresh-restart-race'),
     )
     const member = connection('refresh-restart-race')
     const activationDeadline = Date.now() + PENDING_EDITOR_RESERVATION_ACTIVATION_TIMEOUT_MS
@@ -997,6 +1626,8 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
       activationDeadline,
       COLLABORATION_PROTOCOL_VERSION,
       1,
+      TEST_ROOM_EPOCH,
+      TEST_SECURITY_EPOCH,
     )
     await bridge.activateEditorLease(
       member,
@@ -1006,6 +1637,8 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
       COLLABORATION_PROTOCOL_VERSION,
       1,
       reservation.bootstrapChallenge,
+      TEST_ROOM_EPOCH,
+      TEST_SECURITY_EPOCH,
     )
     rooms.join('refresh-restart-room', member, activeExpiry, 'refresh-restart-lease', 'editor', true)
 
@@ -1033,7 +1666,7 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
         redis.client() as never,
         redis.client() as never,
         logger,
-        'late-reserve-replica',
+        replicaId('late-reserve-replica'),
       )
       const reservation = bridge.reserveEditorLease(
         connection('late-reserve'),
@@ -1042,6 +1675,8 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
         Date.now() + PENDING_EDITOR_RESERVATION_ACTIVATION_TIMEOUT_MS,
         COLLABORATION_PROTOCOL_VERSION,
         1,
+        TEST_ROOM_EPOCH,
+        TEST_SECURITY_EPOCH,
       )
       const timedOutReservation = expect(reservation).rejects.toThrow('Redis collaboration operation timed out')
       expect(redis.reserveEvalCalls).toBe(1)
@@ -1066,14 +1701,14 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
       redis.client() as never,
       redis.client() as never,
       logger,
-      'protocol-a',
+      replicaId('protocol-a'),
     )
     const bridgeB = new CollaborationRedisBridge(
       new RoomRegistry(),
       redis.client() as never,
       redis.client() as never,
       logger,
-      'protocol-b',
+      replicaId('protocol-b'),
     )
     const expiresAt = Date.now() + 60_000
     await bridgeA.reserveEditorLease(
@@ -1083,6 +1718,8 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
       expiresAt,
       COLLABORATION_PROTOCOL_VERSION,
       1,
+      TEST_ROOM_EPOCH,
+      TEST_SECURITY_EPOCH,
     )
     const activeLeaseKey = [...redis.leaseValues.keys()][0]
     redis.leaseValues.set(activeLeaseKey, 'v1:legacy')
@@ -1095,6 +1732,8 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
         expiresAt,
         COLLABORATION_PROTOCOL_VERSION,
         1,
+        TEST_ROOM_EPOCH,
+        TEST_SECURITY_EPOCH,
       ),
     ).rejects.toThrow('Incompatible collaboration protocol')
     await expect(
@@ -1105,6 +1744,8 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
         expiresAt,
         COLLABORATION_PROTOCOL_VERSION,
         1,
+        TEST_ROOM_EPOCH,
+        TEST_SECURITY_EPOCH,
       ),
     ).resolves.toMatchObject({ shouldBootstrap: true })
   })
@@ -1119,7 +1760,7 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
       redis.client() as never,
       redis.client() as never,
       logger,
-      'health-replica',
+      replicaId('health-replica'),
     )
     await bridge.reserveEditorLease(
       member,
@@ -1128,6 +1769,8 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
       Date.now() + 60_000,
       COLLABORATION_PROTOCOL_VERSION,
       1,
+      TEST_ROOM_EPOCH,
+      TEST_SECURITY_EPOCH,
     )
 
     redis.failPublish = true
@@ -1146,7 +1789,7 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
       refreshRedis.client() as never,
       refreshRedis.client() as never,
       logger,
-      'refresh-replica',
+      replicaId('refresh-replica'),
     )
     await refreshBridge.reserveEditorLease(
       refreshMember,
@@ -1155,6 +1798,8 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
       Date.now() + 60_000,
       COLLABORATION_PROTOCOL_VERSION,
       1,
+      TEST_ROOM_EPOCH,
+      TEST_SECURITY_EPOCH,
     )
     refreshRedis.failEval = true
     await refreshBridge.refreshLeases()
@@ -1169,7 +1814,7 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
       subscriberRedis.client() as never,
       subscriberRedis.client() as never,
       logger,
-      'subscriber-replica',
+      replicaId('subscriber-replica'),
     )
     subscriberRedis.emitError()
     expect(subscriberRooms.roomCount()).toBe(0)
@@ -1185,7 +1830,7 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
       redis.client() as never,
       redis.client() as never,
       logger,
-      'subscription-order-replica',
+      replicaId('subscription-order-replica'),
     )
     const expiresAt = Date.now() + 60_000
 
@@ -1210,6 +1855,8 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
         expiresAt,
         COLLABORATION_PROTOCOL_VERSION,
         1,
+        TEST_ROOM_EPOCH,
+        TEST_SECURITY_EPOCH,
       ),
     ).rejects.toThrow('Redis collaboration relay is not healthy')
 
@@ -1221,6 +1868,8 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
       expiresAt,
       COLLABORATION_PROTOCOL_VERSION,
       1,
+      TEST_ROOM_EPOCH,
+      TEST_SECURITY_EPOCH,
     )
 
     redis.emitClose()
@@ -1241,6 +1890,8 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
         expiresAt,
         COLLABORATION_PROTOCOL_VERSION,
         1,
+        TEST_ROOM_EPOCH,
+        TEST_SECURITY_EPOCH,
       ),
     ).rejects.toThrow('Redis collaboration relay is not healthy')
 
@@ -1249,13 +1900,17 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
     expect(redis.subscriptionCallbacks).toHaveLength(3)
     redis.completeSubscription(2)
     await expect(
-      bridge.reserveEditorLease(
-        member,
-        'subscription-room',
-        'current-request',
-        expiresAt,
-        COLLABORATION_PROTOCOL_VERSION,
-        1,
+      reserveAfterRequiredEpochRotation((roomEpoch) =>
+        bridge.reserveEditorLease(
+          member,
+          'subscription-room',
+          'current-request',
+          expiresAt,
+          COLLABORATION_PROTOCOL_VERSION,
+          1,
+          roomEpoch,
+          TEST_SECURITY_EPOCH,
+        ),
       ),
     ).resolves.toMatchObject({ shouldBootstrap: true })
   })
@@ -1268,7 +1923,7 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
       redis.client() as never,
       redis.client() as never,
       logger,
-      'subscription-failure-replica',
+      replicaId('subscription-failure-replica'),
     )
     const member = connection('subscription-failure')
     const expiresAt = Date.now() + 60_000
@@ -1284,6 +1939,8 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
         expiresAt,
         COLLABORATION_PROTOCOL_VERSION,
         1,
+        TEST_ROOM_EPOCH,
+        TEST_SECURITY_EPOCH,
       ),
     ).rejects.toThrow('Redis collaboration relay is not healthy')
 
@@ -1297,6 +1954,8 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
         expiresAt,
         COLLABORATION_PROTOCOL_VERSION,
         1,
+        TEST_ROOM_EPOCH,
+        TEST_SECURITY_EPOCH,
       ),
     ).resolves.toMatchObject({ shouldBootstrap: true })
   })
@@ -1316,7 +1975,7 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
       redis.client() as never,
       redis.client() as never,
       logger,
-      `lifecycle-${_event}-replica`,
+      replicaId(`lifecycle-${_event}-replica`),
     )
     await bridge.reserveEditorLease(
       member,
@@ -1325,6 +1984,8 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
       expiresAt,
       COLLABORATION_PROTOCOL_VERSION,
       1,
+      TEST_ROOM_EPOCH,
+      TEST_SECURITY_EPOCH,
     )
     member.send.mockClear()
 
@@ -1342,6 +2003,8 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
         expiresAt,
         COLLABORATION_PROTOCOL_VERSION,
         1,
+        TEST_ROOM_EPOCH,
+        TEST_SECURITY_EPOCH,
       ),
     ).rejects.toThrow('Redis collaboration relay is not healthy')
   })
@@ -1354,7 +2017,7 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
       redis.client() as never,
       redis.client() as never,
       logger,
-      'dual-health-replica',
+      replicaId('dual-health-replica'),
     )
     const member = connection('dual-health')
     const expiresAt = Date.now() + 60_000
@@ -1369,6 +2032,8 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
         expiresAt,
         COLLABORATION_PROTOCOL_VERSION,
         1,
+        TEST_ROOM_EPOCH,
+        TEST_SECURITY_EPOCH,
       ),
     ).rejects.toThrow('Redis collaboration relay is not healthy')
 
@@ -1381,6 +2046,8 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
         expiresAt,
         COLLABORATION_PROTOCOL_VERSION,
         1,
+        TEST_ROOM_EPOCH,
+        TEST_SECURITY_EPOCH,
       ),
     ).resolves.toMatchObject({ shouldBootstrap: true })
   })
@@ -1392,7 +2059,7 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
       redis.client() as never,
       redis.client() as never,
       logger,
-      'deferred-cleanup-replica',
+      replicaId('deferred-cleanup-replica'),
     )
     const member = connection('deferred-cleanup')
     const expiresAt = Date.now() + 60_000
@@ -1403,6 +2070,8 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
       expiresAt,
       COLLABORATION_PROTOCOL_VERSION,
       1,
+      TEST_ROOM_EPOCH,
+      TEST_SECURITY_EPOCH,
     )
     expect(redis.leases.size).toBe(1)
 
@@ -1413,13 +2082,17 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
     await vi.waitFor(() => expect(redis.leases.size).toBe(0))
     await vi.waitFor(async () => {
       await expect(
-        bridge.reserveEditorLease(
-          member,
-          'deferred-cleanup-room',
-          'recovered-request',
-          expiresAt,
-          COLLABORATION_PROTOCOL_VERSION,
-          1,
+        reserveAfterRequiredEpochRotation((roomEpoch) =>
+          bridge.reserveEditorLease(
+            member,
+            'deferred-cleanup-room',
+            'recovered-request',
+            expiresAt,
+            COLLABORATION_PROTOCOL_VERSION,
+            1,
+            roomEpoch,
+            TEST_SECURITY_EPOCH,
+          ),
         ),
       ).resolves.toMatchObject({ shouldBootstrap: true })
     })
@@ -1432,7 +2105,7 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
       redis.client() as never,
       redis.client() as never,
       logger,
-      'cleanup-retry-replica',
+      replicaId('cleanup-retry-replica'),
     )
     const member = connection('cleanup-retry')
     const expiresAt = Date.now() + 60_000
@@ -1443,6 +2116,8 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
       expiresAt,
       COLLABORATION_PROTOCOL_VERSION,
       1,
+      TEST_ROOM_EPOCH,
+      TEST_SECURITY_EPOCH,
     )
 
     redis.emitCommandClose()
@@ -1457,19 +2132,25 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
         expiresAt,
         COLLABORATION_PROTOCOL_VERSION,
         1,
+        TEST_ROOM_EPOCH,
+        TEST_SECURITY_EPOCH,
       ),
     ).rejects.toThrow('Redis collaboration relay is not healthy')
 
     redis.failEval = false
     await vi.waitFor(async () => {
       await expect(
-        bridge.reserveEditorLease(
-          member,
-          'cleanup-retry-room',
-          'cleanup-recovered',
-          expiresAt,
-          COLLABORATION_PROTOCOL_VERSION,
-          1,
+        reserveAfterRequiredEpochRotation((roomEpoch) =>
+          bridge.reserveEditorLease(
+            member,
+            'cleanup-retry-room',
+            'cleanup-recovered',
+            expiresAt,
+            COLLABORATION_PROTOCOL_VERSION,
+            1,
+            roomEpoch,
+            TEST_SECURITY_EPOCH,
+          ),
         ),
       ).resolves.toMatchObject({ shouldBootstrap: true })
     })
@@ -1484,7 +2165,7 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
         redis.client() as never,
         redis.client() as never,
         logger,
-        `normal-${operation}-retry-replica`,
+        replicaId(`normal-${operation}-retry-replica`),
       )
       const member = connection(`normal-${operation}-retry`)
       const expiresAt = Date.now() + 60_000
@@ -1495,6 +2176,8 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
         expiresAt,
         COLLABORATION_PROTOCOL_VERSION,
         1,
+        TEST_ROOM_EPOCH,
+        TEST_SECURITY_EPOCH,
       )
 
       redis.failEval = true
@@ -1513,6 +2196,8 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
           expiresAt,
           COLLABORATION_PROTOCOL_VERSION,
           1,
+          TEST_ROOM_EPOCH,
+          TEST_SECURITY_EPOCH,
         ),
       ).rejects.toThrow('cleanup is pending for this room')
       await expect(
@@ -1523,18 +2208,24 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
           expiresAt,
           COLLABORATION_PROTOCOL_VERSION,
           1,
+          TEST_ROOM_EPOCH,
+          TEST_SECURITY_EPOCH,
         ),
       ).resolves.toMatchObject({ shouldBootstrap: true })
 
       await vi.waitFor(async () => {
         await expect(
-          bridge.reserveEditorLease(
-            member,
-            'normal-release-room',
-            'recovered-request',
-            expiresAt,
-            COLLABORATION_PROTOCOL_VERSION,
-            1,
+          reserveAfterRequiredEpochRotation((roomEpoch) =>
+            bridge.reserveEditorLease(
+              member,
+              'normal-release-room',
+              'recovered-request',
+              expiresAt,
+              COLLABORATION_PROTOCOL_VERSION,
+              1,
+              roomEpoch,
+              TEST_SECURITY_EPOCH,
+            ),
           ),
         ).resolves.toMatchObject({ shouldBootstrap: true })
       })
@@ -1548,7 +2239,7 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
       redis.client() as never,
       redis.client() as never,
       logger,
-      'stopped-replica',
+      replicaId('stopped-replica'),
     )
     const initialSubscriptionAttempts = redis.subscriptionCallbacks.length
 
@@ -1575,7 +2266,7 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
       redis.client() as never,
       redis.client() as never,
       logger,
-      `command-lifecycle-${_event}-replica`,
+      replicaId(`command-lifecycle-${_event}-replica`),
     )
     await bridge.reserveEditorLease(
       member,
@@ -1584,6 +2275,8 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
       expiresAt,
       COLLABORATION_PROTOCOL_VERSION,
       1,
+      TEST_ROOM_EPOCH,
+      TEST_SECURITY_EPOCH,
     )
     member.send.mockClear()
 
@@ -1605,6 +2298,8 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
         expiresAt,
         COLLABORATION_PROTOCOL_VERSION,
         1,
+        TEST_ROOM_EPOCH,
+        TEST_SECURITY_EPOCH,
       ),
     ).rejects.toThrow('Redis collaboration relay is not healthy')
   })
@@ -1620,11 +2315,15 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
       claimYjsResponse: vi.fn().mockResolvedValue(undefined),
       publish: vi.fn().mockResolvedValue(undefined),
     }
-    const authorize = () => ({
+    // Annotated: as a bare const the returned literal widens
+    // collaborationProtocolVersion from 3 to number and stops matching the type.
+    const authorize: RoomJoinAuthorizer = () => ({
       authorized: true as const,
       expiresAt: Date.now() + 60_000,
       serverUpdatedAtTimestamp: 1,
       collaborationProtocolVersion: COLLABORATION_PROTOCOL_VERSION,
+      roomEpoch: TEST_ROOM_EPOCH,
+      collaborationSecurityEpoch: TEST_SECURITY_EPOCH,
       leaseRequestId: 'lease-1',
     })
 
@@ -1634,9 +2333,11 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
       {
         t: 'room-reserve',
         room: 'note-1',
+        cap: 'capability',
         requestId: 'lease-1',
         role: 'editor',
         protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+        expectedRoomEpoch: TEST_ROOM_EPOCH,
       },
       authorize,
       undefined,
@@ -1648,9 +2349,11 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
       {
         t: 'room-join',
         room: 'note-1',
+        cap: 'capability',
         requestId: 'lease-1',
         role: 'editor',
         protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+        expectedRoomEpoch: TEST_ROOM_EPOCH,
       },
       authorize,
       undefined,
@@ -1664,6 +2367,7 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
         bootstrap: false,
         protocolVersion: COLLABORATION_PROTOCOL_VERSION,
         maxTransferBytes: MAX_YJS_TRANSFER_BYTES,
+        roomEpoch: TEST_ROOM_EPOCH,
       }),
     )
     expect(lifecycle.publish).not.toHaveBeenCalled()
@@ -1685,6 +2389,6 @@ describe('CollaborationRedisBridge multi-replica relay', () => {
       undefined,
       lifecycle,
     )
-    expect(lifecycle.releaseLease).toHaveBeenCalledWith(member, 'note-1', 'lease-1')
+    expect(lifecycle.releaseLease).toHaveBeenCalledWith(member, 'note-1', 'lease-1', 'clean-leave')
   })
 })
