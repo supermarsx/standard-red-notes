@@ -354,6 +354,44 @@ describe('HomeServerRuntime', () => {
     expect(runtime.isActive()).toBe(false)
   })
 
+  it('continues teardown and reports the failure when the realtime drain rejects', async () => {
+    // realtime.stop() is the WebSocket gateway plus its dedicated shared-state
+    // and availability Redis clients. Any of those can reject on quit, and a
+    // swallowed rejection would let stop() resolve as though the socket layer
+    // had drained cleanly.
+    const runtime = new HomeServerRuntime(signalTarget)
+    const server = new FakeServer()
+    server.listening = true
+    server.close.mockImplementation((callback) => callback())
+    realtime.stop.mockRejectedValue(new Error('realtime drain failed'))
+
+    await start(runtime, server)
+
+    await expect(runtime.stop()).rejects.toThrow('realtime drain failed')
+    expect(realtime.stop).toHaveBeenCalledTimes(1)
+    expect(server.close).toHaveBeenCalledTimes(1)
+    expect(bridge.close).toHaveBeenCalledTimes(1)
+    expect(runtime.isActive()).toBe(false)
+  })
+
+  it('surfaces the startup failure, not a realtime cleanup failure, when listening never succeeds', async () => {
+    // Pre-adoption cleanup: the runtime does not own these resources yet, so a
+    // failing realtime stop must not mask why startup actually failed.
+    const runtime = new HomeServerRuntime(signalTarget)
+    const server = new FakeServer()
+    realtime.stop.mockRejectedValue(new Error('realtime cleanup failed'))
+    bridge.close.mockRejectedValue(new Error('bridge cleanup failed'))
+    const startPromise = start(runtime, server)
+
+    server.emit('error', new Error('address in use'))
+
+    await expect(startPromise).rejects.toThrow('address in use')
+    expect(realtime.stop).toHaveBeenCalledTimes(1)
+    expect(bridge.close).toHaveBeenCalledTimes(1)
+    expect(server.unref).toHaveBeenCalledTimes(1)
+    expect(runtime.isActive()).toBe(false)
+  })
+
   it('still closes the server and bridge when scheduler shutdown throws', async () => {
     const runtime = new HomeServerRuntime(signalTarget)
     const server = new FakeServer()
