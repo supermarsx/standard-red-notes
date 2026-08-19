@@ -210,6 +210,12 @@ const pl: LocaleResource = {
     normal: 'Zwykły',
     smartChecklist: 'Inteligentna lista kontrolna',
     restoreCompletedTasks: 'Przywróć ukończone zadania',
+    completeAllChecklistItems: 'Oznacz wszystkie jako ukończone',
+    completeAllChecklistItemsDescription:
+      'Oznacza jako ukończone wszystkie elementy listy kontrolnej, w której znajduje się kursor lub zaznaczenie.',
+    completeSelectedChecklistItems: 'Oznacz zaznaczone jako ukończone',
+    uncompleteSelectedChecklistItems: 'Oznacz zaznaczone jako nieukończone',
+    noChecklistItemsSelected: 'Umieść kursor na liście kontrolnej lub zaznacz elementy, aby użyć tej akcji.',
     leftAlign: 'Wyrównaj do lewej',
     centerAlign: 'Wyśrodkuj',
     rightAlign: 'Wyrównaj do prawej',

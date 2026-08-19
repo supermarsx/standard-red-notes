@@ -210,6 +210,12 @@ const nl: LocaleResource = {
     normal: 'Normaal',
     smartChecklist: 'Slimme checklijst',
     restoreCompletedTasks: 'Voltooide taken herstellen',
+    completeAllChecklistItems: 'Alles als voltooid markeren',
+    completeAllChecklistItemsDescription:
+      'Markeert elk item als voltooid in de checklijst waarin de cursor of de selectie staat.',
+    completeSelectedChecklistItems: 'Selectie als voltooid markeren',
+    uncompleteSelectedChecklistItems: 'Selectie als niet voltooid markeren',
+    noChecklistItemsSelected: 'Plaats de cursor in een checklijst of selecteer items om dit te gebruiken.',
     leftAlign: 'Links uitlijnen',
     centerAlign: 'Centreren',
     rightAlign: 'Rechts uitlijnen',

@@ -237,6 +237,13 @@ const de: LocaleResource = {
     normal: 'Normal',
     smartChecklist: 'Intelligente Checkliste',
     restoreCompletedTasks: 'Erledigte Aufgaben wiederherstellen',
+    completeAllChecklistItems: 'Alle als erledigt markieren',
+    completeAllChecklistItemsDescription:
+      'Markiert alle Einträge der Checkliste als erledigt, in der sich der Cursor oder die Auswahl befindet.',
+    completeSelectedChecklistItems: 'Auswahl als erledigt markieren',
+    uncompleteSelectedChecklistItems: 'Auswahl als nicht erledigt markieren',
+    noChecklistItemsSelected:
+      'Setzen Sie den Cursor in eine Checkliste oder wählen Sie Einträge aus, um dies zu verwenden.',
     leftAlign: 'Linksbündig',
     centerAlign: 'Zentriert',
     rightAlign: 'Rechtsbündig',

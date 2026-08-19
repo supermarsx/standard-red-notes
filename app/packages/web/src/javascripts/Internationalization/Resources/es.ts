@@ -210,6 +210,12 @@ const es: LocaleResource = {
     normal: 'Normal',
     smartChecklist: 'Lista de tareas inteligente',
     restoreCompletedTasks: 'Restaurar tareas completadas',
+    completeAllChecklistItems: 'Marcar todo como completado',
+    completeAllChecklistItemsDescription:
+      'Completa todos los elementos de la lista de tareas donde está el cursor o la selección.',
+    completeSelectedChecklistItems: 'Marcar la selección como completada',
+    uncompleteSelectedChecklistItems: 'Marcar la selección como no completada',
+    noChecklistItemsSelected: 'Coloca el cursor en una lista de tareas o selecciona elementos para usar esta acción.',
     leftAlign: 'Alinear a la izquierda',
     centerAlign: 'Centrar',
     rightAlign: 'Alinear a la derecha',

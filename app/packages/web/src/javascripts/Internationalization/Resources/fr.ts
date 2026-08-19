@@ -237,6 +237,13 @@ const fr: LocaleResource = {
     normal: 'Normal',
     smartChecklist: 'Liste de contrôle intelligente',
     restoreCompletedTasks: 'Restaurer les tâches terminées',
+    completeAllChecklistItems: 'Tout marquer comme terminé',
+    completeAllChecklistItemsDescription:
+      'Marque comme terminé chaque élément de la liste de contrôle dans laquelle se trouve le curseur ou la sélection.',
+    completeSelectedChecklistItems: 'Marquer la sélection comme terminée',
+    uncompleteSelectedChecklistItems: 'Marquer la sélection comme non terminée',
+    noChecklistItemsSelected:
+      'Placez le curseur dans une liste de contrôle ou sélectionnez des éléments pour utiliser cette action.',
     leftAlign: 'Aligner à gauche',
     centerAlign: 'Centrer',
     rightAlign: 'Aligner à droite',

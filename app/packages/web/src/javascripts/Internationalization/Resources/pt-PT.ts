@@ -239,6 +239,12 @@ const ptPT: LocaleResource = {
     normal: 'Normal',
     smartChecklist: 'Lista de verificação inteligente',
     restoreCompletedTasks: 'Restaurar tarefas concluídas',
+    completeAllChecklistItems: 'Marcar tudo como concluído',
+    completeAllChecklistItemsDescription:
+      'Conclui todos os itens da lista de verificação onde está o cursor ou a seleção.',
+    completeSelectedChecklistItems: 'Marcar seleção como concluída',
+    uncompleteSelectedChecklistItems: 'Marcar seleção como não concluída',
+    noChecklistItemsSelected: 'Coloque o cursor numa lista de verificação ou selecione itens para usar esta ação.',
     leftAlign: 'Alinhar à esquerda',
     centerAlign: 'Alinhar ao centro',
     rightAlign: 'Alinhar à direita',

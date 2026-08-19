@@ -210,6 +210,12 @@ const tr: LocaleResource = {
     normal: 'Normal',
     smartChecklist: 'Akıllı onay listesi',
     restoreCompletedTasks: 'Tamamlanan görevleri geri yükle',
+    completeAllChecklistItems: 'Tümünü tamamlandı olarak işaretle',
+    completeAllChecklistItemsDescription:
+      'İmlecin veya seçimin bulunduğu onay listesindeki tüm öğeleri tamamlandı olarak işaretler.',
+    completeSelectedChecklistItems: 'Seçimi tamamlandı olarak işaretle',
+    uncompleteSelectedChecklistItems: 'Seçimi tamamlanmadı olarak işaretle',
+    noChecklistItemsSelected: 'Bunu kullanmak için imleci bir onay listesine yerleştirin veya öğeleri seçin.',
     leftAlign: 'Sola hizala',
     centerAlign: 'Ortala',
     rightAlign: 'Sağa hizala',

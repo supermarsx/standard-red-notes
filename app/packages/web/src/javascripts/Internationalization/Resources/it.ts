@@ -223,6 +223,13 @@ const it: LocaleResource = {
     normal: 'Normale',
     smartChecklist: 'Elenco di controllo intelligente',
     restoreCompletedTasks: 'Ripristina attività completate',
+    completeAllChecklistItems: 'Segna tutto come completato',
+    completeAllChecklistItemsDescription:
+      "Completa tutti gli elementi dell'elenco di controllo in cui si trova il cursore o la selezione.",
+    completeSelectedChecklistItems: 'Segna la selezione come completata',
+    uncompleteSelectedChecklistItems: 'Segna la selezione come non completata',
+    noChecklistItemsSelected:
+      'Posiziona il cursore in un elenco di controllo o seleziona degli elementi per usare questa azione.',
     leftAlign: 'Allinea a sinistra',
     centerAlign: 'Allinea al centro',
     rightAlign: 'Allinea a destra',

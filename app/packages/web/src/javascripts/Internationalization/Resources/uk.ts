@@ -209,6 +209,12 @@ const uk: LocaleResource = {
     normal: 'Звичайний',
     smartChecklist: 'Розумний список завдань',
     restoreCompletedTasks: 'Відновити виконані завдання',
+    completeAllChecklistItems: 'Позначити всі як виконані',
+    completeAllChecklistItemsDescription:
+      'Позначає виконаними всі елементи списку завдань, у якому перебуває курсор або виділення.',
+    completeSelectedChecklistItems: 'Позначити виділені як виконані',
+    uncompleteSelectedChecklistItems: 'Позначити виділені як невиконані',
+    noChecklistItemsSelected: 'Помістіть курсор у список завдань або виділіть елементи, щоб скористатися цією дією.',
     leftAlign: 'Вирівняти ліворуч',
     centerAlign: 'Вирівняти по центру',
     rightAlign: 'Вирівняти праворуч',
