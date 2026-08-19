@@ -140,6 +140,7 @@ describe('AccountSyncOperation transport durability seam', () => {
     expect(transport.execute).toHaveBeenCalledWith(
       expect.objectContaining({ items: [{ uuid: 'b' }], sync_token: 'tok' }),
       expect.any(Function),
+      { operationId: operationB.id, operationIndex: 0 },
     )
   })
 
@@ -161,7 +162,10 @@ describe('AccountSyncOperation transport durability seam', () => {
 
     await operation.run()
 
-    expect(transport.execute).toHaveBeenCalledWith({ api: '20240226', items: [], limit: 150 }, expect.any(Function))
+    expect(transport.execute).toHaveBeenCalledWith({ api: '20240226', items: [], limit: 150 }, expect.any(Function), {
+      operationId: operation.id,
+      operationIndex: 0,
+    })
     expect(markCheckpointDurable).toHaveBeenCalledTimes(1)
     expect(apiService.sync).not.toHaveBeenCalled()
   })
@@ -185,6 +189,26 @@ describe('AccountSyncOperation transport durability seam', () => {
     expect(transport.execute).toHaveBeenCalledTimes(2)
     expect(transport.execute.mock.calls[0][2]).toEqual({ operationId: 'folder-action-1', operationIndex: 0 })
     expect(transport.execute.mock.calls[1][2]).toEqual({ operationId: 'folder-action-1', operationIndex: 1 })
+  })
+
+  it('uses the operation identity by default for every transport page', async () => {
+    const transport = {
+      execute: jest
+        .fn()
+        .mockResolvedValueOnce({ response: rawResponse('next-page') })
+        .mockResolvedValueOnce({ response: rawResponse() }),
+    }
+    const operation = new AccountSyncOperation(
+      [],
+      jest.fn(async () => undefined) as never,
+      { apiVersion: '20240226' } as never,
+      { transport },
+    )
+
+    await operation.run()
+
+    expect(transport.execute.mock.calls[0][2]).toEqual({ operationId: operation.id, operationIndex: 0 })
+    expect(transport.execute.mock.calls[1][2]).toEqual({ operationId: operation.id, operationIndex: 1 })
   })
 
   it('retains the transport outbox when local response persistence fails', async () => {

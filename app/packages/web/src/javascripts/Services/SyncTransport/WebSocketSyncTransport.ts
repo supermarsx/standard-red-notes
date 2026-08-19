@@ -683,13 +683,11 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
       case 'RESULT': {
         const response = normalizeCommittedResult(message.result)
         if (!response) {
-          const persisted = pending.persisted
-          if (persisted) {
-            await this.resolveHttpFallback(message.clientRequestId, pending, persisted.body, persisted.command)
-          } else {
-            pending.reject(new Error('Committed websocket sync response was malformed.'))
-            this.pending.delete(message.clientRequestId)
-          }
+          // COMMITTED proves the mutation may have taken effect. A malformed
+          // response must retain the durable outbox for STATUS reconciliation;
+          // replaying it over HTTP here would create a second transport owner.
+          pending.reject(new Error('Committed websocket sync response was malformed; durable recovery is required.'))
+          this.pending.delete(message.clientRequestId)
           return
         }
         const persisted = pending.persisted

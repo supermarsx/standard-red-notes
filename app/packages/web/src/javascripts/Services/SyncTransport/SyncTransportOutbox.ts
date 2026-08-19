@@ -11,6 +11,12 @@ export type SyncOutboxRecord = {
   /** Exact UTF-8 command frame sent to the gateway. */
   bytes: string
   createdAt: number
+  /**
+   * Set durably immediately before WebSocket.send. Once present, a process or
+   * socket failure is ambiguous and HTTP replay is forbidden until STATUS
+   * confirms UNKNOWN.
+   */
+  dispatchedAt?: number
   /** Retained for audit/safety but never replayed after its session is revoked. */
   revoked?: boolean
 }

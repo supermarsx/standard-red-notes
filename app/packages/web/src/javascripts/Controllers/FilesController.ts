@@ -204,7 +204,6 @@ export class FilesController extends AbstractViewController<FilesControllerEvent
     }
 
     await this.mutator.associateFileWithNote(file, note)
-    void this.sync.sync()
   }
 
   detachFileFromNote = async (file: FileItem) => {
@@ -218,7 +217,6 @@ export class FilesController extends AbstractViewController<FilesControllerEvent
     }
     await this.mutator.disassociateFileWithNote(file, note)
     achievements.markEvent(METRICS.fileDetached)
-    void this.sync.sync()
   }
 
   toggleFileProtection = async (file: FileItem) => {
@@ -228,7 +226,6 @@ export class FilesController extends AbstractViewController<FilesControllerEvent
     } else {
       result = await this.protections.protectFile(file)
     }
-    void this.sync.sync()
     const isProtected = result ? result.protected : file.protected
     return isProtected
   }
@@ -241,7 +238,6 @@ export class FilesController extends AbstractViewController<FilesControllerEvent
 
   renameFile = async (file: FileItem, fileName: string) => {
     await this.mutator.renameFile(file, fileName)
-    void this.sync.sync()
   }
 
   /**

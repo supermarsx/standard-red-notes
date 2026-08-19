@@ -94,6 +94,7 @@ import { UpdateCheckService } from '@/Services/UpdateCheck/UpdateCheckService'
 import { PendingMfaApprovalsNotifier } from '@/Services/PendingMfaApprovals/PendingMfaApprovalsNotifier'
 import { CommandService } from '../Components/CommandPalette/CommandService'
 import { CrossTabCoordinator } from './CrossTab/CrossTabCoordinator'
+import { reloadForeignDatabasePayloads } from './CrossTab/ReloadForeignDatabasePayloads'
 import { WebDevice } from './Device/WebDevice'
 import { assistantHttpError } from '@/Assistant/AssistantHttpError'
 import {
@@ -154,8 +155,8 @@ export class WebApplication extends SNApplication implements WebApplicationInter
 
   // Standard Red Notes: per-workspace cross-tab coordinator for SAVE INVALIDATION. Emits
   // the uuids this tab saves to the shared IndexedDB and, on a peer's save broadcast,
-  // triggers a coalesced sync so the in-memory collection reconciles against disk/server
-  // instead of later overwriting the peer's newer write. (The KEYCHAIN coordinator lives
+  // reloads only those rows into the in-memory collection without scheduling a server sync
+  // or rebroadcasting the same write. (The KEYCHAIN coordinator lives
   // on WebDevice because the keychain is a single global blob, not per-workspace.)
   private _saveCrossTabCoordinator?: CrossTabCoordinator
 
@@ -322,7 +323,7 @@ export class WebApplication extends SNApplication implements WebApplicationInter
    *    its window 'storage' listener via getKeychainValue/setKeychainValue. We re-read its
    *    lock here to veto IndexedDB writes the instant another tab clears/rotates the key.
    *  - A per-workspace SAVE coordinator (created here, namespaced by this.identifier) that
-   *    broadcasts the uuids we save and, on a peer's save, triggers a coalesced sync.
+   *    broadcasts the uuids we save and, on a peer's save, reloads just those database rows.
    *
    * We then forward both into the per-identifier Database as DatabaseCrossTabHooks. Only
    * runs on a real WebDevice (desktop/mobile use a different device with no keychain
@@ -340,18 +341,7 @@ export class WebApplication extends SNApplication implements WebApplicationInter
     this._saveCrossTabCoordinator = new CrossTabCoordinator({
       namespace: this.identifier,
       callbacks: {
-        onForeignSave: () => {
-          // SAFE SUBSET (see report): the low-level Database/device layer has no hook to
-          // push specific uuids back into the in-memory collection without a SyncService
-          // method we don't own. The publicly-callable, conservative reconciliation is a
-          // sync, which reloads/merges changed items. It's already coalesced/debounced by
-          // the coordinator, so this can't create a reload storm.
-          try {
-            void this.sync.sync()
-          } catch {
-            // SyncService not ready yet / app tearing down; the next sync will reconcile.
-          }
-        },
+        onForeignSave: (uuids) => reloadForeignDatabasePayloads(uuids, this.storage, this.payloads),
       },
     })
 

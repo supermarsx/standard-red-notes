@@ -171,15 +171,11 @@ export class AccountSyncOperation {
       ...(this.options.sharedVaultUuids ? { shared_vault_uuids: this.options.sharedVaultUuids } : {}),
     }
     const transportResult = this.options.transport
-      ? this.options.operationId
-        ? await this.options.transport.execute(
-            transportRequest,
-            (request, command) => this.syncOverHttp(request, command),
-            { operationId: this.options.operationId, operationIndex: this.pageCount },
-          )
-        : await this.options.transport.execute(transportRequest, (request, command) =>
-            this.syncOverHttp(request, command),
-          )
+      ? await this.options.transport.execute(
+          transportRequest,
+          (request, command) => this.syncOverHttp(request, command),
+          { operationId: this.options.operationId ?? this.id, operationIndex: this.pageCount },
+        )
       : { response: await this.syncOverHttp(transportRequest) }
     const rawResponse = transportResult.response
     const requestLatencyMs = Math.max(0, this.now() - requestStartedAt)
