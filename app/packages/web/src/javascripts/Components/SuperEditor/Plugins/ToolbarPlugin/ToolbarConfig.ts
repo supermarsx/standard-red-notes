@@ -16,6 +16,8 @@ export enum ToolbarGroupId {
   BlockStyle = 'blockStyle',
   ColorFont = 'colorFont',
   ParagraphList = 'paragraphList',
+  /** Standard Red Notes: bulk completion actions for checklists. */
+  Checklist = 'checklist',
   Insert = 'insert',
   AI = 'ai',
   Find = 'find',
@@ -95,6 +97,10 @@ export enum ToolbarButtonId {
   ParagraphLayout = 'paragraphLayout',
   ListStyle = 'listStyle',
   FormattingMarks = 'formattingMarks',
+  // Checklist bulk completion (Standard Red Notes)
+  CompleteAllChecklistItems = 'completeAllChecklistItems',
+  CompleteSelectedChecklistItems = 'completeSelectedChecklistItems',
+  UncompleteSelectedChecklistItems = 'uncompleteSelectedChecklistItems',
   // Insert
   // @deprecated The general Insert dropdown and its quick-insert siblings were
   // replaced by always-visible catalog sections (see the Insert group config +
@@ -322,6 +328,45 @@ export const DEFAULT_TOOLBAR_GROUPS: ToolbarGroupDescriptor[] = [
     ],
   },
   {
+    // Standard Red Notes: bulk completion actions for checklists. Deliberately
+    // its own group rather than extra buttons inside the Block-style group's
+    // hand-written first row: every button here is renderer-backed (it has an
+    // entry in `buttonRenderers`), so it satisfies the "drop groups with nothing
+    // renderable" filter in ToolbarPlugin on its own and needs no unconditional
+    // keep — the exact shape that has made special-cased-only groups silently
+    // vanish from this toolbar before.
+    id: ToolbarGroupId.Checklist,
+    label: 'Checklist',
+    caption: 'Checklist',
+    buttons: [
+      {
+        id: ToolbarButtonId.CompleteAllChecklistItems,
+        label: 'Mark all checklist items completed',
+        group: ToolbarGroupId.Checklist,
+      },
+      {
+        id: ToolbarButtonId.CompleteSelectedChecklistItems,
+        label: 'Mark selected checklist items completed',
+        group: ToolbarGroupId.Checklist,
+      },
+      {
+        id: ToolbarButtonId.UncompleteSelectedChecklistItems,
+        label: 'Mark selected checklist items not completed',
+        group: ToolbarGroupId.Checklist,
+      },
+    ],
+    // One explicit row: without a `layout` the generic group renderer packs into
+    // three rows of one button each, which would read as a thin column.
+    layout: [
+      [
+        ToolbarButtonId.CompleteAllChecklistItems,
+        ToolbarButtonId.Divider,
+        ToolbarButtonId.CompleteSelectedChecklistItems,
+        ToolbarButtonId.UncompleteSelectedChecklistItems,
+      ],
+    ],
+  },
+  {
     id: ToolbarGroupId.Insert,
     label: 'Insert',
     caption: 'Insert',
@@ -436,6 +481,7 @@ export const DEFAULT_SUPER_GROUPS: ToolbarSuperGroupDescriptor[] = [
       ToolbarGroupId.BlockStyle,
       ToolbarGroupId.ColorFont,
       ToolbarGroupId.ParagraphList,
+      ToolbarGroupId.Checklist,
     ],
   },
   { id: ToolbarSuperGroupId.Insert, label: 'Insert', groups: [ToolbarGroupId.Insert] },

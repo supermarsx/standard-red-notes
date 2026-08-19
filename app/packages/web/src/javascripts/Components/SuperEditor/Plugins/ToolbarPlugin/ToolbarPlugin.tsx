@@ -135,6 +135,12 @@ import {
 import { $reorderCheckList } from '../CheckListAutoMovePlugin/reorderCheckList'
 import { $getOwningCheckList, $uncheckAllInList } from '../CheckListAutoMovePlugin/bulkUncheck'
 import {
+  $getSelectedCheckLists,
+  $selectionHasChecklistItems,
+  $setCheckedForAllInSelectedLists,
+  $setCheckedForSelection,
+} from '../../Checklist/ChecklistBulkCompletion'
+import {
   applyToolbarConfig,
   groupsBySuperGroup,
   isLayoutSentinel,
@@ -592,6 +598,12 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
 
   const [hasNonCollapsedSelection, setHasNonCollapsedSelection] = useState(false)
 
+  // Standard Red Notes: whether the selection touches at least one checklist
+  // row, which is what the three bulk-completion buttons act on. A collapsed
+  // caret inside a row counts (that one row), so the buttons stay usable without
+  // dragging a selection first; outside any checklist they read as disabled.
+  const [hasChecklistSelection, setHasChecklistSelection] = useState(false)
+
   const [linkNode, setLinkNode] = useState<LinkNode | null>(null)
   const [linkTextNode, setLinkTextNode] = useState<TextNode | null>(null)
   const [isEditingLink, setIsEditingLink] = useState(false)
@@ -942,6 +954,45 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
     })
   }, [editor])
 
+  // Standard Red Notes — checklist bulk completion. One `editor.update()` per
+  // action, so however many rows change it is a SINGLE undo step (Lexical
+  // coalesces every mutation inside one update into one history entry). When the
+  // "completed tasks move out of the way" setting is on we re-tidy the affected
+  // checklists inside the SAME update, so the reorder cannot become a second
+  // undo step either.
+  const runChecklistBulkAction = useCallback(
+    (apply: (selection: BaseSelection | null) => number) => {
+      editor.update(() => {
+        const selection = $getSelection()
+        const lists = $getSelectedCheckLists(selection)
+        if (apply(selection) === 0) {
+          return
+        }
+        if (getChecklistAutoMoveEnabled()) {
+          for (const list of lists) {
+            $reorderCheckList(list)
+          }
+        }
+      })
+    },
+    [editor],
+  )
+
+  const completeAllChecklistItems = useCallback(
+    () => runChecklistBulkAction((selection) => $setCheckedForAllInSelectedLists(selection, true)),
+    [runChecklistBulkAction],
+  )
+
+  const completeSelectedChecklistItems = useCallback(
+    () => runChecklistBulkAction((selection) => $setCheckedForSelection(selection, true)),
+    [runChecklistBulkAction],
+  )
+
+  const uncompleteSelectedChecklistItems = useCallback(
+    () => runChecklistBulkAction((selection) => $setCheckedForSelection(selection, false)),
+    [runChecklistBulkAction],
+  )
+
   const containerRef = useRef<HTMLDivElement>(null)
 
   // Standard Red Notes: user-customizable toolbar layout (which buttons are
@@ -1025,6 +1076,7 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
     }
 
     setHasNonCollapsedSelection(!selection.isCollapsed())
+    setHasChecklistSelection($selectionHasChecklistItems(selection))
 
     const anchorNode = selection.anchor.getNode()
     const focusNode = selection.focus.getNode()
@@ -2454,6 +2506,40 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
         <span className="text-base leading-none font-semibold">¶</span>
       </ToolbarButton>
     ),
+    // Standard Red Notes — checklist bulk completion. All three are disabled
+    // (aria-disabled, so the tooltip still explains why) when the selection
+    // touches no checklist row; the tooltip then tells the user what to do.
+    [ToolbarButtonId.CompleteAllChecklistItems]: (
+      <ToolbarButton
+        name={
+          <>
+            <div className="mb-1 font-semibold">{t('completeAllChecklistItems')}</div>
+            <div className="max-w-[35ch] text-xs">
+              {hasChecklistSelection ? t('completeAllChecklistItemsDescription') : t('noChecklistItemsSelected')}
+            </div>
+          </>
+        }
+        iconName="list-check"
+        disabled={!hasChecklistSelection}
+        onSelect={completeAllChecklistItems}
+      />
+    ),
+    [ToolbarButtonId.CompleteSelectedChecklistItems]: (
+      <ToolbarButton
+        name={hasChecklistSelection ? t('completeSelectedChecklistItems') : t('noChecklistItemsSelected')}
+        iconName="check-circle-filled"
+        disabled={!hasChecklistSelection}
+        onSelect={completeSelectedChecklistItems}
+      />
+    ),
+    [ToolbarButtonId.UncompleteSelectedChecklistItems]: (
+      <ToolbarButton
+        name={hasChecklistSelection ? t('uncompleteSelectedChecklistItems') : t('noChecklistItemsSelected')}
+        iconName="check-circle"
+        disabled={!hasChecklistSelection}
+        onSelect={uncompleteSelectedChecklistItems}
+      />
+    ),
     // Standard Red Notes: the former general Insert dropdown (InsertMenu) and its
     // quick-insert siblings (InsertTable / InsertImageFile / InsertDrawing /
     // InsertEquation / InsertFootnote) were replaced by always-visible captioned
@@ -3518,6 +3604,24 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
             onClick={toggleAutoMoveCompleted}
           />
           <ToolbarMenuItem name={t('restoreCompletedTasks')} iconName="arrow-left" onClick={restoreCompletedTasks} />
+          {/* Bulk completion. The floating mini-toolbar is the surface the user
+              is on when they have just dragged a selection, so the two
+              selection-scoped actions belong here as well as in the ribbon. */}
+          <ToolbarMenuItem
+            name={t('completeAllChecklistItems')}
+            iconName="list-check"
+            onClick={completeAllChecklistItems}
+          />
+          <ToolbarMenuItem
+            name={t('completeSelectedChecklistItems')}
+            iconName="check-circle-filled"
+            onClick={completeSelectedChecklistItems}
+          />
+          <ToolbarMenuItem
+            name={t('uncompleteSelectedChecklistItems')}
+            iconName="check-circle"
+            onClick={uncompleteSelectedChecklistItems}
+          />
           <MenuItemSeparator />
           <ToolbarMenuItem
             name={t('quote')}
