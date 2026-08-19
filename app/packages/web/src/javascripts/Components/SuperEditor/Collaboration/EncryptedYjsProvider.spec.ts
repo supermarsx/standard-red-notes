@@ -11,8 +11,10 @@ import {
   YJS_CHUNK_PLAINTEXT_BYTES,
   YJS_TRANSFER_TIMEOUT_MS,
 } from './EncryptedYjsProvider'
-import { createRoomCipher, RoomCipher } from './RoomCrypto'
-import type { CollabChannel, CollabFrame } from './CollabChannel'
+import { CollaborationCipherError, createRoomCipher, RoomCipher } from './RoomCrypto'
+import { COLLABORATION_PRESENCE_HEARTBEAT_INTERVAL_MS, type CollabChannel, type CollabFrame } from './CollabChannel'
+
+const TEST_ROOM_EPOCH = 'room_epoch_0000000000000001'
 
 Object.defineProperty(globalThis, 'crypto', {
   configurable: true,
@@ -157,6 +159,67 @@ async function flushMicrotasksUntil(predicate: () => boolean, turns = 40): Promi
 }
 
 describe('EncryptedYjsProvider convergence', () => {
+  it('fails closed and releases the active lease when a ciphertext room epoch mismatches', async () => {
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined)
+    let inbound: ((frame: CollabFrame) => void) | undefined
+    const release = jest.fn()
+    const onFatal = jest.fn()
+    const lease = {
+      requestId: 'epoch-bound-lease',
+      shouldBootstrap: false,
+      protocolVersion: 3 as const,
+      maxTransferBytes: MAX_YJS_TRANSFER_BYTES,
+      roomEpoch: TEST_ROOM_EPOCH,
+      release,
+    }
+    const cipher: RoomCipher = {
+      encrypt: async (plaintext) => Buffer.from(plaintext).toString('base64'),
+      decrypt: async () => {
+        throw new CollaborationCipherError('EPOCH_MISMATCH')
+      },
+    }
+    const provider = new EncryptedYjsProvider(
+      new Y.Doc(),
+      'epoch-bound-room',
+      {
+        isConnected: () => true,
+        authorize: jest.fn(),
+        subscribe: (handler) => {
+          inbound = handler
+          return jest.fn()
+        },
+        send: jest.fn(),
+      },
+      cipher,
+      undefined,
+      lease.requestId,
+      {
+        activeLease: lease,
+        shouldBootstrap: false,
+        validateAttachment: jest.fn(() => true),
+        reactivate: jest.fn(),
+        onFatal,
+      },
+    )
+
+    try {
+      provider.connect()
+      await settle(provider)
+      inbound?.({ t: 'yjs', room: 'epoch-bound-room', payload: 'opaque-ciphertext' })
+      await settle(provider)
+
+      expect(provider.isRoomJoined()).toBe(false)
+      expect(provider.getLastSyncFailure()).toBe('encrypted-yjs-fatal')
+      expect(release).toHaveBeenCalledTimes(1)
+      expect(onFatal).toHaveBeenCalledWith(
+        'Live collaboration stopped because the encrypted room epoch changed. Reconnect to continue.',
+      )
+    } finally {
+      provider.destroy()
+      consoleError.mockRestore()
+    }
+  })
+
   it('attaches to the hook-activated lease and waits for its correlated peer state without replaying room-join', async () => {
     const sent: CollabFrame[] = []
     let inbound: ((frame: CollabFrame) => void) | undefined
@@ -175,7 +238,7 @@ describe('EncryptedYjsProvider convergence', () => {
       send: (frame) => {
         sent.push(frame)
         if (frame.t === 'yjs' && frame.transferId) {
-          inbound?.({ t: 'yjs-accepted', room: frame.room, transferId: frame.transferId, protocolVersion: 2 })
+          inbound?.({ t: 'yjs-accepted', room: frame.room, transferId: frame.transferId, protocolVersion: 3 })
         } else if (frame.t === 'yjs-retry') {
           inbound?.({
             t: 'yjs',
@@ -190,8 +253,9 @@ describe('EncryptedYjsProvider convergence', () => {
     const lease = {
       requestId: 'already-active-request',
       shouldBootstrap: false,
-      protocolVersion: 2 as const,
+      protocolVersion: 3 as const,
       maxTransferBytes: MAX_YJS_TRANSFER_BYTES,
+      roomEpoch: TEST_ROOM_EPOCH,
       release,
     }
     const doc = new Y.Doc()
@@ -227,6 +291,137 @@ describe('EncryptedYjsProvider convergence', () => {
     expect(release).toHaveBeenCalledTimes(1)
   })
 
+  it('heartbeats only an active epoch-bound lease and dedupes encrypted-awareness presence activity', async () => {
+    jest.useFakeTimers()
+    const sent: CollabFrame[] = []
+    let inbound: ((frame: CollabFrame) => void) | undefined
+    const onPresenceActivity = jest.fn()
+    const release = jest.fn()
+    const lease = {
+      requestId: 'presence-lease',
+      shouldBootstrap: true,
+      protocolVersion: 3 as const,
+      maxTransferBytes: MAX_YJS_TRANSFER_BYTES,
+      roomEpoch: TEST_ROOM_EPOCH,
+      release,
+    }
+    const provider = new EncryptedYjsProvider(
+      new Y.Doc(),
+      'presence-room',
+      {
+        isConnected: () => true,
+        authorize: jest.fn(),
+        subscribe: (handler) => {
+          inbound = handler
+          return () => {
+            inbound = undefined
+          }
+        },
+        send: (frame) => sent.push(frame),
+      },
+      createTestTransportCipher(),
+      undefined,
+      lease.requestId,
+      {
+        activeLease: lease,
+        shouldBootstrap: true,
+        expectedRoomEpoch: TEST_ROOM_EPOCH,
+        validateAttachment: jest.fn(() => true),
+        reactivate: jest.fn(),
+        onFatal: jest.fn(),
+        onPresenceActivity,
+      },
+    )
+
+    try {
+      expect(sent.filter((frame) => frame.t === 'room-presence-heartbeat')).toHaveLength(0)
+      provider.connect()
+      await flushMicrotasksUntil(() => provider.isRoomJoined())
+
+      const firstHeartbeat = sent.find(
+        (frame): frame is Extract<CollabFrame, { t: 'room-presence-heartbeat' }> =>
+          frame.t === 'room-presence-heartbeat',
+      )
+      expect(firstHeartbeat).toEqual({
+        t: 'room-presence-heartbeat',
+        room: 'presence-room',
+        requestId: lease.requestId,
+        expectedRoomEpoch: TEST_ROOM_EPOCH,
+        protocolVersion: 3,
+        clientId: provider.doc.clientID,
+      })
+
+      jest.advanceTimersByTime(COLLABORATION_PRESENCE_HEARTBEAT_INTERVAL_MS)
+      expect(sent.filter((frame) => frame.t === 'room-presence-heartbeat')).toHaveLength(2)
+
+      const remoteClientId = provider.doc.clientID === 9_001 ? 9_002 : 9_001
+      const awareness = provider.awareness as unknown as {
+        getStates(): Map<number, Record<string, unknown>>
+      }
+      awareness.getStates().set(remoteClientId, {
+        name: 'Alice',
+        awarenessData: { userUuid: 'remote-user' },
+      })
+      const joined: Extract<CollabFrame, { t: 'room-presence'; action: 'joined' }> = {
+        t: 'room-presence',
+        room: 'presence-room',
+        roomEpoch: TEST_ROOM_EPOCH,
+        protocolVersion: 3,
+        action: 'joined',
+        presenceId: 'remote-presence',
+        userUuid: 'remote-user',
+        clientId: remoteClientId,
+        ttlMilliseconds: 30_000,
+      }
+      inbound?.(joined)
+      inbound?.(joined)
+      inbound?.({ ...joined, roomEpoch: 'room_epoch_0000000000000002', presenceId: 'wrong-epoch' })
+      expect(onPresenceActivity).toHaveBeenCalledTimes(1)
+      expect(onPresenceActivity).toHaveBeenCalledWith({
+        action: 'joined',
+        presenceId: 'remote-presence',
+        userUuid: 'remote-user',
+        clientId: remoteClientId,
+        label: 'Alice',
+      })
+
+      const revoked: Extract<CollabFrame, { t: 'room-presence'; action: 'left' }> = {
+        t: 'room-presence',
+        room: 'presence-room',
+        roomEpoch: TEST_ROOM_EPOCH,
+        protocolVersion: 3,
+        action: 'left',
+        presenceId: 'remote-presence',
+        userUuid: 'remote-user',
+        clientId: remoteClientId,
+        reason: 'revoked',
+      }
+      inbound?.(revoked)
+      inbound?.(revoked)
+      expect(onPresenceActivity).toHaveBeenCalledTimes(2)
+      expect(onPresenceActivity).toHaveBeenLastCalledWith({
+        action: 'left',
+        presenceId: 'remote-presence',
+        userUuid: 'remote-user',
+        clientId: remoteClientId,
+        label: 'Alice',
+        reason: 'revoked',
+      })
+      expect(awareness.getStates().has(remoteClientId)).toBe(false)
+
+      const heartbeatsBeforeDisconnect = sent.filter((frame) => frame.t === 'room-presence-heartbeat').length
+      provider.disconnect()
+      jest.advanceTimersByTime(COLLABORATION_PRESENCE_HEARTBEAT_INTERVAL_MS * 3)
+      expect(sent.filter((frame) => frame.t === 'room-presence-heartbeat')).toHaveLength(heartbeatsBeforeDisconnect)
+      expect(onPresenceActivity).toHaveBeenCalledTimes(2)
+    } finally {
+      provider.destroy()
+      jest.clearAllTimers()
+      jest.useRealTimers()
+    }
+    expect(release).toHaveBeenCalledTimes(1)
+  })
+
   it('keeps a fresh bootstrap editor non-canonical with bounded work until its exact snapshot is accepted', async () => {
     const sent: CollabFrame[] = []
     let inbound: ((frame: CollabFrame) => void) | undefined
@@ -249,8 +444,9 @@ describe('EncryptedYjsProvider convergence', () => {
         activeLease: {
           requestId: 'deferred-bootstrap-lease',
           shouldBootstrap: true,
-          protocolVersion: 2,
+          protocolVersion: 3,
           maxTransferBytes: MAX_YJS_TRANSFER_BYTES,
+          roomEpoch: TEST_ROOM_EPOCH,
           release: jest.fn(),
         },
         shouldBootstrap: true,
@@ -285,7 +481,7 @@ describe('EncryptedYjsProvider convergence', () => {
       t: 'yjs-accepted',
       room: 'deferred-bootstrap-room',
       transferId: awaiting!.transferId!,
-      protocolVersion: 2,
+      protocolVersion: 3,
     })
     await settle(provider)
     expect(provider.isCanonicalReady()).toBe(true)
@@ -379,8 +575,9 @@ describe('EncryptedYjsProvider convergence', () => {
         activeLease: {
           requestId: 'awareness-failure-lease',
           shouldBootstrap: false,
-          protocolVersion: 2,
+          protocolVersion: 3,
           maxTransferBytes: MAX_YJS_TRANSFER_BYTES,
+          roomEpoch: TEST_ROOM_EPOCH,
           release: jest.fn(),
         },
         shouldBootstrap: false,
@@ -428,7 +625,7 @@ describe('EncryptedYjsProvider convergence', () => {
           }
           sent.push(frame)
           if (frame.t === 'yjs' && frame.transferId) {
-            inbound?.({ t: 'yjs-accepted', room: frame.room, transferId: frame.transferId, protocolVersion: 2 })
+            inbound?.({ t: 'yjs-accepted', room: frame.room, transferId: frame.transferId, protocolVersion: 3 })
           }
         },
       },
@@ -439,8 +636,9 @@ describe('EncryptedYjsProvider convergence', () => {
         activeLease: {
           requestId: 'transient-state-request-lease',
           shouldBootstrap: false,
-          protocolVersion: 2,
+          protocolVersion: 3,
           maxTransferBytes: MAX_YJS_TRANSFER_BYTES,
+          roomEpoch: TEST_ROOM_EPOCH,
           release: jest.fn(),
         },
         shouldBootstrap: false,
@@ -503,8 +701,9 @@ describe('EncryptedYjsProvider convergence', () => {
           activeLease: {
             requestId: 'missing-bootstrap-peer-lease',
             shouldBootstrap: false,
-            protocolVersion: 2,
+            protocolVersion: 3,
             maxTransferBytes: MAX_YJS_TRANSFER_BYTES,
+            roomEpoch: TEST_ROOM_EPOCH,
             release,
           },
           shouldBootstrap: false,
@@ -559,8 +758,9 @@ describe('EncryptedYjsProvider convergence', () => {
           activeLease: {
             requestId: 'dropped-bootstrap-ack-lease',
             shouldBootstrap: true,
-            protocolVersion: 2,
+            protocolVersion: 3,
             maxTransferBytes: MAX_YJS_TRANSFER_BYTES,
+            roomEpoch: TEST_ROOM_EPOCH,
             release,
           },
           shouldBootstrap: true,
@@ -618,7 +818,7 @@ describe('EncryptedYjsProvider convergence', () => {
       send: (frame) => {
         sent.push(frame)
         if (acceptSnapshots && frame.t === 'yjs' && frame.transferId) {
-          inbound?.({ t: 'yjs-accepted', room: frame.room, transferId: frame.transferId, protocolVersion: 2 })
+          inbound?.({ t: 'yjs-accepted', room: frame.room, transferId: frame.transferId, protocolVersion: 3 })
         }
       },
     }
@@ -627,8 +827,9 @@ describe('EncryptedYjsProvider convergence', () => {
     const reactivate = jest.fn().mockResolvedValue({
       requestId: 'reconnected-bootstrap-lease',
       shouldBootstrap: true,
-      protocolVersion: 2 as const,
+      protocolVersion: 3 as const,
       maxTransferBytes: MAX_YJS_TRANSFER_BYTES,
+      roomEpoch: TEST_ROOM_EPOCH,
       release: secondRelease,
     })
     const doc = new Y.Doc()
@@ -643,8 +844,9 @@ describe('EncryptedYjsProvider convergence', () => {
         activeLease: {
           requestId: 'initial-bootstrap-lease',
           shouldBootstrap: true,
-          protocolVersion: 2,
+          protocolVersion: 3,
           maxTransferBytes: MAX_YJS_TRANSFER_BYTES,
+          roomEpoch: TEST_ROOM_EPOCH,
           release: firstRelease,
         },
         shouldBootstrap: true,
@@ -697,15 +899,16 @@ describe('EncryptedYjsProvider convergence', () => {
       send: (frame) => {
         sent.push(frame)
         if (frame.t === 'yjs' && frame.transferId) {
-          inbound?.({ t: 'yjs-accepted', room: frame.room, transferId: frame.transferId, protocolVersion: 2 })
+          inbound?.({ t: 'yjs-accepted', room: frame.room, transferId: frame.transferId, protocolVersion: 3 })
         }
       },
     }
     const lease = {
       requestId: 'loading-request',
       shouldBootstrap: false,
-      protocolVersion: 2 as const,
+      protocolVersion: 3 as const,
       maxTransferBytes: MAX_YJS_TRANSFER_BYTES,
+      roomEpoch: TEST_ROOM_EPOCH,
       release: jest.fn(),
     }
     const doc = new Y.Doc()
@@ -775,7 +978,7 @@ describe('EncryptedYjsProvider convergence', () => {
       room: 'loading-room',
       stateRequestId: 'retry-before-ready',
       leaseRequestId: lease.requestId,
-      protocolVersion: 2,
+      protocolVersion: 3,
     })
     await settle(provider)
     expect(sent.some((frame) => frame.t === 'yjs' && frame.stateRequestId === 'retry-before-ready')).toBe(true)
@@ -811,8 +1014,9 @@ describe('EncryptedYjsProvider convergence', () => {
         activeLease: {
           requestId: 'stale-lease',
           shouldBootstrap: true,
-          protocolVersion: 2,
+          protocolVersion: 3,
           maxTransferBytes: MAX_YJS_TRANSFER_BYTES,
+          roomEpoch: TEST_ROOM_EPOCH,
           release,
         },
         shouldBootstrap: true,
@@ -864,8 +1068,9 @@ describe('EncryptedYjsProvider convergence', () => {
         activeLease: {
           requestId: 'authorization-race-lease',
           shouldBootstrap: true,
-          protocolVersion: 2,
+          protocolVersion: 3,
           maxTransferBytes: MAX_YJS_TRANSFER_BYTES,
+          roomEpoch: TEST_ROOM_EPOCH,
           release,
         },
         shouldBootstrap: true,
@@ -924,7 +1129,7 @@ describe('EncryptedYjsProvider convergence', () => {
         }
         sent.push(frame)
         if (frame.t === 'yjs' && frame.transferId) {
-          inbound?.({ t: 'yjs-accepted', room: frame.room, transferId: frame.transferId, protocolVersion: 2 })
+          inbound?.({ t: 'yjs-accepted', room: frame.room, transferId: frame.transferId, protocolVersion: 3 })
         }
       },
     }
@@ -933,15 +1138,17 @@ describe('EncryptedYjsProvider convergence', () => {
     const firstLease = {
       requestId: 'initial-active-request',
       shouldBootstrap: true,
-      protocolVersion: 2 as const,
+      protocolVersion: 3 as const,
       maxTransferBytes: MAX_YJS_TRANSFER_BYTES,
+      roomEpoch: TEST_ROOM_EPOCH,
       release: firstRelease,
     }
     const secondLease = {
       requestId: 'fresh-reconnect-request',
       shouldBootstrap: true,
-      protocolVersion: 2 as const,
+      protocolVersion: 3 as const,
       maxTransferBytes: MAX_YJS_TRANSFER_BYTES,
+      roomEpoch: TEST_ROOM_EPOCH,
       release: secondRelease,
     }
     const reactivate = jest.fn().mockResolvedValue(secondLease)
@@ -1027,8 +1234,9 @@ describe('EncryptedYjsProvider convergence', () => {
         activeLease: {
           requestId: 'bounded-reconnect-lease',
           shouldBootstrap: true,
-          protocolVersion: 2,
+          protocolVersion: 3,
           maxTransferBytes: MAX_YJS_TRANSFER_BYTES,
+          roomEpoch: TEST_ROOM_EPOCH,
           release,
         },
         shouldBootstrap: true,
@@ -1077,7 +1285,7 @@ describe('EncryptedYjsProvider convergence', () => {
       send: (frame) => {
         sent.push(frame)
         if (frame.t === 'yjs' && frame.transferId) {
-          inbound?.({ t: 'yjs-accepted', room: frame.room, transferId: frame.transferId, protocolVersion: 2 })
+          inbound?.({ t: 'yjs-accepted', room: frame.room, transferId: frame.transferId, protocolVersion: 3 })
         }
       },
     }
@@ -1086,15 +1294,17 @@ describe('EncryptedYjsProvider convergence', () => {
     const initialLease = {
       requestId: 'strict-initial-lease',
       shouldBootstrap: true,
-      protocolVersion: 2 as const,
+      protocolVersion: 3 as const,
       maxTransferBytes: MAX_YJS_TRANSFER_BYTES,
+      roomEpoch: TEST_ROOM_EPOCH,
       release: initialRelease,
     }
     const replayLease = {
       requestId: 'strict-replayed-lease',
       shouldBootstrap: true,
-      protocolVersion: 2 as const,
+      protocolVersion: 3 as const,
       maxTransferBytes: MAX_YJS_TRANSFER_BYTES,
+      roomEpoch: TEST_ROOM_EPOCH,
       release: replayRelease,
     }
     const reactivate = jest.fn().mockResolvedValue(replayLease)
@@ -1158,6 +1368,69 @@ describe('EncryptedYjsProvider convergence', () => {
     expect(awarenessDestroyed).toHaveBeenCalledTimes(1)
   })
 
+  it('rejects a reconnect lease from a rotated room epoch before attaching the stale cipher', async () => {
+    const sent: CollabFrame[] = []
+    let status: ((connected: boolean) => void) | undefined
+    const channel: CollabChannel = {
+      isConnected: () => true,
+      authorize: jest.fn(),
+      subscribe: () => jest.fn(),
+      subscribeStatus: (handler) => {
+        status = handler
+        return jest.fn()
+      },
+      send: (frame) => sent.push(frame),
+    }
+    const initialRelease = jest.fn()
+    const rotatedRelease = jest.fn()
+    const initialLease = {
+      requestId: 'epoch-initial-lease',
+      shouldBootstrap: true,
+      protocolVersion: 3 as const,
+      maxTransferBytes: MAX_YJS_TRANSFER_BYTES,
+      roomEpoch: TEST_ROOM_EPOCH,
+      release: initialRelease,
+    }
+    const rotatedLease = {
+      ...initialLease,
+      requestId: 'epoch-rotated-lease',
+      roomEpoch: 'room_epoch_0000000000000002',
+      release: rotatedRelease,
+    }
+    const onFatal = jest.fn()
+    const provider = new EncryptedYjsProvider(
+      new Y.Doc(),
+      'epoch-rotation-room',
+      channel,
+      createTestTransportCipher(),
+      undefined,
+      initialLease.requestId,
+      {
+        activeLease: initialLease,
+        shouldBootstrap: true,
+        expectedRoomEpoch: TEST_ROOM_EPOCH,
+        validateAttachment: jest.fn(() => true),
+        reactivate: jest.fn().mockResolvedValue(rotatedLease),
+        onFatal,
+      },
+    )
+
+    provider.connect()
+    await provider.flush()
+    expect(provider.isRoomJoined()).toBe(true)
+
+    status?.(false)
+    status?.(true)
+    await provider.flush()
+
+    expect(initialRelease).toHaveBeenCalledTimes(1)
+    expect(rotatedRelease).toHaveBeenCalledTimes(1)
+    expect(provider.isRoomJoined()).toBe(false)
+    expect(sent.some((frame) => frame.t === 'room-join')).toBe(false)
+    expect(onFatal).toHaveBeenCalledWith('Live collaboration stopped because the gateway protocol is incompatible.')
+    provider.destroy()
+  })
+
   it('discards a lease resolved for an obsolete socket generation and attaches the current generation', async () => {
     const sent: CollabFrame[] = []
     let inbound: ((frame: CollabFrame) => void) | undefined
@@ -1181,7 +1454,7 @@ describe('EncryptedYjsProvider convergence', () => {
       send: (frame) => {
         sent.push(frame)
         if (frame.t === 'yjs' && frame.transferId) {
-          inbound?.({ t: 'yjs-accepted', room: frame.room, transferId: frame.transferId, protocolVersion: 2 })
+          inbound?.({ t: 'yjs-accepted', room: frame.room, transferId: frame.transferId, protocolVersion: 3 })
         }
       },
     }
@@ -1192,8 +1465,9 @@ describe('EncryptedYjsProvider convergence', () => {
       (lease: {
         requestId: string
         shouldBootstrap: boolean
-        protocolVersion: 2
+        protocolVersion: 3
         maxTransferBytes: number
+        roomEpoch: string
         release(): void
       }) => void
     > = []
@@ -1202,8 +1476,9 @@ describe('EncryptedYjsProvider convergence', () => {
         new Promise<{
           requestId: string
           shouldBootstrap: boolean
-          protocolVersion: 2
+          protocolVersion: 3
           maxTransferBytes: number
+          roomEpoch: string
           release(): void
         }>((resolve) => resolvers.push(resolve)),
     )
@@ -1218,8 +1493,9 @@ describe('EncryptedYjsProvider convergence', () => {
         activeLease: {
           requestId: 'initial-generation-lease',
           shouldBootstrap: true,
-          protocolVersion: 2,
+          protocolVersion: 3,
           maxTransferBytes: MAX_YJS_TRANSFER_BYTES,
+          roomEpoch: TEST_ROOM_EPOCH,
           release: initialRelease,
         },
         shouldBootstrap: true,
@@ -1248,8 +1524,9 @@ describe('EncryptedYjsProvider convergence', () => {
     resolvers[0]({
       requestId: 'obsolete-generation-lease',
       shouldBootstrap: true,
-      protocolVersion: 2,
+      protocolVersion: 3,
       maxTransferBytes: MAX_YJS_TRANSFER_BYTES,
+      roomEpoch: TEST_ROOM_EPOCH,
       release: obsoleteRelease,
     })
     await Promise.resolve()
@@ -1260,8 +1537,9 @@ describe('EncryptedYjsProvider convergence', () => {
     resolvers[1]({
       requestId: 'current-generation-lease',
       shouldBootstrap: true,
-      protocolVersion: 2,
+      protocolVersion: 3,
       maxTransferBytes: MAX_YJS_TRANSFER_BYTES,
+      roomEpoch: TEST_ROOM_EPOCH,
       release: currentRelease,
     })
     await settle(provider)
@@ -1772,7 +2050,7 @@ async function readyProductionClaimProvider(room: string, index: number): Promis
     send: (frame) => {
       sent.push(frame)
       if (frame.t === 'yjs' && frame.transferId) {
-        receive?.({ t: 'yjs-accepted', room, transferId: frame.transferId, protocolVersion: 2 })
+        receive?.({ t: 'yjs-accepted', room, transferId: frame.transferId, protocolVersion: 3 })
       }
     },
   }
@@ -1789,8 +2067,9 @@ async function readyProductionClaimProvider(room: string, index: number): Promis
       activeLease: {
         requestId: leaseRequestId,
         shouldBootstrap: true,
-        protocolVersion: 2,
+        protocolVersion: 3,
         maxTransferBytes: MAX_YJS_TRANSFER_BYTES,
+        roomEpoch: TEST_ROOM_EPOCH,
         release,
       },
       shouldBootstrap: true,
@@ -1862,7 +2141,7 @@ describe('EncryptedYjsProvider gateway-coordinated response claims', () => {
           room,
           stateRequestId,
           leaseRequestId: winner.leaseRequestId,
-          protocolVersion: 2,
+          protocolVersion: 3,
         })
         await peers[0].provider.flush()
         expect(
@@ -1875,7 +2154,7 @@ describe('EncryptedYjsProvider gateway-coordinated response claims', () => {
           room,
           stateRequestId,
           leaseRequestId: winner.leaseRequestId,
-          protocolVersion: 2,
+          protocolVersion: 3,
         })
         await Promise.all(peers.map(({ provider }) => provider.flush()))
 

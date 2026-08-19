@@ -1,7 +1,12 @@
 import { SNNote } from '@standardnotes/snjs'
 import { WebApplication } from '@/Application/WebApplication'
 import { createGatewayCollabChannel } from '@/Components/SuperEditor/Collaboration/GatewayCollabChannel'
-import { createRoomCipher, RoomCipher } from '@/Components/SuperEditor/Collaboration/RoomCrypto'
+import {
+  createCollaborationRoomCipher,
+  getCollaborationReplayLedger,
+  isValidCollaborationRoomEpoch,
+  RoomCipher,
+} from '@/Components/SuperEditor/Collaboration/RoomCrypto'
 import {
   COLLABORATION_MAX_TRANSFER_BYTES,
   COLLABORATION_PROTOCOL_VERSION,
@@ -45,7 +50,8 @@ const commentAdditionalData = (room: string): Uint8Array =>
   )
 const MAX_PENDING_COMMENT_EVENTS = 32
 export const MAX_COMMENT_EVENT_PLAINTEXT_BYTES = 64 * 1024
-const MAX_COMMENT_EVENT_ENCODED_BYTES = Math.ceil((MAX_COMMENT_EVENT_PLAINTEXT_BYTES + 64) / 3) * 4
+// AES-GCM base64 plus the bounded v1 room/sender/sequence envelope header.
+const MAX_COMMENT_EVENT_ENCODED_BYTES = Math.ceil((MAX_COMMENT_EVENT_PLAINTEXT_BYTES + 64) / 3) * 4 + 512
 
 /**
  * Realtime comment events share the editor's authenticated gateway room and
@@ -71,6 +77,7 @@ export class CommentRelay {
     private readonly application: WebApplication,
     private readonly room: string,
     roomKey: CryptoKey,
+    private readonly roomEpoch: string,
     capability: string,
     private readonly onRemoteEvent: (event: CommentRelayEvent) => void | boolean | Promise<void | boolean>,
     expectedIdentity?: NoteEncryptionIdentity,
@@ -79,14 +86,19 @@ export class CommentRelay {
     if (!availability.available) {
       throw new Error(availability.reason)
     }
-    if (!room || !capability) {
+    if (!room || !capability || !isValidCollaborationRoomEpoch(roomEpoch)) {
       throw new Error('Comments require an exact-note collaboration capability.')
     }
 
     // Validate the key and immutable origin identity before creating or joining
     // any network channel. The sessionUser field is an opaque in-memory epoch;
     // a same-UUID sign-out/login is deliberately a different identity.
-    this.cipher = createRoomCipher(roomKey)
+    this.cipher = createCollaborationRoomCipher(
+      roomKey,
+      roomEpoch,
+      undefined,
+      getCollaborationReplayLedger(application, room, roomEpoch),
+    )
     const capturedIdentity =
       expectedIdentity ??
       (() => {
@@ -121,6 +133,7 @@ export class CommentRelay {
         requestId: this.requestId,
         role: 'comment',
         protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+        expectedRoomEpoch: this.roomEpoch,
       })
     } catch (error) {
       this.joinRequested = false
@@ -236,6 +249,7 @@ export class CommentRelay {
       if (
         frame.protocolVersion !== COLLABORATION_PROTOCOL_VERSION ||
         frame.maxTransferBytes !== COLLABORATION_MAX_TRANSFER_BYTES ||
+        frame.roomEpoch !== this.roomEpoch ||
         !this.hasExpectedIdentity()
       ) {
         this.joinRequested = false
@@ -324,7 +338,13 @@ export class CommentRelay {
     try {
       let capability: string | undefined
       try {
-        capability = await this.channel.authorize(this.room, this.requestId)
+        const authorization = await this.channel.authorizeEpochBound?.(this.room, this.roomEpoch, this.requestId)
+        if (
+          authorization?.collaborationProtocolVersion === COLLABORATION_PROTOCOL_VERSION &&
+          authorization.roomEpoch === this.roomEpoch
+        ) {
+          capability = authorization.capability
+        }
       } catch {
         capability = undefined
       }
@@ -344,6 +364,7 @@ export class CommentRelay {
             requestId: this.requestId,
             role: 'comment',
             protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+            expectedRoomEpoch: this.roomEpoch,
           })
         } catch {
           this.joinRequested = false

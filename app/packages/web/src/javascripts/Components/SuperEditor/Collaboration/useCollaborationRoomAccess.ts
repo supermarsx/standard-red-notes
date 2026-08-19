@@ -20,14 +20,16 @@ import {
 } from './CollabChannel'
 import { createGatewayCollabChannel } from './GatewayCollabChannel'
 import { SUPER_COLLABORATION_TRANSPORT_REASON } from './CollaborationAvailability'
+import { isValidCollaborationRoomEpoch } from './RoomCrypto'
 
-type LeaseFailure = { reason: string }
+type LeaseFailure = { reason: string; requiresRemount?: true }
 
 export type ActiveEditorCollaborationLease = {
   requestId: string
   shouldBootstrap: boolean
   protocolVersion: typeof COLLABORATION_PROTOCOL_VERSION
   maxTransferBytes: number
+  roomEpoch: string
   release(): void
 }
 
@@ -74,6 +76,7 @@ type CanonicalEditorSnapshot = {
   userUuid: string
   sessionUser: object
   serverUpdatedAtTimestamp: number
+  roomEpoch: string
   initialEditorState: string
   invalidate(): void
 }
@@ -106,6 +109,7 @@ function matchesCanonicalEditorSnapshot(
 type CollaborationAuthorizationContext = {
   leaseRequestId?: string
   bootstrapChallenge?: string
+  expectedRoomEpoch?: string
 }
 
 /**
@@ -194,6 +198,7 @@ type EditorLeaseReservation = {
   bootstrapChallenge?: string
   protocolVersion: typeof COLLABORATION_PROTOCOL_VERSION
   maxTransferBytes: number
+  roomEpoch: string
 }
 
 /**
@@ -206,6 +211,7 @@ export function beginEditorLeaseReservation(
   application: WebApplication,
   room: string,
   capability: string,
+  expectedRoomEpoch: string,
   timeoutMs = EDITOR_LEASE_TIMEOUT_MS,
   requestId = createCollaborationRequestId(),
 ): {
@@ -288,6 +294,8 @@ export function beginEditorLeaseReservation(
       if (
         frame.protocolVersion !== COLLABORATION_PROTOCOL_VERSION ||
         frame.maxTransferBytes !== COLLABORATION_MAX_TRANSFER_BYTES ||
+        !isValidCollaborationRoomEpoch(frame.roomEpoch) ||
+        frame.roomEpoch !== expectedRoomEpoch ||
         !challengeIsValid
       ) {
         fail('The collaboration gateway protocol is incompatible with this app.')
@@ -301,6 +309,7 @@ export function beginEditorLeaseReservation(
         ...(frame.bootstrapChallenge ? { bootstrapChallenge: frame.bootstrapChallenge } : {}),
         protocolVersion: frame.protocolVersion,
         maxTransferBytes: frame.maxTransferBytes,
+        roomEpoch: frame.roomEpoch,
       }
       resolveReservation(reservation)
       return
@@ -310,6 +319,7 @@ export function beginEditorLeaseReservation(
         !reservation ||
         frame.protocolVersion !== COLLABORATION_PROTOCOL_VERSION ||
         frame.maxTransferBytes !== COLLABORATION_MAX_TRANSFER_BYTES ||
+        frame.roomEpoch !== reservation.roomEpoch ||
         frame.bootstrap !== reservation.shouldBootstrap
       ) {
         fail('The collaboration gateway activation did not match its reservation.')
@@ -323,6 +333,7 @@ export function beginEditorLeaseReservation(
         shouldBootstrap: reservation.shouldBootstrap,
         protocolVersion: COLLABORATION_PROTOCOL_VERSION,
         maxTransferBytes: COLLABORATION_MAX_TRANSFER_BYTES,
+        roomEpoch: reservation.roomEpoch,
         release,
       })
     }
@@ -338,6 +349,7 @@ export function beginEditorLeaseReservation(
       requestId,
       role: 'editor',
       protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+      expectedRoomEpoch,
     })
   } catch {
     fail('The encrypted collaboration room could not reserve an editor lease.')
@@ -364,6 +376,7 @@ export function beginEditorLeaseReservation(
           requestId,
           role: 'editor',
           protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+          expectedRoomEpoch,
         })
       } catch {
         fail('The encrypted collaboration room could not activate the editor lease.')
@@ -391,7 +404,8 @@ type EstablishedEditorAccess = {
 type ExpectedEditorIdentity = Pick<
   AvailableSynchronizedEditorAccess,
   'noteUuid' | 'sourceId' | 'userUuid' | 'sessionUser'
->
+> &
+  Partial<Pick<AvailableSynchronizedEditorAccess, 'roomEpoch'>>
 
 function matchesExpectedEditorIdentity(
   access: Extract<PreparedRoomAccess, { available: true }>,
@@ -402,7 +416,8 @@ function matchesExpectedEditorIdentity(
     noteUuid === expected.noteUuid &&
     access.sourceId === expected.sourceId &&
     access.userUuid === expected.userUuid &&
-    access.sessionUser === expected.sessionUser
+    access.sessionUser === expected.sessionUser &&
+    (expected.roomEpoch === undefined || access.roomEpoch === expected.roomEpoch)
   )
 }
 
@@ -415,6 +430,7 @@ async function establishEditorAccess(
     const requestId = createCollaborationRequestId()
     const beforeReservation = await prepareSynchronizedEditorAccess(application, initialNote, {
       leaseRequestId: requestId,
+      expectedRoomEpoch: expectedIdentity?.roomEpoch,
     })
     if (!beforeReservation.available) {
       return { reason: beforeReservation.reason }
@@ -423,19 +439,29 @@ async function establishEditorAccess(
       expectedIdentity &&
       !matchesExpectedEditorIdentity(beforeReservation, beforeReservation.noteUuid, expectedIdentity)
     ) {
-      return { reason: 'The signed-in session or note encryption key changed while collaboration was reconnecting.' }
+      return expectedIdentity.roomEpoch !== undefined && beforeReservation.roomEpoch !== expectedIdentity.roomEpoch
+        ? {
+            reason: 'The collaboration room epoch changed while collaboration was reconnecting.',
+            requiresRemount: true,
+          }
+        : { reason: 'The signed-in session or note encryption key changed while collaboration was reconnecting.' }
     }
 
     const transaction = beginEditorLeaseReservation(
       application,
       initialNote.uuid,
       beforeReservation.capability,
+      beforeReservation.roomEpoch,
       EDITOR_LEASE_TIMEOUT_MS,
       requestId,
     )
     const reservation = await transaction.promise
     if ('reason' in reservation) {
       return reservation
+    }
+    if (reservation.roomEpoch !== beforeReservation.roomEpoch) {
+      transaction.cancel()
+      return { reason: 'The collaboration room epoch changed while the editor lease was reserved.' }
     }
 
     const liveAfterReservation = application.items.findItem<SNNote>(initialNote.uuid)
@@ -450,6 +476,7 @@ async function establishEditorAccess(
     const activationAccess = await prepareSynchronizedEditorAccess(application, liveAfterReservation, {
       leaseRequestId: requestId,
       bootstrapChallenge: reservation.bootstrapChallenge,
+      expectedRoomEpoch: reservation.roomEpoch,
     })
     if (
       !activationAccess.available ||
@@ -467,6 +494,10 @@ async function establishEditorAccess(
     if ('reason' in lease) {
       return lease
     }
+    if (lease.roomEpoch !== activationAccess.roomEpoch) {
+      lease.release()
+      return { reason: 'The collaboration room epoch changed while the editor lease was activated.' }
+    }
 
     // The gateway activation is acknowledged before Lexical mounts. Re-run the
     // exact revision barrier while the active lease is silent; if a durable R+1
@@ -479,6 +510,7 @@ async function establishEditorAccess(
     const postAckAccess = await prepareSynchronizedEditorAccess(application, liveAfterAck, {
       leaseRequestId: requestId,
       bootstrapChallenge: reservation.bootstrapChallenge,
+      expectedRoomEpoch: reservation.roomEpoch,
     })
     if (
       !postAckAccess.available ||
@@ -721,6 +753,7 @@ export function useCollaborationRoomAccess(
               userUuid: result.access.userUuid,
               sessionUser: result.access.sessionUser,
               serverUpdatedAtTimestamp: result.access.serverUpdatedAtTimestamp,
+              roomEpoch: result.access.roomEpoch,
               initialEditorState: result.access.initialEditorState,
             })
           ) {
@@ -739,6 +772,7 @@ export function useCollaborationRoomAccess(
             userUuid: result.access.userUuid,
             sessionUser: result.access.sessionUser,
             serverUpdatedAtTimestamp: result.access.serverUpdatedAtTimestamp,
+            roomEpoch: result.access.roomEpoch,
             initialEditorState: result.access.initialEditorState,
             invalidate: () => {
               if (cancelled || invalidated) {
@@ -793,6 +827,9 @@ export function useCollaborationRoomAccess(
               }
               const reactivated = await establishEditorAccess(application, current, snapshot)
               if ('reason' in reactivated) {
+                if (reactivated.requiresRemount) {
+                  snapshot.invalidate()
+                }
                 return reactivated
               }
               if (cancelled) {

@@ -21,6 +21,57 @@ const hasSubtle = Boolean(globalThis.crypto?.subtle)
 const maybe = hasSubtle ? describe : describe.skip
 
 maybe('collaboration room-key derivation', () => {
+  it.each([
+    ['a missing epoch', { capability: 'capability', serverUpdatedAtTimestamp: 100, collaborationProtocolVersion: 3 }],
+    [
+      'a malformed epoch',
+      {
+        capability: 'capability',
+        roomEpoch: 'not a safe epoch',
+        serverUpdatedAtTimestamp: 100,
+        collaborationProtocolVersion: 3,
+      },
+    ],
+    [
+      'a legacy protocol epoch',
+      {
+        capability: 'capability',
+        roomEpoch: 'room_epoch_0000000000000001',
+        serverUpdatedAtTimestamp: 100,
+        collaborationProtocolVersion: 2,
+      },
+    ],
+  ])('fails closed when authorization returns %s', async (_case, authorization) => {
+    const sessionUser = { uuid: 'user-a', email: 'alice@example.com' }
+    const application = {
+      sessions: { isSignedIn: () => true, getUser: () => sessionUser },
+      vaults: { getItemVault: () => undefined },
+      vaultLocks: { getUnlockedVaultRootKey: () => undefined },
+      encryption: {
+        getRootKey: () => ({
+          masterKey: 'account-root',
+          keyVersion: '004',
+          keyParams: { getPortableValue: () => ({ identifier: 'alice', pw_nonce: 'parameters' }) },
+        }),
+      },
+      sockets: { authorizeCollaborationRoom: async () => authorization },
+      isAuthorizedToRenderItem: () => true,
+    } as never
+    const note = {
+      uuid: 'personal-note',
+      user_uuid: 'user-a',
+      locked: false,
+      key_system_identifier: undefined,
+      shared_vault_uuid: undefined,
+    } as never
+
+    await expect(prepareCollaborationAccess(application, note)).resolves.toEqual({
+      available: false,
+      reason: 'The collaboration gateway did not provide a valid encrypted room epoch.',
+      sourceId: expect.any(String),
+    })
+  })
+
   it('derives the same non-extractable AES-256-GCM key for two vault members', async () => {
     const input = {
       rootKeySecret: 'client-only-shared-vault-root-secret',
@@ -61,8 +112,18 @@ maybe('collaboration room-key derivation', () => {
     const firstSession = { uuid: 'user-a', email: 'alice@example.com' }
     const secondSession = { uuid: 'user-a', email: 'alice@example.com' }
     let activeSession = firstSession
-    let resolveAuthorization!: (value: { capability: string; serverUpdatedAtTimestamp: number }) => void
-    const authorization = new Promise<{ capability: string; serverUpdatedAtTimestamp: number }>((resolve) => {
+    let resolveAuthorization!: (value: {
+      capability: string
+      roomEpoch: string
+      serverUpdatedAtTimestamp: number
+      collaborationProtocolVersion: 3
+    }) => void
+    const authorization = new Promise<{
+      capability: string
+      roomEpoch: string
+      serverUpdatedAtTimestamp: number
+      collaborationProtocolVersion: 3
+    }>((resolve) => {
       resolveAuthorization = resolve
     })
     const application = {
@@ -92,7 +153,12 @@ maybe('collaboration room-key derivation', () => {
 
     const preparation = prepareCollaborationAccess(application, note)
     activeSession = secondSession
-    resolveAuthorization({ capability: 'old-session-capability', serverUpdatedAtTimestamp: 100 })
+    resolveAuthorization({
+      capability: 'old-session-capability',
+      roomEpoch: 'room_epoch_0000000000000001',
+      serverUpdatedAtTimestamp: 100,
+      collaborationProtocolVersion: 3,
+    })
 
     await expect(preparation).resolves.toMatchObject({
       available: false,

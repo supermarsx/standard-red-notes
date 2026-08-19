@@ -438,6 +438,7 @@ export const SuperEditor: FunctionComponent<Props> = ({
       ? {
           room: authorizedEditorNote.uuid,
           roomKey: collaborationAccess.roomKey,
+          roomEpoch: collaborationAccess.roomEpoch,
           username: collaborationAccess.username,
           userUuid: collaborationAccess.userUuid,
           cursorColor: collaboratorColor(collaborationAccess.userUuid),

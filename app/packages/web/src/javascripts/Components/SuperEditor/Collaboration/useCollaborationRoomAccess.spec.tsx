@@ -26,8 +26,9 @@ jest.mock('./GatewayCollabChannel', () => ({
 const mockedResolve = jest.mocked(resolveCollaborationKeySource)
 const mockedPrepare = jest.mocked(prepareCollaborationAccess)
 const mockedCreateChannel = jest.mocked(createGatewayCollabChannel)
-const protocolVersion = 2 as const
+const protocolVersion = 3 as const
 const maxTransferBytes = 4 * 1024 * 1024
+const roomEpoch = 'room_epoch_0000000000000001'
 const sessionUser = { uuid: 'user-1', email: 'alice@example.test' }
 
 const createAutoLeaseChannel = (sent: CollabFrame[], bootstrap = true) => {
@@ -47,6 +48,7 @@ const createAutoLeaseChannel = (sent: CollabFrame[], bootstrap = true) => {
             ...(bootstrap ? { bootstrapChallenge: `challenge:${frame.requestId}` } : {}),
             protocolVersion,
             maxTransferBytes,
+            roomEpoch: frame.expectedRoomEpoch,
           })
         } else if (frame.t === 'room-join') {
           inbound?.({
@@ -56,6 +58,7 @@ const createAutoLeaseChannel = (sent: CollabFrame[], bootstrap = true) => {
             bootstrap,
             protocolVersion,
             maxTransferBytes,
+            roomEpoch: frame.expectedRoomEpoch,
           })
         }
       },
@@ -112,6 +115,7 @@ describe('useCollaborationRoomAccess security transitions', () => {
       sourceId: 'root-same-uuid:version-1',
       roomKey: {} as CryptoKey,
       capability: 'capability-1',
+      roomEpoch,
       serverUpdatedAtTimestamp: 100,
       userUuid: 'user-1',
       sessionUser,
@@ -144,6 +148,75 @@ describe('useCollaborationRoomAccess security transitions', () => {
     expect(sent.filter((frame) => frame.t === 'room-reserve')).toHaveLength(1)
     expect(sent.filter((frame) => frame.t === 'room-join')).toHaveLength(1)
     expect(sent.filter((frame) => frame.t === 'room-leave')).toHaveLength(0)
+  })
+
+  it('remounts before reserving or joining when reconnect authorization rotates the room epoch', async () => {
+    const sent: CollabFrame[] = []
+    let authorizedEpoch = roomEpoch
+    mockedCreateChannel.mockImplementation(() => createAutoLeaseChannel(sent).channel)
+    mockedPrepare.mockImplementation(async (_application, note) => ({
+      available: true,
+      noteUuid: note.uuid,
+      sourceId: 'root-same-uuid:version-1',
+      roomKey: {} as CryptoKey,
+      capability: `capability:${authorizedEpoch}`,
+      roomEpoch: authorizedEpoch,
+      serverUpdatedAtTimestamp: 100,
+      userUuid: 'user-1',
+      sessionUser,
+      username: 'Alice',
+    }))
+    const note = { uuid: 'note-1', text: 'canonical', dirty: false, serverUpdatedAtTimestamp: 100 } as never
+    const application = {
+      items: { streamItems: () => jest.fn(), findItem: () => note },
+      sync: { sync: jest.fn().mockResolvedValue(undefined) },
+      vaultLocks: { addEventObserver: () => jest.fn() },
+      sockets: { addEventObserver: () => jest.fn(), isWebSocketConnectionOpen: () => true },
+      addEventObserver: () => jest.fn(),
+    } as never
+    const View = () => {
+      latestAccess = useCollaborationRoomAccess(application, note, true)
+      return createElement('div', null, latestAccess.status)
+    }
+
+    await act(async () => {
+      root.render(createElement(View))
+      await flushMicrotasks(30)
+    })
+    const lease = latestAccess?.status === 'ready' ? latestAccess.editorLease : undefined
+    expect(lease).toBeDefined()
+    expect(sent.filter((frame) => frame.t === 'room-reserve')).toHaveLength(1)
+    expect(sent.filter((frame) => frame.t === 'room-join')).toHaveLength(1)
+
+    authorizedEpoch = 'room_epoch_0000000000000002'
+    let result: unknown
+    let reservesAtOldLeaseReturn = 0
+    let joinsAtOldLeaseReturn = 0
+    await act(async () => {
+      result = await lease!.reactivate()
+      reservesAtOldLeaseReturn = sent.filter((frame) => frame.t === 'room-reserve').length
+      joinsAtOldLeaseReturn = sent.filter((frame) => frame.t === 'room-join').length
+      await flushMicrotasks()
+    })
+
+    expect(result).toEqual({
+      reason: 'The collaboration room epoch changed while collaboration was reconnecting.',
+      requiresRemount: true,
+    })
+    expect(reservesAtOldLeaseReturn).toBe(1)
+    expect(joinsAtOldLeaseReturn).toBe(1)
+    const remountedReserves = sent.filter(
+      (frame): frame is Extract<CollabFrame, { t: 'room-reserve' }> => frame.t === 'room-reserve',
+    )
+    const remountedJoins = sent.filter(
+      (frame): frame is Extract<CollabFrame, { t: 'room-join' }> => frame.t === 'room-join',
+    )
+    expect(remountedReserves.at(-1)).toMatchObject({
+      expectedRoomEpoch: authorizedEpoch,
+      cap: `capability:${authorizedEpoch}`,
+    })
+    expect(remountedJoins.at(-1)).toMatchObject({ expectedRoomEpoch: authorizedEpoch })
+    expect(latestAccess).toMatchObject({ status: 'ready', roomEpoch: authorizedEpoch })
   })
 
   it('keeps committed preparation and observer readiness isolated from an abandoned note render', async () => {
@@ -180,6 +253,7 @@ describe('useCollaborationRoomAccess security transitions', () => {
               sourceId: `source:${committed.uuid}`,
               roomKey: {} as CryptoKey,
               capability: 'committed-capability',
+              roomEpoch,
               serverUpdatedAtTimestamp: 100,
               userUuid: 'user-1',
               sessionUser,
@@ -351,6 +425,7 @@ describe('useCollaborationRoomAccess security transitions', () => {
       sourceId: 'root-same-uuid:version-2',
       roomKey: {} as CryptoKey,
       capability: 'capability-2',
+      roomEpoch,
       serverUpdatedAtTimestamp: 100,
       userUuid: 'user-1',
       sessionUser,
@@ -466,6 +541,7 @@ describe('useCollaborationRoomAccess security transitions', () => {
         bootstrapChallenge: 'spoofed-challenge',
         protocolVersion,
         maxTransferBytes,
+        roomEpoch,
       })
       await Promise.resolve()
     })
@@ -480,6 +556,7 @@ describe('useCollaborationRoomAccess security transitions', () => {
         bootstrapChallenge: 'bootstrap-challenge',
         protocolVersion,
         maxTransferBytes,
+        roomEpoch,
       })
       await flushMicrotasks()
     })
@@ -493,6 +570,7 @@ describe('useCollaborationRoomAccess security transitions', () => {
         bootstrap: true,
         protocolVersion,
         maxTransferBytes,
+        roomEpoch,
       })
       await flushMicrotasks()
     })
@@ -511,6 +589,54 @@ describe('useCollaborationRoomAccess security transitions', () => {
     expect(editorLease?.isAttached()).toBe(true)
     editorLease?.setProviderCanonicalOwnership?.(false)
     expect(editorLease?.isAttached()).toBe(false)
+  })
+
+  it('rejects activation when the gateway changes the negotiated room epoch', async () => {
+    const sent: CollabFrame[] = []
+    let inbound: ((frame: CollabFrame) => void) | undefined
+    mockedCreateChannel.mockReturnValue({
+      isConnected: () => true,
+      authorize: jest.fn(),
+      send: (frame) => sent.push(frame),
+      subscribe: (handler) => {
+        inbound = handler
+        return jest.fn()
+      },
+    })
+    const transaction = beginEditorLeaseReservation(
+      {} as never,
+      'epoch-note',
+      'reservation-capability',
+      roomEpoch,
+      10_000,
+      'epoch-request',
+    )
+    inbound?.({
+      t: 'room-reserved',
+      room: 'epoch-note',
+      requestId: 'epoch-request',
+      bootstrap: false,
+      protocolVersion,
+      maxTransferBytes,
+      roomEpoch,
+    })
+    await expect(transaction.promise).resolves.toMatchObject({ roomEpoch })
+
+    const activation = transaction.activate('activation-capability')
+    inbound?.({
+      t: 'room-joined',
+      room: 'epoch-note',
+      requestId: 'epoch-request',
+      bootstrap: false,
+      protocolVersion,
+      maxTransferBytes,
+      roomEpoch: 'room_epoch_0000000000000002',
+    })
+
+    await expect(activation).resolves.toEqual({
+      reason: 'The collaboration gateway activation did not match its reservation.',
+    })
+    expect(sent).toContainEqual({ t: 'room-leave', room: 'epoch-note', requestId: 'epoch-request' })
   })
 
   it('syncs a stale first device before bootstrap so newer persisted text is the only seed', async () => {
@@ -539,6 +665,7 @@ describe('useCollaborationRoomAccess security transitions', () => {
       sourceId: 'stable-key-source',
       roomKey: {} as CryptoKey,
       capability: 'canonical-capability',
+      roomEpoch,
       serverUpdatedAtTimestamp: 200,
       userUuid: 'user-1',
       sessionUser,
@@ -617,6 +744,7 @@ describe('useCollaborationRoomAccess security transitions', () => {
       sourceId: 'same-root-and-note',
       roomKey: {} as CryptoKey,
       capability: 'first-session-capability',
+      roomEpoch,
       serverUpdatedAtTimestamp: 100,
       userUuid: 'user-1',
       sessionUser: firstSession,
@@ -666,6 +794,7 @@ describe('useCollaborationRoomAccess security transitions', () => {
         sourceId: 'stable-post-ack-source',
         roomKey: {} as CryptoKey,
         capability: `capability-${call}`,
+        roomEpoch,
         serverUpdatedAtTimestamp: revision,
         userUuid: 'user-1',
         sessionUser,
@@ -728,6 +857,7 @@ describe('useCollaborationRoomAccess security transitions', () => {
         sourceId: 'stable-key-source',
         roomKey: {} as CryptoKey,
         capability: 'capability-at-200',
+        roomEpoch,
         serverUpdatedAtTimestamp: 200,
         userUuid: 'user-1',
         sessionUser,
@@ -739,6 +869,7 @@ describe('useCollaborationRoomAccess security transitions', () => {
         sourceId: 'stable-key-source',
         roomKey: {} as CryptoKey,
         capability: 'capability-at-201',
+        roomEpoch,
         serverUpdatedAtTimestamp: 201,
         userUuid: 'user-1',
         sessionUser,
@@ -809,6 +940,7 @@ describe('useCollaborationRoomAccess security transitions', () => {
       sourceId: 'root-same-uuid:version-1',
       roomKey: {} as CryptoKey,
       capability: 'capability-at-200',
+      roomEpoch,
       serverUpdatedAtTimestamp: 200,
       userUuid: 'user-1',
       sessionUser,
@@ -878,6 +1010,7 @@ describe('useCollaborationRoomAccess security transitions', () => {
             bootstrapChallenge: 'challenge-1',
             protocolVersion,
             maxTransferBytes,
+            roomEpoch,
           })
         } else if (frame.t === 'room-join') {
           inbound?.({
@@ -887,6 +1020,7 @@ describe('useCollaborationRoomAccess security transitions', () => {
             bootstrap: true,
             protocolVersion,
             maxTransferBytes,
+            roomEpoch,
           })
         }
       },
@@ -899,25 +1033,28 @@ describe('useCollaborationRoomAccess security transitions', () => {
           bootstrap: false,
           protocolVersion,
           maxTransferBytes,
+          roomEpoch,
         })
         return unsubscribe
       },
     })
 
     try {
-      const reservation = beginEditorLeaseReservation({} as never, 'note-1', 'capability-1')
+      const reservation = beginEditorLeaseReservation({} as never, 'note-1', 'capability-1', roomEpoch)
       await expect(reservation.promise).resolves.toEqual({
         requestId,
         shouldBootstrap: true,
         bootstrapChallenge: 'challenge-1',
         protocolVersion,
         maxTransferBytes,
+        roomEpoch,
       })
       await expect(reservation.activate('activation-capability')).resolves.toMatchObject({
         requestId,
         shouldBootstrap: true,
         protocolVersion,
         maxTransferBytes,
+        roomEpoch,
       })
       expect(unsubscribe).toHaveBeenCalledTimes(1)
     } finally {
@@ -937,7 +1074,7 @@ describe('useCollaborationRoomAccess security transitions', () => {
       subscribe: () => unsubscribe,
     })
 
-    const reservation = beginEditorLeaseReservation({} as never, 'note-1', 'capability-1')
+    const reservation = beginEditorLeaseReservation({} as never, 'note-1', 'capability-1', roomEpoch)
     await expect(reservation.promise).resolves.toEqual({
       reason: 'The encrypted collaboration room could not reserve an editor lease.',
     })
@@ -960,7 +1097,7 @@ describe('useCollaborationRoomAccess security transitions', () => {
       },
     })
 
-    const reservation = beginEditorLeaseReservation({} as never, 'note-1', 'capability-1', 1)
+    const reservation = beginEditorLeaseReservation({} as never, 'note-1', 'capability-1', roomEpoch, 1)
     const reserve = sent.find(
       (frame): frame is Extract<CollabFrame, { t: 'room-reserve' }> => frame.t === 'room-reserve',
     )
@@ -1028,6 +1165,7 @@ describe('useCollaborationRoomAccess security transitions', () => {
         sourceId: `same-vault:root-version:${note.uuid}`,
         roomKey: {} as CryptoKey,
         capability: `capability:${note.uuid}`,
+        roomEpoch,
         serverUpdatedAtTimestamp: 100,
         userUuid: 'user-1',
         sessionUser,
@@ -1114,6 +1252,7 @@ describe('useCollaborationRoomAccess security transitions', () => {
       sourceId: 'same-vault:note-1:root-version',
       roomKey: {} as CryptoKey,
       capability: 'capability:note-1',
+      roomEpoch,
       serverUpdatedAtTimestamp: 100,
       userUuid: 'user-1',
       sessionUser,
@@ -1171,6 +1310,7 @@ describe('useCollaborationRoomAccess security transitions', () => {
       sourceId: 'root-same-uuid:version-1',
       roomKey: {} as CryptoKey,
       capability: `capability-${liveNote.serverUpdatedAtTimestamp}`,
+      roomEpoch,
       serverUpdatedAtTimestamp: liveNote.serverUpdatedAtTimestamp,
       userUuid: 'user-1',
       sessionUser,
@@ -1226,6 +1366,7 @@ describe('useCollaborationRoomAccess security transitions', () => {
       sourceId: 'root-same-uuid:version-1',
       roomKey: {} as CryptoKey,
       capability: `capability-${liveNote.serverUpdatedAtTimestamp}`,
+      roomEpoch,
       serverUpdatedAtTimestamp: liveNote.serverUpdatedAtTimestamp,
       userUuid: 'user-1',
       sessionUser,
@@ -1278,6 +1419,7 @@ describe('useCollaborationRoomAccess security transitions', () => {
       sourceId: 'root-same-uuid:version-1',
       roomKey: {} as CryptoKey,
       capability: `capability-${liveNote.serverUpdatedAtTimestamp}`,
+      roomEpoch,
       serverUpdatedAtTimestamp: liveNote.serverUpdatedAtTimestamp,
       userUuid: 'user-1',
       sessionUser,
@@ -1335,6 +1477,7 @@ describe('useCollaborationRoomAccess security transitions', () => {
         sourceId: activeSourceId,
         roomKey: {} as CryptoKey,
         capability: `capability:${activeSourceId}`,
+        roomEpoch,
         serverUpdatedAtTimestamp: 100,
         userUuid: 'user-1',
         sessionUser,
@@ -1404,7 +1547,7 @@ describe('useCollaborationRoomAccess security transitions', () => {
       send: (frame) => sent.push(frame),
       subscribe: () => jest.fn(),
     })
-    const reservation = beginEditorLeaseReservation({} as never, 'note-1', 'capability-1')
+    const reservation = beginEditorLeaseReservation({} as never, 'note-1', 'capability-1', roomEpoch)
     const reserve = sent.find(
       (frame): frame is Extract<CollabFrame, { t: 'room-reserve' }> => frame.t === 'room-reserve',
     )
@@ -1430,7 +1573,7 @@ describe('useCollaborationRoomAccess security transitions', () => {
       send: (frame) => sent.push(frame),
       subscribe: () => jest.fn(),
     })
-    const reservation = beginEditorLeaseReservation({} as never, 'note-1', 'capability-1', 1)
+    const reservation = beginEditorLeaseReservation({} as never, 'note-1', 'capability-1', roomEpoch, 1)
     const result = await reservation.promise
     const reserve = sent.find(
       (frame): frame is Extract<CollabFrame, { t: 'room-reserve' }> => frame.t === 'room-reserve',

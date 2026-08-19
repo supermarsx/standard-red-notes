@@ -51,4 +51,38 @@ describe('createGatewayCollabChannel shared room leases', () => {
     await expect(createGatewayCollabChannel(application).authorize('note-1')).resolves.toBe('capability-1')
     expect(authorizeCollaborationRoom).toHaveBeenCalledWith('note-1')
   })
+
+  it('binds protocol-v3 reauthorization to the immutable cipher room epoch', async () => {
+    const roomEpoch = 'room_epoch_0000000000000001'
+    const authorizeCollaborationRoom = jest
+      .fn()
+      .mockResolvedValueOnce({
+        capability: 'epoch-capability',
+        roomEpoch,
+        collaborationProtocolVersion: 3,
+      })
+      .mockResolvedValueOnce({
+        capability: 'rotated-capability',
+        roomEpoch: 'room_epoch_0000000000000002',
+        collaborationProtocolVersion: 3,
+      })
+    const application = {
+      sockets: {
+        isWebSocketConnectionOpen: () => true,
+        sendCollaborationFrame: jest.fn(),
+        onCollaborationFrame: jest.fn(() => jest.fn()),
+        authorizeCollaborationRoom,
+      },
+    } as never
+    const channel = createGatewayCollabChannel(application)
+
+    await expect(channel.authorizeEpochBound?.('note-1', roomEpoch, 'lease-1')).resolves.toEqual({
+      capability: 'epoch-capability',
+      roomEpoch,
+      collaborationProtocolVersion: 3,
+    })
+    expect(authorizeCollaborationRoom).toHaveBeenLastCalledWith('note-1', 'lease-1', undefined, roomEpoch)
+
+    await expect(channel.authorizeEpochBound?.('note-1', roomEpoch, 'lease-1')).resolves.toBeUndefined()
+  })
 })

@@ -10,12 +10,14 @@ import * as decoding from 'lib0/decoding'
 import type { Provider } from '@lexical/yjs'
 import {
   COLLABORATION_MAX_TRANSFER_BYTES,
+  COLLABORATION_PRESENCE_HEARTBEAT_INTERVAL_MS,
   COLLABORATION_PROTOCOL_VERSION,
   createCollaborationRequestId,
   type CollabChannel,
   type CollabFrame,
 } from './CollabChannel'
-import type { RoomCipher } from './RoomCrypto'
+import { EphemeralRoomPresence, type CollaborationPresenceActivity } from './EphemeralRoomPresence'
+import { isCollaborationCipherError, type RoomCipher } from './RoomCrypto'
 import type { ActiveEditorCollaborationLease } from './useCollaborationRoomAccess'
 
 type Listener = (...args: never[]) => void
@@ -47,7 +49,7 @@ const STATE_READY_AWARENESS_FIELD = 'srnStateReady'
 export const MAX_OUTBOUND_YJS_PENDING_OPERATIONS = 512
 export const MAX_OUTBOUND_YJS_PENDING_INPUT_BYTES = MAX_YJS_TRANSFER_BYTES
 export const MAX_AWARENESS_PLAINTEXT_BYTES = 64 * 1024
-const MAX_AWARENESS_ENCODED_BYTES = Math.ceil((MAX_AWARENESS_PLAINTEXT_BYTES + 64) / 3) * 4
+const MAX_AWARENESS_ENCODED_BYTES = Math.ceil((MAX_AWARENESS_PLAINTEXT_BYTES + 64) / 3) * 4 + 512
 export const MAX_AWARENESS_CLIENTS_PER_UPDATE = 32
 export const MAX_REMOTE_AWARENESS_CLIENTS = 64
 /** Bound exact state checks before cumulative CRDT history can grow unchecked. */
@@ -119,13 +121,17 @@ export type EncryptedYjsProviderOptions = {
   /** Synchronous final canonical-revision guard before any relay subscription or send. */
   validateAttachment(): boolean
   /** Full freshness-barrier + reserve/activate flow used on socket reconnect. */
-  reactivate(): Promise<ActiveEditorCollaborationLease | { reason: string }>
+  reactivate(): Promise<ActiveEditorCollaborationLease | { reason: string; requiresRemount?: true }>
+  /** Epoch used to construct the immutable cipher; defaults to the initial lease epoch. */
+  expectedRoomEpoch?: string
   /** Fatal transport limits fall back to the ordinary encrypted editor path. */
   onFatal(reason: string): void
   /** Release/remount after bounded peer-state recovery so bootstrap can be re-elected. */
   onBootstrapRetry?(): void
   /** Distinct from retained offline readiness: true only while transport owns canonical state. */
   setCanonicalOwnership?(active: boolean): void
+  /** Transient, deduped activity sourced from encrypted awareness labels. */
+  onPresenceActivity?(activity: CollaborationPresenceActivity): void
 }
 
 /**
@@ -216,6 +222,9 @@ export class EncryptedYjsProvider implements Provider {
   private unverifiedDocumentUpdates = 0
   private initialDocumentWithinBudget = true
   private terminallyDestroyed = false
+  private readonly expectedRoomEpoch?: string
+  private readonly ephemeralPresence?: EphemeralRoomPresence
+  private presenceHeartbeatInterval: ReturnType<typeof setInterval> | undefined
 
   constructor(
     public readonly doc: Y.Doc,
@@ -228,11 +237,22 @@ export class EncryptedYjsProvider implements Provider {
   ) {
     this.joinRequestId = leaseRequestId ?? createCollaborationRequestId()
     this.currentLease = options?.activeLease
+    this.expectedRoomEpoch = options?.expectedRoomEpoch ?? options?.activeLease.roomEpoch
     this.yAwareness = new Awareness(doc)
     // y-protocols Awareness is structurally compatible with lexical's
     // ProviderAwareness at runtime; the field type differs only in the UserState
     // shape it carries.
     this.awareness = this.yAwareness as unknown as Provider['awareness']
+    if (this.options && this.expectedRoomEpoch) {
+      this.ephemeralPresence = new EphemeralRoomPresence({
+        room: this.room,
+        roomEpoch: this.expectedRoomEpoch,
+        localClientId: this.doc.clientID,
+        resolveEncryptedAwarenessIdentity: (clientId) => this.resolveEncryptedAwarenessIdentity(clientId),
+        onActivity: (activity) => this.options?.onPresenceActivity?.(activity),
+        onTerminalClient: (clientId, reason) => this.removeRemoteAwarenessClient(clientId, `room-presence-${reason}`),
+      })
+    }
     // Lexical may reuse a retained Y.Doc across a transport reconnect. Seed the
     // accounting baseline from that exact state; treating it as an empty doc
     // would let the next small remote update bypass the transfer budget.
@@ -310,6 +330,8 @@ export class EncryptedYjsProvider implements Provider {
     }
     const wasJoined = this.joined
     this.joined = false
+    this.stopPresenceHeartbeat()
+    this.ephemeralPresence?.clear()
     this.setStateServingReady(false)
     this.awaitingBootstrapSeed = false
     this.stateEstablishingGeneration = undefined
@@ -322,6 +344,7 @@ export class EncryptedYjsProvider implements Provider {
     this.clearInboundTransfers()
     this.clearInboundCryptoQueue()
     this.clearLocalOutboundQueue()
+    this.clearRemoteAwareness('invalid-live-attachment')
     this.currentLease?.release()
     this.currentLease = undefined
     if (wasJoined) {
@@ -432,8 +455,15 @@ export class EncryptedYjsProvider implements Provider {
       lease.release()
       return
     }
-    if (lease.protocolVersion !== COLLABORATION_PROTOCOL_VERSION || lease.maxTransferBytes !== MAX_YJS_TRANSFER_BYTES) {
+    if (
+      lease.protocolVersion !== COLLABORATION_PROTOCOL_VERSION ||
+      lease.maxTransferBytes !== MAX_YJS_TRANSFER_BYTES ||
+      lease.roomEpoch !== this.expectedRoomEpoch
+    ) {
       lease.release()
+      if (this.currentLease === lease) {
+        this.currentLease = undefined
+      }
       this.fatal('Live collaboration stopped because the gateway protocol is incompatible.')
       return
     }
@@ -446,6 +476,7 @@ export class EncryptedYjsProvider implements Provider {
     }
     this.joinRequestId = lease.requestId
     this.joined = true
+    this.startPresenceHeartbeat()
     this.joinRetryAttempts = 0
     this.clearJoinRetry()
     this.clearStateRequest()
@@ -539,7 +570,9 @@ export class EncryptedYjsProvider implements Provider {
     try {
       const lease = await this.options.reactivate()
       if ('reason' in lease) {
-        if (this.connected && this.channel.isConnected()) {
+        if (lease.requiresRemount) {
+          this.options.onBootstrapRetry?.()
+        } else if (this.connected && this.channel.isConnected()) {
           this.scheduleJoinRetry()
         }
         return
@@ -564,6 +597,51 @@ export class EncryptedYjsProvider implements Provider {
     }
   }
 
+  private startPresenceHeartbeat(): void {
+    this.stopPresenceHeartbeat()
+    this.sendPresenceHeartbeat()
+    if (!this.connected || !this.joined || !this.currentLease || !this.expectedRoomEpoch) {
+      return
+    }
+    this.presenceHeartbeatInterval = setInterval(
+      () => this.sendPresenceHeartbeat(),
+      COLLABORATION_PRESENCE_HEARTBEAT_INTERVAL_MS,
+    )
+  }
+
+  private stopPresenceHeartbeat(): void {
+    if (this.presenceHeartbeatInterval !== undefined) {
+      clearInterval(this.presenceHeartbeatInterval)
+      this.presenceHeartbeatInterval = undefined
+    }
+  }
+
+  private sendPresenceHeartbeat(): void {
+    const lease = this.currentLease
+    if (
+      !lease ||
+      !this.expectedRoomEpoch ||
+      !this.connected ||
+      !this.joined ||
+      !this.channel.isConnected() ||
+      !this.validateLiveAttachment()
+    ) {
+      return
+    }
+    try {
+      this.channel.send({
+        t: 'room-presence-heartbeat',
+        room: this.room,
+        requestId: lease.requestId,
+        expectedRoomEpoch: this.expectedRoomEpoch,
+        protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+        clientId: this.doc.clientID,
+      })
+    } catch {
+      // Ephemeral presence is best-effort and never gates document durability.
+    }
+  }
+
   disconnect(): void {
     if (!this.connected) {
       return
@@ -572,6 +650,8 @@ export class EncryptedYjsProvider implements Provider {
     this.reactivatingGeneration = undefined
     this.connected = false
     this.joined = false
+    this.stopPresenceHeartbeat()
+    this.ephemeralPresence?.clear()
     this.setCanonicalOwnership(false)
     this.awaitingBootstrapSeed = false
     this.stateEstablishingGeneration = undefined
@@ -586,6 +666,7 @@ export class EncryptedYjsProvider implements Provider {
     this.clearInboundTransfers()
     this.clearInboundCryptoQueue()
     this.clearLocalOutboundQueue()
+    this.clearRemoteAwareness('provider-disconnect')
     removeAwarenessStates(this.yAwareness, [this.doc.clientID], 'disconnect')
     this.doc.off('update', this.onLocalDocUpdate)
     this.yAwareness.off('update', this.onLocalAwarenessUpdate)
@@ -622,6 +703,8 @@ export class EncryptedYjsProvider implements Provider {
     this.clearInboundTransfers()
     this.clearInboundCryptoQueue()
     this.clearLocalOutboundQueue()
+    this.stopPresenceHeartbeat()
+    this.ephemeralPresence?.clear()
     this.yAwareness.destroy()
     this.retainedLocalAwarenessState = undefined
     this.setStateServingReady(false)
@@ -755,6 +838,8 @@ export class EncryptedYjsProvider implements Provider {
     this.clearInboundTransfers()
     this.clearInboundCryptoQueue()
     this.clearLocalOutboundQueue()
+    this.stopPresenceHeartbeat()
+    this.ephemeralPresence?.clear()
     if (this.joined) {
       this.joined = false
       this.emit('sync', false as never)
@@ -1416,6 +1501,33 @@ export class EncryptedYjsProvider implements Provider {
     }
   }
 
+  private removeRemoteAwarenessClient(clientId: number, origin: string): void {
+    if (clientId === this.doc.clientID) {
+      return
+    }
+    if (this.yAwareness.getStates().has(clientId) || this.yAwareness.meta.has(clientId)) {
+      removeAwarenessStates(this.yAwareness, [clientId], origin)
+      this.yAwareness.meta.delete(clientId)
+    }
+  }
+
+  private resolveEncryptedAwarenessIdentity(clientId: number): { userUuid?: string; label?: string } | undefined {
+    const state = this.yAwareness.getStates().get(clientId)
+    if (typeof state !== 'object' || state === null) {
+      return undefined
+    }
+    const candidate = state as Record<string, unknown>
+    const awarenessData = candidate.awarenessData
+    return {
+      ...(typeof candidate.name === 'string' ? { label: candidate.name } : {}),
+      ...(typeof awarenessData === 'object' &&
+      awarenessData !== null &&
+      typeof (awarenessData as Record<string, unknown>).userUuid === 'string'
+        ? { userUuid: (awarenessData as Record<string, unknown>).userUuid as string }
+        : {}),
+    }
+  }
+
   private readonly onFrame = (frame: CollabFrame): void => {
     if (frame.room !== this.room) {
       return
@@ -1458,6 +1570,9 @@ export class EncryptedYjsProvider implements Provider {
           this.clearInboundTransfers()
           this.clearInboundCryptoQueue()
           this.clearLocalOutboundQueue()
+          this.stopPresenceHeartbeat()
+          this.ephemeralPresence?.clear()
+          this.clearRemoteAwareness('room-denied')
           this.emit('sync', false as never)
           if (shouldReauthorize && this.connected) {
             if (this.options) {
@@ -1469,6 +1584,11 @@ export class EncryptedYjsProvider implements Provider {
               void this.joinWithCapability()
             }
           }
+        }
+        break
+      case 'room-presence':
+        if (this.joined) {
+          this.ephemeralPresence?.accept(frame)
         }
         break
       case 'room-sync':
@@ -1587,6 +1707,7 @@ export class EncryptedYjsProvider implements Provider {
               this.validateLiveAttachment()
             ) {
               applyAwarenessUpdate(this.yAwareness, validated.update, 'remote')
+              this.ephemeralPresence?.reconcileEncryptedAwareness()
               if (this.remoteAwarenessClientIds().size > MAX_REMOTE_AWARENESS_CLIENTS) {
                 this.clearRemoteAwareness('remote-awareness-capacity')
                 this.fatal('Live collaboration stopped because remote presence exceeded safe capacity.')
@@ -1671,9 +1792,9 @@ export class EncryptedYjsProvider implements Provider {
       }
       const work = job
         .run()
-        .catch(() => {
-          if (job.kind === 'yjs') {
-            this.reportSyncFailure('encrypted-yjs-frame-failed')
+        .catch((error: unknown) => {
+          const shouldRetry = this.handleCipherFailure(error, 'encrypted-yjs-frame-failed')
+          if (job.kind === 'yjs' && shouldRetry) {
             this.requestFullStateRetry(createCollaborationRequestId())
           }
         })
@@ -1763,9 +1884,9 @@ export class EncryptedYjsProvider implements Provider {
     let chunk: Uint8Array
     try {
       chunk = await this.cipher.decrypt(frame.payload, encodeChunkAdditionalData(frame))
-    } catch {
-      this.reportSyncFailure('encrypted-yjs-chunk-decryption-failed')
-      this.rejectTransfer(frame.transferId, true)
+    } catch (error) {
+      const shouldRetry = this.handleCipherFailure(error, 'encrypted-yjs-chunk-decryption-failed')
+      this.rejectTransfer(frame.transferId, shouldRetry)
       return
     } finally {
       // Do not reset this in clearInboundTransfers(): disconnect/reject can
@@ -1830,6 +1951,34 @@ export class EncryptedYjsProvider implements Provider {
       ) {
         this.beginCorrelatedStateEstablishment(transfer.stateRequestId)
       }
+    }
+  }
+
+  /**
+   * Classify only our non-secret cipher codes. Never inspect or log an arbitrary
+   * thrown message: custom ciphers may include plaintext or key material there.
+   */
+  private handleCipherFailure(error: unknown, fallback: string): boolean {
+    if (!isCollaborationCipherError(error)) {
+      this.reportSyncFailure(fallback)
+      return true
+    }
+    switch (error.code) {
+      case 'REPLAYED':
+      case 'SEQUENCE_WINDOW':
+        this.reportSyncFailure('encrypted-envelope-replay-rejected')
+        return false
+      case 'EPOCH_MISMATCH':
+        this.reportSyncFailure('encrypted-envelope-epoch-mismatch')
+        this.fatal('Live collaboration stopped because the encrypted room epoch changed. Reconnect to continue.')
+        return false
+      case 'SENDER_LIMIT':
+        this.reportSyncFailure('encrypted-envelope-sender-capacity')
+        this.fatal('Live collaboration stopped because the encrypted room exceeded safe sender capacity.')
+        return false
+      case 'INVALID_ENVELOPE':
+        this.reportSyncFailure('encrypted-envelope-invalid')
+        return true
     }
   }
 
@@ -2420,6 +2569,9 @@ export class EncryptedYjsProvider implements Provider {
     this.clearPendingResponseClaims()
     this.joined = false
     this.clearLocalOutboundQueue()
+    this.stopPresenceHeartbeat()
+    this.ephemeralPresence?.clear()
+    this.clearRemoteAwareness('bootstrap-failover')
     this.currentLease?.release()
     this.currentLease = undefined
     this.emit('sync', false as never)
@@ -2477,6 +2629,8 @@ export class EncryptedYjsProvider implements Provider {
     this.clearInboundTransfers()
     this.clearInboundCryptoQueue()
     this.clearLocalOutboundQueue()
+    this.stopPresenceHeartbeat()
+    this.ephemeralPresence?.clear()
     this.clearRemoteAwareness('collaboration-fatal')
     this.currentLease?.release()
     this.currentLease = undefined

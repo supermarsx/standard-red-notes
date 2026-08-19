@@ -93,6 +93,7 @@ export function useNoteComments(note: SNNote): CommentsApi {
   const collaborationAccess = useCollaborationRoomAccess(application, note)
   const collaborationStatus = collaborationAccess.status
   const collaborationRoomKey = collaborationAccess.status === 'ready' ? collaborationAccess.roomKey : undefined
+  const collaborationRoomEpoch = collaborationAccess.status === 'ready' ? collaborationAccess.roomEpoch : undefined
   const collaborationCapability = collaborationAccess.status === 'ready' ? collaborationAccess.capability : undefined
 
   let resolvedCommentIdentity: NoteEncryptionIdentity | undefined
@@ -147,7 +148,13 @@ export function useNoteComments(note: SNNote): CommentsApi {
   const selfEmail = application.sessions.getUser()?.email
 
   useEffect(() => {
-    if (collaborationStatus !== 'ready' || !collaborationRoomKey || !collaborationCapability || !relayIdentity) {
+    if (
+      collaborationStatus !== 'ready' ||
+      !collaborationRoomKey ||
+      !collaborationRoomEpoch ||
+      !collaborationCapability ||
+      !relayIdentity
+    ) {
       relayRef.current = null
       return
     }
@@ -177,6 +184,7 @@ export function useNoteComments(note: SNNote): CommentsApi {
         application,
         noteUuid,
         collaborationRoomKey,
+        collaborationRoomEpoch,
         collaborationCapability,
         handleRemoteEvent,
         relayIdentity,
@@ -195,7 +203,15 @@ export function useNoteComments(note: SNNote): CommentsApi {
       }
       relay.destroy()
     }
-  }, [application, collaborationCapability, collaborationRoomKey, collaborationStatus, noteUuid, relayIdentity])
+  }, [
+    application,
+    collaborationCapability,
+    collaborationRoomEpoch,
+    collaborationRoomKey,
+    collaborationStatus,
+    noteUuid,
+    relayIdentity,
+  ])
 
   // Re-read comments whenever this note changes on disk (local edit or HTTP sync
   // from a collaborator). Uses the same streamItems pattern as useItemVaultInfo.

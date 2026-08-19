@@ -19,7 +19,7 @@ jest.mock('./GatewayCollabChannel', () => ({
 }))
 
 jest.mock('./RoomCrypto', () => ({
-  createRoomCipher: jest.fn(),
+  createCollaborationRoomCipher: jest.fn(),
 }))
 
 jest.mock('./EncryptedYjsProvider', () => ({
@@ -28,7 +28,7 @@ jest.mock('./EncryptedYjsProvider', () => ({
 
 import { EncryptedYjsProvider } from './EncryptedYjsProvider'
 import { createGatewayCollabChannel } from './GatewayCollabChannel'
-import { createRoomCipher } from './RoomCrypto'
+import { createCollaborationRoomCipher } from './RoomCrypto'
 import { getSuperCollaborationAvailability } from './CollaborationAvailability'
 import { CollaborationConfig, SuperCollaborationPlugin } from './CollaborationPlugin'
 
@@ -85,8 +85,9 @@ describe('Super collaboration security gate', () => {
     const lease = {
       requestId: 'editor-lease',
       shouldBootstrap: true,
-      protocolVersion: 2 as const,
+      protocolVersion: 3 as const,
       maxTransferBytes: 4 * 1024 * 1024,
+      roomEpoch: 'room_epoch_0000000000000001',
       release: jest.fn(),
       validateAttachment: jest.fn(() => true),
       isAttached: jest.fn(() => true),
@@ -97,6 +98,7 @@ describe('Super collaboration security gate', () => {
     const config: CollaborationConfig = {
       room: 'note-uuid',
       roomKey: {} as CryptoKey,
+      roomEpoch: 'room_epoch_0000000000000001',
       editorLease: lease,
       username: 'Collaborator',
       cursorColor: '#ff0000',
@@ -114,7 +116,7 @@ describe('Super collaboration security gate', () => {
 
     if (globalThis.crypto?.subtle) {
       expect(createGatewayCollabChannel).toHaveBeenCalled()
-      expect(createRoomCipher).toHaveBeenCalledWith(config.roomKey)
+      expect(createCollaborationRoomCipher).toHaveBeenCalledWith(config.roomKey, config.roomEpoch)
       expect(EncryptedYjsProvider).toHaveBeenCalledWith(
         expect.anything(),
         'note-uuid',
@@ -144,8 +146,9 @@ describe('Super collaboration security gate', () => {
     const lease = {
       requestId: 'readiness-lease',
       shouldBootstrap: true,
-      protocolVersion: 2 as const,
+      protocolVersion: 3 as const,
       maxTransferBytes: 4 * 1024 * 1024,
+      roomEpoch: 'room_epoch_0000000000000001',
       release: jest.fn(),
       validateAttachment: jest.fn(() => true),
       isAttached: jest.fn(() => true),
@@ -161,6 +164,7 @@ describe('Super collaboration security gate', () => {
           config: {
             room: 'readiness-note',
             roomKey: {} as CryptoKey,
+            roomEpoch: 'room_epoch_0000000000000001',
             editorLease: lease,
             username: 'Collaborator',
             cursorColor: '#ff0000',
@@ -188,8 +192,9 @@ describe('Super collaboration security gate', () => {
     const lease = {
       requestId: 'strict-lifetime-lease',
       shouldBootstrap: true,
-      protocolVersion: 2 as const,
+      protocolVersion: 3 as const,
       maxTransferBytes: 4 * 1024 * 1024,
+      roomEpoch: 'room_epoch_0000000000000001',
       release: jest.fn(),
       validateAttachment: jest.fn(() => true),
       isAttached: jest.fn(() => true),
@@ -200,6 +205,7 @@ describe('Super collaboration security gate', () => {
     const config: CollaborationConfig = {
       room: 'strict-note',
       roomKey: {} as CryptoKey,
+      roomEpoch: 'room_epoch_0000000000000001',
       editorLease: lease,
       username: 'Collaborator',
       cursorColor: '#ff0000',

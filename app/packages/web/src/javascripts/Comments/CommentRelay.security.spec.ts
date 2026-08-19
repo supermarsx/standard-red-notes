@@ -84,8 +84,14 @@ const structurallyValidRoomKey = {
   algorithm: { name: 'AES-GCM', length: 256 },
   usages: ['encrypt', 'decrypt'],
 } as CryptoKey
-const protocolVersion = 2 as const
+const protocolVersion = 3 as const
 const maxTransferBytes = 4 * 1024 * 1024
+const roomEpoch = 'room_epoch_0000000000000001'
+const epochAuthorization = (capability: string, epoch = roomEpoch) => ({
+  capability,
+  roomEpoch: epoch,
+  collaborationProtocolVersion: protocolVersion,
+})
 const defaultSessionUser = { uuid: 'user-1', email: 'alice@example.com' }
 const commentSigningPair = WebCrypto.sodiumCryptoSignSeedKeypair('77'.repeat(32))
 const defaultCommentId = 'user-1:comment-1'
@@ -205,9 +211,9 @@ describe('CommentRelay security boundary', () => {
       reason: 'client-only room key unavailable',
     })
 
-    expect(() => new CommentRelay({} as never, 'note-uuid', structurallyValidRoomKey, 'capability', jest.fn())).toThrow(
-      'client-only room key unavailable',
-    )
+    expect(
+      () => new CommentRelay({} as never, 'note-uuid', structurallyValidRoomKey, roomEpoch, 'capability', jest.fn()),
+    ).toThrow('client-only room key unavailable')
     expect(mockedCreateChannel).not.toHaveBeenCalled()
   })
 
@@ -217,7 +223,14 @@ describe('CommentRelay security boundary', () => {
 
     expect(
       () =>
-        new CommentRelay({} as never, 'note-uuid', systemIdentifier as unknown as CryptoKey, 'capability', jest.fn()),
+        new CommentRelay(
+          {} as never,
+          'note-uuid',
+          systemIdentifier as unknown as CryptoKey,
+          roomEpoch,
+          'capability',
+          jest.fn(),
+        ),
     ).toThrow(/non-extractable AES-256-GCM CryptoKey/)
     expect(() => RoomCrypto.createRoomCipher(systemIdentifier as unknown as CryptoKey)).toThrow(
       /non-extractable AES-256-GCM CryptoKey/,
@@ -289,6 +302,7 @@ maybe('CommentRelay accepted-join and ciphertext behavior', () => {
     const channel: CollabChannel = {
       isConnected: () => connected,
       authorize: async () => 'unused',
+      authorizeEpochBound: async () => undefined,
       send: (frame) => sent.push(frame),
       subscribe: (value) => {
         handler = value
@@ -326,6 +340,7 @@ maybe('CommentRelay accepted-join and ciphertext behavior', () => {
       applicationWithDurableMutations(),
       'note-uuid',
       key,
+      roomEpoch,
       'exact-note-capability',
       onRemoteEvent,
     )
@@ -344,28 +359,25 @@ maybe('CommentRelay accepted-join and ciphertext behavior', () => {
       requestId: join.requestId,
       protocolVersion,
       maxTransferBytes,
+      roomEpoch,
     })
     await relay.broadcast(comment, mutation(1, 'upsert'))
     const frame = transport.sent.find((value): value is Extract<CollabFrame, { t: 'comment' }> => value.t === 'comment')
 
     expect(frame).toBeDefined()
     expect(frame!.payload).not.toContain(comment.text)
-    const plaintext = await RoomCrypto.createRoomCipher(key).decrypt(
+    const plaintext = await RoomCrypto.createCollaborationRoomCipher(
+      key,
+      roomEpoch,
+      'receiver_epoch_000000000001',
+    ).decrypt(
       frame!.payload,
       new TextEncoder().encode(
         JSON.stringify(['standard-red-notes:collaboration-frame:v3', protocolVersion, 'note-uuid', 'comment-event-v3']),
       ),
     )
     expect(new TextDecoder().decode(plaintext)).toContain('"operation":"upsert"')
-    transport.inbound(frame!)
-    await new Promise((resolve) => setTimeout(resolve, 10))
-    expect(onRemoteEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        operation: 'upsert',
-        version: 3,
-        comment: expect.objectContaining({ id: defaultCommentId, text: 'ciphertext only' }),
-      }),
-    )
+    expect(onRemoteEvent).not.toHaveBeenCalled()
     relay.destroy()
   })
 
@@ -377,7 +389,14 @@ maybe('CommentRelay accepted-join and ciphertext behavior', () => {
       'encrypt',
       'decrypt',
     ])) as CryptoKey
-    const relay = new CommentRelay(applicationWithDurableMutations(), 'note-uuid', key, 'capability', jest.fn())
+    const relay = new CommentRelay(
+      applicationWithDurableMutations(),
+      'note-uuid',
+      key,
+      roomEpoch,
+      'capability',
+      jest.fn(),
+    )
     const join = transport.sent[0] as Extract<CollabFrame, { t: 'room-join' }>
     transport.inbound({
       t: 'room-joined',
@@ -385,6 +404,7 @@ maybe('CommentRelay accepted-join and ciphertext behavior', () => {
       requestId: join.requestId,
       protocolVersion,
       maxTransferBytes,
+      roomEpoch,
     })
 
     const unsigned = { ...signedComment() }
@@ -409,6 +429,7 @@ maybe('CommentRelay accepted-join and ciphertext behavior', () => {
       applicationWithDurableMutations([], { onRead: durableRead }),
       'note-uuid',
       key,
+      roomEpoch,
       'capability',
       delivered,
     )
@@ -419,12 +440,14 @@ maybe('CommentRelay accepted-join and ciphertext behavior', () => {
       requestId: join.requestId,
       protocolVersion,
       maxTransferBytes,
+      roomEpoch,
     })
     const additionalData = new TextEncoder().encode(
       JSON.stringify(['standard-red-notes:collaboration-frame:v3', protocolVersion, 'note-uuid', 'comment-event-v3']),
     )
+    const remoteCipher = RoomCrypto.createCollaborationRoomCipher(key, roomEpoch, 'remote_sender_epoch_00000001')
     const valid = signedComment()
-    const v2Payload = await RoomCrypto.createRoomCipher(key).encrypt(
+    const v2Payload = await remoteCipher.encrypt(
       new TextEncoder().encode(
         JSON.stringify({ version: 2, operation: 'upsert', comment: valid, mutation: mutation(1, 'upsert') }),
       ),
@@ -434,7 +457,7 @@ maybe('CommentRelay accepted-join and ciphertext behavior', () => {
 
     const unknownPair = WebCrypto.sodiumCryptoSignSeedKeypair('88'.repeat(32))
     const unknown = signedComment({}, unknownPair)
-    const unknownPayload = await RoomCrypto.createRoomCipher(key).encrypt(
+    const unknownPayload = await remoteCipher.encrypt(
       new TextEncoder().encode(
         JSON.stringify({ version: 3, operation: 'upsert', comment: unknown, mutation: mutation(2, 'upsert') }),
       ),
@@ -456,7 +479,14 @@ maybe('CommentRelay accepted-join and ciphertext behavior', () => {
       'encrypt',
       'decrypt',
     ])) as CryptoKey
-    const relay = new CommentRelay(applicationWithDurableMutations(), 'note-uuid', key, 'capability', jest.fn())
+    const relay = new CommentRelay(
+      applicationWithDurableMutations(),
+      'note-uuid',
+      key,
+      roomEpoch,
+      'capability',
+      jest.fn(),
+    )
     const join = transport.sent[0] as Extract<CollabFrame, { t: 'room-join' }>
     transport.inbound({
       t: 'room-joined',
@@ -464,6 +494,7 @@ maybe('CommentRelay accepted-join and ciphertext behavior', () => {
       requestId: join.requestId,
       protocolVersion,
       maxTransferBytes,
+      roomEpoch,
     })
 
     await relay.broadcastUpsert(
@@ -490,12 +521,20 @@ maybe('CommentRelay accepted-join and ciphertext behavior', () => {
       'encrypt',
       'decrypt',
     ])) as CryptoKey
-    const sender = new CommentRelay(applicationWithDurableMutations(), 'note-uuid', key, 'sender-capability', jest.fn())
+    const sender = new CommentRelay(
+      applicationWithDurableMutations(),
+      'note-uuid',
+      key,
+      roomEpoch,
+      'sender-capability',
+      jest.fn(),
+    )
     const delivered: unknown[] = []
     const receiver = new CommentRelay(
       applicationWithDurableMutations(),
       'note-uuid',
       key,
+      roomEpoch,
       'receiver-capability',
       async (event) => {
         delivered.push(event)
@@ -510,6 +549,7 @@ maybe('CommentRelay accepted-join and ciphertext behavior', () => {
       requestId: senderJoin.requestId,
       protocolVersion,
       maxTransferBytes,
+      roomEpoch,
     })
     receiverTransport.inbound({
       t: 'room-joined',
@@ -517,6 +557,7 @@ maybe('CommentRelay accepted-join and ciphertext behavior', () => {
       requestId: receiverJoin.requestId,
       protocolVersion,
       maxTransferBytes,
+      roomEpoch,
     })
     const comment = signedComment({ text: 'must stay deleted' })
 
@@ -550,6 +591,7 @@ maybe('CommentRelay accepted-join and ciphertext behavior', () => {
       applicationWithDurableMutations([mutation(2, 'remove')]),
       'note-uuid',
       key,
+      roomEpoch,
       'recreated-capability',
       recreatedDelivery,
     )
@@ -560,6 +602,7 @@ maybe('CommentRelay accepted-join and ciphertext behavior', () => {
       requestId: recreatedJoin.requestId,
       protocolVersion,
       maxTransferBytes,
+      roomEpoch,
     })
     recreatedTransport.inbound(upsertFrame)
     await new Promise((resolve) => setTimeout(resolve, 10))
@@ -578,7 +621,14 @@ maybe('CommentRelay accepted-join and ciphertext behavior', () => {
       'encrypt',
       'decrypt',
     ])) as CryptoKey
-    const sender = new CommentRelay(applicationWithDurableMutations(), 'note-uuid', key, 'sender-capability', jest.fn())
+    const sender = new CommentRelay(
+      applicationWithDurableMutations(),
+      'note-uuid',
+      key,
+      roomEpoch,
+      'sender-capability',
+      jest.fn(),
+    )
     let authorized = true
     let present = true
     const durableRead = jest.fn()
@@ -591,6 +641,7 @@ maybe('CommentRelay accepted-join and ciphertext behavior', () => {
       }),
       'note-uuid',
       key,
+      roomEpoch,
       'receiver-capability',
       delivered,
     )
@@ -602,6 +653,7 @@ maybe('CommentRelay accepted-join and ciphertext behavior', () => {
       requestId: senderJoin.requestId,
       protocolVersion,
       maxTransferBytes,
+      roomEpoch,
     })
     receiverTransport.inbound({
       t: 'room-joined',
@@ -609,6 +661,7 @@ maybe('CommentRelay accepted-join and ciphertext behavior', () => {
       requestId: receiverJoin.requestId,
       protocolVersion,
       maxTransferBytes,
+      roomEpoch,
     })
     const comment = signedComment({ text: 'protected plaintext' })
     await sender.broadcastUpsert(comment, mutation(1, 'upsert'))
@@ -643,6 +696,7 @@ maybe('CommentRelay accepted-join and ciphertext behavior', () => {
       applicationWithDurableMutations([], { onRead: durableRead }),
       'note-uuid',
       key,
+      roomEpoch,
       'capability',
       delivered,
     )
@@ -653,6 +707,7 @@ maybe('CommentRelay accepted-join and ciphertext behavior', () => {
       requestId: join.requestId,
       protocolVersion,
       maxTransferBytes,
+      roomEpoch,
     })
     const oversizedMutation: NoteCommentMutationRecord = {
       commentId: 'comment-0',
@@ -663,7 +718,11 @@ maybe('CommentRelay accepted-join and ciphertext behavior', () => {
         (_, index) => `comment-${index}`,
       ),
     }
-    const payload = await RoomCrypto.createRoomCipher(key).encrypt(
+    const payload = await RoomCrypto.createCollaborationRoomCipher(
+      key,
+      roomEpoch,
+      'oversized_sender_epoch_000001',
+    ).encrypt(
       new TextEncoder().encode(
         JSON.stringify({ version: 3, operation: 'remove', commentId: 'comment-0', mutation: oversizedMutation }),
       ),
@@ -700,13 +759,20 @@ maybe('CommentRelay accepted-join and ciphertext behavior', () => {
   it('reauthorizes its stable logical lease after an accepted capability expires', async () => {
     mockedAvailability.mockReturnValue({ available: true })
     const transport = createChannel()
-    transport.channel.authorize = jest.fn().mockResolvedValue('renewed-capability')
+    transport.channel.authorizeEpochBound = jest.fn().mockResolvedValue(epochAuthorization('renewed-capability'))
     mockedCreateChannel.mockReturnValue(transport.channel)
     const key = (await globalThis.crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, [
       'encrypt',
       'decrypt',
     ])) as CryptoKey
-    const relay = new CommentRelay(applicationWithDurableMutations(), 'note-uuid', key, 'initial-capability', jest.fn())
+    const relay = new CommentRelay(
+      applicationWithDurableMutations(),
+      'note-uuid',
+      key,
+      roomEpoch,
+      'initial-capability',
+      jest.fn(),
+    )
     const firstJoin = transport.sent[0] as Extract<CollabFrame, { t: 'room-join' }>
     transport.inbound({
       t: 'room-joined',
@@ -714,6 +780,7 @@ maybe('CommentRelay accepted-join and ciphertext behavior', () => {
       requestId: firstJoin.requestId,
       protocolVersion,
       maxTransferBytes,
+      roomEpoch,
     })
 
     transport.inbound({ t: 'room-denied', room: 'note-uuid', requestId: firstJoin.requestId })
@@ -723,7 +790,7 @@ maybe('CommentRelay accepted-join and ciphertext behavior', () => {
       (frame): frame is Extract<CollabFrame, { t: 'room-join' }> => frame.t === 'room-join',
     )
 
-    expect(transport.channel.authorize).toHaveBeenCalledWith('note-uuid', firstJoin.requestId)
+    expect(transport.channel.authorizeEpochBound).toHaveBeenCalledWith('note-uuid', roomEpoch, firstJoin.requestId)
     expect(joins).toHaveLength(2)
     expect(joins[1]).toMatchObject({
       cap: 'renewed-capability',
@@ -736,16 +803,23 @@ maybe('CommentRelay accepted-join and ciphertext behavior', () => {
   it('fails closed across disconnects and performs one fresh request-bound join per reconnect', async () => {
     mockedAvailability.mockReturnValue({ available: true })
     const transport = createChannel()
-    transport.channel.authorize = jest
+    transport.channel.authorizeEpochBound = jest
       .fn()
-      .mockResolvedValueOnce('reconnect-capability-1')
-      .mockResolvedValueOnce('reconnect-capability-2')
+      .mockResolvedValueOnce(epochAuthorization('reconnect-capability-1'))
+      .mockResolvedValueOnce(epochAuthorization('reconnect-capability-2'))
     mockedCreateChannel.mockReturnValue(transport.channel)
     const key = (await globalThis.crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, [
       'encrypt',
       'decrypt',
     ])) as CryptoKey
-    const relay = new CommentRelay(applicationWithDurableMutations(), 'note-uuid', key, 'initial-capability', jest.fn())
+    const relay = new CommentRelay(
+      applicationWithDurableMutations(),
+      'note-uuid',
+      key,
+      roomEpoch,
+      'initial-capability',
+      jest.fn(),
+    )
     const firstJoin = transport.sent[0] as Extract<CollabFrame, { t: 'room-join' }>
     transport.inbound({
       t: 'room-joined',
@@ -753,6 +827,7 @@ maybe('CommentRelay accepted-join and ciphertext behavior', () => {
       requestId: firstJoin.requestId,
       protocolVersion,
       maxTransferBytes,
+      roomEpoch,
     })
     expect(relay.isRoomJoined()).toBe(true)
 
@@ -766,8 +841,8 @@ maybe('CommentRelay accepted-join and ciphertext behavior', () => {
     let joins = transport.sent.filter(
       (frame): frame is Extract<CollabFrame, { t: 'room-join' }> => frame.t === 'room-join',
     )
-    expect(transport.channel.authorize).toHaveBeenCalledTimes(1)
-    expect(transport.channel.authorize).toHaveBeenLastCalledWith('note-uuid', firstJoin.requestId)
+    expect(transport.channel.authorizeEpochBound).toHaveBeenCalledTimes(1)
+    expect(transport.channel.authorizeEpochBound).toHaveBeenLastCalledWith('note-uuid', roomEpoch, firstJoin.requestId)
     expect(joins).toHaveLength(2)
     expect(joins[1]).toMatchObject({ cap: 'reconnect-capability-1', requestId: firstJoin.requestId })
 
@@ -777,6 +852,7 @@ maybe('CommentRelay accepted-join and ciphertext behavior', () => {
       requestId: firstJoin.requestId,
       protocolVersion,
       maxTransferBytes,
+      roomEpoch,
     })
     transport.setConnected(false)
     transport.setConnected(false)
@@ -785,20 +861,61 @@ maybe('CommentRelay accepted-join and ciphertext behavior', () => {
     await Promise.resolve()
 
     joins = transport.sent.filter((frame): frame is Extract<CollabFrame, { t: 'room-join' }> => frame.t === 'room-join')
-    expect(transport.channel.authorize).toHaveBeenCalledTimes(2)
+    expect(transport.channel.authorizeEpochBound).toHaveBeenCalledTimes(2)
     expect(joins).toHaveLength(3)
     expect(joins[2]).toMatchObject({ cap: 'reconnect-capability-2', requestId: firstJoin.requestId })
     relay.destroy()
     expect(transport.unsubscribeStatus).toHaveBeenCalledTimes(1)
   })
 
+  it('does not rejoin with an immutable cipher after reconnect authorization rotates the room epoch', async () => {
+    mockedAvailability.mockReturnValue({ available: true })
+    const transport = createChannel()
+    transport.channel.authorizeEpochBound = jest
+      .fn()
+      .mockResolvedValue(epochAuthorization('rotated-capability', 'room_epoch_0000000000000002'))
+    mockedCreateChannel.mockReturnValue(transport.channel)
+    const key = (await globalThis.crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, [
+      'encrypt',
+      'decrypt',
+    ])) as CryptoKey
+    const relay = new CommentRelay(
+      applicationWithDurableMutations(),
+      'note-uuid',
+      key,
+      roomEpoch,
+      'initial-capability',
+      jest.fn(),
+    )
+    const initialJoin = transport.sent[0] as Extract<CollabFrame, { t: 'room-join' }>
+    transport.inbound({
+      t: 'room-joined',
+      room: 'note-uuid',
+      requestId: initialJoin.requestId,
+      protocolVersion,
+      maxTransferBytes,
+      roomEpoch,
+    })
+    expect(relay.isRoomJoined()).toBe(true)
+
+    transport.setConnected(false)
+    transport.setConnected(true)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(transport.channel.authorizeEpochBound).toHaveBeenCalledWith('note-uuid', roomEpoch, initialJoin.requestId)
+    expect(transport.sent.filter((frame) => frame.t === 'room-join')).toHaveLength(1)
+    expect(relay.isRoomJoined()).toBe(false)
+    relay.destroy()
+  })
+
   it('cannot send or rejoin when destroyed during reconnect authorization', async () => {
     mockedAvailability.mockReturnValue({ available: true })
     const transport = createChannel()
-    let resolveAuthorization: ((capability: string) => void) | undefined
-    transport.channel.authorize = jest.fn(
+    let resolveAuthorization: ((authorization: ReturnType<typeof epochAuthorization>) => void) | undefined
+    transport.channel.authorizeEpochBound = jest.fn(
       () =>
-        new Promise<string>((resolve) => {
+        new Promise<ReturnType<typeof epochAuthorization>>((resolve) => {
           resolveAuthorization = resolve
         }),
     )
@@ -807,14 +924,21 @@ maybe('CommentRelay accepted-join and ciphertext behavior', () => {
       'encrypt',
       'decrypt',
     ])) as CryptoKey
-    const relay = new CommentRelay(applicationWithDurableMutations(), 'note-uuid', key, 'initial-capability', jest.fn())
+    const relay = new CommentRelay(
+      applicationWithDurableMutations(),
+      'note-uuid',
+      key,
+      roomEpoch,
+      'initial-capability',
+      jest.fn(),
+    )
     const initialJoinCount = transport.sent.filter((frame) => frame.t === 'room-join').length
 
     transport.setConnected(false)
     transport.setConnected(true)
-    expect(transport.channel.authorize).toHaveBeenCalledTimes(1)
+    expect(transport.channel.authorizeEpochBound).toHaveBeenCalledTimes(1)
     relay.destroy()
-    resolveAuthorization?.('too-late-capability')
+    resolveAuthorization?.(epochAuthorization('too-late-capability'))
     await Promise.resolve()
     await Promise.resolve()
 
@@ -841,7 +965,14 @@ maybe('CommentRelay accepted-join and ciphertext behavior', () => {
       'decrypt',
     ])) as CryptoKey
 
-    const relay = new CommentRelay(applicationWithDurableMutations(), 'note-uuid', key, 'capability', jest.fn())
+    const relay = new CommentRelay(
+      applicationWithDurableMutations(),
+      'note-uuid',
+      key,
+      roomEpoch,
+      'capability',
+      jest.fn(),
+    )
     expect(send).not.toHaveBeenCalled()
     expect(relay.isRoomJoined()).toBe(false)
     expect(unsubscribe).not.toHaveBeenCalled()
@@ -855,10 +986,11 @@ maybe('CommentRelay accepted-join and ciphertext behavior', () => {
     let inbound: ((frame: CollabFrame) => void) | undefined
     let initialSend = true
     const unsubscribeStatus = jest.fn()
-    const authorize = jest.fn().mockResolvedValue('fresh-capability')
+    const authorizeEpochBound = jest.fn().mockResolvedValue(epochAuthorization('fresh-capability'))
     const channel: CollabChannel = {
       isConnected: () => true,
-      authorize,
+      authorize: jest.fn(),
+      authorizeEpochBound,
       send: (frame) => {
         if (initialSend) {
           initialSend = false
@@ -878,11 +1010,18 @@ maybe('CommentRelay accepted-join and ciphertext behavior', () => {
       'decrypt',
     ])) as CryptoKey
 
-    const relay = new CommentRelay(applicationWithDurableMutations(), 'note-uuid', key, 'stale-capability', jest.fn())
+    const relay = new CommentRelay(
+      applicationWithDurableMutations(),
+      'note-uuid',
+      key,
+      roomEpoch,
+      'stale-capability',
+      jest.fn(),
+    )
     await Promise.resolve()
     await Promise.resolve()
     const rejoin = sent.find((frame): frame is Extract<CollabFrame, { t: 'room-join' }> => frame.t === 'room-join')
-    expect(authorize).toHaveBeenCalledWith('note-uuid', rejoin?.requestId)
+    expect(authorizeEpochBound).toHaveBeenCalledWith('note-uuid', roomEpoch, rejoin?.requestId)
     expect(rejoin).toMatchObject({ cap: 'fresh-capability', role: 'comment' })
 
     inbound?.({
@@ -891,6 +1030,7 @@ maybe('CommentRelay accepted-join and ciphertext behavior', () => {
       requestId: rejoin!.requestId,
       protocolVersion,
       maxTransferBytes,
+      roomEpoch,
     })
     expect(relay.isRoomJoined()).toBe(true)
     relay.destroy()
@@ -905,9 +1045,10 @@ maybe('CommentRelay accepted-join and ciphertext behavior', () => {
     let status: ((connected: boolean) => void) | undefined
     const channel: CollabChannel = {
       isConnected: () => connected,
-      authorize: jest.fn(async () => {
+      authorize: jest.fn(),
+      authorizeEpochBound: jest.fn(async () => {
         order.push('authorize')
-        return 'fresh-capability'
+        return epochAuthorization('fresh-capability')
       }),
       subscribe: () => jest.fn(),
       subscribeStatus: (handler) => {
@@ -930,6 +1071,7 @@ maybe('CommentRelay accepted-join and ciphertext behavior', () => {
       applicationWithDurableMutations(),
       'note-uuid',
       key,
+      roomEpoch,
       'capability-from-closed-generation',
       jest.fn(),
     )
@@ -969,7 +1111,14 @@ maybe('CommentRelay accepted-join and ciphertext behavior', () => {
       'encrypt',
       'decrypt',
     ])) as CryptoKey
-    const relay = new CommentRelay(applicationWithDurableMutations(), 'note-uuid', key, 'capability', jest.fn())
+    const relay = new CommentRelay(
+      applicationWithDurableMutations(),
+      'note-uuid',
+      key,
+      roomEpoch,
+      'capability',
+      jest.fn(),
+    )
 
     teardown = true
     expect(() => relay.destroy()).not.toThrow()
@@ -981,10 +1130,11 @@ maybe('CommentRelay accepted-join and ciphertext behavior', () => {
   it('clears reauthorization state and resolves cleanly when a renewed join send throws', async () => {
     mockedAvailability.mockReturnValue({ available: true })
     let initialJoin = true
-    const authorize = jest.fn().mockResolvedValue('renewed-capability')
+    const authorizeEpochBound = jest.fn().mockResolvedValue(epochAuthorization('renewed-capability'))
     const channel: CollabChannel = {
       isConnected: () => true,
-      authorize,
+      authorize: jest.fn(),
+      authorizeEpochBound,
       send: (frame) => {
         if (frame.t === 'room-join') {
           if (!initialJoin) {
@@ -1000,12 +1150,19 @@ maybe('CommentRelay accepted-join and ciphertext behavior', () => {
       'encrypt',
       'decrypt',
     ])) as CryptoKey
-    const relay = new CommentRelay(applicationWithDurableMutations(), 'note-uuid', key, 'capability', jest.fn())
+    const relay = new CommentRelay(
+      applicationWithDurableMutations(),
+      'note-uuid',
+      key,
+      roomEpoch,
+      'capability',
+      jest.fn(),
+    )
     const retry = relay as unknown as { reauthorizeAndJoin(): Promise<void> }
 
     await expect(retry.reauthorizeAndJoin()).resolves.toBeUndefined()
     await expect(retry.reauthorizeAndJoin()).resolves.toBeUndefined()
-    expect(authorize).toHaveBeenCalledTimes(2)
+    expect(authorizeEpochBound).toHaveBeenCalledTimes(2)
     expect(relay.isRoomJoined()).toBe(false)
     relay.destroy()
   })

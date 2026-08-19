@@ -8,9 +8,10 @@ import type { Provider } from '@lexical/yjs'
 import { WebApplication } from '@/Application/WebApplication'
 import { EncryptedYjsProvider } from './EncryptedYjsProvider'
 import { createGatewayCollabChannel } from './GatewayCollabChannel'
-import { createRoomCipher } from './RoomCrypto'
+import { createCollaborationRoomCipher, getCollaborationReplayLedger } from './RoomCrypto'
 import { MAX_PRESENT_PEERS_PER_ROOM, PresenceRegistry, PresentPeer } from './PresenceRegistry'
 import { getSuperCollaborationAvailability } from './CollaborationAvailability'
+import { showCollaborationPresenceActivity } from './CollaborationPresenceNotification'
 import type { EditorCollaborationLease } from './useCollaborationRoomAccess'
 import {
   notifyChecklistMutationBridgeReadiness,
@@ -22,6 +23,8 @@ export type CollaborationConfig = {
   room: string
   /** A non-extractable room key derived exclusively from client-only vault key material. */
   roomKey: CryptoKey
+  /** Gateway-negotiated epoch bound into every encrypted relay payload. */
+  roomEpoch: string
   /** Display name + cursor color for presence. */
   username: string
   cursorColor: string
@@ -153,7 +156,12 @@ const AvailableSuperCollaborationPlugin: FunctionComponent<Props> = ({
         yjsDocMap.set(id, doc)
       }
 
-      const cipher = createRoomCipher(config.roomKey)
+      const cipher = createCollaborationRoomCipher(
+        config.roomKey,
+        config.roomEpoch,
+        undefined,
+        getCollaborationReplayLedger(application, config.room, config.roomEpoch),
+      )
 
       const provider = new EncryptedYjsProvider(
         doc,
@@ -165,6 +173,7 @@ const AvailableSuperCollaborationPlugin: FunctionComponent<Props> = ({
         {
           activeLease: config.editorLease,
           shouldBootstrap: config.shouldBootstrap,
+          expectedRoomEpoch: config.roomEpoch,
           validateAttachment: config.editorLease.validateAttachment,
           reactivate: config.editorLease.reactivate,
           onFatal: config.editorLease.fail,
@@ -172,6 +181,7 @@ const AvailableSuperCollaborationPlugin: FunctionComponent<Props> = ({
           ...(config.editorLease.setProviderCanonicalOwnership
             ? { setCanonicalOwnership: config.editorLease.setProviderCanonicalOwnership }
             : {}),
+          onPresenceActivity: showCollaborationPresenceActivity,
         },
       )
       providerReadinessDisposerRef.current?.()
@@ -203,6 +213,7 @@ const AvailableSuperCollaborationPlugin: FunctionComponent<Props> = ({
     channel,
     config.editorLease,
     config.room,
+    config.roomEpoch,
     config.roomKey,
     config.shouldBootstrap,
     effectiveChecklistOwnerLeaseId,
@@ -277,7 +288,7 @@ export const SuperCollaborationPlugin: FunctionComponent<Props> = (props) => {
     return null
   }
 
-  const lifetimeKey = `${props.config.room}:${props.config.editorLease.requestId}`
+  const lifetimeKey = `${props.config.room}:${props.config.roomEpoch}:${props.config.editorLease.requestId}`
   return (
     <EphemeralLexicalCollaboration lifetimeKey={lifetimeKey}>
       <AvailableSuperCollaborationPlugin {...props} />

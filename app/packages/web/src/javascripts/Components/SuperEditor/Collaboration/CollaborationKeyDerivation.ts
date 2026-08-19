@@ -6,6 +6,8 @@ import {
   SUPER_COLLABORATION_VAULT_KEY_REASON,
   SuperCollaborationAvailability,
 } from './CollaborationAvailability'
+import { COLLABORATION_PROTOCOL_VERSION } from './CollabChannel'
+import { isValidCollaborationRoomEpoch } from './RoomCrypto'
 
 const COLLABORATION_HKDF_SALT = 'Standard Red Notes encrypted collaboration room key v1'
 
@@ -266,6 +268,7 @@ export type PreparedCollaborationAccess =
       sourceId: string
       roomKey: CryptoKey
       capability: string
+      roomEpoch: string
       serverUpdatedAtTimestamp: number
       userUuid: string
       sessionUser: object
@@ -283,6 +286,7 @@ export async function prepareCollaborationAccess(
   authorizationContext?: {
     leaseRequestId?: string
     bootstrapChallenge?: string
+    expectedRoomEpoch?: string
   },
 ): Promise<PreparedCollaborationAccess> {
   const before = resolveCollaborationKeySource(application, note)
@@ -291,18 +295,25 @@ export async function prepareCollaborationAccess(
   }
 
   let roomKey: CryptoKey
-  let authorization: { capability: string; serverUpdatedAtTimestamp: number } | undefined
+  let authorization: unknown
   try {
+    const authorizeEpochBound = application.sockets.authorizeCollaborationRoom as unknown as (
+      noteUuid: string,
+      leaseRequestId?: string,
+      bootstrapChallenge?: string,
+      expectedRoomEpoch?: string,
+    ) => Promise<unknown>
     ;[roomKey, authorization] = await Promise.all([
       deriveCollaborationRoomKey({
         rootKeySecret: before.rootKeySecret,
         keyScope: before.keyScope,
         noteUuid: before.noteUuid,
       }),
-      application.sockets.authorizeCollaborationRoom(
+      authorizeEpochBound(
         before.noteUuid,
         authorizationContext?.leaseRequestId,
         authorizationContext?.bootstrapChallenge,
+        authorizationContext?.expectedRoomEpoch,
       ),
     ])
   } catch {
@@ -313,10 +324,33 @@ export async function prepareCollaborationAccess(
     }
   }
 
-  if (!authorization) {
+  if (!authorization || typeof authorization !== 'object') {
     return {
       available: false,
       reason: 'The server did not authorize live editing for this note. Edit permission is required.',
+      sourceId: before.sourceId,
+    }
+  }
+
+  const epochAuthorization = authorization as {
+    capability?: unknown
+    roomEpoch?: unknown
+    serverUpdatedAtTimestamp?: unknown
+    collaborationProtocolVersion?: unknown
+  }
+  if (
+    typeof epochAuthorization.capability !== 'string' ||
+    epochAuthorization.capability.length === 0 ||
+    !Number.isSafeInteger(epochAuthorization.serverUpdatedAtTimestamp) ||
+    Number(epochAuthorization.serverUpdatedAtTimestamp) <= 0 ||
+    epochAuthorization.collaborationProtocolVersion !== COLLABORATION_PROTOCOL_VERSION ||
+    !isValidCollaborationRoomEpoch(epochAuthorization.roomEpoch) ||
+    (authorizationContext?.expectedRoomEpoch !== undefined &&
+      epochAuthorization.roomEpoch !== authorizationContext.expectedRoomEpoch)
+  ) {
+    return {
+      available: false,
+      reason: 'The collaboration gateway did not provide a valid encrypted room epoch.',
       sourceId: before.sourceId,
     }
   }
@@ -343,8 +377,9 @@ export async function prepareCollaborationAccess(
     noteUuid: after.noteUuid,
     sourceId: after.sourceId,
     roomKey,
-    capability: authorization.capability,
-    serverUpdatedAtTimestamp: authorization.serverUpdatedAtTimestamp,
+    capability: epochAuthorization.capability,
+    roomEpoch: epochAuthorization.roomEpoch,
+    serverUpdatedAtTimestamp: Number(epochAuthorization.serverUpdatedAtTimestamp),
     userUuid: after.userUuid,
     sessionUser: after.sessionUser,
     username: after.username,
