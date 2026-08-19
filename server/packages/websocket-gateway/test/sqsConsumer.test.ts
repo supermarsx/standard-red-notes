@@ -87,6 +87,14 @@ function wsEvent(userUuid: string, message: string, originatingSessionUuid?: str
   }
 }
 
+function inviteEvent(): unknown {
+  return {
+    eventId: 'invite-domain-event-1',
+    type: 'INVITE_REALTIME_INVALIDATION_REQUESTED',
+    payload: { version: 1, recordId: 'invite-record-1', affectedUserUuids: ['user-1'], event: {} },
+  }
+}
+
 function makeLogger() {
   return { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
 }
@@ -199,6 +207,59 @@ describe('startSqsConsumer', () => {
       kind: 'delete',
       input: { QueueUrl: 'https://sqs/q', ReceiptHandle: 'rh-1' },
     })
+    stop()
+  })
+
+  it('dispatches an invite event through the same consumer and deletes only after success', async () => {
+    const { registry, send } = makeRegistry()
+    const logger = makeLogger()
+    const handle = vi.fn().mockResolvedValue(undefined)
+    sqs.state.receiveQueue = [{ Messages: [{ Body: snsEnvelope(inviteEvent()), ReceiptHandle: 'rh-invite' }] }]
+    const drained = whenDrained()
+    const stop = startSqsConsumer(registry, {
+      queueUrl: 'https://sqs/q',
+      logger,
+      inviteRealtimeHandler: { handle },
+    })
+    await drained
+
+    expect(handle).toHaveBeenCalledWith(inviteEvent())
+    expect(send).not.toHaveBeenCalled()
+    expect(sqs.state.sent).toContainEqual({
+      kind: 'delete',
+      input: { QueueUrl: 'https://sqs/q', ReceiptHandle: 'rh-invite' },
+    })
+    stop()
+  })
+
+  it('does not acknowledge a recognized invite event without a healthy dispatcher', async () => {
+    const logger = makeLogger()
+    sqs.state.receiveQueue = [
+      { Messages: [{ Body: snsEnvelope(inviteEvent()), ReceiptHandle: 'rh-invite-unavailable' }] },
+    ]
+    const drained = whenDrained()
+    const stop = startSqsConsumer(makeRegistry().registry, { queueUrl: 'https://sqs/q', logger })
+    await drained
+
+    expect(sqs.state.sent.filter((command) => command.kind === 'delete')).toHaveLength(0)
+    expect(logger.error).toHaveBeenCalledWith(
+      '[sqs] invite realtime processing failed',
+      expect.objectContaining({ errorType: 'Error' }),
+    )
+    stop()
+  })
+
+  it('leaves an invite event unacknowledged when durable dispatch rejects', async () => {
+    sqs.state.receiveQueue = [{ Messages: [{ Body: snsEnvelope(inviteEvent()), ReceiptHandle: 'rh-invite-retry' }] }]
+    const drained = whenDrained()
+    const stop = startSqsConsumer(makeRegistry().registry, {
+      queueUrl: 'https://sqs/q',
+      logger: makeLogger(),
+      inviteRealtimeHandler: { handle: vi.fn().mockRejectedValue(new Error('redis unavailable')) },
+    })
+    await drained
+
+    expect(sqs.state.sent.filter((command) => command.kind === 'delete')).toHaveLength(0)
     stop()
   })
 
