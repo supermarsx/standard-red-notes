@@ -541,14 +541,25 @@ test("an offline sandbox cache miss returns inert text instead of the app shell"
       throw new Error("offline");
     },
     caches: {
-      match: async (request) => {
-        cacheLookups.push(request);
-        if (request === "/index.html") {
-          return new Response("<!doctype html><title>app shell</title>", {
-            headers: { "Content-Type": "text/html" },
-          });
-        }
-        return undefined;
+      // The offline fallback is scoped to THIS build's cache via caches.open,
+      // not the origin-wide caches.match, so the stub has to model the same
+      // shape or the worker throws instead of failing closed.
+      open: async () => ({
+        put: async () => undefined,
+        match: async (request) => {
+          cacheLookups.push(request);
+          if (request === "/index.html") {
+            return new Response("<!doctype html><title>app shell</title>", {
+              headers: { "Content-Type": "text/html" },
+            });
+          }
+          return undefined;
+        },
+      }),
+      match: async () => {
+        throw new Error(
+          "the offline fallback must not search every cache in the origin",
+        );
       },
     },
     self: {
@@ -1026,4 +1037,169 @@ test("portable-output assertion validates script portability and Standard Red CS
   } finally {
     rmSync(temporaryDirectory, { recursive: true, force: true });
   }
+});
+
+// ---------------------------------------------------------------------------
+// Stale-shell eviction (t97). Commit 095d6d7f stopped NEW poisoning of the
+// shell cache; these pin the other half — that an already-poisoned or simply
+// outdated cache is actually evicted, automatically on update and on demand
+// from settings — without ever reaching into user-data storage.
+// ---------------------------------------------------------------------------
+
+const appCacheReset = read(
+  "app/packages/web/src/javascripts/Utils/AppCacheReset.ts",
+);
+const generalPane = read(
+  "app/packages/web/src/javascripts/Components/Preferences/Panes/General/General.tsx",
+);
+const reloadAppControl = read(
+  "app/packages/web/src/javascripts/Components/Preferences/Panes/General/ReloadApp.tsx",
+);
+
+test("activating a new build evicts every previous shell cache and nothing else", async () => {
+  const listeners = new Map();
+  const deleted = [];
+  let claimed = 0;
+  const existingCaches = [
+    "srn-shell-3.201.28-1785432284632",
+    "srn-shell-3.201.28-1786376589647",
+    "srn-shell-__SW_VERSION__",
+    "some-third-party-cache",
+    "workbox-precache-v2",
+  ];
+  const context = {
+    URL,
+    Request,
+    Response,
+    Promise,
+    fetch: async () => {
+      throw new Error("activate must not fetch");
+    },
+    caches: {
+      keys: async () => [...existingCaches],
+      delete: async (key) => {
+        deleted.push(key);
+        return true;
+      },
+      open: async () => ({ put: async () => undefined, match: async () => undefined }),
+    },
+    self: {
+      location: { origin: "https://notes.example.test" },
+      addEventListener: (type, listener) => listeners.set(type, listener),
+      skipWaiting: async () => undefined,
+      clients: {
+        claim: async () => {
+          claimed += 1;
+        },
+      },
+    },
+  };
+  runInNewContext(serviceWorker, context);
+
+  let activation;
+  listeners.get("activate")({
+    waitUntil: (value) => {
+      activation = value;
+    },
+  });
+  await activation;
+
+  // Older shells go. The current build's cache survives (it is what the page is
+  // about to be served from), and caches this app did not write are untouched —
+  // an indiscriminate purge would destroy storage we cannot reason about.
+  assert.deepEqual(deleted, [
+    "srn-shell-3.201.28-1785432284632",
+    "srn-shell-3.201.28-1786376589647",
+  ]);
+  assert.equal(claimed, 1, "the fresh worker must claim open clients");
+});
+
+test("the shell cache name is stamped from the build, never a hand-bumped constant", () => {
+  // A human-maintained version constant gets forgotten and the stale-shell bug
+  // returns silently, so the token must be substituted at build time.
+  assert.match(serviceWorker, /const SW_VERSION = '__SW_VERSION__'/);
+  assert.match(serviceWorker, /const CACHE_NAME = 'srn-shell-' \+ SW_VERSION/);
+  assert.doesNotMatch(
+    serviceWorker,
+    /const SW_VERSION = '\d/,
+    "the checked-in worker must not carry a literal version",
+  );
+
+  // The webpack copy transform is the only place the value is produced. Every
+  // source in its precedence chain is machine-supplied: an explicit build id,
+  // the deploy revision already stamped into the image and the deployment
+  // marker, or the build time. None of them is a constant a human must bump.
+  assert.match(webWebpack, /__SW_VERSION__/);
+  assert.match(
+    webWebpack,
+    /process\.env\.SW_BUILD_ID \|\| process\.env\.SRN_DEPLOY_REVISION \|\| String\(Date\.now\(\)\)/,
+  );
+  assert.match(webWebpack, /\$\{version\}-\$\{buildId\}/);
+});
+
+test("a new worker takes over promptly instead of waiting behind the old one", () => {
+  // skipWaiting on install + claim on activate is deliberate here: the previous
+  // worker can serve a shell from a DIFFERENT release (or a poisoned one), and
+  // that shell fails the per-deploy inline-script hash pin. The asset swap risk
+  // is covered because registerServiceWorker reloads the page once on
+  // controllerchange rather than leaving it running against swapped assets.
+  assert.match(serviceWorker, /self\.skipWaiting\(\)/);
+  assert.match(serviceWorker, /self\.clients\.claim\(\)/);
+  assert.match(serviceWorker, /'SKIP_WAITING'/);
+
+  const registration = read(
+    "app/packages/web/src/javascripts/registerServiceWorker.ts",
+  );
+  assert.match(registration, /controllerchange/);
+  assert.match(registration, /window\.location\.reload\(\)/);
+  assert.match(
+    registration,
+    /hasReloaded \|\| !hadControllerAtLoad/,
+    "the first-visit claim must not be mistaken for an update reload",
+  );
+});
+
+test("the settings cache reset touches shell caches only, never user-data storage", () => {
+  // Notes, files, keys, the session and the unsynced sync outbox all live in
+  // IndexedDB/localStorage. A reset that reached them would destroy unsynced
+  // work and sign the user out — far worse than the stale asset it fixes. The
+  // module must therefore not reference those APIs at all.
+  // Comments name those APIs deliberately (they document the boundary), so
+  // strip comments before asserting the EXECUTABLE code never mentions them.
+  const executableAppCacheReset = appCacheReset
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(^|[^:])\/\/.*$/gm, "$1");
+  for (const forbidden of ["indexedDB", "localStorage", "sessionStorage"]) {
+    assert.doesNotMatch(
+      executableAppCacheReset,
+      new RegExp(`\\b${forbidden}\\b`),
+      `AppCacheReset must never reference ${forbidden} in executable code`,
+    );
+  }
+
+  assert.match(appCacheReset, /export const SHELL_CACHE_PREFIX = 'srn-shell-'/);
+  // Deletion is reachable only after the shell-prefix guard: the loop `continue`s
+  // for anything else, so an unprefixed cache can never reach the delete call.
+  assert.match(
+    executableAppCacheReset,
+    /if \(!key\.startsWith\(SHELL_CACHE_PREFIX\)\) \{[\s\S]{0,200}?continue\n\s*\}[\s\S]{0,200}?delete\(key\)/,
+    "deletion must stay behind the shell-prefix filter",
+  );
+  // The prefix the worker writes and the prefix the reset deletes must agree.
+  assert.ok(serviceWorker.includes("'srn-shell-'"));
+});
+
+test("the reload control is mounted in the General preferences pane", () => {
+  assert.match(generalPane, /import ReloadApp from '\.\/ReloadApp'/);
+  assert.match(
+    generalPane,
+    /<Updates \/>\s*\n\s*<ReloadApp \/>/,
+    "the control must sit in the default General subtab, unconditionally",
+  );
+  // Honest copy: users must not fear this deletes their notes.
+  assert.match(reloadAppControl, /Your notes and account are not affected/);
+  assert.match(reloadAppControl, /You will not be signed out/);
+  // Offline is warned about rather than silently destructive.
+  assert.match(reloadAppControl, /You appear to be offline/);
+  assert.match(reloadAppControl, /alerts\.confirm\(/);
 });

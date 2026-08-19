@@ -41,9 +41,18 @@ module.exports = (env) => {
         // (which rarely changes) meant successive rebuilds reused the same
         // CACHE_NAME, so the activate-handler purge never ran and the browser
         // served a STALE app.js cache-first indefinitely — bug fixes never
-        // reached users. SW_BUILD_ID lets CI pin a deterministic id; otherwise
-        // the build time guarantees uniqueness.
-        const buildId = process.env.SW_BUILD_ID || String(Date.now())
+        // reached users. Precedence, all automatic — nothing here is ever a
+        // hand-bumped constant, because a forgotten bump silently reintroduces
+        // the stale-shell bug:
+        //   1. SW_BUILD_ID          — explicit override for a reproducible build
+        //   2. SRN_DEPLOY_REVISION  — the commit already stamped into the image
+        //      and into /.well-known/srn-deployment.json, so the shell cache and
+        //      the deployment marker name the same release instead of inventing
+        //      a second identity. Passed as a --build-arg (see app/Dockerfile);
+        //      it must be exported into this stage's env to take effect here.
+        //   3. build time           — always unique, so a plain local/CI build
+        //      still rotates the cache name.
+        const buildId = process.env.SW_BUILD_ID || process.env.SRN_DEPLOY_REVISION || String(Date.now())
         return content.toString().replace(/__SW_VERSION__/g, `${version}-${buildId}`)
       },
     },
