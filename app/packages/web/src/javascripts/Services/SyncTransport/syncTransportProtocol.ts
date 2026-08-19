@@ -28,17 +28,27 @@ export type SyncCommandPayload = {
 
 export type CollaborationAuthorizationTransportRequest = {
   noteUuid: string
-  collaborationProtocolVersion: 2
+  collaborationProtocolVersion: 3
   leaseRequestId?: string
   bootstrapChallenge?: string
+  /**
+   * Pins the request to a room epoch the caller already holds. When set, the worker
+   * aborts with COLLABORATION_DENIED if discovery reports a different epoch, rather
+   * than proceeding to the grant leg. Absent, the worker adopts whatever epoch it
+   * discovers.
+   */
+  expectedRoomEpoch?: string
 }
 
 export type CollaborationAuthorizationTransportResult = {
+  epochDiscovery: false
   capability: string
   room: string
   expiresIn: number
   serverUpdatedAtTimestamp: number
-  collaborationProtocolVersion: 2
+  collaborationProtocolVersion: 3
+  roomEpoch: string
+  collaborationSecurityEpoch: string
   leaseRequestId?: string
   bootstrapChallenge?: string
 }

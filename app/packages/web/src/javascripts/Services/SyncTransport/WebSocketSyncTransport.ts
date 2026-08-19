@@ -276,17 +276,34 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     return this.enqueue(() => this.executeOrdered(request, httpFallback, context))
   }
 
+  /**
+   * `expectedRoomEpoch` is optional by design rather than vestigial. Omitted, the
+   * worker discovers the room epoch itself and grants against whatever it finds.
+   * Supplied, it pins the request: `SyncTransportWorkerRuntime` compares it to the
+   * discovered epoch and denies before the grant leg is ever sent, so a caller
+   * holding state from a since-rotated room is cut off during discovery instead of
+   * receiving a capability for the new epoch.
+   *
+   * Note the seam that reaches this method — `CollaborationRoomAuthorizationTransport`
+   * in `@standardnotes/services` — still declares only three parameters, so the
+   * production wiring cannot pass the fourth yet and epoch mismatches are caught one
+   * round trip later by the echo check in `normalizeCollaborationAuthorization`.
+   * Keep this parameter: it is the target of that seam widening, and the epoch-bound
+   * callers already cast to a four-argument signature to reach it.
+   */
   authorizeCollaborationRoom(
     noteUuid: string,
     leaseRequestId?: string,
     bootstrapChallenge?: string,
+    expectedRoomEpoch?: string,
   ): Promise<CollaborationAuthorizationTransportResult | null | undefined> {
     return this.enqueue(() =>
       this.authorizeCollaborationRoomOrdered({
         noteUuid,
-        collaborationProtocolVersion: 2,
+        collaborationProtocolVersion: 3,
         ...(leaseRequestId ? { leaseRequestId } : {}),
         ...(bootstrapChallenge ? { bootstrapChallenge } : {}),
+        ...(expectedRoomEpoch ? { expectedRoomEpoch } : {}),
       }),
     )
   }
@@ -920,9 +937,16 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
       }
     })
     pending.tail = operation.catch((error) => {
-      pending.options.onError?.(
-        error instanceof AuthenticatedRpcError ? error : new AuthenticatedRpcError('INVITE_APPLY_FAILED', true, false),
-      )
+      const failure =
+        error instanceof AuthenticatedRpcError ? error : new AuthenticatedRpcError('INVITE_APPLY_FAILED', true, false)
+      if (this.pendingInviteSubscriptions.get(clientRequestId) === pending) {
+        // The worker/server are both intentionally holding the batch unacked.
+        // End this subscription so the lifecycle owner can retry from its last
+        // durable checkpoint; leaving it registered would deadlock forever.
+        this.pendingInviteSubscriptions.delete(clientRequestId)
+        this.worker?.postMessage({ type: 'UNSUBSCRIBE_INVITE_EVENTS', clientRequestId })
+      }
+      pending.options.onError?.(failure)
     })
   }
 

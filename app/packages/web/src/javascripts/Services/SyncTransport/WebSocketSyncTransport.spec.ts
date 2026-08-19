@@ -834,4 +834,95 @@ describe('WebSocketSyncTransport', () => {
       clientRequestId: subscribe.clientRequestId,
     })
   })
+
+  it('terminates an unacknowledged invite stream when application fails so lifecycle recovery can replay it', async () => {
+    const transport = createTransport()
+    const applyBatch = jest.fn().mockRejectedValue(new Error('checkpoint unavailable'))
+    const onError = jest.fn()
+    const dispose = await transport.subscribeInviteEvents({
+      cursor: 'cursor-0',
+      applyBatch,
+      reconcile: jest.fn(),
+      onError,
+    })
+    const subscribe = worker.posts.find((message) => message.type === 'SUBSCRIBE_INVITE_EVENTS') as Extract<
+      MainToSyncWorkerMessage,
+      { type: 'SUBSCRIBE_INVITE_EVENTS' }
+    >
+    const batch = {
+      previousCursor: 'cursor-0',
+      events: [
+        {
+          version: 1 as const,
+          eventId: '11111111-1111-4111-8111-111111111111',
+          streamPosition: 'cursor-1',
+          kind: 'subscription-invite' as const,
+          action: 'created' as const,
+          inviteUuid: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          occurredAt: 1,
+        },
+      ],
+      nextCursor: 'cursor-1',
+      hasMore: false,
+    }
+
+    worker.emit({ type: 'INVITE_BATCH', clientRequestId: subscribe.clientRequestId, batch })
+    await flush()
+
+    expect(applyBatch).toHaveBeenCalledTimes(1)
+    expect(worker.posts.filter((message) => message.type === 'ACK_INVITE_EVENTS')).toHaveLength(0)
+    expect(worker.posts.filter((message) => message.type === 'UNSUBSCRIBE_INVITE_EVENTS')).toEqual([
+      { type: 'UNSUBSCRIBE_INVITE_EVENTS', clientRequestId: subscribe.clientRequestId },
+    ])
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ code: 'INVITE_APPLY_FAILED', retryable: true, safeToFallback: false }),
+    )
+
+    worker.emit({ type: 'INVITE_BATCH', clientRequestId: subscribe.clientRequestId, batch })
+    await flush()
+    expect(applyBatch).toHaveBeenCalledTimes(1)
+    dispose()
+    expect(worker.posts.filter((message) => message.type === 'UNSUBSCRIBE_INVITE_EVENTS')).toHaveLength(1)
+  })
+
+  // `expectedRoomEpoch` is the fourth parameter of authorizeCollaborationRoom. No
+  // production caller reaches it yet (the WebsocketsService transport seam still
+  // declares three), so without this the argument would be silently droppable.
+  const collaborationPost = () =>
+    worker.posts.find((message) => message.type === 'AUTHORIZE_COLLABORATION') as Extract<
+      MainToSyncWorkerMessage,
+      { type: 'AUTHORIZE_COLLABORATION' }
+    >
+
+  it('forwards an expectedRoomEpoch pin from the four-argument call into the worker request', async () => {
+    const transport = createTransport()
+    const roomEpoch = 'c'.repeat(64)
+
+    void transport.authorizeCollaborationRoom('note-1', 'lease-1', 'challenge-1', roomEpoch)
+    await flush()
+
+    expect(collaborationPost().request).toEqual({
+      noteUuid: 'note-1',
+      collaborationProtocolVersion: 3,
+      leaseRequestId: 'lease-1',
+      bootstrapChallenge: 'challenge-1',
+      expectedRoomEpoch: roomEpoch,
+    })
+  })
+
+  it('omits expectedRoomEpoch entirely when the three-argument call is used', async () => {
+    const transport = createTransport()
+
+    void transport.authorizeCollaborationRoom('note-1', 'lease-1', 'challenge-1')
+    await flush()
+
+    const { request: sent } = collaborationPost()
+    expect('expectedRoomEpoch' in sent).toBe(false)
+    expect(sent).toEqual({
+      noteUuid: 'note-1',
+      collaborationProtocolVersion: 3,
+      leaseRequestId: 'lease-1',
+      bootstrapChallenge: 'challenge-1',
+    })
+  })
 })
