@@ -82,7 +82,13 @@ import { requestBodyLogMetadata } from '../src/Logging/RequestBodyLogMetadata'
 import {
   createRedisSqsEventDedupStore,
   createLoggerSyncCommandMetrics,
+  createSharedInviteEventComposition,
   createRedisSyncState,
+  RedisInviteEventAvailabilityBus,
+  RedisInviteEventStore,
+  type RedisInviteEventClient,
+  type RedisInviteEventPublisher,
+  type RedisInviteEventSubscriber,
   type RedisSqsEventDedupClient,
   type SyncGatewayOptions,
   type SyncRedisClient,
@@ -515,6 +521,10 @@ void container
 
     const webSocketRuntime = new SyncWebSocketRuntime()
     let stopWebSocketGateway: (() => Promise<void>) | undefined
+    let inviteEventAvailability: RedisInviteEventAvailabilityBus | undefined
+    let inviteAvailabilityRedis:
+      | (RedisInviteEventSubscriber & { quit(): Promise<unknown>; disconnect(): void })
+      | undefined
     if (env.get('WEB_SOCKET_CONNECTION_TOKEN_SECRET', true)) {
       try {
         let sync: SyncGatewayOptions | undefined
@@ -534,10 +544,20 @@ void container
               container.get(TYPES.ApiGateway_COLLABORATION_CAPABILITY_TTL),
             ),
           )
-          const redisState = createRedisSyncState(
-            container.get(TYPES.ApiGateway_Redis) as SyncRedisClient,
-            syncRedisOptions,
-          )
+          const redisClient = container.get(TYPES.ApiGateway_Redis) as SyncRedisClient &
+            RedisInviteEventClient &
+            RedisInviteEventPublisher & {
+              duplicate(): RedisInviteEventSubscriber & { quit(): Promise<unknown>; disconnect(): void }
+            }
+          const redisState = createRedisSyncState(redisClient, syncRedisOptions)
+          inviteAvailabilityRedis = redisClient.duplicate()
+          inviteEventAvailability = new RedisInviteEventAvailabilityBus(redisClient, inviteAvailabilityRedis)
+          const inviteEventComposition = createSharedInviteEventComposition({
+            store: new RedisInviteEventStore(redisClient, {
+              cursorSecret: env.get('WEB_SOCKET_CONNECTION_TOKEN_SECRET', true),
+            }),
+            availability: inviteEventAvailability,
+          })
           sync = {
             isEnabled: () => webSocketSyncEnabled,
             allowedOrigins: syncAllowedOrigins,
@@ -550,9 +570,25 @@ void container
               operations: ['API_RPC', 'STREAM_ASSISTANT'],
             }),
             metrics: createLoggerSyncCommandMetrics(gatewayLogger),
+            inviteEvents: inviteEventComposition.gatewayAdapter,
+            inviteEventDispatcher: inviteEventComposition.dispatcher,
             ...redisState,
             requireSharedState: true,
           }
+          // FILES_V1 (`sync.files`) is deliberately NOT supplied here, so the
+          // capability is simply absent from this deployment's advertised
+          // operations. The only implemented adapter is the home server's, and
+          // it needs two things this bootstrap does not have: the canonical file
+          // bytes on a local filesystem root, and the in-process Auth/Syncing
+          // service container the valet-token authorization path calls into. In
+          // the distributed topology the files service owns the bytes (S3 or its
+          // own volume) and Auth/Syncing are reached over HTTP, so wiring the
+          // filesystem adapter here would authorize transfers against a disk
+          // that holds no user files. Serving FILES_V1 from this bootstrap needs
+          // a files-service-backed adapter, not extra configuration.
+          logger.info(
+            'Realtime FILES_V1 transport not advertised: the distributed api-gateway does not own canonical file storage.',
+          )
         } else if (webSocketSyncEnabled) {
           logger.warn('WebSocket sync capability is unavailable: durable backend and shared Redis state are required.')
         }
@@ -585,11 +621,29 @@ void container
         })
         stopWebSocketGateway = async (): Promise<void> => {
           mintConnectionTokenHandler = undefined
-          await webSocketRuntime.stop()
+          try {
+            await webSocketRuntime.stop()
+          } finally {
+            await inviteEventAvailability?.close().catch(() => undefined)
+            inviteEventAvailability = undefined
+            const availabilityRedis = inviteAvailabilityRedis
+            inviteAvailabilityRedis = undefined
+            if (availabilityRedis) {
+              try {
+                await availabilityRedis.quit()
+              } catch {
+                availabilityRedis.disconnect()
+              }
+            }
+          }
         }
         mintConnectionTokenHandler = gateway.handleMintToken
         logger.info('Realtime WebSocket gateway attached in-process on the api-gateway http server')
       } catch (error) {
+        await inviteEventAvailability?.close().catch(() => undefined)
+        inviteEventAvailability = undefined
+        inviteAvailabilityRedis?.disconnect()
+        inviteAvailabilityRedis = undefined
         logger.error('Failed to attach the realtime WebSocket gateway.', safeErrorLogMetadata(error))
         throw error
       }

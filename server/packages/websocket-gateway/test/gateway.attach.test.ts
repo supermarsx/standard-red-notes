@@ -59,13 +59,17 @@ import {
   WebSocketIngressLimiter,
   WebSocketRelayBacklog,
   type GatewayConfig,
+  type SyncFilesAdapter,
 } from '../src/gateway.js'
+import { decodeFileBinaryFrame, encodeFileBinaryFrame, sha256Hex } from '../src/filesProtocol.js'
 import { InMemorySyncAuthTicketStore, mintConnectionToken } from '../src/auth.js'
 import { COLLABORATION_PROTOCOL_VERSION } from '../src/rooms.js'
 
 const CONNECTION_SECRET = 'connection-secret'
 const AUTH_SECRET = 'auth-jwt-secret'
 const INTERNAL_SECRET = 'internal-secret'
+const ROOM_EPOCH = 'room_epoch_00000001'
+const SECURITY_EPOCH = 'security_epoch_0001'
 
 function baseConfig(overrides: Partial<GatewayConfig> = {}): GatewayConfig {
   return {
@@ -301,12 +305,19 @@ describe('defaultRoomJoinAuthorizer', () => {
       purpose: 'collab-room',
       userUuid: 'user-1',
       room: 'note-1',
-      collaborationProtocolVersion: 2,
+      collaborationProtocolVersion: COLLABORATION_PROTOCOL_VERSION,
+      collaborationAuthorizationIssuedAt: 1,
       serverUpdatedAtTimestamp: 1,
+      roomEpoch: ROOM_EPOCH,
+      collaborationSecurityEpoch: SECURITY_EPOCH,
     })
     expect(authorizer('user-1', 'note-1', cap)).toMatchObject({
       authorized: true,
       expiresAt: expect.any(Number),
+      collaborationAuthorizationIssuedAt: 1,
+      collaborationProtocolVersion: COLLABORATION_PROTOCOL_VERSION,
+      roomEpoch: ROOM_EPOCH,
+      collaborationSecurityEpoch: SECURITY_EPOCH,
     })
   })
 
@@ -590,7 +601,9 @@ describe('websocket connection lifecycle', () => {
       authorized: true
       expiresAt: number
       serverUpdatedAtTimestamp: number
-      collaborationProtocolVersion: 2
+      collaborationProtocolVersion: 3
+      roomEpoch: string
+      collaborationSecurityEpoch: string
       leaseRequestId: string
     }) => void
     let markAuthorizationStarted!: () => void
@@ -601,7 +614,9 @@ describe('websocket connection lifecycle', () => {
       authorized: true
       expiresAt: number
       serverUpdatedAtTimestamp: number
-      collaborationProtocolVersion: 2
+      collaborationProtocolVersion: 3
+      roomEpoch: string
+      collaborationSecurityEpoch: string
       leaseRequestId: string
     }>((resolve) => {
       resolveAuthorization = resolve
@@ -624,6 +639,7 @@ describe('websocket connection lifecycle', () => {
         requestId: 'delayed-join',
         role: 'editor',
         protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+        expectedRoomEpoch: ROOM_EPOCH,
       }),
     )
     await authorizationStarted
@@ -636,6 +652,8 @@ describe('websocket connection lifecycle', () => {
       expiresAt: Date.now() + 60_000,
       serverUpdatedAtTimestamp: 1,
       collaborationProtocolVersion: COLLABORATION_PROTOCOL_VERSION,
+      roomEpoch: ROOM_EPOCH,
+      collaborationSecurityEpoch: SECURITY_EPOCH,
       leaseRequestId: 'delayed-join',
     })
     await new Promise((resolve) => setTimeout(resolve, 20))
@@ -757,7 +775,9 @@ describe('websocket connection lifecycle', () => {
           authorized: true,
           expiresAt: Date.now() + 60_000,
           serverUpdatedAtTimestamp: 1,
-          collaborationProtocolVersion: 2,
+          collaborationProtocolVersion: COLLABORATION_PROTOCOL_VERSION,
+          roomEpoch: ROOM_EPOCH,
+          collaborationSecurityEpoch: SECURITY_EPOCH,
           leaseRequestId: capability,
         }),
       })
@@ -776,6 +796,7 @@ describe('websocket connection lifecycle', () => {
           requestId: 'slow-frame-lease',
           role: 'editor',
           protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+          expectedRoomEpoch: ROOM_EPOCH,
         }),
       )
       await vi.waitFor(() => expect(redis.state.evalCalls).toBe(1))
@@ -813,6 +834,7 @@ describe('websocket connection lifecycle', () => {
       requestId: 'slow-byte-lease',
       role: 'editor',
       protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+      expectedRoomEpoch: ROOM_EPOCH,
     })
     try {
       await attachGateway({
@@ -827,7 +849,9 @@ describe('websocket connection lifecycle', () => {
           authorized: true,
           expiresAt: Date.now() + 60_000,
           serverUpdatedAtTimestamp: 1,
-          collaborationProtocolVersion: 2,
+          collaborationProtocolVersion: COLLABORATION_PROTOCOL_VERSION,
+          roomEpoch: ROOM_EPOCH,
+          collaborationSecurityEpoch: SECURITY_EPOCH,
           leaseRequestId: capability,
         }),
       })
@@ -868,7 +892,9 @@ describe('websocket connection lifecycle', () => {
           authorized: true,
           expiresAt: Date.now() + 60_000,
           serverUpdatedAtTimestamp: 1,
-          collaborationProtocolVersion: 2,
+          collaborationProtocolVersion: COLLABORATION_PROTOCOL_VERSION,
+          roomEpoch: ROOM_EPOCH,
+          collaborationSecurityEpoch: SECURITY_EPOCH,
           ...(binding.requestId ? { leaseRequestId: binding.requestId } : {}),
           ...(binding.challenge ? { bootstrapChallenge: binding.challenge } : {}),
         }
@@ -888,11 +914,13 @@ describe('websocket connection lifecycle', () => {
           room: 'note-1',
           requestId,
           role: 'editor',
-          protocolVersion: 2,
+          protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+          expectedRoomEpoch: ROOM_EPOCH,
           cap: JSON.stringify({ requestId }),
         }),
       )
-      const reserved = JSON.parse(await reservedMessage) as { bootstrapChallenge?: string }
+      const reserved = JSON.parse(await reservedMessage) as { bootstrapChallenge?: string; roomEpoch?: string }
+      expect(reserved.roomEpoch).toBe(ROOM_EPOCH)
       const joinedMessage = nextMessage(socket)
       socket.send(
         JSON.stringify({
@@ -900,11 +928,18 @@ describe('websocket connection lifecycle', () => {
           room: 'note-1',
           requestId,
           role: 'editor',
-          protocolVersion: 2,
+          protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+          expectedRoomEpoch: ROOM_EPOCH,
           cap: JSON.stringify({ requestId, challenge: reserved.bootstrapChallenge }),
         }),
       )
-      expect(JSON.parse(await joinedMessage)).toMatchObject({ t: 'room-joined', room: 'note-1', requestId })
+      expect(JSON.parse(await joinedMessage)).toMatchObject({
+        t: 'room-joined',
+        room: 'note-1',
+        requestId,
+        protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+        roomEpoch: ROOM_EPOCH,
+      })
     }
 
     await activate(socketA, 'lease-a')
@@ -1358,5 +1393,259 @@ describe('authenticated /sockets/sync command plane', () => {
       '[ws-sync-metric]',
       JSON.stringify({ event: 'protocol', code: 'FRAME_TOO_LARGE' }),
     )
+  })
+
+  it('routes owned binary FILES_V1 frames to the file session instead of the JSON parser', async () => {
+    const files = {
+      ready: () => true,
+      metadata: vi.fn(),
+      openUpload: vi.fn(),
+      uploadChunk: vi.fn(),
+      finishUpload: vi.fn(),
+      openDownload: vi.fn(),
+      readDownloadChunk: vi.fn(),
+      cancel: vi.fn(),
+    } as unknown as SyncFilesAdapter
+    port = await listen()
+    attached = attachWebSocketGateway({
+      httpServer,
+      config: baseConfig(),
+      logger: makeLogger(),
+      sync: { ...syncOptions(), files },
+    })
+    const issued = await attached.sync.issueTicket({
+      userUuid: 'user-files',
+      sessionUuid: 'session-files',
+      deviceId: 'device-files',
+    })
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/sockets/sync`, {
+      origin: 'https://app.example.test',
+    })
+    await opened(socket)
+    const payload = { ticket: issued.ticket, deviceId: 'device-files' }
+    const authenticated = nextJson(socket)
+    socket.send(
+      JSON.stringify({
+        version: 1,
+        channel: 'sync',
+        type: 'AUTH',
+        requestId: 'auth-files',
+        commandId: 'auth-files',
+        sequence: 0,
+        payloadLength: Buffer.byteLength(JSON.stringify(payload)),
+        payload,
+      }),
+    )
+    expect(await authenticated).toMatchObject({
+      type: 'AUTHENTICATED',
+      payload: { operations: expect.arrayContaining(['FILES_V1']) },
+    })
+
+    const error = nextJson(socket)
+    socket.send(Buffer.from('not-a-file-frame'), { binary: true })
+    expect(await error).toMatchObject({ type: 'ERROR', payload: { code: 'FILE_FRAME_MALFORMED' } })
+    expect(files.uploadChunk).not.toHaveBeenCalled()
+    socket.close()
+  })
+
+  it('runs a full FILES_V1 upload then download round trip over a real socket', async () => {
+    // Byte-accurate storage double: the round trip only passes if every control
+    // frame, binary chunk, credit grant and digest check on the real wire works.
+    const stored = new Map<string, Uint8Array>()
+    const staged = new Map<string, Uint8Array[]>()
+    const uploadTargets = new Map<string, string>()
+    const payload = Uint8Array.from({ length: 700 }, (_value, index) => (index * 7) % 251)
+
+    const files: SyncFilesAdapter = {
+      ready: () => true,
+      metadata: async ({ resources }) =>
+        resources.map((resource) => {
+          const bytes = stored.get(resource.remoteIdentifier)
+          return bytes
+            ? { resource, exists: true, encryptedSize: bytes.byteLength }
+            : { resource, exists: false as const }
+        }),
+      openUpload: async ({ descriptor }) => {
+        staged.set('transfer-up', [])
+        uploadTargets.set('transfer-up', descriptor.remoteIdentifier)
+        return {
+          transferId: 'transfer-up',
+          generation: 1,
+          resumeId: 'resume-up',
+          nextIndex: 0,
+          nextOffset: 0,
+          declaredSize: descriptor.declaredSize,
+        }
+      },
+      uploadChunk: async ({ header, bytes }) => {
+        const parts = staged.get(header.transferId) as Uint8Array[]
+        // Copy: the transport hands over a view onto a reusable frame buffer.
+        parts[header.index] = Uint8Array.from(bytes)
+        return {
+          duplicate: false,
+          nextIndex: header.index + 1,
+          nextOffset: header.offset + bytes.byteLength,
+          resumeId: 'resume-up',
+        }
+      },
+      finishUpload: async ({ transferId, sha256 }) => {
+        const parts = staged.get(transferId) as Uint8Array[]
+        const joined = Buffer.concat(parts.map((part) => Buffer.from(part)))
+        if (sha256Hex(joined) !== sha256) {
+          throw new Error('digest mismatch')
+        }
+        stored.set(uploadTargets.get(transferId) as string, new Uint8Array(joined))
+        return { sha256 }
+      },
+      openDownload: async ({ resource }) => ({
+        transferId: 'transfer-down',
+        generation: 1,
+        resumeId: 'resume-down',
+        declaredSize: (stored.get(resource.remoteIdentifier) as Uint8Array).byteLength,
+        nextIndex: 0,
+        nextOffset: 0,
+      }),
+      readDownloadChunk: async ({ index, offset, maxBytes }) => {
+        const bytes = stored.get('remote-round-trip') as Uint8Array
+        const slice = bytes.slice(offset, Math.min(bytes.byteLength, offset + maxBytes))
+        return {
+          index,
+          offset,
+          declaredSize: bytes.byteLength,
+          bytes: slice,
+          final: offset + slice.byteLength >= bytes.byteLength,
+        }
+      },
+      cancel: async () => undefined,
+    }
+
+    port = await listen()
+    attached = attachWebSocketGateway({
+      httpServer,
+      config: baseConfig(),
+      logger: makeLogger(),
+      sync: { ...syncOptions(), files },
+    })
+    const issued = await attached.sync.issueTicket({
+      userUuid: 'user-round-trip',
+      sessionUuid: 'session-round-trip',
+      deviceId: 'device-round-trip',
+      authorization: 'Bearer server-only-credential',
+    })
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/sockets/sync`, { origin: 'https://app.example.test' })
+    await opened(socket)
+
+    const controls: Array<Record<string, unknown>> = []
+    const binaries: Uint8Array[] = []
+    socket.on('message', (data, isBinary) => {
+      if (isBinary) {
+        binaries.push(new Uint8Array(data as Buffer))
+        return
+      }
+      controls.push(JSON.parse(data.toString()) as Record<string, unknown>)
+    })
+
+    let sequence = 0
+    const send = (type: string, framePayload: Record<string, unknown>): string => {
+      const requestId = `${type.toLowerCase()}-${sequence}`
+      socket.send(
+        JSON.stringify({
+          version: 1,
+          channel: 'sync',
+          type,
+          requestId,
+          commandId: requestId,
+          sequence: sequence++,
+          payloadLength: Buffer.byteLength(JSON.stringify(framePayload), 'utf8'),
+          payload: framePayload,
+        }),
+      )
+      return requestId
+    }
+    const awaitControl = async (type: string): Promise<Record<string, unknown>> => {
+      let frame: Record<string, unknown> | undefined
+      await vi.waitFor(() => {
+        frame = controls.find((candidate) => candidate.type === type)
+        expect(frame, `waiting for ${type}; saw ${controls.map((seen) => seen.type).join(', ')}`).toBeDefined()
+      })
+      return frame as Record<string, unknown>
+    }
+
+    send('AUTH', { ticket: issued.ticket, deviceId: 'device-round-trip' })
+    expect(await awaitControl('AUTHENTICATED')).toMatchObject({
+      payload: { operations: expect.arrayContaining(['FILES_V1']) },
+    })
+
+    const resource = { ownershipType: 'user' as const, remoteIdentifier: 'remote-round-trip', fileUuid: 'file-1' }
+    send('FILES_METADATA', { resources: [resource], deadlineMs: 5_000 })
+    expect(await awaitControl('FILES_METADATA')).toMatchObject({
+      payload: { entries: [{ exists: false }] },
+    })
+
+    send('FILES_UPLOAD_OPEN', {
+      resource,
+      decryptedSize: payload.byteLength,
+      declaredSize: payload.byteLength,
+      mimeType: 'application/octet-stream',
+      deadlineMs: 5_000,
+    })
+    const accepted = await awaitControl('FILES_ACCEPTED')
+    expect(accepted).toMatchObject({ payload: { mode: 'upload', transferId: 'transfer-up' } })
+
+    const half = 350
+    for (const [index, slice] of [payload.slice(0, half), payload.slice(half)].entries()) {
+      socket.send(
+        Buffer.from(
+          encodeFileBinaryFrame(
+            {
+              kind: 'UPLOAD_CHUNK',
+              requestId: 'upload-chunk',
+              transferId: 'transfer-up',
+              generation: 1,
+              index,
+              offset: index * half,
+              declaredSize: payload.byteLength,
+              byteLength: slice.byteLength,
+              sha256: sha256Hex(slice),
+              final: index === 1,
+            },
+            slice,
+          ),
+        ),
+        { binary: true },
+      )
+      await vi.waitFor(() =>
+        expect(controls.filter((frame) => frame.type === 'FILES_CHUNK_ACK')).toHaveLength(index + 1),
+      )
+    }
+
+    send('FILES_UPLOAD_FINISH', {
+      transferId: 'transfer-up',
+      generation: 1,
+      declaredSize: payload.byteLength,
+      sha256: sha256Hex(payload),
+      deadlineMs: 5_000,
+    })
+    expect(await awaitControl('FILES_COMPLETE')).toMatchObject({
+      payload: { mode: 'upload', sha256: sha256Hex(payload) },
+    })
+    expect(stored.get('remote-round-trip')).toEqual(payload)
+
+    controls.length = 0
+    send('FILES_DOWNLOAD_OPEN', {
+      resource,
+      offset: 0,
+      initialCreditBytes: payload.byteLength,
+      deadlineMs: 5_000,
+    })
+    expect(await awaitControl('FILES_ACCEPTED')).toMatchObject({
+      payload: { mode: 'download', declaredSize: payload.byteLength },
+    })
+    const completed = await awaitControl('FILES_COMPLETE')
+    expect(completed).toMatchObject({ payload: { mode: 'download', sha256: sha256Hex(payload) } })
+
+    const received = Buffer.concat(binaries.map((frame) => Buffer.from(decodeFileBinaryFrame(frame).bytes)))
+    expect(new Uint8Array(received)).toEqual(payload)
+    socket.close()
   })
 })

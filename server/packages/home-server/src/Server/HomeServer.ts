@@ -39,8 +39,17 @@ import {
 } from '@standardnotes/api-gateway'
 import {
   createLoggerSyncCommandMetrics,
+  createInviteRealtimeDomainEventBridge,
+  createSharedInviteEventComposition,
   createRedisSyncState,
+  createSyncFilesTokenDecoder,
+  RedisInviteEventAvailabilityBus,
+  RedisInviteEventStore,
+  type RedisInviteEventClient,
+  type RedisInviteEventPublisher,
+  type RedisInviteEventSubscriber,
   type SyncGatewayOptions,
+  type InviteRealtimeDomainEventBridge,
   type SyncRedisClient,
 } from '@standard-red-notes/websocket-gateway'
 import { Service as FilesService } from '@standardnotes/files-server'
@@ -55,6 +64,7 @@ import cors from 'cors'
 import cookieParser from 'cookie-parser'
 import { text, json, Request, Response, NextFunction, raw } from 'express'
 import * as http from 'http'
+import { resolve as resolvePath } from 'path'
 import * as winston from 'winston'
 import Redis from 'ioredis'
 import { PassThrough } from 'stream'
@@ -63,6 +73,14 @@ import { HomeServerInterface } from './HomeServerInterface'
 import { HomeServerConfiguration } from './HomeServerConfiguration'
 import { WebSocketRedisBridge } from './WebSocketRedisBridge'
 import { HomeServerRuntime, HomeServerRuntimeEmailDelivery } from './HomeServerRuntime'
+import { HomeServerSyncFilesAdapter } from './HomeServerSyncFilesAdapter'
+import {
+  CanonicalHomeServerFileResourceAuthorizer,
+  type HomeServerCrossServiceToken,
+  type HomeServerPersonalValetToken,
+  type HomeServerSharedVaultValetToken,
+  type HomeServerSessionValidationPort,
+} from './CanonicalHomeServerFileResourceAuthorizer'
 
 export function buildHomeServerEnvironmentOverrides(
   dataDirectoryPath: string,
@@ -93,6 +111,24 @@ export function buildHomeServerEnvironmentOverrides(
     ...configuredEnvironment,
     MODE: 'home-server',
   }
+}
+
+/**
+ * FILES_V1 (the binary file lane on the sync socket) is ON by default in the
+ * home server: the canonical file store is a local filesystem root that the
+ * same process already owns, so no extra infrastructure is required. Operators
+ * can turn the capability off without disabling realtime sync entirely by
+ * setting WEBSOCKET_FILES_ENABLED=false.
+ */
+export function parseWebSocketFilesEnabled(value: string | undefined): boolean {
+  if (value === undefined) {
+    return true
+  }
+  const normalized = value.trim().toLowerCase()
+  if (normalized === '') {
+    return true
+  }
+  return !['false', '0', 'no', 'off'].includes(normalized)
 }
 
 export interface HomeServerListener {
@@ -559,6 +595,10 @@ export class HomeServer implements HomeServerInterface {
       }
       const webSocketRuntime = new SyncWebSocketRuntime()
       let syncStateRedis: Redis | undefined
+      let inviteAvailabilityRedis: Redis | undefined
+      let inviteEventAvailability: RedisInviteEventAvailabilityBus | undefined
+      let inviteDomainEventBridge: InviteRealtimeDomainEventBridge | undefined
+      let filesAdapter: HomeServerSyncFilesAdapter | undefined
       let realtime: { stop(): Promise<void> } | undefined
       const redisHost = env.get('REDIS_HOST', true) || undefined
       const connectionTokenSecret = env.get('WEB_SOCKET_CONNECTION_TOKEN_SECRET', true) || undefined
@@ -573,6 +613,26 @@ export class HomeServer implements HomeServerInterface {
               maxRetriesPerRequest: 1,
             })
             syncStateRedis.on('error', () => logger.warn('WebSocket sync shared-state Redis connection error.'))
+            inviteAvailabilityRedis = syncStateRedis.duplicate()
+            inviteAvailabilityRedis.on('error', () =>
+              logger.warn('WebSocket invite availability Redis connection error.'),
+            )
+            inviteEventAvailability = new RedisInviteEventAvailabilityBus(
+              syncStateRedis as unknown as RedisInviteEventPublisher,
+              inviteAvailabilityRedis as unknown as RedisInviteEventSubscriber,
+            )
+            const inviteEventComposition = createSharedInviteEventComposition({
+              store: new RedisInviteEventStore(syncStateRedis as unknown as RedisInviteEventClient, {
+                cursorSecret: connectionTokenSecret,
+              }),
+              availability: inviteEventAvailability,
+            })
+            inviteDomainEventBridge = createInviteRealtimeDomainEventBridge({
+              dispatcher: inviteEventComposition.dispatcher,
+              directCallPublisher: directCallDomainEventPublisher,
+            })
+            inviteDomainEventBridge.start()
+            filesAdapter = await this.createSyncFilesAdapter(env, serviceContainer, container, logger)
             const syncAdapter = new SyncWebSocketCommandAdapter(
               container.get(ApiGatewayTypes.ApiGateway_ServiceProxy),
               new DirectCallSyncCommandPort(serviceContainer),
@@ -596,6 +656,9 @@ export class HomeServer implements HomeServerInterface {
                 operations: ['API_RPC', 'STREAM_ASSISTANT'],
               }),
               metrics: createLoggerSyncCommandMetrics(gatewayLogger),
+              inviteEvents: inviteEventComposition.gatewayAdapter,
+              inviteEventDispatcher: inviteEventComposition.dispatcher,
+              files: filesAdapter,
               ...createRedisSyncState(syncStateRedis as unknown as SyncRedisClient, syncRedisOptions),
               requireSharedState: true,
             }
@@ -624,6 +687,19 @@ export class HomeServer implements HomeServerInterface {
               try {
                 await webSocketRuntime.stop()
               } finally {
+                await inviteDomainEventBridge?.close().catch(() => undefined)
+                inviteDomainEventBridge = undefined
+                await inviteEventAvailability?.close().catch(() => undefined)
+                inviteEventAvailability = undefined
+                const availabilityRedis = inviteAvailabilityRedis
+                inviteAvailabilityRedis = undefined
+                if (availabilityRedis) {
+                  try {
+                    await availabilityRedis.quit()
+                  } catch {
+                    availabilityRedis.disconnect()
+                  }
+                }
                 const redis = syncStateRedis
                 syncStateRedis = undefined
                 if (redis) {
@@ -639,6 +715,12 @@ export class HomeServer implements HomeServerInterface {
           logger.info('Realtime WebSocket gateway attached to the HomeServer HTTP server')
         } catch (error) {
           await webSocketRuntime.stop().catch(() => undefined)
+          await inviteDomainEventBridge?.close().catch(() => undefined)
+          inviteDomainEventBridge = undefined
+          await inviteEventAvailability?.close().catch(() => undefined)
+          inviteEventAvailability = undefined
+          inviteAvailabilityRedis?.disconnect()
+          inviteAvailabilityRedis = undefined
           syncStateRedis?.disconnect()
           throw error
         }
@@ -721,6 +803,69 @@ export class HomeServer implements HomeServerInterface {
       return await this.stopPromise
     } finally {
       this.stopPromise = undefined
+    }
+  }
+
+  /**
+   * Build the canonical FILES_V1 storage adapter for the sync socket.
+   *
+   * The home server owns both the file bytes (FILE_UPLOAD_PATH, the same root
+   * the files service uploads into) and the Auth/Syncing valet-token use cases
+   * over the in-process service container, so the socket can authorize and
+   * stream file transfers without a second HTTP hop. Returns undefined -- which
+   * simply leaves FILES_V1 out of the advertised capability set -- whenever the
+   * capability is switched off or its required secrets are missing.
+   */
+  private async createSyncFilesAdapter(
+    env: Env,
+    serviceContainer: ServiceContainer,
+    container: Container,
+    logger: winston.Logger,
+  ): Promise<HomeServerSyncFilesAdapter | undefined> {
+    if (!parseWebSocketFilesEnabled(env.get('WEBSOCKET_FILES_ENABLED', true) || undefined)) {
+      logger.info('WebSocket FILES_V1 transport disabled by WEBSOCKET_FILES_ENABLED.')
+      return undefined
+    }
+
+    const storageRoot = env.get('FILE_UPLOAD_PATH', true) || ''
+    const authJwtSecret = env.get('AUTH_JWT_SECRET', true) || ''
+    const valetTokenSecret = env.get('VALET_TOKEN_SECRET', true) || ''
+    if (!storageRoot || !authJwtSecret || !valetTokenSecret) {
+      logger.warn(
+        'WebSocket FILES_V1 transport unavailable: FILE_UPLOAD_PATH, AUTH_JWT_SECRET and VALET_TOKEN_SECRET are required.',
+      )
+      return undefined
+    }
+
+    try {
+      const adapter = new HomeServerSyncFilesAdapter({
+        storageRoot: resolvePath(storageRoot),
+        authorizer: new CanonicalHomeServerFileResourceAuthorizer({
+          sessionValidator: container.get(
+            ApiGatewayTypes.ApiGateway_ServiceProxy,
+          ) as HomeServerSessionValidationPort,
+          services: serviceContainer,
+          authTokenDecoder: createSyncFilesTokenDecoder<HomeServerCrossServiceToken>(authJwtSecret),
+          valetTokenDecoder: createSyncFilesTokenDecoder<
+            HomeServerPersonalValetToken | HomeServerSharedVaultValetToken
+          >(valetTokenSecret),
+        }),
+        maxActiveTransfers: parseOptionalPositiveInteger(
+          'WEBSOCKET_FILES_MAX_ACTIVE_TRANSFERS',
+          env.get('WEBSOCKET_FILES_MAX_ACTIVE_TRANSFERS', true) || undefined,
+          4_096,
+        ),
+      })
+      await adapter.initialize()
+      logger.info('WebSocket FILES_V1 transport enabled on the realtime sync socket.')
+      return adapter
+    } catch (error) {
+      // A missing or unusable storage root must not take realtime sync down
+      // with it; the capability is simply not advertised.
+      logger.warn('WebSocket FILES_V1 transport could not be initialized.', {
+        error: error instanceof Error ? error.message : String(error),
+      })
+      return undefined
     }
   }
 

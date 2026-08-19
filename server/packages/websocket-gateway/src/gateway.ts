@@ -29,8 +29,13 @@ import {
   type SyncCollaborationAuthorizationAdapter,
   type SyncCommandMetrics,
   type SyncApiRpcAdapter,
+  type SyncInviteEventsAdapter,
   type SyncLiveAuthorizationAdapter,
 } from './syncCommandHandler.js'
+import type { SyncFilesAdapter } from './filesSession.js'
+import { MAX_FILE_BINARY_FRAME_BYTES } from './filesProtocol.js'
+import { InviteRealtimeDomainEventHandler } from './inviteEventDomainEventHandler.js'
+import type { InviteEventOutboxDispatcher } from './inviteEventOutbox.js'
 import { MAX_SYNC_FRAME_BYTES, SYNC_PROTOCOL_VERSION, isSyncDeviceId } from './syncProtocol.js'
 
 // ---------------------------------------------------------------------------
@@ -133,6 +138,12 @@ export interface SyncGatewayOptions {
   collaborationAuthorization?: SyncCollaborationAuthorizationAdapter
   /** Optional same-origin authenticated API RPC adapter. */
   apiRpc?: SyncApiRpcAdapter
+  /** Fleet-shared durable invitation/membership/application-state stream. */
+  inviteEvents?: SyncInviteEventsAdapter
+  /** Durable dispatcher used by the single production SQS consumer before ACK. */
+  inviteEventDispatcher?: Pick<InviteEventOutboxDispatcher, 'dispatch'>
+  /** Canonical in-process file storage adapter for the binary FILES_V1 lane. */
+  files?: SyncFilesAdapter
   tickets?: SyncAuthTicketStore
   leases?: SyncCommandLeaseRegistry
   socketBudget?: SyncSocketBudget
@@ -273,6 +284,20 @@ function rawDataByteLength(data: RawData): number {
     return data.reduce((total, part) => total + part.byteLength, 0)
   }
   return data.byteLength
+}
+
+function copyRawData(data: RawData): Uint8Array {
+  const copy = new Uint8Array(rawDataByteLength(data))
+  if (Array.isArray(data)) {
+    let offset = 0
+    for (const part of data) {
+      copy.set(part, offset)
+      offset += part.byteLength
+    }
+    return copy
+  }
+  copy.set(data instanceof ArrayBuffer ? new Uint8Array(data) : data)
+  return copy
 }
 
 /**
@@ -681,9 +706,15 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
     syncOptions?.requireSharedState &&
     (syncTickets.distribution !== 'shared' ||
       syncLeases.distribution !== 'shared' ||
-      syncSocketBudget.distribution !== 'shared')
+      syncSocketBudget.distribution !== 'shared' ||
+      syncOptions.inviteEvents?.distribution !== 'shared')
   ) {
-    throw new Error('WebSocket sync requires fleet-shared ticket, command-lease, and socket-budget stores.')
+    throw new Error(
+      'WebSocket sync requires fleet-shared ticket, command-lease, socket-budget, and invite-event stores.',
+    )
+  }
+  if (config.sqs?.queueUrl && syncOptions?.requireSharedState && !syncOptions.inviteEventDispatcher) {
+    throw new Error('WebSocket sync requires the durable invite-event SQS dispatcher.')
   }
   const syncIngressLimits: WebSocketIngressLimits = {
     ...DEFAULT_SYNC_WEBSOCKET_INGRESS_LIMITS,
@@ -702,7 +733,8 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
       syncLeases.ready() &&
       syncSocketBudget.ready() &&
       syncOptions.authorization.ready() &&
-      syncOptions.backend.ready(),
+      syncOptions.backend.ready() &&
+      (!syncOptions.requireSharedState || syncOptions.inviteEvents?.ready()),
     )
   const sync: SyncGatewayAccess = {
     capabilities: () => ({
@@ -824,6 +856,9 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
         backend: syncOptions!.backend,
         collaborationAuthorization: syncOptions!.collaborationAuthorization,
         apiRpc: syncOptions!.apiRpc,
+        inviteEvents: syncOptions!.inviteEvents,
+        files: syncOptions!.files,
+        requireSharedState: syncOptions!.requireSharedState,
         isEnabled: syncOptions!.isEnabled,
         metrics: syncOptions!.metrics,
         authDeadlineMs: syncOptions!.authDeadlineMs,
@@ -841,12 +876,13 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
       socket.on('pong', () => {
         alive.set(socket, true)
       })
-      socket.on('message', (data) => {
+      socket.on('message', (data, isBinary) => {
         const rawBytes = rawDataByteLength(data)
-        if (rawBytes > MAX_SYNC_FRAME_BYTES) {
+        const maxFrameBytes = isBinary ? MAX_FILE_BINARY_FRAME_BYTES : MAX_SYNC_FRAME_BYTES
+        if (rawBytes > maxFrameBytes) {
           syncOptions!.metrics?.increment('protocol', 'FRAME_TOO_LARGE')
           stopHandler()
-          socket.close(1009, 'sync frame too large')
+          socket.close(1009, isBinary ? 'file frame too large' : 'sync frame too large')
           return
         }
         if (!ingressLimiter.tryConsume(rawBytes)) {
@@ -856,7 +892,11 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
           return
         }
         alive.set(socket, true)
-        handler.enqueue(data.toString(), rawBytes)
+        if (isBinary) {
+          handler.enqueueBinary(copyRawData(data), rawBytes)
+        } else {
+          handler.enqueue(data.toString(), rawBytes)
+        }
       })
       socket.on('close', stopHandler)
       socket.on('error', (error) => {
@@ -1034,6 +1074,9 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
       secretAccessKey: config.sqs.secretAccessKey,
       logger,
       dedupStore: opts.sqsEventDedupStore,
+      inviteRealtimeHandler: syncOptions?.inviteEventDispatcher
+        ? new InviteRealtimeDomainEventHandler(syncOptions.inviteEventDispatcher)
+        : undefined,
     })
   }
 
@@ -1117,6 +1160,8 @@ export type {
   SyncApiRpcResponse,
   SyncCollaborationAuthorizationAdapter,
   SyncCollaborationAuthorizationResult,
+  SyncInviteEventsAdapter,
+  SyncInviteEventReplay,
   SyncLiveAuthorizationAdapter,
 } from './syncCommandHandler.js'
 export type { SyncTicketIdentity } from './auth.js'
@@ -1129,6 +1174,24 @@ export {
 export type { RedisSyncState, RedisSyncStateOptions, SyncRedisClient } from './syncRedisState.js'
 export type { SyncAuthTicketStore } from './auth.js'
 export type { SyncCommandLeaseRegistry, SyncSocketBudget } from './registry.js'
+export { RedisInviteEventStore } from './inviteEventStore.js'
+export type { InviteEventStore, RedisInviteEventClient, RedisInviteEventStoreOptions } from './inviteEventStore.js'
+export { RedisInviteEventAvailabilityBus, SharedInviteEventsAdapter } from './inviteEventAvailability.js'
+export type {
+  InviteEventAvailabilityBus,
+  RedisInviteEventPublisher,
+  RedisInviteEventSubscriber,
+} from './inviteEventAvailability.js'
+export { createSharedInviteEventComposition } from './inviteEventComposition.js'
+export type { SharedInviteEventComposition } from './inviteEventComposition.js'
+export { createSyncFilesTokenDecoder } from './filesSession.js'
+export type { SyncFilesAdapter, SyncFilesSignedTokenDecoder } from './filesSession.js'
+export {
+  createInviteRealtimeDomainEventBridge,
+  INVITE_REALTIME_DOMAIN_EVENT_TYPE,
+  type InviteRealtimeDomainEventBridge,
+  type InviteRealtimeSubscriberFactory,
+} from './inviteEventDomainEventBridge.js'
 export { createRedisSqsEventDedupStore, createInMemorySqsEventDedupStore } from './sqsConsumer.js'
 export type {
   InMemorySqsEventDedupOptions,

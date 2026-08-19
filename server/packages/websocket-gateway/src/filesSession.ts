@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import jwt from 'jsonwebtoken'
 
 import type { SyncTicketIdentity } from './auth.js'
 import {
@@ -114,23 +115,48 @@ export interface SyncFilesAdapter {
     },
     signal: AbortSignal,
   ): Promise<SyncFileDownloadChunk>
-  cancel(
-    input: { identity: SyncTicketIdentity; transferId: string; generation: number; reason: string },
-  ): Promise<void>
+  cancel(input: { identity: SyncTicketIdentity; transferId: string; generation: number; reason: string }): Promise<void>
 }
 
 export interface SyncFilesSessionMetrics {
   increment(event: string, code?: string): void
 }
 
+/**
+ * Minimal decoder seam consumed by adapter-side FILES_V1 authorizers (the
+ * home-server authorizer re-validates the live session token and the canonical
+ * valet token on every operation).
+ */
+export interface SyncFilesSignedTokenDecoder<T> {
+  decodeToken(token: string): T | undefined
+}
+
+/**
+ * HS256-only signed-token decoder. Bootstraps that own a FILES_V1 adapter need
+ * to verify the cross-service and valet tokens minted elsewhere in the server;
+ * this is the same verification contract `decodeCrossServiceToken` uses, minus
+ * the payload shape. Rejects (returns undefined) on any verification failure so
+ * callers can fail closed.
+ */
+export function createSyncFilesTokenDecoder<T>(secret: string): SyncFilesSignedTokenDecoder<T> {
+  if (!secret) {
+    throw new Error('A signing secret is required to decode FILES_V1 authorization tokens.')
+  }
+  return {
+    decodeToken(token: string): T | undefined {
+      try {
+        const decoded = jwt.verify(token, secret, { algorithms: ['HS256'], clockTolerance: 10 })
+        return typeof decoded === 'object' && decoded !== null ? (decoded as T) : undefined
+      } catch {
+        return undefined
+      }
+    },
+  }
+}
+
 export type SyncFilesSessionOptions = {
   adapter: SyncFilesAdapter
-  sendControl: (
-    type: SyncServerFrameType,
-    requestId: string,
-    commandId: string,
-    payload: JsonObject,
-  ) => boolean
+  sendControl: (type: SyncServerFrameType, requestId: string, commandId: string, payload: JsonObject) => boolean
   sendBinary: (bytes: Uint8Array) => boolean
   sendError: (requestId: string, commandId: string, code: string) => boolean
   metrics?: SyncFilesSessionMetrics
@@ -147,6 +173,7 @@ type ActiveDownload = {
   nextOffset: number
   rangeStart: number
   creditBytes: number
+  deadlineMs: number
   controller: AbortController
   digest: ReturnType<typeof createHash>
   pumping: boolean
@@ -240,10 +267,13 @@ export class SyncFilesSession {
             nextOffset: opened.nextOffset,
             rangeStart: opened.nextOffset,
             creditBytes: frame.payload.initialCreditBytes,
+            deadlineMs: frame.payload.deadlineMs,
             controller: new AbortController(),
             digest: createHash('sha256'),
             pumping: false,
           }
+          const previous = this.downloads.get(opened.transferId)
+          previous?.controller.abort(new Error('download-generation-replaced'))
           this.downloads.set(opened.transferId, active)
           this.options.sendControl('FILES_ACCEPTED', frame.requestId, frame.commandId, {
             mode: 'download',
@@ -256,10 +286,7 @@ export class SyncFilesSession {
         }
         case 'FILES_CREDIT': {
           const active = this.currentDownload(frame.payload.transferId, frame.payload.generation)
-          active.creditBytes = Math.min(
-            MAX_FILE_TRANSFER_CREDIT_BYTES,
-            active.creditBytes + frame.payload.creditBytes,
-          )
+          active.creditBytes = Math.min(MAX_FILE_TRANSFER_CREDIT_BYTES, active.creditBytes + frame.payload.creditBytes)
           void this.pumpDownload(active)
           return
         }
@@ -338,17 +365,26 @@ export class SyncFilesSession {
         if (maxBytes <= 0) {
           throw new SyncFilesError('FILE_INVALID_STATE', false)
         }
-        const chunk = await this.options.adapter.readDownloadChunk(
-          {
-            identity: active.identity,
-            transferId: active.transferId,
-            generation: active.generation,
-            index: active.nextIndex,
-            offset: active.nextOffset,
-            maxBytes,
-          },
+        const chunk = await this.withDeadline(
+          active.deadlineMs,
+          (signal) =>
+            this.options.adapter.readDownloadChunk(
+              {
+                identity: active.identity,
+                transferId: active.transferId,
+                generation: active.generation,
+                index: active.nextIndex,
+                offset: active.nextOffset,
+                maxBytes,
+              },
+              signal,
+            ),
           active.controller.signal,
         )
+        if (!this.isCurrentDownload(active) || active.controller.signal.aborted || this.disconnected) {
+          chunk.bytes.fill(0)
+          return
+        }
         if (
           chunk.index !== active.nextIndex ||
           chunk.offset !== active.nextOffset ||
@@ -382,7 +418,9 @@ export class SyncFilesSession {
         active.nextIndex += 1
         active.nextOffset += header.byteLength
         if (header.final) {
-          this.downloads.delete(active.transferId)
+          if (!this.deleteCurrentDownload(active)) {
+            return
+          }
           this.options.sendControl('FILES_COMPLETE', active.requestId, active.commandId, {
             mode: 'download',
             transferId: active.transferId,
@@ -397,18 +435,20 @@ export class SyncFilesSession {
       }
       this.options.metrics?.increment('files', 'backpressure_wait')
     } catch (error) {
-      this.downloads.delete(active.transferId)
+      const wasCurrent = this.deleteCurrentDownload(active)
       active.controller.abort(error)
-      await this.options.adapter
-        .cancel({
-          identity: active.identity,
-          transferId: active.transferId,
-          generation: active.generation,
-          reason: 'download-failed',
-        })
-        .catch(() => undefined)
-      const normalized = normalizeFilesError(error)
-      this.options.sendError(active.requestId, active.commandId, normalized.code)
+      if (wasCurrent && !this.disconnected) {
+        const normalized = normalizeFilesError(error)
+        this.options.sendError(active.requestId, active.commandId, normalized.code)
+        await this.options.adapter
+          .cancel({
+            identity: active.identity,
+            transferId: active.transferId,
+            generation: active.generation,
+            reason: 'download-failed',
+          })
+          .catch(() => undefined)
+      }
     } finally {
       active.pumping = false
     }
@@ -420,6 +460,18 @@ export class SyncFilesSession {
       throw new SyncFilesError('FILE_STALE_GENERATION', false)
     }
     return active
+  }
+
+  private isCurrentDownload(active: ActiveDownload): boolean {
+    return this.downloads.get(active.transferId) === active
+  }
+
+  private deleteCurrentDownload(active: ActiveDownload): boolean {
+    if (!this.isCurrentDownload(active)) {
+      return false
+    }
+    this.downloads.delete(active.transferId)
+    return true
   }
 
   private async cancelTransfer(
@@ -439,23 +491,53 @@ export class SyncFilesSession {
     await this.options.adapter.cancel({ identity, transferId, generation, reason })
   }
 
-  private async withDeadline<T>(deadlineMs: number, operation: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  private async withDeadline<T>(
+    deadlineMs: number,
+    operation: (signal: AbortSignal) => Promise<T>,
+    parentSignal?: AbortSignal,
+  ): Promise<T> {
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(new Error('file-transfer-deadline')), deadlineMs)
+    let timedOut = false
+    const abortFromParent = (): void => controller.abort(parentSignal?.reason)
+    if (parentSignal?.aborted) {
+      abortFromParent()
+    } else {
+      parentSignal?.addEventListener('abort', abortFromParent, { once: true })
+    }
+    const timer = setTimeout(() => {
+      timedOut = true
+      controller.abort(new Error('file-transfer-deadline'))
+    }, deadlineMs)
     timer.unref()
+    const abortError = (): Error => {
+      if (timedOut) {
+        return new SyncFilesError('FILE_DEADLINE_EXCEEDED', true)
+      }
+      return controller.signal.reason instanceof Error
+        ? controller.signal.reason
+        : new SyncFilesError('FILE_TRANSFER_CANCELLED', false)
+    }
+    let rejectAborted = (_error: Error): void => undefined
+    const aborted = new Promise<T>((_resolve, reject) => {
+      rejectAborted = reject
+    })
+    const onAbort = (): void => rejectAborted(abortError())
+    controller.signal.addEventListener('abort', onAbort, { once: true })
     try {
-      return await Promise.race([
-        operation(controller.signal),
-        new Promise<T>((_resolve, reject) => {
-          controller.signal.addEventListener(
-            'abort',
-            () => reject(new SyncFilesError('FILE_DEADLINE_EXCEEDED', true)),
-            { once: true },
-          )
-        }),
-      ])
+      if (controller.signal.aborted) {
+        throw abortError()
+      }
+      const running = operation(controller.signal).catch((error: unknown) => {
+        if (controller.signal.aborted) {
+          throw abortError()
+        }
+        throw error
+      })
+      return await Promise.race([running, aborted])
     } finally {
       clearTimeout(timer)
+      controller.signal.removeEventListener('abort', onAbort)
+      parentSignal?.removeEventListener('abort', abortFromParent)
     }
   }
 }
@@ -470,12 +552,40 @@ export class SyncFilesError extends Error {
   }
 }
 
+const ADAPTER_ERROR_CODES = new Set([
+  'OPERATION_UNAVAILABLE',
+  'FILE_ACCESS_DENIED',
+  'FILE_BACKEND_ERROR',
+  'FILE_CHUNK_OUT_OF_ORDER',
+  'FILE_DESTINATION_CONFLICT',
+  'FILE_INCOMPLETE',
+  'FILE_INTEGRITY_MISMATCH',
+  'FILE_NOT_FOUND',
+  'FILE_PATH_INVALID',
+  'FILE_RANGE_INVALID',
+  'FILE_RESOURCE_INVALID',
+  'FILE_RESUME_EXPIRED',
+  'FILE_RESUME_INVALID',
+  'FILE_STALE_GENERATION',
+  'FILE_TRANSFER_CAPACITY',
+  'FILE_TRANSFER_NOT_FOUND',
+  'FILE_TRUNCATED',
+])
+
+const RETRYABLE_ADAPTER_ERROR_CODES = new Set(['OPERATION_UNAVAILABLE', 'FILE_BACKEND_ERROR', 'FILE_TRANSFER_CAPACITY'])
+
 function normalizeFilesError(error: unknown): SyncFilesError {
   if (error instanceof SyncFilesError) {
     return error
   }
   if (error instanceof Error && error.name === 'FileProtocolError' && 'code' in error) {
     return new SyncFilesError(String((error as { code: unknown }).code), false)
+  }
+  if (error instanceof Error && error.name === 'HomeServerSyncFilesAdapterError' && 'code' in error) {
+    const code = String((error as { code: unknown }).code)
+    if (ADAPTER_ERROR_CODES.has(code)) {
+      return new SyncFilesError(code, RETRYABLE_ADAPTER_ERROR_CODES.has(code))
+    }
   }
   return new SyncFilesError('FILE_BACKEND_ERROR', true)
 }
