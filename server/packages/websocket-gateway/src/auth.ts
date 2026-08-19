@@ -105,8 +105,11 @@ export function mintConnectionToken(
  */
 export interface VerifiedRoomCapability {
   expiresAt: number
+  collaborationAuthorizationIssuedAt: number
   serverUpdatedAtTimestamp: number
-  collaborationProtocolVersion: 2
+  collaborationProtocolVersion: 3
+  roomEpoch: string
+  collaborationSecurityEpoch: string
   leaseRequestId?: string
   bootstrapChallenge?: string
 }
@@ -154,9 +157,13 @@ export function verifyRoomCapabilityWithExpiry(
       return undefined
     }
     if (
-      payload.collaborationProtocolVersion !== 2 ||
+      payload.collaborationProtocolVersion !== 3 ||
+      !Number.isSafeInteger(payload.collaborationAuthorizationIssuedAt) ||
+      Number(payload.collaborationAuthorizationIssuedAt) <= 0 ||
       !Number.isSafeInteger(payload.serverUpdatedAtTimestamp) ||
-      Number(payload.serverUpdatedAtTimestamp) <= 0
+      Number(payload.serverUpdatedAtTimestamp) <= 0 ||
+      !isValidCollaborationEpoch(payload.roomEpoch) ||
+      !isValidCollaborationEpoch(payload.collaborationSecurityEpoch)
     ) {
       return undefined
     }
@@ -175,14 +182,21 @@ export function verifyRoomCapabilityWithExpiry(
     }
     return {
       expiresAt: payload.exp * 1_000,
+      collaborationAuthorizationIssuedAt: Number(payload.collaborationAuthorizationIssuedAt),
       serverUpdatedAtTimestamp: Number(payload.serverUpdatedAtTimestamp),
-      collaborationProtocolVersion: 2,
+      collaborationProtocolVersion: 3,
+      roomEpoch: payload.roomEpoch,
+      collaborationSecurityEpoch: payload.collaborationSecurityEpoch,
       ...(leaseRequestId ? { leaseRequestId } : {}),
       ...(bootstrapChallenge ? { bootstrapChallenge } : {}),
     }
   } catch {
     return undefined
   }
+}
+
+function isValidCollaborationEpoch(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{16,128}$/.test(value)
 }
 
 export function verifyRoomCapability(

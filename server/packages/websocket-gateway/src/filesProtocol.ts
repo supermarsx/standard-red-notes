@@ -57,11 +57,7 @@ export type DecodedFileBinaryFrame = {
 
 export class FileProtocolError extends Error {
   constructor(
-    readonly code:
-      | 'FILE_FRAME_TOO_LARGE'
-      | 'FILE_FRAME_MALFORMED'
-      | 'FILE_FRAME_UNSUPPORTED'
-      | 'FILE_FRAME_INTEGRITY',
+    readonly code: 'FILE_FRAME_TOO_LARGE' | 'FILE_FRAME_MALFORMED' | 'FILE_FRAME_UNSUPPORTED' | 'FILE_FRAME_INTEGRITY',
     message: string,
   ) {
     super(message)
@@ -114,7 +110,9 @@ export function decodeFileBinaryFrame(raw: Uint8Array): DecodedFileBinaryFrame {
   }
   let parsed: unknown
   try {
-    parsed = JSON.parse(frame.subarray(FILE_BINARY_PREFIX_BYTES, FILE_BINARY_PREFIX_BYTES + headerLength).toString('utf8'))
+    parsed = JSON.parse(
+      frame.subarray(FILE_BINARY_PREFIX_BYTES, FILE_BINARY_PREFIX_BYTES + headerLength).toString('utf8'),
+    )
   } catch {
     throw new FileProtocolError('FILE_FRAME_MALFORMED', 'File binary header is not valid JSON.')
   }
@@ -166,11 +164,7 @@ export function isFileResourceReference(value: unknown): value is FileResourceRe
 }
 
 export function isFileTransferSize(value: unknown, allowZero = false): value is number {
-  return (
-    Number.isSafeInteger(value) &&
-    Number(value) >= (allowZero ? 0 : 1) &&
-    Number(value) <= MAX_FILE_TRANSFER_BYTES
-  )
+  return Number.isSafeInteger(value) && Number(value) >= (allowZero ? 0 : 1) && Number(value) <= MAX_FILE_TRANSFER_BYTES
 }
 
 export function isFileMimeType(value: unknown): value is string {

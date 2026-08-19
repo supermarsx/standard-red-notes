@@ -4,6 +4,8 @@ import { DeleteMessageCommand, ReceiveMessageCommand, SQSClient, type SQSClientC
 import { ConnectionRegistry, dispatch, type DispatchMessage, type SendableSocket } from './registry.js'
 import type { Logger } from './redisBridge.js'
 import { safeErrorLogMetadata } from './safeLog.js'
+import type { InviteRealtimeDomainEventEnvelope } from './inviteEventDomainEventHandler.js'
+import { INVITE_REALTIME_DOMAIN_EVENT_TYPE } from './inviteEventDomainEventBridge.js'
 
 const DEFAULT_DEDUP_RETENTION_MS = 24 * 60 * 60 * 1_000
 const DEFAULT_DEDUP_LEASE_MS = 30_000
@@ -159,6 +161,23 @@ export function createInMemorySqsEventDedupStore(options: InMemorySqsEventDedupO
 
 export type SqsDispatchMessage = DispatchMessage & { eventId?: string }
 
+export function decodeSqsBodyToDomainEvent(body: string): Record<string, unknown> | null {
+  let envelope: { Message?: unknown }
+  try {
+    envelope = JSON.parse(body)
+  } catch {
+    return null
+  }
+
+  const compressed = typeof envelope.Message === 'string' ? envelope.Message : body
+  try {
+    const event = JSON.parse(zlib.unzipSync(Buffer.from(compressed, 'base64')).toString()) as unknown
+    return event && typeof event === 'object' && !Array.isArray(event) ? (event as Record<string, unknown>) : null
+  } catch {
+    return null
+  }
+}
+
 /**
  * Decode an SQS message body (an SNS->SQS envelope) into the dispatch shape the
  * registry expects, or null if it isn't a WEB_SOCKET_MESSAGE_REQUESTED event.
@@ -168,31 +187,11 @@ export type SqsDispatchMessage = DispatchMessage & { eventId?: string }
  * Pure + side-effect free so it can be unit-tested without SQS.
  */
 export function decodeSqsBodyToDispatch(body: string): SqsDispatchMessage | null {
-  let envelope: { Message?: unknown }
-  try {
-    envelope = JSON.parse(body)
-  } catch {
-    return null
-  }
-
-  const compressed = typeof envelope.Message === 'string' ? envelope.Message : body
-  let eventJson: string
-  try {
-    eventJson = zlib.unzipSync(Buffer.from(compressed, 'base64')).toString()
-  } catch {
-    return null
-  }
-
-  let event: {
+  const event = decodeSqsBodyToDomainEvent(body) as {
     eventId?: unknown
     type?: unknown
     payload?: { userUuid?: unknown; message?: unknown; originatingSessionUuid?: unknown }
-  }
-  try {
-    event = JSON.parse(eventJson)
-  } catch {
-    return null
-  }
+  } | null
 
   if (event?.type !== 'WEB_SOCKET_MESSAGE_REQUESTED') {
     return null
@@ -225,6 +224,8 @@ export interface SqsConsumerOptions {
   logger: Logger
   /** Required for durable events carrying eventId; omit only for legacy events. */
   dedupStore?: SqsEventDedupStore
+  /** Recognized invite events are acknowledged only after this strict handler succeeds. */
+  inviteRealtimeHandler?: { handle(event: InviteRealtimeDomainEventEnvelope): Promise<void> }
 }
 
 /**
@@ -268,40 +269,54 @@ export function startSqsConsumer<S extends SendableSocket>(
         for (const msg of result.Messages ?? []) {
           let acknowledge = true
           if (msg.Body) {
-            const parsed = decodeSqsBodyToDispatch(msg.Body)
-            if (parsed) {
+            const domainEvent = decodeSqsBodyToDomainEvent(msg.Body)
+            if (domainEvent?.type === INVITE_REALTIME_DOMAIN_EVENT_TYPE) {
               try {
-                let sent = 0
-                let decision: SqsEventDedupDecision = 'executed'
-                const dispatchMessage = (): void => {
-                  sent = dispatch(registry, parsed)
+                if (!opts.inviteRealtimeHandler) {
+                  throw new Error('Invite realtime SQS handler is unavailable.')
                 }
-                if (parsed.eventId) {
-                  if (!opts.dedupStore) {
-                    throw new Error('Shared SQS event deduplication is required for durable websocket events.')
-                  }
-                  decision = await opts.dedupStore.executeOnce(
-                    `WEB_SOCKET_MESSAGE_REQUESTED:${parsed.eventId}`,
-                    dispatchMessage,
-                  )
-                } else {
-                  dispatchMessage()
-                }
-
-                if (decision === 'duplicate') {
-                  opts.logger.info('[push:sqs] skipped completed websocket duplicate', {
-                    userId: parsed.userUuid,
-                  })
-                } else {
-                  opts.logger.info('[push:sqs] dispatched websocket message', {
-                    userId: parsed.userUuid,
-                    socketCount: sent,
-                    originExcluded: parsed.originatingSessionUuid !== undefined,
-                  })
-                }
+                await opts.inviteRealtimeHandler.handle(domainEvent as InviteRealtimeDomainEventEnvelope)
+                opts.logger.info('[invite:sqs] dispatched durable invite invalidation')
               } catch (error) {
                 acknowledge = false
-                opts.logger.error('[sqs] websocket message processing failed', safeErrorLogMetadata(error))
+                opts.logger.error('[sqs] invite realtime processing failed', safeErrorLogMetadata(error))
+              }
+            } else {
+              const parsed = decodeSqsBodyToDispatch(msg.Body)
+              if (parsed) {
+                try {
+                  let sent = 0
+                  let decision: SqsEventDedupDecision = 'executed'
+                  const dispatchMessage = (): void => {
+                    sent = dispatch(registry, parsed)
+                  }
+                  if (parsed.eventId) {
+                    if (!opts.dedupStore) {
+                      throw new Error('Shared SQS event deduplication is required for durable websocket events.')
+                    }
+                    decision = await opts.dedupStore.executeOnce(
+                      `WEB_SOCKET_MESSAGE_REQUESTED:${parsed.eventId}`,
+                      dispatchMessage,
+                    )
+                  } else {
+                    dispatchMessage()
+                  }
+
+                  if (decision === 'duplicate') {
+                    opts.logger.info('[push:sqs] skipped completed websocket duplicate', {
+                      userId: parsed.userUuid,
+                    })
+                  } else {
+                    opts.logger.info('[push:sqs] dispatched websocket message', {
+                      userId: parsed.userUuid,
+                      socketCount: sent,
+                      originExcluded: parsed.originatingSessionUuid !== undefined,
+                    })
+                  }
+                } catch (error) {
+                  acknowledge = false
+                  opts.logger.error('[sqs] websocket message processing failed', safeErrorLogMetadata(error))
+                }
               }
             }
           }

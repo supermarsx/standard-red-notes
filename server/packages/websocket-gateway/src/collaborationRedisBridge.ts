@@ -3,6 +3,7 @@ import { Redis } from 'ioredis'
 
 import type { Conn, SendableSocket } from './registry.js'
 import {
+  CollaborationRoomEpochMismatchError,
   parseRelayFrame,
   PENDING_EDITOR_RESERVATION_ACTIVATION_TIMEOUT_MS,
   type RelayFrame,
@@ -14,11 +15,13 @@ import { safeErrorLogMetadata } from './safeLog.js'
 
 export const COLLABORATION_RELAY_CHANNEL = 'srn-collaboration-relay-v1'
 const LEASE_TTL_MS = 75_000
+const ROOM_EPOCH_TOMBSTONE_TTL_MS = 24 * 60 * 60 * 1_000
 const REDIS_OPERATION_TIMEOUT_MS = 1_500
 const MAX_RELAY_ENVELOPE_BYTES = 700 * 1024
 const LEASE_CLEANUP_RETRY_BASE_MS = 100
 const LEASE_CLEANUP_RETRY_MAX_MS = 5_000
 export const MAX_DISTRIBUTED_EDITOR_LEASES_PER_ROOM = 64
+export const COLLABORATION_PRESENCE_TTL_MS = 45_000
 // Longer than the client's full-state response/acceptance window. A retry uses
 // a new stateRequestId, so liveness does not require re-granting the same id
 // while a 4 MiB winner may still be encrypting and chunking its response.
@@ -38,10 +41,42 @@ function isLeasePolicyError(error: unknown): error is Error {
 
 type RelayPayloadFrame =
   | Extract<RelayFrame, { t: 'yjs' | 'yjs-chunk' | 'yjs-retry' | 'awareness' | 'comment' }>
+  | RoomPresenceFrame
   | {
       t: 'room-sync'
       room: string
     }
+
+type RoomPresenceFrame =
+  | {
+      t: 'room-presence'
+      room: string
+      roomEpoch: string
+      protocolVersion: 3
+      action: 'joined'
+      presenceId: string
+      userUuid: string
+      clientId: number
+      ttlMilliseconds: number
+    }
+  | {
+      t: 'room-presence'
+      room: string
+      roomEpoch: string
+      protocolVersion: 3
+      action: 'left'
+      presenceId: string
+      userUuid: string
+      clientId: number
+      reason: 'clean-leave' | 'disconnect' | 'heartbeat-timeout' | 'revoked'
+    }
+
+type LocalPresence<S extends SendableSocket> = {
+  lease: LocalLease<S>
+  presenceId: string
+  clientId: number
+  expiresAt: number
+}
 
 interface RedisCommandClient {
   readonly status: string
@@ -72,18 +107,24 @@ type LocalLease<S extends SendableSocket> = {
   room: string
   requestId: string
   roomSetKey: string
+  roomStateKey: string
   leaseKey: string
   redisValue: string
+  roomStatePrefix: string
+  rotatedRoomStateValue: string
   expiresAt: number
   shouldBootstrap: boolean
   bootstrapChallenge?: string
-  protocolVersion: 2
+  protocolVersion: 3
+  roomEpoch: string
+  collaborationSecurityEpoch: string
+  collaborationAuthorizationIssuedAt: number
   reservedRevision: number
   activated: boolean
 }
 
 const RESERVE_LEASE_SCRIPT = `
--- SRN_RESERVE_LEASE_V1
+-- SRN_RESERVE_LEASE_V3
 local members = redis.call('SMEMBERS', KEYS[1])
 local active = 0
 local alreadyReserved = false
@@ -97,17 +138,61 @@ for _, leaseKey in ipairs(members) do
     if leaseKey == KEYS[2] then alreadyReserved = true end
   end
 end
+local requestedState = ARGV[5] .. ':' .. ARGV[6] .. ':' .. ARGV[9]
+local currentState = redis.call('GET', KEYS[3])
+if not currentState then
+  if active > 0 then
+    for _, leaseKey in ipairs(members) do redis.call('DEL', leaseKey) end
+    redis.call('DEL', KEYS[1])
+    local rotatedState = ARGV[7] .. ':' .. ARGV[6] .. ':' .. ARGV[9]
+    redis.call('SET', KEYS[3], rotatedState, 'PX', ARGV[8])
+    return 'revoked:' .. ARGV[7]
+  end
+  redis.call('SET', KEYS[3], requestedState, 'PX', ARGV[8])
+  currentState = requestedState
+else
+  local separator = string.find(currentState, ':', 1, true)
+  local securitySeparator = separator and string.find(currentState, ':', separator + 1, true)
+  local currentEpoch = separator and string.sub(currentState, 1, separator - 1) or ''
+  local currentSecurityEpoch = securitySeparator and string.sub(currentState, separator + 1, securitySeparator - 1) or ''
+  local currentIssuedAt = securitySeparator and tonumber(string.sub(currentState, securitySeparator + 1)) or 0
+  local requestedIssuedAt = tonumber(ARGV[9]) or 0
+  if currentSecurityEpoch ~= ARGV[6] then
+    if requestedIssuedAt <= currentIssuedAt then
+      redis.call('PEXPIRE', KEYS[3], ARGV[8])
+      return 'epoch:' .. currentEpoch
+    end
+    for _, leaseKey in ipairs(members) do redis.call('DEL', leaseKey) end
+    redis.call('DEL', KEYS[1])
+    local rotatedState = ARGV[7] .. ':' .. ARGV[6] .. ':' .. ARGV[9]
+    redis.call('SET', KEYS[3], rotatedState, 'PX', ARGV[8])
+    return 'revoked:' .. ARGV[7]
+  end
+  if currentEpoch ~= ARGV[5] then
+    redis.call('PEXPIRE', KEYS[3], ARGV[8])
+    return 'epoch:' .. currentEpoch
+  end
+end
 if active >= tonumber(ARGV[4]) and not alreadyReserved then return -2 end
 redis.call('SET', KEYS[2], ARGV[3], 'PX', ARGV[1])
 redis.call('SADD', KEYS[1], KEYS[2])
 redis.call('PEXPIRE', KEYS[1], ARGV[2])
+redis.call('PEXPIRE', KEYS[3], ARGV[8])
 if active == 0 then return 1 else return 0 end
 `
 
 const RELEASE_LEASE_SCRIPT = `
+-- SRN_RELEASE_LEASE_V3
 redis.call('DEL', KEYS[2])
 redis.call('SREM', KEYS[1], KEYS[2])
-if redis.call('SCARD', KEYS[1]) == 0 then redis.call('DEL', KEYS[1]) end
+if redis.call('SCARD', KEYS[1]) == 0 then
+  redis.call('DEL', KEYS[1])
+  local currentState = redis.call('GET', KEYS[3])
+  if currentState and string.sub(currentState, 1, string.len(ARGV[2])) == ARGV[2]
+    and string.sub(currentState, string.len(ARGV[2]) + 1, string.len(ARGV[2]) + 1) == ':' then
+    redis.call('SET', KEYS[3], ARGV[1], 'PX', ARGV[3])
+  end
+end
 return 1
 `
 
@@ -118,9 +203,12 @@ return 1
 // already have elected a new bootstrapper while this process retained stale
 // local state.
 const REFRESH_OWNED_LEASE_SCRIPT = `
--- SRN_REFRESH_OWNED_LEASE_V1
+-- SRN_REFRESH_OWNED_LEASE_V3
 local current = redis.call('GET', KEYS[2])
 if not current or current ~= ARGV[3] or redis.call('SISMEMBER', KEYS[1], KEYS[2]) == 0 then return -3 end
+local currentState = redis.call('GET', KEYS[3])
+if not currentState or string.sub(currentState, 1, string.len(ARGV[5])) ~= ARGV[5]
+  or string.sub(currentState, string.len(ARGV[5]) + 1, string.len(ARGV[5]) + 1) ~= ':' then return -3 end
 local members = redis.call('SMEMBERS', KEYS[1])
 local active = 0
 for _, leaseKey in ipairs(members) do
@@ -135,6 +223,7 @@ end
 if active > tonumber(ARGV[4]) then return -2 end
 if redis.call('PEXPIRE', KEYS[2], ARGV[1]) ~= 1 then return -3 end
 redis.call('PEXPIRE', KEYS[1], ARGV[2])
+redis.call('PEXPIRE', KEYS[3], ARGV[6])
 return 1
 `
 
@@ -149,6 +238,12 @@ return 0
 function digest(value: string): string {
   return createHash('sha256').update(value, 'utf8').digest('hex')
 }
+
+function isValidEpoch(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{16,128}$/.test(value)
+}
+
+class CollaborationRoomSecurityRevokedError extends CollaborationRoomEpochMismatchError {}
 
 async function bounded<T>(operation: Promise<T>): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -183,6 +278,45 @@ function parseRemoteFrame(raw: string, localInstanceId: string): RelayPayloadFra
     return undefined
   }
   const candidate = value.frame as { t?: unknown; room?: unknown }
+  if (candidate.t === 'room-presence') {
+    const presence = value.frame as Partial<RoomPresenceFrame>
+    if (
+      typeof presence.room !== 'string' ||
+      presence.room.length === 0 ||
+      presence.room.length > 200 ||
+      !isValidEpoch(presence.roomEpoch) ||
+      presence.protocolVersion !== 3 ||
+      typeof presence.presenceId !== 'string' ||
+      presence.presenceId.length === 0 ||
+      presence.presenceId.length > 128 ||
+      typeof presence.userUuid !== 'string' ||
+      presence.userUuid.length === 0 ||
+      presence.userUuid.length > 128 ||
+      !Number.isSafeInteger(presence.clientId) ||
+      Number(presence.clientId) < 0 ||
+      Number(presence.clientId) > 0xffff_ffff
+    ) {
+      return undefined
+    }
+    if (
+      presence.action === 'joined' &&
+      Number.isSafeInteger(presence.ttlMilliseconds) &&
+      Number(presence.ttlMilliseconds) >= 30_000 &&
+      Number(presence.ttlMilliseconds) <= 120_000
+    ) {
+      return presence as RoomPresenceFrame
+    }
+    if (
+      presence.action === 'left' &&
+      (presence.reason === 'clean-leave' ||
+        presence.reason === 'disconnect' ||
+        presence.reason === 'heartbeat-timeout' ||
+        presence.reason === 'revoked')
+    ) {
+      return presence as RoomPresenceFrame
+    }
+    return undefined
+  }
   if (candidate.t === 'room-sync') {
     return typeof candidate.room === 'string' && candidate.room.length > 0 && candidate.room.length <= 200
       ? { t: 'room-sync', room: candidate.room }
@@ -209,6 +343,8 @@ function parseRemoteFrame(raw: string, localInstanceId: string): RelayPayloadFra
  */
 export class CollaborationRedisBridge<S extends SendableSocket> implements RoomRelayLifecycle<S> {
   private readonly leases = new Map<string, LocalLease<S>>()
+  private readonly presences = new Map<string, LocalPresence<S>>()
+  private presenceExpiryTimer: ReturnType<typeof setTimeout> | undefined
   private relayHealthy = false
   private commandReady = false
   private subscriptionEstablished = false
@@ -303,8 +439,11 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
     room: string,
     requestId: string,
     expiresAt: number,
-    protocolVersion: 2,
+    protocolVersion: 3,
     serverUpdatedAtTimestamp: number,
+    roomEpoch: string,
+    collaborationSecurityEpoch: string,
+    collaborationAuthorizationIssuedAt = Date.now(),
   ): Promise<{ shouldBootstrap: boolean; bootstrapChallenge?: string }> {
     if (!this.relayHealthy) {
       throw new Error('Redis collaboration relay is not healthy')
@@ -314,7 +453,11 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
       !Number.isFinite(expiresAt) ||
       expiresAt <= now ||
       !Number.isSafeInteger(serverUpdatedAtTimestamp) ||
-      serverUpdatedAtTimestamp < 0
+      serverUpdatedAtTimestamp < 0 ||
+      !Number.isSafeInteger(collaborationAuthorizationIssuedAt) ||
+      collaborationAuthorizationIssuedAt <= 0 ||
+      !isValidEpoch(roomEpoch) ||
+      !isValidEpoch(collaborationSecurityEpoch)
     ) {
       throw new Error('Collaboration reservation inputs are invalid or expired')
     }
@@ -324,6 +467,13 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
     const localId = this.localLeaseId(conn, room, requestId)
     const existing = this.leases.get(localId)
     if (existing) {
+      if (
+        existing.protocolVersion !== protocolVersion ||
+        existing.roomEpoch !== roomEpoch ||
+        existing.collaborationSecurityEpoch !== collaborationSecurityEpoch
+      ) {
+        throw new CollaborationRoomEpochMismatchError(existing.roomEpoch)
+      }
       // An active logical lease may replay room-reserve during reconnect churn.
       // Treat that exact replay as read-only: a provisional 15s deadline must
       // never shorten or extend the already-authorized active lease.
@@ -357,8 +507,11 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
     }
 
     const roomSetKey = `srn:collaboration:room:${digest(room)}`
+    const roomStateKey = `srn:collaboration:room-state:${digest(room)}`
     const leaseKey = `srn:collaboration:lease:${digest(`${this.instanceId}\u0000${localId}`)}`
-    const redisValue = `v${protocolVersion}:${digest(conn.userUuid)}:${randomUUID()}`
+    const redisValue = `v${protocolVersion}:${digest(`${roomEpoch}\u0000${collaborationSecurityEpoch}`)}:${randomUUID()}`
+    const roomStatePrefix = `${roomEpoch}:${collaborationSecurityEpoch}`
+    const rotatedRoomStateValue = `${randomUUID()}:${collaborationSecurityEpoch}:${collaborationAuthorizationIssuedAt}`
     const reservationExpiresAt = Math.min(expiresAt, now + PENDING_EDITOR_RESERVATION_ACTIVATION_TIMEOUT_MS)
     // Defend the bridge contract independently of its caller: a timed-out Redis
     // EVAL can complete after bounded() rejects, so an untracked reservation
@@ -368,15 +521,27 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
       const elected = await bounded(
         this.commands.eval(
           RESERVE_LEASE_SCRIPT,
-          2,
+          3,
           roomSetKey,
           leaseKey,
+          roomStateKey,
           ttl,
           Math.max(LEASE_TTL_MS * 4, ttl * 2),
           redisValue,
           MAX_DISTRIBUTED_EDITOR_LEASES_PER_ROOM,
+          roomEpoch,
+          collaborationSecurityEpoch,
+          randomUUID(),
+          ROOM_EPOCH_TOMBSTONE_TTL_MS,
+          collaborationAuthorizationIssuedAt,
         ),
       )
+      if (typeof elected === 'string' && elected.startsWith('epoch:')) {
+        throw new CollaborationRoomEpochMismatchError(elected.slice('epoch:'.length))
+      }
+      if (typeof elected === 'string' && elected.startsWith('revoked:')) {
+        throw new CollaborationRoomSecurityRevokedError(elected.slice('revoked:'.length))
+      }
       const electionResult = Number(elected)
       if (electionResult === -1) {
         throw new Error(INCOMPATIBLE_PROTOCOL_ERROR)
@@ -394,12 +559,18 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
         room,
         requestId,
         roomSetKey,
+        roomStateKey,
         leaseKey,
         redisValue,
+        roomStatePrefix,
+        rotatedRoomStateValue,
         expiresAt: reservationExpiresAt,
         shouldBootstrap,
         ...(bootstrapChallenge ? { bootstrapChallenge } : {}),
         protocolVersion,
+        roomEpoch,
+        collaborationSecurityEpoch,
+        collaborationAuthorizationIssuedAt,
         reservedRevision: serverUpdatedAtTimestamp,
         activated: false,
       })
@@ -409,7 +580,9 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
         '[collab-redis] lease reservation unavailable; denying collaboration',
         safeErrorLogMetadata(error),
       )
-      if (!isLeasePolicyError(error)) {
+      if (error instanceof CollaborationRoomSecurityRevokedError) {
+        await this.discardRevokedRoom(room)
+      } else if (!isLeasePolicyError(error) && !(error instanceof CollaborationRoomEpochMismatchError)) {
         this.handleCommandUnavailable()
       }
       throw error
@@ -421,9 +594,12 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
     room: string,
     requestId: string,
     expiresAt: number,
-    protocolVersion: 2,
+    protocolVersion: 3,
     serverUpdatedAtTimestamp: number,
-    bootstrapChallenge?: string,
+    bootstrapChallenge: string | undefined,
+    roomEpoch: string,
+    collaborationSecurityEpoch: string,
+    collaborationAuthorizationIssuedAt = Date.now(),
   ): Promise<{ shouldBootstrap: boolean }> {
     if (!this.relayHealthy) {
       throw new Error('Redis collaboration relay is not healthy')
@@ -437,8 +613,12 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
       !Number.isFinite(expiresAt) ||
       expiresAt <= now ||
       lease.protocolVersion !== protocolVersion ||
+      lease.roomEpoch !== roomEpoch ||
+      lease.collaborationSecurityEpoch !== collaborationSecurityEpoch ||
       !Number.isSafeInteger(serverUpdatedAtTimestamp) ||
-      serverUpdatedAtTimestamp < lease.reservedRevision
+      serverUpdatedAtTimestamp < lease.reservedRevision ||
+      !Number.isSafeInteger(collaborationAuthorizationIssuedAt) ||
+      collaborationAuthorizationIssuedAt < lease.collaborationAuthorizationIssuedAt
     ) {
       throw new Error('Collaboration reservation is missing or expired')
     }
@@ -446,6 +626,7 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
       throw new Error('Collaboration bootstrap challenge mismatch')
     }
     lease.expiresAt = expiresAt
+    lease.collaborationAuthorizationIssuedAt = collaborationAuthorizationIssuedAt
     lease.reservedRevision = serverUpdatedAtTimestamp
     try {
       await this.refresh(lease, this.leaseTtl(expiresAt))
@@ -461,13 +642,85 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
     return { shouldBootstrap: lease.shouldBootstrap }
   }
 
-  async releaseLease(conn: Conn<S>, room: string, requestId: string | undefined): Promise<void> {
+  async heartbeatPresence(
+    conn: Conn<S>,
+    room: string,
+    requestId: string,
+    roomEpoch: string,
+    clientId: number,
+  ): Promise<void> {
+    if (!this.relayHealthy) {
+      throw new Error('Redis collaboration relay is not healthy')
+    }
+    const localId = this.localLeaseId(conn, room, requestId)
+    const lease = this.leases.get(localId)
+    const now = Date.now()
+    if (
+      !lease?.activated ||
+      lease.expiresAt <= now ||
+      lease.roomEpoch !== roomEpoch ||
+      !Number.isSafeInteger(clientId) ||
+      clientId < 0 ||
+      clientId > 0xffff_ffff
+    ) {
+      throw new CollaborationRoomEpochMismatchError(lease?.roomEpoch ?? roomEpoch)
+    }
+
+    const existing = this.presences.get(localId)
+    if (existing) {
+      if (existing.clientId !== clientId || existing.lease !== lease) {
+        throw new Error('Collaboration presence identity changed during an active lease')
+      }
+      existing.expiresAt = now + COLLABORATION_PRESENCE_TTL_MS
+      this.schedulePresenceExpiry()
+      return
+    }
+    if (
+      [...this.presences.values()].filter((presence) => presence.lease.room === room).length >=
+      MAX_DISTRIBUTED_EDITOR_LEASES_PER_ROOM
+    ) {
+      throw new Error('Collaboration room presence limit exceeded')
+    }
+
+    const presence: LocalPresence<S> = {
+      lease,
+      presenceId: randomUUID(),
+      clientId,
+      expiresAt: now + COLLABORATION_PRESENCE_TTL_MS,
+    }
+    this.presences.set(localId, presence)
+    try {
+      await this.emitPresence({
+        t: 'room-presence',
+        room,
+        roomEpoch,
+        protocolVersion: 3,
+        action: 'joined',
+        presenceId: presence.presenceId,
+        userUuid: conn.userUuid,
+        clientId,
+        ttlMilliseconds: COLLABORATION_PRESENCE_TTL_MS,
+      })
+    } catch (error) {
+      this.presences.delete(localId)
+      throw error
+    }
+    this.schedulePresenceExpiry()
+  }
+
+  async releaseLease(
+    conn: Conn<S>,
+    room: string,
+    requestId: string | undefined,
+    reason: 'clean-leave' | 'disconnect' | 'heartbeat-timeout' | 'revoked' = 'disconnect',
+  ): Promise<void> {
     const localId = this.localLeaseId(conn, room, requestId)
     const lease = this.leases.get(localId)
     if (!lease) {
       return
     }
     this.leases.delete(localId)
+    await this.releasePresence(lease, reason)
     await this.releaseOrQueue(lease)
   }
 
@@ -531,6 +784,7 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
     const owned = [...this.leases.entries()].filter(([, lease]) => lease.conn === conn)
     for (const [localId, lease] of owned) {
       this.leases.delete(localId)
+      await this.releasePresence(lease, 'disconnect')
       await this.releaseOrQueue(lease)
     }
   }
@@ -543,6 +797,7 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
       [...this.leases.entries()].map(async ([localId, lease]) => {
         if (Number.isFinite(lease.expiresAt) && lease.expiresAt <= now) {
           this.leases.delete(localId)
+          await this.releasePresence(lease, 'revoked')
           await this.releaseOrQueue(lease)
           return
         }
@@ -592,6 +847,13 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
 
   async stop(): Promise<void> {
     this.stopping = true
+    if (this.presenceExpiryTimer) {
+      clearTimeout(this.presenceExpiryTimer)
+      this.presenceExpiryTimer = undefined
+    }
+    await Promise.all(
+      [...this.presences.values()].map((presence) => this.releasePresence(presence.lease, 'disconnect')),
+    )
     this.subscriberGeneration += 1
     this.subscriptionPending = false
     this.subscriptionEstablished = false
@@ -619,6 +881,11 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
   private markRelayUnhealthy(): void {
     this.relayHealthy = false
     this.rooms.denyAllRooms()
+    this.presences.clear()
+    if (this.presenceExpiryTimer) {
+      clearTimeout(this.presenceExpiryTimer)
+      this.presenceExpiryTimer = undefined
+    }
     const leases = [...this.leases.values()]
     this.leases.clear()
     for (const lease of leases) {
@@ -766,7 +1033,18 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
 
   private async release(lease: LocalLease<S>): Promise<boolean> {
     try {
-      await bounded(this.commands.eval(RELEASE_LEASE_SCRIPT, 2, lease.roomSetKey, lease.leaseKey))
+      await bounded(
+        this.commands.eval(
+          RELEASE_LEASE_SCRIPT,
+          3,
+          lease.roomSetKey,
+          lease.leaseKey,
+          lease.roomStateKey,
+          lease.rotatedRoomStateValue,
+          lease.roomStatePrefix,
+          ROOM_EPOCH_TOMBSTONE_TTL_MS,
+        ),
+      )
       return true
     } catch (error) {
       // The lease key has a short TTL, so a failed cleanup cannot strand a room.
@@ -789,9 +1067,84 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
     await Promise.all(
       owned.map(async ([localId, lease]) => {
         this.leases.delete(localId)
+        await this.releasePresence(lease, 'revoked')
         await this.releaseOrQueue(lease)
       }),
     )
+  }
+
+  private async discardRevokedRoom(room: string): Promise<void> {
+    this.rooms.denyRoom(room)
+    const releases: Promise<void>[] = []
+    for (const [localId, lease] of this.leases) {
+      if (lease.room === room) {
+        this.leases.delete(localId)
+        releases.push(this.releasePresence(lease, 'revoked'))
+      }
+    }
+    await Promise.all(releases)
+  }
+
+  private async releasePresence(
+    lease: LocalLease<S>,
+    reason: 'clean-leave' | 'disconnect' | 'heartbeat-timeout' | 'revoked',
+  ): Promise<void> {
+    const localId = this.localLeaseId(lease.conn, lease.room, lease.requestId)
+    const presence = this.presences.get(localId)
+    if (!presence) {
+      return
+    }
+    // Delete before I/O so clean leave, socket cleanup, revocation and the TTL
+    // reaper can race without ever emitting more than one terminal event.
+    this.presences.delete(localId)
+    this.schedulePresenceExpiry()
+    const frame: RoomPresenceFrame = {
+      t: 'room-presence',
+      room: lease.room,
+      roomEpoch: lease.roomEpoch,
+      protocolVersion: 3,
+      action: 'left',
+      presenceId: presence.presenceId,
+      userUuid: lease.conn.userUuid,
+      clientId: presence.clientId,
+      reason,
+    }
+    try {
+      await this.emitPresence(frame)
+    } catch {
+      // Membership is already terminal locally. Relay failure independently
+      // denies rooms and clients expire the prior joined event by its short TTL.
+    }
+  }
+
+  private async emitPresence(frame: RoomPresenceFrame): Promise<void> {
+    await this.publish(frame)
+    this.rooms.broadcastAll(frame.room, JSON.stringify(frame))
+  }
+
+  private schedulePresenceExpiry(): void {
+    if (this.presenceExpiryTimer) {
+      clearTimeout(this.presenceExpiryTimer)
+      this.presenceExpiryTimer = undefined
+    }
+    if (this.stopping || this.presences.size === 0) {
+      return
+    }
+    const nextExpiry = Math.min(...[...this.presences.values()].map((presence) => presence.expiresAt))
+    this.presenceExpiryTimer = setTimeout(
+      () => {
+        this.presenceExpiryTimer = undefined
+        void this.expirePresence()
+      },
+      Math.max(0, nextExpiry - Date.now()),
+    )
+  }
+
+  private async expirePresence(): Promise<void> {
+    const now = Date.now()
+    const expired = [...this.presences.values()].filter((presence) => presence.expiresAt <= now)
+    await Promise.all(expired.map((presence) => this.releasePresence(presence.lease, 'heartbeat-timeout')))
+    this.schedulePresenceExpiry()
   }
 
   private async refresh(lease: LocalLease<S>, ttl: number): Promise<void> {
@@ -802,13 +1155,16 @@ export class CollaborationRedisBridge<S extends SendableSocket> implements RoomR
       await bounded(
         this.commands.eval(
           REFRESH_OWNED_LEASE_SCRIPT,
-          2,
+          3,
           lease.roomSetKey,
           lease.leaseKey,
+          lease.roomStateKey,
           ttl,
           LEASE_TTL_MS * 4,
           lease.redisValue,
           MAX_DISTRIBUTED_EDITOR_LEASES_PER_ROOM,
+          lease.roomStatePrefix,
+          ROOM_EPOCH_TOMBSTONE_TTL_MS,
         ),
       ),
     )

@@ -1,4 +1,4 @@
-import { createHash, timingSafeEqual } from 'node:crypto'
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import type { SyncAuthTicketStore, SyncTicketIdentity } from './auth.js'
 import type { SyncCommandLeaseRegistry, SyncSocketBudget } from './registry.js'
 import { MAX_FILE_BINARY_FRAME_BYTES } from './filesProtocol.js'
@@ -94,11 +94,23 @@ export type SyncCollaborationAuthorizationResult =
   | { authorized: false }
   | {
       authorized: true
+      epochDiscovery: true
+      room: string
+      serverUpdatedAtTimestamp: number
+      collaborationProtocolVersion: 3
+      roomEpoch: string
+      collaborationSecurityEpoch: string
+    }
+  | {
+      authorized: true
+      epochDiscovery?: false
       capability: string
       room: string
       expiresIn: number
       serverUpdatedAtTimestamp: number
-      collaborationProtocolVersion: 2
+      collaborationProtocolVersion: 3
+      roomEpoch: string
+      collaborationSecurityEpoch: string
       leaseRequestId?: string
       bootstrapChallenge?: string
     }
@@ -232,7 +244,19 @@ type ActiveInviteSubscription = {
   readySent: boolean
 }
 
+type CollaborationEpochDiscovery = {
+  challengeDigest: Buffer
+  requestId: string
+  userUuid: string
+  sessionUuid: string
+  noteUuid: string
+  roomEpoch: string
+  collaborationSecurityEpoch: string
+  expiresAt: number
+}
+
 const MAX_ACTIVE_RPC_REQUESTS = 8
+const COLLABORATION_EPOCH_DISCOVERY_TTL_MS = 10_000
 const MAX_RPC_CHUNK_BYTES = 64 * 1024
 const MAX_RPC_IDEMPOTENCY_ENTRIES = 256
 
@@ -265,6 +289,7 @@ export class SyncCommandHandler {
   private activeAbort?: AbortController
   private readonly activeRpcs = new Map<string, ActiveRpc>()
   private activeInviteSubscription?: ActiveInviteSubscription
+  private collaborationEpochDiscovery?: CollaborationEpochDiscovery
   private readonly filesSession?: SyncFilesSession
   private readonly rpcIdempotency = new Map<string, string>()
   private activeLease?: ActiveLease
@@ -392,6 +417,7 @@ export class SyncCommandHandler {
     this.activeAbort?.abort()
     this.abortActiveRpcs('SOCKET_CLOSED')
     this.stopInviteSubscription()
+    this.collaborationEpochDiscovery = undefined
     this.filesSession?.disconnect()
     this.trackCleanup(this.releaseActiveLease())
     this.trackCleanup(this.releaseSocketBudget())
@@ -575,15 +601,23 @@ export class SyncCommandHandler {
       return
     }
 
+    const identity = this.identity as SyncTicketIdentity
+    const discoveryRequest = isCollaborationEpochDiscoveryRequest(frame.payload) ? frame.payload : undefined
+    const grantRequest = discoveryRequest
+      ? undefined
+      : (frame.payload as Extract<SyncCollaborationAuthorizationPayload, { expectedRoomEpoch: string }>)
+    const consumedDiscovery = grantRequest ? this.consumeCollaborationEpochDiscovery(grantRequest, identity) : undefined
+    if (grantRequest && !consumedDiscovery) {
+      this.options.metrics?.increment('collaboration_authorization', 'epoch_challenge_invalid')
+      this.sendError(frame.requestId, frame.commandId, 'NOT_AUTHORIZED')
+      return
+    }
+
     const controller = new AbortController()
     this.activeAbort = controller
     try {
       const result = await this.withTimeout(
-        (signal) =>
-          adapter.authorizeCollaboration(
-            { identity: this.identity as SyncTicketIdentity, request: frame.payload },
-            signal,
-          ),
+        (signal) => adapter.authorizeCollaboration({ identity, request: frame.payload }, signal),
         controller,
       )
       if (!result.authorized) {
@@ -591,7 +625,43 @@ export class SyncCommandHandler {
         this.sendError(frame.requestId, frame.commandId, 'NOT_AUTHORIZED')
         return
       }
-      if (!isValidCollaborationAuthorizationResult(result, frame.payload)) {
+      if (discoveryRequest) {
+        if (!isValidCollaborationEpochDiscoveryResult(result, discoveryRequest)) {
+          this.options.metrics?.increment('collaboration_authorization', 'invalid_discovery_result')
+          this.sendError(frame.requestId, frame.commandId, 'BACKEND_ERROR')
+          return
+        }
+        const challenge = randomBytes(32).toString('base64url')
+        const expiresAt = Date.now() + COLLABORATION_EPOCH_DISCOVERY_TTL_MS
+        this.collaborationEpochDiscovery = {
+          challengeDigest: createHash('sha256').update(challenge, 'utf8').digest(),
+          requestId: frame.requestId,
+          userUuid: identity.userUuid,
+          sessionUuid: identity.sessionUuid,
+          noteUuid: frame.payload.noteUuid,
+          roomEpoch: result.roomEpoch,
+          collaborationSecurityEpoch: result.collaborationSecurityEpoch,
+          expiresAt,
+        }
+        this.send('COLLABORATION_AUTHORIZED', frame.requestId, frame.commandId, {
+          epochDiscovery: true,
+          room: result.room,
+          serverUpdatedAtTimestamp: result.serverUpdatedAtTimestamp,
+          collaborationProtocolVersion: 3,
+          roomEpoch: result.roomEpoch,
+          collaborationSecurityEpoch: result.collaborationSecurityEpoch,
+          epochDiscoveryChallenge: challenge,
+          epochDiscoveryRequestId: frame.requestId,
+          challengeExpiresAt: expiresAt,
+        })
+        this.options.metrics?.increment('collaboration_authorization', 'epoch_discovered')
+        return
+      }
+      if (
+        !grantRequest ||
+        !consumedDiscovery ||
+        !isValidCollaborationAuthorizationResult(result, grantRequest, consumedDiscovery)
+      ) {
         this.options.metrics?.increment('collaboration_authorization', 'invalid_result')
         this.sendError(frame.requestId, frame.commandId, 'BACKEND_ERROR')
         return
@@ -602,6 +672,8 @@ export class SyncCommandHandler {
         expiresIn: result.expiresIn,
         serverUpdatedAtTimestamp: result.serverUpdatedAtTimestamp,
         collaborationProtocolVersion: result.collaborationProtocolVersion,
+        roomEpoch: result.roomEpoch,
+        collaborationSecurityEpoch: result.collaborationSecurityEpoch,
         ...(result.leaseRequestId ? { leaseRequestId: result.leaseRequestId } : {}),
         ...(result.bootstrapChallenge ? { bootstrapChallenge: result.bootstrapChallenge } : {}),
       })
@@ -614,6 +686,27 @@ export class SyncCommandHandler {
         this.activeAbort = undefined
       }
     }
+  }
+
+  private consumeCollaborationEpochDiscovery(
+    request: Extract<SyncCollaborationAuthorizationPayload, { expectedRoomEpoch: string }>,
+    identity: SyncTicketIdentity,
+  ): CollaborationEpochDiscovery | undefined {
+    const discovery = this.collaborationEpochDiscovery
+    this.collaborationEpochDiscovery = undefined
+    if (
+      !discovery ||
+      discovery.expiresAt <= Date.now() ||
+      discovery.requestId !== request.epochDiscoveryRequestId ||
+      discovery.userUuid !== identity.userUuid ||
+      discovery.sessionUuid !== identity.sessionUuid ||
+      discovery.noteUuid !== request.noteUuid ||
+      discovery.roomEpoch !== request.expectedRoomEpoch
+    ) {
+      return undefined
+    }
+    const supplied = createHash('sha256').update(request.epochDiscoveryChallenge, 'utf8').digest()
+    return timingSafeEqual(discovery.challengeDigest, supplied) ? discovery : undefined
   }
 
   private async handleInviteSubscribe(frame: SyncInviteSubscribeFrame): Promise<void> {
@@ -1455,10 +1548,13 @@ export class SyncCommandHandler {
 }
 
 function isValidCollaborationAuthorizationResult(
-  result: Exclude<SyncCollaborationAuthorizationResult, { authorized: false }>,
-  request: SyncCollaborationAuthorizationPayload,
-): boolean {
+  result: SyncCollaborationAuthorizationResult,
+  request: Extract<SyncCollaborationAuthorizationPayload, { expectedRoomEpoch: string }>,
+  discovery: CollaborationEpochDiscovery,
+): result is Extract<SyncCollaborationAuthorizationResult, { epochDiscovery?: false }> {
   return (
+    result.authorized === true &&
+    result.epochDiscovery !== true &&
     typeof result.capability === 'string' &&
     result.capability.length > 0 &&
     result.room === request.noteUuid &&
@@ -1466,10 +1562,43 @@ function isValidCollaborationAuthorizationResult(
     result.expiresIn > 0 &&
     Number.isSafeInteger(result.serverUpdatedAtTimestamp) &&
     result.serverUpdatedAtTimestamp > 0 &&
-    result.collaborationProtocolVersion === 2 &&
+    result.collaborationProtocolVersion === 3 &&
+    isValidCollaborationEpoch(result.roomEpoch) &&
+    isValidCollaborationEpoch(result.collaborationSecurityEpoch) &&
+    result.roomEpoch === request.expectedRoomEpoch &&
+    result.roomEpoch === discovery.roomEpoch &&
+    result.collaborationSecurityEpoch === discovery.collaborationSecurityEpoch &&
     result.leaseRequestId === request.leaseRequestId &&
     result.bootstrapChallenge === request.bootstrapChallenge
   )
+}
+
+function isCollaborationEpochDiscoveryRequest(
+  request: SyncCollaborationAuthorizationPayload,
+): request is Extract<SyncCollaborationAuthorizationPayload, { epochDiscovery: true }> {
+  return request.epochDiscovery === true
+}
+
+function isValidCollaborationEpochDiscoveryResult(
+  result: SyncCollaborationAuthorizationResult,
+  request: Extract<SyncCollaborationAuthorizationPayload, { epochDiscovery: true }>,
+): result is Extract<SyncCollaborationAuthorizationResult, { epochDiscovery: true }> {
+  return (
+    result.authorized === true &&
+    result.epochDiscovery === true &&
+    result.room === request.noteUuid &&
+    Number.isSafeInteger(result.serverUpdatedAtTimestamp) &&
+    result.serverUpdatedAtTimestamp > 0 &&
+    result.collaborationProtocolVersion === 3 &&
+    isValidCollaborationEpoch(result.roomEpoch) &&
+    isValidCollaborationEpoch(result.collaborationSecurityEpoch) &&
+    !('capability' in result) &&
+    !('expiresIn' in result)
+  )
+}
+
+function isValidCollaborationEpoch(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{16,128}$/u.test(value)
 }
 
 const RPC_RESPONSE_HEADER_NAMES = new Set([

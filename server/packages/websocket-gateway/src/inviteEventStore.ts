@@ -497,18 +497,19 @@ function assertUserUuid(value: string): void {
 }
 
 function assertInviteEvent(value: unknown): asserts value is InviteEventInvalidation {
-  if (!isInviteEvent(value)) {
+  if (!isInviteEventInvalidation(value)) {
     throw new InviteEventStoreError('INVITE_STORE_UNAVAILABLE', 'Invite invalidation is malformed.')
   }
 }
 
 function assertInviteEventFromStore(value: unknown): asserts value is InviteEventInvalidation {
-  if (!isInviteEvent(value)) {
+  if (!isInviteEventInvalidation(value)) {
     throw unavailable('Invite stream payload failed validation.')
   }
 }
 
-function isInviteEvent(value: unknown): value is InviteEventInvalidation {
+/** Canonical strict validator shared by producers, the durable store, and the wire adapter. */
+export function isInviteEventInvalidation(value: unknown): value is InviteEventInvalidation {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return false
   }
@@ -584,6 +585,14 @@ function hasOnlyFields(value: Record<string, unknown>, fields: ReadonlySet<strin
 
 function isUuid(value: unknown): value is string {
   return typeof value === 'string' && UUID_PATTERN.test(value)
+}
+
+export function isInviteEventUserUuid(value: unknown): value is string {
+  return isUuid(value)
+}
+
+export function isOpaqueInviteEventCursor(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && Buffer.byteLength(value, 'utf8') <= 2_048
 }
 
 function isCanonicalRevision(value: unknown): value is string {

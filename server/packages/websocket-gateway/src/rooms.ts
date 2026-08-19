@@ -11,8 +11,8 @@ import type { Conn, SendableSocket } from './registry.js'
 //
 // Protocol is JSON text frames (so it coexists with the existing `ping`/`pong`
 // and push messages on the same socket) with a base64 binary payload:
-//   { t: 'room-reserve', room, cap, requestId, role: 'editor', protocolVersion: 2 }
-//   { t: 'room-join', room, cap, requestId, role, protocolVersion: 2 }
+//   { t: 'room-reserve', room, cap, requestId, role: 'editor', protocolVersion: 3, expectedRoomEpoch }
+//   { t: 'room-join', room, cap, requestId, role, protocolVersion: 3, expectedRoomEpoch }
 //   { t: 'room-leave', room, requestId }
 //   { t: 'yjs', room, payload, transferId?, stateRequestId? } // base64 encrypted update
 //   { t: 'yjs-chunk',  room, ... }       // bounded chunk of a large encrypted update
@@ -35,7 +35,8 @@ export type RelayFrame =
       cap?: string
       requestId: string
       role: 'editor'
-      protocolVersion: 2
+      protocolVersion: 3
+      expectedRoomEpoch: string
     }
   | {
       t: 'room-join'
@@ -44,8 +45,17 @@ export type RelayFrame =
       requestId?: string
       role?: RoomLeaseRole
       protocolVersion?: number
+      expectedRoomEpoch?: string
     }
   | { t: 'room-leave'; room: string; requestId?: string }
+  | {
+      t: 'room-presence-heartbeat'
+      room: string
+      requestId: string
+      expectedRoomEpoch: string
+      protocolVersion: 3
+      clientId: number
+    }
   | { t: 'yjs'; room: string; payload: string; transferId?: string; stateRequestId?: string }
   | {
       t: 'yjs-chunk'
@@ -66,6 +76,7 @@ const RELAY_TYPES = new Set([
   'room-reserve',
   'room-join',
   'room-leave',
+  'room-presence-heartbeat',
   'yjs',
   'yjs-chunk',
   'yjs-retry',
@@ -73,7 +84,7 @@ const RELAY_TYPES = new Set([
   'awareness',
   'comment',
 ])
-export const COLLABORATION_PROTOCOL_VERSION = 2
+export const COLLABORATION_PROTOCOL_VERSION = 3
 const MAX_ROOM_ID = 200
 const MAX_PAYLOAD = 512 * 1024 // 512 KiB per frame; a yjs update is normally tiny.
 export const YJS_CHUNK_PLAINTEXT_BYTES = 128 * 1024
@@ -83,6 +94,7 @@ export const MAX_YJS_TRANSFER_CHUNKS = MAX_YJS_TRANSFER_BYTES / YJS_CHUNK_PLAINT
 // memory and so verification stays cheap.
 const MAX_CAP = 4096
 const MAX_REQUEST_ID = 128
+const COLLABORATION_EPOCH_PATTERN = /^[A-Za-z0-9_-]{16,128}$/
 export const MAX_YJS_CLIENT_ID = 0xffff_ffff
 export type RoomLeaseRole = 'editor' | 'comment'
 export type YjsResponseFrameDisposition = 'uncorrelated' | 'partial' | 'complete' | 'denied'
@@ -97,6 +109,7 @@ export const MAX_REQUEST_LEASES_PER_CONNECTION = 128
 export const MAX_REQUEST_LEASES_PER_CONNECTION_PER_ROOM = 8
 export const MAX_REQUEST_LEASES_PER_ROOM = 256
 export const MAX_CONNECTIONS_PER_ROOM = 128
+export const MAX_COLLABORATION_SOCKET_BUFFERED_BYTES = 1024 * 1024
 
 // Control frames are far more expensive than opaque updates: reserve invokes
 // capability verification and distributed lease coordination, while retry asks
@@ -161,6 +174,32 @@ export function parseRelayFrame(raw: string): RelayFrame | null {
     }
     return { t, room, ...(requestId ? { requestId } : {}) }
   }
+  if (t === 'room-presence-heartbeat') {
+    const requestId = obj.requestId
+    const expectedRoomEpoch = obj.expectedRoomEpoch
+    const clientId = obj.clientId
+    if (
+      typeof requestId !== 'string' ||
+      requestId.length === 0 ||
+      requestId.length > MAX_REQUEST_ID ||
+      !isValidCollaborationEpoch(expectedRoomEpoch) ||
+      obj.protocolVersion !== COLLABORATION_PROTOCOL_VERSION ||
+      typeof clientId !== 'number' ||
+      !Number.isSafeInteger(clientId) ||
+      clientId < 0 ||
+      clientId > MAX_YJS_CLIENT_ID
+    ) {
+      return null
+    }
+    return {
+      t,
+      room,
+      requestId,
+      expectedRoomEpoch,
+      protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+      clientId,
+    }
+  }
   if (t === 'yjs-retry') {
     const requestId = obj.requestId
     const requesterClientId = obj.requesterClientId
@@ -197,10 +236,14 @@ export function parseRelayFrame(raw: string): RelayFrame | null {
     const requestId = obj.requestId
     const role = obj.role
     const protocolVersion = obj.protocolVersion
+    const expectedRoomEpoch = obj.expectedRoomEpoch
     if (
       requestId !== undefined &&
       (typeof requestId !== 'string' || requestId.length === 0 || requestId.length > MAX_REQUEST_ID)
     ) {
+      return null
+    }
+    if (expectedRoomEpoch !== undefined && !isValidCollaborationEpoch(expectedRoomEpoch)) {
       return null
     }
     if (role !== undefined && role !== 'editor' && role !== 'comment') {
@@ -212,7 +255,8 @@ export function parseRelayFrame(raw: string): RelayFrame | null {
         requestId.length === 0 ||
         requestId.length > MAX_REQUEST_ID ||
         role !== 'editor' ||
-        protocolVersion !== COLLABORATION_PROTOCOL_VERSION
+        protocolVersion !== COLLABORATION_PROTOCOL_VERSION ||
+        !isValidCollaborationEpoch(expectedRoomEpoch)
       ) {
         return null
       }
@@ -231,6 +275,7 @@ export function parseRelayFrame(raw: string): RelayFrame | null {
         ...(protocolVersion === COLLABORATION_PROTOCOL_VERSION
           ? { protocolVersion: COLLABORATION_PROTOCOL_VERSION }
           : {}),
+        ...(isValidCollaborationEpoch(expectedRoomEpoch) ? { expectedRoomEpoch } : {}),
       } as RelayFrame
     }
     if (typeof cap !== 'string' || cap.length === 0 || cap.length > MAX_CAP) {
@@ -248,6 +293,7 @@ export function parseRelayFrame(raw: string): RelayFrame | null {
       ...(protocolVersion === COLLABORATION_PROTOCOL_VERSION
         ? { protocolVersion: COLLABORATION_PROTOCOL_VERSION }
         : {}),
+      ...(isValidCollaborationEpoch(expectedRoomEpoch) ? { expectedRoomEpoch } : {}),
     } as RelayFrame
   }
   const payload = obj.payload
@@ -311,6 +357,10 @@ export function parseRelayFrame(raw: string): RelayFrame | null {
   return { t: t as 'yjs' | 'awareness' | 'comment', room, payload }
 }
 
+function isValidCollaborationEpoch(value: unknown): value is string {
+  return typeof value === 'string' && COLLABORATION_EPOCH_PATTERN.test(value)
+}
+
 /**
  * In-memory map of room id -> live connections currently editing that note.
  * A connection may be in several rooms (e.g. several open Super notes).
@@ -323,6 +373,8 @@ type RoomLease = {
   role: RoomLeaseRole
   shouldBootstrap: boolean
   expiresAt: number
+  roomEpoch?: string
+  collaborationSecurityEpoch?: string
 }
 
 type RoomMembership = {
@@ -537,13 +589,27 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
     room: string,
     conn: Conn<S>,
     requestId: string,
-  ): { role: RoomLeaseRole; shouldBootstrap: boolean } | undefined {
+  ):
+    | {
+        role: RoomLeaseRole
+        shouldBootstrap: boolean
+        roomEpoch?: string
+        collaborationSecurityEpoch?: string
+      }
+    | undefined {
     const membership = this.byRoom.get(room)?.get(conn)
     if (!membership || !this.pruneExpiredLeases(room, conn, membership)) {
       return undefined
     }
     const lease = membership.requestIds.get(requestId)
-    return lease ? { role: lease.role, shouldBootstrap: lease.shouldBootstrap } : undefined
+    return lease
+      ? {
+          role: lease.role,
+          shouldBootstrap: lease.shouldBootstrap,
+          ...(lease.roomEpoch ? { roomEpoch: lease.roomEpoch } : {}),
+          ...(lease.collaborationSecurityEpoch ? { collaborationSecurityEpoch: lease.collaborationSecurityEpoch } : {}),
+        }
+      : undefined
   }
 
   /**
@@ -709,6 +775,8 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
     requestId?: string,
     role: RoomLeaseRole = 'editor',
     shouldBootstrapOverride?: boolean,
+    roomEpoch?: string,
+    collaborationSecurityEpoch?: string,
   ): { joined: boolean; shouldBootstrap: boolean } {
     if (expiresAt <= this.now() || (expiresAt !== Number.POSITIVE_INFINITY && !Number.isFinite(expiresAt))) {
       return { joined: false, shouldBootstrap: false }
@@ -716,7 +784,12 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
     this.members(room) // prune expired leases before bootstrap election
     const existingMembership = this.byRoom.get(room)?.get(conn)
     const existingLease = requestId ? existingMembership?.requestIds.get(requestId) : existingMembership?.legacyLease
-    if (existingLease && existingLease.role !== role) {
+    if (
+      existingLease &&
+      (existingLease.role !== role ||
+        existingLease.roomEpoch !== roomEpoch ||
+        existingLease.collaborationSecurityEpoch !== collaborationSecurityEpoch)
+    ) {
       return { joined: false, shouldBootstrap: false }
     }
     if (!this.canAcceptJoin(room, conn, requestId)) {
@@ -741,14 +814,51 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
       (role === 'editor' ? (shouldBootstrapOverride ?? !this.hasEditorLease(room)) : false)
     if (membership) {
       if (requestId) {
-        membership.requestIds.set(requestId, { role, shouldBootstrap, expiresAt })
+        membership.requestIds.set(requestId, {
+          role,
+          shouldBootstrap,
+          expiresAt,
+          ...(roomEpoch ? { roomEpoch } : {}),
+          ...(collaborationSecurityEpoch ? { collaborationSecurityEpoch } : {}),
+        })
       } else {
-        membership.legacyLease = { role, shouldBootstrap, expiresAt }
+        membership.legacyLease = {
+          role,
+          shouldBootstrap,
+          expiresAt,
+          ...(roomEpoch ? { roomEpoch } : {}),
+          ...(collaborationSecurityEpoch ? { collaborationSecurityEpoch } : {}),
+        }
       }
     } else {
       members.set(conn, {
-        requestIds: new Map(requestId ? [[requestId, { role, shouldBootstrap, expiresAt }]] : []),
-        ...(!requestId ? { legacyLease: { role, shouldBootstrap, expiresAt } } : {}),
+        requestIds: new Map(
+          requestId
+            ? [
+                [
+                  requestId,
+                  {
+                    role,
+                    shouldBootstrap,
+                    expiresAt,
+                    ...(roomEpoch ? { roomEpoch } : {}),
+                    ...(collaborationSecurityEpoch ? { collaborationSecurityEpoch } : {}),
+                  },
+                ],
+              ]
+            : [],
+        ),
+        ...(!requestId
+          ? {
+              legacyLease: {
+                role,
+                shouldBootstrap,
+                expiresAt,
+                ...(roomEpoch ? { roomEpoch } : {}),
+                ...(collaborationSecurityEpoch ? { collaborationSecurityEpoch } : {}),
+              },
+            }
+          : {}),
       })
     }
     rooms.add(room)
@@ -1105,6 +1215,7 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
     let sent = 0
     for (const member of this.members(room)) {
       if (member === from) continue
+      if (!this.canSendWithoutBackpressure(member.socket)) continue
       // A dead/closing socket's send() can throw synchronously; never let one
       // bad peer abort the broadcast or bubble out of the message handler (which
       // would crash the whole gateway for everyone).
@@ -1122,6 +1233,7 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
   broadcastAll(room: string, message: string): number {
     let sent = 0
     for (const member of this.members(room)) {
+      if (!this.canSendWithoutBackpressure(member.socket)) continue
       try {
         member.socket.send(message)
         sent += 1
@@ -1131,6 +1243,17 @@ export class RoomRegistry<S extends SendableSocket = SendableSocket> {
     }
     return sent
   }
+
+  private canSendWithoutBackpressure(socket: S): boolean {
+    const bufferedAmount = (socket as S & { bufferedAmount?: unknown }).bufferedAmount
+    return (
+      bufferedAmount === undefined ||
+      (typeof bufferedAmount === 'number' &&
+        Number.isFinite(bufferedAmount) &&
+        bufferedAmount >= 0 &&
+        bufferedAmount <= MAX_COLLABORATION_SOCKET_BUFFERED_BYTES)
+    )
+  }
 }
 
 export interface RoomRelayLifecycle<S extends SendableSocket = SendableSocket> {
@@ -1139,19 +1262,31 @@ export interface RoomRelayLifecycle<S extends SendableSocket = SendableSocket> {
     room: string,
     requestId: string,
     expiresAt: number,
-    protocolVersion: 2,
+    protocolVersion: 3,
     serverUpdatedAtTimestamp: number,
+    roomEpoch: string,
+    collaborationSecurityEpoch: string,
+    collaborationAuthorizationIssuedAt?: number,
   ): Promise<{ shouldBootstrap: boolean; bootstrapChallenge?: string }>
   activateEditorLease(
     conn: Conn<S>,
     room: string,
     requestId: string,
     expiresAt: number,
-    protocolVersion: 2,
+    protocolVersion: 3,
     serverUpdatedAtTimestamp: number,
-    bootstrapChallenge?: string,
+    bootstrapChallenge: string | undefined,
+    roomEpoch: string,
+    collaborationSecurityEpoch: string,
+    collaborationAuthorizationIssuedAt?: number,
   ): Promise<{ shouldBootstrap: boolean }>
-  releaseLease(conn: Conn<S>, room: string, requestId: string | undefined): Promise<void>
+  releaseLease(
+    conn: Conn<S>,
+    room: string,
+    requestId: string | undefined,
+    reason?: RoomPresenceLeaveReason,
+  ): Promise<void>
+  heartbeatPresence?(conn: Conn<S>, room: string, requestId: string, roomEpoch: string, clientId: number): Promise<void>
   /** Absolute local expiry when granted; undefined means this claimant lost. */
   claimYjsResponse(
     conn: Conn<S>,
@@ -1181,8 +1316,11 @@ export type RoomJoinAuthorization =
       authorized: true
       /** Epoch milliseconds; continued send and receive access ends here. */
       expiresAt: number
+      collaborationAuthorizationIssuedAt?: number
       serverUpdatedAtTimestamp: number
-      collaborationProtocolVersion: 2
+      collaborationProtocolVersion: 3
+      roomEpoch: string
+      collaborationSecurityEpoch: string
       leaseRequestId?: string
       bootstrapChallenge?: string
     }
@@ -1195,6 +1333,16 @@ export type RoomJoinAuthorizer = (
 
 function ignoreLifecycleReleaseFailure(): undefined {
   return undefined
+}
+
+export type RoomPresenceLeaveReason = 'clean-leave' | 'disconnect' | 'heartbeat-timeout' | 'revoked'
+
+/** A policy rejection that may safely disclose only the opaque current epoch. */
+export class CollaborationRoomEpochMismatchError extends Error {
+  constructor(readonly currentRoomEpoch: string) {
+    super('Collaboration room epoch mismatch')
+    this.name = 'CollaborationRoomEpochMismatchError'
+  }
 }
 
 /**
@@ -1223,9 +1371,16 @@ export async function handleRelayFrame<S extends SendableSocket>(
   if (isConnectionActive && !isConnectionActive()) {
     return 0
   }
-  const deny = (room: string, requestId?: string): number => {
+  const deny = (room: string, requestId?: string, roomEpoch?: string): number => {
     try {
-      conn.socket.send(JSON.stringify({ t: 'room-denied', room, ...(requestId ? { requestId } : {}) }))
+      conn.socket.send(
+        JSON.stringify({
+          t: 'room-denied',
+          room,
+          ...(requestId ? { requestId } : {}),
+          ...(roomEpoch ? { roomEpoch } : {}),
+        }),
+      )
     } catch {
       /* socket unwritable */
     }
@@ -1236,8 +1391,11 @@ export async function handleRelayFrame<S extends SendableSocket>(
       return {
         authorized: true,
         expiresAt: Number.POSITIVE_INFINITY,
+        collaborationAuthorizationIssuedAt: 1,
         serverUpdatedAtTimestamp: 1,
         collaborationProtocolVersion: COLLABORATION_PROTOCOL_VERSION,
+        roomEpoch: 'standalone_room_epoch',
+        collaborationSecurityEpoch: 'standalone_security_epoch',
       }
     }
     try {
@@ -1271,6 +1429,8 @@ export async function handleRelayFrame<S extends SendableSocket>(
       if (
         !authorization.authorized ||
         authorization.collaborationProtocolVersion !== COLLABORATION_PROTOCOL_VERSION ||
+        authorization.roomEpoch !== frame.expectedRoomEpoch ||
+        !isValidCollaborationEpoch(authorization.collaborationSecurityEpoch) ||
         authorization.leaseRequestId !== frame.requestId ||
         authorization.bootstrapChallenge !== undefined
       ) {
@@ -1300,6 +1460,9 @@ export async function handleRelayFrame<S extends SendableSocket>(
           activationDeadline,
           COLLABORATION_PROTOCOL_VERSION,
           authorization.serverUpdatedAtTimestamp,
+          authorization.roomEpoch,
+          authorization.collaborationSecurityEpoch,
+          authorization.collaborationAuthorizationIssuedAt,
         )
         if (
           (isConnectionActive && !isConnectionActive()) ||
@@ -1318,12 +1481,17 @@ export async function handleRelayFrame<S extends SendableSocket>(
             ...(reservation.bootstrapChallenge ? { bootstrapChallenge: reservation.bootstrapChallenge } : {}),
             protocolVersion: COLLABORATION_PROTOCOL_VERSION,
             maxTransferBytes: MAX_YJS_TRANSFER_BYTES,
+            roomEpoch: authorization.roomEpoch,
           }),
         )
-      } catch {
+      } catch (error) {
         rooms.releasePendingEditorReservation(frame.room, conn, frame.requestId)
         await lifecycle.releaseLease(conn, frame.room, frame.requestId).catch(ignoreLifecycleReleaseFailure)
-        return deny(frame.room, frame.requestId)
+        return deny(
+          frame.room,
+          frame.requestId,
+          error instanceof CollaborationRoomEpochMismatchError ? error.currentRoomEpoch : undefined,
+        )
       }
       return 0
     }
@@ -1347,7 +1515,11 @@ export async function handleRelayFrame<S extends SendableSocket>(
           }
           return 0
         }
-        if (productionProtocolRequired && frame.protocolVersion !== COLLABORATION_PROTOCOL_VERSION) {
+        if (
+          productionProtocolRequired &&
+          (frame.protocolVersion !== COLLABORATION_PROTOCOL_VERSION ||
+            frame.expectedRoomEpoch !== existingRequestLease.roomEpoch)
+        ) {
           return 0
         }
         if (requestedRole === 'editor' && frame.requestId) {
@@ -1367,6 +1539,7 @@ export async function handleRelayFrame<S extends SendableSocket>(
                 ? {
                     protocolVersion: COLLABORATION_PROTOCOL_VERSION,
                     maxTransferBytes: MAX_YJS_TRANSFER_BYTES,
+                    roomEpoch: existingRequestLease.roomEpoch,
                   }
                 : {}),
             }),
@@ -1417,7 +1590,11 @@ export async function handleRelayFrame<S extends SendableSocket>(
       if (
         productionProtocolRequired &&
         (frame.protocolVersion !== COLLABORATION_PROTOCOL_VERSION ||
-          authorization.collaborationProtocolVersion !== COLLABORATION_PROTOCOL_VERSION)
+          authorization.collaborationProtocolVersion !== COLLABORATION_PROTOCOL_VERSION ||
+          !isValidCollaborationEpoch(frame.expectedRoomEpoch) ||
+          authorization.roomEpoch !== frame.expectedRoomEpoch ||
+          !isValidCollaborationEpoch(authorization.collaborationSecurityEpoch) ||
+          authorization.leaseRequestId !== frame.requestId)
       ) {
         return denyJoin()
       }
@@ -1439,6 +1616,9 @@ export async function handleRelayFrame<S extends SendableSocket>(
               COLLABORATION_PROTOCOL_VERSION,
               authorization.serverUpdatedAtTimestamp,
               authorization.bootstrapChallenge,
+              authorization.roomEpoch,
+              authorization.collaborationSecurityEpoch,
+              authorization.collaborationAuthorizationIssuedAt,
             )
           ).shouldBootstrap
           reservedEditorLease = true
@@ -1447,8 +1627,13 @@ export async function handleRelayFrame<S extends SendableSocket>(
             await lifecycle.releaseLease(conn, frame.room, frame.requestId).catch(ignoreLifecycleReleaseFailure)
             return 0
           }
-        } catch {
-          return denyJoin()
+        } catch (error) {
+          await releaseJoinAttempt()
+          return deny(
+            frame.room,
+            frame.requestId,
+            error instanceof CollaborationRoomEpochMismatchError ? error.currentRoomEpoch : undefined,
+          )
         }
       }
       const joinResult = rooms.join(
@@ -1458,6 +1643,8 @@ export async function handleRelayFrame<S extends SendableSocket>(
         frame.requestId,
         requestedRole,
         shouldBootstrapOverride,
+        authorization.roomEpoch,
+        authorization.collaborationSecurityEpoch,
       )
       if (!joinResult.joined) {
         rooms.releasePendingEditorReservation(frame.room, conn, frame.requestId)
@@ -1491,6 +1678,7 @@ export async function handleRelayFrame<S extends SendableSocket>(
               ? {
                   protocolVersion: COLLABORATION_PROTOCOL_VERSION,
                   maxTransferBytes: MAX_YJS_TRANSFER_BYTES,
+                  roomEpoch: authorization.roomEpoch,
                 }
               : {}),
           }),
@@ -1523,9 +1711,32 @@ export async function handleRelayFrame<S extends SendableSocket>(
       rooms.leave(frame.room, conn, frame.requestId)
       rooms.releasePendingEditorReservation(frame.room, conn, frame.requestId)
       if (lifecycle) {
-        await lifecycle.releaseLease(conn, frame.room, frame.requestId).catch(ignoreLifecycleReleaseFailure)
+        await lifecycle
+          .releaseLease(conn, frame.room, frame.requestId, 'clean-leave')
+          .catch(ignoreLifecycleReleaseFailure)
       }
       return 0
+    case 'room-presence-heartbeat': {
+      const lease = rooms.requestLease(frame.room, conn, frame.requestId)
+      if (
+        !lifecycle?.heartbeatPresence ||
+        lease?.role !== 'editor' ||
+        lease.roomEpoch !== frame.expectedRoomEpoch ||
+        frame.protocolVersion !== COLLABORATION_PROTOCOL_VERSION
+      ) {
+        return deny(frame.room, frame.requestId)
+      }
+      try {
+        await lifecycle.heartbeatPresence(conn, frame.room, frame.requestId, frame.expectedRoomEpoch, frame.clientId)
+      } catch (error) {
+        return deny(
+          frame.room,
+          frame.requestId,
+          error instanceof CollaborationRoomEpochMismatchError ? error.currentRoomEpoch : undefined,
+        )
+      }
+      return 0
+    }
     case 'yjs-response-claim': {
       const exactLease = rooms.requestLease(frame.room, conn, frame.leaseRequestId)
       if (

@@ -103,12 +103,23 @@ export interface SyncCommandPayload extends JsonObject {
   body: JsonObject
 }
 
-export interface SyncCollaborationAuthorizationPayload extends JsonObject {
-  noteUuid: string
-  collaborationProtocolVersion: 2
-  leaseRequestId?: string
-  bootstrapChallenge?: string
-}
+export type SyncCollaborationAuthorizationPayload = JsonObject &
+  (
+    | {
+        noteUuid: string
+        collaborationProtocolVersion: 3
+        epochDiscovery: true
+      }
+    | {
+        noteUuid: string
+        collaborationProtocolVersion: 3
+        expectedRoomEpoch: string
+        epochDiscoveryChallenge: string
+        epochDiscoveryRequestId: string
+        leaseRequestId?: string
+        bootstrapChallenge?: string
+      }
+  )
 
 export type SyncRpcMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
 
@@ -479,25 +490,34 @@ export function parseSyncClientFrame(raw: string, rawBytes = Buffer.byteLength(r
     const payload = parsed.payload as JsonObject
     const leaseRequestId = payload.leaseRequestId
     const bootstrapChallenge = payload.bootstrapChallenge
+    const expectedRoomEpoch = payload.expectedRoomEpoch
+    const epochDiscoveryChallenge = payload.epochDiscoveryChallenge
+    const epochDiscoveryRequestId = payload.epochDiscoveryRequestId
+    const epochDiscovery = payload.epochDiscovery
+    const discoveryKeys = ['noteUuid', 'collaborationProtocolVersion', 'epochDiscovery']
+    const grantKeys = [
+      'noteUuid',
+      'collaborationProtocolVersion',
+      'expectedRoomEpoch',
+      'epochDiscoveryChallenge',
+      'epochDiscoveryRequestId',
+      ...(Object.hasOwn(payload, 'leaseRequestId') ? ['leaseRequestId'] : []),
+      ...(Object.hasOwn(payload, 'bootstrapChallenge') ? ['bootstrapChallenge'] : []),
+    ]
     if (
       !hasExactKeys(parsed, commonKeys) ||
-      !hasExactKeys(payload, [
-        'noteUuid',
-        'collaborationProtocolVersion',
-        ...(Object.hasOwn(payload, 'leaseRequestId') ? ['leaseRequestId'] : []),
-        ...(Object.hasOwn(payload, 'bootstrapChallenge') ? ['bootstrapChallenge'] : []),
-      ]) ||
+      !hasExactKeys(payload, epochDiscovery === true ? discoveryKeys : grantKeys) ||
       typeof payload.noteUuid !== 'string' ||
       payload.noteUuid.length === 0 ||
       payload.noteUuid.length > 200 ||
-      payload.collaborationProtocolVersion !== 2 ||
-      (leaseRequestId !== undefined &&
-        (typeof leaseRequestId !== 'string' || leaseRequestId.length === 0 || leaseRequestId.length > 128)) ||
-      (bootstrapChallenge !== undefined &&
-        (typeof bootstrapChallenge !== 'string' ||
-          bootstrapChallenge.length === 0 ||
-          bootstrapChallenge.length > 128)) ||
-      (bootstrapChallenge !== undefined && leaseRequestId === undefined)
+      payload.collaborationProtocolVersion !== 3 ||
+      (epochDiscovery !== true &&
+        (!isValidCollaborationEpoch(expectedRoomEpoch) ||
+          !isIdentifier(epochDiscoveryChallenge) ||
+          !isIdentifier(epochDiscoveryRequestId) ||
+          (leaseRequestId !== undefined && !isIdentifier(leaseRequestId)) ||
+          (bootstrapChallenge !== undefined && !isIdentifier(bootstrapChallenge)) ||
+          (bootstrapChallenge !== undefined && leaseRequestId === undefined)))
     ) {
       throw new SyncProtocolError('INVALID_ENVELOPE', 'Invalid collaboration authorization frame.')
     }
@@ -657,6 +677,10 @@ export function parseSyncClientFrame(raw: string, rawBytes = Buffer.byteLength(r
   }
 
   throw new SyncProtocolError('INVALID_ENVELOPE', 'Unsupported sync frame type.')
+}
+
+function isValidCollaborationEpoch(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{16,128}$/u.test(value)
 }
 
 function isFileDeadline(value: unknown): value is number {
