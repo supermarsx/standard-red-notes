@@ -1199,8 +1199,18 @@ export type {
 } from './inviteEventAvailability.js'
 export { createSharedInviteEventComposition } from './inviteEventComposition.js'
 export type { SharedInviteEventComposition } from './inviteEventComposition.js'
-export { createSyncFilesTokenDecoder } from './filesSession.js'
-export type { SyncFilesAdapter, SyncFilesSignedTokenDecoder } from './filesSession.js'
+export { createSyncFilesTokenDecoder, SyncFilesSession } from './filesSession.js'
+export type {
+  SyncFilesAdapter,
+  SyncFilesControlFrame,
+  SyncFilesSessionOptions,
+  SyncFilesSignedTokenDecoder,
+} from './filesSession.js'
+// Exported so a storage adapter's own package can drive the real file session
+// with real wire frames, instead of asserting against the adapter interface in
+// isolation and hoping the two halves meet.
+export { decodeFileBinaryFrame, encodeFileBinaryFrame, sha256Hex, MAX_FILE_CHUNK_BYTES } from './filesProtocol.js'
+export type { FileBinaryHeader, FileResourceReference } from './filesProtocol.js'
 export {
   createInviteRealtimeDomainEventBridge,
   INVITE_REALTIME_DOMAIN_EVENT_TYPE,

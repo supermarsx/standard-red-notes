@@ -3,7 +3,13 @@ import { promises as fs } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import type { SyncTicketIdentity } from '@standard-red-notes/websocket-gateway'
+import {
+  encodeFileBinaryFrame,
+  decodeFileBinaryFrame,
+  SyncFilesSession,
+  type SyncFilesControlFrame,
+  type SyncTicketIdentity,
+} from '@standard-red-notes/websocket-gateway'
 
 import {
   HomeServerSyncFilesAdapter,
@@ -543,5 +549,116 @@ describe('HomeServerSyncFilesAdapter', () => {
     await expect(
       malicious.adapter.metadata({ identity, resources: [resource] }, new AbortController().signal),
     ).rejects.toMatchObject({ code: 'FILE_PATH_INVALID' })
+  })
+
+  // The gateway drives this adapter through SyncFilesSession, never directly.
+  // Testing the adapter interface alone leaves that seam unproven -- which is
+  // how the whole FILES_V1 lane stayed dead while looking wired. Here the real
+  // session class consumes real wire frames and the bytes land on real disk.
+  it('moves a file end to end through the real gateway file session', async () => {
+    const { adapter, root } = await createAdapter()
+    const payload = Uint8Array.from({ length: 600 }, (_value, index) => (index * 11) % 251)
+    const sha256 = digest(payload)
+
+    const controls: Array<{ type: string; payload: Record<string, unknown> }> = []
+    const binaries: Uint8Array[] = []
+    const errors: string[] = []
+    const session = new SyncFilesSession({
+      adapter,
+      sendControl: (type, _requestId, _commandId, framePayload) => {
+        controls.push({ type, payload: framePayload as Record<string, unknown> })
+        return true
+      },
+      sendBinary: (bytes) => {
+        binaries.push(Uint8Array.from(bytes))
+        return true
+      },
+      sendError: (_requestId, _commandId, code) => {
+        errors.push(code)
+        return true
+      },
+    })
+    const control = (type: string, framePayload: Record<string, unknown>): SyncFilesControlFrame =>
+      ({
+        version: 1,
+        channel: 'sync',
+        type,
+        requestId: `request-${type}`,
+        commandId: `command-${type}`,
+        sequence: 1,
+        payloadLength: 0,
+        payload: framePayload,
+      }) as unknown as SyncFilesControlFrame
+    const lastControl = (type: string) => controls.filter((frame) => frame.type === type).at(-1)
+
+    await session.handleControl(
+      control('FILES_UPLOAD_OPEN', {
+        resource,
+        decryptedSize: payload.byteLength,
+        declaredSize: payload.byteLength,
+        mimeType: 'application/octet-stream',
+        deadlineMs: 5_000,
+      }),
+      identity,
+    )
+    const opened = lastControl('FILES_ACCEPTED')
+    expect(opened).toMatchObject({ payload: { mode: 'upload', declaredSize: payload.byteLength } })
+    const transferId = opened?.payload.transferId as string
+    const generation = opened?.payload.generation as number
+
+    const half = 300
+    for (const [index, slice] of [payload.slice(0, half), payload.slice(half)].entries()) {
+      await session.handleBinary(
+        encodeFileBinaryFrame(
+          {
+            kind: 'UPLOAD_CHUNK',
+            requestId: 'request-upload-chunk',
+            transferId,
+            generation,
+            index,
+            offset: index * half,
+            declaredSize: payload.byteLength,
+            byteLength: slice.byteLength,
+            sha256: digest(slice),
+            final: index === 1,
+          },
+          slice,
+        ),
+        identity,
+      )
+      expect(lastControl('FILES_CHUNK_ACK')).toMatchObject({ payload: { index, duplicate: false } })
+    }
+
+    await session.handleControl(
+      control('FILES_UPLOAD_FINISH', {
+        transferId,
+        generation,
+        declaredSize: payload.byteLength,
+        sha256,
+        deadlineMs: 5_000,
+      }),
+      identity,
+    )
+    expect(lastControl('FILES_COMPLETE')).toMatchObject({ payload: { mode: 'upload', sha256 } })
+    // Published to the canonical <root>/<ownerUuid>/<remoteIdentifier> path the
+    // files service serves from, not left in private transfer staging.
+    await expect(fs.readFile(join(root, identity.userUuid, resource.remoteIdentifier))).resolves.toEqual(
+      Buffer.from(payload),
+    )
+
+    await session.handleControl(
+      control('FILES_DOWNLOAD_OPEN', {
+        resource,
+        offset: 0,
+        initialCreditBytes: payload.byteLength,
+        deadlineMs: 5_000,
+      }),
+      identity,
+    )
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(lastControl('FILES_COMPLETE')).toMatchObject({ payload: { mode: 'download', sha256 } })
+    expect(errors).toEqual([])
+    const received = Buffer.concat(binaries.map((frame) => Buffer.from(decodeFileBinaryFrame(frame).bytes)))
+    expect(new Uint8Array(received)).toEqual(payload)
   })
 })
