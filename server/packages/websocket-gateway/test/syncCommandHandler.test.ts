@@ -15,6 +15,7 @@ import {
   type SyncCommandMetrics,
   type SyncLiveAuthorizationAdapter,
   type SyncSocket,
+  type SyncInviteEventsAdapter,
 } from '../src/syncCommandHandler.js'
 import {
   MAX_SYNC_BUFFERED_BYTES,
@@ -194,6 +195,34 @@ function rpcCancelFrame(sequence: number, targetRequestId: string): JsonObject {
   }
 }
 
+function inviteSubscribeFrame(sequence: number, cursor?: string, limit = 1): JsonObject {
+  const payload = { ...(cursor === undefined ? {} : { cursor }), limit }
+  return {
+    version: 1,
+    channel: 'sync',
+    type: 'INVITE_SUBSCRIBE',
+    requestId: 'invite-subscription',
+    commandId: 'invite-subscription',
+    sequence,
+    payloadLength: syncPayloadLength(payload),
+    payload,
+  }
+}
+
+function inviteAckFrame(sequence: number, cursor: string): JsonObject {
+  const payload = { cursor }
+  return {
+    version: 1,
+    channel: 'sync',
+    type: 'INVITE_ACK',
+    requestId: `invite-ack-${sequence}`,
+    commandId: `invite-ack-${sequence}`,
+    sequence,
+    payloadLength: syncPayloadLength(payload),
+    payload,
+  }
+}
+
 function enqueue(handler: SyncCommandHandler, frame: JsonObject): void {
   const raw = rawFrame(frame)
   handler.enqueue(raw, Buffer.byteLength(raw))
@@ -219,6 +248,8 @@ async function authenticatedHandler(
     backend?: SyncCommandBackendAdapter
     collaborationAuthorization?: SyncCollaborationAuthorizationAdapter
     apiRpc?: SyncApiRpcAdapter
+    inviteEvents?: SyncInviteEventsAdapter
+    requireSharedState?: boolean
     metrics?: SyncCommandMetrics
     deviceId?: string
     resumeSequence?: number
@@ -250,6 +281,8 @@ async function authenticatedHandler(
     backend: options.backend ?? committingBackend(),
     collaborationAuthorization: options.collaborationAuthorization,
     apiRpc: options.apiRpc,
+    inviteEvents: options.inviteEvents,
+    requireSharedState: options.requireSharedState,
     metrics: options.metrics,
     isEnabled: options.isEnabled ?? (() => true),
     backendTimeoutMs: options.backendTimeoutMs,
@@ -276,6 +309,260 @@ describe('SyncCommandHandler', () => {
     }
     expect(() => new SyncCommandHandler({ ...base, leaseRenewIntervalMs: 0 })).toThrow(/renewal interval/i)
     expect(() => new SyncCommandHandler({ ...base, socketBudgetRenewIntervalMs: 1.5 })).toThrow(/renewal interval/i)
+  })
+
+  it('replays and live-delivers durable invite batches only after the exact prior cursor is acknowledged', async () => {
+    const eventOne = {
+      version: 1,
+      eventId: '11111111-1111-4111-8111-111111111111',
+      streamPosition: 'cursor-1',
+      kind: 'shared-vault-invite',
+      action: 'created',
+      inviteUuid: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      sharedVaultUuid: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      occurredAt: 1,
+    }
+    const eventTwo = {
+      version: 1,
+      eventId: '22222222-2222-4222-8222-222222222222',
+      streamPosition: 'cursor-2',
+      kind: 'subscription-invite',
+      action: 'updated',
+      inviteUuid: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      occurredAt: 2,
+    }
+    const eventThree = {
+      version: 1,
+      eventId: '33333333-3333-4333-8333-333333333333',
+      streamPosition: 'cursor-3',
+      kind: 'subscription-invite',
+      action: 'accepted',
+      inviteUuid: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+      occurredAt: 3,
+    }
+    const events = [eventOne, eventTwo]
+    const listeners = new Set<() => void>()
+    let authoritativeApplyCompleted = false
+    const positions = new Map([
+      ['cursor-0', 0],
+      ['cursor-1', 1],
+      ['cursor-2', 2],
+      ['cursor-3', 3],
+    ])
+    const readAfter = vi.fn(async (_userUuid: string, cursor: string, limit: number) => {
+      if (cursor === 'cursor-1') {
+        expect(authoritativeApplyCompleted).toBe(true)
+      }
+      const after = positions.get(cursor) ?? 0
+      const available = events.slice(after)
+      const selected = available.slice(0, limit)
+      return {
+        previousCursor: cursor,
+        events: selected,
+        nextCursor: selected.at(-1)?.streamPosition ?? cursor,
+        hasMore: available.length > selected.length,
+      }
+    })
+    const inviteEvents: SyncInviteEventsAdapter = {
+      distribution: 'shared',
+      ready: () => true,
+      tail: vi.fn(async () => `cursor-${events.length}`),
+      readAfter,
+      subscribeAvailability: vi.fn((_userUuid, listener) => {
+        listeners.add(listener)
+        return () => listeners.delete(listener)
+      }),
+    }
+
+    const { handler, socket } = await authenticatedHandler({ inviteEvents, requireSharedState: true })
+    expect(socket.frames[0].payload).toMatchObject({ operations: ['SYNC_ITEMS', 'INVITE_EVENTS'] })
+
+    enqueue(handler, inviteSubscribeFrame(1, 'cursor-0'))
+    await vi.waitFor(() => expect(socket.frames.filter((frame) => frame.type === 'INVITE_BATCH')).toHaveLength(1))
+    expect(socket.frames.at(-1)?.payload).toMatchObject({
+      previousCursor: 'cursor-0',
+      events: [eventOne],
+      nextCursor: 'cursor-1',
+      hasMore: true,
+    })
+    expect(readAfter).toHaveBeenCalledTimes(1)
+    expect(readAfter).toHaveBeenLastCalledWith('user-1', 'cursor-0', 1, expect.any(AbortSignal))
+
+    for (const listener of listeners) {
+      listener()
+    }
+    await Promise.resolve()
+    expect(readAfter).toHaveBeenCalledTimes(1)
+    expect(socket.frames.filter((frame) => frame.type === 'INVITE_BATCH')).toHaveLength(1)
+
+    authoritativeApplyCompleted = true
+    enqueue(handler, inviteAckFrame(2, 'cursor-1'))
+    await vi.waitFor(() => expect(socket.frames.filter((frame) => frame.type === 'INVITE_BATCH')).toHaveLength(2))
+    expect(socket.frames.at(-1)?.payload).toMatchObject({
+      previousCursor: 'cursor-1',
+      events: [eventTwo],
+      nextCursor: 'cursor-2',
+      hasMore: false,
+    })
+
+    enqueue(handler, inviteAckFrame(3, 'cursor-2'))
+    await vi.waitFor(() => expect(readAfter).toHaveBeenCalledTimes(3))
+    expect(socket.frames.filter((frame) => frame.type === 'INVITE_BATCH')).toHaveLength(2)
+
+    events.push(eventThree)
+    for (const listener of listeners) {
+      listener()
+    }
+    await vi.waitFor(() => expect(socket.frames.filter((frame) => frame.type === 'INVITE_BATCH')).toHaveLength(3))
+    expect(socket.frames.at(-1)?.payload).toMatchObject({
+      previousCursor: 'cursor-2',
+      events: [eventThree],
+      nextCursor: 'cursor-3',
+      hasMore: false,
+    })
+
+    handler.disconnect()
+    expect(listeners.size).toBe(0)
+  })
+
+  it('strictly replays every membership and application-state invalidation shape', async () => {
+    const sharedVaultUuid = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+    const memberUserUuid = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
+    const membershipUuid = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
+    const inviteUuid = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'
+    const membershipDetails = [
+      { action: 'invited', inviteUuid, role: 'write' },
+      { action: 'accepted', membershipUuid, inviteUuid, role: 'write' },
+      { action: 'joined', membershipUuid, role: 'read' },
+      { action: 'left', membershipUuid },
+      { action: 'revoked', membershipUuid },
+      { action: 'role-changed', membershipUuid, role: 'admin' },
+    ]
+    const membershipEvents = membershipDetails.map((details, index) => ({
+      version: 1,
+      eventId: `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
+      streamPosition: `cursor-${index + 1}`,
+      kind: 'shared-vault-membership',
+      sharedVaultUuid,
+      memberUserUuid,
+      revision: String(index + 1),
+      occurredAt: index + 1,
+      ...details,
+    }))
+    const applicationEvents = ['updated', 'invalidated'].map((action, index) => ({
+      version: 1,
+      eventId: `00000000-0000-4000-8000-${String(index + 7).padStart(12, '0')}`,
+      streamPosition: `cursor-${index + 7}`,
+      kind: 'application-state',
+      action,
+      resource: index === 0 ? 'files-metadata' : 'account',
+      ...(index === 0 ? { resourceUuid: sharedVaultUuid } : {}),
+      revision: String(index + 7),
+      occurredAt: index + 7,
+    }))
+    const events = [...membershipEvents, ...applicationEvents]
+    const inviteEvents: SyncInviteEventsAdapter = {
+      distribution: 'shared',
+      ready: () => true,
+      tail: vi.fn(async () => 'cursor-8'),
+      readAfter: vi.fn(async (_userUuid, cursor) => ({
+        previousCursor: cursor,
+        events,
+        nextCursor: 'cursor-8',
+        hasMore: false,
+      })),
+      subscribeAvailability: vi.fn(() => () => undefined),
+    }
+
+    const { handler, socket } = await authenticatedHandler({ inviteEvents, requireSharedState: true })
+    enqueue(handler, inviteSubscribeFrame(1, 'cursor-0', events.length))
+    await vi.waitFor(() => expect(socket.frames.at(-1)?.type).toBe('INVITE_BATCH'))
+    expect(socket.frames.at(-1)?.payload).toMatchObject({ events, nextCursor: 'cursor-8' })
+    handler.disconnect()
+  })
+
+  it.each([
+    ['an extra field', { extra: true }],
+    ['binary-shaped data', Buffer.from('not-json')],
+  ])('fails closed when an application-state replay contains %s', async (_label, invalidValue) => {
+    const validEvent = {
+      version: 1,
+      eventId: '11111111-1111-4111-8111-111111111111',
+      streamPosition: 'cursor-1',
+      kind: 'application-state',
+      action: 'updated',
+      resource: 'items',
+      revision: '1',
+      occurredAt: 1,
+    }
+    const event = Buffer.isBuffer(invalidValue) ? invalidValue : { ...validEvent, ...invalidValue }
+    const inviteEvents: SyncInviteEventsAdapter = {
+      distribution: 'shared',
+      ready: () => true,
+      tail: vi.fn(async () => 'cursor-1'),
+      readAfter: vi.fn(async (_userUuid, cursor) => ({
+        previousCursor: cursor,
+        events: [event as unknown as JsonObject],
+        nextCursor: 'cursor-1',
+        hasMore: false,
+      })),
+      subscribeAvailability: vi.fn(() => () => undefined),
+    }
+
+    const { handler, socket } = await authenticatedHandler({ inviteEvents, requireSharedState: true })
+    enqueue(handler, inviteSubscribeFrame(1, 'cursor-0'))
+    await vi.waitFor(() => expect(socket.frames.at(-1)?.type).toBe('ERROR'))
+    expect(socket.frames.at(-1)?.payload).toMatchObject({ code: 'INVITE_STORE_UNAVAILABLE' })
+    expect(socket.frames.some((frame) => frame.type === 'INVITE_BATCH')).toBe(false)
+    handler.disconnect()
+  })
+
+  it('requires authoritative bootstrap before subscribing and fails closed on an invalid invite ACK', async () => {
+    const listeners = new Set<() => void>()
+    const inviteEvents: SyncInviteEventsAdapter = {
+      distribution: 'shared',
+      ready: () => true,
+      tail: vi.fn(async () => 'cursor-tail'),
+      readAfter: vi.fn(async (_userUuid, cursor) => ({
+        previousCursor: cursor,
+        events: [
+          {
+            version: 1,
+            eventId: '11111111-1111-4111-8111-111111111111',
+            streamPosition: 'cursor-1',
+            kind: 'subscription-invite',
+            action: 'created',
+            inviteUuid: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+            occurredAt: 1,
+          },
+        ],
+        nextCursor: 'cursor-1',
+        hasMore: false,
+      })),
+      subscribeAvailability: vi.fn((_userUuid, listener) => {
+        listeners.add(listener)
+        return () => listeners.delete(listener)
+      }),
+    }
+    const bootstrap = await authenticatedHandler({ inviteEvents, requireSharedState: true })
+    enqueue(bootstrap.handler, inviteSubscribeFrame(1))
+    await vi.waitFor(() => expect(bootstrap.socket.frames.at(-1)?.type).toBe('INVITE_RECONCILE'))
+    expect(bootstrap.socket.frames.at(-1)?.payload).toEqual({
+      reason: 'BOOTSTRAP_REQUIRED',
+      cursor: 'cursor-tail',
+    })
+    expect(inviteEvents.readAfter).not.toHaveBeenCalled()
+    expect(inviteEvents.subscribeAvailability).not.toHaveBeenCalled()
+
+    const invalidAck = await authenticatedHandler({ inviteEvents, requireSharedState: true })
+    enqueue(invalidAck.handler, inviteSubscribeFrame(1, 'cursor-0'))
+    await vi.waitFor(() => expect(invalidAck.socket.frames.at(-1)?.type).toBe('INVITE_BATCH'))
+    enqueue(invalidAck.handler, inviteAckFrame(2, 'cursor-wrong'))
+    await vi.waitFor(() => expect(invalidAck.socket.closes).toHaveLength(1))
+    expect(invalidAck.socket.frames.at(-1)?.payload).toMatchObject({ code: 'INVITE_ACK_INVALID' })
+    expect(listeners.size).toBe(0)
+
+    bootstrap.handler.disconnect()
   })
 
   it('enforces the first-frame auth deadline', async () => {

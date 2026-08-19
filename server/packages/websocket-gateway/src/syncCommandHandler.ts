@@ -1,6 +1,8 @@
 import { createHash, timingSafeEqual } from 'node:crypto'
 import type { SyncAuthTicketStore, SyncTicketIdentity } from './auth.js'
 import type { SyncCommandLeaseRegistry, SyncSocketBudget } from './registry.js'
+import { MAX_FILE_BINARY_FRAME_BYTES } from './filesProtocol.js'
+import { SyncFilesSession, type SyncFilesAdapter } from './filesSession.js'
 import {
   MAX_SYNC_BUFFERED_BYTES,
   MAX_SYNC_FRAME_BYTES,
@@ -24,11 +26,19 @@ import {
   type SyncRpcRequestFrame,
   type SyncServerFrameType,
   type SyncStatusRequestFrame,
+  type SyncFilesCancelFrame,
+  type SyncFilesCreditFrame,
+  type SyncFilesDownloadOpenFrame,
+  type SyncFilesMetadataFrame,
+  type SyncFilesUploadFinishFrame,
+  type SyncFilesUploadOpenFrame,
+  type SyncInviteAckFrame,
+  type SyncInviteSubscribeFrame,
 } from './syncProtocol.js'
 
 export interface SyncSocket {
   readonly bufferedAmount: number
-  send(data: string): void
+  send(data: string | Uint8Array): void
   close(code?: number, reason?: string): void
 }
 
@@ -135,6 +145,27 @@ export interface SyncApiRpcAdapter {
   execute(input: SyncApiRpcRequest, signal: AbortSignal): Promise<SyncApiRpcResponse>
 }
 
+export type SyncInviteEventReplay = {
+  previousCursor: string
+  events: JsonObject[]
+  nextCursor: string
+  hasMore: boolean
+}
+
+/**
+ * Fleet-shared durable invite invalidations. Producers must append the domain
+ * mutation and its idempotent outbox record atomically; this read-side adapter
+ * may publish availability only after that outbox record has been persisted.
+ */
+export interface SyncInviteEventsAdapter {
+  readonly distribution: 'process' | 'shared'
+  ready(): boolean
+  tail(userUuid: string, signal: AbortSignal): Promise<string>
+  readAfter(userUuid: string, cursor: string, limit: number, signal: AbortSignal): Promise<SyncInviteEventReplay>
+  /** Must fan out across replicas. The callback is only a wake-up; the durable stream remains authoritative. */
+  subscribeAvailability(userUuid: string, onAvailable: () => void): () => void
+}
+
 export interface SyncCommandMetrics {
   increment(event: string, code?: string): void
 }
@@ -149,6 +180,11 @@ export interface SyncCommandHandlerOptions {
   backend: SyncCommandBackendAdapter
   collaborationAuthorization?: SyncCollaborationAuthorizationAdapter
   apiRpc?: SyncApiRpcAdapter
+  inviteEvents?: SyncInviteEventsAdapter
+  /** Production gateways require the invite stream and its wake-up bus to be fleet-shared. */
+  requireSharedState?: boolean
+  /** Optional canonical in-process file transport; never an HTTP proxy. */
+  files?: SyncFilesAdapter
   isEnabled: () => boolean
   metrics?: SyncCommandMetrics
   authDeadlineMs?: number
@@ -183,6 +219,19 @@ type ActiveRpc = {
   abortCode?: string
 }
 
+type ActiveInviteSubscription = {
+  requestId: string
+  commandId: string
+  cursor: string
+  limit: number
+  controller: AbortController
+  unsubscribe?: () => void
+  awaitingAck?: string
+  pending: boolean
+  pumping: boolean
+  readySent: boolean
+}
+
 const MAX_ACTIVE_RPC_REQUESTS = 8
 const MAX_RPC_CHUNK_BYTES = 64 * 1024
 const MAX_RPC_IDEMPOTENCY_ENTRIES = 256
@@ -215,6 +264,8 @@ export class SyncCommandHandler {
   private queue: Promise<void> = Promise.resolve()
   private activeAbort?: AbortController
   private readonly activeRpcs = new Map<string, ActiveRpc>()
+  private activeInviteSubscription?: ActiveInviteSubscription
+  private readonly filesSession?: SyncFilesSession
   private readonly rpcIdempotency = new Map<string, string>()
   private activeLease?: ActiveLease
   private activeSocketBudget?: ActiveSocketBudget
@@ -238,6 +289,15 @@ export class SyncCommandHandler {
     this.maxBufferedBytes = options.maxBufferedBytes ?? MAX_SYNC_BUFFERED_BYTES
     this.leaseRenewIntervalMs = options.leaseRenewIntervalMs ?? 10_000
     this.socketBudgetRenewIntervalMs = options.socketBudgetRenewIntervalMs ?? 20_000
+    if (options.files) {
+      this.filesSession = new SyncFilesSession({
+        adapter: options.files,
+        sendControl: (type, requestId, commandId, payload) => this.send(type, requestId, commandId, payload),
+        sendBinary: (bytes) => this.sendBinary(bytes),
+        sendError: (requestId, commandId, code) => this.sendError(requestId, commandId, code),
+        metrics: options.metrics,
+      })
+    }
     if (
       !Number.isSafeInteger(this.leaseRenewIntervalMs) ||
       this.leaseRenewIntervalMs < 1 ||
@@ -285,6 +345,40 @@ export class SyncCommandHandler {
       })
   }
 
+  enqueueBinary(raw: Uint8Array, rawBytes: number): void {
+    if (this.closed) {
+      return
+    }
+    if (
+      !Number.isSafeInteger(rawBytes) ||
+      rawBytes < 0 ||
+      rawBytes !== raw.byteLength ||
+      rawBytes > MAX_FILE_BINARY_FRAME_BYTES ||
+      this.queuedFrames >= this.maxQueuedFrames ||
+      this.queuedBytes + rawBytes > Math.max(this.maxQueuedBytes, MAX_FILE_BINARY_FRAME_BYTES)
+    ) {
+      raw.fill(0)
+      this.options.metrics?.increment('backpressure', 'files_ingress')
+      this.failAndClose('BACKPRESSURE', 'File transfer queue is full.', 1013)
+      return
+    }
+    this.queuedFrames += 1
+    this.queuedBytes += rawBytes
+    this.queue = this.queue
+      .then(() => this.processBinary(raw))
+      .catch(() => {
+        if (!this.closed) {
+          this.options.metrics?.increment('files', 'transport_unavailable')
+          this.failAndClose('SYNC_DISABLED', 'WebSocket files became unavailable.', 1013)
+        }
+      })
+      .finally(() => {
+        raw.fill(0)
+        this.queuedFrames = Math.max(0, this.queuedFrames - 1)
+        this.queuedBytes = Math.max(0, this.queuedBytes - rawBytes)
+      })
+  }
+
   disconnect(): void {
     if (this.closed) {
       return
@@ -297,6 +391,8 @@ export class SyncCommandHandler {
     this.lifecycleAbort.abort()
     this.activeAbort?.abort()
     this.abortActiveRpcs('SOCKET_CLOSED')
+    this.stopInviteSubscription()
+    this.filesSession?.disconnect()
     this.trackCleanup(this.releaseActiveLease())
     this.trackCleanup(this.releaseSocketBudget())
     this.options.metrics?.increment('disconnect')
@@ -377,6 +473,8 @@ export class SyncCommandHandler {
             ? ['AUTHORIZE_COLLABORATION']
             : []),
           ...(this.options.apiRpc?.ready() ? this.options.apiRpc.operations() : []),
+          ...(this.inviteEventsReady() ? ['INVITE_EVENTS'] : []),
+          ...(this.options.files?.ready() ? ['FILES_V1'] : []),
         ],
       })
       if (!authenticated) {
@@ -420,7 +518,53 @@ export class SyncCommandHandler {
       this.startRpc(frame)
       return
     }
+    if (frame.type === 'INVITE_SUBSCRIBE') {
+      await this.handleInviteSubscribe(frame)
+      return
+    }
+    if (frame.type === 'INVITE_ACK') {
+      this.handleInviteAck(frame)
+      return
+    }
+    if (
+      frame.type === 'FILES_METADATA' ||
+      frame.type === 'FILES_UPLOAD_OPEN' ||
+      frame.type === 'FILES_UPLOAD_FINISH' ||
+      frame.type === 'FILES_DOWNLOAD_OPEN' ||
+      frame.type === 'FILES_CREDIT' ||
+      frame.type === 'FILES_CANCEL'
+    ) {
+      await this.filesSession?.handleControl(
+        frame as
+          | SyncFilesMetadataFrame
+          | SyncFilesUploadOpenFrame
+          | SyncFilesUploadFinishFrame
+          | SyncFilesDownloadOpenFrame
+          | SyncFilesCreditFrame
+          | SyncFilesCancelFrame,
+        this.identity,
+      )
+      if (!this.filesSession) {
+        this.sendError(frame.requestId, frame.commandId, 'OPERATION_UNAVAILABLE')
+      }
+      return
+    }
     await this.handleCommand(frame)
+  }
+
+  private async processBinary(raw: Uint8Array): Promise<void> {
+    if (this.closed) {
+      return
+    }
+    if (!this.identity) {
+      this.failAndClose('AUTH_REQUIRED', 'File binary frames require authentication.')
+      return
+    }
+    if (!this.options.isEnabled() || !this.filesSession || !this.options.files?.ready()) {
+      this.sendError('files-binary', 'files-binary', 'OPERATION_UNAVAILABLE')
+      return
+    }
+    await this.filesSession.handleBinary(raw, this.identity)
   }
 
   private async handleCollaborationAuthorization(frame: SyncCollaborationAuthorizationFrame): Promise<void> {
@@ -470,6 +614,212 @@ export class SyncCommandHandler {
         this.activeAbort = undefined
       }
     }
+  }
+
+  private async handleInviteSubscribe(frame: SyncInviteSubscribeFrame): Promise<void> {
+    const adapter = this.options.inviteEvents
+    if (!adapter || !this.inviteEventsReady()) {
+      this.options.metrics?.increment('invite_events', 'unavailable')
+      this.sendError(frame.requestId, frame.commandId, 'OPERATION_UNAVAILABLE')
+      return
+    }
+
+    this.stopInviteSubscription()
+    const identity = this.identity as SyncTicketIdentity
+    if (frame.payload.cursor === undefined) {
+      const controller = new AbortController()
+      try {
+        const cursor = await this.withTimeout((signal) => adapter.tail(identity.userUuid, signal), controller)
+        if (!isOpaqueInviteCursor(cursor)) {
+          throw new Error('Invite stream returned an invalid tail cursor.')
+        }
+        this.send('INVITE_RECONCILE', frame.requestId, frame.commandId, {
+          reason: 'BOOTSTRAP_REQUIRED',
+          cursor,
+        })
+      } catch {
+        this.options.metrics?.increment('invite_events', controller.signal.aborted ? 'timeout' : 'error')
+        this.sendError(
+          frame.requestId,
+          frame.commandId,
+          controller.signal.aborted ? 'BACKEND_TIMEOUT' : 'INVITE_STORE_UNAVAILABLE',
+        )
+      } finally {
+        controller.abort()
+      }
+      return
+    }
+
+    const subscription: ActiveInviteSubscription = {
+      requestId: frame.requestId,
+      commandId: frame.commandId,
+      cursor: frame.payload.cursor,
+      limit: frame.payload.limit,
+      controller: new AbortController(),
+      pending: true,
+      pumping: false,
+      readySent: false,
+    }
+    this.activeInviteSubscription = subscription
+    try {
+      // Register before the first read so an append racing with replay cannot be lost.
+      subscription.unsubscribe = adapter.subscribeAvailability(identity.userUuid, () => {
+        this.requestInvitePump(subscription)
+      })
+    } catch {
+      this.options.metrics?.increment('invite_events', 'subscription_error')
+      this.stopInviteSubscription(subscription)
+      this.sendError(frame.requestId, frame.commandId, 'INVITE_STORE_UNAVAILABLE')
+      return
+    }
+    await this.pumpInviteEvents(subscription)
+  }
+
+  private handleInviteAck(frame: SyncInviteAckFrame): void {
+    const subscription = this.activeInviteSubscription
+    if (!subscription?.awaitingAck || !constantTimeTextMatches(subscription.awaitingAck, frame.payload.cursor)) {
+      this.options.metrics?.increment('invite_events', 'invalid_ack')
+      this.failAndClose('INVITE_ACK_INVALID', 'Invite acknowledgement did not match the outstanding batch.')
+      return
+    }
+    subscription.cursor = frame.payload.cursor
+    subscription.awaitingAck = undefined
+    subscription.pending = true
+    this.requestInvitePump(subscription)
+  }
+
+  private requestInvitePump(subscription: ActiveInviteSubscription): void {
+    if (this.closed || this.activeInviteSubscription !== subscription) {
+      return
+    }
+    subscription.pending = true
+    if (subscription.pumping || subscription.awaitingAck) {
+      return
+    }
+    void this.pumpInviteEvents(subscription)
+  }
+
+  private async pumpInviteEvents(subscription: ActiveInviteSubscription): Promise<void> {
+    const adapter = this.options.inviteEvents
+    const identity = this.identity
+    if (
+      !adapter ||
+      !identity ||
+      this.closed ||
+      this.activeInviteSubscription !== subscription ||
+      subscription.pumping ||
+      subscription.awaitingAck
+    ) {
+      return
+    }
+
+    subscription.pumping = true
+    subscription.pending = false
+    try {
+      const replay = await this.withTimeout(
+        (signal) => adapter.readAfter(identity.userUuid, subscription.cursor, subscription.limit, signal),
+        subscription.controller,
+      )
+      if (this.closed || this.activeInviteSubscription !== subscription) {
+        return
+      }
+      if (!isValidInviteReplay(replay, subscription.cursor, subscription.limit)) {
+        this.options.metrics?.increment('invite_events', 'invalid_replay')
+        this.stopInviteSubscription(subscription)
+        this.sendError(subscription.requestId, subscription.commandId, 'INVITE_STORE_UNAVAILABLE')
+        return
+      }
+      if (replay.events.length === 0) {
+        // If an availability notification raced with the read, replay again
+        // before declaring the cursor caught up.
+        if (!subscription.pending && !subscription.readySent) {
+          subscription.readySent = this.send('INVITE_READY', subscription.requestId, subscription.commandId, {
+            cursor: subscription.cursor,
+          })
+        }
+        return
+      }
+      const sent = this.send('INVITE_BATCH', subscription.requestId, subscription.commandId, replay)
+      if (sent) {
+        subscription.readySent = true
+        subscription.awaitingAck = replay.nextCursor
+        this.options.metrics?.increment('invite_events', 'batch')
+      }
+    } catch (error) {
+      if (this.closed || this.activeInviteSubscription !== subscription) {
+        return
+      }
+      const code = inviteStreamErrorCode(error)
+      if (code === 'INVITE_CURSOR_EXPIRED' || code === 'INVITE_CURSOR_INVALID') {
+        await this.reconcileInviteSubscription(
+          subscription,
+          code === 'INVITE_CURSOR_EXPIRED' ? 'CURSOR_EXPIRED' : 'CURSOR_INVALID',
+        )
+      } else {
+        this.options.metrics?.increment('invite_events', subscription.controller.signal.aborted ? 'timeout' : 'error')
+        this.stopInviteSubscription(subscription)
+        this.sendError(
+          subscription.requestId,
+          subscription.commandId,
+          subscription.controller.signal.aborted ? 'BACKEND_TIMEOUT' : 'INVITE_STORE_UNAVAILABLE',
+        )
+      }
+    } finally {
+      subscription.pumping = false
+      if (
+        !this.closed &&
+        this.activeInviteSubscription === subscription &&
+        subscription.pending &&
+        !subscription.awaitingAck
+      ) {
+        queueMicrotask(() => this.requestInvitePump(subscription))
+      }
+    }
+  }
+
+  private async reconcileInviteSubscription(
+    subscription: ActiveInviteSubscription,
+    reason: 'CURSOR_EXPIRED' | 'CURSOR_INVALID',
+  ): Promise<void> {
+    const adapter = this.options.inviteEvents
+    const identity = this.identity
+    if (!adapter || !identity || this.activeInviteSubscription !== subscription) {
+      return
+    }
+    try {
+      const cursor = await this.withTimeout(
+        (signal) => adapter.tail(identity.userUuid, signal),
+        subscription.controller,
+      )
+      if (!isOpaqueInviteCursor(cursor)) {
+        throw new Error('Invite stream returned an invalid reconciliation cursor.')
+      }
+      this.stopInviteSubscription(subscription)
+      this.send('INVITE_RECONCILE', subscription.requestId, subscription.commandId, { reason, cursor })
+      this.options.metrics?.increment('invite_events', reason.toLowerCase())
+    } catch {
+      this.stopInviteSubscription(subscription)
+      this.sendError(subscription.requestId, subscription.commandId, 'INVITE_STORE_UNAVAILABLE')
+    }
+  }
+
+  private stopInviteSubscription(expected?: ActiveInviteSubscription): void {
+    const subscription = this.activeInviteSubscription
+    if (!subscription || (expected && expected !== subscription)) {
+      return
+    }
+    this.activeInviteSubscription = undefined
+    subscription.controller.abort()
+    try {
+      subscription.unsubscribe?.()
+    } catch {
+      // Subscription state is already detached; the durable cursor remains authoritative.
+    }
+  }
+
+  private inviteEventsReady(): boolean {
+    const adapter = this.options.inviteEvents
+    return Boolean(adapter?.ready() && (!this.options.requireSharedState || adapter.distribution === 'shared'))
   }
 
   private startRpc(frame: SyncRpcRequestFrame): void {
@@ -997,6 +1347,23 @@ export class SyncCommandHandler {
     }
   }
 
+  private sendBinary(bytes: Uint8Array): boolean {
+    if (this.closed || bytes.byteLength > MAX_FILE_BINARY_FRAME_BYTES) {
+      return false
+    }
+    if (this.options.socket.bufferedAmount + bytes.byteLength > this.maxBufferedBytes) {
+      this.options.metrics?.increment('backpressure', 'files_egress')
+      return false
+    }
+    try {
+      this.options.socket.send(bytes)
+      return true
+    } catch {
+      this.disconnect()
+      return false
+    }
+  }
+
   private failAndClose(code: string, message: string, closeCode = 1008): void {
     if (this.closed) {
       return
@@ -1010,6 +1377,8 @@ export class SyncCommandHandler {
     this.lifecycleAbort.abort()
     this.activeAbort?.abort()
     this.abortActiveRpcs(code)
+    this.stopInviteSubscription()
+    this.filesSession?.disconnect()
     this.trackCleanup(this.releaseActiveLease())
     this.trackCleanup(this.releaseSocketBudget())
     try {
@@ -1206,6 +1575,146 @@ function isRetryableError(code: string): boolean {
     code === 'SOCKET_LIMIT' ||
     code === 'SOCKET_BUDGET_LOST' ||
     code === 'OPERATION_UNAVAILABLE' ||
+    code === 'INVITE_STORE_UNAVAILABLE' ||
     code === 'DEADLINE_EXCEEDED'
   )
+}
+
+function isOpaqueInviteCursor(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && Buffer.byteLength(value, 'utf8') <= 2_048
+}
+
+function isValidInviteReplay(value: unknown, expectedCursor: string, limit: number): value is SyncInviteEventReplay {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false
+  }
+  const replay = value as Partial<SyncInviteEventReplay>
+  if (
+    replay.previousCursor !== expectedCursor ||
+    !isOpaqueInviteCursor(replay.nextCursor) ||
+    !Array.isArray(replay.events) ||
+    replay.events.length > limit ||
+    typeof replay.hasMore !== 'boolean' ||
+    !replay.events.every(isValidInviteEvent)
+  ) {
+    return false
+  }
+  if (replay.events.length === 0) {
+    return replay.nextCursor === expectedCursor && replay.hasMore === false
+  }
+  const positions = replay.events.map((event) => event.streamPosition)
+  return new Set(positions).size === positions.length && positions.at(-1) === replay.nextCursor
+}
+
+const INVITE_UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu
+const INVITE_BASE_EVENT_FIELDS = ['version', 'eventId', 'streamPosition', 'kind', 'action', 'occurredAt'] as const
+const SHARED_VAULT_INVITE_EVENT_FIELDS = new Set([...INVITE_BASE_EVENT_FIELDS, 'inviteUuid', 'sharedVaultUuid'])
+const SUBSCRIPTION_INVITE_EVENT_FIELDS = new Set([...INVITE_BASE_EVENT_FIELDS, 'inviteUuid'])
+const SHARED_VAULT_MEMBERSHIP_EVENT_FIELDS = new Set([
+  ...INVITE_BASE_EVENT_FIELDS,
+  'sharedVaultUuid',
+  'memberUserUuid',
+  'membershipUuid',
+  'inviteUuid',
+  'role',
+  'revision',
+])
+const APPLICATION_STATE_EVENT_FIELDS = new Set([...INVITE_BASE_EVENT_FIELDS, 'resource', 'resourceUuid', 'revision'])
+const INVITE_ACTIONS = new Set(['created', 'updated', 'accepted', 'declined', 'canceled', 'deleted'])
+const MEMBERSHIP_ACTIONS = new Set(['invited', 'accepted', 'joined', 'left', 'revoked', 'role-changed'])
+const MEMBERSHIP_ROLES = new Set(['read', 'write', 'admin'])
+const APPLICATION_STATE_ACTIONS = new Set(['updated', 'invalidated'])
+const APPLICATION_STATE_RESOURCES = new Set([
+  'items',
+  'shared-vaults',
+  'shared-vault-members',
+  'files-metadata',
+  'preferences',
+  'account',
+  'subscriptions',
+])
+
+function isValidInviteEvent(value: unknown): value is JsonObject & { streamPosition: string } {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false
+  }
+  const event = value as Record<string, unknown>
+  if (
+    event.version !== 1 ||
+    !isInviteUuid(event.eventId) ||
+    !isOpaqueInviteCursor(event.streamPosition) ||
+    !Number.isSafeInteger(event.occurredAt) ||
+    Number(event.occurredAt) <= 0
+  ) {
+    return false
+  }
+
+  switch (event.kind) {
+    case 'shared-vault-invite':
+      return (
+        hasOnlyInviteEventFields(event, SHARED_VAULT_INVITE_EVENT_FIELDS) &&
+        typeof event.action === 'string' &&
+        INVITE_ACTIONS.has(event.action) &&
+        isInviteUuid(event.inviteUuid) &&
+        isInviteUuid(event.sharedVaultUuid)
+      )
+    case 'subscription-invite':
+      return (
+        hasOnlyInviteEventFields(event, SUBSCRIPTION_INVITE_EVENT_FIELDS) &&
+        typeof event.action === 'string' &&
+        INVITE_ACTIONS.has(event.action) &&
+        isInviteUuid(event.inviteUuid)
+      )
+    case 'shared-vault-membership': {
+      if (
+        !hasOnlyInviteEventFields(event, SHARED_VAULT_MEMBERSHIP_EVENT_FIELDS) ||
+        typeof event.action !== 'string' ||
+        !MEMBERSHIP_ACTIONS.has(event.action) ||
+        !isInviteUuid(event.sharedVaultUuid) ||
+        !isInviteUuid(event.memberUserUuid) ||
+        !isCanonicalInviteRevision(event.revision)
+      ) {
+        return false
+      }
+      const needsMembership = event.action !== 'invited'
+      const needsInvite = event.action === 'invited' || event.action === 'accepted'
+      const needsRole = ['invited', 'accepted', 'joined', 'role-changed'].includes(event.action)
+      return (
+        (needsMembership ? isInviteUuid(event.membershipUuid) : event.membershipUuid === undefined) &&
+        (needsInvite ? isInviteUuid(event.inviteUuid) : event.inviteUuid === undefined) &&
+        (needsRole ? typeof event.role === 'string' && MEMBERSHIP_ROLES.has(event.role) : event.role === undefined)
+      )
+    }
+    case 'application-state':
+      return (
+        hasOnlyInviteEventFields(event, APPLICATION_STATE_EVENT_FIELDS) &&
+        typeof event.action === 'string' &&
+        APPLICATION_STATE_ACTIONS.has(event.action) &&
+        typeof event.resource === 'string' &&
+        APPLICATION_STATE_RESOURCES.has(event.resource) &&
+        (event.resourceUuid === undefined || isInviteUuid(event.resourceUuid)) &&
+        isCanonicalInviteRevision(event.revision)
+      )
+    default:
+      return false
+  }
+}
+
+function hasOnlyInviteEventFields(value: Record<string, unknown>, fields: ReadonlySet<string>): boolean {
+  return Object.keys(value).every((field) => fields.has(field))
+}
+
+function isInviteUuid(value: unknown): value is string {
+  return typeof value === 'string' && INVITE_UUID_PATTERN.test(value)
+}
+
+function isCanonicalInviteRevision(value: unknown): value is string {
+  return typeof value === 'string' && /^[1-9]\d{0,31}$/u.test(value)
+}
+
+function inviteStreamErrorCode(error: unknown): string | undefined {
+  if (!error || typeof error !== 'object' || !('code' in error)) {
+    return undefined
+  }
+  return typeof error.code === 'string' ? error.code : undefined
 }

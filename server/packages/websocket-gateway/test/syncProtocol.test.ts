@@ -45,6 +45,24 @@ function pingFrame(overrides: JsonObject = {}): JsonObject {
   }
 }
 
+function inviteFrame(
+  type: 'INVITE_SUBSCRIBE' | 'INVITE_ACK',
+  payload: JsonObject,
+  overrides: JsonObject = {},
+): JsonObject {
+  return {
+    version: 1,
+    channel: 'sync',
+    type,
+    requestId: 'invite-request',
+    commandId: 'invite-command',
+    sequence: 1,
+    payloadLength: syncPayloadLength(payload),
+    payload,
+    ...overrides,
+  }
+}
+
 describe('sync protocol v1', () => {
   it('publishes and enforces the shared body-only canonical digest vector', () => {
     expect(canonicalSyncJson(SYNC_COMMAND_DIGEST_TEST_VECTOR.body)).toBe(SYNC_COMMAND_DIGEST_TEST_VECTOR.canonical)
@@ -159,6 +177,35 @@ describe('sync protocol v1', () => {
       expect.objectContaining({ code: 'INVALID_DIGEST' }),
     )
     expect(() => parseSyncClientFrame(JSON.stringify(pingFrame({ type: 'UNKNOWN' })))).toThrowError(
+      expect.objectContaining({ code: 'INVALID_ENVELOPE' }),
+    )
+  })
+
+  it('accepts bounded invite subscriptions and exact acknowledgements', () => {
+    expect(parseSyncClientFrame(JSON.stringify(inviteFrame('INVITE_SUBSCRIBE', { limit: 100 })))).toMatchObject({
+      type: 'INVITE_SUBSCRIBE',
+      payload: { limit: 100 },
+    })
+    expect(
+      parseSyncClientFrame(
+        JSON.stringify(inviteFrame('INVITE_SUBSCRIBE', { cursor: 'v1.0.opaque-signature', limit: 25 })),
+      ),
+    ).toMatchObject({ type: 'INVITE_SUBSCRIBE', payload: { cursor: 'v1.0.opaque-signature', limit: 25 } })
+    expect(
+      parseSyncClientFrame(JSON.stringify(inviteFrame('INVITE_ACK', { cursor: 'v1.1.opaque-signature' }))),
+    ).toMatchObject({ type: 'INVITE_ACK', payload: { cursor: 'v1.1.opaque-signature' } })
+  })
+
+  it.each([
+    ['zero replay limit', inviteFrame('INVITE_SUBSCRIBE', { limit: 0 })],
+    ['oversized replay limit', inviteFrame('INVITE_SUBSCRIBE', { limit: 101 })],
+    ['empty cursor', inviteFrame('INVITE_SUBSCRIBE', { cursor: '', limit: 25 })],
+    ['oversized cursor', inviteFrame('INVITE_SUBSCRIBE', { cursor: 'x'.repeat(2_049), limit: 25 })],
+    ['extra subscription field', inviteFrame('INVITE_SUBSCRIBE', { limit: 25, poll: true })],
+    ['missing acknowledgement cursor', inviteFrame('INVITE_ACK', {})],
+    ['extra acknowledgement field', inviteFrame('INVITE_ACK', { cursor: 'cursor', applied: true })],
+  ])('rejects invalid invite frame: %s', (_label, frame) => {
+    expect(() => parseSyncClientFrame(JSON.stringify(frame))).toThrowError(
       expect.objectContaining({ code: 'INVALID_ENVELOPE' }),
     )
   })

@@ -1,4 +1,19 @@
 import { createHash, timingSafeEqual } from 'node:crypto'
+import {
+  DEFAULT_FILE_TRANSFER_CREDIT_BYTES,
+  DEFAULT_FILE_TRANSFER_DEADLINE_MS,
+  MAX_FILE_METADATA_ENTRIES,
+  MAX_FILE_TRANSFER_BYTES,
+  MAX_FILE_TRANSFER_CREDIT_BYTES,
+  MAX_FILE_TRANSFER_DEADLINE_MS,
+  MIN_FILE_TRANSFER_DEADLINE_MS,
+  isFileIdentifier,
+  isFileMimeType,
+  isFileResourceReference,
+  isFileSha256,
+  isFileTransferSize,
+  type FileResourceReference,
+} from './filesProtocol.js'
 
 export const SYNC_PROTOCOL_VERSION = 1 as const
 export const SYNC_CHANNEL = 'sync' as const
@@ -18,12 +33,29 @@ export const MIN_RPC_DEADLINE_MS = 1_000
 export const DEFAULT_RPC_DEADLINE_MS = 30_000
 export const MAX_RPC_CREDIT_BYTES = 4 * 1024 * 1024
 export const DEFAULT_RPC_CREDIT_BYTES = 256 * 1024
+export const MAX_INVITE_CURSOR_BYTES = 2_048
+export const MAX_INVITE_REPLAY_BATCH = 100
 
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/u
 
 export type SyncClientFrameType =
-  'AUTH' | 'COMMAND' | 'STATUS' | 'PING' | 'COLLABORATION_AUTHORIZE' | 'RPC_REQUEST' | 'RPC_CANCEL' | 'RPC_CREDIT'
+  | 'AUTH'
+  | 'COMMAND'
+  | 'STATUS'
+  | 'PING'
+  | 'COLLABORATION_AUTHORIZE'
+  | 'RPC_REQUEST'
+  | 'RPC_CANCEL'
+  | 'RPC_CREDIT'
+  | 'INVITE_SUBSCRIBE'
+  | 'INVITE_ACK'
+  | 'FILES_METADATA'
+  | 'FILES_UPLOAD_OPEN'
+  | 'FILES_UPLOAD_FINISH'
+  | 'FILES_DOWNLOAD_OPEN'
+  | 'FILES_CREDIT'
+  | 'FILES_CANCEL'
 export type SyncServerFrameType =
   | 'AUTHENTICATED'
   | 'ACCEPTED'
@@ -36,8 +68,16 @@ export type SyncServerFrameType =
   | 'RPC_RESPONSE'
   | 'RPC_CHUNK'
   | 'RPC_END'
+  | 'INVITE_READY'
+  | 'INVITE_BATCH'
+  | 'INVITE_RECONCILE'
+  | 'FILES_METADATA'
+  | 'FILES_ACCEPTED'
+  | 'FILES_CHUNK_ACK'
+  | 'FILES_COMPLETE'
 
-export type SyncNegotiatedOperation = 'SYNC_ITEMS' | 'AUTHORIZE_COLLABORATION' | 'API_RPC' | 'STREAM_ASSISTANT'
+export type SyncNegotiatedOperation =
+  'SYNC_ITEMS' | 'AUTHORIZE_COLLABORATION' | 'API_RPC' | 'STREAM_ASSISTANT' | 'INVITE_EVENTS' | 'FILES_V1'
 
 export type JsonObject = Record<string, unknown>
 
@@ -92,6 +132,52 @@ export interface SyncRpcCreditPayload extends SyncRpcControlPayload {
   creditBytes: number
 }
 
+export interface SyncInviteSubscribePayload extends JsonObject {
+  cursor?: string
+  limit: number
+}
+
+export interface SyncInviteAckPayload extends JsonObject {
+  cursor: string
+}
+
+export interface SyncFilesMetadataPayload extends JsonObject {
+  resources: FileResourceReference[]
+  deadlineMs: number
+}
+
+export interface SyncFilesUploadOpenPayload extends JsonObject {
+  resource: FileResourceReference
+  decryptedSize: number
+  declaredSize: number
+  mimeType: string
+  deadlineMs: number
+  resumeId?: string
+}
+
+export interface SyncFilesTransferPayload extends JsonObject {
+  transferId: string
+  generation: number
+}
+
+export interface SyncFilesUploadFinishPayload extends SyncFilesTransferPayload {
+  declaredSize: number
+  sha256: string
+  deadlineMs: number
+}
+
+export interface SyncFilesDownloadOpenPayload extends JsonObject {
+  resource: FileResourceReference
+  offset: number
+  initialCreditBytes: number
+  deadlineMs: number
+  resumeId?: string
+}
+
+export interface SyncFilesCreditPayload extends SyncFilesTransferPayload {
+  creditBytes: number
+}
+
 export type SyncAuthFrame = SyncFrameBase<'AUTH', SyncAuthPayload>
 export type SyncCommandFrame = SyncFrameBase<'COMMAND', SyncCommandPayload> & { digest: string }
 export type SyncStatusRequestFrame = SyncFrameBase<'STATUS', JsonObject> & { digest: string }
@@ -103,6 +189,14 @@ export type SyncCollaborationAuthorizationFrame = SyncFrameBase<
 export type SyncRpcRequestFrame = SyncFrameBase<'RPC_REQUEST', SyncRpcRequestPayload>
 export type SyncRpcCancelFrame = SyncFrameBase<'RPC_CANCEL', SyncRpcControlPayload>
 export type SyncRpcCreditFrame = SyncFrameBase<'RPC_CREDIT', SyncRpcCreditPayload>
+export type SyncInviteSubscribeFrame = SyncFrameBase<'INVITE_SUBSCRIBE', SyncInviteSubscribePayload>
+export type SyncInviteAckFrame = SyncFrameBase<'INVITE_ACK', SyncInviteAckPayload>
+export type SyncFilesMetadataFrame = SyncFrameBase<'FILES_METADATA', SyncFilesMetadataPayload>
+export type SyncFilesUploadOpenFrame = SyncFrameBase<'FILES_UPLOAD_OPEN', SyncFilesUploadOpenPayload>
+export type SyncFilesUploadFinishFrame = SyncFrameBase<'FILES_UPLOAD_FINISH', SyncFilesUploadFinishPayload>
+export type SyncFilesDownloadOpenFrame = SyncFrameBase<'FILES_DOWNLOAD_OPEN', SyncFilesDownloadOpenPayload>
+export type SyncFilesCreditFrame = SyncFrameBase<'FILES_CREDIT', SyncFilesCreditPayload>
+export type SyncFilesCancelFrame = SyncFrameBase<'FILES_CANCEL', SyncFilesTransferPayload>
 export type SyncClientFrame =
   | SyncAuthFrame
   | SyncCommandFrame
@@ -112,6 +206,14 @@ export type SyncClientFrame =
   | SyncRpcRequestFrame
   | SyncRpcCancelFrame
   | SyncRpcCreditFrame
+  | SyncInviteSubscribeFrame
+  | SyncInviteAckFrame
+  | SyncFilesMetadataFrame
+  | SyncFilesUploadOpenFrame
+  | SyncFilesUploadFinishFrame
+  | SyncFilesDownloadOpenFrame
+  | SyncFilesCreditFrame
+  | SyncFilesCancelFrame
 
 export type SyncServerFrame = SyncFrameBase<SyncServerFrameType, JsonObject> & { digest?: string }
 
@@ -446,8 +548,143 @@ export function parseSyncClientFrame(raw: string, rawBytes = Buffer.byteLength(r
     return parsed as unknown as SyncRpcCancelFrame | SyncRpcCreditFrame
   }
 
+  if (type === 'INVITE_SUBSCRIBE') {
+    const payload = parsed.payload as JsonObject
+    const optional = Object.hasOwn(payload, 'cursor') ? ['cursor'] : []
+    if (
+      !hasExactKeys(parsed, commonKeys) ||
+      !hasExactKeys(payload, ['limit', ...optional]) ||
+      !Number.isSafeInteger(payload.limit) ||
+      Number(payload.limit) < 1 ||
+      Number(payload.limit) > MAX_INVITE_REPLAY_BATCH ||
+      (payload.cursor !== undefined && !isInviteCursor(payload.cursor))
+    ) {
+      throw new SyncProtocolError('INVALID_ENVELOPE', 'Invalid invite subscription frame.')
+    }
+    return parsed as unknown as SyncInviteSubscribeFrame
+  }
+
+  if (type === 'INVITE_ACK') {
+    const payload = parsed.payload as JsonObject
+    if (!hasExactKeys(parsed, commonKeys) || !hasExactKeys(payload, ['cursor']) || !isInviteCursor(payload.cursor)) {
+      throw new SyncProtocolError('INVALID_ENVELOPE', 'Invalid invite acknowledgement frame.')
+    }
+    return parsed as unknown as SyncInviteAckFrame
+  }
+
+  if (type === 'FILES_METADATA') {
+    const payload = parsed.payload as JsonObject
+    if (
+      !hasExactKeys(parsed, commonKeys) ||
+      !hasExactKeys(payload, ['resources', 'deadlineMs']) ||
+      !Array.isArray(payload.resources) ||
+      payload.resources.length < 1 ||
+      payload.resources.length > MAX_FILE_METADATA_ENTRIES ||
+      !payload.resources.every(isFileResourceReference) ||
+      !isFileDeadline(payload.deadlineMs)
+    ) {
+      throw new SyncProtocolError('INVALID_ENVELOPE', 'Invalid FILES metadata frame.')
+    }
+    return parsed as unknown as SyncFilesMetadataFrame
+  }
+
+  if (type === 'FILES_UPLOAD_OPEN') {
+    const payload = parsed.payload as JsonObject
+    const optional = Object.hasOwn(payload, 'resumeId') ? ['resumeId'] : []
+    if (
+      !hasExactKeys(parsed, commonKeys) ||
+      !hasExactKeys(payload, ['resource', 'decryptedSize', 'declaredSize', 'mimeType', 'deadlineMs', ...optional]) ||
+      !isFileResourceReference(payload.resource) ||
+      !isFileTransferSize(payload.decryptedSize) ||
+      !isFileTransferSize(payload.declaredSize) ||
+      !isFileMimeType(payload.mimeType) ||
+      !isFileDeadline(payload.deadlineMs) ||
+      (payload.resumeId !== undefined && !isFileIdentifier(payload.resumeId))
+    ) {
+      throw new SyncProtocolError('INVALID_ENVELOPE', 'Invalid FILES upload-open frame.')
+    }
+    return parsed as unknown as SyncFilesUploadOpenFrame
+  }
+
+  if (type === 'FILES_UPLOAD_FINISH') {
+    const payload = parsed.payload as JsonObject
+    if (
+      !hasExactKeys(parsed, commonKeys) ||
+      !hasExactKeys(payload, ['transferId', 'generation', 'declaredSize', 'sha256', 'deadlineMs']) ||
+      !isFileTransferControl(payload) ||
+      !isFileTransferSize(payload.declaredSize) ||
+      !isFileSha256(payload.sha256) ||
+      !isFileDeadline(payload.deadlineMs)
+    ) {
+      throw new SyncProtocolError('INVALID_ENVELOPE', 'Invalid FILES upload-finish frame.')
+    }
+    return parsed as unknown as SyncFilesUploadFinishFrame
+  }
+
+  if (type === 'FILES_DOWNLOAD_OPEN') {
+    const payload = parsed.payload as JsonObject
+    const optional = Object.hasOwn(payload, 'resumeId') ? ['resumeId'] : []
+    if (
+      !hasExactKeys(parsed, commonKeys) ||
+      !hasExactKeys(payload, ['resource', 'offset', 'initialCreditBytes', 'deadlineMs', ...optional]) ||
+      !isFileResourceReference(payload.resource) ||
+      !Number.isSafeInteger(payload.offset) ||
+      Number(payload.offset) < 0 ||
+      Number(payload.offset) > MAX_FILE_TRANSFER_BYTES ||
+      !isFileCredit(payload.initialCreditBytes) ||
+      !isFileDeadline(payload.deadlineMs) ||
+      (payload.resumeId !== undefined && !isFileIdentifier(payload.resumeId))
+    ) {
+      throw new SyncProtocolError('INVALID_ENVELOPE', 'Invalid FILES download-open frame.')
+    }
+    return parsed as unknown as SyncFilesDownloadOpenFrame
+  }
+
+  if (type === 'FILES_CREDIT' || type === 'FILES_CANCEL') {
+    const payload = parsed.payload as JsonObject
+    if (
+      !hasExactKeys(parsed, commonKeys) ||
+      !hasExactKeys(
+        payload,
+        type === 'FILES_CREDIT' ? ['transferId', 'generation', 'creditBytes'] : ['transferId', 'generation'],
+      ) ||
+      !isFileTransferControl(payload) ||
+      (type === 'FILES_CREDIT' && !isFileCredit(payload.creditBytes))
+    ) {
+      throw new SyncProtocolError('INVALID_ENVELOPE', `Invalid ${type} frame.`)
+    }
+    return parsed as unknown as SyncFilesCreditFrame | SyncFilesCancelFrame
+  }
+
   throw new SyncProtocolError('INVALID_ENVELOPE', 'Unsupported sync frame type.')
 }
+
+function isFileDeadline(value: unknown): value is number {
+  return (
+    Number.isSafeInteger(value) &&
+    Number(value) >= MIN_FILE_TRANSFER_DEADLINE_MS &&
+    Number(value) <= MAX_FILE_TRANSFER_DEADLINE_MS
+  )
+}
+
+function isInviteCursor(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && Buffer.byteLength(value, 'utf8') <= MAX_INVITE_CURSOR_BYTES
+}
+
+function isFileCredit(value: unknown): value is number {
+  return Number.isSafeInteger(value) && Number(value) > 0 && Number(value) <= MAX_FILE_TRANSFER_CREDIT_BYTES
+}
+
+function isFileTransferControl(payload: JsonObject): boolean {
+  return (
+    isFileIdentifier(payload.transferId) && Number.isSafeInteger(payload.generation) && Number(payload.generation) > 0
+  )
+}
+
+export const FILES_CONTROL_DEFAULTS = Object.freeze({
+  deadlineMs: DEFAULT_FILE_TRANSFER_DEADLINE_MS,
+  initialCreditBytes: DEFAULT_FILE_TRANSFER_CREDIT_BYTES,
+})
 
 export function createSyncServerFrame(input: {
   type: SyncServerFrameType
