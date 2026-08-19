@@ -1,4 +1,5 @@
 import { setDOMUnmanaged } from 'lexical'
+import { CALENDAR_ICON_PATHS, CALENDAR_ICON_VIEW_BOX } from '@/Components/Icon/MediaIcons'
 import {
   checklistDueAtToLocalInput,
   composeChecklistDueLocalInput,
@@ -26,8 +27,49 @@ export const CHECKLIST_RECURRENCE_UNIT_ATTR = 'data-checklist-recurrence-unit'
 export const CHECKLIST_RECURRENCE_CUSTOM_ATTR = 'data-checklist-recurrence-custom'
 export const CHECKLIST_SCHEDULE_STATUS_ATTR = 'data-checklist-schedule-status'
 
+/**
+ * Standard Red Notes: the schedule affordance is revealed only for the row the
+ * user is "on". Three attributes drive that, and they are the DOM contract the
+ * reveal tests assert against (CSS alone would be unverifiable in jsdom):
+ *
+ * - `CHECKLIST_ACTIVE_ITEM_ATTR` on the `<li>` — the row holding the caret.
+ * - `CHECKLIST_DUE_REVEAL_ATTR` on the shell — 'active' | 'inactive'.
+ * - `CHECKLIST_SCHEDULE_OPEN_ATTR` on the shell — pins it open while the panel
+ *   is showing, so the control cannot vanish out from under an open dialog.
+ *
+ * An inactive row keeps the button in the DOM (so nothing reflows as the caret
+ * moves) but takes it out of the accessibility tree and the tab order, which is
+ * the assertable meaning of "absent" for keyboard and screen-reader users. CSS
+ * additionally reveals it on `:hover` / `:focus-within` for mouse users — that
+ * is a progressive enhancement on top of the caret rule, never the only path.
+ */
+export const CHECKLIST_ACTIVE_ITEM_ATTR = 'data-checklist-active'
+export const CHECKLIST_DUE_REVEAL_ATTR = 'data-checklist-due-reveal'
+export const CHECKLIST_SCHEDULE_OPEN_ATTR = 'data-checklist-schedule-open'
+
 const PRINT_EXCLUDE_ATTR = 'data-srn-print-exclude'
+const SVG_NS = 'http://www.w3.org/2000/svg'
 let schedulePanelSequence = 0
+
+/** Build the app's calendar glyph as imperative DOM (same paths as CalendarIcon). */
+function createCalendarIcon(): SVGSVGElement {
+  const svg = document.createElementNS(SVG_NS, 'svg')
+  svg.setAttribute('viewBox', CALENDAR_ICON_VIEW_BOX)
+  svg.setAttribute('focusable', 'false')
+  // The button carries the accessible name; the glyph itself is decorative.
+  svg.setAttribute('aria-hidden', 'true')
+  svg.setAttribute('class', 'checklist-due-icon')
+  for (const path of CALENDAR_ICON_PATHS) {
+    const element = document.createElementNS(SVG_NS, 'path')
+    element.setAttribute('d', path.d)
+    if (path.evenOdd) {
+      element.setAttribute('fill-rule', 'evenodd')
+      element.setAttribute('clip-rule', 'evenodd')
+    }
+    svg.appendChild(element)
+  }
+  return svg
+}
 
 function createButton(action: string, label: string): HTMLButtonElement {
   const button = document.createElement('button')
@@ -49,6 +91,7 @@ export function createChecklistDueShell(): HTMLSpanElement {
   const shell = document.createElement('span')
   shell.setAttribute(CHECKLIST_DUE_SHELL_ATTR, 'true')
   shell.setAttribute('contenteditable', 'false')
+  shell.setAttribute(CHECKLIST_DUE_REVEAL_ATTR, 'inactive')
   shell.className = 'checklist-due-shell'
   setDOMUnmanaged(shell, { captureSelection: true })
 
@@ -61,9 +104,14 @@ export function createChecklistDueShell(): HTMLSpanElement {
   controls.setAttribute(PRINT_EXCLUDE_ATTR, 'true')
   controls.className = 'checklist-due-controls'
 
+  // Icon-only trigger: a neat calendar glyph rather than a wordy button, so a
+  // checklist row reads as a task and not as a row of controls. Icon-only does
+  // NOT mean anonymous — it keeps its aria-label (set/refreshed in
+  // syncChecklistDueShell) and a matching `title` for the hover tooltip.
   const edit = createButton('edit-schedule', 'Add due date and recurrence')
-  edit.className = 'checklist-due-button'
-  edit.textContent = 'Add schedule'
+  edit.className = 'checklist-due-button checklist-due-icon-button'
+  edit.title = 'Add due date and recurrence'
+  edit.appendChild(createCalendarIcon())
   edit.setAttribute('aria-haspopup', 'dialog')
   edit.setAttribute('aria-expanded', 'false')
   controls.appendChild(edit)
@@ -207,13 +255,16 @@ export function syncChecklistDueShell(
     controls.hidden = !editable
   }
   if (edit) {
-    edit.textContent = display ? 'Edit schedule' : 'Add schedule'
-    edit.setAttribute(
-      'aria-label',
-      display
-        ? `Edit checklist schedule. ${display.accessibleLabel}${recurrenceSummary ? `; ${recurrenceSummary}` : ''}`
-        : 'Add checklist due date and recurrence',
-    )
+    // Icon-only, so the accessible name and the tooltip carry the whole meaning
+    // — including, for an already-scheduled row, what the current schedule is.
+    const name = display
+      ? `Edit checklist schedule. ${display.accessibleLabel}${recurrenceSummary ? `; ${recurrenceSummary}` : ''}`
+      : 'Add checklist due date and recurrence'
+    edit.setAttribute('aria-label', name)
+    edit.title = name
+    // Scheduled rows get an accent (filled) icon variant; the persistent date
+    // label beside it already makes them findable without hovering each row.
+    edit.setAttribute('data-checklist-due-state', display ? 'scheduled' : 'empty')
   }
   if (clear) {
     clear.hidden = !display
@@ -248,7 +299,59 @@ export function syncChecklistDueShell(
     )
     itemElement.insertBefore(shell, nestedList ?? null)
   }
+  // This runs on every editor update AND on the due-date interval tick, so it
+  // must re-derive the reveal state rather than reset it — otherwise the
+  // affordance would blink off the active row once a second.
+  setChecklistDueShellRevealed(shell, shouldRevealShell(itemElement, shell))
   return shell
+}
+
+/**
+ * Show or hide the per-row schedule affordance WITHOUT changing layout: the
+ * button keeps its box (CSS uses visibility/opacity, never display), so rows do
+ * not jump as the caret moves between them. Hiding it does remove it from the
+ * accessibility tree and the tab order, so it is genuinely absent for keyboard
+ * and screen-reader users on rows they are not on.
+ */
+export function setChecklistDueShellRevealed(shell: HTMLElement, revealed: boolean): void {
+  shell.setAttribute(CHECKLIST_DUE_REVEAL_ATTR, revealed ? 'active' : 'inactive')
+  const button = shell.querySelector<HTMLButtonElement>(`[${CHECKLIST_DUE_ACTION_ATTR}="edit-schedule"]`)
+  if (!button) {
+    return
+  }
+  if (revealed) {
+    button.removeAttribute('aria-hidden')
+    button.removeAttribute('tabindex')
+  } else {
+    button.setAttribute('aria-hidden', 'true')
+    button.setAttribute('tabindex', '-1')
+  }
+}
+
+/** True when this row should show its affordance: it is active, or pinned open. */
+function shouldRevealShell(itemElement: HTMLElement | null, shell: HTMLElement): boolean {
+  return (
+    itemElement?.getAttribute(CHECKLIST_ACTIVE_ITEM_ATTR) === 'true' ||
+    shell.getAttribute(CHECKLIST_SCHEDULE_OPEN_ATTR) === 'true'
+  )
+}
+
+/**
+ * Mark exactly one checklist row inside `root` as the active one and re-derive
+ * every shell's reveal state from it. Passing null clears the marker (the caret
+ * left every checklist), which still leaves an open schedule panel revealed.
+ */
+export function setActiveChecklistItemElement(root: HTMLElement, itemElement: HTMLElement | null): void {
+  for (const previous of Array.from(root.querySelectorAll<HTMLElement>(`[${CHECKLIST_ACTIVE_ITEM_ATTR}]`))) {
+    if (previous !== itemElement) {
+      previous.removeAttribute(CHECKLIST_ACTIVE_ITEM_ATTR)
+    }
+  }
+  itemElement?.setAttribute(CHECKLIST_ACTIVE_ITEM_ATTR, 'true')
+
+  for (const shell of Array.from(root.querySelectorAll<HTMLElement>(`[${CHECKLIST_DUE_SHELL_ATTR}]`))) {
+    setChecklistDueShellRevealed(shell, shouldRevealShell(shell.parentElement, shell))
+  }
 }
 
 export function setChecklistSchedulePanelOpen(shell: HTMLElement, open: boolean): void {
@@ -261,6 +364,15 @@ export function setChecklistSchedulePanelOpen(shell: HTMLElement, open: boolean)
     button.hidden = open
   }
   button?.setAttribute('aria-expanded', String(open))
+  // An open panel pins the row revealed, so clicking the icon with the mouse
+  // (which deliberately does not move the caret) cannot make the dialog's own
+  // container disappear mid-edit.
+  if (open) {
+    shell.setAttribute(CHECKLIST_SCHEDULE_OPEN_ATTR, 'true')
+  } else {
+    shell.removeAttribute(CHECKLIST_SCHEDULE_OPEN_ATTR)
+  }
+  setChecklistDueShellRevealed(shell, shouldRevealShell(shell.parentElement, shell))
 }
 
 export function setChecklistScheduleStatus(shell: HTMLElement, message?: string): void {

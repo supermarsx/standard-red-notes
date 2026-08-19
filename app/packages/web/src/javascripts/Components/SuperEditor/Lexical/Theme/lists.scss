@@ -178,6 +178,65 @@
   align-items: center;
   gap: 0.25rem;
 }
+
+/* Standard Red Notes: the schedule affordance belongs to the row you are ON.
+ *
+ * The reveal uses visibility + opacity, NEVER `display`, so the icon's box is
+ * always reserved and rows cannot jump as the caret moves between them.
+ *
+ * The caret (`[data-checklist-due-reveal='active']`, set by CheckListPlugin) is
+ * the primary trigger because it is the one that works without a mouse; the
+ * `:hover` and `:focus-within` rules below are a mouse-user enhancement layered
+ * on top. Do NOT reduce this to hover alone — an affordance that only exists on
+ * hover is unusable from the keyboard. */
+.checklist-due-shell[data-checklist-due-reveal='inactive'] > .checklist-due-controls {
+  visibility: hidden;
+  opacity: 0;
+}
+.checklist-due-shell[data-checklist-due-reveal='active'] > .checklist-due-controls,
+li:hover > .checklist-due-shell > .checklist-due-controls,
+li:focus-within > .checklist-due-shell > .checklist-due-controls {
+  visibility: visible;
+  opacity: 1;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .checklist-due-controls {
+    transition: opacity 120ms ease-out;
+  }
+}
+
+/* The trigger is icon-only: a compact, borderless calendar glyph that sits at
+ * the visual weight of the row's text rather than reading as a form button. */
+.checklist-due-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.4rem;
+  height: 1.4rem;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  color: var(--sn-stylekit-passive-color-1);
+}
+.checklist-due-icon-button:hover,
+.checklist-due-icon-button:focus-visible {
+  background: var(--sn-stylekit-contrast-background-color);
+  border-color: var(--sn-stylekit-info-color);
+  color: var(--sn-stylekit-foreground-color);
+}
+/* An already-scheduled row gets the accent variant, so its icon reads as "set"
+ * rather than "add" the moment it appears. Its date label renders persistently
+ * (independent of this reveal), so scheduled rows stay findable without
+ * hovering every row. */
+.checklist-due-icon-button[data-checklist-due-state='scheduled'] {
+  color: var(--sn-stylekit-info-color);
+}
+.checklist-due-icon {
+  width: 0.95rem;
+  height: 0.95rem;
+  fill: currentColor;
+  pointer-events: none;
+}
 .checklist-due-button,
 .checklist-due-input,
 .checklist-recurrence-select,

@@ -44,14 +44,32 @@ export const MicIcon = (props: SVGProps<SVGSVGElement>) => (
  * grid with two hanging rings — clearly a calendar at the visual weight of the
  * neighboring block icons.
  */
+export const CALENDAR_ICON_VIEW_BOX = '0 0 24 24'
+
+/**
+ * The calendar glyph's raw path data, exported so surfaces that cannot render a
+ * React component — the checklist due-date control builds its icon with
+ * imperative DOM inside a Lexical decorator shell — draw the SAME glyph rather
+ * than carrying a second copy of it.
+ */
+export const CALENDAR_ICON_PATHS: readonly { d: string; evenOdd?: boolean }[] = [
+  {
+    d: 'M7 2a1 1 0 0 1 1 1v1h8V3a1 1 0 1 1 2 0v1h1a3 3 0 0 1 3 3v12a3 3 0 0 1-3 3H5a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3h1V3a1 1 0 0 1 1-1zM4 10v9a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-9H4zm16-2H4V7a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v1z',
+    evenOdd: true,
+  },
+  { d: 'M7 13h3v3H7v-3z' },
+]
+
 export const CalendarIcon = (props: SVGProps<SVGSVGElement>) => (
-  <svg viewBox="0 0 24 24" {...props}>
-    <path
-      fillRule="evenodd"
-      clipRule="evenodd"
-      d="M7 2a1 1 0 0 1 1 1v1h8V3a1 1 0 1 1 2 0v1h1a3 3 0 0 1 3 3v12a3 3 0 0 1-3 3H5a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3h1V3a1 1 0 0 1 1-1zM4 10v9a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-9H4zm16-2H4V7a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v1z"
-    />
-    <path d="M7 13h3v3H7v-3z" />
+  <svg viewBox={CALENDAR_ICON_VIEW_BOX} {...props}>
+    {CALENDAR_ICON_PATHS.map((path) => (
+      <path
+        key={path.d}
+        d={path.d}
+        fillRule={path.evenOdd ? 'evenodd' : undefined}
+        clipRule={path.evenOdd ? 'evenodd' : undefined}
+      />
+    ))}
   </svg>
 )
 

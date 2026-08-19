@@ -16,6 +16,7 @@ import {
   COMMAND_PRIORITY_LOW,
   KEY_ENTER_COMMAND,
   SKIP_DOM_SELECTION_TAG,
+  type LexicalNode,
 } from 'lexical'
 import { useEffect } from 'react'
 import { useApplication } from '../../ApplicationProvider'
@@ -30,6 +31,7 @@ import {
   CHECKLIST_RECURRENCE_PRESET_ATTR,
   readChecklistScheduleControl,
   removeChecklistDueShell,
+  setActiveChecklistItemElement,
   setChecklistSchedulePanelOpen,
   setChecklistScheduleStatus,
   syncChecklistDueShell,
@@ -379,6 +381,39 @@ export function CheckListPlugin({
       }
     }
 
+    /**
+     * Standard Red Notes: the schedule affordance is revealed only for the row
+     * the user is "on". The caret is the primary trigger — it is the one signal
+     * that works for keyboard users, who have no hover — so we mark the row
+     * holding the selection anchor and let ChecklistDueControls re-derive every
+     * shell's reveal state. (CSS layers hover/:focus-within on top for mouse
+     * users; it is never the only path.) The whole selection is not used: with
+     * a multi-row selection there is no single row you are "on", so we follow
+     * the anchor, which is where the caret visually sits.
+     */
+    const refreshActiveChecklistItem = () => {
+      const root = editor.getRootElement()
+      if (!root) {
+        return
+      }
+      let activeElement: HTMLElement | null = null
+      editor.read(() => {
+        const selection = $getSelection()
+        if (!$isRangeSelection(selection)) {
+          return
+        }
+        let node: LexicalNode | null = selection.anchor.getNode()
+        while (node) {
+          if ($isChecklistItemNode(node)) {
+            activeElement = editor.getElementByKey(node.getKey())
+            return
+          }
+          node = node.getParent()
+        }
+      })
+      setActiveChecklistItemElement(root, activeElement)
+    }
+
     const readScheduleSnapshot = (itemElement: HTMLElement): ChecklistScheduleSnapshot | undefined =>
       editor.read(() => {
         const node = $getNearestNodeFromDOMNode(itemElement)
@@ -536,12 +571,20 @@ export function CheckListPlugin({
         rootElement.addEventListener('change', handleChange)
         rootElement.addEventListener('pointerdown', stopDuePointer)
         refreshDueControls()
+        refreshActiveChecklistItem()
       }
     })
-    const updateDisposer = editor.registerUpdateListener(({ dirtyElements }) =>
-      refreshDueControls(dirtyElements.entries()),
-    )
-    const editableDisposer = editor.registerEditableListener(() => refreshDueControls())
+    // Selection-only changes (arrow keys, clicking into another row) still
+    // commit an editor state, so this listener is what moves the affordance
+    // with the caret.
+    const updateDisposer = editor.registerUpdateListener(({ dirtyElements }) => {
+      refreshDueControls(dirtyElements.entries())
+      refreshActiveChecklistItem()
+    })
+    const editableDisposer = editor.registerEditableListener(() => {
+      refreshDueControls()
+      refreshActiveChecklistItem()
+    })
     const tick = window.setInterval(refreshDueControls, CHECKLIST_DUE_TICK_MS)
 
     return () => {
