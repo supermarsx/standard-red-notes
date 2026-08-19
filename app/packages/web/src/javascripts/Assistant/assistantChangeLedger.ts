@@ -81,8 +81,14 @@ const utf8Bytes = (value: string): number => new TextEncoder().encode(value).byt
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
 
+const containsAsciiControlCharacter = (value: string): boolean =>
+  Array.from(value).some((character) => {
+    const codePoint = character.charCodeAt(0)
+    return codePoint <= 0x1f || codePoint === 0x7f
+  })
+
 const boundedIdentifier = (value: unknown, max = 256): value is string =>
-  typeof value === 'string' && value.length > 0 && value.length <= max && !/[\u0000-\u001f\u007f]/.test(value)
+  typeof value === 'string' && value.length > 0 && value.length <= max && !containsAsciiControlCharacter(value)
 
 const boundedIsoDate = (value: unknown): value is string =>
   typeof value === 'string' && value.length <= 40 && Number.isFinite(Date.parse(value))

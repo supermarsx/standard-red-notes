@@ -536,11 +536,21 @@ function safeBlock(record: NodeRecord): AssistantStructureBlock {
 
 function inlineMarks(format: number): string[] {
   const marks: string[] = []
-  if (format & 1) marks.push('bold')
-  if (format & 2) marks.push('italic')
-  if (format & 4) marks.push('strikethrough')
-  if (format & 8) marks.push('underline')
-  if (format & 16) marks.push('code')
+  if (format & 1) {
+    marks.push('bold')
+  }
+  if (format & 2) {
+    marks.push('italic')
+  }
+  if (format & 4) {
+    marks.push('strikethrough')
+  }
+  if (format & 8) {
+    marks.push('underline')
+  }
+  if (format & 16) {
+    marks.push('code')
+  }
   return marks
 }
 
