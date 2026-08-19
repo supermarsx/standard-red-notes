@@ -319,7 +319,7 @@ describe('Todos empty states', () => {
 })
 
 describe('Todos filter persistence', () => {
-  it('writes the filters to device storage as they change', () => {
+  it('writes the filters to the synced preference as they change', () => {
     setSelect(control<HTMLSelectElement>('Filter by source'), 'super')
     expect(storage.get(TODO_FILTERS_PREF_KEY)).toMatchObject({ source: 'super' })
   })
