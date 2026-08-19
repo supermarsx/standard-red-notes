@@ -26,6 +26,7 @@ import {
   registerPrintableCalendar,
   unregisterPrintableCalendar,
 } from '@/Components/SuperEditor/Lexical/Nodes/PrintableCalendarRegistry'
+import { registerPrintableView, unregisterPrintableView } from './PrintableViewRegistry'
 import {
   createPersistedPrintOptions,
   createPrintSnapshot,
@@ -797,6 +798,80 @@ describe('isolated note printing', () => {
     expect(document.getElementById(PRINT_ROOT_ID)).toBeNull()
     expect(document.body.classList.contains(PRINTING_BODY_CLASS)).toBe(false)
     dispose()
+  })
+
+  it('still refuses in words when neither a note nor a printable view is on screen', () => {
+    // The printable-view registry must not turn "nothing to print" into a
+    // silent blank page: with no note editor AND nothing registered, the
+    // refusal stays explicit and the compositor still gets the empty snapshot
+    // rather than application chrome.
+    document.body.innerHTML = '<main id="some-other-view"><button>Not a note</button></main>'
+    const unsupported = jest.fn()
+    const dispose = installNativeNotePrinting(() => ({}), unsupported)
+
+    expect(getActiveNotePrintSupport({})).toEqual({
+      supported: false,
+      reason: 'Open a note or a printable view before printing.',
+    })
+
+    expect(() => window.dispatchEvent(new Event('beforeprint'))).not.toThrow()
+    expect(unsupported).toHaveBeenCalledWith('Open a note or a printable view before printing.')
+    expect(document.getElementById(PRINT_ROOT_ID)?.getAttribute(PRINT_EMPTY_ATTRIBUTE)).toBe('true')
+    dispose()
+  })
+
+  it('never serves a projection from a view that is no longer on screen', () => {
+    document.body.innerHTML = '<main id="view-host"></main>'
+    const host = document.getElementById('view-host') as HTMLElement
+    const viewRoot = document.createElement('div')
+    host.appendChild(viewRoot)
+
+    const body = document.createElement('div')
+    body.textContent = 'Rows from a view the user has navigated away from'
+    registerPrintableView(viewRoot, () => ({ title: 'Some view', body }))
+
+    expect(getActiveNotePrintSupport({})).toEqual({ supported: true, source: 'view' })
+
+    // Torn out WITHOUT deregistering — the failure mode a lifecycle bug leaves
+    // behind. A stale projection must not decide what the browser prints.
+    viewRoot.remove()
+    expect(getActiveNotePrintSupport({})).toEqual({
+      supported: false,
+      reason: 'Open a note or a printable view before printing.',
+    })
+    expect(createPrintSnapshot({})).toBeUndefined()
+
+    unregisterPrintableView(viewRoot)
+  })
+
+  it('asks the view for its content at print time, not at registration time', () => {
+    document.body.innerHTML = '<main id="view-host"></main>'
+    const host = document.getElementById('view-host') as HTMLElement
+    const viewRoot = document.createElement('div')
+    host.appendChild(viewRoot)
+
+    // What the view is showing changes after it registers — a filter being
+    // applied. A registry holding a materialised snapshot would print the old
+    // set, so it must hold a getter and call it now.
+    let currentRows = ['Everything', 'Both of them']
+    registerPrintableView(viewRoot, () => {
+      const body = document.createElement('div')
+      currentRows.forEach((text) => {
+        const row = document.createElement('p')
+        row.textContent = text
+        body.appendChild(row)
+      })
+      return { title: 'Some view', body }
+    })
+
+    expect(createPrintSnapshot({})?.textContent).toContain('Both of them')
+
+    currentRows = ['Everything']
+    const afterFilter = createPrintSnapshot({})
+    expect(afterFilter?.textContent).toContain('Everything')
+    expect(afterFilter?.textContent).not.toContain('Both of them')
+
+    unregisterPrintableView(viewRoot)
   })
 
   it('keeps an inactive context-menu snapshot for the explicit print beforeprint event', () => {
