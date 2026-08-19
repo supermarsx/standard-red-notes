@@ -12,8 +12,10 @@ import { pruneTodoSelection, selectableTodoKey, todoSelectionKey } from './todoS
 import {
   CHECKLIST_DUE_TICK_MS,
   checklistDueAtToLocalInput,
+  composeChecklistDueLocalInput,
   formatChecklistDue,
   resolveChecklistDueAtLocalInput,
+  splitChecklistDueLocalInput,
 } from '../SuperEditor/Checklist/checklistDueDate'
 import {
   CHECKLIST_RECURRENCE_MAX_INTERVAL,
@@ -104,10 +106,13 @@ type TodoScheduleEditorProps = {
   onSave: (patch: SuperChecklistTodoPatch, expected: SuperChecklistTodoTarget) => Promise<boolean>
 }
 
-function TodoScheduleEditor({ item, target, busy, onOpen, onSave }: TodoScheduleEditorProps) {
+/** Exported for the render-path test; TodoView is its only production caller. */
+export function TodoScheduleEditor({ item, target, busy, onOpen, onSave }: TodoScheduleEditorProps) {
   const persistedChoice = item.recurrence ? checklistRecurrenceChoice(item.recurrence) : undefined
   const [open, setOpen] = useState(false)
-  const [dueDraft, setDueDraft] = useState(item.dueAt ? checklistDueAtToLocalInput(item.dueAt) : '')
+  const [dueDraft, setDueDraft] = useState(() =>
+    splitChecklistDueLocalInput(item.dueAt ? checklistDueAtToLocalInput(item.dueAt) : ''),
+  )
   const [preset, setPreset] = useState(
     typeof persistedChoice === 'string' ? persistedChoice : (persistedChoice?.frequency ?? 'none'),
   )
@@ -124,7 +129,7 @@ function TodoScheduleEditor({ item, target, busy, onOpen, onSave }: TodoSchedule
   const resetDraft = useCallback(
     (schedule: Pick<TodoItem, 'dueAt' | 'recurrence'> = item) => {
       const choice = schedule.recurrence ? checklistRecurrenceChoice(schedule.recurrence) : undefined
-      setDueDraft(schedule.dueAt ? checklistDueAtToLocalInput(schedule.dueAt) : '')
+      setDueDraft(splitChecklistDueLocalInput(schedule.dueAt ? checklistDueAtToLocalInput(schedule.dueAt) : ''))
       setPreset(typeof choice === 'string' ? choice : (choice?.frequency ?? 'none'))
       setInterval(typeof choice === 'object' ? String(choice.interval) : '1')
       setUnit(typeof choice === 'object' ? choice.unit : 'day')
@@ -173,9 +178,12 @@ function TodoScheduleEditor({ item, target, busy, onOpen, onSave }: TodoSchedule
       setError('Close and reopen the schedule editor before saving.')
       return
     }
-    const dueAt = resolveChecklistDueAtLocalInput(dueDraft, expected.dueAt)
+    const dueAt = resolveChecklistDueAtLocalInput(
+      composeChecklistDueLocalInput(dueDraft.date, dueDraft.time),
+      expected.dueAt,
+    )
     if (!dueAt) {
-      setError('Choose a valid due date and time.')
+      setError('Choose a valid due date. Leave the time blank for 00:00.')
       return
     }
     const choice = recurrenceChoice()
@@ -262,11 +270,33 @@ function TodoScheduleEditor({ item, target, busy, onOpen, onSave }: TodoSchedule
             Due
             <input
               ref={dueInputRef}
-              type="datetime-local"
+              type="date"
               className="border-border bg-default text-text max-w-full rounded border px-1.5 py-0.5 text-xs"
-              value={dueDraft}
+              value={dueDraft.date}
               disabled={busy}
-              onChange={(event) => setDueDraft(event.currentTarget.value)}
+              aria-label="Due date"
+              onChange={(event) => {
+                // Read the value eagerly: React nulls `currentTarget` once the
+                // handler returns, and the updater below runs during render.
+                const date = event.currentTarget.value
+                setDueDraft((draft) => ({ ...draft, date }))
+              }}
+            />
+          </label>
+          {/* Optional on purpose: a date with no time means 00:00 that day. */}
+          <label className="text-passive-1 flex flex-col gap-0.5 text-xs">
+            Time (optional)
+            <input
+              type="time"
+              className="border-border bg-default text-text max-w-full rounded border px-1.5 py-0.5 text-xs"
+              value={dueDraft.time}
+              disabled={busy}
+              aria-label="Due time (optional, defaults to 00:00)"
+              title="Optional — leave blank for 00:00"
+              onChange={(event) => {
+                const time = event.currentTarget.value
+                setDueDraft((draft) => ({ ...draft, time }))
+              }}
             />
           </label>
           <label className="text-passive-1 flex flex-col gap-0.5 text-xs">

@@ -3,8 +3,10 @@ import {
   checklistDueAtFromLocalInput,
   checklistDueAtToLocalInput,
   checklistDueExportText,
+  composeChecklistDueLocalInput,
   formatChecklistDue,
   normalizeChecklistDueAt,
+  splitChecklistDueLocalInput,
 } from './checklistDueDate'
 
 describe('checklist due dates', () => {
@@ -35,6 +37,59 @@ describe('checklist due dates', () => {
     if (accepted) {
       expect(checklistDueAtToLocalInput(accepted)).toBe('2026-03-29T01:30')
     }
+  })
+
+  it('defaults a date with no time to local 00:00', () => {
+    const dateOnly = checklistDueAtFromLocalInput('2026-08-20')
+    expect(dateOnly).toBeDefined()
+    // Local, not UTC: the wall value read back must be midnight on that date.
+    expect(checklistDueAtToLocalInput(dateOnly!)).toBe('2026-08-20T00:00')
+    // "No time" and an explicit 00:00 describe the same instant.
+    expect(dateOnly).toBe(checklistDueAtFromLocalInput('2026-08-20T00:00'))
+  })
+
+  it('leaves an explicitly supplied time alone', () => {
+    const timed = checklistDueAtFromLocalInput('2026-08-20T17:45')
+    expect(checklistDueAtToLocalInput(timed!)).toBe('2026-08-20T17:45')
+    expect(timed).not.toBe(checklistDueAtFromLocalInput('2026-08-20'))
+  })
+
+  it('rejects a date-only value that is not a real calendar day', () => {
+    expect(checklistDueAtFromLocalInput('2026-02-30')).toBeUndefined()
+    expect(checklistDueAtFromLocalInput('2026-13-01')).toBeUndefined()
+    expect(checklistDueAtFromLocalInput('1969-12-31')).toBeUndefined()
+    expect(checklistDueAtFromLocalInput('20260820')).toBeUndefined()
+    expect(checklistDueAtFromLocalInput('2026-08-20T')).toBeUndefined()
+    expect(checklistDueAtFromLocalInput('')).toBeUndefined()
+  })
+
+  it('resolves a defaulted midnight on every daylight-saving boundary to the start of that day', () => {
+    // Northern and southern spring-forward / fall-back dates. Some zones (e.g.
+    // parts of South America) jump AT 00:00, so midnight itself can be missing;
+    // a date-only entry must still land on the first instant of that day rather
+    // than failing the way an explicitly typed missing wall time does.
+    for (const day of ['2026-03-08', '2026-03-29', '2026-04-05', '2026-09-06', '2026-10-18', '2026-11-01']) {
+      const resolved = checklistDueAtFromLocalInput(day)
+      expect(resolved).toBeDefined()
+      const local = checklistDueAtToLocalInput(resolved!)
+      expect(local.slice(0, 10)).toBe(day)
+      // Nothing earlier on that day exists: one minute back is the previous day.
+      const earlier = new Date(Date.parse(resolved!) - 60_000)
+      expect(checklistDueAtToLocalInput(earlier.toISOString()).slice(0, 10)).not.toBe(day)
+    }
+  })
+
+  it('splits and recombines the date and optional time halves of a wall value', () => {
+    expect(splitChecklistDueLocalInput('2026-08-20T17:45')).toEqual({ date: '2026-08-20', time: '17:45' })
+    expect(splitChecklistDueLocalInput('2026-08-20')).toEqual({ date: '2026-08-20', time: '' })
+    expect(splitChecklistDueLocalInput('')).toEqual({ date: '', time: '' })
+
+    expect(composeChecklistDueLocalInput('2026-08-20', '17:45')).toBe('2026-08-20T17:45')
+    expect(composeChecklistDueLocalInput('2026-08-20', '')).toBe('2026-08-20')
+    expect(composeChecklistDueLocalInput('2026-08-20', '  ')).toBe('2026-08-20')
+    // A time with no date is not a schedule; it must not become "today".
+    expect(composeChecklistDueLocalInput('', '17:45')).toBe('')
+    expect(checklistDueAtFromLocalInput(composeChecklistDueLocalInput('', '17:45'))).toBeUndefined()
   })
 
   it('reports day/hour time remaining and the due-soon boundary', () => {

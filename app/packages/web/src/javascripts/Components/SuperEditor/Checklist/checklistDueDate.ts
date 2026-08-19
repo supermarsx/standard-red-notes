@@ -19,6 +19,7 @@ export type ChecklistDueDisplay = {
 
 const EXPLICIT_DATE_TIME = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(Z|[+-]\d{2}:\d{2})$/i
 const LOCAL_DATE_TIME = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/
+const LOCAL_DATE = /^(\d{4})-(\d{2})-(\d{2})$/
 
 /**
  * Accept only a real instant and always return its canonical UTC representation.
@@ -65,12 +66,26 @@ export function normalizeChecklistDueAt(value: unknown): string | undefined {
 }
 
 /**
- * Convert a browser `datetime-local` value into a canonical UTC instant.
+ * Convert a browser wall-clock schedule value into a canonical UTC instant.
+ *
+ * Two shapes are accepted:
+ *  - `YYYY-MM-DDTHH:mm` — a full `datetime-local` value.
+ *  - `YYYY-MM-DD` — a DATE-ONLY value, produced when the schedule's optional
+ *    time field is left blank. The time then defaults to **00:00 in the user's
+ *    LOCAL time zone**, matching the rest of this module: the UI is local and
+ *    only the serialized `dueAt` is UTC.
+ *
  * Repeated autumn wall times use ECMAScript's earlier-fold disambiguation;
- * skipped spring wall times fail the round-trip check below.
+ * skipped spring wall times fail the round-trip check below. A *defaulted*
+ * midnight is the one exception — see below.
+ *
+ * Note the data model stores a single instant, so "no time given" and "time
+ * given as 00:00" deliberately converge on the same `dueAt`; there is no
+ * date-only state to round-trip back to.
  */
 export function checklistDueAtFromLocalInput(value: string): string | undefined {
-  const match = LOCAL_DATE_TIME.exec(value)
+  const dateOnly = LOCAL_DATE.exec(value)
+  const match = dateOnly ?? LOCAL_DATE_TIME.exec(value)
   if (!match) {
     return undefined
   }
@@ -78,8 +93,8 @@ export function checklistDueAtFromLocalInput(value: string): string | undefined 
   const year = Number(yearPart)
   const month = Number(monthPart)
   const day = Number(dayPart)
-  const hour = Number(hourPart)
-  const minute = Number(minutePart)
+  const hour = dateOnly ? 0 : Number(hourPart)
+  const minute = dateOnly ? 0 : Number(minutePart)
   if (year < 1970 || year > 9999) {
     return undefined
   }
@@ -89,14 +104,21 @@ export function checklistDueAtFromLocalInput(value: string): string | undefined 
     !Number.isFinite(date.getTime()) ||
     date.getFullYear() !== year ||
     date.getMonth() !== month - 1 ||
-    date.getDate() !== day ||
-    date.getHours() !== hour ||
-    date.getMinutes() !== minute
+    date.getDate() !== day
   ) {
-    // Calendar overflow and local wall times skipped by a DST transition must
-    // fail instead of silently changing the user's requested deadline.
+    // Calendar overflow, and days a DST jump deletes outright, must fail
+    // instead of silently changing the user's requested deadline.
     return undefined
   }
+  if (!dateOnly && (date.getHours() !== hour || date.getMinutes() !== minute)) {
+    // An explicitly typed wall time skipped by a DST transition still fails:
+    // the user asked for a time that does not exist on that day.
+    return undefined
+  }
+  // A DEFAULTED midnight is different. Some zones spring forward at 00:00, so
+  // that wall time does not exist there; the day still does, and its first real
+  // instant is exactly what "this date, no time" means. `new Date` has already
+  // shifted to it, and the date check above proved we stayed on the same day.
   return normalizeChecklistDueAt(date.toISOString())
 }
 
@@ -109,6 +131,32 @@ export function checklistDueAtToLocalInput(value: string): string {
   const date = new Date(normalized)
   const part = (number: number) => number.toString().padStart(2, '0')
   return `${date.getFullYear()}-${part(date.getMonth() + 1)}-${part(date.getDate())}T${part(date.getHours())}:${part(date.getMinutes())}`
+}
+
+/**
+ * Split a wall-clock `YYYY-MM-DDTHH:mm` value into the halves shown by the
+ * schedule form's separate date and time fields. An empty value yields two
+ * empty halves, so a cleared schedule clears both fields.
+ */
+export function splitChecklistDueLocalInput(value: string): { date: string; time: string } {
+  const separator = value.indexOf('T')
+  return separator === -1
+    ? { date: value, time: '' }
+    : { date: value.slice(0, separator), time: value.slice(separator + 1) }
+}
+
+/**
+ * Recombine the schedule form's date field with its OPTIONAL time field. A
+ * blank time yields a date-only value, which
+ * {@link checklistDueAtFromLocalInput} resolves to local 00:00.
+ */
+export function composeChecklistDueLocalInput(date: string, time: string): string {
+  const trimmedDate = date.trim()
+  const trimmedTime = time.trim()
+  if (trimmedDate.length === 0) {
+    return ''
+  }
+  return trimmedTime.length === 0 ? trimmedDate : `${trimmedDate}T${trimmedTime}`
 }
 
 /** Preserve the exact instant (including fold offset and sub-minute precision) when an editor draft is unchanged. */

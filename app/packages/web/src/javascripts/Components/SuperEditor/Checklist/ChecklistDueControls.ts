@@ -1,5 +1,11 @@
 import { setDOMUnmanaged } from 'lexical'
-import { checklistDueAtToLocalInput, formatChecklistDue, resolveChecklistDueAtLocalInput } from './checklistDueDate'
+import {
+  checklistDueAtToLocalInput,
+  composeChecklistDueLocalInput,
+  formatChecklistDue,
+  resolveChecklistDueAtLocalInput,
+  splitChecklistDueLocalInput,
+} from './checklistDueDate'
 import {
   CHECKLIST_RECURRENCE_MAX_INTERVAL,
   checklistRecurrenceSummary,
@@ -12,6 +18,7 @@ import {
 export const CHECKLIST_DUE_SHELL_ATTR = 'data-checklist-due-shell'
 export const CHECKLIST_DUE_ACTION_ATTR = 'data-checklist-due-action'
 export const CHECKLIST_DUE_INPUT_ATTR = 'data-checklist-due-input'
+export const CHECKLIST_DUE_TIME_INPUT_ATTR = 'data-checklist-due-time-input'
 export const CHECKLIST_SCHEDULE_PANEL_ATTR = 'data-checklist-schedule-panel'
 export const CHECKLIST_RECURRENCE_PRESET_ATTR = 'data-checklist-recurrence-preset'
 export const CHECKLIST_RECURRENCE_INTERVAL_ATTR = 'data-checklist-recurrence-interval'
@@ -75,13 +82,29 @@ export function createChecklistDueShell(): HTMLSpanElement {
   dueLabel.className = 'checklist-schedule-field'
   dueLabel.append('Due ')
   const input = document.createElement('input')
-  input.type = 'datetime-local'
+  input.type = 'date'
   input.setAttribute(CHECKLIST_DUE_INPUT_ATTR, 'true')
   input.setAttribute('contenteditable', 'false')
-  input.setAttribute('aria-label', 'Checklist due date and time')
+  input.setAttribute('aria-label', 'Checklist due date')
   input.className = 'checklist-due-input'
   dueLabel.appendChild(input)
   panel.appendChild(dueLabel)
+
+  // The time is deliberately its own OPTIONAL field: a date with no time is a
+  // complete answer and means 00:00 that day, which a single `datetime-local`
+  // control cannot express (it reports an empty value until both halves exist).
+  const timeLabel = document.createElement('label')
+  timeLabel.className = 'checklist-schedule-field'
+  timeLabel.append('at ')
+  const timeInput = document.createElement('input')
+  timeInput.type = 'time'
+  timeInput.setAttribute(CHECKLIST_DUE_TIME_INPUT_ATTR, 'true')
+  timeInput.setAttribute('contenteditable', 'false')
+  timeInput.setAttribute('aria-label', 'Checklist due time (optional, defaults to 00:00)')
+  timeInput.title = 'Optional — leave blank for 00:00'
+  timeInput.className = 'checklist-due-input'
+  timeLabel.appendChild(timeInput)
+  panel.appendChild(timeLabel)
 
   const presetLabel = document.createElement('label')
   presetLabel.className = 'checklist-schedule-field'
@@ -166,6 +189,7 @@ export function syncChecklistDueShell(
   const edit = shell.querySelector<HTMLButtonElement>(`[${CHECKLIST_DUE_ACTION_ATTR}="edit-schedule"]`)
   const panel = shell.querySelector<HTMLElement>(`[${CHECKLIST_SCHEDULE_PANEL_ATTR}]`)
   const input = shell.querySelector<HTMLInputElement>(`[${CHECKLIST_DUE_INPUT_ATTR}]`)
+  const timeInput = shell.querySelector<HTMLInputElement>(`[${CHECKLIST_DUE_TIME_INPUT_ATTR}]`)
   const clear = shell.querySelector<HTMLButtonElement>(`[${CHECKLIST_DUE_ACTION_ATTR}="clear-schedule"]`)
   const display = dueAt ? formatChecklistDue(dueAt, checked, now) : undefined
   const recurrence = display ? normalizeChecklistRecurrence(recurrenceValue) : undefined
@@ -196,8 +220,12 @@ export function syncChecklistDueShell(
   }
 
   if (panel?.hidden) {
+    const local = splitChecklistDueLocalInput(dueAt ? checklistDueAtToLocalInput(dueAt) : '')
     if (input) {
-      input.value = dueAt ? checklistDueAtToLocalInput(dueAt) : ''
+      input.value = local.date
+    }
+    if (timeInput) {
+      timeInput.value = local.time
     }
     const preset = panel.querySelector<HTMLSelectElement>(`[${CHECKLIST_RECURRENCE_PRESET_ATTR}]`)
     const interval = panel.querySelector<HTMLInputElement>(`[${CHECKLIST_RECURRENCE_INTERVAL_ATTR}]`)
@@ -284,10 +312,11 @@ export function readChecklistScheduleControl(
   shell: HTMLElement,
   expectedDueAt?: string,
 ): ChecklistScheduleControlResult {
-  const localDueAt = shell.querySelector<HTMLInputElement>(`[${CHECKLIST_DUE_INPUT_ATTR}]`)?.value ?? ''
-  const dueAt = resolveChecklistDueAtLocalInput(localDueAt, expectedDueAt)
+  const localDate = shell.querySelector<HTMLInputElement>(`[${CHECKLIST_DUE_INPUT_ATTR}]`)?.value ?? ''
+  const localTime = shell.querySelector<HTMLInputElement>(`[${CHECKLIST_DUE_TIME_INPUT_ATTR}]`)?.value ?? ''
+  const dueAt = resolveChecklistDueAtLocalInput(composeChecklistDueLocalInput(localDate, localTime), expectedDueAt)
   if (!dueAt) {
-    return { ok: false, reason: 'Choose a valid due date and time.' }
+    return { ok: false, reason: 'Choose a valid due date. Leave the time blank for 00:00.' }
   }
   const recurrence = readChecklistRecurrenceControl(shell)
   return recurrence.ok ? { ok: true, dueAt, recurrenceChoice: recurrence.choice } : recurrence

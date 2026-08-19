@@ -7,7 +7,11 @@ import {
   syncChecklistRecurrenceCustomVisibility,
 } from './ChecklistDueControls'
 import { createChecklistRecurrence } from './checklistRecurrence'
-import { checklistDueAtToLocalInput, resolveChecklistDueAtLocalInput } from './checklistDueDate'
+import {
+  checklistDueAtToLocalInput,
+  resolveChecklistDueAtLocalInput,
+  splitChecklistDueLocalInput,
+} from './checklistDueDate'
 
 describe('checklist due controls', () => {
   it('renders a semantic countdown with print-excluded edit controls', () => {
@@ -17,7 +21,8 @@ describe('checklist due controls', () => {
 
     expect(shell.querySelector('[data-checklist-due-label]')?.textContent).toContain('1d 2h left')
     expect(shell.querySelector('[data-srn-print-exclude="true"]')).not.toBeNull()
-    expect(shell.querySelector('input')?.getAttribute('type')).toBe('datetime-local')
+    expect(shell.querySelector('[data-checklist-due-input]')?.getAttribute('type')).toBe('date')
+    expect(shell.querySelector('[data-checklist-due-time-input]')?.getAttribute('type')).toBe('time')
     expect(shell.querySelector('[data-checklist-due-action="clear-schedule"]')?.hasAttribute('hidden')).toBe(false)
     jest.useRealTimers()
   })
@@ -59,6 +64,43 @@ describe('checklist due controls', () => {
     })
   })
 
+  it('accepts a date with no time and schedules it for local 00:00', () => {
+    const item = document.createElement('li')
+    const shell = syncChecklistDueShell(item, undefined, false, true)
+    setChecklistSchedulePanelOpen(shell, true)
+    ;(shell.querySelector('[data-checklist-due-input]') as HTMLInputElement).value = '2026-08-20'
+    expect((shell.querySelector('[data-checklist-due-time-input]') as HTMLInputElement).value).toBe('')
+
+    const result = readChecklistScheduleControl(shell)
+    expect(result.ok).toBe(true)
+    const dueAt = (result as { ok: true; dueAt: string }).dueAt
+    expect(checklistDueAtToLocalInput(dueAt)).toBe('2026-08-20T00:00')
+  })
+
+  it('rejects a schedule with a time but no date, and says the time is optional', () => {
+    const item = document.createElement('li')
+    const shell = syncChecklistDueShell(item, undefined, false, true)
+    setChecklistSchedulePanelOpen(shell, true)
+    ;(shell.querySelector('[data-checklist-due-time-input]') as HTMLInputElement).value = '09:30'
+
+    expect(readChecklistScheduleControl(shell)).toEqual({
+      ok: false,
+      reason: 'Choose a valid due date. Leave the time blank for 00:00.',
+    })
+  })
+
+  it('keeps an explicitly entered time untouched', () => {
+    const item = document.createElement('li')
+    const shell = syncChecklistDueShell(item, undefined, false, true)
+    setChecklistSchedulePanelOpen(shell, true)
+    ;(shell.querySelector('[data-checklist-due-input]') as HTMLInputElement).value = '2026-08-20'
+    ;(shell.querySelector('[data-checklist-due-time-input]') as HTMLInputElement).value = '17:45'
+
+    const result = readChecklistScheduleControl(shell)
+    expect(result.ok).toBe(true)
+    expect(checklistDueAtToLocalInput((result as { ok: true; dueAt: string }).dueAt)).toBe('2026-08-20T17:45')
+  })
+
   it('keeps the focused schedule form outside Lexical selection ownership', () => {
     const editor = createEditor({
       namespace: 'checklist-schedule-selection',
@@ -93,9 +135,9 @@ describe('checklist due controls', () => {
     const exactSecondFoldInstant = '2026-11-01T06:30:45.123Z'
     const item = document.createElement('li')
     const shell = syncChecklistDueShell(item, exactSecondFoldInstant, false, true)
-    expect((shell.querySelector('[data-checklist-due-input]') as HTMLInputElement).value).toBe(
-      checklistDueAtToLocalInput(exactSecondFoldInstant),
-    )
+    const localParts = splitChecklistDueLocalInput(checklistDueAtToLocalInput(exactSecondFoldInstant))
+    expect((shell.querySelector('[data-checklist-due-input]') as HTMLInputElement).value).toBe(localParts.date)
+    expect((shell.querySelector('[data-checklist-due-time-input]') as HTMLInputElement).value).toBe(localParts.time)
     expect(readChecklistScheduleControl(shell, exactSecondFoldInstant)).toMatchObject({
       ok: true,
       dueAt: exactSecondFoldInstant,

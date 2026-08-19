@@ -182,7 +182,11 @@ describe('CheckListPlugin schedule root ownership', () => {
       ) as HTMLButtonElement
       act(() => firstOpen.click())
       const dueInput = firstHost.querySelector<HTMLInputElement>('[data-checklist-due-input]') as HTMLInputElement
-      dueInput.value = '2099-01-02T03:04'
+      const dueTimeInput = firstHost.querySelector<HTMLInputElement>(
+        '[data-checklist-due-time-input]',
+      ) as HTMLInputElement
+      dueInput.value = '2099-01-02'
+      dueTimeInput.value = '03:04'
       const save = firstHost.querySelector<HTMLButtonElement>(
         '[data-checklist-due-action="save-schedule"]',
       ) as HTMLButtonElement
