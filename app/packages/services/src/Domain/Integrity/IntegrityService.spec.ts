@@ -154,6 +154,89 @@ describe('IntegrityService', () => {
     )
   })
 
+  const checkEvent = () => ({
+    type: SyncEvent.SyncRequestsIntegrityCheck,
+    payload: {
+      integrityPayloads: [{ uuid: '1-2-3', updated_at_timestamp: 123 } as IntegrityPayload],
+      source: SyncSource.AfterDownloadFirst,
+    },
+  })
+
+  const mismatchesFor = (uuids: string[]) =>
+    uuids.map((uuid) => ({ uuid, updated_at_timestamp: 234 }) as IntegrityPayload)
+
+  it('should stop fetching items once a repair round reconciles nothing', async () => {
+    // The same mismatch set coming back means the previous round's fetches achieved nothing.
+    // Fetching them again cannot help, and re-arming would repeat it for the life of the tab.
+    integrityApi.checkIntegrity = jest.fn().mockReturnValue({ data: { mismatches: mismatchesFor(['a', 'b']) } })
+    itemApi.getSingleItem = jest.fn().mockImplementation((uuid: string) => ({ data: { item: { uuid } } }))
+
+    const service = createService()
+    await service.handleEvent(checkEvent())
+    expect(itemApi.getSingleItem).toHaveBeenCalledTimes(2)
+
+    await service.handleEvent(checkEvent())
+
+    expect(itemApi.getSingleItem).toHaveBeenCalledTimes(2)
+    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('not converging'))
+    expect(internalEventBus.publishSync).toHaveBeenLastCalledWith(
+      { payload: { rawPayloads: [], source: 'AfterDownloadFirst' }, type: 'IntegrityCheckCompleted' },
+      'SEQUENCE',
+    )
+  })
+
+  it('should keep repairing while the mismatch set is shrinking', async () => {
+    integrityApi.checkIntegrity = jest
+      .fn()
+      .mockReturnValueOnce({ data: { mismatches: mismatchesFor(['a', 'b', 'c']) } })
+      .mockReturnValueOnce({ data: { mismatches: mismatchesFor(['c']) } })
+    itemApi.getSingleItem = jest.fn().mockImplementation((uuid: string) => ({ data: { item: { uuid } } }))
+
+    const service = createService()
+    await service.handleEvent(checkEvent())
+    await service.handleEvent(checkEvent())
+
+    expect(itemApi.getSingleItem).toHaveBeenCalledTimes(4)
+    expect(logger.error).not.toHaveBeenCalled()
+  })
+
+  it('should resume repairing after the account comes back into sync', async () => {
+    integrityApi.checkIntegrity = jest
+      .fn()
+      .mockReturnValueOnce({ data: { mismatches: mismatchesFor(['a']) } })
+      .mockReturnValueOnce({ data: { mismatches: [] } })
+      .mockReturnValueOnce({ data: { mismatches: mismatchesFor(['a']) } })
+    itemApi.getSingleItem = jest.fn().mockImplementation((uuid: string) => ({ data: { item: { uuid } } }))
+
+    const service = createService()
+    await service.handleEvent(checkEvent())
+    await service.handleEvent(checkEvent())
+    await service.handleEvent(checkEvent())
+
+    // A clean check clears the stall memory, so a genuinely new mismatch is still repaired.
+    expect(itemApi.getSingleItem).toHaveBeenCalledTimes(2)
+  })
+
+  it('should bound how many item requests are in flight at once', async () => {
+    const uuids = Array.from({ length: 40 }, (_, index) => `uuid-${index}`)
+    integrityApi.checkIntegrity = jest.fn().mockReturnValue({ data: { mismatches: mismatchesFor(uuids) } })
+
+    let inFlight = 0
+    let peakInFlight = 0
+    itemApi.getSingleItem = jest.fn().mockImplementation(async (uuid: string) => {
+      inFlight += 1
+      peakInFlight = Math.max(peakInFlight, inFlight)
+      await Promise.resolve()
+      inFlight -= 1
+      return { data: { item: { uuid } } }
+    })
+
+    await createService().handleEvent(checkEvent())
+
+    expect(itemApi.getSingleItem).toHaveBeenCalledTimes(40)
+    expect(peakInFlight).toBeLessThanOrEqual(8)
+  })
+
   it('should not handle different event types', async () => {
     await createService().handleEvent({
       type: SyncEvent.SyncCompletedWithAllItemsUploaded,

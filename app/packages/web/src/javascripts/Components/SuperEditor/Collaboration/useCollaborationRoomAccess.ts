@@ -70,6 +70,12 @@ export type CollaborationRoomAccessState =
 const EDITOR_LEASE_TIMEOUT_MS = 10_000
 const MAX_BOOTSTRAP_REVISION_ATTEMPTS = 3
 
+/**
+ * How many times a completed sync alone may re-drive room preparation before it stands down and
+ * waits for a real change. Enough to ride out an ordinary revision race, far short of a loop.
+ */
+const MAX_SYNC_DRIVEN_PREPARATION_RETRIES = 3
+
 type CanonicalEditorSnapshot = {
   noteUuid: string
   sourceId: string
@@ -545,6 +551,17 @@ export function useCollaborationRoomAccess(
   const hasReadyAccess = useRef(false)
   const activePreparations = useRef(0)
   const canonicalEditorSnapshot = useRef<CanonicalEditorSnapshot | undefined>(undefined)
+  /**
+   * Preparation itself performs an awaited sync, so a completed sync re-triggering preparation is
+   * self-sustaining: prepare -> sync -> CompletedFullSync -> prepare. While the room cannot be
+   * established at all — a degraded relay, an unavailable transport — that never settles, and it
+   * shows up as an endless authorize/sync pair that starves the requests the editor is waiting on.
+   * The existing `activePreparations` check only prevents overlapping retries, not repeated ones.
+   *
+   * Spend a budget instead. It is refilled only by something that genuinely changes the inputs
+   * (see resetSyncDrivenRetryBudget), never by the sync that preparation itself caused.
+   */
+  const syncDrivenRetryBudget = useRef(MAX_SYNC_DRIVEN_PREPARATION_RETRIES)
 
   useLayoutEffect(() => {
     committedNote.current = { noteUuid: note.uuid, note }
@@ -553,6 +570,10 @@ export function useCollaborationRoomAccess(
   useEffect(() => {
     const invalidateActiveLease = (): void => {
       canonicalEditorSnapshot.current?.invalidate()
+    }
+    /** Something other than our own sync changed the inputs, so retrying can now succeed. */
+    const resetSyncDrivenRetryBudget = (): void => {
+      syncDrivenRetryBudget.current = MAX_SYNC_DRIVEN_PREPARATION_RETRIES
     }
     const disposeItems = application.items.streamItems(
       [ContentType.TYPES.KeySystemRootKey, ContentType.TYPES.VaultListing],
@@ -572,6 +593,7 @@ export function useCollaborationRoomAccess(
       // A mounted provider retains its Y.Doc and performs a fresh authenticated
       // reserve/activate handshake itself. Only a pre-mount preparation retries.
       if (event === WebSocketsServiceEvent.WebSocketDidOpen && !hasReadyAccess.current) {
+        resetSyncDrivenRetryBudget()
         retryPreparation()
       }
       return Promise.resolve()
@@ -579,7 +601,8 @@ export function useCollaborationRoomAccess(
     const disposeApplication = application.addEventObserver((event) => {
       if (event === ApplicationEvent.CompletedFullSync) {
         refresh()
-        if (!hasReadyAccess.current && activePreparations.current === 0) {
+        if (!hasReadyAccess.current && activePreparations.current === 0 && syncDrivenRetryBudget.current > 0) {
+          syncDrivenRetryBudget.current -= 1
           retryPreparation()
         }
         return Promise.resolve()
@@ -593,6 +616,7 @@ export function useCollaborationRoomAccess(
         event === ApplicationEvent.UnprotectedSessionExpired
       ) {
         invalidateActiveLease()
+        resetSyncDrivenRetryBudget()
         refresh()
       }
       return Promise.resolve()
@@ -629,7 +653,18 @@ export function useCollaborationRoomAccess(
 
   useLayoutEffect(() => {
     hasReadyAccess.current = readyAccessIsCommitted
+    if (readyAccessIsCommitted) {
+      syncDrivenRetryBudget.current = MAX_SYNC_DRIVEN_PREPARATION_RETRIES
+    }
   }, [readyAccessIsCommitted])
+
+  /**
+   * Keyed on the room identity alone, deliberately not on preparationRetryRevision: refilling the
+   * budget on each retry would make it unspendable and restore the loop it exists to stop.
+   */
+  useLayoutEffect(() => {
+    syncDrivenRetryBudget.current = MAX_SYNC_DRIVEN_PREPARATION_RETRIES
+  }, [noteUuid, sourceId, sourceUserUuid, sourceSessionUser])
 
   useEffect(() => {
     let cancelled = false

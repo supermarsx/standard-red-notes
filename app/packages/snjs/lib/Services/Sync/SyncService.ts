@@ -3077,15 +3077,30 @@ export class SyncService
     }
 
     const rawPayloadsFilteringResult = FilterDisallowedRemotePayloadsAndMap(rawPayloads)
+    const unusablePayloadUuids: string[] = rawPayloadsFilteringResult.disallowed.map((payload) => payload.uuid)
     const receivedPayloads = rawPayloadsFilteringResult.filtered
       .map((rawPayload) => {
         const result = CreatePayloadFromRawServerItem(rawPayload, PayloadSource.RemoteRetrieved)
         if (result.isFailed()) {
+          unusablePayloadUuids.push(rawPayload.uuid)
           return undefined
         }
         return result.getValue()
       })
       .filter(isNotUndefined)
+
+    /**
+     * An item fetched for integrity repair that cannot be turned into a payload is never applied,
+     * so the next check reports the same mismatch. Silently dropping it is what made that loop
+     * undiagnosable: unlike the ordinary sync response path, which routes disallowed payloads into
+     * the conflict map, this path had nowhere for them to go and no record that they existed.
+     */
+    if (unusablePayloadUuids.length > 0) {
+      this.logger.error(
+        `Integrity repair fetched ${unusablePayloadUuids.length} item(s) that cannot be applied locally and will ` +
+          `keep mismatching. First uuids: ${unusablePayloadUuids.slice(0, 5).join(', ')}`,
+      )
+    }
 
     const payloadSplit = CreateNonDecryptedPayloadSplit(receivedPayloads)
 
