@@ -47,7 +47,15 @@ import {
   WebAlertService,
   WebApplicationInterface,
 } from '@standardnotes/ui-services'
-import { PreferencePaneId } from '@standardnotes/services'
+import {
+  InviteRealtimeEvent,
+  InviteRealtimeEventConsumer,
+  InviteRealtimeHandlerContext,
+  InviteRealtimeInvalidationRouter,
+  InviteRealtimeRawStorageCheckpointStore,
+  InviteRealtimeSubscriptionCoordinator,
+  PreferencePaneId,
+} from '@standardnotes/services'
 import { MobileWebReceiver, NativeMobileEventListener } from '../NativeMobileWeb/MobileWebReceiver'
 import { setCustomViewportHeight } from '@/setViewportHeightWithFallback'
 import { FeatureName } from '@/Controllers/FeatureName'
@@ -104,6 +112,7 @@ import {
   SyncTicketResponse,
   WebSocketSyncTransport,
 } from '@/Services/SyncTransport/WebSocketSyncTransport'
+import { InviteRealtimeApplicationLifecycle } from './InviteRealtimeApplicationLifecycle'
 
 export type WebEventObserver = (event: WebAppEvent, data?: unknown) => void
 
@@ -152,6 +161,8 @@ export class WebApplication extends SNApplication implements WebApplicationInter
   private _proofOfWorkSolver?: WebProofOfWorkSolver
   /** Dedicated worker owning the websocket account-sync transport. */
   private _webSocketSyncTransport?: WebSocketSyncTransport
+  /** Authenticated lifecycle owner for the durable invitation/account-state stream. */
+  private _inviteRealtimeLifecycle?: InviteRealtimeApplicationLifecycle
 
   // Standard Red Notes: per-workspace cross-tab coordinator for SAVE INVALIDATION. Emits
   // the uuids this tab saves to the shared IndexedDB and, on a peer's save broadcast,
@@ -458,12 +469,118 @@ export class WebApplication extends SNApplication implements WebApplicationInter
     })
     this._webSocketSyncTransport = transport
     this.sync.setAccountSyncTransport(transport)
-    this.disposers.push(
-      this.sockets.setCollaborationAuthorizationTransport((noteUuid, leaseRequestId, bootstrapChallenge) =>
-        transport.authorizeCollaborationRoom(noteUuid, leaseRequestId, bootstrapChallenge),
-      ),
+
+    const checkpointStore = new InviteRealtimeRawStorageCheckpointStore(this.webOrDesktopDevice)
+    const invalidationRouter = new InviteRealtimeInvalidationRouter({
+      reloadSharedVaultInvites: (events, context) => this.vaultInvites.handleInviteRealtimeEvents(events, context),
+      refreshSubscriptionInvites: (events, context) => this.subscriptions.handleInviteRealtimeEvents(events, context),
+      applyAccountStateEvents: (events, context) => this.applyInviteRealtimeAccountState(events, context),
+    })
+    const consumer = new InviteRealtimeEventConsumer(checkpointStore, (events, context) =>
+      invalidationRouter.handle(events, context),
     )
-    this.disposers.push(this.sockets.onSyncTransportSessionRevoked(() => transport.notifySessionRevoked()))
+    const coordinator = new InviteRealtimeSubscriptionCoordinator(transport, consumer, {
+      reconcileSnapshot: async ({ context }) => {
+        context.assertCurrent()
+        await Promise.all([
+          this.vaultInvites.reconcileInviteRealtimeSnapshot(context),
+          this.subscriptions.reconcileInviteRealtimeSnapshot(context),
+          this.sync.sync({
+            awaitAll: true,
+            // Security-sensitive realtime recovery must not be suppressed by the
+            // optional manual-sync preference.
+            isUserInitiated: true,
+            sourceDescription: 'durable invite stream authoritative reconciliation',
+          }),
+        ])
+        context.assertCurrent()
+      },
+      onError: (error) => console.error('Durable invite stream failed; reconnecting from its checkpoint.', error),
+    })
+    const lifecycle = new InviteRealtimeApplicationLifecycle({
+      coordinator,
+      isSignedIn: () => this.sessions.isSignedIn(),
+      getSessionScope: () => this.getOpaqueAuthenticatedSyncSessionScope(),
+    })
+    this._inviteRealtimeLifecycle = lifecycle
+
+    const startInviteRealtime = async () => {
+      await lifecycle.startIfAuthenticated().catch((error) => {
+        console.error('Could not start the durable invite stream.', error)
+      })
+    }
+    this.disposers.push(this.addEventObserver(startInviteRealtime, ApplicationEvent.Launched))
+    this.disposers.push(this.addEventObserver(startInviteRealtime, ApplicationEvent.SignedIn))
+    this.disposers.push(
+      this.addEventObserver(async () => {
+        lifecycle.stop()
+      }, ApplicationEvent.SignedOut),
+    )
+    if (typeof this.sockets.setCollaborationAuthorizationTransport === 'function') {
+      this.disposers.push(
+        this.sockets.setCollaborationAuthorizationTransport(
+          (noteUuid, leaseRequestId, bootstrapChallenge, expectedRoomEpoch) =>
+            transport.authorizeCollaborationRoom(noteUuid, leaseRequestId, bootstrapChallenge, expectedRoomEpoch),
+        ),
+      )
+    }
+    if (typeof this.sockets.onSyncTransportSessionRevoked === 'function') {
+      this.disposers.push(
+        this.sockets.onSyncTransportSessionRevoked(() => {
+          lifecycle.stop()
+          transport.notifySessionRevoked()
+        }),
+      )
+    }
+    this.disposers.push(() => lifecycle.stop())
+  }
+
+  /** Apply security-sensitive membership/application invalidations before ACKing their stream cursor. */
+  private async applyInviteRealtimeAccountState(
+    events: readonly InviteRealtimeEvent[],
+    context: InviteRealtimeHandlerContext,
+  ): Promise<void> {
+    context.assertCurrent()
+    if (!this.sessions.isSignedIn()) {
+      throw new Error('Cannot reconcile account state without an authenticated session.')
+    }
+    const userUuid = this.sessions.userUuid
+    const membershipEvents = events.filter((event) => event.kind === 'shared-vault-membership')
+    const affectedSharedVaultUuids = [...new Set(membershipEvents.map((event) => event.sharedVaultUuid))]
+
+    await Promise.all(affectedSharedVaultUuids.map((uuid) => this.vaultUsers.invalidateVaultUsersCache(uuid)))
+    context.assertCurrent()
+
+    const needsSubscriptionSnapshot = events.some(
+      (event) => event.kind === 'application-state' && event.resource === 'subscriptions',
+    )
+    await Promise.all([
+      this.sync.sync({
+        awaitAll: true,
+        // Membership revocation is an authorization boundary and must bypass
+        // the user's optional suppression of background sync.
+        isUserInitiated: true,
+        sourceDescription: 'durable membership/application-state invalidation',
+      }),
+      ...(needsSubscriptionSnapshot ? [this.subscriptions.reconcileInviteRealtimeSnapshot(context)] : []),
+    ])
+
+    context.assertCurrent()
+    if (!this.sessions.isSignedIn() || this.sessions.userUuid !== userUuid) {
+      throw new Error('Authenticated session changed while reconciling account state.')
+    }
+
+    const revokedVaults = new Set(
+      membershipEvents
+        .filter((event) => event.memberUserUuid === userUuid && (event.action === 'left' || event.action === 'revoked'))
+        .map((event) => event.sharedVaultUuid),
+    )
+    const staleAuthorization = this.vaults
+      .getVaults()
+      .find((vault) => vault.isSharedVaultListing() && revokedVaults.has(vault.sharing.sharedVaultUuid))
+    if (staleAuthorization) {
+      throw new Error('Shared-vault authorization remained after a durable membership revocation.')
+    }
   }
 
   /**
@@ -536,6 +653,7 @@ export class WebApplication extends SNApplication implements WebApplicationInter
 
     this._webSocketSyncTransport?.deinit()
     this._webSocketSyncTransport = undefined
+    this._inviteRealtimeLifecycle = undefined
 
     // Standard Red Notes: close the per-workspace save coordination channel. (The keychain
     // coordinator is closed by WebDevice.deinit via removeApplication above.)

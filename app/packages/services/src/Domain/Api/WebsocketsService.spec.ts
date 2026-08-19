@@ -8,6 +8,18 @@ import { StorageKey } from '../Storage/StorageKeys'
 
 describe('webSocketsService', () => {
   const webSocketUrl = ''
+  const roomEpoch = 'room_epoch_0000000000000001'
+  const securityEpoch = 'security_epoch_0000000000000001'
+  const validGrant = {
+    epochDiscovery: false as const,
+    capability: 'capability-1',
+    room: 'note-1',
+    expiresIn: 300,
+    serverUpdatedAtTimestamp: 123,
+    collaborationProtocolVersion: 3 as const,
+    roomEpoch,
+    collaborationSecurityEpoch: securityEpoch,
+  }
 
   let storageService: StorageServiceInterface
   let webSocketApiService: WebSocketApiServiceInterface
@@ -69,82 +81,74 @@ describe('webSocketsService', () => {
       webSocketApiService.authorizeCollaboration = jest.fn().mockResolvedValue({
         status: 200,
         data: {
-          capability: 'capability-1',
-          room: 'note-1',
-          expiresIn: 300,
+          ...validGrant,
           serverUpdatedAtTimestamp: 1_723_456_789_000_000,
-          collaborationProtocolVersion: 2,
         },
       })
 
-      await expect(createService().authorizeCollaborationRoom('note-1')).resolves.toEqual({
+      await expect(
+        createService().authorizeCollaborationRoom('note-1', undefined, undefined, roomEpoch),
+      ).resolves.toEqual({
         capability: 'capability-1',
         serverUpdatedAtTimestamp: 1_723_456_789_000_000,
-        collaborationProtocolVersion: 2,
+        collaborationProtocolVersion: 3,
+        roomEpoch,
+        collaborationSecurityEpoch: securityEpoch,
       })
     })
 
     it.each([
-      [
-        'wrong room',
-        { capability: 'cap', room: 'note-2', collaborationProtocolVersion: 2, serverUpdatedAtTimestamp: 123 },
-      ],
-      ['missing revision', { capability: 'cap', room: 'note-1', collaborationProtocolVersion: 2 }],
-      [
-        'unsafe revision',
-        {
-          capability: 'cap',
-          room: 'note-1',
-          collaborationProtocolVersion: 2,
-          serverUpdatedAtTimestamp: Number.MAX_VALUE,
-        },
-      ],
-      [
-        'legacy protocol',
-        { capability: 'cap', room: 'note-1', collaborationProtocolVersion: 1, serverUpdatedAtTimestamp: 123 },
-      ],
-    ])('fails closed for %s', async (_case, data) => {
-      webSocketApiService.authorizeCollaboration = jest.fn().mockResolvedValue({ status: 200, data })
-      await expect(createService().authorizeCollaborationRoom('note-1')).resolves.toBeUndefined()
+      ['wrong room', { room: 'note-2' }],
+      ['missing revision', { serverUpdatedAtTimestamp: undefined }],
+      ['unsafe revision', { serverUpdatedAtTimestamp: Number.MAX_VALUE }],
+      ['legacy protocol', { collaborationProtocolVersion: 2 }],
+      ['discovery response', { epochDiscovery: true, capability: undefined, expiresIn: undefined }],
+      ['wrong room epoch', { roomEpoch: 'room_epoch_0000000000000002' }],
+      ['missing security epoch', { collaborationSecurityEpoch: undefined }],
+    ])('fails closed for %s', async (_case, override) => {
+      webSocketApiService.authorizeCollaboration = jest
+        .fn()
+        .mockResolvedValue({ status: 200, data: { ...validGrant, ...override } })
+      await expect(
+        createService().authorizeCollaborationRoom('note-1', undefined, undefined, roomEpoch),
+      ).resolves.toBeUndefined()
     })
 
     it('requires exact lease and bootstrap-challenge echoes', async () => {
       webSocketApiService.authorizeCollaboration = jest.fn().mockResolvedValue({
         status: 200,
         data: {
-          capability: 'capability-1',
-          room: 'note-1',
-          expiresIn: 300,
-          serverUpdatedAtTimestamp: 123,
-          collaborationProtocolVersion: 2,
+          ...validGrant,
           leaseRequestId: 'lease-1',
           bootstrapChallenge: 'different-challenge',
         },
       })
 
       await expect(
-        createService().authorizeCollaborationRoom('note-1', 'lease-1', 'challenge-1'),
+        createService().authorizeCollaborationRoom('note-1', 'lease-1', 'challenge-1', roomEpoch),
       ).resolves.toBeUndefined()
-      expect(webSocketApiService.authorizeCollaboration).toHaveBeenCalledWith('note-1', 'lease-1', 'challenge-1')
+      expect(webSocketApiService.authorizeCollaboration).toHaveBeenCalledWith(
+        'note-1',
+        'lease-1',
+        'challenge-1',
+        roomEpoch,
+      )
     })
 
     it('coalesces and caches valid socket authorizations without issuing an HTTP request', async () => {
       webSocketApiService.authorizeCollaboration = jest.fn()
       const socketAuthorize = jest.fn().mockResolvedValue({
+        ...validGrant,
         capability: 'socket-capability',
-        room: 'note-1',
-        expiresIn: 300,
-        serverUpdatedAtTimestamp: 123,
-        collaborationProtocolVersion: 2,
       })
       const service = createService()
       service.setCollaborationAuthorizationTransport(socketAuthorize)
 
       const [first, second] = await Promise.all([
-        service.authorizeCollaborationRoom('note-1'),
-        service.authorizeCollaborationRoom('note-1'),
+        service.authorizeCollaborationRoom('note-1', undefined, undefined, roomEpoch),
+        service.authorizeCollaborationRoom('note-1', undefined, undefined, roomEpoch),
       ])
-      const cached = await service.authorizeCollaborationRoom('note-1')
+      const cached = await service.authorizeCollaborationRoom('note-1', undefined, undefined, roomEpoch)
 
       expect(first).toEqual(second)
       expect(cached).toEqual(first)
@@ -152,13 +156,150 @@ describe('webSocketsService', () => {
       expect(webSocketApiService.authorizeCollaboration).not.toHaveBeenCalled()
     })
 
+    // The socket transport used to be invoked with three arguments, dropping the
+    // caller's epoch pin. That left the worker's pre-grant abort -- it denies during
+    // epoch discovery when the room has rotated -- unreachable from production, so a
+    // rotated room was only caught afterwards by the echoed-epoch check below.
+    it('forwards the caller epoch pin to the socket transport', async () => {
+      webSocketApiService.authorizeCollaboration = jest.fn()
+      const socketAuthorize = jest
+        .fn()
+        .mockResolvedValue({ ...validGrant, leaseRequestId: 'lease-1', bootstrapChallenge: 'challenge-1' })
+      const service = createService()
+      service.setCollaborationAuthorizationTransport(socketAuthorize)
+
+      await expect(
+        service.authorizeCollaborationRoom('note-1', 'lease-1', 'challenge-1', roomEpoch),
+      ).resolves.toMatchObject({ capability: 'capability-1', roomEpoch })
+
+      expect(socketAuthorize).toHaveBeenCalledWith('note-1', 'lease-1', 'challenge-1', roomEpoch)
+      expect(webSocketApiService.authorizeCollaboration).not.toHaveBeenCalled()
+    })
+
+    it('still rejects a socket grant echoing an epoch other than the pin', async () => {
+      webSocketApiService.authorizeCollaboration = jest.fn()
+      webSocketApiService.discoverCollaborationRoomEpoch = jest.fn()
+      const socketAuthorize = jest
+        .fn()
+        .mockResolvedValue({ ...validGrant, roomEpoch: 'room_epoch_0000000000000002' })
+      const service = createService()
+      service.setCollaborationAuthorizationTransport(socketAuthorize)
+
+      await expect(
+        service.authorizeCollaborationRoom('note-1', undefined, undefined, roomEpoch),
+      ).resolves.toBeUndefined()
+      expect(socketAuthorize).toHaveBeenCalledWith('note-1', undefined, undefined, roomEpoch)
+    })
+
     it('treats an explicit socket denial as final and does not retry it over HTTP', async () => {
       webSocketApiService.authorizeCollaboration = jest.fn()
       const service = createService()
       service.setCollaborationAuthorizationTransport(jest.fn().mockResolvedValue(null))
 
-      await expect(service.authorizeCollaborationRoom('note-1')).resolves.toBeUndefined()
+      await expect(
+        service.authorizeCollaborationRoom('note-1', undefined, undefined, roomEpoch),
+      ).resolves.toBeUndefined()
       expect(webSocketApiService.authorizeCollaboration).not.toHaveBeenCalled()
+    })
+
+    it('accepts only the final exact-epoch grant from the socket transport', async () => {
+      webSocketApiService.authorizeCollaboration = jest.fn()
+      webSocketApiService.discoverCollaborationRoomEpoch = jest.fn()
+      const socketAuthorize = jest.fn().mockResolvedValue(validGrant)
+      const service = createService()
+      service.setCollaborationAuthorizationTransport(socketAuthorize)
+
+      await expect(service.authorizeCollaborationRoom('note-1')).resolves.toEqual({
+        capability: 'capability-1',
+        serverUpdatedAtTimestamp: 123,
+        collaborationProtocolVersion: 3,
+        roomEpoch,
+        collaborationSecurityEpoch: securityEpoch,
+      })
+
+      expect(socketAuthorize).toHaveBeenCalledWith('note-1', undefined, undefined, undefined)
+      expect(webSocketApiService.discoverCollaborationRoomEpoch).not.toHaveBeenCalled()
+      expect(webSocketApiService.authorizeCollaboration).not.toHaveBeenCalled()
+    })
+
+    it('performs discovery before the exact-epoch HTTP grant when no socket transport handles it', async () => {
+      webSocketApiService.discoverCollaborationRoomEpoch = jest.fn().mockResolvedValue({
+        status: 200,
+        data: {
+          epochDiscovery: true,
+          room: 'note-1',
+          serverUpdatedAtTimestamp: 123,
+          collaborationProtocolVersion: 3,
+          roomEpoch,
+          collaborationSecurityEpoch: securityEpoch,
+        },
+      })
+      webSocketApiService.authorizeCollaboration = jest.fn().mockResolvedValue({ status: 200, data: validGrant })
+
+      await expect(createService().authorizeCollaborationRoom('note-1')).resolves.toEqual({
+        capability: 'capability-1',
+        serverUpdatedAtTimestamp: 123,
+        collaborationProtocolVersion: 3,
+        roomEpoch,
+        collaborationSecurityEpoch: securityEpoch,
+      })
+
+      expect(webSocketApiService.discoverCollaborationRoomEpoch).toHaveBeenCalledWith('note-1')
+      expect(webSocketApiService.authorizeCollaboration).toHaveBeenCalledWith('note-1', undefined, undefined, roomEpoch)
+    })
+
+    it('fails closed before transport for a malformed explicitly requested epoch', async () => {
+      webSocketApiService.authorizeCollaboration = jest.fn()
+      webSocketApiService.discoverCollaborationRoomEpoch = jest.fn()
+      const socketAuthorize = jest.fn()
+      const service = createService()
+      service.setCollaborationAuthorizationTransport(socketAuthorize)
+
+      await expect(
+        service.authorizeCollaborationRoom('note-1', undefined, undefined, 'invalid epoch'),
+      ).resolves.toBeUndefined()
+
+      expect(socketAuthorize).not.toHaveBeenCalled()
+      expect(webSocketApiService.discoverCollaborationRoomEpoch).not.toHaveBeenCalled()
+      expect(webSocketApiService.authorizeCollaboration).not.toHaveBeenCalled()
+    })
+
+    it('discovers an epoch without accepting a capability or expiresIn', async () => {
+      const socketAuthorize = jest.fn()
+      webSocketApiService.discoverCollaborationRoomEpoch = jest.fn().mockResolvedValue({
+        status: 200,
+        data: {
+          epochDiscovery: true,
+          room: 'note-1',
+          serverUpdatedAtTimestamp: 123,
+          collaborationProtocolVersion: 3,
+          roomEpoch,
+          collaborationSecurityEpoch: securityEpoch,
+        },
+      })
+
+      const service = createService()
+      service.setCollaborationAuthorizationTransport(socketAuthorize)
+      await expect(service.discoverCollaborationRoomEpoch('note-1')).resolves.toEqual({
+        room: 'note-1',
+        serverUpdatedAtTimestamp: 123,
+        collaborationProtocolVersion: 3,
+        roomEpoch,
+        collaborationSecurityEpoch: securityEpoch,
+      })
+      expect(socketAuthorize).not.toHaveBeenCalled()
+    })
+
+    it('rejects a discovery response that contains join capability material', async () => {
+      webSocketApiService.discoverCollaborationRoomEpoch = jest.fn().mockResolvedValue({
+        status: 200,
+        data: {
+          ...validGrant,
+          epochDiscovery: true,
+        },
+      })
+
+      await expect(createService().discoverCollaborationRoomEpoch('note-1')).resolves.toBeUndefined()
     })
   })
 
@@ -292,7 +433,7 @@ describe('webSocketsService', () => {
         room: 'note-1',
         stateRequestId: 'state-request-1',
         leaseRequestId: 'lease-1',
-        protocolVersion: 2,
+        protocolVersion: 3,
       }
       const { run } = pumpRaw(service, JSON.stringify(frame))
 

@@ -297,19 +297,13 @@ export async function prepareCollaborationAccess(
   let roomKey: CryptoKey
   let authorization: unknown
   try {
-    const authorizeEpochBound = application.sockets.authorizeCollaborationRoom as unknown as (
-      noteUuid: string,
-      leaseRequestId?: string,
-      bootstrapChallenge?: string,
-      expectedRoomEpoch?: string,
-    ) => Promise<unknown>
     ;[roomKey, authorization] = await Promise.all([
       deriveCollaborationRoomKey({
         rootKeySecret: before.rootKeySecret,
         keyScope: before.keyScope,
         noteUuid: before.noteUuid,
       }),
-      authorizeEpochBound(
+      application.sockets.authorizeCollaborationRoom(
         before.noteUuid,
         authorizationContext?.leaseRequestId,
         authorizationContext?.bootstrapChallenge,

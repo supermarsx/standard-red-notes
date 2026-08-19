@@ -3,13 +3,6 @@ import { WebSocketsServiceEvent } from '@standardnotes/snjs'
 import { COLLABORATION_PROTOCOL_VERSION, type CollabChannel, type CollabFrame } from './CollabChannel'
 import { isValidCollaborationRoomEpoch } from './RoomCrypto'
 
-type EpochBoundAuthorizer = (
-  room: string,
-  leaseRequestId: string | undefined,
-  bootstrapChallenge: string | undefined,
-  expectedRoomEpoch: string,
-) => Promise<unknown>
-
 /**
  * Backs a CollabChannel with the app's existing authenticated gateway socket
  * (WebSocketsService). Reuses the single live connection rather than opening a
@@ -46,9 +39,10 @@ export function createGatewayCollabChannel(application: WebApplication): CollabC
         return undefined
       }
       // Protected shared seam: the central WebSocketsService/worker transport
-      // adds this fourth argument and validates the echoed epoch before this
-      // client adapter can adopt the capability.
-      const authorization = await (application.sockets.authorizeCollaborationRoom as unknown as EpochBoundAuthorizer)(
+      // carries this fourth argument down to epoch discovery, which aborts before
+      // any grant when the room has rotated, and validates the echoed epoch before
+      // this client adapter can adopt the capability.
+      const authorization = await application.sockets.authorizeCollaborationRoom(
         room,
         leaseRequestId,
         bootstrapChallenge,

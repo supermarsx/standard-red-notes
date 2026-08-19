@@ -22,7 +22,8 @@ export type CollaborationFrame =
       cap: string
       requestId: string
       role: 'editor'
-      protocolVersion: 2
+      protocolVersion: 3
+      expectedRoomEpoch: string
     }
   | {
       t: 'room-join'
@@ -30,17 +31,49 @@ export type CollaborationFrame =
       cap?: string
       requestId?: string
       role?: 'editor' | 'comment'
-      protocolVersion?: 2
+      protocolVersion?: 3
+      expectedRoomEpoch?: string
     }
   | { t: 'room-leave'; room: string; requestId?: string }
+  | {
+      t: 'room-presence-heartbeat'
+      room: string
+      requestId: string
+      expectedRoomEpoch: string
+      protocolVersion: 3
+      clientId: number
+    }
+  | {
+      t: 'room-presence'
+      room: string
+      roomEpoch: string
+      protocolVersion: 3
+      action: 'joined'
+      presenceId: string
+      userUuid: string
+      clientId: number
+      ttlMilliseconds: number
+    }
+  | {
+      t: 'room-presence'
+      room: string
+      roomEpoch: string
+      protocolVersion: 3
+      action: 'left'
+      presenceId: string
+      userUuid?: string
+      clientId?: number
+      reason: 'clean-leave' | 'disconnect' | 'heartbeat-timeout' | 'revoked'
+    }
   | {
       t: 'room-reserved'
       room: string
       requestId: string
       bootstrap: boolean
       bootstrapChallenge?: string
-      protocolVersion: 2
+      protocolVersion: 3
       maxTransferBytes: number
+      roomEpoch: string
     }
   | {
       t: 'room-joined'
@@ -49,6 +82,7 @@ export type CollaborationFrame =
       bootstrap?: boolean
       protocolVersion?: number
       maxTransferBytes?: number
+      roomEpoch?: string
     }
   | { t: 'room-sync'; room: string }
   | { t: 'yjs'; room: string; payload: string; transferId?: string; stateRequestId?: string }
@@ -69,12 +103,12 @@ export type CollaborationFrame =
       room: string
       stateRequestId: string
       leaseRequestId: string
-      protocolVersion: 2
+      protocolVersion: 3
     }
-  | { t: 'yjs-accepted'; room: string; transferId: string; protocolVersion: 2 }
+  | { t: 'yjs-accepted'; room: string; transferId: string; protocolVersion: 3 }
   | { t: 'awareness'; room: string; payload: string }
   // Gateway -> client: the join was refused (no/invalid capability or no access).
-  | { t: 'room-denied'; room: string; requestId?: string }
+  | { t: 'room-denied'; room: string; requestId?: string; roomEpoch?: string }
   // Standard Red Notes: an end-to-end-encrypted note-comment event. `payload` is
   // a base64(iv ‖ ciphertext) blob encrypted with the same per-room key as the
   // yjs frames, so the gateway never sees comment text. Used to push new/edited
@@ -86,6 +120,8 @@ const COLLABORATION_FRAME_TYPES = new Set([
   'room-reserve',
   'room-reserved',
   'room-leave',
+  'room-presence-heartbeat',
+  'room-presence',
   'room-joined',
   'room-sync',
   'yjs',
@@ -117,22 +153,35 @@ export interface SyncItemsPushedData {
 export type CollaborationRoomAuthorization = {
   capability: string
   serverUpdatedAtTimestamp: number
-  collaborationProtocolVersion: 2
+  collaborationProtocolVersion: 3
+  roomEpoch: string
+  collaborationSecurityEpoch: string
   leaseRequestId?: string
   bootstrapChallenge?: string
 }
 
+export type CollaborationRoomEpochDiscovery = {
+  room: string
+  serverUpdatedAtTimestamp: number
+  collaborationProtocolVersion: 3
+  roomEpoch: string
+  collaborationSecurityEpoch: string
+}
+
+/**
+ * `expectedRoomEpoch` pins the request to an epoch the caller already holds. The
+ * worker aborts during epoch discovery when the discovered epoch differs, before
+ * any grant is issued. Omitting it is what left that pre-grant abort unreachable
+ * from production, so pass it whenever the caller has an epoch to bind to; the
+ * echoed-epoch check in `normalizeCollaborationAuthorization` still backs it up.
+ */
 export type CollaborationRoomAuthorizationTransport = (
   noteUuid: string,
   leaseRequestId?: string,
   bootstrapChallenge?: string,
+  expectedRoomEpoch?: string,
 ) => Promise<
-  | (CollaborationRoomAuthorization & {
-      room: string
-      expiresIn: number
-    })
-  | null
-  | undefined
+  (CollaborationRoomAuthorization & { epochDiscovery: false; room: string; expiresIn: number }) | null | undefined
 >
 
 export class WebSocketsService extends AbstractService<
@@ -438,8 +487,17 @@ export class WebSocketsService extends AbstractService<
     noteUuid: string,
     leaseRequestId?: string,
     bootstrapChallenge?: string,
+    expectedRoomEpoch?: string,
   ): Promise<CollaborationRoomAuthorization | undefined> {
-    const key = JSON.stringify([noteUuid, leaseRequestId ?? null, bootstrapChallenge ?? null])
+    if (expectedRoomEpoch !== undefined && !isValidCollaborationEpoch(expectedRoomEpoch)) {
+      return undefined
+    }
+    const key = JSON.stringify([
+      noteUuid,
+      leaseRequestId ?? null,
+      bootstrapChallenge ?? null,
+      expectedRoomEpoch ?? null,
+    ])
     const cached = this.collaborationAuthorizationCache.get(key)
     if (cached && cached.expiresAt > Date.now() + 5_000) {
       return cached.authorization
@@ -450,7 +508,12 @@ export class WebSocketsService extends AbstractService<
       return inFlight
     }
 
-    const request = this.requestCollaborationAuthorization(noteUuid, leaseRequestId, bootstrapChallenge)
+    const request = this.requestCollaborationAuthorization(
+      noteUuid,
+      leaseRequestId,
+      bootstrapChallenge,
+      expectedRoomEpoch,
+    )
       .then((result) => {
         if (!result) {
           return undefined
@@ -461,10 +524,7 @@ export class WebSocketsService extends AbstractService<
         })
         return result.authorization
       })
-      .catch((error) => {
-        console.error('Failed to authorize collaboration room:', (error as Error).message)
-        return undefined
-      })
+      .catch(() => undefined)
       .finally(() => this.collaborationAuthorizationRequests.delete(key))
     this.collaborationAuthorizationRequests.set(key, request)
     return request
@@ -474,8 +534,17 @@ export class WebSocketsService extends AbstractService<
     noteUuid: string,
     leaseRequestId?: string,
     bootstrapChallenge?: string,
+    expectedRoomEpoch?: string,
   ): Promise<{ authorization: CollaborationRoomAuthorization; expiresIn: number } | undefined> {
-    const socketResult = await this.collaborationAuthorizationTransport?.(noteUuid, leaseRequestId, bootstrapChallenge)
+    if (expectedRoomEpoch !== undefined && !isValidCollaborationEpoch(expectedRoomEpoch)) {
+      return undefined
+    }
+    const socketResult = await this.collaborationAuthorizationTransport?.(
+      noteUuid,
+      leaseRequestId,
+      bootstrapChallenge,
+      expectedRoomEpoch,
+    )
     if (socketResult === null) {
       return undefined
     }
@@ -484,15 +553,43 @@ export class WebSocketsService extends AbstractService<
       noteUuid,
       leaseRequestId,
       bootstrapChallenge,
+      expectedRoomEpoch,
     )
     if (socketAuthorization) {
       return socketAuthorization
     }
 
-    const response = await this.webSocketApiService.authorizeCollaboration(noteUuid, leaseRequestId, bootstrapChallenge)
+    let exactRoomEpoch = expectedRoomEpoch
+    if (!isValidCollaborationEpoch(exactRoomEpoch)) {
+      const discoveryResponse = await this.webSocketApiService.discoverCollaborationRoomEpoch(noteUuid)
+      if (isErrorResponse(discoveryResponse)) {
+        return undefined
+      }
+      const discovery = normalizeCollaborationEpochDiscovery(discoveryResponse.data, noteUuid)
+      if (!discovery) {
+        return undefined
+      }
+      exactRoomEpoch = discovery.roomEpoch
+    }
+
+    const response = await this.webSocketApiService.authorizeCollaboration(
+      noteUuid,
+      leaseRequestId,
+      bootstrapChallenge,
+      exactRoomEpoch,
+    )
     return isErrorResponse(response)
       ? undefined
-      : normalizeCollaborationAuthorization(response.data, noteUuid, leaseRequestId, bootstrapChallenge)
+      : normalizeCollaborationAuthorization(response.data, noteUuid, leaseRequestId, bootstrapChallenge, exactRoomEpoch)
+  }
+
+  async discoverCollaborationRoomEpoch(noteUuid: string): Promise<CollaborationRoomEpochDiscovery | undefined> {
+    try {
+      const response = await this.webSocketApiService.discoverCollaborationRoomEpoch(noteUuid)
+      return isErrorResponse(response) ? undefined : normalizeCollaborationEpochDiscovery(response.data, noteUuid)
+    } catch {
+      return undefined
+    }
   }
 
   /** Subscribe to inbound collaboration frames. Returns an unsubscribe fn. */
@@ -629,6 +726,7 @@ function normalizeCollaborationAuthorization(
   noteUuid: string,
   leaseRequestId?: string,
   bootstrapChallenge?: string,
+  expectedRoomEpoch?: string,
 ): { authorization: CollaborationRoomAuthorization; expiresIn: number } | undefined {
   const candidate = value as
     | {
@@ -637,6 +735,9 @@ function normalizeCollaborationAuthorization(
         expiresIn?: unknown
         serverUpdatedAtTimestamp?: unknown
         collaborationProtocolVersion?: unknown
+        epochDiscovery?: unknown
+        roomEpoch?: unknown
+        collaborationSecurityEpoch?: unknown
         leaseRequestId?: unknown
         bootstrapChallenge?: unknown
       }
@@ -645,7 +746,11 @@ function normalizeCollaborationAuthorization(
     typeof candidate?.capability !== 'string' ||
     candidate.capability.length === 0 ||
     candidate.room !== noteUuid ||
-    candidate.collaborationProtocolVersion !== 2 ||
+    candidate.epochDiscovery !== false ||
+    candidate.collaborationProtocolVersion !== 3 ||
+    !isValidCollaborationEpoch(candidate.roomEpoch) ||
+    (expectedRoomEpoch !== undefined && candidate.roomEpoch !== expectedRoomEpoch) ||
+    !isValidCollaborationEpoch(candidate.collaborationSecurityEpoch) ||
     candidate.leaseRequestId !== leaseRequestId ||
     candidate.bootstrapChallenge !== bootstrapChallenge ||
     !Number.isSafeInteger(candidate.serverUpdatedAtTimestamp) ||
@@ -659,10 +764,54 @@ function normalizeCollaborationAuthorization(
     authorization: {
       capability: candidate.capability,
       serverUpdatedAtTimestamp: Number(candidate.serverUpdatedAtTimestamp),
-      collaborationProtocolVersion: 2,
+      collaborationProtocolVersion: 3,
+      roomEpoch: candidate.roomEpoch,
+      collaborationSecurityEpoch: candidate.collaborationSecurityEpoch,
       ...(leaseRequestId ? { leaseRequestId } : {}),
       ...(bootstrapChallenge ? { bootstrapChallenge } : {}),
     },
     expiresIn: Number(candidate.expiresIn),
   }
+}
+
+function normalizeCollaborationEpochDiscovery(
+  value: unknown,
+  noteUuid: string,
+): CollaborationRoomEpochDiscovery | undefined {
+  const candidate = value as
+    | {
+        epochDiscovery?: unknown
+        capability?: unknown
+        expiresIn?: unknown
+        room?: unknown
+        roomEpoch?: unknown
+        collaborationSecurityEpoch?: unknown
+        serverUpdatedAtTimestamp?: unknown
+        collaborationProtocolVersion?: unknown
+      }
+    | undefined
+  if (
+    candidate?.epochDiscovery !== true ||
+    candidate.capability !== undefined ||
+    candidate.expiresIn !== undefined ||
+    candidate.room !== noteUuid ||
+    candidate.collaborationProtocolVersion !== 3 ||
+    !isValidCollaborationEpoch(candidate.roomEpoch) ||
+    !isValidCollaborationEpoch(candidate.collaborationSecurityEpoch) ||
+    !Number.isSafeInteger(candidate.serverUpdatedAtTimestamp) ||
+    Number(candidate.serverUpdatedAtTimestamp) <= 0
+  ) {
+    return undefined
+  }
+  return {
+    room: noteUuid,
+    serverUpdatedAtTimestamp: Number(candidate.serverUpdatedAtTimestamp),
+    collaborationProtocolVersion: 3,
+    roomEpoch: candidate.roomEpoch,
+    collaborationSecurityEpoch: candidate.collaborationSecurityEpoch,
+  }
+}
+
+function isValidCollaborationEpoch(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{16,128}$/.test(value)
 }
