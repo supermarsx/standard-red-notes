@@ -301,6 +301,18 @@ describe('versioned route controllers', () => {
       'ActionsController.serverMetadata (/meta)',
       'AssistantController.transcriptionModelList (/transcription/models)',
       'PluginsController.component (/component/{*splat})',
+      // Static websocket-sync feature discovery. The handler ignores the request
+      // entirely and answers from `SyncWebSocketAccessService.capabilities()`,
+      // which returns only the fixed `{ id, version, endpoint }` protocol
+      // descriptor — or `[]` while sync is disabled. Nothing user-, vault- or
+      // subscription-specific can reach the response, so the only thing it
+      // discloses is whether this deployment currently offers ws-sync, the same
+      // class of server fact as `/meta`. It has to stay open because the client
+      // negotiates the transport before it holds a session, and because the
+      // home-server and websocket-gateway topologies serve the same path
+      // unauthenticated. Everything that grants access is on `/ticket`, which is
+      // guarded by the cross-service token middleware.
+      'SyncWebSocketController.capabilities (/capabilities)',
       // Offline (subscription-token) activation flow, which has no session.
       'OfflineController.createOfflineSubscriptionToken (/subscription-tokens)',
       'OfflineController.createStripeSetupIntent (/payments/stripe-setup-intent)',

@@ -11,6 +11,14 @@ import {
 
 @controller('/v1/sockets/sync')
 export class SyncWebSocketController extends BaseHttpController {
+  /**
+   * Deliberately unauthenticated: clients negotiate the sync transport before
+   * they hold a session, and the payload is the static protocol descriptor
+   * (`id`/`version`/`endpoint`), empty while sync is unavailable. Never return
+   * anything derived from the request or from a user, vault or subscription
+   * here — the allowlist in `Controller/RouteDispatch.spec.ts` pins this route
+   * as public on exactly that basis. Access itself is granted by `/ticket`.
+   */
   @httpGet('/capabilities')
   capabilities(_request: Request, response: Response): void {
     response.status(200).send(syncWebSocketAccessService.capabilities())
