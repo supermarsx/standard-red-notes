@@ -4,9 +4,13 @@ import Popover from '../Popover/Popover'
 import {
   activeTodoFilterCount,
   DEFAULT_TODO_FILTERS,
+  DUE_FILTER_LABEL,
+  SOURCE_FILTER_LABEL,
   todoTagLabel,
+  type TodoDueFilter,
   type TodoFilters,
   type TodoSortKey,
+  type TodoSourceFilter,
   type TodoTag,
 } from './todoFilters'
 
@@ -224,9 +228,11 @@ export default function TodoFilterBar({
             patch({ source })
           }}
         >
-          <option value="all">All sources</option>
-          <option value="super">Super checklists</option>
-          <option value="advanced-checklist">Advanced Checklist</option>
+          {(Object.keys(SOURCE_FILTER_LABEL) as TodoSourceFilter[]).map((source) => (
+            <option key={source} value={source}>
+              {SOURCE_FILTER_LABEL[source]}
+            </option>
+          ))}
         </select>
 
         <select
@@ -238,11 +244,11 @@ export default function TodoFilterBar({
             patch({ due })
           }}
         >
-          <option value="all">Any due date</option>
-          <option value="overdue">Overdue</option>
-          <option value="due-soon">Due within 24h</option>
-          <option value="scheduled">Scheduled</option>
-          <option value="unscheduled">No due date</option>
+          {(Object.keys(DUE_FILTER_LABEL) as TodoDueFilter[]).map((due) => (
+            <option key={due} value={due}>
+              {DUE_FILTER_LABEL[due]}
+            </option>
+          ))}
         </select>
 
         <label className="text-passive-1 flex items-center gap-1.5 text-sm">

@@ -90,6 +90,60 @@
   }
 
   // ---------------------------------------------------------------------------
+  // Aggregate views (Todos) print a projection of the rows they are showing, not
+  // a clone of the screen. These rules only have to make that projection legible
+  // on paper: state the scope, keep nesting readable, and keep a completed item
+  // distinguishable by more than its (already textual) ☒ marker.
+  // ---------------------------------------------------------------------------
+  #srn-print-body .srn-print-todo-summary {
+    border-bottom: 1px solid #ccc !important;
+    color: #333 !important;
+    font-size: 0.85rem;
+    margin: 0 0 0.75rem;
+    padding-bottom: 0.4rem;
+  }
+
+  #srn-print-body .srn-print-todo-list {
+    list-style: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  #srn-print-body .srn-print-todo {
+    break-inside: avoid !important;
+    color: #000 !important;
+    line-height: 1.45;
+    list-style: none !important;
+    margin-block: 0.15rem;
+    padding: 0 !important;
+    page-break-inside: avoid !important;
+  }
+
+  // Completed rows stay readable but unmistakably done, so the printed list is
+  // not a page of items that all look outstanding.
+  #srn-print-body .srn-print-todo--done .srn-print-todo-text {
+    text-decoration: line-through !important;
+  }
+
+  // A row present only because a descendant matched the filters. Its meta text
+  // says so in words; this is only the visual echo of that.
+  #srn-print-body .srn-print-todo--context {
+    color: #555 !important;
+    font-style: italic;
+  }
+
+  #srn-print-body .srn-print-todo-meta,
+  #srn-print-body .srn-print-todo-level {
+    color: #555 !important;
+    font-size: 0.8em;
+  }
+
+  #srn-print-body .srn-print-todo-empty {
+    color: #555 !important;
+    font-style: italic;
+  }
+
+  // ---------------------------------------------------------------------------
   // Force a clean, legible light surface regardless of the active (possibly
   // dark) theme, and reset the page geometry so the note can flow full-width.
   // ---------------------------------------------------------------------------

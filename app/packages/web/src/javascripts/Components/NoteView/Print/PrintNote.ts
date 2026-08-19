@@ -3,6 +3,7 @@ import { SuperEditorContentId } from '@/Components/SuperEditor/Constants'
 import { applyPrintLayout, PRINT_BODY_ID, removePrintLayout } from '@/Components/SuperEditor/Layout/applyPrintLayout'
 import { getPrintableDataTable } from '@/Components/SuperEditor/Lexical/Nodes/PrintableDataTableRegistry'
 import { getPrintableCalendar } from '@/Components/SuperEditor/Lexical/Nodes/PrintableCalendarRegistry'
+import { hasPrintableView, resolvePrintableView } from './PrintableViewRegistry'
 import {
   ContentType,
   DecryptedPayloadInterface,
@@ -46,6 +47,8 @@ type PrintBodySource =
   | { kind: 'plain'; element: HTMLInputElement | HTMLTextAreaElement }
   | { kind: 'markdown-preview'; element: HTMLElement }
   | { kind: 'fallback'; text: string }
+  /** A non-note view's own projection of what it is showing; already detached. */
+  | { kind: 'view'; element: HTMLElement }
 
 export type ActiveNotePrintSupport =
   { supported: true; source: PrintBodySource['kind'] } | { supported: false; reason: string }
@@ -498,6 +501,19 @@ export function sanitizePrintBody(body: HTMLElement, sourceBody?: HTMLElement): 
 function resolvePrintSource(targetDocument: Document, options: PrintNoteOptions): ResolvedPrintSource | undefined {
   const title = targetDocument.getElementById(ElementIds.NoteTitleEditor)
   const liveTitle = title instanceof HTMLInputElement ? title : undefined
+
+  // A view tab takes over the content area instead of the note editor, so when
+  // one is on screen there is no note to print and printing must show what the
+  // user is actually looking at. Two guards keep this narrow: an open editor
+  // still wins, and so does an explicitly requested note — the notes list's own
+  // Print action names a uuid, and it must keep printing that note even while a
+  // view tab happens to be the active content.
+  if (!liveTitle && !options.noteUuid) {
+    const view = resolvePrintableView()
+    if (view) {
+      return { titleText: view.title, body: { kind: 'view', element: view.body } }
+    }
+  }
   const liveNoteUuid = liveTitle?.getAttribute(PRINT_NOTE_UUID_ATTRIBUTE) ?? undefined
   const requestedNoteIsActive = !options.noteUuid || options.noteUuid === liveNoteUuid
 
@@ -551,7 +567,7 @@ export function getActiveNotePrintSupport(
 
   const title = targetDocument.getElementById(ElementIds.NoteTitleEditor)
   if (!(title instanceof HTMLInputElement)) {
-    return { supported: false, reason: 'Open a note before printing.' }
+    return { supported: false, reason: 'Open a note or a printable view before printing.' }
   }
   if (options.noteUuid && title.getAttribute(PRINT_NOTE_UUID_ATTRIBUTE) !== options.noteUuid) {
     return { supported: false, reason: 'This note needs a complete persisted title and body before it can print.' }
@@ -560,6 +576,13 @@ export function getActiveNotePrintSupport(
 }
 
 function cloneCurrentBody(targetDocument: Document, source: PrintBodySource): HTMLElement {
+  if (source.kind === 'view') {
+    // Already detached and built from the view's own data, so there is nothing
+    // to clone — but it goes through the same sanitizer, so the one exclusion
+    // contract covers a view's output as well as a note's.
+    return sanitizePrintBody(source.element)
+  }
+
   if (source.kind === 'super') {
     const clone = source.element.cloneNode(true) as HTMLElement
     copyLiveControlState(source.element, clone)
@@ -769,7 +792,9 @@ export function installNativeNotePrinting(
   const handlePrintShortcut = (event: KeyboardEvent) => {
     const isPrintShortcut =
       event.key.toLowerCase() === 'p' && (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey
-    if (!isPrintShortcut || !document.getElementById(ElementIds.NoteTitleEditor)) {
+    // A printable view tab is a valid print target too, and while one is on
+    // screen there is no note title element to recognize the app by.
+    if (!isPrintShortcut || !(document.getElementById(ElementIds.NoteTitleEditor) || hasPrintableView())) {
       return
     }
 

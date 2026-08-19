@@ -48,6 +48,8 @@ import {
   type ChecklistRecurrenceUnit,
 } from '../SuperEditor/Checklist/checklistRecurrence'
 import { canDisplayTodoNote, canMutateSuperChecklistNote, collectAuthorizedTodoGroups } from './todoAuthorization'
+import { buildTodoPrintBody, TODO_PRINT_TITLE } from './todoPrintProjection'
+import { registerPrintableView, unregisterPrintableView } from '../NoteView/Print/PrintableViewRegistry'
 import { createChecklistTodoId } from '../SuperEditor/Lexical/Nodes/ChecklistItemNode'
 import {
   revokeChecklistMutationBridge,
@@ -471,6 +473,20 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
   const ownerWaits = useRef(new Set<AbortController>())
   const ownerRef = useRef<TodoChecklistEditorOwnerState | undefined>(getTodoChecklistEditorOwner(application))
   const ownerIdleTimeout = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  // The print registry is element-keyed, so this view needs its own handle on
+  // the root node while still honouring whatever ref its parent passed.
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  const setRootRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      rootRef.current = node
+      if (typeof ref === 'function') {
+        ref(node)
+      } else if (ref) {
+        ref.current = node
+      }
+    },
+    [ref],
+  )
 
   if (lifetimeRef.current.application !== application) {
     lifetimeRef.current = {
@@ -1402,10 +1418,28 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
     onRowActivate: (row) => openNote(row.group.note.uuid),
   })
 
+  // Printing resolves its target from the note editor, which this view replaces,
+  // so it used to refuse with "Open a note before printing". Register a
+  // projection of the rows currently being rendered — the filtered, sorted set,
+  // not the whole data — so what prints is what is on screen. Re-registered
+  // whenever that set changes, and dropped on unmount so a closed Todos tab can
+  // never decide what a later print produces.
+  useEffect(() => {
+    const root = rootRef.current
+    if (!root) {
+      return
+    }
+    registerPrintableView(root, () => ({
+      title: TODO_PRINT_TITLE,
+      body: buildTodoPrintBody({ rows: visibleRows, filters, tagOptions, totalCount: rows.length, now }),
+    }))
+    return () => unregisterPrintableView(root)
+  }, [filters, now, rows.length, tagOptions, visibleRows])
+
   return (
     <div
       id={id}
-      ref={ref}
+      ref={setRootRef}
       className={classNames(className, 'border-border bg-default flex h-full flex-col overflow-hidden border-l')}
     >
       <div className="border-border bg-contrast flex items-center justify-between border-b px-4 py-3">

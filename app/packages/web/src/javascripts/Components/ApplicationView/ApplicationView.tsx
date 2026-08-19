@@ -79,6 +79,7 @@ import {
   installNativeNotePrinting,
   PRINT_NOTE_UUID_ATTRIBUTE,
 } from '../NoteView/Print/PrintNote'
+import { hasPrintableView } from '../NoteView/Print/PrintableViewRegistry'
 
 type Props = {
   application: WebApplication
@@ -247,6 +248,12 @@ const ApplicationView: FunctionComponent<Props> = ({ application, mainApplicatio
       installNativeNotePrinting(
         () => {
           const title = document.querySelector<HTMLInputElement>(`[${PRINT_NOTE_UUID_ATTRIBUTE}]`)
+          // A view tab (Todos, …) takes the content area over from the editor,
+          // so the note still held by the controller is NOT what is on screen.
+          // Naming it here would print it instead of the view being looked at.
+          if (!title && hasPrintableView()) {
+            return {}
+          }
           const noteUuid =
             title?.getAttribute(PRINT_NOTE_UUID_ATTRIBUTE) ??
             application.itemListController.activeControllerItem?.uuid ??

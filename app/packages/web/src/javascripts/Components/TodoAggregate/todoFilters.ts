@@ -44,6 +44,25 @@ export type TodoSourceFilter = 'all' | 'super' | 'advanced-checklist'
 
 export type TodoSortKey = 'due' | 'todo' | 'note' | 'status'
 
+/**
+ * The words the filter bar puts on each choice. They live here, not in the bar,
+ * because the printed page states which filters are active and must name them
+ * with the SAME words the user picked — two label lists would drift silently.
+ */
+export const SOURCE_FILTER_LABEL: Record<TodoSourceFilter, string> = {
+  all: 'All sources',
+  super: 'Super checklists',
+  'advanced-checklist': 'Advanced Checklist',
+}
+
+export const DUE_FILTER_LABEL: Record<TodoDueFilter, string> = {
+  all: 'Any due date',
+  overdue: 'Overdue',
+  'due-soon': 'Due within 24h',
+  scheduled: 'Scheduled',
+  unscheduled: 'No due date',
+}
+
 export const CURRENT_TODO_FILTERS_VERSION = 1
 
 /**
