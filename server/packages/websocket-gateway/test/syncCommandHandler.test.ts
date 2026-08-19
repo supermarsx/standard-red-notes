@@ -226,6 +226,23 @@ function inviteAckFrame(sequence: number, cursor: string): JsonObject {
   }
 }
 
+const optionalString = (value: unknown): string | undefined => (typeof value === 'string' ? value : undefined)
+
+// FakeSocket records frames as JsonObject (Record<string, unknown>), so `.payload` is
+// unknown. Narrow it by checking, not asserting: a frame that never arrived or that
+// carries a non-object payload fails here with a readable message instead of a
+// downstream `undefined is not an object`.
+const isJsonObject = (value: unknown): value is JsonObject =>
+  value !== null && typeof value === 'object' && !Array.isArray(value)
+
+function payloadOf(frame: JsonObject | undefined): JsonObject {
+  const payload = frame?.payload
+  if (!isJsonObject(payload)) {
+    throw new Error(`expected a frame with an object payload, got ${JSON.stringify(frame)}`)
+  }
+  return payload
+}
+
 function enqueue(handler: SyncCommandHandler, frame: JsonObject): void {
   const raw = rawFrame(frame)
   handler.enqueue(raw, Buffer.byteLength(raw))
@@ -881,29 +898,33 @@ describe('SyncCommandHandler', () => {
   it('discovers an opaque epoch without a capability, then grants once for the exact one-use challenge', async () => {
     const roomEpoch = 'room_epoch_00000001'
     const securityEpoch = 'security_epoch_0001'
-    const authorizeCollaboration = vi.fn(
-      async ({ request }: Parameters<SyncCollaborationAuthorizationAdapter['authorizeCollaboration']>[0]) =>
+    const authorizeCollaboration = vi.fn<SyncCollaborationAuthorizationAdapter['authorizeCollaboration']>(
+      async ({ request }) =>
         request.epochDiscovery === true
           ? {
-              authorized: true as const,
-              epochDiscovery: true as const,
+              authorized: true,
+              epochDiscovery: true,
               room: request.noteUuid,
               serverUpdatedAtTimestamp: 123,
-              collaborationProtocolVersion: 3 as const,
+              collaborationProtocolVersion: 3,
               roomEpoch,
               collaborationSecurityEpoch: securityEpoch,
             }
           : {
-              authorized: true as const,
+              authorized: true,
               capability: 'collaboration-capability',
               room: request.noteUuid,
               expiresIn: 300,
               serverUpdatedAtTimestamp: 123,
-              collaborationProtocolVersion: 3 as const,
+              collaborationProtocolVersion: 3,
               roomEpoch,
               collaborationSecurityEpoch: securityEpoch,
-              leaseRequestId: request.leaseRequestId,
-              bootstrapChallenge: request.bootstrapChallenge,
+              // SyncCollaborationAuthorizationPayload is `JsonObject & (union)`, so an
+              // unnarrowed read lands on the index signature and yields unknown.
+              // Narrow at runtime rather than assert: a string still echoes back
+              // unchanged, which is what this test asserts on the granted frame.
+              leaseRequestId: optionalString(request.leaseRequestId),
+              bootstrapChallenge: optionalString(request.bootstrapChallenge),
             },
     )
     const collaborationAuthorization: SyncCollaborationAuthorizationAdapter = {
@@ -941,8 +962,8 @@ describe('SyncCommandHandler', () => {
       noteUuid: 'note-1',
       collaborationProtocolVersion: 3,
       expectedRoomEpoch: roomEpoch,
-      epochDiscoveryChallenge: discovery.payload.epochDiscoveryChallenge,
-      epochDiscoveryRequestId: discovery.payload.epochDiscoveryRequestId,
+      epochDiscoveryChallenge: payloadOf(discovery).epochDiscoveryChallenge,
+      epochDiscoveryRequestId: payloadOf(discovery).epochDiscoveryRequestId,
       leaseRequestId: 'lease-1',
       bootstrapChallenge: 'challenge-1',
     }
@@ -996,7 +1017,7 @@ describe('SyncCommandHandler', () => {
       noteUuid: 'note-1',
       collaborationProtocolVersion: 3,
       expectedRoomEpoch: 'room_epoch_00000001',
-      epochDiscoveryRequestId: discovery.payload.epochDiscoveryRequestId,
+      epochDiscoveryRequestId: payloadOf(discovery).epochDiscoveryRequestId,
       epochDiscoveryChallenge: 'wrong_challenge_abcdefghijklmnopqrstuvwxyz',
     }
 
@@ -1006,7 +1027,7 @@ describe('SyncCommandHandler', () => {
       handler,
       collaborationAuthorizationFrame(3, {
         ...grant,
-        epochDiscoveryChallenge: discovery.payload.epochDiscoveryChallenge,
+        epochDiscoveryChallenge: payloadOf(discovery).epochDiscoveryChallenge,
       }),
     )
     await vi.waitFor(() => expect(socket.frames.filter((frame) => frame.type === 'ERROR')).toHaveLength(2))
@@ -1040,8 +1061,8 @@ describe('SyncCommandHandler', () => {
           noteUuid: 'note-1',
           collaborationProtocolVersion: 3,
           expectedRoomEpoch: 'room_epoch_00000001',
-          epochDiscoveryRequestId: discovery.payload.epochDiscoveryRequestId,
-          epochDiscoveryChallenge: discovery.payload.epochDiscoveryChallenge,
+          epochDiscoveryRequestId: payloadOf(discovery).epochDiscoveryRequestId,
+          epochDiscoveryChallenge: payloadOf(discovery).epochDiscoveryChallenge,
         }),
       )
       await vi.waitFor(() =>
@@ -1166,38 +1187,60 @@ describe('SyncCommandHandler', () => {
     }, FRAME_WAIT)
   }
 
-  // KNOWN DEFECT — escalated, not fixed here: the fix belongs in
-  // src/syncCommandHandler.ts, which this executor does not own.
-  //
-  // handleCollaborationAuthorization mints the one-use challenge as
-  // `randomBytes(32).toString('base64url')`, but every identifier carried by a
-  // sync envelope must match IDENTIFIER_PATTERN in src/syncProtocol.ts, whose
-  // FIRST character must be alphanumeric. A base64url string begins with `-` or
-  // `_` 2/64 = 3.1% of the time, so roughly one collaboration handshake in
-  // thirty-two cannot be completed: the client faithfully echoes the challenge
-  // the server gave it, parseSyncClientFrame throws INVALID_ENVELOPE, and
-  // failAndClose() tears down the WHOLE sync socket with close code 1008 —
-  // taking sync, files and invite streams down with it, not just collaboration.
-  // It fails closed (no unauthorized grant), so this is availability, not
-  // authorization.
-  //
-  // `it.fails` captures the defect without leaving the suite red. When the
-  // minter starts emitting an identifier-safe challenge this test goes red and
-  // the `.fails` inversion must be removed.
-  it.fails('mints an epoch-discovery challenge the client can actually present', () => {
-    // Exactly what randomBytes produces when the first six random bits are set.
-    const challengeAsMinted = Buffer.alloc(32, 0xfc).toString('base64url')
-    expect(challengeAsMinted.startsWith('_')).toBe(true)
-    expect(SYNC_IDENTIFIER_PATTERN.test(challengeAsMinted)).toBe(true)
-
-    const grant = collaborationAuthorizationFrame(1, {
+  /** Protocol error code the wire parser rejects a challenge echo with, if any. */
+  function echoRejectionCode(challenge: string): string | undefined {
+    const frame = collaborationAuthorizationFrame(1, {
       noteUuid: 'note-1',
       collaborationProtocolVersion: 3,
       expectedRoomEpoch: collaborationEpochs.roomEpoch,
-      epochDiscoveryChallenge: challengeAsMinted,
+      epochDiscoveryChallenge: challenge,
       epochDiscoveryRequestId: 'collaboration-request-1',
     })
-    expect(() => parseSyncClientFrame(rawFrame(grant))).not.toThrow()
+    try {
+      parseSyncClientFrame(rawFrame(frame))
+      return undefined
+    } catch (error) {
+      return (error as { code?: string }).code
+    }
+  }
+
+  // REGRESSION. The one-use challenge is minted by the server and echoed back
+  // verbatim by the client, so it must satisfy IDENTIFIER_PATTERN in
+  // src/syncProtocol.ts, whose FIRST character must be alphanumeric.
+  //
+  // It was minted as `randomBytes(32).toString('base64url')`, which leads with
+  // `-` or `_` 2/64 = 3.125% of the time. Those challenges could never be
+  // presented: the echo failed envelope validation and failAndClose() tore down
+  // the WHOLE sync socket with close code 1008, taking sync, files and invite
+  // streams with it — not just the collaboration request. It failed closed (no
+  // unauthorized grant), so the defect was availability, not authorization.
+  it('mints an epoch-discovery challenge the client can actually present', { timeout: 30_000 }, async () => {
+    // The trap, pinned deterministically: these are exactly the bytes
+    // randomBytes yields when the first six random bits are set.
+    const unpresentable = Buffer.alloc(32, 0xfc).toString('base64url')
+    expect(unpresentable.startsWith('_')).toBe(true)
+    expect(SYNC_IDENTIFIER_PATTERN.test(unpresentable)).toBe(false)
+    expect(echoRejectionCode(unpresentable)).toBe('INVALID_ENVELOPE')
+
+    // The same bytes under the encoding the minter now uses.
+    const presentable = Buffer.alloc(32, 0xfc).toString('hex')
+    expect(SYNC_IDENTIFIER_PATTERN.test(presentable)).toBe(true)
+    expect(echoRejectionCode(presentable)).toBeUndefined()
+
+    // And end to end against the real minter: whatever the handler hands out
+    // must survive the envelope check on the way back in. `discover()` already
+    // asserts the pattern; this pins the actual round trip.
+    const { adapter } = twoPhaseCollaborationAdapter()
+    const { handler, socket } = await authenticatedHandler({ collaborationAuthorization: adapter })
+    try {
+      for (let attempt = 1; attempt <= 8; attempt += 1) {
+        const { epochDiscoveryChallenge } = await discover(handler, socket, attempt)
+        expect(epochDiscoveryChallenge).toMatch(/^[0-9a-f]{64}$/)
+        expect(echoRejectionCode(epochDiscoveryChallenge)).toBeUndefined()
+      }
+    } finally {
+      handler.disconnect()
+    }
   })
 
   it(
@@ -1579,21 +1622,29 @@ describe('SyncCommandHandler', () => {
       {
         adapter: {
           collaborationAuthorizationReady: () => true,
-          authorizeCollaboration: vi.fn(async () => ({ authorized: false })),
+          authorizeCollaboration: vi.fn<SyncCollaborationAuthorizationAdapter['authorizeCollaboration']>(async () => ({
+            authorized: false,
+          })),
         },
         expectedCode: 'NOT_AUTHORIZED',
       },
       {
         adapter: {
           collaborationAuthorizationReady: () => true,
-          authorizeCollaboration: vi.fn(async () => ({
-            authorized: true,
-            capability: 'capability',
-            room: 'wrong-note',
-            expiresIn: 300,
-            serverUpdatedAtTimestamp: 123,
-            collaborationProtocolVersion: 2,
-          })),
+          // Another misbehaving adapter, like malformedResults below: the wrong room
+          // and a v2 protocol version are outside the result union on purpose, and the
+          // handler must answer BACKEND_ERROR rather than trust them.
+          authorizeCollaboration: vi.fn(
+            async () =>
+              ({
+                authorized: true,
+                capability: 'capability',
+                room: 'wrong-note',
+                expiresIn: 300,
+                serverUpdatedAtTimestamp: 123,
+                collaborationProtocolVersion: 2,
+              }) as never,
+          ),
         },
         expectedCode: 'BACKEND_ERROR',
       },
@@ -1635,7 +1686,9 @@ describe('SyncCommandHandler', () => {
     const metrics: SyncCommandMetrics = { increment: vi.fn() }
     const collaborationAuthorization: SyncCollaborationAuthorizationAdapter = {
       collaborationAuthorizationReady: () => true,
-      authorizeCollaboration: vi.fn(() => new Promise(() => undefined)),
+      authorizeCollaboration: vi.fn<SyncCollaborationAuthorizationAdapter['authorizeCollaboration']>(
+        () => new Promise(() => undefined),
+      ),
     }
     const active = await authenticatedHandler({
       collaborationAuthorization,
@@ -1882,7 +1935,7 @@ describe('SyncCommandHandler', () => {
       idempotencyScope: 'shared-durable',
       ready: () => true,
       operations: () => ['API_RPC'],
-      execute: vi.fn(
+      execute: vi.fn<SyncApiRpcAdapter['execute']>(
         (_input, signal) =>
           new Promise((resolve, reject) => {
             releases.push(() => resolve({ status: 200, body: { ok: true } }))
@@ -2017,9 +2070,9 @@ describe('SyncCommandHandler', () => {
         )
       }
     }
-    const safeHeaders = socket.frames.find(
-      (frame) => frame.type === 'RPC_RESPONSE' && frame.requestId === 'rpc-shape-5',
-    )?.payload.headers
+    const safeHeaders = payloadOf(
+      socket.frames.find((frame) => frame.type === 'RPC_RESPONSE' && frame.requestId === 'rpc-shape-5'),
+    ).headers
     expect(safeHeaders).toEqual({ 'x-request-id': 'safe' })
     handler.disconnect()
   })
@@ -2135,7 +2188,10 @@ describe('SyncCommandHandler', () => {
     const backend = committingBackend()
     const authorization: SyncLiveAuthorizationAdapter = {
       ready: () => true,
-      authorize: vi.fn(async () => ({ authorized: false, code: 'SESSION_REVOKED' })),
+      authorize: vi.fn<SyncLiveAuthorizationAdapter['authorize']>(async () => ({
+        authorized: false,
+        code: 'SESSION_REVOKED',
+      })),
     }
     const { handler, socket } = await authenticatedHandler({ authorization, backend })
     enqueue(handler, commandFrame('revoked-command', 1))
@@ -2208,7 +2264,10 @@ describe('SyncCommandHandler', () => {
     const digest = 'a'.repeat(64)
     const deniedAuthorization: SyncLiveAuthorizationAdapter = {
       ready: () => true,
-      authorize: vi.fn(async () => ({ authorized: false, code: 'SESSION_REVOKED' })),
+      authorize: vi.fn<SyncLiveAuthorizationAdapter['authorize']>(async () => ({
+        authorized: false,
+        code: 'SESSION_REVOKED',
+      })),
     }
     const denied = await authenticatedHandler({ authorization: deniedAuthorization })
     enqueue(denied.handler, statusFrame('status-denied', 1, digest))
@@ -2218,7 +2277,7 @@ describe('SyncCommandHandler', () => {
     const conflictingBackend: SyncCommandBackendAdapter = {
       ready: () => true,
       execute: vi.fn(async (input) => ({ digest: input.digest })),
-      status: vi.fn(async () => ({ status: 'COMMITTED', digest: 'b'.repeat(64) })),
+      status: vi.fn<SyncCommandBackendAdapter['status']>(async () => ({ status: 'COMMITTED', digest: 'b'.repeat(64) })),
     }
     const conflicting = await authenticatedHandler({ backend: conflictingBackend })
     enqueue(conflicting.handler, statusFrame('status-conflict', 1, digest))
@@ -2254,7 +2313,10 @@ describe('SyncCommandHandler', () => {
         await gate
         return { digest: input.digest }
       }),
-      status: vi.fn(async (input) => ({ status: 'UNKNOWN', digest: input.digest })),
+      status: vi.fn<SyncCommandBackendAdapter['status']>(async (input) => ({
+        status: 'UNKNOWN',
+        digest: input.digest,
+      })),
     }
     const first = await authenticatedHandler({ tickets, leases, backend })
     const second = await authenticatedHandler({ tickets, leases, backend })
@@ -2275,13 +2337,16 @@ describe('SyncCommandHandler', () => {
     const releaseLease = vi.fn<() => void>()
     const backend: SyncCommandBackendAdapter = {
       ready: () => true,
-      execute: vi.fn(
+      execute: vi.fn<SyncCommandBackendAdapter['execute']>(
         async (input) =>
           new Promise((resolve) => {
             releaseLease.mockImplementation(() => resolve({ digest: input.digest }))
           }),
       ),
-      status: vi.fn(async (input) => ({ status: 'UNKNOWN', digest: input.digest })),
+      status: vi.fn<SyncCommandBackendAdapter['status']>(async (input) => ({
+        status: 'UNKNOWN',
+        digest: input.digest,
+      })),
     }
     const active = await authenticatedHandler({ leases, backend, leaseRenewIntervalMs: 5 })
     enqueue(active.handler, commandFrame('renewed-command', 1))
@@ -2306,19 +2371,25 @@ describe('SyncCommandHandler', () => {
     const leases: SyncCommandLeaseRegistry = {
       distribution: 'shared',
       ready: () => true,
-      acquire: (input, signal) => backing.acquire(input, signal),
+      // InMemorySyncCommandLeaseRegistry declares acquire/release as (input) only,
+      // so the signal cannot be forwarded. It was being dropped on the floor before
+      // too — the impl has no second parameter — so this is the same call, typed.
+      acquire: (input) => backing.acquire(input),
       renew: vi.fn(async () => false),
-      release: (input, signal) => backing.release(input, signal),
+      release: (input) => backing.release(input),
     }
     const backend: SyncCommandBackendAdapter = {
       ready: () => true,
-      execute: vi.fn(
+      execute: vi.fn<SyncCommandBackendAdapter['execute']>(
         async (_input, signal) =>
           new Promise((_resolve, reject) =>
             signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true }),
           ),
       ),
-      status: vi.fn(async (input) => ({ status: 'UNKNOWN', digest: input.digest })),
+      status: vi.fn<SyncCommandBackendAdapter['status']>(async (input) => ({
+        status: 'UNKNOWN',
+        digest: input.digest,
+      })),
     }
     const active = await authenticatedHandler({ leases, backend, leaseRenewIntervalMs: 5 })
     enqueue(active.handler, commandFrame('lost-command', 1))
@@ -2332,8 +2403,11 @@ describe('SyncCommandHandler', () => {
   it('times out an unresponsive backend, returns a retryable error, and releases the lease', async () => {
     const backend: SyncCommandBackendAdapter = {
       ready: () => true,
-      execute: vi.fn(() => new Promise(() => undefined)),
-      status: vi.fn(async (input) => ({ status: 'UNKNOWN', digest: input.digest })),
+      execute: vi.fn<SyncCommandBackendAdapter['execute']>(() => new Promise(() => undefined)),
+      status: vi.fn<SyncCommandBackendAdapter['status']>(async (input) => ({
+        status: 'UNKNOWN',
+        digest: input.digest,
+      })),
     }
     const leases = new InMemorySyncCommandLeaseRegistry()
     const { handler, socket } = await authenticatedHandler({ backend, leases, backendTimeoutMs: 5 })
@@ -2355,7 +2429,10 @@ describe('SyncCommandHandler', () => {
     const conflictingBackend: SyncCommandBackendAdapter = {
       ready: () => true,
       execute: vi.fn(async () => ({ digest: 'b'.repeat(64) })),
-      status: vi.fn(async (input) => ({ status: 'UNKNOWN', digest: input.digest })),
+      status: vi.fn<SyncCommandBackendAdapter['status']>(async (input) => ({
+        status: 'UNKNOWN',
+        digest: input.digest,
+      })),
     }
     const conflict = await authenticatedHandler({ backend: conflictingBackend })
     enqueue(conflict.handler, commandFrame('command-conflict', 1))
@@ -2365,7 +2442,10 @@ describe('SyncCommandHandler', () => {
     const noResultBackend: SyncCommandBackendAdapter = {
       ready: () => true,
       execute: vi.fn(async (input) => ({ digest: input.digest })),
-      status: vi.fn(async (input) => ({ status: 'UNKNOWN', digest: input.digest })),
+      status: vi.fn<SyncCommandBackendAdapter['status']>(async (input) => ({
+        status: 'UNKNOWN',
+        digest: input.digest,
+      })),
     }
     const noResult = await authenticatedHandler({ backend: noResultBackend })
     enqueue(noResult.handler, commandFrame('command-no-result', 1))
@@ -2388,7 +2468,10 @@ describe('SyncCommandHandler', () => {
     const backend: SyncCommandBackendAdapter = {
       ready: () => true,
       execute: vi.fn(async (input) => ({ digest: input.digest, payload: { huge: 'x'.repeat(MAX_SYNC_FRAME_BYTES) } })),
-      status: vi.fn(async (input) => ({ status: 'UNKNOWN', digest: input.digest })),
+      status: vi.fn<SyncCommandBackendAdapter['status']>(async (input) => ({
+        status: 'UNKNOWN',
+        digest: input.digest,
+      })),
     }
     const { handler, socket } = await authenticatedHandler({ backend })
     enqueue(handler, commandFrame('large-result', 1))
