@@ -516,6 +516,76 @@ export function advanceChecklistDueAt(
   return result.getUTCFullYear() >= 1970 && result.getUTCFullYear() <= MAX_YEAR ? result.toISOString() : undefined
 }
 
+export type ChecklistPropagatedSchedule = {
+  dueAt: string
+  recurrence: ChecklistRecurrence
+}
+
+/**
+ * Resolve the schedule a nested task should carry once its recurring ancestor
+ * rolls forward to `parentNextDueAt`.
+ *
+ * A descendant keeps a recurrence rule it already owns; only a descendant with
+ * no rule of its own adopts the ancestor's, anchored on its own deadline when
+ * it has one so a deliberately chosen time of day survives. Returning
+ * `undefined` means "leave this task exactly as it is": every branch that
+ * cannot be resolved with certainty fails closed rather than guessing at user
+ * data.
+ *
+ * The result is idempotent. Propagation only ever moves a descendant that is
+ * still due before the ancestor's new occurrence, so re-running it against the
+ * same occurrence is a no-op and repeated rolls cannot compound.
+ */
+export function propagatedChecklistDescendantSchedule(
+  parentNextDueAt: string,
+  parentRecurrence: ChecklistRecurrence,
+  descendant: { dueAt?: string; recurrence?: ChecklistRecurrence },
+  completedAt = Date.now(),
+): ChecklistPropagatedSchedule | undefined {
+  const nextDueAt = normalizeChecklistDueAt(parentNextDueAt)
+  const parentRule = normalizeChecklistRecurrence(parentRecurrence)
+  const target = nextDueAt ? Date.parse(nextDueAt) : Number.NaN
+  if (!nextDueAt || !parentRule || !Number.isFinite(target) || !Number.isFinite(completedAt)) {
+    return undefined
+  }
+
+  const inheritedChoice = checklistRecurrenceChoice(parentRule)
+  if (!inheritedChoice) {
+    return undefined
+  }
+  const inherit = (anchoredOn: string): ChecklistRecurrence | undefined =>
+    createChecklistRecurrence(inheritedChoice, anchoredOn, parentRule.anchor.timeZone)
+
+  const descendantDueAt = normalizeChecklistDueAt(descendant.dueAt)
+  if (!descendantDueAt) {
+    // An unscheduled subtask becomes due with the occurrence it belongs to.
+    const inherited = inherit(nextDueAt)
+    return inherited ? { dueAt: nextDueAt, recurrence: inherited } : undefined
+  }
+
+  const own = normalizeChecklistRecurrence(descendant.recurrence)
+  const rule = own ?? inherit(descendantDueAt)
+  if (!rule) {
+    return undefined
+  }
+
+  const descendantTimestamp = Date.parse(descendantDueAt)
+  if (!Number.isFinite(descendantTimestamp)) {
+    return undefined
+  }
+  if (descendantTimestamp >= target) {
+    // Already due at or after the new occurrence: only a missing rule is added.
+    return own ? undefined : { dueAt: descendantDueAt, recurrence: rule }
+  }
+
+  // The first occurrence of the descendant's own cadence that lands at or after
+  // the ancestor's new deadline. `advanceChecklistDueAt` returns the first
+  // occurrence strictly after its threshold, so the threshold is one
+  // millisecond before the ancestor's occurrence.
+  const advanced = advanceChecklistDueAt(descendantDueAt, rule, target - 1)
+  return advanced ? { dueAt: advanced, recurrence: rule } : undefined
+}
+
 export function checklistRecurrenceChoice(value: ChecklistRecurrence): ChecklistRecurrenceChoice | undefined {
   const rule = normalizeChecklistRecurrence(value)
   if (!rule) {

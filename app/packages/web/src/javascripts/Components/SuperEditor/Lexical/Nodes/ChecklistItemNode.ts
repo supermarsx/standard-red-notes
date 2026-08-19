@@ -4,6 +4,7 @@ import { normalizeChecklistDueAt } from '../../Checklist/checklistDueDate'
 import {
   checklistRecurrencesEqual,
   normalizeChecklistRecurrence,
+  propagatedChecklistDescendantSchedule,
   type ChecklistRecurrence,
 } from '../../Checklist/checklistRecurrence'
 
@@ -266,6 +267,124 @@ export function $isChecklistItemNode(node: LexicalNode | null | undefined): node
   // receive aggregate identity or deadline controls. Empty leaf rows remain
   // task items so metadata can be assigned as soon as the user types.
   return children.length === 0 || children.some((child) => !$isListNode(child))
+}
+
+/** Matches the persisted parser's bounds so live and saved traversals agree. */
+export const CHECKLIST_MAX_NESTING_DEPTH = 128
+export const CHECKLIST_MAX_DESCENDANT_NODES = 50_000
+
+/**
+ * Every nested task beneath `item`, in document order.
+ *
+ * The walk is iterative and bounded: nesting reaches 128 levels in the parser,
+ * and a recursive descent over a document that deep has already been shown to
+ * exhaust the stack elsewhere in this editor.
+ */
+export function $getChecklistDescendantItems(
+  item: ListItemNode,
+  maxDepth = CHECKLIST_MAX_NESTING_DEPTH,
+): ListItemNode[] {
+  const descendants: ListItemNode[] = []
+  const visited = new Set<string>([item.getKey()])
+  const stack: Array<{ node: LexicalNode; depth: number }> = []
+
+  const pushNestedLists = (parent: ListItemNode, depth: number): void => {
+    if (depth > maxDepth) {
+      return
+    }
+    const children = parent.getChildren()
+    for (let index = children.length - 1; index >= 0; index -= 1) {
+      const child = children[index]
+      if ($isListNode(child)) {
+        stack.push({ node: child, depth })
+      }
+    }
+  }
+
+  pushNestedLists(item, 1)
+  let budget = CHECKLIST_MAX_DESCENDANT_NODES
+  while (stack.length > 0 && budget > 0) {
+    budget -= 1
+    const current = stack.pop()
+    if (!current || current.depth > maxDepth || visited.has(current.node.getKey())) {
+      continue
+    }
+    visited.add(current.node.getKey())
+    if ($isListNode(current.node)) {
+      const rows = current.node.getChildren()
+      for (let index = rows.length - 1; index >= 0; index -= 1) {
+        stack.push({ node: rows[index], depth: current.depth })
+      }
+      continue
+    }
+    if (!$isListItemNode(current.node)) {
+      continue
+    }
+    const row = current.node
+    if ($isChecklistItemNode(row)) {
+      descendants.push(row)
+    }
+    // Indentation wrappers hold no task of their own but still carry the
+    // nested list underneath them, so both kinds of row are descended.
+    pushNestedLists(row, current.depth + 1)
+  }
+  return descendants
+}
+
+/**
+ * Reproduce a recurring task's subtasks for the occurrence it just rolled
+ * forward to: each nested task reopens and moves onto the new cycle.
+ *
+ * Every descendant is resolved against the ancestor's single new occurrence
+ * rather than rolled level by level, so a grandchild advances exactly once.
+ * Schedules are resolved for the whole subtree before any of them is written,
+ * and the caller's `editor.update` makes the result one atomic step: a subtree
+ * is never left half advanced, and undo restores all of it at once.
+ */
+export function $propagateChecklistRecurrenceToDescendants(
+  item: ListItemNode,
+  nextDueAt: unknown,
+  recurrence: unknown,
+  completedAt = Date.now(),
+  maxDepth = CHECKLIST_MAX_NESTING_DEPTH,
+): number {
+  const dueAt = normalizeChecklistDueAt(nextDueAt)
+  const rule = normalizeChecklistRecurrence(recurrence)
+  if (!dueAt || !rule) {
+    return 0
+  }
+
+  const descendants = $getChecklistDescendantItems(item, maxDepth)
+  const resolved = descendants.map((descendant) => ({
+    descendant,
+    schedule: propagatedChecklistDescendantSchedule(
+      dueAt,
+      rule,
+      { dueAt: $getChecklistDueAt(descendant), recurrence: $getChecklistRecurrence(descendant) },
+      completedAt,
+    ),
+  }))
+
+  let changed = 0
+  for (const { descendant, schedule } of resolved) {
+    let touched = false
+    if (descendant.getChecked()) {
+      descendant.setChecked(false)
+      touched = true
+    }
+    if (
+      schedule &&
+      ($getChecklistDueAt(descendant) !== schedule.dueAt ||
+        !checklistRecurrencesEqual($getChecklistRecurrence(descendant), schedule.recurrence))
+    ) {
+      $setChecklistSchedule(descendant, schedule.dueAt, schedule.recurrence)
+      touched = true
+    }
+    if (touched) {
+      changed += 1
+    }
+  }
+  return changed
 }
 
 /** Label projection shared with the persisted parser: nested lists are tasks of their own. */
