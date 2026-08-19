@@ -16,6 +16,9 @@ import { UseCaseInterface } from '../UseCaseInterface'
 import { AcceptSharedSubscriptionInvitationDTO } from './AcceptSharedSubscriptionInvitationDTO'
 import { AcceptSharedSubscriptionInvitationResponse } from './AcceptSharedSubscriptionInvitationResponse'
 import { ApplyDefaultSubscriptionSettings } from '../ApplyDefaultSubscriptionSettings/ApplyDefaultSubscriptionSettings'
+import { AuthInviteMutationTransactionRunner } from '../../Invite/AuthInviteMutationTransactionRunner'
+import { AuthInviteRealtimeOutboxProducer } from '../../Invite/AuthInviteRealtimeOutboxProducer'
+import { AuthInviteAffectedUserResolver } from '../../Invite/AuthInviteAffectedUserResolver'
 
 export class AcceptSharedSubscriptionInvitation implements UseCaseInterface {
   constructor(
@@ -26,9 +29,24 @@ export class AcceptSharedSubscriptionInvitation implements UseCaseInterface {
     private applyDefaultSubscriptionSettings: ApplyDefaultSubscriptionSettings,
     private timer: TimerInterface,
     private logger: Logger,
+    private inviteMutationTransactionRunner?: AuthInviteMutationTransactionRunner,
+    private inviteRealtimeOutboxProducer?: AuthInviteRealtimeOutboxProducer,
+    private inviteAffectedUserResolver?: AuthInviteAffectedUserResolver,
   ) {}
 
   async execute(dto: AcceptSharedSubscriptionInvitationDTO): Promise<AcceptSharedSubscriptionInvitationResponse> {
+    if (this.inviteMutationTransactionRunner) {
+      return this.inviteMutationTransactionRunner.execute(
+        () => this.executeMutation(dto),
+        (result) => result.success,
+      )
+    }
+    return this.executeMutation(dto)
+  }
+
+  private async executeMutation(
+    dto: AcceptSharedSubscriptionInvitationDTO,
+  ): Promise<AcceptSharedSubscriptionInvitationResponse> {
     const sharedSubscriptionInvitation = await this.sharedSubscriptionInvitationRepository.findOneByUuidAndStatus(
       dto.sharedSubscriptionInvitationUuid,
       InvitationStatus.Sent,
@@ -96,6 +114,16 @@ export class AcceptSharedSubscriptionInvitation implements UseCaseInterface {
     if (result.isFailed()) {
       this.logger.error(`Could not apply default subscription settings for user with uuid ${invitee.uuid}`)
     }
+
+    const affectedUserUuids = await this.inviteAffectedUserResolver?.resolve(
+      [invitee.uuid, inviterUserSubscription.userUuid],
+      [sharedSubscriptionInvitation.inviterIdentifier, sharedSubscriptionInvitation.inviteeIdentifier],
+    )
+    await this.inviteRealtimeOutboxProducer?.recordSubscriptionInvite({
+      action: 'accepted',
+      inviteUuid: sharedSubscriptionInvitation.uuid,
+      affectedUserUuids: affectedUserUuids ?? [invitee.uuid, inviterUserSubscription.userUuid],
+    })
 
     return {
       success: true,

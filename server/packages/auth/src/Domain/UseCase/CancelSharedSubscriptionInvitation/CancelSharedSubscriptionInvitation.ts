@@ -19,6 +19,9 @@ import { UseCaseInterface } from '../UseCaseInterface'
 
 import { CancelSharedSubscriptionInvitationDTO } from './CancelSharedSubscriptionInvitationDTO'
 import { CancelSharedSubscriptionInvitationResponse } from './CancelSharedSubscriptionInvitationResponse'
+import { AuthInviteMutationTransactionRunner } from '../../Invite/AuthInviteMutationTransactionRunner'
+import { AuthInviteRealtimeOutboxProducer } from '../../Invite/AuthInviteRealtimeOutboxProducer'
+import { AuthInviteAffectedUserResolver } from '../../Invite/AuthInviteAffectedUserResolver'
 
 @injectable()
 export class CancelSharedSubscriptionInvitation implements UseCaseInterface {
@@ -33,9 +36,24 @@ export class CancelSharedSubscriptionInvitation implements UseCaseInterface {
     @inject(TYPES.Auth_DomainEventFactory) private domainEventFactory: DomainEventFactoryInterface,
     @inject(TYPES.Auth_Timer) private timer: TimerInterface,
     @inject(TYPES.Auth_Logger) private logger: Logger,
+    private inviteMutationTransactionRunner?: AuthInviteMutationTransactionRunner,
+    private inviteRealtimeOutboxProducer?: AuthInviteRealtimeOutboxProducer,
+    private inviteAffectedUserResolver?: AuthInviteAffectedUserResolver,
   ) {}
 
   async execute(dto: CancelSharedSubscriptionInvitationDTO): Promise<CancelSharedSubscriptionInvitationResponse> {
+    if (this.inviteMutationTransactionRunner) {
+      return this.inviteMutationTransactionRunner.execute(
+        () => this.executeMutation(dto),
+        (result) => result.success,
+      )
+    }
+    return this.executeMutation(dto)
+  }
+
+  private async executeMutation(
+    dto: CancelSharedSubscriptionInvitationDTO,
+  ): Promise<CancelSharedSubscriptionInvitationResponse> {
     const sharedSubscriptionInvitation = await this.sharedSubscriptionInvitationRepository.findOneByUuid(
       dto.sharedSubscriptionInvitationUuid,
     )
@@ -104,6 +122,16 @@ export class CancelSharedSubscriptionInvitation implements UseCaseInterface {
         }),
       )
     }
+
+    const affectedUserUuids = await this.inviteAffectedUserResolver?.resolve(
+      [inviterUserSubscription.userUuid, ...(invitee ? [invitee.uuid] : [])],
+      [sharedSubscriptionInvitation.inviterIdentifier, sharedSubscriptionInvitation.inviteeIdentifier],
+    )
+    await this.inviteRealtimeOutboxProducer?.recordSubscriptionInvite({
+      action: 'canceled',
+      inviteUuid: sharedSubscriptionInvitation.uuid,
+      affectedUserUuids: affectedUserUuids ?? [inviterUserSubscription.userUuid],
+    })
 
     return {
       success: true,

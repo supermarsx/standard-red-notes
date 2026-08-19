@@ -17,6 +17,9 @@ import { UseCaseInterface } from '../UseCaseInterface'
 
 import { InviteToSharedSubscriptionDTO } from './InviteToSharedSubscriptionDTO'
 import { InviteToSharedSubscriptionResult } from './InviteToSharedSubscriptionResult'
+import { AuthInviteMutationTransactionRunner } from '../../Invite/AuthInviteMutationTransactionRunner'
+import { AuthInviteRealtimeOutboxProducer } from '../../Invite/AuthInviteRealtimeOutboxProducer'
+import { AuthInviteAffectedUserResolver } from '../../Invite/AuthInviteAffectedUserResolver'
 
 @injectable()
 export class InviteToSharedSubscription implements UseCaseInterface {
@@ -29,9 +32,22 @@ export class InviteToSharedSubscription implements UseCaseInterface {
     private sharedSubscriptionInvitationRepository: SharedSubscriptionInvitationRepositoryInterface,
     @inject(TYPES.Auth_DomainEventPublisher) private domainEventPublisher: DomainEventPublisherInterface,
     @inject(TYPES.Auth_DomainEventFactory) private domainEventFactory: DomainEventFactoryInterface,
+    private inviteMutationTransactionRunner?: AuthInviteMutationTransactionRunner,
+    private inviteRealtimeOutboxProducer?: AuthInviteRealtimeOutboxProducer,
+    private inviteAffectedUserResolver?: AuthInviteAffectedUserResolver,
   ) {}
 
   async execute(dto: InviteToSharedSubscriptionDTO): Promise<InviteToSharedSubscriptionResult> {
+    if (this.inviteMutationTransactionRunner) {
+      return this.inviteMutationTransactionRunner.execute(
+        () => this.executeMutation(dto),
+        (result) => result.success,
+      )
+    }
+    return this.executeMutation(dto)
+  }
+
+  private async executeMutation(dto: InviteToSharedSubscriptionDTO): Promise<InviteToSharedSubscriptionResult> {
     if (!dto.inviterRoles.includes(RoleName.NAMES.ProUser)) {
       return {
         success: false,
@@ -100,6 +116,13 @@ export class InviteToSharedSubscription implements UseCaseInterface {
         subject: getSubject(),
       }),
     )
+
+    const affectedUserUuids = await this.inviteAffectedUserResolver?.resolve([dto.inviterUuid], [dto.inviteeIdentifier])
+    await this.inviteRealtimeOutboxProducer?.recordSubscriptionInvite({
+      action: existingInvitation === null ? 'created' : 'updated',
+      inviteUuid: savedInvitation.uuid,
+      affectedUserUuids: affectedUserUuids ?? [dto.inviterUuid],
+    })
 
     return {
       success: true,

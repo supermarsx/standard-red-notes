@@ -65,11 +65,7 @@ export class InviteEventOutboxDispatcher {
       this.timer = undefined
     }
     while (this.inFlight) {
-      const pending = this.inFlight
-      await pending
-      if (this.inFlight === pending) {
-        this.inFlight = undefined
-      }
+      await this.inFlight
     }
   }
 
@@ -148,10 +144,7 @@ export class InviteEventOutboxDispatcher {
           // The record stays claimed; its lease expires and another pass reclaims it.
           failed = true
           this.consecutiveFailures++
-          this.logger?.error(
-            'Invite event outbox dispatch pass failed; backing off and retrying.',
-            safeErrorLogMetadata(error),
-          )
+          this.report('Invite event outbox dispatch pass failed; backing off and retrying.', error)
           break
         }
       }
@@ -162,10 +155,6 @@ export class InviteEventOutboxDispatcher {
     } finally {
       this.running = false
     }
-  }
-
-  async deletePublishedBefore(timestamp: number): Promise<number> {
-    return this.repository.deletePublishedBefore(timestamp)
   }
 
   private retryDelay(attempt: number): number {
@@ -199,21 +188,38 @@ export class InviteEventOutboxDispatcher {
   }
 
   /**
-   * Runs one drain and re-arms. `drain()` already contains its own failures, but
-   * this is the poller's last line of defence: nothing here may produce an
-   * unhandled rejection, because bin/server.ts and bin/worker.ts turn one into
-   * `process.exit(1)`. `inFlight` mirrors the drain so `stop()` can await it.
+   * Runs one drain and re-arms. `drain()` contains its own failures, so the catch
+   * here only fires if the error handling itself threw — a logger that raises, say.
+   * It still matters: nothing on this path may produce an unhandled rejection,
+   * because bin/server.ts and bin/worker.ts turn one into `process.exit(1)`.
+   *
+   * `inFlight` is cleared inside the same continuation that resolves it, so once
+   * `stop()`'s await returns there is nothing left in flight and no ordering race
+   * between clearing the handle and observing it.
    */
   private dispatch(): void {
-    const drained = this.drain().catch((error: unknown) => {
-      this.consecutiveFailures++
-      this.logger?.error('Invite event outbox dispatcher failed unexpectedly.', safeErrorLogMetadata(error))
-    })
-    this.inFlight = drained.then(() => undefined)
-    void drained.finally(() => {
-      this.inFlight = undefined
-      this.schedule()
-    })
+    this.inFlight = this.drain()
+      .catch((error: unknown) => {
+        this.consecutiveFailures++
+        this.report('Invite event outbox dispatcher failed unexpectedly.', error)
+      })
+      .then(() => {
+        this.inFlight = undefined
+        this.schedule()
+      })
+  }
+
+  /**
+   * Logging is the last thing standing between a poller fault and a silent one, so
+   * it must not become a fault itself: a logger whose transport is down would
+   * otherwise throw straight out of the handler that exists to contain errors.
+   */
+  private report(message: string, error: unknown): void {
+    try {
+      this.logger?.error(message, safeErrorLogMetadata(error))
+    } catch {
+      /* a failed log must never escalate into a failed process */
+    }
   }
 }
 

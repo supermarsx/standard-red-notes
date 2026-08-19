@@ -34,6 +34,7 @@ import { TypeORMSharedVaultUser } from '../Infra/TypeORM/TypeORMSharedVaultUser'
 import { TypeORMSubscriptionSetting } from '../Infra/TypeORM/TypeORMSubscriptionSetting'
 import { TypeORMSetting } from '../Infra/TypeORM/TypeORMSetting'
 import { TypeORMNextcloudBackupUserLock } from '../Infra/TypeORM/TypeORMNextcloudBackupUserLock'
+import { TypeORMInviteEventOutbox } from '../Infra/TypeORM/TypeORMInviteEventOutbox'
 
 export const AUTH_TYPEORM_ENTITIES = [
   User,
@@ -70,6 +71,7 @@ export const AUTH_TYPEORM_ENTITIES = [
   TypeORMEmergencyAccessInvitation,
   TypeORMCacheEntry,
   TypeORMSharedVaultUser,
+  TypeORMInviteEventOutbox,
 ]
 
 export class AppDataSource {

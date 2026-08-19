@@ -19,6 +19,10 @@ import { InviterIdentifierType } from '../../SharedSubscription/InviterIdentifie
 import { InviteeIdentifierType } from '../../SharedSubscription/InviteeIdentifierType'
 import { Logger } from 'winston'
 
+import { AuthInviteMutationTransactionRunner } from '../../Invite/AuthInviteMutationTransactionRunner'
+import { AuthInviteRealtimeOutboxProducer } from '../../Invite/AuthInviteRealtimeOutboxProducer'
+import { AuthInviteAffectedUserResolver } from '../../Invite/AuthInviteAffectedUserResolver'
+
 describe('CancelSharedSubscriptionInvitation', () => {
   let sharedSubscriptionInvitationRepository: SharedSubscriptionInvitationRepositoryInterface
   let userRepository: UserRepositoryInterface
@@ -32,7 +36,11 @@ describe('CancelSharedSubscriptionInvitation', () => {
   let domainEventFactory: DomainEventFactoryInterface
   let logger: Logger
 
-  const createUseCase = () =>
+  const createUseCase = (
+    runner?: AuthInviteMutationTransactionRunner,
+    producer?: AuthInviteRealtimeOutboxProducer,
+    resolver?: AuthInviteAffectedUserResolver,
+  ) =>
     new CancelSharedSubscriptionInvitation(
       sharedSubscriptionInvitationRepository,
       userRepository,
@@ -42,7 +50,37 @@ describe('CancelSharedSubscriptionInvitation', () => {
       domainEventFactory,
       timer,
       logger,
+      runner,
+      producer,
+      resolver,
     )
+
+  // In production the container always supplies these three, so this is the path
+  // the use case actually runs on; the bare-constructor cases below are the fallback.
+  const wiredInvite = () => {
+    const commits: boolean[] = []
+    const runner = {
+      execute: jest.fn(async (operation: () => Promise<{ success: boolean }>, succeeded) => {
+        const result = await operation()
+        commits.push(succeeded(result))
+        return result
+      }),
+    }
+    const producer = { recordSubscriptionInvite: jest.fn().mockResolvedValue('inserted') }
+    const resolver = { resolve: jest.fn().mockResolvedValue(['affected-uuid']) }
+    return {
+      commits,
+      runnerSpy: runner.execute,
+      producer,
+      resolver,
+      useCase: () =>
+        createUseCase(
+          runner as unknown as AuthInviteMutationTransactionRunner,
+          producer as unknown as AuthInviteRealtimeOutboxProducer,
+          resolver as unknown as AuthInviteAffectedUserResolver,
+        ),
+    }
+  }
 
   beforeEach(() => {
     invitee = {
@@ -239,5 +277,33 @@ describe('CancelSharedSubscriptionInvitation', () => {
     ).toEqual({
       success: false,
     })
+  })
+
+  it('runs the mutation inside the invite transaction runner and enqueues the realtime event', async () => {
+    const wired = wiredInvite()
+
+    expect(
+      await wired.useCase().execute({ sharedSubscriptionInvitationUuid: '1-2-3', inviterEmail: 'test@test.te' }),
+    ).toEqual({ success: true })
+
+    expect(wired.runnerSpy).toHaveBeenCalledTimes(1)
+    expect(wired.commits).toEqual([true])
+    expect(wired.resolver.resolve).toHaveBeenCalled()
+    // Enqueued inside the runner, so it commits or rolls back with the mutation.
+    expect(wired.producer.recordSubscriptionInvite).toHaveBeenCalledWith(
+      expect.objectContaining({ affectedUserUuids: ['affected-uuid'] }),
+    )
+  })
+
+  it('tells the runner to roll back when the invitation cannot be cancelled', async () => {
+    sharedSubscriptionInvitationRepository.findOneByUuid = jest.fn().mockReturnValue(null)
+    const wired = wiredInvite()
+
+    expect(
+      await wired.useCase().execute({ sharedSubscriptionInvitationUuid: '1-2-3', inviterEmail: 'test@test.te' }),
+    ).toMatchObject({ success: false })
+
+    expect(wired.commits).toEqual([false])
+    expect(wired.producer.recordSubscriptionInvite).not.toHaveBeenCalled()
   })
 })

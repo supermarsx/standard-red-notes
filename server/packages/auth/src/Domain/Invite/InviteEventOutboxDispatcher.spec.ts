@@ -214,6 +214,18 @@ describe('InviteEventOutboxDispatcher lifecycle', () => {
       expect(logger.error).toHaveBeenCalledTimes(1)
     })
 
+    it('marks a record failed once it has exhausted its attempts', async () => {
+      repository.claimNext
+        .mockResolvedValueOnce({ ...claimed('exhausted'), attempts: 8 })
+        .mockResolvedValue(null)
+      publisher.publish = jest.fn().mockRejectedValue(new Error('broker unavailable'))
+      const dispatcher = dispatcherWithLogger({ maximumAttempts: 8 })
+
+      await expect(dispatcher.drain()).resolves.toEqual({ published: 0, failed: 1, retried: 0 })
+      expect(repository.markFailed).toHaveBeenCalledWith('exhausted', 'lock', 'ERROR', expect.any(Number))
+      expect(repository.releaseForRetry).not.toHaveBeenCalled()
+    })
+
     it('does not log or count a publish failure as a repository failure', async () => {
       repository.claimNext.mockResolvedValueOnce(claimed('first')).mockResolvedValue(null)
       publisher.publish = jest.fn().mockRejectedValue(new Error('broker unavailable'))
@@ -254,6 +266,58 @@ describe('InviteEventOutboxDispatcher lifecycle', () => {
       await dispatcher.stop()
     })
 
+    // drain() absorbs repository faults itself, so this only fires when the error
+    // handling raises — a logger transport that is down, say. It still has to hold:
+    // an escape here reaches process-level unhandledRejection and exits the server.
+    it('survives a logger that throws while reporting a repository failure', async () => {
+      jest.useRealTimers()
+      const unhandled: unknown[] = []
+      const captureUnhandled = (reason: unknown): void => {
+        unhandled.push(reason)
+      }
+      process.on('unhandledRejection', captureUnhandled)
+      repository.claimNext.mockRejectedValue(new Error('lock wait timeout'))
+      logger.error.mockImplementation(() => {
+        throw new Error('logger transport unavailable')
+      })
+
+      const dispatcher = dispatcherWithLogger()
+      dispatcher.start(5)
+      await new Promise((resolve) => setTimeout(resolve, 40))
+      await dispatcher.stop()
+      process.off('unhandledRejection', captureUnhandled)
+
+      expect(unhandled).toEqual([])
+      expect(logger.error).toHaveBeenCalled()
+    })
+
+    // drain() is written so that it cannot reject, so nothing reaches dispatch()'s
+    // catch today. It is kept as the containment boundary: this exact escape is what
+    // exited the process before, and a future edit to drain() must not be able to
+    // reintroduce it. The test pins that contract through drain()'s public seam
+    // rather than pretending some caller drives it.
+    it('contains a rejecting drain instead of letting it reach the process', async () => {
+      jest.useRealTimers()
+      const unhandled: unknown[] = []
+      const captureUnhandled = (reason: unknown): void => {
+        unhandled.push(reason)
+      }
+      process.on('unhandledRejection', captureUnhandled)
+
+      const dispatcher = dispatcherWithLogger()
+      jest.spyOn(dispatcher, 'drain').mockRejectedValue(new Error('drain contract broken'))
+      dispatcher.start(5)
+      await new Promise((resolve) => setTimeout(resolve, 40))
+      await dispatcher.stop()
+      process.off('unhandledRejection', captureUnhandled)
+
+      expect(unhandled).toEqual([])
+      expect(logger.error).toHaveBeenCalledWith(
+        'Invite event outbox dispatcher failed unexpectedly.',
+        expect.anything(),
+      )
+    })
+
     it('backs off exponentially while failing and returns to cadence once healthy', async () => {
       repository.claimNext.mockRejectedValue(new Error('down'))
       const dispatcher = dispatcherWithLogger({ pollBackoffMaximumMilliseconds: 400 })
@@ -287,6 +351,46 @@ describe('InviteEventOutboxDispatcher lifecycle', () => {
 
       await dispatcher.stop()
     })
+  })
+
+  it('refuses to run a second concurrent drain', async () => {
+    let releaseClaim: (() => void) | undefined
+    repository.claimNext
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            releaseClaim = () => resolve(null)
+          }),
+      )
+      .mockResolvedValue(null)
+
+    const dispatcher = new InviteEventOutboxDispatcher(repository, publisher)
+    const first = dispatcher.drain()
+    await flush()
+
+    // The re-entrancy guard keeps a wake() during an active pass from
+    // double-claiming: the second call returns empty totals immediately.
+    await expect(dispatcher.drain()).resolves.toEqual({ published: 0, failed: 0, retried: 0 })
+    expect(repository.claimNext).toHaveBeenCalledTimes(1)
+
+    releaseClaim?.()
+    await first
+  })
+
+  it('redacts a non-Error rejection to UNKNOWN_ERROR', async () => {
+    repository.claimNext.mockResolvedValueOnce(claimed('first')).mockResolvedValue(null)
+    publisher.publish = jest.fn().mockRejectedValue('a bare string carrying secret@example.com')
+
+    const dispatcher = new InviteEventOutboxDispatcher(repository, publisher)
+    await expect(dispatcher.drain()).resolves.toEqual({ published: 0, failed: 0, retried: 1 })
+
+    expect(repository.releaseForRetry).toHaveBeenCalledWith(
+      'first',
+      'lock',
+      expect.any(Number),
+      'UNKNOWN_ERROR',
+      expect.any(Number),
+    )
   })
 
   it('ignores wake() after stop but resumes on a fresh start', async () => {
