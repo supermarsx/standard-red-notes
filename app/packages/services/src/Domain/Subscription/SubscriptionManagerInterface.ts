@@ -26,6 +26,7 @@ export interface SubscriptionManagerInterface extends ApplicationServiceInterfac
     events: readonly InviteRealtimeEvent[],
     context?: InviteRealtimeHandlerContext,
   ): Promise<void>
+  reconcileInviteRealtimeSnapshot(context?: InviteRealtimeHandlerContext): Promise<void>
   confirmAppleIAP(
     receipt: AppleIAPReceipt,
     subscriptionToken: string,

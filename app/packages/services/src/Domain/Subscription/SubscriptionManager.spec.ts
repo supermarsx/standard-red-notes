@@ -239,6 +239,40 @@ describe('SubscriptionManager', () => {
     expect(manager.getCachedSubscriptionInvitations()).toBeUndefined()
   })
 
+  it('strictly reconciles invitation and entitlement state before completing a durable bootstrap snapshot', async () => {
+    const invitation = { uuid: 'snapshot-invite' } as Invitation
+    const subscription = { uuid: 'snapshot-subscription' }
+    subscriptionApiService.listInvites = jest.fn().mockResolvedValue({ data: { invitations: [invitation] } })
+    subscriptionApiService.getUserSubscription = jest.fn().mockResolvedValue({ data: { subscription } })
+    const manager = createManager()
+
+    await manager.reconcileInviteRealtimeSnapshot()
+
+    expect(manager.getCachedSubscriptionInvitations()).toEqual([invitation])
+    expect(manager.getOnlineSubscription()).toEqual(subscription)
+    expect(storage.setValue).toHaveBeenCalled()
+    expect(internalEventBus.publish).toHaveBeenCalledWith({
+      type: SubscriptionManagerEvent.DidChangeInvitations,
+      payload: undefined,
+    })
+    expect(internalEventBus.publish).toHaveBeenCalledWith({
+      type: SubscriptionManagerEvent.DidFetchSubscription,
+      payload: undefined,
+    })
+  })
+
+  it('rejects a failed bootstrap snapshot without replacing subscription caches or publishing events', async () => {
+    subscriptionApiService.listInvites = jest.fn().mockResolvedValue({ data: { error: 'unavailable' } })
+    const manager = createManager()
+
+    await expect(manager.reconcileInviteRealtimeSnapshot()).rejects.toThrow(
+      'Could not reconcile subscription invitations',
+    )
+    expect(manager.getCachedSubscriptionInvitations()).toBeUndefined()
+    expect(storage.setValue).not.toHaveBeenCalled()
+    expect(internalEventBus.publish).not.toHaveBeenCalled()
+  })
+
   it('does not apply a fetched invitation snapshot after the exact session changes', async () => {
     const existing = { uuid: 'existing-invite' } as Invitation
     const replacement = { uuid: 'replacement-invite' } as Invitation

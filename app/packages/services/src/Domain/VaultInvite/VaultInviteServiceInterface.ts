@@ -27,4 +27,5 @@ export interface VaultInviteServiceInterface extends ApplicationServiceInterface
     events: readonly InviteRealtimeEvent[],
     context?: InviteRealtimeHandlerContext,
   ): Promise<void>
+  reconcileInviteRealtimeSnapshot(context?: InviteRealtimeHandlerContext): Promise<void>
 }

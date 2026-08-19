@@ -60,6 +60,19 @@ describe('VaultInviteService realtime invalidations', () => {
     )
   })
 
+  it('exposes the same strict authoritative reload for durable bootstrap snapshots', async () => {
+    const service = createService()
+    const download = jest.spyOn(service, 'downloadInboundInvites').mockResolvedValue([])
+
+    await expect(service.reconcileInviteRealtimeSnapshot()).resolves.toBeUndefined()
+    expect(service.downloadInboundInvites).toHaveBeenCalledTimes(1)
+
+    download.mockResolvedValue(ClientDisplayableError.FromString('request failed'))
+    await expect(service.reconcileInviteRealtimeSnapshot()).rejects.toThrow(
+      'Could not reconcile shared-vault invitations',
+    )
+  })
+
   it('does not replace cached invitations when the exact session changes during the HTTP reload', async () => {
     let release!: (value: { data: { invites: [] } }) => void
     const response = new Promise<{ data: { invites: [] } }>((resolve) => {

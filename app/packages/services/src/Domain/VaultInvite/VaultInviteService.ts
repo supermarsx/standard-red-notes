@@ -183,6 +183,20 @@ export class VaultInviteService
     }
   }
 
+  /** Strict bootstrap/gap recovery that rejects instead of treating a failed request as an empty invite set. */
+  public async reconcileInviteRealtimeSnapshot(context?: InviteRealtimeHandlerContext): Promise<void> {
+    if (!this.session.isSignedIn()) {
+      throw new Error('Cannot reconcile shared-vault invitations without an authenticated session.')
+    }
+    context?.assertCurrent()
+    const userUuid = this.session.userUuid
+    const result = await this.downloadInboundInvites(context)
+    this.assertRealtimeSession(userUuid, context)
+    if (isClientDisplayableError(result)) {
+      throw new Error('Could not reconcile shared-vault invitations after a realtime invalidation.')
+    }
+  }
+
   private async reloadInboundInvitesForRealtimeEventLoop(
     userUuid: string,
     context?: InviteRealtimeHandlerContext,

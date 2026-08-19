@@ -186,9 +186,33 @@ export class SubscriptionManager
     this.assertRealtimeSession(userUuid, context)
     this.subscriptionInvitations = invitations
     if (shouldRefreshSubscription) {
-      this.handleReceivedOnlineSubscriptionFromServer(subscription)
+      this.applyOnlineSubscription(subscription)
     }
-    await this.notifyEvent(SubscriptionManagerEvent.DidChangeInvitations)
+    await Promise.all([
+      this.notifyEvent(SubscriptionManagerEvent.DidChangeInvitations),
+      ...(shouldRefreshSubscription ? [this.notifyEvent(SubscriptionManagerEvent.DidFetchSubscription)] : []),
+    ])
+  }
+
+  /** Strict bootstrap/gap recovery; unlike the legacy list method this never converts an HTTP failure to an empty list. */
+  async reconcileInviteRealtimeSnapshot(context?: InviteRealtimeHandlerContext): Promise<void> {
+    if (!this.sessions.isSignedIn()) {
+      throw new Error('Cannot reconcile subscription state without an authenticated session.')
+    }
+    context?.assertCurrent()
+    const userUuid = this.sessions.userUuid
+    const [invitations, subscription] = await Promise.all([
+      this.requestSubscriptionInvitations(),
+      this.requestOnlineSubscription(userUuid),
+    ])
+
+    this.assertRealtimeSession(userUuid, context)
+    this.subscriptionInvitations = invitations
+    this.applyOnlineSubscription(subscription)
+    await Promise.all([
+      this.notifyEvent(SubscriptionManagerEvent.DidChangeInvitations),
+      this.notifyEvent(SubscriptionManagerEvent.DidFetchSubscription),
+    ])
   }
 
   async inviteToSubscription(inviteeEmail: string): Promise<boolean> {
@@ -256,11 +280,15 @@ export class SubscriptionManager
   }
 
   private handleReceivedOnlineSubscriptionFromServer(subscription: Subscription | undefined): void {
+    this.applyOnlineSubscription(subscription)
+
+    void this.notifyEvent(SubscriptionManagerEvent.DidFetchSubscription)
+  }
+
+  private applyOnlineSubscription(subscription: Subscription | undefined): void {
     this.onlineSubscription = subscription
 
     this.storage.setValue(StorageKey.Subscription, subscription)
-
-    void this.notifyEvent(SubscriptionManagerEvent.DidFetchSubscription)
   }
 
   async fetchAvailableSubscriptions(): Promise<void> {
