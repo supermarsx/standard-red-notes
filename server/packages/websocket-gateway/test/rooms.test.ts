@@ -5,6 +5,7 @@ import {
   parseRelayFrame,
   handleRelayFrame,
   MAX_CONNECTIONS_PER_ROOM,
+  MAX_COLLABORATION_SOCKET_BUFFERED_BYTES,
   MAX_ACTIVE_YJS_RESPONSE_GRANTS_PER_CONNECTION,
   MAX_PENDING_EDITOR_RESERVATIONS_PER_CONNECTION,
   MAX_PENDING_EDITOR_RESERVATIONS_PER_ROOM,
@@ -27,6 +28,9 @@ import {
   type RoomRelayLifecycle,
 } from '../src/rooms.js'
 import type { Conn } from '../src/registry.js'
+
+const TEST_ROOM_EPOCH = 'room_epoch_0000000000000001'
+const TEST_SECURITY_EPOCH = 'security_epoch_0000000000000001'
 
 function fakeConn(id: string): Conn & { sent: string[] } {
   const sent: string[] = []
@@ -69,6 +73,7 @@ describe('parseRelayFrame', () => {
           requestId: 'lease-1',
           role: 'editor',
           protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+          expectedRoomEpoch: TEST_ROOM_EPOCH,
         }),
       ),
     ).toEqual({
@@ -78,6 +83,7 @@ describe('parseRelayFrame', () => {
       requestId: 'lease-1',
       role: 'editor',
       protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+      expectedRoomEpoch: TEST_ROOM_EPOCH,
     })
     expect(
       parseRelayFrame(
@@ -230,6 +236,24 @@ describe('parseRelayFrame', () => {
 })
 
 describe('RoomRegistry + handleRelayFrame', () => {
+  it('skips slow consumers for local and cross-replica broadcasts without blocking healthy peers', () => {
+    const rooms = new RoomRegistry()
+    const sender = fakeConn('sender')
+    const healthy = fakeConn('healthy')
+    const slow = fakeConn('slow')
+    ;(slow.socket as typeof slow.socket & { bufferedAmount: number }).bufferedAmount =
+      MAX_COLLABORATION_SOCKET_BUFFERED_BYTES + 1
+    rooms.join('n1', sender)
+    rooms.join('n1', healthy)
+    rooms.join('n1', slow)
+
+    expect(rooms.broadcast('n1', 'local-frame', sender)).toBe(1)
+    expect(rooms.broadcastAll('n1', 'remote-frame')).toBe(2)
+    expect(healthy.sent).toEqual(['local-frame', 'remote-frame'])
+    expect(sender.sent).toEqual(['remote-frame'])
+    expect(slow.sent).toEqual([])
+  })
+
   it('relays a yjs frame to other room members but not the sender', async () => {
     const rooms = new RoomRegistry()
     const a = fakeConn('a')
@@ -746,17 +770,28 @@ describe('reservation and expensive control-frame limits', () => {
     let now = 1_000
     const rooms = new RoomRegistry(() => now)
     const conn = fakeConn('join-flooder')
-    const authorize = vi.fn().mockResolvedValue({
+    const authorize = vi.fn((_userUuid: string, _room: string, capability?: string) => ({
       authorized: true as const,
       expiresAt: 60_000,
       serverUpdatedAtTimestamp: 1,
       collaborationProtocolVersion: COLLABORATION_PROTOCOL_VERSION,
-    })
+      roomEpoch: TEST_ROOM_EPOCH,
+      collaborationSecurityEpoch: TEST_SECURITY_EPOCH,
+      leaseRequestId: capability,
+    }))
     const joinComment = (room: string, requestId: string) =>
       handleRelayFrame(
         rooms,
         conn,
-        { t: 'room-join', room, requestId, role: 'comment', protocolVersion: COLLABORATION_PROTOCOL_VERSION },
+        {
+          t: 'room-join',
+          room,
+          cap: requestId,
+          requestId,
+          role: 'comment',
+          protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+          expectedRoomEpoch: TEST_ROOM_EPOCH,
+        },
         authorize,
       )
 
@@ -777,6 +812,7 @@ describe('reservation and expensive control-frame limits', () => {
         requestId: 'join-request-0',
         protocolVersion: COLLABORATION_PROTOCOL_VERSION,
         maxTransferBytes: MAX_YJS_TRANSFER_BYTES,
+        roomEpoch: TEST_ROOM_EPOCH,
       }),
     )
 
@@ -789,6 +825,7 @@ describe('reservation and expensive control-frame limits', () => {
         requestId: 'join-request-0',
         role: 'editor',
         protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+        expectedRoomEpoch: TEST_ROOM_EPOCH,
       },
       authorize,
     )
@@ -800,12 +837,15 @@ describe('reservation and expensive control-frame limits', () => {
     expect(authorize).toHaveBeenCalledTimes(MAX_ROOM_JOIN_FRAMES_PER_CONNECTION + 1)
 
     const aggregateRooms = new RoomRegistry(() => 1_000)
-    const aggregateAuthorize = vi.fn().mockResolvedValue({
+    const aggregateAuthorize = vi.fn((_userUuid: string, _room: string, capability?: string) => ({
       authorized: true as const,
       expiresAt: 60_000,
       serverUpdatedAtTimestamp: 1,
       collaborationProtocolVersion: COLLABORATION_PROTOCOL_VERSION,
-    })
+      roomEpoch: TEST_ROOM_EPOCH,
+      collaborationSecurityEpoch: TEST_SECURITY_EPOCH,
+      leaseRequestId: capability,
+    }))
     const aggregateConnections = Array.from({ length: MAX_ROOM_JOIN_FRAMES_PER_ROOM + 1 }, (_, index) =>
       fakeConn(`aggregate-join-${index}`),
     )
@@ -816,9 +856,11 @@ describe('reservation and expensive control-frame limits', () => {
         {
           t: 'room-join',
           room: 'aggregate-join-room',
+          cap: `aggregate-join-${index}`,
           requestId: `aggregate-join-${index}`,
           role: 'comment',
           protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+          expectedRoomEpoch: TEST_ROOM_EPOCH,
         },
         aggregateAuthorize,
       )
@@ -833,9 +875,11 @@ describe('reservation and expensive control-frame limits', () => {
       {
         t: 'room-join',
         room: 'aggregate-join-room',
+        cap: 'aggregate-join-0',
         requestId: 'aggregate-join-0',
         role: 'comment',
         protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+        expectedRoomEpoch: TEST_ROOM_EPOCH,
       },
       aggregateAuthorize,
     )
@@ -949,6 +993,7 @@ describe('reservation and expensive control-frame limits', () => {
       requestId: 'denied-request',
       role: 'editor' as const,
       protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+      expectedRoomEpoch: TEST_ROOM_EPOCH,
     }
 
     await handleRelayFrame(rooms, conn, frame)
@@ -982,6 +1027,7 @@ describe('reservation and expensive control-frame limits', () => {
         requestId: 'overflow-request',
         role: 'editor',
         protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+        expectedRoomEpoch: TEST_ROOM_EPOCH,
       },
       authorize,
       undefined,
@@ -1005,6 +1051,8 @@ describe('reservation and expensive control-frame limits', () => {
       expiresAt: capability === 'old-request' ? 2_000 : 20_000,
       serverUpdatedAtTimestamp: 1,
       collaborationProtocolVersion: COLLABORATION_PROTOCOL_VERSION,
+      roomEpoch: TEST_ROOM_EPOCH,
+      collaborationSecurityEpoch: TEST_SECURITY_EPOCH,
       leaseRequestId: capability,
     }))
     const reserve = (room: string, requestId: string) =>
@@ -1018,6 +1066,7 @@ describe('reservation and expensive control-frame limits', () => {
           requestId,
           role: 'editor',
           protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+          expectedRoomEpoch: TEST_ROOM_EPOCH,
         },
         authorize,
         undefined,
@@ -1047,6 +1096,8 @@ describe('reservation and expensive control-frame limits', () => {
       expiresAt: 60_000,
       serverUpdatedAtTimestamp: 1,
       collaborationProtocolVersion: COLLABORATION_PROTOCOL_VERSION,
+      roomEpoch: TEST_ROOM_EPOCH,
+      collaborationSecurityEpoch: TEST_SECURITY_EPOCH,
       leaseRequestId: capability,
     }))
     const reserveAndRelease = async (index: number): Promise<void> => {
@@ -1062,6 +1113,7 @@ describe('reservation and expensive control-frame limits', () => {
           requestId,
           role: 'editor',
           protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+          expectedRoomEpoch: TEST_ROOM_EPOCH,
         },
         authorize,
         undefined,
@@ -1091,6 +1143,8 @@ describe('reservation and expensive control-frame limits', () => {
       expiresAt: 60_000,
       serverUpdatedAtTimestamp: 1,
       collaborationProtocolVersion: COLLABORATION_PROTOCOL_VERSION,
+      roomEpoch: TEST_ROOM_EPOCH,
+      collaborationSecurityEpoch: TEST_SECURITY_EPOCH,
       leaseRequestId: capability,
     }))
 
@@ -1107,6 +1161,7 @@ describe('reservation and expensive control-frame limits', () => {
           requestId,
           role: 'editor',
           protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+          expectedRoomEpoch: TEST_ROOM_EPOCH,
         },
         authorize,
         undefined,
@@ -1705,32 +1760,51 @@ describe('handleRelayFrame room-join authorization', () => {
     const intruder = fakeConn('intruder')
 
     // Only user "a" is a member of note "n1".
-    const authorize = (userUuid: string, room: string) =>
+    const authorize = (userUuid: string, room: string, capability?: string) =>
       userUuid === 'a' && room === 'n1'
         ? {
             authorized: true as const,
             expiresAt: Date.now() + 60_000,
             serverUpdatedAtTimestamp: 1,
             collaborationProtocolVersion: COLLABORATION_PROTOCOL_VERSION,
+            roomEpoch: TEST_ROOM_EPOCH,
+            collaborationSecurityEpoch: TEST_SECURITY_EPOCH,
+            leaseRequestId: capability,
           }
         : { authorized: false as const }
 
     await handleRelayFrame(
       rooms,
       a,
-      { t: 'room-join', room: 'n1', protocolVersion: COLLABORATION_PROTOCOL_VERSION },
+      {
+        t: 'room-join',
+        room: 'n1',
+        cap: 'lease-a',
+        requestId: 'lease-a',
+        role: 'editor',
+        protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+        expectedRoomEpoch: TEST_ROOM_EPOCH,
+      },
       authorize,
     )
     const reached = await handleRelayFrame(
       rooms,
       intruder,
-      { t: 'room-join', room: 'n1', protocolVersion: COLLABORATION_PROTOCOL_VERSION },
+      {
+        t: 'room-join',
+        room: 'n1',
+        cap: 'lease-intruder',
+        requestId: 'lease-intruder',
+        role: 'comment',
+        protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+        expectedRoomEpoch: TEST_ROOM_EPOCH,
+      },
       authorize,
     )
 
     expect(reached).toBe(0)
     expect(rooms.members('n1')).toHaveLength(1) // intruder NOT added
-    expect(intruder.sent).toContain(JSON.stringify({ t: 'room-denied', room: 'n1' }))
+    expect(intruder.sent).toContain(JSON.stringify({ t: 'room-denied', room: 'n1', requestId: 'lease-intruder' }))
 
     // The intruder cannot inject frames into a room it never joined, and a's
     // frame is not delivered to the intruder.
@@ -1756,23 +1830,42 @@ describe('handleRelayFrame room-join authorization', () => {
     const rooms = new RoomRegistry()
     const a = fakeConn('a')
     const b = fakeConn('b')
-    const authorize = () => ({
+    const authorize = (_userUuid: string, _room: string, capability?: string) => ({
       authorized: true as const,
       expiresAt: Date.now() + 60_000,
       serverUpdatedAtTimestamp: 1,
       collaborationProtocolVersion: COLLABORATION_PROTOCOL_VERSION,
+      roomEpoch: TEST_ROOM_EPOCH,
+      collaborationSecurityEpoch: TEST_SECURITY_EPOCH,
+      leaseRequestId: capability,
     })
 
     await handleRelayFrame(
       rooms,
       a,
-      { t: 'room-join', room: 'n1', protocolVersion: COLLABORATION_PROTOCOL_VERSION },
+      {
+        t: 'room-join',
+        room: 'n1',
+        cap: 'lease-a',
+        requestId: 'lease-a',
+        role: 'editor',
+        protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+        expectedRoomEpoch: TEST_ROOM_EPOCH,
+      },
       authorize,
     )
     await handleRelayFrame(
       rooms,
       b,
-      { t: 'room-join', room: 'n1', protocolVersion: COLLABORATION_PROTOCOL_VERSION },
+      {
+        t: 'room-join',
+        room: 'n1',
+        cap: 'lease-b',
+        requestId: 'lease-b',
+        role: 'editor',
+        protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+        expectedRoomEpoch: TEST_ROOM_EPOCH,
+      },
       authorize,
     )
     const reached = await handleRelayFrame(rooms, a, { t: 'yjs', room: 'n1', payload: 'AQID' }, authorize)
@@ -1782,9 +1875,11 @@ describe('handleRelayFrame room-join authorization', () => {
       JSON.stringify({
         t: 'room-joined',
         room: 'n1',
+        requestId: 'lease-a',
         bootstrap: true,
         protocolVersion: COLLABORATION_PROTOCOL_VERSION,
         maxTransferBytes: MAX_YJS_TRANSFER_BYTES,
+        roomEpoch: TEST_ROOM_EPOCH,
       }),
     )
     expect(b.sent).toContain(JSON.stringify({ t: 'yjs', room: 'n1', payload: 'AQID' }))
@@ -1794,19 +1889,18 @@ describe('handleRelayFrame room-join authorization', () => {
     const rooms = new RoomRegistry()
     const conn = fakeConn('closing')
     let active = true
-    let resolveAuthorization!: (value: {
+    // Bind to the constant rather than a literal: these annotations were pinned to
+    // `2` and silently outlived the v3 bump (the gateway tsconfig excludes test/,
+    // so nothing flagged the mismatch against the v3 value actually resolved below).
+    type DelayedAuthorization = {
       authorized: true
       expiresAt: number
       serverUpdatedAtTimestamp: number
-      collaborationProtocolVersion: 2
-    }) => void
+      collaborationProtocolVersion: typeof COLLABORATION_PROTOCOL_VERSION
+    }
+    let resolveAuthorization!: (value: DelayedAuthorization) => void
     const authorize = () =>
-      new Promise<{
-        authorized: true
-        expiresAt: number
-        serverUpdatedAtTimestamp: number
-        collaborationProtocolVersion: 2
-      }>((resolve) => {
+      new Promise<DelayedAuthorization>((resolve) => {
         resolveAuthorization = resolve
       })
 
@@ -1834,6 +1928,49 @@ describe('handleRelayFrame room-join authorization', () => {
 
     expect(rooms.roomCount()).toBe(0)
     expect(conn.sent).toEqual([])
+  })
+
+  // The only place a v2 value still belongs: `handleRelayFrame` has no v2 code
+  // path left (every branch compares strict-equal to COLLABORATION_PROTOCOL_VERSION),
+  // so a v2 authorization is a downgrade to be refused, not a compatibility mode.
+  // This is what the stale `collaborationProtocolVersion: 2` fixtures above only
+  // appeared to cover — they were type annotations, never an exercised legacy path.
+  it('denies a join whose authorization carries a stale pre-v3 collaboration protocol version', async () => {
+    const rooms = new RoomRegistry()
+    const conn = fakeConn('downgraded')
+
+    const authorize = (_userUuid: string, _room: string, capability?: string) => ({
+      authorized: true as const,
+      expiresAt: Date.now() + 60_000,
+      serverUpdatedAtTimestamp: 1,
+      // A gateway still speaking the previous protocol revision.
+      collaborationProtocolVersion: 2 as unknown as typeof COLLABORATION_PROTOCOL_VERSION,
+      roomEpoch: TEST_ROOM_EPOCH,
+      collaborationSecurityEpoch: TEST_SECURITY_EPOCH,
+      leaseRequestId: capability,
+    })
+
+    const reached = await handleRelayFrame(
+      rooms,
+      conn,
+      {
+        t: 'room-join',
+        room: 'n1',
+        cap: 'lease-downgraded',
+        requestId: 'lease-downgraded',
+        role: 'editor',
+        protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+        expectedRoomEpoch: TEST_ROOM_EPOCH,
+      },
+      authorize,
+    )
+
+    expect(reached).toBe(0)
+    expect(rooms.roomCount()).toBe(0)
+    expect(conn.sent).toContain(
+      JSON.stringify({ t: 'room-denied', room: 'n1', requestId: 'lease-downgraded' }),
+    )
+    expect(conn.sent.some((message) => message.includes('room-joined'))).toBe(false)
   })
 })
 
@@ -1865,11 +2002,14 @@ describe('handleRelayFrame yjs/awareness send-path membership gate', () => {
     const rooms = new RoomRegistry(() => now)
     const expiring = fakeConn('expiring')
     const current = fakeConn('current')
-    const authorize = (userUuid: string) => ({
+    const authorize = (userUuid: string, _room: string, capability?: string) => ({
       authorized: true as const,
       expiresAt: userUuid === 'expiring' ? 2_000 : 5_000,
       serverUpdatedAtTimestamp: 1,
       collaborationProtocolVersion: COLLABORATION_PROTOCOL_VERSION,
+      roomEpoch: TEST_ROOM_EPOCH,
+      collaborationSecurityEpoch: TEST_SECURITY_EPOCH,
+      leaseRequestId: capability,
     })
 
     await handleRelayFrame(
@@ -1879,7 +2019,10 @@ describe('handleRelayFrame yjs/awareness send-path membership gate', () => {
         t: 'room-join',
         room: 'n1',
         requestId: 'expiring-request',
+        cap: 'expiring-request',
+        role: 'editor',
         protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+        expectedRoomEpoch: TEST_ROOM_EPOCH,
       },
       authorize,
     )
@@ -1890,7 +2033,10 @@ describe('handleRelayFrame yjs/awareness send-path membership gate', () => {
         t: 'room-join',
         room: 'n1',
         requestId: 'current-request',
+        cap: 'current-request',
+        role: 'editor',
         protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+        expectedRoomEpoch: TEST_ROOM_EPOCH,
       },
       authorize,
     )
