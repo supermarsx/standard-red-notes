@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  MAX_INVITE_CURSOR_BYTES,
+  MAX_RPC_CREDIT_BYTES,
+  MAX_RPC_DEADLINE_MS,
   MAX_SYNC_FRAME_BYTES,
   MAX_SYNC_RESUME_SEQUENCE,
   MAX_SYNC_SEQUENCE,
+  MIN_RPC_DEADLINE_MS,
   CURRENT_SYNC_COMMAND_DIGEST_TEST_VECTOR,
+  FILES_CONTROL_DEFAULTS,
   SYNC_COMMAND_DIGEST_TEST_VECTOR,
   SyncProtocolError,
   canonicalSyncJson,
@@ -15,6 +20,13 @@ import {
   syncPayloadLength,
   type JsonObject,
 } from '../src/syncProtocol.js'
+import {
+  MAX_FILE_METADATA_ENTRIES,
+  MAX_FILE_TRANSFER_BYTES,
+  MAX_FILE_TRANSFER_CREDIT_BYTES,
+  MAX_FILE_TRANSFER_DEADLINE_MS,
+  MIN_FILE_TRANSFER_DEADLINE_MS,
+} from '../src/filesProtocol.js'
 
 function commandFrame(body: JsonObject, digest = digestSyncCommandBody(body)): JsonObject {
   const payload = { command: 'SYNC_ITEMS', body }
@@ -61,6 +73,24 @@ function inviteFrame(
     payload,
     ...overrides,
   }
+}
+
+function clientFrame(type: string, payload: JsonObject, overrides: JsonObject = {}): JsonObject {
+  return {
+    version: 1,
+    channel: 'sync',
+    type,
+    requestId: `${type.toLowerCase()}-request`,
+    commandId: `${type.toLowerCase()}-command`,
+    sequence: type === 'AUTH' ? 0 : 1,
+    payloadLength: syncPayloadLength(payload),
+    payload,
+    ...overrides,
+  }
+}
+
+function expectInvalidFrame(frame: JsonObject, code = 'INVALID_ENVELOPE'): void {
+  expect(() => parseSyncClientFrame(JSON.stringify(frame))).toThrowError(expect.objectContaining({ code }))
 }
 
 describe('sync protocol v1', () => {
@@ -240,5 +270,489 @@ describe('sync protocol v1', () => {
     expect(() =>
       createSyncServerFrame({ type: 'PONG', requestId: 'r', commandId: 'c', sequence: MAX_SYNC_SEQUENCE + 1 }),
     ).toThrowError(expect.objectContaining({ code: 'INVALID_SEQUENCE' }))
+  })
+
+  it('accepts strict AUTH, STATUS, PING, and digest-bearing server frames at their boundaries', () => {
+    const authPayload = { ticket: 'x'.repeat(32), deviceId: 'device-1', resumeSequence: MAX_SYNC_RESUME_SEQUENCE }
+    expect(parseSyncClientFrame(JSON.stringify(clientFrame('AUTH', authPayload)))).toMatchObject({
+      type: 'AUTH',
+      payload: authPayload,
+    })
+    const statusPayload = {}
+    expect(
+      parseSyncClientFrame(JSON.stringify(clientFrame('STATUS', statusPayload, { digest: 'a'.repeat(64) }))),
+    ).toMatchObject({ type: 'STATUS', digest: 'a'.repeat(64) })
+    expect(parseSyncClientFrame(JSON.stringify(clientFrame('PING', {})))).toMatchObject({ type: 'PING' })
+    expect(
+      createSyncServerFrame({
+        type: 'COMMITTED',
+        requestId: 'request-1',
+        commandId: 'command-1',
+        sequence: MAX_SYNC_SEQUENCE,
+        payload: { ok: true },
+        digest: 'b'.repeat(64),
+      }),
+    ).toMatchObject({ digest: 'b'.repeat(64), payload: { ok: true } })
+    expect(FILES_CONTROL_DEFAULTS).toEqual({ deadlineMs: 30_000, initialCreditBytes: 512 * 1024 })
+  })
+
+  it('accepts discovery and challenged collaboration grants with exact optional fields', () => {
+    const discovery = {
+      noteUuid: 'note-1',
+      collaborationProtocolVersion: 3,
+      epochDiscovery: true,
+    }
+    expect(parseSyncClientFrame(JSON.stringify(clientFrame('COLLABORATION_AUTHORIZE', discovery)))).toMatchObject({
+      payload: discovery,
+    })
+
+    const grant = {
+      noteUuid: 'note-1',
+      collaborationProtocolVersion: 3,
+      expectedRoomEpoch: 'room_epoch_000001',
+      epochDiscoveryChallenge: 'challenge-1',
+      epochDiscoveryRequestId: 'discovery-request-1',
+      leaseRequestId: 'lease-request-1',
+      bootstrapChallenge: 'bootstrap-1',
+    }
+    expect(parseSyncClientFrame(JSON.stringify(clientFrame('COLLABORATION_AUTHORIZE', grant)))).toMatchObject({
+      payload: grant,
+    })
+  })
+
+  // Rows carry an optional third element (envelope overrides), so the tuple has to
+  // be spelled out: inference over mixed-arity rows makes the third element required.
+  it.each<[string, JsonObject, JsonObject?]>([
+    [
+      'extra envelope field',
+      { noteUuid: 'note-1', collaborationProtocolVersion: 3, epochDiscovery: true },
+      { extra: true },
+    ],
+    [
+      'extra discovery field',
+      { noteUuid: 'note-1', collaborationProtocolVersion: 3, epochDiscovery: true, leaseRequestId: 'lease-1' },
+    ],
+    ['missing note', { collaborationProtocolVersion: 3, epochDiscovery: true }],
+    ['empty note', { noteUuid: '', collaborationProtocolVersion: 3, epochDiscovery: true }],
+    ['oversized note', { noteUuid: 'n'.repeat(201), collaborationProtocolVersion: 3, epochDiscovery: true }],
+    ['wrong protocol version', { noteUuid: 'note-1', collaborationProtocolVersion: 2, epochDiscovery: true }],
+    [
+      'missing epoch',
+      {
+        noteUuid: 'note-1',
+        collaborationProtocolVersion: 3,
+        epochDiscoveryChallenge: 'challenge-1',
+        epochDiscoveryRequestId: 'discovery-1',
+      },
+    ],
+    [
+      'short epoch',
+      {
+        noteUuid: 'note-1',
+        collaborationProtocolVersion: 3,
+        expectedRoomEpoch: 'short',
+        epochDiscoveryChallenge: 'challenge-1',
+        epochDiscoveryRequestId: 'discovery-1',
+      },
+    ],
+    [
+      'invalid challenge',
+      {
+        noteUuid: 'note-1',
+        collaborationProtocolVersion: 3,
+        expectedRoomEpoch: 'room_epoch_000001',
+        epochDiscoveryChallenge: '../bad',
+        epochDiscoveryRequestId: 'discovery-1',
+      },
+    ],
+    [
+      'invalid discovery request',
+      {
+        noteUuid: 'note-1',
+        collaborationProtocolVersion: 3,
+        expectedRoomEpoch: 'room_epoch_000001',
+        epochDiscoveryChallenge: 'challenge-1',
+        epochDiscoveryRequestId: '',
+      },
+    ],
+    [
+      'invalid lease request',
+      {
+        noteUuid: 'note-1',
+        collaborationProtocolVersion: 3,
+        expectedRoomEpoch: 'room_epoch_000001',
+        epochDiscoveryChallenge: 'challenge-1',
+        epochDiscoveryRequestId: 'discovery-1',
+        leaseRequestId: '../bad',
+      },
+    ],
+    [
+      'invalid bootstrap challenge',
+      {
+        noteUuid: 'note-1',
+        collaborationProtocolVersion: 3,
+        expectedRoomEpoch: 'room_epoch_000001',
+        epochDiscoveryChallenge: 'challenge-1',
+        epochDiscoveryRequestId: 'discovery-1',
+        bootstrapChallenge: '../bad',
+      },
+    ],
+    [
+      'bootstrap without lease',
+      {
+        noteUuid: 'note-1',
+        collaborationProtocolVersion: 3,
+        expectedRoomEpoch: 'room_epoch_000001',
+        epochDiscoveryChallenge: 'challenge-1',
+        epochDiscoveryRequestId: 'discovery-1',
+        bootstrapChallenge: 'bootstrap-1',
+      },
+    ],
+  ])('rejects malformed collaboration authorization: %s', (_label, payload, overrides = {}) => {
+    expectInvalidFrame(clientFrame('COLLABORATION_AUTHORIZE', payload, overrides))
+  })
+
+  it('accepts bounded same-origin RPC requests and exact cancel/credit controls', () => {
+    const post = {
+      method: 'POST',
+      path: '/v1/items?limit=1',
+      body: { items: [] },
+      headers: { accept: 'application/json', 'content-type': 'application/json' },
+      deadlineMs: MIN_RPC_DEADLINE_MS,
+      initialCreditBytes: MAX_RPC_CREDIT_BYTES,
+      stream: true,
+      idempotencyKey: 'rpc-key-1',
+    }
+    expect(parseSyncClientFrame(JSON.stringify(clientFrame('RPC_REQUEST', post)))).toMatchObject({ payload: post })
+    expect(
+      parseSyncClientFrame(
+        JSON.stringify(
+          clientFrame('RPC_REQUEST', {
+            method: 'GET',
+            path: '/v1/items',
+            deadlineMs: MAX_RPC_DEADLINE_MS,
+            initialCreditBytes: 1,
+            stream: false,
+          }),
+        ),
+      ),
+    ).toMatchObject({ type: 'RPC_REQUEST' })
+    expect(
+      parseSyncClientFrame(JSON.stringify(clientFrame('RPC_CANCEL', { targetRequestId: 'rpc-request-1' }))),
+    ).toMatchObject({ type: 'RPC_CANCEL' })
+    expect(
+      parseSyncClientFrame(
+        JSON.stringify(clientFrame('RPC_CREDIT', { targetRequestId: 'rpc-request-1', creditBytes: 1 })),
+      ),
+    ).toMatchObject({ type: 'RPC_CREDIT' })
+  })
+
+  it.each([
+    ['unsupported method', { method: 'HEAD' }],
+    ['non-string path', { path: 1 }],
+    ['non-v1 path', { path: '/healthcheck' }],
+    ['protocol-relative path', { path: '//evil.example/v1/items' }],
+    ['backslash path', { path: '/v1/unsafe\\path' }],
+    ['fragment path', { path: '/v1/items#secret' }],
+    ['oversized path', { path: `/v1/${'x'.repeat(2_049)}` }],
+    ['non-integer deadline', { deadlineMs: 1.5 }],
+    ['short deadline', { deadlineMs: MIN_RPC_DEADLINE_MS - 1 }],
+    ['long deadline', { deadlineMs: MAX_RPC_DEADLINE_MS + 1 }],
+    ['non-integer credit', { initialCreditBytes: 1.5 }],
+    ['zero credit', { initialCreditBytes: 0 }],
+    ['oversized credit', { initialCreditBytes: MAX_RPC_CREDIT_BYTES + 1 }],
+    ['non-boolean stream', { stream: 'yes' }],
+    ['non-object headers', { headers: [] }],
+    [
+      'too many headers',
+      {
+        headers: {
+          accept: 'a',
+          'content-type': 'b',
+          'if-match': 'c',
+          'if-none-match': 'd',
+          'x-shared-vault-owner-context': 'e',
+          extra: 'f',
+        },
+      },
+    ],
+    ['uppercase header', { headers: { Accept: 'application/json' } }],
+    ['unapproved header', { headers: { authorization: 'secret' } }],
+    ['non-string header', { headers: { accept: 1 } }],
+    ['oversized header', { headers: { accept: 'x'.repeat(1_025) } }],
+    ['newline header', { headers: { accept: 'text/plain\r\nunsafe' } }],
+    ['invalid idempotency key', { idempotencyKey: '../bad' }],
+    ['GET request body', { method: 'GET', body: {} }],
+    ['unexpected field', { unexpected: true }],
+  ])('rejects an unsafe RPC request with %s', (_label, change) => {
+    const payload = {
+      method: 'POST',
+      path: '/v1/items',
+      deadlineMs: 30_000,
+      initialCreditBytes: 1_024,
+      stream: false,
+      ...change,
+    }
+    expectInvalidFrame(clientFrame('RPC_REQUEST', payload as JsonObject))
+  })
+
+  it.each([
+    ['cancel extra field', 'RPC_CANCEL', { targetRequestId: 'rpc-1', extra: true }],
+    ['invalid cancel target', 'RPC_CANCEL', { targetRequestId: '../bad' }],
+    ['credit missing amount', 'RPC_CREDIT', { targetRequestId: 'rpc-1' }],
+    ['credit invalid target', 'RPC_CREDIT', { targetRequestId: '', creditBytes: 1 }],
+    ['credit non-integer', 'RPC_CREDIT', { targetRequestId: 'rpc-1', creditBytes: 1.5 }],
+    ['credit zero', 'RPC_CREDIT', { targetRequestId: 'rpc-1', creditBytes: 0 }],
+    ['credit oversized', 'RPC_CREDIT', { targetRequestId: 'rpc-1', creditBytes: MAX_RPC_CREDIT_BYTES + 1 }],
+  ])('rejects malformed RPC control: %s', (_label, type, payload) => {
+    expectInvalidFrame(clientFrame(type as string, payload as JsonObject))
+  })
+
+  it('accepts every bounded FILES_V1 control shape, including resumable transfers', () => {
+    const personal = { ownershipType: 'user', remoteIdentifier: 'file-1', fileUuid: 'file-1' }
+    const shared = {
+      ownershipType: 'shared-vault',
+      remoteIdentifier: 'file-2',
+      fileUuid: 'file-2',
+      sharedVaultUuid: 'vault-1',
+      sharedVaultOwnerUuid: 'owner-1',
+    }
+    const frames = [
+      clientFrame('FILES_METADATA', { resources: [personal, shared], deadlineMs: MIN_FILE_TRANSFER_DEADLINE_MS }),
+      clientFrame('FILES_UPLOAD_OPEN', {
+        resource: personal,
+        decryptedSize: 1,
+        declaredSize: MAX_FILE_TRANSFER_BYTES,
+        mimeType: 'application/octet-stream',
+        deadlineMs: MAX_FILE_TRANSFER_DEADLINE_MS,
+        resumeId: 'resume-1',
+      }),
+      clientFrame('FILES_UPLOAD_FINISH', {
+        transferId: 'transfer-1',
+        generation: 1,
+        declaredSize: 1,
+        sha256: 'a'.repeat(64),
+        deadlineMs: 30_000,
+      }),
+      clientFrame('FILES_DOWNLOAD_OPEN', {
+        resource: shared,
+        offset: 0,
+        initialCreditBytes: MAX_FILE_TRANSFER_CREDIT_BYTES,
+        deadlineMs: 30_000,
+        resumeId: 'resume-2',
+      }),
+      clientFrame('FILES_CREDIT', { transferId: 'transfer-1', generation: 1, creditBytes: 1 }),
+      clientFrame('FILES_CANCEL', { transferId: 'transfer-1', generation: 1 }),
+    ]
+    expect(frames.map((frame) => parseSyncClientFrame(JSON.stringify(frame)).type)).toEqual([
+      'FILES_METADATA',
+      'FILES_UPLOAD_OPEN',
+      'FILES_UPLOAD_FINISH',
+      'FILES_DOWNLOAD_OPEN',
+      'FILES_CREDIT',
+      'FILES_CANCEL',
+    ])
+  })
+
+  it.each([
+    [
+      'metadata extra field',
+      'FILES_METADATA',
+      { resources: [{ ownershipType: 'user', remoteIdentifier: 'file-1' }], deadlineMs: 30_000, extra: true },
+    ],
+    ['metadata non-array', 'FILES_METADATA', { resources: {}, deadlineMs: 30_000 }],
+    ['metadata empty', 'FILES_METADATA', { resources: [], deadlineMs: 30_000 }],
+    [
+      'metadata too many',
+      'FILES_METADATA',
+      {
+        resources: Array.from({ length: MAX_FILE_METADATA_ENTRIES + 1 }, () => ({
+          ownershipType: 'user',
+          remoteIdentifier: 'file-1',
+        })),
+        deadlineMs: 30_000,
+      },
+    ],
+    [
+      'metadata invalid resource',
+      'FILES_METADATA',
+      { resources: [{ ownershipType: 'user', remoteIdentifier: '' }], deadlineMs: 30_000 },
+    ],
+    [
+      'metadata short deadline',
+      'FILES_METADATA',
+      {
+        resources: [{ ownershipType: 'user', remoteIdentifier: 'file-1' }],
+        deadlineMs: MIN_FILE_TRANSFER_DEADLINE_MS - 1,
+      },
+    ],
+    [
+      'upload invalid resource',
+      'FILES_UPLOAD_OPEN',
+      { resource: null, decryptedSize: 1, declaredSize: 1, mimeType: 'text/plain', deadlineMs: 30_000 },
+    ],
+    [
+      'upload zero decrypted size',
+      'FILES_UPLOAD_OPEN',
+      {
+        resource: { ownershipType: 'user', remoteIdentifier: 'file-1' },
+        decryptedSize: 0,
+        declaredSize: 1,
+        mimeType: 'text/plain',
+        deadlineMs: 30_000,
+      },
+    ],
+    [
+      'upload oversized declared size',
+      'FILES_UPLOAD_OPEN',
+      {
+        resource: { ownershipType: 'user', remoteIdentifier: 'file-1' },
+        decryptedSize: 1,
+        declaredSize: MAX_FILE_TRANSFER_BYTES + 1,
+        mimeType: 'text/plain',
+        deadlineMs: 30_000,
+      },
+    ],
+    [
+      'upload invalid MIME',
+      'FILES_UPLOAD_OPEN',
+      {
+        resource: { ownershipType: 'user', remoteIdentifier: 'file-1' },
+        decryptedSize: 1,
+        declaredSize: 1,
+        mimeType: '',
+        deadlineMs: 30_000,
+      },
+    ],
+    [
+      'upload long deadline',
+      'FILES_UPLOAD_OPEN',
+      {
+        resource: { ownershipType: 'user', remoteIdentifier: 'file-1' },
+        decryptedSize: 1,
+        declaredSize: 1,
+        mimeType: 'text/plain',
+        deadlineMs: MAX_FILE_TRANSFER_DEADLINE_MS + 1,
+      },
+    ],
+    [
+      'upload invalid resume',
+      'FILES_UPLOAD_OPEN',
+      {
+        resource: { ownershipType: 'user', remoteIdentifier: 'file-1' },
+        decryptedSize: 1,
+        declaredSize: 1,
+        mimeType: 'text/plain',
+        deadlineMs: 30_000,
+        resumeId: '../bad',
+      },
+    ],
+    [
+      'finish invalid transfer',
+      'FILES_UPLOAD_FINISH',
+      { transferId: '', generation: 1, declaredSize: 1, sha256: 'a'.repeat(64), deadlineMs: 30_000 },
+    ],
+    [
+      'finish invalid generation',
+      'FILES_UPLOAD_FINISH',
+      { transferId: 'transfer-1', generation: 0, declaredSize: 1, sha256: 'a'.repeat(64), deadlineMs: 30_000 },
+    ],
+    [
+      'finish zero size',
+      'FILES_UPLOAD_FINISH',
+      { transferId: 'transfer-1', generation: 1, declaredSize: 0, sha256: 'a'.repeat(64), deadlineMs: 30_000 },
+    ],
+    [
+      'finish invalid digest',
+      'FILES_UPLOAD_FINISH',
+      { transferId: 'transfer-1', generation: 1, declaredSize: 1, sha256: 'bad', deadlineMs: 30_000 },
+    ],
+    [
+      'finish invalid deadline',
+      'FILES_UPLOAD_FINISH',
+      { transferId: 'transfer-1', generation: 1, declaredSize: 1, sha256: 'a'.repeat(64), deadlineMs: 1 },
+    ],
+    [
+      'download invalid resource',
+      'FILES_DOWNLOAD_OPEN',
+      { resource: {}, offset: 0, initialCreditBytes: 1, deadlineMs: 30_000 },
+    ],
+    [
+      'download non-integer offset',
+      'FILES_DOWNLOAD_OPEN',
+      {
+        resource: { ownershipType: 'user', remoteIdentifier: 'file-1' },
+        offset: 0.5,
+        initialCreditBytes: 1,
+        deadlineMs: 30_000,
+      },
+    ],
+    [
+      'download negative offset',
+      'FILES_DOWNLOAD_OPEN',
+      {
+        resource: { ownershipType: 'user', remoteIdentifier: 'file-1' },
+        offset: -1,
+        initialCreditBytes: 1,
+        deadlineMs: 30_000,
+      },
+    ],
+    [
+      'download oversized offset',
+      'FILES_DOWNLOAD_OPEN',
+      {
+        resource: { ownershipType: 'user', remoteIdentifier: 'file-1' },
+        offset: MAX_FILE_TRANSFER_BYTES + 1,
+        initialCreditBytes: 1,
+        deadlineMs: 30_000,
+      },
+    ],
+    [
+      'download zero credit',
+      'FILES_DOWNLOAD_OPEN',
+      {
+        resource: { ownershipType: 'user', remoteIdentifier: 'file-1' },
+        offset: 0,
+        initialCreditBytes: 0,
+        deadlineMs: 30_000,
+      },
+    ],
+    [
+      'download invalid deadline',
+      'FILES_DOWNLOAD_OPEN',
+      {
+        resource: { ownershipType: 'user', remoteIdentifier: 'file-1' },
+        offset: 0,
+        initialCreditBytes: 1,
+        deadlineMs: 1,
+      },
+    ],
+    [
+      'download invalid resume',
+      'FILES_DOWNLOAD_OPEN',
+      {
+        resource: { ownershipType: 'user', remoteIdentifier: 'file-1' },
+        offset: 0,
+        initialCreditBytes: 1,
+        deadlineMs: 30_000,
+        resumeId: '../bad',
+      },
+    ],
+    ['credit missing amount', 'FILES_CREDIT', { transferId: 'transfer-1', generation: 1 }],
+    [
+      'credit invalid amount',
+      'FILES_CREDIT',
+      { transferId: 'transfer-1', generation: 1, creditBytes: MAX_FILE_TRANSFER_CREDIT_BYTES + 1 },
+    ],
+    ['cancel extra field', 'FILES_CANCEL', { transferId: 'transfer-1', generation: 1, extra: true }],
+    ['cancel invalid transfer', 'FILES_CANCEL', { transferId: '../bad', generation: 1 }],
+  ])('rejects malformed FILES_V1 control: %s', (_label, type, payload) => {
+    expectInvalidFrame(clientFrame(type as string, payload as JsonObject))
+  })
+
+  it('rejects non-integer byte counts and an oversized invite cursor before JSON work', () => {
+    expect(() => parseSyncClientFrame('{}', -1)).toThrowError(expect.objectContaining({ code: 'FRAME_TOO_LARGE' }))
+    expect(() => parseSyncClientFrame('{}', 1.5)).toThrowError(expect.objectContaining({ code: 'FRAME_TOO_LARGE' }))
+    expectInvalidFrame(inviteFrame('INVITE_ACK', { cursor: 'x'.repeat(MAX_INVITE_CURSOR_BYTES + 1) }))
   })
 })
