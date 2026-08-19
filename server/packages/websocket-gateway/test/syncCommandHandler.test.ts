@@ -23,6 +23,7 @@ import {
   MAX_SYNC_RESUME_SEQUENCE,
   createSyncServerFrame,
   digestSyncCommandBody,
+  parseSyncClientFrame,
   syncPayloadLength,
   type JsonObject,
 } from '../src/syncProtocol.js'
@@ -86,19 +87,21 @@ function commandFrame(
   }
 }
 
-function collaborationAuthorizationFrame(sequence: number): JsonObject {
-  const payload = {
+function collaborationAuthorizationFrame(
+  sequence: number,
+  payload: JsonObject = {
     noteUuid: 'note-1',
-    collaborationProtocolVersion: 2,
-    leaseRequestId: 'lease-1',
-    bootstrapChallenge: 'challenge-1',
-  }
+    collaborationProtocolVersion: 3,
+    epochDiscovery: true,
+  },
+  requestId = `collaboration-request-${sequence}`,
+): JsonObject {
   return {
     version: 1,
     channel: 'sync',
     type: 'COLLABORATION_AUTHORIZE',
-    requestId: 'collaboration-request',
-    commandId: 'collaboration-command',
+    requestId,
+    commandId: `collaboration-command-${sequence}`,
     sequence,
     payloadLength: syncPayloadLength(payload),
     payload,
@@ -228,15 +231,27 @@ function enqueue(handler: SyncCommandHandler, frame: JsonObject): void {
   handler.enqueue(raw, Buffer.byteLength(raw))
 }
 
+// vi.fn() infers its implementation's return type before the assignment, so a bare
+// `async () => ({ authorized: true })` widens to `{ authorized: boolean }` and no
+// longer matches the discriminated union. Passing the adapter's own method type as
+// the type argument contextually types the implementation instead, which keeps the
+// literal discriminants and makes the compiler demand every partner field.
 const allowAuthorization = (): SyncLiveAuthorizationAdapter => ({
   ready: () => true,
-  authorize: vi.fn(async () => ({ authorized: true })),
+  authorize: vi.fn<SyncLiveAuthorizationAdapter['authorize']>(async () => ({ authorized: true })),
 })
 
 const committingBackend = (): SyncCommandBackendAdapter => ({
   ready: () => true,
-  execute: vi.fn(async (input) => ({ digest: input.digest, payload: { saved: true } })),
-  status: vi.fn(async (input) => ({ status: 'COMMITTED', digest: input.digest, payload: { saved: true } })),
+  execute: vi.fn<SyncCommandBackendAdapter['execute']>(async (input) => ({
+    digest: input.digest,
+    payload: { saved: true },
+  })),
+  status: vi.fn<SyncCommandBackendAdapter['status']>(async (input) => ({
+    status: 'COMMITTED',
+    digest: input.digest,
+    payload: { saved: true },
+  })),
 })
 
 async function authenticatedHandler(
@@ -517,6 +532,172 @@ describe('SyncCommandHandler', () => {
     handler.disconnect()
   })
 
+  it('rejects every malformed durable invite replay boundary before exposing event metadata', async () => {
+    const sharedInvite = {
+      version: 1,
+      eventId: '11111111-1111-4111-8111-111111111111',
+      streamPosition: 'cursor-1',
+      kind: 'shared-vault-invite',
+      action: 'created',
+      inviteUuid: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      sharedVaultUuid: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      occurredAt: 1,
+    }
+    const subscriptionInvite = {
+      version: 1,
+      eventId: '22222222-2222-4222-8222-222222222222',
+      streamPosition: 'cursor-1',
+      kind: 'subscription-invite',
+      action: 'updated',
+      inviteUuid: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      occurredAt: 1,
+    }
+    const acceptedMembership = {
+      version: 1,
+      eventId: '33333333-3333-4333-8333-333333333333',
+      streamPosition: 'cursor-1',
+      kind: 'shared-vault-membership',
+      action: 'accepted',
+      sharedVaultUuid: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      memberUserUuid: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      membershipUuid: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+      inviteUuid: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+      role: 'write',
+      revision: '1',
+      occurredAt: 1,
+    }
+    const invitedMembership = {
+      ...acceptedMembership,
+      action: 'invited',
+      membershipUuid: undefined,
+    }
+    const leftMembership = {
+      ...acceptedMembership,
+      action: 'left',
+      inviteUuid: undefined,
+      role: undefined,
+    }
+    const roleChangedMembership = {
+      ...acceptedMembership,
+      action: 'role-changed',
+      inviteUuid: undefined,
+    }
+    const applicationState = {
+      version: 1,
+      eventId: '44444444-4444-4444-8444-444444444444',
+      streamPosition: 'cursor-1',
+      kind: 'application-state',
+      action: 'updated',
+      resource: 'items',
+      revision: '1',
+      occurredAt: 1,
+    }
+    const replayWith = (event: unknown): unknown => ({
+      previousCursor: 'cursor-0',
+      events: [event],
+      nextCursor: 'cursor-1',
+      hasMore: false,
+    })
+    const malformedEvents: unknown[] = [
+      null,
+      [],
+      'event',
+      { ...sharedInvite, version: 2 },
+      { ...sharedInvite, eventId: 1 },
+      { ...sharedInvite, eventId: 'invalid' },
+      { ...sharedInvite, streamPosition: 1 },
+      { ...sharedInvite, streamPosition: '' },
+      { ...sharedInvite, streamPosition: 'x'.repeat(2_049) },
+      { ...sharedInvite, occurredAt: 1.5 },
+      { ...sharedInvite, occurredAt: 0 },
+      { ...sharedInvite, kind: 1 },
+      { ...sharedInvite, kind: 'unknown' },
+      { ...sharedInvite, extra: true },
+      { ...sharedInvite, action: 1 },
+      { ...sharedInvite, action: 'unknown' },
+      { ...sharedInvite, inviteUuid: 1 },
+      { ...sharedInvite, inviteUuid: 'invalid' },
+      { ...sharedInvite, sharedVaultUuid: undefined },
+      { ...subscriptionInvite, extra: true },
+      { ...subscriptionInvite, action: 1 },
+      { ...subscriptionInvite, action: 'unknown' },
+      { ...subscriptionInvite, inviteUuid: undefined },
+      { ...acceptedMembership, extra: true },
+      { ...acceptedMembership, action: 1 },
+      { ...acceptedMembership, action: 'unknown' },
+      { ...acceptedMembership, sharedVaultUuid: 'invalid' },
+      { ...acceptedMembership, memberUserUuid: undefined },
+      { ...acceptedMembership, revision: 1 },
+      { ...acceptedMembership, revision: '0' },
+      { ...acceptedMembership, membershipUuid: undefined },
+      { ...acceptedMembership, inviteUuid: undefined },
+      { ...acceptedMembership, role: undefined },
+      { ...invitedMembership, membershipUuid: acceptedMembership.membershipUuid },
+      { ...invitedMembership, inviteUuid: undefined },
+      { ...invitedMembership, role: undefined },
+      { ...leftMembership, inviteUuid: acceptedMembership.inviteUuid },
+      { ...leftMembership, role: 'read' },
+      { ...roleChangedMembership, role: 1 },
+      { ...roleChangedMembership, role: 'owner' },
+      { ...applicationState, extra: true },
+      { ...applicationState, action: 1 },
+      { ...applicationState, action: 'unknown' },
+      { ...applicationState, resource: 1 },
+      { ...applicationState, resource: 'unknown' },
+      { ...applicationState, resourceUuid: 1 },
+      { ...applicationState, resourceUuid: 'invalid' },
+      { ...applicationState, revision: undefined },
+      { ...applicationState, revision: '0' },
+    ]
+    const malformedReplays: unknown[] = [
+      null,
+      [],
+      'replay',
+      { previousCursor: 'wrong', events: [], nextCursor: 'cursor-0', hasMore: false },
+      { previousCursor: 'cursor-0', events: [], nextCursor: 1, hasMore: false },
+      { previousCursor: 'cursor-0', events: [], nextCursor: '', hasMore: false },
+      { previousCursor: 'cursor-0', events: [], nextCursor: 'x'.repeat(2_049), hasMore: false },
+      { previousCursor: 'cursor-0', events: {}, nextCursor: 'cursor-0', hasMore: false },
+      {
+        previousCursor: 'cursor-0',
+        events: [sharedInvite, sharedInvite, sharedInvite],
+        nextCursor: 'cursor-1',
+        hasMore: false,
+      },
+      { previousCursor: 'cursor-0', events: [], nextCursor: 'cursor-0', hasMore: 'false' },
+      { previousCursor: 'cursor-0', events: [], nextCursor: 'cursor-other', hasMore: false },
+      { previousCursor: 'cursor-0', events: [], nextCursor: 'cursor-0', hasMore: true },
+      {
+        previousCursor: 'cursor-0',
+        events: [sharedInvite, { ...subscriptionInvite, eventId: '55555555-5555-4555-8555-555555555555' }],
+        nextCursor: 'cursor-1',
+        hasMore: false,
+      },
+      { previousCursor: 'cursor-0', events: [sharedInvite], nextCursor: 'cursor-other', hasMore: false },
+      ...malformedEvents.map(replayWith),
+    ]
+    let replayIndex = 0
+    const readAfter = vi.fn(async () => malformedReplays[replayIndex++] as never)
+    const inviteEvents: SyncInviteEventsAdapter = {
+      distribution: 'shared',
+      ready: () => true,
+      tail: vi.fn(async () => 'cursor-tail'),
+      readAfter,
+      subscribeAvailability: vi.fn(() => () => undefined),
+    }
+    const { handler, socket } = await authenticatedHandler({ inviteEvents, requireSharedState: true })
+
+    for (const [index] of malformedReplays.entries()) {
+      enqueue(handler, inviteSubscribeFrame(index + 1, 'cursor-0', 2))
+      await vi.waitFor(() => expect(readAfter).toHaveBeenCalledTimes(index + 1))
+      await vi.waitFor(() => expect(socket.frames.filter((frame) => frame.type === 'ERROR')).toHaveLength(index + 1))
+      expect(socket.frames.at(-1)?.payload).toMatchObject({ code: 'INVITE_STORE_UNAVAILABLE' })
+    }
+
+    expect(socket.frames.some((frame) => frame.type === 'INVITE_BATCH')).toBe(false)
+    handler.disconnect()
+  })
+
   it('requires authoritative bootstrap before subscribing and fails closed on an invalid invite ACK', async () => {
     const listeners = new Set<() => void>()
     const inviteEvents: SyncInviteEventsAdapter = {
@@ -697,72 +878,627 @@ describe('SyncCommandHandler', () => {
     handler.disconnect()
   })
 
-  it('negotiates collaboration authorization and returns an exact bound grant on the authenticated socket', async () => {
+  it('discovers an opaque epoch without a capability, then grants once for the exact one-use challenge', async () => {
+    const roomEpoch = 'room_epoch_00000001'
+    const securityEpoch = 'security_epoch_0001'
+    const authorizeCollaboration = vi.fn(
+      async ({ request }: Parameters<SyncCollaborationAuthorizationAdapter['authorizeCollaboration']>[0]) =>
+        request.epochDiscovery === true
+          ? {
+              authorized: true as const,
+              epochDiscovery: true as const,
+              room: request.noteUuid,
+              serverUpdatedAtTimestamp: 123,
+              collaborationProtocolVersion: 3 as const,
+              roomEpoch,
+              collaborationSecurityEpoch: securityEpoch,
+            }
+          : {
+              authorized: true as const,
+              capability: 'collaboration-capability',
+              room: request.noteUuid,
+              expiresIn: 300,
+              serverUpdatedAtTimestamp: 123,
+              collaborationProtocolVersion: 3 as const,
+              roomEpoch,
+              collaborationSecurityEpoch: securityEpoch,
+              leaseRequestId: request.leaseRequestId,
+              bootstrapChallenge: request.bootstrapChallenge,
+            },
+    )
     const collaborationAuthorization: SyncCollaborationAuthorizationAdapter = {
       collaborationAuthorizationReady: () => true,
-      authorizeCollaboration: vi.fn(async () => ({
-        authorized: true,
-        capability: 'collaboration-capability',
-        room: 'note-1',
-        expiresIn: 300,
-        serverUpdatedAtTimestamp: 123,
-        collaborationProtocolVersion: 2,
-        leaseRequestId: 'lease-1',
-        bootstrapChallenge: 'challenge-1',
-      })),
+      authorizeCollaboration,
     }
     const { handler, socket } = await authenticatedHandler({ collaborationAuthorization })
-    expect(socket.frames[0].payload).toMatchObject({
-      operations: ['SYNC_ITEMS', 'AUTHORIZE_COLLABORATION'],
-    })
-
-    enqueue(handler, collaborationAuthorizationFrame(1))
+    enqueue(
+      handler,
+      collaborationAuthorizationFrame(1, {
+        noteUuid: 'note-1',
+        collaborationProtocolVersion: 3,
+        epochDiscovery: true,
+      }),
+    )
 
     await vi.waitFor(() => expect(socket.frames.at(-1)?.type).toBe('COLLABORATION_AUTHORIZED'))
+    const discovery = socket.frames.at(-1) as JsonObject
+    expect(discovery.payload).toMatchObject({
+      epochDiscovery: true,
+      room: 'note-1',
+      collaborationProtocolVersion: 3,
+      roomEpoch,
+      collaborationSecurityEpoch: securityEpoch,
+      epochDiscoveryRequestId: 'collaboration-request-1',
+      epochDiscoveryChallenge: expect.any(String),
+      challengeExpiresAt: expect.any(Number),
+    })
+    expect(discovery.payload).not.toHaveProperty('capability')
+    expect(discovery.payload).not.toHaveProperty('expiresIn')
+    expect(socket.frames.some((frame) => String(frame.type).startsWith('ROOM_'))).toBe(false)
+    expect(authorizeCollaboration).toHaveBeenCalledTimes(1)
+
+    const grantPayload = {
+      noteUuid: 'note-1',
+      collaborationProtocolVersion: 3,
+      expectedRoomEpoch: roomEpoch,
+      epochDiscoveryChallenge: discovery.payload.epochDiscoveryChallenge,
+      epochDiscoveryRequestId: discovery.payload.epochDiscoveryRequestId,
+      leaseRequestId: 'lease-1',
+      bootstrapChallenge: 'challenge-1',
+    }
+    enqueue(handler, collaborationAuthorizationFrame(2, grantPayload))
+    await vi.waitFor(() =>
+      expect(socket.frames.at(-1)?.payload).toMatchObject({ capability: 'collaboration-capability' }),
+    )
     expect(socket.frames.at(-1)?.payload).toEqual({
       capability: 'collaboration-capability',
       room: 'note-1',
       expiresIn: 300,
       serverUpdatedAtTimestamp: 123,
-      collaborationProtocolVersion: 2,
+      collaborationProtocolVersion: 3,
+      roomEpoch,
+      collaborationSecurityEpoch: securityEpoch,
       leaseRequestId: 'lease-1',
       bootstrapChallenge: 'challenge-1',
     })
-    expect(collaborationAuthorization.authorizeCollaboration).toHaveBeenCalledTimes(1)
+    expect(authorizeCollaboration).toHaveBeenCalledTimes(2)
+
+    enqueue(handler, collaborationAuthorizationFrame(3, grantPayload))
+    await vi.waitFor(() => expect(socket.frames.at(-1)?.payload).toEqual({ code: 'NOT_AUTHORIZED', retryable: false }))
+    expect(authorizeCollaboration).toHaveBeenCalledTimes(2)
     handler.disconnect()
   })
 
-  it('returns a successful collaboration grant without optional lease bindings when none were requested', async () => {
-    const collaborationAuthorization: SyncCollaborationAuthorizationAdapter = {
-      collaborationAuthorizationReady: () => true,
-      authorizeCollaboration: vi.fn(async () => ({
-        authorized: true,
-        capability: 'collaboration-capability',
-        room: 'note-1',
-        expiresIn: 300,
-        serverUpdatedAtTimestamp: 123,
-        collaborationProtocolVersion: 2,
-      })),
-    }
-    const { handler, socket } = await authenticatedHandler({ collaborationAuthorization })
-    const frame = collaborationAuthorizationFrame(1)
-    const payload = frame.payload as JsonObject
-    delete payload.leaseRequestId
-    delete payload.bootstrapChallenge
-    frame.payloadLength = syncPayloadLength(payload)
-
-    enqueue(handler, frame)
-
-    await vi.waitFor(() => expect(socket.frames.at(-1)?.type).toBe('COLLABORATION_AUTHORIZED'))
-    expect(socket.frames.at(-1)?.payload).toEqual({
-      capability: 'collaboration-capability',
+  it('consumes a discovery challenge even when the first exact grant attempt mismatches', async () => {
+    const authorizeCollaboration = vi.fn(async () => ({
+      authorized: true as const,
+      epochDiscovery: true as const,
       room: 'note-1',
-      expiresIn: 300,
       serverUpdatedAtTimestamp: 123,
-      collaborationProtocolVersion: 2,
+      collaborationProtocolVersion: 3 as const,
+      roomEpoch: 'room_epoch_00000001',
+      collaborationSecurityEpoch: 'security_epoch_0001',
+    }))
+    const { handler, socket } = await authenticatedHandler({
+      collaborationAuthorization: { collaborationAuthorizationReady: () => true, authorizeCollaboration },
     })
+    enqueue(
+      handler,
+      collaborationAuthorizationFrame(1, {
+        noteUuid: 'note-1',
+        collaborationProtocolVersion: 3,
+        epochDiscovery: true,
+      }),
+    )
+    await vi.waitFor(() => expect(socket.frames.at(-1)?.type).toBe('COLLABORATION_AUTHORIZED'))
+    const discovery = socket.frames.at(-1) as JsonObject
+    const grant = {
+      noteUuid: 'note-1',
+      collaborationProtocolVersion: 3,
+      expectedRoomEpoch: 'room_epoch_00000001',
+      epochDiscoveryRequestId: discovery.payload.epochDiscoveryRequestId,
+      epochDiscoveryChallenge: 'wrong_challenge_abcdefghijklmnopqrstuvwxyz',
+    }
+
+    enqueue(handler, collaborationAuthorizationFrame(2, grant))
+    await vi.waitFor(() => expect(socket.frames.at(-1)?.payload).toEqual({ code: 'NOT_AUTHORIZED', retryable: false }))
+    enqueue(
+      handler,
+      collaborationAuthorizationFrame(3, {
+        ...grant,
+        epochDiscoveryChallenge: discovery.payload.epochDiscoveryChallenge,
+      }),
+    )
+    await vi.waitFor(() => expect(socket.frames.filter((frame) => frame.type === 'ERROR')).toHaveLength(2))
+    expect(authorizeCollaboration).toHaveBeenCalledTimes(1)
     handler.disconnect()
   })
+
+  it('rejects an expired discovery challenge before invoking the grant backend', async () => {
+    let now = 1_000_000
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const authorizeCollaboration = vi.fn(async () => ({
+      authorized: true as const,
+      epochDiscovery: true as const,
+      room: 'note-1',
+      serverUpdatedAtTimestamp: 123,
+      collaborationProtocolVersion: 3 as const,
+      roomEpoch: 'room_epoch_00000001',
+      collaborationSecurityEpoch: 'security_epoch_0001',
+    }))
+    const { handler, socket } = await authenticatedHandler({
+      collaborationAuthorization: { collaborationAuthorizationReady: () => true, authorizeCollaboration },
+    })
+    try {
+      enqueue(handler, collaborationAuthorizationFrame(1))
+      await vi.waitFor(() => expect(socket.frames.at(-1)?.type).toBe('COLLABORATION_AUTHORIZED'))
+      const discovery = socket.frames.at(-1) as JsonObject
+      now += 10_001
+      enqueue(
+        handler,
+        collaborationAuthorizationFrame(2, {
+          noteUuid: 'note-1',
+          collaborationProtocolVersion: 3,
+          expectedRoomEpoch: 'room_epoch_00000001',
+          epochDiscoveryRequestId: discovery.payload.epochDiscoveryRequestId,
+          epochDiscoveryChallenge: discovery.payload.epochDiscoveryChallenge,
+        }),
+      )
+      await vi.waitFor(() =>
+        expect(socket.frames.at(-1)?.payload).toEqual({ code: 'NOT_AUTHORIZED', retryable: false }),
+      )
+      expect(authorizeCollaboration).toHaveBeenCalledTimes(1)
+    } finally {
+      handler.disconnect()
+      nowSpy.mockRestore()
+    }
+  })
+
+  // -------------------------------------------------------------------------
+  // v3 epoch-discovery challenge handling, asserted at the GRANT BACKEND
+  // boundary. `authorizeCollaboration` is the only door to the collaboration
+  // capability minter, so every case below asserts on its call count: a
+  // NOT_AUTHORIZED response with the backend already invoked would mean an
+  // unauthenticated challenge still reached the grant path.
+  // -------------------------------------------------------------------------
+  const collaborationEpochs = { roomEpoch: 'room_epoch_00000001', securityEpoch: 'security_epoch_0001' }
+  // Mirrors IDENTIFIER_PATTERN in src/syncProtocol.ts, which every requestId,
+  // commandId and epoch-discovery challenge on the wire must satisfy.
+  const SYNC_IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u
+
+  function twoPhaseCollaborationAdapter(epochs = collaborationEpochs) {
+    const authorizeCollaboration = vi.fn(
+      async ({ request }: Parameters<SyncCollaborationAuthorizationAdapter['authorizeCollaboration']>[0]) =>
+        request.epochDiscovery === true
+          ? {
+              authorized: true as const,
+              epochDiscovery: true as const,
+              room: request.noteUuid,
+              serverUpdatedAtTimestamp: 123,
+              collaborationProtocolVersion: 3 as const,
+              roomEpoch: epochs.roomEpoch,
+              collaborationSecurityEpoch: epochs.securityEpoch,
+            }
+          : {
+              authorized: true as const,
+              capability: 'collaboration-capability',
+              room: request.noteUuid,
+              expiresIn: 300,
+              serverUpdatedAtTimestamp: 123,
+              collaborationProtocolVersion: 3 as const,
+              roomEpoch: epochs.roomEpoch,
+              collaborationSecurityEpoch: epochs.securityEpoch,
+              ...(typeof request.leaseRequestId === 'string' ? { leaseRequestId: request.leaseRequestId } : {}),
+              ...(typeof request.bootstrapChallenge === 'string'
+                ? { bootstrapChallenge: request.bootstrapChallenge }
+                : {}),
+            },
+    )
+    const adapter: SyncCollaborationAuthorizationAdapter = {
+      collaborationAuthorizationReady: () => true,
+      authorizeCollaboration,
+    }
+    return { adapter, authorizeCollaboration }
+  }
+
+  // These waits are keyed on frame COUNTS rather than "the last frame", so they
+  // are independent of unrelated frames arriving in between. The short poll
+  // interval matters: each handshake step costs one poll, and the default 50ms
+  // interval makes a four-step test spend most of its budget sleeping once the
+  // whole suite is competing for the event loop.
+  const FRAME_WAIT = { timeout: 15_000, interval: 5 }
+  /** Generous per-test budget; these tests take tens of milliseconds unloaded. */
+  const CHALLENGE_TEST_TIMEOUT = 30_000
+
+  async function discover(
+    handler: SyncCommandHandler,
+    socket: FakeSocket,
+    sequence: number,
+    noteUuid = 'note-1',
+  ): Promise<{ epochDiscoveryChallenge: string; epochDiscoveryRequestId: string }> {
+    const before = socket.frames.filter((frame) => frame.type === 'COLLABORATION_AUTHORIZED').length
+    enqueue(
+      handler,
+      collaborationAuthorizationFrame(sequence, {
+        noteUuid,
+        collaborationProtocolVersion: 3,
+        epochDiscovery: true,
+      }),
+    )
+    let payload: JsonObject | undefined
+    await vi.waitFor(() => {
+      const granted = socket.frames.filter((frame) => frame.type === 'COLLABORATION_AUTHORIZED')
+      expect(granted).toHaveLength(before + 1)
+      payload = granted.at(-1)?.payload as JsonObject
+      expect(payload.epochDiscovery).toBe(true)
+    }, FRAME_WAIT)
+    const epochDiscoveryChallenge = (payload as JsonObject).epochDiscoveryChallenge as string
+    // A challenge the client cannot echo back is unusable. See the dedicated
+    // regression test below: the minter emits base64url, whose leading `_`/`-`
+    // the envelope identifier validator rejects.
+    expect(
+      SYNC_IDENTIFIER_PATTERN.test(epochDiscoveryChallenge),
+      `minted challenge "${epochDiscoveryChallenge}" is not a valid protocol identifier, so the client can never present it`,
+    ).toBe(true)
+    return {
+      epochDiscoveryChallenge,
+      epochDiscoveryRequestId: (payload as JsonObject).epochDiscoveryRequestId as string,
+    }
+  }
+
+  /** Wait until exactly `count` ERROR frames exist, the newest being a denial. */
+  async function expectDenials(socket: FakeSocket, count: number): Promise<void> {
+    await vi.waitFor(() => {
+      const errors = socket.frames.filter((frame) => frame.type === 'ERROR')
+      expect(errors).toHaveLength(count)
+      expect(errors.at(-1)?.payload).toEqual({ code: 'NOT_AUTHORIZED', retryable: false })
+    }, FRAME_WAIT)
+  }
+
+  /** Wait until exactly `count` capability grants have been issued. */
+  async function expectGrants(socket: FakeSocket, count: number): Promise<void> {
+    await vi.waitFor(() => {
+      const granted = socket.frames.filter(
+        (frame) => frame.type === 'COLLABORATION_AUTHORIZED' && (frame.payload as JsonObject).capability !== undefined,
+      )
+      expect(granted).toHaveLength(count)
+      expect(granted.at(-1)?.payload).toMatchObject({ capability: 'collaboration-capability' })
+    }, FRAME_WAIT)
+  }
+
+  // KNOWN DEFECT — escalated, not fixed here: the fix belongs in
+  // src/syncCommandHandler.ts, which this executor does not own.
+  //
+  // handleCollaborationAuthorization mints the one-use challenge as
+  // `randomBytes(32).toString('base64url')`, but every identifier carried by a
+  // sync envelope must match IDENTIFIER_PATTERN in src/syncProtocol.ts, whose
+  // FIRST character must be alphanumeric. A base64url string begins with `-` or
+  // `_` 2/64 = 3.1% of the time, so roughly one collaboration handshake in
+  // thirty-two cannot be completed: the client faithfully echoes the challenge
+  // the server gave it, parseSyncClientFrame throws INVALID_ENVELOPE, and
+  // failAndClose() tears down the WHOLE sync socket with close code 1008 —
+  // taking sync, files and invite streams down with it, not just collaboration.
+  // It fails closed (no unauthorized grant), so this is availability, not
+  // authorization.
+  //
+  // `it.fails` captures the defect without leaving the suite red. When the
+  // minter starts emitting an identifier-safe challenge this test goes red and
+  // the `.fails` inversion must be removed.
+  it.fails('mints an epoch-discovery challenge the client can actually present', () => {
+    // Exactly what randomBytes produces when the first six random bits are set.
+    const challengeAsMinted = Buffer.alloc(32, 0xfc).toString('base64url')
+    expect(challengeAsMinted.startsWith('_')).toBe(true)
+    expect(SYNC_IDENTIFIER_PATTERN.test(challengeAsMinted)).toBe(true)
+
+    const grant = collaborationAuthorizationFrame(1, {
+      noteUuid: 'note-1',
+      collaborationProtocolVersion: 3,
+      expectedRoomEpoch: collaborationEpochs.roomEpoch,
+      epochDiscoveryChallenge: challengeAsMinted,
+      epochDiscoveryRequestId: 'collaboration-request-1',
+    })
+    expect(() => parseSyncClientFrame(rawFrame(grant))).not.toThrow()
+  })
+
+  it(
+    'MISSING challenge: a grant request with no prior discovery never reaches the grant backend',
+    { timeout: CHALLENGE_TEST_TIMEOUT },
+    async () => {
+      const metrics: SyncCommandMetrics = { increment: vi.fn() }
+      const { adapter, authorizeCollaboration } = twoPhaseCollaborationAdapter()
+      const { handler, socket } = await authenticatedHandler({ collaborationAuthorization: adapter, metrics })
+
+      // Well-formed on the wire, but this socket never performed epoch discovery.
+      enqueue(
+        handler,
+        collaborationAuthorizationFrame(1, {
+          noteUuid: 'note-1',
+          collaborationProtocolVersion: 3,
+          expectedRoomEpoch: collaborationEpochs.roomEpoch,
+          epochDiscoveryChallenge: 'fabricated_challenge_abcdefghijklmnop',
+          epochDiscoveryRequestId: 'fabricated-request',
+          leaseRequestId: 'lease-1',
+        }),
+      )
+
+      await expectDenials(socket, 1)
+      expect(authorizeCollaboration).not.toHaveBeenCalled()
+      expect(metrics.increment).toHaveBeenCalledWith('collaboration_authorization', 'epoch_challenge_invalid')
+      expect(socket.frames.some((frame) => frame.type === 'COLLABORATION_AUTHORIZED')).toBe(false)
+
+      // Control: this exact spy DOES record a call once the handshake is real, so
+      // the zero-call assertion above is not vacuous.
+      const challenge = await discover(handler, socket, 2)
+      enqueue(
+        handler,
+        collaborationAuthorizationFrame(3, {
+          noteUuid: 'note-1',
+          collaborationProtocolVersion: 3,
+          expectedRoomEpoch: collaborationEpochs.roomEpoch,
+          leaseRequestId: 'lease-1',
+          ...challenge,
+        }),
+      )
+      await expectGrants(socket, 1)
+      expect(authorizeCollaboration).toHaveBeenCalledTimes(2)
+      handler.disconnect()
+    },
+  )
+
+  it(
+    'MISSING challenge: a grant frame omitting the challenge fields is rejected at the envelope',
+    { timeout: CHALLENGE_TEST_TIMEOUT },
+    async () => {
+      const { adapter, authorizeCollaboration } = twoPhaseCollaborationAdapter()
+      const { handler, socket } = await authenticatedHandler({ collaborationAuthorization: adapter })
+      await discover(handler, socket, 1)
+      expect(authorizeCollaboration).toHaveBeenCalledTimes(1)
+
+      enqueue(
+        handler,
+        collaborationAuthorizationFrame(2, {
+          noteUuid: 'note-1',
+          collaborationProtocolVersion: 3,
+          expectedRoomEpoch: collaborationEpochs.roomEpoch,
+          leaseRequestId: 'lease-1',
+        }),
+      )
+
+      await vi.waitFor(() => expect(socket.closes).toHaveLength(1), FRAME_WAIT)
+      expect(socket.frames.at(-1)?.payload).toEqual({ code: 'INVALID_ENVELOPE', retryable: false })
+      expect(socket.closes[0].code).toBe(1008)
+      // The discovery call is the only one; the grant backend was never reached.
+      expect(authorizeCollaboration).toHaveBeenCalledTimes(1)
+      handler.disconnect()
+    },
+  )
+
+  it.each([
+    [
+      'another note',
+      (challenge: { epochDiscoveryChallenge: string; epochDiscoveryRequestId: string }) => ({
+        noteUuid: 'note-2',
+        collaborationProtocolVersion: 3,
+        expectedRoomEpoch: collaborationEpochs.roomEpoch,
+        ...challenge,
+      }),
+    ],
+    [
+      'another room epoch',
+      (challenge: { epochDiscoveryChallenge: string; epochDiscoveryRequestId: string }) => ({
+        noteUuid: 'note-1',
+        collaborationProtocolVersion: 3,
+        expectedRoomEpoch: 'room_epoch_00000002',
+        ...challenge,
+      }),
+    ],
+    [
+      'another discovery request id',
+      (challenge: { epochDiscoveryChallenge: string; epochDiscoveryRequestId: string }) => ({
+        noteUuid: 'note-1',
+        collaborationProtocolVersion: 3,
+        expectedRoomEpoch: collaborationEpochs.roomEpoch,
+        epochDiscoveryChallenge: challenge.epochDiscoveryChallenge,
+        epochDiscoveryRequestId: 'some-other-discovery',
+      }),
+    ],
+    [
+      'a challenge value from nowhere',
+      (challenge: { epochDiscoveryChallenge: string; epochDiscoveryRequestId: string }) => ({
+        noteUuid: 'note-1',
+        collaborationProtocolVersion: 3,
+        expectedRoomEpoch: collaborationEpochs.roomEpoch,
+        epochDiscoveryChallenge: 'unrelated_challenge_abcdefghijklmnop',
+        epochDiscoveryRequestId: challenge.epochDiscoveryRequestId,
+      }),
+    ],
+  ])(
+    'MISMATCHED challenge bound to %s never reaches the grant backend',
+    { timeout: CHALLENGE_TEST_TIMEOUT },
+    async (_description, buildGrant) => {
+      const { adapter, authorizeCollaboration } = twoPhaseCollaborationAdapter()
+      const { handler, socket } = await authenticatedHandler({ collaborationAuthorization: adapter })
+      const challenge = await discover(handler, socket, 1)
+      expect(authorizeCollaboration).toHaveBeenCalledTimes(1)
+
+      enqueue(handler, collaborationAuthorizationFrame(2, buildGrant(challenge)))
+
+      await expectDenials(socket, 1)
+      expect(authorizeCollaboration).toHaveBeenCalledTimes(1)
+      expect(socket.frames.filter((frame) => frame.type === 'COLLABORATION_AUTHORIZED')).toHaveLength(1)
+      handler.disconnect()
+    },
+  )
+
+  it(
+    'MISMATCHED challenge: a challenge issued to one socket never reaches another socket grant backend',
+    { timeout: CHALLENGE_TEST_TIMEOUT },
+    async () => {
+      const issuer = twoPhaseCollaborationAdapter()
+      const victim = twoPhaseCollaborationAdapter()
+      const issuerHandler = await authenticatedHandler({ collaborationAuthorization: issuer.adapter })
+      const victimHandler = await authenticatedHandler({ collaborationAuthorization: victim.adapter })
+      const challenge = await discover(issuerHandler.handler, issuerHandler.socket, 1)
+      expect(victim.authorizeCollaboration).not.toHaveBeenCalled()
+
+      enqueue(
+        victimHandler.handler,
+        collaborationAuthorizationFrame(1, {
+          noteUuid: 'note-1',
+          collaborationProtocolVersion: 3,
+          expectedRoomEpoch: collaborationEpochs.roomEpoch,
+          ...challenge,
+        }),
+      )
+
+      await expectDenials(victimHandler.socket, 1)
+      // The challenge is bound to the socket that discovered it; the second
+      // socket's grant backend is never consulted.
+      expect(victim.authorizeCollaboration).not.toHaveBeenCalled()
+      expect(issuer.authorizeCollaboration).toHaveBeenCalledTimes(1)
+
+      // Control: the second socket's own discovery does reach its own backend.
+      await discover(victimHandler.handler, victimHandler.socket, 2)
+      expect(victim.authorizeCollaboration).toHaveBeenCalledTimes(1)
+      issuerHandler.handler.disconnect()
+      victimHandler.handler.disconnect()
+    },
+  )
+
+  it(
+    'STALE challenge: a superseded discovery challenge never reaches the grant backend',
+    { timeout: CHALLENGE_TEST_TIMEOUT },
+    async () => {
+      const { adapter, authorizeCollaboration } = twoPhaseCollaborationAdapter()
+      const { handler, socket } = await authenticatedHandler({ collaborationAuthorization: adapter })
+      const first = await discover(handler, socket, 1)
+      const second = await discover(handler, socket, 2)
+      expect(first.epochDiscoveryChallenge).not.toBe(second.epochDiscoveryChallenge)
+      expect(authorizeCollaboration).toHaveBeenCalledTimes(2)
+
+      enqueue(
+        handler,
+        collaborationAuthorizationFrame(3, {
+          noteUuid: 'note-1',
+          collaborationProtocolVersion: 3,
+          expectedRoomEpoch: collaborationEpochs.roomEpoch,
+          ...first,
+        }),
+      )
+
+      await expectDenials(socket, 1)
+      expect(authorizeCollaboration).toHaveBeenCalledTimes(2)
+
+      // Only ONE challenge is ever outstanding, and a failed attempt burns it.
+      // The superseding challenge is therefore dead too — presenting a stale
+      // challenge cannot be used to probe whether a newer one is still live.
+      enqueue(
+        handler,
+        collaborationAuthorizationFrame(4, {
+          noteUuid: 'note-1',
+          collaborationProtocolVersion: 3,
+          expectedRoomEpoch: collaborationEpochs.roomEpoch,
+          ...second,
+        }),
+      )
+      await expectDenials(socket, 2)
+      expect(authorizeCollaboration).toHaveBeenCalledTimes(2)
+
+      // Control: a fresh discovery still grants, so the rejections above are
+      // about challenge staleness rather than a wedged handshake.
+      const third = await discover(handler, socket, 5)
+      enqueue(
+        handler,
+        collaborationAuthorizationFrame(6, {
+          noteUuid: 'note-1',
+          collaborationProtocolVersion: 3,
+          expectedRoomEpoch: collaborationEpochs.roomEpoch,
+          ...third,
+        }),
+      )
+      await expectGrants(socket, 1)
+      expect(authorizeCollaboration).toHaveBeenCalledTimes(4)
+      handler.disconnect()
+    },
+  )
+
+  it(
+    'REPLAYED challenge: a consumed challenge cannot be rebound to a different lease request',
+    { timeout: CHALLENGE_TEST_TIMEOUT },
+    async () => {
+      const { adapter, authorizeCollaboration } = twoPhaseCollaborationAdapter()
+      const { handler, socket } = await authenticatedHandler({ collaborationAuthorization: adapter })
+      const challenge = await discover(handler, socket, 1)
+
+      enqueue(
+        handler,
+        collaborationAuthorizationFrame(2, {
+          noteUuid: 'note-1',
+          collaborationProtocolVersion: 3,
+          expectedRoomEpoch: collaborationEpochs.roomEpoch,
+          leaseRequestId: 'lease-1',
+          ...challenge,
+        }),
+      )
+      await expectGrants(socket, 1)
+      expect(authorizeCollaboration).toHaveBeenCalledTimes(2)
+
+      // Same one-use challenge, different lease binding: a second capability for
+      // the same epoch would let one authorization mint two room leases.
+      enqueue(
+        handler,
+        collaborationAuthorizationFrame(3, {
+          noteUuid: 'note-1',
+          collaborationProtocolVersion: 3,
+          expectedRoomEpoch: collaborationEpochs.roomEpoch,
+          leaseRequestId: 'lease-2',
+          ...challenge,
+        }),
+      )
+
+      await expectDenials(socket, 1)
+      expect(authorizeCollaboration).toHaveBeenCalledTimes(2)
+      expect(socket.frames.filter((frame) => frame.type === 'COLLABORATION_AUTHORIZED')).toHaveLength(2)
+      handler.disconnect()
+    },
+  )
+
+  it(
+    'REPLAYED challenge: a rejected grant burns the challenge so a retry cannot reach the backend',
+    { timeout: CHALLENGE_TEST_TIMEOUT },
+    async () => {
+      const { adapter, authorizeCollaboration } = twoPhaseCollaborationAdapter()
+      const { handler, socket } = await authenticatedHandler({ collaborationAuthorization: adapter })
+      const challenge = await discover(handler, socket, 1)
+
+      // First attempt fails the binding check, which still consumes the challenge.
+      enqueue(
+        handler,
+        collaborationAuthorizationFrame(2, {
+          noteUuid: 'note-1',
+          collaborationProtocolVersion: 3,
+          expectedRoomEpoch: 'room_epoch_00000099',
+          ...challenge,
+        }),
+      )
+      await expectDenials(socket, 1)
+      expect(authorizeCollaboration).toHaveBeenCalledTimes(1)
+
+      // The now-burned challenge must not become usable again on a correct retry.
+      enqueue(
+        handler,
+        collaborationAuthorizationFrame(3, {
+          noteUuid: 'note-1',
+          collaborationProtocolVersion: 3,
+          expectedRoomEpoch: collaborationEpochs.roomEpoch,
+          ...challenge,
+        }),
+      )
+      await expectDenials(socket, 2)
+      expect(authorizeCollaboration).toHaveBeenCalledTimes(1)
+      handler.disconnect()
+    },
+  )
 
   it('fails collaboration authorization closed when unavailable, denied, malformed, or errored', async () => {
     const malformedResults = [
