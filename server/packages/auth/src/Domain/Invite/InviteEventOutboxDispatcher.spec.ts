@@ -224,6 +224,36 @@ describe('InviteEventOutboxDispatcher lifecycle', () => {
       expect(logger.error).not.toHaveBeenCalled()
     })
 
+    // Worker-mode corollary: Container.ts builds the data source with
+    // `runMigrations: this.mode === 'server'` but gates the dispatcher only on
+    // `mode !== 'cli'`, so a worker started before the server has migrated polls an
+    // absent table. It must ride that out and pick up once migrations land, rather
+    // than exiting and crash-looping.
+    it('survives an un-migrated schema and recovers once the table appears', async () => {
+      const missingTable = new Error('SQLITE_ERROR: no such table: invite_event_outbox')
+      repository.claimNext.mockRejectedValue(missingTable)
+      const dispatcher = dispatcherWithLogger({ pollBackoffMaximumMilliseconds: 200 })
+
+      dispatcher.start(50)
+      jest.advanceTimersByTime(0)
+      await flush()
+      jest.advanceTimersByTime(1_000)
+      await flush()
+
+      expect(logger.error).toHaveBeenCalled()
+      expect(repository.claimNext.mock.calls.length).toBeGreaterThan(1)
+
+      // Migrations land: the table exists and a record is waiting.
+      repository.claimNext.mockResolvedValueOnce(claimed('after-migration')).mockResolvedValue(null)
+      jest.advanceTimersByTime(200)
+      await flush()
+
+      expect(publisher.publish).toHaveBeenCalledTimes(1)
+      expect(repository.markPublished).toHaveBeenCalledTimes(1)
+
+      await dispatcher.stop()
+    })
+
     it('backs off exponentially while failing and returns to cadence once healthy', async () => {
       repository.claimNext.mockRejectedValue(new Error('down'))
       const dispatcher = dispatcherWithLogger({ pollBackoffMaximumMilliseconds: 400 })
