@@ -337,6 +337,93 @@
   outline: 2px solid var(--sn-stylekit-info-color);
 }
 
+/* Transient, DOM-only assistant change affordance. The encrypted ledger owns
+   persistence; these classes never enter Lexical/Yjs editor state. */
+.assistant-change-highlight {
+  position: relative;
+  border-radius: 0.25rem;
+  background-color: var(--sn-stylekit-info-backdrop-color);
+  box-shadow: inset 3px 0 0 var(--sn-stylekit-info-color);
+  animation: AssistantChangePulse 6s ease-out both;
+}
+
+.assistant-change-highlight::after {
+  content: attr(data-assistant-change-marker);
+  pointer-events: none;
+  position: absolute;
+  z-index: 2;
+  top: 0.25rem;
+  right: 0.25rem;
+  border-radius: 9999px;
+  background: var(--sn-stylekit-info-color);
+  color: var(--sn-stylekit-info-contrast-color);
+  padding: 0.125rem 0.375rem;
+  font-family: var(--sn-stylekit-sans-serif-font);
+  font-size: 0.625rem;
+  font-weight: 600;
+  line-height: 1rem;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  animation: AssistantChangeMarkerFade 6s ease-out both;
+}
+
+.assistant-change-jump-target {
+  outline: 2px solid var(--sn-stylekit-info-color);
+  outline-offset: 3px;
+  animation: AssistantChangeJump 1.6s ease-out both;
+}
+
+@keyframes AssistantChangePulse {
+  0% {
+    background-color: var(--sn-stylekit-info-backdrop-color);
+    box-shadow:
+      inset 3px 0 0 var(--sn-stylekit-info-color),
+      0 0 0 0 var(--sn-stylekit-info-color);
+  }
+  18% {
+    box-shadow:
+      inset 3px 0 0 var(--sn-stylekit-info-color),
+      0 0 0 4px transparent;
+  }
+  75% {
+    background-color: var(--sn-stylekit-info-backdrop-color);
+    box-shadow: inset 3px 0 0 var(--sn-stylekit-info-color);
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: inset 3px 0 0 transparent;
+  }
+}
+
+@keyframes AssistantChangeMarkerFade {
+  0%,
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes AssistantChangeJump {
+  0%,
+  35% {
+    outline-color: var(--sn-stylekit-info-color);
+  }
+  100% {
+    outline-color: transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .assistant-change-highlight,
+  .assistant-change-highlight::after,
+  .assistant-change-jump-target {
+    animation: none;
+    transition: none;
+  }
+}
+
 .Lexical__blockCursor {
   display: block;
   pointer-events: none;
@@ -353,6 +440,10 @@
 }
 
 @media print {
+  .assistant-change-highlight::after {
+    display: none;
+  }
+
   .ContentEditable__root [data-super-widget-layout],
   .Lexical__tableScrollableWrapper {
     inline-size: 100% !important;

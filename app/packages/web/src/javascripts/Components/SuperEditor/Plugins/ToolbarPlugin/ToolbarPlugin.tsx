@@ -105,6 +105,7 @@ import LinkViewer from './LinkViewer'
 import { OPEN_FILE_UPLOAD_MODAL_COMMAND } from '../EncryptedFilePlugin/FilePlugin'
 import { CREATE_NOTE_FROM_SELECTION_COMMAND } from '../NoteFromSelectionPlugin'
 import SelectionTools from './SelectionTools'
+import AssistantChangesToolbar from './AssistantChangesToolbar'
 import {
   getChecklistAutoMoveEnabled,
   setChecklistAutoMoveEnabled,
@@ -3105,6 +3106,7 @@ const ToolbarPlugin = ({ noteUuid }: { noteUuid?: string }) => {
                 }
                 return <Fragment key={buttonId}>{buttonRenderers[buttonId]}</Fragment>
               })}
+              <AssistantChangesToolbar noteUuid={noteUuid} editor={activeEditor} />
             </Toolbar>
           )}
           {/* Office-ribbon tab strip: one mini tab per super group. Switching tabs

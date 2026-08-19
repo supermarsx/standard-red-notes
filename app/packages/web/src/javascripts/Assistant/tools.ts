@@ -59,6 +59,14 @@ import {
   readAssistantSuperStructure,
 } from './assistantSuperNotePatch'
 import { AssistantLiveSuperReadOptions, getAssistantSuperNoteLiveBridge } from './assistantSuperNoteLiveBridge'
+import {
+  appendAssistantChangeRecord,
+  createAssistantChangeRecord,
+  findAssistantChangesByOperationIds,
+  generateAssistantChangeId,
+  NoteAssistantChangesKey,
+  withAssistantChangeLedgerMutation,
+} from './assistantChangeLedger'
 
 export type TodoStatus = 'pending' | 'in_progress' | 'completed'
 
@@ -149,6 +157,12 @@ export interface AssistantToolContext {
   selectedNoteUuids?: ReadonlySet<string>
   /** Content snapshots attached to the exact context sent for this run. */
   expectedNoteSnapshots?: Map<string, AssistantNoteSnapshot>
+  /** Stable UI identity of the assistant message that owns this run's tool cards. */
+  assistantMessageId?: string
+  /** Live message identity, used when steering replaces the active response bubble. */
+  getAssistantMessageId?: () => string
+  /** Stable identity retained when a visible assistant response is steered/replaced. */
+  assistantRunId?: string
   /** Nested research agents are read-only; the visible parent owns all writes. */
   allowMutatingTools?: boolean
   /** Whether mutating tools require user confirmation before executing. */
@@ -243,6 +257,40 @@ function isAssistantBlockLocator(value: unknown): value is AssistantBlockLocator
     )
   }
   return false
+}
+
+const ASSISTANT_OPERATION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/
+
+function canonicalAssistantOperation(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalAssistantOperation).join(',')}]`
+  }
+  if (isRecord(value)) {
+    return `{${Object.keys(value)
+      .filter((key) => key !== 'operationId')
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalAssistantOperation(value[key])}`)
+      .join(',')}}`
+  }
+  return JSON.stringify(value) ?? 'null'
+}
+
+async function normalizeAssistantOperationId(
+  value: unknown,
+  input: { runId: string; callId?: string; index: number; operation: AssistantStructuralPatchOperation },
+): Promise<string> {
+  if (typeof value === 'string' && ASSISTANT_OPERATION_ID_PATTERN.test(value)) {
+    return value
+  }
+  const revision = await assistantSuperRevision(
+    canonicalAssistantOperation({
+      runId: input.runId,
+      callId: input.callId ?? 'no-tool-call-id',
+      index: input.index,
+      operation: input.operation,
+    }),
+  )
+  return `assistant-operation-${revision.contentHash.replace(':', '-')}`
 }
 
 export class AssistantTools implements ToolSession {
@@ -1148,7 +1196,49 @@ export class AssistantTools implements ToolSession {
     if (!Array.isArray(args.operations)) {
       throw new Error('notes.patchBlocks requires an operations array.')
     }
-    const operations = args.operations as AssistantStructuralPatchOperation[]
+    const rawOperations = args.operations as AssistantStructuralPatchOperation[]
+    const deterministicRunId = this.context.assistantRunId ?? 'assistant-run-unscoped'
+    const operations = await Promise.all(
+      rawOperations.map(async (operation, index) => ({
+        ...operation,
+        operationId: await normalizeAssistantOperationId(operation.operationId, {
+          runId: deterministicRunId,
+          callId,
+          index,
+          operation,
+        }),
+      })),
+    )
+    const operationIds = operations.map((operation) => operation.operationId as string)
+    if (new Set(operationIds).size !== operationIds.length) {
+      throw new Error('notes.patchBlocks requires a unique operationId for every operation.')
+    }
+    const alreadyRecorded = findAssistantChangesByOperationIds(note, operationIds)
+    if (alreadyRecorded.length > 0) {
+      const matchingRecord = alreadyRecorded.find((record) =>
+        operationIds.every((operationId) => record.operationIds.includes(operationId)),
+      )
+      if (
+        matchingRecord &&
+        alreadyRecorded.length === 1 &&
+        matchingRecord.status !== 'undone' &&
+        assistantNoteSnapshotMatches(note, matchingRecord.undo.after)
+      ) {
+        return {
+          ok: true,
+          status: 'applied',
+          alreadyApplied: true,
+          changeId: matchingRecord.changeId,
+          operationIds,
+          note: noteSummary(note),
+          revision: await assistantSuperRevision(note.text, note.userModifiedDate?.toISOString?.()),
+          appliedOperations: matchingRecord.operations.length,
+        }
+      }
+      throw new Error(
+        'This structural patch reuses operation ids whose recorded note state is no longer current, or mixes applied ids with new operations. Re-read the note and issue new operation ids.',
+      )
+    }
     const before = captureAssistantNoteSnapshot(note)
     const request = { base, operations }
     const liveBridge = getAssistantSuperNoteLiveBridge(note.uuid)
@@ -1184,40 +1274,61 @@ export class AssistantTools implements ToolSession {
       }
     }
 
-    // Flush and re-read once more immediately before the single item mutation.
-    // If anything moved since the base projection, return a rebase response and
-    // never partially apply the detached patch.
-    await flushAssistantNoteEditors(this.application, note.uuid)
-    const current = this.requireReadableNote(note.uuid)
-    this.assertNoteMutationAuthorized(current, false)
-    if (!assistantNoteSnapshotMatches(current, before)) {
-      const currentBridge = getAssistantSuperNoteLiveBridge(current.uuid)
-      const currentOptions = { updatedAt: current.userModifiedDate?.toISOString?.() }
-      return currentBridge
-        ? currentBridge.preparePatch(request, currentOptions)
-        : applyAssistantSuperPatch(current.text, request, currentOptions)
-    }
-    this.throwIfAborted()
-    const updated = await this.application.mutator.changeItem<NoteMutator, SNNote>(
-      current,
-      (mutator) => {
-        mutator.text = patch.text
-        mutator.preview_plain = this.notePreview(extractPlaintextFromNoteText(patch.text, NoteType.Super))
-        mutator.preview_html = undefined
+    const changeId = generateAssistantChangeId('change')
+    const ledgerRecord = createAssistantChangeRecord({
+      changeId,
+      noteUuid: note.uuid,
+      source: {
+        assistantMessageId:
+          this.context.getAssistantMessageId?.() ?? this.context.assistantMessageId ?? `assistant-message-${changeId}`,
+        assistantRunId: this.context.assistantRunId ?? `assistant-run-${changeId}`,
+        ...(callId ? { toolCallId: callId } : {}),
       },
-      MutationType.UpdateUserTimestamps,
-      PayloadEmitSource.AssistantChanged,
-    )
-    this.recordExpectedNoteSnapshot(updated)
-    this.syncInBackground()
-    this.publishNoteChange(callId, change)
-    return {
-      ok: true,
-      status: 'applied',
-      note: noteSummary(updated),
-      revision: await assistantSuperRevision(updated.text, updated.userModifiedDate?.toISOString?.()),
-      appliedOperations: patch.appliedOperations,
-    }
+      baseRevision: base,
+      newRevision: { contentHash: patch.revision.contentHash },
+      effects: patch.operationEffects,
+      undo: change,
+    })
+
+    return withAssistantChangeLedgerMutation(this.application, note.uuid, async () => {
+      // Flush and re-read inside the per-note ledger queue immediately before
+      // the single item mutation. Status changes that completed while the
+      // detached patch was prepared are merged from this latest item.
+      await flushAssistantNoteEditors(this.application, note.uuid)
+      const current = this.requireReadableNote(note.uuid)
+      this.assertNoteMutationAuthorized(current, false)
+      if (!assistantNoteSnapshotMatches(current, before)) {
+        const currentBridge = getAssistantSuperNoteLiveBridge(current.uuid)
+        const currentOptions = { updatedAt: current.userModifiedDate?.toISOString?.() }
+        return currentBridge
+          ? currentBridge.preparePatch(request, currentOptions)
+          : applyAssistantSuperPatch(current.text, request, currentOptions)
+      }
+      this.throwIfAborted()
+      const updated = await this.application.mutator.changeItem<NoteMutator, SNNote>(
+        current,
+        (mutator) => {
+          mutator.text = patch.text
+          mutator.preview_plain = this.notePreview(extractPlaintextFromNoteText(patch.text, NoteType.Super))
+          mutator.preview_html = undefined
+          mutator.setAppDataItem(NoteAssistantChangesKey, appendAssistantChangeRecord(current, ledgerRecord))
+        },
+        MutationType.UpdateUserTimestamps,
+        PayloadEmitSource.AssistantChanged,
+      )
+      this.recordExpectedNoteSnapshot(updated)
+      this.syncInBackground()
+      this.publishNoteChange(callId, change)
+      return {
+        ok: true,
+        status: 'applied',
+        note: noteSummary(updated),
+        revision: await assistantSuperRevision(updated.text, updated.userModifiedDate?.toISOString?.()),
+        appliedOperations: patch.appliedOperations,
+        changeId,
+        operationIds,
+      }
+    })
   }
 
   private async notesDelete(args: Record<string, unknown>) {
@@ -2000,6 +2111,11 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
             description:
               'Operation object. type is insert, replace-text, toggle-checklist, move, delete, or update-attrs. All targets use an exact locator returned by notes.readBlocks.',
             properties: {
+              operationId: {
+                type: 'string',
+                description:
+                  'Stable id for idempotent multi-device application. Reuse only when retrying this exact operation.',
+              },
               type: {
                 type: 'string',
                 enum: ['insert', 'replace-text', 'toggle-checklist', 'move', 'delete', 'update-attrs'],

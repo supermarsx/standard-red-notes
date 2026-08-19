@@ -26,7 +26,7 @@ export type AssistantInsertableBlock =
   | { kind: 'rich-fragment'; blocks: AssistantRichBlock[] }
   | { kind: 'markdown-fragment'; markdown: string }
 
-export type AssistantStructuralPatchOperation =
+type AssistantStructuralPatchOperationBody =
   | {
       type: 'insert'
       position: 'before' | 'after' | 'inside-section'
@@ -59,6 +59,35 @@ export type AssistantStructuralPatchOperation =
         checked?: boolean
       }
     }
+
+/**
+ * A caller-provided operation id is carried through the detached patch and the
+ * encrypted per-note audit ledger. It is intentionally optional at this layer
+ * so older callers remain compatible; the assistant tool normalizes one before
+ * any durable mutation.
+ */
+export type AssistantStructuralPatchOperation = AssistantStructuralPatchOperationBody & { operationId?: string }
+
+export type AssistantStructuralEffectLocator = {
+  /** Reload-stable structural fallback. */
+  path: number[]
+  /** Stable identifiers are included whenever the native node carries one. */
+  todoId?: string
+  nodeUuid?: string
+  /** Best-effort live-editor key; never the only locator persisted. */
+  nodeKey?: string
+}
+
+export type AssistantStructuralOperationEffect = {
+  operationId?: string
+  type: AssistantStructuralPatchOperation['type']
+  summary: string
+  affected: AssistantStructuralEffectLocator[]
+  beforeFragment?: string
+  afterFragment?: string
+  truncated?: boolean
+  deleted?: boolean
+}
 
 export type AssistantSuperRevision = {
   contentHash: string
@@ -131,6 +160,7 @@ export type AssistantSuperPatchResult =
       text: string
       revision: AssistantSuperRevision
       appliedOperations: number
+      operationEffects: AssistantStructuralOperationEffect[]
     }
   | {
       ok: false
@@ -317,6 +347,157 @@ function locatorFor(record: NodeRecord): AssistantBlockLocator {
     return { nodeKey: key }
   }
   return { path: record.path }
+}
+
+const MAX_ASSISTANT_EFFECT_RECORDS = 16
+const MAX_ASSISTANT_EFFECT_FRAGMENT_CHARS = 2_048
+
+/**
+ * Display fragments are defense-in-depth only; full undo snapshots remain E2E
+ * encrypted. Redact before any truncation so a cut inside an unterminated secret
+ * cannot turn a formerly recognizable value into a leaked prefix.
+ */
+export function redactAssistantEffectFragmentText(value: string): string {
+  return value
+    .replace(/-----BEGIN [^-\r\n]+-----[\s\S]*?(?:-----END [^-\r\n]+-----|$)/gi, '[redacted private material]')
+    .replace(/data:[^;,\s]+;base64,[A-Za-z0-9+/=]*/gi, '[redacted data URL]')
+    .replace(/\bBearer\s+[^\s"',;}\\]+/gi, 'Bearer [redacted]')
+    .replace(
+      /("(?:password|passphrase|secret|token|access[_-]?token|refresh[_-]?token|api[_-]?key|authorization)"\s*:\s*")((?:\\(?:.|$)|[^"\\\r\n])*)(?:"|$)/gi,
+      (match, prefix: string, secret: string) =>
+        `${prefix}[redacted]${match.length > prefix.length + secret.length ? '"' : ''}`,
+    )
+    .replace(
+      /(\\"(?:password|passphrase|secret|token|access[_-]?token|refresh[_-]?token|api[_-]?key|authorization)\\"\s*:\s*\\")((?:\\\\.|[^"\\\r\n])*)(?:\\"|$)/gi,
+      '$1[redacted]',
+    )
+    .replace(
+      /((?:password|passphrase|secret|token|access[_-]?token|refresh[_-]?token|api[_-]?key|authorization)\s*[=:]\s*)(?!["'])[^\s,};&]+/gi,
+      '$1[redacted]',
+    )
+    .replace(/\b(?:sk-|gh[pousr]_|xox[baprs]-)[A-Za-z0-9_-]{8,}/gi, '[redacted token]')
+}
+
+const ASSISTANT_SECRET_FIELD =
+  /^(?:password|passphrase|secret|token|access[_-]?token|refresh[_-]?token|api[_-]?key|authorization)$/i
+
+function redactAssistantEffectValue(value: unknown, key?: string): unknown {
+  if (key && ASSISTANT_SECRET_FIELD.test(key)) {
+    return '[redacted]'
+  }
+  if (typeof value === 'string') {
+    return redactAssistantEffectFragmentText(value)
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => redactAssistantEffectValue(entry))
+  }
+  if (isObject(value)) {
+    return Object.fromEntries(
+      Object.entries(value).map(([entryKey, entryValue]) => [
+        entryKey,
+        redactAssistantEffectValue(entryValue, entryKey),
+      ]),
+    )
+  }
+  return value
+}
+
+function effectLocatorFor(record: NodeRecord): AssistantStructuralEffectLocator {
+  const id = todoId(record.node)
+  const uuid = nodeIdentifier(record.node, 'uuid')
+  const key = nodeIdentifier(record.node, 'key')
+  return {
+    path: [...record.path],
+    ...(id ? { todoId: id } : {}),
+    ...(uuid ? { nodeUuid: uuid } : {}),
+    ...(key ? { nodeKey: key } : {}),
+  }
+}
+
+function userMeaningfulEffectRecords(records: NodeRecord[]): NodeRecord[] {
+  const blocks = records.filter(
+    (record) => record.path.length > 0 && record.node.type !== 'text' && record.node.type !== 'linebreak',
+  )
+  return (blocks.length > 0 ? blocks : records.filter((record) => record.path.length > 0)).slice(
+    0,
+    MAX_ASSISTANT_EFFECT_RECORDS,
+  )
+}
+
+function boundedEffectFragment(records: NodeRecord[]): { value?: string; truncated: boolean } {
+  if (records.length === 0) {
+    return { truncated: false }
+  }
+  const fragment = records.length === 1 ? records[0].node : records.map((record) => record.node)
+  const redacted = JSON.stringify(redactAssistantEffectValue(fragment))
+  if (redacted.length <= MAX_ASSISTANT_EFFECT_FRAGMENT_CHARS) {
+    return { value: redacted, truncated: false }
+  }
+  return {
+    value: `${redacted.slice(0, MAX_ASSISTANT_EFFECT_FRAGMENT_CHARS)}…`,
+    truncated: true,
+  }
+}
+
+function operationSummary(operation: AssistantStructuralPatchOperation): string {
+  switch (operation.type) {
+    case 'insert':
+      return `Inserted ${operation.block.kind} content ${operation.position}.`
+    case 'replace-text':
+      return 'Replaced text in one structural block.'
+    case 'toggle-checklist':
+      return operation.checked ? 'Marked one checklist item complete.' : 'Marked one checklist item incomplete.'
+    case 'move':
+      return `Moved one structural block ${operation.destination.position}.`
+    case 'delete':
+      return 'Deleted one structural block.'
+    case 'update-attrs':
+      return 'Updated formatting or attributes on one structural block.'
+  }
+}
+
+/** Capture one bounded, display-oriented effect while preserving atomic patch semantics. */
+function applyOperationWithEffect(
+  root: JsonObject,
+  operation: AssistantStructuralPatchOperation,
+  idFactory: () => string,
+): AssistantStructuralOperationEffect {
+  const beforeRecords = collectRecords(root)
+  const beforeNodeSet = new Set(beforeRecords.map((record) => record.node))
+  const beforeTarget = resolveLocator(root, operation.target)
+  const targetNode = beforeTarget.node
+  const beforeAffected = operation.type === 'insert' ? [] : userMeaningfulEffectRecords([beforeTarget])
+  const beforeFragment = boundedEffectFragment(beforeAffected)
+
+  applyOperation(root, operation, idFactory)
+
+  const afterRecords = collectRecords(root)
+  let afterAffected: NodeRecord[]
+  if (operation.type === 'insert') {
+    afterAffected = userMeaningfulEffectRecords(afterRecords.filter((record) => !beforeNodeSet.has(record.node)))
+  } else if (operation.type === 'delete') {
+    afterAffected = []
+  } else {
+    afterAffected = userMeaningfulEffectRecords(afterRecords.filter((record) => record.node === targetNode))
+  }
+  const afterFragment = boundedEffectFragment(afterAffected)
+  const locatorRecords = operation.type === 'delete' ? beforeAffected : afterAffected
+
+  return {
+    ...(operation.operationId ? { operationId: operation.operationId } : {}),
+    type: operation.type,
+    summary: operationSummary(operation),
+    affected: locatorRecords.map(effectLocatorFor),
+    ...(beforeFragment.value ? { beforeFragment: beforeFragment.value } : {}),
+    ...(afterFragment.value ? { afterFragment: afterFragment.value } : {}),
+    ...(operation.type === 'delete' ? { deleted: true } : {}),
+    ...(beforeFragment.truncated ||
+    afterFragment.truncated ||
+    (operation.type === 'insert' &&
+      afterRecords.filter((record) => !beforeNodeSet.has(record.node)).length > MAX_ASSISTANT_EFFECT_RECORDS)
+      ? { truncated: true }
+      : {}),
+  }
 }
 
 function safeBlock(record: NodeRecord): AssistantStructureBlock {
@@ -858,8 +1039,11 @@ export async function applyAssistantSuperPatch(
   const document = JSON.parse(JSON.stringify(parsed.document)) as JsonObject
   const root = document.root as JsonObject
   const idFactory = options.createTodoId ?? (() => createChecklistTodoId())
+  const operationEffects: AssistantStructuralOperationEffect[] = []
   try {
-    request.operations.forEach((operation) => applyOperation(root, operation, idFactory))
+    request.operations.forEach((operation) =>
+      operationEffects.push(applyOperationWithEffect(root, operation, idFactory)),
+    )
   } catch (error) {
     if (error instanceof AmbiguousLocatorError) {
       return {
@@ -883,5 +1067,6 @@ export async function applyAssistantSuperPatch(
     text: patchedText,
     revision: await assistantSuperRevision(patchedText, options.updatedAt),
     appliedOperations: request.operations.length,
+    operationEffects,
   }
 }

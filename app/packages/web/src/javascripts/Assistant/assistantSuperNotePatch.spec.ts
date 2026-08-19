@@ -263,6 +263,103 @@ describe('assistant Super-note structural patches', () => {
     expect(items[0].$.preservedFutureState).toEqual({ version: 9, opaque: true })
   })
 
+  it('returns bounded effects for insertion, replacement, deletion, checklist, and formatting changes', async () => {
+    const text = JSON.stringify(fixture())
+    const base = await assistantSuperRevision(text)
+    const result = await applyAssistantSuperPatch(
+      text,
+      {
+        base,
+        operations: [
+          {
+            operationId: 'op-replace',
+            type: 'replace-text',
+            target: { path: [1] },
+            expectedText: 'formatted',
+            text: 'restyled',
+          },
+          {
+            operationId: 'op-toggle',
+            type: 'toggle-checklist',
+            target: { todoId: 'todo-scanner' },
+            checked: true,
+          },
+          {
+            operationId: 'op-format',
+            type: 'update-attrs',
+            target: { path: [0] },
+            attrs: { tag: 'h3' },
+          },
+          {
+            operationId: 'op-insert',
+            type: 'insert',
+            position: 'after',
+            target: { todoId: 'todo-cable' },
+            block: { kind: 'checklist-item', text: 'New tracked task' },
+          },
+          { operationId: 'op-delete', type: 'delete', target: { nodeUuid: 'embed-1' } },
+        ],
+      },
+      { createTodoId: () => 'todo-tracked' },
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) {
+      throw new Error(result.reason)
+    }
+    expect(result.operationEffects.map((effect) => effect.operationId)).toEqual([
+      'op-replace',
+      'op-toggle',
+      'op-format',
+      'op-insert',
+      'op-delete',
+    ])
+    expect(result.operationEffects.find((effect) => effect.operationId === 'op-replace')).toMatchObject({
+      beforeFragment: expect.stringContaining('formatted'),
+      afterFragment: expect.stringContaining('restyled'),
+    })
+    expect(result.operationEffects.find((effect) => effect.operationId === 'op-toggle')).toMatchObject({
+      affected: [expect.objectContaining({ todoId: 'todo-scanner' })],
+      beforeFragment: expect.stringContaining('false'),
+      afterFragment: expect.stringContaining('true'),
+    })
+    expect(result.operationEffects.find((effect) => effect.operationId === 'op-format')).toMatchObject({
+      beforeFragment: expect.stringContaining('h2'),
+      afterFragment: expect.stringContaining('h3'),
+    })
+    expect(result.operationEffects.find((effect) => effect.operationId === 'op-insert')).toMatchObject({
+      affected: expect.arrayContaining([expect.objectContaining({ todoId: 'todo-tracked' })]),
+      afterFragment: expect.stringContaining('New tracked task'),
+    })
+    expect(result.operationEffects.find((effect) => effect.operationId === 'op-delete')).toMatchObject({
+      deleted: true,
+      affected: [expect.objectContaining({ nodeUuid: 'embed-1' })],
+      beforeFragment: expect.stringContaining('diagram-unknown-future'),
+    })
+    expect(result.operationEffects.find((effect) => effect.operationId === 'op-delete')?.afterFragment).toBeUndefined()
+  })
+
+  it('redacts an unterminated secret before bounding a structural fragment', async () => {
+    const document = fixture()
+    const secret = 'MID_FRAGMENT_SECRET_'.repeat(300)
+    document.root.children[1].children = [textNode(`{"password":"${secret}`)]
+    const text = JSON.stringify(document)
+    const base = await assistantSuperRevision(text)
+    const result = await applyAssistantSuperPatch(text, {
+      base,
+      operations: [{ operationId: 'op-secret-delete', type: 'delete', target: { path: [1] } }],
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) {
+      throw new Error(result.reason)
+    }
+    const fragment = result.operationEffects[0].beforeFragment ?? ''
+    expect(fragment).toContain('[redacted]')
+    expect(fragment).not.toContain('MID_FRAGMENT_SECRET')
+    expect(fragment.length).toBeLessThanOrEqual(2_049)
+  })
+
   it('inserts a native styled Philips section and checklist while preserving existing unknown nodes', async () => {
     const before = fixture()
     const text = JSON.stringify(before)

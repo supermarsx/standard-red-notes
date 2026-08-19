@@ -1,5 +1,6 @@
 import {
   ContentType,
+  DefaultAppDomain,
   DecryptedPayload,
   FillItemContent,
   NoteContent,
@@ -15,6 +16,7 @@ import { TextEncoder as NodeTextEncoder } from 'node:util'
 import { WebApplication } from '@/Application/WebApplication'
 import { AssistantTools } from './tools'
 import { applyAssistantNoteChange, AssistantNoteChange, captureAssistantNoteSnapshot } from './assistantNoteChanges'
+import { getAssistantChangeLedger, NoteAssistantChangesKey } from './assistantChangeLedger'
 
 jest.mock('@/Components/SuperEditor/Tools/HeadlessSuperConverter', () => ({
   HeadlessSuperConverter: class {},
@@ -274,6 +276,7 @@ describe('AssistantTools note change presentation', () => {
       editorIdentifier: 'org.standardnotes.super-editor',
       references: [{ uuid: 'linked-note', content_type: ContentType.TYPES.Note }],
     })
+    let assistantLedger: unknown
     const assignedKeys: string[][] = []
     const changeItem = jest.fn(async (_note: SNNote, mutate: (mutator: NoteMutator) => void) => {
       const mutable: Record<string, unknown> = {
@@ -283,6 +286,11 @@ describe('AssistantTools note change presentation', () => {
         preview_html: live.preview_html,
         noteType: live.noteType,
         editorIdentifier: live.editorIdentifier,
+        setAppDataItem: (key: unknown, value: unknown) => {
+          if (key === NoteAssistantChangesKey) {
+            assistantLedger = value
+          }
+        },
       }
       const touched = new Set<string>()
       const proxy = new Proxy(mutable, {
@@ -299,6 +307,13 @@ describe('AssistantTools note change presentation', () => {
         preview_plain: mutable.preview_plain as string,
         preview_html: mutable.preview_html as string | undefined,
         references: [{ uuid: 'linked-note', content_type: ContentType.TYPES.Note }],
+        ...(assistantLedger
+          ? {
+              appData: {
+                [DefaultAppDomain]: { [NoteAssistantChangesKey as unknown as string]: assistantLedger },
+              },
+            }
+          : {}),
       })
       return live
     })
@@ -318,12 +333,15 @@ describe('AssistantTools note change presentation', () => {
       sync: { sync },
     } as unknown as WebApplication
     const changes: AssistantNoteChange[] = []
+    let activeAssistantMessageId = 'message-original-1'
     const tools = new AssistantTools(application, {
       selectedNoteUuids: new Set([live.uuid]),
       expectedNoteSnapshots: new Map([[live.uuid, captureAssistantNoteSnapshot(live)]]),
       confirmBeforeWrite: false,
       requestConfirmation: async () => true,
       presentPane: () => undefined,
+      getAssistantMessageId: () => activeAssistantMessageId,
+      assistantRunId: 'run-structural-1',
       onNoteChange: (_callId, change) => changes.push(change),
     })
 
@@ -332,6 +350,9 @@ describe('AssistantTools note change presentation', () => {
       view: 'section',
       section: { heading: { text: 'Purchases & Setup' } },
     })) as { revision: { contentHash: string; updatedAt?: string } }
+    // Steering replaces the visible assistant response bubble while the same
+    // run/tool session remains alive. Subsequent tool audit must follow it.
+    activeAssistantMessageId = 'message-steered-1'
     const result = await tools.call(
       'notes.patchBlocks',
       {
@@ -373,6 +394,43 @@ describe('AssistantTools note change presentation', () => {
     expect(changes).toHaveLength(1)
     expect(changes[0].before.text).toBe(originalText)
     expect(changes[0].after.text).toBe(live.text)
+    expect(result).toMatchObject({
+      changeId: expect.stringMatching(/^assistant-change-/),
+      operationIds: [expect.stringMatching(/^assistant-operation-sha256-[0-9a-f]{64}$/)],
+    })
+    const deterministicOperationId = (result as { operationIds: string[] }).operationIds[0]
+    expect(result).not.toHaveProperty('operations')
+    expect(result).not.toHaveProperty('undo')
+    expect(getAssistantChangeLedger(live).records[0]).toMatchObject({
+      noteUuid: 'note-1',
+      source: {
+        assistantMessageId: 'message-steered-1',
+        assistantRunId: 'run-structural-1',
+        toolCallId: 'patch-call',
+      },
+      operationIds: [deterministicOperationId],
+      status: 'applied',
+    })
+
+    await expect(
+      tools.call(
+        'notes.patchBlocks',
+        {
+          uuid: live.uuid,
+          base: section.revision,
+          operations: [
+            {
+              type: 'insert',
+              position: 'after',
+              target: { todoId: 'todo-scanner' },
+              block: { kind: 'markdown-fragment', markdown: '- [ ] Monitor **Philips E24E2**' },
+            },
+          ],
+        },
+        'patch-call',
+      ),
+    ).resolves.toMatchObject({ alreadyApplied: true, operationIds: [deterministicOperationId] })
+    expect(changeItem).toHaveBeenCalledTimes(1)
 
     await expect(applyAssistantNoteChange(application, changes[0], 'undo')).resolves.toMatchObject({
       position: 'before',

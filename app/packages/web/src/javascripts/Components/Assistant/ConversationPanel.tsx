@@ -1067,6 +1067,8 @@ function ConversationPanelImpl({
       const toolContext: AssistantToolContext = {
         selectedNoteUuids,
         expectedNoteSnapshots,
+        getAssistantMessageId: () => activeAssistantId,
+        assistantRunId: assistantId,
         isSessionCurrent,
         confirmBeforeWrite,
         requestConfirmation,
