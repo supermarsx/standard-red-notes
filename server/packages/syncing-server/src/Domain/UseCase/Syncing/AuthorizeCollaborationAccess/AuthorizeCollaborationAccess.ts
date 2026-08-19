@@ -1,4 +1,5 @@
 import { Result, SharedVaultUserPermission, UseCaseInterface, Uuid } from '@standardnotes/domain-core'
+import { createHash } from 'node:crypto'
 
 import { ItemRepositoryInterface } from '../../../Item/ItemRepositoryInterface'
 import { SharedVaultUserRepositoryInterface } from '../../../SharedVault/User/SharedVaultUserRepositoryInterface'
@@ -24,7 +25,7 @@ import { AuthorizeCollaborationAccessDTO } from './AuthorizeCollaborationAccessD
  * Result.fail so callers FAIL CLOSED.
  */
 export type CollaborationAccessAuthorization =
-  { authorized: false } | { authorized: true; serverUpdatedAtTimestamp: number }
+  { authorized: false } | { authorized: true; serverUpdatedAtTimestamp: number; collaborationSecurityEpoch: string }
 
 export class AuthorizeCollaborationAccess implements UseCaseInterface<CollaborationAccessAuthorization> {
   constructor(
@@ -65,7 +66,16 @@ export class AuthorizeCollaborationAccess implements UseCaseInterface<Collaborat
       // session restriction was applied before the item lookup.
       return Result.ok(
         item.props.userUuid.equals(userUuid)
-          ? { authorized: true, serverUpdatedAtTimestamp: item.props.timestamps.updatedAt }
+          ? {
+              authorized: true,
+              serverUpdatedAtTimestamp: item.props.timestamps.updatedAt,
+              collaborationSecurityEpoch: collaborationSecurityEpoch({
+                scope: 'personal',
+                ownerUuid: item.props.userUuid.toString(),
+                itemsKeyId: item.props.itemsKeyId,
+                keySystemIdentifier: item.props.keySystemAssociation?.props.keySystemIdentifier ?? null,
+              }),
+            }
           : { authorized: false },
       )
     }
@@ -86,10 +96,43 @@ export class AuthorizeCollaborationAccess implements UseCaseInterface<Collaborat
     const authorized =
       permission === SharedVaultUserPermission.PERMISSIONS.Write ||
       permission === SharedVaultUserPermission.PERMISSIONS.Admin
-    return Result.ok(
-      authorized
-        ? { authorized: true, serverUpdatedAtTimestamp: item.props.timestamps.updatedAt }
-        : { authorized: false },
-    )
+    if (!authorized) {
+      return Result.ok({ authorized: false })
+    }
+
+    const memberships = await this.sharedVaultUserRepository.findBySharedVaultUuid(sharedVaultUuid)
+    const membershipSecurityState = memberships
+      .map((member) => ({
+        userUuid: member.props.userUuid.toString(),
+        permission: member.props.permission.value,
+        updatedAt: member.props.timestamps.updatedAt,
+        designatedSurvivor: member.props.isDesignatedSurvivor,
+      }))
+      .sort((left, right) =>
+        `${left.userUuid}:${left.permission}`.localeCompare(`${right.userUuid}:${right.permission}`),
+      )
+
+    return Result.ok({
+      authorized: true,
+      serverUpdatedAtTimestamp: item.props.timestamps.updatedAt,
+      collaborationSecurityEpoch: collaborationSecurityEpoch({
+        scope: 'shared-vault',
+        sharedVaultUuid: sharedVaultUuid.toString(),
+        itemsKeyId: item.props.itemsKeyId,
+        keySystemIdentifier: item.props.keySystemAssociation?.props.keySystemIdentifier ?? null,
+        memberships: membershipSecurityState,
+      }),
+    })
   }
+}
+
+/**
+ * Opaque, deterministic security generation for a collaboration room. It
+ * intentionally excludes the note's normal updated-at revision, so ordinary
+ * edits do not evict peers, while key or shared-vault membership changes do.
+ * Only the digest crosses service boundaries; raw membership identifiers never
+ * enter a capability or a gateway log.
+ */
+function collaborationSecurityEpoch(state: object): string {
+  return createHash('sha256').update(JSON.stringify(state), 'utf8').digest('base64url')
 }
