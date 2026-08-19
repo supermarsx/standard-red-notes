@@ -37,8 +37,18 @@ export class WebSocketApiService implements WebSocketApiServiceInterface {
     noteUuid: string,
     leaseRequestId?: string,
     bootstrapChallenge?: string,
+    expectedRoomEpoch?: string,
   ): Promise<HttpResponse<CollaborationAuthorizationResponseBody>> {
-    const authorizationKey = JSON.stringify([noteUuid, leaseRequestId ?? null, bootstrapChallenge ?? null])
+    if (!isValidCollaborationEpoch(expectedRoomEpoch)) {
+      throw new ApiCallError(ErrorMessage.GenericFail)
+    }
+    const authorizationKey = JSON.stringify([
+      'grant',
+      noteUuid,
+      leaseRequestId ?? null,
+      bootstrapChallenge ?? null,
+      expectedRoomEpoch,
+    ])
     const existing = this.collaborationAuthorizations.get(authorizationKey)
     if (existing) {
       return existing
@@ -51,7 +61,9 @@ export class WebSocketApiService implements WebSocketApiServiceInterface {
     const request = this.webSocketServer
       .authorizeCollaboration({
         noteUuid,
-        collaborationProtocolVersion: 2,
+        collaborationProtocolVersion: 3,
+        epochDiscovery: false,
+        expectedRoomEpoch,
         ...(leaseRequestId ? { leaseRequestId } : {}),
         ...(bootstrapChallenge ? { bootstrapChallenge } : {}),
       })
@@ -64,4 +76,30 @@ export class WebSocketApiService implements WebSocketApiServiceInterface {
     this.collaborationAuthorizations.set(authorizationKey, request)
     return request
   }
+
+  async discoverCollaborationRoomEpoch(
+    noteUuid: string,
+  ): Promise<HttpResponse<CollaborationAuthorizationResponseBody>> {
+    const authorizationKey = JSON.stringify(['discovery', noteUuid])
+    const existing = this.collaborationAuthorizations.get(authorizationKey)
+    if (existing) {
+      return existing
+    }
+    const request = this.webSocketServer
+      .authorizeCollaboration({
+        noteUuid,
+        collaborationProtocolVersion: 3,
+        epochDiscovery: true,
+      })
+      .catch(() => {
+        throw new ApiCallError(ErrorMessage.GenericFail)
+      })
+      .finally(() => this.collaborationAuthorizations.delete(authorizationKey))
+    this.collaborationAuthorizations.set(authorizationKey, request)
+    return request
+  }
+}
+
+function isValidCollaborationEpoch(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{16,128}$/.test(value)
 }

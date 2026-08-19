@@ -7,5 +7,7 @@ export interface WebSocketApiServiceInterface {
     noteUuid: string,
     leaseRequestId?: string,
     bootstrapChallenge?: string,
+    expectedRoomEpoch?: string,
   ): Promise<HttpResponse<CollaborationAuthorizationResponseBody>>
+  discoverCollaborationRoomEpoch(noteUuid: string): Promise<HttpResponse<CollaborationAuthorizationResponseBody>>
 }

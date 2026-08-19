@@ -109,7 +109,9 @@ describe('Servers', () => {
     it('authorizeCollaboration should POST the note uuid to the collaboration path', async () => {
       const params = {
         noteUuid: 'note-1',
-        collaborationProtocolVersion: 2,
+        collaborationProtocolVersion: 3 as const,
+        epochDiscovery: false as const,
+        expectedRoomEpoch: 'room_epoch_0000000000000001',
         leaseRequestId: 'lease-1',
         bootstrapChallenge: 'challenge-1',
       }

@@ -187,6 +187,8 @@ describe('RevisionApiService', () => {
 })
 
 describe('WebSocketApiService', () => {
+  const roomEpoch = 'room_epoch_0000000000000001'
+
   it('createConnectionToken should call the server with an empty params object', async () => {
     const server = { createConnectionToken: ok() }
 
@@ -221,11 +223,13 @@ describe('WebSocketApiService', () => {
   it('authorizeCollaboration should pass the note uuid through', async () => {
     const server = { authorizeCollaboration: ok() }
 
-    await new WebSocketApiService(server as never).authorizeCollaboration('note-1')
+    await new WebSocketApiService(server as never).authorizeCollaboration('note-1', undefined, undefined, roomEpoch)
 
     expect(server.authorizeCollaboration).toHaveBeenCalledWith({
       noteUuid: 'note-1',
-      collaborationProtocolVersion: 2,
+      collaborationProtocolVersion: 3,
+      epochDiscovery: false,
+      expectedRoomEpoch: roomEpoch,
     })
   })
 
@@ -233,18 +237,22 @@ describe('WebSocketApiService', () => {
     const authorizeCollaboration = pending()
     const service = new WebSocketApiService({ authorizeCollaboration } as never)
 
-    void service.authorizeCollaboration('note-1')
-    void service.authorizeCollaboration('note-1')
-    void service.authorizeCollaboration('note-2')
+    void service.authorizeCollaboration('note-1', undefined, undefined, roomEpoch)
+    void service.authorizeCollaboration('note-1', undefined, undefined, roomEpoch)
+    void service.authorizeCollaboration('note-2', undefined, undefined, roomEpoch)
 
     expect(authorizeCollaboration).toHaveBeenCalledTimes(2)
     expect(authorizeCollaboration).toHaveBeenNthCalledWith(1, {
       noteUuid: 'note-1',
-      collaborationProtocolVersion: 2,
+      collaborationProtocolVersion: 3,
+      epochDiscovery: false,
+      expectedRoomEpoch: roomEpoch,
     })
     expect(authorizeCollaboration).toHaveBeenNthCalledWith(2, {
       noteUuid: 'note-2',
-      collaborationProtocolVersion: 2,
+      collaborationProtocolVersion: 3,
+      epochDiscovery: false,
+      expectedRoomEpoch: roomEpoch,
     })
   })
 
@@ -252,21 +260,62 @@ describe('WebSocketApiService', () => {
     const authorizeCollaboration = pending()
     const service = new WebSocketApiService({ authorizeCollaboration } as never)
 
-    void service.authorizeCollaboration('note-1', 'lease-1', 'challenge-1')
-    void service.authorizeCollaboration('note-1', 'lease-2', 'challenge-2')
+    void service.authorizeCollaboration('note-1', 'lease-1', 'challenge-1', roomEpoch)
+    void service.authorizeCollaboration('note-1', 'lease-2', 'challenge-2', roomEpoch)
 
     expect(authorizeCollaboration).toHaveBeenNthCalledWith(1, {
       noteUuid: 'note-1',
-      collaborationProtocolVersion: 2,
+      collaborationProtocolVersion: 3,
+      epochDiscovery: false,
+      expectedRoomEpoch: roomEpoch,
       leaseRequestId: 'lease-1',
       bootstrapChallenge: 'challenge-1',
     })
     expect(authorizeCollaboration).toHaveBeenNthCalledWith(2, {
       noteUuid: 'note-1',
-      collaborationProtocolVersion: 2,
+      collaborationProtocolVersion: 3,
+      epochDiscovery: false,
+      expectedRoomEpoch: roomEpoch,
       leaseRequestId: 'lease-2',
       bootstrapChallenge: 'challenge-2',
     })
+  })
+
+  it('authorizeCollaboration fails closed before transport without an exact expected epoch', async () => {
+    const server = { authorizeCollaboration: ok() }
+    const service = new WebSocketApiService(server as never)
+
+    await expect(service.authorizeCollaboration('note-1')).rejects.toThrow(ErrorMessage.GenericFail)
+    expect(server.authorizeCollaboration).not.toHaveBeenCalled()
+  })
+
+  it('discovers the current room epoch without requesting capability material', async () => {
+    const server = { authorizeCollaboration: ok() }
+
+    await new WebSocketApiService(server as never).discoverCollaborationRoomEpoch('note-1')
+
+    expect(server.authorizeCollaboration).toHaveBeenCalledWith({
+      noteUuid: 'note-1',
+      collaborationProtocolVersion: 3,
+      epochDiscovery: true,
+    })
+  })
+
+  it('coalesces concurrent epoch discoveries and releases the lock after a failure', async () => {
+    const authorizeCollaboration = jest
+      .fn()
+      .mockReturnValueOnce(new Promise(() => undefined))
+      .mockRejectedValueOnce(new Error('network down'))
+      .mockResolvedValueOnce(response)
+    const service = new WebSocketApiService({ authorizeCollaboration } as never)
+
+    void service.discoverCollaborationRoomEpoch('note-1')
+    void service.discoverCollaborationRoomEpoch('note-1')
+    expect(authorizeCollaboration).toHaveBeenCalledTimes(1)
+
+    const separate = new WebSocketApiService({ authorizeCollaboration } as never)
+    await expect(separate.discoverCollaborationRoomEpoch('note-2')).rejects.toThrow(ErrorMessage.GenericFail)
+    await expect(separate.discoverCollaborationRoomEpoch('note-2')).resolves.toBe(response)
   })
 
   it('authorizeCollaboration should release the lock after a failure', async () => {
@@ -276,8 +325,10 @@ describe('WebSocketApiService', () => {
       .mockResolvedValueOnce(response)
     const service = new WebSocketApiService({ authorizeCollaboration } as never)
 
-    await expect(service.authorizeCollaboration('note-1')).rejects.toThrow(ErrorMessage.GenericFail)
-    await expect(service.authorizeCollaboration('note-1')).resolves.toBe(response)
+    await expect(service.authorizeCollaboration('note-1', undefined, undefined, roomEpoch)).rejects.toThrow(
+      ErrorMessage.GenericFail,
+    )
+    await expect(service.authorizeCollaboration('note-1', undefined, undefined, roomEpoch)).resolves.toBe(response)
   })
 })
 

@@ -7,10 +7,18 @@ export interface WebSocketServerInterface {
   createConnectionToken(
     params: WebSocketConnectionTokenRequestParams,
   ): Promise<HttpResponse<WebSocketConnectionTokenResponseBody>>
-  authorizeCollaboration(params: {
-    noteUuid: string
-    collaborationProtocolVersion: number
-    leaseRequestId?: string
-    bootstrapChallenge?: string
-  }): Promise<HttpResponse<CollaborationAuthorizationResponseBody>>
+  authorizeCollaboration(
+    params: CollaborationAuthorizationRequestParams,
+  ): Promise<HttpResponse<CollaborationAuthorizationResponseBody>>
 }
+
+export type CollaborationAuthorizationRequestParams =
+  | { noteUuid: string; collaborationProtocolVersion: 3; epochDiscovery: true }
+  | {
+      noteUuid: string
+      collaborationProtocolVersion: 3
+      epochDiscovery?: false
+      expectedRoomEpoch: string
+      leaseRequestId?: string
+      bootstrapChallenge?: string
+    }
