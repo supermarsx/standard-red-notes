@@ -188,6 +188,23 @@ export type SyncFallbackReason =
   | 'worker-error'
   | 'operation-unavailable'
 
+/**
+ * Reasons that describe a structural absence rather than a transient fault: this deployment
+ * does not advertise the websocket sync capability at all, or this client is configured or
+ * built never to use it. Retrying on a timer cannot make any of them succeed, so long-lived
+ * consumers must stand down and wait for a lifecycle event (relaunch, sign-in) instead of
+ * reconnecting forever.
+ */
+const PERMANENT_SYNC_FALLBACK_REASONS = new Set<SyncFallbackReason>([
+  'http-only',
+  'unsupported-browser',
+  'capability-unavailable',
+])
+
+export function isPermanentSyncFallbackReason(reason: SyncFallbackReason): boolean {
+  return PERMANENT_SYNC_FALLBACK_REASONS.has(reason)
+}
+
 export type SyncWorkerToMainMessage =
   | { type: 'NEED_TICKET'; clientRequestId: string; reconnect: boolean }
   | {

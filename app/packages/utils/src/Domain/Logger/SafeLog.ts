@@ -234,18 +234,31 @@ const knownErrorCodes = new Set([
   'TimeoutError',
 ])
 
+/**
+ * `SomethingError` is a class name chosen in source, never a runtime value, so it cannot carry
+ * user data. Matching the shape rather than a fixed list keeps our own error taxonomy legible
+ * in logs without the list drifting every time an error class is added.
+ */
+const errorClassNamePattern = /^[A-Za-z]{1,64}Error$/
+
+/**
+ * SCREAMING_SNAKE codes are likewise authored constants. Identifiers that could carry user data
+ * (uuids, emails, hosts, tokens) all contain lowercase letters or punctuation this rejects.
+ */
+const constantErrorCodePattern = /^[A-Z][A-Z0-9_]{1,63}$/
+
 function safeErrorName(value: unknown): string {
-  return typeof value === 'string' &&
-    ['Error', 'TypeError', 'RangeError', 'AxiosError', 'AbortError', 'TimeoutError'].includes(value)
-    ? value
-    : 'Error'
+  if (typeof value !== 'string') {
+    return 'Error'
+  }
+  return value === 'Error' || errorClassNamePattern.test(value) ? value : 'Error'
 }
 
 function safeErrorCode(value: unknown): string | number | undefined {
   if (typeof value === 'number' && Number.isSafeInteger(value)) {
     return value
   }
-  if (typeof value === 'string' && knownErrorCodes.has(value)) {
+  if (typeof value === 'string' && (knownErrorCodes.has(value) || constantErrorCodePattern.test(value))) {
     return value
   }
   return undefined

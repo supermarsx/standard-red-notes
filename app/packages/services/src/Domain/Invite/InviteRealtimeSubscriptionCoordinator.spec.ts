@@ -145,6 +145,30 @@ describe('InviteRealtimeSubscriptionCoordinator', () => {
     expect(store.values.get(sessionA)?.cursor).toBe(cursor1)
   })
 
+  it('stands down instead of reconnecting when the transport reports a permanently unavailable capability', async () => {
+    const store = new MemoryCheckpointStore()
+    const consumer = new InviteRealtimeEventConsumer(store, jest.fn())
+    const port = new FakeSubscriptionPort()
+    const scheduler = new ManualScheduler()
+    const onError = jest.fn()
+    const coordinator = new InviteRealtimeSubscriptionCoordinator(port, consumer, {
+      scheduler,
+      reconcileSnapshot: jest.fn(),
+      onError,
+    })
+
+    await coordinator.startSession(sessionA)
+    const subscription = port.subscriptions[0]
+    subscription.options.onError?.({ code: 'CAPABILITY_UNAVAILABLE', retryable: false })
+
+    expect(onError).toHaveBeenCalledTimes(1)
+    expect(subscription.disposed).toBe(true)
+    // A deployment that does not advertise the capability cannot be reached by retrying, so no
+    // reconnect may be scheduled; the stream restarts on the next launch or sign-in instead.
+    expect(scheduler.delays).toEqual([])
+    expect(port.subscriptions).toHaveLength(1)
+  })
+
   it('uses a strict snapshot only for server bootstrap and persists its tail before resubscribe', async () => {
     const store = new MemoryCheckpointStore()
     const consumer = new InviteRealtimeEventConsumer(store, jest.fn())

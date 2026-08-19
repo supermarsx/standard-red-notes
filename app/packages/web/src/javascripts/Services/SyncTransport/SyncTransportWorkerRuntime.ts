@@ -22,6 +22,7 @@ import {
   SYNC_PROTOCOL_VERSION,
   SyncClientFrame,
   SyncFallbackReason,
+  isPermanentSyncFallbackReason,
   SyncServerFrame,
   SyncNegotiatedOperation,
   SyncTicket,
@@ -1577,13 +1578,19 @@ export class SyncTransportWorkerRuntime {
     if (active.mode === 'invite-bootstrap') {
       const subscription = this.inviteSubscription
       if (subscription?.clientRequestId === active.clientRequestId) {
+        // A structurally absent capability is not a transient fault. Reporting it as retryable
+        // makes the durable invite coordinator reconnect against it for the life of the tab.
+        const retryable = !isPermanentSyncFallbackReason(reason)
         this.dependencies.postMessage({
           type: 'INVITE_ERROR',
           clientRequestId: active.clientRequestId,
           code: reason.toUpperCase().replaceAll('-', '_'),
-          retryable: true,
+          retryable,
         })
         subscription.sent = false
+        if (!retryable) {
+          this.inviteSubscription = undefined
+        }
       }
       this.active = undefined
       this.transition('DEGRADED', reason)

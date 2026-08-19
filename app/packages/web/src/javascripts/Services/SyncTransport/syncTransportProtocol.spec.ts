@@ -1,5 +1,26 @@
-import { canonicalSyncJson, digestSyncBody, normalizeSyncRequestForWire } from './syncTransportProtocol'
+import {
+  canonicalSyncJson,
+  digestSyncBody,
+  isPermanentSyncFallbackReason,
+  normalizeSyncRequestForWire,
+} from './syncTransportProtocol'
 import { webcrypto } from 'crypto'
+
+describe('permanent sync fallback reasons', () => {
+  it('classifies a structurally absent transport as permanent', () => {
+    expect(isPermanentSyncFallbackReason('capability-unavailable')).toBe(true)
+    expect(isPermanentSyncFallbackReason('http-only')).toBe(true)
+    expect(isPermanentSyncFallbackReason('unsupported-browser')).toBe(true)
+  })
+
+  it('leaves transient faults retryable so durable consumers still recover', () => {
+    expect(isPermanentSyncFallbackReason('ticket-unavailable')).toBe(false)
+    expect(isPermanentSyncFallbackReason('ticket-expired')).toBe(false)
+    expect(isPermanentSyncFallbackReason('reconnect-gap')).toBe(false)
+    expect(isPermanentSyncFallbackReason('server-kill')).toBe(false)
+    expect(isPermanentSyncFallbackReason('worker-error')).toBe(false)
+  })
+})
 
 describe('websocket sync protocol digest', () => {
   it('matches the frozen websocket and HTTP replay fixture', async () => {

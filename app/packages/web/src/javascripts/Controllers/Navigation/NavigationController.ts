@@ -41,6 +41,10 @@ import {
   FileItem,
   PrefDefaults,
   VaultListingInterface,
+  // Taken from snjs, not '@standardnotes/utils': the prebuilt snjs bundle inlines its own copy of
+  // utils, and UuidGenerator's installed generator lives on static state that is per-copy. The copy
+  // EncryptionService initialises is the snjs one, so reading through any other copy is unreliable.
+  UuidGenerator,
 } from '@standardnotes/snjs'
 import { action, computed, makeObservable, observable, reaction, runInAction } from 'mobx'
 import { FeaturesController } from '../FeaturesController'
@@ -56,7 +60,6 @@ import { TagsCountsState } from './TagsCountsState'
 import { PaneController } from '../PaneController/PaneController'
 import { RecentActionsState } from '../../Application/Recents'
 import { CommandService } from '../../Components/CommandPalette/CommandService'
-import { UuidGenerator } from '@standardnotes/utils'
 import {
   FolderCreationCoordinator,
   FolderCreationFinalizationError,

@@ -40,12 +40,24 @@ function unavailableSandboxResponse() {
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) =>
-      // Use `reload` so install doesn't pick up an already-stale HTTP cache
-      // entry, and tolerate individual misses (e.g. a 404 on one optional
-      // file must not abort the whole install).
-      Promise.allSettled(CORE_SHELL.map((url) => cache.add(new Request(url, { cache: 'reload' })))),
-    ),
+    caches
+      .open(CACHE_NAME)
+      .then((cache) =>
+        // Use `reload` so install doesn't pick up an already-stale HTTP cache
+        // entry, and tolerate individual misses (e.g. a 404 on one optional
+        // file must not abort the whole install).
+        Promise.allSettled(CORE_SHELL.map((url) => cache.add(new Request(url, { cache: 'reload' })))),
+      )
+      // Take over without waiting for every tab to close. A previously cached
+      // shell — a proxy error page, or simply the PREVIOUS release's index.html —
+      // stays servable for as long as the old worker keeps control, and serving
+      // it under the new deployment's CSP trips the inline-script hash pin (the
+      // pin is generated per deploy from the real index.html, so an older but
+      // perfectly valid shell mismatches it too, with a different hash each
+      // release). Activating immediately runs the purge below, which is the only
+      // thing that evicts an already-poisoned or simply outdated cache.
+      // `activate` then claims clients and registerServiceWorker.ts reloads once.
+      .then(() => self.skipWaiting()),
   )
 })
 
@@ -130,7 +142,12 @@ self.addEventListener('fetch', (event) => {
           return response
         })
         .catch(async () => {
-          const cached = await caches.match(request)
+          // Scoped to THIS build's cache on purpose. `caches.match` searches every
+          // cache in the origin, so a leftover `srn-shell-<older build>` entry that
+          // the activate purge failed to delete could otherwise be served as the
+          // shell for this deployment — the stale-shell CSP mismatch again.
+          const cache = await caches.open(CACHE_NAME)
+          const cached = await cache.match(request)
           if (cached) {
             return cached
           }
@@ -140,7 +157,7 @@ self.addEventListener('fetch', (event) => {
           if (url.pathname === SANDBOX_PATH) {
             return unavailableSandboxResponse()
           }
-          return caches.match('/index.html')
+          return cache.match('/index.html')
         }),
     )
     return

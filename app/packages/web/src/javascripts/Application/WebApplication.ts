@@ -495,7 +495,20 @@ export class WebApplication extends SNApplication implements WebApplicationInter
         ])
         context.assertCurrent()
       },
-      onError: (error) => console.error('Durable invite stream failed; reconnecting from its checkpoint.', error),
+      onError: (error) => {
+        // The coordinator stands down instead of retrying when the transport reports the
+        // failure as non-retryable, so the message must not promise a reconnect that will
+        // never come — that reads as a hot loop in production logs.
+        const standingDown = Boolean(
+          error && typeof error === 'object' && 'retryable' in error && error.retryable === false,
+        )
+        console.error(
+          standingDown
+            ? 'Durable invite stream is unavailable in this deployment; standing down until the next launch or sign-in.'
+            : 'Durable invite stream failed; reconnecting from its checkpoint.',
+          error,
+        )
+      },
     })
     const lifecycle = new InviteRealtimeApplicationLifecycle({
       coordinator,
