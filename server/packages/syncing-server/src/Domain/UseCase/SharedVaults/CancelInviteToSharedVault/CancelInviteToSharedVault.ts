@@ -10,14 +10,25 @@ import {
 import { CancelInviteToSharedVaultDTO } from './CancelInviteToSharedVaultDTO'
 import { SharedVaultInviteRepositoryInterface } from '../../../SharedVault/User/Invite/SharedVaultInviteRepositoryInterface'
 import { AddNotificationForUser } from '../../Messaging/AddNotificationForUser/AddNotificationForUser'
+import { InviteRealtimeDomainEventProducer } from '../../../Invite/InviteRealtimeDomainEventProducer'
+import { InviteMutationTransactionRunner } from '../../../Invite/InviteMutationTransactionRunner'
 
 export class CancelInviteToSharedVault implements UseCaseInterface<void> {
   constructor(
     private sharedVaultInviteRepository: SharedVaultInviteRepositoryInterface,
     private addNotificationForUser: AddNotificationForUser,
+    private inviteMutationTransactionRunner?: InviteMutationTransactionRunner,
+    private inviteRealtimeDomainEventProducer?: InviteRealtimeDomainEventProducer,
   ) {}
 
   async execute(dto: CancelInviteToSharedVaultDTO): Promise<Result<void>> {
+    if (this.inviteMutationTransactionRunner) {
+      return this.inviteMutationTransactionRunner.execute(() => this.executeMutation(dto))
+    }
+    return this.executeMutation(dto)
+  }
+
+  private async executeMutation(dto: CancelInviteToSharedVaultDTO): Promise<Result<void>> {
     const inviteUuidOrError = Uuid.create(dto.inviteUuid)
     if (inviteUuidOrError.isFailed()) {
       return Result.fail(inviteUuidOrError.getError())
@@ -67,6 +78,13 @@ export class CancelInviteToSharedVault implements UseCaseInterface<void> {
     if (result.isFailed()) {
       return Result.fail(result.getError())
     }
+
+    await this.inviteRealtimeDomainEventProducer?.recordSharedVaultInvite({
+      action: invite.props.senderUuid.equals(userUuid) ? 'canceled' : 'declined',
+      inviteUuid: invite.id.toString(),
+      sharedVaultUuid: invite.props.sharedVaultUuid.value,
+      affectedUserUuids: [invite.props.senderUuid.value, invite.props.userUuid.value],
+    })
 
     return Result.ok()
   }

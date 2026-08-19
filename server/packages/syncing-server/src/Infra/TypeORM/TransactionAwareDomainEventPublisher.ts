@@ -16,6 +16,11 @@ export class TransactionAwareDomainEventPublisher implements DomainEventPublishe
       return
     }
 
+    if (this.transactionContext.defersDomainEventsUntilCommit) {
+      this.transactionContext.deferUntilCommit(() => this.delegate.publish(event))
+      return
+    }
+
     try {
       await this.outboxRepository.enqueue(event)
     } catch (error) {

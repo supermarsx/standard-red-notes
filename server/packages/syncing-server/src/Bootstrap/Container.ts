@@ -194,6 +194,8 @@ import { SyncCommandOutboxDispatcher } from '../Domain/SyncCommand/SyncCommandOu
 import { ExecuteSyncCommand } from '../Domain/SyncCommand/ExecuteSyncCommand'
 import { GetSyncCommandStatus } from '../Domain/SyncCommand/GetSyncCommandStatus'
 import { CleanupSyncCommands } from '../Domain/SyncCommand/CleanupSyncCommands'
+import { InviteMutationTransactionRunner } from '../Domain/Invite/InviteMutationTransactionRunner'
+import { InviteRealtimeDomainEventProducer } from '../Domain/Invite/InviteRealtimeDomainEventProducer'
 
 export class ContainerConfigLoader {
   private readonly DEFAULT_FREE_USER_CONTENT_LIMIT_BYTES = 100_000_000
@@ -631,6 +633,22 @@ export class ContainerConfigLoader {
         ),
       )
     container
+      .bind<InviteMutationTransactionRunner>(TYPES.Sync_InviteMutationTransactionRunner)
+      .toConstantValue(
+        new InviteMutationTransactionRunner(
+          appDataSource.dataSource,
+          container.get<SyncCommandTransactionContext>(TYPES.Sync_SyncCommandTransactionContext),
+          container.get<SyncCommandOutboxDispatcher>(TYPES.Sync_SyncCommandOutboxDispatcher),
+        ),
+      )
+    container
+      .bind<InviteRealtimeDomainEventProducer>(TYPES.Sync_InviteRealtimeDomainEventProducer)
+      .toConstantValue(
+        new InviteRealtimeDomainEventProducer(
+          container.get<SyncCommandOutboxRepositoryInterface>(TYPES.Sync_SyncCommandOutboxRepository),
+        ),
+      )
+    container
       .bind<GetSyncCommandStatus>(TYPES.Sync_GetSyncCommandStatus)
       .toConstantValue(
         new GetSyncCommandStatus(container.get<SyncCommandRepositoryInterface>(TYPES.Sync_SyncCommandRepository)),
@@ -1008,6 +1026,8 @@ export class ContainerConfigLoader {
           container.get<DomainEventPublisherInterface>(TYPES.Sync_DomainEventPublisher),
           container.get<SendEventToClient>(TYPES.Sync_SendEventToClient),
           container.get<Logger>(TYPES.Sync_Logger),
+          container.get<InviteMutationTransactionRunner>(TYPES.Sync_InviteMutationTransactionRunner),
+          container.get<InviteRealtimeDomainEventProducer>(TYPES.Sync_InviteRealtimeDomainEventProducer),
         ),
       )
     container
@@ -1016,6 +1036,8 @@ export class ContainerConfigLoader {
         new UpdateSharedVaultInvite(
           container.get(TYPES.Sync_SharedVaultInviteRepository),
           container.get(TYPES.Sync_Timer),
+          container.get(TYPES.Sync_InviteMutationTransactionRunner),
+          container.get(TYPES.Sync_InviteRealtimeDomainEventProducer),
         ),
       )
     container
@@ -1036,6 +1058,9 @@ export class ContainerConfigLoader {
         new AcceptInviteToSharedVault(
           container.get(TYPES.Sync_AddUserToSharedVault),
           container.get(TYPES.Sync_SharedVaultInviteRepository),
+          container.get(TYPES.Sync_SharedVaultUserRepository),
+          container.get(TYPES.Sync_InviteMutationTransactionRunner),
+          container.get(TYPES.Sync_InviteRealtimeDomainEventProducer),
         ),
       )
     container
@@ -1044,6 +1069,8 @@ export class ContainerConfigLoader {
         new CancelInviteToSharedVault(
           container.get<SharedVaultInviteRepositoryInterface>(TYPES.Sync_SharedVaultInviteRepository),
           container.get<AddNotificationForUser>(TYPES.Sync_AddNotificationForUser),
+          container.get<InviteMutationTransactionRunner>(TYPES.Sync_InviteMutationTransactionRunner),
+          container.get<InviteRealtimeDomainEventProducer>(TYPES.Sync_InviteRealtimeDomainEventProducer),
         ),
       )
     container
@@ -1083,6 +1110,8 @@ export class ContainerConfigLoader {
           container.get<AddNotificationForUser>(TYPES.Sync_AddNotificationForUser),
           container.get<DomainEventFactoryInterface>(TYPES.Sync_DomainEventFactory),
           container.get<DomainEventPublisherInterface>(TYPES.Sync_DomainEventPublisher),
+          container.get<InviteMutationTransactionRunner>(TYPES.Sync_InviteMutationTransactionRunner),
+          container.get<InviteRealtimeDomainEventProducer>(TYPES.Sync_InviteRealtimeDomainEventProducer),
         ),
       )
     container

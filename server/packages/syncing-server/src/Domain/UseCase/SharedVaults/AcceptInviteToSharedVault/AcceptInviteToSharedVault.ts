@@ -2,14 +2,27 @@ import { Result, UseCaseInterface, Uuid } from '@standardnotes/domain-core'
 import { AcceptInviteToSharedVaultDTO } from './AcceptInviteToSharedVaultDTO'
 import { SharedVaultInviteRepositoryInterface } from '../../../SharedVault/User/Invite/SharedVaultInviteRepositoryInterface'
 import { AddUserToSharedVault } from '../AddUserToSharedVault/AddUserToSharedVault'
+import { SharedVaultUserRepositoryInterface } from '../../../SharedVault/User/SharedVaultUserRepositoryInterface'
+import { InviteRealtimeDomainEventProducer } from '../../../Invite/InviteRealtimeDomainEventProducer'
+import { InviteMutationTransactionRunner } from '../../../Invite/InviteMutationTransactionRunner'
 
 export class AcceptInviteToSharedVault implements UseCaseInterface<void> {
   constructor(
     private addUserToSharedVault: AddUserToSharedVault,
     private sharedVaultInviteRepository: SharedVaultInviteRepositoryInterface,
+    private sharedVaultUserRepository?: SharedVaultUserRepositoryInterface,
+    private inviteMutationTransactionRunner?: InviteMutationTransactionRunner,
+    private inviteRealtimeDomainEventProducer?: InviteRealtimeDomainEventProducer,
   ) {}
 
   async execute(dto: AcceptInviteToSharedVaultDTO): Promise<Result<void>> {
+    if (this.inviteMutationTransactionRunner) {
+      return this.inviteMutationTransactionRunner.execute(() => this.executeMutation(dto))
+    }
+    return this.executeMutation(dto)
+  }
+
+  private async executeMutation(dto: AcceptInviteToSharedVaultDTO): Promise<Result<void>> {
     const inviteUuidOrError = Uuid.create(dto.inviteUuid)
     if (inviteUuidOrError.isFailed()) {
       return Result.fail(inviteUuidOrError.getError())
@@ -39,8 +52,32 @@ export class AcceptInviteToSharedVault implements UseCaseInterface<void> {
     if (result.isFailed()) {
       return Result.fail(result.getError())
     }
+    const membership = result.getValue()
 
     await this.sharedVaultInviteRepository.remove(invite)
+
+    const members = await this.sharedVaultUserRepository?.findBySharedVaultUuid(invite.props.sharedVaultUuid)
+    const affectedUserUuids = [
+      invite.props.senderUuid.value,
+      invite.props.userUuid.value,
+      ...(members ?? []).map((member) => member.props.userUuid.value),
+    ]
+    await this.inviteRealtimeDomainEventProducer?.recordSharedVaultInvite({
+      action: 'accepted',
+      inviteUuid: invite.id.toString(),
+      sharedVaultUuid: invite.props.sharedVaultUuid.value,
+      affectedUserUuids,
+    })
+    await this.inviteRealtimeDomainEventProducer?.recordSharedVaultMembership({
+      action: 'accepted',
+      inviteUuid: invite.id.toString(),
+      membershipUuid: membership.id.toString(),
+      sharedVaultUuid: invite.props.sharedVaultUuid.value,
+      memberUserUuid: invite.props.userUuid.value,
+      role: membership.props.permission.value as 'read' | 'write' | 'admin',
+      revision: String(membership.props.timestamps.updatedAt),
+      affectedUserUuids,
+    })
 
     return Result.ok()
   }

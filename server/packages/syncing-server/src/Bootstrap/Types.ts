@@ -138,6 +138,8 @@ const TYPES = {
   Sync_RawDomainEventPublisher: Symbol.for('Sync_RawDomainEventPublisher'),
   Sync_SyncCommandTransactionContext: Symbol.for('Sync_SyncCommandTransactionContext'),
   Sync_SyncCommandOutboxDispatcher: Symbol.for('Sync_SyncCommandOutboxDispatcher'),
+  Sync_InviteMutationTransactionRunner: Symbol.for('Sync_InviteMutationTransactionRunner'),
+  Sync_InviteRealtimeDomainEventProducer: Symbol.for('Sync_InviteRealtimeDomainEventProducer'),
   Sync_CleanupSyncCommands: Symbol.for('Sync_CleanupSyncCommands'),
   Sync_DomainEventSubscriber: Symbol.for('Sync_DomainEventSubscriber'),
   Sync_DomainEventFactory: Symbol.for('Sync_DomainEventFactory'),

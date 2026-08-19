@@ -17,6 +17,8 @@ import { Logger } from 'winston'
 import { DomainEventFactoryInterface } from '../../../Event/DomainEventFactoryInterface'
 import { SendEventToClient } from '../../Syncing/SendEventToClient/SendEventToClient'
 import { DomainEventPublisherInterface } from '@standardnotes/domain-events'
+import { InviteRealtimeDomainEventProducer } from '../../../Invite/InviteRealtimeDomainEventProducer'
+import { InviteMutationTransactionRunner } from '../../../Invite/InviteMutationTransactionRunner'
 
 export class InviteUserToSharedVault implements UseCaseInterface<SharedVaultInvite> {
   constructor(
@@ -28,8 +30,17 @@ export class InviteUserToSharedVault implements UseCaseInterface<SharedVaultInvi
     private domainEventPublisher: DomainEventPublisherInterface,
     private sendEventToClientUseCase: SendEventToClient,
     private logger: Logger,
+    private inviteMutationTransactionRunner?: InviteMutationTransactionRunner,
+    private inviteRealtimeDomainEventProducer?: InviteRealtimeDomainEventProducer,
   ) {}
   async execute(dto: InviteUserToSharedVaultDTO): Promise<Result<SharedVaultInvite>> {
+    if (this.inviteMutationTransactionRunner) {
+      return this.inviteMutationTransactionRunner.execute(() => this.executeMutation(dto))
+    }
+    return this.executeMutation(dto)
+  }
+
+  private async executeMutation(dto: InviteUserToSharedVaultDTO): Promise<Result<SharedVaultInvite>> {
     const sharedVaultUuidOrError = Uuid.create(dto.sharedVaultUuid)
     if (sharedVaultUuidOrError.isFailed()) {
       return Result.fail(sharedVaultUuidOrError.getError())
@@ -124,6 +135,13 @@ export class InviteUserToSharedVault implements UseCaseInterface<SharedVaultInvi
         safeErrorLogMetadata(result.getError()),
       )
     }
+
+    await this.inviteRealtimeDomainEventProducer?.recordSharedVaultInvite({
+      action: existingInvite ? 'updated' : 'created',
+      inviteUuid: sharedVaultInvite.id.toString(),
+      sharedVaultUuid: sharedVaultInvite.props.sharedVaultUuid.value,
+      affectedUserUuids: [sharedVaultInvite.props.senderUuid.value, sharedVaultInvite.props.userUuid.value],
+    })
 
     return Result.ok(sharedVaultInvite)
   }

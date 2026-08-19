@@ -14,6 +14,8 @@ import { SharedVaultUserRepositoryInterface } from '../../../SharedVault/User/Sh
 import { DomainEventFactoryInterface } from '../../../Event/DomainEventFactoryInterface'
 import { AddNotificationsForUsers } from '../../Messaging/AddNotificationsForUsers/AddNotificationsForUsers'
 import { AddNotificationForUser } from '../../Messaging/AddNotificationForUser/AddNotificationForUser'
+import { InviteRealtimeDomainEventProducer } from '../../../Invite/InviteRealtimeDomainEventProducer'
+import { InviteMutationTransactionRunner } from '../../../Invite/InviteMutationTransactionRunner'
 
 export class RemoveUserFromSharedVault implements UseCaseInterface<void> {
   constructor(
@@ -23,9 +25,18 @@ export class RemoveUserFromSharedVault implements UseCaseInterface<void> {
     private addNotificationForUser: AddNotificationForUser,
     private domainEventFactory: DomainEventFactoryInterface,
     private domainEventPublisher: DomainEventPublisherInterface,
+    private inviteMutationTransactionRunner?: InviteMutationTransactionRunner,
+    private inviteRealtimeDomainEventProducer?: InviteRealtimeDomainEventProducer,
   ) {}
 
   async execute(dto: RemoveUserFromSharedVaultDTO): Promise<Result<void>> {
+    if (this.inviteMutationTransactionRunner) {
+      return this.inviteMutationTransactionRunner.execute(() => this.executeMutation(dto))
+    }
+    return this.executeMutation(dto)
+  }
+
+  private async executeMutation(dto: RemoveUserFromSharedVaultDTO): Promise<Result<void>> {
     const sharedVaultUuidOrError = Uuid.create(dto.sharedVaultUuid)
     if (sharedVaultUuidOrError.isFailed()) {
       return Result.fail(sharedVaultUuidOrError.getError())
@@ -67,6 +78,10 @@ export class RemoveUserFromSharedVault implements UseCaseInterface<void> {
     if (!sharedVaultUser) {
       return Result.fail('User is not a member of the shared vault')
     }
+
+    const membersBeforeRemoval = this.inviteRealtimeDomainEventProducer
+      ? await this.sharedVaultUsersRepository.findBySharedVaultUuid(sharedVaultUuid)
+      : [sharedVaultUser]
 
     await this.sharedVaultUsersRepository.remove(sharedVaultUser)
 
@@ -123,6 +138,15 @@ export class RemoveUserFromSharedVault implements UseCaseInterface<void> {
         userUuid: dto.userUuid,
       }),
     )
+
+    await this.inviteRealtimeDomainEventProducer?.recordSharedVaultMembership({
+      action: userUuid.equals(originatorUuid) ? 'left' : 'revoked',
+      sharedVaultUuid: sharedVaultUuid.value,
+      memberUserUuid: userUuid.value,
+      membershipUuid: sharedVaultUser.id.toString(),
+      revision: String(sharedVaultUser.props.timestamps.updatedAt),
+      affectedUserUuids: [...membersBeforeRemoval.map((member) => member.props.userUuid.value), userUuid.value],
+    })
 
     return Result.ok()
   }

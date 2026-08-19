@@ -3,6 +3,7 @@ import { EntityManager } from 'typeorm'
 
 type TransactionState = {
   manager: EntityManager
+  mode: 'sync-command' | 'invite-mutation'
   outboxFailure?: unknown
   afterCommitOperations: Array<() => Promise<void>>
 }
@@ -11,11 +12,19 @@ export class SyncCommandTransactionContext {
   private readonly storage = new AsyncLocalStorage<TransactionState>()
 
   run<T>(manager: EntityManager, callback: () => Promise<T>): Promise<T> {
-    return this.storage.run({ manager, afterCommitOperations: [] }, callback)
+    return this.storage.run({ manager, mode: 'sync-command', afterCommitOperations: [] }, callback)
+  }
+
+  runInviteMutation<T>(manager: EntityManager, callback: () => Promise<T>): Promise<T> {
+    return this.storage.run({ manager, mode: 'invite-mutation', afterCommitOperations: [] }, callback)
   }
 
   get manager(): EntityManager | undefined {
     return this.storage.getStore()?.manager
+  }
+
+  get defersDomainEventsUntilCommit(): boolean {
+    return this.storage.getStore()?.mode === 'invite-mutation'
   }
 
   markOutboxFailure(error: unknown): void {
