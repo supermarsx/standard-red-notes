@@ -24,10 +24,20 @@ import {
   MAX_YJS_RESPONSE_CLAIM_FRAMES_PER_ROOM,
   PENDING_EDITOR_RESERVATION_ACTIVATION_TIMEOUT_MS,
   YJS_CHUNK_PLAINTEXT_BYTES,
-  COLLABORATION_PROTOCOL_VERSION,
+  COLLABORATION_PROTOCOL_VERSION as COLLABORATION_PROTOCOL_VERSION_SOURCE,
+  type RoomJoinAuthorization,
   type RoomRelayLifecycle,
 } from '../src/rooms.js'
 import type { Conn } from '../src/registry.js'
+
+// `export const COLLABORATION_PROTOCOL_VERSION = 3` carries a *widening* literal
+// type, so `{ protocolVersion: COLLABORATION_PROTOCOL_VERSION }` in a fixture
+// infers `number` and no longer matches RelayFrame / RoomJoinAuthorizer, whose
+// protocol fields are the literal 3. Re-binding it under an explicit annotation
+// makes the reference non-widening so every fixture below narrows on its own.
+// Value-identical to the source constant, and still tracks a version bump.
+const COLLABORATION_PROTOCOL_VERSION: typeof COLLABORATION_PROTOCOL_VERSION_SOURCE =
+  COLLABORATION_PROTOCOL_VERSION_SOURCE
 
 const TEST_ROOM_EPOCH = 'room_epoch_0000000000000001'
 const TEST_SECURITY_EPOCH = 'security_epoch_0000000000000001'
@@ -1889,15 +1899,13 @@ describe('handleRelayFrame room-join authorization', () => {
     const rooms = new RoomRegistry()
     const conn = fakeConn('closing')
     let active = true
-    // Bind to the constant rather than a literal: these annotations were pinned to
-    // `2` and silently outlived the v3 bump (the gateway tsconfig excludes test/,
-    // so nothing flagged the mismatch against the v3 value actually resolved below).
-    type DelayedAuthorization = {
-      authorized: true
-      expiresAt: number
-      serverUpdatedAtTimestamp: number
-      collaborationProtocolVersion: typeof COLLABORATION_PROTOCOL_VERSION
-    }
+    // These annotations were hand-rolled and pinned to `2`, which silently outlived
+    // the v3 bump. Worse, the shape was missing roomEpoch/collaborationSecurityEpoch
+    // entirely, so the join would have been refused by the epoch guard even if the
+    // connection had stayed open -- the case could not fail for the reason it names.
+    // Derive it from the real authorization type and grant a fully valid one, so the
+    // only thing standing between this frame and a join is the closed-connection guard.
+    type DelayedAuthorization = Extract<RoomJoinAuthorization, { authorized: true }>
     let resolveAuthorization!: (value: DelayedAuthorization) => void
     const authorize = () =>
       new Promise<DelayedAuthorization>((resolve) => {
@@ -1910,9 +1918,11 @@ describe('handleRelayFrame room-join authorization', () => {
       {
         t: 'room-join',
         room: 'n1',
+        cap: 'delayed',
         requestId: 'delayed',
         role: 'editor',
         protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+        expectedRoomEpoch: TEST_ROOM_EPOCH,
       },
       authorize,
       () => active,
@@ -1923,6 +1933,9 @@ describe('handleRelayFrame room-join authorization', () => {
       expiresAt: Date.now() + 60_000,
       serverUpdatedAtTimestamp: 1,
       collaborationProtocolVersion: COLLABORATION_PROTOCOL_VERSION,
+      roomEpoch: TEST_ROOM_EPOCH,
+      collaborationSecurityEpoch: TEST_SECURITY_EPOCH,
+      leaseRequestId: 'delayed',
     })
     await handling
 
