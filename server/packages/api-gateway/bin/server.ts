@@ -97,6 +97,7 @@ import { RequiredCrossServiceTokenMiddleware } from '../src/Controller/RequiredC
 import { createAdminEmailDeliveryRouter } from '../src/Controller/v1/createAdminEmailDeliveryRouter'
 import { AdminEmailDeliveryService } from '../src/Service/EmailDelivery/AdminEmailDeliveryService'
 import { EmailDeliveryRuntime } from '../src/Service/EmailDelivery/EmailDeliveryRuntime'
+import { createMultiContainerFilesComposition } from '../src/Service/Files/createMultiContainerFilesComposition'
 import { DurableSyncCommandPort, SyncWebSocketCommandAdapter } from '../src/Service/Sync/SyncWebSocketCommandAdapter'
 import { CollaborationAuthorizationService } from '../src/Service/Sync/CollaborationAuthorizationService'
 import { LoopbackSyncApiRpcAdapter } from '../src/Service/Sync/LoopbackSyncApiRpcAdapter'
@@ -558,6 +559,49 @@ void container
             }),
             availability: inviteEventAvailability,
           })
+          // -----------------------------------------------------------------
+          // FILES_V1 seam.
+          //
+          // The distributed deployment does NOT own canonical file storage, so
+          // it cannot use the home server's filesystem adapter -- that one
+          // authorizes against a local storage root and an in-process
+          // Auth/Syncing container, and here the files service owns the bytes
+          // (S3 or its own volume) while Auth/Syncing are reached over HTTP.
+          // `MultiContainerSyncFilesAdapter` is the counterpart built for this
+          // topology: it reaches the files service over HTTP and authorizes
+          // every operation with a freshly minted, single-use valet credential.
+          //
+          // Required configuration (see createMultiContainerFilesComposition):
+          //   - an INTERNAL files service URL. WEBSOCKET_SYNC_FILES_URL or
+          //     FILES_SERVER_PROBE_URL; FILES_SERVER_URL is used only when it
+          //     is demonstrably not PUBLIC_FILES_SERVER_URL, because the
+          //     bundled image aliases the two and the public URL is not
+          //     reachable from inside the container.
+          //   - VALET_TOKEN_SECRET, to verify minted credentials before they
+          //     are presented to storage.
+          //   - AUTH_JWT_SECRET, to re-validate the session behind a transfer.
+          //
+          // Absent any of those the composition waives the lane explicitly
+          // rather than advertising a capability every transfer would fail.
+          // The gateway rejects a shared-state composition that neither
+          // supplies nor waives FILES_V1, so this is always a stated decision.
+          // -----------------------------------------------------------------
+          const filesComposition = createMultiContainerFilesComposition(
+            {
+              websocketSyncFilesUrl: env.get('WEBSOCKET_SYNC_FILES_URL', true) || undefined,
+              filesServerProbeUrl: env.get('FILES_SERVER_PROBE_URL', true) || undefined,
+              filesServerUrl: env.get('FILES_SERVER_URL', true) || undefined,
+              publicFilesServerUrl: env.get('PUBLIC_FILES_SERVER_URL', true) || undefined,
+              authJwtSecret: env.get('AUTH_JWT_SECRET', true) || undefined,
+              valetTokenSecret: env.get('VALET_TOKEN_SECRET', true) || undefined,
+            },
+            {
+              serviceProxy: container.get(TYPES.ApiGateway_ServiceProxy),
+              endpointResolver: container.get(TYPES.ApiGateway_EndpointResolver),
+              httpClient: container.get(TYPES.ApiGateway_HTTPClient),
+            },
+          )
+
           sync = {
             isEnabled: () => webSocketSyncEnabled,
             allowedOrigins: syncAllowedOrigins,
@@ -574,28 +618,15 @@ void container
             inviteEventDispatcher: inviteEventComposition.dispatcher,
             ...redisState,
             requireSharedState: true,
-            // ---------------------------------------------------------------
-            // FILES_V1 seam.
-            //
-            // The multi-container deployment has no SyncFilesAdapter yet. The
-            // only implementation is the home server's, and it needs two things
-            // this bootstrap does not have: the canonical file bytes on a local
-            // filesystem root, and the in-process Auth/Syncing service container
-            // the valet-token authorization path calls into. Here the files
-            // service owns the bytes (S3 or its own volume) and Auth/Syncing are
-            // reached over HTTP, so supplying the filesystem adapter would
-            // authorize transfers against a disk holding no user files.
-            //
-            // `filesUnsupported` makes that a declared decision rather than a
-            // silent omission -- the gateway now rejects a shared-state
-            // composition that does neither. To serve FILES_V1 here, replace
-            // this line with `files: <files-service-backed adapter>`.
-            // ---------------------------------------------------------------
-            filesUnsupported: true,
+            ...filesComposition.option,
           }
-          logger.info(
-            'Realtime FILES_V1 transport not advertised: the distributed api-gateway does not own canonical file storage.',
-          )
+          if (filesComposition.advertised) {
+            logger.info(
+              `Realtime FILES_V1 transport advertised against the files service at ${filesComposition.filesServerUrl} (from ${filesComposition.source})`,
+            )
+          } else {
+            logger.info(`Realtime FILES_V1 transport not advertised: ${filesComposition.reason}.`)
+          }
         } else if (webSocketSyncEnabled) {
           logger.warn('WebSocket sync capability is unavailable: durable backend and shared Redis state are required.')
         }
