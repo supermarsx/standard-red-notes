@@ -187,12 +187,14 @@ describe('SyncTransportWorkerRuntime', () => {
     ticket = 't'.repeat(40),
     sessionScope = SESSION_A,
     operations: string[] = ['SYNC_ITEMS', 'AUTHORIZE_COLLABORATION'],
+    context?: { operationId: string; operationIndex: number },
   ) => {
     await harness.runtime.handle({
       type: 'EXECUTE',
       clientRequestId: 'client-1',
       body: requestBody,
       sessionScope,
+      ...(context ? { context } : {}),
     })
     await harness.runtime.handle({
       type: 'CONNECT',
@@ -221,6 +223,24 @@ describe('SyncTransportWorkerRuntime', () => {
     await flush()
     await flush()
     return socket
+  }
+
+  const expectDispatchedRecoveryWithoutHttpFallback = (
+    harness: ReturnType<typeof setup>,
+    clientRequestId: string,
+    commandId: string,
+    operationId: string,
+  ) => {
+    expect(commandId).toBe(operationId)
+    expect(harness.messages).toContainEqual({ type: 'RECOVERY_REQUIRED', clientRequestId })
+    expect(harness.messages.filter((message) => message.type === 'HTTP_FALLBACK')).toHaveLength(0)
+    expect(harness.outbox.records.get(commandId)).toEqual(
+      expect.objectContaining({
+        commandId,
+        operationId,
+        dispatchedAt: expect.any(Number),
+      }),
+    )
   }
 
   it('persists before send, clears only after checkpoint, and reuses one socket without another ticket', async () => {
@@ -413,7 +433,7 @@ describe('SyncTransportWorkerRuntime', () => {
     expect(harness.sockets).toHaveLength(1)
   })
 
-  it('keeps the current normalized WS body, id, and digest unchanged through uncertain HTTP replay', async () => {
+  it('keeps the normalized body and stable operation identity while reconciling an accepted reconnect', async () => {
     const requestBody = {
       api: '20240226',
       items: [
@@ -453,7 +473,11 @@ describe('SyncTransportWorkerRuntime', () => {
     const harness = setup(new FakeOutbox(), {
       digest: jest.fn().mockResolvedValue(digestBytes.buffer),
     } as unknown as SubtleCrypto)
-    const firstSocket = await authorize(harness, requestBody)
+    const operationId = '11111111-1111-4111-8111-111111111141'
+    const firstSocket = await authorize(harness, requestBody, 't'.repeat(40), SESSION_A, undefined, {
+      operationId,
+      operationIndex: 0,
+    })
     const commandBytes = firstSocket.sent.find((entry) => JSON.parse(entry).type === 'COMMAND') as string
     const command = JSON.parse(commandBytes) as {
       commandId: string
@@ -497,13 +521,12 @@ describe('SyncTransportWorkerRuntime', () => {
 
     secondSocket.receive(serverFrame('STATUS', command.commandId, { status: 'ACCEPTED' }, command.digest))
     await flush()
-    expect(harness.messages).toContainEqual({
-      type: 'HTTP_FALLBACK',
+    await harness.runtime.handle({
+      type: 'TICKET_UNAVAILABLE',
       clientRequestId: 'client-1',
-      reason: 'reconnect-gap',
-      body: expectedWireBody,
-      command: { id: command.commandId, digest: command.digest, sequence: command.sequence },
+      reason: 'capability-unavailable',
     })
+    expectDispatchedRecoveryWithoutHttpFallback(harness, 'client-1', command.commandId, operationId)
   })
 
   it('applies persisted A through RECOVER before allowing fresh B to be sent', async () => {
@@ -585,7 +608,11 @@ describe('SyncTransportWorkerRuntime', () => {
   it('recovers command identity before capability fallback so reload cannot replay id-less HTTP', async () => {
     const shared = new FakeOutbox()
     const first = setup(shared)
-    const firstSocket = await authorize(first)
+    const operationId = '11111111-1111-4111-8111-111111111151'
+    const firstSocket = await authorize(first, body(), 't'.repeat(40), SESSION_A, undefined, {
+      operationId,
+      operationIndex: 0,
+    })
     const persistedCommand = JSON.parse(
       firstSocket.sent.find((entry) => JSON.parse(entry).type === 'COMMAND') as string,
     ) as { commandId: string; digest: string; sequence: number }
@@ -606,6 +633,7 @@ describe('SyncTransportWorkerRuntime', () => {
         id: persistedCommand.commandId,
         digest: persistedCommand.digest,
         sequence: persistedCommand.sequence,
+        operationId,
       },
     })
 
@@ -614,17 +642,7 @@ describe('SyncTransportWorkerRuntime', () => {
       clientRequestId: 'client-1',
       reason: 'capability-unavailable',
     })
-    expect(recovered.messages).toContainEqual({
-      type: 'HTTP_FALLBACK',
-      clientRequestId: 'client-1',
-      reason: 'capability-unavailable',
-      body: body(),
-      command: {
-        id: persistedCommand.commandId,
-        digest: persistedCommand.digest,
-        sequence: persistedCommand.sequence,
-      },
-    })
+    expectDispatchedRecoveryWithoutHttpFallback(recovered, 'client-1', persistedCommand.commandId, operationId)
   })
 
   it('isolates recovery by authenticated session scope and ignores legacy unscoped records', async () => {
@@ -650,9 +668,13 @@ describe('SyncTransportWorkerRuntime', () => {
     expect(legacyProbe.messages).toContainEqual({ type: 'RECOVERY_EMPTY', clientRequestId: 'legacy-probe' })
   })
 
-  it('replays a committed result that is too large for WS over HTTP with the original command identity', async () => {
+  it('requires durable recovery for a committed result that is too large for WS', async () => {
     const harness = setup()
-    const socket = await authorize(harness)
+    const operationId = '11111111-1111-4111-8111-111111111161'
+    const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, undefined, {
+      operationId,
+      operationIndex: 0,
+    })
     const command = JSON.parse(socket.sent.find((entry) => JSON.parse(entry).type === 'COMMAND') as string) as {
       commandId: string
       digest: string
@@ -664,18 +686,16 @@ describe('SyncTransportWorkerRuntime', () => {
     )
     await flush()
 
-    expect(harness.messages).toContainEqual({
-      type: 'HTTP_FALLBACK',
-      clientRequestId: 'client-1',
-      reason: 'result-too-large',
-      body: body(),
-      command: { id: command.commandId, digest: command.digest, sequence: command.sequence },
-    })
+    expectDispatchedRecoveryWithoutHttpFallback(harness, 'client-1', command.commandId, operationId)
   })
 
   it('rejects an oversized inbound result without delivering it and preserves replay identity', async () => {
     const harness = setup()
-    const socket = await authorize(harness)
+    const operationId = '11111111-1111-4111-8111-111111111171'
+    const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, undefined, {
+      operationId,
+      operationIndex: 0,
+    })
     const command = JSON.parse(socket.sent.find((entry) => JSON.parse(entry).type === 'COMMAND') as string) as {
       commandId: string
       digest: string
@@ -694,13 +714,39 @@ describe('SyncTransportWorkerRuntime', () => {
     await flush()
 
     expect(harness.messages).not.toContainEqual(expect.objectContaining({ type: 'RESULT' }))
-    expect(harness.messages).toContainEqual({
-      type: 'HTTP_FALLBACK',
-      clientRequestId: 'client-1',
-      reason: 'frame-too-large',
-      body: body(),
-      command: { id: command.commandId, digest: command.digest, sequence: command.sequence },
+    expectDispatchedRecoveryWithoutHttpFallback(harness, 'client-1', command.commandId, operationId)
+  })
+
+  it('falls back exactly once when a ticket expires before any command bytes can be sent', async () => {
+    const harness = setup()
+    await harness.runtime.handle({
+      type: 'EXECUTE',
+      clientRequestId: 'pre-send-client',
+      body: body('pre-send'),
+      sessionScope: SESSION_A,
+      context: { operationId: '11111111-1111-4111-8111-111111111181', operationIndex: 0 },
     })
+    await harness.runtime.handle({
+      type: 'CONNECT',
+      clientRequestId: 'pre-send-client',
+      sessionScope: SESSION_A,
+      authorization: {
+        endpoint: 'wss://sync.example.test/sockets/sync',
+        ticket: 'e'.repeat(40),
+        expiresAt: Date.now(),
+        deviceId: 'device-1',
+      },
+    })
+
+    expect(harness.messages.filter((message) => message.type === 'HTTP_FALLBACK')).toEqual([
+      expect.objectContaining({
+        type: 'HTTP_FALLBACK',
+        clientRequestId: 'pre-send-client',
+        reason: 'ticket-expired',
+      }),
+    ])
+    expect(harness.outbox.records.size).toBe(0)
+    expect(harness.sockets).toHaveLength(0)
   })
 
   it('falls back for an expired ticket, oversized frame, unavailable outbox, and non-owner tab', async () => {
@@ -808,11 +854,18 @@ describe('SyncTransportWorkerRuntime', () => {
     const consoleError = jest.spyOn(console, 'error').mockImplementation()
     const consoleLog = jest.spyOn(console, 'log').mockImplementation()
     const harness = setup()
-    const socket = await authorize(harness, body('secret'), 'super-secret-ticket'.repeat(3))
+    const operationId = '11111111-1111-4111-8111-111111111191'
+    const socket = await authorize(harness, body('secret'), 'super-secret-ticket'.repeat(3), SESSION_A, undefined, {
+      operationId,
+      operationIndex: 0,
+    })
     socket.receive('{malformed')
     await flush()
 
-    expect(harness.messages).toContainEqual(expect.objectContaining({ type: 'HTTP_FALLBACK', reason: 'proxy-failed' }))
+    const command = JSON.parse(socket.sent.find((entry) => JSON.parse(entry).type === 'COMMAND') as string) as {
+      commandId: string
+    }
+    expectDispatchedRecoveryWithoutHttpFallback(harness, 'client-1', command.commandId, operationId)
     expect(consoleError).not.toHaveBeenCalled()
     expect(consoleLog).not.toHaveBeenCalled()
     consoleError.mockRestore()
@@ -840,5 +893,77 @@ describe('SyncTransportWorkerRuntime', () => {
     const nextSession = setup(harness.outbox)
     const nextSocket = await authorize(nextSession, body('next-session'), 'n'.repeat(40), SESSION_B)
     expect(nextSocket.sent.map((entry) => JSON.parse(entry).type)).toEqual(['AUTH', 'COMMAND'])
+  })
+
+  it('holds durable invite delivery until the main thread explicitly acknowledges the applied cursor', async () => {
+    const harness = setup()
+    await harness.runtime.handle({
+      type: 'SUBSCRIBE_INVITE_EVENTS',
+      clientRequestId: 'invite-client',
+      sessionScope: SESSION_A,
+      cursor: 'cursor-0',
+      limit: 1,
+    })
+    expect(harness.messages).toContainEqual({
+      type: 'NEED_TICKET',
+      clientRequestId: 'invite-client',
+      reconnect: false,
+    })
+    await harness.runtime.handle({
+      type: 'CONNECT',
+      clientRequestId: 'invite-client',
+      sessionScope: SESSION_A,
+      authorization: {
+        endpoint: 'wss://sync.example.test/sockets/sync',
+        ticket: 'i'.repeat(40),
+        expiresAt: Date.now() + 30_000,
+        deviceId: 'device-1',
+      },
+    })
+    const socket = harness.sockets[0]
+    socket.open()
+    const auth = JSON.parse(socket.sent[0]) as { commandId: string }
+    socket.receive(
+      serverFrame('AUTHENTICATED', auth.commandId, {
+        capability: 'ws-sync',
+        protocolVersion: 1,
+        operations: ['SYNC_ITEMS', 'INVITE_EVENTS'],
+        nextClientSequence: 1,
+      }),
+    )
+    await flush()
+    const subscription = JSON.parse(socket.sent.find((entry) => JSON.parse(entry).type === 'INVITE_SUBSCRIBE')!) as {
+      commandId: string
+      payload: { cursor: string; limit: number }
+    }
+    expect(subscription.payload).toEqual({ cursor: 'cursor-0', limit: 1 })
+    const batch = {
+      previousCursor: 'cursor-0',
+      events: [
+        {
+          version: 1 as const,
+          eventId: '11111111-1111-4111-8111-111111111111',
+          streamPosition: 'cursor-1',
+          kind: 'subscription-invite' as const,
+          action: 'created' as const,
+          inviteUuid: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          occurredAt: 1,
+        },
+      ],
+      nextCursor: 'cursor-1',
+      hasMore: false,
+    }
+    socket.receive(serverFrame('INVITE_BATCH', subscription.commandId, batch))
+    await flush()
+    expect(harness.messages).toContainEqual({ type: 'INVITE_BATCH', clientRequestId: 'invite-client', batch })
+    expect(socket.sent.map((entry) => JSON.parse(entry).type)).toEqual(['AUTH', 'INVITE_SUBSCRIBE'])
+
+    await harness.runtime.handle({
+      type: 'ACK_INVITE_EVENTS',
+      clientRequestId: 'invite-client',
+      cursor: 'cursor-1',
+    })
+    expect(socket.sent.map((entry) => JSON.parse(entry).type)).toEqual(['AUTH', 'INVITE_SUBSCRIBE', 'INVITE_ACK'])
+    expect(JSON.parse(socket.sent.at(-1)!).payload).toEqual({ cursor: 'cursor-1' })
   })
 })

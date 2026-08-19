@@ -3,6 +3,7 @@ import type {
   AccountSyncTransportContext,
   AccountSyncTransportRequest,
 } from '@standardnotes/services'
+import { isInviteRealtimeBatch, isOpaqueCursor } from '@standardnotes/services'
 import {
   CollaborationAuthorizationTransportRequest,
   CollaborationAuthorizationTransportResult,
@@ -83,6 +84,11 @@ type ActiveRequest =
       sessionScope: string
       mode: 'rpc-bootstrap'
     }
+  | {
+      clientRequestId: string
+      sessionScope: string
+      mode: 'invite-bootstrap'
+    }
 
 type ActiveRpcRequest = {
   clientRequestId: string
@@ -94,6 +100,16 @@ type ActiveRpcRequest = {
   responseStarted: boolean
   expectedChunkIndex: number
   deadlineTimer?: ReturnType<typeof setTimeout>
+}
+
+type ActiveInviteSubscription = {
+  clientRequestId: string
+  sessionScope: string
+  commandId: string
+  cursor?: string
+  limit: number
+  sent: boolean
+  awaitingAck?: string
 }
 
 function defaultUuid(): string {
@@ -139,10 +155,13 @@ export class SyncTransportWorkerRuntime {
   private outboxRecord?: SyncOutboxRecord
   private sequence = 1
   private accepted = false
+  /** True once COMMAND bytes have been handed to WebSocket.send. */
+  private commandSent = false
   private resultDelivered = false
   private reconnectAttempts = 0
   private negotiatedOperations = new Set<SyncNegotiatedOperation>()
   private readonly rpcRequests = new Map<string, ActiveRpcRequest>()
+  private inviteSubscription?: ActiveInviteSubscription
   private shuttingDown = false
   private ackTimeout?: ReturnType<typeof setTimeout>
   private reconnectTimeout?: ReturnType<typeof setTimeout>
@@ -190,6 +209,15 @@ export class SyncTransportWorkerRuntime {
       case 'RPC_CREDIT':
         await this.creditRpc(message.clientRequestId, message.creditBytes)
         break
+      case 'SUBSCRIBE_INVITE_EVENTS':
+        await this.subscribeInviteEvents(message.clientRequestId, message.sessionScope, message.cursor, message.limit)
+        break
+      case 'ACK_INVITE_EVENTS':
+        await this.ackInviteEvents(message.clientRequestId, message.cursor)
+        break
+      case 'UNSUBSCRIBE_INVITE_EVENTS':
+        this.unsubscribeInviteEvents(message.clientRequestId)
+        break
       case 'CONNECT':
         await this.connect(message.clientRequestId, message.sessionScope, message.authorization)
         break
@@ -234,6 +262,7 @@ export class SyncTransportWorkerRuntime {
       this.sessionScope = sessionScope
       this.outboxRecord = record
       this.accepted = false
+      this.commandSent = record.dispatchedAt !== undefined
       this.resultDelivered = false
       this.dependencies.postMessage({
         type: 'COMMAND_PERSISTED',
@@ -267,8 +296,15 @@ export class SyncTransportWorkerRuntime {
       this.postFallback(clientRequestId, body, 'worker-error')
       return
     }
+    if (this.active?.mode === 'invite-bootstrap') {
+      // A command may supersede the connection-only invite bootstrap. The
+      // subscription is sent after AUTH on the command's ticket instead.
+      this.active = undefined
+    }
     if (this.active) {
-      this.postFallback(clientRequestId, body, 'reconnect-gap')
+      // Never create a parallel HTTP owner while an earlier command may be in
+      // flight. The durable owner must be reconciled first.
+      this.dependencies.postMessage({ type: 'RECOVERY_REQUIRED', clientRequestId })
       return
     }
     let normalizedBody: AccountSyncTransportRequest
@@ -286,6 +322,7 @@ export class SyncTransportWorkerRuntime {
     this.active = { clientRequestId, sessionScope, mode: 'execute', body: normalizedBody, context }
     this.sessionScope = sessionScope
     this.accepted = false
+    this.commandSent = false
     this.resultDelivered = false
 
     if (this.socket?.readyState === 1 && this.state === 'READY' && this.transportScope) {
@@ -423,6 +460,107 @@ export class SyncTransportWorkerRuntime {
     }
   }
 
+  private async subscribeInviteEvents(
+    clientRequestId: string,
+    sessionScope: string,
+    cursor: string | undefined,
+    limit: number,
+  ): Promise<void> {
+    if (
+      this.shuttingDown ||
+      !validSessionScope(sessionScope) ||
+      (cursor !== undefined && !isOpaqueCursor(cursor)) ||
+      !Number.isSafeInteger(limit) ||
+      limit < 1 ||
+      limit > 100
+    ) {
+      this.dependencies.postMessage({
+        type: 'INVITE_ERROR',
+        clientRequestId,
+        code: 'INVALID_REQUEST',
+        retryable: false,
+      })
+      return
+    }
+    if (this.sessionScope && this.sessionScope !== sessionScope) {
+      this.dependencies.postMessage({
+        type: 'INVITE_ERROR',
+        clientRequestId,
+        code: 'SESSION_CHANGED',
+        retryable: false,
+      })
+      return
+    }
+
+    const subscription: ActiveInviteSubscription = {
+      clientRequestId,
+      sessionScope,
+      commandId: this.uuid(),
+      ...(cursor === undefined ? {} : { cursor }),
+      limit,
+      sent: false,
+    }
+    this.inviteSubscription = subscription
+    this.sessionScope = sessionScope
+    if (this.socket?.readyState === 1 && this.state === 'READY' && this.transportScope) {
+      await this.sendInviteSubscription(subscription)
+      return
+    }
+    if (!this.active) {
+      this.active = { clientRequestId, sessionScope, mode: 'invite-bootstrap' }
+      this.transition('HALF_OPEN')
+      this.dependencies.postMessage({ type: 'NEED_TICKET', clientRequestId, reconnect: false })
+    }
+  }
+
+  private async ackInviteEvents(clientRequestId: string, cursor: string): Promise<void> {
+    const subscription = this.inviteSubscription
+    if (
+      !subscription ||
+      subscription.clientRequestId !== clientRequestId ||
+      subscription.awaitingAck !== cursor ||
+      !isOpaqueCursor(cursor) ||
+      this.socket?.readyState !== 1 ||
+      this.state !== 'READY'
+    ) {
+      return
+    }
+    const payload = { cursor }
+    const frame: SyncClientFrame = {
+      version: SYNC_PROTOCOL_VERSION,
+      channel: SYNC_CHANNEL,
+      type: 'INVITE_ACK',
+      requestId: this.uuid(),
+      commandId: this.uuid(),
+      sequence: this.sequence++,
+      payloadLength: payloadByteLength(payload),
+      payload,
+    }
+    try {
+      await this.sendWithBackpressure(JSON.stringify(frame))
+      if (this.inviteSubscription === subscription) {
+        subscription.cursor = cursor
+        subscription.awaitingAck = undefined
+      }
+    } catch {
+      this.dependencies.postMessage({
+        type: 'INVITE_ERROR',
+        clientRequestId,
+        code: 'SOCKET_CLOSED',
+        retryable: true,
+      })
+    }
+  }
+
+  private unsubscribeInviteEvents(clientRequestId: string): void {
+    if (this.inviteSubscription?.clientRequestId === clientRequestId) {
+      this.inviteSubscription = undefined
+      if (this.active?.mode === 'invite-bootstrap' && this.active.clientRequestId === clientRequestId) {
+        this.active = undefined
+      }
+    }
+  }
+
   private async connect(clientRequestId: string, sessionScope: string, authorization: SyncTicket): Promise<void> {
     if (
       !this.active ||
@@ -550,7 +688,8 @@ export class SyncTransportWorkerRuntime {
             operation !== 'SYNC_ITEMS' &&
             operation !== 'AUTHORIZE_COLLABORATION' &&
             operation !== 'API_RPC' &&
-            operation !== 'STREAM_ASSISTANT',
+            operation !== 'STREAM_ASSISTANT' &&
+            operation !== 'INVITE_EVENTS',
         )
       ) {
         await this.fallback('auth-failed')
@@ -569,6 +708,9 @@ export class SyncTransportWorkerRuntime {
       })
       this.beginHeartbeat()
       await this.sendReadyRpcRequests()
+      if (this.inviteSubscription) {
+        await this.sendInviteSubscription(this.inviteSubscription)
+      }
       await this.prepareActiveRequest()
       return
     }
@@ -579,6 +721,11 @@ export class SyncTransportWorkerRuntime {
     const rpc = this.rpcByCommandId(frame.commandId)
     if (rpc) {
       this.handleRpcServerFrame(rpc, frame)
+      return
+    }
+    const inviteSubscription = this.inviteSubscription
+    if (inviteSubscription && frame.commandId === inviteSubscription.commandId) {
+      this.handleInviteServerFrame(inviteSubscription, frame)
       return
     }
     if (frame.type === 'ERROR' && this.state === 'AUTHENTICATING') {
@@ -641,16 +788,23 @@ export class SyncTransportWorkerRuntime {
         this.clearAckDeadline()
         if (frame.payload.status === 'COMMITTED') {
           this.deliverResult(frame.payload.result)
+        } else if (frame.payload.status === 'UNKNOWN') {
+          // The durable backend explicitly confirmed that the command did not
+          // take effect. Only this result permits HTTP replay.
+          await this.fallback('reconnect-gap', this.outboxRecord, false, true)
         } else {
-          await this.fallback('reconnect-gap', this.outboxRecord)
+          // ACCEPTED is post-admission and potentially post-effect. Keep the
+          // outbox and query STATUS again after a bounded reconnect.
+          this.accepted = true
+          this.startAckDeadline(COMMAND_ACK_TIMEOUT_MS)
         }
         break
       case 'ERROR':
-        if (frame.payload.code === 'RESULT_TOO_LARGE' && frame.payload.retryable === true) {
-          await this.fallback('result-too-large', this.outboxRecord, true)
-        } else {
-          await this.fallback('server-kill', this.outboxRecord)
-        }
+        await this.fallback(
+          frame.payload.code === 'RESULT_TOO_LARGE' ? 'result-too-large' : 'server-kill',
+          this.outboxRecord,
+          frame.payload.code === 'RESULT_TOO_LARGE',
+        )
         break
       default:
         break
@@ -658,6 +812,10 @@ export class SyncTransportWorkerRuntime {
   }
 
   private async prepareActiveRequest(): Promise<void> {
+    if (this.active?.mode === 'invite-bootstrap') {
+      this.active = undefined
+      return
+    }
     if (this.active?.mode === 'rpc-bootstrap') {
       this.active = undefined
       await this.sendReadyRpcRequests()
@@ -668,6 +826,120 @@ export class SyncTransportWorkerRuntime {
       return
     }
     await this.prepareActiveCommand()
+  }
+
+  private async sendInviteSubscription(subscription: ActiveInviteSubscription): Promise<void> {
+    if (this.inviteSubscription !== subscription || this.state !== 'READY' || this.socket?.readyState !== 1) {
+      return
+    }
+    if (!this.negotiatedOperations.has('INVITE_EVENTS')) {
+      this.dependencies.postMessage({
+        type: 'INVITE_ERROR',
+        clientRequestId: subscription.clientRequestId,
+        code: 'OPERATION_UNAVAILABLE',
+        retryable: true,
+      })
+      return
+    }
+    const payload = {
+      ...(subscription.cursor === undefined ? {} : { cursor: subscription.cursor }),
+      limit: subscription.limit,
+    }
+    const frame: SyncClientFrame = {
+      version: SYNC_PROTOCOL_VERSION,
+      channel: SYNC_CHANNEL,
+      type: 'INVITE_SUBSCRIBE',
+      requestId: subscription.commandId,
+      commandId: subscription.commandId,
+      sequence: this.sequence++,
+      payloadLength: payloadByteLength(payload),
+      payload,
+    }
+    try {
+      await this.sendWithBackpressure(JSON.stringify(frame))
+      if (this.inviteSubscription === subscription) {
+        subscription.sent = true
+      }
+    } catch {
+      this.dependencies.postMessage({
+        type: 'INVITE_ERROR',
+        clientRequestId: subscription.clientRequestId,
+        code: 'SOCKET_CLOSED',
+        retryable: true,
+      })
+    }
+  }
+
+  private handleInviteServerFrame(subscription: ActiveInviteSubscription, frame: SyncServerFrame): void {
+    switch (frame.type) {
+      case 'INVITE_READY':
+        if (!isOpaqueCursor(frame.payload.cursor) || frame.payload.cursor !== subscription.cursor) {
+          this.failInviteSubscription(subscription, 'INVALID_RESPONSE', false)
+          return
+        }
+        this.dependencies.postMessage({
+          type: 'INVITE_READY',
+          clientRequestId: subscription.clientRequestId,
+          cursor: frame.payload.cursor,
+        })
+        return
+      case 'INVITE_BATCH':
+        if (
+          subscription.awaitingAck !== undefined ||
+          !isInviteRealtimeBatch(frame.payload) ||
+          frame.payload.previousCursor !== subscription.cursor
+        ) {
+          this.failInviteSubscription(subscription, 'INVALID_RESPONSE', false)
+          return
+        }
+        subscription.awaitingAck = frame.payload.nextCursor
+        this.dependencies.postMessage({
+          type: 'INVITE_BATCH',
+          clientRequestId: subscription.clientRequestId,
+          batch: frame.payload,
+        })
+        return
+      case 'INVITE_RECONCILE':
+        if (
+          !isOpaqueCursor(frame.payload.cursor) ||
+          (frame.payload.reason !== 'BOOTSTRAP_REQUIRED' &&
+            frame.payload.reason !== 'CURSOR_EXPIRED' &&
+            frame.payload.reason !== 'CURSOR_INVALID')
+        ) {
+          this.failInviteSubscription(subscription, 'INVALID_RESPONSE', false)
+          return
+        }
+        subscription.sent = false
+        subscription.awaitingAck = undefined
+        this.dependencies.postMessage({
+          type: 'INVITE_RECONCILE',
+          clientRequestId: subscription.clientRequestId,
+          reason: frame.payload.reason,
+          cursor: frame.payload.cursor,
+        })
+        return
+      case 'ERROR':
+        this.failInviteSubscription(
+          subscription,
+          typeof frame.payload.code === 'string' ? frame.payload.code : 'INVITE_ERROR',
+          frame.payload.retryable === true,
+        )
+        return
+      default:
+        return
+    }
+  }
+
+  private failInviteSubscription(subscription: ActiveInviteSubscription, code: string, retryable: boolean): void {
+    this.dependencies.postMessage({
+      type: 'INVITE_ERROR',
+      clientRequestId: subscription.clientRequestId,
+      code,
+      retryable,
+    })
+    if (!retryable && this.inviteSubscription === subscription) {
+      this.inviteSubscription = undefined
+    }
   }
 
   private async sendReadyRpcRequests(): Promise<void> {
@@ -952,7 +1224,14 @@ export class SyncTransportWorkerRuntime {
           ...(record.operationId ? { operationId: record.operationId } : {}),
         },
       })
-      await this.sendWithBackpressure(record.bytes)
+      // Persist the ambiguous-dispatch boundary before calling WebSocket.send.
+      // A crash after this write but before the call is conservatively recovered
+      // through STATUS; it can never create a duplicate HTTP owner.
+      const dispatchingRecord: SyncOutboxRecord = { ...record, dispatchedAt: this.now() }
+      await this.outbox.put(dispatchingRecord)
+      this.outboxRecord = dispatchingRecord
+      this.commandSent = true
+      await this.sendWithBackpressure(dispatchingRecord.bytes)
       this.startAckDeadline(COMMAND_ACK_TIMEOUT_MS)
     } catch {
       await this.fallback('outbox-unavailable', this.outboxRecord)
@@ -984,12 +1263,11 @@ export class SyncTransportWorkerRuntime {
     const deadline = this.now() + COMMAND_ACK_TIMEOUT_MS
     while (socket.bufferedAmount > MAX_SYNC_BUFFERED_BYTES) {
       if (this.now() >= deadline) {
-        await this.fallback('backpressure', this.outboxRecord)
-        return
+        throw new Error('Sync socket backpressure deadline exceeded before write.')
       }
       await new Promise<void>((resolve) => this.scheduleTimeout(resolve, 10))
       if (this.socket !== socket) {
-        return
+        throw new Error('Sync socket changed before write.')
       }
     }
     socket.send(bytes)
@@ -1019,6 +1297,7 @@ export class SyncTransportWorkerRuntime {
         this.outboxRecord = undefined
         this.active = undefined
         this.accepted = false
+        this.commandSent = false
         this.resultDelivered = false
         this.reconnectAttempts = 0
       }
@@ -1054,6 +1333,15 @@ export class SyncTransportWorkerRuntime {
           sessionScope: unsent.sessionScope,
           mode: 'rpc-bootstrap',
         }
+      }
+    }
+    if (!this.active && this.inviteSubscription) {
+      this.inviteSubscription.sent = false
+      this.inviteSubscription.awaitingAck = undefined
+      this.active = {
+        clientRequestId: this.inviteSubscription.clientRequestId,
+        sessionScope: this.inviteSubscription.sessionScope,
+        mode: 'invite-bootstrap',
       }
     }
     if (!this.active) {
@@ -1151,6 +1439,7 @@ export class SyncTransportWorkerRuntime {
     reason: SyncFallbackReason,
     record: SyncOutboxRecord | undefined = this.outboxRecord,
     preserveHealthySocket = false,
+    confirmedNoSideEffect = false,
   ): Promise<void> {
     const active = this.active
     if (!active) {
@@ -1168,8 +1457,32 @@ export class SyncTransportWorkerRuntime {
       }
       return
     }
+    if (active.mode === 'invite-bootstrap') {
+      const subscription = this.inviteSubscription
+      if (subscription?.clientRequestId === active.clientRequestId) {
+        this.dependencies.postMessage({
+          type: 'INVITE_ERROR',
+          clientRequestId: active.clientRequestId,
+          code: reason.toUpperCase().replaceAll('-', '_'),
+          retryable: true,
+        })
+        subscription.sent = false
+        subscription.awaitingAck = undefined
+      }
+      this.active = undefined
+      this.transition('DEGRADED', reason)
+      if (!preserveHealthySocket) {
+        await this.closeSocketAndReleaseOwner()
+      }
+      return
+    }
     if (active.mode === 'collaboration') {
       await this.fallbackCollaboration(reason, preserveHealthySocket)
+      return
+    }
+    const recordBelongsToActive = record?.sessionScope === active.sessionScope
+    if (recordBelongsToActive && this.commandSent && !confirmedNoSideEffect) {
+      await this.requireDurableRecovery(active.clientRequestId, reason, preserveHealthySocket)
       return
     }
     this.transition('HTTP_FALLBACK', reason)
@@ -1194,10 +1507,29 @@ export class SyncTransportWorkerRuntime {
     this.outboxRecord = undefined
     this.resultDelivered = false
     this.accepted = false
+    this.commandSent = false
     if (!preserveHealthySocket) {
       await this.closeSocketAndReleaseOwner()
     } else {
       this.transition('READY')
+    }
+  }
+
+  private async requireDurableRecovery(
+    clientRequestId: string,
+    reason: SyncFallbackReason,
+    preserveHealthySocket: boolean,
+  ): Promise<void> {
+    this.clearAckDeadline()
+    this.dependencies.postMessage({ type: 'RECOVERY_REQUIRED', clientRequestId })
+    this.active = undefined
+    this.resultDelivered = false
+    this.accepted = false
+    // Retain outboxRecord and commandSent. The next recoverPending call must
+    // query STATUS for this exact command id/digest before any replay.
+    this.transition('DEGRADED', reason)
+    if (!preserveHealthySocket) {
+      await this.closeSocketAndReleaseOwner()
     }
   }
 
@@ -1258,6 +1590,10 @@ export class SyncTransportWorkerRuntime {
     this.transportScope = undefined
     this.authorization = undefined
     this.negotiatedOperations.clear()
+    if (this.inviteSubscription) {
+      this.inviteSubscription.sent = false
+      this.inviteSubscription.awaitingAck = undefined
+    }
   }
 
   private async revokeSession(requestId: string, sessionScope: string): Promise<void> {
@@ -1277,6 +1613,7 @@ export class SyncTransportWorkerRuntime {
     }
     this.authorization = undefined
     this.active = undefined
+    this.inviteSubscription = undefined
     this.outboxRecord = undefined
     this.outbox.close()
     this.transition('HTTP_ONLY')
@@ -1295,6 +1632,7 @@ export class SyncTransportWorkerRuntime {
     }
     this.authorization = undefined
     this.active = undefined
+    this.inviteSubscription = undefined
     this.outboxRecord = undefined
     this.outbox.close()
     this.transition('HTTP_ONLY')

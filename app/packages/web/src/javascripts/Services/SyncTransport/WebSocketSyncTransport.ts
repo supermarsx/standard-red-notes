@@ -6,6 +6,7 @@ import type {
   AccountSyncTransportRecoveryResult,
   AccountSyncTransportRequest,
   AccountSyncTransportResult,
+  InviteRealtimeBatch,
 } from '@standardnotes/services'
 import type { HttpResponse, RawSyncResponse } from '@standardnotes/snjs'
 import * as SyncTransportWorkerModule from './syncTransport.worker'
@@ -130,6 +131,26 @@ type PendingCollaborationAuthorization = {
   reject: (error: unknown) => void
 }
 
+export type InviteRealtimeSubscriptionOptions = {
+  cursor?: string
+  limit?: number
+  /** Must resolve to the exact batch cursor only after authoritative state and its checkpoint are durable. */
+  applyBatch(batch: InviteRealtimeBatch): Promise<string>
+  /** Must complete the authoritative HTTP snapshot and reset its checkpoint before resolving. */
+  reconcile(input: {
+    reason: 'BOOTSTRAP_REQUIRED' | 'CURSOR_EXPIRED' | 'CURSOR_INVALID'
+    cursor: string
+  }): Promise<void>
+  onReady?: (cursor: string) => void
+  onError?: (error: AuthenticatedRpcError) => void
+}
+
+type PendingInviteSubscription = {
+  sessionScope: string
+  options: InviteRealtimeSubscriptionOptions
+  tail: Promise<void>
+}
+
 export type AuthenticatedRpcResponse = {
   status: number
   headers: Record<string, string>
@@ -203,6 +224,7 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
   private workerSessionScope?: string
   private readonly pending = new Map<string, PendingExecution>()
   private readonly pendingCollaboration = new Map<string, PendingCollaborationAuthorization>()
+  private readonly pendingInviteSubscriptions = new Map<string, PendingInviteSubscription>()
   private readonly pendingRpcs = new Map<string, PendingRpc>()
   private readonly checkpointBarriers = new Map<string, Barrier>()
   private readonly revocationBarriers = new Map<string, Barrier>()
@@ -311,6 +333,51 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     })
   }
 
+  async subscribeInviteEvents(options: InviteRealtimeSubscriptionOptions): Promise<() => void> {
+    if (this.deinitialized || !this.environmentSupported()) {
+      throw new AuthenticatedRpcError('SOCKET_UNAVAILABLE', true, true)
+    }
+    const sessionScope = await this.currentSessionScope()
+    if (!sessionScope || this.revokedSessionScopes.has(sessionScope)) {
+      throw new AuthenticatedRpcError('SESSION_UNAVAILABLE', false, true)
+    }
+    const worker = await this.workerForSession(sessionScope)
+    if (!worker) {
+      throw new AuthenticatedRpcError('WORKER_UNAVAILABLE', true, true)
+    }
+    const limit = options.limit ?? 100
+    if (
+      (options.cursor !== undefined && (options.cursor.length === 0 || options.cursor.length > 2_048)) ||
+      !Number.isSafeInteger(limit) ||
+      limit < 1 ||
+      limit > 100
+    ) {
+      throw new AuthenticatedRpcError('INVALID_REQUEST', false, true)
+    }
+    for (const [requestId, pending] of this.pendingInviteSubscriptions) {
+      this.pendingInviteSubscriptions.delete(requestId)
+      this.worker?.postMessage({ type: 'UNSUBSCRIBE_INVITE_EVENTS', clientRequestId: requestId })
+      pending.options.onError?.(new AuthenticatedRpcError('REPLACED', false, true))
+    }
+    const clientRequestId = this.nextRequestId('invite-events')
+    const pending: PendingInviteSubscription = { sessionScope, options, tail: Promise.resolve() }
+    this.pendingInviteSubscriptions.set(clientRequestId, pending)
+    worker.postMessage({
+      type: 'SUBSCRIBE_INVITE_EVENTS',
+      clientRequestId,
+      sessionScope,
+      ...(options.cursor === undefined ? {} : { cursor: options.cursor }),
+      limit,
+    })
+    return () => {
+      if (this.pendingInviteSubscriptions.get(clientRequestId) !== pending) {
+        return
+      }
+      this.pendingInviteSubscriptions.delete(clientRequestId)
+      this.worker?.postMessage({ type: 'UNSUBSCRIBE_INVITE_EVENTS', clientRequestId })
+    }
+  }
+
   async notifySessionRevoked(): Promise<void> {
     const sessionScope = (await this.currentSessionScope()) ?? this.workerSessionScope
     if (!sessionScope) {
@@ -340,6 +407,12 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     for (const [requestId, pending] of this.pendingRpcs) {
       if (pending.sessionScope === sessionScope) {
         this.rejectRpc(requestId, pending, new AuthenticatedRpcError('SESSION_REVOKED', false, false))
+      }
+    }
+    for (const [requestId, pending] of this.pendingInviteSubscriptions) {
+      if (pending.sessionScope === sessionScope) {
+        pending.options.onError?.(new AuthenticatedRpcError('SESSION_REVOKED', false, false))
+        this.pendingInviteSubscriptions.delete(requestId)
       }
     }
     this.negotiated = undefined
@@ -391,6 +464,10 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     for (const [requestId, pending] of this.pendingRpcs) {
       this.rejectRpc(requestId, pending, new AuthenticatedRpcError('SHUTDOWN', false, false))
     }
+    for (const pending of this.pendingInviteSubscriptions.values()) {
+      pending.options.onError?.(new AuthenticatedRpcError('SHUTDOWN', false, false))
+    }
+    this.pendingInviteSubscriptions.clear()
     this.negotiated = undefined
     this.rejectAllBarriers(error)
     this.state = 'HTTP_ONLY'
@@ -622,11 +699,28 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     const collaborationPending =
       'clientRequestId' in message ? this.pendingCollaboration.get(message.clientRequestId) : undefined
     const rpcPending = 'clientRequestId' in message ? this.pendingRpcs.get(message.clientRequestId) : undefined
+    const invitePending =
+      'clientRequestId' in message ? this.pendingInviteSubscriptions.get(message.clientRequestId) : undefined
 
     if (message.type === 'NEED_TICKET') {
-      const sessionScope = pending?.sessionScope ?? collaborationPending?.sessionScope ?? rpcPending?.sessionScope
+      const sessionScope =
+        pending?.sessionScope ??
+        collaborationPending?.sessionScope ??
+        rpcPending?.sessionScope ??
+        invitePending?.sessionScope
       if (sessionScope) {
         await this.supplyTicket(message.clientRequestId, sessionScope)
+      }
+      return
+    }
+    if (
+      message.type === 'INVITE_READY' ||
+      message.type === 'INVITE_BATCH' ||
+      message.type === 'INVITE_RECONCILE' ||
+      message.type === 'INVITE_ERROR'
+    ) {
+      if (invitePending) {
+        this.handleInviteWorkerMessage(message, invitePending)
       }
       return
     }
@@ -782,6 +876,56 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     }
   }
 
+  private handleInviteWorkerMessage(
+    message: Extract<
+      SyncWorkerToMainMessage,
+      { type: 'INVITE_READY' | 'INVITE_BATCH' | 'INVITE_RECONCILE' | 'INVITE_ERROR' }
+    >,
+    pending: PendingInviteSubscription,
+  ): void {
+    if (message.type === 'INVITE_READY') {
+      pending.options.onReady?.(message.cursor)
+      return
+    }
+    if (message.type === 'INVITE_ERROR') {
+      pending.options.onError?.(new AuthenticatedRpcError(message.code, message.retryable, false))
+      return
+    }
+
+    const clientRequestId = message.clientRequestId
+    const operation = pending.tail.then(async () => {
+      if (this.pendingInviteSubscriptions.get(clientRequestId) !== pending) {
+        return
+      }
+      if (message.type === 'INVITE_BATCH') {
+        const ackCursor = await pending.options.applyBatch(message.batch)
+        if (ackCursor !== message.batch.nextCursor) {
+          throw new AuthenticatedRpcError('INVITE_ACK_MISMATCH', false, false)
+        }
+        if (this.pendingInviteSubscriptions.get(clientRequestId) === pending) {
+          this.worker?.postMessage({ type: 'ACK_INVITE_EVENTS', clientRequestId, cursor: ackCursor })
+        }
+        return
+      }
+
+      await pending.options.reconcile({ reason: message.reason, cursor: message.cursor })
+      if (this.pendingInviteSubscriptions.get(clientRequestId) === pending) {
+        this.worker?.postMessage({
+          type: 'SUBSCRIBE_INVITE_EVENTS',
+          clientRequestId,
+          sessionScope: pending.sessionScope,
+          cursor: message.cursor,
+          limit: pending.options.limit ?? 100,
+        })
+      }
+    })
+    pending.tail = operation.catch((error) => {
+      pending.options.onError?.(
+        error instanceof AuthenticatedRpcError ? error : new AuthenticatedRpcError('INVITE_APPLY_FAILED', true, false),
+      )
+    })
+  }
+
   private rejectRpc(clientRequestId: string, pending: PendingRpc, error: AuthenticatedRpcError): void {
     if (pending.streamController) {
       try {
@@ -809,7 +953,8 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
       !worker ||
       (!this.pending.has(clientRequestId) &&
         !this.pendingCollaboration.has(clientRequestId) &&
-        !this.pendingRpcs.has(clientRequestId)) ||
+        !this.pendingRpcs.has(clientRequestId) &&
+        !this.pendingInviteSubscriptions.has(clientRequestId)) ||
       this.workerSessionScope !== sessionScope
     ) {
       return
@@ -850,13 +995,16 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
         const pending = this.pending.get(clientRequestId)
         const collaborationPending = this.pendingCollaboration.get(clientRequestId)
         const rpcPending = this.pendingRpcs.get(clientRequestId)
+        const invitePending = this.pendingInviteSubscriptions.get(clientRequestId)
         this.pending.delete(clientRequestId)
         this.pendingCollaboration.delete(clientRequestId)
+        this.pendingInviteSubscriptions.delete(clientRequestId)
         pending?.reject(new Error('Authenticated session changed while acquiring a sync ticket.'))
         collaborationPending?.reject(new Error('Authenticated session changed while authorizing collaboration.'))
         if (rpcPending) {
           this.rejectRpc(clientRequestId, rpcPending, new AuthenticatedRpcError('SESSION_CHANGED', false, true))
         }
+        invitePending?.options.onError?.(new AuthenticatedRpcError('SESSION_CHANGED', false, true))
         await this.quarantineWorkerScope(sessionScope)
         return
       }
@@ -994,6 +1142,10 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     for (const [requestId, pending] of this.pendingRpcs) {
       this.rejectRpc(requestId, pending, new AuthenticatedRpcError('WORKER_ERROR', true, false))
     }
+    for (const pending of this.pendingInviteSubscriptions.values()) {
+      pending.options.onError?.(new AuthenticatedRpcError('WORKER_ERROR', true, false))
+    }
+    this.pendingInviteSubscriptions.clear()
     const entries = [...this.pending.entries()]
     this.pending.clear()
     for (const [, pending] of entries) {
@@ -1002,16 +1154,10 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
         pending.reject(new Error('Sync worker failed before durable command identity was confirmed.'))
         continue
       }
-      try {
-        const response = await pending.httpFallback(persisted.body, persisted.command)
-        const result: AccountSyncTransportResult<TransportResponse> = {
-          response,
-          markCheckpointDurable: this.createDurableCheckpoint(pending.sessionScope, persisted.command.id),
-        }
-        pending.resolve(pending.mode === 'recover' ? { ...result, request: persisted.body } : result)
-      } catch (error) {
-        pending.reject(error)
-      }
+      // COMMAND_PERSISTED can race the worker's socket write. Once the worker
+      // itself is gone the main thread cannot prove the command stayed local,
+      // so retain IndexedDB state and require STATUS recovery instead of HTTP.
+      pending.reject(new Error('Sync worker failed after command persistence; durable recovery is required.'))
     }
     this.rejectAllBarriers(new Error('Sync worker failed during an acknowledgement barrier.'))
   }

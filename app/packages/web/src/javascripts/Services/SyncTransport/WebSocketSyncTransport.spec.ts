@@ -361,6 +361,33 @@ describe('WebSocketSyncTransport', () => {
     expect(fallback).toHaveBeenCalledTimes(1)
   })
 
+  it('never replays a persisted command over HTTP when the worker crashes at the dispatch boundary', async () => {
+    const transport = createTransport()
+    const fallback = jest.fn().mockResolvedValue(response('must-not-replay'))
+    const originalBody = request('worker-crash')
+    const execution = transport.execute(originalBody, fallback, {
+      operationId: 'worker-crash-operation',
+      operationIndex: 0,
+    })
+    await flush()
+    const execute = worker.posts.find((message) => message.type === 'EXECUTE') as Extract<
+      MainToSyncWorkerMessage,
+      { type: 'EXECUTE' }
+    >
+    const command = {
+      id: 'worker-crash-operation',
+      operationId: 'worker-crash-operation',
+      digest: 'd'.repeat(64),
+      sequence: 1,
+    }
+    worker.emit({ type: 'COMMAND_PERSISTED', clientRequestId: execute.clientRequestId, body: originalBody, command })
+
+    worker.fail()
+
+    await expect(execution).rejects.toThrow('durable recovery is required')
+    expect(fallback).not.toHaveBeenCalled()
+  })
+
   it('returns recovered A under the recovery contract and only then executes fresh B', async () => {
     const transport = createTransport()
     const fallback = jest.fn().mockResolvedValue(response('http-recovered'))
@@ -723,6 +750,88 @@ describe('WebSocketSyncTransport', () => {
       headers: { 'content-type': 'application/json' },
       body: { enabled: true },
       transport: 'websocket',
+    })
+  })
+
+  it('acknowledges an invite batch only after authoritative application and checkpoint completion', async () => {
+    const transport = createTransport()
+    let finishApply!: (cursor: string) => void
+    const applicationCheckpoint = new Promise<string>((resolve) => {
+      finishApply = resolve
+    })
+    let finishReconcile!: () => void
+    const authoritativeSnapshot = new Promise<void>((resolve) => {
+      finishReconcile = resolve
+    })
+    const applyBatch = jest.fn(() => applicationCheckpoint)
+    const reconcile = jest.fn(() => authoritativeSnapshot)
+    const onError = jest.fn()
+
+    const dispose = await transport.subscribeInviteEvents({
+      cursor: 'cursor-0',
+      limit: 1,
+      applyBatch,
+      reconcile,
+      onError,
+    })
+    const subscribe = worker.posts.find((message) => message.type === 'SUBSCRIBE_INVITE_EVENTS') as Extract<
+      MainToSyncWorkerMessage,
+      { type: 'SUBSCRIBE_INVITE_EVENTS' }
+    >
+    const batch = {
+      previousCursor: 'cursor-0',
+      events: [
+        {
+          version: 1 as const,
+          eventId: '11111111-1111-4111-8111-111111111111',
+          streamPosition: 'cursor-1',
+          kind: 'subscription-invite' as const,
+          action: 'created' as const,
+          inviteUuid: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          occurredAt: 1,
+        },
+      ],
+      nextCursor: 'cursor-1',
+      hasMore: false,
+    }
+
+    worker.emit({ type: 'INVITE_BATCH', clientRequestId: subscribe.clientRequestId, batch })
+    await flush()
+    expect(applyBatch).toHaveBeenCalledWith(batch)
+    expect(worker.posts.filter((message) => message.type === 'ACK_INVITE_EVENTS')).toHaveLength(0)
+
+    finishApply('cursor-1')
+    await flush()
+    expect(worker.posts.filter((message) => message.type === 'ACK_INVITE_EVENTS')).toEqual([
+      { type: 'ACK_INVITE_EVENTS', clientRequestId: subscribe.clientRequestId, cursor: 'cursor-1' },
+    ])
+
+    worker.emit({
+      type: 'INVITE_RECONCILE',
+      clientRequestId: subscribe.clientRequestId,
+      reason: 'CURSOR_EXPIRED',
+      cursor: 'cursor-tail',
+    })
+    await flush()
+    expect(reconcile).toHaveBeenCalledWith({ reason: 'CURSOR_EXPIRED', cursor: 'cursor-tail' })
+    expect(worker.posts.filter((message) => message.type === 'SUBSCRIBE_INVITE_EVENTS')).toHaveLength(1)
+
+    finishReconcile()
+    await flush()
+    expect(worker.posts.filter((message) => message.type === 'SUBSCRIBE_INVITE_EVENTS')).toHaveLength(2)
+    expect(worker.posts.at(-1)).toEqual({
+      type: 'SUBSCRIBE_INVITE_EVENTS',
+      clientRequestId: subscribe.clientRequestId,
+      sessionScope: SESSION_A,
+      cursor: 'cursor-tail',
+      limit: 1,
+    })
+    expect(onError).not.toHaveBeenCalled()
+
+    dispose()
+    expect(worker.posts.at(-1)).toEqual({
+      type: 'UNSUBSCRIBE_INVITE_EVENTS',
+      clientRequestId: subscribe.clientRequestId,
     })
   })
 })

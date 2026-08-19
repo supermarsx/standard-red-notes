@@ -2,6 +2,7 @@ import type {
   AccountSyncCommandMetadata,
   AccountSyncTransportContext,
   AccountSyncTransportRequest,
+  InviteRealtimeBatch,
 } from '@standardnotes/services'
 
 export const SYNC_PROTOCOL_VERSION = 1 as const
@@ -14,7 +15,8 @@ export const MAX_RPC_DEADLINE_MS = 120_000
 export const DEFAULT_RPC_CREDIT_BYTES = 256 * 1024
 export const MAX_RPC_CREDIT_BYTES = 4 * 1024 * 1024
 
-export type SyncNegotiatedOperation = 'SYNC_ITEMS' | 'AUTHORIZE_COLLABORATION' | 'API_RPC' | 'STREAM_ASSISTANT'
+export type SyncNegotiatedOperation =
+  'SYNC_ITEMS' | 'AUTHORIZE_COLLABORATION' | 'API_RPC' | 'STREAM_ASSISTANT' | 'INVITE_EVENTS'
 
 export type SyncTransportState =
   'HTTP_ONLY' | 'CONNECTING' | 'AUTHENTICATING' | 'READY' | 'DEGRADED' | 'HTTP_FALLBACK' | 'HALF_OPEN'
@@ -67,7 +69,17 @@ export type WorkerAuthenticatedRpcRequest = Omit<
 export type SyncClientFrame = {
   version: typeof SYNC_PROTOCOL_VERSION
   channel: typeof SYNC_CHANNEL
-  type: 'AUTH' | 'COMMAND' | 'STATUS' | 'PING' | 'COLLABORATION_AUTHORIZE' | 'RPC_REQUEST' | 'RPC_CANCEL' | 'RPC_CREDIT'
+  type:
+    | 'AUTH'
+    | 'COMMAND'
+    | 'STATUS'
+    | 'PING'
+    | 'COLLABORATION_AUTHORIZE'
+    | 'RPC_REQUEST'
+    | 'RPC_CANCEL'
+    | 'RPC_CREDIT'
+    | 'INVITE_SUBSCRIBE'
+    | 'INVITE_ACK'
   requestId: string
   commandId: string
   sequence: number
@@ -91,6 +103,9 @@ export type SyncServerFrame = {
     | 'RPC_RESPONSE'
     | 'RPC_CHUNK'
     | 'RPC_END'
+    | 'INVITE_READY'
+    | 'INVITE_BATCH'
+    | 'INVITE_RECONCILE'
   requestId: string
   commandId: string
   sequence: number
@@ -129,6 +144,15 @@ export type MainToSyncWorkerMessage =
     }
   | { type: 'CANCEL_RPC'; clientRequestId: string }
   | { type: 'RPC_CREDIT'; clientRequestId: string; creditBytes: number }
+  | {
+      type: 'SUBSCRIBE_INVITE_EVENTS'
+      clientRequestId: string
+      sessionScope: string
+      cursor?: string
+      limit: number
+    }
+  | { type: 'ACK_INVITE_EVENTS'; clientRequestId: string; cursor: string }
+  | { type: 'UNSUBSCRIBE_INVITE_EVENTS'; clientRequestId: string }
   | { type: 'CONNECT'; clientRequestId: string; sessionScope: string; authorization: SyncTicket }
   | { type: 'TICKET_UNAVAILABLE'; clientRequestId: string; reason: SyncFallbackReason }
   | { type: 'CHECKPOINT_DURABLE'; requestId: string; sessionScope: string; commandId: string }
@@ -198,6 +222,15 @@ export type SyncWorkerToMainMessage =
       /** HTTP fallback is allowed only before a request is written to the socket. */
       safeToFallback: boolean
     }
+  | { type: 'INVITE_READY'; clientRequestId: string; cursor: string }
+  | { type: 'INVITE_BATCH'; clientRequestId: string; batch: InviteRealtimeBatch }
+  | {
+      type: 'INVITE_RECONCILE'
+      clientRequestId: string
+      reason: 'BOOTSTRAP_REQUIRED' | 'CURSOR_EXPIRED' | 'CURSOR_INVALID'
+      cursor: string
+    }
+  | { type: 'INVITE_ERROR'; clientRequestId: string; code: string; retryable: boolean }
   | {
       type: 'NEGOTIATED'
       sessionScope: string
