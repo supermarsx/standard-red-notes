@@ -23,6 +23,8 @@ import {
 import { SubscriptionManagerEvent } from './SubscriptionManagerEvent'
 import { ApplicationStageChangedEventPayload } from '../Event/ApplicationStageChangedEventPayload'
 import { IsApplicationUsingThirdPartyHost } from '../UseCase/IsApplicationUsingThirdPartyHost'
+import { InviteRealtimeEvent } from '../Invite/InviteRealtimeEvent'
+import { InviteRealtimeHandlerContext } from '../Invite/InviteRealtimeEventConsumer'
 
 export class SubscriptionManager
   extends AbstractService<SubscriptionManagerEvent>
@@ -30,6 +32,7 @@ export class SubscriptionManager
 {
   private onlineSubscription?: Subscription
   private availableSubscriptions?: AvailableSubscriptions | undefined
+  private subscriptionInvitations?: Invitation[]
 
   constructor(
     private subscriptionApiService: SubscriptionApiServiceInterface,
@@ -148,16 +151,44 @@ export class SubscriptionManager
 
   async listSubscriptionInvitations(): Promise<Invitation[]> {
     try {
-      const result = await this.subscriptionApiService.listInvites()
-
-      if (isErrorResponse(result)) {
-        return []
-      }
-
-      return result.data.invitations ?? []
+      const invitations = await this.requestSubscriptionInvitations()
+      this.subscriptionInvitations = invitations
+      return invitations
     } catch {
       return []
     }
+  }
+
+  getCachedSubscriptionInvitations(): Invitation[] | undefined {
+    return this.subscriptionInvitations ? [...this.subscriptionInvitations] : undefined
+  }
+
+  async handleInviteRealtimeEvents(
+    events: readonly InviteRealtimeEvent[],
+    context?: InviteRealtimeHandlerContext,
+  ): Promise<void> {
+    const subscriptionEvents = events.filter((event) => event.kind === 'subscription-invite')
+    if (subscriptionEvents.length === 0) {
+      return
+    }
+    if (!this.sessions.isSignedIn()) {
+      throw new Error('Cannot reconcile subscription invitations without an authenticated session.')
+    }
+    context?.assertCurrent()
+    const userUuid = this.sessions.userUuid
+
+    const invitations = await this.requestSubscriptionInvitations()
+    const shouldRefreshSubscription = subscriptionEvents.some(
+      (event) => event.action === 'accepted' || event.action === 'canceled',
+    )
+    const subscription = shouldRefreshSubscription ? await this.requestOnlineSubscription(userUuid) : undefined
+
+    this.assertRealtimeSession(userUuid, context)
+    this.subscriptionInvitations = invitations
+    if (shouldRefreshSubscription) {
+      this.handleReceivedOnlineSubscriptionFromServer(subscription)
+    }
+    await this.notifyEvent(SubscriptionManagerEvent.DidChangeInvitations)
   }
 
   async inviteToSubscription(inviteeEmail: string): Promise<boolean> {
@@ -194,17 +225,33 @@ export class SubscriptionManager
     }
 
     try {
-      const result = await this.subscriptionApiService.getUserSubscription({ userUuid: this.sessions.userUuid })
-
-      if (isErrorResponse(result)) {
-        return
-      }
-
-      const subscription = result.data.subscription
-
+      const subscription = await this.requestOnlineSubscription(this.sessions.userUuid)
       this.handleReceivedOnlineSubscriptionFromServer(subscription)
     } catch (error) {
       void error
+    }
+  }
+
+  private async requestSubscriptionInvitations(): Promise<Invitation[]> {
+    const result = await this.subscriptionApiService.listInvites()
+    if (isErrorResponse(result)) {
+      throw new Error('Could not reconcile subscription invitations after a realtime invalidation.')
+    }
+    return result.data.invitations ?? []
+  }
+
+  private async requestOnlineSubscription(userUuid: string): Promise<Subscription | undefined> {
+    const result = await this.subscriptionApiService.getUserSubscription({ userUuid })
+    if (isErrorResponse(result)) {
+      throw new Error('Could not reconcile subscription entitlements after a realtime invalidation.')
+    }
+    return result.data.subscription
+  }
+
+  private assertRealtimeSession(userUuid: string, context?: InviteRealtimeHandlerContext): void {
+    context?.assertCurrent()
+    if (!this.sessions.isSignedIn() || this.sessions.userUuid !== userUuid) {
+      throw new Error('Subscription invitation session changed during authoritative reload.')
     }
   }
 

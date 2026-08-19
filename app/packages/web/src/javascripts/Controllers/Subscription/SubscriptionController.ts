@@ -46,6 +46,7 @@ export class SubscriptionController extends AbstractViewController implements In
     eventBus.addEventHandler(this, ApplicationEvent.SignedIn)
     eventBus.addEventHandler(this, ApplicationEvent.UserRolesChanged)
     eventBus.addEventHandler(this, SubscriptionManagerEvent.DidFetchSubscription)
+    eventBus.addEventHandler(this, SubscriptionManagerEvent.DidChangeInvitations)
   }
 
   override deinit() {
@@ -79,6 +80,18 @@ export class SubscriptionController extends AbstractViewController implements In
         runInAction(() => {
           this.onlineSubscription = this.subscriptions.getOnlineSubscription()
         })
+        break
+      }
+
+      case SubscriptionManagerEvent.DidChangeInvitations: {
+        const invitations = this.subscriptions.getCachedSubscriptionInvitations()
+        if (invitations === undefined) {
+          await this.reloadSubscriptionInvitations()
+        } else {
+          runInAction(() => {
+            this.subscriptionInvitations = invitations
+          })
+        }
         break
       }
 

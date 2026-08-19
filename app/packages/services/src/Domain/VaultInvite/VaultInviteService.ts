@@ -41,12 +41,16 @@ import { StatusServiceInterface } from '../Status/StatusServiceInterface'
 import { ApplicationEvent } from '../Event/ApplicationEvent'
 import { WebSocketsServiceEvent } from '../Api/WebSocketsServiceEvent'
 import { NotificationServiceEvent, NotificationServiceEventPayload } from '../UserEvent/NotificationServiceEvent'
+import { InviteRealtimeEvent } from '../Invite/InviteRealtimeEvent'
+import { InviteRealtimeHandlerContext } from '../Invite/InviteRealtimeEventConsumer'
 
 export class VaultInviteService
   extends AbstractService<VaultInviteServiceEvent>
   implements VaultInviteServiceInterface, InternalEventHandlerInterface
 {
   private pendingInvites: Record<string, InviteRecord> = {}
+  private realtimeReload?: Promise<void>
+  private realtimeReloadDirty = false
 
   constructor(
     items: ItemManagerInterface,
@@ -98,6 +102,8 @@ export class VaultInviteService
     ;(this._decryptErroredPayloads as unknown) = undefined
 
     this.pendingInvites = {}
+    this.realtimeReload = undefined
+    this.realtimeReloadDirty = false
   }
 
   updatePendingInviteCount() {
@@ -148,18 +154,74 @@ export class VaultInviteService
     return Object.values(this.pendingInvites)
   }
 
-  public async downloadInboundInvites(): Promise<ClientDisplayableError | SharedVaultInviteServerHash[]> {
+  public async handleInviteRealtimeEvents(
+    events: readonly InviteRealtimeEvent[],
+    context?: InviteRealtimeHandlerContext,
+  ): Promise<void> {
+    if (!events.some((event) => event.kind === 'shared-vault-invite')) {
+      return
+    }
+    if (!this.session.isSignedIn()) {
+      throw new Error('Cannot reconcile shared-vault invitations without an authenticated session.')
+    }
+    context?.assertCurrent()
+    const userUuid = this.session.userUuid
+
+    const current = this.realtimeReload
+    if (current) {
+      this.realtimeReloadDirty = true
+      return current
+    }
+    const reload = this.reloadInboundInvitesForRealtimeEventLoop(userUuid, context)
+    this.realtimeReload = reload
+    try {
+      await reload
+    } finally {
+      if (this.realtimeReload === reload) {
+        this.realtimeReload = undefined
+      }
+    }
+  }
+
+  private async reloadInboundInvitesForRealtimeEventLoop(
+    userUuid: string,
+    context?: InviteRealtimeHandlerContext,
+  ): Promise<void> {
+    do {
+      this.realtimeReloadDirty = false
+      this.assertRealtimeSession(userUuid, context)
+      const result = await this.downloadInboundInvites(context)
+      this.assertRealtimeSession(userUuid, context)
+      if (isClientDisplayableError(result)) {
+        throw new Error('Could not reconcile shared-vault invitations after a realtime invalidation.')
+      }
+    } while (this.realtimeReloadDirty)
+  }
+
+  public async downloadInboundInvites(
+    context?: InviteRealtimeHandlerContext,
+  ): Promise<ClientDisplayableError | SharedVaultInviteServerHash[]> {
     const response = await this.invitesServer.getInboundUserInvites()
 
     if (isErrorResponse(response)) {
       return ClientDisplayableError.FromString(`Failed to get inbound user invites ${JSON.stringify(response)}`)
     }
 
-    this.pendingInvites = {}
-
-    await this.processInboundInvites(response.data.invites)
+    context?.assertCurrent()
+    const records = await this.decodeInboundInvites(response.data.invites, context)
+    context?.assertCurrent()
+    this.pendingInvites = Object.fromEntries(records.map((record) => [record.invite.uuid, record]))
+    this.updatePendingInviteCount()
+    await this.notifyEvent(VaultInviteServiceEvent.InvitesReloaded)
 
     return response.data.invites
+  }
+
+  private assertRealtimeSession(userUuid: string, context?: InviteRealtimeHandlerContext): void {
+    context?.assertCurrent()
+    if (!this.session.isSignedIn() || this.session.userUuid !== userUuid) {
+      throw new Error('Shared-vault invitation session changed during authoritative reload.')
+    }
   }
 
   public async getOutboundInvites(
@@ -295,13 +357,33 @@ export class VaultInviteService
       return
     }
 
-    const keys = this._getKeyPairs.execute()
-    if (keys.isFailed()) {
-      return
-    }
-
+    const records = await this.decodeInboundInvites(invites)
     for (const invite of invites) {
       delete this.pendingInvites[invite.uuid]
+    }
+    for (const record of records) {
+      this.pendingInvites[record.invite.uuid] = record
+    }
+    this.updatePendingInviteCount()
+    await this.notifyEvent(VaultInviteServiceEvent.InvitesReloaded)
+  }
+
+  private async decodeInboundInvites(
+    invites: SharedVaultInviteServerHash[],
+    context?: InviteRealtimeHandlerContext,
+  ): Promise<InviteRecord[]> {
+    if (invites.length === 0) {
+      return []
+    }
+
+    const keys = this._getKeyPairs.execute()
+    if (keys.isFailed()) {
+      return []
+    }
+
+    const records: InviteRecord[] = []
+    for (const invite of invites) {
+      context?.assertCurrent()
 
       const sender = this._findContact.execute({ userUuid: invite.sender_uuid })
       if (!sender.isFailed()) {
@@ -313,7 +395,7 @@ export class VaultInviteService
         })
 
         if (!trustedMessage.isFailed()) {
-          this.addPendingInvite({
+          records.push({
             invite,
             message: trustedMessage.getValue(),
             trusted: true,
@@ -329,14 +411,14 @@ export class VaultInviteService
       })
 
       if (!untrustedMessage.isFailed()) {
-        this.addPendingInvite({
+        records.push({
           invite,
           message: untrustedMessage.getValue(),
           trusted: false,
         })
       }
     }
-
-    void this.notifyEvent(VaultInviteServiceEvent.InvitesReloaded)
+    context?.assertCurrent()
+    return records
   }
 }
