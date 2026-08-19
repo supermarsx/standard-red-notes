@@ -31,10 +31,16 @@
  * `editor.update()` context; a single call therefore lands as ONE history entry,
  * i.e. one undo step for the whole bulk change.
  */
-import { $isListItemNode, $isListNode, ListItemNode, ListNode } from '@lexical/list'
-import { BaseSelection, LexicalNode } from 'lexical'
-import { $isChecklistItemNode } from '../Lexical/Nodes/ChecklistItemNode'
-import { $setChecklistItemChecked } from './ChecklistEditorMutations'
+import { $isListNode, ListItemNode, ListNode } from '@lexical/list'
+import { $isElementNode, BaseSelection, LexicalNode } from 'lexical'
+import {
+  $getChecklistDueAt,
+  $getChecklistRecurrence,
+  $isChecklistItemNode,
+  $propagateChecklistRecurrenceToDescendants,
+  CHECKLIST_MAX_DESCENDANT_NODES,
+} from '../Lexical/Nodes/ChecklistItemNode'
+import { $applyChecklistItemChecked } from './ChecklistEditorMutations'
 
 /** Walk up from `node` (inclusive) to the nearest checkable checklist row. */
 function $nearestChecklistItem(node: LexicalNode | null): ListItemNode | null {
@@ -48,25 +54,50 @@ function $nearestChecklistItem(node: LexicalNode | null): ListItemNode | null {
   return null
 }
 
-/** Every checkable row inside `listNode`, descending into nested checklists. */
+/**
+ * Every checkable row inside `listNode`, in document order, descending into
+ * nested checklists — including the sub-list hanging off a row that also has
+ * its own text, and the "wrapper" rows Lexical uses for indentation (which are
+ * structure, so they are descended into but never collected).
+ *
+ * The walk is ITERATIVE and node-bounded on purpose: a recursive descent over a
+ * deeply nested document has already blown the stack elsewhere in this editor,
+ * and nesting reaches 128 levels in the parser.
+ */
 function $checkableItemsInList(listNode: ListNode): ListItemNode[] {
   const items: ListItemNode[] = []
-  for (const child of listNode.getChildren()) {
-    if ($isChecklistItemNode(child)) {
-      items.push(child)
+  const seen = new Set<string>()
+  const stack: LexicalNode[] = [listNode]
+  let budget = CHECKLIST_MAX_DESCENDANT_NODES
+
+  while (stack.length > 0 && budget > 0) {
+    const node = stack.pop() as LexicalNode
+    budget--
+    if ($isChecklistItemNode(node) && !seen.has(node.getKey())) {
+      seen.add(node.getKey())
+      items.push(node)
+    }
+    if (!$isElementNode(node)) {
       continue
     }
-    // Otherwise this is a "wrapper" item whose only child is a nested list
-    // (Lexical's representation of indentation). Recurse into it so nested
-    // sub-tasks count as part of "all items in this checklist".
-    if ($isListItemNode(child)) {
-      const nested = child.getFirstChild()
-      if ($isListNode(nested) && nested.getListType() === 'check') {
-        items.push(...$checkableItemsInList(nested))
-      }
+    const children = node.getChildren()
+    for (let index = children.length - 1; index >= 0; index--) {
+      stack.push(children[index])
     }
   }
   return items
+}
+
+/** True when some ancestor row of `item` is one of `keys`. */
+function $hasAncestorIn(item: ListItemNode, keys: ReadonlySet<string>): boolean {
+  let current: LexicalNode | null = item.getParent()
+  while (current) {
+    if ($isChecklistItemNode(current) && keys.has(current.getKey())) {
+      return true
+    }
+    current = current.getParent()
+  }
+  return false
 }
 
 /** Dedupe by node key while preserving the given (document) order. */
@@ -131,9 +162,35 @@ export function $selectionHasChecklistItems(selection: BaseSelection | null): bo
  * a caller can skip follow-up work (e.g. auto-move reordering) when nothing did.
  */
 export function $setCheckedForItems(items: ListItemNode[], checked: boolean, now = Date.now()): number {
+  // Completing a row that ADVANCES a recurrence carries its whole subtree onto
+  // that one new occurrence, reopening the subtasks. One bulk action must be
+  // one occurrence for the tree, so once a row advances we roll its descendants
+  // to the same occurrence and skip them for the rest of the batch — otherwise
+  // a subtask would advance once for its parent and again for its own turn in
+  // the loop, and would be re-closed after the parent deliberately reopened it.
+  //
+  // Only an ADVANCE stands in for its subtree: a row that merely closes (no
+  // recurrence, or a schedule at the calendar ceiling that cannot roll) leaves
+  // its subtasks to be completed on their own. `items` is in document order, so
+  // an ancestor is always processed before its descendants.
+  const advanced = new Set<string>()
+
   let changed = 0
   for (const item of items) {
-    if ($setChecklistItemChecked(item, checked, now)) {
+    if (advanced.size > 0 && $hasAncestorIn(item, advanced)) {
+      continue
+    }
+    const outcome = $applyChecklistItemChecked(item, checked, now)
+    if (outcome.advanced) {
+      advanced.add(item.getKey())
+      const dueAt = $getChecklistDueAt(item)
+      const recurrence = $getChecklistRecurrence(item)
+      if (dueAt && recurrence) {
+        // Idempotent: re-rolling the same occurrence is a documented no-op.
+        $propagateChecklistRecurrenceToDescendants(item, dueAt, recurrence, now)
+      }
+    }
+    if (outcome.changed) {
       changed++
     }
   }
