@@ -234,6 +234,12 @@ export enum PrefKey {
   // added after the user last reordered are appended at the end, so the stored
   // value is forward/backward compatible and never needs migrating.
   BlockStyleGalleryOrder = 'blockStyleGalleryOrder',
+  // Standard Red Notes: the Todos general view's filter bar state (search text,
+  // folder/tag selection, source, due bucket, hide-completed, and sort order).
+  // Stored as a pref so filters follow the user across reloads AND devices,
+  // matching how the notes list persists its own display filters
+  // (NotesShowArchived / NotesHidePinned / SortNotesBy).
+  TodoFilters = 'todoFilters',
   DEPRECATED_ActiveThemes = 'activeThemes',
   DEPRECATED_UseSystemColorScheme = 'useSystemColorScheme',
   DEPRECATED_UseTranslucentUI = 'useTranslucentUI',
@@ -260,6 +266,44 @@ export type ConflictResolutionStrategyValue = 'ask' | 'keepBoth' | 'keepLocal' |
 export type RecentNoteEntry = {
   uuid: string
   openedAt: number
+}
+
+export const CurrentTodoFiltersPreferenceVersion = 1
+
+/**
+ * Standard Red Notes: the persisted filter state of the Todos general view.
+ *
+ * A todo carries no topic/category/folder of its own, so the taxonomy dimension
+ * is `tagUuids` — the SOURCE NOTE's tags, which nest and which this app's UI
+ * calls Folders. `source` selects Super checklists vs Advanced Checklist notes,
+ * and `due` buckets by deadline independently of completion so `hideCompleted`
+ * composes with it rather than overlapping.
+ *
+ * This value SYNCS, so a client can meet a value written by an older or newer
+ * version of itself. Consumers must treat every field as untrusted and
+ * normalize before use rather than reading it straight.
+ */
+export type TodoFiltersPreference = {
+  version: typeof CurrentTodoFiltersPreferenceVersion
+  query: string
+  tagUuids: string[]
+  source: 'all' | 'super' | 'advanced-checklist'
+  due: 'all' | 'overdue' | 'due-soon' | 'scheduled' | 'unscheduled'
+  hideCompleted: boolean
+  sortBy: 'due' | 'todo' | 'note' | 'status'
+  sortReverse: boolean
+}
+
+/** Show everything, nearest deadline first — a first run never opens filtered. */
+export const DefaultTodoFiltersPreference: TodoFiltersPreference = {
+  version: CurrentTodoFiltersPreferenceVersion,
+  query: '',
+  tagUuids: [],
+  source: 'all',
+  due: 'all',
+  hideCompleted: false,
+  sortBy: 'due',
+  sortReverse: false,
 }
 
 /**
@@ -386,4 +430,6 @@ export type PrefValue = {
    * compatible), so the stored value never needs migrating.
    */
   [PrefKey.BlockStyleGalleryOrder]: BlockTypeKey[]
+  /** The Todos general view's filter bar state. See {@link TodoFiltersPreference}. */
+  [PrefKey.TodoFilters]: TodoFiltersPreference
 }

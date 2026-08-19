@@ -6,7 +6,7 @@ const group = (noteUuid: string, todoId: string): NoteTodos =>
   ({
     note: { uuid: noteUuid, noteType: NoteType.Super } as never,
     source: 'super',
-    items: [{ id: todoId, todoId, locator: '0.0', text: 'Task', checked: false }],
+    items: [{ id: todoId, todoId, locator: '0.0', text: 'Task', checked: false, depth: 0 }],
     completed: 0,
     total: 1,
   }) as NoteTodos

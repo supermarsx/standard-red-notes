@@ -2,13 +2,13 @@
 
 import { act, createElement } from 'react'
 import { createRoot, Root } from 'react-dom/client'
-import { FeatureStatus, NoteType, SNNote, SNTag, UuidGenerator } from '@standardnotes/snjs'
+import { ApplicationEvent, FeatureStatus, NoteType, SNNote, SNTag, UuidGenerator } from '@standardnotes/snjs'
 import { WebApplication } from '@/Application/WebApplication'
 import ApplicationProvider from '@/Components/ApplicationProvider'
 import AndroidBackHandlerProvider from '@/NativeMobileWeb/useAndroidBackHandler'
 import TodoView from './TodoView'
 import { CHECKLIST_TODO_ID_STATE_KEY } from '../SuperEditor/Lexical/Nodes/ChecklistItemNode'
-import { TODO_FILTERS_STORAGE_KEY } from './todoFilters'
+import { DEFAULT_TODO_FILTERS, TODO_FILTERS_PREF_KEY } from './todoFilters'
 
 /**
  * Render-path coverage for the Todos general view's array display and its
@@ -90,6 +90,7 @@ const noteTags: Record<string, SNTag[]> = {
 let container: HTMLElement
 let root: Root
 let storage: Map<string, unknown>
+let preferenceObservers: ((event: unknown) => void)[]
 let originalResizeObserver: typeof ResizeObserver
 let originalAnimate: typeof HTMLElement.prototype.animate
 
@@ -101,7 +102,10 @@ const buildApplication = (): WebApplication =>
       findItem: (uuid: string) => notes.find((note) => note.uuid === uuid),
       getSortedTagsForItem: (note: SNNote) => noteTags[note.uuid] ?? [],
     },
-    addEventObserver: () => () => undefined,
+    addEventObserver: (observer: (event: unknown) => Promise<void> | void) => {
+      preferenceObservers.push(observer)
+      return () => undefined
+    },
     isAuthorizedToRenderItem: () => true,
     vaults: { getItemVault: () => undefined },
     sessions: { isCurrentSessionReadOnly: () => false },
@@ -110,10 +114,11 @@ const buildApplication = (): WebApplication =>
     paneController: { closeViewTab: () => undefined, setActiveViewTab: () => undefined, presentPane: () => undefined },
     itemControllerGroup: { itemControllers: [] },
     keyboardService: { isMac: false },
-    // The device-local app-storage K/V the filters persist through.
-    getValue: (key: string) => storage.get(key),
-    setValue: (key: string, value: unknown) => {
+    // The SYNCED UserPrefs item the filters persist through.
+    getPreference: (key: string, defaultValue?: unknown) => storage.get(key) ?? defaultValue,
+    setPreference: (key: string, value: unknown) => {
       storage.set(key, value)
+      return Promise.resolve()
     },
     addAndroidBackHandlerEventListener: () => () => undefined,
     setAndroidBackHandlerFallbackListener: () => undefined,
@@ -182,6 +187,7 @@ beforeEach(() => {
   // The shared Table asks for a uuid; app boot normally registers the generator.
   UuidGenerator.SetGenerator(() => 'todo-filters-table-test')
   storage = new Map()
+  preferenceObservers = []
   originalResizeObserver = globalThis.ResizeObserver
   originalAnimate = HTMLElement.prototype.animate
   window.matchMedia = ((query: string) => ({
@@ -315,7 +321,7 @@ describe('Todos empty states', () => {
 describe('Todos filter persistence', () => {
   it('writes the filters to device storage as they change', () => {
     setSelect(control<HTMLSelectElement>('Filter by source'), 'super')
-    expect(storage.get(TODO_FILTERS_STORAGE_KEY)).toMatchObject({ source: 'super' })
+    expect(storage.get(TODO_FILTERS_PREF_KEY)).toMatchObject({ source: 'super' })
   })
 
   it('restores every filter on a fresh mount, as a reload would', () => {
@@ -343,11 +349,57 @@ describe('Todos filter persistence', () => {
 
   it('ignores a corrupted stored value instead of breaking the view', () => {
     unmount()
-    storage.set(TODO_FILTERS_STORAGE_KEY, { query: 42, source: 'nonsense', tagUuids: 'not-an-array' })
+    storage.set(TODO_FILTERS_PREF_KEY, { query: 42, source: 'nonsense', tagUuids: 'not-an-array' })
     mount()
 
     expect(control<HTMLInputElement>('Search todos').value).toBe('')
     expect(visibleTodoText()).toHaveLength(4)
     expect(container.textContent).not.toContain('filters active')
+  })
+
+  it('adopts a filter change that arrives from another device', async () => {
+    // Nothing has been edited in this view, so a synced write wins.
+    storage.set(TODO_FILTERS_PREF_KEY, { ...DEFAULT_TODO_FILTERS, source: 'advanced-checklist' })
+    await act(async () => {
+      await Promise.all(preferenceObservers.map((observer) => observer(ApplicationEvent.PreferencesChanged)))
+    })
+    expect(control<HTMLSelectElement>('Filter by source').value).toBe('advanced-checklist')
+    expect(visibleTodoText()).toEqual(['Buy milk', 'Call the plumber'])
+  })
+
+  it('does not let a remote change yank the query out from under active typing', async () => {
+    setInput(control<HTMLInputElement>('Search todos'), 'ship')
+    storage.set(TODO_FILTERS_PREF_KEY, { ...DEFAULT_TODO_FILTERS, query: 'something else' })
+    await act(async () => {
+      await Promise.all(preferenceObservers.map((observer) => observer(ApplicationEvent.PreferencesChanged)))
+    })
+    expect(control<HTMLInputElement>('Search todos').value).toBe('ship')
+  })
+
+  it('degrades an unknown newer-client shape to the defaults instead of breaking', () => {
+    unmount()
+    // What an older client sees after a newer one writes fields it has never
+    // heard of, and enum values outside its own union.
+    storage.set(TODO_FILTERS_PREF_KEY, {
+      version: 99,
+      query: 'ship',
+      tagUuids: ['tag-work'],
+      source: 'future-source-kind',
+      due: 'sometime-next-decade',
+      hideCompleted: true,
+      sortBy: 'priority',
+      sortReverse: true,
+      groupBy: 'assignee',
+    })
+    mount()
+
+    // Fields it understands survive; the ones it does not fall back, and the
+    // view still renders rather than showing an empty or broken list.
+    expect(control<HTMLInputElement>('Search todos').value).toBe('ship')
+    expect(control<HTMLSelectElement>('Filter by folder or tag').value).toBe('tag-work')
+    expect(control<HTMLSelectElement>('Filter by source').value).toBe('all')
+    expect(control<HTMLSelectElement>('Filter by due date').value).toBe('all')
+    expect(control<HTMLSelectElement>('Sort by').value).toBe('due')
+    expect(visibleTodoText()).toEqual(['Ship the beta'])
   })
 })

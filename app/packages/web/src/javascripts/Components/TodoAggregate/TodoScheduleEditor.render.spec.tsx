@@ -69,7 +69,14 @@ afterEach(() => {
   HTMLElement.prototype.animate = originalAnimate
 })
 
-const item: TodoItem = { id: 'todo-milk', todoId: 'todo-milk', locator: '0.0', text: 'Buy milk', checked: false }
+const item: TodoItem = {
+  id: 'todo-milk',
+  todoId: 'todo-milk',
+  locator: '0.0',
+  text: 'Buy milk',
+  checked: false,
+  depth: 0,
+}
 const target: SuperChecklistTodoTarget = { todoId: 'todo-milk', locator: '0.0', text: 'Buy milk', checked: false }
 
 const mountEditor = async (onSave: (patch: SuperChecklistTodoPatch) => Promise<boolean>) => {

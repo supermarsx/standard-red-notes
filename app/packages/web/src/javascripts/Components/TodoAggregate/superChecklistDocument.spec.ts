@@ -200,4 +200,75 @@ describe('Super checklist persisted document parsing', () => {
     )
     expect(parseSuperChecklistDocument(duplicated).every((item) => item.todoId === undefined)).toBe(true)
   })
+
+  it('reports each task nesting level and the task it is nested under', () => {
+    const text = (value: string) => ({ type: 'text', text: value })
+    const checkList = (children: unknown[]) => ({ type: 'list', listType: 'check', children })
+    const nested = JSON.stringify({
+      root: {
+        type: 'root',
+        children: [
+          checkList([
+            {
+              type: 'listitem',
+              checked: false,
+              children: [
+                text('Parent'),
+                checkList([
+                  {
+                    type: 'listitem',
+                    checked: false,
+                    children: [
+                      text('Child'),
+                      checkList([{ type: 'listitem', checked: false, children: [text('Grandchild')] }]),
+                    ],
+                  },
+                ]),
+              ],
+            },
+            { type: 'listitem', checked: false, children: [text('Sibling')] },
+          ]),
+        ],
+      },
+    })
+
+    const parsed = parseSuperChecklistDocument(nested)
+    expect(parsed.map((todo) => [todo.text, todo.depth])).toEqual([
+      ['Parent', 0],
+      ['Child', 1],
+      ['Grandchild', 2],
+      ['Sibling', 0],
+    ])
+    const byText = new Map(parsed.map((todo) => [todo.text, todo]))
+    expect(byText.get('Parent')?.parentLocator).toBeUndefined()
+    expect(byText.get('Child')?.parentLocator).toBe(byText.get('Parent')?.locator)
+    expect(byText.get('Grandchild')?.parentLocator).toBe(byText.get('Child')?.locator)
+    expect(byText.get('Sibling')?.parentLocator).toBeUndefined()
+  })
+
+  it('does not count a non-checklist wrapper as a nesting level', () => {
+    // A checklist inside a quote is deeper in the TREE without being a deeper
+    // task; reporting the tree depth here would indent it for no reason.
+    const wrapped = JSON.stringify({
+      root: {
+        type: 'root',
+        children: [
+          {
+            type: 'quote',
+            children: [
+              {
+                type: 'list',
+                listType: 'check',
+                children: [{ type: 'listitem', checked: false, children: [{ type: 'text', text: 'Quoted task' }] }],
+              },
+            ],
+          },
+        ],
+      },
+    })
+
+    expect(parseSuperChecklistDocument(wrapped)).toEqual([
+      expect.objectContaining({ text: 'Quoted task', depth: 0, parentLocator: undefined }),
+    ])
+  })
 })

@@ -45,6 +45,14 @@ export type TodoItem = {
   dueAt?: string
   /** Canonical recurrence rule and wall-time anchor for Super checklist items. */
   recurrence?: ChecklistRecurrence
+  /**
+   * Checklist nesting level: 0 at the top, 1 for a subtask, and so on. Super
+   * checklists nest arbitrarily (bounded by the parser); Advanced Checklist
+   * payloads are flat, so every one of their tasks is level 0.
+   */
+  depth: number
+  /** Locator of the task this one is nested under, absent at the top level. */
+  parentLocator?: string
 }
 
 /** All todos from one source note, plus progress, for grouped rendering. */
@@ -96,6 +104,9 @@ function parseTask(raw: unknown, index: number): TodoItem | null {
         : `adv-${index}`,
     text,
     checked: task.completed === true,
+    // The third-party payload has no task nesting — its `groups` name sections,
+    // not parents — so every advanced-checklist task is top level.
+    depth: 0,
   }
 }
 

@@ -13,9 +13,12 @@ import type { TableColumn } from '../Table/CommonTypes'
 import TodoFilterBar from './TodoFilterBar'
 import {
   collectTodoTagOptions,
+  countTodoMatches,
   DEFAULT_TODO_FILTERS,
   normalizeTodoFilters,
-  TODO_FILTERS_STORAGE_KEY,
+  TODO_FILTERS_PREF_KEY,
+  TODO_MAX_INDENT_LEVEL,
+  todoRowIndentLevel,
   todoRowsFromGroups,
   visibleTodoRows,
   type TodoFilters,
@@ -438,19 +441,24 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
     generation: number
     groups: NoteTodos[]
   }>(() => ({ application, generation: 0, groups: readGroups() }))
-  // Filters are read once per mounted view and written back on every change, so
-  // they survive navigating away and reloading. The store is device-local (the
-  // same app-storage K/V `searchIndexSettings` uses), so filters do NOT follow
-  // the user to another machine.
+  // Filters are read on mount and written back on every change, so they survive
+  // navigating away and reloading. They live in the SYNCED UserPrefs item, so
+  // they also follow the user to another device — which is why every read runs
+  // through the normalizer: the value may have been written by an older or
+  // newer version of this client.
   const readPersistedFilters = useCallback((): TodoFilters => {
     try {
-      return normalizeTodoFilters(application.getValue<unknown>(TODO_FILTERS_STORAGE_KEY))
+      return normalizeTodoFilters(application.getPreference(TODO_FILTERS_PREF_KEY))
     } catch {
       return DEFAULT_TODO_FILTERS
     }
   }, [application])
 
   const [filters, setFiltersState] = useState<TodoFilters>(readPersistedFilters)
+  // True once this view has edited the filters. A synced change from elsewhere
+  // is adopted only while that is false, so a remote write can never yank the
+  // query out from under someone mid-search.
+  const filtersDirtyRef = useRef(false)
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(() => new Set())
   const [busyKeys, setBusyKeys] = useState<Set<string>>(() => new Set())
   const [bulkBusy, setBulkBusy] = useState(false)
@@ -757,6 +765,7 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
     actionQueue.current = Promise.resolve()
     lifetimeRef.current.dataReady = true
     // A different signed-in account has different stored filters.
+    filtersDirtyRef.current = false
     setFiltersState(readPersistedFilters())
     setSelectedKeys(new Set())
     setBusyKeys(new Set())
@@ -831,6 +840,15 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
         scheduleRecompute()
         return
       }
+      if (event === ApplicationEvent.PreferencesChanged) {
+        // Filters are a synced pref, so they can arrive from another device or
+        // another tab. Adopt the stored value unless this view is mid-edit,
+        // which would otherwise yank the query out from under the user's typing.
+        if (!filtersDirtyRef.current) {
+          setFiltersState(readPersistedFilters())
+        }
+        return
+      }
       if (
         event === ApplicationEvent.Launched ||
         event === ApplicationEvent.LocalDataLoaded ||
@@ -849,7 +867,7 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
         clearTimeout(throttleTimeout)
       }
     }
-  }, [application, closeOwnerImmediately, recompute])
+  }, [application, closeOwnerImmediately, readPersistedFilters, recompute])
 
   useEffect(() => {
     setSelectedKeys((selected) =>
@@ -896,13 +914,12 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
 
   const setFilters = useCallback(
     (next: TodoFilters) => {
+      filtersDirtyRef.current = true
       setFiltersState(next)
-      try {
-        application.setValue(TODO_FILTERS_STORAGE_KEY, next)
-      } catch {
-        // Storage can be unavailable (e.g. before launch); the in-memory
-        // filters still apply for this session rather than the view breaking.
-      }
+      // Fire-and-forget: the view already reflects `next`, and a failed write
+      // must not block typing. A rejected write leaves the previous persisted
+      // value, which the next mount will simply read back.
+      void Promise.resolve(application.setPreference(TODO_FILTERS_PREF_KEY, next)).catch(() => undefined)
     },
     [application],
   )
@@ -1201,8 +1218,26 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
           const manageable = canManageGroup(application, group)
           const selectionKey = selectableTodoKey(group, item)
           const busy = busyFor(row)
+          const indentLevel = todoRowIndentLevel(row.depth)
           return (
-            <div className="flex min-w-0 items-center gap-2">
+            <div
+              className="flex min-w-0 items-center gap-2"
+              // The indent step shrinks past level 4 so ten levels still leave
+              // room for the label instead of pushing it off the edge.
+              style={{
+                paddingInlineStart: `${Math.min(indentLevel, 4) * 0.85 + Math.max(indentLevel - 4, 0) * 0.4}rem`,
+              }}
+              data-todo-depth={row.depth}
+            >
+              {row.depth > 0 && (
+                <span
+                  aria-hidden="true"
+                  className="text-passive-2 flex-shrink-0 text-xs select-none"
+                  title={`Subtask, level ${row.depth}`}
+                >
+                  &#8226;
+                </span>
+              )}
               {manageable ? (
                 <input
                   type="checkbox"
@@ -1240,11 +1275,27 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
                 />
               )}
               <span
-                className={classNames('truncate text-sm', item.checked ? 'text-passive-1 line-through' : 'text-text')}
-                title={item.text}
+                className={classNames(
+                  'truncate text-sm',
+                  item.checked ? 'text-passive-1 line-through' : 'text-text',
+                  // A row kept only because a descendant matched is context,
+                  // not a result; muting it keeps the two readable apart.
+                  row.isMatch ? '' : 'text-passive-2 opacity-70',
+                )}
+                title={row.isMatch ? item.text : `${item.text} — shown as the parent of a match`}
               >
                 {item.text}
               </span>
+              {row.depth > TODO_MAX_INDENT_LEVEL && (
+                // Past the indent ceiling the row stops moving right, so the
+                // real level has to be stated or it would be lost.
+                <span
+                  className="border-border text-passive-2 flex-shrink-0 rounded border px-1 text-[0.625rem]"
+                  title={`Nesting level ${row.depth}`}
+                >
+                  L{row.depth}
+                </span>
+              )}
             </div>
           )
         },
@@ -1356,7 +1407,7 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
       <TodoFilterBar
         filters={filters}
         tagOptions={tagOptions}
-        visibleCount={visibleRows.length}
+        visibleCount={countTodoMatches(visibleRows)}
         totalCount={rows.length}
         onChange={setFilters}
       />

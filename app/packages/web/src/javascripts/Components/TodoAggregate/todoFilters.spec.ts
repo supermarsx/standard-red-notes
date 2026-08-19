@@ -3,6 +3,7 @@ import type { NoteTodos, TodoItem } from './allTodos'
 import {
   activeTodoFilterCount,
   collectTodoTagOptions,
+  countTodoMatches,
   DEFAULT_TODO_FILTERS,
   filterTodoRows,
   MAX_TODO_FILTER_QUERY_LENGTH,
@@ -10,7 +11,9 @@ import {
   normalizeTodoFilters,
   sortTodoRows,
   todoDueBucket,
+  TODO_MAX_INDENT_LEVEL,
   todoFiltersAreDefault,
+  todoRowIndentLevel,
   todoRowsFromGroups,
   visibleTodoRows,
   type TodoFilters,
@@ -28,6 +31,7 @@ const todo = (id: string, text: string, extra: Partial<TodoItem> = {}): TodoItem
   text,
   checked: false,
   locator: id,
+  depth: 0,
   ...extra,
 })
 
@@ -288,5 +292,121 @@ describe('activeTodoFilterCount', () => {
     expect(todoFiltersAreDefault(DEFAULT_TODO_FILTERS)).toBe(true)
     expect(todoFiltersAreDefault(withFilters({ sortBy: 'todo' }))).toBe(false)
     expect(todoFiltersAreDefault(withFilters({ hideCompleted: true }))).toBe(false)
+  })
+})
+
+describe('todo hierarchy', () => {
+  const nested = (): NoteTodos =>
+    group('n-tree', 'Project', [
+      todo('p', 'Parent task', { locator: '0' }),
+      todo('c1', 'Child one', { locator: '0.0.0', depth: 1, parentLocator: '0' }),
+      todo('g1', 'Grandchild milk', { locator: '0.0.0.0.0', depth: 2, parentLocator: '0.0.0' }),
+      todo('c2', 'Child two', { locator: '0.0.1', depth: 1, parentLocator: '0' }),
+      todo('other', 'Unrelated task', { locator: '1' }),
+    ])
+
+  const treeRows = () => todoRowsFromGroups([nested()], () => [])
+
+  it('derives depth and parent links from the parent chain', () => {
+    expect(treeRows().map((row) => [row.item.text, row.depth])).toEqual([
+      ['Parent task', 0],
+      ['Child one', 1],
+      ['Grandchild milk', 2],
+      ['Child two', 1],
+      ['Unrelated task', 0],
+    ])
+    const byText = new Map(treeRows().map((row) => [row.item.text, row]))
+    expect(byText.get('Grandchild milk')?.parentId).toBe(byText.get('Child one')?.id)
+    expect(byText.get('Parent task')?.parentId).toBeUndefined()
+  })
+
+  it('treats a task whose parent never became a row as top level', () => {
+    const orphaned = group('n-orphan', 'Orphan', [
+      todo('c', 'Child of a blank parent', { locator: '0.0.0', depth: 1, parentLocator: 'missing' }),
+    ])
+    const [row] = todoRowsFromGroups([orphaned], () => [])
+    expect(row.depth).toBe(0)
+    expect(row.parentId).toBeUndefined()
+  })
+
+  it('clamps the rendered indent at ten levels without clamping the real depth', () => {
+    expect(todoRowIndentLevel(0)).toBe(0)
+    expect(todoRowIndentLevel(4)).toBe(4)
+    expect(todoRowIndentLevel(TODO_MAX_INDENT_LEVEL)).toBe(TODO_MAX_INDENT_LEVEL)
+    expect(todoRowIndentLevel(TODO_MAX_INDENT_LEVEL + 7)).toBe(TODO_MAX_INDENT_LEVEL)
+    expect(todoRowIndentLevel(-3)).toBe(0)
+  })
+
+  it('renders a chain deeper than the display ceiling without dropping a row', () => {
+    const deep = group(
+      'n-deep',
+      'Deep',
+      Array.from({ length: 15 }, (_, index) =>
+        todo(`d${index}`, `Level ${index}`, {
+          locator: Array.from({ length: index + 1 }, () => '0').join('.'),
+          depth: index,
+          parentLocator: index === 0 ? undefined : Array.from({ length: index }, () => '0').join('.'),
+        }),
+      ),
+    )
+    const rows = todoRowsFromGroups([deep], () => [])
+    expect(rows).toHaveLength(15)
+    expect(rows[14].depth).toBe(14)
+    // Real depth survives past the ceiling; only the indent stops growing.
+    expect(todoRowIndentLevel(rows[14].depth)).toBe(TODO_MAX_INDENT_LEVEL)
+    expect(visibleTodoRows(rows, DEFAULT_TODO_FILTERS, NOW)).toHaveLength(15)
+  })
+
+  it('keeps ancestors as context when only a descendant matches', () => {
+    const filtered = filterTodoRows(treeRows(), withFilters({ query: 'milk' }), NOW)
+    expect(filtered.map((row) => [row.item.text, row.isMatch])).toEqual([
+      ['Parent task', false],
+      ['Child one', false],
+      ['Grandchild milk', true],
+    ])
+    // Context ancestors are not counted as results.
+    expect(countTodoMatches(filtered)).toBe(1)
+  })
+
+  it('marks every row a match when the filter excludes nothing', () => {
+    const all = filterTodoRows(treeRows(), DEFAULT_TODO_FILTERS, NOW)
+    expect(all.every((row) => row.isMatch)).toBe(true)
+    expect(countTodoMatches(all)).toBe(5)
+  })
+
+  it('drops a parent whose subtree has no match at all', () => {
+    const filtered = filterTodoRows(treeRows(), withFilters({ query: 'unrelated' }), NOW)
+    expect(filtered.map((row) => row.item.text)).toEqual(['Unrelated task'])
+  })
+
+  it('sorts siblings within their parent instead of flattening the tree', () => {
+    const ordered = sortTodoRows(treeRows(), withFilters({ sortBy: 'todo', sortReverse: true }))
+    expect(ordered.map((row) => row.item.text)).toEqual([
+      'Unrelated task',
+      'Parent task',
+      'Child two',
+      'Child one',
+      'Grandchild milk',
+    ])
+    // Every child still follows its own parent, whichever way it is sorted.
+    const indexOf = (text: string) => ordered.findIndex((row) => row.item.text === text)
+    expect(indexOf('Grandchild milk')).toBeGreaterThan(indexOf('Child one'))
+    expect(indexOf('Child one')).toBeGreaterThan(indexOf('Parent task'))
+  })
+
+  it('keeps a filtered subtree intact and correctly ordered end to end', () => {
+    const visible = visibleTodoRows(treeRows(), withFilters({ query: 'milk' }), NOW)
+    expect(visible.map((row) => row.item.text)).toEqual(['Parent task', 'Child one', 'Grandchild milk'])
+    expect(visible.map((row) => row.depth)).toEqual([0, 1, 2])
+  })
+
+  it('never loses a row to a malformed parent cycle', () => {
+    const cyclic = group('n-cycle', 'Cycle', [
+      todo('a', 'A', { locator: '0', parentLocator: '1' }),
+      todo('b', 'B', { locator: '1', parentLocator: '0' }),
+    ])
+    const rows = todoRowsFromGroups([cyclic], () => [])
+    expect(sortTodoRows(rows, DEFAULT_TODO_FILTERS)).toHaveLength(2)
+    expect(visibleTodoRows(rows, DEFAULT_TODO_FILTERS, NOW)).toHaveLength(2)
   })
 })

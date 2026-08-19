@@ -24,6 +24,15 @@ export type SuperChecklistTodo = {
   checked: boolean
   dueAt?: string
   recurrence?: ChecklistRecurrence
+  /**
+   * Nesting level of the checklist this task belongs to: 0 for a top-level
+   * list, 1 for a list nested inside a task, and so on. A checklist can nest as
+   * deep as {@link MAX_TREE_DEPTH}; this reports the real depth and leaves any
+   * display ceiling to the view.
+   */
+  depth: number
+  /** Locator of the task this one is nested under, absent at the top level. */
+  parentLocator?: string
 }
 
 export type SuperChecklistTodoTarget = Pick<
@@ -133,7 +142,12 @@ function parseDocument(noteText: string): unknown | undefined {
 
 function collectCandidates(parsed: unknown): TodoCandidate[] {
   const root = (parsed as { root?: unknown })?.root ?? parsed
-  const stack: Array<{ value: unknown; path: number[]; depth: number }> = [{ value: root, path: [], depth: 0 }]
+  // `depth` bounds traversal of the whole tree; `level` counts only CHECKLIST
+  // nesting, which is what a task's level means. A checklist wrapped in a quote
+  // or a table is deeper in the tree without being a deeper task.
+  const stack: Array<{ value: unknown; path: number[]; depth: number; level: number; parentLocator?: string }> = [
+    { value: root, path: [], depth: 0, level: 0 },
+  ]
   const candidates: TodoCandidate[] = []
   const budget: TraversalBudget = { remaining: MAX_TREE_NODES }
 
@@ -175,6 +189,8 @@ function collectCandidates(parsed: unknown): TodoCandidate[] {
           checked: item.checked === true,
           dueAt: schedule?.dueAt,
           recurrence: schedule?.recurrence,
+          depth: current.level,
+          parentLocator: current.parentLocator,
         })
 
         // A task can own nested checklists. Traverse only nested list children,
@@ -187,6 +203,8 @@ function collectCandidates(parsed: unknown): TodoCandidate[] {
               value: nested,
               path: [...itemPath, childIndex],
               depth: current.depth + 1,
+              level: current.level + 1,
+              parentLocator: locator,
             })
           }
         }
@@ -195,7 +213,15 @@ function collectCandidates(parsed: unknown): TodoCandidate[] {
     }
 
     for (let index = Math.min(children.length, budget.remaining) - 1; index >= 0; index -= 1) {
-      stack.push({ value: children[index], path: [...current.path, index], depth: current.depth + 1 })
+      // Non-checklist containers do not add a task level, so both the level and
+      // the nearest enclosing task carry through unchanged.
+      stack.push({
+        value: children[index],
+        path: [...current.path, index],
+        depth: current.depth + 1,
+        level: current.level,
+        parentLocator: current.parentLocator,
+      })
     }
   }
   return candidates

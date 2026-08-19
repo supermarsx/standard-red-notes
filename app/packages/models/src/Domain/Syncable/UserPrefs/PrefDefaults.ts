@@ -4,7 +4,7 @@ import { EditorFontSize } from './EditorFontSize'
 import { SuperToolbarIconSize } from './SuperToolbarIconSize'
 import { EditorLineHeight } from './EditorLineHeight'
 import { EditorLineWidth } from './EditorLineWidth'
-import { CurrentUserAppearancePreferenceVersion, PrefKey, PrefValue } from './PrefKey'
+import { CurrentUserAppearancePreferenceVersion, DefaultTodoFiltersPreference, PrefKey, PrefValue } from './PrefKey'
 import { NewNoteTitleFormat } from './NewNoteTitleFormat'
 import { DEFAULT_TYPOGRAPHY_PROFILE, DEFAULT_TYPOGRAPHY_PROFILE_ID } from './TypographyProfile'
 
@@ -128,6 +128,9 @@ export const PrefDefaults = {
   // order" (GALLERY_BLOCKS). Storing the full default here instead would fossilize
   // the order and force sync migrations whenever the block-style set changes.
   [PrefKey.BlockStyleGalleryOrder]: [],
+  // Standard Red Notes: the Todos view opens showing everything; see
+  // DefaultTodoFiltersPreference.
+  [PrefKey.TodoFilters]: DefaultTodoFiltersPreference,
 } satisfies {
   [key in PrefKey]: PrefValue[key]
 }
