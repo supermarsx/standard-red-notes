@@ -22,9 +22,10 @@ import {
  *  2. We reject read-only sessions, then ask the syncing-server (single source
  *     of truth for note ownership + shared-vault write permission) whether this
  *     user may edit the note.
- *  3. ONLY on an explicit `authorized: true` do we mint an HS256 capability
- *     binding the user, room, v2 protocol, canonical server revision, and any
- *     lease request/bootstrap challenge supplied by the two-phase handshake.
+ *  3. An explicit discovery request returns the opaque current initial epoch
+ *     but never a capability. A subsequent exact-epoch grant request may mint
+ *     an HS256 capability binding the user, room, v3 room/security epochs,
+ *     canonical revision, and any lease request/bootstrap challenge.
  *  4. The gateway verifies that capability locally and requires exact bindings
  *     first on `room-reserve`, then on challenge-bound `room-join` activation.
  *

@@ -10,6 +10,8 @@ import { EndpointResolverInterface } from '../../Service/Resolver/EndpointResolv
 const SECRET = 'collab-secret'
 const TTL = 300
 const SERVER_REVISION = 1_723_456_789_000_000
+const SECURITY_EPOCH = 'security_epoch_0000000000000001'
+const ROOM_EPOCH = 'room_epoch_0000000000000001'
 
 describe('CollaborationController', () => {
   let serviceProxy: jest.Mocked<ServiceProxyInterface>
@@ -46,7 +48,8 @@ describe('CollaborationController', () => {
     ({
       body: {
         noteUuid,
-        collaborationProtocolVersion: 2,
+        collaborationProtocolVersion: 3,
+        expectedRoomEpoch: ROOM_EPOCH,
         ...body,
       },
     }) as unknown as Request
@@ -64,6 +67,7 @@ describe('CollaborationController', () => {
     serviceProxy.callSyncingServer = proxyReturning({
       authorized: true,
       serverUpdatedAtTimestamp: SERVER_REVISION,
+      collaborationSecurityEpoch: SECURITY_EPOCH,
     })
 
     endpointResolver = {
@@ -91,10 +95,16 @@ describe('CollaborationController', () => {
       collaborationProtocolVersion: number
       leaseRequestId: string
       bootstrapChallenge: string
+      roomEpoch: string
+      collaborationSecurityEpoch: string
+      epochDiscovery: boolean
     }
     expect(body.room).toBe('note-1')
     expect(body.serverUpdatedAtTimestamp).toBe(SERVER_REVISION)
-    expect(body.collaborationProtocolVersion).toBe(2)
+    expect(body.collaborationProtocolVersion).toBe(3)
+    expect(body.roomEpoch).toBe(ROOM_EPOCH)
+    expect(body.collaborationSecurityEpoch).toBe(SECURITY_EPOCH)
+    expect(body.epochDiscovery).toBe(false)
     expect(body.leaseRequestId).toBe('lease-request-1')
     expect(body.bootstrapChallenge).toBe('bootstrap-challenge-1')
 
@@ -102,7 +112,10 @@ describe('CollaborationController', () => {
     expect(decoded.purpose).toBe('collab-room')
     expect(decoded.userUuid).toBe('user-1')
     expect(decoded.room).toBe('note-1')
-    expect(decoded.collaborationProtocolVersion).toBe(2)
+    expect(decoded.collaborationProtocolVersion).toBe(3)
+    expect(decoded.collaborationAuthorizationIssuedAt).toEqual(expect.any(Number))
+    expect(decoded.roomEpoch).toBe(body.roomEpoch)
+    expect(decoded.collaborationSecurityEpoch).toBe(SECURITY_EPOCH)
     expect(decoded.serverUpdatedAtTimestamp).toBe(SERVER_REVISION)
     expect(decoded.leaseRequestId).toBe('lease-request-1')
     expect(decoded.bootstrapChallenge).toBe('bootstrap-challenge-1')
@@ -110,7 +123,11 @@ describe('CollaborationController', () => {
 
   it('accepts the home-server wrapped { data: { authorized } } shape', async () => {
     serviceProxy.callSyncingServer = proxyReturning({
-      data: { authorized: true, serverUpdatedAtTimestamp: SERVER_REVISION },
+      data: {
+        authorized: true,
+        serverUpdatedAtTimestamp: SERVER_REVISION,
+        collaborationSecurityEpoch: SECURITY_EPOCH,
+      },
     })
     const response = responseWith('user-1')
     await makeController().authorize(requestWith('note-1'), response)
@@ -218,10 +235,12 @@ describe('CollaborationController', () => {
   it.each([
     ['missing protocol version', { collaborationProtocolVersion: undefined }],
     ['legacy protocol version', { collaborationProtocolVersion: 1 }],
+    ['missing expected room epoch', { expectedRoomEpoch: undefined }],
     ['challenge without a lease request', { bootstrapChallenge: 'challenge-1' }],
     ['empty lease request', { leaseRequestId: '' }],
     ['empty bootstrap challenge', { leaseRequestId: 'lease-1', bootstrapChallenge: '' }],
-  ])('DENIES (403) for invalid v2 binding: %s', async (_description, body) => {
+    ['invalid expected room epoch', { expectedRoomEpoch: 'bad epoch' }],
+  ])('DENIES (403) for invalid v3 binding: %s', async (_description, body) => {
     const response = responseWith('user-1')
 
     await makeController().authorize(requestWith('note-1', body), response)
@@ -229,4 +248,79 @@ describe('CollaborationController', () => {
     expect(statusMock).toHaveBeenCalledWith(403)
     expect(serviceProxy.callSyncingServer).not.toHaveBeenCalled()
   })
+
+  it('binds an exact expected room epoch in both the response and signed capability', async () => {
+    const response = responseWith('user-1')
+
+    await makeController().authorize(
+      requestWith('note-1', {
+        leaseRequestId: 'lease-1',
+        expectedRoomEpoch: ROOM_EPOCH,
+      }),
+      response,
+    )
+
+    expect(statusMock).toHaveBeenCalledWith(200)
+    const body = jsonMock.mock.calls[0][0] as { capability: string; roomEpoch: string }
+    expect(body.roomEpoch).toBe(ROOM_EPOCH)
+    expect(verify(body.capability, SECRET)).toEqual(expect.objectContaining({ roomEpoch: ROOM_EPOCH }))
+  })
+
+  it('DENIES when the syncing-server omits the collaboration security epoch', async () => {
+    serviceProxy.callSyncingServer = proxyReturning({
+      authorized: true,
+      serverUpdatedAtTimestamp: SERVER_REVISION,
+    })
+    const response = responseWith('user-1')
+
+    await makeController().authorize(requestWith('note-1'), response)
+
+    expect(statusMock).toHaveBeenCalledWith(403)
+  })
+
+  it('discovers an opaque deterministic epoch without minting a join capability', async () => {
+    const response = responseWith('user-1')
+
+    await makeController().authorize(
+      requestWith('note-1', {
+        expectedRoomEpoch: undefined,
+        epochDiscovery: true,
+      }),
+      response,
+    )
+
+    expect(statusMock).toHaveBeenCalledWith(200)
+    const body = jsonMock.mock.calls[0][0] as Record<string, unknown>
+    expect(body).toEqual(
+      expect.objectContaining({
+        epochDiscovery: true,
+        room: 'note-1',
+        roomEpoch: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
+        collaborationSecurityEpoch: SECURITY_EPOCH,
+        collaborationProtocolVersion: 3,
+        serverUpdatedAtTimestamp: SERVER_REVISION,
+      }),
+    )
+    expect(body).not.toHaveProperty('capability')
+    expect(body).not.toHaveProperty('expiresIn')
+  })
+
+  it.each([{ leaseRequestId: 'lease-1' }, { bootstrapChallenge: 'challenge-1' }, { expectedRoomEpoch: ROOM_EPOCH }])(
+    'DENIES discovery requests carrying grant-only bindings: %p',
+    async (grantBinding) => {
+      const response = responseWith('user-1')
+
+      await makeController().authorize(
+        requestWith('note-1', {
+          expectedRoomEpoch: undefined,
+          epochDiscovery: true,
+          ...grantBinding,
+        }),
+        response,
+      )
+
+      expect(statusMock).toHaveBeenCalledWith(403)
+      expect(serviceProxy.callSyncingServer).not.toHaveBeenCalled()
+    },
+  )
 })
