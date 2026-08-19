@@ -5,7 +5,7 @@ import { classNames } from '@standardnotes/utils'
 import { WebApplication } from '@/Application/WebApplication'
 import Icon from '@/Components/Icon/Icon'
 import { AppPaneId } from '../Panes/AppPaneMetadata'
-import { NoteTodos, TodoItem, totalTodoProgress } from './allTodos'
+import { filterTodoGroups, NoteTodos, TodoItem, totalTodoProgress } from './allTodos'
 import { applyTodoPatch, TodoActionResult } from './todoActions'
 import { type SuperChecklistTodoPatch, type SuperChecklistTodoTarget } from './superChecklistDocument'
 import { pruneTodoSelection, selectableTodoKey, todoSelectionKey } from './todoSelection'
@@ -413,6 +413,7 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
     generation: number
     groups: NoteTodos[]
   }>(() => ({ application, generation: 0, groups: readGroups() }))
+  const [query, setQuery] = useState('')
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(() => new Set())
   const [busyKeys, setBusyKeys] = useState<Set<string>>(() => new Set())
   const [bulkBusy, setBulkBusy] = useState(false)
@@ -718,6 +719,7 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
     ownerWaits.current.clear()
     actionQueue.current = Promise.resolve()
     lifetimeRef.current.dataReady = true
+    setQuery('')
     setSelectedKeys(new Set())
     setBusyKeys(new Set())
     setBulkBusy(false)
@@ -853,6 +855,12 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
   }, [hasDeadline])
 
   const total = useMemo(() => totalTodoProgress(groups), [groups])
+
+  // Instant search: filtering is a pure, memoized pass over already-loaded
+  // groups (no debounce, no index), exactly like Bookmarks and Templates.
+  // Selection and bulk actions stay bound to the UNFILTERED groups so a query
+  // never silently drops what the user already selected.
+  const visibleGroups = useMemo(() => filterTodoGroups(groups, query), [groups, query])
 
   const selectedTodos = useMemo(() => {
     const selected: ManagedTodo[] = []
@@ -1137,6 +1145,24 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
         </button>
       </div>
 
+      <div className="border-border flex items-center gap-2 border-b px-4 py-2">
+        <div className="relative flex min-w-[160px] flex-1 items-center">
+          <Icon type="search" size="small" className="text-neutral pointer-events-none absolute left-2" />
+          <input
+            className="border-border bg-default text-text focus:border-info w-full rounded border px-2 py-1 pl-7 text-sm focus:outline-none"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search todos"
+            aria-label="Search todos"
+          />
+        </div>
+        {query && (
+          <button className="text-neutral hover:bg-contrast rounded px-2 py-1 text-xs" onClick={() => setQuery('')}>
+            Clear
+          </button>
+        )}
+      </div>
+
       {selectedTodos.length > 0 && (
         <div className="border-border bg-contrast flex flex-wrap items-center gap-2 border-b px-4 py-2">
           <span className="text-xs font-semibold">{selectedTodos.length} selected</span>
@@ -1186,9 +1212,11 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
           <div className="text-passive-1 px-4 py-10 text-center text-sm">
             No todos yet. Add a checklist in a Super note or an Advanced Checklist note.
           </div>
+        ) : visibleGroups.length === 0 ? (
+          <div className="text-passive-1 px-4 py-10 text-center text-sm">No todos match your search.</div>
         ) : (
           <div className="flex flex-col gap-4">
-            {groups.map((group) => {
+            {visibleGroups.map((group) => {
               const manageable = canManageGroup(application, group)
               return (
                 <section

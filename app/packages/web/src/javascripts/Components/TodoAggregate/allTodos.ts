@@ -221,6 +221,36 @@ export function collectAllTodos(notes: SNNote[]): NoteTodos[] {
   })
 }
 
+/**
+ * Narrow the aggregated todo list by a free-text query, matched
+ * case-insensitively against each todo's text AND its source note title —
+ * the same match rule `filterBookmarks` / `filterTemplates` use for the sibling
+ * aggregate views. A note whose title matches keeps all of its todos. Groups
+ * left with no matching todo are dropped. An empty/whitespace query returns the
+ * list unchanged (same array identity, so memoized renders stay stable).
+ *
+ * `completed`/`total` deliberately keep describing the WHOLE source note, so a
+ * filtered view never misreports a note's real progress.
+ */
+export function filterTodoGroups(groups: NoteTodos[], query: string): NoteTodos[] {
+  const trimmed = query.trim().toLowerCase()
+  if (trimmed.length === 0) {
+    return groups
+  }
+  const result: NoteTodos[] = []
+  for (const group of groups) {
+    if ((group.note.title ?? '').toLowerCase().includes(trimmed)) {
+      result.push(group)
+      continue
+    }
+    const items = group.items.filter((item) => item.text.toLowerCase().includes(trimmed))
+    if (items.length > 0) {
+      result.push({ ...group, items })
+    }
+  }
+  return result
+}
+
 /** Aggregate progress across every collected note. */
 export function totalTodoProgress(groups: NoteTodos[]): { completed: number; total: number } {
   let completed = 0
