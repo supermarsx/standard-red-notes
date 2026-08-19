@@ -12,6 +12,7 @@ import { useTable } from '../Table/useTable'
 import type { TableColumn } from '../Table/CommonTypes'
 import TodoFilterBar from './TodoFilterBar'
 import {
+  collectTodoGroupOptions,
   collectTodoTagOptions,
   countTodoMatches,
   DEFAULT_TODO_FILTERS,
@@ -20,6 +21,7 @@ import {
   TODO_MAX_INDENT_LEVEL,
   todoRowIndentLevel,
   todoRowsFromGroups,
+  todoTagLabel,
   visibleTodoRows,
   type TodoFilters,
   type TodoRow,
@@ -931,12 +933,23 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
   const rows = useMemo(
     () =>
       todoRowsFromGroups(groups, (note): TodoTag[] =>
-        application.items.getSortedTagsForItem(note).map((tag) => ({ uuid: tag.uuid, title: tag.title })),
+        application.items.getSortedTagsForItem(note).map((tag) => ({
+          uuid: tag.uuid,
+          title: tag.title,
+          // The full ancestor path ItemManager already renders for linked tags.
+          // Without it the filter list cannot tell two folders named "Personal"
+          // under different parents apart — the exact case nesting exists for.
+          longTitle: application.items.getTagLongTitle(tag),
+        })),
       ),
     [application, groups],
   )
 
   const tagOptions = useMemo(() => collectTodoTagOptions(rows), [rows])
+
+  // Almost always empty: only Advanced Checklist notes name their sections. The
+  // filter bar hides that control entirely when there is nothing to choose.
+  const groupOptions = useMemo(() => collectTodoGroupOptions(rows), [rows])
 
   // Instant: filtering and sorting are a pure, memoized pass over already-loaded
   // rows (no debounce, no index), like Bookmarks and Templates. Selection and
@@ -1351,6 +1364,9 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
             </button>
             <span className="text-passive-1 text-[0.625rem] tracking-wide uppercase">
               {SOURCE_LABEL[row.group.source]}
+              {/* Only Advanced Checklist notes have sections; naming the one a
+                  row came from is what makes the section filter legible. */}
+              {row.item.groupName ? ` · ${row.item.groupName}` : ''}
             </span>
           </div>
         ),
@@ -1366,6 +1382,9 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
                 <span
                   key={tag.uuid}
                   className="border-border text-passive-1 truncate rounded border px-1.5 py-0.5 text-xs"
+                  // The chip stays short — a path would truncate to nothing in a
+                  // table cell — but carries the full one for disambiguation.
+                  title={todoTagLabel(tag)}
                 >
                   {tag.title}
                 </span>
@@ -1407,6 +1426,7 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
       <TodoFilterBar
         filters={filters}
         tagOptions={tagOptions}
+        groupOptions={groupOptions}
         visibleCount={countTodoMatches(visibleRows)}
         totalCount={rows.length}
         onChange={setFilters}

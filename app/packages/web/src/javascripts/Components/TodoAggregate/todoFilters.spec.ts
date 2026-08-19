@@ -2,13 +2,17 @@ import { NoteType, SNNote } from '@standardnotes/snjs'
 import type { NoteTodos, TodoItem } from './allTodos'
 import {
   activeTodoFilterCount,
+  collectTodoGroupOptions,
   collectTodoTagOptions,
   countTodoMatches,
   DEFAULT_TODO_FILTERS,
   filterTodoRows,
+  MAX_TODO_FILTER_GROUPS,
+  MAX_TODO_FILTER_GROUP_NAME_LENGTH,
   MAX_TODO_FILTER_QUERY_LENGTH,
   MAX_TODO_FILTER_TAGS,
   normalizeTodoFilters,
+  todoTagLabel,
   sortTodoRows,
   todoDueBucket,
   TODO_MAX_INDENT_LEVEL,
@@ -43,8 +47,8 @@ const group = (uuid: string, title: string, items: TodoItem[], source: NoteTodos
   total: items.length,
 })
 
-const TAG_WORK: TodoTag = { uuid: 'tag-work', title: 'Work' }
-const TAG_HOME: TodoTag = { uuid: 'tag-home', title: 'Home/Errands' }
+const TAG_WORK: TodoTag = { uuid: 'tag-work', title: 'Work', longTitle: 'Work' }
+const TAG_HOME: TodoTag = { uuid: 'tag-home', title: 'Errands', longTitle: 'Home/Errands' }
 
 const groups: NoteTodos[] = [
   group('n-work', 'Sprint board', [
@@ -95,6 +99,41 @@ describe('todoRowsFromGroups', () => {
   it('collects the tag options actually present, de-duplicated and sorted', () => {
     expect(collectTodoTagOptions(rows())).toEqual([TAG_HOME, TAG_WORK])
   })
+
+  it('identifies a folder by its full path, so two same-named ones stay distinct', () => {
+    const workPersonal: TodoTag = { uuid: 't-wp', title: 'Personal', longTitle: 'Work/Personal' }
+    const homePersonal: TodoTag = { uuid: 't-hp', title: 'Personal', longTitle: 'Home/Personal' }
+    const sameName = [
+      group('n-a', 'A', [todo('a', 'Task A')]),
+      group('n-b', 'B', [todo('b', 'Task B')]),
+    ]
+    const tagged = todoRowsFromGroups(sameName, (source) => (source.uuid === 'n-a' ? [workPersonal] : [homePersonal]))
+    // Their own titles collide; the label the picker shows must not.
+    expect(workPersonal.title).toBe(homePersonal.title)
+    expect(collectTodoTagOptions(tagged).map(todoTagLabel)).toEqual(['Home/Personal', 'Work/Personal'])
+  })
+
+  it('falls back to the bare title when a path is missing', () => {
+    expect(todoTagLabel({ uuid: 't', title: 'Loose', longTitle: '   ' })).toBe('Loose')
+  })
+
+  it('collects checklist section names, and none at all when there are none', () => {
+    // Every fixture row here is a Super checklist row, which has no sections.
+    expect(collectTodoGroupOptions(rows())).toEqual([])
+
+    const sectioned = group(
+      'n-adv',
+      'Errands',
+      [
+        todo('a', 'Buy milk', { groupName: 'Groceries' }),
+        todo('b', 'Call the plumber', { groupName: 'Chores' }),
+        todo('c', 'Buy bread', { groupName: 'Groceries' }),
+        todo('d', 'Unfiled task'),
+      ],
+      'advanced-checklist',
+    )
+    expect(collectTodoGroupOptions(todoRowsFromGroups([sectioned], () => []))).toEqual(['Chores', 'Groceries'])
+  })
 })
 
 describe('todoDueBucket', () => {
@@ -144,6 +183,59 @@ describe('filterTodoRows', () => {
     ])
     expect(filterTodoRows(rows(), withFilters({ tagUuids: ['tag-home', 'tag-work'] }), NOW)).toHaveLength(5)
     expect(filterTodoRows(rows(), withFilters({ tagUuids: ['tag-missing'] }), NOW)).toEqual([])
+  })
+
+  it('unions several selected tags rather than intersecting them', () => {
+    // Each note carries exactly ONE folder, so an intersection of two folders
+    // would admit nothing at all — the case that makes union the only usable
+    // reading of a multi-select over a taxonomy.
+    const both = filterTodoRows(rows(), withFilters({ tagUuids: ['tag-home', 'tag-work'] }), NOW)
+    expect(texts(both)).toEqual(['Ship the beta', 'Write release notes', 'Book the venue', 'Buy milk', 'Call the plumber'])
+    // Adding a value can only ever reveal rows, never remove them.
+    const one = filterTodoRows(rows(), withFilters({ tagUuids: ['tag-work'] }), NOW)
+    expect(both.length).toBeGreaterThan(one.length)
+  })
+
+  it('filters by checklist section, unioning the selected ones', () => {
+    const sectioned = [
+      group(
+        'n-adv',
+        'Errands',
+        [
+          todo('a', 'Buy milk', { groupName: 'Groceries' }),
+          todo('b', 'Call the plumber', { groupName: 'Chores' }),
+          todo('c', 'Mow the lawn', { groupName: 'Chores' }),
+          todo('d', 'Unfiled task'),
+        ],
+        'advanced-checklist',
+      ),
+    ]
+    const sectionRows = () => todoRowsFromGroups(sectioned, () => [])
+    expect(texts(filterTodoRows(sectionRows(), withFilters({ groupNames: ['Chores'] }), NOW))).toEqual([
+      'Call the plumber',
+      'Mow the lawn',
+    ])
+    expect(texts(filterTodoRows(sectionRows(), withFilters({ groupNames: ['Chores', 'Groceries'] }), NOW))).toEqual([
+      'Buy milk',
+      'Call the plumber',
+      'Mow the lawn',
+    ])
+    // A row with no section is excluded by a section filter, not exempted.
+    expect(texts(filterTodoRows(sectionRows(), withFilters({ groupNames: ['Groceries'] }), NOW))).toEqual(['Buy milk'])
+    expect(filterTodoRows(sectionRows(), withFilters({ groupNames: ['Gone'] }), NOW)).toEqual([])
+    // Sections are meaningless for Super rows, so a section filter hides them all.
+    expect(filterTodoRows(rows(), withFilters({ groupNames: ['Chores'] }), NOW)).toEqual([])
+  })
+
+  it('searches the section name and the full folder path', () => {
+    const sectioned = [
+      group('n-adv', 'List', [todo('a', 'Buy milk', { groupName: 'Groceries' })], 'advanced-checklist'),
+    ]
+    expect(texts(filterTodoRows(todoRowsFromGroups(sectioned, () => []), withFilters({ query: 'grocer' }), NOW))).toEqual(
+      ['Buy milk'],
+    )
+    // "Home" appears only in the PARENT segment of the Errands folder's path.
+    expect(texts(filterTodoRows(rows(), withFilters({ query: 'home' }), NOW))).toEqual(['Buy milk', 'Call the plumber'])
   })
 
   it('filters by source kind', () => {
@@ -241,6 +333,7 @@ describe('normalizeTodoFilters', () => {
         version: 1,
         query: 'milk',
         tagUuids: ['a', 'a', '', 'b', 7],
+        groupNames: ['Chores', ' Chores ', '', '   ', 9, 'Groceries'],
         source: 'nonsense',
         due: 'overdue',
         hideCompleted: 'yes',
@@ -251,6 +344,8 @@ describe('normalizeTodoFilters', () => {
       version: 1,
       query: 'milk',
       tagUuids: ['a', 'b'],
+      // Trimmed, so a padded duplicate collapses onto the name it really is.
+      groupNames: ['Chores', 'Groceries'],
       source: 'all',
       due: 'overdue',
       hideCompleted: false,
@@ -259,13 +354,38 @@ describe('normalizeTodoFilters', () => {
     })
   })
 
-  it('bounds the query length and the tag count', () => {
+  it('reads a value written before section filtering existed as unfiltered', () => {
+    // The guaranteed case: an older client's stored value simply has no such key.
+    const older = {
+      version: 1,
+      query: 'milk',
+      tagUuids: ['a'],
+      source: 'super',
+      due: 'all',
+      hideCompleted: false,
+      sortBy: 'due',
+      sortReverse: false,
+    }
+    expect(normalizeTodoFilters(older).groupNames).toEqual([])
+    // Query, tag and source — the absent section key adds nothing to the count.
+    expect(activeTodoFilterCount(normalizeTodoFilters(older))).toBe(3)
+    for (const malformed of ['Chores', { 0: 'Chores' }, 7, null]) {
+      expect(normalizeTodoFilters({ ...older, groupNames: malformed }).groupNames).toEqual([])
+    }
+  })
+
+  it('bounds the query length, the tag count, and the section count and name length', () => {
     const normalized = normalizeTodoFilters({
       query: 'x'.repeat(MAX_TODO_FILTER_QUERY_LENGTH + 500),
       tagUuids: Array.from({ length: MAX_TODO_FILTER_TAGS + 20 }, (_, index) => `tag-${index}`),
+      groupNames: Array.from({ length: MAX_TODO_FILTER_GROUPS + 20 }, (_, index) => `section-${index}`),
     })
     expect(normalized.query).toHaveLength(MAX_TODO_FILTER_QUERY_LENGTH)
     expect(normalized.tagUuids).toHaveLength(MAX_TODO_FILTER_TAGS)
+    expect(normalized.groupNames).toHaveLength(MAX_TODO_FILTER_GROUPS)
+    expect(
+      normalizeTodoFilters({ groupNames: ['y'.repeat(MAX_TODO_FILTER_GROUP_NAME_LENGTH + 50)] }).groupNames[0],
+    ).toHaveLength(MAX_TODO_FILTER_GROUP_NAME_LENGTH)
   })
 
   it('round-trips its own output', () => {
@@ -286,6 +406,11 @@ describe('activeTodoFilterCount', () => {
         withFilters({ query: 'a', tagUuids: ['t'], source: 'super', due: 'overdue', hideCompleted: true }),
       ),
     ).toBe(5)
+    // A multi-value dimension counts ONCE however many values it holds: the
+    // banner answers "why are rows missing", and three folders are one reason.
+    expect(activeTodoFilterCount(withFilters({ tagUuids: ['a', 'b', 'c'] }))).toBe(1)
+    expect(activeTodoFilterCount(withFilters({ groupNames: ['Chores'] }))).toBe(1)
+    expect(activeTodoFilterCount(withFilters({ tagUuids: ['a'], groupNames: ['Chores'] }))).toBe(2)
   })
 
   it('reports the default state only when nothing narrows or reorders', () => {

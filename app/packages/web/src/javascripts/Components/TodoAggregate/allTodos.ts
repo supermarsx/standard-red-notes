@@ -53,6 +53,13 @@ export type TodoItem = {
   depth: number
   /** Locator of the task this one is nested under, absent at the top level. */
   parentLocator?: string
+  /**
+   * Name of the Advanced Checklist section this task was authored under
+   * (`groups[].name`). Present ONLY for advanced-checklist notes, and only when
+   * that note actually named the group — Super checklists have no equivalent
+   * concept, so this is undefined for every Super row.
+   */
+  groupName?: string
 }
 
 /** All todos from one source note, plus progress, for grouped rendering. */
@@ -88,7 +95,27 @@ const MAX_ADVANCED_TODOS = 10_000
 const MAX_ADVANCED_LABEL_LENGTH = 16_384
 const MAX_ADVANCED_ID_LENGTH = 256
 
-function parseTask(raw: unknown, index: number): TodoItem | null {
+/** Section names are labels, not documents; a long one is truncated, not trusted. */
+export const MAX_ADVANCED_GROUP_NAME_LENGTH = 128
+
+/**
+ * The section name to attribute a group's tasks to, or undefined when the
+ * payload gave none. Untitled sections stay undefined rather than becoming an
+ * empty-string label that would show up as a blank filter option.
+ */
+function parseGroupName(group: unknown): string | undefined {
+  if (!group || typeof group !== 'object') {
+    return undefined
+  }
+  const name = (group as { name?: unknown }).name
+  if (typeof name !== 'string') {
+    return undefined
+  }
+  const trimmed = name.slice(0, MAX_ADVANCED_GROUP_NAME_LENGTH).trim()
+  return trimmed.length > 0 ? trimmed : undefined
+}
+
+function parseTask(raw: unknown, index: number, groupName?: string): TodoItem | null {
   if (!raw || typeof raw !== 'object') {
     return null
   }
@@ -105,8 +132,10 @@ function parseTask(raw: unknown, index: number): TodoItem | null {
     text,
     checked: task.completed === true,
     // The third-party payload has no task nesting — its `groups` name sections,
-    // not parents — so every advanced-checklist task is top level.
+    // not parents — so every advanced-checklist task is top level. The section
+    // name rides along as a label instead, which is what it actually is.
     depth: 0,
+    ...(groupName === undefined ? {} : { groupName }),
   }
 }
 
@@ -132,13 +161,14 @@ export function parseAdvancedChecklist(noteText: string): TodoItem[] {
   if (Array.isArray(groups)) {
     for (let groupIndex = 0; groupIndex < groups.length && groupIndex < MAX_ADVANCED_GROUPS; groupIndex += 1) {
       const group = groups[groupIndex]
+      const groupName = parseGroupName(group)
       const tasks = group && typeof group === 'object' ? (group as { tasks?: unknown }).tasks : undefined
       if (Array.isArray(tasks)) {
         for (const task of tasks) {
           if (index >= MAX_ADVANCED_TODOS) {
             break
           }
-          const item = parseTask(task, index)
+          const item = parseTask(task, index, groupName)
           index += 1
           if (item) {
             items.push(item)

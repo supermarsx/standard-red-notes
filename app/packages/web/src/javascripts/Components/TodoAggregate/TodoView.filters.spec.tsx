@@ -51,17 +51,20 @@ const superChecklistJson = (items: { text: string; todoId: string; checked?: boo
     },
   })
 
-const advancedChecklistJson = (tasks: { id: string; description: string; completed: boolean }[]): string =>
-  JSON.stringify({ schemaVersion: '1.0.0', groups: [{ name: 'Chores', tasks }] })
+const advancedChecklistJson = (
+  groups: { name: string; tasks: { id: string; description: string; completed: boolean }[] }[],
+): string => JSON.stringify({ schemaVersion: '1.0.0', groups })
 
 const makeNote = (uuid: string, title: string, text: string, noteType: NoteType): SNNote =>
   ({ uuid, title, text, trashed: false, locked: false, noteType, payload: {} }) as unknown as SNNote
 
-const tag = (uuid: string, title: string): SNTag => ({ uuid, title }) as unknown as SNTag
+/** A tag plus the ancestor path `ItemManager.getTagLongTitle` would render for it. */
+const tag = (uuid: string, title: string, longTitle = title): SNTag =>
+  ({ uuid, title, longTitle }) as unknown as SNTag
 
 const OVERDUE = new Date(Date.now() - 60 * 60 * 1000).toISOString()
 
-const notes = [
+const defaultNotes = [
   makeNote(
     'work',
     'Sprint board',
@@ -75,17 +78,25 @@ const notes = [
     'home',
     'Errands',
     advancedChecklistJson([
-      { id: 'milk', description: 'Buy milk', completed: false },
-      { id: 'plumber', description: 'Call the plumber', completed: true },
+      { name: 'Groceries', tasks: [{ id: 'milk', description: 'Buy milk', completed: false }] },
+      { name: 'Chores', tasks: [{ id: 'plumber', description: 'Call the plumber', completed: true }] },
     ]),
     NoteType.Task,
   ),
 ]
 
-const noteTags: Record<string, SNTag[]> = {
+const defaultNoteTags: Record<string, SNTag[]> = {
   work: [tag('tag-work', 'Work')],
   home: [tag('tag-home', 'Home')],
 }
+
+/**
+ * Swappable so a test can prove what the bar does with a DIFFERENT shape of
+ * data — notably, that the section control disappears when no Advanced
+ * Checklist note supplies one.
+ */
+let notes = defaultNotes
+let noteTags = defaultNoteTags
 
 let container: HTMLElement
 let root: Root
@@ -101,6 +112,9 @@ const buildApplication = (): WebApplication =>
       streamItems: () => () => undefined,
       findItem: (uuid: string) => notes.find((note) => note.uuid === uuid),
       getSortedTagsForItem: (note: SNNote) => noteTags[note.uuid] ?? [],
+      // The real ItemManager walks the tag's parent chain; the fixtures carry
+      // the resulting path directly so the view's use of it is what is tested.
+      getTagLongTitle: (each: SNTag) => (each as unknown as { longTitle: string }).longTitle,
     },
     addEventObserver: (observer: (event: unknown) => Promise<void> | void) => {
       preferenceObservers.push(observer)
@@ -183,6 +197,56 @@ const clickButtonLabelled = (text: string) => {
   act(() => (button as HTMLButtonElement).click())
 }
 
+// --- multi-select filter controls -----------------------------------------
+// These are checkbox lists behind a trigger, and the list renders through a
+// Popover PORTAL onto document.body — so it is found there, not in `container`.
+
+const TAG_FILTER_LABEL = 'Filter by folder or tag'
+const SECTION_FILTER_LABEL = 'Filter by checklist section'
+
+/** The trigger's own text, i.e. what the collapsed control says it is doing. */
+const multiSelectSummary = (label: string) => control<HTMLButtonElement>(label)?.textContent?.trim()
+
+const openMultiSelect = (label: string) => {
+  const trigger = control<HTMLButtonElement>(label)
+  expect(trigger).toBeTruthy()
+  if (trigger.getAttribute('aria-expanded') !== 'true') {
+    act(() => trigger.click())
+  }
+  return trigger
+}
+
+const multiSelectPanel = (kind: string) => document.body.querySelector<HTMLElement>(`[data-todo-filter="${kind}"]`)
+
+/** Every option the open panel offers, in the order it offers them. */
+const multiSelectOptions = (kind: string) =>
+  Array.from(multiSelectPanel(kind)?.querySelectorAll('input[type="checkbox"]') ?? []).map((box) =>
+    box.getAttribute('aria-label'),
+  )
+
+const toggleMultiSelectOption = (kind: string, optionLabel: string) => {
+  const panel = multiSelectPanel(kind)
+  expect(panel).toBeTruthy()
+  const box = panel?.querySelector<HTMLInputElement>(`input[aria-label="${optionLabel}"]`)
+  expect(box).toBeTruthy()
+  act(() => (box as HTMLInputElement).click())
+}
+
+/** Open the control, tick each option by its rendered label, and leave it open. */
+const selectTags = (...optionLabels: string[]) => {
+  openMultiSelect(TAG_FILTER_LABEL)
+  for (const optionLabel of optionLabels) {
+    toggleMultiSelectOption('tags', optionLabel)
+  }
+}
+
+const selectSections = (...optionLabels: string[]) => {
+  openMultiSelect(SECTION_FILTER_LABEL)
+  for (const optionLabel of optionLabels) {
+    toggleMultiSelectOption('groups', optionLabel)
+  }
+}
+
 beforeEach(() => {
   // The shared Table asks for a uuid; app boot normally registers the generator.
   UuidGenerator.SetGenerator(() => 'todo-filters-table-test')
@@ -212,6 +276,9 @@ beforeEach(() => {
 
 afterEach(() => {
   unmount()
+  // A test that swapped the fixtures must not leak them into the next one.
+  notes = defaultNotes
+  noteTags = defaultNoteTags
   globalThis.ResizeObserver = originalResizeObserver
   HTMLElement.prototype.animate = originalAnimate
 })
@@ -253,8 +320,64 @@ describe('Todos filter bar', () => {
   })
 
   it('filters by folder/tag', () => {
-    setSelect(control<HTMLSelectElement>('Filter by folder or tag'), 'tag-work')
+    selectTags('Work')
     expect(visibleTodoText()).toEqual(['Ship the beta', 'Write release notes'])
+  })
+
+  it('admits every selected folder at once, rather than intersecting them', () => {
+    // The trap an intersection would spring: a note sits in ONE folder, so
+    // requiring both would empty the list the moment a second box is ticked.
+    selectTags('Work')
+    expect(visibleTodoText()).toEqual(['Ship the beta', 'Write release notes'])
+    toggleMultiSelectOption('tags', 'Home')
+    expect(visibleTodoText()).toEqual(['Ship the beta', 'Buy milk', 'Call the plumber', 'Write release notes'])
+    expect(multiSelectSummary(TAG_FILTER_LABEL)).toContain('2 folders & tags selected')
+
+    // Unticking is symmetrical — the control only ever widens or narrows by one.
+    toggleMultiSelectOption('tags', 'Work')
+    expect(visibleTodoText()).toEqual(['Buy milk', 'Call the plumber'])
+    expect(multiSelectSummary(TAG_FILTER_LABEL)).toContain('Home')
+  })
+
+  it('identifies each folder by its full path, not its own title', () => {
+    unmount()
+    // Two folders genuinely named the same, under different parents: the exact
+    // case a bare title cannot express.
+    noteTags = {
+      work: [tag('tag-work', 'Personal', 'Work/Personal')],
+      home: [tag('tag-home', 'Personal', 'Home/Personal')],
+    }
+    mount()
+
+    openMultiSelect(TAG_FILTER_LABEL)
+    // Sorted by path, so each nested folder lands under its own parent.
+    expect(multiSelectOptions('tags')).toEqual(['Home/Personal', 'Work/Personal'])
+    toggleMultiSelectOption('tags', 'Work/Personal')
+    expect(visibleTodoText()).toEqual(['Ship the beta', 'Write release notes'])
+
+    // And the search box reaches the parent's name through the same path.
+    setInput(control<HTMLInputElement>('Search todos'), 'home/')
+    expect(visibleTodoText()).toEqual([])
+  })
+
+  it('filters by Advanced Checklist section, and unions the selected ones', () => {
+    selectSections('Groceries')
+    expect(visibleTodoText()).toEqual(['Buy milk'])
+    toggleMultiSelectOption('groups', 'Chores')
+    expect(visibleTodoText()).toEqual(['Buy milk', 'Call the plumber'])
+    // Super rows have no sections at all, so a section filter excludes them.
+    expect(visibleTodoText()).not.toContain('Ship the beta')
+  })
+
+  it('offers no section control at all when nothing in the data has sections', () => {
+    unmount()
+    // A user with only Super checklists — the common case — must not be shown a
+    // control that can never do anything.
+    notes = [defaultNotes[0]]
+    mount()
+
+    expect(container.querySelector(`[aria-label="${SECTION_FILTER_LABEL}"]`)).toBeNull()
+    expect(control<HTMLButtonElement>(TAG_FILTER_LABEL)).toBeTruthy()
   })
 
   it('filters by source kind', () => {
@@ -281,7 +404,7 @@ describe('Todos filter bar', () => {
   })
 
   it('composes filters instead of letting the last one win', () => {
-    setSelect(control<HTMLSelectElement>('Filter by folder or tag'), 'tag-work')
+    selectTags('Work')
     setInput(control<HTMLInputElement>('Search todos'), 'e')
     expect(visibleTodoText()).toEqual(['Ship the beta', 'Write release notes'])
     const toggle = Array.from(container.querySelectorAll('label'))
@@ -326,7 +449,7 @@ describe('Todos filter persistence', () => {
 
   it('restores every filter on a fresh mount, as a reload would', () => {
     setInput(control<HTMLInputElement>('Search todos'), 'ship')
-    setSelect(control<HTMLSelectElement>('Filter by folder or tag'), 'tag-work')
+    selectTags('Work')
     setSelect(control<HTMLSelectElement>('Sort by'), 'todo')
     const toggle = Array.from(container.querySelectorAll('label'))
       .find((each) => each.textContent?.includes('Hide completed'))
@@ -340,7 +463,7 @@ describe('Todos filter persistence', () => {
     mount()
 
     expect(control<HTMLInputElement>('Search todos').value).toBe('ship')
-    expect(control<HTMLSelectElement>('Filter by folder or tag').value).toBe('tag-work')
+    expect(multiSelectSummary(TAG_FILTER_LABEL)).toContain('Work')
     expect(control<HTMLSelectElement>('Sort by').value).toBe('todo')
     expect(visibleTodoText()).toEqual(['Ship the beta'])
     // The trap this guards: a restored filter set that quietly hides rows.
@@ -396,7 +519,7 @@ describe('Todos filter persistence', () => {
     // Fields it understands survive; the ones it does not fall back, and the
     // view still renders rather than showing an empty or broken list.
     expect(control<HTMLInputElement>('Search todos').value).toBe('ship')
-    expect(control<HTMLSelectElement>('Filter by folder or tag').value).toBe('tag-work')
+    expect(multiSelectSummary(TAG_FILTER_LABEL)).toContain('Work')
     expect(control<HTMLSelectElement>('Filter by source').value).toBe('all')
     expect(control<HTMLSelectElement>('Filter by due date').value).toBe('all')
     expect(control<HTMLSelectElement>('Sort by').value).toBe('due')

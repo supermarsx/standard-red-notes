@@ -279,14 +279,23 @@ export const CurrentTodoFiltersPreferenceVersion = 1
  * and `due` buckets by deadline independently of completion so `hideCompleted`
  * composes with it rather than overlapping.
  *
+ * `groupNames` is the one grouping dimension carried inside the raw todo data
+ * itself: the Advanced Checklist note format names its sections (`groups[].name`).
+ * It exists ONLY for that note type — Super checklists have no equivalent — so a
+ * client with no such notes simply never selects any and the field stays empty.
+ * Names, not ids: the third-party payload gives its groups no stable identity.
+ *
  * This value SYNCS, so a client can meet a value written by an older or newer
  * version of itself. Consumers must treat every field as untrusted and
- * normalize before use rather than reading it straight.
+ * normalize before use rather than reading it straight. Every field added here
+ * must therefore be OPTIONAL to read (an older client's value simply lacks it)
+ * and must default to "narrows nothing".
  */
 export type TodoFiltersPreference = {
   version: typeof CurrentTodoFiltersPreferenceVersion
   query: string
   tagUuids: string[]
+  groupNames: string[]
   source: 'all' | 'super' | 'advanced-checklist'
   due: 'all' | 'overdue' | 'due-soon' | 'scheduled' | 'unscheduled'
   hideCompleted: boolean
@@ -299,6 +308,7 @@ export const DefaultTodoFiltersPreference: TodoFiltersPreference = {
   version: CurrentTodoFiltersPreferenceVersion,
   query: '',
   tagUuids: [],
+  groupNames: [],
   source: 'all',
   due: 'all',
   hideCompleted: false,

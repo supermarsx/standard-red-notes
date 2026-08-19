@@ -1,5 +1,5 @@
 import type { PrefKey, SNNote, TodoFiltersPreference } from '@standardnotes/snjs'
-import type { NoteTodos, TodoItem } from './allTodos'
+import { MAX_ADVANCED_GROUP_NAME_LENGTH, type NoteTodos, type TodoItem } from './allTodos'
 
 /**
  * Standard Red Notes: the Todos general view's filter model.
@@ -15,13 +15,26 @@ import type { NoteTodos, TodoItem } from './allTodos'
  * and in this app "topics", "categories" and "folders" are all one concept:
  * **tags**, which nest (the UI calls nested tags Folders). So the real, non-
  * invented dimensions are: the note's tags, the source note itself, the source
- * kind (Super vs Advanced Checklist), completion, and the due date.
+ * kind (Super vs Advanced Checklist), completion, the due date, and — for
+ * Advanced Checklist notes only — the section name the task was authored under.
+ *
+ * ## Multi-value filters are a UNION, never an intersection
+ * Selecting several folders/tags (or several sections) admits a row that matches
+ * ANY of them. These are FACETS of one dimension, not independent dimensions: a
+ * note usually sits in a single folder, so requiring every selected folder at
+ * once would return nothing for almost every selection a user could make. Union
+ * also keeps the control monotone — ticking another box can only ever reveal
+ * rows — which is what a checkbox list is universally read to mean. Different
+ * dimensions still compose with AND; see {@link filterTodoRows}.
  */
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
 export const MAX_TODO_FILTER_QUERY_LENGTH = 256
 export const MAX_TODO_FILTER_TAGS = 64
+export const MAX_TODO_FILTER_GROUPS = 64
+/** Mirrors the parser's own bound, so a stored name can still match a parsed one. */
+export const MAX_TODO_FILTER_GROUP_NAME_LENGTH = MAX_ADVANCED_GROUP_NAME_LENGTH
 
 /** Which todos a due-date filter admits. Independent of completion — the
  * hide-completed toggle composes on top rather than being folded in here. */
@@ -60,6 +73,7 @@ export const DEFAULT_TODO_FILTERS: TodoFilters = {
   // never open the Todos view with rows already filtered out.
   query: '',
   tagUuids: [],
+  groupNames: [],
   source: 'all',
   due: 'all',
   hideCompleted: false,
@@ -67,7 +81,24 @@ export const DEFAULT_TODO_FILTERS: TodoFilters = {
   sortReverse: false,
 }
 
-export type TodoTag = { uuid: string; title: string }
+/**
+ * One folder/tag as the Todos view needs it.
+ *
+ * Tags nest, and the UI calls a nested tag a Folder, so the tag's own `title`
+ * does NOT identify it: two folders both called "Personal" under different
+ * parents share it. `longTitle` is the full ancestor path that `ItemManager`
+ * already renders for exactly this reason (`getTagLongTitle`), and it is what
+ * the filter's own list must show — a picker that cannot tell two options apart
+ * is not a picker. The bare `title` is kept for the compact per-row chip, where
+ * the column header already supplies the context a path would repeat.
+ */
+export type TodoTag = { uuid: string; title: string; longTitle: string }
+
+/** The path a folder/tag is identified BY, falling back if a path is missing. */
+export function todoTagLabel(tag: TodoTag): string {
+  const longTitle = tag.longTitle.trim()
+  return longTitle.length > 0 ? longTitle : tag.title
+}
 
 /**
  * How many nesting levels the view indents before it stops widening rows. Real
@@ -132,10 +163,25 @@ export function normalizeTodoFilters(raw: unknown): TodoFilters {
       ).slice(0, MAX_TODO_FILTER_TAGS)
     : []
 
+  // Absent entirely on any value written before section filtering existed, which
+  // is the common case rather than the exotic one — it must read as "no section
+  // filter", exactly like a malformed value does.
+  const groupNames = Array.isArray(candidate.groupNames)
+    ? Array.from(
+        new Set(
+          candidate.groupNames
+            .filter((name): name is string => typeof name === 'string')
+            .map((name) => name.slice(0, MAX_TODO_FILTER_GROUP_NAME_LENGTH).trim())
+            .filter((name) => name.length > 0),
+        ),
+      ).slice(0, MAX_TODO_FILTER_GROUPS)
+    : []
+
   return {
     version: CURRENT_TODO_FILTERS_VERSION,
     query,
     tagUuids,
+    groupNames,
     source: isSourceFilter(candidate.source) ? candidate.source : DEFAULT_TODO_FILTERS.source,
     due: isDueFilter(candidate.due) ? candidate.due : DEFAULT_TODO_FILTERS.due,
     hideCompleted: candidate.hideCompleted === true,
@@ -159,7 +205,12 @@ export function activeTodoFilterCount(filters: TodoFilters): number {
   if (filters.query.trim().length > 0) {
     count += 1
   }
+  // One dimension, one count — selecting three folders is still ONE reason rows
+  // are missing, and the banner exists to answer "why is this list short".
   if (filters.tagUuids.length > 0) {
+    count += 1
+  }
+  if (filters.groupNames.length > 0) {
     count += 1
   }
   if (filters.source !== 'all') {
@@ -206,7 +257,11 @@ export function todoRowsFromGroups(groups: NoteTodos[], tagsForNote: (note: SNNo
   return rows
 }
 
-/** Every tag present on at least one row, de-duplicated and title-sorted. */
+/**
+ * Every tag present on at least one row, de-duplicated and PATH-sorted. Sorting
+ * by the full path rather than the leaf title lands each nested folder directly
+ * under its parent, so the list reads as the tree it actually is.
+ */
 export function collectTodoTagOptions(rows: TodoRow[]): TodoTag[] {
   const byUuid = new Map<string, TodoTag>()
   for (const row of rows) {
@@ -216,7 +271,25 @@ export function collectTodoTagOptions(rows: TodoRow[]): TodoTag[] {
       }
     }
   }
-  return Array.from(byUuid.values()).sort((a, b) => a.title.localeCompare(b.title))
+  return Array.from(byUuid.values()).sort((a, b) => todoTagLabel(a).localeCompare(todoTagLabel(b)))
+}
+
+/**
+ * Every Advanced Checklist section name present on at least one row, sorted.
+ *
+ * Usually EMPTY: only advanced-checklist notes carry sections, so a user with
+ * none gets no options — and the filter bar must then offer no control at all
+ * rather than a control that can never do anything. See `TodoFilterBar`.
+ */
+export function collectTodoGroupOptions(rows: TodoRow[]): string[] {
+  const names = new Set<string>()
+  for (const row of rows) {
+    const name = row.item.groupName
+    if (name) {
+      names.add(name)
+    }
+  }
+  return Array.from(names).sort((a, b) => a.localeCompare(b))
 }
 
 export type TodoDueBucket = 'overdue' | 'due-soon' | 'later' | 'unscheduled'
@@ -248,7 +321,10 @@ function matchesQuery(row: TodoRow, trimmedLowerQuery: string): boolean {
   return (
     row.item.text.toLowerCase().includes(trimmedLowerQuery) ||
     row.noteTitle.toLowerCase().includes(trimmedLowerQuery) ||
-    row.tags.some((tag) => tag.title.toLowerCase().includes(trimmedLowerQuery))
+    (row.item.groupName?.toLowerCase().includes(trimmedLowerQuery) ?? false) ||
+    // The full path, not just the leaf: searching a parent folder's name finds
+    // the todos filed under its children, which is what nesting means.
+    row.tags.some((tag) => todoTagLabel(tag).toLowerCase().includes(trimmedLowerQuery))
   )
 }
 
@@ -275,6 +351,7 @@ function rowMatchesFilters(
   filters: TodoFilters,
   query: string,
   tagUuids: Set<string> | undefined,
+  groupNames: Set<string> | undefined,
   now: number,
 ): boolean {
   if (filters.hideCompleted && row.item.checked) {
@@ -283,7 +360,11 @@ function rowMatchesFilters(
   if (filters.source !== 'all' && row.group.source !== filters.source) {
     return false
   }
+  // UNION within the dimension: any one of the selected folders admits the row.
   if (tagUuids && !row.tags.some((tag) => tagUuids.has(tag.uuid))) {
+    return false
+  }
+  if (groupNames && !(row.item.groupName !== undefined && groupNames.has(row.item.groupName))) {
     return false
   }
   if (!matchesDue(row, filters.due, now)) {
@@ -293,8 +374,10 @@ function rowMatchesFilters(
 }
 
 /**
- * Apply every filter together. They COMPOSE: search AND tag AND source AND due
- * AND hide-completed must all admit a row for it to count as a match.
+ * Apply every filter together. They COMPOSE: search AND tag AND section AND
+ * source AND due AND hide-completed must all admit a row for it to count as a
+ * match. WITHIN the multi-value dimensions (tags, sections) the selected values
+ * are a union — see the module header for why that, and not an intersection.
  *
  * Hierarchy rule: a matching row DRAGS ITS ANCESTORS IN as context, flagged
  * `isMatch: false` so the view can mute them. A deep subtask shown with no
@@ -305,10 +388,11 @@ function rowMatchesFilters(
 export function filterTodoRows(rows: TodoRow[], filters: TodoFilters, now: number): TodoRow[] {
   const query = filters.query.trim().toLowerCase()
   const tagUuids = filters.tagUuids.length > 0 ? new Set(filters.tagUuids) : undefined
+  const groupNames = filters.groupNames.length > 0 ? new Set(filters.groupNames) : undefined
 
   const matched = new Set<string>()
   for (const row of rows) {
-    if (rowMatchesFilters(row, filters, query, tagUuids, now)) {
+    if (rowMatchesFilters(row, filters, query, tagUuids, groupNames, now)) {
       matched.add(row.id)
     }
   }

@@ -1,6 +1,7 @@
 import { NoteType, SNNote } from '@standardnotes/snjs'
 import {
   collectAllTodos,
+  MAX_ADVANCED_GROUP_NAME_LENGTH,
   parseAdvancedChecklist,
   parseSuperChecklist,
   todosForNote,
@@ -117,6 +118,43 @@ describe('parseAdvancedChecklist', () => {
     )
     expect(items.map((i) => i.text)).toEqual(['Email Bob', 'Review PR'])
     expect(items.map((i) => i.checked)).toEqual([true, false])
+  })
+
+  it('keeps the section name each task was authored under', () => {
+    const items = parseAdvancedChecklist(
+      advancedChecklistJson([
+        { name: '  Groceries  ', tasks: [{ id: 't1', description: 'Buy milk', completed: false }] },
+        { name: 'Chores', tasks: [{ id: 't2', description: 'Mow the lawn', completed: false }] },
+      ]),
+    )
+    expect(items.map((item) => item.groupName)).toEqual(['Groceries', 'Chores'])
+  })
+
+  it('leaves the section name absent when the payload gives none, rather than blank', () => {
+    const items = parseAdvancedChecklist(
+      JSON.stringify({
+        groups: [
+          { tasks: [{ id: 'a', description: 'No name key', completed: false }] },
+          { name: '   ', tasks: [{ id: 'b', description: 'Blank name', completed: false }] },
+          { name: 42, tasks: [{ id: 'c', description: 'Wrong type', completed: false }] },
+        ],
+      }),
+    )
+    expect(items.map((item) => item.groupName)).toEqual([undefined, undefined, undefined])
+    // A flat payload has no sections at all.
+    expect(
+      parseAdvancedChecklist(JSON.stringify({ tasks: [{ id: 'a', description: 'Solo', completed: false }] }))[0]
+        .groupName,
+    ).toBeUndefined()
+  })
+
+  it('bounds an absurdly long section name', () => {
+    const items = parseAdvancedChecklist(
+      advancedChecklistJson([
+        { name: 'n'.repeat(5_000), tasks: [{ id: 't', description: 'Task', completed: false }] },
+      ]),
+    )
+    expect(items[0].groupName).toHaveLength(MAX_ADVANCED_GROUP_NAME_LENGTH)
   })
 
   it('supports a flat top-level tasks array fallback', () => {
