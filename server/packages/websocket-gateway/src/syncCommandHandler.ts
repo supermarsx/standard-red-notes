@@ -631,7 +631,16 @@ export class SyncCommandHandler {
           this.sendError(frame.requestId, frame.commandId, 'BACKEND_ERROR')
           return
         }
-        const challenge = randomBytes(32).toString('base64url')
+        // Hex, not base64url: the client must echo this challenge back inside a
+        // sync envelope, where every identifier has to satisfy IDENTIFIER_PATTERN
+        // (first character alphanumeric). base64url leads with `-` or `_` 2/64 of
+        // the time, so 3.125% of handshakes minted a challenge the client could
+        // never present — the echo failed envelope validation and failAndClose()
+        // tore down the whole sync socket. Hex keeps all 256 bits and always
+        // leads with [0-9a-f]. Only the SHA-256 digest of this value is stored,
+        // and the comparison is timingSafeEqual, so the encoding is otherwise
+        // immaterial.
+        const challenge = randomBytes(32).toString('hex')
         const expiresAt = Date.now() + COLLABORATION_EPOCH_DISCOVERY_TTL_MS
         this.collaborationEpochDiscovery = {
           challengeDigest: createHash('sha256').update(challenge, 'utf8').digest(),
