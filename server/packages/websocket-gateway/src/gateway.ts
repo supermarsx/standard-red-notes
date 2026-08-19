@@ -144,6 +144,16 @@ export interface SyncGatewayOptions {
   inviteEventDispatcher?: Pick<InviteEventOutboxDispatcher, 'dispatch'>
   /** Canonical in-process file storage adapter for the binary FILES_V1 lane. */
   files?: SyncFilesAdapter
+  /**
+   * Declares that this deployment intentionally serves no FILES_V1 lane.
+   *
+   * Under `requireSharedState` a composition root must state its intent about
+   * `files` explicitly: supply an adapter, or set this. Omitting both is a
+   * composition bug and fails at attach time. This exists because `files` was
+   * silently absent from every bootstrap while the whole lane looked wired --
+   * nothing errored, the capability simply never appeared on the wire.
+   */
+  filesUnsupported?: boolean
   tickets?: SyncAuthTicketStore
   leases?: SyncCommandLeaseRegistry
   socketBudget?: SyncSocketBudget
@@ -715,6 +725,11 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
   }
   if (config.sqs?.queueUrl && syncOptions?.requireSharedState && !syncOptions.inviteEventDispatcher) {
     throw new Error('WebSocket sync requires the durable invite-event SQS dispatcher.')
+  }
+  if (syncOptions?.requireSharedState && !syncOptions.files && !syncOptions.filesUnsupported) {
+    throw new Error(
+      'WebSocket sync requires a FILES_V1 storage adapter, or an explicit filesUnsupported declaration.',
+    )
   }
   const syncIngressLimits: WebSocketIngressLimits = {
     ...DEFAULT_SYNC_WEBSOCKET_INGRESS_LIMITS,

@@ -60,10 +60,12 @@ import {
   WebSocketRelayBacklog,
   type GatewayConfig,
   type SyncFilesAdapter,
+  type SyncGatewayOptions,
 } from '../src/gateway.js'
 import { decodeFileBinaryFrame, encodeFileBinaryFrame, sha256Hex } from '../src/filesProtocol.js'
 import { InMemorySyncAuthTicketStore, mintConnectionToken } from '../src/auth.js'
-import { COLLABORATION_PROTOCOL_VERSION } from '../src/rooms.js'
+import { InMemorySyncCommandLeaseRegistry, InMemorySyncSocketBudget } from '../src/registry.js'
+import { COLLABORATION_PROTOCOL_VERSION, type RoomJoinAuthorization } from '../src/rooms.js'
 
 const CONNECTION_SECRET = 'connection-secret'
 const AUTH_SECRET = 'auth-jwt-secret'
@@ -678,7 +680,21 @@ describe('websocket connection lifecycle', () => {
   })
 
   it('rejects an oversized message in ws before it can enter the relay', async () => {
-    const authorizeRoomJoin = vi.fn(() => ({ authorized: true as const, expiresAt: Date.now() + 60_000 }))
+    // Annotate the return type: without a contextual type the object literal
+    // widens `collaborationProtocolVersion` to `number` and stops matching the
+    // literal-3 v3 authorization. The grant is never consumed here -- the
+    // oversized frame is rejected before any join -- but it must still be a
+    // shape the gateway would actually accept.
+    const authorizeRoomJoin = vi.fn(
+      (): RoomJoinAuthorization => ({
+        authorized: true,
+        expiresAt: Date.now() + 60_000,
+        serverUpdatedAtTimestamp: 1,
+        collaborationProtocolVersion: COLLABORATION_PROTOCOL_VERSION,
+        roomEpoch: ROOM_EPOCH,
+        collaborationSecurityEpoch: SECURITY_EPOCH,
+      }),
+    )
     await attachGateway({ authorizeRoomJoin })
     const token = mintConnectionToken(
       { userUuid: 'user-large', sessionUuid: 'session-large' },
@@ -1111,6 +1127,55 @@ describe('authenticated /sockets/sync command plane', () => {
     },
   })
 
+  /**
+   * Fleet-shared store set: the real in-memory implementations behind adapters
+   * that only differ in `distribution`. Behaviour is unchanged, so a test can
+   * get past the shared-state guard and reach the composition checks behind it
+   * without inventing store semantics.
+   */
+  const sharedSyncState = (): Pick<SyncGatewayOptions, 'tickets' | 'leases' | 'socketBudget' | 'inviteEvents'> => {
+    const tickets = new InMemorySyncAuthTicketStore()
+    const leases = new InMemorySyncCommandLeaseRegistry()
+    const socketBudget = new InMemorySyncSocketBudget(4)
+    return {
+      // The in-memory implementations take no abort signal; the adapters accept
+      // one to satisfy the interface and drop it, exactly as those stores do.
+      tickets: {
+        distribution: 'shared',
+        ready: () => tickets.ready(),
+        issue: (identity, ttlMs) => tickets.issue(identity, ttlMs),
+        consume: (ticket) => tickets.consume(ticket),
+        clear: () => tickets.clear(),
+      },
+      leases: {
+        distribution: 'shared',
+        ready: () => leases.ready(),
+        acquire: (input) => leases.acquire(input),
+        renew: (input) => leases.renew(input),
+        release: (input) => leases.release(input),
+      },
+      socketBudget: {
+        distribution: 'shared',
+        ready: () => socketBudget.ready(),
+        acquire: (input) => socketBudget.acquire(input),
+        renew: (input) => socketBudget.renew(input),
+        release: (input) => socketBudget.release(input),
+      },
+      inviteEvents: {
+        distribution: 'shared',
+        ready: () => true,
+        tail: async () => '0',
+        readAfter: async (_userUuid, cursor) => ({
+          previousCursor: cursor,
+          events: [],
+          nextCursor: cursor,
+          hasMore: false,
+        }),
+        subscribeAvailability: () => () => undefined,
+      },
+    }
+  }
+
   async function attachSync(): Promise<void> {
     port = await listen()
     attached = attachWebSocketGateway({
@@ -1215,6 +1280,85 @@ describe('authenticated /sockets/sync command plane', () => {
         sync: { ...syncOptions(), requireSharedState: true },
       }),
     ).toThrow(/fleet-shared/i)
+  })
+
+  it('refuses a shared-state composition that neither supplies nor waives FILES_V1', async () => {
+    await listen()
+    // FILES_V1 was silently absent from every bootstrap while the lane looked
+    // fully wired, because nothing required `files`. Now a shared-state
+    // composition has to state its intent.
+    expect(() =>
+      attachWebSocketGateway({
+        httpServer,
+        config: baseConfig(),
+        logger: makeLogger(),
+        sync: { ...syncOptions(), ...sharedSyncState(), requireSharedState: true },
+      }),
+    ).toThrow(/FILES_V1 storage adapter/i)
+
+    expect(() =>
+      attachWebSocketGateway({
+        httpServer,
+        config: baseConfig(),
+        logger: makeLogger(),
+        sync: { ...syncOptions(), ...sharedSyncState(), requireSharedState: true, filesUnsupported: true },
+      }),
+    ).not.toThrow()
+  })
+
+  it('advertises FILES_V1 only to the shared-state composition that supplied an adapter', async () => {
+    const files = {
+      ready: () => true,
+      metadata: vi.fn(),
+      openUpload: vi.fn(),
+      uploadChunk: vi.fn(),
+      finishUpload: vi.fn(),
+      openDownload: vi.fn(),
+      readDownloadChunk: vi.fn(),
+      cancel: vi.fn(),
+    } as unknown as SyncFilesAdapter
+
+    for (const [supplied, expectation] of [
+      [{ files }, expect.arrayContaining(['FILES_V1'])],
+      [{ filesUnsupported: true }, expect.not.arrayContaining(['FILES_V1'])],
+    ] as const) {
+      port = await listen()
+      attached = attachWebSocketGateway({
+        httpServer,
+        config: baseConfig(),
+        logger: makeLogger(),
+        sync: { ...syncOptions(), ...sharedSyncState(), requireSharedState: true, ...supplied },
+      })
+      const issued = await attached.sync.issueTicket({
+        userUuid: 'user-guard',
+        sessionUuid: 'session-guard',
+        deviceId: 'device-guard',
+      })
+      const socket = new WebSocket(`ws://127.0.0.1:${port}/sockets/sync`, { origin: 'https://app.example.test' })
+      await opened(socket)
+      const payload = { ticket: issued.ticket, deviceId: 'device-guard' }
+      const authenticated = nextJson(socket)
+      socket.send(
+        JSON.stringify({
+          version: 1,
+          channel: 'sync',
+          type: 'AUTH',
+          requestId: 'auth-guard',
+          commandId: 'auth-guard',
+          sequence: 0,
+          payloadLength: Buffer.byteLength(JSON.stringify(payload)),
+          payload,
+        }),
+      )
+      expect(await authenticated).toMatchObject({
+        type: 'AUTHENTICATED',
+        payload: { operations: expectation },
+      })
+      socket.close()
+      await attached.stop()
+      attached = undefined
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()))
+    }
   })
 
   it('clears unconsumed process-local authentication tickets during awaited stop', async () => {

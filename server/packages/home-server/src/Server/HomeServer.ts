@@ -658,7 +658,9 @@ export class HomeServer implements HomeServerInterface {
               metrics: createLoggerSyncCommandMetrics(gatewayLogger),
               inviteEvents: inviteEventComposition.gatewayAdapter,
               inviteEventDispatcher: inviteEventComposition.dispatcher,
-              files: filesAdapter,
+              // Explicit either way: the gateway rejects a shared-state
+              // composition that neither supplies nor waives FILES_V1.
+              ...(filesAdapter ? { files: filesAdapter } : { filesUnsupported: true }),
               ...createRedisSyncState(syncStateRedis as unknown as SyncRedisClient, syncRedisOptions),
               requireSharedState: true,
             }

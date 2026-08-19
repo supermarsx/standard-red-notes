@@ -15,6 +15,7 @@ import {
   createSyncFilesTokenDecoder,
   SyncFilesError,
   SyncFilesSession,
+  type SyncFileDownloadChunk,
   type SyncFilesAdapter,
   type SyncFilesSessionOptions,
 } from '../src/filesSession.js'
@@ -427,7 +428,7 @@ describe('SyncFilesSession', () => {
         readDownloadChunk: vi.fn((_input, signal) => {
           readSignal = signal
           markReadStarted()
-          return new Promise(() => undefined)
+          return new Promise<SyncFileDownloadChunk>(() => undefined)
         }),
       })
       const { session, errors } = harness(filesAdapter)
@@ -497,7 +498,7 @@ describe('SyncFilesSession', () => {
     const filesAdapter = adapter({
       readDownloadChunk: vi.fn((_input, signal) => {
         readSignal = signal
-        return new Promise(() => undefined)
+        return new Promise<SyncFileDownloadChunk>(() => undefined)
       }),
     })
     const { session, errors } = harness(filesAdapter)

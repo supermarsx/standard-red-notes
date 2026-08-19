@@ -574,18 +574,25 @@ void container
             inviteEventDispatcher: inviteEventComposition.dispatcher,
             ...redisState,
             requireSharedState: true,
+            // ---------------------------------------------------------------
+            // FILES_V1 seam.
+            //
+            // The multi-container deployment has no SyncFilesAdapter yet. The
+            // only implementation is the home server's, and it needs two things
+            // this bootstrap does not have: the canonical file bytes on a local
+            // filesystem root, and the in-process Auth/Syncing service container
+            // the valet-token authorization path calls into. Here the files
+            // service owns the bytes (S3 or its own volume) and Auth/Syncing are
+            // reached over HTTP, so supplying the filesystem adapter would
+            // authorize transfers against a disk holding no user files.
+            //
+            // `filesUnsupported` makes that a declared decision rather than a
+            // silent omission -- the gateway now rejects a shared-state
+            // composition that does neither. To serve FILES_V1 here, replace
+            // this line with `files: <files-service-backed adapter>`.
+            // ---------------------------------------------------------------
+            filesUnsupported: true,
           }
-          // FILES_V1 (`sync.files`) is deliberately NOT supplied here, so the
-          // capability is simply absent from this deployment's advertised
-          // operations. The only implemented adapter is the home server's, and
-          // it needs two things this bootstrap does not have: the canonical file
-          // bytes on a local filesystem root, and the in-process Auth/Syncing
-          // service container the valet-token authorization path calls into. In
-          // the distributed topology the files service owns the bytes (S3 or its
-          // own volume) and Auth/Syncing are reached over HTTP, so wiring the
-          // filesystem adapter here would authorize transfers against a disk
-          // that holds no user files. Serving FILES_V1 from this bootstrap needs
-          // a files-service-backed adapter, not extra configuration.
           logger.info(
             'Realtime FILES_V1 transport not advertised: the distributed api-gateway does not own canonical file storage.',
           )
