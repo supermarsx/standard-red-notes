@@ -144,6 +144,16 @@ import { SharedSubscriptionInvitation } from '../Domain/SharedSubscription/Share
 import { AcceptSharedSubscriptionInvitation } from '../Domain/UseCase/AcceptSharedSubscriptionInvitation/AcceptSharedSubscriptionInvitation'
 import { DeclineSharedSubscriptionInvitation } from '../Domain/UseCase/DeclineSharedSubscriptionInvitation/DeclineSharedSubscriptionInvitation'
 import { CancelSharedSubscriptionInvitation } from '../Domain/UseCase/CancelSharedSubscriptionInvitation/CancelSharedSubscriptionInvitation'
+import { TypeORMInviteEventOutbox } from '../Infra/TypeORM/TypeORMInviteEventOutbox'
+import { TypeORMInviteEventOutboxRepository } from '../Infra/TypeORM/TypeORMInviteEventOutboxRepository'
+import { AuthInviteEventTransactionContext } from '../Infra/TypeORM/AuthInviteEventTransactionContext'
+import { authInviteTransactionAwareORMRepository } from '../Infra/TypeORM/AuthInviteTransactionAwareORMRepository'
+import { AuthInviteTransactionAwareDomainEventPublisher } from '../Infra/TypeORM/AuthInviteTransactionAwareDomainEventPublisher'
+import { InviteEventOutboxRepositoryInterface } from '../Domain/Invite/InviteEventOutboxRepositoryInterface'
+import { InviteEventOutboxDispatcher } from '../Domain/Invite/InviteEventOutboxDispatcher'
+import { AuthInviteRealtimeOutboxProducer } from '../Domain/Invite/AuthInviteRealtimeOutboxProducer'
+import { AuthInviteMutationTransactionRunner } from '../Domain/Invite/AuthInviteMutationTransactionRunner'
+import { AuthInviteAffectedUserResolver } from '../Domain/Invite/AuthInviteAffectedUserResolver'
 import { SharedSubscriptionInvitationCreatedEventHandler } from '../Domain/Handler/SharedSubscriptionInvitationCreatedEventHandler'
 import { SubscriptionSettingRepositoryInterface } from '../Domain/Setting/SubscriptionSettingRepositoryInterface'
 import { TypeORMSubscriptionSettingRepository } from '../Infra/TypeORM/TypeORMSubscriptionSettingRepository'
@@ -728,7 +738,18 @@ export class ContainerConfigLoader {
         env,
       )
     }
-    container.bind<DomainEventPublisherInterface>(TYPES.Auth_DomainEventPublisher).toConstantValue(domainEventPublisher)
+    const authInviteEventTransactionContext = new AuthInviteEventTransactionContext()
+    container
+      .bind<AuthInviteEventTransactionContext>(TYPES.Auth_InviteEventTransactionContext)
+      .toConstantValue(authInviteEventTransactionContext)
+    container
+      .bind<DomainEventPublisherInterface>(TYPES.Auth_RawDomainEventPublisher)
+      .toConstantValue(domainEventPublisher)
+    container
+      .bind<DomainEventPublisherInterface>(TYPES.Auth_DomainEventPublisher)
+      .toConstantValue(
+        new AuthInviteTransactionAwareDomainEventPublisher(domainEventPublisher, authInviteEventTransactionContext),
+      )
 
     const nextcloudBackupTopicArn = env.get('NEXTCLOUD_BACKUP_SNS_TOPIC_ARN', true)
     let nextcloudBackupDomainEventPublisher: DomainEventPublisherInterface
@@ -881,7 +902,15 @@ export class ContainerConfigLoader {
     container
       .bind<Repository<RevokedSession>>(TYPES.Auth_ORMRevokedSessionRepository)
       .toConstantValue(appDataSource.getRepository(RevokedSession))
-    container.bind<Repository<Role>>(TYPES.Auth_ORMRoleRepository).toConstantValue(appDataSource.getRepository(Role))
+    container
+      .bind<Repository<Role>>(TYPES.Auth_ORMRoleRepository)
+      .toConstantValue(
+        authInviteTransactionAwareORMRepository(
+          appDataSource.getRepository(Role),
+          Role,
+          authInviteEventTransactionContext,
+        ),
+      )
     container
       .bind<Repository<Permission>>(TYPES.Auth_ORMPermissionRepository)
       .toConstantValue(appDataSource.getRepository(Permission))
@@ -890,17 +919,52 @@ export class ContainerConfigLoader {
       .toConstantValue(appDataSource.getRepository(Session))
     container
       .bind<Repository<TypeORMSetting>>(TYPES.Auth_ORMSettingRepository)
-      .toConstantValue(appDataSource.getRepository(TypeORMSetting))
+      .toConstantValue(
+        authInviteTransactionAwareORMRepository(
+          appDataSource.getRepository(TypeORMSetting),
+          TypeORMSetting,
+          authInviteEventTransactionContext,
+        ),
+      )
     container
       .bind<Repository<SharedSubscriptionInvitation>>(TYPES.Auth_ORMSharedSubscriptionInvitationRepository)
-      .toConstantValue(appDataSource.getRepository(SharedSubscriptionInvitation))
+      .toConstantValue(
+        authInviteTransactionAwareORMRepository(
+          appDataSource.getRepository(SharedSubscriptionInvitation),
+          SharedSubscriptionInvitation,
+          authInviteEventTransactionContext,
+        ),
+      )
     container
       .bind<Repository<TypeORMSubscriptionSetting>>(TYPES.Auth_ORMSubscriptionSettingRepository)
-      .toConstantValue(appDataSource.getRepository(TypeORMSubscriptionSetting))
-    container.bind<Repository<User>>(TYPES.Auth_ORMUserRepository).toConstantValue(appDataSource.getRepository(User))
+      .toConstantValue(
+        authInviteTransactionAwareORMRepository(
+          appDataSource.getRepository(TypeORMSubscriptionSetting),
+          TypeORMSubscriptionSetting,
+          authInviteEventTransactionContext,
+        ),
+      )
+    container
+      .bind<Repository<User>>(TYPES.Auth_ORMUserRepository)
+      .toConstantValue(
+        authInviteTransactionAwareORMRepository(
+          appDataSource.getRepository(User),
+          User,
+          authInviteEventTransactionContext,
+        ),
+      )
     container
       .bind<Repository<UserSubscription>>(TYPES.Auth_ORMUserSubscriptionRepository)
-      .toConstantValue(appDataSource.getRepository(UserSubscription))
+      .toConstantValue(
+        authInviteTransactionAwareORMRepository(
+          appDataSource.getRepository(UserSubscription),
+          UserSubscription,
+          authInviteEventTransactionContext,
+        ),
+      )
+    container
+      .bind<Repository<TypeORMInviteEventOutbox>>(TYPES.Auth_ORMInviteEventOutboxRepository)
+      .toConstantValue(appDataSource.getRepository(TypeORMInviteEventOutbox))
     container
       .bind<Repository<TypeORMSessionTrace>>(TYPES.Auth_ORMSessionTraceRepository)
       .toConstantValue(appDataSource.getRepository(TypeORMSessionTrace))
@@ -1003,6 +1067,60 @@ export class ContainerConfigLoader {
     container
       .bind<SharedSubscriptionInvitationRepositoryInterface>(TYPES.Auth_SharedSubscriptionInvitationRepository)
       .to(TypeORMSharedSubscriptionInvitationRepository)
+    container
+      .bind<InviteEventOutboxRepositoryInterface>(TYPES.Auth_InviteEventOutboxRepository)
+      .toConstantValue(
+        new TypeORMInviteEventOutboxRepository(
+          container.get<Repository<TypeORMInviteEventOutbox>>(TYPES.Auth_ORMInviteEventOutboxRepository),
+          authInviteEventTransactionContext,
+        ),
+      )
+    container
+      .bind<InviteEventOutboxDispatcher>(TYPES.Auth_InviteEventOutboxDispatcher)
+      .toConstantValue(
+        new InviteEventOutboxDispatcher(
+          container.get<InviteEventOutboxRepositoryInterface>(TYPES.Auth_InviteEventOutboxRepository),
+          container.get<DomainEventPublisherInterface>(TYPES.Auth_RawDomainEventPublisher),
+        ),
+      )
+    container
+      .bind<AuthInviteRealtimeOutboxProducer>(TYPES.Auth_InviteRealtimeOutboxProducer)
+      .toConstantValue(
+        new AuthInviteRealtimeOutboxProducer(
+          container.get<InviteEventOutboxRepositoryInterface>(TYPES.Auth_InviteEventOutboxRepository),
+          authInviteEventTransactionContext,
+        ),
+      )
+    container
+      .bind<AuthInviteMutationTransactionRunner>(TYPES.Auth_InviteMutationTransactionRunner)
+      .toConstantValue(
+        new AuthInviteMutationTransactionRunner(
+          appDataSource.dataSource,
+          authInviteEventTransactionContext,
+          container.get<InviteEventOutboxDispatcher>(TYPES.Auth_InviteEventOutboxDispatcher),
+        ),
+      )
+    container
+      .bind<AuthInviteAffectedUserResolver>(TYPES.Auth_InviteAffectedUserResolver)
+      .toConstantValue(
+        new AuthInviteAffectedUserResolver(container.get<UserRepositoryInterface>(TYPES.Auth_UserRepository)),
+      )
+    if (!isConfiguredForCli) {
+      const inviteEventOutboxDispatcher = container.get<InviteEventOutboxDispatcher>(
+        TYPES.Auth_InviteEventOutboxDispatcher,
+      )
+      inviteEventOutboxDispatcher.start()
+      // The dispatcher polls for both the server and the worker process, so its
+      // shutdown belongs with the start rather than in a single bin entrypoint.
+      // `once` keeps repeated container loads (home-server, tests) from stacking
+      // listeners; awaiting stop() lets an in-flight publish finish before the
+      // data source it writes through is torn down.
+      const stopInviteEventOutboxDispatcher = (): void => {
+        void inviteEventOutboxDispatcher.stop()
+      }
+      process.once('SIGTERM', stopInviteEventOutboxDispatcher)
+      process.once('SIGINT', stopInviteEventOutboxDispatcher)
+    }
     container
       .bind<SessionTraceRepositoryInterface>(TYPES.Auth_SessionTraceRepository)
       .toConstantValue(
@@ -2729,7 +2847,22 @@ export class ContainerConfigLoader {
           container.get<number>(TYPES.Auth_VALET_TOKEN_TTL),
         ),
       )
-    container.bind<InviteToSharedSubscription>(TYPES.Auth_InviteToSharedSubscription).to(InviteToSharedSubscription)
+    container
+      .bind<InviteToSharedSubscription>(TYPES.Auth_InviteToSharedSubscription)
+      .toConstantValue(
+        new InviteToSharedSubscription(
+          container.get<UserSubscriptionRepositoryInterface>(TYPES.Auth_UserSubscriptionRepository),
+          container.get<TimerInterface>(TYPES.Auth_Timer),
+          container.get<SharedSubscriptionInvitationRepositoryInterface>(
+            TYPES.Auth_SharedSubscriptionInvitationRepository,
+          ),
+          container.get<DomainEventPublisherInterface>(TYPES.Auth_DomainEventPublisher),
+          container.get<DomainEventFactoryInterface>(TYPES.Auth_DomainEventFactory),
+          container.get<AuthInviteMutationTransactionRunner>(TYPES.Auth_InviteMutationTransactionRunner),
+          container.get<AuthInviteRealtimeOutboxProducer>(TYPES.Auth_InviteRealtimeOutboxProducer),
+          container.get<AuthInviteAffectedUserResolver>(TYPES.Auth_InviteAffectedUserResolver),
+        ),
+      )
     container
       .bind<AcceptSharedSubscriptionInvitation>(TYPES.Auth_AcceptSharedSubscriptionInvitation)
       .toConstantValue(
@@ -2743,14 +2876,43 @@ export class ContainerConfigLoader {
           container.get<ApplyDefaultSubscriptionSettings>(TYPES.Auth_ApplyDefaultSubscriptionSettings),
           container.get<TimerInterface>(TYPES.Auth_Timer),
           container.get<winston.Logger>(TYPES.Auth_Logger),
+          container.get<AuthInviteMutationTransactionRunner>(TYPES.Auth_InviteMutationTransactionRunner),
+          container.get<AuthInviteRealtimeOutboxProducer>(TYPES.Auth_InviteRealtimeOutboxProducer),
+          container.get<AuthInviteAffectedUserResolver>(TYPES.Auth_InviteAffectedUserResolver),
         ),
       )
     container
       .bind<DeclineSharedSubscriptionInvitation>(TYPES.Auth_DeclineSharedSubscriptionInvitation)
-      .to(DeclineSharedSubscriptionInvitation)
+      .toConstantValue(
+        new DeclineSharedSubscriptionInvitation(
+          container.get<SharedSubscriptionInvitationRepositoryInterface>(
+            TYPES.Auth_SharedSubscriptionInvitationRepository,
+          ),
+          container.get<TimerInterface>(TYPES.Auth_Timer),
+          container.get<AuthInviteMutationTransactionRunner>(TYPES.Auth_InviteMutationTransactionRunner),
+          container.get<AuthInviteRealtimeOutboxProducer>(TYPES.Auth_InviteRealtimeOutboxProducer),
+          container.get<AuthInviteAffectedUserResolver>(TYPES.Auth_InviteAffectedUserResolver),
+        ),
+      )
     container
       .bind<CancelSharedSubscriptionInvitation>(TYPES.Auth_CancelSharedSubscriptionInvitation)
-      .to(CancelSharedSubscriptionInvitation)
+      .toConstantValue(
+        new CancelSharedSubscriptionInvitation(
+          container.get<SharedSubscriptionInvitationRepositoryInterface>(
+            TYPES.Auth_SharedSubscriptionInvitationRepository,
+          ),
+          container.get<UserRepositoryInterface>(TYPES.Auth_UserRepository),
+          container.get<UserSubscriptionRepositoryInterface>(TYPES.Auth_UserSubscriptionRepository),
+          container.get<RoleServiceInterface>(TYPES.Auth_RoleService),
+          container.get<DomainEventPublisherInterface>(TYPES.Auth_DomainEventPublisher),
+          container.get<DomainEventFactoryInterface>(TYPES.Auth_DomainEventFactory),
+          container.get<TimerInterface>(TYPES.Auth_Timer),
+          container.get<winston.Logger>(TYPES.Auth_Logger),
+          container.get<AuthInviteMutationTransactionRunner>(TYPES.Auth_InviteMutationTransactionRunner),
+          container.get<AuthInviteRealtimeOutboxProducer>(TYPES.Auth_InviteRealtimeOutboxProducer),
+          container.get<AuthInviteAffectedUserResolver>(TYPES.Auth_InviteAffectedUserResolver),
+        ),
+      )
     container
       .bind<ListSharedSubscriptionInvitations>(TYPES.Auth_ListSharedSubscriptionInvitations)
       .to(ListSharedSubscriptionInvitations)
