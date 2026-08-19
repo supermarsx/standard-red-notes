@@ -125,6 +125,29 @@ describe('InviteEventOutboxDispatcher lifecycle', () => {
     expect(repository.markPublished).toHaveBeenCalledTimes(1)
   })
 
+  // A container-load `start()` must not be a reason the process stays up. Every
+  // armed handle is unref-ed, so the event loop drains on its own and `stop()` is
+  // about not writing through a torn-down connection, not about letting Node exit.
+  it('arms only unref-ed timers, so a started dispatcher never holds the event loop open', async () => {
+    jest.useRealTimers()
+    const handles: NodeJS.Timeout[] = []
+    const realSetTimeout = global.setTimeout
+    const spy = jest.spyOn(global, 'setTimeout').mockImplementation(((callback: () => void, delay?: number) => {
+      const handle = realSetTimeout(callback, delay)
+      handles.push(handle)
+      return handle
+    }) as unknown as typeof global.setTimeout)
+
+    const dispatcher = new InviteEventOutboxDispatcher(repository, publisher)
+    dispatcher.start(5)
+    await new Promise((resolve) => realSetTimeout(resolve, 30))
+    await dispatcher.stop()
+    spy.mockRestore()
+
+    expect(handles.length).toBeGreaterThan(1)
+    expect(handles.filter((handle) => handle.hasRef())).toEqual([])
+  })
+
   it('ignores wake() after stop but resumes on a fresh start', async () => {
     const dispatcher = new InviteEventOutboxDispatcher(repository, publisher)
 
