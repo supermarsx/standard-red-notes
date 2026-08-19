@@ -74,6 +74,14 @@ export class NoteViewController implements ItemViewControllerInterface {
   private latestSaveAttempt?: { revision: number; params: NoteSaveFunctionParams }
   private strictLocalPersistenceFailure?: { revision: number; params: NoteSaveFunctionParams; error: unknown }
 
+  /**
+   * Standard Red Notes: a collaboration durability flush that cannot reach the relay
+   * is reported ONCE per controller lifetime on the ordinary note-switch path. Without
+   * this guard a room that never becomes mutation-ready throws on every note open and
+   * close, which both spams the log and blocks navigation entirely.
+   */
+  private reportedDurabilityFlushFailure = false
+
   // Standard Red Notes (achievements): per-note edit counter for the lifetime of
   // this controller. Each save bumps it; we feed the running count to the
   // achievements service's setAtLeast so the "max edits on a single note" metric
@@ -163,6 +171,7 @@ export class NoteViewController implements ItemViewControllerInterface {
     this.editorFlush = undefined
     this.editorHasPending = undefined
     this.editorDurabilityFlush = undefined
+    this.reportedDurabilityFlushFailure = false
     this.inFlightSavePromise = null
     this.latestSaveAttempt = undefined
     this.strictLocalPersistenceFailure = undefined
@@ -490,7 +499,49 @@ export class NoteViewController implements ItemViewControllerInterface {
         // The save chain rejects on deinit; nothing more to await.
       }
     }
-    await this.editorDurabilityFlush?.()
+
+    /**
+     * Standard Red Notes: this is the ORDINARY note-switch/close teardown, not a
+     * user-acknowledged checklist write (that is flushAndAwaitPendingSaveStrict,
+     * which still rejects). A collaboration provider that is not mutation-ready —
+     * still correlating room state, or stuck because the relay is unreachable —
+     * must not make every note open and close throw.
+     *
+     * Skipping the relay flush here is only safe because the note's own content is
+     * already durable without it: the flush + awaited local save ABOVE persist the
+     * editor's text through the ordinary encrypted item pipeline, which does not go
+     * through the collaboration relay. What a failed provider flush gives up is
+     * REPLICATION of not-yet-relayed updates to peers, and keeping the controller
+     * mounted does not deliver those either. So: prove the local copy really landed,
+     * and only if THAT fails treat it as data loss and reject (the caller then keeps
+     * the editor mounted rather than discarding it).
+     */
+    try {
+      await this.editorDurabilityFlush?.()
+    } catch (error) {
+      await this.retainNoteAfterDurabilityFlushFailure(error)
+    }
+  }
+
+  /**
+   * Confirm the outgoing note is locally durable after a collaboration durability
+   * flush failed. Rejects (blocking the close) when the local copy is NOT durable —
+   * that is genuine data loss. Otherwise surfaces the relay failure exactly once and
+   * lets teardown continue.
+   */
+  private async retainNoteAfterDurabilityFlushFailure(error: unknown): Promise<void> {
+    await this.syncController.awaitCurrentLocalPropagationStrict()
+
+    if (this.reportedDurabilityFlushFailure) {
+      return
+    }
+    this.reportedDurabilityFlushFailure = true
+    console.error('Collaboration durability flush failed; the note was saved locally but not relayed.', error)
+    this.showErrorSyncStatus({
+      type: 'error',
+      message: 'Not synced to collaborators',
+      description: 'This note was saved on this device, but live collaboration updates could not be sent.',
+    })
   }
 
   /**

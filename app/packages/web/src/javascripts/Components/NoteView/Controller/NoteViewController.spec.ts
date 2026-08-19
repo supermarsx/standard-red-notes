@@ -259,6 +259,95 @@ describe('note view controller', () => {
     consoleError.mockRestore()
   })
 
+  /**
+   * Standard Red Notes: a collaboration provider that never becomes mutation-ready
+   * (relay unreachable / room state still correlating) used to reject the ORDINARY
+   * note-switch teardown, so every note open threw and navigation was blocked. The
+   * note's own text is persisted by the local save above the relay flush, so the
+   * teardown now continues and reports the lost relay exactly once.
+   */
+  it('note-switch teardown survives a provider that is not mutation-ready and reports it once', async () => {
+    const note = { uuid: 'note-uuid', text: '' } as jest.Mocked<SNNote>
+    application.items.findItem = jest.fn().mockReturnValue(note)
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    const controller = new NoteViewController(
+      note,
+      application.items,
+      application.mutator,
+      application.sync,
+      application.sessions,
+      application.preferences,
+      application.componentManager,
+      application.alerts,
+      application.isNativeMobileWebUseCase,
+    )
+    await controller.initialize()
+
+    const providerFlush = jest
+      .fn()
+      .mockRejectedValue(new Error('Checklist collaboration provider is not mutation-ready.'))
+    controller.registerEditorDurabilityFlush(providerFlush)
+    const showError = jest.spyOn(controller, 'showErrorSyncStatus')
+
+    await expect(controller.flushAndAwaitPendingSave()).resolves.toBeUndefined()
+    await expect(controller.flushAndAwaitPendingSave()).resolves.toBeUndefined()
+
+    expect(providerFlush).toHaveBeenCalledTimes(2)
+    expect(consoleError).toHaveBeenCalledTimes(1)
+    expect(showError).toHaveBeenCalledTimes(1)
+    expect(showError).toHaveBeenCalledWith(expect.objectContaining({ type: 'error' }))
+    consoleError.mockRestore()
+  })
+
+  /**
+   * The relay flush may only be waived once the LOCAL copy is proved durable. When
+   * local persistence also failed there is genuine unsaved content, so the teardown
+   * must still reject and the caller keeps the editor mounted.
+   */
+  it('note-switch teardown still rejects when the local copy is not durable either', async () => {
+    const note = { uuid: 'note-uuid', text: '' } as jest.Mocked<SNNote>
+    application.items.findItem = jest.fn().mockReturnValue(note)
+    application.sessions.isSignedOut = jest.fn().mockReturnValue(false)
+    application.mutator.changeItem = jest.fn().mockRejectedValue(new Error('local persistence failed'))
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    const controller = new NoteViewController(
+      note,
+      application.items,
+      application.mutator,
+      application.sync,
+      application.sessions,
+      application.preferences,
+      application.componentManager,
+      application.alerts,
+      application.isNativeMobileWebUseCase,
+    )
+    await controller.initialize()
+
+    controller.registerEditorDurabilityFlush(
+      jest.fn().mockRejectedValue(new Error('Checklist collaboration provider is not mutation-ready.')),
+    )
+    let firstSerialize = true
+    controller.registerEditorFlush(
+      () => {
+        if (!firstSerialize) {
+          return
+        }
+        firstSerialize = false
+        void controller.saveAndAwaitLocalPropagation({
+          text: 'unsaved checklist state',
+          isUserModified: true,
+          bypassDebouncer: true,
+        })
+      },
+      () => true,
+    )
+
+    await expect(controller.flushAndAwaitPendingSave()).rejects.toThrow('local persistence failed')
+    consoleError.mockRestore()
+  })
+
   it('security teardown synchronously scrubs a retained vault note and editor callbacks', async () => {
     const disposeItemStream = jest.fn()
     application.items.streamItems = jest.fn().mockReturnValue(disposeItemStream)

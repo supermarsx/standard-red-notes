@@ -592,6 +592,55 @@ test("an offline sandbox cache miss returns inert text instead of the app shell"
   );
 });
 
+test("a failing-upstream navigation is passed through but never cached as the app shell", async () => {
+  const listeners = new Map();
+  const cachePuts = [];
+  const context = {
+    URL,
+    Request,
+    Response,
+    Promise,
+    fetch: async () =>
+      new Response("<html><script>window.x=1</script></html>", {
+        status: 502,
+        headers: { "Content-Type": "text/html" },
+      }),
+    caches: {
+      open: async () => ({
+        put: async (request, response) => {
+          cachePuts.push([request, response]);
+        },
+      }),
+      match: async () => undefined,
+    },
+    self: {
+      location: { origin: "https://notes.example.test" },
+      addEventListener: (type, listener) => listeners.set(type, listener),
+    },
+  };
+  runInNewContext(serviceWorker, context);
+
+  let responsePromise;
+  listeners.get("fetch")({
+    request: {
+      method: "GET",
+      url: "https://notes.example.test/",
+      mode: "navigate",
+      destination: "document",
+    },
+    respondWith: (value) => {
+      responsePromise = Promise.resolve(value);
+    },
+  });
+
+  const response = await responsePromise;
+  assert.equal(response.status, 502, "the real upstream failure reaches the page");
+  // A cached 502 becomes the offline shell and is then served under the app CSP,
+  // whose inline-script hash pins the real index.html — the proxy error page's
+  // own inline script would be blocked as a script-src-elem violation.
+  assert.deepEqual(cachePuts, [], "an error page must never enter the shell cache");
+});
+
 test("deployment marker requests bypass the service worker and every cache", () => {
   const listeners = new Map();
   let respondWithCalls = 0;

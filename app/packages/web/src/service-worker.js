@@ -117,8 +117,16 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       fetch(request)
         .then((response) => {
-          const copy = response.clone()
-          caches.open(CACHE_NAME).then((cache) => cache.put(request, copy))
+          // Only a real app shell may enter the cache. A reverse proxy that is
+          // between releases answers navigations with its own 502/503/504 HTML;
+          // storing that would pin an error page as the offline shell (served
+          // afterwards under the app CSP, whose inline-script hash pins the REAL
+          // index.html — so the error page's own inline script is then blocked).
+          // Same gate the asset handlers below already apply.
+          if (response && response.status === 200 && response.type === 'basic') {
+            const copy = response.clone()
+            caches.open(CACHE_NAME).then((cache) => cache.put(request, copy))
+          }
           return response
         })
         .catch(async () => {
