@@ -34,7 +34,7 @@ const FilePreviewInfoPanel: FunctionComponent<Props> = ({ file }) => {
       {file.description && (
         <div className="mb-3">
           <div className="font-semibold">{t('fileDescription')}</div>
-          <p className="mt-1 whitespace-pre-wrap break-words" dir="auto">
+          <p className="mt-1 break-words whitespace-pre-wrap" dir="auto">
             {file.description}
           </p>
         </div>
