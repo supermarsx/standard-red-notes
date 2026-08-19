@@ -2,6 +2,7 @@ import type { AccountSyncTransportRequest } from '@standardnotes/services'
 import { SyncOutboxRecord, SyncOutboxStore } from './SyncTransportOutbox'
 import { SyncSocketLike, SyncTransportWorkerRuntime } from './SyncTransportWorkerRuntime'
 import {
+  CollaborationAuthorizationTransportRequest,
   MainToSyncWorkerMessage,
   payloadByteLength,
   SyncServerFrame,
@@ -120,6 +121,8 @@ const body = (suffix = 'a'): AccountSyncTransportRequest => ({
 
 const SESSION_A = `sync-session-v1:${'a'.repeat(64)}`
 const SESSION_B = `sync-session-v1:${'b'.repeat(64)}`
+const ROOM_EPOCH = 'room_epoch_00000001'
+const SECURITY_EPOCH = 'security_epoch_0001'
 
 const serverFrame = (
   type: SyncServerFrame['type'],
@@ -225,6 +228,53 @@ describe('SyncTransportWorkerRuntime', () => {
     return socket
   }
 
+  const startCollaborationHandshake = async (
+    harness: ReturnType<typeof setup>,
+    request: CollaborationAuthorizationTransportRequest = {
+      noteUuid: 'note-1',
+      collaborationProtocolVersion: 3,
+      expectedRoomEpoch: ROOM_EPOCH,
+      leaseRequestId: 'lease-1',
+      bootstrapChallenge: 'bootstrap-challenge-1',
+    },
+  ) => {
+    await harness.runtime.handle({
+      type: 'AUTHORIZE_COLLABORATION',
+      clientRequestId: 'collaboration-client-1',
+      sessionScope: SESSION_A,
+      request,
+    })
+    await harness.runtime.handle({
+      type: 'CONNECT',
+      clientRequestId: 'collaboration-client-1',
+      sessionScope: SESSION_A,
+      authorization: {
+        endpoint: 'wss://sync.example.test/sockets/sync',
+        ticket: 'c'.repeat(40),
+        expiresAt: Date.now() + 30_000,
+        deviceId: 'device-1',
+      },
+    })
+    const socket = harness.sockets.at(-1) as FakeSocket
+    socket.open()
+    const auth = JSON.parse(socket.sent[0]) as { commandId: string }
+    socket.receive(
+      serverFrame('AUTHENTICATED', auth.commandId, {
+        capability: 'ws-sync',
+        protocolVersion: 1,
+        operations: ['SYNC_ITEMS', 'AUTHORIZE_COLLABORATION'],
+        nextClientSequence: 1,
+      }),
+    )
+    await flush()
+    const discovery = JSON.parse(socket.sent[1]) as {
+      requestId: string
+      commandId: string
+      payload: Record<string, unknown>
+    }
+    return { socket, discovery }
+  }
+
   const expectDispatchedRecoveryWithoutHttpFallback = (
     harness: ReturnType<typeof setup>,
     clientRequestId: string,
@@ -242,6 +292,132 @@ describe('SyncTransportWorkerRuntime', () => {
       }),
     )
   }
+
+  it('keeps epoch discovery internal and performs exactly one challenged grant retry on the same socket', async () => {
+    const harness = setup()
+    const { socket, discovery } = await startCollaborationHandshake(harness)
+
+    expect(discovery.payload).toEqual({
+      noteUuid: 'note-1',
+      collaborationProtocolVersion: 3,
+      epochDiscovery: true,
+    })
+    expect(harness.messages.some((message) => message.type === 'COLLABORATION_RESULT')).toBe(false)
+
+    const challenge = 'challenge_abcdefghijklmnopqrstuvwxyz0123456789'
+    socket.receive({
+      ...serverFrame('COLLABORATION_AUTHORIZED', discovery.commandId, {
+        epochDiscovery: true,
+        room: 'note-1',
+        serverUpdatedAtTimestamp: 123,
+        collaborationProtocolVersion: 3,
+        roomEpoch: ROOM_EPOCH,
+        collaborationSecurityEpoch: SECURITY_EPOCH,
+        epochDiscoveryChallenge: challenge,
+        epochDiscoveryRequestId: discovery.requestId,
+        challengeExpiresAt: Date.now() + 10_000,
+      }),
+      requestId: discovery.requestId,
+    })
+    await flush()
+
+    const authorizationFrames = socket.sent
+      .map((entry) => JSON.parse(entry))
+      .filter((frame) => frame.type === 'COLLABORATION_AUTHORIZE')
+    expect(authorizationFrames).toHaveLength(2)
+    const grant = authorizationFrames[1] as { requestId: string; commandId: string; payload: Record<string, unknown> }
+    expect(grant.commandId).not.toBe(discovery.commandId)
+    expect(grant.payload).toEqual({
+      noteUuid: 'note-1',
+      collaborationProtocolVersion: 3,
+      expectedRoomEpoch: ROOM_EPOCH,
+      epochDiscoveryChallenge: challenge,
+      epochDiscoveryRequestId: discovery.requestId,
+      leaseRequestId: 'lease-1',
+      bootstrapChallenge: 'bootstrap-challenge-1',
+    })
+    expect(harness.messages.some((message) => message.type === 'COLLABORATION_RESULT')).toBe(false)
+
+    socket.receive({
+      ...serverFrame('COLLABORATION_AUTHORIZED', grant.commandId, {
+        capability: 'collaboration-capability',
+        room: 'note-1',
+        expiresIn: 300,
+        serverUpdatedAtTimestamp: 123,
+        collaborationProtocolVersion: 3,
+        roomEpoch: ROOM_EPOCH,
+        collaborationSecurityEpoch: SECURITY_EPOCH,
+        leaseRequestId: 'lease-1',
+        bootstrapChallenge: 'bootstrap-challenge-1',
+      }),
+      requestId: grant.requestId,
+    })
+    await flush()
+
+    expect(harness.messages.filter((message) => message.type === 'COLLABORATION_RESULT')).toEqual([
+      {
+        type: 'COLLABORATION_RESULT',
+        clientRequestId: 'collaboration-client-1',
+        result: {
+          epochDiscovery: false,
+          capability: 'collaboration-capability',
+          room: 'note-1',
+          expiresIn: 300,
+          serverUpdatedAtTimestamp: 123,
+          collaborationProtocolVersion: 3,
+          roomEpoch: ROOM_EPOCH,
+          collaborationSecurityEpoch: SECURITY_EPOCH,
+          leaseRequestId: 'lease-1',
+          bootstrapChallenge: 'bootstrap-challenge-1',
+        },
+      },
+    ])
+  })
+
+  it('rejects a stale discovery without sending a challenged grant', async () => {
+    const harness = setup()
+    const { socket, discovery } = await startCollaborationHandshake(harness)
+    socket.receive({
+      ...serverFrame('COLLABORATION_AUTHORIZED', discovery.commandId, {
+        epochDiscovery: true,
+        room: 'note-1',
+        serverUpdatedAtTimestamp: 123,
+        collaborationProtocolVersion: 3,
+        roomEpoch: ROOM_EPOCH,
+        collaborationSecurityEpoch: SECURITY_EPOCH,
+        epochDiscoveryChallenge: 'challenge_abcdefghijklmnopqrstuvwxyz0123456789',
+        epochDiscoveryRequestId: discovery.requestId,
+        challengeExpiresAt: Date.now() - 1,
+      }),
+      requestId: discovery.requestId,
+    })
+    await flush()
+
+    expect(
+      socket.sent.map((entry) => JSON.parse(entry)).filter((frame) => frame.type === 'COLLABORATION_AUTHORIZE'),
+    ).toHaveLength(1)
+    expect(harness.messages).toContainEqual({
+      type: 'COLLABORATION_FALLBACK',
+      clientRequestId: 'collaboration-client-1',
+      reason: 'proxy-failed',
+    })
+    expect(harness.messages.some((message) => message.type === 'COLLABORATION_RESULT')).toBe(false)
+  })
+
+  it('aborts an in-flight discovery when its authenticated socket generation closes', async () => {
+    const harness = setup()
+    const { socket } = await startCollaborationHandshake(harness)
+    socket.close(1006)
+    await flush()
+
+    expect(harness.messages).toContainEqual({
+      type: 'COLLABORATION_FALLBACK',
+      clientRequestId: 'collaboration-client-1',
+      reason: 'reconnect-gap',
+    })
+    expect(harness.messages.some((message) => message.type === 'NEED_TICKET' && message.reconnect === true)).toBe(false)
+    expect(harness.messages.some((message) => message.type === 'COLLABORATION_RESULT')).toBe(false)
+  })
 
   it('persists before send, clears only after checkpoint, and reuses one socket without another ticket', async () => {
     const harness = setup()
@@ -895,7 +1071,7 @@ describe('SyncTransportWorkerRuntime', () => {
     expect(nextSocket.sent.map((entry) => JSON.parse(entry).type)).toEqual(['AUTH', 'COMMAND'])
   })
 
-  it('holds durable invite delivery until the main thread explicitly acknowledges the applied cursor', async () => {
+  it('holds durable invite delivery across reconnect until the main thread acknowledges the applied cursor', async () => {
     const harness = setup()
     await harness.runtime.handle({
       type: 'SUBSCRIBE_INVITE_EVENTS',
@@ -958,12 +1134,58 @@ describe('SyncTransportWorkerRuntime', () => {
     expect(harness.messages).toContainEqual({ type: 'INVITE_BATCH', clientRequestId: 'invite-client', batch })
     expect(socket.sent.map((entry) => JSON.parse(entry).type)).toEqual(['AUTH', 'INVITE_SUBSCRIBE'])
 
+    socket.close(1006)
+    await flush()
     await harness.runtime.handle({
       type: 'ACK_INVITE_EVENTS',
       clientRequestId: 'invite-client',
       cursor: 'cursor-1',
     })
-    expect(socket.sent.map((entry) => JSON.parse(entry).type)).toEqual(['AUTH', 'INVITE_SUBSCRIBE', 'INVITE_ACK'])
-    expect(JSON.parse(socket.sent.at(-1)!).payload).toEqual({ cursor: 'cursor-1' })
+    expect(socket.sent.map((entry) => JSON.parse(entry).type)).toEqual(['AUTH', 'INVITE_SUBSCRIBE'])
+
+    jest.advanceTimersByTime(1)
+    await flush()
+    expect(harness.messages).toContainEqual({
+      type: 'NEED_TICKET',
+      clientRequestId: 'invite-client',
+      reconnect: true,
+    })
+    await harness.runtime.handle({
+      type: 'CONNECT',
+      clientRequestId: 'invite-client',
+      sessionScope: SESSION_A,
+      authorization: {
+        endpoint: 'wss://sync.example.test/sockets/sync',
+        ticket: 'r'.repeat(40),
+        expiresAt: Date.now() + 30_000,
+        deviceId: 'device-1',
+      },
+    })
+    const reconnectSocket = harness.sockets[1]
+    reconnectSocket.open()
+    const reconnectAuth = JSON.parse(reconnectSocket.sent[0]) as { commandId: string }
+    reconnectSocket.receive(
+      serverFrame('AUTHENTICATED', reconnectAuth.commandId, {
+        capability: 'ws-sync',
+        protocolVersion: 1,
+        operations: ['SYNC_ITEMS', 'INVITE_EVENTS'],
+        nextClientSequence: 1,
+      }),
+    )
+    await flush()
+    const replaySubscription = JSON.parse(
+      reconnectSocket.sent.find((entry) => JSON.parse(entry).type === 'INVITE_SUBSCRIBE')!,
+    ) as { commandId: string; payload: { cursor: string } }
+    expect(replaySubscription.payload.cursor).toBe('cursor-0')
+    reconnectSocket.receive(serverFrame('INVITE_BATCH', replaySubscription.commandId, batch))
+    await flush()
+
+    expect(harness.messages.filter((message) => message.type === 'INVITE_BATCH')).toHaveLength(1)
+    expect(reconnectSocket.sent.map((entry) => JSON.parse(entry).type)).toEqual([
+      'AUTH',
+      'INVITE_SUBSCRIBE',
+      'INVITE_ACK',
+    ])
+    expect(JSON.parse(reconnectSocket.sent.at(-1)!).payload).toEqual({ cursor: 'cursor-1' })
   })
 })

@@ -1,9 +1,10 @@
-import type {
-  AccountSyncCommandMetadata,
-  AccountSyncTransportContext,
-  AccountSyncTransportRequest,
+import {
+  isInviteRealtimeBatch,
+  isOpaqueCursor,
+  type AccountSyncCommandMetadata,
+  type AccountSyncTransportContext,
+  type AccountSyncTransportRequest,
 } from '@standardnotes/services'
-import { isInviteRealtimeBatch, isOpaqueCursor } from '@standardnotes/services'
 import {
   CollaborationAuthorizationTransportRequest,
   CollaborationAuthorizationTransportResult,
@@ -78,6 +79,9 @@ type ActiveRequest =
       mode: 'collaboration'
       request: CollaborationAuthorizationTransportRequest
       commandId: string
+      phase: 'discovery' | 'grant'
+      socketGeneration?: number
+      discovery?: CollaborationEpochDiscoveryHandshake
     }
   | {
       clientRequestId: string
@@ -110,6 +114,15 @@ type ActiveInviteSubscription = {
   limit: number
   sent: boolean
   awaitingAck?: string
+  ackReady?: boolean
+}
+
+type CollaborationEpochDiscoveryHandshake = {
+  challenge: string
+  requestId: string
+  roomEpoch: string
+  collaborationSecurityEpoch: string
+  expiresAt: number
 }
 
 function defaultUuid(): string {
@@ -148,6 +161,7 @@ export class SyncTransportWorkerRuntime {
 
   private state: SyncTransportState = 'HTTP_ONLY'
   private socket?: SyncSocketLike
+  private socketGeneration = 0
   private active?: ActiveRequest
   private authorization?: SyncTicket
   private sessionScope?: string
@@ -347,7 +361,14 @@ export class SyncTransportWorkerRuntime {
       this.dependencies.postMessage({ type: 'COLLABORATION_FALLBACK', clientRequestId, reason: 'reconnect-gap' })
       return
     }
-    this.active = { clientRequestId, sessionScope, mode: 'collaboration', request, commandId: this.uuid() }
+    this.active = {
+      clientRequestId,
+      sessionScope,
+      mode: 'collaboration',
+      request,
+      commandId: this.uuid(),
+      phase: 'discovery',
+    }
     this.sessionScope = sessionScope
     if (this.socket?.readyState === 1 && this.state === 'READY' && this.transportScope) {
       await this.prepareActiveRequest()
@@ -519,7 +540,20 @@ export class SyncTransportWorkerRuntime {
       !subscription ||
       subscription.clientRequestId !== clientRequestId ||
       subscription.awaitingAck !== cursor ||
-      !isOpaqueCursor(cursor) ||
+      !isOpaqueCursor(cursor)
+    ) {
+      return
+    }
+    subscription.ackReady = true
+    await this.sendInviteAckIfReady(subscription)
+  }
+
+  private async sendInviteAckIfReady(subscription: ActiveInviteSubscription): Promise<void> {
+    const cursor = subscription.awaitingAck
+    if (
+      this.inviteSubscription !== subscription ||
+      !subscription.ackReady ||
+      !cursor ||
       this.socket?.readyState !== 1 ||
       this.state !== 'READY'
     ) {
@@ -541,14 +575,16 @@ export class SyncTransportWorkerRuntime {
       if (this.inviteSubscription === subscription) {
         subscription.cursor = cursor
         subscription.awaitingAck = undefined
+        subscription.ackReady = undefined
       }
     } catch {
       this.dependencies.postMessage({
         type: 'INVITE_ERROR',
-        clientRequestId,
+        clientRequestId: subscription.clientRequestId,
         code: 'SOCKET_CLOSED',
         retryable: true,
       })
+      this.socket?.close(4000, 'invite acknowledgement failed')
     }
   }
 
@@ -616,6 +652,7 @@ export class SyncTransportWorkerRuntime {
       return
     }
     this.socket = socket
+    this.socketGeneration += 1
     socket.onopen = () => this.onOpen(socket)
     socket.onmessage = (event) => void this.onMessage(socket, event.data)
     socket.onerror = () => undefined
@@ -738,12 +775,50 @@ export class SyncTransportWorkerRuntime {
       }
       if (frame.type === 'COLLABORATION_AUTHORIZED') {
         this.clearAckDeadline()
-        const result = parseCollaborationAuthorizationResult(frame.payload, this.active.request)
+        const active = this.active
+        if (
+          active.sessionScope !== this.sessionScope ||
+          active.socketGeneration !== this.socketGeneration ||
+          this.socket?.readyState !== 1
+        ) {
+          await this.fallbackCollaboration('reconnect-gap', false)
+          return
+        }
+        if (active.phase === 'discovery') {
+          const discovery = parseCollaborationEpochDiscoveryResult(
+            frame.payload,
+            active.request,
+            frame.requestId,
+            this.now(),
+          )
+          if (!discovery) {
+            await this.fallbackCollaboration('proxy-failed', false)
+            return
+          }
+          if (active.request.expectedRoomEpoch && active.request.expectedRoomEpoch !== discovery.roomEpoch) {
+            const clientRequestId = active.clientRequestId
+            this.active = undefined
+            this.reconnectAttempts = 0
+            this.dependencies.postMessage({ type: 'COLLABORATION_DENIED', clientRequestId })
+            return
+          }
+          active.phase = 'grant'
+          active.discovery = discovery
+          active.commandId = this.uuid()
+          await this.sendCollaborationAuthorization()
+          return
+        }
+        const result = parseCollaborationAuthorizationResult(
+          frame.payload,
+          active.request,
+          active.discovery,
+          this.now(),
+        )
         if (!result) {
           await this.fallbackCollaboration('proxy-failed', false)
           return
         }
-        const clientRequestId = this.active.clientRequestId
+        const clientRequestId = active.clientRequestId
         this.active = undefined
         this.reconnectAttempts = 0
         this.dependencies.postMessage({ type: 'COLLABORATION_RESULT', clientRequestId, result })
@@ -884,15 +959,23 @@ export class SyncTransportWorkerRuntime {
         })
         return
       case 'INVITE_BATCH':
-        if (
-          subscription.awaitingAck !== undefined ||
-          !isInviteRealtimeBatch(frame.payload) ||
-          frame.payload.previousCursor !== subscription.cursor
-        ) {
+        if (!isInviteRealtimeBatch(frame.payload) || frame.payload.previousCursor !== subscription.cursor) {
           this.failInviteSubscription(subscription, 'INVALID_RESPONSE', false)
           return
         }
+        if (subscription.awaitingAck !== undefined) {
+          if (subscription.awaitingAck !== frame.payload.nextCursor) {
+            this.failInviteSubscription(subscription, 'INVALID_RESPONSE', false)
+            return
+          }
+          // Reconnect may replay the still-unacknowledged batch while the main
+          // thread is applying it. Do not deliver a duplicate. If application
+          // already completed while disconnected, acknowledge this replay now.
+          void this.sendInviteAckIfReady(subscription)
+          return
+        }
         subscription.awaitingAck = frame.payload.nextCursor
+        subscription.ackReady = false
         this.dependencies.postMessage({
           type: 'INVITE_BATCH',
           clientRequestId: subscription.clientRequestId,
@@ -911,6 +994,7 @@ export class SyncTransportWorkerRuntime {
         }
         subscription.sent = false
         subscription.awaitingAck = undefined
+        subscription.ackReady = undefined
         this.dependencies.postMessage({
           type: 'INVITE_RECONCILE',
           clientRequestId: subscription.clientRequestId,
@@ -1100,11 +1184,13 @@ export class SyncTransportWorkerRuntime {
 
   private async sendCollaborationAuthorization(): Promise<void> {
     const active = this.active
+    const socketGeneration = this.socketGeneration
     if (
       !active ||
       active.mode !== 'collaboration' ||
       !this.transportScope ||
       !this.sessionScope ||
+      active.sessionScope !== this.sessionScope ||
       this.state !== 'READY'
     ) {
       return
@@ -1113,12 +1199,40 @@ export class SyncTransportWorkerRuntime {
       await this.fallbackCollaboration('operation-unavailable', true)
       return
     }
-    const payload = active.request as unknown as Record<string, unknown>
+    if (active.socketGeneration !== undefined && active.socketGeneration !== socketGeneration) {
+      await this.fallbackCollaboration('reconnect-gap', false)
+      return
+    }
+    active.socketGeneration = socketGeneration
+    let payload: Record<string, unknown>
+    if (active.phase === 'discovery') {
+      payload = {
+        noteUuid: active.request.noteUuid,
+        collaborationProtocolVersion: 3,
+        epochDiscovery: true,
+      }
+    } else {
+      const discovery = active.discovery
+      if (!discovery || discovery.expiresAt <= this.now()) {
+        await this.fallbackCollaboration('proxy-failed', false)
+        return
+      }
+      payload = {
+        noteUuid: active.request.noteUuid,
+        collaborationProtocolVersion: 3,
+        expectedRoomEpoch: discovery.roomEpoch,
+        epochDiscoveryChallenge: discovery.challenge,
+        epochDiscoveryRequestId: discovery.requestId,
+        ...(active.request.leaseRequestId ? { leaseRequestId: active.request.leaseRequestId } : {}),
+        ...(active.request.bootstrapChallenge ? { bootstrapChallenge: active.request.bootstrapChallenge } : {}),
+      }
+    }
+    const requestId = this.uuid()
     const frame: SyncClientFrame = {
       version: SYNC_PROTOCOL_VERSION,
       channel: SYNC_CHANNEL,
       type: 'COLLABORATION_AUTHORIZE',
-      requestId: this.uuid(),
+      requestId,
       commandId: active.commandId,
       sequence: this.sequence++,
       payloadLength: payloadByteLength(payload),
@@ -1324,6 +1438,10 @@ export class SyncTransportWorkerRuntime {
     if (this.shuttingDown) {
       return
     }
+    if (this.active?.mode === 'collaboration' && this.active.socketGeneration !== undefined) {
+      await this.fallbackCollaboration('reconnect-gap', false)
+      return
+    }
     this.transition('DEGRADED', code >= 4000 ? 'server-kill' : undefined)
     if (!this.active) {
       const unsent = this.rpcRequests.values().next().value as ActiveRpcRequest | undefined
@@ -1337,7 +1455,6 @@ export class SyncTransportWorkerRuntime {
     }
     if (!this.active && this.inviteSubscription) {
       this.inviteSubscription.sent = false
-      this.inviteSubscription.awaitingAck = undefined
       this.active = {
         clientRequestId: this.inviteSubscription.clientRequestId,
         sessionScope: this.inviteSubscription.sessionScope,
@@ -1467,7 +1584,6 @@ export class SyncTransportWorkerRuntime {
           retryable: true,
         })
         subscription.sent = false
-        subscription.awaitingAck = undefined
       }
       this.active = undefined
       this.transition('DEGRADED', reason)
@@ -1592,7 +1708,6 @@ export class SyncTransportWorkerRuntime {
     this.negotiatedOperations.clear()
     if (this.inviteSubscription) {
       this.inviteSubscription.sent = false
-      this.inviteSubscription.awaitingAck = undefined
     }
   }
 
@@ -1704,8 +1819,13 @@ function decodedBase64Length(value: string): number {
 function parseCollaborationAuthorizationResult(
   payload: Record<string, unknown>,
   request: CollaborationAuthorizationTransportRequest,
+  discovery: CollaborationEpochDiscoveryHandshake | undefined,
+  now: number,
 ): CollaborationAuthorizationTransportResult | undefined {
   if (
+    !discovery ||
+    discovery.expiresAt <= now ||
+    payload.epochDiscovery === true ||
     typeof payload.capability !== 'string' ||
     payload.capability.length === 0 ||
     payload.room !== request.noteUuid ||
@@ -1713,19 +1833,74 @@ function parseCollaborationAuthorizationResult(
     Number(payload.expiresIn) <= 0 ||
     !Number.isSafeInteger(payload.serverUpdatedAtTimestamp) ||
     Number(payload.serverUpdatedAtTimestamp) <= 0 ||
-    payload.collaborationProtocolVersion !== 2 ||
+    payload.collaborationProtocolVersion !== 3 ||
+    !isValidCollaborationEpoch(payload.roomEpoch) ||
+    !isValidCollaborationEpoch(payload.collaborationSecurityEpoch) ||
+    payload.roomEpoch !== discovery.roomEpoch ||
+    payload.collaborationSecurityEpoch !== discovery.collaborationSecurityEpoch ||
     payload.leaseRequestId !== request.leaseRequestId ||
     payload.bootstrapChallenge !== request.bootstrapChallenge
   ) {
     return undefined
   }
   return {
+    epochDiscovery: false,
     capability: payload.capability,
     room: request.noteUuid,
     expiresIn: Number(payload.expiresIn),
     serverUpdatedAtTimestamp: Number(payload.serverUpdatedAtTimestamp),
-    collaborationProtocolVersion: 2,
+    collaborationProtocolVersion: 3,
+    roomEpoch: payload.roomEpoch,
+    collaborationSecurityEpoch: payload.collaborationSecurityEpoch,
     ...(request.leaseRequestId ? { leaseRequestId: request.leaseRequestId } : {}),
     ...(request.bootstrapChallenge ? { bootstrapChallenge: request.bootstrapChallenge } : {}),
   }
+}
+
+function parseCollaborationEpochDiscoveryResult(
+  payload: Record<string, unknown>,
+  request: CollaborationAuthorizationTransportRequest,
+  responseRequestId: string,
+  now: number,
+): CollaborationEpochDiscoveryHandshake | undefined {
+  const allowedKeys = new Set([
+    'epochDiscovery',
+    'room',
+    'serverUpdatedAtTimestamp',
+    'collaborationProtocolVersion',
+    'roomEpoch',
+    'collaborationSecurityEpoch',
+    'epochDiscoveryChallenge',
+    'epochDiscoveryRequestId',
+    'challengeExpiresAt',
+  ])
+  if (
+    Object.keys(payload).some((key) => !allowedKeys.has(key)) ||
+    payload.epochDiscovery !== true ||
+    payload.room !== request.noteUuid ||
+    !Number.isSafeInteger(payload.serverUpdatedAtTimestamp) ||
+    Number(payload.serverUpdatedAtTimestamp) <= 0 ||
+    payload.collaborationProtocolVersion !== 3 ||
+    !isValidCollaborationEpoch(payload.roomEpoch) ||
+    !isValidCollaborationEpoch(payload.collaborationSecurityEpoch) ||
+    typeof payload.epochDiscoveryChallenge !== 'string' ||
+    !/^[A-Za-z0-9_-]{32,128}$/u.test(payload.epochDiscoveryChallenge) ||
+    payload.epochDiscoveryRequestId !== responseRequestId ||
+    !Number.isSafeInteger(payload.challengeExpiresAt) ||
+    Number(payload.challengeExpiresAt) <= now ||
+    Number(payload.challengeExpiresAt) > now + 60_000
+  ) {
+    return undefined
+  }
+  return {
+    challenge: payload.epochDiscoveryChallenge,
+    requestId: responseRequestId,
+    roomEpoch: payload.roomEpoch,
+    collaborationSecurityEpoch: payload.collaborationSecurityEpoch,
+    expiresAt: Number(payload.challengeExpiresAt),
+  }
+}
+
+function isValidCollaborationEpoch(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{16,128}$/u.test(value)
 }
