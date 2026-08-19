@@ -201,6 +201,15 @@ export class InviteRealtimeEventConsumer {
     }
     const current = this.checkpoint
     if (!current || value.previousCursor !== current.cursor) {
+      if (current && isExactPreviouslyAppliedReplay(value, current)) {
+        return {
+          status: 'applied',
+          ackCursor: current.cursor,
+          applied: 0,
+          duplicates: value.events.length,
+          hasMore: value.hasMore,
+        }
+      }
       return { status: 'reconcile', reason: 'cursor-gap' }
     }
 
@@ -332,4 +341,26 @@ function compareRevisions(left: string, right: string): number {
   const leftValue = BigInt(left)
   const rightValue = BigInt(right)
   return leftValue < rightValue ? -1 : leftValue > rightValue ? 1 : 0
+}
+
+/**
+ * A socket can reconnect after the authoritative handler and checkpoint have
+ * completed but before the ACK reaches the gateway. In that narrow window the
+ * server correctly replays the outstanding batch from its previous cursor.
+ * Accept only the exact immediately-checkpointed batch: every event identity
+ * must still be in the bounded deduplication window and its next cursor must be
+ * the durable cursor. Older or partially-overlapping replays remain gaps.
+ */
+function isExactPreviouslyAppliedReplay(
+  batch: {
+    events: readonly InviteRealtimeEvent[]
+    nextCursor: string
+  },
+  checkpoint: InviteRealtimeCheckpoint,
+): boolean {
+  if (batch.events.length === 0 || batch.nextCursor !== checkpoint.cursor) {
+    return false
+  }
+  const seen = new Set(checkpoint.seenEventIds)
+  return batch.events.every((event) => seen.has(event.eventId))
 }

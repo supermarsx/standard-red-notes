@@ -101,6 +101,44 @@ describe('InviteRealtimeEventConsumer', () => {
     expect(handler).not.toHaveBeenCalled()
   })
 
+  it('ACKs the exact checkpointed batch replayed after a reconnect without reapplying it', async () => {
+    const store = new MemoryStore()
+    store.values.set(accountA, {
+      cursor: cursor1,
+      seenEventIds: ['00000000-0000-4000-8000-000000000001'],
+    })
+    const handler = jest.fn()
+    const consumer = new InviteRealtimeEventConsumer(store, handler)
+    await consumer.beginSession(accountA)
+
+    await expect(consumer.consume(accountA, batch([event()]))).resolves.toEqual({
+      status: 'applied',
+      ackCursor: cursor1,
+      applied: 0,
+      duplicates: 1,
+      hasMore: false,
+    })
+    expect(handler).not.toHaveBeenCalled()
+    expect(store.values.get(accountA)?.cursor).toBe(cursor1)
+  })
+
+  it('does not accept an older or partially-known batch as a reconnect replay', async () => {
+    const store = new MemoryStore()
+    store.values.set(accountA, {
+      cursor: cursor2,
+      seenEventIds: ['00000000-0000-4000-8000-000000000001'],
+    })
+    const handler = jest.fn()
+    const consumer = new InviteRealtimeEventConsumer(store, handler)
+    await consumer.beginSession(accountA)
+
+    await expect(consumer.consume(accountA, batch([event()]))).resolves.toEqual({
+      status: 'reconcile',
+      reason: 'cursor-gap',
+    })
+    expect(handler).not.toHaveBeenCalled()
+  })
+
   it('deduplicates repeated event identities within one batch', async () => {
     const store = new MemoryStore()
     store.values.set(accountA, { cursor: cursor0, seenEventIds: [] })
