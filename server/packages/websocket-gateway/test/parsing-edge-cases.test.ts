@@ -178,13 +178,16 @@ describe('handleRelayFrame room cap', () => {
 
   it('still reports a denial when the denied socket cannot be written to', async () => {
     const rooms = new RoomRegistry<SendableSocket>()
-    const connection = conn('c2', {
-      send: () => {
+    const connection = conn(
+      'c2',
+      vi.fn(() => {
         throw new Error('socket unwritable')
-      },
-    } as unknown as ReturnType<typeof vi.fn>)
+      }),
+    )
 
-    const joined = await handleRelayFrame(rooms, connection, { t: 'room-join', room: 'note-1' }, () => false)
+    const joined = await handleRelayFrame(rooms, connection, { t: 'room-join', room: 'note-1' }, () => ({
+      authorized: false,
+    }))
     expect(joined).toBe(0)
     expect(rooms.isMember('note-1', connection)).toBe(false)
   })
