@@ -8,6 +8,7 @@ import {
   $getChecklistRecurrence,
   $getChecklistTodoId,
   $normalizeChecklistItemMetadata,
+  $propagateChecklistRecurrenceToDescendants,
   $setChecklistSchedule,
   $setChecklistTodoId,
   normalizeChecklistTodoId,
@@ -158,6 +159,10 @@ export function $applyChecklistItemChecked(
     const nextDueAt = advanceChecklistDueAt(dueAt, recurrence, now)
     if (nextDueAt) {
       $setChecklistSchedule(item, nextDueAt, recurrence)
+      // A recurring task carries its subtasks with it. This belongs to the
+      // advance itself rather than to any one caller, so ticking a checkbox by
+      // hand and completing the row in bulk reproduce the subtree identically.
+      $propagateChecklistRecurrenceToDescendants(item, nextDueAt, recurrence, now)
       if (wasChecked) {
         item.setChecked(false)
       }

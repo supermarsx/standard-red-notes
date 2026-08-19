@@ -33,13 +33,7 @@
  */
 import { $isListNode, ListItemNode, ListNode } from '@lexical/list'
 import { $isElementNode, BaseSelection, LexicalNode } from 'lexical'
-import {
-  $getChecklistDueAt,
-  $getChecklistRecurrence,
-  $isChecklistItemNode,
-  $propagateChecklistRecurrenceToDescendants,
-  CHECKLIST_MAX_DESCENDANT_NODES,
-} from '../Lexical/Nodes/ChecklistItemNode'
+import { $isChecklistItemNode, CHECKLIST_MAX_DESCENDANT_NODES } from '../Lexical/Nodes/ChecklistItemNode'
 import { $applyChecklistItemChecked } from './ChecklistEditorMutations'
 
 /** Walk up from `node` (inclusive) to the nearest checkable checklist row. */
@@ -163,11 +157,11 @@ export function $selectionHasChecklistItems(selection: BaseSelection | null): bo
  */
 export function $setCheckedForItems(items: ListItemNode[], checked: boolean, now = Date.now()): number {
   // Completing a row that ADVANCES a recurrence carries its whole subtree onto
-  // that one new occurrence, reopening the subtasks. One bulk action must be
-  // one occurrence for the tree, so once a row advances we roll its descendants
-  // to the same occurrence and skip them for the rest of the batch — otherwise
-  // a subtask would advance once for its parent and again for its own turn in
-  // the loop, and would be re-closed after the parent deliberately reopened it.
+  // that one new occurrence, reopening the subtasks (see
+  // `$applyChecklistItemChecked`). One bulk action must be one occurrence for
+  // the tree, so those descendants are skipped for the rest of the batch —
+  // otherwise a subtask would advance once for its parent and again for its own
+  // turn in the loop, and would be re-closed after the parent reopened it.
   //
   // Only an ADVANCE stands in for its subtree: a row that merely closes (no
   // recurrence, or a schedule at the calendar ceiling that cannot roll) leaves
@@ -182,13 +176,10 @@ export function $setCheckedForItems(items: ListItemNode[], checked: boolean, now
     }
     const outcome = $applyChecklistItemChecked(item, checked, now)
     if (outcome.advanced) {
+      // The advance itself already rolled this row's subtree onto the new
+      // occurrence; all that is left here is to keep those rows out of the
+      // batch so they do not advance a second time.
       advanced.add(item.getKey())
-      const dueAt = $getChecklistDueAt(item)
-      const recurrence = $getChecklistRecurrence(item)
-      if (dueAt && recurrence) {
-        // Idempotent: re-rolling the same occurrence is a documented no-op.
-        $propagateChecklistRecurrenceToDescendants(item, dueAt, recurrence, now)
-      }
     }
     if (outcome.changed) {
       changed++

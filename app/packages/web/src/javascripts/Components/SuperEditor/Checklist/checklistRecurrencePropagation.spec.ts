@@ -14,6 +14,8 @@ import {
   createChecklistRecurrence,
   propagatedChecklistDescendantSchedule,
 } from './checklistRecurrence'
+import { $setCheckedForItems } from './ChecklistBulkCompletion'
+import { $toggleChecklistItemChecked } from './ChecklistEditorMutations'
 
 const PARENT_DUE_AT = '2026-08-16T09:00:00.000Z'
 const COMPLETED_AT = Date.parse('2026-08-16T10:00:00.000Z')
@@ -144,6 +146,196 @@ describe('recurring checklist parents reproduce their subtasks', () => {
 
     // A whole subtree is one undoable step, not one per descendant.
     expect(updates.length - updatesBefore).toBe(1)
+  })
+
+  it('advances a nested recurring task once when a bulk action completes it alongside its parent', () => {
+    const editor = createEditor()
+
+    editor.update(
+      () => {
+        const list = $createListNode('check')
+        const parent = $createListItemNode(false)
+        parent.append($createTextNode('Parent'))
+        list.append(parent)
+        $getRoot().append(list)
+        $setChecklistSchedule(parent, PARENT_DUE_AT, daily)
+
+        const child = appendChild(parent, 'Child')
+        $setChecklistSchedule(child, PARENT_DUE_AT, daily)
+        appendChild(child, 'Grandchild')
+      },
+      { discrete: true },
+    )
+
+    editor.update(
+      () => {
+        const parent = $getRoot().getFirstChild<ListNode>()!.getFirstChild<ListItemNode>()!
+        const rows = [parent, ...$getChecklistDescendantItems(parent)]
+        $setCheckedForItems(rows, true, COMPLETED_AT)
+
+        // One bulk action is one occurrence for the whole tree. A subtask must
+        // not roll once for its parent and again for its own turn in the loop.
+        expect(rows.map((row) => $getChecklistDueAt(row))).toEqual([NEXT_DUE_AT, NEXT_DUE_AT, NEXT_DUE_AT])
+        expect(rows.some((row) => row.getChecked())).toBe(false)
+
+        // Twice over must not drift the levels apart.
+        $setCheckedForItems(rows, true, Date.parse('2026-08-17T10:00:00.000Z'))
+        expect(rows.map((row) => $getChecklistDueAt(row))).toEqual([
+          '2026-08-18T09:00:00.000Z',
+          '2026-08-18T09:00:00.000Z',
+          '2026-08-18T09:00:00.000Z',
+        ])
+      },
+      { discrete: true },
+    )
+  })
+
+  it('reproduces the subtasks when the user simply ticks a recurring parent', () => {
+    const editor = createEditor()
+    const updates: number[] = []
+    editor.registerUpdateListener(() => {
+      updates.push(1)
+    })
+
+    editor.update(
+      () => {
+        const list = $createListNode('check')
+        const parent = $createListItemNode(false)
+        parent.append($createTextNode('Water the plants'))
+        list.append(parent)
+        $getRoot().append(list)
+        $setChecklistSchedule(parent, PARENT_DUE_AT, daily)
+
+        const child = appendChild(parent, 'Front room', true)
+        appendChild(child, 'Fern', true)
+      },
+      { discrete: true },
+    )
+
+    const updatesBefore = updates.length
+    editor.update(
+      () => {
+        const parent = $getRoot().getFirstChild<ListNode>()!.getFirstChild<ListItemNode>()!
+        // Exactly what clicking the checkbox does, via the canonical mutation.
+        expect($toggleChecklistItemChecked(parent, COMPLETED_AT)).toBe(true)
+
+        const rows = [parent, ...$getChecklistDescendantItems(parent)]
+        expect(rows).toHaveLength(3)
+        expect(rows.map((row) => $getChecklistDueAt(row))).toEqual([NEXT_DUE_AT, NEXT_DUE_AT, NEXT_DUE_AT])
+        expect(rows.every((row) => $getChecklistRecurrence(row) !== undefined)).toBe(true)
+        expect(rows.some((row) => row.getChecked())).toBe(false)
+      },
+      { discrete: true },
+    )
+
+    expect(updates.length - updatesBefore).toBe(1)
+  })
+
+  it('completes every subtask of an ordinary parent, which carries nothing with it', () => {
+    const editor = createEditor()
+
+    editor.update(
+      () => {
+        const list = $createListNode('check')
+        const parent = $createListItemNode(false)
+        parent.append($createTextNode('Pack'))
+        list.append(parent)
+        $getRoot().append(list)
+
+        const child = appendChild(parent, 'Passport')
+        appendChild(child, 'Boarding pass')
+      },
+      { discrete: true },
+    )
+
+    editor.update(
+      () => {
+        const parent = $getRoot().getFirstChild<ListNode>()!.getFirstChild<ListItemNode>()!
+        const rows = [parent, ...$getChecklistDescendantItems(parent)]
+        $setCheckedForItems(rows, true, COMPLETED_AT)
+
+        expect(rows.every((row) => row.getChecked())).toBe(true)
+      },
+      { discrete: true },
+    )
+  })
+
+  it('completes the subtasks of a recurring row that has run out of occurrences', () => {
+    const editor = createEditor()
+    // A yearly rule anchored at the last supported year cannot roll again.
+    const exhausted = createChecklistRecurrence('yearly', '9999-08-16T09:00:00.000Z', 'UTC')!
+
+    editor.update(
+      () => {
+        const list = $createListNode('check')
+        const parent = $createListItemNode(false)
+        parent.append($createTextNode('Final'))
+        list.append(parent)
+        $getRoot().append(list)
+        $setChecklistSchedule(parent, '9999-08-16T09:00:00.000Z', exhausted)
+
+        appendChild(parent, 'Subtask')
+      },
+      { discrete: true },
+    )
+
+    editor.update(
+      () => {
+        const parent = $getRoot().getFirstChild<ListNode>()!.getFirstChild<ListItemNode>()!
+        const rows = [parent, ...$getChecklistDescendantItems(parent)]
+        $setCheckedForItems(rows, true, Date.parse('9999-08-16T10:00:00.000Z'))
+
+        // Nothing was carried, so the subtask must not be orphaned unchecked.
+        expect(rows.every((row) => row.getChecked())).toBe(true)
+        expect($getChecklistRecurrence(parent)).toBeUndefined()
+      },
+      { discrete: true },
+    )
+  })
+
+  it('lands a mixed recurring/ordinary tree on one occurrence and never compounds', () => {
+    const editor = createEditor()
+    const weekly = createChecklistRecurrence('weekly', PARENT_DUE_AT, 'UTC')!
+
+    editor.update(
+      () => {
+        const list = $createListNode('check')
+        const parent = $createListItemNode(false)
+        parent.append($createTextNode('Recurring parent'))
+        list.append(parent)
+        $getRoot().append(list)
+        $setChecklistSchedule(parent, PARENT_DUE_AT, daily)
+
+        // Ordinary middle row with a recurring row of its own beneath it.
+        const child = appendChild(parent, 'Ordinary child')
+        const grandchild = appendChild(child, 'Recurring grandchild')
+        $setChecklistSchedule(grandchild, PARENT_DUE_AT, weekly)
+      },
+      { discrete: true },
+    )
+
+    editor.update(
+      () => {
+        const parent = $getRoot().getFirstChild<ListNode>()!.getFirstChild<ListItemNode>()!
+        const rows = [parent, ...$getChecklistDescendantItems(parent)]
+        $setCheckedForItems(rows, true, COMPLETED_AT)
+
+        const [, child, grandchild] = rows
+        expect($getChecklistDueAt(parent)).toBe(NEXT_DUE_AT)
+        expect($getChecklistDueAt(child)).toBe(NEXT_DUE_AT)
+        // The grandchild keeps its own weekly cadence, moved onto the cycle.
+        expect($getChecklistDueAt(grandchild)).toBe('2026-08-23T09:00:00.000Z')
+        expect($getChecklistRecurrence(grandchild)).toEqual(weekly)
+        expect(rows.some((row) => row.getChecked())).toBe(false)
+
+        // A second bulk action advances the tree together, never apart.
+        $setCheckedForItems(rows, true, Date.parse('2026-08-17T10:00:00.000Z'))
+        expect($getChecklistDueAt(parent)).toBe('2026-08-18T09:00:00.000Z')
+        expect($getChecklistDueAt(child)).toBe('2026-08-18T09:00:00.000Z')
+        expect($getChecklistDueAt(grandchild)).toBe('2026-08-23T09:00:00.000Z')
+      },
+      { discrete: true },
+    )
   })
 
   it('walks nesting deeper than any recursive descent could and stops at the parser bound', () => {
