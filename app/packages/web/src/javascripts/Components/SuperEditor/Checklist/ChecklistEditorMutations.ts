@@ -118,19 +118,38 @@ export function $getChecklistItems(): ListItemNode[] {
   return items
 }
 
+export type ChecklistCompletionOutcome = {
+  /** The row's checkbox state or schedule actually changed. */
+  changed: boolean
+  /**
+   * The row was recurring and rolled to its next occurrence instead of being
+   * completed. Only an advance carries a subtree with it, so only an advance
+   * may stand in for completing the rows beneath it.
+   */
+  advanced: boolean
+}
+
 /**
  * Apply a checkbox state without cloning recurring rows. Completing a recurring
  * item advances the same row to its next due occurrence and leaves it open;
  * reopening an ordinary/terminal item never rewinds its schedule.
+ *
+ * A caller completing several rows at once needs to tell the two outcomes
+ * apart, so the result reports which one happened rather than leaving it to be
+ * inferred from the node afterwards.
  */
-export function $setChecklistItemChecked(item: ListItemNode, checked: boolean, now = Date.now()): boolean {
+export function $applyChecklistItemChecked(
+  item: ListItemNode,
+  checked: boolean,
+  now = Date.now(),
+): ChecklistCompletionOutcome {
   const wasChecked = Boolean(item.getChecked())
   if (!checked) {
     if (wasChecked) {
       item.setChecked(false)
-      return true
+      return { changed: true, advanced: false }
     }
-    return false
+    return { changed: false, advanced: false }
   }
 
   const dueAt = $getChecklistDueAt(item)
@@ -142,7 +161,7 @@ export function $setChecklistItemChecked(item: ListItemNode, checked: boolean, n
       if (wasChecked) {
         item.setChecked(false)
       }
-      return true
+      return { changed: true, advanced: true }
     }
     // A schedule at the supported calendar ceiling has no next occurrence.
     // Complete it normally and remove the exhausted recurrence contract.
@@ -151,9 +170,13 @@ export function $setChecklistItemChecked(item: ListItemNode, checked: boolean, n
 
   if (!wasChecked) {
     item.setChecked(true)
-    return true
+    return { changed: true, advanced: false }
   }
-  return recurrence !== undefined && dueAt !== undefined
+  return { changed: recurrence !== undefined && dueAt !== undefined, advanced: false }
+}
+
+export function $setChecklistItemChecked(item: ListItemNode, checked: boolean, now = Date.now()): boolean {
+  return $applyChecklistItemChecked(item, checked, now).changed
 }
 
 export function $toggleChecklistItemChecked(item: ListItemNode, now = Date.now()): boolean {
