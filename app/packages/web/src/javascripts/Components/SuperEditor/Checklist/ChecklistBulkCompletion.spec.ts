@@ -29,14 +29,9 @@ import {
   $setChecklistRecurrence,
   $setChecklistSchedule,
   $getChecklistDueAt,
+  $getChecklistRecurrence,
 } from '../Lexical/Nodes/ChecklistItemNode'
 import { advanceChecklistDueAt, createChecklistRecurrence } from './checklistRecurrence'
-
-/** A daily rule anchored on DAILY_DUE_AT, plus the occurrence it rolls to. */
-const DAILY_DUE_AT = '2026-08-16T09:00:00.000Z'
-const COMPLETED_AT = Date.parse('2026-08-16T10:00:00.000Z')
-const dailyRule = () => createChecklistRecurrence('daily', DAILY_DUE_AT, 'UTC')!
-const NEXT_DUE_AT = advanceChecklistDueAt(DAILY_DUE_AT, dailyRule(), COMPLETED_AT)!
 import {
   $getSelectedCheckLists,
   $getSelectedChecklistItems,
@@ -44,6 +39,12 @@ import {
   $setCheckedForAllInSelectedLists,
   $setCheckedForSelection,
 } from './ChecklistBulkCompletion'
+
+/** A daily rule anchored on DAILY_DUE_AT, plus the occurrence it rolls to. */
+const DAILY_DUE_AT = '2026-08-16T09:00:00.000Z'
+const COMPLETED_AT = Date.parse('2026-08-16T10:00:00.000Z')
+const dailyRule = () => createChecklistRecurrence('daily', DAILY_DUE_AT, 'UTC')!
+const NEXT_DUE_AT = advanceChecklistDueAt(DAILY_DUE_AT, dailyRule(), COMPLETED_AT)!
 
 const createEditor = () =>
   createHeadlessEditor({
@@ -98,6 +99,20 @@ const $caretIn = (row: ElementNode): RangeSelection => {
   selection.focus.set(text.getKey(), 1, 'text')
   return selection
 }
+
+/** Indent a subtask under `parent`: a nested check list holding one new row. */
+const $appendSubtask = (parent: ListItemNode, text: string): ListItemNode => {
+  const list = $createListNode('check')
+  const item = $createListItemNode(false)
+  item.append($createTextNode(text))
+  list.append(item)
+  parent.append(list)
+  return item
+}
+
+/** The single subtask indented under `row`. */
+const $subtaskOf = (row: ListItemNode): ListItemNode =>
+  (row.getLastChild() as ListNode).getChildren()[0] as ListItemNode
 
 const checkedStates = (list: ListNode): boolean[] =>
   list.getChildren().map((child) => Boolean((child as ListItemNode).getChecked()))
@@ -419,6 +434,129 @@ describe('checklist bulk completion — selection scoped actions', () => {
       () => {
         expect($selectionHasChecklistItems($caretIn($rows(0)[0]))).toBe(true)
         expect($selectionHasChecklistItems($caretIn($block(1)))).toBe(false)
+      },
+      { discrete: true },
+    )
+  })
+
+  it('keeps a three-level recurring tree in lockstep across repeated bulk actions', () => {
+    // The drift this guards against compounds: before the batch guard a
+    // parent/child/grandchild landed on three consecutive days, and each further
+    // bulk action pushed them a day further apart.
+    const editor = createEditor()
+    editor.update(
+      () => {
+        const outer = $createListNode('check')
+        const parent = $createListItemNode(false).append($createTextNode('parent'))
+        outer.append(parent)
+        $getRoot().append(outer)
+        $setChecklistSchedule(parent, DAILY_DUE_AT, dailyRule())
+
+        const child = $appendSubtask(parent, 'child')
+        $setChecklistSchedule(child, DAILY_DUE_AT, dailyRule())
+        const grandchild = $appendSubtask(child, 'grandchild')
+        $setChecklistSchedule(grandchild, DAILY_DUE_AT, dailyRule())
+      },
+      { discrete: true },
+    )
+
+    const dueDates = (): (string | undefined)[] => {
+      const parent = $rows(0)[0]
+      const child = $subtaskOf(parent)
+      return [$getChecklistDueAt(parent), $getChecklistDueAt(child), $getChecklistDueAt($subtaskOf(child))]
+    }
+
+    editor.update(
+      () => {
+        $setCheckedForAllInSelectedLists($caretIn($rows(0)[0]), true, COMPLETED_AT)
+        expect(dueDates()).toEqual([NEXT_DUE_AT, NEXT_DUE_AT, NEXT_DUE_AT])
+      },
+      { discrete: true },
+    )
+
+    editor.update(
+      () => {
+        // A second bulk action a day later must move the tree together again,
+        // not spread it out.
+        $setCheckedForAllInSelectedLists($caretIn($rows(0)[0]), true, Date.parse('2026-08-17T10:00:00Z'))
+        const [first, second, third] = dueDates()
+        expect(second).toBe(first)
+        expect(third).toBe(first)
+        expect(first).not.toBe(NEXT_DUE_AT)
+      },
+      { discrete: true },
+    )
+  })
+
+  it('rolls a mixed recurring / non-recurring / recurring tree onto one occurrence', () => {
+    const editor = createEditor()
+    const weekly = createChecklistRecurrence('weekly', '2026-08-16T17:00:00.000Z', 'UTC')!
+    editor.update(
+      () => {
+        const outer = $createListNode('check')
+        const parent = $createListItemNode(false).append($createTextNode('parent'))
+        outer.append(parent)
+        $getRoot().append(outer)
+        $setChecklistSchedule(parent, DAILY_DUE_AT, dailyRule())
+
+        // Middle row has no schedule at all; the leaf carries its own rule.
+        const child = $appendSubtask(parent, 'child')
+        const grandchild = $appendSubtask(child, 'grandchild')
+        $setChecklistSchedule(grandchild, '2026-08-16T17:00:00.000Z', weekly)
+      },
+      { discrete: true },
+    )
+
+    editor.update(
+      () => {
+        $setCheckedForAllInSelectedLists($caretIn($rows(0)[0]), true, COMPLETED_AT)
+        const parent = $rows(0)[0]
+        const child = $subtaskOf(parent)
+        const grandchild = $subtaskOf(child)
+
+        expect($getChecklistDueAt(parent)).toBe(NEXT_DUE_AT)
+        // The unscheduled middle row becomes due with the occurrence it belongs to.
+        expect($getChecklistDueAt(child)).toBe(NEXT_DUE_AT)
+        // The leaf keeps its OWN rule; only its deadline moves onto the new cycle.
+        expect($getChecklistRecurrence(grandchild)).toEqual(weekly)
+        expect($getChecklistDueAt(grandchild)).toBe('2026-08-23T17:00:00.000Z')
+        // A rolled occurrence stays open all the way down.
+        for (const row of [parent, child, grandchild]) {
+          expect(row.getChecked()).toBeFalsy()
+        }
+      },
+      { discrete: true },
+    )
+  })
+
+  it('still completes the subtasks of a recurring row that cannot roll any further', () => {
+    // A schedule at the supported calendar ceiling has no next occurrence, so
+    // the row COMPLETES rather than advancing. It therefore carries nothing with
+    // it, and its subtasks must be completed on their own — the case a
+    // "skip descendants of anything recurring" guard would silently leave open.
+    const editor = createEditor()
+    const atCeiling = '9999-06-01T09:00:00.000Z'
+    const yearly = createChecklistRecurrence('yearly', atCeiling, 'UTC')!
+    editor.update(
+      () => {
+        const outer = $createListNode('check')
+        const parent = $createListItemNode(false).append($createTextNode('parent'))
+        outer.append(parent)
+        $getRoot().append(outer)
+        $setChecklistSchedule(parent, atCeiling, yearly)
+        $appendSubtask(parent, 'child')
+      },
+      { discrete: true },
+    )
+
+    editor.update(
+      () => {
+        expect($setCheckedForAllInSelectedLists($caretIn($rows(0)[0]), true, Date.parse('9999-06-01T10:00:00Z'))).toBe(
+          2,
+        )
+        const parent = $rows(0)[0]
+        expect(parent.getChecked()).toBe(true)
+        expect($subtaskOf(parent).getChecked()).toBe(true)
       },
       { discrete: true },
     )
