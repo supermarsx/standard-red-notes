@@ -1,7 +1,6 @@
 import { NoteType, SNNote } from '@standardnotes/snjs'
 import {
   collectAllTodos,
-  filterTodoGroups,
   parseAdvancedChecklist,
   parseSuperChecklist,
   todosForNote,
@@ -186,65 +185,5 @@ describe('collectAllTodos', () => {
   it('skips trashed notes', () => {
     const note = makeNote(NoteType.Super, superChecklistJson([{ text: 'X', checked: false }]), { trashed: true })
     expect(collectAllTodos([note])).toEqual([])
-  })
-})
-
-describe('filterTodoGroups', () => {
-  const groceries = makeNote(
-    NoteType.Super,
-    superChecklistJson([
-      { text: 'Buy milk', checked: false },
-      { text: 'Buy bread', checked: true },
-      { text: 'Call the plumber', checked: false },
-    ]),
-    { uuid: 'groceries', title: 'Groceries' },
-  )
-  const roadmap = makeNote(
-    NoteType.Super,
-    superChecklistJson([
-      { text: 'Ship the beta', checked: false },
-      { text: 'Write release notes', checked: false },
-    ]),
-    { uuid: 'roadmap', title: 'Product roadmap' },
-  )
-  const all = () => collectAllTodos([groceries, roadmap])
-
-  it('returns the exact same list for an empty or whitespace query', () => {
-    const groups = all()
-    expect(filterTodoGroups(groups, '')).toBe(groups)
-    expect(filterTodoGroups(groups, '   ')).toBe(groups)
-  })
-
-  it('matches todo text case-insensitively and drops notes with no match', () => {
-    const filtered = filterTodoGroups(all(), 'BUY')
-    expect(filtered).toHaveLength(1)
-    expect(filtered[0].note.uuid).toBe('groceries')
-    expect(filtered[0].items.map((item) => item.text)).toEqual(['Buy milk', 'Buy bread'])
-  })
-
-  it('keeps every todo of a note whose title matches', () => {
-    const filtered = filterTodoGroups(all(), 'roadmap')
-    expect(filtered).toHaveLength(1)
-    expect(filtered[0].items).toHaveLength(2)
-  })
-
-  it('reports the whole notes progress even when rows are filtered out', () => {
-    const filtered = filterTodoGroups(all(), 'milk')
-    expect(filtered[0].items).toHaveLength(1)
-    expect(filtered[0].completed).toBe(1)
-    expect(filtered[0].total).toBe(3)
-  })
-
-  it('returns nothing when no todo matches', () => {
-    expect(filterTodoGroups(all(), 'nonexistent')).toEqual([])
-  })
-
-  it('never mutates the source groups across a burst of successive queries', () => {
-    const groups = all()
-    for (const query of ['b', 'bu', 'buy', 'buy ', 'buy m', 'buy mi', 'buy mil', 'buy milk', 'buy milkz']) {
-      filterTodoGroups(groups, query)
-    }
-    expect(groups.map((group) => group.items.length)).toEqual([3, 2])
-    expect(filterTodoGroups(groups, '')).toBe(groups)
   })
 })

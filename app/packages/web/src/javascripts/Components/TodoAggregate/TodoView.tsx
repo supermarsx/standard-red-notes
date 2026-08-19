@@ -5,7 +5,23 @@ import { classNames } from '@standardnotes/utils'
 import { WebApplication } from '@/Application/WebApplication'
 import Icon from '@/Components/Icon/Icon'
 import { AppPaneId } from '../Panes/AppPaneMetadata'
-import { filterTodoGroups, NoteTodos, TodoItem, totalTodoProgress } from './allTodos'
+import { NoteTodos, TodoItem, totalTodoProgress } from './allTodos'
+import Popover from '../Popover/Popover'
+import Table from '../Table/Table'
+import { useTable } from '../Table/useTable'
+import type { TableColumn } from '../Table/CommonTypes'
+import TodoFilterBar from './TodoFilterBar'
+import {
+  collectTodoTagOptions,
+  DEFAULT_TODO_FILTERS,
+  normalizeTodoFilters,
+  TODO_FILTERS_STORAGE_KEY,
+  todoRowsFromGroups,
+  visibleTodoRows,
+  type TodoFilters,
+  type TodoRow,
+  type TodoTag,
+} from './todoFilters'
 import { applyTodoPatch, TodoActionResult } from './todoActions'
 import { type SuperChecklistTodoPatch, type SuperChecklistTodoTarget } from './superChecklistDocument'
 import { pruneTodoSelection, selectableTodoKey, todoSelectionKey } from './todoSelection'
@@ -259,13 +275,22 @@ export function TodoScheduleEditor({ item, target, busy, onOpen, onSave }: TodoS
       >
         {opening ? 'Preparing schedule…' : item.dueAt ? 'Edit schedule' : 'Add schedule'}
       </button>
-      {open && (
-        <div
-          className="border-border bg-contrast mt-1 flex max-w-xl flex-wrap items-end gap-2 rounded border p-2"
-          role="dialog"
-          aria-modal="false"
-          aria-label={`Schedule for ${item.text}`}
-        >
+      {/* A popover, not an inline panel: the row lives in a table cell that
+          clips its overflow, and the popover portals out of it. */}
+      <Popover
+        open={open}
+        anchorElement={triggerRef}
+        title={`Schedule for ${item.text}`}
+        side="bottom"
+        align="start"
+        togglePopover={() => {
+          resetDraft()
+          openTarget.current = undefined
+          setOpen(false)
+        }}
+        className="p-2"
+      >
+        <div className="flex max-w-xl flex-wrap items-end gap-2" role="group" aria-label={`Schedule for ${item.text}`}>
           <label className="text-passive-1 flex flex-col gap-0.5 text-xs">
             Due
             <input
@@ -380,7 +405,7 @@ export function TodoScheduleEditor({ item, target, busy, onOpen, onSave }: TodoS
             </span>
           )}
         </div>
-      )}
+      </Popover>
     </div>
   )
 }
@@ -413,7 +438,19 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
     generation: number
     groups: NoteTodos[]
   }>(() => ({ application, generation: 0, groups: readGroups() }))
-  const [query, setQuery] = useState('')
+  // Filters are read once per mounted view and written back on every change, so
+  // they survive navigating away and reloading. The store is device-local (the
+  // same app-storage K/V `searchIndexSettings` uses), so filters do NOT follow
+  // the user to another machine.
+  const readPersistedFilters = useCallback((): TodoFilters => {
+    try {
+      return normalizeTodoFilters(application.getValue<unknown>(TODO_FILTERS_STORAGE_KEY))
+    } catch {
+      return DEFAULT_TODO_FILTERS
+    }
+  }, [application])
+
+  const [filters, setFiltersState] = useState<TodoFilters>(readPersistedFilters)
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(() => new Set())
   const [busyKeys, setBusyKeys] = useState<Set<string>>(() => new Set())
   const [bulkBusy, setBulkBusy] = useState(false)
@@ -719,13 +756,14 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
     ownerWaits.current.clear()
     actionQueue.current = Promise.resolve()
     lifetimeRef.current.dataReady = true
-    setQuery('')
+    // A different signed-in account has different stored filters.
+    setFiltersState(readPersistedFilters())
     setSelectedKeys(new Set())
     setBusyKeys(new Set())
     setBulkBusy(false)
     setActionError(undefined)
     recompute()
-  }, [application, recompute])
+  }, [application, readPersistedFilters, recompute])
 
   // Throttled recompute from local item state — no server polling.
   useEffect(() => {
@@ -856,11 +894,38 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
 
   const total = useMemo(() => totalTodoProgress(groups), [groups])
 
-  // Instant search: filtering is a pure, memoized pass over already-loaded
-  // groups (no debounce, no index), exactly like Bookmarks and Templates.
-  // Selection and bulk actions stay bound to the UNFILTERED groups so a query
+  const setFilters = useCallback(
+    (next: TodoFilters) => {
+      setFiltersState(next)
+      try {
+        application.setValue(TODO_FILTERS_STORAGE_KEY, next)
+      } catch {
+        // Storage can be unavailable (e.g. before launch); the in-memory
+        // filters still apply for this session rather than the view breaking.
+      }
+    },
+    [application],
+  )
+
+  /**
+   * One flat row per todo, carrying its source note's tags — the taxonomy the
+   * folder/tag filter uses. A todo has no tags of its own.
+   */
+  const rows = useMemo(
+    () =>
+      todoRowsFromGroups(groups, (note): TodoTag[] =>
+        application.items.getSortedTagsForItem(note).map((tag) => ({ uuid: tag.uuid, title: tag.title })),
+      ),
+    [application, groups],
+  )
+
+  const tagOptions = useMemo(() => collectTodoTagOptions(rows), [rows])
+
+  // Instant: filtering and sorting are a pure, memoized pass over already-loaded
+  // rows (no debounce, no index), like Bookmarks and Templates. Selection and
+  // bulk actions stay bound to the UNFILTERED groups, so narrowing the view
   // never silently drops what the user already selected.
-  const visibleGroups = useMemo(() => filterTodoGroups(groups, query), [groups, query])
+  const visibleRows = useMemo(() => visibleTodoRows(rows, filters, now), [filters, now, rows])
 
   const selectedTodos = useMemo(() => {
     const selected: ManagedTodo[] = []
@@ -1124,6 +1189,149 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
     [application, bulkBusy, enqueueNoteAction, recompute, runThroughOwner, selectedTodos],
   )
 
+  const columns: TableColumn<TodoRow>[] = useMemo(() => {
+    const busyFor = (row: TodoRow) =>
+      bulkBusy || busyKeys.has(selectableTodoKey(row.group, row.item) ?? `${row.group.note.uuid}:${row.item.id}`)
+
+    return [
+      {
+        name: 'Todo',
+        cell: (row) => {
+          const { group, item } = row
+          const manageable = canManageGroup(application, group)
+          const selectionKey = selectableTodoKey(group, item)
+          const busy = busyFor(row)
+          return (
+            <div className="flex min-w-0 items-center gap-2">
+              {manageable ? (
+                <input
+                  type="checkbox"
+                  className="flex-shrink-0"
+                  checked={selectionKey ? selectedKeys.has(selectionKey) : false}
+                  disabled={busy}
+                  aria-label={`Select ${item.text}`}
+                  onChange={(event) => {
+                    const checked = event.currentTarget.checked
+                    void toggleSelection(group, item, checked)
+                  }}
+                />
+              ) : (
+                <span className="w-3.5 flex-shrink-0" />
+              )}
+              {manageable ? (
+                <button
+                  type="button"
+                  className="flex-shrink-0 rounded focus-visible:outline focus-visible:outline-2"
+                  disabled={busy}
+                  aria-label={item.checked ? `Reopen ${item.text}` : `Mark ${item.text} complete`}
+                  onClick={() => void applyOne(group, item, { checked: !item.checked })}
+                >
+                  <Icon
+                    type={item.checked ? 'check-circle-filled' : 'check-circle'}
+                    size="small"
+                    className={item.checked ? 'text-success' : 'text-neutral'}
+                  />
+                </button>
+              ) : (
+                <Icon
+                  type={item.checked ? 'check-circle-filled' : 'check-circle'}
+                  size="small"
+                  className={classNames('flex-shrink-0', item.checked ? 'text-success' : 'text-neutral')}
+                />
+              )}
+              <span
+                className={classNames('truncate text-sm', item.checked ? 'text-passive-1 line-through' : 'text-text')}
+                title={item.text}
+              >
+                {item.text}
+              </span>
+            </div>
+          )
+        },
+      },
+      {
+        name: 'Due',
+        cell: (row) => {
+          const { group, item } = row
+          const manageable = canManageGroup(application, group)
+          const due = item.dueAt ? formatChecklistDue(item.dueAt, item.checked, now) : undefined
+          const recurrence = item.recurrence ? checklistRecurrenceSummary(item.recurrence, true) : undefined
+          const scheduleTarget = manageable ? todoTarget(item) : undefined
+          return (
+            <div className="flex min-w-0 flex-col gap-0.5">
+              {due ? (
+                <span
+                  className={classNames(
+                    'truncate text-xs tabular-nums',
+                    due.state === 'overdue' ? 'text-danger' : 'text-passive-1',
+                  )}
+                  title={due.accessibleLabel}
+                >
+                  {due.dateLabel} · {due.relativeLabel}
+                  {recurrence ? ` · ${recurrence}` : ''}
+                </span>
+              ) : (
+                <span className="text-passive-2 text-xs">No due date</span>
+              )}
+              {scheduleTarget && (
+                <TodoScheduleEditor
+                  item={item}
+                  target={scheduleTarget}
+                  busy={busyFor(row)}
+                  onOpen={() => prepareSchedule(group, item)}
+                  onSave={(patch, expectedTarget) => applyOne(group, item, patch, expectedTarget)}
+                />
+              )}
+            </div>
+          )
+        },
+      },
+      {
+        name: 'Note',
+        cell: (row) => (
+          <div className="flex min-w-0 flex-col">
+            <button
+              type="button"
+              className="hover:text-info min-w-0 truncate text-left text-sm"
+              title="Open source note"
+              onClick={() => openNote(row.group.note.uuid)}
+            >
+              {row.noteTitle}
+            </button>
+            <span className="text-passive-1 text-[0.625rem] tracking-wide uppercase">
+              {SOURCE_LABEL[row.group.source]}
+            </span>
+          </div>
+        ),
+      },
+      {
+        name: 'Folders & tags',
+        cell: (row) =>
+          row.tags.length === 0 ? (
+            <span className="text-passive-2 text-xs">—</span>
+          ) : (
+            <div className="flex min-w-0 flex-wrap gap-1">
+              {row.tags.map((tag) => (
+                <span
+                  key={tag.uuid}
+                  className="border-border text-passive-1 truncate rounded border px-1.5 py-0.5 text-xs"
+                >
+                  {tag.title}
+                </span>
+              ))}
+            </div>
+          ),
+      },
+    ]
+  }, [application, applyOne, bulkBusy, busyKeys, now, openNote, prepareSchedule, selectedKeys, toggleSelection])
+
+  const table = useTable<TodoRow>({
+    data: visibleRows,
+    columns,
+    getRowId: (row) => row.id,
+    onRowActivate: (row) => openNote(row.group.note.uuid),
+  })
+
   return (
     <div
       id={id}
@@ -1145,23 +1353,13 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
         </button>
       </div>
 
-      <div className="border-border flex items-center gap-2 border-b px-4 py-2">
-        <div className="relative flex min-w-[160px] flex-1 items-center">
-          <Icon type="search" size="small" className="text-neutral pointer-events-none absolute left-2" />
-          <input
-            className="border-border bg-default text-text focus:border-info w-full rounded border px-2 py-1 pl-7 text-sm focus:outline-none"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search todos"
-            aria-label="Search todos"
-          />
-        </div>
-        {query && (
-          <button className="text-neutral hover:bg-contrast rounded px-2 py-1 text-xs" onClick={() => setQuery('')}>
-            Clear
-          </button>
-        )}
-      </div>
+      <TodoFilterBar
+        filters={filters}
+        tagOptions={tagOptions}
+        visibleCount={visibleRows.length}
+        totalCount={rows.length}
+        onChange={setFilters}
+      />
 
       {selectedTodos.length > 0 && (
         <div className="border-border bg-contrast flex flex-wrap items-center gap-2 border-b px-4 py-2">
@@ -1207,140 +1405,29 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
         </div>
       )}
 
-      <div className="flex-grow overflow-y-auto p-4">
-        {groups.length === 0 ? (
+      <div className="flex min-h-0 flex-grow flex-col">
+        {rows.length === 0 ? (
           <div className="text-passive-1 px-4 py-10 text-center text-sm">
             No todos yet. Add a checklist in a Super note or an Advanced Checklist note.
           </div>
-        ) : visibleGroups.length === 0 ? (
-          <div className="text-passive-1 px-4 py-10 text-center text-sm">No todos match your search.</div>
-        ) : (
-          <div className="flex flex-col gap-4">
-            {visibleGroups.map((group) => {
-              const manageable = canManageGroup(application, group)
-              return (
-                <section
-                  key={group.note.uuid}
-                  className="border-border bg-default overflow-hidden rounded-md border"
-                  aria-label={group.note.title?.trim() || 'Untitled'}
-                >
-                  <div className="border-border bg-contrast flex items-center justify-between gap-2 border-b px-4 py-2">
-                    <button
-                      className="hover:text-info flex min-w-0 flex-col text-left"
-                      onClick={() => openNote(group.note.uuid)}
-                      title="Open source note"
-                    >
-                      <span className="text-text truncate text-sm font-bold">
-                        {group.note.title?.trim() || 'Untitled'}
-                      </span>
-                      <span className="text-passive-1 text-[0.625rem] tracking-wide uppercase">
-                        {SOURCE_LABEL[group.source]}
-                      </span>
-                    </button>
-                    <ProgressBar completed={group.completed} total={group.total} />
-                  </div>
-                  <ul className="divide-border divide-y px-4">
-                    {group.items.map((item) => {
-                      const selectionKey = selectableTodoKey(group, item)
-                      const busyKey = selectionKey ?? `${group.note.uuid}:${item.id}`
-                      const busy = bulkBusy || busyKeys.has(busyKey)
-                      const due = item.dueAt ? formatChecklistDue(item.dueAt, item.checked, now) : undefined
-                      const recurrence = item.recurrence ? checklistRecurrenceSummary(item.recurrence, true) : undefined
-                      const scheduleTarget = manageable ? todoTarget(item) : undefined
-                      return (
-                        <li key={item.locator ?? item.id} className="flex items-start gap-2 py-2">
-                          {manageable ? (
-                            <input
-                              type="checkbox"
-                              className="mt-1 flex-shrink-0"
-                              checked={selectionKey ? selectedKeys.has(selectionKey) : false}
-                              disabled={busy}
-                              aria-label={`Select ${item.text}`}
-                              onChange={(event) => void toggleSelection(group, item, event.currentTarget.checked)}
-                            />
-                          ) : (
-                            <span className="w-3.5 flex-shrink-0" />
-                          )}
-                          {manageable ? (
-                            <button
-                              type="button"
-                              className="mt-0.5 flex-shrink-0 rounded focus-visible:outline focus-visible:outline-2"
-                              disabled={busy}
-                              aria-label={item.checked ? `Reopen ${item.text}` : `Mark ${item.text} complete`}
-                              onClick={() => void applyOne(group, item, { checked: !item.checked })}
-                            >
-                              <Icon
-                                type={item.checked ? 'check-circle-filled' : 'check-circle'}
-                                size="small"
-                                className={item.checked ? 'text-success' : 'text-neutral'}
-                              />
-                            </button>
-                          ) : (
-                            <Icon
-                              type={item.checked ? 'check-circle-filled' : 'check-circle'}
-                              size="small"
-                              className={classNames(
-                                'mt-0.5 flex-shrink-0',
-                                item.checked ? 'text-success' : 'text-neutral',
-                              )}
-                            />
-                          )}
-                          <div className="min-w-0 flex-grow">
-                            <div
-                              className={classNames(
-                                'text-sm',
-                                item.checked ? 'text-passive-1 line-through' : 'text-text',
-                              )}
-                            >
-                              {item.text}
-                            </div>
-                            {due && (
-                              <div
-                                className={classNames(
-                                  'mt-0.5 text-xs tabular-nums',
-                                  due.state === 'overdue' ? 'text-danger' : 'text-passive-1',
-                                )}
-                                title={due.accessibleLabel}
-                              >
-                                Due {due.dateLabel} · {due.relativeLabel}
-                                {recurrence ? ` · ${recurrence}` : ''}
-                              </div>
-                            )}
-                            {manageable && scheduleTarget && (
-                              <TodoScheduleEditor
-                                item={item}
-                                target={scheduleTarget}
-                                busy={busy}
-                                onOpen={() => prepareSchedule(group, item)}
-                                onSave={(patch, expectedTarget) => applyOne(group, item, patch, expectedTarget)}
-                              />
-                            )}
-                            {!manageable && group.source === 'advanced-checklist' && (
-                              <span className="text-passive-1 mt-1 block text-xs">
-                                Managed by the Advanced Checklist editor
-                              </span>
-                            )}
-                            {!manageable && group.source === 'super' && (
-                              <span className="text-passive-1 mt-1 block text-xs">This todo is read-only</span>
-                            )}
-                          </div>
-                          <button
-                            type="button"
-                            className="text-passive-1 hover:text-info flex-shrink-0 rounded p-1"
-                            aria-label={`Open source note for ${item.text}`}
-                            title="Open source note"
-                            onClick={() => openNote(group.note.uuid)}
-                          >
-                            <Icon type="open-in" size="small" />
-                          </button>
-                        </li>
-                      )
-                    })}
-                  </ul>
-                </section>
-              )
-            })}
+        ) : visibleRows.length === 0 ? (
+          <div className="text-passive-1 flex flex-col items-center gap-2 px-4 py-10 text-center text-sm">
+            <span>No todos match your filters.</span>
+            <span className="text-passive-2 text-xs">
+              {rows.length} {rows.length === 1 ? 'todo is' : 'todos are'} hidden by the filter bar above.
+            </span>
+            <button
+              type="button"
+              className="border-border hover:bg-contrast rounded border px-2 py-1 text-xs"
+              onClick={() =>
+                setFilters({ ...DEFAULT_TODO_FILTERS, sortBy: filters.sortBy, sortReverse: filters.sortReverse })
+              }
+            >
+              Clear filters
+            </button>
           </div>
+        ) : (
+          <Table table={table} />
         )}
       </div>
       {children}
