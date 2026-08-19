@@ -1,0 +1,15 @@
+{
+  // Typecheck-only project covering everything tsconfig.json leaves out: the test
+  // suite and the vitest config. Vitest never typechecks, and tsconfig.json
+  // excludes `test`, so without this project a type error under test/ is invisible
+  // to `yarn build`, `yarn typecheck` and `yarn test` alike.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "declaration": false,
+    "rootDir": ".",
+    "outDir": null
+  },
+  "include": ["src/**/*", "test/**/*", "vitest.config.ts"],
+  "exclude": ["dist", "node_modules"]
+}

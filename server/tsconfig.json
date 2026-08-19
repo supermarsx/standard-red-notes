@@ -25,7 +25,12 @@
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
   },
-  "exclude": ["**/*.spec.ts", "dist", "test-setup.ts"],
+  // This project doubles as the solution file and as a catch-all compile of every
+  // source the referenced projects do not own. websocket-gateway is deliberately
+  // out: it is a standalone NodeNext/ESM project, so the catch-all was checking it
+  // under the wrong module settings and — having no outDir — emitting .js/.d.ts
+  // next to its sources. Its own tsconfig.json + tsconfig.test.json cover it fully.
+  "exclude": ["**/*.spec.ts", "dist", "test-setup.ts", "packages/websocket-gateway"],
   "references": [
     {
       "path": "./packages/analytics"
