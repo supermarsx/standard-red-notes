@@ -9,6 +9,7 @@ import { InviteEventOutboxRepositoryInterface } from './InviteEventOutboxReposit
 describe('InviteEventOutboxDispatcher lifecycle', () => {
   let repository: jest.Mocked<InviteEventOutboxRepositoryInterface>
   let publisher: DomainEventPublisherInterface
+  let logger: { error: jest.Mock; warn: jest.Mock; info: jest.Mock; debug: jest.Mock }
 
   const claimed = (uuid: string) => ({
     uuid,
@@ -33,6 +34,7 @@ describe('InviteEventOutboxDispatcher lifecycle', () => {
       deletePublishedBefore: jest.fn(),
     } as unknown as jest.Mocked<InviteEventOutboxRepositoryInterface>
     publisher = { publish: jest.fn() }
+    logger = { error: jest.fn(), warn: jest.fn(), info: jest.fn(), debug: jest.fn() }
   })
 
   afterEach(() => {
@@ -146,6 +148,115 @@ describe('InviteEventOutboxDispatcher lifecycle', () => {
 
     expect(handles.length).toBeGreaterThan(1)
     expect(handles.filter((handle) => handle.hasRef())).toEqual([])
+  })
+
+  // A dropped table or a MySQL blip used to reject drain(), and dispatch()'s bare
+  // `void drained.finally(...)` let that reach the process-level unhandledRejection
+  // handler in bin/server.ts, which exits(1). Re-armed every second, one transient
+  // fault crash-looped a healthy auth process.
+  describe('repository failures', () => {
+    const dispatcherWithLogger = (options: Record<string, unknown> = {}) =>
+      new InviteEventOutboxDispatcher(repository, publisher, {
+        logger: logger as unknown as never,
+        ...options,
+      })
+
+    it('does not produce an unhandled rejection when the repository throws in the poller', async () => {
+      jest.useRealTimers()
+      const unhandled: unknown[] = []
+      const captureUnhandled = (reason: unknown): void => {
+        unhandled.push(reason)
+      }
+      // Jest installs its own handler; capture directly so a real rejection is visible.
+      process.on('unhandledRejection', captureUnhandled)
+      repository.claimNext.mockRejectedValue(new Error('no such table: invite_event_outbox'))
+
+      const dispatcher = dispatcherWithLogger()
+      dispatcher.start(5)
+      await new Promise((resolve) => setTimeout(resolve, 60))
+      await dispatcher.stop()
+      process.off('unhandledRejection', captureUnhandled)
+
+      expect(unhandled).toEqual([])
+      expect(logger.error).toHaveBeenCalled()
+      expect(logger.error.mock.calls[0][0]).toContain('Invite event outbox dispatch pass failed')
+    })
+
+    it('logs and ends the pass instead of rejecting when claimNext fails', async () => {
+      repository.claimNext.mockRejectedValueOnce(new Error('lock wait timeout'))
+      const dispatcher = dispatcherWithLogger()
+
+      await expect(dispatcher.drain()).resolves.toEqual({ published: 0, failed: 0, retried: 0 })
+      expect(logger.error).toHaveBeenCalledTimes(1)
+    })
+
+    // markPublished sits inside the publish try/catch, so its failure is already
+    // absorbed as a publish failure and the record is released for retry. The calls
+    // that genuinely escaped are claimNext and the release/fail bookkeeping itself.
+    it('treats a markPublished failure as a publish failure and releases for retry', async () => {
+      repository.claimNext.mockResolvedValueOnce(claimed('first')).mockResolvedValue(null)
+      repository.markPublished.mockRejectedValueOnce(new Error('connection reset'))
+      const dispatcher = dispatcherWithLogger()
+
+      await expect(dispatcher.drain()).resolves.toEqual({ published: 0, failed: 0, retried: 1 })
+      expect(publisher.publish).toHaveBeenCalledTimes(1)
+      expect(repository.releaseForRetry).toHaveBeenCalledTimes(1)
+      expect(logger.error).not.toHaveBeenCalled()
+    })
+
+    it('logs and ends the pass when the retry bookkeeping itself fails', async () => {
+      repository.claimNext.mockResolvedValueOnce(claimed('first')).mockResolvedValue(null)
+      publisher.publish = jest.fn().mockRejectedValue(new Error('broker unavailable'))
+      repository.releaseForRetry.mockRejectedValueOnce(new Error('deadlock found when trying to get lock'))
+      const dispatcher = dispatcherWithLogger()
+
+      await expect(dispatcher.drain()).resolves.toEqual({ published: 0, failed: 0, retried: 0 })
+      expect(logger.error).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not log or count a publish failure as a repository failure', async () => {
+      repository.claimNext.mockResolvedValueOnce(claimed('first')).mockResolvedValue(null)
+      publisher.publish = jest.fn().mockRejectedValue(new Error('broker unavailable'))
+      const dispatcher = dispatcherWithLogger()
+
+      await expect(dispatcher.drain()).resolves.toEqual({ published: 0, failed: 0, retried: 1 })
+      expect(repository.releaseForRetry).toHaveBeenCalledTimes(1)
+      expect(logger.error).not.toHaveBeenCalled()
+    })
+
+    it('backs off exponentially while failing and returns to cadence once healthy', async () => {
+      repository.claimNext.mockRejectedValue(new Error('down'))
+      const dispatcher = dispatcherWithLogger({ pollBackoffMaximumMilliseconds: 400 })
+
+      dispatcher.start(50)
+      jest.advanceTimersByTime(0)
+      await flush()
+      // Failure 1 -> 100ms, failure 2 -> 200ms, then capped at 400ms.
+      const expectedDelays = [100, 200, 400, 400]
+      for (let step = 0; step < expectedDelays.length; step++) {
+        expect(jest.getTimerCount()).toBe(1)
+        jest.advanceTimersByTime(expectedDelays[step] - 1)
+        await flush()
+        // Still parked one tick short of the backoff: no new poll yet.
+        expect(repository.claimNext).toHaveBeenCalledTimes(step + 1)
+        jest.advanceTimersByTime(1)
+        await flush()
+        expect(repository.claimNext).toHaveBeenCalledTimes(step + 2)
+      }
+
+      repository.claimNext.mockResolvedValue(null)
+      jest.advanceTimersByTime(400)
+      await flush()
+      // A clean pass clears the backoff, so the next poll is back on cadence.
+      jest.advanceTimersByTime(49)
+      await flush()
+      const beforeCadence = repository.claimNext.mock.calls.length
+      jest.advanceTimersByTime(1)
+      await flush()
+      expect(repository.claimNext.mock.calls.length).toBe(beforeCadence + 1)
+
+      await dispatcher.stop()
+    })
   })
 
   it('ignores wake() after stop but resumes on a fresh start', async () => {

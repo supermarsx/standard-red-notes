@@ -1081,6 +1081,7 @@ export class ContainerConfigLoader {
         new InviteEventOutboxDispatcher(
           container.get<InviteEventOutboxRepositoryInterface>(TYPES.Auth_InviteEventOutboxRepository),
           container.get<DomainEventPublisherInterface>(TYPES.Auth_RawDomainEventPublisher),
+          { logger: container.get<winston.Logger>(TYPES.Auth_Logger) },
         ),
       )
     container

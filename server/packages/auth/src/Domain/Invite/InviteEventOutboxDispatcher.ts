@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto'
 
 import { DomainEventPublisherInterface } from '@standardnotes/domain-events'
+import { Logger } from 'winston'
 
+import { safeErrorLogMetadata } from '../Logging/SafeLog'
 import { InviteEventOutboxRepositoryInterface } from './InviteEventOutboxRepositoryInterface'
 
 export type InviteEventOutboxDispatcherOptions = {
@@ -9,7 +11,10 @@ export type InviteEventOutboxDispatcherOptions = {
   leaseMilliseconds?: number
   retryBaseMilliseconds?: number
   retryMaximumMilliseconds?: number
+  /** Ceiling for the backoff applied after consecutive repository failures. */
+  pollBackoffMaximumMilliseconds?: number
   clock?: () => number
+  logger?: Logger
 }
 
 export class InviteEventOutboxDispatcher {
@@ -17,7 +22,10 @@ export class InviteEventOutboxDispatcher {
   private readonly leaseMilliseconds: number
   private readonly retryBaseMilliseconds: number
   private readonly retryMaximumMilliseconds: number
+  private readonly pollBackoffMaximumMilliseconds: number
   private readonly clock: () => number
+  private readonly logger: Logger | undefined
+  private consecutiveFailures = 0
   private running = false
   private stopped = false
   private timer: ReturnType<typeof setTimeout> | undefined
@@ -33,7 +41,9 @@ export class InviteEventOutboxDispatcher {
     this.leaseMilliseconds = options.leaseMilliseconds ?? 30_000
     this.retryBaseMilliseconds = options.retryBaseMilliseconds ?? 250
     this.retryMaximumMilliseconds = options.retryMaximumMilliseconds ?? 60_000
+    this.pollBackoffMaximumMilliseconds = options.pollBackoffMaximumMilliseconds ?? 30_000
     this.clock = options.clock ?? Date.now
+    this.logger = options.logger
   }
 
   start(maintenanceInterval = 1_000): void {
@@ -74,45 +84,79 @@ export class InviteEventOutboxDispatcher {
     this.timer.unref?.()
   }
 
+  /**
+   * Publishes claimable records until the outbox is empty or `maximumRecords` is
+   * reached.
+   *
+   * Repository failures end the pass rather than escaping. The dispatcher is a
+   * steady-state poller on a live server: an unhandled rejection here reaches the
+   * process-level `unhandledRejection` handler in bin/server.ts and bin/worker.ts,
+   * which exits the process. Re-armed every second, that turns any transient
+   * database fault -- deadlock, lock timeout, replica failover, dropped connection
+   * -- into a crash-looping auth outage. It also kills a worker that merely started
+   * before the server had run migrations, since worker mode starts this poller but
+   * never migrates.
+   *
+   * So the pass logs and gives up its turn, and `schedule()` retries with a backoff.
+   * Nothing is swallowed silently; every failure is logged. Deliberately no
+   * fail-fast branch: a missing table is exactly the un-migrated-worker case that
+   * must back off rather than die, so it is not distinguishable here from a
+   * transient fault in a way worth acting on.
+   */
   async drain(maximumRecords = 100): Promise<{ published: number; failed: number; retried: number }> {
     if (this.running) {
       return { published: 0, failed: 0, retried: 0 }
     }
     this.running = true
     const totals = { published: 0, failed: 0, retried: 0 }
+    let failed = false
     try {
       for (let index = 0; index < maximumRecords; index++) {
-        const now = this.clock()
-        const claimed = await this.repository.claimNext(
-          now,
-          now - this.leaseMilliseconds,
-          randomUUID(),
-          this.maximumAttempts,
-        )
-        if (!claimed) {
+        try {
+          const now = this.clock()
+          const claimed = await this.repository.claimNext(
+            now,
+            now - this.leaseMilliseconds,
+            randomUUID(),
+            this.maximumAttempts,
+          )
+          if (!claimed) {
+            break
+          }
+          try {
+            await this.publisher.publish(claimed.event)
+            await this.repository.markPublished(claimed.uuid, claimed.lockToken, this.clock())
+            totals.published++
+          } catch (error) {
+            const attemptedAt = this.clock()
+            const errorCode = redactedErrorCode(error)
+            if (claimed.attempts >= this.maximumAttempts) {
+              await this.repository.markFailed(claimed.uuid, claimed.lockToken, errorCode, attemptedAt)
+              totals.failed++
+            } else {
+              await this.repository.releaseForRetry(
+                claimed.uuid,
+                claimed.lockToken,
+                attemptedAt + this.retryDelay(claimed.attempts),
+                errorCode,
+                attemptedAt,
+              )
+              totals.retried++
+            }
+          }
+        } catch (error) {
+          // The record stays claimed; its lease expires and another pass reclaims it.
+          failed = true
+          this.consecutiveFailures++
+          this.logger?.error(
+            'Invite event outbox dispatch pass failed; backing off and retrying.',
+            safeErrorLogMetadata(error),
+          )
           break
         }
-        try {
-          await this.publisher.publish(claimed.event)
-          await this.repository.markPublished(claimed.uuid, claimed.lockToken, this.clock())
-          totals.published++
-        } catch (error) {
-          const attemptedAt = this.clock()
-          const errorCode = redactedErrorCode(error)
-          if (claimed.attempts >= this.maximumAttempts) {
-            await this.repository.markFailed(claimed.uuid, claimed.lockToken, errorCode, attemptedAt)
-            totals.failed++
-          } else {
-            await this.repository.releaseForRetry(
-              claimed.uuid,
-              claimed.lockToken,
-              attemptedAt + this.retryDelay(claimed.attempts),
-              errorCode,
-              attemptedAt,
-            )
-            totals.retried++
-          }
-        }
+      }
+      if (!failed) {
+        this.consecutiveFailures = 0
       }
       return totals
     } finally {
@@ -135,22 +179,37 @@ export class InviteEventOutboxDispatcher {
     this.timer = setTimeout(() => {
       this.timer = undefined
       this.dispatch()
-    }, this.maintenanceInterval)
+    }, this.nextPollDelay())
     this.timer.unref?.()
   }
 
   /**
-   * Runs one drain and re-arms. `inFlight` is a settled-either-way mirror of the
-   * drain so `stop()` can await it without inheriting a rejection; the original
-   * promise keeps its unhandled-rejection behaviour so a broken repository still
-   * trips the process-level fail-fast handlers rather than looping silently.
+   * Steady cadence while healthy; exponential backoff once passes start failing, so
+   * a persistently broken or un-migrated schema is retried patiently instead of
+   * being hammered — and logged once per backoff step rather than once a second.
+   */
+  private nextPollDelay(): number {
+    if (this.consecutiveFailures === 0) {
+      return this.maintenanceInterval
+    }
+    return Math.min(
+      this.pollBackoffMaximumMilliseconds,
+      this.maintenanceInterval * 2 ** Math.min(this.consecutiveFailures, 16),
+    )
+  }
+
+  /**
+   * Runs one drain and re-arms. `drain()` already contains its own failures, but
+   * this is the poller's last line of defence: nothing here may produce an
+   * unhandled rejection, because bin/server.ts and bin/worker.ts turn one into
+   * `process.exit(1)`. `inFlight` mirrors the drain so `stop()` can await it.
    */
   private dispatch(): void {
-    const drained = this.drain()
-    this.inFlight = drained.then(
-      () => undefined,
-      () => undefined,
-    )
+    const drained = this.drain().catch((error: unknown) => {
+      this.consecutiveFailures++
+      this.logger?.error('Invite event outbox dispatcher failed unexpectedly.', safeErrorLogMetadata(error))
+    })
+    this.inFlight = drained.then(() => undefined)
     void drained.finally(() => {
       this.inFlight = undefined
       this.schedule()
