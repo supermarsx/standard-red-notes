@@ -78,7 +78,8 @@ import { KanbanEditor, KanbanEditorIdentifier } from './KanbanEditor/KanbanEdito
 import { TimelineEditor, TimelineEditorIdentifier } from './TimelineEditor/TimelineEditor'
 import { FlashcardsEditor, FlashcardsEditorIdentifier } from './FlashcardsEditor/FlashcardsEditor'
 import { MapEditor, MapEditorIdentifier } from './MapEditor/MapEditor'
-import NoteStatusIndicator, { NoteStatus } from './NoteStatusIndicator'
+import { NoteStatus } from './NoteStatusIndicator'
+import NoteStatusCluster from './NoteStatusCluster'
 import CollaborationInfoHUD from './CollaborationInfoHUD'
 import CollaboratorsPresencePanel from './CollaboratorsPresencePanel'
 import PresenceBadge from './PresenceBadge'
@@ -1147,7 +1148,7 @@ class NoteView extends AbstractComponent<NoteViewProps, State> {
                     }
                   />
                 </div>
-                <NoteStatusIndicator
+                <NoteStatusCluster
                   note={this.note}
                   status={this.state.noteStatus}
                   syncTakingTooLong={this.state.syncTakingTooLong}

@@ -55,6 +55,7 @@ import { EditorEventSource } from '@/Types/EditorEventSource'
 import { ElementIds } from '@/Constants/ElementIDs'
 import { NoteFromSelectionPlugin } from './Plugins/NoteFromSelectionPlugin'
 import { useCollaborationRoomAccess } from './Collaboration/useCollaborationRoomAccess'
+import { CollaborationRoomStatus, CollaborationStatusRegistry } from './Collaboration/CollaborationStatusRegistry'
 import { flushChecklistMutationDurability } from './Checklist/ChecklistMutationBridge'
 import { createChecklistTodoId } from './Lexical/Nodes/ChecklistItemNode'
 import { isInteractiveChecklistEditorOwner } from './Checklist/ChecklistOwnerMode'
@@ -447,6 +448,50 @@ export const SuperEditor: FunctionComponent<Props> = ({
           initialEditorState: collaborationAccess.initialEditorState,
         }
       : undefined
+
+  /**
+   * Publish collaboration state for the title-bar status chip.
+   *
+   * Collaboration state must never take the editing surface away, so it is
+   * reported in the status row instead. This mount is the one that already knows
+   * the answer; the chip reads it rather than mounting the (expensive,
+   * traffic-generating) room-access hook a second time.
+   *
+   * "Active" deliberately tracks the real `collaboration` object rather than
+   * `status === 'ready'`: an authorized room that has not produced a usable lease
+   * and initial state is still settling, not live.
+   */
+  const collaborationRoom = lifetimeNote.uuid
+  const collaborationIsLive = Boolean(collaboration)
+  const collaborationUnavailableReason =
+    collaborationAccess.status === 'disabled' ? collaborationAccess.reason : undefined
+  const publishedCollaborationStatus = useMemo<CollaborationRoomStatus>(() => {
+    if (collaborationIsLive) {
+      return { kind: 'active' }
+    }
+    if (collaborationUnavailableReason !== undefined) {
+      return { kind: 'unavailable', reason: collaborationUnavailableReason }
+    }
+    return { kind: 'preparing' }
+  }, [collaborationIsLive, collaborationUnavailableReason])
+
+  useEffect(() => {
+    if (!interactiveOwner) {
+      return
+    }
+    CollaborationStatusRegistry.setStatus(collaborationRoom, publishedCollaborationStatus)
+  }, [collaborationRoom, interactiveOwner, publishedCollaborationStatus])
+
+  // Separate from the publish effect so a status change does not momentarily
+  // deregister the room (which would also forget that it had ever been live).
+  useEffect(() => {
+    if (!interactiveOwner) {
+      return
+    }
+    return () => {
+      CollaborationStatusRegistry.clearRoom(collaborationRoom)
+    }
+  }, [collaborationRoom, interactiveOwner])
 
   useEffect(() => {
     if (!interactiveOwner) {
@@ -995,11 +1040,7 @@ export const SuperEditor: FunctionComponent<Props> = ({
       <ErrorBoundary>
         <LinkingControllerProvider controller={linkingController}>
           <FilesControllerProvider controller={filesController}>
-            {collaborationAccess.status === 'preparing' ? (
-              <div className="text-passive-1 flex h-full items-center justify-center text-sm">
-                Preparing encrypted collaboration…
-              </div>
-            ) : !authorizedEditorNote ? (
+            {!authorizedEditorNote ? (
               <div className="text-passive-1 flex h-full items-center justify-center text-sm">
                 Editor unavailable while encrypted note access is changing…
               </div>
