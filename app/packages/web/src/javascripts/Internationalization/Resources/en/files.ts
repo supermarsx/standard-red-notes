@@ -67,6 +67,8 @@ const files = {
   errorLoadingFile:
     'There was an error loading the file. Try again, or download the file and open it using another application.',
   tryAgain: 'Try again',
+  filePreviewKeptRestarting:
+    'The file record kept changing while the preview was loading, so the download never finished. This usually means sync is not applying changes locally. Try again, or download the file and open it using another application.',
   downloadToView: 'To view this file, download it and open it using another application.',
 
   // FilePreviewInfoPanel

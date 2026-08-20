@@ -18,6 +18,14 @@ import { sanitizeFileErrorDetail } from '@/Utils/FileErrorMessage'
 const MAX_MEDIA_PREVIEW_BYTES = 100 * 1024 * 1024
 export const PREVIEW_DOWNLOAD_IDLE_TIMEOUT_MS = 45_000
 const MAX_PREVIEW_DOWNLOAD_ATTEMPTS = 2
+/**
+ * Wall-clock ceiling for one preview, spanning every restart. The per-attempt
+ * idle timeout bounds a stalled socket; this bounds the other way a preview can
+ * hang: an item that keeps being re-applied locally (a churning sync) re-keying
+ * the download faster than it can finish. Without it the spinner is unbounded
+ * even though every individual attempt is bounded.
+ */
+export const PREVIEW_TOTAL_DEADLINE_MS = 120_000
 
 type Props = {
   application: WebApplication
@@ -27,9 +35,35 @@ type Props = {
 } & OptionalSuperEmbeddedImageProps
 
 type DownloadedPreview = {
-  fileUuid: string
-  remoteIdentifier: string
+  identity: string
   bytes: Uint8Array
+}
+
+/**
+ * Identifies the bytes a download would fetch and the material needed to decrypt
+ * them — deliberately NOT the FileItem's object identity.
+ *
+ * Items are immutable, so a rename, a description edit, a link, a protection
+ * toggle, or a plain sync re-apply all publish a brand new FileItem for the same
+ * stored payload. Keying the download effect on the object meant any of those
+ * aborted the transfer, discarded every chunk already decrypted, and started
+ * over at byte zero; while sync churned an item the preview could restart
+ * forever and never render. Keying on this string instead means only a change
+ * that genuinely invalidates the transfer restarts it.
+ */
+function downloadIdentityOf(file: FileItem | undefined): string | undefined {
+  if (!file) {
+    return undefined
+  }
+
+  return JSON.stringify([
+    file.uuid,
+    file.remoteIdentifier,
+    file.key,
+    file.encryptionHeader,
+    file.encryptedChunkSizes ?? null,
+    file.shared_vault_uuid ?? null,
+  ])
 }
 
 /**
@@ -118,14 +152,14 @@ const FilePreview = ({
   const isAuthorized = useItemAuthorization(application, authoritativeFile)
   const authorizationRef = useRef(isAuthorized)
   authorizationRef.current = isAuthorized
-  const currentFileIdentityRef = useRef({
-    uuid: authoritativeFile?.uuid,
-    remoteIdentifier: authoritativeFile?.remoteIdentifier,
-  })
-  currentFileIdentityRef.current = {
-    uuid: authoritativeFile?.uuid,
-    remoteIdentifier: authoritativeFile?.remoteIdentifier,
-  }
+  const downloadIdentity = useMemo(() => downloadIdentityOf(authoritativeFile), [authoritativeFile])
+  const currentFileIdentityRef = useRef(downloadIdentity)
+  currentFileIdentityRef.current = downloadIdentity
+  // The download runs against the live item rather than the object captured when
+  // the effect started, so a rename or protection change mid-transfer is honored
+  // without the transfer itself being restarted.
+  const fileForDownloadRef = useRef(authoritativeFile)
+  fileForDownloadRef.current = authoritativeFile
 
   const previewByteLimit = useMemo(() => {
     return authoritativeFile && resolvePreviewKind(authoritativeFile) === 'text'
@@ -148,11 +182,12 @@ const FilePreview = ({
   const [retryGeneration, setRetryGeneration] = useState(0)
   const [downloadError, setDownloadError] = useState<string>()
   const downloadedBytes =
-    authoritativeFile &&
-    downloadedPreview?.fileUuid === authoritativeFile.uuid &&
-    downloadedPreview.remoteIdentifier === authoritativeFile.remoteIdentifier
+    downloadIdentity !== undefined && downloadedPreview?.identity === downloadIdentity
       ? downloadedPreview.bytes
       : undefined
+  // Anchored to the mount, not to a single attempt, so restarts cannot extend it.
+  // Cleared only by a completed preview or an explicit retry.
+  const deadlineAtRef = useRef(0)
 
   useEffect(() => {
     return () => {
@@ -163,13 +198,7 @@ const FilePreview = ({
   useLayoutEffect(() => {
     setDownloadError(undefined)
     setDownloadedPreview((preview) => {
-      if (
-        preview &&
-        (!isAuthorized ||
-          !authoritativeFile ||
-          preview.fileUuid !== authoritativeFile.uuid ||
-          preview.remoteIdentifier !== authoritativeFile.remoteIdentifier)
-      ) {
+      if (preview && (!isAuthorized || downloadIdentity === undefined || preview.identity !== downloadIdentity)) {
         preview.bytes.fill(0)
         return undefined
       }
@@ -180,13 +209,25 @@ const FilePreview = ({
       setIsDownloading(false)
       setDownloadProgress(undefined)
     }
-  }, [authoritativeFile, isAuthorized])
+  }, [downloadIdentity, isAuthorized])
 
   useEffect(() => {
-    if (!authoritativeFile || !canPreviewFile || !isAuthorized) {
+    if (downloadIdentity === undefined || !canPreviewFile || !isAuthorized) {
       setIsDownloading(false)
       setDownloadProgress(undefined)
       return
+    }
+
+    // A restart that arrives after the ceiling means the item is being re-applied
+    // faster than the file can be fetched. Say that, rather than spinning on.
+    if (deadlineAtRef.current !== 0 && Date.now() >= deadlineAtRef.current) {
+      setIsDownloading(false)
+      setDownloadProgress(undefined)
+      setDownloadError(t('filePreviewKeptRestarting'))
+      return
+    }
+    if (deadlineAtRef.current === 0) {
+      deadlineAtRef.current = Date.now() + PREVIEW_TOTAL_DEADLINE_MS
     }
 
     let cancelled = false
@@ -194,9 +235,7 @@ const FilePreview = ({
     let activeAbortController: AbortController | undefined
     let activeClearIdleTimeout: (() => void) | undefined
     let activeChunks: Uint8Array[] = []
-    const fileForDownload = authoritativeFile
-    const fileUuid = fileForDownload.uuid
-    const remoteIdentifier = fileForDownload.remoteIdentifier
+    const identity = downloadIdentity
     const wipeChunks = (chunks: Uint8Array[]) => {
       for (const chunk of chunks) {
         chunk.fill(0)
@@ -204,13 +243,7 @@ const FilePreview = ({
       chunks.length = 0
     }
     const isCurrentDownload = () => {
-      const currentIdentity = currentFileIdentityRef.current
-      return (
-        !cancelled &&
-        authorizationRef.current &&
-        currentIdentity.uuid === fileUuid &&
-        currentIdentity.remoteIdentifier === remoteIdentifier
-      )
+      return !cancelled && authorizationRef.current && currentFileIdentityRef.current === identity
     }
 
     const downloadFileForPreview = async () => {
@@ -225,6 +258,11 @@ const FilePreview = ({
         setDownloadProgress(undefined)
         for (let attempt = 0; attempt < MAX_PREVIEW_DOWNLOAD_ATTEMPTS; attempt++) {
           if (!isCurrentDownload()) {
+            return
+          }
+
+          const fileForDownload = fileForDownloadRef.current
+          if (!fileForDownload) {
             return
           }
 
@@ -328,7 +366,9 @@ const FilePreview = ({
                 return currentPreview
               }
               currentPreview?.bytes.fill(0)
-              return { fileUuid, remoteIdentifier, bytes: finalDecryptedBytes }
+              // A rendered preview retires the ceiling; a later re-key starts fresh.
+              deadlineAtRef.current = 0
+              return { identity, bytes: finalDecryptedBytes }
             })
             wipeChunks(chunks)
             return
@@ -345,7 +385,18 @@ const FilePreview = ({
       }
     }
 
-    void downloadFileForPreview()
+    // An unexpected throw (rather than a rejected download) must still land on a
+    // terminal state. Leaving it to an unhandled rejection kept `isDownloading`
+    // true and produced a permanent spinner with nothing explaining it.
+    downloadFileForPreview().catch((error: unknown) => {
+      if (!isCurrentDownload()) {
+        return
+      }
+      console.error(error)
+      setIsDownloading(false)
+      setDownloadProgress(undefined)
+      setDownloadError(sanitizeFileErrorDetail(error) ?? t('errorLoadingFile'))
+    })
 
     return () => {
       cancelled = true
@@ -355,7 +406,7 @@ const FilePreview = ({
     }
   }, [
     application,
-    authoritativeFile,
+    downloadIdentity,
     canPreviewFile,
     downloadedBytes,
     isAuthorized,
@@ -372,9 +423,15 @@ const FilePreview = ({
 
     const granted = await application.protections.authorizeItemAccess(currentFile)
     if (granted && application.isAuthorizedToRenderItem(currentFile)) {
+      deadlineAtRef.current = 0
       setRetryGeneration((generation) => generation + 1)
     }
   }, [application, file.uuid])
+
+  const retryPreview = useCallback(() => {
+    deadlineAtRef.current = 0
+    setRetryGeneration((generation) => generation + 1)
+  }, [])
 
   if (!isAuthorized) {
     const hasProtectionSources = application.hasProtectionSources()
@@ -441,9 +498,7 @@ const FilePreview = ({
     <FilePreviewError
       file={authoritativeFile!}
       filesController={application.filesController}
-      tryAgainCallback={() => {
-        setRetryGeneration((generation) => generation + 1)
-      }}
+      tryAgainCallback={retryPreview}
       isFilePreviewable={canPreviewFile}
       errorMessage={
         downloadError ??
