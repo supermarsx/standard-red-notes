@@ -282,18 +282,24 @@ export class VaultInviteService
   public async getInvitableContactsForSharedVault(
     sharedVault: SharedVaultListingInterface,
   ): Promise<TrustedContactInterface[]> {
+    // Each early return below collapses into the same empty list, which the invite UI can only
+    // render as "No contacts available to invite" — indistinguishable from genuinely having none,
+    // and it hides the invite action entirely. Log which precondition actually failed.
     const users = await this.vaultUsers.getSharedVaultUsersFromServer(sharedVault)
     if (!users) {
+      console.error('Cannot list invitable contacts; failed to load shared vault users from server')
       return []
     }
 
     const contacts = this._getAllContacts.execute()
     if (contacts.isFailed()) {
+      console.error('Cannot list invitable contacts;', contacts.getError())
       return []
     }
 
     const outboundInvites = await this.getOutboundInvites(sharedVault)
     if (isClientDisplayableError(outboundInvites)) {
+      console.error('Cannot list invitable contacts;', outboundInvites.text)
       return []
     }
 

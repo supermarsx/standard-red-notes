@@ -9,6 +9,7 @@ import {
 } from '@standardnotes/snjs'
 import Spinner from '@/Components/Spinner/Spinner'
 import Dropdown from '@/Components/Dropdown/Dropdown'
+import { describeContactInviteFailures, sendContactInvites } from './SendContactInvites'
 
 type Props = {
   vault: SharedVaultListingInterface
@@ -44,20 +45,35 @@ const ContactInviteModal: FunctionComponent<Props> = ({ vault, onCloseDialog }) 
 
   const inviteSelectedContacts = useCallback(async () => {
     setIsInvitingContacts(true)
-    for (const selectedContact of selectedContacts) {
-      const contact = contacts.find((contact) => contact.uuid === selectedContact.uuid)
-      if (!contact) {
-        continue
-      }
-      await application.vaultInvites.inviteContactToSharedVault(
+
+    let result
+    try {
+      result = await sendContactInvites({
         vault,
-        contact,
-        SharedVaultUserPermission.PERMISSIONS[selectedContact.permission],
-      )
+        contacts,
+        selectedContacts: selectedContacts.map((selectedContact) => ({
+          uuid: selectedContact.uuid,
+          permission: SharedVaultUserPermission.PERMISSIONS[selectedContact.permission],
+        })),
+        invite: (sharedVault, contact, permission) =>
+          application.vaultInvites.inviteContactToSharedVault(sharedVault, contact, permission),
+      })
+    } finally {
+      setIsInvitingContacts(false)
     }
-    setIsInvitingContacts(false)
+
+    if (result.failures.length > 0) {
+      // Keep the modal open so the failure is actionable, and drop the contacts that did go out
+      // so retrying the rest cannot re-invite them.
+      setSelectedContacts((selectedContacts) =>
+        selectedContacts.filter((selectedContact) => !result.sentContactUuids.includes(selectedContact.uuid)),
+      )
+      void application.alerts.alert(describeContactInviteFailures(result), 'Could not send invites')
+      return
+    }
+
     handleDialogClose()
-  }, [handleDialogClose, selectedContacts, contacts, application.vaultInvites, vault])
+  }, [handleDialogClose, selectedContacts, contacts, application.vaultInvites, application.alerts, vault])
 
   const toggleContact = useCallback(
     (contact: TrustedContactInterface) => {
