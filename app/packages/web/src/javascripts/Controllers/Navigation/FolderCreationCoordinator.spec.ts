@@ -6,6 +6,7 @@ import {
   MAX_INSERTS_PER_FOLDER_IDENTITY,
   folderCreationIdentity,
   folderCreationScope,
+  folderInsertLimitKey,
   normalizeFolderName,
 } from './FolderCreationCoordinator'
 
@@ -314,6 +315,45 @@ describe('FolderCreationCoordinator duplicate-insert ceiling', () => {
     // An unchanged, present folder is still returned without inserting again.
     await coordinator.createOnce(options('operation-noop'))
     expect(insert).toHaveBeenCalledTimes(2)
+  })
+
+  it('still trips when a broken store makes the resolved identity differ each attempt', async () => {
+    const coordinator = new FolderCreationCoordinator<Folder>()
+    const inserted: Folder[] = []
+    const insert = jest.fn(async () => {
+      const folder = { uuid: `folder-${inserted.length + 1}`, title: 'Projects' }
+      inserted.push(folder)
+      return folder
+    })
+
+    /**
+     * `folderCreationIdentity` takes an ancestor path resolved by walking local items. With those
+     * ancestors missing the walk truncates differently from attempt to attempt, so identity — and
+     * therefore the coalescing key — changes every time. Only a key that never consults local
+     * state can recognise these as the same folder.
+     */
+    const ancestorPaths = [['Work', 'Clients'], ['Work'], [], ['Work', 'Clients'], ['Work']]
+    const options = (attempt: number) => ({
+      scope: folderCreationScope('account-a', 'vault-a'),
+      identity: folderCreationIdentity(ancestorPaths[attempt], 'Projects'),
+      insertLimitKey: folderInsertLimitKey('parent-uuid', 'Projects'),
+      operationId: `operation-${attempt}`,
+      findExisting: () => undefined,
+      isCurrent: () => false,
+      create: insert,
+      finalize: async () => undefined,
+    })
+
+    for (let attempt = 0; attempt < ancestorPaths.length; attempt += 1) {
+      await coordinator.createOnce(options(attempt)).catch(() => undefined)
+    }
+
+    expect(insert).toHaveBeenCalledTimes(MAX_INSERTS_PER_FOLDER_IDENTITY)
+  })
+
+  it('keys the ceiling per parent so different parents are not conflated', async () => {
+    expect(folderInsertLimitKey('parent-a', 'Projects')).not.toBe(folderInsertLimitKey('parent-b', 'Projects'))
+    expect(folderInsertLimitKey(undefined, 'Projects')).toBe(folderInsertLimitKey(undefined, '  projects  '))
   })
 
   it('resets the ceiling when the scope is released', async () => {

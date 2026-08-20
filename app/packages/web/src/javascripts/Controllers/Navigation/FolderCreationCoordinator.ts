@@ -21,6 +21,25 @@ export function folderCreationScope(accountUuid: string | undefined, vaultUuid: 
   return JSON.stringify([accountUuid || 'local-account', vaultUuid || 'default-vault'])
 }
 
+/**
+ * Key for the repeated-insert ceiling. Deliberately derived only from the caller's own parent
+ * reference and the title — never from walking the folder tree through local item state.
+ *
+ * `folderCreationIdentity` takes a resolved ancestor *path*, and resolving that path requires
+ * looking each ancestor up locally. When local state is missing those ancestors the walk stops
+ * early, the path is shorter, and the identity differs between two attempts at the same folder —
+ * so a ceiling keyed on identity would see every attempt as a different folder and never fire,
+ * which is exactly the state a broken local store produces.
+ */
+export function folderInsertLimitKey(parentUuid: string | undefined, title: string): string {
+  const normalizedTitle = normalizeFolderName(title)
+  if (!normalizedTitle) {
+    throw new Error('Folder names cannot be empty.')
+  }
+
+  return JSON.stringify([parentUuid ?? 'root', normalizedTitle.identity])
+}
+
 export function folderCreationIdentity(parentPath: readonly string[], title: string): string {
   if (parentPath.length >= MAX_FOLDER_PATH_DEPTH) {
     throw new Error(`Folder paths cannot exceed ${MAX_FOLDER_PATH_DEPTH} levels.`)
@@ -92,6 +111,12 @@ export class FolderCreationFinalizationError extends Error {
 type CreateOnceOptions<Item> = {
   scope: string
   identity: string
+  /**
+   * Key for the repeated-insert ceiling only, never for coalescing. Defaults to `identity`, but
+   * callers whose identity is derived from local item state must supply a stable one — see
+   * folderInsertLimitKey.
+   */
+  insertLimitKey?: string
   /** Opaque, per-user-action UUID. Duplicate submissions keep the first value. */
   operationId: string
   findExisting(): Item | undefined
@@ -143,6 +168,8 @@ export class FolderCreationCoordinator<Item> {
     const generation = this.getOrCreateScopeGeneration(options.scope)
     const key = this.key(options.scope, generation, options.identity)
 
+    const limitKey = this.key(options.scope, generation, options.insertLimitKey ?? options.identity)
+
     const active = this.inFlight.get(key)
     if (active) {
       return active
@@ -181,7 +208,7 @@ export class FolderCreationCoordinator<Item> {
       return Promise.resolve(existing)
     }
 
-    const blocked = this.insertRefusalReason(key)
+    const blocked = this.insertRefusalReason(key, limitKey)
     if (blocked) {
       return Promise.reject(new Error(blocked))
     }
@@ -197,7 +224,7 @@ export class FolderCreationCoordinator<Item> {
         return reloadedExisting
       }
 
-      const blockedOnEntry = this.insertRefusalReason(key)
+      const blockedOnEntry = this.insertRefusalReason(key, limitKey)
       if (blockedOnEntry) {
         throw new Error(blockedOnEntry)
       }
@@ -209,17 +236,17 @@ export class FolderCreationCoordinator<Item> {
         state: 'pending',
       }
       this.successfulInsertCounts.set(key, 1)
-      this.lifetimeInsertCounts.set(key, (this.lifetimeInsertCounts.get(key) ?? 0) + 1)
+      this.lifetimeInsertCounts.set(limitKey, (this.lifetimeInsertCounts.get(limitKey) ?? 0) + 1)
       this.entries.set(key, createdEntry)
       return this.finalizeEntry(createdEntry, options)
     })
   }
 
-  private insertRefusalReason(key: string): string | undefined {
+  private insertRefusalReason(key: string, limitKey: string): string | undefined {
     if ((this.successfulInsertCounts.get(key) ?? 0) >= 1) {
       return 'Folder creation circuit breaker stopped a duplicate insert.'
     }
-    if ((this.lifetimeInsertCounts.get(key) ?? 0) >= MAX_INSERTS_PER_FOLDER_IDENTITY) {
+    if ((this.lifetimeInsertCounts.get(limitKey) ?? 0) >= MAX_INSERTS_PER_FOLDER_IDENTITY) {
       return (
         `Folder creation stopped after ${MAX_INSERTS_PER_FOLDER_IDENTITY} inserts of the same folder. ` +
         'The created folder is not present in local item state, so creating it again would only ' +

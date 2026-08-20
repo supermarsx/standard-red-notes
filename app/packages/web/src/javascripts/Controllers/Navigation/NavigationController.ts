@@ -66,6 +66,7 @@ import {
   FolderMigrationCoordinator,
   MAX_FOLDER_PATH_DEPTH,
   folderCreationIdentity,
+  folderInsertLimitKey,
   folderCreationScope,
   normalizeFolderName,
 } from './FolderCreationCoordinator'
@@ -922,6 +923,10 @@ export class NavigationController
     return this.folderCreationCoordinator.createOnce({
       scope,
       identity,
+      // `identity` resolves the ancestor path through local items, so it is only as stable as that
+      // store. The insert ceiling must key on something that is not, or a store that has lost the
+      // ancestors makes every attempt look like a different folder and the ceiling never fires.
+      insertLimitKey: folderInsertLimitKey(parent?.uuid, title),
       operationId,
       findExisting: () => this.findFolderByTitle(title, parent, vault),
       isCurrent: (folder) => this.items.findItem<SNFolder>(folder.uuid) !== undefined,
