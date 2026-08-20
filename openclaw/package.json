@@ -47,9 +47,9 @@
     "format:check": "prettier --check \"src/**/*.{ts,tsx,js,json,md}\" \"test/**/*.{ts,tsx,js,json,md}\" \"scripts/**/*.mjs\" README.md package.json"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.111.0",
+    "@anthropic-ai/sdk": "^0.117.1",
     "@modelcontextprotocol/sdk": "^1.30.0",
-    "openai": "^6.47.0",
+    "openai": "^7.4.0",
     "toml": "^5.0.0",
     "zod": "^4.4.3"
   },
@@ -61,10 +61,10 @@
     "zod"
   ],
   "devDependencies": {
-    "@types/node": "^26.1.1",
+    "@types/node": "^26.2.0",
     "@vitest/coverage-v8": "^4.1.10",
-    "prettier": "^3.9.5",
-    "tsx": "^4.23.1",
+    "prettier": "^3.9.6",
+    "tsx": "^4.23.12",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"
   }
