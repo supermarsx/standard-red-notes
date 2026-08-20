@@ -177,9 +177,30 @@ afterEach(() => {
 const composer = (): Element | null => container.querySelector('[data-testid="blocks-editor-composer"]')
 
 describe('the editing surface survives every collaboration state', () => {
+  /**
+   * Exhaustive over `CollaborationRoomAccessState`. `ready` appears twice on
+   * purpose: an authorized room that has not produced a lease and initial state
+   * is a DIFFERENT render path from a fully live one, and it is the path a
+   * half-working gateway parks on.
+   */
   const states: Array<[string, CollaborationRoomAccessState]> = [
     ['preparing', { status: 'preparing' }],
     ['disabled', { status: 'disabled', reason: 'Live collaboration is offline.' } as CollaborationRoomAccessState],
+    ['ready but still settling (no lease)', { status: 'ready' } as CollaborationRoomAccessState],
+    [
+      'ready with a lease',
+      {
+        status: 'ready',
+        sourceId: 'source-id',
+        userUuid: 'user-uuid',
+        sessionUser: { uuid: 'user-uuid' },
+        roomKey: 'room-key',
+        roomEpoch: 'epoch',
+        username: 'user',
+        initialEditorState: 'body',
+        editorLease: { requestId: 'lease-1', shouldBootstrap: false },
+      } as unknown as CollaborationRoomAccessState,
+    ],
   ]
 
   it.each(states)('renders the editor while collaboration is %s', async (_name, state) => {
@@ -188,6 +209,23 @@ describe('the editing surface survives every collaboration state', () => {
     await renderEditor()
 
     expect(composer()).not.toBeNull()
+    expect(container.querySelector('[data-testid="blocks-editor"]')).not.toBeNull()
+  })
+
+  it('keeps the editor for a "preparing" that NEVER settles', async () => {
+    mockCollaborationAccess = { status: 'preparing' }
+
+    await renderEditor()
+
+    // Re-render repeatedly without the status ever resolving — the deployment
+    // where the gateway answers 503 SYNC_DISABLED and preparation never
+    // completes. The editing surface must survive indefinitely.
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await renderEditor()
+      expect(composer()).not.toBeNull()
+    }
+
+    expect(container.textContent).not.toContain('Preparing encrypted collaboration')
     expect(container.querySelector('[data-testid="blocks-editor"]')).not.toBeNull()
   })
 
