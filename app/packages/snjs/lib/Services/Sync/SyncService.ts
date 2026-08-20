@@ -1,4 +1,11 @@
-import { ConflictParams, ConflictType, HttpRequest, HttpResponse, RawSyncResponse } from '@standardnotes/responses'
+import {
+  ConflictParams,
+  ConflictType,
+  HttpRequest,
+  HttpResponse,
+  RawSyncResponse,
+  ServerItemResponse,
+} from '@standardnotes/responses'
 import { AccountSyncOperation } from '@Lib/Services/Sync/Account/Operation'
 import {
   LoggerInterface,
@@ -27,6 +34,8 @@ import {
   PayloadSource,
   CreateDecryptedItemFromPayload,
   FilterDisallowedRemotePayloadsAndMap,
+  isCorruptTransferPayload,
+  isEncryptedTransferPayload,
   DeltaOutOfSync,
   ImmutablePayloadCollection,
   CreatePayload,
@@ -3077,12 +3086,21 @@ export class SyncService
     }
 
     const rawPayloadsFilteringResult = FilterDisallowedRemotePayloadsAndMap(rawPayloads)
-    const unusablePayloadUuids: string[] = rawPayloadsFilteringResult.disallowed.map((payload) => payload.uuid)
+    const unusablePayloads: { uuid: string; contentType?: string; reason: string }[] =
+      rawPayloadsFilteringResult.disallowed.map((payload) => ({
+        uuid: payload.uuid,
+        contentType: payload.content_type,
+        reason: describeDisallowedRemotePayload(payload),
+      }))
     const receivedPayloads = rawPayloadsFilteringResult.filtered
       .map((rawPayload) => {
         const result = CreatePayloadFromRawServerItem(rawPayload, PayloadSource.RemoteRetrieved)
         if (result.isFailed()) {
-          unusablePayloadUuids.push(rawPayload.uuid)
+          unusablePayloads.push({
+            uuid: rawPayload.uuid,
+            contentType: rawPayload.content_type,
+            reason: `payload construction failed: ${result.getError()}`,
+          })
           return undefined
         }
         return result.getValue()
@@ -3094,11 +3112,23 @@ export class SyncService
      * so the next check reports the same mismatch. Silently dropping it is what made that loop
      * undiagnosable: unlike the ordinary sync response path, which routes disallowed payloads into
      * the conflict map, this path had nowhere for them to go and no record that they existed.
+     *
+     * The per-item reason is the diagnostic that identifies WHY an item is unusable, which is what
+     * distinguishes a schema/version mismatch from a corrupt record. Content is never logged.
      */
-    if (unusablePayloadUuids.length > 0) {
+    if (unusablePayloads.length > 0) {
+      const reasonCounts = new Map<string, number>()
+      for (const entry of unusablePayloads) {
+        const label = `${entry.contentType ?? 'unknown-content-type'}: ${entry.reason}`
+        reasonCounts.set(label, (reasonCounts.get(label) ?? 0) + 1)
+      }
+      const summary = [...reasonCounts.entries()].map(([label, count]) => `${count}x ${label}`).join('; ')
       this.logger.error(
-        `Integrity repair fetched ${unusablePayloadUuids.length} item(s) that cannot be applied locally and will ` +
-          `keep mismatching. First uuids: ${unusablePayloadUuids.slice(0, 5).join(', ')}`,
+        `Integrity repair fetched ${unusablePayloads.length} item(s) that cannot be applied locally and will ` +
+          `keep mismatching. Reasons: ${summary}. First uuids: ${unusablePayloads
+            .slice(0, 5)
+            .map((entry) => entry.uuid)
+            .join(', ')}`,
       )
     }
 
@@ -3169,4 +3199,18 @@ export class SyncService
   ut_endLatencySimulator(): void {
     this._simulate_latency = undefined
   }
+}
+
+/**
+ * Names why the remote-payload filter rejected an item, mirroring checkRemotePayloadAllowed's
+ * branches. Only the classification is produced — never item content.
+ */
+function describeDisallowedRemotePayload(payload: ServerItemResponse): string {
+  if (isCorruptTransferPayload(payload as never)) {
+    return 'corrupt server record (missing uuid or content_type)'
+  }
+  if (!isEncryptedTransferPayload(payload as never) && payload.content != undefined) {
+    return 'content is present but not an encrypted string, which this client cannot apply'
+  }
+  return 'rejected by the remote payload filter'
 }

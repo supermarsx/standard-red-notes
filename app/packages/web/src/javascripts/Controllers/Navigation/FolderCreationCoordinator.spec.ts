@@ -3,6 +3,7 @@ import {
   FolderCreationFinalizationError,
   FolderMigrationCoordinator,
   MAX_FOLDER_PATH_DEPTH,
+  MAX_INSERTS_PER_FOLDER_IDENTITY,
   folderCreationIdentity,
   folderCreationScope,
   normalizeFolderName,
@@ -224,6 +225,110 @@ describe('FolderCreationCoordinator one-action/one-create contract', () => {
         'child',
       ),
     ).toThrow(/cannot exceed/)
+  })
+})
+
+describe('FolderCreationCoordinator duplicate-insert ceiling', () => {
+  /**
+   * Reproduces the production failure: local item state never receives the created folder, so
+   * `findExisting` and `isCurrent` both keep reporting it absent. Every attempt then looks like a
+   * fresh user action creating the folder for the first time.
+   */
+  const brokenLocalStoreCoordinator = () => {
+    const coordinator = new FolderCreationCoordinator<Folder>()
+    const inserted: Folder[] = []
+    const insert = jest.fn(async () => {
+      const folder = { uuid: `folder-${inserted.length + 1}`, title: 'Projects' }
+      inserted.push(folder)
+      return folder
+    })
+    const options = (operationId: string) => ({
+      scope: folderCreationScope('account-a', 'vault-a'),
+      identity: folderCreationIdentity([], 'Projects'),
+      operationId,
+      findExisting: () => undefined,
+      isCurrent: () => false,
+      create: insert,
+      finalize: async () => undefined,
+    })
+    return { coordinator, inserted, insert, options }
+  }
+
+  it('refuses to keep inserting when the created folder never lands in local item state', async () => {
+    const { coordinator, insert, options } = brokenLocalStoreCoordinator()
+
+    for (let attempt = 0; attempt < MAX_INSERTS_PER_FOLDER_IDENTITY; attempt += 1) {
+      await coordinator.createOnce(options(`operation-${attempt}`))
+    }
+    expect(insert).toHaveBeenCalledTimes(MAX_INSERTS_PER_FOLDER_IDENTITY)
+
+    await expect(coordinator.createOnce(options('operation-runaway'))).rejects.toThrow(
+      /not present in local item state/,
+    )
+    await expect(coordinator.createOnce(options('operation-runaway-2'))).rejects.toThrow(
+      /not present in local item state/,
+    )
+    expect(insert).toHaveBeenCalledTimes(MAX_INSERTS_PER_FOLDER_IDENTITY)
+  })
+
+  it('does not let scope retirement silently reset the ceiling', async () => {
+    const { coordinator, insert, options } = brokenLocalStoreCoordinator()
+
+    for (let attempt = 0; attempt < MAX_INSERTS_PER_FOLDER_IDENTITY + 2; attempt += 1) {
+      await coordinator.createOnce(options(`operation-${attempt}`)).catch(() => undefined)
+    }
+
+    // Retiring the scope would mint a new generation and therefore a new key, which would restart
+    // the count from zero and restore the unbounded write storm.
+    expect(insert).toHaveBeenCalledTimes(MAX_INSERTS_PER_FOLDER_IDENTITY)
+  })
+
+  it('still allows recreating a folder the user genuinely deleted', async () => {
+    const coordinator = new FolderCreationCoordinator<Folder>()
+    const inserted: Folder[] = []
+    let liveFolder: Folder | undefined
+    const insert = jest.fn(async () => {
+      const folder = { uuid: `folder-${inserted.length + 1}`, title: 'Projects' }
+      inserted.push(folder)
+      liveFolder = folder
+      return folder
+    })
+    const options = (operationId: string) => ({
+      scope: folderCreationScope('account-a', 'vault-a'),
+      identity: folderCreationIdentity([], 'Projects'),
+      operationId,
+      findExisting: () => liveFolder,
+      isCurrent: (folder: Folder) => liveFolder?.uuid === folder.uuid,
+      create: insert,
+      finalize: async () => undefined,
+    })
+
+    await coordinator.createOnce(options('operation-first'))
+    expect(insert).toHaveBeenCalledTimes(1)
+
+    // A healthy store: the delete is real, and the next create is a genuine new user action.
+    liveFolder = undefined
+    await coordinator.createOnce(options('operation-after-delete'))
+    expect(insert).toHaveBeenCalledTimes(2)
+
+    // An unchanged, present folder is still returned without inserting again.
+    await coordinator.createOnce(options('operation-noop'))
+    expect(insert).toHaveBeenCalledTimes(2)
+  })
+
+  it('resets the ceiling when the scope is released', async () => {
+    const { coordinator, insert, options } = brokenLocalStoreCoordinator()
+    const scope = folderCreationScope('account-a', 'vault-a')
+
+    for (let attempt = 0; attempt < MAX_INSERTS_PER_FOLDER_IDENTITY + 1; attempt += 1) {
+      await coordinator.createOnce(options(`operation-${attempt}`)).catch(() => undefined)
+    }
+    expect(insert).toHaveBeenCalledTimes(MAX_INSERTS_PER_FOLDER_IDENTITY)
+
+    coordinator.releaseScope(scope)
+    await coordinator.createOnce(options('operation-after-release'))
+
+    expect(insert).toHaveBeenCalledTimes(MAX_INSERTS_PER_FOLDER_IDENTITY + 1)
   })
 })
 

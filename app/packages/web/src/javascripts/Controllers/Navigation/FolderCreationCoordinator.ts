@@ -42,6 +42,14 @@ export function folderCreationIdentity(parentPath: readonly string[], title: str
   return JSON.stringify([...normalizedParentPath, normalizedTitle.identity])
 }
 
+/**
+ * How many times one folder identity may be physically inserted within a single scope generation.
+ * Deleting a folder and recreating it by the same name is legitimate and must keep working, so this
+ * is a ceiling on runaway repetition rather than a strict once-only rule. Releasing the scope (an
+ * account or vault change) resets it.
+ */
+export const MAX_INSERTS_PER_FOLDER_IDENTITY = 3
+
 export type FolderCreationFinalizationOutcome = 'ambiguous' | 'definitive'
 
 /** Serializes the one-time legacy migration per shared ItemManager owner. */
@@ -115,6 +123,17 @@ export class FolderCreationCoordinator<Item> {
   private readonly inFlight = new Map<string, Promise<Item>>()
   private readonly entries = new Map<string, CreationEntry<Item>>()
   private readonly successfulInsertCounts = new Map<string, number>()
+  /**
+   * Inserts performed for this identity since the scope was last released, INCLUDING those whose
+   * entry was later dropped because `isCurrent` reported the item gone.
+   *
+   * `successfulInsertCounts` alone cannot bound anything: the "item was explicitly removed" branch
+   * deletes it, and that branch fires whenever the created folder is absent from local item state
+   * for ANY reason. If local application of items is broken, every attempt looks like a fresh
+   * user action and inserts again — an unbounded write storm producing duplicate folders. This
+   * counter is deliberately independent of local item state and survives that branch.
+   */
+  private readonly lifetimeInsertCounts = new Map<string, number>()
   private readonly scopeGenerations = new Map<string, number>()
   /** Monotonic process-local epoch; it contains no account/vault identifiers. */
   private nextScopeGeneration = 0
@@ -144,8 +163,10 @@ export class FolderCreationCoordinator<Item> {
         return Promise.resolve(entry.item)
       }
 
-      // The previously completed item was explicitly removed. This is a new
-      // user action, so its new operation ID may legitimately create it again.
+      // The previously completed item appears to be gone, which is normally an explicit removal:
+      // a new user action whose new operation ID may legitimately create it again. The lifetime
+      // counter is intentionally NOT cleared here, so a broken local store cannot make this look
+      // like an endless series of fresh user actions.
       this.entries.delete(key)
       this.successfulInsertCounts.delete(key)
     }
@@ -160,8 +181,9 @@ export class FolderCreationCoordinator<Item> {
       return Promise.resolve(existing)
     }
 
-    if ((this.successfulInsertCounts.get(key) ?? 0) >= 1) {
-      return Promise.reject(new Error('Folder creation circuit breaker stopped a duplicate insert.'))
+    const blocked = this.insertRefusalReason(key)
+    if (blocked) {
+      return Promise.reject(new Error(blocked))
     }
 
     return this.startOperation(key, options.scope, generation, async () => {
@@ -175,8 +197,9 @@ export class FolderCreationCoordinator<Item> {
         return reloadedExisting
       }
 
-      if ((this.successfulInsertCounts.get(key) ?? 0) >= 1) {
-        throw new Error('Folder creation circuit breaker stopped a duplicate insert.')
+      const blockedOnEntry = this.insertRefusalReason(key)
+      if (blockedOnEntry) {
+        throw new Error(blockedOnEntry)
       }
 
       const created = await options.create(options.operationId)
@@ -186,9 +209,24 @@ export class FolderCreationCoordinator<Item> {
         state: 'pending',
       }
       this.successfulInsertCounts.set(key, 1)
+      this.lifetimeInsertCounts.set(key, (this.lifetimeInsertCounts.get(key) ?? 0) + 1)
       this.entries.set(key, createdEntry)
       return this.finalizeEntry(createdEntry, options)
     })
+  }
+
+  private insertRefusalReason(key: string): string | undefined {
+    if ((this.successfulInsertCounts.get(key) ?? 0) >= 1) {
+      return 'Folder creation circuit breaker stopped a duplicate insert.'
+    }
+    if ((this.lifetimeInsertCounts.get(key) ?? 0) >= MAX_INSERTS_PER_FOLDER_IDENTITY) {
+      return (
+        `Folder creation stopped after ${MAX_INSERTS_PER_FOLDER_IDENTITY} inserts of the same folder. ` +
+        'The created folder is not present in local item state, so creating it again would only ' +
+        'duplicate it on the server.'
+      )
+    }
+    return undefined
   }
 
   /**
@@ -205,6 +243,11 @@ export class FolderCreationCoordinator<Item> {
         this.successfulInsertCounts.delete(key)
       }
     }
+    for (const key of [...this.lifetimeInsertCounts.keys()]) {
+      if (key.startsWith(prefix) && !this.inFlight.has(key)) {
+        this.lifetimeInsertCounts.delete(key)
+      }
+    }
     this.retireScopeIfUnused(scope)
   }
 
@@ -216,7 +259,13 @@ export class FolderCreationCoordinator<Item> {
 
   /** Test/diagnostic seams: expose counts only, never scope values or item IDs. */
   public retainedStateCount(): number {
-    return this.inFlight.size + this.entries.size + this.successfulInsertCounts.size + this.scopeGenerations.size
+    return (
+      this.inFlight.size +
+      this.entries.size +
+      this.successfulInsertCounts.size +
+      this.lifetimeInsertCounts.size +
+      this.scopeGenerations.size
+    )
   }
 
   public retainedScopeCount(): number {
@@ -234,6 +283,7 @@ export class FolderCreationCoordinator<Item> {
         if ((this.scopeGenerations.get(scope) ?? 0) !== generation) {
           this.entries.delete(key)
           this.successfulInsertCounts.delete(key)
+          this.lifetimeInsertCounts.delete(key)
         }
         this.retireScopeIfUnused(scope)
       })
@@ -295,10 +345,13 @@ export class FolderCreationCoordinator<Item> {
 
   private retireScopeIfUnused(scope: string): void {
     const prefix = `${scope}\u0000`
+    // The lifetime counter is included deliberately: retiring the scope would mint a new generation
+    // and therefore a new key, silently resetting the very guard that bounds repeated inserts.
     const hasScopedState =
       [...this.inFlight.keys()].some((key) => key.startsWith(prefix)) ||
       [...this.entries.keys()].some((key) => key.startsWith(prefix)) ||
-      [...this.successfulInsertCounts.keys()].some((key) => key.startsWith(prefix))
+      [...this.successfulInsertCounts.keys()].some((key) => key.startsWith(prefix)) ||
+      [...this.lifetimeInsertCounts.keys()].some((key) => key.startsWith(prefix))
     if (!hasScopedState) {
       this.scopeGenerations.delete(scope)
     }
