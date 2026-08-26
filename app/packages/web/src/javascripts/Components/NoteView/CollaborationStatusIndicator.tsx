@@ -22,6 +22,21 @@ import { collaboratorColor, collaboratorInitials } from '../SuperEditor/Collabor
  */
 export const PREPARING_QUIET_PERIOD_MS = 750
 
+/**
+ * When a first-time "preparing" stops being worth a pixel again.
+ *
+ * A preparation that has run this long on a room that has never been live is
+ * indistinguishable from "this deployment does not offer live collaboration" —
+ * and it can genuinely never resolve, e.g. when the gateway answers the sync
+ * ticket with 503 SYNC_DISABLED. A spinner that never stops is worse than no
+ * spinner: it promises progress that is not happening and then sits in the
+ * status bar forever. So it stands down and goes quiet instead.
+ *
+ * A room that HAS been live never stands down — "reconnecting" stays visible
+ * for as long as it is true, because there the user really did lose something.
+ */
+export const PREPARING_STAND_DOWN_MS = 20_000
+
 export const COLLABORATION_INDICATOR_TEST_ID = 'collaboration-status-indicator'
 
 type Props = {
@@ -112,25 +127,30 @@ function presentationFor(state: CollaborationRoomState, peers: PresentPeer[]): P
  *  - no entry in the registry (plain/component editor, no Super editor) -> hidden
  *  - unavailable and never once live -> hidden, because "this deployment has no
  *    live collaboration" is not news on every note open
- *  - preparing for the first time -> hidden until PREPARING_QUIET_PERIOD_MS
+ *  - preparing for the first time -> hidden until PREPARING_QUIET_PERIOD_MS, and
+ *    hidden again after PREPARING_STAND_DOWN_MS if it still has not settled
  * so the common quiet path really is silent rather than a permanent dead icon.
  */
 const CollaborationStatusIndicator: FunctionComponent<Props> = ({ noteUuid }) => {
   const state = useCollaborationStatus(noteUuid)
   const { peers } = usePresence(noteUuid)
   const [isTooltipVisible, setIsTooltipVisible] = useState(false)
-  const [quietPeriodElapsed, setQuietPeriodElapsed] = useState(false)
+  const [firstPreparationPhase, setFirstPreparationPhase] = useState<'quiet' | 'visible' | 'stood-down'>('quiet')
   const buttonRef = useRef<HTMLButtonElement>(null)
 
   const isFirstPreparation = state?.status.kind === 'preparing' && !state.hasBeenActive
 
   useEffect(() => {
     if (!isFirstPreparation) {
-      setQuietPeriodElapsed(false)
+      setFirstPreparationPhase('quiet')
       return
     }
-    const timer = setTimeout(() => setQuietPeriodElapsed(true), PREPARING_QUIET_PERIOD_MS)
-    return () => clearTimeout(timer)
+    const show = setTimeout(() => setFirstPreparationPhase('visible'), PREPARING_QUIET_PERIOD_MS)
+    const standDown = setTimeout(() => setFirstPreparationPhase('stood-down'), PREPARING_STAND_DOWN_MS)
+    return () => {
+      clearTimeout(show)
+      clearTimeout(standDown)
+    }
   }, [isFirstPreparation])
 
   const toggleTooltip = useCallback(() => {
@@ -143,7 +163,7 @@ const CollaborationStatusIndicator: FunctionComponent<Props> = ({ noteUuid }) =>
   if (state.status.kind === 'unavailable' && !state.hasBeenActive) {
     return null
   }
-  if (isFirstPreparation && !quietPeriodElapsed) {
+  if (isFirstPreparation && firstPreparationPhase !== 'visible') {
     return null
   }
 

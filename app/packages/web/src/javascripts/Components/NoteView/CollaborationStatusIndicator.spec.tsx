@@ -24,6 +24,7 @@ import { PresenceRegistry } from '../SuperEditor/Collaboration/PresenceRegistry'
 import CollaborationStatusIndicator, {
   COLLABORATION_INDICATOR_TEST_ID,
   PREPARING_QUIET_PERIOD_MS,
+  PREPARING_STAND_DOWN_MS,
 } from './CollaborationStatusIndicator'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -103,6 +104,36 @@ describe('when collaboration does not apply', () => {
     await advance(PREPARING_QUIET_PERIOD_MS * 4)
 
     expect(chip()).toBeNull()
+  })
+
+  it('stands down instead of spinning forever when a first preparation never settles', async () => {
+    CollaborationStatusRegistry.setStatus(ROOM, { kind: 'preparing' })
+    await render()
+
+    await advance(PREPARING_QUIET_PERIOD_MS)
+    expect(chip()).not.toBeNull()
+
+    // The gateway answers 503 SYNC_DISABLED and preparation never resolves.
+    await advance(PREPARING_STAND_DOWN_MS)
+
+    expect(chip()).toBeNull()
+
+    // And it stays quiet rather than reappearing.
+    await advance(PREPARING_STAND_DOWN_MS * 5)
+    expect(chip()).toBeNull()
+  })
+
+  it('never stands down a reconnect — a room that was live keeps reporting', async () => {
+    CollaborationStatusRegistry.setStatus(ROOM, { kind: 'active' })
+    await render()
+
+    await act(async () => {
+      CollaborationStatusRegistry.setStatus(ROOM, { kind: 'preparing' })
+    })
+    await advance(PREPARING_STAND_DOWN_MS * 5)
+
+    expect(chip()).not.toBeNull()
+    expect(label()).toContain('Reconnecting')
   })
 })
 
