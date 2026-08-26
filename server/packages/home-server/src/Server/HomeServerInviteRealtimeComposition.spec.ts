@@ -199,6 +199,11 @@ jest.mock('@standardnotes/api-gateway', () => ({
   createRateLimitMiddleware: jest.fn(() => jest.fn()),
   createSharedServerAccessKeyMiddleware: jest.fn(() => jest.fn()),
   decideCorsOrigin: jest.fn(() => ({ allow: true })),
+  // The boot log's precondition diagnosis. Stubbed like every other collaborator
+  // in this partial mock; the resolution itself is covered where it lives, in
+  // api-gateway's SyncWebSocketPreconditions spec.
+  describeUnmetSyncPreconditions: jest.fn(() => 'none'),
+  resolveUnmetSyncPreconditions: jest.fn(() => []),
   HOME_SERVER_WELCOME_HTML: '<p>home</p>',
   parseClientIpHeaderName: jest.fn(),
   parseOptionalPositiveInteger: jest.fn((_name: string, value: string | undefined, fallback: number) =>

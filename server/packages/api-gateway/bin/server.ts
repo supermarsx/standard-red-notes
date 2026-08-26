@@ -107,6 +107,11 @@ import {
   resolveWebSocketSyncAllowedOrigins,
 } from '../src/Service/Sync/SyncWebSocketConfiguration'
 import { SyncWebSocketRuntime } from '../src/Service/Sync/SyncWebSocketRuntime'
+import {
+  describeUnmetSyncPreconditions,
+  resolveUnmetSyncPreconditions,
+} from '../src/Service/Sync/SyncWebSocketPreconditions'
+import { syncGateDiagnostics, SyncFilesUnmetCondition } from '../src/Service/Sync/SyncGateDiagnostics'
 
 // Standard Red Notes: fail-fast global crash handlers. A genuinely unhandled
 // rejection or uncaught exception leaves the process in an unknown state, so we
@@ -526,6 +531,38 @@ void container
     let inviteAvailabilityRedis:
       | (RedisInviteEventSubscriber & { quit(): Promise<unknown>; disconnect(): void })
       | undefined
+    // Standard Red Notes: record WHICH of the sync-lane preconditions held, so the
+    // admin diagnostics endpoint can name the missing one instead of repeating the
+    // log line's "durable backend and shared Redis state are required" — which
+    // never says which of the two is absent. Recorded before the lane is built so
+    // a failure inside the try still leaves the gate decision on record; the
+    // resolution itself lives in SyncWebSocketPreconditions, shared with the log.
+    // Presence only: booleans, never the configured values.
+    const gateObservation = {
+      connectionTokenSecretPresent: Boolean(env.get('WEB_SOCKET_CONNECTION_TOKEN_SECRET', true)),
+      webSocketSyncEnabled,
+      redisBound: container.isBound(TYPES.ApiGateway_Redis),
+      syncingServerGrpcBound: container.isBound(TYPES.ApiGateway_GRPCSyncingServerServiceProxy),
+    }
+    syncGateDiagnostics.record({ ...gateObservation, filesAdvertised: false })
+
+    // Standard Red Notes: the DEFINITIVE, once-per-boot verdict on the realtime
+    // lane. The gate is evaluated exactly here and never re-evaluated, so this
+    // single line is complete — an operator does not need to catch a request in
+    // flight to learn why sync is off, and a client retry storm cannot bury it.
+    // Per-request refusals (SyncWebSocketController) are throttled precisely
+    // because this line is the authoritative one. Names env VARIABLES, never
+    // their values: `gateObservation` is booleans and the remedies are constants.
+    const unmetSyncPreconditions = resolveUnmetSyncPreconditions(gateObservation)
+    if (unmetSyncPreconditions.length === 0) {
+      logger.info('WebSocket sync preconditions are satisfied; the realtime transport will be advertised.')
+    } else {
+      logger.warn(
+        `WebSocket sync is UNAVAILABLE. Unmet preconditions: ${describeUnmetSyncPreconditions(unmetSyncPreconditions)}`,
+        { unmetPreconditions: unmetSyncPreconditions.map(({ code }) => code) },
+      )
+    }
+
     if (env.get('WEB_SOCKET_CONNECTION_TOKEN_SECRET', true)) {
       try {
         let sync: SyncGatewayOptions | undefined
@@ -620,6 +657,31 @@ void container
             requireSharedState: true,
             ...filesComposition.option,
           }
+          // Standard Red Notes: re-derive WHICH files precondition failed, as a
+          // literal key, for the admin diagnostics endpoint. Deliberately NOT
+          // taken from `filesComposition.reason`: the construction-failure branch
+          // interpolates the thrown message, which can embed the resolved
+          // files-service URL. The reason string stays in the boot log (where the
+          // operator already holds the host); the endpoint gets the key only.
+          const filesUnmetCondition: SyncFilesUnmetCondition | undefined = filesComposition.advertised
+            ? undefined
+            : !(
+                  env.get('WEBSOCKET_SYNC_FILES_URL', true) ||
+                  env.get('FILES_SERVER_PROBE_URL', true) ||
+                  env.get('FILES_SERVER_URL', true)
+                )
+              ? 'FILES_INTERNAL_URL'
+              : !env.get('AUTH_JWT_SECRET', true)
+                ? 'AUTH_JWT_SECRET'
+                : !env.get('VALET_TOKEN_SECRET', true)
+                  ? 'VALET_TOKEN_SECRET'
+                  : 'TRANSPORT_CONSTRUCTION'
+          syncGateDiagnostics.record({
+            ...gateObservation,
+            filesAdvertised: filesComposition.advertised,
+            ...(filesUnmetCondition ? { filesUnmetCondition } : {}),
+          })
+
           if (filesComposition.advertised) {
             logger.info(
               `Realtime FILES_V1 transport advertised against the files service at ${filesComposition.filesServerUrl} (from ${filesComposition.source})`,
@@ -628,7 +690,14 @@ void container
             logger.info(`Realtime FILES_V1 transport not advertised: ${filesComposition.reason}.`)
           }
         } else if (webSocketSyncEnabled) {
-          logger.warn('WebSocket sync capability is unavailable: durable backend and shared Redis state are required.')
+          // This branch means the sync lane was NOT built. It used to say only
+          // "durable backend and shared Redis state are required", which does
+          // not distinguish an unbound Redis from an unbound gRPC syncing proxy
+          // — two different fixes behind one sentence. Name them.
+          logger.warn(
+            `WebSocket sync capability was not built: ${describeUnmetSyncPreconditions(unmetSyncPreconditions)}`,
+            { unmetPreconditions: unmetSyncPreconditions.map(({ code }) => code) },
+          )
         }
 
         const gateway = webSocketRuntime.attach({

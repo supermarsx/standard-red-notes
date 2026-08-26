@@ -28,9 +28,11 @@ import {
   RequiredCrossServiceTokenMiddleware,
   createAdminEmailDeliveryRouter,
   CollaborationAuthorizationService,
+  describeUnmetSyncPreconditions,
   LoopbackSyncApiRpcAdapter,
   DirectCallSyncCommandPort,
   parseOptionalPositiveInteger,
+  resolveUnmetSyncPreconditions,
   parseWebSocketSyncEnabled,
   resolveWebSocketSyncAllowedOrigins,
   SyncWebSocketCommandAdapter,
@@ -602,6 +604,25 @@ export class HomeServer implements HomeServerInterface {
       let realtime: { stop(): Promise<void> } | undefined
       const redisHost = env.get('REDIS_HOST', true) || undefined
       const connectionTokenSecret = env.get('WEB_SOCKET_CONNECTION_TOKEN_SECRET', true) || undefined
+      // Standard Red Notes: same DEFINITIVE, once-per-boot verdict the distributed
+      // api-gateway emits, from the same shared module, so an operator reads the
+      // identical precondition names whichever deployment they run. The durable
+      // backend is in-process here, so that condition is satisfied by construction.
+      // Presence only — booleans in, constant remedies out, never a value.
+      const unmetSyncPreconditions = resolveUnmetSyncPreconditions({
+        connectionTokenSecretPresent: Boolean(connectionTokenSecret),
+        webSocketSyncEnabled,
+        redisBound: Boolean(redisHost),
+        syncingServerGrpcBound: true,
+      })
+      if (unmetSyncPreconditions.length === 0) {
+        logger.info('WebSocket sync preconditions are satisfied; the realtime transport will be advertised.')
+      } else {
+        logger.warn(
+          `WebSocket sync is UNAVAILABLE. Unmet preconditions: ${describeUnmetSyncPreconditions(unmetSyncPreconditions)}`,
+          { unmetPreconditions: unmetSyncPreconditions.map(({ code }) => code) },
+        )
+      }
       if (connectionTokenSecret && redisHost) {
         try {
           let sync: SyncGatewayOptions | undefined
@@ -727,8 +748,11 @@ export class HomeServer implements HomeServerInterface {
           throw error
         }
       } else if (webSocketSyncEnabled) {
+        // Was "connection-token secret and shared Redis state are required",
+        // which never said which of the two was absent.
         logger.warn(
-          'WebSocket sync capability is unavailable: connection-token secret and shared Redis state are required.',
+          `WebSocket sync capability was not built: ${describeUnmetSyncPreconditions(unmetSyncPreconditions)}`,
+          { unmetPreconditions: unmetSyncPreconditions.map(({ code }) => code) },
         )
       }
 
