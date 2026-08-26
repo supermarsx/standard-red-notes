@@ -207,9 +207,12 @@ export function buildCapabilityRows(
     let tone: Tone
     let explanation: string
 
-    // Recognized-only is checked BEFORE negotiated on purpose. FILES_V1 is
-    // negotiated on a healthy socket and still carries nothing, so reporting it
-    // as active because it appeared in the handshake would be a confident lie.
+    // Recognized-only is checked BEFORE negotiated on purpose: such an operation
+    // appears in a healthy handshake and still carries nothing, so calling it
+    // active because it was negotiated would be a confident lie. No operation is
+    // in that bucket today — FILES_V1 was, until the download lane began consuming
+    // it — but the ordering is the invariant, not the occupant, so it stays
+    // correct for whichever lane lands server-side first next.
     if (recognizedOnly.has(operation)) {
       status = 'recognized-only'
       tone = 'warn'
