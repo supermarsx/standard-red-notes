@@ -192,15 +192,19 @@ describe('AdminDiagnosticsTab', () => {
     return [...(row?.querySelectorAll('td') ?? [])].map((cell) => cell.textContent ?? '')
   }
 
-  it('shows FILES_V1 as advertised-but-inert, not as active and not as a flat gap', async () => {
+  it('shows FILES_V1 as client-implemented now that downloads consume the lane', async () => {
     await renderTab(makeApplication())
 
-    const [operation, server, client, status, why] = capabilityRow('FILES_V1')
+    // This fixture is HTTP-only, so the honest status is the same "Unknown" every
+    // implemented-but-unnegotiated operation gets — not "Carries nothing", which
+    // would now understate a lane that does carry encrypted file bytes, and not a
+    // client gap, which would overstate a plain absence of socket.
+    const [operation, server, client, status] = capabilityRow('FILES_V1')
     expect(operation).toBe('FILES_V1')
     expect(server).toBe('yes')
-    expect(client).toBe('no')
-    expect(status).toBe('Carries nothing')
-    expect(why).toContain('no handler')
+    expect(client).toBe('yes')
+    expect(status).toBe('Unknown')
+    expect(status).not.toBe('Carries nothing')
   })
 
   it('shows an operation both sides implement without calling it broken while HTTP-only', async () => {

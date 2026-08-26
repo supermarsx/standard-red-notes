@@ -1,5 +1,6 @@
 import {
   buildCapabilityRows,
+  CLIENT_RECOGNIZED_ONLY_OPERATIONS,
   CLIENT_SYNC_OPERATIONS,
   describeDeployment,
   describeTransport,
@@ -162,17 +163,17 @@ describe('sync diagnostics model', () => {
       expect(finding?.detail).toContain('needs a client change')
     })
 
-    it('reports an advertised-but-inert operation separately from an outright gap', () => {
+    it('no longer reports FILES_V1 as advertised-but-inert now that downloads consume it', () => {
       const diagnosis = diagnose(
         { ...gateSatisfied, protocol: { version: 1, serverOperations: [...CLIENT_SYNC_OPERATIONS, 'FILES_V1'] } },
         { state: 'READY', operations: [...CLIENT_SYNC_OPERATIONS, 'FILES_V1'] },
       )
 
-      const finding = diagnosis.findings.find((entry) => entry.title.includes('carries nothing'))
-      expect(finding?.title).toContain('FILES_V1')
-      expect(finding?.detail).toContain('stays on HTTP')
-      // It must NOT also be reported as a flat client gap — one honest finding.
+      // Telling an operator that a working file lane carries nothing is the same
+      // class of false report as the false failure this screen just shed.
+      expect(diagnosis.findings.some((entry) => entry.title.includes('carries nothing'))).toBe(false)
       expect(diagnosis.findings.some((entry) => entry.title.includes('does not implement'))).toBe(false)
+      expect(diagnosis.findings).toHaveLength(0)
     })
 
     it('reports a fully configured deployment as healthy with no findings', () => {
@@ -203,10 +204,10 @@ describe('sync diagnostics model', () => {
       expect(future?.explanation).toContain('not a misconfiguration')
     })
 
-    it('does not report a recognized-only operation as active just because it was negotiated', () => {
-      // FILES_V1 appears in a healthy handshake and still carries nothing. Calling
-      // it active because it was negotiated would be a confident lie, and it is
-      // the row an operator is most likely to misread.
+    it('reports a negotiated FILES_V1 as active now that the download lane consumes it', () => {
+      // The mirror of the row this panel used to get wrong: while FILES_V1 had no
+      // client consumer, calling it active was a confident lie. Now that downloads
+      // stream over it, calling it "carries nothing" would be the same lie inverted.
       const rows = buildCapabilityRows(
         [...CLIENT_SYNC_OPERATIONS, 'FILES_V1'],
         [...CLIENT_SYNC_OPERATIONS, 'FILES_V1'],
@@ -214,17 +215,28 @@ describe('sync diagnostics model', () => {
       )
       const files = rows.find((row) => row.operation === 'FILES_V1')
 
-      expect(files?.status).toBe('recognized-only')
+      expect(files?.status).toBe('active')
       expect(files?.negotiated).toBe(true)
-      expect(files?.clientImplemented).toBe(false)
-      expect(files?.explanation).toContain('carries nothing')
-      expect(files?.explanation).toContain('dropping the whole socket')
+      expect(files?.clientImplemented).toBe(true)
+      expect(files?.explanation).toContain('carrying traffic')
     })
 
-    it('still lists a recognized-only operation when the server does not advertise it', () => {
+    it('does not claim FILES_V1 is broken when no socket is negotiated at all', () => {
       const rows = buildCapabilityRows([...CLIENT_SYNC_OPERATIONS], [], false)
+      const files = rows.find((row) => row.operation === 'FILES_V1')
 
-      expect(rows.find((row) => row.operation === 'FILES_V1')?.status).toBe('recognized-only')
+      expect(files?.clientImplemented).toBe(true)
+      expect(files?.status).not.toBe('not-negotiated')
+      expect(files?.status).not.toBe('client-gap')
+    })
+
+    it('classifies every protocol operation, leaving nothing recognized-only today', () => {
+      // An empty recognized-only list is a real state, not a placeholder: it means
+      // every operation this build accepts at the handshake also carries traffic.
+      // The next server-side lane will land in that bucket and this asserts the
+      // panel still has somewhere honest to put it.
+      expect([...CLIENT_RECOGNIZED_ONLY_OPERATIONS]).toEqual([])
+      expect([...CLIENT_SYNC_OPERATIONS]).toContain('FILES_V1')
     })
 
     it('never drops an operation that only one side knows about', () => {

@@ -33,22 +33,26 @@ export const CLIENT_SYNC_OPERATIONS = [
   'API_RPC',
   'STREAM_ASSISTANT',
   'INVITE_EVENTS',
+  // Consumed since the download lane landed: a negotiated FILES_V1 now carries
+  // real encrypted file bytes. Uploads and shared-vault downloads still use HTTP,
+  // but this list answers "does a negotiated lane carry traffic", and it does.
+  'FILES_V1',
 ] as const satisfies readonly SyncNegotiatedOperation[]
 
 /**
  * Operations the client recognizes at handshake but does not consume.
  *
- * FILES_V1 is the live case. A configured gateway advertises it whenever a files
- * adapter is ready; the client has no handler, so file transfers never use the
- * socket. Until the worker was taught to recognize it, that advertisement failed
- * the handshake outright and dropped the WHOLE socket — sync included — to HTTP.
- * Worth stating plainly in the panel: a server-side capability can be the reason
- * an unrelated lane is on HTTP.
+ * Currently empty, and that is a real state rather than a placeholder. The
+ * distinction is worth keeping: recognizing an operation is what stops an
+ * advertised lane costing the ENTIRE socket, since the worker rejects a handshake
+ * naming anything it does not know. FILES_V1 spent time in exactly this bucket —
+ * recognized so the handshake survived, with no client consumer — and the next
+ * server-side lane will land the same way.
  *
  * Not constrained to `SyncNegotiatedOperation`, so this file compiles whether or
  * not the union has caught up with the worker's accept-set yet.
  */
-export const CLIENT_RECOGNIZED_ONLY_OPERATIONS = ['FILES_V1'] as const
+export const CLIENT_RECOGNIZED_ONLY_OPERATIONS = [] as const
 
 /**
  * Every protocol operation must be classified as consumed or recognized-only.
