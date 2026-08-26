@@ -22,6 +22,7 @@ import { formatDateForContextMenu } from '@/Utils/DateUtils'
 import { MutuallyExclusiveMediaQueryBreakpoints, useMediaQuery } from '@/Hooks/useMediaQuery'
 import { filesSortByForTableSortBy, getFileTypeLabel, tableSortByForFilesSortBy } from './FilesViewTableUtils'
 import ItemOptionsMenu from '@/Components/ContentTableView/ItemOptionsMenu'
+import BulkFileActionBar from './BulkFileActionBar'
 
 type Props = {
   application: WebApplication
@@ -116,6 +117,19 @@ const FilesView: FunctionComponent<Props> = observer(({ application, className, 
   }, [itemListController, sorted])
 
   const clearSelection = useCallback(() => itemListController.clearFilesViewSelection(), [itemListController])
+
+  // Drop only the files a bulk action actually completed, so anything that failed
+  // stays selected and a retry does not redo the work that already succeeded.
+  const deselectFiles = useCallback(
+    (processed: FileItem[]) => {
+      const processedUuids = new Set(processed.map((file) => file.uuid))
+      const remaining = Array.from(itemListController.filesViewSelectedUuids).filter(
+        (uuid) => !processedUuids.has(uuid),
+      )
+      itemListController.selectAllFilesViewFiles(remaining)
+    },
+    [itemListController],
+  )
 
   const uploadNewFiles = useCallback(() => {
     if (!application.entitledToFiles) {
@@ -300,41 +314,45 @@ const FilesView: FunctionComponent<Props> = observer(({ application, className, 
       </div>
 
       {selectionActive && (
-        <div className="border-border flex items-center gap-3 border-b px-4 py-2">
-          <span className="text-sm font-semibold">{selectedUuids.size} selected</span>
-          <button className="border-border hover:bg-contrast rounded border px-2 py-1 text-sm" onClick={selectAll}>
-            Select all
-          </button>
-          <button className="border-border hover:bg-contrast rounded border px-2 py-1 text-sm" onClick={clearSelection}>
-            Clear
-          </button>
-          <button
-            ref={bulkMenuAnchorRef}
-            className="border-border hover:bg-contrast ml-auto flex items-center gap-1 rounded border px-2 py-1 text-sm"
-            onClick={() => setBulkMenuVisible((visible) => !visible)}
-          >
-            <Icon type="more" size="medium" />
-            Actions
-          </button>
-          <Popover
-            title="File options"
-            open={bulkMenuVisible}
-            anchorElement={bulkMenuAnchorRef}
-            togglePopover={() => setBulkMenuVisible(false)}
-            side="bottom"
-            align="end"
-            className="py-2"
-          >
-            <Menu a11yLabel="Bulk file context menu">
-              <FileMenuOptions
-                closeMenu={() => setBulkMenuVisible(false)}
-                shouldShowRenameOption={true}
-                shouldShowAttachOption={false}
-                selectedFiles={selectedFiles}
-              />
-            </Menu>
-          </Popover>
-        </div>
+        <BulkFileActionBar
+          application={application}
+          selectedFiles={selectedFiles}
+          totalFileCount={sorted.length}
+          onSelectAll={selectAll}
+          onClearSelection={clearSelection}
+          onFilesProcessed={deselectFiles}
+          moreActions={
+            <>
+              <button
+                ref={bulkMenuAnchorRef}
+                className="border-border hover:bg-contrast flex items-center gap-1 rounded border px-2 py-1 text-sm"
+                onClick={() => setBulkMenuVisible((visible) => !visible)}
+              >
+                <Icon type="more" size="medium" />
+                More
+              </button>
+              <Popover
+                title="File options"
+                open={bulkMenuVisible}
+                anchorElement={bulkMenuAnchorRef}
+                togglePopover={() => setBulkMenuVisible(false)}
+                side="bottom"
+                align="end"
+                className="py-2"
+              >
+                <Menu a11yLabel="Bulk file context menu">
+                  <FileMenuOptions
+                    closeMenu={() => setBulkMenuVisible(false)}
+                    shouldShowRenameOption={true}
+                    shouldShowAttachOption={false}
+                    selectedFiles={selectedFiles}
+                    omitBulkManagedActions={true}
+                  />
+                </Menu>
+              </Popover>
+            </>
+          }
+        />
       )}
 
       <div className="min-h-0 flex-grow overflow-hidden">

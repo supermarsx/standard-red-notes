@@ -27,6 +27,13 @@ type Props = {
   shouldShowRenameOption: boolean
   shouldShowAttachOption: boolean
   selectedFiles: FileItem[]
+  /**
+   * Set when the surrounding surface already offers download / protect / delete as
+   * first-class bulk actions with per-file failure reporting. Those entries are then
+   * omitted here so there is only one batched path for each, rather than a second
+   * one that discards which files failed.
+   */
+  omitBulkManagedActions?: boolean
 }
 
 const FileMenuOptions: FunctionComponent<Props> = ({
@@ -36,6 +43,7 @@ const FileMenuOptions: FunctionComponent<Props> = ({
   shouldShowRenameOption,
   shouldShowAttachOption,
   selectedFiles,
+  omitBulkManagedActions = false,
 }) => {
   const { t } = useTranslation('files')
   const application = useApplication()
@@ -179,6 +187,7 @@ const FileMenuOptions: FunctionComponent<Props> = ({
             disabled={areSomeFilesInReadonlySharedVault}
           />
         )}
+        {!omitBulkManagedActions && (
         <MenuSwitchButtonItem
           checked={hasProtectedFiles}
           onChange={(hasProtectedFiles) => {
@@ -189,17 +198,20 @@ const FileMenuOptions: FunctionComponent<Props> = ({
           <Icon type="lock" className={`text-neutral mr-2 ${MenuItemIconSize}`} />
           {t('passwordProtect')}
         </MenuSwitchButtonItem>
+        )}
       </MenuSection>
       <MenuSection>
-        <MenuItem
-          onClick={() => {
-            void application.filesController.downloadFiles(selectedFiles)
-            closeMenu()
-          }}
-        >
-          <Icon type="download" className={`text-neutral mr-2 ${MenuItemIconSize}`} />
-          {canShowZipDownloadOption ? t('downloadSeparately') : t('common:download')}
-        </MenuItem>
+        {!omitBulkManagedActions && (
+          <MenuItem
+            onClick={() => {
+              void application.filesController.downloadFiles(selectedFiles)
+              closeMenu()
+            }}
+          >
+            <Icon type="download" className={`text-neutral mr-2 ${MenuItemIconSize}`} />
+            {canShowZipDownloadOption ? t('downloadSeparately') : t('common:download')}
+          </MenuItem>
+        )}
         {canShowZipDownloadOption && (
           <MenuItem
             onClick={() => {
@@ -226,16 +238,18 @@ const FileMenuOptions: FunctionComponent<Props> = ({
             {t('common:rename')}
           </MenuItem>
         )}
-        <MenuItem
-          onClick={() => {
-            closeMenuAndToggleFilesList()
-            void application.filesController.deleteFilesPermanently(selectedFiles)
-          }}
-          disabled={areSomeFilesInReadonlySharedVault}
-        >
-          <Icon type="trash" className={`text-danger mr-2 ${MenuItemIconSize}`} />
-          <span className="text-danger">{t('common:deletePermanently')}</span>
-        </MenuItem>
+        {!omitBulkManagedActions && (
+          <MenuItem
+            onClick={() => {
+              closeMenuAndToggleFilesList()
+              void application.filesController.deleteFilesPermanently(selectedFiles)
+            }}
+            disabled={areSomeFilesInReadonlySharedVault}
+          >
+            <Icon type="trash" className={`text-danger mr-2 ${MenuItemIconSize}`} />
+            <span className="text-danger">{t('common:deletePermanently')}</span>
+          </MenuItem>
+        )}
       </MenuSection>
 
       <FileContextMenuBackupOption file={selectedFiles[0]} />

@@ -154,7 +154,10 @@ export const StringUtils = {
   },
   deleteFile(title: string): string {
     const escapedTitle = escapeHtmlString(title)
-    return `Are you sure you want to permanently delete ${escapedTitle}?`
+    return `Are you sure you want to permanently delete ${escapedTitle}? This cannot be undone.`
+  },
+  deleteFiles(count: number): string {
+    return `Are you sure you want to permanently delete ${count} files? This cannot be undone — deleted files are not moved to the trash and cannot be recovered.`
   },
   archiveLockedNotesAttempt(archive: boolean, notesCount = 1): string {
     const archiveString = archive ? 'archive' : 'unarchive'

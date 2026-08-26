@@ -47,6 +47,11 @@ import { stripImageMetadata } from '@/Utils/StripImageMetadata'
 import { getStripImageMetadataEnabled } from '@/Utils/StripImageMetadataSetting'
 import { achievements, METRICS } from '@/Achievements'
 import { formatFileDownloadError } from '@/Utils/FileErrorMessage'
+import {
+  BulkFileProgress,
+  BulkFileResult,
+  runBulkFileOperation,
+} from '@/Components/FilesView/bulkFileOperation'
 
 const UnprotectedFileActions = [FileItemActionType.ToggleFileProtection]
 const NonMutatingFileActions = [FileItemActionType.DownloadFile, FileItemActionType.PreviewFile]
@@ -1034,20 +1039,52 @@ export class FilesController extends AbstractViewController<FilesControllerEvent
     })
   }
 
-  deleteFilesPermanently = async (files: FileItem[]) => {
-    const title = Strings.deleteItemsPermanentlyTitle
-    const text = files.length === 1 ? StringUtils.deleteFile(files[0].name) : Strings.deleteMultipleFiles
+  /**
+   * Resolves with a per-file verdict, or `undefined` when the user declines the
+   * confirmation. Deletion is irreversible and a bulk selection can be large, so
+   * the prompt names the exact count and every file is attempted independently —
+   * a failure part-way through must never be reported as a clean sweep.
+   */
+  deleteFilesPermanently = async (
+    files: FileItem[],
+    options: { onProgress?: (progress: BulkFileProgress) => void } = {},
+  ): Promise<BulkFileResult | undefined> => {
+    if (files.length === 0) {
+      return { succeeded: [], failed: [] }
+    }
 
-    if (
-      await confirmDialog({
-        title,
-        text,
-        confirmButtonStyle: 'danger',
-      })
-    ) {
-      await Promise.all(files.map((file) => this.files.deleteFile(file)))
+    const title = Strings.deleteItemsPermanentlyTitle
+    const text = files.length === 1 ? StringUtils.deleteFile(files[0].name) : StringUtils.deleteFiles(files.length)
+
+    const confirmed = await confirmDialog({
+      title,
+      text,
+      confirmButtonText: files.length === 1 ? 'Delete' : `Delete ${files.length} files`,
+      confirmButtonStyle: 'danger',
+    })
+
+    if (!confirmed) {
+      return undefined
+    }
+
+    const result = await runBulkFileOperation(
+      files,
+      async (file) => {
+        // deleteFile reports failure by returning an error rather than throwing,
+        // so it has to be promoted or the file counts as deleted when it is not.
+        const error = await this.files.deleteFile(file)
+        if (error) {
+          throw error
+        }
+      },
+      { onProgress: options.onProgress },
+    )
+
+    if (result.succeeded.length > 0) {
       void this.sync.sync()
     }
+
+    return result
   }
 
   setProtectionForFiles = async (protect: boolean, files: FileItem[]) => {
@@ -1077,44 +1114,47 @@ export class FilesController extends AbstractViewController<FilesControllerEvent
     return directoryHandle
   }
 
-  downloadFiles = async (files: FileItem[]) => {
+  /**
+   * Resolves with a per-file verdict, or `undefined` when the user cancels the
+   * download-directory picker. Files that fail are attributed individually rather
+   * than collapsing the whole batch into one rejected promise.
+   */
+  downloadFiles = async (
+    files: FileItem[],
+    options: { onProgress?: (progress: BulkFileProgress) => void } = {},
+  ): Promise<BulkFileResult | undefined> => {
     // macOS doesn't allow multiple calls to the filepicker at the
     // same time, so we need to iterate one by one
-    if (this.platform === Platform.MacDesktop || this.platform === Platform.MacWeb) {
-      let directoryHandle: FileSystemDirectoryHandle | undefined
+    const isMac = this.platform === Platform.MacDesktop || this.platform === Platform.MacWeb
 
-      if (files.length > 1) {
-        try {
-          directoryHandle = await this.getDirectoryHandleForDownloads()
-        } catch (error) {
-          if (error instanceof DOMException && error.name === 'AbortError') {
-            return
-          }
-          console.error(error)
+    let directoryHandle: FileSystemDirectoryHandle | undefined
+
+    if (isMac && files.length > 1) {
+      try {
+        directoryHandle = await this.getDirectoryHandleForDownloads()
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') {
+          return undefined
         }
+        console.error(error)
       }
-
-      for (const file of files) {
-        await this.handleFileAction({
-          type: FileItemActionType.DownloadFile,
-          payload: {
-            file,
-            directoryHandle,
-          },
-        })
-      }
-      return
     }
 
-    await Promise.all(
-      files.map((file) =>
-        this.handleFileAction({
+    return runBulkFileOperation(
+      files,
+      async (file) => {
+        const { didHandleAction } = await this.handleFileAction({
           type: FileItemActionType.DownloadFile,
-          payload: {
-            file,
-          },
-        }),
-      ),
+          payload: { file, directoryHandle },
+        })
+        // A refused authorization challenge or a file that vanished mid-batch
+        // returns false instead of throwing; counting it as downloaded would be a
+        // lie, so it is attributed as a failure like any other.
+        if (!didHandleAction) {
+          throw new Error('Not downloaded — the file is unavailable or access was not authorized')
+        }
+      },
+      { onProgress: options.onProgress, concurrency: isMac ? 1 : undefined },
     )
   }
 
