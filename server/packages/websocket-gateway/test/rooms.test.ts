@@ -1980,9 +1980,7 @@ describe('handleRelayFrame room-join authorization', () => {
 
     expect(reached).toBe(0)
     expect(rooms.roomCount()).toBe(0)
-    expect(conn.sent).toContain(
-      JSON.stringify({ t: 'room-denied', room: 'n1', requestId: 'lease-downgraded' }),
-    )
+    expect(conn.sent).toContain(JSON.stringify({ t: 'room-denied', room: 'n1', requestId: 'lease-downgraded' }))
     expect(conn.sent.some((message) => message.includes('room-joined'))).toBe(false)
   })
 })

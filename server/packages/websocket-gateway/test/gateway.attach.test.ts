@@ -685,16 +685,14 @@ describe('websocket connection lifecycle', () => {
     // literal-3 v3 authorization. The grant is never consumed here -- the
     // oversized frame is rejected before any join -- but it must still be a
     // shape the gateway would actually accept.
-    const authorizeRoomJoin = vi.fn(
-      (): RoomJoinAuthorization => ({
-        authorized: true,
-        expiresAt: Date.now() + 60_000,
-        serverUpdatedAtTimestamp: 1,
-        collaborationProtocolVersion: COLLABORATION_PROTOCOL_VERSION,
-        roomEpoch: ROOM_EPOCH,
-        collaborationSecurityEpoch: SECURITY_EPOCH,
-      }),
-    )
+    const authorizeRoomJoin = vi.fn((): RoomJoinAuthorization => ({
+      authorized: true,
+      expiresAt: Date.now() + 60_000,
+      serverUpdatedAtTimestamp: 1,
+      collaborationProtocolVersion: COLLABORATION_PROTOCOL_VERSION,
+      roomEpoch: ROOM_EPOCH,
+      collaborationSecurityEpoch: SECURITY_EPOCH,
+    }))
     await attachGateway({ authorizeRoomJoin })
     const token = mintConnectionToken(
       { userUuid: 'user-large', sessionUuid: 'session-large' },
