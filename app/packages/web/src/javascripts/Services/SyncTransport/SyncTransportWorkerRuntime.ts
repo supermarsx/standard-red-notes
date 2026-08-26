@@ -41,6 +41,25 @@ const OWNER_RENEW_INTERVAL_MS = 5_000
 const MAX_RECONNECT_ATTEMPTS = 2
 const OPAQUE_SESSION_SCOPE_PATTERN = /^sync-session-v1:[a-f0-9]{64}$/u
 
+/**
+ * Every operation this build knows the gateway may advertise. An `AUTHENTICATED`
+ * frame naming anything outside this set is rejected, because an unrecognized
+ * operation means the peer is speaking a protocol this client cannot bound.
+ * Recognizing an operation here is deliberately weaker than consuming it: a lane
+ * stays unused until a caller opts into it, but its presence must never cost the
+ * socket. `FILES_V1` is recognized-not-consumed today — the gateway advertises it
+ * whenever a files adapter is ready, and without this entry that handshake would
+ * drop sync itself to HTTP.
+ */
+const NEGOTIABLE_OPERATIONS: ReadonlySet<SyncNegotiatedOperation> = new Set([
+  'SYNC_ITEMS',
+  'AUTHORIZE_COLLABORATION',
+  'API_RPC',
+  'STREAM_ASSISTANT',
+  'INVITE_EVENTS',
+  'FILES_V1',
+])
+
 export interface SyncSocketLike {
   readonly readyState: number
   readonly bufferedAmount: number
@@ -721,14 +740,7 @@ export class SyncTransportWorkerRuntime {
         Number(nextSequence) < 1 ||
         !Array.isArray(operations) ||
         !operations.includes('SYNC_ITEMS') ||
-        operations.some(
-          (operation) =>
-            operation !== 'SYNC_ITEMS' &&
-            operation !== 'AUTHORIZE_COLLABORATION' &&
-            operation !== 'API_RPC' &&
-            operation !== 'STREAM_ASSISTANT' &&
-            operation !== 'INVITE_EVENTS',
-        )
+        operations.some((operation) => !NEGOTIABLE_OPERATIONS.has(operation as SyncNegotiatedOperation))
       ) {
         await this.fallback('auth-failed')
         return

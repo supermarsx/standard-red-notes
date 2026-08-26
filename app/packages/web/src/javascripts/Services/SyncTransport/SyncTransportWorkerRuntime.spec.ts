@@ -529,6 +529,38 @@ describe('SyncTransportWorkerRuntime', () => {
     )
   })
 
+  it('keeps a gateway that advertises no optional lane on exactly SYNC_ITEMS', async () => {
+    const harness = setup()
+    const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, ['SYNC_ITEMS'])
+
+    expect(harness.messages).toContainEqual(expect.objectContaining({ type: 'NEGOTIATED', operations: ['SYNC_ITEMS'] }))
+    expect(harness.messages.some((message) => message.type === 'HTTP_FALLBACK')).toBe(false)
+    expect(socket.sent.some((entry) => JSON.parse(entry).type === 'COMMAND')).toBe(true)
+  })
+
+  it('negotiates against a FILES_V1 gateway without dropping sync to HTTP', async () => {
+    const harness = setup()
+    const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, ['SYNC_ITEMS', 'FILES_V1'])
+
+    // The gateway advertises FILES_V1 whenever a files adapter is ready. Recognizing
+    // it must not be confused with consuming it: no lane opens here, but the
+    // handshake has to survive, or sync itself would fall back to HTTP.
+    expect(harness.messages).toContainEqual(
+      expect.objectContaining({ type: 'NEGOTIATED', operations: ['SYNC_ITEMS', 'FILES_V1'] }),
+    )
+    expect(harness.messages.some((message) => message.type === 'HTTP_FALLBACK')).toBe(false)
+    expect(socket.sent.some((entry) => JSON.parse(entry).type === 'COMMAND')).toBe(true)
+    expect(socket.sent.some((entry) => String(JSON.parse(entry).type).startsWith('FILES_'))).toBe(false)
+  })
+
+  it('still fails the handshake when the gateway advertises an operation this build cannot bound', async () => {
+    const harness = setup()
+    await authorize(harness, body(), 't'.repeat(40), SESSION_A, ['SYNC_ITEMS', 'FILES_V2'])
+
+    expect(harness.messages).toContainEqual(expect.objectContaining({ type: 'HTTP_FALLBACK', reason: 'auth-failed' }))
+    expect(harness.messages.some((message) => message.type === 'NEGOTIATED')).toBe(false)
+  })
+
   it('multiplexes credit-controlled RPC and never auto-replays after request bytes are sent', async () => {
     const harness = setup()
     const request = {

@@ -15,8 +15,15 @@ export const MAX_RPC_DEADLINE_MS = 120_000
 export const DEFAULT_RPC_CREDIT_BYTES = 256 * 1024
 export const MAX_RPC_CREDIT_BYTES = 4 * 1024 * 1024
 
+/**
+ * Must stay a superset of every operation the gateway can advertise
+ * (`websocket-gateway/src/syncProtocol.ts`). The worker rejects an
+ * `AUTHENTICATED` frame carrying an operation outside this set, so an operation
+ * missing here does not merely disable its own lane — it fails the handshake and
+ * drops the whole socket, sync included, to HTTP.
+ */
 export type SyncNegotiatedOperation =
-  'SYNC_ITEMS' | 'AUTHORIZE_COLLABORATION' | 'API_RPC' | 'STREAM_ASSISTANT' | 'INVITE_EVENTS'
+  'SYNC_ITEMS' | 'AUTHORIZE_COLLABORATION' | 'API_RPC' | 'STREAM_ASSISTANT' | 'INVITE_EVENTS' | 'FILES_V1'
 
 export type SyncTransportState =
   'HTTP_ONLY' | 'CONNECTING' | 'AUTHENTICATING' | 'READY' | 'DEGRADED' | 'HTTP_FALLBACK' | 'HALF_OPEN'
