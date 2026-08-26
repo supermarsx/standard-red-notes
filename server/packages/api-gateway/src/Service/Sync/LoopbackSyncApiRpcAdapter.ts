@@ -138,17 +138,74 @@ function isAllowedRpcRequest(
   )
 }
 
+/**
+ * Route FAMILIES the websocket RPC lane may never reach, as base paths. A path
+ * is forbidden when it equals a family or is nested under it.
+ *
+ * Expressed as families rather than a hand-maintained list of individual routes
+ * because the previous list had entries that matched NOTHING, and a block-list
+ * that silently matches nothing is worse than none — it reads as protection.
+ * Two entries were dead: `/v1/sockets/sync/tickets` was plural where the route
+ * is `/v1/sockets/sync/ticket`, and `startsWith('/sockets/')` missed every
+ * `/v1/`-prefixed form, which is how those routes are actually mounted. A third,
+ * the bare `/v1/users`, matched only the exact registration path and left the
+ * whole `/v1/users/:uuid/*` subtree — including `mfa-secret` — reachable, while
+ * the neighbouring `/v1/items` and `/v1/sessions` entries did match subtrees.
+ *
+ * A family cannot drift with a singular/plural rename or a new sibling route,
+ * so adding a route under one of these is safe by default. Keep them broad.
+ */
+const FORBIDDEN_RPC_ROUTE_FAMILIES: readonly string[] = [
+  // Durable item sync belongs to SYNC_ITEMS, which owns its idempotency.
+  '/v1/items',
+  // Session issuance/refresh/revocation: never re-enter auth over this lane.
+  '/v1/sessions',
+  '/v1/login-params',
+  // Registration plus the whole per-user subtree: params, settings, features,
+  // subscription and mfa-secret.
+  '/v1/users',
+  // The socket handshake itself — token mint, ticket, capabilities. Routing it
+  // through the transport it establishes is circular. Both mount points.
+  '/v1/sockets',
+  '/sockets',
+]
+
+/**
+ * Normalizes to the form the family comparison can trust, or `undefined` when
+ * the path cannot be understood — the caller treats that as forbidden.
+ *
+ * Express routes case-insensitively and non-strictly by default, so `/V1/Users/`
+ * reaches the same controller as `/v1/users`; comparing raw pathnames would let
+ * either variation walk past the block-list. Percent-encoding is decoded for the
+ * same reason, and a malformed encoding fails closed rather than being compared
+ * in its raw form.
+ */
+function normalizeRpcPathname(path: string): string | undefined {
+  let pathname: string
+  try {
+    // Resolves dot-segments, so `/v1/items/../users` cannot hide its target.
+    pathname = new URL(path, 'http://rpc.invalid').pathname
+    pathname = decodeURIComponent(pathname)
+  } catch {
+    return undefined
+  }
+
+  const collapsed = pathname
+    .toLowerCase()
+    .replace(/\/{2,}/gu, '/')
+    .replace(/\/+$/u, '')
+
+  return collapsed === '' ? '/' : collapsed
+}
+
 function isForbiddenRpcPath(path: string): boolean {
-  const pathname = new URL(path, 'http://rpc.invalid').pathname
-  return (
-    pathname === '/v1/items' ||
-    pathname.startsWith('/v1/items/') ||
-    pathname === '/v1/sessions' ||
-    pathname.startsWith('/v1/sessions/') ||
-    pathname === '/v1/login-params' ||
-    pathname === '/v1/users' ||
-    pathname === '/v1/sockets/sync/tickets' ||
-    pathname.startsWith('/sockets/')
+  const pathname = normalizeRpcPathname(path)
+  if (pathname === undefined) {
+    return true
+  }
+
+  return FORBIDDEN_RPC_ROUTE_FAMILIES.some(
+    (family) => pathname === family || pathname.startsWith(`${family}/`),
   )
 }
 
