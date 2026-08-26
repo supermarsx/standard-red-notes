@@ -214,6 +214,46 @@ export async function fileBinaryPayloadMatchesDigest(
   return difference === 0
 }
 
+/** Hex digest of one chunk payload, for a binary frame header. */
+export async function fileBinaryPayloadDigest(
+  bytes: Uint8Array,
+  subtle: SubtleCrypto = crypto.subtle,
+): Promise<string> {
+  const digest = new Uint8Array(await subtle.digest('SHA-256', bytes as unknown as BufferSource))
+  return [...digest].map((byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
+/**
+ * Inverse of {@link decodeFileBinaryFrame}, byte-for-byte identical to the
+ * gateway's `encodeFileBinaryFrame`: 4-byte `SRNF` magic, version, kind, a
+ * big-endian uint16 header length, the JSON header, then the payload.
+ *
+ * Validates before emitting rather than after. A frame the gateway would reject
+ * costs a round trip and, on an upload, leaves the transfer in a state the client
+ * then has to resolve — so anything checkable locally is checked locally.
+ */
+export function encodeFileBinaryFrame(header: SocketFileBinaryHeader, bytes: Uint8Array): Uint8Array {
+  if (!isFileBinaryHeader(header, bytes.byteLength)) {
+    throw new FileBinaryFrameError('FILE_FRAME_MALFORMED')
+  }
+  const headerBytes = utf8Bytes(JSON.stringify(header))
+  if (headerBytes.byteLength > MAX_FILE_BINARY_HEADER_BYTES) {
+    throw new FileBinaryFrameError('FILE_FRAME_TOO_LARGE')
+  }
+  const frame = new Uint8Array(FILE_BINARY_PREFIX_BYTES + headerBytes.byteLength + bytes.byteLength)
+  frame.set(FILE_BINARY_MAGIC, 0)
+  frame[4] = FILES_PROTOCOL_VERSION
+  frame[5] = header.kind === 'UPLOAD_CHUNK' ? 1 : 2
+  frame[6] = (headerBytes.byteLength >> 8) & 0xff
+  frame[7] = headerBytes.byteLength & 0xff
+  frame.set(headerBytes, FILE_BINARY_PREFIX_BYTES)
+  frame.set(bytes, FILE_BINARY_PREFIX_BYTES + headerBytes.byteLength)
+  if (frame.byteLength > MAX_FILE_BINARY_FRAME_BYTES) {
+    throw new FileBinaryFrameError('FILE_FRAME_TOO_LARGE')
+  }
+  return frame
+}
+
 /**
  * Must stay a superset of every operation the gateway can advertise
  * (`websocket-gateway/src/syncProtocol.ts`). The worker rejects an

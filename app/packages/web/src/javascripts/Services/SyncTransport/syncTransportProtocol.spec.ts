@@ -1,8 +1,14 @@
 import {
   canonicalSyncJson,
+  decodeFileBinaryFrame,
   digestSyncBody,
+  encodeFileBinaryFrame,
+  fileBinaryPayloadDigest,
+  fileBinaryPayloadMatchesDigest,
   isPermanentSyncFallbackReason,
+  MAX_FILE_CHUNK_BYTES,
   normalizeSyncRequestForWire,
+  type SocketFileBinaryHeader,
 } from './syncTransportProtocol'
 import { webcrypto } from 'crypto'
 
@@ -103,5 +109,85 @@ describe('websocket sync protocol digest', () => {
     cyclic.self = cyclic
     expect(() => normalizeSyncRequestForWire(cyclic as never)).toThrow('not JSON serializable')
     expect(() => normalizeSyncRequestForWire(null as never)).toThrow('JSON object')
+  })
+})
+
+describe('FILES_V1 binary frames', () => {
+  const subtle = webcrypto.subtle as unknown as SubtleCrypto
+
+  const header = async (
+    bytes: Uint8Array,
+    overrides: Partial<SocketFileBinaryHeader> = {},
+  ): Promise<SocketFileBinaryHeader> => ({
+    kind: 'UPLOAD_CHUNK',
+    requestId: 'request-1',
+    transferId: 'transfer-1',
+    generation: 1,
+    index: 0,
+    offset: 0,
+    declaredSize: bytes.byteLength,
+    byteLength: bytes.byteLength,
+    sha256: await fileBinaryPayloadDigest(bytes, subtle),
+    final: true,
+    ...overrides,
+  })
+
+  it('round-trips a chunk through the exact wire layout the gateway expects', async () => {
+    const bytes = Uint8Array.from({ length: 300 }, (_, index) => index % 256)
+    const encoded = encodeFileBinaryFrame(await header(bytes), bytes)
+
+    // The prefix is the interop contract with `encodeFileBinaryFrame` on the
+    // server: SRNF, version, kind, then a big-endian uint16 header length.
+    expect([...encoded.subarray(0, 4)]).toEqual([0x53, 0x52, 0x4e, 0x46])
+    expect(encoded[4]).toBe(1)
+    expect(encoded[5]).toBe(1)
+    const headerLength = (encoded[6] << 8) | encoded[7]
+    expect(encoded.byteLength).toBe(8 + headerLength + bytes.byteLength)
+
+    const decoded = decodeFileBinaryFrame(encoded)
+    expect(decoded.header).toEqual(await header(bytes))
+    expect([...decoded.bytes]).toEqual([...bytes])
+    await expect(fileBinaryPayloadMatchesDigest(decoded, subtle)).resolves.toBe(true)
+  })
+
+  it('marks the kind byte so a download chunk cannot be read back as an upload', async () => {
+    const bytes = Uint8Array.from([1, 2, 3])
+    const encoded = encodeFileBinaryFrame(await header(bytes, { kind: 'DOWNLOAD_CHUNK' }), bytes)
+
+    expect(encoded[5]).toBe(2)
+    expect(decodeFileBinaryFrame(encoded).header.kind).toBe('DOWNLOAD_CHUNK')
+  })
+
+  it('detects a payload that does not match its declared digest', async () => {
+    const bytes = Uint8Array.from([1, 2, 3, 4])
+    const encoded = encodeFileBinaryFrame(await header(bytes), bytes)
+    // Corrupt one payload byte, leaving the header untouched.
+    encoded[encoded.byteLength - 1] ^= 0xff
+
+    const decoded = decodeFileBinaryFrame(encoded)
+    await expect(fileBinaryPayloadMatchesDigest(decoded, subtle)).resolves.toBe(false)
+  })
+
+  it('refuses to emit a frame whose header disagrees with its payload', async () => {
+    const bytes = Uint8Array.from([1, 2, 3, 4])
+    const claimed = await header(bytes, { byteLength: 3 })
+
+    expect(() => encodeFileBinaryFrame(claimed, bytes)).toThrow('FILE_FRAME_MALFORMED')
+  })
+
+  it('refuses to emit a chunk above the protocol chunk ceiling', async () => {
+    const bytes = new Uint8Array(MAX_FILE_CHUNK_BYTES + 1)
+    // A ceiling to respect, not a budget to raise: the gateway enforces the same
+    // number, so exceeding it locally can only waste a round trip.
+    const claimed = await header(bytes)
+
+    expect(() => encodeFileBinaryFrame(claimed, bytes)).toThrow('FILE_FRAME_MALFORMED')
+  })
+
+  it('refuses a final flag that disagrees with the declared size', async () => {
+    const bytes = Uint8Array.from([1, 2, 3, 4])
+    const claimed = await header(bytes, { declaredSize: 10, final: true })
+
+    expect(() => encodeFileBinaryFrame(claimed, bytes)).toThrow('FILE_FRAME_MALFORMED')
   })
 })
