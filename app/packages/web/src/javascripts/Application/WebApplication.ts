@@ -1346,11 +1346,70 @@ export class WebApplication extends SNApplication implements WebApplicationInter
    * NOTE: the caller is responsible for the privacy disclosure — this can carry
    * decrypted note content and a GitHub PAT to the server.
    */
+  /**
+   * Standard Red Notes: carry the control-plane JSON helpers over the
+   * authenticated websocket RPC lane (`API_RPC`) when the socket is up, and
+   * return undefined to mean "use HTTP" when it is not.
+   *
+   * HTTP stays the fallback by design. An `AuthenticatedRpcError` is only
+   * swallowed when `safeToFallback` proves no request bytes crossed the socket;
+   * an ambiguous or post-send failure is rethrown rather than silently replayed
+   * over HTTP, which for a POST could apply the same mutation twice.
+   *
+   * The socket handshake is excluded explicitly: `/v1/sockets/...` is what
+   * *establishes* this transport, so routing it through the transport would be
+   * circular. The gateway also refuses `/v1/items*` on this lane (those belong
+   * to `SYNC_ITEMS`, which owns their idempotency semantics) — such a request
+   * fails path validation client-side with `safeToFallback`, so it degrades to
+   * HTTP here rather than erroring.
+   */
+  private async controlPlaneRpc<T>(
+    method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
+    path: string,
+    body?: unknown,
+    signal?: AbortSignal,
+  ): Promise<{ status: number; ok: boolean; data: T } | undefined> {
+    const transport = this._webSocketSyncTransport
+    if (!transport || path.startsWith('/v1/sockets/')) {
+      return undefined
+    }
+
+    const hasBody = body !== undefined
+    try {
+      const response = await transport.openAuthenticatedRpcStream({
+        method,
+        path,
+        headers: {
+          accept: 'application/json',
+          ...(hasBody ? { 'content-type': 'application/json' } : {}),
+        },
+        ...(hasBody ? { body } : {}),
+        signal,
+      })
+
+      return {
+        status: response.status,
+        ok: response.status >= 200 && response.status < 300,
+        data: (response.body ?? {}) as T,
+      }
+    } catch (error) {
+      if (error instanceof AuthenticatedRpcError && error.safeToFallback) {
+        return undefined
+      }
+      throw error
+    }
+  }
+
   public async serverJsonRequest<T>(
     path: string,
     body: unknown,
     signal?: AbortSignal,
   ): Promise<{ status: number; ok: boolean; data: T }> {
+    const overSocket = await this.controlPlaneRpc<T>('POST', path, body, signal)
+    if (overSocket) {
+      return overSocket
+    }
+
     const host = this.getHost.execute().getValue()
     const session = (this.sessions as unknown as { getSession?: () => unknown }).getSession?.()
     const accessToken = extractAccessToken(session)
@@ -1389,6 +1448,11 @@ export class WebApplication extends SNApplication implements WebApplicationInter
     body?: unknown,
     signal?: AbortSignal,
   ): Promise<{ status: number; ok: boolean; data: T }> {
+    const overSocket = await this.controlPlaneRpc<T>(method, path, body, signal)
+    if (overSocket) {
+      return overSocket
+    }
+
     const host = this.getHost.execute().getValue()
     const session = (this.sessions as unknown as { getSession?: () => unknown }).getSession?.()
     const accessToken = extractAccessToken(session)
@@ -1427,6 +1491,11 @@ export class WebApplication extends SNApplication implements WebApplicationInter
     path: string,
     signal?: AbortSignal,
   ): Promise<{ status: number; ok: boolean; data: T }> {
+    const overSocket = await this.controlPlaneRpc<T>('GET', path, undefined, signal)
+    if (overSocket) {
+      return overSocket
+    }
+
     const host = this.getHost.execute().getValue()
     const session = (this.sessions as unknown as { getSession?: () => unknown }).getSession?.()
     const accessToken = extractAccessToken(session)
