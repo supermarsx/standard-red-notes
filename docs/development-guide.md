@@ -76,6 +76,43 @@ cd server && yarn build && yarn test
 
 Then run the repository-level gate appropriate to the change.
 
+## Launch preflight
+
+Before a local launch binds a port, `scripts/detect-running-instance.mjs` checks
+whether the port is taken and — the part that matters — whether the thing already
+listening is this app, and which build it is:
+
+```bash
+yarn preflight          # every local port, plus a desktop process scan
+yarn preflight:web      # webpack dev server port
+yarn preflight:docker   # docker compose app and gateway ports
+yarn preflight:desktop  # desktop extensions server and running instances
+```
+
+Identity comes from `/.well-known/srn-deployment.json`, the same marker used to
+answer "which commit is live?" during an incident. The report names the running
+revision next to the one being launched, so a stale instance is visible instead
+of being mistaken for the build you just made.
+
+Collision behaviour differs by occupant, deliberately:
+
+| Occupant | Behaviour |
+| --- | --- |
+| Nothing listening | Launch proceeds |
+| Unrelated process | Move to the next free port, where the service allows it |
+| This app, any build | Stop and report — the choice is yours |
+
+Moving off a port this app already holds is never automatic: the browser tab and
+bookmarks would still point at the stale instance, so a relocation that looks
+like a successful restart is the exact confusion the check exists to prevent.
+Nothing is ever killed or restarted. `yarn start:web` runs the check
+automatically; set `SRN_SKIP_LAUNCH_PREFLIGHT=1` to bypass it.
+
+The desktop app keeps its Electron single-instance lock unchanged — a second
+launch still exits and focuses the running window — but now logs which version
+was blocked and which is running, so relaunching a rebuild over a stale instance
+is stated rather than silent.
+
 ## Contract and operations gates
 
 | Command | Contract |

@@ -8,6 +8,7 @@ import { isLinux, isMac, isWindows } from './javascripts/Main/Types/Platforms'
 import { setupTesting } from './javascripts/Main/Utils/Testing'
 import { isDev, isTesting } from './javascripts/Main/Utils/Utils'
 import { createWindowState, WindowState } from './javascripts/Main/Window'
+import { describeSecondInstance } from './javascripts/Shared/SecondInstance'
 
 const deepLinkScheme = 'standardnotes'
 
@@ -87,10 +88,12 @@ export async function openNewWindow(args: { app: App; shell: Shell; state: AppSt
 }
 
 function registerSingleInstanceHandler(app: Electron.App, appState: AppState) {
-  app.on('second-instance', (_event: Event, argv: string[], _workingDirectory: string, _additionalData: unknown) => {
+  app.on('second-instance', (_event: Event, argv: string[], _workingDirectory: string, additionalData: unknown) => {
     if (isWindows()) {
       appState.deepLinkUrl = argv.find((arg) => arg.startsWith(deepLinkScheme))
     }
+
+    console.warn(describeSecondInstance(appState.version, additionalData))
 
     /* Someone tried to run a second instance, we should focus our window. */
     focusWindow(appState)
@@ -142,7 +145,11 @@ function registerAppEventListeners(args: {
 
   app.on('ready', () => {
     if (!state.isPrimaryInstance) {
-      console.warn('Quiting app and focusing existing instance.')
+      console.warn(
+        `Another instance of ${AppName} already holds the single-instance lock. ` +
+          `Quitting this process (version ${state.version}) and focusing the running instance. ` +
+          'If you just rebuilt, note that the window you are about to see is the OLD build.',
+      )
       app.quit()
       return
     }

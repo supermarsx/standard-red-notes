@@ -138,6 +138,27 @@ export function createExtensionsServer(options: ExtensionsServerOptions = {}): s
       })
       .listen(port, ip, initCallback)
       .on('error', (err) => {
+        /**
+         * A port collision here is silent and nasty. The host string is returned
+         * and persisted regardless of whether the listen succeeded, so the app
+         * goes on loading editors and themes from `host` — which, if the bind
+         * failed with EADDRINUSE, is SOMEONE ELSE'S server. Usually that is a
+         * leftover instance of this app from an earlier run, so components come
+         * from the previous build while everything else is the new one.
+         *
+         * The behaviour is left as-is deliberately (refusing to boot over a
+         * component-server collision would be a worse trade), but the log has to
+         * name the consequence, not just the errno.
+         */
+        if ((err as NodeJS.ErrnoException).code === 'EADDRINUSE') {
+          logError(
+            `port ${port} is already in use, so this app did NOT start its own component server. ` +
+              `Editors and themes will be loaded from whatever is already listening on ${host} — ` +
+              'most likely a leftover instance of this app serving components from an older build. ' +
+              'Close the other instance and restart if components look stale.',
+          )
+          return
+        }
         console.error('Error listening on extServer', err)
       })
   } catch (error) {

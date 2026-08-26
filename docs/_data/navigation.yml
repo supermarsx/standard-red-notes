@@ -927,6 +927,8 @@
           url: /development-guide.html#toolchain
         - title: Common commands
           url: /development-guide.html#common-commands
+        - title: Launch preflight
+          url: /development-guide.html#launch-preflight
         - title: Contract and operations gates
           url: /development-guide.html#contract-and-operations-gates
         - title: Change workflow
