@@ -17,15 +17,15 @@ import type { SyncNegotiatedOperation, SyncTransportState } from '@/Services/Syn
  */
 
 /**
- * The operations THIS CLIENT BUILD implements. Deliberately spelled out rather
- * than derived: the client protocol's `SyncNegotiatedOperation` union is the
- * definition of what the client can handle, so a `satisfies` check against it
- * turns a protocol change into a compile error here.
+ * The operations this client build actually CONSUMES — a negotiated one here
+ * carries real traffic.
  *
- * Note what is absent: FILES_V1. The server protocol defines it and a configured
- * gateway advertises it, but the client has no implementation, so file transfers
- * do not use the socket lane no matter how the server is configured. That gap is
- * invisible in every other surface, which is why the tab reports it explicitly.
+ * This is deliberately narrower than the protocol union. `SyncNegotiatedOperation`
+ * is the set the worker will ACCEPT in an `AUTHENTICATED` frame, which is a
+ * different question: the worker rejects the whole handshake on an unrecognized
+ * operation, so recognizing one is what stops an advertised lane costing the
+ * entire socket. Recognized and consumed are not the same thing, and a panel that
+ * conflated them would report a lane as working because the handshake survived it.
  */
 export const CLIENT_SYNC_OPERATIONS = [
   'SYNC_ITEMS',
@@ -34,6 +34,34 @@ export const CLIENT_SYNC_OPERATIONS = [
   'STREAM_ASSISTANT',
   'INVITE_EVENTS',
 ] as const satisfies readonly SyncNegotiatedOperation[]
+
+/**
+ * Operations the client recognizes at handshake but does not consume.
+ *
+ * FILES_V1 is the live case. A configured gateway advertises it whenever a files
+ * adapter is ready; the client has no handler, so file transfers never use the
+ * socket. Until the worker was taught to recognize it, that advertisement failed
+ * the handshake outright and dropped the WHOLE socket — sync included — to HTTP.
+ * Worth stating plainly in the panel: a server-side capability can be the reason
+ * an unrelated lane is on HTTP.
+ *
+ * Not constrained to `SyncNegotiatedOperation`, so this file compiles whether or
+ * not the union has caught up with the worker's accept-set yet.
+ */
+export const CLIENT_RECOGNIZED_ONLY_OPERATIONS = ['FILES_V1'] as const
+
+/**
+ * Every protocol operation must be classified as consumed or recognized-only.
+ * Adding one to `SyncNegotiatedOperation` without deciding which it is makes
+ * `UnclassifiedSyncOperation` non-never and fails this file to compile — the
+ * panel would otherwise keep rendering a confident, wrong row for it.
+ */
+type UnclassifiedSyncOperation = Exclude<
+  SyncNegotiatedOperation,
+  (typeof CLIENT_SYNC_OPERATIONS)[number] | (typeof CLIENT_RECOGNIZED_ONLY_OPERATIONS)[number]
+>
+type AssertNever<T extends never> = T
+export type EverySyncOperationIsClassified = AssertNever<UnclassifiedSyncOperation>
 
 /** Shape of GET /v1/admin/sync-diagnostics. Every field is presence, never value. */
 export type SyncDiagnosticsPayload = {
@@ -134,13 +162,13 @@ export function describeTransport(status: TransportStatusInput | undefined): Tra
   }
 }
 
-export type CapabilityStatus = 'active' | 'not-negotiated' | 'client-gap' | 'unknown'
+export type CapabilityStatus = 'active' | 'not-negotiated' | 'client-gap' | 'recognized-only' | 'unknown'
 
 export type CapabilityRow = {
   operation: string
   /** The server build knows how to negotiate this operation. */
   serverSupported: boolean
-  /** This client build implements a handler for it. */
+  /** This client build CONSUMES it — not merely tolerates it at handshake. */
   clientImplemented: boolean
   /** This client's current socket actually negotiated it. */
   negotiated: boolean
@@ -160,8 +188,11 @@ export function buildCapabilityRows(
   socketIsLive: boolean,
 ): CapabilityRow[] {
   const clientImplemented = new Set<string>(CLIENT_SYNC_OPERATIONS)
+  const recognizedOnly = new Set<string>(CLIENT_RECOGNIZED_ONLY_OPERATIONS)
   const negotiatedSet = new Set(negotiated)
-  const operations = [...new Set([...serverOperations, ...CLIENT_SYNC_OPERATIONS, ...negotiated])].sort()
+  const operations = [
+    ...new Set([...serverOperations, ...CLIENT_SYNC_OPERATIONS, ...CLIENT_RECOGNIZED_ONLY_OPERATIONS, ...negotiated]),
+  ].sort()
 
   return operations.map((operation) => {
     const onServer = serverOperations.includes(operation)
@@ -172,13 +203,20 @@ export function buildCapabilityRows(
     let tone: Tone
     let explanation: string
 
-    if (isNegotiated) {
+    // Recognized-only is checked BEFORE negotiated on purpose. FILES_V1 is
+    // negotiated on a healthy socket and still carries nothing, so reporting it
+    // as active because it appeared in the handshake would be a confident lie.
+    if (recognizedOnly.has(operation)) {
+      status = 'recognized-only'
+      tone = 'warn'
+      explanation = isNegotiated
+        ? 'Negotiated, but this client only tolerates it at the handshake — it has no handler, so the lane carries nothing and its traffic stays on HTTP. Recognising it is what stops the advertisement dropping the whole socket.'
+        : 'This client tolerates this operation at the handshake but has no handler for it, so it carries nothing. Not a misconfiguration — it needs a client change.'
+    } else if (isNegotiated) {
       status = 'active'
       tone = 'good'
       explanation = 'Negotiated on the live socket and carrying traffic.'
     } else if (onServer && !onClient) {
-      // The FILES_V1 case: a correctly configured server advertises it and this
-      // client still cannot use it. No amount of server configuration fixes it.
       status = 'client-gap'
       tone = 'warn'
       explanation =
@@ -298,13 +336,28 @@ export function diagnose(
 
   const serverOperations = payload.protocol?.serverOperations ?? []
   const clientGaps = serverOperations.filter(
-    (operation) => !(CLIENT_SYNC_OPERATIONS as readonly string[]).includes(operation),
+    (operation) =>
+      !(CLIENT_SYNC_OPERATIONS as readonly string[]).includes(operation) &&
+      !(CLIENT_RECOGNIZED_ONLY_OPERATIONS as readonly string[]).includes(operation),
   )
   if (clientGaps.length > 0) {
     findings.push({
       title: `This client does not implement ${clientGaps.join(', ')}`,
       detail:
         'The server build can negotiate these operations but this client build has no handler for them, so they will never be used. Nothing on the server fixes this — it needs a client change.',
+    })
+  }
+
+  // Reported separately from an outright gap: these DO appear in the handshake,
+  // so they look healthy everywhere else, and they carry nothing.
+  const recognizedOnly = serverOperations.filter((operation) =>
+    (CLIENT_RECOGNIZED_ONLY_OPERATIONS as readonly string[]).includes(operation),
+  )
+  if (recognizedOnly.length > 0) {
+    findings.push({
+      title: `${recognizedOnly.join(', ')} is advertised but carries nothing`,
+      detail:
+        'This client recognises the operation at the handshake so the advertisement does not cost the socket, but it has no handler, so that traffic stays on HTTP. It needs a client change, not server configuration.',
     })
   }
 

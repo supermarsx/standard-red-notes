@@ -365,9 +365,11 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
                         ? 'Active'
                         : row.status === 'client-gap'
                           ? 'Client gap'
-                          : row.status === 'not-negotiated'
-                            ? 'Not offered'
-                            : 'Unknown'}
+                          : row.status === 'recognized-only'
+                            ? 'Carries nothing'
+                            : row.status === 'not-negotiated'
+                              ? 'Not offered'
+                              : 'Unknown'}
                     </Chip>
                   </td>
                   <td className="text-passive-0 py-2">{row.explanation}</td>

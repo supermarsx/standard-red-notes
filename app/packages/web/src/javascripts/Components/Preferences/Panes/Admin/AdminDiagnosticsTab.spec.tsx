@@ -169,11 +169,38 @@ describe('AdminDiagnosticsTab', () => {
     expect(text).toContain('The socket lane was never entered')
   })
 
-  it('shows FILES_V1 as a client gap even though the server advertises it', async () => {
-    const text = await renderTab(makeApplication())
+  /**
+   * Asserted against the ROW, not the page text. The Capabilities section has a
+   * static paragraph explaining what "Client gap" means, so a `toContain` over
+   * the whole page matches that prose and passes no matter what the table says —
+   * which is exactly the vacuous assertion this file exists to avoid.
+   */
+  const capabilityRow = (operation: string): string[] => {
+    const row = [...container.querySelectorAll('table tbody tr')].find(
+      (element) => element.querySelector('td')?.textContent === operation,
+    )
+    expect(row).toBeDefined()
+    return [...(row?.querySelectorAll('td') ?? [])].map((cell) => cell.textContent ?? '')
+  }
 
-    expect(text).toContain('FILES_V1')
-    expect(text).toContain('Client gap')
+  it('shows FILES_V1 as advertised-but-inert, not as active and not as a flat gap', async () => {
+    await renderTab(makeApplication())
+
+    const [operation, server, client, status, why] = capabilityRow('FILES_V1')
+    expect(operation).toBe('FILES_V1')
+    expect(server).toBe('yes')
+    expect(client).toBe('no')
+    expect(status).toBe('Carries nothing')
+    expect(why).toContain('no handler')
+  })
+
+  it('shows an operation both sides implement without calling it broken while HTTP-only', async () => {
+    await renderTab(makeApplication())
+
+    const [, server, client, status] = capabilityRow('SYNC_ITEMS')
+    expect(server).toBe('yes')
+    expect(client).toBe('yes')
+    expect(status).toBe('Unknown')
   })
 
   it('reports an unstamped deployment marker explicitly rather than blank', async () => {

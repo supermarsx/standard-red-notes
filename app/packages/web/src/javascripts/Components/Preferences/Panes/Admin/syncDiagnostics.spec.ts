@@ -153,13 +153,26 @@ describe('sync diagnostics model', () => {
 
     it('flags an operation the server supports and this client does not implement', () => {
       const diagnosis = diagnose(
-        { ...gateSatisfied, protocol: { version: 1, serverOperations: [...CLIENT_SYNC_OPERATIONS, 'FILES_V1'] } },
+        { ...gateSatisfied, protocol: { version: 1, serverOperations: [...CLIENT_SYNC_OPERATIONS, 'FUTURE_LANE'] } },
         { state: 'READY', operations: [...CLIENT_SYNC_OPERATIONS] },
       )
 
-      const finding = diagnosis.findings.find((entry) => entry.title.includes('FILES_V1'))
+      const finding = diagnosis.findings.find((entry) => entry.title.includes('FUTURE_LANE'))
       expect(finding).toBeDefined()
       expect(finding?.detail).toContain('needs a client change')
+    })
+
+    it('reports an advertised-but-inert operation separately from an outright gap', () => {
+      const diagnosis = diagnose(
+        { ...gateSatisfied, protocol: { version: 1, serverOperations: [...CLIENT_SYNC_OPERATIONS, 'FILES_V1'] } },
+        { state: 'READY', operations: [...CLIENT_SYNC_OPERATIONS, 'FILES_V1'] },
+      )
+
+      const finding = diagnosis.findings.find((entry) => entry.title.includes('carries nothing'))
+      expect(finding?.title).toContain('FILES_V1')
+      expect(finding?.detail).toContain('stays on HTTP')
+      // It must NOT also be reported as a flat client gap — one honest finding.
+      expect(diagnosis.findings.some((entry) => entry.title.includes('does not implement'))).toBe(false)
     })
 
     it('reports a fully configured deployment as healthy with no findings', () => {
@@ -180,14 +193,38 @@ describe('sync diagnostics model', () => {
   describe('buildCapabilityRows', () => {
     const socketDown: TransportStatusInput = { state: 'HTTP_ONLY', operations: [] }
 
-    it('marks a server-only operation as a client gap, not a misconfiguration', () => {
-      const rows = buildCapabilityRows([...CLIENT_SYNC_OPERATIONS, 'FILES_V1'], [], false)
+    it('marks a genuinely unimplemented server operation as a client gap', () => {
+      const rows = buildCapabilityRows([...CLIENT_SYNC_OPERATIONS, 'FUTURE_LANE'], [], false)
+      const future = rows.find((row) => row.operation === 'FUTURE_LANE')
+
+      expect(future?.status).toBe('client-gap')
+      expect(future?.serverSupported).toBe(true)
+      expect(future?.clientImplemented).toBe(false)
+      expect(future?.explanation).toContain('not a misconfiguration')
+    })
+
+    it('does not report a recognized-only operation as active just because it was negotiated', () => {
+      // FILES_V1 appears in a healthy handshake and still carries nothing. Calling
+      // it active because it was negotiated would be a confident lie, and it is
+      // the row an operator is most likely to misread.
+      const rows = buildCapabilityRows(
+        [...CLIENT_SYNC_OPERATIONS, 'FILES_V1'],
+        [...CLIENT_SYNC_OPERATIONS, 'FILES_V1'],
+        true,
+      )
       const files = rows.find((row) => row.operation === 'FILES_V1')
 
-      expect(files?.status).toBe('client-gap')
-      expect(files?.serverSupported).toBe(true)
+      expect(files?.status).toBe('recognized-only')
+      expect(files?.negotiated).toBe(true)
       expect(files?.clientImplemented).toBe(false)
-      expect(files?.explanation).toContain('not a misconfiguration')
+      expect(files?.explanation).toContain('carries nothing')
+      expect(files?.explanation).toContain('dropping the whole socket')
+    })
+
+    it('still lists a recognized-only operation when the server does not advertise it', () => {
+      const rows = buildCapabilityRows([...CLIENT_SYNC_OPERATIONS], [], false)
+
+      expect(rows.find((row) => row.operation === 'FILES_V1')?.status).toBe('recognized-only')
     })
 
     it('never drops an operation that only one side knows about', () => {
