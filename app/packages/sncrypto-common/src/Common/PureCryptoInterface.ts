@@ -4,6 +4,7 @@ import { Base64URLSafeString } from '../Types/Base64URLSafeString'
 import { HexString } from '../Types/HexString'
 import { StreamDecryptor } from '../Types/StreamDecryptor'
 import { StreamEncryptor } from '../Types/StreamEncryptor'
+import { StreamingHash } from '../Types/StreamingHash'
 import { Utf8String } from '../Types/Utf8String'
 
 /**
@@ -62,6 +63,25 @@ export interface PureCryptoInterface {
    * @returns Hex string
    */
   sha256(text: string): Promise<string>
+
+  /**
+   * Begins a SHA-256 over a byte stream, for data too large to hold in memory.
+   *
+   * The one-shot `sha256` above takes a whole string and so cannot digest a file
+   * that is only ever seen one chunk at a time. Push chunks with
+   * {@link sha256StreamUpdate} in order, then read the digest exactly once with
+   * {@link sha256StreamFinal}.
+   */
+  sha256StreamInit(): StreamingHash
+
+  /** Adds the next chunk of the stream. Order is significant. */
+  sha256StreamUpdate(hash: StreamingHash, bytes: Uint8Array): void
+
+  /**
+   * Finalizes and returns the hex digest. Consumes the hash: the state is
+   * released, so a second call on the same {@link StreamingHash} is invalid.
+   */
+  sha256StreamFinal(hash: StreamingHash): HexString
 
   /**
    * Runs HMAC with SHA-1 on a message with key.

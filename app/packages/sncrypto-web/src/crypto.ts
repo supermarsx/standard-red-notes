@@ -11,6 +11,8 @@ import {
   Utf8String,
   timingSafeEqual,
   PkcKeyPair,
+  StreamingHash,
+  SodiumStateAddress,
 } from '@standardnotes/sncrypto-common'
 import * as Utils from './utils'
 import * as sodium from './libsodium'
@@ -149,6 +151,28 @@ export class SNWebCrypto implements PureCryptoInterface {
     const textData = Utils.stringToArrayBuffer(text)
     const digest = await crypto.subtle.digest(WebCryptoAlgs.Sha256, textData)
     return Utils.arrayBufferToHexString(digest)
+  }
+
+  /**
+   * Streaming SHA-256, for data never resident in memory — a chunked file
+   * upload, whose digest the server requires over the whole encrypted stream.
+   *
+   * WebCrypto's `subtle.digest` is one-shot and has no incremental form, so this
+   * uses libsodium's streaming hash. It is available because this package
+   * depends on the *sumo* build; the standard libsodium.js build ships only the
+   * one-shot `crypto_hash_sha256`.
+   */
+  public sha256StreamInit(): StreamingHash {
+    return { state: sodium.crypto_hash_sha256_init() as unknown as SodiumStateAddress }
+  }
+
+  public sha256StreamUpdate(hash: StreamingHash, bytes: Uint8Array): void {
+    sodium.crypto_hash_sha256_update(hash.state as unknown as sodium.StateAddress, bytes)
+  }
+
+  public sha256StreamFinal(hash: StreamingHash): HexString {
+    const digest = sodium.crypto_hash_sha256_final(hash.state as unknown as sodium.StateAddress)
+    return Utils.arrayBufferToHexString(digest.buffer as ArrayBuffer)
   }
 
   public async hmac1(message: Utf8String, key: HexString): Promise<HexString | null> {

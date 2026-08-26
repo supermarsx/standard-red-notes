@@ -45,6 +45,11 @@ export const crypto_box_keypair = lazy('crypto_box_keypair')
 export const crypto_box_open_easy = lazy('crypto_box_open_easy')
 export const crypto_box_seed_keypair = lazy('crypto_box_seed_keypair')
 export const crypto_generichash = lazy('crypto_generichash')
+// Streaming SHA-256. Present because this package depends on the *sumo* build;
+// the standard libsodium.js build ships only the one-shot `crypto_hash_sha256`.
+export const crypto_hash_sha256_final = lazy('crypto_hash_sha256_final')
+export const crypto_hash_sha256_init = lazy('crypto_hash_sha256_init')
+export const crypto_hash_sha256_update = lazy('crypto_hash_sha256_update')
 export const crypto_kdf_derive_from_key = lazy('crypto_kdf_derive_from_key')
 export const crypto_pwhash = lazy('crypto_pwhash')
 export const crypto_secretstream_xchacha20poly1305_init_pull = lazy('crypto_secretstream_xchacha20poly1305_init_pull')
