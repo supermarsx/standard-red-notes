@@ -186,6 +186,47 @@ describe('AdminController sync-diagnostics', () => {
     expect(live.ticketAvailable).toBe(true)
   })
 
+  /**
+   * The single-container trap, pinned.
+   *
+   * In the home-server topology `ApiGateway_ServiceProxy` is a
+   * `DirectCallServiceProxy` that resolves handlers by NAME out of the auth
+   * package's `controllerContainer`. An endpoint that reaches the proxy without a
+   * matching registration answers `500 "Method not found"` at runtime while the
+   * build, the decorator and every unit test stay green — nine invite endpoints
+   * shipped dead exactly that way.
+   *
+   * This endpoint is gateway-LOCAL and must never touch the proxy, so no
+   * registration is required. Rather than assert that from reading the code, the
+   * proxy and the endpoint resolver are made to THROW on any use: if a future
+   * edit routes this handler through either of them, this test fails instead of
+   * the single-container deployment.
+   */
+  it('answers without touching the service proxy, so it needs no controllerContainer registration', () => {
+    const explode = (name: string) => () => {
+      throw new Error(`Method not found: getSyncDiagnostics must not reach ${name} — it is gateway-local.`)
+    }
+    const throwingProxy = new Proxy({} as ServiceProxyInterface, { get: (_target, key) => explode(`serviceProxy.${String(key)}`) })
+    const throwingResolver = new Proxy({} as EndpointResolverInterface, {
+      get: (_target, key) => explode(`endpointResolver.${String(key)}`),
+    })
+    syncGateDiagnostics.record({
+      connectionTokenSecretPresent: true,
+      webSocketSyncEnabled: true,
+      redisBound: false,
+      syncingServerGrpcBound: true,
+      filesAdvertised: false,
+    })
+    const response = adminResponse()
+
+    new AdminController(throwingProxy, throwingResolver).getSyncDiagnostics({} as Request, response)
+
+    // A real answer, not a 500 and not a 403.
+    expect(statusMock).not.toHaveBeenCalled()
+    const { gate } = payload() as unknown as { gate: { unmetCodes: string[] } }
+    expect(gate.unmetCodes).toEqual(['REDIS_UNBOUND'])
+  })
+
   it('advertises the server protocol operations including FILES_V1', () => {
     const response = adminResponse()
 

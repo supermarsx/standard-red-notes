@@ -140,6 +140,19 @@ const mockCreateHttpServer = jest.fn(() => {
 })
 
 const mockReadiness = { markReady: jest.fn(), markUnavailable: jest.fn() }
+/**
+ * The gate recorder the admin Diagnostics endpoint reads. Home server is a
+ * SEPARATE boot path from the distributed gateway's bin/server.ts, so a recorder
+ * wired only there would leave the single-container topology reporting "the gate
+ * has not been recorded" forever — the useless non-answer that panel exists to
+ * replace. Hoisted so the tests below can assert it was actually driven.
+ */
+const mockSyncGateDiagnostics = {
+  record: jest.fn(),
+  clear: jest.fn(),
+  report: jest.fn(() => ({ recorded: false })),
+}
+
 const mockTypes = {
   ApiGateway_AggregateReadinessService: Symbol('AggregateReadinessService'),
   ApiGateway_COLLABORATION_CAPABILITY_TTL: Symbol('CollaborationCapabilityTtl'),
@@ -204,6 +217,7 @@ jest.mock('@standardnotes/api-gateway', () => ({
   // api-gateway's SyncWebSocketPreconditions spec.
   describeUnmetSyncPreconditions: jest.fn(() => 'none'),
   resolveUnmetSyncPreconditions: jest.fn(() => []),
+  syncGateDiagnostics: mockSyncGateDiagnostics,
   HOME_SERVER_WELCOME_HTML: '<p>home</p>',
   parseClientIpHeaderName: jest.fn(),
   parseOptionalPositiveInteger: jest.fn((_name: string, value: string | undefined, fallback: number) =>
@@ -584,6 +598,35 @@ describe('HomeServer FILES_V1 composition', () => {
         new AbortController().signal,
       ),
     ).rejects.toMatchObject({ code: 'FILE_ACCESS_DENIED' })
+
+    await server.stop()
+  })
+
+  /**
+   * The single-container topology, pinned. The admin Diagnostics panel reads the
+   * gate verdict out of this recorder; if HomeServer never drives it, the panel
+   * reports "the gate has not been recorded" on every home-server deployment
+   * while the build, the endpoint and every api-gateway test stay green. The
+   * assertion is on the OBSERVATION, not the render, because that is the seam
+   * that differs between the two boot paths.
+   */
+  it('records the gate verdict, so the admin diagnostics panel works on a single-container deployment', async () => {
+    mockSyncGateDiagnostics.record.mockClear()
+    const { server } = await startWithFiles({})
+
+    expect(mockSyncGateDiagnostics.record).toHaveBeenCalled()
+    const recorded = mockSyncGateDiagnostics.record.mock.calls.at(-1)?.[0] as Record<string, unknown>
+    // The durable backend is in-process here, so that condition is satisfied by
+    // construction rather than by configuration.
+    expect(recorded).toMatchObject({ syncingServerGrpcBound: true, connectionTokenSecretPresent: true })
+    // Presence only: every recorded field is a boolean or a literal key, never a
+    // configured value. This is the structural guarantee the endpoint relies on.
+    for (const [key, value] of Object.entries(recorded)) {
+      expect({ key, safe: typeof value === 'boolean' || typeof value === 'string' }).toEqual({ key, safe: true })
+      if (typeof value === 'string') {
+        expect(value).toMatch(/^[A-Z0-9_]+$/)
+      }
+    }
 
     await server.stop()
   })

@@ -33,6 +33,7 @@ import {
   DirectCallSyncCommandPort,
   parseOptionalPositiveInteger,
   resolveUnmetSyncPreconditions,
+  syncGateDiagnostics,
   parseWebSocketSyncEnabled,
   resolveWebSocketSyncAllowedOrigins,
   SyncWebSocketCommandAdapter,
@@ -609,12 +610,21 @@ export class HomeServer implements HomeServerInterface {
       // identical precondition names whichever deployment they run. The durable
       // backend is in-process here, so that condition is satisfied by construction.
       // Presence only — booleans in, constant remedies out, never a value.
-      const unmetSyncPreconditions = resolveUnmetSyncPreconditions({
+      const syncGateObservation = {
         connectionTokenSecretPresent: Boolean(connectionTokenSecret),
         webSocketSyncEnabled,
         redisBound: Boolean(redisHost),
         syncingServerGrpcBound: true,
-      })
+      }
+      const unmetSyncPreconditions = resolveUnmetSyncPreconditions(syncGateObservation)
+      // Standard Red Notes: the admin Diagnostics panel reads the SAME verdict over
+      // GET /v1/admin/sync-diagnostics. Recording it here as well as in the
+      // distributed gateway's bin/server.ts is what makes that panel work on a
+      // single-container deployment — HomeServer is a separate boot path, so a
+      // recorder wired only in bin/server.ts would leave this topology reporting
+      // "the gate has not been recorded" forever, which is precisely the useless
+      // non-answer the panel exists to replace.
+      syncGateDiagnostics.record({ ...syncGateObservation, filesAdvertised: false })
       if (unmetSyncPreconditions.length === 0) {
         logger.info('WebSocket sync preconditions are satisfied; the realtime transport will be advertised.')
       } else {
@@ -654,6 +664,14 @@ export class HomeServer implements HomeServerInterface {
             })
             inviteDomainEventBridge.start()
             filesAdapter = await this.createSyncFilesAdapter(env, serviceContainer, container, logger)
+            // Home server owns canonical file storage in-process, so the FILES_V1
+            // waiver here is never about a missing URL or valet secret — the
+            // adapter either constructed or it did not.
+            syncGateDiagnostics.record({
+              ...syncGateObservation,
+              filesAdvertised: Boolean(filesAdapter),
+              ...(filesAdapter ? {} : { filesUnmetCondition: 'TRANSPORT_CONSTRUCTION' as const }),
+            })
             const syncAdapter = new SyncWebSocketCommandAdapter(
               container.get(ApiGatewayTypes.ApiGateway_ServiceProxy),
               new DirectCallSyncCommandPort(serviceContainer),
