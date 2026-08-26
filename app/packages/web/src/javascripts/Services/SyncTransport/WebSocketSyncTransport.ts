@@ -14,6 +14,8 @@ import {
   CollaborationAuthorizationTransportRequest,
   CollaborationAuthorizationTransportResult,
   AuthenticatedRpcRequest as AuthenticatedRpcRequestInput,
+  DEFAULT_FILE_TRANSFER_CREDIT_BYTES,
+  DEFAULT_FILE_TRANSFER_DEADLINE_MS,
   DEFAULT_RPC_CREDIT_BYTES,
   DEFAULT_RPC_DEADLINE_MS,
   MainToSyncWorkerMessage,
@@ -193,6 +195,49 @@ type RpcWorkerMessage = Extract<
   { type: 'RPC_ACCEPTED' | 'RPC_RESPONSE' | 'RPC_CHUNK' | 'RPC_END' | 'RPC_ERROR' }
 >
 
+type FileDownloadWorkerMessage = Extract<
+  SyncWorkerToMainMessage,
+  { type: 'FILE_DOWNLOAD_ACCEPTED' | 'FILE_DOWNLOAD_CHUNK' | 'FILE_DOWNLOAD_COMPLETE' | 'FILE_DOWNLOAD_ERROR' }
+>
+
+export type SocketFileDownloadRequest = {
+  /**
+   * Passed through to the gateway byte-identical. This is the same string the
+   * file's encryptor and decryptor use as the xchacha20 AAD, so it is never
+   * derived, normalized or regenerated on this path.
+   */
+  remoteIdentifier: string
+  fileUuid: string
+  /** The client's own authenticated total, i.e. the sum of `encryptedChunkSizes`. */
+  declaredSize: number
+  /** Receives the encrypted stream in order. Backpressure: credit is returned only once this resolves. */
+  onBytes: (bytes: Uint8Array) => Promise<void>
+  signal?: AbortSignal
+}
+
+export type SocketFileDownloadOutcome =
+  | { outcome: 'completed'; sha256: string }
+  /** No socket, or the gateway does not advertise FILES_V1. Nothing was attempted. */
+  | { outcome: 'unavailable' }
+  | { outcome: 'aborted' }
+  | {
+      outcome: 'failed'
+      code: string
+      retryable: boolean
+      /** True only if no byte reached `onBytes`, so an HTTP retry cannot double-feed the decryptor. */
+      safeToFallback: boolean
+    }
+
+type PendingFileDownload = {
+  sessionScope: string
+  request: SocketFileDownloadRequest
+  settle: (outcome: SocketFileDownloadOutcome) => void
+  settled: boolean
+  bytesDelivered: number
+  tail: Promise<void>
+  abortCleanup?: () => void
+}
+
 const CAPABILITY_REPROBE_MS = 60_000
 
 function defaultHttpOnly(): boolean {
@@ -226,6 +271,7 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
   private readonly pendingCollaboration = new Map<string, PendingCollaborationAuthorization>()
   private readonly pendingInviteSubscriptions = new Map<string, PendingInviteSubscription>()
   private readonly pendingRpcs = new Map<string, PendingRpc>()
+  private readonly pendingFileDownloads = new Map<string, PendingFileDownload>()
   private readonly checkpointBarriers = new Map<string, Barrier>()
   private readonly revocationBarriers = new Map<string, Barrier>()
   private readonly revokedSessionScopes = new Set<string>()
@@ -350,6 +396,98 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     })
   }
 
+  /**
+   * True only when a live, authenticated socket has actually negotiated FILES_V1.
+   *
+   * Never optimistic and never a promise: this reads the operation list the
+   * gateway sent in `AUTHENTICATED`, so it is false on every deployment that
+   * does not serve the lane, false before the socket is up, and false again the
+   * moment the socket degrades. Callers use it to decide whether to try the
+   * socket at all, which is what keeps the HTTP path completely untouched where
+   * the lane is absent.
+   */
+  isFileLaneAvailable(): boolean {
+    return (
+      !this.deinitialized &&
+      this.state === 'READY' &&
+      this.negotiated?.operations.has('FILES_V1') === true &&
+      this.worker !== undefined
+    )
+  }
+
+  /**
+   * Streams one file's encrypted bytes over the negotiated socket.
+   *
+   * Opens nothing on its own: with no socket already up and advertising
+   * FILES_V1 this returns `unavailable` without a ticket request or a connection
+   * attempt, and the caller proceeds over HTTP exactly as before.
+   *
+   * Authorization is unchanged, not relaxed. The client sends only the resource
+   * reference; the gateway mints its own single-use credential and re-validates
+   * the session per operation, so this lane cannot move bytes that the HTTP path
+   * would have refused.
+   */
+  async downloadFileOverSocket(request: SocketFileDownloadRequest): Promise<SocketFileDownloadOutcome> {
+    if (!this.isFileLaneAvailable() || !this.environmentSupported()) {
+      return { outcome: 'unavailable' }
+    }
+    if (
+      !Number.isSafeInteger(request.declaredSize) ||
+      request.declaredSize < 1 ||
+      !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(request.remoteIdentifier) ||
+      !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(request.fileUuid)
+    ) {
+      return { outcome: 'unavailable' }
+    }
+    const sessionScope = await this.currentSessionScope()
+    if (!sessionScope || this.revokedSessionScopes.has(sessionScope) || this.workerSessionScope !== sessionScope) {
+      return { outcome: 'unavailable' }
+    }
+    const worker = this.worker
+    if (!worker || !this.isFileLaneAvailable()) {
+      return { outcome: 'unavailable' }
+    }
+    if (request.signal?.aborted) {
+      return { outcome: 'aborted' }
+    }
+
+    const clientRequestId = this.nextRequestId('file-download')
+    return new Promise<SocketFileDownloadOutcome>((resolve) => {
+      const pending: PendingFileDownload = {
+        sessionScope,
+        request,
+        settle: resolve,
+        settled: false,
+        bytesDelivered: 0,
+        tail: Promise.resolve(),
+      }
+      if (request.signal) {
+        const abort = () => {
+          worker.postMessage({ type: 'CANCEL_FILE_DOWNLOAD', clientRequestId })
+          this.settleFileDownload(clientRequestId, pending, { outcome: 'aborted' })
+        }
+        request.signal.addEventListener('abort', abort, { once: true })
+        pending.abortCleanup = () => request.signal?.removeEventListener('abort', abort)
+      }
+      this.pendingFileDownloads.set(clientRequestId, pending)
+      worker.postMessage({
+        type: 'OPEN_FILE_DOWNLOAD',
+        clientRequestId,
+        sessionScope,
+        request: {
+          resource: {
+            ownershipType: 'user',
+            remoteIdentifier: request.remoteIdentifier,
+            fileUuid: request.fileUuid,
+          },
+          declaredSize: request.declaredSize,
+          initialCreditBytes: DEFAULT_FILE_TRANSFER_CREDIT_BYTES,
+          deadlineMs: DEFAULT_FILE_TRANSFER_DEADLINE_MS,
+        },
+      })
+    })
+  }
+
   async subscribeInviteEvents(options: InviteRealtimeSubscriptionOptions): Promise<() => void> {
     if (this.deinitialized || !this.environmentSupported()) {
       throw new AuthenticatedRpcError('SOCKET_UNAVAILABLE', true, true)
@@ -432,6 +570,7 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
         this.pendingInviteSubscriptions.delete(requestId)
       }
     }
+    this.failAllFileDownloads('SESSION_REVOKED', sessionScope)
     this.negotiated = undefined
 
     if (!this.environmentSupported()) {
@@ -485,6 +624,7 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
       pending.options.onError?.(new AuthenticatedRpcError('SHUTDOWN', false, false))
     }
     this.pendingInviteSubscriptions.clear()
+    this.failAllFileDownloads('SHUTDOWN')
     this.negotiated = undefined
     this.rejectAllBarriers(error)
     this.state = 'HTTP_ONLY'
@@ -754,6 +894,18 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
       return
     }
     if (
+      message.type === 'FILE_DOWNLOAD_ACCEPTED' ||
+      message.type === 'FILE_DOWNLOAD_CHUNK' ||
+      message.type === 'FILE_DOWNLOAD_COMPLETE' ||
+      message.type === 'FILE_DOWNLOAD_ERROR'
+    ) {
+      const fileDownloadPending = this.pendingFileDownloads.get(message.clientRequestId)
+      if (fileDownloadPending) {
+        this.handleFileDownloadWorkerMessage(message, fileDownloadPending)
+      }
+      return
+    }
+    if (
       message.type === 'COLLABORATION_RESULT' ||
       message.type === 'COLLABORATION_DENIED' ||
       message.type === 'COLLABORATION_FALLBACK'
@@ -948,6 +1100,100 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
       }
       pending.options.onError?.(failure)
     })
+  }
+
+  /**
+   * Applies download messages strictly in arrival order, and returns socket
+   * credit only after `onBytes` has resolved. Chaining onto a per-download tail
+   * is what makes the credit window mean "consumed" rather than "received" —
+   * without it a slow consumer would keep granting credit and the encrypted
+   * stream would pile up in memory ahead of the decryptor.
+   */
+  private handleFileDownloadWorkerMessage(message: FileDownloadWorkerMessage, pending: PendingFileDownload): void {
+    if (message.type === 'FILE_DOWNLOAD_ACCEPTED') {
+      return
+    }
+    if (message.type === 'FILE_DOWNLOAD_ERROR') {
+      this.settleFileDownload(message.clientRequestId, pending, {
+        outcome: 'failed',
+        code: message.code,
+        retryable: message.retryable,
+        // The worker reports what crossed to this thread; this thread knows what
+        // actually reached the decryptor, and that is the stricter of the two.
+        safeToFallback: message.safeToFallback && pending.bytesDelivered === 0,
+      })
+      return
+    }
+
+    const clientRequestId = message.clientRequestId
+    const operation = pending.tail.then(async () => {
+      if (this.pendingFileDownloads.get(clientRequestId) !== pending || pending.settled) {
+        return
+      }
+      if (message.type === 'FILE_DOWNLOAD_CHUNK') {
+        await pending.request.onBytes(message.bytes)
+        pending.bytesDelivered += message.bytes.byteLength
+        if (this.pendingFileDownloads.get(clientRequestId) === pending && !pending.settled) {
+          this.worker?.postMessage({
+            type: 'FILE_DOWNLOAD_CREDIT',
+            clientRequestId,
+            creditBytes: message.bytes.byteLength,
+          })
+        }
+        return
+      }
+      if (pending.bytesDelivered !== message.declaredSize) {
+        this.settleFileDownload(clientRequestId, pending, {
+          outcome: 'failed',
+          code: 'FILE_TRUNCATED',
+          retryable: false,
+          safeToFallback: pending.bytesDelivered === 0,
+        })
+        return
+      }
+      this.settleFileDownload(clientRequestId, pending, { outcome: 'completed', sha256: message.sha256 })
+    })
+    pending.tail = operation.catch(() => {
+      this.worker?.postMessage({ type: 'CANCEL_FILE_DOWNLOAD', clientRequestId })
+      this.settleFileDownload(clientRequestId, pending, {
+        outcome: 'failed',
+        code: 'FILE_CONSUMER_FAILED',
+        retryable: false,
+        // The consumer already saw bytes, so it owns whatever partial state it
+        // built. Restarting the same file over HTTP would feed them a second time.
+        safeToFallback: false,
+      })
+    })
+  }
+
+  private settleFileDownload(
+    clientRequestId: string,
+    pending: PendingFileDownload,
+    outcome: SocketFileDownloadOutcome,
+  ): void {
+    if (pending.settled) {
+      return
+    }
+    pending.settled = true
+    if (this.pendingFileDownloads.get(clientRequestId) === pending) {
+      this.pendingFileDownloads.delete(clientRequestId)
+    }
+    pending.abortCleanup?.()
+    pending.settle(outcome)
+  }
+
+  private failAllFileDownloads(code: string, sessionScope?: string): void {
+    for (const [clientRequestId, pending] of [...this.pendingFileDownloads]) {
+      if (sessionScope !== undefined && pending.sessionScope !== sessionScope) {
+        continue
+      }
+      this.settleFileDownload(clientRequestId, pending, {
+        outcome: 'failed',
+        code,
+        retryable: false,
+        safeToFallback: pending.bytesDelivered === 0,
+      })
+    }
   }
 
   private rejectRpc(clientRequestId: string, pending: PendingRpc, error: AuthenticatedRpcError): void {
@@ -1170,6 +1416,7 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
       pending.options.onError?.(new AuthenticatedRpcError('WORKER_ERROR', true, false))
     }
     this.pendingInviteSubscriptions.clear()
+    this.failAllFileDownloads('WORKER_ERROR')
     const entries = [...this.pending.entries()]
     this.pending.clear()
     for (const [, pending] of entries) {

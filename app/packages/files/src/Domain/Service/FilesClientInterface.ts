@@ -8,6 +8,7 @@ import { FileHandleRead } from '../Api/FileHandleRead'
 import { FileSystemNoSelection } from '../Api/FileSystemNoSelection'
 import { FileBackupMetadataFile } from '../Device/FileBackupMetadataFile'
 import { LocalFileBackendInterface } from './LocalFileBackendInterface'
+import { FileSocketTransportInterface } from '../Api/FileSocketTransportInterface'
 
 export interface FilesClientInterface {
   minimumChunkSize(): number
@@ -18,6 +19,14 @@ export interface FilesClientInterface {
    * implementation. When unset, local-only uploads are not available.
    */
   setLocalFileBackend(backend: LocalFileBackendInterface): void
+
+  /**
+   * Installs the realtime transport that file downloads may borrow when the
+   * server advertises the file lane. Optional so platforms without a socket
+   * transport (and existing test doubles) need no change: unset, every file
+   * operation runs over HTTP exactly as before.
+   */
+  setFileSocketTransport?(transport: FileSocketTransportInterface | undefined): void
 
   /**
    * Begins a "large local-only file" operation. The returned operation encrypts pushed chunks

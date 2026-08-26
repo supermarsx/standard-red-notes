@@ -486,6 +486,20 @@ export class WebApplication extends SNApplication implements WebApplicationInter
     this._webSocketSyncTransport = transport
     this.sync.setAccountSyncTransport(transport)
 
+    /**
+     * Offer the socket to file downloads. This installs a preference, not a
+     * switch: the files layer re-checks `isFileLaneAvailable()` per download, and
+     * that is true only while a live socket has actually negotiated FILES_V1. On a
+     * deployment that does not advertise the lane — which is the usual case — the
+     * check is false and downloads run over HTTP with nothing attempted. Uploads
+     * are untouched and stay on HTTP regardless.
+     */
+    this.files.setFileSocketTransport?.({
+      isFileLaneAvailable: () => transport.isFileLaneAvailable(),
+      downloadFileOverSocket: (request) => transport.downloadFileOverSocket(request),
+    })
+    this.disposers.push(() => this.files.setFileSocketTransport?.(undefined))
+
     const checkpointStore = new InviteRealtimeRawStorageCheckpointStore(this.webOrDesktopDevice)
     const invalidationRouter = new InviteRealtimeInvalidationRouter({
       reloadSharedVaultInvites: (events, context) => this.vaultInvites.handleInviteRealtimeEvents(events, context),

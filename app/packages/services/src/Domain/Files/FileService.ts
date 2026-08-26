@@ -51,6 +51,8 @@ import {
   BackupServiceInterface,
   LocalFileBackendInterface,
   LocalOnlyFileUploadOperation,
+  FileSocketTransportInterface,
+  SocketPreferredFilesApi,
 } from '@standardnotes/files'
 import { AlertService, ButtonType } from '../Alert/AlertService'
 import { ChallengeServiceInterface } from '../Challenge'
@@ -68,6 +70,7 @@ export class FileService extends AbstractService implements FilesClientInterface
   private encryptedCache: FileMemoryCache = new FileMemoryCache(OneHundredMb)
   private sharedVault: SharedVaultServerInterface
   private localFileBackend?: LocalFileBackendInterface
+  private socketPreferredApi?: FilesApiInterface
 
   constructor(
     private api: FilesApiInterface,
@@ -86,9 +89,27 @@ export class FileService extends AbstractService implements FilesClientInterface
     this.sharedVault = new SharedVaultServer(http)
   }
 
+  /**
+   * Installs (or clears) the realtime transport that file downloads may borrow.
+   *
+   * Optional by design: when it is never called, or called with `undefined`,
+   * every file operation continues to run over the HTTP client exactly as before.
+   * The decorator itself re-checks liveness per download, so a socket that later
+   * degrades silently reverts to HTTP rather than needing to be uninstalled.
+   */
+  public setFileSocketTransport(transport: FileSocketTransportInterface | undefined): void {
+    this.socketPreferredApi = transport ? new SocketPreferredFilesApi(this.api, transport) : undefined
+  }
+
+  /** Downloads may use the socket; every other file operation stays on HTTP. */
+  private get downloadApi(): FilesApiInterface {
+    return this.socketPreferredApi ?? this.api
+  }
+
   override deinit(): void {
     super.deinit()
 
+    this.socketPreferredApi = undefined
     this.encryptedCache.clear()
     ;(this.encryptedCache as unknown) = undefined
     ;(this.api as unknown) = undefined
@@ -568,7 +589,7 @@ export class FileService extends AbstractService implements FilesClientInterface
         return tokenResult
       }
 
-      const operation = new DownloadAndDecryptFileOperation(file, this.crypto, this.api, tokenResult)
+      const operation = new DownloadAndDecryptFileOperation(file, this.crypto, this.downloadApi, tokenResult)
 
       // Tear down the in-flight download/decrypt if the caller aborts (e.g. the preview modal
       // is closed mid-download). Always remove the listener when this run settles;

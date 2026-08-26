@@ -7,6 +7,7 @@ import {
   payloadByteLength,
   SyncServerFrame,
   SyncWorkerToMainMessage,
+  utf8Bytes,
 } from './syncTransportProtocol'
 
 class FakeOutbox implements SyncOutboxStore {
@@ -84,6 +85,7 @@ class FakeOutbox implements SyncOutboxStore {
 class FakeSocket implements SyncSocketLike {
   readyState = 0
   bufferedAmount = 0
+  binaryType = 'blob'
   onopen: (() => void) | null = null
   onmessage: ((event: { data: unknown }) => void) | null = null
   onerror: (() => void) | null = null
@@ -101,6 +103,10 @@ class FakeSocket implements SyncSocketLike {
 
   receive(frame: SyncServerFrame | string): void {
     this.onmessage?.({ data: typeof frame === 'string' ? frame : JSON.stringify(frame) })
+  }
+
+  receiveBinary(bytes: Uint8Array): void {
+    this.onmessage?.({ data: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) })
   }
 
   close(code = 1000): void {
@@ -146,6 +152,51 @@ const flush = async () => {
   await Promise.resolve()
   await Promise.resolve()
 }
+
+const REMOTE_IDENTIFIER = 'remote-identifier-9f3c.a:b-1'
+const FILE_UUID = '11111111-1111-4111-8111-111111111111'
+/** The setup harness stubs SubtleCrypto.digest with a constant 0xab..ab. */
+const STUB_DIGEST_HEX = 'ab'.repeat(32)
+
+/** Mirrors the gateway's `encodeFileBinaryFrame` so tests exercise the real decoder. */
+const fileBinaryFrame = (header: Record<string, unknown>, bytes: Uint8Array): Uint8Array => {
+  const headerBytes = utf8Bytes(JSON.stringify(header))
+  const frame = new Uint8Array(8 + headerBytes.byteLength + bytes.byteLength)
+  frame.set([0x53, 0x52, 0x4e, 0x46], 0)
+  frame[4] = 1
+  frame[5] = header.kind === 'UPLOAD_CHUNK' ? 1 : 2
+  frame[6] = (headerBytes.byteLength >> 8) & 0xff
+  frame[7] = headerBytes.byteLength & 0xff
+  frame.set(headerBytes, 8)
+  frame.set(bytes, 8 + headerBytes.byteLength)
+  return frame
+}
+
+const downloadChunkFrame = (input: {
+  requestId: string
+  transferId: string
+  generation: number
+  index: number
+  offset: number
+  declaredSize: number
+  bytes: Uint8Array
+  sha256?: string
+}): Uint8Array =>
+  fileBinaryFrame(
+    {
+      kind: 'DOWNLOAD_CHUNK',
+      requestId: input.requestId,
+      transferId: input.transferId,
+      generation: input.generation,
+      index: input.index,
+      offset: input.offset,
+      declaredSize: input.declaredSize,
+      byteLength: input.bytes.byteLength,
+      sha256: input.sha256 ?? STUB_DIGEST_HEX,
+      final: input.offset + input.bytes.byteLength === input.declaredSize,
+    },
+    input.bytes,
+  )
 
 describe('SyncTransportWorkerRuntime', () => {
   let runtimeNumber = 0
@@ -559,6 +610,341 @@ describe('SyncTransportWorkerRuntime', () => {
 
     expect(harness.messages).toContainEqual(expect.objectContaining({ type: 'HTTP_FALLBACK', reason: 'auth-failed' }))
     expect(harness.messages.some((message) => message.type === 'NEGOTIATED')).toBe(false)
+  })
+
+  describe('FILES_V1 downloads', () => {
+    const openDownload = async (harness: ReturnType<typeof setup>, declaredSize = 10) =>
+      harness.runtime.handle({
+        type: 'OPEN_FILE_DOWNLOAD',
+        clientRequestId: 'file-download-1',
+        sessionScope: SESSION_A,
+        request: {
+          resource: { ownershipType: 'user', remoteIdentifier: REMOTE_IDENTIFIER, fileUuid: FILE_UUID },
+          declaredSize,
+          initialCreditBytes: 512 * 1024,
+          deadlineMs: 30_000,
+        },
+      })
+
+    const sentFrames = (socket: FakeSocket) =>
+      socket.sent.map((entry) => JSON.parse(entry) as { type: string; requestId: string; commandId: string })
+
+    const acceptDownload = (socket: FakeSocket, declaredSize = 10) => {
+      const open = sentFrames(socket).find((frame) => frame.type === 'FILES_DOWNLOAD_OPEN')!
+      socket.receive(
+        serverFrame('FILES_ACCEPTED', open.commandId, {
+          mode: 'download',
+          transferId: 'transfer-1',
+          generation: 1,
+          resumeId: 'resume-1',
+          declaredSize,
+          nextIndex: 0,
+          nextOffset: 0,
+          maxChunkBytes: 256 * 1024,
+        }),
+      )
+      return open
+    }
+
+    it('never touches the socket when the gateway does not advertise the lane', async () => {
+      const harness = setup()
+      const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, ['SYNC_ITEMS'])
+      const framesBefore = socket.sent.length
+
+      await openDownload(harness)
+
+      expect(harness.messages).toContainEqual({
+        type: 'FILE_DOWNLOAD_ERROR',
+        clientRequestId: 'file-download-1',
+        code: 'OPERATION_UNAVAILABLE',
+        retryable: true,
+        // Nothing was sent, so the caller may use HTTP with no risk of a replay.
+        safeToFallback: true,
+      })
+      expect(socket.sent).toHaveLength(framesBefore)
+      expect(sentFrames(socket).some((frame) => frame.type.startsWith('FILES_'))).toBe(false)
+    })
+
+    it('reports the lane as unavailable when there is no socket at all, without requesting a ticket', async () => {
+      const harness = setup()
+
+      await openDownload(harness)
+
+      expect(harness.messages).toContainEqual(
+        expect.objectContaining({ type: 'FILE_DOWNLOAD_ERROR', code: 'OPERATION_UNAVAILABLE', safeToFallback: true }),
+      )
+      // No bootstrap: a deployment without the lane pays nothing for its existence.
+      expect(harness.messages.some((message) => message.type === 'NEED_TICKET')).toBe(false)
+      expect(harness.sockets).toHaveLength(0)
+    })
+
+    it('carries remoteIdentifier verbatim and streams a transfer to completion', async () => {
+      const harness = setup()
+      const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, ['SYNC_ITEMS', 'FILES_V1'])
+
+      await openDownload(harness)
+
+      const open = JSON.parse(
+        socket.sent.find((entry) => JSON.parse(entry).type === 'FILES_DOWNLOAD_OPEN') as string,
+      ) as { requestId: string; commandId: string; payload: Record<string, unknown> }
+      expect(open.payload).toEqual({
+        resource: { ownershipType: 'user', remoteIdentifier: REMOTE_IDENTIFIER, fileUuid: FILE_UUID },
+        offset: 0,
+        initialCreditBytes: 512 * 1024,
+        deadlineMs: 30_000,
+      })
+      expect((open.payload.resource as { remoteIdentifier: string }).remoteIdentifier).toBe(REMOTE_IDENTIFIER)
+
+      acceptDownload(socket)
+      await flush()
+      expect(harness.messages).toContainEqual({
+        type: 'FILE_DOWNLOAD_ACCEPTED',
+        clientRequestId: 'file-download-1',
+        declaredSize: 10,
+      })
+
+      socket.receiveBinary(
+        downloadChunkFrame({
+          requestId: open.requestId,
+          transferId: 'transfer-1',
+          generation: 1,
+          index: 0,
+          offset: 0,
+          declaredSize: 10,
+          bytes: Uint8Array.from([1, 2, 3, 4, 5, 6]),
+        }),
+      )
+      await flush()
+      socket.receiveBinary(
+        downloadChunkFrame({
+          requestId: open.requestId,
+          transferId: 'transfer-1',
+          generation: 1,
+          index: 1,
+          offset: 6,
+          declaredSize: 10,
+          bytes: Uint8Array.from([7, 8, 9, 10]),
+        }),
+      )
+      await flush()
+
+      const chunks = harness.messages.filter((message) => message.type === 'FILE_DOWNLOAD_CHUNK') as Extract<
+        SyncWorkerToMainMessage,
+        { type: 'FILE_DOWNLOAD_CHUNK' }
+      >[]
+      expect(chunks.map((chunk) => [...chunk.bytes])).toEqual([
+        [1, 2, 3, 4, 5, 6],
+        [7, 8, 9, 10],
+      ])
+
+      socket.receive(
+        serverFrame('FILES_COMPLETE', open.commandId, {
+          mode: 'download',
+          transferId: 'transfer-1',
+          generation: 1,
+          sha256: STUB_DIGEST_HEX,
+          rangeStart: 0,
+          declaredSize: 10,
+        }),
+      )
+      await flush()
+      expect(harness.messages).toContainEqual({
+        type: 'FILE_DOWNLOAD_COMPLETE',
+        clientRequestId: 'file-download-1',
+        sha256: STUB_DIGEST_HEX,
+        declaredSize: 10,
+      })
+    })
+
+    it('returns consumed credit only when the main thread asks for it', async () => {
+      const harness = setup()
+      const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, ['SYNC_ITEMS', 'FILES_V1'])
+      await openDownload(harness)
+      acceptDownload(socket)
+      await flush()
+
+      expect(sentFrames(socket).some((frame) => frame.type === 'FILES_CREDIT')).toBe(false)
+
+      await harness.runtime.handle({
+        type: 'FILE_DOWNLOAD_CREDIT',
+        clientRequestId: 'file-download-1',
+        creditBytes: 6,
+      })
+      const credit = JSON.parse(
+        socket.sent.find((entry) => JSON.parse(entry).type === 'FILES_CREDIT') as string,
+      ) as { payload: Record<string, unknown> }
+      expect(credit.payload).toEqual({ transferId: 'transfer-1', generation: 1, creditBytes: 6 })
+    })
+
+    it('rejects a chunk whose payload does not match its declared digest', async () => {
+      const harness = setup()
+      const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, ['SYNC_ITEMS', 'FILES_V1'])
+      await openDownload(harness)
+      const open = acceptDownload(socket)
+      await flush()
+
+      socket.receiveBinary(
+        downloadChunkFrame({
+          requestId: open.requestId,
+          transferId: 'transfer-1',
+          generation: 1,
+          index: 0,
+          offset: 0,
+          declaredSize: 10,
+          bytes: Uint8Array.from([1, 2, 3, 4, 5, 6]),
+          sha256: 'cd'.repeat(32),
+        }),
+      )
+      await flush()
+
+      expect(harness.messages.some((message) => message.type === 'FILE_DOWNLOAD_CHUNK')).toBe(false)
+      expect(harness.messages).toContainEqual({
+        type: 'FILE_DOWNLOAD_ERROR',
+        clientRequestId: 'file-download-1',
+        code: 'FILE_INTEGRITY_MISMATCH',
+        retryable: false,
+        safeToFallback: true,
+      })
+    })
+
+    it('refuses an accepted size that disagrees with the client’s authenticated metadata', async () => {
+      const harness = setup()
+      const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, ['SYNC_ITEMS', 'FILES_V1'])
+      await openDownload(harness, 10)
+
+      acceptDownload(socket, 11)
+      await flush()
+
+      expect(harness.messages).toContainEqual(
+        expect.objectContaining({ type: 'FILE_DOWNLOAD_ERROR', code: 'FILE_INVALID_STATE' }),
+      )
+    })
+
+    it('drops a chunk that arrives out of order rather than applying it', async () => {
+      const harness = setup()
+      const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, ['SYNC_ITEMS', 'FILES_V1'])
+      await openDownload(harness)
+      const open = acceptDownload(socket)
+      await flush()
+
+      socket.receiveBinary(
+        downloadChunkFrame({
+          requestId: open.requestId,
+          transferId: 'transfer-1',
+          generation: 1,
+          index: 1,
+          offset: 6,
+          declaredSize: 10,
+          bytes: Uint8Array.from([7, 8, 9, 10]),
+        }),
+      )
+      await flush()
+
+      expect(harness.messages.some((message) => message.type === 'FILE_DOWNLOAD_CHUNK')).toBe(false)
+      expect(harness.messages).toContainEqual(
+        expect.objectContaining({ type: 'FILE_DOWNLOAD_ERROR', code: 'FILE_CHUNK_OUT_OF_ORDER' }),
+      )
+    })
+
+    it('marks a mid-transfer socket loss as unsafe to replay once a chunk has crossed', async () => {
+      const harness = setup()
+      const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, ['SYNC_ITEMS', 'FILES_V1'])
+      await openDownload(harness)
+      const open = acceptDownload(socket)
+      await flush()
+
+      socket.receiveBinary(
+        downloadChunkFrame({
+          requestId: open.requestId,
+          transferId: 'transfer-1',
+          generation: 1,
+          index: 0,
+          offset: 0,
+          declaredSize: 10,
+          bytes: Uint8Array.from([1, 2, 3, 4, 5, 6]),
+        }),
+      )
+      await flush()
+      socket.close(1006)
+      await flush()
+
+      expect(harness.messages).toContainEqual({
+        type: 'FILE_DOWNLOAD_ERROR',
+        clientRequestId: 'file-download-1',
+        code: 'SOCKET_CLOSED',
+        retryable: true,
+        safeToFallback: false,
+      })
+    })
+
+    it('reports a completion that arrives before every declared byte as truncated', async () => {
+      const harness = setup()
+      const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, ['SYNC_ITEMS', 'FILES_V1'])
+      await openDownload(harness)
+      const open = acceptDownload(socket)
+      await flush()
+
+      socket.receive(
+        serverFrame('FILES_COMPLETE', open.commandId, {
+          mode: 'download',
+          transferId: 'transfer-1',
+          generation: 1,
+          sha256: STUB_DIGEST_HEX,
+          rangeStart: 0,
+          declaredSize: 10,
+        }),
+      )
+      await flush()
+
+      expect(harness.messages).toContainEqual(
+        expect.objectContaining({ type: 'FILE_DOWNLOAD_ERROR', code: 'FILE_TRUNCATED', safeToFallback: true }),
+      )
+      expect(harness.messages.some((message) => message.type === 'FILE_DOWNLOAD_COMPLETE')).toBe(false)
+    })
+
+    it('cancels an open transfer on the socket before terminating it locally', async () => {
+      const harness = setup()
+      const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, ['SYNC_ITEMS', 'FILES_V1'])
+      await openDownload(harness)
+      acceptDownload(socket)
+      await flush()
+
+      await harness.runtime.handle({ type: 'CANCEL_FILE_DOWNLOAD', clientRequestId: 'file-download-1' })
+
+      const cancel = JSON.parse(
+        socket.sent.find((entry) => JSON.parse(entry).type === 'FILES_CANCEL') as string,
+      ) as { payload: Record<string, unknown> }
+      expect(cancel.payload).toEqual({ transferId: 'transfer-1', generation: 1 })
+      expect(harness.messages).toContainEqual(
+        expect.objectContaining({ type: 'FILE_DOWNLOAD_ERROR', code: 'CANCELLED' }),
+      )
+    })
+
+    it('ignores a binary frame that belongs to no active transfer without harming the socket', async () => {
+      const harness = setup()
+      const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, ['SYNC_ITEMS', 'FILES_V1'])
+      await openDownload(harness)
+      acceptDownload(socket)
+      await flush()
+
+      socket.receiveBinary(
+        downloadChunkFrame({
+          requestId: 'someone-elses-request',
+          transferId: 'transfer-9',
+          generation: 1,
+          index: 0,
+          offset: 0,
+          declaredSize: 10,
+          bytes: Uint8Array.from([1, 2, 3, 4, 5, 6]),
+        }),
+      )
+      socket.receiveBinary(Uint8Array.from([0, 1, 2, 3]))
+      await flush()
+
+      expect(harness.messages.some((message) => message.type === 'FILE_DOWNLOAD_CHUNK')).toBe(false)
+      expect(harness.messages.some((message) => message.type === 'FILE_DOWNLOAD_ERROR')).toBe(false)
+      expect(socket.readyState).toBe(1)
+    })
   })
 
   it('multiplexes credit-controlled RPC and never auto-replays after request bytes are sent', async () => {

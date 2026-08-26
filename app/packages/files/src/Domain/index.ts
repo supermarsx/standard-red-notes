@@ -7,6 +7,8 @@ export * from './Api/FileSystemNoSelection'
 export * from './Api/FileSystemResult'
 export * from './Api/DownloadFileParams'
 export * from './Api/FileOwnershipType'
+export * from './Api/FileSocketTransportInterface'
+export * from './Api/SocketPreferredFilesApi'
 
 export * from './Cache/FileMemoryCache'
 export * from './Chunker/ByteChunker'

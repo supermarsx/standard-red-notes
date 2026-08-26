@@ -16,6 +16,189 @@ export const DEFAULT_RPC_CREDIT_BYTES = 256 * 1024
 export const MAX_RPC_CREDIT_BYTES = 4 * 1024 * 1024
 
 /**
+ * FILES_V1 bounds. Every value here mirrors `websocket-gateway/src/filesProtocol.ts`
+ * exactly and exists so the client can reject an oversized or out-of-range frame
+ * without waiting for the server to. They are ceilings to respect, never budgets
+ * to raise: the gateway enforces the same numbers and will close or error on a
+ * client that exceeds them.
+ */
+export const FILES_PROTOCOL_VERSION = 1 as const
+export const MAX_FILE_CHUNK_BYTES = 256 * 1024
+export const MAX_FILE_BINARY_HEADER_BYTES = 4 * 1024
+export const MAX_FILE_BINARY_FRAME_BYTES = MAX_FILE_CHUNK_BYTES + MAX_FILE_BINARY_HEADER_BYTES + 8
+export const MAX_FILE_TRANSFER_BYTES = 5 * 1024 * 1024 * 1024
+export const MAX_FILE_TRANSFER_CREDIT_BYTES = 4 * 1024 * 1024
+export const DEFAULT_FILE_TRANSFER_CREDIT_BYTES = 512 * 1024
+export const MIN_FILE_TRANSFER_DEADLINE_MS = 1_000
+export const MAX_FILE_TRANSFER_DEADLINE_MS = 120_000
+export const DEFAULT_FILE_TRANSFER_DEADLINE_MS = 30_000
+
+const FILE_BINARY_MAGIC = [0x53, 0x52, 0x4e, 0x46] as const
+const FILE_BINARY_PREFIX_BYTES = 8
+const FILE_IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u
+const FILE_SHA256_PATTERN = /^[a-f0-9]{64}$/u
+
+/**
+ * The server's view of which stored object a transfer refers to.
+ *
+ * `remoteIdentifier` is the whole identity and must reach the wire byte-identical
+ * to `FileContent['remoteIdentifier']`. It is not merely a lookup key: the same
+ * string is the xchacha20 AAD in both the encryptor and the decryptor, so any
+ * derivation, normalization or re-generation applied on the way out would break
+ * decryption authentication rather than produce a clean not-found.
+ */
+export type SocketFileResourceReference = {
+  ownershipType: 'user'
+  remoteIdentifier: string
+  fileUuid: string
+}
+
+export type SocketFileBinaryHeader = {
+  kind: 'UPLOAD_CHUNK' | 'DOWNLOAD_CHUNK'
+  requestId: string
+  transferId: string
+  generation: number
+  index: number
+  offset: number
+  declaredSize: number
+  byteLength: number
+  sha256: string
+  final: boolean
+}
+
+export function isFileIdentifier(value: unknown): value is string {
+  return typeof value === 'string' && FILE_IDENTIFIER_PATTERN.test(value)
+}
+
+export function isFileSha256(value: unknown): value is string {
+  return typeof value === 'string' && FILE_SHA256_PATTERN.test(value)
+}
+
+export function isFileTransferSize(value: unknown): value is number {
+  return Number.isSafeInteger(value) && Number(value) >= 1 && Number(value) <= MAX_FILE_TRANSFER_BYTES
+}
+
+/**
+ * Mirrors the gateway's `validateFileBinaryHeader`. The exact-key check matters:
+ * an extra field would mean the peer is describing something this build does not
+ * model, and silently ignoring it is how a transfer ends up applied under
+ * assumptions the client never verified.
+ */
+export function isFileBinaryHeader(value: unknown, actualByteLength: number): value is SocketFileBinaryHeader {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false
+  }
+  const expectedKeys = [
+    'byteLength',
+    'declaredSize',
+    'final',
+    'generation',
+    'index',
+    'kind',
+    'offset',
+    'requestId',
+    'sha256',
+    'transferId',
+  ]
+  const actualKeys = Object.keys(value).sort()
+  const header = value as Partial<SocketFileBinaryHeader>
+  return (
+    actualKeys.length === expectedKeys.length &&
+    actualKeys.every((key, index) => key === expectedKeys[index]) &&
+    (header.kind === 'UPLOAD_CHUNK' || header.kind === 'DOWNLOAD_CHUNK') &&
+    isFileIdentifier(header.requestId) &&
+    isFileIdentifier(header.transferId) &&
+    Number.isSafeInteger(header.generation) &&
+    Number(header.generation) >= 1 &&
+    Number.isSafeInteger(header.index) &&
+    Number(header.index) >= 0 &&
+    Number.isSafeInteger(header.offset) &&
+    Number(header.offset) >= 0 &&
+    isFileTransferSize(header.declaredSize) &&
+    Number.isSafeInteger(header.byteLength) &&
+    Number(header.byteLength) >= 1 &&
+    Number(header.byteLength) <= MAX_FILE_CHUNK_BYTES &&
+    Number(header.byteLength) === actualByteLength &&
+    Number(header.offset) + Number(header.byteLength) <= Number(header.declaredSize) &&
+    isFileSha256(header.sha256) &&
+    typeof header.final === 'boolean' &&
+    header.final === (Number(header.offset) + Number(header.byteLength) === Number(header.declaredSize))
+  )
+}
+
+export type SocketFileBinaryFrame = { header: SocketFileBinaryHeader; bytes: Uint8Array }
+
+export class FileBinaryFrameError extends Error {
+  override readonly name = 'FileBinaryFrameError'
+
+  constructor(readonly code: 'FILE_FRAME_TOO_LARGE' | 'FILE_FRAME_MALFORMED' | 'FILE_FRAME_UNSUPPORTED') {
+    super(`File binary frame rejected: ${code}`)
+  }
+}
+
+/**
+ * Structural half of the gateway's `decodeFileBinaryFrame`. The payload digest is
+ * verified separately by {@link fileBinaryPayloadMatchesDigest} because
+ * SHA-256 in a browser worker is only available asynchronously — splitting the
+ * two keeps this function usable from synchronous frame routing while making the
+ * digest check impossible to skip, since the bytes are useless until it passes.
+ */
+export function decodeFileBinaryFrame(raw: Uint8Array): SocketFileBinaryFrame {
+  if (raw.byteLength > MAX_FILE_BINARY_FRAME_BYTES) {
+    throw new FileBinaryFrameError('FILE_FRAME_TOO_LARGE')
+  }
+  if (raw.byteLength < FILE_BINARY_PREFIX_BYTES) {
+    throw new FileBinaryFrameError('FILE_FRAME_MALFORMED')
+  }
+  if (FILE_BINARY_MAGIC.some((byte, index) => raw[index] !== byte)) {
+    throw new FileBinaryFrameError('FILE_FRAME_MALFORMED')
+  }
+  if (raw[4] !== FILES_PROTOCOL_VERSION) {
+    throw new FileBinaryFrameError('FILE_FRAME_UNSUPPORTED')
+  }
+  const kindByte = raw[5]
+  const headerLength = (raw[6] << 8) | raw[7]
+  if (
+    (kindByte !== 1 && kindByte !== 2) ||
+    headerLength < 2 ||
+    headerLength > MAX_FILE_BINARY_HEADER_BYTES ||
+    FILE_BINARY_PREFIX_BYTES + headerLength > raw.byteLength
+  ) {
+    throw new FileBinaryFrameError('FILE_FRAME_MALFORMED')
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(utf8Decode(raw.subarray(FILE_BINARY_PREFIX_BYTES, FILE_BINARY_PREFIX_BYTES + headerLength)))
+  } catch {
+    throw new FileBinaryFrameError('FILE_FRAME_MALFORMED')
+  }
+  const bytes = raw.subarray(FILE_BINARY_PREFIX_BYTES + headerLength)
+  if (!isFileBinaryHeader(parsed, bytes.byteLength)) {
+    throw new FileBinaryFrameError('FILE_FRAME_MALFORMED')
+  }
+  if (parsed.kind !== (kindByte === 1 ? 'UPLOAD_CHUNK' : 'DOWNLOAD_CHUNK')) {
+    throw new FileBinaryFrameError('FILE_FRAME_MALFORMED')
+  }
+  return { header: parsed, bytes }
+}
+
+/** Digest half of frame decoding; see {@link decodeFileBinaryFrame}. */
+export async function fileBinaryPayloadMatchesDigest(
+  frame: SocketFileBinaryFrame,
+  subtle: SubtleCrypto = crypto.subtle,
+): Promise<boolean> {
+  const digest = new Uint8Array(await subtle.digest('SHA-256', frame.bytes as unknown as BufferSource))
+  if (digest.byteLength !== 32) {
+    return false
+  }
+  let difference = 0
+  for (let index = 0; index < 32; index++) {
+    difference |= digest[index] ^ Number.parseInt(frame.header.sha256.slice(index * 2, index * 2 + 2), 16)
+  }
+  return difference === 0
+}
+
+/**
  * Must stay a superset of every operation the gateway can advertise
  * (`websocket-gateway/src/syncProtocol.ts`). The worker rejects an
  * `AUTHENTICATED` frame carrying an operation outside this set, so an operation
@@ -83,6 +266,47 @@ export type WorkerAuthenticatedRpcRequest = Omit<
   stream: boolean
 }
 
+/**
+ * A download the worker may open on the socket.
+ *
+ * `declaredSize` is the client's own authenticated total (the sum of
+ * `encryptedChunkSizes` from the decrypted file item), not something learned from
+ * the server. The worker requires the server's accepted `declaredSize` to equal
+ * it, so a server that reports a different length is refused rather than
+ * followed — the file metadata the user's key authenticated is the authority on
+ * how many bytes this file has.
+ */
+export type WorkerFileDownloadRequest = {
+  resource: SocketFileResourceReference
+  declaredSize: number
+  initialCreditBytes: number
+  deadlineMs: number
+}
+
+export function isWorkerFileDownloadRequest(value: unknown): value is WorkerFileDownloadRequest {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false
+  }
+  const request = value as Partial<WorkerFileDownloadRequest>
+  const resource = request.resource
+  return (
+    !!resource &&
+    typeof resource === 'object' &&
+    !Array.isArray(resource) &&
+    resource.ownershipType === 'user' &&
+    isFileIdentifier(resource.remoteIdentifier) &&
+    isFileIdentifier(resource.fileUuid) &&
+    Object.keys(resource).length === 3 &&
+    isFileTransferSize(request.declaredSize) &&
+    Number.isSafeInteger(request.initialCreditBytes) &&
+    Number(request.initialCreditBytes) > 0 &&
+    Number(request.initialCreditBytes) <= MAX_FILE_TRANSFER_CREDIT_BYTES &&
+    Number.isSafeInteger(request.deadlineMs) &&
+    Number(request.deadlineMs) >= MIN_FILE_TRANSFER_DEADLINE_MS &&
+    Number(request.deadlineMs) <= MAX_FILE_TRANSFER_DEADLINE_MS
+  )
+}
+
 export type SyncClientFrame = {
   version: typeof SYNC_PROTOCOL_VERSION
   channel: typeof SYNC_CHANNEL
@@ -97,6 +321,9 @@ export type SyncClientFrame = {
     | 'RPC_CREDIT'
     | 'INVITE_SUBSCRIBE'
     | 'INVITE_ACK'
+    | 'FILES_DOWNLOAD_OPEN'
+    | 'FILES_CREDIT'
+    | 'FILES_CANCEL'
   requestId: string
   commandId: string
   sequence: number
@@ -123,6 +350,10 @@ export type SyncServerFrame = {
     | 'INVITE_READY'
     | 'INVITE_BATCH'
     | 'INVITE_RECONCILE'
+    | 'FILES_METADATA'
+    | 'FILES_ACCEPTED'
+    | 'FILES_CHUNK_ACK'
+    | 'FILES_COMPLETE'
   requestId: string
   commandId: string
   sequence: number
@@ -170,6 +401,14 @@ export type MainToSyncWorkerMessage =
     }
   | { type: 'ACK_INVITE_EVENTS'; clientRequestId: string; cursor: string }
   | { type: 'UNSUBSCRIBE_INVITE_EVENTS'; clientRequestId: string }
+  | {
+      type: 'OPEN_FILE_DOWNLOAD'
+      clientRequestId: string
+      sessionScope: string
+      request: WorkerFileDownloadRequest
+    }
+  | { type: 'FILE_DOWNLOAD_CREDIT'; clientRequestId: string; creditBytes: number }
+  | { type: 'CANCEL_FILE_DOWNLOAD'; clientRequestId: string }
   | { type: 'CONNECT'; clientRequestId: string; sessionScope: string; authorization: SyncTicket }
   | { type: 'TICKET_UNAVAILABLE'; clientRequestId: string; reason: SyncFallbackReason }
   | { type: 'CHECKPOINT_DURABLE'; requestId: string; sessionScope: string; commandId: string }
@@ -265,6 +504,24 @@ export type SyncWorkerToMainMessage =
       cursor: string
     }
   | { type: 'INVITE_ERROR'; clientRequestId: string; code: string; retryable: boolean }
+  | { type: 'FILE_DOWNLOAD_ACCEPTED'; clientRequestId: string; declaredSize: number }
+  | { type: 'FILE_DOWNLOAD_CHUNK'; clientRequestId: string; bytes: Uint8Array; offset: number }
+  | { type: 'FILE_DOWNLOAD_COMPLETE'; clientRequestId: string; sha256: string; declaredSize: number }
+  | {
+      type: 'FILE_DOWNLOAD_ERROR'
+      clientRequestId: string
+      code: string
+      retryable: boolean
+      /**
+       * True only while no chunk has been forwarded to the main thread. Downloads
+       * have no server-side effect, so this is not about the server: once a chunk
+       * has crossed to the main thread it may already have been fed to the
+       * stateful file decryptor, and restarting the same file over HTTP from byte
+       * zero would double-feed it. The worker cannot observe main-thread
+       * consumption, so "forwarded" is the conservative stand-in for "consumed".
+       */
+      safeToFallback: boolean
+    }
   | {
       type: 'NEGOTIATED'
       sessionScope: string
@@ -344,6 +601,47 @@ export function payloadByteLength(payload: Record<string, unknown>): number {
 
 export function frameByteLength(frame: SyncClientFrame): number {
   return utf8Bytes(JSON.stringify(frame)).byteLength
+}
+
+/** Worker-safe UTF-8 decoder, paired with {@link utf8Bytes}; rejects malformed sequences. */
+export function utf8Decode(bytes: Uint8Array): string {
+  let result = ''
+  for (let index = 0; index < bytes.byteLength;) {
+    const first = bytes[index]
+    let codePoint: number
+    let width: number
+    if (first <= 0x7f) {
+      codePoint = first
+      width = 1
+    } else if ((first & 0xe0) === 0xc0) {
+      codePoint = first & 0x1f
+      width = 2
+    } else if ((first & 0xf0) === 0xe0) {
+      codePoint = first & 0x0f
+      width = 3
+    } else if ((first & 0xf8) === 0xf0) {
+      codePoint = first & 0x07
+      width = 4
+    } else {
+      throw new Error('Invalid UTF-8 sequence.')
+    }
+    if (index + width > bytes.byteLength) {
+      throw new Error('Truncated UTF-8 sequence.')
+    }
+    for (let offset = 1; offset < width; offset++) {
+      const continuation = bytes[index + offset]
+      if ((continuation & 0xc0) !== 0x80) {
+        throw new Error('Invalid UTF-8 continuation byte.')
+      }
+      codePoint = (codePoint << 6) | (continuation & 0x3f)
+    }
+    if (codePoint > 0x10ffff) {
+      throw new Error('UTF-8 code point out of range.')
+    }
+    result += String.fromCodePoint(codePoint)
+    index += width
+  }
+  return result
 }
 
 /** Small worker-safe UTF-8 encoder that does not depend on a DOM TextEncoder global. */

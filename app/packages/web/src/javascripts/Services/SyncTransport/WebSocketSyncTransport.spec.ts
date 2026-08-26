@@ -925,4 +925,191 @@ describe('WebSocketSyncTransport', () => {
       bootstrapChallenge: 'challenge-1',
     })
   })
+
+  describe('FILES_V1 capability gate', () => {
+    const fileRequest = () => ({
+      remoteIdentifier: 'remote-identifier-1',
+      fileUuid: '11111111-1111-4111-8111-111111111111',
+      declaredSize: 10,
+      onBytes: jest.fn().mockResolvedValue(undefined),
+    })
+
+    const negotiate = async (transport: WebSocketSyncTransport, operations: string[]) => {
+      const fallback = jest.fn().mockResolvedValue(response('http'))
+      void transport.execute(request(), fallback)
+      await flush()
+      worker.emit({
+        type: 'NEGOTIATED',
+        sessionScope: SESSION_A,
+        protocolVersion: 1,
+        endpoint: 'wss://sync.example.test/sockets/sync',
+        operations: operations as never,
+      })
+      worker.emit({ type: 'STATE', state: 'READY' })
+      await flush()
+    }
+
+    it('reports the lane unavailable and creates no worker before anything is negotiated', async () => {
+      const transport = createTransport()
+
+      expect(transport.isFileLaneAvailable()).toBe(false)
+      await expect(transport.downloadFileOverSocket(fileRequest())).resolves.toEqual({ outcome: 'unavailable' })
+      // The point of the gate: a deployment without the lane never even builds
+      // the worker, requests a ticket, or opens a socket on a file's behalf.
+      expect(worker.posts).toHaveLength(0)
+      expect(controlPlane.createTicket).not.toHaveBeenCalled()
+    })
+
+    it('reports the lane unavailable when the socket is up but does not advertise FILES_V1', async () => {
+      const transport = createTransport()
+      await negotiate(transport, ['SYNC_ITEMS', 'API_RPC'])
+
+      expect(transport.isFileLaneAvailable()).toBe(false)
+      const postsBefore = worker.posts.length
+      await expect(transport.downloadFileOverSocket(fileRequest())).resolves.toEqual({ outcome: 'unavailable' })
+      expect(worker.posts).toHaveLength(postsBefore)
+    })
+
+    it('opens a download and preserves remoteIdentifier once FILES_V1 is negotiated', async () => {
+      const transport = createTransport()
+      await negotiate(transport, ['SYNC_ITEMS', 'FILES_V1'])
+
+      expect(transport.isFileLaneAvailable()).toBe(true)
+      const download = transport.downloadFileOverSocket(fileRequest())
+      await flush()
+
+      const open = worker.posts.find((message) => message.type === 'OPEN_FILE_DOWNLOAD') as Extract<
+        MainToSyncWorkerMessage,
+        { type: 'OPEN_FILE_DOWNLOAD' }
+      >
+      expect(open.request.resource).toEqual({
+        ownershipType: 'user',
+        remoteIdentifier: 'remote-identifier-1',
+        fileUuid: '11111111-1111-4111-8111-111111111111',
+      })
+      expect(open.request.declaredSize).toBe(10)
+
+      worker.emit({ type: 'FILE_DOWNLOAD_ACCEPTED', clientRequestId: open.clientRequestId, declaredSize: 10 })
+      worker.emit({
+        type: 'FILE_DOWNLOAD_CHUNK',
+        clientRequestId: open.clientRequestId,
+        bytes: Uint8Array.from([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
+        offset: 0,
+      })
+      await flush()
+      worker.emit({
+        type: 'FILE_DOWNLOAD_COMPLETE',
+        clientRequestId: open.clientRequestId,
+        sha256: 'a'.repeat(64),
+        declaredSize: 10,
+      })
+      await flush()
+
+      await expect(download).resolves.toEqual({ outcome: 'completed', sha256: 'a'.repeat(64) })
+    })
+
+    it('returns credit only after the consumer has finished with the bytes', async () => {
+      const transport = createTransport()
+      await negotiate(transport, ['SYNC_ITEMS', 'FILES_V1'])
+
+      let releaseConsumer = (): void => undefined
+      const consumed = new Promise<void>((resolve) => {
+        releaseConsumer = resolve
+      })
+      void transport.downloadFileOverSocket({ ...fileRequest(), onBytes: () => consumed })
+      await flush()
+      const open = worker.posts.find((message) => message.type === 'OPEN_FILE_DOWNLOAD') as Extract<
+        MainToSyncWorkerMessage,
+        { type: 'OPEN_FILE_DOWNLOAD' }
+      >
+
+      worker.emit({
+        type: 'FILE_DOWNLOAD_CHUNK',
+        clientRequestId: open.clientRequestId,
+        bytes: Uint8Array.from([1, 2, 3, 4]),
+        offset: 0,
+      })
+      await flush()
+      expect(worker.posts.some((message) => message.type === 'FILE_DOWNLOAD_CREDIT')).toBe(false)
+
+      releaseConsumer()
+      await flush()
+      expect(worker.posts).toContainEqual({
+        type: 'FILE_DOWNLOAD_CREDIT',
+        clientRequestId: open.clientRequestId,
+        creditBytes: 4,
+      })
+    })
+
+    it('will not call a failure safe to replay once bytes have reached the consumer', async () => {
+      const transport = createTransport()
+      await negotiate(transport, ['SYNC_ITEMS', 'FILES_V1'])
+
+      const download = transport.downloadFileOverSocket(fileRequest())
+      await flush()
+      const open = worker.posts.find((message) => message.type === 'OPEN_FILE_DOWNLOAD') as Extract<
+        MainToSyncWorkerMessage,
+        { type: 'OPEN_FILE_DOWNLOAD' }
+      >
+
+      worker.emit({
+        type: 'FILE_DOWNLOAD_CHUNK',
+        clientRequestId: open.clientRequestId,
+        bytes: Uint8Array.from([1, 2, 3, 4]),
+        offset: 0,
+      })
+      await flush()
+      // The worker believes nothing crossed; this thread knows better, and the
+      // stricter of the two answers is the one that reaches the caller.
+      worker.emit({
+        type: 'FILE_DOWNLOAD_ERROR',
+        clientRequestId: open.clientRequestId,
+        code: 'SOCKET_CLOSED',
+        retryable: true,
+        safeToFallback: true,
+      })
+      await flush()
+
+      await expect(download).resolves.toEqual({
+        outcome: 'failed',
+        code: 'SOCKET_CLOSED',
+        retryable: true,
+        safeToFallback: false,
+      })
+    })
+
+    it('fails a transfer whose completion arrives short of the declared size', async () => {
+      const transport = createTransport()
+      await negotiate(transport, ['SYNC_ITEMS', 'FILES_V1'])
+
+      const download = transport.downloadFileOverSocket(fileRequest())
+      await flush()
+      const open = worker.posts.find((message) => message.type === 'OPEN_FILE_DOWNLOAD') as Extract<
+        MainToSyncWorkerMessage,
+        { type: 'OPEN_FILE_DOWNLOAD' }
+      >
+
+      worker.emit({
+        type: 'FILE_DOWNLOAD_COMPLETE',
+        clientRequestId: open.clientRequestId,
+        sha256: 'a'.repeat(64),
+        declaredSize: 10,
+      })
+      await flush()
+
+      await expect(download).resolves.toMatchObject({ outcome: 'failed', code: 'FILE_TRUNCATED' })
+    })
+
+    it('stops advertising the lane as soon as the socket degrades', async () => {
+      const transport = createTransport()
+      await negotiate(transport, ['SYNC_ITEMS', 'FILES_V1'])
+      expect(transport.isFileLaneAvailable()).toBe(true)
+
+      worker.emit({ type: 'STATE', state: 'DEGRADED', reason: 'proxy-failed' })
+      await flush()
+
+      expect(transport.isFileLaneAvailable()).toBe(false)
+      await expect(transport.downloadFileOverSocket(fileRequest())).resolves.toEqual({ outcome: 'unavailable' })
+    })
+  })
 })

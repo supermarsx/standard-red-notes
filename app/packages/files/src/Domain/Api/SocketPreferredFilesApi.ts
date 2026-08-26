@@ -1,0 +1,160 @@
+import {
+  ClientDisplayableError,
+  HttpResponse,
+  StartUploadSessionResponse,
+  ValetTokenOperation,
+} from '@standardnotes/responses'
+import { DownloadFileParams } from './DownloadFileParams'
+import { FileOwnershipType } from './FileOwnershipType'
+import { FilesApiInterface } from './FilesApiInterface'
+import { FileSocketTransportInterface } from './FileSocketTransportInterface'
+import { OrderedByteChunker } from '../Chunker/OrderedByteChunker'
+
+/**
+ * Prefers an already-negotiated realtime socket for file downloads, and is a
+ * transparent pass-through to the HTTP client for everything else.
+ *
+ * Shape of the decision, in order of how much it matters:
+ *
+ * 1. **The lane is used only when the server says it exists.** `isFileLaneAvailable()`
+ *    reads the operation list the gateway sent at AUTHENTICATED. Absent — which is
+ *    what nearly every deployment reports — this class does nothing but delegate,
+ *    so the HTTP path is not merely still available, it is still the only code
+ *    that runs.
+ * 2. **HTTP remains the fallback, but never a replay.** The file decryptor is
+ *    stateful and chunk-ordered. Falling back after bytes have been handed to it
+ *    would decrypt the head of the file twice, so fallback is permitted only
+ *    while the transport proves nothing was delivered.
+ * 3. **Uploads are not on this lane yet.** They are delegated unchanged. An upload
+ *    that dies mid-flight may already have been applied server-side, and honest
+ *    recovery for that needs the resume protocol, not a retry.
+ *
+ * Authorization is unchanged: the socket path sends only a resource reference and
+ * the gateway mints its own single-use credential per operation, so nothing here
+ * can move bytes that the HTTP path would have refused.
+ */
+export class SocketPreferredFilesApi implements FilesApiInterface {
+  constructor(
+    private readonly http: FilesApiInterface,
+    private readonly socket: FileSocketTransportInterface,
+  ) {}
+
+  createUserFileValetToken(
+    remoteIdentifier: string,
+    operation: ValetTokenOperation,
+    unencryptedFileSize?: number,
+  ): Promise<string | ClientDisplayableError> {
+    return this.http.createUserFileValetToken(remoteIdentifier, operation, unencryptedFileSize)
+  }
+
+  startUploadSession(
+    valetToken: string,
+    ownershipType: FileOwnershipType,
+  ): Promise<HttpResponse<StartUploadSessionResponse>> {
+    return this.http.startUploadSession(valetToken, ownershipType)
+  }
+
+  uploadFileBytes(
+    valetToken: string,
+    ownershipType: FileOwnershipType,
+    chunkId: number,
+    encryptedBytes: Uint8Array,
+  ): Promise<boolean> {
+    return this.http.uploadFileBytes(valetToken, ownershipType, chunkId, encryptedBytes)
+  }
+
+  closeUploadSession(valetToken: string, ownershipType: FileOwnershipType): Promise<boolean | ClientDisplayableError> {
+    return this.http.closeUploadSession(valetToken, ownershipType)
+  }
+
+  moveFile(valetToken: string): Promise<boolean> {
+    return this.http.moveFile(valetToken)
+  }
+
+  deleteFile(valetToken: string, ownershipType: FileOwnershipType): Promise<HttpResponse> {
+    return this.http.deleteFile(valetToken, ownershipType)
+  }
+
+  getFilesDownloadUrl(ownershipType: FileOwnershipType): string {
+    return this.http.getFilesDownloadUrl(ownershipType)
+  }
+
+  async downloadFile(params: DownloadFileParams): Promise<ClientDisplayableError | undefined> {
+    if (!this.canUseSocketFor(params)) {
+      return this.http.downloadFile(params)
+    }
+
+    const declaredSize = params.file.encryptedChunkSizes.reduce((total, size) => total + size, 0)
+
+    let chunker: OrderedByteChunker
+    try {
+      // The socket's frame size (256 KiB) has nothing to do with this file's
+      // encrypted chunk boundaries, so the arriving stream is re-cut to the exact
+      // sizes the decryptor authenticated. Downstream therefore cannot tell which
+      // transport delivered the bytes.
+      chunker = new OrderedByteChunker(params.file.encryptedChunkSizes.slice(), 'network', async (chunk) => {
+        await params.onBytesReceived(chunk.data)
+      })
+    } catch {
+      return this.http.downloadFile(params)
+    }
+
+    let delivered = false
+    const result = await this.socket.downloadFileOverSocket({
+      remoteIdentifier: params.file.remoteIdentifier,
+      fileUuid: params.file.uuid,
+      declaredSize,
+      ...(params.abortSignal ? { signal: params.abortSignal } : {}),
+      onBytes: async (bytes) => {
+        delivered = true
+        await chunker.addBytes(bytes)
+      },
+    })
+
+    if (result.outcome === 'completed') {
+      try {
+        chunker.finish()
+      } catch (error) {
+        return new ClientDisplayableError(
+          error instanceof Error ? error.message : 'File download ended before its declared final chunk.',
+        )
+      }
+      return undefined
+    }
+
+    if (result.outcome === 'aborted') {
+      // Matches the HTTP path, which also reports an aborted download as a
+      // non-error so the caller can distinguish cancellation from failure.
+      return undefined
+    }
+
+    if (result.outcome === 'unavailable') {
+      return this.http.downloadFile(params)
+    }
+
+    if (result.safeToFallback && !delivered) {
+      return this.http.downloadFile(params)
+    }
+
+    return new ClientDisplayableError(`File download over the realtime transport failed (${result.code}).`)
+  }
+
+  private canUseSocketFor(params: DownloadFileParams): boolean {
+    return (
+      this.socket.isFileLaneAvailable() &&
+      // Shared-vault resources are excluded on purpose. Their wire reference also
+      // requires the vault's owner uuid, which this download path never obtains —
+      // it mints a read token without one. Inventing or guessing that value is
+      // exactly the kind of divergence that would produce a confusing authorization
+      // failure, so those downloads stay on HTTP until the owner uuid is plumbed.
+      params.ownershipType === 'user' &&
+      // Only a whole-file download from byte zero. A resumed or partial range has
+      // no socket equivalent yet, and reinterpreting one as a full download would
+      // silently return the wrong bytes.
+      params.chunkIndex === 0 &&
+      params.contentRangeStart === 0 &&
+      params.file.encryptedChunkSizes.length > 0 &&
+      params.shouldAbort?.() !== true
+    )
+  }
+}

@@ -8,8 +8,17 @@ import {
 import {
   CollaborationAuthorizationTransportRequest,
   CollaborationAuthorizationTransportResult,
+  decodeFileBinaryFrame,
   DEFAULT_RPC_CREDIT_BYTES,
   digestSyncBody,
+  fileBinaryPayloadMatchesDigest,
+  isFileIdentifier,
+  isFileSha256,
+  isWorkerFileDownloadRequest,
+  MAX_FILE_BINARY_FRAME_BYTES,
+  MAX_FILE_TRANSFER_CREDIT_BYTES,
+  SocketFileBinaryFrame,
+  WorkerFileDownloadRequest,
   frameByteLength,
   isSyncServerFrame,
   MainToSyncWorkerMessage,
@@ -51,6 +60,21 @@ const OPAQUE_SESSION_SCOPE_PATTERN = /^sync-session-v1:[a-f0-9]{64}$/u
  * whenever a files adapter is ready, and without this entry that handshake would
  * drop sync itself to HTTP.
  */
+const FILES_NEGOTIATED_OPERATION: SyncNegotiatedOperation = 'FILES_V1'
+
+/**
+ * Gateway file errors worth another attempt on a later connection. Everything
+ * else (integrity, range, not-found, denied) describes a stable condition that a
+ * retry would only reproduce.
+ */
+const RETRYABLE_FILE_ERROR_CODES = new Set([
+  'OPERATION_UNAVAILABLE',
+  'FILE_BACKEND_ERROR',
+  'FILE_TRANSFER_CAPACITY',
+  'FILE_DEADLINE_EXCEEDED',
+  'FILE_BACKPRESSURE',
+])
+
 const NEGOTIABLE_OPERATIONS: ReadonlySet<SyncNegotiatedOperation> = new Set([
   'SYNC_ITEMS',
   'AUTHORIZE_COLLABORATION',
@@ -63,6 +87,13 @@ const NEGOTIABLE_OPERATIONS: ReadonlySet<SyncNegotiatedOperation> = new Set([
 export interface SyncSocketLike {
   readonly readyState: number
   readonly bufferedAmount: number
+  /**
+   * Set to `'arraybuffer'` before the socket opens so FILES_V1 download chunks
+   * arrive as `ArrayBuffer` rather than `Blob`. Optional because sockets that
+   * predate the files lane (and the test doubles built against them) never
+   * carry binary frames; those keep working untouched.
+   */
+  binaryType?: string
   onopen: (() => void) | null
   onmessage: ((event: { data: unknown }) => void) | null
   onerror: (() => void) | null
@@ -137,6 +168,35 @@ type ActiveInviteSubscription = {
   ackReady?: boolean
 }
 
+/**
+ * One in-flight FILES_V1 download.
+ *
+ * Identity is `transferId` + `generation`, which is what the gateway itself uses
+ * to invalidate a transfer: a re-opened download replaces the previous
+ * generation, and a frame carrying a stale one is discarded rather than applied.
+ * Nothing here is keyed on an object reference, so re-rendering or re-applying
+ * the file item cannot restart a transfer.
+ */
+type ActiveFileDownload = {
+  clientRequestId: string
+  sessionScope: string
+  request: WorkerFileDownloadRequest
+  /** Echoed by the gateway on FILES_ACCEPTED / FILES_COMPLETE / ERROR. */
+  commandId: string
+  /** Echoed by the gateway inside every binary chunk header. */
+  requestId: string
+  accepted: boolean
+  transferId?: string
+  generation?: number
+  declaredSize: number
+  nextIndex: number
+  nextOffset: number
+  /** Chunks handed to the main thread; once above zero, HTTP replay is unsafe. */
+  chunksForwarded: number
+  outstandingCreditBytes: number
+  deadlineTimer?: ReturnType<typeof setTimeout>
+}
+
 type CollaborationEpochDiscoveryHandshake = {
   challenge: string
   requestId: string
@@ -195,6 +255,7 @@ export class SyncTransportWorkerRuntime {
   private reconnectAttempts = 0
   private negotiatedOperations = new Set<SyncNegotiatedOperation>()
   private readonly rpcRequests = new Map<string, ActiveRpcRequest>()
+  private readonly fileDownloads = new Map<string, ActiveFileDownload>()
   private inviteSubscription?: ActiveInviteSubscription
   private shuttingDown = false
   private ackTimeout?: ReturnType<typeof setTimeout>
@@ -251,6 +312,15 @@ export class SyncTransportWorkerRuntime {
         break
       case 'UNSUBSCRIBE_INVITE_EVENTS':
         this.unsubscribeInviteEvents(message.clientRequestId)
+        break
+      case 'OPEN_FILE_DOWNLOAD':
+        await this.openFileDownload(message.clientRequestId, message.sessionScope, message.request)
+        break
+      case 'FILE_DOWNLOAD_CREDIT':
+        await this.creditFileDownload(message.clientRequestId, message.creditBytes)
+        break
+      case 'CANCEL_FILE_DOWNLOAD':
+        await this.cancelFileDownload(message.clientRequestId, 'CANCELLED')
         break
       case 'CONNECT':
         await this.connect(message.clientRequestId, message.sessionScope, message.authorization)
@@ -617,6 +687,322 @@ export class SyncTransportWorkerRuntime {
     }
   }
 
+  /**
+   * Opens a FILES_V1 download on an already-negotiated socket.
+   *
+   * Deliberately never bootstraps a connection. Unlike sync or RPC there is no
+   * `files-bootstrap` mode and no `NEED_TICKET`: if the socket is not already up
+   * and advertising FILES_V1, this reports OPERATION_UNAVAILABLE and the caller
+   * uses HTTP exactly as it always has. A deployment that advertises nothing
+   * therefore pays literally nothing for this lane — no ticket request, no
+   * connection attempt, no new failure mode — which is the property that has to
+   * hold, since that is the configuration nearly every deployment runs.
+   */
+  private async openFileDownload(
+    clientRequestId: string,
+    sessionScope: string,
+    request: WorkerFileDownloadRequest,
+  ): Promise<void> {
+    if (
+      this.shuttingDown ||
+      !validSessionScope(sessionScope) ||
+      !isWorkerFileDownloadRequest(request) ||
+      this.fileDownloads.has(clientRequestId)
+    ) {
+      this.failFileDownloadMessage(clientRequestId, 'INVALID_REQUEST', false, true)
+      return
+    }
+    if (this.sessionScope && this.sessionScope !== sessionScope) {
+      this.failFileDownloadMessage(clientRequestId, 'SESSION_CHANGED', false, true)
+      return
+    }
+    if (
+      this.socket?.readyState !== 1 ||
+      this.state !== 'READY' ||
+      !this.negotiatedOperations.has(FILES_NEGOTIATED_OPERATION)
+    ) {
+      this.failFileDownloadMessage(clientRequestId, 'OPERATION_UNAVAILABLE', true, true)
+      return
+    }
+
+    const download: ActiveFileDownload = {
+      clientRequestId,
+      sessionScope,
+      request,
+      commandId: this.uuid(),
+      requestId: this.uuid(),
+      accepted: false,
+      declaredSize: request.declaredSize,
+      nextIndex: 0,
+      nextOffset: 0,
+      chunksForwarded: 0,
+      outstandingCreditBytes: 0,
+    }
+    download.deadlineTimer = this.scheduleTimeout(() => {
+      void this.cancelFileDownload(clientRequestId, 'DEADLINE_EXCEEDED')
+    }, request.deadlineMs)
+    this.fileDownloads.set(clientRequestId, download)
+
+    const payload = {
+      // `remoteIdentifier` crosses here byte-identical to the value the file item
+      // authenticated; it is also the decryptor's AAD, so it is passed through and
+      // never rebuilt.
+      resource: {
+        ownershipType: download.request.resource.ownershipType,
+        remoteIdentifier: download.request.resource.remoteIdentifier,
+        fileUuid: download.request.resource.fileUuid,
+      },
+      offset: 0,
+      initialCreditBytes: request.initialCreditBytes,
+      deadlineMs: request.deadlineMs,
+    }
+    const frame: SyncClientFrame = {
+      version: SYNC_PROTOCOL_VERSION,
+      channel: SYNC_CHANNEL,
+      type: 'FILES_DOWNLOAD_OPEN',
+      requestId: download.requestId,
+      commandId: download.commandId,
+      sequence: this.sequence++,
+      payloadLength: payloadByteLength(payload),
+      payload,
+    }
+    try {
+      await this.sendWithBackpressure(JSON.stringify(frame))
+      download.outstandingCreditBytes = request.initialCreditBytes
+    } catch {
+      this.failFileDownload(download, 'SOCKET_CLOSED', true)
+    }
+  }
+
+  /**
+   * Returns consumed credit to the gateway. The main thread sends this only after
+   * the bytes have actually been written through the decryptor, so the socket
+   * window reflects real consumption rather than mere arrival — the gateway pumps
+   * only while credit remains, so a slow consumer stalls the sender instead of
+   * accumulating an unbounded buffer in the worker.
+   */
+  private async creditFileDownload(clientRequestId: string, creditBytes: number): Promise<void> {
+    const download = this.fileDownloads.get(clientRequestId)
+    if (
+      !download?.accepted ||
+      download.transferId === undefined ||
+      download.generation === undefined ||
+      !Number.isSafeInteger(creditBytes) ||
+      creditBytes <= 0 ||
+      creditBytes > MAX_FILE_TRANSFER_CREDIT_BYTES ||
+      this.socket?.readyState !== 1 ||
+      this.state !== 'READY'
+    ) {
+      return
+    }
+    const granted = Math.min(creditBytes, MAX_FILE_TRANSFER_CREDIT_BYTES - download.outstandingCreditBytes)
+    if (granted <= 0) {
+      return
+    }
+    const payload = { transferId: download.transferId, generation: download.generation, creditBytes: granted }
+    const frame: SyncClientFrame = {
+      version: SYNC_PROTOCOL_VERSION,
+      channel: SYNC_CHANNEL,
+      type: 'FILES_CREDIT',
+      requestId: this.uuid(),
+      commandId: this.uuid(),
+      sequence: this.sequence++,
+      payloadLength: payloadByteLength(payload),
+      payload,
+    }
+    try {
+      await this.sendWithBackpressure(JSON.stringify(frame))
+      download.outstandingCreditBytes += granted
+    } catch {
+      this.failFileDownload(download, 'SOCKET_CLOSED', true)
+    }
+  }
+
+  private async cancelFileDownload(clientRequestId: string, code: string): Promise<void> {
+    const download = this.fileDownloads.get(clientRequestId)
+    if (!download) {
+      return
+    }
+    if (
+      download.transferId !== undefined &&
+      download.generation !== undefined &&
+      this.socket?.readyState === 1 &&
+      this.state === 'READY'
+    ) {
+      const payload = { transferId: download.transferId, generation: download.generation }
+      const frame: SyncClientFrame = {
+        version: SYNC_PROTOCOL_VERSION,
+        channel: SYNC_CHANNEL,
+        type: 'FILES_CANCEL',
+        requestId: this.uuid(),
+        commandId: this.uuid(),
+        sequence: this.sequence++,
+        payloadLength: payloadByteLength(payload),
+        payload,
+      }
+      try {
+        await this.sendWithBackpressure(JSON.stringify(frame))
+      } catch {
+        // The local termination below is authoritative for the caller either way.
+      }
+    }
+    this.failFileDownload(download, code, code === 'DEADLINE_EXCEEDED')
+  }
+
+  private handleFilesServerFrame(download: ActiveFileDownload, frame: SyncServerFrame): void {
+    if (frame.type === 'ERROR') {
+      const code = typeof frame.payload.code === 'string' ? frame.payload.code : 'FILE_BACKEND_ERROR'
+      this.failFileDownload(download, code, RETRYABLE_FILE_ERROR_CODES.has(code))
+      return
+    }
+    if (frame.type === 'FILES_ACCEPTED') {
+      const payload = frame.payload
+      if (
+        download.accepted ||
+        payload.mode !== 'download' ||
+        !isFileIdentifier(payload.transferId) ||
+        !Number.isSafeInteger(payload.generation) ||
+        Number(payload.generation) < 1 ||
+        // The client's own authenticated metadata decides how long this file is.
+        // A server reporting a different length is refused, not adopted.
+        payload.declaredSize !== download.declaredSize ||
+        payload.nextIndex !== 0 ||
+        payload.nextOffset !== 0
+      ) {
+        this.failFileDownload(download, 'FILE_INVALID_STATE', false)
+        return
+      }
+      download.accepted = true
+      download.transferId = payload.transferId
+      download.generation = Number(payload.generation)
+      this.dependencies.postMessage({
+        type: 'FILE_DOWNLOAD_ACCEPTED',
+        clientRequestId: download.clientRequestId,
+        declaredSize: download.declaredSize,
+      })
+      return
+    }
+    if (frame.type === 'FILES_COMPLETE') {
+      const payload = frame.payload
+      if (
+        payload.mode !== 'download' ||
+        payload.transferId !== download.transferId ||
+        payload.generation !== download.generation ||
+        payload.rangeStart !== 0 ||
+        payload.declaredSize !== download.declaredSize ||
+        !isFileSha256(payload.sha256) ||
+        download.nextOffset !== download.declaredSize
+      ) {
+        this.failFileDownload(download, 'FILE_TRUNCATED', false)
+        return
+      }
+      this.clearFileDownload(download)
+      this.dependencies.postMessage({
+        type: 'FILE_DOWNLOAD_COMPLETE',
+        clientRequestId: download.clientRequestId,
+        sha256: payload.sha256,
+        declaredSize: download.declaredSize,
+      })
+    }
+  }
+
+  /**
+   * A malformed or unattributable binary frame fails at most the transfer it
+   * names. It never closes the socket: an advertised lane misbehaving must not
+   * cost sync, collaboration and invites their transport.
+   */
+  private async handleFileBinaryFrame(raw: Uint8Array): Promise<void> {
+    let decoded: SocketFileBinaryFrame
+    try {
+      decoded = decodeFileBinaryFrame(raw)
+    } catch {
+      return
+    }
+    if (decoded.header.kind !== 'DOWNLOAD_CHUNK') {
+      return
+    }
+    const download = [...this.fileDownloads.values()].find(
+      (candidate) =>
+        candidate.requestId === decoded.header.requestId &&
+        candidate.transferId === decoded.header.transferId &&
+        candidate.generation === decoded.header.generation,
+    )
+    if (!download || !download.accepted) {
+      return
+    }
+    if (
+      decoded.header.index !== download.nextIndex ||
+      decoded.header.offset !== download.nextOffset ||
+      decoded.header.declaredSize !== download.declaredSize ||
+      decoded.header.byteLength > download.outstandingCreditBytes
+    ) {
+      this.failFileDownload(download, 'FILE_CHUNK_OUT_OF_ORDER', false)
+      return
+    }
+    let digestMatches: boolean
+    try {
+      digestMatches = await fileBinaryPayloadMatchesDigest(decoded, this.subtle)
+    } catch {
+      digestMatches = false
+    }
+    if (!digestMatches) {
+      this.failFileDownload(download, 'FILE_INTEGRITY_MISMATCH', false)
+      return
+    }
+    // The transfer can be cancelled or replaced while the digest is being
+    // computed; re-establish that this frame is still the one expected.
+    if (this.fileDownloads.get(download.clientRequestId) !== download || decoded.header.index !== download.nextIndex) {
+      return
+    }
+    download.nextIndex += 1
+    download.nextOffset += decoded.header.byteLength
+    download.outstandingCreditBytes -= decoded.header.byteLength
+    download.chunksForwarded += 1
+    this.dependencies.postMessage({
+      type: 'FILE_DOWNLOAD_CHUNK',
+      clientRequestId: download.clientRequestId,
+      bytes: decoded.bytes.slice(),
+      offset: decoded.header.offset,
+    })
+  }
+
+  private failFileDownload(download: ActiveFileDownload, code: string, retryable: boolean): void {
+    if (this.fileDownloads.get(download.clientRequestId) !== download) {
+      return
+    }
+    this.clearFileDownload(download)
+    this.failFileDownloadMessage(download.clientRequestId, code, retryable, download.chunksForwarded === 0)
+  }
+
+  private failFileDownloadMessage(
+    clientRequestId: string,
+    code: string,
+    retryable: boolean,
+    safeToFallback: boolean,
+  ): void {
+    this.dependencies.postMessage({
+      type: 'FILE_DOWNLOAD_ERROR',
+      clientRequestId,
+      code,
+      retryable,
+      safeToFallback,
+    })
+  }
+
+  private clearFileDownload(download: ActiveFileDownload): void {
+    if (download.deadlineTimer) {
+      this.cancelTimeout(download.deadlineTimer)
+      download.deadlineTimer = undefined
+    }
+    this.fileDownloads.delete(download.clientRequestId)
+  }
+
+  private failAllFileDownloads(code: string, retryable: boolean): void {
+    for (const download of [...this.fileDownloads.values()]) {
+      this.failFileDownload(download, code, retryable)
+    }
+  }
+
   private async connect(clientRequestId: string, sessionScope: string, authorization: SyncTicket): Promise<void> {
     if (
       !this.active ||
@@ -673,6 +1059,13 @@ export class SyncTransportWorkerRuntime {
     }
     this.socket = socket
     this.socketGeneration += 1
+    try {
+      // Must be set before the socket opens, or FILES_V1 chunks would arrive as
+      // Blobs. Guarded because the setter does not exist on every socket double.
+      socket.binaryType = 'arraybuffer'
+    } catch {
+      // A socket that will not take binary simply never carries a file transfer.
+    }
     socket.onopen = () => this.onOpen(socket)
     socket.onmessage = (event) => void this.onMessage(socket, event.data)
     socket.onerror = () => undefined
@@ -705,7 +1098,16 @@ export class SyncTransportWorkerRuntime {
   }
 
   private async onMessage(socket: SyncSocketLike, raw: unknown): Promise<void> {
-    if (this.socket !== socket || typeof raw !== 'string') {
+    if (this.socket !== socket) {
+      return
+    }
+    if (typeof raw !== 'string') {
+      const binary = asBinaryFrame(raw)
+      // Binary frames belong to FILES_V1 only. Anything else on this socket, or a
+      // frame above the file ceiling, is dropped without disturbing the JSON lanes.
+      if (binary && binary.byteLength <= MAX_FILE_BINARY_FRAME_BYTES && this.fileDownloads.size > 0) {
+        await this.handleFileBinaryFrame(binary)
+      }
       return
     }
     if (utf8Bytes(raw).byteLength > MAX_SYNC_FRAME_BYTES) {
@@ -776,6 +1178,11 @@ export class SyncTransportWorkerRuntime {
     const inviteSubscription = this.inviteSubscription
     if (inviteSubscription && frame.commandId === inviteSubscription.commandId) {
       this.handleInviteServerFrame(inviteSubscription, frame)
+      return
+    }
+    const fileDownload = [...this.fileDownloads.values()].find((candidate) => candidate.commandId === frame.commandId)
+    if (fileDownload) {
+      this.handleFilesServerFrame(fileDownload, frame)
       return
     }
     if (frame.type === 'ERROR' && this.state === 'AUTHENTICATING') {
@@ -1441,6 +1848,9 @@ export class SyncTransportWorkerRuntime {
     this.socket = undefined
     this.clearAckDeadline()
     this.clearHeartbeat()
+    // A download cannot survive its socket: the gateway aborts the transfer on
+    // disconnect, and its transferId/generation do not carry to a new connection.
+    this.failAllFileDownloads('SOCKET_CLOSED', true)
     for (const rpc of [...this.rpcRequests.values()]) {
       if (rpc.sent) {
         // Never replay a request after bytes crossed the socket. The server's
@@ -1742,6 +2152,7 @@ export class SyncTransportWorkerRuntime {
       quarantined = false
     }
     await this.closeSocketAndReleaseOwner()
+    this.failAllFileDownloads('SESSION_REVOKED', false)
     for (const rpc of [...this.rpcRequests.values()]) {
       this.failRpc(rpc, 'SESSION_REVOKED', false, false)
     }
@@ -1761,6 +2172,7 @@ export class SyncTransportWorkerRuntime {
   private async shutdown(): Promise<void> {
     this.shuttingDown = true
     await this.closeSocketAndReleaseOwner()
+    this.failAllFileDownloads('SHUTDOWN', false)
     for (const rpc of [...this.rpcRequests.values()]) {
       this.failRpc(rpc, 'SHUTDOWN', false, false)
     }
@@ -1781,6 +2193,17 @@ function validOperationId(operationId: unknown): operationId is string {
 
 function validOperationIndex(operationIndex: unknown): operationIndex is number {
   return Number.isSafeInteger(operationIndex) && Number(operationIndex) >= 0
+}
+
+/** Normalizes the binary shapes a WebSocket can deliver into a single view. */
+function asBinaryFrame(raw: unknown): Uint8Array | undefined {
+  if (raw instanceof ArrayBuffer) {
+    return new Uint8Array(raw)
+  }
+  if (ArrayBuffer.isView(raw)) {
+    return new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength)
+  }
+  return undefined
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
