@@ -11,6 +11,8 @@ import { SocketPreferredFilesApi } from './SocketPreferredFilesApi'
 
 const REMOTE_IDENTIFIER = 'remote-identifier-9f3c.a:b-1'
 const FILE_UUID = '11111111-1111-4111-8111-111111111111'
+const VAULT_UUID = '22222222-2222-4222-8222-222222222222'
+const VAULT_OWNER_UUID = '33333333-3333-4333-8333-333333333333'
 
 describe('SocketPreferredFilesApi', () => {
   let http: jest.Mocked<FilesApiInterface>
@@ -25,6 +27,7 @@ describe('SocketPreferredFilesApi', () => {
       uuid: FILE_UUID,
       remoteIdentifier: REMOTE_IDENTIFIER,
       encryptedChunkSizes: [4, 4, 2],
+      shared_vault_uuid: undefined,
     },
     chunkIndex: 0,
     valetToken: 'valet-token',
@@ -36,7 +39,20 @@ describe('SocketPreferredFilesApi', () => {
     ...overrides,
   })
 
-  const subject = () => new SocketPreferredFilesApi(http, socket)
+  const sharedVaultParams = (overrides: Partial<DownloadFileParams> = {}): DownloadFileParams =>
+    params({
+      ownershipType: 'shared-vault',
+      file: {
+        uuid: FILE_UUID,
+        remoteIdentifier: REMOTE_IDENTIFIER,
+        encryptedChunkSizes: [4, 4, 2],
+        shared_vault_uuid: VAULT_UUID,
+      },
+      ...overrides,
+    })
+
+  const subject = (resolveOwner?: (sharedVaultUuid: string) => string | undefined) =>
+    new SocketPreferredFilesApi(http, socket, resolveOwner)
 
   beforeEach(() => {
     received = []
@@ -116,8 +132,17 @@ describe('SocketPreferredFilesApi', () => {
       laneAvailable = true
     })
 
-    it('sends shared-vault downloads over HTTP', async () => {
-      await subject().downloadFile(params({ ownershipType: 'shared-vault' }))
+    it('sends a shared-vault download over HTTP when the vault owner is not known locally', async () => {
+      // The vault has not synced yet, so there is no owner to name. Guessing one
+      // would fail closed server-side and read as a permissions bug.
+      await subject(() => undefined).downloadFile(sharedVaultParams())
+
+      expect(http.downloadFile).toHaveBeenCalledTimes(1)
+      expect(socketRequests).toHaveLength(0)
+    })
+
+    it('sends a shared-vault download over HTTP when no owner resolver is installed at all', async () => {
+      await subject().downloadFile(sharedVaultParams())
 
       expect(http.downloadFile).toHaveBeenCalledTimes(1)
       expect(socketRequests).toHaveLength(0)
@@ -175,6 +200,39 @@ describe('SocketPreferredFilesApi', () => {
         [5, 6, 7, 8],
         [9, 10],
       ])
+    })
+
+    it('names a shared-vault resource with the owner the vault listing records', async () => {
+      const resolve = jest.fn().mockReturnValue(VAULT_OWNER_UUID)
+      socketOutcome = async (request) => {
+        await request.onBytes(Uint8Array.from([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]))
+        return { outcome: 'completed', sha256: 'a'.repeat(64) }
+      }
+
+      await expect(subject(resolve).downloadFile(sharedVaultParams())).resolves.toBeUndefined()
+
+      expect(resolve).toHaveBeenCalledWith(VAULT_UUID)
+      expect(socketRequests[0].sharedVault).toEqual({
+        sharedVaultUuid: VAULT_UUID,
+        sharedVaultOwnerUuid: VAULT_OWNER_UUID,
+      })
+      // The identifier is the decryptor's AAD on this path exactly as on the
+      // personal one — shared ownership changes who may read it, not what it is.
+      expect(socketRequests[0].remoteIdentifier).toBe(REMOTE_IDENTIFIER)
+      expect(http.downloadFile).not.toHaveBeenCalled()
+    })
+
+    it('never attaches a vault reference to a personal file', async () => {
+      const resolve = jest.fn().mockReturnValue(VAULT_OWNER_UUID)
+      socketOutcome = async (request) => {
+        await request.onBytes(Uint8Array.from([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]))
+        return { outcome: 'completed', sha256: 'a'.repeat(64) }
+      }
+
+      await subject(resolve).downloadFile(params())
+
+      expect(resolve).not.toHaveBeenCalled()
+      expect(socketRequests[0].sharedVault).toBeUndefined()
     })
 
     it('reports a transfer that completed short of its declared size', async () => {

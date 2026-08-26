@@ -16,6 +16,8 @@ export type DownloadFileParams = {
     uuid: string
     remoteIdentifier: FileContent['remoteIdentifier']
     encryptedChunkSizes: FileContent['encryptedChunkSizes']
+    /** Set when the file lives in a shared vault; the vault's owner is resolved separately. */
+    shared_vault_uuid: string | undefined
   }
   chunkIndex: number
   valetToken: string

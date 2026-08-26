@@ -1196,6 +1196,21 @@ export class Dependencies {
        */
       this.get<MutatorService>(TYPES.MutatorService).setFileService(fileService)
 
+      /**
+       * Late-bound for the same reason: the socket download path must name a
+       * shared-vault resource by the owner its vault listing records, and reading
+       * vaults from FileService's constructor would close a dependency cycle.
+       * Resolved per download so a vault that syncs in later starts working
+       * without re-wiring, and returning undefined simply keeps that file on HTTP.
+       */
+      fileService.setSharedVaultOwnerResolver(
+        (sharedVaultUuid) =>
+          this.get<GetSharedVaults>(TYPES.GetSharedVaults)
+            .execute()
+            .getValue()
+            .find((vault) => vault.sharing.sharedVaultUuid === sharedVaultUuid)?.sharing.ownerUserUuid,
+      )
+
       return fileService
     })
 

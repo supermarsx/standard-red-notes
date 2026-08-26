@@ -28,6 +28,10 @@ import { OrderedByteChunker } from '../Chunker/OrderedByteChunker'
  * 3. **Uploads are not on this lane yet.** They are delegated unchanged. An upload
  *    that dies mid-flight may already have been applied server-side, and honest
  *    recovery for that needs the resume protocol, not a retry.
+ * 4. **Shared-vault downloads need the vault's owner, and will not invent one.**
+ *    HTTP carries the owner as request context; the socket must name it in the
+ *    resource itself. When it cannot be resolved from the vault listing that
+ *    records it, the download goes over HTTP rather than guessing.
  *
  * Authorization is unchanged: the socket path sends only a resource reference and
  * the gateway mints its own single-use credential per operation, so nothing here
@@ -37,6 +41,14 @@ export class SocketPreferredFilesApi implements FilesApiInterface {
   constructor(
     private readonly http: FilesApiInterface,
     private readonly socket: FileSocketTransportInterface,
+    /**
+     * Resolves a shared vault's owner from the vault listing that records it.
+     * Returning `undefined` — no such vault known locally — sends the download
+     * over HTTP. It must never guess: the owner is cross-checked server-side
+     * against the credential the gateway mints, so a fabricated value would fail
+     * closed and read as a permissions bug rather than as the missing lookup it is.
+     */
+    private readonly resolveSharedVaultOwnerUuid?: (sharedVaultUuid: string) => string | undefined,
   ) {}
 
   createUserFileValetToken(
@@ -84,6 +96,14 @@ export class SocketPreferredFilesApi implements FilesApiInterface {
       return this.http.downloadFile(params)
     }
 
+    const sharedVault = this.sharedVaultReferenceFor(params)
+    if (params.ownershipType === 'shared-vault' && !sharedVault) {
+      // The vault's owner is not known locally, so there is nothing honest to
+      // send. HTTP carries the owner as request context instead and does not
+      // need it resolved here.
+      return this.http.downloadFile(params)
+    }
+
     const declaredSize = params.file.encryptedChunkSizes.reduce((total, size) => total + size, 0)
 
     let chunker: OrderedByteChunker
@@ -104,6 +124,7 @@ export class SocketPreferredFilesApi implements FilesApiInterface {
       remoteIdentifier: params.file.remoteIdentifier,
       fileUuid: params.file.uuid,
       declaredSize,
+      ...(sharedVault ? { sharedVault } : {}),
       ...(params.abortSignal ? { signal: params.abortSignal } : {}),
       onBytes: async (bytes) => {
         delivered = true
@@ -139,15 +160,31 @@ export class SocketPreferredFilesApi implements FilesApiInterface {
     return new ClientDisplayableError(`File download over the realtime transport failed (${result.code}).`)
   }
 
+  /**
+   * The shared-vault half of the wire reference, or `undefined` when it cannot be
+   * established from local state.
+   *
+   * The owner comes from the vault listing's own `sharing.ownerUserUuid` and from
+   * nowhere else. There is deliberately no fallback: the gateway cross-checks this
+   * against the credential it mints itself, so a guessed value fails closed and
+   * would surface as an inexplicable permission error instead of the plain
+   * "this vault isn't loaded yet" that it actually is.
+   */
+  private sharedVaultReferenceFor(
+    params: DownloadFileParams,
+  ): { sharedVaultUuid: string; sharedVaultOwnerUuid: string } | undefined {
+    const sharedVaultUuid = params.file.shared_vault_uuid
+    if (params.ownershipType !== 'shared-vault' || !sharedVaultUuid) {
+      return undefined
+    }
+    const sharedVaultOwnerUuid = this.resolveSharedVaultOwnerUuid?.(sharedVaultUuid)
+    return sharedVaultOwnerUuid ? { sharedVaultUuid, sharedVaultOwnerUuid } : undefined
+  }
+
   private canUseSocketFor(params: DownloadFileParams): boolean {
     return (
       this.socket.isFileLaneAvailable() &&
-      // Shared-vault resources are excluded on purpose. Their wire reference also
-      // requires the vault's owner uuid, which this download path never obtains —
-      // it mints a read token without one. Inventing or guessing that value is
-      // exactly the kind of divergence that would produce a confusing authorization
-      // failure, so those downloads stay on HTTP until the owner uuid is plumbed.
-      params.ownershipType === 'user' &&
+      (params.ownershipType === 'user' || params.ownershipType === 'shared-vault') &&
       // Only a whole-file download from byte zero. A resumed or partial range has
       // no socket equivalent yet, and reinterpreting one as a full download would
       // silently return the wrong bytes.

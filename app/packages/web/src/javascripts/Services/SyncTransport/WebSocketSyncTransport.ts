@@ -18,8 +18,10 @@ import {
   DEFAULT_FILE_TRANSFER_DEADLINE_MS,
   DEFAULT_RPC_CREDIT_BYTES,
   DEFAULT_RPC_DEADLINE_MS,
+  isSocketFileResourceReference,
   MainToSyncWorkerMessage,
   MAX_RPC_CREDIT_BYTES,
+  SocketFileResourceReference,
   MAX_RPC_DEADLINE_MS,
   MIN_RPC_DEADLINE_MS,
   normalizeSyncRequestForWire,
@@ -208,6 +210,12 @@ export type SocketFileDownloadRequest = {
    */
   remoteIdentifier: string
   fileUuid: string
+  /**
+   * Present only for a file that lives in a shared vault, and only when both
+   * values come from the vault listing that genuinely records them. Omitted, the
+   * transfer is opened as a personal resource.
+   */
+  sharedVault?: { sharedVaultUuid: string; sharedVaultOwnerUuid: string }
   /** The client's own authenticated total, i.e. the sum of `encryptedChunkSizes`. */
   declaredSize: number
   /** Receives the encrypted stream in order. Backpressure: credit is returned only once this resolves. */
@@ -431,11 +439,19 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
     if (!this.isFileLaneAvailable() || !this.environmentSupported()) {
       return { outcome: 'unavailable' }
     }
+    const resource: SocketFileResourceReference = request.sharedVault
+      ? {
+          ownershipType: 'shared-vault',
+          remoteIdentifier: request.remoteIdentifier,
+          fileUuid: request.fileUuid,
+          sharedVaultUuid: request.sharedVault.sharedVaultUuid,
+          sharedVaultOwnerUuid: request.sharedVault.sharedVaultOwnerUuid,
+        }
+      : { ownershipType: 'user', remoteIdentifier: request.remoteIdentifier, fileUuid: request.fileUuid }
     if (
       !Number.isSafeInteger(request.declaredSize) ||
       request.declaredSize < 1 ||
-      !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(request.remoteIdentifier) ||
-      !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(request.fileUuid)
+      !isSocketFileResourceReference(resource)
     ) {
       return { outcome: 'unavailable' }
     }
@@ -475,11 +491,7 @@ export class WebSocketSyncTransport implements AccountSyncTransportInterface<Tra
         clientRequestId,
         sessionScope,
         request: {
-          resource: {
-            ownershipType: 'user',
-            remoteIdentifier: request.remoteIdentifier,
-            fileUuid: request.fileUuid,
-          },
+          resource,
           declaredSize: request.declaredSize,
           initialCreditBytes: DEFAULT_FILE_TRANSFER_CREDIT_BYTES,
           deadlineMs: DEFAULT_FILE_TRANSFER_DEADLINE_MS,

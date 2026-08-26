@@ -756,6 +756,65 @@ describe('SyncTransportWorkerRuntime', () => {
       })
     })
 
+    it('forwards a shared-vault reference whole instead of rebuilding it as personal', async () => {
+      const harness = setup()
+      const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, ['SYNC_ITEMS', 'FILES_V1'])
+
+      await harness.runtime.handle({
+        type: 'OPEN_FILE_DOWNLOAD',
+        clientRequestId: 'file-download-1',
+        sessionScope: SESSION_A,
+        request: {
+          resource: {
+            ownershipType: 'shared-vault',
+            remoteIdentifier: REMOTE_IDENTIFIER,
+            fileUuid: FILE_UUID,
+            sharedVaultUuid: '22222222-2222-4222-8222-222222222222',
+            sharedVaultOwnerUuid: '33333333-3333-4333-8333-333333333333',
+          },
+          declaredSize: 10,
+          initialCreditBytes: 512 * 1024,
+          deadlineMs: 30_000,
+        },
+      })
+
+      const open = JSON.parse(
+        socket.sent.find((entry) => JSON.parse(entry).type === 'FILES_DOWNLOAD_OPEN') as string,
+      ) as { payload: Record<string, unknown> }
+      expect(open.payload.resource).toEqual({
+        ownershipType: 'shared-vault',
+        remoteIdentifier: REMOTE_IDENTIFIER,
+        fileUuid: FILE_UUID,
+        sharedVaultUuid: '22222222-2222-4222-8222-222222222222',
+        sharedVaultOwnerUuid: '33333333-3333-4333-8333-333333333333',
+      })
+    })
+
+    it('refuses a shared-vault reference that is missing its vault fields', async () => {
+      const harness = setup()
+      const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, ['SYNC_ITEMS', 'FILES_V1'])
+      const framesBefore = socket.sent.length
+
+      await harness.runtime.handle({
+        type: 'OPEN_FILE_DOWNLOAD',
+        clientRequestId: 'file-download-1',
+        sessionScope: SESSION_A,
+        request: {
+          // Structurally invalid: the gateway would refuse it, and sending it
+          // would burn a sequence number to learn what is checkable here.
+          resource: { ownershipType: 'shared-vault', remoteIdentifier: REMOTE_IDENTIFIER, fileUuid: FILE_UUID },
+          declaredSize: 10,
+          initialCreditBytes: 512 * 1024,
+          deadlineMs: 30_000,
+        } as never,
+      })
+
+      expect(harness.messages).toContainEqual(
+        expect.objectContaining({ type: 'FILE_DOWNLOAD_ERROR', code: 'INVALID_REQUEST', safeToFallback: true }),
+      )
+      expect(socket.sent).toHaveLength(framesBefore)
+    })
+
     it('returns consumed credit only when the main thread asks for it', async () => {
       const harness = setup()
       const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, ['SYNC_ITEMS', 'FILES_V1'])

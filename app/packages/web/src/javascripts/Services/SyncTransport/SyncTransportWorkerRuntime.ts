@@ -744,14 +744,11 @@ export class SyncTransportWorkerRuntime {
     this.fileDownloads.set(clientRequestId, download)
 
     const payload = {
-      // `remoteIdentifier` crosses here byte-identical to the value the file item
-      // authenticated; it is also the decryptor's AAD, so it is passed through and
-      // never rebuilt.
-      resource: {
-        ownershipType: download.request.resource.ownershipType,
-        remoteIdentifier: download.request.resource.remoteIdentifier,
-        fileUuid: download.request.resource.fileUuid,
-      },
+      // Forwarded as validated, not rebuilt field by field. `remoteIdentifier`
+      // crosses byte-identical to the value the file item authenticated — it is
+      // also the decryptor's AAD — and reconstructing the reference here is how a
+      // shared-vault download would quietly lose its vault fields and be refused.
+      resource: { ...download.request.resource },
       offset: 0,
       initialCreditBytes: request.initialCreditBytes,
       deadlineMs: request.deadlineMs,

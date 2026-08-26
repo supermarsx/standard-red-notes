@@ -1008,6 +1008,49 @@ describe('WebSocketSyncTransport', () => {
       await expect(download).resolves.toEqual({ outcome: 'completed', sha256: 'a'.repeat(64) })
     })
 
+    it('opens a shared-vault download with both vault fields present', async () => {
+      const transport = createTransport()
+      await negotiate(transport, ['SYNC_ITEMS', 'FILES_V1'])
+
+      void transport.downloadFileOverSocket({
+        ...fileRequest(),
+        sharedVault: {
+          sharedVaultUuid: '22222222-2222-4222-8222-222222222222',
+          sharedVaultOwnerUuid: '33333333-3333-4333-8333-333333333333',
+        },
+      })
+      await flush()
+
+      const open = worker.posts.find((message) => message.type === 'OPEN_FILE_DOWNLOAD') as Extract<
+        MainToSyncWorkerMessage,
+        { type: 'OPEN_FILE_DOWNLOAD' }
+      >
+      expect(open.request.resource).toEqual({
+        ownershipType: 'shared-vault',
+        remoteIdentifier: 'remote-identifier-1',
+        fileUuid: '11111111-1111-4111-8111-111111111111',
+        sharedVaultUuid: '22222222-2222-4222-8222-222222222222',
+        sharedVaultOwnerUuid: '33333333-3333-4333-8333-333333333333',
+      })
+    })
+
+    it('refuses to open a shared-vault download whose owner uuid is not a valid identifier', async () => {
+      const transport = createTransport()
+      await negotiate(transport, ['SYNC_ITEMS', 'FILES_V1'])
+      const postsBefore = worker.posts.length
+
+      await expect(
+        transport.downloadFileOverSocket({
+          ...fileRequest(),
+          sharedVault: { sharedVaultUuid: '22222222-2222-4222-8222-222222222222', sharedVaultOwnerUuid: '' },
+        }),
+      ).resolves.toEqual({ outcome: 'unavailable' })
+
+      // Reported as unavailable rather than failed, so the caller falls back to
+      // HTTP: nothing was sent, so nothing can have been half-applied.
+      expect(worker.posts).toHaveLength(postsBefore)
+    })
+
     it('returns credit only after the consumer has finished with the bytes', async () => {
       const transport = createTransport()
       await negotiate(transport, ['SYNC_ITEMS', 'FILES_V1'])

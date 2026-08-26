@@ -29,6 +29,13 @@ export interface FilesClientInterface {
   setFileSocketTransport?(transport: FileSocketTransportInterface | undefined): void
 
   /**
+   * Supplies the shared vault uuid → owner user uuid lookup that the socket
+   * download path needs to name a shared-vault resource. Optional and
+   * independent of the transport: unset, shared-vault downloads use HTTP.
+   */
+  setSharedVaultOwnerResolver?(resolve: ((sharedVaultUuid: string) => string | undefined) | undefined): void
+
+  /**
    * Begins a "large local-only file" operation. The returned operation encrypts pushed chunks
    * and accumulates the encrypted bytes in memory; nothing is sent to the server. Mirrors the
    * server upload triad (begin / pushBytes / finish) so callers can reuse the same chunked

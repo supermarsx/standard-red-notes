@@ -71,6 +71,8 @@ export class FileService extends AbstractService implements FilesClientInterface
   private sharedVault: SharedVaultServerInterface
   private localFileBackend?: LocalFileBackendInterface
   private socketPreferredApi?: FilesApiInterface
+  private socketTransport?: FileSocketTransportInterface
+  private sharedVaultOwnerResolver?: (sharedVaultUuid: string) => string | undefined
 
   constructor(
     private api: FilesApiInterface,
@@ -98,7 +100,29 @@ export class FileService extends AbstractService implements FilesClientInterface
    * degrades silently reverts to HTTP rather than needing to be uninstalled.
    */
   public setFileSocketTransport(transport: FileSocketTransportInterface | undefined): void {
-    this.socketPreferredApi = transport ? new SocketPreferredFilesApi(this.api, transport) : undefined
+    this.socketTransport = transport
+    this.rebuildSocketPreferredApi()
+  }
+
+  /**
+   * Supplies the lookup from a shared vault's uuid to the user uuid that vault
+   * listing records as its owner.
+   *
+   * Late-bound for the same reason `MutatorService.setFileService` is: reading
+   * vaults from the constructor would close a dependency cycle. Only the socket
+   * download path consumes it — HTTP sends the owner as request context and never
+   * needs it resolved — and a vault this returns nothing for simply keeps its
+   * downloads on HTTP.
+   */
+  public setSharedVaultOwnerResolver(resolve: ((sharedVaultUuid: string) => string | undefined) | undefined): void {
+    this.sharedVaultOwnerResolver = resolve
+    this.rebuildSocketPreferredApi()
+  }
+
+  private rebuildSocketPreferredApi(): void {
+    this.socketPreferredApi = this.socketTransport
+      ? new SocketPreferredFilesApi(this.api, this.socketTransport, this.sharedVaultOwnerResolver)
+      : undefined
   }
 
   /** Downloads may use the socket; every other file operation stays on HTTP. */
@@ -110,6 +134,8 @@ export class FileService extends AbstractService implements FilesClientInterface
     super.deinit()
 
     this.socketPreferredApi = undefined
+    this.socketTransport = undefined
+    this.sharedVaultOwnerResolver = undefined
     this.encryptedCache.clear()
     ;(this.encryptedCache as unknown) = undefined
     ;(this.api as unknown) = undefined

@@ -22,6 +22,12 @@ export type SocketFileDownloadRequest = {
    */
   remoteIdentifier: string
   fileUuid: string
+  /**
+   * Present only for a file in a shared vault, and only when both values come
+   * from the vault listing that genuinely records them — never inferred or
+   * defaulted. Omitted, the transfer is opened as a personal resource.
+   */
+  sharedVault?: { sharedVaultUuid: string; sharedVaultOwnerUuid: string }
   /** The client's own authenticated total: the sum of `encryptedChunkSizes`. */
   declaredSize: number
   /** Receives the encrypted stream in order; credit is returned only once it resolves. */

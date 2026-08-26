@@ -47,11 +47,27 @@ const FILE_SHA256_PATTERN = /^[a-f0-9]{64}$/u
  * derivation, normalization or re-generation applied on the way out would break
  * decryption authentication rather than produce a clean not-found.
  */
-export type SocketFileResourceReference = {
-  ownershipType: 'user'
-  remoteIdentifier: string
-  fileUuid: string
-}
+export type SocketFileResourceReference =
+  | {
+      ownershipType: 'user'
+      remoteIdentifier: string
+      fileUuid: string
+    }
+  | {
+      ownershipType: 'shared-vault'
+      remoteIdentifier: string
+      fileUuid: string
+      sharedVaultUuid: string
+      /**
+       * Not a capability, and not the client asserting anything. The gateway
+       * checks `sharedVaultUuid` against the authenticated session's own
+       * membership list, and cross-checks this value against the claims of the
+       * credential it mints itself — so a wrong or invented owner fails closed
+       * rather than granting anything. It must still come from the vault listing
+       * that genuinely records it, never from inference or a default.
+       */
+      sharedVaultOwnerUuid: string
+    }
 
 export type SocketFileBinaryHeader = {
   kind: 'UPLOAD_CHUNK' | 'DOWNLOAD_CHUNK'
@@ -283,20 +299,40 @@ export type WorkerFileDownloadRequest = {
   deadlineMs: number
 }
 
+/**
+ * Mirrors the gateway's `isFileResourceReference`. The exact-key counts matter as
+ * much as the field checks: a `user` reference carrying shared-vault fields, or a
+ * shared-vault reference missing them, is rejected here rather than sent for the
+ * server to refuse.
+ */
+export function isSocketFileResourceReference(value: unknown): value is SocketFileResourceReference {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false
+  }
+  const resource = value as Partial<
+    Omit<Extract<SocketFileResourceReference, { ownershipType: 'shared-vault' }>, 'ownershipType'>
+  > & { ownershipType?: unknown }
+  if (!isFileIdentifier(resource.remoteIdentifier) || !isFileIdentifier(resource.fileUuid)) {
+    return false
+  }
+  if (resource.ownershipType === 'user') {
+    return Object.keys(resource).length === 3
+  }
+  return (
+    resource.ownershipType === 'shared-vault' &&
+    Object.keys(resource).length === 5 &&
+    isFileIdentifier(resource.sharedVaultUuid) &&
+    isFileIdentifier(resource.sharedVaultOwnerUuid)
+  )
+}
+
 export function isWorkerFileDownloadRequest(value: unknown): value is WorkerFileDownloadRequest {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return false
   }
   const request = value as Partial<WorkerFileDownloadRequest>
-  const resource = request.resource
   return (
-    !!resource &&
-    typeof resource === 'object' &&
-    !Array.isArray(resource) &&
-    resource.ownershipType === 'user' &&
-    isFileIdentifier(resource.remoteIdentifier) &&
-    isFileIdentifier(resource.fileUuid) &&
-    Object.keys(resource).length === 3 &&
+    isSocketFileResourceReference(request.resource) &&
     isFileTransferSize(request.declaredSize) &&
     Number.isSafeInteger(request.initialCreditBytes) &&
     Number(request.initialCreditBytes) > 0 &&
