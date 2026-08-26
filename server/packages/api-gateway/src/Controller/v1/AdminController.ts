@@ -43,6 +43,9 @@ import {
   TokenWindowUsage,
   WEEKLY_WINDOW_MS,
 } from '../../Service/Assistant/tokenMetering'
+import { SYNC_PROTOCOL_VERSION } from '@standard-red-notes/websocket-gateway'
+import { syncWebSocketAccessService } from '../../Service/Sync/SyncWebSocketAccessService'
+import { SYNC_SERVER_OPERATIONS, syncGateDiagnostics } from '../../Service/Sync/SyncGateDiagnostics'
 
 const ADMIN_USER_USAGE_HISTORY_LIMIT = 100
 
@@ -872,6 +875,68 @@ export class AdminController extends BaseHttpController {
         clientIpHeader: this.clientIpHeader && this.clientIpHeader !== '' ? this.clientIpHeader : null,
       },
       services,
+    })
+  }
+
+  /**
+   * Standard Red Notes: gateway-LOCAL diagnosis of the realtime sync lane, for
+   * the admin panel's Diagnostics tab. Admin-gated HARD (403 for non-admins),
+   * exactly like /server-status.
+   *
+   * This exists because the deployment's most expensive question — "why is
+   * everything running over HTTP?" — has had no answer reachable from a browser.
+   * `/v1/sockets/sync/capabilities` is public and static by design, so it returns
+   * a bare empty list; the boot log narrows it only as far as "durable backend and
+   * shared Redis state are required", which does not say WHICH. Answering it has
+   * meant reading bin/server.ts against the running environment by hand.
+   *
+   * Three layers, because they fail independently and an operator needs to know
+   * which one to fix:
+   *   - `gate`: the BOOT-time conjunction. Names each unmet condition by the
+   *     environment variable that fixes it, plus the FILES_V1 sub-gate.
+   *   - `live`: what the gateway is doing RIGHT NOW — the capability list it
+   *     would serve, and its own refusal reasons for a lane that was built but is
+   *     currently declining (stopping, a store that went away).
+   *   - `protocol`: what this server build can negotiate at all, so the client
+   *     can flag operations it does not implement.
+   *
+   * *** SECURITY ***
+   * Presence, never values. Every string in this payload is a compile-time
+   * constant or a closed-enum code; no environment value, URL, host or secret can
+   * reach it — see SyncGateDiagnostics, whose recorder accepts only booleans and
+   * literal keys. `AdminController.spec.ts` pins that with a scan of the whole
+   * serialized response against planted secret values.
+   */
+  @httpGet('/sync-diagnostics', TYPES.ApiGateway_RequiredCrossServiceTokenMiddleware)
+  getSyncDiagnostics(_request: Request, response: Response): void {
+    if (!this.requestorIsAdmin(response)) {
+      response.status(403).json({ error: { message: 'Admin role required.' } })
+
+      return
+    }
+
+    const capabilities = syncWebSocketAccessService.capabilities().capabilities
+    const unavailabilityReasons = [...syncWebSocketAccessService.unavailabilityReasons()]
+
+    response.json({
+      capturedAt: new Date().toISOString(),
+      gate: syncGateDiagnostics.report(),
+      live: {
+        capabilities,
+        unavailabilityReasons,
+        // What POST /v1/sockets/sync/ticket would do if asked right now: it
+        // refuses with 503 SYNC_DISABLED on an empty capability list, so this is
+        // the single field that answers "can this client get onto the socket".
+        ticketAvailable: capabilities.length > 0 && unavailabilityReasons.length === 0,
+      },
+      protocol: {
+        version: SYNC_PROTOCOL_VERSION,
+        // Every operation this SERVER build knows how to negotiate. Whether a
+        // given one is actually offered is decided per connection at AUTHENTICATED
+        // time (it depends on which adapters composed), so the client compares
+        // this against what its own socket negotiated.
+        serverOperations: [...SYNC_SERVER_OPERATIONS],
+      },
     })
   }
 

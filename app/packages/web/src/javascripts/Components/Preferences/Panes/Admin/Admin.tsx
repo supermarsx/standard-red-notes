@@ -18,6 +18,7 @@ import AdminServerTab from './AdminServerTab'
 import AdminAiTab from './AdminAiTab'
 import AdminLogsContainer from './AdminLogsContainer'
 import AdminSecurityTab from './AdminSecurityTab'
+import AdminDiagnosticsTab from './AdminDiagnosticsTab'
 
 type Props = {
   application: WebApplication
@@ -30,6 +31,7 @@ const ADMIN_TABS: { id: string; title: string; icon: VectorIconNameOrEmoji }[] =
   { id: 'ai', title: 'AI', icon: 'dashboard' },
   { id: 'logs', title: 'Logs', icon: 'list-bulleted' },
   { id: 'security', title: 'Security', icon: 'security' },
+  { id: 'diagnostics', title: 'Diagnostics', icon: 'info' },
 ]
 
 /**
@@ -156,6 +158,9 @@ const Admin: FunctionComponent<Props> = ({ application }: Props) => {
         </TabPanel>
         <TabPanel state={tabState} id="security" className="p-6">
           <AdminSecurityTab application={application} noteIfForbidden={noteIfForbidden} goToTab={goToTab} />
+        </TabPanel>
+        <TabPanel state={tabState} id="diagnostics" className="p-6">
+          <AdminDiagnosticsTab application={application} noteIfForbidden={noteIfForbidden} />
         </TabPanel>
       </div>
     </PreferencesPane>

@@ -59,6 +59,32 @@ const makeApplication = () => ({
     adminGetAuditLog: jest.fn().mockResolvedValue({ data: { events: [], total: 0 } }),
     adminListUsers: jest.fn().mockResolvedValue({ data: { users: [], total: 0 } }),
   },
+  // Diagnostics tab: reads the admin sync-diagnostics endpoint and the live
+  // transport directly off the application, not through legacyApi.
+  serverGetJsonRequest: jest.fn().mockResolvedValue({
+    status: 200,
+    ok: true,
+    data: {
+      gate: {
+        recorded: true,
+        gatewayAttached: true,
+        syncLaneEnabled: false,
+        unmetPreconditions: [{ code: 'REDIS_UNBOUND', remedy: 'configure REDIS_URL' }],
+        unmetCodes: ['REDIS_UNBOUND'],
+        files: {
+          advertised: false,
+          unmetCondition: 'FILES_INTERNAL_URL',
+          remedy: 'no INTERNAL files service URL is configured.',
+        },
+      },
+      live: { capabilities: [], unavailabilityReasons: ['sync-not-configured'], ticketAvailable: false },
+      protocol: { version: 1, serverOperations: ['SYNC_ITEMS', 'FILES_V1'] },
+    },
+  }),
+  serverJsonRequest: jest
+    .fn()
+    .mockResolvedValue({ status: 503, ok: false, data: { error: { code: 'SYNC_DISABLED' } } }),
+  syncTransportStatus: { state: 'HTTP_ONLY', operations: [] },
 })
 
 let container: HTMLElement
@@ -153,17 +179,32 @@ describe('AdminLogsContainer — 2 subtabs each mount their panel', () => {
 })
 
 describe('Admin shell — top-level tab set after folding Audit into Logs', () => {
-  it('renders the 6 top-level tabs and no standalone "Audit log" tab', async () => {
+  it('renders the top-level tabs and no standalone "Audit log" tab', async () => {
     const application = makeApplication()
     await render(createElement(Admin, { application: asApp(application) }))
 
     const tabLabels = Array.from(container.querySelectorAll('button[role="tab"]')).map((b) =>
       (b.textContent ?? '').trim(),
     )
-    for (const label of ['Users', 'Groups & roles', 'Server', 'AI', 'Logs', 'Security']) {
+    for (const label of ['Users', 'Groups & roles', 'Server', 'AI', 'Logs', 'Security', 'Diagnostics']) {
       expect(tabLabels.some((t) => t.includes(label))).toBe(true)
     }
     // The old standalone Audit-log tab is gone (folded into Logs).
     expect(tabLabels.some((t) => t.includes('Audit log'))).toBe(false)
+  })
+
+  // A tab in the bar whose panel does not mount is the exact failure this file
+  // was written for, so the Diagnostics tab is activated and its own content
+  // asserted — not just its label.
+  it('mounts the Diagnostics panel and names the unmet condition', async () => {
+    const application = makeApplication()
+    await render(createElement(Admin, { application: asApp(application) }))
+
+    await clickTab('Diagnostics')
+
+    expect(container.textContent).toContain('Capability diagnostics')
+    expect(container.textContent).toContain('REDIS_UNBOUND')
+    expect(container.textContent).toContain('REDIS_URL')
+    expect(application.serverGetJsonRequest).toHaveBeenCalledWith('/v1/admin/sync-diagnostics')
   })
 })

@@ -440,6 +440,22 @@ export class WebApplication extends SNApplication implements WebApplicationInter
   }
 
   /**
+   * Standard Red Notes: the LIVE state of the realtime transport — which lane
+   * this client is actually on right now, why it fell back if it did, and which
+   * operations its socket negotiated at AUTHENTICATED.
+   *
+   * Exposed for the admin Diagnostics tab. The negotiated operation list is the
+   * only trustworthy answer to "which capabilities do I have"; the server's
+   * `/capabilities` endpoint carries just the static protocol descriptor, and the
+   * per-operation subset is decided per connection from whichever adapters
+   * composed at boot. Undefined when the transport was never installed (a build
+   * or browser without it), which is distinct from being installed and HTTP_ONLY.
+   */
+  public get syncTransportStatus(): WebSocketSyncTransport['transportStatus'] | undefined {
+    return this._webSocketSyncTransport?.transportStatus
+  }
+
+  /**
    * Install websocket-preferred account sync for capable browsers. Capability
    * and one-use ticket requests stay on the authenticated main-thread client;
    * no long-lived session token is ever posted to the worker.

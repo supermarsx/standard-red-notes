@@ -43,6 +43,7 @@ describe('AdminController auth-server pass-through routes', () => {
   const gatewayLocalHandlers = new Set([
     'getUserUsage',
     'getServerStatus',
+    'getSyncDiagnostics',
     'listControllableServices',
     'restartContainer',
     'restartService',
@@ -72,8 +73,12 @@ describe('AdminController auth-server pass-through routes', () => {
    */
   const verbByHandler = ((): Map<string, string> => {
     const source = fs.readFileSync(path.join(__dirname, 'AdminController.ts'), 'utf-8')
+    // `async` is optional: a gateway-local handler that answers from process
+    // state does no I/O and is legitimately synchronous. Requiring it here made
+    // such a handler invisible to this parse, which then failed the completeness
+    // check below against the runtime metadata.
     const declarations = source.matchAll(
-      /@http(Get|Post|Put|Delete|Patch)\(\s*'([^']*)'[\s\S]*?\n\s*(?:private |public )?async (\w+)\(/g,
+      /@http(Get|Post|Put|Delete|Patch)\(\s*'([^']*)'[\s\S]*?\n\s*(?:private |public )?(?:async )?(\w+)\(/g,
     )
 
     return new Map([...declarations].map((match) => [match[3], match[1].toUpperCase()]))
