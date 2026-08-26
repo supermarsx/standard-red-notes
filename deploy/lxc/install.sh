@@ -294,6 +294,15 @@ if [ -n "${EXPECTED_COMMIT}" ] && \
   die "Resolved commit ${DEPLOY_COMMIT} does not match EXPECTED_COMMIT ${EXPECTED_COMMIT}."
 fi
 git -C "${SOURCE_DIR}" cat-file -e "${DEPLOY_COMMIT}^{commit}"
+# The sealed marker below is what an operator curls during an incident to learn
+# WHICH COMMIT IS LIVE. DEPLOY_COMMIT is already proven to be a full SHA above,
+# but SRN_DEPLOY_VERSION is optional — leaving it blank published `"version":""`,
+# which reads as a serialization bug rather than as "this release is unversioned".
+# Derive it from the proven commit instead (same scheme as scripts/setup.sh), so
+# the marker never carries a silently empty field.
+if [ -z "${SRN_DEPLOY_VERSION}" ]; then
+  SRN_DEPLOY_VERSION="src-$(printf '%s' "${DEPLOY_COMMIT}" | cut -c1-12)"
+fi
 release_create_stage "${SOURCE_DIR}" "${RELEASES_DIR}" "${DEPLOY_COMMIT}"
 trap 'release_cleanup_stage "${RELEASE_STAGE:-}" "${RELEASES_DIR}"' EXIT
 DEPLOY_ROOT="${RELEASE_STAGE}"

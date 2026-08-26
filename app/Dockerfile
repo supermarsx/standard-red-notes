@@ -7,18 +7,36 @@ FROM alpine:3.23 AS deployment-identity
 
 ARG SRN_DEPLOY_REVISION
 ARG SRN_DEPLOY_VERSION
+# The public marker at /.well-known/srn-deployment.json exists to answer exactly
+# one question during an incident: WHICH COMMIT IS LIVE? An empty string answers
+# nothing and is indistinguishable from a serialization bug, so an unstamped
+# build records the explicit `unstamped` sentinel instead of "". Same fail-closed
+# contract as the CSP inline-script hash: the value is either real or
+# unmistakably absent, and never silently blank.
+#
+# The build contexts deliberately exclude .git (see .dockerignore), so the
+# revision CANNOT be derived here and MUST be passed in — scripts/setup.sh and
+# CI do this, or pass `--build-arg SRN_DEPLOY_REVISION=$(git rev-parse HEAD)`.
+# When a revision IS supplied but no version is, the version is derived from the
+# revision, so the two images of one build always agree (mirrors setup.sh).
 RUN set -eu; \
   revision="${SRN_DEPLOY_REVISION}"; \
   version="${SRN_DEPLOY_VERSION}"; \
-  if [ -n "${revision}" ]; then \
+  [ -n "${revision}" ] || revision='unstamped'; \
+  if [ "${revision}" != 'unstamped' ]; then \
     [ "${#revision}" -eq 40 ] && case "${revision}" in *[!0-9a-f]*) false ;; *) true ;; esac \
-      || { echo 'SRN_DEPLOY_REVISION must be empty or exactly 40 lowercase hexadecimal characters.' >&2; exit 64; }; \
+      || { echo 'SRN_DEPLOY_REVISION must be unset or exactly 40 lowercase hexadecimal characters.' >&2; exit 64; }; \
   fi; \
-  if [ -n "${version}" ]; then \
-    [ "${#version}" -le 128 ] && case "${version}" in [0-9A-Za-z]*) true ;; *) false ;; esac \
-      && case "${version}" in *[!0-9A-Za-z._+-]*) false ;; *) true ;; esac \
-      || { echo 'SRN_DEPLOY_VERSION must be empty or a 1-128 character safe ASCII version token.' >&2; exit 64; }; \
+  if [ -z "${version}" ]; then \
+    if [ "${revision}" = 'unstamped' ]; then \
+      version='unstamped'; \
+    else \
+      version="src-$(printf '%s' "${revision}" | cut -c1-12)"; \
+    fi; \
   fi; \
+  [ "${#version}" -le 128 ] && case "${version}" in [0-9A-Za-z]*) true ;; *) false ;; esac \
+    && case "${version}" in *[!0-9A-Za-z._+-]*) false ;; *) true ;; esac \
+    || { echo 'SRN_DEPLOY_VERSION must be unset or a 1-128 character safe ASCII version token.' >&2; exit 64; }; \
   install -d -m 0555 /srn-deployment; \
   printf '{"revision":"%s","version":"%s"}\n' "${revision}" "${version}" > /srn-deployment/deployment.json; \
   chmod 0444 /srn-deployment/deployment.json
