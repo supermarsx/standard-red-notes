@@ -83,6 +83,15 @@ const makeApplication = (overrides: Record<string, unknown> = {}) => ({
   serverJsonRequest: jest
     .fn()
     .mockResolvedValue({ status: 503, ok: false, data: { error: { code: 'SYNC_DISABLED' } } }),
+  // The socket-handshake probes must NOT use the RPC-lane helpers: `/v1/sockets/*`
+  // is refused on that lane and the refusal is not safe-to-fallback, so those
+  // helpers throw when a socket is live. This double answers only the ticket and
+  // capability paths, and the tests below pin which helper each probe reaches for.
+  httpOnlyJsonRequest: jest.fn().mockImplementation(async (_method: string, path: string) =>
+    path === '/v1/sockets/sync/ticket'
+      ? { status: 503, ok: false, data: { error: { code: 'SYNC_DISABLED' } } }
+      : { status: 200, ok: true, data: { capabilities: [] } },
+  ),
   syncTransportStatus: { state: 'HTTP_ONLY', operations: [] },
   ...overrides,
 })
@@ -280,8 +289,38 @@ describe('AdminDiagnosticsTab', () => {
     expect(text).toContain('Live socket negotiation')
     expect(text).toContain('checks passed')
     // The ticket probe must not reuse the client's real sync device id.
-    const ticketCall = application.serverJsonRequest.mock.calls.find(([path]) => path === '/v1/sockets/sync/ticket')
-    expect(ticketCall?.[1].deviceId).toMatch(/^admin-diagnostic-probe-/)
+    const ticketCall = application.httpOnlyJsonRequest.mock.calls.find(
+      ([, path]) => path === '/v1/sockets/sync/ticket',
+    )
+    expect(ticketCall?.[2].deviceId).toMatch(/^admin-diagnostic-probe-/)
+  })
+
+  /**
+   * Regression guard for a false FAILURE that only appears when the deployment is
+   * HEALTHY. `/v1/sockets/*` is a forbidden family on the websocket RPC lane, and
+   * that refusal arrives as a server ERROR frame, which is not safe-to-fallback —
+   * so `serverGetJsonRequest`/`serverJsonRequest` THROW once a socket is live
+   * rather than retrying over HTTP. A probe using them would report the socket
+   * handshake as broken precisely when it works, which is worse than no panel.
+   */
+  it('probes the socket handshake over HTTP, never the RPC lane', async () => {
+    const application = makeApplication({
+      syncTransportStatus: { state: 'READY', operations: ['SYNC_ITEMS', 'API_RPC'] },
+    })
+    await renderTab(application)
+    await clickButton('Test all capabilities')
+
+    const socketPaths = ['/v1/sockets/sync/capabilities', '/v1/sockets/sync/ticket']
+    for (const path of socketPaths) {
+      expect(application.httpOnlyJsonRequest.mock.calls.some(([, called]) => called === path)).toBe(true)
+    }
+    // Neither RPC-lane helper may be handed a /v1/sockets path.
+    for (const [path] of application.serverGetJsonRequest.mock.calls) {
+      expect(path.startsWith('/v1/sockets')).toBe(false)
+    }
+    for (const [path] of application.serverJsonRequest.mock.calls) {
+      expect(path.startsWith('/v1/sockets')).toBe(false)
+    }
   })
 
   it('does not write, invite or delete anything while testing', async () => {
@@ -290,13 +329,16 @@ describe('AdminDiagnosticsTab', () => {
     await clickButton('Test all capabilities')
 
     // Only the single, self-expiring ticket mint may POST, and only to /ticket.
-    for (const [path] of application.serverJsonRequest.mock.calls) {
-      expect(path).toBe('/v1/sockets/sync/ticket')
+    for (const [method, path] of application.httpOnlyJsonRequest.mock.calls) {
+      if (method === 'POST') {
+        expect(path).toBe('/v1/sockets/sync/ticket')
+      }
     }
-    // Every GET is a read-only diagnostic path.
+    // Every RPC-lane GET is a read-only diagnostic path.
     for (const [path] of application.serverGetJsonRequest.mock.calls) {
-      expect(['/v1/admin/sync-diagnostics', '/v1/sockets/sync/capabilities']).toContain(path)
+      expect(path).toBe('/v1/admin/sync-diagnostics')
     }
+    expect(application.serverJsonRequest).not.toHaveBeenCalled()
   })
 
   /**

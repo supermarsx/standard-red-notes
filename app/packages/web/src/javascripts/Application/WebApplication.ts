@@ -1453,6 +1453,57 @@ export class WebApplication extends SNApplication implements WebApplicationInter
   }
 
   /**
+   * Standard Red Notes: authenticated JSON request that DELIBERATELY never uses
+   * the websocket RPC lane.
+   *
+   * The `/v1/sockets/*` family is refused on that lane by design — routing the
+   * socket handshake through the transport it establishes is circular (see
+   * `LoopbackSyncApiRpcAdapter`'s forbidden families). The refusal arrives as a
+   * server ERROR frame, which is `safeToFallback: false`, so the ordinary helpers
+   * THROW rather than retrying over HTTP. That is correct for real callers: the
+   * transport only negotiates before a socket exists, so it never meets the
+   * refusal.
+   *
+   * The admin Diagnostics probes are the exception. They exercise the handshake
+   * endpoints ON PURPOSE, and can run while a socket is live — through the normal
+   * helpers they would throw and be reported as a failed capability check exactly
+   * when the deployment is healthiest. Diagnostics that lie when everything works
+   * are worse than none, so these go straight to HTTP.
+   */
+  public async httpOnlyJsonRequest<T>(
+    method: 'GET' | 'POST',
+    path: string,
+    body?: unknown,
+    signal?: AbortSignal,
+  ): Promise<{ status: number; ok: boolean; data: T }> {
+    const host = this.getHost.execute().getValue()
+    const session = (this.sessions as unknown as { getSession?: () => unknown }).getSession?.()
+    const accessToken = extractAccessToken(session)
+    const url = `${host.replace(/\/$/, '')}${path}`
+    const hasBody = body !== undefined
+
+    const response = await fetch(url, {
+      method,
+      headers: {
+        ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
+        Accept: 'application/json',
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+      },
+      ...(hasBody ? { body: JSON.stringify(body) } : {}),
+      signal,
+    })
+
+    let data: T
+    try {
+      data = (await response.json()) as T
+    } catch {
+      data = {} as T
+    }
+
+    return { status: response.status, ok: response.ok, data }
+  }
+
+  /**
    * Authenticated JSON mutation helper for the small set of server control-plane
    * endpoints whose REST contract requires PUT or DELETE. Keeping the method
    * allow-list here prevents a caller-controlled verb while preserving the same

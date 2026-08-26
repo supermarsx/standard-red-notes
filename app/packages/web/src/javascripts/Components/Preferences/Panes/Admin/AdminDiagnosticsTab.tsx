@@ -145,7 +145,13 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
       // 1. The public capability descriptor — the same call the transport makes
       //    before it will even attempt a socket.
       try {
-        const response = await application.serverGetJsonRequest<{ capabilities?: unknown[] }>(
+        // HTTP-only on purpose. `/v1/sockets/*` is a forbidden family on the
+        // websocket RPC lane (routing the handshake through the transport it
+        // establishes is circular), and that refusal is not safe-to-fallback —
+        // through the ordinary helper this probe would throw and be reported as a
+        // FAILED check precisely when the socket is healthy.
+        const response = await application.httpOnlyJsonRequest<{ capabilities?: unknown[] }>(
+          'GET',
           '/v1/sockets/sync/capabilities',
         )
         const advertised = Array.isArray(response.data?.capabilities) ? response.data.capabilities.length : 0
@@ -165,7 +171,9 @@ const AdminDiagnosticsTab: FunctionComponent<Props> = ({ application, noteIfForb
       // 2. Ticket issuance — the definitive test of whether this session can get
       //    onto the socket lane.
       try {
-        const response = await application.serverJsonRequest<{ error?: { code?: string }; endpoint?: string }>(
+        // HTTP-only for the same reason as the capability probe above.
+        const response = await application.httpOnlyJsonRequest<{ error?: { code?: string }; endpoint?: string }>(
+          'POST',
           '/v1/sockets/sync/ticket',
           { deviceId: probeDeviceId() },
         )
