@@ -87,11 +87,12 @@ const makeApplication = (overrides: Record<string, unknown> = {}) => ({
   // is refused on that lane and the refusal is not safe-to-fallback, so those
   // helpers throw when a socket is live. This double answers only the ticket and
   // capability paths, and the tests below pin which helper each probe reaches for.
-  httpOnlyJsonRequest: jest.fn().mockImplementation(async (_method: string, path: string) =>
-    path === '/v1/sockets/sync/ticket'
-      ? { status: 503, ok: false, data: { error: { code: 'SYNC_DISABLED' } } }
-      : { status: 200, ok: true, data: { capabilities: [] } },
-  ),
+  httpOnlyJsonRequest: jest.fn().mockImplementation(async (_method: string, path: string) => {
+    if (path === '/v1/sockets/sync/ticket') {
+      return { status: 503, ok: false, data: { error: { code: 'SYNC_DISABLED' } } }
+    }
+    return { status: 200, ok: true, data: { capabilities: [] } }
+  }),
   syncTransportStatus: { state: 'HTTP_ONLY', operations: [] },
   ...overrides,
 })
@@ -293,9 +294,7 @@ describe('AdminDiagnosticsTab', () => {
     expect(text).toContain('Live socket negotiation')
     expect(text).toContain('checks passed')
     // The ticket probe must not reuse the client's real sync device id.
-    const ticketCall = application.httpOnlyJsonRequest.mock.calls.find(
-      ([, path]) => path === '/v1/sockets/sync/ticket',
-    )
+    const ticketCall = application.httpOnlyJsonRequest.mock.calls.find(([, path]) => path === '/v1/sockets/sync/ticket')
     expect(ticketCall?.[2].deviceId).toMatch(/^admin-diagnostic-probe-/)
   })
 
@@ -357,7 +356,7 @@ describe('AdminDiagnosticsTab', () => {
         recorded: true,
         gatewayAttached: true,
         syncLaneEnabled: false,
-        unmetPreconditions: [{ code: 'REDIS_UNBOUND', remedy: `configure REDIS_URL` }],
+        unmetPreconditions: [{ code: 'REDIS_UNBOUND', remedy: 'configure REDIS_URL' }],
         unmetCodes: ['REDIS_UNBOUND'],
         files: {
           advertised: false,
