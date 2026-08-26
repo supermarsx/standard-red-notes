@@ -42,12 +42,22 @@ export const CLIENT_SYNC_OPERATIONS = [
 /**
  * Operations the client recognizes at handshake but does not consume.
  *
- * Currently empty, and that is a real state rather than a placeholder. The
- * distinction is worth keeping: recognizing an operation is what stops an
- * advertised lane costing the ENTIRE socket, since the worker rejects a handshake
- * naming anything it does not know. FILES_V1 spent time in exactly this bucket —
- * recognized so the handshake survived, with no client consumer — and the next
- * server-side lane will land the same way.
+ * EMPTY IS A REAL STATE, NOT DEAD CODE — please do not delete this because it has
+ * no entries today.
+ *
+ * Recognizing an operation is what stops an advertised lane costing the ENTIRE
+ * socket: the worker rejects any `AUTHENTICATED` frame naming something it does
+ * not know, so an unrecognized operation does not disable its own lane, it drops
+ * sync, collaboration, RPC and invites to HTTP together. FILES_V1 was exactly
+ * that case — advertised by any gateway with a files adapter, unknown to the
+ * client, and therefore fatal to the whole socket — then spent time recognized
+ * but unconsumed, and only now carries traffic. Every future server-side lane
+ * arrives by that same three-step path, and this bucket is the middle step.
+ *
+ * Deleting it would remove the panel's vocabulary for "negotiated and healthy,
+ * but carrying nothing", which is the single row an operator is most likely to
+ * misread. Add the next lane here first; move it to CLIENT_SYNC_OPERATIONS only
+ * when a client consumer actually exists.
  *
  * Not constrained to `SyncNegotiatedOperation`, so this file compiles whether or
  * not the union has caught up with the worker's accept-set yet.
