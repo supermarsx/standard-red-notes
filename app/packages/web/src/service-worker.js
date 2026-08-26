@@ -22,8 +22,9 @@ const SANDBOX_PATH = '/sandbox.html'
 const DEPLOYMENT_MARKER_PATH = '/.well-known/srn-deployment.json'
 
 // Minimal set of files that make up the bootable shell. Everything else
-// (components, editors, fonts, vendor libsodium, etc.) is cached on first use
-// by the runtime fetch handler below.
+// (components, editors, fonts, etc.) is cached on first use by the runtime
+// fetch handler below. Libsodium is not among them: it is bundled into app.js
+// through @standardnotes/sncrypto-web, not served as a separate asset.
 const CORE_SHELL = ['/', '/index.html', SANDBOX_PATH, '/app.js', '/app.css', '/manifest.webmanifest']
 
 function unavailableSandboxResponse() {

@@ -14,7 +14,6 @@ module.exports = (env) => {
 
   const copyPluginPatterns = [
     { from: 'src/favicon', to: 'favicon' },
-    { from: 'src/vendor', to: 'dist' },
     { from: 'src/fonts', to: 'assets/fonts' },
     // Excalidraw loads its fonts from window.EXCALIDRAW_ASSET_PATH ('/excalidraw/')
     // -> serve them locally so the drawing block works fully offline (no CDN).
