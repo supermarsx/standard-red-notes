@@ -2,7 +2,7 @@ import { CreateItemDelta } from './../Index/ItemDelta'
 import { DeletedPayload } from './../../Abstract/Payload/Implementations/DeletedPayload'
 import { createFile, createNote, createTagWithTitle, mockUuid, pinnedContent } from './../../Utilities/Test/SpecUtils'
 import { ContentType } from '@standardnotes/domain-core'
-import { DeletedItem, EncryptedItem } from '../../Abstract/Item'
+import { DecryptedItemInterface, DeletedItem, EncryptedItem } from '../../Abstract/Item'
 import { EncryptedPayload, PayloadTimestampDefaults } from '../../Abstract/Payload'
 import { createNoteWithContent } from '../../Utilities/Test/SpecUtils'
 import { ItemCollection } from './../Collection/Item/ItemCollection'
@@ -638,6 +638,96 @@ describe('item display controller', () => {
             )
             .join('\n'),
       )
+    })
+  })
+
+  /**
+   * Sync re-applies items constantly: items are immutable, so a save acknowledgement, a
+   * retrieved copy, an integrity repair or a websocket push all publish a NEW object for the
+   * same uuid. A note vanishing from the list and returning on its own is the symptom users
+   * report as "notes disappearing temporarily", so the invariant worth pinning is that the
+   * displayed set never dips DURING such a pass — not merely that it is correct afterwards.
+   */
+  describe('a note must stay displayed across a sync re-apply', () => {
+    const reapply = (note: SNNote): SNNote =>
+      new SNNote(
+        note.payload.copy({
+          updated_at: new Date(),
+          updated_at_timestamp: (note.payload.updated_at_timestamp ?? 0) + 1,
+        }) as typeof note.payload,
+      )
+
+    it('keeps every note present through repeated re-applies of the same uuids', () => {
+      const collection = new ItemCollection()
+      const notes = [
+        createNoteWithContent({ title: 'a' }),
+        createNoteWithContent({ title: 'b' }),
+        createNoteWithContent({ title: 'c' }),
+      ]
+      collection.set(notes)
+
+      const controller = new ItemDisplayController(collection, [ContentType.TYPES.Note], {
+        sortBy: 'title',
+        sortDirection: 'asc',
+      })
+
+      const uuids = notes.map((note) => note.uuid).sort()
+      expect(
+        controller
+          .items()
+          .map((item) => item.uuid)
+          .sort(),
+      ).toEqual(uuids)
+
+      let current = notes
+      for (let pass = 0; pass < 3; pass++) {
+        current = current.map(reapply)
+        const delta = CreateItemDelta({ changed: current })
+        collection.onChange(delta)
+        controller.onCollectionChange(delta)
+
+        /** Read INSIDE the pass: a transient drop here is exactly what the UI would render. */
+        expect(
+          controller
+            .items()
+            .map((item) => item.uuid)
+            .sort(),
+        ).toEqual(uuids)
+      }
+    })
+
+    it('keeps a folder-scoped note displayed when the folder itself is re-applied', () => {
+      const collection = new ItemCollection()
+      const note = createNoteWithContent({ title: 'filed note' })
+      collection.set([note])
+
+      /**
+       * Folder membership lives on the FOLDER (folder -> note references), so the list is
+       * filtered by a captured folder object. Re-applying the folder must not narrow the list.
+       */
+      let folderReferences = [note.uuid]
+      const controller = new ItemDisplayController(collection, [ContentType.TYPES.Note], {
+        sortBy: 'title',
+        sortDirection: 'asc',
+        customFilter: (item: DecryptedItemInterface) => folderReferences.includes(item.uuid),
+      })
+
+      expect(controller.items()).toHaveLength(1)
+
+      const reappliedNote = reapply(note)
+      const delta = CreateItemDelta({ changed: [reappliedNote] })
+      collection.onChange(delta)
+      controller.onCollectionChange(delta)
+
+      expect(controller.items()).toHaveLength(1)
+      expect(controller.items()[0].uuid).toEqual(note.uuid)
+
+      /** A folder whose reference set genuinely lost the note is the only legitimate removal. */
+      folderReferences = []
+      controller.setDisplayOptions({
+        customFilter: (item: DecryptedItemInterface) => folderReferences.includes(item.uuid),
+      })
+      expect(controller.items()).toHaveLength(0)
     })
   })
 

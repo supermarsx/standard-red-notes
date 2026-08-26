@@ -60,6 +60,7 @@ import {
   KeyboardModifier,
   FolderContentType,
   NoteType,
+  searchableBodyForItem,
   SyncServiceInterface,
   PayloadEmitSource,
   VaultListingInterface,
@@ -894,11 +895,23 @@ export class ItemListController
     }
   }
 
-  /** Map a displayable note/file into the shape the search predicate consumes. */
+  /**
+   * Map a displayable note/file into the shape the search predicate consumes.
+   *
+   * The body MUST be resolved through the same fallback the model's substring matcher
+   * uses (searchableBodyForItem). Under `lazyDecryptEnabled` a cold-loaded note is
+   * "lite": its `text` is stripped from memory and only `preview_plain`/`preview_html`
+   * stay resident. Reading `text` directly here made the operator predicate disagree
+   * with the model filter that already admitted the note on its preview, so the note
+   * dropped out of the result and returned only after something else hydrated it —
+   * i.e. the same query silently yielded different notes over time.
+   */
   private toSearchableNote(item: ListableContentItem): SearchableNote {
     const noteLike = item as unknown as {
       title?: string
       text?: string
+      preview_plain?: string
+      preview_html?: string
       noteType?: NoteType
       editorIdentifier?: string
       protected?: boolean
@@ -909,7 +922,14 @@ export class ItemListController
       locked?: boolean
     }
     const rawText = noteLike.text ?? ''
-    const text = rawText.length > 0 ? extractPlaintextFromNoteText(rawText, noteLike.noteType) : ''
+    /**
+     * Only the real body can be Lexical editor-state JSON, so the plaintext extraction
+     * applies to it alone; the preview fallback is already plain text.
+     */
+    const text =
+      rawText.length > 0
+        ? extractPlaintextFromNoteText(rawText, noteLike.noteType)
+        : (searchableBodyForItem({ uuid: item.uuid, ...noteLike }) ?? '')
     const tagTitles = this.itemManager.getSortedTagsForItem(item).map((tag) => tag.title)
     // A note "has files" when any item referencing it is a File. Files attached
     // to a note reference the note, so we look at the inbound references.

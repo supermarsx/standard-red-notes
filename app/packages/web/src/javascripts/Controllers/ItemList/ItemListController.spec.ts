@@ -513,4 +513,82 @@ describe('item list controller', () => {
       expect(rebuildSpy).toHaveBeenCalledTimes(1)
     })
   })
+
+  describe('operator filter over lazy-decrypted ("lite") notes', () => {
+    /**
+     * `lazyDecryptEnabled` is on in the web app, so a cold-loaded note has its body
+     * stripped from memory (`text === ''`) and only the preview stays resident. The model's
+     * substring matcher deliberately falls back to that preview, so if the operator
+     * predicate read `text` directly the two filters disagreed: the note was admitted by one
+     * and dropped by the other, and came back only once something else hydrated it.
+     */
+    type LiteItem = {
+      uuid: string
+      title?: string
+      text?: string
+      preview_plain?: string
+      preview_html?: string
+      pinned?: boolean
+      created_at?: Date
+    }
+
+    const filter = (items: LiteItem[]): LiteItem[] =>
+      (controller as unknown as { applyOperatorFilter: (i: LiteItem[]) => LiteItem[] }).applyOperatorFilter(items)
+
+    beforeEach(() => {
+      application.items.getSortedTagsForItem = jest.fn().mockReturnValue([])
+      application.items.itemsReferencingItem = jest.fn().mockReturnValue([])
+    })
+
+    it('matches a lite note on its resident preview text', () => {
+      const lite: LiteItem = {
+        uuid: 'lite',
+        title: 'Untitled',
+        text: '',
+        preview_plain: 'the quarterly needle lives in the body',
+        pinned: true,
+        created_at: new Date(),
+      }
+
+      runInAction(() => {
+        controller.noteFilterText = 'is:pinned needle'
+      })
+
+      expect(filter([lite]).map((i) => i.uuid)).toEqual(['lite'])
+    })
+
+    it('falls back to preview_html with its tags stripped', () => {
+      const lite: LiteItem = {
+        uuid: 'lite-html',
+        title: 'Untitled',
+        text: '',
+        preview_html: '<p>the quarterly <b>needle</b> lives here</p>',
+        pinned: true,
+        created_at: new Date(),
+      }
+
+      runInAction(() => {
+        controller.noteFilterText = 'is:pinned needle'
+      })
+
+      expect(filter([lite]).map((i) => i.uuid)).toEqual(['lite-html'])
+    })
+
+    it('still rejects a note whose title, body and preview all lack the term', () => {
+      const lite: LiteItem = {
+        uuid: 'other',
+        title: 'Untitled',
+        text: '',
+        preview_plain: 'nothing relevant here',
+        pinned: true,
+        created_at: new Date(),
+      }
+
+      runInAction(() => {
+        controller.noteFilterText = 'is:pinned needle'
+      })
+
+      expect(filter([lite])).toEqual([])
+    })
+  })
 })

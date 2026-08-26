@@ -45,7 +45,7 @@ function matchResultForStringQuery(item: SearchableItem, searchString: string): 
   }
 
   const title = item.title?.toLowerCase()
-  const text = bodyForMatching(item)?.toLowerCase()
+  const text = searchableBodyForItem(item)?.toLowerCase()
   const lowercaseText = searchString.toLowerCase()
   const words = lowercaseText.split(' ')
   const quotedText = stringBetweenQuotes(lowercaseText)
@@ -85,8 +85,13 @@ function matchResultForStringQuery(item: SearchableItem, searchString: string): 
  * tags stripped) so the note still matches on its preview with zero decrypt.
  * When `text` is present (flag off, or note already hydrated) behavior is
  * identical — the full body is matched and the preview fallback is unused.
+ *
+ * Exported because every OTHER filter that narrows the same list must use the same
+ * body, or the two disagree: a note the substring matcher admitted on its preview
+ * would then be dropped by the second filter for having an empty body, and would
+ * reappear only once something else happened to hydrate it.
  */
-function bodyForMatching(item: SearchableItem): string | undefined {
+export function searchableBodyForItem(item: SearchableItem): string | undefined {
   if (item.text && item.text.length > 0) {
     return item.text
   }
