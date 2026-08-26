@@ -1,7 +1,8 @@
 import { createServer } from 'node:http'
 import { attachWebSocketGateway, type GatewayConfig } from './gateway.js'
+import { createConsoleLogger } from './logger.js'
 import { type Logger } from './redisBridge.js'
-import { safeErrorLogMetadata, safeLogArguments } from './safeLog.js'
+import { safeErrorLogMetadata } from './safeLog.js'
 
 // ---------------------------------------------------------------------------
 // Standalone entry.
@@ -20,12 +21,10 @@ const PORT = Number(process.env.PORT ?? 3106)
 const REDIS_HOST = process.env.REDIS_HOST ?? '127.0.0.1'
 const REDIS_PORT = Number(process.env.REDIS_PORT ?? 6379)
 
-const logger: Logger = {
-  // eslint-disable-next-line no-console
-  info: (...args) => console.log(new Date().toISOString(), '[info]', ...safeLogArguments(args)),
-  warn: (...args) => console.warn(new Date().toISOString(), '[warn]', ...safeLogArguments(args)),
-  error: (...args) => console.error(new Date().toISOString(), '[error]', ...safeLogArguments(args)),
-}
+// Verbosity is tuned with LOG_LEVEL, exactly as every other server package does
+// (auth, syncing-server, files, revisions, ...). See `logger.ts`: it owns the
+// only `console` usage in this package and redacts every argument.
+const logger: Logger = createConsoleLogger({ level: process.env.LOG_LEVEL })
 
 const config: GatewayConfig = {
   connectionTokenSecret: process.env.WEB_SOCKET_CONNECTION_TOKEN_SECRET ?? '',

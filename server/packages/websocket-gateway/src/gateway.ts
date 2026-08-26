@@ -21,6 +21,7 @@ import {
 import { RoomRegistry, parseRelayFrame, handleRelayFrame, type RoomJoinAuthorizer } from './rooms.js'
 import { startRedisBridge, type Logger } from './redisBridge.js'
 import { startCollaborationRedisBridge } from './collaborationRedisBridge.js'
+import { createLogThrottle, type LogThrottle } from './logThrottle.js'
 import { safeErrorLogMetadata } from './safeLog.js'
 import { startSqsConsumer, type SqsEventDedupStore } from './sqsConsumer.js'
 import {
@@ -181,9 +182,36 @@ export function createLoggerSyncCommandMetrics(logger: Pick<Logger, 'info'>): Sy
   }
 }
 
+/**
+ * The individual preconditions behind `SyncGatewayAccess.capabilities()` being
+ * empty. Sync availability is a conjunction of eight independent clauses, and
+ * for a long time a false result was reported as one undifferentiated
+ * "unavailable" -- which is indistinguishable, from outside, from a kill switch,
+ * an unbound Redis, or an adapter that has not finished starting. These codes
+ * exist so a refusal names its own cause. They are STABLE, non-sensitive
+ * identifiers: never put a secret, URL or user identifier in one.
+ */
+export type SyncUnavailabilityReason =
+  | 'sync-not-configured'
+  | 'gateway-stopping'
+  | 'disabled-by-configuration'
+  | 'no-allowed-origins'
+  | 'ticket-store-unavailable'
+  | 'command-lease-store-unavailable'
+  | 'socket-budget-store-unavailable'
+  | 'authorization-adapter-unavailable'
+  | 'durable-backend-unavailable'
+  | 'invite-event-store-unavailable'
+
 export interface SyncGatewayAccess {
   capabilities(): SyncCapabilityResponse
   issueTicket(identity: SyncTicketIdentity): Promise<SyncTicketResponse>
+  /**
+   * Optional so existing hosts and test doubles keep satisfying the interface.
+   * An empty array means available; a non-empty one lists EVERY unmet
+   * precondition, not just the first, so one log line resolves the whole gate.
+   */
+  unavailabilityReasons?(): readonly SyncUnavailabilityReason[]
 }
 
 export interface WebSocketRelayBacklogLimits {
@@ -424,11 +452,22 @@ function buildMintTokenHandler(
   config: GatewayConfig,
   logger: Logger,
 ): (req: IncomingMessage, res: ServerResponse) => void {
+  const logRefusal = createRefusalLogger(logger)
+
   return function handleMintToken(req: IncomingMessage, res: ServerResponse): void {
     const xAuthToken = req.headers['x-auth-token']
     if (typeof xAuthToken === 'string' && xAuthToken.length > 0) {
       const identity = config.authJwtSecret ? decodeCrossServiceToken(xAuthToken, config.authJwtSecret) : undefined
       if (!identity) {
+        // Distinguishes "AUTH_JWT_SECRET is not configured here" from "the
+        // presented cross-service token did not verify" -- the first is an
+        // operator misconfiguration, the second is normal client churn.
+        logRefusal(
+          config.authJwtSecret
+            ? '[token] mint refused: x-auth-token did not decode against AUTH_JWT_SECRET'
+            : '[token] mint refused: AUTH_JWT_SECRET is not configured, so no x-auth-token can be accepted',
+          config.authJwtSecret ? 'mint:bad-x-auth-token' : 'mint:no-auth-jwt-secret',
+        )
         res.writeHead(401, { 'content-type': 'application/json' })
         res.end(JSON.stringify({ error: 'invalid auth token' }))
         return
@@ -442,6 +481,10 @@ function buildMintTokenHandler(
 
     // Internal path: fail CLOSED when no internal secret is configured.
     if (!config.internalSecret) {
+      logRefusal(
+        '[token] mint refused: WEBSOCKET_GATEWAY_INTERNAL_SECRET is not configured, so internal minting is disabled',
+        'mint:no-internal-secret',
+      )
       res.writeHead(503, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ error: 'internal token minting is disabled (no internal secret configured)' }))
       return
@@ -450,6 +493,10 @@ function buildMintTokenHandler(
     // Constant-time compare so the internal secret cannot be recovered byte by
     // byte via response-timing analysis. Fails closed for missing/array headers.
     if (!secretsMatch(provided, config.internalSecret)) {
+      logRefusal(
+        '[token] mint refused: x-internal-secret absent or did not match WEBSOCKET_GATEWAY_INTERNAL_SECRET',
+        'mint:internal-secret-mismatch',
+      )
       res.writeHead(403, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ error: 'forbidden' }))
       return
@@ -459,7 +506,7 @@ function buildMintTokenHandler(
     // already-parsed body when present; otherwise read the raw stream (standalone).
     const parsedBody = (req as { body?: unknown }).body
     if (parsedBody && typeof parsedBody === 'object') {
-      mintFromBody(parsedBody as Record<string, unknown>, config, logger, res)
+      mintFromBody(parsedBody as Record<string, unknown>, config, logger, res, logRefusal)
       return
     }
 
@@ -467,6 +514,7 @@ function buildMintTokenHandler(
     req.on('data', (chunk) => {
       body += chunk
       if (body.length > 16_384) {
+        logRefusal('[token] mint refused: request body exceeded the 16384-byte bound', 'mint:body-too-large')
         req.destroy()
       }
     })
@@ -475,11 +523,12 @@ function buildMintTokenHandler(
       try {
         parsed = body ? (JSON.parse(body) as Record<string, unknown>) : {}
       } catch {
+        logRefusal('[token] mint refused: request body was not valid JSON', 'mint:invalid-json')
         res.writeHead(400, { 'content-type': 'application/json' })
         res.end(JSON.stringify({ error: 'invalid json body' }))
         return
       }
-      mintFromBody(parsed, config, logger, res)
+      mintFromBody(parsed, config, logger, res, logRefusal)
     })
   }
 }
@@ -489,10 +538,12 @@ function mintFromBody(
   config: GatewayConfig,
   logger: Logger,
   res: ServerResponse,
+  logRefusal: RefusalLogger,
 ): void {
   const userUuid = parsed.userUuid
   const sessionUuid = parsed.sessionUuid
   if (typeof userUuid !== 'string' || typeof sessionUuid !== 'string' || !userUuid || !sessionUuid) {
+    logRefusal('[token] mint refused: body is missing a userUuid or sessionUuid', 'mint:incomplete-body')
     res.writeHead(400, { 'content-type': 'application/json' })
     res.end(JSON.stringify({ error: 'userUuid and sessionUuid are required' }))
     return
@@ -506,6 +557,29 @@ function mintFromBody(
 function writeJson(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { 'content-type': 'application/json' })
   res.end(JSON.stringify(body))
+}
+
+export type RefusalLogger = (message: string, throttleKey: string, metadata?: Record<string, unknown>) => void
+
+/**
+ * Every refusal in this file goes through here. Two rules it enforces for free:
+ * the line is THROTTLED (an unauthenticated caller must not be able to drive
+ * unbounded log volume by retrying), and the metadata is serialized with
+ * JSON.stringify so it survives the minimal variadic logger bridge the
+ * api-gateway and home-server install -- the same reason
+ * `createLoggerSyncCommandMetrics` does it.
+ *
+ * Callers pass only stable, non-sensitive codes and counters. No token, no
+ * header value, no body, no email.
+ */
+export function createRefusalLogger(logger: Logger, throttle: LogThrottle = createLogThrottle()): RefusalLogger {
+  return (message: string, throttleKey: string, metadata?: Record<string, unknown>): void => {
+    const decision = throttle.consider(throttleKey)
+    if (!decision.emit) {
+      return
+    }
+    logger.warn(message, JSON.stringify({ ...(metadata ?? {}), suppressedSinceLastLog: decision.suppressed }))
+  }
 }
 
 function readBoundedJsonBody(
@@ -727,9 +801,7 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
     throw new Error('WebSocket sync requires the durable invite-event SQS dispatcher.')
   }
   if (syncOptions?.requireSharedState && !syncOptions.files && !syncOptions.filesUnsupported) {
-    throw new Error(
-      'WebSocket sync requires a FILES_V1 storage adapter, or an explicit filesUnsupported declaration.',
-    )
+    throw new Error('WebSocket sync requires a FILES_V1 storage adapter, or an explicit filesUnsupported declaration.')
   }
   const syncIngressLimits: WebSocketIngressLimits = {
     ...DEFAULT_SYNC_WEBSOCKET_INGRESS_LIMITS,
@@ -738,27 +810,71 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
   assertValidIngressLimits(syncIngressLimits)
   let stopping = false
   const ticketOperations = new Set<Promise<unknown>>()
-  const syncAvailable = (): boolean =>
-    Boolean(
-      syncOptions &&
-      !stopping &&
-      syncOptions.isEnabled() &&
-      (syncAllowedOrigins.size > 0 || syncAllowsSameOrigin) &&
-      syncTickets.ready() &&
-      syncLeases.ready() &&
-      syncSocketBudget.ready() &&
-      syncOptions.authorization.ready() &&
-      syncOptions.backend.ready() &&
-      (!syncOptions.requireSharedState || syncOptions.inviteEvents?.ready()),
+  // One evaluation, one list of causes. `syncAvailable()` is derived from this
+  // rather than the reverse, so the gate and its explanation can never disagree.
+  const syncUnavailabilityReasons = (): readonly SyncUnavailabilityReason[] => {
+    if (!syncOptions) {
+      return ['sync-not-configured']
+    }
+    const reasons: SyncUnavailabilityReason[] = []
+    if (stopping) {
+      reasons.push('gateway-stopping')
+    }
+    if (!syncOptions.isEnabled()) {
+      reasons.push('disabled-by-configuration')
+    }
+    if (syncAllowedOrigins.size === 0 && !syncAllowsSameOrigin) {
+      reasons.push('no-allowed-origins')
+    }
+    if (!syncTickets.ready()) {
+      reasons.push('ticket-store-unavailable')
+    }
+    if (!syncLeases.ready()) {
+      reasons.push('command-lease-store-unavailable')
+    }
+    if (!syncSocketBudget.ready()) {
+      reasons.push('socket-budget-store-unavailable')
+    }
+    if (!syncOptions.authorization.ready()) {
+      reasons.push('authorization-adapter-unavailable')
+    }
+    if (!syncOptions.backend.ready()) {
+      reasons.push('durable-backend-unavailable')
+    }
+    if (syncOptions.requireSharedState && !syncOptions.inviteEvents?.ready()) {
+      reasons.push('invite-event-store-unavailable')
+    }
+    return reasons
+  }
+  const syncAvailable = (): boolean => syncUnavailabilityReasons().length === 0
+  // Refusals are what an operator needs to see and what a retrying client can
+  // emit endlessly; one line per distinct cause per minute keeps both true.
+  const logRefusal = createRefusalLogger(logger)
+  const logSyncRefusal = (event: string, reasons: readonly SyncUnavailabilityReason[]): void => {
+    logRefusal(
+      `[ws-sync] ${event}: unmet preconditions ${reasons.join(', ') || 'none'}`,
+      `${event}:${reasons.join()}`,
+      {
+        reasons,
+      },
     )
+  }
   const sync: SyncGatewayAccess = {
-    capabilities: () => ({
-      capabilities: syncAvailable()
-        ? [{ id: SYNC_CAPABILITY_ID, version: SYNC_PROTOCOL_VERSION, endpoint: SYNC_SOCKET_PATH }]
-        : [],
-    }),
+    unavailabilityReasons: syncUnavailabilityReasons,
+    capabilities: () => {
+      const reasons = syncUnavailabilityReasons()
+      if (reasons.length > 0) {
+        logSyncRefusal('capability negotiation returned an empty list', reasons)
+        return { capabilities: [] }
+      }
+      return {
+        capabilities: [{ id: SYNC_CAPABILITY_ID, version: SYNC_PROTOCOL_VERSION, endpoint: SYNC_SOCKET_PATH }],
+      }
+    },
     issueTicket: async (identity) => {
-      if (!syncAvailable()) {
+      const reasons = syncUnavailabilityReasons()
+      if (reasons.length > 0) {
+        logSyncRefusal('ticket refused', reasons)
         throw new Error('WebSocket sync is unavailable.')
       }
       const operation = syncTickets.issue(identity)
@@ -792,12 +908,15 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
   }
   const handleSyncTicket = (req: IncomingMessage, res: ServerResponse): void => {
     void (async () => {
-      if (!syncAvailable()) {
+      const unavailability = syncUnavailabilityReasons()
+      if (unavailability.length > 0) {
+        logSyncRefusal('ticket refused', unavailability)
         writeJson(res, 503, { error: { code: 'SYNC_DISABLED' } })
         return
       }
       const body = await readBoundedJsonBody(req)
       if (!body || !isSyncDeviceId(body.deviceId)) {
+        logRefusal('[ws-sync] ticket refused: unreadable body or invalid deviceId', 'ticket:invalid-device')
         writeJson(res, 400, { error: { code: 'INVALID_DEVICE' } })
         return
       }
@@ -817,12 +936,19 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
         }
       }
       if (!identity) {
+        logRefusal(
+          '[ws-sync] ticket refused: neither a decodable x-auth-token nor a matching internal secret with a body identity',
+          'ticket:auth-rejected',
+        )
         writeJson(res, 401, { error: { code: 'AUTH_REJECTED' } })
         return
       }
       try {
         writeJson(res, 200, await sync.issueTicket({ ...identity, deviceId: body.deviceId }))
-      } catch {
+      } catch (error) {
+        // issueTicket already logged the precondition list when it refused; this
+        // covers a ticket store that threw while otherwise reporting ready.
+        logRefusal('[ws-sync] ticket issuance failed', 'ticket:issue-failed', safeErrorLogMetadata(error))
         writeJson(res, 503, { error: { code: 'SYNC_DISABLED' } })
       }
     })()
@@ -853,9 +979,21 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
       const originAllowed =
         typeof origin === 'string' &&
         (syncAllowedOrigins.has(origin) || (syncAllowsSameOrigin && isSameOriginUpgrade(req, origin)))
-      if (url.search.length > 0 || !originAllowed || !syncAvailable()) {
-        logger.warn('[ws-sync] connection rejected')
-        socket.close(syncAvailable() ? 1008 : 1013, 'sync unavailable')
+      const unavailability = syncUnavailabilityReasons()
+      if (url.search.length > 0 || !originAllowed || unavailability.length > 0) {
+        // Name the cause. "connection rejected" alone cannot tell an operator
+        // whether a client sent a query string, arrived from an origin the
+        // deployment never allowed, or hit a genuinely-down backend -- three
+        // completely different fixes. The origin itself is NOT logged: it is
+        // attacker-controlled input, and the boolean is the diagnostic.
+        const rejection =
+          url.search.length > 0 ? 'query-string-not-permitted' : !originAllowed ? 'origin-not-allowed' : 'unavailable'
+        logRefusal(
+          `[ws-sync] connection rejected: ${rejection}`,
+          `connection:${rejection}:${unavailability.join()}`,
+          unavailability.length > 0 ? { rejection, reasons: unavailability } : { rejection },
+        )
+        socket.close(unavailability.length === 0 ? 1008 : 1013, 'sync unavailable')
         return
       }
 
@@ -1162,6 +1300,19 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
 }
 
 export * from './syncProtocol.js'
+export { createLogThrottle } from './logThrottle.js'
+export type { LogThrottle, LogThrottleDecision, LogThrottleOptions } from './logThrottle.js'
+export {
+  createConsoleLogger,
+  isLevelEnabled,
+  resolveLogLevel,
+  DEFAULT_LOG_LEVEL,
+  LOG_LEVELS,
+  type ConsoleLoggerOptions,
+  type ConsoleLoggerSink,
+  type LogLevelName,
+} from './logger.js'
+export type { Logger } from './redisBridge.js'
 export type {
   SyncAuthorizationCode,
   SyncAuthorizationDecision,

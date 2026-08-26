@@ -9,6 +9,12 @@ export interface Logger {
   info(...args: unknown[]): void
   warn(...args: unknown[]): void
   error(...args: unknown[]): void
+  /**
+   * Optional so the existing host adapters (api-gateway, home-server) that only
+   * bridge info/warn/error keep satisfying this interface. Callers must treat it
+   * as possibly absent; `createConsoleLogger` always provides it.
+   */
+  debug?(...args: unknown[]): void
 }
 
 /**
