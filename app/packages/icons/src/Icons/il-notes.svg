@@ -1,17 +1,25 @@
+<!--
+  Theme-aware (light AND dark) — see il-files.svg / il-protected.svg for the full
+  rationale. This one backs the "N notes selected" / "N files selected" placeholder
+  panels that sit directly beside the empty-files state, so it had the identical
+  light-theme literals (#F4F5F7 disc / white cards / #BBBEC4 lines) and the identical
+  glow on a dark panel. var() is not valid in SVG presentation attributes, so the
+  fills live in style=""; each fallback is the original literal.
+-->
 <svg width="120" height="120" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg">
-<circle cx="60" cy="60" r="60" fill="#F4F5F7"/>
+<circle cx="60" cy="60" r="60" style="fill: var(--sn-stylekit-contrast-background-color, #F4F5F7)"/>
 <g filter="url(#filter0_d)">
-<rect x="21.5051" y="49.3528" width="40" height="40" rx="4" transform="rotate(-15 21.5051 49.3528)" fill="white"/>
+<rect x="21.5051" y="49.3528" width="40" height="40" rx="4" transform="rotate(-15 21.5051 49.3528)" style="fill: var(--sn-stylekit-background-color, #FFFFFF)"/>
 </g>
-<rect x="29.8889" y="57.4591" width="28" height="4" rx="2" transform="rotate(-15 29.8889 57.4591)" fill="#BBBEC4"/>
-<rect x="31.9595" y="65.1865" width="28" height="4" rx="2" transform="rotate(-15 31.9595 65.1865)" fill="#BBBEC4"/>
-<rect x="34.03" y="72.9139" width="16" height="4" rx="2" transform="rotate(-15 34.03 72.9139)" fill="#BBBEC4"/>
+<rect x="29.8889" y="57.4591" width="28" height="4" rx="2" transform="rotate(-15 29.8889 57.4591)" style="fill: var(--sn-stylekit-passive-color-2, #BBBEC4)"/>
+<rect x="31.9595" y="65.1865" width="28" height="4" rx="2" transform="rotate(-15 31.9595 65.1865)" style="fill: var(--sn-stylekit-passive-color-2, #BBBEC4)"/>
+<rect x="34.03" y="72.9139" width="16" height="4" rx="2" transform="rotate(-15 34.03 72.9139)" style="fill: var(--sn-stylekit-passive-color-2, #BBBEC4)"/>
 <g filter="url(#filter1_d)">
-<rect x="40" y="32" width="56" height="56" rx="4" fill="white"/>
+<rect x="40" y="32" width="56" height="56" rx="4" style="fill: var(--sn-stylekit-background-color, #FFFFFF)"/>
 </g>
-<rect x="48" y="46" width="40" height="6" rx="3" fill="#BBBEC4"/>
-<rect x="48" y="57" width="40" height="6" rx="3" fill="#BBBEC4"/>
-<rect x="48" y="68" width="22" height="6" rx="3" fill="#BBBEC4"/>
+<rect x="48" y="46" width="40" height="6" rx="3" style="fill: var(--sn-stylekit-passive-color-2, #BBBEC4)"/>
+<rect x="48" y="57" width="40" height="6" rx="3" style="fill: var(--sn-stylekit-passive-color-2, #BBBEC4)"/>
+<rect x="48" y="68" width="22" height="6" rx="3" style="fill: var(--sn-stylekit-passive-color-2, #BBBEC4)"/>
 <defs>
 <filter id="filter0_d" x="10.4031" y="31.8979" width="71.1938" height="71.1938" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
 <feFlood flood-opacity="0" result="BackgroundImageFix"/>

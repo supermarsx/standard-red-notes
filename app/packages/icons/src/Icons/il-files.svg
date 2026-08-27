@@ -1,15 +1,32 @@
+<!--
+  Theme-aware (light AND dark): colors come from the stylekit CSS variables so the
+  illustration adapts to the active app theme. The previous hardcoded values were
+  the light-theme literals (#F4F5F7 disc / white page / #BBBEC4 lines), which glowed
+  on dark themes — and this fork's BASE palette is dark, so the empty-files state
+  showed a bright grey disc on a burgundy-black panel.
+
+  Same treatment, same tokens, and the same element→token mapping as il-protected.svg
+  and il-no-preview.svg (disc = contrast background, sheet = default background,
+  details = passive-2). NOTE: var() is NOT valid inside SVG presentation attributes
+  (fill="var(...)"), so the fills live in style="" instead. Each fallback is the
+  original literal, so a render with no stylekit attached is unchanged.
+
+  The drop-shadow filter below is deliberately left alone: it is plain black at 0.16
+  opacity, which is invisible rather than wrong on a dark surface, and il-protected.svg
+  leaves the identical filter untouched.
+-->
 <svg viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <circle cx="60" cy="60" r="60" fill="#F4F5F7" />
+  <circle cx="60" cy="60" r="60" style="fill: var(--sn-stylekit-contrast-background-color, #F4F5F7)" />
   <g filter="url(#filter0_d_647_28)">
     <path
       d="M39.75 26H66.75L87 46.4V87.2C87 89.0035 86.2888 90.7331 85.023 92.0083C83.7571 93.2836 82.0402 94 80.25 94H39.75C36.0038 94 33 90.94 33 87.2V32.8C33 29.026 36.0038 26 39.75 26Z"
-      fill="white" />
+      style="fill: var(--sn-stylekit-background-color, #FFFFFF)" />
   </g>
-  <rect x="40" y="63" width="40" height="6" rx="3" fill="#BBBEC4" />
-  <rect x="40" y="74" width="22" height="6" rx="3" fill="#BBBEC4" />
+  <rect x="40" y="63" width="40" height="6" rx="3" style="fill: var(--sn-stylekit-passive-color-2, #BBBEC4)" />
+  <rect x="40" y="74" width="22" height="6" rx="3" style="fill: var(--sn-stylekit-passive-color-2, #BBBEC4)" />
   <path
     d="M63.4737 33.8205C63.4737 32.9432 64.5228 32.4911 65.1605 33.0936L80.6983 47.7731C81.3559 48.3944 80.9162 49.5 80.0116 49.5H64.4736C63.9214 49.5 63.4736 49.0523 63.4736 48.5L63.4737 33.8205Z"
-    fill="#BBBEC4" />
+    style="fill: var(--sn-stylekit-passive-color-2, #BBBEC4)" />
   <defs>
     <filter id="filter0_d_647_28" x="21" y="18" width="78" height="92" filterUnits="userSpaceOnUse"
       color-interpolation-filters="sRGB">
