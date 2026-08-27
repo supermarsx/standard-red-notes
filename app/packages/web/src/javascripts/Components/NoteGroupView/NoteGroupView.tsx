@@ -432,13 +432,34 @@ class NoteGroupView extends AbstractComponent<Props, State> {
     // tile and no note tab looks active.
     const isTiling = controllers.length > 1 && !this.state.isInMobileView && !activeViewTab
 
+    /**
+     * Standard Red Notes: why the split toggle is unavailable, or undefined when it
+     * is usable. Splitting needs at least one open note tab to split from, a
+     * viewport that actually tiles, and the content area not taken over by a view
+     * tab. `canSplit` is derived from this so the disabled state and the tooltip
+     * explaining it can never disagree.
+     */
+    const splitDisabledReason = !hasControllers
+      ? 'Open a tab to split'
+      : this.state.isInMobileView
+        ? 'Splitting is unavailable on small screens'
+        : activeViewTab
+          ? 'Switch to a note tab to split'
+          : undefined
+
     return (
       <>
         {this.state.showMultipleSelectedNotes && <MultipleSelectedNotes application={this.application} />}
         {this.state.showMultipleSelectedFiles && (
           <MultipleSelectedFiles itemListController={this.application.itemListController} />
         )}
-        {shouldNotShowMultipleSelectedItems && (hasControllers || this.state.viewTabs.length > 0) && (
+        {/**
+         * Standard Red Notes: the tab bar renders even with zero tabs open. It used
+         * to be gated on `hasControllers || viewTabs.length > 0`, which meant closing
+         * the last tab removed the only in-pane way to open another one — a dead end
+         * wherever the notes list is not on screen (mobile, collapsed list).
+         */}
+        {shouldNotShowMultipleSelectedItems && (
           <div className="flex h-full w-full flex-col">
             <NoteTabBar
               controllers={controllers}
@@ -449,7 +470,8 @@ class NoteGroupView extends AbstractComponent<Props, State> {
               canAddTab={true}
               onToggleSplit={this.toggleSplit}
               isSplit={isTiling && this.state.tileLayout !== TileLayout.Single}
-              canSplit={!this.state.isInMobileView && !activeViewTab}
+              canSplit={splitDisabledReason === undefined}
+              splitDisabledReason={splitDisabledReason}
               viewTabs={this.state.viewTabs}
               activeViewTabId={this.state.activeViewTabId}
               onSelectViewTab={this.selectViewTab}

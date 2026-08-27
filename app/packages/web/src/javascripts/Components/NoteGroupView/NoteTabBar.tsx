@@ -54,6 +54,15 @@ type Props = {
    */
   canSplit: boolean
   /**
+   * Standard Red Notes: why splitting is unavailable, shown as the disabled split
+   * button's tooltip (and, because the button also carries an `aria-label`, as its
+   * accessible *description* — browsers expose `title` that way once a name is
+   * present). The button is always rendered: greying out a control the user can
+   * see is easier to learn than one that appears and disappears. Ignored while
+   * `canSplit` is true.
+   */
+  splitDisabledReason?: string
+  /**
    * Standard Red Notes: right-click context-menu operations. They span BOTH the
    * view tabs and the note/file controllers, keyed off a {@link TabTarget}.
    */
@@ -109,6 +118,7 @@ const NoteTabBar: FunctionComponent<Props> = ({
   onToggleSplit,
   isSplit,
   canSplit,
+  splitDisabledReason,
   viewTabs,
   activeViewTabId,
   onSelectViewTab,
@@ -181,6 +191,11 @@ const NoteTabBar: FunctionComponent<Props> = ({
     onRenameTab && target?.kind === 'controller'
       ? controllers.find((controller) => controller.runtimeId === target.runtimeId)
       : undefined
+
+  const splitLabel = isSplit ? 'Return to single note view' : 'Split: show notes side by side'
+  // Keep the accessible NAME stable whether or not the button is usable, and use
+  // the tooltip to carry the reason it is not.
+  const splitTitle = canSplit ? splitLabel : (splitDisabledReason ?? splitLabel)
 
   const runAndClose = (action: () => void) => {
     action()
@@ -356,9 +371,9 @@ const NoteTabBar: FunctionComponent<Props> = ({
         )}
         onClick={onToggleSplit}
         disabled={!canSplit}
-        aria-label={isSplit ? 'Return to single note view' : 'Split: show notes side by side'}
+        aria-label={splitLabel}
         aria-pressed={isSplit}
-        title={isSplit ? 'Return to single note view' : 'Split: show notes side by side'}
+        title={splitTitle}
       >
         <Icon type="open-in" size="small" />
       </button>
