@@ -619,6 +619,122 @@ describe('SyncTransportWorkerRuntime', () => {
     expect(harness.messages.some((message) => message.type === 'NEGOTIATED')).toBe(false)
   })
 
+  // ---------------------------------------------------------------------------
+  // A gateway that binds no durable sync command port advertises every other
+  // capability and omits SYNC_ITEMS. This client used to reject that handshake
+  // outright and drop to HTTP for EVERYTHING -- including the collaboration,
+  // RPC, invite and file lanes the socket was perfectly able to serve.
+  // ---------------------------------------------------------------------------
+  describe('a gateway that does not advertise SYNC_ITEMS', () => {
+    const WITHOUT_SYNC_ITEMS = ['AUTHORIZE_COLLABORATION', 'API_RPC', 'INVITE_EVENTS', 'FILES_V1']
+
+    it('completes the handshake instead of failing it', async () => {
+      const harness = setup()
+      await authorize(harness, body(), 't'.repeat(40), SESSION_A, WITHOUT_SYNC_ITEMS)
+
+      expect(harness.messages).toContainEqual(
+        expect.objectContaining({ type: 'NEGOTIATED', operations: WITHOUT_SYNC_ITEMS }),
+      )
+      // The old behaviour, and the precise regression this guards.
+      expect(
+        harness.messages.some((message) => message.type === 'HTTP_FALLBACK' && message.reason === 'auth-failed'),
+      ).toBe(false)
+    })
+
+    it('routes the sync request to HTTP without disturbing the socket', async () => {
+      const harness = setup()
+      const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, WITHOUT_SYNC_ITEMS)
+
+      expect(harness.messages).toContainEqual(
+        expect.objectContaining({ type: 'HTTP_FALLBACK', reason: 'operation-unavailable' }),
+      )
+      // `capability-unavailable` is a PERMANENT fallback reason; reporting it
+      // here would tell long-lived consumers to stand down and stop
+      // reconnecting a socket that is up and serving four other lanes.
+      expect(
+        harness.messages.some(
+          (message) => message.type === 'HTTP_FALLBACK' && message.reason === 'capability-unavailable',
+        ),
+      ).toBe(false)
+      // Refused before a frame is written, so no command can be in flight and
+      // nothing can later be replayed as a phantom commit.
+      expect(socket.sent.some((entry) => JSON.parse(entry).type === 'COMMAND')).toBe(false)
+      expect(harness.outbox.records.size).toBe(0)
+      expect(socket.readyState).not.toBe(3)
+    })
+
+    it('keeps serving invite events over the same socket that refused sync', async () => {
+      // The coexistence case: this is the user's actual target state, not a
+      // corollary. Sync on HTTP, everything else realtime.
+      const harness = setup()
+      const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, WITHOUT_SYNC_ITEMS)
+      expect(harness.messages).toContainEqual(
+        expect.objectContaining({ type: 'HTTP_FALLBACK', reason: 'operation-unavailable' }),
+      )
+
+      await harness.runtime.handle({
+        type: 'SUBSCRIBE_INVITE_EVENTS',
+        clientRequestId: 'invite-client',
+        sessionScope: SESSION_A,
+        cursor: 'cursor-0',
+        limit: 1,
+      })
+      await flush()
+
+      const subscribe = socket.sent.find((entry) => JSON.parse(entry).type === 'INVITE_SUBSCRIBE')
+      expect(subscribe).toBeDefined()
+      expect((JSON.parse(subscribe!) as { payload: unknown }).payload).toEqual({ cursor: 'cursor-0', limit: 1 })
+      expect(socket.readyState).not.toBe(3)
+    })
+
+    it('falls back a second sync request without wedging or tearing down the lane', async () => {
+      const harness = setup()
+      const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, WITHOUT_SYNC_ITEMS)
+
+      await harness.runtime.handle({
+        type: 'EXECUTE',
+        clientRequestId: 'client-2',
+        body: body('second'),
+        sessionScope: SESSION_A,
+      })
+      await flush()
+      await flush()
+
+      const fallbacks = harness.messages.filter(
+        (message) => message.type === 'HTTP_FALLBACK' && message.reason === 'operation-unavailable',
+      )
+      expect(fallbacks).toHaveLength(2)
+      expect(fallbacks.map((message) => (message as { clientRequestId: string }).clientRequestId)).toEqual([
+        'client-1',
+        'client-2',
+      ])
+      expect(socket.sent.some((entry) => JSON.parse(entry).type === 'COMMAND')).toBe(false)
+      expect(socket.readyState).not.toBe(3)
+    })
+
+    it('still refuses an unrecognised operation when SYNC_ITEMS is absent too', async () => {
+      // The allow-list must stay genuinely closed. Removing the SYNC_ITEMS
+      // requirement must not become general permissiveness, and this proves the
+      // rejection independently of SYNC_ITEMS being present to carry it.
+      const harness = setup()
+      await authorize(harness, body(), 't'.repeat(40), SESSION_A, ['FILES_V2'])
+
+      expect(harness.messages).toContainEqual(expect.objectContaining({ type: 'HTTP_FALLBACK', reason: 'auth-failed' }))
+      expect(harness.messages.some((message) => message.type === 'NEGOTIATED')).toBe(false)
+    })
+
+    it('falls back on an empty operation list rather than negotiating a useless socket', async () => {
+      const harness = setup()
+      const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, [])
+
+      expect(harness.messages).toContainEqual(expect.objectContaining({ type: 'NEGOTIATED', operations: [] }))
+      expect(harness.messages).toContainEqual(
+        expect.objectContaining({ type: 'HTTP_FALLBACK', reason: 'operation-unavailable' }),
+      )
+      expect(socket.sent.some((entry) => JSON.parse(entry).type === 'COMMAND')).toBe(false)
+    })
+  })
+
   describe('FILES_V1 downloads', () => {
     const openDownload = async (harness: ReturnType<typeof setup>, declaredSize = 10) =>
       harness.runtime.handle({

@@ -1520,7 +1520,12 @@ export class SyncTransportWorkerRuntime {
         !Number.isSafeInteger(nextSequence) ||
         Number(nextSequence) < 1 ||
         !Array.isArray(operations) ||
-        !operations.includes('SYNC_ITEMS') ||
+        // SYNC_ITEMS is NOT required here. A deployment that binds no durable
+        // sync command port serves collaboration, API RPC, invite events and
+        // files over this socket while items sync over HTTP; demanding
+        // SYNC_ITEMS threw that whole socket away and put every lane on HTTP.
+        // The allow-list below stays closed: an unrecognised operation still
+        // fails the handshake, which is the bd092f03 guarantee.
         operations.some((operation) => !NEGOTIABLE_OPERATIONS.has(operation as SyncNegotiatedOperation))
       ) {
         await this.fallback('auth-failed')
@@ -2068,6 +2073,27 @@ export class SyncTransportWorkerRuntime {
       !this.sessionScope ||
       this.state !== 'READY'
     ) {
+      return
+    }
+    // The per-operation guard SYNC_ITEMS never had, matching the ones already
+    // on INVITE_EVENTS, API_RPC, AUTHORIZE_COLLABORATION and FILES_V1. When the
+    // server binds no durable command port it advertises everything else and
+    // omits this one; items then sync over HTTP while the socket keeps serving
+    // its other lanes.
+    //
+    // `preserveHealthySocket` is true because nothing is wrong with the socket
+    // -- closing it here would drop the four lanes that ARE working, which is
+    // the whole defect this change exists to fix. `confirmedNoSideEffect` is
+    // true because we refuse before writing a frame, so no command can be in
+    // flight; `fallback` still attaches any pre-existing outbox metadata so the
+    // HTTP path can resolve a command left over from an earlier connection.
+    //
+    // The reason is `operation-unavailable`, deliberately NOT
+    // `capability-unavailable`: the latter is a PERMANENT fallback reason that
+    // tells long-lived consumers to stand down and stop reconnecting, which is
+    // wrong for a socket that is up and healthy.
+    if (!this.negotiatedOperations.has('SYNC_ITEMS')) {
+      await this.fallback('operation-unavailable', undefined, true, true)
       return
     }
     try {
