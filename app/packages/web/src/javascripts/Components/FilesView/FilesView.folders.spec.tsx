@@ -46,6 +46,24 @@ jest.mock('@/Hooks/useMediaQuery', () => ({
 jest.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }))
 jest.mock('@standardnotes/icons', () => ({ FilesIllustration: () => <div data-testid="files-illustration" /> }))
 
+const mockCameraSupported = jest.fn()
+jest.mock('@/Controllers/Moments/PhotoRecorder', () => ({
+  PhotoRecorder: { isSupported: () => mockCameraSupported() },
+}))
+jest.mock('@/Components/Modal/ModalOverlay', () => ({
+  __esModule: true,
+  default: ({ isOpen, children }: { isOpen: boolean; children: React.ReactNode }) =>
+    isOpen ? <div data-testid="capture-modal">{children}</div> : null,
+}))
+jest.mock('@/Components/CameraCaptureModal/PhotoCaptureModal', () => ({
+  __esModule: true,
+  default: () => <div data-testid="photo-capture" />,
+}))
+jest.mock('@/Components/CameraCaptureModal/VideoCaptureModal', () => ({
+  __esModule: true,
+  default: () => <div data-testid="video-capture" />,
+}))
+
 const mockSelectDirectoryFiles = jest.fn()
 const mockUploadFilesWithFolderStructure = jest.fn()
 jest.mock('@/Utils/DirectoryPicker', () => ({ selectDirectoryFiles: () => mockSelectDirectoryFiles() }))
@@ -165,6 +183,8 @@ describe('FilesView folder management (ported from the Files smart view)', () =>
   beforeEach(() => {
     mockSelectDirectoryFiles.mockReset()
     mockUploadFilesWithFolderStructure.mockReset()
+    mockCameraSupported.mockReset()
+    mockCameraSupported.mockResolvedValue(false)
     container = document.createElement('div')
     document.body.appendChild(container)
     root = createRoot(container)
@@ -235,6 +255,43 @@ describe('FilesView folder management (ported from the Files smart view)', () =>
       picked,
       expect.objectContaining({ navigationController: application.navigationController }),
     )
+  })
+
+  it('keeps camera capture, which used to exist only in the Files smart view', async () => {
+    // Take photo / Record video were reachable ONLY from the smart view's
+    // add-item menu. If the consolidation dropped them, this is the only place
+    // that would notice.
+    mockCameraSupported.mockResolvedValue(true)
+    const application = createApplication([WORK_FILE])
+    await act(async () => {
+      root.render(createElement(FilesView, { application: application as never }))
+    })
+
+    act(() => {
+      buttonByText('Upload')?.click()
+    })
+
+    expect(buttonByText('takePhoto')).toBeDefined()
+    expect(buttonByText('recordVideo')).toBeDefined()
+
+    act(() => {
+      buttonByText('takePhoto')?.click()
+    })
+
+    expect(container.querySelector('[data-testid="photo-capture"]')).not.toBeNull()
+  })
+
+  it('hides camera capture when the device has no camera', async () => {
+    const application = createApplication([WORK_FILE])
+    await act(async () => {
+      root.render(createElement(FilesView, { application: application as never }))
+    })
+
+    act(() => {
+      buttonByText('Upload')?.click()
+    })
+
+    expect(buttonByText('takePhoto')).toBeUndefined()
   })
 
   it('distinguishes an empty folder from an account with no files', () => {

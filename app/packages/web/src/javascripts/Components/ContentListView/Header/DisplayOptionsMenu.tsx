@@ -84,7 +84,6 @@ const TabButton: FunctionComponent<{
 
 const DisplayOptionsMenu: FunctionComponent<DisplayOptionsMenuProps> = ({
   application,
-  isFilesSmartView,
   selectedTag,
   paneController,
 }) => {
@@ -315,7 +314,7 @@ const DisplayOptionsMenu: FunctionComponent<DisplayOptionsMenuProps> = ({
   }, [preferences.useTableView, changePreferences, paneController])
 
   const isMobileScreen = useMediaQuery(MutuallyExclusiveMediaQueryBreakpoints.sm)
-  const isTableViewEnabled = Boolean(isFilesSmartView || preferences.useTableView)
+  const isTableViewEnabled = Boolean(preferences.useTableView)
   const shouldHideNonApplicableOptions = isTableViewEnabled && !isMobileScreen
 
   return (
@@ -428,7 +427,7 @@ const DisplayOptionsMenu: FunctionComponent<DisplayOptionsMenuProps> = ({
       </MenuSection>
 
       <MenuSection title={t('view')}>
-        {!shouldHideNonApplicableOptions && !isFilesSmartView && (
+        {!shouldHideNonApplicableOptions && (
           <MenuSwitchButtonItem
             disabled={controlsDisabled}
             className="hover:bg-contrast focus:bg-info-backdrop py-1"

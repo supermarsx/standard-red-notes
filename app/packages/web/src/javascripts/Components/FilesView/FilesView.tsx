@@ -24,15 +24,16 @@ import { MutuallyExclusiveMediaQueryBreakpoints, useMediaQuery } from '@/Hooks/u
 import { filesSortByForTableSortBy, getFileTypeLabel, tableSortByForFilesSortBy } from './FilesViewTableUtils'
 import ItemOptionsMenu from '@/Components/ContentTableView/ItemOptionsMenu'
 import BulkFileActionBar from './BulkFileActionBar'
-import FilesFolderBar, {
-  FilesFolderFilterAll,
-  filterItemsByFolder,
-} from '@/Components/ContentListView/FilesFolderBar'
+import FilesFolderBar, { FilesFolderFilterAll, filterItemsByFolder } from '@/Components/ContentListView/FilesFolderBar'
 import EmptyFilesView from '@/Components/ContentListView/EmptyFilesView'
 import { selectDirectoryFiles } from '@/Utils/DirectoryPicker'
 import { uploadFilesWithFolderStructure } from '@/Utils/FolderUpload'
 import MenuItem from '@/Components/Menu/MenuItem'
 import ListItemVaultInfo from '@/Components/ContentListView/ListItemVaultInfo'
+import ModalOverlay from '@/Components/Modal/ModalOverlay'
+import PhotoCaptureModal from '@/Components/CameraCaptureModal/PhotoCaptureModal'
+import VideoCaptureModal from '@/Components/CameraCaptureModal/VideoCaptureModal'
+import { PhotoRecorder } from '@/Controllers/Moments/PhotoRecorder'
 import { readPersistedFilesSort, writePersistedFilesSort } from './filesViewSortPreference'
 import { fileMatchesQuery } from './filesViewSearch'
 
@@ -117,6 +118,25 @@ const FilesView: FunctionComponent<Props> = observer(({ application, className, 
   const [bulkMenuVisible, setBulkMenuVisible] = useState(false)
   const [uploadMenuVisible, setUploadMenuVisible] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
+  /**
+   * Camera capture was reachable ONLY from the Files smart view's add-item menu,
+   * so it has to live here now or the consolidation would quietly remove the
+   * app's only way to record a photo/video straight into files.
+   */
+  const [deviceHasCamera, setDeviceHasCamera] = useState(false)
+  const [captureType, setCaptureType] = useState<'photo' | 'video'>()
+
+  useEffect(() => {
+    let active = true
+    void PhotoRecorder.isSupported().then((supported) => {
+      if (active) {
+        setDeviceHasCamera(supported)
+      }
+    })
+    return () => {
+      active = false
+    }
+  }, [])
   const [rowMenu, setRowMenu] = useState<{
     file: FileItem
     position: { x: number; y: number }
@@ -180,10 +200,7 @@ const FilesView: FunctionComponent<Props> = observer(({ application, className, 
     itemListController.pruneFilesViewSelection(new Set(visibleFiles.map((file) => file.uuid)))
   }, [visibleFiles, itemListController])
 
-  const sorted = useMemo(
-    () => sortFiles(visibleFiles, sortBy, sortDirection),
-    [visibleFiles, sortBy, sortDirection],
-  )
+  const sorted = useMemo(() => sortFiles(visibleFiles, sortBy, sortDirection), [visibleFiles, sortBy, sortDirection])
 
   const selectedFiles = useMemo(() => sorted.filter((file) => selectedUuids.has(file.uuid)), [sorted, selectedUuids])
   const selectionActive = selectedUuids.size > 0
@@ -474,6 +491,28 @@ const FilesView: FunctionComponent<Props> = observer(({ application, className, 
                 <Icon type="folder" className="text-neutral mr-2" />
                 {t('uploadFolder')}
               </MenuItem>
+              {deviceHasCamera && (
+                <>
+                  <MenuItem
+                    onClick={() => {
+                      setUploadMenuVisible(false)
+                      setCaptureType('photo')
+                    }}
+                  >
+                    <Icon type="camera" className="text-neutral mr-2" />
+                    {t('takePhoto')}
+                  </MenuItem>
+                  <MenuItem
+                    onClick={() => {
+                      setUploadMenuVisible(false)
+                      setCaptureType('video')
+                    }}
+                  >
+                    <Icon type="camera" className="text-neutral mr-2" />
+                    {t('recordVideo')}
+                  </MenuItem>
+                </>
+              )}
             </Menu>
           </Popover>
         </div>
@@ -569,6 +608,12 @@ const FilesView: FunctionComponent<Props> = observer(({ application, className, 
       {rowMenu && (
         <ItemOptionsMenu items={[rowMenu.file]} open={true} anchorPoint={rowMenu.position} closeMenu={closeRowMenu} />
       )}
+      <ModalOverlay isOpen={captureType === 'photo'} close={() => setCaptureType(undefined)}>
+        <PhotoCaptureModal filesController={application.filesController} close={() => setCaptureType(undefined)} />
+      </ModalOverlay>
+      <ModalOverlay isOpen={captureType === 'video'} close={() => setCaptureType(undefined)}>
+        <VideoCaptureModal filesController={application.filesController} close={() => setCaptureType(undefined)} />
+      </ModalOverlay>
     </div>
   )
 })

@@ -56,6 +56,7 @@ import { AbstractViewController } from '../Abstract/AbstractViewController'
 import { Persistable } from '../Abstract/Persistable'
 import { TagListSectionType } from '@/Components/Tags/TagListSection'
 import { PaneLayout } from '../PaneController/PaneLayout'
+import { AppPaneId } from '@/Components/Panes/AppPaneMetadata'
 import { TagsCountsState } from './TagsCountsState'
 import { PaneController } from '../PaneController/PaneController'
 import { RecentActionsState } from '../../Application/Recents'
@@ -96,7 +97,6 @@ export class NavigationController
   addingSubfolderTo: SNFolder | undefined = undefined
   contextMenuFolder: SNFolder | undefined = undefined
   allNotesCount_ = 0
-  allFilesCount_ = 0
   selectedUuid: AnyTag['uuid'] | undefined = undefined
   selected_: AnyTag | undefined = undefined
   selectedLocation: TagListSectionType | undefined = undefined
@@ -171,11 +171,8 @@ export class NavigationController
       removeFolder: action,
       createNewFolderTemplate: action,
       allNotesCount_: observable,
-      allFilesCount_: observable,
       allNotesCount: computed,
-      allFilesCount: computed,
       setAllNotesCount: action,
-      setAllFilesCount: action,
 
       selected_: observable,
       selectedLocation: observable,
@@ -212,8 +209,6 @@ export class NavigationController
       setContextMenuClickLocation: action,
       contextMenuTag: observable,
       setContextMenuTag: action,
-
-      isInFilesView: computed,
 
       hydrateFromPersistedValue: action,
 
@@ -285,7 +280,6 @@ export class NavigationController
       this.items.addNoteCountChangeObserver((tagUuid) => {
         if (!tagUuid) {
           this.setAllNotesCount(this.items.allCountableNotesCount())
-          this.setAllFilesCount(this.items.allCountableFilesCount())
         } else {
           const tag = this.items.findItem<SNTag>(tagUuid)
           if (tag) {
@@ -459,10 +453,7 @@ export class NavigationController
     return this.selected instanceof SmartView && this.selected.uuid === SystemViewId.AllNotes
   }
 
-  public get isInFilesView(): boolean {
-    return this.selectedUuid === SystemViewId.Files
-  }
-
+  /** Files are managed in the Files tab; selecting this view redirects there. */
   isTagFilesView(tag: AnyTag): boolean {
     return tag.uuid === SystemViewId.Files
   }
@@ -1497,14 +1488,6 @@ export class NavigationController
     this.allNotesCount_ = allNotesCount
   }
 
-  setAllFilesCount(allFilesCount: number) {
-    this.allFilesCount_ = allFilesCount
-  }
-
-  public get allFilesCount(): number {
-    return this.allFilesCount_
-  }
-
   public get allNotesCount(): number {
     return this.allNotesCount_
   }
@@ -1532,6 +1515,20 @@ export class NavigationController
     options?: { userTriggered: boolean; scrollIntoView?: boolean },
   ) {
     const { userTriggered = false, scrollIntoView = false } = options || {}
+
+    /**
+     * Files are managed in the Files tab, not as a navigation selection. The
+     * sidebar and command-palette entries that selected the Files system view are
+     * gone, but saved state can still ask for it — a quick action or Home card
+     * configured before the merge stores the view's uuid and resolves it here.
+     * Redirecting at this single choke point covers every such route rather than
+     * leaving them to land on a files list with no folder chips or upload.
+     */
+    if (tag && this.isTagFilesView(tag)) {
+      this.paneController.openPaneTab(AppPaneId.Files)
+      return
+    }
+
     if (tag && tag.conflictOf) {
       this._changeAndSaveItem
         .execute(tag, (mutator) => {
@@ -1540,7 +1537,8 @@ export class NavigationController
         .catch(console.error)
     }
 
-    if (tag && (this.isTagFilesView(tag) || this.tagUsesTableView(tag))) {
+    // The Files view returned above, so only an explicit table-view tag reaches this.
+    if (tag && this.tagUsesTableView(tag)) {
       this.paneController.setPaneLayout(PaneLayout.TableView)
     } else if (userTriggered) {
       this.paneController.setPaneLayout(PaneLayout.ItemSelection)
@@ -1577,16 +1575,8 @@ export class NavigationController
     await this.setSelectedTag(this.homeNavigationView, 'views')
   }
 
-  public async selectFilesView() {
-    await this.setSelectedTag(this.filesNavigationView, 'views')
-  }
-
   get homeNavigationView(): SmartView {
     return this.smartViews[0]
-  }
-
-  get filesNavigationView(): SmartView {
-    return this.smartViews.find(this.isTagFilesView) as SmartView
   }
 
   private setSelectedTagInstance(tag: AnyTag | undefined): void {

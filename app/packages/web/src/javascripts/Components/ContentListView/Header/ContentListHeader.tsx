@@ -11,7 +11,6 @@ import RoundIconButton from '@/Components/Button/RoundIconButton'
 import { AnyTag } from '@/Controllers/Navigation/AnyTagType'
 import { MediaQueryBreakpoints, MutuallyExclusiveMediaQueryBreakpoints, useMediaQuery } from '@/Hooks/useMediaQuery'
 import AddItemMenuButton from './AddItemMenuButton'
-import { FilesController } from '@/Controllers/FilesController'
 import SearchButton from './SearchButton'
 import { ItemListController } from '@/Controllers/ItemList/ItemListController'
 import { PaneController } from '@/Controllers/PaneController/PaneController'
@@ -36,12 +35,9 @@ type Props = {
   icon?: VectorIconNameOrEmoji
   addButtonLabel: string
   addNewItem: () => void
-  uploadFolder?: () => void
-  isFilesSmartView: boolean
   isTableViewEnabled: boolean
   optionsSubtitle?: string
   selectedTag: AnyTag
-  filesController: FilesController
   itemListController: ItemListController
   paneController: PaneController
 }
@@ -52,12 +48,9 @@ const ContentListHeader = ({
   icon,
   addButtonLabel,
   addNewItem,
-  uploadFolder,
-  isFilesSmartView,
   isTableViewEnabled,
   optionsSubtitle,
   selectedTag,
-  filesController,
   itemListController,
   paneController,
 }: Props) => {
@@ -153,30 +146,16 @@ const ContentListHeader = ({
             className="py-2"
             title={t('displayOptions')}
           >
-            <DisplayOptionsMenu
-              application={application}
-              isFilesSmartView={isFilesSmartView}
-              selectedTag={selectedTag}
-              paneController={paneController}
-            />
+            <DisplayOptionsMenu application={application} selectedTag={selectedTag} paneController={paneController} />
           </Popover>
         </div>
       </div>
     )
-  }, [showDisplayOptionsMenu, toggleDisplayOptionsMenu, application, isFilesSmartView, selectedTag, paneController, t])
+  }, [showDisplayOptionsMenu, toggleDisplayOptionsMenu, application, selectedTag, paneController, t])
 
   const AddButton = useMemo(() => {
-    return (
-      <AddItemMenuButton
-        isInFilesSmartView={isFilesSmartView}
-        isDailyEntry={isDailyEntry}
-        addButtonLabel={addButtonLabel}
-        addNewItem={addNewItem}
-        uploadFolder={uploadFolder}
-        filesController={filesController}
-      />
-    )
-  }, [addButtonLabel, addNewItem, uploadFolder, filesController, isDailyEntry, isFilesSmartView])
+    return <AddItemMenuButton isDailyEntry={isDailyEntry} addButtonLabel={addButtonLabel} addNewItem={addNewItem} />
+  }, [addButtonLabel, addNewItem, isDailyEntry])
 
   const SearchBarButton = useMemo(() => {
     if (!isTableViewEnabled || isMobileScreen) {

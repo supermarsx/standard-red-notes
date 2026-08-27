@@ -1,56 +1,22 @@
-import PhotoCaptureModal from '@/Components/CameraCaptureModal/PhotoCaptureModal'
-import VideoCaptureModal from '@/Components/CameraCaptureModal/VideoCaptureModal'
 import Icon from '@/Components/Icon/Icon'
-import Menu from '@/Components/Menu/Menu'
-import MenuItem from '@/Components/Menu/MenuItem'
-import Popover from '@/Components/Popover/Popover'
-import ModalOverlay from '@/Components/Modal/ModalOverlay'
-import { FilesController } from '@/Controllers/FilesController'
-import { PhotoRecorder } from '@/Controllers/Moments/PhotoRecorder'
 import { classNames } from '@standardnotes/snjs'
-import { useEffect, useRef, useState } from 'react'
-import { useTranslation } from 'react-i18next'
+import { useRef } from 'react'
 import StyledTooltip from '@/Components/StyledTooltip/StyledTooltip'
 
 type Props = {
   isDailyEntry: boolean
-  isInFilesSmartView: boolean
   addButtonLabel: string
   addNewItem: () => void
-  uploadFolder?: () => void
-  filesController: FilesController
 }
 
-const AddItemMenuButton = ({
-  filesController,
-  isDailyEntry,
-  addButtonLabel,
-  isInFilesSmartView,
-  addNewItem,
-  uploadFolder,
-}: Props) => {
-  const { t } = useTranslation('notes')
+/**
+ * The notes list's add button. It used to grow a menu (folder upload, camera
+ * capture) when the Files smart view was selected; that view is gone and those
+ * actions live in the Files tab's Upload menu, so this is only ever the plain
+ * primary add action now.
+ */
+const AddItemMenuButton = ({ isDailyEntry, addButtonLabel, addNewItem }: Props) => {
   const addItemButtonRef = useRef<HTMLButtonElement>(null)
-
-  const [isMenuOpen, setIsMenuOpen] = useState(false)
-  const [deviceHasCamera, setDeviceHasCamera] = useState(false)
-  const [captureType, setCaptureType] = useState<'photo' | 'video'>()
-
-  useEffect(() => {
-    const setCameraSupport = async () => {
-      setDeviceHasCamera(await PhotoRecorder.isSupported())
-    }
-
-    void setCameraSupport()
-  }, [])
-
-  // In the Files view we always offer a menu (folder upload, and camera capture
-  // when available); elsewhere the button just runs the primary add action.
-  const canShowMenu = isInFilesSmartView
-
-  const closeCaptureModal = () => {
-    setCaptureType(undefined)
-  }
 
   return (
     <>
@@ -61,82 +27,12 @@ const AddItemMenuButton = ({
             isDailyEntry ? 'bg-danger text-danger-contrast' : 'bg-info text-info-contrast',
           )}
           aria-label={addButtonLabel}
-          onClick={() => {
-            if (canShowMenu) {
-              setIsMenuOpen((isOpen) => !isOpen)
-            } else {
-              addNewItem()
-            }
-          }}
+          onClick={addNewItem}
           ref={addItemButtonRef}
         >
           <Icon type="add" size="custom" className="h-5 w-5" />
         </button>
       </StyledTooltip>
-      {canShowMenu && (
-        <Popover
-          title={t('addItem')}
-          open={isMenuOpen}
-          anchorElement={addItemButtonRef}
-          togglePopover={() => {
-            setIsMenuOpen((isOpen) => !isOpen)
-          }}
-          side="bottom"
-          align="center"
-          className="py-2"
-        >
-          <Menu a11yLabel={'test'}>
-            <MenuItem
-              onClick={() => {
-                addNewItem()
-                setIsMenuOpen(false)
-              }}
-            >
-              <Icon type="add" className="mr-2" />
-              {addButtonLabel}
-            </MenuItem>
-            {uploadFolder && (
-              <MenuItem
-                onClick={() => {
-                  uploadFolder()
-                  setIsMenuOpen(false)
-                }}
-              >
-                <Icon type="folder" className="mr-2" />
-                {t('uploadFolder')}
-              </MenuItem>
-            )}
-            {deviceHasCamera && (
-              <>
-                <MenuItem
-                  onClick={async () => {
-                    setCaptureType('photo')
-                    setIsMenuOpen(false)
-                  }}
-                >
-                  <Icon type="camera" className="mr-2" />
-                  {t('takePhoto')}
-                </MenuItem>
-                <MenuItem
-                  onClick={async () => {
-                    setCaptureType('video')
-                    setIsMenuOpen(false)
-                  }}
-                >
-                  <Icon type="camera" className="mr-2" />
-                  {t('recordVideo')}
-                </MenuItem>
-              </>
-            )}
-          </Menu>
-        </Popover>
-      )}
-      <ModalOverlay isOpen={captureType === 'photo'} close={closeCaptureModal}>
-        <PhotoCaptureModal filesController={filesController} close={closeCaptureModal} />
-      </ModalOverlay>
-      <ModalOverlay isOpen={captureType === 'video'} close={closeCaptureModal}>
-        <VideoCaptureModal filesController={filesController} close={closeCaptureModal} />
-      </ModalOverlay>
     </>
   )
 }

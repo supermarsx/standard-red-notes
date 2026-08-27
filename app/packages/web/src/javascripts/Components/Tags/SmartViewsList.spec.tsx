@@ -47,7 +47,6 @@ describe('SmartViewsList — the Files system view is not a sidebar entry', () =
       selected: undefined,
       editingTag: undefined,
       allNotesCount: 12,
-      allFilesCount: 7,
       setSelectedTag: jest.fn(async () => undefined),
       save: jest.fn(async () => undefined),
       remove: jest.fn(async () => undefined),
@@ -102,12 +101,10 @@ describe('SmartViewsList — the Files system view is not a sidebar entry', () =
     expect(container.querySelector(`#react-tag-${SystemViewId.Files}`)).toBeNull()
   })
 
-  it('does not render the Files count that the row used to display', async () => {
+  it('still renders the All notes count beside the surviving rows', async () => {
     await renderList([ALL_NOTES, FILES])
 
-    // allFilesCount is 7 and allNotesCount is 12; only the notes count should survive.
     expect(container.textContent).toContain('12')
-    expect(container.textContent).not.toContain('7')
   })
 
   it('treats a Files-only list as empty while searching rather than rendering a blank section', async () => {

@@ -156,7 +156,6 @@ const SmartViewsListItem: FunctionComponent<Props> = ({ view, tagsState, setEdit
         )}
         <div className={'count text-base lg:text-sm'}>
           {view.uuid === SystemViewId.AllNotes && tagsState.allNotesCount}
-          {view.uuid === SystemViewId.Files && tagsState.allFilesCount}
           {view.uuid === SystemViewId.Conflicts && conflictsCount}
         </div>
       </div>

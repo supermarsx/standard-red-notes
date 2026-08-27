@@ -6,9 +6,7 @@ import {
   FileItem,
   SortableItem,
   CollectionSort,
-  PrefKey,
   FileBackupRecord,
-  SystemViewId,
   DecryptedItemInterface,
   SNNote,
   TagMutator,
@@ -224,24 +222,9 @@ const ContentTableView = ({ application, items }: Props) => {
         return
       }
 
-      if (selectedTag.uuid === SystemViewId.Files) {
-        const systemViewPreferences = application.getPreference(PrefKey.SystemViewPreferences) || {}
-        const filesViewPreferences = systemViewPreferences[SystemViewId.Files] || {}
-
-        await application.setPreference(PrefKey.SystemViewPreferences, {
-          ...systemViewPreferences,
-          [SystemViewId.Files]: {
-            ...filesViewPreferences,
-            sortBy,
-            sortReverse: sortReversed,
-          },
-        })
-
-        return
-      }
-
-      const isNonFilesSystemView = isSmartView(selectedTag) && isSystemView(selectedTag)
-      if (isNonFilesSystemView) {
+      // The Files system view is no longer selectable here — its sort preference is
+      // owned by the Files tab (see FilesView/filesViewSortPreference).
+      if (isSmartView(selectedTag) && isSystemView(selectedTag)) {
         return
       }
 

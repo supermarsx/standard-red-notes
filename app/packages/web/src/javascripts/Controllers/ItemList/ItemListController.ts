@@ -1620,10 +1620,10 @@ export class ItemListController
       this.deselectItem(activeItem)
 
       if (this.shouldSelectFirstItem(itemsReloadSource)) {
-        // The Files smart view always renders as a table (never a single-selection
-        // list), so — like an explicit table view — it must NOT auto-advance to the
-        // next item when the active item closes (e.g. when a view tab takes focus).
-        if ((this.isTableViewEnabled || this.navigationController.isInFilesView) && !isMobileScreen()) {
+        // A table view is not a single-selection list, so it must NOT auto-advance
+        // to the next item when the active item closes (e.g. when a view tab takes
+        // focus).
+        if (this.isTableViewEnabled && !isMobileScreen()) {
           return
         }
 
