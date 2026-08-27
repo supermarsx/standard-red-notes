@@ -14,6 +14,8 @@ let mockRowMenuProps: { items: unknown[]; closeMenu: () => void; anchorPoint: { 
 jest.mock('mobx-react-lite', () => ({ observer: (component: unknown) => component }))
 jest.mock('@standardnotes/filepicker', () => ({ formatSizeToReadableString: (size: number) => `${size} bytes` }))
 jest.mock('@/Components/Icon/Icon', () => () => null)
+// Reads the app from context; these cases render FilesView without a provider.
+jest.mock('@/Components/ContentListView/ListItemVaultInfo', () => ({ __esModule: true, default: () => null }))
 jest.mock('@/Components/FilePreview/getFileIconComponent', () => ({ getFileIconComponent: () => null }))
 jest.mock('@/Utils/Items/Icons/getIconForFileType', () => ({ getIconForFileType: () => 'file' }))
 jest.mock('@/Components/ContentTableView/ContentTableView', () => ({
@@ -126,6 +128,11 @@ const createApplication = (file: ReturnType<typeof createFile>) =>
     },
     entitledToFiles: true,
     showPremiumModal: jest.fn(),
+    // No stored sort preference and no local backup service in these cases, so
+    // the table renders from the controller defaults exactly as before.
+    getPreference: () => undefined,
+    setPreference: jest.fn(async () => undefined),
+    fileBackups: undefined,
   }) as never
 
 let container: HTMLElement

@@ -142,6 +142,9 @@ const createApplication = (files: TestFile[], initialFilter = 'all') => {
     },
     entitledToFiles: true,
     showPremiumModal: jest.fn(),
+    getPreference: () => undefined,
+    setPreference: jest.fn(async () => undefined),
+    fileBackups: undefined,
   }
 }
 

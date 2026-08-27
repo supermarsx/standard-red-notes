@@ -32,6 +32,9 @@ import EmptyFilesView from '@/Components/ContentListView/EmptyFilesView'
 import { selectDirectoryFiles } from '@/Utils/DirectoryPicker'
 import { uploadFilesWithFolderStructure } from '@/Utils/FolderUpload'
 import MenuItem from '@/Components/Menu/MenuItem'
+import ListItemVaultInfo from '@/Components/ContentListView/ListItemVaultInfo'
+import { readPersistedFilesSort, writePersistedFilesSort } from './filesViewSortPreference'
+import { fileMatchesQuery } from './filesViewSearch'
 
 type Props = {
   application: WebApplication
@@ -41,11 +44,39 @@ type Props = {
 
 const FileNameCell: FunctionComponent<{
   file: FileItem
+  application: WebApplication
   onPreview: (file: FileItem) => void
-}> = ({ file, onPreview }) => {
+}> = ({ file, application, onPreview }) => {
+  // Parity with ContentTableView's name cell: the smart view showed whether a
+  // file is backed up locally, protected, or in a vault, and losing those on the
+  // merged surface would be a silent downgrade of what the row tells you.
+  const [isBackedUp, setIsBackedUp] = useState(false)
+
+  useEffect(() => {
+    let active = true
+    void application.fileBackups?.getFileBackupInfo(file).then((info) => {
+      if (active) {
+        setIsBackedUp(Boolean(info))
+      }
+    })
+    return () => {
+      active = false
+    }
+  }, [application, file])
+
   return (
     <div className="flex min-w-0 items-center gap-3 whitespace-normal">
-      {getFileIconComponent(getIconForFileType(file.mimeType), 'w-6 h-6 flex-shrink-0')}
+      <span className="relative flex-shrink-0">
+        {getFileIconComponent(getIconForFileType(file.mimeType), 'w-6 h-6 flex-shrink-0')}
+        {isBackedUp && (
+          <span
+            className="bg-default text-success absolute right-1 bottom-1 translate-x-1/2 translate-y-1/2 rounded-full"
+            title="File is backed up locally"
+          >
+            <Icon size="small" type="check-circle-filled" />
+          </span>
+        )}
+      </span>
       <button
         type="button"
         title={`Preview ${file.name}`}
@@ -61,6 +92,12 @@ const FileNameCell: FunctionComponent<{
           {file.name}
         </span>
       </button>
+      <ListItemVaultInfo item={file} />
+      {file.protected && (
+        <span className="flex items-center" title="File is protected">
+          <Icon ariaLabel="File is protected" type="lock-filled" className="text-passive-1 h-3.5 w-3.5" size="custom" />
+        </span>
+      )}
     </div>
   )
 }
@@ -79,6 +116,7 @@ const FilesView: FunctionComponent<Props> = observer(({ application, className, 
   const [files, setFiles] = useState<FileItem[]>(() => application.items.getDisplayableFiles())
   const [bulkMenuVisible, setBulkMenuVisible] = useState(false)
   const [uploadMenuVisible, setUploadMenuVisible] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
   const [rowMenu, setRowMenu] = useState<{
     file: FileItem
     position: { x: number; y: number }
@@ -100,6 +138,29 @@ const FilesView: FunctionComponent<Props> = observer(({ application, className, 
     })
   }, [application])
 
+  /**
+   * Adopt the sort the Files smart view persisted, once per mount. Without this
+   * the saved preference would be stranded by the consolidation and every user's
+   * chosen sort would silently reset to the tab's in-memory default.
+   */
+  const hydratedSortRef = useRef(false)
+  useEffect(() => {
+    if (hydratedSortRef.current) {
+      return
+    }
+    hydratedSortRef.current = true
+
+    const persisted = readPersistedFilesSort(application)
+    if (!persisted) {
+      return
+    }
+
+    itemListController.setFilesViewSortBy(persisted.sortBy)
+    if (itemListController.filesViewSortDirection !== persisted.sortDirection) {
+      itemListController.toggleFilesViewSortDirection()
+    }
+  }, [application, itemListController])
+
   const folderFilter = itemListController.filesFolderFilter
   const { navigationController } = application
 
@@ -109,10 +170,10 @@ const FilesView: FunctionComponent<Props> = observer(({ application, className, 
    * list rather than `files`, so a selection can never span files the user
    * cannot currently see and a bulk delete can only ever hit visible rows.
    */
-  const visibleFiles = useMemo(
-    () => filterItemsByFolder(files, folderFilter, navigationController) as FileItem[],
-    [files, folderFilter, navigationController, navigationController.folders],
-  )
+  const visibleFiles = useMemo(() => {
+    const inFolder = filterItemsByFolder(files, folderFilter, navigationController) as FileItem[]
+    return searchQuery.trim() ? inFolder.filter((file) => fileMatchesQuery(file, searchQuery)) : inFolder
+  }, [files, folderFilter, navigationController, navigationController.folders, searchQuery])
 
   // Drop any selection entries whose file no longer exists OR is filtered out.
   useEffect(() => {
@@ -206,7 +267,26 @@ const FilesView: FunctionComponent<Props> = observer(({ application, className, 
     }
   }, [addDragTarget, removeDragTarget])
 
-  const toggleSortDirection = () => itemListController.toggleFilesViewSortDirection()
+  /**
+   * The single place sort changes are applied, so every entry point — the sort
+   * select, the direction button and the table headers — persists identically.
+   * Writing on change rather than from an effect avoids racing the hydration
+   * above, which would otherwise save the default over the stored preference.
+   */
+  const applySort = useCallback(
+    (nextSortBy: FilesSortBy, nextDirection: 'asc' | 'dsc') => {
+      itemListController.setFilesViewSortBy(nextSortBy)
+      if (itemListController.filesViewSortDirection !== nextDirection) {
+        itemListController.toggleFilesViewSortDirection()
+      }
+      void writePersistedFilesSort(application, { sortBy: nextSortBy, sortDirection: nextDirection }).catch(
+        console.error,
+      )
+    },
+    [application, itemListController],
+  )
+
+  const toggleSortDirection = () => applySort(sortBy, sortDirection === 'asc' ? 'dsc' : 'asc')
 
   const selectedRowIds = useMemo(() => Array.from(selectedUuids), [selectedUuids])
   const onRowSelectionChange = useCallback(
@@ -227,13 +307,9 @@ const FilesView: FunctionComponent<Props> = observer(({ application, className, 
         return
       }
 
-      itemListController.setFilesViewSortBy(nextSortBy)
-      const nextDirection = reversed ? 'dsc' : 'asc'
-      if (sortDirection !== nextDirection) {
-        itemListController.toggleFilesViewSortDirection()
-      }
+      applySort(nextSortBy, reversed ? 'dsc' : 'asc')
     },
-    [itemListController, sortDirection],
+    [applySort],
   )
 
   const columnDefs: TableColumn<FileItem>[] = useMemo(
@@ -241,7 +317,7 @@ const FilesView: FunctionComponent<Props> = observer(({ application, className, 
       {
         name: 'Name',
         sortBy: 'title',
-        cell: (file) => <FileNameCell file={file} onPreview={openFile} />,
+        cell: (file) => <FileNameCell file={file} application={application} onPreview={openFile} />,
       },
       {
         name: 'Description',
@@ -332,12 +408,20 @@ const FilesView: FunctionComponent<Props> = observer(({ application, className, 
         {sorted.length > 0 && <span className="text-passive-1 text-sm">{sorted.length}</span>}
 
         <div className="ml-auto flex items-center gap-2">
+          <input
+            type="search"
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            placeholder="Search files"
+            aria-label="Search files"
+            className="border-border bg-default text-text w-40 rounded border px-2 py-1 text-sm lg:w-56"
+          />
           <label className="text-passive-1 flex items-center gap-1 text-xs">
             Sort
             <select
               className="border-border bg-default text-text rounded border px-2 py-1 text-xs"
               value={sortBy}
-              onChange={(event) => itemListController.setFilesViewSortBy(event.target.value as FilesSortBy)}
+              onChange={(event) => applySort(event.target.value as FilesSortBy, sortDirection)}
             >
               <option value="name">Name</option>
               <option value="size">Size</option>
@@ -445,7 +529,20 @@ const FilesView: FunctionComponent<Props> = observer(({ application, className, 
 
       <div className="min-h-0 flex-grow overflow-hidden">
         {sorted.length === 0 ? (
-          folderFilter === FilesFolderFilterAll ? (
+          searchQuery.trim() ? (
+            // A search with no hits is not an empty account or an empty folder;
+            // showing "upload your first file" here would be actively misleading.
+            <div className="text-passive-1 flex h-full flex-col items-center justify-center p-4 text-center">
+              <div className="text-sm">No files match “{searchQuery.trim()}”.</div>
+              <button
+                className="border-border hover:bg-contrast mt-4 flex items-center gap-1 rounded border px-3 py-1.5 text-sm"
+                onClick={() => setSearchQuery('')}
+              >
+                <Icon type="close" size="medium" />
+                Clear search
+              </button>
+            </div>
+          ) : folderFilter === FilesFolderFilterAll ? (
             // The account genuinely has no files. EmptyFilesView is the shared
             // illustrated state whose artwork follows the theme (db27cca2).
             <EmptyFilesView addNewItem={uploadNewFiles} />

@@ -125,6 +125,11 @@ const createApplication = (files: TestFile[], filesController: Record<string, un
     },
     entitledToFiles: true,
     showPremiumModal: jest.fn(),
+    // No stored sort preference and no local backup service in these cases, so
+    // the bulk behaviour under test is unaffected by either.
+    getPreference: () => undefined,
+    setPreference: jest.fn(async () => undefined),
+    fileBackups: undefined,
   }
 }
 
