@@ -14,6 +14,7 @@ export * from './Service/Sync/SyncWebSocketPreconditions'
 // Standard Red Notes: home-server records the same gate verdict here, so the
 // admin Diagnostics panel works on a single-container deployment too.
 export * from './Service/Sync/SyncGateDiagnostics'
+export * from './Service/Diagnostics/DeploymentDiagnostics'
 export * from './Service/Sync/SyncWebSocketCommandAdapter'
 export * from './Service/Sync/CollaborationAuthorizationService'
 export * from './Service/Sync/LoopbackSyncApiRpcAdapter'

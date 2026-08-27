@@ -46,6 +46,7 @@ import {
 import { SYNC_PROTOCOL_VERSION } from '@standard-red-notes/websocket-gateway'
 import { syncWebSocketAccessService } from '../../Service/Sync/SyncWebSocketAccessService'
 import { SYNC_SERVER_OPERATIONS, syncGateDiagnostics } from '../../Service/Sync/SyncGateDiagnostics'
+import { deploymentDiagnostics } from '../../Service/Diagnostics/DeploymentDiagnostics'
 
 const ADMIN_USER_USAGE_HISTORY_LIMIT = 100
 
@@ -921,6 +922,12 @@ export class AdminController extends BaseHttpController {
     response.json({
       capturedAt: new Date().toISOString(),
       gate: syncGateDiagnostics.report(),
+      // Standard Red Notes: topology + configuration PRESENCE. The gate says
+      // which precondition is unmet; this says what the operator can actually do
+      // about it, because the right action differs per topology and the panel
+      // must not recommend a variable this deployment never reads. Same secrecy
+      // contract as the gate: booleans and closed enums only.
+      deployment: deploymentDiagnostics.report(),
       live: {
         capabilities,
         unavailabilityReasons,

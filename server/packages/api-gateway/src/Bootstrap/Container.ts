@@ -18,6 +18,11 @@ import { RedisCrossServiceTokenCache } from '../Infra/Redis/RedisCrossServiceTok
 import { WebSocketAuthMiddleware } from '../Controller/WebSocketAuthMiddleware'
 import { InMemoryCrossServiceTokenCache } from '../Infra/InMemory/InMemoryCrossServiceTokenCache'
 import { DirectCallServiceProxy } from '../Service/DirectCall/DirectCallServiceProxy'
+import {
+  deploymentDiagnostics,
+  observeDeployment,
+  type BoundServiceProxy,
+} from '../Service/Diagnostics/DeploymentDiagnostics'
 import { createSafeLogFormat } from '../Service/Logging/SafeLog'
 import {
   MapperInterface,
@@ -1035,10 +1040,20 @@ export class ContainerConfigLoader {
       .bind<EndpointResolverInterface>(TYPES.ApiGateway_EndpointResolver)
       .toConstantValue(new EndpointResolver(isConfiguredForHomeServer))
 
+    // Standard Red Notes: recorded, not re-derived. The admin Diagnostics panel
+    // must know WHICH proxy branch actually ran, because the remedy for an
+    // unbound durable backend is different in each of them (see
+    // Service/Diagnostics/DeploymentDiagnostics.ts). A second copy of these
+    // conditions elsewhere would eventually disagree with the branch taken here,
+    // and the panel would confidently recommend an environment variable that is
+    // never read.
+    let boundServiceProxy: BoundServiceProxy
+
     if (isConfiguredForHomeServer) {
       if (!configuration?.serviceContainer) {
         throw new Error('Service container is required when configured for home server')
       }
+      boundServiceProxy = 'direct-call'
       container
         .bind<ServiceProxyInterface>(TYPES.ApiGateway_ServiceProxy)
         .toConstantValue(
@@ -1046,6 +1061,7 @@ export class ContainerConfigLoader {
         )
     } else {
       if (isConfiguredForGRPCProxy) {
+        boundServiceProxy = 'grpc'
         container.bind(TYPES.ApiGateway_AUTH_SERVER_GRPC_URL).toConstantValue(env.get('AUTH_SERVER_GRPC_URL'))
         container.bind(TYPES.ApiGateway_SYNCING_SERVER_GRPC_URL).toConstantValue(env.get('SYNCING_SERVER_GRPC_URL'))
         const grpcAgentKeepAliveTimeout = env.get('GRPC_AGENT_KEEP_ALIVE_TIMEOUT', true)
@@ -1132,6 +1148,7 @@ export class ContainerConfigLoader {
             ),
           )
       } else {
+        boundServiceProxy = 'http'
         container.bind<ServiceProxyInterface>(TYPES.ApiGateway_ServiceProxy).to(HttpServiceProxy)
       }
     }
@@ -1149,6 +1166,21 @@ export class ContainerConfigLoader {
     } else {
       container.bind<WebSocketAuthMiddleware>(TYPES.ApiGateway_WebSocketAuthMiddleware).to(WebSocketAuthMiddleware)
     }
+
+    // Standard Red Notes: presence and topology for the admin Diagnostics panel.
+    // Recorded HERE rather than in either boot file because both of them route
+    // through this loader — the bundled home-server hands its environment
+    // OVERRIDES in through `configuration.environmentOverrides`, and those
+    // overrides (MODE=home-server, CACHE_TYPE=memory) never reach `process.env`.
+    // Reading them from this same `env` instance is what makes the panel's
+    // topology-conditional remedies true on the bundled deployment too.
+    deploymentDiagnostics.record(
+      observeDeployment((key) => env.get(key, true), {
+        boundServiceProxy,
+        grpcSyncingProxyBound: container.isBound(TYPES.ApiGateway_GRPCSyncingServerServiceProxy),
+        redisBound: container.isBound(TYPES.ApiGateway_Redis),
+      }),
+    )
 
     logger.debug('Configuration complete')
 

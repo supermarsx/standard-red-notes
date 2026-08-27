@@ -5,10 +5,45 @@ import {
   describeDeployment,
   describeTransport,
   diagnose,
+  sanitizeServerCopy,
   summarizeTestRun,
   type SyncDiagnosticsPayload,
   type TransportStatusInput,
 } from './syncDiagnostics'
+
+/**
+ * The redactor is the second line behind the server's presence-only contract. It
+ * is tested from both directions, because over-redaction is a real cost too: it
+ * would quietly mangle the variable names and version tokens that are the whole
+ * point of the panel.
+ */
+describe('sanitizeServerCopy', () => {
+  it.each([
+    ['redis://admin:hunter2@redis.internal.example:6379', 'a connection URL with credentials'],
+    ['https://notes.internal.example/v1/sockets', 'an https URL'],
+    ['syncing.internal.example:50051', 'a host and port'],
+    ['files.internal:3104', 'a two-label host with a port'],
+    ['10.4.2.9', 'a bare IPv4 address'],
+    ['10.4.2.9:6379', 'an IPv4 address with a port'],
+  ])('redacts %s (%s)', (value) => {
+    const output = sanitizeServerCopy(`the backend at ${value} refused`)
+
+    expect(output).not.toContain(value)
+    expect(output).toContain('[address withheld]')
+  })
+
+  it.each([
+    'set SYNCING_SERVER_GRPC_URL so realtime commands have a durable backend',
+    'WEBSOCKET_SYNC_ENABLED is set to the exact string "false"',
+    'running revision 4f0e788e2b1c9d0a5e6f7a8b9c0d1e2f3a4b5c6d',
+    'version src-4f0e788e2b1c',
+    'version 1.2.3',
+    'REDIS_URL (or REDIS_HOST/REDIS_PORT)',
+    'e.g. the port is 6379',
+  ])('leaves ordinary diagnostic copy alone: %s', (copy) => {
+    expect(sanitizeServerCopy(copy)).toBe(copy)
+  })
+})
 
 /**
  * The wording of a diagnosis is the product here, so it is tested directly.
@@ -306,8 +341,8 @@ describe('sync diagnostics model', () => {
     expect(summarizeTestRun([])).toContain('No tests')
     expect(
       summarizeTestRun([
-        { name: 'a', passed: true, detail: '' },
-        { name: 'b', passed: false, detail: '' },
+        { name: 'a', passed: true, detail: '', reportDetail: '' },
+        { name: 'b', passed: false, detail: '', reportDetail: '' },
       ]),
     ).toBe('1 of 2 checks passed.')
   })

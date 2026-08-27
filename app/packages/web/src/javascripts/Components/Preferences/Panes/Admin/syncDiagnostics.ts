@@ -1,4 +1,5 @@
 import type { SyncNegotiatedOperation, SyncTransportState } from '@/Services/SyncTransport/syncTransportProtocol'
+import type { DeploymentTopology } from './diagnosticRemedies'
 
 /**
  * Standard Red Notes: the model behind the admin Diagnostics tab.
@@ -80,10 +81,25 @@ export type EverySyncOperationIsClassified = AssertNever<UnclassifiedSyncOperati
 /** Shape of GET /v1/admin/sync-diagnostics. Every field is presence, never value. */
 export type SyncDiagnosticsPayload = {
   capturedAt?: string
+  /**
+   * Topology and configuration presence. Absent on a server build older than
+   * this block — which is why every consumer treats `recorded !== true` as
+   * "make no topology-conditional claim", rather than as a set of falses.
+   */
+  deployment?: DeploymentTopology
   gate?: {
     recorded?: boolean
     gatewayAttached?: boolean
     syncLaneEnabled?: boolean
+    /**
+     * Whether SYNC_ITEMS is offered on that lane. Independent of
+     * `syncLaneEnabled` since the boot gate was split: the socket can be up and
+     * serving collaboration, API RPC, invite events and files while SYNC_ITEMS
+     * is withheld for want of a durable command port, with items syncing over
+     * HTTP. Absent on a server build older than that split, which is why every
+     * read of it distinguishes `false` from `undefined`.
+     */
+    syncItemsAdvertised?: boolean
     unmetPreconditions?: { code?: string; remedy?: string }[]
     unmetCodes?: string[]
     files?: { advertised?: boolean; unmetCondition?: string | null; remedy?: string | null }
@@ -94,6 +110,43 @@ export type SyncDiagnosticsPayload = {
     ticketAvailable?: boolean
   }
   protocol?: { version?: number; serverOperations?: string[] }
+}
+
+/**
+ * Redact address- and credential-shaped text from copy the SERVER supplied.
+ *
+ * The real guarantee is server-side: every remedy string in the payload is a
+ * frozen compile-time constant, and the recorder that builds the payload accepts
+ * only booleans and literal keys, so there is no field a value can travel in.
+ * This is the second line, and it exists because of what the panel is FOR — an
+ * operator reads it during an incident and pastes it into an issue, so the cost
+ * of one future server change interpolating a resolved URL into a remedy is out
+ * of all proportion to the cost of this function.
+ *
+ * It cannot catch an opaque secret with no structure, and does not pretend to.
+ * It catches the shapes that actually leak from this codebase: connection URLs,
+ * internal hostnames, host:port pairs and bare addresses — the things a thrown
+ * error or an interpolated config value looks like.
+ *
+ * Applied ONLY to strings that came off the wire. Copy that this build owns is
+ * never passed through it, because a redaction there would be a bug, not a save.
+ */
+export function sanitizeServerCopy(text: string): string {
+  return (
+    text
+      // scheme://anything, which also takes any embedded user:password@ with it
+      .replace(/\b[a-z][a-z0-9+.-]*:\/\/\S+/gi, '[address withheld]')
+      // dotted quad, with or without a port
+      .replace(/\b\d{1,3}(?:\.\d{1,3}){3}(?::\d{1,5})?\b/g, '[address withheld]')
+      // a hostname of three or more labels ending in an alphabetic TLD. Requiring
+      // the final label to be alphabetic is what keeps a version like "1.2.3"
+      // intact, and requiring three labels keeps "e.g." and sentence punctuation
+      // intact.
+      .replace(/\b[a-z0-9][\w-]*(?:\.[\w-]+)+\.[a-z]{2,}(?::\d{1,5})?\b/gi, '[address withheld]')
+      // a two-label host WITH a port — "files.internal:3104". Without the port
+      // this shape is indistinguishable from ordinary prose, so it is left alone.
+      .replace(/\b[a-z][\w-]*\.[a-z]{2,}:\d{1,5}\b/gi, '[address withheld]')
+  )
 }
 
 export type TransportStatusInput = {
@@ -256,7 +309,10 @@ export function buildCapabilityRows(
     }
 
     return {
-      operation,
+      // The operation name is a closed protocol token in a correct server, and
+      // this row is printed into the copyable report, so it is redacted like any
+      // other string that arrived over the wire.
+      operation: sanitizeServerCopy(operation),
       serverSupported: onServer,
       clientImplemented: onClient,
       negotiated: isNegotiated,
@@ -328,26 +384,41 @@ export function diagnose(
     })
   }
 
+  // Every string below arrives from the server, so every one of them goes through
+  // the redactor on the way in. Codes and reasons are closed enums in a correct
+  // server, but "in a correct server" is exactly the assumption a leak breaks.
   const unmet = gate.unmetPreconditions ?? []
   for (const precondition of unmet) {
     findings.push({
-      title: precondition.code ?? 'Unknown unmet condition',
-      detail: precondition.remedy ?? 'No remedy was reported for this condition.',
+      title: sanitizeServerCopy(precondition.code ?? 'Unknown unmet condition'),
+      detail: sanitizeServerCopy(precondition.remedy ?? 'No remedy was reported for this condition.'),
     })
   }
 
-  // Live refusals only add information when the gate itself is satisfied;
-  // otherwise they merely restate it.
-  if (unmet.length === 0) {
+  // Live refusals only add information when the LANE itself came up; otherwise
+  // they merely restate the gate. Keyed on the lane rather than on "no unmet
+  // conditions at all", because since the gate was split an unmet
+  // SYNCING_SERVER_GRPC_UNBOUND no longer stops the lane — suppressing live
+  // reasons on its account would hide a real, independent refusal.
+  // A server that predates the split reports no `syncLaneEnabled`, and on that
+  // build ANY unmet condition did take the lane down — so the old rule is the
+  // correct reading of an old payload, and the new field is the correct reading
+  // of a new one. Treating a missing field as "up" would make an old server's
+  // gate failure print its live reason twice.
+  const laneDown = gate.syncLaneEnabled === false || (gate.syncLaneEnabled === undefined && unmet.length > 0)
+  if (!laneDown) {
     for (const reason of live.unavailabilityReasons ?? []) {
-      findings.push({ title: reason, detail: LIVE_REASON_COPY[reason] ?? 'The gateway reported this refusal reason.' })
+      findings.push({
+        title: sanitizeServerCopy(reason),
+        detail: LIVE_REASON_COPY[reason] ?? 'The gateway reported this refusal reason.',
+      })
     }
   }
 
   if (gate.files?.advertised === false && gate.files.unmetCondition) {
     findings.push({
-      title: `FILES_V1 not advertised (${gate.files.unmetCondition})`,
-      detail: gate.files.remedy ?? 'The realtime file transport was waived at boot.',
+      title: `FILES_V1 not advertised (${sanitizeServerCopy(gate.files.unmetCondition)})`,
+      detail: sanitizeServerCopy(gate.files.remedy ?? 'The realtime file transport was waived at boot.'),
     })
   }
 
@@ -387,7 +458,23 @@ export function diagnose(
   }
 
   const socketDown = transport === undefined || transport.state === 'HTTP_ONLY' || transport.state === 'HTTP_FALLBACK'
-  const blocking = unmet.length > 0 || live.ticketAvailable === false
+  // "Blocking" means the LANE cannot come up — not merely that some condition is
+  // unmet. Since the boot gate was split, an unmet durable-backend condition
+  // withholds SYNC_ITEMS while the socket still carries collaboration, API RPC,
+  // invite events and files. Calling that "unavailable" would be the panel's
+  // worst possible error: it would send an operator chasing a dead lane that is
+  // in fact up, and it would hide the one operation that really is missing.
+  const blocking = laneDown || live.ticketAvailable === false
+  const itemsWithheld = !blocking && gate.syncItemsAdvertised === false
+
+  if (itemsWithheld) {
+    return {
+      headline:
+        'The realtime lane is up, but SYNC_ITEMS is not advertised — note syncing is on HTTP while everything else uses the socket.',
+      tone: 'warn',
+      findings,
+    }
+  }
 
   return {
     headline: blocking
@@ -420,8 +507,12 @@ export type DeploymentIdentityView = {
  */
 export function describeDeployment(raw: unknown): DeploymentIdentityView {
   const marker = (raw ?? {}) as { revision?: unknown; version?: unknown }
-  const revision = typeof marker.revision === 'string' ? marker.revision : ''
-  const version = typeof marker.version === 'string' ? marker.version : ''
+  // The marker is served by whatever is in front of the web bundle, so it is
+  // untrusted input like any other server string — and both fields are printed
+  // into the copyable report. A real revision (40 hex) and a real version token
+  // pass through the redactor untouched.
+  const revision = typeof marker.revision === 'string' ? sanitizeServerCopy(marker.revision) : ''
+  const version = typeof marker.version === 'string' ? sanitizeServerCopy(marker.version) : ''
 
   if (revision === 'unstamped') {
     return {
@@ -449,7 +540,20 @@ export function describeDeployment(raw: unknown): DeploymentIdentityView {
 export type CapabilityTestOutcome = {
   name: string
   passed: boolean
+  /**
+   * Shown in the panel. MAY embed a thrown message — an exception from `fetch`
+   * can carry the URL it was attempting, and that detail is worth having in
+   * front of the operator who already knows their own hosts.
+   */
   detail: string
+  /**
+   * The same outcome, reduced to constant copy and closed codes, for the
+   * copyable report. Separated from `detail` STRUCTURALLY rather than by
+   * sanitising at copy time: the report is written to be pasted somewhere
+   * public, and a regex that tries to strip hosts out of an arbitrary thrown
+   * message is a guess, whereas never putting one in is a guarantee.
+   */
+  reportDetail: string
 }
 
 /** Human summary of a completed test run, for the header line. */

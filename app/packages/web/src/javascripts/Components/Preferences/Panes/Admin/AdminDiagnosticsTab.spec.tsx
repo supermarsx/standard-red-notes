@@ -6,10 +6,13 @@
  * on screen, so this drives the REAL component in jsdom and asserts the text an
  * operator would actually read.
  *
+ * Since the panel became sub-tabbed the render risk got WORSE, not better: an
+ * inactive TabPanel returns null, so a section can be perfectly correct and
+ * simply never mount. Every section therefore has a test that clicks through to
+ * it and asserts content that only that section produces.
+ *
  * The UNAVAILABLE path is tested first and in most detail, because it is the
- * state this deployment is actually in: WEBSOCKET_SYNC_ENABLED defaults on, so
- * the lane is off because a backing service is unbound, and the panel's whole
- * reason to exist is naming WHICH one.
+ * state this deployment is actually in.
  */
 import { act, createElement } from 'react'
 import { createRoot, Root } from 'react-dom/client'
@@ -33,8 +36,8 @@ import AdminDiagnosticsTab from './AdminDiagnosticsTab'
 
 /**
  * The environment values a leak would carry. Planted into every server response
- * this component reads, so the final test proves the RENDERED page cannot show
- * them even when the server misbehaves and sends them.
+ * this component reads, so the final tests prove the RENDERED page and the
+ * COPYABLE REPORT cannot show them even when the server misbehaves and sends them.
  */
 const SECRETS = [
   'redis://admin:hunter2@redis.internal.example:6379',
@@ -44,12 +47,39 @@ const SECRETS = [
   'internal.example',
 ]
 
+/**
+ * The live deployment's shape: the lane is UP (the gate no longer hangs the whole
+ * transport off the durable backend), SYNC_ITEMS is withheld, and the gRPC URL is
+ * set and being ignored because SERVICE_PROXY_TYPE is not "grpc".
+ */
 const unavailablePayload = {
   capturedAt: '2026-08-26T00:00:00.000Z',
+  deployment: {
+    recorded: true,
+    mode: 'self-hosted',
+    serviceProxySetting: 'unset',
+    boundServiceProxy: 'http',
+    cacheSetting: 'redis',
+    syncSwitchSetting: 'unset',
+    grpcSyncingProxyBound: false,
+    grpcProxyBindableInThisMode: true,
+    redisBound: true,
+    presence: {
+      WEB_SOCKET_CONNECTION_TOKEN_SECRET: true,
+      REDIS_URL: true,
+      SYNCING_SERVER_GRPC_URL: true,
+      AUTH_SERVER_GRPC_URL: true,
+      SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET: false,
+      VALET_TOKEN_SECRET: false,
+      AUTH_JWT_SECRET: true,
+      SRN_DEPLOY_REVISION: false,
+    },
+  },
   gate: {
     recorded: true,
     gatewayAttached: true,
     syncLaneEnabled: false,
+    syncItemsAdvertised: false,
     unmetPreconditions: [
       {
         code: 'SYNCING_SERVER_GRPC_UNBOUND',
@@ -118,6 +148,14 @@ afterEach(() => {
   jest.useRealTimers()
 })
 
+const settle = async () => {
+  await act(async () => {
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+}
+
 const renderTab = async (application: ReturnType<typeof makeApplication>) => {
   await act(async () => {
     root.render(
@@ -128,11 +166,7 @@ const renderTab = async (application: ReturnType<typeof makeApplication>) => {
       }),
     )
   })
-  await act(async () => {
-    await Promise.resolve()
-    await Promise.resolve()
-    await Promise.resolve()
-  })
+  await settle()
   return container.textContent ?? ''
 }
 
@@ -142,43 +176,169 @@ const clickButton = async (label: string) => {
   await act(async () => {
     button?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
   })
-  await act(async () => {
-    await Promise.resolve()
-    await Promise.resolve()
-    await Promise.resolve()
-  })
+  await settle()
 }
 
-describe('AdminDiagnosticsTab', () => {
-  it('renders at all — headings, chips and controls are on the page', async () => {
+/** Click a sub-tab by its visible label and return the text of the panel it reveals. */
+const openSubtab = async (label: string): Promise<string> => {
+  const tab = [...container.querySelectorAll('[role="tab"]')].find((element) => element.textContent === label)
+  expect(tab).toBeDefined()
+  await act(async () => {
+    tab?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+  })
+  await settle()
+  const panel = container.querySelector('[role="tabpanel"]')
+  expect(panel).not.toBeNull()
+  return panel?.textContent ?? ''
+}
+
+describe('AdminDiagnosticsTab — the shell', () => {
+  it('renders at all — header, chips, controls and every sub-tab control', async () => {
     const text = await renderTab(makeApplication())
 
     expect(text).toContain('Capability diagnostics')
-    expect(text).toContain('Transport in use right now')
-    expect(text).toContain('Diagnosis')
-    expect(text).toContain('Boot gate')
-    expect(text).toContain('Capabilities')
-    expect(text).toContain('Capability tests')
-    expect(text).toContain('Deployment identity')
+    for (const label of ['Overview', 'Boot gate', 'Capabilities', 'Configuration', 'Checks', 'Copyable report']) {
+      expect([...container.querySelectorAll('[role="tab"]')].some((tab) => tab.textContent === label)).toBe(true)
+    }
     expect(container.querySelectorAll('button').length).toBeGreaterThanOrEqual(2)
-    expect(container.querySelectorAll('table tbody tr').length).toBeGreaterThan(0)
   })
 
-  it('names the missing configuration item on the unavailable path', async () => {
-    const text = await renderTab(makeApplication())
+  it('opens on Overview and mounts exactly one panel at a time', async () => {
+    await renderTab(makeApplication())
 
-    // The whole point: the operator reads the env var to set, not a category.
-    expect(text).toContain('SYNCING_SERVER_GRPC_UNBOUND')
-    expect(text).toContain('SYNCING_SERVER_GRPC_URL')
-    expect(text).toContain('running over HTTP')
+    expect(container.querySelectorAll('[role="tabpanel"]')).toHaveLength(1)
+    expect(container.querySelector('[role="tabpanel"]')?.id).toBe('tab-panel-diag-overview')
   })
 
+  /**
+   * The sub-tab ids are prefixed because Tab renders `tab-control-<id>` as a DOM
+   * id and this list is nested inside the Admin shell's own tab list. An
+   * unprefixed id would collide with a same-named top-level tab and break both.
+   */
+  it('namespaces its tab control ids so they cannot collide with the Admin shell', async () => {
+    await renderTab(makeApplication())
+
+    for (const tab of container.querySelectorAll('[role="tab"]')) {
+      expect(tab.id.startsWith('tab-control-diag-')).toBe(true)
+    }
+  })
+})
+
+describe('AdminDiagnosticsTab — Overview', () => {
   it('reports the transport as HTTP and says the socket was never entered', async () => {
     const text = await renderTab(makeApplication())
 
     expect(text).toContain('The socket lane was never entered')
   })
 
+  it('names the missing configuration item rather than a category', async () => {
+    const text = await renderTab(makeApplication())
+
+    expect(text).toContain('SYNCING_SERVER_GRPC_UNBOUND')
+    expect(text).toContain('running over HTTP')
+  })
+
+  it('reports an unstamped deployment explicitly, and says a rebuild is the only fix', async () => {
+    const text = await renderTab(makeApplication())
+
+    expect(text).toContain('Unstamped')
+    expect(text).toContain('did not record a revision')
+    expect(text).toContain('Rebuild required')
+    expect(text).toContain('--build-arg SRN_DEPLOY_REVISION=$(git rev-parse HEAD)')
+    // The specific trap: stamping the running container does nothing.
+    expect(text).toContain('does NOT stamp it')
+  })
+
+  it('distinguishes a withheld SYNC_ITEMS from a dead lane', async () => {
+    const application = makeApplication({
+      serverGetJsonRequest: jest.fn().mockResolvedValue({
+        status: 200,
+        ok: true,
+        data: {
+          ...unavailablePayload,
+          gate: { ...unavailablePayload.gate, syncLaneEnabled: true, syncItemsAdvertised: false },
+          live: { capabilities: [{ id: 'ws-sync' }], unavailabilityReasons: [], ticketAvailable: true },
+        },
+      }),
+    })
+
+    const text = await renderTab(application)
+
+    expect(text).toContain('SYNC_ITEMS is not advertised')
+    expect(text).not.toContain('the realtime sync lane is unavailable')
+  })
+})
+
+describe('AdminDiagnosticsTab — Boot gate and its remedies', () => {
+  it('shows the lane, SYNC_ITEMS and ticket verdicts separately', async () => {
+    await renderTab(makeApplication())
+
+    const text = await openSubtab('Boot gate')
+
+    expect(text).toContain('Socket transport')
+    expect(text).toContain('SYNC_ITEMS')
+    expect(text).toContain('Ticket minting')
+  })
+
+  /**
+   * The whole reason this task exists. The stock advice is "configure
+   * SYNCING_SERVER_GRPC_URL"; on this deployment that variable is already SET and
+   * is never read, and the thing to change is SERVICE_PROXY_TYPE.
+   */
+  it('replaces the wrong stock remedy with the topology-conditional one', async () => {
+    await renderTab(makeApplication())
+
+    const text = await openSubtab('Boot gate')
+
+    expect(text).toContain('SERVICE_PROXY_TYPE=grpc')
+    expect(text).toContain('Config + restart')
+    expect(text).toContain('already set')
+    expect(text).toContain('would have led nowhere')
+    // And it must NOT print the server's misleading sentence.
+    expect(text).not.toContain('so realtime commands have a durable backend')
+  })
+
+  it('says nothing can be done, rather than naming a variable, in home-server mode', async () => {
+    const application = makeApplication({
+      serverGetJsonRequest: jest.fn().mockResolvedValue({
+        status: 200,
+        ok: true,
+        data: {
+          ...unavailablePayload,
+          deployment: {
+            ...unavailablePayload.deployment,
+            mode: 'home-server',
+            boundServiceProxy: 'direct-call',
+            grpcProxyBindableInThisMode: false,
+          },
+        },
+      }),
+    })
+    await renderTab(application)
+
+    const text = await openSubtab('Boot gate')
+
+    expect(text).toContain('Not fixable here')
+    expect(text).toContain('Do not set SYNCING_SERVER_GRPC_URL')
+    expect(text).not.toContain('SERVICE_PROXY_TYPE=grpc')
+  })
+
+  it('marks the remedy as generic when the server reported no topology', async () => {
+    const application = makeApplication({
+      serverGetJsonRequest: jest
+        .fn()
+        .mockResolvedValue({ status: 200, ok: true, data: { ...unavailablePayload, deployment: undefined } }),
+    })
+    await renderTab(application)
+
+    const text = await openSubtab('Boot gate')
+
+    expect(text).toContain('Generic advice')
+    expect(text).toContain('may not apply here')
+  })
+})
+
+describe('AdminDiagnosticsTab — Capabilities', () => {
   /**
    * Asserted against the ROW, not the page text. The Capabilities section has a
    * static paragraph explaining what "Client gap" means, so a `toContain` over
@@ -195,21 +355,21 @@ describe('AdminDiagnosticsTab', () => {
 
   it('shows FILES_V1 as client-implemented now that downloads consume the lane', async () => {
     await renderTab(makeApplication())
+    await openSubtab('Capabilities')
 
     // This fixture is HTTP-only, so the honest status is the same "Unknown" every
     // implemented-but-unnegotiated operation gets — not "Carries nothing", which
-    // would now understate a lane that does carry encrypted file bytes, and not a
-    // client gap, which would overstate a plain absence of socket.
+    // would now understate a lane that does carry encrypted file bytes.
     const [operation, server, client, status] = capabilityRow('FILES_V1')
     expect(operation).toBe('FILES_V1')
     expect(server).toBe('yes')
     expect(client).toBe('yes')
     expect(status).toBe('Unknown')
-    expect(status).not.toBe('Carries nothing')
   })
 
   it('shows an operation both sides implement without calling it broken while HTTP-only', async () => {
     await renderTab(makeApplication())
+    await openSubtab('Capabilities')
 
     const [, server, client, status] = capabilityRow('SYNC_ITEMS')
     expect(server).toBe('yes')
@@ -217,78 +377,76 @@ describe('AdminDiagnosticsTab', () => {
     expect(status).toBe('Unknown')
   })
 
-  it('reports an unstamped deployment marker explicitly rather than blank', async () => {
-    const text = await renderTab(makeApplication())
-
-    expect(text).toContain('Unstamped')
-    expect(text).toContain('did not record a revision')
-  })
-
-  it('renders the healthy path without inventing findings', async () => {
+  it('offers a client-update remedy for an operation only the server knows', async () => {
     const application = makeApplication({
       serverGetJsonRequest: jest.fn().mockResolvedValue({
         status: 200,
         ok: true,
         data: {
-          gate: {
-            recorded: true,
-            gatewayAttached: true,
-            syncLaneEnabled: true,
-            unmetPreconditions: [],
-            unmetCodes: [],
-            files: { advertised: true },
-          },
-          live: { capabilities: [{ id: 'ws-sync' }], unavailabilityReasons: [], ticketAvailable: true },
-          protocol: {
-            version: 1,
-            serverOperations: ['SYNC_ITEMS', 'AUTHORIZE_COLLABORATION', 'API_RPC', 'STREAM_ASSISTANT', 'INVITE_EVENTS'],
-          },
+          ...unavailablePayload,
+          protocol: { version: 1, serverOperations: [...unavailablePayload.protocol.serverOperations, 'FUTURE_LANE'] },
         },
       }),
-      syncTransportStatus: {
-        state: 'READY',
-        operations: ['SYNC_ITEMS', 'AUTHORIZE_COLLABORATION', 'API_RPC', 'STREAM_ASSISTANT', 'INVITE_EVENTS'],
-      },
     })
+    await renderTab(application)
+    const text = await openSubtab('Capabilities')
 
-    const text = await renderTab(application)
+    expect(capabilityRow('FUTURE_LANE')[3]).toBe('Client gap')
+    expect(text).toContain('Client update')
+  })
+})
 
-    expect(text).toContain('Healthy')
-    expect(text).toContain('All boot conditions are satisfied')
-    expect(text).toContain('fully configured and available')
+describe('AdminDiagnosticsTab — Configuration', () => {
+  it('renders the topology facts and the presence table', async () => {
+    await renderTab(makeApplication())
+
+    const text = await openSubtab('Configuration')
+
+    expect(text).toContain('SERVICE_PROXY_TYPE')
+    expect(text).toContain('Configuration presence')
+    expect(text).toContain('SYNCING_SERVER_GRPC_URL')
   })
 
-  it('explains a 403 rather than rendering an empty screen', async () => {
-    const noteIfForbidden = jest.fn()
+  /**
+   * Asserted against the ROW. The section's own prose explains what "inert"
+   * means, so a page-wide match on the word would pass regardless of the table.
+   */
+  it('marks the set-but-ignored variable inert in its own row', async () => {
+    await renderTab(makeApplication())
+    await openSubtab('Configuration')
+
+    const row = [...container.querySelectorAll('table tbody tr')].find(
+      (element) => element.querySelector('td')?.textContent === 'SYNCING_SERVER_GRPC_URL',
+    )
+    const cells = [...(row?.querySelectorAll('td') ?? [])].map((cell) => cell.textContent ?? '')
+    expect(cells[1]).toBe('set')
+    expect(cells[2]).toBe('inert')
+    expect(cells[3]).toContain('Set, and NOT read')
+  })
+
+  it('says the server does not report presence rather than showing an empty table', async () => {
     const application = makeApplication({
-      serverGetJsonRequest: jest.fn().mockResolvedValue({ status: 403, ok: false, data: {} }),
+      serverGetJsonRequest: jest
+        .fn()
+        .mockResolvedValue({ status: 200, ok: true, data: { ...unavailablePayload, deployment: undefined } }),
     })
+    await renderTab(application)
 
-    await act(async () => {
-      root.render(
-        createElement(AdminDiagnosticsTab, {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          application: application as any,
-          noteIfForbidden,
-        }),
-      )
-    })
-    await act(async () => {
-      await Promise.resolve()
-      await Promise.resolve()
-    })
+    const text = await openSubtab('Configuration')
 
-    expect(noteIfForbidden).toHaveBeenCalled()
-    expect(container.textContent).toContain('403')
+    expect(text).toContain('does not report configuration presence')
+    expect(text).toContain('Topology')
   })
+})
 
+describe('AdminDiagnosticsTab — Checks', () => {
   it('runs the capability tests and reports the real error from each lane', async () => {
     const application = makeApplication()
     await renderTab(application)
 
     await clickButton('Test all capabilities')
+    const text = await openSubtab('Checks')
 
-    const text = container.textContent ?? ''
     expect(text).toContain('Ticket issuance')
     expect(text).toContain('SYNC_DISABLED')
     expect(text).toContain('Live socket negotiation')
@@ -313,11 +471,9 @@ describe('AdminDiagnosticsTab', () => {
     await renderTab(application)
     await clickButton('Test all capabilities')
 
-    const socketPaths = ['/v1/sockets/sync/capabilities', '/v1/sockets/sync/ticket']
-    for (const path of socketPaths) {
+    for (const path of ['/v1/sockets/sync/capabilities', '/v1/sockets/sync/ticket']) {
       expect(application.httpOnlyJsonRequest.mock.calls.some(([, called]) => called === path)).toBe(true)
     }
-    // Neither RPC-lane helper may be handed a /v1/sockets path.
     for (const [path] of application.serverGetJsonRequest.mock.calls) {
       expect(path.startsWith('/v1/sockets')).toBe(false)
     }
@@ -337,31 +493,126 @@ describe('AdminDiagnosticsTab', () => {
         expect(path).toBe('/v1/sockets/sync/ticket')
       }
     }
-    // Every RPC-lane GET is a read-only diagnostic path.
     for (const [path] of application.serverGetJsonRequest.mock.calls) {
       expect(path).toBe('/v1/admin/sync-diagnostics')
     }
     expect(application.serverJsonRequest).not.toHaveBeenCalled()
   })
+})
+
+describe('AdminDiagnosticsTab — Copyable report', () => {
+  const reportText = (): string =>
+    (container.querySelector('textarea[aria-label="Diagnostics report"]') as HTMLTextAreaElement | null)?.value ?? ''
+
+  it('renders a report containing the verdict, the gate, the matrix and presence', async () => {
+    await renderTab(makeApplication())
+    await openSubtab('Copyable report')
+
+    const report = reportText()
+    expect(report).toContain('# Standard Red Notes — capability diagnostics')
+    expect(report).toContain('## Boot gate')
+    expect(report).toContain('SYNCING_SERVER_GRPC_UNBOUND')
+    expect(report).toContain('| Operation | Server | Client | Negotiated | Status |')
+    expect(report).toContain('SYNCING_SERVER_GRPC_URL: set (inert)')
+  })
+
+  it('copies it to the clipboard and confirms', async () => {
+    const writeText = jest.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    await renderTab(makeApplication())
+    await openSubtab('Copyable report')
+
+    await clickButton('Copy report')
+
+    expect(writeText).toHaveBeenCalledTimes(1)
+    expect(writeText.mock.calls[0][0]).toContain('## Topology')
+    expect(container.textContent).toContain('Copied')
+  })
+})
+
+describe('AdminDiagnosticsTab — failure and secrecy', () => {
+  it('explains a 403 rather than rendering an empty screen', async () => {
+    const noteIfForbidden = jest.fn()
+    const application = makeApplication({
+      serverGetJsonRequest: jest.fn().mockResolvedValue({ status: 403, ok: false, data: {} }),
+    })
+
+    await act(async () => {
+      root.render(
+        createElement(AdminDiagnosticsTab, {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          application: application as any,
+          noteIfForbidden,
+        }),
+      )
+    })
+    await settle()
+
+    expect(noteIfForbidden).toHaveBeenCalled()
+    expect(container.textContent).toContain('403')
+  })
+
+  it('renders the healthy path without inventing findings', async () => {
+    const application = makeApplication({
+      serverGetJsonRequest: jest.fn().mockResolvedValue({
+        status: 200,
+        ok: true,
+        data: {
+          deployment: { ...unavailablePayload.deployment, serviceProxySetting: 'grpc', grpcSyncingProxyBound: true },
+          gate: {
+            recorded: true,
+            gatewayAttached: true,
+            syncLaneEnabled: true,
+            syncItemsAdvertised: true,
+            unmetPreconditions: [],
+            unmetCodes: [],
+            files: { advertised: true },
+          },
+          live: { capabilities: [{ id: 'ws-sync' }], unavailabilityReasons: [], ticketAvailable: true },
+          protocol: {
+            version: 1,
+            serverOperations: ['SYNC_ITEMS', 'AUTHORIZE_COLLABORATION', 'API_RPC', 'STREAM_ASSISTANT', 'INVITE_EVENTS'],
+          },
+        },
+      }),
+      syncTransportStatus: {
+        state: 'READY',
+        operations: ['SYNC_ITEMS', 'AUTHORIZE_COLLABORATION', 'API_RPC', 'STREAM_ASSISTANT', 'INVITE_EVENTS'],
+      },
+    })
+
+    const text = await renderTab(application)
+
+    expect(text).toContain('Healthy')
+    expect(text).toContain('fully configured and available')
+    expect(await openSubtab('Boot gate')).toContain('All boot conditions are satisfied')
+  })
 
   /**
-   * The security boundary, proved against the rendered DOM. The server is made
-   * to misbehave — it returns configuration VALUES in every string field the
-   * component reads — and none of them may reach the screen.
+   * The security boundary, proved against the rendered DOM AND against the report
+   * that is designed to be pasted in public. The server is made to misbehave — it
+   * returns configuration VALUES in every string field the component reads — and
+   * none of them may reach either.
    */
-  it('cannot render a secret or an address even when the server sends one', async () => {
+  it('cannot render or export a secret even when the server sends one', async () => {
     const poisoned = {
       capturedAt: SECRETS[0],
+      deployment: {
+        ...unavailablePayload.deployment,
+        // A server that has started putting values where booleans belong.
+        presence: { REDIS_URL: SECRETS[0] as unknown as boolean, SYNCING_SERVER_GRPC_URL: true },
+      },
       gate: {
         recorded: true,
         gatewayAttached: true,
         syncLaneEnabled: false,
-        unmetPreconditions: [{ code: 'REDIS_UNBOUND', remedy: 'configure REDIS_URL' }],
+        syncItemsAdvertised: false,
+        unmetPreconditions: [{ code: 'REDIS_UNBOUND', remedy: `configure REDIS_URL to ${SECRETS[0]}` }],
         unmetCodes: ['REDIS_UNBOUND'],
         files: {
           advertised: false,
           unmetCondition: 'FILES_INTERNAL_URL',
-          remedy: 'no INTERNAL files service URL is configured.',
+          remedy: `no INTERNAL files service URL is configured (${SECRETS[1]}).`,
         },
       },
       live: {
@@ -376,13 +627,25 @@ describe('AdminDiagnosticsTab', () => {
       syncTransportStatus: { state: 'HTTP_ONLY', operations: [] },
     })
 
-    const text = await renderTab(application)
+    await renderTab(application)
 
-    for (const secret of SECRETS) {
-      expect(text).not.toContain(secret)
+    for (const label of ['Overview', 'Boot gate', 'Capabilities', 'Configuration', 'Checks', 'Copyable report']) {
+      const text = await openSubtab(label)
+      for (const secret of SECRETS) {
+        expect(text).not.toContain(secret)
+      }
     }
-    // The remedy copy must name the variable without ever carrying its value.
-    expect(text).toContain('REDIS_URL')
-    expect(text).not.toContain('redis://')
+
+    await openSubtab('Copyable report')
+    const report = reportTextValue()
+    for (const secret of SECRETS) {
+      expect(report).not.toContain(secret)
+    }
+    expect(report).not.toMatch(/redis:\/\//)
+    // The remedy still names the variable, without ever carrying its value.
+    expect(report).toContain('REDIS_UNBOUND')
   })
+
+  const reportTextValue = (): string =>
+    (container.querySelector('textarea[aria-label="Diagnostics report"]') as HTMLTextAreaElement | null)?.value ?? ''
 })
