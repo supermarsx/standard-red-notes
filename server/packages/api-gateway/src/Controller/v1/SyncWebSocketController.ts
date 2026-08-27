@@ -1,5 +1,5 @@
 import { Request, Response } from 'express'
-import { inject } from 'inversify'
+import { inject, optional } from 'inversify'
 import { BaseHttpController, controller, httpGet, httpPost } from 'inversify-express-utils'
 import { Logger } from 'winston'
 import { createLogThrottle, isSyncDeviceId, type LogThrottle } from '@standard-red-notes/websocket-gateway'
@@ -25,12 +25,40 @@ export class SyncWebSocketController extends BaseHttpController {
    */
   private readonly refusalLog: LogThrottle = createLogThrottle()
 
+  private readonly accessService: SyncWebSocketAccessService
+  private readonly diagnostics: SyncGateDiagnosticsRecorder
+
+  /**
+   * *** EVERY PARAMETER MUST CARRY @inject(). ***
+   *
+   * This class is bound `toSelf()` and resolved by Inversify PER REQUEST, so the
+   * TypeScript default values below are never what production sees — Inversify
+   * supplies every argument itself. `emitDecoratorMetadata` is on, so an
+   * UNDECORATED parameter makes Inversify read the emitted `design:paramtypes`
+   * and treat the parameter's CLASS as a service identifier to resolve. Nothing
+   * binds these two classes, so resolution threw
+   * `No bindings found for service: "SyncWebSocketAccessService"` before the
+   * handler ran, and BOTH routes answered 500 — including `/capabilities`, which
+   * is public, static, and must never fail. The defaults look like they cover
+   * it and do not: Inversify never reaches them.
+   *
+   * `@optional()` is what makes an unbound identifier resolve to `undefined`
+   * instead of throwing; the `??` fallbacks then reach the module singletons the
+   * boot gate late-binds. Tests still construct this class directly and pass
+   * fakes positionally.
+   */
   constructor(
-    @inject(TYPES.ApiGateway_Logger) private readonly logger?: Logger,
-    private readonly accessService: SyncWebSocketAccessService = syncWebSocketAccessService,
-    private readonly diagnostics: SyncGateDiagnosticsRecorder = syncGateDiagnostics,
+    @inject(TYPES.ApiGateway_Logger) @optional() private readonly logger?: Logger,
+    @inject(TYPES.ApiGateway_SyncWebSocketAccessService)
+    @optional()
+    accessService?: SyncWebSocketAccessService,
+    @inject(TYPES.ApiGateway_SyncGateDiagnostics)
+    @optional()
+    diagnostics?: SyncGateDiagnosticsRecorder,
   ) {
     super()
+    this.accessService = accessService ?? syncWebSocketAccessService
+    this.diagnostics = diagnostics ?? syncGateDiagnostics
   }
 
   /**

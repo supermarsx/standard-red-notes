@@ -1,11 +1,16 @@
+import 'reflect-metadata'
+
 import { Request, Response } from 'express'
+import { Container } from 'inversify'
 import type { SyncGatewayAccess } from '@standard-red-notes/websocket-gateway'
 
 import { Logger } from 'winston'
 
+import { TYPES } from '../../Bootstrap/Types'
 import { SyncWebSocketController } from './SyncWebSocketController'
 import { SyncWebSocketAccessService, syncWebSocketAccessService } from '../../Service/Sync/SyncWebSocketAccessService'
-import { SyncGateDiagnosticsRecorder } from '../../Service/Sync/SyncGateDiagnostics'
+import { SyncGateDiagnosticsRecorder, syncGateDiagnostics } from '../../Service/Sync/SyncGateDiagnostics'
+import type { SyncPreconditionState } from '../../Service/Sync/SyncWebSocketPreconditions'
 
 function responseDouble(locals: Record<string, unknown> = {}): {
   response: Response
@@ -267,6 +272,124 @@ describe('SyncWebSocketController refusal logging', () => {
     for (const secret of [...secrets, 'device-1', 'user-uuid-1', 'session-uuid-1']) {
       expect(emitted).not.toContain(secret)
     }
+  })
+})
+
+/**
+ * Standard Red Notes: the GATE-CLOSED path, exercised through a real Inversify
+ * container rather than `new SyncWebSocketController(...)`.
+ *
+ * Every other test in this file — and the sweep in `RouteDispatch.spec.ts`,
+ * which builds instances with `Object.create(prototype)` — bypasses the
+ * constructor, so none of them can see a controller that cannot be CONSTRUCTED.
+ * That is precisely how a constructor whose parameters Inversify could not
+ * resolve shipped: it turned both routes into 500s in production while the whole
+ * suite stayed green. These tests resolve the controller the way the
+ * `inversify-express-utils` facade does (`bind(target).toSelf()`, resolved per
+ * request) so the DI path itself is under test.
+ *
+ * The gate is genuinely unmet here — that is the normal state of any deployment
+ * that has not configured realtime sync. `/capabilities` is public, static and
+ * consulted BEFORE a session exists, so it must answer 200 with an empty list;
+ * `/ticket` must answer a clean 503 SYNC_DISABLED. Neither may ever be a 500: a
+ * known, expected configuration state is not a server error.
+ */
+describe('SyncWebSocketController with the boot gate closed', () => {
+  const MET: SyncPreconditionState = {
+    connectionTokenSecretPresent: true,
+    webSocketSyncEnabled: true,
+    redisBound: true,
+    syncingServerGrpcBound: true,
+  }
+
+  /** Each of the four conditions, unmet one at a time. One of these is any given self-hosted deployment. */
+  const UNMET_VARIANTS: ReadonlyArray<[string, Partial<SyncPreconditionState>]> = [
+    ['the connection-token secret is absent', { connectionTokenSecretPresent: false }],
+    ['sync is switched off by configuration', { webSocketSyncEnabled: false }],
+    ['Redis is unbound', { redisBound: false }],
+    ['the gRPC syncing proxy is unbound', { syncingServerGrpcBound: false }],
+  ]
+
+  const resolveThroughContainer = (): SyncWebSocketController => {
+    const container = new Container()
+    container.bind(TYPES.ApiGateway_Logger).toConstantValue({ warn: jest.fn() } as unknown as Logger)
+    container.bind(SyncWebSocketController).toSelf()
+
+    return container.get(SyncWebSocketController)
+  }
+
+  beforeEach(() => syncWebSocketAccessService.clearProvider())
+  afterEach(() => {
+    syncWebSocketAccessService.clearProvider()
+    syncGateDiagnostics.clear()
+  })
+
+  it.each(UNMET_VARIANTS)('serves /capabilities as 200 with an empty list when %s', (_label, unmet) => {
+    syncGateDiagnostics.record({ ...MET, ...unmet, filesAdvertised: false })
+    const { response, status, send } = responseDouble()
+
+    resolveThroughContainer().capabilities({} as Request, response)
+
+    expect(status).toHaveBeenCalledWith(200)
+    expect(send).toHaveBeenCalledWith({ capabilities: [] })
+  })
+
+  it.each(UNMET_VARIANTS)('refuses /ticket with a clean 503 SYNC_DISABLED when %s', async (_label, unmet) => {
+    syncGateDiagnostics.record({ ...MET, ...unmet, filesAdvertised: false })
+    const { response, status, send } = responseDouble({
+      user: { uuid: 'user-uuid-1' },
+      session: { uuid: 'session-uuid-1' },
+    })
+
+    await resolveThroughContainer().ticket(
+      { body: { deviceId: 'device-1' }, headers: { authorization: 'Bearer token' } } as unknown as Request,
+      response,
+    )
+
+    expect(status).toHaveBeenCalledWith(503)
+    expect(send).toHaveBeenCalledWith({ error: { code: 'SYNC_DISABLED' } })
+  })
+
+  /**
+   * The gate record is written by the boot gate AFTER app.build(), so a request
+   * that lands during boot finds no observation at all. That must degrade to the
+   * same clean answers, not to a 500 from an unrecorded report.
+   */
+  it('still answers cleanly when the gate has not been recorded at all', async () => {
+    syncGateDiagnostics.clear()
+    const capabilities = responseDouble()
+    const ticket = responseDouble({ user: { uuid: 'user-uuid-1' }, session: { uuid: 'session-uuid-1' } })
+    const controller = resolveThroughContainer()
+
+    controller.capabilities({} as Request, capabilities.response)
+    await controller.ticket(
+      { body: { deviceId: 'device-1' }, headers: { authorization: 'Bearer token' } } as unknown as Request,
+      ticket.response,
+    )
+
+    expect(capabilities.status).toHaveBeenCalledWith(200)
+    expect(capabilities.send).toHaveBeenCalledWith({ capabilities: [] })
+    expect(ticket.status).toHaveBeenCalledWith(503)
+    expect(ticket.send).toHaveBeenCalledWith({ error: { code: 'SYNC_DISABLED' } })
+  })
+
+  /**
+   * The controller must fall back to the module singletons the boot gate
+   * late-binds, NOT to whatever the container happens to hold — otherwise a
+   * container that resolved the optional parameters to `undefined` would report
+   * a lane that is actually up as unavailable.
+   */
+  it('reads the live singleton provider bound after the container resolved it', () => {
+    const controller = resolveThroughContainer()
+    syncWebSocketAccessService.setProvider(readyProvider())
+    const { response, status, send } = responseDouble()
+
+    controller.capabilities({} as Request, response)
+
+    expect(status).toHaveBeenCalledWith(200)
+    expect(send).toHaveBeenCalledWith({
+      capabilities: [{ id: 'ws-sync', version: 1, endpoint: '/sockets/sync' }],
+    })
   })
 })
 

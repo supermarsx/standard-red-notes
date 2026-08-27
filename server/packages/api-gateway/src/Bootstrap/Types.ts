@@ -66,6 +66,18 @@ export const TYPES = {
   ApiGateway_OptionalCrossServiceTokenMiddleware: Symbol.for('ApiGateway_OptionalCrossServiceTokenMiddleware'),
   ApiGateway_WebSocketAuthMiddleware: Symbol.for('ApiGateway_WebSocketAuthMiddleware'),
   ApiGateway_SubscriptionTokenAuthMiddleware: Symbol.for('ApiGateway_SubscriptionTokenAuthMiddleware'),
+  // Realtime-sync collaborators of SyncWebSocketController.
+  //
+  // DELIBERATELY UNBOUND in every composition root. Both are module-level
+  // singletons that the boot gate late-binds AFTER app.build() (see
+  // SyncWebSocketAccessService / SyncGateDiagnostics), so the container is not
+  // their owner and a binding would only be a second, drift-prone handle on the
+  // same object. They exist so the constructor parameters can carry
+  // `@inject() @optional()`: an undecorated parameter makes Inversify read the
+  // emitted `design:paramtypes` and try to resolve the CLASS as a service
+  // identifier, which throws on every request. See the constructor comment.
+  ApiGateway_SyncWebSocketAccessService: Symbol.for('ApiGateway_SyncWebSocketAccessService'),
+  ApiGateway_SyncGateDiagnostics: Symbol.for('ApiGateway_SyncGateDiagnostics'),
   // Mapping
   Mapper_SyncRequestGRPCMapper: Symbol.for('Mapper_SyncRequestGRPCMapper'),
   Mapper_SyncResponseGRPCMapper: Symbol.for('Mapper_SyncResponseGRPCMapper'),
