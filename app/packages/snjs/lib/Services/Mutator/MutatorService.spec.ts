@@ -8,6 +8,11 @@ import {
   FileItem,
   FileContent,
   SNTag,
+  NoteMutator,
+  PayloadEmitSource,
+  createLitePayloadFromDecrypted,
+  isLitePayload,
+  LitePayloadSafetyError,
 } from '@standardnotes/models'
 import { ContentType } from '@standardnotes/domain-core'
 import { ClientDisplayableError } from '@standardnotes/responses'
@@ -247,6 +252,94 @@ describe('mutator service', () => {
       const result = await mutatorService.addTagToNote(note, tag, true)
 
       expect(result).toBeUndefined()
+    })
+  })
+
+  /**
+   * Under `lazyDecryptEnabled` a cold-loaded note is body-less ("lite") and the model safety guard
+   * refuses to dirty it, because syncing a stripped payload would overwrite the real encrypted
+   * body with nothing. The mutator re-hydrates at the seam that already resolves live items, so no
+   * individual call site can forget to.
+   */
+  describe('lazy-decrypt re-hydration before mutation', () => {
+    const insertNoteWithBody = async (title: string, text: string) => {
+      const note = new SNNote(
+        new DecryptedPayload({
+          uuid: String(Math.random()),
+          content_type: ContentType.TYPES.Note,
+          content: FillItemContent<NoteContent>({ title, text }),
+          ...PayloadTimestampDefaults(),
+        }),
+      )
+      return (await mutatorService.insertItem(note)) as SNNote
+    }
+
+    const makeLite = async (title: string) => {
+      const note = await insertNoteWithBody(title, 'the real encrypted body')
+      const full = note.payload
+      const lite = createLitePayloadFromDecrypted(full)
+      await payloadManager.emitPayload(lite, PayloadEmitSource.LocalDatabaseLoaded)
+      return { uuid: note.uuid, full }
+    }
+
+    it('refuses to dirty a lite note when no re-hydrator is wired', async () => {
+      const { uuid } = await makeLite('cold note')
+      const live = itemManager.findSureItem<SNNote>(uuid)
+
+      await expect(
+        mutatorService.changeItems([live], (mutator) => ((mutator as NoteMutator).trashed = true)),
+      ).rejects.toThrow(LitePayloadSafetyError)
+
+      expect(itemManager.findSureItem<SNNote>(uuid).trashed).toBeFalsy()
+    })
+
+    it('trashes a lite note end to end by re-hydrating its body first', async () => {
+      const { uuid, full } = await makeLite('cold note')
+      mutatorService.setLiteContentRehydrator(async () => full)
+
+      const live = itemManager.findSureItem<SNNote>(uuid)
+      expect(isLitePayload(live.payload)).toBe(true)
+
+      await mutatorService.changeItems([live], (mutator) => ((mutator as NoteMutator).trashed = true))
+
+      const after = itemManager.findSureItem<SNNote>(uuid)
+      expect(after.trashed).toBe(true)
+      expect(isLitePayload(after.payload)).toBe(false)
+      /** The real body survived the write — this is the data-loss the guard exists to prevent. */
+      expect(after.text).toEqual('the real encrypted body')
+      expect(after.dirty).toBe(true)
+    })
+
+    it('still refuses the write when the body cannot be read back', async () => {
+      const { uuid } = await makeLite('cold note')
+      mutatorService.setLiteContentRehydrator(async () => undefined)
+
+      const live = itemManager.findSureItem<SNNote>(uuid)
+
+      await expect(
+        mutatorService.changeItems([live], (mutator) => ((mutator as NoteMutator).trashed = true)),
+      ).rejects.toThrow(LitePayloadSafetyError)
+    })
+
+    it('does not read the body for a non-dirtying mutation', async () => {
+      const { uuid, full } = await makeLite('cold note')
+      const rehydrator = jest.fn(async () => full)
+      mutatorService.setLiteContentRehydrator(rehydrator)
+
+      const live = itemManager.findSureItem<SNNote>(uuid)
+      await mutatorService.changeItems([live], undefined, MutationType.NonDirtying)
+
+      expect(rehydrator).not.toHaveBeenCalled()
+    })
+
+    it('does not read the body for a note that is already full', async () => {
+      const note = (await insertNote('warm note')) as SNNote
+      const rehydrator = jest.fn(async () => note.payload)
+      mutatorService.setLiteContentRehydrator(rehydrator)
+
+      await mutatorService.changeItems([note], (mutator) => ((mutator as NoteMutator).trashed = true))
+
+      expect(rehydrator).not.toHaveBeenCalled()
     })
   })
 })

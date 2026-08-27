@@ -32,6 +32,7 @@ import {
   ItemContent,
   ItemsKeyInterface,
   ItemsKeyMutatorInterface,
+  isLitePayload,
   MutationType,
   NoteMutator,
   PayloadEmitSource,
@@ -70,6 +71,13 @@ export class MutatorService extends AbstractService implements MutatorClientInte
    */
   private filesBeingDeletedViaFileService = new Set<string>()
 
+  /**
+   * Late-bound reader for the FULL on-disk payload of a content-stripped ("lite") item.
+   * See {@link setLiteContentRehydrator}. Undefined until wired, and never invoked when
+   * `lazyDecryptEnabled` is off, because no item is ever lite in that mode.
+   */
+  private liteContentRehydrator?: (uuid: string) => Promise<DecryptedPayloadInterface | undefined>
+
   constructor(
     private itemManager: ItemManager,
     private payloadManager: PayloadManager,
@@ -84,6 +92,79 @@ export class MutatorService extends AbstractService implements MutatorClientInte
     ;(this.itemManager as unknown) = undefined
     ;(this.payloadManager as unknown) = undefined
     ;(this.fileService as unknown) = undefined
+    this.liteContentRehydrator = undefined
+  }
+
+  /**
+   * Wires the reader used to re-hydrate a content-stripped ("lite") item before it is mutated
+   * (SyncService.getFullContentPayload). Late-bound for the same reason as
+   * {@link setFileService}: SyncService is built after MutatorService.
+   *
+   * WHY THIS LIVES HERE: under `lazyDecryptEnabled` any cold-loaded note is body-less, and the
+   * model safety guard deliberately REFUSES to dirty it (it would sync an empty body over the
+   * real ciphertext). Every dirtying mutation therefore has to re-hydrate first. Requiring each
+   * of the ~60 `changeItem(s)` call sites to remember that is how the trash/delete bug happened,
+   * so the re-hydration is done once, here, at the seam that already re-reads the live items by
+   * uuid — after the caller's list is resolved and immediately before the mutators are built, so
+   * nothing can race in between and only the items actually being mutated are ever loaded.
+   */
+  public setLiteContentRehydrator(rehydrator: (uuid: string) => Promise<DecryptedPayloadInterface | undefined>): void {
+    this.liteContentRehydrator = rehydrator
+  }
+
+  /**
+   * Replaces any lite (body-stripped) item in `items` with its full on-disk payload so the
+   * following dirtying mutation operates on real content.
+   *
+   * Fails CLOSED: if the body cannot be read back, the item is left lite and the mutator's
+   * safety guard throws — refusing the write is the correct outcome, since the alternative is
+   * uploading an empty body. Callers surface that to the user.
+   *
+   * @returns true if any payload was emitted, meaning the caller must re-read its items.
+   */
+  private async rehydrateLiteItemsForMutation(
+    items: (DecryptedItemInterface | undefined)[],
+    mutationType: MutationType,
+  ): Promise<boolean> {
+    /** A non-dirtying mutation never reaches the guard and never syncs, so it needs no body. */
+    if (mutationType === MutationType.NonDirtying || !this.liteContentRehydrator) {
+      return false
+    }
+
+    let didEmit = false
+
+    for (const item of items) {
+      if (!item || !isLitePayload(item.payload)) {
+        continue
+      }
+
+      let full: DecryptedPayloadInterface | undefined
+      try {
+        full = await this.liteContentRehydrator(item.uuid)
+      } catch (error) {
+        console.error('Failed to re-hydrate lite item before mutation', item.uuid, error)
+        continue
+      }
+
+      if (!full || isLitePayload(full)) {
+        continue
+      }
+
+      /**
+       * DATA-LOSS GUARD (rehydrate-clobber race): the disk read above is async, so the live item
+       * may have been written since. Only emit the on-disk body while the live item is STILL lite
+       * and clean; anything else means a newer write is in flight and this body is stale.
+       */
+      const live = this.itemManager.findItem(item.uuid)
+      if (!live || !isLitePayload(live.payload) || live.dirty) {
+        continue
+      }
+
+      await this.payloadManager.emitPayload(full, PayloadEmitSource.LocalDatabaseLoaded)
+      didEmit = true
+    }
+
+    return didEmit
   }
 
   /**
@@ -134,7 +215,15 @@ export class MutatorService extends AbstractService implements MutatorClientInte
     emitSource = PayloadEmitSource.LocalChanged,
     payloadSourceKey?: string,
   ): Promise<I[]> {
-    const items = this.itemManager.findItemsIncludingBlanks(Uuids(itemsToLookupUuidsFor))
+    const uuids = Uuids(itemsToLookupUuidsFor)
+
+    let items = this.itemManager.findItemsIncludingBlanks(uuids)
+
+    /** Lazy-decrypt: cold-loaded items are body-less; a dirtying write needs the real body. */
+    if (await this.rehydrateLiteItemsForMutation(items, mutationType)) {
+      items = this.itemManager.findItemsIncludingBlanks(uuids)
+    }
+
     const payloads: DecryptedPayloadInterface[] = []
 
     for (const item of items) {
@@ -169,13 +258,19 @@ export class MutatorService extends AbstractService implements MutatorClientInte
     const payloads: DecryptedPayloadInterface[] = []
 
     for (const transaction of transactions) {
-      const item = this.itemManager.findItem(transaction.itemUuid)
+      const mutationType = transaction.mutationType || MutationType.UpdateUserTimestamps
 
-      if (!item) {
+      const existing = this.itemManager.findItem(transaction.itemUuid)
+
+      if (!existing) {
         continue
       }
 
-      const mutator = CreateDecryptedMutatorForItem(item, transaction.mutationType || MutationType.UpdateUserTimestamps)
+      await this.rehydrateLiteItemsForMutation([existing], mutationType)
+
+      const item = this.itemManager.findItem(transaction.itemUuid) ?? existing
+
+      const mutator = CreateDecryptedMutatorForItem(item, mutationType)
 
       transaction.mutate(mutator)
       const payload = mutator.getResult()
@@ -192,8 +287,12 @@ export class MutatorService extends AbstractService implements MutatorClientInte
     emitSource = PayloadEmitSource.LocalChanged,
     payloadSourceKey?: string,
   ): Promise<DecryptedItemInterface | undefined> {
+    const mutationType = transaction.mutationType || MutationType.UpdateUserTimestamps
+
+    await this.rehydrateLiteItemsForMutation([this.itemManager.findItem(transaction.itemUuid)], mutationType)
+
     const item = this.itemManager.findSureItem(transaction.itemUuid)
-    const mutator = CreateDecryptedMutatorForItem(item, transaction.mutationType || MutationType.UpdateUserTimestamps)
+    const mutator = CreateDecryptedMutatorForItem(item, mutationType)
     transaction.mutate(mutator)
     const payload = mutator.getResult()
 
@@ -209,10 +308,15 @@ export class MutatorService extends AbstractService implements MutatorClientInte
     emitSource = PayloadEmitSource.LocalChanged,
     payloadSourceKey?: string,
   ): Promise<DecryptedPayloadInterface[]> {
-    const note = this.itemManager.findItem<SNNote>(itemToLookupUuidFor.uuid)
-    if (!note) {
+    const existing = this.itemManager.findItem<SNNote>(itemToLookupUuidFor.uuid)
+    if (!existing) {
       throw Error('Attempting to change non-existant note')
     }
+
+    /** Notes are the only lite-able content type, so this path needs the same re-hydration. */
+    await this.rehydrateLiteItemsForMutation([existing], mutationType)
+
+    const note = this.itemManager.findItem<SNNote>(itemToLookupUuidFor.uuid) ?? existing
     const mutator = new NoteMutator(note, mutationType)
 
     return this.applyTransform(mutator, mutate, emitSource, payloadSourceKey)

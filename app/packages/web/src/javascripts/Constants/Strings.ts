@@ -178,4 +178,36 @@ export const StringUtils = {
     const escapedName = escapeHtmlString(name)
     return `Cannot upload file "${escapedName}"`
   },
+  /**
+   * Message for a bulk note action that did not fully succeed.
+   *
+   * PARTIAL FAILURE MUST BE VISIBLE: when some notes were written and others were not, the count
+   * of each is stated explicitly. Reporting a bulk action as done while some items were silently
+   * skipped is the exact defect shape this app has shipped before, so this never collapses to a
+   * generic "something went wrong".
+   *
+   * @param actionPastTense e.g. 'moved to trash', 'deleted', 'updated'
+   * @param remedy why it failed and what the user can do — see {@link noteContentUnavailableRemedy}
+   */
+  bulkNoteActionFailure(actionPastTense: string, total: number, failed: number, remedy: string): string {
+    const succeeded = total - failed
+
+    if (succeeded === 0) {
+      return total === 1
+        ? `This note could not be ${actionPastTense}. ${remedy}`
+        : `None of the ${total} selected notes could be ${actionPastTense}. ${remedy}`
+    }
+
+    return `${succeeded} of ${total} notes ${actionPastTense}; ${failed} failed. ${remedy}`
+  },
+  /**
+   * The lazy-decrypt failure reason: a cold-loaded note's body could not be read back from local
+   * storage, so writing it would have replaced the real encrypted body with nothing. Opening the
+   * note re-hydrates it, which is the user-facing way out.
+   */
+  noteContentUnavailableRemedy(failed: number): string {
+    return failed === 1
+      ? 'Its content could not be loaded from this device. Open the note once, then try again.'
+      : 'Their content could not be loaded from this device. Open them once, then try again.'
+  },
 }

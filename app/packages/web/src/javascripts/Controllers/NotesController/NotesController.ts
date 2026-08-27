@@ -36,7 +36,7 @@ import {
 import { NotePart, SplitNoteOptions, splitNoteContent } from '../../Utils/NoteSplitting/splitNoteContent'
 import { makeObservable, observable, action, computed, runInAction, reaction } from 'mobx'
 import { AbstractViewController } from '../Abstract/AbstractViewController'
-import { NotesControllerInterface } from './NotesControllerInterface'
+import { BulkNoteMutationResult, NotesControllerInterface } from './NotesControllerInterface'
 import { CrossControllerEvent } from '../CrossControllerEvent'
 import { addToast, dismissToast, ToastType } from '@standardnotes/toast'
 import { createNoteExport } from '../../Utils/NoteExportUtils'
@@ -345,10 +345,32 @@ export class NotesController
    * enough — the subsequent mutation picks up the re-hydrated (full) item. No-op and
    * byte-identical when the flag is off (no note is ever lite) or the note is already full.
    */
-  private async rehydrateLiteNotesForMutation(notes: SNNote[]): Promise<void> {
+  private async rehydrateLiteNotesForMutation(notes: SNNote[]): Promise<BulkNoteMutationResult> {
+    const changed: SNNote[] = []
+    const failed: SNNote[] = []
+
     for (const note of notes) {
-      await rehydrateNoteForEditing(this.application, note)
+      try {
+        await rehydrateNoteForEditing(this.application, note)
+      } catch (error) {
+        console.error('Failed to re-hydrate note before mutation', note.uuid, error)
+      }
+
+      /**
+       * Re-read the LIVE item: `rehydrateNoteForEditing` returns the caller's (still lite) object
+       * either way, so the only truthful signal that the body came back is the collection itself.
+       * A note that is still lite here CANNOT be written, and saying otherwise would be the
+       * "reported as done, never actually done" bug this guard exists to prevent.
+       */
+      const live = this.application.items.findItem<SNNote>(note.uuid)
+      if (!live || isLitePayload(live.payload)) {
+        failed.push(note)
+      } else {
+        changed.push(note)
+      }
     }
+
+    return { changed, failed }
   }
 
   /**
@@ -358,27 +380,137 @@ export class NotesController
    * pre-flight guards (e.g. `note.locked`).
    */
   private async changeNoteMetadata(note: SNNote, mutate: (mutator: NoteMutator) => void): Promise<void> {
-    await this.rehydrateLiteNotesForMutation([note])
+    const result = await this.rehydrateLiteNotesForMutation([note])
+
+    if (result.changed.length === 0) {
+      this.reportBulkNoteFailure(result, 'updated')
+      return
+    }
+
     await this.application.mutator.changeItem<NoteMutator>(note, mutate, MutationType.NoUpdateUserTimestamps)
     this.application.sync.sync().catch(console.error)
   }
 
-  async changeSelectedNotes(mutate: (mutator: NoteMutator) => void): Promise<void> {
-    await this.rehydrateLiteNotesForMutation(this.getSelectedNotesList())
-    await this.application.mutator.changeItems(this.getSelectedNotesList(), mutate, MutationType.NoUpdateUserTimestamps)
+  /**
+   * Bulk metadata write over an EXPLICIT list of notes.
+   *
+   * WHY THE LIST IS A PARAMETER: this used to read `getSelectedNotesList()` twice — once for
+   * re-hydration and again for the mutation — with `await`s in between. `deleteNotes` fires
+   * `selectNextItem()`, whose selection replacement is async and unawaited, so it landed inside
+   * that window: the second read returned a DIFFERENT, un-re-hydrated note. That is exactly the
+   * reported trash failure (LitePayloadSafetyError), and when the incoming note happened to be
+   * full it silently trashed the wrong note instead. Resolving the selection ONCE, in the caller,
+   * makes the set of notes acted upon immutable for the whole operation.
+   *
+   * Never throws for a note it could not write: the outcome is returned so the caller can report
+   * partial failure honestly.
+   */
+  private async changeNotes(notes: SNNote[], mutate: (mutator: NoteMutator) => void): Promise<BulkNoteMutationResult> {
+    const { changed, failed } = await this.rehydrateLiteNotesForMutation(notes)
+
+    if (changed.length === 0) {
+      return { changed, failed }
+    }
+
+    try {
+      await this.application.mutator.changeItems(changed, mutate, MutationType.NoUpdateUserTimestamps)
+    } catch (error) {
+      /** `changeItems` builds every payload before emitting any, so a throw wrote nothing. */
+      console.error('Failed to change notes', error)
+      return { changed: [], failed: [...failed, ...changed] }
+    }
+
     this.application.sync.sync().catch(console.error)
+
+    return { changed, failed }
+  }
+
+  async changeSelectedNotes(mutate: (mutator: NoteMutator) => void): Promise<BulkNoteMutationResult> {
+    return this.changeNotes(this.getSelectedNotesList(), mutate)
+  }
+
+  /**
+   * Surfaces a bulk note action that did not fully succeed. Silent on full success.
+   *
+   * @param actionPastTense e.g. 'moved to trash', 'deleted', 'archived'
+   */
+  private reportBulkNoteFailure(result: BulkNoteMutationResult, actionPastTense: string, remedy?: string): void {
+    if (result.failed.length === 0) {
+      return
+    }
+
+    const failedCount = result.failed.length
+    const total = result.changed.length + failedCount
+
+    /** Toasting does not replace diagnosis: the failing uuids stay in the console. */
+    console.error(
+      `Bulk note action "${actionPastTense}" failed for ${failedCount} of ${total} notes`,
+      result.failed.map((note) => note.uuid),
+    )
+
+    addToast({
+      type: ToastType.Error,
+      message: StringUtils.bulkNoteActionFailure(
+        actionPastTense,
+        total,
+        failedCount,
+        remedy ?? StringUtils.noteContentUnavailableRemedy(failedCount),
+      ),
+      autoClose: true,
+    })
+  }
+
+  /**
+   * Permanently deletes notes one at a time so a single failure (e.g. a file blob that could not
+   * be removed) does not hide the fate of the rest. `deleteItems` fans out with `Promise.all`,
+   * whose first rejection discards every other outcome — reporting notes as deleted that never
+   * were is the defect shape this avoids.
+   */
+  private async deleteNotesPermanentlyFromDisk(notes: SNNote[]): Promise<BulkNoteMutationResult> {
+    const changed: SNNote[] = []
+    const failed: SNNote[] = []
+
+    const outcomes = await Promise.allSettled(notes.map((note) => this.application.mutator.deleteItem(note)))
+
+    outcomes.forEach((outcome, index) => {
+      if (outcome.status === 'fulfilled') {
+        changed.push(notes[index])
+      } else {
+        console.error('Failed to permanently delete note', notes[index].uuid, outcome.reason)
+        failed.push(notes[index])
+      }
+    })
+
+    return { changed, failed }
+  }
+
+  /**
+   * Runs a selection-wide mutation from a synchronous (fire-and-forget) call site and reports any
+   * note it could not write. These actions are all subject to the same lazy-decrypt refusal as
+   * trash/delete, so none of them may fail silently.
+   */
+  private changeSelectedNotesAndReport(mutate: (mutator: NoteMutator) => void, actionPastTense: string): void {
+    this.changeSelectedNotes(mutate)
+      .then((result) => this.reportBulkNoteFailure(result, actionPastTense))
+      .catch(console.error)
   }
 
   setHideSelectedNotePreviews(hide: boolean): void {
-    this.changeSelectedNotes((mutator) => {
-      mutator.hidePreview = hide
-    }).catch(console.error)
+    this.changeSelectedNotesAndReport(
+      (mutator) => {
+        mutator.hidePreview = hide
+      },
+      hide ? 'hidden' : 'shown',
+    )
   }
 
   setLockSelectedNotes(lock: boolean): void {
-    this.changeSelectedNotes((mutator) => {
-      mutator.locked = lock
-    }).catch(console.error)
+    this.changeSelectedNotesAndReport(
+      (mutator) => {
+        mutator.locked = lock
+      },
+      lock ? 'locked' : 'unlocked',
+    )
   }
 
   async setTrashSelectedNotes(trashed: boolean): Promise<void> {
@@ -391,10 +523,12 @@ export class NotesController
       }
     } else {
       const restoredNotes = this.getSelectedNotesList()
-      await this.changeSelectedNotes((mutator) => {
+      const result = await this.changeNotes(restoredNotes, (mutator) => {
         mutator.trashed = trashed
       })
-      for (const note of restoredNotes) {
+      this.reportBulkNoteFailure(result, 'restored')
+      /** Only count notes that were actually written back. */
+      for (const note of result.changed) {
         achievements.increment(METRICS.itemsRestoredTotal)
         const n = recordItemRestore(note.uuid)
         achievements.setAtLeast(METRICS.sameItemRestores, n)
@@ -410,19 +544,28 @@ export class NotesController
   }
 
   async deleteNotes(permanently: boolean): Promise<boolean> {
-    if (this.getSelectedNotesList().some((note) => note.locked)) {
-      const text = StringUtils.deleteLockedNotesAttempt(this.selectedNotesCount)
+    /**
+     * Resolve the target notes ONCE, before the confirmation dialog and before
+     * `selectNextItem()` moves the selection. Everything below — the locked check, the dialog
+     * text, and the deletion itself — must act on the same set the user was asked about;
+     * re-reading the selection after an `await` is what let an unawaited selection change
+     * redirect the deletion at a different note.
+     */
+    const notesToDelete = this.getSelectedNotesList()
+
+    if (notesToDelete.some((note) => note.locked)) {
+      const text = StringUtils.deleteLockedNotesAttempt(notesToDelete.length)
       this.application.alerts.alert(text).catch(console.error)
       return false
     }
 
     const title = permanently ? Strings.deleteItemsPermanentlyTitle : Strings.trashItemsTitle
     let noteTitle = undefined
-    if (this.selectedNotesCount === 1) {
-      const selectedNote = this.getSelectedNotesList()[0]
+    if (notesToDelete.length === 1) {
+      const selectedNote = notesToDelete[0]
       noteTitle = selectedNote.title.length ? `'${selectedNote.title}'` : 'this note'
     }
-    const text = StringUtils.deleteNotes(permanently, this.selectedNotesCount, noteTitle)
+    const text = StringUtils.deleteNotes(permanently, notesToDelete.length, noteTitle)
 
     if (
       await confirmDialog({
@@ -433,18 +576,20 @@ export class NotesController
     ) {
       this.application.itemListController.selectNextItem()
       if (permanently) {
-        const notesToDelete = this.getSelectedNotesList()
-        await this.application.mutator.deleteItems(notesToDelete)
-        for (let i = 0; i < notesToDelete.length; i++) {
+        const result = await this.deleteNotesPermanentlyFromDisk(notesToDelete)
+        this.reportBulkNoteFailure(result, 'deleted', 'See the developer console for details, then try again.')
+        for (let i = 0; i < result.changed.length; i++) {
           achievements.increment(METRICS.itemsDeletedTotal)
         }
         void this.application.sync.sync()
+        return result.changed.length > 0
       } else {
-        await this.changeSelectedNotes((mutator) => {
+        const result = await this.changeNotes(notesToDelete, (mutator) => {
           mutator.trashed = true
         })
+        this.reportBulkNoteFailure(result, 'moved to trash')
+        return result.changed.length > 0
       }
-      return true
     }
 
     return false
@@ -480,15 +625,21 @@ export class NotesController
         achievements.increment(METRICS.notesPinnedTotal, newlyPinned)
       }
     }
-    this.changeSelectedNotes((mutator) => {
-      mutator.pinned = pinned
-    }).catch(console.error)
+    this.changeSelectedNotesAndReport(
+      (mutator) => {
+        mutator.pinned = pinned
+      },
+      pinned ? 'pinned' : 'unpinned',
+    )
   }
 
   setStarSelectedNotes(starred: boolean): void {
-    this.changeSelectedNotes((mutator) => {
-      mutator.starred = starred
-    }).catch(console.error)
+    this.changeSelectedNotesAndReport(
+      (mutator) => {
+        mutator.starred = starred
+      },
+      starred ? 'starred' : 'unstarred',
+    )
   }
 
   canEnableLocalOnlyForNotes(notes: SNNote[]): boolean {
@@ -509,10 +660,11 @@ export class NotesController
       return false
     }
 
-    await this.changeSelectedNotes((mutator) => {
+    const result = await this.changeNotes(notes, (mutator) => {
       mutator.localOnly = localOnly
     })
-    return true
+    this.reportBulkNoteFailure(result, localOnly ? 'made local-only' : 'made syncing')
+    return result.failed.length === 0
   }
 
   async toggleLocalOnlySelectedNotes(): Promise<void> {
@@ -522,16 +674,17 @@ export class NotesController
   }
 
   async setArchiveSelectedNotes(archived: boolean): Promise<void> {
-    if (this.getSelectedNotesList().some((note) => note.locked)) {
-      this.application.alerts
-        .alert(StringUtils.archiveLockedNotesAttempt(archived, this.selectedNotesCount))
-        .catch(console.error)
+    const notes = this.getSelectedNotesList()
+
+    if (notes.some((note) => note.locked)) {
+      this.application.alerts.alert(StringUtils.archiveLockedNotesAttempt(archived, notes.length)).catch(console.error)
       return
     }
 
-    await this.changeSelectedNotes((mutator) => {
+    const result = await this.changeNotes(notes, (mutator) => {
       mutator.archived = archived
     })
+    this.reportBulkNoteFailure(result, archived ? 'archived' : 'unarchived')
 
     runInAction(() => {
       this.application.itemListController.deselectAll()
@@ -553,13 +706,20 @@ export class NotesController
   async setProtectSelectedNotes(protect: boolean): Promise<void> {
     const selectedNotes = this.getSelectedNotesList()
     // Protect/unprotect dirties each note (mutator.protected). Re-hydrate any cold-loaded lite
-    // notes first so the mutation is not refused for a note the user hasn't opened.
-    await this.rehydrateLiteNotesForMutation(selectedNotes)
+    // notes first so the mutation is not refused for a note the user hasn't opened. Notes whose
+    // body could not be read back are excluded and reported rather than attempted and lost.
+    const { changed, failed } = await this.rehydrateLiteNotesForMutation(selectedNotes)
+    this.reportBulkNoteFailure({ changed, failed }, protect ? 'protected' : 'unprotected')
+
+    if (changed.length === 0) {
+      return
+    }
+
     if (protect) {
-      await this.application.protections.protectNotes(selectedNotes)
+      await this.application.protections.protectNotes(changed)
       this.setShowProtectedWarning(true)
     } else {
-      await this.application.protections.unprotectNotes(selectedNotes)
+      await this.application.protections.unprotectNotes(changed)
       this.setShowProtectedWarning(false)
     }
 

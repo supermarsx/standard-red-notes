@@ -1516,12 +1516,22 @@ export class Dependencies {
     })
 
     this.factory.set(TYPES.MutatorService, () => {
-      return new MutatorService(
+      const mutator = new MutatorService(
         this.get<ItemManager>(TYPES.ItemManager),
         this.get<PayloadManager>(TYPES.PayloadManager),
         this.get<AlertService>(TYPES.AlertService),
         this.get<InternalEventBus>(TYPES.InternalEventBus),
       )
+
+      /**
+       * Under `lazyDecryptEnabled` a cold-loaded note is body-less, and dirtying it is refused by
+       * the model safety guard. Give the mutator the on-disk body reader so every dirtying change
+       * path re-hydrates before mutating. Resolved lazily inside the closure so SyncService (which
+       * is built later, and transitively depends on the mutator) is not pulled in here.
+       */
+      mutator.setLiteContentRehydrator((uuid) => this.get<SyncService>(TYPES.SyncService).getFullContentPayload(uuid))
+
+      return mutator
     })
 
     this.factory.set(TYPES.DiskStorageService, () => {
