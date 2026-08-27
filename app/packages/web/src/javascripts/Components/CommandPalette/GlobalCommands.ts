@@ -115,13 +115,9 @@ export const GLOBAL_COMMANDS: GlobalCommand[] = [
     icon: 'notes',
     run: (application) => void application.navigationController.selectHomeNavigationView(),
   },
-  {
-    id: 'global-go-files',
-    title: 'Go to files',
-    keywords: ['navigate', 'attachments'],
-    icon: 'file',
-    run: (application) => void application.navigationController.selectFilesView(),
-  },
+  // 'global-go-files' (which selected the Files smart view) is intentionally absent:
+  // it duplicated 'global-open-files' below, which opens the Files tab. Two palette
+  // entries named for the same thing landed the user in two different file UIs.
   {
     id: 'global-open-constellation',
     title: 'Open constellation graph',
@@ -162,7 +158,9 @@ export const GLOBAL_COMMANDS: GlobalCommand[] = [
   {
     id: 'global-open-files',
     title: 'Open Files',
-    keywords: ['attachments', 'gallery', 'uploads', 'documents'],
+    // 'navigate' / 'go to' carried over from the removed 'global-go-files' so the
+    // palette still answers the same searches now that this is the only Files entry.
+    keywords: ['attachments', 'gallery', 'uploads', 'documents', 'navigate', 'go to'],
     icon: 'attachment-file',
     run: openAppPaneTab(AppPaneId.Files),
   },

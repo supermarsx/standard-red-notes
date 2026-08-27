@@ -1,8 +1,8 @@
 import { FeaturesController } from '@/Controllers/FeaturesController'
 import { NavigationController } from '@/Controllers/Navigation/NavigationController'
-import { SmartView } from '@standardnotes/snjs'
+import { SmartView, SystemViewId } from '@standardnotes/snjs'
 import { observer } from 'mobx-react-lite'
-import { FunctionComponent, useState } from 'react'
+import { FunctionComponent, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import SmartViewsListItem from './SmartViewsListItem'
 import { useListKeyboardNavigation } from '@/Hooks/useListKeyboardNavigation'
@@ -18,7 +18,18 @@ const SmartViewsList: FunctionComponent<Props> = ({
   featuresController,
   setEditingSmartView,
 }: Props) => {
-  const allViews = navigationController.smartViews
+  /**
+   * Standard Red Notes: the Files system view is deliberately not listed here.
+   * Files are managed in the dedicated Files tab (FilesSectionButton →
+   * AppPaneId.Files); listing both put two identically-named, identically-iconed
+   * "Files" entries in the same sidebar opening two different UIs over the same
+   * data. Filtering at the render site rather than on the controller keeps
+   * `smartViews[0]` (the home navigation view) and the search filter intact.
+   */
+  const allViews = useMemo(
+    () => navigationController.smartViews.filter((view) => view.uuid !== SystemViewId.Files),
+    [navigationController.smartViews],
+  )
   const { t } = useTranslation('navigation')
 
   const [container, setContainer] = useState<HTMLDivElement | null>(null)
