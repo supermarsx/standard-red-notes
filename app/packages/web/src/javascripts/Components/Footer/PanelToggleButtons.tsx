@@ -12,6 +12,13 @@ import PaneCollapseButton from '../Panes/PaneCollapseButton'
  * in the footer so no panel chrome sits above the content the user is reading,
  * and so both toggles are always in the same, predictable place.
  *
+ * The request was for "floating icons", and they are deliberately NOT floated:
+ * the footer is a normal in-flow element, so these buttons structurally cannot
+ * overlay the editor. This app already shipped, and had to revert, one control
+ * that covered the note being edited — an absolutely-positioned variant would
+ * reintroduce exactly that. The intent behind "floating" (get them off the top
+ * bars, keep them small and unobtrusive) is met without the overlay risk.
+ *
  * Both buttons are rendered unconditionally so the pair never shifts position
  * as panes collapse; instead each button's icon, tooltip and accessible name
  * describe the action it will perform *right now* ("Collapse notes panel" when

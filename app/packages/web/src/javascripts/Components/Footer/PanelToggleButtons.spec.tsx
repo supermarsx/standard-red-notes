@@ -241,6 +241,28 @@ describe('panel toggles in the footer bar', () => {
     }
   })
 
+  /**
+   * The "nothing is lost below 768px" claim. jsdom applies no CSS, so this cannot
+   * assert visibility at a viewport width — it asserts the responsive contract in
+   * the rendered DOM: the footer that hosts the toggles, and the toggles
+   * themselves, are `hidden` by default and only `md:flex`. Every control this
+   * change replaced carried the same pair (PaneCollapseButton's own base classes),
+   * so the md+ floor is unchanged rather than newly introduced.
+   */
+  it('keeps the toggles on the same md+ floor as the footer that hosts them', () => {
+    const footerBar = renderFooter()
+
+    expect(footerBar.classList.contains('hidden')).toBe(true)
+    expect(footerBar.classList.contains('md:flex')).toBe(true)
+
+    const buttons = toggleButtonsIn(footerBar)
+    expect(buttons).toHaveLength(2)
+    for (const { element } of buttons) {
+      expect(element.classList.contains('hidden')).toBe(true)
+      expect(element.classList.contains('md:flex')).toBe(true)
+    }
+  })
+
   it.each([
     ['both panes expanded', false, false],
     ['both panes collapsed', true, true],
