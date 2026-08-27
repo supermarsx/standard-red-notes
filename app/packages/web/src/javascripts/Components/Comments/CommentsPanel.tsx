@@ -140,7 +140,7 @@ export const CommentsPanel: FunctionComponent<Props> = ({ note }) => {
     <div className="border-border bg-default rounded border p-2.5">
       <div className="mb-2 flex items-center justify-between">
         <div className="text-passive-0 flex items-center gap-1.5 text-xs font-semibold tracking-wide uppercase">
-          <Icon type="chat-bubble" size="small" />
+          <Icon type="comment" size="small" />
           Comments
           {comments.length > 0 && <span className="text-passive-1">({comments.length})</span>}
         </div>

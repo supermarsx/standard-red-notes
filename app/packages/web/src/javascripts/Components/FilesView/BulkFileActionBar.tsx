@@ -174,7 +174,7 @@ const BulkFileActionBar: FunctionComponent<Props> = ({
           {anyProtected && (
             <button className={buttonClass} onClick={() => onSetProtection(false)} disabled={isRunning}>
               <span className="flex items-center gap-1">
-                <Icon type="unlock" size="medium" />
+                <Icon type="lock" size="medium" />
                 Unprotect
               </span>
             </button>
