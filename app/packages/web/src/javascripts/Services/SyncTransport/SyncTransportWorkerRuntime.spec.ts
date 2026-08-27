@@ -7,6 +7,7 @@ import {
   payloadByteLength,
   SyncServerFrame,
   SyncWorkerToMainMessage,
+  decodeFileBinaryFrame,
   utf8Bytes,
 } from './syncTransportProtocol'
 
@@ -99,6 +100,12 @@ class FakeSocket implements SyncSocketLike {
 
   send(data: string): void {
     this.sent.push(data)
+  }
+
+  sentBinary: Uint8Array[] = []
+
+  sendBinary(data: Uint8Array): void {
+    this.sentBinary.push(data)
   }
 
   receive(frame: SyncServerFrame | string): void {
@@ -813,6 +820,271 @@ describe('SyncTransportWorkerRuntime', () => {
         expect.objectContaining({ type: 'FILE_DOWNLOAD_ERROR', code: 'INVALID_REQUEST', safeToFallback: true }),
       )
       expect(socket.sent).toHaveLength(framesBefore)
+    })
+
+    describe('uploads', () => {
+      const uploadRequest = (overrides: Record<string, unknown> = {}) => ({
+        resource: { ownershipType: 'user' as const, remoteIdentifier: REMOTE_IDENTIFIER, fileUuid: FILE_UUID },
+        decryptedSize: 8,
+        declaredSize: 10,
+        mimeType: 'application/octet-stream',
+        deadlineMs: 30_000,
+        ...overrides,
+      })
+
+      const openUpload = async (harness: ReturnType<typeof setup>, overrides: Record<string, unknown> = {}) =>
+        harness.runtime.handle({
+          type: 'OPEN_FILE_UPLOAD',
+          clientRequestId: 'file-upload-1',
+          sessionScope: SESSION_A,
+          request: uploadRequest(overrides) as never,
+        })
+
+      const acceptUpload = (socket: FakeSocket) => {
+        const open = socket.sent
+          .map((entry) => JSON.parse(entry) as { type: string; requestId: string; commandId: string })
+          .find((frame) => frame.type === 'FILES_UPLOAD_OPEN')!
+        socket.receive(
+          serverFrame('FILES_ACCEPTED', open.commandId, {
+            mode: 'upload',
+            transferId: 'transfer-1',
+            generation: 1,
+            resumeId: 'resume-1',
+            nextIndex: 0,
+            nextOffset: 0,
+            declaredSize: 10,
+            maxChunkBytes: 256 * 1024,
+          }),
+        )
+        return open
+      }
+
+      it('never touches the socket when the gateway does not advertise the lane', async () => {
+        const harness = setup()
+        const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, ['SYNC_ITEMS'])
+        const framesBefore = socket.sent.length
+
+        await openUpload(harness)
+
+        expect(harness.messages).toContainEqual({
+          type: 'FILE_UPLOAD_ERROR',
+          clientRequestId: 'file-upload-1',
+          code: 'OPERATION_UNAVAILABLE',
+          retryable: true,
+          safeToFallback: true,
+        })
+        expect(socket.sent).toHaveLength(framesBefore)
+        expect(socket.sentBinary).toHaveLength(0)
+      })
+
+      it('reports the lane unavailable with no socket at all, without requesting a ticket', async () => {
+        const harness = setup()
+
+        await openUpload(harness)
+
+        expect(harness.messages).toContainEqual(
+          expect.objectContaining({ type: 'FILE_UPLOAD_ERROR', code: 'OPERATION_UNAVAILABLE', safeToFallback: true }),
+        )
+        expect(harness.messages.some((message) => message.type === 'NEED_TICKET')).toBe(false)
+        expect(harness.sockets).toHaveLength(0)
+      })
+
+      it('carries remoteIdentifier verbatim and moves a chunk as a binary frame', async () => {
+        const harness = setup()
+        const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, ['SYNC_ITEMS', 'FILES_V1'])
+        await openUpload(harness)
+
+        const open = JSON.parse(
+          socket.sent.find((entry) => JSON.parse(entry).type === 'FILES_UPLOAD_OPEN') as string,
+        ) as { requestId: string; payload: Record<string, unknown> }
+        expect(open.payload.resource).toEqual({
+          ownershipType: 'user',
+          remoteIdentifier: REMOTE_IDENTIFIER,
+          fileUuid: FILE_UUID,
+        })
+
+        acceptUpload(socket)
+        await flush()
+        expect(harness.messages).toContainEqual(
+          expect.objectContaining({ type: 'FILE_UPLOAD_ACCEPTED', transferId: 'transfer-1', generation: 1 }),
+        )
+
+        await harness.runtime.handle({
+          type: 'SEND_FILE_CHUNK',
+          clientRequestId: 'file-upload-1',
+          index: 0,
+          offset: 0,
+          bytes: Uint8Array.from([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
+        })
+        await flush()
+
+        expect(socket.sentBinary).toHaveLength(1)
+        // Decoding with this client's own decoder proves the frame is well formed
+        // against the same rules the gateway applies.
+        const decoded = decodeFileBinaryFrame(socket.sentBinary[0])
+        expect(decoded.header).toMatchObject({
+          kind: 'UPLOAD_CHUNK',
+          requestId: open.requestId,
+          transferId: 'transfer-1',
+          generation: 1,
+          index: 0,
+          offset: 0,
+          declaredSize: 10,
+          byteLength: 10,
+          final: true,
+        })
+        expect([...decoded.bytes]).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+      })
+
+      it('forwards a shared-vault upload reference whole rather than rebuilding it', async () => {
+        const harness = setup()
+        const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, ['SYNC_ITEMS', 'FILES_V1'])
+
+        await openUpload(harness, {
+          resource: {
+            ownershipType: 'shared-vault',
+            remoteIdentifier: REMOTE_IDENTIFIER,
+            fileUuid: FILE_UUID,
+            sharedVaultUuid: '22222222-2222-4222-8222-222222222222',
+            sharedVaultOwnerUuid: '33333333-3333-4333-8333-333333333333',
+          },
+        })
+
+        const open = JSON.parse(
+          socket.sent.find((entry) => JSON.parse(entry).type === 'FILES_UPLOAD_OPEN') as string,
+        ) as { payload: Record<string, unknown> }
+        expect(open.payload.resource).toEqual({
+          ownershipType: 'shared-vault',
+          remoteIdentifier: REMOTE_IDENTIFIER,
+          fileUuid: FILE_UUID,
+          sharedVaultUuid: '22222222-2222-4222-8222-222222222222',
+          sharedVaultOwnerUuid: '33333333-3333-4333-8333-333333333333',
+        })
+      })
+
+      it('relays a chunk acknowledgement addressed by transferId rather than the open commandId', async () => {
+        const harness = setup()
+        const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, ['SYNC_ITEMS', 'FILES_V1'])
+        await openUpload(harness)
+        const open = acceptUpload(socket)
+        await flush()
+
+        // The gateway sets commandId to the transferId when acknowledging a
+        // binary chunk, so routing must match on either.
+        socket.receive(
+          serverFrame('FILES_CHUNK_ACK', 'transfer-1', {
+            transferId: 'transfer-1',
+            generation: 1,
+            index: 0,
+            duplicate: false,
+            nextIndex: 1,
+            nextOffset: 10,
+            resumeId: 'resume-2',
+          }),
+        )
+        await flush()
+
+        expect(open.commandId).not.toBe('transfer-1')
+        expect(harness.messages).toContainEqual({
+          type: 'FILE_UPLOAD_CHUNK_ACK',
+          clientRequestId: 'file-upload-1',
+          transferId: 'transfer-1',
+          generation: 1,
+          index: 0,
+          duplicate: false,
+          nextIndex: 1,
+          nextOffset: 10,
+          resumeId: 'resume-2',
+        })
+      })
+
+      it('treats everything after a FINISH attempt as unsafe to replay', async () => {
+        const harness = setup()
+        const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, ['SYNC_ITEMS', 'FILES_V1'])
+        await openUpload(harness)
+        acceptUpload(socket)
+        await flush()
+
+        await harness.runtime.handle({
+          type: 'FINISH_FILE_UPLOAD',
+          clientRequestId: 'file-upload-1',
+          transferId: 'transfer-1',
+          generation: 1,
+          declaredSize: 10,
+          sha256: 'ab'.repeat(32),
+        })
+        socket.close(1006)
+        await flush()
+
+        expect(harness.messages).toContainEqual({
+          type: 'FILE_UPLOAD_ERROR',
+          clientRequestId: 'file-upload-1',
+          code: 'SOCKET_CLOSED',
+          retryable: true,
+          safeToFallback: false,
+        })
+      })
+
+      it('is safe to replay when the socket dies before FINISH', async () => {
+        const harness = setup()
+        const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, ['SYNC_ITEMS', 'FILES_V1'])
+        await openUpload(harness)
+        acceptUpload(socket)
+        await flush()
+        socket.close(1006)
+        await flush()
+
+        expect(harness.messages).toContainEqual(
+          expect.objectContaining({ type: 'FILE_UPLOAD_ERROR', code: 'SOCKET_CLOSED', safeToFallback: true }),
+        )
+      })
+
+      it('refuses to emit a chunk the gateway would reject rather than spending a round trip', async () => {
+        const harness = setup()
+        const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, ['SYNC_ITEMS', 'FILES_V1'])
+        await openUpload(harness)
+        acceptUpload(socket)
+        await flush()
+
+        // Offset beyond the declared size can never be a valid frame.
+        await harness.runtime.handle({
+          type: 'SEND_FILE_CHUNK',
+          clientRequestId: 'file-upload-1',
+          index: 0,
+          offset: 9,
+          bytes: Uint8Array.from([1, 2, 3, 4]),
+        })
+        await flush()
+
+        expect(socket.sentBinary).toHaveLength(0)
+        expect(harness.messages).toContainEqual(
+          expect.objectContaining({ type: 'FILE_UPLOAD_ERROR', code: 'FILE_FRAME_MALFORMED' }),
+        )
+      })
+
+      it('completes when the gateway confirms the upload', async () => {
+        const harness = setup()
+        const socket = await authorize(harness, body(), 't'.repeat(40), SESSION_A, ['SYNC_ITEMS', 'FILES_V1'])
+        await openUpload(harness)
+        const open = acceptUpload(socket)
+        await flush()
+
+        socket.receive(
+          serverFrame('FILES_COMPLETE', open.commandId, {
+            mode: 'upload',
+            transferId: 'transfer-1',
+            generation: 1,
+            sha256: 'ab'.repeat(32),
+          }),
+        )
+        await flush()
+
+        expect(harness.messages).toContainEqual({
+          type: 'FILE_UPLOAD_COMPLETE',
+          clientRequestId: 'file-upload-1',
+          sha256: 'ab'.repeat(32),
+        })
+      })
     })
 
     it('returns consumed credit only when the main thread asks for it', async () => {

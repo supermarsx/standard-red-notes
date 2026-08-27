@@ -33,6 +33,23 @@ export const MIN_FILE_TRANSFER_DEADLINE_MS = 1_000
 export const MAX_FILE_TRANSFER_DEADLINE_MS = 120_000
 export const DEFAULT_FILE_TRANSFER_DEADLINE_MS = 30_000
 
+export const MAX_FILE_MIME_TYPE_BYTES = 255
+
+/**
+ * C0 controls plus DEL, matching the gateway's `isFileMimeType` rejection set.
+ * Written as a code-point scan rather than a regex so the control characters
+ * never appear literally in this source file.
+ */
+function hasControlCharacters(value: string): boolean {
+  for (let index = 0; index < value.length; index++) {
+    const code = value.charCodeAt(index)
+    if (code <= 0x1f || code === 0x7f) {
+      return true
+    }
+  }
+  return false
+}
+
 const FILE_BINARY_MAGIC = [0x53, 0x52, 0x4e, 0x46] as const
 const FILE_BINARY_PREFIX_BYTES = 8
 const FILE_IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u
@@ -366,6 +383,47 @@ export function isSocketFileResourceReference(value: unknown): value is SocketFi
   )
 }
 
+/**
+ * An upload the worker may open on the socket.
+ *
+ * `declaredSize` is the total ENCRYPTED size and must be exact — the gateway
+ * validates it at open, on every chunk, and again at finish, where a mismatch is
+ * `FILE_INCOMPLETE` after the whole file has already crossed the wire. The
+ * transport therefore takes it as a given from a caller that knows it; deriving
+ * it here from a decrypted size would mean assuming a chunking contract this
+ * layer cannot see.
+ */
+export type WorkerFileUploadRequest = {
+  resource: SocketFileResourceReference
+  decryptedSize: number
+  declaredSize: number
+  mimeType: string
+  deadlineMs: number
+  /** Present to resume an interrupted transfer rather than start a second one. */
+  resumeId?: string
+}
+
+export function isWorkerFileUploadRequest(value: unknown): value is WorkerFileUploadRequest {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false
+  }
+  const request = value as Partial<WorkerFileUploadRequest>
+  return (
+    isSocketFileResourceReference(request.resource) &&
+    isFileTransferSize(request.decryptedSize) &&
+    isFileTransferSize(request.declaredSize) &&
+    typeof request.mimeType === 'string' &&
+    request.mimeType.length > 0 &&
+    utf8Bytes(request.mimeType).byteLength <= MAX_FILE_MIME_TYPE_BYTES &&
+    // Mirrors the gateway's isFileMimeType: control characters never reach the wire.
+    !hasControlCharacters(request.mimeType) &&
+    Number.isSafeInteger(request.deadlineMs) &&
+    Number(request.deadlineMs) >= MIN_FILE_TRANSFER_DEADLINE_MS &&
+    Number(request.deadlineMs) <= MAX_FILE_TRANSFER_DEADLINE_MS &&
+    (request.resumeId === undefined || isFileIdentifier(request.resumeId))
+  )
+}
+
 export function isWorkerFileDownloadRequest(value: unknown): value is WorkerFileDownloadRequest {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return false
@@ -398,6 +456,8 @@ export type SyncClientFrame = {
     | 'INVITE_SUBSCRIBE'
     | 'INVITE_ACK'
     | 'FILES_DOWNLOAD_OPEN'
+    | 'FILES_UPLOAD_OPEN'
+    | 'FILES_UPLOAD_FINISH'
     | 'FILES_CREDIT'
     | 'FILES_CANCEL'
   requestId: string
@@ -485,6 +545,33 @@ export type MainToSyncWorkerMessage =
     }
   | { type: 'FILE_DOWNLOAD_CREDIT'; clientRequestId: string; creditBytes: number }
   | { type: 'CANCEL_FILE_DOWNLOAD'; clientRequestId: string }
+  | {
+      type: 'OPEN_FILE_UPLOAD'
+      clientRequestId: string
+      sessionScope: string
+      request: WorkerFileUploadRequest
+    }
+  /**
+   * One binary chunk to write. The bytes come from the main thread because that
+   * is where the encryptor produces them; the worker holds no keys and only
+   * frames and forwards what it is handed.
+   */
+  | {
+      type: 'SEND_FILE_CHUNK'
+      clientRequestId: string
+      index: number
+      offset: number
+      bytes: Uint8Array
+    }
+  | {
+      type: 'FINISH_FILE_UPLOAD'
+      clientRequestId: string
+      transferId: string
+      generation: number
+      declaredSize: number
+      sha256: string
+    }
+  | { type: 'CANCEL_FILE_UPLOAD'; clientRequestId: string }
   | { type: 'CONNECT'; clientRequestId: string; sessionScope: string; authorization: SyncTicket }
   | { type: 'TICKET_UNAVAILABLE'; clientRequestId: string; reason: SyncFallbackReason }
   | { type: 'CHECKPOINT_DURABLE'; requestId: string; sessionScope: string; commandId: string }
@@ -595,6 +682,41 @@ export type SyncWorkerToMainMessage =
        * stateful file decryptor, and restarting the same file over HTTP from byte
        * zero would double-feed it. The worker cannot observe main-thread
        * consumption, so "forwarded" is the conservative stand-in for "consumed".
+       */
+      safeToFallback: boolean
+    }
+  | {
+      type: 'FILE_UPLOAD_ACCEPTED'
+      clientRequestId: string
+      transferId: string
+      generation: number
+      resumeId: string
+      nextIndex: number
+      nextOffset: number
+      declaredSize: number
+    }
+  | {
+      type: 'FILE_UPLOAD_CHUNK_ACK'
+      clientRequestId: string
+      transferId: string
+      generation: number
+      index: number
+      duplicate: boolean
+      nextIndex: number
+      nextOffset: number
+      resumeId: string
+    }
+  | { type: 'FILE_UPLOAD_COMPLETE'; clientRequestId: string; sha256: string }
+  | {
+      type: 'FILE_UPLOAD_ERROR'
+      clientRequestId: string
+      code: string
+      retryable: boolean
+      /**
+       * Only what the socket itself observed. `SocketUploadTransfer` on the main
+       * thread has the final say, because only it knows whether FINISH was ever
+       * issued — and after FINISH nothing is safe to replay regardless of what
+       * the socket saw.
        */
       safeToFallback: boolean
     }

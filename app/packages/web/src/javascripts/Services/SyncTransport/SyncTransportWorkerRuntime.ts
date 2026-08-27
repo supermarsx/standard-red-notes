@@ -11,14 +11,19 @@ import {
   decodeFileBinaryFrame,
   DEFAULT_RPC_CREDIT_BYTES,
   digestSyncBody,
+  encodeFileBinaryFrame,
+  fileBinaryPayloadDigest,
   fileBinaryPayloadMatchesDigest,
   isFileIdentifier,
   isFileSha256,
   isWorkerFileDownloadRequest,
+  isWorkerFileUploadRequest,
   MAX_FILE_BINARY_FRAME_BYTES,
+  MAX_FILE_CHUNK_BYTES,
   MAX_FILE_TRANSFER_CREDIT_BYTES,
   SocketFileBinaryFrame,
   WorkerFileDownloadRequest,
+  WorkerFileUploadRequest,
   frameByteLength,
   isSyncServerFrame,
   MainToSyncWorkerMessage,
@@ -99,6 +104,12 @@ export interface SyncSocketLike {
   onerror: (() => void) | null
   onclose: ((event: { code?: number }) => void) | null
   send(data: string): void
+  /**
+   * Writes a binary FILES_V1 frame. Separate from {@link send} so a socket double
+   * that never carries file transfers does not have to model binary writes, and
+   * so a caller cannot accidentally pass bytes where a JSON frame is expected.
+   */
+  sendBinary(data: Uint8Array): void
   close(code?: number, reason?: string): void
 }
 
@@ -197,6 +208,30 @@ type ActiveFileDownload = {
   deadlineTimer?: ReturnType<typeof setTimeout>
 }
 
+/**
+ * One in-flight FILES_V1 upload, from the worker's point of view.
+ *
+ * The worker deliberately holds no opinion about resume, replay safety, or what
+ * to send next — `SocketUploadTransfer` on the main thread owns all of that, and
+ * it is pure and tested. This is a frame pump: it opens, writes the chunks it is
+ * handed, relays acknowledgements, and reports failures.
+ */
+type ActiveFileUpload = {
+  clientRequestId: string
+  sessionScope: string
+  request: WorkerFileUploadRequest
+  /** Echoed by the gateway on FILES_ACCEPTED / FILES_COMPLETE / ERROR. */
+  commandId: string
+  /** Carried in every binary chunk header this upload emits. */
+  requestId: string
+  accepted: boolean
+  transferId?: string
+  generation?: number
+  /** True once FINISH bytes are on the socket; from then on nothing is replayable. */
+  finishSent: boolean
+  deadlineTimer?: ReturnType<typeof setTimeout>
+}
+
 type CollaborationEpochDiscoveryHandshake = {
   challenge: string
   requestId: string
@@ -269,6 +304,7 @@ export class SyncTransportWorkerRuntime {
   private negotiatedOperations = new Set<SyncNegotiatedOperation>()
   private readonly rpcRequests = new Map<string, ActiveRpcRequest>()
   private readonly fileDownloads = new Map<string, ActiveFileDownload>()
+  private readonly fileUploads = new Map<string, ActiveFileUpload>()
   private inviteSubscription?: ActiveInviteSubscription
   private shuttingDown = false
   private ackTimeout?: ReturnType<typeof setTimeout>
@@ -284,7 +320,10 @@ export class SyncTransportWorkerRuntime {
         if (typeof WebSocket === 'undefined') {
           throw new Error('WebSocket is unavailable')
         }
-        return new WebSocket(endpoint) as unknown as SyncSocketLike
+        const socket = new WebSocket(endpoint)
+        const adapted = socket as unknown as SyncSocketLike & { sendBinary: (data: Uint8Array) => void }
+        adapted.sendBinary = (data: Uint8Array) => socket.send(data.slice().buffer)
+        return adapted
       })
     this.now = dependencies.now ?? Date.now
     this.random = dependencies.random ?? Math.random
@@ -334,6 +373,18 @@ export class SyncTransportWorkerRuntime {
         break
       case 'CANCEL_FILE_DOWNLOAD':
         await this.cancelFileDownload(message.clientRequestId, 'CANCELLED')
+        break
+      case 'OPEN_FILE_UPLOAD':
+        await this.openFileUpload(message.clientRequestId, message.sessionScope, message.request)
+        break
+      case 'SEND_FILE_CHUNK':
+        await this.sendFileChunk(message.clientRequestId, message.index, message.offset, message.bytes)
+        break
+      case 'FINISH_FILE_UPLOAD':
+        await this.finishFileUpload(message)
+        break
+      case 'CANCEL_FILE_UPLOAD':
+        await this.cancelFileUpload(message.clientRequestId, 'CANCELLED')
         break
       case 'CONNECT':
         await this.connect(message.clientRequestId, message.sessionScope, message.authorization)
@@ -1013,6 +1064,324 @@ export class SyncTransportWorkerRuntime {
     }
   }
 
+  /**
+   * Opens a FILES_V1 upload on an already-negotiated socket.
+   *
+   * Gated exactly like a download and for the same reason: it never bootstraps a
+   * connection. Without a live socket advertising FILES_V1 this reports
+   * OPERATION_UNAVAILABLE and the caller uploads over HTTP as it always has, so a
+   * deployment that advertises nothing performs no extra work and gains no new
+   * failure mode from this lane existing.
+   */
+  private async openFileUpload(
+    clientRequestId: string,
+    sessionScope: string,
+    request: WorkerFileUploadRequest,
+  ): Promise<void> {
+    if (
+      this.shuttingDown ||
+      !validSessionScope(sessionScope) ||
+      !isWorkerFileUploadRequest(request) ||
+      this.fileUploads.has(clientRequestId)
+    ) {
+      this.failFileUploadMessage(clientRequestId, 'INVALID_REQUEST', false, true)
+      return
+    }
+    if (this.sessionScope && this.sessionScope !== sessionScope) {
+      this.failFileUploadMessage(clientRequestId, 'SESSION_CHANGED', false, true)
+      return
+    }
+    if (
+      this.socket?.readyState !== 1 ||
+      this.state !== 'READY' ||
+      !this.negotiatedOperations.has(FILES_NEGOTIATED_OPERATION)
+    ) {
+      this.failFileUploadMessage(clientRequestId, 'OPERATION_UNAVAILABLE', true, true)
+      return
+    }
+
+    const upload: ActiveFileUpload = {
+      clientRequestId,
+      sessionScope,
+      request,
+      commandId: this.uuid(),
+      requestId: this.uuid(),
+      accepted: false,
+      finishSent: false,
+    }
+    upload.deadlineTimer = this.scheduleTimeout(() => {
+      void this.cancelFileUpload(clientRequestId, 'DEADLINE_EXCEEDED')
+    }, request.deadlineMs)
+    this.fileUploads.set(clientRequestId, upload)
+
+    const payload = {
+      // Forwarded as validated, never rebuilt field by field: reconstructing it
+      // here is exactly how a shared-vault upload would lose its vault fields.
+      resource: { ...request.resource },
+      decryptedSize: request.decryptedSize,
+      declaredSize: request.declaredSize,
+      mimeType: request.mimeType,
+      deadlineMs: request.deadlineMs,
+      ...(request.resumeId ? { resumeId: request.resumeId } : {}),
+    }
+    const frame: SyncClientFrame = {
+      version: SYNC_PROTOCOL_VERSION,
+      channel: SYNC_CHANNEL,
+      type: 'FILES_UPLOAD_OPEN',
+      requestId: upload.requestId,
+      commandId: upload.commandId,
+      sequence: this.sequence++,
+      payloadLength: payloadByteLength(payload),
+      payload,
+    }
+    try {
+      await this.sendWithBackpressure(JSON.stringify(frame))
+    } catch {
+      this.failFileUpload(upload, 'SOCKET_CLOSED', true)
+    }
+  }
+
+  /** Frames and writes one encrypted chunk handed down from the main thread. */
+  private async sendFileChunk(
+    clientRequestId: string,
+    index: number,
+    offset: number,
+    bytes: Uint8Array,
+  ): Promise<void> {
+    const upload = this.fileUploads.get(clientRequestId)
+    if (
+      !upload?.accepted ||
+      upload.transferId === undefined ||
+      upload.generation === undefined ||
+      upload.finishSent ||
+      this.socket?.readyState !== 1 ||
+      this.state !== 'READY'
+    ) {
+      return
+    }
+    if (bytes.byteLength < 1 || bytes.byteLength > MAX_FILE_CHUNK_BYTES) {
+      this.failFileUpload(upload, 'FILE_FRAME_TOO_LARGE', false)
+      return
+    }
+    let encoded: Uint8Array
+    try {
+      const sha256 = await fileBinaryPayloadDigest(bytes, this.subtle)
+      encoded = encodeFileBinaryFrame(
+        {
+          kind: 'UPLOAD_CHUNK',
+          requestId: upload.requestId,
+          transferId: upload.transferId,
+          generation: upload.generation,
+          index,
+          offset,
+          declaredSize: upload.request.declaredSize,
+          byteLength: bytes.byteLength,
+          sha256,
+          final: offset + bytes.byteLength === upload.request.declaredSize,
+        },
+        bytes,
+      )
+    } catch {
+      // A frame this client knows the gateway would reject is not worth a round
+      // trip, and sending it would leave a transfer needing resolution.
+      this.failFileUpload(upload, 'FILE_FRAME_MALFORMED', false)
+      return
+    }
+    if (this.fileUploads.get(clientRequestId) !== upload) {
+      return
+    }
+    try {
+      await this.sendBinaryWithBackpressure(encoded)
+    } catch {
+      this.failFileUpload(upload, 'SOCKET_CLOSED', true)
+    }
+  }
+
+  private async finishFileUpload(message: {
+    clientRequestId: string
+    transferId: string
+    generation: number
+    declaredSize: number
+    sha256: string
+  }): Promise<void> {
+    const upload = this.fileUploads.get(message.clientRequestId)
+    if (
+      !upload?.accepted ||
+      upload.transferId !== message.transferId ||
+      upload.generation !== message.generation ||
+      !isFileSha256(message.sha256) ||
+      this.socket?.readyState !== 1 ||
+      this.state !== 'READY'
+    ) {
+      return
+    }
+    const payload = {
+      transferId: message.transferId,
+      generation: message.generation,
+      declaredSize: message.declaredSize,
+      sha256: message.sha256,
+      deadlineMs: upload.request.deadlineMs,
+    }
+    const frame: SyncClientFrame = {
+      version: SYNC_PROTOCOL_VERSION,
+      channel: SYNC_CHANNEL,
+      type: 'FILES_UPLOAD_FINISH',
+      requestId: this.uuid(),
+      commandId: upload.commandId,
+      sequence: this.sequence++,
+      payloadLength: payloadByteLength(payload),
+      payload,
+    }
+    // Marked before the write, not after. The client cannot know whether bytes it
+    // wrote arrived, so "I attempted FINISH" is the only transition point that
+    // never under-estimates the risk of the upload already having been applied.
+    upload.finishSent = true
+    try {
+      await this.sendWithBackpressure(JSON.stringify(frame))
+    } catch {
+      this.failFileUpload(upload, 'SOCKET_CLOSED', true)
+    }
+  }
+
+  private async cancelFileUpload(clientRequestId: string, code: string): Promise<void> {
+    const upload = this.fileUploads.get(clientRequestId)
+    if (!upload) {
+      return
+    }
+    if (
+      upload.transferId !== undefined &&
+      upload.generation !== undefined &&
+      this.socket?.readyState === 1 &&
+      this.state === 'READY'
+    ) {
+      const payload = { transferId: upload.transferId, generation: upload.generation }
+      const frame: SyncClientFrame = {
+        version: SYNC_PROTOCOL_VERSION,
+        channel: SYNC_CHANNEL,
+        type: 'FILES_CANCEL',
+        requestId: this.uuid(),
+        commandId: this.uuid(),
+        sequence: this.sequence++,
+        payloadLength: payloadByteLength(payload),
+        payload,
+      }
+      try {
+        await this.sendWithBackpressure(JSON.stringify(frame))
+      } catch {
+        // The local termination below is authoritative for the caller regardless.
+      }
+    }
+    this.failFileUpload(upload, code, code === 'DEADLINE_EXCEEDED')
+  }
+
+  private handleFileUploadServerFrame(upload: ActiveFileUpload, frame: SyncServerFrame): void {
+    if (frame.type === 'ERROR') {
+      const code = typeof frame.payload.code === 'string' ? frame.payload.code : 'FILE_BACKEND_ERROR'
+      this.failFileUpload(upload, code, RETRYABLE_FILE_ERROR_CODES.has(code))
+      return
+    }
+    if (frame.type === 'FILES_ACCEPTED') {
+      const payload = frame.payload
+      if (
+        payload.mode !== 'upload' ||
+        !isFileIdentifier(payload.transferId) ||
+        !isFileIdentifier(payload.resumeId) ||
+        !Number.isSafeInteger(payload.generation) ||
+        Number(payload.generation) < 1 ||
+        payload.declaredSize !== upload.request.declaredSize ||
+        !Number.isSafeInteger(payload.nextIndex) ||
+        !Number.isSafeInteger(payload.nextOffset) ||
+        Number(payload.nextOffset) > upload.request.declaredSize
+      ) {
+        this.failFileUpload(upload, 'FILE_INVALID_STATE', false)
+        return
+      }
+      upload.accepted = true
+      upload.transferId = payload.transferId
+      upload.generation = Number(payload.generation)
+      this.dependencies.postMessage({
+        type: 'FILE_UPLOAD_ACCEPTED',
+        clientRequestId: upload.clientRequestId,
+        transferId: payload.transferId,
+        generation: Number(payload.generation),
+        resumeId: payload.resumeId,
+        nextIndex: Number(payload.nextIndex),
+        nextOffset: Number(payload.nextOffset),
+        declaredSize: upload.request.declaredSize,
+      })
+      return
+    }
+    if (frame.type === 'FILES_CHUNK_ACK') {
+      const payload = frame.payload
+      if (
+        payload.transferId !== upload.transferId ||
+        payload.generation !== upload.generation ||
+        !Number.isSafeInteger(payload.index) ||
+        !Number.isSafeInteger(payload.nextIndex) ||
+        !Number.isSafeInteger(payload.nextOffset) ||
+        !isFileIdentifier(payload.resumeId)
+      ) {
+        return
+      }
+      this.dependencies.postMessage({
+        type: 'FILE_UPLOAD_CHUNK_ACK',
+        clientRequestId: upload.clientRequestId,
+        transferId: String(payload.transferId),
+        generation: Number(payload.generation),
+        index: Number(payload.index),
+        duplicate: payload.duplicate === true,
+        nextIndex: Number(payload.nextIndex),
+        nextOffset: Number(payload.nextOffset),
+        resumeId: payload.resumeId,
+      })
+      return
+    }
+    if (frame.type === 'FILES_COMPLETE') {
+      const payload = frame.payload
+      if (payload.mode !== 'upload' || payload.transferId !== upload.transferId || !isFileSha256(payload.sha256)) {
+        this.failFileUpload(upload, 'FILE_INVALID_STATE', false)
+        return
+      }
+      this.clearFileUpload(upload)
+      this.dependencies.postMessage({
+        type: 'FILE_UPLOAD_COMPLETE',
+        clientRequestId: upload.clientRequestId,
+        sha256: payload.sha256,
+      })
+    }
+  }
+
+  private failFileUpload(upload: ActiveFileUpload, code: string, retryable: boolean): void {
+    if (this.fileUploads.get(upload.clientRequestId) !== upload) {
+      return
+    }
+    this.clearFileUpload(upload)
+    this.failFileUploadMessage(upload.clientRequestId, code, retryable, !upload.finishSent)
+  }
+
+  private failFileUploadMessage(
+    clientRequestId: string,
+    code: string,
+    retryable: boolean,
+    safeToFallback: boolean,
+  ): void {
+    this.dependencies.postMessage({ type: 'FILE_UPLOAD_ERROR', clientRequestId, code, retryable, safeToFallback })
+  }
+
+  private clearFileUpload(upload: ActiveFileUpload): void {
+    if (upload.deadlineTimer) {
+      this.cancelTimeout(upload.deadlineTimer)
+      upload.deadlineTimer = undefined
+    }
+    this.fileUploads.delete(upload.clientRequestId)
+  }
+
+  private failAllFileUploads(code: string, retryable: boolean): void {
+    for (const upload of [...this.fileUploads.values()]) {
+      this.failFileUpload(upload, code, retryable)
+    }
+  }
+
   private async connect(clientRequestId: string, sessionScope: string, authorization: SyncTicket): Promise<void> {
     if (
       !this.active ||
@@ -1193,6 +1562,16 @@ export class SyncTransportWorkerRuntime {
     const fileDownload = [...this.fileDownloads.values()].find((candidate) => candidate.commandId === frame.commandId)
     if (fileDownload) {
       this.handleFilesServerFrame(fileDownload, frame)
+      return
+    }
+    // FILES_CHUNK_ACK is addressed by transferId rather than by the open frame's
+    // commandId — the gateway sets `commandId` to the transferId when it
+    // acknowledges a binary chunk — so uploads are matched on either.
+    const fileUpload = [...this.fileUploads.values()].find(
+      (candidate) => candidate.commandId === frame.commandId || candidate.transferId === frame.commandId,
+    )
+    if (fileUpload) {
+      this.handleFileUploadServerFrame(fileUpload, frame)
       return
     }
     if (frame.type === 'ERROR' && this.state === 'AUTHENTICATING') {
@@ -1817,6 +2196,30 @@ export class SyncTransportWorkerRuntime {
     socket.send(bytes)
   }
 
+  /**
+   * Binary sibling of {@link sendWithBackpressure}. A file chunk is up to 256 KiB
+   * and an upload writes many back to back, so waiting on `bufferedAmount` is what
+   * stops a large upload from queueing the whole file in the socket's send buffer
+   * and starving the JSON lanes that share this connection.
+   */
+  private async sendBinaryWithBackpressure(bytes: Uint8Array): Promise<void> {
+    const socket = this.socket
+    if (!socket || socket.readyState !== 1) {
+      throw new Error('Socket is not ready')
+    }
+    const deadline = this.now() + COMMAND_ACK_TIMEOUT_MS
+    while (socket.bufferedAmount > MAX_SYNC_BUFFERED_BYTES) {
+      if (this.now() >= deadline) {
+        throw new Error('Sync socket backpressure deadline exceeded before binary write.')
+      }
+      await new Promise<void>((resolve) => this.scheduleTimeout(resolve, 10))
+      if (this.socket !== socket) {
+        throw new Error('Sync socket changed before binary write.')
+      }
+    }
+    socket.sendBinary(bytes)
+  }
+
   private deliverResult(result: unknown): void {
     if (!this.active || !this.outboxRecord || this.resultDelivered) {
       return
@@ -1861,6 +2264,10 @@ export class SyncTransportWorkerRuntime {
     // A download cannot survive its socket: the gateway aborts the transfer on
     // disconnect, and its transferId/generation do not carry to a new connection.
     this.failAllFileDownloads('SOCKET_CLOSED', true)
+    // An upload cannot survive its socket either, but unlike a download it may
+    // have written bytes the server kept, so the main thread decides what that
+    // means for replay safety.
+    this.failAllFileUploads('SOCKET_CLOSED', true)
     for (const rpc of [...this.rpcRequests.values()]) {
       if (rpc.sent) {
         // Never replay a request after bytes crossed the socket. The server's
@@ -2163,6 +2570,7 @@ export class SyncTransportWorkerRuntime {
     }
     await this.closeSocketAndReleaseOwner()
     this.failAllFileDownloads('SESSION_REVOKED', false)
+    this.failAllFileUploads('SESSION_REVOKED', false)
     for (const rpc of [...this.rpcRequests.values()]) {
       this.failRpc(rpc, 'SESSION_REVOKED', false, false)
     }
@@ -2183,6 +2591,7 @@ export class SyncTransportWorkerRuntime {
     this.shuttingDown = true
     await this.closeSocketAndReleaseOwner()
     this.failAllFileDownloads('SHUTDOWN', false)
+    this.failAllFileUploads('SHUTDOWN', false)
     for (const rpc of [...this.rpcRequests.values()]) {
       this.failRpc(rpc, 'SHUTDOWN', false, false)
     }
