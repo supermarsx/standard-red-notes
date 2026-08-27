@@ -61,20 +61,48 @@ function abortable<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
  * Revalidates the original session token for every WS COMMAND/STATUS and then
  * delegates durable execution/idempotency to Lane 1's gRPC adapter. It never
  * implements a second executor or repository.
+ *
+ * Two INDEPENDENT readiness questions live on this one object, and conflating
+ * them used to close the whole socket:
+ *
+ *   - `sessionAuthorizationReady()` -- can a session be revalidated at all?
+ *     Needs only `AUTH_JWT_SECRET` and the HTTP `ServiceProxy`. Everything the
+ *     socket does (collaboration authorization, API RPC, invite events, files)
+ *     rests on this and NOTHING else.
+ *   - `ready()` -- can a DURABLE sync command be executed? Additionally needs a
+ *     bound durable command port. Only `SYNC_ITEMS` rests on this.
+ *
+ * While both answers came from one `ready()`, an unbound gRPC proxy -- or a
+ * bound one with no `SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET` -- reported the
+ * SESSION plane as dead and took five gRPC-independent capabilities with it.
  */
 export class SyncWebSocketCommandAdapter
   implements SyncLiveAuthorizationAdapter, SyncCommandBackendAdapter, SyncCollaborationAuthorizationAdapter
 {
   constructor(
     private readonly serviceProxy: ServiceProxyInterface,
-    private readonly durableSync: DurableSyncCommandPort,
+    /**
+     * Absent when the deployment binds no durable command port. The socket
+     * still serves every non-sync capability; only `SYNC_ITEMS` is withheld.
+     */
+    private readonly durableSync: DurableSyncCommandPort | undefined,
     private readonly authJwtSecret: string,
     private readonly collaborationAuthorization?: CollaborationAuthorizationService,
   ) {}
 
+  /**
+   * Session revalidation readiness. Deliberately says nothing about the durable
+   * backend: this is what gates the socket's non-sync capabilities.
+   */
+  sessionAuthorizationReady(): boolean {
+    return this.authJwtSecret.length > 0
+  }
+
+  /** Durable-command readiness. `SYNC_ITEMS` is advertised on this and only this. */
   ready(): boolean {
     return (
-      this.authJwtSecret.length > 0 &&
+      this.sessionAuthorizationReady() &&
+      this.durableSync !== undefined &&
       this.durableSync.durableCommandAuthenticationReady() &&
       typeof this.durableSync.sync === 'function' &&
       typeof this.durableSync.getSyncCommandStatus === 'function'
@@ -108,11 +136,12 @@ export class SyncWebSocketCommandAdapter
   }
 
   async execute(input: SyncBackendCommandInput, signal: AbortSignal): Promise<SyncBackendCommit> {
+    const durableSync = this.requireDurableSync()
     const validated = await this.validate(input.identity, signal)
     const body = this.commandBody(input.payload)
     const { request, response } = this.httpContext(validated.locals, body)
     const result = await abortable(
-      this.durableSync.sync(request, response, {
+      durableSync.sync(request, response, {
         ...body,
         command: { id: input.commandId, digest: input.digest },
       }),
@@ -128,10 +157,11 @@ export class SyncWebSocketCommandAdapter
   }
 
   async status(input: Omit<SyncBackendCommandInput, 'payload'>, signal: AbortSignal): Promise<SyncBackendStatus> {
+    const durableSync = this.requireDurableSync()
     const validated = await this.validate(input.identity, signal)
     const { request, response } = this.httpContext(validated.locals, {})
     const result = await abortable(
-      this.durableSync.getSyncCommandStatus(request, response, input.commandId, input.digest),
+      durableSync.getSyncCommandStatus(request, response, input.commandId, input.digest),
       signal,
     )
     if (result.status < 200 || result.status >= 300) {
@@ -149,7 +179,7 @@ export class SyncWebSocketCommandAdapter
   }
 
   collaborationAuthorizationReady(): boolean {
-    return this.ready() && this.collaborationAuthorization?.ready() === true
+    return this.sessionAuthorizationReady() && this.collaborationAuthorization?.ready() === true
   }
 
   async authorizeCollaboration(
@@ -169,8 +199,23 @@ export class SyncWebSocketCommandAdapter
     return this.collaborationAuthorization.authorize(request, validated.locals, input.request, signal)
   }
 
+  /**
+   * The durable port is resolved once, at the point of use, so a caller that
+   * reached `execute`/`status` without consulting `ready()` fails loudly here
+   * rather than dereferencing `undefined` mid-command.
+   */
+  private requireDurableSync(): DurableSyncCommandPort {
+    if (!this.durableSync) {
+      throw new Error('Durable sync command execution is unavailable.')
+    }
+    return this.durableSync
+  }
+
   private async validate(identity: SyncTicketIdentity, signal: AbortSignal): Promise<ValidatedSession> {
-    if (!identity.authorization || !this.ready()) {
+    // Session revalidation needs the auth secret and the HTTP service proxy,
+    // never the durable port -- gating it on `ready()` is what made an unbound
+    // gRPC proxy look like a dead authorization plane.
+    if (!identity.authorization || !this.sessionAuthorizationReady()) {
       throw new Error('Live sync authorization is unavailable.')
     }
     const authorization = identity.authorization.replace(/^Bearer\s+/i, '')

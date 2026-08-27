@@ -26,6 +26,7 @@ import { safeErrorLogMetadata } from './safeLog.js'
 import { startSqsConsumer, type SqsEventDedupStore } from './sqsConsumer.js'
 import {
   SyncCommandHandler,
+  sessionAuthorizationReady,
   type SyncCommandBackendAdapter,
   type SyncCollaborationAuthorizationAdapter,
   type SyncCommandMetrics,
@@ -200,6 +201,15 @@ export type SyncUnavailabilityReason =
   | 'command-lease-store-unavailable'
   | 'socket-budget-store-unavailable'
   | 'authorization-adapter-unavailable'
+  /**
+   * Retained and still reported, but NO LONGER FATAL to the socket. The durable
+   * backend is a dependency of `SYNC_ITEMS` alone; when it is unready the
+   * socket opens and simply does not advertise that one operation. It used to
+   * be part of the availability conjunction, which meant an unbound gRPC proxy
+   * -- or a bound one missing SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET -- shut
+   * the lane and took INVITE_EVENTS, AUTHORIZE_COLLABORATION, API_RPC,
+   * STREAM_ASSISTANT and FILES_V1 down with it, none of which depend on it.
+   */
   | 'durable-backend-unavailable'
   | 'invite-event-store-unavailable'
 
@@ -835,11 +845,8 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
     if (!syncSocketBudget.ready()) {
       reasons.push('socket-budget-store-unavailable')
     }
-    if (!syncOptions.authorization.ready()) {
+    if (!sessionAuthorizationReady(syncOptions.authorization)) {
       reasons.push('authorization-adapter-unavailable')
-    }
-    if (!syncOptions.backend.ready()) {
-      reasons.push('durable-backend-unavailable')
     }
     if (syncOptions.requireSharedState && !syncOptions.inviteEvents?.ready()) {
       reasons.push('invite-event-store-unavailable')
@@ -847,6 +854,25 @@ export function attachWebSocketGateway(opts: AttachOptions): AttachedGateway {
     return reasons
   }
   const syncAvailable = (): boolean => syncUnavailabilityReasons().length === 0
+  /**
+   * Non-fatal, per-capability. `SYNC_ITEMS` is withheld from the negotiated
+   * operation list when this is false; the socket itself stays open and every
+   * other capability negotiates normally.
+   */
+  const syncItemsAvailable = (): boolean => syncOptions?.backend.ready() === true
+  // Once per attach, name the SYNC_ITEMS decision separately from the lane's.
+  // Without this, a socket that comes up healthy but serves no sync is
+  // indistinguishable in the log from one that serves everything -- and that
+  // is precisely the state a deployment with no durable command port now runs
+  // in permanently, so it must be stated rather than inferred.
+  if (syncOptions && !syncItemsAvailable()) {
+    // One string, no metadata object: hosts bridge this variadic logger with
+    // `args.map(String).join(' ')`, which renders an object as [object Object].
+    logger.warn(
+      `[ws-sync] SYNC_ITEMS will not be advertised (${'durable-backend-unavailable' satisfies SyncUnavailabilityReason}). ` +
+        'The socket still serves collaboration, API RPC, invite events and files; clients sync over HTTP.',
+    )
+  }
   // Refusals are what an operator needs to see and what a retrying client can
   // emit endlessly; one line per distinct cause per minute keeps both true.
   const logRefusal = createRefusalLogger(logger)

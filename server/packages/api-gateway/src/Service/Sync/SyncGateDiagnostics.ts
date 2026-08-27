@@ -1,7 +1,9 @@
 import type { SyncNegotiatedOperation } from '@standard-red-notes/websocket-gateway'
 
 import {
+  resolveUnmetSyncItemsPreconditions,
   resolveUnmetSyncPreconditions,
+  resolveUnmetSyncTransportPreconditions,
   type SyncPrecondition,
   type SyncPreconditionCode,
   type SyncPreconditionState,
@@ -99,6 +101,15 @@ export type SyncGateDiagnosticsReport = {
   gatewayAttached: boolean
   /** The sync lane itself was built — this is what makes POST /ticket succeed. */
   syncLaneEnabled: boolean
+  /**
+   * Whether the SYNC_ITEMS operation is offered on that lane. Reported
+   * SEPARATELY from `syncLaneEnabled` because they are now independent: a lane
+   * can be fully up and serving collaboration, API RPC, invite events and files
+   * while SYNC_ITEMS is withheld for want of a durable command port, with
+   * clients syncing over HTTP. Collapsing the two would show an operator a
+   * healthy lane and leave them no way to see the missing operation.
+   */
+  syncItemsAdvertised: boolean
   /** Every unmet boot condition, from SyncWebSocketPreconditions. */
   unmetPreconditions: SyncPrecondition[]
   /** Just the codes, for callers that only need the set. */
@@ -139,18 +150,23 @@ export class SyncGateDiagnosticsRecorder {
         recorded: false,
         gatewayAttached: false,
         syncLaneEnabled: false,
+        syncItemsAdvertised: false,
         unmetPreconditions: [],
         unmetCodes: [],
         files: { ...NO_FILES },
       }
     }
 
+    // The full list is still what the panel renders, so the gRPC condition
+    // remains visible and named; only which of them gate WHAT has changed.
     const unmetPreconditions = resolveUnmetSyncPreconditions(observed)
+    const laneEnabled = resolveUnmetSyncTransportPreconditions(observed).length === 0
 
     return {
       recorded: true,
       gatewayAttached: observed.connectionTokenSecretPresent,
-      syncLaneEnabled: unmetPreconditions.length === 0,
+      syncLaneEnabled: laneEnabled,
+      syncItemsAdvertised: laneEnabled && resolveUnmetSyncItemsPreconditions(observed).length === 0,
       unmetPreconditions,
       unmetCodes: unmetPreconditions.map(({ code }) => code),
       files: {

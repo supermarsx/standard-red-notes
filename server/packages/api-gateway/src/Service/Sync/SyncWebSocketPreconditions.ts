@@ -36,14 +36,24 @@ export interface SyncPreconditionState {
 
 const REMEDIES: Readonly<Record<SyncPreconditionCode, string>> = Object.freeze({
   WEB_SOCKET_CONNECTION_TOKEN_SECRET_MISSING:
-    'set WEB_SOCKET_CONNECTION_TOKEN_SECRET to a strong random value; the gateway refuses to sign tickets with an empty key',
+    'set WEB_SOCKET_CONNECTION_TOKEN_SECRET to a strong random value of AT LEAST 32 bytes; the gateway refuses to sign tickets with an empty key, and the invite-event cursor codec HMACs with the same secret and rejects a shorter one',
   WEBSOCKET_SYNC_DISABLED_BY_CONFIGURATION:
     'WEBSOCKET_SYNC_ENABLED is set to the exact string "false"; unset it or set it to "true" to re-enable the realtime transport',
   REDIS_UNBOUND:
     'no Redis client is bound; configure REDIS_URL (or REDIS_HOST/REDIS_PORT) and do not run with CACHE_TYPE=memory, because sync requires fleet-shared ticket, lease and socket-budget state',
   SYNCING_SERVER_GRPC_UNBOUND:
-    'the gRPC syncing-server proxy is not bound; configure SYNCING_SERVER_GRPC_URL so realtime commands have a durable backend',
+    'the gRPC syncing-server proxy is not bound; configure SERVICE_PROXY_TYPE=grpc and SYNCING_SERVER_GRPC_URL so realtime SYNC_ITEMS has a durable backend. This disables SYNC_ITEMS ONLY -- the socket still serves collaboration, API RPC, invite events and files, and clients transparently sync over HTTP',
 })
+
+/**
+ * The conditions the socket TRANSPORT itself needs. Every capability rides on
+ * these, so an unmet one closes the lane outright.
+ */
+const TRANSPORT_CODES = [
+  'WEB_SOCKET_CONNECTION_TOKEN_SECRET_MISSING',
+  'WEBSOCKET_SYNC_DISABLED_BY_CONFIGURATION',
+  'REDIS_UNBOUND',
+] as const satisfies readonly SyncPreconditionCode[]
 
 export interface SyncPrecondition {
   code: SyncPreconditionCode
@@ -73,6 +83,28 @@ export function resolveUnmetSyncPreconditions(state: SyncPreconditionState): Syn
   }
 
   return unmet.map((code) => ({ code, remedy: REMEDIES[code] }))
+}
+
+/**
+ * The subset that gates the socket LANE. `SYNCING_SERVER_GRPC_UNBOUND` is
+ * deliberately excluded: it is a dependency of the SYNC_ITEMS operation, not of
+ * the transport. Gating the lane on it is what made one unmet server-to-server
+ * dependency disable five capabilities that never touch it, and drop clients to
+ * HTTP for everything.
+ */
+export function resolveUnmetSyncTransportPreconditions(state: SyncPreconditionState): SyncPrecondition[] {
+  const transport: readonly SyncPreconditionCode[] = TRANSPORT_CODES
+  return resolveUnmetSyncPreconditions(state).filter((precondition) => transport.includes(precondition.code))
+}
+
+/**
+ * The preconditions for advertising `SYNC_ITEMS` over an already-open socket.
+ * Empty means the durable command port is bound; it says nothing about whether
+ * the lane itself came up.
+ */
+export function resolveUnmetSyncItemsPreconditions(state: SyncPreconditionState): SyncPrecondition[] {
+  const transport: readonly SyncPreconditionCode[] = TRANSPORT_CODES
+  return resolveUnmetSyncPreconditions(state).filter((precondition) => !transport.includes(precondition.code))
 }
 
 export function describeUnmetSyncPreconditions(preconditions: readonly SyncPrecondition[]): string {

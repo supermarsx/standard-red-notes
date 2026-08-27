@@ -7,6 +7,7 @@ import { ServiceProxyInterface } from '../../Service/Proxy/ServiceProxyInterface
 import { EndpointResolverInterface } from '../../Service/Resolver/EndpointResolverInterface'
 import { syncGateDiagnostics } from '../../Service/Sync/SyncGateDiagnostics'
 import { syncWebSocketAccessService } from '../../Service/Sync/SyncWebSocketAccessService'
+import { deploymentDiagnostics, observeDeployment } from '../../Service/Diagnostics/DeploymentDiagnostics'
 
 jest.mock('../../Service/Assistant/providers/factory', () => ({
   configuredProviders: jest.fn().mockReturnValue([]),
@@ -52,11 +53,13 @@ describe('AdminController sync-diagnostics', () => {
 
   beforeEach(() => {
     syncGateDiagnostics.clear()
+    deploymentDiagnostics.clear()
     syncWebSocketAccessService.clearProvider()
   })
 
   afterAll(() => {
     syncGateDiagnostics.clear()
+    deploymentDiagnostics.clear()
     syncWebSocketAccessService.clearProvider()
   })
 
@@ -80,8 +83,9 @@ describe('AdminController sync-diagnostics', () => {
   it('names the single unmet condition rather than a category', () => {
     // The deployment this feature was built for: the kill switch is on (default),
     // the signing secret is set, Redis is bound — only the durable backend is
-    // missing. The boot log calls this "durable backend and shared Redis state
-    // are required", which reads as though BOTH are absent.
+    // missing. The lane now COMES UP in this state and serves collaboration,
+    // API RPC, invite events and files; only SYNC_ITEMS is withheld, so the two
+    // are reported separately rather than as one dead lane.
     syncGateDiagnostics.record({
       connectionTokenSecretPresent: true,
       webSocketSyncEnabled: true,
@@ -94,12 +98,62 @@ describe('AdminController sync-diagnostics', () => {
     makeController().getSyncDiagnostics({} as Request, response)
 
     const { gate } = payload() as unknown as {
-      gate: { recorded: boolean; syncLaneEnabled: boolean; unmetCodes: string[]; unmetPreconditions: unknown[] }
+      gate: {
+        recorded: boolean
+        syncLaneEnabled: boolean
+        syncItemsAdvertised: boolean
+        unmetCodes: string[]
+        unmetPreconditions: unknown[]
+      }
     }
     expect(gate.recorded).toBe(true)
-    expect(gate.syncLaneEnabled).toBe(false)
+    expect(gate.syncLaneEnabled).toBe(true)
+    expect(gate.syncItemsAdvertised).toBe(false)
+    // The condition stays visible and named in the panel regardless.
     expect(gate.unmetCodes).toEqual(['SYNCING_SERVER_GRPC_UNBOUND'])
     expect(gate.unmetPreconditions).toHaveLength(1)
+  })
+
+  it('reports the lane and SYNC_ITEMS as both healthy when the durable port is bound', () => {
+    syncGateDiagnostics.record({
+      connectionTokenSecretPresent: true,
+      webSocketSyncEnabled: true,
+      redisBound: true,
+      syncingServerGrpcBound: true,
+      filesAdvertised: true,
+    })
+    const response = adminResponse()
+
+    makeController().getSyncDiagnostics({} as Request, response)
+
+    const { gate } = payload() as unknown as {
+      gate: { syncLaneEnabled: boolean; syncItemsAdvertised: boolean; unmetCodes: string[] }
+    }
+    expect(gate.syncLaneEnabled).toBe(true)
+    expect(gate.syncItemsAdvertised).toBe(true)
+    expect(gate.unmetCodes).toEqual([])
+  })
+
+  it('reports SYNC_ITEMS as unadvertised whenever the lane itself is down', () => {
+    // SYNC_ITEMS cannot be offered over a socket that never opened, so a
+    // transport failure must not leave it reading as advertised.
+    syncGateDiagnostics.record({
+      connectionTokenSecretPresent: true,
+      webSocketSyncEnabled: true,
+      redisBound: false,
+      syncingServerGrpcBound: true,
+      filesAdvertised: false,
+    })
+    const response = adminResponse()
+
+    makeController().getSyncDiagnostics({} as Request, response)
+
+    const { gate } = payload() as unknown as {
+      gate: { syncLaneEnabled: boolean; syncItemsAdvertised: boolean; unmetCodes: string[] }
+    }
+    expect(gate.syncLaneEnabled).toBe(false)
+    expect(gate.syncItemsAdvertised).toBe(false)
+    expect(gate.unmetCodes).toEqual(['REDIS_UNBOUND'])
   })
 
   it('reports every unmet condition, not just the first', () => {
@@ -239,6 +293,43 @@ describe('AdminController sync-diagnostics', () => {
   })
 
   /**
+   * The topology block is what makes a remedy safe to print. Without it the panel
+   * can only repeat the gate's generic advice, which is wrong in home-server mode
+   * (no gRPC proxy is ever constructed there, so SYNCING_SERVER_GRPC_URL is never
+   * read). `recorded: false` is therefore not a cosmetic default — it is the flag
+   * that suppresses every topology-conditional remedy.
+   */
+  it('reports the deployment topology as not recorded until the container records it', () => {
+    const response = adminResponse()
+
+    makeController().getSyncDiagnostics({} as Request, response)
+
+    expect((payload() as Record<string, { recorded: boolean }>).deployment.recorded).toBe(false)
+  })
+
+  it('carries the recorded topology, the branch that ran, and configuration presence', () => {
+    deploymentDiagnostics.record(
+      observeDeployment(
+        (key) => ({ MODE: 'home-server', SYNCING_SERVER_GRPC_URL: '0.0.0.0:50052' })[key],
+        { boundServiceProxy: 'direct-call', grpcSyncingProxyBound: false, redisBound: true },
+      ),
+    )
+    const response = adminResponse()
+
+    makeController().getSyncDiagnostics({} as Request, response)
+
+    const deployment = (payload() as Record<string, Record<string, unknown>>).deployment
+    expect(deployment.recorded).toBe(true)
+    expect(deployment.mode).toBe('home-server')
+    expect(deployment.boundServiceProxy).toBe('direct-call')
+    // The load-bearing pair: the URL IS set, and it still cannot bind anything
+    // here. A panel that saw only the first half would tell the operator to set
+    // a variable they have already set.
+    expect((deployment.presence as Record<string, boolean>).SYNCING_SERVER_GRPC_URL).toBe(true)
+    expect(deployment.grpcProxyBindableInThisMode).toBe(false)
+  })
+
+  /**
    * The security boundary, held end-to-end rather than by reading the code.
    * Every value below is planted in the environment the gate observes; none of
    * them may appear anywhere in the serialized response, at any nesting depth,
@@ -264,6 +355,16 @@ describe('AdminController sync-diagnostics', () => {
       // path is the one that carries remedy copy naming env vars, which is where
       // a value would most plausibly be interpolated by mistake.
       for (const bound of [true, false]) {
+        // The topology block reads those same planted variables, so it travels
+        // through this scan too — it is the newest and therefore likeliest place
+        // for a value-carrying field to be introduced.
+        deploymentDiagnostics.record(
+          observeDeployment((key) => process.env[key], {
+            boundServiceProxy: bound ? 'grpc' : 'http',
+            grpcSyncingProxyBound: bound,
+            redisBound: bound,
+          }),
+        )
         syncGateDiagnostics.record({
           connectionTokenSecretPresent: bound,
           webSocketSyncEnabled: bound,

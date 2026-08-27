@@ -119,6 +119,22 @@ describe('sync unavailability reasons', () => {
       syncOptions({
         isEnabled: () => false,
         allowedOrigins: [],
+      }),
+    )
+
+    expect(attached!.sync.unavailabilityReasons?.()).toEqual<SyncUnavailabilityReason[]>([
+      'disabled-by-configuration',
+      'no-allowed-origins',
+    ])
+  })
+
+  it('does NOT close the lane for an unready durable backend', async () => {
+    // The durable backend is a dependency of SYNC_ITEMS alone. Treating it as a
+    // lane precondition is what let one unmet server-to-server dependency shut
+    // the socket and take AUTHORIZE_COLLABORATION, API_RPC, STREAM_ASSISTANT,
+    // INVITE_EVENTS and FILES_V1 -- none of which touch it -- down with it.
+    await attach(
+      syncOptions({
         backend: {
           ready: () => false,
           execute: vi.fn(),
@@ -127,10 +143,37 @@ describe('sync unavailability reasons', () => {
       }),
     )
 
+    expect(attached!.sync.unavailabilityReasons?.()).toEqual([])
+    expect(attached!.sync.capabilities()).toEqual({
+      capabilities: [{ id: 'ws-sync', version: 1, endpoint: '/sockets/sync' }],
+    })
+  })
+
+  it('uses an authorization adapter’s narrower session readiness when it has one', async () => {
+    // The api-gateway adapter implements both the authorization and the backend
+    // role on one object. Before it could report them separately, an unset
+    // SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET made the SESSION plane look dead
+    // and closed the socket even with the gRPC proxy bound -- a second,
+    // independent way to lose every lane.
+    const authorization = {
+      ready: () => false,
+      sessionAuthorizationReady: () => true,
+      authorize: vi.fn(),
+    } as unknown as SyncGatewayOptions['authorization']
+    await attach(syncOptions({ authorization }))
+
+    expect(attached!.sync.unavailabilityReasons?.()).toEqual([])
+  })
+
+  it('falls back to ready() for an authorization adapter that does not distinguish the two', async () => {
+    const authorization = {
+      ready: () => false,
+      authorize: vi.fn(),
+    } as unknown as SyncGatewayOptions['authorization']
+    await attach(syncOptions({ authorization }))
+
     expect(attached!.sync.unavailabilityReasons?.()).toEqual<SyncUnavailabilityReason[]>([
-      'disabled-by-configuration',
-      'no-allowed-origins',
-      'durable-backend-unavailable',
+      'authorization-adapter-unavailable',
     ])
   })
 

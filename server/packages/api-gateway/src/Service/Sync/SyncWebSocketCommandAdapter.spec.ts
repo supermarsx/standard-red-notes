@@ -91,6 +91,102 @@ const collaborationInput = {
 }
 
 describe('SyncWebSocketCommandAdapter', () => {
+  // ---------------------------------------------------------------------------
+  // Session readiness vs durable readiness are two independent questions on one
+  // object. While a single `ready()` answered both, an unbound gRPC proxy -- or
+  // a bound one with no SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET -- reported the
+  // SESSION plane as dead, which closed the socket and took every capability
+  // with it, including the five that never touch the durable backend.
+  // ---------------------------------------------------------------------------
+  describe('readiness is split between the session and the durable planes', () => {
+    it('keeps the session plane alive with NO durable port bound', async () => {
+      const serviceProxy = {
+        validateSession: jest.fn(async () => ({
+          status: 200,
+          data: { authToken: token() },
+          headers: { contentType: 'application/json' },
+        })),
+      } as unknown as ServiceProxyInterface
+      const adapter = new SyncWebSocketCommandAdapter(serviceProxy, undefined, JWT_SECRET, collaborationService())
+
+      expect(adapter.sessionAuthorizationReady()).toBe(true)
+      expect(adapter.ready()).toBe(false)
+      expect(adapter.collaborationAuthorizationReady()).toBe(true)
+      await expect(
+        adapter.authorize(
+          { identity, operation: 'COMMAND', commandId: 'command-1', digest: 'a'.repeat(64), payloadLength: 1 },
+          new AbortController().signal,
+        ),
+      ).resolves.toEqual({ authorized: true })
+      await expect(
+        adapter.authorizeCollaboration(collaborationInput, new AbortController().signal),
+      ).resolves.toMatchObject({ authorized: true })
+    })
+
+    it('keeps the session plane alive when the durable port lacks its internal signing secret', async () => {
+      // The second, independent way this used to lose every lane: the gRPC proxy
+      // IS bound, but SYNCING_SERVER_INTERNAL_GRPC_AUTH_SECRET is unset, so
+      // durableCommandAuthenticationReady() is false. Nobody has hit this only
+      // by luck -- the failure mode is identical to an unbound proxy.
+      const { adapter, durable } = build({}, collaborationService())
+      ;(durable.durableCommandAuthenticationReady as jest.Mock).mockReturnValue(false)
+
+      expect(adapter.sessionAuthorizationReady()).toBe(true)
+      expect(adapter.ready()).toBe(false)
+      expect(adapter.collaborationAuthorizationReady()).toBe(true)
+      await expect(
+        adapter.authorize(
+          { identity, operation: 'STATUS', commandId: 'command-1', digest: 'a'.repeat(64), payloadLength: 0 },
+          new AbortController().signal,
+        ),
+      ).resolves.toEqual({ authorized: true })
+    })
+
+    it('reports both planes unready without an auth secret, since the session plane rests on it', async () => {
+      const serviceProxy = {
+        validateSession: jest.fn(),
+      } as unknown as ServiceProxyInterface
+      const adapter = new SyncWebSocketCommandAdapter(serviceProxy, undefined, '', collaborationService())
+
+      expect(adapter.sessionAuthorizationReady()).toBe(false)
+      expect(adapter.ready()).toBe(false)
+      expect(adapter.collaborationAuthorizationReady()).toBe(false)
+    })
+
+    it('refuses durable execution outright rather than dereferencing an absent port', async () => {
+      const serviceProxy = {
+        validateSession: jest.fn(async () => ({
+          status: 200,
+          data: { authToken: token() },
+          headers: { contentType: 'application/json' },
+        })),
+      } as unknown as ServiceProxyInterface
+      const adapter = new SyncWebSocketCommandAdapter(serviceProxy, undefined, JWT_SECRET)
+      const digest = 'a'.repeat(64)
+
+      await expect(
+        adapter.execute(
+          { identity, commandId: 'command-1', digest, payload: { command: 'SYNC_ITEMS', body: { api: '20200115' } } },
+          new AbortController().signal,
+        ),
+      ).rejects.toThrow('Durable sync command execution is unavailable.')
+      await expect(
+        adapter.status({ identity, commandId: 'command-1', digest }, new AbortController().signal),
+      ).rejects.toThrow('Durable sync command execution is unavailable.')
+      // The gateway never reaches these without consulting ready(); the throw is
+      // the backstop, so it must not have touched the session first.
+      expect(serviceProxy.validateSession).not.toHaveBeenCalled()
+    })
+
+    it('still reports ready on a fully bound durable port', async () => {
+      const { adapter } = build({}, collaborationService())
+
+      expect(adapter.sessionAuthorizationReady()).toBe(true)
+      expect(adapter.ready()).toBe(true)
+      expect(adapter.collaborationAuthorizationReady()).toBe(true)
+    })
+  })
+
   it('revalidates the original session on every command and delegates durable execution with identical metadata', async () => {
     const { adapter, serviceProxy, durable } = build()
     const digest = 'a'.repeat(64)

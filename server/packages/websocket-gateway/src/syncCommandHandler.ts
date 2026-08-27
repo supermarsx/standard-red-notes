@@ -59,7 +59,23 @@ export type SyncAuthorizationDecision = { authorized: true } | { authorized: fal
 /** Called for every command/status request; no authorization claim is cached from the ticket. */
 export interface SyncLiveAuthorizationAdapter {
   ready(): boolean
+  /**
+   * Narrower readiness covering ONLY session revalidation, for adapters that
+   * also implement `SyncCommandBackendAdapter` and would otherwise report the
+   * durable backend's health as the session plane's health. When supplied this
+   * is what gates the socket; `ready()` remains the fallback, so an adapter
+   * that does not distinguish the two behaves exactly as it did before.
+   */
+  sessionAuthorizationReady?(): boolean
   authorize(input: SyncAuthorizationInput, signal: AbortSignal): Promise<SyncAuthorizationDecision>
+}
+
+/**
+ * Session-plane readiness for an authorization adapter: its own narrower answer
+ * when it has one, otherwise its single `ready()`.
+ */
+export function sessionAuthorizationReady(adapter: SyncLiveAuthorizationAdapter): boolean {
+  return adapter.sessionAuthorizationReady ? adapter.sessionAuthorizationReady() : adapter.ready()
 }
 
 export interface SyncBackendCommandInput {
@@ -441,12 +457,15 @@ export class SyncCommandHandler {
       !this.options.tickets.ready() ||
       !this.options.leases.ready() ||
       !this.options.socketBudget.ready() ||
-      !this.options.authorization.ready() ||
-      !this.options.backend.ready()
+      !sessionAuthorizationReady(this.options.authorization)
     ) {
       this.failAndClose('SYNC_DISABLED', 'WebSocket sync is unavailable.', 1012)
       return
     }
+    // The durable backend is deliberately NOT part of this blanket check. It is
+    // a per-operation dependency of SYNC_ITEMS alone; closing the socket for it
+    // also destroys the invite, collaboration, RPC and files lanes, none of
+    // which touch it. COMMAND/STATUS are refused individually below instead.
 
     let frame
     try {
@@ -494,7 +513,10 @@ export class SyncCommandHandler {
         protocolVersion: 1,
         nextClientSequence: this.expectedClientSequence,
         operations: [
-          'SYNC_ITEMS',
+          // SYNC_ITEMS is the ONE capability that needs the durable command
+          // port. It stays first in the list so a deployment that has the port
+          // advertises byte-identically to before this became conditional.
+          ...(this.options.backend.ready() ? ['SYNC_ITEMS'] : []),
           ...(this.options.collaborationAuthorization?.collaborationAuthorizationReady()
             ? ['AUTHORIZE_COLLABORATION']
             : []),
@@ -1150,6 +1172,10 @@ export class SyncCommandHandler {
   }
 
   private async handleStatus(frame: SyncStatusRequestFrame): Promise<void> {
+    if (!this.options.backend.ready()) {
+      this.sendError(frame.requestId, frame.commandId, 'OPERATION_UNAVAILABLE')
+      return
+    }
     const identity = this.identity as SyncTicketIdentity
     const controller = new AbortController()
     this.activeAbort = controller
@@ -1203,6 +1229,12 @@ export class SyncCommandHandler {
   }
 
   private async handleCommand(frame: SyncCommandFrame): Promise<void> {
+    // Refused BEFORE a command lease is acquired: a socket that never
+    // advertised SYNC_ITEMS must not be able to take durable-command leases.
+    if (!this.options.backend.ready()) {
+      this.sendError(frame.requestId, frame.commandId, 'OPERATION_UNAVAILABLE')
+      return
+    }
     const identity = this.identity as SyncTicketIdentity
     const leaseInput = {
       userUuid: identity.userUuid,

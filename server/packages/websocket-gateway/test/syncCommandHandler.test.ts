@@ -895,6 +895,109 @@ describe('SyncCommandHandler', () => {
     handler.disconnect()
   })
 
+  // -------------------------------------------------------------------------
+  // SYNC_ITEMS is the ONLY capability that depends on the durable command
+  // backend. These cover the socket that opens without it: every other lane
+  // negotiates normally and the client syncs over HTTP, instead of the whole
+  // socket closing and dropping five gRPC-independent capabilities with it.
+  // -------------------------------------------------------------------------
+  const unreadyBackend = (): SyncCommandBackendAdapter => ({
+    ready: () => false,
+    execute: vi.fn<SyncCommandBackendAdapter['execute']>(async () => {
+      throw new Error('the durable backend must never be entered when it is unready')
+    }),
+    status: vi.fn<SyncCommandBackendAdapter['status']>(async () => {
+      throw new Error('the durable backend must never be entered when it is unready')
+    }),
+  })
+
+  it('withholds SYNC_ITEMS when the durable backend is unready, and still negotiates the rest', async () => {
+    const apiRpc: SyncApiRpcAdapter = {
+      idempotencyScope: 'shared-durable',
+      ready: () => true,
+      operations: () => ['API_RPC', 'STREAM_ASSISTANT'],
+      execute: vi.fn(),
+    }
+    const collaborationAuthorization = {
+      collaborationAuthorizationReady: () => true,
+      authorizeCollaboration: vi.fn(),
+    } as unknown as SyncCollaborationAuthorizationAdapter
+
+    const { handler, socket } = await authenticatedHandler({
+      backend: unreadyBackend(),
+      apiRpc,
+      collaborationAuthorization,
+    })
+
+    expect(socket.frames[0].type).toBe('AUTHENTICATED')
+    expect(socket.frames[0].payload).toEqual({
+      capability: 'ws-sync',
+      protocolVersion: 1,
+      operations: ['AUTHORIZE_COLLABORATION', 'API_RPC', 'STREAM_ASSISTANT'],
+      nextClientSequence: 1,
+    })
+    expect(socket.closes).toHaveLength(0)
+    handler.disconnect()
+  })
+
+  it('keeps the advertised list byte-identical when the durable backend IS ready', async () => {
+    // The protection for every deployment NOT affected by this change: making
+    // SYNC_ITEMS conditional must not reorder or drop anything when the durable
+    // port is bound, which is the state a gRPC-configured gateway runs in.
+    const apiRpc: SyncApiRpcAdapter = {
+      idempotencyScope: 'shared-durable',
+      ready: () => true,
+      operations: () => ['API_RPC', 'STREAM_ASSISTANT'],
+      execute: vi.fn(),
+    }
+    const collaborationAuthorization = {
+      collaborationAuthorizationReady: () => true,
+      authorizeCollaboration: vi.fn(),
+    } as unknown as SyncCollaborationAuthorizationAdapter
+
+    const { handler, socket } = await authenticatedHandler({ apiRpc, collaborationAuthorization })
+
+    expect(socket.frames[0].payload).toEqual({
+      capability: 'ws-sync',
+      protocolVersion: 1,
+      operations: ['SYNC_ITEMS', 'AUTHORIZE_COLLABORATION', 'API_RPC', 'STREAM_ASSISTANT'],
+      nextClientSequence: 1,
+    })
+    handler.disconnect()
+  })
+
+  it('refuses a COMMAND with OPERATION_UNAVAILABLE without taking a lease or closing the socket', async () => {
+    const leases = new InMemorySyncCommandLeaseRegistry()
+    const acquire = vi.spyOn(leases, 'acquire')
+    const backend = unreadyBackend()
+    const { handler, socket } = await authenticatedHandler({ backend, leases })
+
+    enqueue(handler, commandFrame('command-1', 1))
+
+    await vi.waitFor(() => expect(socket.frames.map((frame) => frame.type)).toContain('ERROR'))
+    expect(socket.frames.at(-1)?.payload).toEqual({ code: 'OPERATION_UNAVAILABLE', retryable: true })
+    // A socket that never advertised SYNC_ITEMS must not be able to reserve
+    // durable-command leases, so the refusal precedes lease acquisition.
+    expect(acquire).not.toHaveBeenCalled()
+    expect(backend.execute).not.toHaveBeenCalled()
+    // Non-fatal: the invite, collaboration, RPC and files lanes stay usable.
+    expect(socket.closes).toHaveLength(0)
+    handler.disconnect()
+  })
+
+  it('refuses a STATUS with OPERATION_UNAVAILABLE without entering the backend', async () => {
+    const backend = unreadyBackend()
+    const { handler, socket } = await authenticatedHandler({ backend })
+
+    enqueue(handler, statusFrame('command-1', 1, 'a'.repeat(64)))
+
+    await vi.waitFor(() => expect(socket.frames.map((frame) => frame.type)).toContain('ERROR'))
+    expect(socket.frames.at(-1)?.payload).toEqual({ code: 'OPERATION_UNAVAILABLE', retryable: true })
+    expect(backend.status).not.toHaveBeenCalled()
+    expect(socket.closes).toHaveLength(0)
+    handler.disconnect()
+  })
+
   it('discovers an opaque epoch without a capability, then grants once for the exact one-use challenge', async () => {
     const roomEpoch = 'room_epoch_00000001'
     const securityEpoch = 'security_epoch_0001'

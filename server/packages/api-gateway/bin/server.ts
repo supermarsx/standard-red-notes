@@ -109,7 +109,8 @@ import {
 import { SyncWebSocketRuntime } from '../src/Service/Sync/SyncWebSocketRuntime'
 import {
   describeUnmetSyncPreconditions,
-  resolveUnmetSyncPreconditions,
+  resolveUnmetSyncItemsPreconditions,
+  resolveUnmetSyncTransportPreconditions,
 } from '../src/Service/Sync/SyncWebSocketPreconditions'
 import { syncGateDiagnostics, SyncFilesUnmetCondition } from '../src/Service/Sync/SyncGateDiagnostics'
 
@@ -538,8 +539,18 @@ void container
     // a failure inside the try still leaves the gate decision on record; the
     // resolution itself lives in SyncWebSocketPreconditions, shared with the log.
     // Presence only: booleans, never the configured values.
+    // The sync lane's invite-event cursor codec HMACs with this secret and
+    // REJECTS anything under 32 bytes by throwing. While the lane was gated on
+    // the gRPC proxy, a deployment with a short secret and no gRPC never
+    // reached that constructor and booted (with a dead socket); now that the
+    // lane opens without gRPC it would reach it and take the PROCESS down on a
+    // config that used to start. So a too-short secret is treated as an unmet
+    // precondition — reported by the gate with a named remedy — rather than as
+    // a crash. Length only; the value is never read into a log or a diagnostic.
+    const connectionTokenSecret = env.get('WEB_SOCKET_CONNECTION_TOKEN_SECRET', true)
+    const connectionTokenSecretUsable = Buffer.byteLength(connectionTokenSecret || '', 'utf8') >= 32
     const gateObservation = {
-      connectionTokenSecretPresent: Boolean(env.get('WEB_SOCKET_CONNECTION_TOKEN_SECRET', true)),
+      connectionTokenSecretPresent: connectionTokenSecretUsable,
       webSocketSyncEnabled,
       redisBound: container.isBound(TYPES.ApiGateway_Redis),
       syncingServerGrpcBound: container.isBound(TYPES.ApiGateway_GRPCSyncingServerServiceProxy),
@@ -553,7 +564,10 @@ void container
     // Per-request refusals (SyncWebSocketController) are throttled precisely
     // because this line is the authoritative one. Names env VARIABLES, never
     // their values: `gateObservation` is booleans and the remedies are constants.
-    const unmetSyncPreconditions = resolveUnmetSyncPreconditions(gateObservation)
+    // The TRANSPORT verdict. Since the socket lane no longer depends on the
+    // server-to-server gRPC proxy, this is evaluated over the transport
+    // preconditions only; the durable-backend verdict is its own line below.
+    const unmetSyncPreconditions = resolveUnmetSyncTransportPreconditions(gateObservation)
     if (unmetSyncPreconditions.length === 0) {
       logger.info('WebSocket sync preconditions are satisfied; the realtime transport will be advertised.')
     } else {
@@ -562,18 +576,44 @@ void container
         { unmetPreconditions: unmetSyncPreconditions.map(({ code }) => code) },
       )
     }
+    // The SYNC_ITEMS verdict, stated separately and never folded into the line
+    // above. A client whose socket is healthy but carries no SYNC_ITEMS syncs
+    // over HTTP while everything else stays realtime, and an operator needs to
+    // be able to see exactly that rather than infer it from a silent lane.
+    const unmetSyncItemsPreconditions = resolveUnmetSyncItemsPreconditions(gateObservation)
+    if (unmetSyncItemsPreconditions.length > 0) {
+      logger.warn(
+        `Realtime SYNC_ITEMS will NOT be advertised (the socket lane is unaffected and still serves its other capabilities). Unmet preconditions: ${describeUnmetSyncPreconditions(unmetSyncItemsPreconditions)}`,
+        { unmetPreconditions: unmetSyncItemsPreconditions.map(({ code }) => code) },
+      )
+    }
 
     if (env.get('WEB_SOCKET_CONNECTION_TOKEN_SECRET', true)) {
       try {
         let sync: SyncGatewayOptions | undefined
-        if (
-          webSocketSyncEnabled &&
-          container.isBound(TYPES.ApiGateway_Redis) &&
-          container.isBound(TYPES.ApiGateway_GRPCSyncingServerServiceProxy)
-        ) {
+        // Standard Red Notes: the lane is gated on TRANSPORT prerequisites only
+        // — the ticket-signing secret, the kill switch, and the fleet-shared
+        // Redis state every capability rides on. The gRPC syncing proxy is a
+        // server-to-server dependency of ONE operation (SYNC_ITEMS) and is
+        // resolved separately just below; requiring it here is what closed the
+        // whole socket with 1013 on every deployment that does not set
+        // SERVICE_PROXY_TYPE=grpc, taking AUTHORIZE_COLLABORATION, API_RPC,
+        // STREAM_ASSISTANT, INVITE_EVENTS and FILES_V1 down with it.
+        // `connectionTokenSecretUsable` (not mere presence) — see the note at
+        // the gate. The OUTER `if` still keys off presence alone, so the legacy
+        // `/?authToken=` collaboration lane and token minting are untouched by
+        // a short secret; only the sync lane, which is what actually consumes
+        // it as an HMAC key, declines to build.
+        if (connectionTokenSecretUsable && webSocketSyncEnabled && container.isBound(TYPES.ApiGateway_Redis)) {
+          // Undefined when this deployment binds no durable command port. The
+          // adapter then reports `ready() === false` and the gateway withholds
+          // SYNC_ITEMS from negotiation; it never fabricates a second executor.
+          const durableSyncPort = container.isBound(TYPES.ApiGateway_GRPCSyncingServerServiceProxy)
+            ? (container.get(TYPES.ApiGateway_GRPCSyncingServerServiceProxy) as DurableSyncCommandPort)
+            : undefined
           const syncAdapter = new SyncWebSocketCommandAdapter(
             container.get(TYPES.ApiGateway_ServiceProxy),
-            container.get(TYPES.ApiGateway_GRPCSyncingServerServiceProxy) as DurableSyncCommandPort,
+            durableSyncPort,
             env.get('AUTH_JWT_SECRET', true) || '',
             new CollaborationAuthorizationService(
               container.get(TYPES.ApiGateway_ServiceProxy),
@@ -690,10 +730,10 @@ void container
             logger.info(`Realtime FILES_V1 transport not advertised: ${filesComposition.reason}.`)
           }
         } else if (webSocketSyncEnabled) {
-          // This branch means the sync lane was NOT built. It used to say only
-          // "durable backend and shared Redis state are required", which does
-          // not distinguish an unbound Redis from an unbound gRPC syncing proxy
-          // — two different fixes behind one sentence. Name them.
+          // This branch means the sync lane was NOT built — which now happens
+          // only when a TRANSPORT precondition is unmet (in practice: Redis).
+          // An unbound gRPC syncing proxy no longer reaches here; it withholds
+          // SYNC_ITEMS and is reported by its own line at the gate above.
           logger.warn(
             `WebSocket sync capability was not built: ${describeUnmetSyncPreconditions(unmetSyncPreconditions)}`,
             { unmetPreconditions: unmetSyncPreconditions.map(({ code }) => code) },
