@@ -225,7 +225,20 @@ function validSessionScope(sessionScope: string): boolean {
   return OPAQUE_SESSION_SCOPE_PATTERN.test(sessionScope)
 }
 
-/** Dedicated-worker state machine. It never receives an access/refresh token. */
+/**
+ * Dedicated-worker state machine. It never receives an access/refresh token.
+ *
+ * That isolation is why this worker has no access to the app's crypto provider,
+ * and must not acquire one: it holds no keys, so it can neither encrypt nor
+ * decrypt, and a file's bytes pass through it opaquely. The consequence for
+ * FILES_V1 is a deliberate split of the two digests it deals with. The per-chunk
+ * digest is verified here with `crypto.subtle`, which workers have and which
+ * needs no key. The digest of a whole file — required by `FILES_UPLOAD_FINISH` —
+ * is computed on the main thread beside the encryptor that produces those bytes,
+ * because that is where the file actually exists in plaintext-adjacent form. Do
+ * not "simplify" this by giving the worker a crypto provider; the boundary is the
+ * point, not an oversight.
+ */
 export class SyncTransportWorkerRuntime {
   private readonly outbox: SyncOutboxStore
   private readonly socketFactory: (endpoint: string) => SyncSocketLike
