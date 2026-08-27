@@ -16,20 +16,17 @@ import SearchButton from './SearchButton'
 import { ItemListController } from '@/Controllers/ItemList/ItemListController'
 import { PaneController } from '@/Controllers/PaneController/PaneController'
 import ListItemVaultInfo from '../ListItemVaultInfo'
-import { useResponsiveAppPane } from '@/Components/Panes/ResponsivePaneProvider'
-import PaneCollapseButton from '@/Components/Panes/PaneCollapseButton'
 import useIsTabletOrMobileScreen from '@/Hooks/useIsTabletOrMobileScreen'
 
-export const getNavigationControlVisibility = (
-  isNavigationPaneCollapsed: boolean,
-  isTabletOrMobile: boolean,
-  usesTabletLayout: boolean,
-) => {
-  const showNavigationMenu = isTabletOrMobile || usesTabletLayout
-
+/**
+ * Whether the header shows the touch navigation menu button. The desktop
+ * collapse/expand affordances no longer live in this header at all — they are
+ * in the footer bar (see Components/Footer/PanelToggleButtons) — so the only
+ * navigation control this header still owns is the touch-layout menu button.
+ */
+export const getNavigationControlVisibility = (isTabletOrMobile: boolean, usesTabletLayout: boolean) => {
   return {
-    showNavigationMenu,
-    showCollapsedNavigationExpander: isNavigationPaneCollapsed && !showNavigationMenu,
+    showNavigationMenu: isTabletOrMobile || usesTabletLayout,
   }
 }
 
@@ -75,12 +72,7 @@ const ContentListHeader = ({
   const isTablet = matchesMd && isTouchScreen
   const { isTabletOrMobile } = useIsTabletOrMobileScreen()
 
-  const { isNavigationPaneCollapsed, toggleNavigationPane, toggleListPane } = useResponsiveAppPane()
-  const { showNavigationMenu, showCollapsedNavigationExpander } = getNavigationControlVisibility(
-    isNavigationPaneCollapsed,
-    isTabletOrMobile,
-    isTablet,
-  )
+  const { showNavigationMenu } = getNavigationControlVisibility(isTabletOrMobile, isTablet)
 
   const [syncSubtitle, setSyncSubtitle] = useState('')
   const [outOfSync, setOutOfSync] = useState(false)
@@ -229,41 +221,15 @@ const ContentListHeader = ({
     return (
       <div className={'flex w-full justify-between md:flex'}>
         <NavigationMenuButton isVisible={showNavigationMenu} />
-        {showCollapsedNavigationExpander && (
-          <PaneCollapseButton
-            onClick={toggleNavigationPane}
-            label={t('expandTopicsPanel')}
-            icon="menu-variant"
-            expanded={false}
-            className="mt-1 mr-2 lg:mt-0"
-          />
-        )}
         {FolderName}
         <div className="flex items-start gap-3 md:items-center">
           {SearchBarButton}
           {OptionsMenu}
           {AddButton}
-          <PaneCollapseButton
-            onClick={toggleListPane}
-            label={t('collapseNotesPanel')}
-            icon="menu-close"
-            expanded={true}
-            className="mt-1 lg:mt-0"
-          />
         </div>
       </div>
     )
-  }, [
-    FolderName,
-    SearchBarButton,
-    OptionsMenu,
-    AddButton,
-    showNavigationMenu,
-    showCollapsedNavigationExpander,
-    toggleNavigationPane,
-    toggleListPane,
-    t,
-  ])
+  }, [FolderName, SearchBarButton, OptionsMenu, AddButton, showNavigationMenu])
 
   const TabletLayout = useMemo(() => {
     return (

@@ -31,6 +31,7 @@ import ConstellationButton from './ConstellationButton'
 import PreferencesButton from './PreferencesButton'
 import VaultSelectionButton from './VaultSelectionButton'
 import ConnectionStatusIndicator from './ConnectionStatus'
+import PanelToggleButtons from './PanelToggleButtons'
 import NoteStats from './NoteStats'
 import NotesFolderCounter from './NotesFolderCounter'
 import AssistantUsage from './AssistantUsage'
@@ -475,6 +476,15 @@ class Footer extends AbstractComponent<Props, State> {
 
             <div className="z-footer-bar-item relative ml-1.5 select-none">
               <VaultSelectionButton />
+            </div>
+            {/*
+              Standard Red Notes: the topics/notes panel collapse-expand toggles.
+              They live here rather than in the panel top bars so that no chrome
+              sits above the note the user is reading; the footer is part of the
+              layout flow, so these can never overlay content.
+            */}
+            <div className="z-footer-bar-item border-border relative ml-3 flex items-center border-l border-solid pl-3 select-none">
+              <PanelToggleButtons />
             </div>
             {this.state.showBetaWarning && (
               <Fragment>

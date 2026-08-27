@@ -31,6 +31,7 @@ const notes = {
   displayOptions: 'Display options',
   expandTopicsPanel: 'Expand topics panel',
   collapseNotesPanel: 'Collapse notes panel',
+  expandNotesPanel: 'Expand notes panel',
 
   // AddItemMenuButton
   addItem: 'Add item',
