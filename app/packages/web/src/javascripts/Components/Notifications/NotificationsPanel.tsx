@@ -25,9 +25,12 @@ const LEVEL_ACCENT: Record<NotificationLevel, string> = {
 }
 
 /**
- * Compact popover row: just the level icon + title (the "basics") plus a dismiss
- * affordance. The full message + actions live in the Notifications tab, reached
- * via "View all" — keeping the popup lightweight.
+ * Compact popover row: the level icon + title (the "basics"), an optional
+ * one-line subtitle naming the entry's subject (e.g. WHICH achievement was
+ * unlocked — a bare "Achievement unlocked" says nothing on its own), plus a
+ * dismiss affordance. The full message + actions live in the Notifications tab,
+ * reached via "View all" — keeping the popup lightweight. Both lines truncate
+ * (with a title tooltip) so a long name can never widen or wrap the row.
  */
 const CompactRow: FunctionComponent<{
   notification: AppNotification
@@ -43,9 +46,16 @@ const CompactRow: FunctionComponent<{
         className={classNames('flex-shrink-0', LEVEL_ACCENT[notification.level])}
       />
     )}
-    <span className="text-text min-w-0 flex-grow truncate text-sm font-semibold" title={notification.title}>
-      {notification.title}
-    </span>
+    <div className="min-w-0 flex-grow">
+      <div className="text-text truncate text-sm font-semibold" title={notification.title}>
+        {notification.title}
+      </div>
+      {notification.subtitle && (
+        <div className="text-passive-0 truncate text-xs" title={notification.subtitle}>
+          {notification.subtitle}
+        </div>
+      )}
+    </div>
     {!isRead && <span className="bg-info h-2 w-2 flex-shrink-0 rounded-full" aria-label="Unread" />}
     {notification.dismissable && (
       <button

@@ -128,10 +128,37 @@ describe('NotificationsController', () => {
       const entry = controller.notifications.find((n) => n.id === `achievement:${achievement.id}`)
       expect(entry).toBeDefined()
       expect(entry?.title).toBe('Achievement unlocked')
-      expect(entry?.message).toContain(achievement.name)
+      // The generic title is useless on its own — the entry must name WHICH
+      // achievement, in the subtitle (the popover renders titles + subtitles only).
+      expect(entry?.subtitle).toBe(achievement.name)
+      expect(entry?.subtitle).not.toBe('')
+      // ...and the name is not repeated inside the message alongside it.
+      expect(entry?.message).toBe(achievement.description)
       expect(entry?.icon).toBeDefined()
       expect(entry?.dismissable).toBe(true)
       expect(controller.unreadCount).toBe(1)
+    })
+
+    it('names every achievement separately when several unlock at once', () => {
+      const [first, second, third] = ACHIEVEMENTS
+      const { application } = createApplication({ signedOut: false })
+      controller = new NotificationsController(application)
+
+      recordAchievementNotification(first.id)
+      recordAchievementNotification(second.id)
+      recordAchievementNotification(third.id)
+
+      const entries = controller!.notifications.filter((n) => n.id.startsWith('achievement:'))
+      expect(entries).toHaveLength(3)
+      // Newest first, and NOT collapsed into one row or an "and 2 more" summary:
+      // each unlock keeps its own name, icon and dismiss affordance.
+      expect(entries.map((n) => n.subtitle)).toEqual([third.name, second.name, first.name])
+      expect(controller!.unreadCount).toBe(3)
+
+      // Dismissing one leaves the others still named.
+      controller!.dismiss(`achievement:${second.id}`)
+      const remaining = controller!.notifications.filter((n) => n.id.startsWith('achievement:'))
+      expect(remaining.map((n) => n.subtitle)).toEqual([third.name, first.name])
     })
 
     it('marks achievement entries read when the pane is viewed', () => {

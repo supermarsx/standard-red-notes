@@ -56,6 +56,9 @@ const FullNotificationRow: FunctionComponent<{
         <span className="text-text text-sm font-bold">{notification.title}</span>
         {!isRead && <span className="bg-info h-2 w-2 flex-shrink-0 rounded-full" aria-label="Unread" />}
       </div>
+      {notification.subtitle && (
+        <div className="text-passive-0 mt-0.5 text-xs font-semibold">{notification.subtitle}</div>
+      )}
       <div className="text-neutral mt-0.5 text-sm">{notification.message}</div>
       {notification.action && (
         <button

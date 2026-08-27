@@ -29,6 +29,13 @@ export type AppNotification = {
   /** Stable id for a given *condition* (e.g. 'no-account'), so dismissals stick. */
   id: string
   title: string
+  /**
+   * Optional one-line subtitle rendered directly under the title, before the
+   * message. Carries the *specific* subject of a generic title — e.g. an
+   * "Achievement unlocked" entry names the achievement here, so the compact
+   * popover row (which shows titles only) still says WHICH one was earned.
+   */
+  subtitle?: string
   message: string
   level: NotificationLevel
   action?: NotificationAction
@@ -55,8 +62,10 @@ const ACHIEVEMENT_NOTIFICATION_PREFIX = 'achievement:'
  *  - "You're offline" — `navigator.onLine` loss.
  *  - "Sync problem" / "Syncing paused" — sync failure / rate limiting.
  *  - "Achievement unlocked" — persisted unlock feed (see
- *    achievementNotifications.ts), rendered with the tier-colored trophy;
- *    dismissing removes the record permanently.
+ *    achievementNotifications.ts), rendered with the tier-colored trophy and
+ *    subtitled with the achievement's name; dismissing removes the record
+ *    permanently. One entry per unlock, so a simultaneous multi-unlock lists
+ *    each achievement by name rather than collapsing into one vague row.
  *
  * Read/unread: notifications carry a persisted read flag (keyed by their stable
  * condition id). The count bubble reflects UNREAD only. When/how a shown alert
@@ -93,7 +102,12 @@ export class NotificationsController extends AbstractViewController {
     super(application.events)
 
     makeObservable(this, {
-      notifications: observable,
+      // SHALLOW on purpose: entries are immutable snapshots rebuilt wholesale by
+      // recompute(), and one carries a React element (`icon`). Deep observability
+      // would convert that element's props — React then freezes the style object
+      // while rendering it, which MobX rejects ("observable objects cannot be
+      // frozen"), taking the whole notifications surface down with it.
+      notifications: observable.shallow,
       settings: observable,
       count: computed,
       unreadCount: computed,
@@ -298,7 +312,11 @@ export class NotificationsController extends AbstractViewController {
       notifications.push({
         id: `${ACHIEVEMENT_NOTIFICATION_PREFIX}${definition.id}`,
         title: 'Achievement unlocked',
-        message: definition.description ? `${definition.name} — ${definition.description}` : definition.name,
+        // The achievement's NAME is the subtitle (shown on every surface,
+        // including the titles-only popover); the description stays in the
+        // message so the name is never repeated twice in the same row.
+        subtitle: definition.name,
+        message: definition.description || definition.name,
         level: 'info',
         icon: achievementUnlockToastIcon(definition),
         dismissable: true,
