@@ -16,6 +16,8 @@ import { TriggerPostSettingUpdateActions } from '../../Domain/UseCase/TriggerPos
 import { GetMfaSecret } from '../../Domain/UseCase/GetMfaSecret/GetMfaSecret'
 import { ValidateMfaToken } from '../../Domain/UseCase/ValidateMfaToken/ValidateMfaToken'
 import { Logger } from 'winston'
+import { AuditLogWriterInterface } from '../../Domain/AuditLog/AuditLogWriterInterface'
+import { SettingsAssociationServiceInterface } from '../../Domain/Setting/SettingsAssociationServiceInterface'
 
 @controller('/users/:userUuid')
 export class AnnotatedSettingsController extends BaseSettingsController {
@@ -32,6 +34,9 @@ export class AnnotatedSettingsController extends BaseSettingsController {
     @inject(TYPES.Auth_SubscriptionSettingHttpMapper)
     subscriptionSettingHttpMapper: MapperInterface<SubscriptionSetting, SubscriptionSettingHttpRepresentation>,
     @inject(TYPES.Auth_Logger) logger: Logger,
+    @inject(TYPES.Auth_AuditLogWriter) override auditLogWriter: AuditLogWriterInterface,
+    @inject(TYPES.Auth_SettingsAssociationService)
+    override settingsAssociationService: SettingsAssociationServiceInterface,
   ) {
     super(
       doGetSettings,
@@ -44,6 +49,8 @@ export class AnnotatedSettingsController extends BaseSettingsController {
       settingHttMapper,
       subscriptionSettingHttpMapper,
       logger,
+      auditLogWriter,
+      settingsAssociationService,
     )
   }
 

@@ -540,8 +540,10 @@ const AdminSecurityTab: FunctionComponent<Props> = ({ application, noteIfForbidd
             <Button label="Open full audit log" onClick={() => goToTab('logs')} small />
           </div>
           <Text className="mt-1">
-            The latest security-relevant entries from the audit log (sign-ins, role, ban, 2FA and registration changes).
-            Newest first; the full, paginated record lives on the Logs tab.
+            The latest security-relevant entries from the audit log: sign-ins and sessions, changes to sensitive
+            settings (credentials, 2FA, admin feature gates), and privilege attributions (roles, group membership,
+            invites, approvals) &mdash; including failed attempts. Newest first; the full, paginated record lives on the
+            Logs tab.
           </Text>
           {auditLoading ? (
             <Spinner className="mt-3 h-5 w-5" />

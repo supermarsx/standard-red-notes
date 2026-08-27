@@ -3759,6 +3759,7 @@ export class ContainerConfigLoader {
             container.get<IncreaseLoginAttempts>(TYPES.Auth_IncreaseLoginAttempts),
             container.get<ChangeCredentials>(TYPES.Auth_ChangeCredentials),
             container.get<CookieFactoryInterface>(TYPES.Auth_CookieFactory),
+            container.get<AuditLogWriterInterface>(TYPES.Auth_AuditLogWriter),
             container.get<ControllerContainerInterface>(TYPES.Auth_ControllerContainer),
           ),
         )
@@ -3885,6 +3886,8 @@ export class ContainerConfigLoader {
               TYPES.Auth_SubscriptionSettingHttpMapper,
             ),
             container.get<winston.Logger>(TYPES.Auth_Logger),
+            container.get<AuditLogWriterInterface>(TYPES.Auth_AuditLogWriter),
+            container.get<SettingsAssociationServiceInterface>(TYPES.Auth_SettingsAssociationService),
             container.get<ControllerContainerInterface>(TYPES.Auth_ControllerContainer),
           ),
         )

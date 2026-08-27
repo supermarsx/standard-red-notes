@@ -44,6 +44,33 @@ describe('isSecurityRelevantAuditAction', () => {
     expect(isSecurityRelevantAuditAction('registration.flag.changed')).toBe(true)
   })
 
+  it('matches changes to sensitive settings and to credentials', () => {
+    // These were already written server-side but had no matching keyword, so
+    // they never reached the "Recent security events" preview.
+    expect(isSecurityRelevantAuditAction('setting.changed')).toBe(true)
+    expect(isSecurityRelevantAuditAction('setting.deleted')).toBe(true)
+    expect(isSecurityRelevantAuditAction('credentials.changed')).toBe(true)
+    expect(isSecurityRelevantAuditAction('credentials.change_failed')).toBe(true)
+    expect(isSecurityRelevantAuditAction('mfa.enabled')).toBe(true)
+    expect(isSecurityRelevantAuditAction('mfa.disabled')).toBe(true)
+    expect(isSecurityRelevantAuditAction('mfa.change_failed')).toBe(true)
+  })
+
+  it('matches privilege attributions, including ones conferred through a group', () => {
+    expect(isSecurityRelevantAuditAction('group.changed')).toBe(true)
+    expect(isSecurityRelevantAuditAction('group.membership_changed')).toBe(true)
+    expect(isSecurityRelevantAuditAction('invite_link.created')).toBe(true)
+    expect(isSecurityRelevantAuditAction('invite_link.revoked')).toBe(true)
+    expect(isSecurityRelevantAuditAction('user.approved')).toBe(true)
+    expect(isSecurityRelevantAuditAction('user.rejected')).toBe(true)
+  })
+
+  it('matches account-level state changes', () => {
+    expect(isSecurityRelevantAuditAction('user.account_deleted')).toBe(true)
+    expect(isSecurityRelevantAuditAction('user.suspension_changed')).toBe(true)
+    expect(isSecurityRelevantAuditAction('account.unlocked')).toBe(true)
+  })
+
   it('ignores non-security actions and empty input', () => {
     expect(isSecurityRelevantAuditAction('quota.recalculated')).toBe(false)
     expect(isSecurityRelevantAuditAction('webhook.created')).toBe(false)
@@ -77,5 +104,22 @@ describe('filterSecurityAuditEntries', () => {
       'role.changed',
     ])
     expect(filterSecurityAuditEntries(entries, 0)).toEqual([])
+  })
+
+  it('surfaces sensitive-setting and attribution events alongside the sign-in events', () => {
+    const mixed = [
+      { action: 'credentials.change_failed' },
+      { action: 'quota.recalculated' },
+      { action: 'mfa.disabled' },
+      { action: 'setting.changed' },
+      { action: 'group.membership_changed' },
+    ]
+
+    expect(filterSecurityAuditEntries(mixed, 10).map((entry) => entry.action)).toEqual([
+      'credentials.change_failed',
+      'mfa.disabled',
+      'setting.changed',
+      'group.membership_changed',
+    ])
   })
 })

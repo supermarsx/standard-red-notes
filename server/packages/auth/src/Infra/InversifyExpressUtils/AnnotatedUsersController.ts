@@ -9,6 +9,7 @@ import { IncreaseLoginAttempts } from '../../Domain/UseCase/IncreaseLoginAttempt
 import { ChangeCredentials } from '../../Domain/UseCase/ChangeCredentials/ChangeCredentials'
 import { BaseUsersController } from './Base/BaseUsersController'
 import { CookieFactoryInterface } from '../../Domain/Auth/Cookies/CookieFactoryInterface'
+import { AuditLogWriterInterface } from '../../Domain/AuditLog/AuditLogWriterInterface'
 
 @controller('/users')
 export class AnnotatedUsersController extends BaseUsersController {
@@ -19,6 +20,7 @@ export class AnnotatedUsersController extends BaseUsersController {
     @inject(TYPES.Auth_IncreaseLoginAttempts) override increaseLoginAttempts: IncreaseLoginAttempts,
     @inject(TYPES.Auth_ChangeCredentials) override changeCredentialsUseCase: ChangeCredentials,
     @inject(TYPES.Auth_CookieFactory) override cookieFactory: CookieFactoryInterface,
+    @inject(TYPES.Auth_AuditLogWriter) override auditLogWriter: AuditLogWriterInterface,
   ) {
     super(
       doDeleteAccount,
@@ -27,6 +29,7 @@ export class AnnotatedUsersController extends BaseUsersController {
       increaseLoginAttempts,
       changeCredentialsUseCase,
       cookieFactory,
+      auditLogWriter,
     )
   }
 

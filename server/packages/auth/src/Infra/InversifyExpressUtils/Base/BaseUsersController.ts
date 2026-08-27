@@ -10,6 +10,9 @@ import { IncreaseLoginAttempts } from '../../../Domain/UseCase/IncreaseLoginAtte
 import { ErrorTag } from '@standardnotes/responses'
 import { ResponseLocals } from '../ResponseLocals'
 import { CookieFactoryInterface } from '../../../Domain/Auth/Cookies/CookieFactoryInterface'
+import { AuditLogWriterInterface } from '../../../Domain/AuditLog/AuditLogWriterInterface'
+import { AuditAction } from '../../../Domain/AuditLog/AuditAction'
+import { auditActorUuid, auditClientIp } from './auditRequestAttribution'
 
 export class BaseUsersController extends BaseHttpController {
   constructor(
@@ -19,6 +22,10 @@ export class BaseUsersController extends BaseHttpController {
     protected increaseLoginAttempts: IncreaseLoginAttempts,
     protected changeCredentialsUseCase: ChangeCredentials,
     protected cookieFactory: CookieFactoryInterface,
+    // Standard Red Notes: optional so an older wiring that omits it still boots;
+    // when present, credential changes and self-serve account deletion are
+    // recorded on the same audit path the admin surface already uses.
+    protected auditLogWriter?: AuditLogWriterInterface,
     private controllerContainer?: ControllerContainerInterface,
   ) {
     super()
@@ -73,6 +80,18 @@ export class BaseUsersController extends BaseHttpController {
         400,
       )
     }
+
+    // Standard Red Notes: the user erasing their own account is the most
+    // destructive thing they can do to it. The admin path already records
+    // AccountDeleted; `selfInitiated` distinguishes the two in the log.
+    await this.auditLogWriter?.write({
+      actorUuid: locals.user.uuid,
+      action: AuditAction.AccountDeleted,
+      targetType: 'user',
+      targetUuid: request.params.userUuid as string,
+      ip: auditClientIp(request),
+      metadata: { selfInitiated: true },
+    })
 
     return this.json({ message: result.getValue() }, 200)
   }
@@ -179,8 +198,28 @@ export class BaseUsersController extends BaseHttpController {
       application: request.headers['x-application-version'] as string,
     })
 
+    // What the request ASKED to change, recorded whether or not it succeeded.
+    // Derived from the request shape only — never from the submitted values, so
+    // no password, nonce or address can reach the log.
+    const requestedChange = {
+      passwordChanged: true,
+      emailChanged: typeof request.body.new_email === 'string' && request.body.new_email.length > 0,
+    }
+
     if (changeCredentialsResult.isFailed()) {
       await this.increaseLoginAttempts.execute({ email: locals.user.email })
+
+      // A rejected credential change on a live session is a stronger signal than
+      // a successful one: it means the session holder could not produce the
+      // account's current password.
+      await this.auditLogWriter?.write({
+        actorUuid: auditActorUuid(response),
+        action: AuditAction.CredentialsChangeFailed,
+        targetType: 'user',
+        targetUuid: locals.user.uuid,
+        ip: auditClientIp(request),
+        metadata: requestedChange,
+      })
 
       return this.json(
         {
@@ -193,6 +232,16 @@ export class BaseUsersController extends BaseHttpController {
     }
 
     await this.clearLoginAttempts.execute({ email: locals.user.email })
+
+    await this.auditLogWriter?.write({
+      actorUuid: auditActorUuid(response),
+      action: AuditAction.CredentialsChanged,
+      targetType: 'user',
+      targetUuid: locals.user.uuid,
+      ip: auditClientIp(request),
+      // WHICH credentials changed, never what they changed to.
+      metadata: requestedChange,
+    })
 
     const changeCredentialsResultValue = changeCredentialsResult.getValue()
     const session = changeCredentialsResultValue.session

@@ -148,6 +148,63 @@ describe('AdminSecurityTab — 4 subtabs mount with content (vanish guard)', () 
     expect(container.textContent).toContain('Configured via the server environment')
   })
 
+  it('renders sensitive-setting and privilege-attribution events in the Recent security events preview', async () => {
+    const application = makeApplication()
+    application.legacyApi.adminGetAuditLog = jest.fn().mockResolvedValue({
+      data: {
+        entries: [
+          {
+            uuid: 'e1',
+            actorUuid: 'user-1',
+            action: 'credentials.change_failed',
+            targetType: 'user',
+            targetUuid: 'user-1',
+            ip: '198.51.100.7',
+            createdAt: '2026-08-01T10:00:00.000Z',
+          },
+          {
+            uuid: 'e2',
+            actorUuid: 'user-1',
+            action: 'mfa.disabled',
+            targetType: 'setting',
+            targetUuid: 'user-1',
+            ip: null,
+            createdAt: '2026-08-01T10:01:00.000Z',
+          },
+          {
+            uuid: 'e3',
+            actorUuid: 'admin-1',
+            action: 'group.membership_changed',
+            targetType: 'user',
+            targetUuid: 'user-2',
+            ip: null,
+            createdAt: '2026-08-01T10:02:00.000Z',
+          },
+          // Operational noise that must stay out of the security preview.
+          {
+            uuid: 'e4',
+            actorUuid: 'admin-1',
+            action: 'quota.recalculated',
+            targetType: 'user',
+            targetUuid: 'user-2',
+            ip: null,
+            createdAt: '2026-08-01T10:03:00.000Z',
+          },
+        ],
+      },
+    })
+
+    await renderTab(application)
+
+    expect(container.textContent).toContain('credentials.change_failed')
+    expect(container.textContent).toContain('mfa.disabled')
+    expect(container.textContent).toContain('group.membership_changed')
+    expect(container.textContent).not.toContain('quota.recalculated')
+    // Attribution is rendered alongside each event, not just the action name.
+    expect(container.textContent).toContain('Actor: user-1')
+    expect(container.textContent).toContain('from 198.51.100.7')
+  })
+
   it('routes the Recent-events button to the Logs tab (audit folded into Logs)', async () => {
     const application = makeApplication()
     await renderTab(application)

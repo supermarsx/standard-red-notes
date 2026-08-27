@@ -1838,7 +1838,20 @@ export class BaseAdminController extends BaseHttpController {
       return this.json({ error: { message: result.getError() } }, 400)
     }
 
-    return this.json({ group: this.groupHttpMapper.toProjection(result.getValue()) })
+    const createdGroup = this.groupHttpMapper.toProjection(result.getValue())
+
+    // A group is an indirect grant: every role it confers reaches every member.
+    // Creating one is therefore a privilege change even though no user row moved.
+    await this.auditLogWriter?.write({
+      actorUuid: this.actorUuid(response),
+      action: AuditAction.GroupChanged,
+      targetType: 'group',
+      targetUuid: createdGroup.uuid,
+      ip: this.clientIp(request),
+      metadata: { group: createdGroup.name, created: true, roleNames: createdGroup.roleNames },
+    })
+
+    return this.json({ group: createdGroup })
   }
 
   /**
@@ -1858,6 +1871,16 @@ export class BaseAdminController extends BaseHttpController {
     if (result.isFailed()) {
       return this.json({ error: { message: result.getError() } }, 400)
     }
+
+    // Deleting a group withdraws its roles from every member at once.
+    await this.auditLogWriter?.write({
+      actorUuid: this.actorUuid(response),
+      action: AuditAction.GroupChanged,
+      targetType: 'group',
+      targetUuid: groupUuid,
+      ip: this.clientIp(request),
+      metadata: { deleted: true },
+    })
 
     return this.json({ success: true, groupUuid })
   }
@@ -1882,7 +1905,20 @@ export class BaseAdminController extends BaseHttpController {
       return this.json({ error: { message: result.getError() } }, 400)
     }
 
-    return this.json({ group: this.groupHttpMapper.toProjection(result.getValue()) })
+    const group = this.groupHttpMapper.toProjection(result.getValue())
+
+    // The roles a group confers ARE the privilege it grants; replacing them
+    // re-attributes permissions to every current member.
+    await this.auditLogWriter?.write({
+      actorUuid: this.actorUuid(response),
+      action: AuditAction.GroupChanged,
+      targetType: 'group',
+      targetUuid: group.uuid,
+      ip: this.clientIp(request),
+      metadata: { group: group.name, roleNames: group.roleNames },
+    })
+
+    return this.json({ group })
   }
 
   /**
@@ -1925,6 +1961,18 @@ export class BaseAdminController extends BaseHttpController {
       return this.json({ error: { message: result.getError() } }, 400)
     }
 
+    // The attribution itself: this user now holds every role the group confers.
+    // Recorded against the USER, so a reader scanning one account's history sees
+    // the privilege arrive even though it was granted through a group.
+    await this.auditLogWriter?.write({
+      actorUuid: this.actorUuid(response),
+      action: AuditAction.GroupMembershipChanged,
+      targetType: 'user',
+      targetUuid: result.getValue(),
+      ip: this.clientIp(request),
+      metadata: { groupUuid, added: true },
+    })
+
     return this.json({ success: true, groupUuid, userUuid: result.getValue() })
   }
 
@@ -1945,6 +1993,15 @@ export class BaseAdminController extends BaseHttpController {
     if (result.isFailed()) {
       return this.json({ error: { message: result.getError() } }, 400)
     }
+
+    await this.auditLogWriter?.write({
+      actorUuid: this.actorUuid(response),
+      action: AuditAction.GroupMembershipChanged,
+      targetType: 'user',
+      targetUuid: result.getValue(),
+      ip: this.clientIp(request),
+      metadata: { groupUuid, added: false },
+    })
 
     return this.json({ success: true, groupUuid, userUuid: result.getValue() })
   }

@@ -16,6 +16,10 @@ import { SubscriptionSettingHttpRepresentation } from '../../../Mapping/Http/Sub
 import { SettingHttpRepresentation } from '../../../Mapping/Http/SettingHttpRepresentation'
 import { TriggerPostSettingUpdateActions } from '../../../Domain/UseCase/TriggerPostSettingUpdateActions/TriggerPostSettingUpdateActions'
 import { ResponseLocals } from '../ResponseLocals'
+import { AuditLogWriterInterface } from '../../../Domain/AuditLog/AuditLogWriterInterface'
+import { AuditAction } from '../../../Domain/AuditLog/AuditAction'
+import { SettingsAssociationServiceInterface } from '../../../Domain/Setting/SettingsAssociationServiceInterface'
+import { auditActorUuid, auditClientIp } from './auditRequestAttribution'
 
 export class BaseSettingsController extends BaseHttpController {
   constructor(
@@ -32,6 +36,11 @@ export class BaseSettingsController extends BaseHttpController {
       SubscriptionSettingHttpRepresentation
     >,
     protected logger: Logger,
+    // Standard Red Notes: optional so an older wiring that omits them still
+    // boots. When present, a user changing one of their OWN SENSITIVE settings
+    // is recorded on the same audit path the admin write path already uses.
+    protected auditLogWriter?: AuditLogWriterInterface,
+    protected settingsAssociationService?: SettingsAssociationServiceInterface,
     private controllerContainer?: ControllerContainerInterface,
   ) {
     super()
@@ -218,6 +227,18 @@ export class BaseSettingsController extends BaseHttpController {
       })
 
       if (validationResult.isFailed()) {
+        // A rejected 2FA change is a stronger security signal than an accepted
+        // one — the session holder could not produce a valid current token. The
+        // rejected token itself is never recorded.
+        await this.auditLogWriter?.write({
+          actorUuid: auditActorUuid(response),
+          action: AuditAction.MfaChangeFailed,
+          targetType: 'user',
+          targetUuid: locals.user.uuid,
+          ip: auditClientIp(request),
+          metadata: { name: SettingName.NAMES.MfaSecret, enabling: true },
+        })
+
         return this.json(
           {
             error: {
@@ -247,6 +268,17 @@ export class BaseSettingsController extends BaseHttpController {
       )
     }
     const setting = result.getValue()
+
+    await this.auditSensitiveSettingChange({
+      request,
+      response,
+      userUuid: locals.user.uuid,
+      settingName: setting.props.name,
+      // SetSettingValue has already classified this write, so trust its verdict
+      // rather than re-deriving it.
+      sensitive: setting.props.sensitive,
+      deleted: false,
+    })
 
     const triggerResult = await this.triggerPostSettingUpdateActions.execute({
       updatedSettingName: setting.props.name,
@@ -318,6 +350,15 @@ export class BaseSettingsController extends BaseHttpController {
     })
 
     if (result.success) {
+      await this.auditSensitiveSettingChange({
+        request,
+        response,
+        userUuid: locals.user.uuid,
+        settingName: settingName.toUpperCase(),
+        sensitive: this.settingIsSensitive(settingName.toUpperCase()),
+        deleted: true,
+      })
+
       if (settingName.toUpperCase() === SettingName.NAMES.EmailRemindersEnabled) {
         const triggerResult = await this.triggerPostSettingUpdateActions.execute({
           updatedSettingName: SettingName.NAMES.EmailRemindersEnabled,
@@ -367,6 +408,72 @@ export class BaseSettingsController extends BaseHttpController {
     return this.json({
       success: true,
       secret: result.getValue().secret,
+    })
+  }
+
+  /**
+   * Standard Red Notes: the server's own classification of a setting, used on
+   * the delete path where the persisted row is already gone by the time we log.
+   * Falls back to "not sensitive" when the association service is not wired or
+   * the name is not a known setting — an unclassifiable name is never promoted
+   * into the security log on a guess.
+   */
+  private settingIsSensitive(settingName: string): boolean {
+    if (this.settingsAssociationService === undefined) {
+      return false
+    }
+
+    const settingNameOrError = SettingName.create(settingName)
+    if (settingNameOrError.isFailed()) {
+      return false
+    }
+
+    return this.settingsAssociationService.getSensitivityForSetting(settingNameOrError.getValue())
+  }
+
+  /**
+   * Standard Red Notes: record a user changing one of their OWN settings, but
+   * only when that setting is SENSITIVE. Auditing every setting write would bury
+   * the security log under routine preference churn; the sensitive ones (the
+   * TOTP secret, backup credentials, extension keys) are the ones an attacker
+   * would touch.
+   *
+   * Turning 2FA on or off is recorded under its own action rather than as a
+   * generic setting change, because "MFA disabled" is the line a reader of this
+   * log is actually scanning for.
+   *
+   * The VALUE is never passed to this method, so no secret can reach the log
+   * even by accident — only the setting NAME.
+   */
+  private async auditSensitiveSettingChange(params: {
+    request: Request
+    response: Response
+    userUuid: string
+    settingName: string
+    sensitive: boolean
+    deleted: boolean
+  }): Promise<void> {
+    const isMfaSecret = params.settingName === SettingName.NAMES.MfaSecret
+
+    if (!params.sensitive && !isMfaSecret) {
+      return
+    }
+
+    const action = isMfaSecret
+      ? params.deleted
+        ? AuditAction.MfaDisabled
+        : AuditAction.MfaEnabled
+      : params.deleted
+        ? AuditAction.SettingDeleted
+        : AuditAction.SettingChanged
+
+    await this.auditLogWriter?.write({
+      actorUuid: auditActorUuid(params.response),
+      action,
+      targetType: 'setting',
+      targetUuid: params.userUuid,
+      ip: auditClientIp(params.request),
+      metadata: { name: params.settingName, selfInitiated: true },
     })
   }
 }

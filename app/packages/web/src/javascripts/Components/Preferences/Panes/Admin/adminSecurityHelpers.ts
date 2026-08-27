@@ -50,11 +50,23 @@ export const registrationBlockSource = (
 // ---------------------------------------------------------------------------
 
 /**
- * Keywords that mark an admin audit action as security-relevant for the
- * Security tab's "recent events" preview. Matched case-insensitively as a
- * substring of the action name, so both dotted ("login.failure",
- * "role.changed", "ban.changed") and flat ("mfaReset") styles are covered
- * without coupling to an exact server enum.
+ * Keywords that mark an audit action as security-relevant for the Security
+ * tab's "recent events" preview. Matched case-insensitively as a substring of
+ * the action name, so both dotted ("login.failure", "role.changed",
+ * "ban.changed") and flat ("mfaReset") styles are covered without coupling to
+ * an exact server enum.
+ *
+ * These cover three families:
+ *  - authentication and sessions (who got in, and how),
+ *  - CHANGES TO SENSITIVE SETTINGS (credentials, 2FA, admin feature gates,
+ *    backup credentials) — recorded server-side as setting.changed /
+ *    setting.deleted / credentials.* / mfa.*,
+ *  - ATTRIBUTIONS of privilege (roles, group membership, invites, approvals) —
+ *    who was granted what, directly or through a group.
+ *
+ * Deliberately NOT matched: purely operational actions with no security
+ * meaning, e.g. `quota.recalculated`, and `webhook.*` (an integration
+ * subscription, kept out of this preview by an earlier deliberate choice).
  */
 export const SECURITY_AUDIT_KEYWORDS = [
   'login',
@@ -75,6 +87,19 @@ export const SECURITY_AUDIT_KEYWORDS = [
   'register',
   'lock',
   'unlock',
+  // Sensitive settings and credentials.
+  'setting',
+  'credential',
+  // Privilege attribution: groups confer roles transitively, so a membership
+  // change is a permission change even though no role row is touched.
+  'group',
+  'member',
+  'invite',
+  'approved',
+  'rejected',
+  // Account-level state: self-serve and admin deletion, suspension, unlock.
+  'account',
+  'suspension',
 ]
 
 export const isSecurityRelevantAuditAction = (action: string | null | undefined): boolean => {
