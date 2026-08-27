@@ -47,11 +47,7 @@ import { stripImageMetadata } from '@/Utils/StripImageMetadata'
 import { getStripImageMetadataEnabled } from '@/Utils/StripImageMetadataSetting'
 import { achievements, METRICS } from '@/Achievements'
 import { formatFileDownloadError } from '@/Utils/FileErrorMessage'
-import {
-  BulkFileProgress,
-  BulkFileResult,
-  runBulkFileOperation,
-} from '@/Components/FilesView/bulkFileOperation'
+import { BulkFileProgress, BulkFileResult, runBulkFileOperation } from '@/Components/FilesView/bulkFileOperation'
 
 const UnprotectedFileActions = [FileItemActionType.ToggleFileProtection]
 const NonMutatingFileActions = [FileItemActionType.DownloadFile, FileItemActionType.PreviewFile]
@@ -189,12 +185,16 @@ export class FilesController extends AbstractViewController<FilesControllerEvent
         type: ToastType.Loading,
         message: `Deleting file "${file.name}"...`,
       })
-      await this.files.deleteFile(file)
-      addToast({
-        type: ToastType.Success,
-        message: `Deleted file "${file.name}"`,
-      })
+      const error = await this.files.deleteFile(file)
       dismissToast(deletingToastId)
+      // The service already explained the failure in a dialog, and it may have
+      // left the item in place on purpose. Claiming success here (which this
+      // did unconditionally) contradicted both.
+      addToast(
+        error
+          ? { type: ToastType.Error, message: `Could not delete file "${file.name}"` }
+          : { type: ToastType.Success, message: `Deleted file "${file.name}"` },
+      )
     }
   }
 

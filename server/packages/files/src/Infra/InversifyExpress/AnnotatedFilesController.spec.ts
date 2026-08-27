@@ -318,7 +318,9 @@ describe('AnnotatedFilesController', () => {
       const originalRemoveEventListener = abortSignal.removeEventListener.bind(abortSignal)
       jest.spyOn(abortSignal, 'removeEventListener').mockImplementation((type, listener, options) => {
         originalRemoveEventListener(type, listener, options)
-        const disconnect = (request.once as jest.Mock).mock.calls.find(([event]) => event === 'aborted')[1] as () => void
+        const disconnect = (request.once as jest.Mock).mock.calls.find(
+          ([event]) => event === 'aborted',
+        )[1] as () => void
         disconnect()
       })
       return { success: true, readStream }
@@ -426,6 +428,34 @@ describe('AnnotatedFilesController', () => {
         resourceRemoteIdentifier: '2-3-4',
         userUuid: '1-2-3',
       },
+    })
+  })
+
+  it('should report a real removal without the already-absent flag', async () => {
+    response.locals.permittedOperation = ValetTokenOperation.Delete
+
+    removeFile.execute = jest.fn().mockResolvedValue(Result.ok('removed'))
+
+    const httpResponse = await createController().remove(request, response)
+
+    expect((httpResponse as results.JsonResult).json).toEqual({
+      success: true,
+      alreadyAbsent: false,
+      message: 'File removed successfully',
+    })
+  })
+
+  it('should report success and flag already-absent when storage had nothing to remove', async () => {
+    response.locals.permittedOperation = ValetTokenOperation.Delete
+
+    removeFile.execute = jest.fn().mockResolvedValue(Result.ok('already-absent'))
+
+    const httpResponse = await createController().remove(request, response)
+
+    expect((httpResponse as results.JsonResult).json).toEqual({
+      success: true,
+      alreadyAbsent: true,
+      message: 'File was already absent from storage',
     })
   })
 

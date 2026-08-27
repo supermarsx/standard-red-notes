@@ -96,4 +96,91 @@ describe('RemoveFile', () => {
     expect(fileRemover.remove).toHaveBeenCalledWith('1-2-3/2-3-4')
     expect(domainEventPublisher.publish).toHaveBeenCalled()
   })
+
+  it('should report `removed` and consume the valet token on a real removal', async () => {
+    const result = await createUseCase().execute({
+      userInput: {
+        resourceRemoteIdentifier: '2-3-4',
+        userUuid: '1-2-3',
+        regularSubscriptionUuid: '3-4-5',
+      },
+      valetToken: 'valet-token',
+    })
+
+    expect(result.isFailed()).toEqual(false)
+    expect(result.getValue()).toEqual('removed')
+    expect(valetTokenRepository.markAsUsed).toHaveBeenCalledWith('valet-token')
+  })
+
+  it('should succeed idempotently when storage no longer holds the object', async () => {
+    fileRemover.remove = jest.fn().mockImplementation(() => {
+      throw Object.assign(new Error('ENOENT: no such file or directory'), { code: 'ENOENT' })
+    })
+
+    const result = await createUseCase().execute({
+      userInput: {
+        resourceRemoteIdentifier: '2-3-4',
+        userUuid: '1-2-3',
+        regularSubscriptionUuid: '3-4-5',
+      },
+      valetToken: 'valet-token',
+    })
+
+    expect(result.isFailed()).toEqual(false)
+    expect(result.getValue()).toEqual('already-absent')
+    expect(valetTokenRepository.markAsUsed).toHaveBeenCalledWith('valet-token')
+  })
+
+  it('should NOT publish a quota event when nothing was actually removed', async () => {
+    fileRemover.remove = jest.fn().mockImplementation(() => {
+      throw Object.assign(new Error('NotFound'), { name: 'NotFound' })
+    })
+
+    await createUseCase().execute({
+      userInput: {
+        resourceRemoteIdentifier: '2-3-4',
+        userUuid: '1-2-3',
+        regularSubscriptionUuid: '3-4-5',
+      },
+      valetToken: 'valet-token',
+    })
+
+    expect(domainEventPublisher.publish).not.toHaveBeenCalled()
+  })
+
+  it('should still fail loudly when storage is unavailable rather than claiming the file is gone', async () => {
+    fileRemover.remove = jest.fn().mockImplementation(() => {
+      throw Object.assign(new Error('Internal Error'), { $metadata: { httpStatusCode: 500 } })
+    })
+
+    const result = await createUseCase().execute({
+      userInput: {
+        resourceRemoteIdentifier: '2-3-4',
+        userUuid: '1-2-3',
+        regularSubscriptionUuid: '3-4-5',
+      },
+      valetToken: 'valet-token',
+    })
+
+    expect(result.isFailed()).toEqual(true)
+    expect(result.getError()).toEqual('Could not remove the file from server storage')
+    expect(valetTokenRepository.markAsUsed).not.toHaveBeenCalled()
+  })
+
+  it('should fail when a permissions error is mistaken for nothing being there', async () => {
+    fileRemover.remove = jest.fn().mockImplementation(() => {
+      throw Object.assign(new Error('EACCES'), { code: 'EACCES' })
+    })
+
+    const result = await createUseCase().execute({
+      userInput: {
+        resourceRemoteIdentifier: '2-3-4',
+        userUuid: '1-2-3',
+        regularSubscriptionUuid: '3-4-5',
+      },
+      valetToken: 'valet-token',
+    })
+
+    expect(result.isFailed()).toEqual(true)
+  })
 })

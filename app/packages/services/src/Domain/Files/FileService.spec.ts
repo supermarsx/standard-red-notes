@@ -88,6 +88,7 @@ describe('fileService', () => {
 
     logger = {} as jest.Mocked<LoggerInterface>
     logger.info = jest.fn()
+    logger.error = jest.fn()
 
     http = {} as jest.Mocked<HttpServiceInterface>
 
@@ -309,6 +310,114 @@ describe('fileService', () => {
 
     expect(alertMock).toHaveBeenCalledTimes(1)
     expect(deleteItemMock).toHaveBeenCalledTimes(1)
+  })
+
+  describe('delete failure reporting', () => {
+    const file = () =>
+      ({
+        uuid: '1',
+        remoteIdentifier: 'remote-1',
+        decryptedSize: 100_000,
+      }) as jest.Mocked<FileItem>
+
+    const respondWith = (response: unknown) => {
+      apiService.deleteFile = jest.fn().mockReturnValue(response)
+    }
+
+    it('never blames another account for the failure', async () => {
+      const confirmMock = (alertService.confirm = jest.fn().mockReturnValue(false))
+      const alertMock = (alertService.alert = jest.fn())
+
+      for (const response of [
+        { status: 400, data: { error: { message: 'Could not remove the file from server storage' } } },
+        { status: 401, data: { error: { message: 'Invalid valet token.' } } },
+        { status: 403, data: { error: { message: 'no-space' } } },
+        { status: 404, data: { error: { message: 'Not Found' } } },
+        { status: 500, data: { error: { message: 'boom' } } },
+        { status: 500, data: { networkFailure: true, error: { message: 'Network request failed' } } },
+      ]) {
+        respondWith(response)
+        await fileService.deleteFile(file())
+      }
+
+      const shownText = [...confirmMock.mock.calls, ...alertMock.mock.calls].map((call) => call[0]).join('\n')
+
+      expect(shownText).not.toContain('imported from another account')
+      expect(shownText.length).toBeGreaterThan(0)
+    })
+
+    it('does not offer local removal, or delete the item, when the server could not be reached', async () => {
+      const confirmMock = (alertService.confirm = jest.fn().mockReturnValue(true))
+      const alertMock = (alertService.alert = jest.fn())
+      const deleteItemMock = (mutator.setItemToBeDeleted = jest.fn())
+
+      respondWith({ status: 500, data: { networkFailure: true, error: { message: 'Network request failed' } } })
+
+      const error = await fileService.deleteFile(file())
+
+      expect(confirmMock).not.toHaveBeenCalled()
+      expect(deleteItemMock).not.toHaveBeenCalled()
+      expect(alertMock).toHaveBeenCalledTimes(1)
+      expect(alertMock.mock.calls[0][0]).toContain('server could not be reached')
+      expect(error?.tag).toEqual('network')
+    })
+
+    it('does not offer local removal when the credential was rejected', async () => {
+      const confirmMock = (alertService.confirm = jest.fn().mockReturnValue(true))
+      const alertMock = (alertService.alert = jest.fn())
+      const deleteItemMock = (mutator.setItemToBeDeleted = jest.fn())
+
+      respondWith({ status: 401, data: { error: { message: 'Invalid valet token.' } } })
+
+      const error = await fileService.deleteFile(file())
+
+      expect(confirmMock).not.toHaveBeenCalled()
+      expect(deleteItemMock).not.toHaveBeenCalled()
+      expect(alertMock.mock.calls[0][0]).toContain('Invalid valet token.')
+      expect(error?.tag).toEqual('unauthorized')
+    })
+
+    it('does not offer local removal on a genuine server error', async () => {
+      const confirmMock = (alertService.confirm = jest.fn().mockReturnValue(true))
+      alertService.alert = jest.fn()
+      const deleteItemMock = (mutator.setItemToBeDeleted = jest.fn())
+
+      respondWith({ status: 500, data: { error: { message: 'Could not remove the file from server storage' } } })
+
+      const error = await fileService.deleteFile(file())
+
+      expect(confirmMock).not.toHaveBeenCalled()
+      expect(deleteItemMock).not.toHaveBeenCalled()
+      expect(error?.tag).toEqual('server-error')
+    })
+
+    it('offers local removal when the server says it has no such file', async () => {
+      const confirmMock = (alertService.confirm = jest.fn().mockReturnValue(true))
+      const deleteItemMock = (mutator.setItemToBeDeleted = jest.fn())
+
+      respondWith({ status: 404, data: { error: { message: 'Not Found' } } })
+
+      const error = await fileService.deleteFile(file())
+
+      expect(confirmMock).toHaveBeenCalledTimes(1)
+      expect(confirmMock.mock.calls[0][0]).toContain('no stored copy')
+      expect(deleteItemMock).toHaveBeenCalledTimes(1)
+      expect(error).toBeUndefined()
+    })
+
+    it('quotes the server verbatim and warns about the stored copy on an outright refusal', async () => {
+      const confirmMock = (alertService.confirm = jest.fn().mockReturnValue(false))
+      const deleteItemMock = (mutator.setItemToBeDeleted = jest.fn())
+
+      respondWith({ status: 400, data: { error: { message: 'Not permitted for this operation' } } })
+
+      const error = await fileService.deleteFile(file())
+
+      expect(confirmMock.mock.calls[0][0]).toContain('Not permitted for this operation')
+      expect(confirmMock.mock.calls[0][0]).toContain('still stored on the')
+      expect(deleteItemMock).not.toHaveBeenCalled()
+      expect(error?.tag).toEqual('refused')
+    })
   })
 
   it('should download file from network if no backup', async () => {

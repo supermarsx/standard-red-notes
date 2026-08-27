@@ -152,6 +152,28 @@ describe('files post-build JSON-404 fallback (boot-mounted)', () => {
       expect(result.body).not.toContain(FALLBACK_MESSAGE)
     })
 
+    // The client sends DELETE to the collection path with NO trailing slash
+    // (`joinPaths(filesHost, '/v1/files')`), while the route is declared as
+    // `@controller('/v1/files') + @httpDelete('/')`. Under Express 5 those are
+    // normalized to the same route, but nothing else in the suite proves it —
+    // and a delete that 404s at the router would surface to the user as a
+    // generic "could not be deleted" with no way to tell it from a real refusal.
+    it('DELETE /v1/files (no trailing slash) reaches the valet auth middleware (401), not the fallback', async () => {
+      const result = await requestOf(baseUrl, 'DELETE', '/v1/files')
+
+      expect(result.status).toBe(401)
+      expect(result.body).toContain(AUTH_SENTINEL)
+      expect(result.body).not.toContain(FALLBACK_MESSAGE)
+    })
+
+    it('DELETE /v1/shared-vault/files (no trailing slash) reaches its own middleware (401), not the fallback', async () => {
+      const result = await requestOf(baseUrl, 'DELETE', '/v1/shared-vault/files')
+
+      expect(result.status).toBe(401)
+      expect(result.body).toContain(AUTH_SENTINEL)
+      expect(result.body).not.toContain(FALLBACK_MESSAGE)
+    })
+
     it('POST /v1/shared-vault/files/upload/create-session reaches its own middleware (401), not the fallback', async () => {
       const result = await requestOf(baseUrl, 'POST', '/v1/shared-vault/files/upload/create-session')
 

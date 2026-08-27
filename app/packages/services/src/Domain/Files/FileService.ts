@@ -27,7 +27,7 @@ import {
   DefaultAppDomain,
 } from '@standardnotes/models'
 import { PureCryptoInterface } from '@standardnotes/sncrypto-common'
-import { LoggerInterface, spaceSeparatedStrings, UuidGenerator } from '@standardnotes/utils'
+import { LoggerInterface, UuidGenerator } from '@standardnotes/utils'
 import { SNItemsKey } from '@standardnotes/encryption'
 import {
   DownloadAndDecryptFileOperation,
@@ -63,6 +63,7 @@ import { DecryptItemsKeyWithUserFallback } from '../Encryption/Functions'
 import { SharedVaultServer, SharedVaultServerInterface, HttpServiceInterface } from '@standardnotes/api'
 import { ContentType } from '@standardnotes/domain-core'
 import { EncryptionProviderInterface } from '../Encryption/EncryptionProviderInterface'
+import { diagnoseDeleteFileFailure } from './DeleteFileFailure'
 
 const OneHundredMb = 100 * 1_000_000
 
@@ -678,20 +679,31 @@ export class FileService extends AbstractService implements FilesClientInterface
     const result = await this.api.deleteFile(tokenResult, file.shared_vault_uuid ? 'shared-vault' : 'user')
 
     if (isErrorResponse(result)) {
+      const failure = diagnoseDeleteFileFailure(result)
+
+      this.logger.error(
+        `Server delete failed for file ${file.uuid} (remote identifier ${file.remoteIdentifier}): ` +
+          `${failure.kind}, status ${result.status}, server said "${failure.serverMessage}"`,
+      )
+
+      // A transport failure or an expired credential is no evidence that the
+      // file is gone, so removing the item locally would silently orphan it.
+      // Report what actually happened and stop.
+      if (!failure.offerLocalRemoval) {
+        await this.alertService.alert(failure.text, failure.title)
+
+        return new ClientDisplayableError(failure.text, failure.title, failure.kind)
+      }
+
       const deleteAnyway = await this.alertService.confirm(
-        spaceSeparatedStrings(
-          'This file could not be deleted from the server, possibly because you are attempting to delete a file item',
-          'that was imported from another account. Would you like to remove this file item from your account anyway?',
-          "If you're sure the file is yours and still exists on the server, do not choose this option,",
-          'and instead try to delete it again.',
-        ),
-        'Unable to Delete',
-        'Delete Anyway',
+        failure.text,
+        failure.title,
+        'Remove From Account',
         ButtonType.Danger,
       )
 
       if (!deleteAnyway) {
-        return ClientDisplayableError.FromNetworkError(result)
+        return new ClientDisplayableError(failure.text, failure.title, failure.kind)
       }
     }
 

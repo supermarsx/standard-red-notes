@@ -144,7 +144,13 @@ export class AnnotatedFilesController extends BaseHttpController {
       return this.badRequest(result.getError())
     }
 
-    return this.json({ success: true, message: 'File removed successfully' })
+    const alreadyAbsent = result.getValue() === 'already-absent'
+
+    return this.json({
+      success: true,
+      alreadyAbsent,
+      message: alreadyAbsent ? 'File was already absent from storage' : 'File removed successfully',
+    })
   }
 
   @httpGet('/')
