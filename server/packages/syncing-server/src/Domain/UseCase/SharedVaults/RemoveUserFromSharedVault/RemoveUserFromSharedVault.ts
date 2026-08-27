@@ -17,6 +17,11 @@ import { AddNotificationForUser } from '../../Messaging/AddNotificationForUser/A
 import { InviteRealtimeDomainEventProducer } from '../../../Invite/InviteRealtimeDomainEventProducer'
 import { InviteMutationTransactionRunner } from '../../../Invite/InviteMutationTransactionRunner'
 
+/**
+ * KNOWN GAP — like the grant side, withdrawing shared-vault access is not
+ * written to the security audit log, because `syncing-server` has no audit
+ * writer bound at all. See the full note on `AddUserToSharedVault`.
+ */
 export class RemoveUserFromSharedVault implements UseCaseInterface<void> {
   constructor(
     private sharedVaultUsersRepository: SharedVaultUserRepositoryInterface,

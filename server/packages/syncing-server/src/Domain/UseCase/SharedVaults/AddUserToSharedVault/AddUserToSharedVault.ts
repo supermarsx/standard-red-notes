@@ -18,6 +18,30 @@ import { SharedVaultUserRepositoryInterface } from '../../../SharedVault/User/Sh
 import { DomainEventFactoryInterface } from '../../../Event/DomainEventFactoryInterface'
 import { AddNotificationsForUsers } from '../../Messaging/AddNotificationsForUsers/AddNotificationsForUsers'
 
+/**
+ * KNOWN GAP — shared-vault membership is NOT written to the security audit log.
+ *
+ * Granting someone membership of a shared vault determines who can read another
+ * user's notes, which makes it among the most security-relevant events in the
+ * product. It is nevertheless absent from the admin "Recent security events"
+ * surface, and from the audit log entirely.
+ *
+ * The reason is structural, not an oversight: the audit log
+ * (`AuditLogWriter` / `AuditAction`) lives in the `auth` package, and
+ * `syncing-server` has NO audit writer bound at all. Recording these events is
+ * therefore a piece of cross-service infrastructure, not a call-site addition —
+ * which is why the pass that added credential, sensitive-setting, MFA and RBAC
+ * group-attribution events deliberately stopped short of it.
+ *
+ * When that infrastructure is built, the natural seam is the domain event bus
+ * rather than these call sites: this use case and its siblings already publish
+ * `UserAddedToSharedVault` / `UserRemovedFromSharedVault` /
+ * `UserInvitedToSharedVault`, so an audit consumer can subscribe to those and
+ * pick up every membership and permission change without touching the use
+ * cases. Record the vault uuid, the affected user, the permission level and the
+ * actor — never vault key material or any item content, both of which are
+ * end-to-end encrypted and must stay outside the log.
+ */
 export class AddUserToSharedVault implements UseCaseInterface<SharedVaultUser> {
   constructor(
     private sharedVaultRepository: SharedVaultRepositoryInterface,

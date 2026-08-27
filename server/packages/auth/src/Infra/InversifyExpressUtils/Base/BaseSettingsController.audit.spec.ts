@@ -242,4 +242,90 @@ describe('BaseSettingsController — sensitive setting audit', () => {
       expect(recorded).not.toContain(secret)
     }
   })
+
+  /**
+   * The dangerous case is not MFA_SECRET — whose name announces itself — but a
+   * setting whose NAME reads innocuous while its VALUE is a credential.
+   * EXTENSION_KEY is exactly that. Nothing about the audit path may treat such a
+   * setting more loosely than an obviously-secret one.
+   */
+  it('does not leak the value of a sensitive setting whose name reads innocuous', async () => {
+    const secretValue = 'ext-key-a1b2c3d4-NEVER-LOG-ME'
+    setSettingValue.execute.mockResolvedValue(settingResult(SettingName.NAMES.ExtensionKey, true))
+
+    await controller.updateSetting(
+      {
+        params: { userUuid: user.uuid },
+        body: { name: SettingName.NAMES.ExtensionKey, value: secretValue },
+        headers: {},
+      } as unknown as Request,
+      response(),
+    )
+
+    const recorded = auditLogWriter.write.mock.calls[0][0] as AuditLogWriteParams
+    expect(recorded.action).toEqual(AuditAction.SettingChanged)
+    expect(JSON.stringify(recorded)).not.toContain(secretValue)
+    // The name is the ONLY setting-derived field recorded.
+    expect(recorded.metadata).toEqual({ name: SettingName.NAMES.ExtensionKey, selfInitiated: true })
+  })
+
+  /**
+   * Structural guard rather than a value blocklist: whatever setting is written,
+   * the metadata may only ever carry a fixed set of keys, and `name` must equal
+   * the setting NAME exactly. A future edit that widened metadata with anything
+   * value-derived would fail here even if the value looked harmless in the test.
+   */
+  it('confines metadata to a fixed set of non-value keys on every audited path', async () => {
+    const allowedKeys = ['name', 'selfInitiated', 'enabling']
+
+    setSettingValue.execute.mockResolvedValue(settingResult(SettingName.NAMES.ExtensionKey, true))
+    await controller.updateSetting(
+      {
+        params: { userUuid: user.uuid },
+        body: { name: SettingName.NAMES.ExtensionKey, value: 'secret' },
+        headers: {},
+      } as unknown as Request,
+      response(),
+    )
+
+    setSettingValue.execute.mockResolvedValue(settingResult(SettingName.NAMES.MfaSecret, true))
+    await controller.updateSetting(
+      {
+        params: { userUuid: user.uuid },
+        body: { name: SettingName.NAMES.MfaSecret, value: 'secret', totpToken: '123456' },
+        headers: {},
+      } as unknown as Request,
+      response(),
+    )
+
+    await controller.deleteSetting(
+      {
+        params: { userUuid: user.uuid, settingName: SettingName.NAMES.ExtensionKey },
+        headers: {},
+      } as unknown as Request,
+      response(),
+    )
+
+    validateMfaToken.execute.mockResolvedValueOnce(Result.fail('Invalid TOTP token.'))
+    await controller.updateSetting(
+      {
+        params: { userUuid: user.uuid },
+        body: { name: SettingName.NAMES.MfaSecret, value: 'secret', totpToken: '000000' },
+        headers: {},
+      } as unknown as Request,
+      response(),
+    )
+
+    expect(auditLogWriter.write).toHaveBeenCalledTimes(4)
+
+    const knownSettingNames = Object.values(SettingName.NAMES)
+    for (const call of auditLogWriter.write.mock.calls) {
+      const metadata = (call[0] as AuditLogWriteParams).metadata as Record<string, unknown>
+      for (const key of Object.keys(metadata)) {
+        expect(allowedKeys).toContain(key)
+      }
+      // `name` is a canonical setting name, never a submitted value.
+      expect(knownSettingNames).toContain(metadata.name)
+    }
+  })
 })
