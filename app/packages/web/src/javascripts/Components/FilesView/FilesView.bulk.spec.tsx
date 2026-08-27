@@ -100,6 +100,10 @@ const createApplication = (files: TestFile[], filesController: Record<string, un
     }),
     toggleFilesViewSortDirection: jest.fn(),
     setFilesViewSortBy: jest.fn(),
+    // 'all' is the default chip, under which filterItemsByFolder is a pass-through,
+    // so the folder bar does not change what these bulk cases exercise.
+    filesFolderFilter: 'all',
+    setFilesFolderFilter: jest.fn(),
   }
 
   return {
@@ -108,6 +112,12 @@ const createApplication = (files: TestFile[], filesController: Record<string, un
       streamItems: () => () => undefined,
     },
     itemListController,
+    navigationController: {
+      folders: [],
+      allLocalRootFolders: [],
+      getFolderChildren: () => [],
+      createFolder: jest.fn(),
+    },
     filesController: {
       handleFileAction: jest.fn(),
       selectAndUploadNewFiles: jest.fn(),

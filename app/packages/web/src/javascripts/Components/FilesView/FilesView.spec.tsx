@@ -109,6 +109,16 @@ const createApplication = (file: ReturnType<typeof createFile>) =>
       clearFilesViewSelection: jest.fn(),
       toggleFilesViewSortDirection: jest.fn(),
       setFilesViewSortBy: jest.fn(),
+      // 'all' is the default chip, under which filterItemsByFolder is a pass-through,
+      // so the folder bar does not change what these cases assert about the table.
+      filesFolderFilter: 'all',
+      setFilesFolderFilter: jest.fn(),
+    },
+    navigationController: {
+      folders: [],
+      allLocalRootFolders: [],
+      getFolderChildren: () => [],
+      createFolder: jest.fn(),
     },
     filesController: {
       handleFileAction: jest.fn(),

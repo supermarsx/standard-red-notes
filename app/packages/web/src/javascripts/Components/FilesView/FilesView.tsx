@@ -1,5 +1,6 @@
 import { FunctionComponent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { observer } from 'mobx-react-lite'
+import { useTranslation } from 'react-i18next'
 import { ContentType, FileItem, SortableItem } from '@standardnotes/snjs'
 import { classNames } from '@standardnotes/utils'
 import { formatSizeToReadableString } from '@standardnotes/filepicker'
@@ -23,6 +24,14 @@ import { MutuallyExclusiveMediaQueryBreakpoints, useMediaQuery } from '@/Hooks/u
 import { filesSortByForTableSortBy, getFileTypeLabel, tableSortByForFilesSortBy } from './FilesViewTableUtils'
 import ItemOptionsMenu from '@/Components/ContentTableView/ItemOptionsMenu'
 import BulkFileActionBar from './BulkFileActionBar'
+import FilesFolderBar, {
+  FilesFolderFilterAll,
+  filterItemsByFolder,
+} from '@/Components/ContentListView/FilesFolderBar'
+import EmptyFilesView from '@/Components/ContentListView/EmptyFilesView'
+import { selectDirectoryFiles } from '@/Utils/DirectoryPicker'
+import { uploadFilesWithFolderStructure } from '@/Utils/FolderUpload'
+import MenuItem from '@/Components/Menu/MenuItem'
 
 type Props = {
   application: WebApplication
@@ -65,15 +74,18 @@ const FileNameCell: FunctionComponent<{
  * sort/selection state, file-specific actions, upload and drag-and-drop behavior.
  */
 const FilesView: FunctionComponent<Props> = observer(({ application, className, id }) => {
+  const { t } = useTranslation('notes')
   const { itemListController } = application
   const [files, setFiles] = useState<FileItem[]>(() => application.items.getDisplayableFiles())
   const [bulkMenuVisible, setBulkMenuVisible] = useState(false)
+  const [uploadMenuVisible, setUploadMenuVisible] = useState(false)
   const [rowMenu, setRowMenu] = useState<{
     file: FileItem
     position: { x: number; y: number }
     trigger: HTMLElement
   }>()
   const bulkMenuAnchorRef = useRef<HTMLButtonElement>(null)
+  const uploadMenuAnchorRef = useRef<HTMLButtonElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const { addDragTarget, removeDragTarget } = useFileDragNDrop()
 
@@ -88,12 +100,29 @@ const FilesView: FunctionComponent<Props> = observer(({ application, className, 
     })
   }, [application])
 
-  // Drop any selection entries whose file no longer exists.
-  useEffect(() => {
-    itemListController.pruneFilesViewSelection(new Set(files.map((file) => file.uuid)))
-  }, [files, itemListController])
+  const folderFilter = itemListController.filesFolderFilter
+  const { navigationController } = application
 
-  const sorted = useMemo(() => sortFiles(files, sortBy, sortDirection), [files, sortBy, sortDirection])
+  /**
+   * The files under the active folder chip. Everything downstream — the table,
+   * select-all, the bulk bar's counts and the selection prune below — reads this
+   * list rather than `files`, so a selection can never span files the user
+   * cannot currently see and a bulk delete can only ever hit visible rows.
+   */
+  const visibleFiles = useMemo(
+    () => filterItemsByFolder(files, folderFilter, navigationController) as FileItem[],
+    [files, folderFilter, navigationController, navigationController.folders],
+  )
+
+  // Drop any selection entries whose file no longer exists OR is filtered out.
+  useEffect(() => {
+    itemListController.pruneFilesViewSelection(new Set(visibleFiles.map((file) => file.uuid)))
+  }, [visibleFiles, itemListController])
+
+  const sorted = useMemo(
+    () => sortFiles(visibleFiles, sortBy, sortDirection),
+    [visibleFiles, sortBy, sortDirection],
+  )
 
   const selectedFiles = useMemo(() => sorted.filter((file) => selectedUuids.has(file.uuid)), [sorted, selectedUuids])
   const selectionActive = selectedUuids.size > 0
@@ -138,6 +167,26 @@ const FilesView: FunctionComponent<Props> = observer(({ application, className, 
     }
     void application.filesController.selectAndUploadNewFiles()
   }, [application])
+
+  /**
+   * Directory upload, ported from the Files smart view's add-item menu. Recreates
+   * the picked folder structure as SNFolders, which is what makes the folder chips
+   * above meaningful — dropping it would have left the chips with no way to fill.
+   */
+  const uploadFolder = useCallback(async () => {
+    if (!application.entitledToFiles) {
+      application.showPremiumModal(FeatureName.Files)
+      return
+    }
+    const filesWithPaths = await selectDirectoryFiles()
+    if (filesWithPaths.length === 0) {
+      return
+    }
+    await uploadFilesWithFolderStructure(filesWithPaths, {
+      filesController: application.filesController,
+      navigationController,
+    })
+  }, [application, navigationController])
 
   // Drag-and-drop upload (no note → standalone upload, like the upload button).
   useEffect(() => {
@@ -303,15 +352,54 @@ const FilesView: FunctionComponent<Props> = observer(({ application, className, 
             <Icon type={sortDirection === 'asc' ? 'arrows-sort-up' : 'arrows-sort-down'} size="medium" />
           </button>
           <button
+            ref={uploadMenuAnchorRef}
             className="border-border hover:bg-contrast flex items-center gap-1 rounded border px-2 py-1 text-sm"
-            onClick={uploadNewFiles}
-            title="Upload files"
+            onClick={() => setUploadMenuVisible((visible) => !visible)}
+            title="Upload files or a folder"
+            aria-haspopup="menu"
           >
             <Icon type="upload" size="medium" />
             Upload
+            <Icon type="chevron-down" size="small" />
           </button>
+          <Popover
+            title="Upload"
+            open={uploadMenuVisible}
+            anchorElement={uploadMenuAnchorRef}
+            togglePopover={() => setUploadMenuVisible(false)}
+            side="bottom"
+            align="end"
+            className="py-2"
+          >
+            <Menu a11yLabel="Upload menu">
+              <MenuItem
+                onClick={() => {
+                  setUploadMenuVisible(false)
+                  uploadNewFiles()
+                }}
+              >
+                <Icon type="upload" className="text-neutral mr-2" />
+                {t('uploadFiles')}
+              </MenuItem>
+              <MenuItem
+                onClick={() => {
+                  setUploadMenuVisible(false)
+                  void uploadFolder()
+                }}
+              >
+                <Icon type="folder" className="text-neutral mr-2" />
+                {t('uploadFolder')}
+              </MenuItem>
+            </Menu>
+          </Popover>
         </div>
       </div>
+
+      <FilesFolderBar
+        navigationController={navigationController}
+        activeFilter={folderFilter}
+        onChange={itemListController.setFilesFolderFilter}
+      />
 
       {selectionActive && (
         <BulkFileActionBar
@@ -357,17 +445,24 @@ const FilesView: FunctionComponent<Props> = observer(({ application, className, 
 
       <div className="min-h-0 flex-grow overflow-hidden">
         {sorted.length === 0 ? (
-          <div className="text-passive-1 flex h-full flex-col items-center justify-center p-4 text-center">
-            <Icon type="attachment-file" size="large" className="text-passive-2" />
-            <div className="mt-2 text-sm">No files yet — upload a file or attach one to a note.</div>
-            <button
-              className="border-border hover:bg-contrast mt-4 flex items-center gap-1 rounded border px-3 py-1.5 text-sm"
-              onClick={uploadNewFiles}
-            >
-              <Icon type="upload" size="medium" />
-              Upload files
-            </button>
-          </div>
+          folderFilter === FilesFolderFilterAll ? (
+            // The account genuinely has no files. EmptyFilesView is the shared
+            // illustrated state whose artwork follows the theme (db27cca2).
+            <EmptyFilesView addNewItem={uploadNewFiles} />
+          ) : (
+            // Files exist but none in the selected folder — say that instead of
+            // claiming the account is empty, and offer a way back to everything.
+            <div className="text-passive-1 flex h-full flex-col items-center justify-center p-4 text-center">
+              <div className="text-sm">{t('noFilesInFolder')}</div>
+              <button
+                className="border-border hover:bg-contrast mt-4 flex items-center gap-1 rounded border px-3 py-1.5 text-sm"
+                onClick={() => itemListController.setFilesFolderFilter(FilesFolderFilterAll)}
+              >
+                <Icon type="attachment-file" size="medium" />
+                {t('allFiles')}
+              </button>
+            </div>
+          )
         ) : (
           <div className="h-full min-h-0 [&>div]:h-full">
             <Table table={table} />
