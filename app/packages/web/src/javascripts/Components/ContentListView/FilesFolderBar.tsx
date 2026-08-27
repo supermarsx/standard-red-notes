@@ -72,7 +72,13 @@ const FilesFolderBar: FunctionComponent<Props> = ({ navigationController, active
         className={chipClass(activeFilter === FilesFolderFilterAll)}
         onClick={() => onChange(FilesFolderFilterAll)}
       >
-        <Icon type="files" className="h-4 w-4" />
+        {/*
+          `Icon` falls back to rendering the type string itself as an emoji label when the
+          name is not in IconNameToSvgMapping, and `VectorIconNameOrEmoji` accepts any
+          string — so a name that does not exist typechecks and silently renders as text.
+          There is no `files` icon; `attachment-file` is the app's Files glyph (see ViewTab).
+        */}
+        <Icon type="attachment-file" className="h-4 w-4" />
         {t('allFiles')}
       </button>
       <button
