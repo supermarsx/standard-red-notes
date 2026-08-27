@@ -99,17 +99,33 @@ None of this needs revisiting; it is all landed, tested, and independent of §1.
 Two behaviours in there that are easy to break and worth knowing before you touch them:
 
 - **`FILES_CHUNK_ACK` is addressed by `transferId`, not by the open frame's
-  `commandId`.** Route on only the latter and every acknowledgement is silently
-  dropped — the upload opens, sends the whole file, and hangs with no error.
+  `commandId`.** The gateway passes `decoded.header.transferId` as the commandId when
+  it acknowledges a binary chunk (`websocket-gateway/src/filesSession.ts`). Routing on
+  `commandId` alone — which is the obvious thing to do, and what every other frame in
+  this protocol wants — silently drops every acknowledgement: the upload opens, sends
+  the entire file, and then **hangs forever with no error.** No exception, no surfaced
+  timeout, just a transfer that never completes. The worker matches on either
+  identifier, and the test asserts the two genuinely differ so it cannot pass
+  vacuously.
 - **`finishSent` is marked *before* the write, not after.** A client cannot know
   whether bytes it wrote arrived, so "I attempted FINISH" is the only transition point
   that never under-estimates the risk that the upload already applied. Everything after
   it is unsafe to replay over HTTP; everything before it is safe, because the server
   publishes only at `closeUploadSession`.
 
-## 7. Known residual
+## 7. Known residuals
 
-Abandoned pre-FINISH upload sessions consume server-side storage until the files
+**Abandoned pre-FINISH upload sessions consume server-side storage** until the files
 service reaps them. This is a consequence of the fallback rule in §6 and is correct
 behaviour on the client's side — inventing client-driven cleanup would be the wrong
 place to solve it. It belongs to the files service's housekeeping.
+
+**The web suite has an unexplained intermittent failure, and it predates this work.**
+Recorded here because an undocumented flake gets blamed on whoever next touches the
+area. Observed while landing the upload transport: one run in four reported 3 failures
+across 2 suites but force-exited before naming them, and three subsequent runs were
+clean. Both trees were then run to completion — baseline 5047/5047 green, with the
+change 5056/5056 green — and Jest's "worker process failed to exit gracefully" warning
+appears on **both**, so it is not introduced by the file lanes. It could not be
+attributed to the change, and equally could not be proven unrelated. If you see a
+sporadic red here, suspect the suite's teardown before suspecting your diff.
