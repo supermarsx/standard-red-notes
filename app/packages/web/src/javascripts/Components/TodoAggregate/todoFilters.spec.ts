@@ -103,10 +103,7 @@ describe('todoRowsFromGroups', () => {
   it('identifies a folder by its full path, so two same-named ones stay distinct', () => {
     const workPersonal: TodoTag = { uuid: 't-wp', title: 'Personal', longTitle: 'Work/Personal' }
     const homePersonal: TodoTag = { uuid: 't-hp', title: 'Personal', longTitle: 'Home/Personal' }
-    const sameName = [
-      group('n-a', 'A', [todo('a', 'Task A')]),
-      group('n-b', 'B', [todo('b', 'Task B')]),
-    ]
+    const sameName = [group('n-a', 'A', [todo('a', 'Task A')]), group('n-b', 'B', [todo('b', 'Task B')])]
     const tagged = todoRowsFromGroups(sameName, (source) => (source.uuid === 'n-a' ? [workPersonal] : [homePersonal]))
     // Their own titles collide; the label the picker shows must not.
     expect(workPersonal.title).toBe(homePersonal.title)
@@ -190,7 +187,13 @@ describe('filterTodoRows', () => {
     // would admit nothing at all — the case that makes union the only usable
     // reading of a multi-select over a taxonomy.
     const both = filterTodoRows(rows(), withFilters({ tagUuids: ['tag-home', 'tag-work'] }), NOW)
-    expect(texts(both)).toEqual(['Ship the beta', 'Write release notes', 'Book the venue', 'Buy milk', 'Call the plumber'])
+    expect(texts(both)).toEqual([
+      'Ship the beta',
+      'Write release notes',
+      'Book the venue',
+      'Buy milk',
+      'Call the plumber',
+    ])
     // Adding a value can only ever reveal rows, never remove them.
     const one = filterTodoRows(rows(), withFilters({ tagUuids: ['tag-work'] }), NOW)
     expect(both.length).toBeGreaterThan(one.length)
@@ -231,9 +234,15 @@ describe('filterTodoRows', () => {
     const sectioned = [
       group('n-adv', 'List', [todo('a', 'Buy milk', { groupName: 'Groceries' })], 'advanced-checklist'),
     ]
-    expect(texts(filterTodoRows(todoRowsFromGroups(sectioned, () => []), withFilters({ query: 'grocer' }), NOW))).toEqual(
-      ['Buy milk'],
-    )
+    expect(
+      texts(
+        filterTodoRows(
+          todoRowsFromGroups(sectioned, () => []),
+          withFilters({ query: 'grocer' }),
+          NOW,
+        ),
+      ),
+    ).toEqual(['Buy milk'])
     // "Home" appears only in the PARENT segment of the Errands folder's path.
     expect(texts(filterTodoRows(rows(), withFilters({ query: 'home' }), NOW))).toEqual(['Buy milk', 'Call the plumber'])
   })

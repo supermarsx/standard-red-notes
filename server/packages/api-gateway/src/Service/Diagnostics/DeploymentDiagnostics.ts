@@ -167,7 +167,12 @@ export function observeDeployment(read: EnvReader, bindings: DeploymentBindings)
     serviceProxySetting: readToken<ServiceProxySetting>(read('SERVICE_PROXY_TYPE'), ['grpc'], 'unset', 'other'),
     boundServiceProxy: bindings.boundServiceProxy,
     cacheSetting: readToken<CacheSetting>(read('CACHE_TYPE'), ['memory', 'redis'], 'unset', 'other'),
-    syncSwitchSetting: readToken<SyncSwitchSetting>(read('WEBSOCKET_SYNC_ENABLED'), ['true', 'false'], 'unset', 'other'),
+    syncSwitchSetting: readToken<SyncSwitchSetting>(
+      read('WEBSOCKET_SYNC_ENABLED'),
+      ['true', 'false'],
+      'unset',
+      'other',
+    ),
     grpcSyncingProxyBound: bindings.grpcSyncingProxyBound,
     // Container.ts:1038 — the gRPC construction block is the `else` of
     // `isConfiguredForHomeServer`, so home-server can never reach it.

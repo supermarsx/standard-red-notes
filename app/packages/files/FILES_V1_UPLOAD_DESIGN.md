@@ -22,7 +22,7 @@ rather than assumed (1000 plaintext bytes → 1017 ciphertext;
 
 `chunkCount` is the problem. Three facts, all verified:
 
-1. **`ByteChunker` emits chunks of *at least* `minimumChunkSize`, not exactly it.**
+1. **`ByteChunker` emits chunks of _at least_ `minimumChunkSize`, not exactly it.**
    `src/Domain/Chunker/ByteChunker.ts:33` computes
    `const maxIndex = Math.max(this.minimumChunkSize, this.bytes.length)`.
    If the reader hands it a buffer larger than the minimum, the whole buffer becomes
@@ -89,12 +89,12 @@ this was stopped for a decision rather than pushed through.
 
 None of this needs revisiting; it is all landed, tested, and independent of §1.
 
-| Piece | Where | Note |
-| --- | --- | --- |
-| Binary frame encoder/decoder | `Services/SyncTransport/syncTransportProtocol.ts` | Byte-identical to the gateway's, proven by round-trip and direct wire-prefix assertion |
-| Streaming SHA-256 | `PureCryptoInterface.sha256Stream*`, `UseCase/EncryptedStreamDigest.ts` | The whole-file digest FINISH requires. A property of the **file**, not of a transfer attempt — it survives any number of resume cycles unchanged |
-| Resume state machine | `UseCase/SocketUploadTransfer.ts` | Pure, 20 tests. **Takes `declaredSize` as a constructor argument**, so it does not care where the value comes from and is *not* blocked by this problem |
-| Worker upload transport | `Services/SyncTransport/SyncTransportWorkerRuntime.ts` | Open/chunk/ack/finish/cancel frames, capability-gated. Has no consumer yet |
+| Piece                        | Where                                                                   | Note                                                                                                                                                    |
+| ---------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Binary frame encoder/decoder | `Services/SyncTransport/syncTransportProtocol.ts`                       | Byte-identical to the gateway's, proven by round-trip and direct wire-prefix assertion                                                                  |
+| Streaming SHA-256            | `PureCryptoInterface.sha256Stream*`, `UseCase/EncryptedStreamDigest.ts` | The whole-file digest FINISH requires. A property of the **file**, not of a transfer attempt — it survives any number of resume cycles unchanged        |
+| Resume state machine         | `UseCase/SocketUploadTransfer.ts`                                       | Pure, 20 tests. **Takes `declaredSize` as a constructor argument**, so it does not care where the value comes from and is _not_ blocked by this problem |
+| Worker upload transport      | `Services/SyncTransport/SyncTransportWorkerRuntime.ts`                  | Open/chunk/ack/finish/cancel frames, capability-gated. Has no consumer yet                                                                              |
 
 Two behaviours in there that are easy to break and worth knowing before you touch them:
 
@@ -107,7 +107,7 @@ Two behaviours in there that are easy to break and worth knowing before you touc
   timeout, just a transfer that never completes. The worker matches on either
   identifier, and the test asserts the two genuinely differ so it cannot pass
   vacuously.
-- **`finishSent` is marked *before* the write, not after.** A client cannot know
+- **`finishSent` is marked _before_ the write, not after.** A client cannot know
   whether bytes it wrote arrived, so "I attempted FINISH" is the only transition point
   that never under-estimates the risk that the upload already applied. Everything after
   it is unsafe to replay over HTTP; everything before it is safe, because the server

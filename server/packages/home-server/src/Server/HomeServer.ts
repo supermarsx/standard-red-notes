@@ -885,9 +885,7 @@ export class HomeServer implements HomeServerInterface {
       const adapter = new HomeServerSyncFilesAdapter({
         storageRoot: resolvePath(storageRoot),
         authorizer: new CanonicalHomeServerFileResourceAuthorizer({
-          sessionValidator: container.get(
-            ApiGatewayTypes.ApiGateway_ServiceProxy,
-          ) as HomeServerSessionValidationPort,
+          sessionValidator: container.get(ApiGatewayTypes.ApiGateway_ServiceProxy) as HomeServerSessionValidationPort,
           services: serviceContainer,
           authTokenDecoder: createSyncFilesTokenDecoder<HomeServerCrossServiceToken>(authJwtSecret),
           valetTokenDecoder: createSyncFilesTokenDecoder<

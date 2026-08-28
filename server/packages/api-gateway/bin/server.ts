@@ -530,8 +530,7 @@ void container
     let stopWebSocketGateway: (() => Promise<void>) | undefined
     let inviteEventAvailability: RedisInviteEventAvailabilityBus | undefined
     let inviteAvailabilityRedis:
-      | (RedisInviteEventSubscriber & { quit(): Promise<unknown>; disconnect(): void })
-      | undefined
+      (RedisInviteEventSubscriber & { quit(): Promise<unknown>; disconnect(): void }) | undefined
     // Standard Red Notes: record WHICH of the sync-lane preconditions held, so the
     // admin diagnostics endpoint can name the missing one instead of repeating the
     // log line's "durable backend and shared Redis state are required" — which

@@ -52,7 +52,10 @@ export class SyncWebSocketAccessService {
       return ['sync-not-configured']
     }
 
-    return this.provider.unavailabilityReasons?.() ?? (this.capabilities().capabilities.length === 0 ? ['sync-not-configured'] : [])
+    return (
+      this.provider.unavailabilityReasons?.() ??
+      (this.capabilities().capabilities.length === 0 ? ['sync-not-configured'] : [])
+    )
   }
 
   async issueTicket(identity: SyncTicketIdentity): Promise<SyncTicketResponse> {

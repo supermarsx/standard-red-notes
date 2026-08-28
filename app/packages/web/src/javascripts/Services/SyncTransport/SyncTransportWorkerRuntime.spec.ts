@@ -1217,9 +1217,9 @@ describe('SyncTransportWorkerRuntime', () => {
         clientRequestId: 'file-download-1',
         creditBytes: 6,
       })
-      const credit = JSON.parse(
-        socket.sent.find((entry) => JSON.parse(entry).type === 'FILES_CREDIT') as string,
-      ) as { payload: Record<string, unknown> }
+      const credit = JSON.parse(socket.sent.find((entry) => JSON.parse(entry).type === 'FILES_CREDIT') as string) as {
+        payload: Record<string, unknown>
+      }
       expect(credit.payload).toEqual({ transferId: 'transfer-1', generation: 1, creditBytes: 6 })
     })
 
@@ -1358,9 +1358,9 @@ describe('SyncTransportWorkerRuntime', () => {
 
       await harness.runtime.handle({ type: 'CANCEL_FILE_DOWNLOAD', clientRequestId: 'file-download-1' })
 
-      const cancel = JSON.parse(
-        socket.sent.find((entry) => JSON.parse(entry).type === 'FILES_CANCEL') as string,
-      ) as { payload: Record<string, unknown> }
+      const cancel = JSON.parse(socket.sent.find((entry) => JSON.parse(entry).type === 'FILES_CANCEL') as string) as {
+        payload: Record<string, unknown>
+      }
       expect(cancel.payload).toEqual({ transferId: 'transfer-1', generation: 1 })
       expect(harness.messages).toContainEqual(
         expect.objectContaining({ type: 'FILE_DOWNLOAD_ERROR', code: 'CANCELLED' }),

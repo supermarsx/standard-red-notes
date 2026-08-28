@@ -24,10 +24,7 @@ import { LexicalIconNameToSvgMapping } from './LexicalIcons'
 
 const JAVASCRIPTS_ROOT = join(__dirname, '..', '..')
 
-const knownIconNames = new Set([
-  ...Object.keys(IconNameToSvgMapping),
-  ...Object.keys(LexicalIconNameToSvgMapping),
-])
+const knownIconNames = new Set([...Object.keys(IconNameToSvgMapping), ...Object.keys(LexicalIconNameToSvgMapping)])
 
 const sourceFiles = (dir: string): string[] => {
   const found: string[] = []

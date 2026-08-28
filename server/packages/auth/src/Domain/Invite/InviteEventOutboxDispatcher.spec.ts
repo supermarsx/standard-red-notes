@@ -1,7 +1,4 @@
-import {
-  DomainEventPublisherInterface,
-  InviteRealtimeInvalidationRequestedEvent,
-} from '@standardnotes/domain-events'
+import { DomainEventPublisherInterface, InviteRealtimeInvalidationRequestedEvent } from '@standardnotes/domain-events'
 
 import { InviteEventOutboxDispatcher } from './InviteEventOutboxDispatcher'
 import { InviteEventOutboxRepositoryInterface } from './InviteEventOutboxRepositoryInterface'
@@ -215,9 +212,7 @@ describe('InviteEventOutboxDispatcher lifecycle', () => {
     })
 
     it('marks a record failed once it has exhausted its attempts', async () => {
-      repository.claimNext
-        .mockResolvedValueOnce({ ...claimed('exhausted'), attempts: 8 })
-        .mockResolvedValue(null)
+      repository.claimNext.mockResolvedValueOnce({ ...claimed('exhausted'), attempts: 8 }).mockResolvedValue(null)
       publisher.publish = jest.fn().mockRejectedValue(new Error('broker unavailable'))
       const dispatcher = dispatcherWithLogger({ maximumAttempts: 8 })
 

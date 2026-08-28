@@ -165,7 +165,9 @@ describe('buildDiagnosticsReport — what it withholds', () => {
     capturedAt: 'redis://admin:hunter2@redis.internal.example:6379',
     gate: {
       ...payload.gate,
-      unmetPreconditions: [{ code: 'REDIS_UNBOUND', remedy: 'set REDIS_URL to redis://admin:hunter2@redis.internal.example:6379' }],
+      unmetPreconditions: [
+        { code: 'REDIS_UNBOUND', remedy: 'set REDIS_URL to redis://admin:hunter2@redis.internal.example:6379' },
+      ],
       unmetCodes: ['REDIS_UNBOUND'],
       files: { advertised: false, unmetCondition: 'FILES_INTERNAL_URL', remedy: 'https://notes.internal.example' },
     },

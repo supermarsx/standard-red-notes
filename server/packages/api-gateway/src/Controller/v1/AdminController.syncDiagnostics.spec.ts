@@ -33,8 +33,7 @@ describe('AdminController sync-diagnostics', () => {
   let jsonMock: jest.Mock
   let statusMock: jest.Mock
 
-  const makeController = () =>
-    new AdminController({} as ServiceProxyInterface, {} as EndpointResolverInterface)
+  const makeController = () => new AdminController({} as ServiceProxyInterface, {} as EndpointResolverInterface)
 
   const responseWith = (roles: Array<{ name: string }>): Response => {
     jsonMock = jest.fn()
@@ -260,7 +259,9 @@ describe('AdminController sync-diagnostics', () => {
     const explode = (name: string) => () => {
       throw new Error(`Method not found: getSyncDiagnostics must not reach ${name} — it is gateway-local.`)
     }
-    const throwingProxy = new Proxy({} as ServiceProxyInterface, { get: (_target, key) => explode(`serviceProxy.${String(key)}`) })
+    const throwingProxy = new Proxy({} as ServiceProxyInterface, {
+      get: (_target, key) => explode(`serviceProxy.${String(key)}`),
+    })
     const throwingResolver = new Proxy({} as EndpointResolverInterface, {
       get: (_target, key) => explode(`endpointResolver.${String(key)}`),
     })
@@ -309,10 +310,11 @@ describe('AdminController sync-diagnostics', () => {
 
   it('carries the recorded topology, the branch that ran, and configuration presence', () => {
     deploymentDiagnostics.record(
-      observeDeployment(
-        (key) => ({ MODE: 'home-server', SYNCING_SERVER_GRPC_URL: '0.0.0.0:50052' })[key],
-        { boundServiceProxy: 'direct-call', grpcSyncingProxyBound: false, redisBound: true },
-      ),
+      observeDeployment((key) => ({ MODE: 'home-server', SYNCING_SERVER_GRPC_URL: '0.0.0.0:50052' })[key], {
+        boundServiceProxy: 'direct-call',
+        grpcSyncingProxyBound: false,
+        redisBound: true,
+      }),
     )
     const response = adminResponse()
 

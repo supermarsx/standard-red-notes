@@ -181,9 +181,7 @@ describe('CollaborationAuthorizationService', () => {
   // --- 1. THE ROOM EPOCH HMAC BINDS WHAT IT CLAIMS -------------------------
 
   describe('the derived room epoch is a keyed binding, not a guessable label', () => {
-    async function epochFor(
-      options: { note?: string; securityEpoch?: string; secret?: string } = {},
-    ): Promise<string> {
+    async function epochFor(options: { note?: string; securityEpoch?: string; secret?: string } = {}): Promise<string> {
       const { service } = harness({
         secret: options.secret,
         body: { collaborationSecurityEpoch: options.securityEpoch ?? SECURITY_EPOCH },
@@ -428,7 +426,10 @@ describe('CollaborationAuthorizationService', () => {
       ['a missing expected room epoch', grantRequest({ expectedRoomEpoch: undefined })],
       ['an empty lease request id', grantRequest({ leaseRequestId: '' })],
       ['an oversized lease request id', grantRequest({ leaseRequestId: 'l'.repeat(129) })],
-      ['an oversized bootstrap challenge', grantRequest({ leaseRequestId: 'lease-1', bootstrapChallenge: 'c'.repeat(129) })],
+      [
+        'an oversized bootstrap challenge',
+        grantRequest({ leaseRequestId: 'lease-1', bootstrapChallenge: 'c'.repeat(129) }),
+      ],
       ['a bootstrap challenge with no lease request id', grantRequest({ bootstrapChallenge: 'challenge-1' })],
     ])('refuses %s without calling syncing-server', async (_label, malformed) => {
       const { service, callSyncingServer } = harness()

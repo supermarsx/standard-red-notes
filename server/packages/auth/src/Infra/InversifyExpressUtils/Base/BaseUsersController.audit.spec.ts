@@ -122,10 +122,7 @@ describe('BaseUsersController — credential and account audit', () => {
   })
 
   it('distinguishes a self-serve account deletion from the admin-initiated one', async () => {
-    await controller.deleteAccount(
-      { params: { userUuid: user.uuid }, headers: {} } as unknown as Request,
-      response(),
-    )
+    await controller.deleteAccount({ params: { userUuid: user.uuid }, headers: {} } as unknown as Request, response())
 
     expect(auditLogWriter.write).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -140,10 +137,7 @@ describe('BaseUsersController — credential and account audit', () => {
   it('records no deletion event when the deletion fails', async () => {
     doDeleteAccount.execute.mockResolvedValueOnce(Result.fail('nope'))
 
-    await controller.deleteAccount(
-      { params: { userUuid: user.uuid }, headers: {} } as unknown as Request,
-      response(),
-    )
+    await controller.deleteAccount({ params: { userUuid: user.uuid }, headers: {} } as unknown as Request, response())
 
     expect(auditLogWriter.write).not.toHaveBeenCalled()
   })

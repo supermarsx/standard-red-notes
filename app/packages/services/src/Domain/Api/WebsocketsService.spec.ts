@@ -179,9 +179,7 @@ describe('webSocketsService', () => {
     it('still rejects a socket grant echoing an epoch other than the pin', async () => {
       webSocketApiService.authorizeCollaboration = jest.fn()
       webSocketApiService.discoverCollaborationRoomEpoch = jest.fn()
-      const socketAuthorize = jest
-        .fn()
-        .mockResolvedValue({ ...validGrant, roomEpoch: 'room_epoch_0000000000000002' })
+      const socketAuthorize = jest.fn().mockResolvedValue({ ...validGrant, roomEpoch: 'room_epoch_0000000000000002' })
       const service = createService()
       service.setCollaborationAuthorizationTransport(socketAuthorize)
 

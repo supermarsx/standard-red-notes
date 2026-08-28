@@ -413,7 +413,9 @@ describe('AnnotatedSharedVaultFilesController', () => {
         const originalRemoveEventListener = abortSignal.removeEventListener.bind(abortSignal)
         jest.spyOn(abortSignal, 'removeEventListener').mockImplementation((type, listener, options) => {
           originalRemoveEventListener(type, listener, options)
-          const disconnect = (request.once as jest.Mock).mock.calls.find(([event]) => event === 'aborted')[1] as () => void
+          const disconnect = (request.once as jest.Mock).mock.calls.find(
+            ([event]) => event === 'aborted',
+          )[1] as () => void
           disconnect()
         })
         return { success: true, readStream }

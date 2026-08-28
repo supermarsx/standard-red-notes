@@ -204,9 +204,7 @@ function isForbiddenRpcPath(path: string): boolean {
     return true
   }
 
-  return FORBIDDEN_RPC_ROUTE_FAMILIES.some(
-    (family) => pathname === family || pathname.startsWith(`${family}/`),
-  )
+  return FORBIDDEN_RPC_ROUTE_FAMILIES.some((family) => pathname === family || pathname.startsWith(`${family}/`))
 }
 
 function parseContentLength(value: string | null): number | undefined {

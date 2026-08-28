@@ -69,7 +69,9 @@ describe('observeDeployment', () => {
 
     expect(report.syncSwitchSetting).toBe('false')
     expect(report.cacheSetting).toBe('memory')
-    expect(observeDeployment(readerFor({ WEBSOCKET_SYNC_ENABLED: 'FALSE' }), bindings()).syncSwitchSetting).toBe('other')
+    expect(observeDeployment(readerFor({ WEBSOCKET_SYNC_ENABLED: 'FALSE' }), bindings()).syncSwitchSetting).toBe(
+      'other',
+    )
   })
 
   it('reports presence for every diagnostic key, and only presence', () => {

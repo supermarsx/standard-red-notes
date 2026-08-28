@@ -150,9 +150,7 @@ describe('parseAdvancedChecklist', () => {
 
   it('bounds an absurdly long section name', () => {
     const items = parseAdvancedChecklist(
-      advancedChecklistJson([
-        { name: 'n'.repeat(5_000), tasks: [{ id: 't', description: 'Task', completed: false }] },
-      ]),
+      advancedChecklistJson([{ name: 'n'.repeat(5_000), tasks: [{ id: 't', description: 'Task', completed: false }] }]),
     )
     expect(items[0].groupName).toHaveLength(MAX_ADVANCED_GROUP_NAME_LENGTH)
   })

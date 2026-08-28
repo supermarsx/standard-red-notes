@@ -20,13 +20,7 @@ describe('DeclineSharedSubscriptionInvitation', () => {
     producer?: AuthInviteRealtimeOutboxProducer,
     resolver?: AuthInviteAffectedUserResolver,
   ) =>
-    new DeclineSharedSubscriptionInvitation(
-      sharedSubscriptionInvitationRepository,
-      timer,
-      runner,
-      producer,
-      resolver,
-    )
+    new DeclineSharedSubscriptionInvitation(sharedSubscriptionInvitationRepository, timer, runner, producer, resolver)
 
   // In production the container always supplies the runner, so this — not the bare
   // path the other cases exercise — is how the use case actually executes.

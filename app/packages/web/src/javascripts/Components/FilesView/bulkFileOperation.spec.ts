@@ -97,9 +97,7 @@ describe('runBulkFileOperation', () => {
 
 describe('describeBulkFileError', () => {
   it('reads the message off a ClientDisplayableError, which is not an Error subclass', () => {
-    expect(describeBulkFileError({ text: 'File server rejected the request' })).toBe(
-      'File server rejected the request',
-    )
+    expect(describeBulkFileError({ text: 'File server rejected the request' })).toBe('File server rejected the request')
   })
 
   it('falls back to a stable label for unrecognisable throws', () => {

@@ -78,9 +78,12 @@ describe('AuthInviteMutationTransactionRunner', () => {
     const failure = new Error('deadlock found when trying to get lock')
 
     await expect(
-      runner().execute(async () => {
-        throw failure
-      }, () => true),
+      runner().execute(
+        async () => {
+          throw failure
+        },
+        () => true,
+      ),
     ).rejects.toBe(failure)
 
     expect(committed).toBe(false)

@@ -246,22 +246,20 @@ describe('LoopbackSyncApiRpcAdapter forbidden route families', () => {
 
   // The guard against over-blocking: the families must not swallow the control
   // plane this lane exists to carry.
-  it.each([
-    '/v1/admin/sync-diagnostics',
-    '/v1/workflows/status',
-    '/v1/assistant/config',
-    '/v1/subscription-invites',
-  ])('still permits the control-plane read %s', async (path) => {
-    const fetch = jest.fn(async () => Response.json({ ok: true }))
-    const adapter = new LoopbackSyncApiRpcAdapter({
-      origin: 'http://127.0.0.1:3000',
-      operations: ['API_RPC'],
-      fetch: fetch as unknown as typeof globalThis.fetch,
-    })
+  it.each(['/v1/admin/sync-diagnostics', '/v1/workflows/status', '/v1/assistant/config', '/v1/subscription-invites'])(
+    'still permits the control-plane read %s',
+    async (path) => {
+      const fetch = jest.fn(async () => Response.json({ ok: true }))
+      const adapter = new LoopbackSyncApiRpcAdapter({
+        origin: 'http://127.0.0.1:3000',
+        operations: ['API_RPC'],
+        fetch: fetch as unknown as typeof globalThis.fetch,
+      })
 
-    await expect(
-      adapter.execute({ identity, method: 'GET', path, headers: {}, stream: false }, new AbortController().signal),
-    ).resolves.toMatchObject({ status: 200 })
-    expect(fetch).toHaveBeenCalledTimes(1)
-  })
+      await expect(
+        adapter.execute({ identity, method: 'GET', path, headers: {}, stream: false }, new AbortController().signal),
+      ).resolves.toMatchObject({ status: 200 })
+      expect(fetch).toHaveBeenCalledTimes(1)
+    },
+  )
 })

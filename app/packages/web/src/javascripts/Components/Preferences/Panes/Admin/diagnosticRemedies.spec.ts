@@ -40,7 +40,10 @@ describe('remedyForPrecondition — no topology reported', () => {
   })
 
   it('treats an unrecorded topology exactly like an absent one, rather than as a set of falses', () => {
-    const remedy = remedyForPrecondition('REDIS_UNBOUND', 'configure REDIS_URL', { recorded: false, mode: 'home-server' })
+    const remedy = remedyForPrecondition('REDIS_UNBOUND', 'configure REDIS_URL', {
+      recorded: false,
+      mode: 'home-server',
+    })
 
     expect(remedy.basis).toBe('generic')
   })
@@ -99,8 +102,16 @@ describe('remedyForPrecondition — SYNCING_SERVER_GRPC_UNBOUND', () => {
   })
 
   it('offers the bundled-image restart path only on a self-hosted deployment', () => {
-    const bundled = remedyForPrecondition('SYNCING_SERVER_GRPC_UNBOUND', STOCK_GRPC_REMEDY, topology({ mode: 'self-hosted' }))
-    const distributed = remedyForPrecondition('SYNCING_SERVER_GRPC_UNBOUND', STOCK_GRPC_REMEDY, topology({ mode: 'unset' }))
+    const bundled = remedyForPrecondition(
+      'SYNCING_SERVER_GRPC_UNBOUND',
+      STOCK_GRPC_REMEDY,
+      topology({ mode: 'self-hosted' }),
+    )
+    const distributed = remedyForPrecondition(
+      'SYNCING_SERVER_GRPC_UNBOUND',
+      STOCK_GRPC_REMEDY,
+      topology({ mode: 'unset' }),
+    )
 
     expect(bundled.steps.join(' ')).toContain('API_GATEWAY_SERVICE_PROXY_TYPE=grpc')
     expect(bundled.steps.join(' ')).toContain('does not have to be rebuilt')
@@ -196,7 +207,10 @@ describe('remedyForLiveReason', () => {
   })
 
   it('distinguishes an unset origin list from one that resolved to nothing', () => {
-    const set = remedyForLiveReason('no-allowed-origins', topology({ presence: { WEBSOCKET_SYNC_ALLOWED_ORIGINS: true } }))
+    const set = remedyForLiveReason(
+      'no-allowed-origins',
+      topology({ presence: { WEBSOCKET_SYNC_ALLOWED_ORIGINS: true } }),
+    )
     const unset = remedyForLiveReason('no-allowed-origins', topology())
 
     expect(set?.because.join(' ')).toContain('resolved to nothing usable')

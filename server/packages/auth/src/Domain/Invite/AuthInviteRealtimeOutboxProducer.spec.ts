@@ -19,14 +19,19 @@ describe('AuthInviteRealtimeOutboxProducer', () => {
   let transactionContext: AuthInviteEventTransactionContext
 
   beforeEach(() => {
-    repository = { enqueue: jest.fn().mockResolvedValue('inserted') } as unknown as jest.Mocked<
-      InviteEventOutboxRepositoryInterface
-    >
+    repository = {
+      enqueue: jest.fn().mockResolvedValue('inserted'),
+    } as unknown as jest.Mocked<InviteEventOutboxRepositoryInterface>
     transactionContext = new AuthInviteEventTransactionContext()
   })
 
   const producer = () =>
-    new AuthInviteRealtimeOutboxProducer(repository, transactionContext, () => 1_700_000_000_000, () => eventId)
+    new AuthInviteRealtimeOutboxProducer(
+      repository,
+      transactionContext,
+      () => 1_700_000_000_000,
+      () => eventId,
+    )
 
   const inTransaction = <T>(operation: () => Promise<T>): Promise<T> =>
     transactionContext.run({} as EntityManager, operation)
@@ -56,9 +61,7 @@ describe('AuthInviteRealtimeOutboxProducer', () => {
   })
 
   it('deduplicates and lowercases affected users', async () => {
-    await inTransaction(() =>
-      record({ affectedUserUuids: [firstUser.toUpperCase(), firstUser, secondUser] }),
-    )
+    await inTransaction(() => record({ affectedUserUuids: [firstUser.toUpperCase(), firstUser, secondUser] }))
 
     expect(repository.enqueue.mock.calls[0][0].payload.affectedUserUuids).toEqual([firstUser, secondUser])
   })
@@ -88,11 +91,7 @@ describe('AuthInviteRealtimeOutboxProducer', () => {
     ],
     ['a fractional occurrence time', { occurredAt: 1.5 }, 'Auth invite realtime occurrence time is invalid.'],
     ['a zero occurrence time', { occurredAt: 0 }, 'Auth invite realtime occurrence time is invalid.'],
-    [
-      'an unsafe occurrence time',
-      { occurredAt: Number.MAX_VALUE },
-      'Auth invite realtime occurrence time is invalid.',
-    ],
+    ['an unsafe occurrence time', { occurredAt: Number.MAX_VALUE }, 'Auth invite realtime occurrence time is invalid.'],
   ])('rejects %s', async (_case, overrides, message) => {
     await expect(inTransaction(() => record(overrides))).rejects.toThrow(message)
     expect(repository.enqueue).not.toHaveBeenCalled()

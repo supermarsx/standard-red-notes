@@ -65,16 +65,12 @@ export const SYNC_SERVER_OPERATIONS = [
  * holds the host.
  */
 export type SyncFilesUnmetCondition =
-  | 'FILES_INTERNAL_URL'
-  | 'AUTH_JWT_SECRET'
-  | 'VALET_TOKEN_SECRET'
-  | 'TRANSPORT_CONSTRUCTION'
+  'FILES_INTERNAL_URL' | 'AUTH_JWT_SECRET' | 'VALET_TOKEN_SECRET' | 'TRANSPORT_CONSTRUCTION'
 
 const FILES_REMEDIES: Readonly<Record<SyncFilesUnmetCondition, string>> = Object.freeze({
   FILES_INTERNAL_URL:
     'no INTERNAL files service URL is configured. Set WEBSOCKET_SYNC_FILES_URL (or FILES_SERVER_PROBE_URL) to the address the api-gateway can reach the files service on. FILES_SERVER_URL is only used when it is demonstrably not the public URL, because the bundled image aliases the two.',
-  AUTH_JWT_SECRET:
-    'AUTH_JWT_SECRET is not set, so the live session behind a file transfer cannot be re-validated.',
+  AUTH_JWT_SECRET: 'AUTH_JWT_SECRET is not set, so the live session behind a file transfer cannot be re-validated.',
   VALET_TOKEN_SECRET:
     'VALET_TOKEN_SECRET is not set, so minted valet credentials cannot be verified before they are presented to storage.',
   TRANSPORT_CONSTRUCTION:

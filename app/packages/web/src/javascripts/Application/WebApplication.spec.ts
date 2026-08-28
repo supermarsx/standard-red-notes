@@ -101,9 +101,9 @@ describe('web application', () => {
 
     // The lambda used to accept three arguments, silently dropping the caller's
     // epoch pin before it could reach the worker's pre-grant abort.
-    await expect(
-      authorizationTransport?.('note-1', 'lease-1', 'bootstrap-1', 'room_epoch_00000001'),
-    ).resolves.toEqual(grant)
+    await expect(authorizationTransport?.('note-1', 'lease-1', 'bootstrap-1', 'room_epoch_00000001')).resolves.toEqual(
+      grant,
+    )
     expect(authorize).toHaveBeenLastCalledWith('note-1', 'lease-1', 'bootstrap-1', 'room_epoch_00000001')
 
     const notifySessionRevoked = jest

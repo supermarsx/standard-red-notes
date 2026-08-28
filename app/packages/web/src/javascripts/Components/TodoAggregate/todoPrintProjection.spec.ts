@@ -78,10 +78,9 @@ describe('describeActiveTodoFilters', () => {
   })
 
   it('counts a folder it cannot name rather than printing a raw uuid', () => {
-    const described = describeActiveTodoFilters(
-      filters({ tagUuids: ['tag-work', 'deleted-elsewhere'] }),
-      [tag('tag-work', 'Work')],
-    )
+    const described = describeActiveTodoFilters(filters({ tagUuids: ['tag-work', 'deleted-elsewhere'] }), [
+      tag('tag-work', 'Work'),
+    ])
     expect(described).toEqual(['folders & tags: Work, 1 unavailable'])
   })
 })
