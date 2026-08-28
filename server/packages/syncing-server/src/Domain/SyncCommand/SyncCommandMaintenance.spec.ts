@@ -107,4 +107,162 @@ describe('sync command maintenance jobs', () => {
       expect.objectContaining({ codeTag: 'CleanupSyncCommands', errorType: 'Error' }),
     )
   })
+
+  /**
+   * The scheduling lifecycle of both maintenance jobs. These run unattended for
+   * the life of the process, so the properties that matter are that starting is
+   * idempotent (a second start must not double the dispatch rate), that stopping
+   * actually stops, and that a stop before any start is harmless during a failed
+   * boot.
+   */
+  describe('background scheduling', () => {
+    afterEach(() => {
+      jest.useRealTimers()
+    })
+
+    it('dispatches once immediately on start and then on every interval', async () => {
+      jest.useFakeTimers()
+      const repository = createOutboxRepository()
+      repository.claimNext.mockResolvedValue(null)
+      const publisher: jest.Mocked<DomainEventPublisherInterface> = { publish: jest.fn() }
+      const logger = { error: jest.fn() } as unknown as Logger
+      const dispatcher = new SyncCommandOutboxDispatcher(repository, publisher, logger)
+
+      dispatcher.start(5_000)
+      // Waiting a full interval before the first drain would leave events
+      // sitting in a durable outbox for no reason.
+      expect(repository.claimNext).toHaveBeenCalledTimes(1)
+      await dispatcher.waitForIdle()
+
+      jest.advanceTimersByTime(5_000)
+      expect(repository.claimNext).toHaveBeenCalledTimes(2)
+      await dispatcher.waitForIdle()
+
+      jest.advanceTimersByTime(5_000)
+      expect(repository.claimNext).toHaveBeenCalledTimes(3)
+      await dispatcher.waitForIdle()
+
+      dispatcher.stop()
+      jest.advanceTimersByTime(60_000)
+      expect(repository.claimNext).toHaveBeenCalledTimes(3)
+      expect(logger.error).not.toHaveBeenCalled()
+    })
+
+    it('ignores a second start rather than installing a faster second timer', async () => {
+      jest.useFakeTimers()
+      const repository = createOutboxRepository()
+      repository.claimNext.mockResolvedValue(null)
+      const publisher: jest.Mocked<DomainEventPublisherInterface> = { publish: jest.fn() }
+      const dispatcher = new SyncCommandOutboxDispatcher(repository, publisher, {
+        error: jest.fn(),
+      } as unknown as Logger)
+
+      dispatcher.start(5_000)
+      await dispatcher.waitForIdle()
+      expect(repository.claimNext).toHaveBeenCalledTimes(1)
+
+      dispatcher.start(100)
+      await dispatcher.waitForIdle()
+
+      // The second start must be inert: no extra immediate dispatch, and no
+      // 100ms timer racing the 5s one.
+      expect(repository.claimNext).toHaveBeenCalledTimes(1)
+      jest.advanceTimersByTime(4_000)
+      expect(repository.claimNext).toHaveBeenCalledTimes(1)
+
+      dispatcher.stop()
+    })
+
+    it('runs cleanup on start and stops scheduling once stopped', async () => {
+      jest.useFakeTimers()
+      const commandRepository = createCommandRepository()
+      const outboxRepository = createOutboxRepository()
+      commandRepository.deleteExpired.mockResolvedValue(0)
+      outboxRepository.deletePublishedBefore.mockResolvedValue(0)
+      const logger = { error: jest.fn() } as unknown as Logger
+      const cleanup = new CleanupSyncCommands(commandRepository, outboxRepository, 1_000, logger)
+
+      cleanup.start(30_000)
+      expect(commandRepository.deleteExpired).toHaveBeenCalledTimes(1)
+      await cleanup.waitForIdle()
+
+      jest.advanceTimersByTime(30_000)
+      expect(commandRepository.deleteExpired).toHaveBeenCalledTimes(2)
+      await cleanup.waitForIdle()
+
+      cleanup.stop()
+      jest.advanceTimersByTime(300_000)
+      expect(commandRepository.deleteExpired).toHaveBeenCalledTimes(2)
+      expect(logger.error).not.toHaveBeenCalled()
+    })
+
+    it('ignores a second cleanup start', async () => {
+      jest.useFakeTimers()
+      const commandRepository = createCommandRepository()
+      const outboxRepository = createOutboxRepository()
+      commandRepository.deleteExpired.mockResolvedValue(0)
+      outboxRepository.deletePublishedBefore.mockResolvedValue(0)
+      const cleanup = new CleanupSyncCommands(commandRepository, outboxRepository, 1_000)
+
+      cleanup.start(30_000)
+      await cleanup.waitForIdle()
+      cleanup.start(50)
+      await cleanup.waitForIdle()
+
+      expect(commandRepository.deleteExpired).toHaveBeenCalledTimes(1)
+      jest.advanceTimersByTime(1_000)
+      expect(commandRepository.deleteExpired).toHaveBeenCalledTimes(1)
+
+      cleanup.stop()
+    })
+
+    it('tolerates a stop that was never started', () => {
+      jest.useFakeTimers()
+      const dispatcher = new SyncCommandOutboxDispatcher(createOutboxRepository(), { publish: jest.fn() }, {
+        error: jest.fn(),
+      } as unknown as Logger)
+      const cleanup = new CleanupSyncCommands(createCommandRepository(), createOutboxRepository(), 1_000)
+
+      // Reached whenever boot fails partway and shutdown stops everything.
+      expect(() => dispatcher.stop()).not.toThrow()
+      expect(() => cleanup.stop()).not.toThrow()
+
+      // Still restartable afterwards.
+      dispatcher.stop()
+      cleanup.stop()
+    })
+
+    it('does not hold the process open with its maintenance timers', () => {
+      jest.useFakeTimers()
+      const unrefCalls: number[] = []
+      const realSetInterval = global.setInterval
+      const spy = jest.spyOn(global, 'setInterval').mockImplementation(((handler: () => void, timeout?: number) => {
+        const timer = realSetInterval(handler, timeout)
+        const originalUnref = timer.unref.bind(timer)
+        timer.unref = () => {
+          unrefCalls.push(timeout ?? 0)
+          return originalUnref()
+        }
+        return timer
+      }) as unknown as typeof setInterval)
+
+      const repository = createOutboxRepository()
+      repository.claimNext.mockResolvedValue(null)
+      const dispatcher = new SyncCommandOutboxDispatcher(repository, { publish: jest.fn() }, {
+        error: jest.fn(),
+      } as unknown as Logger)
+      const cleanup = new CleanupSyncCommands(createCommandRepository(), createOutboxRepository(), 1_000)
+
+      dispatcher.start(5_000)
+      cleanup.start(30_000)
+
+      // A referenced interval keeps the event loop alive and stops the server
+      // exiting on SIGTERM, so both maintenance timers must be unref'd.
+      expect(unrefCalls).toEqual([5_000, 30_000])
+
+      dispatcher.stop()
+      cleanup.stop()
+      spy.mockRestore()
+    })
+  })
 })
