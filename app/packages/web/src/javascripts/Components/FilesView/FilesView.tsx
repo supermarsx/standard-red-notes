@@ -2,6 +2,7 @@ import { FunctionComponent, useCallback, useEffect, useMemo, useRef, useState } 
 import { observer } from 'mobx-react-lite'
 import { useTranslation } from 'react-i18next'
 import { ContentType, FileItem, SortableItem } from '@standardnotes/snjs'
+import { CREATE_NEW_NOTE_KEYBOARD_COMMAND } from '@standardnotes/ui-services'
 import { classNames } from '@standardnotes/utils'
 import { formatSizeToReadableString } from '@standardnotes/filepicker'
 import { FileItemActionType } from '@/Components/AttachedFilesPopover/PopoverFileItemAction'
@@ -245,6 +246,32 @@ const FilesView: FunctionComponent<Props> = observer(({ application, className, 
     }
     void application.filesController.selectAndUploadNewFiles()
   }, [application])
+
+  /**
+   * The create shortcut uploads a file while the Files tab is up, which is what it
+   * did on the Files smart view before this surface replaced it. ContentListView
+   * owns the same command for the notes list and stands down whenever this tab is
+   * active (see its registration), so exactly one handler is ever installed —
+   * KeyboardService keeps handlers in a Set and would otherwise fire both, creating
+   * a note *and* opening the file picker.
+   *
+   * Only the active view tab is mounted, so this registration is scoped to the tab
+   * being open and is torn down with it.
+   */
+  useEffect(
+    () =>
+      application.commands.addWithShortcut(
+        CREATE_NEW_NOTE_KEYBOARD_COMMAND,
+        'General',
+        'Upload file',
+        (event) => {
+          event?.preventDefault()
+          uploadNewFiles()
+        },
+        'upload',
+      ),
+    [application.commands, uploadNewFiles],
+  )
 
   /**
    * Directory upload, ported from the Files smart view's add-item menu. Recreates

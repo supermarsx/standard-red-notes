@@ -121,6 +121,8 @@ const createApplication = (files: TestFile[], options: { storedPreferences?: unk
     filesController: { handleFileAction: jest.fn(), selectAndUploadNewFiles: jest.fn() },
     entitledToFiles: true,
     showPremiumModal: jest.fn(),
+    // The view binds the create shortcut to upload while it is mounted.
+    commands: { addWithShortcut: () => () => undefined },
     getPreference: (key: string) => (key === PrefKey.SystemViewPreferences ? options.storedPreferences : undefined),
     setPreference,
     fileBackups: options.backedUp ? { getFileBackupInfo: async () => ({ backedUp: true }) } : undefined,

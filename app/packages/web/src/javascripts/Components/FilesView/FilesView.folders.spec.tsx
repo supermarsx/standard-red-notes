@@ -160,6 +160,8 @@ const createApplication = (files: TestFile[], initialFilter = 'all') => {
     },
     entitledToFiles: true,
     showPremiumModal: jest.fn(),
+    // The view binds the create shortcut to upload while it is mounted.
+    commands: { addWithShortcut: () => () => undefined },
     getPreference: () => undefined,
     setPreference: jest.fn(async () => undefined),
     fileBackups: undefined,

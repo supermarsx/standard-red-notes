@@ -35,6 +35,21 @@ export type ViewTab =
     }
 
 /**
+ * Whether the active view tab rebinds the create shortcut to its own action.
+ *
+ * The Files tab binds it to "upload file", the way the Files smart view did before
+ * that surface replaced it. The notes list (ContentListView) stays mounted beside
+ * the tab surface and binds the same command to "create new note", so it must stand
+ * down while such a tab is active: KeyboardService keeps handlers in a Set and would
+ * fire both, creating a note *and* opening the file picker, and CommandService keys
+ * the palette entry by command id so whichever registered last would win.
+ *
+ * Any future tab that binds the create shortcut belongs in this predicate.
+ */
+export const viewTabOwnsCreateShortcut = (tab: ViewTab | undefined): boolean =>
+  tab?.kind === 'pane' && tab.paneId === AppPaneId.Files
+
+/**
  * The panes that are surfaced as tabs. Each entry's icon matches the icon that
  * pane's sidebar SectionButton already uses.
  */

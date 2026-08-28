@@ -125,6 +125,8 @@ const createApplication = (files: TestFile[], filesController: Record<string, un
     },
     entitledToFiles: true,
     showPremiumModal: jest.fn(),
+    // The view binds the create shortcut to upload while it is mounted.
+    commands: { addWithShortcut: () => () => undefined },
     // No stored sort preference and no local backup service in these cases, so
     // the bulk behaviour under test is unaffected by either.
     getPreference: () => undefined,

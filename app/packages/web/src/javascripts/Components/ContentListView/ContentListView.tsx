@@ -29,6 +29,7 @@ import FloatingAddButton from './FloatingAddButton'
 import ContentTableView from '../ContentTableView/ContentTableView'
 import { MutuallyExclusiveMediaQueryBreakpoints, useMediaQuery } from '@/Hooks/useMediaQuery'
 import { PaneLayout } from '@/Controllers/PaneController/PaneLayout'
+import { viewTabOwnsCreateShortcut } from '@/Controllers/PaneController/ViewTab'
 import { usePaneSwipeGesture } from '../Panes/usePaneGesture'
 import { mergeRefs } from '@/Hooks/mergeRefs'
 import Icon from '../Icon/Icon'
@@ -250,20 +251,25 @@ const ContentListView = forwardRef<HTMLDivElement, Props>(
       return t('createNoteInTopicWithShortcut', { shortcut })
     }, [shortcutForCreate, t])
 
-    useEffect(
-      () =>
-        application.commands.addWithShortcut(
-          CREATE_NEW_NOTE_KEYBOARD_COMMAND,
-          'General',
-          'Create new note',
-          (event) => {
-            event?.preventDefault()
-            void addNewItem()
-          },
-          'add',
-        ),
-      [addNewItem, application.commands],
-    )
+    // Stand down while a view tab binds the create shortcut to its own action (the
+    // Files tab makes it "upload file"), so only one handler is ever installed.
+    const createShortcutOwnedByViewTab = viewTabOwnsCreateShortcut(paneController.activeViewTab)
+
+    useEffect(() => {
+      if (createShortcutOwnedByViewTab) {
+        return
+      }
+      return application.commands.addWithShortcut(
+        CREATE_NEW_NOTE_KEYBOARD_COMMAND,
+        'General',
+        'Create new note',
+        (event) => {
+          event?.preventDefault()
+          void addNewItem()
+        },
+        'add',
+      )
+    }, [addNewItem, application.commands, createShortcutOwnedByViewTab])
 
     const dailyMode = selectedAsTag?.isDailyEntry
 

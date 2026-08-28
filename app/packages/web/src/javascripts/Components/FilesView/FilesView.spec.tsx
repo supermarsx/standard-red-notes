@@ -128,6 +128,8 @@ const createApplication = (file: ReturnType<typeof createFile>) =>
     },
     entitledToFiles: true,
     showPremiumModal: jest.fn(),
+    // The view binds the create shortcut to upload while it is mounted.
+    commands: { addWithShortcut: () => () => undefined },
     // No stored sort preference and no local backup service in these cases, so
     // the table renders from the controller defaults exactly as before.
     getPreference: () => undefined,
