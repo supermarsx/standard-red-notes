@@ -220,9 +220,9 @@ jest.mock('@standardnotes/api-gateway', () => ({
   syncGateDiagnostics: mockSyncGateDiagnostics,
   HOME_SERVER_WELCOME_HTML: '<p>home</p>',
   parseClientIpHeaderName: jest.fn(),
-  parseOptionalPositiveInteger: jest.fn((_name: string, value: string | undefined, fallback: number) =>
-    value === undefined ? fallback : Number(value),
-  ),
+  parseOptionalPositiveInteger: jest.fn((_name: string, value: string | undefined, fallback: number) => {
+    return value === undefined ? fallback : Number(value)
+  }),
   parseWebSocketSyncEnabled: jest.fn((value: string | undefined) => value === 'true'),
   registerCaldavRoutes: jest.fn(),
   RequiredCrossServiceTokenMiddleware: class {},
@@ -293,7 +293,7 @@ jest.mock('./WebSocketRedisBridge', () => ({ WebSocketRedisBridge: WebSocketRedi
 
 // Deliberately require after the dependency doubles are initialized. A static
 // import is hoisted ahead of the captured class doubles by the Jest transform.
-// eslint-disable-next-line @typescript-eslint/no-var-requires
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const { HomeServer } = require('./HomeServer') as typeof import('./HomeServer')
 type HomeServerInstance = InstanceType<typeof HomeServer>
 
@@ -577,12 +577,15 @@ describe('HomeServer FILES_V1 composition', () => {
 
   it('denies transfers whose valet grant is minted under a different secret', async () => {
     const { server, files } = await startWithFiles()
-    latest(mockServiceContainerInstances).register({ value: 'Auth' }, {
-      handleRequest: jest.fn(async () => ({
-        statusCode: 200,
-        json: { valetToken: JSON.stringify({ secret: 'wrong-secret', claims: {} }) },
-      })),
-    })
+    latest(mockServiceContainerInstances).register(
+      { value: 'Auth' },
+      {
+        handleRequest: jest.fn(async () => ({
+          statusCode: 200,
+          json: { valetToken: JSON.stringify({ secret: 'wrong-secret', claims: {} }) },
+        })),
+      },
+    )
 
     await expect(
       files.openUpload(
