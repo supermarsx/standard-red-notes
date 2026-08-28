@@ -11,7 +11,7 @@
  * With REQUIRE_GATEWAY=1 an unreachable gateway is a failure, never a skip.
  */
 import { WebSocket } from 'ws'
-import { webcrypto as crypto } from 'node:crypto'
+import { webcrypto as crypto, randomBytes } from 'node:crypto'
 import jwt from 'jsonwebtoken'
 import * as Y from 'yjs'
 
@@ -23,7 +23,25 @@ const INTERNAL_SECRET = process.env.WEBSOCKET_GATEWAY_INTERNAL_SECRET ?? 'dev-ws
 const CONNECTION_TOKEN_SECRET =
   process.env.WEB_SOCKET_CONNECTION_TOKEN_SECRET ?? 'dev-ws-connection-token-secret-change-me'
 const COLLABORATION_HKDF_SALT = 'Standard Red Notes encrypted collaboration room key v1'
-const COLLABORATION_PROTOCOL_VERSION = 2
+const COLLABORATION_PROTOCOL_VERSION = 3
+
+// Protocol v3 binds every room membership to a room epoch and a security epoch
+// (`586bcbb7`): `room-reserve`/`room-join` must carry `expectedRoomEpoch`, and
+// the capability must pin the identical pair. Real clients learn the pair from
+// the one-use COLLABORATION_AUTHORIZATION epoch-discovery handshake; this
+// harness already mints its own capability with the connection-token secret
+// (exactly what `defaultRoomJoinAuthorizer` verifies), so it seeds the pair
+// itself. These are only the OPENING values: the room's epoch is owned by the
+// gateway from the first reservation onwards, and `connect()` below adopts
+// whatever epoch the gateway reports back.
+//
+// Hex, not base64url, for the same reason the discovery challenge is hex
+// (`f34e333e`): epochs are echoed through identifier validation, and a leading
+// `-`/`_` would make a fraction of runs fail while the rest passed.
+const epoch = () => randomBytes(16).toString('hex')
+const ROOM_EPOCH = epoch()
+const COLLABORATION_SECURITY_EPOCH = epoch()
+
 const YJS_CHUNK_PLAINTEXT_BYTES = 128 * 1024
 const MAX_YJS_TRANSFER_BYTES = 4 * 1024 * 1024
 const PEER_FLUSH_TIMEOUT_MS = 10_000
@@ -115,14 +133,17 @@ async function decrypt(key, payload, additionalData) {
   return new Uint8Array(plaintext)
 }
 
-function roomCapability(userUuid, room, leaseRequestId, bootstrapChallenge) {
+function roomCapability(userUuid, room, leaseRequestId, roomEpoch, bootstrapChallenge) {
   return jwt.sign(
     {
       purpose: 'collab-room',
       userUuid,
       room,
       collaborationProtocolVersion: COLLABORATION_PROTOCOL_VERSION,
+      collaborationAuthorizationIssuedAt: 1,
       serverUpdatedAtTimestamp: 1,
+      roomEpoch,
+      collaborationSecurityEpoch: COLLABORATION_SECURITY_EPOCH,
       leaseRequestId,
       ...(bootstrapChallenge ? { bootstrapChallenge } : {}),
     },
@@ -184,6 +205,8 @@ class EncryptedPeer {
     this.requestId = undefined
     this.reservation = undefined
     this.denied = false
+    this.deniedRoomEpoch = undefined
+    this.roomEpoch = ROOM_EPOCH
     this.awaitingStateRequestId = undefined
     this.pendingResponseClaims = new Set()
     this.awaitingAcceptances = new Set()
@@ -217,39 +240,68 @@ class EncryptedPeer {
       }
     })
     socket.on('message', (data) => this.onMessage(socket, data.toString()))
-    socket.send(
-      JSON.stringify({
-        t: 'room-reserve',
-        room: this.room,
-        cap: roomCapability(this.userUuid, this.room, this.requestId),
-        requestId: this.requestId,
-        role: 'editor',
-        protocolVersion: COLLABORATION_PROTOCOL_VERSION,
-      }),
-    )
-    await waitFor(() => this.reservation || this.denied, `${this.userUuid} room reservation`)
+
+    // The gateway rotates a room's epoch as soon as its last editor lease is
+    // released (RELEASE_LEASE_SCRIPT rewrites the room-state key once SCARD
+    // hits 0), so the epoch this peer used before an offline round is stale by
+    // the time it reconnects. That is deliberate: a stale reservation is denied
+    // with `room-denied` carrying the room's current epoch, exactly so the
+    // client can adopt it and re-reserve. Production does the same thing by
+    // re-running epoch discovery for every activation, which yields whatever
+    // epoch the room currently has. Mirror that here rather than pinning one
+    // epoch for the process lifetime.
+    for (let attempt = 0; attempt < 3 && !this.reservation; attempt++) {
+      this.denied = false
+      this.deniedRoomEpoch = undefined
+      this.requestId = `e2e-${sessionUuid}-${crypto.randomUUID()}`
+      socket.send(
+        JSON.stringify({
+          t: 'room-reserve',
+          room: this.room,
+          cap: roomCapability(this.userUuid, this.room, this.requestId, this.roomEpoch),
+          requestId: this.requestId,
+          role: 'editor',
+          protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+          expectedRoomEpoch: this.roomEpoch,
+        }),
+      )
+      await waitFor(() => this.reservation || this.denied, `${this.userUuid} room reservation`)
+      if (this.denied && this.deniedRoomEpoch && this.deniedRoomEpoch !== this.roomEpoch) {
+        this.roomEpoch = this.deniedRoomEpoch
+      }
+    }
+
     const shouldBootstrap = this.reservation?.bootstrap
     const challengeIsValid =
       shouldBootstrap === true
         ? typeof this.reservation?.bootstrapChallenge === 'string' && this.reservation.bootstrapChallenge.length > 0
         : shouldBootstrap === false && this.reservation?.bootstrapChallenge === undefined
     if (
-      this.denied ||
+      !this.reservation ||
       this.reservation?.protocolVersion !== COLLABORATION_PROTOCOL_VERSION ||
       this.reservation?.maxTransferBytes !== MAX_YJS_TRANSFER_BYTES ||
+      this.reservation?.roomEpoch !== this.roomEpoch ||
       typeof shouldBootstrap !== 'boolean' ||
       !challengeIsValid
     ) {
       throw new Error(`${this.userUuid} received an invalid room reservation`)
     }
+    this.denied = false
     socket.send(
       JSON.stringify({
         t: 'room-join',
         room: this.room,
-        cap: roomCapability(this.userUuid, this.room, this.requestId, this.reservation.bootstrapChallenge),
+        cap: roomCapability(
+          this.userUuid,
+          this.room,
+          this.requestId,
+          this.roomEpoch,
+          this.reservation.bootstrapChallenge,
+        ),
         requestId: this.requestId,
         role: 'editor',
         protocolVersion: COLLABORATION_PROTOCOL_VERSION,
+        expectedRoomEpoch: this.roomEpoch,
       }),
     )
     await waitFor(() => this.joined || this.denied, `${this.userUuid} room join`)
@@ -414,6 +466,10 @@ class EncryptedPeer {
       this.reservation = frame
     } else if (frame.t === 'room-denied' && frame.requestId === this.requestId) {
       this.denied = true
+      // Carries the room's current epoch when the denial was an epoch mismatch.
+      if (typeof frame.roomEpoch === 'string' && frame.roomEpoch.length > 0) {
+        this.deniedRoomEpoch = frame.roomEpoch
+      }
     } else if (
       frame.t === 'room-joined' &&
       frame.requestId === this.requestId &&
