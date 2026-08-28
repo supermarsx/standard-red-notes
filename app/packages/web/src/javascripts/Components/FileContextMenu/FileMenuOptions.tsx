@@ -188,16 +188,16 @@ const FileMenuOptions: FunctionComponent<Props> = ({
           />
         )}
         {!omitBulkManagedActions && (
-        <MenuSwitchButtonItem
-          checked={hasProtectedFiles}
-          onChange={(hasProtectedFiles) => {
-            void application.filesController.setProtectionForFiles(hasProtectedFiles, selectedFiles)
-          }}
-          disabled={areSomeFilesInReadonlySharedVault}
-        >
-          <Icon type="lock" className={`text-neutral mr-2 ${MenuItemIconSize}`} />
-          {t('passwordProtect')}
-        </MenuSwitchButtonItem>
+          <MenuSwitchButtonItem
+            checked={hasProtectedFiles}
+            onChange={(hasProtectedFiles) => {
+              void application.filesController.setProtectionForFiles(hasProtectedFiles, selectedFiles)
+            }}
+            disabled={areSomeFilesInReadonlySharedVault}
+          >
+            <Icon type="lock" className={`text-neutral mr-2 ${MenuItemIconSize}`} />
+            {t('passwordProtect')}
+          </MenuSwitchButtonItem>
         )}
       </MenuSection>
       <MenuSection>

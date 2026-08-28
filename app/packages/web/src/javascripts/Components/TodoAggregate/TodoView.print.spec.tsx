@@ -331,9 +331,7 @@ describe('Printing the Todos view', () => {
     expect(deepest?.depth).toBe(13)
     expect(deepest?.indent).toBe(atCeiling?.indent)
     // The indent can no longer say how deep it is, so the row says it.
-    expect(
-      buildSnapshot().querySelector<HTMLElement>('.srn-print-todo-level')?.textContent?.trim(),
-    ).toBe('L11')
+    expect(buildSnapshot().querySelector<HTMLElement>('.srn-print-todo-level')?.textContent?.trim()).toBe('L11')
   })
 
   it('marks an ancestor kept only as context, in words rather than by colour alone', () => {

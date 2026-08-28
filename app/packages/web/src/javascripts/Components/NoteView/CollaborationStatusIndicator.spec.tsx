@@ -15,8 +15,9 @@ import { createRoot, Root } from 'react-dom/client'
 
 jest.mock('../Popover/Popover', () => ({
   __esModule: true,
-  default: ({ open, children }: { open: boolean; children: ReactNode }) =>
-    open ? createElement('div', { 'data-testid': 'collaboration-popover' }, children) : null,
+  default: ({ open, children }: { open: boolean; children: ReactNode }) => {
+    return open ? createElement('div', { 'data-testid': 'collaboration-popover' }, children) : null
+  },
 }))
 
 import { CollaborationStatusRegistry } from '../SuperEditor/Collaboration/CollaborationStatusRegistry'

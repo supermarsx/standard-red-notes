@@ -33,8 +33,7 @@ const systemViewPreferences = (application: WebApplication): Record<string, unkn
 
 export const readPersistedFilesSort = (application: WebApplication): PersistedFilesSort | undefined => {
   const stored = systemViewPreferences(application)[SystemViewId.Files] as
-    | { sortBy?: string; sortReverse?: boolean }
-    | undefined
+    { sortBy?: string; sortReverse?: boolean } | undefined
 
   if (!stored?.sortBy) {
     return undefined

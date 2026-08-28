@@ -214,7 +214,7 @@ describe('Todos hierarchy display', () => {
     const atCeiling = rows.find((row) => row.depth === TODO_MAX_INDENT_LEVEL)
     expect(parseFloat(deepest?.indent ?? '0')).toBe(parseFloat(atCeiling?.indent ?? '0'))
     // …and it says how deep it really is, since the indent no longer can.
-    expect(deepest?.text).toContain(`L13`)
+    expect(deepest?.text).toContain('L13')
     expect(container.textContent).toContain('Level 13')
   })
 

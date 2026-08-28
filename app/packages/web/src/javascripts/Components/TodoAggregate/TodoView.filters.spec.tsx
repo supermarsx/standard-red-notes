@@ -59,8 +59,7 @@ const makeNote = (uuid: string, title: string, text: string, noteType: NoteType)
   ({ uuid, title, text, trashed: false, locked: false, noteType, payload: {} }) as unknown as SNNote
 
 /** A tag plus the ancestor path `ItemManager.getTagLongTitle` would render for it. */
-const tag = (uuid: string, title: string, longTitle = title): SNTag =>
-  ({ uuid, title, longTitle }) as unknown as SNTag
+const tag = (uuid: string, title: string, longTitle = title): SNTag => ({ uuid, title, longTitle }) as unknown as SNTag
 
 const OVERDUE = new Date(Date.now() - 60 * 60 * 1000).toISOString()
 

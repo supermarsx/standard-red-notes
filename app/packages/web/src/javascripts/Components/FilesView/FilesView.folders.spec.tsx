@@ -52,8 +52,9 @@ jest.mock('@/Controllers/Moments/PhotoRecorder', () => ({
 }))
 jest.mock('@/Components/Modal/ModalOverlay', () => ({
   __esModule: true,
-  default: ({ isOpen, children }: { isOpen: boolean; children: React.ReactNode }) =>
-    isOpen ? <div data-testid="capture-modal">{children}</div> : null,
+  default: ({ isOpen, children }: { isOpen: boolean; children: React.ReactNode }) => {
+    return isOpen ? <div data-testid="capture-modal">{children}</div> : null
+  },
 }))
 jest.mock('@/Components/CameraCaptureModal/PhotoCaptureModal', () => ({
   __esModule: true,

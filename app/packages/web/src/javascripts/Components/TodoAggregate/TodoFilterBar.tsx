@@ -64,7 +64,16 @@ type MultiSelectProps = {
  * Ticking boxes UNIONS them (see `todoFilters`), so the panel never closes on a
  * click: choosing a second folder is the normal case, not a restart.
  */
-function MultiSelectFilter({ ariaLabel, title, emptyLabel, unit, options, selected, kind, onChange }: MultiSelectProps) {
+function MultiSelectFilter({
+  ariaLabel,
+  title,
+  emptyLabel,
+  unit,
+  options,
+  selected,
+  kind,
+  onChange,
+}: MultiSelectProps) {
   const [open, setOpen] = useState(false)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const selectedSet = new Set(selected)
@@ -82,7 +91,9 @@ function MultiSelectFilter({ ariaLabel, title, emptyLabel, unit, options, select
   }
 
   const toggle = (value: string, checked: boolean) => {
-    onChange(checked ? [...selected.filter((each) => each !== value), value] : selected.filter((each) => each !== value))
+    onChange(
+      checked ? [...selected.filter((each) => each !== value), value] : selected.filter((each) => each !== value),
+    )
   }
 
   return (
@@ -112,7 +123,11 @@ function MultiSelectFilter({ ariaLabel, title, emptyLabel, unit, options, select
           <div className="flex items-center justify-between gap-2 px-1 pb-1">
             <span className="text-passive-1 text-xs font-semibold">{title}</span>
             {selected.length > 0 && (
-              <button type="button" className="text-info rounded px-1 text-xs hover:underline" onClick={() => onChange([])}>
+              <button
+                type="button"
+                className="text-info rounded px-1 text-xs hover:underline"
+                onClick={() => onChange([])}
+              >
                 Clear
               </button>
             )}

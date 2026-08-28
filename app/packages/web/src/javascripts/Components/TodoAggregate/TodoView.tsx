@@ -1389,8 +1389,8 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
       },
       {
         name: 'Folders & tags',
-        cell: (row) =>
-          row.tags.length === 0 ? (
+        cell: (row) => {
+          return row.tags.length === 0 ? (
             <span className="text-passive-2 text-xs">—</span>
           ) : (
             <div className="flex min-w-0 flex-wrap gap-1">
@@ -1406,7 +1406,8 @@ const TodoView = forwardRef<HTMLDivElement, Props>(({ application, className, id
                 </span>
               ))}
             </div>
-          ),
+          )
+        },
       },
     ]
   }, [application, applyOne, bulkBusy, busyKeys, now, openNote, prepareSchedule, selectedKeys, toggleSelection])

@@ -293,10 +293,7 @@ describe('FilesView bulk actions', () => {
     const failures = Array.from(container.querySelectorAll('[data-testid="bulk-failure-item"]')).map(
       (item) => item.textContent,
     )
-    expect(failures).toEqual([
-      'beta.txt — Network unreachable',
-      'gamma.txt — File server rejected the request',
-    ])
+    expect(failures).toEqual(['beta.txt — Network unreachable', 'gamma.txt — File server rejected the request'])
 
     // The two failures stay selected so a retry does not redo the one that worked.
     expect(container.querySelector('[data-testid="bulk-selection-count"]')?.textContent).toBe('2 files selected')

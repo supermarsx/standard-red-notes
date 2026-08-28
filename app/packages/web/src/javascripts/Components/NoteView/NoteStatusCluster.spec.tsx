@@ -22,8 +22,9 @@ jest.mock('../ApplicationProvider', () => ({
 
 jest.mock('../Popover/Popover', () => ({
   __esModule: true,
-  default: ({ open, children }: { open: boolean; children: ReactNode }) =>
-    open ? createElement('div', null, children) : null,
+  default: ({ open, children }: { open: boolean; children: ReactNode }) => {
+    return open ? createElement('div', null, children) : null
+  },
 }))
 
 import { CollaborationStatusRegistry } from '../SuperEditor/Collaboration/CollaborationStatusRegistry'
@@ -83,7 +84,7 @@ it('renders the collaboration icon immediately before the sync status', async ()
   expect(buttons[1]).toBe(sync)
 
   // DOCUMENT_POSITION_FOLLOWING === 4: `sync` comes after `collaboration`.
-  // eslint-disable-next-line no-bitwise
+
   expect((collaboration as HTMLElement).compareDocumentPosition(sync as HTMLElement) & 4).toBe(4)
 })
 
